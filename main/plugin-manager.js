@@ -36,6 +36,7 @@ function createPluginManager({ appDir, userDataDir }) {
       version: meta?.version || '',
       vendor: meta?.vendor || '',
       description: meta?.description || '',
+      i18n: meta?.i18n || {},
       depends: [].concat(meta?.depends || []),
       required: !!meta?.required,
       bundled,
@@ -81,7 +82,7 @@ function createPluginManager({ appDir, userDataDir }) {
   function list() {
     const disabled = new Set(state().disabled);
     return discover().map((p) => ({
-      id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description,
+      id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n,
       depends: p.depends, required: p.required, bundled: p.bundled, dir: p.dir, blockedBy: p.blockedBy || null,
       enabled: p.required || !disabled.has(p.id),
       loaded: loadedIds.has(p.id),
@@ -131,7 +132,7 @@ function createPluginManager({ appDir, userDataDir }) {
   }
 
   const catalog = () => subdirs(catalogDir).map((d) => describe(d, false)).filter(Boolean).map((p) => ({
-    id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, dir: p.dir,
+    id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n, dir: p.dir,
   }));
 
   // Renderer assets of the plugins running this session, in a stable order (bundled first).

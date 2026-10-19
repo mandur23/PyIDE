@@ -116,18 +116,19 @@ try {
   // ---------- Settings: Editor ----------
   await press('Ctrl+Alt+S');
   await until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
-  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].map(n => n.textContent).join('|') === 'Appearance|Editor|Python Interpreter|Tools'`), 'Ctrl+Alt+S opens Settings with categories');
+  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Appearance & Behavior|Appearance|Language and Region|Keymap|Editor|General|Code Style|Plugins|Project: project|Python Interpreter|Tools'`), 'Ctrl+Alt+S opens Settings with categories');
   check(await js(`document.querySelector('#settingsApply').disabled`), 'Apply disabled until something changes');
   await type('wrap');
-  check(await js(`[...document.querySelectorAll('.settings-nav-row:not(.hidden)')].map(n => n.textContent).join('|') === 'Editor' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');
+  check(await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Editor|General|Code Style' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');
   await press('Ctrl+A');
   await press('Backspace');
   await click('.settings-nav-row[data-page="editor"]');
   await setNumber('editor.fontSize', 18);
-  await setNumber('editor.tabSize', 2);
-  await setNumber('editor.ruler', 100);
   await click('[data-key="editor.showWhitespace"]');
   await click('[data-key="editor.softWrap"]');
+  await click('.settings-nav-row[data-page="codestyle"]');
+  await setNumber('editor.tabSize', 2);
+  await setNumber('editor.ruler', 100);
   check(await js(`!document.querySelector('#settingsApply').disabled`), 'Apply enabled after edits');
   check(await js(`ide.editor.getOption(ide.monaco.editor.EditorOption.fontSize) === 14`), 'nothing applied before Apply');
   await click('#settingsApply');

@@ -42,27 +42,32 @@
     return Math.max(range.endLineNumber - range.startLineNumber + 1, edit.text.split('\n').length);
   }
 
+  // Whole strings per case, so each language can phrase the count and the plural its own way.
+  const reformattedText = (selection, count) => tr(selection
+    ? (count === 1 ? 'Reformatted selected text: {count} line changed' : 'Reformatted selected text: {count} lines changed')
+    : (count === 1 ? 'Reformatted code: {count} line changed' : 'Reformatted code: {count} lines changed'), { count });
+
   async function reformat(tab = ide.activeTab()) {
-    if (!isPy(tab)) return showHint('Reformat Code works on Python files');
+    if (!isPy(tab)) return showHint(tr('Reformat Code works on Python files'));
     const model = tab.model;
     const version = model.getVersionId();
     const sel = ide.editor.getModel() === model ? ide.editor.getSelection() : null;
     const range = sel && !sel.isEmpty() ? `${sel.startLineNumber}:${sel.startColumn}-${sel.endLineNumber}:${sel.endColumn}` : undefined;
     const r = await ide.api.invoke('tooling:format', model.getValue(), tab.path, { ...opts(), range });
     if (model.isDisposed() || model.getVersionId() !== version) return;
-    if (!r.ok) return showHint(`Cannot reformat: ${r.error}`, true);
+    if (!r.ok) return showHint(tr('Cannot reformat: {error}', { error: r.error }), true);
     const lines = applyText(model, r.text);
-    showHint(lines ? `Reformatted ${range ? 'selected text' : 'code'}: ${lines} line${lines === 1 ? '' : 's'} changed` : 'No lines changed: content is already properly formatted');
+    showHint(lines ? reformattedText(!!range, lines) : tr('No lines changed: content is already properly formatted'));
   }
 
   async function optimizeImports(tab = ide.activeTab()) {
-    if (!isPy(tab)) return showHint('Optimize Imports works on Python files');
+    if (!isPy(tab)) return showHint(tr('Optimize Imports works on Python files'));
     const model = tab.model;
     const version = model.getVersionId();
     const r = await ide.api.invoke('tooling:optimizeImports', model.getValue(), tab.path, opts());
     if (model.isDisposed() || model.getVersionId() !== version) return;
-    if (!r.ok) return showHint(`Cannot optimize imports: ${r.error}`, true);
-    showHint(applyText(model, r.text) ? 'Imports optimized' : 'Unused imports not found');
+    if (!r.ok) return showHint(tr('Cannot optimize imports: {error}', { error: r.error }), true);
+    showHint(applyText(model, r.text) ? tr('Imports optimized') : tr('Unused imports not found'));
   }
 
   async function fixAll(tab = ide.activeTab()) {
@@ -71,8 +76,8 @@
     const version = model.getVersionId();
     const r = await ide.api.invoke('tooling:fixAll', model.getValue(), tab.path, opts());
     if (model.isDisposed() || model.getVersionId() !== version) return;
-    if (!r.ok) return showHint(`Ruff fix failed: ${r.error}`, true);
-    showHint(applyText(model, r.text) ? 'Applied ruff fixes' : 'Nothing to fix');
+    if (!r.ok) return showHint(tr('Ruff fix failed: {error}', { error: r.error }), true);
+    showHint(applyText(model, r.text) ? tr('Applied ruff fixes') : tr('Nothing to fix'));
     lint(tab);
   }
 
@@ -80,10 +85,10 @@
   async function onDisk(path, channel) {
     const text = await ide.api.read(path);
     const r = await ide.api.invoke(channel, text, path, opts());
-    if (!r.ok) return showHint(r.error, true);
+    if (!r.ok) return showHint(tr(channel === 'tooling:format' ? 'Cannot reformat: {error}' : 'Cannot optimize imports: {error}', { error: r.error }), true);
     if (r.text !== text) await ide.api.write(path, r.text);
     await ide.reloadFromDisk([path]);
-    showHint(r.text !== text ? `${basename(path)} updated` : `${basename(path)}: nothing to change`);
+    showHint(tr(r.text !== text ? '{name} updated' : '{name}: nothing to change', { name: basename(path) }));
   }
 
   // ---------- lint ----------
@@ -179,7 +184,7 @@
       for (const d of hits) {
         if (d.fix?.edits?.length) {
           actions.push({
-            title: `Fix with ruff: ${d.fix.message || d.message} (${d.code})${d.fix.applicability === 'unsafe' ? ' [unsafe]' : ''}`,
+            title: tr(d.fix.applicability === 'unsafe' ? 'Fix with ruff: {message} ({code}) [unsafe]' : 'Fix with ruff: {message} ({code})', { message: d.fix.message || d.message, code: d.code }),
             kind: 'quickfix',
             diagnostics: markersFor(d),
             isPreferred: actions.length === 0,
@@ -197,26 +202,26 @@
         const textEdit = noqaEdit(model, d);
         if (!textEdit) continue;
         actions.push({
-          title: `Suppress ${d.code} with # noqa`,
+          title: tr('Suppress {code} for line with # noqa', { code: d.code }),
           kind: 'quickfix',
           diagnostics: markersFor(d),
           edit: { edits: [{ resource: model.uri, versionId: model.getVersionId(), textEdit }] },
         });
       }
       if (state.diags.filter((d) => d.fix).length > 1 && hits.length) {
-        actions.push({ title: 'Fix all ruff problems in file', kind: 'quickfix', command: { id: 'tooling.ruffFixAll', title: 'Fix all ruff problems in file' } });
+        actions.push({ title: tr('Fix all ruff problems in file'), kind: 'quickfix', command: { id: 'tooling.ruffFixAll', title: tr('Fix all ruff problems in file') } });
       }
       return { actions, dispose() {} };
     },
   }, { providedCodeActionKinds: ['quickfix'] });
 
   // ---------- actions ----------
-  ide.registerAction({ id: 'ReformatCode', title: 'Reformat Code', keys: 'Ctrl+Alt+L', run: () => reformat() });
-  ide.registerAction({ id: 'OptimizeImports', title: 'Optimize Imports', keys: 'Ctrl+Alt+O', run: () => optimizeImports() });
-  ide.registerAction({ id: 'RuffFixAll', title: 'Fix All Ruff Problems in File', run: () => fixAll() });
+  ide.registerAction({ id: 'ReformatCode', title: tr('Reformat Code'), keys: 'Ctrl+Alt+L', run: () => reformat() });
+  ide.registerAction({ id: 'OptimizeImports', title: tr('Optimize Imports'), keys: 'Ctrl+Alt+O', run: () => optimizeImports() });
+  ide.registerAction({ id: 'RuffFixAll', title: tr('Fix All Ruff Problems in File'), run: () => fixAll() });
   const pyFile = (e) => !e.dir && /\.pyi?$/i.test(e.name);
-  ide.registerTreeAction({ title: 'Reformat Code', hint: 'Ctrl+Alt+L', when: pyFile, run: (e) => (ide.findTab(e.path) ? reformat(ide.findTab(e.path)) : onDisk(e.path, 'tooling:format')) });
-  ide.registerTreeAction({ title: 'Optimize Imports', hint: 'Ctrl+Alt+O', when: pyFile, run: (e) => (ide.findTab(e.path) ? optimizeImports(ide.findTab(e.path)) : onDisk(e.path, 'tooling:optimizeImports')) });
+  ide.registerTreeAction({ title: tr('Reformat Code'), hint: 'Ctrl+Alt+L', when: pyFile, run: (e) => (ide.findTab(e.path) ? reformat(ide.findTab(e.path)) : onDisk(e.path, 'tooling:format')) });
+  ide.registerTreeAction({ title: tr('Optimize Imports'), hint: 'Ctrl+Alt+O', when: pyFile, run: (e) => (ide.findTab(e.path) ? optimizeImports(ide.findTab(e.path)) : onDisk(e.path, 'tooling:optimizeImports')) });
 
   ide.tooling = { reformat, optimizeImports, fixAll, lint };
 })();

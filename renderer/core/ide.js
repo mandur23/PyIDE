@@ -50,14 +50,13 @@ ide.emit = (evt, ...args) => {
 };
 
 // ---------- settings ----------
-const SETTINGS_KEY = 'pyide.settings';
-let settingsCache;
-try { settingsCache = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { settingsCache = {}; }
+// Persisted by the main process (userData/settings.json), written synchronously so nothing is lost on restart.
+const settingsCache = window.__initialSettings || {};
 ide.settings = {
   get: (key, fallback) => (key in settingsCache ? settingsCache[key] : fallback),
   set(key, value) {
     settingsCache[key] = value;
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settingsCache)); } catch {}
+    api.saveSettingsSync(settingsCache);
     ide.emit('settingsChanged', key, value);
   },
   all: () => ({ ...settingsCache }),

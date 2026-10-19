@@ -1,0 +1,5 @@
+.key-promoter-host { position: fixed; right: 16px; bottom: 36px; z-index: 65; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.key-promoter-toast { min-width: 260px; max-width: 360px; padding: 10px 14px; border-radius: 8px; background: var(--gray2);
+  border: 1px solid var(--gray4); box-shadow: 0 8px 24px #0006; transition: opacity .4s; }
+.key-promoter-toast.fade { opacity: 0; }
+.key-promoter-keys { font: 600 15px var(--mono); color: var(--blue8); margin-bottom: 4px; }

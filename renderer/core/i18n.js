@@ -2,8 +2,13 @@
 // tr('Find in Files') or tr('Run {name}', {name}). Dictionaries are each plugin's locales/<lang>.json, merged by
 // the main process. The language is fixed for the session; changing it restarts the IDE, as in PyCharm.
 (() => {
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem('pyide.settings')) || {}; } catch {}
+  // Settings predating the settings file were kept in localStorage; read them once and move them over.
+  let saved = api.loadSettingsSync();
+  if (!saved) {
+    try { saved = JSON.parse(localStorage.getItem('pyide.settings')) || {}; } catch { saved = {}; }
+    api.saveSettingsSync(saved);
+  }
+  window.__initialSettings = saved;
   const pref = saved['appearance.language'] || 'system';
   const systemLocale = navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en';
   const locale = pref === 'system' ? systemLocale : pref;

@@ -1,0 +1,4 @@
+{
+  "Selection: {lines} lines, {words} words, {chars} chars": "선택 영역: {lines}줄, 단어 {words}개, 문자 {chars}개",
+  "{lines} lines, {words} words, {chars} chars": "{lines}줄, 단어 {words}개, 문자 {chars}개"
+}

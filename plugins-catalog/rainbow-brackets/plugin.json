@@ -1,0 +1,13 @@
+{
+  "id": "rainbow-brackets",
+  "name": "Rainbow Brackets",
+  "version": "1.2.0",
+  "vendor": "PyIDE Samples",
+  "description": "Colors matching brackets by nesting depth and draws a bracket-pair guide, so deeply nested Python is easier to read.",
+  "i18n": {
+    "ko": {
+      "name": "무지개 괄호",
+      "description": "짝이 맞는 괄호를 중첩 깊이별로 색칠하고 괄호 쌍 가이드를 그려서 깊게 중첩된 Python 코드를 읽기 쉽게 해 줍니다."
+    }
+  }
+}

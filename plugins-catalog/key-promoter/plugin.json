@@ -1,0 +1,13 @@
+{
+  "id": "key-promoter",
+  "name": "Key Promoter X",
+  "version": "2.0.0",
+  "vendor": "PyIDE Samples",
+  "description": "Learn the keyboard shortcuts: whenever you click a button that has a shortcut, a notification shows the key you could have pressed and how often you clicked it.",
+  "i18n": {
+    "ko": {
+      "name": "Key Promoter X",
+      "description": "단축키를 익혀 보세요. 단축키가 있는 버튼을 마우스로 누를 때마다 대신 누를 수 있었던 키와 클릭 횟수를 알림으로 보여 줍니다."
+    }
+  }
+}

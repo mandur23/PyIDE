@@ -10,7 +10,8 @@ const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electro
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
-export async function launch({ fixture, port, name = fixture, lang = 'en-US' }) {
+// userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
+export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData }) {
   const work = mkdtempSync(path.join(tmpdir(), `pyide-${name}-`));
   const project = path.join(work, 'project');
   cpSync(path.join(APP_DIR, 'verify', 'fixtures', fixture), project, { recursive: true });
@@ -18,7 +19,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US' }) 
   mkdirSync(outDir, { recursive: true });
 
   const child = spawn(ELECTRON, [APP_DIR, project, `--remote-debugging-port=${port}`, `--lang=${lang}`], {
-    env: { ...process.env, PYIDE_USER_DATA: path.join(work, 'userdata') },
+    env: { ...process.env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
 
@@ -106,7 +107,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US' }) 
     close();
     throw new Error(`IDE never became ready; renderer exceptions after reload:\n  ${consoleErrors.join('\n  ') || '(none)'}`);
   }
-  return { project, outDir, cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
+  return { project, outDir, userData: userData || path.join(work, 'userdata'), cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
 }
 
 // Opens a project file in the editor and waits for its tab.

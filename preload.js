@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   on: (channel, fn) => ipcRenderer.on(channel, (_e, payload) => fn(payload)),
   localeSync: (lang) => ipcRenderer.sendSync('core:localeSync', lang),
+  loadSettingsSync: () => ipcRenderer.sendSync('settings:loadSync'),
+  saveSettingsSync: (settings) => ipcRenderer.sendSync('settings:saveSync', settings),
   relaunch: invoke('core:relaunch'),
   openFolder: invoke('dialog:openFolder'),
   openFileDialog: invoke('dialog:openFile'),

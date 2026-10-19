@@ -116,6 +116,18 @@ ipcMain.handle('proc:kill', (_e, id) => killProcess(id));
 
 const plugins = createPluginManager({ appDir: __dirname, userDataDir: app.getPath('userData') });
 
+// Settings live in a file, not localStorage: a restart (app.exit) can drop localStorage writes that were not flushed yet.
+const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
+ipcMain.on('settings:loadSync', (e) => {
+  try { e.returnValue = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch { e.returnValue = null; }
+});
+ipcMain.on('settings:saveSync', (e, settings) => {
+  fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+  fs.writeFileSync(`${SETTINGS_FILE}.tmp`, JSON.stringify(settings, null, 2));
+  fs.renameSync(`${SETTINGS_FILE}.tmp`, SETTINGS_FILE);
+  e.returnValue = true;
+});
+
 ipcMain.handle('core:features', () => plugins.rendererEntries());
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
 ipcMain.handle('core:relaunch', () => {
