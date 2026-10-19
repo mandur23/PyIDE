@@ -194,11 +194,27 @@ exports.register = ({ ipcMain }) => {
     });
   });
 
+  // What happened to HEAD, newest first: commits, merges, checkouts, pulls, resets, rebases. `action` is git's own
+  // reflog subject ("merge feature: Fast-forward"); the renderer classifies it.
+  h('reflog', async (root, max = 300) => {
+    const r = await git(root, ['reflog', 'show', '--date=unix', `-n${max}`, '--format=%H%x1f%h%x1f%gd%x1f%gs%x1f%gn%x1f%s%x1e', 'HEAD']);
+    if (r.code) return [];
+    return r.out.split('\x1e').map((s) => s.trim()).filter(Boolean).map((rec) => {
+      const [hash, short, selector, action, who, subject] = rec.split('\x1f');
+      return { hash, short, time: Number(/\{(\d+)\}/.exec(selector)?.[1]) || 0, action, who, subject };
+    });
+  });
+
+  h('identity', async (root) => {
+    const [name, email] = await Promise.all([git(root, ['config', 'user.name']), git(root, ['config', 'user.email'])]);
+    return { name: name.out.trim(), email: email.out.trim() };
+  });
+
   h('commitDetails', async (root, hash) => {
     const info = await repoInfo(root);
     const [files, msg] = await Promise.all([
       git(root, ['diff-tree', '-r', '--root', '--no-commit-id', '--name-status', '--no-renames', '-z', '--diff-merges=first-parent', hash]),
-      git(root, ['show', '-s', '--format=%H%x1f%an%x1f%ae%x1f%at%x1f%B', hash]),
+      git(root, ['show', '-s', '--format=%H%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%B', hash]),
     ]);
     const parts = files.out.split('\0').filter(Boolean);
     const list = [];
@@ -206,8 +222,8 @@ exports.register = ({ ipcMain }) => {
       const s = parts[i][0];
       list.push({ status: s === 'A' ? 'added' : s === 'D' ? 'deleted' : 'modified', rel: parts[i + 1], path: info ? toAbs(root, info, parts[i + 1]) : parts[i + 1] });
     }
-    const [full, author, email, time, ...body] = msg.out.split('\x1f');
-    return { hash: full, author, email, time: Number(time), message: body.join('\x1f').trim(), files: list };
+    const [full, author, email, time, parents, ...body] = msg.out.split('\x1f');
+    return { hash: full, author, email, time: Number(time), parents: parents ? parents.split(' ') : [], message: body.join('\x1f').trim(), files: list };
   });
 
   h('blame', async (root, abs, content) => {

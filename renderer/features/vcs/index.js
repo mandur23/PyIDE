@@ -731,22 +731,38 @@
     ]);
   }
 
-  // ---------- Git tool window: Log and Console ----------
-  let logRows, filesEl, detailsEl, logPane, consolePane, subTabs;
+  // ---------- Git tool window: Log, Activity and Console ----------
+  let logRows, filesEl, detailsEl, logPane, activityPane, activityRows, consolePane, subTabs, logSearch, authorSelect, kindSelect;
   let commits = [];
+  let layout = { rows: new Map(), lanes: 0 };
+  let activity = [];
+  let me = null;
   let selectedCommit = null;
   let details = null;
-
+  // Activity badges; defined before the tool window because its mount can run as soon as it is registered.
+  const KIND_LABEL = {
+    commit: tr('Commit'), amend: tr('Amend'), merge: tr('Merge'), checkout: tr('Checkout'), pull: tr('Pull'),
+    reset: tr('Reset'), rebase: tr('Rebase'), 'cherry-pick': tr('Cherry-pick'), revert: tr('Revert'), clone: tr('Clone'), other: tr('Other'),
+  };
   const gitTw = ide.registerToolWindow({
     id: 'Git', title: 'Git', icon: '⑂', side: 'bottom', keys: 'Alt+9', order: 45,
     mount(container, tw) {
       subTabs = el('div', 'vcs-subtabs');
-      const logTab = el('button', 'vcs-subtab active', tr('Log'));
-      const conTab = el('button', 'vcs-subtab', tr('Console'));
-      subTabs.append(logTab, conTab);
+      const tabs = { log: el('button', 'vcs-subtab active', tr('Log')), activity: el('button', 'vcs-subtab', tr('Activity')), console: el('button', 'vcs-subtab', tr('Console')) };
+      tabs.activity.id = 'vcsActivityTab';
+      subTabs.append(tabs.log, tabs.activity, tabs.console);
+
       logPane = el('div', 'vcs-log');
-      consolePane = el('div', 'vcs-console hidden');
       const table = el('div', 'vcs-log-table');
+      const bar = el('div', 'vcs-log-bar');
+      logSearch = el('input', 'vcs-log-search');
+      logSearch.id = 'vcsLogSearch';
+      logSearch.placeholder = tr('Search commits (message, hash, author)');
+      logSearch.oninput = () => renderLog();
+      authorSelect = el('select', 'vcs-log-author');
+      authorSelect.id = 'vcsLogAuthor';
+      authorSelect.onchange = () => renderLog();
+      bar.append(logSearch, el('span', 'muted', tr('User:')), authorSelect);
       const header = el('div', 'vcs-log-row vcs-log-header');
       header.append(el('span', 'vcs-c-subject', tr('Commit')), el('span', 'vcs-c-author', tr('Author')), el('span', 'vcs-c-date', tr('Date')));
       logRows = el('div', 'vcs-log-rows');
@@ -754,28 +770,44 @@
       logRows.onkeydown = (e) => {
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         e.preventDefault();
-        const i = commits.findIndex((c) => c.hash === selectedCommit);
-        const next = commits[Math.max(0, Math.min(commits.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+        const shown = visibleCommits();
+        const i = shown.findIndex((c) => c.hash === selectedCommit);
+        const next = shown[Math.max(0, Math.min(shown.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
         if (next) selectCommit(next.hash);
       };
-      table.append(header, logRows);
+      table.append(bar, header, logRows);
       const side = el('div', 'vcs-log-side');
       filesEl = el('div', 'vcs-log-files');
       detailsEl = el('div', 'vcs-log-details');
       side.append(filesEl, detailsEl);
       logPane.append(table, side);
+
+      activityPane = el('div', 'vcs-activity hidden');
+      const abar = el('div', 'vcs-log-bar');
+      kindSelect = el('select');
+      kindSelect.id = 'vcsActivityKind';
+      kindSelect.add(new Option(tr('All actions'), ''));
+      for (const k of Object.keys(KIND_LABEL)) kindSelect.add(new Option(KIND_LABEL[k], k));
+      kindSelect.onchange = () => renderActivity();
+      abar.append(el('span', 'muted', tr('What happened in this repository, newest first')), el('span', 'vcs-spacer'), kindSelect);
+      activityRows = el('div', 'vcs-activity-rows');
+      activityRows.id = 'vcsActivity';
+      activityPane.append(abar, activityRows);
+
+      consolePane = el('div', 'vcs-console hidden');
       gitConsole = ide.ui.console(consolePane);
       gitConsole.out.id = 'vcsConsole';
-      const switchTo = (log) => {
-        logTab.classList.toggle('active', log);
-        conTab.classList.toggle('active', !log);
-        logPane.classList.toggle('hidden', !log);
-        consolePane.classList.toggle('hidden', log);
+      const panes = { log: logPane, activity: activityPane, console: consolePane };
+      // true / false keep the old meaning (Log / Console) for existing callers.
+      const switchTo = (name) => {
+        const which = name === true ? 'log' : name === false ? 'console' : name;
+        for (const [k, b] of Object.entries(tabs)) b.classList.toggle('active', k === which);
+        for (const [k, p] of Object.entries(panes)) p.classList.toggle('hidden', k !== which);
+        if (which === 'activity') loadActivity();
       };
-      logTab.onclick = () => switchTo(true);
-      conTab.onclick = () => switchTo(false);
+      for (const k of Object.keys(tabs)) tabs[k].onclick = () => switchTo(k);
       subTabs.switchTo = switchTo;
-      container.append(subTabs, logPane, consolePane);
+      container.append(subTabs, logPane, activityPane, consolePane);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: loadLog },
         { icon: '↓', title: tr('Update Project… (Ctrl+T)'), run: updateProject },
@@ -789,42 +821,141 @@
     subTabs.switchTo(false);
   }
 
+  // Commit graph like PyCharm's log: each commit sits on a lane and lines run to its parents. Lanes hold the hash
+  // each one waits for; a commit takes the lane waiting for it (others waiting for it merge in), its first parent
+  // continues that lane and further parents (merges) branch out to lanes of their own.
+  function layoutGraph(list) {
+    const lanes = [];
+    const rows = new Map();
+    let width = 0;
+    for (const c of list) {
+      const before = lanes.slice();
+      let lane = lanes.indexOf(c.hash);
+      const fromAbove = lane >= 0;
+      if (!fromAbove) { lane = lanes.indexOf(null); if (lane < 0) lane = lanes.length; }
+      const into = [];
+      lanes.forEach((h, i) => { if (h === c.hash && i !== lane) { into.push(i); lanes[i] = null; } });
+      lanes[lane] = c.parents[0] ?? null;
+      const out = [];
+      for (const p of c.parents.slice(1)) {
+        let j = lanes.indexOf(p);
+        if (j < 0) { j = lanes.indexOf(null); if (j < 0) j = lanes.length; lanes[j] = p; }
+        out.push(j);
+      }
+      while (lanes.length && lanes[lanes.length - 1] == null) lanes.pop();
+      width = Math.max(width, before.length, lane + 1, lanes.length);
+      rows.set(c.hash, { lane, before, into, out, fromAbove, down: c.parents.length > 0 });
+    }
+    return { rows, lanes: width };
+  }
+
+  const LANE = 12;
+  const MAX_LANES = 14;
+  const LANE_COLORS = ['#3592c4', '#d1873a', '#5fb86b', '#c75cc0', '#c9b640', '#4fb5ad', '#e06c75', '#8f8ce6'];
+  const laneX = (i) => Math.min(i, MAX_LANES - 1) * LANE + LANE / 2 + 2;
+  const SVG = 'http://www.w3.org/2000/svg';
+
+  function graphCell(g, lanes, merge) {
+    const svg = document.createElementNS(SVG, 'svg');
+    const width = Math.min(lanes, MAX_LANES) * LANE + 4;
+    svg.setAttribute('class', 'vcs-graph');
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', 24);
+    const color = (i) => LANE_COLORS[i % LANE_COLORS.length];
+    const line = (x1, y1, x2, y2, lane) => {
+      const p = document.createElementNS(SVG, 'path');
+      const my = (y1 + y2) / 2;
+      p.setAttribute('d', x1 === x2 ? `M${x1} ${y1}V${y2}` : `M${x1} ${y1}C${x1} ${my} ${x2} ${my} ${x2} ${y2}`);
+      p.setAttribute('stroke', color(lane));
+      svg.appendChild(p);
+    };
+    if (g) {
+      g.before.forEach((h, i) => {
+        if (!h) return;
+        if (i === g.lane) { if (g.fromAbove) line(laneX(i), 0, laneX(i), 12, i); }
+        else if (g.into.includes(i)) line(laneX(i), 0, laneX(g.lane), 12, i);
+        else line(laneX(i), 0, laneX(i), 24, i);
+      });
+      if (g.down) line(laneX(g.lane), 12, laneX(g.lane), 24, g.lane);
+      for (const j of g.out) line(laneX(g.lane), 12, laneX(j), 24, j);
+    }
+    const dot = document.createElementNS(SVG, 'circle');
+    const lane = g ? g.lane : 0;
+    dot.setAttribute('cx', laneX(lane));
+    dot.setAttribute('cy', 12);
+    dot.setAttribute('r', merge ? 4 : 3.5);
+    dot.setAttribute('class', merge ? 'vcs-node merge' : 'vcs-node');
+    dot.style.setProperty('--lane', color(lane));
+    svg.appendChild(dot);
+    return svg;
+  }
+
+  const isMine = (c) => !!me && (c.author === me.name || (me.email && c.email === me.email));
+  function visibleCommits() {
+    const q = logSearch?.value.trim().toLowerCase() || '';
+    const who = authorSelect?.value || '';
+    return commits.filter((c) => (!who || (who === '@me' ? isMine(c) : c.author === who))
+      && (!q || c.subject.toLowerCase().includes(q) || c.hash.startsWith(q) || c.author.toLowerCase().includes(q)));
+  }
+
+  function fillAuthors() {
+    const keep = authorSelect.value;
+    authorSelect.replaceChildren(new Option(tr('All'), ''));
+    if (me?.name) authorSelect.add(new Option(tr('Me ({name})', { name: me.name }), '@me'));
+    for (const a of [...new Set(commits.map((c) => c.author))].sort()) authorSelect.add(new Option(a, a));
+    authorSelect.value = [...authorSelect.options].some((o) => o.value === keep) ? keep : '';
+  }
+
   let logSeq = 0;
   async function loadLog() {
     if (!logRows) return;
     const my = ++logSeq;
     if (!repo) {
       commits = [];
+      activity = [];
       logRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? tr('No Git repository in this project') : tr('No project')));
+      activityRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? tr('No Git repository in this project') : tr('No project')));
       filesEl.replaceChildren();
       detailsEl.replaceChildren();
       return;
     }
-    const list = await invoke('log', ide.root);
+    const [list, who] = await Promise.all([invoke('log', ide.root), invoke('identity', ide.root)]);
     if (my !== logSeq) return;
     commits = list;
+    me = who;
+    layout = layoutGraph(commits);
+    fillAuthors();
     if (!commits.some((c) => c.hash === selectedCommit)) selectedCommit = commits[0]?.hash || null;
     renderLog();
     if (selectedCommit) selectCommit(selectedCommit);
     else { filesEl.replaceChildren(); detailsEl.replaceChildren(el('div', 'muted', tr('No commits yet'))); }
+    if (!activityPane.classList.contains('hidden')) loadActivity();
   }
 
   function renderLog() {
     logRows.replaceChildren();
     if (!commits.length) logRows.appendChild(el('div', 'vcs-empty muted', tr('No commits yet')));
-    for (const c of commits) {
-      const row = el('div', 'vcs-log-row' + (c.hash === selectedCommit ? ' selected' : ''));
+    const shown = visibleCommits();
+    // A filtered list has gaps, so lines between its commits would lie; it keeps only the dots.
+    const filtered = shown.length !== commits.length;
+    logRows.classList.toggle('filtered', filtered);
+    if (commits.length && !shown.length) logRows.appendChild(el('div', 'vcs-empty muted', tr('No commits match the filter')));
+    for (const c of shown) {
+      const merge = c.parents.length > 1;
+      const row = el('div', 'vcs-log-row' + (c.hash === selectedCommit ? ' selected' : '') + (merge ? ' merge' : ''));
       row.dataset.hash = c.hash;
       // subject, refs and author are user data
       const subj = userText('span', 'vcs-c-subject');
-      subj.appendChild(el('span', 'vcs-dot', '●'));
+      subj.appendChild(graphCell(filtered ? null : layout.rows.get(c.hash), filtered ? 1 : layout.lanes, merge));
       for (const ref of c.refs) {
         const name = ref.replace(/^HEAD -> /, '').replace(/^tag: /, '');
         if (name === 'HEAD' || name.endsWith('/HEAD')) continue;
         subj.appendChild(el('span', 'vcs-ref' + (ref.startsWith('HEAD -> ') ? ' head' : ref.startsWith('tag: ') ? ' tag' : ref.includes('/') ? ' remote' : ''), name));
       }
+      if (merge) subj.appendChild(el('span', 'vcs-badge merge', tr('Merge')));
       subj.appendChild(el('span', 'vcs-subject-text', c.subject));
-      row.append(subj, userText('span', 'vcs-c-author', c.author), el('span', 'vcs-c-date', fmtDate(c.time)));
+      const author = userText('span', 'vcs-c-author' + (isMine(c) ? ' mine' : ''), c.author);
+      row.append(subj, author, el('span', 'vcs-c-date', fmtDate(c.time)));
       subj.title = `${c.short} ${c.subject}`;
       row.onclick = () => { selectCommit(c.hash); logRows.focus(); };
       logRows.appendChild(row);
@@ -853,14 +984,123 @@
     const who = userText('span', null, `${d.hash.slice(0, 8)} ${d.author} <${d.email}>`);
     const when = el('div', 'muted vcs-detail-meta');
     when.append(who, ' ', tr('on {date}', { date: new Date(d.time * 1000).toLocaleString(dateLocale) }));
-    detailsEl.replaceChildren(userText('div', 'vcs-detail-msg', d.message), when);
+    const parts = [userText('div', 'vcs-detail-msg', d.message), when];
+    if (d.parents.length > 1) {
+      // A merge: its parents are the branch it was made on and the branch(es) merged into it.
+      const p = el('div', 'vcs-detail-parents');
+      p.append(el('span', 'vcs-badge merge', tr('Merge')), ' ', tr('Parents:'), ' ');
+      d.parents.forEach((h, i) => {
+        const a = userText('a', 'vcs-hash-link', h.slice(0, 8));
+        a.href = '#';
+        a.onclick = (e) => { e.preventDefault(); showCommit(h); };
+        p.append(...(i ? [', ', a] : [a]));
+      });
+      parts.push(p);
+    }
+    detailsEl.replaceChildren(...parts);
   }
 
   async function showCommit(hash) {
     gitTw.show();
-    subTabs.switchTo(true);
+    subTabs.switchTo('log');
+    if (logSearch.value || authorSelect.value) { logSearch.value = ''; authorSelect.value = ''; }
     await loadLog();
     if (commits.some((c) => c.hash === hash)) await selectCommit(hash);
+  }
+
+  // ---------- Activity: git reflog as a timeline ----------
+  // Reflog subjects git writes, most specific first. Each maps to a kind (badge in KIND_LABEL) and a sentence; the
+  // {placeholders} are filled with git's own text (branch names, commit messages), which stays untranslated.
+  const ACTIVITY = [
+    { kind: 'commit', re: /^commit \(initial\): (.*)$/s, say: (m) => ['Initial commit: {message}', { message: m[1] }] },
+    { kind: 'amend', re: /^commit \(amend\): (.*)$/s, say: (m) => ['Amended the last commit: {message}', { message: m[1] }] },
+    { kind: 'merge', re: /^commit \(merge\): (.*)$/s, say: (m) => ['Committed a merge: {message}', { message: m[1] }] },
+    { kind: 'commit', re: /^commit: (.*)$/s, say: (m) => ['Committed: {message}', { message: m[1] }] },
+    { kind: 'merge', re: /^merge (.+?): (.*)$/s, say: (m) => ['Merged {branch} ({how})', { branch: m[1], how: m[2] }] },
+    { kind: 'pull', re: /^pull(?: [^:]*)?: (.*)$/s, say: (m) => ['Pulled ({how})', { how: m[1] }] },
+    { kind: 'checkout', re: /^checkout: moving from (.+) to (.+)$/, say: (m) => ['Switched from {from} to {to}', { from: m[1], to: m[2] }] },
+    { kind: 'reset', re: /^reset: moving to (.+)$/, say: (m) => ['Reset to {target}', { target: m[1] }] },
+    { kind: 'rebase', re: /^rebase(?: -i)? \(finish\): (?:returning to )?(.*)$/, say: (m) => ['Finished a rebase of {branch}', { branch: m[1].replace(/^refs\/heads\//, '') }] },
+    { kind: 'rebase', re: /^rebase(?: -i)? \(abort\)/, say: () => ['Aborted a rebase', {}] },
+    // The steps inside a rebase (start, pick, continue...) would flood the list; its finish line stands for them.
+    { kind: 'rebase', re: /^rebase/, hidden: true },
+    { kind: 'cherry-pick', re: /^cherry-pick: (.*)$/s, say: (m) => ['Cherry-picked: {message}', { message: m[1] }] },
+    { kind: 'revert', re: /^revert: (.*)$/s, say: (m) => ['Reverted: {message}', { message: m[1] }] },
+    { kind: 'clone', re: /^clone: (.*)$/s, say: (m) => ['Cloned {source}', { source: m[1].replace(/^from /, '') }] },
+  ];
+  // Literal keys so the i18n checks see every sentence.
+  const SENTENCES = {
+    'Initial commit: {message}': () => tr('Initial commit: {message}'),
+    'Amended the last commit: {message}': () => tr('Amended the last commit: {message}'),
+    'Committed a merge: {message}': () => tr('Committed a merge: {message}'),
+    'Committed: {message}': () => tr('Committed: {message}'),
+    'Merged {branch} ({how})': () => tr('Merged {branch} ({how})'),
+    'Pulled ({how})': () => tr('Pulled ({how})'),
+    'Switched from {from} to {to}': () => tr('Switched from {from} to {to}'),
+    'Reset to {target}': () => tr('Reset to {target}'),
+    'Finished a rebase of {branch}': () => tr('Finished a rebase of {branch}'),
+    'Aborted a rebase': () => tr('Aborted a rebase'),
+    'Cherry-picked: {message}': () => tr('Cherry-picked: {message}'),
+    'Reverted: {message}': () => tr('Reverted: {message}'),
+    'Cloned {source}': () => tr('Cloned {source}'),
+  };
+
+  function classify(e) {
+    for (const a of ACTIVITY) {
+      const m = a.re.exec(e.action);
+      if (m) return a.hidden ? null : { kind: a.kind, say: a.say(m) };
+    }
+    return { kind: 'other', say: null };
+  }
+
+  // The translated sentence with each {placeholder} as its own user-data span.
+  function sentence([key, vars]) {
+    const out = el('span', 'vcs-act-text');
+    (SENTENCES[key] ? SENTENCES[key]() : key).split(/\{(\w+)\}/).forEach((part, i) => {
+      if (i % 2) out.append(userText('span', 'vcs-act-value', vars[part] ?? ''));
+      else if (part) out.append(part);
+    });
+    return out;
+  }
+
+  let activitySeq = 0;
+  async function loadActivity() {
+    if (!activityRows || !repo) return;
+    const my = ++activitySeq;
+    const list = await invoke('reflog', ide.root);
+    if (my !== activitySeq) return;
+    activity = list.map((e) => ({ ...e, ...classify(e) })).filter((e) => e.kind);
+    renderActivity();
+  }
+
+  function dayLabel(t) {
+    const days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(t * 1000).setHours(0, 0, 0, 0)) / 86400000);
+    return days === 0 ? tr('Today') : days === 1 ? tr('Yesterday') : new Date(t * 1000).toLocaleDateString(dateLocale, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+  }
+
+  function renderActivity() {
+    activityRows.replaceChildren();
+    const kind = kindSelect.value;
+    const shown = activity.filter((e) => !kind || e.kind === kind);
+    if (!shown.length) activityRows.appendChild(el('div', 'vcs-empty muted', activity.length ? tr('No actions of this kind') : tr('No activity yet')));
+    let day = null;
+    for (const e of shown) {
+      const label = dayLabel(e.time);
+      if (label !== day) { activityRows.appendChild(el('div', 'vcs-act-day', label)); day = label; }
+      const row = el('div', `vcs-act-row kind-${e.kind}`);
+      row.dataset.kind = e.kind;
+      row.dataset.hash = e.hash;
+      const text = e.say ? sentence(e.say) : userText('span', 'vcs-act-text', e.action);
+      const hash = userText('a', 'vcs-hash-link', e.short);
+      hash.href = '#';
+      hash.title = tr('Show in Log');
+      const go = (ev) => { ev.preventDefault(); showCommit(e.hash); };
+      hash.onclick = go;
+      row.ondblclick = go;
+      row.append(el('span', `vcs-badge ${e.kind}`, KIND_LABEL[e.kind]), text, hash, userText('span', 'vcs-act-who muted', e.who),
+        el('span', 'vcs-act-time muted', new Date(e.time * 1000).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit' })));
+      activityRows.appendChild(row);
+    }
   }
 
   ide.on('toolWindowShown', (id) => id === 'Git' && loadLog());

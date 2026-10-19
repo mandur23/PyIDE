@@ -152,7 +152,7 @@ try {
   await press('Alt+9');
   await until(`ide.toolWindows.get('Git').isVisible() && document.querySelectorAll('.vcs-log-rows .vcs-log-row').length === 2`, 'log rows');
   check(await js(`[...document.querySelectorAll('.vcs-log-header span')].map(s => s.textContent).join('|')`) === '커밋|작성자|날짜', 'log columns are 커밋 | 작성자 | 날짜');
-  check(await js(`[...document.querySelectorAll('.vcs-subtab')].map(s => s.textContent).join('|')`) === '로그|콘솔', 'log sub-tabs are 로그 | 콘솔');
+  check(await js(`[...document.querySelectorAll('.vcs-subtab')].map(s => s.textContent).join('|')`) === '로그|활동|콘솔', 'log sub-tabs are 로그 | 활동 | 콘솔');
   check(await js(`document.querySelector('.vcs-log-rows .vcs-c-date').textContent.startsWith('오늘 ')`), 'commit dates read 오늘 …');
   await until(`document.querySelectorAll('.vcs-log-files .vcs-log-file').length >= 1`, 'commit files');
   check(await js(`document.querySelector('.vcs-side-title').textContent`) === '파일 1개 변경됨', 'changed-files title is Korean');

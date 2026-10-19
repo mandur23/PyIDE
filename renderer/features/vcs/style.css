@@ -94,7 +94,6 @@
 .vcs-subject-text { overflow: hidden; text-overflow: ellipsis; }
 .vcs-c-author { width: 140px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gray11); }
 .vcs-c-date { width: 150px; flex-shrink: 0; color: var(--gray9); }
-.vcs-dot { color: var(--vcs-dot); font-size: 9px; }
 .vcs-ref { font-size: 11px; padding: 0 5px; border-radius: 3px; background: var(--vcs-ref-bg); color: var(--vcs-ref-fg); }
 .vcs-ref.head { background: var(--vcs-ref-head-bg); color: var(--vcs-ref-head-fg); }
 .vcs-ref.remote { background: var(--vcs-ref-remote-bg); color: var(--vcs-ref-remote-fg); }
@@ -125,3 +124,44 @@
 .vcs-note-title { font-weight: 600; color: var(--gray12); }
 .vcs-note-text { margin-top: 4px; color: var(--gray9); white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; }
 .vcs-note-close { position: absolute; top: 6px; right: 6px; color: var(--gray7); }
+
+/* Log graph, filters and the Activity timeline */
+.vcs-log-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.vcs-log-search { flex: 1; min-width: 80px; max-width: 360px; padding: 3px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
+.vcs-log-search:focus { border-color: var(--blue6); }
+.vcs-log-bar select { background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; padding: 2px 6px; max-width: 220px; }
+.vcs-spacer { flex: 1; }
+.vcs-log-row .vcs-c-subject { gap: 6px; }
+.vcs-graph { flex-shrink: 0; overflow: visible; }
+.vcs-graph path { fill: none; stroke-width: 1.6; }
+.vcs-node { fill: var(--lane); }
+.vcs-node.merge { fill: var(--gray1); stroke: var(--lane); stroke-width: 2; }
+.vcs-log-row.selected .vcs-node.merge { fill: var(--blue2); }
+.vcs-c-author.mine { color: var(--blue6); font-weight: 600; }
+.vcs-badge { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px; flex-shrink: 0; background: var(--gray3); color: var(--gray11); }
+.vcs-badge.commit { background: #2c4466; color: #9cc3f5; }
+.vcs-badge.amend { background: #3d3a2a; color: #e3cf86; }
+.vcs-badge.merge { background: #3f2d4f; color: #d2a8f0; }
+.vcs-badge.checkout { background: #24443f; color: #8fd8c8; }
+.vcs-badge.pull { background: #2b4430; color: #95d69f; }
+.vcs-badge.reset, .vcs-badge.revert { background: #4d2f2f; color: #f0a3a3; }
+.vcs-badge.rebase, .vcs-badge.cherry-pick { background: #47392a; color: #f0c08a; }
+:root[data-theme="light"] .vcs-badge.commit { background: #dce8fb; color: #2a5d9b; }
+:root[data-theme="light"] .vcs-badge.amend { background: #f6efd2; color: #7d5f00; }
+:root[data-theme="light"] .vcs-badge.merge { background: #efe4f8; color: #7a3fb5; }
+:root[data-theme="light"] .vcs-badge.checkout { background: #dcf2ee; color: #1d6f62; }
+:root[data-theme="light"] .vcs-badge.pull { background: #dcefdc; color: #067d17; }
+:root[data-theme="light"] .vcs-badge.reset, :root[data-theme="light"] .vcs-badge.revert { background: #fbe1e1; color: #b3261e; }
+:root[data-theme="light"] .vcs-badge.rebase, :root[data-theme="light"] .vcs-badge.cherry-pick { background: #fbecd9; color: #8a4b00; }
+.vcs-detail-parents { margin-top: 6px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.vcs-hash-link { font-family: var(--mono); font-size: 12px; color: var(--blue6); text-decoration: none; }
+.vcs-hash-link:hover { text-decoration: underline; }
+.vcs-activity { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vcs-activity-rows { flex: 1; overflow: auto; padding: 2px 0 8px; }
+.vcs-act-day { position: sticky; top: 0; z-index: 1; padding: 6px 12px 3px; font-size: 12px; font-weight: 600; color: var(--gray9); background: var(--gray1); }
+.vcs-act-row { display: flex; align-items: center; gap: 10px; height: 26px; padding: 0 12px 0 20px; white-space: nowrap; cursor: default; }
+.vcs-act-row:hover { background: var(--gray2); }
+.vcs-act-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gray12); }
+.vcs-act-value { font-weight: 600; }
+.vcs-act-who { width: 120px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.vcs-act-time { width: 70px; flex-shrink: 0; text-align: right; }
