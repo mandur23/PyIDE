@@ -58,7 +58,7 @@ try {
   for (let i = 0; i < 5; i++) await a.press('ArrowUp');
   await a.js(`(${rowByLabel('.context-menu[data-level="1"]', 'About PyIDE')}).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
   await a.until(`document.querySelector('.dialog-title')?.textContent === 'About PyIDE'`, 'about dialog');
-  check(/Electron \d+/.test(await a.js(`document.querySelector('.about-facts').textContent`)), 'Help › About PyIDE shows versions');
+  check(/Electron \d+/.test(await a.js(`document.querySelector('.diag-facts').textContent`)), 'Help › About PyIDE shows versions');
   await a.press('Escape');
 
   // Edit › Select All acts on the editor; View › Appearance › Light switches the theme.

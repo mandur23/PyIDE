@@ -167,7 +167,8 @@ try {
   await shot('ko-configurations.png');
 
   await click('.rc-tool[data-tool="add"]');
-  await noLeaks('.context-menu', 'Add New Configuration menu');
+  // Run configuration types named after products (FastAPI on uvicorn) keep their names, as PyCharm's Korean UI does.
+  await noLeaks('.context-menu', 'Add New Configuration menu', ['FastAPI', 'uvicorn']);
   await clickMenu('pytest');
   const pyt = await js(`[...document.querySelectorAll('.rc-form .field > span')].map(n => n.textContent)`);
   check(['대상:', '추가 인수:', '작업 디렉터리:', '환경 변수:', 'Python 인터프리터:'].every((l) => pyt.includes(l)), `pytest configuration labels (${pyt.join(' | ')})`);

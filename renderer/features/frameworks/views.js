@@ -26,7 +26,7 @@
   let djangoBody;
   const collapsed = new Set(); // node keys the user folded
   const djangoTw = ide.registerToolWindow({
-    id: 'DjangoStructure', title: tr('Django Structure'), icon: '🌐', side: 'left', order: 45,
+    id: 'DjangoStructure', title: tr('Django Structure'), icon: '🌐', iconName: 'djangoStructure', side: 'left', order: 45,
     mount(container) {
       container.classList.add('fw-tool');
       djangoBody = el('div', 'fw-tree');
@@ -104,7 +104,7 @@
   let endpointsList;
   let filterInput;
   const endpointsTw = ide.registerToolWindow({
-    id: 'Endpoints', title: tr('Endpoints'), icon: '⇄', side: 'bottom', order: 58,
+    id: 'Endpoints', title: tr('Endpoints'), icon: '⇄', iconName: 'endpoints', side: 'bottom', order: 58,
     mount(container) {
       container.classList.add('fw-tool', 'fw-endpoints');
       const bar = el('div', 'fw-endpoints-bar');

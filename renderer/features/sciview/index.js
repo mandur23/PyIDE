@@ -803,7 +803,7 @@
   }
   if (ide.notebook) {
     const jvTw = ide.registerToolWindow({
-      id: 'JupyterVariables', title: tr('Jupyter Variables'), icon: '𝑥', side: 'bottom', order: 66,
+      id: 'JupyterVariables', title: tr('Jupyter Variables'), icon: '𝑥', iconName: 'jupyterVariables', side: 'bottom', order: 66,
       mount(container) {
         container.classList.add('sv-jv');
         jvHost = container;
@@ -919,7 +919,7 @@
   }
 
   const plotsTw = ide.registerToolWindow({
-    id: 'Plots', title: tr('Plots'), icon: '📈', side: 'left', order: 40,
+    id: 'Plots', title: tr('Plots'), icon: '📈', iconName: 'plots', side: 'left', order: 40,
     mount(container) {
       container.classList.add('sv-plots');
       const toolbar = el('div', 'sv-plot-bar');

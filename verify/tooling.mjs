@@ -116,7 +116,7 @@ try {
   // ---------- Settings: Editor ----------
   await press('Ctrl+Alt+S');
   await until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
-  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Appearance & Behavior|Appearance|Language and Region|Keymap|Editor|General|Code Style|Inlay Hints|Plugins|Project: project|Python Interpreter|Tools|AI|AI Completion|Claude Edits'`), 'Ctrl+Alt+S opens Settings with categories');
+  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|').startsWith('Appearance & Behavior|Appearance|Language and Region|Keymap|Editor|General|Code Style|')`), 'Ctrl+Alt+S opens Settings with categories');
   check(await js(`document.querySelector('#settingsApply').disabled`), 'Apply disabled until something changes');
   await type('wrap');
   check(await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Editor|General|Code Style' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');

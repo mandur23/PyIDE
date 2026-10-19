@@ -312,5 +312,4 @@ body.detached #statusInterp { display: none !important; }
 .about-logo { width: 56px; height: 56px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 20px;
   color: #000; background: linear-gradient(135deg, #21d789, #fcf84a); }
 .about h2 { margin: 0 0 2px; color: var(--gray12); }
-.about-facts { font: 12px/1.5 var(--mono); color: var(--gray11); margin: 10px 0; white-space: pre-wrap; }
 .about-credit { font-size: 12px; }

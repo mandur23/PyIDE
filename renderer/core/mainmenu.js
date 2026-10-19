@@ -264,19 +264,7 @@
     url.focus();
   }
 
-  // ---------- About ----------
-  async function about() {
-    const info = await ide.api.invoke('app:info');
-    const body = el('div', 'about');
-    body.append(el('div', 'about-logo', 'Py'));
-    const text = el('div');
-    text.append(el('h2', null, 'PyIDE'), el('div', 'muted', tr('A PyCharm-style Python IDE')));
-    const facts = el('pre', 'about-facts', `Version ${info.version}\nElectron ${info.electron} · Chromium ${info.chrome} · Node ${info.node}\n${info.platform}`);
-    facts.dataset.userText = '';
-    text.append(facts, el('div', 'muted about-credit', tr('Icons and color schemes from PyCharm (IntelliJ Platform, Apache License 2.0).')));
-    body.appendChild(text);
-    ide.ui.dialog({ title: tr('About PyIDE'), body, width: 480 });
-  }
+  // About PyIDE is the diagnostics plugin's (a required plugin): versions of every tool, with Copy.
 
   // ---------- actions ----------
   [
@@ -292,7 +280,6 @@
     { id: 'Paste', title: tr('Paste'), run: async () => { const t = await ide.api.invoke('clipboard:readText'); const ed = ide.editor; if (ed && t) { ed.focus(); ed.trigger('menu', 'type', { text: t }); } } },
     { id: 'SelectAll', title: tr('Select All'), run: editorCmd('editor.action.selectAll') },
     { id: 'KeymapReference', title: tr('Keymap Reference'), run: () => ide.openSettings?.('keymap') },
-    { id: 'AboutPyIDE', title: tr('About PyIDE'), run: about },
   ].forEach(ide.registerAction);
   // Monaco handles these keys itself; the Edit menu shows them for reference without binding them again.
   for (const [id, keys] of [['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Shift+Z'], ['Cut', 'Ctrl+X'], ['Copy', 'Ctrl+C'], ['Paste', 'Ctrl+V'], ['SelectAll', 'Ctrl+A']]) {
