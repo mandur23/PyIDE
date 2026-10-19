@@ -1,0 +1,11 @@
+{
+  "id": "run",
+  "name": "Run Configurations",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Run widget, run configurations, gutter run icons and the Run tool window.",
+  "required": true,
+  "main": [
+    "run.js"
+  ]
+}

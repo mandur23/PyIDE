@@ -9,10 +9,10 @@
   <header id="toolbar">
     <div id="toolbarLeft" class="tb-group">
       <span class="logo">Py</span>
-      <button id="projectWidget" class="tb-btn" title="Open folder (Ctrl+O)">No project ▾</button>
+      <button id="projectWidget" class="tb-btn" title="Open folder (Ctrl+O)" data-i18n-title="Open folder (Ctrl+O)">No project ▾</button>
     </div>
     <div id="toolbarRight" class="tb-group">
-      <select id="interpSelect" class="tb-select" title="Python interpreter"></select>
+      <select id="interpSelect" class="tb-select" title="Python interpreter" data-i18n-title="Python interpreter"></select>
     </div>
   </header>
 
@@ -39,13 +39,13 @@
         <div id="customHost"></div>
         <div id="welcome">
           <h1>PyIDE</h1>
-          <p>A PyCharm-style Python IDE</p>
-          <button id="welcomeOpen" class="primary">Open Folder</button>
+          <p data-i18n="A PyCharm-style Python IDE">A PyCharm-style Python IDE</p>
+          <button id="welcomeOpen" class="primary" data-i18n="Open Folder">Open Folder</button>
           <table class="keys">
-            <tr><td>Search files</td><td>Double Shift / Ctrl+Shift+N</td></tr>
-            <tr><td>Run current file</td><td>Shift+F10</td></tr>
-            <tr><td>Project / Terminal</td><td>Alt+1 / Alt+F12</td></tr>
-            <tr><td>Find actions</td><td>Ctrl+Shift+A</td></tr>
+            <tr><td data-i18n="Search files">Search files</td><td data-i18n="Double Shift / Ctrl+Shift+N">Double Shift / Ctrl+Shift+N</td></tr>
+            <tr><td data-i18n="Run current file">Run current file</td><td>Shift+F10</td></tr>
+            <tr><td data-i18n="Project / Terminal">Project / Terminal</td><td>Alt+1 / Alt+F12</td></tr>
+            <tr><td data-i18n="Find actions">Find actions</td><td>Ctrl+Shift+A</td></tr>
           </table>
         </div>
       </div>
@@ -55,7 +55,7 @@
           <div id="bottomTabs" class="bottom-tab-list"></div>
           <span class="spacer"></span>
           <span id="bottomActions" class="panel-actions"></span>
-          <button id="hideBottomBtn" title="Hide (Shift+Esc)">—</button>
+          <button id="hideBottomBtn" title="Hide (Shift+Esc)" data-i18n-title="Hide (Shift+Esc)">—</button>
         </div>
         <div id="bottomBody"></div>
       </section>
@@ -78,6 +78,7 @@
   <div id="menuHost"></div>
   <div id="dialogHost"></div>
 
+  <script src="core/i18n.js"></script>
   <script src="core/theme.js"></script>
   <script src="core/python.js"></script>
   <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>

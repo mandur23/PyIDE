@@ -1,0 +1,10 @@
+{
+  "id": "vcs",
+  "name": "Git Integration",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Commit tool window, diff viewer, change markers, log, annotate, branches, pull and push.",
+  "main": [
+    "git.js"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "search-nav",
+  "name": "Search and Navigation",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Find and Replace in Files, Recent Files, Structure, Go to Class/Symbol, navigation history and TODO.",
+  "main": [
+    "search.js"
+  ]
+}

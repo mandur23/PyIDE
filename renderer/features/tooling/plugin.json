@@ -1,0 +1,10 @@
+{
+  "id": "tooling",
+  "name": "Ruff Formatter and Linter",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Reformat Code, Optimize Imports and ruff inspections.",
+  "main": [
+    "tooling.js"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "problems",
+  "name": "Problems View",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Problems tool window collecting diagnostics from every inspection (Alt+6).",
+  "required": true
+}

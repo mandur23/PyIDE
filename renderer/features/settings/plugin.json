@@ -1,0 +1,8 @@
+{
+  "id": "settings",
+  "name": "Settings",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Settings dialog, themes, editor preferences, languages and plugin management.",
+  "required": true
+}

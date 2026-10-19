@@ -2,12 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFileSync } = require('child_process');
+const { createPluginManager } = require('./main/plugin-manager');
 
 if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
 
 const IGNORED = new Set(['.git', '__pycache__', 'node_modules', '.idea', '.mypy_cache', '.pytest_cache', '.ruff_cache']);
-const FEATURES_MAIN = path.join(__dirname, 'main', 'features');
-const FEATURES_RENDERER = path.join(__dirname, 'renderer', 'features');
 
 let win;
 const procs = new Map();
@@ -115,12 +114,29 @@ ipcMain.handle('proc:input', (_e, id, text) => procs.get(id)?.stdin.write(text))
 ipcMain.handle('proc:closeInput', (_e, id) => procs.get(id)?.stdin.end());
 ipcMain.handle('proc:kill', (_e, id) => killProcess(id));
 
-ipcMain.handle('core:features', () =>
-  fs.existsSync(FEATURES_RENDERER)
-    ? fs.readdirSync(FEATURES_RENDERER, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && fs.existsSync(path.join(FEATURES_RENDERER, d.name, 'index.js')))
-      .map((d) => ({ name: d.name, css: fs.existsSync(path.join(FEATURES_RENDERER, d.name, 'style.css')) }))
-    : []);
+const plugins = createPluginManager({ appDir: __dirname, userDataDir: app.getPath('userData') });
+
+ipcMain.handle('core:features', () => plugins.rendererEntries());
+ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
+ipcMain.handle('core:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
+});
+ipcMain.handle('plugins:list', () => plugins.list());
+ipcMain.handle('plugins:setEnabled', (_e, id, enabled) => plugins.setEnabled(id, enabled));
+ipcMain.handle('plugins:install', (_e, source) => plugins.install(source));
+ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
+ipcMain.handle('plugins:catalog', () => plugins.catalog());
+ipcMain.handle('dialog:openPlugin', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Install Plugin from Disk',
+    properties: ['openFile', 'openDirectory'],
+    filters: [{ name: 'Plugin (.zip or folder with plugin.json)', extensions: ['zip', 'json'] }],
+  });
+  if (r.canceled) return null;
+  const p = r.filePaths[0];
+  return path.basename(p).toLowerCase() === 'plugin.json' ? path.dirname(p) : p;
+});
 
 const featureContext = {
   ipcMain,
@@ -134,11 +150,11 @@ const featureContext = {
   vendorDir: path.join(__dirname, 'vendor'),
 };
 
-for (const file of fs.existsSync(FEATURES_MAIN) ? fs.readdirSync(FEATURES_MAIN).filter((f) => f.endsWith('.js')).sort() : []) {
+for (const file of plugins.mainModules()) {
   try {
-    require(path.join(FEATURES_MAIN, file)).register(featureContext);
+    require(file).register(featureContext);
   } catch (err) {
-    console.error(`feature ${file} failed to register:`, err);
+    console.error(`plugin module ${file} failed to register:`, err);
   }
 }
 

@@ -1,0 +1,10 @@
+{
+  "id": "packages",
+  "name": "Python Packages",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Browse, install, upgrade and uninstall packages of the project interpreter.",
+  "main": [
+    "packages.js"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "debugger",
+  "name": "Python Debugger",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Breakpoints, stepping, frames, variables, watches and inline values via debugpy.",
+  "main": [
+    "debug.js"
+  ]
+}

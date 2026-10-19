@@ -5,6 +5,8 @@ const invoke = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
 contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   on: (channel, fn) => ipcRenderer.on(channel, (_e, payload) => fn(payload)),
+  localeSync: (lang) => ipcRenderer.sendSync('core:localeSync', lang),
+  relaunch: invoke('core:relaunch'),
   openFolder: invoke('dialog:openFolder'),
   openFileDialog: invoke('dialog:openFile'),
   list: invoke('fs:list'),

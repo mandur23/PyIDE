@@ -1,0 +1,13 @@
+{
+  "id": "tests",
+  "name": "Python Test Runner",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Runs pytest or unittest and shows results in a test tree.",
+  "depends": [
+    "run"
+  ],
+  "main": [
+    "tests.js"
+  ]
+}

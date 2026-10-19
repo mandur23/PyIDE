@@ -8,6 +8,16 @@ PyIDE is an Electron + Monaco Python IDE modeled on PyCharm. The core (`main.js`
 - `renderer/features/foo/index.js` is loaded automatically after Monaco and the core are ready, before the project opens. Wrap it in an IIFE and use the global `ide`.
 - `renderer/features/foo/style.css` is loaded automatically if present. Reuse the CSS variables in `renderer/core/styles.css` (`--gray1`..`--gray12`, `--blue6`, `--green6`, `--red`, `--yellow`, `--mono`).
 - `verify/foo.mjs` plus `verify/fixtures/foo/` hold the end-to-end check (see Verification).
+- `renderer/features/foo/plugin.json` makes the feature a bundled plugin: `{id, name, version, vendor, description, main?: ['foo.js'], depends?: [ids], required?: true}`. `main` names its modules in `main/features/`. Disabled plugins load neither their renderer nor their main modules.
+- `renderer/features/foo/locales/ko.json` holds its Korean strings (see Localization).
+
+## Plugins
+
+A plugin is a folder with `plugin.json`, plus optional `index.js`, `style.css`, `locales/<lang>.json`, and main-process modules listed in `main` (paths relative to the plugin folder). It uses exactly the same `ide` API as bundled features. Bundled plugins are the folders in `renderer/features/`. Installed plugins live in `<userData>/plugins/<id>/`. `plugins-catalog/` ships sample plugins that Settings › Plugins › Marketplace installs. `main/plugin-manager.js` owns discovery, enable/disable state (`<userData>/plugin-state.json`), install from a folder or `.zip`, and uninstall. Every change applies after a restart (`ide.restart()`), as in PyCharm. A plugin whose `depends` entry is disabled or missing does not load, so features must treat other plugins' APIs (`ide.lsp`, `ide.debugger`, `ide.run`…) as optional.
+
+## Localization
+
+UI text stays in English in the source and is translated by lookup, gettext style: the global `tr('Find in Files')`, or with placeholders `tr('Run {name}', { name })`. It is also available as `ide.t`. Each plugin's `locales/ko.json` maps the exact English string to Korean. `renderer/locales/ko.json` covers the core. The language (`appearance.language`: `system`, `en`, `ko`) is fixed for a session, so call `tr()` wherever text is produced. Calling it at module load is fine. Static markup uses `data-i18n`, `data-i18n-title` and `data-i18n-placeholder`. Never translate user data: code, file names, paths, process output, package names, git messages. Keep product names (Python, Git, Pyright, ruff, pytest, pip, venv) and key chords in English, as PyCharm's Korean language pack does. Use PyCharm's Korean terminology, for example 프로젝트, 실행, 디버그, 터미널, 문제, 커밋, 구조, 설정, 인터프리터, 중단점, 단계 건너뛰기 (Step Over), 단계 진입 (Step Into), 단계 나가기 (Step Out), 프로그램 재개, 파일에서 찾기, 사용 위치 찾기, 이름 변경, 코드 서식 다시 지정 (Reformat Code), import 최적화. `verify/i18n-lib.mjs` has `englishLeaks(ctx, selector)`, which lists visible English UI text, and `missingTranslations(ctx)`, which lists `tr()` strings without a Korean entry. Launch with `launch({..., lang: 'ko-KR'})` to test Korean. Tests default to English.
 
 ## Main-process context (`ctx`)
 

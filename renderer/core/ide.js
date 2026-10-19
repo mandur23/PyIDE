@@ -24,6 +24,7 @@ const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascrip
   xml: 'xml', sh: 'shell', ps1: 'powershell', sql: 'sql', txt: 'plaintext' };
 
 const ide = (window.ide = {
+  t: tr,
   root: null,
   monaco: null,
   editor: null,
@@ -152,7 +153,7 @@ function renderPopup() {
   const list = $('popupList');
   list.innerHTML = '';
   if (s.mode === 'prompt') {
-    list.appendChild(el('div', 'popup-item hint', `${s.placeholder} — Enter to confirm, Esc to cancel`));
+    list.appendChild(el('div', 'popup-item hint', tr('{label} — Enter to confirm, Esc to cancel', { label: s.placeholder })));
     return;
   }
   const q = $('popupIn').value.trim().toLowerCase();
@@ -169,7 +170,7 @@ function renderPopup() {
     row._item = it;
     list.appendChild(row);
   });
-  if (!items.length) list.appendChild(el('div', 'popup-item hint', 'Nothing found'));
+  if (!items.length) list.appendChild(el('div', 'popup-item hint', tr('Nothing found')));
 }
 
 function closePopup(value = null) {
@@ -258,7 +259,7 @@ ide.ui.contextMenu = (x, y, items) => {
 };
 
 // buttons: [{label, primary?, run?(dialog) -> false keeps it open}]
-ide.ui.dialog = ({ title, body, buttons = [{ label: 'OK', primary: true }], width = 520, onClose }) => {
+ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], width = 520, onClose }) => {
   const backdrop = el('div', 'dialog-backdrop');
   const box = el('div', 'dialog');
   box.style.width = `${width}px`;
@@ -410,7 +411,7 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
   button.onclick = tw.toggle;
   if (tab) tab.onclick = tw.show;
   ide.toolWindows.set(id, tw);
-  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: `Tool Window: ${title}`, keys, run: tw.toggle });
+  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: tw.toggle });
   mount?.(container, tw);
   // Until something is shown explicitly, the default window of an area is the one with the lowest order
   // (features load alphabetically, so registration order is not meaningful).
@@ -544,9 +545,9 @@ function renderTabs() {
     node.oncontextmenu = (e) => {
       e.preventDefault();
       ide.ui.contextMenu(e.clientX, e.clientY, [
-        { label: 'Close', hint: 'Ctrl+F4', run: () => ide.closeTab(t.path) },
-        { label: 'Close Other Tabs', run: () => ide.tabs.filter((o) => o !== t).forEach((o) => ide.closeTab(o.path)) },
-        { label: 'Close All Tabs', run: () => [...ide.tabs].forEach((o) => ide.closeTab(o.path)) },
+        { label: tr('Close'), hint: 'Ctrl+F4', run: () => ide.closeTab(t.path) },
+        { label: tr('Close Other Tabs'), run: () => ide.tabs.filter((o) => o !== t).forEach((o) => ide.closeTab(o.path)) },
+        { label: tr('Close All Tabs'), run: () => [...ide.tabs].forEach((o) => ide.closeTab(o.path)) },
       ]);
     };
     close.onclick = (e) => { e.stopPropagation(); ide.closeTab(t.path); };
@@ -560,7 +561,7 @@ ide.closeTab = (path, force) => {
   const i = ide.tabs.findIndex((t) => samePath(t.path, path));
   if (i < 0) return;
   const tab = ide.tabs[i];
-  if (!force && ide.isDirty(tab) && !confirm(`${tab.title} has unsaved changes. Close anyway?`)) return;
+  if (!force && ide.isDirty(tab) && !confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }))) return;
   ide.tabs.splice(i, 1);
   if (tab.kind === 'file') tab.model.dispose();
   else { tab.onClose?.(); tab.host.remove(); }
@@ -677,7 +678,7 @@ const selectedDir = () => (!selected ? ide.root : selected.dir ? selected.path :
 
 async function createEntry(isDir) {
   if (!ide.root) return;
-  const name = await ide.ui.prompt(isDir ? 'New directory name' : 'New Python file name', isDir ? '' : 'main.py');
+  const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
   if (!name) return;
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
   try {
@@ -690,7 +691,7 @@ async function createEntry(isDir) {
 }
 
 async function renameEntry(entry) {
-  const name = await ide.ui.prompt('New name', entry.name);
+  const name = await ide.ui.prompt(tr('New name'), entry.name);
   if (!name || name === entry.name) return;
   const to = joinPath(dirname(entry.path), name);
   try { await ide.api.rename(entry.path, to); } catch (e) { return alert(e.message); }
@@ -702,7 +703,7 @@ async function renameEntry(entry) {
 }
 
 async function deleteEntry(entry) {
-  if (!confirm(`Move ${entry.name} to the Recycle Bin?`)) return;
+  if (!confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }))) return;
   await ide.api.trash(entry.path);
   ide.tabs.filter((t) => t.path && isUnder(t.path, entry.path)).forEach((t) => ide.closeTab(t.path, true));
   renderTree();
@@ -712,25 +713,25 @@ async function deleteEntry(entry) {
 function showTreeMenu(entry, x, y) {
   const extra = treeActions.filter((a) => !a.when || a.when(entry)).map((a) => ({ label: a.title, hint: a.hint, run: () => a.run(entry) }));
   ide.ui.contextMenu(x, y, [
-    { label: 'New Python File', hint: 'Alt+Insert', run: () => createEntry(false) },
-    { label: 'New Directory', run: () => createEntry(true) },
+    { label: tr('New Python File'), hint: 'Alt+Insert', run: () => createEntry(false) },
+    { label: tr('New Directory'), run: () => createEntry(true) },
     { separator: true },
     ...(extra.length ? [...extra, { separator: true }] : []),
-    { label: 'Rename…', hint: 'Shift+F6', run: () => renameEntry(entry), disabled: samePath(entry.path, ide.root) },
-    { label: 'Delete', hint: 'Delete', run: () => deleteEntry(entry), disabled: samePath(entry.path, ide.root) },
+    { label: tr('Rename…'), hint: 'Shift+F6', run: () => renameEntry(entry), disabled: samePath(entry.path, ide.root) },
+    { label: tr('Delete'), hint: 'Delete', run: () => deleteEntry(entry), disabled: samePath(entry.path, ide.root) },
   ]);
 }
 
 ide.registerToolWindow({
-  id: 'Project', title: 'Project', icon: '▤', side: 'left', keys: 'Alt+1', order: 0,
+  id: 'Project', title: tr('Project'), icon: '▤', side: 'left', keys: 'Alt+1', order: 0,
   mount(container, tw) {
     const tree = el('div');
     tree.id = 'tree';
     container.appendChild(tree);
     tw.setActions([
-      { icon: '＋', title: 'New Python File', run: () => createEntry(false) },
-      { icon: '▣', title: 'New Directory', run: () => createEntry(true) },
-      { icon: '⟳', title: 'Refresh', run: renderTree },
+      { icon: '＋', title: tr('New Python File'), run: () => createEntry(false) },
+      { icon: '▣', title: tr('New Directory'), run: () => createEntry(true) },
+      { icon: '⟳', title: tr('Refresh'), run: renderTree },
     ]);
   },
 });
@@ -742,11 +743,11 @@ ide.reloadInterpreters = async () => {
   const sel = $('interpSelect');
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));
-  if (!ide.interps.length) sel.add(new Option('<No interpreter>'));
+  if (!ide.interps.length) sel.add(new Option(tr('<No interpreter>')));
   const preferred = ide.settings.get(`interpreter.${ide.root}`);
   const idx = ide.interps.findIndex((i) => samePath(i.executable, preferred));
   if (idx >= 0) sel.selectedIndex = idx;
-  $('statusInterp').textContent = ide.currentInterp()?.label || 'No interpreter';
+  $('statusInterp').textContent = ide.currentInterp()?.label || tr('No interpreter');
   ide.emit('interpreterChanged', ide.currentInterp());
 };
 $('interpSelect').onchange = () => {
@@ -800,7 +801,7 @@ async function gotoFile() {
   if (!ide.root) return;
   const files = await ide.api.walk(ide.root);
   const path = await ide.ui.pick({
-    placeholder: 'Search files',
+    placeholder: tr('Search files'),
     items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: p.endsWith('.py') ? '🐍' : '📄', value: p })),
   });
   if (path) ide.openFile(path);
@@ -808,7 +809,7 @@ async function gotoFile() {
 
 async function findAction() {
   const action = await ide.ui.pick({
-    placeholder: 'Search actions',
+    placeholder: tr('Search actions'),
     items: ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.join(', '), value: a })),
   });
   action?.run();
@@ -817,30 +818,31 @@ async function findAction() {
 const inEditor = () => ide.editor?.hasTextFocus();
 const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
 [
-  { id: 'SaveAll', title: 'Save All', keys: 'Ctrl+S', run: ide.saveAll },
-  { id: 'OpenProject', title: 'Open Folder…', keys: 'Ctrl+O', run: pickFolder },
-  { id: 'GotoFile', title: 'Go to File…', keys: ['Ctrl+Shift+N', 'Shift Shift'], run: gotoFile },
-  { id: 'GotoAction', title: 'Find Action…', keys: 'Ctrl+Shift+A', run: findAction },
-  { id: 'CloseContent', title: 'Close Tab', keys: 'Ctrl+F4', run: () => ide.active && ide.closeTab(ide.active) },
-  { id: 'PreviousTab', title: 'Previous Tab', keys: 'Alt+ArrowLeft', run: () => cycleTab(-1) },
-  { id: 'NextTab', title: 'Next Tab', keys: 'Alt+ArrowRight', run: () => cycleTab(1) },
-  { id: 'NewPythonFile', title: 'New Python File', keys: 'Alt+Insert', run: () => createEntry(false) },
-  { id: 'HideBottom', title: 'Hide Active Tool Window', keys: 'Shift+Escape', run: () => areas.bottom.active?.hide() },
+  { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: ide.saveAll },
+  { id: 'OpenProject', title: tr('Open Folder…'), keys: 'Ctrl+O', run: pickFolder },
+  { id: 'GotoFile', title: tr('Go to File…'), keys: ['Ctrl+Shift+N', 'Shift Shift'], run: gotoFile },
+  { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction },
+  { id: 'CloseContent', title: tr('Close Tab'), keys: 'Ctrl+F4', run: () => ide.active && ide.closeTab(ide.active) },
+  { id: 'PreviousTab', title: tr('Previous Tab'), keys: 'Alt+ArrowLeft', run: () => cycleTab(-1) },
+  { id: 'NextTab', title: tr('Next Tab'), keys: 'Alt+ArrowRight', run: () => cycleTab(1) },
+  { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },
+  { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide() },
   { id: 'FocusEditor', keys: 'Escape', when: () => !inEditor() && !document.activeElement?.closest('#editor') && !!ide.editor?.getModel(), run: () => ide.editor.focus() },
-  { id: 'EditorDuplicate', title: 'Duplicate Line', keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
-  { id: 'EditorDeleteLine', title: 'Delete Line', keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },
-  { id: 'CommentByLineComment', title: 'Comment with Line Comment', keys: 'Ctrl+/', when: inEditor, run: editorAction('editor.action.commentLine') },
-  { id: 'GotoLine', title: 'Go to Line…', keys: 'Ctrl+G', when: inEditor, run: editorAction('editor.action.gotoLine') },
-  { id: 'Find', title: 'Find', keys: 'Ctrl+F', when: inEditor, run: editorAction('actions.find') },
-  { id: 'Replace', title: 'Replace', keys: 'Ctrl+R', when: inEditor, run: editorAction('editor.action.startFindReplaceAction') },
-  { id: 'EditorSelectWord', title: 'Extend Selection', keys: 'Ctrl+W', when: inEditor, run: editorAction('editor.action.smartSelect.expand') },
-  { id: 'EditorUnSelectWord', title: 'Shrink Selection', keys: 'Ctrl+Shift+W', when: inEditor, run: editorAction('editor.action.smartSelect.shrink') },
-  { id: 'MoveLineUp', title: 'Move Line Up', keys: 'Alt+Shift+ArrowUp', when: inEditor, run: editorAction('editor.action.moveLinesUpAction') },
-  { id: 'MoveLineDown', title: 'Move Line Down', keys: 'Alt+Shift+ArrowDown', when: inEditor, run: editorAction('editor.action.moveLinesDownAction') },
-  { id: 'CollapseRegion', title: 'Collapse', keys: 'Ctrl+-', when: inEditor, run: editorAction('editor.fold') },
-  { id: 'ExpandRegion', title: 'Expand', keys: 'Ctrl+=', when: inEditor, run: editorAction('editor.unfold') },
+  { id: 'EditorDuplicate', title: tr('Duplicate Line'), keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
+  { id: 'EditorDeleteLine', title: tr('Delete Line'), keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },
+  { id: 'CommentByLineComment', title: tr('Comment with Line Comment'), keys: 'Ctrl+/', when: inEditor, run: editorAction('editor.action.commentLine') },
+  { id: 'GotoLine', title: tr('Go to Line…'), keys: 'Ctrl+G', when: inEditor, run: editorAction('editor.action.gotoLine') },
+  { id: 'Find', title: tr('Find'), keys: 'Ctrl+F', when: inEditor, run: editorAction('actions.find') },
+  { id: 'Replace', title: tr('Replace'), keys: 'Ctrl+R', when: inEditor, run: editorAction('editor.action.startFindReplaceAction') },
+  { id: 'EditorSelectWord', title: tr('Extend Selection'), keys: 'Ctrl+W', when: inEditor, run: editorAction('editor.action.smartSelect.expand') },
+  { id: 'EditorUnSelectWord', title: tr('Shrink Selection'), keys: 'Ctrl+Shift+W', when: inEditor, run: editorAction('editor.action.smartSelect.shrink') },
+  { id: 'MoveLineUp', title: tr('Move Line Up'), keys: 'Alt+Shift+ArrowUp', when: inEditor, run: editorAction('editor.action.moveLinesUpAction') },
+  { id: 'MoveLineDown', title: tr('Move Line Down'), keys: 'Alt+Shift+ArrowDown', when: inEditor, run: editorAction('editor.action.moveLinesDownAction') },
+  { id: 'CollapseRegion', title: tr('Collapse'), keys: 'Ctrl+-', when: inEditor, run: editorAction('editor.fold') },
+  { id: 'ExpandRegion', title: tr('Expand'), keys: 'Ctrl+=', when: inEditor, run: editorAction('editor.unfold') },
 ].forEach(ide.registerAction);
 
+$('projectWidget').textContent = `${tr('No project')} ▾`;
 $('projectWidget').onclick = pickFolder;
 $('welcomeOpen').onclick = pickFolder;
 
@@ -851,27 +853,31 @@ ide.api = window.api;
 addEventListener('unhandledrejection', (e) => { if (e.reason?.name === 'Canceled' && e.reason?.message === 'Canceled') e.preventDefault(); });
 
 async function loadFeatures() {
-  for (const f of await ide.api.invoke('core:features')) {
-    if (f.css) {
+  for (const p of await ide.api.invoke('core:features')) {
+    if (p.css) {
       const link = el('link');
       link.rel = 'stylesheet';
-      link.href = `features/${f.name}/style.css`;
+      link.href = p.css;
       document.head.appendChild(link);
     }
     await new Promise((resolve) => {
       const s = el('script');
-      s.src = `features/${f.name}/index.js`;
+      s.src = p.script;
       s.onload = resolve;
-      s.onerror = () => { console.error(`feature ${f.name} failed to load`); resolve(); };
+      s.onerror = () => { console.error(`plugin ${p.id} failed to load`); resolve(); };
       document.body.appendChild(s);
     });
   }
 }
 
+ide.restart = () => ide.api.relaunch();
+
 require.config({ paths: { vs: '../node_modules/monaco-editor/min/vs' } });
 // Monaco's default blob worker cannot importScripts() a file:// URL (uncaught ErrorEvent); load the worker script directly.
 window.MonacoEnvironment = { getWorkerUrl: () => new URL('../node_modules/monaco-editor/min/vs/base/worker/workerMain.js', location.href).href };
-require(['vs/editor/editor.main'], async () => {
+// Monaco's own UI strings (find widget, context menu, command palette) come from its NLS bundle for the locale.
+const monacoNls = i18n.locale === 'en' ? [] : [`vs/nls.messages.${i18n.locale}`];
+require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
   const monaco = (ide.monaco = window.monaco);
   monaco.languages.setMonarchTokensProvider('python', PYTHON_GRAMMAR);
   monaco.languages.setLanguageConfiguration('python', {
@@ -912,4 +918,4 @@ require(['vs/editor/editor.main'], async () => {
   if (last && await ide.api.exists(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
   window.__ideReady = true;
-});
+}));

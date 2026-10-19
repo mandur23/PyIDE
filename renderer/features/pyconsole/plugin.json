@@ -1,0 +1,10 @@
+{
+  "id": "pyconsole",
+  "name": "Python Console",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Interactive Python console tool window (Alt+8).",
+  "main": [
+    "pyconsole.js"
+  ]
+}
