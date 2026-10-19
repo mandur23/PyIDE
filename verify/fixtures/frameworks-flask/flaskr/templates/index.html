@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}{{ title|title }}{% endblock %}
+{% block content %}
+  <h1>{{ title }}</h1>
+  {% include 'auth/login.html' %}
+{% endblock %}

@@ -1,0 +1,6 @@
+<!doctype html>
+<title>{% block title %}{% endblock %} - Flaskr</title>
+<nav><a href="{{ url_for('auth.login') }}">Log In</a></nav>
+<section class="content">
+  {% block content %}{% endblock %}
+</section>

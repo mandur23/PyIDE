@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% load poll_extras %}
+{# The latest questions #}
+{% block content %}
+  <h1 class="title">{{ greeting|upper }}</h1>
+  {% include "polls/_item.html" %}
+  <ul>
+  {% for question in latest %}
+    <li><a href="{% url 'polls:detail' question.id %}">{{ question.question_text }}</a></li>
+  {% empty %}
+    <li>No polls are available.</li>
+  {% endfor %}
+  </ul>
+{% endblock %}

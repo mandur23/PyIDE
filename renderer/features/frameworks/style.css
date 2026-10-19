@@ -1,0 +1,41 @@
+.fw-tool { display: flex; flex-direction: column; min-height: 0; }
+.fw-empty { padding: 10px 12px; }
+
+.fw-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
+.fw-node { display: flex; align-items: center; gap: 4px; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; color: var(--gray11); }
+.fw-node:hover { background: var(--gray3); }
+.fw-arrow { width: 12px; flex-shrink: 0; color: var(--gray8); font-size: 10px; text-align: center; }
+.fw-icon { width: 16px; flex-shrink: 0; text-align: center; font-size: 11px; color: var(--gray9); }
+.fw-name { overflow: hidden; text-overflow: ellipsis; }
+.fw-detail { margin-left: 6px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.fw-section > .fw-name { font-weight: 600; color: var(--gray12); }
+.fw-model .fw-icon { color: var(--blue6); }
+.fw-field .fw-name, .fw-url .fw-name { font-family: var(--mono); font-size: 12px; }
+
+.fw-endpoints-bar { display: flex; padding: 4px 6px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.fw-filter { flex: 1; max-width: 360px; }
+.fw-row { display: grid; grid-template-columns: 110px minmax(160px, 2fr) minmax(120px, 1.5fr) minmax(100px, 1fr); gap: 10px;
+  align-items: center; padding: 0 10px; height: 24px; white-space: nowrap; }
+.fw-row > span { overflow: hidden; text-overflow: ellipsis; }
+.fw-head { color: var(--gray8); font-size: 12px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.fw-endpoint-rows { flex: 1; min-height: 0; overflow: auto; }
+.fw-endpoint { cursor: default; }
+.fw-endpoint:hover { background: var(--gray3); }
+.fw-endpoint.selected { background: var(--blue3, var(--gray4)); }
+.fw-group { padding: 6px 10px 2px; color: var(--gray9); font-size: 12px; font-weight: 600; }
+.fw-method { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--gray10); }
+.fw-method.m-get { color: var(--green6); }
+.fw-method.m-post { color: var(--blue6); }
+.fw-method.m-put, .fw-method.m-patch { color: var(--yellow); }
+.fw-method.m-delete { color: var(--red); }
+.fw-path, .fw-endpoint-name { font-family: var(--mono); font-size: 12px; }
+
+.fw-route-gutter { cursor: pointer; }
+.fw-route-gutter::before { content: '🌐'; display: block; text-align: center; font-size: 10px; line-height: 22px; filter: grayscale(.2); }
+
+.fw-browser { display: flex; flex-direction: column; height: 100%; background: var(--gray1); }
+.fw-browser-bar { display: flex; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.fw-browser-btn { width: 28px; height: 26px; border-radius: 4px; color: var(--gray11); }
+.fw-browser-btn:hover { background: var(--gray3); }
+.fw-browser-url { flex: 1; font-family: var(--mono); font-size: 12px; }
+.fw-browser-frame { flex: 1; border: 0; background: #fff; width: 100%; }

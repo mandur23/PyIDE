@@ -392,11 +392,13 @@
 
   // The debugger debugs the active file; 'DebugCurrent' is the contract name, 'Debug' is PyCharm's action id.
   const debugActionId = () => ['DebugCurrent', 'Debug'].find((id) => ide.actions.some((a) => a.id === id));
-  const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python');
-  function debugConfig(cfg) {
-    if (cfg.type === 'python' && ide.debugger?.debugFile) {
+  // A type with debugTarget(cfg, interp) -> {script, cwd, params, env} (script may be '-m') is debugged like a script.
+  const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile));
+  async function debugConfig(cfg) {
+    const debugTarget = types.get(cfg.type)?.debugTarget;
+    if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
-      const r = ide.run.resolvePython(cfg);
+      const r = cfg.type === 'python' ? ide.run.resolvePython(cfg) : { ...(await debugTarget(cfg, interpFor(cfg))), interp: interpFor(cfg) };
       return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env });
     }
     const file = types.get(cfg.type)?.file?.(cfg);
@@ -558,6 +560,11 @@
           if (current[fd.key] && !ide.interps.some((i) => samePath(i.executable, current[fd.key]))) input.add(new Option(current[fd.key], current[fd.key]));
           input.value = current[fd.key] || '';
           input.onchange = () => (current[fd.key] = input.value);
+        } else if (fd.kind === 'checkbox') {
+          input = el('input');
+          input.type = 'checkbox';
+          input.checked = !!current[fd.key];
+          input.onchange = () => (current[fd.key] = input.checked);
         } else {
           input = el('input');
           input.value = current[fd.key] || '';
@@ -710,6 +717,8 @@
     runConfig,
     runContext,
     runCurrentFile,
+    debugConfig,
+    canDebug,
     editConfigurations,
     sessions: () => sessions,
     activeSession: () => activeSession,

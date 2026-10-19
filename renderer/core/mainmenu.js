@@ -141,6 +141,7 @@
       act('RunPythonConsole'), act('ActivateTerminalToolWindow'), act('TerminalNewSession'), { separator: true },
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
       act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
+      ...(ide.frameworks?.kinds().length ? [act('Frameworks.RunServer'), act('Frameworks.DebugServer'), ...(ide.frameworks.info().django ? [act('Django.RunManageTask'), act('Django.MakeMigrations'), act('Django.Migrate')] : []), { separator: true }] : []),
       act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'),
     ]) },
     { label: 'Git', submenu: () => tidy([
