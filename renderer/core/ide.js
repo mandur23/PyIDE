@@ -358,6 +358,38 @@ const areas = {
   bottom: { panel: $('bottom'), splitter: $('bottomSplitter'), body: $('bottomBody'), actions: $('bottomActions'), stripe: $('stripeBottom'), active: null },
 };
 
+// PyCharm New UI icons (icons.js) for the built-in tool windows; plugins may pass iconName, or a text glyph as icon.
+const TOOL_ICONS = { Project: 'project', Commit: 'commit', Structure: 'structure', Launchers: 'services', Run: 'run',
+  Debug: 'debug', FindUsages: 'find', FindInFiles: 'find', PythonConsole: 'pythonConsole', Terminal: 'terminal',
+  Problems: 'problems', Git: 'vcs', TODO: 'todo', PythonPackages: 'pythonPackages' };
+ide.icon = (name, fallback = '') => {
+  const svg = window.PYIDE_ICONS?.[name];
+  const span = el('span', 'ide-icon');
+  if (svg) span.innerHTML = svg; else span.textContent = fallback;
+  return span;
+};
+
+// Like PyCharm's New UI, the sidebar shows only pinned tool windows (plus whichever is open right now); the rest live
+// behind the "More" button. The pinned set is a user setting.
+const DEFAULT_PINNED = ['Project', 'Commit', 'Structure', 'Run', 'Debug', 'Terminal', 'Problems'];
+const pinnedIds = () => ide.settings.get('sidebar.pinned', DEFAULT_PINNED);
+const isPinned = (id) => pinnedIds().includes(id);
+function setPinned(id, pinned) {
+  const list = pinnedIds().filter((x) => x !== id);
+  if (pinned) list.push(id);
+  ide.settings.set('sidebar.pinned', list);
+  refreshStripe();
+}
+function refreshStripe() {
+  for (const tw of ide.toolWindows.values()) {
+    const shown = isPinned(tw.id) || tw.isVisible();
+    tw.button.classList.toggle('hidden', !shown);
+    tw.button.classList.toggle('unpinned', !isPinned(tw.id));
+    tw.tab?.classList.toggle('hidden', !shown);
+  }
+}
+ide.sidebar = { isPinned, setPinned, pinned: pinnedIds };
+
 function renderAreaActions(area) {
   area.actions.innerHTML = '';
   for (const a of area.active?.actionList || []) {
@@ -374,15 +406,19 @@ function setAreaVisible(area, visible) {
   for (const tw of ide.toolWindows.values()) {
     if (tw.area === area) tw.button.classList.toggle('active', visible && area.active === tw);
   }
+  refreshStripe();
 }
 
-// {id, title, icon, side: 'left'|'bottom', keys?, order?, mount(container, tw)} -> tw {show, hide, toggle, setActions, setBadge, isVisible}
-ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100, mount }) => {
+// {id, title, icon, iconName?, side: 'left'|'bottom', keys?, order?, mount(container, tw)} -> tw {show, hide, toggle, setActions, setBadge, isVisible}
+ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, order = 100, mount }) => {
   const area = areas[side];
   const container = el('div', 'tool');
   area.body.appendChild(container);
-  const button = el('button', 'stripe-btn', icon);
-  button.title = `${title}${keys ? ` (${normalizeKeys(keys).join(', ')})` : ''}`;
+  const button = el('button', 'stripe-btn');
+  button.appendChild(ide.icon(iconName || TOOL_ICONS[id], icon));
+  const keyText = keys ? normalizeKeys(keys).join(', ') : '';
+  button.title = `${title}${keyText ? ` (${keyText})` : ''}`;
+  button.dataset.tool = id;
   placeOrdered(area.stripe, button, order);
   let tab;
   if (side === 'bottom') {
@@ -392,7 +428,7 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
     placeOrdered($('bottomTabs'), tab, order);
   }
   const tw = {
-    id, title, area, container, button, actionList: [],
+    id, title, area, container, button, actionList: [], keys: keyText, iconName: iconName || TOOL_ICONS[id], glyph: icon,
     isVisible: () => !area.panel.classList.contains('hidden') && area.active === tw,
     show() {
       area.active = tw;
@@ -415,6 +451,15 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
     tab,
   };
   button.onclick = tw.toggle;
+  button.oncontextmenu = (e) => {
+    e.preventDefault();
+    ide.ui.contextMenu(e.clientX, e.clientY, [
+      { label: tw.isVisible() ? tr('Hide') : tr('Show'), hint: keyText, run: tw.toggle },
+      isPinned(id)
+        ? { label: tr('Remove from Sidebar'), run: () => setPinned(id, false) }
+        : { label: tr('Pin to Sidebar'), run: () => setPinned(id, true) },
+    ]);
+  };
   if (tab) tab.onclick = tw.show;
   ide.toolWindows.set(id, tw);
   if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: tw.toggle, terminal: true });
@@ -427,9 +472,56 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
     area.active?.tab?.classList.remove('active');
     area.active = tw; container.classList.add('active'); tab?.classList.add('active'); if (side === 'left') $('sideTitle').textContent = title; renderAreaActions(area);
   }
+  refreshStripe();
   return tw;
 };
 $('hideBottomBtn').onclick = () => areas.bottom.active?.hide();
+
+// "More Tool Windows": every tool window, with a pin to keep it on the sidebar.
+const moreBtn = $('stripeMore');
+moreBtn.appendChild(ide.icon('more', '⋯'));
+moreBtn.title = tr('More Tool Windows');
+let morePanel = null;
+function closeMore() {
+  morePanel?.remove();
+  morePanel = null;
+  removeEventListener('mousedown', outsideMore, true);
+  removeEventListener('keydown', escMore, true);
+}
+const outsideMore = (e) => { if (!morePanel?.contains(e.target) && !moreBtn.contains(e.target)) closeMore(); };
+const escMore = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeMore(); } };
+function renderMore() {
+  morePanel.replaceChildren();
+  for (const [side, label] of [['left', tr('Left')], ['bottom', tr('Bottom')]]) {
+    const list = [...ide.toolWindows.values()].filter((tw) => tw.area === areas[side]).sort((a, b) => a.order - b.order);
+    if (!list.length) continue;
+    morePanel.appendChild(el('div', 'more-group', label));
+    for (const tw of list) {
+      const row = el('div', 'more-row' + (tw.isVisible() ? ' visible' : ''));
+      row.dataset.tool = tw.id;
+      row.append(ide.icon(tw.iconName, tw.glyph), el('span', 'more-title', tw.title), el('span', 'more-keys', tw.keys));
+      const pin = el('button', 'more-pin' + (isPinned(tw.id) ? ' pinned' : ''));
+      pin.appendChild(ide.icon(isPinned(tw.id) ? 'pinSelected' : 'pin', '📌'));
+      pin.title = isPinned(tw.id) ? tr('Remove from Sidebar') : tr('Pin to Sidebar');
+      pin.onclick = (e) => { e.stopPropagation(); setPinned(tw.id, !isPinned(tw.id)); renderMore(); };
+      row.appendChild(pin);
+      row.onclick = () => { closeMore(); tw.show(); };
+      morePanel.appendChild(row);
+    }
+  }
+}
+moreBtn.onclick = () => {
+  if (morePanel) return closeMore();
+  morePanel = el('div', 'more-panel');
+  morePanel.id = 'moreToolWindows';
+  document.body.appendChild(morePanel);
+  renderMore();
+  const r = moreBtn.getBoundingClientRect();
+  morePanel.style.left = `${r.right + 6}px`;
+  morePanel.style.top = `${Math.max(8, Math.min(r.bottom - morePanel.offsetHeight, innerHeight - morePanel.offsetHeight - 8))}px`;
+  setTimeout(() => { addEventListener('mousedown', outsideMore, true); addEventListener('keydown', escMore, true); });
+};
+ide.on('settingsChanged', (key) => { if (key === 'sidebar.pinned') refreshStripe(); });
 
 // ---------- problems ----------
 const problemStore = new Map(); // source -> Map(pathLower -> {path, items})

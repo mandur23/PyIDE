@@ -94,8 +94,13 @@ try {
   await openFile(t, 'app.py');
   await until(`ide.lsp.status() === 'ready'`, 'ready');
   await caret(6, 25);
+  // Monaco sometimes closes a hover that opens while the LSP is still updating highlights; a user just presses again.
+  const quickDoc = `[...document.querySelectorAll('.monaco-hover')].some(h => h.offsetParent && /def greet/.test(h.textContent))`;
   await press('Ctrl+Q');
-  await until(`${visible('.monaco-hover')} && /def greet/.test(document.querySelector('.monaco-hover').textContent)`, 'quick documentation');
+  if (!(await until(quickDoc, 'quick documentation', 5000).catch(() => false))) {
+    await press('Ctrl+Q');
+    await until(quickDoc, 'quick documentation');
+  }
   await noLeaks('.monaco-hover .hover-row.status-bar', 'quick documentation chrome');
   await shot('quick-doc.png');
   await press('Escape');

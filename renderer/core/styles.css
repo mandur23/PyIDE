@@ -34,8 +34,30 @@ input, select, textarea { font: inherit; }
 .stripe-btn { width: 30px; height: 30px; border-radius: 6px; color: var(--gray9); font-size: 15px; position: relative; }
 .stripe-btn:hover { background: var(--gray3); }
 .stripe-btn.active { background: var(--blue6); color: #fff; }
-/* Feature icons may be color emoji; the New UI stripe is monochrome until a window is active. */
-.stripe-btn:not(.active) { filter: grayscale(1) brightness(1.25); }
+/* Tool window icons: PyCharm New UI SVGs drawn in currentColor; text glyphs (plugins without an SVG) stay monochrome. */
+.stripe-btn { display: grid; place-items: center; }
+.stripe-btn.active { color: #fff; }
+.ide-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; line-height: 1; filter: grayscale(1); }
+.ide-icon svg { width: 16px; height: 16px; display: block; }
+.stripe-btn .ide-icon, .stripe-btn .ide-icon svg { width: 20px; height: 20px; }
+.stripe-btn.active .ide-icon { filter: none; }
+.stripe-more { margin-top: 4px; color: var(--gray9); }
+.more-panel { position: fixed; z-index: 60; min-width: 280px; max-height: calc(100vh - 16px); overflow: auto; padding: 4px;
+  background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 8px 24px #0008; }
+.more-group { padding: 6px 10px 2px; color: var(--gray7); font-size: 12px; }
+.more-row { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 10px; border-radius: 5px; cursor: default; }
+.more-row:hover { background: var(--blue2); }
+.more-row.visible .more-title { font-weight: 600; }
+.more-title { flex: 1; white-space: nowrap; }
+.more-keys { color: var(--gray7); font-size: 12px; }
+.more-pin { width: 22px; height: 22px; border-radius: 4px; color: var(--gray7); display: grid; place-items: center; opacity: 0; }
+.more-row:hover .more-pin, .more-pin.pinned, .more-pin:focus-visible { opacity: 1; }
+.more-pin.pinned { color: var(--blue8); }
+.more-pin:hover { background: var(--gray4); }
+.more-pin .ide-icon { filter: none; }
+.stripe-btn:focus-visible, .more-pin:focus-visible { outline: 2px solid var(--blue6); outline-offset: -2px; }
+.stripe-btn:focus:not(:focus-visible) { outline: none; }
+:root[data-theme="light"] .more-panel { background: #fff; box-shadow: 0 8px 28px #0003; border-color: #b9bdc9; }
 .stripe-btn[data-badge]:not([data-badge=""])::after { content: ''; position: absolute; top: 4px; right: 4px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--red); }
 

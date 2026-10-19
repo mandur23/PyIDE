@@ -210,7 +210,10 @@ try {
   check(true, 'OK switches the project interpreter back to .venv');
 
   // ---------- Python Packages tool window ----------
-  await click('.stripe-btn[title^="Python Packages"]');
+  // Not pinned to the sidebar by default: open it from the sidebar's More menu.
+  await click('#stripeMore');
+  await until(`!!document.querySelector('#moreToolWindows .more-row[data-tool="PythonPackages"]')`, 'more menu');
+  await click('#moreToolWindows .more-row[data-tool="PythonPackages"]');
   await until(`ide.toolWindows.get('PythonPackages').isVisible() && [...document.querySelectorAll('#pkgList .pkg-row')].some(r => r.dataset.name === 'pip')`, 'packages listed', 60000);
   check(await js(`document.querySelector('.pkgs-interp').textContent.includes('.venv')`), 'tool window shows the current interpreter');
   check(await js(`ide.currentInterp().executable.toLowerCase().startsWith(${S(t.project.toLowerCase())})`), 'about to install only into the temp project venv');

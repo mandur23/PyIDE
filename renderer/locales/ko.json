@@ -97,5 +97,12 @@
   "Don't Save": "저장 안 함",
   "Switch to Previous Tab": "이전 탭으로 전환",
   "Open File…": "파일 열기…",
-  "Hide All Tool Windows": "모든 도구 창 숨기기"
+  "Hide All Tool Windows": "모든 도구 창 숨기기",
+  "Hide": "숨기기",
+  "Show": "표시",
+  "Remove from Sidebar": "사이드바에서 제거",
+  "Pin to Sidebar": "사이드바에 고정",
+  "More Tool Windows": "더 많은 도구 창",
+  "Left": "왼쪽",
+  "Bottom": "아래쪽"
 }

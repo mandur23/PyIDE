@@ -42,6 +42,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   });
   const cdp = (method, params = {}) => new Promise((r) => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
   await cdp('Runtime.enable');
+  // Test windows run beside other windows; without this, losing OS focus closes Monaco hovers and hints mid-check.
+  await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
 
   const js = async (expr) => {
     const r = await cdp('Runtime.evaluate', { expression: `(async () => (${expr}))()`, awaitPromise: true, returnByValue: true });
