@@ -3,7 +3,7 @@
 const { complete } = require('../ai/claude');
 
 const EDIT_SYSTEM = `You are the code-editing engine of a Python IDE. The user selected a region of a file and gave an instruction, in Korean or English.
-Reply with only the complete new text that replaces the region: no explanation, no Markdown code fences, no tags, nothing before or after it.
+Reply with only the complete new text that replaces the region: every line of the region, including the lines you keep unchanged (such as a def or class line above an added docstring), and no explanation, no Markdown code fences, no tags, nothing before or after it.
 Keep the region's indentation and the file's style. Change only what the instruction asks for.
 If the region is empty, write the code to insert there.
 Write new code comments in the language the existing comments use.`;

@@ -541,6 +541,8 @@ if (process.env.AI_EDIT_REAL === '1') {
     const s = await hr.session();
     console.log(`REAL edit: ${Date.now() - started} ms wall, cli ${s.ms} ms, phase ${s.phase}, message ${s.message}, hunks ${JSON.stringify(s.hunks)}`);
     check(s.phase === 'reviewing' && s.hunks.length >= 1, 'real Claude Code proposes an edit');
+    check(s.hunks.every((h) => !h.oldLines.some((l) => l.startsWith('def perimeter'))) && s.hunks.some((h) => h.newLines.some((l) => /^    """/.test(l))),
+      'the real edit keeps the def line and adds an indented docstring');
     await press('Escape');
     await press('Escape');
     await openFile(r, 'rename.py');
@@ -556,6 +558,7 @@ if (process.env.AI_EDIT_REAL === '1') {
     check(false, err.message);
   }
   r.close();
+  process.env.PYIDE_CLAUDE_PATH = fakeCmd;
   for (const x of r.results) t.results.push(x);
   t.consoleErrors.push(...r.consoleErrors);
 }
