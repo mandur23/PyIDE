@@ -1,0 +1,81 @@
+.db-tool { flex-direction: column; }
+.db-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px 6px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.db-tool-btn { width: 26px; height: 24px; border-radius: 5px; display: grid; place-items: center; color: var(--gray10); }
+.db-tool-btn:hover { background: var(--gray3); color: var(--gray12); }
+.db-glyph { font-size: 14px; line-height: 1; }
+.db-sep { width: 1px; height: 16px; background: var(--gray4); margin: 0 4px; }
+.db-tree { flex: 1; overflow: auto; padding: 2px 0 8px; user-select: none; }
+.db-node { display: flex; align-items: center; gap: 4px; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; }
+.db-node:hover { background: var(--gray2); }
+.db-node.selected { background: var(--blue2); }
+.db-arrow { width: 12px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
+.db-icon { width: 16px; text-align: center; color: var(--gray9); flex-shrink: 0; }
+.db-source .db-icon { color: var(--blue8); }
+.db-label { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; }
+.db-detail { color: var(--gray7); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.db-info .db-label { color: var(--gray7); font-style: italic; }
+.db-error .db-label, .db-node.db-error .db-label { color: var(--red); white-space: normal; }
+.db-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--gray6); }
+.db-state-connecting.db-dot { background: var(--yellow); }
+.db-state-connected.db-dot { background: var(--green6); }
+.db-state-error.db-dot { background: var(--red); }
+.db-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px; }
+
+.db-dialog .field { grid-template-columns: 110px 1fr; }
+.db-driver { margin: 4px 0 2px; }
+.db-driver-missing { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--yellow) 14%, transparent); color: var(--gray12); }
+.db-driver-missing > span { flex: 1; }
+.db-log { margin: 6px 0 0; max-height: 150px; overflow: auto; font: 12px/1.4 var(--mono); color: var(--gray9); white-space: pre-wrap; }
+.db-log:empty { display: none; }
+.db-test { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.db-test-result { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.db-test-result.ok { color: var(--green6); }
+.db-test-result.err { color: var(--red); }
+.db-test-detail { color: var(--gray9); }
+.db-remove-name { margin-top: 6px; font-weight: 600; color: var(--gray12); }
+
+.db-console { display: flex; flex-direction: column; }
+.db-console-bar { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.db-run { width: 26px; height: 24px; border-radius: 5px; display: grid; place-items: center; color: var(--green6); }
+.db-run:hover { background: var(--gray3); }
+.db-run:disabled { opacity: .5; }
+.db-console-source { color: var(--gray11); }
+.db-console-state { font-size: 12px; color: var(--gray7); }
+.db-console-state.db-state-connected { color: var(--green6); }
+.db-console-state.db-state-error { color: var(--red); }
+.db-console-editor { flex: 1 1 55%; min-height: 60px; position: relative; overflow: hidden; }
+.db-console-split { height: 5px; flex-shrink: 0; cursor: row-resize; background: var(--gray2); border-top: 1px solid var(--gray3); border-bottom: 1px solid var(--gray3); }
+.db-console-split:hover { background: var(--blue6); }
+.db-results { flex: 1 1 45%; min-height: 60px; display: flex; flex-direction: column; overflow: hidden; }
+.db-result-bar { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; font-size: 12px; }
+.db-result-status { flex: 1; color: var(--gray9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-copy { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
+.db-copy:hover:not(:disabled) { background: var(--gray3); }
+.db-copy:disabled { opacity: .4; cursor: default; }
+.db-output { flex: 1; min-height: 0; overflow: auto; }
+.db-placeholder, .db-message { padding: 10px 12px; }
+.db-error { padding: 10px 12px; color: var(--red); font-family: var(--mono); white-space: pre-wrap; display: flex; gap: 10px; }
+.db-error-label { font-family: inherit; font-weight: 600; flex-shrink: 0; }
+.db-grid-wrap { min-width: 100%; }
+.db-grid { border-collapse: collapse; font: 12.5px/1.35 var(--mono); }
+.db-grid th, .db-grid td { border: 1px solid var(--gray3); padding: 3px 8px; text-align: left; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-grid th { position: sticky; top: 0; background: var(--gray2); color: var(--gray12); font-weight: 600; z-index: 1; }
+.db-coltype { margin-left: 6px; color: var(--gray7); font-weight: 400; }
+.db-grid td.db-num { text-align: right; color: var(--blue8); }
+.db-grid td.db-null { color: var(--gray6); font-style: italic; }
+.db-grid .db-rownum { color: var(--gray7); text-align: right; background: var(--gray2); }
+.db-grid tbody tr:hover td { background: var(--gray2); }
+.db-executed { background: color-mix(in srgb, var(--blue6) 25%, transparent); }
+
+.db-file-view { padding: 24px 32px; overflow: auto; gap: 6px; }
+.db-file-title { font-size: 16px; font-weight: 600; color: var(--gray12); }
+.db-file-path { font-size: 12px; }
+.db-file-info { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; align-items: flex-start; }
+.db-file-buttons { display: flex; gap: 8px; }
+.db-file-tables { align-self: stretch; }
+.db-file-heading { color: var(--gray9); margin: 8px 0 4px; }
+.db-file-table { display: flex; gap: 8px; padding: 3px 4px; border-radius: 4px; white-space: nowrap; overflow: hidden; }
+.db-file-table:hover { background: var(--gray2); }
+.db-file-table .muted { overflow: hidden; text-overflow: ellipsis; }
+.db-local-server { display: inline-block; margin: 2px 0 8px; color: var(--blue6); font-size: 12px; }
+.db-local-server:hover { text-decoration: underline; }

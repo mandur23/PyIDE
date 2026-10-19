@@ -1,13 +1,13 @@
 // Builds renderer/core/icons.js from PyCharm's New UI (expui) SVG icons extracted with REA.
-// Usage: node tools/build-icons.mjs <platform-ide.jar dir> <terminal.jar dir> <python.community.impl.jar dir> <python.parser.jar dir> <python (pro) jar dir>
+// Usage: node tools/build-icons.mjs <platform-ide.jar dir> <terminal.jar dir> <python.community.impl.jar dir> <python.parser.jar dir> <python (pro) jar dir> <intellij.database.jar dir>
 // (each the folder REA's extract_artifact produced for that jar)
 // The icons come from the IntelliJ Platform (Apache License 2.0, https://github.com/JetBrains/intellij-community).
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const [platform, terminal, python, pythonParser, pythonPro] = process.argv.slice(2);
-if (!pythonPro) throw new Error('usage: node tools/build-icons.mjs <platform> <terminal> <python> <pythonParser> <pythonPro>');
+const [platform, terminal, python, pythonParser, pythonPro, database] = process.argv.slice(2);
+if (!database) throw new Error('usage: node tools/build-icons.mjs <platform> <terminal> <python> <pythonParser> <pythonPro> <database>');
 
 const SOURCES = {
   project: [platform, 'expui/toolwindows/project.svg'],
@@ -47,6 +47,7 @@ const SOURCES = {
   python: [pythonParser, 'icons/com/jetbrains/python/parser/expui/python.svg'],
   flask: [pythonPro, 'icons/com/intellij/python/pro/expui/flask.svg'],
   fastapi: [pythonPro, 'icons/com/intellij/python/pro/expui/fastAPI.svg'],
+  database: [database, 'icons/expui/dbms.svg'],
 };
 
 // The light variants draw in Gray7 (#6C707E); that gray becomes currentColor so CSS sets the color per theme and state.
