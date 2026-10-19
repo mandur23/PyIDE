@@ -1,0 +1,8 @@
+.upd-status { cursor: default; color: var(--gray9); }
+.upd-status.ready { cursor: pointer; color: var(--blue8); }
+.upd-status.ready:hover { text-decoration: underline; }
+.upd-message p { margin: 0 0 8px; line-height: 1.5; word-break: break-word; }
+.upd-feed-row { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.upd-feed { flex: 1; min-width: 0; }
+.upd-skipped { display: flex; align-items: center; gap: 10px; }
+#updatesCheckNow { margin-top: 6px; }

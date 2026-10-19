@@ -1,0 +1,8 @@
+{
+  "id": "updater",
+  "name": "Updates",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Checks an update feed on startup and from Help, downloads new versions in the background and installs them on restart.",
+  "main": ["updater.js"]
+}
