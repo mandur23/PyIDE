@@ -34,5 +34,9 @@
   "Local code model behind AI completion (Tab). It runs on this computer with llama.cpp; your code never leaves it.": "AI 코드 완성(Tab)에 쓰이는 로컬 코드 모델입니다. 이 컴퓨터에서 llama.cpp로 실행되며, 코드는 외부로 전송되지 않습니다.",
   "In use": "사용 중",
   "Code Prediction (Tab)": "코드 예측 (Tab)",
-  "Download models in the Install Manager": "설치 관리자에서 모델 다운로드"
+  "Download models in the Install Manager": "설치 관리자에서 모델 다운로드",
+  "Local Models": "로컬 모델",
+  "Unload idle models after (minutes)": "유휴 모델 해제까지 시간 (분)",
+  "0 keeps them loaded": "0이면 계속 로드 상태로 둡니다",
+  "Applies to the completion model and to EmbeddingGemma 2 (Semantic Search). An unloaded model loads again on the next request.": "코드 완성 모델과 EmbeddingGemma 2(의미 검색)에 적용됩니다. 해제된 모델은 다음 요청 때 다시 로드됩니다."
 }

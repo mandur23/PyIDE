@@ -117,9 +117,19 @@ function hfDownload(job, repo, files) {
   return job.run(python, ['-c', code]);
 }
 
+// Models stay loaded this long after their last request before the sidecar is stopped (see startSidecar's idleMs).
+// The user setting is in minutes (`ai.idleUnloadMinutes`, which the renderer plugins pass to their main side);
+// 0 keeps a model loaded, unset means the default.
+const IDLE_MINUTES = 10;
+const idleMsOf = (minutes) => Math.round((Number.isFinite(Number(minutes)) ? Number(minutes) : IDLE_MINUTES) * 60000);
+
 // A long-lived Python server that reads one JSON request per line on stdin and answers with JSON lines on stdout.
 // Replies carry the request's id; lines without an id are events. stderr is passed through as log text.
-function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExit = () => {} }) {
+// `idleMs()` gives the idle timeout to apply: once no request is in flight for that long, the server's stdin is
+// closed and it exits on its own (both servers end on end-of-input, so the exit is clean and not a crash). From then
+// on alive() is false and the caller starts a fresh server on the next request, so a request never waits on a
+// server that is shutting down.
+function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExit = () => {}, idleMs = () => 0 }) {
   const proc = spawn(python, ['-u', script], {
     cwd: dir,
     windowsHide: true,
@@ -129,8 +139,23 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
   let nextId = 1;
   let buffer = '';
   let alive = true;
+  let stopping = false;
+  let idleTimer = null;
   let exited;
   const closed = new Promise((resolve) => { exited = resolve; });
+  const stop = () => {
+    if (!alive || stopping) return;
+    stopping = true;
+    proc.stdin.end();
+    // A server that ignores end-of-input (stuck in the model) is killed; proc.killed keeps that off the error list.
+    setTimeout(() => { if (alive) { try { proc.kill(); } catch {} } }, 10000).unref();
+  };
+  const idle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+    const ms = idleMs();
+    if (alive && !stopping && !pending.size && ms > 0) idleTimer = setTimeout(() => { if (!pending.size) stop(); }, ms);
+  };
   proc.stdout.on('data', (d) => {
     buffer += d.toString('utf8');
     let nl;
@@ -140,7 +165,11 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
       if (!line) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
-      if (msg.id !== undefined && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); } else if (msg.event) onEvent(msg);
+      if (msg.id !== undefined && pending.has(msg.id)) {
+        pending.get(msg.id)(msg);
+        pending.delete(msg.id);
+        if (!pending.size) idle();
+      } else if (msg.event) onEvent(msg);
     }
   });
   proc.stderr.on('data', (d) => onLog(d.toString('utf8')));
@@ -150,25 +179,29 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
   proc.on('error', (err) => onLog(`${err.message}\n`));
   proc.on('exit', (code) => {
     alive = false;
+    clearTimeout(idleTimer);
     for (const resolve of pending.values()) resolve({ error: `server exited (${code})` });
     pending.clear();
     onExit(code);
     exited(code);
   });
-  const write = (msg) => { if (alive) proc.stdin.write(`${JSON.stringify(msg)}\n`); };
+  const write = (msg) => { if (alive && !stopping) proc.stdin.write(`${JSON.stringify(msg)}\n`); };
   return {
     // -> {id, reply: Promise<message>}
     send(msg) {
       const id = nextId++;
       const reply = new Promise((resolve) => {
-        if (!alive) { resolve({ error: 'server is not running' }); return; }
+        if (!alive || stopping) { resolve({ error: 'server is not running' }); return; }
+        clearTimeout(idleTimer);
         pending.set(id, resolve);
         write({ ...msg, id });
       });
       return { id, reply };
     },
     notify: write,
-    alive: () => alive,
+    alive: () => alive && !stopping,
+    // Re-reads idleMs(), for when the setting changes while the server sits idle.
+    idle,
     // Resolves once the process has exited and released its files.
     kill() { try { proc.kill(); } catch {} return closed; },
   };
@@ -176,5 +209,5 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
 
 module.exports = {
   dir, venv, python, sitePackages, hasPackage, pythonReady, canImport, hfCacheDir, hfRepoDir, hfCachedFile,
-  createJob, exclusive, ensureVenv, pipInstall, installTorchvision, hfDownload, startSidecar,
+  createJob, exclusive, ensureVenv, pipInstall, installTorchvision, hfDownload, startSidecar, idleMsOf,
 };

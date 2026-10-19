@@ -65,18 +65,25 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   };
 
   let sidecar = null;
+  let idleMs = runtime.idleMsOf(); // the renderer passes the user's setting (ai-complete:configure)
   function startServer() {
     if (sidecar?.alive()) return sidecar;
-    sidecar = runtime.startSidecar({
+    const sc = runtime.startSidecar({
       script: server,
+      idleMs: () => idleMs,
       onEvent: (msg) => {
         if (msg.event === 'loading') setEngine({ state: 'loading', error: null });
         else if (msg.event === 'ready') setEngine({ state: 'ready', error: null, loadMs: msg.ms });
       },
       onLog: (text) => send('ai-complete:log', { model: engine.model, text }),
-      onExit: (code) => setEngine({ state: engine.state === 'ready' ? 'idle' : 'error', model: null, error: engine.state === 'ready' ? null : `completion server exited (${code})` }),
+      onExit: (code) => {
+        // A server stopped for being idle may already have a successor whose events own the state.
+        if (sidecar !== sc) return;
+        setEngine({ state: engine.state === 'ready' ? 'idle' : 'error', model: null, error: engine.state === 'ready' ? null : `completion server exited (${code})` });
+      },
     });
-    return sidecar;
+    sidecar = sc;
+    return sc;
   }
   const llamaBackend = {
     start(req) {
@@ -121,6 +128,10 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   ipcMain.handle('ai-complete:status', () => status());
   ipcMain.handle('ai-complete:stats', () => stats);
   ipcMain.handle('ai-complete:testConfig', (_e, cfg) => { if (fake) Object.assign(fakeConfig, cfg); return fake; });
+  ipcMain.handle('ai-complete:configure', (_e, { idleMinutes } = {}) => {
+    idleMs = runtime.idleMsOf(idleMinutes);
+    sidecar?.idle();
+  });
 
   // ---------- setup: shared runtime, llama.cpp, model download ----------
   const jobs = new Map(); // model id -> setup job

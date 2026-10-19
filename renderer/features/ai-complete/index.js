@@ -4,9 +4,12 @@
   const { el } = ide.util;
   const monaco = ide.monaco;
 
-  const KEYS = { enabled: 'aiComplete.enabled', model: 'aiComplete.model', delay: 'aiComplete.delay', multiline: 'aiComplete.multiline', snoozeUntil: 'aiComplete.snoozeUntil' };
-  const DEFAULTS = { enabled: true, model: 'qwen2.5-coder-0.5b', delay: 200, multiline: true, snoozeUntil: 0 };
+  // `idle` is shared with Semantic Search: minutes without a request before a local model is unloaded (0 keeps it).
+  // Main owns its default (main/ai/runtime.js); the one here only fills the settings field.
+  const KEYS = { enabled: 'aiComplete.enabled', model: 'aiComplete.model', delay: 'aiComplete.delay', multiline: 'aiComplete.multiline', snoozeUntil: 'aiComplete.snoozeUntil', idle: 'ai.idleUnloadMinutes' };
+  const DEFAULTS = { enabled: true, model: 'qwen2.5-coder-0.5b', delay: 200, multiline: true, snoozeUntil: 0, idle: 10 };
   const setting = (k) => ide.settings.get(KEYS[k], DEFAULTS[k]);
+  const configure = () => ide.api.invoke('ai-complete:configure', { idleMinutes: ide.settings.get(KEYS.idle) });
   const LANGUAGES = ['python', 'javascript', 'typescript', 'java', 'go', 'rust', 'c', 'cpp', 'csharp', 'lua', 'sql', 'shell',
     'powershell', 'html', 'css', 'yaml', 'ini', 'json', 'markdown', 'plaintext'];
   // Prompt windows, in characters. The prefix starts on a line boundary that only moves in steps of PREFIX_STEP lines,
@@ -60,7 +63,11 @@
     return status;
   }
   ide.api.on('ai-complete:status', (s) => { status = s; render(); });
-  ide.on('settingsChanged', (key) => { if (Object.values(KEYS).includes(key)) render(); });
+  ide.on('settingsChanged', (key) => {
+    if (key === KEYS.idle) configure();
+    if (Object.values(KEYS).includes(key)) render();
+  });
+  configure();
   let snoozeTimer = null;
   const scheduleWake = () => {
     clearTimeout(snoozeTimer);
@@ -109,6 +116,9 @@
       const model = field(ctx.ui.selectInput(KEYS.model, models, DEFAULTS.model), 'aicModel');
       main.appendChild(ctx.ui.fieldRow(tr('Model'), model));
       main.appendChild(ctx.ui.fieldRow(tr('Delay after typing (ms)'), field(ctx.ui.numberInput(KEYS.delay, { step: 10, min: 50, max: 2000, fallback: DEFAULTS.delay }), 'aicDelay')));
+      const local = ctx.ui.section(host, tr('Local Models'));
+      local.appendChild(ctx.ui.fieldRow(tr('Unload idle models after (minutes)'), field(ctx.ui.numberInput(KEYS.idle, { step: 1, min: 0, max: 1440, fallback: DEFAULTS.idle }), 'aicIdle'), tr('0 keeps them loaded')));
+      local.appendChild(el('p', 'muted settings-note', tr('Applies to the completion model and to EmbeddingGemma 2 (Semantic Search). An unloaded model loads again on the next request.')));
       const install = el('a', 'aic-install', tr('Download models in the Install Manager'));
       install.href = '#';
       install.onclick = (e) => { e.preventDefault(); openSetup(); };

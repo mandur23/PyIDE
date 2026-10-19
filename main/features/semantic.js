@@ -7,16 +7,21 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { isMainThread, parentPort, workerData } = require('worker_threads');
-// This file is also the worker that reads and chunks project files (see collect()); relative requires do not resolve there.
-const runtime = isMainThread ? require('../ai/runtime') : null;
+// This file is also the worker that reads and chunks project files (see collect()), where relative requires do not
+// resolve, and verify/semantic.mjs loads it in plain Node for the index log checks, so the Electron-bound runtime is
+// required by register() alone.
 
 const MODEL_ID = 'google/embeddinggemma-2';
 const DIM = 256; // Matryoshka truncation: a quarter of the storage of 768 with little loss for code retrieval
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 const MAX_FILE_BYTES = 300 * 1024;
 const MAX_CHUNKS = 30000;
 const CHUNK_CHARS = 1800;
 const BATCH = 24;
+const TAKE = 200; // files per page handed from the worker to main, so no one message carries a whole project
+const SLICE_CHUNKS = 300; // chunks encoded per main-thread slice when the index is written (a few ms each)
+const SLICE_MS = 8; // the longest a slice of index loading runs before the main thread gets a turn
+const SAVE_DELAY = 2000; // changed files reach the index on disk this long after the last update (and at quit)
 const TEXT_EXT = new Set(['py', 'pyi', 'md', 'rst', 'txt', 'toml', 'cfg', 'ini', 'yaml', 'yml', 'json', 'js', 'mjs', 'cjs',
   'ts', 'tsx', 'jsx', 'html', 'css', 'java', 'kt', 'lua', 'luau', 'sql', 'sh', 'ps1', 'bat', 'go', 'rs', 'c', 'cpp', 'h', 'cs', 'jsp']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.idea', '.vscode', '.mypy_cache', '.pytest_cache',
@@ -108,6 +113,7 @@ function keywordScore(queryTokens, chunk) {
 
 // ---------- backends ----------
 // A deterministic stand-in (hashed bag of words and identifier parts) used by tests and when no model is installed.
+// It runs on the worker thread like the real model runs in its sidecar, so indexing never computes on main.
 function fakeEmbed(text) {
   const v = new Float32Array(DIM);
   const parts = tokens(text.replace(/([a-z])([A-Z])/g, '$1 $2'));
@@ -145,15 +151,22 @@ function walk(root) {
 }
 
 // The disk half of an index update, run on a worker thread so a large project never stalls the main process:
-// which files are gone or changed, and the changed ones read and chunked. `known` is {rel: {mtime, size, chunks}}
-// (chunks = how many the index holds for it).
-function collect(root, known, onlyPaths) {
+// which files are gone or changed, and the changed ones read and chunked. `known` is what the index holds, as one
+// flat array [rel, mtime, size, chunks, rel, ...] (chunks = how many it holds for the file): one array crosses the
+// thread boundary in a few ms where 20k small objects take tens. The changed files wait here, under their root, and
+// main takes them a page at a time (take), so a 20k-file project never crosses to main in one message either and
+// two projects indexing at once never take each other's files.
+const queued = new Map(); // root -> changed files not yet taken
+function collect(root, knownFlat, onlyPaths) {
+  const known = new Map();
+  for (let i = 0; i < knownFlat.length; i += 4) known.set(knownFlat[i], { mtime: knownFlat[i + 1], size: knownFlat[i + 2], chunks: knownFlat[i + 3] });
   const disk = walk(root);
   const seen = new Set(disk.map((f) => f.rel.toLowerCase()));
-  let stale = disk.filter((f) => { const old = known[f.rel]; return !old || old.mtime !== f.mtime || old.size !== f.size; });
-  if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known[f.rel]);
+  let stale = disk.filter((f) => { const old = known.get(f.rel); return !old || old.mtime !== f.mtime || old.size !== f.size; });
+  if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known.has(f.rel));
   const staleRels = new Set(stale.map((f) => f.rel));
-  let budget = MAX_CHUNKS - Object.entries(known).filter(([rel]) => seen.has(rel.toLowerCase()) && !staleRels.has(rel)).reduce((n, [, k]) => n + k.chunks, 0);
+  let budget = MAX_CHUNKS;
+  for (const [rel, k] of known) if (seen.has(rel.toLowerCase()) && !staleRels.has(rel)) budget -= k.chunks;
   const work = [];
   let capped = false;
   for (const f of stale) {
@@ -165,21 +178,275 @@ function collect(root, known, onlyPaths) {
     budget -= chunks.length;
     work.push({ f, chunks });
   }
-  return { seen: [...seen], work, capped };
+  queued.set(root, work);
+  return { seen: [...seen], files: work.length, chunks: work.reduce((n, w) => n + w.chunks.length, 0), capped };
+}
+const fakeEmbedAll = (items) => items.map((it) => fakeEmbed(`${it.title || ''} ${it.text}`));
+// The next page of a root's changed files; with `embed`, their chunks come back already embedded by the test backend
+// (one round trip per page instead of one per batch, which adds up to seconds on a 20k-file project).
+function take(root, n, embed) {
+  const page = (queued.get(root) || []).splice(0, n);
+  if (!page.length) queued.delete(root);
+  if (embed) for (const w of page) fakeEmbedAll(w.chunks.map((c) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text }))).forEach((v, i) => { w.chunks[i].vector = v; });
+  return page;
 }
 
+const WORKER_OPS = { collect, take, fakeEmbed: fakeEmbedAll };
 if (!isMainThread && workerData?.role === 'pyide-semantic') {
-  parentPort.on('message', ({ id, args }) => {
-    try { parentPort.postMessage({ id, result: collect(...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+  parentPort.on('message', ({ id, op, args }) => {
+    try { parentPort.postMessage({ id, result: WORKER_OPS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
   });
 }
-const collectInWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-semantic') : null;
-const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
+const inWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-semantic') : null;
+const yieldTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+// ---------- the index on disk ----------
+// In memory: files = {rel: {mtime, size, chunks: [{start, end, symbol, title, text, vector}]}}. On disk, in the
+// index's dir: index.jsonl, a header line then one [rel, record | null] line per change (a null is a deleted file;
+// the last line for a path wins), and the vector file the header names, DIM float32 per chunk in the order the
+// records' `v` give. Changes are appended, so a save costs its own size, not the project's; when more than half of
+// the log is stale, or the log on disk is not one this version wrote intact (never saved, another version's header,
+// a write that failed), the whole index is rewritten into a new vector file. Both are read and written in slices
+// that yield to the event loop, since a 20k-file project's index runs to tens of MB.
+const ROW_BYTES = DIM * 4;
+const indexFile = (idx) => path.join(idx.dir, 'index.jsonl');
+const vectorFile = (idx, name = idx.vectors) => path.join(idx.dir, name);
+const newVectors = () => `vectors-${Date.now().toString(36)}.bin`;
+const header = (idx, vectors) => `${JSON.stringify({ version: INDEX_VERSION, backend: idx.backend, dim: DIM, root: idx.root, vectors })}\n`;
+const newIndex = (root, dir, backend) => ({
+  root, dir, backend, files: {}, chunks: 0, job: null, done: 0, total: 0, capped: false, sentAt: 0,
+  vectors: newVectors(), onDisk: false, records: 0, // the log on disk: its vector file, whether it is intact and appendable, records in index.jsonl
+  pending: new Map(), saveTimer: null, io: Promise.resolve(), writing: null, // changes not yet on disk; the save in flight (saves run one at a time)
+});
+
+// fs.promises.readFile reads a file in 512 KB pieces and joins them on the main thread, tens of ms for a large
+// index; one read into a buffer of the file's size costs the main thread nothing.
+async function readWhole(file) {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const { size } = await fh.stat();
+    const buf = Buffer.allocUnsafe(size);
+    let got = 0;
+    while (got < size) {
+      const { bytesRead } = await fh.read(buf, got, size - got, got);
+      if (!bytesRead) break;
+      got += bytesRead;
+    }
+    return buf.subarray(0, got);
+  } finally {
+    await fh.close();
+  }
+}
+
+async function readIndex(idx) {
+  let log;
+  try { log = await readWhole(indexFile(idx)); } catch { return; }
+  let cursor = 0;
+  const nextLine = () => {
+    const nl = log.indexOf(10, cursor);
+    if (nl < 0) return null;
+    const line = log.toString('utf8', cursor, nl);
+    cursor = nl + 1;
+    return line;
+  };
+  let head;
+  try { head = JSON.parse(nextLine()); } catch { return; }
+  if (!(head?.version === INDEX_VERSION && head.backend === idx.backend && head.dim === DIM && typeof head.vectors === 'string')) return;
+  let vec;
+  try { vec = await readWhole(vectorFile(idx, head.vectors)); } catch { return; }
+  // A row a crash cut short at the end of the vector file is ignored; the next save overwrites it.
+  const rows = Math.floor(vec.byteLength / ROW_BYTES);
+  const all = new Float32Array(vec.buffer, vec.byteOffset, rows * DIM);
+  let records = 0;
+  let onDisk = true;
+  let t = performance.now();
+  for (let line = nextLine(); line !== null; line = nextLine()) {
+    records++;
+    let rel, f;
+    try { [rel, f] = JSON.parse(line); } catch { continue; } // a line cut short by a crash mid-append
+    forget(idx, rel, true);
+    // Records whose vectors never made it to disk are dropped, so the file is embedded again. Their lines stay,
+    // pointing at rows the next append would fill, so that save rewrites the log instead.
+    if (f && f.chunks.every((c) => c.v < rows)) {
+      const title = rel.replace(/\\/g, '/');
+      for (const c of f.chunks) {
+        c.title = title;
+        c.vector = all.subarray(c.v * DIM, (c.v + 1) * DIM);
+        delete c.v;
+      }
+      remember(idx, rel, f, true);
+    } else if (f) onDisk = false;
+    if (performance.now() - t > SLICE_MS) { await yieldTurn(); t = performance.now(); }
+  }
+  // A last line a crash cut short (there is no newline after it) is cut off, or the next record appended would
+  // join it and be lost with it.
+  if (cursor < log.length) await fs.promises.truncate(indexFile(idx), cursor).catch(() => { onDisk = false; });
+  Object.assign(idx, { vectors: head.vectors, onDisk, records });
+  await dropStrays(idx);
+}
+// Vector files other than the one the log names (a crash between a rewrite's two steps, a replaced log), and the
+// pre-v3 index file.
+async function dropStrays(idx) {
+  for (const name of await fs.promises.readdir(idx.dir).catch(() => [])) {
+    if ((name !== idx.vectors && /^vectors.*\.bin$/.test(name)) || name === 'index.json') await fs.promises.rm(path.join(idx.dir, name), { force: true }).catch(() => {});
+  }
+}
+
+const remember = (idx, rel, f, loading) => {
+  idx.files[rel] = f;
+  idx.chunks += f.chunks.length;
+  if (!loading) idx.pending.set(rel, f);
+};
+const forget = (idx, rel, loading) => {
+  const old = idx.files[rel];
+  if (!old) return;
+  idx.chunks -= old.chunks.length;
+  delete idx.files[rel];
+  if (!loading) idx.pending.set(rel, null);
+};
+
+// Log lines and vectors for [rel, record | null] entries, with `row` the next free row of the vector file.
+function encode(entries, row) {
+  const lines = [];
+  const vecs = [];
+  for (const [rel, f] of entries) {
+    const rec = f && { mtime: f.mtime, size: f.size, chunks: f.chunks.map((c) => { vecs.push(c.vector); return { start: c.start, end: c.end, symbol: c.symbol, text: c.text, v: row++ }; }) };
+    lines.push(`${JSON.stringify([rel, rec])}\n`);
+  }
+  const all = new Float32Array(vecs.length * DIM);
+  vecs.forEach((v, i) => all.set(v, i * DIM));
+  return { text: Buffer.from(lines.join('')), vectors: Buffer.from(all.buffer), row };
+}
+// The same in slices of SLICE_CHUNKS chunks, each followed by a turn of the event loop.
+async function encodeSliced(entries, row) {
+  const text = [];
+  const vectors = [];
+  for (let i = 0; i < entries.length;) {
+    let j = i;
+    for (let n = 0; j < entries.length && n < SLICE_CHUNKS; j++) n += entries[j][1]?.chunks.length || 1;
+    const e = encode(entries.slice(i, j), row);
+    text.push(e.text);
+    vectors.push(e.vectors);
+    row = e.row;
+    i = j;
+    await yieldTurn();
+  }
+  return { text, vectors };
+}
+async function writeParts(file, flag, parts) {
+  const fh = await fs.promises.open(file, flag);
+  try { await fh.writev(parts); } finally { await fh.close(); }
+}
+
+// A save takes the pending changes and either appends them to the log or rewrites the whole index (compact). Only
+// one runs at a time: `writing` is the one in flight from the moment it takes the changes, as it encodes in slices
+// and a second writer in between would put rows where its records do not point. A save that fails puts its changes
+// back (changes made meanwhile win) and leaves the log not known-good, so the next save rewrites everything.
+const needsRewrite = (idx) => !idx.onDisk || idx.records + idx.pending.size > 2 * Object.keys(idx.files).length + 1000;
+const afterWrite = (idx, next) => idx.writing.then(next, next);
+function takePending(idx) {
+  const batch = [...idx.pending];
+  idx.pending = new Map();
+  return batch;
+}
+function restorePending(idx, batch) {
+  for (const [rel, f] of batch) if (!idx.pending.has(rel)) idx.pending.set(rel, f);
+  idx.onDisk = false;
+}
+const save = (idx, batch, work) => (idx.writing = work.catch((err) => { restorePending(idx, batch); throw err; }).finally(() => { idx.writing = null; }));
+// Rows are appended where the vector file really ends (a crash may have left part of a row, a failed save rows
+// without records), and vectors go before their records: a record never points beside its vectors.
+async function alignedRows(fh) {
+  const { size } = await fh.stat();
+  const rows = Math.floor(size / ROW_BYTES);
+  if (size !== rows * ROW_BYTES) await fh.truncate(rows * ROW_BYTES);
+  return rows;
+}
+async function appendLog(idx, batch) {
+  await fs.promises.mkdir(idx.dir, { recursive: true });
+  const fh = await fs.promises.open(vectorFile(idx), fs.constants.O_RDWR | fs.constants.O_CREAT);
+  let text;
+  try {
+    const rows = await alignedRows(fh);
+    let vectors;
+    ({ text, vectors } = await encodeSliced(batch, rows));
+    vectors = vectors.filter((b) => b.length);
+    if (vectors.length) await fh.writev(vectors, rows * ROW_BYTES);
+  } finally {
+    await fh.close();
+  }
+  await writeParts(indexFile(idx), 'a', text);
+  idx.records += batch.length;
+}
+async function rewriteLog(idx, entries) {
+  const fresh = newVectors();
+  const { text, vectors } = await encodeSliced(entries, 0);
+  await fs.promises.mkdir(idx.dir, { recursive: true });
+  await writeParts(vectorFile(idx, fresh), 'w', vectors);
+  await writeParts(`${indexFile(idx)}.tmp`, 'w', [Buffer.from(header(idx, fresh)), ...text]);
+  await fs.promises.rename(`${indexFile(idx)}.tmp`, indexFile(idx));
+  Object.assign(idx, { vectors: fresh, onDisk: true, records: entries.length });
+  await dropStrays(idx);
+}
+async function flush(idx) {
+  if (idx.writing) return afterWrite(idx, () => flush(idx));
+  if (!idx.pending.size) return;
+  if (needsRewrite(idx)) return compact(idx);
+  const batch = takePending(idx);
+  return save(idx, batch, appendLog(idx, batch));
+}
+async function compact(idx) {
+  if (idx.writing) return afterWrite(idx, () => compact(idx));
+  const batch = takePending(idx);
+  return save(idx, batch, rewriteLog(idx, Object.entries(idx.files)));
+}
+// At quit there is no event loop left to wait on: the save is done in one go. A save already in flight finishes
+// first, and this one follows it (the quit waits on other work for a while; if the process is gone by then, the
+// next launch finds what a crash leaves, which the reader handles).
+function flushSync(idx) {
+  if (idx.writing) { afterWrite(idx, () => { try { flushSync(idx); } catch {} }); return; }
+  if (!idx.pending.size) return;
+  const rewrite = needsRewrite(idx);
+  const batch = takePending(idx);
+  try {
+    fs.mkdirSync(idx.dir, { recursive: true });
+    if (rewrite) {
+      const entries = Object.entries(idx.files);
+      const fresh = newVectors();
+      const { text, vectors } = encode(entries, 0);
+      fs.writeFileSync(vectorFile(idx, fresh), vectors);
+      fs.writeFileSync(`${indexFile(idx)}.tmp`, Buffer.concat([Buffer.from(header(idx, fresh)), text]));
+      fs.renameSync(`${indexFile(idx)}.tmp`, indexFile(idx));
+      Object.assign(idx, { vectors: fresh, onDisk: true, records: entries.length });
+    } else {
+      const fd = fs.openSync(vectorFile(idx), fs.constants.O_RDWR | fs.constants.O_CREAT);
+      let text;
+      try {
+        const { size } = fs.fstatSync(fd);
+        const rows = Math.floor(size / ROW_BYTES);
+        if (size !== rows * ROW_BYTES) fs.ftruncateSync(fd, rows * ROW_BYTES);
+        let vectors;
+        ({ text, vectors } = encode(batch, rows));
+        if (vectors.length) fs.writeSync(fd, vectors, 0, vectors.length, rows * ROW_BYTES);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.appendFileSync(indexFile(idx), text);
+      idx.records += batch.length;
+    }
+  } catch (err) {
+    restorePending(idx, batch);
+    throw err;
+  }
+}
 
 exports.register = ({ ipcMain, app, send, unpackedDir }) => {
+  const runtime = require('../ai/runtime');
   const base = path.join(app.getPath('userData'), 'semantic');
   const server = path.join(unpackedDir, 'main', 'semantic', 'embed_server.py');
   const fake = process.env.PYIDE_SEMANTIC_BACKEND === 'fake';
+  const backend = fake ? 'fake' : MODEL_ID;
+  const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
   // ---------- runtime state ----------
   // Setup only installs torchvision after torch is importable, so its presence stands for the whole runtime.
@@ -192,10 +459,12 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
 
   // ---------- sidecar ----------
   let sidecar = null;
+  let idleMs = runtime.idleMsOf(); // the renderer passes the user's setting (semantic:configure)
   function startServer() {
     if (sidecar?.alive()) return sidecar;
-    sidecar = runtime.startSidecar({
+    const sc = runtime.startSidecar({
       script: server,
+      idleMs: () => idleMs,
       onEvent: (msg) => {
         if (msg.event === 'loading') model = { state: 'loading', device: null, error: null };
         else if (msg.event === 'ready') model = { state: 'ready', device: msg.device, error: null };
@@ -203,16 +472,19 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       },
       onLog: (text) => send('semantic:log', text),
       onExit: (code) => {
+        // A server stopped for being idle may already have a successor whose events own the state.
+        if (sidecar !== sc) return;
         if (model.state !== 'ready') model = { state: 'error', device: null, error: `embedding server exited (${code})` };
         else model = { state: 'idle', device: null, error: null };
         pushStatus();
       },
     });
-    return sidecar;
+    sidecar = sc;
+    return sc;
   }
 
   async function embed(items, kind) {
-    if (fake) return items.map((it) => fakeEmbed(`${it.title || ''} ${it.text}`));
+    if (fake) return inWorker('fakeEmbed', items);
     if (!status().runtime) throw new Error('EmbeddingGemma 2 is not set up');
     const reply = await startServer().send({ op: 'embed', kind, items, dim: DIM }).reply;
     if (reply.error) {
@@ -225,79 +497,71 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   }
 
   // ---------- per-project index ----------
-  const indexes = new Map(); // root key -> {root, dir, files: {rel: {mtime, size, chunks}}, job}
+  const indexes = new Map(); // root key -> idx (newIndex)
   const keyOf = (root) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
-
   function loadIndex(root) {
     const k = keyOf(root);
-    if (indexes.has(k)) return indexes.get(k);
-    const dir = path.join(base, 'indexes', k);
-    const idx = { root, dir, files: {}, job: null, done: 0, total: 0, capped: false };
-    try {
-      const meta = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'));
-      const backend = fake ? 'fake' : MODEL_ID;
-      if (meta.version === INDEX_VERSION && meta.backend === backend && meta.dim === DIM) {
-        const vec = fs.readFileSync(path.join(dir, 'vectors.bin'));
-        const all = new Float32Array(vec.buffer, vec.byteOffset, vec.byteLength / 4);
-        for (const [rel, f] of Object.entries(meta.files)) {
-          for (const c of f.chunks) c.vector = all.slice(c.v * DIM, (c.v + 1) * DIM);
-          idx.files[rel] = f;
-        }
-      }
-    } catch {}
-    indexes.set(k, idx);
-    return idx;
-  }
-
-  function saveIndex(idx) {
-    fs.mkdirSync(idx.dir, { recursive: true });
-    const files = {};
-    const parts = [];
-    let n = 0;
-    for (const [rel, f] of Object.entries(idx.files)) {
-      files[rel] = { mtime: f.mtime, size: f.size, chunks: f.chunks.map((c) => { parts.push(c.vector); return { ...c, vector: undefined, v: n++ }; }) };
+    if (!indexes.has(k)) {
+      const idx = newIndex(root, path.join(base, 'indexes', k), backend);
+      idx.loaded = readIndex(idx).catch(() => {});
+      indexes.set(k, idx);
     }
-    const all = new Float32Array(n * DIM);
-    parts.forEach((v, i) => all.set(v, i * DIM));
-    fs.writeFileSync(path.join(idx.dir, 'vectors.bin'), Buffer.from(all.buffer));
-    fs.writeFileSync(path.join(idx.dir, 'index.json'), JSON.stringify({ version: INDEX_VERSION, backend: fake ? 'fake' : MODEL_ID, dim: DIM, root: idx.root, files }));
+    const idx = indexes.get(k);
+    return idx.loaded.then(() => idx);
+  }
+  function scheduleSave(idx) {
+    clearTimeout(idx.saveTimer);
+    idx.saveTimer = setTimeout(() => {
+      idx.saveTimer = null;
+      idx.io = idx.io.then(() => flush(idx)).catch((err) => send('semantic:log', `index save failed: ${err.message}\n`));
+    }, SAVE_DELAY);
   }
 
-
-  const progress = (idx, phase) => send('semantic:progress', {
-    root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length,
-    chunks: Object.values(idx.files).reduce((n, f) => n + f.chunks.length, 0), capped: idx.capped,
-  });
+  // At most ten progress messages a second while indexing; phase changes always go out.
+  const progress = (idx, phase, force) => {
+    const now = Date.now();
+    if (!force && now - idx.sentAt < 100) return;
+    idx.sentAt = now;
+    send('semantic:progress', { root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length, chunks: idx.chunks, capped: idx.capped });
+  };
 
   // Brings the index up to date with the files on disk; concurrent calls share one run.
-  function update(root, onlyPaths) {
-    const idx = loadIndex(root);
+  async function update(root, onlyPaths) {
+    const idx = await loadIndex(root);
     if (idx.job) { idx.rerun = true; return idx.job; }
     idx.job = (async () => {
       try {
         do {
           idx.rerun = false;
-          const known = Object.fromEntries(Object.entries(idx.files).map(([rel, f]) => [rel, { mtime: f.mtime, size: f.size, chunks: f.chunks.length }]));
-          const { seen, work, capped } = await collectInWorker('collect', root, known, onlyPaths);
+          const known = [];
+          for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length);
+          const { seen, chunks, capped } = await inWorker('collect', root, known, onlyPaths);
           const seenSet = new Set(seen);
-          for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) delete idx.files[rel];
+          for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) forget(idx, rel);
           idx.capped = capped;
-          const items = work.flatMap((w) => w.chunks);
-          idx.total = items.length;
+          idx.total = chunks;
           idx.done = 0;
-          progress(idx, 'indexing');
-          for (let i = 0; i < items.length; i += BATCH) {
-            const batch = items.slice(i, i + BATCH);
-            const vecs = await embed(batch.map((c) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text })), 'document');
-            batch.forEach((c, j) => { c.vector = vecs[j]; });
-            idx.done = Math.min(items.length, i + BATCH);
+          progress(idx, 'indexing', true);
+          for (let page = await inWorker('take', root, TAKE, fake); page.length; page = await inWorker('take', root, TAKE, fake)) {
+            const items = page.flatMap((w) => w.chunks).filter((c) => !c.vector);
+            for (let i = 0; i < items.length; i += BATCH) {
+              const batch = items.slice(i, i + BATCH);
+              const vecs = await embed(batch.map((c) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text })), 'document');
+              batch.forEach((c, j) => { c.vector = vecs[j]; });
+              idx.done += batch.length;
+              progress(idx, 'indexing');
+            }
+            idx.done += page.reduce((n, w) => n + w.chunks.length, 0) - items.length;
             progress(idx, 'indexing');
+            for (const w of page) {
+              forget(idx, w.f.rel);
+              remember(idx, w.f.rel, { mtime: w.f.mtime, size: w.f.size, chunks: w.chunks });
+            }
           }
-          for (const w of work) idx.files[w.f.rel] = { mtime: w.f.mtime, size: w.f.size, chunks: w.chunks };
-          if (work.length) saveIndex(idx);
           onlyPaths = null;
         } while (idx.rerun);
-        progress(idx, 'ready');
+        if (idx.pending.size) scheduleSave(idx);
+        progress(idx, 'ready', true);
       } catch (err) {
         send('semantic:progress', { root, phase: 'error', error: String(err.message || err) });
       } finally {
@@ -308,7 +572,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   }
 
   async function search(root, query, { limit = 30, similarTo } = {}) {
-    const idx = loadIndex(root);
+    const idx = await loadIndex(root);
     // Code-to-code similarity compares like with like: the selection is embedded as a document, the space the index lives in.
     const [q] = similarTo ? await embed([{ text: similarTo }], 'document') : await embed([{ text: query }], 'query');
     const qt = tokens(query || '');
@@ -319,7 +583,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
         let dot = 0;
         for (let i = 0; i < DIM; i++) dot += c.vector[i] * q[i];
         const kw = similarTo ? 0 : keywordScore(qt, c);
-        results.push({ rel, path: path.join(root, rel), start: c.start, end: c.end, symbol: c.symbol, score: dot + 0.15 * kw, semantic: dot, keyword: kw, text: c.text });
+        results.push({ rel, start: c.start, end: c.end, symbol: c.symbol, score: dot + 0.15 * kw, semantic: dot, keyword: kw, text: c.text });
       }
     }
     results.sort((a, b) => b.score - a.score);
@@ -327,7 +591,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     const out = [];
     for (const r of results) {
       if (out.some((o) => o.rel === r.rel && r.start < o.end && o.start < r.end)) continue;
-      out.push({ ...r, preview: r.text.split('\n').slice(0, 12).join('\n'), text: undefined });
+      out.push({ ...r, path: path.join(root, r.rel), preview: r.text.split('\n').slice(0, 12).join('\n'), text: undefined });
       if (out.length >= limit) break;
     }
     return out;
@@ -362,23 +626,36 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   ipcMain.handle('semantic:cancelSetup', () => setupJob?.cancel());
 
   ipcMain.handle('semantic:status', () => status());
+  ipcMain.handle('semantic:configure', (_e, { idleMinutes } = {}) => {
+    idleMs = runtime.idleMsOf(idleMinutes);
+    sidecar?.idle();
+  });
   ipcMain.handle('semantic:index', (_e, root, paths) => { update(root, paths); return true; });
   ipcMain.handle('semantic:rebuild', async (_e, root) => {
-    const idx = loadIndex(root);
-    idx.files = {};
-    try { fs.rmSync(idx.dir, { recursive: true, force: true }); } catch {}
+    const idx = await loadIndex(root);
+    idx.io = idx.io.then(async () => {
+      Object.assign(idx, { files: {}, chunks: 0, pending: new Map(), vectors: newVectors(), onDisk: false, records: 0 });
+      await fs.promises.rm(idx.dir, { recursive: true, force: true });
+    }).catch(() => {});
+    await idx.io;
     update(root);
     return true;
   });
   ipcMain.handle('semantic:query', async (_e, root, query, opts) => {
     try { return { ok: true, results: await search(root, query, opts) }; } catch (err) { return { ok: false, error: String(err.message || err) }; }
   });
-  ipcMain.handle('semantic:indexInfo', (_e, root) => {
-    const idx = loadIndex(root);
-    return { files: Object.keys(idx.files).length, chunks: Object.values(idx.files).reduce((n, f) => n + f.chunks.length, 0), indexing: !!idx.job, capped: idx.capped };
+  ipcMain.handle('semantic:indexInfo', async (_e, root) => {
+    const idx = await loadIndex(root);
+    return { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped };
   });
 
-  app.on('before-quit', () => sidecar?.kill());
+  app.on('before-quit', () => {
+    for (const idx of indexes.values()) {
+      clearTimeout(idx.saveTimer);
+      try { flushSync(idx); } catch {}
+    }
+    sidecar?.kill();
+  });
 };
 
-exports._test = { chunkFile, chunkPython, keywordScore, tokens, fakeEmbed };
+exports._test = { chunkFile, chunkPython, keywordScore, tokens, fakeEmbed, collect, take, newIndex, readIndex, remember, forget, flush, compact, flushSync };

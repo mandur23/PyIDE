@@ -51,6 +51,13 @@
     return status;
   }
 
+  // Minutes without a request before the model is unloaded; the field lives in Settings › AI › AI Completion and
+  // main owns the default (main/ai/runtime.js).
+  const IDLE_KEY = 'ai.idleUnloadMinutes';
+  const configure = () => ide.api.invoke('semantic:configure', { idleMinutes: ide.settings.get(IDLE_KEY) });
+  configure();
+  ide.on('settingsChanged', (key) => { if (key === IDLE_KEY) configure(); });
+
   ide.api.on('semantic:status', (s) => { status = s; renderStatus(); });
   ide.api.on('semantic:progress', (p) => {
     if (p.root && ide.root && p.root.toLowerCase() !== ide.root.toLowerCase()) return;
