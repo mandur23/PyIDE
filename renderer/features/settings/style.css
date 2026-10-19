@@ -1,0 +1,62 @@
+/* Light theme: PyCharm expUI_light.theme.json mapped onto the core variables (gray1 = editor background ... gray12 = brightest text). */
+:root[data-theme="light"] {
+  --gray1: #ffffff; --gray2: #f7f8fa; --gray3: #ebecf0; --gray4: #d3d5db;
+  --gray5: #a8adbd; --gray7: #818594; --gray9: #6c707e; --gray11: #000000; --gray12: #000000;
+  --blue2: #d4e2ff; --blue6: #3574f0; --blue8: #315fbd; --green6: #208a3c; --red: #db3b4b; --yellow: #ffaf0f;
+  --text: #080808;
+  color-scheme: light;
+}
+/* The Light theme keeps PyCharm's dark main toolbar (MainToolbar.background = Gray2 #27282E). */
+:root[data-theme="light"] #toolbar {
+  --gray1: #1e1f22; --gray2: #27282e; --gray3: #383a42; --gray4: #494b57; --gray5: #5a5d6b;
+  --gray7: #818594; --gray9: #a8adbd; --gray11: #ebecf0; --gray12: #ffffff;
+  color: var(--gray11); color-scheme: dark;
+}
+:root[data-theme="light"] #stripe, :root[data-theme="light"] #status { border-color: var(--gray3); }
+:root[data-theme="light"] #sideSplitter, :root[data-theme="light"] #bottomSplitter { background: var(--gray3); }
+:root[data-theme="light"] .console .err { color: #c7222d; }
+:root[data-theme="light"] .dialog-backdrop { background: #0003; }
+:root[data-theme="light"] .dialog, :root[data-theme="light"] #popup, :root[data-theme="light"] .context-menu { box-shadow: 0 8px 28px #0003; border-color: #b9bdc9; }
+:root[data-theme="light"] #popup, :root[data-theme="light"] #popupIn, :root[data-theme="light"] .dialog,
+:root[data-theme="light"] .context-menu { background: #ffffff; }
+
+/* Settings dialog */
+.settings-dialog .dialog-title { border-bottom: 1px solid var(--gray3); }
+.settings-body.dialog-body { padding: 0; height: 560px; display: flex; overflow: hidden; }
+.settings { display: flex; flex: 1; min-height: 0; }
+.settings-nav { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--gray3); background: var(--gray2); }
+.settings-search { margin: 8px; padding: 5px 8px; background: var(--gray1); color: var(--gray12);
+  border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
+.settings-search:focus { border-color: var(--blue6); }
+.settings-pages { flex: 1; overflow: auto; padding-bottom: 8px; }
+.settings-group { padding: 6px 12px 2px; color: var(--gray9); }
+.settings-nav-row { padding: 4px 12px; cursor: default; border-radius: 4px; margin: 0 6px; }
+.settings-nav-row.child { padding-left: 26px; }
+.settings-nav-row:hover { background: var(--gray3); }
+.settings-nav-row.selected { background: var(--blue2); }
+.settings-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.settings-crumb { padding: 10px 16px; font-weight: 600; color: var(--gray12); }
+.settings-page { flex: 1; overflow: auto; padding: 0 16px 16px; display: flex; flex-direction: column; }
+.settings-section { border: 0; border-top: 1px solid var(--gray3); margin: 8px 0; padding: 6px 0 4px 12px; }
+.settings-section legend { padding: 0 6px 0 0; margin-left: -12px; color: var(--gray9); }
+.settings-section .field { grid-template-columns: 170px 220px; }
+.settings-check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.settings-check input { accent-color: var(--blue6); }
+.settings-note { margin: 6px 0; font-size: 12px; }
+.settings-subtitle { font-weight: 600; margin-bottom: 4px; }
+.dialog button:disabled { opacity: .45; cursor: default; }
+.settings-menu { position: fixed; z-index: 80; }
+
+.interp-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.interp-row > span, .interp-row > button { flex-shrink: 0; }
+.interp-select { flex: 1; width: 0; min-width: 0; text-overflow: ellipsis;background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4);
+  border-radius: 4px; padding: 5px 8px; outline: none; }
+.venv-form { border: 1px solid var(--gray4); border-radius: 6px; padding: 8px 12px; margin: 6px 0; }
+.venv-form .field { grid-template-columns: 130px 1fr; }
+.venv-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+.venv-log { max-height: 110px; overflow: auto; margin: 8px 0 0; font: 12px/1.4 var(--mono); color: var(--gray9); white-space: pre-wrap; }
+.venv-log:empty { display: none; }
+.pkg-table { flex: 1; min-height: 120px; overflow: auto; border: 1px solid var(--gray3); border-radius: 4px; margin-top: 6px; }
+.pkg-head, .pkg-trow { display: grid; grid-template-columns: 1fr 160px; padding: 3px 10px; }
+.pkg-head { position: sticky; top: 0; background: var(--gray2); color: var(--gray9); border-bottom: 1px solid var(--gray3); }
+.pkg-table > .muted { padding: 8px 10px; }

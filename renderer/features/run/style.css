@@ -1,3 +1,55 @@
-.run-target { color: var(--gray9); padding: 0 4px; }
+.run-target { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 5px;
+  color: var(--gray11); max-width: 260px; }
+.run-target:hover { background: var(--gray3); }
+.run-target-icon { font-size: 12px; }
+.run-target-icon.temporary { opacity: .55; }
+.run-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-target-arrow { color: var(--gray7); font-size: 10px; }
 .run-btn { color: var(--green6); }
 .stop-btn { color: var(--red); }
+
+.run-tool { position: relative; }
+.run-tabs { display: flex; gap: 2px; padding: 2px 6px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; overflow-x: auto; }
+.run-tabs::-webkit-scrollbar { height: 3px; }
+.run-tabs::-webkit-scrollbar-thumb { background: var(--gray5); border-radius: 2px; }
+.run-tabs::-webkit-scrollbar-track { background: transparent; }
+.run-tab { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; border-radius: 5px; color: var(--gray9);
+  white-space: nowrap; cursor: default; }
+.run-tab:hover { background: var(--gray2); }
+.run-tab.active { background: var(--gray3); color: var(--gray12); }
+.run-tab-icon { font-size: 11px; color: var(--gray9); }
+.run-tab-icon.running { color: var(--green6); }
+.run-tab-icon.failed { color: var(--red); }
+.run-tab-icon.passed { color: var(--green6); }
+.run-tab-close { color: var(--gray7); width: 16px; border-radius: 3px; visibility: hidden; }
+.run-tab:hover .run-tab-close, .run-tab.active .run-tab-close { visibility: visible; }
+.run-tab-close:hover { background: var(--gray4); color: var(--gray12); }
+.run-bodies { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.run-session { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.run-empty { margin: auto; }
+
+/* Monaco glyph margin icon (green triangle, PyCharm's run marker); test results tint it. */
+.run-gutter-icon { cursor: pointer; }
+.run-gutter-icon::before { content: '▶'; display: block; text-align: center; color: #5fb865; font-size: 10px; line-height: 22px; }
+.run-gutter-icon.passed::before { content: '✔'; color: #5fb865; font-size: 12px; }
+.run-gutter-icon.failed::before { content: '✖'; color: var(--red); font-size: 12px; }
+
+.rc-dialog { display: grid; grid-template-columns: 230px 1fr; gap: 12px; height: 380px; }
+.rc-left { display: flex; flex-direction: column; border: 1px solid var(--gray3); border-radius: 6px; min-height: 0; }
+.rc-bar { display: flex; gap: 2px; padding: 4px; border-bottom: 1px solid var(--gray3); }
+.rc-tool { width: 26px; height: 24px; border-radius: 4px; color: var(--gray11); }
+.rc-tool:hover { background: var(--gray3); }
+.rc-list { flex: 1; overflow: auto; padding: 4px 0; }
+.rc-group { padding: 4px 8px; color: var(--gray9); font-weight: 600; }
+.rc-item { padding: 3px 8px 3px 26px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-item:hover { background: var(--gray3); }
+.rc-item.selected { background: var(--blue2); }
+.rc-item.temporary { color: var(--gray9); font-style: italic; }
+.rc-none { padding: 8px; }
+.rc-form { overflow: auto; }
+.rc-form .field { grid-template-columns: 160px 1fr; }
+.rc-type { margin: 4px 0 8px; }
+.rc-keep { display: flex; align-items: center; gap: 4px; margin: 4px 0 4px 168px; color: var(--gray9); }
+.rc-browse { display: flex; gap: 4px; }
+.rc-browse input { flex: 1; min-width: 0; }
+.rc-browse .secondary { padding: 2px 10px; }

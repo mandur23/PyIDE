@@ -1,0 +1,80 @@
+/* Symbol icons in PyCharm's expUI colors: class blue, method red, function orange, field yellow, variable purple, property green. */
+.sn-icon { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  font: 700 9px/1 'Segoe UI', sans-serif; color: #1e1f22; margin-right: 6px; }
+.sn-icon.k-class { background: #548af7; }
+.sn-icon.k-method { background: #f0716b; }
+.sn-icon.k-function { background: #e8a33e; }
+.sn-icon.k-field { background: #d9b24a; }
+.sn-icon.k-variable { background: #b189f5; }
+.sn-icon.k-property { background: #5fb865; }
+
+.sn-hit { background: #5c4a1a; color: #fff; border-radius: 2px; }
+.sn-error { color: var(--red); }
+
+/* Find in Files dialog */
+.sn-find { display: flex; flex-direction: column; gap: 8px; }
+.sn-qwrap { position: relative; display: flex; }
+.sn-find .input { width: 100%; font: 13px var(--mono); padding: 6px 8px; }
+.sn-q { padding-right: 96px !important; }
+.sn-toggles { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
+.sn-toggle { min-width: 26px; height: 22px; padding: 0 4px; border-radius: 4px; color: var(--gray9);
+  font: 600 12px var(--mono); border: 1px solid transparent; }
+.sn-toggle:hover { background: var(--gray3); }
+.sn-toggle.on { color: var(--gray12); background: var(--blue2); border-color: var(--blue6); }
+.sn-filters { display: flex; align-items: center; gap: 8px; color: var(--gray9); }
+.sn-scope { padding: 3px 8px; border-radius: 4px; background: var(--gray3); color: var(--gray12); }
+.sn-mask-lbl { display: flex; align-items: center; gap: 4px; }
+.sn-find .sn-mask { width: 160px; }
+.sn-find .sn-mask:disabled { color: var(--gray7); }
+.sn-status { min-height: 18px; }
+.sn-preview { height: 280px; overflow: auto; border: 1px solid var(--gray3); border-radius: 4px; background: var(--gray1);
+  font: 12.5px/1.6 var(--mono); }
+.sn-prow { display: flex; gap: 12px; padding: 1px 8px; cursor: pointer; white-space: nowrap; }
+.sn-prow:hover { background: var(--gray3); }
+.sn-prow .sn-text { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.sn-ploc { color: var(--gray7); font-family: 'Segoe UI', sans-serif; }
+
+/* Find / TODO tool windows */
+.sn-head { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px; flex-shrink: 0;
+  border-bottom: 1px solid var(--gray3); color: var(--gray11); white-space: nowrap; overflow: hidden; }
+.sn-title { font-weight: 600; color: var(--gray12); overflow: hidden; text-overflow: ellipsis; }
+.sn-note { color: var(--green6); }
+.sn-btn { padding: 2px 12px; }
+.sn-tree { user-select: none; }
+.sn-file { display: flex; align-items: center; gap: 4px; cursor: pointer; padding-left: 6px; }
+.sn-arrow { width: 14px; flex-shrink: 0; text-align: center; color: var(--gray7); font-size: 10px; }
+.sn-ficon { width: 18px; font-size: 12px; flex-shrink: 0; }
+.sn-fname { color: var(--gray12); }
+.sn-fdir { color: var(--gray7); margin-left: 4px; }
+.sn-count { color: var(--gray7); margin-left: 10px; }
+.sn-group.collapsed .sn-children { display: none; }
+.sn-match { display: flex; gap: 10px; padding-left: 44px; cursor: pointer; font: 12.5px/1.6 var(--mono); }
+.sn-match .sn-ln { color: var(--gray7); min-width: 28px; text-align: right; flex-shrink: 0; }
+.sn-match .sn-text { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.sn-todo .sn-ln { min-width: 60px; text-align: left; }
+.sn-todo-text { color: #a8c023; font-style: italic; overflow: hidden; text-overflow: ellipsis; }
+.sn-todo-kw { font-weight: 700; }
+
+/* Structure tool window */
+.sn-struct { flex: 1; overflow: auto; padding-bottom: 8px; user-select: none; }
+.sn-node { display: flex; align-items: center; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; }
+.sn-node:hover { background: var(--gray3); }
+.sn-node.selected { background: var(--blue2); }
+.sn-node .sn-arrow { cursor: pointer; }
+.sn-root { padding-left: 4px; }
+.sn-name { color: var(--gray12); }
+.sn-detail { color: var(--gray7); margin-left: 2px; overflow: hidden; text-overflow: ellipsis; }
+.sn-err { color: var(--red); padding-left: 24px; }
+
+/* File Structure popup */
+.sn-fs { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); width: 520px; max-width: 90vw;
+  background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 12px 40px #0009;
+  z-index: 50; overflow: hidden; display: flex; flex-direction: column; }
+.sn-fs-head { padding: 8px 12px 4px; font-weight: 600; color: var(--gray12); }
+.sn-fs-head .sn-err { padding-left: 0; font-weight: 400; }
+.sn-fs-in { margin: 4px 10px 6px; padding: 6px 8px; font-size: 13px; background: var(--gray1); color: var(--gray12);
+  border: 1px solid var(--blue6); border-radius: 4px; outline: none; }
+.sn-fs-list { max-height: 420px; overflow: auto; padding-bottom: 6px; }
+.sn-fs-row { display: flex; align-items: center; height: 24px; padding-right: 12px; white-space: nowrap; cursor: pointer; }
+.sn-fs-row.active { background: var(--blue2); }
+.sn-fs-row.dim .sn-name { color: var(--gray7); }

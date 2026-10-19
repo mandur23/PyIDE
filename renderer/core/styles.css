@@ -34,6 +34,8 @@ input, select, textarea { font: inherit; }
 .stripe-btn { width: 30px; height: 30px; border-radius: 6px; color: var(--gray9); font-size: 15px; position: relative; }
 .stripe-btn:hover { background: var(--gray3); }
 .stripe-btn.active { background: var(--blue6); color: #fff; }
+/* Feature icons may be color emoji; the New UI stripe is monochrome until a window is active. */
+.stripe-btn:not(.active) { filter: grayscale(1) brightness(1.25); }
 .stripe-btn[data-badge]:not([data-badge=""])::after { content: ''; position: absolute; top: 4px; right: 4px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--red); }
 
@@ -46,6 +48,8 @@ input, select, textarea { font: inherit; }
 #sideBody, #bottomBody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tool { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
 .tool.active { display: flex; }
+/* A tool container that is itself a console host must still hide when inactive. */
+.tool:not(.active) { display: none !important; }
 
 #tree { flex: 1; overflow: auto; padding-bottom: 8px; user-select: none; }
 .node { display: flex; align-items: center; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; }

@@ -1,0 +1,16 @@
+.lsp-status { cursor: pointer; padding: 0 4px; border-radius: 3px; }
+.lsp-status:hover { background: var(--gray3); color: var(--gray12); }
+.lsp-status[data-state="starting"] { color: var(--gray7); }
+.lsp-status[data-state="error"] { color: var(--red); }
+
+.lsp-find-head { height: 28px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 12px;
+  border-bottom: 1px solid var(--gray3); }
+.lsp-find-sym { color: var(--gray12); }
+.lsp-find { font-size: 13px; }
+.lsp-find-file { display: flex; align-items: center; gap: 4px; }
+.lsp-find-file .arrow { width: 14px; color: var(--gray7); font-size: 10px; text-align: center; }
+.lsp-find-file .name { color: var(--gray12); }
+.lsp-find-row { display: flex; gap: 12px; padding-left: 44px; cursor: pointer; font-family: var(--mono); }
+.lsp-find-row .ln { min-width: 28px; text-align: right; color: var(--gray7); }
+.lsp-find-row .code { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.lsp-find-row .hit { background: #32593d; color: var(--gray12); border-radius: 2px; }

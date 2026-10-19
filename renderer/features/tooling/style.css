@@ -1,0 +1,4 @@
+.tooling-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20;
+  padding: 6px 12px; border-radius: 6px; background: var(--gray2); color: var(--gray12);
+  border: 1px solid var(--gray4); box-shadow: 0 6px 18px #0006; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.tooling-hint.error { border-color: var(--red); }

@@ -23,13 +23,21 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 - Files and tabs: `ide.openFile(path, {line, col, focus})`, `ide.openCustomTab({id, title, icon, mount(host, tab), onClose})` for non-text editors such as a diff view, `ide.closeTab(path, force)`, `ide.saveAll()`, `ide.reloadFromDisk(paths?)` after a tool rewrote files, `ide.isDirty(tab)`, `ide.renderTabs()`. A file tab is `{kind: 'file', path, title, model, savedVersion}`.
 - Actions and keymap: `ide.registerAction({id, title, keys, run, when})`. Keys look like `'Ctrl+Shift+F10'`, `'Alt+ArrowLeft'`, `'Shift Shift'`. The last registration wins on a clash, so use PyCharm's default keymap and do not take a key another feature owns (table below). `ide.runAction(id)`.
 - Tool windows: `ide.registerToolWindow({id, title, icon, side: 'left'|'bottom', keys, order, mount(container, tw)})` returns `tw` with `show()`, `hide()`, `toggle()`, `isVisible()`, `setActions([{icon, title, run}])`, `setBadge(text)`.
-- Toolbar and status bar: `ide.registerToolbarItem({side: 'left'|'right', order, el})`, `ide.registerStatusItem({order, el})`. Toolbar right orders: interpreter 50, run target 60, run 70, stop 90.
+- Toolbar and status bar: `ide.registerToolbarItem({side: 'left'|'right', order, el})`, `ide.registerStatusItem({order, el})`. Toolbar right orders: interpreter 50, run target 60, run 70, debug 80, stop 90, settings 200. Toolbar left: VCS branch 10. Bottom tool window orders: Run 10, Debug 15, Find 18, Find in Files 20, Python Console 25, Terminal 30, Problems 40, Git 45, TODO 50, Python Packages 60. Until a window is shown, an area's default window is the one with the lowest order.
 - Project tree: `ide.registerTreeDecorator(entry => ({color, badge}))`, `ide.registerTreeAction({title, when(entry), run(entry)})`, `ide.refreshTree()`, `ide.revealInTree(path)`.
 - Problems: `ide.problems.set(source, path, [{line, col, endLine, endCol, msg, severity: 'error'|'warning'|'info'}])`, `ide.problems.clear(source)`, `ide.problems.all()`. Markers on open models are handled for you.
 - Processes: after a main handler returns an id from `ctx.startProcess`, call `ide.proc.attach(id, {data(text, stream), exit(code)})`. Output that arrived early is replayed. Also `ide.proc.input(id, text)`, `ide.proc.kill(id)`.
 - UI: `ide.ui.console(host, {input, placeholder, onInput})` gives a console with clickable tracebacks. `ide.ui.pick({placeholder, items | async query => items})` with items `{label, detail, hint, icon, value}`. `ide.ui.prompt(label, initial)`. `ide.ui.contextMenu(x, y, items)`. `ide.ui.dialog({title, body, buttons, width})`.
 - Settings: `ide.settings.get(key, fallback)`, `ide.settings.set(key, value)`, persisted and broadcast via `settingsChanged`.
 - Helpers: `ide.util.el(tag, cls, text)`, `basename`, `dirname`, `joinPath`, `samePath`, `rel(path)`.
+
+## Cross-feature APIs
+
+- `ide.lsp` (lsp): `request(method, params)` -> result or null, `documentSymbols(path)` -> LSP DocumentSymbol[] with `kindName` and 1-based line/col, `ready()` -> Promise<bool>, `status()`, `restart()`. Pyright is the only syntax/type diagnostics source (`ide.problems` source `'pyright'`).
+- `ide.run` (run): `registerType`, `registerGutterProvider`, `runConfig`, `runContext`, `addTemporary`, `editConfigurations`, `sessions`, `activeSession`, `resolvePython(cfg)`. `ide.tests` (tests) and `ide.pyconsole` (pyconsole: `execute`, `restart`, `isRunning`).
+- Debugger: action ids `Debug` (Shift+F9) and `StopDebug` (Ctrl+F2 while a session is active, registered on `ready`), event `debugSessionChanged(active)`; the toolbar Stop button stops a debug session when no run is active.
+- `ide.openSettings(pageId)` (settings) and `ide.tooling` (`reformat`, `optimizeImports`, `fixAll`, `lint`). Ruff lint results use problems source `'ruff'`.
+- Key handoffs through `when`: Ctrl+F2 is run's Stop unless a debug session is active; Ctrl+Shift+F10 is run's context run unless the caret is in a test (tests).
 
 ## Keymap ownership (PyCharm default keymap)
 

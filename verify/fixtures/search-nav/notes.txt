@@ -1,0 +1,2 @@
+Notes: call greet before compute.
+This TODO in a text file is not a comment and must not be listed.

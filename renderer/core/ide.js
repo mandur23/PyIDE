@@ -382,6 +382,7 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
     isVisible: () => !area.panel.classList.contains('hidden') && area.active === tw,
     show() {
       area.active = tw;
+      area.picked = true;
       for (const other of ide.toolWindows.values()) {
         if (other.area !== area) continue;
         other.container.classList.toggle('active', other === tw);
@@ -404,7 +405,14 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
   ide.toolWindows.set(id, tw);
   if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: `Tool Window: ${title}`, keys, run: tw.toggle });
   mount?.(container, tw);
-  if (!area.active) { area.active = tw; container.classList.add('active'); tab?.classList.add('active'); if (side === 'left') $('sideTitle').textContent = title; renderAreaActions(area); }
+  // Until something is shown explicitly, the default window of an area is the one with the lowest order
+  // (features load alphabetically, so registration order is not meaningful).
+  tw.order = order;
+  if (!area.active || (!area.picked && order < area.active.order)) {
+    area.active?.container.classList.remove('active');
+    area.active?.tab?.classList.remove('active');
+    area.active = tw; container.classList.add('active'); tab?.classList.add('active'); if (side === 'left') $('sideTitle').textContent = title; renderAreaActions(area);
+  }
   return tw;
 };
 $('hideBottomBtn').onclick = () => areas.bottom.active?.hide();
@@ -831,6 +839,9 @@ $('welcomeOpen').onclick = pickFolder;
 
 // ---------- boot ----------
 ide.api = window.api;
+// Monaco cancels in-flight provider requests (e.g. word highlight) when the model switches and leaves the
+// rejection unhandled; Monaco itself treats these as non-errors.
+addEventListener('unhandledrejection', (e) => { if (e.reason?.name === 'Canceled' && e.reason?.message === 'Canceled') e.preventDefault(); });
 
 async function loadFeatures() {
   for (const f of await ide.api.invoke('core:features')) {
@@ -851,6 +862,8 @@ async function loadFeatures() {
 }
 
 require.config({ paths: { vs: '../node_modules/monaco-editor/min/vs' } });
+// Monaco's default blob worker cannot importScripts() a file:// URL (uncaught ErrorEvent); load the worker script directly.
+window.MonacoEnvironment = { getWorkerUrl: () => new URL('../node_modules/monaco-editor/min/vs/base/worker/workerMain.js', location.href).href };
 require(['vs/editor/editor.main'], async () => {
   const monaco = (ide.monaco = window.monaco);
   monaco.languages.setMonarchTokensProvider('python', PYTHON_GRAMMAR);

@@ -1,0 +1,14 @@
+.pkgs { flex: 1; display: flex; min-height: 0; }
+.pkgs-left { width: 38%; min-width: 220px; display: flex; flex-direction: column; border-right: 1px solid var(--gray3); }
+.pkgs-search { margin: 6px 8px; }
+.pkgs-interp { padding: 0 12px 2px; font-size: 12px; }
+.pkg-row, .pkg-install-row { display: flex; gap: 8px; }
+.pkg-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.pkg-ver { color: var(--gray7); }
+.pkg-install-row { color: var(--blue8); }
+.pkgs-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pkgs-details { padding: 8px 12px; border-bottom: 1px solid var(--gray3); }
+.pkg-title { display: flex; gap: 10px; align-items: baseline; font-size: 14px; font-weight: 600; color: var(--gray12); }
+.pkg-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.pkg-buttons button:disabled { opacity: .45; cursor: default; }
+.pkgs-out { flex: 1; min-height: 0; display: flex; }

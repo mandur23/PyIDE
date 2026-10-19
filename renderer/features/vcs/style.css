@@ -1,0 +1,91 @@
+/* branch widget */
+.vcs-branch { display: flex; align-items: center; gap: 5px; font-weight: 600; }
+.vcs-branch-icon { color: var(--gray9); }
+.vcs-caret { color: var(--gray7); font-size: 10px; }
+
+/* Commit tool window */
+.vcs-init { padding: 16px 12px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.vcs-commit { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vcs-changes { flex: 1; overflow: auto; padding: 2px 0 6px; outline: none; user-select: none; }
+.vcs-group { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 4px; white-space: nowrap; }
+.vcs-group .arrow { width: 14px; color: var(--gray7); font-size: 10px; text-align: center; }
+.vcs-group-title { font-weight: 600; color: var(--gray12); }
+.vcs-file { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 26px; white-space: nowrap; cursor: default; }
+.vcs-file:hover { background: var(--gray3); }
+.vcs-file.selected { background: var(--blue2); }
+.vcs-changes:focus .vcs-file.selected { background: #2e4d8a; }
+.vcs-file .icon { width: 18px; font-size: 12px; flex-shrink: 0; }
+.vcs-file[data-status="deleted"] .vcs-name { text-decoration: line-through; }
+.vcs-dir { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.vcs-changes input[type=checkbox], .vcs-group input[type=checkbox] { margin: 0; accent-color: var(--blue6); }
+.vcs-msg { height: 110px; flex-shrink: 0; margin: 0 8px; resize: vertical; background: var(--gray1); color: var(--gray12);
+  border: 1px solid var(--gray4); border-radius: 4px; padding: 6px 8px; outline: none; font: 13px var(--mono); }
+.vcs-msg:focus { border-color: var(--blue6); }
+.vcs-commit-btns { display: flex; gap: 8px; padding: 8px; flex-shrink: 0; }
+.vcs-empty { padding: 10px 12px; }
+
+/* editor gutter markers (between line numbers and code, like PyCharm) */
+.monaco-editor .vcs-gutter { width: 3px !important; margin-left: calc(var(--vcs-bar-left, 0px) + 2px); }
+.monaco-editor .vcs-added { background: #549159; }
+.monaco-editor .vcs-modified { background: #375fad; }
+.monaco-editor .vcs-deleted { background: none; }
+.monaco-editor .vcs-deleted::before { content: ''; position: absolute; left: 0; top: -5px; border-style: solid;
+  border-width: 5px 0 5px 7px; border-color: transparent transparent transparent var(--red); }
+.monaco-editor .vcs-deleted-end::before { top: auto; bottom: -5px; }
+.monaco-editor .vcs-gutter:hover { width: 5px !important; cursor: pointer; }
+.monaco-editor .vcs-blame { white-space: nowrap; overflow: hidden; cursor: pointer; }
+.monaco-editor .vcs-blame::after { padding-left: 4px; color: #8c8f96; font: 12px/22px 'Inter', 'Segoe UI', sans-serif; }
+.monaco-editor .vcs-blame:hover::after { color: var(--gray12); }
+
+/* diff tab */
+.vcs-diff-head { display: grid; grid-template-columns: 1fr 1fr; height: 30px; flex-shrink: 0; background: var(--gray2);
+  border-bottom: 1px solid var(--gray3); }
+.vcs-diff-side { padding: 0 12px; line-height: 30px; color: var(--gray9); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vcs-diff-body { flex: 1; min-height: 0; position: relative; }
+
+/* Git tool window */
+.vcs-subtabs { display: flex; gap: 2px; padding: 4px 8px; flex-shrink: 0; border-bottom: 1px solid var(--gray3); }
+.vcs-subtab { padding: 2px 10px; border-radius: 4px; color: var(--gray9); }
+.vcs-subtab.active { color: var(--gray12); background: var(--gray3); }
+.vcs-console { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vcs-log { flex: 1; display: flex; min-height: 0; }
+.vcs-log-table { flex: 1; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--gray3); }
+.vcs-log-rows { flex: 1; overflow: auto; outline: none; user-select: none; }
+.vcs-log-row { display: flex; height: 24px; align-items: center; padding: 0 8px; gap: 12px; cursor: default; white-space: nowrap; }
+.vcs-log-row:hover { background: var(--gray2); }
+.vcs-log-row.selected { background: var(--blue2); }
+.vcs-log-header { color: var(--gray7); font-size: 12px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.vcs-log-header:hover { background: none; }
+.vcs-c-subject { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.vcs-subject-text { overflow: hidden; text-overflow: ellipsis; }
+.vcs-c-author { width: 140px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gray11); }
+.vcs-c-date { width: 150px; flex-shrink: 0; color: var(--gray9); }
+.vcs-dot { color: #3592c4; font-size: 9px; }
+.vcs-ref { font-size: 11px; padding: 0 5px; border-radius: 3px; background: #4d4e2e; color: #e8c46a; }
+.vcs-ref.head { background: #2f4a2f; color: #8fd18f; }
+.vcs-ref.remote { background: #3c3049; color: #c3a3e6; }
+.vcs-ref.tag { background: #2e3d4a; color: #8cbde6; }
+.vcs-log-side { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; }
+.vcs-log-files { flex: 1; overflow: auto; min-height: 0; }
+.vcs-log-file { padding-left: 10px; }
+.vcs-side-title { padding: 4px 10px; color: var(--gray7); font-size: 12px; }
+.vcs-log-details { max-height: 45%; overflow: auto; padding: 8px 10px; border-top: 1px solid var(--gray3); font-size: 12px; user-select: text; }
+.vcs-detail-msg { white-space: pre-wrap; color: var(--gray12); margin-bottom: 6px; font-size: 13px; }
+
+/* dialogs */
+.vcs-dialog-list { max-height: 220px; overflow: auto; margin-top: 8px; padding: 6px 8px; background: var(--gray1);
+  border: 1px solid var(--gray3); border-radius: 4px; font: 12px/1.6 var(--mono); }
+.vcs-push-target { font-weight: 600; color: var(--gray12); }
+.vcs-push-warn { color: var(--yellow); }
+.vcs-push .field { grid-template-columns: 60px 1fr; }
+
+/* notification balloons */
+.vcs-notes { position: fixed; right: 14px; bottom: 34px; z-index: 65; display: flex; flex-direction: column; gap: 8px; width: 360px; pointer-events: none; }
+.vcs-note { position: relative; pointer-events: auto; background: var(--gray2); border: 1px solid var(--gray4); border-left: 3px solid var(--blue6);
+  border-radius: 6px; padding: 10px 28px 10px 12px; box-shadow: 0 8px 24px #0008; cursor: pointer; }
+.vcs-note.ok { border-left-color: var(--green6); }
+.vcs-note.warn { border-left-color: var(--yellow); }
+.vcs-note.error { border-left-color: var(--red); }
+.vcs-note-title { font-weight: 600; color: var(--gray12); }
+.vcs-note-text { margin-top: 4px; color: var(--gray9); white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; }
+.vcs-note-close { position: absolute; top: 6px; right: 6px; color: var(--gray7); }
