@@ -131,9 +131,11 @@
     ]) },
     { label: tr('Refactor'), submenu: () => tidy([act('RenameElement')]) },
     { label: tr('Run'), submenu: () => tidy([
-      act('Run'), act('Debug'), act('RunClass'), act('ChooseRunConfiguration'), act('ChooseDebugConfiguration'),
+      act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
+      act('ChooseDebugConfiguration'),
       act('editRunConfigurations'), { separator: true },
-      act('Stop'), act('StopDebug'), act('Rerun'), act('RerunFailedTests'), { separator: true },
+      act('Stop'), act('StopDebug'), act('Rerun'), act('RerunFailedTests'), act('HideCoverage'), act('ShowCoverage'),
+      { separator: true },
       act('StepOver'), act('StepInto'), act('StepOut'), act('RunToCursor'), act('Resume'), act('Pause'),
       act('EvaluateExpression'), act('ToggleLineBreakpoint'), act('ViewBreakpoints'),
     ]) },

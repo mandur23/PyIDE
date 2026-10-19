@@ -6,6 +6,8 @@
   const MAX_TEMPORARY = 5;
   const types = new Map();
   const gutterProviders = [];
+  // Executors run a configuration another way (Run with Coverage, Profile) by wrapping its interpreter.
+  const executors = new Map();
 
   // ---------- helpers ----------
   const isAbs = (p) => /^[a-zA-Z]:[\\/]|^[\\/]{2}/.test(p);
@@ -130,7 +132,7 @@
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
-      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => runConfig(s.cfg) },
+      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => runConfig(s.cfg, { executor: s.executor }) },
       ...(busy(s) ? [{ icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
       ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
@@ -164,6 +166,8 @@
   function createSession(cfg) {
     const s = {
       key: cfg.id, cfg, title: cfg.name, running: false, procId: null, con: null, extraActions: [], dispose: null,
+      // executor: the id of the executor of the current run; exitHooks run once when its process exits.
+      executor: null, exitHooks: [],
       // starting: a promise while a run is being set up (its process may exist before started() gets its id).
       starting: null, cancelStart: false, closed: false,
       host: el('div', 'run-session hidden'),
@@ -199,6 +203,7 @@
         if (s.con?.input) s.con.input.disabled = true;
         updateToolbar();
         if (activeSession === s) renderActions();
+        for (const hook of s.exitHooks.splice(0)) hook();
       },
       // Streams a process into the session console and prints PyCharm's exit line.
       attach(id, { onExit } = {}) {
@@ -243,7 +248,7 @@
   // Reuses the configuration's tab (stopping what runs there), like PyCharm without "Allow multiple instances".
   // A run still starting in the tab is waited out first, so its process is stopped here instead of being orphaned
   // (two quick Shift+F10 presses would otherwise both spawn, and the first could no longer be stopped).
-  async function prepareSession(cfg) {
+  async function prepareSession(cfg, executor) {
     let s;
     while ((s = sessions.find((o) => o.key === cfg.id))?.starting) await s.starting;
     if (s) {
@@ -251,6 +256,7 @@
       s.dispose?.();
       s.dispose = null;
       s.extraActions = [];
+      s.exitHooks = [];
       s.con = null;
       s.cfg = cfg;
       s.title = cfg.name;
@@ -258,6 +264,7 @@
       s.setIcon(types.get(cfg.type)?.icon || '▶');
       s.host.replaceChildren();
     } else s = createSession(cfg);
+    s.executor = executor?.id || null;
     s.cancelStart = false;
     let done;
     s.starting = new Promise((r) => (done = r));
@@ -268,17 +275,20 @@
   }
 
   let lastRun = null;
-  // opts are passed through to the type (e.g. {targets} for rerunning failed tests).
+  // opts are passed through to the type (e.g. {targets} for rerunning failed tests); opts.executor names an executor.
   async function runConfig(cfg, opts = {}) {
     const type = types.get(cfg?.type);
     if (!type) return;
+    const executor = executors.get(opts.executor) || null;
     lastRun = cfg;
     tw.show();
     await ide.saveAll();
-    const s = await prepareSession(cfg);
+    const s = await prepareSession(cfg, executor);
     try {
-      const interp = interpFor(cfg);
+      let interp = interpFor(cfg);
       if (!interp) return s.console().append(`${tr('No Python interpreter found.')}\n`, 'err');
+      // The executor returns the interpreter to start instead (null cancels the run) and may add exit hooks.
+      if (executor && !(interp = await executor.prepare(cfg, interp, s))) return s;
       await type.start(cfg, s, interp, opts);
     } catch (err) {
       (s.con || s.console()).append(`${err.message}\n`, 'err');
@@ -330,6 +340,11 @@
   ide.registerToolbarItem({ order: 60, el: target });
   ide.registerToolbarItem({ order: 70, el: runBtn });
   ide.registerToolbarItem({ order: 90, el: stopBtn });
+  // PyCharm's "More Actions" (⋮) in the run widget: the other executors for the selected configuration.
+  const moreBtn = el('button', 'tb-icon run-more-btn hidden');
+  moreBtn.appendChild(ide.icon('moreVertical', '⋮'));
+  moreBtn.title = tr('More Actions');
+  ide.registerToolbarItem({ order: 85, el: moreBtn });
 
   function renderTarget() {
     const cfg = selectedConfig();
@@ -370,20 +385,37 @@
     return tab?.kind === 'file' && /\.pyw?$/i.test(tab.path) ? tab.path : null;
   }
 
-  function runCurrentFile() {
+  const currentFileConfig = (file) => {
+    const cfg = contextConfigForFile(file);
+    return { ...types.get(cfg.type).defaults(), ...cfg, id: `file:${file.toLowerCase()}` };
+  };
+
+  function runCurrentFile(opts = {}) {
     const file = currentPyFile();
-    if (file) {
-      const cfg = contextConfigForFile(file);
-      return runConfig({ ...types.get(cfg.type).defaults(), ...cfg, id: `file:${file.toLowerCase()}` });
-    }
-    if (lastRun) return runConfig(lastRun);
+    if (file) return runConfig(currentFileConfig(file), opts);
+    if (lastRun) return runConfig(lastRun, opts);
     ide.ui.dialog({ title: tr('Run'), body: tr('Open a Python file to run it, or select a run configuration.') });
   }
 
-  function runSelected() {
+  function runSelected(opts = {}) {
     const cfg = selectedConfig();
-    return cfg ? runConfig(cfg) : runCurrentFile();
+    return cfg ? runConfig(cfg, opts) : runCurrentFile(opts);
   }
+
+  // What Run would start now: the selected configuration, the current file, or the last run.
+  function selectedTarget() {
+    const file = currentPyFile();
+    return selectedConfig() || (file ? currentFileConfig(file) : lastRun);
+  }
+
+  moreBtn.onclick = () => {
+    const r = moreBtn.getBoundingClientRect();
+    const cfg = selectedTarget();
+    ide.ui.contextMenu(r.left, r.bottom + 2, [...executors.values()].map((ex) => ({
+      label: cfg ? ex.label(cfg.name) : ex.title, icon: ex.iconName, glyph: ex.glyph, disabled: !cfg,
+      run: () => runSelected({ executor: ex.id }),
+    })));
+  };
 
   // Ctrl+Shift+F10 / project tree / gutter: run a context configuration, saved as a temporary one.
   function runContext(cfg) {
@@ -448,7 +480,7 @@
   ide.registerAction({ id: 'ChooseRunConfiguration', title: tr('Run…'), keys: 'Alt+Shift+F10', run: () => chooseConfiguration(false) });
   ide.registerAction({ id: 'ChooseDebugConfiguration', title: tr('Debug…'), keys: 'Alt+Shift+F9', run: () => chooseConfiguration(true) });
   ide.registerAction({ id: 'editRunConfigurations', title: tr('Edit Configurations…'), run: () => editConfigurations() });
-  ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && runConfig(activeSession.cfg) });
+  ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && runConfig(activeSession.cfg, { executor: activeSession.executor }) });
   ide.registerTreeAction({
     title: tr("Run '…'"),
     hint: 'Ctrl+Shift+F10',
@@ -653,6 +685,9 @@
         ed.setPosition({ lineNumber: item.line, column: 1 });
         debugConfig(addTemporary(cfg()));
       } }] : []),
+      ...[...executors.values()].map((ex) => ({
+        label: ex.label(item.title), icon: ex.iconName, glyph: ex.glyph, run: () => runConfig(addTemporary(cfg()), { executor: ex.id }),
+      })),
       { separator: true },
       { label: tr('Modify Run Configuration…'), run: () => editConfigurations(addTemporary(cfg()).id) },
     ]);
@@ -717,6 +752,13 @@
     runConfig,
     runContext,
     runCurrentFile,
+    runSelected,
+    selectedTarget,
+    // executor: {id, title, label(name), iconName?, glyph?, prepare(cfg, interp, session) -> Promise<interp | null>}.
+    // prepare returns the interpreter to start with (e.g. one whose args launch a wrapper script before the program)
+    // and may push callbacks to session.exitHooks, which run once when that run's process exits.
+    registerExecutor: (ex) => { executors.set(ex.id, ex); moreBtn.classList.remove('hidden'); },
+    executors,
     debugConfig,
     canDebug,
     editConfigurations,

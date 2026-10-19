@@ -1,0 +1,36 @@
+/* Editor stripes in PyCharm's coverage colors (covered, not covered, partly covered). */
+:root { --cov-hit: #57965c; --cov-miss: #db5c5c; --cov-partial: #d9a343; }
+:root[data-theme="light"] { --cov-hit: #6ab36e; --cov-miss: #e55765; --cov-partial: #e5a72e; }
+.monaco-editor .cov-line { width: 4px !important; margin-left: 2px; cursor: pointer; }
+.monaco-editor .cov-hit { background: var(--cov-hit); }
+.monaco-editor .cov-miss { background: var(--cov-miss); }
+.monaco-editor .cov-partial { background: var(--cov-partial); }
+
+.cov-install p { margin: 0 0 8px; }
+.cov-install code { display: block; padding: 6px 8px; background: var(--gray2); border-radius: 4px; font-family: var(--mono); user-select: text; }
+.cov-install-log { max-height: 180px; overflow: auto; margin: 0; padding: 6px 8px; background: var(--gray1); border: 1px solid var(--gray3);
+  border-radius: 4px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; user-select: text; }
+
+.cov-tool { display: flex; flex-direction: column; }
+.cov-header { display: flex; align-items: center; gap: 12px; padding: 4px 10px; border-bottom: 1px solid var(--gray3); white-space: nowrap;
+  overflow: hidden; flex-shrink: 0; }
+.cov-suite { font-weight: 600; color: var(--gray12); }
+.cov-time { color: var(--gray7); }
+.cov-summary { color: var(--gray11); }
+.cov-row { display: grid; grid-template-columns: minmax(200px, 1fr) 150px 150px; align-items: center; height: 22px; padding-right: 8px; }
+.cov-columns { color: var(--gray9); border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.cov-columns .cov-name { padding-left: 24px; }
+.cov-list { flex: 1; overflow: auto; outline: none; user-select: none; }
+.cov-item { cursor: default; }
+.cov-item:hover { background: var(--gray2); }
+.cov-item.selected { background: var(--gray3); }
+.cov-list:focus .cov-item.selected { background: var(--blue2); }
+.cov-name { display: flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; }
+.cov-label { overflow: hidden; text-overflow: ellipsis; }
+.cov-arrow { width: 14px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
+.cov-icon { width: 14px; height: 12px; flex-shrink: 0; border-radius: 2px; }
+.cov-icon.dir { background: #8b8f97; clip-path: polygon(0 10%, 40% 10%, 50% 25%, 100% 25%, 100% 100%, 0 100%); }
+.cov-icon.file { background: #4b8bbe; clip-path: polygon(15% 0, 70% 0, 90% 22%, 90% 100%, 15% 100%); }
+.cov-pc { text-align: right; color: var(--gray11); font-variant-numeric: tabular-nums; }
+.cov-item .cov-pc[data-percent="100"] { color: var(--cov-hit); }
+.cov-item .cov-pc[data-percent="0"] { color: var(--cov-miss); }

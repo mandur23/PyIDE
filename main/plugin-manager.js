@@ -136,8 +136,23 @@ function createPluginManager({ appDir, userDataDir }) {
     id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n, dir: p.dir,
   }));
 
-  // Renderer assets of the plugins running this session, in a stable order (bundled first).
-  const rendererEntries = ({ detached = false } = {}) => loaded.filter((p) => p.enabled && p.script && (!detached || p.detached)).map((p) => ({
+  // Discovery order, except that a plugin's dependencies come before it, so it can use their APIs while it loads.
+  function dependencyOrder(list) {
+    const byId = new Map(list.map((p) => [p.id, p]));
+    const out = [];
+    const seen = new Set();
+    const visit = (p) => {
+      if (seen.has(p.id)) return;
+      seen.add(p.id);
+      for (const d of p.depends) if (byId.has(d)) visit(byId.get(d));
+      out.push(p);
+    };
+    list.forEach(visit);
+    return out;
+  }
+
+  // Renderer assets of the plugins running this session, in a stable order (bundled first, dependencies first).
+  const rendererEntries = ({ detached = false } = {}) => dependencyOrder(loaded.filter((p) => p.enabled && p.script && (!detached || p.detached))).map((p) => ({
     id: p.id,
     script: p.bundled ? `features/${path.basename(p.dir)}/index.js` : require('url').pathToFileURL(p.script).href,
     css: p.style ? (p.bundled ? `features/${path.basename(p.dir)}/style.css` : require('url').pathToFileURL(p.style).href) : null,

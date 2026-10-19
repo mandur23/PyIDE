@@ -1,0 +1,9 @@
+{
+  "id": "coverage",
+  "name": "Code Coverage",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Run with Coverage for any run configuration through coverage.py: the Coverage tool window with line and branch percentages, and covered, missed and partly covered lines marked in editors.",
+  "depends": ["run"],
+  "main": ["coverage.js"]
+}
