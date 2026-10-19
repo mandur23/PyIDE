@@ -120,7 +120,6 @@ await sleep(1500);
 spawnSync(path.join(installDir, 'Uninstall PyIDE.exe'), ['/S'], { stdio: 'ignore' });
 for (let i = 0; i < 120 && existsSync(exe); i++) await sleep(500);
 check(!existsSync(exe), 'uninstall removes the updated app');
-if (!cacheExisted) rmSync(cacheDir, { recursive: true, force: true });
 try { rmSync(path.dirname(installDir), { recursive: true, force: true }); } catch {}
 
 // ---------- an MSI install is pointed at the new MSI instead of updating itself ----------
@@ -146,6 +145,7 @@ if (existsSync(msi) && !existsSync(msiDir)) {
   await sleep(1500);
   check(spawnSync('msiexec', ['/x', msi, '/qn'], { stdio: 'ignore' }).status === 0 && !existsSync(path.join(msiDir, 'PyIDE.exe')), 'MSI: uninstalled');
 } else console.log(`skipping the MSI part (${existsSync(msi) ? `${msiDir} exists` : 'no MSI in dist'})`);
+if (!cacheExisted) rmSync(cacheDir, { recursive: true, force: true });
 
 const failed = results.filter((x) => !x.ok).length;
 console.log(`${results.length - failed}/${results.length} passed`);
