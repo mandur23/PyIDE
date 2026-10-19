@@ -29,7 +29,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 - Processes: after a main handler returns an id from `ctx.startProcess`, call `ide.proc.attach(id, {data(text, stream), exit(code)})`. Output that arrived early is replayed. Also `ide.proc.input(id, text)`, `ide.proc.kill(id)`.
 - UI: `ide.ui.console(host, {input, placeholder, onInput})` gives a console with clickable tracebacks. `ide.ui.pick({placeholder, items | async query => items})` with items `{label, detail, hint, icon, value}`. `ide.ui.prompt(label, initial)`. `ide.ui.contextMenu(x, y, items)`. `ide.ui.dialog({title, body, buttons, width})`.
 - Settings: `ide.settings.get(key, fallback)`, `ide.settings.set(key, value)`, persisted and broadcast via `settingsChanged`.
-- Helpers: `ide.util.el(tag, cls, text)`, `basename`, `dirname`, `joinPath`, `samePath`, `rel(path)`.
+- Helpers: `ide.util.el(tag, cls, text)`, `basename`, `dirname`, `joinPath`, `samePath`, `isUnder(path, dir)` (same path or inside it), `rel(path)`.
 
 ## Cross-feature APIs
 

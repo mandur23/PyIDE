@@ -25,6 +25,8 @@ class DapClient {
     socket.on('close', () => {
       for (const p of this.pending.values()) p.reject(new Error('debug session closed'));
       this.pending.clear();
+      for (const w of this.waiters) w.reject(new Error('debug session closed'));
+      this.waiters = [];
     });
   }
 
@@ -69,7 +71,10 @@ class DapClient {
   }
 
   waitEvent(event) {
-    return new Promise((resolve) => this.waiters.push({ event, resolve }));
+    return new Promise((resolve, reject) => {
+      if (this.socket.destroyed) return reject(new Error('debug session closed'));
+      this.waiters.push({ event, resolve, reject });
+    });
   }
 }
 
@@ -125,6 +130,18 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
       if (sessions.delete(id)) send('debug:event', { id, event: 'closed', body: {} });
     });
 
+    try {
+      await configure(dap, breakpoints);
+    } catch (err) {
+      // A failed handshake must not leave the debuggee running (or listening) with nobody attached.
+      closeSession(id);
+      if (procs.has(id)) killProcess(id);
+      throw err;
+    }
+    return { id };
+  });
+
+  async function configure(dap, breakpoints) {
     await dap.request('initialize', {
       clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
@@ -140,8 +157,7 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
     await dap.request('setExceptionBreakpoints', { filters: ['uncaught'] }).catch(() => {});
     await dap.request('configurationDone');
     await attached;
-    return { id };
-  });
+  }
 
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);

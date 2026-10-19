@@ -147,7 +147,11 @@ exports.register = ({ ipcMain }) => {
     return r.code ? null : r.out;
   });
 
-  h('commit', async (root, message, paths) => {
+  // files: [path | {path, orig}]. A staged rename's original path is committed too (its deletion is already staged and
+  // `git commit <paths>` implies --only), but is not passed to `git add`, which rejects a path gone from index and disk.
+  h('commit', async (root, message, files) => {
+    const paths = files.map((f) => (typeof f === 'string' ? f : f.path));
+    const origs = files.map((f) => (typeof f === 'string' ? null : f.orig)).filter(Boolean);
     const rels = paths.map((p) => relOf(root, p)).join('\0');
     const addArgs = ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'];
     const add = await git(root, addArgs, rels);
@@ -155,7 +159,7 @@ exports.register = ({ ipcMain }) => {
     const msgFile = path.join(os.tmpdir(), `pyide-commit-${process.pid}-${Date.now()}.txt`);
     fs.writeFileSync(msgFile, message, 'utf8');
     const args = ['commit', '-F', msgFile, '--pathspec-from-file=-', '--pathspec-file-nul'];
-    const r = await git(root, args, rels);
+    const r = await git(root, args, [...paths, ...origs].map((p) => relOf(root, p)).join('\0'));
     try { fs.unlinkSync(msgFile); } catch {}
     const hash = r.code ? null : (await git(root, ['rev-parse', '--short', 'HEAD'])).out.trim();
     return { ok: !r.code, cmd: cmdLine(['commit', '-m', message.split('\n')[0], '--', ...paths.map((p) => relOf(root, p))]), out: r.out, err: r.err, hash };

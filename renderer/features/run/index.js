@@ -123,12 +123,15 @@
     }
   }
 
+  // A session is stoppable while its process runs and while a run is still starting there.
+  const busy = (s) => s.running || !!s.starting;
+
   function renderActions() {
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
       { icon: '⟳', title: `Rerun '${s.title}'`, run: () => runConfig(s.cfg) },
-      ...(s.running ? [{ icon: '■', title: 'Stop', run: () => s.stop() }] : []),
+      ...(busy(s) ? [{ icon: '■', title: 'Stop', run: () => s.stop() }] : []),
       ...s.extraActions,
       ...(s.con ? [{ icon: '⌫', title: 'Clear All', run: () => s.con.clear() }] : []),
     ]);
@@ -147,7 +150,8 @@
   }
 
   function closeSession(s) {
-    if (s.running) s.stop();
+    s.closed = true;
+    s.stop();
     s.dispose?.();
     sessions.splice(sessions.indexOf(s), 1);
     s.tab.remove();
@@ -160,6 +164,8 @@
   function createSession(cfg) {
     const s = {
       key: cfg.id, cfg, title: cfg.name, running: false, procId: null, con: null, extraActions: [], dispose: null,
+      // starting: a promise while a run is being set up (its process may exist before started() gets its id).
+      starting: null, cancelStart: false, closed: false,
       host: el('div', 'run-session hidden'),
       tab: el('div', 'run-tab'),
       // A console in the session (or in `parent`); typed lines go to the running process's stdin.
@@ -180,6 +186,8 @@
       started(id) {
         s.procId = id;
         s.running = true;
+        // Stop (or closing the tab) was asked for before the process id arrived.
+        if (s.cancelStart || s.closed) { s.cancelStart = false; ide.proc.kill(id); }
         s.setIcon('▶', 'running');
         if (s.con?.input) { s.con.input.disabled = false; s.con.input.focus(); }
         updateToolbar();
@@ -205,7 +213,10 @@
           },
         });
       },
-      stop() { if (s.running) ide.proc.kill(s.procId); },
+      stop() {
+        if (s.running) ide.proc.kill(s.procId);
+        else if (s.starting) s.cancelStart = true;
+      },
       setIcon(icon, cls) {
         const i = s.tab.querySelector('.run-tab-icon');
         i.textContent = icon;
@@ -228,8 +239,11 @@
   }
 
   // Reuses the configuration's tab (stopping what runs there), like PyCharm without "Allow multiple instances".
+  // A run still starting in the tab is waited out first, so its process is stopped here instead of being orphaned
+  // (two quick Shift+F10 presses would otherwise both spawn, and the first could no longer be stopped).
   async function prepareSession(cfg) {
-    let s = sessions.find((o) => o.key === cfg.id);
+    let s;
+    while ((s = sessions.find((o) => o.key === cfg.id))?.starting) await s.starting;
     if (s) {
       if (s.running) { const old = s.procId; s.procId = null; s.running = false; ide.proc.kill(old); }
       s.dispose?.();
@@ -242,6 +256,11 @@
       s.setIcon(types.get(cfg.type)?.icon || '▶');
       s.host.replaceChildren();
     } else s = createSession(cfg);
+    s.cancelStart = false;
+    let done;
+    s.starting = new Promise((r) => (done = r));
+    s.startDone = () => { s.starting = null; done(); updateToolbar(); if (activeSession === s) renderActions(); };
+    updateToolbar();
     selectSession(s);
     return s;
   }
@@ -255,14 +274,16 @@
     tw.show();
     await ide.saveAll();
     const s = await prepareSession(cfg);
-    const interp = interpFor(cfg);
-    if (!interp) return s.console().append('No Python interpreter found.\n', 'err');
     try {
+      const interp = interpFor(cfg);
+      if (!interp) return s.console().append('No Python interpreter found.\n', 'err');
       await type.start(cfg, s, interp, opts);
     } catch (err) {
       (s.con || s.console()).append(`${err.message}\n`, 'err');
       s.running = false;
       updateToolbar();
+    } finally {
+      s.startDone();
     }
     return s;
   }
@@ -316,7 +337,7 @@
   }
 
   function updateToolbar() {
-    stopBtn.disabled = !sessions.some((s) => s.running) && !debugActive;
+    stopBtn.disabled = !sessions.some(busy) && !debugActive;
   }
   // The toolbar Stop button also stops a debug session (the debugger owns that process).
   ide.on('debugSessionChanged', (active) => { debugActive = active; updateToolbar(); });
@@ -398,8 +419,8 @@
   }
 
   function stop() {
-    if (activeSession?.running) return activeSession.stop();
-    const running = sessions.filter((s) => s.running);
+    if (activeSession && busy(activeSession)) return activeSession.stop();
+    const running = sessions.filter(busy);
     if (!running.length && debugActive) return ide.runAction('StopDebug');
     if (running.length === 1) return running[0].stop();
     if (running.length > 1) {

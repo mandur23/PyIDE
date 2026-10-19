@@ -182,6 +182,16 @@
     if (id === 'PythonConsole' && !procId) start().then(() => input.focus());
   });
 
+  // The interpreter runs in the project root with it on sys.path, so another project gets a fresh one.
+  ide.on('projectOpened', async () => {
+    if (starting) await starting.catch(() => {});
+    if (!procId) return;
+    await stop();
+    con.clear();
+    setPrompt('ps1');
+    if (tw.isVisible()) start();
+  });
+
   // Alt+Shift+E: selection, or the current line (then the caret moves down), like PyCharm.
   function executeSelection() {
     const ed = ide.editor;

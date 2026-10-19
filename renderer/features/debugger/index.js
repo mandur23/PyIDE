@@ -1,5 +1,5 @@
 (() => {
-  const { el, basename, dirname, samePath } = ide.util;
+  const { el, basename, dirname, samePath, isUnder } = ide.util;
   const monaco = ide.monaco;
   const { MouseTargetType, TrackedRangeStickiness } = monaco.editor;
   const key = (p) => p.toLowerCase();
@@ -212,7 +212,12 @@
       if (sess === mine) { sess = null; updateControls(); }
       return;
     }
-    if (sess !== mine) return;
+    if (sess !== mine) {
+      // Stopped or superseded while debugpy was starting: tear this debuggee down instead of leaving it running unseen.
+      ide.proc.attach(id, {}); // drop its buffered and future output
+      ide.api.invoke('debug:stop', id).catch(() => {});
+      return;
+    }
     sess.id = id;
     if (sess.state === 'starting') sess.state = 'running';
     con.append('Connected to pydev debugger (build debugpy)\n', 'sys');
@@ -243,6 +248,8 @@
     if (!sess) return;
     const s = sess;
     if (s.id) await ide.api.invoke('debug:stop', s.id);
+    // Still starting: end the session now; debugFile stops the process as soon as 'debug:start' hands back its id.
+    else endSession(s, null);
   }
 
   function setRunning() {
@@ -398,7 +405,7 @@
     let changed = false;
     for (const [from, to] of renamed || []) {
       for (const f of [...bps.values()]) {
-        if (!key(f.path).startsWith(key(from))) continue;
+        if (!isUnder(f.path, from)) continue;
         bps.delete(key(f.path));
         f.path = to + f.path.slice(from.length);
         bps.set(key(f.path), f);
@@ -406,7 +413,7 @@
       }
     }
     for (const d of deleted || []) {
-      for (const f of [...bps.values()]) if (key(f.path).startsWith(key(d))) { bps.delete(key(f.path)); changed = true; }
+      for (const f of [...bps.values()]) if (isUnder(f.path, d)) { bps.delete(key(f.path)); changed = true; }
     }
     if (changed) { saveBps(); bpListChanged(); }
   });
@@ -818,7 +825,7 @@
     { id: 'EvaluateExpression', title: 'Evaluate Expression…', keys: 'Alt+F8', when: suspended, run: evaluateDialog },
   ].forEach(ide.registerAction);
   // Registered after every feature has loaded so it takes precedence over run's Ctrl+F2, but only while debugging.
-  ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: 'Stop Debugging', keys: 'Ctrl+F2', when: () => !!sess?.id, run: stopDebug }));
+  ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: 'Stop Debugging', keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
   ide.registerTreeAction({ title: "Debug '…'", when: (e) => !e.dir && e.name.endsWith('.py'), run: (e) => debugFile(e.path) });
 
   ide.debugger = { debugFile, isActive: () => !!sess };

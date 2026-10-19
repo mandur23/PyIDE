@@ -252,6 +252,14 @@ try {
   check(await js(`window.__treeRefreshes > 0`), 'project tree refreshed after Replace All');
   check(await js(`document.querySelector('#snFindResults').textContent.includes('No matches found')`), 'search reruns and shows nothing left');
 
+  // A regex that can match the empty string replaces only the non-empty matches the preview counts.
+  writeFileSync(path.join(project, 'empty_re.txt'), 'bab\n');
+  const reOpts = `{ query: 'a*', regex: true, caseSensitive: true, words: false, replacement: '[$&]' }`;
+  const inBuffer = await js(`ide.api.invoke('search:replaceText', ${reOpts}, 'bab')`);
+  const onDisk = await js(`ide.api.invoke('search:replace', ${reOpts}, [ide.util.joinPath(ide.root, 'empty_re.txt')])`);
+  check(inBuffer.text === 'b[a]b' && inBuffer.count === 1 && onDisk.count === 1 && disk('empty_re.txt') === 'b[a]b\n',
+    `empty regex matches are not replaced (buffer ${JSON.stringify(inBuffer)}, disk ${JSON.stringify(disk('empty_re.txt'))})`);
+
   // ---- Find in a directory from the project tree ----
   await press('Alt+1');
   await until(`ide.toolWindows.get('Project').isVisible()`, 'project tree visible');

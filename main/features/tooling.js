@@ -6,13 +6,20 @@ const fs = require('fs');
 function ruff(exe, args, text, file, root) {
   return new Promise((resolve) => {
     const cwd = root && fs.existsSync(root) ? root : path.dirname(file || exe);
-    const p = spawn(exe, [...args, '--stdin-filename', file || 'untitled.py', '-'], { cwd });
+    let p;
+    try {
+      p = spawn(exe, [...args, '--stdin-filename', file || 'untitled.py', '-'], { cwd });
+    } catch (e) {
+      return resolve({ code: -1, out: '', err: e.message });
+    }
     let out = '';
     let err = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
     p.on('error', (e) => resolve({ code: -1, out, err: e.message }));
     p.on('close', (code) => resolve({ code, out, err }));
+    // A missing or blocked ruff.exe also fails the stdin write (EOF/EPIPE); unhandled, that throws in the main process.
+    p.stdin.on('error', () => {});
     p.stdin.end(text, 'utf8');
   });
 }

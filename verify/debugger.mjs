@@ -1,4 +1,19 @@
+import { execFileSync } from 'child_process';
+import path from 'path';
 import { launch, openFile } from './lib.mjs';
+
+// Live Python processes whose command line names `file` (a venv launcher and its child may both count).
+const pyProcs = (file) => Number(execFileSync('powershell', ['-NoProfile', '-Command',
+  `@(Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${file.replace(/'/g, "''")}') }).Count`],
+{ encoding: 'utf8' }).trim());
+async function noProcs(file, ms = 10000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (pyProcs(file) === 0) return true;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
 
 const t = await launch({ fixture: 'debugger', port: 9402 });
 const { js, until, press, type, click, check, shot, cdp } = t;
@@ -210,6 +225,32 @@ try {
   await press('Ctrl+F2');
   await until(`document.querySelector('#runOut').textContent.includes('Process finished')`, 'run stopped');
   check(true, "Ctrl+F2 outside debugging still stops Run");
+
+  // ---- quick double starts and Stop during startup leave no process behind ----
+  const loopPy = path.join(t.project, 'loop.py');
+  const waiterPy = path.join(t.project, 'waiter.py');
+  await openFile(t, 'loop.py');
+  await press('Shift+F9');
+  await press('Shift+F9');
+  await until(`window.__debugger.state()?.state === 'running'`, 'second debug session running');
+  await t.sleep(1500);
+  check(pyProcs(loopPy) > 0, 'the debuggee is running');
+  await press('Ctrl+F2');
+  await until(`window.__debugger.state() === null`, 'double-started session stopped');
+  check(await noProcs(loopPy), 'Shift+F9 twice while debugpy connects leaves no orphaned debuggee after Stop');
+  await press('Shift+F9');
+  await until(`window.__debugger.state()?.state === 'starting'`, 'debug session starting');
+  await press('Ctrl+F2');
+  await until(`window.__debugger.state() === null`, 'starting session stopped');
+  check(await noProcs(loopPy), 'Ctrl+F2 while a debug session is starting stops its debuggee');
+
+  await openFile(t, 'waiter.py');
+  await js(`(ide.runAction('Run'), ide.runAction('Run'), true)`); // the second Run lands while the first is still starting
+  await until(`document.querySelector('#runOut')?.textContent.includes('waiting for input')`, 'rerun started');
+  await t.sleep(1000);
+  await press('Ctrl+F2');
+  await until(`document.querySelector('#runOut').textContent.includes('Process finished')`, 'rerun stopped');
+  check(await noProcs(waiterPy), 'Run twice in a row leaves no unstoppable process behind');
 
   // ---- persistence across reload ----
   await js(`location.reload(), true`);

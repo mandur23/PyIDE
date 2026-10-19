@@ -11,6 +11,13 @@ const basename = (p) => p.split(/[\\/]/).pop();
 const dirname = (p) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')));
 const joinPath = (a, b) => `${a.replace(/[\\/]+$/, '')}\\${b}`;
 const samePath = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+// `p` is `dir` itself or inside it: a whole-segment prefix, so C:\proj\pkg does not contain C:\proj\pkg2.
+const isUnder = (p, dir) => {
+  if (!p || !dir) return false;
+  const a = p.toLowerCase();
+  const b = dir.toLowerCase().replace(/[\\/]+$/, '');
+  return a === b || (a.startsWith(b) && '\\/'.includes(a[b.length]));
+};
 
 const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', ts: 'typescript', json: 'json',
   md: 'markdown', html: 'html', css: 'css', yml: 'yaml', yaml: 'yaml', toml: 'ini', cfg: 'ini', ini: 'ini',
@@ -25,7 +32,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, basename, dirname, joinPath, samePath, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, basename, dirname, joinPath, samePath, isUnder, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
 });
 
 // ---------- events ----------
@@ -687,7 +694,7 @@ async function renameEntry(entry) {
   if (!name || name === entry.name) return;
   const to = joinPath(dirname(entry.path), name);
   try { await ide.api.rename(entry.path, to); } catch (e) { return alert(e.message); }
-  for (const t of ide.tabs.filter((t) => t.kind === 'file' && t.path.toLowerCase().startsWith(entry.path.toLowerCase()))) {
+  for (const t of ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path))) {
     ide.closeTab(t.path, true);
   }
   renderTree();
@@ -697,7 +704,7 @@ async function renameEntry(entry) {
 async function deleteEntry(entry) {
   if (!confirm(`Move ${entry.name} to the Recycle Bin?`)) return;
   await ide.api.trash(entry.path);
-  ide.tabs.filter((t) => t.path.toLowerCase().startsWith(entry.path.toLowerCase())).forEach((t) => ide.closeTab(t.path, true));
+  ide.tabs.filter((t) => t.path && isUnder(t.path, entry.path)).forEach((t) => ide.closeTab(t.path, true));
   renderTree();
   ide.emit('filesChanged', { deleted: [entry.path] });
 }

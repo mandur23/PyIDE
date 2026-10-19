@@ -132,6 +132,38 @@ function find(root, opts, overrides) {
   return { files, count, truncated };
 }
 
+// String.prototype.replace's $-pattern expansion (GetSubstitution) for a replace() callback's arguments.
+function expandReplacement(rep, args) {
+  const a = [...args];
+  const groups = typeof a[a.length - 1] === 'string' ? undefined : a.pop();
+  const str = a.pop();
+  const pos = a.pop();
+  const [match, ...caps] = a;
+  return rep.replace(/\$(\$|&|`|'|\d{1,2}|<([^>]*)>)/g, (t, k, name) => {
+    if (k === '$') return '$';
+    if (k === '&') return match;
+    if (k === '`') return str.slice(0, pos);
+    if (k === "'") return str.slice(pos + match.length);
+    if (name !== undefined) return groups ? groups[name] ?? '' : t;
+    if (k.length === 2 && Number(k) >= 1 && Number(k) <= caps.length) return caps[Number(k) - 1] ?? '';
+    const n = Number(k[0]);
+    return n >= 1 && n <= caps.length ? (caps[n - 1] ?? '') + k.slice(1) : t;
+  });
+}
+
+// Replaces exactly the matches findIn reports: empty matches are skipped there, so they must be here too, or a regex
+// like `a*` would also insert the replacement at every gap of the file while the preview counted one match.
+function replaceText(text, re, rep) {
+  let count = 0;
+  re.lastIndex = 0;
+  const next = text.replace(re, (...args) => {
+    if (args[0] === '') return '';
+    count++;
+    return expandReplacement(rep, args);
+  });
+  return { text: next, count };
+}
+
 function replaceIn(paths, opts) {
   const re = buildRegex(opts);
   const rep = replacementOf(opts);
@@ -142,10 +174,8 @@ function replaceIn(paths, opts) {
     try { if (fs.statSync(p).size > MAX_SIZE) continue; raw = fs.readFileSync(p); } catch { continue; }
     if (raw.subarray(0, 8000).includes(0)) continue;
     const text = raw.toString('utf8');
-    const n = findIn(text, re, Infinity).length;
-    if (!n) continue;
-    const next = text.replace(re, rep);
-    if (next === text) continue;
+    const { text: next, count: n } = replaceText(text, re, rep);
+    if (!n || next === text) continue;
     fs.writeFileSync(p, next, 'utf8');
     changed.push(p);
     count += n;
@@ -356,6 +386,8 @@ async function buildIndex(interp, root) {
 exports.register = ({ ipcMain }) => {
   ipcMain.handle('search:find', (_e, root, opts, overrides) => find(root, opts, overrides));
   ipcMain.handle('search:replace', (_e, opts, paths) => replaceIn(paths, opts));
+  // The same replacement applied to an unsaved buffer's text -> {text, count}.
+  ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, buildRegex(opts), replacementOf(opts)));
   ipcMain.handle('search:todos', (_e, root, overrides) => todos(root, overrides));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text)) || { error: 'Python interpreter failed' });
   ipcMain.handle('search:symbols', (_e, interp, root) => {

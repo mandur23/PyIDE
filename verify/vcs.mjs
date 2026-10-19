@@ -210,6 +210,30 @@ try {
   await until(`document.querySelector('.vcs-branch-name').textContent === 'main'`, 'back on main');
   check(git(project, 'branch', '--show-current') === 'main' && !readFileSync(path.join(project, 'README.md'), 'utf8').includes('feature-x'), 'checkout from the branch popup switches branch and files');
 
+  // Unsaved edits are saved before a checkout (like PyCharm), so they carry over instead of a later Ctrl+S writing
+  // the old branch's text over the checked-out file.
+  await openFile(t, 'main.py');
+  await js(`ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 })`);
+  await type('# unsaved edit\n');
+  check(await js(`ide.isDirty(ide.activeTab())`), 'main.py has unsaved changes before checkout');
+  await t.click('.vcs-branch');
+  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
+  await type('feature-x');
+  await until(`document.querySelector('.popup-item.active')?.textContent.includes('feature-x')`, 'feature-x item');
+  await press('Enter');
+  await until(`document.querySelector('.vcs-branch-name').textContent === 'feature-x'`, 'on feature-x with edit');
+  check(!(await js(`ide.isDirty(ide.activeTab())`)) && readFileSync(path.join(project, 'main.py'), 'utf8').startsWith('# unsaved edit')
+    && readFileSync(path.join(project, 'README.md'), 'utf8').includes('feature-x'), 'checkout saves unsaved editors first and the edit carries over');
+  await t.click('.vcs-branch');
+  await until(`!document.querySelector('#popup').classList.contains('hidden')`, 'branch popup');
+  await type('main');
+  await until(`document.querySelector('.popup-item.active')?.textContent.startsWith('★main') || document.querySelector('.popup-item.active .label')?.textContent === 'main'`, 'main item');
+  await press('Enter');
+  await until(`document.querySelector('.vcs-branch-name').textContent === 'main'`, 'back on main again');
+  git(project, 'checkout', '--', 'main.py');
+  await js(`ide.reloadFromDisk()`);
+  await until(`!ide.activeTab().model.getValue().includes('# unsaved edit')`, 'main.py restored');
+
   // --- update / push without a remote ---
   await clearNotes();
   await press('Ctrl+T');
@@ -254,6 +278,18 @@ try {
   await t.click('.dialog .primary');
   await until(noteWith('Pushed 1 commit to origin/main'), 'commit and push');
   check(git(bare, 'log', '-1', '--format=%s', 'main') === 'Add extra module', 'Commit and Push lands on the remote');
+
+  // --- a staged rename commits as a rename (the original path's deletion is committed too) ---
+  git(project, 'mv', 'extra.py', 'extra_renamed.py');
+  await js(`window.dispatchEvent(new Event('focus'))`);
+  await until(`!!${fileRow('extra_renamed.py')}`, 'renamed file listed');
+  await press('Ctrl+K');
+  await until(`document.activeElement?.classList.contains('vcs-msg')`, 'message focus');
+  await type('Rename extra');
+  await t.click('.vcs-commit-btn');
+  await until(`document.querySelectorAll('.vcs-changes .vcs-file').length === 0`, 'clean after rename commit');
+  check(git(project, 'status', '--porcelain') === '' && git(project, 'show', '--name-status', '--format=', 'HEAD').startsWith('R'),
+    `committing a staged rename records a rename and leaves nothing staged (${git(project, 'show', '--name-status', '--format=', 'HEAD')})`);
 
   // --- external change picked up on window focus ---
   writeFileSync(path.join(project, 'README.md'), '# VCS fixture\n\nEdited outside.\n');

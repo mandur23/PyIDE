@@ -67,6 +67,7 @@ class Server {
     this.proc.stdout.on('data', (d) => this.onData(d));
     this.proc.stderr.on('data', (d) => this.addLog(d.toString('utf8')));
     this.proc.on('error', (err) => this.onExit(err.message));
+    this.proc.stdin.on('error', () => {}); // writes until 'exit' marks the server dead would otherwise throw EPIPE
     this.proc.on('exit', (code) => this.onExit(`exited with code ${code}`));
     this.ready = this.initialize();
     this.ready.catch(() => {});

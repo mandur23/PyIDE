@@ -84,14 +84,6 @@
   let findList;
   const findCollapsed = new Set();
 
-  function buildRegex({ query, caseSensitive, words, regex }) {
-    let src = regex ? query : escapeRe(query);
-    if (words) src = regex ? `\\b(?:${src})\\b` : `${/^\w/.test(query) ? '\\b' : ''}${src}${/\w$/.test(query) ? '\\b' : ''}`;
-    return new RegExp(src, `gm${caseSensitive ? '' : 'i'}`);
-  }
-  const replacementOf = (o) => (o.regex
-    ? (o.replacement || '').replace(/\\([nt\\])/g, (_m, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'))
-    : (o.replacement || '').replace(/\$/g, '$$$$'));
   const searchOpts = (o) => ({ query: o.query, caseSensitive: o.caseSensitive, words: o.words, regex: o.regex,
     mask: o.useMask ? o.mask : '', dir: o.dir || null, replacement: o.replacement || '' });
   const runFind = (o) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts());
@@ -177,20 +169,19 @@
   async function replaceAll(o, res) {
     res = res || (await runFind(o));
     if (res.error || !res.files.length) return showFindResults(o, true);
-    const re = buildRegex(o);
-    const rep = replacementOf(o);
     const changed = [];
     const onDisk = [];
     let count = 0;
     for (const f of res.files) {
       const tab = ide.findTab(f.path);
       if (tab?.kind === 'file' && ide.isDirty(tab)) {
-        // Unsaved buffers are edited in place and stay unsaved, like PyCharm's document-level replace.
+        // Unsaved buffers are edited in place and stay unsaved, like PyCharm's document-level replace. The text is
+        // replaced by main's search:replaceText, the same code that replaces files on disk.
         const before = tab.model.getValue();
-        const after = before.replace(re, rep);
-        if (after === before) continue;
+        const { text: after, count: n } = await ide.api.invoke('search:replaceText', searchOpts(o), before);
+        if (!n || after === before || tab.model.getValue() !== before) continue;
         applyText(tab.model, before, after);
-        count += f.matches.length;
+        count += n;
         changed.push(f.path);
       } else onDisk.push(f.path);
     }

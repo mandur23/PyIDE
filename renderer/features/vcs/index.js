@@ -116,12 +116,14 @@
     if (choice.create) {
       const name = await ide.ui.prompt('New branch name', '');
       if (!name) return;
+      await ide.saveAll(); // like PyCharm: unsaved edits reach disk before HEAD moves, so git sees (and carries) them
       const r = await invoke('newBranch', ide.root, name.replace(/\s+/g, '-'));
       logResult(r);
       if (!r.ok) return notify('Branch creation failed', r.err, 'error');
       return afterCheckout();
     }
     if (choice.name === repo.branch) return;
+    await ide.saveAll();
     let r;
     if (choice.remote) {
       const localName = choice.name.split('/').slice(1).join('/');
@@ -274,7 +276,7 @@
     const message = msgEl.value.trim();
     if (!files.length) return notify('No changes selected for commit', 'Select files with the checkboxes in the Commit tool window.', 'warn');
     if (!message) { msgEl.focus(); return notify('Commit message is empty', 'Enter a commit message.', 'warn'); }
-    const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => f.path));
+    const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })));
     logResult(r);
     if (!r.ok) return notify('Commit failed', r.err || r.out, 'error');
     msgEl.value = '';
