@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 
 const SKIP_DIRS = new Set(['.git', '.hg', '.svn', '__pycache__', 'node_modules', '.idea', '.mypy_cache', '.pytest_cache',
   '.ruff_cache', '.tox', '.nox', '.venv', 'venv', 'env', 'site-packages']);
@@ -187,6 +188,25 @@ const COMMENT = { js: '//', ts: '//', jsx: '//', tsx: '//', java: '//', c: '//',
 const HASH_EXT = new Set(['py', 'pyi', 'pyw', 'sh', 'ps1', 'toml', 'yaml', 'yml', 'cfg', 'ini', 'rb', 'pl', 'r']);
 
 // PyCharm's default TODO patterns (\btodo\b.*, \bfixme\b.*), matched inside comments only.
+function todoItems(text, marker) {
+  if (text == null || !/todo|fixme/i.test(text)) return [];
+  const re = new RegExp(`${escapeRe(marker)}.*?\\b(todo|fixme)\\b.*$`, 'gimd');
+  let starts;
+  const items = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    starts ??= lineStarts(text);
+    const [kwStart] = m.indices[1];
+    const end = m.index + m[0].replace(/\r$/, '').length;
+    const d = describe(text, starts, kwStart, end - kwStart);
+    items.push({ line: d.line, col: d.col, text: text.slice(kwStart, end).trim(), kind: m[1].toUpperCase(), kwLen: m[1].length });
+  }
+  return items;
+}
+
+// pathLower -> {mtime, size, items}. The TODO list is rescanned on every save and file change, so a rescan rereads
+// only files whose mtime or size moved; unsaved buffers (overrides) always count fresh.
+const todoCache = new Map();
+
 function todos(root, overrides) {
   const ov = lowerMap(overrides);
   const files = [];
@@ -195,17 +215,18 @@ function todos(root, overrides) {
     const ext = path.extname(p).slice(1).toLowerCase();
     const marker = COMMENT[ext] || (HASH_EXT.has(ext) ? '#' : null);
     if (!marker) return;
-    const text = ov.get(p.toLowerCase()) ?? readText(p);
-    if (text == null || !/todo|fixme/i.test(text)) return;
-    const re = new RegExp(`${escapeRe(marker)}.*?\\b(todo|fixme)\\b.*$`, 'gimd');
-    let starts;
-    const items = [];
-    for (let m = re.exec(text); m; m = re.exec(text)) {
-      starts ??= lineStarts(text);
-      const [kwStart] = m.indices[1];
-      const end = m.index + m[0].replace(/\r$/, '').length;
-      const d = describe(text, starts, kwStart, end - kwStart);
-      items.push({ line: d.line, col: d.col, text: text.slice(kwStart, end).trim(), kind: m[1].toUpperCase(), kwLen: m[1].length });
+    const key = p.toLowerCase();
+    let items;
+    if (ov.has(key)) items = todoItems(ov.get(key), marker);
+    else {
+      let st;
+      try { st = fs.statSync(p); } catch { return; }
+      const hit = todoCache.get(key);
+      if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) items = hit.items;
+      else {
+        items = todoItems(readText(p), marker);
+        todoCache.set(key, { mtime: st.mtimeMs, size: st.size, items });
+      }
     }
     if (items.length) { files.push({ path: p, items }); count += items.length; }
     if (count >= 5000) return false;
@@ -213,6 +234,33 @@ function todos(root, overrides) {
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, count };
 }
+
+// Python files under root with their mtime, for the symbol index.
+function pyFiles(root) {
+  const out = [];
+  walk(root, (p) => {
+    if (!PY_EXT.test(p)) return;
+    try { const st = fs.statSync(p); if (st.size <= MAX_SIZE) out.push({ p, mtime: st.mtimeMs }); } catch {}
+  });
+  return out;
+}
+
+function invalidateScans(paths) {
+  if (!paths) todoCache.clear();
+  else for (const p of paths) todoCache.delete(String(p).toLowerCase());
+}
+
+// File scans run on a worker thread: on a large project they read thousands of files, and doing that on the main
+// process froze every window and IPC call until it finished.
+const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), todos, pyFiles, invalidate: invalidateScans };
+if (!isMainThread && workerData?.role === 'pyide-search') {
+  parentPort.on('message', ({ id, op, args }) => {
+    try { parentPort.postMessage({ id, result: SCANS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+  });
+}
+
+// Main side; worker-host evaluates this file as the worker (the role check above).
+const scan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
 
 // One script, two modes: `outline` parses source from stdin into a tree; `index` reads a JSON list of paths and returns flat symbols per file.
 const AST_SCRIPT = String.raw`
@@ -355,18 +403,13 @@ const symbolCache = new Map();
 let indexQueue = Promise.resolve();
 
 async function buildIndex(interp, root) {
-  const files = [];
-  walk(root, (p) => { if (PY_EXT.test(p)) files.push(p); });
   const live = new Set();
   const stale = [];
-  for (const p of files) {
-    let st;
-    try { st = fs.statSync(p); } catch { continue; }
-    if (st.size > MAX_SIZE) continue;
+  for (const { p, mtime } of await scan('pyFiles', root)) {
     const key = p.toLowerCase();
     live.add(key);
     const hit = symbolCache.get(key);
-    if (!hit || hit.mtime !== st.mtimeMs) stale.push({ p, mtime: st.mtimeMs });
+    if (!hit || hit.mtime !== mtime) stale.push({ p, mtime });
   }
   for (let i = 0; i < stale.length; i += 400) {
     const batch = stale.slice(i, i + 400);
@@ -384,11 +427,11 @@ async function buildIndex(interp, root) {
 }
 
 exports.register = ({ ipcMain }) => {
-  ipcMain.handle('search:find', (_e, root, opts, overrides) => find(root, opts, overrides));
-  ipcMain.handle('search:replace', (_e, opts, paths) => replaceIn(paths, opts));
+  ipcMain.handle('search:find', (_e, root, opts, overrides) => scan('find', root, opts, overrides));
+  ipcMain.handle('search:replace', (_e, opts, paths) => scan('replace', paths, opts));
   // The same replacement applied to an unsaved buffer's text -> {text, count}.
   ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, buildRegex(opts), replacementOf(opts)));
-  ipcMain.handle('search:todos', (_e, root, overrides) => todos(root, overrides));
+  ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text)) || { error: 'Python interpreter failed' });
   ipcMain.handle('search:symbols', (_e, interp, root) => {
     const run = indexQueue.then(() => buildIndex(interp, root));
@@ -398,5 +441,6 @@ exports.register = ({ ipcMain }) => {
   ipcMain.handle('search:invalidate', (_e, paths) => {
     if (!paths) symbolCache.clear();
     else for (const p of paths) symbolCache.delete(String(p).toLowerCase());
+    return scan('invalidate', paths || null);
   });
 };

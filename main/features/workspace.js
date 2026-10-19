@@ -5,7 +5,9 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { execFile } = require('child_process');
-const { shell } = require('electron');
+const { isMainThread, parentPort, workerData } = require('worker_threads');
+// This file is also the launcher scan's worker source (see the end of scan()), where electron is not available.
+const { shell } = isMainThread ? require('electron') : {};
 
 const MAX_DEPTH = 3;
 const MAX_DIRS = 2500;
@@ -331,6 +333,14 @@ const isUtf8 = (file) => {
   try { new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file)); return true; } catch { return false; }
 };
 
+// The launcher scan reads the project's scripts; it runs on a worker thread so a large project never stalls the main process.
+if (!isMainThread && workerData?.role === 'pyide-workspace') {
+  parentPort.on('message', ({ id, args }) => {
+    try { parentPort.postMessage({ id, result: scan(...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+  });
+}
+const scanInWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-workspace') : null;
+
 exports.register = ({ ipcMain, app, startProcess }) => {
   const fakeOpen = process.env.PYIDE_FAKE_OPEN_EXTERNAL === '1';
   const opened = [];
@@ -343,7 +353,7 @@ exports.register = ({ ipcMain, app, startProcess }) => {
     fs.writeFileSync(psWrapper, '﻿param([string]$__script)\r\n[Console]::OutputEncoding = [Text.Encoding]::UTF8\r\n$OutputEncoding = [Text.Encoding]::UTF8\r\n& $__script @args\r\nexit $LASTEXITCODE\r\n');
   };
 
-  ipcMain.handle('workspace:scan', (_e, root) => scan(root));
+  ipcMain.handle('workspace:scan', (_e, root) => scanInWorker('scan', root));
   ipcMain.handle('workspace:info', async (_e, root) => ({ branch: await gitBranch(root), readme: readme(root) }));
 
   ipcMain.handle('workspace:checkPort', async (_e, root, entry, args) => {
