@@ -9,7 +9,7 @@
 .term-tab-icon.claude { color: #d97757; }
 .term-tab-name { overflow: hidden; text-overflow: ellipsis; }
 .term-tab-name.exited { color: var(--gray7); font-style: italic; }
-.term-tab-close { color: var(--gray7); width: 16px; border-radius: 3px; visibility: hidden; }
+.term-tab-close { color: var(--gray7); border-radius: 3px; visibility: hidden; }
 .term-tab:hover .term-tab-close, .term-tab.active .term-tab-close { visibility: visible; }
 .term-tab-close:hover { background: var(--gray4); color: var(--gray12); }
 .term-new { color: var(--gray9); width: 24px; height: 22px; border-radius: 4px; flex-shrink: 0; }

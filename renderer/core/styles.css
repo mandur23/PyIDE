@@ -140,7 +140,13 @@ input, select, textarea { font: inherit; }
 .tab.drop-before { box-shadow: inset 2px 0 0 var(--blue6); }
 .tab.drop-after { box-shadow: inset -2px 0 0 var(--blue6); }
 .tab .dirty { color: var(--blue6); }
-.tab .close { color: var(--gray7); width: 16px; border-radius: 3px; visibility: hidden; }
+/* Tab close buttons (editor, Run and Terminal tabs): a square 16px hover box with a vector cross centered in it. A text
+   × rides on the font's baseline and the button's default padding, which left it off-center in its own hover box. */
+.tab .close, .run-tab-close, .term-tab-close { flex-shrink: 0; width: 16px; height: 16px; padding: 0; display: flex;
+  align-items: center; justify-content: center; font-size: 0; line-height: 0; }
+.tab .close::before, .run-tab-close::before, .term-tab-close::before { content: ''; width: 8px; height: 8px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1 1l6 6M7 1L1 7' stroke='%23000' stroke-width='1.25' stroke-linecap='round'/%3E%3C/svg%3E") center / 8px 8px no-repeat; }
+.tab .close { color: var(--gray7); border-radius: 3px; visibility: hidden; }
 .tab:hover .close, .tab.active .close { visibility: visible; }
 .tab .close:hover { background: var(--gray4); color: var(--gray12); }
 .custom-tab { position: absolute; inset: 0; background: var(--gray1); pointer-events: auto; display: flex; flex-direction: column; outline: none; }

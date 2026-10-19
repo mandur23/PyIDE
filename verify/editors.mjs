@@ -56,6 +56,12 @@ const dragTab = (fromGroup, title, targetExpr, fx, fy) => js(`(() => {
 try {
   // ---------- split and clone ----------
   await openFile(t, 'a.py');
+  check(await js(`(() => {
+    const tab = document.querySelector('.tab.active'), c = tab.querySelector('.close'), r = c.getBoundingClientRect(), n = tab.querySelector('.name').getBoundingClientRect();
+    const s = getComputedStyle(c), x = getComputedStyle(c, '::before');
+    return r.width === 16 && r.height === 16 && s.display === 'flex' && s.alignItems === 'center' && s.justifyContent === 'center'
+      && x.width === '8px' && x.height === '8px' && Math.abs((r.top + r.bottom) / 2 - (n.top + n.bottom) / 2) <= 1;
+  })()`), 'the tab close cross is centered in a square hover box level with the file name');
   await js('ide.editor.focus()');
   await press('Ctrl+\\');
   await until(`ide.groups().length === 2`, 'split right');
