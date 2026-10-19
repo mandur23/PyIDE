@@ -19,9 +19,9 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   mkdirSync(outDir, { recursive: true });
 
   const child = spawn(ELECTRON, [APP_DIR, project, `--remote-debugging-port=${port}`, `--lang=${lang}`], {
-    // Suites default to the deterministic semantic backend; a real EmbeddingGemma 2 install would otherwise load a
-    // 1.4 GB model in every test instance. verify/semantic.mjs opts in with PYIDE_SEMANTIC_BACKEND=real.
-    env: { PYIDE_SEMANTIC_BACKEND: 'fake', ...process.env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
+    // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their
+    // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
+    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', ...process.env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
 

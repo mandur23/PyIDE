@@ -1,0 +1,11 @@
+.aic-status { cursor: pointer; color: var(--gray9); white-space: nowrap; }
+.aic-status:hover { color: var(--gray12); }
+.aic-status[data-mode="setup"], .aic-status[data-mode="error"] { color: var(--yellow); }
+.aic-status[data-mode="off"], .aic-status[data-mode="snoozed"] { color: var(--gray7); }
+.aic-settings { display: flex; flex-direction: column; gap: 10px; }
+.aic-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.aic-row .input { width: 220px; }
+.aic-settings p { margin: 4px 0 0; line-height: 1.5; }
+
+.aic-install { display: inline-block; margin: 4px 0; color: var(--blue6); font-size: 12px; }
+.aic-install:hover { text-decoration: underline; }

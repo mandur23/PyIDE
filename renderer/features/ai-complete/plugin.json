@@ -1,0 +1,8 @@
+{
+  "id": "ai-complete",
+  "name": "AI Completion (Qwen2.5-Coder)",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Predicts the next line or block as you type and shows it as ghost text, with a Qwen2.5-Coder model running locally. Tab accepts.",
+  "main": ["ai-complete.js"]
+}

@@ -1,13 +1,12 @@
 // Semantic code search with Google's EmbeddingGemma 2 (Apache 2.0, google/embeddinggemma-2).
-// The model runs in a Python sidecar (main/semantic/embed_server.py) inside a private venv that reuses the system
-// torch. Project files are split into code-aware chunks (functions, classes, methods, doc sections), embedded once,
-// and stored per project; only files that changed are embedded again. Queries mix cosine similarity with a small
+// The model runs in a Python sidecar (main/semantic/embed_server.py) inside the shared AI runtime (main/ai/runtime.js),
+// a private venv that reuses the system torch. Project files are split into code-aware chunks (functions, classes,
+// methods, doc sections), embedded once, and stored per project; only files that changed are embedded again. Queries mix cosine similarity with a small
 // keyword score so exact identifiers still rank well.
-const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const runtime = require('../ai/runtime');
 
 const MODEL_ID = 'google/embeddinggemma-2';
 const DIM = 256; // Matryoshka truncation: a quarter of the storage of 768 with little loss for code retrieval
@@ -122,83 +121,47 @@ function fakeEmbed(text) {
   return v;
 }
 
-function hfCacheDir() {
-  const home = process.env.HF_HOME || path.join(os.homedir(), '.cache', 'huggingface');
-  return process.env.HF_HUB_CACHE || path.join(home, 'hub');
-}
-function modelDownloaded() {
-  const snaps = path.join(hfCacheDir(), 'models--google--embeddinggemma-2', 'snapshots');
-  try { return fs.readdirSync(snaps).some((s) => fs.existsSync(path.join(snaps, s, 'model.safetensors'))); } catch { return false; }
-}
+const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
 exports.register = ({ ipcMain, app, send, appDir }) => {
   const base = path.join(app.getPath('userData'), 'semantic');
-  // The runtime is shared by every PyIDE profile (like the Hugging Face model cache); indexes stay per profile.
-  // It lives under the home folder: packaged launchers virtualize %LOCALAPPDATA%, which would hide it from other launches.
-  const runtimeDir = path.join(os.homedir(), '.pyide', 'semantic');
-  const venv = path.join(runtimeDir, 'venv');
-  const venvPython = path.join(venv, 'Scripts', 'python.exe');
   const server = path.join(appDir, 'main', 'semantic', 'embed_server.py');
   const fake = process.env.PYIDE_SEMANTIC_BACKEND === 'fake';
 
   // ---------- runtime state ----------
-  // A file check, not an import: importing torch takes seconds and this runs on the main process during startup.
   // Setup only installs torchvision after torch is importable, so its presence stands for the whole runtime.
-  const sitePackages = path.join(venv, 'Lib', 'site-packages');
-  const runtimeInstalled = () => ['sentence_transformers', 'transformers', 'torchvision'].every((p) => fs.existsSync(path.join(sitePackages, p)));
+  const runtimeInstalled = () => ['sentence_transformers', 'transformers', 'torchvision'].every(runtime.hasPackage);
   let model = { state: 'idle', device: null, error: null };
   const status = () => (fake
     ? { backend: 'fake', runtime: true, downloaded: true, model: { state: 'ready', device: 'cpu' }, modelId: 'hashing (test)', dim: DIM }
-    : { backend: 'embeddinggemma-2', runtime: fs.existsSync(venvPython) && runtimeInstalled(), downloaded: modelDownloaded(), model, modelId: MODEL_ID, dim: DIM });
+    : { backend: 'embeddinggemma-2', runtime: runtime.pythonReady() && runtimeInstalled(), downloaded: modelDownloaded(), model, modelId: MODEL_ID, dim: DIM });
   const pushStatus = () => send('semantic:status', status());
 
   // ---------- sidecar ----------
-  let proc = null;
-  let nextReq = 1;
-  const pending = new Map();
-  let buffer = '';
+  let sidecar = null;
   function startServer() {
-    if (proc) return proc;
-    proc = spawn(venvPython, ['-u', server], {
-      cwd: runtimeDir,
-      windowsHide: true,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_TELEMETRY: '1', TOKENIZERS_PARALLELISM: 'false' },
+    if (sidecar?.alive()) return sidecar;
+    sidecar = runtime.startSidecar({
+      script: server,
+      onEvent: (msg) => {
+        if (msg.event === 'loading') model = { state: 'loading', device: null, error: null };
+        else if (msg.event === 'ready') model = { state: 'ready', device: msg.device, error: null };
+        pushStatus();
+      },
+      onLog: (text) => send('semantic:log', text),
+      onExit: (code) => {
+        if (model.state !== 'ready') model = { state: 'error', device: null, error: `embedding server exited (${code})` };
+        else model = { state: 'idle', device: null, error: null };
+        pushStatus();
+      },
     });
-    proc.stdout.on('data', (d) => {
-      buffer += d.toString('utf8');
-      let nl;
-      while ((nl = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (!line) continue;
-        let msg;
-        try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.event === 'loading') { model = { state: 'loading', device: null, error: null }; pushStatus(); }
-        else if (msg.event === 'ready') { model = { state: 'ready', device: msg.device, error: null }; pushStatus(); }
-        else if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-      }
-    });
-    proc.stderr.on('data', (d) => send('semantic:log', d.toString('utf8')));
-    proc.on('exit', (code) => {
-      proc = null;
-      for (const resolve of pending.values()) resolve({ error: `embedding server exited (${code})` });
-      pending.clear();
-      if (model.state !== 'ready') model = { state: 'error', device: null, error: `embedding server exited (${code})` };
-      else model = { state: 'idle', device: null, error: null };
-      pushStatus();
-    });
-    return proc;
+    return sidecar;
   }
 
   async function embed(items, kind) {
     if (fake) return items.map((it) => fakeEmbed(`${it.title || ''} ${it.text}`));
     if (!status().runtime) throw new Error('EmbeddingGemma 2 is not set up');
-    startServer();
-    const id = nextReq++;
-    const reply = await new Promise((resolve) => {
-      pending.set(id, resolve);
-      proc.stdin.write(`${JSON.stringify({ id, op: 'embed', kind, items, dim: DIM })}\n`);
-    });
+    const reply = await startServer().send({ op: 'embed', kind, items, dim: DIM }).reply;
     if (reply.error) {
       model = { ...model, error: reply.error };
       throw new Error(reply.error);
@@ -349,71 +312,33 @@ exports.register = ({ ipcMain, app, send, appDir }) => {
     return out;
   }
 
-  // ---------- setup: private venv reusing system torch, packages, model download ----------
-  let setupProc = null;
-  function run(cmd, args, opts = {}) {
-    return new Promise((resolve, reject) => {
-      send('semantic:log', `> ${[cmd, ...args].join(' ')}\n`);
-      setupProc = spawn(cmd, args, { windowsHide: true, ...opts, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env } });
-      setupProc.stdout.on('data', (d) => send('semantic:log', d.toString('utf8')));
-      setupProc.stderr.on('data', (d) => send('semantic:log', d.toString('utf8')));
-      setupProc.on('error', reject);
-      setupProc.on('close', (code) => { setupProc = null; code === 0 ? resolve() : reject(new Error(`${path.basename(cmd)} exited with code ${code}`)); });
-    });
-  }
-  function findTorchPython(preferred) {
-    const candidates = [...(preferred ? [[preferred, []]] : []), ['py', ['-3']], ['python', []]];
-    for (const [cmd, args] of candidates) {
-      try {
-        execFileSync(cmd, [...args, '-c', 'import torch'], { timeout: 60000, windowsHide: true });
-        return { cmd, args, torch: true };
-      } catch {}
-    }
-    for (const [cmd, args] of candidates) {
-      try { execFileSync(cmd, [...args, '--version'], { timeout: 15000, windowsHide: true }); return { cmd, args, torch: false }; } catch {}
-    }
-    return null;
-  }
-
+  // ---------- setup: shared runtime, packages, model download ----------
+  let setupJob = null;
   ipcMain.handle('semantic:setup', async (_e, { interpreter } = {}) => {
     if (fake) return { ok: true };
+    const job = setupJob = runtime.createJob((text) => send('semantic:log', text));
     try {
-      fs.mkdirSync(runtimeDir, { recursive: true });
-      if (!fs.existsSync(venvPython)) {
-        const py = findTorchPython(interpreter);
-        if (!py) throw new Error('No Python interpreter found');
-        // Reusing an installed torch avoids a second multi-hundred-MB download.
-        await run(py.cmd, [...py.args, '-m', 'venv', ...(py.torch ? ['--system-site-packages'] : []), venv]);
-      }
-      if (!runtimeInstalled()) {
-        let hasTorch = true;
-        try { execFileSync(venvPython, ['-c', 'import torch'], { timeout: 60000, windowsHide: true }); } catch { hasTorch = false; }
+      await runtime.exclusive(async () => {
+        await runtime.ensureVenv(job, interpreter);
+        if (runtimeInstalled()) return;
+        const hasTorch = runtime.canImport('torch');
         // Upgrading only the small packages keeps the reused system torch instead of downloading a new one.
-        await run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'sentence-transformers>=6.1', 'transformers', 'huggingface_hub', ...(hasTorch ? [] : ['torch'])]);
-        // EmbeddingGemma 2's processor loads its video processor even for text, and that needs torchvision. It must be
-        // the build paired with the installed torch (2.X.Y pairs with 0.(X+15).Y) from PyTorch's index for the same
-        // variant (cpu, cu128, ...); --no-deps stops pip from replacing the reused torch.
-        const torchVersion = execFileSync(venvPython, ['-c', 'import torch; print(torch.__version__)'], { timeout: 60000, windowsHide: true, encoding: 'utf8' }).trim();
-        const [, minor, patch, variant] = torchVersion.match(/^2\.(\d+)\.(\d+)(?:\+(\w+))?/) || [];
-        if (minor) {
-          await run(venvPython, ['-m', 'pip', 'install', '--no-deps', 'pillow', `torchvision==0.${+minor + 15}.${patch}${variant ? `+${variant}` : ''}`,
-            '--extra-index-url', `https://download.pytorch.org/whl/${variant || 'cpu'}`]);
-        } else await run(venvPython, ['-m', 'pip', 'install', 'torchvision']);
-        }
+        await runtime.pipInstall(job, ['--upgrade', 'sentence-transformers>=6.1', 'transformers', 'huggingface_hub', ...(hasTorch ? [] : ['torch'])]);
+        // EmbeddingGemma 2's processor loads its video processor even for text, and that needs torchvision.
+        await runtime.installTorchvision(job);
+      });
       pushStatus();
-      if (!modelDownloaded()) {
-        await run(venvPython, ['-c', `from huggingface_hub import snapshot_download; snapshot_download('${MODEL_ID}')`], { env: { HF_HUB_DISABLE_TELEMETRY: '1' } });
-      }
+      if (!modelDownloaded()) await runtime.hfDownload(job, MODEL_ID);
       pushStatus();
       return { ok: true };
     } catch (err) {
       pushStatus();
       return { ok: false, error: String(err.message || err) };
+    } finally {
+      if (setupJob === job) setupJob = null;
     }
   });
-  ipcMain.handle('semantic:cancelSetup', () => {
-    if (setupProc) spawn('taskkill', ['/pid', String(setupProc.pid), '/T', '/F']);
-  });
+  ipcMain.handle('semantic:cancelSetup', () => setupJob?.cancel());
 
   ipcMain.handle('semantic:status', () => status());
   ipcMain.handle('semantic:index', (_e, root, paths) => { update(root, paths); return true; });
@@ -432,7 +357,7 @@ exports.register = ({ ipcMain, app, send, appDir }) => {
     return { files: Object.keys(idx.files).length, chunks: Object.values(idx.files).reduce((n, f) => n + f.chunks.length, 0), indexing: !!idx.job, capped: idx.capped };
   });
 
-  app.on('before-quit', () => { if (proc) { try { proc.kill(); } catch {} } });
+  app.on('before-quit', () => sidecar?.kill());
 };
 
 exports._test = { chunkFile, chunkPython, keywordScore, tokens, fakeEmbed };
