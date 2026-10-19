@@ -11,7 +11,8 @@ const os = require('os');
 const path = require('path');
 const T = require('./target');
 const { M, setMessages } = require('./messages');
-const { session, onSessionInit, runRaw, tool, unpackStream, walkLocal, stopContainers, DEBUG_PORTS } = require('./session');
+const { session, onSessionInit, runRaw, tool, stopContainers, DEBUG_PORTS } = require('./session');
+const transfer = require('./files');
 
 const isRemote = (interp) => !!interp?.target;
 const cacheDir = (...p) => path.join(require('electron').app.getPath('userData'), 'remote-interp', ...p);
@@ -215,12 +216,12 @@ async function syncLibs(interp) {
     const dest = path.join(libsDir(id), 'paths', `${i}-${path.posix.basename(remoteDir)}`);
     const m = await s.checked(s.helper(['manifest', remoteDir, '.py', '.pyi']), M('Listing library files'));
     const remote = JSON.parse(m.stdout || '{}');
-    const have = walkLocal(dest, () => true, 500000);
+    const have = await transfer.walk(dest, {}, 500000);
     const wanted = Object.keys(remote).filter((rel) => { const h = have.get(rel); return !h || h.size !== remote[rel][0] || h.mtime !== remote[rel][1]; });
     for (const [rel, h] of have) if (!remote[rel]) fs.rmSync(h.abs, { force: true });
     for (let k = 0; k < wanted.length; k += 2000) {
       const r = await s.checked(s.helper(['pack', remoteDir], { input: JSON.stringify(wanted.slice(k, k + 2000)), binary: true, timeout: 600000 }), M('Downloading library files'));
-      files += unpackStream(r.stdout, dest);
+      files += await transfer.unpack(r.stdout, dest);
     }
     fs.mkdirSync(dest, { recursive: true });
     local.push(dest);

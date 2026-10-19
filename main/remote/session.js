@@ -6,9 +6,9 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib');
 const T = require('./target');
 const askpass = require('./askpass');
+const transfer = require('./files');
 const { M } = require('./messages');
 
 const APP_DIR = path.resolve(__dirname, '..', '..');
@@ -21,8 +21,6 @@ const DOCKER_MOUNT = '/opt/project';
 const DEBUG_PORTS = [5678, 5679, 5680];
 // Keeps a dev container alive without a long-running program of its own; SIGTERM (docker stop) ends it at once.
 const KEEPALIVE = 'trap "exit 0" TERM INT; while :; do sleep 3600 & wait $!; done';
-const SKIP = new Set(['.git', '__pycache__', 'node_modules', '.mypy_cache', '.pytest_cache', '.ruff_cache', '.idea', '.venv', 'venv', 'env']);
-const BINARY = /\.(exe|dll|pyd|pdb|so|dylib)$/i;
 
 const sha = (s, n = 12) => crypto.createHash('sha1').update(s).digest('hex').slice(0, n);
 
@@ -67,68 +65,21 @@ function runRaw(cmd, args, { env = {}, input, timeout = 120000, binary = false }
   });
 }
 
-// Files under dir as rel (with '/') -> {size, mtime (whole seconds), abs}, skipping caches and virtualenvs.
-function walkLocal(dir, accept = () => true, limit = 20000) {
-  const out = new Map();
-  const walk = (d) => {
-    let entries = [];
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (out.size >= limit) return;
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) {
-        if (!SKIP.has(e.name) && !fs.existsSync(path.join(p, 'pyvenv.cfg'))) walk(p);
-      } else if (e.isFile() && accept(e.name, p)) {
-        const st = fs.statSync(p);
-        out.set(path.relative(dir, p).split(path.sep).join('/'), { size: st.size, mtime: Math.floor(st.mtimeMs / 1000), abs: p });
-      }
-    }
-  };
-  walk(dir);
-  return out;
-}
-
-// The transfer stream of pyide_remote.py: header line + bytes per file, {"d": rel} for deletions, gzip-compressed.
-function packStream(files, deleted = []) {
-  const parts = [];
-  for (const [rel, f] of files) {
-    const data = fs.readFileSync(f.abs);
-    parts.push(Buffer.from(`${JSON.stringify({ p: rel, n: data.length, m: f.mtime })}\n`), data);
-  }
-  for (const rel of deleted) parts.push(Buffer.from(`${JSON.stringify({ d: rel })}\n`));
-  return zlib.gzipSync(Buffer.concat(parts));
-}
-function unpackStream(buf, dest) {
-  const data = zlib.gunzipSync(buf);
-  let i = 0;
-  let n = 0;
-  while (i < data.length) {
-    const nl = data.indexOf(0x0a, i);
-    if (nl < 0) break;
-    const h = JSON.parse(data.subarray(i, nl).toString('utf8'));
-    i = nl + 1;
-    if (h.d) continue;
-    if (h.p.split('/').includes('..')) throw new Error(`unsafe path ${h.p}`);
-    const file = path.join(dest, ...h.p.split('/'));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, data.subarray(i, i + h.n));
-    fs.utimesSync(file, h.m, h.m);
-    i += h.n;
-    n++;
-  }
-  return n;
-}
-
 // A version for the helper upload, so an IDE update re-uploads changed scripts into a fresh folder.
 let helpersVersion = null;
-function helperFiles() {
+async function helperFiles() {
+  const [features, debugpy] = await Promise.all([
+    transfer.walk(FEATURES, { ext: '.py' }),
+    transfer.walk(path.join(VENDOR, 'debugpy'), { noBinary: true }, 100000),
+  ]);
   return [
-    ...[...walkLocal(FEATURES, (n) => n.endsWith('.py'))].map(([rel, f]) => [`features/${rel}`, f]),
-    ...[...walkLocal(path.join(VENDOR, 'debugpy'), (n) => !BINARY.test(n), 100000)].map(([rel, f]) => [`vendor/debugpy/${rel}`, f]),
+    ...[...features].map(([rel, f]) => [`features/${rel}`, f]),
+    ...[...debugpy].map(([rel, f]) => [`vendor/debugpy/${rel}`, f]),
   ];
 }
 function getHelpersVersion() {
-  if (!helpersVersion) helpersVersion = sha(helperFiles().map(([rel, f]) => `${rel}:${f.size}:${f.mtime}`).join('\n'));
+  helpersVersion ??= helperFiles().then((list) => sha(list.map(([rel, f]) => `${rel}:${f.size}:${f.mtime}`).join('\n')));
+  helpersVersion.catch(() => { helpersVersion = null; });
   return helpersVersion;
 }
 
@@ -199,7 +150,7 @@ class Session {
       const r = await this.checked(this.run(`printf '%s\\n' "$HOME"; wslpath -u 'C:\\' 2>/dev/null || echo /mnt/c/`), M('Connecting to {target}', { target: T.describe(t) }));
       const [home, mnt = '/mnt/c/'] = r.stdout.trim().split('\n').map((s) => s.trim());
       const am = mnt.replace(/c\/?$/i, '') || '/mnt/';
-      this.helpersDir = `${home}/.cache/pyide/helpers/${getHelpersVersion()}`;
+      this.helpersDir = `${home}/.cache/pyide/helpers/${await getHelpersVersion()}`;
       this.map = new T.PathMap([
         { local: FEATURES, remote: `${this.helpersDir}/features` },
         { local: VENDOR, remote: `${this.helpersDir}/vendor` },
@@ -209,7 +160,7 @@ class Session {
       const home = r.stdout.trim().split('\n').pop() || '/tmp';
       const dirOf = (p) => (p.startsWith('~/') ? `${home}/${p.slice(2)}` : p === '~' ? home : p);
       this.remoteRoot = this.root ? dirOf(t.remoteDir || `~/pyide-projects/${path.basename(this.root)}-${sha(this.root.toLowerCase(), 6)}`) : null;
-      this.helpersDir = `${home}/.cache/pyide/helpers/${getHelpersVersion()}`;
+      this.helpersDir = `${home}/.cache/pyide/helpers/${await getHelpersVersion()}`;
       this.map = new T.PathMap([
         ...(this.root ? [{ local: this.root, remote: this.remoteRoot }] : []),
         { local: FEATURES, remote: `${this.helpersDir}/features` },
@@ -233,7 +184,7 @@ class Session {
       if (!this.map) await this.init();
       if (this.t.kind === 'docker' || this.t.kind === 'compose') await this.ensureContainer();
       if (this.helpersDir && !this.helpersUploaded) {
-        await this.push(new Map(helperFiles()), this.helpersDir, { remove: true, what: M('Uploading IDE helpers') });
+        await this.push(new Map(await helperFiles()), this.helpersDir, { remove: true, what: M('Uploading IDE helpers') });
         this.helpersUploaded = true;
       }
       if (this.t.kind === 'ssh' && sync && this.root) await this.syncProject();
@@ -252,12 +203,12 @@ class Session {
     const changed = [...files].filter(([rel, f]) => !remote[rel] || remote[rel][0] !== f.size || remote[rel][1] !== f.mtime);
     const deleted = remove ? Object.keys(remote).filter((rel) => !files.has(rel)) : [];
     if (!changed.length && !deleted.length) return 0;
-    await this.checked(this.helper(['unpack', remoteDir], { input: packStream(changed, deleted), timeout: 600000 }), what);
+    await this.checked(this.helper(['unpack', remoteDir], { input: await transfer.pack(changed, deleted), timeout: 600000 }), what);
     return changed.length;
   }
 
   async syncProject() {
-    const files = walkLocal(this.root, (_n, p) => fs.statSync(p).size <= 50 * 1024 * 1024);
+    const files = await transfer.walk(this.root, { maxSize: 50 * 1024 * 1024 });
     this.lastUpload = await this.push(files, this.remoteRoot, { what: M('Uploading the project') });
   }
 
@@ -316,4 +267,4 @@ function stopContainers() {
 
 const onSessionInit = (fn) => initListeners.push(fn);
 
-module.exports = { session, onSessionInit, runRaw, tool, unpackStream, walkLocal, stopContainers, FEATURES, VENDOR, DEBUG_PORTS };
+module.exports = { session, onSessionInit, runRaw, tool, stopContainers, FEATURES, VENDOR, DEBUG_PORTS };

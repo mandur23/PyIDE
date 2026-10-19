@@ -4,24 +4,21 @@ const pty = require('@lydell/node-pty');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 const claude = require('../ai/claude');
 const remote = require('../remote');
 
 const sessions = new Map(); // id -> {proc, owner}
 let nextId = 1;
 
-function onPath(exe) {
-  try {
-    return execFileSync('where.exe', [exe], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).find(Boolean) || null;
-  } catch {
-    return null;
-  }
-}
+const run = (cmd, args, opts = {}) => new Promise((resolve) => {
+  execFile(cmd, args, { encoding: 'utf8', windowsHide: true, ...opts }, (err, out) => resolve(err ? null : out));
+});
+const onPath = async (exe) => (await run('where.exe', [exe]))?.split(/\r?\n/).find(Boolean) || null;
 
-function detectShells() {
+async function detectShells() {
   const shells = [];
-  const pwsh = onPath('pwsh.exe');
+  const pwsh = await onPath('pwsh.exe');
   if (pwsh) shells.push({ id: 'pwsh', name: 'PowerShell 7', file: pwsh, args: ['-NoLogo'] });
   shells.push({ id: 'powershell', name: 'Windows PowerShell', file: 'powershell.exe', args: ['-NoLogo'] });
   shells.push({ id: 'cmd', name: 'Command Prompt', file: process.env.ComSpec || 'cmd.exe', args: [] });
@@ -34,13 +31,18 @@ function detectShells() {
   return shells;
 }
 
-function findClaude() {
+// The version is asked once per claude.exe build: the status is refreshed on every project open.
+let claudeVersion = null; // {path, mtime, version}
+async function findClaude() {
   const found = claude.findClaude();
   if (!found) return { installed: false };
   if (process.env.PYIDE_CLAUDE_PATH) return { installed: true, path: found, version: '' };
-  let version = '';
-  try { version = execFileSync(found, ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true, shell: /\.cmd$/i.test(found) }).trim(); } catch {}
-  return { installed: true, path: found, version };
+  const mtime = await fs.promises.stat(found).then((st) => st.mtimeMs, () => null);
+  if (claudeVersion?.path !== found || claudeVersion.mtime !== mtime) {
+    const out = await run(found, ['--version'], { timeout: 15000, shell: /\.cmd$/i.test(found) });
+    claudeVersion = { path: found, mtime, version: (out || '').trim() };
+  }
+  return { installed: true, path: found, version: claudeVersion.version };
 }
 
 // Like PyCharm, a terminal opened while a venv interpreter is selected starts with that venv active.
@@ -52,15 +54,15 @@ function venvEnv(interpExe) {
 }
 
 exports.register = ({ ipcMain, app }) => {
-  let shells = null;
+  let shells = null; // promise of the detected shells
   ipcMain.handle('pty:shells', () => (shells ??= detectShells()));
   ipcMain.handle('claude:status', () => findClaude());
 
   // opts: {shell, cwd, cols, rows, interpreter, command?: string to run in the shell, env?, target?}
   // target: a remote interpreter's target (WSL, SSH, Docker); the session is then a login shell in it.
   ipcMain.handle('pty:create', async (e, opts = {}) => {
-    shells ??= detectShells();
-    let shell = shells.find((s) => s.id === opts.shell) || shells.find((s) => s.id === 'powershell');
+    const known = await (shells ??= detectShells());
+    let shell = known.find((s) => s.id === opts.shell) || known.find((s) => s.id === 'powershell');
     let args = [...shell.args];
     let release;
     let targetEnv = {}; // ssh's askpass runs the IDE as Node, so this goes on after ELECTRON_RUN_AS_NODE is cleared
@@ -74,7 +76,7 @@ exports.register = ({ ipcMain, app }) => {
         release = t.release;
       } catch (err) {
         // The shell reports why the target is unreachable instead of the session failing silently.
-        shell = shells.find((s) => s.id === 'cmd');
+        shell = known.find((s) => s.id === 'cmd');
         args = ['/k', `echo ${String(err.message).replace(/[&|<>^%]/g, '')}`];
       }
     } else if (opts.command) {
