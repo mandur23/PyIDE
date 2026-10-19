@@ -25,7 +25,12 @@ function ruff(exe, args, text, file, root) {
 }
 
 const lineLengthArgs = (opts) => (opts?.lineLength ? ['--line-length', String(opts.lineLength)] : []);
-const firstError = (err) => err.split(/\r?\n/).find((l) => /error/i.test(l))?.replace(/^error:\s*/i, '') || err.trim();
+// Bundled ruff's default rule set includes isort (I001), which flags nearly every file; without a project config,
+// fall back to ruff's classic defaults, which match what PyCharm's own inspections report.
+const hasRuffConfig = (root) => !!root && (['ruff.toml', '.ruff.toml'].some((f) => fs.existsSync(path.join(root, f)))
+  || (fs.existsSync(path.join(root, 'pyproject.toml')) && /^\[tool\.ruff/m.test(fs.readFileSync(path.join(root, 'pyproject.toml'), 'utf8'))));
+const lintRuleArgs = (opts) => (hasRuffConfig(opts?.root) ? [] : ['--select', 'E4,E7,E9,F']);
+const firstError =(err) => err.split(/\r?\n/).find((l) => /error/i.test(l))?.replace(/^error:\s*/i, '') || err.trim();
 
 exports.register = ({ ipcMain, startProcess, vendorDir }) => {
   const exe = path.join(vendorDir, 'bin', 'ruff.exe');
@@ -44,13 +49,13 @@ exports.register = ({ ipcMain, startProcess, vendorDir }) => {
   });
 
   ipcMain.handle('tooling:fixAll', async (_e, text, file, opts = {}) => {
-    const r = await ruff(exe, ['check', '--fix', '--exit-zero', '--quiet', ...lineLengthArgs(opts)], text, file, opts.root);
+    const r = await ruff(exe, ['check', '--fix', '--exit-zero', '--quiet', ...lintRuleArgs(opts), ...lineLengthArgs(opts)], text, file, opts.root);
     return r.code === 0 ? { ok: true, text: r.out } : { ok: false, error: firstError(r.err) };
   });
 
   // -> [{code, message, location: {row, column}, end_location, fix: {message, edits}, noqa_row}]
   ipcMain.handle('tooling:check', async (_e, text, file, opts = {}) => {
-    const r = await ruff(exe, ['check', '--output-format', 'json', '--exit-zero', ...lineLengthArgs(opts)], text, file, opts.root);
+    const r = await ruff(exe, ['check', '--output-format', 'json', '--exit-zero', ...lintRuleArgs(opts), ...lineLengthArgs(opts)], text, file, opts.root);
     try { return JSON.parse(r.out); } catch { return []; }
   });
 
