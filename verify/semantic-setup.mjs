@@ -2,7 +2,7 @@
 // sentence-transformers, ~1.4 GB model download). Run once before `SEMANTIC_REAL=1 node verify/semantic.mjs`.
 import { launch } from './lib.mjs';
 
-delete process.env.PYIDE_SEMANTIC_BACKEND;
+process.env.PYIDE_SEMANTIC_BACKEND = 'real';
 const t = await launch({ fixture: 'semantic', port: 9540, name: 'semantic-setup-real' });
 await t.js(`(window.__semLog = [], ide.api.on('semantic:log', (s) => window.__semLog.push(s)), true)`);
 const started = Date.now();

@@ -5,7 +5,7 @@ import { launch, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const REAL = process.env.SEMANTIC_REAL === '1';
-if (!REAL) process.env.PYIDE_SEMANTIC_BACKEND = 'fake';
+process.env.PYIDE_SEMANTIC_BACKEND = REAL ? 'real' : 'fake';
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const top = (t) => t.js(`[...document.querySelectorAll('#semanticResults .sem-row')].map(r => r.dataset.rel.replace(/\\\\/g, '/'))`);
@@ -71,7 +71,7 @@ try {
 
   // ---------- setup screen ----------
   if (!REAL) {
-    delete process.env.PYIDE_SEMANTIC_BACKEND;
+    process.env.PYIDE_SEMANTIC_BACKEND = 'real';
     const c = await launch({ fixture: 'semantic', port: 9532, name: 'semantic-setup', lang: 'ko-KR' });
     await c.js(`(ide.settings.set('appearance.language', 'ko'), true)`);
     const st = await c.js(`ide.api.invoke('semantic:status')`);
