@@ -10,7 +10,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --x64"
+    "dist": "electron-builder --win nsis msi --x64"
   },
   "devDependencies": {
     "electron": "^38.8.6",
@@ -60,10 +60,17 @@
       "node_modules/pyright/**/*",
       "node_modules/@lydell/**/*"
     ],
+    "msiProjectCreated": "build/msi-project.js",
     "win": {
       "target": [
         {
           "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "msi",
           "arch": [
             "x64"
           ]
@@ -82,6 +89,14 @@
       "uninstallDisplayName": "PyIDE",
       "artifactName": "PyIDE-Setup-${version}.exe",
       "include": "build/installer.nsh"
+    },
+    "msi": {
+      "perMachine": false,
+      "upgradeCode": "C8A5FFE8-0263-4874-B6AC-E39E095BE819",
+      "createStartMenuShortcut": true,
+      "createDesktopShortcut": false,
+      "shortcutName": "PyIDE",
+      "artifactName": "PyIDE-${version}.msi"
     }
   }
 }
