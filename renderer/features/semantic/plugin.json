@@ -1,0 +1,8 @@
+{
+  "id": "semantic",
+  "name": "Semantic Code Search (EmbeddingGemma 2)",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Search the project by meaning in Korean or English, and find similar code, with Google's EmbeddingGemma 2 running locally.",
+  "main": ["semantic.js"]
+}

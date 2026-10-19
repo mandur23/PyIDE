@@ -1,0 +1,26 @@
+.sem-status { cursor: pointer; color: var(--gray9); }
+.sem-status:hover { color: var(--gray12); }
+.sem-tool { flex-direction: column; }
+.sem-bar { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.sem-input { flex: 1; min-width: 0; }
+.sem-info { white-space: nowrap; font-size: 12px; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.sem-setup { padding: 12px 16px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; max-height: 60%; overflow: auto; }
+.sem-setup-title { font-weight: 600; color: var(--gray12); margin-bottom: 6px; }
+.sem-setup p { margin: 4px 0; line-height: 1.5; }
+.sem-setup-buttons { display: flex; gap: 8px; margin: 10px 0 6px; }
+.sem-log { margin: 0; max-height: 160px; overflow: auto; font: 12px/1.4 var(--mono); color: var(--gray9); white-space: pre-wrap; }
+.sem-log:empty { display: none; }
+.sem-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 42%) 1fr; }
+.sem-list { overflow: auto; border-right: 1px solid var(--gray3); padding: 2px 0; }
+.sem-list.busy { opacity: .6; }
+.sem-row { display: grid; grid-template-columns: 54px auto 1fr; align-items: center; gap: 8px; padding: 3px 10px; cursor: default; white-space: nowrap; }
+.sem-row:hover { background: var(--gray2); }
+.sem-row.selected { background: var(--blue2); }
+.sem-score { height: 4px; border-radius: 2px; background: var(--gray4); position: relative; overflow: hidden; }
+.sem-score::after { content: ''; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--blue6); border-radius: 2px; }
+.sem-symbol { font-family: var(--mono); color: var(--gray12); overflow: hidden; text-overflow: ellipsis; }
+.sem-loc { color: var(--gray7); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.sem-empty { padding: 14px; line-height: 1.5; }
+.sem-preview { overflow: auto; padding: 6px 12px; }
+.sem-preview-head { color: var(--gray7); font-size: 12px; margin-bottom: 6px; }
+.sem-preview-code { margin: 0; font: 13px/1.45 var(--mono); white-space: pre; }

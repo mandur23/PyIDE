@@ -76,7 +76,12 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 | vcs | Ctrl+K, Ctrl+Shift+K, Ctrl+T, Alt+0, Alt+9, Ctrl+Alt+Z, Ctrl+Alt+Shift+Down/Up |
 | run-tools | Alt+Shift+F10, Alt+Shift+F9, Alt+8 (Python Console), Ctrl+Shift+F10 on a test (via `when`) |
 | tooling | Ctrl+Alt+L, Ctrl+Alt+O, Ctrl+Alt+S, Ctrl+Shift+Alt+S |
+| semantic | Ctrl+Alt+F (Semantic Search popup) |
 
 ## Verification
 
 `verify/lib.mjs` launches an isolated instance: a temp copy of `verify/fixtures/<fixture>/` as the project, temp user data, and a CDP port. It returns `js(expr)`, `until(expr, label)`, `press('Ctrl+Shift+F')` (real key events), `type(text)`, `click(selector)`, `shot(file)`, `check(ok, label)`, `finish()`. A run fails on any failed check or uncaught renderer exception. See `verify/core.mjs`. Each feature uses its own port so instances can run side by side.
+
+## Semantic search (EmbeddingGemma 2)
+
+`renderer/features/semantic` and `main/features/semantic.js` add meaning-based search with Google's EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache 2.0) running locally. The model runs in a Python sidecar (`main/semantic/embed_server.py`) inside a private venv at `~\.pyide\semantic\venv` that reuses the system PyTorch. Setup adds only the torchvision build paired with that torch (the model's processor needs it even for text) and never replaces torch itself. The model itself sits in the standard Hugging Face cache. Files are split into code-aware chunks (functions, classes, and each method for Python; heading sections for Markdown; line windows elsewhere). They are embedded with the model card's CodeRetrieval prompts, truncated to 256 dimensions, and stored per project in `<userData>/semantic/indexes`. Only changed files are embedded again. Queries combine cosine similarity with a small keyword score. Other plugins can call `ide.semantic.query(text, {limit, similarTo})`. Tests use `PYIDE_SEMANTIC_BACKEND=fake`, a deterministic hashing embedder; `SEMANTIC_REAL=1 node verify/semantic.mjs` runs against the real model once `node verify/semantic-setup.mjs` has installed it.
