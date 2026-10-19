@@ -44,10 +44,10 @@
   }
 
   const nodeIdFor = (path, item) => [relPosix(path), item.cls, item.kind === 'class' ? null : item.name].filter(Boolean).join('::');
-  const titleFor = (path, item) => `pytest for ${[moduleName(path), item.cls, item.kind === 'class' ? null : item.name].filter(Boolean).join('.')}`;
+  const titleFor = (path, item) => tr('pytest for {name}', { name: [moduleName(path), item.cls, item.kind === 'class' ? null : item.name].filter(Boolean).join('.') });
   const configFor = (path, item) => (item
     ? { type: 'pytest', name: titleFor(path, item), target: nodeIdFor(path, item) }
-    : { type: 'pytest', name: `pytest in ${basename(path)}`, target: relPosix(path) });
+    : { type: 'pytest', name: tr('pytest in {name}', { name: basename(path) }), target: relPosix(path) });
 
   // The innermost test around a line, or null.
   function contextAt(model, lineNumber) {
@@ -59,11 +59,11 @@
   run.registerType({
     type: 'pytest', title: 'pytest', icon: '🧪',
     fields: [
-      { key: 'target', label: 'Target', placeholder: 'Script, folder, or node id (test_x.py::TestY::test_z)' },
-      { key: 'args', label: 'Additional arguments', placeholder: 'e.g. -x -k "fast"' },
-      { key: 'cwd', label: 'Working directory', placeholder: 'Defaults to the project root' },
-      { key: 'env', label: 'Environment variables', placeholder: 'NAME=value;OTHER=value' },
-      { key: 'interp', label: 'Python interpreter', kind: 'interp' },
+      { key: 'target', label: tr('Target'), placeholder: tr('Script, folder, or node id (test_x.py::TestY::test_z)') },
+      { key: 'args', label: tr('Additional arguments'), placeholder: tr('e.g. -x -k "fast"') },
+      { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project root') },
+      { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
+      { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
     ],
     defaults: () => ({ target: '', args: '', cwd: '', env: '', interp: '' }),
     identity: (c) => (c.target || '').toLowerCase(),
@@ -79,9 +79,10 @@
   const ICONS = { passed: '✓', failed: '✗', error: '✗', skipped: '⊘', running: '◷', pending: '○' };
   const fmtMs = (sec) => {
     const ms = Math.round((sec || 0) * 1000);
-    return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)} sec` : `${ms} ms`;
+    return ms >= 1000 ? tr('{n} sec', { n: (ms / 1000).toFixed(ms >= 10000 ? 0 : 1) }) : tr('{n} ms', { n: ms });
   };
   const RANK = { error: 5, failed: 5, running: 4, pending: 3, passed: 2, skipped: 1 };
+  const STATUS_TEXT = { passed: tr('Passed'), failed: tr('Failed'), error: tr('Error'), skipped: tr('Ignored'), running: tr('Running'), pending: tr('Pending') };
 
   function createView(s) {
     const root = el('div', 'tr-view');
@@ -108,7 +109,7 @@
 
     const log = []; // full console output, restored when the root is selected
     const nodes = new Map();
-    const rootNode = { id: '', kind: 'root', name: 'Test Results', children: [], status: 'pending', duration: 0, collapsed: false };
+    const rootNode = { id: '', kind: 'root', name: tr('Test Results'), children: [], status: 'pending', duration: 0, collapsed: false };
     nodes.set('', rootNode);
     let selected = rootNode;
     let finished = false;
@@ -157,13 +158,16 @@
       const time = fmtMs((finished ? elapsed : performance.now() - started) / 1000);
       let text;
       let cls;
-      if (!finished) { text = `Running: ${c.done} of ${c.total} tests`; cls = 'running'; }
-      else if (!c.total) { text = 'No tests were found'; cls = c.failed ? 'failed' : 'skipped'; }
+      if (!finished) { text = tr('Running: {done} of {total} tests', { done: c.done, total: c.total }); cls = 'running'; }
+      else if (!c.total) { text = tr('No tests were found'); cls = c.failed ? 'failed' : 'skipped'; }
       else {
         // PyCharm's wording: "Tests failed: 2, passed: 3, ignored: 1 of 6 tests – 120 ms"
-        const parts = c.failed ? [`Tests failed: ${c.failed}`, c.passed && `passed: ${c.passed}`] : [`Tests passed: ${c.passed}`];
-        if (c.skipped) parts.push(`ignored: ${c.skipped}`);
-        text = `${parts.filter(Boolean).join(', ')} of ${c.total} test${c.total === 1 ? '' : 's'} – ${time}`;
+        const parts = c.failed
+          ? [tr('Tests failed: {failed}', { failed: c.failed }), c.passed && tr('passed: {passed}', { passed: c.passed })]
+          : [tr('Tests passed: {passed}', { passed: c.passed })];
+        if (c.skipped) parts.push(tr('ignored: {skipped}', { skipped: c.skipped }));
+        const vars = { counts: parts.filter(Boolean).join(', '), total: c.total, time };
+        text = c.total === 1 ? tr('{counts} of {total} test – {time}', vars) : tr('{counts} of {total} tests – {time}', vars);
         cls = c.failed ? 'failed' : 'passed';
       }
       status.replaceChildren(el('span', `tr-icon ${cls}`, finished ? ICONS[cls === 'passed' ? 'passed' : cls === 'failed' ? 'failed' : 'skipped'] : ICONS.running), el('span', null, text));
@@ -182,7 +186,11 @@
         const hasKids = n.children?.length;
         const arrow = el('span', 'tr-arrow', hasKids ? (n.collapsed ? '▸' : '▾') : '');
         arrow.onclick = (e) => { e.stopPropagation(); n.collapsed = !n.collapsed; renderTree(); };
-        row.append(arrow, el('span', `tr-icon ${st}`, ICONS[st]), el('span', 'tr-name', n.name));
+        const name = el('span', 'tr-name', n.name);
+        // Test, class and file names are user data; the root and "collection error" rows are UI text.
+        if (n.kind !== 'root' && !n.uiName) name.dataset.userText = '';
+        row.title = STATUS_TEXT[st] || '';
+        row.append(arrow, el('span', `tr-icon ${st}`, ICONS[st]), name);
         if (n.kind === 'test' ? n.duration != null : st !== 'pending') row.appendChild(el('span', 'tr-time', fmtMs(n.kind === 'root' && finished ? elapsed / 1000 : durationOf(n))));
         row.onclick = () => selectNode(n, false);
         row.ondblclick = () => selectNode(n, true);
@@ -200,10 +208,10 @@
       for (const t of tests) {
         if (n.kind !== 'test') con.append(`${ICONS[t.status]} ${t.id}\n`, t.status === 'failed' || t.status === 'error' ? 'err' : 'sys');
         if (n.kind === 'test' || t.status === 'failed' || t.status === 'error') {
-          if (t.status === 'skipped' && t.text) con.append(`Skipped: ${t.text.replace(/^Skipped: /, '')}\n`, 'sys');
+          if (t.status === 'skipped' && t.text) con.append(`${tr('Skipped: {reason}', { reason: t.text.replace(/^Skipped: /, '') })}\n`, 'sys');
           else if (t.text) con.append(`${t.text}\n`, 'err');
           if (t.output) con.append(`${t.output}\n`);
-          if (n.kind === 'test' && !t.text && !t.output) con.append(t.status === 'passed' ? 'Test passed.\n' : `${t.status}\n`, 'sys');
+          if (n.kind === 'test' && !t.text && !t.output) con.append(`${t.status === 'passed' ? tr('Test passed.') : STATUS_TEXT[t.status] || t.status}\n`, 'sys');
         }
       }
     }
@@ -266,7 +274,7 @@
           } else if (ev.e === 'collecterror') {
             const id = ev.id || 'collection';
             const fileNode = nodes.get(`file:${id}`) || add(rootNode, { id: `file:${id}`, kind: 'file', name: id.split('/').pop(), status: 'error' });
-            add(fileNode, { id: `${id}::<collection>`, kind: 'test', name: 'collection error', file: fileNode.file, line: 1, status: 'error', text: ev.text, duration: 0 });
+            add(fileNode, { id: `${id}::<collection>`, kind: 'test', name: tr('collection error'), uiName: true, file: fileNode.file, line: 1, status: 'error', text: ev.text, duration: 0 });
           }
         }
         renderStatus();
@@ -313,8 +321,8 @@
     const runner = version ? 'pytest' : 'unittest';
     if (!version) {
       const install = `${[interp.cmd, ...interp.args].join(' ')} -m pip install pytest`;
-      view.hint(`pytest is not installed for ${interp.label || interp.cmd}. Running with unittest instead. Install pytest: ${install}`);
-      view.log(`pytest is not installed in the selected interpreter; falling back to unittest discovery.\nTo install it: ${install}\n\n`, 'sys');
+      view.hint(tr('pytest is not installed for {interp}. Running with unittest instead. Install pytest: {command}', { interp: interp.label || interp.cmd, command: install }));
+      view.log(`${tr('pytest is not installed in the selected interpreter; falling back to unittest discovery.')}\n${tr('To install it: {command}', { command: install })}\n\n`, 'sys');
     }
     const targets = opts.targets || (cfg.target ? [cfg.target] : []);
     const cwd = run.resolvePath(cfg.cwd) || ide.root;
@@ -334,7 +342,7 @@
     s.started(id);
     s.setIcon('◷', 'running');
     s.setActions([
-      { icon: '⟲', title: 'Rerun Failed Tests', run: () => {
+      { id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
         const failed = view.failedIds();
         if (failed.length) run.runConfig(s.cfg, { targets: failed });
       } },
@@ -344,7 +352,7 @@
       async exit(code) {
         clearInterval(timer);
         await poll(true);
-        view.log(`\nProcess finished with exit code ${code ?? 1}\n`, 'sys');
+        view.log(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
         const c = view.finish();
         for (const r of view.results()) {
           if (r.status === 'passed' || r.status === 'failed' || r.status === 'error') lastResults.set(r.id, r.status === 'passed' ? 'passed' : 'failed');
@@ -379,22 +387,22 @@
 
   // Registered after the run feature's Ctrl+Shift+F10, so it wins inside test files and falls back elsewhere.
   ide.registerAction({
-    id: 'RunTestAtCaret', title: 'Run Test at Caret', keys: 'Ctrl+Shift+F10',
+    id: 'RunTestAtCaret', title: tr('Run Test at Caret'), keys: 'Ctrl+Shift+F10',
     when: () => !!caretTest(),
     run: () => {
       const ctx = caretTest();
       if (ctx) run.runContext(configFor(ctx.path, ctx.item));
     },
   });
-  ide.registerAction({ id: 'RerunFailedTests', title: 'Rerun Failed Tests', run: () => {
+  ide.registerAction({ id: 'RerunFailedTests', title: tr('Rerun Failed Tests'), run: () => {
     const s = run.activeSession();
-    s?.extraActions.find((a) => a.title === 'Rerun Failed Tests')?.run();
+    s?.extraActions.find((a) => a.id === 'rerunFailed')?.run();
   } });
   ide.registerTreeAction({
-    title: "Run 'pytest in …'",
+    title: tr("Run 'pytest in …'"),
     hint: 'Ctrl+Shift+F10',
     when: (e) => e.dir || isTestFileName(e.name),
-    run: (e) => run.runContext({ type: 'pytest', name: `pytest in ${e.name}`, target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
+    run: (e) => run.runContext({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
   });
 
   ide.on('fileSaved', () => classLines.clear());

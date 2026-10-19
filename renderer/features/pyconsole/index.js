@@ -51,17 +51,17 @@
     if (procId) return ready;
     if (starting) return starting;
     const interp = ide.currentInterp();
-    if (!interp) { con.append('No Python interpreter found.\n', 'err'); return null; }
+    if (!interp) { con.append(`${tr('No Python interpreter found.')}\n`, 'err'); return null; }
     starting = (async () => {
       carry = '';
       ready = new Promise((r) => (markReady = r));
-      con.append(`${[interp.cmd, ...interp.args].join(' ')} (Python Console)\n`, 'sys');
+      con.append(`${tr('{command} (Python Console)', { command: [interp.cmd, ...interp.args].join(' ') })}\n`, 'sys');
       const id = (procId = await ide.api.invoke('pyconsole:start', interp, ide.root || undefined, ide.root ? [ide.root] : []));
       input.disabled = false;
       ide.proc.attach(id, {
         data: onData,
         exit(code) {
-          con.append(`\nProcess finished with exit code ${code ?? 0}\n`, 'sys');
+          con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 0 })}\n`, 'sys');
           if (procId !== id) return;
           procId = null;
           setPrompt('ps1');
@@ -128,14 +128,14 @@
 
   function renderActions() {
     tw.setActions([
-      { icon: '⟳', title: 'Rerun Python Console', run: restart },
-      ...(procId ? [{ icon: '■', title: 'Stop Console', run: stop }] : []),
-      { icon: '⌫', title: 'Clear All', run: () => con.clear() },
+      { icon: '⟳', title: tr('Rerun Python Console'), run: restart },
+      ...(procId ? [{ icon: '■', title: tr('Stop Console'), run: stop }] : []),
+      { icon: '⌫', title: tr('Clear All'), run: () => con.clear() },
     ]);
   }
 
   const tw = ide.registerToolWindow({
-    id: 'PythonConsole', title: 'Python Console', icon: '🐍', side: 'bottom', keys: 'Alt+8', order: 25,
+    id: 'PythonConsole', title: tr('Python Console'), icon: '🐍', side: 'bottom', keys: 'Alt+8', order: 25,
     mount(container) {
       con = ide.ui.console(container);
       con.out.id = 'pyconsoleOut';
@@ -212,16 +212,16 @@
   }
 
   ide.registerAction({
-    id: 'ExecuteInPyConsoleAction', title: 'Execute Selection in Python Console', keys: 'Alt+Shift+E',
+    id: 'ExecuteInPyConsoleAction', title: tr('Execute Selection in Python Console'), keys: 'Alt+Shift+E',
     when: () => ide.activeTab()?.kind === 'file' && /\.pyw?$/i.test(ide.activeTab().path),
     run: executeSelection,
   });
-  ide.registerAction({ id: 'RunPythonConsole', title: 'Python Console', run: () => tw.show() });
+  ide.registerAction({ id: 'RunPythonConsole', title: tr('Python Console'), run: () => tw.show() });
 
   ide.on('ready', () => {
     ide.editor.addAction({
       id: 'pyide.executeInConsole',
-      label: 'Execute Selection in Python Console',
+      label: tr('Execute Selection in Python Console'),
       contextMenuGroupId: 'navigation',
       contextMenuOrder: 99,
       precondition: null,

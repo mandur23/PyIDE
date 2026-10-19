@@ -104,12 +104,12 @@
   let emptyNote;
 
   const tw = ide.registerToolWindow({
-    id: 'Run', title: 'Run', icon: '▶', side: 'bottom', keys: 'Alt+4', order: 10,
+    id: 'Run', title: tr('Run'), icon: '▶', side: 'bottom', keys: 'Alt+4', order: 10,
     mount(container) {
       container.classList.add('run-tool');
       tabBar = el('div', 'run-tabs hidden');
       bodies = el('div', 'run-bodies');
-      emptyNote = el('div', 'run-empty muted', 'Nothing to show. Run a configuration with Shift+F10.');
+      emptyNote = el('div', 'run-empty muted', tr('Nothing to show. Run a configuration with Shift+F10.'));
       bodies.appendChild(emptyNote);
       container.append(tabBar, bodies);
     },
@@ -130,10 +130,10 @@
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
-      { icon: '⟳', title: `Rerun '${s.title}'`, run: () => runConfig(s.cfg) },
-      ...(busy(s) ? [{ icon: '■', title: 'Stop', run: () => s.stop() }] : []),
+      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => runConfig(s.cfg) },
+      ...(busy(s) ? [{ icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
-      ...(s.con ? [{ icon: '⌫', title: 'Clear All', run: () => s.con.clear() }] : []),
+      ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
     ]);
   }
 
@@ -206,7 +206,7 @@
         ide.proc.attach(id, {
           data: (text, stream) => s.con?.append(text, stream === 'err' ? 'err' : null),
           exit(code) {
-            s.con?.append(`\nProcess finished with exit code ${code ?? 1}\n`, 'sys');
+            s.con?.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
             if (s.procId === id) s.setIcon('▶', code === 0 ? 'done' : 'failed');
             onExit?.(code);
             s.exited(id);
@@ -225,9 +225,11 @@
       setActions(list) { s.extraActions = list; if (activeSession === s) renderActions(); },
       select: () => selectSession(s),
     };
-    s.tab.append(el('span', 'run-tab-icon', types.get(cfg.type)?.icon || '▶'), el('span', 'run-tab-title', cfg.name));
+    const tabTitle = el('span', 'run-tab-title', cfg.name);
+    tabTitle.dataset.userText = '';
+    s.tab.append(el('span', 'run-tab-icon', types.get(cfg.type)?.icon || '▶'), tabTitle);
     const close = el('button', 'run-tab-close', '×');
-    close.title = 'Close';
+    close.title = tr('Close');
     close.onclick = (e) => { e.stopPropagation(); closeSession(s); };
     s.tab.appendChild(close);
     s.tab.onclick = () => selectSession(s);
@@ -276,7 +278,7 @@
     const s = await prepareSession(cfg);
     try {
       const interp = interpFor(cfg);
-      if (!interp) return s.console().append('No Python interpreter found.\n', 'err');
+      if (!interp) return s.console().append(`${tr('No Python interpreter found.')}\n`, 'err');
       await type.start(cfg, s, interp, opts);
     } catch (err) {
       (s.con || s.console()).append(`${err.message}\n`, 'err');
@@ -292,20 +294,20 @@
   types.set('python', {
     type: 'python', title: 'Python', icon: '🐍',
     fields: [
-      { key: 'script', label: 'Script path', placeholder: 'path\\to\\script.py', browse: true },
-      { key: 'params', label: 'Script parameters' },
-      { key: 'cwd', label: 'Working directory', placeholder: 'Defaults to the script folder' },
-      { key: 'env', label: 'Environment variables', placeholder: 'NAME=value;OTHER=value' },
-      { key: 'interp', label: 'Python interpreter', kind: 'interp' },
+      { key: 'script', label: tr('Script path'), placeholder: tr('path\\to\\script.py'), browse: true },
+      { key: 'params', label: tr('Script parameters') },
+      { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the script folder') },
+      { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
+      { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
     ],
     defaults: () => ({ script: '', params: '', cwd: '', env: '', interp: '' }),
     identity: (c) => resolvePath(c.script).toLowerCase(),
     file: (c) => resolvePath(c.script),
     forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path }),
     async start(cfg, s, interp) {
-      const con = s.console({ input: true, placeholder: 'stdin: type input and press Enter' });
+      const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
       const script = resolvePath(cfg.script);
-      if (!script) return con.append('Script path is not specified. Edit the configuration first.\n', 'err');
+      if (!script) return con.append(`${tr('Script path is not specified. Edit the configuration first.')}\n`, 'err');
       const cwd = resolvePath(cfg.cwd) || dirname(script);
       const params = parseArgs(cfg.params);
       con.append(`${[interp.cmd, ...interp.args].map(quoteArg).join(' ')} ${quoteArg(script)}${params.length ? ` ${params.map(quoteArg).join(' ')}` : ''}\n`, 'sys');
@@ -316,22 +318,24 @@
 
   // ---------- run widget (toolbar) ----------
   const runBtn = el('button', 'tb-icon run-btn', '▶');
-  runBtn.title = 'Run (Shift+F10)';
+  runBtn.title = tr('Run (Shift+F10)');
   let debugActive = false; // a debugger session is active (see 'debugSessionChanged')
   const stopBtn = el('button', 'tb-icon stop-btn', '■');
-  stopBtn.title = 'Stop (Ctrl+F2)';
+  stopBtn.title = tr('Stop (Ctrl+F2)');
   stopBtn.disabled = true;
   const target = el('button', 'run-target');
-  target.title = 'Run/Debug Configurations';
+  target.title = tr('Run/Debug Configurations');
   ide.registerToolbarItem({ order: 60, el: target });
   ide.registerToolbarItem({ order: 70, el: runBtn });
   ide.registerToolbarItem({ order: 90, el: stopBtn });
 
   function renderTarget() {
     const cfg = selectedConfig();
+    const name = el('span', 'run-target-name', cfg ? cfg.name : tr('Current File'));
+    if (cfg) name.dataset.userText = '';
     target.replaceChildren(
       el('span', 'run-target-icon' + (cfg?.temporary ? ' temporary' : ''), cfg ? types.get(cfg.type)?.icon || '▶' : '📄'),
-      el('span', 'run-target-name', cfg ? cfg.name : 'Current File'),
+      name,
       el('span', 'run-target-arrow', '▾'),
     );
   }
@@ -351,10 +355,10 @@
         label: `${types.get(c.type)?.icon || '▶'}  ${c.name}`, hint: c.id === state.selected ? '✓' : '', run: () => select(c.id),
       })),
       ...(sorted.length ? [{ separator: true }] : []),
-      { label: '📄  Current File', hint: state.selected === CURRENT ? '✓' : '', run: () => select(CURRENT) },
+      { label: `📄  ${tr('Current File')}`, hint: state.selected === CURRENT ? '✓' : '', run: () => select(CURRENT) },
       { separator: true },
-      ...(cfg?.temporary ? [{ label: `Save '${cfg.name}' Configuration`, run: () => { cfg.temporary = false; persist(); } }] : []),
-      { label: 'Edit Configurations…', run: () => editConfigurations() },
+      ...(cfg?.temporary ? [{ label: tr("Save '{name}' Configuration", { name: cfg.name }), run: () => { cfg.temporary = false; persist(); } }] : []),
+      { label: tr('Edit Configurations…'), run: () => editConfigurations() },
     ]);
   };
 
@@ -371,7 +375,7 @@
       return runConfig({ ...types.get(cfg.type).defaults(), ...cfg, id: `file:${file.toLowerCase()}` });
     }
     if (lastRun) return runConfig(lastRun);
-    ide.ui.dialog({ title: 'Run', body: 'Open a Python file to run it, or select a run configuration.' });
+    ide.ui.dialog({ title: tr('Run'), body: tr('Open a Python file to run it, or select a run configuration.') });
   }
 
   function runSelected() {
@@ -401,21 +405,21 @@
   async function chooseConfiguration(debug) {
     const items = [
       ...state.configs.map((c) => ({ label: c.name, detail: types.get(c.type)?.title, icon: types.get(c.type)?.icon, value: { cfg: c } })),
-      { label: 'Current File', icon: '📄', value: { current: true } },
-      { label: 'Edit Configurations…', icon: '⚙', value: { edit: true } },
+      { label: tr('Current File'), icon: '📄', value: { current: true } },
+      { label: tr('Edit Configurations…'), icon: '⚙', value: { edit: true } },
     ];
-    const choice = await ide.ui.pick({ placeholder: debug ? 'Debug' : 'Run', items });
+    const choice = await ide.ui.pick({ placeholder: debug ? tr('Debug') : tr('Run'), items });
     if (!choice) return;
     if (choice.edit) return editConfigurations();
     if (choice.current) {
       select(CURRENT);
       if (!debug) return runCurrentFile();
-      return canDebug() ? ide.runAction(debugActionId()) : ide.ui.dialog({ title: 'Debug', body: 'No debugger is available.' });
+      return canDebug() ? ide.runAction(debugActionId()) : ide.ui.dialog({ title: tr('Debug'), body: tr('No debugger is available.') });
     }
     select(choice.cfg.id);
     if (!debug) return runConfig(choice.cfg);
     if (canDebug(choice.cfg)) return debugConfig(choice.cfg);
-    ide.ui.dialog({ title: 'Debug', body: canDebug() ? `Debugging '${choice.cfg.name}' is not supported yet; it can be run.` : 'No debugger is available.' });
+    ide.ui.dialog({ title: tr('Debug'), body: canDebug() ? tr("Debugging '{name}' is not supported yet; it can be run.", { name: choice.cfg.name }) : tr('No debugger is available.') });
   }
 
   function stop() {
@@ -424,25 +428,25 @@
     if (!running.length && debugActive) return ide.runAction('StopDebug');
     if (running.length === 1) return running[0].stop();
     if (running.length > 1) {
-      ide.ui.pick({ placeholder: 'Stop process', items: running.map((s) => ({ label: s.title, icon: '■', value: s })) })
+      ide.ui.pick({ placeholder: tr('Stop process'), items: running.map((s) => ({ label: s.title, icon: '■', value: s })) })
         .then((s) => s?.stop());
     }
   }
 
   runBtn.onclick = runSelected;
   stopBtn.onclick = stop;
-  ide.registerAction({ id: 'Run', title: 'Run', keys: 'Shift+F10', run: runSelected });
-  ide.registerAction({ id: 'RunClass', title: 'Run Context Configuration', keys: 'Ctrl+Shift+F10', run: () => {
+  ide.registerAction({ id: 'Run', title: tr('Run'), keys: 'Shift+F10', run: runSelected });
+  ide.registerAction({ id: 'RunClass', title: tr('Run Context Configuration'), keys: 'Ctrl+Shift+F10', run: () => {
     const file = currentPyFile();
     if (file) runContext(contextConfigForFile(file));
   } });
-  ide.registerAction({ id: 'Stop', title: 'Stop', keys: 'Ctrl+F2', run: stop });
-  ide.registerAction({ id: 'ChooseRunConfiguration', title: 'Run…', keys: 'Alt+Shift+F10', run: () => chooseConfiguration(false) });
-  ide.registerAction({ id: 'ChooseDebugConfiguration', title: 'Debug…', keys: 'Alt+Shift+F9', run: () => chooseConfiguration(true) });
-  ide.registerAction({ id: 'editRunConfigurations', title: 'Edit Configurations…', run: () => editConfigurations() });
-  ide.registerAction({ id: 'Rerun', title: 'Rerun', run: () => activeSession && runConfig(activeSession.cfg) });
+  ide.registerAction({ id: 'Stop', title: tr('Stop'), keys: 'Ctrl+F2', run: stop });
+  ide.registerAction({ id: 'ChooseRunConfiguration', title: tr('Run…'), keys: 'Alt+Shift+F10', run: () => chooseConfiguration(false) });
+  ide.registerAction({ id: 'ChooseDebugConfiguration', title: tr('Debug…'), keys: 'Alt+Shift+F9', run: () => chooseConfiguration(true) });
+  ide.registerAction({ id: 'editRunConfigurations', title: tr('Edit Configurations…'), run: () => editConfigurations() });
+  ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && runConfig(activeSession.cfg) });
   ide.registerTreeAction({
-    title: "Run '…'",
+    title: tr("Run '…'"),
     hint: 'Ctrl+Shift+F10',
     when: (e) => !e.dir && /\.pyw?$/i.test(e.name) && contextConfigForFile(e.path)?.type === 'python',
     run: (e) => runContext(contextConfigForFile(e.path)),
@@ -460,21 +464,22 @@
     left.append(bar, list);
     body.append(left, form);
 
-    const tool = (icon, title, run) => {
+    const tool = (id, icon, title, run) => {
       const b = el('button', 'rc-tool', icon);
+      b.dataset.tool = id;
       b.title = title;
       b.onclick = run;
       bar.appendChild(b);
       return b;
     };
-    tool('＋', 'Add New Configuration', (e) => {
+    tool('add', '＋', tr('Add New Configuration'), (e) => {
       const r = e.currentTarget.getBoundingClientRect();
       ide.ui.contextMenu(r.left, r.bottom + 2, [...types.values()].map((t) => ({
         label: `${t.icon}  ${t.title}`,
         run() {
-          const cfg = { ...t.defaults(), id: newId(), type: t.type, name: 'Unnamed' };
+          const cfg = { ...t.defaults(), id: newId(), type: t.type, name: tr('Unnamed') };
           const file = currentPyFile();
-          if (file && t.forFile) Object.assign(cfg, t.forFile(file) || {}, { type: t.type, name: 'Unnamed' });
+          if (file && t.forFile) Object.assign(cfg, t.forFile(file) || {}, { type: t.type, name: tr('Unnamed') });
           draft.push(cfg);
           current = cfg;
           render();
@@ -485,14 +490,14 @@
       const menu = document.querySelector('#menuHost .context-menu');
       if (menu) menu.style.zIndex = 80;
     });
-    tool('−', 'Remove Configuration', () => {
+    tool('remove', '−', tr('Remove Configuration'), () => {
       if (!current) return;
       const i = draft.indexOf(current);
       draft.splice(i, 1);
       current = draft[Math.min(i, draft.length - 1)] || null;
       render();
     });
-    tool('⧉', 'Copy Configuration', () => {
+    tool('copy', '⧉', tr('Copy Configuration'), () => {
       if (!current) return;
       const copy = { ...JSON.parse(JSON.stringify(current)), id: newId(), name: `${current.name} (1)`, temporary: false };
       draft.splice(draft.indexOf(current) + 1, 0, copy);
@@ -507,12 +512,13 @@
         if (!group.length) continue;
         list.appendChild(el('div', 'rc-group', `${t.icon}  ${t.title}`));
         for (const c of group) {
-          const row = el('div', 'rc-item' + (c === current ? ' selected' : '') + (c.temporary ? ' temporary' : ''), c.name || 'Unnamed');
+          const row = el('div', 'rc-item' + (c === current ? ' selected' : '') + (c.temporary ? ' temporary' : ''), c.name || tr('Unnamed'));
+          row.dataset.userText = '';
           row.onclick = () => { current = c; render(); };
           list.appendChild(row);
         }
       }
-      if (!draft.length) list.appendChild(el('div', 'rc-none muted', 'No run configurations added. Click ＋ to add one.'));
+      if (!draft.length) list.appendChild(el('div', 'rc-none muted', tr('No run configurations added. Click ＋ to add one.')));
     }
 
     function field(label, input) {
@@ -523,13 +529,13 @@
 
     function renderForm() {
       form.replaceChildren();
-      if (!current) return form.appendChild(el('div', 'muted', 'Select a configuration or add a new one.'));
+      if (!current) return form.appendChild(el('div', 'muted', tr('Select a configuration or add a new one.')));
       const t = types.get(current.type);
       const name = el('input');
       name.dataset.key = 'name';
       name.value = current.name;
       name.oninput = () => { current.name = name.value; renderList(); };
-      field('Name:', name);
+      field(tr('Name:'), name);
       if (current.temporary) {
         const keep = el('label', 'rc-keep');
         const cb = el('input');
@@ -537,7 +543,7 @@
         cb.checked = false;
         cb.dataset.key = 'save';
         cb.onchange = () => { current.temporary = !cb.checked; renderList(); };
-        keep.append(cb, el('span', null, ' Save configuration (it is temporary now)'));
+        keep.append(cb, el('span', null, ` ${tr('Save configuration (it is temporary now)')}`));
         form.appendChild(keep);
       }
       form.appendChild(el('div', 'rc-type muted', `${t.icon} ${t.title}`));
@@ -545,7 +551,7 @@
         let input;
         if (fd.kind === 'interp') {
           input = el('select');
-          input.add(new Option(`Project Default (${ide.currentInterp()?.label || 'none'})`, ''));
+          input.add(new Option(tr('Project Default ({interp})', { interp: ide.currentInterp()?.label || tr('none') }), ''));
           for (const it of ide.interps) input.add(new Option(it.label, it.executable));
           if (current[fd.key] && !ide.interps.some((i) => samePath(i.executable, current[fd.key]))) input.add(new Option(current[fd.key], current[fd.key]));
           input.value = current[fd.key] || '';
@@ -560,7 +566,7 @@
         if (fd.browse) {
           const wrap = el('span', 'rc-browse');
           const b = el('button', 'secondary', '…');
-          b.title = 'Browse';
+          b.title = tr('Browse');
           b.onclick = async (e) => {
             e.preventDefault();
             const p = await ide.api.openFileDialog([{ name: 'Python', extensions: ['py', 'pyw'] }]);
@@ -576,13 +582,13 @@
     render();
 
     ide.ui.dialog({
-      title: 'Run/Debug Configurations',
+      title: tr('Run/Debug Configurations'),
       body,
       width: 780,
       buttons: [
-        { label: 'Cancel' },
-        { label: 'OK', primary: true, run() {
-          for (const c of draft) if (!c.name?.trim()) c.name = 'Unnamed';
+        { label: tr('Cancel') },
+        { label: tr('OK'), primary: true, run() {
+          for (const c of draft) if (!c.name?.trim()) c.name = tr('Unnamed');
           state.configs = draft;
           state.selected = current ? current.id : findConfig(state.selected) ? state.selected : CURRENT;
           persist();
@@ -614,7 +620,7 @@
       range: new ide.monaco.Range(it.line, 1, it.line, 1),
       options: {
         glyphMarginClassName: `run-gutter-icon ${it.state || ''}`,
-        glyphMarginHoverMessage: { value: `Run '${it.title}'` },
+        glyphMarginHoverMessage: { value: tr("Run '{name}'", { name: it.title }) },
         glyphMargin: { position: lane },
       },
     })));
@@ -624,13 +630,13 @@
   function showGutterMenu(item, x, y) {
     const cfg = () => item.config();
     ide.ui.contextMenu(x, y, [
-      { label: `▶  Run '${item.title}'`, hint: 'Ctrl+Shift+F10', run: () => runContext(cfg()) },
-      ...(canDebug(cfg()) ? [{ label: `🐞  Debug '${item.title}'`, run: () => {
+      { label: `▶  ${tr("Run '{name}'", { name: item.title })}`, hint: 'Ctrl+Shift+F10', run: () => runContext(cfg()) },
+      ...(canDebug(cfg()) ? [{ label: `🐞  ${tr("Debug '{name}'", { name: item.title })}`, run: () => {
         ide.editor.setPosition({ lineNumber: item.line, column: 1 });
         debugConfig(addTemporary(cfg()));
       } }] : []),
       { separator: true },
-      { label: `Modify Run Configuration…`, run: () => editConfigurations(addTemporary(cfg()).id) },
+      { label: tr('Modify Run Configuration…'), run: () => editConfigurations(addTemporary(cfg()).id) },
     ]);
   }
 

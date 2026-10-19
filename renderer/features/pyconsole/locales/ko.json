@@ -1,0 +1,10 @@
+{
+  "Python Console": "Python 콘솔",
+  "Rerun Python Console": "Python 콘솔 다시 실행",
+  "Stop Console": "콘솔 중지",
+  "Clear All": "모두 지우기",
+  "Execute Selection in Python Console": "Python 콘솔에서 선택 영역 실행",
+  "{command} (Python Console)": "{command} (Python 콘솔)",
+  "No Python interpreter found.": "Python 인터프리터를 찾을 수 없습니다.",
+  "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스"
+}

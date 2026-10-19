@@ -39,17 +39,23 @@
   let serverKey = null;
   let readyWaiters = [];
 
-  const statusEl = el('span', 'lsp-status', 'Pyright: off');
+  // Each status text is a complete entry in the locale files.
+  const STATUS_TEXT = {
+    off: () => tr('Pyright: off'), starting: () => tr('Pyright: starting'),
+    ready: () => tr('Pyright: ready'), error: () => tr('Pyright: error'),
+  };
+  const statusTitle = (message) => tr('{message}. Click to restart.', { message: message || tr('Pyright language server') });
+  const statusEl = el('span', 'lsp-status', STATUS_TEXT.off());
   statusEl.id = 'lspStatus';
-  statusEl.title = 'Pyright language server. Click to restart.';
+  statusEl.title = statusTitle();
   statusEl.onclick = () => restart();
   ide.registerStatusItem({ order: 20, el: statusEl });
 
   function setStatus(state, message) {
     status = state;
-    statusEl.textContent = `Pyright: ${state}`;
+    statusEl.textContent = STATUS_TEXT[state]();
     statusEl.dataset.state = state;
-    statusEl.title = `${message || 'Pyright language server'}. Click to restart.`;
+    statusEl.title = statusTitle(message);
     if (state === 'ready' || state === 'error' || state === 'off') {
       const waiters = readyWaiters;
       readyWaiters = [];
@@ -72,19 +78,26 @@
     for (const tab of ide.tabs) if (tab.model) monaco.editor.setModelMarkers(tab.model, HINT_OWNER, []);
     rawDiagnostics.clear();
     probeCache.clear();
-    setStatus('starting', `Starting Pyright for ${basename(root)}`);
+    setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
     let g = null;
     try { g = await ide.api.invoke('lsp:start', root, python); } catch (err) { console.warn('pyright failed to start', err); }
     if (serverKey !== key) return;
-    if (!g) return setStatus('error', 'Pyright failed to start');
+    if (!g) return setStatus('error', tr('Pyright failed to start'));
     gen = g;
     for (const doc of docs.values()) sendOpen(doc);
-    setStatus('ready', `Pyright ready${python ? ` (${python})` : ''}`);
+    setStatus('ready', python ? tr('Pyright ready ({python})', { python }) : tr('Pyright ready'));
   }
   const restart = () => ensureServer(true);
 
+  // main/features/lsp.js reports 'Pyright exited with code N', 'Pyright stopped' or a raw system error.
+  const serverError = (message = '') => {
+    const exit = /^Pyright exited with code (.*)$/.exec(message);
+    if (exit) return tr('Pyright exited with code {code}', { code: exit[1] });
+    if (message === 'Pyright stopped') return tr('Pyright stopped');
+    return tr('Pyright error: {message}', { message });
+  };
   ide.api.on('lsp:status', (p) => {
-    if (p.gen === gen && p.state === 'error') setStatus('error', p.message);
+    if (p.gen === gen && p.state === 'error') setStatus('error', serverError(p.message));
   });
   ide.api.on('lsp:message', (p) => {
     if (p.gen === gen && p.type === 1) console.warn(`Pyright: ${p.message}`);
@@ -406,15 +419,15 @@
       const r = doc && await request('textDocument/prepareRename', { textDocument: { uri: doc.uri }, position: lspPos(position) });
       const word = model.getWordAtPosition(position);
       const fallback = new monaco.Range(position.lineNumber, word?.startColumn || position.column, position.lineNumber, word?.endColumn || position.column);
-      if (!r) return { range: fallback, text: word?.word || '', rejectReason: 'This element cannot be renamed' };
+      if (!r) return { range: fallback, text: word?.word || '', rejectReason: tr('This element cannot be renamed') };
       const range = toRange(r.range || r);
       return { range, text: r.placeholder || model.getValueInRange(range) };
     },
     async provideRenameEdits(model, position, newName) {
       const doc = docFor(model);
-      if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: `'${newName}' is not a valid identifier` };
+      if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: tr("'{name}' is not a valid identifier", { name: newName }) };
       const we = doc && await request('textDocument/rename', { textDocument: { uri: doc.uri }, position: lspPos(position), newName });
-      if (!we) return { edits: [], rejectReason: 'Rename failed' };
+      if (!we) return { edits: [], rejectReason: tr('Rename failed') };
       const { edits } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
       return { edits };
     },
@@ -454,9 +467,9 @@
       if (s.name !== name || s.containerName || samePath(file, path) || ![5, 12, 13, 14].includes(s.kind)) continue;
       if (!ide.root || !file.toLowerCase().startsWith(ide.root.toLowerCase())) continue;
       const mod = moduleNameOf(file);
-      if (!out.some((c) => c.module === mod)) out.push({ title: `Import '${name}' from '${mod}'`, line: `from ${mod} import ${name}` });
+      if (!out.some((c) => c.module === mod)) out.push({ title: tr("Import '{name}' from '{module}'", { name, module: mod }), line: `from ${mod} import ${name}` });
     }
-    if (await isImportableModule(name)) out.unshift({ title: `Import '${name}'`, line: `import ${name}` });
+    if (await isImportableModule(name)) out.unshift({ title: tr("Import '{name}'", { name }), line: `import ${name}` });
     return out;
   }
 
@@ -527,7 +540,7 @@
           // Extend an existing ignore comment (before its closing bracket) rather than adding a second one.
           const at = existing ? existing.index + existing[0].length : end;
           const edit = { range: new monaco.Range(line, at, line, at), text: existing ? `, ${d.code}` : `  # pyright: ignore[${d.code}]` };
-          actions.push({ title: `Suppress '${d.code}' for statement`, kind: 'quickfix', edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit: edit }] } });
+          actions.push({ title: tr("Suppress '{code}' for statement", { code: d.code }), kind: 'quickfix', edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit: edit }] } });
         }
       }
       if (token.isCancellationRequested) return undefined;
@@ -577,18 +590,18 @@
     const ctx = cursorContext();
     if (!ctx) return;
     const locs = toLocations(await request('textDocument/definition', ctx.params));
-    if (!locs.length) return hint('Cannot find declaration to go to');
+    if (!locs.length) return hint(tr('Cannot find declaration to go to'));
     // On the declaration itself Ctrl+B shows its usages, as in PyCharm.
     if (locs.length === 1 && samePath(toPath(locs[0].uri), ctx.doc.path) && inRange(locs[0].range, ctx.position)) return findUsages();
-    return chooseAndNavigate(locs, 'Choose Declaration');
+    return chooseAndNavigate(locs, tr('Choose Declaration'));
   }
 
   async function gotoTypeDeclaration() {
     const ctx = cursorContext();
     if (!ctx) return;
     const locs = toLocations(await request('textDocument/typeDefinition', ctx.params));
-    if (!locs.length) return hint('Cannot find type declaration to go to');
-    return chooseAndNavigate(locs, 'Choose Type Declaration');
+    if (!locs.length) return hint(tr('Cannot find type declaration to go to'));
+    return chooseAndNavigate(locs, tr('Choose Type Declaration'));
   }
 
   // Next/previous highlighted problem in the current file (F2 / Shift+F2), with its description shown.
@@ -600,7 +613,7 @@
     const errors = all.filter((m) => m.severity === monaco.MarkerSeverity.Error);
     const markers = (errors.length ? errors : all)
       .sort((a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn);
-    if (!markers.length) return hint('No problems found');
+    if (!markers.length) return hint(tr('No problems found'));
     const pos = ide.editor.getPosition();
     const cmp = (m) => m.startLineNumber - pos.lineNumber || m.startColumn - pos.column;
     const target = dir > 0 ? markers.find((m) => cmp(m) > 0) || markers[0] : [...markers].reverse().find((m) => cmp(m) < 0) || markers[markers.length - 1];
@@ -614,9 +627,9 @@
   let findList;
   let findHead;
   const findTw = ide.registerToolWindow({
-    id: 'FindUsages', title: 'Find', icon: '⌕', side: 'bottom', order: 18,
+    id: 'FindUsages', title: tr('Find'), icon: '⌕', side: 'bottom', order: 18,
     mount(container) {
-      findHead = el('div', 'lsp-find-head muted', 'Use Alt+F7 on a symbol to find its usages');
+      findHead = el('div', 'lsp-find-head muted', tr('Use Alt+F7 on a symbol to find its usages'));
       findList = el('div', 'list lsp-find');
       findList.id = 'lspFindList';
       container.append(findHead, findList);
@@ -631,13 +644,19 @@
     return (await fileCache.get(path))[line - 1] || '';
   }
 
+  // Symbol names, file names and code lines are data, not UI text (verify/i18n-lib.mjs skips them).
+  const userText = (node) => ((node.dataset.userText = ''), node);
+  const usageCount = (count) => (count === 1 ? tr('1 usage') : tr('{count} usages', { count }));
+  const usageTotal = (count, files) => (count === 1 ? tr('1 usage in 1 file')
+    : files === 1 ? tr('{count} usages in 1 file', { count }) : tr('{count} usages in {files} files', { count, files }));
+
   async function findUsages() {
     const ctx = cursorContext();
     if (!ctx) return;
     const word = ctx.model.getWordAtPosition(ctx.position)?.word || '';
     const refs = await request('textDocument/references', { ...ctx.params, context: { includeDeclaration: false } });
-    if (!refs) return hint('Cannot search for usages: Pyright is not ready');
-    if (!refs.length) return hint(`No usages of '${word}' found in Project Files`);
+    if (!refs) return hint(tr('Cannot search for usages: Pyright is not ready'));
+    if (!refs.length) return hint(tr("No usages of '{name}' found in Project Files", { name: word }));
     fileCache.clear();
     const groups = new Map();
     for (const r of refs) {
@@ -646,8 +665,11 @@
       groups.get(path.toLowerCase()).refs.push(r);
     }
     const sorted = [...groups.values()].sort((a, b) => ide.util.rel(a.path).localeCompare(ide.util.rel(b.path)));
-    findHead.replaceChildren(el('span', null, 'Usages of '), el('b', 'lsp-find-sym', word),
-      el('span', 'muted', `  ${refs.length} usage${refs.length === 1 ? '' : 's'} in ${sorted.length} file${sorted.length === 1 ? '' : 's'}`));
+    // The symbol is bold wherever the translation places {name}.
+    const [before, after = ''] = tr('Usages of {name}').split('{name}');
+    const sym = userText(el('b', 'lsp-find-sym', word));
+    findHead.replaceChildren(el('span', null, before), sym, el('span', null, after),
+      el('span', 'muted', `  ${usageTotal(refs.length, sorted.length)}`));
     findHead.classList.remove('muted');
     const frag = document.createDocumentFragment();
     for (const g of sorted) {
@@ -656,8 +678,8 @@
       const arrow = el('span', 'arrow', '▾');
       const rel = ide.util.rel(g.path);
       const dir = /[\\/]/.test(rel) ? dirname(rel) : '';
-      head.append(arrow, el('span', 'icon', '🐍'), el('span', 'name', basename(g.path)),
-        el('span', 'muted', `${dir ? `  ${dir}` : ''}  ${g.refs.length} usage${g.refs.length === 1 ? '' : 's'}`));
+      head.append(arrow, el('span', 'icon', '🐍'), userText(el('span', 'name', basename(g.path))),
+        userText(el('span', 'muted', dir ? `  ${dir}` : '')), el('span', 'muted', `  ${usageCount(g.refs.length)}`));
       const rows = el('div', 'lsp-find-rows');
       head.onclick = () => { rows.classList.toggle('hidden'); arrow.textContent = rows.classList.contains('hidden') ? '▸' : '▾'; };
       for (const r of g.refs) {
@@ -669,7 +691,7 @@
         const row = el('div', 'list-row lsp-find-row');
         row.dataset.path = g.path;
         row.dataset.line = line;
-        const code = el('span', 'code');
+        const code = userText(el('span', 'code'));
         code.append(text.slice(lead, s), el('span', 'hit', text.slice(s, e)), text.slice(e).trimEnd());
         row.append(el('span', 'ln', String(line)), code);
         row.onclick = () => {
@@ -687,16 +709,16 @@
   }
 
   [
-    { id: 'GotoDeclaration', title: 'Go to Declaration or Usages', keys: 'Ctrl+B', when: editorPython, run: gotoDeclaration },
-    { id: 'GotoTypeDeclaration', title: 'Go to Type Declaration', keys: 'Ctrl+Alt+B', when: editorPython, run: gotoTypeDeclaration },
-    { id: 'FindUsages', title: 'Find Usages', keys: 'Alt+F7', when: editorPython, run: findUsages },
-    { id: 'RenameElement', title: 'Rename…', keys: 'Shift+F6', when: editorPython, run: editorTrigger('editor.action.rename') },
-    { id: 'QuickJavaDoc', title: 'Quick Documentation', keys: 'Ctrl+Q', when: editorPython, run: editorTrigger('editor.action.showHover') },
-    { id: 'ParameterInfo', title: 'Parameter Info', keys: 'Ctrl+P', when: editorPython, run: editorTrigger('editor.action.triggerParameterHints') },
-    { id: 'ShowIntentionActions', title: 'Show Context Actions', keys: 'Alt+Enter', when: editorPython, run: editorTrigger('editor.action.quickFix') },
-    { id: 'GotoNextError', title: 'Next Highlighted Error', keys: 'F2', when: editorPython, run: () => gotoProblem(1) },
-    { id: 'GotoPreviousError', title: 'Previous Highlighted Error', keys: 'Shift+F2', when: editorPython, run: () => gotoProblem(-1) },
-    { id: 'Pyright.Restart', title: 'Restart Pyright Language Server', run: restart },
+    { id: 'GotoDeclaration', title: tr('Go to Declaration or Usages'), keys: 'Ctrl+B', when: editorPython, run: gotoDeclaration },
+    { id: 'GotoTypeDeclaration', title: tr('Go to Type Declaration'), keys: 'Ctrl+Alt+B', when: editorPython, run: gotoTypeDeclaration },
+    { id: 'FindUsages', title: tr('Find Usages'), keys: 'Alt+F7', when: editorPython, run: findUsages },
+    { id: 'RenameElement', title: tr('Rename…'), keys: 'Shift+F6', when: editorPython, run: editorTrigger('editor.action.rename') },
+    { id: 'QuickJavaDoc', title: tr('Quick Documentation'), keys: 'Ctrl+Q', when: editorPython, run: editorTrigger('editor.action.showHover') },
+    { id: 'ParameterInfo', title: tr('Parameter Info'), keys: 'Ctrl+P', when: editorPython, run: editorTrigger('editor.action.triggerParameterHints') },
+    { id: 'ShowIntentionActions', title: tr('Show Context Actions'), keys: 'Alt+Enter', when: editorPython, run: editorTrigger('editor.action.quickFix') },
+    { id: 'GotoNextError', title: tr('Next Highlighted Error'), keys: 'F2', when: editorPython, run: () => gotoProblem(1) },
+    { id: 'GotoPreviousError', title: tr('Previous Highlighted Error'), keys: 'Shift+F2', when: editorPython, run: () => gotoProblem(-1) },
+    { id: 'Pyright.Restart', title: tr('Restart Pyright Language Server'), run: restart },
   ].forEach(ide.registerAction);
 
   ide.lsp = { request, documentSymbols, ready, status: () => status, restart };

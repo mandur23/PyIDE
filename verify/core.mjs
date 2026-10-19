@@ -10,7 +10,7 @@ try {
   await js(`[...document.querySelectorAll('#tree .node')].find(n => n.textContent.includes('hello.py')).click()`);
   await until(`ide.activeTab()?.title === 'hello.py'`, 'hello.py tab');
   check(true, 'clicking hello.py in tree opens a tab');
-  await t.sleep(400);
+  await until(`[...document.querySelectorAll('.view-line span span')].some(s => s.textContent.trim() === 'helper')`, 'editor tokens painted');
   const colors = await js(`(() => { const c = {}; for (const s of document.querySelectorAll('.view-line span span')) c[s.textContent.trim()] = getComputedStyle(s).color; return c; })()`);
   check(colors['def'] === 'rgb(207, 142, 109)', `keyword color cf8e6d (got ${colors['def']})`);
   check(colors['helper'] === 'rgb(86, 168, 245)', `function declaration color 56a8f5 (got ${colors['helper']})`);

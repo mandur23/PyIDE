@@ -1,5 +1,6 @@
 // Debugger backend: runs the program under `python -m debugpy --listen` as a normal IDE process (so stdout,
 // stderr and stdin flow through ctx.startProcess) and talks DAP to debugpy's adapter over TCP.
+// Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
 const net = require('net');
 const path = require('path');
 
@@ -23,9 +24,9 @@ class DapClient {
     this.buf = Buffer.alloc(0);
     socket.on('data', (d) => this.receive(d));
     socket.on('close', () => {
-      for (const p of this.pending.values()) p.reject(new Error('debug session closed'));
+      for (const p of this.pending.values()) p.reject(new Error('Debug session closed'));
       this.pending.clear();
-      for (const w of this.waiters) w.reject(new Error('debug session closed'));
+      for (const w of this.waiters) w.reject(new Error('Debug session closed'));
       this.waiters = [];
     });
   }
@@ -63,7 +64,7 @@ class DapClient {
     const seq = this.seq++;
     const json = Buffer.from(JSON.stringify({ seq, type: 'request', command, arguments: args }), 'utf8');
     return new Promise((resolve, reject) => {
-      if (this.socket.destroyed) return reject(new Error('debug session closed'));
+      if (this.socket.destroyed) return reject(new Error('Debug session closed'));
       this.pending.set(seq, { resolve, reject });
       this.socket.write(`Content-Length: ${json.length}\r\n\r\n`);
       this.socket.write(json);
@@ -72,7 +73,7 @@ class DapClient {
 
   waitEvent(event) {
     return new Promise((resolve, reject) => {
-      if (this.socket.destroyed) return reject(new Error('debug session closed'));
+      if (this.socket.destroyed) return reject(new Error('Debug session closed'));
       this.waiters.push({ event, resolve, reject });
     });
   }
@@ -88,7 +89,7 @@ async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
         s.once('error', reject);
       });
     } catch (err) {
-      if (!isAlive() || Date.now() > end) throw new Error(`could not connect to debugpy on port ${port}: ${err.message}`);
+      if (!isAlive() || Date.now() > end) throw new Error(`Could not connect to debugpy on port ${port}: ${err.message}`);
       await new Promise((r) => setTimeout(r, 150));
     }
   }
@@ -161,7 +162,7 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
 
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);
-    if (!s) throw new Error('no debug session');
+    if (!s) throw new Error('No debug session');
     return s.dap.request(command, args);
   });
 

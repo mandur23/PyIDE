@@ -90,3 +90,15 @@
 .dbg-bps-title { font-weight: 600; color: var(--gray12); }
 .dbg-bps-actions { display: flex; gap: 8px; margin-top: auto; }
 .dbg-group .dbg-name { color: var(--gray11); }
+
+/* Light theme: PyCharm Light editor scheme (execution point, breakpoint line, debugger value colors). */
+:root[data-theme="light"] .dbg-bp-line { background: #faeae6; }
+:root[data-theme="light"] .dbg-exec-line { background: #d5e1ff !important; }
+:root[data-theme="light"] .dbg-frame-line { background: #e9eaee; }
+:root[data-theme="light"] .dbg-inline-val { color: #8c8c8c; opacity: 1; }
+:root[data-theme="light"] .dbg-name { color: #871094; }
+:root[data-theme="light"] .dbg-group .dbg-name { color: var(--gray11); }
+:root[data-theme="light"] .dbg-value.str { color: #067d17; }
+:root[data-theme="light"] .dbg-value.num { color: #1750eb; }
+:root[data-theme="light"] .dbg-err { color: #c7222d; }
+:root[data-theme="light"] .dbg-frame.muted .dbg-frame-name { color: var(--gray9); }

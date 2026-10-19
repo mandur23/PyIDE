@@ -1,0 +1,5 @@
+{
+  "Terminal": "터미널",
+  "Clear": "지우기",
+  "cd: cannot find path '{path}'": "cd: '{path}' 경로를 찾을 수 없습니다"
+}

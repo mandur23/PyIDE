@@ -2,10 +2,25 @@
   const { el, basename, dirname, samePath } = ide.util;
   const invoke = (ch, ...args) => ide.api.invoke(`git:${ch}`, ...args);
   const key = (p) => p.toLowerCase();
-  // PyCharm (Darcula) file status colors.
-  const COLORS = { modified: '#6897bb', added: '#629755', deleted: '#6c6c6c', unversioned: '#d1675a', conflict: '#d5756c' };
-  const GUTTER = { added: '#549159', modified: '#375fad', deleted: '#db5c5c' };
-  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  // PyCharm file status colors, defined per theme in style.css (Darcula / Light).
+  const COLORS = Object.fromEntries(['modified', 'added', 'deleted', 'unversioned', 'conflict'].map((s) => [s, `var(--vcs-${s})`]));
+  // Monaco's overview ruler needs a concrete color, so read the theme's variable when decorating.
+  const gutterColor = (type) => getComputedStyle(document.documentElement).getPropertyValue(`--vcs-gutter-${type}`).trim();
+  const STATUS_LABEL = { modified: tr('Modified'), added: tr('Added'), deleted: tr('Deleted'), unversioned: tr('Unversioned'), conflict: tr('Merge Conflict') };
+  // Singular/plural message pair with {n} and optional placeholders.
+  const trn = (n, one, many, vars = {}) => tr(n === 1 ? one : many, { n, ...vars });
+  const nFiles = (n) => trn(n, '{n} file', '{n} files');
+  const dateLocale = i18n.locale === 'ko' ? 'ko-KR' : 'en-US';
+  // Text that is user data (paths, git output, commit messages, names) and must stay as is.
+  const userText = (tag, cls, text) => { const n = el(tag, cls, text); n.dataset.userText = ''; return n; };
+
+  // Errors this feature composes in the main process come with a reason; anything else is git's own text.
+  const REASONS = {
+    notRepo: tr('Not a Git repository'),
+    noRemote: tr('No remotes are defined for this repository.'),
+    detached: tr('Cannot push from a detached HEAD.'),
+  };
+  const errorText = (r) => (r.reason && REASONS[r.reason]) || r.err || r.out || '';
 
   let repo = null; // git:status result while the project is a repository
   const byPath = new Map(); // lower-cased path -> changed file
@@ -14,10 +29,11 @@
   // ---------- notifications and the Git console ----------
   const notes = el('div', 'vcs-notes');
   document.body.appendChild(notes);
-  function notify(title, text = '', kind = 'info') {
+  // raw: the text is git output or a path, shown untranslated.
+  function notify(title, text = '', kind = 'info', raw = false) {
     const note = el('div', `vcs-note ${kind}`);
     note.appendChild(el('div', 'vcs-note-title', title));
-    if (text) note.appendChild(el('div', 'vcs-note-text', text.trim()));
+    if (text) note.appendChild((raw ? userText : el)('div', 'vcs-note-text', text.trim()));
     const close = el('button', 'vcs-note-close', '×');
     close.onclick = (e) => { e.stopPropagation(); note.remove(); };
     note.appendChild(close);
@@ -88,13 +104,13 @@
 
   // ---------- branch widget ----------
   const branchBtn = el('button', 'tb-btn vcs-branch hidden');
-  branchBtn.title = 'Git Branches';
+  branchBtn.title = tr('Git Branches');
   ide.registerToolbarItem({ side: 'left', order: 10, el: branchBtn });
 
   function renderWidget() {
     branchBtn.classList.toggle('hidden', !repo);
     if (!repo) return;
-    branchBtn.replaceChildren(el('span', 'vcs-branch-icon', '⑂'), el('span', 'vcs-branch-name', repo.branch || repo.detached || 'HEAD'), el('span', 'vcs-caret', '▾'));
+    branchBtn.replaceChildren(el('span', 'vcs-branch-icon', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.detached || 'HEAD'), el('span', 'vcs-caret', '▾'));
   }
 
   async function afterCheckout() {
@@ -108,18 +124,18 @@
   async function showBranches() {
     if (!repo) return;
     const { local, remote } = await invoke('branches', ide.root);
-    const items = [{ label: 'New Branch…', icon: '＋', value: { create: true } }];
-    for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? 'current' : 'Local', value: { name: b } });
-    for (const b of remote) items.push({ label: b, icon: '☁', hint: 'Remote', value: { name: b, remote: true } });
-    const choice = await ide.ui.pick({ placeholder: `Git Branches — ${repo.branch || repo.detached}`, items });
+    const items = [{ label: tr('New Branch…'), icon: '＋', value: { create: true } }];
+    for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? tr('current') : tr('Local'), value: { name: b } });
+    for (const b of remote) items.push({ label: b, icon: '☁', hint: tr('Remote'), value: { name: b, remote: true } });
+    const choice = await ide.ui.pick({ placeholder: tr('Git Branches — {branch}', { branch: repo.branch || repo.detached }), items });
     if (!choice) return;
     if (choice.create) {
-      const name = await ide.ui.prompt('New branch name', '');
+      const name = await ide.ui.prompt(tr('New branch name'), '');
       if (!name) return;
       await ide.saveAll(); // like PyCharm: unsaved edits reach disk before HEAD moves, so git sees (and carries) them
       const r = await invoke('newBranch', ide.root, name.replace(/\s+/g, '-'));
       logResult(r);
-      if (!r.ok) return notify('Branch creation failed', r.err, 'error');
+      if (!r.ok) return notify(tr('Branch creation failed'), errorText(r), 'error', true);
       return afterCheckout();
     }
     if (choice.name === repo.branch) return;
@@ -130,8 +146,8 @@
       r = local.includes(localName) ? await invoke('checkout', ide.root, localName) : await invoke('checkout', ide.root, choice.name, true);
     } else r = await invoke('checkout', ide.root, choice.name);
     logResult(r);
-    if (!r.ok) return notify('Checkout failed', r.err, 'error');
-    notify(`Checked out ${choice.remote ? choice.name.split('/').slice(1).join('/') : choice.name}`, '', 'ok');
+    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
+    notify(tr('Checked out {branch}', { branch: choice.remote ? choice.name.split('/').slice(1).join('/') : choice.name }), '', 'ok');
     afterCheckout();
   }
   branchBtn.onclick = showBranches;
@@ -143,11 +159,11 @@
   const fileIncluded = (f) => included.get(key(f.path)) ?? f.status !== 'unversioned';
 
   const commitTw = ide.registerToolWindow({
-    id: 'Commit', title: 'Commit', icon: '✓', side: 'left', keys: 'Alt+0', order: 10,
+    id: 'Commit', title: tr('Commit'), icon: '✓', side: 'left', keys: 'Alt+0', order: 10,
     mount(container, tw) {
       initBox = el('div', 'vcs-init');
-      initBox.appendChild(el('div', 'muted', 'Version control is not configured for this project.'));
-      const initBtn = el('button', 'primary vcs-init-btn', 'Create Git Repository…');
+      initBox.appendChild(el('div', 'muted', tr('Version control is not configured for this project.')));
+      const initBtn = el('button', 'primary vcs-init-btn', tr('Create Git Repository…'));
       initBtn.onclick = createRepository;
       initBox.appendChild(initBtn);
 
@@ -156,23 +172,23 @@
       listEl.tabIndex = 0;
       listEl.onkeydown = onListKey;
       msgEl = el('textarea', 'vcs-msg');
-      msgEl.placeholder = 'Commit Message';
+      msgEl.placeholder = tr('Commit Message');
       msgEl.onkeydown = (e) => {
         if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); doCommit(false); }
       };
       const btns = el('div', 'vcs-commit-btns');
-      const commitBtn = el('button', 'primary vcs-commit-btn', 'Commit');
-      commitBtn.title = 'Commit (Ctrl+Enter)';
+      const commitBtn = el('button', 'primary vcs-commit-btn', tr('Commit'));
+      commitBtn.title = tr('Commit (Ctrl+Enter)');
       commitBtn.onclick = () => doCommit(false);
-      const pushBtn = el('button', 'secondary vcs-commit-push-btn', 'Commit and Push…');
+      const pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
       pushBtn.onclick = () => doCommit(true);
       btns.append(commitBtn, pushBtn);
       commitBody.append(listEl, msgEl, btns);
       container.append(initBox, commitBody);
       tw.setActions([
-        { icon: '⟳', title: 'Refresh', run: refresh },
-        { icon: '↶', title: 'Rollback… (Ctrl+Alt+Z)', run: () => rollbackFiles(selectedFiles()) },
-        { icon: '⇆', title: 'Show Diff', run: () => selectedFiles()[0] && openWorkingDiff(selectedFiles()[0].path) },
+        { icon: '⟳', title: tr('Refresh'), run: refresh },
+        { icon: '↶', title: tr('Rollback… (Ctrl+Alt+Z)'), run: () => rollbackFiles(selectedFiles()) },
+        { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openWorkingDiff(selectedFiles()[0].path) },
       ]);
     },
   });
@@ -189,8 +205,8 @@
     listEl.replaceChildren();
     const changes = repo.files.filter((f) => f.status !== 'unversioned');
     const unversioned = repo.files.filter((f) => f.status === 'unversioned');
-    renderGroup('Changes', changes);
-    if (unversioned.length) renderGroup('Unversioned Files', unversioned);
+    renderGroup(tr('Changes'), changes);
+    if (unversioned.length) renderGroup(tr('Unversioned Files'), unversioned);
     listEl.scrollTop = scroll;
   }
 
@@ -203,7 +219,7 @@
     cb.indeterminate = on > 0 && on < files.length;
     cb.disabled = !files.length;
     cb.onchange = () => { for (const f of files) included.set(key(f.path), cb.checked); renderChanges(); };
-    head.append(el('span', 'arrow', '▾'), cb, el('span', 'vcs-group-title', title), el('span', 'muted', plural(files.length, 'file')));
+    head.append(el('span', 'arrow', '▾'), cb, el('span', 'vcs-group-title', title), el('span', 'muted', nFiles(files.length)));
     listEl.appendChild(head);
     for (const f of files) {
       const row = el('div', 'vcs-file' + (selection.has(key(f.path)) ? ' selected' : ''));
@@ -214,11 +230,11 @@
       fcb.checked = fileIncluded(f);
       fcb.onclick = (e) => e.stopPropagation();
       fcb.onchange = () => { included.set(key(f.path), fcb.checked); renderChanges(); };
-      const name = el('span', 'vcs-name', basename(f.path));
+      const name = userText('span', 'vcs-name', basename(f.path));
       name.style.color = COLORS[f.status];
       const dir = ide.util.rel(dirname(f.path));
-      row.append(fcb, el('span', 'icon', f.path.endsWith('.py') ? '🐍' : '📄'), name, el('span', 'muted vcs-dir', samePath(dirname(f.path), ide.root) ? '' : dir));
-      row.title = `${ide.util.rel(f.path)} — ${f.status}`;
+      row.append(fcb, el('span', 'icon', f.path.endsWith('.py') ? '🐍' : '📄'), name, userText('span', 'muted vcs-dir', samePath(dirname(f.path), ide.root) ? '' : dir));
+      row.title = `${ide.util.rel(f.path)} — ${STATUS_LABEL[f.status] || f.status}`;
       row.onclick = (e) => {
         if (!e.ctrlKey) selection.clear();
         const k = key(f.path);
@@ -256,8 +272,8 @@
     if (!ide.root) return;
     const r = await invoke('init', ide.root);
     logResult(r);
-    if (!r.ok) return notify('Git init failed', r.err, 'error');
-    notify('Created Git repository', ide.root, 'ok');
+    if (!r.ok) return notify(tr('Git init failed'), errorText(r), 'error', true);
+    notify(tr('Created Git repository'), ide.root, 'ok', true);
     await refresh();
   }
 
@@ -274,25 +290,25 @@
     await refresh();
     const files = repo.files.filter(fileIncluded);
     const message = msgEl.value.trim();
-    if (!files.length) return notify('No changes selected for commit', 'Select files with the checkboxes in the Commit tool window.', 'warn');
-    if (!message) { msgEl.focus(); return notify('Commit message is empty', 'Enter a commit message.', 'warn'); }
+    if (!files.length) return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
+    if (!message) { msgEl.focus(); return notify(tr('Commit message is empty'), tr('Enter a commit message.'), 'warn'); }
     const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })));
     logResult(r);
-    if (!r.ok) return notify('Commit failed', r.err || r.out, 'error');
+    if (!r.ok) return notify(tr('Commit failed'), errorText(r), 'error', true);
     msgEl.value = '';
     included.clear();
     selection.clear();
-    notify(`${plural(files.length, 'file')} committed: ${message.split('\n')[0]}`, '', 'ok');
+    notify(trn(files.length, '{n} file committed: {message}', '{n} files committed: {message}', { message: message.split('\n')[0] }), '', 'ok');
     await refresh();
     if (andPush) openPushDialog();
   }
 
   function rollbackFiles(files) {
     files = files.filter((f) => f.status !== 'unversioned');
-    if (!repo || !files.length) return notify('Nothing to roll back', 'Select changed files in the Commit tool window.', 'warn');
+    if (!repo || !files.length) return notify(tr('Nothing to roll back'), tr('Select changed files in the Commit tool window.'), 'warn');
     const body = el('div', 'vcs-rollback');
-    body.appendChild(el('div', null, `Rollback changes in ${plural(files.length, 'file')}? Local changes will be lost.`));
-    const list = el('div', 'vcs-dialog-list');
+    body.appendChild(el('div', null, trn(files.length, 'Rollback changes in {n} file? Local changes will be lost.', 'Rollback changes in {n} files? Local changes will be lost.')));
+    const list = userText('div', 'vcs-dialog-list');
     for (const f of files) {
       const n = el('div', null, ide.util.rel(f.path));
       n.style.color = COLORS[f.status];
@@ -300,18 +316,18 @@
     }
     body.appendChild(list);
     ide.ui.dialog({
-      title: 'Rollback Changes', body, width: 480,
+      title: tr('Rollback Changes'), body, width: 480,
       buttons: [
-        { label: 'Rollback', primary: true, run: async () => {
+        { label: tr('Rollback'), primary: true, run: async () => {
           const r = await invoke('rollback', ide.root, files.map((f) => ({ path: f.path, status: f.status, orig: f.orig })));
           logResult(r);
-          if (!r.ok) notify('Rollback failed', r.log.map((l) => l.err).join('\n'), 'error');
+          if (!r.ok) notify(tr('Rollback failed'), r.log.map((l) => l.err).join('\n'), 'error', true);
           for (const f of files) selection.delete(key(f.path));
           await reloadTabs(files.flatMap((f) => (f.orig ? [f.path, f.orig] : [f.path])), true);
           ide.refreshTree();
           await refresh();
         } },
-        { label: 'Cancel' },
+        { label: tr('Cancel') },
       ],
     });
   }
@@ -320,9 +336,33 @@
   let diffSeq = 0;
   const diffUri = (name) => ide.monaco.Uri.from({ scheme: 'vcs-diff', path: `/${++diffSeq}/${name}` });
 
+  // PyCharm colors a changed block blue on both sides (Monaco only knows inserted/removed): whole-line and
+  // per-character decorations over Monaco's own, styled per theme in style.css.
+  function markModifiedBlocks(diff) {
+    const M = ide.monaco;
+    const orig = [];
+    const mod = [];
+    for (const c of diff.getLineChanges() || []) {
+      if (!c.originalEndLineNumber || !c.modifiedEndLineNumber) continue;
+      orig.push({ range: new M.Range(c.originalStartLineNumber, 1, c.originalEndLineNumber, 1), options: { isWholeLine: true, className: 'vcs-diff-mod', marginClassName: 'vcs-diff-mod' } });
+      mod.push({ range: new M.Range(c.modifiedStartLineNumber, 1, c.modifiedEndLineNumber, 1), options: { isWholeLine: true, className: 'vcs-diff-mod', marginClassName: 'vcs-diff-mod' } });
+      for (const ch of c.charChanges || []) {
+        if (ch.originalEndLineNumber) orig.push({ range: new M.Range(ch.originalStartLineNumber, ch.originalStartColumn, ch.originalEndLineNumber, ch.originalEndColumn), options: { className: 'vcs-diff-mod-char' } });
+        if (ch.modifiedEndLineNumber) mod.push({ range: new M.Range(ch.modifiedStartLineNumber, ch.modifiedStartColumn, ch.modifiedEndLineNumber, ch.modifiedEndColumn), options: { className: 'vcs-diff-mod-char' } });
+      }
+    }
+    diff._vcsMod = {
+      orig: diff.getOriginalEditor().deltaDecorations(diff._vcsMod?.orig || [], orig),
+      mod: diff.getModifiedEditor().deltaDecorations(diff._vcsMod?.mod || [], mod),
+    };
+  }
+
+  // A header title is UI text, or {user} for text that is user data (hashes, commit messages).
+  const diffSide = (t) => (typeof t === 'string' ? el('span', 'vcs-diff-side', t) : userText('span', 'vcs-diff-side', t.user));
+
   function mountDiff(host, { leftTitle, rightTitle, left, right, rightModel, name }) {
     const head = el('div', 'vcs-diff-head');
-    head.append(el('span', 'vcs-diff-side', leftTitle), el('span', 'vcs-diff-side', rightTitle));
+    head.append(diffSide(leftTitle), diffSide(rightTitle));
     const box = el('div', 'vcs-diff-body');
     host.append(head, box);
     const monaco = ide.monaco;
@@ -334,8 +374,11 @@
       scrollBeyondLastLine: false, ignoreTrimWhitespace: false, renderMarginRevertIcon: false,
     });
     diff.setModel({ original, modified });
+    diff.onDidUpdateDiff(() => markModifiedBlocks(diff));
     host._vcsDiff = diff;
     return () => {
+      // the modified side may be an open editor's model, which outlives this view
+      if (diff._vcsMod) diff.getModifiedEditor().deltaDecorations(diff._vcsMod.mod, []);
       diff.dispose();
       // Monaco keeps a global hover-delegate factory bound to the last editor's (scoped) services; after the
       // diff editor's scope is disposed every context menu throws. A throwaway editor rebinds it to the root.
@@ -346,7 +389,7 @@
   }
 
   async function openWorkingDiff(path) {
-    const id = `${path} [diff with HEAD]`; // tab ids double as the status-bar path
+    const id = `${path} [${tr('diff with HEAD')}]`; // tab ids double as the status-bar path
     if (ide.findTab(id)) return ide.openCustomTab({ id });
     const f = byPath.get(key(path));
     const left = f?.status === 'unversioned' || f?.status === 'added' ? '' : await invoke('show', ide.root, f?.orig || path, 'HEAD');
@@ -356,11 +399,12 @@
     let dispose;
     let unsub;
     ide.openCustomTab({
-      id, title: `Diff: ${basename(path)}`, icon: '⇆',
+      id, title: tr('Diff: {name}', { name: basename(path) }), icon: '⇆',
       mount(host) {
         dispose = mountDiff(host, {
           name: basename(path), left, right, rightModel: tab?.model,
-          leftTitle: lastHead ? `HEAD (${lastHead.slice(0, 8)}) — read-only` : 'HEAD', rightTitle: tab ? 'Your version' : 'Your version — read-only',
+          leftTitle: lastHead ? tr('HEAD ({hash}) — read-only', { hash: lastHead.slice(0, 8) }) : 'HEAD',
+          rightTitle: tab ? tr('Your version') : tr('Your version — read-only'),
         });
         // the right side shares the open editor's model, so the diff cannot outlive that tab
         if (tab) unsub = ide.on('fileClosed', (p) => samePath(p, path) && setTimeout(() => ide.closeTab(id)));
@@ -380,7 +424,11 @@
     ide.openCustomTab({
       id, title: `${basename(file.rel)} (${commit.hash.slice(0, 7)})`, icon: '⇆',
       mount(host) {
-        dispose = mountDiff(host, { name: basename(file.rel), left, right, leftTitle: `${commit.hash.slice(0, 7)}^ (parent)`, rightTitle: `${commit.hash.slice(0, 7)} — ${commit.message?.split('\n')[0] || ''}` });
+        dispose = mountDiff(host, {
+          name: basename(file.rel), left, right,
+          leftTitle: tr('{hash}^ (parent)', { hash: commit.hash.slice(0, 7) }),
+          rightTitle: { user: `${commit.hash.slice(0, 7)} — ${commit.message?.split('\n')[0] || ''}` },
+        });
       },
       onClose() { dispose?.(); },
     });
@@ -466,7 +514,7 @@
       options: {
         isWholeLine: true,
         linesDecorationsClassName: `vcs-gutter vcs-${type}${atEnd ? ' vcs-deleted-end' : ''}`,
-        overviewRuler: { color: GUTTER[type], position: M.editor.OverviewRulerLane.Left },
+        overviewRuler: { color: gutterColor(type), position: M.editor.OverviewRulerLane.Left },
       },
     };
   }
@@ -556,14 +604,14 @@
   const repoKey = ide.editor.createContextKey('vcsRepo', false);
   const annotatedKey = ide.editor.createContextKey('vcsAnnotated', false);
   let blameSeq = 0;
-  const fmtShort = (t) => new Date(t * 1000).toLocaleDateString('en-US', { year: '2-digit', month: 'numeric', day: 'numeric' });
+  const fmtShort = (t) => new Date(t * 1000).toLocaleDateString(dateLocale, { year: '2-digit', month: 'numeric', day: 'numeric' });
 
   function fmtDate(t) {
     const d = new Date(t * 1000);
-    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const time = d.toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit' });
     const days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 86400000);
-    if (days === 0) return `Today ${time}`;
-    if (days === 1) return `Yesterday ${time}`;
+    if (days === 0) return tr('Today {time}', { time });
+    if (days === 1) return tr('Yesterday {time}', { time });
     return `${fmtShort(t)}, ${time}`;
   }
 
@@ -581,7 +629,7 @@
   async function annotate(tab) {
     if (!repo || tab?.kind !== 'file') return;
     const r = await invoke('blame', ide.root, tab.path, tab.model.getValue());
-    if (!r) return notify('Cannot annotate', `${basename(tab.path)} is not tracked by Git.`, 'warn');
+    if (!r) return notify(tr('Cannot annotate'), tr('{name} is not tracked by Git.', { name: basename(tab.path) }), 'warn');
     const old = blames.get(key(tab.path));
     const classToHash = {};
     const classOf = {};
@@ -622,8 +670,8 @@
     blames.has(key(tab.path)) ? closeAnnotations(tab) : annotate(tab);
   };
 
-  ide.editor.addAction({ id: 'vcs.annotate', label: 'Annotate with Git Blame', contextMenuGroupId: '9_vcs', precondition: 'vcsRepo && !vcsAnnotated', run: toggleAnnotate });
-  ide.editor.addAction({ id: 'vcs.closeAnnotations', label: 'Close Annotations', contextMenuGroupId: '9_vcs', precondition: 'vcsAnnotated', run: toggleAnnotate });
+  ide.editor.addAction({ id: 'vcs.annotate', label: tr('Annotate with Git Blame'), contextMenuGroupId: '9_vcs', precondition: 'vcsRepo && !vcsAnnotated', run: toggleAnnotate });
+  ide.editor.addAction({ id: 'vcs.closeAnnotations', label: tr('Close Annotations'), contextMenuGroupId: '9_vcs', precondition: 'vcsAnnotated', run: toggleAnnotate });
 
   ide.editor.onMouseDown((e) => {
     const M = ide.monaco;
@@ -643,11 +691,11 @@
     const h = hunkAt(tab, line);
     if (!h || !e.event.leftButton) return;
     ide.ui.contextMenu(e.event.posx, e.event.posy, [
-      { label: 'Rollback Lines', hint: 'Ctrl+Alt+Z', run: () => rollbackHunk(tab, h) },
-      { label: 'Show Diff', run: () => openWorkingDiff(tab.path) },
+      { label: tr('Rollback Lines'), hint: 'Ctrl+Alt+Z', run: () => rollbackHunk(tab, h) },
+      { label: tr('Show Diff'), run: () => openWorkingDiff(tab.path) },
       { separator: true },
-      { label: 'Next Change', hint: 'Ctrl+Alt+Shift+Down', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(1); } },
-      { label: 'Previous Change', hint: 'Ctrl+Alt+Shift+Up', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1); } },
+      { label: tr('Next Change'), hint: 'Ctrl+Alt+Shift+Down', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(1); } },
+      { label: tr('Previous Change'), hint: 'Ctrl+Alt+Shift+Up', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1); } },
     ]);
   });
 
@@ -661,14 +709,14 @@
     id: 'Git', title: 'Git', icon: '⑂', side: 'bottom', keys: 'Alt+9', order: 45,
     mount(container, tw) {
       subTabs = el('div', 'vcs-subtabs');
-      const logTab = el('button', 'vcs-subtab active', 'Log');
-      const conTab = el('button', 'vcs-subtab', 'Console');
+      const logTab = el('button', 'vcs-subtab active', tr('Log'));
+      const conTab = el('button', 'vcs-subtab', tr('Console'));
       subTabs.append(logTab, conTab);
       logPane = el('div', 'vcs-log');
       consolePane = el('div', 'vcs-console hidden');
       const table = el('div', 'vcs-log-table');
       const header = el('div', 'vcs-log-row vcs-log-header');
-      header.append(el('span', 'vcs-c-subject', 'Commit'), el('span', 'vcs-c-author', 'Author'), el('span', 'vcs-c-date', 'Date'));
+      header.append(el('span', 'vcs-c-subject', tr('Commit')), el('span', 'vcs-c-author', tr('Author')), el('span', 'vcs-c-date', tr('Date')));
       logRows = el('div', 'vcs-log-rows');
       logRows.tabIndex = 0;
       logRows.onkeydown = (e) => {
@@ -697,9 +745,9 @@
       subTabs.switchTo = switchTo;
       container.append(subTabs, logPane, consolePane);
       tw.setActions([
-        { icon: '⟳', title: 'Refresh', run: loadLog },
-        { icon: '↓', title: 'Update Project… (Ctrl+T)', run: updateProject },
-        { icon: '↑', title: 'Push… (Ctrl+Shift+K)', run: openPushDialog },
+        { icon: '⟳', title: tr('Refresh'), run: loadLog },
+        { icon: '↓', title: tr('Update Project… (Ctrl+T)'), run: updateProject },
+        { icon: '↑', title: tr('Push… (Ctrl+Shift+K)'), run: openPushDialog },
       ]);
     },
   });
@@ -715,7 +763,7 @@
     const my = ++logSeq;
     if (!repo) {
       commits = [];
-      logRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? 'No Git repository in this project' : 'No project'));
+      logRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? tr('No Git repository in this project') : tr('No project')));
       filesEl.replaceChildren();
       detailsEl.replaceChildren();
       return;
@@ -726,16 +774,17 @@
     if (!commits.some((c) => c.hash === selectedCommit)) selectedCommit = commits[0]?.hash || null;
     renderLog();
     if (selectedCommit) selectCommit(selectedCommit);
-    else { filesEl.replaceChildren(); detailsEl.replaceChildren(el('div', 'muted', 'No commits yet')); }
+    else { filesEl.replaceChildren(); detailsEl.replaceChildren(el('div', 'muted', tr('No commits yet'))); }
   }
 
   function renderLog() {
     logRows.replaceChildren();
-    if (!commits.length) logRows.appendChild(el('div', 'vcs-empty muted', 'No commits yet'));
+    if (!commits.length) logRows.appendChild(el('div', 'vcs-empty muted', tr('No commits yet')));
     for (const c of commits) {
       const row = el('div', 'vcs-log-row' + (c.hash === selectedCommit ? ' selected' : ''));
       row.dataset.hash = c.hash;
-      const subj = el('span', 'vcs-c-subject');
+      // subject, refs and author are user data
+      const subj = userText('span', 'vcs-c-subject');
       subj.appendChild(el('span', 'vcs-dot', '●'));
       for (const ref of c.refs) {
         const name = ref.replace(/^HEAD -> /, '').replace(/^tag: /, '');
@@ -743,8 +792,8 @@
         subj.appendChild(el('span', 'vcs-ref' + (ref.startsWith('HEAD -> ') ? ' head' : ref.startsWith('tag: ') ? ' tag' : ref.includes('/') ? ' remote' : ''), name));
       }
       subj.appendChild(el('span', 'vcs-subject-text', c.subject));
-      row.append(subj, el('span', 'vcs-c-author', c.author), el('span', 'vcs-c-date', fmtDate(c.time)));
-      row.title = `${c.short} ${c.subject}`;
+      row.append(subj, userText('span', 'vcs-c-author', c.author), el('span', 'vcs-c-date', fmtDate(c.time)));
+      subj.title = `${c.short} ${c.subject}`;
       row.onclick = () => { selectCommit(c.hash); logRows.focus(); };
       logRows.appendChild(row);
     }
@@ -757,21 +806,22 @@
     const d = await invoke('commitDetails', ide.root, hash);
     if (selectedCommit !== hash) return;
     details = d;
-    filesEl.replaceChildren(el('div', 'vcs-side-title', plural(d.files.length, 'file') + ' changed'));
+    filesEl.replaceChildren(el('div', 'vcs-side-title', trn(d.files.length, '{n} file changed', '{n} files changed')));
     for (const f of d.files) {
       const row = el('div', 'vcs-file vcs-log-file');
       row.dataset.rel = f.rel;
-      const name = el('span', 'vcs-name', basename(f.rel));
+      row.title = `${f.rel} — ${STATUS_LABEL[f.status] || f.status}`;
+      const name = userText('span', 'vcs-name', basename(f.rel));
       name.style.color = COLORS[f.status];
-      row.append(el('span', 'icon', f.rel.endsWith('.py') ? '🐍' : '📄'), name, el('span', 'muted vcs-dir', f.rel.includes('/') ? dirname(f.rel) : ''));
+      row.append(el('span', 'icon', f.rel.endsWith('.py') ? '🐍' : '📄'), name, userText('span', 'muted vcs-dir', f.rel.includes('/') ? dirname(f.rel) : ''));
       row.onclick = () => { filesEl.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected')); row.classList.add('selected'); };
       row.ondblclick = () => openCommitDiff(d, f);
       filesEl.appendChild(row);
     }
-    detailsEl.replaceChildren(
-      el('div', 'vcs-detail-msg', d.message),
-      el('div', 'muted', `${d.hash.slice(0, 8)} ${d.author} <${d.email}> on ${new Date(d.time * 1000).toLocaleString()}`),
-    );
+    const who = userText('span', null, `${d.hash.slice(0, 8)} ${d.author} <${d.email}>`);
+    const when = el('div', 'muted vcs-detail-meta');
+    when.append(who, ' ', tr('on {date}', { date: new Date(d.time * 1000).toLocaleString(dateLocale) }));
+    detailsEl.replaceChildren(userText('div', 'vcs-detail-msg', d.message), when);
   }
 
   async function showCommit(hash) {
@@ -785,14 +835,14 @@
 
   // ---------- update project / push ----------
   async function updateProject() {
-    if (!repo) return notify('Update Project', 'This project is not under Git version control.', 'warn');
+    if (!repo) return notify(tr('Update Project'), tr('This project is not under Git version control.'), 'warn');
     await ide.saveAll();
     const r = await invoke('pull', ide.root);
     logResult(r);
-    if (r.noRemote) return notify("Can't update", 'No remotes are defined for this repository. Define a remote in the Push dialog (Ctrl+Shift+K).', 'warn');
-    if (!r.ok) return notify('Update failed', r.err || r.out, 'error');
-    if (r.upToDate) notify('All files are up-to-date', '', 'ok');
-    else notify(`${plural(r.updated.length, 'file')} updated`, r.updated.map((p) => ide.util.rel(p)).join('\n'), 'ok');
+    if (r.noRemote) return notify(tr("Can't update"), tr('No remotes are defined for this repository. Define a remote in the Push dialog (Ctrl+Shift+K).'), 'warn');
+    if (!r.ok) return notify(tr('Update failed'), errorText(r), 'error', true);
+    if (r.upToDate) notify(tr('All files are up-to-date'), '', 'ok');
+    else notify(trn(r.updated.length, '{n} file updated', '{n} files updated'), r.updated.map((p) => ide.util.rel(p)).join('\n'), 'ok', true);
     headCache.clear();
     await reloadTabs(r.updated, false);
     ide.refreshTree();
@@ -803,56 +853,59 @@
   async function doPush() {
     const r = await invoke('push', ide.root);
     logResult(r);
-    if (r.noRemote) return notify('Push failed', 'No remotes are defined for this repository.', 'warn');
-    if (!r.ok) return notify('Push failed', r.err || r.out, 'error');
-    notify(r.pushed ? `Pushed ${plural(r.pushed, 'commit')} to ${r.target}` : 'Everything is up to date', '', 'ok');
+    if (r.noRemote) return notify(tr('Push failed'), tr('No remotes are defined for this repository.'), 'warn');
+    if (!r.ok) return notify(tr('Push failed'), errorText(r), 'error', !r.reason);
+    notify(r.pushed ? trn(r.pushed, 'Pushed {n} commit to {target}', 'Pushed {n} commits to {target}', { target: r.target }) : tr('Everything is up to date'), '', 'ok');
     await refresh();
     if (gitTw.isVisible()) loadLog();
   }
 
   async function openPushDialog() {
-    if (!repo) return notify('Push', 'This project is not under Git version control.', 'warn');
+    if (!repo) return notify(tr('Push'), tr('This project is not under Git version control.'), 'warn');
     const o = await invoke('outgoing', ide.root);
     const body = el('div', 'vcs-push');
     let urlIn;
     let nameIn;
     if (!o.remotes.length) {
-      body.appendChild(el('div', 'vcs-push-warn', 'No remotes are defined. Define a remote to push to:'));
+      body.appendChild(el('div', 'vcs-push-warn', tr('No remotes are defined. Define a remote to push to:')));
       const f1 = el('label', 'field');
       nameIn = el('input');
       nameIn.value = 'origin';
-      f1.append(el('span', null, 'Name'), nameIn);
+      f1.append(el('span', null, tr('Name')), nameIn);
       const f2 = el('label', 'field');
       urlIn = el('input', 'vcs-remote-url');
-      urlIn.placeholder = 'https://github.com/user/repo.git or a local path';
-      f2.append(el('span', null, 'URL'), urlIn);
+      urlIn.placeholder = tr('https://github.com/user/repo.git or a local path');
+      f2.append(el('span', null, tr('URL')), urlIn);
       body.append(f1, f2);
     } else {
       const dest = o.upstream ? o.upstream.split('/').slice(1).join('/') : o.branch;
-      body.appendChild(el('div', 'vcs-push-target', `${o.branch || 'HEAD'} → ${o.remote} : ${dest}${o.upstream ? '' : ' (new)'}`));
+      const target = el('div', 'vcs-push-target');
+      target.append(userText('span', null, `${o.branch || 'HEAD'} → ${o.remote} : ${dest}`));
+      if (!o.upstream) target.append(' ', el('span', 'muted', tr('(new)')));
+      body.appendChild(target);
     }
-    const list = el('div', 'vcs-dialog-list vcs-push-commits');
+    const list = userText('div', 'vcs-dialog-list vcs-push-commits');
     for (const c of o.commits || []) {
       const row = el('div', 'vcs-push-commit');
       row.append(el('span', 'muted', c.short), el('span', null, ` ${c.subject}`), el('span', 'muted', `  ${c.author}`));
       list.appendChild(row);
     }
-    if (!o.commits?.length) list.appendChild(el('div', 'muted', 'No commits to push'));
+    if (!o.commits?.length) { delete list.dataset.userText; list.appendChild(el('div', 'muted', tr('No commits to push'))); }
     body.appendChild(list);
     ide.ui.dialog({
-      title: `Push Commits to ${basename(ide.root)}`, body, width: 560,
+      title: tr('Push Commits to {project}', { project: basename(ide.root) }), body, width: 560,
       buttons: [
-        { label: 'Push', primary: true, run: async () => {
+        { label: tr('Push'), primary: true, run: async () => {
           if (urlIn) {
             const url = urlIn.value.trim();
             if (!url) { urlIn.focus(); return false; }
             const r = await invoke('addRemote', ide.root, nameIn.value.trim() || 'origin', url);
             logResult(r);
-            if (!r.ok) { notify('Cannot define remote', r.err, 'error'); return false; }
+            if (!r.ok) { notify(tr('Cannot define remote'), errorText(r), 'error', true); return false; }
           }
           doPush();
         } },
-        { label: 'Cancel' },
+        { label: tr('Cancel') },
       ],
     });
   }
@@ -860,26 +913,26 @@
   // ---------- actions ----------
   const commitFocused = () => !!listEl && listEl.closest('.tool').contains(document.activeElement) && document.activeElement !== msgEl;
   [
-    { id: 'CheckinProject', title: 'Commit…', keys: 'Ctrl+K', run: focusCommitMessage },
-    { id: 'Vcs.Push', title: 'Push…', keys: 'Ctrl+Shift+K', run: openPushDialog },
-    { id: 'Vcs.UpdateProject', title: 'Update Project…', keys: 'Ctrl+T', run: updateProject },
-    { id: 'ChangesView.Revert', title: 'Rollback…', keys: 'Ctrl+Alt+Z', run: () => {
+    { id: 'CheckinProject', title: tr('Commit…'), keys: 'Ctrl+K', run: focusCommitMessage },
+    { id: 'Vcs.Push', title: tr('Push…'), keys: 'Ctrl+Shift+K', run: openPushDialog },
+    { id: 'Vcs.UpdateProject', title: tr('Update Project…'), keys: 'Ctrl+T', run: updateProject },
+    { id: 'ChangesView.Revert', title: tr('Rollback…'), keys: 'Ctrl+Alt+Z', run: () => {
       if (commitFocused()) return rollbackFiles(selectedFiles());
       if (ide.editor.hasTextFocus()) return rollbackLinesAtCaret();
       const tab = ide.activeTab();
       const f = tab && byPath.get(key(tab.path));
       if (f) rollbackFiles([f]);
     } },
-    { id: 'VcsShowNextChangeMarker', title: 'Next Change', keys: 'Ctrl+Alt+Shift+ArrowDown', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(1) },
-    { id: 'VcsShowPrevChangeMarker', title: 'Previous Change', keys: 'Ctrl+Alt+Shift+ArrowUp', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(-1) },
-    { id: 'Annotate', title: 'Annotate with Git Blame', run: toggleAnnotate },
-    { id: 'Git.Branches', title: 'Branches…', run: showBranches },
-    { id: 'Git.Init', title: 'Create Git Repository…', run: createRepository },
-    { id: 'Git.Log', title: 'Show Git Log', run: () => { gitTw.show(); subTabs.switchTo(true); } },
-    { id: 'Compare.SameVersion', title: 'Show Diff with HEAD', run: () => ide.activeTab()?.kind === 'file' && openWorkingDiff(ide.activeTab().path) },
+    { id: 'VcsShowNextChangeMarker', title: tr('Next Change'), keys: 'Ctrl+Alt+Shift+ArrowDown', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(1) },
+    { id: 'VcsShowPrevChangeMarker', title: tr('Previous Change'), keys: 'Ctrl+Alt+Shift+ArrowUp', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(-1) },
+    { id: 'Annotate', title: tr('Annotate with Git Blame'), run: toggleAnnotate },
+    { id: 'Git.Branches', title: tr('Branches…'), run: showBranches },
+    { id: 'Git.Init', title: tr('Create Git Repository…'), run: createRepository },
+    { id: 'Git.Log', title: tr('Show Git Log'), run: () => { gitTw.show(); subTabs.switchTo(true); } },
+    { id: 'Compare.SameVersion', title: tr('Show Diff with HEAD'), run: () => ide.activeTab()?.kind === 'file' && openWorkingDiff(ide.activeTab().path) },
   ].forEach(ide.registerAction);
-  ide.registerTreeAction({ title: 'Git: Show Diff', when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
-  ide.registerTreeAction({ title: 'Git: Rollback…', when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
+  ide.registerTreeAction({ title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
+  ide.registerTreeAction({ title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
 
   // ---------- events ----------
   ide.on('projectOpened', () => {
@@ -901,6 +954,8 @@
     if (blames.has(key(tab.path))) annotate(tab);
   });
   ide.on('filesChanged', () => scheduleRefresh());
+  // overview-ruler marks carry concrete colors; recolor them for the new theme
+  ide.on('settingsChanged', (k) => k === 'appearance.theme' && setTimeout(() => updateGutter(ide.activeTab())));
   ide.on('activeTabChanged', (tab) => { updateGutter(tab); applyAnnotationLayout(tab); });
   ide.on('fileClosed', (path) => { gutters.delete(key(path)); if (blames.delete(key(path))) rebuildBlameCss(); });
   window.addEventListener('focus', () => scheduleRefresh(50));

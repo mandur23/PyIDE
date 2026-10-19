@@ -26,7 +26,7 @@
       const target = cd[2].replace(/^["']|["']$/g, '');
       const next = normalize(/^[a-zA-Z]:|^\\/.test(target) ? target : joinPath(cwd, target));
       if (await ide.api.exists(next)) { cwd = next; updatePrompt(); }
-      else con.append(`cd: cannot find path '${target}'\n`, 'err');
+      else con.append(`${tr("cd: cannot find path '{path}'", { path: target })}\n`, 'err');
       return;
     }
     if (termId) return ide.proc.input(termId, `${cmd}\n`);
@@ -43,13 +43,14 @@
   }
 
   ide.registerToolWindow({
-    id: 'Terminal', title: 'Terminal', icon: '❯', side: 'bottom', keys: 'Alt+F12', order: 30,
+    id: 'Terminal', title: tr('Terminal'), icon: '❯', side: 'bottom', keys: 'Alt+F12', order: 30,
     mount(container, tw) {
       con = ide.ui.console(container);
       con.out.id = 'termOut';
       const line = el('div', 'term-line');
       prompt = el('span', 'term-prompt');
       prompt.id = 'termPrompt';
+      prompt.dataset.userText = ''; // the shell's own prompt and working directory
       input = el('input', 'console-in');
       input.id = 'termIn';
       line.append(prompt, input);
@@ -66,7 +67,7 @@
         input.value = '';
         exec(cmd);
       };
-      tw.setActions([{ icon: '⌫', title: 'Clear', run: () => con.clear() }]);
+      tw.setActions([{ icon: '⌫', title: tr('Clear'), run: () => con.clear() }]);
       updatePrompt();
     },
   });

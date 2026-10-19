@@ -41,7 +41,7 @@
         isWholeLine: true,
         className: bp.enabled ? 'dbg-bp-line' : null,
         glyphMarginClassName: `dbg-bp${bp.condition ? ' cond' : ''}${bp.enabled ? '' : ' disabled'}`,
-        glyphMarginHoverMessage: { value: `Line ${bp.line} in ${basename(path)}${bp.condition ? `\n\nCondition: \`${bp.condition}\`` : ''}${bp.enabled ? '' : ' (disabled)'}` },
+        glyphMarginHoverMessage: { value: `${tr('Line {line} in {file}', { line: bp.line, file: basename(path) })}${bp.condition ? `\n\n${tr('Condition:')} \`${bp.condition}\`` : ''}${bp.enabled ? '' : ` ${tr('(disabled)')}`}` },
         stickiness: TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
       },
     })));
@@ -141,24 +141,25 @@
     const enabled = el('input');
     enabled.type = 'checkbox';
     enabled.checked = bp.enabled;
-    enabledRow.append(enabled, el('span', null, 'Enabled'));
+    enabledRow.append(enabled, el('span', null, tr('Enabled')));
     const condRow = el('div', 'field');
     const cond = el('input');
     cond.id = 'dbgBpCondition';
-    cond.placeholder = 'Python expression, e.g. i == 3';
+    cond.placeholder = tr('Python expression, e.g. i == 3');
     cond.value = bp.condition;
-    condRow.append(el('label', null, 'Condition:'), cond);
+    condRow.append(el('label', null, tr('Condition:')), cond);
     body.append(enabledRow, condRow);
     const line = bp.line;
-    ide.ui.dialog({
+    const dlg = ide.ui.dialog({
       title: `${basename(path)}:${line}`,
       body,
       width: 460,
       buttons: [
-        { label: 'Remove', run: () => removeBp(path, line) },
-        { label: 'Done', primary: true, run: () => setBp(path, line, { enabled: enabled.checked, condition: cond.value.trim() }) },
+        { label: tr('Remove'), run: () => removeBp(path, line) },
+        { label: tr('Done'), primary: true, run: () => setBp(path, line, { enabled: enabled.checked, condition: cond.value.trim() }) },
       ],
     });
+    dlg.el.classList.add('dbg-dialog');
     setTimeout(() => cond.focus());
   }
 
@@ -168,6 +169,20 @@
   let earlyEvents = [];
   const req = (command, args) => ide.api.invoke('debug:request', sess.id, command, args);
   const suspended = () => sess?.state === 'suspended';
+
+  // Errors from main/features/debug.js arrive as English text; its own messages are translated here, while
+  // debugpy's (exception text, OS errors) pass through unchanged.
+  const MAIN_ERRORS = [
+    [/^Could not connect to debugpy on port (\d+): ([\s\S]*)$/, (m) => tr('Could not connect to debugpy on port {port}: {error}', { port: m[1], error: m[2] })],
+    [/^Debug session closed$/, () => tr('Debug session closed')],
+    [/^No debug session$/, () => tr('No debug session')],
+    [/^(\w+) failed$/, (m) => tr('{command} failed', { command: m[1] })],
+  ];
+  function remoteError(err) {
+    const msg = String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    for (const [re, fn] of MAIN_ERRORS) { const m = re.exec(msg); if (m) return fn(m); }
+    return msg;
+  }
 
   ide.api.on('debug:event', (m) => {
     if (sess && !sess.id) { earlyEvents.push(m); return; }
@@ -191,7 +206,7 @@
     const interp = cfg.interp || ide.currentInterp();
     tw.show();
     showSub('console');
-    if (!interp) return con.append('No Python interpreter found.\n', 'err');
+    if (!interp) return con.append(`${tr('No Python interpreter found.')}\n`, 'err');
     if (sess) await stopDebug();
     await ide.saveAll();
     lastFile = file;
@@ -208,7 +223,7 @@
       const opts = { params: cfg.params || [], env: cfg.env || {}, roots: ide.root ? [ide.root] : [] };
       ({ id } = await ide.api.invoke('debug:start', interp, file, cfg.cwd || dirname(file), files, opts));
     } catch (err) {
-      con.append(`${String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}\n`, 'err');
+      con.append(`${remoteError(err)}\n`, 'err');
       if (sess === mine) { sess = null; updateControls(); }
       return;
     }
@@ -220,7 +235,7 @@
     }
     sess.id = id;
     if (sess.state === 'starting') sess.state = 'running';
-    con.append('Connected to pydev debugger (build debugpy)\n', 'sys');
+    con.append(`${tr('Connected to pydev debugger (build debugpy)')}\n`, 'sys');
     con.input.disabled = false;
     updateControls();
     ide.proc.attach(id, {
@@ -234,7 +249,7 @@
 
   function endSession(s, code) {
     if (sess !== s) return;
-    con.append(`\nProcess finished with exit code ${code ?? 1}\n`, 'sys');
+    con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
     sess = null;
     con.input.disabled = true;
     clearFrameDecorations();
@@ -312,7 +327,7 @@
     if (!suspended()) return;
     const threadId = sess.threadId;
     setRunning();
-    req(command, { threadId }).catch((err) => con.append(`${command} failed: ${err.message}\n`, 'err'));
+    req(command, { threadId }).catch((err) => con.append(`${tr('{command} failed: {error}', { command, error: remoteError(err) })}\n`, 'err'));
   }
   const pause = () => sess?.state === 'running' && req('pause', { threadId: sess.threadId || 1 }).catch(() => {});
 
@@ -421,6 +436,17 @@
   // ---------- variables tree ----------
   const expandedVars = new Set(); // "parent/child" paths kept open across steps, like PyCharm
   const valueClass = (v) => (v.type === 'str' ? 'str' : ['int', 'float', 'complex', 'bool'].includes(v.type) ? 'num' : '');
+  // Names, types, values and debugpy's error text are program data: never translated (data-user-text).
+  const data = (cls, text, title) => {
+    const n = el('span', cls, text);
+    n.dataset.userText = '';
+    if (title) n.title = title;
+    return n;
+  };
+  // Labels debugpy gives scopes and variable buckets; anything else is shown as is.
+  const GROUP_LABELS = { Locals: tr('Locals'), Globals: tr('Globals'), 'special variables': tr('special variables'),
+    'function variables': tr('function variables'), 'class variables': tr('class variables'), 'protected variables': tr('protected variables') };
+  const groupLabel = (name) => (Object.hasOwn(GROUP_LABELS, name) ? GROUP_LABELS[name] : name);
 
   function varNode(v, parentPath, depth) {
     const nodePath = `${parentPath}/${v.name}`;
@@ -429,16 +455,21 @@
     row.style.paddingLeft = `${depth * 16 + 4}px`;
     const expandable = v.variablesReference > 0;
     const arrow = el('span', 'dbg-arrow', expandable ? '▸' : '');
-    row.append(arrow, el('span', 'dbg-name', v.name));
-    if (v.error) row.append(el('span', 'dbg-eq', ' = '), el('span', 'dbg-err', v.error));
     // Scopes and debugpy's "special variables"/"function variables" buckets have no value of their own.
-    else if (v.group || (expandable && !v.type && !v.value)) row.classList.add('dbg-group');
-    else {
-      row.append(el('span', 'dbg-eq', ' = '));
-      if (v.type) row.append(el('span', 'dbg-type', `{${v.type}} `));
-      row.append(el('span', `dbg-value ${valueClass(v)}`, v.value ?? ''));
+    const group = !v.error && (v.group || (expandable && !v.type && !v.value));
+    const tip = `${v.name} = ${v.value ?? v.error ?? ''}`;
+    if (group) {
+      row.classList.add('dbg-group');
+      row.append(arrow, el('span', 'dbg-name', groupLabel(v.name)));
+    } else {
+      row.append(arrow, v.label ? el('span', 'dbg-name', v.label) : data('dbg-name', v.name, tip));
     }
-    row.title = `${v.name} = ${v.value ?? v.error ?? ''}`;
+    if (v.error) row.append(el('span', 'dbg-eq', ' = '), data('dbg-err', v.error, tip));
+    else if (!group) {
+      row.append(el('span', 'dbg-eq', ' = '));
+      if (v.type) row.append(data('dbg-type', `{${v.type}} `));
+      row.append(data(`dbg-value ${valueClass(v)}`, v.value ?? '', tip));
+    }
     wrap.appendChild(row);
     if (!expandable) return wrap;
     const kids = el('div', 'dbg-kids hidden');
@@ -451,7 +482,7 @@
       if (open) expandedVars.add(nodePath); else expandedVars.delete(nodePath);
       if (!open || loaded || sess !== s || !suspended()) return;
       loaded = true;
-      kids.appendChild(el('div', 'dbg-var muted', 'Collecting data…')).style.paddingLeft = `${depth * 16 + 24}px`;
+      kids.appendChild(el('div', 'dbg-var muted', tr('Collecting data…'))).style.paddingLeft = `${depth * 16 + 24}px`;
       let children = [];
       try { ({ variables: children } = await req('variables', { variablesReference: v.variablesReference })); } catch {}
       kids.replaceChildren(...children.map((c) => varNode(c, nodePath, depth + 1)));
@@ -466,24 +497,29 @@
   // vars: null while running, [] when no session
   function renderVars(vars, extraScopes = []) {
     if (!varsList) return;
-    if (!vars) return varsList.replaceChildren(el('div', 'dbg-empty', sess ? 'Variables are not available while running' : 'Not suspended'));
-    if (!sess) return varsList.replaceChildren(el('div', 'dbg-empty', 'Not debugging. Start with Shift+F9'));
+    if (!vars) return varsList.replaceChildren(el('div', 'dbg-empty', sess ? tr('Variables are not available while running') : tr('Not suspended')));
+    if (!sess) return varsList.replaceChildren(el('div', 'dbg-empty', tr('Not debugging. Start with {keys}', { keys: 'Shift+F9' })));
     varsList.replaceChildren(
       ...vars.map((v) => varNode(v, 'L', 0)),
       ...extraScopes.map((sc) => varNode({ name: sc.name, group: true, variablesReference: sc.variablesReference }, 'S', 0)),
     );
-    if (!vars.length && !extraScopes.length) varsList.appendChild(el('div', 'dbg-empty', 'No variables'));
+    if (!vars.length && !extraScopes.length) varsList.appendChild(el('div', 'dbg-empty', tr('No variables')));
   }
+
+  // DAP 'stopped' reasons, shown next to the thread name.
+  const STOP_REASONS = { breakpoint: tr('breakpoint'), step: tr('step'), pause: tr('pause'), exception: tr('exception'), entry: tr('entry'),
+    goto: tr('goto'), 'function breakpoint': tr('function breakpoint'), 'data breakpoint': tr('data breakpoint') };
+  const stopReasonLabel = (reason) => (!reason ? tr('paused') : Object.hasOwn(STOP_REASONS, reason) ? STOP_REASONS[reason] : reason);
 
   function renderFrames() {
     if (!framesList) return;
-    threadLabel.textContent = !sess ? '' : suspended() ? `MainThread · ${sess.stopReason || 'paused'}` : 'Running';
+    threadLabel.textContent = !sess ? '' : suspended() ? `MainThread · ${stopReasonLabel(sess.stopReason)}` : tr('Running');
     if (!suspended()) {
-      return framesList.replaceChildren(el('div', 'dbg-empty', sess ? 'Frames are not available in non-suspended state' : 'Not debugging'));
+      return framesList.replaceChildren(el('div', 'dbg-empty', sess ? tr('Frames are not available in non-suspended state') : tr('Not debugging')));
     }
     framesList.replaceChildren(...sess.frames.map((f, i) => {
       const row = el('div', 'dbg-frame' + (i === sess.frameIdx ? ' selected' : '') + (f.source?.path ? '' : ' muted'));
-      row.append(el('span', 'dbg-frame-name', f.name), el('span', 'dbg-frame-loc', `, ${f.source?.path ? basename(f.source.path) : f.source?.name || '?'}:${f.line}`));
+      row.append(data('dbg-frame-name', f.name), data('dbg-frame-loc', `, ${f.source?.path ? basename(f.source.path) : f.source?.name || '?'}:${f.line}`));
       row.title = f.source?.path || '';
       row.onclick = () => selectFrame(i);
       return row;
@@ -503,7 +539,7 @@
       const r = await req('evaluate', { expression, frameId: frame?.id, context });
       return { name: expression, value: r.result, type: r.type, variablesReference: r.variablesReference || 0, s };
     } catch (err) {
-      return { name: expression, error: String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), variablesReference: 0, s };
+      return { name: expression, error: remoteError(err), variablesReference: 0, s };
     }
   }
 
@@ -520,7 +556,7 @@
         const n = el('div', 'dbg-node');
         const row = el('div', 'dbg-var');
         row.style.paddingLeft = '4px';
-        row.append(el('span', 'dbg-arrow'), el('span', 'dbg-name', r.name), el('span', 'dbg-eq muted', sess ? '  (not suspended)' : ''));
+        row.append(el('span', 'dbg-arrow'), data('dbg-name', r.name), el('span', 'dbg-eq muted', sess ? `  ${tr('(not suspended)')}` : ''));
         n.appendChild(row);
         return n;
       })() : varNode(r, 'W', 0);
@@ -528,12 +564,12 @@
       node.classList.toggle('selected', i === selectedWatch);
       node.firstChild.addEventListener('mousedown', () => { selectedWatch = i; watchesList.querySelectorAll('.dbg-watch').forEach((w, j) => w.classList.toggle('selected', j === i)); });
       const del = el('button', 'dbg-watch-del', '×');
-      del.title = 'Remove Watch';
+      del.title = tr('Remove Watch');
       del.onclick = (e) => { e.stopPropagation(); removeWatch(i); };
       node.firstChild.appendChild(del);
       return node;
     }));
-    if (!watches.length) watchesList.appendChild(el('div', 'dbg-empty', 'No watches. Add one with +'));
+    if (!watches.length) watchesList.appendChild(el('div', 'dbg-empty', tr('No watches. Add one with +')));
   }
 
   function addWatch(expr) {
@@ -557,7 +593,7 @@
     const body = el('div', 'dbg-eval-dialog');
     const input = el('input', 'input dbg-eval-input');
     input.id = 'dbgEvalInput';
-    input.placeholder = 'Expression (Enter to evaluate)';
+    input.placeholder = tr('Expression (Enter to evaluate)');
     const sel = ide.editor.getSelection();
     const model = ide.editor.getModel();
     if (model && sel && !sel.isEmpty()) input.value = model.getValueInRange(sel);
@@ -565,23 +601,24 @@
     const result = el('div', 'dbg-eval-result');
     result.id = 'dbgEvalResult';
     body.append(input, result);
-    ide.ui.dialog({
-      title: 'Evaluate',
+    const dlg = ide.ui.dialog({
+      title: tr('Evaluate'),
       body,
       width: 620,
       buttons: [
-        { label: 'Add Watch', run: () => { addWatch(input.value); return false; } },
-        { label: 'Close' },
-        { label: 'Evaluate', primary: true, run: async () => {
+        { label: tr('Add Watch'), run: () => { addWatch(input.value); return false; } },
+        { label: tr('Close') },
+        { label: tr('Evaluate'), primary: true, run: async () => {
           const expr = input.value.trim();
           if (!expr) return false;
           const r = await evaluate(expr, 'repl');
-          result.replaceChildren(varNode({ ...r, name: 'result' }, `E/${expr}`, 0));
+          result.replaceChildren(varNode({ ...r, name: 'result', label: tr('result') }, `E/${expr}`, 0));
           input.select();
           return false;
         } },
       ],
     });
+    dlg.el.classList.add('dbg-dialog');
     setTimeout(() => { input.focus(); input.select(); });
   }
 
@@ -598,52 +635,55 @@
       const entries = allBps().sort((a, b) => a.path.localeCompare(b.path) || a.bp.line - b.bp.line);
       if (current && !entries.some((e) => e.bp === current.bp)) current = null;
       current ||= entries[0] || null;
-      list.replaceChildren(el('div', 'dbg-bps-group', `Python Line Breakpoints (${entries.length})`), ...entries.map((e) => {
+      list.replaceChildren(el('div', 'dbg-bps-group', tr('Python Line Breakpoints ({count})', { count: entries.length })), ...entries.map((e) => {
         const row = el('div', 'dbg-bps-row' + (e === current || e.bp === current?.bp ? ' selected' : ''));
         const cb = el('input');
         cb.type = 'checkbox';
         cb.checked = e.bp.enabled;
         cb.onclick = (ev) => { ev.stopPropagation(); setBp(e.path, e.bp.line, { enabled: cb.checked }); };
         row.append(cb, el('span', 'dbg-bp-dot' + (e.bp.condition ? ' cond' : '') + (e.bp.enabled ? '' : ' disabled')),
-          el('span', null, `${basename(e.path)}:${e.bp.line}`), el('span', 'muted', e.bp.condition ? `  [${e.bp.condition}]` : ''));
+          data(null, `${basename(e.path)}:${e.bp.line}`), data('muted', e.bp.condition ? `  [${e.bp.condition}]` : ''));
         row.onclick = () => { current = e; render(); };
         row.ondblclick = () => { dlg.close(); ide.openFile(e.path, { line: e.bp.line }); };
         return row;
       }));
-      if (!entries.length) list.appendChild(el('div', 'dbg-empty', 'No breakpoints'));
+      if (!entries.length) list.appendChild(el('div', 'dbg-empty', tr('No breakpoints')));
       detail.replaceChildren();
       if (!current) return;
       const { path, bp } = current;
-      detail.append(el('div', 'dbg-bps-title', `${ide.util.rel(path)}:${bp.line}`));
+      const title = el('div', 'dbg-bps-title', `${ide.util.rel(path)}:${bp.line}`);
+      title.dataset.userText = '';
+      detail.append(title);
       const en = el('label', 'dbg-check');
       const enCb = el('input');
       enCb.type = 'checkbox';
       enCb.checked = bp.enabled;
       enCb.onchange = () => setBp(path, bp.line, { enabled: enCb.checked });
-      en.append(enCb, el('span', null, 'Enabled'));
+      en.append(enCb, el('span', null, tr('Enabled')));
       const cond = el('input', 'input');
       cond.id = 'dbgBpListCondition';
-      cond.placeholder = 'Condition';
+      cond.placeholder = tr('Condition');
       cond.value = bp.condition;
       cond.onchange = () => setBp(path, bp.line, { condition: cond.value.trim() });
       const actions = el('div', 'dbg-bps-actions');
-      const go = el('button', 'secondary', 'Go to Source');
+      const go = el('button', 'secondary', tr('Go to Source'));
       go.onclick = () => { dlg.close(); ide.openFile(path, { line: bp.line }); };
-      const rm = el('button', 'secondary', 'Remove');
+      const rm = el('button', 'secondary', tr('Remove'));
       rm.id = 'dbgBpRemove';
       rm.onclick = () => removeBp(path, bp.line);
       actions.append(go, rm);
-      detail.append(en, el('div', 'muted', 'Condition:'), cond, actions);
+      detail.append(en, el('div', 'muted', tr('Condition:')), cond, actions);
     };
     bpListener = render;
     render();
     dlg = ide.ui.dialog({
-      title: 'Breakpoints',
+      title: tr('Breakpoints'),
       body,
       width: 720,
-      buttons: [{ label: 'Done', primary: true, run: () => { document.activeElement?.blur?.(); } }],
+      buttons: [{ label: tr('Done'), primary: true, run: () => { document.activeElement?.blur?.(); } }],
       onClose: () => { if (bpListener === render) bpListener = null; },
     });
+    dlg.el.classList.add('dbg-dialog');
   }
 
   // ---------- tool window ----------
@@ -654,6 +694,8 @@
     for (const [k, b] of Object.entries(subTabs)) b.classList.toggle('active', k === which);
     for (const [k, p] of Object.entries(subPanes)) p.classList.toggle('hidden', k !== which);
   }
+
+  const withKeys = (title, keys) => `${title} (${keys})`;
 
   function pane(title, actions = []) {
     const p = el('div', 'dbg-pane');
@@ -674,11 +716,11 @@
   }
 
   tw = ide.registerToolWindow({
-    id: 'Debug', title: 'Debug', icon: '🐞', side: 'bottom', keys: 'Alt+5', order: 15,
+    id: 'Debug', title: tr('Debug'), icon: '🐞', side: 'bottom', keys: 'Alt+5', order: 15,
     mount(container) {
       container.classList.add('dbg-root');
       const bar = el('div', 'dbg-bar');
-      subTabs = { debugger: el('button', 'dbg-subtab', 'Threads & Variables'), console: el('button', 'dbg-subtab', 'Console') };
+      subTabs = { debugger: el('button', 'dbg-subtab', tr('Threads & Variables')), console: el('button', 'dbg-subtab', tr('Console')) };
       subTabs.debugger.id = 'dbgTabVars';
       subTabs.console.id = 'dbgTabConsole';
       subTabs.debugger.onclick = () => showSub('debugger');
@@ -692,31 +734,31 @@
         bar.appendChild(b);
         btns[id] = b;
       };
-      mk('Rerun', '↻', 'Rerun', () => debugFile(sess?.file || lastFile, lastCfg), 'green');
-      mk('Resume', '▶', 'Resume Program (F9)', () => step('continue'), 'green');
-      mk('Pause', '⏸', 'Pause Program', pause);
-      mk('Stop', '■', 'Stop (Ctrl+F2)', stopDebug, 'red');
+      mk('Rerun', '↻', tr('Rerun'), () => debugFile(sess?.file || lastFile, lastCfg), 'green');
+      mk('Resume', '▶', withKeys(tr('Resume Program'), 'F9'), () => step('continue'), 'green');
+      mk('Pause', '⏸', tr('Pause Program'), pause);
+      mk('Stop', '■', withKeys(tr('Stop'), 'Ctrl+F2'), stopDebug, 'red');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('StepOver', '↷', 'Step Over (F8)', () => step('next'), 'blue');
-      mk('StepInto', '↘', 'Step Into (F7)', () => step('stepIn'), 'blue');
-      mk('StepOut', '↖', 'Step Out (Shift+F8)', () => step('stepOut'), 'blue');
-      mk('RunToCursor', '⇥', 'Run to Cursor (Alt+F9)', runToCursor, 'blue');
+      mk('StepOver', '↷', withKeys(tr('Step Over'), 'F8'), () => step('next'), 'blue');
+      mk('StepInto', '↘', withKeys(tr('Step Into'), 'F7'), () => step('stepIn'), 'blue');
+      mk('StepOut', '↖', withKeys(tr('Step Out'), 'Shift+F8'), () => step('stepOut'), 'blue');
+      mk('RunToCursor', '⇥', withKeys(tr('Run to Cursor'), 'Alt+F9'), runToCursor, 'blue');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('Evaluate', '⌨', 'Evaluate Expression (Alt+F8)', evaluateDialog);
-      mk('Breakpoints', '●', 'View Breakpoints (Ctrl+Shift+F8)', breakpointsDialog, 'red');
+      mk('Evaluate', '⌨', withKeys(tr('Evaluate Expression'), 'Alt+F8'), evaluateDialog);
+      mk('Breakpoints', '●', withKeys(tr('View Breakpoints'), 'Ctrl+Shift+F8'), breakpointsDialog, 'red');
 
       const vars = el('div', 'dbg-panes');
-      const frames = pane('Frames');
+      const frames = pane(tr('Frames'));
       threadLabel = el('span', 'dbg-thread muted');
       frames.head.insertBefore(threadLabel, frames.head.children[1]);
       framesList = frames.list;
       framesList.id = 'dbgFrames';
-      const variables = pane('Variables');
+      const variables = pane(tr('Variables'));
       varsList = variables.list;
       varsList.id = 'dbgVars';
-      const watchPane = pane('Watches', [
-        { id: 'dbgWatchAdd', icon: '+', title: 'New Watch', run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
-        { id: 'dbgWatchRemove', icon: '−', title: 'Remove Watch (Delete)', run: () => removeWatch() },
+      const watchPane = pane(tr('Watches'), [
+        { id: 'dbgWatchAdd', icon: '+', title: tr('New Watch'), run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
+        { id: 'dbgWatchRemove', icon: '−', title: withKeys(tr('Remove Watch'), 'Delete'), run: () => removeWatch() },
       ]);
       watchesList = watchPane.list;
       watchesList.id = 'dbgWatches';
@@ -724,7 +766,7 @@
       watchesList.onkeydown = (e) => { if (e.key === 'Delete') { e.preventDefault(); removeWatch(); } };
       const watchInput = el('input', 'dbg-watch-input hidden');
       watchInput.id = 'dbgWatchInput';
-      watchInput.placeholder = 'Expression to watch (Enter)';
+      watchInput.placeholder = tr('Expression to watch (Enter)');
       watchInput.onkeydown = (e) => {
         if (e.key === 'Enter') { addWatch(watchInput.value); watchInput.value = ''; watchInput.classList.add('hidden'); }
         if (e.key === 'Escape') { e.stopPropagation(); watchInput.value = ''; watchInput.classList.add('hidden'); }
@@ -735,7 +777,7 @@
       const consoleHost = el('div', 'dbg-console hidden');
       con = ide.ui.console(consoleHost, {
         input: true,
-        placeholder: 'stdin: type program input and press Enter',
+        placeholder: tr('stdin: type program input and press Enter'),
         onInput(text) {
           if (!sess?.id) return;
           con.append(`${text}\n`, 'cmd');
@@ -748,14 +790,14 @@
       const evalLine = el('div', 'dbg-eval-line');
       const evalIn = el('input', 'console-in');
       evalIn.id = 'dbgConsoleEval';
-      evalIn.placeholder = 'Evaluate expression in the selected frame (Enter)';
+      evalIn.placeholder = tr('Evaluate expression in the selected frame (Enter)');
       evalIn.onkeydown = async (e) => {
         if (e.key !== 'Enter') return;
         const expr = evalIn.value.trim();
         if (!expr) return;
         evalIn.value = '';
         con.append(`>>> ${expr}\n`, 'cmd');
-        if (!suspended()) return con.append('Evaluation is available only while the program is suspended\n', 'err');
+        if (!suspended()) return con.append(`${tr('Evaluation is available only while the program is suspended')}\n`, 'err');
         const r = await evaluate(expr, 'repl');
         if (r.error) con.append(`${r.error}\n`, 'err');
         else if (r.value !== undefined && r.value !== '') con.append(`${r.value}\n`);
@@ -793,7 +835,7 @@
   // ---------- toolbar, actions ----------
   const debugBtn = el('button', 'tb-icon dbg-tb-btn');
   debugBtn.id = 'debugBtn';
-  debugBtn.title = 'Debug (Shift+F9)';
+  debugBtn.title = withKeys(tr('Debug'), 'Shift+F9');
   debugBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">'
     + '<ellipse cx="8" cy="9.5" rx="3.6" ry="4.3"/><path d="M5.6 5.6a2.6 2.6 0 0 1 4.8 0"/><path d="M8 7v6.6"/>'
     + '<path d="M4.4 8.2H2.2M11.6 8.2h2.2M4.6 11.4l-2 1.4M11.4 11.4l2 1.4M5 6.6 3.2 5M11 6.6 12.8 5"/></svg>';
@@ -805,28 +847,28 @@
     if (lastFile) return debugFile(lastFile, lastCfg);
     tw.show();
     showSub('console');
-    con.append('Open a .py file to debug it.\n', 'sys');
+    con.append(`${tr('Open a .py file to debug it.')}\n`, 'sys');
   }
   debugBtn.onclick = debugCurrent;
   updateControls();
 
   const hasFile = () => !!activeFile();
   [
-    { id: 'Debug', title: 'Debug', keys: 'Shift+F9', run: debugCurrent },
-    { id: 'ToggleLineBreakpoint', title: 'Toggle Line Breakpoint', keys: 'Ctrl+F8', when: hasFile,
+    { id: 'Debug', title: tr('Debug'), keys: 'Shift+F9', run: debugCurrent },
+    { id: 'ToggleLineBreakpoint', title: tr('Toggle Line Breakpoint'), keys: 'Ctrl+F8', when: hasFile,
       run: () => toggleBp(activeFile().path, ide.editor.getPosition().lineNumber) },
-    { id: 'ViewBreakpoints', title: 'View Breakpoints…', keys: 'Ctrl+Shift+F8', run: breakpointsDialog },
-    { id: 'StepOver', title: 'Step Over', keys: 'F8', when: suspended, run: () => step('next') },
-    { id: 'StepInto', title: 'Step Into', keys: 'F7', when: suspended, run: () => step('stepIn') },
-    { id: 'StepOut', title: 'Step Out', keys: 'Shift+F8', when: suspended, run: () => step('stepOut') },
-    { id: 'Resume', title: 'Resume Program', keys: 'F9', when: suspended, run: () => step('continue') },
-    { id: 'Pause', title: 'Pause Program', when: () => sess?.state === 'running', run: pause },
-    { id: 'RunToCursor', title: 'Run to Cursor', keys: 'Alt+F9', when: suspended, run: runToCursor },
-    { id: 'EvaluateExpression', title: 'Evaluate Expression…', keys: 'Alt+F8', when: suspended, run: evaluateDialog },
+    { id: 'ViewBreakpoints', title: tr('View Breakpoints…'), keys: 'Ctrl+Shift+F8', run: breakpointsDialog },
+    { id: 'StepOver', title: tr('Step Over'), keys: 'F8', when: suspended, run: () => step('next') },
+    { id: 'StepInto', title: tr('Step Into'), keys: 'F7', when: suspended, run: () => step('stepIn') },
+    { id: 'StepOut', title: tr('Step Out'), keys: 'Shift+F8', when: suspended, run: () => step('stepOut') },
+    { id: 'Resume', title: tr('Resume Program'), keys: 'F9', when: suspended, run: () => step('continue') },
+    { id: 'Pause', title: tr('Pause Program'), when: () => sess?.state === 'running', run: pause },
+    { id: 'RunToCursor', title: tr('Run to Cursor'), keys: 'Alt+F9', when: suspended, run: runToCursor },
+    { id: 'EvaluateExpression', title: tr('Evaluate Expression…'), keys: 'Alt+F8', when: suspended, run: evaluateDialog },
   ].forEach(ide.registerAction);
   // Registered after every feature has loaded so it takes precedence over run's Ctrl+F2, but only while debugging.
-  ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: 'Stop Debugging', keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
-  ide.registerTreeAction({ title: "Debug '…'", when: (e) => !e.dir && e.name.endsWith('.py'), run: (e) => debugFile(e.path) });
+  ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: tr('Stop Debugging'), keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
+  ide.registerTreeAction({ title: tr("Debug '…'"), when: (e) => !e.dir && e.name.endsWith('.py'), run: (e) => debugFile(e.path) });
 
   ide.debugger = { debugFile, isActive: () => !!sess };
   window.__debugger = { state: () => sess && { id: sess.id, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };

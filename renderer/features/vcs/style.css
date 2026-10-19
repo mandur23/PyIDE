@@ -1,3 +1,21 @@
+/* VCS colors: PyCharm Darcula by default, PyCharm Light under data-theme="light". */
+:root {
+  --vcs-modified: #6897bb; --vcs-added: #629755; --vcs-deleted: #6c6c6c; --vcs-unversioned: #d1675a; --vcs-conflict: #d5756c;
+  --vcs-gutter-added: #549159; --vcs-gutter-modified: #375fad; --vcs-gutter-deleted: #db5c5c;
+  --vcs-selected-focus: #2e4d8a; --vcs-blame: #8c8f96; --vcs-dot: #3592c4; --vcs-shadow: #0008;
+  --vcs-ref-bg: #4d4e2e; --vcs-ref-fg: #e8c46a; --vcs-ref-head-bg: #2f4a2f; --vcs-ref-head-fg: #8fd18f;
+  --vcs-ref-remote-bg: #3c3049; --vcs-ref-remote-fg: #c3a3e6; --vcs-ref-tag-bg: #2e3d4a; --vcs-ref-tag-fg: #8cbde6;
+  --vcs-diff-mod: #263552; --vcs-diff-mod-char: #2f4a7c;
+}
+:root[data-theme="light"] {
+  --vcs-modified: #0032a0; --vcs-added: #067d17; --vcs-deleted: #6c707e; --vcs-unversioned: #8c2e1b; --vcs-conflict: #d5441c;
+  --vcs-gutter-added: #5fb865; --vcs-gutter-modified: #6f9ef8; --vcs-gutter-deleted: #868a91;
+  --vcs-selected-focus: #d4e2ff; --vcs-blame: #8c8c8c; --vcs-dot: #3574f0; --vcs-shadow: #0003;
+  --vcs-ref-bg: #f8edc8; --vcs-ref-fg: #7d5f00; --vcs-ref-head-bg: #dcefdc; --vcs-ref-head-fg: #067d17;
+  --vcs-ref-remote-bg: #efe4f8; --vcs-ref-remote-fg: #7a3fb5; --vcs-ref-tag-bg: #e3edf8; --vcs-ref-tag-fg: #2a5d9b;
+  --vcs-diff-mod: #e8effa; --vcs-diff-mod-char: #c9d8f5;
+}
+
 /* branch widget */
 .vcs-branch { display: flex; align-items: center; gap: 5px; font-weight: 600; }
 .vcs-branch-icon { color: var(--gray9); }
@@ -13,7 +31,8 @@
 .vcs-file { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 26px; white-space: nowrap; cursor: default; }
 .vcs-file:hover { background: var(--gray3); }
 .vcs-file.selected { background: var(--blue2); }
-.vcs-changes:focus .vcs-file.selected { background: #2e4d8a; }
+:root[data-theme="light"] .vcs-file.selected { background: #dfe1e5; }
+.vcs-changes:focus .vcs-file.selected { background: var(--vcs-selected-focus); }
 .vcs-file .icon { width: 18px; font-size: 12px; flex-shrink: 0; }
 .vcs-file[data-status="deleted"] .vcs-name { text-decoration: line-through; }
 .vcs-dir { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
@@ -26,15 +45,15 @@
 
 /* editor gutter markers (between line numbers and code, like PyCharm) */
 .monaco-editor .vcs-gutter { width: 3px !important; margin-left: calc(var(--vcs-bar-left, 0px) + 2px); }
-.monaco-editor .vcs-added { background: #549159; }
-.monaco-editor .vcs-modified { background: #375fad; }
+.monaco-editor .vcs-added { background: var(--vcs-gutter-added); }
+.monaco-editor .vcs-modified { background: var(--vcs-gutter-modified); }
 .monaco-editor .vcs-deleted { background: none; }
 .monaco-editor .vcs-deleted::before { content: ''; position: absolute; left: 0; top: -5px; border-style: solid;
-  border-width: 5px 0 5px 7px; border-color: transparent transparent transparent var(--red); }
+  border-width: 5px 0 5px 7px; border-color: transparent transparent transparent var(--vcs-gutter-deleted); }
 .monaco-editor .vcs-deleted-end::before { top: auto; bottom: -5px; }
 .monaco-editor .vcs-gutter:hover { width: 5px !important; cursor: pointer; }
 .monaco-editor .vcs-blame { white-space: nowrap; overflow: hidden; cursor: pointer; }
-.monaco-editor .vcs-blame::after { padding-left: 4px; color: #8c8f96; font: 12px/22px 'Inter', 'Segoe UI', sans-serif; }
+.monaco-editor .vcs-blame::after { padding-left: 4px; color: var(--vcs-blame); font: 12px/22px 'Inter', 'Segoe UI', sans-serif; }
 .monaco-editor .vcs-blame:hover::after { color: var(--gray12); }
 
 /* diff tab */
@@ -42,6 +61,21 @@
   border-bottom: 1px solid var(--gray3); }
 .vcs-diff-side { padding: 0 12px; line-height: 30px; color: var(--gray9); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .vcs-diff-body { flex: 1; min-height: 0; position: relative; }
+/* changed blocks are blue on both sides, as in PyCharm (drawn over Monaco's inserted/removed backgrounds) */
+.vcs-diff-body .monaco-editor .vcs-diff-mod { background: var(--vcs-diff-mod); }
+.vcs-diff-body .monaco-editor .vcs-diff-mod-char { background: var(--vcs-diff-mod-char); }
+/* PyCharm Light diff backgrounds: inserted green, deleted pink */
+:root[data-theme="light"] .vcs-diff-body .monaco-diff-editor,
+:root[data-theme="light"] .vcs-diff-body .monaco-editor {
+  --vscode-diffEditor-insertedLineBackground: #e9f5e6;
+  --vscode-diffEditor-insertedTextBackground: #c8e6c1a0;
+  --vscode-diffEditorGutter-insertedLineBackground: #e9f5e6;
+  --vscode-diffEditor-removedLineBackground: #f5e7e8;
+  --vscode-diffEditor-removedTextBackground: #f1c5c9a0;
+  --vscode-diffEditorGutter-removedLineBackground: #f5e7e8;
+  --vscode-diffEditor-diagonalFill: #d3d5db;
+  --vscode-diffEditor-border: #ebecf0;
+}
 
 /* Git tool window */
 .vcs-subtabs { display: flex; gap: 2px; padding: 4px 8px; flex-shrink: 0; border-bottom: 1px solid var(--gray3); }
@@ -60,11 +94,11 @@
 .vcs-subject-text { overflow: hidden; text-overflow: ellipsis; }
 .vcs-c-author { width: 140px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gray11); }
 .vcs-c-date { width: 150px; flex-shrink: 0; color: var(--gray9); }
-.vcs-dot { color: #3592c4; font-size: 9px; }
-.vcs-ref { font-size: 11px; padding: 0 5px; border-radius: 3px; background: #4d4e2e; color: #e8c46a; }
-.vcs-ref.head { background: #2f4a2f; color: #8fd18f; }
-.vcs-ref.remote { background: #3c3049; color: #c3a3e6; }
-.vcs-ref.tag { background: #2e3d4a; color: #8cbde6; }
+.vcs-dot { color: var(--vcs-dot); font-size: 9px; }
+.vcs-ref { font-size: 11px; padding: 0 5px; border-radius: 3px; background: var(--vcs-ref-bg); color: var(--vcs-ref-fg); }
+.vcs-ref.head { background: var(--vcs-ref-head-bg); color: var(--vcs-ref-head-fg); }
+.vcs-ref.remote { background: var(--vcs-ref-remote-bg); color: var(--vcs-ref-remote-fg); }
+.vcs-ref.tag { background: var(--vcs-ref-tag-bg); color: var(--vcs-ref-tag-fg); }
 .vcs-log-side { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; }
 .vcs-log-files { flex: 1; overflow: auto; min-height: 0; }
 .vcs-log-file { padding-left: 10px; }
@@ -77,12 +111,14 @@
   border: 1px solid var(--gray3); border-radius: 4px; font: 12px/1.6 var(--mono); }
 .vcs-push-target { font-weight: 600; color: var(--gray12); }
 .vcs-push-warn { color: var(--yellow); }
+:root[data-theme="light"] .vcs-push-warn { color: #a46704; }
 .vcs-push .field { grid-template-columns: 60px 1fr; }
 
 /* notification balloons */
 .vcs-notes { position: fixed; right: 14px; bottom: 34px; z-index: 65; display: flex; flex-direction: column; gap: 8px; width: 360px; pointer-events: none; }
 .vcs-note { position: relative; pointer-events: auto; background: var(--gray2); border: 1px solid var(--gray4); border-left: 3px solid var(--blue6);
-  border-radius: 6px; padding: 10px 28px 10px 12px; box-shadow: 0 8px 24px #0008; cursor: pointer; }
+  border-radius: 6px; padding: 10px 28px 10px 12px; box-shadow: 0 8px 24px var(--vcs-shadow); cursor: pointer; }
+:root[data-theme="light"] .vcs-note { background: #ffffff; }
 .vcs-note.ok { border-left-color: var(--green6); }
 .vcs-note.warn { border-left-color: var(--yellow); }
 .vcs-note.error { border-left-color: var(--red); }

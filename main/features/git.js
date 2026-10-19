@@ -1,4 +1,5 @@
 // Git integration: every operation shells out to the git CLI in the project folder.
+// Errors composed here carry a `reason` the renderer translates; git's own output is passed through untranslated.
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -233,9 +234,9 @@ exports.register = ({ ipcMain }) => {
 
   h('push', async (root) => {
     const st = await status(root);
-    if (!st.isRepo) return { ok: false, err: 'Not a git repository' };
-    if (!st.remotes.length) return { ok: false, noRemote: true, err: 'No remotes are defined for this repository.' };
-    if (!st.branch) return { ok: false, err: 'Cannot push from a detached HEAD.' };
+    if (!st.isRepo) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+    if (!st.remotes.length) return { ok: false, noRemote: true, reason: 'noRemote', err: 'No remotes are defined for this repository.' };
+    if (!st.branch) return { ok: false, reason: 'detached', err: 'Cannot push from a detached HEAD.' };
     const count = await git(root, ['rev-list', '--count', ...(st.upstream ? ['@{u}..HEAD'] : ['HEAD', '--not', '--remotes'])]);
     const args = st.upstream ? ['push', '--porcelain'] : ['push', '--porcelain', '-u', pickRemote(st.remotes), st.branch];
     const r = await git(root, args);
@@ -245,8 +246,8 @@ exports.register = ({ ipcMain }) => {
 
   h('pull', async (root) => {
     const st = await status(root);
-    if (!st.isRepo) return { ok: false, err: 'Not a git repository' };
-    if (!st.remotes.length) return { ok: false, noRemote: true, err: 'No remotes are defined for this repository.' };
+    if (!st.isRepo) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+    if (!st.remotes.length) return { ok: false, noRemote: true, reason: 'noRemote', err: 'No remotes are defined for this repository.' };
     const before = st.head;
     const args = ['pull', '--no-rebase', '--no-edit'];
     const r = await git(root, args);

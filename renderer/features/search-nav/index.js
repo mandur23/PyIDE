@@ -6,7 +6,13 @@
   const LETTER = { class: 'C', method: 'm', function: 'f', field: 'f', variable: 'v', property: 'p' };
   const GLYPH = { class: 'Ⓒ', method: 'ⓜ', function: 'ⓕ', field: 'ⓕ', variable: 'ⓥ', property: 'ⓟ' };
   const kindIcon = (kind) => el('span', `sn-icon k-${kind}`, LETTER[kind] || '?');
-  const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  // Plural forms are separate whole messages (ngettext style) so a translation can reorder them.
+  const nt = (n, one, many) => tr(n === 1 ? one : many, { n });
+  const nt2 = (count, files, [oneOne, oneMany, manyOne, manyMany]) =>
+    tr(count === 1 ? (files === 1 ? oneOne : oneMany) : (files === 1 ? manyOne : manyMany), { count, files });
+  // Spans holding code, file names or symbol names: user data, never translated.
+  const userText = (node) => { node.dataset.userText = ''; return node; };
+  const KIND = { class: tr('class'), method: tr('method'), function: tr('function'), field: tr('field'), variable: tr('variable'), property: tr('property') };
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -53,8 +59,8 @@
     const isCollapsed = collapsed.has(path.toLowerCase());
     g.classList.toggle('collapsed', isCollapsed);
     const arrow = el('span', 'sn-arrow', isCollapsed ? '▸' : '▾');
-    head.append(arrow, el('span', 'sn-ficon', fileIcon(path)), el('span', 'sn-fname', basename(path)),
-      el('span', 'sn-fdir', rel(dirname(path))), el('span', 'sn-count', countText));
+    head.append(arrow, el('span', 'sn-ficon', fileIcon(path)), userText(el('span', 'sn-fname', basename(path))),
+      userText(el('span', 'sn-fdir', rel(dirname(path)))), el('span', 'sn-count', countText));
     head.onclick = () => {
       const c = g.classList.toggle('collapsed');
       arrow.textContent = c ? '▸' : '▾';
@@ -87,8 +93,9 @@
   const searchOpts = (o) => ({ query: o.query, caseSensitive: o.caseSensitive, words: o.words, regex: o.regex,
     mask: o.useMask ? o.mask : '', dir: o.dir || null, replacement: o.replacement || '' });
   const runFind = (o) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts());
-  const summaryOf = (res) => (res.error ? res.error
-    : `${plural(res.count, 'match', 'matches')} in ${plural(res.files.length, 'file')}${res.truncated ? ' (results truncated)' : ''}`);
+  const summaryOf = (res) => (res.error ? tr('Invalid regular expression: {message}', { message: res.error })
+    : nt2(res.count, res.files.length, ['{count} match in {files} file', '{count} match in {files} files', '{count} matches in {files} file', '{count} matches in {files} files'])
+      + (res.truncated ? ` ${tr('(results truncated)')}` : ''));
 
   // One row per line; every match on the line is highlighted, the first one is the jump target.
   function lineRows(matches) {
@@ -107,25 +114,25 @@
   }
 
   const findTw = ide.registerToolWindow({
-    id: 'FindInFiles', title: 'Find in Files', icon: '🔍', side: 'bottom', order: 20,
+    id: 'FindInFiles', title: tr('Find in Files'), icon: '🔍', side: 'bottom', order: 20,
     mount(container, tw) {
       findHead = el('div', 'sn-head');
       findHead.id = 'snFindHead';
       findList = el('div', 'list sn-tree');
       findList.id = 'snFindResults';
-      findHead.textContent = 'Use Find in Files (Ctrl+Shift+F) to search the project';
+      findHead.textContent = tr('Use Find in Files (Ctrl+Shift+F) to search the project');
       container.append(findHead, findList);
       tw.setActions([
-        { icon: '⟳', title: 'Rerun Search', run: () => findState && showFindResults(findState.opts, findState.replace) },
-        { icon: '⊞', title: 'Expand All', run: () => setAllCollapsed(findList, findCollapsed, false) },
-        { icon: '⊟', title: 'Collapse All', run: () => setAllCollapsed(findList, findCollapsed, true) },
+        { icon: '⟳', title: tr('Rerun Search'), run: () => findState && showFindResults(findState.opts, findState.replace) },
+        { icon: '⊞', title: tr('Expand All'), run: () => setAllCollapsed(findList, findCollapsed, false) },
+        { icon: '⊟', title: tr('Collapse All'), run: () => setAllCollapsed(findList, findCollapsed, true) },
       ]);
     },
   });
 
   function matchRow(path, r) {
     const row = el('div', 'list-row sn-match');
-    row.append(el('span', 'sn-ln', String(r.line)), el('span', 'sn-text'));
+    row.append(el('span', 'sn-ln', String(r.line)), userText(el('span', 'sn-text')));
     row.lastChild.append(highlight(r.text, r.ranges));
     row.onclick = () => {
       findList.querySelectorAll('.sn-match.selected').forEach((n) => n.classList.remove('selected'));
@@ -137,30 +144,33 @@
 
   function renderFindResults(note) {
     const { opts: o, res, replace } = findState;
-    findHead.replaceChildren(el('span', 'sn-title', `${replace ? 'Replace' : 'Find'}: '${o.query}'${replace ? ` → '${o.replacement}'` : ''}`));
-    const scope = [o.dir ? `directory ${rel(o.dir) || basename(o.dir)}` : 'project', o.useMask && o.mask ? `mask ${o.mask}` : ''].filter(Boolean).join(', ');
+    findHead.replaceChildren(el('span', 'sn-title', replace
+      ? tr("Replace: '{query}' → '{replacement}'", { query: o.query, replacement: o.replacement })
+      : tr("Find: '{query}'", { query: o.query })));
+    const scope = [o.dir ? tr('directory {name}', { name: rel(o.dir) || basename(o.dir) }) : tr('project'),
+      o.useMask && o.mask ? tr('mask {mask}', { mask: o.mask }) : ''].filter(Boolean).join(', ');
     findHead.append(el('span', res.error ? 'sn-error' : 'muted', `${summaryOf(res)} · ${scope}`));
     if (note) findHead.append(el('span', 'sn-note', note));
     findHead.append(el('span', 'spacer'));
     if (replace && res.files.length) {
-      const b = el('button', 'secondary sn-btn', 'Replace All');
+      const b = el('button', 'secondary sn-btn', tr('Replace All'));
       b.id = 'snReplaceAll';
       b.onclick = () => replaceAll(o, res);
       findHead.append(b);
     }
     findList.replaceChildren();
     for (const f of res.files) {
-      const g = fileGroup(f.path, plural(f.matches.length, 'match', 'matches'), lineRows(f.matches).map((r) => matchRow(f.path, r)), findCollapsed);
+      const g = fileGroup(f.path, nt(f.matches.length, '{n} match', '{n} matches'), lineRows(f.matches).map((r) => matchRow(f.path, r)), findCollapsed);
       g.dataset.path = f.path.toLowerCase();
       findList.append(g);
     }
-    if (!res.files.length && !res.error) findList.append(el('div', 'list-row muted', 'No matches found'));
+    if (!res.files.length && !res.error) findList.append(el('div', 'list-row muted', tr('No matches found')));
     findTw.setBadge('');
   }
 
   async function showFindResults(o, replace, note) {
     findTw.show();
-    findHead.replaceChildren(el('span', 'muted', `Searching for '${o.query}'…`));
+    findHead.replaceChildren(el('span', 'muted', tr("Searching for '{query}'…", { query: o.query })));
     const res = await runFind(o);
     findState = { opts: o, res, replace };
     renderFindResults(note);
@@ -193,7 +203,8 @@
     ide.renderTabs();
     ide.api.invoke('search:invalidate', changed);
     refreshTodos();
-    await showFindResults(o, true, `Replaced ${plural(count, 'occurrence')} in ${plural(changed.length, 'file')}`);
+    await showFindResults(o, true, nt2(count, changed.length, ['Replaced {count} occurrence in {files} file', 'Replaced {count} occurrence in {files} files',
+      'Replaced {count} occurrences in {files} file', 'Replaced {count} occurrences in {files} files']));
   }
 
   function selectedText() {
@@ -210,13 +221,13 @@
     const qWrap = el('div', 'sn-qwrap');
     const q = el('input', 'input sn-q');
     q.id = 'snQuery';
-    q.placeholder = 'Search text';
+    q.placeholder = tr('Search text');
     q.spellcheck = false;
     q.value = o.query;
     const toggles = el('span', 'sn-toggles');
     const btn = {};
     const flip = (key) => { o[key] = !o[key]; btn[key].classList.toggle('on', o[key]); update(); };
-    for (const [key, label, title] of [['caseSensitive', 'Cc', 'Match Case (Alt+C)'], ['words', 'W', 'Words (Alt+W)'], ['regex', '.*', 'Regex (Alt+X)']]) {
+    for (const [key, label, title] of [['caseSensitive', 'Cc', tr('Match Case (Alt+C)')], ['words', 'W', tr('Words (Alt+W)')], ['regex', '.*', tr('Regex (Alt+X)')]]) {
       const b = el('button', `sn-toggle${o[key] ? ' on' : ''}`, label);
       b.title = title;
       b.dataset.opt = key;
@@ -230,7 +241,7 @@
     if (replace) {
       r = el('input', 'input sn-r');
       r.id = 'snReplace';
-      r.placeholder = 'Replace with';
+      r.placeholder = tr('Replace with');
       r.spellcheck = false;
       r.value = o.replacement;
       body.append(r);
@@ -241,12 +252,12 @@
     maskOn.type = 'checkbox';
     maskOn.id = 'snMaskOn';
     maskOn.checked = o.useMask;
-    maskLbl.append(maskOn, document.createTextNode('File mask:'));
+    maskLbl.append(maskOn, document.createTextNode(tr('File mask:')));
     const mask = el('input', 'input sn-mask');
     mask.id = 'snMask';
     mask.value = o.mask;
     mask.disabled = !o.useMask;
-    filters.append(el('span', 'sn-scope', dir ? `Directory: ${rel(dir) || basename(dir)}` : 'In Project'), el('span', 'spacer'), maskLbl, mask);
+    filters.append(el('span', 'sn-scope', dir ? tr('Directory: {name}', { name: rel(dir) || basename(dir) }) : tr('In Project')), el('span', 'spacer'), maskLbl, mask);
     const status = el('div', 'sn-status muted');
     status.id = 'snStatus';
     const preview = el('div', 'sn-preview');
@@ -276,7 +287,7 @@
         for (const row of lineRows(f.matches)) {
           if (n++ >= 200) break;
           const node = el('div', 'sn-prow');
-          node.append(el('span', 'sn-text'), el('span', 'sn-ploc', `${basename(f.path)} ${row.line}`));
+          node.append(userText(el('span', 'sn-text')), userText(el('span', 'sn-ploc', `${basename(f.path)} ${row.line}`)));
           node.firstChild.append(highlight(row.text, row.ranges));
           node.onclick = () => { dlg.close(); goTo(f.path, row.line, row.col, row.len); };
           preview.append(node);
@@ -297,9 +308,9 @@
       if (!o.query) return false;
       showFindResults({ ...o }, replace);
     };
-    const buttons = [{ label: 'Open in Find Window', primary: true, run: toWindow }];
-    if (replace) buttons.unshift({ label: 'Replace All', run: async () => { sync(); if (!o.query) return false; await replaceAll({ ...o }); } });
-    const dlg = ide.ui.dialog({ title: replace ? 'Replace in Files' : 'Find in Files', body, buttons, width: 780 });
+    const buttons = [{ label: tr('Open in Find Window'), primary: true, run: toWindow }];
+    if (replace) buttons.unshift({ label: tr('Replace All'), run: async () => { sync(); if (!o.query) return false; await replaceAll({ ...o }); } });
+    const dlg = ide.ui.dialog({ title: replace ? tr('Replace in Files') : tr('Find in Files'), body, buttons, width: 780 });
     q.select();
     update();
   }
@@ -314,7 +325,7 @@
     const list = recent.filter((_, i) => exists[i]);
     if (!list.length) return;
     const chosen = ide.ui.pick({
-      placeholder: 'Recent Files',
+      placeholder: tr('Recent Files'),
       // Every row gets a detail: the core picker ranks rows with a detail above rows without one, which would break recency order.
       items: list.map((p) => ({ label: basename(p), detail: rel(dirname(p)) || basename(ide.root), icon: fileIcon(p), value: p })),
     });
@@ -394,9 +405,9 @@
 
   async function showRecentLocations() {
     const items = places.filter((p) => !(cur && near(p, cur, 0))).map((p) => ({
-      label: `${basename(p.path)}:${p.line}`, detail: lineText(p) || p.text || ' ', hint: p.edited ? 'changed' : '', icon: fileIcon(p.path), value: p,
+      label: `${basename(p.path)}:${p.line}`, detail: lineText(p) || p.text || ' ', hint: p.edited ? tr('changed') : '', icon: fileIcon(p.path), value: p,
     }));
-    const p = await ide.ui.pick({ placeholder: 'Recent Locations', items });
+    const p = await ide.ui.pick({ placeholder: tr('Recent Locations'), items });
     if (p) goTo(p.path, p.line, p.col);
   }
 
@@ -453,11 +464,12 @@
     const interp = ide.currentInterp();
     const text = tab.model.getValue();
     const promise = (async () => {
-      if (!interp) return { path: tab.path, version, items: [], error: 'No Python interpreter configured' };
+      if (!interp) return { path: tab.path, version, items: [], error: tr('No Python interpreter configured') };
       const r = await ide.api.invoke('search:outline', interp, text);
       // On a syntax error keep showing the last good outline of this file, as PyCharm does.
       const keep = outline && samePath(outline.path, tab.path) ? outline.items : [];
-      return { path: tab.path, version, items: r.items || keep, error: r.error ? `${r.error}${r.line ? ` (line ${r.line})` : ''}` : null };
+      return { path: tab.path, version, items: r.items || keep, error: !r.error ? null
+        : r.line ? tr('Syntax error: {message} (line {line})', { message: r.error, line: r.line }) : tr(r.error) };
     })();
     outlineReq = { path: tab.path, version, promise };
     const res = await promise;
@@ -467,15 +479,15 @@
   }
 
   const structTw = ide.registerToolWindow({
-    id: 'Structure', title: 'Structure', icon: '⧉', side: 'left', keys: 'Alt+7', order: 20,
+    id: 'Structure', title: tr('Structure'), icon: '⧉', side: 'left', keys: 'Alt+7', order: 20,
     mount(container, tw) {
       structList = el('div', 'sn-struct');
       structList.id = 'snStructure';
       container.append(structList);
       tw.setActions([
-        { icon: '⇅', title: 'Sort Alphabetically', run: () => { sortAlpha = !sortAlpha; ide.settings.set('searchNav.structureSort', sortAlpha); refreshStructure(); } },
-        { icon: '⊞', title: 'Expand All', run: () => { structCollapsed.clear(); refreshStructure(); } },
-        { icon: '⊟', title: 'Collapse All', run: () => { structList.querySelectorAll('.sn-node[data-key]').forEach((n) => n.dataset.parent === '1' && structCollapsed.add(n.dataset.key)); refreshStructure(); } },
+        { icon: '⇅', title: tr('Sort Alphabetically'), run: () => { sortAlpha = !sortAlpha; ide.settings.set('searchNav.structureSort', sortAlpha); refreshStructure(); } },
+        { icon: '⊞', title: tr('Expand All'), run: () => { structCollapsed.clear(); refreshStructure(); } },
+        { icon: '⊟', title: tr('Collapse All'), run: () => { structList.querySelectorAll('.sn-node[data-key]').forEach((n) => n.dataset.parent === '1' && structCollapsed.add(n.dataset.key)); refreshStructure(); } },
       ]);
     },
   });
@@ -483,7 +495,7 @@
   function renderStructure(tab, o) {
     structList.replaceChildren();
     const head = el('div', 'sn-node sn-root');
-    head.append(el('span', 'sn-arrow', '▾'), el('span', 'sn-ficon', fileIcon(tab.path)), el('span', 'sn-name', tab.title));
+    head.append(el('span', 'sn-arrow', '▾'), el('span', 'sn-ficon', fileIcon(tab.path)), userText(el('span', 'sn-name', tab.title)));
     structList.append(head);
     if (o.error) structList.append(el('div', 'sn-node sn-err', o.error));
     const add = (items, depth, prefix) => {
@@ -500,14 +512,14 @@
           open ? structCollapsed.add(key) : structCollapsed.delete(key);
           renderStructure(tab, o);
         };
-        row.append(arrow, kindIcon(it.kind), el('span', 'sn-name', it.name), el('span', 'sn-detail', it.detail));
+        row.append(arrow, kindIcon(it.kind), userText(el('span', 'sn-name', it.name)), userText(el('span', 'sn-detail', it.detail)));
         row.onclick = () => goTo(tab.path, it.line, it.col);
         structList.append(row);
         if (open && it.children.length) add(it.children, depth + 1, key);
       }
     };
     add(o.items, 1, tab.path.toLowerCase());
-    if (!o.items.length && !o.error) structList.append(el('div', 'sn-node muted', 'No structure elements'));
+    if (!o.items.length && !o.error) structList.append(el('div', 'sn-node muted', tr('No structure elements')));
     markCurrent();
   }
 
@@ -515,7 +527,7 @@
     if (!structList || !structTw.isVisible()) return;
     const tab = ide.activeTab();
     if (tab?.kind !== 'file' || !isPy(tab.path)) {
-      structList.replaceChildren(el('div', 'sn-node muted', tab ? 'Structure is not available for this file' : 'No file is open'));
+      structList.replaceChildren(el('div', 'sn-node muted', tab ? tr('Structure is not available for this file') : tr('No file is open')));
       return;
     }
     const o = await getOutline(tab);
@@ -555,9 +567,9 @@
     const box = el('div', 'sn-fs');
     box.id = 'snFileStructure';
     const head = el('div', 'sn-fs-head');
-    head.append(el('span', null, tab.title), el('span', 'sn-err', o.error ? `  ${o.error}` : ''));
+    head.append(userText(el('span', null, tab.title)), el('span', 'sn-err', o.error ? `  ${o.error}` : ''));
     const input = el('input', 'sn-fs-in');
-    input.placeholder = 'Type to filter';
+    input.placeholder = tr('Type to filter');
     input.spellcheck = false;
     const list = el('div', 'sn-fs-list');
     box.append(head, input, list);
@@ -588,14 +600,14 @@
         const hit = !q || matchScore(n.it.name, q) > 0;
         const row = el('div', `sn-fs-row${hit ? '' : ' dim'}`);
         row.style.paddingLeft = `${n.depth * 18 + 10}px`;
-        row.append(kindIcon(n.it.kind), el('span', 'sn-name', n.it.name), el('span', 'sn-detail', n.it.detail));
+        row.append(kindIcon(n.it.kind), userText(el('span', 'sn-name', n.it.name)), userText(el('span', 'sn-detail', n.it.detail)));
         row.onmousedown = (e) => { e.preventDefault(); choose(n); };
         row._node = n;
         row._hit = hit;
         list.append(row);
         return row;
       });
-      if (!rows.length) list.append(el('div', 'sn-fs-row muted', 'Nothing found'));
+      if (!rows.length) list.append(el('div', 'sn-fs-row muted', tr('Nothing found')));
       const idx = q ? rows.findIndex((r) => r._hit)
         : rows.reduce((best, r, i) => (r._node.it.line <= caret && caret <= r._node.it.endLine ? i : best), -1);
       setActive(Math.max(0, idx));
@@ -657,7 +669,7 @@
     }
     scored.sort((a, b) => b[1] - a[1] || a[0].name.length - b[0].name.length || a[0].name.localeCompare(b[0].name));
     return scored.slice(0, 100).map(([s]) => ({
-      label: s.name, detail: `${s.container ? `${s.container} · ` : ''}${rel(s.path)}`, hint: s.kind, icon: GLYPH[s.kind] || '•', value: s,
+      label: s.name, detail: `${s.container ? `${s.container} · ` : ''}${rel(s.path)}`, hint: KIND[s.kind] || s.kind, icon: GLYPH[s.kind] || '•', value: s,
     }));
   }
 
@@ -670,7 +682,7 @@
     if (!ide.root) return;
     const index = loadIndex();
     const s = await ide.ui.pick({
-      placeholder: classesOnly ? 'Enter class name' : 'Enter symbol name',
+      placeholder: classesOnly ? tr('Enter class name') : tr('Enter symbol name'),
       items: async (q) => rankSymbols((await index).filter((x) => !classesOnly || x.kind === 'class'), q),
     });
     if (s) goTo(s.path, s.line, s.col, s.name.length);
@@ -689,9 +701,9 @@
       todoList.id = 'snTodo';
       container.append(todoHead, todoList);
       tw.setActions([
-        { icon: '⟳', title: 'Refresh', run: () => refreshTodosNow() },
-        { icon: '⊞', title: 'Expand All', run: () => setAllCollapsed(todoList, todoCollapsed, false) },
-        { icon: '⊟', title: 'Collapse All', run: () => setAllCollapsed(todoList, todoCollapsed, true) },
+        { icon: '⟳', title: tr('Refresh'), run: () => refreshTodosNow() },
+        { icon: '⊞', title: tr('Expand All'), run: () => setAllCollapsed(todoList, todoCollapsed, false) },
+        { icon: '⊟', title: tr('Collapse All'), run: () => setAllCollapsed(todoList, todoCollapsed, true) },
       ]);
     },
   });
@@ -699,20 +711,21 @@
   async function refreshTodosNow() {
     if (!ide.root) return;
     const res = await ide.api.invoke('search:todos', ide.root, dirtyTexts());
-    todoHead.replaceChildren(el('span', null, `Found ${plural(res.count, 'TODO item')} in ${plural(res.files.length, 'file')}`));
+    todoHead.replaceChildren(el('span', null, nt2(res.count, res.files.length, ['Found {count} TODO item in {files} file',
+      'Found {count} TODO item in {files} files', 'Found {count} TODO items in {files} file', 'Found {count} TODO items in {files} files'])));
     todoList.replaceChildren(...res.files.map((f) => {
       const rows = f.items.map((it) => {
         const row = el('div', 'list-row sn-match sn-todo');
-        row.append(el('span', 'sn-ln', `(${it.line}, ${it.col})`), el('span', 'sn-todo-text'));
+        row.append(el('span', 'sn-ln', `(${it.line}, ${it.col})`), userText(el('span', 'sn-todo-text')));
         row.lastChild.append(highlight(it.text, [[0, it.kwLen]], 'sn-todo-kw'));
         row.onclick = () => goTo(f.path, it.line, it.col);
         return row;
       });
-      const g = fileGroup(f.path, plural(f.items.length, 'item'), rows, todoCollapsed);
+      const g = fileGroup(f.path, nt(f.items.length, '{n} item', '{n} items'), rows, todoCollapsed);
       g.dataset.path = f.path.toLowerCase();
       return g;
     }));
-    if (!res.files.length) todoList.append(el('div', 'list-row muted', 'No TODO items found'));
+    if (!res.files.length) todoList.append(el('div', 'list-row muted', tr('No TODO items found')));
   }
   const refreshTodos = debounce(refreshTodosNow, 300);
 
@@ -736,21 +749,21 @@
   ide.on('toolWindowShown', (id) => id === 'Structure' && refreshStructure());
   ide.on('interpreterChanged', () => { outline = null; refreshStructure(); });
 
-  ide.registerTreeAction({ title: 'Find in Files…', hint: 'Ctrl+Shift+F', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
-  ide.registerTreeAction({ title: 'Replace in Files…', hint: 'Ctrl+Shift+R', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
+  ide.registerTreeAction({ title: tr('Find in Files…'), hint: 'Ctrl+Shift+F', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
+  ide.registerTreeAction({ title: tr('Replace in Files…'), hint: 'Ctrl+Shift+R', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
 
   [
-    { id: 'FindInPath', title: 'Find in Files…', keys: 'Ctrl+Shift+F', run: () => openFindDialog(false) },
-    { id: 'ReplaceInPath', title: 'Replace in Files…', keys: 'Ctrl+Shift+R', run: () => openFindDialog(true) },
-    { id: 'RecentFiles', title: 'Recent Files', keys: 'Ctrl+E', run: showRecentFiles },
-    { id: 'RecentLocations', title: 'Recent Locations', keys: 'Ctrl+Shift+E', run: showRecentLocations },
-    { id: 'Back', title: 'Navigate Back', keys: 'Ctrl+Alt+ArrowLeft', run: () => navigate(back, fwd) },
-    { id: 'Forward', title: 'Navigate Forward', keys: 'Ctrl+Alt+ArrowRight', run: () => navigate(fwd, back) },
-    { id: 'JumpToLastChange', title: 'Last Edit Location', keys: 'Ctrl+Shift+Backspace', run: lastEdit },
-    { id: 'FileStructurePopup', title: 'File Structure', keys: 'Ctrl+F12', run: fileStructurePopup },
-    { id: 'GotoClass', title: 'Go to Class…', keys: 'Ctrl+N', run: () => gotoSymbol(true) },
-    { id: 'GotoSymbol', title: 'Go to Symbol…', keys: 'Ctrl+Alt+Shift+N', run: () => gotoSymbol(false) },
-    { id: 'ActivateFindToolWindow', title: 'Tool Window: Find in Files', run: () => findTw.show() },
-    { id: 'ActivateTODOToolWindow', title: 'Tool Window: TODO', run: () => { todoTw.show(); refreshTodosNow(); } },
+    { id: 'FindInPath', title: tr('Find in Files…'), keys: 'Ctrl+Shift+F', run: () => openFindDialog(false) },
+    { id: 'ReplaceInPath', title: tr('Replace in Files…'), keys: 'Ctrl+Shift+R', run: () => openFindDialog(true) },
+    { id: 'RecentFiles', title: tr('Recent Files'), keys: 'Ctrl+E', run: showRecentFiles },
+    { id: 'RecentLocations', title: tr('Recent Locations'), keys: 'Ctrl+Shift+E', run: showRecentLocations },
+    { id: 'Back', title: tr('Navigate Back'), keys: 'Ctrl+Alt+ArrowLeft', run: () => navigate(back, fwd) },
+    { id: 'Forward', title: tr('Navigate Forward'), keys: 'Ctrl+Alt+ArrowRight', run: () => navigate(fwd, back) },
+    { id: 'JumpToLastChange', title: tr('Last Edit Location'), keys: 'Ctrl+Shift+Backspace', run: lastEdit },
+    { id: 'FileStructurePopup', title: tr('File Structure'), keys: 'Ctrl+F12', run: fileStructurePopup },
+    { id: 'GotoClass', title: tr('Go to Class…'), keys: 'Ctrl+N', run: () => gotoSymbol(true) },
+    { id: 'GotoSymbol', title: tr('Go to Symbol…'), keys: 'Ctrl+Alt+Shift+N', run: () => gotoSymbol(false) },
+    { id: 'ActivateFindToolWindow', title: tr('Tool Window: {title}', { title: tr('Find in Files') }), run: () => findTw.show() },
+    { id: 'ActivateTODOToolWindow', title: tr('Tool Window: {title}', { title: 'TODO' }), run: () => { todoTw.show(); refreshTodosNow(); } },
   ].forEach(ide.registerAction);
 })();
