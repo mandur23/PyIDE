@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PyIDE</title>
+  <link rel="stylesheet" href="core/styles.css">
+</head>
+<body>
+  <header id="toolbar">
+    <div id="toolbarLeft" class="tb-group">
+      <span class="logo">Py</span>
+      <button id="projectWidget" class="tb-btn" title="Open folder (Ctrl+O)">No project ▾</button>
+    </div>
+    <div id="toolbarRight" class="tb-group">
+      <select id="interpSelect" class="tb-select" title="Python interpreter"></select>
+    </div>
+  </header>
+
+  <div id="main">
+    <nav id="stripe">
+      <div id="stripeTop" class="stripe-group"></div>
+      <div class="spacer"></div>
+      <div id="stripeBottom" class="stripe-group"></div>
+    </nav>
+
+    <aside id="sidePanel">
+      <div class="panel-header">
+        <span id="sideTitle"></span>
+        <span id="sideActions" class="panel-actions"></span>
+      </div>
+      <div id="sideBody"></div>
+    </aside>
+    <div id="sideSplitter" class="splitter v" data-target="sidePanel"></div>
+
+    <section id="center">
+      <div id="tabs"></div>
+      <div id="editorWrap">
+        <div id="editor"></div>
+        <div id="customHost"></div>
+        <div id="welcome">
+          <h1>PyIDE</h1>
+          <p>A PyCharm-style Python IDE</p>
+          <button id="welcomeOpen" class="primary">Open Folder</button>
+          <table class="keys">
+            <tr><td>Search files</td><td>Double Shift / Ctrl+Shift+N</td></tr>
+            <tr><td>Run current file</td><td>Shift+F10</td></tr>
+            <tr><td>Project / Terminal</td><td>Alt+1 / Alt+F12</td></tr>
+            <tr><td>Find actions</td><td>Ctrl+Shift+A</td></tr>
+          </table>
+        </div>
+      </div>
+      <div id="bottomSplitter" class="splitter h" data-target="bottom"></div>
+      <section id="bottom">
+        <div class="bottom-tabs">
+          <div id="bottomTabs" class="bottom-tab-list"></div>
+          <span class="spacer"></span>
+          <span id="bottomActions" class="panel-actions"></span>
+          <button id="hideBottomBtn" title="Hide (Shift+Esc)">—</button>
+        </div>
+        <div id="bottomBody"></div>
+      </section>
+    </section>
+  </div>
+
+  <footer id="status">
+    <span id="statusPath"></span>
+    <span class="spacer"></span>
+    <span id="statusItems"></span>
+    <span id="statusPos"></span>
+    <span>UTF-8</span>
+    <span id="statusInterp"></span>
+  </footer>
+
+  <div id="popup" class="hidden">
+    <input id="popupIn">
+    <div id="popupList"></div>
+  </div>
+  <div id="menuHost"></div>
+  <div id="dialogHost"></div>
+
+  <script src="core/theme.js"></script>
+  <script src="core/python.js"></script>
+  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="core/ide.js"></script>
+</body>
+</html>

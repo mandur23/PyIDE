@@ -1,0 +1,36 @@
+// Values taken from PyCharm 2025.2.4 via REA: lib/intellij.platform.ide.impl.jar
+// themes/expUI/expUI_dark.theme.json, themes/expUI/expUI_darkScheme.xml, keymaps/$default.xml
+window.PYCHARM_DARK = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: '', foreground: 'bcbec4' },
+    { token: 'keyword', foreground: 'cf8e6d' },
+    { token: 'string', foreground: '6aab73' },
+    { token: 'string.escape', foreground: 'cf8e6d' },
+    { token: 'number', foreground: '2aacb8' },
+    { token: 'comment', foreground: '7a7e85' },
+    { token: 'tag', foreground: 'b3ae60' },
+    { token: 'identifier', foreground: 'bcbec4' },
+    { token: 'type.identifier', foreground: 'bcbec4' },
+    { token: 'delimiter', foreground: 'bcbec4' },
+    { token: 'function', foreground: '56a8f5' },
+    { token: 'self', foreground: '94558d' },
+    { token: 'builtin', foreground: '8888c6' },
+  ],
+  colors: {
+    'editor.background': '#1e1f22',
+    'editor.foreground': '#bcbec4',
+    'editor.lineHighlightBackground': '#26282e',
+    'editorLineNumber.foreground': '#4b5059',
+    'editorLineNumber.activeForeground': '#a1a3ab',
+    'editor.selectionBackground': '#214283',
+    'editorCursor.foreground': '#ced0d6',
+    'editorIndentGuide.background1': '#313438',
+    'editorGutter.background': '#1e1f22',
+    'editorWidget.background': '#2b2d30',
+    'editorSuggestWidget.background': '#2b2d30',
+    'editorSuggestWidget.selectedBackground': '#2e436e',
+    'scrollbarSlider.background': '#4e515780',
+  },
+};

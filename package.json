@@ -1,0 +1,1 @@
+{"name":"pyide","version":"0.1.0","description":"PyCharm-style Python IDE","main":"main.js","scripts":{"start":"electron ."},"devDependencies":{"electron":"^38.8.6"},"dependencies":{"monaco-editor":"^0.52.2","pyright":"^1.1.406"}}

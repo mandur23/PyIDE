@@ -1,0 +1,3 @@
+.run-target { color: var(--gray9); padding: 0 4px; }
+.run-btn { color: var(--green6); }
+.stop-btn { color: var(--red); }

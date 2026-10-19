@@ -1,0 +1,5 @@
+.problem { font-family: var(--mono); cursor: pointer; }
+.problem .sev { margin-right: 6px; }
+.problem .sev.error { color: var(--red); }
+.problem .sev.warning { color: var(--yellow); }
+.problem .sev.info { color: var(--blue8); }
