@@ -53,16 +53,30 @@ ide.emit = (evt, ...args) => {
 };
 
 // ---------- settings ----------
-// Persisted by the main process (userData/settings.json), written synchronously so nothing is lost on restart.
+// Persisted by the main process (userData/settings.json). The changes made in one task are written together right
+// after it, synchronously, and pending changes are written before the window unloads or the app restarts.
 const settingsCache = window.__initialSettings || {};
+let settingsDirty = false;
+const flushSettings = () => {
+  if (!settingsDirty) return;
+  settingsDirty = false;
+  api.saveSettingsSync(settingsCache);
+};
+// pagehide comes after every beforeunload listener, so changes those listeners make are written too.
+addEventListener('beforeunload', flushSettings);
+addEventListener('pagehide', flushSettings);
 ide.settings = {
   get: (key, fallback) => (key in settingsCache ? settingsCache[key] : fallback),
   set(key, value) {
     settingsCache[key] = value;
-    api.saveSettingsSync(settingsCache);
+    if (!settingsDirty) {
+      settingsDirty = true;
+      setTimeout(flushSettings);
+    }
     ide.emit('settingsChanged', key, value);
   },
   all: () => ({ ...settingsCache }),
+  flush: flushSettings,
 };
 
 // ---------- processes ----------
@@ -665,9 +679,17 @@ ide.problems = {
 };
 
 // ---------- project tree ----------
-const expanded = new Set();
+// The tree is a flat list of visible rows ({entry, depth}) built from listings of the open folders. Expanding or
+// collapsing a folder splices only its rows, and only the rows in view (plus a margin) have DOM nodes, so a folder
+// with 10,000 files costs one listing and about 60 nodes. Tree operations run one at a time in `treeQueue`.
+const ROW_HEIGHT = 24;
+const OVERSCAN = 10;
+const EXPANDED_KEY = 'projectTree.expanded';
+const keyOf = (p) => p.toLowerCase();
+const expanded = new Set(); // keyOf(path) of every open folder
 const treeDecorators = [];
 const treeActions = [];
+let rows = [];
 let selected = null;
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
@@ -675,65 +697,145 @@ ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
 ide.registerTreeAction = (action) => { treeActions.push(action); };
 ide.selectedTreeEntry = () => selected;
 
-async function renderTree() {
-  const tree = $('tree');
-  if (!tree || !ide.root) return;
-  const frag = document.createDocumentFragment();
-  const addNode = async (entry, depth) => {
-    const node = el('div', 'node' + (selected && samePath(entry.path, selected.path) ? ' selected' : ''));
-    node.style.paddingLeft = `${depth * 16 + 4}px`;
-    const open = expanded.has(entry.path.toLowerCase());
-    const ext = entry.name.split('.').pop();
-    node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
-    node.appendChild(el('span', 'icon ' + (entry.dir ? 'dir' : ext === 'py' ? 'py' : 'file'), entry.dir ? (open ? '📂' : '📁') : ext === 'py' ? '🐍' : '📄'));
-    const name = el('span', 'name', entry.name);
-    node.appendChild(name);
-    for (const deco of treeDecorators) {
-      const d = deco(entry);
-      if (d?.color) name.style.color = d.color;
-      if (d?.badge) node.appendChild(el('span', 'tree-badge', d.badge));
-    }
-    node.onclick = () => {
-      selected = entry;
-      if (entry.dir) {
-        const k = entry.path.toLowerCase();
-        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
-        renderTree();
-      } else {
-        tree.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
-        node.classList.add('selected');
-        ide.openFile(entry.path, { preview: true });
-      }
-    };
-    // Double-click keeps a file that a single click opened as a preview tab; Shift+click opens it beside the current pane.
-    if (!entry.dir) node.ondblclick = () => ide.openFile(entry.path);
-    if (!entry.dir) node.addEventListener('click', (e) => { if (e.shiftKey) { e.stopImmediatePropagation(); ide.openFile(entry.path, { group: 'right' }); } }, true);
-    node.oncontextmenu = (e) => {
-      e.preventDefault();
-      selected = entry;
-      tree.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
-      node.classList.add('selected');
-      showTreeMenu(entry, e.clientX, e.clientY);
-    };
-    frag.appendChild(node);
-    if (entry.dir && open) {
-      let children = [];
-      try { children = await ide.api.list(entry.path); } catch {}
-      for (const child of children) await addNode(child, depth + 1);
+let treeQueue = Promise.resolve();
+const enqueueTree = (fn) => (treeQueue = treeQueue.catch(() => {}).then(fn));
+const listDir = (dir) => ide.api.list(dir).catch(() => []);
+const rowIndexOf = (path) => rows.findIndex((r) => samePath(r.entry.path, path));
+
+// The rows below an open folder: its open subfolders are listed level by level, each level in parallel.
+async function subtreeRows(entry, depth) {
+  const listings = new Map();
+  for (let level = [entry.path]; level.length;) {
+    const lists = await Promise.all(level.map(listDir));
+    const next = [];
+    level.forEach((dir, i) => {
+      listings.set(keyOf(dir), lists[i]);
+      for (const c of lists[i]) if (c.dir && expanded.has(keyOf(c.path))) next.push(c.path);
+    });
+    level = next;
+  }
+  const out = [];
+  const add = (dir, d) => {
+    for (const c of listings.get(keyOf(dir)) || []) {
+      out.push({ entry: c, depth: d });
+      if (c.dir && expanded.has(keyOf(c.path))) add(c.path, d + 1);
     }
   };
-  await addNode({ name: basename(ide.root), path: ide.root, dir: true }, 0);
-  tree.replaceChildren(frag);
-  ide.emit('treeRefreshed');
+  add(entry.path, depth + 1);
+  return out;
+}
+
+function rowNode({ entry, depth }, index) {
+  const open = entry.dir && expanded.has(keyOf(entry.path));
+  const node = el('div', 'node' + (selected && samePath(entry.path, selected.path) ? ' selected' : ''));
+  node._entry = entry;
+  node.style.top = `${index * ROW_HEIGHT}px`;
+  node.style.paddingLeft = `${depth * 16 + 4}px`;
+  node.draggable = depth > 0;
+  const ext = entry.name.split('.').pop();
+  node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
+  node.appendChild(el('span', 'icon ' + (entry.dir ? 'dir' : ext === 'py' ? 'py' : 'file'), entry.dir ? (open ? '📂' : '📁') : ext === 'py' ? '🐍' : '📄'));
+  const name = el('span', 'name', entry.name);
+  node.appendChild(name);
+  for (const deco of treeDecorators) {
+    const d = deco(entry);
+    if (d?.color) name.style.color = d.color;
+    if (d?.badge) node.appendChild(el('span', 'tree-badge', d.badge));
+  }
+  return node;
+}
+
+// Draws the rows in view. A hidden tree (no height yet) still draws a screenful, so its first rows exist.
+function drawTree() {
+  const tree = $('tree');
+  if (!tree) return;
+  const canvas = tree.firstChild;
+  canvas.style.height = `${rows.length * ROW_HEIGHT}px`;
+  const view = tree.clientHeight || 40 * ROW_HEIGHT;
+  const first = Math.max(0, Math.floor(tree.scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((tree.scrollTop + view) / ROW_HEIGHT) + OVERSCAN);
+  const nodes = [];
+  for (let i = first; i < last; i++) nodes.push(rowNode(rows[i], i));
+  canvas.replaceChildren(...nodes);
+}
+
+function scrollToRow(i) {
+  const tree = $('tree');
+  if (i * ROW_HEIGHT < tree.scrollTop) tree.scrollTop = i * ROW_HEIGHT;
+  else if ((i + 1) * ROW_HEIGHT > tree.scrollTop + tree.clientHeight) tree.scrollTop = (i + 1) * ROW_HEIGHT - tree.clientHeight;
+}
+
+function selectRow(i) {
+  if (!rows.length) return;
+  i = Math.max(0, Math.min(rows.length - 1, i));
+  selected = rows[i].entry;
+  scrollToRow(i);
+  drawTree();
+}
+
+// Open folders are remembered per project (relative, lower-cased paths) and listed again when it opens.
+let saveExpandedTimer = null;
+function saveExpanded() {
+  clearTimeout(saveExpandedTimer);
+  const root = ide.root;
+  saveExpandedTimer = setTimeout(() => {
+    if (!root || !samePath(root, ide.root)) return;
+    const open = rows.filter((r) => r.depth > 0 && r.entry.dir && expanded.has(keyOf(r.entry.path))).map((r) => keyOf(r.entry.path).slice(root.replace(/[\\/]+$/, '').length + 1));
+    const keep = new Set(ide.settings.get('recentProjects', []).map((p) => keyOf(p.path)));
+    const all = Object.fromEntries(Object.entries(ide.settings.get(EXPANDED_KEY, {})).filter(([k]) => keep.has(k)));
+    ide.settings.set(EXPANDED_KEY, { ...all, [keyOf(root)]: open.slice(0, 500) });
+  }, 1000);
+}
+
+// Lists every open folder again (files may have changed on disk) and redraws. Calls made while one is waiting to
+// start share it; a call made while one runs gets its own run afterwards.
+let pendingRefresh = null;
+function renderTree() {
+  pendingRefresh ||= enqueueTree(async () => {
+    pendingRefresh = null;
+    const rootPath = ide.root;
+    if (!rootPath || !$('tree')) return;
+    const root = { name: basename(rootPath), path: rootPath, dir: true };
+    const below = expanded.has(keyOf(rootPath)) ? await subtreeRows(root, 0) : [];
+    if (!samePath(rootPath, ide.root)) return;
+    rows = [{ entry: root, depth: 0 }, ...below];
+    drawTree();
+    if (!performance.getEntriesByName('pyide:tree').length) performance.mark('pyide:tree');
+    ide.emit('treeRefreshed');
+  });
+  return pendingRefresh;
 }
 ide.refreshTree = renderTree;
 
+const toggleDir = (entry) => enqueueTree(async () => {
+  const i = rowIndexOf(entry.path);
+  if (i < 0) return;
+  const { depth } = rows[i];
+  const k = keyOf(entry.path);
+  if (expanded.has(k)) {
+    expanded.delete(k);
+    let end = i + 1;
+    while (end < rows.length && rows[end].depth > depth) end++;
+    rows.splice(i + 1, end - i - 1);
+  } else {
+    const rootPath = ide.root;
+    expanded.add(k);
+    const below = await subtreeRows(rows[i].entry, depth);
+    if (!samePath(rootPath, ide.root)) return;
+    rows = rows.slice(0, i + 1).concat(below, rows.slice(i + 1));
+  }
+  saveExpanded();
+  drawTree();
+});
+
 ide.revealInTree = async (path) => {
   let d = dirname(path);
-  while (d && d.length >= (ide.root || '').length) { expanded.add(d.toLowerCase()); d = dirname(d); }
+  while (d && d.length >= (ide.root || '').length) { expanded.add(keyOf(d)); d = dirname(d); }
   selected = { name: basename(path), path, dir: false };
   await renderTree();
-  $('tree').querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+  const i = rowIndexOf(path);
+  if (i >= 0) selectRow(i);
+  saveExpanded();
 };
 
 const selectedDir = () => (!selected ? ide.root : selected.dir ? selected.path : dirname(selected.path));
@@ -745,23 +847,38 @@ async function createEntry(isDir) {
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
   try {
     await ide.api.create(target, isDir);
-    expanded.add(dirname(target).toLowerCase());
+    expanded.add(keyOf(dirname(target)));
     await renderTree();
     ide.emit('filesChanged', { created: [target] });
     if (!isDir) ide.openFile(target);
   } catch (e) { alert(e.message); }
 }
 
+// Renames or moves a file or folder. Windows' rename replaces an existing file, so an existing target is refused.
+// Open files under it are saved first and reopened from their new place.
+async function moveTo(entry, to) {
+  if (!samePath(entry.path, to) && await ide.api.exists(to)) return alert(tr('{path} already exists', { path: to }));
+  const open = ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path));
+  for (const t of open) if (ide.isDirty(t)) await ide.saveTab(t);
+  try { await ide.api.rename(entry.path, to); } catch (e) { return alert(e.message); }
+  for (const t of open) ide.closeTab(t.path, true);
+  renderTree();
+  ide.emit('filesChanged', { renamed: [[entry.path, to]] });
+  for (const p of new Set(open.map((t) => t.path))) ide.openFile(to + p.slice(entry.path.length));
+}
+
 async function renameEntry(entry) {
   const name = await ide.ui.prompt(tr('New name'), entry.name);
   if (!name || name === entry.name) return;
-  const to = joinPath(dirname(entry.path), name);
-  try { await ide.api.rename(entry.path, to); } catch (e) { return alert(e.message); }
-  for (const t of ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path))) {
-    ide.closeTab(t.path, true);
-  }
-  renderTree();
-  ide.emit('filesChanged', { renamed: [[entry.path, to]] });
+  await moveTo(entry, joinPath(dirname(entry.path), name));
+}
+
+// Dropping a row on a folder moves it there, after a confirmation.
+async function moveEntry(entry, dir) {
+  if (samePath(dirname(entry.path), dir) || isUnder(dir, entry.path)) return;
+  if (!confirm(tr('Move {name} to {dir}?', { name: entry.name, dir: ide.util.rel(dir) || basename(dir) }))) return;
+  expanded.add(keyOf(dir));
+  await moveTo(entry, joinPath(dir, entry.name));
 }
 
 async function deleteEntry(entry) {
@@ -784,12 +901,111 @@ function showTreeMenu(entry, x, y) {
   ]);
 }
 
+// Up/Down/Home/End/PageUp/PageDown move the selection, Right opens a folder or enters it, Left closes it or goes to
+// the parent, Enter opens a file or toggles a folder, Delete moves the selection to the Recycle Bin.
+function treeKey(e) {
+  if (e.ctrlKey || e.altKey || e.metaKey || !rows.length) return;
+  const i = selected ? rowIndexOf(selected.path) : -1;
+  const row = rows[i];
+  const page = Math.max(1, Math.floor($('tree').clientHeight / ROW_HEIGHT) - 1);
+  const isOpen = row?.entry.dir && expanded.has(keyOf(row.entry.path));
+  const keys = {
+    ArrowDown: () => selectRow(i + 1),
+    ArrowUp: () => selectRow(i < 0 ? 0 : i - 1),
+    Home: () => selectRow(0),
+    End: () => selectRow(rows.length - 1),
+    PageDown: () => selectRow(i + page),
+    PageUp: () => selectRow(i - page),
+    ArrowRight: () => row?.entry.dir && (isOpen ? rows[i + 1]?.depth > row.depth && selectRow(i + 1) : toggleDir(row.entry)),
+    ArrowLeft: () => {
+      if (!row) return;
+      if (isOpen) return toggleDir(row.entry);
+      let j = i - 1;
+      while (j >= 0 && rows[j].depth >= row.depth) j--;
+      if (j >= 0) selectRow(j);
+    },
+    Enter: () => row && (row.entry.dir ? toggleDir(row.entry) : ide.openFile(row.entry.path)),
+    Delete: () => row && row.depth > 0 && deleteEntry(row.entry),
+  };
+  if (!keys[e.key]) return;
+  e.preventDefault();
+  e.stopPropagation();
+  keys[e.key]();
+}
+
+function wireTree(tree) {
+  const entryAt = (e) => e.target.closest?.('.node')?._entry;
+  tree.addEventListener('scroll', drawTree, { passive: true });
+  new ResizeObserver(drawTree).observe(tree);
+  tree.addEventListener('keydown', treeKey);
+  tree.addEventListener('click', (e) => {
+    const entry = entryAt(e);
+    if (!entry) return;
+    selected = entry;
+    drawTree();
+    // Shift+click opens a file beside the current pane; a single click opens it as a preview tab.
+    if (entry.dir) toggleDir(entry);
+    else ide.openFile(entry.path, e.shiftKey ? { group: 'right' } : { preview: true });
+  });
+  // Double-click keeps a file that a single click opened as a preview tab.
+  tree.addEventListener('dblclick', (e) => {
+    const entry = entryAt(e);
+    if (entry && !entry.dir) ide.openFile(entry.path);
+  });
+  tree.addEventListener('contextmenu', (e) => {
+    const entry = entryAt(e);
+    if (!entry) return;
+    e.preventDefault();
+    selected = entry;
+    drawTree();
+    showTreeMenu(entry, e.clientX, e.clientY);
+  });
+  // Drag a row onto a folder to move it, or onto an editor to open it there (editors.js reads the path type).
+  let dragged = null;
+  const dropDir = (e) => {
+    const entry = entryAt(e);
+    return entry && dragged && (entry.dir ? entry.path : dirname(entry.path));
+  };
+  const clearDropMark = () => tree.querySelectorAll('.drop-into').forEach((n) => n.classList.remove('drop-into'));
+  tree.addEventListener('dragstart', (e) => {
+    dragged = entryAt(e);
+    if (!dragged) return;
+    // No text/plain: Monaco would type the path into the editor it is dropped on.
+    e.dataTransfer.setData(ide.TREE_PATH_TYPE, dragged.path);
+    e.dataTransfer.effectAllowed = 'copyMove';
+  });
+  // On the document: the row the drag started from may have been redrawn (auto-scroll, a refresh) and detached.
+  document.addEventListener('dragend', () => { dragged = null; clearDropMark(); });
+  tree.addEventListener('dragover', (e) => {
+    const dir = dropDir(e);
+    clearDropMark();
+    if (!dir || samePath(dirname(dragged.path), dir) || isUnder(dir, dragged.path)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const i = rowIndexOf(dir);
+    [...tree.firstChild.children].find((n) => n._entry === rows[i]?.entry)?.classList.add('drop-into');
+  });
+  tree.addEventListener('drop', (e) => {
+    const dir = dropDir(e);
+    const entry = dragged;
+    clearDropMark();
+    if (!dir) return;
+    e.preventDefault();
+    e.stopPropagation();
+    moveEntry(entry, dir);
+  });
+}
+ide.TREE_PATH_TYPE = 'application/x-pyide-path';
+
 ide.registerToolWindow({
   id: 'Project', title: tr('Project'), icon: '▤', side: 'left', keys: 'Alt+1', order: 0,
   mount(container, tw) {
     const tree = el('div');
     tree.id = 'tree';
+    tree.tabIndex = 0;
+    tree.appendChild(el('div', 'tree-canvas'));
     container.appendChild(tree);
+    wireTree(tree);
     tw.setActions([
       { icon: '＋', title: tr('New Python File'), run: () => createEntry(false) },
       { icon: '▣', title: tr('New Directory'), run: () => createEntry(true) },
@@ -797,6 +1013,12 @@ ide.registerToolWindow({
     ]);
   },
 });
+// Alt+1 also moves the keyboard into the tree, as in PyCharm; other ways of showing it leave the focus alone.
+ide.registerAction({ ...ide.actions.find((a) => a.id === 'ActivateProjectToolWindow'), run() {
+  const tw = ide.toolWindows.get('Project');
+  tw.toggle();
+  if (tw.isVisible()) $('tree').focus();
+} });
 
 // ---------- interpreters ----------
 // interpreterProviders: async (root) => interps, for interpreters that are not local executables.
@@ -847,12 +1069,15 @@ ide.openProject = async (dir) => {
   ide.closeAllTabs(true);
   ide.root = dir;
   expanded.clear();
-  expanded.add(dir.toLowerCase());
+  expanded.add(keyOf(dir));
+  for (const rel of ide.settings.get(EXPANDED_KEY, {})[keyOf(dir)] || []) expanded.add(keyOf(joinPath(dir, rel)));
   selected = null;
+  rows = [];
+  drawTree();
+  $('tree').scrollTop = 0;
   document.title = `${basename(dir)} - PyIDE`;
   $('welcome').classList.add('hidden');
-  await renderTree();
-  await ide.reloadInterpreters();
+  await Promise.all([renderTree(), ide.reloadInterpreters()]);
   try { localStorage.setItem('lastProject', dir); } catch {}
   const recent = ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, dir));
   ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
@@ -865,7 +1090,8 @@ ide.closeProject = async () => {
   ide.root = null;
   expanded.clear();
   selected = null;
-  $('tree')?.replaceChildren();
+  rows = [];
+  drawTree();
   document.title = 'PyIDE';
   $('welcome').classList.remove('hidden');
   try { localStorage.removeItem('lastProject'); } catch {}
@@ -949,25 +1175,29 @@ ide.api = window.api;
 // rejection unhandled; Monaco itself treats these as non-errors.
 addEventListener('unhandledrejection', (e) => { if (e.reason?.name === 'Canceled' && e.reason?.message === 'Canceled') e.preventDefault(); });
 
+// Plugin scripts are fetched in parallel; async = false still runs them in list order (dependencies first).
 async function loadFeatures() {
-  for (const p of await ide.api.invoke('core:features')) {
+  const plugins = await ide.api.invoke('core:features');
+  await Promise.all(plugins.map((p) => {
     if (p.css) {
       const link = el('link');
       link.rel = 'stylesheet';
       link.href = p.css;
       document.head.appendChild(link);
     }
-    await new Promise((resolve) => {
+    return new Promise((resolve) => {
       const s = el('script');
       s.src = p.script;
+      s.async = false;
       s.onload = resolve;
       s.onerror = () => { console.error(`plugin ${p.id} failed to load`); resolve(); };
       document.body.appendChild(s);
     });
-  }
+  }));
 }
 
-ide.restart = () => ide.api.relaunch();
+// The relaunch exits without unloading the window, so pending settings are written first.
+ide.restart = () => { flushSettings(); return ide.api.relaunch(); };
 
 require.config({ paths: { vs: '../node_modules/monaco-editor/min/vs' } });
 // Monaco's default blob worker cannot importScripts() a file:// URL (uncaught ErrorEvent); load the worker script directly.
@@ -1005,7 +1235,9 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
     fixedOverflowWidgets: true,
   });
 
+  performance.mark('pyide:monaco');
   await loadFeatures();
+  performance.mark('pyide:features');
   ide.emit('ready');
   if (ide.detached) {
     await ide.initDetachedWindow();
@@ -1018,5 +1250,6 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
   if (last && await ide.api.exists(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
+  performance.mark('pyide:ready');
   window.__ideReady = true;
 }));

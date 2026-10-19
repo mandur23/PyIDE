@@ -456,10 +456,12 @@
 
   const hasTabData = (e) => [...e.dataTransfer.types].includes('application/x-pyide-tab');
   const hasFiles = (e) => [...e.dataTransfer.types].includes('Files');
+  // A row dragged from the project tree carries its path.
+  const treePath = (e) => ([...e.dataTransfer.types].includes(ide.TREE_PATH_TYPE) ? e.dataTransfer.getData(ide.TREE_PATH_TYPE) || true : null);
 
   function wireDrop(g) {
     g.body.addEventListener('dragover', (e) => {
-      if (!hasTabData(e) && !hasFiles(e)) return;
+      if (!hasTabData(e) && !hasFiles(e) && !treePath(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
       showDropOverlay(g, dropZone(g, e));
@@ -471,6 +473,7 @@
       hideDropOverlay();
       const zone = dropZone(g, e);
       if (hasFiles(e)) return openDroppedFiles(e, zone === 'center' ? g : splitGroup(g, zone, null));
+      if (treePath(e)) return ide.openFile(treePath(e), { group: zone === 'center' ? g : splitGroup(g, zone, null) });
       const tab = dragging;
       if (!tab) return;
       if (zone === 'center') placeTab(tab, g, { clone: e.ctrlKey });
@@ -481,7 +484,7 @@
       }
     });
     g.tabList.addEventListener('dragover', (e) => {
-      if (!hasTabData(e) && !hasFiles(e)) return;
+      if (!hasTabData(e) && !hasFiles(e) && !treePath(e)) return;
       e.preventDefault();
       hideDropOverlay();
       for (const n of g.tabList.children) n.classList.remove('drop-before', 'drop-after');
@@ -494,6 +497,7 @@
       e.stopPropagation();
       for (const n of g.tabList.children) n.classList.remove('drop-before', 'drop-after');
       if (hasFiles(e)) return openDroppedFiles(e, g);
+      if (treePath(e)) return ide.openFile(treePath(e), { group: g });
       const tab = dragging;
       if (!tab) return;
       const target = e.target.closest('.tab');

@@ -24,6 +24,7 @@
   "New Python file name": "새 Python 파일 이름",
   "New name": "새 이름",
   "Move {name} to the Recycle Bin?": "{name}을(를) 휴지통으로 이동하시겠습니까?",
+  "Move {name} to {dir}?": "{name}을(를) {dir}(으)로 이동하시겠습니까?",
   "New Python File": "새 Python 파일",
   "New Directory": "새 디렉터리",
   "Rename…": "이름 변경…",

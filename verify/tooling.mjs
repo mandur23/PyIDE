@@ -189,7 +189,8 @@ try {
   check(await js(`document.querySelector('#venvLocation').value.toLowerCase() === ${S(path.join(t.project, '.venv').toLowerCase())}`), 'new venv defaults to <project>\\.venv');
   await click('#venvCreate');
   await until(`document.querySelector('#interpStatus').textContent.startsWith('Created')`, 'venv created', 180000);
-  check(await js(`ide.currentInterp().executable.toLowerCase().startsWith(${S(path.join(t.project, '.venv').toLowerCase())})`), 'created venv becomes the project interpreter');
+  // The status shows "Created" before the interpreter list is reloaded and the venv selected.
+  check(await until(`ide.currentInterp()?.executable.toLowerCase().startsWith(${S(path.join(t.project, '.venv').toLowerCase())})`, 'venv selected', 15000).then(() => true, () => false), 'created venv becomes the project interpreter');
   await until(`[...document.querySelectorAll('#settingsPackages .pkg-trow')].some(r => r.textContent.startsWith('pip'))`, 'venv packages', 60000);
   check(await js(`document.querySelectorAll('#settingsPackages .pkg-trow').length <= 3`), 'interpreter page lists the venv packages');
 

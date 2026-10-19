@@ -12,18 +12,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
 // userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
 // exe: an installed PyIDE.exe to run instead of the source tree; open: a project file to pass instead of the folder.
-export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open }) {
+// projectDir: an existing project folder to open in place, instead of a copy of a fixture; args: extra command-line flags.
+export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [] }) {
   const work = mkdtempSync(path.join(tmpdir(), `pyide-${name}-`));
-  const project = path.join(work, 'project');
-  cpSync(path.join(APP_DIR, 'verify', 'fixtures', fixture), project, { recursive: true });
+  const project = projectDir || path.join(work, 'project');
+  if (!projectDir) cpSync(path.join(APP_DIR, 'verify', 'fixtures', fixture), project, { recursive: true });
   const outDir = path.join(APP_DIR, 'verify', 'out', name);
   mkdirSync(outDir, { recursive: true });
 
-  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`];
+  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...extraArgs];
+  const spawnedAt = Date.now();
   const child = spawn(exe || ELECTRON, exe ? args : [APP_DIR, ...args], {
     // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their
     // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
-    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', ...process.env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
+    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
 
@@ -113,7 +115,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     close();
     throw new Error(`IDE never became ready; renderer exceptions after reload:\n  ${consoleErrors.join('\n  ') || '(none)'}`);
   }
-  return { project, outDir, userData: userData || path.join(work, 'userdata'), cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
+  return { project, outDir, userData: userData || path.join(work, 'userdata'), pid: child.pid, spawnedAt, cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
 }
 
 // Opens a project file in the editor and waits for its tab.

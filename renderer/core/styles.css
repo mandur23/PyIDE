@@ -73,7 +73,10 @@ input, select, textarea { font: inherit; }
 /* A tool container that is itself a console host must still hide when inactive. */
 .tool:not(.active) { display: none !important; }
 
-#tree { flex: 1; overflow: auto; padding-bottom: 8px; user-select: none; }
+#tree { flex: 1; overflow: auto; padding-bottom: 8px; user-select: none; outline: none; }
+.tree-canvas { position: relative; min-width: 100%; }
+.tree-canvas > .node { position: absolute; left: 0; right: 0; }
+.node.drop-into { box-shadow: inset 0 0 0 1px var(--blue6); }
 .node { display: flex; align-items: center; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; }
 .node:hover { background: var(--gray3); }
 .node.selected { background: var(--blue2); }
