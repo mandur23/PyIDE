@@ -1,0 +1,9 @@
+{
+  "Inlay Hints": "인레이 힌트",
+  "Shows inferred variable types, parameter names in calls and inferred return types inline in Python editors, using the Pyright language server.": "Pyright 언어 서버를 사용해 Python 에디터에 추론된 변수 타입, 호출의 매개변수 이름, 추론된 반환 타입을 인라인으로 표시합니다.",
+  "Show inlay hints": "인레이 힌트 표시",
+  "Inferred types of variables": "추론된 변수 타입",
+  "Parameter names in calls": "호출의 매개변수 이름",
+  "Inferred return types of functions": "추론된 함수 반환 타입",
+  "Types and parameter names come from Pyright.": "타입과 매개변수 이름은 Pyright에서 가져옵니다."
+}

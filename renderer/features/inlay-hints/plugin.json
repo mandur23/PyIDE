@@ -1,0 +1,8 @@
+{
+  "id": "inlay-hints",
+  "name": "Inlay Hints",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Shows inferred variable types, parameter names in calls and inferred return types inline in Python editors, using the Pyright language server.",
+  "depends": ["lsp"]
+}

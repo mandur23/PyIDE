@@ -129,7 +129,11 @@
       act('ShowIntentionActions'), act('ReformatCode'), act('OptimizeImports'), act('RuffFixAll') || act('tooling.ruffFixAll'),
       { separator: true }, act('CommentByLineComment'), act('CollapseRegion'), act('ExpandRegion'),
     ]) },
-    { label: tr('Refactor'), submenu: () => tidy([act('RenameElement')]) },
+    { label: tr('Refactor'), submenu: () => tidy([
+      act('Refactorings.QuickListPopupAction'), { separator: true },
+      act('RenameElement'), act('ChangeSignature'), act('Move'), act('Inline'), { separator: true },
+      act('IntroduceVariable'), act('IntroduceConstant'), act('IntroduceParameter'), act('ExtractMethod'),
+    ]) },
     { label: tr('Run'), submenu: () => tidy([
       act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
       act('ChooseDebugConfiguration'),

@@ -72,7 +72,9 @@
     'tools.ruffLineLength': [0, 400],
   };
   const RESTART_KEYS = new Set(['appearance.language']);
-  const get = (k) => ide.settings.get(k, DEFAULTS[k]);
+  // Plugin settings pages may declare defaults for their keys ({defaults: {key: value}}).
+  const pluginDefault = (k) => (ide.settingsPages || []).find((p) => p.defaults && k in p.defaults)?.defaults[k];
+  const get = (k) => ide.settings.get(k, k in DEFAULTS ? DEFAULTS[k] : pluginDefault(k));
 
   function applyTheme() {
     const light = get('appearance.theme') === 'light';
@@ -142,13 +144,15 @@
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai', mount(host, ctx)} to
-  // ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor', defaults?, mount(host, ctx)}
+  // to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
   let TREE, PAGES;
   function rebuildTree() {
     const pluginPages = ide.settingsPages || [];
     const ai = pluginPages.filter((p) => p.group === 'ai');
-    TREE = [...BASE_TREE, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai')];
+    const editor = pluginPages.filter((p) => p.group === 'editor');
+    const base = BASE_TREE.map((n) => (n.group === 'editor-group' ? { ...n, children: [...n.children, ...editor] } : n));
+    TREE = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && p.group !== 'editor')];
     PAGES = TREE.flatMap((n) => n.children || [n]);
   }
   rebuildTree();

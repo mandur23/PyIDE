@@ -65,7 +65,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 - `ide.openSettings(pageId)` (settings) and `ide.tooling` (`reformat`, `optimizeImports`, `fixAll`, `lint`). Ruff lint results use problems source `'ruff'`.
 - `ide.database` (database): `addDataSource(cfg)` -> id, `list()`, `query(id, sql, opts)`, `openConsole(id)`, `drivers()`, `activeConsole()`.
 - `ide.installer` (installer): `open(category?)`, `refresh()`, `register(item)`, `pip({package, name, description, category})`. Any plugin lists installables by pushing to `ide.installables` and emitting `installablesChanged` (see Install Manager below), so load order does not matter.
-- Settings pages: a plugin pushes `{id, title: () => string, keywords, group?: 'ai', mount(host, ctx)}` to `ide.settingsPages`; `ctx.ui` has `section`, `fieldRow`, `checkbox`, `numberInput(key, {min, max, fallback})` and `selectInput(key, options, fallback)`, whose values follow the dialog's OK/Apply/Cancel.
+- Settings pages: a plugin pushes `{id, title: () => string, keywords, group?: 'ai' | 'editor', defaults?: {key: value}, mount(host, ctx)}` to `ide.settingsPages` (`group: 'editor'` lists the page under Editor; `defaults` are what its controls show for unset keys); `ctx.ui` has `section`, `fieldRow`, `checkbox`, `numberInput(key, {min, max, fallback})` and `selectInput(key, options, fallback)`, whose values follow the dialog's OK/Apply/Cancel.
 - `ide.aiComplete` (ai-complete): `status()`, `mode()`, `isVisible(editor)`. `ide.aiEdit` (ai-edit): `open`, `session`, `nes`, `nesEnabled`, `setNes`.
 - `ide.localHistory` (local-history): `checkpoint(label, {paths, user})` before anything that rewrites files (English label such as `'Before Refactoring'`, translated where it is shown; `user: true` for a name the user typed), `show(path, isDir)`, `putLabel()`, `ready()`. `ide.bookmarks` (bookmarks): `list()`, `toggle()`, `gotoMnemonic(c)`, `showPopup()`, `show()`.
 - Key handoffs through `when`: Ctrl+F2 is run's Stop unless a debug session is active; Ctrl+Shift+F10 is run's context run unless the caret is in a test (tests); Ctrl+1..3 focus editor groups (core) unless a numbered bookmark with that digit exists (bookmarks).
@@ -90,6 +90,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 | ai-complete | Tab / Ctrl+Right / Esc while ghost text is visible, Ctrl+Alt+\ (Trigger AI Completion) |
 | ai-edit | Ctrl+I (Edit with Claude), Ctrl+Enter / Tab / Esc while reviewing, Tab / Esc for a visible next edit suggestion (never while ghost text, the suggest widget or a snippet is active) |
 | notebook | Shift+Enter, Ctrl+Enter, Alt+Enter, Esc inside notebook cells, and Jupyter's single-letter command-mode keys while the notebook (not a cell) has focus; none are global |
+| refactor | Ctrl+Alt+V, Ctrl+Alt+C, Ctrl+Alt+P, Ctrl+Alt+M, Ctrl+Alt+N, Ctrl+F6, F6, Ctrl+Alt+Shift+T, all only in a Python editor; Ctrl+Z / Ctrl+Shift+Z only in a file a refactoring just moved (elsewhere Monaco's own undo starts the cross-file undo) |
 | bookmarks | F11, Ctrl+F11, Shift+F11, Ctrl+0..9 (while that numbered bookmark exists), Ctrl+Shift+0..9, Alt+2 |
 | frameworks | Ctrl+Alt+R (Run manage.py Task, Django projects only), Ctrl+B on a template, URL-name or urlconf string (registered on `ready`, so it runs before lsp's Ctrl+B and falls through to it elsewhere) |
 
