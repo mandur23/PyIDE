@@ -70,6 +70,9 @@ exports.register = ({ ipcMain, app }) => {
     }
     const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
     const env = { ...process.env, ...venvEnv(opts.interpreter), ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
+    // The official Claude Code installer puts claude.exe in ~/.local/bin without adding it to PATH; make `claude` work here.
+    const localBin = path.join(os.homedir(), '.local', 'bin');
+    if (fs.existsSync(localBin) && !(env.PATH || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env.PATH = `${localBin};${env.PATH}`;
     delete env.ELECTRON_RUN_AS_NODE;
     const proc = pty.spawn(shell.file, args, {
       name: 'xterm-256color',

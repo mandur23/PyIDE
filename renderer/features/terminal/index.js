@@ -242,6 +242,9 @@
 
   async function openClaude() {
     tw.show();
+    // Claude Code's interface needs room; a short bottom panel grows to just under half the window.
+    const bottom = document.getElementById('bottom');
+    if (bottom.offsetHeight < innerHeight * 0.4) bottom.style.height = `${Math.round(innerHeight * 0.45)}px`;
     const existing = claudeSession();
     if (existing) { select(existing); return existing; }
     if (!(await refreshClaude()).installed) { showInstallPrompt(); return null; }
