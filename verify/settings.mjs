@@ -55,6 +55,21 @@ try {
   await a.shot('small-window.png');
   await a.cdp('Emulation.clearDeviceMetricsOverride');
 
+  // ---------- new virtualenv form stays inside the dialog ----------
+  await openPage(a, 'interpreter');
+  await a.click('#addInterpBtn');
+  await a.until(`!!document.querySelector('#addInterpMenu')`, 'add interpreter menu');
+  await a.js(`[...document.querySelectorAll('#addInterpMenu .menu-item')][1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  await a.until(`document.activeElement?.id === 'venvLocation'`, 'venv form focused');
+  const fit = await a.js(`(() => {
+    const dlg = document.querySelector('.settings-dialog').getBoundingClientRect();
+    const scrolled = [...document.querySelectorAll('.settings, .settings-main, .settings-page, .settings-body')].some(n => n.scrollLeft > 0);
+    const inside = ['#venvLocation', '#venvBase', '#venvCreate', '#addInterpBtn', '.settings-search'].every(s => { const r = document.querySelector(s).getBoundingClientRect(); return r.left >= dlg.left && r.right <= dlg.right; });
+    return { scrolled, inside };
+  })()`);
+  check(!fit.scrolled && fit.inside, `the new virtualenv form fits the dialog without scrolling it sideways (${JSON.stringify(fit)})`);
+  await a.js(`[...document.querySelectorAll('.venv-buttons button')].find(b => b.textContent === 'Cancel').click()`);
+
   // ---------- plugins ----------
   await openPage(a, 'plugins');
   await a.until(`document.querySelectorAll('#pluginsList .plugin-row').length >= 12`, 'installed plugins listed');
