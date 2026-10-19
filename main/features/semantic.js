@@ -6,7 +6,9 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const runtime = require('../ai/runtime');
+const { isMainThread, parentPort, workerData } = require('worker_threads');
+// This file is also the worker that reads and chunks project files (see collect()); relative requires do not resolve there.
+const runtime = isMainThread ? require('../ai/runtime') : null;
 
 const MODEL_ID = 'google/embeddinggemma-2';
 const DIM = 256; // Matryoshka truncation: a quarter of the storage of 768 with little loss for code retrieval
@@ -121,6 +123,57 @@ function fakeEmbed(text) {
   return v;
 }
 
+function walk(root) {
+  const out = [];
+  const visit = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) {
+        if (SKIP_DIRS.has(d.name) || /^\.?venv/i.test(d.name) || fs.existsSync(path.join(p, 'pyvenv.cfg'))) continue;
+        visit(p);
+      } else if (TEXT_EXT.has(d.name.split('.').pop().toLowerCase())) {
+        let st;
+        try { st = fs.statSync(p); } catch { continue; }
+        if (st.size > 0 && st.size <= MAX_FILE_BYTES) out.push({ abs: p, rel: path.relative(root, p), mtime: st.mtimeMs, size: st.size });
+      }
+    }
+  };
+  visit(root);
+  return out;
+}
+
+// The disk half of an index update, run on a worker thread so a large project never stalls the main process:
+// which files are gone or changed, and the changed ones read and chunked. `known` is {rel: {mtime, size, chunks}}
+// (chunks = how many the index holds for it).
+function collect(root, known, onlyPaths) {
+  const disk = walk(root);
+  const seen = new Set(disk.map((f) => f.rel.toLowerCase()));
+  let stale = disk.filter((f) => { const old = known[f.rel]; return !old || old.mtime !== f.mtime || old.size !== f.size; });
+  if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known[f.rel]);
+  const staleRels = new Set(stale.map((f) => f.rel));
+  let budget = MAX_CHUNKS - Object.entries(known).filter(([rel]) => seen.has(rel.toLowerCase()) && !staleRels.has(rel)).reduce((n, [, k]) => n + k.chunks, 0);
+  const work = [];
+  let capped = false;
+  for (const f of stale) {
+    let text;
+    try { text = fs.readFileSync(f.abs, 'utf8'); } catch { continue; }
+    if (text.includes('\u0000')) continue;
+    const chunks = chunkFile(f.rel, text).map((c) => ({ ...c, title: f.rel.replace(/\\/g, '/') }));
+    if (chunks.length > budget) { capped = true; break; }
+    budget -= chunks.length;
+    work.push({ f, chunks });
+  }
+  return { seen: [...seen], work, capped };
+}
+
+if (!isMainThread && workerData?.role === 'pyide-semantic') {
+  parentPort.on('message', ({ id, args }) => {
+    try { parentPort.postMessage({ id, result: collect(...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+  });
+}
+const collectInWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-semantic') : null;
 const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
 exports.register = ({ ipcMain, app, send, unpackedDir }) => {
@@ -210,26 +263,6 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     fs.writeFileSync(path.join(idx.dir, 'index.json'), JSON.stringify({ version: INDEX_VERSION, backend: fake ? 'fake' : MODEL_ID, dim: DIM, root: idx.root, files }));
   }
 
-  function walk(root) {
-    const out = [];
-    const visit = (dir) => {
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const d of entries) {
-        const p = path.join(dir, d.name);
-        if (d.isDirectory()) {
-          if (SKIP_DIRS.has(d.name) || /^\.?venv/i.test(d.name) || fs.existsSync(path.join(p, 'pyvenv.cfg'))) continue;
-          visit(p);
-        } else if (TEXT_EXT.has(d.name.split('.').pop().toLowerCase())) {
-          let st;
-          try { st = fs.statSync(p); } catch { continue; }
-          if (st.size > 0 && st.size <= MAX_FILE_BYTES) out.push({ abs: p, rel: path.relative(root, p), mtime: st.mtimeMs, size: st.size });
-        }
-      }
-    };
-    visit(root);
-    return out;
-  }
 
   const progress = (idx, phase) => send('semantic:progress', {
     root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length,
@@ -244,23 +277,11 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       try {
         do {
           idx.rerun = false;
-          const disk = walk(root);
-          const seen = new Set(disk.map((f) => f.rel.toLowerCase()));
-          for (const rel of Object.keys(idx.files)) if (!seen.has(rel.toLowerCase())) delete idx.files[rel];
-          let stale = disk.filter((f) => { const old = idx.files[f.rel]; return !old || old.mtime !== f.mtime || old.size !== f.size; });
-          if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !idx.files[f.rel]);
-          const work = [];
-          let budget = MAX_CHUNKS - Object.entries(idx.files).filter(([rel]) => !stale.some((s) => s.rel === rel)).reduce((n, [, f]) => n + f.chunks.length, 0);
-          idx.capped = false;
-          for (const f of stale) {
-            let text;
-            try { text = fs.readFileSync(f.abs, 'utf8'); } catch { continue; }
-            if (text.includes('\u0000')) continue;
-            const chunks = chunkFile(f.rel, text).map((c) => ({ ...c, title: f.rel.replace(/\\/g, '/') }));
-            if (chunks.length > budget) { idx.capped = true; break; }
-            budget -= chunks.length;
-            work.push({ f, chunks });
-          }
+          const known = Object.fromEntries(Object.entries(idx.files).map(([rel, f]) => [rel, { mtime: f.mtime, size: f.size, chunks: f.chunks.length }]));
+          const { seen, work, capped } = await collectInWorker('collect', root, known, onlyPaths);
+          const seenSet = new Set(seen);
+          for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) delete idx.files[rel];
+          idx.capped = capped;
           const items = work.flatMap((w) => w.chunks);
           idx.total = items.length;
           idx.done = 0;
