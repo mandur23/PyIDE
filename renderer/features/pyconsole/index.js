@@ -1,8 +1,9 @@
 // Python Console tool window: a persistent interpreter driven by pyide_repl.py, which reports its prompt state
-// with \x02ps1\x03 / \x02ps2\x03 markers on stdout.
+// with \x02ps1\x03 / \x02ps2\x03 markers on stdout. ide.pyconsole.evaluate(expr) sends a \x05 query between
+// statements and gets \x02q[id, ok, text]\x03 back; 'pyconsoleChanged' fires after each statement.
 (() => {
   const { el } = ide.util;
-  const MARKER = /\x02(ps1|ps2)\x03/;
+  const MARKER = /\x02(ps1|ps2|q[^\x03]*)\x03/;
   const HISTORY_KEY = 'pyconsole.history';
   let procId = null;
   let con, promptEl, input;
@@ -14,6 +15,34 @@
   const history = ide.settings.get(HISTORY_KEY, []).slice(-200);
   let historyIdx = history.length;
   let draft = '';
+
+  // Queries run only between statements, so a program reading input() never receives one.
+  let busy = true;
+  const idleWaiters = [];
+  const queries = new Map();
+  let querySeq = 0;
+  function answerQuery(json) {
+    let id, ok, text;
+    try { [id, ok, text] = JSON.parse(json); } catch { return; }
+    const q = queries.get(id);
+    if (!q) return;
+    queries.delete(id);
+    if (ok) q.resolve(text); else q.reject(new Error(text));
+  }
+  async function evaluate(expr) {
+    if (!procId) throw new Error(tr('The Python Console is not running.'));
+    if (busy) await new Promise((r) => idleWaiters.push(r));
+    if (!procId) throw new Error(tr('The Python Console is not running.'));
+    const id = ++querySeq;
+    const answer = new Promise((resolve, reject) => queries.set(id, { resolve, reject }));
+    ide.proc.input(procId, `\x05${JSON.stringify([id, expr])}\n`);
+    return answer;
+  }
+  function dropQueries() {
+    for (const q of queries.values()) q.reject(new Error(tr('The Python Console is not running.')));
+    queries.clear();
+    for (const fn of idleWaiters.splice(0)) fn();
+  }
 
   const fit = () => { input.rows = Math.min(12, input.value.split('\n').length); };
   const promptText = () => (ps === 'ps2' ? '... ' : '>>> ');
@@ -29,7 +58,11 @@
     for (let m = rest.match(MARKER); m; m = rest.match(MARKER)) {
       if (m.index) con.append(rest.slice(0, m.index));
       rest = rest.slice(m.index + m[0].length);
+      if (m[1][0] === 'q') { answerQuery(m[1].slice(1)); continue; }
       setPrompt(m[1]);
+      busy = false;
+      for (const fn of idleWaiters.splice(0)) fn();
+      if (m[1] === 'ps1') ide.emit('pyconsoleChanged');
       if (m[1] === 'ps2' && !input.value) { input.value = continuationIndent(); fit(); }
       markReady?.();
       markReady = null;
@@ -54,6 +87,7 @@
     if (!interp) { con.append(`${tr('No Python interpreter found.')}\n`, 'err'); return null; }
     starting = (async () => {
       carry = '';
+      busy = true;
       ready = new Promise((r) => (markReady = r));
       con.append(`${tr('{command} (Python Console)', { command: [interp.cmd, ...interp.args].join(' ') })}\n`, 'sys');
       const id = (procId = await ide.api.invoke('pyconsole:start', interp, ide.root || undefined, ide.root ? [ide.root] : []));
@@ -66,7 +100,9 @@
           procId = null;
           setPrompt('ps1');
           markReady?.();
+          dropQueries();
           renderActions();
+          ide.emit('pyconsoleChanged');
         },
       });
       renderActions();
@@ -79,8 +115,10 @@
     if (!procId) return;
     const id = procId;
     procId = null;
+    dropQueries();
     await ide.proc.kill(id);
     renderActions();
+    ide.emit('pyconsoleChanged');
   }
 
   async function restart() {
@@ -108,6 +146,7 @@
     con.append(`${promptText()}${line}\n`, 'cmd');
     remember(line);
     lastLine = line;
+    busy = true;
     ide.proc.input(procId, `${line}\n`);
   }
 
@@ -123,6 +162,7 @@
     con.append(lines.map((l, i) => `${i ? '... ' : '>>> '}${l}`).join('\n') + '\n', 'cmd');
     remember(code);
     ready = new Promise((r) => (markReady = r));
+    busy = true;
     ide.proc.input(procId, `\x01${JSON.stringify(code)}\n`);
   }
 
@@ -131,13 +171,41 @@
       { icon: '⟳', title: tr('Rerun Python Console'), run: restart },
       ...(procId ? [{ icon: '■', title: tr('Stop Console'), run: stop }] : []),
       { icon: '⌫', title: tr('Clear All'), run: () => con.clear() },
+      ...(ide.dataView?.consoleVariables ? [{ icon: '𝑥', title: varsPane ? tr('Hide Variables') : tr('Show Variables'), run: toggleVariables }] : []),
     ]);
   }
+
+  // Variables pane (PyCharm's "Show Variables"), drawn by the Data View plugin (sciview) when it is enabled.
+  const VARS_KEY = 'pyconsole.showVariables';
+  let root = null;
+  let varsPane = null;
+  function placeVariables() {
+    const want = !!ide.dataView?.consoleVariables && ide.settings.get(VARS_KEY, true);
+    if (want && !varsPane && root) {
+      varsPane = ide.dataView.consoleVariables();
+      root.appendChild(varsPane.el);
+      varsPane.refresh();
+    } else if (!want && varsPane) {
+      varsPane.dispose();
+      varsPane.el.remove();
+      varsPane = null;
+    }
+    renderActions();
+  }
+  function toggleVariables() {
+    ide.settings.set(VARS_KEY, !ide.settings.get(VARS_KEY, true));
+    placeVariables();
+  }
+  ide.on('ready', placeVariables);
 
   const tw = ide.registerToolWindow({
     id: 'PythonConsole', title: tr('Python Console'), icon: '🐍', side: 'bottom', keys: 'Alt+8', order: 25,
     mount(container) {
-      con = ide.ui.console(container);
+      root = container;
+      container.classList.add('pyc-root');
+      const main = el('div', 'pyc-main');
+      container.appendChild(main);
+      con = ide.ui.console(main);
       con.out.id = 'pyconsoleOut';
       const line = el('div', 'pyc-line');
       promptEl = el('span', 'pyc-prompt', '>>> ');
@@ -149,7 +217,7 @@
       input.spellcheck = false;
       input.oninput = fit;
       line.append(promptEl, input);
-      container.appendChild(line);
+      main.appendChild(line);
       con.out.onclick = () => { if (!getSelection().toString()) input.focus(); };
       input.onkeydown = (e) => {
         if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey) {
@@ -180,6 +248,7 @@
 
   ide.on('toolWindowShown', (id) => {
     if (id === 'PythonConsole' && !procId) start().then(() => input.focus());
+    else if (id === 'PythonConsole') varsPane?.refresh();
   });
 
   // The interpreter runs in the project root with it on sys.path, so another project gets a fresh one.
@@ -227,5 +296,5 @@
     run: (editor) => executeSelection(editor),
   }));
 
-  ide.pyconsole = { execute: executeBlock, restart, isRunning: () => !!procId };
+  ide.pyconsole = { execute: executeBlock, restart, isRunning: () => !!procId, evaluate };
 })();

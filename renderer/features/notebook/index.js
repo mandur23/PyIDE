@@ -337,7 +337,14 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     return pre;
   }
 
+  // Other plugins add to rendered outputs (the Data View's "View as DataFrame"): fn(wrap, output, {baseDir, host}).
+  const outputDecorators = [];
   function renderOutput(o, ctx) {
+    const wrap = renderOutputBody(o, ctx);
+    for (const fn of outputDecorators) { try { fn(wrap, o, ctx); } catch (err) { console.error(err); } }
+    return wrap;
+  }
+  function renderOutputBody(o, ctx) {
     const wrap = el('div', `nb-output nb-out-${o.output_type}`);
     if (o.output_type === 'stream') {
       const pre = userEl('pre', `nb-text nb-stream nb-${o.name === 'stderr' ? 'stderr' : 'stdout'}`);
@@ -805,7 +812,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       c.status.textContent = `${c.elapsed.ok ? '✓' : '✗'} ${ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`}`;
     }
 
-    const outputCtx = () => ({ baseDir, attachments: null });
+    const outputCtx = () => ({ baseDir, attachments: null, host });
     function renderOutputs(c) {
       if (c.data.type !== 'code') { c.outputs.replaceChildren(); return; }
       c.outputs.replaceChildren(...c.data.outputs.map((o) => renderOutput(o, outputCtx())));
@@ -892,6 +899,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       renderPrompt(c);
       renderStatus(c);
       changed();
+      ide.emit('notebookExecuted', host.notebook);
     }
 
     // ---------- running ----------
@@ -1297,7 +1305,10 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
   ide.on('installablesChanged', () => { if (!kernelItem && ide.installer?.pip) installItem(); });
   if (ide.installer?.pip) installItem();
 
+  // 'notebookExecuted' (view) fires after each cell run; view.kernel.request('evaluate', {expr}) evaluates an expression
+  // silently in the kernel (the reply's user_expressions.r).
   ide.notebook = {
+    addOutputDecorator: (fn) => outputDecorators.push(fn),
     views: () => [...views.values()],
     parse: parseNotebook,
     stringify: (nb) => `${stringify(nb)}\n`,

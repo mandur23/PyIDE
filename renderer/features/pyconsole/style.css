@@ -1,3 +1,5 @@
 .pyc-line { display: flex; align-items: flex-start; border-top: 1px solid var(--gray3); }
 .pyc-prompt { padding: 6px 0 0 10px; color: var(--blue8); font: 13px/1.45 var(--mono); white-space: pre; }
 .pyc-input { border: 0; resize: none; line-height: 1.45; overflow: auto; }
+.tool.pyc-root { flex-direction: row; }
+.pyc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }

@@ -66,6 +66,9 @@ class Bridge:
         env.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
         env["PYTHONIOENCODING"] = "utf-8"
         env.pop("PYTHONUNBUFFERED", None)
+        # The IDE routes other programs' matplotlib figures to its Plots window; notebooks keep ipykernel's inline plots.
+        if env.get("MPLBACKEND", "").startswith("module://pyide_"):
+            del env["MPLBACKEND"]
         return env
 
     def _connect(self):
@@ -119,6 +122,11 @@ class Bridge:
             self.requests[self.kc.complete(cmd["code"], cmd["pos"])] = ("complete", rid)
         elif op == "inspect":
             self.requests[self.kc.inspect(cmd["code"], cmd["pos"], detail_level=cmd.get("detail", 0))] = ("inspect", rid)
+        elif op == "evaluate":
+            # A silent execution whose user expression "r" comes back in the reply (Data View, Jupyter Variables).
+            msg_id = self.kc.execute("", silent=True, store_history=False, user_expressions={"r": cmd["expr"]},
+                                     allow_stdin=False, stop_on_error=False)
+            self.requests[msg_id] = ("evaluate", rid)
         elif op == "input":
             self.kc.input(cmd.get("value", ""))
         elif op == "interrupt":

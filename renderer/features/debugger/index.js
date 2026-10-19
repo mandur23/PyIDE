@@ -265,6 +265,7 @@
     renderVars([]);
     renderWatches();
     updateControls();
+    ide.emit('debugContextChanged');
   }
 
   async function stopDebug() {
@@ -284,6 +285,7 @@
     renderVars(null);
     renderWatches();
     updateControls();
+    ide.emit('debugContextChanged');
   }
 
   async function onStopped(body) {
@@ -327,6 +329,7 @@
     applyFrameDecorations();
     renderVars(vars, scopes.slice(1));
     renderWatches();
+    ide.emit('debugContextChanged');
   }
 
   const currentFrame = () => (suspended() ? sess.frames[sess.frameIdx] : null);
@@ -443,6 +446,8 @@
 
   // ---------- variables tree ----------
   const expandedVars = new Set(); // "parent/child" paths kept open across steps, like PyCharm
+  // Other plugins add links to value rows (the Data View's "View as DataFrame"): fn(row, variable, expression).
+  const varDecorators = [];
   const valueClass = (v) => (v.type === 'str' ? 'str' : ['int', 'float', 'complex', 'bool'].includes(v.type) ? 'num' : '');
   // Names, types, values and debugpy's error text are program data: never translated (data-user-text).
   const data = (cls, text, title) => {
@@ -477,6 +482,8 @@
       row.append(el('span', 'dbg-eq', ' = '));
       if (v.type) row.append(data('dbg-type', `{${v.type}} `));
       row.append(data(`dbg-value ${valueClass(v)}`, v.value ?? '', tip));
+      const expr = v.evaluateName || (parentPath === 'W' ? v.name : null);
+      for (const fn of varDecorators) { try { fn(row, v, expr); } catch (err) { console.error(err); } }
     }
     wrap.appendChild(row);
     if (!expandable) return wrap;
@@ -876,6 +883,14 @@
   ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: tr('Stop Debugging'), keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
   ide.registerTreeAction({ title: tr("Debug '…'"), when: (e) => !e.dir && e.name.endsWith('.py'), run: (e) => debugFile(e.path) });
 
-  ide.debugger = { debugFile, isActive: () => !!sess };
+  // evaluate(expression, context) runs in the selected frame and resolves {value, type} or {error}.
+  // 'debugContextChanged' fires when the selected frame changes or the program resumes or ends.
+  ide.debugger = {
+    debugFile,
+    isActive: () => !!sess,
+    isSuspended: suspended,
+    evaluate: (expression, context = 'repl') => (suspended() ? evaluate(expression, context) : Promise.resolve({ error: tr('Not suspended') })),
+    addVariableDecorator: (fn) => varDecorators.push(fn),
+  };
   window.__debugger = { state: () => sess && { id: sess.id, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
 })();

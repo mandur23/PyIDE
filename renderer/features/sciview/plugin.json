@@ -1,0 +1,8 @@
+{
+  "id": "sciview",
+  "name": "Scientific Data View and Plots",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "View pandas DataFrames, NumPy arrays, polars frames and lists of dicts as paged tables from the debugger, the Python Console and notebooks, and see matplotlib figures in a Plots tool window.",
+  "main": ["sciview.js"]
+}
