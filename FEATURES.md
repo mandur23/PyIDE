@@ -33,7 +33,9 @@ UI text stays in English in the source and is translated by lookup, gettext styl
 
 ## Main-process context (`ctx`)
 
-`ipcMain`, `app`, `send(channel, payload)` to the renderer, `startProcess(cmd, args, {cwd, env}) -> id` (output streams to the renderer as process events, see `ide.proc`), `killProcess(id)`, `procs` (id -> ChildProcess, for stdin), `getWindow()`, `appDir`, `vendorDir`.
+`ipcMain`, `app`, `send(channel, payload)` to the renderer, `startProcess(cmd, args, {cwd, env}) -> id` (output streams to the renderer as process events, see `ide.proc`), `killProcess(id)`, `procs` (id -> ChildProcess, for stdin), `getWindow()`, `appDir`, `unpackedDir`, `vendorDir`.
+
+`appDir` is `resources/app.asar` in an installed build: fine for `require` and `fs` reads, but other programs cannot open files inside it. Paths handed to another program (Python scripts, `ruff.exe`, pyright run as Node) use `unpackedDir`, the same tree on disk (`app.asar.unpacked`; equal to `appDir` from source), and must match `build.asarUnpack` in package.json. `vendorDir` is already under `unpackedDir`.
 
 Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.execPath` and env `ELECTRON_RUN_AS_NODE=1`), and `vendor/` (a pip `--target` dir with `debugpy` and `ruff`; run ruff via `vendor/bin/ruff.exe`, and debugpy with the selected interpreter and `PYTHONPATH=vendor`).
 
@@ -116,3 +118,13 @@ AI edits (`renderer/features/ai-edit`, `main/features/ai-edit.js`, `main/ai/clau
 ## Git log and activity
 
 The Git tool window (Alt+9) has three tabs. Log draws the commit graph (`layoutGraph` in `renderer/features/vcs/index.js`: each commit takes the lane waiting for it, its first parent continues the lane and merge parents branch out), marks merge commits, lists a merge's parents in the details, and filters by message/hash/author or by user, where "Me" is `git config user.name`. A filtered list shows dots only, since lines across hidden commits would mislead. Activity is `git reflog` for HEAD (`git:reflog`) as a timeline grouped by day: commits, amends, merges, checkouts, pulls, resets, finished rebases, cherry-picks and reverts each get a badge and a sentence from the `ACTIVITY` table, with git's own text (branch names, messages) kept as user data. Clicking an action's hash shows the commit in Log. Tests: `verify/vcs-log.mjs` (ports 9660-9661).
+
+## Packaging
+
+`npm run dist` builds `dist/PyIDE-Setup-<version>.exe` with electron-builder (config in package.json `build`). electron-builder rather than Electron Forge because its NSIS target does what the installer needs out of the box: a per-user install with no admin prompt (`perMachine: false`, `allowElevation: false`), a choice of install folder, a Start menu shortcut, an uninstaller, and `asarUnpack` globs. Forge's Windows makers are Squirrel, MSI and MSIX, so an NSIS installer would need a third-party maker. The build packs Electron from `node_modules/electron/dist` (no second download), keeps only the `en-US` and `ko` Chromium locales, and skips native rebuilds (`npmRebuild: false`), since `@lydell/node-pty` ships N-API prebuilds. `vendor/` is not in git: it must hold ruff and debugpy (pip `--target`) before you build.
+
+- App code goes into `resources/app.asar`. Anything that another program opens is unpacked into `app.asar.unpacked` (`build.asarUnpack`): `vendor/` (ruff.exe, debugpy), `node_modules/pyright`, `node_modules/@lydell` (ConPTY binaries and the conout worker), and every `.py` under `main/` and `renderer/features/` (AI and semantic sidecars, the Python Console REPL, test runner helpers). Features build these paths from `ctx.unpackedDir` (see Main-process context). Monaco, xterm, marked and the locale JSON files load from inside the asar. The installed app is unsigned.
+- Icon: `build/icon.ico`, rendered from the welcome screen's "Py" tile by `node_modules\electron\dist\electron.exe tools/build-app-icon.js`.
+- "Open with PyIDE" for `.py` files (`build/installer.nsh`): a per-user `PyIDE.py` ProgID plus a value in `HKCU\Software\Classes\.py\OpenWithProgids`. It never changes the default program for `.py`, and the uninstaller removes only what it added. Launched with a file, PyIDE opens the file's folder as the project and then the file (the `file` query of `renderer/index.html`). It also opens a folder given on the command line.
+- Silent install: `PyIDE-Setup-<version>.exe /S /D=<folder>`. Uninstall: `"<folder>\Uninstall PyIDE.exe" /S`. App data in `%APPDATA%\PyIDE` and `~/.pyide` is kept.
+- `node verify/installed.mjs [installer.exe]` installs the build into a temp folder, then runs the installed `PyIDE.exe` over CDP. It opens a `.py` the way "Open with" does and checks Pyright diagnostics, the terminal, ruff reformat and the Git log. Finally it uninstalls and checks that the shortcut, the uninstall entry and the `.py` registration are gone.

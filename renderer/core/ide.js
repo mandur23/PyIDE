@@ -995,8 +995,10 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
     return;
   }
 
-  const last = new URLSearchParams(location.search).get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();
+  const params = new URLSearchParams(location.search);
+  const last = params.get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();
   if (last && await ide.api.exists(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
+  if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   window.__ideReady = true;
 }));

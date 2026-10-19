@@ -123,9 +123,9 @@ function fakeEmbed(text) {
 
 const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
-exports.register = ({ ipcMain, app, send, appDir }) => {
+exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const base = path.join(app.getPath('userData'), 'semantic');
-  const server = path.join(appDir, 'main', 'semantic', 'embed_server.py');
+  const server = path.join(unpackedDir, 'main', 'semantic', 'embed_server.py');
   const fake = process.env.PYIDE_SEMANTIC_BACKEND === 'fake';
 
   // ---------- runtime state ----------

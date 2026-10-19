@@ -6,8 +6,8 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { withPath } = require('./run.js');
 
-exports.register = ({ ipcMain, startProcess, appDir }) => {
-  const helpers = path.join(appDir, 'renderer', 'features', 'tests');
+exports.register = ({ ipcMain, startProcess, unpackedDir }) => {
+  const helpers = path.join(unpackedDir, 'renderer', 'features', 'tests');
   const reports = new Map(); // id -> {file, offset, rest}
   const pytestCache = new Map();
 

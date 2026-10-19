@@ -188,6 +188,10 @@ ipcMain.handle('dialog:openPlugin', async () => {
   return path.basename(p).toLowerCase() === 'plugin.json' ? path.dirname(p) : p;
 });
 
+// Packaged builds load the app from resources/app.asar, which only Electron can read. Files that other programs open
+// (Python scripts, ruff.exe, pyright run as Node) are unpacked next to it (package.json build.asarUnpack).
+const unpackedDir = __dirname.replace(/\.asar$/, '.asar.unpacked');
+
 const featureContext = {
   ipcMain,
   app,
@@ -197,7 +201,8 @@ const featureContext = {
   procs,
   getWindow: () => win,
   appDir: __dirname,
-  vendorDir: path.join(__dirname, 'vendor'),
+  unpackedDir,
+  vendorDir: path.join(unpackedDir, 'vendor'),
 };
 
 require('./main/new-project').register(featureContext);
@@ -212,9 +217,12 @@ for (const file of plugins.mainModules()) {
 
 const windows = createWindowManager({ appDir: __dirname });
 
+// A folder argument opens it as the project; a file ("Open with PyIDE" on a .py) opens its folder and then the file.
 function createWindow() {
-  const folder = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && fs.existsSync(a));
-  win = windows.createMain(folder ? { open: path.resolve(folder) } : {});
+  const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && fs.existsSync(a));
+  const target = arg && path.resolve(arg);
+  const query = !target ? {} : fs.statSync(target).isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
+  win = windows.createMain(query);
 }
 
 app.whenReady().then(createWindow);

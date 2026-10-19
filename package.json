@@ -1,1 +1,87 @@
-{"name":"pyide","version":"0.1.0","description":"PyCharm-style Python IDE","main":"main.js","scripts":{"start":"electron ."},"devDependencies":{"electron":"^38.8.6"},"dependencies":{"@lydell/node-pty":"^1.1.0","@xterm/addon-fit":"^0.10.0","@xterm/addon-search":"^0.15.0","@xterm/addon-unicode11":"^0.8.0","@xterm/addon-web-links":"^0.11.0","@xterm/xterm":"^5.5.0","iconv-lite":"^0.6.3","marked":"^12.0.2","monaco-editor":"^0.52.2","pyright":"^1.1.406"}}
+{
+  "name": "pyide",
+  "productName": "PyIDE",
+  "version": "0.1.0",
+  "description": "PyCharm-style Python IDE",
+  "author": {
+    "name": "PyIDE",
+    "email": "ms01048913077@gmail.com"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-unicode11": "^0.8.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "iconv-lite": "^0.6.3",
+    "marked": "^12.0.2",
+    "monaco-editor": "^0.52.2",
+    "pyright": "^1.1.406"
+  },
+  "build": {
+    "appId": "dev.pyide.ide",
+    "productName": "PyIDE",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "electronLanguages": [
+      "en-US",
+      "ko"
+    ],
+    "npmRebuild": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "main/**/*",
+      "renderer/**/*",
+      "plugins-catalog/**/*",
+      "vendor/**/*",
+      "!**/__pycache__",
+      "!**/*.{pdb,map}",
+      "!node_modules/monaco-editor/{dev,esm,min-maps}"
+    ],
+    "asarUnpack": [
+      "main/**/*.py",
+      "renderer/features/**/*.py",
+      "vendor/**/*",
+      "node_modules/pyright/**/*",
+      "node_modules/@lydell/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createStartMenuShortcut": true,
+      "createDesktopShortcut": false,
+      "shortcutName": "PyIDE",
+      "uninstallDisplayName": "PyIDE",
+      "artifactName": "PyIDE-Setup-${version}.exe",
+      "include": "build/installer.nsh"
+    }
+  }
+}

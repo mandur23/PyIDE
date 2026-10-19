@@ -31,9 +31,9 @@ const FAKE_RULES = [
   [/def half\(x\):\n\n$/, '    return x / 2'],
 ];
 
-exports.register = ({ ipcMain, app, send, appDir }) => {
+exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const fake = process.env.PYIDE_AI_COMPLETE_BACKEND === 'fake';
-  const server = path.join(appDir, 'main', 'ai', 'complete_server.py');
+  const server = path.join(unpackedDir, 'main', 'ai', 'complete_server.py');
   const modelOf = (id) => MODELS.find((m) => m.id === id) || MODELS[0];
   const modelFile = (m) => runtime.hfCachedFile(m.repo, m.file);
   const runtimeReady = () => runtime.pythonReady() && runtime.hasPackage('llama_cpp');

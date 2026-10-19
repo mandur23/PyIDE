@@ -50,7 +50,7 @@ const CLIENT_CAPABILITIES = {
 };
 
 class Server {
-  constructor({ appDir, root, pythonPath, gen, send }) {
+  constructor({ unpackedDir, root, pythonPath, gen, send }) {
     Object.assign(this, { root, pythonPath, gen, send });
     this.nextId = 1;
     this.pending = new Map();
@@ -59,7 +59,7 @@ class Server {
     this.dead = false;
     this.log = [];
     this.buf = Buffer.alloc(0);
-    this.proc = spawn(process.execPath, [path.join(appDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
+    this.proc = spawn(process.execPath, [path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
       cwd: root,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       windowsHide: true,
@@ -234,7 +234,7 @@ class Server {
   }
 }
 
-exports.register = ({ ipcMain, app, send, appDir }) => {
+exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   let server = null;
   let gen = 0;
 
@@ -242,7 +242,7 @@ exports.register = ({ ipcMain, app, send, appDir }) => {
     server?.stop();
     server = null;
     if (!root) return null;
-    const s = (server = new Server({ appDir, root, pythonPath, gen: ++gen, send }));
+    const s = (server = new Server({ unpackedDir, root, pythonPath, gen: ++gen, send }));
     send('lsp:status', { gen: s.gen, state: 'starting' });
     try {
       await s.ready;
