@@ -40,10 +40,10 @@ try {
 
   await press('Alt+F12');
   await until(`ide.toolWindows.get('Terminal').isVisible()`, 'terminal visible');
-  await js(`document.querySelector('#termIn').focus()`);
+  await until(`/PS .*project>/.test(ide.terminal.text())`, 'PowerShell prompt in the project folder', 20000);
   await type('Get-ChildItem -Name');
   await press('Enter');
-  await until(`document.querySelector('#termOut').textContent.includes('hello.py') && !document.querySelector('#termIn').disabled`, 'terminal output');
+  await until(`ide.terminal.text().includes('hello.py')`, 'terminal output');
   check(true, 'terminal runs PowerShell in project folder');
 
   await js(`ide.editor.focus()`);

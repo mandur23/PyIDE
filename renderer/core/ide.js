@@ -323,10 +323,17 @@ document.addEventListener('keydown', (e) => {
   fireCombo(comboOf(e), e);
 }, true);
 
+// Inside a terminal, keys belong to the program running there (Esc, Ctrl+T, Ctrl+K... matter to Claude Code, readline,
+// vim); only actions marked 	erminal: true (tool windows and a few window-level ones) still fire, like PyCharm's
+// "Override IDE shortcuts" terminal option.
+const inTerminal = () => !!document.activeElement?.closest('[data-terminal]');
+
 function fireCombo(combo, e) {
+  const terminalFocused = inTerminal();
   for (let i = ide.actions.length - 1; i >= 0; i--) {
     const a = ide.actions[i];
     if (!a.keys.includes(combo) || (a.when && !a.when())) continue;
+    if (terminalFocused && !a.terminal) continue;
     e.preventDefault();
     e.stopPropagation();
     a.run();
@@ -410,7 +417,7 @@ ide.registerToolWindow = ({ id, title, icon, side = 'bottom', keys, order = 100,
   button.onclick = tw.toggle;
   if (tab) tab.onclick = tw.show;
   ide.toolWindows.set(id, tw);
-  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: tw.toggle });
+  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: tw.toggle, terminal: true });
   mount?.(container, tw);
   // Until something is shown explicitly, the default window of an area is the one with the lowest order
   // (features load alphabetically, so registration order is not meaningful).
@@ -686,9 +693,9 @@ const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
   { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: () => ide.saveAll() },
   { id: 'OpenProject', title: tr('Open Folder…'), keys: 'Ctrl+O', run: pickFolder },
   { id: 'GotoFile', title: tr('Go to File…'), keys: ['Ctrl+Shift+N', 'Shift Shift'], run: gotoFile },
-  { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction },
+  { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction, terminal: true },
   { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },
-  { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide() },
+  { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide(), terminal: true },
   { id: 'FocusEditor', keys: 'Escape', when: () => !inEditor() && !document.activeElement?.closest('.editor-group') && !!ide.editor?.getModel(), run: () => ide.editor.focus() },
   { id: 'EditorDuplicate', title: tr('Duplicate Line'), keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
   { id: 'EditorDeleteLine', title: tr('Delete Line'), keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },

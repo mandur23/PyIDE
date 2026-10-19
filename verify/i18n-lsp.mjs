@@ -155,15 +155,12 @@ try {
   await press('Alt+F12');
   await until(`ide.toolWindows.get('Terminal').isVisible()`, 'terminal');
   check(await js(`ide.toolWindows.get('Terminal').tab.textContent.startsWith('터미널')`), 'Terminal tool window tab is "터미널"');
-  check(await js(`[...document.querySelectorAll('#bottomActions [title]')].map(b => b.title).includes('지우기')`), 'terminal Clear button tooltip is "지우기"');
-  await js(`document.querySelector('#termIn').focus()`);
-  await type('cd no_such_dir');
+  check(await js(`[...document.querySelectorAll('#bottomActions [title]')].map(b => b.title).includes('버퍼 지우기')`), 'terminal Clear Buffer tooltip is "버퍼 지우기"');
+  await until(`/PS .*>/.test(ide.terminal.text())`, 'PowerShell prompt', 20000);
+  await type('echo 안녕');
   await press('Enter');
-  await until(`document.querySelector('#termOut').textContent.includes("cd: 'no_such_dir' 경로를 찾을 수 없습니다")`, 'Korean cd error');
-  check(true, 'terminal cd error is Korean');
-  await type('echo hello');
-  await press('Enter');
-  await until(`document.querySelector('#termOut').textContent.includes('hello\\n') && !document.querySelector('#termIn').disabled`, 'terminal output');
+  await until(`ide.terminal.text().includes('안녕\\n')`, 'Korean echoed by the real terminal');
+  check(true, 'Korean text round-trips through the terminal');
   await noLeaks('#bottom .tool.active, #bottomActions, .bottom-tab-list', 'Terminal tool window and bottom tabs');
   await noLeaks('#stripe', 'tool window stripe');
   await shot('terminal.png');
@@ -196,8 +193,9 @@ try {
   await shot('light-problems.png');
   await press('Alt+F12');
   await until(`ide.toolWindows.get('Terminal').isVisible()`, 'terminal in light');
-  const prompt = await js(`getComputedStyle(document.querySelector('#termPrompt')).color`);
-  check(lum(prompt) < 0.6, `terminal prompt stays readable in Light (${prompt})`);
+  await until(`getComputedStyle(document.querySelector('.term-session:not(.hidden) .xterm-viewport')).backgroundColor !== ''`, 'terminal painted');
+  const termBg = await js(`getComputedStyle(document.querySelector('.term-host')).backgroundColor`);
+  check(lum(termBg) > 0.8, `terminal background follows the Light theme (${termBg})`);
   await shot('light-terminal.png');
   await js(`ide.settings.set('appearance.theme', 'dark')`);
 } catch (err) {

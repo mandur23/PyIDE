@@ -107,6 +107,9 @@ ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.read(p, encoding));
 ipcMain.handle('shell:showInFolder', (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
 ipcMain.handle('clipboard:writeText', (_e, text) => clipboard.writeText(text));
+ipcMain.handle('clipboard:readText', () => clipboard.readText());
+// Only web pages leave the app; anything else (file:, custom schemes) is refused.
+ipcMain.handle('shell:openExternal', (_e, url) => (/^https?:\/\//i.test(url) ? shell.openExternal(url) : false));
 ipcMain.handle('fs:trash', (_e, p) => shell.trashItem(p));
 
 ipcMain.handle('py:interpreters', (_e, root, extraPaths = []) => {

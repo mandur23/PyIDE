@@ -958,7 +958,7 @@
     { id: 'SelectInProjectView', title: tr('Select in Project View'), keys: 'Alt+F1', run: () => activeGroup?.active && selectInProject(activeGroup.active.path) },
     { id: 'ShowInExplorer', title: tr('Show in Explorer'), run: () => activeGroup?.active && ide.api.invoke('shell:showInFolder', activeGroup.active.path) },
     { id: 'OpenFile', title: tr('Open File…'), run: async () => { const p = await ide.api.openFileDialog(); if (p) ide.openFile(p); } },
-    { id: 'HideAllWindows', title: tr('Hide All Tool Windows'), keys: 'Ctrl+Shift+F12', run: toggleMaximizeEditor },
+    { id: 'HideAllWindows', title: tr('Hide All Tool Windows'), keys: 'Ctrl+Shift+F12', run: toggleMaximizeEditor, terminal: true },
   ].forEach(ide.registerAction);
 
   // ---------- boot ----------

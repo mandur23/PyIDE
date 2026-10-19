@@ -5,13 +5,14 @@ export const KEEP_ENGLISH = [
   'virtualenv', 'debugpy', 'PowerShell', 'UTF-8', 'TODO', 'FIXME', 'HEAD', 'JSON', 'PyPI', 'PATH', 'PYTHONPATH',
   'Ctrl', 'Alt', 'Shift', 'Esc', 'Enter', 'Tab', 'Insert', 'Delete', 'Space', 'Backspace', 'noqa', 'Pyright',
   'OK', 'stdin', 'stdout', 'stderr', 'py', 'launcher', 'English', 'Windows', 'Monaco', 'LSP', 'DAP', 'regex', 'Regex',
+  'Claude', 'Code', 'Anthropic',
 ];
 
 // Elements whose text is user data, not UI chrome.
 const SKIP = [
   '.monaco-editor .view-lines', '.monaco-editor .margin', '.console', 'pre', 'code', '#tree .name', '.tab .name',
   '#statusPath', '#statusInterp', '#interpSelect', '#projectWidget', '[data-user-text]', '.monaco-diff-editor .view-lines',
-  'input', 'textarea', 'option', '.monaco-alert', '.monaco-aria-container',
+  'input', 'textarea', 'option', '.monaco-alert', '.monaco-aria-container', '.xterm',
 ];
 
 // Returns [{text, where}] for visible text under `selector` that still contains English words.

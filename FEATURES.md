@@ -43,7 +43,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 - IPC: `ide.api.invoke(channel, ...args)`, `ide.api.on(channel, fn)`, plus `ide.api.read/write/list/walk/exists/create/rename/trash/openFolder/openFileDialog`.
 - Events (`ide.on(name, fn)` returns an unsubscribe): `ready`, `projectOpened(root)`, `fileOpened(tab)`, `activeTabChanged(tab|null)`, `beforeSave(tab)`, `fileSaved(tab)`, `fileClosed(path)`, `filesChanged({created?, deleted?, renamed?})`, `interpreterChanged(interp)`, `problemsChanged`, `settingsChanged(key, value)`, `toolWindowShown(id)`, `treeRefreshed`.
 - Files and tabs: `ide.openFile(path, {line, col, focus})`, `ide.openCustomTab({id, title, icon, mount(host, tab), onClose})` for non-text editors such as a diff view, `ide.closeTab(path, force)`, `ide.saveAll()`, `ide.reloadFromDisk(paths?)` after a tool rewrote files, `ide.isDirty(tab)`, `ide.renderTabs()`. A file tab is `{kind: 'file', path, title, model, savedVersion}`.
-- Actions and keymap: `ide.registerAction({id, title, keys, run, when})`. Keys look like `'Ctrl+Shift+F10'`, `'Alt+ArrowLeft'`, `'Shift Shift'`. The last registration wins on a clash, so use PyCharm's default keymap and do not take a key another feature owns (table below). `ide.runAction(id)`.
+- Actions and keymap: `ide.registerAction({id, title, keys, run, when, terminal})`. While a terminal has focus, only actions with `terminal: true` fire (tool-window toggles do automatically), so programs such as Claude Code keep Esc, Ctrl+K, Ctrl+T and the rest. Keys look like `'Ctrl+Shift+F10'`, `'Alt+ArrowLeft'`, `'Shift Shift'`. The last registration wins on a clash, so use PyCharm's default keymap and do not take a key another feature owns (table below). `ide.runAction(id)`.
 - Tool windows: `ide.registerToolWindow({id, title, icon, side: 'left'|'bottom', keys, order, mount(container, tw)})` returns `tw` with `show()`, `hide()`, `toggle()`, `isVisible()`, `setActions([{icon, title, run}])`, `setBadge(text)`.
 - Toolbar and status bar: `ide.registerToolbarItem({side: 'left'|'right', order, el})`, `ide.registerStatusItem({order, el})`. Toolbar right orders: interpreter 50, run target 60, run 70, debug 80, stop 90, settings 200. Toolbar left: VCS branch 10. Bottom tool window orders: Run 10, Debug 15, Find 18, Find in Files 20, Python Console 25, Terminal 30, Problems 40, Git 45, TODO 50, Python Packages 60. Until a window is shown, an area's default window is the one with the lowest order.
 - Project tree: `ide.registerTreeDecorator(entry => ({color, badge}))`, `ide.registerTreeAction({title, when(entry), run(entry)})`, `ide.refreshTree()`, `ide.revealInTree(path)`.
@@ -67,7 +67,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 | --- | --- |
 | core | Ctrl+S, Ctrl+O, Ctrl+Shift+N, Shift Shift, Ctrl+Shift+A, Ctrl+F4, Alt+Left/Right, Alt+Insert, Shift+Esc, Esc, Ctrl+D, Ctrl+Y, Ctrl+/, Ctrl+G, Ctrl+F, Ctrl+R, Ctrl+W, Ctrl+Shift+W, Alt+Shift+Up/Down, Ctrl+-/=, Alt+1 |
 | run (built in) | Shift+F10, Ctrl+Shift+F10, Ctrl+F2, Alt+4 |
-| terminal (built in) | Alt+F12 |
+| terminal | Alt+F12, Ctrl+Esc (Claude Code), Ctrl+Alt+K (send file reference to Claude Code), Ctrl+Shift+T inside a terminal (new session) |
 | problems (built in) | Alt+6 |
 | lsp | Ctrl+Space (Monaco), Ctrl+B, Ctrl+Click, Ctrl+Alt+B, Alt+F7, Shift+F6, Ctrl+Q, Ctrl+P, Alt+Enter, F2 / Shift+F2 |
 | debugger | Shift+F9, F8, F7, Shift+F8, F9, Ctrl+F8, Ctrl+Shift+F8, Alt+F9, Alt+F8, Alt+5 |
