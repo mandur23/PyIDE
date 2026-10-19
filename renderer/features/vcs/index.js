@@ -1,6 +1,17 @@
 (() => {
   const { el, basename, dirname, samePath } = ide.util;
-  const invoke = (ch, ...args) => ide.api.invoke(`git:${ch}`, ...args);
+  // Commands that rewrite the working tree put a Local History label first (local-history plugin), whichever UI ran them.
+  const CHECKPOINTS = {
+    pull: 'Before Update Project', checkout: 'Before Checkout', rollback: 'Before Rollback', merge: 'Before Merge',
+    rebase: 'Before Rebase', cherryPick: 'Before Cherry-pick', revert: 'Before Git Revert', stash: 'Before Stash',
+    unstash: 'Before Unstash', acceptSide: 'Before Accepting a Merge Side', resolve: 'Before Resolving a Conflict',
+  };
+  const OPERATION_CHECKPOINTS = { continue: 'Before Continuing', skip: 'Before Skipping', abort: 'Before Aborting' };
+  const invoke = async (ch, ...args) => {
+    const label = ch === 'operation' ? OPERATION_CHECKPOINTS[args[1]] : CHECKPOINTS[ch];
+    if (label) await ide.localHistory?.checkpoint(label);
+    return ide.api.invoke(`git:${ch}`, ...args);
+  };
   const key = (p) => p.toLowerCase();
   // PyCharm file status colors, defined per theme in style.css (Darcula / Light).
   const COLORS = Object.fromEntries(['modified', 'added', 'deleted', 'unversioned', 'conflict'].map((s) => [s, `var(--vcs-${s})`]));

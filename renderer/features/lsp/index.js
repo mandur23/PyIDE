@@ -225,6 +225,7 @@
   // Applies edits to open models (undoable) and rewrites closed files on disk. With keepOpenEdits the
   // edits for open models are returned as Monaco workspace edits instead (rename applies them itself).
   async function applyWorkspaceEdit(we, { keepOpenEdits = false } = {}) {
+    await ide.localHistory?.checkpoint('Before Refactoring', { paths: [...editsByUri(we).keys()].map(toPath) });
     const monacoEdits = [];
     const written = [];
     for (const [uri, edits] of editsByUri(we)) {

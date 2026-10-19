@@ -1,0 +1,10 @@
+{
+  "id": "local-history",
+  "name": "Local History",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Automatic revisions of project files on every save and outside change, labels before risky actions, and a history view to compare and revert.",
+  "main": [
+    "local-history.js"
+  ]
+}

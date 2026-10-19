@@ -1,0 +1,35 @@
+:root { --bm-color: #c9a227; }
+:root[data-theme="light"] { --bm-color: #b58900; }
+
+/* gutter: a ribbon, or a tile with the mnemonic */
+.bm-glyph { display: flex !important; align-items: center; justify-content: center; }
+.bm-glyph::before { content: ''; width: 9px; height: 13px; background: var(--bm-color); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
+.bm-glyph.bm-mn::before { display: none; }
+.bm-glyph.bm-mn::after { width: 14px; height: 14px; border-radius: 3px; background: var(--bm-color); color: #1e1f22;
+  font: bold 10px/14px var(--mono); text-align: center; }
+
+/* tool window */
+.bm-list { height: 100%; overflow: auto; outline: none; padding: 2px 0; }
+.bm-file { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; white-space: nowrap; }
+.bm-file-name { color: var(--gray12); }
+.bm-file-dir { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.bm-row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 26px; white-space: nowrap; cursor: default; }
+.bm-row:hover { background: var(--gray3); }
+.bm-row.selected { background: var(--blue2); }
+.bm-list:focus .bm-row.selected { background: var(--blue6); color: #fff; }
+.bm-badge { width: 14px; height: 14px; flex-shrink: 0; border-radius: 3px; font: bold 10px/14px var(--mono); text-align: center; }
+.bm-badge:not(.mn) { background: var(--bm-color); clip-path: polygon(15% 0, 85% 0, 85% 100%, 50% 72%, 15% 100%); }
+.bm-badge.mn { background: var(--bm-color); color: #1e1f22; }
+.bm-line { color: var(--gray9); font-size: 12px; min-width: 22px; text-align: right; flex-shrink: 0; }
+.bm-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bm-code { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bm-empty { padding: 12px; line-height: 1.5; }
+
+/* Ctrl+F11 */
+.bm-dialog { display: flex; flex-direction: column; gap: 10px; }
+.bm-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; outline: none; padding: 2px; }
+.bm-grid:focus { box-shadow: 0 0 0 1px var(--blue6); border-radius: 4px; }
+.bm-cell { height: 28px; border-radius: 4px; background: var(--gray3); color: var(--gray11); font: 600 13px var(--mono); }
+.bm-cell:hover { background: var(--gray4); }
+.bm-cell.used { color: var(--bm-color); }
+.bm-cell.selected { background: var(--blue6); color: #fff; }

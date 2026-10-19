@@ -289,9 +289,19 @@
     ctx.session?.request?.cancel();
   }
 
+  // The first accept of a session puts a Local History label (local-history plugin) with the text before it.
+  function checkpointOnce(ctx) {
+    const s = ctx.session;
+    if (s.checkpointed) return;
+    s.checkpointed = true;
+    const path = ide.tabs.find((t) => t.model === ctx.editor.getModel())?.path;
+    if (path) ide.localHistory?.checkpoint('Before Accepting AI Edit', { paths: [path] });
+  }
+
   function acceptAll(ctx) {
     const s = ctx.session;
     if (s?.phase !== 'reviewing') return;
+    checkpointOnce(ctx);
     const { start, end } = s.region;
     if (hunksOf(ctx).length) replaceLines(ctx.editor.getModel(), start, end - start + 1, s.proposal);
     endSession(ctx);
@@ -302,6 +312,7 @@
     const s = ctx.session;
     const h = hunksOf(ctx)[index];
     if (!h) return;
+    checkpointOnce(ctx);
     const { start, end } = s.region;
     replaceLines(ctx.editor.getModel(), h.startLine, h.oldLines.length, h.newLines);
     // The accepted lines are the region's by definition; tracking would leave lines inserted at an edge outside.

@@ -64,4 +64,4 @@ function write(p, text, encoding = 'utf-8') {
   fs.writeFileSync(p, buf);
 }
 
-module.exports = { read, write, ENCODINGS };
+module.exports = { read, write, ENCODINGS, looksBinary, detect, decode, encode };
