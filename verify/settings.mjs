@@ -18,8 +18,8 @@ try {
   // ---------- layout ----------
   await a.press('Ctrl+Alt+S');
   await a.until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
-  check((await navRows(a)) === 'Appearance & Behavior|Appearance|Language and Region|Keymap|Editor|General|Code Style|Plugins|Project: project|Python Interpreter|Tools',
-    'category tree lists groups and pages');
+  check((await navRows(a)) === 'Appearance & Behavior|Appearance|Language and Region|Keymap|Editor|General|Code Style|Plugins|Project: project|Python Interpreter|Tools|AI|AI Completion|Claude Edits',
+    'category tree lists groups and pages (plugin pages under AI)');
   const indents = await a.js(`(() => { const x = (sel) => [...document.querySelectorAll(sel)].map(n => Math.round(n.querySelector('.settings-nav-label').getBoundingClientRect().left)); return { top: [...new Set(x('.settings-nav-row:not(.child)'))], child: [...new Set(x('.settings-nav-row.child'))] }; })()`);
   check(indents.top.length === 1 && indents.child.length === 1 && indents.child[0] > indents.top[0], `top-level and child labels each share one indent (${JSON.stringify(indents)})`);
   await a.click('.settings-nav-row.settings-group[data-group="editor-group"]');

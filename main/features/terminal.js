@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const claude = require('../ai/claude');
 
 const sessions = new Map(); // id -> {proc, owner}
 let nextId = 1;
@@ -32,14 +33,10 @@ function detectShells() {
   return shells;
 }
 
-// The official installer puts claude.exe in ~/.local/bin; npm installs a claude.cmd shim on PATH.
 function findClaude() {
-  // PYIDE_CLAUDE_PATH points at a specific binary (tests use a stand-in); 'none' simulates a machine without it.
-  if (process.env.PYIDE_CLAUDE_PATH === 'none') return { installed: false };
-  if (process.env.PYIDE_CLAUDE_PATH) return { installed: true, path: process.env.PYIDE_CLAUDE_PATH, version: '' };
-  const local = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
-  const found = fs.existsSync(local) ? local : onPath('claude');
+  const found = claude.findClaude();
   if (!found) return { installed: false };
+  if (process.env.PYIDE_CLAUDE_PATH) return { installed: true, path: found, version: '' };
   let version = '';
   try { version = execFileSync(found, ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true, shell: /\.cmd$/i.test(found) }).trim(); } catch {}
   return { installed: true, path: found, version };

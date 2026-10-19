@@ -1,0 +1,45 @@
+.ai-edit-widget { box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--blue6); border-radius: 6px; background: var(--gray2);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); font-size: 13px; color: var(--gray12); z-index: 20; }
+.ai-edit-row { display: flex; align-items: center; gap: 6px; }
+.ai-edit-icon { color: #d97757; font-size: 14px; }
+.ai-edit-input { flex: 1; min-width: 0; height: 24px; padding: 0 6px; border: 1px solid var(--gray4); border-radius: 4px; background: var(--gray1);
+  color: var(--gray12); font: inherit; outline: none; }
+.ai-edit-input:focus { border-color: var(--blue6); }
+.ai-edit-input[readonly] { color: var(--gray9); }
+.ai-edit-spinner { width: 12px; height: 12px; border: 2px solid var(--gray5); border-top-color: var(--blue8); border-radius: 50%;
+  animation: ai-edit-spin 0.8s linear infinite; }
+.ai-edit-spinner.hidden { display: none; }
+@keyframes ai-edit-spin { to { transform: rotate(360deg); } }
+.ai-edit-foot { display: flex; align-items: center; gap: 8px; margin-top: 5px; min-height: 22px; }
+.ai-edit-status { flex: 1; color: var(--gray9); font-size: 12px; line-height: 1.4; white-space: normal; }
+.ai-edit-status.error { color: var(--red); }
+.ai-edit-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ai-edit-btn { height: 22px; padding: 0 8px; border: 1px solid var(--gray5); border-radius: 4px; background: var(--gray3); color: var(--gray12);
+  font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ai-edit-btn:hover { background: var(--gray4); }
+.ai-edit-btn.primary { background: var(--green6); border-color: var(--green6); color: #fff; }
+.ai-edit-btn.primary:hover { filter: brightness(1.1); }
+
+.monaco-editor .ai-edit-region { background: rgba(53, 116, 240, 0.1); }
+.monaco-editor .ai-edit-del { background: rgba(219, 92, 92, 0.24); }
+.monaco-editor .ai-edit-del-gutter { background: var(--red); width: 3px !important; margin-left: 3px; }
+.monaco-editor .ai-edit-pending { background: rgba(160, 160, 160, 0.12); }
+.ai-edit-add { background: rgba(87, 150, 92, 0.26); color: var(--gray12); white-space: pre; box-shadow: inset 3px 0 0 var(--green6); }
+.ai-line { white-space: pre; padding-left: 0; }
+
+.ai-edit-hunk-actions { display: flex; gap: 4px; width: max-content; margin-left: 24px; opacity: 0.9; z-index: 10; }
+.ai-edit-hunk-actions .ai-edit-btn { height: 18px; padding: 0 6px; font-size: 11px; }
+
+.monaco-editor .ai-nes-del { background: rgba(219, 92, 92, 0.12); }
+.monaco-editor .ai-nes-glyph::before { content: '⇥'; display: block; text-align: center; color: var(--blue8); font-size: 13px; }
+.ai-nes-add { background: rgba(87, 150, 92, 0.14); color: var(--gray11); white-space: pre; opacity: 0.85;
+  box-shadow: inset 2px 0 0 rgba(87, 150, 92, 0.7); }
+.ai-nes-hint { margin-left: 20px; width: max-content; display: flex; gap: 8px; align-items: center; white-space: nowrap; font-size: 11px; color: var(--gray9); }
+.ai-nes-key { padding: 0 5px; border: 1px solid var(--gray5); border-radius: 3px; background: var(--gray2); color: var(--blue8); }
+.ai-nes-reason { font-style: italic; }
+
+.ai-edit-statusbar { color: #d97757; padding: 0 6px; cursor: pointer; opacity: 0.55; }
+.ai-edit-statusbar.nes-on { opacity: 1; }
+.ai-edit-statusbar.busy { animation: ai-edit-pulse 1s ease-in-out infinite; opacity: 1; }
+.ai-edit-statusbar.problem { color: var(--yellow); }
+@keyframes ai-edit-pulse { 50% { opacity: 0.35; } }

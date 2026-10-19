@@ -126,7 +126,7 @@
   let open = null; // {dlg, show(pageId)}
 
   const projectGroup = () => tr('Project: {name}', { name: ide.root ? basename(ide.root) : tr('<none>') });
-  const TREE = [
+  const BASE_TREE = [
     { group: 'appearance-behavior', title: () => tr('Appearance & Behavior'), children: [
       { id: 'appearance', title: () => tr('Appearance'), keywords: 'theme dark light look feel 테마 다크 라이트', mount: mountAppearance },
       { id: 'language', title: () => tr('Language and Region'), keywords: 'language korean english locale 언어 한국어 영어', mount: mountLanguage },
@@ -142,11 +142,21 @@
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  const PAGES = TREE.flatMap((n) => n.children || [n]);
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai', mount(host, ctx)} to
+  // ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
+  let TREE, PAGES;
+  function rebuildTree() {
+    const pluginPages = ide.settingsPages || [];
+    const ai = pluginPages.filter((p) => p.group === 'ai');
+    TREE = [...BASE_TREE, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai')];
+    PAGES = TREE.flatMap((n) => n.children || [n]);
+  }
+  rebuildTree();
   const groupOf = (id) => TREE.find((n) => n.children?.some((c) => c.id === id));
 
   function openSettings(pageId = 'appearance') {
     if (open) return open.show(pageId);
+    rebuildTree();
     let pending = {};
     const value = (k) => (k in pending ? pending[k] : get(k));
     const set = (k, v) => {
@@ -155,7 +165,9 @@
     };
     // Plugin enable/disable choices are pending until OK/Apply, like the other settings.
     const pluginChanges = new Map();
-    const ctx = { value, set, pluginChanges, changed: updateButtons, markRestart: () => { restartPending = true; updateButtons(); } };
+    const ctx = { value, set, pluginChanges, changed: updateButtons, markRestart: () => { restartPending = true; updateButtons(); },
+      // Form helpers for pages registered by other plugins; values go through value/set, so OK/Apply/Cancel cover them.
+      ui: { section, fieldRow, checkbox: (key, label) => checkbox(ctx, key, label), numberInput: (key, opts) => numberInput(ctx, key, opts), selectInput: (key, options, fallback) => selectInput(ctx, key, options, fallback) } };
 
     const root = el('div', 'settings');
     const left = el('div', 'settings-nav');
@@ -312,8 +324,8 @@
     host.appendChild(s);
     return s;
   };
-  function numberInput(ctx, key, { step = 1, placeholder } = {}) {
-    const [min, max] = RANGES[key];
+  function numberInput(ctx, key, { step = 1, placeholder, min: lo = 0, max: hi = 1e9, fallback } = {}) {
+    const [min, max] = RANGES[key] || [lo, hi];
     const i = el('input');
     i.type = 'number';
     i.min = min;
@@ -321,7 +333,7 @@
     i.step = step;
     if (placeholder) i.placeholder = placeholder;
     i.dataset.key = key;
-    const v = ctx.value(key);
+    const v = ctx.value(key) ?? fallback;
     i.value = placeholder && !v ? '' : v;
     i.oninput = () => {
       const n = i.value === '' ? (placeholder ? 0 : NaN) : Number(i.value);
@@ -342,11 +354,11 @@
     row.append(c, el('span', null, label));
     return row;
   }
-  function selectInput(ctx, key, options) {
+  function selectInput(ctx, key, options, fallback) {
     const s = el('select');
     s.dataset.key = key;
     for (const [v, label] of options) s.add(new Option(label, v));
-    s.value = ctx.value(key);
+    s.value = ctx.value(key) ?? fallback;
     s.onchange = () => ctx.set(key, s.value);
     return s;
   }
