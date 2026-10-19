@@ -782,9 +782,26 @@
   ide.registerAction({ id: 'ShowPlugins', title: tr('Plugins…'), run: () => openSettings('plugins') });
   ide.registerAction({ id: 'RestartIde', title: tr('Restart IDE'), run: () => ide.restart() });
 
-  const gear = el('button', 'tb-icon settings-gear', '⚙');
-  gear.title = tr('Settings (Ctrl+Alt+S)');
-  gear.onclick = () => openSettings();
+  // PyCharm's toolbar gear: a menu of IDE-wide settings rather than the dialog itself.
+  const gear = el('button', 'tb-icon settings-gear');
+  gear.appendChild(ide.icon('settings', '⚙'));
+  gear.title = tr('IDE and Project Settings');
+  const themeItem = (value, label) => ({ label, checked: get('appearance.theme') === value, run: () => ide.settings.set('appearance.theme', value) });
+  gear.onclick = () => {
+    const r = gear.getBoundingClientRect();
+    const menu = ide.ui.contextMenu(r.right - 240, r.bottom + 4, [
+      { label: tr('Settings…'), hint: 'Ctrl+Alt+S', icon: 'settings', run: () => openSettings('appearance') },
+      { label: tr('Plugins…'), run: () => openSettings('plugins') },
+      { label: tr('Python Interpreter…'), hint: 'Ctrl+Alt+Shift+S', icon: 'python', run: () => openSettings('interpreter') },
+      { separator: true },
+      { label: tr('Theme'), submenu: () => [themeItem('dark', tr('Dark')), themeItem('light', tr('Light'))] },
+      { label: tr('Keymap…'), run: () => openSettings('keymap') },
+      { label: tr('Language and Region'), run: () => openSettings('language') },
+      { separator: true },
+      { label: tr('Restart IDE'), run: () => ide.restart() },
+    ]);
+    menu.id = 'settingsGearMenu';
+  };
   ide.registerToolbarItem({ side: 'right', order: 200, el: gear });
 
   ide.openSettings = openSettings;

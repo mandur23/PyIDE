@@ -200,6 +200,8 @@ const featureContext = {
   vendorDir: path.join(__dirname, 'vendor'),
 };
 
+require('./main/new-project').register(featureContext);
+
 for (const file of plugins.mainModules()) {
   try {
     require(file).register(featureContext);

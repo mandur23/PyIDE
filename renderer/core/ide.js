@@ -232,30 +232,124 @@ $('popupIn').onkeydown = (e) => {
 };
 $('popupIn').onblur = () => setTimeout(() => document.activeElement !== $('popupIn') && closePopup(), 120);
 
-// items: [{label, hint?, run, disabled?} | {separator: true}]
-ide.ui.contextMenu = (x, y, items) => {
-  const host = $('menuHost');
-  host.innerHTML = '';
+// Menus: items are [{label, hint?, icon?, checked?, disabled?, run?, submenu?: items | () => items} | {separator: true}].
+// Submenus open on hover or Right; Up/Down move, Enter runs, Left closes a submenu, Esc closes the menu.
+const menuStack = [];
+let menuCleanup = null;
+
+function closeMenus(level = 0) {
+  while (menuStack.length > level) menuStack.pop().el.remove();
+  if (!menuStack.length && menuCleanup) { menuCleanup(); menuCleanup = null; }
+}
+ide.ui.closeMenus = () => closeMenus(0);
+// A menu removed from the page by other code counts as closed (and its key handlers are dropped).
+function menusOpen() {
+  if (menuStack.length && !menuStack[0].el.isConnected) closeMenus(0);
+  return menuStack.length > 0;
+}
+
+function setActiveRow(level, row) {
+  const m = menuStack[level];
+  if (!m) return;
+  m.el.querySelectorAll('.menu-item.active').forEach((n) => n.classList.remove('active'));
+  if (row) { row.classList.add('active'); row.scrollIntoView({ block: 'nearest' }); }
+  m.active = row || null;
+}
+
+function openSubmenu(level, row) {
+  closeMenus(level + 1);
+  const items = typeof row._item.submenu === 'function' ? row._item.submenu() : row._item.submenu;
+  const r = row.getBoundingClientRect();
+  showMenu(r.right - 2, r.top - 5, items, level + 1, r.left);
+}
+
+function activate(level, row) {
+  const it = row?._item;
+  if (!it || it.disabled) return;
+  if (it.submenu) { openSubmenu(level, row); setActiveRow(level + 1, menuStack[level + 1]?.el.querySelector('.menu-item:not(.disabled)')); return; }
+  closeMenus(0);
+  it.run?.();
+}
+
+function showMenu(x, y, items, level, leftEdge) {
   const menu = el('div', 'context-menu');
-  for (const it of items) {
+  menu.dataset.level = level;
+  let hoverTimer = null;
+  for (const it of items.filter(Boolean)) {
     if (it.separator) { menu.appendChild(el('div', 'menu-sep')); continue; }
-    const row = el('div', 'menu-item' + (it.disabled ? ' disabled' : ''));
-    row.appendChild(el('span', null, it.label));
+    if (it.header) { menu.appendChild(el('div', 'menu-header', it.header)); continue; }
+    const row = el('div', 'menu-item' + (it.disabled ? ' disabled' : '') + (it.submenu ? ' has-sub' : ''));
+    row._item = it;
+    const icon = el('span', 'menu-icon');
+    if (it.checked) icon.textContent = '✓';
+    else if (it.icon) icon.appendChild(ide.icon(it.icon, it.glyph || ''));
+    else if (it.glyph) icon.textContent = it.glyph;
+    const label = el('span', 'menu-label', it.label);
+    if (it.userText) label.dataset.userText = '';
+    // The label stays the first child (callers read row.firstChild); CSS order draws the icon before it.
+    row.append(label, icon);
+    if (it.detail) { const d = el('span', 'menu-detail', it.detail); d.dataset.userText = ''; row.appendChild(d); }
     if (it.hint) row.appendChild(el('span', 'hint-right', it.hint));
-    row.onmousedown = (e) => { e.preventDefault(); if (it.disabled) return; host.innerHTML = ''; it.run(); };
+    if (it.submenu) row.appendChild(el('span', 'menu-arrow', '›'));
+    row.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); activate(level, row); };
+    row.onmouseenter = () => {
+      setActiveRow(level, it.disabled ? null : row);
+      clearTimeout(hoverTimer);
+      hoverTimer = setTimeout(() => {
+        if (it.submenu && !it.disabled) openSubmenu(level, row);
+        else closeMenus(level + 1);
+      }, it.submenu ? 120 : 200);
+    };
     menu.appendChild(row);
   }
-  host.appendChild(menu);
+  $('menuHost').appendChild(menu);
+  menuStack[level] = { el: menu, active: null };
   const r = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, innerWidth - r.width - 4)}px`;
-  menu.style.top = `${Math.min(y, innerHeight - r.height - 4)}px`;
-  const dismiss = (e) => {
-    if (menu.contains(e.target)) return;
-    host.innerHTML = '';
-    removeEventListener('mousedown', dismiss, true);
+  let left = x;
+  if (left + r.width > innerWidth - 4) left = leftEdge !== undefined ? leftEdge - r.width + 2 : innerWidth - r.width - 4;
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
+  return menu;
+}
+
+ide.ui.contextMenu = (x, y, items) => {
+  closeMenus(0);
+  showMenu(x, y, items, 0);
+  const dismiss = (e) => { if (!e.target.closest?.('.context-menu')) closeMenus(0); };
+  const keys = (e) => {
+    if (!menusOpen()) return;
+    const level = menuStack.length - 1;
+    const m = menuStack[level];
+    if (!m) return;
+    const rows = [...m.el.querySelectorAll('.menu-item:not(.disabled)')];
+    const i = rows.indexOf(m.active);
+    const handled = {
+      ArrowDown: () => setActiveRow(level, rows[(i + 1) % rows.length]),
+      ArrowUp: () => setActiveRow(level, rows[(i - 1 + rows.length) % rows.length]),
+      ArrowRight: () => m.active?._item.submenu && activate(level, m.active),
+      ArrowLeft: () => level > 0 && closeMenus(level),
+      Enter: () => activate(level, m.active),
+      Escape: () => (level > 0 ? closeMenus(level) : closeMenus(0)),
+    }[e.key];
+    if (!handled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handled();
   };
-  setTimeout(() => addEventListener('mousedown', dismiss, true));
+  setTimeout(() => {
+    if (!menuStack.length) return;
+    addEventListener('mousedown', dismiss, true);
+    addEventListener('keydown', keys, true);
+    addEventListener('blur', ide.ui.closeMenus);
+  });
+  menuCleanup = () => {
+    removeEventListener('mousedown', dismiss, true);
+    removeEventListener('keydown', keys, true);
+    removeEventListener('blur', ide.ui.closeMenus);
+  };
+  return menuStack[0].el;
 };
+ide.ui.menuOpen = menusOpen;
 
 // buttons: [{label, primary?, run?(dialog) -> false keeps it open}]
 ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], width = 520, onClose }) => {
@@ -312,7 +406,7 @@ ide.keysFor = (id) => ide.actions.find((a) => a.id === id)?.keys.join(', ') || '
 
 let lastShift = 0;
 document.addEventListener('keydown', (e) => {
-  if (popupState || $('dialogHost').childElementCount) return;
+  if (popupState || $('dialogHost').childElementCount || menusOpen()) return;
   if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.repeat) {
     const now = performance.now();
     if (now - lastShift < 350) { lastShift = 0; return fireCombo('Shift Shift', e); }
@@ -347,9 +441,10 @@ const placeOrdered = (host, node, order) => {
   const before = [...host.children].find((c) => Number(c.dataset.order ?? 0) > order);
   host.insertBefore(node, before || null);
 };
-ide.registerToolbarItem = ({ side = 'right', order = 100, el: node }) => placeOrdered($(side === 'left' ? 'toolbarLeft' : 'toolbarRight'), node, order);
+// Items ordered 60-99 on the right form the run widget (configuration, Run, Debug, Stop), drawn as one pill.
+ide.registerToolbarItem = ({ side = 'right', order = 100, el: node }) => placeOrdered(
+  side === 'left' ? $('toolbarLeft') : order >= 60 && order < 100 ? $('runWidget') : $('toolbarRight'), node, order);
 ide.registerStatusItem = ({ order = 100, el: node }) => placeOrdered($('statusItems'), node, order);
-$('interpSelect').dataset.order = 50;
 $('projectWidget').dataset.order = 0;
 
 // ---------- tool windows ----------
@@ -711,12 +806,20 @@ ide.reloadInterpreters = async () => {
   const preferred = ide.settings.get(`interpreter.${ide.root}`);
   const idx = ide.interps.findIndex((i) => samePath(i.executable, preferred));
   if (idx >= 0) sel.selectedIndex = idx;
-  $('statusInterp').textContent = ide.currentInterp()?.label || tr('No interpreter');
+  $('statusInterpLabel').textContent = ide.currentInterp()?.label || tr('No interpreter');
   ide.emit('interpreterChanged', ide.currentInterp());
+};
+// Selects an interpreter by its python.exe (the status-bar widget and the New Project wizard use this).
+ide.setInterpreter = (executable) => {
+  const i = ide.interps.findIndex((x) => samePath(x.executable, executable));
+  if (i < 0) return false;
+  $('interpSelect').selectedIndex = i;
+  $('interpSelect').onchange();
+  return true;
 };
 $('interpSelect').onchange = () => {
   const it = ide.currentInterp();
-  $('statusInterp').textContent = it?.label || '';
+  $('statusInterpLabel').textContent = it?.label || '';
   if (it && ide.root) ide.settings.set(`interpreter.${ide.root}`, it.executable);
   ide.emit('interpreterChanged', it);
 };
@@ -728,15 +831,32 @@ ide.openProject = async (dir) => {
   expanded.clear();
   expanded.add(dir.toLowerCase());
   selected = null;
-  $('projectWidget').textContent = `${basename(dir)} ▾`;
   document.title = `${basename(dir)} - PyIDE`;
   $('welcome').classList.add('hidden');
   await renderTree();
   await ide.reloadInterpreters();
   try { localStorage.setItem('lastProject', dir); } catch {}
+  const recent = ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, dir));
+  ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
   ide.emit('projectOpened', dir);
 };
 
+// Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open.
+ide.closeProject = async () => {
+  if (!ide.root || !ide.closeAllTabs(false)) return false;
+  ide.root = null;
+  expanded.clear();
+  selected = null;
+  $('tree')?.replaceChildren();
+  document.title = 'PyIDE';
+  $('welcome').classList.remove('hidden');
+  try { localStorage.removeItem('lastProject'); } catch {}
+  await ide.reloadInterpreters();
+  ide.emit('projectClosed');
+  return true;
+};
+
+ide.pickAndOpenProject = pickFolder;
 async function pickFolder() {
   const dir = await ide.api.openFolder();
   if (dir) ide.openProject(dir);
@@ -803,8 +923,6 @@ const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
   { id: 'ExpandRegion', title: tr('Expand'), keys: 'Ctrl+=', when: inEditor, run: editorAction('editor.unfold') },
 ].forEach(ide.registerAction);
 
-$('projectWidget').textContent = `${tr('No project')} ▾`;
-$('projectWidget').onclick = pickFolder;
 $('welcomeOpen').onclick = pickFolder;
 
 // ---------- boot ----------

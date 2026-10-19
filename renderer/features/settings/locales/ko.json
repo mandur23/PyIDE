@@ -130,5 +130,8 @@
   "Editor Tabs": "에디터 탭",
   "Open files in a preview tab on single click": "한 번 클릭하면 미리보기 탭에서 파일 열기",
   "Tab limit:": "탭 개수 제한:",
-  "0 means no limit": "0이면 제한 없음"
+  "0 means no limit": "0이면 제한 없음",
+  "IDE and Project Settings": "IDE 및 프로젝트 설정",
+  "Python Interpreter…": "Python 인터프리터…",
+  "Keymap…": "키맵…"
 }

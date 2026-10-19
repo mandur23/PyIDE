@@ -110,7 +110,7 @@
   function renderWidget() {
     branchBtn.classList.toggle('hidden', !repo);
     if (!repo) return;
-    branchBtn.replaceChildren(el('span', 'vcs-branch-icon', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.detached || 'HEAD'), el('span', 'vcs-caret', '▾'));
+    branchBtn.replaceChildren(ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.detached || 'HEAD'), ide.icon('chevronDown', '▾'));
   }
 
   async function afterCheckout() {

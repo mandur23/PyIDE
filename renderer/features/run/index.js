@@ -317,10 +317,12 @@
   });
 
   // ---------- run widget (toolbar) ----------
-  const runBtn = el('button', 'tb-icon run-btn', '▶');
+  const runBtn = el('button', 'tb-icon run-btn');
+  runBtn.appendChild(ide.icon('runRun', '▶'));
   runBtn.title = tr('Run (Shift+F10)');
   let debugActive = false; // a debugger session is active (see 'debugSessionChanged')
-  const stopBtn = el('button', 'tb-icon stop-btn', '■');
+  const stopBtn = el('button', 'tb-icon stop-btn');
+  stopBtn.appendChild(ide.icon('runStop', '■'));
   stopBtn.title = tr('Stop (Ctrl+F2)');
   stopBtn.disabled = true;
   const target = el('button', 'run-target');
@@ -336,7 +338,7 @@
     target.replaceChildren(
       el('span', 'run-target-icon' + (cfg?.temporary ? ' temporary' : ''), cfg ? types.get(cfg.type)?.icon || '▶' : '📄'),
       name,
-      el('span', 'run-target-arrow', '▾'),
+      (() => { const a = el('span', 'run-target-arrow'); a.appendChild(ide.icon('chevronDown', '▾')); return a; })(),
     );
   }
 

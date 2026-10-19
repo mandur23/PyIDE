@@ -8,11 +8,12 @@
 <body>
   <header id="toolbar">
     <div id="toolbarLeft" class="tb-group">
-      <span class="logo">Py</span>
-      <button id="projectWidget" class="tb-btn" title="Open folder (Ctrl+O)" data-i18n-title="Open folder (Ctrl+O)">No project ▾</button>
+      <button id="mainMenuBtn" class="tb-icon main-menu-btn" title="Main Menu (Alt+\)" data-i18n-title="Main Menu (Alt+\)"></button>
+      <button id="projectWidget" class="tb-btn project-widget" title="Projects" data-i18n-title="Projects"></button>
     </div>
     <div id="toolbarRight" class="tb-group">
-      <select id="interpSelect" class="tb-select" title="Python interpreter" data-i18n-title="Python interpreter"></select>
+      <div id="runWidget" class="run-widget"></div>
+      <button id="searchBtn" class="tb-icon search-btn" title="Search Everywhere (Double Shift)" data-i18n-title="Search Everywhere (Double Shift)"></button>
     </div>
   </header>
 
@@ -37,15 +38,22 @@
       <div id="editorArea">
         <div id="editorGroups"></div>
         <div id="welcome">
-          <h1>PyIDE</h1>
-          <p data-i18n="A PyCharm-style Python IDE">A PyCharm-style Python IDE</p>
-          <button id="welcomeOpen" class="primary" data-i18n="Open Folder">Open Folder</button>
-          <table class="keys">
-            <tr><td data-i18n="Search files">Search files</td><td data-i18n="Double Shift / Ctrl+Shift+N">Double Shift / Ctrl+Shift+N</td></tr>
-            <tr><td data-i18n="Run current file">Run current file</td><td>Shift+F10</td></tr>
-            <tr><td data-i18n="Project / Terminal">Project / Terminal</td><td>Alt+1 / Alt+F12</td></tr>
-            <tr><td data-i18n="Find actions">Find actions</td><td>Ctrl+Shift+A</td></tr>
-          </table>
+          <div class="welcome-card">
+            <div class="welcome-head">
+              <span class="welcome-logo">Py</span>
+              <div>
+                <h1>PyIDE</h1>
+                <p data-i18n="A PyCharm-style Python IDE">A PyCharm-style Python IDE</p>
+              </div>
+            </div>
+            <div class="welcome-actions">
+              <button id="welcomeNew" class="welcome-action"><span class="welcome-action-icon" data-icon="newProject"></span><span data-i18n="New Project">New Project</span></button>
+              <button id="welcomeOpen" class="welcome-action"><span class="welcome-action-icon" data-icon="openProject"></span><span data-i18n="Open">Open</span></button>
+              <button id="welcomeVcs" class="welcome-action"><span class="welcome-action-icon" data-icon="fromVcs"></span><span data-i18n="Get from VCS">Get from VCS</span></button>
+            </div>
+            <div class="welcome-recent-title" data-i18n="Recent Projects">Recent Projects</div>
+            <div id="welcomeRecent" class="welcome-recent"></div>
+          </div>
         </div>
       </div>
       <div id="bottomSplitter" class="splitter h" data-target="bottom"></div>
@@ -67,7 +75,8 @@
     <span id="statusItems"></span>
     <span id="statusPos"></span>
     <span id="statusEncodingSlot"></span>
-    <span id="statusInterp"></span>
+    <button id="statusInterp" class="status-interp" title="Python Interpreter" data-i18n-title="Python Interpreter"><span id="statusInterpLabel"></span></button>
+    <select id="interpSelect" class="hidden" aria-hidden="true"></select>
   </footer>
 
   <div id="popup" class="hidden">
@@ -84,5 +93,7 @@
   <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="core/ide.js"></script>
   <script src="core/editors.js"></script>
+  <script src="core/project-wizard.js"></script>
+  <script src="core/mainmenu.js"></script>
 </body>
 </html>

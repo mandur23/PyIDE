@@ -844,9 +844,7 @@
   const debugBtn = el('button', 'tb-icon dbg-tb-btn');
   debugBtn.id = 'debugBtn';
   debugBtn.title = withKeys(tr('Debug'), 'Shift+F9');
-  debugBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">'
-    + '<ellipse cx="8" cy="9.5" rx="3.6" ry="4.3"/><path d="M5.6 5.6a2.6 2.6 0 0 1 4.8 0"/><path d="M8 7v6.6"/>'
-    + '<path d="M4.4 8.2H2.2M11.6 8.2h2.2M4.6 11.4l-2 1.4M11.4 11.4l2 1.4M5 6.6 3.2 5M11 6.6 12.8 5"/></svg>';
+  debugBtn.appendChild(ide.icon('runDebug', '🐞'));
   ide.registerToolbarItem({ order: 80, el: debugBtn });
 
   function debugCurrent() {
