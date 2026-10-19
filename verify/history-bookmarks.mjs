@@ -48,11 +48,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
   await until(`ide.localHistory.ready().then(Boolean)`, 'local history open');
-  check((await h.kinds('main.py')).join() === 'initial', 'opening the project records the initial content of each file');
-  check((await h.kinds('pkg', true)).join() === 'initial', 'a folder lists the revisions of the files under it');
+  check((await h.kinds('', true)).length === 0, 'opening a project records nothing until a file is opened or changes');
 
   // ---------- a save is a revision ----------
+  for (const f of ['notes.txt', 'util.py', 'pkg/mod.py']) await openFile(t, f);
   await openFile(t, 'main.py');
+  await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'main.py'), false).then(r => r.revisions.map(x => x.k).join() === 'initial')`, 'initial revision');
+  check(true, 'opening a file in the editor records its initial content');
   await js(`(ide.activeTab().model.pushEditOperations([], [{ range: new ide.monaco.Range(4, 1, 4, 1), text: '# greeting helper\\n' }], () => null), true)`);
   await h.caretTo(1);
   await press('Ctrl+S');
@@ -115,7 +117,7 @@ try {
   appendFileSync(file('pkg/mod.py'), 'VALUE = 2\n');
   await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'pkg\\\\mod.py'), false).then(r => r.revisions[0]?.k === 'external')`, 'mod.py change', 8000);
   await js(`ide.vcs.invoke('rollback', ide.root, [{ path: ide.util.joinPath(ide.root, 'pkg\\\\mod.py'), status: 'modified' }]).then(() => true)`);
-  await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'pkg\\\\mod.py'), false).then(r => r.revisions.length === 3)`, 'rollback revision', 8000);
+  await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'pkg\\\\mod.py'), false).then(r => r.revisions.map(x => x.k).join() === 'external,external,initial')`, 'rollback revision', 8000);
   check(read(file('pkg/mod.py')) === 'VALUE = 1\n' && (await h.labels()).includes('Before Rollback'), 'a Git rollback is preceded by a "Before Rollback" label and its result is recorded');
   await js(`ide.localHistory.checkpoint('My checkpoint', { user: true }).then(() => true)`);
   check((await h.labels())[0] === 'My checkpoint', 'Put Label adds a label the user named');
@@ -214,7 +216,7 @@ try {
   // ---------- restart ----------
   await until(`(ide.settings.get('bookmarks.' + ide.root) || []).length === 3 && ide.settings.get('bookmarks.' + ide.root).some(m => m.description === 'entry point')`, 'bookmarks saved');
   before = { main: (await h.kinds('main.py')).length, notes: await h.kinds('notes.txt') };
-  check(before.notes.join() === 'initial', 'an untouched file keeps its single revision');
+  check(before.notes.join() === 'initial', 'an opened file that never changed keeps its single revision');
   t.close();
   writeFileSync(file('notes.txt'), 'Edited while the IDE was closed.\n');
 } catch (err) {
@@ -243,7 +245,7 @@ try {
   const kinds = await h2.kinds('main.py');
   r2.check(kinds.length === before?.main && kinds.includes('revert') && kinds.includes('save'), `the local history of a file survives a restart (${kinds.join()})`);
   r2.check((await h2.kinds('notes.txt')).join() === 'external,initial', 'a change made while the IDE was closed is recorded when the project opens');
-  r2.check((await h2.kinds('pkg/mod.py')).length === 3, 'unchanged files get no new revision when the project opens again');
+  r2.check((await h2.kinds('pkg/mod.py')).join() === 'external,external,initial', 'unchanged files get no new revision when the project opens again');
   r2.check(r2.consoleErrors.length === 0, `no renderer exceptions after restart${r2.consoleErrors.length ? ` ${JSON.stringify(r2.consoleErrors)}` : ''}`);
 } catch (err) {
   r2.check(false, err.message);

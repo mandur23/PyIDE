@@ -22,7 +22,7 @@
   "Reverting to this label restores {n} files: {files}": "이 레이블로 되돌리면 파일 {n}개가 복원됩니다: {files}",
   "Saved": "저장됨",
   "Select the changes to revert in the diff": "Diff에서 되돌릴 변경 사항을 선택하세요",
-  "The latest revision of every file is always kept, so deleted files can be recovered.": "모든 파일의 최신 리비전은 항상 보관되므로 삭제된 파일을 복구할 수 있습니다.",
+  "A file is recorded from the first time it is opened or changes. Its latest revision is always kept, so it can be recovered after it is deleted.": "파일은 처음 열리거나 변경될 때부터 기록됩니다. 최신 리비전은 항상 보관되므로 삭제된 후에도 복구할 수 있습니다.",
   "This revision is binary and cannot be shown.": "이 리비전은 바이너리라서 표시할 수 없습니다.",
   "Today {time}": "오늘 {time}",
   "{time} (read-only)": "{time} — 읽기 전용",

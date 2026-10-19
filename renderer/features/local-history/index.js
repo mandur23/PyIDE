@@ -37,6 +37,11 @@
     const kind = reverting.delete(key(tab.path)) ? 'revert' : 'save';
     invoke('record', ide.root, tab.path, kind).catch(logError('cannot record a save'));
   });
+  // As in PyCharm, a file's history starts when it is first opened (or changes).
+  ide.on('fileOpened', (tab) => {
+    if (!ide.root || !isUnder(tab.path, ide.root) || !tab.doc) return;
+    invoke('record', ide.root, tab.path, 'opened', { text: tab.doc.model.getValue(), encoding: tab.doc.encoding }).catch(logError('cannot record an opened file'));
+  });
   ide.on('filesChanged', (e) => {
     for (const [from, to] of e?.renamed || []) invoke('rename', ide.root, from, to).catch(logError('cannot follow a rename'));
   });
@@ -47,13 +52,14 @@
     if (samePath(root, ide.root)) for (const v of views) v.reload();
   });
 
-  // Text of open documents now, before the caller changes anything (only `paths`, when given).
+  // Unsaved text of open documents now, before the caller changes anything (only `paths`, when given). Saved ones
+  // are on disk, where the store already has them.
   function openDocs(paths) {
     const seen = new Set();
     const out = [];
     for (const t of ide.tabs) {
       const doc = t.doc;
-      if (!doc || seen.has(doc) || doc.model.isDisposed() || !isUnder(doc.path, ide.root)) continue;
+      if (!doc || seen.has(doc) || doc.model.isDisposed() || !ide.isDirty(t) || !isUnder(doc.path, ide.root)) continue;
       if (paths && !paths.some((p) => samePath(p, doc.path))) continue;
       seen.add(doc);
       out.push({ path: doc.path, text: doc.model.getValue(), encoding: doc.encoding });
@@ -248,8 +254,9 @@
       // Monaco keeps a global hover-delegate factory bound to the last editor's scoped services; a throwaway editor
       // rebinds it to the root after a diff editor goes away (see the vcs plugin).
       ide.monaco.editor.create(el('div')).dispose();
-      original?.dispose();
-      ownModified?.dispose();
+      // A diff computation still in flight fails ("no diff result available") if its models go away first.
+      const models = [original, ownModified];
+      setTimeout(() => { for (const m of models) m?.dispose(); }, 2000);
       diff = original = ownModified = liveDoc = null;
       host._lhDiff = null;
       box.replaceChildren();
@@ -277,8 +284,9 @@
         return;
       }
       const left = p.rev?.h ? await content(p.rev.h).catch(() => ({ text: '' })) : { text: '' };
-      const doc = ide.getDocument(p.path);
-      const exists = !!doc || await ide.api.exists(p.path);
+      // A file deleted on disk shows as deleted even while an editor still holds its text.
+      const exists = await ide.api.exists(p.path);
+      const doc = exists ? ide.getDocument(p.path) : null;
       const right = doc || !exists ? '' : (await ide.api.invoke('fs:readText', p.path).catch(() => null))?.text ?? '';
       if (my !== showSeq || disposed) return;
       if (left.binary) {
@@ -405,7 +413,7 @@
       const s = ctx.ui.section(host, tr('Local History'));
       s.appendChild(ctx.ui.fieldRow(tr('Keep revisions for (days):'), ctx.ui.numberInput(SETTINGS.days, { min: 1, max: 365, fallback: 5 })));
       s.appendChild(ctx.ui.fieldRow(tr('Maximum storage (MB):'), ctx.ui.numberInput(SETTINGS.maxMB, { min: 10, max: 10000, fallback: 200 })));
-      host.appendChild(el('div', 'muted settings-note', tr('The latest revision of every file is always kept, so deleted files can be recovered.')));
+      host.appendChild(el('div', 'muted settings-note', tr('A file is recorded from the first time it is opened or changes. Its latest revision is always kept, so it can be recovered after it is deleted.')));
     },
   });
 
