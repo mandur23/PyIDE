@@ -104,7 +104,6 @@
   "Uninstalled {name}. Restart the IDE to unload it.": "{name}을(를) 제거했습니다. 완전히 내리려면 IDE를 다시 시작하세요.",
   "Version": "버전",
   "Virtual environment created.": "가상 환경을 생성했습니다.",
-
   "Run Configurations": "실행 구성",
   "Run widget, run configurations, gutter run icons and the Run tool window.": "실행 위젯, 실행 구성, 거터 실행 아이콘, 실행 도구 창을 제공합니다.",
   "Terminal": "터미널",
@@ -127,5 +126,9 @@
   "Ruff Formatter and Linter": "Ruff 포매터 및 린터",
   "Reformat Code, Optimize Imports and ruff inspections.": "코드 서식 다시 지정, import 최적화, ruff 검사를 제공합니다.",
   "Python Packages": "Python 패키지",
-  "Browse, install, upgrade and uninstall packages of the project interpreter.": "프로젝트 인터프리터의 패키지를 찾아보고 설치, 업그레이드, 제거합니다."
+  "Browse, install, upgrade and uninstall packages of the project interpreter.": "프로젝트 인터프리터의 패키지를 찾아보고 설치, 업그레이드, 제거합니다.",
+  "Editor Tabs": "에디터 탭",
+  "Open files in a preview tab on single click": "한 번 클릭하면 미리보기 탭에서 파일 열기",
+  "Tab limit:": "탭 개수 제한:",
+  "0 means no limit": "0이면 제한 없음"
 }

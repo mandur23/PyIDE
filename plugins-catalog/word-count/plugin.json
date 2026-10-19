@@ -4,6 +4,7 @@
   "version": "0.9.1",
   "vendor": "PyIDE Samples",
   "description": "Shows the line, word and character count of the current file (or of the selection) in the status bar.",
+  "detached": true,
   "i18n": {
     "ko": {
       "name": "통계: 줄 수와 단어 수",

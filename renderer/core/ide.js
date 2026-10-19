@@ -19,12 +19,10 @@ const isUnder = (p, dir) => {
   return a === b || (a.startsWith(b) && '\\/'.includes(a[b.length]));
 };
 
-const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', ts: 'typescript', json: 'json',
-  md: 'markdown', html: 'html', css: 'css', yml: 'yaml', yaml: 'yaml', toml: 'ini', cfg: 'ini', ini: 'ini',
-  xml: 'xml', sh: 'shell', ps1: 'powershell', sql: 'sql', txt: 'plaintext' };
-
 const ide = (window.ide = {
   t: tr,
+  // A detached window ("Open in New Window") shows only editors; see editors.js.
+  detached: new URLSearchParams(location.search).has('detached'),
   root: null,
   monaco: null,
   editor: null,
@@ -35,6 +33,8 @@ const ide = (window.ide = {
   toolWindows: new Map(),
   util: { $, el, basename, dirname, joinPath, samePath, isUnder, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
 });
+
+if (ide.detached) document.body.classList.add('detached');
 
 // ---------- events ----------
 const listeners = new Map();
@@ -467,143 +467,6 @@ ide.problems = {
   },
 };
 
-// ---------- tabs ----------
-const languageFor = (p) => LANG_BY_EXT[p.split('.').pop().toLowerCase()] || 'plaintext';
-ide.findTab = (path) => ide.tabs.find((t) => samePath(t.path, path));
-ide.activeTab = () => ide.findTab(ide.active);
-ide.isDirty = (t) => t.kind === 'file' && t.model.getAlternativeVersionId() !== t.savedVersion;
-
-function showSurface(tab) {
-  $('editor').classList.toggle('hidden', !tab || tab.kind !== 'file');
-  for (const t of ide.tabs) t.host?.classList.toggle('hidden', t !== tab);
-}
-
-function activate(tab) {
-  ide.active = tab?.path || null;
-  showSurface(tab);
-  if (tab?.kind === 'file') ide.editor.setModel(tab.model);
-  else ide.editor.setModel(null);
-  $('statusPath').textContent = tab ? ide.util.rel(tab.path) : '';
-  renderTabs();
-  ide.emit('activeTabChanged', tab || null);
-}
-
-// opts: {line?, col?, focus = true}. Returns the tab.
-ide.openFile = async (path, opts = {}) => {
-  let tab = ide.findTab(path);
-  if (!tab) {
-    let text;
-    try { text = await ide.api.read(path); } catch (e) { alert(e.message); return null; }
-    tab = ide.findTab(path);
-    if (!tab) {
-      const uri = ide.monaco.Uri.file(path);
-      const model = ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(text, languageFor(path), uri);
-      tab = { kind: 'file', path, title: basename(path), model, savedVersion: model.getAlternativeVersionId() };
-      ide.tabs.push(tab);
-      applyMarkers(tab);
-      ide.emit('fileOpened', tab);
-    }
-  }
-  activate(tab);
-  if (opts.line) {
-    const pos = { lineNumber: opts.line, column: opts.col || 1 };
-    ide.editor.setPosition(pos);
-    ide.editor.revealPositionInCenterIfOutsideViewport(pos);
-  }
-  if (opts.focus !== false) ide.editor.focus();
-  return tab;
-};
-
-// {id, title, icon?, mount(host, tab), onClose?()} -> tab; reopening an existing id just activates it.
-ide.openCustomTab = ({ id, title, icon = '◆', mount, onClose }) => {
-  let tab = ide.findTab(id);
-  if (!tab) {
-    const host = el('div', 'custom-tab hidden');
-    $('customHost').appendChild(host);
-    tab = { kind: 'custom', path: id, title, icon, host, onClose };
-    ide.tabs.push(tab);
-    mount(host, tab);
-  }
-  activate(tab);
-  return tab;
-};
-
-function renderTabs() {
-  const bar = $('tabs');
-  bar.innerHTML = '';
-  for (const t of ide.tabs) {
-    const node = el('div', 'tab' + (samePath(t.path, ide.active) ? ' active' : ''));
-    node.title = t.path;
-    node.appendChild(el('span', 'tab-icon', t.kind === 'custom' ? t.icon : t.path.endsWith('.py') ? '🐍' : '📄'));
-    node.appendChild(el('span', 'name', t.title));
-    if (ide.isDirty(t)) node.appendChild(el('span', 'dirty', '●'));
-    const close = el('button', 'close', '×');
-    node.appendChild(close);
-    node.onclick = () => (t.kind === 'file' ? ide.openFile(t.path) : activate(t));
-    node.onauxclick = (e) => e.button === 1 && ide.closeTab(t.path);
-    node.oncontextmenu = (e) => {
-      e.preventDefault();
-      ide.ui.contextMenu(e.clientX, e.clientY, [
-        { label: tr('Close'), hint: 'Ctrl+F4', run: () => ide.closeTab(t.path) },
-        { label: tr('Close Other Tabs'), run: () => ide.tabs.filter((o) => o !== t).forEach((o) => ide.closeTab(o.path)) },
-        { label: tr('Close All Tabs'), run: () => [...ide.tabs].forEach((o) => ide.closeTab(o.path)) },
-      ]);
-    };
-    close.onclick = (e) => { e.stopPropagation(); ide.closeTab(t.path); };
-    bar.appendChild(node);
-  }
-  bar.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-}
-ide.renderTabs = renderTabs;
-
-ide.closeTab = (path, force) => {
-  const i = ide.tabs.findIndex((t) => samePath(t.path, path));
-  if (i < 0) return;
-  const tab = ide.tabs[i];
-  if (!force && ide.isDirty(tab) && !confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }))) return;
-  ide.tabs.splice(i, 1);
-  if (tab.kind === 'file') tab.model.dispose();
-  else { tab.onClose?.(); tab.host.remove(); }
-  ide.emit('fileClosed', tab.path);
-  if (samePath(ide.active, path)) {
-    const next = ide.tabs[Math.min(i, ide.tabs.length - 1)];
-    if (next) (next.kind === 'file' ? ide.openFile(next.path) : activate(next));
-    else activate(null);
-  } else renderTabs();
-};
-
-ide.saveTab = async (tab) => {
-  if (!ide.isDirty(tab)) return;
-  ide.emit('beforeSave', tab);
-  await ide.api.write(tab.path, tab.model.getValue());
-  tab.savedVersion = tab.model.getAlternativeVersionId();
-  ide.emit('fileSaved', tab);
-};
-ide.saveAll = async () => {
-  await Promise.all(ide.tabs.filter((t) => t.kind === 'file').map(ide.saveTab));
-  renderTabs();
-};
-
-// Reloads open tabs whose file changed on disk (after formatters, git checkout, replace-in-files...).
-ide.reloadFromDisk = async (paths) => {
-  for (const tab of ide.tabs.filter((t) => t.kind === 'file' && (!paths || paths.some((p) => samePath(p, t.path))))) {
-    if (ide.isDirty(tab)) continue;
-    let text;
-    try { text = await ide.api.read(tab.path); } catch { continue; }
-    if (text === tab.model.getValue()) continue;
-    tab.model.pushEditOperations([], [{ range: tab.model.getFullModelRange(), text }], () => null);
-    tab.savedVersion = tab.model.getAlternativeVersionId();
-  }
-  renderTabs();
-};
-
-function cycleTab(dir) {
-  if (!ide.tabs.length) return;
-  const i = ide.tabs.findIndex((t) => samePath(t.path, ide.active));
-  const t = ide.tabs[(i + dir + ide.tabs.length) % ide.tabs.length];
-  t.kind === 'file' ? ide.openFile(t.path) : activate(t);
-}
-
 // ---------- project tree ----------
 const expanded = new Set();
 const treeDecorators = [];
@@ -642,9 +505,12 @@ async function renderTree() {
       } else {
         tree.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
         node.classList.add('selected');
-        ide.openFile(entry.path);
+        ide.openFile(entry.path, { preview: true });
       }
     };
+    // Double-click keeps a file that a single click opened as a preview tab; Shift+click opens it beside the current pane.
+    if (!entry.dir) node.ondblclick = () => ide.openFile(entry.path);
+    if (!entry.dir) node.addEventListener('click', (e) => { if (e.shiftKey) { e.stopImmediatePropagation(); ide.openFile(entry.path, { group: 'right' }); } }, true);
     node.oncontextmenu = (e) => {
       e.preventDefault();
       selected = entry;
@@ -758,7 +624,7 @@ $('interpSelect').onchange = () => {
 
 // ---------- project ----------
 ide.openProject = async (dir) => {
-  for (const t of [...ide.tabs]) ide.closeTab(t.path, true);
+  ide.closeAllTabs(true);
   ide.root = dir;
   expanded.clear();
   expanded.add(dir.toLowerCase());
@@ -817,16 +683,13 @@ async function findAction() {
 const inEditor = () => ide.editor?.hasTextFocus();
 const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
 [
-  { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: ide.saveAll },
+  { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: () => ide.saveAll() },
   { id: 'OpenProject', title: tr('Open Folder…'), keys: 'Ctrl+O', run: pickFolder },
   { id: 'GotoFile', title: tr('Go to File…'), keys: ['Ctrl+Shift+N', 'Shift Shift'], run: gotoFile },
   { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction },
-  { id: 'CloseContent', title: tr('Close Tab'), keys: 'Ctrl+F4', run: () => ide.active && ide.closeTab(ide.active) },
-  { id: 'PreviousTab', title: tr('Previous Tab'), keys: 'Alt+ArrowLeft', run: () => cycleTab(-1) },
-  { id: 'NextTab', title: tr('Next Tab'), keys: 'Alt+ArrowRight', run: () => cycleTab(1) },
   { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },
   { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide() },
-  { id: 'FocusEditor', keys: 'Escape', when: () => !inEditor() && !document.activeElement?.closest('#editor') && !!ide.editor?.getModel(), run: () => ide.editor.focus() },
+  { id: 'FocusEditor', keys: 'Escape', when: () => !inEditor() && !document.activeElement?.closest('.editor-group') && !!ide.editor?.getModel(), run: () => ide.editor.focus() },
   { id: 'EditorDuplicate', title: tr('Duplicate Line'), keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
   { id: 'EditorDeleteLine', title: tr('Delete Line'), keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },
   { id: 'CommentByLineComment', title: tr('Comment with Line Comment'), keys: 'Ctrl+/', when: inEditor, run: editorAction('editor.action.commentLine') },
@@ -890,7 +753,7 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
   monaco.languages.registerCompletionItemProvider('python', { provideCompletionItems: pythonBasicCompletions(monaco) });
   monaco.editor.defineTheme('pycharm-dark', PYCHARM_DARK);
 
-  ide.editor = monaco.editor.create($('editor'), {
+  ide.initEditors({
     theme: 'pycharm-dark',
     fontFamily: "'JetBrains Mono', Consolas, monospace",
     fontSize: 14,
@@ -906,12 +769,14 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
     bracketPairColorization: { enabled: false },
     fixedOverflowWidgets: true,
   });
-  ide.editor.onDidChangeCursorPosition((e) => ($('statusPos').textContent = `${e.position.lineNumber}:${e.position.column}`));
-  ide.editor.onDidChangeModelContent(() => renderTabs());
-  showSurface(null);
 
   await loadFeatures();
   ide.emit('ready');
+  if (ide.detached) {
+    await ide.initDetachedWindow();
+    window.__ideReady = true;
+    return;
+  }
 
   const last = new URLSearchParams(location.search).get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();
   if (last && await ide.api.exists(last)) await ide.openProject(last);

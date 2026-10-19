@@ -412,29 +412,37 @@
   }
 
   const CursorReason = ide.monaco.editor.CursorChangeReason;
-  ide.editor.onDidChangeCursorPosition((e) => {
-    const tab = ide.activeTab();
-    if (tab?.kind !== 'file' || tab.model !== ide.editor.getModel()) return;
-    const { lineNumber: line, column: col } = e.position;
-    if ([CursorReason.Paste, CursorReason.Undo, CursorReason.Redo, CursorReason.ContentFlush].includes(e.reason) && cur && samePath(cur.path, tab.path)) {
-      cur = { path: tab.path, line, col };
-    } else track(tab.path, line, col);
-    markCurrentSoon();
-  });
+  // History follows the pane the user works in: the active pane's editor, or a focused editor inside a viewer.
+  // Other panes showing the same file also move their carets when it is edited; those moves are not navigation.
+  const driving = (ed) => ed === ide.editor || (ed.hasTextFocus() && !ide.editors().includes(ed));
+  const pathOf = (ed) => { const m = ed.getModel(); return m ? ide.tabs.find((t) => t.model === m)?.path || null : null; };
 
-  ide.editor.onDidChangeModelContent((e) => {
-    refreshStructureSoon();
-    const tab = ide.activeTab();
-    if (e.isFlush || tab?.kind !== 'file' || tab.model !== ide.editor.getModel()) return;
-    setTimeout(() => {
-      if (ide.editor.getModel() !== tab.model) return;
-      const pos = ide.editor.getPosition();
-      const loc = { path: tab.path, line: pos.lineNumber, col: pos.column };
-      const last = edits[edits.length - 1];
-      if (last && near(last, loc, 1)) edits[edits.length - 1] = loc; else edits.push(loc);
-      if (edits.length > 100) edits.shift();
-      editIdx = null;
-      rememberPlace(loc, true);
+  ide.onEditor((ed) => {
+    ed.onDidChangeCursorPosition((e) => {
+      const path = driving(ed) && pathOf(ed);
+      if (!path) return;
+      const { lineNumber: line, column: col } = e.position;
+      if ([CursorReason.Paste, CursorReason.Undo, CursorReason.Redo, CursorReason.ContentFlush].includes(e.reason) && cur && samePath(cur.path, path)) {
+        cur = { path, line, col };
+      } else track(path, line, col);
+      markCurrentSoon();
+    });
+
+    ed.onDidChangeModelContent((e) => {
+      refreshStructureSoon();
+      const model = ed.getModel();
+      const path = !e.isFlush && driving(ed) && pathOf(ed);
+      if (!path) return;
+      setTimeout(() => {
+        if (ed.getModel() !== model) return;
+        const pos = ed.getPosition();
+        const loc = { path, line: pos.lineNumber, col: pos.column };
+        const last = edits[edits.length - 1];
+        if (last && near(last, loc, 1)) edits[edits.length - 1] = loc; else edits.push(loc);
+        if (edits.length > 100) edits.shift();
+        editIdx = null;
+        rememberPlace(loc, true);
+      });
     });
   });
 

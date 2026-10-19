@@ -90,11 +90,11 @@
       headCache.clear();
       if (gitTw.isVisible()) loadLog();
     }
-    repoKey.set(!!repo);
+    setRepoKey(!!repo);
     renderWidget();
     renderChanges();
     if (treeSig() !== before) ide.refreshTree();
-    updateGutter(ide.activeTab());
+    updateVisibleGutters();
   }
 
   ide.registerTreeDecorator((entry) => {
@@ -533,14 +533,27 @@
     if (tab?.kind !== 'file' || tab.model.isDisposed()) return;
     const f = byPath.get(key(tab.path));
     const base = repo && f?.status !== 'unversioned' && f?.status !== 'added' ? await headText(tab.path) : null;
-    if (!tab.model.isDisposed() && ide.findTab(tab.path) === tab) applyGutter(tab, base);
+    if (!tab.model.isDisposed() && ide.findTab(tab.path)?.model === tab.model) applyGutter(tab, base);
   }
 
+  // The change markers are model decorations, so every pane showing the file has them; an edit typed in any pane
+  // (or in an editor embedded in a viewer) recomputes them.
+  const tabOf = (ed) => { const m = ed.getModel(); return m ? ide.tabs.find((t) => t.model === m) || null : null; };
+  const fileTabOf = (ed) => { const t = tabOf(ed); return t && { kind: 'file', path: t.path, model: t.model }; };
   let gutterTimer;
-  ide.editor.onDidChangeModelContent(() => {
+  ide.onEditor((ed) => ed.onDidChangeModelContent(() => {
     clearTimeout(gutterTimer);
-    gutterTimer = setTimeout(() => updateGutter(ide.activeTab()), 250);
-  });
+    gutterTimer = setTimeout(() => updateGutter(fileTabOf(ed)), 250);
+  }));
+
+  // Every file shown in some pane, not just the active one, so a split view stays current after commits and checkouts.
+  function updateVisibleGutters() {
+    const seen = new Set();
+    for (const ed of vcsEditors.keys()) {
+      const tab = fileTabOf(ed);
+      if (tab && !seen.has(tab.model)) { seen.add(tab.model); updateGutter(tab); }
+    }
+  }
 
   // Recomputes synchronously so navigation sees edits typed within the debounce window.
   function currentHunks(tab) {
@@ -549,17 +562,17 @@
     return g?.base == null ? [] : applyGutter(tab, g.base).hunks;
   }
 
-  function gotoChange(dir) {
-    const tab = ide.activeTab();
+  function gotoChange(dir, ed = ide.editor) {
+    const tab = ed && fileTabOf(ed);
     const hunks = currentHunks(tab);
     if (!hunks.length) return;
-    const line = ide.editor.getPosition()?.lineNumber || 1;
+    const line = ed.getPosition()?.lineNumber || 1;
     const starts = hunks.map((h) => hunkLine(h, tab.model));
     let target = dir > 0 ? starts.find((s) => s > line) : [...starts].reverse().find((s) => s < line);
     if (target == null) target = dir > 0 ? starts[0] : starts[starts.length - 1];
-    ide.editor.setPosition({ lineNumber: target, column: 1 });
-    ide.editor.revealLineInCenterIfOutsideViewport(target);
-    ide.editor.focus();
+    ed.setPosition({ lineNumber: target, column: 1 });
+    ed.revealLineInCenterIfOutsideViewport(target);
+    ed.focus();
   }
 
   const hunkAt = (tab, line) => currentHunks(tab).find((h) => {
@@ -601,8 +614,6 @@
   const blames = new Map(); // lower path -> {ids, width, classToHash}
   const blameStyle = el('style');
   document.head.appendChild(blameStyle);
-  const repoKey = ide.editor.createContextKey('vcsRepo', false);
-  const annotatedKey = ide.editor.createContextKey('vcsAnnotated', false);
   let blameSeq = 0;
   const fmtShort = (t) => new Date(t * 1000).toLocaleDateString(dateLocale, { year: '2-digit', month: 'numeric', day: 'numeric' });
 
@@ -619,12 +630,18 @@
     blameStyle.textContent = [...blames.values()].map((b) => b.css).join('\n');
   }
 
-  function applyAnnotationLayout(tab) {
-    const b = tab?.kind === 'file' && blames.get(key(tab.path));
-    annotatedKey.set(!!b);
-    ide.editor.updateOptions({ lineDecorationsWidth: b ? b.width : 10 });
-    ide.editor.getDomNode()?.style.setProperty('--vcs-bar-left', b ? `${b.width - 6}px` : '0px');
+  // The blame column is model decorations, but its width and the context keys are per editor: each pane sizes its
+  // gutter for the file it shows.
+  function applyAnnotationLayout(ed) {
+    const keys = vcsEditors.get(ed);
+    if (!keys) return;
+    const t = tabOf(ed);
+    const b = t && blames.get(key(t.path));
+    keys.annotated.set(!!b);
+    ed.updateOptions({ lineDecorationsWidth: b ? b.width : 10 });
+    ed.getDomNode()?.style.setProperty('--vcs-bar-left', b ? `${b.width - 6}px` : '0px');
   }
+  const layoutAnnotations = () => { for (const ed of vcsEditors.keys()) applyAnnotationLayout(ed); };
 
   async function annotate(tab) {
     if (!repo || tab?.kind !== 'file') return;
@@ -652,7 +669,7 @@
     const ids = tab.model.deltaDecorations(old?.ids || [], decos);
     blames.set(key(tab.path), { ids, css, classToHash, width: Math.round(longest * 7.2) + 22 });
     rebuildBlameCss();
-    if (ide.activeTab() === tab) applyAnnotationLayout(tab);
+    layoutAnnotations();
   }
 
   function closeAnnotations(tab) {
@@ -661,27 +678,42 @@
     if (!tab.model.isDisposed()) tab.model.deltaDecorations(b.ids, []);
     blames.delete(key(tab.path));
     rebuildBlameCss();
-    applyAnnotationLayout(ide.activeTab());
+    layoutAnnotations();
   }
 
-  const toggleAnnotate = () => {
-    const tab = ide.activeTab();
-    if (tab?.kind !== 'file') return;
+  // Toggles annotations for the file shown in `ed` (the active pane unless a context menu names another editor).
+  const toggleAnnotate = (ed = ide.editor) => {
+    const tab = ed && fileTabOf(ed);
+    if (!tab) return;
     blames.has(key(tab.path)) ? closeAnnotations(tab) : annotate(tab);
   };
 
-  ide.editor.addAction({ id: 'vcs.annotate', label: tr('Annotate with Git Blame'), contextMenuGroupId: '9_vcs', precondition: 'vcsRepo && !vcsAnnotated', run: toggleAnnotate });
-  ide.editor.addAction({ id: 'vcs.closeAnnotations', label: tr('Close Annotations'), contextMenuGroupId: '9_vcs', precondition: 'vcsAnnotated', run: toggleAnnotate });
+  // Per-editor context keys, context-menu actions and gutter clicks, for every pane and viewer-embedded editor.
+  const vcsEditors = new Map(); // editor -> {repo, annotated} context keys
+  let repoOn = false;
+  function setRepoKey(on) {
+    repoOn = on;
+    for (const k of vcsEditors.values()) k.repo.set(on);
+  }
+  ide.onEditor((ed) => {
+    vcsEditors.set(ed, { repo: ed.createContextKey('vcsRepo', repoOn), annotated: ed.createContextKey('vcsAnnotated', false) });
+    ed.onDidDispose(() => vcsEditors.delete(ed));
+    ed.onDidChangeModel(() => applyAnnotationLayout(ed));
+    ed.addAction({ id: 'vcs.annotate', label: tr('Annotate with Git Blame'), contextMenuGroupId: '9_vcs', precondition: 'vcsRepo && !vcsAnnotated', run: () => toggleAnnotate(ed) });
+    ed.addAction({ id: 'vcs.closeAnnotations', label: tr('Close Annotations'), contextMenuGroupId: '9_vcs', precondition: 'vcsAnnotated', run: () => toggleAnnotate(ed) });
+    ed.onMouseDown((e) => gutterMouseDown(ed, e));
+    applyAnnotationLayout(ed);
+  });
 
-  ide.editor.onMouseDown((e) => {
+  function gutterMouseDown(ed, e) {
     const M = ide.monaco;
     if (e.target.type !== M.editor.MouseTargetType.GUTTER_LINE_DECORATIONS || !e.target.position) return;
-    const tab = ide.activeTab();
-    if (tab?.kind !== 'file') return;
+    const tab = fileTabOf(ed);
+    if (!tab) return;
     const line = e.target.position.lineNumber;
     const b = blames.get(key(tab.path));
-    const layout = ide.editor.getLayoutInfo();
-    const x = e.event.posx - ide.editor.getDomNode().getBoundingClientRect().left;
+    const layout = ed.getLayoutInfo();
+    const x = e.event.posx - ed.getDomNode().getBoundingClientRect().left;
     if (b && x < layout.decorationsLeft + b.width - 8) {
       const cls = tab.model.getLineDecorations(line).map((d) => d.options.linesDecorationsClassName || '')
         .map((c) => c.split(' ').find((n) => b.classToHash[n])).find(Boolean);
@@ -694,10 +726,10 @@
       { label: tr('Rollback Lines'), hint: 'Ctrl+Alt+Z', run: () => rollbackHunk(tab, h) },
       { label: tr('Show Diff'), run: () => openWorkingDiff(tab.path) },
       { separator: true },
-      { label: tr('Next Change'), hint: 'Ctrl+Alt+Shift+Down', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(1); } },
-      { label: tr('Previous Change'), hint: 'Ctrl+Alt+Shift+Up', run: () => { ide.editor.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1); } },
+      { label: tr('Next Change'), hint: 'Ctrl+Alt+Shift+Down', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(1, ed); } },
+      { label: tr('Previous Change'), hint: 'Ctrl+Alt+Shift+Up', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1, ed); } },
     ]);
-  });
+  }
 
   // ---------- Git tool window: Log and Console ----------
   let logRows, filesEl, detailsEl, logPane, consolePane, subTabs;
@@ -925,7 +957,7 @@
     } },
     { id: 'VcsShowNextChangeMarker', title: tr('Next Change'), keys: 'Ctrl+Alt+Shift+ArrowDown', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(1) },
     { id: 'VcsShowPrevChangeMarker', title: tr('Previous Change'), keys: 'Ctrl+Alt+Shift+ArrowUp', when: () => ide.activeTab()?.kind === 'file', run: () => gotoChange(-1) },
-    { id: 'Annotate', title: tr('Annotate with Git Blame'), run: toggleAnnotate },
+    { id: 'Annotate', title: tr('Annotate with Git Blame'), run: () => toggleAnnotate() },
     { id: 'Git.Branches', title: tr('Branches…'), run: showBranches },
     { id: 'Git.Init', title: tr('Create Git Repository…'), run: createRepository },
     { id: 'Git.Log', title: tr('Show Git Log'), run: () => { gitTw.show(); subTabs.switchTo(true); } },
@@ -955,8 +987,8 @@
   });
   ide.on('filesChanged', () => scheduleRefresh());
   // overview-ruler marks carry concrete colors; recolor them for the new theme
-  ide.on('settingsChanged', (k) => k === 'appearance.theme' && setTimeout(() => updateGutter(ide.activeTab())));
-  ide.on('activeTabChanged', (tab) => { updateGutter(tab); applyAnnotationLayout(tab); });
+  ide.on('settingsChanged', (k) => k === 'appearance.theme' && setTimeout(updateVisibleGutters));
+  ide.on('activeTabChanged', (tab) => { updateGutter(tab); layoutAnnotations(); });
   ide.on('fileClosed', (path) => { gutters.delete(key(path)); if (blames.delete(key(path))) rebuildBlameCss(); });
   window.addEventListener('focus', () => scheduleRefresh(50));
 })();

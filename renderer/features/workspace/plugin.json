@@ -1,0 +1,10 @@
+{
+  "id": "workspace",
+  "name": "My Workspace",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Launchers tool window for every way the project starts (launch.json, run/start scripts, python -m packages, PyCharm run configurations, Maven, Gradle), port checks, and the Workspace home with recent projects.",
+  "main": [
+    "workspace.js"
+  ]
+}

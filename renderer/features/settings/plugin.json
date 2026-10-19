@@ -4,5 +4,6 @@
   "version": "1.0.0",
   "vendor": "PyIDE",
   "description": "Settings dialog, themes, editor preferences, languages and plugin management.",
+  "detached": true,
   "required": true
 }

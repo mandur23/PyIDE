@@ -1,0 +1,8 @@
+id,name,city,score,note
+1,Alice,"Seoul, KR",88.5,first
+2,Bob,"Busan, KR",92,"says ""hi"""
+3,Charlie,Tokyo,75.25,
+4,Dana,"New York, NY",100,"multi
+line note"
+5,Eve,Paris,9,last
+10,Frank,"Incheon, KR",61,

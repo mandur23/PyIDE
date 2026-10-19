@@ -9,7 +9,7 @@
   // ---------- editor hint (PyCharm shows a balloon after reformatting) ----------
   const hint = el('div', 'tooling-hint hidden');
   hint.id = 'toolingHint';
-  document.getElementById('editorWrap').appendChild(hint);
+  document.getElementById('editorArea').appendChild(hint);
   let hintTimer;
   function showHint(text, error) {
     hint.textContent = text;

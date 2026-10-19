@@ -600,23 +600,25 @@
   }
 
   // ---------- gutter run icons ----------
-  let gutter;
-  let gutterItems = new Map(); // line -> item
-  let gutterTimer;
-  function refreshGutter() {
-    if (!ide.editor) return;
-    gutter ??= ide.editor.createDecorationsCollection();
-    const tab = ide.activeTab();
-    gutterItems = new Map();
-    if (tab?.kind === 'file' && /\.pyw?$/i.test(tab.path)) {
+  // Every editor (split pane or viewer-embedded) keeps its own icon decorations and line -> item map.
+  const gutterEditors = new Map(); // editor -> {deco, items: Map(line -> item), timer}
+  const pathOfModel = (model) => (model ? ide.tabs.find((t) => t.model === model)?.path || null : null);
+
+  function refreshEditorGutter(ed) {
+    const g = gutterEditors.get(ed);
+    if (!g) return;
+    const model = ed.getModel();
+    const path = pathOfModel(model);
+    g.items = new Map();
+    if (path && /\.pyw?$/i.test(path)) {
       for (const p of gutterProviders) {
         let items = [];
-        try { items = p(tab.model, tab.path) || []; } catch (err) { console.error('gutter provider failed', err); }
-        for (const it of items) if (!gutterItems.has(it.line)) gutterItems.set(it.line, it);
+        try { items = p(model, path) || []; } catch (err) { console.error('gutter provider failed', err); }
+        for (const it of items) if (!g.items.has(it.line)) g.items.set(it.line, it);
       }
     }
     const lane = ide.monaco.editor.GlyphMarginLane.Right;
-    gutter.set([...gutterItems.values()].map((it) => ({
+    g.deco.set([...g.items.values()].map((it) => ({
       range: new ide.monaco.Range(it.line, 1, it.line, 1),
       options: {
         glyphMarginClassName: `run-gutter-icon ${it.state || ''}`,
@@ -625,14 +627,21 @@
       },
     })));
   }
-  const scheduleGutter = () => { clearTimeout(gutterTimer); gutterTimer = setTimeout(refreshGutter, 250); };
+  function refreshGutter() { for (const ed of gutterEditors.keys()) refreshEditorGutter(ed); }
+  function scheduleGutter(ed) {
+    for (const [e, g] of gutterEditors) {
+      if (ed && e !== ed) continue;
+      clearTimeout(g.timer);
+      g.timer = setTimeout(() => refreshEditorGutter(e), 250);
+    }
+  }
 
-  function showGutterMenu(item, x, y) {
+  function showGutterMenu(ed, item, x, y) {
     const cfg = () => item.config();
     ide.ui.contextMenu(x, y, [
       { label: `▶  ${tr("Run '{name}'", { name: item.title })}`, hint: 'Ctrl+Shift+F10', run: () => runContext(cfg()) },
       ...(canDebug(cfg()) ? [{ label: `🐞  ${tr("Debug '{name}'", { name: item.title })}`, run: () => {
-        ide.editor.setPosition({ lineNumber: item.line, column: 1 });
+        ed.setPosition({ lineNumber: item.line, column: 1 });
         debugConfig(addTemporary(cfg()));
       } }] : []),
       { separator: true },
@@ -640,28 +649,32 @@
     ]);
   }
 
-  // The icon shares the glyph margin with breakpoints; intercepting the press before Monaco sees it keeps a click
-  // on the run icon from also toggling a breakpoint.
-  const editorDom = document.getElementById('editor');
+  // The icon shares the glyph margin with breakpoints; intercepting the press on the editor's container before
+  // Monaco sees it keeps a click on the run icon from also toggling a breakpoint.
   const iconAt = (e) => e.button === 0 && e.target.closest?.('.run-gutter-icon');
-  for (const type of ['pointerdown', 'mousedown']) {
-    editorDom.addEventListener(type, (e) => {
-      if (!iconAt(e)) return;
-      e.stopPropagation();
-      // Cancelling pointerdown would suppress the mousedown that opens the menu.
-      if (type !== 'mousedown') return;
-      e.preventDefault();
-      const pos = ide.editor.getTargetAtClientPoint(e.clientX, e.clientY)?.position;
-      const item = pos && gutterItems.get(pos.lineNumber);
-      if (item) showGutterMenu(item, e.clientX, e.clientY);
-    }, true);
-  }
-  for (const type of ['pointerup', 'mouseup', 'click']) editorDom.addEventListener(type, (e) => iconAt(e) && e.stopPropagation(), true);
-
-  ide.on('ready', () => {
-    ide.editor.onDidChangeModelContent(scheduleGutter);
-    refreshGutter();
+  ide.onEditor((ed) => {
+    const g = { deco: ed.createDecorationsCollection(), items: new Map(), timer: null };
+    gutterEditors.set(ed, g);
+    const dom = ed.getContainerDomNode();
+    for (const type of ['pointerdown', 'mousedown']) {
+      dom.addEventListener(type, (e) => {
+        if (!iconAt(e)) return;
+        e.stopPropagation();
+        // Cancelling pointerdown would suppress the mousedown that opens the menu.
+        if (type !== 'mousedown') return;
+        e.preventDefault();
+        const pos = ed.getTargetAtClientPoint(e.clientX, e.clientY)?.position;
+        const item = pos && g.items.get(pos.lineNumber);
+        if (item) showGutterMenu(ed, item, e.clientX, e.clientY);
+      }, true);
+    }
+    for (const type of ['pointerup', 'mouseup', 'click']) dom.addEventListener(type, (e) => iconAt(e) && e.stopPropagation(), true);
+    ed.onDidChangeModel(() => refreshEditorGutter(ed));
+    ed.onDidChangeModelContent(() => scheduleGutter(ed));
+    ed.onDidDispose(() => { clearTimeout(g.timer); gutterEditors.delete(ed); });
+    refreshEditorGutter(ed);
   });
+  // A tab can become a .py file (rename) or a first tab can appear for a model without the editor's model changing.
   ide.on('activeTabChanged', refreshGutter);
 
   ide.on('projectOpened', () => {

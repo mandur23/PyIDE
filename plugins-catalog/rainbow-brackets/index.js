@@ -6,7 +6,7 @@
     const colors = document.documentElement.dataset.theme === 'light' ? LIGHT : DARK;
     const style = document.getElementById('rainbow-brackets-colors') || document.head.appendChild(Object.assign(document.createElement('style'), { id: 'rainbow-brackets-colors' }));
     style.textContent = colors.map((c, i) => `.monaco-editor .bracket-highlighting-${i} { color: ${c} !important; }`).join('\n');
-    ide.editor.updateOptions({
+    ide.updateEditorOptions({
       bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: false },
       guides: { bracketPairs: 'active', indentation: true },
     });
@@ -15,7 +15,7 @@
   ide.on('ready', apply);
   ide.on('settingsChanged', (key) => key === 'appearance.theme' && setTimeout(apply));
   ide.registerAction({ id: 'RainbowBracketsToggle', title: tr('Toggle Rainbow Brackets'), run: () => {
-    const on = !ide.editor.getOption(ide.monaco.editor.EditorOption.bracketPairColorization).enabled;
-    ide.editor.updateOptions({ bracketPairColorization: { enabled: on } });
+    const on = !ide.editorOptions().bracketPairColorization?.enabled;
+    ide.updateEditorOptions({ bracketPairColorization: { enabled: on, independentColorPoolPerBracketType: false } });
   } });
 })();

@@ -1,0 +1,4 @@
+{"id": 1, "text": "안녕하세요", "speaker": "A", "duration": 1.5}
+{"id": 2, "text": "hello", "speaker": "B", "duration": 2.25, "tags": ["en", "test"]}
+{"id": 3, "text": "broken line", "speaker":
+{"id": 4, "text": "마지막", "speaker": "A", "duration": 0.75, "meta": {"snr": 30}}

@@ -4,6 +4,7 @@
   "version": "1.2.0",
   "vendor": "PyIDE Samples",
   "description": "Colors matching brackets by nesting depth and draws a bracket-pair guide, so deeply nested Python is easier to read.",
+  "detached": true,
   "i18n": {
     "ko": {
       "name": "무지개 괄호",

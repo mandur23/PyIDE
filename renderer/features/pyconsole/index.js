@@ -193,9 +193,8 @@
   });
 
   // Alt+Shift+E: selection, or the current line (then the caret moves down), like PyCharm.
-  function executeSelection() {
-    const ed = ide.editor;
-    const model = ed.getModel();
+  function executeSelection(ed = ide.editor) {
+    const model = ed?.getModel();
     if (!model) return;
     const sel = ed.getSelection();
     let code;
@@ -214,20 +213,19 @@
   ide.registerAction({
     id: 'ExecuteInPyConsoleAction', title: tr('Execute Selection in Python Console'), keys: 'Alt+Shift+E',
     when: () => ide.activeTab()?.kind === 'file' && /\.pyw?$/i.test(ide.activeTab().path),
-    run: executeSelection,
+    run: () => executeSelection(),
   });
   ide.registerAction({ id: 'RunPythonConsole', title: tr('Python Console'), run: () => tw.show() });
 
-  ide.on('ready', () => {
-    ide.editor.addAction({
-      id: 'pyide.executeInConsole',
-      label: tr('Execute Selection in Python Console'),
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 99,
-      precondition: null,
-      run: executeSelection,
-    });
-  });
+  // Every pane's context menu, run against the editor it was opened in.
+  ide.onEditor((ed) => ed.addAction({
+    id: 'pyide.executeInConsole',
+    label: tr('Execute Selection in Python Console'),
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 99,
+    precondition: null,
+    run: (editor) => executeSelection(editor),
+  }));
 
   ide.pyconsole = { execute: executeBlock, restart, isRunning: () => !!procId };
 })();

@@ -56,6 +56,8 @@
     'editor.showWhitespace': false,
     'editor.softWrap': false,
     'editor.ruler': 120,
+    'editor.previewTab': false,
+    'editor.tabLimit': 10,
     'tools.formatOnSave': false,
     'tools.ruffOnSave': true,
     'tools.ruffLineLength': 0,
@@ -66,6 +68,7 @@
     'editor.lineHeight': [1, 3],
     'editor.tabSize': [1, 16],
     'editor.ruler': [0, 400],
+    'editor.tabLimit': [0, 50],
     'tools.ruffLineLength': [0, 400],
   };
   const RESTART_KEYS = new Set(['appearance.language']);
@@ -85,20 +88,21 @@
   function applyEditor() {
     const fontSize = Math.max(6, Number(get('editor.fontSize')) || 14);
     const ruler = Number(get('editor.ruler')) || 0;
-    ide.editor.updateOptions({
+    // Every pane and every editor embedded in a viewer, now and later.
+    ide.updateEditorOptions({
       fontSize,
       lineHeight: Math.round(fontSize * (Number(get('editor.lineHeight')) || 1.6)),
       renderWhitespace: get('editor.showWhitespace') ? 'all' : 'none',
       wordWrap: get('editor.softWrap') ? 'on' : 'off',
       rulers: ruler > 0 ? [ruler] : [],
     });
-    for (const t of ide.tabs) if (t.kind === 'file') applyModel(t.model);
+    for (const t of ide.tabs) if (t.model) applyModel(t.model);
   }
 
   // The theme is applied before features finish loading so the first paint is already in the right theme.
   applyTheme();
   ide.on('ready', () => { applyTheme(); applyEditor(); });
-  ide.on('fileOpened', (tab) => tab.kind === 'file' && applyModel(tab.model));
+  ide.on('fileOpened', (tab) => tab.model && applyModel(tab.model));
   ide.on('settingsChanged', (key) => {
     if (key === 'appearance.theme') applyTheme();
     else if (key.startsWith('editor.')) applyEditor();
@@ -129,7 +133,7 @@
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap },
     { group: 'editor-group', title: () => tr('Editor'), children: [
-      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap 글꼴 크기 줄 높이 공백', mount: mountEditor },
+      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit 글꼴 크기 줄 높이 공백 탭 미리보기', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap 탭 들여쓰기 눈금자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins },
@@ -417,6 +421,9 @@
     const look = section(host, tr('Appearance'));
     look.appendChild(checkbox(ctx, 'editor.showWhitespace', tr('Show whitespaces')));
     look.appendChild(checkbox(ctx, 'editor.softWrap', tr('Soft-wrap files')));
+    const tabs = section(host, tr('Editor Tabs'));
+    tabs.appendChild(checkbox(ctx, 'editor.previewTab', tr('Open files in a preview tab on single click')));
+    tabs.appendChild(fieldRow(tr('Tab limit:'), numberInput(ctx, 'editor.tabLimit'), tr('0 means no limit')));
   }
 
   function mountCodeStyle(host, ctx) {

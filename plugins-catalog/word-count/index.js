@@ -3,10 +3,12 @@
   item.id = 'wordCountStatus';
   ide.registerStatusItem({ order: 5, el: item });
 
+  // Counts for the active pane's editor.
   function update() {
-    const model = ide.editor.getModel();
+    const ed = ide.editor;
+    const model = ed?.getModel();
     if (!model) { item.textContent = ''; return; }
-    const sel = ide.editor.getSelection();
+    const sel = ed.getSelection();
     const text = sel && !sel.isEmpty() ? model.getValueInRange(sel) : model.getValue();
     const vars = {
       lines: text ? text.split(/\r?\n/).length : 0,
@@ -18,10 +20,12 @@
       : tr('{lines} lines, {words} words, {chars} chars', vars);
   }
 
-  ide.on('ready', () => {
-    ide.editor.onDidChangeModel(update);
-    ide.editor.onDidChangeModelContent(update);
-    ide.editor.onDidChangeCursorSelection(update);
-    update();
+  const updateIfActive = (ed) => () => { if (ed === ide.editor) update(); };
+  ide.onEditor((ed) => {
+    ed.onDidChangeModel(updateIfActive(ed));
+    ed.onDidChangeModelContent(updateIfActive(ed));
+    ed.onDidChangeCursorSelection(updateIfActive(ed));
   });
+  ide.on('activeEditorChanged', update);
+  ide.on('ready', update);
 })();

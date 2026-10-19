@@ -107,32 +107,40 @@
   }
 
   // ---------- editor gutter ----------
-  let hoverIds = [];
-  const clearHover = () => { if (ide.editor.getModel()) hoverIds = ide.editor.getModel().deltaDecorations(hoverIds, []); };
   const activeFile = () => { const t = ide.activeTab(); return t?.kind === 'file' ? t : null; };
+  // The file shown in a given editor (a split pane or an editor embedded in a viewer).
+  const pathOf = (ed) => { const m = ed.getModel(); return m ? ide.tabs.find((t) => t.model === m)?.path || null : null; };
 
-  ide.editor.onMouseDown((e) => {
-    if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.event.leftButton || !e.target.position) return;
-    const tab = activeFile();
-    if (!tab) return;
-    clearHover();
-    toggleBp(tab.path, e.target.position.lineNumber);
+  // Every pane gets its own glyph-margin handlers; the hover dot is an editor decoration, so it shows only in that pane.
+  ide.onEditor((ed) => {
+    const hover = ed.createDecorationsCollection();
+    const clearHover = () => hover.clear();
+    ed.onMouseDown((e) => {
+      if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.event.leftButton || !e.target.position) return;
+      const path = pathOf(ed);
+      if (!path) return;
+      clearHover();
+      toggleBp(path, e.target.position.lineNumber);
+    });
+    ed.onContextMenu((e) => {
+      if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
+      const path = pathOf(ed);
+      const bp = path && findBp(path, e.target.position.lineNumber);
+      if (bp) editBpPopup(path, bp);
+    });
+    ed.onMouseMove((e) => {
+      const path = pathOf(ed);
+      if (!path) return;
+      // No hover dot over another glyph (the run icon): adding one opens a second glyph lane and shifts that icon
+      // out from under the mouse, so the click would land on the breakpoint lane instead.
+      const onGlyph = e.target.element?.closest?.('.cgmr:not(.dbg-bp)');
+      const line = e.target.type === MouseTargetType.GUTTER_GLYPH_MARGIN && !onGlyph ? e.target.position?.lineNumber : null;
+      hover.set(line && !findBp(path, line)
+        ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'dbg-bp hover' } }] : []);
+    });
+    ed.onMouseLeave(clearHover);
+    ed.onDidChangeModel(clearHover);
   });
-  ide.editor.onContextMenu((e) => {
-    if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
-    const tab = activeFile();
-    const bp = tab && findBp(tab.path, e.target.position.lineNumber);
-    if (bp) editBpPopup(tab.path, bp);
-  });
-  ide.editor.onMouseMove((e) => {
-    const model = ide.editor.getModel();
-    const tab = activeFile();
-    if (!model || !tab) return;
-    const line = e.target.type === MouseTargetType.GUTTER_GLYPH_MARGIN ? e.target.position?.lineNumber : null;
-    hoverIds = model.deltaDecorations(hoverIds, line && !findBp(tab.path, line)
-      ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'dbg-bp hover' } }] : []);
-  });
-  ide.editor.onMouseLeave(clearHover);
 
   // PyCharm's breakpoint popup: enabled flag and condition.
   function editBpPopup(path, bp) {

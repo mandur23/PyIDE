@@ -39,6 +39,7 @@ function createPluginManager({ appDir, userDataDir }) {
       i18n: meta?.i18n || {},
       depends: [].concat(meta?.depends || []),
       required: !!meta?.required,
+      detached: !!meta?.detached,
       bundled,
       dir,
       script: fs.existsSync(path.join(dir, 'index.js')) ? path.join(dir, 'index.js') : null,
@@ -136,7 +137,7 @@ function createPluginManager({ appDir, userDataDir }) {
   }));
 
   // Renderer assets of the plugins running this session, in a stable order (bundled first).
-  const rendererEntries = () => loaded.filter((p) => p.enabled && p.script).map((p) => ({
+  const rendererEntries = ({ detached = false } = {}) => loaded.filter((p) => p.enabled && p.script && (!detached || p.detached)).map((p) => ({
     id: p.id,
     script: p.bundled ? `features/${path.basename(p.dir)}/index.js` : require('url').pathToFileURL(p.script).href,
     css: p.style ? (p.bundled ? `features/${path.basename(p.dir)}/style.css` : require('url').pathToFileURL(p.style).href) : null,

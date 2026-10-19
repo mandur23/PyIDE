@@ -1,8 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFileSync } = require('child_process');
 const { createPluginManager } = require('./main/plugin-manager');
+const textCodec = require('./main/text-codec');
+const iconv = require('iconv-lite');
+const { createWindowManager } = require('./main/windows');
 
 if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
 
@@ -13,16 +16,24 @@ const procs = new Map();
 let nextProcId = 1;
 
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
+// Virtual environments are folders with a pyvenv.cfg; they are never part of the project's own sources.
+const isVenv = (dir) => fs.existsSync(path.join(dir, 'pyvenv.cfg'));
 
 // Spawns a child whose output streams to the renderer as proc:data / proc:exit, keyed by the returned id.
 function startProcess(cmd, args, opts = {}) {
   const id = nextProcId++;
+  const { encoding, ...spawnOpts } = opts;
   const proc = spawn(cmd, args, {
-    ...opts,
+    ...spawnOpts,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
   });
   procs.set(id, proc);
-  const forward = (stream) => (d) => send('proc:data', { id, stream, text: d.toString('utf8') });
+  // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.
+  // Streaming decoders keep multi-byte characters intact across chunk boundaries.
+  const forward = (stream) => {
+    const decoder = iconv.getDecoder(opts.encoding || 'utf8');
+    return (d) => send('proc:data', { id, stream, text: decoder.write(d) });
+  };
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
   proc.on('error', (err) => send('proc:data', { id, stream: 'err', text: `${err.message}\n` }));
@@ -63,13 +74,15 @@ ipcMain.handle('fs:list', (_e, dir) =>
     .map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() }))
     .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name)));
 
-ipcMain.handle('fs:walk', (_e, root) => {
+ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => {
   const out = [];
+  const excluded = new Set(excludedDirs.map((d) => d.toLowerCase()));
   const walk = (dir) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
       if (out.length >= 20000) return;
       if (IGNORED.has(d.name) || ['.venv', 'venv', 'env'].includes(d.name)) continue;
       const p = path.join(dir, d.name);
+      if (d.isDirectory() && (isVenv(p) || excluded.has(p.toLowerCase()))) continue;
       if (d.isDirectory()) walk(p);
       else out.push(p);
     }
@@ -87,6 +100,13 @@ ipcMain.handle('fs:create', (_e, p, isDir) => {
   else fs.writeFileSync(p, '');
 });
 ipcMain.handle('fs:rename', (_e, from, to) => fs.renameSync(from, to));
+// Encoding-aware text IO for editor documents (UTF-8, UTF-8 with BOM, UTF-16, CP949/EUC-KR).
+ipcMain.handle('fs:readText', (_e, p) => textCodec.read(p));
+ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.write(p, text, encoding));
+ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.read(p, encoding));
+ipcMain.handle('shell:showInFolder', (_e, p) => shell.showItemInFolder(p));
+ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
+ipcMain.handle('clipboard:writeText', (_e, text) => clipboard.writeText(text));
 ipcMain.handle('fs:trash', (_e, p) => shell.trashItem(p));
 
 ipcMain.handle('py:interpreters', (_e, root, extraPaths = []) => {
@@ -99,9 +119,23 @@ ipcMain.handle('py:interpreters', (_e, root, extraPaths = []) => {
     found.push({ cmd, args, label: `${label} (Python ${info.version})`, executable: info.executable, version: info.version });
   };
   if (root) {
-    for (const venv of ['.venv', 'venv', 'env']) {
-      const exe = path.join(root, venv, 'Scripts', 'python.exe');
-      if (fs.existsSync(exe)) add(exe, [], venv);
+    // Every venv in the project, up to two levels deep (.venv, .venv-rvc, ai/.venv...), nearest first.
+    const venvs = [];
+    const scan = (dir, depth) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const d of entries) {
+        if (!d.isDirectory() || IGNORED.has(d.name)) continue;
+        const p = path.join(dir, d.name);
+        if (isVenv(p)) venvs.push(p);
+        else if (depth < 2) scan(p, depth + 1);
+      }
+    };
+    scan(root, 1);
+    venvs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length || a.localeCompare(b));
+    for (const v of venvs) {
+      const exe = path.join(v, 'Scripts', 'python.exe');
+      if (fs.existsSync(exe)) add(exe, [], path.relative(root, v));
     }
   }
   for (const p of extraPaths) if (fs.existsSync(p)) add(p, [], path.basename(path.dirname(path.dirname(p))) || p);
@@ -128,7 +162,8 @@ ipcMain.on('settings:saveSync', (e, settings) => {
   e.returnValue = true;
 });
 
-ipcMain.handle('core:features', () => plugins.rendererEntries());
+// Detached editor windows load only the plugins that declare "detached": true.
+ipcMain.handle('core:features', (e) => plugins.rendererEntries({ detached: e.sender.id !== win?.webContents.id }));
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
 ipcMain.handle('core:relaunch', () => {
   app.relaunch();
@@ -170,17 +205,11 @@ for (const file of plugins.mainModules()) {
   }
 }
 
+const windows = createWindowManager({ appDir: __dirname });
+
 function createWindow() {
-  win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    backgroundColor: '#1e1f22',
-    title: 'PyIDE',
-    autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false },
-  });
   const folder = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && fs.existsSync(a));
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: folder ? { open: path.resolve(folder) } : {} });
+  win = windows.createMain(folder ? { open: path.resolve(folder) } : {});
 }
 
 app.whenReady().then(createWindow);

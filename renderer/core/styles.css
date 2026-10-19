@@ -65,8 +65,42 @@ input, select, textarea { font: inherit; }
 .splitter.h::after { content: ''; position: absolute; inset: -3px 0; z-index: 5; }
 
 #center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#tabs { height: 38px; flex-shrink: 0; display: flex; background: var(--gray1); border-bottom: 1px solid var(--gray3); overflow-x: auto; }
-#tabs::-webkit-scrollbar { height: 3px; }
+/* Editor groups (split panes): each has a tab bar and its own editor. */
+#editorArea { flex: 1; position: relative; min-height: 0; display: flex; }
+#editorGroups { flex: 1; display: flex; min-width: 0; min-height: 0; }
+#editorGroups > .editor-group, #editorGroups > .split { flex: 1; }
+.split { display: flex; min-width: 0; min-height: 0; }
+.split-row { flex-direction: row; }
+.split-column { flex-direction: column; }
+.split-handle { flex: 0 0 1px; background: var(--gray3); position: relative; z-index: 4; }
+.split-row > .split-handle { cursor: col-resize; }
+.split-column > .split-handle { cursor: row-resize; }
+.split-row > .split-handle::after { content: ''; position: absolute; inset: 0 -3px; }
+.split-column > .split-handle::after { content: ''; position: absolute; inset: -3px 0; }
+.split-handle:hover { background: var(--blue6); }
+.editor-group { display: flex; flex-direction: column; min-width: 120px; min-height: 80px; }
+.group-tabs { height: 38px; flex-shrink: 0; display: flex; background: var(--gray1); border-bottom: 1px solid var(--gray3); }
+.tab-list { flex: 1; display: flex; overflow-x: auto; min-width: 0; }
+.tab-list::-webkit-scrollbar { height: 3px; }
+.group-actions { display: flex; align-items: center; gap: 2px; padding: 0 4px; }
+.group-actions button { color: var(--gray9); width: 24px; height: 24px; border-radius: 4px; }
+.group-actions button:hover { background: var(--gray3); color: var(--gray12); }
+.group-body { flex: 1; position: relative; min-height: 0; }
+.editor-host, .custom-host { position: absolute; inset: 0; }
+.custom-host { pointer-events: none; }
+.group-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--gray9); pointer-events: none; }
+.empty-row { display: grid; grid-template-columns: 200px 160px; gap: 12px; }
+.empty-row span { text-align: right; }
+.empty-row kbd { font: 12px var(--mono); color: var(--gray11); }
+.drop-overlay { position: fixed; z-index: 40; pointer-events: none; background: color-mix(in srgb, var(--blue6) 22%, transparent);
+  border: 2px solid var(--blue6); border-radius: 4px; transition: all .08s; }
+.close-confirm-list { margin: 8px 0 0; padding-left: 20px; font-family: var(--mono); font-size: 12px; max-height: 200px; overflow: auto; }
+.binary-viewer { align-items: center; justify-content: center; gap: 10px; }
+.binary-title { font-size: 16px; font-weight: 600; color: var(--gray12); }
+.binary-actions { display: flex; gap: 8px; margin-top: 6px; }
+.status-encoding { cursor: pointer; padding: 0 4px; border-radius: 3px; }
+.status-encoding:hover { background: var(--gray3); }
 /* Native scrollbars and form controls otherwise render light in the dark theme. */
 :root { color-scheme: dark; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -77,15 +111,17 @@ input, select, textarea { font: inherit; }
 .tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; white-space: nowrap; cursor: default;
   color: var(--gray11); border-bottom: 2px solid transparent; }
 .tab:hover { background: var(--gray2); }
-.tab.active { border-bottom-color: var(--blue6); }
+.tab.active { border-bottom-color: var(--gray7); }
+.editor-group.active-group .tab.active { border-bottom-color: var(--blue6); }
+.tab.preview .name { font-style: italic; }
+.tab .pin { font-size: 10px; }
+.tab.drop-before { box-shadow: inset 2px 0 0 var(--blue6); }
+.tab.drop-after { box-shadow: inset -2px 0 0 var(--blue6); }
 .tab .dirty { color: var(--blue6); }
 .tab .close { color: var(--gray7); width: 16px; border-radius: 3px; visibility: hidden; }
 .tab:hover .close, .tab.active .close { visibility: visible; }
 .tab .close:hover { background: var(--gray4); color: var(--gray12); }
-#editorWrap { flex: 1; position: relative; min-height: 0; }
-#editor, #customHost { position: absolute; inset: 0; }
-#customHost { pointer-events: none; }
-.custom-tab { position: absolute; inset: 0; background: var(--gray1); pointer-events: auto; display: flex; flex-direction: column; }
+.custom-tab { position: absolute; inset: 0; background: var(--gray1); pointer-events: auto; display: flex; flex-direction: column; outline: none; }
 #welcome { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; background: var(--gray1); gap: 8px; }
 #welcome h1 { margin: 0; font-size: 28px; color: var(--gray12); }
@@ -159,3 +195,8 @@ input, select, textarea { font: inherit; }
 .field input, .field select, .field textarea, .input { background: var(--gray1); color: var(--gray12);
   border: 1px solid var(--gray4); border-radius: 4px; padding: 5px 8px; outline: none; }
 .field input:focus, .field select:focus, .field textarea:focus, .input:focus { border-color: var(--blue6); }
+
+/* Detached editor windows ("Open in New Window") show only the editor area. */
+body.detached #stripe, body.detached #sidePanel, body.detached #sideSplitter, body.detached #bottom,
+body.detached #bottomSplitter, body.detached #welcome, body.detached #toolbarRight, body.detached #projectWidget,
+body.detached #statusInterp { display: none !important; }
