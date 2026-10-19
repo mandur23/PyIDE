@@ -1,0 +1,4 @@
+import remote_only_pkg
+import surely_not_installed_anywhere
+
+print(remote_only_pkg.GREETING)

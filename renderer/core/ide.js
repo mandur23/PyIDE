@@ -124,7 +124,7 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
       for (const m of text.matchAll(TRACEBACK)) {
         span.append(text.slice(last, m.index));
         const a = el('a', null, m[0]);
-        a.onclick = () => ide.openFile(m[1], { line: Number(m[2]) });
+        a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
         span.append(a);
         last = m.index + m[0].length;
       }
@@ -799,9 +799,24 @@ ide.registerToolWindow({
 });
 
 // ---------- interpreters ----------
+// interpreterProviders: async (root) => interps, for interpreters that are not local executables.
+// pathMappers: (path) => local path or null, so a path a remote interpreter printed (a traceback) opens here.
+ide.interpreterProviders = [];
+ide.pathMappers = [];
+ide.toLocalPath = (p) => {
+  for (const map of ide.pathMappers) {
+    const local = map(p);
+    if (local) return local;
+  }
+  return p;
+};
 ide.currentInterp = () => ide.interps[$('interpSelect').selectedIndex] || null;
 ide.reloadInterpreters = async () => {
   ide.interps = await ide.api.interpreters(ide.root, ide.settings.get('interpreters.extra', []));
+  // Plugins add interpreters that are not local executables (remote-interp: WSL, SSH, Docker targets).
+  for (const provide of ide.interpreterProviders) {
+    try { ide.interps.push(...await provide(ide.root)); } catch (err) { console.warn('interpreter provider failed', err); }
+  }
   const sel = $('interpSelect');
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));

@@ -90,6 +90,8 @@
       rows: s.term.rows,
       command,
       interpreter: ide.settings.get('terminal.activateVenv', true) ? ide.currentInterp()?.executable : undefined,
+      // With a remote project interpreter (WSL, SSH, Docker), a plain new session is a shell in that target.
+      target: !shell && !command ? ide.currentInterp()?.target : undefined,
     });
     s.id = r.id;
     s.shellName = r.shellName;

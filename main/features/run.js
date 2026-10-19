@@ -1,3 +1,5 @@
+const remote = require('../remote');
+
 // PyCharm adds the content root to PYTHONPATH for every Python run configuration; keep any PYTHONPATH the user set.
 const withPath = (env = {}, extra = []) => {
   const parts = [...extra, env.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean);
@@ -6,8 +8,11 @@ const withPath = (env = {}, extra = []) => {
 
 exports.withPath = withPath;
 
-exports.register = ({ ipcMain, startProcess }) => {
+exports.register = (ctx) => {
   // opts: {params?: string[], env?: object, roots?: string[]}
-  ipcMain.handle('run:start', (_e, interp, file, cwd, params = [], env = {}, roots = []) =>
-    startProcess(interp.cmd, [...interp.args, '-u', file, ...params], { cwd, env: withPath(env, roots) }));
+  ctx.ipcMain.handle('run:start', (_e, interp, file, cwd, params = [], env = {}, roots = []) => {
+    const args = ['-u', file, ...params];
+    const opts = { cwd, env: withPath(env, roots) };
+    return remote.isRemote(interp) ? remote.startPython(ctx, interp, args, opts) : ctx.startProcess(interp.cmd, [...interp.args, ...args], opts);
+  });
 };

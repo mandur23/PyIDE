@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const remote = require('../remote');
 const diagnostics = require('../diagnostics');
 
 const WATCH_IGNORED = /[\\/](\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.idea)([\\/]|$)/;
@@ -257,7 +258,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     return s.gen;
   };
 
-  ipcMain.handle('lsp:start', (_e, root, pythonPath) => start(root, pythonPath));
+  // A remote interpreter's Pyright runs here against a synced copy of its libraries (main/remote/index.js).
+  ipcMain.handle('lsp:start', (_e, root, pythonPath) => start(root, remote.isRemoteExecutable(pythonPath) ? remote.pyrightPython(pythonPath) : pythonPath));
   ipcMain.handle('lsp:stop', () => { server?.stop(); server = null; });
   ipcMain.handle('lsp:request', async (_e, method, params) => {
     const s = server;

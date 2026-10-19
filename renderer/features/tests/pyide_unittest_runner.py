@@ -13,13 +13,15 @@ import unittest
 
 ROOT = os.path.abspath(sys.argv[1])
 TARGETS = sys.argv[2:] or [ROOT]
-OUT = open(os.environ["PYIDE_TEST_REPORT"], "a", encoding="utf-8")
+REPORT = os.environ["PYIDE_TEST_REPORT"]  # a path, or fd:N from remote interpreters (see pyide_pytest_plugin.py)
+OUT = open(int(REPORT[3:]) if REPORT.startswith("fd:") else REPORT, "a", encoding="utf-8")
+MARK = "\x1ePYIDE-TEST " if os.environ.get("PYIDE_TEST_REPORT_MARK") else ""
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
 def emit(event):
-    OUT.write(json.dumps(event) + "\n")
+    OUT.write(MARK + json.dumps(event) + "\n")
     OUT.flush()
 
 

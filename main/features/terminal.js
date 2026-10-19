@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const claude = require('../ai/claude');
+const remote = require('../remote');
 
 const sessions = new Map(); // id -> {proc, owner}
 let nextId = 1;
@@ -55,12 +56,28 @@ exports.register = ({ ipcMain, app }) => {
   ipcMain.handle('pty:shells', () => (shells ??= detectShells()));
   ipcMain.handle('claude:status', () => findClaude());
 
-  // opts: {shell, cwd, cols, rows, interpreter, command?: string to run in the shell, env?}
-  ipcMain.handle('pty:create', (e, opts = {}) => {
+  // opts: {shell, cwd, cols, rows, interpreter, command?: string to run in the shell, env?, target?}
+  // target: a remote interpreter's target (WSL, SSH, Docker); the session is then a login shell in it.
+  ipcMain.handle('pty:create', async (e, opts = {}) => {
     shells ??= detectShells();
-    const shell = shells.find((s) => s.id === opts.shell) || shells.find((s) => s.id === 'powershell');
+    let shell = shells.find((s) => s.id === opts.shell) || shells.find((s) => s.id === 'powershell');
     let args = [...shell.args];
-    if (opts.command) {
+    let release;
+    let targetEnv = {}; // ssh's askpass runs the IDE as Node, so this goes on after ELECTRON_RUN_AS_NODE is cleared
+    if (opts.target) {
+      try {
+        const t = await remote.terminal(opts.target, opts.cwd);
+        shell = { id: `remote:${opts.target.kind}`, name: t.name, file: t.file };
+        args = t.args;
+        opts = { ...opts, interpreter: undefined };
+        targetEnv = t.env;
+        release = t.release;
+      } catch (err) {
+        // The shell reports why the target is unreachable instead of the session failing silently.
+        shell = shells.find((s) => s.id === 'cmd');
+        args = ['/k', `echo ${String(err.message).replace(/[&|<>^%]/g, '')}`];
+      }
+    } else if (opts.command) {
       if (shell.id === 'cmd') args = ['/k', opts.command];
       else if (shell.id === 'gitbash' || shell.id === 'wsl') args = [...args.filter((a) => a !== '-i'), '-c', `${opts.command}; exec bash -i`];
       else args = [...args, '-NoExit', '-Command', opts.command];
@@ -71,6 +88,7 @@ exports.register = ({ ipcMain, app }) => {
     const localBin = path.join(os.homedir(), '.local', 'bin');
     if (fs.existsSync(localBin) && !(env.PATH || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env.PATH = `${localBin};${env.PATH}`;
     delete env.ELECTRON_RUN_AS_NODE;
+    Object.assign(env, targetEnv);
     const proc = pty.spawn(shell.file, args, {
       name: 'xterm-256color',
       cols: Math.max(2, opts.cols || 80),
@@ -96,6 +114,7 @@ exports.register = ({ ipcMain, app }) => {
       });
     });
     proc.onExit(({ exitCode }) => {
+      release?.();
       sessions.delete(id);
       if (!owner.isDestroyed()) setImmediate(() => owner.send('pty:exit', { id, code: exitCode }));
     });

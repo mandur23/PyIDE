@@ -1,0 +1,4 @@
+services:
+  web:
+    image: python:3.12-slim
+    working_dir: /opt/project

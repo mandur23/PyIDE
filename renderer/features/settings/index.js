@@ -786,9 +786,11 @@
       loc.focus();
     }
 
+    // Plugins add kinds such as On WSL… / On SSH… / On Docker… (remote-interp): {label() -> string, run({form, status, useInterpreter})}.
     addBtn.onclick = () => dialogMenu(addBtn, [
       [tr('Add Local Interpreter…'), addExisting],
       [tr('Create Virtualenv Environment…'), showVenvForm],
+      ...(ide.interpreterAddActions || []).map((a) => [a.label(), () => a.run({ form, status, useInterpreter })]),
     ], 'addInterpMenu');
   }
 

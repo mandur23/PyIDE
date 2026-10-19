@@ -3,13 +3,21 @@ import json
 import os
 
 _out = None
+# Remote interpreters pass a descriptor (PYIDE_TEST_REPORT=fd:3) that shares a stream with other output, so each
+# line is marked for the IDE to take out.
+_MARK = "\x1ePYIDE-TEST " if os.environ.get("PYIDE_TEST_REPORT_MARK") else ""
+
+
+def _target():
+    path = os.environ["PYIDE_TEST_REPORT"]
+    return int(path[3:]) if path.startswith("fd:") else path
 
 
 def _emit(event):
     global _out
     if _out is None:
-        _out = open(os.environ["PYIDE_TEST_REPORT"], "a", encoding="utf-8")
-    _out.write(json.dumps(event) + "\n")
+        _out = open(_target(), "a", encoding="utf-8")
+    _out.write(_MARK + json.dumps(event) + "\n")
     _out.flush()
 
 

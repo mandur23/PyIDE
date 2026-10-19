@@ -25,7 +25,7 @@ const isVenv = (dir) => fs.existsSync(path.join(dir, 'pyvenv.cfg'));
 const procLog = diagnostics.logger('#process');
 function startProcess(cmd, args, opts = {}) {
   const id = nextProcId++;
-  const { encoding, ...spawnOpts } = opts;
+  const { encoding, filter, ...spawnOpts } = opts;
   const proc = spawn(cmd, args, {
     ...spawnOpts,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
@@ -34,9 +34,13 @@ function startProcess(cmd, args, opts = {}) {
   procLog.info(`#${id} started (pid ${proc.pid}): ${cmd} ${args.join(' ')}${opts.cwd ? ` in ${opts.cwd}` : ''}`);
   // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.
   // Streaming decoders keep multi-byte characters intact across chunk boundaries.
+  // opts.filter(text, stream) -> text: lets a launcher take its own marker lines out of the output (remote targets).
   const forward = (stream) => {
     const decoder = iconv.getDecoder(opts.encoding || 'utf8');
-    return (d) => send('proc:data', { id, stream, text: decoder.write(d) });
+    return (d) => {
+      const text = filter ? filter(decoder.write(d), stream) : decoder.write(d);
+      if (text) send('proc:data', { id, stream, text });
+    };
   };
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
@@ -51,7 +55,9 @@ function startProcess(cmd, args, opts = {}) {
 
 function killProcess(id) {
   const proc = procs.get(id);
-  if (proc) spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
+  if (!proc) return;
+  proc.remoteKill?.(); // a program in a remote interpreter target outlives its local client (wsl.exe, ssh, docker)
+  spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
 }
 
 function probeInterpreter(cmd, args) {

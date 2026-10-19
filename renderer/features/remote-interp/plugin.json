@@ -1,0 +1,10 @@
+{
+  "id": "remote-interp",
+  "name": "Remote Interpreters",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Python interpreters on WSL, over SSH and in Docker or Docker Compose, used by Run, Debug, tests, the Python Console, the terminal, Python Packages and Pyright.",
+  "main": [
+    "remote-interp.js"
+  ]
+}

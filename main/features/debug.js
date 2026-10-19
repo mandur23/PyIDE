@@ -3,6 +3,7 @@
 // Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
 const net = require('net');
 const path = require('path');
+const remote = require('../remote');
 const log = require('../diagnostics').logger('#debugger');
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -99,7 +100,8 @@ async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
   }
 }
 
-exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir }) => {
+exports.register = (ctx) => {
+  const { ipcMain, send, startProcess, killProcess, procs, vendorDir } = ctx;
   const sessions = new Map(); // procId -> {dap, socket}
 
   const closeSession = (id) => {
@@ -112,14 +114,19 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
   // breakpoints: [{path, lines: [{line, condition}]}]. Resolves {id} once the program runs with breakpoints set.
   // opts: {params?: string[], env?: object, roots?: string[]} from a run configuration (roots go on PYTHONPATH like Run).
   ipcMain.handle('debug:start', async (_e, interp, file, cwd, breakpoints = [], opts = {}) => {
-    const port = await freePort();
+    // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
+    const ep = remote.isRemote(interp) ? await remote.debugEndpoint(interp) : null;
+    const port = ep ? ep.port : await freePort();
     const pythonPath = [vendorDir, ...(opts.roots || []), opts.env?.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
     const env = { ...(opts.env || {}), PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
-    const id = startProcess(interp.cmd, [...interp.args, '-X', 'frozen_modules=off', '-m', 'debugpy',
-      '--listen', `127.0.0.1:${port}`, '--wait-for-client', file, ...(opts.params || [])], { cwd, env });
+    const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
+      '--wait-for-client', file, ...(opts.params || [])];
+    const id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
+      : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd, env });
 
     let socket;
     try {
+      await ep?.ready(() => procs.has(id));
       socket = await connectWithRetry(port, () => procs.has(id));
     } catch (err) {
       killProcess(id);
@@ -136,7 +143,7 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
     });
 
     try {
-      await configure(dap, breakpoints);
+      await configure(dap, breakpoints, ep?.pathMappings);
     } catch (err) {
       // A failed handshake must not leave the debuggee running (or listening) with nobody attached.
       closeSession(id);
@@ -146,14 +153,16 @@ exports.register = ({ ipcMain, send, startProcess, killProcess, procs, vendorDir
     return { id };
   });
 
-  async function configure(dap, breakpoints) {
+  async function configure(dap, breakpoints, pathMappings = []) {
     await dap.request('initialize', {
       clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
     });
     const initialized = dap.waitEvent('initialized');
     // debugpy answers attach only after configurationDone, so it is awaited last.
-    const attached = dap.request('attach', { justMyCode: true, redirectOutput: false, showReturnValue: true, subProcess: false });
+    const attached = dap.request('attach', { justMyCode: true, redirectOutput: false, showReturnValue: true, subProcess: false,
+      // A Linux debugpy translates this side's backslash paths only when told the client is Windows.
+      ...(pathMappings.length ? { pathMappings, clientOS: process.platform === 'win32' ? 'windows' : 'unix' } : {}) });
     attached.catch(() => {});
     await initialized;
     for (const bp of breakpoints) {

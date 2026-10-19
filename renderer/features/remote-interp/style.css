@@ -1,0 +1,16 @@
+.remote-form .field { grid-template-columns: 170px minmax(0, 1fr); }
+.remote-form .field > input, .remote-form .field > select { min-width: 0; width: 100%; }
+.remote-form .field.hidden { display: none; }
+.remote-key { display: flex; gap: 6px; min-width: 0; }
+.remote-key > input { flex: 1; min-width: 0; }
+.remote-unavailable { color: var(--yellow); }
+.remote-interp-status.error { color: var(--red); }
+.remote-kinds { display: grid; gap: 4px; margin-bottom: 8px; }
+.remote-kind { display: grid; grid-template-columns: 130px 90px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.remote-kind-name { font-weight: 600; }
+.remote-kind.ok .remote-kind-state { color: var(--green6); }
+.remote-kind.unavailable .remote-kind-state { color: var(--gray9); }
+.remote-kind-detail { color: var(--gray10); overflow: hidden; text-overflow: ellipsis; }
+.remote-list { display: grid; gap: 6px; }
+.remote-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.remote-row-name, .remote-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
