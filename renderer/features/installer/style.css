@@ -1,0 +1,57 @@
+.inst-tab { overflow: hidden; }
+.inst-page { display: flex; flex: 1; min-height: 0; background: var(--gray1); }
+.inst-side { width: 230px; flex-shrink: 0; background: var(--gray2); border-right: 1px solid var(--gray3); padding: 14px 8px; overflow: auto; }
+.inst-side-title { font-size: 15px; font-weight: 600; color: var(--gray12); padding: 2px 10px 12px; }
+.inst-side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--gray7); padding: 14px 10px 4px; }
+.inst-nav { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 5px; cursor: default; color: var(--gray11); }
+.inst-nav:hover { background: var(--gray3); }
+.inst-nav.selected { background: var(--blue2); color: var(--gray12); }
+.inst-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inst-count { font-size: 11px; color: var(--gray9); min-width: 18px; text-align: right; }
+.inst-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.inst-top { display: flex; gap: 8px; align-items: center; padding: 14px 24px 10px; }
+.inst-search { flex: 1; max-width: 480px; }
+.inst-icon-btn { color: var(--gray9); font-size: 15px; padding: 2px 7px; border-radius: 4px; }
+.inst-icon-btn:hover { background: var(--gray3); color: var(--gray12); }
+.inst-target { display: flex; gap: 8px; align-items: center; padding: 0 24px 8px; font-size: 12px; flex-wrap: wrap; }
+.inst-interp { color: var(--gray12); }
+.inst-link { color: var(--blue8); font-size: 12px; padding: 1px 6px; border-radius: 4px; }
+.inst-link:hover { background: var(--gray3); }
+.inst-cards { flex: 1; overflow: auto; padding: 4px 24px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px; align-content: start; }
+.inst-empty { padding: 20px 4px; }
+.inst-card { background: var(--gray2); border: 1px solid var(--gray3); border-radius: 8px; padding: 12px 14px 10px; min-width: 0;
+  display: flex; flex-direction: column; gap: 6px; }
+.inst-card[data-phase="failed"] { border-color: color-mix(in srgb, var(--red) 55%, var(--gray3)); }
+.inst-card-head { display: flex; align-items: center; gap: 8px; }
+.inst-name { font-weight: 600; color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inst-version { font-size: 12px; color: var(--gray9); font-family: var(--mono); }
+.inst-links { display: flex; }
+.inst-badge { font-size: 11px; border: 1px solid currentColor; border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+.inst-badge.muted { color: var(--gray9); }
+.inst-badge.ok { color: var(--green6); }
+.inst-badge.run { color: var(--blue8); }
+.inst-badge.warn { color: var(--yellow); }
+.inst-badge.busy { color: var(--blue8); }
+.inst-badge.error { color: var(--red); }
+.inst-desc { color: var(--gray11); line-height: 1.45; }
+.inst-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--gray9); }
+.inst-meta:empty, .inst-message:empty, .inst-buttons:empty { display: none; }
+.inst-message { font-size: 12px; color: var(--gray11); white-space: pre-wrap; }
+.inst-message.warn { color: var(--yellow); }
+.inst-message.error { color: var(--red); }
+.inst-progress { height: 4px; border-radius: 2px; background: var(--gray4); overflow: hidden; position: relative; }
+.inst-bar { height: 100%; width: 0; background: var(--blue6); border-radius: 2px; transition: width .2s; }
+.inst-bar.indeterminate { width: 30%; position: absolute; animation: inst-slide 1.2s ease-in-out infinite; }
+@keyframes inst-slide { from { left: -30%; } to { left: 100%; } }
+.inst-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.inst-buttons .primary { padding: 4px 14px; }
+.inst-buttons .secondary { padding: 3px 12px; }
+.inst-logbox summary { font-size: 12px; color: var(--gray9); cursor: default; user-select: none; }
+.inst-logbox summary:hover { color: var(--gray12); }
+.inst-log { margin: 6px 0 0; max-height: 220px; overflow: auto; font: 12px/1.4 var(--mono); color: var(--gray9); white-space: pre-wrap;
+  word-break: break-all; background: var(--gray1); border-radius: 4px; padding: 6px 8px; }
+.inst-confirm p { margin: 0 0 10px; line-height: 1.5; }
+.inst-confirm code { font-family: var(--mono); font-size: 12px; background: var(--gray1); padding: 4px 6px; border-radius: 4px; display: inline-block; word-break: break-all; }
+.inst-status { cursor: pointer; color: var(--gray9); }
+.inst-status:hover { color: var(--gray12); }

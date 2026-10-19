@@ -361,6 +361,30 @@
   ide.registerAction({ id: 'ClaudeCodeSendReference', title: tr('Send File Reference to Claude Code'), keys: 'Ctrl+Alt+K', run: sendReference });
   ide.registerAction({ id: 'TerminalNewSession', title: tr('New Terminal Session'), keys: 'Ctrl+Shift+T', when: () => !!document.activeElement?.closest('[data-terminal]'), run: () => createSession(), terminal: true });
   ide.registerAction({ id: 'InstallClaudeCode', title: tr('Install Claude Code'), run: showInstallPrompt });
+  // The official installer runs in a visible Terminal session, so the user sees exactly what it does; the Install
+  // Manager card waits until the claude binary shows up.
+  (ide.installables ||= []).push({
+    id: 'ai:claude-code', category: 'ai', name: 'Claude Code', homepage: 'https://claude.com/claude-code',
+    description: tr("Anthropic's coding agent in the Terminal, signed in with your Claude subscription."),
+    confirm: tr('This runs the official installer in a Terminal session: `irm https://claude.ai/install.ps1 | iex`'),
+    status: async () => {
+      const c = await refreshClaude();
+      return { installed: !!c?.installed, version: c?.version?.split(' ')[0] || undefined };
+    },
+    install: async (log, _progress, signal) => {
+      tw.show();
+      await createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex' });
+      log(`${tr('Running the official installer in the Terminal…')}\n`);
+      const end = Date.now() + 15 * 60000;
+      while (!(await refreshClaude())?.installed) {
+        if (signal?.aborted) throw new Error(tr('Cancelled'));
+        if (Date.now() > end) throw new Error(tr('The installer did not finish within 15 minutes.'));
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      log(`${claude.version || 'claude'}\n`);
+    },
+  });
+  ide.emit('installablesChanged');
   ide.onEditor((ed) => ed.addAction({
     id: 'pyide.claude.sendReference', label: tr('Send to Claude Code'), contextMenuGroupId: '9_claude', run: sendReference,
   }));

@@ -1,0 +1,1 @@
+print("install manager fixture")

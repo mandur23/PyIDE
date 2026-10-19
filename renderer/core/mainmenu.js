@@ -140,7 +140,8 @@
     { label: tr('Tools'), submenu: () => tidy([
       act('RunPythonConsole'), act('ActivateTerminalToolWindow'), act('TerminalNewSession'), { separator: true },
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
-      act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'),
+      act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
+      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'),
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },

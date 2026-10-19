@@ -1,0 +1,8 @@
+{
+  "id": "installer",
+  "name": "Install Manager",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "One place to install, check, update and remove Python tools for the project interpreter, portable local database servers, system tools through winget, and anything other plugins register.",
+  "main": ["installer.js"]
+}

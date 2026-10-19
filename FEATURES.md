@@ -60,6 +60,8 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 - `ide.run` (run): `registerType`, `registerGutterProvider`, `runConfig`, `runContext`, `addTemporary`, `editConfigurations`, `sessions`, `activeSession`, `resolvePython(cfg)`. `ide.tests` (tests) and `ide.pyconsole` (pyconsole: `execute`, `restart`, `isRunning`).
 - Debugger: action ids `Debug` (Shift+F9) and `StopDebug` (Ctrl+F2 while a session is active, registered on `ready`), event `debugSessionChanged(active)`; the toolbar Stop button stops a debug session when no run is active.
 - `ide.openSettings(pageId)` (settings) and `ide.tooling` (`reformat`, `optimizeImports`, `fixAll`, `lint`). Ruff lint results use problems source `'ruff'`.
+- `ide.database` (database): `addDataSource(cfg)` -> id, `list()`, `query(id, sql, opts)`, `openConsole(id)`, `drivers()`, `activeConsole()`.
+- `ide.installer` (installer): `open(category?)`, `refresh()`, `register(item)`, `pip({package, name, description, category})`. Any plugin lists installables by pushing to `ide.installables` and emitting `installablesChanged` (see Install Manager below), so load order does not matter.
 - Key handoffs through `when`: Ctrl+F2 is run's Stop unless a debug session is active; Ctrl+Shift+F10 is run's context run unless the caret is in a test (tests).
 
 ## Keymap ownership (PyCharm default keymap)
@@ -77,6 +79,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 | run-tools | Alt+Shift+F10, Alt+Shift+F9, Alt+8 (Python Console), Ctrl+Shift+F10 on a test (via `when`) |
 | tooling | Ctrl+Alt+L, Ctrl+Alt+O, Ctrl+Alt+S, Ctrl+Shift+Alt+S |
 | semantic | Ctrl+Alt+F (Semantic Search popup) |
+| database | Ctrl+Enter (Execute Statement, only while a query console has focus) |
 
 ## Verification
 
@@ -85,3 +88,15 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 ## Semantic search (EmbeddingGemma 2)
 
 `renderer/features/semantic` and `main/features/semantic.js` add meaning-based search with Google's EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache 2.0) running locally. The model runs in a Python sidecar (`main/semantic/embed_server.py`) inside a private venv at `~\.pyide\semantic\venv` that reuses the system PyTorch. Setup adds only the torchvision build paired with that torch (the model's processor needs it even for text) and never replaces torch itself. The model itself sits in the standard Hugging Face cache. Files are split into code-aware chunks (functions, classes, and each method for Python; heading sections for Markdown; line windows elsewhere). They are embedded with the model card's CodeRetrieval prompts, truncated to 256 dimensions, and stored per project in `<userData>/semantic/indexes`. Only changed files are embedded again. Queries combine cosine similarity with a small keyword score. Other plugins can call `ide.semantic.query(text, {limit, similarTo})`. Tests use `PYIDE_SEMANTIC_BACKEND=fake`, a deterministic hashing embedder; `SEMANTIC_REAL=1 node verify/semantic.mjs` runs against the real model once `node verify/semantic-setup.mjs` has installed it.
+
+## Database
+
+`renderer/features/database`, `main/features/database.js` and `main/db/drivers.js` add PyCharm-style data sources. The driver table in `main/db/drivers.js` holds one entry per kind: SQLite (built in, Electron's `node:sqlite`), PostgreSQL (`pg`), and MySQL and MariaDB (both `mysql2`). Each entry carries its fields, default port, identifier quoting and an adapter with `query`, `schema` and `close`. External drivers install on demand with npm into `~\.pyide\db-drivers` (`PYIDE_DB_DRIVERS` overrides it). Data sources live in `<userData>/database/sources.json`. Passwords are encrypted with safeStorage and never reach the renderer, which only sees `hasPassword`. Errors cross IPC as `{ok: false, error, missingDriver}`.
+
+The Database tool window (bottom, order 55) shows sources, schemas, tables, views and columns, loading a source's schema when it is expanded. A query console is a custom tab with a Monaco SQL editor over a result grid. Ctrl+Enter runs the selection or the statement at the caret; the splitter respects quotes, comments and `$tag$` bodies. Console text is saved under `<userData>/database/consoles/`. Opening a `.sqlite`, `.sqlite3` or `.db` file with a SQLite header adds it as a source. For server kinds, the data source dialog links to the Install Manager's Databases category. Tests: `verify/database.mjs` (ports 9600-9603); `DB_REAL=1` also installs the real `pg` driver.
+
+## Install Manager
+
+`renderer/features/installer`, `main/features/installer.js` and `main/installer/servers.js` add one tab (action `InstallManager`, Tools menu) for installing, updating and removing what a Python developer needs. An installable is a plain object pushed to `ide.installables`: `{id, category, name, description, size?, homepage?, status(), install(log, progress, signal), uninstall?, update?, start?, stop?, actions?: [{label, run, when?}], confirm?, confirmUninstall?}`, where `status()` resolves to `{installed, version?, running?, update?, detail?, available?, reason?}`. Built in are Python tools for the project interpreter (pip), portable PostgreSQL 18.6 and MariaDB 11.8.9 servers, and Git, Python 3.13 and Node.js through winget after a confirmation dialog. Other plugins add the PostgreSQL and MySQL drivers (database), EmbeddingGemma 2 (semantic) and Claude Code (terminal).
+
+Main runs jobs in one queue per target (an interpreter's pip, winget, or one server), with cancel, streaming `installer:log` and `installer:progress`. Servers download with a pinned sha256 to `~\.pyide\servers\<name>-<version>` (`PYIDE_INSTALL_ROOT` overrides it), initialize with a generated password kept with safeStorage in `<userData>/installer/servers.json`, take the first free port from 5432 or 3306, run as children of the IDE and stop when it quits. A running server offers Add as Data Source, which calls `ide.database.addDataSource`. `PYIDE_INSTALLER_RUNNER` swaps the winget and detection runner for tests. Tests: `verify/installer.mjs` (ports 9620-9625); `INSTALLER_REAL=1` really downloads, starts, connects through the Database plugin, stops and removes both servers.

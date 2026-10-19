@@ -58,7 +58,9 @@
     renderStatus();
     if (p.phase === 'ready' && input?.value.trim()) runQuery(input.value);
   });
+  let logSink = null; // the Install Manager card's log while it runs setup
   ide.api.on('semantic:log', (text) => {
+    logSink?.(text);
     if (!log) return;
     // pip and huggingface_hub draw progress bars with carriage returns; keep only the last state of each line.
     const lines = (log.textContent + text).split('\n').map((l) => l.split('\r').filter(Boolean).pop() || '');
@@ -254,6 +256,29 @@
   }
 
   ide.registerAction({ id: 'SemanticSearchPopup', title: tr('Semantic Search…'), keys: 'Ctrl+Alt+F', run: searchPopup });
+  (ide.installables ||= []).push({
+    id: 'ai:embeddinggemma-2', category: 'ai', name: 'EmbeddingGemma 2', size: '1.4 GB', homepage: 'https://huggingface.co/google/embeddinggemma-2',
+    description: tr('Google\'s local embedding model behind Semantic Search (Ctrl+Alt+F). Your code never leaves this computer.'),
+    status: async () => {
+      const s = await refreshStatus();
+      return { installed: !!ready(), version: s?.dim ? `${s.dim}d` : undefined, detail: s?.model?.device ? s.model.device.toUpperCase() : undefined };
+    },
+    install: async (log, _progress, signal) => {
+      const abort = () => ide.api.invoke('semantic:cancelSetup');
+      signal?.addEventListener('abort', abort);
+      logSink = log;
+      try {
+        const r = await ide.api.invoke('semantic:setup', { interpreter: ide.currentInterp()?.executable });
+        if (!r.ok) throw new Error(r.error);
+      } finally {
+        logSink = null;
+        signal?.removeEventListener('abort', abort);
+      }
+      await refreshStatus();
+      index();
+    },
+  });
+  ide.emit('installablesChanged');
   ide.registerAction({ id: 'FindSimilarCode', title: tr('Find Similar Code'), run: () => ide.editor && findSimilar(ide.editor) });
   ide.onEditor((ed) => ed.addAction({
     id: 'pyide.semantic.findSimilar', label: tr('Find Similar Code'), contextMenuGroupId: '8_semantic', run: () => findSimilar(ed),

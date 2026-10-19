@@ -21,5 +21,10 @@
   "Send File Reference to Claude Code": "Claude Code에 파일 참조 보내기",
   "Send to Claude Code": "Claude Code로 보내기",
   "New Terminal Session": "새 터미널 세션",
-  "Open in Terminal": "터미널에서 열기"
+  "Open in Terminal": "터미널에서 열기",
+  "Anthropic's coding agent in the Terminal, signed in with your Claude subscription.": "터미널에서 Claude 구독으로 로그인해 쓰는 Anthropic의 코딩 에이전트입니다.",
+  "This runs the official installer in a Terminal session: `irm https://claude.ai/install.ps1 | iex`": "터미널 세션에서 공식 설치 프로그램을 실행합니다: `irm https://claude.ai/install.ps1 | iex`",
+  "Running the official installer in the Terminal…": "터미널에서 공식 설치 프로그램을 실행하는 중…",
+  "Cancelled": "취소됨",
+  "The installer did not finish within 15 minutes.": "설치 프로그램이 15분 안에 끝나지 않았습니다."
 }
