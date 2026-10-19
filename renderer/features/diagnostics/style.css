@@ -1,0 +1,33 @@
+.diag-status { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 5px; border: 0; border-radius: 3px;
+  background: none; color: var(--red); font: inherit; cursor: pointer; }
+.diag-status:hover { background: var(--gray3); }
+.diag-status.hidden { display: none; }
+.diag-status-icon { display: inline-flex; }
+.diag-status-count { font-size: 11px; }
+.diag-status.unread .diag-status-icon { animation: diag-blink 1s steps(2, jump-none) infinite; }
+@keyframes diag-blink { 50% { opacity: 0.15; } }
+
+.diag-dialog .dialog-body { padding: 0; }
+.diag { display: grid; grid-template-columns: 300px 1fr; height: 460px; }
+.diag-list { overflow: auto; border-right: 1px solid var(--gray4); }
+.diag-empty { padding: 12px; }
+.diag-row { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--gray3); }
+.diag-row:hover { background: var(--gray3); }
+.diag-row.active { background: var(--blue-sel, var(--gray4)); }
+.diag-row-head { display: flex; gap: 8px; font-size: 11px; color: var(--gray9); }
+.diag-row-plugin { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diag-row-count { color: var(--red); }
+.diag-row-msg { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gray12); }
+.diag-detail { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; min-width: 0; overflow: hidden; }
+.diag-plugin-name { color: var(--gray12); }
+.diag-meta { font-size: 12px; }
+.diag-failing { padding: 6px 8px; border-radius: 4px; background: color-mix(in srgb, var(--red) 15%, transparent); color: var(--gray12); }
+.diag-message { color: var(--gray12); font-weight: 600; overflow-wrap: anywhere; }
+.diag-stack { flex: 1; margin: 0; padding: 8px; overflow: auto; border-radius: 4px; background: var(--gray2); color: var(--gray11);
+  font: 12px/1.45 var(--mono); white-space: pre; }
+.dialog-buttons button.hidden { display: none; }
+
+.diag-saved-path { font-family: var(--mono); overflow-wrap: anywhere; margin: 2px 0 8px; color: var(--gray12); }
+.diag-facts { border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.diag-facts td { padding: 2px 12px 2px 0; vertical-align: top; }
+.diag-facts td:last-child { font-family: var(--mono); color: var(--gray11); overflow-wrap: anywhere; }

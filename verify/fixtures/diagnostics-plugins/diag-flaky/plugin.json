@@ -1,0 +1,8 @@
+{
+  "id": "diag-flaky",
+  "name": "Diag Flaky",
+  "version": "0.0.1",
+  "vendor": "PyIDE tests",
+  "description": "Test plugin for verify/diagnostics.mjs: throws on demand in the renderer and the main process, and runs a sidecar that crashes.",
+  "main": ["flaky-main.js"]
+}

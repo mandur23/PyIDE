@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const diagnostics = require('../diagnostics');
 
 const WATCH_IGNORED = /[\\/](\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.idea)([\\/]|$)/;
 
@@ -69,6 +70,7 @@ class Server {
     this.proc.on('error', (err) => this.onExit(err.message));
     this.proc.stdin.on('error', () => {}); // writes until 'exit' marks the server dead would otherwise throw EPIPE
     this.proc.on('exit', (code) => this.onExit(`exited with code ${code}`));
+    diagnostics.watchProcess(this.proc, { name: 'Pyright language server' });
     this.ready = this.initialize();
     this.ready.catch(() => {});
     this.watch();

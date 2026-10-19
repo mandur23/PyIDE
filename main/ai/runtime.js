@@ -7,6 +7,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const diagnostics = require('../diagnostics');
 
 const dir = path.join(os.homedir(), '.pyide', 'semantic');
 const venv = path.join(dir, 'venv');
@@ -143,6 +144,7 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
     }
   });
   proc.stderr.on('data', (d) => onLog(d.toString('utf8')));
+  diagnostics.watchProcess(proc, { name: path.basename(script) });
   // A write racing the process's exit fails with EPIPE; the exit handler already answers pending requests.
   proc.stdin.on('error', () => {});
   proc.on('error', (err) => onLog(`${err.message}\n`));

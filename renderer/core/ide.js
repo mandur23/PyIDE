@@ -21,6 +21,9 @@ const isUnder = (p, dir) => {
 
 const ide = (window.ide = {
   t: tr,
+  // The IDE log (<userData>/logs/pyide.log): ide.log.info(msg), or ide.logger('#my-plugin').warn(msg).
+  log: ideDiagnostics.logger('#renderer'),
+  logger: ideDiagnostics.logger,
   // A detached window ("Open in New Window") shows only editors; see editors.js.
   detached: new URLSearchParams(location.search).has('detached'),
   root: null,

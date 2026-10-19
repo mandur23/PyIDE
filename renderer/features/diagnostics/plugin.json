@@ -1,0 +1,9 @@
+{
+  "id": "diagnostics",
+  "name": "Diagnostics",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "IDE internal errors with the plugin each came from, the IDE log, About, and Collect Logs and Diagnostic Data.",
+  "main": ["diagnostics.js"],
+  "required": true
+}

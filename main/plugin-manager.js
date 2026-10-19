@@ -161,7 +161,14 @@ function createPluginManager({ appDir, userDataDir }) {
     return [...unclaimed, ...enabled].sort();
   }
 
-  return { list, setEnabled, install, uninstall, catalog, rendererEntries, localeDictionary, mainModules };
+  // The plugin a source file belongs to (inside its folder, or one of its main modules), for error reports.
+  function ownerOf(file) {
+    const f = path.resolve(file).toLowerCase();
+    const p = loaded.find((x) => x.mainModules.some((m) => m.toLowerCase() === f) || f.startsWith(x.dir.toLowerCase() + path.sep));
+    return p ? { id: p.id, name: p.name, i18n: p.i18n, required: p.required, bundled: p.bundled } : null;
+  }
+
+  return { list, setEnabled, install, uninstall, catalog, rendererEntries, localeDictionary, mainModules, ownerOf };
 }
 
 module.exports = { createPluginManager };

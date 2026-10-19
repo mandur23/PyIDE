@@ -1,0 +1,8 @@
+{
+  "id": "diag-broken",
+  "name": "Diag Broken",
+  "version": "0.0.1",
+  "vendor": "PyIDE tests",
+  "description": "Test plugin for verify/diagnostics.mjs: fails to activate and its main module fails to register.",
+  "main": ["broken-main.js"]
+}

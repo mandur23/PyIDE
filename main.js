@@ -1,4 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
+// First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
+const diagnostics = require('./main/diagnostics').install();
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFileSync } = require('child_process');
@@ -6,8 +9,6 @@ const { createPluginManager } = require('./main/plugin-manager');
 const textCodec = require('./main/text-codec');
 const iconv = require('iconv-lite');
 const { createWindowManager } = require('./main/windows');
-
-if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
 
 const IGNORED = new Set(['.git', '__pycache__', 'node_modules', '.idea', '.mypy_cache', '.pytest_cache', '.ruff_cache']);
 
@@ -20,6 +21,8 @@ const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.
 const isVenv = (dir) => fs.existsSync(path.join(dir, 'pyvenv.cfg'));
 
 // Spawns a child whose output streams to the renderer as proc:data / proc:exit, keyed by the returned id.
+// The log records the launch and exit code; the output itself is the user's and stays out of it.
+const procLog = diagnostics.logger('#process');
 function startProcess(cmd, args, opts = {}) {
   const id = nextProcId++;
   const { encoding, ...spawnOpts } = opts;
@@ -28,6 +31,7 @@ function startProcess(cmd, args, opts = {}) {
     env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
   });
   procs.set(id, proc);
+  procLog.info(`#${id} started (pid ${proc.pid}): ${cmd} ${args.join(' ')}${opts.cwd ? ` in ${opts.cwd}` : ''}`);
   // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.
   // Streaming decoders keep multi-byte characters intact across chunk boundaries.
   const forward = (stream) => {
@@ -36,8 +40,9 @@ function startProcess(cmd, args, opts = {}) {
   };
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
-  proc.on('error', (err) => send('proc:data', { id, stream: 'err', text: `${err.message}\n` }));
+  proc.on('error', (err) => { procLog.warn(`#${id} ${err.message}`); send('proc:data', { id, stream: 'err', text: `${err.message}\n` }); });
   proc.on('close', (code) => {
+    procLog.info(`#${id} exited with code ${code}`);
     procs.delete(id);
     send('proc:exit', { id, code });
   });
@@ -152,6 +157,7 @@ ipcMain.handle('proc:closeInput', (_e, id) => procs.get(id)?.stdin.end());
 ipcMain.handle('proc:kill', (_e, id) => killProcess(id));
 
 const plugins = createPluginManager({ appDir: __dirname, userDataDir: app.getPath('userData') });
+diagnostics.setPluginResolver(plugins.ownerOf);
 
 // Settings live in a file, not localStorage: a restart (app.exit) can drop localStorage writes that were not flushed yet.
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
@@ -203,6 +209,7 @@ const featureContext = {
   appDir: __dirname,
   unpackedDir,
   vendorDir: path.join(unpackedDir, 'vendor'),
+  diagnostics,
 };
 
 require('./main/new-project').register(featureContext);
@@ -211,7 +218,7 @@ for (const file of plugins.mainModules()) {
   try {
     require(file).register(featureContext);
   } catch (err) {
-    console.error(`plugin module ${file} failed to register:`, err);
+    diagnostics.report({ source: 'plugin', kind: 'load', error: err, title: `Plugin module ${path.basename(file)} failed to load`, files: [file] });
   }
 }
 

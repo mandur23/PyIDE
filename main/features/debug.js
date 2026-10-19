@@ -3,6 +3,7 @@
 // Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
 const net = require('net');
 const path = require('path');
+const log = require('../diagnostics').logger('#debugger');
 
 const freePort = () => new Promise((resolve, reject) => {
   const srv = net.createServer();
@@ -53,7 +54,10 @@ class DapClient {
       if (!p) return;
       this.pending.delete(msg.request_seq);
       if (msg.success) p.resolve(msg.body || {});
-      else p.reject(new Error(msg.body?.error?.format || msg.message || `${msg.command} failed`));
+      else {
+        log.warn(`DAP ${msg.command} failed: ${msg.body?.error?.format || msg.message || ''}`);
+        p.reject(new Error(msg.body?.error?.format || msg.message || `${msg.command} failed`));
+      }
     } else if (msg.type === 'event') {
       this.waiters = this.waiters.filter((w) => (w.event === msg.event ? (w.resolve(msg.body || {}), false) : true));
       this.onEvent(msg.event, msg.body || {});
@@ -85,7 +89,7 @@ async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
     try {
       return await new Promise((resolve, reject) => {
         const s = net.connect(port, '127.0.0.1');
-        s.once('connect', () => resolve(s));
+        s.once('connect', () => { log.info(`connected to the debugpy adapter on port ${port}`); resolve(s); });
         s.once('error', reject);
       });
     } catch (err) {
