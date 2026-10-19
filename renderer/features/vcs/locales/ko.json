@@ -136,5 +136,13 @@
   "Show in Log": "로그에서 보기",
   "Switched from {from} to {to}": "{from}에서 {to}(으)로 전환함",
   "User:": "사용자:",
-  "What happened in this repository, newest first": "이 저장소에서 한 작업 (최신순)"
+  "What happened in this repository, newest first": "이 저장소에서 한 작업 (최신순)",
+  "No merge, rebase, cherry-pick or revert is in progress.": "진행 중인 병합, 리베이스, 체리픽 또는 되돌리기가 없습니다.",
+  "No local changes to save": "저장할 로컬 변경 사항이 없습니다",
+  "Merging": "병합 중",
+  "Rebasing": "리베이스 중",
+  "Cherry-picking": "체리픽 중",
+  "Reverting": "되돌리는 중",
+  "Merge Conflicts": "병합 충돌",
+  "Resolve": "해결"
 }

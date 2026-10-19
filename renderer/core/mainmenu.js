@@ -145,6 +145,7 @@
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },
+      act('Git.Merge'), act('Git.Rebase'), act('Git.ResolveConflicts'), act('Git.Stash'), act('Git.Unstash'), { separator: true },
       act('Git.Log'), act('Annotate'), act('ChangesView.Revert'), act('Compare.SameVersion'), act('Git.Init'),
     ]) },
     { label: tr('Window'), submenu: () => tidy([

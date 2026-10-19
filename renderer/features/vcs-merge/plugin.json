@@ -1,0 +1,10 @@
+{
+  "id": "vcs-merge",
+  "name": "Git Merge, Rebase and Stash",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Three-way merge tool for conflicts, merge and rebase from the branch popup, stash and unstash, cherry-pick and revert from the log.",
+  "depends": [
+    "vcs"
+  ]
+}

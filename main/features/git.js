@@ -12,7 +12,10 @@ function git(cwd, args, input) {
   return new Promise((resolve) => {
     let p;
     try {
-      p = spawn('git', ['-c', 'core.quotepath=false', '-c', 'color.ui=false', '--literal-pathspecs', ...args],
+      // `stash -u` cleans untracked files through a magic `:/` pathspec that literal pathspecs would disable; the
+      // stash commands here take no user paths.
+      const literal = args[0] === 'stash' ? [] : ['--literal-pathspecs'];
+      p = spawn('git', ['-c', 'core.quotepath=false', '-c', 'color.ui=false', ...literal, ...args],
         { cwd, env: { ...process.env, ...ENV }, windowsHide: true });
     } catch (e) {
       return resolve({ code: -1, out: '', err: e.message });
@@ -34,12 +37,23 @@ const relOf = (root, abs) => path.relative(root, abs).replace(/\\/g, '/');
 // The project may be a subfolder of the work tree; map repo-relative paths through the prefix so
 // returned paths keep the exact spelling of `root` (temp dirs can differ in 8.3/long form).
 async function repoInfo(root) {
-  const r = await git(root, ['rev-parse', '--show-toplevel', '--show-prefix']);
+  const r = await git(root, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--show-prefix']);
   if (r.code) return null;
-  const [top, prefix = ''] = r.out.split(/\r?\n/);
-  return { top: path.resolve(top), prefix };
+  const [top, gitDir, prefix = ''] = r.out.split(/\r?\n/);
+  return { top: path.resolve(top), gitDir: path.resolve(gitDir), prefix };
 }
 const toAbs = (root, info, rel) => (rel.startsWith(info.prefix) ? path.join(root, rel.slice(info.prefix.length)) : path.join(info.top, rel));
+
+// The multi-step operation stopped in the work tree, from the marker files git leaves in its directory.
+function operationOf(gitDir) {
+  const has = (name) => fs.existsSync(path.join(gitDir, name));
+  if (has('rebase-merge') || has('rebase-apply')) return 'rebase';
+  if (has('MERGE_HEAD')) return 'merge';
+  if (has('CHERRY_PICK_HEAD')) return 'cherry-pick';
+  if (has('REVERT_HEAD')) return 'revert';
+  return null;
+}
+const readGitFile = (info, name) => { try { return fs.readFileSync(path.join(info.gitDir, name), 'utf8').trim(); } catch { return ''; } };
 
 const STATUS_OF = (xy) => {
   if (xy.includes('U') || xy === 'AA' || xy === 'DD') return 'conflict';
@@ -79,6 +93,10 @@ async function status(root) {
   }
   for (const f of res.files) f.path = toAbs(root, info, f.rel);
   if (res.head && !res.branch) res.detached = res.head.slice(0, 8);
+  res.op = operationOf(info.gitDir);
+  // A rebase detaches HEAD; the branch being rebased is what the user thinks of as current.
+  if (res.op === 'rebase') res.opBranch = (readGitFile(info, 'rebase-merge/head-name') || readGitFile(info, 'rebase-apply/head-name')).replace(/^refs\/heads\//, '') || null;
+  if (res.op === 'merge') res.mergeMessage = readGitFile(info, 'MERGE_MSG').split(/\r?\n/).filter((l) => !l.startsWith('#')).join('\n').trim();
   return res;
 }
 
@@ -100,6 +118,34 @@ function parseBlame(out) {
 }
 
 const pickRemote = (remotes) => (remotes.includes('origin') ? 'origin' : remotes[0]);
+
+async function conflictedPaths(root, info) {
+  const r = await git(root, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  return [...new Set(r.out.split('\0').filter(Boolean))].map((rel) => toAbs(root, info, rel));
+}
+
+// Runs a git command that may stop on conflicts (merge, rebase, cherry-pick, revert, unstash, pull) and reports
+// where it left the work tree: the files still in conflict, the operation waiting for --continue, whether HEAD moved.
+async function runStoppable(root, args) {
+  const before = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+  const r = await git(root, args);
+  const info = await repoInfo(root);
+  const after = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+  let updated = [];
+  if (before && after && before !== after) {
+    const d = await git(root, ['diff', '--name-only', '-z', before, after]);
+    updated = d.out.split('\0').filter(Boolean).map((rel) => toAbs(root, info, rel));
+  }
+  return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, conflicts: info ? await conflictedPaths(root, info) : [],
+    op: info ? operationOf(info.gitDir) : null, moved: before !== after, updated };
+}
+
+// Short names of the branches pointing at `rev`, else its abbreviated hash.
+async function nameOf(root, rev) {
+  const refs = await git(root, ['for-each-ref', '--points-at', rev, '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
+  const name = refs.out.split(/\r?\n/).find((n) => n && !n.endsWith('/HEAD'));
+  return name || (await git(root, ['rev-parse', '--short', rev])).out.trim() || null;
+}
 
 exports.register = ({ ipcMain }) => {
   const h = (name, fn) => ipcMain.handle(`git:${name}`, (_e, ...args) => fn(...args));
@@ -155,15 +201,20 @@ exports.register = ({ ipcMain }) => {
     const origs = files.map((f) => (typeof f === 'string' ? null : f.orig)).filter(Boolean);
     const rels = paths.map((p) => relOf(root, p)).join('\0');
     const addArgs = ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'];
-    const add = await git(root, addArgs, rels);
+    // an empty pathspec file would make `add -A` take the whole work tree
+    const add = rels ? await git(root, addArgs, rels) : { code: 0 };
     if (add.code) return { ok: false, cmd: cmdLine(addArgs), out: add.out, err: add.err };
     const msgFile = path.join(os.tmpdir(), `pyide-commit-${process.pid}-${Date.now()}.txt`);
     fs.writeFileSync(msgFile, message, 'utf8');
-    const args = ['commit', '-F', msgFile, '--pathspec-from-file=-', '--pathspec-file-nul'];
+    // git refuses a partial commit while a merge, cherry-pick or rebase is stopped: that commit takes the whole index.
+    const info = await repoInfo(root);
+    const whole = !!(info && operationOf(info.gitDir));
+    const args = whole ? ['commit', '-F', msgFile] : ['commit', '-F', msgFile, '--pathspec-from-file=-', '--pathspec-file-nul'];
     const r = await git(root, args, [...paths, ...origs].map((p) => relOf(root, p)).join('\0'));
     try { fs.unlinkSync(msgFile); } catch {}
     const hash = r.code ? null : (await git(root, ['rev-parse', '--short', 'HEAD'])).out.trim();
-    return { ok: !r.code, cmd: cmdLine(['commit', '-m', message.split('\n')[0], '--', ...paths.map((p) => relOf(root, p))]), out: r.out, err: r.err, hash };
+    const shown = ['commit', '-m', message.split('\n')[0], ...(whole ? [] : ['--', ...paths.map((p) => relOf(root, p))])];
+    return { ok: !r.code, cmd: cmdLine(shown), out: r.out, err: r.err, hash };
   });
 
   // files: [{path, status}]. Tracked changes are restored from HEAD; newly added files are only unstaged.
@@ -264,16 +315,126 @@ exports.register = ({ ipcMain }) => {
     const st = await status(root);
     if (!st.isRepo) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
     if (!st.remotes.length) return { ok: false, noRemote: true, reason: 'noRemote', err: 'No remotes are defined for this repository.' };
-    const before = st.head;
-    const args = ['pull', '--no-rebase', '--no-edit'];
-    const r = await git(root, args);
-    const after = (await git(root, ['rev-parse', 'HEAD'])).out.trim();
-    let updated = [];
-    if (!r.code && before && after && before !== after) {
-      const info = await repoInfo(root);
-      const d = await git(root, ['diff', '--name-only', '-z', before, after]);
-      updated = d.out.split('\0').filter(Boolean).map((rel) => toAbs(root, info, rel));
+    const r = await runStoppable(root, ['pull', '--no-rebase', '--no-edit']);
+    return { ...r, upToDate: r.ok && !r.moved };
+  });
+
+  // ---------- merge, rebase, cherry-pick, revert and the conflicts they leave ----------
+  h('merge', (root, branch) => runStoppable(root, ['merge', '--no-edit', branch]));
+  h('rebase', (root, onto) => runStoppable(root, ['rebase', onto]));
+  // A merge commit is picked or reverted against its first parent, as PyCharm does.
+  h('cherryPick', (root, hash, isMerge) => runStoppable(root, ['cherry-pick', ...(isMerge ? ['-m', '1'] : []), hash]));
+  h('revert', (root, hash, isMerge) => runStoppable(root, ['revert', '--no-edit', ...(isMerge ? ['-m', '1'] : []), hash]));
+
+  // action: 'abort' | 'continue' | 'skip', applied to whichever operation is stopped.
+  h('operation', async (root, action) => {
+    const info = await repoInfo(root);
+    const op = info && operationOf(info.gitDir);
+    if (!op) return { ok: false, reason: 'noOperation', err: 'No merge, rebase, cherry-pick or revert is in progress.' };
+    return { ...(await runStoppable(root, [op, `--${action}`])), was: op };
+  });
+
+  // Names for the two sides of the conflicts in the work tree: ours (stage 2) and theirs (stage 3).
+  h('conflictSides', async (root) => {
+    const info = await repoInfo(root);
+    const op = info && operationOf(info.gitDir);
+    const branch = (await git(root, ['branch', '--show-current'])).out.trim();
+    const current = branch || (await git(root, ['rev-parse', '--short', 'HEAD'])).out.trim() || null;
+    if (op === 'merge') return { op, ours: current, theirs: await nameOf(root, 'MERGE_HEAD') };
+    if (op === 'rebase') {
+      const rebased = (readGitFile(info, 'rebase-merge/head-name') || readGitFile(info, 'rebase-apply/head-name')).replace(/^refs\/heads\//, '');
+      const onto = readGitFile(info, 'rebase-merge/onto') || readGitFile(info, 'rebase-apply/onto');
+      return { op, ours: onto ? await nameOf(root, onto) : current, theirs: rebased || null };
     }
-    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, updated, upToDate: !r.code && before === after };
+    if (op === 'cherry-pick') return { op, ours: current, theirs: await nameOf(root, 'CHERRY_PICK_HEAD') };
+    if (op === 'revert') return { op, ours: current, theirs: await nameOf(root, 'REVERT_HEAD') };
+    return { op: null, ours: current, theirs: null };
+  });
+
+  // The three versions of a conflicted file (null where that side has no such file) and what is on disk now.
+  h('mergeVersions', async (root, abs) => {
+    const rel = relOf(root, abs);
+    const stage = async (n) => { const r = await git(root, ['show', `:${n}:./${rel}`]); return r.code ? null : r.out; };
+    const [base, ours, theirs] = await Promise.all([stage(1), stage(2), stage(3)]);
+    let working = null;
+    try { working = fs.readFileSync(abs, 'utf8'); } catch {}
+    return { base, ours, theirs, working };
+  });
+
+  // Marks a file resolved with `content` (null: the file is deleted), like `git add` / `git rm` after a merge tool.
+  h('resolve', async (root, abs, content) => {
+    const rel = relOf(root, abs);
+    if (content == null) {
+      const args = ['rm', '--quiet', '--', rel];
+      const r = await git(root, args);
+      return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+    }
+    fs.writeFileSync(abs, content, 'utf8');
+    const args = ['add', '--', rel];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+  });
+
+  // Accept Yours / Accept Theirs: each file becomes that side's version, or is removed where that side deleted it.
+  h('acceptSide', async (root, files, side) => {
+    const log = [];
+    let ok = true;
+    const run = async (args) => {
+      const r = await git(root, args);
+      log.push({ cmd: cmdLine(args), out: r.out, err: r.err });
+      if (r.code) ok = false;
+      return r;
+    };
+    for (const abs of files) {
+      const rel = relOf(root, abs);
+      const stages = (await git(root, ['ls-files', '-u', '--', rel])).out.split(/\r?\n/).filter(Boolean).map((l) => l.split(/\s+/)[2]);
+      if (stages.includes(side === 'ours' ? '2' : '3')) {
+        if (!(await run(['checkout', `--${side}`, '--', rel])).code) await run(['add', '--', rel]);
+      } else await run(['rm', '--quiet', '--', rel]);
+    }
+    return { ok, log };
+  });
+
+  // ---------- stash ----------
+  h('stashList', async (root) => {
+    const r = await git(root, ['stash', 'list', '--format=%gd%x1f%H%x1f%ct%x1f%gs%x1e']);
+    if (r.code) return [];
+    return r.out.split('\x1e').map((s) => s.trim()).filter(Boolean).map((rec) => {
+      const [ref, hash, time, subject] = rec.split('\x1f');
+      // git writes "On <branch>: <message>" for a named stash and "WIP on <branch>: <hash> <subject>" otherwise.
+      const m = /^(?:WIP on|On) (.+?): (.*)$/s.exec(subject);
+      return { ref, hash, time: Number(time), subject, branch: m?.[1] || null, message: m?.[2] ?? subject };
+    });
+  });
+
+  h('stash', async (root, { message, untracked, keepIndex } = {}) => {
+    const args = ['stash', 'push', ...(untracked ? ['--include-untracked'] : []), ...(keepIndex ? ['--keep-index'] : []), ...(message ? ['-m', message] : [])];
+    const r = await git(root, args);
+    const nothing = !r.code && /No local changes to save/.test(r.out);
+    return { ok: !r.code && !nothing, cmd: cmdLine(args), out: r.out, err: r.err, ...(nothing ? { reason: 'noLocalChanges' } : {}) };
+  });
+
+  // opts: {pop, index, branch}. With a branch name the stash is applied onto a new branch made where it was created.
+  h('unstash', (root, ref, { pop, index, branch } = {}) => runStoppable(root, branch
+    ? ['stash', 'branch', branch, ref]
+    : ['stash', pop ? 'pop' : 'apply', ...(index ? ['--index'] : []), ref]));
+
+  h('stashDrop', async (root, ref) => {
+    const args = ['stash', 'drop', ref];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+  });
+
+  // Files a stash changes, untracked ones included; their content is at <ref>^1 (before) and <ref> or <ref>^3 (after).
+  h('stashFiles', async (root, ref) => {
+    const info = await repoInfo(root);
+    const r = await git(root, ['stash', 'show', '--include-untracked', '--name-status', '--no-renames', '-z', ref]);
+    const parts = r.out.split('\0').filter(Boolean);
+    const list = [];
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const s = parts[i][0];
+      list.push({ status: s === 'A' ? 'added' : s === 'D' ? 'deleted' : 'modified', rel: parts[i + 1], path: info ? toAbs(root, info, parts[i + 1]) : parts[i + 1] });
+    }
+    return list;
   });
 };

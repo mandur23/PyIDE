@@ -19,7 +19,18 @@
     notRepo: tr('Not a Git repository'),
     noRemote: tr('No remotes are defined for this repository.'),
     detached: tr('Cannot push from a detached HEAD.'),
+    noOperation: tr('No merge, rebase, cherry-pick or revert is in progress.'),
+    noLocalChanges: tr('No local changes to save'),
   };
+  // The operation git stopped in the middle of, as the branch widget shows it.
+  const OP_LABEL = { merge: tr('Merging'), rebase: tr('Rebasing'), 'cherry-pick': tr('Cherry-picking'), revert: tr('Reverting') };
+
+  // Extension points the vcs-merge plugin fills: branch popup entries, Log context-menu entries, rows above the
+  // changes list, and what opening a conflicted file or a stopped pull does.
+  const branchActions = [];
+  const logActions = [];
+  const commitHeaders = [];
+  let conflictHandler = null;
   const errorText = (r) => (r.reason && REASONS[r.reason]) || r.err || r.out || '';
 
   let repo = null; // git:status result while the project is a repository
@@ -84,6 +95,7 @@
     byPath.clear();
     for (const f of repo?.files || []) byPath.set(key(f.path), f);
     for (const k of [...selection]) if (!byPath.has(k)) selection.delete(k);
+    prefillMergeMessage();
     const head = repo?.head || null;
     if (head !== lastHead) {
       lastHead = head;
@@ -110,7 +122,9 @@
   function renderWidget() {
     branchBtn.classList.toggle('hidden', !repo);
     if (!repo) return;
-    branchBtn.replaceChildren(ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.detached || 'HEAD'), ide.icon('chevronDown', '▾'));
+    const parts = [ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.opBranch || repo.detached || 'HEAD')];
+    if (repo.op) parts.push(el('span', 'vcs-branch-op', OP_LABEL[repo.op]));
+    branchBtn.replaceChildren(...parts, ide.icon('chevronDown', '▾'));
   }
 
   async function afterCheckout() {
@@ -125,10 +139,14 @@
     if (!repo) return;
     const { local, remote } = await invoke('branches', ide.root);
     const items = [{ label: tr('New Branch…'), icon: '＋', value: { create: true } }];
+    const extra = branchActions.flatMap((fn) => fn(repo, { local, remote }));
+    // While an operation is stopped its Continue / Abort come first, as in PyCharm.
+    if (repo.op) items.unshift(...extra); else items.push(...extra);
     for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? tr('current') : tr('Local'), value: { name: b } });
     for (const b of remote) items.push({ label: b, icon: '☁', hint: tr('Remote'), value: { name: b, remote: true } });
     const choice = await ide.ui.pick({ placeholder: tr('Git Branches — {branch}', { branch: repo.branch || repo.detached }), items });
     if (!choice) return;
+    if (choice.run) return choice.run();
     if (choice.create) {
       const name = await ide.ui.prompt(tr('New branch name'), '');
       if (!name) return;
@@ -155,8 +173,19 @@
   // ---------- Commit tool window ----------
   const included = new Map(); // lower path -> explicit checkbox choice
   const selection = new Set(); // lower paths selected in the changes list
-  let listEl, msgEl, initBox, commitBody;
-  const fileIncluded = (f) => included.get(key(f.path)) ?? f.status !== 'unversioned';
+  let listEl, msgEl, initBox, commitBody, headerEl;
+  // Conflicted files are left out until resolved: committing one as is would record its conflict markers.
+  const fileIncluded = (f) => f.status !== 'conflict' && (included.get(key(f.path)) ?? f.status !== 'unversioned');
+  let prefilled = null; // the merge message put into an empty commit message box
+
+  function prefillMergeMessage() {
+    if (!msgEl) return;
+    if (repo?.op === 'merge' && repo.mergeMessage && !msgEl.value) msgEl.value = prefilled = repo.mergeMessage;
+    else if (repo?.op !== 'merge' && prefilled) {
+      if (msgEl.value === prefilled) msgEl.value = '';
+      prefilled = null;
+    }
+  }
 
   const commitTw = ide.registerToolWindow({
     id: 'Commit', title: tr('Commit'), icon: '✓', side: 'left', keys: 'Alt+0', order: 10,
@@ -168,6 +197,7 @@
       initBox.appendChild(initBtn);
 
       commitBody = el('div', 'vcs-commit hidden');
+      headerEl = el('div', 'vcs-commit-header');
       listEl = el('div', 'vcs-changes');
       listEl.tabIndex = 0;
       listEl.onkeydown = onListKey;
@@ -183,15 +213,22 @@
       const pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
       pushBtn.onclick = () => doCommit(true);
       btns.append(commitBtn, pushBtn);
-      commitBody.append(listEl, msgEl, btns);
+      commitBody.append(headerEl, listEl, msgEl, btns);
       container.append(initBox, commitBody);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: refresh },
         { icon: '↶', title: tr('Rollback… (Ctrl+Alt+Z)'), run: () => rollbackFiles(selectedFiles()) },
-        { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openWorkingDiff(selectedFiles()[0].path) },
+        { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openChange(selectedFiles()[0].path) },
       ]);
+      prefillMergeMessage();
     },
   });
+
+  // A conflicted file opens in the merge tool; any other change in a diff with HEAD.
+  function openChange(path) {
+    if (byPath.get(key(path))?.status === 'conflict' && conflictHandler) return conflictHandler.open(path);
+    return openWorkingDiff(path);
+  }
 
   const selectedFiles = () => [...selection].map((k) => byPath.get(k)).filter(Boolean);
 
@@ -200,26 +237,35 @@
     initBox.classList.toggle('hidden', !!repo || !ide.root);
     commitBody.classList.toggle('hidden', !repo);
     commitTw.setBadge(repo?.files.length ? String(repo.files.length) : '');
-    if (!repo) return;
+    if (!repo) { headerEl.replaceChildren(); return; }
+    headerEl.replaceChildren(...commitHeaders.map((fn) => fn(repo)).filter(Boolean));
     const scroll = listEl.scrollTop;
     listEl.replaceChildren();
-    const changes = repo.files.filter((f) => f.status !== 'unversioned');
+    const conflicts = repo.files.filter((f) => f.status === 'conflict');
+    const changes = repo.files.filter((f) => f.status !== 'unversioned' && f.status !== 'conflict');
     const unversioned = repo.files.filter((f) => f.status === 'unversioned');
+    if (conflicts.length) renderGroup(tr('Merge Conflicts'), conflicts, true);
     renderGroup(tr('Changes'), changes);
     if (unversioned.length) renderGroup(tr('Unversioned Files'), unversioned);
     listEl.scrollTop = scroll;
   }
 
-  function renderGroup(title, files) {
-    const head = el('div', 'vcs-group');
+  function renderGroup(title, files, conflicts = false) {
+    const head = el('div', 'vcs-group' + (conflicts ? ' vcs-conflicts' : ''));
     const cb = el('input');
     cb.type = 'checkbox';
     const on = files.filter(fileIncluded).length;
     cb.checked = files.length > 0 && on === files.length;
     cb.indeterminate = on > 0 && on < files.length;
-    cb.disabled = !files.length;
+    cb.disabled = !files.length || conflicts;
     cb.onchange = () => { for (const f of files) included.set(key(f.path), cb.checked); renderChanges(); };
     head.append(el('span', 'arrow', '▾'), cb, el('span', 'vcs-group-title', title), el('span', 'muted', nFiles(files.length)));
+    if (conflicts && conflictHandler) {
+      const link = el('a', 'vcs-resolve-link', tr('Resolve'));
+      link.href = '#';
+      link.onclick = (e) => { e.preventDefault(); conflictHandler.resolve(); };
+      head.appendChild(link);
+    }
     listEl.appendChild(head);
     for (const f of files) {
       const row = el('div', 'vcs-file' + (selection.has(key(f.path)) ? ' selected' : ''));
@@ -228,6 +274,7 @@
       const fcb = el('input');
       fcb.type = 'checkbox';
       fcb.checked = fileIncluded(f);
+      fcb.disabled = f.status === 'conflict';
       fcb.onclick = (e) => e.stopPropagation();
       fcb.onchange = () => { included.set(key(f.path), fcb.checked); renderChanges(); };
       const name = userText('span', 'vcs-name', basename(f.path));
@@ -242,7 +289,7 @@
         listEl.focus();
         renderChanges();
       };
-      row.ondblclick = () => openWorkingDiff(f.path);
+      row.ondblclick = () => openChange(f.path);
       listEl.appendChild(row);
     }
   }
@@ -260,7 +307,7 @@
       listEl.querySelector('.vcs-file.selected')?.scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter' && rows[i]) {
       e.preventDefault();
-      openWorkingDiff(rows[i].dataset.path);
+      openChange(rows[i].dataset.path);
     } else if (e.key === ' ' && rows[i]) {
       e.preventDefault();
       for (const f of selectedFiles()) included.set(key(f.path), !fileIncluded(f));
@@ -290,7 +337,8 @@
     await refresh();
     const files = repo.files.filter(fileIncluded);
     const message = msgEl.value.trim();
-    if (!files.length) return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
+    // A merge whose result equals HEAD still needs its merge commit.
+    if (!files.length && repo.op !== 'merge') return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
     if (!message) { msgEl.focus(); return notify(tr('Commit message is empty'), tr('Enter a commit message.'), 'warn'); }
     const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })));
     logResult(r);
@@ -420,16 +468,20 @@
       file.status === 'added' ? '' : invoke('fileAt', ide.root, `${commit.hash}^`, file.rel),
       file.status === 'deleted' ? '' : invoke('fileAt', ide.root, commit.hash, file.rel),
     ]);
+    openTextDiff({
+      id, title: `${basename(file.rel)} (${commit.hash.slice(0, 7)})`, name: basename(file.rel), left, right,
+      leftTitle: tr('{hash}^ (parent)', { hash: commit.hash.slice(0, 7) }),
+      rightTitle: { user: `${commit.hash.slice(0, 7)} — ${commit.message?.split('\n')[0] || ''}` },
+    });
+  }
+
+  // A read-only diff tab of two texts; titles as in mountDiff.
+  function openTextDiff({ id, title, name, left, right, leftTitle, rightTitle }) {
+    if (ide.findTab(id)) return ide.openCustomTab({ id });
     let dispose;
     ide.openCustomTab({
-      id, title: `${basename(file.rel)} (${commit.hash.slice(0, 7)})`, icon: '⇆',
-      mount(host) {
-        dispose = mountDiff(host, {
-          name: basename(file.rel), left, right,
-          leftTitle: tr('{hash}^ (parent)', { hash: commit.hash.slice(0, 7) }),
-          rightTitle: { user: `${commit.hash.slice(0, 7)} — ${commit.message?.split('\n')[0] || ''}` },
-        });
-      },
+      id, title, icon: '⇆',
+      mount(host) { dispose = mountDiff(host, { name, left, right, leftTitle, rightTitle }); },
       onClose() { dispose?.(); },
     });
   }
@@ -958,6 +1010,12 @@
       row.append(subj, author, el('span', 'vcs-c-date', fmtDate(c.time)));
       subj.title = `${c.short} ${c.subject}`;
       row.onclick = () => { selectCommit(c.hash); logRows.focus(); };
+      row.oncontextmenu = (e) => {
+        e.preventDefault();
+        selectCommit(c.hash);
+        const items = logActions.flatMap((fn) => fn(c));
+        if (items.length) ide.ui.contextMenu(e.clientX, e.clientY, items);
+      };
       logRows.appendChild(row);
     }
   }
@@ -1112,6 +1170,7 @@
     const r = await invoke('pull', ide.root);
     logResult(r);
     if (r.noRemote) return notify(tr("Can't update"), tr('No remotes are defined for this repository. Define a remote in the Push dialog (Ctrl+Shift+K).'), 'warn');
+    if (!r.ok && r.conflicts?.length && conflictHandler) { await afterCheckout(); return conflictHandler.stopped(r); }
     if (!r.ok) return notify(tr('Update failed'), errorText(r), 'error', true);
     if (r.upToDate) notify(tr('All files are up-to-date'), '', 'ok');
     else notify(trn(r.updated.length, '{n} file updated', '{n} files updated'), r.updated.map((p) => ide.util.rel(p)).join('\n'), 'ok', true);
@@ -1205,6 +1264,19 @@
   ].forEach(ide.registerAction);
   ide.registerTreeAction({ title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
   ide.registerTreeAction({ title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
+
+  ide.vcs = {
+    invoke, notify, logResult, errorText, userText, trn, nFiles, refresh, showConsole, openTextDiff, diffLines,
+    repo: () => repo,
+    // Reloads editors and the log after git moved HEAD or rewrote files (unsaved edits were saved beforehand).
+    reload: afterCheckout,
+    showCommit,
+    addBranchActions: (fn) => branchActions.push(fn),
+    addLogActions: (fn) => logActions.push(fn),
+    addCommitHeader: (fn) => { commitHeaders.push(fn); renderChanges(); },
+    // {open(path): merge tool for one file, resolve(): the conflicts dialog, stopped(result): after a pull stopped on conflicts}
+    setConflictHandler: (handler) => { conflictHandler = handler; renderChanges(); },
+  };
 
   // ---------- events ----------
   ide.on('projectOpened', () => {
