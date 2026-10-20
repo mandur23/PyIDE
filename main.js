@@ -27,10 +27,22 @@ const procLog = diagnostics.logger('#process');
 function startProcess(cmd, args, opts = {}) {
   const id = nextProcId++;
   const { encoding, filter, ...spawnOpts } = opts;
-  const proc = spawn(cmd, args, {
-    ...spawnOpts,
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
-  });
+  let proc;
+  try {
+    proc = spawn(cmd, args, {
+      ...spawnOpts,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
+    });
+  } catch (err) {
+    // spawn throws for what it refuses outright (EINVAL for a .cmd/.bat without a shell, bad arguments). The caller
+    // still gets an id, and the renderer the same error output and exit as for a program that is not found.
+    procLog.warn(`#${id} could not start ${cmd}: ${err.message}`);
+    setImmediate(() => {
+      send('proc:data', { id, stream: 'err', text: `Cannot start ${cmd}: ${err.code || err.message}\n` });
+      send('proc:exit', { id, code: -1 });
+    });
+    return id;
+  }
   procs.set(id, proc);
   procLog.info(`#${id} started (pid ${proc.pid}): ${cmd} ${args.join(' ')}${opts.cwd ? ` in ${opts.cwd}` : ''}`);
   // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.

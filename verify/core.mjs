@@ -1,3 +1,5 @@
+import { writeFileSync } from 'fs';
+import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
 const t = await launch({ fixture: 'core', port: 9400 });
@@ -89,6 +91,13 @@ try {
   await t.sleep(500);
   const internal = await js(`ide.api.invoke('diagnostics:errors').then(list => list.map(e => e.message))`);
   check(!internal.some((m) => /write after end|EPIPE/i.test(m)), `input to a process that exits or whose stdin is closed is not an internal error (${writes} writes; ${JSON.stringify(internal)})`);
+  // spawn refuses a .cmd without a shell (EINVAL) synchronously: the caller still gets output and an exit code.
+  writeFileSync(path.join(t.project, 'tool.cmd'), '@echo tool\r\n');
+  const refused = await js(`(async () => {
+    const id = await ide.api.invoke('project:exec', ide.util.joinPath(ide.root, 'tool.cmd'), [], ide.root);
+    return new Promise((resolve) => { let out = ''; ide.proc.attach(id, { data: (t) => { out += t; }, exit: (code) => resolve({ out, code }) }); });
+  })()`);
+  check(refused.code === -1 && /^Cannot start .*tool\.cmd: EINVAL/.test(refused.out), `a program spawn refuses ends with its error and exit code -1 (${JSON.stringify(refused)})`);
   await shot('final.png');
 } catch (err) {
   t.check(false, err.message);
