@@ -66,5 +66,5 @@ $outPath = [IO.Path]::GetFullPath((Join-Path $root $Out))
 New-Item -ItemType Directory -Force (Split-Path $outPath) | Out-Null
 $quoted = ($Command | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
 $code = [OtherDesktop]::Run("PyIDE-Tests-$PID", "cmd.exe /d /s /c `"$quoted > `"$outPath`" 2>&1`"", $root)
-Get-Content $outPath
+Get-Content $outPath -Encoding UTF8
 exit $code
