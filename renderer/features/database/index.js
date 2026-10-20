@@ -886,20 +886,27 @@
         const language = src && consoleLanguage(src.kind);
         if (language && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language);
       },
-      // Runs each statement in order and shows the last result; an error stops the run.
+      // Runs each statement in order and shows the last result; an error stops the run. One run at a time: Ctrl+Enter
+      // during a run would otherwise interleave two runs' statements and results.
+      running: false,
       async execute(statements) {
-        if (!statements.length) return;
+        if (!statements.length || c.running) return;
+        c.running = true;
         runBtn.disabled = true;
         status.textContent = tr('Running…');
         let r = null;
         let done = 0;
-        for (const stmt of statements) {
-          r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
-          if (!r.ok) break;
-          done++;
-          if (r.schemaChanged || /^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
+        try {
+          for (const stmt of statements) {
+            r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
+            if (!r.ok) break;
+            done++;
+            if (r.schemaChanged || /^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
+          }
+        } finally {
+          c.running = false;
+          runBtn.disabled = false;
         }
-        runBtn.disabled = false;
         showResult(r, done, statements.length);
         c.runs++;
         return r;

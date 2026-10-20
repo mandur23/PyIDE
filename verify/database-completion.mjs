@@ -113,6 +113,8 @@ try {
   // The cache refreshes after DDL from the console.
   await a.js(`ide.database.activeConsole().execute(['CREATE TABLE audit (at TEXT)']).then(() => true)`);
   await a.sleep(300);
+  const overlap = await a.js(`(async () => { const c = ide.database.activeConsole(); const before = c.runs; const [x, y] = await Promise.all([c.execute(['SELECT 1']), c.execute(['SELECT 2'])]); return { first: !!x?.ok, second: y === undefined, runs: c.runs - before }; })()`);
+  check(overlap.first && overlap.second && overlap.runs === 1, `a second run while one is in progress is ignored (${q(overlap)})`);
   rows = await suggest(a, consoleEditor, 'SELECT * FROM a|');
   check(labels(rows).includes('audit'), 'a table created in the console completes right away');
 
