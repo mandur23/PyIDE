@@ -1,6 +1,6 @@
 /* VCS colors: PyCharm Darcula by default, PyCharm Light under data-theme="light". */
 :root {
-  --vcs-modified: #6897bb; --vcs-added: #629755; --vcs-deleted: #6c6c6c; --vcs-unversioned: #d1675a; --vcs-conflict: #d5756c;
+  --vcs-modified: #6897bb; --vcs-added: #629755; --vcs-deleted: #6c6c6c; --vcs-unversioned: #d1675a; --vcs-conflict: #d5756c; --vcs-ignored: #e0913d;
   --vcs-gutter-added: #549159; --vcs-gutter-modified: #375fad; --vcs-gutter-deleted: #db5c5c;
   --vcs-selected-focus: #2e4d8a; --vcs-blame: #8c8f96; --vcs-dot: #3592c4; --vcs-shadow: #0008;
   --vcs-ref-bg: #4d4e2e; --vcs-ref-fg: #e8c46a; --vcs-ref-head-bg: #2f4a2f; --vcs-ref-head-fg: #8fd18f;
@@ -8,7 +8,7 @@
   --vcs-diff-mod: #263552; --vcs-diff-mod-char: #2f4a7c; --vcs-op-bg: #3d3a2a; --vcs-op-border: #6d5f2a;
 }
 :root[data-theme="light"] {
-  --vcs-modified: #0032a0; --vcs-added: #067d17; --vcs-deleted: #6c707e; --vcs-unversioned: #8c2e1b; --vcs-conflict: #d5441c;
+  --vcs-modified: #0032a0; --vcs-added: #067d17; --vcs-deleted: #6c707e; --vcs-unversioned: #8c2e1b; --vcs-conflict: #d5441c; --vcs-ignored: #c26a00;
   --vcs-gutter-added: #5fb865; --vcs-gutter-modified: #6f9ef8; --vcs-gutter-deleted: #868a91;
   --vcs-selected-focus: #d4e2ff; --vcs-blame: #8c8c8c; --vcs-dot: #3574f0; --vcs-shadow: #0003;
   --vcs-ref-bg: #f8edc8; --vcs-ref-fg: #7d5f00; --vcs-ref-head-bg: #dcefdc; --vcs-ref-head-fg: #067d17;

@@ -46,6 +46,7 @@
 
   let repo = null; // git:status result while the project is a repository
   const byPath = new Map(); // lower-cased path -> changed file
+  const ignored = new Set(); // lower-cased paths of ignored files and folders (a folder covers what it holds)
   let lastHead;
 
   // ---------- notifications and the Git console ----------
@@ -93,7 +94,7 @@
   let refreshSeq = 0;
   let refreshTimer;
   const scheduleRefresh = (ms = 200) => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, ms); };
-  const treeSig = () => [...byPath.values()].map((f) => `${key(f.path)}:${f.status}`).sort().join('|');
+  const treeSig = () => [...byPath.values()].map((f) => `${key(f.path)}:${f.status}`).sort().join('|') + '#' + [...ignored].sort().join('|');
 
   async function refresh() {
     const root = ide.root;
@@ -105,6 +106,8 @@
     repo = st.isRepo ? st : null;
     byPath.clear();
     for (const f of repo?.files || []) byPath.set(key(f.path), f);
+    ignored.clear();
+    for (const p of repo?.ignored || []) ignored.add(key(p));
     for (const k of [...selection]) if (!byPath.has(k)) selection.delete(k);
     prefillMergeMessage();
     const head = repo?.head || null;
@@ -120,9 +123,16 @@
     updateVisibleGutters();
   }
 
+  // Ignored by .gitignore: the path itself or a folder above it (git lists an ignored folder once, not its files).
+  const isIgnored = (p) => {
+    if (!ignored.size) return false;
+    for (let k = key(p); k && k !== key(ide.root || ''); k = k.slice(0, Math.max(k.lastIndexOf('\\'), k.lastIndexOf('/')))) if (ignored.has(k)) return true;
+    return false;
+  };
   ide.registerTreeDecorator((entry) => {
     const f = !entry.dir && byPath.get(key(entry.path));
-    return f ? { color: COLORS[f.status] } : null;
+    if (f) return { color: COLORS[f.status] };
+    return isIgnored(entry.path) ? { color: 'var(--vcs-ignored)' } : null;
   });
 
   // ---------- branch widget ----------

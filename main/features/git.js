@@ -66,10 +66,11 @@ async function status(root) {
   const info = await repoInfo(root);
   if (!info) return { isRepo: false };
   const [st, remotes] = await Promise.all([
-    git(root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']),
+    // --ignored=matching lists an ignored folder once ("build/") instead of every file in it.
+    git(root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--ignored=matching']),
     git(root, ['remote']),
   ]);
-  const res = { isRepo: true, top: info.top, branch: null, head: null, upstream: null, ahead: 0, behind: 0, files: [],
+  const res = { isRepo: true, top: info.top, branch: null, head: null, upstream: null, ahead: 0, behind: 0, files: [], ignored: [],
     remotes: remotes.out.split(/\r?\n/).filter(Boolean) };
   const parts = st.out.split('\0');
   for (let i = 0; i < parts.length; i++) {
@@ -80,6 +81,7 @@ async function status(root) {
     else if (line.startsWith('# branch.upstream ')) res.upstream = line.slice(18);
     else if (line.startsWith('# branch.ab ')) [res.ahead, res.behind] = line.slice(12).split(' ').map((n) => Math.abs(Number(n)));
     else if (line.startsWith('? ')) res.files.push({ status: 'unversioned', rel: line.slice(2) });
+    else if (line.startsWith('! ') && res.ignored.length < 20000) res.ignored.push(toAbs(root, info, line.slice(2).replace(/\/$/, '')));
     else if (line.startsWith('1 ')) {
       const f = line.split(' ');
       res.files.push({ status: STATUS_OF(f[1]), xy: f[1], rel: f.slice(8).join(' ') });
