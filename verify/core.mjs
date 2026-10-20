@@ -65,6 +65,11 @@ try {
   check(await js(`document.querySelector('#sidePanel').classList.contains('hidden')`), 'Alt+1 hides project panel');
   await press('Alt+1');
   check(await js(`!document.querySelector('#sidePanel').classList.contains('hidden')`), 'Alt+1 shows project panel');
+
+  // ---------- console links, process input ----------
+  const traceback = '  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "C:\\p\\app.py", line 3, in <module>\n';
+  const links = await js(`(() => { const host = document.createElement('div'); ide.ui.console(host).append(${JSON.stringify(traceback)}); return [...host.querySelectorAll('a')].map(a => a.textContent); })()`);
+  check(links.length === 1 && links[0] === 'File "C:\\p\\app.py", line 3', `traceback frames without a file ("<frozen runpy>") are not links (${JSON.stringify(links)})`);
   await shot('final.png');
 } catch (err) {
   t.check(false, err.message);

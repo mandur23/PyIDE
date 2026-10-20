@@ -126,7 +126,8 @@ ide.proc = {
 
 // ---------- UI primitives ----------
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-const TRACEBACK = /File "([^"]+)", line (\d+)/g;
+// Frames from code without a file ("<string>", "<frozen runpy>", "<stdin>") are not links.
+const TRACEBACK = /File "([^"<][^"]*)", line (\d+)/g;
 
 ide.ui = {};
 
