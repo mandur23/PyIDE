@@ -290,24 +290,53 @@ function replaceForeign(paths, opts) {
   return { changed, count };
 }
 
+// A user's regex can backtrack for hours (`(a+)+$` on a long line), and every later scan waits behind it on the
+// worker; a search that runs past its limit is stopped (worker-host terminates the worker) and answers {stopped}.
+// PYIDE_FIND_TIMEOUT_MS shortens both search limits for the tests.
+const FIND_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 60000;
+const PREVIEW_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 30000;
+const REPLACE_TIMEOUT = 120000;
+const SUPERSEDED = () => ({ files: [], count: 0, superseded: true });
+const findOnWorker = (args, timeout, signal) => scan.with({ timeout, signal }, 'find', ...args).catch((e) => {
+  if (e.code === 'ABORT_ERR') return SUPERSEDED();
+  if (e.code === 'ETIMEDOUT') return { files: [], count: 0, stopped: timeout / 1000 };
+  return { files: [], count: 0, failed: e.message };
+});
+
 // The Find in Files dialog searches as the user types, and every search reads the whole project on the worker, one
 // after another. A preview search (`live`) therefore waits only behind the one running: a newer preview replaces it,
 // and the replaced one answers {superseded: true} at once instead of scanning the project for text nobody sees.
-let liveBusy = false;
+// A running preview that a newer one replaced is stopped once it has run for a second, so a slow pattern typed on
+// the way to the intended one does not hold up the search for that one.
+let liveBusy = null; // {ctl, started, stop}: the preview the worker runs
 let liveNext = null;
 function liveFind(args) {
-  return new Promise((resolve, reject) => {
-    liveNext?.resolve({ files: [], count: 0, superseded: true });
-    liveNext = { args, resolve, reject };
+  return new Promise((resolve) => {
+    liveNext?.resolve(SUPERSEDED());
+    liveNext = { args, resolve };
+    if (liveBusy && !liveBusy.stop) {
+      const { ctl, started } = liveBusy;
+      liveBusy.stop = setTimeout(() => ctl.abort(), Math.max(0, started + 1000 - Date.now()));
+    }
     pumpLive();
   });
 }
+// A search for the Find tool window closes the dialog, so its previews are dropped and a running one stops now.
+function dropPreviews() {
+  liveNext?.resolve(SUPERSEDED());
+  liveNext = null;
+  liveBusy?.ctl.abort();
+}
 function pumpLive() {
   if (liveBusy || !liveNext) return;
-  const { args, resolve, reject } = liveNext;
+  const { args, resolve } = liveNext;
   liveNext = null;
-  liveBusy = true;
-  scan('find', ...args).then(resolve, reject).finally(() => { liveBusy = false; pumpLive(); });
+  const busy = (liveBusy = { ctl: new AbortController(), started: Date.now(), stop: null });
+  findOnWorker(args, PREVIEW_TIMEOUT, busy.ctl.signal).then(resolve).finally(() => {
+    clearTimeout(busy.stop);
+    liveBusy = null;
+    pumpLive();
+  });
 }
 
 // One script, two modes: `outline` parses source from stdin into a tree; `index` reads a JSON list of paths and returns flat symbols per file.
@@ -433,14 +462,21 @@ else:
     print(json.dumps(result))
 `;
 
-function runAst(interp, mode, input) {
+// Resolves to null when Python fails or does not answer within `timeout` ms (then it is killed with its children:
+// interp.cmd can be a launcher such as py.exe).
+function runAst(interp, mode, input, timeout) {
   return new Promise((resolve) => {
     let p;
     try { p = spawn(interp.cmd, [...interp.args, '-c', AST_SCRIPT, mode], { windowsHide: true }); } catch { return resolve(null); }
     let out = '';
+    const timer = setTimeout(() => {
+      resolve(null);
+      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true }).on('error', () => {});
+      else p.kill();
+    }, timeout);
     p.stdout.on('data', (d) => (out += d));
-    p.on('error', () => resolve(null));
-    p.on('close', () => { try { resolve(JSON.parse(out)); } catch { resolve(null); } });
+    p.on('error', () => { clearTimeout(timer); resolve(null); });
+    p.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(out)); } catch { resolve(null); } });
     p.stdin.on('error', () => {});
     p.stdin.end(input, 'utf8');
   });
@@ -461,7 +497,7 @@ async function buildIndex(interp, root) {
   }
   for (let i = 0; i < stale.length; i += 400) {
     const batch = stale.slice(i, i + 400);
-    const res = (await runAst(interp, 'index', JSON.stringify(batch.map((b) => b.p)))) || {};
+    const res = (await runAst(interp, 'index', JSON.stringify(batch.map((b) => b.p)), 120000)) || {};
     for (const { p, mtime } of batch) symbolCache.set(p.toLowerCase(), { path: p, mtime, symbols: res[p] || [] });
   }
   // With the separator, so indexing C:\proj does not drop the cached files of C:\proj2.
@@ -476,16 +512,24 @@ async function buildIndex(interp, root) {
 }
 
 exports.register = ({ ipcMain }) => {
-  ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides]) : scan('find', root, opts, overrides)));
+  ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides])
+    : (dropPreviews(), findOnWorker([root, opts, overrides], FIND_TIMEOUT))));
+  // {changed, count}, or {stopped} when the worker was stopped partway: some of `paths` may then have been replaced.
   ipcMain.handle('search:replace', async (_e, opts, paths) => {
-    const { changed, count, foreign } = await scan('replace', paths, opts);
-    const other = replaceForeign(foreign, opts);
-    return { changed: [...changed, ...other.changed], count: count + other.count };
+    let res;
+    try {
+      res = await scan.with({ timeout: REPLACE_TIMEOUT, resend: false }, 'replace', paths, opts);
+    } catch (e) {
+      if (e.code === 'ETIMEDOUT') return { changed: [], count: 0, stopped: REPLACE_TIMEOUT / 1000 };
+      throw e;
+    }
+    const other = replaceForeign(res.foreign, opts);
+    return { changed: [...res.changed, ...other.changed], count: res.count + other.count };
   });
   // The same replacement applied to an unsaved buffer's text -> {text, count}.
   ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, buildRegex(opts), replacementOf(opts)));
   ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));
-  ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text)) || { error: 'Python interpreter failed' });
+  ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text, 30000)) || { error: 'Python interpreter failed' });
   ipcMain.handle('search:symbols', (_e, interp, root) => {
     const run = indexQueue.then(() => buildIndex(interp, root));
     indexQueue = run.catch(() => {});

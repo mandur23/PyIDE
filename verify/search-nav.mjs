@@ -2,7 +2,7 @@ import { readFileSync, statSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
-const t = await launch({ fixture: 'search-nav', port: 9403 });
+const t = await launch({ fixture: 'search-nav', port: 9403, env: { PYIDE_FIND_TIMEOUT_MS: '4000' } });
 const { js, until, press, type, click, shot, cdp, project } = t;
 let seenErrors = 0;
 const check = (ok, label) => {
@@ -271,6 +271,35 @@ try {
   // Preview searches typed in a row: the one waiting behind a running search is replaced by the newer one.
   const live = await js(`Promise.all(['greet', 'compute', 'calculate'].map((q) => ide.api.invoke('search:find', ide.root, { ...${opts('')}, query: q }, {}, { live: true })))`);
   check(!live[0].superseded && live[1].superseded && !live[2].superseded && live[2].count > 0, `a queued preview search is superseded by a newer one (${J(live.map((r) => r.superseded || r.count))})`);
+
+  // A catastrophic regex backtracks for hours on this line. The search is stopped at its limit (4 s in this suite,
+  // PYIDE_FIND_TIMEOUT_MS) with a readable message, and the scans queued behind it still answer.
+  writeFileSync(path.join(project, 'backtrack.txt'), `${'a'.repeat(40)}b\n`);
+  const slow = `{ ...${opts('(a+)+$')}, regex: true }`;
+  let t0 = Date.now();
+  const stuck = await js(`Promise.all([ide.api.invoke('search:find', ide.root, ${slow}, {}), ide.api.invoke('search:todos', ide.root, {}), ide.api.invoke('search:find', ide.root, ${opts('greet')}, {})])`);
+  check(stuck[0].stopped === 4 && stuck[0].count === 0 && stuck[1].count > 0 && stuck[2].count > 0 && Date.now() - t0 < 12000,
+    `a runaway regex search is stopped and the TODO scan and search queued behind it answer (${J([stuck[0], stuck[1].count, stuck[2].count])}, ${Date.now() - t0} ms)`);
+  // A preview replaced by a newer one is stopped after a second instead of running to the limit.
+  t0 = Date.now();
+  const typed = await js(`(async () => {
+    const a = ide.api.invoke('search:find', ide.root, ${slow}, {}, { live: true });
+    await new Promise((r) => setTimeout(r, 200));
+    const b = ide.api.invoke('search:find', ide.root, ${opts('greet')}, {}, { live: true });
+    return [await a, await b];
+  })()`);
+  check(typed[0].superseded && typed[1].count > 0 && Date.now() - t0 < 3500,
+    `a running runaway preview is stopped when a newer preview replaces it (${J(typed.map((r) => r.superseded || r.count))}, ${Date.now() - t0} ms)`);
+  // The Find tool window says why it shows nothing.
+  await js(`ide.editor.focus()`);
+  await press('Ctrl+Shift+F');
+  await until(`document.activeElement?.id === 'snQuery'`, 'find dialog for the runaway regex');
+  await setToggle('regex', true);
+  await setQuery('(a+)+$');
+  await press('Enter');
+  check(await until(`(document.querySelector('#snFindHead')?.textContent || '').includes('The search was stopped after 4 seconds')`, 'stopped message', 15000).then(() => true, () => false),
+    'the Find tool window reports a search stopped at its time limit');
+  writeFileSync(path.join(project, 'backtrack.txt'), 'gone\n');
 
   // ---- Find in a directory from the project tree ----
   await press('Alt+1');

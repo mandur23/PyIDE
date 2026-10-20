@@ -14,6 +14,7 @@
   const userText = (node) => { node.dataset.userText = ''; return node; };
   const KIND = { class: tr('class'), method: tr('method'), function: tr('function'), field: tr('field'), variable: tr('variable'), property: tr('property') };
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+  const ipcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   function highlight(text, ranges, cls = 'sn-hit') {
@@ -93,8 +94,13 @@
   const searchOpts = (o) => ({ query: o.query, caseSensitive: o.caseSensitive, words: o.words, regex: o.regex,
     mask: o.useMask ? o.mask : '', dir: o.dir || null, replacement: o.replacement || '' });
   // live: a preview while typing, which a newer preview may replace before it runs ({superseded: true}).
-  const runFind = (o, live = false) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts(), { live });
-  const summaryOf = (res) => (res.error ? tr('Invalid regular expression: {message}', { message: res.error })
+  // A result with `stopped` (seconds) ran past main's time limit, `failed` is a search the worker could not run.
+  const runFind = (o, live = false) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts(), { live })
+    .catch((e) => ({ files: [], count: 0, failed: ipcError(e) }));
+  const hasError = (res) => !!(res.error || res.stopped || res.failed);
+  const summaryOf = (res) => (res.stopped ? tr('The search was stopped after {seconds} seconds. Try a simpler pattern or a smaller scope.', { seconds: res.stopped })
+    : res.failed ? tr('Search failed: {message}', { message: res.failed })
+    : res.error ? tr('Invalid regular expression: {message}', { message: res.error })
     : nt2(res.count, res.files.length, ['{count} match in {files} file', '{count} match in {files} files', '{count} matches in {files} file', '{count} matches in {files} files'])
       + (res.truncated ? ` ${tr('(results truncated)')}` : ''));
 
@@ -150,7 +156,7 @@
       : tr("Find: '{query}'", { query: o.query })));
     const scope = [o.dir ? tr('directory {name}', { name: rel(o.dir) || basename(o.dir) }) : tr('project'),
       o.useMask && o.mask ? tr('mask {mask}', { mask: o.mask }) : ''].filter(Boolean).join(', ');
-    findHead.append(el('span', res.error ? 'sn-error' : 'muted', `${summaryOf(res)} · ${scope}`));
+    findHead.append(el('span', hasError(res) ? 'sn-error' : 'muted', `${summaryOf(res)} · ${scope}`));
     if (note) findHead.append(el('span', 'sn-note', note));
     findHead.append(el('span', 'spacer'));
     if (replace && res.files.length) {
@@ -165,7 +171,7 @@
       g.dataset.path = f.path.toLowerCase();
       findList.append(g);
     }
-    if (!res.files.length && !res.error) findList.append(el('div', 'list-row muted', tr('No matches found')));
+    if (!res.files.length && !hasError(res)) findList.append(el('div', 'list-row muted', tr('No matches found')));
     findTw.setBadge('');
   }
 
@@ -179,7 +185,7 @@
 
   async function replaceAll(o, res) {
     res = res || (await runFind(o));
-    if (res.error || !res.files.length) return showFindResults(o, true);
+    if (hasError(res) || !res.files.length) return showFindResults(o, true);
     const changed = [];
     const onDisk = [];
     let count = 0;
@@ -196,14 +202,23 @@
         changed.push(f.path);
       } else onDisk.push(f.path);
     }
-    const r = await ide.api.invoke('search:replace', searchOpts(o), onDisk);
+    let r;
+    try {
+      r = await ide.api.invoke('search:replace', searchOpts(o), onDisk);
+    } catch (e) {
+      r = { changed: [], count: 0, failed: ipcError(e) };
+    }
     count += r.count;
     changed.push(...r.changed);
-    await ide.reloadFromDisk(r.changed);
+    // Stopped or failed partway, any of the files may have been rewritten.
+    const settled = r.stopped || r.failed ? onDisk : r.changed;
+    await ide.reloadFromDisk(settled);
     await ide.refreshTree();
     ide.renderTabs();
-    ide.api.invoke('search:invalidate', changed);
+    ide.api.invoke('search:invalidate', r.stopped || r.failed ? [...changed, ...onDisk] : changed).catch(() => {});
     refreshTodos();
+    if (r.stopped) return showFindResults(o, true, tr('Replace was stopped after {seconds} seconds; some files may have been changed.', { seconds: r.stopped }));
+    if (r.failed) return showFindResults(o, true, tr('Replace failed: {message}', { message: r.failed }));
     await showFindResults(o, true, nt2(count, changed.length, ['Replaced {count} occurrence in {files} file', 'Replaced {count} occurrence in {files} files',
       'Replaced {count} occurrences in {files} file', 'Replaced {count} occurrences in {files} files']));
   }
@@ -281,7 +296,7 @@
       const res = await runFind(o, true);
       if (my !== seq || res.superseded) return;
       status.textContent = summaryOf(res);
-      status.classList.toggle('sn-error', !!res.error);
+      status.classList.toggle('sn-error', hasError(res));
       preview.replaceChildren();
       let n = 0;
       for (const f of res.files) {
@@ -726,9 +741,14 @@
     }));
   }
 
+  // An empty index when the scan fails (the worker stopped), so callers and the warm-up after a project opens never reject.
   const loadIndex = () => {
     const interp = ide.currentInterp();
-    return interp && ide.root ? ide.api.invoke('search:symbols', interp, ide.root) : Promise.resolve([]);
+    if (!interp || !ide.root) return Promise.resolve([]);
+    return ide.api.invoke('search:symbols', interp, ide.root).catch((e) => {
+      console.warn('symbol index failed', e);
+      return [];
+    });
   };
 
   async function gotoSymbol(classesOnly) {
@@ -763,7 +783,13 @@
 
   async function refreshTodosNow() {
     if (!ide.root) return;
-    const res = await ide.api.invoke('search:todos', ide.root, dirtyTexts());
+    let res;
+    try {
+      res = await ide.api.invoke('search:todos', ide.root, dirtyTexts());
+    } catch (e) {
+      console.warn('TODO scan failed', e);
+      return;
+    }
     todoHead.replaceChildren(el('span', null, nt2(res.count, res.files.length, ['Found {count} TODO item in {files} file',
       'Found {count} TODO item in {files} files', 'Found {count} TODO items in {files} file', 'Found {count} TODO items in {files} files'])));
     todoList.replaceChildren(...res.files.map((f) => {
@@ -791,12 +817,12 @@
     setTimeout(loadIndex, 1500);
   });
   ide.on('fileSaved', (tab) => {
-    ide.api.invoke('search:invalidate', [tab.path]);
+    ide.api.invoke('search:invalidate', [tab.path]).catch(() => {});
     refreshTodos();
   });
   ide.on('filesChanged', (c = {}) => {
     const paths = [...(c.created || []), ...(c.deleted || []), ...(c.renamed || []).flat()];
-    ide.api.invoke('search:invalidate', paths.length ? paths : null);
+    ide.api.invoke('search:invalidate', paths.length ? paths : null).catch(() => {});
     refreshTodos();
   });
   ide.on('toolWindowShown', (id) => id === 'Structure' && refreshStructure());
