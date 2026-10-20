@@ -84,39 +84,47 @@
     tabBar.insertBefore(s.tab, tabBar.querySelector('.term-new'));
     select(s, focus);
     s.fit.fit();
+    const size = { cols: s.term.cols, rows: s.term.rows };
     const r = await ide.api.invoke('pty:create', {
       shell: shell || ide.settings.get('terminal.shell', 'powershell'),
       cwd: cwd || ide.root || undefined,
-      cols: s.term.cols,
-      rows: s.term.rows,
+      ...size,
       command,
       interpreter: ide.settings.get('terminal.activateVenv', true) ? ide.currentInterp()?.executable : undefined,
       envFiles: ide.settings.get(LOAD_ENV_FILE, true) && ide.root ? [joinPath(ide.root, '.env')] : [],
       // With a remote project interpreter (WSL, SSH, Docker), a plain new session is a shell in that target.
       target: !shell && !command ? ide.currentInterp()?.target : undefined,
     });
+    const pending = orphanOutput.get(r.id) || [];
+    orphanOutput.delete(r.id);
+    // The tab was closed while the shell started (a remote target can take seconds): end it instead of orphaning it.
+    if (s.closed) { closedIds.add(r.id); ide.api.invoke('pty:kill', r.id); return s; }
     s.id = r.id;
     s.shellName = r.shellName;
     s.name ??= r.shellName;
     renderTab(s);
-    for (const d of orphanOutput.get(r.id) || []) s.term.write(d);
-    orphanOutput.delete(r.id);
+    for (const d of pending) s.term.write(d);
     s.term.onData((data) => !s.exited && ide.api.send('pty:write', { id: s.id, data }));
     s.term.onResize(({ cols, rows }) => ide.api.send('pty:resize', { id: s.id, cols, rows }));
+    // A resize while the shell started (the panel settling after it opened) did not reach the pty.
+    if (s.term.cols !== size.cols || s.term.rows !== size.rows) ide.api.send('pty:resize', { id: s.id, cols: s.term.cols, rows: s.term.rows });
     s.term.onTitleChange((title) => { if (kind === 'shell' && title) { s.title = title; renderTab(s); } });
     return s;
   }
 
   const byId = (id) => sessions.find((s) => s.id === id);
-  // Output that arrives before pty:create has answered is kept until the session knows its id.
+  // Output that arrives before pty:create has answered is kept until the session knows its id. Sessions closed
+  // here may still print until their exit arrives; that output is dropped.
   const orphanOutput = new Map();
+  const closedIds = new Set();
   ide.api.on('pty:data', ({ id, data }) => {
     const s = byId(id);
     if (s) s.term.write(data);
-    else orphanOutput.set(id, [...(orphanOutput.get(id) || []), data]);
+    else if (!closedIds.has(id)) (orphanOutput.get(id) || orphanOutput.set(id, []).get(id)).push(data);
   });
   ide.api.on('pty:exit', ({ id, code }) => {
     const s = byId(id);
+    closedIds.delete(id);
     if (!s) return;
     s.exited = true;
     s.term.write(`\r\n\x1b[90m${tr('Process exited with code {code}. Press Enter to close this tab.', { code })}\x1b[0m\r\n`);
@@ -137,7 +145,8 @@
   }
 
   function closeSession(s) {
-    if (s.id && !s.exited) ide.api.invoke('pty:kill', s.id);
+    s.closed = true;
+    if (s.id && !s.exited) { closedIds.add(s.id); ide.api.invoke('pty:kill', s.id); }
     s.term.dispose();
     s.el.remove();
     s.tab.remove();

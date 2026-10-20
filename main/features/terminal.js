@@ -120,12 +120,16 @@ exports.register = ({ ipcMain, app }) => {
         buffer = '';
       });
     });
+    // Closing the window ends its shells; a shell that ends first takes its listener with it, or every session ever
+    // opened would keep one on the window (and its proc alive).
+    const onWindowGone = () => { try { proc.kill(); } catch {} sessions.delete(id); };
+    owner.once('destroyed', onWindowGone);
     proc.onExit(({ exitCode }) => {
       release?.();
       sessions.delete(id);
+      owner.removeListener('destroyed', onWindowGone);
       if (!owner.isDestroyed()) setImmediate(() => owner.send('pty:exit', { id, code: exitCode }));
     });
-    owner.once('destroyed', () => { try { proc.kill(); } catch {} sessions.delete(id); });
     return { id, shell: shell.id, shellName: shell.name, pid: proc.pid };
   });
 

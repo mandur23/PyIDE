@@ -1,5 +1,6 @@
 // Real PTY terminal: interactive programs, Korean text, IDE shortcuts that stay out of the terminal's way,
 // clipboard, shells, file links, and the Claude Code launcher (run against a stand-in claude.cmd).
+import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -138,6 +139,25 @@ try {
   const before = await js('ide.terminal.sessions().length');
   await js(`document.querySelector('.term-tab.active .term-tab-close').click()`);
   check((await js('ide.terminal.sessions().length')) === before - 1, 'closing a tab ends its session');
+
+  // A tab closed while its shell is still starting must not leave that shell running unseen.
+  const marker = `pyide-orphan-${Date.now()}`;
+  const shellsWith = (m) => Number(execFileSync('powershell', ['-NoProfile', '-Command',
+    `@(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${m}') }).Count`],
+  { encoding: 'utf8' }).trim());
+  const closedEarly = await js(`(async () => {
+    const tabs = () => document.querySelectorAll('.term-tab').length;
+    const n = tabs();
+    ide.terminal.open({ shell: 'cmd', command: 'echo ${marker} && ping -n 60 127.0.0.1 >nul' });
+    for (let i = 0; tabs() === n && i < 1000; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r)); // no click lands in the same task (xterm finishes setting up in a timer)
+    const s = ide.terminal.sessions().at(-1);
+    if (s.id !== undefined) return 'the shell had already started';
+    [...document.querySelectorAll('.term-tab')].pop().querySelector('.term-tab-close').click();
+    return 'closed';
+  })()`);
+  await sleep(3000);
+  check(closedEarly === 'closed' && shellsWith(marker) === 0, `closing a tab while its shell starts ends that shell (${closedEarly}, ${shellsWith(marker)} left)`);
   await shot('terminal.png');
 } catch (err) {
   check(false, err.message);
