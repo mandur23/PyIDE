@@ -123,7 +123,11 @@ try {
   check(disk('d.py') === 'external = True\n' && await dirty('d.py'), 'a file changed on disk is not overwritten by auto save');
   check(await js(`!document.querySelector('#autosaveStatus').classList.contains('hidden') && document.querySelector('#autosaveStatus').textContent.includes('d.py changed on disk')`),
     'the status bar names the file auto save left alone');
-  await save('d.py');
+  // The explicit save asks first (File Cache Conflict, verify/external-changes.mjs); keeping the editor text writes it.
+  const saving = save('d.py');
+  await until(`document.querySelector('.dialog-title')?.textContent === 'File Cache Conflict'`, 'file cache conflict');
+  await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Keep Memory Changes').click()`);
+  await saving;
   check(disk('d.py').startsWith('# mine\n') && await js(`document.querySelector('#autosaveStatus').classList.contains('hidden')`), 'an explicit save still writes it and clears the warning');
 
   // ---------- actions on save ----------

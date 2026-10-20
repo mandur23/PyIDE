@@ -146,7 +146,12 @@
       get title() { return basename(doc.path); },
       get model() { return doc.model; },
       get savedVersion() { return doc.savedVersion; },
-      set savedVersion(v) { doc.savedVersion = v; },
+      // A plugin marking the tab saved (it just wrote or reloaded the file, e.g. a git rollback) means the editor text is
+      // what is on disk; without the disk fingerprint the next save would report a false File Cache Conflict.
+      set savedVersion(v) {
+        doc.savedVersion = v;
+        if (v === doc.model.getAlternativeVersionId()) Object.assign(doc, { diskHash: textHash(doc.model.getValue()), conflict: false });
+      },
     };
   }
 
@@ -854,10 +859,44 @@
     return false;
   }
 
-  async function saveDoc(doc, { auto = false } = {}) {
+  // An explicit save of a file that also changed on disk asks first, as PyCharm's File Cache Conflict does, instead of
+  // silently writing over the other change (a git pull in the terminal, another editor). True: go ahead and write.
+  async function confirmOverwrite(doc) {
+    if (doc.untitled || doc.model.uri.scheme !== 'file') return true;
+    let r = null;
+    try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { return true; } // gone: write recreates it
+    if (r?.text === undefined || textHash(r.text) === doc.diskHash) return true;
+    if (r.text === doc.model.getValue()) return true;
+    return new Promise((resolve) => {
+      let choice = false;
+      ide.ui.dialog({
+        title: tr('File Cache Conflict'),
+        body: el('div', 'dialog-message', tr('{name} was changed both in the editor and on disk.', { name: basename(doc.path) })),
+        width: 480,
+        onClose: () => resolve(choice),
+        buttons: [
+          { label: tr('Load File System Changes'), run: () => {
+            if (!doc.model.isDisposed()) {
+              doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
+              doc.savedVersion = doc.model.getAlternativeVersionId();
+              Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
+              clearChanged(doc);
+              renderAllTabs();
+            }
+          } },
+          // The disk version is now acknowledged: a save that then fails (read-only file) does not ask again.
+          { label: tr('Keep Memory Changes'), primary: true, run: () => { choice = true; doc.diskHash = textHash(r.text); } },
+          { label: tr('Cancel') },
+        ],
+      });
+    });
+  }
+
+  async function saveDoc(doc, { auto = false, overwrite = false } = {}) {
     while (doc.saving) await doc.saving;
     if (!docDirty(doc) || doc.model.isDisposed()) return;
     if (auto && !(await autoSavable(doc))) return;
+    if (!auto && !overwrite && !(await confirmOverwrite(doc))) return;
     let done;
     doc.saving = new Promise((r) => { done = r; });
     try { await writeDoc(doc, auto); } finally { doc.saving = null; done(); }
@@ -890,7 +929,8 @@
     for (const t of tabsOfDoc(doc)) t.preview = false;
     ide.emit('fileSaved', tab);
   }
-  ide.saveTab = async (tab) => { if (tab?.doc) await saveDoc(tab.doc); renderAllTabs(); };
+  // overwrite: the user already chose to write over a disk change (no File Cache Conflict question).
+  ide.saveTab = async (tab, { overwrite = false } = {}) => { if (tab?.doc) await saveDoc(tab.doc, { overwrite }); renderAllTabs(); };
   ide.saveAll = async () => {
     await Promise.all([...docs.values()].map((d) => saveDoc(d)));
     renderAllTabs();
@@ -918,6 +958,32 @@
     }
     renderAllTabs();
   };
+
+  // ---------- files changed outside the IDE ----------
+  // Open documents follow the disk: an unmodified one reloads; a modified one is marked, and its next explicit save
+  // asks (confirmOverwrite). The project watcher (main/project-watch.js) reports changes; window focus checks again,
+  // since a watcher can miss changes (network drives, an overflowed change buffer).
+  async function checkDisk(list) {
+    for (const doc of list) {
+      if (doc.untitled || doc.saving || doc.model.isDisposed() || doc.model.uri.scheme !== 'file') continue;
+      let r;
+      try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { continue; }
+      if (r?.text === undefined || doc.model.isDisposed() || doc.saving || textHash(r.text) === doc.diskHash) continue;
+      if (!docDirty(doc)) await ide.reloadFromDisk([doc.path]);
+      else doc.conflict = true;
+    }
+  }
+  const watchProject = (root) => { if (!ide.detached) ide.api.invoke('watch:project', root || null).catch(() => {}); };
+  ide.on('projectOpened', watchProject);
+  ide.on('projectClosed', () => watchProject(null));
+  let treeTimer = null;
+  ide.api.on('watch:changed', ({ root, paths, overflow }) => {
+    if (!ide.root || !samePath(root, ide.root)) return;
+    clearTimeout(treeTimer);
+    treeTimer = setTimeout(() => ide.refreshTree(), 200);
+    checkDisk([...docs.values()].filter((d) => overflow || paths.some((p) => samePath(p, d.path))));
+  });
+  window.addEventListener('focus', () => checkDisk([...docs.values()]));
 
   // ---------- status bar: encoding ----------
   const ENCODING_LABEL = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 BOM', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE', cp949: 'CP949 (EUC-KR)' };

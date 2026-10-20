@@ -90,7 +90,7 @@
     const r = status.getBoundingClientRect();
     ide.ui.contextMenu(r.left, r.top - 8, [...skipped.keys()].flatMap((path) => [
       { header: ide.util.rel(path) },
-      { label: tr('Save (overwrite the file on disk)'), run: () => ide.saveTab(ide.findTab(path)) },
+      { label: tr('Save (overwrite the file on disk)'), run: () => ide.saveTab(ide.findTab(path), { overwrite: true }) },
       { label: tr('Reload from disk (discard changes in the editor)'), run: async () => {
         const doc = ide.getDocument(path);
         if (!doc) return;

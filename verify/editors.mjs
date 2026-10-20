@@ -190,6 +190,10 @@ try {
   t.cdp('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 0)' });
   await until(`document.querySelector('.dialog-title')?.textContent === 'Save Changes?'`, 'close confirmation (main window)', 8000);
   await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Save All').click()`);
+  // notes.txt also changed on disk above: unless the project watcher already reloaded it before the typing, the save
+  // asks first (File Cache Conflict, covered by verify/external-changes.mjs) and keeping the editor text goes on.
+  await until(`window.__alerts.length > 0 || [...document.querySelectorAll('.dialog-title')].some(n => n.textContent === 'File Cache Conflict')`, 'save error or conflict', 8000);
+  await js(`([...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Keep Memory Changes')?.click(), true)`);
   await until(`window.__alerts.length > 0 && !document.querySelector('.dialog-backdrop')`, 'save error shown');
   await sleep(800);
   check(await js(`ide.isDirty(${notesTab}) && window.__alerts[0].startsWith('Could not save notes.txt: ')`), 'Save All that fails to write keeps the window open with the file still modified');

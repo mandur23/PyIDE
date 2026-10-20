@@ -279,7 +279,7 @@ const featureContext = {
 // only callers of feature channels.
 let featuresRegistered = null;
 function registerFeatures() {
-  const files = [require.resolve('./main/new-project'), ...plugins.mainModules()];
+  const files = [require.resolve('./main/new-project'), require.resolve('./main/project-watch'), ...plugins.mainModules()];
   featuresRegistered = new Promise((resolve) => {
     const next = (i) => {
       if (i === files.length) return resolve();
