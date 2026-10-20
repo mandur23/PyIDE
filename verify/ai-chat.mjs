@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
@@ -306,6 +307,10 @@ try {
   check(big.stdin.length < 25000 && /more lines truncated/.test(big.stdin) && big.stdin.includes('big.py') && big.stdin.includes('+value_0 = 0'),
     `a huge diff is cut at line boundaries before it is sent (${big.stdin.length} characters for a ${20000 * 34}-character file)`);
   check(/in English/.test(big.system) && (await js(`document.querySelector('.vcs-msg').value`)) === 'chore: add generated values', 'the language setting switches the message to English');
+  // Only the start of a huge diff is read: git is stopped once enough has come, instead of buffering all of it.
+  const { git: readGit } = createRequire(import.meta.url)('../main/features/ai-chat.js');
+  const head = await readGit(t.project, ['diff', '--cached'], { maxBytes: 4096 });
+  check(head.capped && head.out.startsWith('diff --git') && head.out.length < 4096 + 65536, `reading a diff stops at the size limit (${head.out.length} characters read)`);
   await shot('commit.png');
 } catch (err) {
   check(false, err.message);

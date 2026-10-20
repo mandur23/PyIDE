@@ -50,22 +50,34 @@ function chatPrompt({ messages, context = [] }) {
 }
 
 // ---------- git ----------
-function git(cwd, args, input) {
+// maxBytes: stop reading (and stop git) once this much output has come; the result then has capped: true.
+function git(cwd, args, { input, maxBytes = Infinity } = {}) {
   return new Promise((resolve) => {
     const child = spawn('git', ['-c', 'core.quotepath=off', ...args], {
       cwd, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' },
     });
     const out = [];
-    child.stdout.on('data', (d) => out.push(d));
+    let size = 0;
+    let capped = false;
+    child.stdout.on('data', (d) => {
+      if (capped) return;
+      out.push(d);
+      size += d.length;
+      if (size > maxBytes) { capped = true; child.kill(); }
+    });
     child.stderr.on('data', () => {});
-    child.on('error', () => resolve({ code: -1, out: '' }));
-    child.on('close', (code) => resolve({ code, out: Buffer.concat(out).toString('utf8') }));
+    child.on('error', () => resolve({ code: -1, out: '', capped }));
+    child.on('close', (code) => resolve({ code, out: Buffer.concat(out).toString('utf8'), capped }));
+    child.stdin.on('error', () => {});
     if (input !== undefined) child.stdin.end(input, 'utf8'); else child.stdin.end();
   });
 }
 
 const DIFF_FLAGS = ['--no-color', '--no-ext-diff', '-M'];
 const MAX_DIFF_CHARS = 16000;
+// Only the start of a huge diff reaches the prompt, so only that much is read: a diff of generated or data files
+// can be hundreds of megabytes.
+const MAX_DIFF_READ = 4 * 1024 * 1024;
 const MAX_SECTION_CHARS = 3000;
 
 // Cuts at a line boundary and says how much was left out.
@@ -113,9 +125,9 @@ function newFileDiff(top, rel) {
 async function collectDiff(root, files) {
   const top = (await git(root, ['rev-parse', '--show-toplevel'])).out.trim();
   if (!top) return { ok: false, code: 'not-repo', message: 'not a Git repository' };
-  const staged = await git(top, ['diff', '--cached', ...DIFF_FLAGS]);
+  const staged = await git(top, ['diff', '--cached', ...DIFF_FLAGS], { maxBytes: MAX_DIFF_READ });
   if (staged.out.trim()) {
-    const stat = (await git(top, ['diff', '--cached', '--stat=100', '--no-color'])).out;
+    const stat = (await git(top, ['diff', '--cached', '--stat=100', '--no-color'], { maxBytes: MAX_DIFF_READ })).out;
     return { ok: true, source: 'staged', stat, ...truncateDiff(staged.out) };
   }
   const rels = files.map((f) => ({ ...f, rel: path.relative(top, f.path).replace(/\\/g, '/') })).filter((f) => f.rel && !f.rel.startsWith('..'));
@@ -124,11 +136,14 @@ async function collectDiff(root, files) {
   const hasHead = (await git(top, ['rev-parse', '-q', '--verify', 'HEAD'])).code === 0;
   let diff = '';
   // git diff takes no --pathspec-from-file; batches keep the command line short.
-  for (let i = 0; i < tracked.length; i += 50) {
+  for (let i = 0; i < tracked.length && diff.length < MAX_DIFF_READ; i += 50) {
     const args = ['--literal-pathspecs', 'diff', ...(hasHead ? ['HEAD'] : []), ...DIFF_FLAGS, '--', ...tracked.slice(i, i + 50).map((f) => f.rel)];
-    diff += (await git(top, args)).out;
+    diff += (await git(top, args, { maxBytes: MAX_DIFF_READ - diff.length })).out;
   }
-  for (const f of rels.filter((x) => x.status === 'unversioned').slice(0, 50)) diff += newFileDiff(top, f.rel);
+  for (const f of rels.filter((x) => x.status === 'unversioned').slice(0, 50)) {
+    if (diff.length >= MAX_DIFF_READ) break;
+    diff += newFileDiff(top, f.rel);
+  }
   if (!diff.trim()) return { ok: false, code: 'empty', message: 'no changes' };
   const stat = rels.map((f) => `${f.status} ${f.rel}`).join('\n') + '\n';
   return { ok: true, source: 'selected', stat, ...truncateDiff(diff) };
@@ -224,3 +239,4 @@ exports.chatPrompt = chatPrompt;
 exports.truncateDiff = truncateDiff;
 exports.cleanMessage = cleanMessage;
 exports.collectDiff = collectDiff;
+exports.git = git;
