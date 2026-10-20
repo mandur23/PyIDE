@@ -22,5 +22,18 @@
   "Uninstalled {name}": "{name} 제거됨",
   "Failed to install {name} (exit code {code})": "{name} 설치 실패 (종료 코드 {code})",
   "Failed to upgrade {name} (exit code {code})": "{name} 업그레이드 실패 (종료 코드 {code})",
-  "Failed to uninstall {name} (exit code {code})": "{name} 제거 실패 (종료 코드 {code})"
+  "Failed to uninstall {name} (exit code {code})": "{name} 제거 실패 (종료 코드 {code})",
+  "Add to requirements": "요구 사항에 추가",
+  "Add {requirement} to {file}": "{file}에 {requirement} 추가",
+  "1 package not installed / outdated": "패키지 1개가 설치되지 않았거나 오래됨",
+  "{count} packages not installed / outdated": "패키지 {count}개가 설치되지 않았거나 오래됨",
+  "Package '{name}' is not installed": "'{name}' 패키지가 설치되지 않았습니다",
+  "Package requirement '{requirement}' is not satisfied: {version} is installed": "패키지 요구 사항 '{requirement}'이(가) 충족되지 않았습니다: {version}이(가) 설치되어 있습니다",
+  "Install": "설치",
+  "Installing…": "설치 중…",
+  "This project uses {tool}, but {tool} was not found.": "이 프로젝트는 {tool}을(를) 사용하지만 {tool}을(를) 찾을 수 없습니다.",
+  "Install uv…": "uv 설치…",
+  "Install with pip": "pip로 설치",
+  "Install {name}": "{name} 설치",
+  "Show Context Actions": "컨텍스트 액션 표시"
 }

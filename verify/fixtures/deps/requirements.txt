@@ -1,0 +1,3 @@
+# Dependencies of the deps fixture
+pyide-deps-tiny>=1.0
+Pyide_Deps_Other>=2.0  # names are case- and _/- insensitive
