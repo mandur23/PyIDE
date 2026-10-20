@@ -43,6 +43,7 @@ const CLIENT_CAPABILITIES = {
     references: {},
     documentHighlight: {},
     documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+    callHierarchy: { dynamicRegistration: false },
     codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['', 'quickfix', 'refactor', 'source', 'source.organizeImports'] } }, isPreferredSupport: true },
     rename: { prepareSupport: true },
     publishDiagnostics: { relatedInformation: true, tagSupport: { valueSet: [1, 2] }, versionSupport: true },

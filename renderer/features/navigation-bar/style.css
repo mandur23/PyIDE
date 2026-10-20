@@ -1,0 +1,39 @@
+:root {
+  --nb-icon-fg: #1e1f22; --nb-class: #548af7; --nb-method: #f0716b; --nb-function: #e8a33e; --nb-field: #d9b24a;
+  --nb-variable: #b189f5; --nb-property: #5fb865;
+}
+:root[data-theme="light"] {
+  --nb-icon-fg: #ffffff; --nb-class: #3574f0; --nb-method: #e55765; --nb-function: #d87a2b; --nb-field: #c29512;
+  --nb-variable: #8d5ae6; --nb-property: #3d9a50;
+}
+
+.nb-icon { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  font: 700 9px/1 'Segoe UI', sans-serif; color: var(--nb-icon-fg); background: var(--gray8); }
+.nb-icon.k-class { background: var(--nb-class); }
+.nb-icon.k-method { background: var(--nb-method); }
+.nb-icon.k-function { background: var(--nb-function); }
+.nb-icon.k-field { background: var(--nb-field); }
+.nb-icon.k-variable { background: var(--nb-variable); }
+.nb-icon.k-property { background: var(--nb-property); }
+
+/* A fixed height, so changing the crumbs never resizes the editor below. */
+.nb-bar { height: 24px; box-sizing: border-box; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 8px;
+  overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: none; background: var(--gray1);
+  border-bottom: 1px solid var(--gray3); font-size: 12px; color: var(--gray10); }
+.nb-bar::-webkit-scrollbar { display: none; }
+.nb-crumb { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
+.nb-crumb:hover { background: var(--gray3); color: var(--gray12); }
+.nb-crumb:last-child { color: var(--gray12); }
+.nb-sep { color: var(--gray7); flex-shrink: 0; }
+.nb-drop { color: var(--gray8); font-size: 10px; padding: 0 1px; }
+.nb-crumb:hover .nb-drop, .nb-drop:hover { color: var(--gray12); }
+.nb-menu .menu-item.nb-current .menu-label { font-weight: 600; }
+
+.nb-ch-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); }
+.nb-ch-mode { background: none; border: 1px solid var(--gray4); color: var(--gray10); border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.nb-ch-mode.on { background: var(--gray4); color: var(--gray12); }
+.nb-ch-head > span, .nb-ch-row .muted { white-space: pre; }
+.nb-ch-head { margin-left: 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-ch-tree { outline: none; overflow: auto; }
+.nb-ch-row { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: default; }
+.nb-ch-arrow { width: 12px; flex-shrink: 0; color: var(--gray9); cursor: pointer; text-align: center; }

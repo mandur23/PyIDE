@@ -1,0 +1,19 @@
+{
+  "Breadcrumbs and Call Hierarchy": "이동 경로 및 호출 계층 구조",
+  "Breadcrumbs above each editor with the file path and the class and function at the caret, and the Call Hierarchy tool window, using the Pyright language server.": "각 편집기 위에 파일 경로와 캐럿 위치의 클래스 및 함수를 보여 주는 이동 경로, 그리고 Pyright 언어 서버를 사용하는 호출 계층 구조 도구 창입니다.",
+  "Empty folder": "빈 폴더",
+  "Show Siblings": "같은 수준 요소 표시",
+  "Breadcrumbs": "이동 경로",
+  "Show breadcrumbs above the editor": "편집기 위에 이동 경로 표시",
+  "Breadcrumbs show the file path and the classes and functions around the caret.": "이동 경로에는 파일 경로와 캐럿을 둘러싼 클래스 및 함수가 표시됩니다.",
+  "Hierarchy": "계층 구조",
+  "Caller Hierarchy": "호출자 계층 구조",
+  "Callee Hierarchy": "피호출자 계층 구조",
+  "Use Ctrl+Alt+H on a function to see its callers and callees": "함수에서 Ctrl+Alt+H를 누르면 호출자와 피호출자를 볼 수 있습니다",
+  "Callers of {name}": "{name}의 호출자",
+  "Callees of {name}": "{name}의 피호출자",
+  "Loading…": "로드 중…",
+  "No call hierarchy for the element at the caret": "캐럿 위치의 요소에 대한 호출 계층 구조가 없습니다",
+  "Call Hierarchy": "호출 계층 구조",
+  "Show Breadcrumbs": "이동 경로 표시"
+}

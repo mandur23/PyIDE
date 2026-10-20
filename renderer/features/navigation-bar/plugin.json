@@ -1,0 +1,8 @@
+{
+  "id": "navigation-bar",
+  "name": "Breadcrumbs and Call Hierarchy",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Breadcrumbs above each editor with the file path and the class and function at the caret, and the Call Hierarchy tool window, using the Pyright language server.",
+  "depends": ["lsp"]
+}
