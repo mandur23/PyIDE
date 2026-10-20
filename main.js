@@ -142,7 +142,10 @@ ipcMain.handle('dialog:openFile', async (_e, filters) => {
 ipcMain.handle('fs:list', (_e, dir) => fsScan('list', dir));
 ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, excludedDirs));
 
-ipcMain.handle('fs:exists', (_e, p) => fs.existsSync(p));
+// Not existsSync: a path on an unreachable network share takes ~20 s to fail, and the main process (every window's
+// IPC) would wait for it. The renderer checks the last project and recent projects with this.
+const exists = (p) => fs.promises.access(p).then(() => true, () => false);
+ipcMain.handle('fs:exists', (_e, p) => exists(p));
 ipcMain.handle('fs:read', (_e, p) => fs.readFileSync(p, 'utf8'));
 ipcMain.handle('fs:write', (_e, p, text) => fs.writeFileSync(p, text, 'utf8'));
 ipcMain.handle('fs:create', (_e, p, isDir) => {
@@ -173,10 +176,10 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   if (root) {
     for (const v of await fsScan('venvs', root)) {
       const exe = path.join(v, 'Scripts', 'python.exe');
-      if (fs.existsSync(exe)) candidates.push([exe, [], path.relative(root, v)]);
+      if (await exists(exe)) candidates.push([exe, [], path.relative(root, v)]);
     }
   }
-  for (const p of extraPaths) if (fs.existsSync(p)) candidates.push([p, [], path.basename(path.dirname(path.dirname(p))) || p]);
+  for (const p of extraPaths) if (await exists(p)) candidates.push([p, [], path.basename(path.dirname(path.dirname(p))) || p]);
   candidates.push(['py', ['-3'], 'py launcher'], ['python', [], 'python']);
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
   const found = [];
@@ -297,17 +300,23 @@ function registerFeatures() {
 const windows = createWindowManager({ appDir: __dirname });
 
 // A folder argument opens it as the project; a file ("Open with PyIDE" on a .py) opens its folder and then the file.
-function createWindow() {
-  const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && fs.existsSync(a));
-  const target = arg && path.resolve(arg);
-  const query = !target ? {} : fs.statSync(target).isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
+// A path on an unreachable network share takes ~20 s to fail: the window opens without it after 3 s, and the main
+// process is not blocked meanwhile.
+async function createWindow() {
+  let target = null;
+  let stat = null;
+  for (const a of process.argv.slice(app.isPackaged ? 1 : 2).filter((x) => !x.startsWith('-'))) {
+    stat = await Promise.race([fs.promises.stat(a).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
+    if (stat) { target = path.resolve(a); break; }
+  }
+  const query = !target ? {} : stat.isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
   win = windows.createMain(query);
 }
 
 // The window starts loading before the feature modules are required, so the renderer process starts while they
 // load. Core renderer code only uses channels registered above; see registerFeatures for the feature channels.
-app.whenReady().then(() => {
-  createWindow();
+app.whenReady().then(async () => {
+  await createWindow();
   registerFeatures();
 });
 app.on('window-all-closed', () => app.quit());

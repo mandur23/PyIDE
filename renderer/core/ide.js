@@ -1309,7 +1309,10 @@ require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
 
   const params = new URLSearchParams(location.search);
   const last = params.get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();
-  if (last && await ide.api.exists(last)) await ide.openProject(last);
+  // A last project on a network share that does not answer (~20 s to fail) leaves the welcome screen up after 3 s;
+  // Recent Projects opens it once the share is back.
+  const reachable = (p) => Promise.race([ide.api.exists(p), new Promise((r) => { setTimeout(r, 3000, false); })]);
+  if (last && await reachable(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   performance.mark('pyide:ready');
