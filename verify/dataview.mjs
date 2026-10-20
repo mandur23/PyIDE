@@ -255,6 +255,17 @@ try {
   await until(`${DV}.state().info?.rows === 10`, 'data view refreshed after the console changed big', 30000);
   check(await statusText(t) === '10 rows × 3 columns', 'the Data View refreshes after a console statement');
 
+  // Closing a Data View removes its window listener, which would keep the closed view and its rows alive.
+  const windowListeners = async (type) => {
+    const win = (await t.cdp('Runtime.evaluate', { expression: 'window' })).result.result.objectId;
+    return (await t.cdp('DOMDebugger.getEventListeners', { objectId: win })).result.listeners.filter((l) => l.type === type).length;
+  };
+  const mouseupBefore = await windowListeners('mouseup');
+  await js(`ide.closeTabObject(ide.activeTab(), true)`);
+  await until(`!ide.tabs.some((x) => x.path === 'dataview:console:big')`, 'big data view closed');
+  const mouseupAfter = await windowListeners('mouseup');
+  check(mouseupAfter === mouseupBefore - 1, `closing a Data View releases its window listener (${mouseupBefore} -> ${mouseupAfter} mouseup listeners)`);
+
   // ---------- Plots from the console ----------
   const plotCount = () => js(`ide.plots.list().length`);
   await consoleRun(t, 'import matplotlib.pyplot as plt\nfig, ax = plt.subplots()\nax.plot([1, 4, 9])', 'console plot');

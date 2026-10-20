@@ -473,7 +473,7 @@
     }
 
     scroller.addEventListener('scroll', scheduleDraw);
-    ide.util.observeSize(scroller, () => scheduleDraw());
+    const ro = ide.util.observeSize(scroller, () => scheduleDraw());
 
     let drag = null;
     const target = (e) => e.target.closest?.('[data-r]');
@@ -498,7 +498,9 @@
       if (!drag.row) st.sel.c1 = Math.max(0, Number(t.dataset.c));
       scheduleDraw();
     });
-    addEventListener('mouseup', () => { drag = null; });
+    // On the window, so a drag released outside the grid ends; removed on dispose, since it keeps the whole view alive.
+    const endDrag = () => { drag = null; };
+    addEventListener('mouseup', endDrag);
     layer.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const t = target(e);
@@ -668,6 +670,9 @@
         unsub();
         clearTimeout(refreshTimer);
         clearTimeout(loadTimer);
+        clearTimeout(flashTimer);
+        removeEventListener('mouseup', endDrag);
+        ro.disconnect();
       },
     };
     host.dataView = ctl;
