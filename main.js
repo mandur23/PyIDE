@@ -1,4 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol } = require('electron');
+// The HTML preview serves project files over pyide-preview:// (main/features/viewers.js). A scheme gets standard URL
+// resolution (relative stylesheets, scripts, images) only when it is declared before the app is ready.
+protocol.registerSchemesAsPrivileged([{ scheme: 'pyide-preview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
 if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();

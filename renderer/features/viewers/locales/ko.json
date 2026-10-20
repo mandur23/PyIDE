@@ -115,5 +115,16 @@
   "MediaPipe task bundle": "MediaPipe 태스크 번들",
   "TensorFlow Lite model": "TensorFlow Lite 모델",
   "HDF5 / Keras model": "HDF5 / Keras 모델",
-  "Keras model": "Keras 모델"
+  "Keras model": "Keras 모델",
+  "Responsive": "반응형",
+  "Desktop (1280 px)": "데스크톱 (1280 px)",
+  "Tablet (768 px)": "태블릿 (768 px)",
+  "Mobile (375 px)": "모바일 (375 px)",
+  "Reload Preview": "미리보기 새로 고침",
+  "Preview width": "미리보기 너비",
+  "Open in Browser": "브라우저에서 열기",
+  "Open the saved file in the system browser": "저장된 파일을 시스템 브라우저에서 엽니다",
+  "HTML preview": "HTML 미리보기",
+  "{n} script error": "스크립트 오류 {n}개",
+  "{n} script errors": "스크립트 오류 {n}개"
 }

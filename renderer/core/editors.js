@@ -612,7 +612,8 @@
       }
     }
     const g = resolveGroup(opts.group);
-    let tab = g.tabs.find((t) => (doc ? t.doc === doc && t.kind === 'file' && !viewer : samePath(t.path, path) && t.kind === 'custom'));
+    // A viewer (also one that edits text, like Markdown) is found by path and viewer; a plain editor by its document.
+    let tab = g.tabs.find((t) => (viewer ? samePath(t.path, path) && t.kind === 'custom' && t.viewer === viewer : t.doc === doc && t.kind === 'file'));
     if (!tab && viewer) tab = openViewerTab(g, path, viewer, doc);
     else if (!tab) {
       const preview = opts.preview && settingOn('editor.previewTab', false);

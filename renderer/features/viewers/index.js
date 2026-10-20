@@ -1212,6 +1212,150 @@
     };
   }
 
+  // ---------- HTML ----------
+  // The page renders in a sandboxed iframe served by main/features/viewers.js (pyide-preview://), so linked stylesheets,
+  // scripts and images load from the project as on a web server, with unsaved editor text standing in for the file on
+  // disk. Typing in the page or in any open CSS/JS/SVG/JSON file of the same site reloads it at the same scroll.
+  const PREVIEW_RELOAD_EXT = new Set(['html', 'htm', 'xhtml', 'css', 'js', 'mjs', 'json', 'svg']);
+  const previewWidths = () => [['', tr('Responsive')], ['1280', tr('Desktop (1280 px)')], ['768', tr('Tablet (768 px)')], ['375', tr('Mobile (375 px)')]];
+
+  function mountHtml(host, { path, doc }) {
+    host.classList.add('vw', 'vw-md', 'vw-html');
+    if (!doc) { host.classList.add('vw-center'); fallbackCard(host, path, tr('This file is too large to edit.')); return {}; }
+    const MODES = [
+      { value: 'editor', label: tr('Editor'), title: tr('Show Editor Only') },
+      { value: 'split', label: tr('Editor and Preview'), title: tr('Show Editor and Preview') },
+      { value: 'preview', label: tr('Preview'), title: tr('Show Preview Only') },
+    ];
+    let mode = ide.settings.get('viewers.htmlMode', 'split');
+    const bar = toolbar();
+    const seg = segmented(MODES, mode, (v) => setMode(v, true));
+    const reloadBtn = button('⟳', tr('Reload Preview'), () => reload());
+    const width = el('select', 'vw-html-width');
+    width.title = tr('Preview width');
+    for (const [v, label] of previewWidths()) width.add(new Option(label, v));
+    width.value = ide.settings.get('viewers.htmlWidth', '');
+    width.onchange = () => { ide.settings.set('viewers.htmlWidth', width.value); applyWidth(); };
+    const browserBtn = button(tr('Open in Browser'), tr('Open the saved file in the system browser'), () => invoke('viewers:openInBrowser', path));
+    const status = el('span', 'vw-status vw-html-errors');
+    bar.append(seg.el, reloadBtn, width, browserBtn, status);
+    const split = el('div', 'vw-md-split');
+    const edHost = el('div', 'vw-md-editor');
+    const divider = el('div', 'vw-md-divider');
+    const stage = el('div', 'vw-html-stage');
+    const frame = el('iframe', 'vw-html-frame');
+    // No allow-same-origin: the page runs in its own opaque origin and cannot reach the IDE.
+    frame.sandbox = 'allow-scripts allow-forms allow-modals allow-popups';
+    frame.title = tr('HTML preview');
+    stage.appendChild(frame);
+    split.append(edHost, divider, stage);
+    host.append(bar, split);
+
+    const editor = embedEditor(edHost, doc);
+    let ratio = 0.5;
+    let disposed = false;
+    let url = null;
+    let root = null;
+    let scrollY = 0;
+    let errors = [];
+
+    function applyWidth() {
+      const w = Number(width.value);
+      frame.style.width = w ? `${w}px` : '100%';
+      stage.classList.toggle('fixed', !!w);
+    }
+    function renderStatus() {
+      status.textContent = errors.length ? tr(errors.length === 1 ? '{n} script error' : '{n} script errors', { n: errors.length }) : '';
+      status.title = errors.map((e) => `${e.message}${e.source ? ` (${e.source.split('/').pop()}:${e.line})` : ''}`).join('\n');
+    }
+    function setMode(v, persist) {
+      mode = v;
+      seg.set(v);
+      host.dataset.mode = v;
+      edHost.classList.toggle('hidden', v === 'preview');
+      stage.classList.toggle('hidden', v === 'editor');
+      divider.classList.toggle('hidden', v !== 'split');
+      edHost.style.flex = v === 'split' ? `${ratio} 1 0` : '1 1 0';
+      stage.style.flex = v === 'split' ? `${1 - ratio} 1 0` : '1 1 0';
+      if (persist) ide.settings.set('viewers.htmlMode', v);
+      if (v !== 'editor' && !frame.src) reload();
+      if (v !== 'preview') editor.layout();
+    }
+
+    const openDocs = () => ide.groups().flatMap((g) => g.tabs).filter((t) => t.doc && t.path);
+    async function reload() {
+      if (disposed || mode === 'editor') return;
+      if (!url) ({ url, root } = await invoke('viewers:previewUrl', path, ide.root));
+      const unsaved = {};
+      for (const t of openDocs()) if (ide.isDirty(t) && ide.util.isUnder(t.path, root)) unsaved[t.path] = t.doc.model.getValue();
+      await invoke('viewers:previewOverrides', unsaved);
+      if (disposed) return;
+      errors = [];
+      renderStatus();
+      frame.src = `${url}?__pyide_t=${Date.now()}&__pyide_y=${Math.round(scrollY)}`;
+      host.dataset.reloads = String(Number(host.dataset.reloads || 0) + 1);
+    }
+    const scheduled = debounce(reload, 300);
+    const affects = (p) => root && ide.util.isUnder(p, root) && PREVIEW_RELOAD_EXT.has(p.split('.').pop().toLowerCase());
+    const subs = [doc.model.onDidChangeContent(() => scheduled())];
+    // Edits to the site's other open files (a stylesheet in another tab) reload the page too.
+    const watchModel = (m) => {
+      if (m === doc.model) return;
+      subs.push(m.onDidChangeContent(() => {
+        const t = openDocs().find((x) => x.doc.model === m);
+        if (t && affects(t.path)) scheduled();
+      }));
+    };
+    monaco.editor.getModels().forEach(watchModel);
+    subs.push(monaco.editor.onDidCreateModel(watchModel));
+    const onDisk = (c = {}) => {
+      const paths = [...(c.created || []), ...(c.deleted || []), ...(c.changed || []), ...(c.renamed || []).flat()];
+      if (!paths.length || paths.some(affects)) scheduled();
+    };
+    const offSaved = ide.on('fileSaved', (t) => { if (t?.path && affects(t.path)) scheduled(); });
+    const offChanged = ide.on('filesChanged', onDisk);
+
+    const onMessage = (e) => {
+      if (e.source !== frame.contentWindow || !e.data?.pyidePreview) return;
+      const m = e.data;
+      if (m.type === 'scroll') scrollY = Number(m.y) || 0;
+      else if (m.type === 'error') { errors.push({ message: String(m.message), source: String(m.source || ''), line: Number(m.line) || 0 }); renderStatus(); }
+      else if (m.type === 'open' && /^https?:\/\//i.test(m.url)) invoke('viewers:openExternal', m.url);
+    };
+    addEventListener('message', onMessage);
+
+    divider.addEventListener('mousedown', (down) => {
+      down.preventDefault();
+      const r = split.getBoundingClientRect();
+      // The iframe would swallow mouse moves while dragging over it.
+      frame.style.pointerEvents = 'none';
+      const move = (e) => {
+        ratio = Math.min(0.85, Math.max(0.15, (e.clientX - r.left) / r.width));
+        edHost.style.flex = `${ratio} 1 0`;
+        stage.style.flex = `${1 - ratio} 1 0`;
+      };
+      const up = () => { frame.style.pointerEvents = ''; removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+      addEventListener('mousemove', move);
+      addEventListener('mouseup', up);
+    });
+    host.addEventListener('focus', () => { if (mode !== 'preview') editor.focus(); });
+
+    applyWidth();
+    setMode(mode);
+    host._viewer = { editor, setMode, frame, reload, errors: () => errors };
+    return {
+      dispose: () => {
+        disposed = true;
+        scheduled.cancel();
+        subs.forEach((s) => s.dispose());
+        offSaved?.();
+        offChanged?.();
+        removeEventListener('message', onMessage);
+        editor.dispose();
+      },
+    };
+  }
+
   // ---------- CSV / TSV / JSONL tables ----------
   // RFC 4180: quoted fields with "" escapes and embedded newlines; records remember their 1-based start line.
   function parseDelimited(text, delim) {
@@ -1584,6 +1728,7 @@
   ide.registerFileViewer({ id: 'model', icon: '🧠', match: byExt(...MODEL_EXT.filter((e) => e !== 'bin')), mount: mountModel });
   ide.registerFileViewer({ id: 'model-bin', icon: '🧠', binaryOnly: true, match: (p) => ext(p) === 'bin' && /pytorch_model|model|weights/i.test(basename(p)), mount: mountModel });
   ide.registerFileViewer({ id: 'markdown', icon: '📝', text: true, match: byExt('md', 'markdown'), mount: mountMarkdown });
+  ide.registerFileViewer({ id: 'html', icon: '🌐', text: true, match: byExt('html', 'htm', 'xhtml'), mount: mountHtml });
   ide.registerFileViewer({ id: 'csv', icon: '▦', text: true, match: byExt('csv', 'tsv'),
     mount: (host, ctx) => mountTableViewer(host, ctx, { kind: 'csv', build: (text) => tableFromCsv(text, ctx.path) }) });
   ide.registerFileViewer({ id: 'jsonl', icon: '▤', text: true, match: byExt('jsonl', 'ndjson'),

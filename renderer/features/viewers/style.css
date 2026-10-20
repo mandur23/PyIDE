@@ -152,3 +152,11 @@
 .vw-error-label { color: var(--red); font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; }
 .vw-error-raw { color: var(--gray9); }
 .vw-row-ragged .vw-idx { color: var(--yellow); }
+
+/* HTML preview */
+.vw-html-stage { min-width: 0; position: relative; display: flex; justify-content: center; overflow: auto; background: #fff; }
+.vw-html-stage.fixed { background: var(--gray2); padding: 12px 0; }
+.vw-html-frame { border: 0; height: 100%; width: 100%; background: #fff; flex-shrink: 0; }
+.vw-html-stage.fixed .vw-html-frame { box-shadow: 0 0 0 1px var(--gray4), 0 6px 20px #0005; }
+.vw-html-width { background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; padding: 2px 6px; }
+.vw-html-errors { color: var(--red); }
