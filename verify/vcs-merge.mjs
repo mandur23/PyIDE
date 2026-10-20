@@ -325,6 +325,27 @@ try {
   check(await js(`!!document.querySelector('#vcsActivity .vcs-act-row[data-kind="rebase"]') && !!document.querySelector('#vcsActivity .vcs-act-row[data-kind="merge"]')`), 'the rebase and the merge are in Activity too');
   await shot('activity.png');
   check(await js(`document.querySelector('#vcsConsole').textContent.includes('git cherry-pick') && document.querySelector('#vcsConsole').textContent.includes('git stash push')`), 'the Git console logs the commands');
+
+  // ---------- a CP949 file in conflict: its versions are decoded, and the result is written back as CP949 ----------
+  const cp949 = (s) => Buffer.from(s.replace(/한글/g, '\u0000').split('').flatMap((c) => (c === '\u0000' ? [0xc7, 0xd1, 0xb1, 0xdb] : [c.charCodeAt(0)])));
+  const legacy = path.join(project, 'legacy.py');
+  writeFileSync(legacy, cp949('# 한글\nx = 1\n'));
+  git(project, 'add', 'legacy.py');
+  git(project, 'commit', '-m', 'Add legacy');
+  git(project, 'checkout', '-b', 'legacy-side');
+  writeFileSync(legacy, cp949('# 한글\nx = 2\n'));
+  git(project, 'commit', '-am', 'Side');
+  git(project, 'checkout', 'main');
+  writeFileSync(legacy, cp949('# 한글\nx = 3\n'));
+  git(project, 'commit', '-am', 'Main');
+  try { git(project, 'merge', 'legacy-side'); } catch {}
+  const v = await js(`ide.api.invoke('git:mergeVersions', ide.root, ${q(legacy)})`);
+  check(v.base === '# 한글\nx = 1\n' && v.ours === '# 한글\nx = 3\n' && v.theirs === '# 한글\nx = 2\n' && v.working.startsWith('# 한글\n<<<<<<<'),
+    `the merge tool gets a CP949 file's three versions and the work tree file as text (${JSON.stringify(v).slice(0, 160)})`);
+  const resolved = await js(`ide.api.invoke('git:resolve', ide.root, ${q(legacy)}, '# 한글\\nx = 23\\n')`);
+  check(resolved.ok && readFileSync(legacy).equals(cp949('# 한글\nx = 23\n')), 'resolving a CP949 file writes the result in CP949, so its Korean text survives');
+  git(project, 'commit', '--no-edit');
+
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${JSON.stringify(t.consoleErrors)}` : ''}`);
 } catch (err) {
   check(false, err.message);

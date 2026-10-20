@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const textCodec = require('../text-codec');
 
 // No credential/editor prompts can be answered from the IDE, so fail fast instead of hanging.
 const ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
@@ -25,11 +26,20 @@ function git(cwd, args, input) {
     p.stdout.on('data', (d) => out.push(d));
     p.stderr.on('data', (d) => err.push(d));
     p.on('error', (e) => resolve({ code: -1, out: '', err: e.message }));
-    p.on('close', (code) => resolve({ code, out: Buffer.concat(out).toString('utf8'), err: Buffer.concat(err).toString('utf8') }));
+    p.on('close', (code) => {
+      const buf = Buffer.concat(out);
+      resolve({ code, buf, out: buf.toString('utf8'), err: Buffer.concat(err).toString('utf8') });
+    });
     p.stdin.on('error', () => {});
     p.stdin.end(input ?? '');
   });
 }
+
+// File content as the editor reads it (main/text-codec.js): Korean Windows files are often CP949, and a UTF-8 BOM
+// is not part of the text. Decoding it as UTF-8 marked every Korean line as changed and broke merges of such files.
+const fileText = (buf) => textCodec.decode(buf, textCodec.detect(buf));
+// The encoding of a work tree file as it is on disk (UTF-8 when it cannot be read).
+const diskEncoding = (abs) => { try { return textCodec.detect(fs.readFileSync(abs)); } catch { return 'utf-8'; } };
 
 const cmdLine = (args) => `git ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')}`;
 const relOf = (root, abs) => path.relative(root, abs).replace(/\\/g, '/');
@@ -186,14 +196,14 @@ exports.register = ({ ipcMain }) => {
   // Content of a project file at `rev` (null when the file does not exist there).
   h('show', async (root, abs, rev = 'HEAD') => {
     const r = await git(root, ['show', `${rev}:./${relOf(root, abs)}`]);
-    return r.code ? null : r.out;
+    return r.code ? null : fileText(r.buf);
   });
 
   // Content of a repo-relative path at `rev`, for diffs of historical commits.
   h('fileAt', async (root, rev, repoRel) => {
     const info = await repoInfo(root);
     const r = await git(info?.top || root, ['show', `${rev}:${repoRel}`]);
-    return r.code ? null : r.out;
+    return r.code ? null : fileText(r.buf);
   });
 
   // files: [path | {path, orig}]. A staged rename's original path is committed too (its deletion is already staged and
@@ -280,7 +290,8 @@ exports.register = ({ ipcMain }) => {
   });
 
   h('blame', async (root, abs, content) => {
-    const r = await git(root, ['blame', '--porcelain', '--contents', '-', '--', relOf(root, abs)], content);
+    // The editor's text in the file's own encoding, so unchanged lines match their committed bytes.
+    const r = await git(root, ['blame', '--porcelain', '--contents', '-', '--', relOf(root, abs)], textCodec.encode(content, diskEncoding(abs)));
     return r.code ? null : parseBlame(r.out);
   });
 
@@ -356,10 +367,10 @@ exports.register = ({ ipcMain }) => {
   // The three versions of a conflicted file (null where that side has no such file) and what is on disk now.
   h('mergeVersions', async (root, abs) => {
     const rel = relOf(root, abs);
-    const stage = async (n) => { const r = await git(root, ['show', `:${n}:./${rel}`]); return r.code ? null : r.out; };
+    const stage = async (n) => { const r = await git(root, ['show', `:${n}:./${rel}`]); return r.code ? null : fileText(r.buf); };
     const [base, ours, theirs] = await Promise.all([stage(1), stage(2), stage(3)]);
     let working = null;
-    try { working = fs.readFileSync(abs, 'utf8'); } catch {}
+    try { working = fileText(fs.readFileSync(abs)); } catch {}
     return { base, ours, theirs, working };
   });
 
@@ -371,7 +382,12 @@ exports.register = ({ ipcMain }) => {
       const r = await git(root, args);
       return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
     }
-    fs.writeFileSync(abs, content, 'utf8');
+    // Written back in the file's encoding: a CP949 file saved as UTF-8 would turn its Korean text into garbage.
+    try {
+      textCodec.write(abs, content, diskEncoding(abs));
+    } catch (err) {
+      return { ok: false, cmd: '', out: '', err: err.message };
+    }
     const args = ['add', '--', rel];
     const r = await git(root, args);
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };

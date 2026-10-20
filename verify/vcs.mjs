@@ -291,6 +291,39 @@ try {
   check(git(project, 'status', '--porcelain') === '' && git(project, 'show', '--name-status', '--format=', 'HEAD').startsWith('R'),
     `committing a staged rename records a rename and leaves nothing staged (${git(project, 'show', '--name-status', '--format=', 'HEAD')})`);
 
+  // --- CP949 and UTF-8 BOM files: HEAD is read in the file's encoding, so only edited lines are changes ---
+  const hangul = Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]); // "한글" in CP949
+  writeFileSync(path.join(project, 'legacy.py'), Buffer.concat([Buffer.from('# '), hangul, Buffer.from('\r\nx = 1\r\n')]));
+  writeFileSync(path.join(project, 'bom.py'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('a = 1\nb = 2\n')]));
+  git(project, 'add', 'legacy.py', 'bom.py');
+  git(project, 'commit', '-qm', 'Add CP949 and BOM files');
+  await js(`window.dispatchEvent(new Event('focus'))`);
+  await openFile(t, 'legacy.py');
+  await js(`ide.runAction('Annotate')`);
+  const blamed = `ide.activeTab().model.getAllDecorations().filter(d => /vcs-blame/.test(d.options.linesDecorationsClassName || '')).map(d => d.range.startLineNumber).join(',')`;
+  await until(`${blamed} !== ''`, 'CP949 blame');
+  await sleep(300);
+  const blamedLines = await js(blamed);
+  check(blamedLines === '1,2', `Annotate attributes the Korean line of a CP949 file to its commit (lines ${blamedLines})`);
+  await js(`ide.runAction('Annotate')`);
+  await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'legacy.py'), true), true)`);
+  const marksOf = `ide.activeTab().model.getAllDecorations().filter(d => /vcs-(added|modified|deleted)/.test(d.options.linesDecorationsClassName || '')).map(d => d.options.linesDecorationsClassName.split(' ')[1] + ':' + d.range.startLineNumber + '-' + d.range.endLineNumber).join(',')`;
+  for (const name of ['legacy.py', 'bom.py']) {
+    await openFile(t, name);
+    await js(`ide.editor.executeEdits('test', [{ range: new ide.monaco.Range(2, 1, 2, 1), text: 'y = 0  ' }])`);
+    await until(`${marksOf} !== ''`, `${name} gutter`);
+    await sleep(400);
+    const got = await js(marksOf);
+    check(got === 'vcs-modified:2-2', `editing line 2 of ${name === 'legacy.py' ? 'a CP949' : 'a UTF-8 BOM'} file marks only line 2 (got ${got})`);
+  }
+  await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'bom.py'), true), true)`);
+  await until(`ide.activeTab()?.title === 'legacy.py'`, 'legacy.py active');
+  await js(`ide.runAction('Compare.SameVersion')`);
+  await until(`!!document.querySelector('.custom-tab:not(.hidden)')?._vcsDiff`, 'CP949 diff tab');
+  check(await js(`document.querySelector('.custom-tab:not(.hidden)')._vcsDiff.getOriginalEditor().getValue().startsWith('# 한글')`), 'the diff with HEAD shows a CP949 file\'s Korean text');
+  await press('Ctrl+F4');
+  await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'legacy.py'), true), true)`);
+
   // --- external change picked up on window focus ---
   writeFileSync(path.join(project, 'README.md'), '# VCS fixture\n\nEdited outside.\n');
   await js(`window.dispatchEvent(new Event('focus'))`);

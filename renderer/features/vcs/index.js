@@ -83,8 +83,10 @@
   async function reloadTabs(paths, force) {
     if (!force) return ide.reloadFromDisk(paths);
     for (const tab of ide.tabs.filter((t) => t.kind === 'file' && paths.some((p) => samePath(p, t.path)))) {
+      // Read in the document's own encoding (CP949, UTF-16...), as the editor opened it.
       let text;
-      try { text = await ide.api.read(tab.path); } catch { continue; }
+      try { ({ text } = await ide.api.invoke('fs:readText', tab.path, tab.doc?.encoding)); } catch { continue; }
+      if (text === undefined) continue;
       if (text !== tab.model.getValue()) tab.model.pushEditOperations([], [{ range: tab.model.getFullModelRange(), text }], () => null);
       tab.savedVersion = tab.model.getAlternativeVersionId();
     }
@@ -467,7 +469,7 @@
     const left = f?.status === 'unversioned' || f?.status === 'added' ? '' : await invoke('show', ide.root, f?.orig || path, 'HEAD');
     const tab = ide.findTab(path);
     let right = null;
-    if (!tab && f?.status !== 'deleted') { try { right = await ide.api.read(path); } catch { right = ''; } }
+    if (!tab && f?.status !== 'deleted') { try { right = (await ide.api.invoke('fs:readText', path)).text ?? ''; } catch { right = ''; } }
     let dispose;
     let unsub;
     ide.openCustomTab({
