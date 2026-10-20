@@ -5,6 +5,8 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'pyide-preview', privileges: { s
 if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();
+// No window may leave the IDE page: links and popups go to the system browser, permissions are denied (main/security.js).
+require('./main/security').install({ appDir: __dirname });
 const path = require('path');
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');

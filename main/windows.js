@@ -2,6 +2,7 @@
 // unsaved text and save state are relayed between them, and a window with unsaved changes asks before closing.
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 function createWindowManager({ appDir }) {
   const all = new Set();
@@ -25,7 +26,11 @@ function createWindowManager({ appDir }) {
       backgroundColor: '#1e1f22',
       title: 'PyIDE',
       autoHideMenuBar: true,
-      webPreferences: { preload: path.join(appDir, 'preload.js'), contextIsolation: true, sandbox: false },
+      // The preload hands the IPC API only to the IDE page (--pyide-page); the renderer process runs in Chromium's sandbox.
+      webPreferences: {
+        preload: path.join(appDir, 'preload.js'), contextIsolation: true, sandbox: true,
+        additionalArguments: [`--pyide-page=${pathToFileURL(path.join(appDir, 'renderer', 'index.html')).href}`],
+      },
     });
     all.add(w);
     const id = w.webContents.id;

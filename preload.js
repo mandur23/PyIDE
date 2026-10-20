@@ -2,7 +2,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
 
-contextBridge.exposeInMainWorld('api', {
+// Only the IDE's own page gets the API. A window that somehow loaded anything else (a link target, a dropped file;
+// main/security.js refuses those navigations) must not be able to read files or start programs.
+const pagePath = (href) => { try { const u = new URL(href); return u.protocol === 'file:' && !u.host ? decodeURIComponent(u.pathname).toLowerCase() : null; } catch { return null; } };
+const idePage = pagePath(process.argv.find((a) => a.startsWith('--pyide-page='))?.slice('--pyide-page='.length));
+if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   on: (channel, fn) => ipcRenderer.on(channel, (_e, payload) => fn(payload)),
   send: (channel, payload) => ipcRenderer.send(channel, payload),
