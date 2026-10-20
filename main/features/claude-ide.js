@@ -100,6 +100,18 @@ exports.register = ({ ipcMain, app, send }) => {
     } catch (err) { console.error('claude-ide: cannot write the lock file', err); }
   };
   const removeLock = () => { if (port) try { fs.unlinkSync(path.join(lockDir(), `${port}.lock`)); } catch {} };
+  // A PyIDE that crashed or was killed never removed its lock file, and Claude Code would keep offering that window.
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
+  const removeStaleLocks = async () => {
+    for (const name of await fs.promises.readdir(lockDir()).catch(() => [])) {
+      if (!name.endsWith('.lock')) continue;
+      const file = path.join(lockDir(), name);
+      try {
+        const lock = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+        if (lock.ideName === 'PyIDE' && Number.isInteger(lock.pid) && lock.pid !== process.pid && !alive(lock.pid)) await fs.promises.unlink(file);
+      } catch {}
+    }
+  };
   const status = () => send('claudeIde:status', { port, connected: clients.size });
 
   // A tool call answered by the main window's renderer; openDiff stays pending until the user decides.
@@ -159,6 +171,7 @@ exports.register = ({ ipcMain, app, send }) => {
     port = server.address().port;
     writeLock();
     status();
+    removeStaleLocks();
   });
   server.on('error', (err) => console.error('claude-ide: server error', err));
 

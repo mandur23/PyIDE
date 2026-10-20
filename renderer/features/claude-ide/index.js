@@ -67,7 +67,9 @@
       let done = false;
       const finish = (result) => { if (done) return; done = true; diffs.delete(name); resolve(result); };
       const id = `claude-diff:${name}`;
-      diffs.get(name)?.finish(textResult('DIFF_REJECTED'));
+      // A diff that reuses an open one's tab name replaces it; reopening the old tab would show the old proposal.
+      const prev = diffs.get(name);
+      if (prev) { prev.finish(textResult('DIFF_REJECTED')); prev.close(); }
       ide.openCustomTab({
         id, title: `${basename(newPath)} ⟷ Claude`, icon: '✳',
         onClose: () => finish([...textResult('DIFF_REJECTED'), ...textResult(name)]),
@@ -86,10 +88,19 @@
           const editor = ide.monaco.editor.createDiffEditor(box, { ...ide.editorOptions(), automaticLayout: true, renderSideBySide: true, originalEditable: false });
           const models = [ide.monaco.editor.createModel(original, lang), ide.monaco.editor.createModel(contents, lang)];
           editor.setModel({ original: models[0], modified: models[1] });
-          const close = () => { ide.closeTabObject(tab, true); editor.dispose(); models.forEach((m) => m.dispose()); };
+          // Closing the tab any way (buttons, ×, Close All) disposes the diff editor and its models.
+          tab.dispose = () => { editor.dispose(); models.forEach((m) => m.dispose()); };
+          const close = () => ide.closeTabObject(tab, true);
           accept.onclick = async () => {
             const text = models[1].getValue();
-            await ide.api.invoke('fs:writeText', absPath(newPath), text);
+            try {
+              await ide.api.invoke('fs:writeText', absPath(newPath), text);
+            } catch (err) {
+              // The diff stays open: the user can fix the cause and accept again, or reject.
+              const body = el('div', null, tr('Cannot save {file}: {error}', { file: absPath(newPath), error: String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+              ide.ui.dialog({ title: 'Claude Code', body });
+              return;
+            }
             await ide.reloadFromDisk([absPath(newPath)]);
             finish([...textResult('FILE_SAVED'), ...textResult(text)]);
             close();

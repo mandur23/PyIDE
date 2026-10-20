@@ -3,6 +3,7 @@
 // accept or reject). The test plays Claude Code's side over a raw WebSocket. CLAUDE_IDE_REAL=1 also starts the real
 // Claude Code in a PyIDE terminal and waits for it to connect (no prompt is sent, so it costs no model usage).
 import { mkdtempSync, readFileSync, readdirSync, existsSync, unlinkSync, writeFileSync } from 'fs';
+import { spawnSync } from 'child_process';
 import { tmpdir, homedir } from 'os';
 import path from 'path';
 import http from 'http';
@@ -56,11 +57,23 @@ function connect(port, token) {
 }
 const json = (content) => JSON.parse(content[0].text);
 
+// Lock files a crashed PyIDE left behind (its process is gone); another IDE's lock is not PyIDE's to remove.
+const deadPid = spawnSync(process.execPath, ['-e', '0']).pid;
+const staleLocks = REAL ? [] : [['1.lock', 'PyIDE'], ['2.lock', 'Visual Studio Code']].map(([name, ideName]) => {
+  writeFileSync(path.join(lockDir, name), JSON.stringify({ pid: deadPid, workspaceFolders: [], ideName, transport: 'ws', authToken: 'x' }));
+  return path.join(lockDir, name);
+});
+
 const t = await launch({ fixture: 'core', port: 9810, name: 'claude-ide' });
 const { js, until, check, shot, press } = t;
 let lockPath = null;
 try {
   await until(`ide.api.invoke('claudeIde:status').then(s => !!s.port)`, 'IDE server listening');
+  if (staleLocks.length) {
+    for (let i = 0; i < 50 && existsSync(staleLocks[0]); i++) await new Promise((r) => setTimeout(r, 100));
+    check(!existsSync(staleLocks[0]) && existsSync(staleLocks[1]), 'the lock file of a PyIDE that is no longer running is removed at startup, while other IDEs keep theirs');
+    unlinkSync(staleLocks[1]);
+  }
   const { port } = await js(`ide.api.invoke('claudeIde:status')`);
   lockPath = path.join(lockDir, `${port}.lock`);
   const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
@@ -136,6 +149,31 @@ try {
   await until(`!!document.querySelector('#claudeDiffReject')`, 'third diff');
   const closedAll = await c.tool('closeAllDiffTabs');
   check(closedAll[0].text === 'CLOSED_1_DIFF_TABS' && (await pendingClosed)[0].text === 'DIFF_REJECTED', 'closeAllDiffTabs closes open diffs when the answer came from the terminal');
+
+  // A second diff under an open diff's tab name replaces it: the first is answered, the second shows its own proposal.
+  const models = await js('ide.monaco.editor.getModels().length');
+  const first = c.tool('openDiff', { old_file_path: target, new_file_path: target, new_file_contents: 'first proposal', tab_name: 'same' });
+  await until(`!!document.querySelector('#claudeDiffAccept')`, 'first same-name diff');
+  const second = c.tool('openDiff', { old_file_path: target, new_file_path: target, new_file_contents: 'second proposal', tab_name: 'same' });
+  check((await first)[0].text === 'DIFF_REJECTED', 'a diff replaced by one with the same tab name is answered DIFF_REJECTED');
+  await until(`ide.monaco.editor.getModels().some((m) => m.getValue() === 'second proposal') && !ide.monaco.editor.getModels().some((m) => m.getValue() === 'first proposal')`, 'second proposal shown');
+  await js(`document.querySelector('#claudeDiffReject').click()`);
+  check((await second)[0].text === 'DIFF_REJECTED', 'the replacing diff shows its own proposal and gets its own answer');
+  // Closing the tab itself answers DIFF_REJECTED and frees the diff editor's models.
+  const closedTab = c.tool('openDiff', { old_file_path: target, new_file_path: target, new_file_contents: 'closed', tab_name: 'closed' });
+  await until(`!!document.querySelector('#claudeDiffReject')`, 'diff to close');
+  await js(`(ide.closeTab('claude-diff:closed'), true)`);
+  check((await closedTab)[0].text === 'DIFF_REJECTED' && await js('ide.monaco.editor.getModels().length') === models, 'closing a diff tab answers DIFF_REJECTED and disposes its models');
+  // A file that cannot be written keeps the diff open with a message instead of failing silently.
+  const unwritable = path.join(t.project, 'no-such-folder', 'new.py');
+  const failing = c.tool('openDiff', { old_file_path: unwritable, new_file_path: unwritable, new_file_contents: 'x = 1', tab_name: 'unwritable' });
+  await until(`!!document.querySelector('#claudeDiffAccept')`, 'unwritable diff');
+  await js(`document.querySelector('#claudeDiffAccept').click()`);
+  await until(`[...document.querySelectorAll('.dialog-body')].some((b) => b.textContent.includes('new.py'))`, 'save error dialog');
+  check(await js(`!!document.querySelector('#claudeDiffAccept')`), 'accepting into a path that cannot be written shows the error and keeps the diff open');
+  await js(`document.querySelector('.dialog-buttons .primary').click()`);
+  await js(`document.querySelector('#claudeDiffReject').click()`);
+  check((await failing)[0].text === 'DIFF_REJECTED', 'the diff can still be rejected after a failed save');
 } catch (err) {
   check(false, err.message);
 }
