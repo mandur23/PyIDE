@@ -647,7 +647,18 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
   };
   if (tab) tab.onclick = tw.show;
   ide.toolWindows.set(id, tw);
-  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: tw.toggle, terminal: true });
+  // A window opened by its shortcut takes the keyboard, as in PyCharm: its field or list (show() already focuses a field),
+  // else the window itself, so Esc (back to the editor) and Shift+Esc (hide) work from it. Other ways of showing it
+  // leave the focus alone.
+  const activate = () => {
+    tw.toggle();
+    if (!tw.isVisible() || container.contains(document.activeElement)) return;
+    const target = [...container.querySelectorAll('[tabindex="0"], input:not([disabled]), textarea:not([disabled])')].find((n) => n.getClientRects().length);
+    if (target) return target.focus();
+    container.tabIndex = -1;
+    container.focus();
+  };
+  if (keys) ide.registerAction({ id: `Activate${id}ToolWindow`, title: tr('Tool Window: {title}', { title }), keys, run: activate, terminal: true });
   mount?.(container, tw);
   // Until something is shown explicitly, the default window of an area is the one with the lowest order
   // (features load alphabetically, so registration order is not meaningful).
@@ -1110,12 +1121,6 @@ ide.registerToolWindow({
     ]);
   },
 });
-// Alt+1 also moves the keyboard into the tree, as in PyCharm; other ways of showing it leave the focus alone.
-ide.registerAction({ ...ide.actions.find((a) => a.id === 'ActivateProjectToolWindow'), run() {
-  const tw = ide.toolWindows.get('Project');
-  tw.toggle();
-  if (tw.isVisible()) $('tree').focus();
-} });
 
 // ---------- interpreters ----------
 // interpreterProviders: async (root) => interps, for interpreters that are not local executables.
@@ -1336,7 +1341,9 @@ const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
   { id: 'GotoFile', title: tr('Go to File…'), keys: 'Ctrl+Shift+N', run: gotoFile },
   { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction, terminal: true },
   { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },
-  { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide(), terminal: true },
+  // The window that has the keyboard (left, right or bottom), else the bottom one.
+  { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', terminal: true,
+    run: () => (Object.values(areas).find((a) => a.panel.contains(document.activeElement)) || areas.bottom).active?.hide() },
   { id: 'FocusEditor', keys: 'Escape', when: () => !inEditor() && !document.activeElement?.closest('.editor-group') && !!ide.editor?.getModel(), run: () => ide.editor.focus() },
   { id: 'EditorDuplicate', title: tr('Duplicate Line'), keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
   { id: 'EditorDeleteLine', title: tr('Delete Line'), keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },
