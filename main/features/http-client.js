@@ -10,6 +10,7 @@ const { addSecretValues } = require('../diagnostics/redact');
 const ENV_FILE = 'http-client.env.json';
 const PRIVATE_ENV_FILE = 'http-client.private.env.json';
 const MAX_TEXT = 5 * 1024 * 1024;
+const MAX_IMAGE = 20 * 1024 * 1024;
 
 const readJson = (file) => {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return null; }
@@ -139,6 +140,28 @@ function describeError(err, url, timeoutMs) {
   return { kind: 'other', target, code, detail: cause.message || err?.message || String(err) };
 }
 
+// The body up to `keep` bytes. A longer body is not downloaded further (it may be endless or gigabytes), and its
+// size is the Content-Length when the server sent one; binary bodies (keep 0) are only counted, never held.
+async function readBody(res, keep) {
+  const chunks = [];
+  let kept = 0;
+  let size = 0;
+  if (res.body) {
+    for await (const chunk of res.body) {
+      size += chunk.length;
+      if (!keep) continue;
+      if (kept + chunk.length > keep) {
+        chunks.push(chunk.subarray(0, keep - kept));
+        const length = Number(res.headers.get('content-length'));
+        return { buf: Buffer.concat(chunks), size: !res.headers.get('content-encoding') && length > size ? length : size, cut: true };
+      }
+      chunks.push(chunk);
+      kept += chunk.length;
+    }
+  }
+  return { buf: Buffer.concat(chunks), size, cut: false };
+}
+
 async function send({ file, root, env: envName, request, fileVars = [], timeoutMs = 60000 }) {
   const envs = loadEnvs(file, root);
   const { substitute, unresolved } = makeResolver({ fileVars, env: envVars(envs, envName), root });
@@ -160,24 +183,28 @@ async function send({ file, root, env: envName, request, fileVars = [], timeoutM
 
   const started = performance.now();
   let res;
-  let buf;
+  let kind;
+  let read;
   try {
     const h = new Headers();
     for (const [k, v] of headers) h.append(k, v);
     res = await fetch(url, { method, headers: h, body: body.data, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
-    buf = Buffer.from(await res.arrayBuffer());
+    kind = kindOf(res.headers.get('content-type'));
+    read = await readBody(res, kind === 'image' ? MAX_IMAGE : kind === 'binary' ? 0 : MAX_TEXT);
   } catch (err) {
     return { ok: false, request: shown, unresolved: [...unresolved], timeMs: Math.round(performance.now() - started), error: describeError(err, url, timeoutMs) };
   }
   const timeMs = Math.round(performance.now() - started);
   const respHeaders = [...res.headers];
   const contentType = res.headers.get('content-type') || '';
-  const kind = kindOf(contentType);
-  const response = { status: res.status, statusText: res.statusText, url: res.url, headers: respHeaders, contentType, kind, size: buf.length, timeMs };
+  const { buf, size, cut } = read;
+  // An image too large to keep is reported like binary content.
+  if (kind === 'image' && cut) kind = 'binary';
+  const response = { status: res.status, statusText: res.statusText, url: res.url, headers: respHeaders, contentType, kind, size, timeMs };
   if (kind === 'image') response.base64 = buf.toString('base64');
   else if (kind !== 'binary') {
-    response.text = buf.subarray(0, MAX_TEXT).toString('utf8');
-    response.truncated = buf.length > MAX_TEXT;
+    response.text = buf.toString('utf8');
+    response.truncated = cut;
   }
   if (request.name) {
     let json;

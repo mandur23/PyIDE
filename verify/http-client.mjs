@@ -11,6 +11,7 @@ import { englishLeaks } from './i18n-lib.mjs';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const TOKEN = 'tok-7f2e91c4b8';
 const seen = [];
+const big = { sent: 0, closed: false };
 function server(label, port) {
   const s = http.createServer((req, res) => {
     let body = '';
@@ -25,6 +26,21 @@ function server(label, port) {
       if (url.pathname === '/whoami') return json(200, { auth: req.headers.authorization || null });
       if (url.pathname === '/echo') return json(200, { echoed: body });
       if (url.pathname === '/page.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end('<!doctype html><h1 id="t">Hello page</h1>'); }
+      // 64 KB chunks for as long as the client reads (up to 512 MB), and 30 MB of binary.
+      if (url.pathname === '/endless') {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        const chunk = Buffer.alloc(64 * 1024, 'a');
+        res.on('close', () => { big.closed = true; });
+        const pump = () => {
+          while (!res.destroyed && big.sent < 512 * 1024 * 1024) {
+            big.sent += chunk.length;
+            if (!res.write(chunk)) return void res.once('drain', pump);
+          }
+          if (!res.destroyed) res.end();
+        };
+        return pump();
+      }
+      if (url.pathname === '/blob') { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); return res.end(Buffer.alloc(30 * 1024 * 1024, 7)); }
       if (url.pathname === '/logo.png') { res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(PNG); }
       json(404, { error: 'not found' });
     });
@@ -145,6 +161,18 @@ try {
   await waitRun(9, 'refused');
   const err = await js(`document.querySelector('.http-error')?.textContent || ''`);
   check(err === 'Connection refused: nothing is listening at 127.0.0.1:9997.', `a refused connection shows a readable message (${err})`);
+
+  // A huge or endless body: only the first 5 MB of text is read, then the download stops; binary is only counted.
+  const send = (p) => js(`ide.api.invoke('http-client:send', { file: ide.util.joinPath(ide.root, 'api.http'), root: ide.root, request: { method: 'GET', url: 'http://127.0.0.1:9995${p}', headers: [] } })`);
+  const t0 = Date.now();
+  const endless = await send('/endless');
+  const r = endless.response || {};
+  await until('true', 'settle');
+  await ctx.sleep(300);
+  check(endless.ok && r.truncated && r.text.length === 5 * 1024 * 1024 && big.closed && big.sent < 64 * 1024 * 1024 && Date.now() - t0 < 20000,
+    `an endless text body stops at 5 MB and the download is dropped (${Date.now() - t0} ms, server sent ${Math.round(big.sent / 1048576)} MB, closed ${big.closed})`);
+  const blob = (await send('/blob')).response || {};
+  check(blob.kind === 'binary' && blob.size === 30 * 1024 * 1024 && blob.text === undefined && blob.base64 === undefined, `a binary body is counted, not held (${blob.kind}, ${blob.size} bytes)`);
 
   // History.
   const rows = await js(`[...document.querySelectorAll('.http-row')].map((r) => r.querySelector('.http-row-status').textContent)`);
