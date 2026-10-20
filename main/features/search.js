@@ -33,6 +33,29 @@ const UTF8 = new TextDecoder('utf-8', { fatal: true });
 const CP949 = new TextDecoder('euc-kr');
 const isUtf8 = (buf) => { try { UTF8.decode(buf); return true; } catch { return false; } };
 
+// UTF-16 text, with or without a byte order mark (PowerShell's `>` writes it): full of NUL bytes, yet text, and not
+// UTF-8 even when its bytes happen to decode as UTF-8. Same test as text-codec.js. -> 'utf-16le' | 'utf-16be' | null
+function utf16Of(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return 'utf-16le';
+  if (buf[0] === 0xfe && buf[1] === 0xff) return 'utf-16be';
+  if (buf.length < 2 || buf.length % 2) return null;
+  const n = Math.min(buf.length, 8000);
+  let le = 0;
+  let be = 0;
+  for (let i = 0; i < n; i += 2) {
+    if (buf[i] === 0 && buf[i + 1] === 0) return null;
+    if (buf[i + 1] === 0 && buf[i] >= 9 && buf[i] < 0x7f) le++;
+    else if (buf[i] === 0 && buf[i + 1] >= 9 && buf[i + 1] < 0x7f) be++;
+  }
+  return le >= n / 6 && be <= le / 20 ? 'utf-16le' : be >= n / 6 && le <= be / 20 ? 'utf-16be' : null;
+}
+const UTF16 = new TextDecoder('utf-16le');
+function decodeUtf16(buf, wide) {
+  let b = buf.subarray((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff) ? 2 : 0);
+  b = b.subarray(0, b.length - (b.length % 2));
+  return UTF16.decode(wide === 'utf-16be' ? Buffer.from(b).swap16() : b);
+}
+
 // Returns null for files that are too large or look binary.
 function readText(p) {
   let buf;
@@ -40,6 +63,8 @@ function readText(p) {
     if (fs.statSync(p).size > MAX_SIZE) return null;
     buf = fs.readFileSync(p);
   } catch { return null; }
+  const wide = utf16Of(buf);
+  if (wide) return decodeUtf16(buf, wide);
   if (buf.subarray(0, 8000).includes(0)) return null;
   const text = isUtf8(buf) ? buf.toString('utf8') : CP949.decode(buf);
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -181,6 +206,7 @@ function replaceIn(paths, opts) {
   for (const p of paths) {
     let raw;
     try { if (fs.statSync(p).size > MAX_SIZE) continue; raw = fs.readFileSync(p); } catch { continue; }
+    if (utf16Of(raw)) { foreign.push(p); continue; }
     if (raw.subarray(0, 8000).includes(0)) continue;
     if (!isUtf8(raw)) { foreign.push(p); continue; }
     const text = raw.toString('utf8');

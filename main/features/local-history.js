@@ -32,8 +32,23 @@ const NEW_FILE_MS = 10000;
 
 const sha1 = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
 const blobPath = (blobDir, h) => path.join(blobDir, h.slice(0, 2), h);
-// The same test as main/text-codec.js (which the worker cannot require: it runs from evaluated text).
+// The same tests as main/text-codec.js (which the worker cannot require: it runs from evaluated text). UTF-16, with or
+// without a byte order mark, is full of NUL bytes but is text.
+function isUtf16(buf) {
+  if ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff)) return true;
+  if (buf.length < 2 || buf.length % 2) return false;
+  const n = Math.min(buf.length, 8000);
+  let le = 0;
+  let be = 0;
+  for (let i = 0; i < n; i += 2) {
+    if (buf[i] === 0 && buf[i + 1] === 0) return false;
+    if (buf[i + 1] === 0 && buf[i] >= 9 && buf[i] < 0x7f) le++;
+    else if (buf[i] === 0 && buf[i + 1] >= 9 && buf[i + 1] < 0x7f) be++;
+  }
+  return (le >= n / 6 && be <= le / 20) || (be >= n / 6 && le <= be / 20);
+}
 function looksBinary(buf) {
+  if (isUtf16(buf)) return false;
   const n = Math.min(buf.length, 8000);
   for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
@@ -411,8 +426,9 @@ function createStore(dir, root, limits, onChange) {
     }),
     content(h) {
       const buf = readBlob(h);
-      if (looksBinary(buf)) return { binary: true };
+      // UTF-16 is full of NUL bytes, so the encoding is detected before the binary check (as text-codec's read does).
       const encoding = textCodec.detect(buf);
+      if (!encoding.startsWith('utf-16') && looksBinary(buf)) return { binary: true };
       return { text: textCodec.decode(buf, encoding), encoding };
     },
     // Writes a revision's bytes back (recreating a deleted file and its folders).

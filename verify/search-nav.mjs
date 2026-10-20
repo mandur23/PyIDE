@@ -268,6 +268,14 @@ try {
   check(korean.count === 1 && korean.files[0].path.endsWith('korean.txt') && korean.files[0].matches[0].col === 3, `Korean text found in a CP949 file at its column (${J(korean.files.map((f) => f.matches))})`);
   const cpReplace = await js(`ide.api.invoke('search:replace', ${opts('total', 'sum')}, [ide.util.joinPath(ide.root, 'korean.txt')])`);
   check(cpReplace.count === 1 && readFileSync(path.join(project, 'korean.txt')).equals(cp949('sum')), 'Replace in Files keeps a CP949 file in CP949');
+  // UTF-16 as PowerShell's `>` writes it (LE with a BOM) and without a BOM: found as text, rewritten in UTF-16.
+  const utf16 = (word, bom) => Buffer.concat([bom ? Buffer.from([0xff, 0xfe]) : Buffer.alloc(0), Buffer.from(`한글 ${word} 끝\r\n`, 'utf16le')]);
+  writeFileSync(path.join(project, 'ps_out.txt'), utf16('wide_total', true));
+  writeFileSync(path.join(project, 'nobom.txt'), utf16('wide_total', false));
+  const wide = await js(`ide.api.invoke('search:find', ide.root, ${opts('wide_total')}, {})`);
+  check(wide.count === 2 && wide.files.every((f) => f.matches[0].col === 4), `UTF-16 files are searched as text (${J(wide.files.map((f) => [f.path.split(/[\\\\/]/).pop(), f.matches[0]?.col]))})`);
+  const wideReplace = await js(`ide.api.invoke('search:replace', ${opts('wide_total', 'wide_sum')}, ['ps_out.txt', 'nobom.txt'].map((f) => ide.util.joinPath(ide.root, f)))`);
+  check(wideReplace.count === 2 && readFileSync(path.join(project, 'ps_out.txt')).equals(utf16('wide_sum', true)) && readFileSync(path.join(project, 'nobom.txt')).equals(utf16('wide_sum', false)), 'Replace in Files keeps UTF-16 files in UTF-16 (with and without a BOM)');
   // Preview searches typed in a row: the one waiting behind a running search is replaced by the newer one.
   const live = await js(`Promise.all(['greet', 'compute', 'calculate'].map((q) => ide.api.invoke('search:find', ide.root, { ...${opts('')}, query: q }, {}, { live: true })))`);
   check(!live[0].superseded && live[1].superseded && !live[2].superseded && live[2].count > 0, `a queued preview search is superseded by a newer one (${J(live.map((r) => r.superseded || r.count))})`);

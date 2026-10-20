@@ -55,9 +55,11 @@ function register({ ipcMain }) {
 
   // root: the window's project folder, or null to stop watching. A project on a network share may show its images
   // (main/security.js).
-  ipcMain.handle('watch:project', (e, root) => {
+  // Not existsSync: on a share that just dropped it blocks the main process for ~20 s; an unanswered check is given up.
+  const reachable = (p) => Promise.race([fs.promises.access(p).then(() => true, () => false), new Promise((r) => { setTimeout(r, 3000, false); })]);
+  ipcMain.handle('watch:project', async (e, root) => {
     if (root) allowShare(root);
-    return watch(e.sender, root && fs.existsSync(root) ? root : null);
+    return watch(e.sender, root && await reachable(root) ? root : null);
   });
 }
 
