@@ -309,8 +309,25 @@
       fieldsHost.replaceChildren();
       const d = driverOf(kind);
       const labels = FIELD_LABELS();
-      for (const f of d.fields) {
-        const input = el('input');
+      // Field specs come from the kind's driver (main/db/drivers.js): built-in names or {key, label, type, options...}.
+      for (const spec of d.fields) {
+        const f = spec.key;
+        const label = spec.builtin ? labels[f] : tr(spec.label);
+        let input;
+        if (spec.type === 'select') {
+          input = el('select');
+          for (const [value, text] of spec.options || []) input.add(new Option(tr(text), value));
+          input.value = values[f] ?? spec.default ?? spec.options?.[0]?.[0] ?? '';
+          input.onchange = () => { values[f] = input.value; };
+        } else if (spec.type === 'checkbox') {
+          input = el('input');
+          input.type = 'checkbox';
+          input.checked = values[f] ?? !!spec.default;
+          input.onchange = () => { values[f] = input.checked; };
+        } else {
+          input = el('input');
+          if (spec.placeholder) input.placeholder = spec.placeholder;
+        }
         input.id = `dbField-${f}`;
         input.dataset.field = f;
         if (f === 'password') {
@@ -318,26 +335,27 @@
           input.autocomplete = 'new-password';
           if (existing.hasPassword && existing.kind === kind) input.placeholder = tr('Saved; type to replace');
           input.oninput = () => { passwordTouched = true; };
-        } else {
-          input.value = values[f] ?? (f === 'port' ? d.defaultPort : '');
+        } else if (spec.type !== 'select' && spec.type !== 'checkbox') {
+          input.value = values[f] ?? (f === 'port' ? d.defaultPort : spec.default ?? '');
           input.oninput = () => { values[f] = input.value; };
         }
-        if (f === 'port') input.type = 'number';
+        if (spec.type === 'number') input.type = 'number';
         inputs[f] = input;
-        if (f === 'file') {
+        if (spec.type === 'file') {
           const wrap = el('div', 'field-row');
           const browse = el('button', 'secondary', tr('Browse…'));
           browse.id = 'dbBrowse';
           browse.onclick = async () => {
-            const p = await ide.api.openFileDialog([{ name: tr('SQLite database'), extensions: ['sqlite', 'sqlite3', 'db', 'db3'] }, { name: tr('All files'), extensions: ['*'] }]);
+            const exts = spec.extensions || ['sqlite', 'sqlite3', 'db', 'db3'];
+            const p = await ide.api.openFileDialog([{ name: tr('{name} database', { name: d.label }), extensions: exts }, { name: tr('All files'), extensions: ['*'] }]);
             if (p) {
-              input.value = values.file = p;
+              input.value = values[f] = p;
               if (!nameInput.value.trim()) nameInput.value = basename(p);
             }
           };
           wrap.append(input, browse);
-          fieldsHost.append(field(labels[f], wrap));
-        } else fieldsHost.append(field(labels[f], input));
+          fieldsHost.append(field(label, wrap));
+        } else fieldsHost.append(field(label, input));
       }
       renderDriver();
     }
@@ -386,8 +404,8 @@
     function collect() {
       const cfg = { kind, name: nameInput.value.trim() };
       if (!isNew) cfg.id = existing.id;
-      for (const f of driverOf(kind).fields) {
-        if (f === 'password') { if (passwordTouched) cfg.password = inputs.password.value; } else cfg[f] = inputs[f].value.trim();
+      for (const { key: f, type } of driverOf(kind).fields) {
+        if (f === 'password') { if (passwordTouched) cfg.password = inputs.password.value; } else cfg[f] = type === 'checkbox' ? inputs[f].checked : inputs[f].value.trim();
       }
       return cfg;
     }
@@ -412,7 +430,7 @@
       buttons: [
         { label: tr('OK'), primary: true, run: async () => {
           const cfg = collect();
-          if (kind === 'sqlite' && !cfg.file) { testResult.className = 'db-test-result err'; testResult.textContent = tr('Choose a database file.'); return false; }
+          if (driverOf(kind).fields.some((x) => x.type === 'file') && !cfg.file) { testResult.className = 'db-test-result err'; testResult.textContent = tr('Choose a database file.'); return false; }
           const saved = await invoke('db:save', cfg);
           await reloadSources();
           selectedKey = nodeKey(saved.id);
@@ -788,26 +806,29 @@
   });
 
   // ---------- installables (for the Install Manager plugin) ----------
-  const INSTALLABLES = [
-    { pkg: 'pg', id: 'db-driver-postgres', name: tr('PostgreSQL driver (pg)'), description: tr('Lets the Database tool window connect to PostgreSQL.') },
-    { pkg: 'mysql2', id: 'db-driver-mysql', name: tr('MySQL and MariaDB driver (mysql2)'), description: tr('Lets the Database tool window connect to MySQL and MariaDB.') },
-  ];
+  // One per npm driver package, named after the kinds that use it (first kind's key in the id: db-driver-postgres).
   ide.installables ||= [];
-  for (const it of INSTALLABLES) {
-    ide.installables.push({
-      id: it.id, category: 'drivers', name: it.name, description: it.description,
-      status: async () => {
-        const d = (await invoke('db:drivers')).find((x) => x.package === it.pkg);
-        return { installed: !!d?.installed, version: d?.version || undefined };
-      },
-      install: async (log) => {
-        const r = await installDriver(it.pkg, log);
-        if (!r.ok) throw new Error(r.error);
-        return r;
-      },
-    });
-  }
-  ide.emit('installablesChanged');
+  loaded.then(() => {
+    const byPackage = new Map();
+    for (const d of drivers) if (d.package) byPackage.set(d.package, [...(byPackage.get(d.package) || []), d]);
+    for (const [pkg, kinds] of byPackage) {
+      const names = kinds.map((k) => k.label).join(', ');
+      const it = { pkg, id: `db-driver-${kinds[0].kind}`, name: tr('{names} driver ({package})', { names, package: pkg }), description: tr('Lets the Database tool window connect to {names}.', { names }) };
+      ide.installables.push({
+        id: it.id, category: 'drivers', name: it.name, description: it.description,
+        status: async () => {
+          const d = (await invoke('db:drivers')).find((x) => x.package === it.pkg);
+          return { installed: !!d?.installed, version: d?.version || undefined };
+        },
+        install: async (log) => {
+          const r = await installDriver(it.pkg, log);
+          if (!r.ok) throw new Error(r.error);
+          return r;
+        },
+      });
+    }
+    ide.emit('installablesChanged');
+  });
 
   // ---------- public API ----------
   ide.database = {

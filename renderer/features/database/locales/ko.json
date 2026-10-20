@@ -29,7 +29,6 @@
   "Driver": "드라이버",
   "Saved; type to replace": "저장됨, 바꾸려면 입력하세요",
   "Browse…": "찾아보기…",
-  "SQLite database": "SQLite 데이터베이스",
   "All files": "모든 파일",
   "Driver files for {name} are missing.": "{name} 드라이버 파일이 없습니다.",
   "Download Driver": "드라이버 다운로드",
@@ -65,9 +64,8 @@
   "Database: New Data Source…": "데이터베이스: 새 데이터 소스…",
   "Database: Open Query Console": "데이터베이스: 쿼리 콘솔 열기",
   "Database: Execute Statement": "데이터베이스: 문 실행",
-  "PostgreSQL driver (pg)": "PostgreSQL 드라이버 (pg)",
-  "Lets the Database tool window connect to PostgreSQL.": "데이터베이스 도구 창에서 PostgreSQL에 연결할 수 있게 합니다.",
-  "MySQL and MariaDB driver (mysql2)": "MySQL 및 MariaDB 드라이버 (mysql2)",
-  "Lets the Database tool window connect to MySQL and MariaDB.": "데이터베이스 도구 창에서 MySQL과 MariaDB에 연결할 수 있게 합니다.",
-  "No server yet? Install one locally in the Install Manager": "서버가 없나요? 설치 관리자에서 로컬 서버를 설치하세요"
+  "No server yet? Install one locally in the Install Manager": "서버가 없나요? 설치 관리자에서 로컬 서버를 설치하세요",
+  "{name} database": "{name} 데이터베이스",
+  "{names} driver ({package})": "{names} 드라이버 ({package})",
+  "Lets the Database tool window connect to {names}.": "데이터베이스 도구 창에서 {names}에 연결할 수 있게 합니다."
 }

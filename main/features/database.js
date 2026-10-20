@@ -49,14 +49,17 @@ function register({ ipcMain, app, send }) {
   };
 
   // Keeps only the fields the kind's driver uses, so a record never carries stale values from another kind.
+  // The password is never stored here: it goes to the encrypted secret.
   function normalize(cfg) {
     const driver = DRIVERS[cfg.kind];
     if (!driver) throw new Error(`Unknown database kind ${cfg.kind}`);
     const out = { id: cfg.id || crypto.randomUUID(), name: String(cfg.name || '').trim() || driver.label, kind: cfg.kind };
-    for (const f of driver.fields) {
-      if (f === 'password') continue;
-      if (f === 'port') out.port = Number(cfg.port) || driver.defaultPort;
-      else if (cfg[f] !== undefined && cfg[f] !== '') out[f] = String(cfg[f]).trim();
+    for (const f of fieldSpecs(driver)) {
+      if (f.key === 'password') continue;
+      const v = cfg[f.key];
+      if (f.type === 'number') out[f.key] = Number(v) || (f.key === 'port' ? driver.defaultPort : f.default ?? null);
+      else if (f.type === 'checkbox') out[f.key] = v === undefined ? !!f.default : !!v;
+      else if (v !== undefined && v !== '') out[f.key] = String(v).trim();
     }
     return out;
   }
@@ -105,11 +108,15 @@ function register({ ipcMain, app, send }) {
     send('db:state', { id, state: 'disconnected', message: null });
   }
 
+  // Built-in field names as specs; kinds may also declare their own (see main/db/drivers.js).
+  const BUILTIN_FIELDS = { file: { type: 'file' }, host: { type: 'text' }, port: { type: 'number' }, user: { type: 'text' }, password: { type: 'password' }, database: { type: 'text' } };
+  const fieldSpecs = (d) => d.fields.map((f) => (typeof f === 'string' ? { key: f, builtin: true, ...BUILTIN_FIELDS[f] } : { type: 'text', ...f }));
+
   const failure = (err) => ({ ok: false, error: err.message, missingDriver: err.missingDriver || null });
 
   // ---------- drivers ----------
   const driverList = () => Object.entries(DRIVERS).map(([kind, d]) => ({
-    kind, label: d.label, fields: d.fields, defaultPort: d.defaultPort || null, builtin: !!d.builtin, quote: d.quote,
+    kind, label: d.label, fields: fieldSpecs(d), ui: d.ui || null, defaultPort: d.defaultPort || null, builtin: !!d.builtin, quote: d.quote,
     implicitSchemas: d.implicitSchemas, package: d.package || null,
     installed: d.builtin || !!packageVersion(d.package), version: d.builtin ? null : packageVersion(d.package),
   }));
