@@ -176,7 +176,9 @@ class Server {
       const timer = setTimeout(() => {
         if (!this.pending.delete(id)) return;
         this.write({ method: '$/cancelRequest', params: { id } });
-        reject(new Error(`Pyright did not answer ${method} within ${ms / 1000} s`));
+        // Expected on a very large file (a million lines): the renderer treats it as no answer, and it is not an
+        // IDE internal error (main/diagnostics).
+        reject(Object.assign(new Error(`Pyright did not answer ${method} within ${ms / 1000} s`), { expected: true }));
       }, ms);
       const settle = (fn) => (v) => { clearTimeout(timer); fn(v); };
       this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });

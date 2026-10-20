@@ -880,7 +880,24 @@ ide.revealInTree = async (path) => {
 
 const selectedDir = () => (!selected ? ide.root : selected.dir ? selected.path : dirname(selected.path));
 // The message of an error a main-process handler threw, without Electron's "Error invoking remote method" prefix.
-const ipcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+// The file-system errors users meet read as a sentence instead of Node's "EBUSY: resource busy or locked, open '…'".
+const FS_ERRORS = {
+  EBUSY: tr('The file is in use by another program'),
+  EPERM: tr('Access is denied (the file may be read-only)'),
+  EACCES: tr('Access is denied (the file may be read-only)'),
+  ENOENT: tr('The file or folder does not exist'),
+  EISDIR: tr('It is a folder, not a file'),
+  ENOTDIR: tr('A part of the path is a file, not a folder'),
+  ENOSPC: tr('The disk is full'),
+  EROFS: tr('The disk is read-only'),
+  ENAMETOOLONG: tr('The path is too long'),
+};
+const ipcError = (e) => {
+  const text = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const code = /^([A-Z]+): /.exec(text)?.[1];
+  return FS_ERRORS[code] || text;
+};
+ide.util.errorText = ipcError;
 
 async function createEntry(isDir) {
   if (!ide.root) return;

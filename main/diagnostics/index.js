@@ -80,6 +80,9 @@ let resolveOwner = null; // file path -> {id, name, required, bundled} | null, f
 let changedTimer = null;
 const rawDialogs = [];
 const watched = new Set();
+// Errors an IPC handler threw that the renderer shows to the user (see install); Node error codes of the user's files.
+const expectedErrors = new WeakSet();
+const FS_USER_ERRORS = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EROFS', 'ENAMETOOLONG', 'ELOOP', 'UNKNOWN']);
 let quitting = false;
 
 const errorText = (v) => {
@@ -222,19 +225,23 @@ function install() {
     console[method] = (...args) => {
       try { original[method](...args); } catch {}
       const err = args.find((a) => a instanceof Error);
-      if (level === 'ERROR' && err) {
+      if (level === 'ERROR' && err && !expectedErrors.has(err)) {
         const message = args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : toText(a))).join(' ');
         report({ source: 'main', kind: 'logged', message, stack: err.stack });
       } else write(level, '#console', args.map(toText).join(' '));
     };
   }
 
-  // IPC handlers that throw answer the renderer with the error; the log keeps the stack.
+  // IPC handlers that throw answer the renderer with the error; the log keeps the stack. Errors about the user's files
+  // in the core fs: handlers (a file another program holds, a read-only file, a folder opened as a file) and errors a
+  // handler marks `expected` (a language server that did not answer in time) are the renderer's to show; they are
+  // not IDE internal errors, which Electron's "Error occurred in handler" console line would otherwise make them.
   const handle = ipcMain.handle.bind(ipcMain);
   const ipcLog = logger('#ipc');
   ipcMain.handle = (channel, fn) => handle(channel, async (...args) => {
     try { return await fn(...args); } catch (err) {
       ipcLog.warn(`${channel} failed: ${err?.stack || err}`);
+      if (err instanceof Error && (err.expected || (channel.startsWith('fs:') && FS_USER_ERRORS.has(err.code)))) expectedErrors.add(err);
       throw err;
     }
   });

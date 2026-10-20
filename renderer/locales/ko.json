@@ -199,5 +199,13 @@
   "Search Everywhere (Double Shift)": "어디서나 검색 (Shift 두 번)",
   "Open": "열기",
   "Get from VCS": "VCS에서 가져오기",
-  "Python Interpreter": "Python 인터프리터"
+  "Python Interpreter": "Python 인터프리터",
+  "The file is in use by another program": "다른 프로그램이 파일을 사용하고 있습니다",
+  "Access is denied (the file may be read-only)": "액세스가 거부되었습니다 (읽기 전용 파일일 수 있습니다)",
+  "The file or folder does not exist": "파일 또는 폴더가 없습니다",
+  "It is a folder, not a file": "파일이 아니라 폴더입니다",
+  "A part of the path is a file, not a folder": "경로의 일부가 폴더가 아니라 파일입니다",
+  "The disk is full": "디스크가 가득 찼습니다",
+  "The disk is read-only": "디스크가 읽기 전용입니다",
+  "The path is too long": "경로가 너무 깁니다"
 }

@@ -659,7 +659,7 @@
     if (!viewer || viewer.text) {
       doc = await loadDoc(path).catch((e) => ({ error: e }));
       if (doc.error) {
-        ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(path), error: String(doc.error.message || doc.error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+        ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(path), error: ide.util.errorText(doc.error) }));
         return null;
       }
       if (doc.unsupported) {
@@ -914,7 +914,7 @@
     try {
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
     } catch (e) {
-      const error = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      const error = ide.util.errorText(e);
       if (!auto) ide.ui.alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
       else {
         doc.autoSaveFailed = version;
@@ -1010,7 +1010,7 @@
         run: async () => {
           let res;
           try { res = await ide.api.invoke('fs:decode', doc.path, enc); } catch (e) {
-            ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(doc.path), error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+            ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(doc.path), error: ide.util.errorText(e) }));
             return;
           }
           // Too large to read as text, or the tab was closed or edited while the file was read.
@@ -1032,7 +1032,7 @@
           doc.encoding = enc;
           try { await ide.api.invoke('fs:writeText', doc.path, doc.model.getValue(), enc); } catch (e) {
             doc.encoding = prev;
-            ide.ui.alert(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+            ide.ui.alert(ide.util.errorText(e));
             return;
           }
           doc.savedVersion = doc.model.getAlternativeVersionId();
