@@ -390,13 +390,17 @@
     return out;
   }
 
+  // The project dictionary is a file in the project, which may be read-only; the word still counts for this session.
+  const writeProjectDictionary = (root, words) => ide.api.invoke('spellcheck:writeProjectDictionary', root, words)
+    .catch((err) => ide.log.warn(`spellcheck: cannot write the project dictionary: ${err.message}`));
+
   const SAVE = 'pyide.spellcheck.saveWord';
   monaco.editor.registerCommand(SAVE, (_accessor, word, scope) => saveWord(word, scope));
   async function saveWord(word, scope) {
     const lower = word.toLowerCase();
     if (scope === 'project' && ide.root) {
       projectWords.add(lower);
-      await ide.api.invoke('spellcheck:writeProjectDictionary', ide.root, [...projectWords]);
+      await writeProjectDictionary(ide.root, [...projectWords]);
     } else {
       userWords.add(lower);
       ide.settings.set(KEY_USER, [...userWords].sort());
@@ -549,7 +553,7 @@
       rescanAll();
     } else if (key === KEY_PROJECT_EDIT && value && ide.root && ide.util.samePath(value.root, ide.root)) {
       ide.settings.set(KEY_PROJECT_EDIT, undefined);
-      await ide.api.invoke('spellcheck:writeProjectDictionary', ide.root, value.words);
+      await writeProjectDictionary(ide.root, value.words);
       await loadProjectDictionary();
       rescanAll();
     }
