@@ -86,6 +86,18 @@ try {
   writeFileSync(path.join(project, 'util', 'helpers.py'), 'def double(x):\n    return x * 2\n\n\ndef triple(x):\n    return x * 3  # by Bob\n');
   git(project, '-c', 'user.name=Bob', '-c', 'user.email=bob@example.com', 'commit', '-qam', 'Bob tweaks triple');
 
+  // --- Rollback Lines when the file's only change is added lines (one hunk with no HEAD lines) ---
+  await openFile(t, 'util/helpers.py');
+  const headHelpers = await js('ide.activeTab().model.getValue()');
+  await js(`ide.editor.setPosition({ lineNumber: 3, column: 1 }), ide.editor.focus()`);
+  await type('# only change\n');
+  await until(`!!document.querySelector('.vcs-added')`, 'added marker for the only change');
+  await js(`ide.editor.setPosition({ lineNumber: 3, column: 2 })`);
+  await press('Ctrl+Alt+Z');
+  await until(`ide.activeTab().model.getValue() === ${q(headHelpers)}`, 'only change rolled back');
+  check(true, 'Rollback Lines removes added lines that are the only change in the file');
+  await press('Ctrl+S');
+
   // --- gutter markers and change navigation ---
   await openFile(t, 'main.py');
   await js(`ide.editor.setPosition({ lineNumber: 14, column: 1 }), ide.editor.focus()`);

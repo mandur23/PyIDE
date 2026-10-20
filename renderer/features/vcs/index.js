@@ -549,19 +549,35 @@
     while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
     let suf = 0;
     while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
-    const A = a.slice(pre, a.length - suf);
-    const B = b.slice(pre, b.length - suf);
-    const N = A.length;
-    const M = B.length;
+    const oldLines = a.slice(pre, a.length - suf);
+    const N = oldLines.length;
+    const M = b.length - pre - suf;
+    // Every hunk carries its HEAD lines (Rollback Lines puts them back).
+    const whole = [{ os: pre, oc: N, ns: pre, nc: M, old: oldLines }];
     if (!N && !M) return [];
-    if (!N || !M) return [{ os: pre, oc: N, ns: pre, nc: M }];
+    if (!N || !M) return whole;
+    // Lines as numbers: the search below compares them millions of times on a big diff.
+    const ids = new Map();
+    const id = (l) => { let n = ids.get(l); if (n === undefined) ids.set(l, (n = ids.size)); return n; };
+    const A = Int32Array.from(oldLines, id);
+    const B = Int32Array.from(b.slice(pre, b.length - suf), id);
+    // More than MAX_D edits is pathological input: one big hunk. Lines one side lacks are edits whatever the
+    // alignment, so a heavily rewritten file is recognized here without the O(MAX_D²) search (175 ms on 20k lines).
+    const MAX_D = 4000;
+    if (N + M > MAX_D) {
+      const count = new Int32Array(ids.size);
+      for (const l of A) count[l]++;
+      let matched = 0;
+      for (const l of B) if (count[l] > 0) { count[l]--; matched++; }
+      if (N + M - 2 * matched > MAX_D) return whole;
+    }
     const max = N + M;
     const off = max + 1;
     const v = new Int32Array(2 * max + 3);
     const trace = [];
     let D = -1;
     for (let d = 0; d <= max && D < 0; d++) {
-      if (d > 4000) return [{ os: pre, oc: N, ns: pre, nc: M }]; // pathological input: one big hunk
+      if (d > MAX_D) return whole;
       trace.push(v.slice(off - d - 1, off + d + 2));
       for (let k = -d; k <= d; k += 2) {
         let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
@@ -597,7 +613,7 @@
       const ns = j;
       while (i < N && !ma[i]) i++;
       while (j < M && !mb[j]) j++;
-      hunks.push({ os: os + pre, oc: i - os, ns: ns + pre, nc: j - ns, old: A.slice(os, i) });
+      hunks.push({ os: os + pre, oc: i - os, ns: ns + pre, nc: j - ns, old: oldLines.slice(os, i) });
     }
     return hunks;
   }
@@ -630,8 +646,10 @@
   function applyGutter(tab, base) {
     const k = key(tab.path);
     const g = gutters.get(k) || { ids: [], hunks: [], base: null };
+    const started = performance.now();
     g.base = base;
     g.hunks = base == null ? [] : diffLines(base.split(/\r?\n/), tab.model.getLinesContent());
+    g.ms = performance.now() - started;
     g.ids = tab.model.deltaDecorations(g.ids, g.hunks.map((h) => hunkDecoration(h, tab.model)));
     gutters.set(k, g);
     return g;
@@ -651,7 +669,10 @@
   let gutterTimer;
   ide.onEditor((ed) => ed.onDidChangeModelContent(() => {
     clearTimeout(gutterTimer);
-    gutterTimer = setTimeout(() => updateGutter(fileTabOf(ed)), 250);
+    // A file whose last diff took long (big and heavily changed) is diffed after a longer pause in typing.
+    const tab = tabOf(ed);
+    const slow = tab && gutters.get(key(tab.path))?.ms > 40;
+    gutterTimer = setTimeout(() => updateGutter(fileTabOf(ed)), slow ? 1000 : 250);
   }));
 
   // Every file shown in some pane, not just the active one, so a split view stays current after commits and checkouts.
