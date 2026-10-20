@@ -335,8 +335,8 @@ async function readIndex(idx) {
     records++;
     let rel, f;
     try { [rel, f] = JSON.parse(line); } catch { continue; } // a line cut short by a crash mid-append
-    // A line of another shape (a damaged file) is skipped the same way; read as a record it threw, and the project's
-    // index never loaded again.
+    // A line of another shape (a damaged file) is skipped the same way; read as a record it threw, which ended the
+    // read there, so every record after it was dropped and its file embedded again.
     if (typeof rel !== 'string' || (f && !(Array.isArray(f.chunks) && f.chunks.every((c) => c && typeof c.text === 'string')))) continue;
     forget(idx, rel, true);
     // Records whose vectors never made it to disk are dropped, so the file is embedded again. Their lines stay,
