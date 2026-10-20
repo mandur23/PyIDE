@@ -291,6 +291,18 @@ try {
   await until(noteWith('Pushed 1 commit to origin/main'), 'commit and push');
   check(git(bare, 'log', '-1', '--format=%s', 'main') === 'Add extra module', 'Commit and Push lands on the remote');
 
+  // --- push from a detached HEAD: no branch to push, said so instead of "HEAD → origin : null" ---
+  git(project, 'checkout', '-q', '--detach');
+  await js('ide.vcs.refresh().then(() => true)');
+  await press('Ctrl+Shift+K');
+  await until(`!!document.querySelector('.dialog .vcs-push-warn')`, 'push dialog on a detached HEAD');
+  check(await js(`document.querySelector('.dialog .vcs-push-warn').textContent === 'Cannot push from a detached HEAD.' && !document.querySelector('.dialog').textContent.includes('null')`),
+    'the push dialog on a detached HEAD says it cannot push instead of showing a null target');
+  await press('Escape');
+  await until(`!document.querySelector('.dialog')`, 'push dialog closed');
+  git(project, 'checkout', '-q', 'main');
+  await js('ide.vcs.refresh().then(() => true)');
+
   // --- a staged rename commits as a rename (the original path's deletion is committed too) ---
   git(project, 'mv', 'extra.py', 'extra_renamed.py');
   await js(`window.dispatchEvent(new Event('focus'))`);

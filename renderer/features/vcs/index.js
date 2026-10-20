@@ -1285,10 +1285,13 @@
       urlIn.placeholder = tr('https://github.com/user/repo.git or a local path');
       f2.append(el('span', null, tr('URL')), urlIn);
       body.append(f1, f2);
+    } else if (!o.branch) {
+      // A detached HEAD has no branch to push (git:push refuses it as well).
+      body.appendChild(el('div', 'vcs-push-warn', REASONS.detached));
     } else {
       const dest = o.upstream ? o.upstream.split('/').slice(1).join('/') : o.branch;
       const target = el('div', 'vcs-push-target');
-      target.append(userText('span', null, `${o.branch || 'HEAD'} → ${o.remote} : ${dest}`));
+      target.append(userText('span', null, `${o.branch} → ${o.remote} : ${dest}`));
       if (!o.upstream) target.append(' ', el('span', 'muted', tr('(new)')));
       body.appendChild(target);
     }
