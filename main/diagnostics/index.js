@@ -196,7 +196,7 @@ function watchProcess(proc, { name, plugin } = {}) {
 
 // ---------- install ----------
 function readSettings() {
-  try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')); } catch { return {}; }
+  try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')) || {}; } catch { return {}; }
 }
 
 function install() {

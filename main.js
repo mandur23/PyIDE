@@ -189,14 +189,31 @@ diagnostics.setPluginResolver(plugins.ownerOf);
 
 // Settings live in a file, not localStorage: a restart (app.exit) can drop localStorage writes that were not flushed yet.
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
+const settingsLog = diagnostics.logger('#settings');
+// A file that cannot be read as settings (hand-edited, truncated) is kept as settings.json.bak before the renderer
+// starts over with defaults and writes a new one.
 ipcMain.on('settings:loadSync', (e) => {
-  try { e.returnValue = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch { e.returnValue = null; }
+  let text;
+  try { text = fs.readFileSync(SETTINGS_FILE, 'utf8'); } catch { e.returnValue = null; return; }
+  try {
+    const settings = JSON.parse(text);
+    if (settings && typeof settings === 'object' && !Array.isArray(settings)) { e.returnValue = settings; return; }
+  } catch {}
+  settingsLog.warn(`${SETTINGS_FILE} is not valid settings JSON; kept as settings.json.bak, starting with defaults`);
+  try { fs.copyFileSync(SETTINGS_FILE, `${SETTINGS_FILE}.bak`); } catch {}
+  e.returnValue = null;
 });
+// A failed write (disk full, the file locked by a virus scanner) answers false; the renderer tries again later.
 ipcMain.on('settings:saveSync', (e, settings) => {
-  fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-  fs.writeFileSync(`${SETTINGS_FILE}.tmp`, JSON.stringify(settings, null, 2));
-  fs.renameSync(`${SETTINGS_FILE}.tmp`, SETTINGS_FILE);
-  e.returnValue = true;
+  try {
+    fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+    fs.writeFileSync(`${SETTINGS_FILE}.tmp`, JSON.stringify(settings, null, 2));
+    fs.renameSync(`${SETTINGS_FILE}.tmp`, SETTINGS_FILE);
+    e.returnValue = true;
+  } catch (err) {
+    settingsLog.warn(`saving settings failed: ${err.message}`);
+    e.returnValue = false;
+  }
 });
 
 // Detached editor windows load only the plugins that declare "detached": true.

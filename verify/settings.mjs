@@ -1,4 +1,7 @@
 // Settings dialog layout, validation, language switching and plugin management, including what survives a restart.
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
@@ -138,6 +141,16 @@ try {
   await b.shot('settings-ko.png');
   check(b.consoleErrors.length === 0, 'no renderer exceptions after restart');
   b.close();
+
+  // ---------- a settings.json that is not valid JSON ----------
+  const broken = mkdtempSync(path.join(tmpdir(), 'pyide-settings-broken-'));
+  writeFileSync(path.join(broken, 'settings.json'), '{ "editor.fontSize": 16, oops');
+  const c = await launch({ fixture: 'core', port: 9452, name: 'settings-broken', userData: broken });
+  check(await c.js(`ide.settings.get('editor.fontSize', 14) === 14`), 'an unreadable settings.json starts with defaults');
+  check(readFileSync(path.join(broken, 'settings.json.bak'), 'utf8').includes('oops'), 'the unreadable file is kept as settings.json.bak');
+  check(!!JSON.parse(readFileSync(path.join(broken, 'settings.json'), 'utf8')), 'a valid settings.json is written in its place');
+  check(c.consoleErrors.length === 0, 'no renderer exceptions with a broken settings file');
+  c.close();
 } catch (err) {
   check(false, err.message);
   a?.close();

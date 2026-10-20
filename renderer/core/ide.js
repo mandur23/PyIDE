@@ -78,7 +78,11 @@ let settingsDirty = false;
 const flushSettings = () => {
   if (!settingsDirty) return;
   settingsDirty = false;
-  api.saveSettingsSync(settingsCache);
+  // The main process could not write the file (it was locked, the disk full): keep the changes pending and retry.
+  if (api.saveSettingsSync(settingsCache) === false) {
+    settingsDirty = true;
+    setTimeout(flushSettings, 2000);
+  }
 };
 // pagehide comes after every beforeunload listener, so changes those listeners make are written too.
 addEventListener('beforeunload', flushSettings);
