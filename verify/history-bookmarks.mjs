@@ -137,8 +137,12 @@ try {
   await until(`ide.api.exists(ide.util.joinPath(ide.root, 'util.py'))`, 'restored file');
   check(read(file('util.py')) === beforeDelete, 'Revert recovers the deleted file with its last content');
   // A closed file that cannot be written (read-only here) is reported in the view rather than failing silently.
+  // (Closing the tab waits for the diff of the restored text: Monaco fails a diff still computing when its model goes.)
+  await sleep(1000);
   await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'util.py'), true), true)`);
   await until(`!ide.getDocument(ide.util.joinPath(ide.root, 'util.py'))`, 'util.py closed');
+  await until(`document.querySelector('.lh-view:not(.hidden) .lh-diff-head')?.textContent.includes('Current (read-only)')`, 'diff against the file on disk', 8000)
+    .then(() => check(true, 'closing a file shown in a history view switches its diff to the file on disk'), () => check(false, 'closing a file shown in a history view switches its diff to the file on disk'));
   chmodSync(file('util.py'), 0o444);
   await click('.lh-view:not(.hidden) .lh-revert');
   await until(`document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent.startsWith('Cannot revert: EPERM')`, 'revert error shown', 8000)

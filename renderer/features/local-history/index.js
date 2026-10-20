@@ -167,6 +167,7 @@
     let original = null;
     let ownModified = null;
     let liveDoc = null;
+    let liveSub = null;
     let focusedSide = 'modified';
     let showSeq = 0;
     let disposed = false;
@@ -249,6 +250,8 @@
     }
 
     function closeDiff() {
+      liveSub?.dispose();
+      liveSub = null;
       if (!diff) return;
       diff.dispose();
       // Monaco keeps a global hover-delegate factory bound to the last editor's scoped services; a throwaway editor
@@ -306,6 +309,9 @@
       original = ide.monaco.editor.createModel(left.text ?? '', undefined, diffUri(name));
       const modified = doc ? doc.model : (ownModified = ide.monaco.editor.createModel(right, undefined, diffUri(name)));
       liveDoc = doc;
+      // Closing the file's tab disposes its model, which the diff editor must let go of first; the row is then shown
+      // against the file on disk.
+      if (doc) liveSub = doc.model.onWillDispose(() => { closeDiff(); setTimeout(() => !disposed && selected && show(selected)); });
       diff = ide.monaco.editor.createDiffEditor(box, {
         automaticLayout: true, readOnly: !doc, originalEditable: false, renderSideBySide: true,
         fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: 14, lineHeight: 22, minimap: { enabled: false },
