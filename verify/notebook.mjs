@@ -138,8 +138,9 @@ try {
   check(true, 'image/png output renders as an image (12x8)');
   const frame = `${H}.querySelectorAll('.nb-cell')[${img}].querySelector('iframe.nb-html')`;
   check(await js(`${frame}?.getAttribute('sandbox') === 'allow-scripts'`), 'HTML output renders in a sandboxed iframe');
-  check(await js(`(() => { try { return ${frame}.contentDocument === null; } catch { return true; } })()`), 'the HTML frame cannot reach the IDE document');
   await until(`parseInt(${frame}.style.height) > 20`, 'iframe fits its content', 10000).then(() => check(true, 'the HTML frame grows to its content'), () => check(false, 'the HTML frame grows to its content'));
+  // After the output loaded (it grew): until then the frame holds the initial about:blank, which the IDE can read.
+  check(await js(`(() => { try { return ${frame}.contentDocument === null; } catch { return true; } })()`), 'the HTML frame cannot reach the IDE document');
   await shot('notebook-image.png');
 
   // ---------- error output ----------
