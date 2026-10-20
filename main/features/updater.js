@@ -6,6 +6,7 @@ const { shell } = require('electron');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const { pipeline } = require('stream');
 const { fileURLToPath } = require('url');
 
 function installKind(app) {
@@ -17,13 +18,17 @@ function installKind(app) {
 function serveFolder(dir) {
   const root = path.resolve(dir);
   const server = http.createServer((req, res) => {
-    const rel = decodeURIComponent(new URL(req.url, 'http://localhost').pathname).replace(/^\/+/, '');
-    const file = path.resolve(root, rel);
+    let file = null;
     let stat = null;
-    try { stat = file.startsWith(root + path.sep) && fs.statSync(file); } catch {}
+    try { // a malformed escape (%E0) throws URIError: a 404, not an exception in the main process
+      file = path.resolve(root, decodeURIComponent(new URL(req.url, 'http://localhost').pathname).replace(/^\/+/, ''));
+      stat = file.startsWith(root + path.sep) && fs.statSync(file);
+    } catch {}
     if (!stat || !stat.isFile()) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'Content-Length': stat.size, 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
-    if (req.method === 'HEAD') res.end(); else fs.createReadStream(file).pipe(res);
+    // pipeline, not pipe: a cancelled download closes the file, and a read error ends the response instead of
+    // being thrown in the main process.
+    if (req.method === 'HEAD') res.end(); else pipeline(fs.createReadStream(file), res, () => {});
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);

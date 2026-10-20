@@ -37,6 +37,8 @@
     for (const line of [].concat(text)) body.appendChild(el('p', null, line));
     return ide.ui.dialog({ title, body, buttons, width: 460 });
   };
+  // What main threw, without Electron's "Error invoking remote method '…': Error: " prefix.
+  const reasonOf = (err) => String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
   const skip = (version) => ({ label: tr('Skip This Version'), run: () => ide.settings.set(SKIPPED, version) });
   const later = { label: tr('Later') };
 
@@ -53,7 +55,7 @@
     try {
       result = await ide.api.invoke('updater:check', feedUrl);
     } catch (err) {
-      const reason = String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      const reason = reasonOf(err);
       log.warn(`update check failed: ${reason}`);
       if (manual) message(tr('Check for Updates'), [tr('Could not check for updates.'), reason], [{ label: tr('Close'), primary: true }]);
       return null;
@@ -67,8 +69,8 @@
     if (state.kind === 'nsis') {
       if (state.phase === 'downloaded') offerRestart();
       else ide.api.invoke('updater:download').catch((err) => {
-        log.warn(`update download failed: ${err.message}`);
-        message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), String(err.message)], [{ label: tr('Close'), primary: true }]);
+        log.warn(`update download failed: ${reasonOf(err)}`);
+        message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
       });
     } else if (state.kind === 'msi') {
       message(tr('Update Available'), [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
