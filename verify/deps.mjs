@@ -3,6 +3,7 @@
 // PIP_NO_INDEX, so nothing reaches PyPI. Ports 9920-9929.
 import { execFileSync } from 'child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -54,6 +55,13 @@ async function quickFixTitles(line, column) {
 }
 
 try {
+  // ---------- a UTF-16 requirements.txt (Windows PowerShell's `pip freeze >`) is read as pip reads it ----------
+  const utf16 = mkdtempSync(path.join(scratch, 'utf16-'));
+  writeFileSync(path.join(utf16, 'requirements.txt'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('pyide-deps-tiny==1.0\r\n# 한글\r\n', 'utf16le')]));
+  const depsLib = createRequire(import.meta.url)('../main/packages/deps.js');
+  const utf16Reqs = depsLib.detect(utf16).files[0]?.reqs.map((r) => `${r.name}${r.spec}`);
+  check(S(utf16Reqs) === S(['pyide-deps-tiny==1.0']), `a UTF-16 requirements.txt is parsed (${S(utf16Reqs)})`);
+
   // ---------- the project venv is the interpreter ----------
   const isVenv = `ide.currentInterp()?.executable.toLowerCase() === ${S(venvPython.toLowerCase())}`;
   try { await until(isVenv, 'project venv selected', 20000); } catch {

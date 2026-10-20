@@ -327,6 +327,10 @@ const KIND_OF = (name) => {
 };
 const parseFile = (kind, text) => (kind === 'requirements' ? parseRequirementsTxt(text) : kind === 'pyproject' ? parsePyproject(text) : parsePipfile(text));
 
+const decodeText = (buf) => (buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2)
+  : buf[0] === 0xfe && buf[1] === 0xff ? Buffer.from(buf.subarray(2)).swap16().toString('utf16le')
+    : buf.toString('utf8').replace(/^﻿/, ''));
+
 // Dependency files in the project root and the manager they imply: a lock file picks uv or Poetry, so does a
 // [tool.poetry] / [tool.uv] table; otherwise pip. texts: {path: unsaved editor text} overrides what is on disk.
 function detect(root, texts = {}) {
@@ -335,7 +339,8 @@ function detect(root, texts = {}) {
   const textOf = (p) => {
     const hit = Object.keys(texts).find((k) => k.toLowerCase() === p.toLowerCase());
     if (hit) return texts[hit];
-    try { return fs.readFileSync(p, 'utf8').replace(/^﻿/, ''); } catch { return null; }
+    // Windows PowerShell's `pip freeze > requirements.txt` writes UTF-16 with a BOM, which pip reads too.
+    try { return decodeText(fs.readFileSync(p)); } catch { return null; }
   };
   const files = [];
   for (const name of names.sort()) {
