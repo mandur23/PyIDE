@@ -85,6 +85,8 @@ class DapClient {
   }
 }
 
+const HANDSHAKE_TIMEOUT_MS = 30000;
+
 async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
   const end = Date.now() + timeoutMs;
   for (;;) {
@@ -104,6 +106,7 @@ async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
 exports.register = (ctx) => {
   const { ipcMain, send, startProcess, killProcess, procs, vendorDir } = ctx;
   const sessions = new Map(); // procId -> {dap, socket}
+  const starting = new Map(); // opts.startKey of a debug:start in progress -> its stop()
 
   const closeSession = (id) => {
     const s = sessions.get(id);
@@ -115,46 +118,65 @@ exports.register = (ctx) => {
   // breakpoints: [{path, lines: [{line, condition?, hitCondition?, logMessage?}]}], DAP SourceBreakpoints passed to debugpy
   // as they are (a logMessage makes a logpoint). Resolves {id} once the program runs with breakpoints set.
   // opts: {params?: string[], env?: object, roots?: string[]} from a run configuration (roots go on PYTHONPATH like Run).
+  // opts.startKey: names this startup for debug:stop(null, startKey), which ends it before the renderer has its id.
   ipcMain.handle('debug:start', async (_e, interp, file, cwd, breakpoints = [], opts = {}) => {
-    // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
-    const ep = remote.isRemote(interp) ? await remote.debugEndpoint(interp) : null;
-    const port = ep ? ep.port : await freePort();
-    // opts.envFiles: .env files under opts.env (undefined: the project root's .env), as for run:start.
-    const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
-    const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
-    const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
-    const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
-      '--wait-for-client', file, ...(opts.params || [])];
-    const id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
-      : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd, env });
-
-    let socket;
+    let stopped = false;
+    let fail;
+    const failed = new Promise((_r, reject) => { fail = reject; });
+    failed.catch(() => {});
+    const key = opts.startKey;
+    if (key != null) starting.set(key, () => { stopped = true; fail(new Error('Debugging stopped')); });
+    let id = null;
+    let timer;
     try {
-      await ep?.ready(() => procs.has(id));
-      socket = await connectWithRetry(port, () => procs.has(id));
-    } catch (err) {
-      killProcess(id);
-      throw err;
-    }
-    socket.setNoDelay(true);
-    const dap = new DapClient(socket, (event, body) => {
-      send('debug:event', { id, event, body });
-      if (event === 'terminated' || event === 'exited') setTimeout(() => closeSession(id), 300);
-    });
-    sessions.set(id, { dap, socket });
-    socket.on('close', () => {
-      if (sessions.delete(id)) send('debug:event', { id, event: 'closed', body: {} });
-    });
+      // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
+      const ep = remote.isRemote(interp) ? await remote.debugEndpoint(interp) : null;
+      const port = ep ? ep.port : await freePort();
+      if (stopped) { ep?.release(); throw new Error('Debugging stopped'); }
+      // opts.envFiles: .env files under opts.env (undefined: the project root's .env), as for run:start.
+      const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
+      const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+      const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
+      const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
+        '--wait-for-client', file, ...(opts.params || [])];
+      id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
+        : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd, env });
+      if (stopped) throw new Error('Debugging stopped');
 
-    try {
-      await configure(dap, breakpoints, ep?.pathMappings);
+      const alive = () => procs.has(id) && !stopped;
+      const connecting = (async () => {
+        await ep?.ready(alive);
+        return connectWithRetry(port, alive);
+      })();
+      // A socket that connects after a stop has nobody to talk to.
+      connecting.then((sock) => { if (stopped) sock.destroy(); }, () => {});
+      const socket = await Promise.race([connecting, failed]);
+      socket.setNoDelay(true);
+      const dap = new DapClient(socket, (event, body) => {
+        send('debug:event', { id, event, body });
+        if (event === 'terminated' || event === 'exited') setTimeout(() => closeSession(id), 300);
+      });
+      sessions.set(id, { dap, socket });
+      socket.on('close', () => {
+        if (sessions.delete(id)) send('debug:event', { id, event: 'closed', body: {} });
+      });
+      // A debugpy that accepts the connection but never answers or never sends 'initialized' would otherwise keep this
+      // startup (and the Stop button) waiting forever.
+      timer = setTimeout(() => fail(new Error(`debugpy did not start the debug session within ${HANDSHAKE_TIMEOUT_MS / 1000} seconds`)),
+        HANDSHAKE_TIMEOUT_MS);
+      await Promise.race([configure(dap, breakpoints, ep?.pathMappings), failed]);
+      return { id };
     } catch (err) {
-      // A failed handshake must not leave the debuggee running (or listening) with nobody attached.
-      closeSession(id);
-      if (procs.has(id)) killProcess(id);
+      // A failed or stopped startup must not leave the debuggee running (or listening) with nobody attached.
+      if (id != null) {
+        closeSession(id);
+        killProcess(id);
+      }
       throw err;
+    } finally {
+      clearTimeout(timer);
+      if (key != null) starting.delete(key);
     }
-    return { id };
   });
 
   async function configure(dap, breakpoints, pathMappings = []) {
@@ -183,7 +205,9 @@ exports.register = (ctx) => {
     return s.dap.request(command, args);
   });
 
-  ipcMain.handle('debug:stop', async (_e, id) => {
+  // id null: stops the debug:start named startKey, which has not handed its id to the renderer yet.
+  ipcMain.handle('debug:stop', async (_e, id, startKey) => {
+    if (id == null) return starting.get(startKey)?.();
     const s = sessions.get(id);
     if (s) {
       await Promise.race([s.dap.request('disconnect', { terminateDebuggee: true }).catch(() => {}), new Promise((r) => setTimeout(r, 800))]);

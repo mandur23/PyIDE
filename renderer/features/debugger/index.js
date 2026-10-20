@@ -266,6 +266,7 @@
   let lastActive = false; // last value sent as 'debugSessionChanged'
   let sess = null; // {id, file, state: 'starting'|'running'|'suspended', threadId, frames, frameIdx, tempBp}
   let earlyEvents = [];
+  let startKeys = 0;
   const req = (command, args) => ide.api.invoke('debug:request', sess.id, command, args);
   const suspended = () => sess?.state === 'suspended';
 
@@ -274,6 +275,7 @@
   const MAIN_ERRORS = [
     [/^Could not connect to debugpy on port (\d+): ([\s\S]*)$/, (m) => tr('Could not connect to debugpy on port {port}: {error}', { port: m[1], error: m[2] })],
     [/^Debug session closed$/, () => tr('Debug session closed')],
+    [/^debugpy did not start the debug session within (\d+) seconds$/, (m) => tr('debugpy did not start the debug session within {seconds} seconds', { seconds: m[1] })],
     [/^No debug session$/, () => tr('No debug session')],
     [/^(\w+) failed$/, (m) => tr('{command} failed', { command: m[1] })],
   ];
@@ -312,18 +314,23 @@
     lastCfg = cfg;
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
-    sess = { id: null, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
+    sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
     earlyEvents = [];
     const mine = sess;
     updateControls();
     const files = [...bps.values()].map((f) => bpPayload(f.path)).filter((p) => p.lines.length);
     let id;
     try {
-      const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [] };
+      const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [],
+        startKey: mine.startKey };
       ({ id } = await ide.api.invoke('debug:start', interp, file, cfg.cwd || dirname(file), files, opts));
     } catch (err) {
-      con.append(`${remoteError(err)}\n`, 'err');
-      if (sess === mine) { sess = null; updateControls(); }
+      // A startup the user stopped (or replaced) ends quietly: the console already says the process finished.
+      if (sess === mine) {
+        con.append(`${remoteError(err)}\n`, 'err');
+        sess = null;
+        updateControls();
+      }
       return;
     }
     if (sess !== mine) {
@@ -366,8 +373,12 @@
     if (!sess) return;
     const s = sess;
     if (s.id) await ide.api.invoke('debug:stop', s.id);
-    // Still starting: end the session now; debugFile stops the process as soon as 'debug:start' hands back its id.
-    else endSession(s, null);
+    else {
+      // Still starting: end the session now and have main abort the startup, which kills the debuggee even when
+      // debugpy never completes the handshake (debugFile also stops it should 'debug:start' still return an id).
+      endSession(s, null);
+      await ide.api.invoke('debug:stop', null, s.startKey).catch(() => {});
+    }
   }
 
   function setRunning() {

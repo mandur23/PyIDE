@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process';
+import { writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
@@ -243,6 +244,34 @@ try {
   await press('Ctrl+F2');
   await until(`window.__debugger.state() === null`, 'starting session stopped');
   check(await noProcs(loopPy), 'Ctrl+F2 while a debug session is starting stops its debuggee');
+
+  // ---- a debugpy that accepts the connection but never completes the handshake ----
+  // The fake reads requests without answering and stays alive after the IDE hangs up, so only a kill ends it.
+  const fakeDebugpy = path.join(t.project, '..', 'fake_debugpy.py');
+  writeFileSync(fakeDebugpy, [
+    'import socket, sys, time',
+    "host, port = sys.argv[sys.argv.index('--listen') + 1].rsplit(':', 1)",
+    's = socket.socket()',
+    's.bind((host, int(port)))',
+    's.listen(1)',
+    'c, _ = s.accept()',
+    'while c.recv(65536):',
+    '    pass',
+    'while True:',
+    '    time.sleep(1)',
+  ].join('\n'));
+  const debugHanging = () => js(`(() => { const i = ide.currentInterp();
+    ide.debugger.debugFile(${JSON.stringify(loopPy)}, { interp: { ...i, args: [...i.args, ${JSON.stringify(fakeDebugpy)}] } }); return true; })()`);
+  await debugHanging();
+  await until(`window.__debugger.state()?.state === 'starting'`, 'handshake-less session starting');
+  await t.sleep(2500);
+  check(await js(`window.__debugger.state()?.state === 'starting'`) && pyProcs(loopPy) > 0, 'a debugpy without handshake keeps the session starting');
+  await press('Ctrl+F2');
+  await until(`window.__debugger.state() === null`, 'handshake-less session stopped');
+  check(await noProcs(loopPy), 'Stop during a handshake that never completes kills the debuggee');
+  await debugHanging();
+  await until(`document.querySelector('#dbgOut').textContent.includes('did not start the debug session within 30 seconds')`, 'handshake timeout message', 45000);
+  check(await js(`window.__debugger.state() === null`) && await noProcs(loopPy), 'a handshake that never completes times out with a message and kills the debuggee');
 
   await openFile(t, 'waiter.py');
   await js(`(ide.runAction('Run'), ide.runAction('Run'), true)`); // the second Run lands while the first is still starting

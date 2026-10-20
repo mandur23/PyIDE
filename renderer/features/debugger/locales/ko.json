@@ -73,6 +73,7 @@
   "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스",
   "Could not connect to debugpy on port {port}: {error}": "포트 {port}에서 debugpy에 연결할 수 없습니다: {error}",
   "Debug session closed": "디버그 세션이 종료되었습니다",
+  "debugpy did not start the debug session within {seconds} seconds": "debugpy가 {seconds}초 안에 디버그 세션을 시작하지 않았습니다",
   "No debug session": "디버그 세션 없음",
   "{command} failed": "{command} 실패",
   "{command} failed: {error}": "{command} 실패: {error}",
