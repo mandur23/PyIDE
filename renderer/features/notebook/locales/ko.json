@@ -50,5 +50,6 @@
   "{name} already exists": "{name}이(가) 이미 있습니다",
   "{package} is not installed for this interpreter ({python}). Notebooks need it to run code.": "이 인터프리터({python})에 {package}이(가) 설치되어 있지 않습니다. 노트북에서 코드를 실행하려면 필요합니다.",
   "The cell has too much output; only its latest outputs are kept.": "셀의 출력이 너무 많아 최근 출력만 유지합니다.",
-  "The output is too long; only its last 1 MB is kept.": "출력이 너무 길어 마지막 1MB만 유지합니다."
+  "The output is too long; only its last 1 MB is kept.": "출력이 너무 길어 마지막 1MB만 유지합니다.",
+  "The output is too long; only its last 1 MB is shown.": "출력이 너무 길어 마지막 1MB만 표시합니다."
 }

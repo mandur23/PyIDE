@@ -365,9 +365,13 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
   function renderOutputBody(o, ctx) {
     const wrap = el('div', `nb-output nb-out-${o.output_type}`);
     if (o.output_type === 'stream') {
+      // A saved notebook can hold more than a run here keeps (Jupyter writes it all): only its last 1 MB is drawn and
+      // the file keeps the rest. Drawn whole, 200,000 lines held the window for two seconds when the notebook opened.
+      const long = o.text.length > MAX_STREAM;
       if (o.dropped) wrap.appendChild(el('div', 'nb-dropped', tr('The output is too long; only its last 1 MB is kept.')));
+      else if (long) wrap.appendChild(el('div', 'nb-dropped', tr('The output is too long; only its last 1 MB is shown.')));
       const pre = userEl('pre', `nb-text nb-stream nb-${o.name === 'stderr' ? 'stderr' : 'stdout'}`);
-      pre.appendChild(ansiFragment(o.text));
+      pre.appendChild(ansiFragment(long ? o.text.slice(o.text.indexOf('\n', o.text.length - MAX_STREAM) + 1 || o.text.length - MAX_STREAM) : o.text));
       wrap.appendChild(pre);
     } else if (o.output_type === 'error') {
       const pre = userEl('pre', 'nb-text nb-error');
