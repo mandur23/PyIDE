@@ -1,0 +1,10 @@
+{
+  "id": "spellcheck",
+  "name": "Spell Checker",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Typo inspection for comments, strings, names, Markdown and commit messages, with an offline English dictionary (Hunspell en_US) and project and user dictionaries.",
+  "main": [
+    "spellcheck.js"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "Typo: In word '{word}'": "오타: 단어 '{word}'",
+  "Change to '{word}'": "'{word}'(으)로 변경",
+  "Save '{word}' to project dictionary": "'{word}'을(를) 프로젝트 사전에 저장",
+  "Save '{word}' to user dictionary": "'{word}'을(를) 사용자 사전에 저장",
+  "Show Context Actions": "컨텍스트 작업 표시",
+  "Spelling": "맞춤법",
+  "Check spelling in comments, strings, names, Markdown and commit messages (Typo inspection)": "주석, 문자열, 이름, Markdown, 커밋 메시지의 맞춤법 검사 (오타 검사)",
+  "User dictionary": "사용자 사전",
+  "Accepted in every project. One word per line.": "모든 프로젝트에서 허용됩니다. 한 줄에 단어 하나씩 입력하세요.",
+  "Project dictionary": "프로젝트 사전",
+  "Stored in {file}, so it can be shared with the project. One word per line.": "{file}에 저장되므로 프로젝트와 함께 공유할 수 있습니다. 한 줄에 단어 하나씩 입력하세요."
+}

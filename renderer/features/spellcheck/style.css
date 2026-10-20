@@ -1,0 +1,15 @@
+/* Typos are Monaco hint markers; no other feature draws plain (untagged) hints, so they take PyCharm's green wave. */
+.monaco-editor .squiggly-hint {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 3' height='3' width='6'%3E%3Cg fill='%236a9f62'%3E%3Cpolygon points='5.5,0 2.5,3 1.1,3 4.1,0'/%3E%3Cpolygon points='4,0 6,2 6,0.6 5.4,0'/%3E%3Cpolygon points='0,2 1,3 2.4,3 0,0.6'/%3E%3C/g%3E%3C/svg%3E") repeat-x bottom left;
+  opacity: 0.85;
+}
+
+.vcs-msg-box .spell-overlay {
+  position: absolute; box-sizing: border-box; border-style: solid; border-color: transparent; pointer-events: none;
+  overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; z-index: 1;
+}
+.spell-overlay .spell-typo { text-decoration: underline wavy #6a9f62; text-decoration-skip-ink: none; text-underline-offset: 2px; }
+
+.spell-words { width: 100%; min-height: 110px; box-sizing: border-box; resize: vertical; background: var(--gray1); color: var(--gray12);
+  border: 1px solid var(--gray4); border-radius: 4px; padding: 6px 8px; font: 13px var(--mono); outline: none; }
+.spell-words:focus { border-color: var(--blue6); }
