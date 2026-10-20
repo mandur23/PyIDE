@@ -23,7 +23,9 @@ function walkLocal(dir, { ext, noBinary, maxSize } = {}, limit = 20000) {
       if (e.isDirectory()) {
         if (!SKIP.has(e.name) && !fs.existsSync(path.join(p, 'pyvenv.cfg'))) walk(p);
       } else if (e.isFile() && (!ext || e.name.endsWith(ext)) && !(noBinary && BINARY.test(e.name))) {
-        const st = fs.statSync(p);
+        // A file the project's own programs delete while this runs is skipped, as the target's manifest does.
+        let st;
+        try { st = fs.statSync(p); } catch { continue; }
         if (maxSize && st.size > maxSize) continue;
         out.set(path.relative(dir, p).split(path.sep).join('/'), { size: st.size, mtime: Math.floor(st.mtimeMs / 1000), abs: p });
       }
@@ -37,7 +39,8 @@ function walkLocal(dir, { ext, noBinary, maxSize } = {}, limit = 20000) {
 function packStream(files, deleted = []) {
   const parts = [];
   for (const [rel, f] of files) {
-    const data = fs.readFileSync(f.abs);
+    let data;
+    try { data = fs.readFileSync(f.abs); } catch { continue; } // deleted since the walk
     parts.push(Buffer.from(`${JSON.stringify({ p: rel, n: data.length, m: f.mtime })}\n`), data);
   }
   for (const rel of deleted) parts.push(Buffer.from(`${JSON.stringify({ d: rel })}\n`));

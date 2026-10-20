@@ -218,9 +218,10 @@ class Session {
     const docker = tool('docker');
     const t = this.t;
     const st = await runRaw(docker, ['inspect', '-f', '{{.State.Running}}', this.container], { timeout: 30000 });
-    if (st.code === 0 && st.stdout.trim() === 'true') return;
+    // A container kept from an earlier session is reused, and stops at quit like a new one.
+    if (st.code === 0 && st.stdout.trim() === 'true') { started.add(this.container); return; }
     if (st.code === 0) {
-      if ((await runRaw(docker, ['start', this.container], { timeout: 60000 })).code === 0) return;
+      if ((await runRaw(docker, ['start', this.container], { timeout: 60000 })).code === 0) { started.add(this.container); return; }
       await runRaw(docker, ['rm', '-f', this.container]);
     }
     const opts = [

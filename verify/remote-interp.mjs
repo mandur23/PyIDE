@@ -179,6 +179,8 @@ async function exercise(k) {
   try {
     await until(`(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx]; return f && f.path?.toLowerCase() === ${JSON.stringify(local('main.py').toLowerCase())} && f.line === 10; })()`, `${label} breakpoint`, 120000);
     hit = true;
+    // 'suspended' comes before the frame's variables are fetched over the tunnel.
+    await until(`/value/.test(document.querySelector('#dbgVars')?.textContent || '')`, `${label} variables`, 15000).catch(() => {});
   } catch {}
   const vars = await text('#dbgVars');
   check(hit && /value\s*=?\s*(\{int\}\s*)?42/.test(vars), `${label}: the debugger stops at the breakpoint in the target with local paths and variables (${hit ? vars.slice(0, 120) : (await text('#dbgOut')).slice(-400)})`);
