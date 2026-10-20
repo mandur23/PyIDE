@@ -114,7 +114,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     if (r.error) {
       stats.errors++;
       // A server that exits reports itself through onExit; a deliberate stop is not an error.
-      if (!/server exited|not running/.test(r.error)) setEngine({ error: r.error });
+      // A model that failed to load is not loading any more (the next request tries again); left at 'loading', the
+      // status bar would say "AI Completion: loading…" for good instead of showing the error.
+      if (!/server exited|not running/.test(r.error)) setEngine({ error: r.error, ...(engine.state === 'loading' ? { state: 'error' } : {}) });
       return { id, error: r.error };
     }
     if (engine.error) setEngine({ error: null });

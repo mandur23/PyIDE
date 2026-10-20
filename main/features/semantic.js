@@ -561,7 +561,10 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     if (!status().runtime) throw new Error('EmbeddingGemma 2 is not set up');
     const reply = await startServer().send({ op: 'embed', kind, items, dim: DIM }).reply;
     if (reply.error) {
-      model = { ...model, error: reply.error };
+      // A model that failed to load stays unloaded (the server tries again on the next request); left at 'loading',
+      // the status bar would say "Loading EmbeddingGemma 2…" for good.
+      model = { ...model, state: model.state === 'loading' ? 'error' : model.state, error: reply.error };
+      pushStatus();
       throw new Error(reply.error);
     }
     const buf = Buffer.from(reply.data, 'base64');

@@ -2,6 +2,9 @@
 // real models are installed, the sidecars stopping after the idle time without an internal error, the process tree's
 // working set before and after, and the reload on the next request with the status-bar loading hint.
 import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
 const results = [];
@@ -38,6 +41,7 @@ const seen = (t) => t.js(`[...window.__seen]`);
 
 let a;
 let b;
+let c;
 try {
   // ---------- the setting (fake backends) ----------
   a = await launch({ fixture: 'ai-complete', port: 9822, name: 'ai-idle' });
@@ -98,10 +102,35 @@ try {
     check((await b.js(`ide.api.invoke('diagnostics:errors').then((e) => e.length)`)) === 0 && b.consoleErrors.length === 0, 'no internal or renderer errors');
   }
   b.close();
+
+  // ---------- a model that fails to load ----------
+  // Broken model files in an otherwise empty cache: each server reports the failure, and the status bar shows the
+  // error instead of keeping its loading hint up.
+  if (rs.s.runtime && rs.c.runtime) {
+    const cache = mkdtempSync(path.join(tmpdir(), 'pyide-broken-hf-'));
+    for (const [repo, file] of [['google/embeddinggemma-2', 'model.safetensors'], ['ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF', 'qwen2.5-coder-0.5b-q8_0.gguf']]) {
+      const dir = path.join(cache, `models--${repo.replace('/', '--')}`, 'snapshots', 'broken');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, file), 'not a model');
+    }
+    c = await launch({ fixture: 'semantic', port: 9824, name: 'ai-idle-broken', env: { PYIDE_SEMANTIC_BACKEND: 'real', PYIDE_AI_COMPLETE_BACKEND: 'real', HF_HUB_CACHE: cache, HF_HUB_OFFLINE: '1' } });
+    await watchStatus(c);
+    const [query, completion] = await c.js(`Promise.all([
+      ide.api.invoke('semantic:query', ide.root, 'anything', {}),
+      ide.api.invoke('ai-complete:complete', { id: 'broken-1', prefix: 'def f():\\n    ', suffix: '\\n', path: 'x.py', language: 'python', context: [], multiline: true, model: 'qwen2.5-coder-0.5b', repo: 'project' }),
+    ])`);
+    await c.sleep(500);
+    const st = await states(c);
+    const bar = await c.js(`({ semantic: document.querySelector('#semanticStatus').textContent, complete: document.querySelector('#aiCompleteStatus').textContent })`);
+    check(!query.ok && completion.error && st.semantic === 'error' && st.complete === 'error' && !/Loading|loading/.test(bar.semantic + bar.complete),
+      `a model that fails to load ends its loading state (${JSON.stringify({ st, bar, query: query.error?.slice(0, 80), completion: completion.error?.slice(0, 80) })})`);
+    c.close();
+  }
 } catch (err) {
   check(false, err.message);
   a?.close();
   b?.close();
+  c?.close();
 }
 const failed = results.filter((r) => !r).length;
 console.log(`${results.length - failed}/${results.length} passed`);
