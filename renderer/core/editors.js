@@ -45,7 +45,8 @@
     const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [] };
     docs.set(key(path), doc);
     model.onDidChangeContent((e) => {
-      scheduleRender();
+      // The tab bars change only when the modified mark does, not on every keystroke.
+      if (docDirty(doc) !== doc.shownDirty) scheduleRender(); else reportDirty();
       markChanged(doc, e);
       if (!applyingRemote) syncOut(doc);
     });
@@ -222,7 +223,9 @@
       node.dataset.path = t.path;
       node.appendChild(tabIcon(t));
       node.appendChild(el('span', 'name', t.title));
-      if (ide.isDirty(t)) node.appendChild(el('span', 'dirty', '●'));
+      const dirty = ide.isDirty(t);
+      if (t.doc) t.doc.shownDirty = dirty;
+      if (dirty) node.appendChild(el('span', 'dirty', '●'));
       if (t.pinned) node.appendChild(el('span', 'pin', '📌'));
       const close = el('button', 'close', '×');
       close.title = tr('Close');
