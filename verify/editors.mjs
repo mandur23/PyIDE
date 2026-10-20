@@ -1,5 +1,5 @@
 // Editor groups (split panes), tab management, preview/pinned tabs, encodings, binary files and detached windows.
-import { readFileSync, writeFileSync } from 'fs';
+import { chmodSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 import { launch, openFile } from './lib.mjs';
@@ -162,6 +162,44 @@ try {
   await js(`ide.openFile(ide.util.joinPath(ide.root, 'data.bin'))`);
   await until(`!!document.querySelector('.custom-tab:not(.hidden) .binary-actions, .custom-tab:not(.hidden) [data-viewer]')`, 'binary viewer');
   check(true, 'a binary file opens a viewer instead of garbage text');
+
+  // ---------- saving and reloading while the user types ----------
+  // One IPC channel is slowed down so an edit lands while a save or a reload is waiting for the main process.
+  const slowIpc = (channel, ms) => js(`(() => { const real = window.api; ide.api = { ...real, invoke: async (ch, ...a) => { if (ch === ${JSON.stringify(channel)}) await new Promise(r => setTimeout(r, ${ms})); return real.invoke(ch, ...a); } }; return true; })()`);
+  const fastIpc = () => js(`(ide.api = window.api, true)`);
+  const notes = path.join(t.project, 'notes.txt');
+  const notesTab = `ide.findTab(${JSON.stringify(notes)})`;
+  const insert = (text) => `${notesTab}.model.pushEditOperations([], [{ range: new ide.monaco.Range(1, 1, 1, 1), text: ${JSON.stringify(text)} }], () => null)`;
+  await js(`ide.openFile(${JSON.stringify(notes)})`);
+  await until(`!!${notesTab}`, 'notes.txt open');
+  await slowIpc('fs:writeText', 400);
+  const dirtyAfterSave = await js(`(async () => { ${insert('saved line\n')}; const p = ide.saveTab(${notesTab}); await new Promise(r => setTimeout(r, 100)); ${insert('typed during save\n')}; await p; return ide.isDirty(${notesTab}); })()`);
+  await fastIpc();
+  const onDisk = readFileSync(notes, 'utf8');
+  check(dirtyAfterSave && onDisk.includes('saved line') && !onDisk.includes('typed during save'), 'text typed while a save is writing stays marked modified (it is not on disk yet)');
+  await js(`ide.saveTab(${notesTab})`);
+  writeFileSync(notes, 'changed on disk\n');
+  await slowIpc('fs:readText', 400);
+  const afterReload = await js(`(async () => { const p = ide.reloadFromDisk([${notesTab}.path]); await new Promise(r => setTimeout(r, 100)); ${insert('typed during reload\n')}; await p; return { text: ${notesTab}.model.getValue(), dirty: ide.isDirty(${notesTab}) }; })()`);
+  await fastIpc();
+  check(afterReload.text.includes('typed during reload') && !afterReload.text.includes('changed on disk') && afterReload.dirty, `a reload from disk does not overwrite text typed while the file was read (${JSON.stringify(afterReload)})`);
+
+  // Save All in the close confirmation keeps the window open when a file cannot be written (read-only here).
+  await js(`(window.__alerts = [], window.alert = (m) => window.__alerts.push(String(m)), true)`);
+  chmodSync(notes, 0o444);
+  t.cdp('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 0)' });
+  await until(`document.querySelector('.dialog-title')?.textContent === 'Save Changes?'`, 'close confirmation (main window)', 8000);
+  await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Save All').click()`);
+  await until(`window.__alerts.length > 0 && !document.querySelector('.dialog-backdrop')`, 'save error shown');
+  await sleep(800);
+  check(await js(`ide.isDirty(${notesTab}) && window.__alerts[0].startsWith('Could not save notes.txt: ')`), 'Save All that fails to write keeps the window open with the file still modified');
+  chmodSync(notes, 0o666);
+  await js(`ide.saveTab(${notesTab})`);
+  check(await js(`!ide.isDirty(${notesTab})`), 'the file saves once it is writable again');
+  // A file that cannot be read gets a readable message, not Electron's IPC error text.
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'missing.py'))`);
+  const openAlert = await js(`window.__alerts.pop()`);
+  check(/^Cannot open missing\.py: /.test(openAlert) && !openAlert.includes('invoking remote method'), `opening a missing file explains why (${openAlert})`);
 
   // ---------- maximize editor ----------
   await press('Alt+F12');

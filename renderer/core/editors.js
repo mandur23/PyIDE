@@ -863,22 +863,24 @@
     ide.emit('beforeSave', tab);
     if (!(await runSaveActions(doc, auto)) && auto) return;
     if (doc.model.isDisposed()) return;
+    // The version written, not the one after the write: edits typed while it runs are not on disk yet.
     const text = doc.model.getValue();
+    const version = doc.model.getAlternativeVersionId();
     try {
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
     } catch (e) {
       const error = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
       if (!auto) alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
       else {
-        doc.autoSaveFailed = doc.model.getAlternativeVersionId();
+        doc.autoSaveFailed = version;
         ide.emit('autoSaveSkipped', { path: doc.path, reason: 'failed', error });
       }
       return;
     }
-    doc.savedVersion = doc.model.getAlternativeVersionId();
+    doc.savedVersion = version;
     doc.diskHash = textHash(text);
     doc.conflict = false;
-    clearChanged(doc);
+    if (!docDirty(doc)) clearChanged(doc);
     if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text });
     for (const t of tabsOfDoc(doc)) t.preview = false;
     ide.emit('fileSaved', tab);
@@ -901,6 +903,8 @@
       if (docDirty(doc)) continue;
       let r;
       try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { continue; }
+      // Typed into or closed while the file was read: the editor's text wins.
+      if (doc.model.isDisposed() || docDirty(doc)) continue;
       if (r.text === undefined || r.text === doc.model.getValue()) continue;
       doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
       doc.savedVersion = doc.model.getAlternativeVersionId();
@@ -1113,7 +1117,8 @@
       body,
       width: 460,
       buttons: [
-        { label: tr('Save All'), primary: true, run: async () => { await ide.saveAll(); ide.api.invoke('window:closeNow'); } },
+        // A file that could not be saved (its error was shown) keeps the window open.
+        { label: tr('Save All'), primary: true, run: async () => { await ide.saveAll(); if (![...docs.values()].some(docDirty)) ide.api.invoke('window:closeNow'); } },
         { label: tr("Don't Save"), run: () => { ide.api.send('window:setDirty', false); ide.api.invoke('window:closeNow'); } },
         { label: tr('Cancel') },
       ],
