@@ -1065,12 +1065,20 @@ ide.toLocalPath = (p) => {
   return p;
 };
 ide.currentInterp = () => ide.interps[$('interpSelect').selectedIndex] || null;
-ide.reloadInterpreters = async () => {
-  ide.interps = await ide.api.interpreters(ide.root, ide.settings.get('interpreters.extra', []));
+// Only the latest call applies its list: probing a project's venvs can take seconds, and a call for the project
+// that was open before must not replace the list of the one opened since. An overtaken call resolves with the latest.
+let interpSeq = 0;
+let interpLoad = null;
+ide.reloadInterpreters = () => (interpLoad = loadInterpreters(++interpSeq));
+async function loadInterpreters(seq) {
+  const root = ide.root;
+  const interps = await ide.api.interpreters(root, ide.settings.get('interpreters.extra', []));
   // Plugins add interpreters that are not local executables (remote-interp: WSL, SSH, Docker targets).
   for (const provide of ide.interpreterProviders) {
-    try { ide.interps.push(...await provide(ide.root)); } catch (err) { console.warn('interpreter provider failed', err); }
+    try { interps.push(...await provide(root)); } catch (err) { console.warn('interpreter provider failed', err); }
   }
+  if (seq !== interpSeq) return interpLoad;
+  ide.interps = interps;
   const sel = $('interpSelect');
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));
@@ -1080,7 +1088,7 @@ ide.reloadInterpreters = async () => {
   if (idx >= 0) sel.selectedIndex = idx;
   $('statusInterpLabel').textContent = ide.currentInterp()?.label || tr('No interpreter');
   ide.emit('interpreterChanged', ide.currentInterp());
-};
+}
 // Selects an interpreter by its python.exe (the status-bar widget and the New Project wizard use this).
 ide.setInterpreter = (executable) => {
   const i = ide.interps.findIndex((x) => samePath(x.executable, executable));
