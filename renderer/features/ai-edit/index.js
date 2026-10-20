@@ -169,7 +169,7 @@
     contexts.set(editor, ctx);
     editor.onDidChangeModelContent((e) => onContentChange(ctx, e));
     // The edit history starts from the text as it was opened, so the first edit is recorded too.
-    const track = () => { if (editor.getModel()) historyOf(editor.getModel()); };
+    const track = () => { if (nesEnabled() && editor.getModel()) historyOf(editor.getModel()); };
     track();
     editor.onDidChangeModel(() => { endSession(ctx); clearNes(ctx); track(); });
     editor.onDidChangeCursorPosition(() => { if (ctx.nes.suggestion) renderNesHint(ctx); });
@@ -545,7 +545,8 @@
   }
 
   // ---------- next edit suggestions ----------
-  const histories = new WeakMap(); // model -> {snapshot, edits: [text], lastLine, timer}
+  // Kept only while suggestions are on: diffing the whole file after every pause in typing is wasted work otherwise.
+  let histories = new WeakMap(); // model -> {snapshot, edits: [text], lastLine, timer}
   const historyOf = (model) => {
     let h = histories.get(model);
     if (!h) {
@@ -565,6 +566,7 @@
       scheduleRender(ctx);
     }
     if (ctx.nes.suggestion || ctx.nes.request) clearNes(ctx);
+    if (!nesEnabled()) return;
     const history = historyOf(model);
     if (!ctx.editor.hasTextFocus()) return;
     clearTimeout(history.timer);
@@ -748,7 +750,15 @@
   // The Settings dialog writes the setting directly, so its effects follow the setting, not setNes.
   ide.on('settingsChanged', (key) => {
     if (key !== SETTINGS.nes) return;
-    if (!nesEnabled()) for (const ctx of contexts.values()) clearNes(ctx);
+    const on = nesEnabled();
+    for (const ctx of contexts.values()) {
+      const model = ctx.editor.getModel();
+      if (on) { if (model) historyOf(model); continue; }
+      clearNes(ctx);
+      if (model) clearTimeout(histories.get(model)?.timer);
+    }
+    // Edits made while suggestions are off are not recorded; turning them on starts from the text as it is then.
+    if (!on) histories = new WeakMap();
     renderStatus();
   });
 
