@@ -261,6 +261,27 @@ try {
   await until(`${H}.dataset.kernel === 'idle'`, 'restarted', 60000);
   await runAt(t, probe, "'x' in globals()", 'after restart');
   check((await outputsText(t, probe)).includes('False'), 'Restart Kernel clears the kernel state');
+
+  // ---------- output flood: a stream output keeps its last 1 MB ----------
+  const flood = await addCodeCell(t, 'for i in range(200000):\n    print("line", i)');
+  await runAt(t, flood, undefined, 'flood');
+  const streamLen = await js(`${V}.cells()[${flood}].data.outputs[0]?.text.length`);
+  const streamText = await js(`${H}.querySelectorAll('.nb-cell')[${flood}].querySelector('.nb-stream').textContent`);
+  check(streamLen <= 1024 * 1024 && streamText.endsWith('line 199999\n') && !streamText.startsWith('line 0\n'), `a flooding cell keeps only the last 1 MB of its output (${streamLen} chars)`);
+  check(await js(`!!${H}.querySelectorAll('.nb-cell')[${flood}].querySelector('.nb-dropped') && !${V}.serialize().includes('"dropped"')`), 'the cut is noted in the cell, not written into the file');
+
+  // ---------- a dead kernel ----------
+  const die = await addCodeCell(t, 'import os\nos._exit(1)');
+  await js(`${V}.runCell(${die})`);
+  await until(`${H}.dataset.kernel === 'dead'`, 'kernel died', 30000);
+  check(await js(`${H}.querySelector('.nb-banner').textContent.includes('kernel died')`), 'a kernel that exits shows the Kernel died banner');
+  await js(`${V}.runCell(${probe})`);
+  await until(`!${H}.querySelectorAll('.nb-cell')[${probe}].matches('.running, .queued')`, 'run on a dead kernel ends', 10000)
+    .then(() => check(true, 'running a cell on a dead kernel does not hang'), () => check(false, 'running a cell on a dead kernel does not hang'));
+  await click(`${HS} .nb-banner button.primary`);
+  await until(`${H}.dataset.kernel === 'idle'`, 'restarted after death', 60000);
+  await runAt(t, probe, '6 * 7', 'after death');
+  check((await outputsText(t, probe)).includes('42'), 'Restart Kernel brings a dead kernel back');
   await js(`ide.closeTab(ide.activeTab().path, true)`);
 
   // ---------- invalid file ----------

@@ -38,6 +38,7 @@
   function writeOutput(o) {
     const out = { ...o };
     delete out.displayId;
+    delete out.dropped;
     if (o.output_type === 'stream') out.text = splitLines(o.text);
     if (o.data) out.data = splitBundle(o.data);
     return out;
@@ -122,7 +123,20 @@
     }).join('\n');
   }
 
-  const ANSI_RE = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+  // A cell that prints without end would grow its output (rendered again on every message, and written into the
+  // document) until the window runs out of memory. A stream output keeps its last 1 MB, like PyCharm's console buffer;
+  // `dropped` (not saved) counts the characters cut from the front.
+  const MAX_STREAM = 1024 * 1024;
+  function capStream(o) {
+    if (o.text.length <= MAX_STREAM) return;
+    let from = o.text.length - MAX_STREAM;
+    const nl = o.text.indexOf('\n', from);
+    if (nl >= 0 && nl - from < 4096) from = nl + 1;
+    o.text = o.text.slice(from);
+    o.dropped = (o.dropped || 0) + from;
+  }
+
+  const ANSI_RE =/\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
   const stripAnsi = (s) => s.replace(ANSI_RE, '');
   function color256(n) {
     if (n < 16) return null;
@@ -347,6 +361,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
   function renderOutputBody(o, ctx) {
     const wrap = el('div', `nb-output nb-out-${o.output_type}`);
     if (o.output_type === 'stream') {
+      if (o.dropped) wrap.appendChild(el('div', 'nb-dropped', tr('The output is too long; only its last 1 MB is kept.')));
       const pre = userEl('pre', `nb-text nb-stream nb-${o.name === 'stderr' ? 'stderr' : 'stdout'}`);
       pre.appendChild(ansiFragment(o.text));
       wrap.appendChild(pre);
@@ -836,10 +851,11 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       const last = outs[outs.length - 1];
       if (o.output_type === 'stream' && last?.output_type === 'stream' && last.name === o.name) {
         last.text = fixConsole(last.text + o.text);
+        capStream(last);
         const node = c.outputs.querySelectorAll('.nb-output')[outs.length - 1];
         node?.replaceWith(renderOutput(last, outputCtx()));
       } else {
-        if (o.output_type === 'stream') o.text = fixConsole(o.text);
+        if (o.output_type === 'stream') { o.text = fixConsole(o.text); capStream(o); }
         outs.push(o);
         const node = renderOutput(o, outputCtx());
         if (c.stdin?.isConnected) c.outputs.insertBefore(node, c.stdin); else c.outputs.appendChild(node);

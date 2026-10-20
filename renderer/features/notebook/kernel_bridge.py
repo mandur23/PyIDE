@@ -115,6 +115,10 @@ class Bridge:
         op = cmd.get("op")
         rid = cmd.get("id")
         if op == "execute":
+            # A dead kernel never answers, so the cell would wait forever; it ends at once until the kernel restarts.
+            if self.dead_reported:
+                emit(ev="done", id=rid, status="dead", n=None)
+                return True
             msg_id = self.kc.execute(cmd["code"], store_history=True, allow_stdin=True, stop_on_error=True)
             self.requests[msg_id] = ("execute", rid)
             self.last_exec = rid
