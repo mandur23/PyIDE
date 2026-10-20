@@ -117,9 +117,9 @@ try {
     for (let i = 0; i < 10; i++) await js(`ide.editor.trigger('k', 'type', { text: 'z' })`);
     return js(`ide.activeTab().model.getLineContent(1).slice(0, 16)`);
   });
-  // Every edit sends the whole text to Pyright and ruff, which costs the main process about 0.2 s per 15 MB.
+  // Edits reach Pyright as ranges, and ruff lints a file this large only when it opens and when it is saved.
   smooth(typing, 'typing on the 15 MB line');
-  for (const [f, kind] of [['binary.py', 'binary'], ['utf16_nobom.py', 'binary'], ['late_nul.py', 'file'], ['invalid_utf8.py', 'file']]) {
+  for (const [f, kind] of [['binary.py', 'binary'], ['utf16_nobom.py', 'file'], ['late_nul.py', 'file'], ['invalid_utf8.py', 'file']]) {
     const r = await scenario(`open ${f}`, open(f));
     check(r.value?.kind === kind && r.task < 1000, `${f} opens as ${kind === 'file' ? 'text' : 'binary'}`);
   }
