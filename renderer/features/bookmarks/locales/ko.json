@@ -1,4 +1,5 @@
 {
+  "Line bookmarks with mnemonics (F11, Ctrl+F11, Ctrl+digit), gutter icons and a Bookmarks tool window.": "줄 북마크와 니모닉(F11, Ctrl+F11, Ctrl+숫자), 거터 아이콘, 북마크 도구 창.",
   "Add Mnemonic Bookmark": "니모닉 북마크 추가",
   "Bookmark description": "북마크 설명",
   "Bookmark {mnemonic}": "북마크 {mnemonic}",

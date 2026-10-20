@@ -1,4 +1,5 @@
 {
+  "Python interpreters on WSL, over SSH and in Docker or Docker Compose, used by Run, Debug, tests, the Python Console, the terminal, Python Packages and Pyright.": "WSL, SSH, Docker 및 Docker Compose의 Python 인터프리터. 실행, 디버그, 테스트, Python 콘솔, 터미널, Python 패키지와 Pyright에서 사용합니다.",
   "On WSL…": "WSL에서…",
   "New Interpreter on WSL": "WSL의 새 인터프리터",
   "WSL": "WSL",

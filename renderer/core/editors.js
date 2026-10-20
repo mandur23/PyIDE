@@ -224,7 +224,8 @@
     bar.replaceChildren();
     for (const t of g.tabs) {
       const node = el('div', 'tab' + (t === g.active ? ' active' : '') + (t.preview ? ' preview' : '') + (t.pinned ? ' pinned' : ''));
-      node.title = t.path;
+      // A file's tooltip is its path; a custom tab's path is an internal id (workspace:home), so it shows its title.
+      node.title = /^([a-z]:[\\/]|\\\\)/i.test(t.path || '') ? t.path : t.title;
       node.draggable = true;
       node.dataset.path = t.path;
       node.appendChild(tabIcon(t));
