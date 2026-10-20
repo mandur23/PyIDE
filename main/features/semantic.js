@@ -18,7 +18,7 @@ const INDEX_VERSION = 3;
 const MAX_FILE_BYTES = 300 * 1024;
 const MAX_CHUNKS = 30000;
 const CHUNK_CHARS = 1800;
-const BATCH = 24;
+const BATCH = 4; // small: a search waits for the batch the server is on (seconds per chunk on a CPU)
 const TAKE = 200; // files per page handed from the worker to main, so no one message carries a whole project
 const SLICE_CHUNKS = 300; // chunks encoded per main-thread slice when the index is written (a few ms each)
 const SLICE_MS = 8; // the longest a slice of index loading runs before the main thread gets a turn
@@ -631,7 +631,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   // ---------- limits, pause, typing, exclusions ----------
   // The renderer passes the user's settings (semantic:configure); confirmChunks is the size of a first index above
   // which the user is asked before it starts.
-  const limits = { dataFiles: 1000, dataMB: 50, confirmChunks: 5000 };
+  const limits = { dataFiles: 1000, dataMB: 50, confirmChunks: 1000 };
   let paused = false; // Pause Indexing, for every project, until Resume or the next launch
   let typingAt = 0; // the renderer reports edits (semantic:typing); indexing waits until the user stops typing
   const exclusionsFile = path.join(base, 'exclusions.json');

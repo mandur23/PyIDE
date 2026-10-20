@@ -325,7 +325,8 @@ try {
   sem.take(proj, 1e9);
   const files = plan.files;
   const env = { PYIDE_SEMANTIC_FAKE_PAGE_MS: '1500' };
-  const big = await launch({ projectDir: proj, port: 9535, name: 'semantic-git', env });
+  // Above the default size prompt (1000 chunks): this run checks indexing itself; the prompt is checked below.
+const big = await launch({ projectDir: proj, port: 9535, name: 'semantic-git', env, userData: seeded({ 'semantic.confirmChunks': 100000 }) });
   live.push(big);
   if (REAL) {
     await big.until(`ide.semantic.progress()?.phase === 'ready' && ide.semantic.progress().files === ${files}`, 'index ready', 600000);

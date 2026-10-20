@@ -85,7 +85,8 @@
   // main owns the default (main/ai/runtime.js). The indexing limits are on Settings › AI › Semantic Search.
   const IDLE_KEY = 'ai.idleUnloadMinutes';
   const KEYS = { dataFiles: 'semantic.dataFolderFiles', dataMB: 'semantic.dataFolderMB', confirmChunks: 'semantic.confirmChunks' };
-  const DEFAULTS = { dataFiles: 1000, dataMB: 50, confirmChunks: 5000 };
+  // About 1000 chunks already take hours of background CPU without a GPU, so a larger first index asks first.
+  const DEFAULTS = { dataFiles: 1000, dataMB: 50, confirmChunks: 1000 };
   const limit = (k) => ide.settings.get(KEYS[k]) ?? DEFAULTS[k];
   const configure = () => ide.api.invoke('semantic:configure', { idleMinutes: ide.settings.get(IDLE_KEY), ...Object.fromEntries(Object.keys(KEYS).map((k) => [k, limit(k)])) });
   configure();

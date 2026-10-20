@@ -21,9 +21,10 @@ def emit(obj):
 
 
 def be_gentle(torch):
-    """Indexing runs beside the user's work: half the cores torch would take (PYIDE_SEMANTIC_THREADS overrides),
-    and below-normal priority on Windows, so the editor and the user's own programs come first."""
-    threads = int(os.environ.get("PYIDE_SEMANTIC_THREADS") or 0) or max(1, torch.get_num_threads() // 2)
+    """Indexing runs beside the user's work, for hours on a CPU: a quarter of the cores torch would take
+    (PYIDE_SEMANTIC_THREADS overrides), and below-normal priority on Windows, so the editor and the user's own programs
+    come first. Measured on an 8-core CPU: 2 threads take 16 core-seconds per chunk, 4 threads 42."""
+    threads = int(os.environ.get("PYIDE_SEMANTIC_THREADS") or 0) or max(1, torch.get_num_threads() // 4)
     torch.set_num_threads(threads)
     try:
         torch.set_num_interop_threads(1)
@@ -52,6 +53,10 @@ def load():
         config_kwargs={"vision_config": None, "audio_config": None},
         model_kwargs=model_kwargs,
     )
+    # The model reports no length limit, so a 1800-character chunk (~550 tokens) was embedded whole; attention grows
+    # with the square of the length. A chunk's first 256 tokens (its signature, docstring and start) carry what a
+    # search matches, at less than half the cost.
+    model.max_seq_length = int(os.environ.get("PYIDE_SEMANTIC_MAX_TOKENS") or 256)
     emit({"event": "ready", "device": device, "threads": threads})
 
 
