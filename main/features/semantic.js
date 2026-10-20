@@ -749,26 +749,41 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     const idx = await loadIndex(root);
     // Code-to-code similarity compares like with like: the selection is embedded as a document, the space the index lives in.
     const [q] = similarTo ? await embed([{ text: similarTo }], 'document') : await embed([{ text: query }], 'query');
-    const qt = tokens(query || '');
-    const results = [];
+    const qt = similarTo ? [] : tokens(query || '');
+    const candidates = [];
     for (const [rel, f] of Object.entries(idx.files)) {
       for (const c of f.chunks) {
         if (!c.vector) continue;
         let dot = 0;
         for (let i = 0; i < DIM; i++) dot += c.vector[i] * q[i];
-        const kw = similarTo ? 0 : keywordScore(qt, c);
-        results.push({ rel, start: c.start, end: c.end, symbol: c.symbol, score: dot + 0.15 * kw, semantic: dot, keyword: kw, text: c.text });
+        candidates.push({ rel, c, dot });
       }
     }
-    results.sort((a, b) => b.score - a.score);
-    // One hit per symbol region: drop overlapping windows of an already listed chunk.
-    const out = [];
-    for (const r of results) {
-      if (out.some((o) => o.rel === r.rel && r.start < o.end && o.start < r.end)) continue;
-      out.push({ ...r, path: path.join(root, r.rel), preview: r.text.split('\n').slice(0, 12).join('\n'), text: undefined });
-      if (out.length >= limit) break;
+    // The keyword score scans each chunk's text (hundreds of ms on the main process for a full index), but adds at
+    // most KEYWORD_WEIGHT. So chunks are scored best cosine first, in growing batches, until no chunk left could
+    // still reach the results: the outcome is the same as scoring every chunk.
+    const KEYWORD_WEIGHT = 0.15;
+    candidates.sort((a, b) => b.dot - a.dot);
+    const scored = [];
+    let out = [];
+    for (let i = 0, batch = Math.max(256, limit * 8); ; batch *= 2) {
+      for (const end = Math.min(candidates.length, i + batch); i < end; i++) {
+        const { rel, c, dot } = candidates[i];
+        const kw = keywordScore(qt, c);
+        scored.push({ rel, start: c.start, end: c.end, symbol: c.symbol, score: dot + KEYWORD_WEIGHT * kw, semantic: dot, keyword: kw, text: c.text });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      // One hit per symbol region: drop overlapping windows of an already listed chunk. A chunk not scored yet ranks
+      // below every listed hit, so it could not have hidden one of them.
+      out = [];
+      for (const r of scored) {
+        if (out.some((o) => o.rel === r.rel && r.start < o.end && o.start < r.end)) continue;
+        out.push(r);
+        if (out.length >= limit) break;
+      }
+      if (i >= candidates.length || (out.length >= limit && out[out.length - 1].score >= candidates[i].dot + KEYWORD_WEIGHT)) break;
     }
-    return out;
+    return out.map((r) => ({ ...r, path: path.join(root, r.rel), preview: r.text.split('\n').slice(0, 12).join('\n'), text: undefined }));
   }
 
   // ---------- setup: shared runtime, packages, model download ----------
