@@ -222,7 +222,7 @@ if __name__ == '__main__':
           if (busy) return false;
           busy = true;
           createBtn.disabled = true;
-          try { await create(d); } catch (e) { error.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''); }
+          try { await create(d); } catch (e) { error.textContent = ide.util.errorText(e); }
           busy = false;
           createBtn.disabled = false;
           return false;

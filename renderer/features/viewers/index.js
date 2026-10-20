@@ -11,7 +11,7 @@
   const user = (node) => { node.dataset.userText = ''; return node; };
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
   const invoke = (ch, ...args) => ide.api.invoke(ch, ...args);
-  const cleanError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const cleanError = (e) => ide.util.errorText(e);
 
   // file:// URL for a Windows path, each segment encoded (#, %, spaces and Korean names all survive).
   function fileUrl(p) {

@@ -14,7 +14,7 @@
   const userText = (node) => { node.dataset.userText = ''; return node; };
   const KIND = { class: tr('class'), method: tr('method'), function: tr('function'), field: tr('field'), variable: tr('variable'), property: tr('property') };
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-  const ipcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const ipcError = (e) => ide.util.errorText(e);
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   function highlight(text, ranges, cls = 'sn-hit') {

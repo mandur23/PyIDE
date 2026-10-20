@@ -38,7 +38,7 @@
     return ide.ui.dialog({ title, body, buttons, width: 460 });
   };
   // What main threw, without Electron's "Error invoking remote method '…': Error: " prefix.
-  const reasonOf = (err) => String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const reasonOf = (err) => ide.util.errorText(err);
   const skip = (version) => ({ label: tr('Skip This Version'), run: () => ide.settings.set(SKIPPED, version) });
   const later = { label: tr('Later') };
 

@@ -630,7 +630,7 @@
         ctx.markRestart();
         render();
       } catch (e) {
-        status.textContent = tr('Could not install the plugin: {error}', { error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') });
+        status.textContent = tr('Could not install the plugin: {error}', { error: ide.util.errorText(e) });
       }
     }
     const installFromCatalog = (p) => installFrom(p.dir, localized(p).name);
@@ -639,7 +639,7 @@
       if (!confirm(tr('Uninstall {name}?', { name: localized(p).name }))) return;
       // Windows refuses to delete a folder another program has open.
       try { await ide.api.invoke('plugins:uninstall', p.id); } catch (e) {
-        status.textContent = tr('Could not uninstall {name}: {error}', { name: localized(p).name, error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') });
+        status.textContent = tr('Could not uninstall {name}: {error}', { name: localized(p).name, error: ide.util.errorText(e) });
         return;
       }
       ctx.pluginChanges.delete(p.id);

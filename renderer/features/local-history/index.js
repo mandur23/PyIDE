@@ -374,7 +374,7 @@
       try {
         for (const x of targets) await revertFile(x.path, x.h);
       } catch (err) {
-        status.textContent = tr('Cannot revert: {error}', { error: String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') });
+        status.textContent = tr('Cannot revert: {error}', { error: ide.util.errorText(err) });
         return;
       }
       status.textContent = tr('Reverted');

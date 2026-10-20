@@ -99,7 +99,7 @@
       });
     } catch (err) {
       // The shell could not start (missing executable, unreachable target): say why instead of a tab stuck at "…".
-      const message = String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      const message = ide.util.errorText(err);
       s.exited = true;
       s.name ??= shell || ide.settings.get('terminal.shell', 'powershell');
       s.term.write(`\x1b[31m${tr('The terminal could not start: {message}', { message })}\x1b[0m\r\n\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);

@@ -97,7 +97,7 @@
               await ide.api.invoke('fs:writeText', absPath(newPath), text);
             } catch (err) {
               // The diff stays open: the user can fix the cause and accept again, or reject.
-              const body = el('div', null, tr('Cannot save {file}: {error}', { file: absPath(newPath), error: String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+              const body = el('div', null, tr('Cannot save {file}: {error}', { file: absPath(newPath), error: ide.util.errorText(err) }));
               ide.ui.dialog({ title: 'Claude Code', body });
               return;
             }

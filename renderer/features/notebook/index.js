@@ -9,7 +9,7 @@
   const SCHEME = 'pyide-nb';
   const user = (n) => { n.dataset.userText = ''; return n; };
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
-  const cleanError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const cleanError = (e) => ide.util.errorText(e);
   const views = new Map(); // model authority -> view, for the kernel completion and hover providers
   let viewSeq = 0;
 

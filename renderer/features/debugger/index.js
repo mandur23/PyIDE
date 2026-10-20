@@ -280,7 +280,7 @@
     [/^(\w+) failed$/, (m) => tr('{command} failed', { command: m[1] })],
   ];
   function remoteError(err) {
-    const msg = String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    const msg = ide.util.errorText(err);
     for (const [re, fn] of MAIN_ERRORS) { const m = re.exec(msg); if (m) return fn(m); }
     return msg;
   }

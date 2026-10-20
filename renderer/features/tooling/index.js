@@ -94,7 +94,7 @@
       await ide.reloadFromDisk([path]);
       showHint(tr(r.text !== file.text ? '{name} updated' : '{name}: nothing to change', { name: basename(path) }));
     } catch (err) {
-      failed(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      failed(ide.util.errorText(err));
     }
   }
 

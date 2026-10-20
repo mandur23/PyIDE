@@ -151,7 +151,7 @@ try {
     .then(() => check(true, 'closing a file shown in a history view switches its diff to the file on disk'), () => check(false, 'closing a file shown in a history view switches its diff to the file on disk'));
   chmodSync(file('util.py'), 0o444);
   await click('.lh-view:not(.hidden) .lh-revert');
-  await until(`document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent.startsWith('Cannot revert: EPERM')`, 'revert error shown', 8000)
+  await until(`(document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent || '').startsWith('Cannot revert: ') && !document.querySelector('.lh-view:not(.hidden) .lh-status').textContent.includes('EPERM')`, 'revert error shown', 8000)
     .then(() => check(true, 'a revert that cannot write the file says so in the history view'), async () => check(false, `revert error shown (status: ${await js(`document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent`)})`));
   chmodSync(file('util.py'), 0o666);
   await shot('history-project.png');
