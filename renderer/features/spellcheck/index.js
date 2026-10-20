@@ -492,6 +492,7 @@
       overlay?.remove();
       overlay = el('div', 'spell-overlay');
       overlay.setAttribute('aria-hidden', 'true');
+      overlay.dataset.userText = ''; // mirrors the user's commit message
       box.after(overlay);
       place();
       ide.util.observeSize(box, place);
