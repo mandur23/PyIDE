@@ -136,7 +136,7 @@
       panes = { stats: buildStats(), tree: buildTree(), flame: buildFlame() };
       for (const [id, pane] of Object.entries(panes)) { pane.root.dataset.pane = id; body.appendChild(pane.root); }
       container.append(header, tabsEl, body);
-      new ResizeObserver(() => activeTab === 'flame' && panes.flame.render()).observe(body);
+      ide.util.observeSize(body, () => activeTab === 'flame' && panes.flame.render());
       render();
     },
   });

@@ -333,7 +333,7 @@
       empty.appendChild(start);
       host.appendChild(empty);
       container.append(tabBar, host);
-      new ResizeObserver(() => { if (active && !host.closest('.hidden')) { try { active.fit.fit(); } catch {} } }).observe(host);
+      ide.util.observeSize(host, () => { if (active && !host.closest('.hidden')) { try { active.fit.fit(); } catch {} } });
     },
   });
   tw.setActions([

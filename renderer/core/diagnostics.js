@@ -13,6 +13,10 @@
   const report = (payload) => send('diagnostics:report', { window: windowKind, ...payload });
   // Monaco cancels in-flight provider requests and leaves the rejection unhandled; these are not errors.
   const isCanceled = (r) => r?.name === 'Canceled' && r?.message === 'Canceled';
+  // ResizeObserver's loop notice is not an exception: the browser reports it when some size notifications wait for the
+  // next frame, and nothing is lost. It goes to the log once per window instead of the internal errors list.
+  const RO_NOTICE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
+  let roNoticeLogged = false;
 
   addEventListener('error', (e) => {
     // A <script> or stylesheet that failed to load (a plugin's index.js, for example).
@@ -24,6 +28,11 @@
     }
     const err = e.error;
     if (isCanceled(err)) return;
+    if (!err && RO_NOTICE.test(e.message || '')) {
+      if (!roNoticeLogged) send('diagnostics:log', { level: 'WARN', category: `#renderer.${windowKind}`, message: `${e.message} (logged once per window)` });
+      roNoticeLogged = true;
+      return;
+    }
     const message = err?.message || e.message || 'Script error';
     report({ kind: 'uncaught', message, stack: err?.stack || `${message}\n    at ${e.filename}:${e.lineno}:${e.colno}` });
   }, true);

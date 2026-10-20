@@ -279,11 +279,10 @@
       e.preventDefault();
     });
 
-    const ro = new ResizeObserver(() => {
+    const ro = ide.util.observeSize(stage, () => {
       if (mode === 'fit') fit();
       else if (mode === 'auto') autoSize();
     });
-    ro.observe(stage);
     return { dispose: () => ro.disconnect() };
   }
 
@@ -611,8 +610,7 @@
     }
     load();
 
-    const ro = new ResizeObserver(() => draw());
-    ro.observe(stage);
+    const ro = ide.util.observeSize(stage, () => draw());
     const offTheme = onTheme(draw);
     return {
       dispose: () => {
@@ -1594,8 +1592,7 @@
       const row = e.target.closest('.vw-row');
       if (row) onOpenLine(data.rows[Number(row.dataset.index)].line);
     });
-    const ro = new ResizeObserver(() => paint(true));
-    ro.observe(scroller);
+    const ro = ide.util.observeSize(scroller, () => paint(true));
 
     const grid = {
       el: scroller,

@@ -8,6 +8,24 @@ const el = (tag, cls, text) => {
 };
 
 const basename = (p) => p.split(/[\\/]/).pop();
+
+// ResizeObserver with its work moved to the next animation frame, and skipped while the size stays the same. A callback
+// that changes layout (a redraw, a terminal fit, a scrollbar appearing) then cannot re-trigger itself within the same
+// frame, which the browser reports as "ResizeObserver loop completed with undelivered notifications".
+function observeSize(target, fn) {
+  let frame = 0;
+  let last = '';
+  const ro = new ResizeObserver((entries) => {
+    const r = entries[entries.length - 1].contentRect;
+    const size = `${Math.round(r.width)}x${Math.round(r.height)}`;
+    if (size === last) return;
+    last = size;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => fn(r));
+  });
+  ro.observe(target);
+  return { disconnect: () => { cancelAnimationFrame(frame); ro.disconnect(); } };
+}
 const dirname = (p) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')));
 const joinPath = (a, b) => `${a.replace(/[\\/]+$/, '')}\\${b}`;
 const samePath = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
@@ -34,7 +52,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, basename, dirname, joinPath, samePath, isUnder, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, basename, dirname, joinPath, samePath, isUnder, observeSize, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');
@@ -937,7 +955,7 @@ function treeKey(e) {
 function wireTree(tree) {
   const entryAt = (e) => e.target.closest?.('.node')?._entry;
   tree.addEventListener('scroll', drawTree, { passive: true });
-  new ResizeObserver(drawTree).observe(tree);
+  observeSize(tree, () => drawTree());
   tree.addEventListener('keydown', treeKey);
   tree.addEventListener('click', (e) => {
     const entry = entryAt(e);

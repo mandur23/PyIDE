@@ -376,10 +376,9 @@
     };
     editor.addContentWidget(widget);
     let height = 0;
-    const observer = new ResizeObserver(() => {
+    const observer = ide.util.observeSize(node, () => {
       if (node.offsetHeight && node.offsetHeight !== height) { height = node.offsetHeight; if (ctx.session) render(ctx); }
     });
-    observer.observe(node);
     return {
       node, input, status, actions, spinner, widget,
       height: () => (height || 62) + 6,

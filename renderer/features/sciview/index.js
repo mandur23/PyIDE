@@ -473,7 +473,7 @@
     }
 
     scroller.addEventListener('scroll', scheduleDraw);
-    new ResizeObserver(scheduleDraw).observe(scroller);
+    ide.util.observeSize(scroller, () => scheduleDraw());
 
     let drag = null;
     const target = (e) => e.target.closest?.('[data-r]');
