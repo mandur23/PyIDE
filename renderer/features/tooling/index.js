@@ -119,8 +119,12 @@
   }
 
   const lintTimers = new Map();
+  // Each lint sends the whole buffer to ruff. A file larger than this (in characters) is linted when it opens and when
+  // it is saved, not after every pause in typing.
+  const LINT_WHILE_TYPING_MAX = 2 * 1024 * 1024;
   function lintSoon(tab, ms = 700) {
     clearTimeout(lintTimers.get(tab.path));
+    if (tab.model.getValueLength() > LINT_WHILE_TYPING_MAX) return;
     lintTimers.set(tab.path, setTimeout(() => lint(tab), ms));
   }
 

@@ -131,6 +131,21 @@ try {
   check(true, 'ruff re-runs on save and clears fixed problems');
   await shot('lint.png');
 
+  // Each lint sends the whole buffer to ruff, so a file over 2 MB is linted when it opens and when it is saved, not
+  // after every pause in typing.
+  writeFileSync(path.join(t.project, 'big_lint.py'), `import json\n${'x = 1\n'.repeat(400000)}`);
+  await js(`(window.__ruffChecks = 0, ide.api = { ...window.api, invoke: (ch, ...a) => { if (ch === 'tooling:check') __ruffChecks++; return window.api.invoke(ch, ...a); } }, true)`);
+  await openFile(t, 'big_lint.py');
+  await until(`ide.problems.all().some(p => p.source === 'ruff' && p.path.endsWith('big_lint.py') && p.msg.startsWith('F401'))`, 'big file linted on open', 30000);
+  const lintsAtOpen = await js('__ruffChecks');
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }), ide.editor.trigger('kb', 'type', { text: 'y = 2\\n' }), true)`);
+  await sleep(1500);
+  check(lintsAtOpen === 1 && await js('__ruffChecks') === 1, `typing in a 2.4 MB file does not lint it again (${await js('__ruffChecks')} lint runs)`);
+  await press('Ctrl+S');
+  await until(`__ruffChecks === 2`, 'big file linted on save', 30000);
+  check(true, 'saving the 2.4 MB file lints it');
+  await js(`(ide.api = window.api, ide.closeTab(ide.activeTab().path, true), true)`);
+
   // ---------- Settings: Editor ----------
   await press('Ctrl+Alt+S');
   await until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');

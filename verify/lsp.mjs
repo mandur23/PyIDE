@@ -208,8 +208,81 @@ try {
   await until(`!ide.problems.all().some(p => p.path.endsWith('broken.py'))`, 'problems cleared after didClose', 15000);
   check(true, 'closing a file (didClose) clears its diagnostics');
 
+  // ---- incremental document sync: edits reach Pyright as ranges, and its text stays the editor's ----
+  // Every didOpen/didChange the plugin sends is replayed on a copy here; LSP positions count UTF-16 units, as Monaco's.
+  const incPath = await js(`ide.util.joinPath(ide.root, 'incremental.py')`);
+  await js(`ide.api.write(${JSON.stringify(incPath)}, '# 한글 주석 😀\\r\\ngreeting = "안녕 😀"\\r\\n\\r\\n\\r\\nvalue = 1\\r\\n')`);
+  await js(`(() => {
+    const shadow = window.__lspShadow = {};
+    window.__lspSyncs = [];
+    const apply = (text, c) => {
+      if (!c.range) return c.text;
+      const starts = [0];
+      for (let i = 0; i < text.length; i++) if (text[i] === '\\n') starts.push(i + 1);
+      const off = (p) => starts[p.line] + p.character;
+      return text.slice(0, off(c.range.start)) + c.text + text.slice(off(c.range.end));
+    };
+    ide.api = { ...window.api, invoke: (ch, method, params, ...rest) => {
+      const uri = params?.textDocument?.uri;
+      if (ch === 'lsp:notify' && method === 'textDocument/didOpen') shadow[uri] = params.textDocument.text;
+      if (ch === 'lsp:notify' && method === 'textDocument/didChange') {
+        __lspSyncs.push(params.contentChanges.every((c) => c.range) ? 'ranges' : 'full');
+        shadow[uri] = params.contentChanges.reduce(apply, shadow[uri]);
+      }
+      return window.api.invoke(ch, method, params, ...rest);
+    } };
+    return true;
+  })()`);
+  await openFile(t, 'incremental.py');
+  await until(`__lspShadow[ide.editor.getModel().uri.toString()] !== undefined`, 'didOpen of incremental.py');
+  const inSync = async () => {
+    await sleep(500); // past the plugin's 300 ms change debounce
+    return js(`(() => { const m = ide.editor.getModel(); return { same: __lspShadow[m.uri.toString()] === m.getValue(), syncs: __lspSyncs.splice(0) }; })()`);
+  };
+  // Multi-cursor typing of Korean and emoji at three line ends, then text typed inside a string after an emoji.
+  await js(`(() => { const e = ide.editor, m = e.getModel(); e.focus();
+    e.setSelections([1, 2, 5].map((l) => new monaco.Selection(l, m.getLineMaxColumn(l), l, m.getLineMaxColumn(l))));
+    e.trigger('kb', 'type', { text: '  # 끝😀' });
+    const l2 = m.getLineContent(2); const c = l2.lastIndexOf('"') + 1;
+    e.setPosition({ lineNumber: 2, column: c }); e.trigger('kb', 'type', { text: '가😀' });
+    return true; })()`);
+  let s = await inSync();
+  check(s.same && s.syncs.length && s.syncs.every((k) => k === 'ranges'), `multi-cursor typing of Korean and emoji in a CRLF file is sent as ranges and Pyright's copy matches (${JSON.stringify(s)})`);
+  // A multi-line paste (LF in a CRLF file), a delete across lines, undo twice and redo once.
+  await js(`(() => { const e = ide.editor, m = e.getModel();
+    e.setPosition({ lineNumber: 3, column: 1 }); e.trigger('kb', 'paste', { text: 'a = 1\\nb = "😀한"\\nc = 3\\n' });
+    e.executeEdits('t', [{ range: new monaco.Range(1, 3, 2, 4), text: '' }]);
+    e.trigger('kb', 'undo'); e.trigger('kb', 'undo'); e.trigger('kb', 'redo');
+    return true; })()`);
+  s = await inSync();
+  check(s.same && s.syncs.every((k) => k === 'ranges'), `paste, delete across lines, undo and redo keep Pyright's copy identical (${JSON.stringify(s)})`);
+  // A diagnostic after Korean and emoji text lands on the right UTF-16 column.
+  const diagLine = await js(`(() => { const e = ide.editor, m = e.getModel(); const n = m.getLineCount();
+    e.executeEdits('t', [{ range: new monaco.Range(n, 1, n, 1), text: 'print("😀한글😀", undefined_zz)\\r\\n' }]); return n; })()`);
+  await until(`ide.problems.all().some(p => p.source === 'pyright' && p.path.endsWith('incremental.py') && /undefined_zz/.test(p.msg))`, 'diagnostic for undefined_zz', 30000);
+  const zz = await js(`ide.problems.all().find(p => p.source === 'pyright' && /undefined_zz/.test(p.msg))`);
+  const zzCol = await js(`ide.editor.getModel().getLineContent(${diagLine}).indexOf('undefined_zz') + 1`);
+  check(zz.line === diagLine && zz.col === zzCol, `Pyright's diagnostic after emoji and Korean text is at ${zz.line}:${zz.col} (expected ${diagLine}:${zzCol})`);
+  s = await inSync();
+  check(s.same, 'Pyright\'s copy still matches after the edit');
+  await js(`(ide.editor.trigger('kb', 'undo'), true)`);
+  await until(`!ide.problems.all().some(p => p.source === 'pyright' && /undefined_zz/.test(p.msg))`, 'undefined_zz diagnostic gone after undo', 30000);
+  check(true, 'undoing the edit clears its diagnostic');
+  // More edits than one sync carries, and an end-of-line change, fall back to the whole text.
+  await inSync();
+  await js(`(() => { const e = ide.editor, m = e.getModel(); const n = m.getLineCount();
+    e.executeEdits('t', [{ range: new monaco.Range(n, 1, n, 1), text: 'w = "' + 'a'.repeat(1200) + '"' }]);
+    for (let i = 0; i < 1100; i++) e.executeEdits('t', [{ range: new monaco.Range(n, 6 + i, n, 7 + i), text: 'b' }]);
+    return true; })()`);
+  s = await inSync();
+  check(s.same && s.syncs.length === 1 && s.syncs[0] === 'full', `1,100 edits between two syncs are sent as the whole text (${JSON.stringify(s)})`);
+  await js(`(ide.editor.getModel().pushEOL(monaco.editor.EndOfLineSequence.LF), true)`);
+  s = await inSync();
+  check(s.same && s.syncs.at(-1) === 'full' && !(await js(`ide.editor.getModel().getValue().includes('\\r')`)), `an end-of-line change is sent as the whole text (${JSON.stringify(s)})`);
+  await js(`(ide.api = window.api, ide.closeTab(ide.activeTab().path, true), true)`);
+
   // ---- API for other features ----
-  const syms = await js(`ide.lsp.documentSymbols(ide.util.joinPath(ide.root, 'models.py'))`);
+  const syms =await js(`ide.lsp.documentSymbols(ide.util.joinPath(ide.root, 'models.py'))`);
   const greeter = syms.find((s) => s.name === 'Greeter');
   check(greeter?.kindName === 'Class' && greeter.line === 4 && greeter.children.some((c) => c.name === '__init__'), 'ide.lsp.documentSymbols returns the outline');
   check(await js(`ide.lsp.ready()`) === true, 'ide.lsp.ready() resolves true');

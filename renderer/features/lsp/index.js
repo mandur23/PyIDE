@@ -37,6 +37,7 @@
   // ---------- server lifecycle & status ----------
   let status = 'off';
   let gen = 0;
+  let incremental = false; // the server takes edits (TextDocumentSyncKind.Incremental), not only the whole text
   let serverKey = null;
   let startSeq = 0; // the latest start; an earlier one still in flight was superseded
   let readyWaiters = [];
@@ -82,12 +83,12 @@
     rawDiagnostics.clear();
     probeCache.clear();
     setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
-    let g = null;
-    try { g = await ide.api.invoke('lsp:start', root, python); } catch (err) { console.warn('pyright failed to start', err); }
+    let started = null;
+    try { started = await ide.api.invoke('lsp:start', root, python); } catch (err) { console.warn('pyright failed to start', err); }
     // A restart while this start was in flight stopped its server; that is not a failure to report.
     if (my !== startSeq) return;
-    if (!g) return setStatus('error', tr('Pyright failed to start'));
-    gen = g;
+    if (!started) return setStatus('error', tr('Pyright failed to start'));
+    ({ gen, incremental } = started);
     for (const doc of docs.values()) sendOpen(doc);
     setStatus('ready', python ? tr('Pyright ready ({python})', { python }) : tr('Pyright ready'));
   }
@@ -122,12 +123,17 @@
   }
 
   // ---------- document sync ----------
-  const docs = new Map(); // pathLower -> {path, uri, model, opened (gen), timer, pending, sub}
+  // pathLower -> {path, uri, model, opened (gen), timer, pending, changes, sub}. changes: the edits since the last
+  // sync, in order, or null when the whole text has to be sent.
+  const docs = new Map();
+  // More edits than this in one sync (a Replace All) are sent as the whole text.
+  const MAX_CHANGES = 1000;
 
   function sendOpen(doc) {
     if (status === 'off' || !gen || doc.model.isDisposed()) return;
     clearTimeout(doc.timer);
     doc.pending = false;
+    doc.changes = [];
     doc.opened = gen;
     notify('textDocument/didOpen', { textDocument: { uri: doc.uri, languageId: 'python', version: doc.model.getVersionId(), text: doc.model.getValue() } });
   }
@@ -135,19 +141,33 @@
   function flush(doc) {
     clearTimeout(doc.timer);
     if (!doc.pending || doc.opened !== gen || doc.model.isDisposed()) return;
+    const changes = doc.changes || [{ text: doc.model.getValue() }];
     doc.pending = false;
-    notify('textDocument/didChange', {
-      textDocument: { uri: doc.uri, version: doc.model.getVersionId() },
-      contentChanges: [{ text: doc.model.getValue() }],
-    });
+    doc.changes = [];
+    notify('textDocument/didChange', { textDocument: { uri: doc.uri, version: doc.model.getVersionId() }, contentChanges: changes });
   }
   const flushAll = () => docs.forEach(flush);
 
+  // Monaco lists an event's edits from the end of the document to the start, so applied in order they give the new
+  // text; its columns count UTF-16 code units, as LSP positions do.
+  function recordChanges(doc, e) {
+    if (!doc.changes) return;
+    if (!incremental || e.isFlush || e.isEolChange) { doc.changes = null; return; }
+    for (const c of e.changes) {
+      doc.changes.push({
+        range: { start: { line: c.range.startLineNumber - 1, character: c.range.startColumn - 1 }, end: { line: c.range.endLineNumber - 1, character: c.range.endColumn - 1 } },
+        text: c.text,
+      });
+    }
+    if (doc.changes.length > MAX_CHANGES) doc.changes = null;
+  }
+
   function trackTab(tab) {
     if (tab?.kind !== 'file' || !isPy(tab.path) || docs.has(tab.path.toLowerCase())) return;
-    const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, timer: null };
-    doc.sub = tab.model.onDidChangeContent(() => {
+    const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, changes: [], timer: null };
+    doc.sub = tab.model.onDidChangeContent((e) => {
       if (doc.opened !== gen) return;
+      recordChanges(doc, e);
       doc.pending = true;
       clearTimeout(doc.timer);
       doc.timer = setTimeout(() => flush(doc), CHANGE_DEBOUNCE);

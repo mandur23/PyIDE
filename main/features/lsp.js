@@ -193,7 +193,7 @@ class Server {
 
   async initialize() {
     const uri = pathToFileURL(this.root).href;
-    await this.request('initialize', {
+    const init = await this.request('initialize', {
       processId: process.pid,
       clientInfo: { name: 'PyIDE' },
       rootUri: uri,
@@ -202,6 +202,9 @@ class Server {
       capabilities: CLIENT_CAPABILITIES,
       initializationOptions: {},
     });
+    // TextDocumentSyncKind.Incremental (2): the renderer sends edits instead of the whole text on every change.
+    const sync = init?.capabilities?.textDocumentSync;
+    this.incremental = (typeof sync === 'number' ? sync : sync?.change) === 2;
     this.write({ method: 'initialized', params: {} });
     this.write({ method: 'workspace/didChangeConfiguration', params: { settings: { python: this.settingsFor('python') } } });
     this.initialized = true;
@@ -274,10 +277,11 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     }
     if (server !== s) return null;
     send('lsp:status', { gen: s.gen, state: 'ready' });
-    return s.gen;
+    return { gen: s.gen, incremental: s.incremental };
   };
 
   // A remote interpreter's Pyright runs here against a synced copy of its libraries (main/remote/index.js).
+  // -> {gen, incremental} | null
   ipcMain.handle('lsp:start', (_e, root, pythonPath) => start(root, remote.isRemoteExecutable(pythonPath) ? remote.pyrightPython(pythonPath) : pythonPath));
   ipcMain.handle('lsp:stop', () => { server?.stop(); server = null; });
   ipcMain.handle('lsp:request', async (_e, method, params) => {
