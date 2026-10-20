@@ -19,17 +19,26 @@ function createPluginManager({ appDir, userDataDir }) {
   const userDir = path.join(userDataDir, 'plugins');
   const stateFile = path.join(userDataDir, 'plugin-state.json');
 
-  const state = () => ({ disabled: [], ...readJson(stateFile, {}) });
+  // Read before the window exists, so a hand-edited file must not throw: a `disabled` that is not a list of ids
+  // counts as nothing disabled.
+  const state = () => {
+    const s = readJson(stateFile, {});
+    const saved = s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+    return { ...saved, disabled: Array.isArray(saved.disabled) ? saved.disabled.filter((id) => typeof id === 'string') : [] };
+  };
   const saveState = (s) => {
     fs.mkdirSync(userDataDir, { recursive: true });
     fs.writeFileSync(stateFile, JSON.stringify(s, null, 2));
   };
 
   function describe(dir, bundled) {
-    const meta = readJson(path.join(dir, 'plugin.json'), null);
+    const json = readJson(path.join(dir, 'plugin.json'), null);
+    const meta = json && typeof json === 'object' && !Array.isArray(json) ? json : null;
     if (!meta && !bundled) return null;
-    const id = meta?.id || path.basename(dir);
-    const mains = [].concat(meta?.main || []);
+    // An installed plugin's plugin.json is read at every start: fields of the wrong kind are left out, not thrown on.
+    const strings = (v) => [].concat(v || []).filter((s) => typeof s === 'string');
+    const id = (typeof meta?.id === 'string' && meta.id) || path.basename(dir);
+    const mains = strings(meta?.main);
     return {
       id,
       name: meta?.name || id,
@@ -37,7 +46,7 @@ function createPluginManager({ appDir, userDataDir }) {
       vendor: meta?.vendor || '',
       description: meta?.description || '',
       i18n: meta?.i18n || {},
-      depends: [].concat(meta?.depends || []),
+      depends: strings(meta?.depends),
       required: !!meta?.required,
       detached: !!meta?.detached,
       bundled,
