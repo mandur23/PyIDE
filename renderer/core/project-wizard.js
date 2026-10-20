@@ -204,6 +204,8 @@ if __name__ == '__main__':
     update();
 
     let busy = false;
+    let cancelled = false;
+    let running = null; // the setup step's process id
     const dlg = ide.ui.dialog({
       title: tr('New Project'),
       body: root,
@@ -212,25 +214,46 @@ if __name__ == '__main__':
         { label: tr('Create'), primary: true, run: async (d) => {
           if (busy) return false;
           busy = true;
+          createBtn.disabled = true;
           try { await create(d); } catch (e) { error.textContent = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''); }
           busy = false;
+          createBtn.disabled = false;
           return false;
         } },
-        { label: tr('Cancel'), run: () => !busy },
+        // While a setup step runs, Cancel stops it; create() then opens what was created so far.
+        { label: tr('Cancel'), run: () => {
+          if (!busy) return true;
+          cancelled = true;
+          if (running !== null) ide.proc.kill(running);
+          return false;
+        } },
       ],
     });
     dlg.el.classList.add('np-dialog');
-    dlg.el.querySelector('.dialog-buttons .primary').id = 'npCreate';
+    const createBtn = dlg.el.querySelector('.dialog-buttons .primary');
+    createBtn.id = 'npCreate';
     name.focus();
     name.select();
 
     // Runs one setup step, streaming its output into the log; resolves to the exit code.
     const step = (title, cmd, args, cwd) => new Promise(async (resolve) => {
+      if (cancelled) return resolve(-1);
       log.textContent += `\n$ ${[cmd, ...args].join(' ')}\n`;
-      const id = await ide.api.invoke('project:exec', cmd, args, cwd);
+      let id;
+      try {
+        id = await ide.api.invoke('project:exec', cmd, args, cwd);
+      } catch (e) {
+        log.textContent += `${String(e.message || e)}\n${tr('{step} failed (exit code {code})', { step: title, code: -1 })}\n`;
+        return resolve(-1);
+      }
+      running = id;
       ide.proc.attach(id, {
         data: (t) => { log.textContent += t; log.scrollTop = log.scrollHeight; },
-        exit: (code) => { if (code !== 0) log.textContent += `${tr('{step} failed (exit code {code})', { step: title, code })}\n`; resolve(code); },
+        exit: (code) => {
+          running = null;
+          if (code !== 0 && !cancelled) log.textContent += `${tr('{step} failed (exit code {code})', { step: title, code })}\n`;
+          resolve(code);
+        },
       });
     });
 
@@ -253,19 +276,30 @@ if __name__ == '__main__':
       ide.settings.set('newProject.location', loc.value.trim());
       ide.settings.set('newProject.git', git.input.checked);
 
-      // The interpreter the project will use, and how to call it.
+      // The project folder exists from here on: a failed or cancelled setup step still opens it, and a failure is
+      // reported with the setup log instead of leaving the wizard open.
+      let failed = false;
       let python;
       if (m === 'venv') {
-        if (await step(tr('Creating the virtual environment'), baseInterp.cmd, [...baseInterp.args, '-m', 'venv', '.venv'], dir)) return;
-        python = { cmd: joinPath(dir, '.venv\\Scripts\\python.exe'), args: [] };
+        if (await step(tr('Creating the virtual environment'), baseInterp.cmd, [...baseInterp.args, '-m', 'venv', '.venv'], dir)) {
+          failed = true;
+          python = { cmd: baseInterp.executable, args: [] };
+        } else python = { cmd: joinPath(dir, '.venv\\Scripts\\python.exe'), args: [] };
       } else if (m === 'base') python = { cmd: baseInterp.executable, args: [] };
       else python = { cmd: custom.value, args: [] };
 
-      if (doInstall && await step(tr('Installing packages'), python.cmd, [...python.args, '-m', 'pip', 'install', ...type.packages], dir)) return;
-      if (type.id === 'django' && await step(tr('Creating the Django project'), python.cmd, [...python.args, '-m', 'django', 'startproject', n.replace(/\W/g, '_'), '.'], dir)) return;
-      if (git.input.checked && await step(tr('Creating the Git repository'), 'git', ['init'], dir)) return;
+      if (!failed && doInstall && await step(tr('Installing packages'), python.cmd, [...python.args, '-m', 'pip', 'install', ...type.packages], dir)) failed = true;
+      if (!failed && type.id === 'django' && await step(tr('Creating the Django project'), python.cmd, [...python.args, '-m', 'django', 'startproject', n.replace(/\W/g, '_'), '.'], dir)) failed = true;
+      if (git.input.checked && await step(tr('Creating the Git repository'), 'git', ['init'], dir)) failed = true;
 
       d.close();
+      if (failed && !cancelled) {
+        const report = el('pre', 'np-log');
+        report.id = 'npFailLog';
+        report.textContent = log.textContent.trim();
+        ide.ui.dialog({ title: tr('Project created, but a setup step failed'), body: report, width: 760 });
+        report.scrollTop = report.scrollHeight;
+      }
       if (m !== 'venv') {
         const extra = ide.settings.get('interpreters.extra', []);
         if (!extra.some((p) => ide.util.samePath(p, python.cmd))) ide.settings.set('interpreters.extra', [...extra, python.cmd]);

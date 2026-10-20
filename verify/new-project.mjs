@@ -46,6 +46,7 @@ try {
   await a.click('#npCreate');
   await a.until(`ide.root && ide.root.toLowerCase() === ${q(path.join(where, 'demo').toLowerCase())}`, 'project opened', 120000);
   const demo = path.join(where, 'demo');
+  check(await a.js(`!document.querySelector('.np-dialog')`), 'the wizard closes once the project is created');
   check(existsSync(path.join(demo, '.venv', 'Scripts', 'python.exe')), 'a .venv was created with the base interpreter');
   check(existsSync(path.join(demo, '.git')) && readFileSync(path.join(demo, '.gitignore'), 'utf8').includes('.venv/'), 'Git repository and .gitignore created');
   await a.until(`ide.activeTab()?.title === 'main.py'`, 'main.py opened');
@@ -70,6 +71,29 @@ try {
   await a.until(`ide.activeTab()?.title === 'app.py'`, 'app.py opened');
   check(true, 'app.py is opened');
 
+  // ---------- a failing setup step ----------
+  await openWizard(a);
+  await a.js(`document.querySelector('.np-type[data-type="django"]').click()`);
+  await setValue(a, '#npName', 'broken');
+  await a.js(`(() => { document.querySelector('input[name="npMode"][value="custom"]').click(); const s = document.querySelector('#npCustom'); s.add(new Option('missing', 'C:\\\\nope\\\\python.exe'), 0); s.value = 'C:\\\\nope\\\\python.exe'; document.querySelector('#npGit').checked = true; return true; })()`);
+  await a.click('#npCreate');
+  await a.until(`ide.root && ide.root.toLowerCase().endsWith('\\\\broken')`, 'project with a failed step opened', 60000);
+  check(await a.js(`!document.querySelector('.np-dialog')`), 'a failed setup step still closes the wizard and opens the project');
+  const failLog = await a.js(`document.querySelector('#npFailLog')?.textContent || ''`);
+  check(/Installing packages/.test(failLog) && existsSync(path.join(where, 'broken', '.git')), `the failure is reported with the setup log, and later steps (git init) still run (${JSON.stringify(failLog.slice(-200))})`);
+  await a.js(`([...document.querySelectorAll('.dialog-buttons .primary')].pop().click(), true)`);
+
+  // ---------- Cancel stops a running step ----------
+  await openWizard(a);
+  await a.js(`document.querySelector('.np-type[data-type="python"]').click()`);
+  await setValue(a, '#npName', 'stopped');
+  await a.js(`(document.querySelector('input[name="npMode"][value="venv"]').click(), true)`);
+  await a.click('#npCreate');
+  await a.until(`/-m venv/.test(document.querySelector('#npLog').textContent)`, 'venv step running');
+  await a.js(`(document.querySelector('.np-dialog .dialog-buttons .secondary').click(), true)`);
+  await a.until(`!document.querySelector('.np-dialog') && ide.root && ide.root.toLowerCase().endsWith('\\\\stopped')`, 'cancelled', 30000);
+  check(!(await a.js(`!!document.querySelector('#npFailLog')`)), 'Cancel during a setup step stops it, closes the wizard and opens the project without an error report');
+
   // ---------- existing folder ----------
   await openWizard(a);
   await setValue(a, '#npName', 'web');
@@ -86,8 +110,8 @@ try {
   await a.js(`[...document.querySelectorAll('.dialog-buttons .primary')].pop().click()`);
   await a.until(`ide.root && ide.root.toLowerCase().endsWith('\\\\cloned')`, 'cloned project opened', 60000);
   check(existsSync(path.join(where, 'cloned', 'tool.py')), 'Get from VCS clones the repository and opens it');
-  check((await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 3).join('|') === 'cloned|web|demo', 'recent projects keep the newest first');
-  check(a.consoleErrors.length === 0, 'no renderer exceptions');
+  check((await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|') === 'cloned|stopped|broken|web', 'recent projects keep the newest first');
+  check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${JSON.stringify(a.consoleErrors)}` : ''}`);
   a.close();
 
   // ---------- Korean ----------
