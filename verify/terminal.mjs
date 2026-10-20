@@ -158,6 +158,23 @@ try {
   })()`);
   await sleep(3000);
   check(closedEarly === 'closed' && shellsWith(marker) === 0, `closing a tab while its shell starts ends that shell (${closedEarly}, ${shellsWith(marker)} left)`);
+
+  // A shell that cannot start (pty:create rejects) says why, and Enter closes the tab.
+  const failed = await js(`(async () => {
+    const api = ide.api;
+    ide.api = { ...api, invoke: (ch, ...a) => (ch === 'pty:create' ? Promise.reject(new Error("Error invoking remote method 'pty:create': Error: File not found: nope.exe")) : api.invoke(ch, ...a)) };
+    try { await ide.terminal.open({}); } finally { ide.api = api; }
+    return { exited: ide.terminal.sessions().at(-1).exited };
+  })()`);
+  // xterm parses written text asynchronously.
+  await until(`ide.terminal.text().includes('nope.exe')`, 'failure message', 5000).catch(() => {});
+  failed.text = await js('ide.terminal.text()');
+  check(failed.exited && failed.text.includes('could not start: File not found: nope.exe') && !failed.text.includes('Error invoking'), `a shell that cannot start says why (${JSON.stringify(failed.text.slice(-120))})`);
+  const count = await js('ide.terminal.sessions().length');
+  await js(`(document.querySelector('.term-session:not(.hidden) .xterm-helper-textarea').focus(), true)`);
+  await press('Enter');
+  await until(`ide.terminal.sessions().length === ${count - 1}`, 'failed tab closed with Enter');
+  check(true, 'Enter closes the tab of a shell that could not start');
   await shot('terminal.png');
 } catch (err) {
   check(false, err.message);

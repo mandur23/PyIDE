@@ -85,16 +85,27 @@
     select(s, focus);
     s.fit.fit();
     const size = { cols: s.term.cols, rows: s.term.rows };
-    const r = await ide.api.invoke('pty:create', {
-      shell: shell || ide.settings.get('terminal.shell', 'powershell'),
-      cwd: cwd || ide.root || undefined,
-      ...size,
-      command,
-      interpreter: ide.settings.get('terminal.activateVenv', true) ? ide.currentInterp()?.executable : undefined,
-      envFiles: ide.settings.get(LOAD_ENV_FILE, true) && ide.root ? [joinPath(ide.root, '.env')] : [],
-      // With a remote project interpreter (WSL, SSH, Docker), a plain new session is a shell in that target.
-      target: !shell && !command ? ide.currentInterp()?.target : undefined,
-    });
+    let r;
+    try {
+      r = await ide.api.invoke('pty:create', {
+        shell: shell || ide.settings.get('terminal.shell', 'powershell'),
+        cwd: cwd || ide.root || undefined,
+        ...size,
+        command,
+        interpreter: ide.settings.get('terminal.activateVenv', true) ? ide.currentInterp()?.executable : undefined,
+        envFiles: ide.settings.get(LOAD_ENV_FILE, true) && ide.root ? [joinPath(ide.root, '.env')] : [],
+        // With a remote project interpreter (WSL, SSH, Docker), a plain new session is a shell in that target.
+        target: !shell && !command ? ide.currentInterp()?.target : undefined,
+      });
+    } catch (err) {
+      // The shell could not start (missing executable, unreachable target): say why instead of a tab stuck at "…".
+      const message = String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      s.exited = true;
+      s.name ??= shell || ide.settings.get('terminal.shell', 'powershell');
+      s.term.write(`\x1b[31m${tr('The terminal could not start: {message}', { message })}\x1b[0m\r\n\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);
+      renderTab(s);
+      return s;
+    }
     const pending = orphanOutput.get(r.id) || [];
     orphanOutput.delete(r.id);
     // The tab was closed while the shell started (a remote target can take seconds): end it instead of orphaning it.
