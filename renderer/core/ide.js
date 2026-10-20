@@ -1173,7 +1173,10 @@ document.querySelectorAll('.splitter').forEach((s) => {
 // ---------- core actions (PyCharm $default keymap, extracted with REA) ----------
 async function gotoFile() {
   if (!ide.root) return;
-  const files = await ide.api.walk(ide.root);
+  let files;
+  try { files = await ide.api.walk(ide.root); } catch (e) {
+    return void ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(ide.root), error: ipcError(e) }));
+  }
   const path = await ide.ui.pick({
     placeholder: tr('Search files'),
     items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: ide.fileIcon(p), value: p })),

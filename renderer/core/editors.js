@@ -941,7 +941,13 @@
       ...Object.entries(ENCODING_LABEL).map(([enc, label]) => ({
         label: tr('Reload in {encoding}', { encoding: label }), hint: enc === doc.encoding ? '✓' : '', disabled: docDirty(doc),
         run: async () => {
-          const res = await ide.api.invoke('fs:decode', doc.path, enc);
+          let res;
+          try { res = await ide.api.invoke('fs:decode', doc.path, enc); } catch (e) {
+            ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(doc.path), error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+            return;
+          }
+          // Too large to read as text, or the tab was closed or edited while the file was read.
+          if (res.text === undefined || doc.model.isDisposed() || docDirty(doc)) return;
           doc.encoding = enc;
           doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: res.text }], () => null);
           doc.savedVersion = doc.model.getAlternativeVersionId();
