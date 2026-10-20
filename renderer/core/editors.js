@@ -109,7 +109,7 @@
     };
   }
 
-  const tabIcon = (t) => (t.kind === 'custom' ? t.icon : t.path.endsWith('.py') ? '🐍' : '📄');
+  const tabIcon = (t) => (t.kind === 'custom' ? el('span', 'tab-icon', t.icon) : Object.assign(ide.fileIcon(t.path), { className: 'file-icon tab-icon' }));
 
   function addTab(g, tab, index) {
     tab.group = g;
@@ -181,7 +181,7 @@
       node.title = t.path;
       node.draggable = true;
       node.dataset.path = t.path;
-      node.appendChild(el('span', 'tab-icon', tabIcon(t)));
+      node.appendChild(tabIcon(t));
       node.appendChild(el('span', 'name', t.title));
       if (ide.isDirty(t)) node.appendChild(el('span', 'dirty', '●'));
       if (t.pinned) node.appendChild(el('span', 'pin', '📌'));

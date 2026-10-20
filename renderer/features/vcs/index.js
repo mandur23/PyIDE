@@ -291,7 +291,7 @@
       const name = userText('span', 'vcs-name', basename(f.path));
       name.style.color = COLORS[f.status];
       const dir = ide.util.rel(dirname(f.path));
-      row.append(fcb, el('span', 'icon', f.path.endsWith('.py') ? '🐍' : '📄'), name, userText('span', 'muted vcs-dir', samePath(dirname(f.path), ide.root) ? '' : dir));
+      row.append(fcb, Object.assign(ide.fileIcon(f.path), { className: 'file-icon icon' }), name, userText('span', 'muted vcs-dir', samePath(dirname(f.path), ide.root) ? '' : dir));
       row.title = `${ide.util.rel(f.path)} — ${STATUS_LABEL[f.status] || f.status}`;
       row.onclick = (e) => {
         if (!e.ctrlKey) selection.clear();
@@ -1045,7 +1045,7 @@
       row.title = `${f.rel} — ${STATUS_LABEL[f.status] || f.status}`;
       const name = userText('span', 'vcs-name', basename(f.rel));
       name.style.color = COLORS[f.status];
-      row.append(el('span', 'icon', f.rel.endsWith('.py') ? '🐍' : '📄'), name, userText('span', 'muted vcs-dir', f.rel.includes('/') ? dirname(f.rel) : ''));
+      row.append(Object.assign(ide.fileIcon(f.rel), { className: 'file-icon icon' }), name, userText('span', 'muted vcs-dir', f.rel.includes('/') ? dirname(f.rel) : ''));
       row.onclick = () => { filesEl.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected')); row.classList.add('selected'); };
       row.ondblclick = () => openCommitDiff(d, f);
       filesEl.appendChild(row);

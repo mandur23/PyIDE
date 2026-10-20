@@ -178,7 +178,7 @@ function renderPopup() {
       .filter(([, sc]) => sc > 0).sort((a, b) => b[1] - a[1]).map(([it]) => it);
   items.slice(0, 200).forEach((it, i) => {
     const row = el('div', 'popup-item' + (i === 0 ? ' active' : ''));
-    if (it.icon) row.appendChild(el('span', 'icon', it.icon));
+    if (it.icon) row.appendChild(typeof it.icon === 'string' ? el('span', 'icon', it.icon) : Object.assign(it.icon.cloneNode(true), { className: `${it.icon.className} icon` }));
     row.appendChild(el('span', 'label', it.label));
     if (it.detail) row.appendChild(el('span', 'detail', it.detail));
     if (it.hint) row.appendChild(el('span', 'hint-right', it.hint));
@@ -732,9 +732,10 @@ function rowNode({ entry, depth }, index) {
   node.style.top = `${index * ROW_HEIGHT}px`;
   node.style.paddingLeft = `${depth * 16 + 4}px`;
   node.draggable = depth > 0;
-  const ext = entry.name.split('.').pop();
   node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
-  node.appendChild(el('span', 'icon ' + (entry.dir ? 'dir' : ext === 'py' ? 'py' : 'file'), entry.dir ? (open ? '📂' : '📁') : ext === 'py' ? '🐍' : '📄'));
+  const icon = ide.fileIcon(entry.name, { dir: entry.dir });
+  icon.classList.add('icon');
+  node.appendChild(icon);
   const name = el('span', 'name', entry.name);
   node.appendChild(name);
   for (const deco of treeDecorators) {
@@ -1130,7 +1131,7 @@ async function gotoFile() {
   const files = await ide.api.walk(ide.root);
   const path = await ide.ui.pick({
     placeholder: tr('Search files'),
-    items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: p.endsWith('.py') ? '🐍' : '📄', value: p })),
+    items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: ide.fileIcon(p), value: p })),
   });
   if (path) ide.openFile(path);
 }

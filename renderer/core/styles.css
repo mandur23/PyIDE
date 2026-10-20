@@ -316,3 +316,12 @@ body.detached #statusInterp { display: none !important; }
   color: #000; background: linear-gradient(135deg, #21d789, #fcf84a); }
 .about h2 { margin: 0 0 2px; color: var(--gray12); }
 .about-credit { font-size: 12px; }
+/* File type icons (renderer/core/file-icons.js): both drawings are present, the theme picks one. */
+.file-icon { display: inline-flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center; vertical-align: -3px; }
+.file-icon svg { width: 16px; height: 16px; display: block; }
+.file-icon .fi-light { display: none; }
+:root[data-theme="light"] .file-icon .fi-light { display: contents; }
+:root[data-theme="light"] .file-icon .fi-dark { display: none; }
+.file-icon .fi-dark { display: contents; }
+.file-icon[data-type="database"] { color: var(--gray9); }
+.node .file-icon { margin-right: 4px; }

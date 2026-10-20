@@ -582,7 +582,7 @@
     const lines = await Promise.all(locs.map((l) => lineText(toPath(l.uri), l.range.start.line + 1)));
     const picked = await ide.ui.pick({
       placeholder: title,
-      items: locs.map((l, i) => ({ label: lines[i].trim() || basename(toPath(l.uri)), detail: `${ide.util.rel(toPath(l.uri))}:${l.range.start.line + 1}`, icon: '🐍', value: l })),
+      items: locs.map((l, i) => ({ label: lines[i].trim() || basename(toPath(l.uri)), detail: `${ide.util.rel(toPath(l.uri))}:${l.range.start.line + 1}`, icon: ide.fileIcon(toPath(l.uri)), value: l })),
     });
     if (picked) navigate(picked);
   }
@@ -679,7 +679,7 @@
       const arrow = el('span', 'arrow', '▾');
       const rel = ide.util.rel(g.path);
       const dir = /[\\/]/.test(rel) ? dirname(rel) : '';
-      head.append(arrow, el('span', 'icon', '🐍'), userText(el('span', 'name', basename(g.path))),
+      head.append(arrow, Object.assign(ide.fileIcon(g.path), { className: 'file-icon icon' }), userText(el('span', 'name', basename(g.path))),
         userText(el('span', 'muted', dir ? `  ${dir}` : '')), el('span', 'muted', `  ${usageCount(g.refs.length)}`));
       const rows = el('div', 'lsp-find-rows');
       head.onclick = () => { rows.classList.toggle('hidden'); arrow.textContent = rows.classList.contains('hidden') ? '▸' : '▾'; };

@@ -2,7 +2,7 @@
 (() => {
   const { el, basename, dirname, samePath, rel } = ide.util;
   const isPy = (p) => /\.py[iw]?$/i.test(p);
-  const fileIcon = (p) => (isPy(p) ? '🐍' : '📄');
+  const fileIcon = (p) => ide.fileIcon(p);
   const LETTER = { class: 'C', method: 'm', function: 'f', field: 'f', variable: 'v', property: 'p' };
   const GLYPH = { class: 'Ⓒ', method: 'ⓜ', function: 'ⓕ', field: 'ⓕ', variable: 'ⓥ', property: 'ⓟ' };
   const kindIcon = (kind) => el('span', `sn-icon k-${kind}`, LETTER[kind] || '?');
@@ -59,7 +59,7 @@
     const isCollapsed = collapsed.has(path.toLowerCase());
     g.classList.toggle('collapsed', isCollapsed);
     const arrow = el('span', 'sn-arrow', isCollapsed ? '▸' : '▾');
-    head.append(arrow, el('span', 'sn-ficon', fileIcon(path)), userText(el('span', 'sn-fname', basename(path))),
+    head.append(arrow, Object.assign(fileIcon(path), { className: 'file-icon sn-ficon' }), userText(el('span', 'sn-fname', basename(path))),
       userText(el('span', 'sn-fdir', rel(dirname(path)))), el('span', 'sn-count', countText));
     head.onclick = () => {
       const c = g.classList.toggle('collapsed');
@@ -503,7 +503,7 @@
   function renderStructure(tab, o) {
     structList.replaceChildren();
     const head = el('div', 'sn-node sn-root');
-    head.append(el('span', 'sn-arrow', '▾'), el('span', 'sn-ficon', fileIcon(tab.path)), userText(el('span', 'sn-name', tab.title)));
+    head.append(el('span', 'sn-arrow', '▾'), Object.assign(fileIcon(tab.path), { className: 'file-icon sn-ficon' }), userText(el('span', 'sn-name', tab.title)));
     structList.append(head);
     if (o.error) structList.append(el('div', 'sn-node sn-err', o.error));
     const add = (items, depth, prefix) => {

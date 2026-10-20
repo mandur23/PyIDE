@@ -247,7 +247,7 @@
       if (!samePath(file, m.path)) {
         file = m.path;
         const head = el('div', 'bm-file');
-        head.append(el('span', 'bm-file-icon', m.path.endsWith('.py') ? '🐍' : '📄'), userText('span', 'bm-file-name', basename(m.path)),
+        head.append(Object.assign(ide.fileIcon(m.path), { className: 'file-icon bm-file-icon' }), userText('span', 'bm-file-name', basename(m.path)),
           userText('span', 'bm-file-dir muted', ide.util.rel(dirname(m.path))));
         listEl.appendChild(head);
       }

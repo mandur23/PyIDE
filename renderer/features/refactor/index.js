@@ -271,7 +271,7 @@
         const row = el('div', 'rf-file');
         row.dataset.path = c.path;
         const tag = c.old === null ? tr('new file') : '';
-        row.append(el('span', 'rf-file-icon', '🐍'), userText(el('span', 'rf-file-name', basename(c.path))),
+        row.append(Object.assign(ide.fileIcon(c.path), { className: 'file-icon rf-file-icon' }), userText(el('span', 'rf-file-name', basename(c.path))),
           userText(el('span', 'muted rf-file-dir', rel(c.path))), tag ? el('span', 'rf-file-tag', tag) : '');
         row.onclick = () => show(row, c);
         rows.push(row);
