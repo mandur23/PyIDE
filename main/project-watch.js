@@ -3,6 +3,7 @@
 // batched until 300 ms pass without one, as a checkout produces thousands.
 const fs = require('fs');
 const path = require('path');
+const { allowShare } = require('./security');
 
 // Paths under these folders never matter to the tree or open documents.
 const NOISE = /(^|[\\/])(\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.tox|\.nox|\.idea)([\\/]|$)/i;
@@ -52,8 +53,12 @@ function register({ ipcMain }) {
     return !!watcher;
   }
 
-  // root: the window's project folder, or null to stop watching.
-  ipcMain.handle('watch:project', (e, root) => watch(e.sender, root && fs.existsSync(root) ? root : null));
+  // root: the window's project folder, or null to stop watching. A project on a network share may show its images
+  // (main/security.js).
+  ipcMain.handle('watch:project', (e, root) => {
+    if (root) allowShare(root);
+    return watch(e.sender, root && fs.existsSync(root) ? root : null);
+  });
 }
 
 module.exports = { register };

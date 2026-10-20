@@ -92,6 +92,20 @@ fetch('/' + decodeURIComponent(location.hash.slice(1))).then((r) => r.status, ()
   await js(`ide.api.invoke('viewers:previewUrl', ide.util.joinPath(ide.root, 'site\\\\.hidden\\\\page.html'), ide.root)`);
   check(await status('site/.hidden/page.html') === 200, 'a previewed page inside a hidden folder is still served');
 
+  // ---------- network shares ----------
+  // Fetching a file URL on a share makes Windows sign in to that server (NTLM over SMB). One nobody opened, as in a
+  // docstring image, is not fetched: every spelling fails at once instead of after the ~20 s SMB timeout.
+  const forms = ['file://10.255.255.11/share/a.png', 'file:////10.255.255.12/share/b.png', 'file:///\\\\10.255.255.13\\share\\c.png', '//10.255.255.14/share/d.png', '\\\\10.255.255.15\\share\\e.png'];
+  const loads = await js(`Promise.all(${JSON.stringify(forms)}.map((u) => new Promise((res) => { const i = new Image(); const t0 = performance.now(); i.onload = () => res('loaded'); i.onerror = () => res(Math.round(performance.now() - t0)); i.src = u; })))`);
+  check(loads.every((ms) => typeof ms === 'number' && ms < 2000), `images on a network share nobody opened are not fetched (failed after ${loads.join(', ')} ms)`);
+  await openFile(t, 'hello.py');
+  await js(`(window.__shareHover = ide.monaco.languages.registerHoverProvider('python', { provideHover: () => ({ contents: [{ value: 'Docstring ![x](file://10.255.255.16/share/h.png)' }] }) }), true)`);
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 2 }), ide.editor.trigger('verify', 'editor.action.showHover', {}), true)`);
+  await until(`!!document.querySelector('.monaco-hover img[src^="file://10.255.255.16"]')`, 'hover with a docstring image on a share', 10000);
+  const settled = await until(`document.querySelector('.monaco-hover img[src^="file://10.255.255.16"]').complete`, 'hover image settled', 3000).then(() => true, () => false);
+  check(settled, 'a docstring image on a network share in a Monaco hover is not fetched');
+  await js(`(window.__shareHover.dispose(), true)`);
+
   // ---------- permissions ----------
   check(await js(`navigator.permissions.query({ name: 'geolocation' }).then((p) => p.state)`) === 'denied', 'location access is denied');
   check(await js(`Notification.permission`) === 'denied', 'notifications are denied');

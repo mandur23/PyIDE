@@ -133,14 +133,14 @@ async function probeInterpreter(cmd, args) {
   return hit.missing ? null : hit;
 }
 
-ipcMain.handle('dialog:openFolder', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
-  return r.canceled ? null : r.filePaths[0];
-});
-ipcMain.handle('dialog:openFile', async (_e, filters) => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters });
-  return r.canceled ? null : r.filePaths[0];
-});
+// A folder or file the user picks on a network share may show its images (main/security.js).
+const picked = (r) => {
+  if (r.canceled) return null;
+  require('./main/security').allowShare(r.filePaths[0]);
+  return r.filePaths[0];
+};
+ipcMain.handle('dialog:openFolder', async () => picked(await dialog.showOpenDialog(win, { properties: ['openDirectory'] })));
+ipcMain.handle('dialog:openFile', async (_e, filters) => picked(await dialog.showOpenDialog(win, { properties: ['openFile'], filters })));
 
 ipcMain.handle('fs:list', (_e, dir) => fsScan('list', dir));
 ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, excludedDirs));
