@@ -99,7 +99,24 @@
   const scheduleRefresh = (ms = 200) => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, ms); };
   const treeSig = () => [...byPath.values()].map((f) => `${key(f.path)}:${f.status}`).sort().join('|') + '#' + [...ignored].sort().join('|');
 
-  async function refresh() {
+  // One git status at a time: on a large repository it takes seconds, and saves, focus changes and file events
+  // would otherwise start overlapping ones. A refresh asked for meanwhile runs once after the current one, and every
+  // caller's promise settles after a status taken since it asked.
+  let refreshing = null;
+  let refreshAgain = false;
+  function refresh() {
+    if (refreshing) { refreshAgain = true; return refreshing; }
+    refreshing = (async () => {
+      try {
+        do { refreshAgain = false; await refreshOnce(); } while (refreshAgain);
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
+  }
+
+  async function refreshOnce() {
     const root = ide.root;
     if (!root) return;
     const my = ++refreshSeq;
@@ -1331,6 +1348,6 @@
   // overview-ruler marks carry concrete colors; recolor them for the new theme
   ide.on('settingsChanged', (k) => k === 'appearance.theme' && setTimeout(updateVisibleGutters));
   ide.on('activeTabChanged', (tab) => { updateGutter(tab); layoutAnnotations(); });
-  ide.on('fileClosed', (path) => { gutters.delete(key(path)); if (blames.delete(key(path))) rebuildBlameCss(); });
+  ide.on('fileClosed', (path) => { gutters.delete(key(path)); headCache.delete(key(path)); if (blames.delete(key(path))) rebuildBlameCss(); });
   window.addEventListener('focus', () => scheduleRefresh(50));
 })();

@@ -330,6 +330,20 @@ try {
   await until(`!!${fileRow('README.md')}`, 'focus refresh');
   check(true, 'window focus refreshes changes');
 
+  // A burst of refreshes (saves, focus, file events) runs one git status at a time, not one per event.
+  const burst = await js(`(async () => {
+    const real = ide.api;
+    let now = 0, peak = 0, calls = 0;
+    ide.api = { ...real, invoke: async (ch, ...args) => {
+      if (ch !== 'git:status') return real.invoke(ch, ...args);
+      calls++; peak = Math.max(peak, ++now);
+      try { return await real.invoke(ch, ...args); } finally { now--; }
+    } };
+    try { await Promise.all(Array.from({ length: 10 }, () => ide.vcs.refresh())); } finally { ide.api = real; }
+    return { peak, calls };
+  })()`);
+  check(burst.peak === 1 && burst.calls <= 2, `ten refreshes at once run git status one at a time (${burst.calls} runs, ${burst.peak} at once)`);
+
   await press('Alt+9');
   if (!(await js(`ide.toolWindows.get('Git').isVisible()`))) await press('Alt+9');
   await openFile(t, 'README.md');
