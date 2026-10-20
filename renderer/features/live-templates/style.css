@@ -1,0 +1,19 @@
+/* Settings › Editor › Live Templates */
+.lt-page { display: flex; flex-direction: column; gap: 6px; }
+.lt-toolbar { display: flex; gap: 4px; }
+.lt-toolbar button { min-width: 28px; padding: 2px 8px; }
+.lt-list { border: 1px solid var(--gray3); border-radius: 4px; max-height: 210px; overflow-y: auto; background: var(--gray1); }
+.lt-row { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; cursor: default; white-space: nowrap; }
+.lt-row:hover { background: var(--gray2); }
+.lt-row.selected { background: var(--blue2); }
+.lt-row input, .lt-postfix-row input { accent-color: var(--blue6); margin: 0; }
+.lt-name { font-family: var(--mono); color: var(--gray12); min-width: 72px; }
+.lt-row-desc { overflow: hidden; text-overflow: ellipsis; }
+.lt-tag { margin-left: auto; font-size: 11px; }
+.lt-form { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.lt-field { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: start; gap: 8px; }
+.lt-field > span { padding-top: 4px; }
+.lt-field input.invalid { border-color: var(--red); }
+.lt-body { font-family: var(--mono); font-size: 13px; resize: vertical; min-height: 90px; tab-size: 4; }
+.lt-postfix { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px; margin-top: 6px; }
+.lt-postfix-row { display: flex; align-items: center; gap: 8px; height: 24px; white-space: nowrap; overflow: hidden; }

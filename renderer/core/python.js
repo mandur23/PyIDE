@@ -42,12 +42,11 @@ window.pythonBasicCompletions = (monaco) => (model, position) => {
   const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
     startColumn: word.startColumn, endColumn: word.endColumn };
   const K = monaco.languages.CompletionItemKind;
+  // main, try and the other Python templates are live templates (renderer/features/live-templates).
   const snippets = [
-    ['main', 'if __name__ == "__main__":\n    ${1:main()}', 'if __name__ == "__main__"'],
     ['def', 'def ${1:name}(${2}):\n    ${0:pass}', 'function'],
     ['class', 'class ${1:Name}:\n    def __init__(self${2}):\n        ${0:pass}', 'class'],
     ['for', 'for ${1:item} in ${2:items}:\n    ${0:pass}', 'for loop'],
-    ['try', 'try:\n    ${1:pass}\nexcept ${2:Exception} as e:\n    ${0:raise}', 'try/except'],
   ];
   return {
     suggestions: [
