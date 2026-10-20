@@ -130,7 +130,11 @@ try {
   // ---------- quick fixes ----------
   await openFile(t, 'lint.py');
   await until(`ide.problems.all().some(p => p.source === 'ruff' && p.path.endsWith('lint.py') && p.msg.startsWith('F401'))`, 'ruff F401 problem');
-  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 8 }), ide.editor.trigger('verify', 'editor.action.quickFix', null), true)`);
+  // A pause after the caret move, as in verify/tooling.mjs's quickFix(): Monaco's own check 250 ms after it would
+  // replace an explicit request still waiting on Pyright.
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 8 }), true)`);
+  await sleep(400);
+  await js(`(ide.editor.trigger('verify', 'editor.action.quickFix', null), true)`);
   await until(`[...document.querySelectorAll('.action-widget .monaco-list-row.action')].some(n => n.textContent.includes('ruff로 수정'))`, 'quick fix menu');
   const fixes = await js(`[...document.querySelectorAll('.action-widget .monaco-list-row.action')].map(n => n.textContent).filter(s => /ruff|noqa|Ruff/.test(s))`);
   check(fixes.some((s) => s.startsWith('ruff로 수정: ') && s.includes('(F401)')), `'Fix with ruff' in Korean (${S(fixes)})`);

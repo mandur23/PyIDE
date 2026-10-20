@@ -46,6 +46,9 @@ async function clickText(selector, label) {
 
 async function quickFix(lineNumber, column, label) {
   await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${lineNumber}, column: ${column} }), true)`);
+  // Monaco's own code-action check runs 250 ms after a caret move and replaces an explicit request still waiting on
+  // Pyright, which then shows "no code actions"; a person pauses longer than that before Alt+Enter.
+  await sleep(400);
   // Alt+Enter belongs to the lsp feature; without it, fall back to Monaco's own quick-fix command.
   if (await js(`ide.actions.some(a => a.keys.includes('Alt+Enter'))`)) await press('Alt+Enter');
   else await js(`(ide.editor.trigger('verify', 'editor.action.quickFix', null), true)`);
