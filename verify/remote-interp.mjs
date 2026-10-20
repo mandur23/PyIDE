@@ -7,6 +7,7 @@
 // REMOTE_DOCKER_IMAGE pick the target) and skips with a message when it is not there.
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -95,6 +96,20 @@ const procCount = (needle) => Number(execFileSync('powershell', ['-NoProfile', '
 const t = await launch({ fixture: 'remote-interp', port: REAL ? 9732 : 9730, name: REAL ? `remote-interp-real-${REAL.replace(/\W/g, '-')}` : 'remote-interp' });
 const { js, until, press, type, click, check, shot } = t;
 const local = (rel) => path.join(t.project, rel);
+
+// ---------- `wsl -l -v` output as Windows writes it in other languages ----------
+{
+  const { parseWslList } = createRequire(import.meta.url)('../main/remote/target.js');
+  const utf16 = (rows, bom = false) => Buffer.concat([bom ? Buffer.from([0xff, 0xfe]) : Buffer.alloc(0), Buffer.from(`${rows.join('\r\n')}\r\n`, 'utf16le')]);
+  const list = (buf) => JSON.stringify(parseWslList(buf).map((d) => [d.name, d.state, d.version, d.default]));
+  check(list(utf16(['  NAME            STATE           VERSION', '* Ubuntu-22.04    Running         2', '  Debian          Stopped         1']))
+    === JSON.stringify([['Ubuntu-22.04', 'Running', 2, true], ['Debian', 'Stopped', 1, false]]), 'WSL list: English output');
+  check(list(utf16(['  이름            상태            버전', '* Ubuntu          실행 중         2', '  docker-desktop  중지됨          2'], true))
+    === JSON.stringify([['Ubuntu', '실행 중', 2, true], ['docker-desktop', '중지됨', 2, false]]), 'WSL list: Korean output with a BOM and a two-word state');
+  check(list(Buffer.from('  NAME      STATE                VERSION\n* Alpine    Converting to WSL 2  1\n  Arch      Uninstalling         2\n', 'utf8'))
+    === JSON.stringify([['Alpine', 'Converting to WSL 2', 1, true], ['Arch', 'Uninstalling', 2, false]]), 'WSL list: UTF-8 output (WSL_UTF8=1) with a multi-word state');
+  check(list(utf16(['Windows Subsystem for Linux has no installed distributions.'])) === '[]', 'WSL list: no distributions');
+}
 
 const text = (sel) => js(`document.querySelector(${JSON.stringify(sel)})?.textContent || ''`);
 const matches = (s, want) => (want instanceof RegExp ? want.test(s) : s.includes(want));

@@ -144,13 +144,16 @@ function sshConfigHosts(file = process.env.PYIDE_SSH_CONFIG || path.join(os.home
   return hosts;
 }
 
-// `wsl.exe -l -v` writes UTF-16LE (or UTF-8 with WSL_UTF8=1); rows are "[*] NAME STATE VERSION".
+// `wsl.exe -l -v` writes UTF-16LE, with or without a BOM (or UTF-8 with WSL_UTF8=1); rows are "[*] NAME STATE VERSION".
+// The header and STATE are in the Windows display language and STATE may be several words ("실행 중"), while a
+// distribution name has no spaces: NAME is the first token after the optional '*', VERSION the last, STATE the rest.
 function parseWslList(buf) {
-  const text = buf.length > 1 && buf[1] === 0 ? buf.toString('utf16le') : buf.toString('utf8');
+  const utf16 = (buf.length > 1 && buf[1] === 0) || (buf[0] === 0xff && buf[1] === 0xfe);
+  const text = (utf16 ? buf.toString('utf16le') : buf.toString('utf8')).replace(/^﻿/, '');
   const rows = text.replace(/\0/g, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const out = [];
   for (const row of rows.slice(1)) {
-    const m = /^(\*)?\s*(\S+)\s+(\S+)\s+(\d+)$/.exec(row);
+    const m = /^(\*\s*)?(\S+)\s+(.+?)\s+(\d+)$/.exec(row);
     if (m) out.push({ name: m[2], state: m[3], version: Number(m[4]), default: !!m[1] });
   }
   return out;
