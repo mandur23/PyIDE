@@ -86,8 +86,10 @@
   const isTypo = (w) => verdicts.get(w.lower) === true && !ignored(w.lower);
 
   // ---------- words ----------
-  // Spans that are not prose: URLs, e-mail addresses, paths, HTML entities, %-placeholders.
-  const SKIP = /\b[a-z][\w+.-]*:\/\/[^\s"'<>()`]+|\bwww\.[^\s"'<>()`]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\S*[\\/]\S*|&#?\w+;|%[-#0 +]*\d*(?:\.\d+)?[a-zA-Z]/g;
+  // Spans that are not prose: URLs, e-mail addresses, paths, HTML entities, %-placeholders. E-mail addresses and paths
+  // are tried only where their run of characters starts (the leftmost match starts there anyway): tried at every
+  // character, a long run without @ or a slash (base64 in a string) cost time quadratic in its length.
+  const SKIP = /\b[a-z][\w+.-]*:\/\/[^\s"'<>()`]+|\bwww\.[^\s"'<>()`]+|(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?<!\S)\S*[\\/]\S*|&#?\w+;|%[-#0 +]*\d*(?:\.\d+)?[a-zA-Z]/g;
   const TOKEN = /[\p{L}\p{N}_'’]+/gu;
   const PART = /[A-Z]+(?![a-z])|[A-Z]?[a-z']+/g;
   const HEX = /^(?:0x[0-9a-f]+|(?=[0-9a-f]*\d)[0-9a-f]{6,})$/i;
@@ -145,7 +147,9 @@
       for (const w of out) if (!knownCode.has(w.lower)) { knownCode.add(w.lower); added = true; }
     };
     for (const m of text.matchAll(/^[ \t]*(?:from|import)[ \t].*$/gm)) for (const n of m[0].matchAll(/[A-Za-z_]\w*/g)) add(n[0]);
-    for (const m of text.matchAll(/([A-Za-z_]\w*|[)\]])\s*\.\s*([A-Za-z_]\w*)/g)) if (m[1] !== 'self' && m[1] !== 'cls') add(m[2]);
+    // A name starts only where a word starts: tried at every letter of a long word (a 100 KB string literal), the
+    // pattern backtracked over the rest of it each time, and a 400 KB line took two minutes.
+    for (const m of text.matchAll(/((?<!\w)[A-Za-z_]\w*|[)\]])\s*\.\s*([A-Za-z_]\w*)/g)) if (m[1] !== 'self' && m[1] !== 'cls') add(m[2]);
     return added;
   }
 
