@@ -359,6 +359,10 @@ try {
   check(!hints.some((x) => x.startsWith(`${L.label}:`)), 'no type hint for a plain literal');
   check(!hints.some((x) => x.startsWith(`${L.count}:obj`)), 'no name for positional-only parameters (len)');
   check(hints.includes(`${L.greet}:-> str`), 'inferred return type of an unannotated function');
+  // Monaco asks for the lines in view; hints for a range are tokenized from the statement around it, not the whole file.
+  const tail = await js(`(async () => { const m = ide.editor.getModel(); return (await ide.inlayHints.hints(m, new ide.monaco.Range(${L.price}, 1, m.getLineCount(), 1))).map(h => h.position.lineNumber + ':' + h.label); })()`);
+  const expectTail = hints.filter((x) => Number(x.split(':')[0]) >= L.price);
+  check(JSON.stringify(tail) === JSON.stringify(expectTail), `hints for a range match the whole file's (${tail.join(', ')})`);
   await until(`[...document.querySelectorAll('.view-line')].some(l => l.textContent.replace(/\\u00a0/g, ' ').includes('count: int = len'))`, 'hint rendered', 15000).catch(() => {});
   check(await js(`[...document.querySelectorAll('.view-line')].some(l => l.textContent.replace(/\\u00a0/g, ' ').includes('count: int = len'))`), 'hints render inline in the editor');
   await shot('inlay-hints.png');

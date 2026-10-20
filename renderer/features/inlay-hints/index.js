@@ -14,12 +14,28 @@
   const MAX_TYPE = 60;
 
   // ---------- where hints go ----------
-  // Tokens of the whole model (multi-line strings need the state from the top), cached per model version.
+  // Monaco asks for the lines in view after every pause in typing. Tokenizing the whole model each time cost 150 ms on a
+  // 12,000-line file, so only the lines asked for are tokenized, from the nearest line above them that starts a
+  // top-level statement outside a string (where a fresh tokenizer and bracket depth 0 are right), plus a margin below
+  // for calls and signatures that run on. Cached per model version and window.
+  const MARGIN = 40;
+  const STANDARD_COMMENT = 1;
+  const STANDARD_STRING = 2;
+  function statementStart(model, ln) {
+    if (!/^[A-Za-z_@]/.test(model.getLineContent(ln))) return false;
+    model.tokenization.forceTokenization(ln);
+    const type = model.tokenization.getLineTokens(ln).getStandardTokenType(0);
+    return type !== STANDARD_STRING && type !== STANDARD_COMMENT;
+  }
   const scans = new WeakMap();
-  function tokensOf(model) {
+  function tokensOf(model, range) {
+    let from = range.startLineNumber;
+    while (from > 1 && !statementStart(model, from)) from--;
+    const to = Math.min(model.getLineCount(), range.endLineNumber + MARGIN);
     const cached = scans.get(model);
-    if (cached?.version === model.getVersionId()) return cached.sites;
-    const lines = model.getLinesContent();
+    if (cached?.version === model.getVersionId() && cached.from <= from && cached.to >= to) return cached.sites;
+    const lines = [];
+    for (let ln = from; ln <= to; ln++) lines.push(model.getLineContent(ln));
     const raw = monaco.editor.tokenize(lines.join('\n'), 'python');
     const toks = [];
     raw.forEach((lineToks, i) => {
@@ -35,13 +51,13 @@
         for (const part of parts) {
           const lead = part.length - part.trimStart().length;
           const body = part.trim();
-          if (body) toks.push({ line: i + 1, col: k + lead + 1, end: k + lead + body.length + 1, text: body, type });
+          if (body) toks.push({ line: from + i, col: k + lead + 1, end: k + lead + body.length + 1, text: body, type });
           k += part.length;
         }
       });
     });
-    const sites = findSites(toks, lines);
-    scans.set(model, { version: model.getVersionId(), sites });
+    const sites = findSites(toks, (ln) => lines[ln - from]);
+    scans.set(model, { version: model.getVersionId(), from, to, sites });
     return sites;
   }
 
@@ -50,7 +66,8 @@
   const isName = (t) => t && (t.type === 'identifier' || t.type === 'self');
   const LITERAL = (t) => t && (t.type.startsWith('string') || t.type === 'number' || (t.type === 'keyword' && ['True', 'False', 'None'].includes(t.text)));
 
-  function findSites(toks, lines) {
+  // lineAt(n): the text of line n.
+  function findSites(toks, lineAt) {
     const vars = [];
     const calls = [];
     const defs = [];
@@ -61,7 +78,7 @@
       const t = toks[i];
       const prev = toks[i - 1];
       // A new physical line at bracket depth 0 starts a statement unless the previous line ends with a backslash.
-      if (prev && t.line !== prev.line && depth === 0 && !/\\\s*$/.test(lines[prev.line - 1])) stmtStart = true;
+      if (prev && t.line !== prev.line && depth === 0 && !/\\\s*$/.test(lineAt(prev.line))) stmtStart = true;
       if (t.type === 'comment') continue;
       if (stmtStart && depth === 0) {
         stmtStart = false;
@@ -244,7 +261,7 @@
     const empty = { hints: [], dispose() {} };
     if (!on('enabled') || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
     const uri = model.uri.toString();
-    const sites = tokensOf(model);
+    const sites = tokensOf(model, range);
     const jobs = [];
     const K = monaco.languages.InlayHintKind;
     if (on('types')) {
@@ -309,7 +326,7 @@
 
   ide.inlayHints = {
     refresh: () => changed.fire(),
-    // Hints for the whole model, as the provider computes them (verify/refactor.mjs).
-    hints: async (model) => (await provide(model, model.getFullModelRange(), { isCancellationRequested: false })).hints,
+    // Hints for the whole model or a range of it, as the provider computes them (verify/refactor.mjs).
+    hints: async (model, range = model.getFullModelRange()) => (await provide(model, range, { isCancellationRequested: false })).hints,
   };
 })();
