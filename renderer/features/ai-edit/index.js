@@ -214,6 +214,21 @@
     focusInput(ctx.session);
   }
 
+  // A proposal made elsewhere (AI Chat's Apply) for lines start..end (end = start - 1 inserts before `start`), reviewed
+  // like a Ctrl+I answer: hunk by hunk, with follow-up instructions.
+  function openReview(ctx, { start, end, lines }) {
+    endSession(ctx);
+    clearNes(ctx);
+    const model = ctx.editor.getModel();
+    ctx.session = { phase: 'reviewing', region: { start, end }, lines: model.getLinesContent(), instructions: [], proposal: [...lines], streamed: null, request: null, message: null, ui: null };
+    ctx.session.ui = createPromptWidget(ctx);
+    if (!hunksOf(ctx).length) ctx.session.message = { kind: 'info', text: tr('No changes suggested.') };
+    ctx.editor.setPosition({ lineNumber: Math.min(start, model.getLineCount()), column: 1 });
+    render(ctx);
+    ctx.editor.revealLinesInCenterIfOutsideViewport(Math.max(1, start - 2), Math.max(start, end));
+    focusInput(ctx.session);
+  }
+
   // Monaco attaches a new content widget on its next render, so the input may not be in the page yet.
   function focusInput(s, tries = 10) {
     s.ui.input.focus();
@@ -769,6 +784,8 @@
   const ctxFor = (editor) => contexts.get(editor || ide.editor) || null;
   ide.aiEdit = {
     open: (editor) => openPrompt(ctxFor(editor)),
+    // proposal: {start, end, lines}; end = start - 1 inserts the lines before line `start`.
+    review: (editor, proposal) => openReview(ctxFor(editor), proposal),
     session(editor) {
       const ctx = ctxFor(editor);
       const s = ctx?.session;

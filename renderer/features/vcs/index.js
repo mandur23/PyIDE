@@ -41,6 +41,7 @@
   const branchActions = [];
   const logActions = [];
   const commitHeaders = [];
+  const msgActions = el('div', 'vcs-msg-actions'); // buttons other plugins put on the commit message box
   let conflictHandler = null;
   const errorText = (r) => (r.reason && REASONS[r.reason]) || r.err || r.out || '';
 
@@ -234,7 +235,9 @@
       const pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
       pushBtn.onclick = () => doCommit(true);
       btns.append(commitBtn, pushBtn);
-      commitBody.append(headerEl, listEl, msgEl, btns);
+      const msgBox = el('div', 'vcs-msg-box');
+      msgBox.append(msgEl, msgActions);
+      commitBody.append(headerEl, listEl, msgBox, btns);
       container.append(initBox, commitBody);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: refresh },
@@ -1295,6 +1298,10 @@
     addBranchActions: (fn) => branchActions.push(fn),
     addLogActions: (fn) => logActions.push(fn),
     addCommitHeader: (fn) => { commitHeaders.push(fn); renderChanges(); },
+    // The commit message box, the changes ticked for commit, and a button shown in the box's top right corner.
+    commitMessage: () => msgEl,
+    includedFiles: () => (repo ? repo.files.filter(fileIncluded) : []),
+    addMessageAction: (node) => msgActions.appendChild(node),
     // {open(path): merge tool for one file, resolve(): the conflicts dialog, stopped(result): after a pull stopped on conflicts}
     setConflictHandler: (handler) => { conflictHandler = handler; renderChanges(); },
   };

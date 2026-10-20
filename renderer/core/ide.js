@@ -484,8 +484,9 @@ $('projectWidget').dataset.order = 0;
 
 // ---------- tool windows ----------
 const areas = {
-  left: { panel: $('sidePanel'), splitter: $('sideSplitter'), body: $('sideBody'), actions: $('sideActions'), stripe: $('stripeTop'), active: null },
+  left: { panel: $('sidePanel'), splitter: $('sideSplitter'), body: $('sideBody'), actions: $('sideActions'), stripe: $('stripeTop'), title: $('sideTitle'), active: null },
   bottom: { panel: $('bottom'), splitter: $('bottomSplitter'), body: $('bottomBody'), actions: $('bottomActions'), stripe: $('stripeBottom'), active: null },
+  right: { panel: $('rightPanel'), splitter: $('rightSplitter'), body: $('rightBody'), actions: $('rightActions'), stripe: $('stripeRightTop'), title: $('rightTitle'), active: null },
 };
 
 // PyCharm New UI icons (icons.js) for the built-in tool windows; plugins may pass iconName, or a text glyph as icon.
@@ -539,7 +540,7 @@ function setAreaVisible(area, visible) {
   refreshStripe();
 }
 
-// {id, title, icon, iconName?, side: 'left'|'bottom', keys?, order?, mount(container, tw)} -> tw {show, hide, toggle, setActions, setBadge, isVisible}
+// {id, title, icon, iconName?, side: 'left'|'bottom'|'right', keys?, order?, mount(container, tw)} -> tw {show, hide, toggle, setActions, setBadge, isVisible}
 ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, order = 100, mount }) => {
   const area = areas[side];
   const container = el('div', 'tool');
@@ -568,7 +569,7 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
         other.container.classList.toggle('active', other === tw);
         other.tab?.classList.toggle('active', other === tw);
       }
-      if (side === 'left') $('sideTitle').textContent = title;
+      if (area.title) area.title.textContent = title;
       setAreaVisible(area, true);
       renderAreaActions(area);
       ide.emit('toolWindowShown', id);
@@ -600,7 +601,7 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
   if (!area.active || (!area.picked && order < area.active.order)) {
     area.active?.container.classList.remove('active');
     area.active?.tab?.classList.remove('active');
-    area.active = tw; container.classList.add('active'); tab?.classList.add('active'); if (side === 'left') $('sideTitle').textContent = title; renderAreaActions(area);
+    area.active = tw; container.classList.add('active'); tab?.classList.add('active'); if (area.title) area.title.textContent = title; renderAreaActions(area);
   }
   refreshStripe();
   return tw;
@@ -622,7 +623,7 @@ const outsideMore = (e) => { if (!morePanel?.contains(e.target) && !moreBtn.cont
 const escMore = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeMore(); } };
 function renderMore() {
   morePanel.replaceChildren();
-  for (const [side, label] of [['left', tr('Left')], ['bottom', tr('Bottom')]]) {
+  for (const [side, label] of [['left', tr('Left')], ['bottom', tr('Bottom')], ['right', tr('Right')]]) {
     const list = [...ide.toolWindows.values()].filter((tw) => tw.area === areas[side]).sort((a, b) => a.order - b.order);
     if (!list.length) continue;
     morePanel.appendChild(el('div', 'more-group', label));
@@ -1133,7 +1134,7 @@ document.querySelectorAll('.splitter').forEach((s) => {
     const start = vertical ? down.clientX : down.clientY;
     const size = vertical ? target.offsetWidth : target.offsetHeight;
     const move = (e) => {
-      const delta = (vertical ? e.clientX : e.clientY) - start;
+      const delta = ((vertical ? e.clientX : e.clientY) - start) * (s.dataset.grow === 'left' ? -1 : 1);
       if (vertical) target.style.width = `${Math.max(140, size + delta)}px`;
       else target.style.height = `${Math.max(80, size - delta)}px`;
     };

@@ -62,6 +62,12 @@ input, select, textarea { font: inherit; }
   width: 6px; height: 6px; border-radius: 50%; background: var(--red); }
 
 #sidePanel { width: 280px; min-width: 140px; background: var(--gray2); display: flex; flex-direction: column; }
+#rightPanel { width: 380px; min-width: 140px; background: var(--gray2); display: flex; flex-direction: column; }
+#rightBody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* The right stripe shows only while a right-side tool window is on it. */
+#stripeRight { width: 40px; background: var(--gray2); display: flex; flex-direction: column; align-items: center;
+  padding: 6px 0; border-left: 1px solid var(--gray1); }
+#stripeRight:not(:has(.stripe-btn:not(.hidden))) { display: none; }
 .panel-header { height: 34px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 10px; font-weight: 600; flex-shrink: 0; }
 .panel-actions { display: flex; gap: 2px; }
@@ -236,6 +242,7 @@ input, select, textarea { font: inherit; }
 
 /* Detached editor windows ("Open in New Window") show only the editor area. */
 body.detached #stripe, body.detached #sidePanel, body.detached #sideSplitter, body.detached #bottom,
+body.detached #stripeRight, body.detached #rightPanel, body.detached #rightSplitter,
 body.detached #bottomSplitter, body.detached #welcome, body.detached #toolbarRight, body.detached #projectWidget, body.detached #mainMenuBtn,
 body.detached #statusInterp { display: none !important; }
 

@@ -1,0 +1,60 @@
+.aic { flex: 1; display: flex; flex-direction: column; min-height: 0; font-size: 13px; }
+.aic-list { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
+.aic-empty { margin: auto 8px; text-align: center; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
+.aic-empty-title { font-weight: 600; color: var(--gray11); }
+.aic-msg { line-height: 1.5; overflow-wrap: anywhere; }
+.aic-msg.user { align-self: flex-end; max-width: 90%; background: var(--blue2); border-radius: 8px; padding: 6px 10px; }
+.aic-user-text { white-space: pre-wrap; }
+.aic-msg-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.aic-msg.assistant .aic-body > :first-child > :first-child { margin-top: 0; }
+.aic-md p, .aic-md ul, .aic-md ol, .aic-md blockquote, .aic-md table { margin: 6px 0; }
+.aic-md ul, .aic-md ol { padding-left: 20px; }
+.aic-md h1, .aic-md h2, .aic-md h3, .aic-md h4 { margin: 10px 0 4px; font-size: 14px; }
+.aic-md code { font-family: var(--mono); font-size: 12px; background: var(--gray3); padding: 1px 4px; border-radius: 3px; }
+.aic-md a { color: var(--blue8); }
+.aic-md table { border-collapse: collapse; }
+.aic-md th, .aic-md td { border: 1px solid var(--gray4); padding: 2px 6px; }
+.aic-md blockquote { border-left: 3px solid var(--gray5); padding-left: 8px; color: var(--gray9); }
+.aic-plain { white-space: pre-wrap; }
+.aic-code { margin: 6px 0; border: 1px solid var(--gray4); border-radius: 6px; overflow: hidden; background: var(--gray1); }
+.aic-code-head { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; background: var(--gray3); font-size: 12px; }
+.aic-code-lang { flex: 1; min-width: 0; color: var(--gray9); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aic-code-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.aic-code-btn { height: 22px; padding: 0 7px; border-radius: 4px; color: var(--gray11); font-size: 12px; white-space: nowrap; }
+.aic-code-btn:hover:not(:disabled) { background: var(--gray4); }
+.aic-code-btn:disabled { color: var(--gray6); }
+.aic-pre { margin: 0; padding: 6px 8px; overflow: auto; font: 12px/1.5 var(--mono); }
+.aic-typing { color: var(--gray8); }
+.aic-msg.pending .aic-body::after { content: '▍'; color: var(--blue8); animation: aic-blink 1s steps(2) infinite; }
+@keyframes aic-blink { 50% { opacity: 0; } }
+.aic-note { margin-top: 4px; color: var(--gray8); font-size: 12px; }
+.aic-note.error { color: var(--red); }
+.aic-composer { position: relative; flex-shrink: 0; border-top: 1px solid var(--gray1); padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.aic-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.aic-chips:empty { display: none; }
+.aic-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 22px; padding: 0 4px 0 6px; border: 1px solid var(--gray5);
+  border-radius: 11px; background: var(--gray3); font-size: 12px; }
+.aic-chip.selection { border-color: var(--blue6); }
+.aic-chip-icon { font-size: 11px; }
+.aic-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aic-chip-note { color: var(--gray8); }
+.aic-chip-x { width: 16px; height: 16px; border-radius: 50%; color: var(--gray9); line-height: 1; }
+.aic-chip-x:hover { background: var(--gray5); }
+.aic-input { resize: none; min-height: 54px; max-height: 200px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4);
+  border-radius: 6px; padding: 6px 8px; outline: none; font: 13px/1.45 inherit; font-family: inherit; }
+.aic-input:focus { border-color: var(--blue6); }
+.aic-foot { display: flex; align-items: center; gap: 8px; }
+.aic-status { flex: 1; color: var(--gray8); font-size: 12px; }
+.aic-status.error { color: var(--red); }
+.aic-send { min-width: 64px; }
+.aic-send.stop { background: var(--red); border-color: var(--red); }
+.aic-complete { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 30; padding: 4px; background: var(--gray2);
+  border: 1px solid var(--gray5); border-radius: 6px; box-shadow: 0 6px 18px #0006; }
+.aic-complete-item { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; }
+.aic-complete-item.active { background: var(--blue2); }
+.aic-complete-name { flex-shrink: 0; }
+.aic-complete-dir { color: var(--gray8); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.aic-commit-gen { width: 24px; height: 24px; border-radius: 4px; font-size: 14px; display: grid; place-items: center; }
+.aic-commit-gen:hover { background: var(--gray3); }
+.aic-commit-gen.busy { animation: aic-pulse 1s ease-in-out infinite; }
+@keyframes aic-pulse { 50% { opacity: 0.35; } }

@@ -106,6 +106,7 @@
   "More Tool Windows": "더 많은 도구 창",
   "Left": "왼쪽",
   "Bottom": "아래쪽",
+  "Right": "오른쪽",
   "{path} no longer exists. Remove it from the list?": "{path}이(가) 더 이상 존재하지 않습니다. 목록에서 제거하시겠습니까?",
   "Recent Projects": "최근 프로젝트",
   "File": "파일",

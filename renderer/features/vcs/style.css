@@ -42,6 +42,9 @@
 .vcs-msg { height: 110px; flex-shrink: 0; margin: 0 8px; resize: vertical; background: var(--gray1); color: var(--gray12);
   border: 1px solid var(--gray4); border-radius: 4px; padding: 6px 8px; outline: none; font: 13px var(--mono); }
 .vcs-msg:focus { border-color: var(--blue6); }
+.vcs-msg-box { position: relative; flex-shrink: 0; display: flex; flex-direction: column; }
+.vcs-msg-actions { position: absolute; top: 4px; right: 13px; display: flex; gap: 2px; }
+.vcs-msg-box:has(.vcs-msg-actions:not(:empty)) .vcs-msg { padding-right: 34px; }
 .vcs-commit-btns { display: flex; gap: 8px; padding: 8px; flex-shrink: 0; }
 .vcs-empty { padding: 10px 12px; }
 .vcs-commit-header:empty { display: none; }
