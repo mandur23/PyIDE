@@ -240,6 +240,7 @@ const PREVIEW_HELPER = `<script>(() => {
 })();</script>`;
 const sites = new Map(); // id -> root folder
 const overrides = new Map(); // site id -> Map(lowercase absolute path -> unsaved text)
+const hiddenShown = new Map(); // site id -> Set(lowercase hidden names on the paths of previewed pages)
 const isInside = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
 const injectHelper = (html) => (/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + PREVIEW_HELPER) : PREVIEW_HELPER + html);
 
@@ -258,7 +259,15 @@ async function servePreview(req) {
   try { rel = decodeURIComponent(u.pathname); } catch { return new Response('Bad path', { status: 400 }); }
   let file = path.resolve(root, `.${rel}`);
   if (!isInside(file, root) && file.toLowerCase() !== root.toLowerCase()) return new Response('Outside the preview folder', { status: 403 });
+  // Hidden files and folders (.env, .git, .ssh when the site is a home folder) are not part of a site, unless a
+  // previewed page itself lies in one.
+  const shown = hiddenShown.get(u.hostname);
+  if (path.relative(root, file).split(path.sep).some((seg) => seg.startsWith('.') && !shown?.has(seg.toLowerCase()))) return new Response('Not found', { status: 404 });
   try { if (fs.statSync(file).isDirectory()) file = path.join(file, 'index.html'); } catch {}
+  // A symlink or junction inside the site must not lead out of it.
+  const real = await fs.promises.realpath(file).catch(() => null);
+  const realRoot = await fs.promises.realpath(root).catch(() => root);
+  if (real && !isInside(real, realRoot)) return new Response('Outside the preview folder', { status: 403 });
   const over = overrides.get(u.hostname)?.get(file.toLowerCase());
   let body = over !== undefined ? Buffer.from(over, 'utf8') : await fs.promises.readFile(file).catch(() => null);
   if (!body) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
@@ -271,8 +280,10 @@ exports.register = ({ ipcMain }) => {
   // -> {url} for an HTML file, served from the project (or from the file's folder when it is outside the project).
   ipcMain.handle('viewers:previewUrl', (_e, file, projectRoot) => {
     const root = projectRoot && isInside(file, projectRoot) ? projectRoot : path.dirname(file);
-    const rel = path.relative(root, file).split(path.sep).map(encodeURIComponent).join('/');
-    return { url: `pyide-preview://${siteFor(root)}/${rel}`, root };
+    const segs = path.relative(root, file).split(path.sep);
+    const site = siteFor(root);
+    for (const seg of segs) if (seg.startsWith('.')) hiddenShown.set(site, (hiddenShown.get(site) || new Set()).add(seg.toLowerCase()));
+    return { url: `pyide-preview://${site}/${segs.map(encodeURIComponent).join('/')}`, root };
   });
   // The unsaved text of open documents in a site (the host of its preview URL): {absolutePath: text}; replaces that
   // site's previous set. Each site has its own, so previews of two sites do not take each other's away.
