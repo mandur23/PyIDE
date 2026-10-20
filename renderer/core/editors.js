@@ -647,7 +647,10 @@
     let doc = null;
     if (!viewer || viewer.text) {
       doc = await loadDoc(path).catch((e) => ({ error: e }));
-      if (doc.error) { alert(doc.error.message); return null; }
+      if (doc.error) {
+        alert(tr('Cannot open {name}: {error}', { name: basename(path), error: String(doc.error.message || doc.error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+        return null;
+      }
       if (doc.unsupported) {
         viewer = viewerFor(path, { binary: true }) || binaryViewer;
         doc = null;

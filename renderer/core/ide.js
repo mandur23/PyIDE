@@ -865,19 +865,22 @@ ide.revealInTree = async (path) => {
 };
 
 const selectedDir = () => (!selected ? ide.root : selected.dir ? selected.path : dirname(selected.path));
+// The message of an error a main-process handler threw, without Electron's "Error invoking remote method" prefix.
+const ipcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 async function createEntry(isDir) {
   if (!ide.root) return;
   const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
   if (!name) return;
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
+  if (await ide.api.exists(target)) return alert(tr('{path} already exists', { path: basename(target) }));
   try {
     await ide.api.create(target, isDir);
     expanded.add(keyOf(dirname(target)));
     await renderTree();
     ide.emit('filesChanged', { created: [target] });
     if (!isDir) ide.openFile(target);
-  } catch (e) { alert(e.message); }
+  } catch (e) { alert(ipcError(e)); }
 }
 
 // Renames or moves a file or folder. Windows' rename replaces an existing file, so an existing target is refused.
@@ -886,7 +889,7 @@ async function moveTo(entry, to) {
   if (!samePath(entry.path, to) && await ide.api.exists(to)) return alert(tr('{path} already exists', { path: to }));
   const open = ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path));
   for (const t of open) if (ide.isDirty(t)) await ide.saveTab(t);
-  try { await ide.api.rename(entry.path, to); } catch (e) { return alert(e.message); }
+  try { await ide.api.rename(entry.path, to); } catch (e) { return alert(ipcError(e)); }
   for (const t of open) ide.closeTab(t.path, true);
   renderTree();
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
@@ -909,7 +912,10 @@ async function moveEntry(entry, dir) {
 
 async function deleteEntry(entry) {
   if (!confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }))) return;
-  await ide.api.trash(entry.path);
+  // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
+  try { await ide.api.trash(entry.path); } catch (e) {
+    return alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
+  }
   ide.tabs.filter((t) => t.path && isUnder(t.path, entry.path)).forEach((t) => ide.closeTab(t.path, true));
   renderTree();
   ide.emit('filesChanged', { deleted: [entry.path] });

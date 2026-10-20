@@ -77,6 +77,8 @@
   "Open with Default App": "기본 앱으로 열기",
   "Show in Explorer": "탐색기에서 표시",
   "Could not save {name}: {error}": "{name}을(를) 저장할 수 없습니다: {error}",
+  "Cannot open {name}: {error}": "{name}을(를) 열 수 없습니다: {error}",
+  "Could not move {name} to the Recycle Bin: {error}": "{name}을(를) 휴지통으로 이동할 수 없습니다: {error}",
   "File encoding": "파일 인코딩",
   "Reload in {encoding}": "{encoding}(으)로 다시 로드",
   "Convert to {encoding}": "{encoding}(으)로 변환",
