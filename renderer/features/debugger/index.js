@@ -5,7 +5,9 @@
   const key = (p) => p.toLowerCase();
 
   // ---------- breakpoints ----------
-  let bps = new Map(); // pathLower -> {path, items: [{line, condition, enabled}]}
+  // A breakpoint with a logMessage is a logpoint: debugpy prints the message ({expr} parts evaluated) and never suspends.
+  // hitCondition is debugpy's: "3" suspends on the 3rd hit only, ">= 3" from the 3rd on, "% 3" on every 3rd.
+  let bps = new Map(); // pathLower -> {path, items: [{line, condition, hitCondition, logMessage, enabled}]}
   const bpDecos = new Map(); // pathLower -> [{id, bp}]
   let saveTimer = null;
 
@@ -14,19 +16,24 @@
   const fileBps = (path) => bps.get(key(path))?.items || [];
   const allBps = () => [...bps.values()].flatMap((f) => f.items.map((bp) => ({ path: f.path, bp })));
   const findBp = (path, line) => fileBps(path).find((b) => b.line === line);
+  const newBp = (line) => ({ line, condition: '', hitCondition: '', logMessage: '', enabled: true });
+  const isConditional = (bp) => !!(bp.condition || bp.hitCondition);
+  const bpClasses = (bp) => `${isConditional(bp) ? ' cond' : ''}${bp.logMessage ? ' log' : ''}${bp.enabled ? '' : ' disabled'}`;
 
   function loadBps() {
     bps = new Map();
     for (const b of ide.settings.get(bpSettingsKey(), [])) {
       if (!bps.has(key(b.path))) bps.set(key(b.path), { path: b.path, items: [] });
-      bps.get(key(b.path)).items.push({ line: b.line, condition: b.condition || '', enabled: b.enabled !== false });
+      bps.get(key(b.path)).items.push({ ...newBp(b.line), condition: b.condition || '', hitCondition: b.hitCondition || '',
+        logMessage: b.logMessage || '', enabled: b.enabled !== false });
     }
   }
   function saveBps() {
     clearTimeout(saveTimer);
     saveTimer = null;
     if (!ide.root) return;
-    ide.settings.set(bpSettingsKey(), allBps().map(({ path, bp }) => ({ path, line: bp.line, condition: bp.condition, enabled: bp.enabled })));
+    ide.settings.set(bpSettingsKey(), allBps().map(({ path, bp }) => ({ path, line: bp.line, condition: bp.condition,
+      hitCondition: bp.hitCondition, logMessage: bp.logMessage, enabled: bp.enabled })));
   }
   const saveBpsSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveBps, 300); };
 
@@ -39,13 +46,21 @@
       range: new monaco.Range(bp.line, 1, bp.line, 1),
       options: {
         isWholeLine: true,
-        className: bp.enabled ? 'dbg-bp-line' : null,
-        glyphMarginClassName: `dbg-bp${bp.condition ? ' cond' : ''}${bp.enabled ? '' : ' disabled'}`,
-        glyphMarginHoverMessage: { value: `${tr('Line {line} in {file}', { line: bp.line, file: basename(path) })}${bp.condition ? `\n\n${tr('Condition:')} \`${bp.condition}\`` : ''}${bp.enabled ? '' : ` ${tr('(disabled)')}`}` },
+        className: bp.enabled && !bp.logMessage ? 'dbg-bp-line' : null,
+        glyphMarginClassName: `dbg-bp${bpClasses(bp)}`,
+        glyphMarginHoverMessage: { value: bpHover(path, bp) },
         stickiness: TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
       },
     })));
     bpDecos.set(key(path), ids.map((id, i) => ({ id, bp: items[i] })));
+  }
+  const code = (s) => `\`${s.replace(/`/g, "'")}\``;
+  function bpHover(path, bp) {
+    const parts = [`${tr('Line {line} in {file}', { line: bp.line, file: basename(path) })}${bp.enabled ? '' : ` ${tr('(disabled)')}`}`];
+    if (bp.condition) parts.push(`${tr('Condition:')} ${code(bp.condition)}`);
+    if (bp.hitCondition) parts.push(`${tr('Hit count:')} ${code(bp.hitCondition)}`);
+    if (bp.logMessage) parts.push(`${tr('Log message:')} ${code(bp.logMessage)}`);
+    return parts.join('\n\n');
   }
 
   // Breakpoint lines follow edits through their decorations.
@@ -72,7 +87,7 @@
     if (!bps.has(key(path))) bps.set(key(path), { path, items: [] });
     const f = bps.get(key(path));
     let bp = f.items.find((b) => b.line === line);
-    if (!bp) f.items.push((bp = { line, condition: '', enabled: true }));
+    if (!bp) f.items.push((bp = newBp(line)));
     Object.assign(bp, props);
     afterBpChange(path);
     return bp;
@@ -96,7 +111,8 @@
   const bpListChanged = () => bpListener?.();
 
   function bpPayload(path) {
-    const lines = fileBps(path).filter((b) => b.enabled).map((b) => ({ line: b.line, ...(b.condition ? { condition: b.condition } : {}) }));
+    const lines = fileBps(path).filter((b) => b.enabled).map((b) => ({ line: b.line, ...(b.condition ? { condition: b.condition } : {}),
+      ...(b.hitCondition ? { hitCondition: b.hitCondition } : {}), ...(b.logMessage ? { logMessage: b.logMessage } : {}) }));
     if (sess?.tempBp && samePath(sess.tempBp.path, path) && !lines.some((l) => l.line === sess.tempBp.line)) lines.push({ line: sess.tempBp.line });
     return { path, lines };
   }
@@ -126,7 +142,7 @@
       if (e.target.type !== MouseTargetType.GUTTER_GLYPH_MARGIN || !e.target.position) return;
       const path = pathOf(ed);
       const bp = path && findBp(path, e.target.position.lineNumber);
-      if (bp) editBpPopup(path, bp);
+      if (bp) editBpPopup(path, bp, ed);
     });
     ed.onMouseMove((e) => {
       const path = pathOf(ed);
@@ -142,33 +158,106 @@
     ed.onDidChangeModel(clearHover);
   });
 
-  // PyCharm's breakpoint popup: enabled flag and condition.
-  function editBpPopup(path, bp) {
-    const body = el('div');
-    const enabledRow = el('label', 'dbg-check');
-    const enabled = el('input');
-    enabled.type = 'checkbox';
-    enabled.checked = bp.enabled;
-    enabledRow.append(enabled, el('span', null, tr('Enabled')));
-    const condRow = el('div', 'field');
-    const cond = el('input');
-    cond.id = 'dbgBpCondition';
-    cond.placeholder = tr('Python expression, e.g. i == 3');
-    cond.value = bp.condition;
-    condRow.append(el('label', null, tr('Condition:')), cond);
-    body.append(enabledRow, condRow);
-    const line = bp.line;
-    const dlg = ide.ui.dialog({
-      title: `${basename(path)}:${line}`,
-      body,
-      width: 460,
-      buttons: [
-        { label: tr('Remove'), run: () => removeBp(path, line) },
-        { label: tr('Done'), primary: true, run: () => setBp(path, line, { enabled: enabled.checked, condition: cond.value.trim() }) },
-      ],
+  // The fields PyCharm's breakpoint popup and the Breakpoints dialog share. onChange gets the edited props.
+  function bpFields(bp, onChange, ids = {}) {
+    const box = el('div', 'dbg-bp-fields');
+    const check = (label, checked) => {
+      const row = el('label', 'dbg-check');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      row.append(cb, el('span', null, label));
+      return { row, cb };
+    };
+    const input = (id, value, placeholder) => {
+      const i = el('input', 'input');
+      if (id) i.id = id;
+      i.value = value;
+      i.placeholder = placeholder;
+      i.spellcheck = false;
+      return i;
+    };
+    const en = check(tr('Enabled'), bp.enabled);
+    const cond = input(ids.condition, bp.condition, tr('Python expression, e.g. i == 3'));
+    const hit = input(ids.hit, bp.hitCondition, tr('e.g. 3, >= 3 or % 3'));
+    hit.classList.add('dbg-bp-hit');
+    const log = check(tr('Log message instead of suspending'), !!bp.logMessage);
+    const msg = input(ids.log, bp.logMessage, tr('e.g. i = {i}, total = {total}'));
+    const syncLog = () => { msg.disabled = !log.cb.checked; };
+    syncLog();
+    const props = () => ({
+      enabled: en.cb.checked,
+      condition: cond.value.trim(),
+      hitCondition: hit.value.trim(),
+      logMessage: log.cb.checked ? msg.value.trim() : '',
     });
-    dlg.el.classList.add('dbg-dialog');
-    setTimeout(() => cond.focus());
+    log.cb.onchange = () => { syncLog(); if (log.cb.checked) msg.focus(); onChange?.(props()); };
+    en.cb.onchange = () => onChange?.(props());
+    for (const i of [cond, hit, msg]) i.onchange = () => onChange?.(props());
+    if (ids.log) log.cb.id = `${ids.log}Toggle`;
+    const field = (label, ...nodes) => { const r = el('div', 'dbg-bp-field'); r.append(el('span', 'dbg-bp-label', label), ...nodes); return r; };
+    box.append(en.row, field(tr('Condition:'), cond), field(tr('Hit count:'), hit), log.row, msg,
+      el('div', 'dbg-bp-hint', tr('Expressions in braces are evaluated and printed to the Debug console.')));
+    return { el: box, props, focus: () => cond.focus() };
+  }
+
+  // PyCharm's inline breakpoint popup, opened by right-clicking a breakpoint or Ctrl+Shift+F8 on its line.
+  // Changes apply when it closes (Enter, Esc, Done or a click elsewhere); Ctrl+Shift+F8 again opens the full dialog.
+  let closeBpPopup = null;
+  function editBpPopup(path, bp, ed = ide.editor) {
+    closeBpPopup?.();
+    const line = bp.line;
+    const pop = el('div', 'dbg-bp-popup dbg-dialog');
+    pop.id = 'dbgBpPopup';
+    const title = el('div', 'dbg-bp-popup-title', `${basename(path)}:${line}`);
+    title.dataset.userText = '';
+    const fields = bpFields(bp, null, { condition: 'dbgBpCondition', hit: 'dbgBpHit', log: 'dbgBpLog' });
+    const foot = el('div', 'dbg-bp-popup-foot');
+    const more = el('button', 'link', withKeys(tr('More'), 'Ctrl+Shift+F8'));
+    const rm = el('button', 'secondary', tr('Remove'));
+    const done = el('button', 'primary', tr('Done'));
+    foot.append(more, el('span', 'spacer'), rm, done);
+    pop.append(title, fields.el, foot);
+
+    let closed = false;
+    const close = (apply = true) => {
+      if (closed) return;
+      closed = true;
+      closeBpPopup = null;
+      removeEventListener('keydown', onKey, true);
+      removeEventListener('mousedown', outside, true);
+      pop.remove();
+      if (apply && findBp(path, line) === bp) setBp(path, line, fields.props());
+    };
+    const onKey = (e) => {
+      const combo = `${e.ctrlKey ? 'Ctrl+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`;
+      if (e.isComposing) return;
+      if (e.key === 'Escape' || e.key === 'Enter' || combo === 'Ctrl+Shift+F8') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        if (combo === 'Ctrl+Shift+F8') breakpointsDialog({ path, line });
+        else ed.focus();
+      }
+    };
+    const outside = (e) => { if (!pop.contains(e.target)) close(); };
+    more.onclick = () => { close(); breakpointsDialog({ path, line }); };
+    rm.onclick = () => { close(false); removeBp(path, line); ed.focus(); };
+    done.onclick = () => { close(); ed.focus(); };
+    closeBpPopup = () => close();
+
+    // Under the glyph, kept inside the window.
+    ed.revealLineInCenterIfOutsideViewport(line);
+    const r = ed.getDomNode().getBoundingClientRect();
+    const li = ed.getLayoutInfo();
+    const pos = ed.getScrolledVisiblePosition({ lineNumber: line, column: 1 });
+    document.getElementById('dialogHost').appendChild(pop);
+    const x = r.left + li.glyphMarginLeft + 2;
+    const y = r.top + (pos ? pos.top + pos.height : 0) + 2;
+    pop.style.left = `${Math.max(4, Math.min(x, innerWidth - pop.offsetWidth - 4))}px`;
+    pop.style.top = `${y + pop.offsetHeight > innerHeight - 4 ? Math.max(4, y - pop.offsetHeight - (pos?.height || 0) - 4) : y}px`;
+    addEventListener('keydown', onKey, true);
+    setTimeout(() => { if (!closed) { addEventListener('mousedown', outside, true); fields.focus(); } });
   }
 
   // ---------- session ----------
@@ -638,13 +727,25 @@
   }
 
   // ---------- breakpoints dialog (Ctrl+Shift+F8) ----------
-  function breakpointsDialog() {
+  // What a breakpoint does besides suspending, for the Breakpoints list: condition and log message are program text.
+  function bpSummary(bp) {
+    const box = el('span', 'dbg-bps-summary');
+    if (bp.condition) box.append(data('muted', `  [${bp.condition}]`));
+    if (bp.hitCondition) box.append(el('span', 'muted', `  ${tr('hit {count}', { count: bp.hitCondition })}`));
+    if (bp.logMessage) box.append(el('span', 'muted', `  ${tr('log:')} `), data('muted dbg-bps-log', `"${bp.logMessage}"`));
+    return box;
+  }
+
+  // select: {path, line} of the breakpoint to show first.
+  function breakpointsDialog(select = null) {
+    closeBpPopup?.();
     const body = el('div', 'dbg-bps');
     const list = el('div', 'dbg-bps-list');
     list.id = 'dbgBpList';
     const detail = el('div', 'dbg-bps-detail');
     body.append(list, detail);
-    let current = null;
+    let current = select ? allBps().find((e) => samePath(e.path, select.path) && e.bp.line === select.line) || null : null;
+    let shown = null; // the breakpoint whose fields the detail pane holds, so edits there are not rebuilt under the caret
     let dlg;
     const render = () => {
       const entries = allBps().sort((a, b) => a.path.localeCompare(b.path) || a.bp.line - b.bp.line);
@@ -656,30 +757,24 @@
         cb.type = 'checkbox';
         cb.checked = e.bp.enabled;
         cb.onclick = (ev) => { ev.stopPropagation(); setBp(e.path, e.bp.line, { enabled: cb.checked }); };
-        row.append(cb, el('span', 'dbg-bp-dot' + (e.bp.condition ? ' cond' : '') + (e.bp.enabled ? '' : ' disabled')),
-          data(null, `${basename(e.path)}:${e.bp.line}`), data('muted', e.bp.condition ? `  [${e.bp.condition}]` : ''));
+        row.append(cb, el('span', `dbg-bp-dot${bpClasses(e.bp)}`), data(null, `${basename(e.path)}:${e.bp.line}`), bpSummary(e.bp));
         row.onclick = () => { current = e; render(); };
         row.ondblclick = () => { dlg.close(); ide.openFile(e.path, { line: e.bp.line }); };
         return row;
       }));
       if (!entries.length) list.appendChild(el('div', 'dbg-empty', tr('No breakpoints')));
+      if (fromDetail && shown === current?.bp) return;
+      shown = current?.bp || null;
       detail.replaceChildren();
       if (!current) return;
       const { path, bp } = current;
       const title = el('div', 'dbg-bps-title', `${ide.util.rel(path)}:${bp.line}`);
       title.dataset.userText = '';
       detail.append(title);
-      const en = el('label', 'dbg-check');
-      const enCb = el('input');
-      enCb.type = 'checkbox';
-      enCb.checked = bp.enabled;
-      enCb.onchange = () => setBp(path, bp.line, { enabled: enCb.checked });
-      en.append(enCb, el('span', null, tr('Enabled')));
-      const cond = el('input', 'input');
-      cond.id = 'dbgBpListCondition';
-      cond.placeholder = tr('Condition');
-      cond.value = bp.condition;
-      cond.onchange = () => setBp(path, bp.line, { condition: cond.value.trim() });
+      const fields = bpFields(bp, (props) => {
+        fromDetail = true;
+        try { setBp(path, bp.line, props); } finally { fromDetail = false; }
+      }, { condition: 'dbgBpListCondition', hit: 'dbgBpListHit', log: 'dbgBpListLog' });
       const actions = el('div', 'dbg-bps-actions');
       const go = el('button', 'secondary', tr('Go to Source'));
       go.onclick = () => { dlg.close(); ide.openFile(path, { line: bp.line }); };
@@ -687,8 +782,9 @@
       rm.id = 'dbgBpRemove';
       rm.onclick = () => removeBp(path, bp.line);
       actions.append(go, rm);
-      detail.append(en, el('div', 'muted', tr('Condition:')), cond, actions);
+      detail.append(fields.el, actions);
     };
+    let fromDetail = false;
     bpListener = render;
     render();
     dlg = ide.ui.dialog({
@@ -760,7 +856,7 @@
       mk('RunToCursor', '⇥', withKeys(tr('Run to Cursor'), 'Alt+F9'), runToCursor, 'blue');
       bar.appendChild(el('span', 'dbg-sep'));
       mk('Evaluate', '⌨', withKeys(tr('Evaluate Expression'), 'Alt+F8'), evaluateDialog);
-      mk('Breakpoints', '●', withKeys(tr('View Breakpoints'), 'Ctrl+Shift+F8'), breakpointsDialog, 'red');
+      mk('Breakpoints', '●', withKeys(tr('View Breakpoints'), 'Ctrl+Shift+F8'), () => breakpointsDialog(), 'red');
 
       const vars = el('div', 'dbg-panes');
       const frames = pane(tr('Frames'));
@@ -866,11 +962,19 @@
   updateControls();
 
   const hasFile = () => !!activeFile();
+  // Like PyCharm: in an editor on a breakpoint's line, Ctrl+Shift+F8 edits that breakpoint inline; elsewhere it lists them.
+  function viewOrEditBreakpoint() {
+    const ed = ide.editor;
+    const path = ed?.hasTextFocus() && pathOf(ed);
+    const bp = path && findBp(path, ed.getPosition().lineNumber);
+    if (bp) editBpPopup(path, bp, ed);
+    else breakpointsDialog();
+  }
   [
     { id: 'Debug', title: tr('Debug'), keys: 'Shift+F9', run: debugCurrent },
     { id: 'ToggleLineBreakpoint', title: tr('Toggle Line Breakpoint'), keys: 'Ctrl+F8', when: hasFile,
       run: () => toggleBp(activeFile().path, ide.editor.getPosition().lineNumber) },
-    { id: 'ViewBreakpoints', title: tr('View Breakpoints…'), keys: 'Ctrl+Shift+F8', run: breakpointsDialog },
+    { id: 'ViewBreakpoints', title: tr('View Breakpoints…'), keys: 'Ctrl+Shift+F8', run: viewOrEditBreakpoint },
     { id: 'StepOver', title: tr('Step Over'), keys: 'F8', when: suspended, run: () => step('next') },
     { id: 'StepInto', title: tr('Step Into'), keys: 'F7', when: suspended, run: () => step('stepIn') },
     { id: 'StepOut', title: tr('Step Out'), keys: 'Shift+F8', when: suspended, run: () => step('stepOut') },

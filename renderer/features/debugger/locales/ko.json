@@ -32,7 +32,6 @@
   "Done": "완료",
   "Close": "닫기",
   "Enabled": "사용",
-  "Condition": "조건",
   "Condition:": "조건:",
   "Python expression, e.g. i == 3": "Python 표현식 (예: i == 3)",
   "Line {line} in {file}": "{file}의 {line}번째 줄",
@@ -76,5 +75,14 @@
   "Debug session closed": "디버그 세션이 종료되었습니다",
   "No debug session": "디버그 세션 없음",
   "{command} failed": "{command} 실패",
-  "{command} failed: {error}": "{command} 실패: {error}"
+  "{command} failed: {error}": "{command} 실패: {error}",
+  "Hit count:": "적중 횟수:",
+  "Log message:": "로그 메시지:",
+  "e.g. 3, >= 3 or % 3": "예: 3, >= 3 또는 % 3",
+  "Log message instead of suspending": "일시 중지하지 않고 메시지 로그 출력",
+  "e.g. i = {i}, total = {total}": "예: i = {i}, total = {total}",
+  "Expressions in braces are evaluated and printed to the Debug console.": "중괄호 안의 표현식이 평가되어 디버그 콘솔에 출력됩니다.",
+  "More": "더 보기",
+  "hit {count}": "적중 {count}",
+  "log:": "로그:"
 }

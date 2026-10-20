@@ -111,7 +111,8 @@ exports.register = (ctx) => {
     s.socket.destroy();
   };
 
-  // breakpoints: [{path, lines: [{line, condition}]}]. Resolves {id} once the program runs with breakpoints set.
+  // breakpoints: [{path, lines: [{line, condition?, hitCondition?, logMessage?}]}], DAP SourceBreakpoints passed to debugpy
+  // as they are (a logMessage makes a logpoint). Resolves {id} once the program runs with breakpoints set.
   // opts: {params?: string[], env?: object, roots?: string[]} from a run configuration (roots go on PYTHONPATH like Run).
   ipcMain.handle('debug:start', async (_e, interp, file, cwd, breakpoints = [], opts = {}) => {
     // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
