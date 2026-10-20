@@ -891,7 +891,9 @@
       authorSelect = el('select', 'vcs-log-author');
       authorSelect.id = 'vcsLogAuthor';
       authorSelect.onchange = () => renderLog();
-      bar.append(logSearch, el('span', 'muted', tr('User:')), authorSelect);
+      const authorLabel = el('label', 'muted', tr('User:'));
+      authorLabel.htmlFor = authorSelect.id; // names the list for screen readers
+      bar.append(logSearch, authorLabel, authorSelect);
       const header = el('div', 'vcs-log-row vcs-log-header');
       header.append(el('span', 'vcs-c-subject', tr('Commit')), el('span', 'vcs-c-author', tr('Author')), el('span', 'vcs-c-date', tr('Date')));
       logRows = el('div', 'vcs-log-rows');
