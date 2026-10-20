@@ -172,8 +172,9 @@ input, select, textarea { font: inherit; }
 
 #bottom { height: 260px; min-height: 80px; display: flex; flex-direction: column; background: var(--gray1); }
 .bottom-tabs { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 6px; background: var(--gray2); }
-.bottom-tab-list { display: flex; gap: 2px; }
-.bottom-tab { padding: 4px 10px; border-radius: 5px; color: var(--gray9); }
+.bottom-tab-list { display: flex; gap: 2px; min-width: 0; overflow-x: auto; }
+.bottom-tab-list::-webkit-scrollbar { height: 3px; }
+.bottom-tab { padding: 4px 10px; border-radius: 5px; color: var(--gray9); white-space: nowrap; flex-shrink: 0; }
 .bottom-tab.active { color: var(--gray12); background: var(--gray3); }
 .bottom-tab:hover { background: var(--gray3); }
 .bottom-tab .badge { color: var(--red); margin-left: 4px; }

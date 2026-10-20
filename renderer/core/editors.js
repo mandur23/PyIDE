@@ -314,6 +314,8 @@
     g.el.dataset.group = g.id;
     const bar = el('div', 'group-tabs');
     g.tabList = el('div', 'tab-list');
+    // A tab bar that gets narrower (a tool window opened beside it, a smaller window) keeps the active tab in view.
+    g.tabListSize = ide.util.observeSize(g.tabList, () => g.tabList.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     const actions = el('div', 'group-actions');
     const splitBtn = el('button', null, '◫');
     splitBtn.title = tr('Split Right');
@@ -417,6 +419,7 @@
     Object.keys(parent).forEach((k) => delete parent[k]);
     Object.assign(parent, sibling);
     groups.splice(groups.indexOf(g), 1);
+    g.tabListSize?.disconnect();
     g.editor.dispose();
     g.el.remove();
     // The first group keeps the stable ids (#editor, #customHost, #tabs) that plugins and tests rely on.
