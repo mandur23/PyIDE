@@ -35,18 +35,43 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
     conn.on('error', onLost);
     conn.on('end', () => onLost(new Error('Connection closed')));
     return {
-      query: (sql, { maxRows }) => timed(async () => {
-        const [result, fields] = await conn.query({ sql, rowsAsArray: true });
+      // Rows stream in through the core connection's events: those past maxRows are read and dropped, so a large result
+      // never sits whole in the main process. A CALL answers with several result sets; the last one with rows is shown.
+      query: (sql, { maxRows }) => timed(() => new Promise((resolve, reject) => {
         const command = commandOf(sql);
-        if (!Array.isArray(result)) return { columns: [], rows: [], rowCount: DML.has(command) ? result.affectedRows : null, truncated: false, command };
-        return {
-          columns: (fields || []).map((f) => ({ name: f.name, type: String(f.columnType ?? f.type ?? '') })),
-          rows: result.slice(0, maxRows).map((row) => row.map(jsonSafe)),
-          rowCount: Math.min(result.length, maxRows),
-          truncated: result.length > maxRows,
-          command,
-        };
-      }),
+        const sets = [];
+        let failed = null;
+        // A query without a callback hears nothing when the connection drops (the error goes to the connection).
+        const core = conn.connection;
+        const lost = (err) => { core.off('error', lost); core.off('end', lost); reject(err || new Error('Connection closed')); };
+        core.once('error', lost);
+        core.once('end', lost);
+        const q = core.query({ sql, rowsAsArray: true });
+        q.on('fields', (fields) => sets.push({ fields, rows: [], truncated: false, header: null }));
+        q.on('result', (r) => {
+          const set = sets[sets.length - 1];
+          if (!set?.fields) { if (set) set.header = r; } else if (set.rows.length < maxRows) set.rows.push(r);
+          else set.truncated = true;
+        });
+        q.on('error', (err) => { failed = err; });
+        q.on('end', () => {
+          core.off('error', lost);
+          core.off('end', lost);
+          if (failed) return reject(failed);
+          const set = [...sets].reverse().find((s) => s.fields) || null;
+          if (!set) {
+            const header = sets[sets.length - 1]?.header;
+            return resolve({ columns: [], rows: [], rowCount: DML.has(command) ? header?.affectedRows ?? null : null, truncated: false, command });
+          }
+          resolve({
+            columns: set.fields.map((f) => ({ name: f.name, type: String(f.columnType ?? f.type ?? '') })),
+            rows: set.rows.map((row) => row.map(jsonSafe)),
+            rowCount: set.rows.length,
+            truncated: set.truncated,
+            command,
+          });
+        });
+      })),
       async schema() {
         const [rows] = await conn.query(`
           SELECT c.TABLE_SCHEMA s, c.TABLE_NAME t, tb.TABLE_TYPE tt, c.COLUMN_NAME col, c.COLUMN_TYPE ty, c.IS_NULLABLE n, c.COLUMN_KEY k
