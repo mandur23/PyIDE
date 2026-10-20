@@ -63,6 +63,7 @@
     encoding: () => tr('Only UTF-8 files can be refactored.'),
     stale: (p) => tr('{name} changed while the refactoring was prepared. Try again.', p),
     'empty-name': () => tr('Enter a name.'),
+    timeout: (p) => tr('The refactoring took longer than {seconds} seconds and was stopped.', p),
   };
   const errorText = (err) => {
     const m = MESSAGES[err?.code];

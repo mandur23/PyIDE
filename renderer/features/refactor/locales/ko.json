@@ -83,6 +83,7 @@
   "The file has syntax errors (line {line}).": "파일에 구문 오류가 있습니다({line}행).",
   "The file is not inside the project.": "파일이 프로젝트 안에 있지 않습니다.",
   "The refactoring process stopped: {detail}": "리팩터링 프로세스가 중지되었습니다: {detail}",
+  "The refactoring took longer than {seconds} seconds and was stopped.": "리팩터링이 {seconds}초 안에 끝나지 않아 중지했습니다.",
   "The result would not be valid Python (line {line}).": "결과가 올바른 Python 코드가 아닙니다({line}행).",
   "The selected code cannot be extracted.": "선택한 코드는 추출할 수 없습니다.",
   "The selected expression is not inside a function body.": "선택한 식이 함수 본문 안에 있지 않습니다.",
