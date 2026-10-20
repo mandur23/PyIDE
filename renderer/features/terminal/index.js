@@ -158,6 +158,9 @@
   function closeSession(s) {
     s.closed = true;
     if (s.id && !s.exited) { closedIds.add(s.id); ide.api.invoke('pty:kill', s.id); }
+    // xterm 5.5 never disposes the device-pixel-ratio monitor its CoreBrowserService creates, so every closed terminal
+    // left a window 'resize' and a media-query listener behind (verify/soak.mjs counted 4 per session).
+    s.term._core?._coreBrowserService?._screenDprMonitor?.dispose();
     s.term.dispose();
     s.el.remove();
     s.tab.remove();
