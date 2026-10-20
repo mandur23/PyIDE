@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { complete } = require('../ai/claude');
+const trust = require('../trust');
 
 const CHAT_SYSTEM = `You are the AI assistant inside PyIDE, a Python IDE. The user asks about their project; files and selections they attached are given as context.
 Answer in Markdown and keep answers focused. Put code in fenced code blocks with a language tag.
@@ -52,6 +53,8 @@ function chatPrompt({ messages, context = [] }) {
 // ---------- git ----------
 // maxBytes: stop reading (and stop git) once this much output has come; the result then has capped: true.
 function git(cwd, args, { input, maxBytes = Infinity } = {}) {
+  // As in git.js: an untrusted repository's config could run programs through git.
+  if (!trust.isTrusted(cwd)) return Promise.resolve({ code: -1, out: '' });
   return new Promise((resolve) => {
     const child = spawn('git', ['-c', 'core.quotepath=off', ...args], {
       cwd, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' },

@@ -5,11 +5,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const textCodec = require('../text-codec');
+const trust = require('../trust');
 
 // No credential/editor prompts can be answered from the IDE, so fail fast instead of hanging.
 const ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
 
 function git(cwd, args, input) {
+  // A repository's own .git/config can make even `git status` run programs (core.fsmonitor, filter.*.clean), so
+  // git does not run in a project the user has not trusted (main/trust.js).
+  if (!trust.isTrusted(cwd)) return Promise.resolve({ code: -1, out: '', err: 'This project is not trusted', reason: 'untrusted' });
   return new Promise((resolve) => {
     let p;
     try {

@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const trust = require('./trust');
 
 function register({ ipcMain, app, startProcess }) {
   ipcMain.handle('app:info', () => ({
@@ -20,6 +21,7 @@ function register({ ipcMain, app, startProcess }) {
     if (!path.isAbsolute(dir)) throw new Error('The location must be an absolute path');
     if (fs.existsSync(dir) && fs.readdirSync(dir).length) throw new Error(`${dir} already exists and is not empty`);
     fs.mkdirSync(dir, { recursive: true });
+    trust.trust(dir); // the user is creating it
     for (const [rel, content] of Object.entries(files)) {
       const target = path.resolve(dir, rel);
       if (!target.startsWith(path.resolve(dir) + path.sep)) throw new Error(`Bad path ${rel}`);

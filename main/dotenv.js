@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { addSecretValues } = require('./diagnostics/redact');
 const log = require('./diagnostics').logger('#dotenv');
+const trust = require('./trust');
 
 const ESCAPES = { n: '\n', r: '\r', t: '\t', v: '\v', f: '\f', b: '\b', a: '\x07', '\\': '\\', '"': '"', "'": "'", $: '$' };
 const ENTRY = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*/;
@@ -100,6 +101,8 @@ function loadFiles(files, base = process.env) {
   const env = {};
   const lookup = (name) => (hasOwn(env, name) ? env[name] : lookupIn(base, name));
   for (const file of files) {
+    // An untrusted project's .env could set PATH, PYTHONSTARTUP and the like for everything started from it.
+    if (!trust.isTrusted(path.dirname(file))) continue;
     let text;
     try {
       text = fs.readFileSync(file, 'utf8');

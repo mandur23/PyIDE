@@ -6,6 +6,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Suites that call main-process modules directly (dotenv, git helpers) run outside the app, where nothing is trusted.
+process.env.PYIDE_TRUST_ALL ??= '1';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -26,7 +28,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their
     // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
     // Test instances keep their Claude Code IDE lock files to themselves (a killed instance cannot remove its own).
-    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
+    // Test projects are temporary copies: trusted, so no Trust and Open Project question (verify/trust.mjs turns it off).
+    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_TRUST_ALL: '1', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
 

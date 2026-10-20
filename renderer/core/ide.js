@@ -1119,9 +1119,55 @@ $('interpSelect').onchange = () => {
 };
 
 // ---------- project ----------
-// Returns false if the user kept unsaved files of the current project open (each one asks, as Close Project does).
+// A folder the user has not trusted (main/trust.js) asks first, like PyCharm's "Trust and Open Project": trusted, it
+// opens normally; in Safe Mode it opens without running anything it ships (its venv's Python, git, its .env).
+// Resolves 'trusted', 'safe' or null (cancelled).
+async function askTrust(dir) {
+  if (await ide.api.invoke('trust:isTrusted', dir)) return 'trusted';
+  return new Promise((resolve) => {
+    let answer = null;
+    ide.ui.dialog({
+      title: tr('Trust and Open Project?'),
+      body: el('div', 'dialog-message', tr('{name} can run code when PyIDE works with it: its virtual environment\'s Python, its Git configuration and its .env file. Trust it only if you know where it comes from. Safe Mode opens it without running anything from it.', { name: basename(dir) })),
+      width: 560,
+      onClose: () => resolve(answer),
+      buttons: [
+        { label: tr('Trust Project'), primary: true, run: async () => { await ide.api.invoke('trust:add', dir); answer = 'trusted'; } },
+        { label: tr('Preview in Safe Mode'), run: () => { answer = 'safe'; } },
+        { label: tr('Cancel') },
+      ],
+    });
+  });
+}
+
+const trustBar = el('div', 'trust-bar hidden');
+trustBar.id = 'trustBar';
+$('center').prepend(trustBar);
+function showTrustBar(dir) {
+  trustBar.replaceChildren(el('span', null, tr('Safe Mode: PyIDE runs nothing from this project (its venv, Git, .env).')));
+  const btn = el('button', 'primary', tr('Trust Project'));
+  btn.onclick = async () => {
+    await ide.api.invoke('trust:add', dir);
+    // Every feature starts over as for a trusted project: interpreters, Git, Pyright with the project venv. The page
+    // reopens this project (the window's own ?open= is the folder it was started with).
+    if (!ide.closeAllTabs(false)) return;
+    const url = new URL(location.href);
+    url.searchParams.set('open', dir);
+    url.searchParams.delete('file');
+    location.replace(url.href);
+  };
+  trustBar.appendChild(btn);
+  trustBar.classList.remove('hidden');
+}
+
+// Returns false if the user kept unsaved files of the current project open (each one asks, as Close Project does),
+// or did not open an untrusted folder.
 ide.openProject = async (dir) => {
+  const trust = await askTrust(dir);
+  if (!trust) return false;
   if (!ide.closeAllTabs(false)) return false;
+  ide.trusted = trust === 'trusted';
+  if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
   ide.root = dir;
   expanded.clear();
   expanded.add(keyOf(dir));
@@ -1144,6 +1190,7 @@ ide.openProject = async (dir) => {
 ide.closeProject = async () => {
   if (!ide.root || !ide.closeAllTabs(false)) return false;
   ide.root = null;
+  trustBar.classList.add('hidden');
   expanded.clear();
   selected = null;
   rows = [];

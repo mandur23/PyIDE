@@ -12,6 +12,7 @@ const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const { createPluginManager } = require('./main/plugin-manager');
 const textCodec = require('./main/text-codec');
+const trust = require('./main/trust');
 const iconv = require('iconv-lite');
 const { createWindowManager } = require('./main/windows');
 // Folder listings, project walks and interpreter probes run on a worker thread (see main/fs-scan.js).
@@ -175,7 +176,8 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   const t0 = performance.now();
   const started = probesStarted;
   const candidates = [];
-  if (root) {
+  // An untrusted project's own virtualenvs are not started: probing runs their python.exe, which the project supplies.
+  if (root && trust.isTrusted(root)) {
     for (const v of await fsScan('venvs', root)) {
       const exe = path.join(v, 'Scripts', 'python.exe');
       if (await exists(exe)) candidates.push([exe, [], path.relative(root, v)]);
@@ -284,6 +286,8 @@ const featureContext = {
 // only callers of feature channels.
 let featuresRegistered = null;
 function registerFeatures() {
+  // Before anything else: interpreter discovery and git ask it about the first project right away.
+  trust.register(featureContext);
   const files = [require.resolve('./main/new-project'), require.resolve('./main/project-watch'), ...plugins.mainModules()];
   featuresRegistered = new Promise((resolve) => {
     const next = (i) => {
