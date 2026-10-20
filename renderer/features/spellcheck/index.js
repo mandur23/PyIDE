@@ -153,7 +153,11 @@
     return added;
   }
 
+  // A line this long is generated or minified (Monaco stops tokenizing at 20,000 characters): nothing a person typed
+  // to check, and scanning it cost ~400 ms per typing pause on a 15 MB line.
+  const MAX_LINE = 10000;
   function pythonLine(model, ln) {
+    if (model.getLineLength(ln) > MAX_LINE) return [];
     model.tokenization.forceTokenization(ln);
     const lt = model.tokenization.getLineTokens(ln);
     const text = model.getLineContent(ln);
@@ -193,7 +197,7 @@
     return mask(mask(mask(mask(text, /`[^`]*`/g), /\]\([^)]*\)/g), /<[^>]+>/g), /^\s*\[[^\]]+\]:\s*\S+/);
   }
   function markdownLine(model, ln) {
-    if (inFence(model, ln)) return [];
+    if (model.getLineLength(ln) > MAX_LINE || inFence(model, ln)) return [];
     const out = [];
     proseWords(markdownText(model.getLineContent(ln)), 0, out);
     return out;
