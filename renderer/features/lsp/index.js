@@ -37,6 +37,7 @@
   let status = 'off';
   let gen = 0;
   let serverKey = null;
+  let startSeq = 0; // the latest start; an earlier one still in flight was superseded
   let readyWaiters = [];
 
   // Each status text is a complete entry in the locale files.
@@ -73,6 +74,7 @@
     const key = `${root}|${python}`;
     if (!force && key === serverKey) return;
     serverKey = key;
+    const my = ++startSeq;
     for (const doc of docs.values()) doc.opened = 0;
     ide.problems.clear(SOURCE);
     for (const tab of ide.tabs) if (tab.model) monaco.editor.setModelMarkers(tab.model, HINT_OWNER, []);
@@ -81,7 +83,8 @@
     setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
     let g = null;
     try { g = await ide.api.invoke('lsp:start', root, python); } catch (err) { console.warn('pyright failed to start', err); }
-    if (serverKey !== key) return;
+    // A restart while this start was in flight stopped its server; that is not a failure to report.
+    if (my !== startSeq) return;
     if (!g) return setStatus('error', tr('Pyright failed to start'));
     gen = g;
     for (const doc of docs.values()) sendOpen(doc);
@@ -169,6 +172,16 @@
   });
   ide.on('projectOpened', () => ensureServer());
   ide.on('interpreterChanged', () => ensureServer());
+  // Pyright holds the closed project's analysis (hundreds of MB on a large one); the welcome screen needs none.
+  ide.on('projectClosed', () => {
+    startSeq++;
+    serverKey = null;
+    ide.problems.clear(SOURCE);
+    rawDiagnostics.clear();
+    probeCache.clear();
+    ide.api.invoke('lsp:stop').catch(() => {});
+    setStatus('off');
+  });
 
   const docFor = (model) => {
     const p = modelPath(model);
@@ -181,7 +194,7 @@
   const SEVERITY = { 1: 'error', 2: 'warning', 3: 'info' };
 
   ide.api.on('lsp:diagnostics', (p) => {
-    if (p.gen !== gen) return;
+    if (p.gen !== gen || status === 'off') return;
     const path = toPath(p.uri);
     if (basename(path) === PROBE_NAME) return;
     rawDiagnostics.set(path.toLowerCase(), p.diagnostics);
@@ -579,6 +592,7 @@
 
   async function chooseAndNavigate(locs, title) {
     if (locs.length === 1) return navigate(locs[0]);
+    fileCache.clear();
     const lines = await Promise.all(locs.map((l) => lineText(toPath(l.uri), l.range.start.line + 1)));
     const picked = await ide.ui.pick({
       placeholder: title,

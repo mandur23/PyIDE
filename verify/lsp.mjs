@@ -232,6 +232,21 @@ try {
   check(true, 'interpreter change restarts Pyright with the new python.pythonPath');
   await js(`(ide.currentInterp = window.__realInterp, ide.emit('interpreterChanged', ide.currentInterp()), true)`);
   await until(`document.querySelector('#lspStatus').textContent === 'Pyright: ready'`, 'ready again', 30000);
+
+  // A second restart while the first is still starting supersedes it; the first is not reported as an error.
+  await watchStates();
+  await js(`(ide.lsp.restart(), setTimeout(() => ide.lsp.restart(), 50), true)`);
+  await until(`__lspStates.includes('Pyright: starting') && document.querySelector('#lspStatus').textContent === 'Pyright: ready'`, 'ready after two restarts', 30000);
+  check(!(await js(`__lspStates.includes('Pyright: error')`)), `restarting twice in a row never shows an error (${await js('JSON.stringify(__lspStates)')})`);
+
+  // Close Project stops Pyright; opening the project again starts it.
+  const root = await js(`ide.root`);
+  await js(`ide.closeProject()`);
+  await until(`document.querySelector('#lspStatus').textContent === 'Pyright: off'`, 'Pyright off after Close Project', 15000);
+  check(await js(`ide.api.invoke('lsp:log').then((l) => l === '')`), 'Close Project stops the Pyright server');
+  await js(`ide.openProject(${JSON.stringify(root)})`);
+  await until(`document.querySelector('#lspStatus').textContent === 'Pyright: ready'`, 'ready after reopening', 30000);
+  check(true, 'reopening the project starts Pyright again');
   await shot('final.png');
 } catch (err) {
   t.check(false, err.message);
