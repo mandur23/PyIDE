@@ -79,3 +79,25 @@
 .db-file-table .muted { overflow: hidden; text-overflow: ellipsis; }
 .db-local-server { display: inline-block; margin: 2px 0 8px; color: var(--blue6); font-size: 12px; }
 .db-local-server:hover { text-decoration: underline; }
+.db-view-switch { display: flex; border: 1px solid var(--gray4); border-radius: 5px; overflow: hidden; margin-right: 4px; }
+.db-view-switch.hidden { display: none; }
+.db-view-btn { padding: 1px 10px; color: var(--gray9); }
+.db-view-btn:hover { background: var(--gray3); }
+.db-view-btn.selected { background: var(--blue2); color: var(--gray12); }
+.db-result-message { color: var(--gray11); }
+.db-reply { font-family: var(--mono); white-space: pre-wrap; color: var(--gray12); }
+.db-json { font: 12.5px/1.5 var(--mono); padding: 4px 0 8px; }
+.db-json-line { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; cursor: default; padding-right: 12px; }
+.db-json-line:hover { background: var(--gray2); }
+.db-json-children.hidden { display: none; }
+.db-json-index { color: var(--gray7); }
+.db-json-key { color: #c77dbb; }
+.db-json-key::after, .db-json-index::after { content: ':'; color: var(--gray7); }
+.db-json-summary { color: var(--gray9); overflow: hidden; text-overflow: ellipsis; }
+.db-json-node.open > .db-json-line > .db-json-summary { color: var(--gray7); }
+.db-json-string { color: #6aab73; }
+.db-json-number { color: #2aacb8; }
+.db-json-boolean, .db-json-null { color: #cf8e6d; }
+.db-json-tagged { color: #56a8f5; }
+.db-kind-description { margin: -2px 0 8px 110px; font-size: 12px; }
+.db-kind-description:empty { display: none; }

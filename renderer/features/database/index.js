@@ -28,7 +28,7 @@
 
   async function reloadSources() {
     sources = await invoke('db:list');
-    for (const id of [...schemas.keys()]) if (!sourceOf(id)) schemas.delete(id);
+    for (const id of [...schemas.keys()]) if (!sourceOf(id)) { schemas.delete(id); forgetLazy(id); }
     renderTree();
   }
 
@@ -36,7 +36,7 @@
     const s = sourceOf(id);
     if (s) Object.assign(s, { state, message });
     // Expanding a source connects, so a disconnected source folds up instead of reconnecting on the next render.
-    if (state === 'disconnected') { schemas.delete(id); expanded.delete(nodeKey(id)); }
+    if (state === 'disconnected') { schemas.delete(id); forgetLazy(id); expanded.delete(nodeKey(id)); }
     renderTree();
     consoles.get(id)?.renderState();
   });
@@ -56,55 +56,169 @@
     try { return await invoke('db:installDriver', pkg); } finally { off(); }
   }
 
-  // ---------- SQL text ----------
-  // Statements separated by `;`, skipping quoted text, comments and Postgres $tag$ bodies.
-  // Each part is {start, end, from, to, text}: [start, end) is its share of the text including the `;`, [from, to) the statement itself.
-  function splitStatements(text) {
+  // ---------- kind ui ----------
+  // A kind's `ui` (main/db/kinds/*.js) shapes its console and tree: language ('sql', 'mongosh' or 'plaintext'),
+  // statementSeparator (see splitStatements), and openData, templates of the Open Data command per tree node kind
+  // ({qualified} is the quoted schema.table, {schema} and {name} the raw names). Tree nodes may also carry their own
+  // `open` command, which wins. SQL kinds need no ui: these defaults are SQL.
+  const SQL_OPEN = 'SELECT * FROM {qualified} LIMIT 200;';
+  const uiOf = (kind) => {
+    const ui = driverOf(kind)?.ui || {};
+    const language = ui.language || 'sql';
+    return { language, statementSeparator: ui.statementSeparator || 'semicolon', openData: ui.openData || (language === 'sql' ? { table: SQL_OPEN, view: SQL_OPEN } : {}) };
+  };
+
+  // ---------- statements ----------
+  // How a console splits its text, by the kind's ui.statementSeparator:
+  //   'semicolon': `;` outside quoted text, comments and Postgres $tag$ bodies (SQL);
+  //   'go-line': a line holding only GO (optionally with a count) ends a batch, and `;` stays inside it (T-SQL);
+  //   'lines': one command per line (Redis);
+  //   'mongo': a top-level shell expression, running across lines until its brackets balance; a line that starts with
+  //     `.` or follows one ending in `.` or `,` continues it, and `;` also ends it (MongoDB shell).
+  // Each part is {start, end, from, to, text}: [start, end) is its share of the text including the separator, [from, to) the statement itself.
+  function splitter(text) {
     const out = [];
     let start = 0;
-    let i = 0;
-    const push = (end, stop) => {
-      const raw = text.slice(start, stop);
-      const lead = raw.length - raw.trimStart().length;
-      const body = raw.trim();
-      out.push({ start, end, from: start + lead, to: start + lead + body.length, text: body });
-      start = end;
+    return {
+      push(stop, end) {
+        const raw = text.slice(start, stop);
+        const lead = raw.length - raw.trimStart().length;
+        const body = raw.trim();
+        out.push({ start, end, from: start + lead, to: start + lead + body.length, text: body });
+        start = end;
+      },
+      finish() { if (start < text.length || !out.length) this.push(text.length, text.length); return out; },
     };
-    while (i < text.length) {
-      const ch = text[i];
-      const two = text.slice(i, i + 2);
-      if (two === '--') { const e = text.indexOf('\n', i); i = e < 0 ? text.length : e; continue; }
-      if (two === '/*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 2; continue; }
-      if (ch === "'" || ch === '"' || ch === '`') {
-        let j = i + 1;
-        while (j < text.length && !(text[j] === ch && text[j + 1] !== ch)) j += text[j] === ch ? 2 : 1;
-        i = j + 1;
-        continue;
-      }
-      const dollar = ch === '$' && text.slice(i).match(/^\$([A-Za-z_]\w*)?\$/);
-      if (dollar) { const e = text.indexOf(dollar[0], i + dollar[0].length); i = e < 0 ? text.length : e + dollar[0].length; continue; }
-      if (ch === ';') { push(i + 1, i); i++; continue; }
-      i++;
-    }
-    if (start < text.length || !out.length) push(text.length, text.length);
-    return out;
   }
-  const isBlank = (sql) => !sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim();
-  const runnable = (text) => splitStatements(text).filter((s) => !isBlank(s.text));
+
+  // Skips a quoted string, comment or $tag$ body starting at i in SQL text; returns the index after it, or -1.
+  // brackets: T-SQL [names]; qQuotes: Oracle q'[...]' literals.
+  const Q_CLOSE = { '[': ']', '{': '}', '(': ')', '<': '>' };
+  function skipSql(text, i, { brackets = false, qQuotes = false } = {}) {
+    const ch = text[i];
+    const two = text.slice(i, i + 2);
+    if (two === '--') { const e = text.indexOf('\n', i); return e < 0 ? text.length : e; }
+    if (two === '/*') { const e = text.indexOf('*/', i + 2); return e < 0 ? text.length : e + 2; }
+    const q = qQuotes && !/\w/.test(text[i - 1] || '') && text.slice(i, i + 4).match(/^[nN]?[qQ]'(.)/);
+    if (q) {
+      const e = text.indexOf(`${Q_CLOSE[q[1]] || q[1]}'`, i + q[0].length);
+      return e < 0 ? text.length : e + 2;
+    }
+    const close = ch === '[' && brackets ? ']' : (ch === "'" || ch === '"' || ch === '`') ? ch : null;
+    if (close) {
+      let j = i + 1;
+      while (j < text.length && !(text[j] === close && text[j + 1] !== close)) j += text[j] === close ? 2 : 1;
+      return j + 1;
+    }
+    const dollar = ch === '$' && text.slice(i).match(/^\$([A-Za-z_]\w*)?\$/);
+    if (dollar) { const e = text.indexOf(dollar[0], i + dollar[0].length); return e < 0 ? text.length : e + dollar[0].length; }
+    return -1;
+  }
+
+  const SPLITTERS = {
+    semicolon(text) {
+      const s = splitter(text);
+      for (let i = 0; i < text.length;) {
+        const skip = skipSql(text, i);
+        if (skip >= 0) { i = skip; continue; }
+        if (text[i] === ';') s.push(i, i + 1);
+        i++;
+      }
+      return s.finish();
+    },
+    'go-line'(text) {
+      const s = splitter(text);
+      const GO = /^[ \t]*go(?:[ \t]+\d+)?[ \t]*(?:\r?\n|$)/i;
+      for (let i = 0; i < text.length;) {
+        if (i === 0 || text[i - 1] === '\n') {
+          const eol = text.indexOf('\n', i);
+          const m = text.slice(i, eol < 0 ? text.length : eol + 1).match(GO);
+          if (m) { s.push(i, i + m[0].length); i += m[0].length; continue; }
+        }
+        const skip = skipSql(text, i, { brackets: true });
+        i = skip >= 0 ? skip : i + 1;
+      }
+      return s.finish();
+    },
+    // SQL*Plus rules: `;` ends a SQL statement, while a PL/SQL unit keeps its inner `;` and ends at a line holding only `/`.
+    plsql(text) {
+      const s = splitter(text);
+      const UNIT = /^(?:DECLARE|BEGIN|CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:NON)?EDITIONABLE\s+)?(?:PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE|LIBRARY))\b/i;
+      const SLASH = /^[ \t]*\/[ \t]*(?:\r?\n|$)/;
+      let unit = null; // whether the current statement is a PL/SQL unit, decided at its first token
+      for (let i = 0; i < text.length;) {
+        if (i === 0 || text[i - 1] === '\n') {
+          const eol = text.indexOf('\n', i);
+          const m = text.slice(i, eol < 0 ? text.length : eol + 1).match(SLASH);
+          if (m) { s.push(i, i + m[0].length); unit = null; i += m[0].length; continue; }
+        }
+        if (/\s/.test(text[i]) || text.startsWith('--', i) || text.startsWith('/*', i)) { i = Math.max(i + 1, skipSql(text, i)); continue; }
+        if (unit === null) unit = UNIT.test(text.slice(i, i + 120));
+        const skip = skipSql(text, i, { qQuotes: true });
+        if (skip >= 0) { i = skip; continue; }
+        if (text[i] === ';' && !unit) { s.push(i, i + 1); unit = null; }
+        i++;
+      }
+      return s.finish();
+    },
+    lines(text) {
+      const s = splitter(text);
+      for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) s.push(i, i + 1);
+      return s.finish();
+    },
+    mongo(text) {
+      const s = splitter(text);
+      let depth = 0;
+      let last = ''; // the last significant character, for telling a regex literal from a division
+      for (let i = 0; i < text.length;) {
+        const ch = text[i];
+        const two = text.slice(i, i + 2);
+        if (two === '//') { const e = text.indexOf('\n', i); i = e < 0 ? text.length : e; continue; }
+        if (two === '/*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 2; continue; }
+        if (ch === "'" || ch === '"' || ch === '`' || (ch === '/' && (!last || '(,:[{;=!&|?'.includes(last)))) {
+          let j = i + 1;
+          let inClass = false;
+          while (j < text.length && (text[j] !== ch || inClass) && (ch === '`' || text[j] !== '\n')) {
+            if (text[j] === '\\') j++;
+            else if (ch === '/' && text[j] === '[') inClass = true;
+            else if (ch === '/' && text[j] === ']') inClass = false;
+            j++;
+          }
+          i = j + 1;
+          last = 'x';
+          continue;
+        }
+        if ('([{'.includes(ch)) depth++;
+        else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1);
+        if (depth === 0 && ch === ';') { s.push(i, i + 1); last = ''; i++; continue; }
+        if (depth === 0 && ch === '\n') {
+          const next = text.slice(i + 1).match(/^\s*(.)/)?.[1];
+          if (last && last !== '.' && last !== ',' && next !== '.') { s.push(i, i + 1); last = ''; i++; continue; }
+        }
+        if (!/\s/.test(ch)) last = ch;
+        i++;
+      }
+      return s.finish();
+    },
+  };
+  const COMMENTS = { semicolon: /--[^\n]*|\/\*[\s\S]*?\*\//g, 'go-line': /--[^\n]*|\/\*[\s\S]*?\*\//g, plsql: /--[^\n]*|\/\*[\s\S]*?\*\//g, lines: /^\s*#.*$/gm, mongo: /\/\/[^\n]*|\/\*[\s\S]*?\*\//g };
+  const splitStatements = (text, mode = 'semicolon') => (SPLITTERS[mode] || SPLITTERS.semicolon)(text);
+  const isBlank = (stmt, mode = 'semicolon') => !stmt.replace(COMMENTS[mode] || COMMENTS.semicolon, '').trim();
+  const runnable = (text, mode) => splitStatements(text, mode).filter((s) => !isBlank(s.text, mode));
 
   // The statement the caret is in; in the blank space after the last statement, the one before it.
-  function statementAt(text, offset) {
-    const parts = splitStatements(text);
+  function statementAt(text, offset, mode) {
+    const parts = splitStatements(text, mode);
     const i = parts.findIndex((p) => offset >= p.start && offset <= p.end);
     const at = i < 0 ? parts.length - 1 : i;
-    for (let k = at; k >= 0; k--) if (!isBlank(parts[k].text)) return parts[k];
-    return parts.slice(at).find((p) => !isBlank(p.text)) || null;
+    for (let k = at; k >= 0; k--) if (!isBlank(parts[k].text, mode)) return parts[k];
+    return parts.slice(at).find((p) => !isBlank(p.text, mode)) || null;
   }
 
   function qualifiedName(src, schema, table) {
     const d = driverOf(src.kind);
     const q = (name) => `${d.quote}${name.split(d.quote).join(d.quote + d.quote)}${d.quote}`;
-    return d.implicitSchemas.includes(schema) ? q(table) : `${q(schema)}.${q(table)}`;
+    return schema === null || d.implicitSchemas.includes(schema) ? q(table) : `${q(schema)}.${q(table)}`;
   }
 
   // ---------- tool window ----------
@@ -123,21 +237,7 @@
       if (!sch) { loadSchema(s.id); add(1, { kind: 'info', label: tr('Loading…') }); continue; }
       if (sch.loading) { add(1, { kind: 'info', label: tr('Loading…') }); continue; }
       if (sch.error) { add(1, { kind: 'error', label: sch.missingDriver ? tr('Driver files are missing. Download them in the data source settings.') : sch.error }); continue; }
-      for (const schema of sch.schemas) {
-        const k = nodeKey(s.id, schema.name);
-        add(1, { key: k, kind: 'schema', source: s, schema: schema.name, label: schema.name, open: expanded.has(k), leaf: false });
-        if (!expanded.has(k)) continue;
-        if (!schema.children.length) add(2, { kind: 'info', label: tr('No tables') });
-        for (const t of schema.children) {
-          const tk = nodeKey(s.id, schema.name, t.name);
-          add(2, { key: tk, kind: t.kind, source: s, schema: schema.name, table: t, label: t.name, open: expanded.has(tk), leaf: false });
-          if (!expanded.has(tk)) continue;
-          for (const c of t.columns) {
-            add(3, { key: nodeKey(s.id, schema.name, t.name, c.name), kind: 'column', source: s, column: c, label: c.name,
-              detail: `${c.type || ''}${c.nullable ? '' : ' NOT NULL'}`.trim(), leaf: true });
-          }
-        }
-      }
+      addNodes(add, s, sch.schemas, 1, []);
     }
     treeEl.replaceChildren();
     if (!sources.length) {
@@ -152,7 +252,59 @@
     for (const r of rows) treeEl.append(treeRow(r));
   }
 
-  const ICONS = { source: '⛁', schema: '▤', table: '▦', view: '◫', column: '▫', info: '', error: '' };
+  // The tree below a source is what the kind's schema() returns: nodes {name, kind, detail?, children?, lazy?, open?,
+  // emptyText?} (schemas/tables, databases/collections/fields, databases/key groups/keys). SQL tables list `columns`
+  // instead of children; a lazy node's children come from db:children when it is first expanded.
+  const childNodes = (n) => n.children || n.columns?.map((c) => ({ name: c.name, kind: 'column', pk: c.pk, detail: `${c.type || ''}${c.nullable ? '' : ' NOT NULL'}`.trim() })) || null;
+  const lazy = new Map(); // nodeKey -> {loading} | {nodes} | {error}
+
+  function addNodes(add, s, nodes, depth, path) {
+    for (const n of nodes) {
+      if (n.kind === 'info') { add(depth, { kind: 'info', label: tr(n.label, n.args) }); continue; }
+      const p = [...path, n.name];
+      const key = nodeKey(s.id, ...p);
+      let items = childNodes(n);
+      const leaf = !n.lazy && !items;
+      const open = !leaf && expanded.has(key);
+      add(depth, { key, kind: n.kind, source: s, node: n, path: p, label: n.name, detail: n.detail, open, leaf });
+      if (!open) continue;
+      if (n.lazy) {
+        const st = lazy.get(key);
+        if (!st) loadChildren(s.id, key, p);
+        if (!st || st.loading) { add(depth + 1, { kind: 'info', label: tr('Loading…') }); continue; }
+        if (st.error) { add(depth + 1, { kind: 'error', label: st.error }); continue; }
+        items = st.nodes;
+      }
+      if (!items.length) {
+        if (n.emptyText || n.kind === 'schema') add(depth + 1, { kind: 'info', label: n.emptyText ? tr(n.emptyText) : tr('No tables') });
+        continue;
+      }
+      addNodes(add, s, items, depth + 1, p);
+    }
+  }
+
+  async function loadChildren(id, key, path) {
+    lazy.set(key, { loading: true });
+    const r = await invoke('db:children', id, path);
+    if (!lazy.get(key)?.loading) return;
+    lazy.set(key, r.ok ? { nodes: r.nodes } : { error: r.error });
+    renderTree();
+  }
+
+  const forgetLazy = (id) => { for (const k of [...lazy.keys()]) if (JSON.parse(k)[0] === id) lazy.delete(k); };
+
+  const ICONS = { source: '⛁', schema: '▤', database: '▤', table: '▦', collection: '▦', view: '◫', column: '▫', field: '▫', group: '▣', key: '⚿', info: '', error: '' };
+
+  // The command Open Data appends to the console for a tree row, or null when the row has no data to open.
+  function openCommand(r) {
+    if (r.node?.open) return r.node.open;
+    const template = uiOf(r.source.kind).openData[r.kind];
+    if (!template) return null;
+    const name = r.path[r.path.length - 1];
+    const schema = r.path.length > 1 ? r.path[r.path.length - 2] : null;
+    const vars = { qualified: () => qualifiedName(r.source, schema, name), schema: () => schema ?? '', name: () => name };
+    return template.replace(/\{(qualified|schema|name)\}/g, (_m, k) => vars[k]());
+  }
 
   function treeRow(r) {
     const row = el('div', `db-node db-${r.kind}` + (r.key && r.key === selectedKey ? ' selected' : ''));
@@ -160,7 +312,7 @@
     if (r.key) row.dataset.key = r.key;
     row.dataset.kind = r.kind;
     row.append(el('span', 'db-arrow', r.leaf === false ? (r.open ? '▾' : '▸') : ''));
-    const icon = el('span', 'db-icon', r.column?.pk ? '🔑' : ICONS[r.kind]);
+    const icon = el('span', 'db-icon', r.node?.pk ? '🔑' : ICONS[r.kind] ?? '▫');
     row.append(icon);
     if (r.kind === 'source') {
       const dot = el('span', `db-dot db-state-${r.source.state}`);
@@ -176,7 +328,7 @@
       if (!r.leaf) { expanded.has(r.key) ? expanded.delete(r.key) : expanded.add(r.key); }
       renderTree();
     };
-    row.ondblclick = () => { if (r.kind === 'table' || r.kind === 'view') openData(r.source.id, r.schema, r.table.name); };
+    row.ondblclick = () => { const cmd = r.kind !== 'source' && openCommand(r); if (cmd) openData(r.source.id, cmd); };
     row.oncontextmenu = (e) => {
       e.preventDefault();
       selectedKey = r.key;
@@ -195,15 +347,15 @@
       { label: tr('Refresh'), run: () => refreshSchema(s.id) },
       { label: tr('Disconnect'), disabled: s.state !== 'connected', run: () => invoke('db:disconnect', s.id) },
     ];
-    if (r.kind === 'table' || r.kind === 'view') {
+    if (r.kind !== 'source') {
+      const cmd = openCommand(r);
       return [
-        { label: tr('Open Data'), run: () => openData(s.id, r.schema, r.table.name) },
-        { label: tr('Generate SELECT'), run: () => generateSelect(s.id, r.schema, r.table) },
-        { label: tr('Copy Name'), run: () => invoke('clipboard:writeText', r.table.name) },
-        ...common,
+        ...(cmd ? [{ label: tr('Open Data'), run: () => openData(s.id, cmd) }] : []),
+        ...(r.node.columns && uiOf(s.kind).language === 'sql' ? [{ label: tr('Generate SELECT'), run: () => generateSelect(s.id, r.path, r.node) }] : []),
+        { label: tr('Copy Name'), run: () => invoke('clipboard:writeText', r.node.name) },
+        ...(r.leaf ? [] : common),
       ];
     }
-    if (r.kind === 'column') return [{ label: tr('Copy Name'), run: () => invoke('clipboard:writeText', r.column.name) }];
     return [
       { label: tr('New Query Console'), run: () => openConsole(s.id) },
       ...common,
@@ -225,6 +377,7 @@
 
   function refreshSchema(id) {
     schemas.delete(id);
+    forgetLazy(id);
     if (expanded.has(nodeKey(id))) loadSchema(id);
     else renderTree();
   }
@@ -289,6 +442,7 @@
     for (const d of drivers) kindSelect.add(new Option(d.label, d.kind));
     kindSelect.value = kind;
     const fieldsHost = el('div');
+    const descHost = el('div', 'db-kind-description muted');
     const driverHost = el('div', 'db-driver');
     const testRow = el('div', 'db-test');
     const testBtn = el('button', 'secondary', tr('Test Connection'));
@@ -302,13 +456,14 @@
       row.append(el('span', null, label), input);
       return row;
     };
-    body.append(field(tr('Name'), nameInput), field(tr('Driver'), kindSelect), fieldsHost, driverHost, testRow);
+    body.append(field(tr('Name'), nameInput), field(tr('Driver'), kindSelect), descHost, fieldsHost, driverHost, testRow);
 
     const inputs = {};
     function renderFields() {
       fieldsHost.replaceChildren();
       const d = driverOf(kind);
       const labels = FIELD_LABELS();
+      descHost.textContent = d.ui?.description ? tr(d.ui.description) : '';
       // Field specs come from the kind's driver (main/db/drivers.js): built-in names or {key, label, type, options...}.
       for (const spec of d.fields) {
         const f = spec.key;
@@ -356,6 +511,14 @@
           wrap.append(input, browse);
           fieldsHost.append(field(label, wrap));
         } else fieldsHost.append(field(label, input));
+      }
+      // ui.fileOptional names a checkbox (DuckDB's in-memory) that makes the file field unnecessary while checked.
+      const optional = d.ui?.fileOptional && inputs[d.ui.fileOptional];
+      const fileSpec = d.fields.find((x) => x.type === 'file');
+      if (optional && fileSpec) {
+        const sync = () => { inputs[fileSpec.key].disabled = optional.checked; fieldsHost.querySelector('#dbBrowse')?.toggleAttribute('disabled', optional.checked); };
+        optional.addEventListener('change', sync);
+        sync();
       }
       renderDriver();
     }
@@ -430,7 +593,8 @@
       buttons: [
         { label: tr('OK'), primary: true, run: async () => {
           const cfg = collect();
-          if (driverOf(kind).fields.some((x) => x.type === 'file') && !cfg.file) { testResult.className = 'db-test-result err'; testResult.textContent = tr('Choose a database file.'); return false; }
+          const dk = driverOf(kind);
+          if (dk.fields.some((x) => x.type === 'file') && !cfg.file && !(dk.ui?.fileOptional && cfg[dk.ui.fileOptional])) { testResult.className = 'db-test-result err'; testResult.textContent = tr('Choose a database file.'); return false; }
           const saved = await invoke('db:save', cfg);
           await reloadSources();
           selectedKey = nodeKey(saved.id);
@@ -467,12 +631,160 @@
     });
   }
 
+  // ---------- console languages ----------
+  // 'mongosh' is Monaco's JavaScript grammar plus the shell's show/use, without the TypeScript worker's diagnostics
+  // (which would flag `show dbs`), and completions for db methods, collection methods and collection names.
+  let mongosh = null;
+  function registerMongosh() {
+    if (mongosh) return mongosh;
+    const monaco = ide.monaco;
+    monaco.languages.register({ id: 'mongosh', aliases: ['MongoDB Shell'] });
+    mongosh = (async () => {
+      const js = monaco.languages.getLanguages().find((l) => l.id === 'javascript');
+      const mod = js?.loader ? await js.loader() : null;
+      if (!mod?.language) return;
+      const language = structuredClone(mod.language);
+      language.keywords = [...(language.keywords || []), 'show', 'use'];
+      monaco.languages.setMonarchTokensProvider('mongosh', language);
+      monaco.languages.setLanguageConfiguration('mongosh', mod.conf);
+    })();
+    const kinds = monaco.languages.CompletionItemKind;
+    const DB = ['getCollection', 'getSiblingDB', 'runCommand', 'adminCommand', 'getCollectionNames', 'createCollection', 'dropDatabase', 'stats', 'getName'];
+    const COLL = ['find', 'findOne', 'countDocuments', 'estimatedDocumentCount', 'distinct', 'aggregate', 'insertOne', 'insertMany', 'updateOne', 'updateMany',
+      'replaceOne', 'deleteOne', 'deleteMany', 'createIndex', 'getIndexes', 'dropIndex', 'drop'];
+    const CURSOR = ['sort', 'limit', 'skip', 'project', 'hint', 'maxTimeMS', 'collation', 'toArray'];
+    monaco.languages.registerCompletionItemProvider('mongosh', {
+      triggerCharacters: ['.'],
+      provideCompletionItems(model, pos) {
+        const before = model.getLineContent(pos.lineNumber).slice(0, pos.column - 1);
+        const word = model.getWordUntilPosition(pos);
+        const range = new monaco.Range(pos.lineNumber, word.startColumn, pos.lineNumber, word.endColumn);
+        const item = (label, kind, insertText = label) => ({ label, kind, insertText, range });
+        const c = [...consoles.values()].find((x) => x.model === model);
+        const tree = c && schemas.get(c.id)?.schemas;
+        const collections = [...new Set((tree || []).flatMap((d) => (d.children || []).map((x) => x.name)))].filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
+        if (/\bdb\.[\w$]*$/.test(before)) return { suggestions: [...DB.map((m) => item(m, kinds.Method, `${m}(`)), ...collections.map((n) => item(n, kinds.Field))] };
+        if (/\bdb\.(?:[\w$]+|getCollection\([^)]*\))\.[\w$]*$/.test(before)) return { suggestions: COLL.map((m) => item(m, kinds.Method, `${m}(`)) };
+        if (/\)\s*\.[\w$]*$/.test(before)) return { suggestions: CURSOR.map((m) => item(m, kinds.Method, `${m}(`)) };
+        return { suggestions: [] };
+      },
+    });
+    return mongosh;
+  }
+
+  function consoleLanguage(kind) {
+    const { language } = uiOf(kind);
+    if (language === 'mongosh') registerMongosh();
+    return language;
+  }
+
+  // ---------- results ----------
+  // Tagged values in document results ({$oid}, {$date}, ...) as the MongoDB shell prints them.
+  const TAGS = {
+    $oid: (v) => `ObjectId('${v}')`, $date: (v) => `ISODate('${v}')`, $numberLong: (v) => `NumberLong('${v}')`, $numberDecimal: (v) => `NumberDecimal('${v}')`,
+    $numberDouble: (v) => v, $uuid: (v) => `UUID('${v}')`, $timestamp: (v) => `Timestamp(${v.t}, ${v.i})`, $binary: (v) => `BinData(${parseInt(v.subType, 16)}, '${v.base64}')`,
+    $minKey: () => 'MinKey()', $maxKey: () => 'MaxKey()', $code: (v) => `Code(${JSON.stringify(v)})`,
+  };
+  const tagOf = (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const keys = Object.keys(v);
+    if (keys.length === 1 && TAGS[keys[0]]) return keys[0];
+    return keys.length === 2 && typeof v.$regex === 'string' && '$options' in v ? '$regex' : null;
+  };
+  const literal = (v) => {
+    const tag = tagOf(v);
+    if (tag === '$regex') return `/${v.$regex}/${v.$options}`;
+    if (tag) return TAGS[tag](v[tag]);
+    return v === null ? 'null' : typeof v === 'string' ? JSON.stringify(v) : String(v);
+  };
+  const isContainer = (v) => v !== null && typeof v === 'object' && !tagOf(v);
+  const keyText = (k) => (/^[A-Za-z_$][\w$]*$/.test(k) ? k : JSON.stringify(k));
+  function preview(v, budget = 160) {
+    const arr = Array.isArray(v);
+    const pieces = [];
+    let used = 0;
+    for (const [k, x] of Object.entries(v)) {
+      const piece = `${arr ? '' : `${keyText(k)}: `}${isContainer(x) ? (Array.isArray(x) ? `[…${x.length}]` : '{…}') : literal(x)}`;
+      if (used + piece.length > budget) { pieces.push('…'); break; }
+      pieces.push(piece);
+      used += piece.length + 2;
+    }
+    if (arr) return `[${pieces.join(', ')}]`;
+    return pieces.length ? `{ ${pieces.join(', ')} }` : '{}';
+  }
+
+  // The document view: one expandable JSON tree per document; children are built when a node first opens.
+  function jsonTree(docs) {
+    const wrap = el('div', 'db-json');
+    docs.forEach((d, i) => wrap.append(jsonNode(`(${i + 1})`, d, 0, docs.length === 1)));
+    return wrap;
+  }
+  function jsonNode(label, v, depth, open = false) {
+    const node = el('div', 'db-json-node');
+    const line = el('div', 'db-json-line');
+    line.style.paddingLeft = `${depth * 16 + 4}px`;
+    const container = isContainer(v);
+    const arrow = el('span', 'db-arrow', container ? '▸' : '');
+    line.append(arrow, userEl('span', depth ? 'db-json-key' : 'db-json-index', label));
+    if (container) line.append(userEl('span', 'db-json-summary', preview(v)));
+    else {
+      const cls = tagOf(v) ? 'tagged' : v === null ? 'null' : typeof v;
+      line.append(userEl('span', `db-json-value db-json-${cls}`, literal(v)));
+    }
+    node.append(line);
+    if (container) {
+      let kids = null;
+      const toggle = () => {
+        if (!kids) {
+          kids = el('div', 'db-json-children');
+          for (const [k, x] of Object.entries(v)) kids.append(jsonNode(Array.isArray(v) ? `[${k}]` : k, x, depth + 1));
+          node.append(kids);
+        } else kids.classList.toggle('hidden');
+        const shown = !kids.classList.contains('hidden');
+        arrow.textContent = shown ? '▾' : '▸';
+        node.classList.toggle('open', shown);
+      };
+      line.onclick = toggle;
+      if (open) toggle();
+    }
+    return node;
+  }
+
+  function grid(r) {
+    const wrap = el('div', 'db-grid-wrap');
+    const table = el('table', 'db-grid');
+    const head = el('tr');
+    head.append(el('th', 'db-rownum', ''));
+    for (const col of r.columns) {
+      const th = userEl('th', null, col.name);
+      if (col.type) th.append(userEl('span', 'db-coltype', col.type.toLowerCase()));
+      head.append(th);
+    }
+    const thead = el('thead');
+    thead.append(head);
+    const tbody = el('tbody');
+    r.rows.forEach((row, i) => {
+      const line = el('tr');
+      line.append(el('td', 'db-rownum', String(i + 1)));
+      for (const v of row) {
+        const td = el('td', v === null ? 'db-null' : typeof v === 'number' ? 'db-num' : null, v === null ? 'NULL' : String(v));
+        if (v !== null) { user(td); if (String(v).length > 60) td.title = String(v); }
+        line.append(td);
+      }
+      tbody.append(line);
+    });
+    table.append(thead, tbody);
+    wrap.append(table);
+    return wrap;
+  }
+
   // ---------- query console ----------
   const OPEN_KEY = 'database.openConsoles';
   const openIds = () => ide.settings.get(OPEN_KEY, []);
   const rememberConsole = (id) => { if (!openIds().includes(id)) ide.settings.set(OPEN_KEY, [...openIds(), id]); };
   const forgetConsole = (id) => { if (openIds().includes(id)) ide.settings.set(OPEN_KEY, openIds().filter((x) => x !== id)); };
   const consoleTabId = (id) => `db-console:${id}`;
+  const VIEW_KEY = 'database.resultView';
 
   async function openConsole(id) {
     await loaded;
@@ -511,6 +823,7 @@
 
   function mountConsole(host, tab, id, text) {
     const monaco = ide.monaco;
+    const mode = () => uiOf(sourceOf(id)?.kind).statementSeparator;
     host.classList.add('db-console');
     host.dataset.source = id;
     const bar = el('div', 'db-console-bar');
@@ -525,19 +838,32 @@
     const results = el('div', 'db-results');
     const resultBar = el('div', 'db-result-bar');
     const status = el('div', 'db-result-status');
+    // Document results (MongoDB) switch between the grid of top-level fields and a JSON tree per document.
+    const viewSwitch = el('div', 'db-view-switch hidden');
+    const viewButtons = ['grid', 'json'].map((v) => {
+      const b = el('button', 'db-view-btn', v === 'grid' ? tr('Grid') : 'JSON');
+      b.dataset.view = v;
+      b.onclick = () => { ide.settings.set(VIEW_KEY, v); if (last?.ok) showResult(last, lastDone, lastTotal); };
+      return b;
+    });
+    viewSwitch.append(...viewButtons);
     const copyCsv = el('button', 'db-copy', tr('Copy as CSV'));
     const copyTsv = el('button', 'db-copy', tr('Copy as TSV'));
     copyCsv.disabled = copyTsv.disabled = true;
-    resultBar.append(status, copyCsv, copyTsv);
+    resultBar.append(status, viewSwitch, copyCsv, copyTsv);
     const output = el('div', 'db-output');
     output.append(el('div', 'db-placeholder muted', tr('Press Ctrl+Enter to run the statement at the caret, or the selection.')));
     results.append(resultBar, output);
     host.append(bar, editorHost, splitter, results);
 
-    const model = monaco.editor.createModel(text, 'sql');
+    const model = monaco.editor.createModel(text, consoleLanguage(sourceOf(id)?.kind));
     model.setEOL(monaco.editor.EndOfLineSequence.LF);
     const editor = ide.createEditor(editorHost, { model, glyphMargin: false, rulers: [], folding: false, lineNumbersMinChars: 3, renderLineHighlight: 'line' });
     const executed = editor.createDecorationsCollection();
+    const flashRange = (from, to) => {
+      executed.set([{ range: monaco.Range.fromPositions(model.getPositionAt(from), model.getPositionAt(to)), options: { className: 'db-executed' } }]);
+      setTimeout(() => executed.clear(), 700);
+    };
 
     let saveTimer = null;
     const flush = () => { clearTimeout(saveTimer); saveTimer = null; invoke('db:consoleSave', id, model.getValue()); };
@@ -555,6 +881,8 @@
     };
 
     let last = null;
+    let lastDone = 0;
+    let lastTotal = 0;
     const c = {
       id, tab, editor, model, host, flush,
       runs: 0, // completed runs, so callers can wait for the next result
@@ -565,6 +893,8 @@
         stateEl.className = `db-console-state db-state-${src?.state || 'disconnected'}`;
         stateEl.textContent = stateLabel(src?.state || 'disconnected');
         stateEl.title = src?.state === 'error' ? src.message : '';
+        const language = src && consoleLanguage(src.kind);
+        if (language && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language);
       },
       // Runs each statement in order and shows the last result; an error stops the run.
       async execute(statements) {
@@ -573,14 +903,13 @@
         status.textContent = tr('Running…');
         let r = null;
         let done = 0;
-        for (const sql of statements) {
-          r = await ide.database.query(id, sql, { maxRows: MAX_ROWS });
+        for (const stmt of statements) {
+          r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
           if (!r.ok) break;
           done++;
-          if (/^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
+          if (r.schemaChanged || /^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
         }
         runBtn.disabled = false;
-        last = r;
         showResult(r, done, statements.length);
         c.runs++;
         return r;
@@ -591,38 +920,47 @@
         if (sel && !sel.isEmpty()) {
           const base = model.getOffsetAt(sel.getStartPosition());
           part = { from: base, to: model.getOffsetAt(sel.getEndPosition()), text: model.getValueInRange(sel) };
-        } else part = statementAt(model.getValue(), model.getOffsetAt(editor.getPosition()));
+        } else part = statementAt(model.getValue(), model.getOffsetAt(editor.getPosition()), mode());
         if (!part) return null;
-        const range = monaco.Range.fromPositions(model.getPositionAt(part.from), model.getPositionAt(part.to));
-        executed.set([{ range, options: { className: 'db-executed' } }]);
-        setTimeout(() => executed.clear(), 700);
-        return c.execute(runnable(part.text).map((s) => s.text));
+        flashRange(part.from, part.to);
+        return c.execute(runnable(part.text, mode()).map((s) => s.text));
       },
-      // Appends a statement on its own line and runs it (Open Data).
-      appendAndRun(sql) {
+      // Appends command text on its own line(s) and runs every statement in it (Open Data).
+      appendAndRun(text) {
         const lines = model.getLineCount();
         const lastLine = model.getLineContent(lines);
         const prefix = lastLine.trim() ? '\n' : '';
         const at = { lineNumber: lines, column: lastLine.length + 1 };
-        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${prefix}${sql}` }]);
+        const from = model.getOffsetAt(at) + prefix.length;
+        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${prefix}${text}` }]);
         const end = model.getLineCount();
         editor.setPosition({ lineNumber: end, column: 1 });
         editor.revealLine(end);
-        return c.execute([sql.replace(/;\s*$/, '')]);
+        flashRange(from, from + text.length);
+        return c.execute(runnable(text, mode()).map((s) => s.text));
       },
-      insert(sql) {
+      insert(text) {
         const lines = model.getLineCount();
         const lastLine = model.getLineContent(lines);
         const at = { lineNumber: lines, column: lastLine.length + 1 };
-        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${lastLine.trim() ? '\n' : ''}${sql}` }]);
+        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${lastLine.trim() ? '\n' : ''}${text}` }]);
         editor.setPosition({ lineNumber: model.getLineCount(), column: 1 });
         editor.focus();
       },
+      // 'grid' or 'json': how the current result shows (JSON only for document results).
+      view: () => (last?.documents ? ide.settings.get(VIEW_KEY, 'grid') : 'grid'),
     };
 
+    // Status line and output for a result: {columns, rows, rowCount, truncated, ms} plus, from some kinds, documents
+    // (Grid/JSON views), affected (documents written), message (a reply such as Redis's OK, shown as data) and notice
+    // ({text, args}: an English UI message from the kind, translated here).
     function showResult(r, done, total) {
+      last = r;
+      lastDone = done;
+      lastTotal = total;
       output.replaceChildren();
       copyCsv.disabled = copyTsv.disabled = !(r?.ok && r.columns.length);
+      viewSwitch.classList.toggle('hidden', !(r?.ok && r.documents));
       const parts = [];
       if (total > 1) parts.push(tr('{done} of {total} statements executed', { done, total }));
       if (!r.ok) {
@@ -632,43 +970,23 @@
         output.append(err);
         return;
       }
-      if (r.columns.length) {
-        parts.push(tr('{n} rows', { n: r.rowCount }));
-        if (r.truncated) parts.push(tr('showing the first {n}', { n: r.rowCount }));
-      } else if (r.rowCount !== null && r.rowCount !== undefined) parts.push(tr('{n} rows affected', { n: r.rowCount }));
-      else parts.push(tr('Statement executed'));
-      parts.push(`${r.ms} ms`);
-      status.textContent = parts.join(' · ');
-      if (r.columns.length) output.append(grid(r));
-      else output.append(el('div', 'db-message', parts[parts.length - 2]));
-    }
-
-    function grid(r) {
-      const wrap = el('div', 'db-grid-wrap');
-      const table = el('table', 'db-grid');
-      const head = el('tr');
-      head.append(el('th', 'db-rownum', ''));
-      for (const col of r.columns) {
-        const th = userEl('th', null, col.name);
-        if (col.type) th.append(userEl('span', 'db-coltype', col.type.toLowerCase()));
-        head.append(th);
-      }
-      const thead = el('thead');
-      thead.append(head);
-      const tbody = el('tbody');
-      r.rows.forEach((row, i) => {
-        const line = el('tr');
-        line.append(el('td', 'db-rownum', String(i + 1)));
-        for (const v of row) {
-          const td = el('td', v === null ? 'db-null' : typeof v === 'number' ? 'db-num' : null, v === null ? 'NULL' : String(v));
-          if (v !== null) { user(td); if (String(v).length > 60) td.title = String(v); }
-          line.append(td);
-        }
-        tbody.append(line);
-      });
-      table.append(thead, tbody);
-      wrap.append(table);
-      return wrap;
+      const docs = !!r.documents;
+      let summary = null;
+      if (r.affected !== null && r.affected !== undefined) summary = docs ? tr('{n} documents affected', { n: r.affected }) : tr('{n} rows affected', { n: r.affected });
+      else if (r.columns.length) {
+        summary = docs ? tr('{n} documents', { n: r.rowCount }) : tr('{n} rows', { n: r.rowCount });
+        if (r.truncated) summary += ` · ${tr('showing the first {n}', { n: r.rowCount })}`;
+      } else if (r.rowCount !== null && r.rowCount !== undefined) summary = tr('{n} rows affected', { n: r.rowCount });
+      else if (r.notice) summary = tr(r.notice.text, r.notice.args);
+      else if (!r.message) summary = tr('Statement executed');
+      if (summary) parts.push(summary);
+      status.replaceChildren(parts.length ? `${parts.join(' · ')} · ` : '');
+      if (r.message && r.columns.length) status.append(userEl('span', 'db-result-message', r.message), ' · ');
+      status.append(`${r.ms} ms`);
+      for (const b of viewButtons) b.classList.toggle('selected', b.dataset.view === c.view());
+      if (r.columns.length) output.append(c.view() === 'json' ? jsonTree(r.documents) : grid(r));
+      else if (r.message) output.append(userEl('div', 'db-message db-reply', r.message));
+      else output.append(el('div', 'db-message', summary));
     }
 
     const delimited = (sep) => {
@@ -690,18 +1008,17 @@
   const focusedConsole = () => [...consoles.values()].find((c) => c.editor.hasTextFocus()) || null;
   const activeConsole = () => [...consoles.values()].find((c) => ide.activeTab() === c.tab) || null;
 
-  async function openData(id, schema, table) {
-    const src = sourceOf(id);
+  async function openData(id, command) {
     const c = await openConsole(id);
-    return c?.appendAndRun(`SELECT * FROM ${qualifiedName(src, schema, table)} LIMIT 200;`);
+    return c?.appendAndRun(command);
   }
 
-  async function generateSelect(id, schema, table) {
+  async function generateSelect(id, path, table) {
     const src = sourceOf(id);
     const d = driverOf(src.kind);
     const cols = table.columns.map((col) => `${d.quote}${col.name.split(d.quote).join(d.quote + d.quote)}${d.quote}`).join(', ');
     const c = await openConsole(id);
-    c?.insert(`SELECT ${cols || '*'}\nFROM ${qualifiedName(src, schema, table.name)};`);
+    c?.insert(`SELECT ${cols || '*'}\nFROM ${qualifiedName(src, path.length > 1 ? path[path.length - 2] : null, table.name)};`);
   }
 
   async function pickSource(placeholder) {
@@ -762,7 +1079,7 @@
           for (const { schema, t } of tables) {
             const row = el('div', 'db-file-table');
             row.append(el('span', 'db-icon', ICONS[t.kind]), userEl('span', null, t.name), userEl('span', 'muted', t.columns.map((c) => c.name).join(', ')));
-            row.ondblclick = () => openData(source.id, schema, t.name);
+            row.ondblclick = () => { const cmd = openCommand({ source, kind: t.kind, node: t, path: [schema, t.name] }); if (cmd) openData(source.id, cmd); };
             row.title = tr('Double-click to open the data');
             list.append(row);
           }

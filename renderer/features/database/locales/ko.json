@@ -80,5 +80,18 @@
   "Read-only": "읽기 전용",
   "URL (instead of host and port)": "URL(호스트와 포트 대신)",
   "Use HTTPS": "HTTPS 사용",
-  "Embedded analytical database in a file or in memory. It queries CSV, Parquet and JSON files directly, e.g. SELECT * FROM read_csv_auto('data.csv').": "파일이나 메모리에 두는 임베디드 분석 데이터베이스입니다. CSV, Parquet, JSON 파일을 바로 쿼리할 수 있습니다(예: SELECT * FROM read_csv_auto('data.csv'))."
+  "Embedded analytical database in a file or in memory. It queries CSV, Parquet and JSON files directly, e.g. SELECT * FROM read_csv_auto('data.csv').": "파일이나 메모리에 두는 임베디드 분석 데이터베이스입니다. CSV, Parquet, JSON 파일을 바로 쿼리할 수 있습니다(예: SELECT * FROM read_csv_auto('data.csv')).",
+  "Connection string": "연결 문자열",
+  "Username": "사용자 이름",
+  "Database index": "데이터베이스 번호",
+  "Use TLS": "TLS 사용",
+  "Auth database": "인증 데이터베이스",
+  "No keys": "키 없음",
+  "No collections": "컬렉션 없음",
+  "No fields": "필드 없음",
+  "Showing the first {n} keys": "처음 {n}개 키만 표시",
+  "Switched to database {name}": "데이터베이스를 {name}(으)로 전환했습니다",
+  "Grid": "그리드",
+  "{n} documents": "문서 {n}개",
+  "{n} documents affected": "문서 {n}개 변경됨"
 }

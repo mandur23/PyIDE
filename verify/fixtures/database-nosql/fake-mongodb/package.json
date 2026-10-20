@@ -1,0 +1,5 @@
+{
+  "name": "mongodb",
+  "version": "7.0.0-fake",
+  "main": "index.js"
+}

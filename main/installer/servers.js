@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const mongoWire = require('./mongo-wire');
 
 const tarExe = () => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
 
@@ -58,7 +59,59 @@ const SERVERS = {
     start: ({ bin, data, port }) => [path.join(bin, 'mariadbd.exe'), [`--defaults-file=${path.join(data, 'my.ini')}`, `--port=${port}`, '--bind-address=127.0.0.1', '--console']],
     stop: ({ bin, port, password, exec }) => exec(path.join(bin, 'mariadb-admin.exe'), ['-h', '127.0.0.1', '-P', String(port), '-u', 'root', `--password=${password}`, 'shutdown']),
   },
+  mongodb: {
+    kind: 'mongodb',
+    title: 'MongoDB',
+    version: '8.0.34',
+    url: 'https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.0.34.zip',
+    size: 807616685,
+    // Published by MongoDB next to the zip (<url>.sha256) and in downloads.mongodb.org/full.json.
+    sha256: '6b021a0864494e4decf278b36477a29eb36072432773e4e62c2f42c302630db0',
+    // Debug symbols are 2 GB of the archive; mongos is for sharded clusters.
+    exclude: ['*.pdb', '*/bin/mongos.exe', '*/bin/Install-Compass.ps1'],
+    bin: 'mongodb-win32-x86_64-windows-8.0.34/bin',
+    exe: 'mongod.exe',
+    defaultPort: 27017,
+    user: 'admin',
+    database: 'test',
+    connection: { authSource: 'admin' },
+    initialized: (data) => fs.existsSync(path.join(data, 'WiredTiger')),
+    pidFile: (data) => path.join(data, 'mongod.lock'),
+    // mongod has no tool to create users, so init runs it once without --auth on 127.0.0.1, creates the admin user over
+    // the wire, and shuts it down; every later start requires that user.
+    async init({ bin, data, password, port, spawn, logFile, log }) {
+      requireVcRuntime(bin);
+      fs.mkdirSync(data, { recursive: true });
+      const child = spawn(path.join(bin, 'mongod.exe'), ['--dbpath', data, '--port', String(port), '--bind_ip', '127.0.0.1'], { cwd: path.dirname(data), logFile });
+      try {
+        for (let i = 0; !(await portOpen(port)); i++) {
+          if (child.exitCode !== null) throw new Error(`mongod exited with code ${child.exitCode}; see ${logFile}`);
+          if (i > 120) throw new Error('mongod did not start within 60 seconds');
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        log('Creating the admin user\n');
+        await mongoWire.adminCommand(port, { createUser: 'admin', pwd: password, roles: [{ role: 'root', db: 'admin' }] });
+        await mongoWire.shutdown(port);
+        for (let i = 0; i < 120 && child.exitCode === null; i++) await new Promise((r) => setTimeout(r, 250));
+      } finally {
+        if (child.exitCode === null) child.kill();
+      }
+    },
+    start: ({ bin, data, port }) => [path.join(bin, 'mongod.exe'), ['--dbpath', data, '--port', String(port), '--bind_ip', '127.0.0.1', '--auth']],
+    stop: ({ port, password }) => mongoWire.shutdown(port, { user: 'admin', password }),
+  },
 };
+
+// mongod links the Visual C++ 2015-2022 runtime, which Windows installs system-wide; the zip ships its installer.
+function requireVcRuntime(bin) {
+  const dlls = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'];
+  const system = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+  const missing = dlls.filter((d) => !fs.existsSync(path.join(system, d)) && !fs.existsSync(path.join(bin, d)));
+  if (missing.length) {
+    throw new Error(`MongoDB needs the Microsoft Visual C++ runtime (${missing.join(', ')} is missing). `
+      + `Run ${path.join(bin, 'vc_redist.x64.exe')} once (it asks for administrator rights), then install again.`);
+  }
+}
 
 const portOpen = (port) => new Promise((resolve) => {
   const sock = net.connect({ host: '127.0.0.1', port });
@@ -171,7 +224,7 @@ function createServers({ root, store, spawnServer, run }) {
       const port = await freePort(s.defaultPort);
       log(`Initializing the data directory (port ${port})\n`);
       try {
-        await s.init({ bin: p.bin, data: p.data, password, port, exec });
+        await s.init({ bin: p.bin, data: p.data, password, port, exec, log, spawn: spawnServer, logFile: p.logFile });
       } catch (err) {
         fs.rmSync(p.data, { recursive: true, force: true });
         throw err;
@@ -244,7 +297,12 @@ function createServers({ root, store, spawnServer, run }) {
   const connection = (name) => {
     const saved = store.get(name);
     if (!saved) return null;
-    return { kind: SERVERS[name].kind, name: `${SERVERS[name].title} ${SERVERS[name].version} (PyIDE)`, host: '127.0.0.1', port: saved.port, user: saved.user, password: saved.password, database: saved.database };
+    const s = SERVERS[name];
+    const c = { kind: s.kind, name: `${s.title} ${s.version} (PyIDE)`, host: '127.0.0.1', port: saved.port, user: saved.user, password: saved.password, database: saved.database, ...s.connection };
+    const enc = encodeURIComponent;
+    const scheme = { postgres: 'postgresql', mariadb: 'mysql', mongodb: 'mongodb' }[s.kind];
+    c.url = `${scheme}://${enc(c.user)}:${enc(c.password)}@${c.host}:${c.port}/${c.database}${c.authSource ? `?authSource=${c.authSource}` : ''}`;
+    return c;
   };
 
   const ownedNames = () => [...owned.keys()];

@@ -114,6 +114,24 @@ function register({ ipcMain, app, send }) {
 
   const failure = (err) => ({ ok: false, error: err.message, missingDriver: err.missingDriver || null });
 
+  // A password typed into a connection string field (type 'url', e.g. mongodb://user:pw@host) moves to the encrypted
+  // secret like a password field, so sources.json never holds it; the kind gets the URL without it plus cfg.password.
+  function liftUrlPassword(cfg) {
+    const driver = DRIVERS[cfg.kind];
+    if (!driver) return cfg;
+    const out = { ...cfg };
+    for (const f of fieldSpecs(driver)) {
+      if (f.type !== 'url' || typeof out[f.key] !== 'string') continue;
+      const m = out[f.key].match(/^([a-z][\w+.-]*:\/\/)([^:@/]*):([^@/]*)@(.*)$/i);
+      if (!m) continue;
+      out[f.key] = `${m[1]}${m[2]}@${m[4]}`;
+      if (out.password === undefined || out.password === '') {
+        try { out.password = decodeURIComponent(m[3]); } catch { out.password = m[3]; }
+      }
+    }
+    return out;
+  }
+
   // ---------- drivers ----------
   const driverList = () => Object.entries(DRIVERS).map(([kind, d]) => ({
     kind, label: d.label, fields: fieldSpecs(d), ui: d.ui || null, defaultPort: d.defaultPort || null, builtin: !!d.builtin, quote: d.quote,
@@ -155,7 +173,8 @@ function register({ ipcMain, app, send }) {
   ipcMain.handle('db:installDriver', (_e, pkg) => installDriver(pkg));
   ipcMain.handle('db:list', () => sources.map(toPublic));
 
-  ipcMain.handle('db:save', async (_e, cfg) => {
+  ipcMain.handle('db:save', async (_e, input) => {
+    const cfg = liftUrlPassword(input);
     const record = normalize(cfg);
     const old = sources.find((s) => s.id === record.id);
     let secret = old?.secret;
@@ -174,7 +193,8 @@ function register({ ipcMain, app, send }) {
     fs.rmSync(consoleFile(id), { force: true });
   });
 
-  ipcMain.handle('db:test', async (_e, cfg) => {
+  ipcMain.handle('db:test', async (_e, input) => {
+    const cfg = liftUrlPassword(input);
     let adapter;
     const t0 = performance.now();
     try {
@@ -196,6 +216,16 @@ function register({ ipcMain, app, send }) {
 
   ipcMain.handle('db:schema', async (_e, id) => {
     try { return { ok: true, schemas: await (await connect(id)).schema() }; } catch (err) { return failure(err); }
+  });
+
+  // Children of a node the kind marked lazy (a collection's sampled fields, a Redis database's keys); path is the
+  // node names from the top of the tree.
+  ipcMain.handle('db:children', async (_e, id, nodePath) => {
+    try {
+      const adapter = await connect(id);
+      if (!adapter.children) throw new Error('This data source has no lazy tree nodes');
+      return { ok: true, nodes: await adapter.children(nodePath) };
+    } catch (err) { return failure(err); }
   });
 
   ipcMain.handle('db:query', async (_e, id, sql, { maxRows = 500 } = {}) => {

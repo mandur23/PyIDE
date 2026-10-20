@@ -69,5 +69,6 @@
   "Error: {error}": "오류: {error}",
   "Search installables": "설치 항목 검색",
   "Refresh": "새로 고침",
-  "Install Manager: {count} running": "설치 관리자: {count}개 실행 중"
+  "Install Manager: {count} running": "설치 관리자: {count}개 실행 중",
+  "Document database server (Community Edition), from the official MongoDB zip.": "문서 데이터베이스 서버(Community Edition)로, 공식 MongoDB zip을 사용합니다."
 }

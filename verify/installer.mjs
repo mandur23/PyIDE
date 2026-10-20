@@ -71,7 +71,7 @@ try {
   await settled(a);
   const counts = { python: await count(a, 'cat:python'), databases: await count(a, 'cat:databases'), system: await count(a, 'cat:system'), all: await count(a, 'all') };
   // Other plugins add their own pip items (rope, coverage, pandas...), so Python Tools has at least the eight built in.
-  check(counts.python >= 8 && counts.databases === 2 && counts.system === 3 && counts.all >= 13, `categories render with counts ${JSON.stringify(counts)}`);
+  check(counts.python >= 8 && counts.databases === 3 && counts.system === 3 && counts.all >= 13, `categories render with counts ${JSON.stringify(counts)}`);
   const aiIds = await a.js(`ide.installables.filter(i => i.category === 'ai').map(i => i.id).sort().join(',')`);
   check(aiIds === 'ai:claude-code,ai:embeddinggemma-2,ai:qwen2.5-coder-0.5b,ai:qwen2.5-coder-1.5b' && await count(a, 'cat:ai') === 4, `EmbeddingGemma 2, Claude Code and the completion models are listed under AI Models (${aiIds})`);
   // One driver entry per npm package that the database kinds in main/db/kinds/ load.
@@ -193,9 +193,10 @@ try {
   // ---------- portable databases ----------
   await showFilter(a, 'cat:databases');
   await settled(a);
-  const db = await a.js(`['server:postgresql', 'server:mariadb'].map((id) => { const c = document.querySelector('.inst-card[data-id="' + id + '"]'); return [c.dataset.phase, c.querySelector('.inst-version').textContent, c.querySelector('.inst-meta').textContent]; })`);
+  const db = await a.js(`['server:postgresql', 'server:mariadb', 'server:mongodb'].map((id) => { const c = document.querySelector('.inst-card[data-id="' + id + '"]'); return [c.dataset.phase, c.querySelector('.inst-version').textContent, c.querySelector('.inst-meta').textContent]; })`);
   check(db[0][0] === 'notInstalled' && db[0][1] === 'v18.6' && db[0][2].includes('367 MB'), `PostgreSQL shows Not installed under the temp root ${JSON.stringify(db[0])}`);
   check(db[1][0] === 'notInstalled' && db[1][1] === 'v11.8.9' && db[1][2].includes('93 MB'), `MariaDB shows Not installed under the temp root ${JSON.stringify(db[1])}`);
+  check(db[2][0] === 'notInstalled' && db[2][1] === 'v8.0.34' && db[2][2].includes('770 MB'), `MongoDB shows Not installed under the temp root ${JSON.stringify(db[2])}`);
   check(!existsSync(path.join(root, 'servers')), 'checking status writes nothing to the install root');
   await a.shot('databases.png');
 

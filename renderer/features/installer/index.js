@@ -233,7 +233,7 @@
   let serverList = null;
   const servers = () => (serverList ||= ide.api.invoke('installer:servers').then((list) => new Map(list.map((s) => [s.name, s]))));
   const mb = (bytes) => tr('{size} MB download', { size: Math.round(bytes / 1048576) });
-  const connectionUrl = (c) => `${c.kind === 'postgres' ? 'postgresql' : 'mysql'}://${encodeURIComponent(c.user)}:${encodeURIComponent(c.password)}@${c.host}:${c.port}/${c.database}`;
+  const connectionUrl = (c) => c.url || `${c.kind === 'postgres' ? 'postgresql' : 'mysql'}://${encodeURIComponent(c.user)}:${encodeURIComponent(c.password)}@${c.host}:${c.port}/${c.database}`;
 
   function serverItem(name, title, description, homepage) {
     const job = (kind) => async (log, progress, signal) => {
@@ -305,6 +305,7 @@
     ...PYTHON_TOOLS.map(([pkg, name, description]) => pip({ package: pkg, name, description })),
     serverItem('postgresql', 'PostgreSQL', tr('Open-source relational database server, from the EDB Windows binaries.'), 'https://www.postgresql.org/'),
     serverItem('mariadb', 'MariaDB', tr('MySQL-compatible database server, from the official MariaDB zip.'), 'https://mariadb.org/'),
+    serverItem('mongodb', 'MongoDB', tr('Document database server (Community Edition), from the official MongoDB zip.'), 'https://www.mongodb.com/'),
     ...SYSTEM.map(systemItem),
   ];
   (ide.installables ||= []).push(...builtins);
