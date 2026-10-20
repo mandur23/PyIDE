@@ -6,6 +6,13 @@ const { pathToFileURL } = require('url');
 const remote = require('../remote');
 const diagnostics = require('../diagnostics');
 
+// A request Pyright never answers (a hang, a lost response) is cancelled and rejected after this many ms, so the
+// feature waiting on it does not wait forever. Project-wide searches get longer on a large project.
+const REQUEST_TIMEOUT = 30000;
+const LONG_REQUESTS = new Set(['initialize', 'textDocument/references', 'textDocument/rename', 'workspace/symbol',
+  'callHierarchy/incomingCalls', 'callHierarchy/outgoingCalls', 'workspace/executeCommand']);
+const timeoutFor = (method) => (LONG_REQUESTS.has(method) ? 120000 : REQUEST_TIMEOUT);
+
 const WATCH_IGNORED = /[\\/](\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.idea)([\\/]|$)/;
 
 const CLIENT_CAPABILITIES = {
@@ -164,8 +171,15 @@ class Server {
   request(method, params) {
     if (this.dead) return Promise.reject(new Error('language server is not running'));
     const id = this.nextId++;
+    const ms = timeoutFor(method);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        this.write({ method: '$/cancelRequest', params: { id } });
+        reject(new Error(`Pyright did not answer ${method} within ${ms / 1000} s`));
+      }, ms);
+      const settle = (fn) => (v) => { clearTimeout(timer); fn(v); };
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
       this.write({ id, method, params });
     });
   }
