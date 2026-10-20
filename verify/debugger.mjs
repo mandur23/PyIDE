@@ -252,6 +252,25 @@ try {
   await until(`document.querySelector('#runOut').textContent.includes('Process finished')`, 'rerun stopped');
   check(await noProcs(waiterPy), 'Run twice in a row leaves no unstoppable process behind');
 
+  // ---- a breakpoint toggled while debugpy starts is still sent to the session ----
+  await openFile(t, 'waiter.py');
+  await press('Shift+F9');
+  await until(`window.__debugger.state()?.state === 'starting'`, 'waiter debug session starting');
+  await cursorTo(3);
+  await press('Ctrl+F8');
+  await until(`window.__debugger.state()?.state === 'running'`, 'waiter debug session running');
+  await click('#dbgTabConsole');
+  await js(`document.querySelector('#dbgIn').focus()`);
+  await type('x');
+  await press('Enter');
+  await stoppedAt('waiter.py', 3);
+  check(true, 'a breakpoint added while the debug session starts suspends the program');
+  await cursorTo(3);
+  await press('Ctrl+F8');
+  check((await bpLines('waiter.py')).length === 0, 'waiter.py breakpoint removed again');
+  await press('Ctrl+F2');
+  await until(`window.__debugger.state() === null`, 'waiter debug session stopped');
+
   // ---- persistence across reload ----
   await js(`location.reload(), true`);
   await t.sleep(500);

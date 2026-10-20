@@ -117,7 +117,9 @@
     return { path, lines };
   }
   function sendBps(path) {
-    if (!sess?.id) return;
+    if (!sess) return;
+    // debug:start took its breakpoints when it was called; files changed while debugpy starts are sent once it runs.
+    if (!sess.id) { sess.pendingBps.add(path); return; }
     const { lines } = bpPayload(path);
     req('setBreakpoints', { source: { path }, breakpoints: lines }).catch(() => {});
   }
@@ -310,7 +312,7 @@
     lastCfg = cfg;
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
-    sess = { id: null, file, state: 'starting', frames: [], frameIdx: 0 };
+    sess = { id: null, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
     earlyEvents = [];
     const mine = sess;
     updateControls();
@@ -336,9 +338,12 @@
     con.input.disabled = false;
     updateControls();
     ide.proc.attach(id, {
-      data: (text, stream) => con.append(text, stream === 'err' ? 'err' : null),
+      // A session replaced by a new one (Rerun) must not write into the console the new one cleared.
+      data: (text, stream) => sess === mine && con.append(text, stream === 'err' ? 'err' : null),
       exit: (code) => endSession(mine, code),
     });
+    for (const p of mine.pendingBps) sendBps(p);
+    mine.pendingBps.clear();
     const queued = earlyEvents.filter((m) => m.id === id);
     earlyEvents = [];
     for (const m of queued) handleEvent(m.event, m.body);
