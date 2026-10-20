@@ -84,11 +84,11 @@ function acceptSocket(socket, onText, onClose) {
   return (text) => { if (!socket.destroyed) socket.write(frame(0x1, Buffer.from(text, 'utf8'))); };
 }
 
-exports.register = ({ ipcMain, app, send }) => {
+exports.register = ({ ipcMain, app, send, getWindow }) => {
   const clients = new Set(); // {send}
   let workspaceFolders = [];
   let seq = 0;
-  const pendingCalls = new Map(); // id -> resolve
+  const pendingCalls = new Map(); // id -> {name, args, resolve}
 
   const writeLock = () => {
     if (!port) return;
@@ -115,15 +115,35 @@ exports.register = ({ ipcMain, app, send }) => {
   const status = () => send('claudeIde:status', { port, connected: clients.size });
 
   // A tool call answered by the main window's renderer; openDiff stays pending until the user decides.
+  // A renderer that reloads, crashes or closes never answers the calls it had, so they are answered here instead:
+  // a diff as rejected, anything else as an error (Claude Code would otherwise wait for them forever).
+  const watched = new WeakSet();
+  const abandonCalls = () => {
+    for (const [id, { name, args, resolve }] of pendingCalls) {
+      pendingCalls.delete(id);
+      resolve(name === 'openDiff'
+        ? [{ type: 'text', text: 'DIFF_REJECTED' }, { type: 'text', text: String(args.tab_name ?? '') }]
+        : [{ type: 'text', text: 'Error: the PyIDE window was reloaded or closed' }]);
+    }
+  };
   const callRenderer = (name, args) => new Promise((resolve) => {
     const id = ++seq;
-    pendingCalls.set(id, resolve);
+    pendingCalls.set(id, { name, args, resolve });
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return abandonCalls();
+    const wc = win.webContents;
+    if (!watched.has(wc)) {
+      watched.add(wc);
+      wc.on('did-navigate', abandonCalls);
+      wc.on('render-process-gone', abandonCalls);
+      wc.once('destroyed', abandonCalls);
+    }
     send('claudeIde:call', { id, name, args });
   });
   ipcMain.on('claudeIde:result', (_e, { id, content }) => {
-    const resolve = pendingCalls.get(id);
+    const call = pendingCalls.get(id);
     pendingCalls.delete(id);
-    resolve?.(content);
+    call?.resolve(content);
   });
 
   async function handle(msg, reply) {

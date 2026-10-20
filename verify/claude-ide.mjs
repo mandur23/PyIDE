@@ -192,8 +192,10 @@ try {
   const leaks = await englishLeaks(k, '.cide-bar, #claudeIdeStatus', ['Claude', 'Code']);
   k.check(!leaks.length && await k.js(`document.querySelector('#claudeDiffAccept').textContent === '수락'`), `the diff bar is Korean${leaks.length ? ` ${JSON.stringify(leaks)}` : ''}`);
   await k.shot('diff-ko.png');
-  await k.js(`document.querySelector('#claudeDiffReject').click()`);
-  await pending;
+  // A window that reloads while Claude Code waits on a diff answers it as rejected instead of leaving the CLI hanging.
+  await k.js(`(setTimeout(() => location.reload(), 50), true)`);
+  const answer = await Promise.race([pending, new Promise((r) => setTimeout(() => r(null), 15000))]);
+  k.check(answer?.[0]?.text === 'DIFF_REJECTED' && answer[1]?.text === 'ko', `a pending diff is answered DIFF_REJECTED when the window reloads ${JSON.stringify(answer)}`);
   c.close();
 } catch (err) {
   k.check(false, err.message);
