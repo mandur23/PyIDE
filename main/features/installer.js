@@ -120,7 +120,10 @@ exports.register = ({ ipcMain, app, send }) => {
   function spawnServer(cmd, args, { cwd, logFile }) {
     const out = fs.openSync(logFile, 'a');
     const child = spawn(cmd, args, { cwd, windowsHide: true, stdio: ['ignore', out, out] });
-    child.once('exit', () => fs.closeSync(out));
+    // A program that cannot start (missing, blocked) emits 'error' and 'close' but no 'exit'; its exitCode is then the
+    // negative error code, which the callers' start loops report.
+    child.on('error', (err) => fs.appendFile(logFile, `${err.message}\n`, () => {}));
+    child.once('close', () => fs.closeSync(out));
     return child;
   }
   const servers = createServers({ root, store, spawnServer, run: runProcess });

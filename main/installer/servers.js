@@ -1,6 +1,7 @@
 // Portable, per-user database servers: pinned vendor zips extracted under <root>/servers/<name>-<version>, a data
 // directory initialized with a generated password, and a server process owned by the IDE.
 const crypto = require('crypto');
+const { once } = require('events');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
@@ -139,6 +140,8 @@ async function download(url, dest, { sha256, size, signal, progress, log }) {
   const total = Number(res.headers.get('content-length')) || size;
   const part = `${dest}.part`;
   const out = fs.createWriteStream(part);
+  // A write error (disk full) is raised from the loop below: waiting for 'drain' after it would wait forever.
+  out.on('error', () => {});
   const hash = crypto.createHash('sha256');
   let got = 0;
   let shown = -1;
@@ -146,7 +149,8 @@ async function download(url, dest, { sha256, size, signal, progress, log }) {
     for await (const chunk of res.body) {
       hash.update(chunk);
       got += chunk.length;
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
+      if (out.errored) throw out.errored;
+      if (!out.write(chunk)) await once(out, 'drain');
       progress(got / total);
       const pct = Math.floor((got / total) * 10);
       if (pct !== shown) { shown = pct; log(`  ${Math.round(got / 1048576)} / ${Math.round(total / 1048576)} MB\n`); }
