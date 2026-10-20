@@ -19,6 +19,7 @@
       { label: tr('Open in Browser Pane'), disabled: !canOpen, run: () => fw.openRoute(r) },
       { label: tr('Open in External Browser'), disabled: !canOpen, run: () => fw.openRoute(r, { external: true }) },
       { label: tr('Copy URL'), run: () => navigator.clipboard.writeText(fw.routeUrl(r)) },
+      ...(fw.routeActions.length ? [{ separator: true }, ...fw.routeActions.map((a) => ({ label: a.title(), run: () => a.run(r) }))] : []),
     ];
   }
 

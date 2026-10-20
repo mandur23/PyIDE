@@ -1,0 +1,10 @@
+{
+  "id": "http-client",
+  "name": "HTTP Client",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Run requests from .http and .rest files, with environments, variables and a response viewer.",
+  "main": [
+    "http-client.js"
+  ]
+}

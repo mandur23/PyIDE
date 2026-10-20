@@ -382,6 +382,8 @@
     templateLanguage,
     isTemplatePath,
     browser: () => browserTab,
+    // Extra items for route menus (gutter, Endpoints): {title: () => string, run(route)}; the HTTP client adds one.
+    routeActions: [],
   };
 
   for (const file of ['templates.js', 'views.js']) {

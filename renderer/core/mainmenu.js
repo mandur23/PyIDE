@@ -96,7 +96,7 @@
   }
   const MENUS = () => [
     { label: tr('File'), submenu: () => tidy([
-      act('NewProject'), act('NewPythonFile'), { separator: true },
+      act('NewProject'), act('NewPythonFile'), act('NewHttpRequest'), { separator: true },
       act('OpenProject'), act('OpenFile'), act('GetFromVcs'),
       { label: tr('Recent Projects'), submenu: () => recentItems(15), disabled: !recentProjects().length },
       act('CloseProject'), { separator: true },

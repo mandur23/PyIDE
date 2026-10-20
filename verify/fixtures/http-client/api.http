@@ -1,0 +1,45 @@
+@base = {{host}}/api
+
+### Get item
+# @name item
+GET {{base}}/items/7
+Accept: application/json
+
+### Create item
+POST {{base}}/items
+Content-Type: application/json
+X-Request-Id: {{$uuid}}
+X-Api-Key: {{apiKey}}
+
+{
+  "name": "widget",
+  "count": 3,
+  "stamp": "{{$timestamp}}"
+}
+
+### Login
+# @name login
+POST {{host}}/login
+Content-Type: application/json
+
+{"user": "me"}
+
+### Who am I
+GET {{host}}/whoami?item={{item.response.body.name}}
+Authorization: Bearer {{login.response.body.$.token}}
+
+### Body from a file
+POST {{host}}/echo
+Content-Type: application/json
+
+< ./payload.json
+
+### HTML page
+GET {{host}}/page.html
+
+### Image
+GET {{host}}/logo.png
+
+### Refused
+// Nothing listens on this port.
+GET http://127.0.0.1:9997/nothing
