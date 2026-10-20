@@ -1227,6 +1227,10 @@ window.MonacoEnvironment = { getWorkerUrl: () => new URL('../node_modules/monaco
 const monacoNls = i18n.locale === 'en' ? [] : [`vs/nls.messages.${i18n.locale}`];
 require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
   const monaco = (ide.monaco = window.monaco);
+  // Diff editors leave their hunk gutter menu subscribed after dispose, and it throws "AbstractContextKeyService has
+  // been disposed" whenever an editor action is registered later. PyIDE puts nothing in that menu.
+  const createDiffEditor = monaco.editor.createDiffEditor;
+  monaco.editor.createDiffEditor = (el, options, override) => createDiffEditor(el, { renderGutterMenu: false, ...options }, override);
   monaco.languages.setMonarchTokensProvider('python', PYTHON_GRAMMAR);
   monaco.languages.setLanguageConfiguration('python', {
     comments: { lineComment: '#' },
