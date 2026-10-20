@@ -105,6 +105,10 @@ async function smoke(exe, port, name) {
     await until(`ide.editor.getModel().getValue().includes('def f(a, b):\\n    return a + b')`, 'ruff reformat', 20000);
     check(true, 'Ctrl+Alt+L reformats with ruff');
 
+    // ---------- spell checker: nspell and the Hunspell dictionary inside app.asar, on a worker thread ----------
+    const sugg = await js(`ide.spellcheck.suggest('mispeled').catch((e) => 'error: ' + e.message)`);
+    check(Array.isArray(sugg) && sugg.includes('misspelled'), `the spell checker reads its dictionary from the package (${JSON.stringify(sugg)})`);
+
     // ---------- Git log ----------
     const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-installed-git-'));
     writeFileSync(path.join(gitHome, 'gitconfig'), '[user]\n\tname = Alice\n\temail = alice@example.com\n[init]\n\tdefaultBranch = main\n');
