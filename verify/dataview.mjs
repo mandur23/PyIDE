@@ -278,6 +278,7 @@ try {
   check(await plotCount() === 1, 'changing the same figure updates its plot instead of adding one');
 
   // ---------- Plots from Run ----------
+  await js(`document.querySelector('.sv-thumb').dataset.kept = '1'`);
   await openFile(t, 'plot_script.py');
   await press('Ctrl+Shift+F10');
   await until(`ide.plots.list().some((p) => p.source === 'plot_script.py')`, 'Run plot', 60000);
@@ -286,6 +287,7 @@ try {
   const runPlot = await js(`ide.plots.list().findIndex((p) => p.source === 'plot_script.py')`);
   check(await js(`ide.plots.list()[${runPlot}].title === 'Run plot' && ide.plots.current() === ${runPlot}`), 'the new plot is selected');
   check(await js(`document.querySelectorAll('.sv-thumb').length`) === await plotCount(), 'every plot has a history thumbnail');
+  check(await js(`document.querySelector('.sv-thumb[data-index="0"]')?.dataset.kept === '1'`), 'a new plot adds its thumbnail without rebuilding the others');
   await click('.sv-zoom-in');
   check(typeof await js(`ide.plots.zoom()`) === 'number', 'Zoom In leaves fit-to-window mode');
   await click('.sv-zoom-actual');

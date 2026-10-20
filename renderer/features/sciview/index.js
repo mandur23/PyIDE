@@ -849,35 +849,51 @@
     view.classList.toggle('hidden', !p);
     for (const b of plotsEls.needPlot) b.disabled = !p;
     plotsEls.svgBtn.disabled = !p?.svg;
-    if (!p) { strip.replaceChildren(); info.textContent = ''; return; }
+    renderStrip(strip);
+    if (!p) { info.textContent = ''; return; }
     img.src = `data:image/png;base64,${p.png}`;
     view.classList.toggle('fit', zoom === 'fit');
     img.style.width = zoom === 'fit' ? '' : `${Math.round((p.width / 2) * zoom)}px`;
     info.textContent = `${p.title} · ${p.source}${zoom === 'fit' ? '' : ` · ${Math.round(zoom * 100)}%`}`;
-    strip.replaceChildren(...plots.map((q, i) => {
-      const t = el('button', `sv-thumb${i === current ? ' active' : ''}`);
-      const ti = el('img');
-      ti.src = `data:image/png;base64,${q.png}`;
-      ti.alt = '';
-      t.appendChild(ti);
-      t.dataset.index = String(i);
-      userText(t).title = `${q.title} · ${q.source} · ${q.time}`;
-      t.onclick = () => { current = i; renderPlot(); };
-      t.oncontextmenu = (e) => {
-        e.preventDefault();
-        current = i;
-        renderPlot();
-        ide.ui.contextMenu(e.clientX, e.clientY, [
-          { label: tr('Save as PNG…'), run: () => savePlot(i, 'png') },
-          { label: tr('Save as SVG…'), disabled: !q.svg, run: () => savePlot(i, 'svg') },
-          { label: tr('Copy Image'), run: () => copyPlot(i) },
-          { separator: true },
-          { label: tr('Delete Plot'), run: () => deletePlot(i) },
-        ]);
-      };
-      return t;
-    }));
     strip.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  // History thumbnails, made once per plot: a new plot adds one image instead of decoding all hundred again.
+  const thumbs = new Map(); // plot id -> its button in the strip
+  function thumbFor(q) {
+    let t = thumbs.get(q.id);
+    if (t) return t;
+    t = el('button', 'sv-thumb');
+    const ti = el('img');
+    ti.src = `data:image/png;base64,${q.png}`;
+    ti.alt = '';
+    t.appendChild(ti);
+    userText(t).title = `${q.title} · ${q.source} · ${q.time}`;
+    t.onclick = () => { current = plots.indexOf(q); renderPlot(); };
+    t.oncontextmenu = (e) => {
+      e.preventDefault();
+      const i = plots.indexOf(q);
+      current = i;
+      renderPlot();
+      ide.ui.contextMenu(e.clientX, e.clientY, [
+        { label: tr('Save as PNG…'), run: () => savePlot(i, 'png') },
+        { label: tr('Save as SVG…'), disabled: !q.svg, run: () => savePlot(i, 'svg') },
+        { label: tr('Copy Image'), run: () => copyPlot(i) },
+        { separator: true },
+        { label: tr('Delete Plot'), run: () => deletePlot(i) },
+      ]);
+    };
+    thumbs.set(q.id, t);
+    return t;
+  }
+  function renderStrip(strip) {
+    const live = new Set(plots.map((q) => q.id));
+    for (const [id, t] of thumbs) if (!live.has(id)) { t.remove(); thumbs.delete(id); }
+    plots.forEach((q, i) => {
+      const t = thumbFor(q);
+      if (strip.children[i] !== t) strip.insertBefore(t, strip.children[i] || null);
+      t.dataset.index = String(i);
+      t.classList.toggle('active', i === current);
+    });
   }
   function addPlot(msg) {
     const plot = { ...msg, id: ++plotSeq, time: new Date().toLocaleTimeString() };
