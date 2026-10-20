@@ -169,7 +169,7 @@ class Server {
   }
 
   request(method, params) {
-    if (this.dead) return Promise.reject(new Error('language server is not running'));
+    if (this.dead) return Promise.reject(Object.assign(new Error('language server is not running'), { expected: true }));
     const id = this.nextId++;
     const ms = timeoutFor(method);
     return new Promise((resolve, reject) => {
@@ -232,7 +232,9 @@ class Server {
     if (this.dead) return;
     this.dead = true;
     this.watcher?.close();
-    for (const p of this.pending.values()) p.reject(new Error(`language server ${reason}`));
+    // Requests in flight when the server stops (another project, another interpreter) or exits get no answer; the
+    // renderer treats that as none, and the exit itself is reported, so these are not internal errors as well.
+    for (const p of this.pending.values()) p.reject(Object.assign(new Error(`language server ${reason}`), { expected: true }));
     this.pending.clear();
     if (!this.stopping) {
       this.addLog(`server ${reason}\n`);
