@@ -29,10 +29,16 @@ function helpers(t) {
     // The diff of the active history tab.
     diff: (expr) => js(`(() => { const d = ide.activeTab()?.host?._lhDiff; return d ? (${expr}) : null; })()`),
     // Clicks the first visible element matching `selector` whose text contains `text`.
+    // A list that re-renders between finding the element and clicking it (a slow, loaded machine) is tried again.
     async clickText(selector, text) {
-      const id = await js(`(() => { const n = [...document.querySelectorAll(${JSON.stringify(selector)})].find(n => n.offsetParent && n.textContent.includes(${JSON.stringify(text)})); if (!n) return null; n.id ||= 'hbTmp' + Math.random().toString(36).slice(2); return n.id; })()`);
-      if (!id) throw new Error(`no visible ${selector} containing ${text}`);
-      await click(`#${id}`);
+      for (let attempt = 0; ; attempt++) {
+        const id = await js(`(() => { const n = [...document.querySelectorAll(${JSON.stringify(selector)})].find(n => n.offsetParent && n.textContent.includes(${JSON.stringify(text)})); if (!n) return null; n.id ||= 'hbTmp' + Math.random().toString(36).slice(2); return n.id; })()`);
+        if (!id) {
+          if (attempt < 10) { await new Promise((r) => setTimeout(r, 200)); continue; }
+          throw new Error(`no visible ${selector} containing ${text}`);
+        }
+        try { return await click(`#${id}`); } catch (e) { if (attempt >= 10 || !/no element/.test(e.message)) throw e; }
+      }
     },
     caretTo: (line) => js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${line}, column: 1 }), true)`),
     marks: () => js(`ide.bookmarks.list().map(m => ({ file: ide.util.basename(m.path), line: m.line, mnemonic: m.mnemonic || '', description: m.description || '' }))`),
