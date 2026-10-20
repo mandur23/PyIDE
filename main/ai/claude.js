@@ -18,6 +18,10 @@ class ClaudeError extends Error {
 const WORK_DIR = path.join(os.tmpdir(), 'pyide-claude');
 
 let cachedPath = null;
+// where.exe blocks the main process for a moment, and without Claude Code every status check and AI request ran it:
+// a PATH search that found nothing is repeated at most every 30 seconds (the installer's claude.exe is still seen at once).
+const PATH_RECHECK_MS = 30000;
+let pathMissedAt = -Infinity;
 
 // Same lookup as the terminal plugin: PYIDE_CLAUDE_PATH ('none' simulates a missing install), the official installer's
 // ~/.local/bin/claude.exe, then PATH (an npm install puts a claude.cmd shim there).
@@ -28,13 +32,14 @@ function findClaude() {
   if (cachedPath && fs.existsSync(cachedPath)) return cachedPath;
   const local = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
   if (fs.existsSync(local)) return (cachedPath = local);
+  if (Date.now() - pathMissedAt < PATH_RECHECK_MS) return null;
+  let found = null;
   try {
-    const found = execFileSync('where.exe', ['claude'], { encoding: 'utf8', windowsHide: true })
-      .split(/\r?\n/).find((p) => /\.(exe|cmd)$/i.test(p));
-    return (cachedPath = found || null);
-  } catch {
-    return null;
-  }
+    found = execFileSync('where.exe', ['claude'], { encoding: 'utf8', windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] })
+      .split(/\r?\n/).find((p) => /\.(exe|cmd)$/i.test(p)) || null;
+  } catch {}
+  if (!found) pathMissedAt = Date.now();
+  return (cachedPath = found);
 }
 
 function systemPromptFile(text) {
