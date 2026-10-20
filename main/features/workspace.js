@@ -148,8 +148,10 @@ function launchConfigs(root) {
   if (!text) return [];
   let json;
   try { json = parseJsonc(text); } catch { return []; }
-  return (json.configurations || []).filter((c) => c && c.name && c.runtimeExecutable).map((c) => {
-    const cwd = c.cwd ? path.resolve(root, c.cwd) : root;
+  // The project's own file: entries and fields of the wrong kind are left out instead of failing the whole scan.
+  const list = Array.isArray(json?.configurations) ? json.configurations : [];
+  return list.filter((c) => c && c.name && c.runtimeExecutable).map((c) => {
+    const cwd = typeof c.cwd === 'string' && c.cwd ? path.resolve(root, c.cwd) : root;
     const raw = String(c.runtimeExecutable);
     // A path (.venv\Scripts\python.exe) is used as written; a bare python/py means the project interpreter.
     const exe = /[\\/]/.test(raw) ? path.resolve(cwd, raw) : raw;

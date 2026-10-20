@@ -48,6 +48,9 @@ writeFileSync(LONG(P('trailing.')), 'trailing dot\n');
 writeFileSync(LONG(P('trailing ')), 'trailing space\n');
 mkdirSync(P('x.py'));
 writeFileSync(P('x.py', 'inner.py'), 'print("inner")\n');
+// Launchers the project declares, with entries and fields of the wrong kind.
+mkdirSync(P('.claude'));
+writeFileSync(P('.claude', 'launch.json'), JSON.stringify({ configurations: [null, 5, { name: 'web', runtimeExecutable: 'python', cwd: 5, runtimeArgs: { a: 1 }, env: 'x', port: 'x' }] }));
 
 // Another process holds a file open with no sharing at all, as a running program or a backup tool can.
 const lockers = [];
@@ -167,7 +170,9 @@ try {
   check(walk.value > 10 && walk.value < 100 && walk.ms < 3000, `Go to File lists the project once (${walk.value} files)`);
   smooth(await scenario('find in files', () => js(`ide.api.invoke('search:find', ide.root, { query: 'print' }, {}).then((r) => JSON.stringify(r).length)`)), 'Find in Files over the project');
   smooth(await scenario('todos', () => js(`ide.api.invoke('search:todos', ide.root, {}).then((r) => JSON.stringify(r).length)`)), 'the TODO scan');
-  smooth(await scenario('workspace scan', () => js(`ide.api.invoke('workspace:scan', ide.root).then((r) => JSON.stringify(r).length)`)), 'the launcher scan');
+  const launchers = await scenario('workspace scan', () => js(`ide.api.invoke('workspace:scan', ide.root).then((r) => JSON.stringify(r))`));
+  smooth(launchers, 'the launcher scan');
+  check(String(launchers.value).includes('"web"'), 'a launch.json with entries of the wrong kind still lists its valid launcher');
   await scenario('close all', () => js(`ide.closeAllTabs(true)`));
   check(readFileSync(P('readonly.py'), 'utf8') === 'print("readonly")\n', 'the read-only file is unchanged');
   await sleep(2000);
