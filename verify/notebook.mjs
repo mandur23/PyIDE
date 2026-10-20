@@ -273,6 +273,22 @@ try {
   check(streamLen <= 1024 * 1024 && streamText.endsWith('line 199999\n') && !streamText.startsWith('line 0\n'), `a flooding cell keeps only the last 1 MB of its output (${streamLen} chars)`);
   check(await js(`!!${H}.querySelectorAll('.nb-cell')[${flood}].querySelector('.nb-dropped') && !${V}.serialize().includes('"dropped"')`), 'the cut is noted in the cell, not written into the file');
 
+  // ---------- stdout and stderr taking turns: each switch is a new output, and their number is bounded ----------
+  const turns = await addCodeCell(t, 'import sys\nfor i in range(3000):\n    print("out", i, flush=True)\n    print("err", i, file=sys.stderr, flush=True)');
+  await runAt(t, turns, undefined, 'alternating streams');
+  const turnOuts = await js(`(() => { const o = ${V}.cells()[${turns}].data.outputs; return { n: o.length, last: o[o.length - 1]?.text || '',
+    nodes: ${H}.querySelectorAll('.nb-cell')[${turns}].querySelectorAll('.nb-output').length,
+    note: !!${H}.querySelectorAll('.nb-cell')[${turns}].querySelector('.nb-outputs > .nb-dropped') }; })()`);
+  check(turnOuts.n > 2 && turnOuts.n <= 500 && turnOuts.nodes === turnOuts.n && turnOuts.last.includes('err 2999') && turnOuts.note,
+    `a cell alternating stdout and stderr keeps only its latest 500 outputs, noting the cut (${JSON.stringify({ ...turnOuts, last: turnOuts.last.slice(-12) })})`);
+
+  // ---------- clear_output(wait=True) replaces the output on the page too ----------
+  const clearing = await addCodeCell(t, 'from IPython.display import clear_output\nimport time\nfor i in range(5):\n    clear_output(wait=True)\n    print("step", i)\n    time.sleep(0.05)');
+  await runAt(t, clearing, undefined, 'clear_output progress');
+  const clearingText = await outputsText(t, clearing);
+  check(clearingText.trim() === 'step 4' && await js(`${H}.querySelectorAll('.nb-cell')[${clearing}].querySelectorAll('.nb-output').length === 1`),
+    `clear_output(wait=True) leaves only the latest output on the page (${JSON.stringify(clearingText)})`);
+
   // ---------- a dead kernel ----------
   const die = await addCodeCell(t, 'import os\nos._exit(1)');
   await js(`${V}.runCell(${die})`);

@@ -130,6 +130,7 @@
   // document) until the window runs out of memory. A stream output keeps its last 1 MB, like PyCharm's console buffer;
   // `dropped` (not saved) counts the characters cut from the front.
   const MAX_STREAM = 1024 * 1024;
+  const MAX_OUTPUTS = 500;
   function capStream(o) {
     if (o.text.length <= MAX_STREAM) return;
     let from = o.text.length - MAX_STREAM;
@@ -834,6 +835,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     function renderOutputs(c) {
       if (c.data.type !== 'code') { c.outputs.replaceChildren(); return; }
       c.outputs.replaceChildren(...c.data.outputs.map((o) => renderOutput(o, outputCtx())));
+      if (c.outputsDropped) c.outputs.prepend(droppedNote());
       if (c.stdin) c.outputs.appendChild(c.stdin);
     }
 
@@ -841,13 +843,15 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       if (!c) return;
       c.data.outputs = outputs;
       c.clearPending = false;
+      c.outputsDropped = false;
       renderOutputs(c);
       changed();
     }
 
     function addOutput(c, output, displayId) {
       if (!c) return;
-      if (c.clearPending) { c.data.outputs = []; c.clearPending = false; }
+      // clear_output(wait=True): the old outputs go when the next one arrives, from the page as well.
+      if (c.clearPending) { c.data.outputs = []; c.clearPending = false; c.outputsDropped = false; renderOutputs(c); }
       const outs = c.data.outputs;
       const o = readOutput(output);
       if (displayId) o.displayId = displayId;
@@ -863,8 +867,30 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         const node = renderOutput(o, outputCtx());
         if (c.stdin?.isConnected) c.outputs.insertBefore(node, c.stdin); else c.outputs.appendChild(node);
       }
+      capOutputs(c);
       changed();
     }
+
+    // Each switch between stdout and stderr (and each display() call) starts a new output, so a cell printing
+    // without end would also grow without bound in outputs: it keeps its last MAX_OUTPUTS outputs and the last
+    // MAX_STREAM characters of stream text over all of them, dropping the oldest outputs (and noting it) beyond that.
+    function capOutputs(c) {
+      const outs = c.data.outputs;
+      let text = 0;
+      for (const o of outs) if (o.output_type === 'stream') text += o.text.length;
+      let drop = 0;
+      while (outs.length - drop > 1 && (outs.length - drop > MAX_OUTPUTS || text > MAX_STREAM)) {
+        if (outs[drop].output_type === 'stream') text -= outs[drop].text.length;
+        drop++;
+      }
+      if (!drop) return;
+      const nodes = c.outputs.querySelectorAll('.nb-output');
+      for (let i = 0; i < drop; i++) nodes[i]?.remove();
+      outs.splice(0, drop);
+      if (!c.outputsDropped) c.outputs.prepend(droppedNote());
+      c.outputsDropped = true;
+    }
+    const droppedNote = () => el('div', 'nb-dropped', tr('The cell has too much output; only its latest outputs are kept.'));
 
     function updateDisplay(displayId, data, metadata) {
       if (!displayId) return;
@@ -911,7 +937,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         c.running = false;
         c.stdin?.remove();
         c.stdin = null;
-        if (c.clearPending) { c.clearPending = false; c.data.outputs = []; renderOutputs(c); }
+        if (c.clearPending) { c.clearPending = false; c.data.outputs = []; c.outputsDropped = false; renderOutputs(c); }
       }
       if (n !== null && n !== undefined) c.data.count = n;
       if (status === 'ok' || status === 'error') c.elapsed = { ms: performance.now() - (c.started || performance.now()), ok: status === 'ok' };
@@ -1052,7 +1078,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       const c = cells[i];
       if (!c || c.data.type === type) return;
       c.data.type = type;
-      if (type !== 'code') { c.data.outputs = []; c.data.count = null; c.elapsed = null; }
+      if (type !== 'code') { c.data.outputs = []; c.data.count = null; c.elapsed = null; c.outputsDropped = false; }
       c.editing = true;
       monaco.editor.setModelLanguage(c.model, langOf(type));
       renderCell(c);
@@ -1067,6 +1093,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         c.data.outputs = [];
         c.data.count = null;
         c.elapsed = null;
+        c.outputsDropped = false;
         renderCell(c);
       }
       changed();
