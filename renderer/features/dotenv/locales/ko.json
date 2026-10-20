@@ -1,0 +1,4 @@
+{
+  ".env Files": ".env 파일",
+  "Syntax highlighting for .env files. Run configurations, the test runner, the Python Console and new terminals load them (main/dotenv.js).": ".env 파일 구문 강조. 실행 구성, 테스트 실행기, Python 콘솔과 새 터미널이 이 파일을 불러옵니다(main/dotenv.js)."
+}

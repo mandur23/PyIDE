@@ -492,7 +492,7 @@ const areas = {
 // PyCharm New UI icons (icons.js) for the built-in tool windows; plugins may pass iconName, or a text glyph as icon.
 const TOOL_ICONS = { Project: 'project', Commit: 'commit', Structure: 'structure', Launchers: 'services', Run: 'run',
   Debug: 'debug', FindUsages: 'find', FindInFiles: 'find', PythonConsole: 'pythonConsole', Terminal: 'terminal',
-  Problems: 'problems', Git: 'vcs', TODO: 'todo', PythonPackages: 'pythonPackages' };
+  Problems: 'problems', Git: 'vcs', TODO: 'todo', PythonPackages: 'pythonPackages', AIChat: 'aiChat', CallHierarchy: 'hierarchy' };
 ide.icon = (name, fallback = '') => {
   const svg = window.PYIDE_ICONS?.[name];
   const span = el('span', 'ide-icon');
