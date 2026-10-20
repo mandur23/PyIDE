@@ -292,7 +292,7 @@
     const executor = executors.get(opts.executor) || null;
     lastRun = cfg;
     tw.show();
-    await ide.saveAll();
+    if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     const s = await prepareSession(cfg, executor);
     try {
       let interp = interpFor(cfg);

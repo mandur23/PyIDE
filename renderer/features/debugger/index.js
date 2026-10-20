@@ -305,7 +305,7 @@
     showSub('console');
     if (!interp) return con.append(`${tr('No Python interpreter found.')}\n`, 'err');
     if (sess) await stopDebug();
-    await ide.saveAll();
+    if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     lastFile = file;
     lastCfg = cfg;
     con.clear();

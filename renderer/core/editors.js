@@ -40,11 +40,13 @@
     if (again) return again;
     const uri = ide.monaco.Uri.file(path);
     const model = ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(r.text, languageFor(path), uri);
-    // fresh: fileOpened is announced once the first tab for it exists.
-    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true };
+    // fresh: fileOpened is announced once the first tab for it exists. diskHash fingerprints the text last read from
+    // or written to the file, so auto save can tell when the file changed underneath.
+    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [] };
     docs.set(key(path), doc);
-    model.onDidChangeContent(() => {
+    model.onDidChangeContent((e) => {
       scheduleRender();
+      markChanged(doc, e);
       if (!applyingRemote) syncOut(doc);
     });
     if (peers > 1) ide.api.send('doc:opened', { path });
@@ -61,6 +63,43 @@
     doc.model.dispose();
     ide.emit('fileClosed', doc.path);
   }
+
+  const textHash = (s) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return `${s.length}:${h >>> 0}`;
+  };
+
+  // Lines edited since the last save, kept as whole-line decorations so they move with the text.
+  function markChanged(doc, e) {
+    const m = doc.model;
+    if (e.isFlush) return;
+    const marks = e.changes.map((c) => {
+      const start = Math.min(c.range.startLineNumber, m.getLineCount());
+      const end = Math.min(start + (c.text.match(/\n/g)?.length || 0), m.getLineCount());
+      return { range: new ide.monaco.Range(start, 1, end, m.getLineMaxColumn(end)), options: { isWholeLine: true } };
+    });
+    if (doc.changed.length > 200) doc.changed = m.deltaDecorations(doc.changed, lineRanges(changedLines(doc)));
+    doc.changed = doc.changed.concat(m.deltaDecorations([], marks));
+  }
+  function changedLines(doc) {
+    const lines = new Set();
+    for (const id of doc.changed) {
+      const r = doc.model.getDecorationRange(id);
+      if (r) for (let l = r.startLineNumber; l <= r.endLineNumber; l++) lines.add(l);
+    }
+    return lines;
+  }
+  function lineRanges(lines) {
+    const out = [];
+    for (const l of [...lines].sort((a, b) => a - b)) {
+      const last = out[out.length - 1];
+      if (last && last.range.endLineNumber === l - 1) last.range = last.range.setEndPosition(l, 1);
+      else out.push({ range: new ide.monaco.Range(l, 1, l, 1), options: { isWholeLine: true } });
+    }
+    return out;
+  }
+  const clearChanged = (doc) => { if (!doc.model.isDisposed()) doc.changed = doc.model.deltaDecorations(doc.changed, []); };
 
   // ---------- multi-window document sync ----------
   const syncTimers = new Map();
@@ -90,7 +129,7 @@
   ide.api.on('doc:changed', ({ path, text }) => { const d = docs.get(key(path)); if (d) applyRemoteText(d, text); });
   ide.api.on('doc:saved', ({ path, text }) => {
     const d = docs.get(key(path));
-    if (d && d.model.getValue() === text) { d.savedVersion = d.model.getAlternativeVersionId(); renderAllTabs(); }
+    if (d && d.model.getValue() === text) { d.savedVersion = d.model.getAlternativeVersionId(); d.diskHash = textHash(text); clearChanged(d); renderAllTabs(); }
   });
   ide.api.on('doc:opened', ({ path }) => {
     const d = docs.get(key(path));
@@ -696,26 +735,161 @@
     return true;
   };
 
-  async function saveDoc(doc) {
-    if (!docDirty(doc)) return;
+  // ---------- saving ----------
+  // Save actions rewrite the text before it is written, on explicit and auto saves alike: {id, order, run(text, ctx) ->
+  // new text | undefined}, ctx = {doc, path, auto, eol, modifiedLines, caretLines} (Sets of 1-based line numbers).
+  // They run in order on the text, and the result lands in the model as one undo step of line-level edits.
+  const saveActions = [];
+  ide.registerSaveAction = (a) => { saveActions.push(a); saveActions.sort((x, y) => (x.order ?? 50) - (y.order ?? 50)); };
+
+  const editorsOf = (model) => [...groups.map((g) => g.editor), ...embedded].filter((ed) => ed.getModel() === model);
+
+  // Returns false when the text changed while the actions ran (their result is then dropped).
+  async function runSaveActions(doc, auto) {
+    const model = doc.model;
+    const version = model.getVersionId();
+    const before = model.getValue();
+    const caretLines = new Set(editorsOf(model).flatMap((ed) => ed.getSelections().map((s) => s.positionLineNumber)));
+    const ctx = { doc, path: doc.path, auto, eol: model.getEOL(), modifiedLines: changedLines(doc), caretLines };
+    let text = before;
+    for (const a of saveActions) {
+      try {
+        const out = await a.run(text, ctx);
+        if (typeof out === 'string') text = out;
+      } catch (err) { ide.log.warn(`save action ${a.id} failed: ${err?.message || err}`); }
+      if (model.isDisposed() || model.getVersionId() !== version) return false;
+    }
+    if (text !== before) {
+      const ed = editorsOf(model).find((e) => e.hasTextFocus()) || editorsOf(model)[0];
+      model.pushStackElement();
+      model.pushEditOperations(ed?.getSelections() || null, lineEdits(model, text), () => null);
+      model.pushStackElement();
+    }
+    return true;
+  }
+
+  // Minimal whole-line edits turning the model's text into `text`, so carets outside changed lines stay put.
+  function lineEdits(model, text) {
+    const eol = model.getEOL();
+    const a = model.getLinesContent();
+    const b = text.split(/\r\n|\n/);
+    const { Range } = ide.monaco;
+    return diffLines(a, b).map(([s, e, t, u]) => {
+      const lines = b.slice(t, u);
+      if (e < a.length) return { range: new Range(s + 1, 1, e + 1, 1), text: lines.map((l) => l + eol).join('') };
+      if (s > 0) return { range: new Range(s, model.getLineMaxColumn(s), a.length, model.getLineMaxColumn(a.length)), text: lines.map((l) => eol + l).join('') };
+      return { range: model.getFullModelRange(), text: lines.join(eol) };
+    });
+  }
+
+  // Myers line diff -> hunks [aStart, aEnd, bStart, bEnd]; one hunk for the whole middle when the diff is too large.
+  function diffLines(a, b) {
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const n = a.length - pre - suf;
+    const m = b.length - pre - suf;
+    if (!n && !m) return [];
+    const max = n + m;
+    const off = max + 1;
+    const v = new Int32Array(2 * max + 2);
+    const trace = [];
+    let found = false;
+    for (let d = 0; d <= max && !found; d++) {
+      if ((d + 1) * v.length > 4e6) return [[pre, pre + n, pre, pre + m]];
+      trace.push(v.slice());
+      for (let k = -d; k <= d; k += 2) {
+        let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+        let y = x - k;
+        while (x < n && y < m && a[pre + x] === b[pre + y]) { x++; y++; }
+        v[off + k] = x;
+        if (x >= n && y >= m) { found = true; break; }
+      }
+    }
+    const matches = [];
+    let x = n;
+    let y = m;
+    for (let d = trace.length - 1; d >= 0; d--) {
+      const w = trace[d];
+      const k = x - y;
+      const pk = k === -d || (k !== d && w[off + k - 1] < w[off + k + 1]) ? k + 1 : k - 1;
+      const px = d ? w[off + pk] : 0;
+      const py = d ? px - pk : 0;
+      while (x > px && y > py) { x--; y--; matches.push([x, y]); }
+      x = px;
+      y = py;
+    }
+    matches.reverse();
+    const hunks = [];
+    let i = 0;
+    let j = 0;
+    for (const [mx, my] of [...matches, [n, m]]) {
+      if (mx > i || my > j) hunks.push([pre + i, pre + mx, pre + j, pre + my]);
+      i = mx + 1;
+      j = my + 1;
+    }
+    return hunks;
+  }
+
+  // Auto save leaves alone what nobody would expect it to write: untitled documents, read-only ones, documents shown
+  // only in a viewer, files whose disk text changed since PyIDE read or wrote them, files it cannot read (a deleted
+  // file, an unreachable network or remote path), and a version whose auto save already failed.
+  async function autoSavable(doc) {
+    if (doc.untitled || doc.readOnly || doc.model.uri.scheme !== 'file') return false;
+    if (!tabsOfDoc(doc).some((t) => t.kind === 'file')) return false;
+    if (doc.autoSaveFailed === doc.model.getAlternativeVersionId()) return false;
+    let r = null;
+    try { r = await ide.api.invoke('fs:readText', doc.path); } catch {}
+    if (r?.text !== undefined && textHash(r.text) === doc.diskHash) return true;
+    if (!doc.conflict) { doc.conflict = true; ide.emit('autoSaveSkipped', { path: doc.path, reason: r ? 'changedOnDisk' : 'unreadable' }); }
+    return false;
+  }
+
+  async function saveDoc(doc, { auto = false } = {}) {
+    while (doc.saving) await doc.saving;
+    if (!docDirty(doc) || doc.model.isDisposed()) return;
+    if (auto && !(await autoSavable(doc))) return;
+    let done;
+    doc.saving = new Promise((r) => { done = r; });
+    try { await writeDoc(doc, auto); } finally { doc.saving = null; done(); }
+  }
+
+  async function writeDoc(doc, auto) {
     const tab = firstTabFor(doc) || { kind: 'file', path: doc.path, model: doc.model, doc };
     ide.emit('beforeSave', tab);
+    if (!(await runSaveActions(doc, auto)) && auto) return;
+    if (doc.model.isDisposed()) return;
     const text = doc.model.getValue();
     try {
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
     } catch (e) {
-      alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+      const error = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+      if (!auto) alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
+      else {
+        doc.autoSaveFailed = doc.model.getAlternativeVersionId();
+        ide.emit('autoSaveSkipped', { path: doc.path, reason: 'failed', error });
+      }
       return;
     }
     doc.savedVersion = doc.model.getAlternativeVersionId();
+    doc.diskHash = textHash(text);
+    doc.conflict = false;
+    clearChanged(doc);
     if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text });
     for (const t of tabsOfDoc(doc)) t.preview = false;
     ide.emit('fileSaved', tab);
   }
   ide.saveTab = async (tab) => { if (tab?.doc) await saveDoc(tab.doc); renderAllTabs(); };
   ide.saveAll = async () => {
-    await Promise.all([...docs.values()].map(saveDoc));
+    await Promise.all([...docs.values()].map((d) => saveDoc(d)));
     renderAllTabs();
+  };
+  // Saves modified documents (all, or those at `paths`) the way auto save does; see autoSavable.
+  ide.autoSave = async (paths) => {
+    const list = [...docs.values()].filter((d) => docDirty(d) && (!paths || paths.some((p) => samePath(p, d.path))));
+    await Promise.all(list.map((d) => saveDoc(d, { auto: true })));
+    if (list.length) renderAllTabs();
   };
 
   // Reloads open documents whose file changed on disk (after formatters, git checkout, replace-in-files...).
@@ -727,6 +901,8 @@
       if (r.text === undefined || r.text === doc.model.getValue()) continue;
       doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
       doc.savedVersion = doc.model.getAlternativeVersionId();
+      Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
+      clearChanged(doc);
     }
     renderAllTabs();
   };
@@ -757,6 +933,8 @@
           doc.encoding = enc;
           doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: res.text }], () => null);
           doc.savedVersion = doc.model.getAlternativeVersionId();
+          doc.diskHash = textHash(res.text);
+          clearChanged(doc);
           renderAllTabs();
           updateStatus();
         },

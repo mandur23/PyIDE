@@ -1,4 +1,4 @@
-// Ruff integration: Reformat Code, Optimize Imports, lint diagnostics with quick fixes, actions on save.
+// Ruff integration: Reformat Code, Optimize Imports, lint diagnostics with quick fixes, reformat and optimize imports on save.
 (() => {
   const { el, basename } = ide.util;
   const monaco = ide.monaco;
@@ -117,22 +117,17 @@
     lintTimers.set(tab.path, setTimeout(() => lint(tab), ms));
   }
 
-  const formatting = new Set();
-  ide.on('fileSaved', async (tab) => {
-    if (!isPy(tab)) return;
-    if (ide.settings.get('tools.formatOnSave', false) && !formatting.has(tab.path)) {
-      formatting.add(tab.path);
-      try {
-        const version = tab.model.getVersionId();
-        const r = await ide.api.invoke('tooling:format', tab.model.getValue(), tab.path, opts());
-        if (r.ok && !tab.model.isDisposed() && tab.model.getVersionId() === version && applyText(tab.model, r.text)) {
-          await ide.saveTab(tab);
-          ide.renderTabs();
-        }
-      } finally { formatting.delete(tab.path); }
-    }
-    lint(tab);
-  });
+  // Actions on Save: the core runs them on the text being saved (explicit and auto saves) and applies the result as
+  // one undo step. A file ruff cannot parse is saved as it is.
+  const onSave = (key, channel) => async (text, ctx) => {
+    if (!/\.pyi?$/i.test(ctx.path) || !ide.settings.get(key, false)) return undefined;
+    const r = await ide.api.invoke(channel, text, ctx.path, opts());
+    return r.ok ? r.text : undefined;
+  };
+  ide.registerSaveAction({ id: 'optimizeImports', order: 30, run: onSave('tools.optimizeImportsOnSave', 'tooling:optimizeImports') });
+  ide.registerSaveAction({ id: 'reformat', order: 40, run: onSave('tools.formatOnSave', 'tooling:format') });
+
+  ide.on('fileSaved', (tab) => { if (isPy(tab)) lint(tab); });
   ide.on('fileOpened', (tab) => {
     if (!isPy(tab)) return;
     lint(tab);

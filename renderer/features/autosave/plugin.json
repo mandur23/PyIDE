@@ -1,0 +1,8 @@
+{
+  "id": "autosave",
+  "name": "Auto Save",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Saves files when PyIDE loses focus, when you switch tabs and after an idle time, and runs actions on save such as stripping trailing whitespace.",
+  "detached": true
+}

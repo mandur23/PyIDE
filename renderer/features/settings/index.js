@@ -144,15 +144,15 @@
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor', defaults?, mount(host, ctx)}
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, mount(host, ctx)}
   // to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
   let TREE, PAGES;
   function rebuildTree() {
     const pluginPages = ide.settingsPages || [];
     const ai = pluginPages.filter((p) => p.group === 'ai');
-    const editor = pluginPages.filter((p) => p.group === 'editor');
-    const base = BASE_TREE.map((n) => (n.group === 'editor-group' ? { ...n, children: [...n.children, ...editor] } : n));
-    TREE = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && p.group !== 'editor')];
+    const nested = { 'editor-group': 'editor', 'appearance-behavior': 'appearance' };
+    const base = BASE_TREE.map((n) => (nested[n.group] ? { ...n, children: [...n.children, ...pluginPages.filter((p) => p.group === nested[n.group])] } : n));
+    TREE = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
     PAGES = TREE.flatMap((n) => n.children || [n]);
   }
   rebuildTree();
@@ -449,10 +449,8 @@
   }
 
   function mountTools(host, ctx) {
-    const save = section(host, tr('Actions on Save'));
-    save.appendChild(checkbox(ctx, 'tools.formatOnSave', tr('Reformat code (ruff format)')));
-    save.appendChild(checkbox(ctx, 'tools.ruffOnSave', tr('Run ruff checks on open and save')));
     const ruff = section(host, 'Ruff');
+    ruff.appendChild(checkbox(ctx, 'tools.ruffOnSave', tr('Run ruff checks on open and save')));
     ruff.appendChild(fieldRow(tr('Line length:'), numberInput(ctx, 'tools.ruffLineLength', { placeholder: tr('from project config (88)') })));
     const ver = el('div', 'muted settings-note', tr('Bundled ruff (vendor/bin/ruff.exe)'));
     ruff.appendChild(ver);
