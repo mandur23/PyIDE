@@ -1,0 +1,5 @@
+{
+  "name": "pg",
+  "version": "8.0.0-fake",
+  "main": "index.js"
+}

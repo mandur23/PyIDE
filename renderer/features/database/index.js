@@ -283,12 +283,17 @@
     }
   }
 
-  async function loadChildren(id, key, path) {
-    lazy.set(key, { loading: true });
-    const r = await invoke('db:children', id, path);
-    if (!lazy.get(key)?.loading) return;
-    lazy.set(key, r.ok ? { nodes: r.nodes } : { error: r.error });
-    renderTree();
+  function loadChildren(id, key, path) {
+    if (lazy.get(key)?.loading) return lazy.get(key).promise;
+    const entry = { loading: true };
+    entry.promise = (async () => {
+      const r = await invoke('db:children', id, path);
+      if (lazy.get(key) !== entry) return;
+      lazy.set(key, r.ok ? { nodes: r.nodes } : { error: r.error });
+      renderTree();
+    })();
+    lazy.set(key, entry);
+    return entry.promise;
   }
 
   const forgetLazy = (id) => { for (const k of [...lazy.keys()]) if (JSON.parse(k)[0] === id) lazy.delete(k); };
@@ -365,14 +370,20 @@
     ];
   }
 
-  async function loadSchema(id) {
-    schemas.set(id, { loading: true });
-    const r = await invoke('db:schema', id);
-    if (!sourceOf(id)) return;
-    schemas.set(id, r.ok ? { schemas: r.schemas } : { error: r.error, missingDriver: r.missingDriver });
-    // A single schema (SQLite's main) opens by itself so the tables are one click away.
-    if (r.ok && r.schemas.length === 1) expanded.add(nodeKey(id, r.schemas[0].name));
-    renderTree();
+  // Loads a source's tree once; callers (the tree, console completions) share a running load.
+  function loadSchema(id) {
+    if (schemas.get(id)?.loading) return schemas.get(id).promise;
+    const entry = { loading: true };
+    entry.promise = (async () => {
+      const r = await invoke('db:schema', id);
+      if (!sourceOf(id) || schemas.get(id) !== entry) return;
+      schemas.set(id, r.ok ? { schemas: r.schemas } : { error: r.error, missingDriver: r.missingDriver });
+      // A single schema (SQLite's main) opens by itself so the tables are one click away.
+      if (r.ok && r.schemas.length === 1) expanded.add(nodeKey(id, r.schemas[0].name));
+      renderTree();
+    })();
+    schemas.set(id, entry);
+    return entry.promise;
   }
 
   function refreshSchema(id) {
@@ -633,7 +644,7 @@
 
   // ---------- console languages ----------
   // 'mongosh' is Monaco's JavaScript grammar plus the shell's show/use, without the TypeScript worker's diagnostics
-  // (which would flag `show dbs`), and completions for db methods, collection methods and collection names.
+  // (which would flag `show dbs`). Console completions live in completion.js.
   let mongosh = null;
   function registerMongosh() {
     if (mongosh) return mongosh;
@@ -648,27 +659,6 @@
       monaco.languages.setMonarchTokensProvider('mongosh', language);
       monaco.languages.setLanguageConfiguration('mongosh', mod.conf);
     })();
-    const kinds = monaco.languages.CompletionItemKind;
-    const DB = ['getCollection', 'getSiblingDB', 'runCommand', 'adminCommand', 'getCollectionNames', 'createCollection', 'dropDatabase', 'stats', 'getName'];
-    const COLL = ['find', 'findOne', 'countDocuments', 'estimatedDocumentCount', 'distinct', 'aggregate', 'insertOne', 'insertMany', 'updateOne', 'updateMany',
-      'replaceOne', 'deleteOne', 'deleteMany', 'createIndex', 'getIndexes', 'dropIndex', 'drop'];
-    const CURSOR = ['sort', 'limit', 'skip', 'project', 'hint', 'maxTimeMS', 'collation', 'toArray'];
-    monaco.languages.registerCompletionItemProvider('mongosh', {
-      triggerCharacters: ['.'],
-      provideCompletionItems(model, pos) {
-        const before = model.getLineContent(pos.lineNumber).slice(0, pos.column - 1);
-        const word = model.getWordUntilPosition(pos);
-        const range = new monaco.Range(pos.lineNumber, word.startColumn, pos.lineNumber, word.endColumn);
-        const item = (label, kind, insertText = label) => ({ label, kind, insertText, range });
-        const c = [...consoles.values()].find((x) => x.model === model);
-        const tree = c && schemas.get(c.id)?.schemas;
-        const collections = [...new Set((tree || []).flatMap((d) => (d.children || []).map((x) => x.name)))].filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
-        if (/\bdb\.[\w$]*$/.test(before)) return { suggestions: [...DB.map((m) => item(m, kinds.Method, `${m}(`)), ...collections.map((n) => item(n, kinds.Field))] };
-        if (/\bdb\.(?:[\w$]+|getCollection\([^)]*\))\.[\w$]*$/.test(before)) return { suggestions: COLL.map((m) => item(m, kinds.Method, `${m}(`)) };
-        if (/\)\s*\.[\w$]*$/.test(before)) return { suggestions: CURSOR.map((m) => item(m, kinds.Method, `${m}(`)) };
-        return { suggestions: [] };
-      },
-    });
     return mongosh;
   }
 
@@ -1162,5 +1152,42 @@
     splitStatements,
     statementAt,
     toolWindow: tw,
+    // For completion.js: console lookup and the trees the tool window loads (shared cache, refreshed after DDL).
+    completionHost: {
+      consoleFor(model) {
+        const c = [...consoles.values()].find((x) => x.model === model);
+        const source = c && sourceOf(c.id);
+        if (!source) return null;
+        const driver = driverOf(source.kind);
+        return { id: c.id, source, driver, ui: uiOf(source.kind), completion: driver?.ui?.completion || null };
+      },
+      async tree(id) {
+        if (!schemas.get(id)?.schemas) await loadSchema(id);
+        return schemas.get(id)?.schemas || [];
+      },
+      // Children of the node at path: its own children/columns, or a lazy node's loaded children.
+      async children(id, path) {
+        const tree = await this.tree(id);
+        let nodes = tree;
+        let node = null;
+        for (const name of path) {
+          node = nodes.find((n) => n.name === name);
+          if (!node) return [];
+          nodes = childNodes(node) || [];
+        }
+        if (!node?.lazy) return nodes;
+        const key = nodeKey(id, ...path);
+        if (!lazy.get(key)?.nodes) await loadChildren(id, key, path);
+        return lazy.get(key)?.nodes || [];
+      },
+      query: (id, text) => invoke('db:query', id, text, { maxRows: 200 }),
+      splitStatements,
+    },
   };
+
+  const here = document.currentScript.src.replace(/[^/]*$/, '');
+  const script = el('script');
+  script.src = `${here}completion.js`;
+  script.async = false;
+  document.body.appendChild(script);
 })();

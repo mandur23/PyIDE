@@ -91,11 +91,15 @@ export function startRespMock({ user = 'default', password = null, version = '7.
         return text;
       }
       case 'SCAN': {
-        const count = Number(a[a.findIndex((x) => x.toUpperCase() === 'COUNT') + 1]) || 10;
+        const opt = (name) => { const i = a.findIndex((x) => x.toUpperCase() === name); return i > 0 ? a[i + 1] : null; };
+        const count = Number(opt('COUNT')) || 10;
+        // Glob as Redis reads it: * and ? wildcards, a backslash escapes the next character.
+        const pattern = opt('MATCH');
+        const re = pattern && new RegExp(`^${pattern.replace(/\\(.)|([*?])|([.+^${}()|[\]])/g, (_m, esc, wild, special) => (esc ? esc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : wild ? (wild === '*' ? '.*' : '.') : `\\${special}`))}$`, 's');
         const all = [...keys.keys()].sort();
         const at = Number(a[0]);
         const next = at + count >= all.length ? '0' : String(at + count);
-        return [next, all.slice(at, at + count)];
+        return [next, all.slice(at, at + count).filter((k) => !re || re.test(k))];
       }
       case 'KEYS': return [...keys.keys()];
       case 'TYPE': return { s: keys.get(a[0])?.type || 'none' };
