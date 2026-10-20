@@ -42,5 +42,6 @@
   "Before Skipping": "건너뛰기 전",
   "Before Aborting": "중단하기 전",
   "Before Refactoring": "리팩터링 전",
-  "Before Accepting AI Edit": "AI 수정 수락 전"
+  "Before Accepting AI Edit": "AI 수정 수락 전",
+  "Cannot revert: {error}": "되돌릴 수 없습니다: {error}"
 }

@@ -4,7 +4,7 @@
 // Ctrl+F11 assigns a mnemonic, Ctrl+digit jumps, bookmarks follow edits, the Alt+2 tool window lists them, and both
 // bookmarks and history survive a restart. Then the same surfaces in Korean. Ports 9710-9712.
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdtempSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdtempSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -136,6 +136,14 @@ try {
   await click('.lh-view:not(.hidden) .lh-revert');
   await until(`ide.api.exists(ide.util.joinPath(ide.root, 'util.py'))`, 'restored file');
   check(read(file('util.py')) === beforeDelete, 'Revert recovers the deleted file with its last content');
+  // A closed file that cannot be written (read-only here) is reported in the view rather than failing silently.
+  await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'util.py'), true), true)`);
+  await until(`!ide.getDocument(ide.util.joinPath(ide.root, 'util.py'))`, 'util.py closed');
+  chmodSync(file('util.py'), 0o444);
+  await click('.lh-view:not(.hidden) .lh-revert');
+  await until(`document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent.startsWith('Cannot revert: EPERM')`, 'revert error shown', 8000)
+    .then(() => check(true, 'a revert that cannot write the file says so in the history view'), async () => check(false, `revert error shown (status: ${await js(`document.querySelector('.lh-view:not(.hidden) .lh-status')?.textContent`)})`));
+  chmodSync(file('util.py'), 0o666);
   await shot('history-project.png');
 
   // ---------- bookmarks ----------

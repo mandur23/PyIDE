@@ -174,7 +174,9 @@ function createStore(dir, root, limits, onChange) {
     fs.writeFileSync(`${indexFile}.tmp`, JSON.stringify(index));
     fs.renameSync(`${indexFile}.tmp`, indexFile);
   }
-  const scheduleSave = () => { if (!saveTimer) saveTimer = setTimeout(flush, 1000); };
+  // A closed store wrote its index at close(); work still queued then must not write a stale index over the one a
+  // store opened again for the same project (Close Project and reopen) keeps.
+  const scheduleSave = () => { if (!saveTimer && !closed) saveTimer = setTimeout(flush, 1000); };
   const readBlob = (h) => zlib.gunzipSync(fs.readFileSync(blobPath(blobDir, h)));
 
   function addRevision(rec, rev) {

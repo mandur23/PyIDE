@@ -364,7 +364,13 @@
       const targets = p ? (p.rev?.h ? [{ path: p.path, h: p.rev.h }] : []) : labelChanges(selected).map((c) => ({ path: c.path, h: c.then.h }));
       if (!targets.length) return;
       await checkpoint('Before Local History Revert', { paths: targets.map((x) => x.path) });
-      for (const x of targets) await revertFile(x.path, x.h);
+      // Writing the file can fail (read-only, locked by another program); say so instead of leaving it unexplained.
+      try {
+        for (const x of targets) await revertFile(x.path, x.h);
+      } catch (err) {
+        status.textContent = tr('Cannot revert: {error}', { error: String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') });
+        return;
+      }
       status.textContent = tr('Reverted');
     };
     revertSelBtn.onclick = async () => {
@@ -377,7 +383,8 @@
       status.textContent = tr('Reverted');
     };
 
-    const view = { reload, dispose() { disposed = true; views.delete(view); closeDiff(); } };
+    // Revision texts are kept while a history view is open, not for the rest of the session.
+    const view = { reload, dispose() { disposed = true; views.delete(view); if (!views.size) contentCache.clear(); closeDiff(); } };
     views.add(view);
     reload();
     return view;
