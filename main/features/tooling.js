@@ -8,12 +8,15 @@ function ruff(exe, args, text, file, root) {
     const cwd = root && fs.existsSync(root) ? root : path.dirname(file || exe);
     let p;
     try {
-      p = spawn(exe, [...args, '--stdin-filename', file || 'untitled.py', '-'], { cwd });
+      p = spawn(exe, [...args, '--stdin-filename', file || 'untitled.py', '-'], { cwd, windowsHide: true });
     } catch (e) {
       return resolve({ code: -1, out: '', err: e.message });
     }
     let out = '';
     let err = '';
+    // Decoded as a stream: a pipe chunk can end inside a multi-byte character (Korean text in a large file).
+    p.stdout.setEncoding('utf8');
+    p.stderr.setEncoding('utf8');
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
     p.on('error', (e) => resolve({ code: -1, out, err: e.message }));

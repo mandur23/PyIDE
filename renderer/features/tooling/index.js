@@ -81,14 +81,21 @@
     lint(tab);
   }
 
-  // Formats a file that is not open (project tree action), then lets open tabs pick up the change.
+  // Formats a file that is not open (project tree action), then lets open tabs pick up the change. The file is read
+  // and written in its own encoding, so a CP949 file keeps its Korean text.
   async function onDisk(path, channel) {
-    const text = await ide.api.read(path);
-    const r = await ide.api.invoke(channel, text, path, opts());
-    if (!r.ok) return showHint(tr(channel === 'tooling:format' ? 'Cannot reformat: {error}' : 'Cannot optimize imports: {error}', { error: r.error }), true);
-    if (r.text !== text) await ide.api.write(path, r.text);
-    await ide.reloadFromDisk([path]);
-    showHint(tr(r.text !== text ? '{name} updated' : '{name}: nothing to change', { name: basename(path) }));
+    const failed = (error) => showHint(tr(channel === 'tooling:format' ? 'Cannot reformat: {error}' : 'Cannot optimize imports: {error}', { error }), true);
+    try {
+      const file = await ide.api.invoke('fs:readText', path);
+      if (file.text === undefined) return;
+      const r = await ide.api.invoke(channel, file.text, path, opts());
+      if (!r.ok) return failed(r.error);
+      if (r.text !== file.text) await ide.api.invoke('fs:writeText', path, r.text, file.encoding);
+      await ide.reloadFromDisk([path]);
+      showHint(tr(r.text !== file.text ? '{name} updated' : '{name}: nothing to change', { name: basename(path) }));
+    } catch (err) {
+      failed(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    }
   }
 
   // ---------- lint ----------

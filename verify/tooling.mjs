@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdtempSync, readFileSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -87,6 +87,21 @@ try {
   check((await line(3)) === 'x=1' && (await line(6)) === 'y = [1,2]', 'with a selection only the selected lines are reformatted (--range)');
   await press('Ctrl+Alt+L');
   await sleep(300);
+
+  // ruff's output arrives in pipe chunks; a chunk boundary inside a Korean character must not break it.
+  const big = await js(`(async () => { const text = 'x = "한글 텍스트"\\n'.repeat(20000); const r = await ide.api.invoke('tooling:format', text, ide.util.joinPath(ide.root, 'big.py'), { root: ide.root }); return r.ok && r.text === text; })()`);
+  check(big, 'reformatting a large file with Korean text keeps every character');
+  // Reformat from the project tree rewrites a closed CP949 file in CP949 ('# 한글' is c7 d1 b1 db).
+  const cp949 = (code) => Buffer.concat([Buffer.from('# '), Buffer.from('c7d1b1db', 'hex'), Buffer.from(`\n${code}\n`)]).toString('hex');
+  writeFileSync(path.join(t.project, 'korean.py'), Buffer.from(cp949('x=1'), 'hex'));
+  await js(`ide.refreshTree()`);
+  const treeRow = `[...document.querySelectorAll('#tree .node')].find((n) => n.querySelector('.name').textContent === 'korean.py')`;
+  await until(`!!${treeRow}`, 'korean.py in the tree');
+  await js(`(() => { const n = ${treeRow}; const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
+  await until(`!!document.querySelector('.context-menu')`, 'tree context menu');
+  await clickText('.context-menu .menu-item', 'Reformat Code');
+  await until(`document.querySelector('#toolingHint').textContent.includes('korean.py updated')`, 'korean.py reformatted');
+  check(readFileSync(path.join(t.project, 'korean.py')).toString('hex') === cp949('x = 1'), 'Reformat Code on a closed CP949 file keeps its encoding');
 
   // ---------- Optimize Imports ----------
   await openFile(t, 'imports.py');
