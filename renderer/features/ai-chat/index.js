@@ -225,16 +225,19 @@
 
   let saveTimer = null;
   let saving = Promise.resolve();
+  // Writes `hist` as the history of `root`; both are passed in, since the project may change before it runs.
+  function persist(root, hist) {
+    const chats = hist.chats.filter((c) => c.messages.length).map((c) => ({
+      ...c, messages: c.messages.map(({ pending: _p, ...m }) => m),
+    }));
+    saving = ide.api.invoke('ai-chat:saveHistory', root, { current: hist.current, chats }).catch((err) => ide.log.warn(`ai-chat: ${err.message}`));
+  }
   function save() {
     clearTimeout(saveTimer);
     const root = ide.root;
+    const hist = history;
     if (!root || loadedFor !== root) return;
-    saveTimer = setTimeout(() => {
-      const chats = history.chats.filter((c) => c.messages.length).map((c) => ({
-        ...c, messages: c.messages.map(({ pending: _p, ...m }) => m),
-      }));
-      saving = ide.api.invoke('ai-chat:saveHistory', root, { current: history.current, chats }).catch((err) => ide.log.warn(`ai-chat: ${err.message}`));
-    }, 200);
+    saveTimer = setTimeout(() => persist(root, hist), 200);
   }
 
   async function loadHistory() {
@@ -321,6 +324,8 @@
     if (!text || pending) return;
     if (!ide.root) return setStatus(tr('Open a project to chat about it.'), 'error');
     if (loadedFor !== ide.root) await loadHistory();
+    const project = ide.root;
+    const hist = history;
     const chat = currentChat() || newChat();
     const context = await gatherContext(text);
     chat.messages.push({ role: 'user', text, at: Date.now(), context: context.map(({ text: _t, language: _l, ...c }) => c) });
@@ -347,6 +352,8 @@
     else reply.error = errorText(res);
     if (pending?.reqId === reqId) pending = null;
     chat.updated = Date.now();
+    // Another project was opened meanwhile: the reply belongs to the chat history of the one it was asked in.
+    if (history !== hist) { persist(project, hist); renderAll(); return; }
     renderAll();
     save();
   }
@@ -614,7 +621,16 @@
   });
 
   ide.on('activeTabChanged', () => { chips.hideCurrent = null; renderChips(); });
-  ide.on('projectOpened', () => { fileList = null; chips.selection = null; chips.mentions = []; loadHistory(); });
+  ide.on('projectOpened', () => {
+    fileList = null;
+    chips.selection = null;
+    chips.mentions = [];
+    // A reply still streaming is stopped (and kept in the previous project's history), and a commit message being
+    // written for the previous project must not land in this one's commit box.
+    stop();
+    if (commitReq) { commitReq.edited = true; ide.api.invoke('ai-chat:cancel', commitReq.reqId); }
+    loadHistory();
+  });
 
   // ---------- commit messages ----------
   let commitReq = null;

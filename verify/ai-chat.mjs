@@ -231,6 +231,28 @@ try {
   const hist = await js(`ide.api.invoke('ai-chat:loadHistory', ide.root)`);
   check(hist.chats.length === 2 && hist.chats.some((c) => c.id === firstId && c.messages.length === 4), `chats are saved per project (${hist.chats.length} chats)`);
 
+  // ---------- opening another project while a reply streams ----------
+  await js('ide.saveAll()');
+  const home = t.project;
+  const elsewhere = mkdtempSync(path.join(tmpdir(), 'pyide-ai-chat-other-'));
+  writeFileSync(path.join(elsewhere, 'other.py'), 'x = 1\n');
+  scenario({ chat: { reply: LONG, chunkMs: 150 } });
+  await js(`(document.querySelector('.aic-input').focus(), true)`);
+  await type('switch test');
+  await press('Enter');
+  await until(`(ide.aiChat.state().messages.at(-1)?.text.length || 0) > 20`, 'reply streaming before the switch', 15000);
+  await js(`(window.confirm = () => true, ide.openProject(${JSON.stringify(elsewhere)}).then(() => true))`);
+  await until(`!ide.aiChat.state().pending && ide.aiChat.state().root?.toLowerCase() === ${JSON.stringify(elsewhere.toLowerCase())}`, 'other project loaded', 10000);
+  check((await state()).messages.length === 0, 'the other project starts with its own chats, and is not blocked by the reply of the previous one');
+  await js('ide.aiChat.saved()');
+  const homeHist = await js(`ide.api.invoke('ai-chat:loadHistory', ${JSON.stringify(home)})`);
+  const asked = homeHist.chats.find((c) => c.messages.some((m) => m.text === 'switch test'));
+  const answer = asked?.messages.at(-1);
+  check(answer?.role === 'assistant' && answer.stopped && answer.text.length > 20 && homeHist.chats.length === 3,
+    `the reply in progress is stopped and kept in the previous project's history (${answer?.text.length} chars, ${homeHist.chats.length} chats)`);
+  await js(`ide.openProject(${JSON.stringify(home)}).then(() => true)`);
+  await until(`ide.aiChat.state().root?.toLowerCase() === ${JSON.stringify(home.toLowerCase())}`, 'back to the project', 10000);
+
   // ---------- commit message from the staged diff ----------
   await js('ide.saveAll()');
   const git = (...a) => execFileSync('git', a, { cwd: t.project, encoding: 'utf8' });
