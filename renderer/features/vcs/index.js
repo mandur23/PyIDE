@@ -214,6 +214,10 @@
   // ---------- Commit tool window ----------
   const included = new Map(); // lower path -> explicit checkbox choice
   const selection = new Set(); // lower paths selected in the changes list
+  // A group lists its first rows only: a venv or data folder missing from .gitignore makes tens of thousands of
+  // unversioned files, and rebuilding a row for each on every refresh and click took seconds. "Show more" doubles it.
+  const GROUP_ROWS = 300;
+  const groupRows = new Map(); // group title -> rows shown
   let listEl, msgEl, initBox, commitBody, headerEl;
   // Conflicted files are left out until resolved: committing one as is would record its conflict markers.
   const fileIncluded = (f) => f.status !== 'conflict' && (included.get(key(f.path)) ?? f.status !== 'unversioned');
@@ -310,7 +314,8 @@
       head.appendChild(link);
     }
     listEl.appendChild(head);
-    for (const f of files) {
+    const limit = groupRows.get(title) || GROUP_ROWS;
+    for (const f of files.slice(0, limit)) {
       const row = el('div', 'vcs-file' + (selection.has(key(f.path)) ? ' selected' : ''));
       row.dataset.path = f.path;
       row.dataset.status = f.status;
@@ -334,6 +339,14 @@
       };
       row.ondblclick = () => openChange(f.path);
       listEl.appendChild(row);
+    }
+    if (files.length > limit) {
+      const more = el('a', 'vcs-more', tr('Show {n} more', { n: Math.min(limit, files.length - limit) }));
+      more.href = '#';
+      more.onclick = (e) => { e.preventDefault(); groupRows.set(title, limit * 2); renderChanges(); };
+      const moreRow = el('div', 'vcs-more-row');
+      moreRow.append(more, el('span', 'muted', tr('{shown} of {total}', { shown: limit, total: files.length })));
+      listEl.appendChild(moreRow);
     }
   }
 
@@ -1332,6 +1345,7 @@
     byPath.clear();
     included.clear();
     selection.clear();
+    groupRows.clear();
     headCache.clear();
     gutters.clear();
     blames.clear();

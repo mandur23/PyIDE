@@ -144,5 +144,7 @@
   "Cherry-picking": "체리픽 중",
   "Reverting": "되돌리는 중",
   "Merge Conflicts": "병합 충돌",
-  "Resolve": "해결"
+  "Resolve": "해결",
+  "Show {n} more": "{n}개 더 보기",
+  "{shown} of {total}": "{total}개 중 {shown}개"
 }

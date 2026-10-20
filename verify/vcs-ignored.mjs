@@ -52,6 +52,23 @@ try {
   await until(`document.documentElement.dataset.theme === 'light'`, 'light');
   check(await color('secret.env') === 'rgb(194, 106, 0)', 'the light theme uses a darker orange');
   await shot('ignored-light.png');
+
+  // A data folder missing from .gitignore: the Commit window lists the first rows of a big group and more on request.
+  mkdirSync(path.join(p, 'data'));
+  for (let i = 0; i < 700; i++) writeFileSync(path.join(p, 'data', `f${String(i).padStart(3, '0')}.csv`), 'x');
+  await js(`(ide.toolWindows.get('Commit').show(), true)`);
+  await js('ide.vcs.refresh().then(() => true)');
+  await until(`ide.vcs.repo()?.files.filter((f) => f.status === 'unversioned').length > 700`, 'data files in the status');
+  const unversionedRows = `[...document.querySelectorAll('.vcs-changes .vcs-file')].filter((r) => r.dataset.status === 'unversioned').length`;
+  const total = await js(`ide.vcs.repo().files.filter((f) => f.status === 'unversioned').length`);
+  check(await js(unversionedRows) === 300 && await js(`document.querySelector('.vcs-more')?.textContent`) === 'Show 300 more',
+    `a group of ${total} unversioned files shows 300 rows and a "Show 300 more" link`);
+  await js(`document.querySelector('.vcs-more').click()`);
+  check(await js(unversionedRows) === 600 && await js(`document.querySelector('.vcs-more')?.textContent`) === `Show ${total - 600} more`, 'the link shows more rows');
+  await js(`[...document.querySelectorAll('.vcs-group')].find((g) => g.textContent.includes('Unversioned')).querySelector('input').click()`);
+  check(await js(`ide.vcs.includedFiles().filter((f) => f.status === 'unversioned').length`) === total, 'the group checkbox still includes every file of the group, shown or not');
+  await js('ide.vcs.refresh().then(() => true)');
+  check(await js(unversionedRows) === 600, 'a refresh keeps the rows shown');
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${JSON.stringify(t.consoleErrors)}` : ''}`);
 } catch (err) {
   check(false, err.message);

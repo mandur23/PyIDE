@@ -50,6 +50,9 @@
 .vcs-commit-header:empty { display: none; }
 .vcs-resolve-link { color: var(--blue6); text-decoration: none; cursor: pointer; }
 .vcs-resolve-link:hover { text-decoration: underline; }
+.vcs-more-row { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px 0 26px; white-space: nowrap; font-size: 12px; }
+.vcs-more { color: var(--blue6); text-decoration: none; cursor: pointer; }
+.vcs-more:hover { text-decoration: underline; }
 .vcs-group.vcs-conflicts .vcs-group-title { color: var(--vcs-conflict); }
 
 /* editor gutter markers (between line numbers and code, like PyCharm) */
