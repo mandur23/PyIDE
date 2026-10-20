@@ -221,18 +221,27 @@ function renderPopup() {
   if (!items.length) list.appendChild(el('div', 'popup-item hint', tr('Nothing found')));
 }
 
+// Where the keyboard goes when a popup or dialog closes: back to the element that had it if it is still shown, else the
+// editor; never left on the closed popup's hidden input, where keys would go nowhere.
+const focusBack = (prev) => {
+  if (prev?.isConnected && prev !== document.body && prev.getClientRects().length) prev.focus();
+  else ide.editor?.focus();
+};
+
 function closePopup(value = null) {
   if (!popupState) return;
-  const { resolve } = popupState;
+  const { resolve, prevFocus } = popupState;
   popupState = null;
   $('popup').classList.add('hidden');
+  if (document.activeElement === $('popupIn')) focusBack(prevFocus);
   resolve(value);
 }
 
 function openPopup(state) {
+  const prevFocus = popupState ? popupState.prevFocus : document.activeElement;
   if (popupState) closePopup();
   return new Promise((resolve) => {
-    popupState = { ...state, resolve };
+    popupState = { ...state, resolve, prevFocus };
     $('popupIn').placeholder = state.placeholder || '';
     $('popupIn').value = state.initial || '';
     $('popup').classList.remove('hidden');
@@ -265,7 +274,8 @@ $('popupIn').oninput = () => (popupState?.onQuery ? popupState.onQuery() : popup
 $('popupIn').onkeydown = (e) => {
   if (!popupState) return;
   if (e.key === 'Escape') { e.stopPropagation(); return closePopup(); }
-  if (popupState.mode === 'prompt') { if (e.key === 'Enter') closePopup($('popupIn').value.trim() || null); return; }
+  // preventDefault: the Enter must not also reach the editor that gets the keyboard back.
+  if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup($('popupIn').value.trim() || null); } return; }
   const rows = [...$('popupList').querySelectorAll('.popup-item:not(.hint)')];
   const i = rows.findIndex((r) => r.classList.contains('active'));
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -410,25 +420,49 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   // A string body is text: messages carry names (run configurations, files) that must never become markup.
   if (typeof body === 'string') content.textContent = body; else if (body) content.appendChild(body);
   const foot = el('div', 'dialog-buttons');
+  const prevFocus = document.activeElement;
   const dlg = {
     el: box,
     body: content,
-    close() { backdrop.remove(); removeEventListener('keydown', onKey, true); onClose?.(); },
+    close() {
+      const hadFocus = box.contains(document.activeElement) || document.activeElement === document.body;
+      backdrop.remove();
+      removeEventListener('keydown', onKey, true);
+      if (hadFocus) focusBack(prevFocus);
+      onClose?.();
+    },
   };
   for (const b of buttons) {
     const btn = el('button', b.primary ? 'primary' : 'secondary', b.label);
     btn.onclick = async () => { if ((await b.run?.(dlg)) !== false) dlg.close(); };
     foot.appendChild(btn);
   }
+  const shown = (n) => !n.disabled && n.getClientRects().length > 0;
+  // Only the topmost dialog takes keys, and none while a menu opened from it is up (the menu's Esc and Enter come first).
+  // Tab and Shift+Tab cycle inside it (never into the editor behind); Enter on a focused button presses that button, in
+  // a textarea it is a new line, and while an IME composes it commits the text.
   const onKey = (e) => {
+    if (backdrop !== $('dialogHost').lastElementChild || menusOpen()) return;
     if (e.key === 'Escape') { e.stopPropagation(); dlg.close(); }
-    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') { e.stopPropagation(); foot.querySelector('.primary')?.click(); }
+    if (e.key === 'Enter' && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) {
+      e.preventDefault(); // the keystroke must not also type into the field that gets the keyboard back
+      e.stopPropagation();
+      foot.querySelector('.primary')?.click();
+    }
+    if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.target.closest?.('.monaco-editor')) {
+      const stops = [...box.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')].filter((n) => n.tabIndex >= 0 && shown(n));
+      const i = stops.indexOf(document.activeElement);
+      if (i !== -1 && i !== (e.shiftKey ? 0 : stops.length - 1)) return;
+      e.preventDefault();
+      stops[e.shiftKey ? stops.length - 1 : 0]?.focus();
+    }
   };
   addEventListener('keydown', onKey, true);
   box.append(head, content, foot);
   backdrop.appendChild(box);
   $('dialogHost').appendChild(backdrop);
-  content.querySelector('input,select,textarea')?.focus();
+  // The keyboard starts in the first field, or on the primary button of a dialog without fields.
+  ([...content.querySelectorAll('input,select,textarea')].find(shown) || foot.querySelector('.primary') || foot.querySelector('button'))?.focus();
   return dlg;
 };
 // A message in the IDE's own dialog. window.alert() blocks the whole renderer until it is dismissed.
