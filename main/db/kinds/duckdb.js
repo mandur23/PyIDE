@@ -2,6 +2,65 @@
 // addon, so the same win32-x64 build loads in Electron's Node). See main/db/drivers.js for the kind module contract.
 const path = require('path');
 
+// Console completion data (ui.completion): DuckDB keywords, functions (file readers, lists, structs, dates), and types.
+const list = (s) => s.split(/\s*,\s*/).filter(Boolean);
+const COMPLETION = {
+  keywords: list(`SELECT, FROM, WHERE, GROUP BY, GROUP BY ALL, HAVING, ORDER BY, ORDER BY ALL, ASC, DESC, NULLS FIRST, NULLS LAST,
+    LIMIT, OFFSET, DISTINCT, DISTINCT ON, AS, JOIN, INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, POSITIONAL JOIN,
+    ASOF JOIN, ASOF LEFT JOIN, SEMI JOIN, ANTI JOIN, LATERAL, ON, USING, UNION, UNION ALL, UNION BY NAME, UNION ALL BY NAME, INTERSECT,
+    EXCEPT, QUALIFY, WINDOW, OVER, PARTITION BY, ROWS BETWEEN, RANGE BETWEEN, UNBOUNDED PRECEDING, CURRENT ROW, FILTER, PIVOT,
+    UNPIVOT, PIVOT_LONGER, PIVOT_WIDER, EXCLUDE, REPLACE, COLUMNS, USING SAMPLE, TABLESAMPLE, REPEATABLE, INSERT INTO,
+    INSERT OR REPLACE INTO, INSERT OR IGNORE INTO, BY NAME, VALUES, RETURNING, ON CONFLICT DO NOTHING, ON CONFLICT DO UPDATE SET,
+    UPDATE, SET, DELETE FROM, CREATE TABLE, CREATE OR REPLACE TABLE, CREATE TEMP TABLE, CREATE VIEW, CREATE OR REPLACE VIEW,
+    CREATE MACRO, CREATE SEQUENCE, CREATE SCHEMA, CREATE TYPE, CREATE INDEX, CREATE SECRET, ALTER TABLE, ADD COLUMN, DROP COLUMN,
+    RENAME COLUMN, RENAME TO, DROP TABLE, DROP VIEW, DROP MACRO, IF EXISTS, IF NOT EXISTS, PRIMARY KEY, FOREIGN KEY, REFERENCES,
+    UNIQUE, CHECK, DEFAULT, NOT NULL, NULL, IS NULL, IS NOT NULL, IS DISTINCT FROM, IS NOT DISTINCT FROM, AND, OR, NOT, IN, EXISTS,
+    BETWEEN, LIKE, ILIKE, GLOB, SIMILAR TO, CASE, WHEN, THEN, ELSE, END, WITH, WITH RECURSIVE, MATERIALIZED, COPY, TO, FORMAT,
+    HEADER, DELIMITER, PARTITION_BY, ATTACH, DETACH, USE, INSTALL, LOAD, FORCE INSTALL, EXPORT DATABASE, IMPORT DATABASE, DESCRIBE,
+    SUMMARIZE, SHOW TABLES, SHOW ALL TABLES, SHOW DATABASES, PRAGMA, SET, RESET, EXPLAIN, EXPLAIN ANALYZE, BEGIN TRANSACTION, COMMIT,
+    ROLLBACK, CHECKPOINT, VACUUM, LAMBDA, STRUCT, MAP, INTERVAL`),
+  functions: [
+    'read_csv_auto(path[, options])', 'read_csv(path[, options])', 'read_parquet(path[, options])', 'read_json_auto(path[, options])',
+    'read_json(path[, options])', 'read_ndjson(path[, options])', 'read_text(path)', 'read_blob(path)', 'parquet_schema(path)',
+    'parquet_metadata(path)', 'glob(pattern)', 'sniff_csv(path)', 'list_value(value[, ...])', 'list_concat(list1, list2)',
+    'list_contains(list, element)', 'list_has_any(list1, list2)', 'list_has_all(list1, list2)', 'list_extract(list, index)',
+    'list_slice(list, begin, end[, step])', 'list_sort(list[, order[, nulls]])', 'list_reverse_sort(list)', 'list_distinct(list)',
+    'list_unique(list)', 'list_aggregate(list, name)', 'list_transform(list, lambda)', 'list_filter(list, lambda)',
+    'list_reduce(list, lambda)', 'list_position(list, element)', 'list_reverse(list)', 'list_zip(list1, list2[, ...])',
+    'list_sum(list)', 'list_min(list)', 'list_max(list)', 'list_avg(list)', 'list_count(list)', 'list_string_agg(list)', 'len(list)',
+    'unnest(list[, recursive := true])', 'flatten(list_of_lists)', 'array_agg(expr)', 'struct_pack(name := value[, ...])',
+    'struct_extract(struct, entry)', 'struct_insert(struct, name := value)', 'row(value[, ...])', 'map(keys, values)',
+    'map_from_entries(list)', 'map_keys(map)', 'map_values(map)', 'map_extract(map, key)', 'strftime(timestamp, format)',
+    'strptime(text, format)', 'try_strptime(text, format)', 'date_trunc(part, date)', 'date_part(part, date)', 'date_diff(part, start, end)',
+    'date_sub(part, start, end)', 'date_add(date, interval)', 'datediff(part, start, end)', 'make_date(year, month, day)',
+    'make_timestamp(year, month, day, hour, minute, seconds)', 'epoch(timestamp)', 'epoch_ms(milliseconds)', 'to_timestamp(seconds)',
+    'current_date', 'current_timestamp', 'now()', 'today()', 'age(timestamp1[, timestamp2])', 'time_bucket(width, timestamp[, origin])',
+    'last_day(date)', 'dayname(date)', 'monthname(date)', 'generate_series(start, stop[, step])', 'range(start, stop[, step])',
+    'string_split(string, separator)', 'string_agg(arg, separator)', 'concat(value[, ...])', 'concat_ws(separator, value[, ...])',
+    'regexp_matches(string, pattern[, options])', 'regexp_replace(string, pattern, replacement[, options])',
+    'regexp_extract(string, pattern[, group[, options]])', 'regexp_split_to_array(string, pattern)', 'contains(string, search)',
+    'starts_with(string, prefix)', 'ends_with(string, suffix)', 'lower(string)', 'upper(string)', 'length(string)',
+    'substring(string, start[, length])', 'trim(string[, characters])', 'replace(string, source, target)',
+    'split_part(string, separator, index)', 'format(format, value[, ...])', 'printf(format, value[, ...])',
+    'lpad(string, count, character)', 'rpad(string, count, character)', 'levenshtein(string1, string2)',
+    'jaro_winkler_similarity(string1, string2)', 'md5(value)', 'sha256(value)', 'hash(value)', 'coalesce(value[, ...])',
+    'ifnull(expr, other)', 'nullif(a, b)', 'greatest(value[, ...])', 'least(value[, ...])', 'try_cast(expr AS type)', 'typeof(expr)',
+    'count(expr)', 'count_star()', 'sum(expr)', 'avg(expr)', 'min(expr)', 'max(expr)', 'median(expr)', 'mode(expr)',
+    'quantile_cont(expr, position)', 'quantile_disc(expr, position)', 'approx_count_distinct(expr)', 'approx_quantile(expr, position)',
+    'arg_max(arg, value)', 'arg_min(arg, value)', 'max_by(arg, value)', 'min_by(arg, value)', 'first(expr)', 'last(expr)',
+    'any_value(expr)', 'list(expr)', 'histogram(expr)', 'bool_and(expr)', 'bool_or(expr)', 'stddev(expr)', 'variance(expr)',
+    'corr(y, x)', 'regr_slope(y, x)', 'row_number()', 'rank()', 'dense_rank()', 'percent_rank()', 'ntile(buckets)',
+    'lag(expr[, offset[, default]])', 'lead(expr[, offset[, default]])', 'first_value(expr)', 'last_value(expr)', 'nth_value(expr, n)',
+    'round(number[, digits])', 'floor(number)', 'ceil(number)', 'abs(number)', 'sqrt(number)', 'pow(base, exponent)', 'ln(number)',
+    'log10(number)', 'random()', 'setseed(seed)', 'uuid()', 'gen_random_uuid()', 'json_extract(json, path)',
+    'json_extract_string(json, path)', 'json_keys(json)', 'json_array_length(json)', 'json_structure(json)', 'json_transform(json, structure)',
+    'to_json(value)', 'json_object(key, value[, ...])', 'duckdb_tables()', 'duckdb_columns()', 'duckdb_settings()', 'duckdb_extensions()',
+  ].map((signature) => ({ name: signature.match(/^\w+/)[0], signature })),
+  dataTypes: list(`BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT, UHUGEINT, FLOAT, DOUBLE,
+    DECIMAL(p, s), VARCHAR, BLOB, BIT, DATE, TIME, TIMETZ, TIMESTAMP, TIMESTAMPTZ, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS, INTERVAL,
+    UUID, JSON, ENUM, LIST, ARRAY, STRUCT, MAP, UNION, VARIANT, GEOMETRY`),
+};
+
 module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
   // DuckDB locks a database file per process, so connections to one file share an instance; the last close
   // releases the file for other programs (a Python script using duckdb, say).
@@ -117,6 +176,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
         ],
         ui: {
           fileOptional: 'memory',
+          completion: COMPLETION,
           description: "Embedded analytical database in a file or in memory. It queries CSV, Parquet and JSON files directly, e.g. SELECT * FROM read_csv_auto('data.csv').",
         },
       },

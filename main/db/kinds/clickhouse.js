@@ -15,6 +15,66 @@ function tsvValue(raw, type) {
   return s;
 }
 
+// Console completion data (ui.completion): ClickHouse keywords, engines and formats, functions, and types.
+const list = (s) => s.split(/\s*,\s*/).filter(Boolean);
+const COMPLETION = {
+  keywords: list(`SELECT, FROM, WHERE, PREWHERE, GROUP BY, WITH ROLLUP, WITH CUBE, WITH TOTALS, GROUPING SETS, HAVING, ORDER BY, ASC,
+    DESC, NULLS FIRST, NULLS LAST, WITH FILL, LIMIT, LIMIT BY, OFFSET, DISTINCT, DISTINCT ON, AS, FINAL, SAMPLE, ARRAY JOIN,
+    LEFT ARRAY JOIN, JOIN, INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, ANY JOIN, ALL JOIN, ASOF JOIN, SEMI JOIN,
+    ANTI JOIN, PASTE JOIN, GLOBAL JOIN, GLOBAL IN, ON, USING, UNION ALL, UNION DISTINCT, INTERSECT, EXCEPT, WITH, WINDOW, OVER,
+    PARTITION BY, ROWS BETWEEN, QUALIFY, SETTINGS, FORMAT, INTO OUTFILE, INSERT INTO, VALUES, CREATE TABLE, CREATE DATABASE,
+    CREATE VIEW, CREATE MATERIALIZED VIEW, CREATE DICTIONARY, CREATE FUNCTION, ENGINE, ON CLUSTER, PRIMARY KEY, TTL, CODEC,
+    ALTER TABLE, ADD COLUMN, DROP COLUMN, MODIFY COLUMN, RENAME COLUMN, COMMENT COLUMN, ADD INDEX, UPDATE, DELETE, DELETE FROM,
+    DETACH, ATTACH, OPTIMIZE TABLE, DEDUPLICATE, TRUNCATE TABLE, DROP TABLE, DROP DATABASE, RENAME TABLE, EXCHANGE TABLES,
+    SHOW TABLES, SHOW DATABASES, SHOW CREATE TABLE, SHOW PROCESSLIST, DESCRIBE TABLE, EXPLAIN, EXPLAIN PIPELINE, EXISTS, KILL QUERY,
+    SYSTEM, SYSTEM FLUSH LOGS, IF EXISTS, IF NOT EXISTS, AND, OR, NOT, IN, NOT IN, BETWEEN, LIKE, ILIKE, IS NULL, IS NOT NULL, CASE,
+    WHEN, THEN, ELSE, END, INTERVAL, MergeTree, ReplacingMergeTree, SummingMergeTree, AggregatingMergeTree, CollapsingMergeTree,
+    VersionedCollapsingMergeTree, ReplicatedMergeTree, Distributed, Memory, Log, TinyLog, Null, Buffer, Kafka, JSONEachRow,
+    JSONCompact, CSV, CSVWithNames, TabSeparated, TabSeparatedWithNames, Parquet, Arrow, ORC, Native, Pretty, PrettyCompact, Vertical`),
+  functions: [
+    'toDate(expr)', 'toDate32(expr)', 'toDateTime(expr[, timezone])', 'toDateTime64(expr, precision[, timezone])',
+    'toDateOrNull(expr)', 'toString(value)', 'toInt32(value)', 'toInt64(value)', 'toUInt32(value)', 'toUInt64(value)',
+    'toFloat64(value)', 'toDecimal64(value, scale)', 'toTypeName(value)', 'toStartOfMinute(datetime)', 'toStartOfFiveMinutes(datetime)',
+    'toStartOfHour(datetime)', 'toStartOfDay(datetime)', 'toStartOfWeek(date[, mode])', 'toStartOfMonth(date)', 'toStartOfQuarter(date)',
+    'toStartOfYear(date)', 'toStartOfInterval(datetime, INTERVAL n unit)', 'toMonday(date)', 'toYear(date)', 'toMonth(date)',
+    'toDayOfMonth(date)', 'toDayOfWeek(date)', 'toHour(datetime)', 'toMinute(datetime)', 'toYYYYMM(date)', 'toYYYYMMDD(date)',
+    'toUnixTimestamp(datetime)', 'fromUnixTimestamp(seconds)', 'now()', 'now64([precision])', 'today()', 'yesterday()',
+    'dateDiff(unit, start, end)', 'dateAdd(unit, value, date)', 'dateSub(unit, value, date)', 'dateTrunc(unit, datetime)',
+    'formatDateTime(datetime, format[, timezone])', 'parseDateTimeBestEffort(string[, timezone])', 'count()', 'uniq(x[, ...])',
+    'uniqExact(x[, ...])', 'uniqCombined(x[, ...])', 'uniqHLL12(x[, ...])', 'sum(x)', 'avg(x)', 'min(x)', 'max(x)', 'any(x)', 'anyLast(x)',
+    'argMax(arg, value)', 'argMin(arg, value)', 'groupArray(x)', 'groupArray(max_size)(x)', 'groupUniqArray(x)', 'groupArraySample(n)(x)',
+    'quantile(level)(x)', 'quantiles(level1, level2[, ...])(x)', 'quantileExact(level)(x)', 'median(x)', 'topK(n)(x)', 'countIf(condition)',
+    'sumIf(x, condition)', 'avgIf(x, condition)', 'uniqIf(x, condition)', 'sumMap(keys, values)', 'histogram(bins)(x)',
+    'stddevPop(x)', 'varPop(x)', 'corr(x, y)', 'arrayJoin(array)', 'arrayMap(func, array)', 'arrayFilter(func, array)',
+    'arrayExists(func, array)', 'arrayAll(func, array)', 'arraySort([func,] array)', 'arrayReverseSort([func,] array)',
+    'arrayDistinct(array)', 'arrayConcat(array1, array2[, ...])', 'arraySlice(array, offset[, length])', 'arrayReduce(agg_name, array)',
+    'arrayEnumerate(array)', 'arrayFlatten(array)', 'arrayZip(array1, array2[, ...])', 'arrayStringConcat(array[, separator])',
+    'has(array, element)', 'hasAny(array1, array2)', 'hasAll(array1, array2)', 'indexOf(array, element)', 'length(value)',
+    'empty(value)', 'notEmpty(value)', 'range([start,] end[, step])', 'splitByChar(separator, string)',
+    'splitByString(separator, string)', 'concat(value1, value2[, ...])', 'substring(string, offset[, length])', 'lower(string)',
+    'upper(string)', 'trim(string)', 'trimBoth(string)', 'replaceAll(haystack, pattern, replacement)',
+    'replaceRegexpAll(haystack, pattern, replacement)', 'match(haystack, pattern)', 'extract(haystack, pattern)',
+    'extractAll(haystack, pattern)', 'position(haystack, needle)', 'positionCaseInsensitive(haystack, needle)', 'lengthUTF8(string)',
+    'format(pattern, value[, ...])', 'leftPad(string, length[, pad])', 'base64Encode(string)', 'base64Decode(string)',
+    'JSONExtractString(json, key[, ...])', 'JSONExtractInt(json, key[, ...])', 'JSONExtractFloat(json, key[, ...])',
+    'JSONExtract(json, key[, ...], type)', 'JSONExtractKeys(json[, key])', 'JSONHas(json, key[, ...])', 'if(condition, then, else)',
+    'multiIf(condition1, then1[, condition2, then2 ...], else)', 'ifNull(x, alternative)', 'coalesce(x[, ...])', 'nullIf(x, y)',
+    'isNull(x)', 'isNotNull(x)', 'assumeNotNull(x)', 'cityHash64(value[, ...])', 'sipHash64(value[, ...])', 'xxHash64(value)',
+    'MD5(string)', 'SHA256(string)', 'rand()', 'rand64()', 'generateUUIDv4()', 'round(x[, n])', 'floor(x[, n])', 'ceil(x[, n])',
+    'intDiv(a, b)', 'modulo(a, b)', 'abs(x)', 'greatest(a, b)', 'least(a, b)', 'exp(x)', 'log(x)', 'sqrt(x)', 'pow(x, y)',
+    'dictGet(dictionary, attribute, key)', 'dictGetOrDefault(dictionary, attribute, key, default)', 'row_number()', 'rank()',
+    'dense_rank()', 'lagInFrame(x[, offset[, default]])', 'leadInFrame(x[, offset[, default]])', 'numbers(n)', 'numbers(start, count)',
+    'file(path[, format[, structure]])', 'url(url, format[, structure])', 's3(path[, access_key, secret_key][, format[, structure]])',
+    'remote(addresses, database, table)', 'generateRandom(structure)', 'input(structure)', 'currentDatabase()', 'version()',
+    'hostName()', 'formatReadableSize(bytes)', 'formatReadableQuantity(number)', 'formatReadableTimeDelta(seconds)',
+  ].map((signature) => ({ name: signature.match(/^\w+/)[0], signature })),
+  dataTypes: list(`UInt8, UInt16, UInt32, UInt64, UInt128, UInt256, Int8, Int16, Int32, Int64, Int128, Int256, Float32, Float64,
+    BFloat16, Decimal(P, S), Decimal32(S), Decimal64(S), Decimal128(S), Decimal256(S), Bool, String, FixedString(N), UUID, Date,
+    Date32, DateTime, DateTime(timezone), DateTime64(precision[, timezone]), Time, Enum8, Enum16, LowCardinality(T), Nullable(T),
+    Array(T), Tuple(T1[, ...]), Map(K, V), Nested, JSON, Dynamic, Variant(T1[, ...]), IPv4, IPv6, AggregateFunction(name, T),
+    SimpleAggregateFunction(name, T), Point, Ring, Polygon, MultiPolygon, Interval`),
+};
+
 module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
   // Statements that answer with rows; everything else (DDL, INSERT, SET...) is sent as a command.
   const ROWS = new Set(['SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'EXISTS', 'VALUES']);
@@ -101,6 +161,7 @@ module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIE
           { key: 'https', label: 'Use HTTPS', type: 'checkbox', default: false },
           user, password, database,
         ],
+        ui: { completion: COMPLETION },
       },
     },
   };

@@ -2,7 +2,8 @@
 // Pure checks of the T-SQL GO splitter, the Oracle script splitter (PL/SQL blocks) and ClickHouse value typing; then
 // in the app: DuckDB end to end (Download Driver into a temp driver directory, tables, queries, read_csv_auto, schema
 // tree, Open Data), and for the server kinds the dialog fields, the driver download, a refused connection and a
-// server that drops the connection mid-handshake (the main process must survive). Korean dialogs after a restart.
+// server that drops the connection mid-handshake (the main process must survive), the console completion lists each
+// kind serves through db:drivers, and Korean dialogs after a restart.
 // DB_SQL_REAL=1 also connects to the public ClickHouse playground (play.clickhouse.com, read only).
 import { createRequire } from 'module';
 import { mkdtempSync } from 'fs';
@@ -118,6 +119,24 @@ try {
   a = await launch({ fixture: 'database-sql', port: 9820, name: 'database-sql' });
   const csv = path.join(a.project, 'data', 'orders.csv').replace(/\\/g, '/');
   await a.js(`ide.toolWindows.get('Database').show()`);
+
+  // ---------- completion data for the consoles, as the renderer receives it ----------
+  const MUST = {
+    mssql: ['TOP', 'OUTPUT', 'MERGE', 'GO', 'GETDATE', 'ISNULL', 'CONVERT', 'STRING_AGG', 'NVARCHAR(MAX)'],
+    oracle: ['ROWNUM', 'CONNECT BY', 'MERGE INTO', 'NVL', 'DECODE', 'TO_CHAR', 'TO_DATE', 'LISTAGG', 'SYSDATE', 'VARCHAR2(n)'],
+    duckdb: ['QUALIFY', 'PIVOT', 'UNPIVOT', 'ASOF JOIN', 'read_csv_auto', 'read_parquet', 'list_transform', 'struct_pack', 'strftime', 'HUGEINT'],
+    clickhouse: ['FINAL', 'PREWHERE', 'SAMPLE', 'ARRAY JOIN', 'FORMAT', 'toDate', 'toStartOfHour', 'uniq', 'groupArray', 'arrayJoin', 'LowCardinality(T)'],
+    cockroachdb: ['AS OF SYSTEM TIME', 'SHOW RANGES', 'UPSERT INTO', 'follower_read_timestamp', 'gen_random_uuid', 'JSONB'],
+  };
+  const served = await a.js(`ide.database.drivers().then(ds => Object.fromEntries(ds.map(d => [d.kind, d.ui?.completion || null])))`);
+  for (const [k, words] of Object.entries(MUST)) {
+    const c = served[k];
+    const ok = c && ['keywords', 'functions', 'dataTypes'].every((f) => Array.isArray(c[f]) && c[f].length && c[f].length <= 400)
+      && c.functions.every((f) => f.name && f.signature.startsWith(f.name));
+    const all = new Set(c ? [...c.keywords, ...c.dataTypes, ...c.functions.map((f) => f.name)] : []);
+    const missing = words.filter((w) => !all.has(w));
+    check(ok && !missing.length, `${k} serves completion lists through db:drivers (${c ? `${c.keywords.length} keywords, ${c.functions.length} functions, ${c.dataTypes.length} types` : 'none'}${missing.length ? `; missing ${q(missing)}` : ''})`);
+  }
 
   // ---------- DuckDB: driver download and a file database ----------
   await openNewDialog(a, 'DuckDB');

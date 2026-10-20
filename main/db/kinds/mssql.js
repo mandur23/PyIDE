@@ -55,6 +55,64 @@ function splitGoBatches(text) {
   return batches;
 }
 
+// Console completion data (ui.completion): T-SQL keywords, built-in functions with their signatures, and types.
+const list = (s) => s.split(/\s*,\s*/).filter(Boolean);
+const COMPLETION = {
+  keywords: list(`SELECT, TOP, PERCENT, WITH TIES, DISTINCT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, ASC, DESC, OFFSET, FETCH NEXT,
+    ROWS ONLY, AS, JOIN, INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, CROSS APPLY, OUTER APPLY, ON, UNION, UNION ALL,
+    INTERSECT, EXCEPT, INSERT INTO, VALUES, OUTPUT, INSERTED, DELETED, UPDATE, SET, DELETE, MERGE, USING, WHEN MATCHED,
+    WHEN NOT MATCHED, WHEN NOT MATCHED BY SOURCE, THEN, CREATE TABLE, CREATE VIEW, CREATE INDEX, CREATE UNIQUE INDEX,
+    CREATE PROCEDURE, CREATE FUNCTION, CREATE TRIGGER, CREATE SCHEMA, CREATE OR ALTER, ALTER TABLE, ALTER PROCEDURE, ALTER VIEW,
+    ADD, ALTER COLUMN, DROP TABLE, DROP VIEW, DROP PROCEDURE, DROP FUNCTION, DROP INDEX, IF EXISTS, TRUNCATE TABLE, PRIMARY KEY,
+    FOREIGN KEY, REFERENCES, UNIQUE, CHECK, DEFAULT, IDENTITY, CONSTRAINT, CLUSTERED, NONCLUSTERED, NOT NULL, NULL, IS NULL,
+    IS NOT NULL, AND, OR, NOT, IN, EXISTS, BETWEEN, LIKE, ESCAPE, CASE, WHEN, ELSE, END, WITH, OVER, PARTITION BY, ROWS BETWEEN,
+    UNBOUNDED PRECEDING, CURRENT ROW, PIVOT, UNPIVOT, DECLARE, BEGIN, IF, WHILE, BREAK, CONTINUE, RETURN, RETURNS, EXEC, EXECUTE,
+    PRINT, RAISERROR, THROW, BEGIN TRY, END TRY, BEGIN CATCH, END CATCH, BEGIN TRANSACTION, COMMIT, COMMIT TRANSACTION, ROLLBACK,
+    ROLLBACK TRANSACTION, SAVE TRANSACTION, GO, USE, SET NOCOUNT ON, SET XACT_ABORT ON, NOLOCK, READPAST, UPDLOCK, HOLDLOCK,
+    COLLATE, GRANT, REVOKE, DENY, INTO, FOR JSON PATH, FOR JSON AUTO, FOR XML PATH, WITHIN GROUP, CURSOR, FETCH, OPEN, CLOSE,
+    DEALLOCATE, WAITFOR DELAY, TABLESAMPLE, OPTION, RECOMPILE, MAXDOP, SCHEMABINDING, NOCHECK, CASCADE, SEQUENCE,
+    NEXT VALUE FOR, SYNONYM, TEMPORAL, SYSTEM_VERSIONING, FOR SYSTEM_TIME AS OF`),
+  functions: list(`GETDATE(), GETUTCDATE(), SYSDATETIME(), SYSUTCDATETIME(), SYSDATETIMEOFFSET(), CURRENT_TIMESTAMP`)
+    .concat([
+      'DATEADD(datepart, number, date)', 'DATEDIFF(datepart, startdate, enddate)', 'DATEDIFF_BIG(datepart, startdate, enddate)',
+      'DATEPART(datepart, date)', 'DATENAME(datepart, date)', 'DATETRUNC(datepart, date)', 'DATEFROMPARTS(year, month, day)',
+      'DATETIMEFROMPARTS(year, month, day, hour, minute, seconds, milliseconds)', 'EOMONTH(start_date[, month_to_add])',
+      'YEAR(date)', 'MONTH(date)', 'DAY(date)', 'ISDATE(expression)', 'SWITCHOFFSET(datetimeoffset, timezone)',
+      'TODATETIMEOFFSET(datetime, timezone)', 'FORMAT(value, format[, culture])', 'CONVERT(data_type, expression[, style])',
+      'CAST(expression AS data_type)', 'TRY_CAST(expression AS data_type)', 'TRY_CONVERT(data_type, expression[, style])',
+      'PARSE(string AS data_type[ USING culture])', 'TRY_PARSE(string AS data_type[ USING culture])',
+      'ISNULL(check_expression, replacement_value)', 'COALESCE(expression1, expression2[, ...])', 'NULLIF(expression1, expression2)',
+      'IIF(condition, true_value, false_value)', 'CHOOSE(index, value1, value2[, ...])', 'GREATEST(expression1, expression2[, ...])',
+      'LEAST(expression1, expression2[, ...])', 'LEN(string)', 'DATALENGTH(expression)', 'LEFT(string, count)', 'RIGHT(string, count)',
+      'SUBSTRING(string, start, length)', 'CHARINDEX(substring, string[, start])', 'PATINDEX(pattern, string)',
+      'REPLACE(string, pattern, replacement)', 'REPLICATE(string, count)', 'REVERSE(string)', 'STUFF(string, start, length, insert)',
+      'LTRIM(string[, characters])', 'RTRIM(string[, characters])', 'TRIM([characters FROM] string)', 'UPPER(string)', 'LOWER(string)',
+      'CONCAT(string1, string2[, ...])', 'CONCAT_WS(separator, string1, string2[, ...])', 'STRING_AGG(expression, separator)',
+      'STRING_SPLIT(string, separator[, enable_ordinal])', 'STRING_ESCAPE(text, type)', 'TRANSLATE(string, characters, translations)',
+      'QUOTENAME(name[, quote_character])', 'SPACE(count)', 'STR(float[, length[, decimals]])', 'CHAR(code)', 'NCHAR(code)',
+      'ASCII(character)', 'UNICODE(character)', 'SOUNDEX(string)', 'DIFFERENCE(string1, string2)', 'COUNT(expression)',
+      'COUNT_BIG(expression)', 'SUM(expression)', 'AVG(expression)', 'MIN(expression)', 'MAX(expression)', 'STDEV(expression)',
+      'STDEVP(expression)', 'VAR(expression)', 'VARP(expression)', 'APPROX_COUNT_DISTINCT(expression)', 'GROUPING(column)',
+      'ROW_NUMBER()', 'RANK()', 'DENSE_RANK()', 'NTILE(groups)', 'LAG(expression[, offset[, default]])',
+      'LEAD(expression[, offset[, default]])', 'FIRST_VALUE(expression)', 'LAST_VALUE(expression)', 'PERCENT_RANK()', 'CUME_DIST()',
+      'PERCENTILE_CONT(fraction)', 'PERCENTILE_DISC(fraction)', 'ABS(number)', 'CEILING(number)', 'FLOOR(number)',
+      'ROUND(number, length[, function])', 'POWER(number, exponent)', 'SQRT(number)', 'SQUARE(number)', 'EXP(number)',
+      'LOG(number[, base])', 'LOG10(number)', 'SIGN(number)', 'PI()', 'RAND([seed])', 'NEWID()', 'NEWSEQUENTIALID()', 'SCOPE_IDENTITY()',
+      'IDENT_CURRENT(table_name)', 'OBJECT_ID(object_name[, object_type])', 'OBJECT_NAME(object_id)', 'COL_LENGTH(table, column)',
+      'DB_NAME([database_id])', 'DB_ID([database_name])', 'SCHEMA_NAME([schema_id])', 'USER_NAME([user_id])', 'SUSER_SNAME()',
+      'HOST_NAME()', 'APP_NAME()', 'SERVERPROPERTY(property)', 'JSON_VALUE(expression, path)', 'JSON_QUERY(expression[, path])',
+      'JSON_MODIFY(expression, path, value)', 'JSON_OBJECT(key: value[, ...])', 'JSON_ARRAY(value[, ...])', 'ISJSON(expression)',
+      'OPENJSON(json[, path])', 'OPENROWSET(provider, data_source, query)', 'ERROR_MESSAGE()', 'ERROR_NUMBER()', 'ERROR_LINE()',
+      'ERROR_SEVERITY()', 'ERROR_STATE()', 'ERROR_PROCEDURE()', 'XACT_STATE()', 'HASHBYTES(algorithm, input)',
+      'CHECKSUM(expression[, ...])', 'COMPRESS(expression)', 'DECOMPRESS(expression)', 'ISNUMERIC(expression)',
+    ])
+    .map((signature) => ({ name: signature.match(/^\w+/)[0], signature })),
+  dataTypes: list(`BIT, TINYINT, SMALLINT, INT, BIGINT, DECIMAL(p, s), NUMERIC(p, s), MONEY, SMALLMONEY, FLOAT, REAL, DATE, TIME,
+    DATETIME, DATETIME2, DATETIMEOFFSET, SMALLDATETIME, CHAR(n), VARCHAR(n), VARCHAR(MAX), NCHAR(n), NVARCHAR(n), NVARCHAR(MAX), TEXT,
+    NTEXT, BINARY(n), VARBINARY(n), VARBINARY(MAX), IMAGE, UNIQUEIDENTIFIER, XML, JSON, SQL_VARIANT, ROWVERSION, HIERARCHYID,
+    GEOGRAPHY, GEOMETRY, TABLE, CURSOR`),
+};
+
 module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
   // tedious gives BIGINT as a string, DATE/TIME as a Date, and binary as a Buffer.
   function cellOf(value, type) {
@@ -198,7 +256,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
           { key: 'encrypt', label: 'Encrypt connection', type: 'checkbox', default: true },
           { key: 'trustServerCertificate', label: 'Trust server certificate', type: 'checkbox', default: false },
         ],
-        ui: { statementSeparator: 'go-line', openData: { table: OPEN, view: OPEN } },
+        ui: { statementSeparator: 'go-line', openData: { table: OPEN, view: OPEN }, completion: COMPLETION },
       },
     },
   };

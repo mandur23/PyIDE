@@ -66,6 +66,62 @@ function splitOracleScript(text) {
   return out;
 }
 
+// Console completion data (ui.completion): Oracle SQL and PL/SQL keywords, built-in functions, and types.
+const list = (s) => s.split(/\s*,\s*/).filter(Boolean);
+const COMPLETION = {
+  keywords: list(`SELECT, FROM, WHERE, GROUP BY, HAVING, ORDER BY, ASC, DESC, NULLS FIRST, NULLS LAST, DISTINCT, UNIQUE, AS, JOIN,
+    INNER JOIN, LEFT OUTER JOIN, RIGHT OUTER JOIN, FULL OUTER JOIN, CROSS JOIN, NATURAL JOIN, CROSS APPLY, OUTER APPLY, LATERAL, ON,
+    USING, UNION, UNION ALL, INTERSECT, MINUS, INSERT INTO, INSERT ALL, INSERT FIRST, VALUES, RETURNING, UPDATE, SET, DELETE FROM,
+    MERGE INTO, WHEN MATCHED THEN, WHEN NOT MATCHED THEN, ROWNUM, ROWID, LEVEL, CONNECT BY, START WITH, PRIOR, NOCYCLE,
+    CONNECT_BY_ROOT, CONNECT_BY_ISLEAF, ORDER SIBLINGS BY, FETCH FIRST, FETCH NEXT, ROWS ONLY, OFFSET, WITH TIES, DUAL,
+    CREATE TABLE, CREATE GLOBAL TEMPORARY TABLE, CREATE OR REPLACE VIEW, CREATE MATERIALIZED VIEW, CREATE INDEX, CREATE UNIQUE INDEX,
+    CREATE SEQUENCE, CREATE SYNONYM, CREATE OR REPLACE PROCEDURE, CREATE OR REPLACE FUNCTION, CREATE OR REPLACE PACKAGE,
+    CREATE OR REPLACE PACKAGE BODY, CREATE OR REPLACE TRIGGER, CREATE OR REPLACE TYPE, ALTER TABLE, ADD, MODIFY, DROP COLUMN,
+    RENAME COLUMN, RENAME TO, DROP TABLE, DROP VIEW, DROP SEQUENCE, DROP PROCEDURE, PURGE, CASCADE CONSTRAINTS, TRUNCATE TABLE,
+    PRIMARY KEY, FOREIGN KEY, REFERENCES, ON DELETE CASCADE, CHECK, DEFAULT, CONSTRAINT, GENERATED ALWAYS AS IDENTITY, NOT NULL,
+    NULL, IS NULL, IS NOT NULL, AND, OR, NOT, IN, EXISTS, BETWEEN, LIKE, ESCAPE, CASE, WHEN, THEN, ELSE, END, WITH, OVER,
+    PARTITION BY, ROWS BETWEEN, RANGE BETWEEN, UNBOUNDED PRECEDING, UNBOUNDED FOLLOWING, CURRENT ROW, KEEP, DENSE_RANK FIRST,
+    WITHIN GROUP, PIVOT, UNPIVOT, MODEL, MATCH_RECOGNIZE, DECLARE, BEGIN, EXCEPTION, WHEN OTHERS THEN, RAISE,
+    RAISE_APPLICATION_ERROR, RETURN, RETURNING INTO, IS, LOOP, END LOOP, FOR, IN REVERSE, WHILE, EXIT, EXIT WHEN, CONTINUE, IF,
+    ELSIF, END IF, CURSOR, OPEN, FETCH, INTO, CLOSE, BULK COLLECT INTO, FORALL, EXECUTE IMMEDIATE, PRAGMA AUTONOMOUS_TRANSACTION,
+    %TYPE, %ROWTYPE, NEXTVAL, CURRVAL, COMMIT, ROLLBACK, SAVEPOINT, ROLLBACK TO, GRANT, REVOKE, FOR UPDATE, FOR UPDATE OF, NOWAIT,
+    SKIP LOCKED, AS OF TIMESTAMP, AS OF SCN, VERSIONS BETWEEN, SAMPLE, PARALLEL, ANALYZE, EXPLAIN PLAN FOR, COMMENT ON`),
+  functions: [
+    'NVL(expr1, expr2)', 'NVL2(expr, value_if_not_null, value_if_null)',
+    'DECODE(expr, search, result[, search, result ...][, default])', 'COALESCE(expr1, expr2[, ...])', 'NULLIF(expr1, expr2)',
+    'TO_CHAR(value[, format[, nls_params]])', 'TO_DATE(string[, format[, nls_params]])', 'TO_NUMBER(string[, format[, nls_params]])',
+    'TO_TIMESTAMP(string[, format[, nls_params]])', 'TO_TIMESTAMP_TZ(string[, format[, nls_params]])', 'TO_CLOB(value)',
+    'TO_BLOB(raw)', 'CAST(expr AS type)', 'SYSDATE', 'SYSTIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'LOCALTIMESTAMP',
+    'ADD_MONTHS(date, months)', 'MONTHS_BETWEEN(date1, date2)', 'LAST_DAY(date)', 'NEXT_DAY(date, weekday)',
+    'TRUNC(date_or_number[, format_or_places])', 'ROUND(date_or_number[, format_or_places])', 'EXTRACT(part FROM datetime)',
+    'NUMTODSINTERVAL(number, unit)', 'NUMTOYMINTERVAL(number, unit)', 'FROM_TZ(timestamp, time_zone)',
+    'SUBSTR(string, position[, length])', 'INSTR(string, substring[, position[, occurrence]])', 'LENGTH(string)',
+    'LENGTHB(string)', 'UPPER(string)', 'LOWER(string)', 'INITCAP(string)', 'LPAD(string, length[, pad])', 'RPAD(string, length[, pad])',
+    'TRIM([LEADING | TRAILING | BOTH] [chars FROM] string)', 'LTRIM(string[, set])', 'RTRIM(string[, set])',
+    'REPLACE(string, search[, replacement])', 'TRANSLATE(string, from_chars, to_chars)', 'CONCAT(string1, string2)', 'CHR(code)',
+    'ASCII(character)', 'SOUNDEX(string)', 'REGEXP_LIKE(string, pattern[, flags])',
+    'REGEXP_SUBSTR(string, pattern[, position[, occurrence[, flags[, group]]]])',
+    'REGEXP_REPLACE(string, pattern[, replacement[, position[, occurrence[, flags]]]])',
+    'REGEXP_INSTR(string, pattern[, position[, occurrence[, return_option[, flags]]]])', 'REGEXP_COUNT(string, pattern[, position[, flags]])',
+    'LISTAGG(expr[, delimiter])', 'COUNT(expr)', 'SUM(expr)', 'AVG(expr)', 'MIN(expr)', 'MAX(expr)', 'MEDIAN(expr)', 'STDDEV(expr)',
+    'VARIANCE(expr)', 'APPROX_COUNT_DISTINCT(expr)', 'COLLECT(expr)', 'ROW_NUMBER()', 'RANK()', 'DENSE_RANK()', 'NTILE(buckets)',
+    'LAG(expr[, offset[, default]])', 'LEAD(expr[, offset[, default]])', 'FIRST_VALUE(expr)', 'LAST_VALUE(expr)',
+    'RATIO_TO_REPORT(expr)', 'PERCENT_RANK()', 'CUME_DIST()', 'PERCENTILE_CONT(fraction)', 'ABS(number)', 'CEIL(number)',
+    'FLOOR(number)', 'MOD(number, divisor)', 'REMAINDER(number, divisor)', 'POWER(number, exponent)', 'SQRT(number)', 'EXP(number)',
+    'LN(number)', 'LOG(base, number)', 'SIGN(number)', 'GREATEST(expr1, expr2[, ...])', 'LEAST(expr1, expr2[, ...])', 'SYS_GUID()',
+    'USER', 'UID', 'SYS_CONTEXT(namespace, parameter)', 'USERENV(parameter)', 'SYS_CONNECT_BY_PATH(column, separator)',
+    'RAWTOHEX(raw)', 'HEXTORAW(string)', 'ORA_HASH(expr[, max_bucket[, seed]])', 'STANDARD_HASH(expr[, method])', 'EMPTY_CLOB()',
+    'EMPTY_BLOB()', 'JSON_VALUE(expr, path)', 'JSON_QUERY(expr, path)', 'JSON_EXISTS(expr, path)', 'JSON_TABLE(expr, path COLUMNS (...))',
+    'JSON_OBJECT(key VALUE expr[, ...])', 'JSON_ARRAY(expr[, ...])', 'JSON_ARRAYAGG(expr)', 'JSON_OBJECTAGG(key VALUE expr)',
+    'XMLAGG(xml_expr)', 'XMLELEMENT(NAME name, expr)', 'DBMS_OUTPUT.PUT_LINE(text)', 'DBMS_RANDOM.VALUE([low, high])',
+    'DBMS_LOB.SUBSTR(lob[, amount[, offset]])', 'DBMS_LOB.GETLENGTH(lob)', 'DBMS_METADATA.GET_DDL(object_type, name[, schema])',
+    'DBMS_STATS.GATHER_TABLE_STATS(owner, table)', 'DBMS_XPLAN.DISPLAY()', 'DBMS_SESSION.SLEEP(seconds)',
+  ].map((signature) => ({ name: signature.match(/^[\w.]+/)[0], signature })),
+  dataTypes: list(`VARCHAR2(n), NVARCHAR2(n), CHAR(n), NCHAR(n), NUMBER, NUMBER(p, s), INTEGER, FLOAT, BINARY_FLOAT, BINARY_DOUBLE,
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, TIMESTAMP WITH LOCAL TIME ZONE, INTERVAL YEAR TO MONTH, INTERVAL DAY TO SECOND, CLOB,
+    NCLOB, BLOB, BFILE, RAW(n), LONG, ROWID, UROWID, XMLTYPE, JSON, BOOLEAN, VECTOR, PLS_INTEGER, BINARY_INTEGER, SYS_REFCURSOR`),
+};
+
 module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema }) => {
   // NUMBER comes as text so big or precise values survive; it becomes a JS number only when that is exact.
   const numberOf = (s) => {
@@ -171,7 +227,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema })
           { key: 'service', label: 'Service name or SID', placeholder: 'FREEPDB1' },
           { key: 'allSchemas', label: 'Show all accessible schemas', type: 'checkbox', default: false },
         ],
-        ui: { statementSeparator: 'plsql', openData: { table: OPEN, view: OPEN } },
+        ui: { statementSeparator: 'plsql', openData: { table: OPEN, view: OPEN }, completion: COMPLETION },
       },
     },
   };
