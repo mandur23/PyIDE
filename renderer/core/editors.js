@@ -1110,17 +1110,22 @@
   });
 
   // A window with unsaved documents asks before it closes (the main process holds the close until then).
+  // Clicking the window's close button again while it asks does not stack a second dialog.
+  let confirmingClose = false;
   ide.api.on('window:confirmClose', () => {
+    if (confirmingClose) return;
     const dirtyDocs = [...docs.values()].filter(docDirty);
     if (!dirtyDocs.length) { ide.api.invoke('window:closeNow'); return; }
     const list = el('ul', 'close-confirm-list');
     for (const d of dirtyDocs) list.appendChild(el('li', null, ide.util.rel(d.path)));
     const body = el('div');
     body.append(el('div', null, tr('These files have unsaved changes:')), list);
+    confirmingClose = true;
     ide.ui.dialog({
       title: tr('Save Changes?'),
       body,
       width: 460,
+      onClose: () => { confirmingClose = false; },
       buttons: [
         // A file that could not be saved (its error was shown) keeps the window open.
         { label: tr('Save All'), primary: true, run: async () => { await ide.saveAll(); if (![...docs.values()].some(docDirty)) ide.api.invoke('window:closeNow'); } },

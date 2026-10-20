@@ -176,6 +176,7 @@
   "Project created, but a setup step failed": "프로젝트는 생성되었지만 설정 단계가 실패했습니다",
   "Enter a valid project name.": "올바른 프로젝트 이름을 입력하세요.",
   "Choose a location.": "위치를 선택하세요.",
+  "Choose an interpreter.": "인터프리터를 선택하세요.",
   "No Python interpreter was found. Install Python first.": "Python 인터프리터를 찾을 수 없습니다. 먼저 Python을 설치하세요.",
   "{type} projects need their packages installed.": "{type} 프로젝트는 패키지를 설치해야 합니다.",
   "Creating {path}…": "{path} 생성 중…",

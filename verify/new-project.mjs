@@ -94,6 +94,18 @@ try {
   await a.until(`!document.querySelector('.np-dialog') && ide.root && ide.root.toLowerCase().endsWith('\\\\stopped')`, 'cancelled', 30000);
   check(!(await a.js(`!!document.querySelector('#npFailLog')`)), 'Cancel during a setup step stops it, closes the wizard and opens the project without an error report');
 
+  // Esc during a step cancels it the same way.
+  await openWizard(a);
+  await setValue(a, '#npName', 'escaped');
+  await a.js(`(document.querySelector('input[name="npMode"][value="venv"]').click(), true)`);
+  await a.click('#npCreate');
+  await a.until(`/-m venv/.test(document.querySelector('#npLog').textContent)`, 'venv step running (Esc)');
+  await a.press('Escape');
+  await a.until(`ide.root && ide.root.toLowerCase().endsWith('\\\\escaped')`, 'escaped', 30000);
+  // A stopped venv step leaves the project on the base interpreter (a finished one would select .venv).
+  const escInterp = await a.js(`ide.settings.get('interpreter.' + ide.root) || ''`);
+  check(!/\.venv/i.test(escInterp) && !(await a.js(`!!document.querySelector('#npFailLog')`)), `Esc during a setup step stops it too, with no error report (${escInterp})`);
+
   // ---------- existing folder ----------
   await openWizard(a);
   await setValue(a, '#npName', 'web');
@@ -110,7 +122,7 @@ try {
   await a.js(`[...document.querySelectorAll('.dialog-buttons .primary')].pop().click()`);
   await a.until(`ide.root && ide.root.toLowerCase().endsWith('\\\\cloned')`, 'cloned project opened', 60000);
   check(existsSync(path.join(where, 'cloned', 'tool.py')), 'Get from VCS clones the repository and opens it');
-  check((await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|') === 'cloned|stopped|broken|web', 'recent projects keep the newest first');
+  check((await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|') === 'cloned|escaped|stopped|broken', 'recent projects keep the newest first');
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${JSON.stringify(a.consoleErrors)}` : ''}`);
   a.close();
 

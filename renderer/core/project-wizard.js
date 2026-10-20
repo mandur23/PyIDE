@@ -205,11 +205,18 @@ if __name__ == '__main__':
 
     let busy = false;
     let cancelled = false;
+    let finished = false;
     let running = null; // the setup step's process id
+    const cancelSetup = () => {
+      cancelled = true;
+      if (running !== null) ide.proc.kill(running);
+    };
     const dlg = ide.ui.dialog({
       title: tr('New Project'),
       body: root,
       width: 860,
+      // Esc during a setup step cancels it like the Cancel button (the dialog is already gone).
+      onClose: () => { if (busy && !finished) cancelSetup(); },
       buttons: [
         { label: tr('Create'), primary: true, run: async (d) => {
           if (busy) return false;
@@ -223,8 +230,7 @@ if __name__ == '__main__':
         // While a setup step runs, Cancel stops it; create() then opens what was created so far.
         { label: tr('Cancel'), run: () => {
           if (!busy) return true;
-          cancelled = true;
-          if (running !== null) ide.proc.kill(running);
+          cancelSetup();
           return false;
         } },
       ],
@@ -265,6 +271,7 @@ if __name__ == '__main__':
       const m = selectedMode();
       const baseInterp = bases.find((b) => b.executable === base.value) || bases[0];
       if (m !== 'custom' && !baseInterp) throw new Error(tr('No Python interpreter was found. Install Python first.'));
+      if (m === 'custom' && (!custom.value || custom.value === '__browse')) throw new Error(tr('Choose an interpreter.'));
       const doInstall = type.packages.length && install.input.checked && !install.input.disabled;
       if (type.needsPackages && !doInstall) throw new Error(tr('{type} projects need their packages installed.', { type: type.name() }));
 
@@ -292,6 +299,7 @@ if __name__ == '__main__':
       if (!failed && type.id === 'django' && await step(tr('Creating the Django project'), python.cmd, [...python.args, '-m', 'django', 'startproject', n.replace(/\W/g, '_'), '.'], dir)) failed = true;
       if (git.input.checked && await step(tr('Creating the Git repository'), 'git', ['init'], dir)) failed = true;
 
+      finished = true;
       d.close();
       if (failed && !cancelled) {
         const report = el('pre', 'np-log');
