@@ -1,4 +1,5 @@
 {
+  "Move": "이동",
   "{name} can run code when PyIDE works with it: its virtual environment's Python, its Git configuration and its .env file. Trust it only if you know where it comes from. Safe Mode opens it without running anything from it.": "{name}은(는) PyIDE가 작업하는 동안 코드를 실행할 수 있습니다: 가상 환경의 Python, Git 설정, .env 파일. 출처를 아는 경우에만 신뢰하세요. 안전 모드에서는 이 프로젝트의 어떤 것도 실행하지 않고 엽니다.",
   "Trust Project": "프로젝트 신뢰",
   "Preview in Safe Mode": "안전 모드로 미리 보기",
