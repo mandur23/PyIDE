@@ -1203,6 +1203,34 @@ ide.openProject = async (dir) => {
   return true;
 };
 
+// Whether a recent project's folder can be opened: 'exists', 'missing' (deleted; its drive or share is there), or
+// null when it cannot be reached (a network share that does not answer, a drive that is not connected; the user is
+// told, and it stays in the lists since it may come back) or the user cancelled. Such a share takes ~20 s to fail,
+// so after a moment a dialog says it is connecting and offers Cancel, and after PROBE_MS it is reported unreachable.
+const PROBE_MS = 5000;
+let probing = false;
+ide.probeProject = async (dir) => {
+  if (probing) return null;
+  probing = true;
+  let dlg = null;
+  let done = false;
+  let cancelled = false;
+  const later = setTimeout(() => {
+    dlg = ide.ui.dialog({ title: tr('Opening Project'), body: tr('Connecting to {path}…', { path: dir }), width: 460,
+      buttons: [{ label: tr('Cancel') }], onClose: () => { if (!done) cancelled = true; } });
+  }, 300);
+  let state;
+  try { state = await ide.api.invoke('fs:probe', dir, PROBE_MS); } catch { state = 'unreachable'; }
+  done = true;
+  probing = false;
+  clearTimeout(later);
+  if (cancelled) return null;
+  dlg?.close();
+  if (state !== 'unreachable') return state;
+  ide.ui.alert(tr('{path} cannot be reached. Check the network connection or that the drive is connected, then try again.', { path: dir }));
+  return null;
+};
+
 // Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open.
 ide.closeProject = async () => {
   if (!ide.root || !ide.closeAllTabs(false)) return false;

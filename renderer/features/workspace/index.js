@@ -542,12 +542,14 @@
 
   async function openRecent(p) {
     if (samePath(p.path, ide.root)) return;
-    if (!(await ide.api.exists(p.path))) {
+    // A folder that cannot be reached (a network share that does not answer) is reported and kept in the list.
+    const state = await ide.probeProject(p.path);
+    if (state === 'missing') {
       const yes = await confirm({ title: tr('Recent Projects'), text: tr('The folder {path} no longer exists. Remove it from Recent Projects?', { path: p.path }), ok: tr('Remove') });
       if (yes) forget(p.path);
       return;
     }
-    await ide.openProject(p.path);
+    if (state === 'exists') await ide.openProject(p.path);
   }
 
   function card(title, cls, actions = []) {

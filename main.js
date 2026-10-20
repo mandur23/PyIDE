@@ -149,6 +149,24 @@ ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, 
 // IPC) would wait for it. The renderer checks the last project and recent projects with this.
 const exists = (p) => fs.promises.access(p).then(() => true, () => false);
 ipcMain.handle('fs:exists', (_e, p) => exists(p));
+// 'exists', 'missing' or 'unreachable' within ms, for a recent project: a folder whose drive or network share is not
+// there (a share that does not answer, a drive that is not connected) cannot be reached, which is not the same as a
+// deleted folder. Each unanswered check holds one of libuv's four file threads for ~20 s, so a path being checked
+// is not checked a second time meanwhile.
+const checking = new Map();
+const accessible = (p) => {
+  const k = p.toLowerCase();
+  if (!checking.has(k)) checking.set(k, exists(p).finally(() => checking.delete(k)));
+  return checking.get(k);
+};
+const within = (promise, ms) => Promise.race([promise, new Promise((r) => { setTimeout(r, ms, 'timeout'); })]);
+ipcMain.handle('fs:probe', async (_e, p, ms = 5000) => {
+  const started = Date.now();
+  const found = await within(accessible(p), ms);
+  if (found !== false) return found === true ? 'exists' : 'unreachable';
+  const volume = await within(accessible(path.parse(path.resolve(p)).root), Math.max(500, ms - (Date.now() - started)));
+  return volume === true ? 'missing' : 'unreachable';
+});
 ipcMain.handle('fs:read', (_e, p) => fs.readFileSync(p, 'utf8'));
 ipcMain.handle('fs:write', (_e, p, text) => fs.writeFileSync(p, text, 'utf8'));
 ipcMain.handle('fs:create', (_e, p, isDir) => {

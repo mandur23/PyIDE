@@ -62,11 +62,16 @@
     }));
   }
   async function openRecent(path) {
-    if (await ide.api.exists(path)) return ide.openProject(path);
-    if (confirm(tr('{path} no longer exists. Remove it from the list?', { path }))) {
-      ide.settings.set('recentProjects', ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, path)));
-      renderWelcomeRecent();
-    }
+    const state = await ide.probeProject(path);
+    if (state === 'exists') return ide.openProject(path);
+    if (state !== 'missing') return;
+    ide.ui.dialog({ title: tr('Recent Projects'), body: tr('{path} no longer exists. Remove it from the list?', { path }), width: 460, buttons: [
+      { label: tr('Remove'), primary: true, run: () => {
+        ide.settings.set('recentProjects', ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, path)));
+        renderWelcomeRecent();
+      } },
+      { label: tr('Cancel') },
+    ] });
   }
   $('projectWidget').onclick = () => {
     const r = $('projectWidget').getBoundingClientRect();

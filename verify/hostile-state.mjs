@@ -155,6 +155,28 @@ const exercise = async (t) => {
       await t.until('window.__ideReady === true', 'IDE ready after reload', 15000);
       const readyMs = Date.now() - reloaded;
       check(readyMs < 10000 && await t.js(`!ide.root`), `an unreachable last project: welcome screen ready in ${readyMs} ms`);
+      // As a recent project: the welcome screen says it is connecting, reports it unreachable after a few seconds
+      // (not "no longer exists") and keeps it in the list; a deleted folder is offered for removal.
+      const S = JSON.stringify;
+      const gone = path.join(work, 'deleted-project');
+      // Another address than above: Windows answers at once for a while for a server it just failed to reach.
+      const deadRecent = '\\\\10.255.255.9\\pyide-share\\project';
+      await t.js(`(ide.settings.set('recentProjects', [{ path: ${S(deadRecent)}, opened: 2 }, { path: ${S(gone)}, opened: 1 }]), true)`);
+      await t.until(`document.querySelectorAll('#welcomeRecent .welcome-recent-row').length === 2`, 'two recent projects on the welcome screen');
+      await t.js(`(window.__connecting = false, new MutationObserver(() => { if ([...document.querySelectorAll('#dialogHost .dialog-body')].some((n) => n.textContent.startsWith('Connecting to'))) window.__connecting = true; }).observe(document.getElementById('dialogHost'), { childList: true, subtree: true }), true)`);
+      const clicked = Date.now();
+      await t.js(`(document.querySelector('#welcomeRecent .welcome-recent-row').click(), true)`);
+      await t.until(`[...document.querySelectorAll('#dialogHost .dialog-message')].some((n) => n.textContent.includes('cannot be reached'))`, 'unreachable message', 12000);
+      const answeredMs = Date.now() - clicked;
+      check(await t.js('window.__connecting') || answeredMs < 1000, `while the share does not answer, a dialog says "Connecting to …" (${answeredMs} ms)`);
+      check(answeredMs < 8000 && await t.js(`![...document.querySelectorAll('#dialogHost .dialog-body')].some((n) => n.textContent.includes('no longer exists')) && ide.settings.get('recentProjects').length === 2 && !ide.root`),
+        `it is reported as unreachable after ${answeredMs} ms, not as deleted, and stays in Recent Projects`);
+      await t.js(`(document.querySelector('#dialogHost .dialog-buttons button').click(), true)`);
+      await t.js(`(document.querySelectorAll('#welcomeRecent .welcome-recent-row')[1].click(), true)`);
+      await t.until(`[...document.querySelectorAll('#dialogHost .dialog-body')].some((n) => n.textContent.includes('no longer exists'))`, 'deleted folder question', 5000);
+      await t.js(`[...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Remove').click()`);
+      await t.until(`ide.settings.get('recentProjects').length === 1 && ide.settings.get('recentProjects')[0].path === ${S(deadRecent)}`, 'deleted folder removed', 3000);
+      check(true, 'a deleted recent project is offered for removal and removed');
       await noErrors(t, 'unreachable share');
     } catch (err) {
       check(false, err.message);
