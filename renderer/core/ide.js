@@ -184,6 +184,60 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   };
 };
 
+// Keyboard for a tool window's list or tree of rows, as in PyCharm: the list takes focus, Up/Down/Home/End move the
+// selection over the shown rows matching `rows`, Enter opens the selected one, Right expands it (or enters it when it is
+// open) and Left collapses it (or goes to its parent). The plugin says what its rows mean: selected() -> row, select(row),
+// open(row) (a click by default), and for a tree expanded(row) -> true | false | null (a leaf), toggle(row) (a click) and
+// parent(row, rows) (by data-depth). select and toggle may redraw the rows: the row with the same id(row) (data-key) is
+// looked up again.
+const rowAbove = (row, list) => {
+  const depth = Number(row.dataset.depth);
+  for (let j = list.indexOf(row) - 1; depth > 0 && j >= 0; j--) if (Number(list[j].dataset.depth || 0) < depth) return list[j];
+  return null;
+};
+ide.ui.listKeys = (host, { rows, selected, select, open = (row) => row.click(), expanded = () => null, toggle = (row) => row.click(),
+  parent = rowAbove, id = (row) => row.dataset.key ?? null }) => {
+  const shownRows = () => [...host.querySelectorAll(rows)].filter((r) => r.getClientRects().length);
+  selected ||= () => shownRows().find((r) => r.classList.contains('selected')) || null;
+  select ||= (row) => {
+    for (const r of host.querySelectorAll(rows)) r.classList.toggle('selected', r === row);
+  };
+  const again = (key) => key != null && shownRows().find((r) => id(r) === key);
+  const go = (row) => {
+    if (!row) return;
+    const key = id(row);
+    select(row);
+    (again(key) || selected() || row).scrollIntoView({ block: 'nearest' });
+  };
+  host.tabIndex = 0;
+  host.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.altKey || e.metaKey || e.target !== host) return;
+    const list = shownRows();
+    const cur = selected();
+    const i = list.indexOf(cur);
+    const state = i === -1 ? null : expanded(cur);
+    const keys = {
+      ArrowDown: () => go(list[Math.min(i + 1, list.length - 1)]),
+      ArrowUp: () => go(list[Math.max(i - 1, 0)]),
+      Home: () => go(list[0]),
+      End: () => go(list[list.length - 1]),
+      Enter: () => i !== -1 && open(cur),
+      ArrowRight: () => {
+        if (state === false) { const key = id(cur); toggle(cur); go(again(key)); }
+        else if (state === true && list[i + 1] && parent(list[i + 1], list) === cur) go(list[i + 1]);
+      },
+      ArrowLeft: () => {
+        if (state === true) { const key = id(cur); toggle(cur); go(again(key)); }
+        else if (i !== -1) go(parent(cur, list));
+      },
+    };
+    if (!keys[e.key] || !list.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    keys[e.key]();
+  });
+};
+
 // Popup chooser used by search everywhere, find action, recent files, and prompts.
 let popupState = null;
 const fuzzyScore = (text, q) => {

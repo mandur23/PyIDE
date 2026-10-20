@@ -55,6 +55,7 @@
 
 .dbg-var { display: flex; align-items: center; white-space: nowrap; padding-right: 8px; cursor: default; }
 .dbg-var:hover { background: var(--gray2); }
+.dbg-var.selected { background: var(--blue2); }
 .dbg-arrow { width: 16px; flex-shrink: 0; color: var(--gray7); font-size: 10px; text-align: center; }
 .dbg-name { color: #c77dbb; }
 .dbg-eq { color: var(--gray9); white-space: pre; }

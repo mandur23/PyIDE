@@ -9,6 +9,7 @@
     mount(container) {
       list = el('div', 'list');
       list.id = 'problemList';
+      ide.ui.listKeys(list, { rows: '.problem' });
       container.appendChild(list);
     },
   });

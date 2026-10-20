@@ -233,6 +233,12 @@
         e.preventDefault();
         const next = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
         if (next) { const n = nodes.get(next.dataset.id); selected = n; renderTree(); showOutput(n); tree.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }); }
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        // Right/Left expand and collapse a file or class, Left on anything else goes to its parent.
+        e.preventDefault();
+        const kids = !!selected?.children?.length;
+        if (kids && !!selected.collapsed === (e.key === 'ArrowRight')) { selected.collapsed = !selected.collapsed; renderTree(); }
+        else if (e.key === 'ArrowLeft' && selected?.parent) { selected = selected.parent; renderTree(); showOutput(selected); tree.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }); }
       } else if ((e.key === 'Enter' || e.key === 'F4') && selected?.file) {
         e.preventDefault();
         e.stopPropagation();

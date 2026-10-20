@@ -314,6 +314,7 @@
   function treeRow(r) {
     const row = el('div', `db-node db-${r.kind}` + (r.key && r.key === selectedKey ? ' selected' : ''));
     row.style.paddingLeft = `${r.depth * 16 + 4}px`;
+    row.dataset.depth = r.depth;
     if (r.key) row.dataset.key = r.key;
     row.dataset.kind = r.kind;
     row.append(el('span', 'db-arrow', r.leaf === false ? (r.open ? '▾' : '▸') : ''));
@@ -431,6 +432,13 @@
       );
       treeEl = el('div', 'db-tree');
       treeEl.id = 'dbTree';
+      // Up/Down select, Right/Left open and close a node, Enter opens a node or a leaf's data (its double-click).
+      ide.ui.listKeys(treeEl, {
+        rows: '.db-node[data-key]',
+        select: (row) => { selectedKey = row.dataset.key; renderTree(); },
+        expanded: (row) => ({ '▾': true, '▸': false })[row.querySelector('.db-arrow').textContent] ?? null,
+        open: (row) => (row.querySelector('.db-arrow').textContent ? row.click() : row.ondblclick()),
+      });
       container.append(bar, treeEl);
       renderTree();
     },

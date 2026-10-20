@@ -73,6 +73,13 @@
     return g;
   }
 
+  // Up/Down over file and line rows, Enter jumps to a line (or folds a file), Left/Right fold a file or go to it.
+  const groupKeys = (list) => ide.ui.listKeys(list, {
+    rows: '.sn-file, .sn-match',
+    expanded: (row) => (row.classList.contains('sn-file') ? !row.parentElement.classList.contains('collapsed') : null),
+    parent: (row) => (row.classList.contains('sn-match') ? row.closest('.sn-group').querySelector('.sn-file') : null),
+  });
+
   function setAllCollapsed(list, collapsed, value) {
     for (const g of list.querySelectorAll('.sn-group')) {
       g.classList.toggle('collapsed', value);
@@ -127,6 +134,7 @@
       findHead.id = 'snFindHead';
       findList = el('div', 'list sn-tree');
       findList.id = 'snFindResults';
+      groupKeys(findList);
       findHead.textContent = tr('Use Find in Files (Ctrl+Shift+F) to search the project');
       container.append(findHead, findList);
       tw.setActions([
@@ -142,7 +150,7 @@
     row.append(el('span', 'sn-ln', String(r.line)), userText(el('span', 'sn-text')));
     row.lastChild.append(highlight(r.text, r.ranges));
     row.onclick = () => {
-      findList.querySelectorAll('.sn-match.selected').forEach((n) => n.classList.remove('selected'));
+      findList.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
       row.classList.add('selected');
       goTo(path, r.line, r.col, r.len);
     };
@@ -507,6 +515,11 @@
     mount(container, tw) {
       structList = el('div', 'sn-struct');
       structList.id = 'snStructure';
+      ide.ui.listKeys(structList, {
+        rows: '.sn-node[data-line]',
+        expanded: (row) => (row.dataset.parent ? !structCollapsed.has(row.dataset.key) : null),
+        toggle: (row) => row.querySelector('.sn-arrow').click(),
+      });
       container.append(structList);
       tw.setActions([
         { icon: '⇅', title: tr('Sort Alphabetically'), run: () => { sortAlpha = !sortAlpha; ide.settings.set('searchNav.structureSort', sortAlpha); refreshStructure(); } },
@@ -772,6 +785,7 @@
       todoHead.id = 'snTodoHead';
       todoList = el('div', 'list sn-tree');
       todoList.id = 'snTodo';
+      groupKeys(todoList);
       container.append(todoHead, todoList);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: () => refreshTodosNow() },

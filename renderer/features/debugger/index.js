@@ -880,9 +880,16 @@
       frames.head.insertBefore(threadLabel, frames.head.children[1]);
       framesList = frames.list;
       framesList.id = 'dbgFrames';
+      ide.ui.listKeys(framesList, { rows: '.dbg-frame', select: (row) => row.click() });
       const variables = pane(tr('Variables'));
       varsList = variables.list;
       varsList.id = 'dbgVars';
+      // Variables: Right/Left expand and collapse a value, Left on a child goes to its parent.
+      ide.ui.listKeys(varsList, {
+        rows: '.dbg-var:not(.muted)',
+        expanded: (row) => ({ '▾': true, '▸': false })[row.querySelector('.dbg-arrow')?.textContent] ?? null,
+        parent: (row) => (row.parentElement.parentElement.classList.contains('dbg-kids') ? row.parentElement.parentElement.previousElementSibling : null),
+      });
       const watchPane = pane(tr('Watches'), [
         { id: 'dbgWatchAdd', icon: '+', title: tr('New Watch'), run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
         { id: 'dbgWatchRemove', icon: '−', title: withKeys(tr('Remove Watch'), 'Delete'), run: () => removeWatch() },

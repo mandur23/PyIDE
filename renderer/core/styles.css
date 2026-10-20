@@ -197,6 +197,8 @@ input, select, textarea { font: inherit; }
 .list-row { padding: 3px 12px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list-row:hover { background: var(--gray2); }
 .list-row.selected { background: var(--blue2); }
+/* Keyboard focus on lists, trees and tool windows, whose own rules turn the browser's ring off. */
+#tree:focus-visible, :is(.tool, .dialog) div[tabindex]:focus-visible, .tool:focus-visible { outline: 1px solid var(--blue6); outline-offset: -1px; }
 .muted { color: var(--gray7); }
 
 #status { height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 10px;
