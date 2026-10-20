@@ -12,11 +12,15 @@ const IGNORED = new Set(['.git', '__pycache__', 'node_modules', '.idea', '.mypy_
 // Virtual environments are folders with a pyvenv.cfg; they are never part of the project's own sources.
 const isVenv = (dir) => fs.existsSync(path.join(dir, 'pyvenv.cfg'));
 
+// A junction or a symbolic link (mklink /J data D:\data) to a folder is a folder in the project tree, which lists it
+// when it is opened; the project walks below do not follow links, so a link back to the project cannot loop them.
+const isFolderLink = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+
 const SCANS = {
   // Entries of one folder, folders first: [{name, path, dir}].
   list: (dir) => fs.readdirSync(dir, { withFileTypes: true })
     .filter((d) => !IGNORED.has(d.name))
-    .map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() }))
+    .map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() || (d.isSymbolicLink() && isFolderLink(path.join(dir, d.name))) }))
     .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name)),
   // Every file under root (at most 20,000), skipping caches, virtualenvs and the excluded folders.
   walk(root, excludedDirs = []) {
