@@ -260,6 +260,18 @@ try {
   check(inBuffer.text === 'b[a]b' && inBuffer.count === 1 && onDisk.count === 1 && disk('empty_re.txt') === 'b[a]b\n',
     `empty regex matches are not replaced (buffer ${JSON.stringify(inBuffer)}, disk ${JSON.stringify(disk('empty_re.txt'))})`);
 
+  // A CP949 file ('한글' is c7 d1 b1 db) is searched as Korean text and rewritten in CP949, not as broken UTF-8.
+  const cp949 = (word) => Buffer.concat([Buffer.from('# '), Buffer.from('c7d1b1db', 'hex'), Buffer.from(` ${word}\n`)]);
+  writeFileSync(path.join(project, 'korean.txt'), cp949('total'));
+  const opts = (query, replacement = '') => `{ query: ${J(query)}, caseSensitive: true, words: false, regex: false, mask: '', dir: null, replacement: ${J(replacement)} }`;
+  const korean = await js(`ide.api.invoke('search:find', ide.root, ${opts('한글')}, {})`);
+  check(korean.count === 1 && korean.files[0].path.endsWith('korean.txt') && korean.files[0].matches[0].col === 3, `Korean text found in a CP949 file at its column (${J(korean.files.map((f) => f.matches))})`);
+  const cpReplace = await js(`ide.api.invoke('search:replace', ${opts('total', 'sum')}, [ide.util.joinPath(ide.root, 'korean.txt')])`);
+  check(cpReplace.count === 1 && readFileSync(path.join(project, 'korean.txt')).equals(cp949('sum')), 'Replace in Files keeps a CP949 file in CP949');
+  // Preview searches typed in a row: the one waiting behind a running search is replaced by the newer one.
+  const live = await js(`Promise.all(['greet', 'compute', 'calculate'].map((q) => ide.api.invoke('search:find', ide.root, { ...${opts('')}, query: q }, {}, { live: true })))`);
+  check(!live[0].superseded && live[1].superseded && !live[2].superseded && live[2].count > 0, `a queued preview search is superseded by a newer one (${J(live.map((r) => r.superseded || r.count))})`);
+
   // ---- Find in a directory from the project tree ----
   await press('Alt+1');
   await until(`ide.toolWindows.get('Project').isVisible()`, 'project tree visible');

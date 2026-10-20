@@ -27,6 +27,12 @@ function walk(root, onFile) {
   visit(root);
 }
 
+// Text that is not UTF-8 is read as CP949 (EUC-KR), as the editor does (main/text-codec.js, which this file cannot
+// require when it runs as the worker), so Korean text in such a file is found and the columns match the editor.
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+const CP949 = new TextDecoder('euc-kr');
+const isUtf8 = (buf) => { try { UTF8.decode(buf); return true; } catch { return false; } };
+
 // Returns null for files that are too large or look binary.
 function readText(p) {
   let buf;
@@ -35,7 +41,7 @@ function readText(p) {
     buf = fs.readFileSync(p);
   } catch { return null; }
   if (buf.subarray(0, 8000).includes(0)) return null;
-  const text = buf.toString('utf8');
+  const text = isUtf8(buf) ? buf.toString('utf8') : CP949.decode(buf);
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
@@ -165,15 +171,18 @@ function replaceText(text, re, rep) {
   return { text: next, count };
 }
 
+// UTF-8 files only; the others are returned as `foreign` for the main side to rewrite in their own encoding.
 function replaceIn(paths, opts) {
   const re = buildRegex(opts);
   const rep = replacementOf(opts);
   const changed = [];
+  const foreign = [];
   let count = 0;
   for (const p of paths) {
     let raw;
     try { if (fs.statSync(p).size > MAX_SIZE) continue; raw = fs.readFileSync(p); } catch { continue; }
     if (raw.subarray(0, 8000).includes(0)) continue;
+    if (!isUtf8(raw)) { foreign.push(p); continue; }
     const text = raw.toString('utf8');
     const { text: next, count: n } = replaceText(text, re, rep);
     if (!n || next === text) continue;
@@ -181,7 +190,7 @@ function replaceIn(paths, opts) {
     changed.push(p);
     count += n;
   }
-  return { changed, count };
+  return { changed, count, foreign };
 }
 
 const COMMENT = { js: '//', ts: '//', jsx: '//', tsx: '//', java: '//', c: '//', h: '//', cpp: '//', go: '//', rs: '//', kt: '//', swift: '//' };
@@ -261,6 +270,45 @@ if (!isMainThread && workerData?.role === 'pyide-search') {
 
 // Main side; worker-host evaluates this file as the worker (the role check above).
 const scan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
+const textCodec = isMainThread ? require('../text-codec') : null;
+
+// Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding.
+function replaceForeign(paths, opts) {
+  const changed = [];
+  let count = 0;
+  for (const p of paths) {
+    try {
+      const file = textCodec.read(p);
+      if (file.text === undefined) continue;
+      const { text, count: n } = replaceText(file.text, buildRegex(opts), replacementOf(opts));
+      if (!n || text === file.text) continue;
+      textCodec.write(p, text, file.encoding);
+      changed.push(p);
+      count += n;
+    } catch {}
+  }
+  return { changed, count };
+}
+
+// The Find in Files dialog searches as the user types, and every search reads the whole project on the worker, one
+// after another. A preview search (`live`) therefore waits only behind the one running: a newer preview replaces it,
+// and the replaced one answers {superseded: true} at once instead of scanning the project for text nobody sees.
+let liveBusy = false;
+let liveNext = null;
+function liveFind(args) {
+  return new Promise((resolve, reject) => {
+    liveNext?.resolve({ files: [], count: 0, superseded: true });
+    liveNext = { args, resolve, reject };
+    pumpLive();
+  });
+}
+function pumpLive() {
+  if (liveBusy || !liveNext) return;
+  const { args, resolve, reject } = liveNext;
+  liveNext = null;
+  liveBusy = true;
+  scan('find', ...args).then(resolve, reject).finally(() => { liveBusy = false; pumpLive(); });
+}
 
 // One script, two modes: `outline` parses source from stdin into a tree; `index` reads a JSON list of paths and returns flat symbols per file.
 const AST_SCRIPT = String.raw`
@@ -416,7 +464,8 @@ async function buildIndex(interp, root) {
     const res = (await runAst(interp, 'index', JSON.stringify(batch.map((b) => b.p)))) || {};
     for (const { p, mtime } of batch) symbolCache.set(p.toLowerCase(), { path: p, mtime, symbols: res[p] || [] });
   }
-  const rootKey = root.toLowerCase();
+  // With the separator, so indexing C:\proj does not drop the cached files of C:\proj2.
+  const rootKey = root.toLowerCase().replace(/[\\/]*$/, path.sep);
   const out = [];
   for (const [key, entry] of symbolCache) {
     if (!key.startsWith(rootKey)) continue;
@@ -427,8 +476,12 @@ async function buildIndex(interp, root) {
 }
 
 exports.register = ({ ipcMain }) => {
-  ipcMain.handle('search:find', (_e, root, opts, overrides) => scan('find', root, opts, overrides));
-  ipcMain.handle('search:replace', (_e, opts, paths) => scan('replace', paths, opts));
+  ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides]) : scan('find', root, opts, overrides)));
+  ipcMain.handle('search:replace', async (_e, opts, paths) => {
+    const { changed, count, foreign } = await scan('replace', paths, opts);
+    const other = replaceForeign(foreign, opts);
+    return { changed: [...changed, ...other.changed], count: count + other.count };
+  });
   // The same replacement applied to an unsaved buffer's text -> {text, count}.
   ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, buildRegex(opts), replacementOf(opts)));
   ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));

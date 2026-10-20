@@ -92,7 +92,8 @@
 
   const searchOpts = (o) => ({ query: o.query, caseSensitive: o.caseSensitive, words: o.words, regex: o.regex,
     mask: o.useMask ? o.mask : '', dir: o.dir || null, replacement: o.replacement || '' });
-  const runFind = (o) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts());
+  // live: a preview while typing, which a newer preview may replace before it runs ({superseded: true}).
+  const runFind = (o, live = false) => ide.api.invoke('search:find', ide.root, searchOpts(o), dirtyTexts(), { live });
   const summaryOf = (res) => (res.error ? tr('Invalid regular expression: {message}', { message: res.error })
     : nt2(res.count, res.files.length, ['{count} match in {files} file', '{count} match in {files} files', '{count} matches in {files} file', '{count} matches in {files} files'])
       + (res.truncated ? ` ${tr('(results truncated)')}` : ''));
@@ -277,8 +278,8 @@
       sync();
       const my = ++seq;
       if (!o.query) { status.textContent = ''; preview.replaceChildren(); return; }
-      const res = await runFind(o);
-      if (my !== seq) return;
+      const res = await runFind(o, true);
+      if (my !== seq || res.superseded) return;
       status.textContent = summaryOf(res);
       status.classList.toggle('sn-error', !!res.error);
       preview.replaceChildren();
