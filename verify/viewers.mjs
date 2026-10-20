@@ -1,6 +1,6 @@
 // End-to-end check for the File Viewers plugin (renderer/features/viewers, main/features/viewers.js).
 // Fixtures: verify/fixtures/viewers (binary files come from make_fixtures.py there).
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { launch, openFile } from './lib.mjs';
@@ -79,6 +79,19 @@ try {
   await until(`${H}.querySelector('.vw-play').textContent === '⏸'`, 'playing', 5000).then(() => check(true, 'play button starts playback'), () => check(false, 'play button starts playback'));
   await clickEl(`${H}.querySelector('.vw-play')`);
   await shot('audio.png');
+
+  // 2.5 hours of 8 kHz mono: decoding at 8 kHz would take 288 MB of samples, so it decodes at a lower rate.
+  const seconds = 9000;
+  const wav = Buffer.alloc(44 + seconds * 8000, 128);
+  wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+  wav.write('data', 36); wav.writeUInt32LE(seconds * 8000, 40);
+  writeFileSync(path.join(t.project, 'audio', 'long.wav'), wav);
+  await openFile(t, 'audio/long.wav');
+  await loaded('long audio');
+  check(Number(await ds('decodeRate')) < 8000 && await ds('sampleRate') === '8000' && Math.abs(Number(await ds('duration')) - seconds) < 1,
+    `a long recording decodes at a lower rate for its waveform (${await ds('decodeRate')} Hz; header ${await ds('sampleRate')} Hz, ${await ds('duration')} s)`);
+  await js(`ide.closeTab(ide.activeTab().path, true)`);
 
   // ---------- video ----------
   if (existsSync(path.join(FIX, 'video', 'clip.mp4'))) {
@@ -230,6 +243,19 @@ try {
   check(true, 'scrolling to the end renders the last row');
   check(await js(`${H}.querySelector('.vw-grid-head').getBoundingClientRect().top === ${H}.querySelector('.vw-grid').getBoundingClientRect().top`), 'header stays sticky while scrolled');
   await js(`ide.closeTab(${JSON.stringify(big)}, true)`);
+
+  // Past the editor's 20 MB the table is read-only, and past 32 MB it shows the file's first 32 MB, cut at a line end.
+  const huge = path.join(t.project, 'data', 'huge.csv');
+  const lines = Array.from({ length: 40000 }, (_, i) => `${i},${'x'.repeat(990)}\n`);
+  writeFileSync(huge, `id,text\n${lines.join('')}`);
+  let fit = 0;
+  for (let bytes = 8; fit < lines.length && bytes + lines[fit].length <= 32 * 1024 * 1024; fit++) bytes += lines[fit].length;
+  await openFile(t, 'data/huge.csv');
+  await until(`${H}?.dataset.loaded === 'true'`, 'huge csv', 60000);
+  const hugeStatus = await js(`${H}.querySelector('.vw-status').textContent`);
+  check(await ds('rows') === String(fit) && /first 32\.0 MB of 38\.0 MB/.test(hugeStatus),
+    `a 38 MB CSV shows the whole lines in its first 32 MB and says so (${await ds('rows')} of ${lines.length} rows, ${fit} expected; ${hugeStatus})`);
+  await js(`ide.closeTab(ide.activeTab().path, true)`);
 
   // ---------- JSONL ----------
   await openFile(t, 'data/records.jsonl');

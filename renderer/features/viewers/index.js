@@ -406,6 +406,9 @@
   // ---------- audio ----------
   const AUDIO_EXT = ['wav', 'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'aac'];
   const MAX_DECODE = 300 * 1024 * 1024;
+  // Decoded audio takes 4 bytes per sample and channel: an hour of stereo MP3 (~60 MB) would decode to 1.3 GB at its own
+  // rate. Long files decode at a lower rate instead, which is still plenty for drawing peaks.
+  const MAX_PCM = 256 * 1024 * 1024;
 
   // Sample rate and channel count from the container header (decodeAudioData resamples, so it cannot tell).
   function sniffAudio(b) {
@@ -482,6 +485,19 @@
     audio.addEventListener('seeked', () => { readout(); draw(); });
     audio.addEventListener('loadedmetadata', () => { if (!Number.isFinite(duration)) duration = audio.duration; readout(); });
     const readout = () => { time.textContent = `${fmtTime(audio.currentTime)} / ${fmtTime(duration)}`; };
+    // The element's duration once its metadata has loaded; NaN when it cannot tell.
+    const mediaDuration = () => new Promise((resolve) => {
+      if (audio.readyState >= 1) { resolve(audio.duration); return; }
+      const done = () => {
+        clearTimeout(timer);
+        audio.removeEventListener('loadedmetadata', done);
+        audio.removeEventListener('error', done);
+        resolve(audio.duration);
+      };
+      const timer = setTimeout(done, 10000);
+      audio.addEventListener('loadedmetadata', done);
+      audio.addEventListener('error', done);
+    });
     const loop = () => {
       cancelAnimationFrame(raf);
       draw();
@@ -565,7 +581,20 @@
         const bytes = await invoke('viewers:readBytes', path);
         const head = sniffAudio(bytes.subarray(0, 1 << 20));
         const rate = head?.rate >= 3000 && head.rate <= 768000 ? head.rate : 48000;
-        const ctx = new OfflineAudioContext(1, 1, rate);
+        const seconds = await mediaDuration();
+        const bytesPerSecond = (head?.channels || 2) * 4;
+        let decodeRate = rate;
+        if (Number.isFinite(seconds) && seconds * rate * bytesPerSecond > MAX_PCM) {
+          decodeRate = Math.floor(MAX_PCM / (seconds * bytesPerSecond));
+          if (decodeRate < 3000) {
+            status.textContent = tr('The file is too large to draw a waveform ({size}).', { size: fmtBytes(st.size) });
+            info.textContent = fmtBytes(st.size);
+            return;
+          }
+        }
+        if (disposed) return;
+        host.dataset.decodeRate = String(decodeRate);
+        const ctx = new OfflineAudioContext(1, 1, decodeRate);
         const buf = await ctx.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
         if (disposed) return;
         duration = buf.duration;
@@ -587,15 +616,17 @@
           peaks.push(out);
         }
         const channels = head?.channels || buf.numberOfChannels;
+        // Without a header rate, the decoded rate is the file's own only when it was not lowered.
+        const fileRate = head?.rate || (decodeRate === rate ? buf.sampleRate : 0);
         const parts = [
-          `${(head?.rate || buf.sampleRate).toLocaleString('en-US')} Hz`,
+          ...(fileRate ? [`${fileRate.toLocaleString('en-US')} Hz`] : []),
           channels === 1 ? tr('Mono') : channels === 2 ? tr('Stereo') : tr('{n} channels', { n: channels }),
           ...(head?.bits ? [`${head.bits}-bit`] : []),
           fmtTime(buf.duration),
           fmtBytes(st.size),
         ];
         info.textContent = parts.join('  ·  ');
-        host.dataset.sampleRate = String(head?.rate || buf.sampleRate);
+        host.dataset.sampleRate = String(fileRate || '');
         host.dataset.channels = String(channels);
         host.dataset.duration = String(buf.duration);
         host.dataset.loaded = 'true';
@@ -1615,6 +1646,7 @@
   }
 
   // Editor / Table views of a text document. `build(text)` -> {columns, rows, errors}.
+  const MAX_TABLE_BYTES = 32 * 1024 * 1024;
   function mountTableViewer(host, { path, doc }, { kind, build }) {
     host.classList.add('vw', 'vw-tableview');
     const settingKey = `viewers.${kind}Mode`;
@@ -1667,11 +1699,18 @@
       let text;
       if (doc) text = doc.model.getValue();
       else {
+        // Parsed rows take many times the file's size, so a big file shows its first MAX_TABLE_BYTES, cut at a line end.
         status.textContent = tr('Loading…');
-        const bytes = await invoke('viewers:readBytes', path).catch(() => null);
+        const st = await invoke('viewers:stat', path).catch(() => null);
+        const bytes = await invoke('viewers:readBytes', path, 0, MAX_TABLE_BYTES).catch(() => null);
         if (disposed) return;
-        text = bytes ? new TextDecoder().decode(bytes) : '';
-        status.textContent = tr('Read-only: the file is too large for the editor.');
+        let end = bytes?.length || 0;
+        const cut = !!st && st.size > end;
+        if (cut) end = bytes.lastIndexOf(10) + 1 || end;
+        text = bytes ? new TextDecoder().decode(bytes.subarray(0, end)) : '';
+        status.textContent = cut
+          ? tr('Read-only: the file is too large for the editor. The table shows its first {size} of {total}.', { size: fmtBytes(end), total: fmtBytes(st.size) })
+          : tr('Read-only: the file is too large for the editor.');
       }
       const t0 = performance.now();
       const d = build(text);

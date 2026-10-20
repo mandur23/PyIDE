@@ -126,5 +126,6 @@
   "Open the saved file in the system browser": "저장된 파일을 시스템 브라우저에서 엽니다",
   "HTML preview": "HTML 미리보기",
   "{n} script error": "스크립트 오류 {n}개",
-  "{n} script errors": "스크립트 오류 {n}개"
+  "{n} script errors": "스크립트 오류 {n}개",
+  "Read-only: the file is too large for the editor. The table shows its first {size} of {total}.": "읽기 전용: 파일이 너무 커서 에디터에서 열 수 없습니다. 표에는 전체 {total} 중 처음 {size}만 표시됩니다."
 }
