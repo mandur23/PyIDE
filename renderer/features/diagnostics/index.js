@@ -59,9 +59,13 @@
     e.stack,
   ].join('\n');
 
+  let opening = false;
   async function openErrors() {
-    if (openDialog) return;
-    let list = await invoke('diagnostics:errors');
+    // A second click while the list is being fetched must not open a second dialog.
+    if (openDialog || opening) return;
+    opening = true;
+    let list;
+    try { list = await invoke('diagnostics:errors'); } finally { opening = false; }
     let selected = list[list.length - 1]?.id;
     const body = el('div', 'diag');
     const rows = el('div', 'diag-list');
