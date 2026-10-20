@@ -305,7 +305,7 @@ if __name__ == '__main__':
         if (!extra.some((p) => ide.util.samePath(p, python.cmd))) ide.settings.set('interpreters.extra', [...extra, python.cmd]);
       }
       ide.settings.set(`interpreter.${dir}`, python.cmd);
-      await ide.openProject(dir);
+      if (!(await ide.openProject(dir))) return;
       ide.setInterpreter(python.cmd);
       const main = joinPath(dir, type.main);
       if (await ide.api.exists(main)) await ide.openFile(main);

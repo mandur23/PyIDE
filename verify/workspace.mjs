@@ -207,6 +207,16 @@ try {
   check((await js(`ide.settings.get('workspace.recent')`))[0].path.toLowerCase() === t.project.toLowerCase(), 'reopened project moves to the top of workspace.recent');
   await until(`(${rowExpr('python -m app')})?.classList.contains('ws-row')`, 'launchers of the first project again');
   check(await consoleOf('python -m app').then((s) => s.includes('Hello from app, Claude')), 'launcher consoles survive switching projects');
+
+  // ---------- unsaved files when switching, closing the project ----------
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'tool.py'))`);
+  await until(`ide.activeTab()?.title === 'tool.py'`, 'tool.py open before switching');
+  await js(`(ide.findTab(ide.util.joinPath(ide.root, 'tool.py')).model.pushEditOperations([], [{ range: new ide.monaco.Range(1, 1, 1, 1), text: '# unsaved\\n' }], () => null), true)`);
+  const kept = await js(`(window.confirm = () => false, ide.openProject(${q(second)}).then((opened) => ({ opened, root: ide.root, dirty: ide.isDirty(ide.findTab(ide.util.joinPath(ide.root, 'tool.py'))) })))`);
+  check(kept.opened === false && kept.root.toLowerCase() === t.project.toLowerCase() && kept.dirty, `opening another project asks about unsaved files and keeps them when cancelled (${JSON.stringify(kept)})`);
+  await js(`(window.confirm = () => true, ide.closeProject())`);
+  await until(`document.querySelector('#wsList .ws-empty')?.textContent === 'Open a project to see its launchers.'`, 'launchers cleared');
+  check(await js(`!document.querySelector('#wsList .ws-row') && !document.querySelector('#wsDetail .ws-detail-head')`), 'closing the project clears the Launchers tool window');
   await shot('final.png');
 } catch (err) {
   check(false, err.message);

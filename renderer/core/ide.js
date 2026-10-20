@@ -1097,8 +1097,9 @@ $('interpSelect').onchange = () => {
 };
 
 // ---------- project ----------
+// Returns false if the user kept unsaved files of the current project open (each one asks, as Close Project does).
 ide.openProject = async (dir) => {
-  ide.closeAllTabs(true);
+  if (!ide.closeAllTabs(false)) return false;
   ide.root = dir;
   expanded.clear();
   expanded.add(keyOf(dir));
@@ -1114,6 +1115,7 @@ ide.openProject = async (dir) => {
   const recent = ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, dir));
   ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
   ide.emit('projectOpened', dir);
+  return true;
 };
 
 // Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open.

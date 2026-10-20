@@ -726,6 +726,17 @@
     renderHome();
     refresh();
   });
+  // Back on the welcome screen the Launchers tool window no longer lists the closed project's launchers; a scan
+  // still running for it is dropped (refresh() checks the sequence).
+  ide.on('projectClosed', () => {
+    refreshSeq++;
+    scanning = false;
+    scanned = { entries: [], venvs: [] };
+    info = { branch: null, readme: null };
+    selectedId = null;
+    renderList();
+    renderDetail();
+  });
   // With nothing open, the home tab comes back (unless it was the tab just closed).
   ide.on('fileClosed', (path) => { closedHomeLast = path === HOME_ID; });
   ide.on('activeTabChanged', (tab) => {
