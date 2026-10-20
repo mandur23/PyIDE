@@ -185,7 +185,7 @@ try {
   check(afterReload.text.includes('typed during reload') && !afterReload.text.includes('changed on disk') && afterReload.dirty, `a reload from disk does not overwrite text typed while the file was read (${JSON.stringify(afterReload)})`);
 
   // Save All in the close confirmation keeps the window open when a file cannot be written (read-only here).
-  await js(`(window.__alerts = [], window.alert = (m) => window.__alerts.push(String(m)), true)`);
+  await js(`(window.__alerts = [], ide.ui.alert = (m) => window.__alerts.push(String(m)), true)`);
   chmodSync(notes, 0o444);
   t.cdp('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 0)' });
   await until(`document.querySelector('.dialog-title')?.textContent === 'Save Changes?'`, 'close confirmation (main window)', 8000);

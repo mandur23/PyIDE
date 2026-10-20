@@ -1302,7 +1302,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     const name = await ide.ui.prompt(tr('New Jupyter Notebook name'), 'Untitled.ipynb');
     if (!name) return;
     const target = joinPath(dir, /\.ipynb$/i.test(name) ? name : `${name}.ipynb`);
-    if (await ide.api.exists(target)) { alert(tr('{name} already exists', { name: basename(target) })); return; }
+    if (await ide.api.exists(target)) { ide.ui.alert(tr('{name} already exists', { name: basename(target) })); return; }
     const nb = { ...newNotebookMeta(), cells: [cellJson(newCell('code', '', true))] };
     await ide.api.write(target, `${stringify(nb)}\n`);
     ide.refreshTree?.();

@@ -85,9 +85,14 @@ try {
 
   writeFileSync(path.join(t.project, 'docs', 'a.py'), 'KEEP = 1\n');
   await js(`ide.refreshTree()`);
+  // Messages use the IDE's own dialog (window.alert would block the renderer until dismissed).
+  await js(`(ide.ui.alert('<b>x</b> & y'), true)`);
+  check(await js(`document.querySelector('.dialog-message')?.textContent === '<b>x</b> & y'`), 'ide.ui.alert shows the message as text in an IDE dialog');
+  await press('Escape');
+  await until(`!document.querySelector('.dialog-message')`, 'message dialog closed');
   await js(`(() => {
     window.alerts = [];
-    window.alert = (m) => window.alerts.push(m);
+    ide.ui.alert = (m) => window.alerts.push(m);
     const dt = new DataTransfer();
     const fire = (type, node) => node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
     const pkgA = [...document.querySelectorAll('#tree .node')].find((n) => n._entry.path.toLowerCase().endsWith('pkg\\\\a.py'));

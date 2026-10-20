@@ -463,7 +463,7 @@
     const name = await ide.ui.prompt(tr('New HTTP Request file name'), 'requests.http');
     if (!name) return;
     const target = joinPath(dir, isHttpPath(name) ? name : `${name}.http`);
-    if (await ide.api.exists(target)) { alert(tr('{name} already exists', { name: basename(target) })); return; }
+    if (await ide.api.exists(target)) { ide.ui.alert(tr('{name} already exists', { name: basename(target) })); return; }
     await ide.api.write(target, TEMPLATE);
     ide.refreshTree?.();
     ide.emit('filesChanged', { created: [target] });

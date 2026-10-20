@@ -653,7 +653,7 @@
     if (!viewer || viewer.text) {
       doc = await loadDoc(path).catch((e) => ({ error: e }));
       if (doc.error) {
-        alert(tr('Cannot open {name}: {error}', { name: basename(path), error: String(doc.error.message || doc.error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
+        ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(path), error: String(doc.error.message || doc.error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') }));
         return null;
       }
       if (doc.unsupported) {
@@ -875,7 +875,7 @@
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
     } catch (e) {
       const error = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-      if (!auto) alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
+      if (!auto) ide.ui.alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
       else {
         doc.autoSaveFailed = version;
         ide.emit('autoSaveSkipped', { path: doc.path, reason: 'failed', error });
@@ -959,7 +959,7 @@
           doc.encoding = enc;
           try { await ide.api.invoke('fs:writeText', doc.path, doc.model.getValue(), enc); } catch (e) {
             doc.encoding = prev;
-            alert(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+            ide.ui.alert(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
             return;
           }
           doc.savedVersion = doc.model.getAlternativeVersionId();

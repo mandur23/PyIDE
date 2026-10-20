@@ -421,6 +421,10 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   content.querySelector('input,select,textarea')?.focus();
   return dlg;
 };
+// A message in the IDE's own dialog. window.alert() blocks the whole renderer until it is dismissed.
+ide.ui.alert = (text) => {
+  ide.ui.dialog({ title: '', body: el('div', 'dialog-message', text) });
+};
 
 // ---------- actions & keymap ----------
 const CODE_KEYS = { Slash: '/', Backslash: '\\', Minus: '-', Equal: '=', Comma: ',', Period: '.', Semicolon: ';',
@@ -873,23 +877,23 @@ async function createEntry(isDir) {
   const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
   if (!name) return;
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
-  if (await ide.api.exists(target)) return alert(tr('{path} already exists', { path: basename(target) }));
+  if (await ide.api.exists(target)) return void ide.ui.alert(tr('{path} already exists', { path: basename(target) }));
   try {
     await ide.api.create(target, isDir);
     expanded.add(keyOf(dirname(target)));
     await renderTree();
     ide.emit('filesChanged', { created: [target] });
     if (!isDir) ide.openFile(target);
-  } catch (e) { alert(ipcError(e)); }
+  } catch (e) { ide.ui.alert(ipcError(e)); }
 }
 
 // Renames or moves a file or folder. Windows' rename replaces an existing file, so an existing target is refused.
 // Open files under it are saved first and reopened from their new place.
 async function moveTo(entry, to) {
-  if (!samePath(entry.path, to) && await ide.api.exists(to)) return alert(tr('{path} already exists', { path: to }));
+  if (!samePath(entry.path, to) && await ide.api.exists(to)) return void ide.ui.alert(tr('{path} already exists', { path: to }));
   const open = ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path));
   for (const t of open) if (ide.isDirty(t)) await ide.saveTab(t);
-  try { await ide.api.rename(entry.path, to); } catch (e) { return alert(ipcError(e)); }
+  try { await ide.api.rename(entry.path, to); } catch (e) { return void ide.ui.alert(ipcError(e)); }
   for (const t of open) ide.closeTab(t.path, true);
   renderTree();
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
@@ -914,7 +918,7 @@ async function deleteEntry(entry) {
   if (!confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }))) return;
   // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
   try { await ide.api.trash(entry.path); } catch (e) {
-    return alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
+    return void ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
   }
   ide.tabs.filter((t) => t.path && isUnder(t.path, entry.path)).forEach((t) => ide.closeTab(t.path, true));
   renderTree();
