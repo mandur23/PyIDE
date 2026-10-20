@@ -98,7 +98,7 @@ try {
   check(await a.js(`document.querySelector('#pluginsList .plugins-group').textContent.startsWith('Downloaded (2)')`), 'Installed tab shows downloaded plugins');
   await a.click('#pluginsList .plugin-row[data-id="key-promoter"]');
   await a.until(`!!document.querySelector('#pluginUninstallBtn')`, 'uninstall button');
-  await a.js(`(window.confirm = () => true, 0)`);
+  await a.js(`(ide.ui.confirm = async () => true, 0)`);
   await a.click('#pluginUninstallBtn');
   await a.until(`!document.querySelector('#pluginsList .plugin-row[data-id="key-promoter"]')`, 'uninstalled');
   check(true, 'uninstall removes a downloaded plugin');

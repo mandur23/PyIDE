@@ -399,7 +399,7 @@ try {
     // Opening another project stops this run (what it embedded is saved); reopening the project indexes the rest.
     const other = mkdtempSync(path.join(tmpdir(), 'pyide-semantic-other-'));
     writeFileSync(path.join(other, 'other.py'), 'def other():\n    return 1\n');
-    await again.js(`(window.confirm = () => true, ide.openProject(${JSON.stringify(other)}).then(() => true))`);
+    await again.js(`(ide.ui.confirm = async () => true, ide.openProject(${JSON.stringify(other)}).then(() => true))`);
     await again.until(`ide.api.invoke('semantic:indexInfo', ${JSON.stringify(proj)}).then((i) => !i.indexing)`, 'previous project run stopped', 10000);
     const stoppedAt = await again.js(`ide.api.invoke('semantic:indexInfo', ${JSON.stringify(proj)})`);
     await sleep(3000);

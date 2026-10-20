@@ -277,13 +277,17 @@
     if (any !== lastDirty) { lastDirty = any; ide.api.send('window:setDirty', any); }
   }
 
-  // Returns false when the user cancelled closing a modified document.
+  // Returns true once closed; when a modified document has to ask first, a promise of whether it closed (false: the
+  // user kept it). Callers that need the answer await it.
   function closeTabObj(tab, force = false, { moving = false } = {}) {
     const g = tab.group;
-    const i = g.tabs.indexOf(tab);
-    if (i < 0) return true;
+    if (g.tabs.indexOf(tab) < 0) return true;
     const last = tab.doc && tabsOfDoc(tab.doc).length === 1;
-    if (!force && last && docDirty(tab.doc) && !confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }))) return false;
+    if (!force && last && docDirty(tab.doc)) {
+      return ide.ui.confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }), { ok: tr('Close') })
+        .then((yes) => yes && closeTabObj(tab, true, { moving }));
+    }
+    const i = g.tabs.indexOf(tab);
     g.tabs.splice(i, 1);
     const m = mru.indexOf(tab);
     if (m >= 0) mru.splice(m, 1);
@@ -758,8 +762,9 @@
     return tab ? closeTabObj(tab, force) : true;
   };
   ide.closeTabObject = closeTabObj;
-  ide.closeAllTabs = (force) => {
-    for (const g of [...groups]) for (const t of [...g.tabs]) if (!closeTabObj(t, force)) return false;
+  // Resolves false if the user kept a modified document open.
+  ide.closeAllTabs = async (force) => {
+    for (const g of [...groups]) for (const t of [...g.tabs]) if (!(await closeTabObj(t, force))) return false;
     return true;
   };
 
@@ -1059,7 +1064,7 @@
 
   // ---------- menus ----------
   const fileTabs = (g) => g.tabs;
-  function closeMany(list) { for (const t of list) if (!closeTabObj(t)) break; }
+  async function closeMany(list) { for (const t of list) if (!(await closeTabObj(t))) break; }
 
   function showTabMenu(t, x, y) {
     const g = t.group;

@@ -242,7 +242,7 @@ try {
   await type('switch test');
   await press('Enter');
   await until(`(ide.aiChat.state().messages.at(-1)?.text.length || 0) > 20`, 'reply streaming before the switch', 15000);
-  await js(`(window.confirm = () => true, ide.openProject(${JSON.stringify(elsewhere)}).then(() => true))`);
+  await js(`(ide.ui.confirm = async () => true, ide.openProject(${JSON.stringify(elsewhere)}).then(() => true))`);
   await until(`!ide.aiChat.state().pending && ide.aiChat.state().root?.toLowerCase() === ${JSON.stringify(elsewhere.toLowerCase())}`, 'other project loaded', 10000);
   check((await state()).messages.length === 0, 'the other project starts with its own chats, and is not blocked by the reply of the previous one');
   await js('ide.aiChat.saved()');

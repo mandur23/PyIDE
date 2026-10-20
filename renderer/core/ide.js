@@ -523,6 +523,16 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
 ide.ui.alert = (text) => {
   ide.ui.dialog({ title: '', body: el('div', 'dialog-message', text) });
 };
+// A yes/no question in the IDE's own dialog; resolves true for `ok`. window.confirm() would block the renderer.
+ide.ui.confirm = (text, { title = '', ok = tr('OK') } = {}) => new Promise((resolve) => {
+  let yes = false;
+  ide.ui.dialog({
+    title,
+    body: el('div', 'dialog-message', text),
+    onClose: () => resolve(yes),
+    buttons: [{ label: ok, primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+  });
+});
 
 // ---------- actions & keymap ----------
 const CODE_KEYS = { Slash: '/', Backslash: '\\', Minus: '-', Equal: '=', Comma: ',', Period: '.', Semicolon: ';',
@@ -1035,13 +1045,13 @@ async function renameEntry(entry) {
 // Dropping a row on a folder moves it there, after a confirmation.
 async function moveEntry(entry, dir) {
   if (samePath(dirname(entry.path), dir) || isUnder(dir, entry.path)) return;
-  if (!confirm(tr('Move {name} to {dir}?', { name: entry.name, dir: ide.util.rel(dir) || basename(dir) }))) return;
+  if (!(await ide.ui.confirm(tr('Move {name} to {dir}?', { name: entry.name, dir: ide.util.rel(dir) || basename(dir) }), { ok: tr('Move') }))) return;
   expanded.add(keyOf(dir));
   await moveTo(entry, joinPath(dir, entry.name));
 }
 
 async function deleteEntry(entry) {
-  if (!confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }))) return;
+  if (!(await ide.ui.confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }), { ok: tr('Delete') }))) return;
   // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
   try { await ide.api.trash(entry.path); } catch (e) {
     return void ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
@@ -1260,7 +1270,7 @@ function showTrustBar(dir) {
     await ide.api.invoke('trust:add', dir);
     // Every feature starts over as for a trusted project: interpreters, Git, Pyright with the project venv. The page
     // reopens this project (the window's own ?open= is the folder it was started with).
-    if (!ide.closeAllTabs(false)) return;
+    if (!(await ide.closeAllTabs(false))) return;
     const url = new URL(location.href);
     url.searchParams.set('open', dir);
     url.searchParams.delete('file');
@@ -1275,7 +1285,7 @@ function showTrustBar(dir) {
 ide.openProject = async (dir) => {
   const trust = await askTrust(dir);
   if (!trust) return false;
-  if (!ide.closeAllTabs(false)) return false;
+  if (!(await ide.closeAllTabs(false))) return false;
   ide.trusted = trust === 'trusted';
   if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
   ide.root = dir;
@@ -1326,7 +1336,7 @@ ide.probeProject = async (dir) => {
 
 // Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open.
 ide.closeProject = async () => {
-  if (!ide.root || !ide.closeAllTabs(false)) return false;
+  if (!ide.root || !(await ide.closeAllTabs(false))) return false;
   ide.root = null;
   trustBar.classList.add('hidden');
   expanded.clear();

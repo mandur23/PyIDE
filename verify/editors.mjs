@@ -262,6 +262,21 @@ try {
   const pages = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).filter((p) => p.type === 'page');
   check(pages.length === 1, "Don't Save closes the detached window");
   w.close();
+
+  // ---------- closing a modified tab asks in the IDE's own dialog (window.confirm would freeze the renderer) ----------
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'c.py'))`);
+  await until(`ide.activeTab()?.title === 'c.py'`, 'c.py again');
+  await js(`(ide.editor.trigger('test', 'type', { text: 'DIRTY = 1\\n' }), true)`);
+  await press('Ctrl+F4');
+  await until(`document.querySelector('.dialog-message')?.textContent.includes('c.py has unsaved changes')`, 'close tab question');
+  await press('Escape');
+  await sleep(300);
+  check(await js(`ide.activeTab()?.title === 'c.py' && ide.isDirty(ide.activeTab())`), 'Cancel keeps the modified tab open');
+  await press('Ctrl+F4');
+  await until(`!!document.querySelector('.dialog-message')`, 'close tab question again');
+  await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Close').click()`);
+  await until(`!ide.findTab(ide.util.joinPath(ide.root, 'c.py'))`, 'tab closed');
+  check(true, 'Close closes it without saving');
   await shot('final.png');
 } catch (err) {
   check(false, err.message);

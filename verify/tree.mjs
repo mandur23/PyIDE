@@ -70,7 +70,7 @@ try {
 
   // Drag main.py onto docs: moves it after the confirmation. Drag a.py onto the editor: opens it there.
   await js(`(() => {
-    window.confirm = () => true;
+    ide.ui.confirm = async () => true;
     const dt = new DataTransfer();
     const fire = (type, node) => node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
     fire('dragstart', ${row('main.py')});

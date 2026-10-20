@@ -636,7 +636,7 @@
     const installFromCatalog = (p) => installFrom(p.dir, localized(p).name);
 
     async function uninstall(p) {
-      if (!confirm(tr('Uninstall {name}?', { name: localized(p).name }))) return;
+      if (!(await ide.ui.confirm(tr('Uninstall {name}?', { name: localized(p).name }), { ok: tr('Uninstall') }))) return;
       // Windows refuses to delete a folder another program has open.
       try { await ide.api.invoke('plugins:uninstall', p.id); } catch (e) {
         status.textContent = tr('Could not uninstall {name}: {error}', { name: localized(p).name, error: ide.util.errorText(e) });
