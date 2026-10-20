@@ -443,7 +443,8 @@ let lastShift = 0;
 document.addEventListener('keydown', (e) => {
   if (popupState || $('dialogHost').childElementCount || menusOpen()) return;
   if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.repeat) {
-    const now = performance.now();
+    // The key's own time, not the handling time: a busy renderer must not split one Double Shift into two Shifts.
+    const now = e.timeStamp;
     if (now - lastShift < 350) { lastShift = 0; return fireCombo('Shift Shift', e); }
     lastShift = now;
     return;
@@ -1168,7 +1169,7 @@ const editorAction = (id) => () => ide.editor?.trigger('keymap', id, null);
 [
   { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: () => ide.saveAll() },
   { id: 'OpenProject', title: tr('Open Folder…'), keys: 'Ctrl+O', run: pickFolder },
-  { id: 'GotoFile', title: tr('Go to File…'), keys: ['Ctrl+Shift+N', 'Shift Shift'], run: gotoFile },
+  { id: 'GotoFile', title: tr('Go to File…'), keys: 'Ctrl+Shift+N', run: gotoFile },
   { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction, terminal: true },
   { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },
   { id: 'HideBottom', title: tr('Hide Active Tool Window'), keys: 'Shift+Escape', run: () => areas.bottom.active?.hide(), terminal: true },

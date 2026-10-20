@@ -637,20 +637,64 @@
 
   // ---------- Go to Class / Go to Symbol ----------
   // PyCharm-style matching: exact, prefix, CamelHumps/snake_humps ("UM" -> UserModel), substring, and * wildcards.
+  // humps returns the matched character positions, or null.
   function humps(name, q) {
     const upper = (c) => c >= 'A' && c <= 'Z';
-    const start = (k) => k === 0 || name[k - 1] === '_' || (upper(name[k]) && !upper(name[k - 1]));
+    const start = (k) => k === 0 || !/[\p{L}\p{N}]/u.test(name[k - 1]) || (upper(name[k]) && !upper(name[k - 1]));
+    const at = [];
     let i = 0;
     for (let j = 0; j < q.length; j++) {
       const c = q[j].toLowerCase();
-      if (c === '_') continue;
-      if (j > 0 && i < name.length && name[i].toLowerCase() === c && !(upper(q[j]) && !start(i))) { i++; continue; }
+      if (c === '_' || c === ' ') continue;
+      if (j > 0 && i < name.length && name[i].toLowerCase() === c && !(upper(q[j]) && !start(i))) { at.push(i++); continue; }
       let k = i;
       while (k < name.length && !(start(k) && name[k].toLowerCase() === c)) k++;
-      if (k >= name.length) return false;
+      if (k >= name.length) return null;
+      at.push(k);
       i = k + 1;
     }
-    return true;
+    return at;
+  }
+
+  const toRanges = (at) => at.reduce((out, k) => {
+    const last = out[out.length - 1];
+    if (last && last[1] === k) last[1] = k + 1; else out.push([k, k + 1]);
+    return out;
+  }, []);
+
+  // matchScore plus the ranges to highlight. `fuzzy` adds PyCharm's typo-tolerant tail: every word of a multi-word
+  // query found anywhere ("todo tool"), then any in-order subsequence ("mdl" -> models).
+  function match(name, q, { fuzzy = false } = {}) {
+    q = q.trim();
+    if (!q) return { score: 1, ranges: [] };
+    const n = name.toLowerCase();
+    const l = q.toLowerCase();
+    if (q.includes('*')) {
+      const ranges = [];
+      let from = 0;
+      for (const part of l.split('*').filter(Boolean)) {
+        const k = n.indexOf(part, from);
+        if (k < 0) return { score: 0, ranges: [] };
+        ranges.push([k, k + part.length]);
+        from = k + part.length;
+      }
+      return { score: 30, ranges };
+    }
+    const score = matchScore(name, q);
+    if (score >= 80) return { score, ranges: [[0, q.length]] };
+    if (score === 60) return { score, ranges: toRanges(humps(name, q)) };
+    if (score === 40) { const k = n.indexOf(l); return { score, ranges: [[k, k + l.length]] }; }
+    if (!fuzzy) return { score: 0, ranges: [] };
+    const words = l.split(/\s+/);
+    if (words.length > 1 && words.every((w) => n.includes(w))) return { score: 35, ranges: words.map((w) => [n.indexOf(w), n.indexOf(w) + w.length]) };
+    const at = [];
+    for (let i = 0, j = 0; j < l.length; j++) {
+      if (l[j] === ' ') continue;
+      while (i < n.length && n[i] !== l[j]) i++;
+      if (i >= n.length) return { score: 0, ranges: [] };
+      at.push(i++);
+    }
+    return { score: 10, ranges: toRanges(at) };
   }
 
   function matchScore(name, q) {
@@ -664,7 +708,7 @@
     return n.includes(l) ? 40 : 0;
   }
 
-  function rankSymbols(list, query) {
+  function rankSymbols(list, query, limit = 100) {
     let q = query.trim();
     let scope = '';
     const dot = q.lastIndexOf('.');
@@ -676,7 +720,7 @@
       if (sc > 0) scored.push([s, sc]);
     }
     scored.sort((a, b) => b[1] - a[1] || a[0].name.length - b[0].name.length || a[0].name.localeCompare(b[0].name));
-    return scored.slice(0, 100).map(([s]) => ({
+    return scored.slice(0, limit).map(([s]) => ({
       label: s.name, detail: `${s.container ? `${s.container} · ` : ''}${rel(s.path)}`, hint: KIND[s.kind] || s.kind, icon: GLYPH[s.kind] || '•', value: s,
     }));
   }
@@ -774,4 +818,11 @@
     { id: 'ActivateFindToolWindow', title: tr('Tool Window: {title}', { title: tr('Find in Files') }), run: () => findTw.show() },
     { id: 'ActivateTODOToolWindow', title: tr('Tool Window: {title}', { title: 'TODO' }), run: () => { todoTw.show(); refreshTodosNow(); } },
   ].forEach(ide.registerAction);
+
+  // Providers for Search Everywhere (search-everywhere plugin), so it shows exactly what Go to Class/Symbol finds.
+  ide.searchNav = {
+    match, rankSymbols, kindIcon, goTo,
+    symbols: loadIndex,
+    recentFiles: () => [...recent],
+  };
 })();

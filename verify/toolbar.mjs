@@ -83,7 +83,7 @@ try {
   check((await menuLabels(a, '#settingsGearMenu')).slice(0, 2).join('|') === 'Settings…|Plugins…', 'settings gear opens a menu (Settings…, Plugins…, Theme, …)');
   await a.press('Escape');
   await a.click('#searchBtn');
-  await a.until(`!document.querySelector('#popup').classList.contains('hidden')`, 'search popup');
+  await a.until(`!!document.querySelector('#searchEverywhere')`, 'search popup');
   check(true, 'search button opens Search Everywhere');
   await a.press('Escape');
   await a.click('#statusInterp');

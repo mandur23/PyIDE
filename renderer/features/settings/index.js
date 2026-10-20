@@ -147,14 +147,20 @@
   // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, mount(host, ctx)}
   // to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
   let TREE, PAGES;
-  function rebuildTree() {
+  function buildTree() {
     const pluginPages = ide.settingsPages || [];
     const ai = pluginPages.filter((p) => p.group === 'ai');
     const nested = { 'editor-group': 'editor', 'appearance-behavior': 'appearance' };
     const base = BASE_TREE.map((n) => (nested[n.group] ? { ...n, children: [...n.children, ...pluginPages.filter((p) => p.group === nested[n.group])] } : n));
-    TREE = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
+    return [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
+  }
+  function rebuildTree() {
+    TREE = buildTree();
     PAGES = TREE.flatMap((n) => n.children || [n]);
   }
+  // Every page with its group's title, for Search Everywhere: [{id, title, group, keywords}].
+  ide.settingsPageList = () => buildTree().flatMap((n) => (n.children || [n]).map((p) => ({
+    id: p.id, title: p.title(), group: n.children ? n.title() : '', keywords: p.keywords || '' })));
   rebuildTree();
   const groupOf = (id) => TREE.find((n) => n.children?.some((c) => c.id === id));
 

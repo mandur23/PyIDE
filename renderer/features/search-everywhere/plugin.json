@@ -1,0 +1,10 @@
+{
+  "id": "search-everywhere",
+  "name": "Search Everywhere",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Double Shift popup that searches classes, files, symbols, actions and settings in one place.",
+  "depends": [
+    "search-nav"
+  ]
+}

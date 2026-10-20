@@ -121,7 +121,7 @@
     ]) },
     { label: tr('Navigate'), submenu: () => tidy([
       act('Back'), act('Forward'), act('JumpToLastChange'), { separator: true },
-      act('GotoFile'), act('GotoClass'), act('GotoSymbol'), act('GotoAction'), act('GotoLine'), { separator: true },
+      act('SearchEverywhere'), act('GotoFile'), act('GotoClass'), act('GotoSymbol'), act('GotoAction'), act('GotoLine'), { separator: true },
       act('GotoDeclaration'), act('GotoTypeDeclaration'), act('GotoNextError'), act('GotoPreviousError'),
       act('SelectInProjectView'),
     ]) },
@@ -269,7 +269,8 @@
   // ---------- actions ----------
   [
     { id: 'MainMenu', title: tr('Main Menu'), keys: 'Alt+\\', run: openMainMenu, terminal: true },
-    { id: 'SearchEverywhere', title: tr('Search Everywhere'), run: () => ide.runAction('GotoFile') },
+    // The search-everywhere plugin replaces this with the real popup; without it, Double Shift still finds files.
+    { id: 'SearchEverywhere', title: tr('Search Everywhere'), keys: 'Shift Shift', run: () => ide.runAction('GotoFile') },
     { id: 'GetFromVcs', title: tr('Get from VCS…'), run: getFromVcs },
     { id: 'CloseProject', title: tr('Close Project'), run: () => ide.closeProject() },
     { id: 'Exit', title: tr('Exit'), run: () => window.close() },
@@ -285,7 +286,7 @@
   for (const [id, keys] of [['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Shift+Z'], ['Cut', 'Ctrl+X'], ['Copy', 'Ctrl+C'], ['Paste', 'Ctrl+V'], ['SelectAll', 'Ctrl+A']]) {
     ide.actions.find((x) => x.id === id).menuHint = keys;
   }
-  $('searchBtn').onclick = () => ide.runAction('GotoFile');
+  $('searchBtn').onclick = () => ide.runAction('SearchEverywhere');
 
   ide.on('projectOpened', renderProjectWidget);
   ide.on('projectClosed', () => { renderProjectWidget(); renderWelcomeRecent(); });
