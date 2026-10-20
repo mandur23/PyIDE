@@ -6,7 +6,8 @@
   const CURSOR_DEBOUNCE = 120;
   const EDIT_DEBOUNCE = 400;
 
-  const toPath = (uri) => decodeURIComponent(String(uri).replace(/^file:\/\/\//i, ''))
+  // file:///c%3A/x.py -> C:\x.py; file://server/share/x.py (UNC) -> \\server\share\x.py
+  const toPath = (uri) => decodeURIComponent(String(uri).replace(/^file:\/\/\//i, '').replace(/^file:\/\//i, '//'))
     .replace(/\//g, '\\').replace(/^([a-z]):/, (_m, d) => `${d.toUpperCase()}:`);
   const modelPath = (model) => (model?.uri.scheme === 'file' ? toPath(model.uri.toString()) : null);
   const isPy = (p) => /\.pyi?$/i.test(p || '');

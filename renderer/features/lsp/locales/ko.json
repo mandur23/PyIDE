@@ -40,5 +40,6 @@
   "Show Context Actions": "컨텍스트 액션 표시",
   "Next Highlighted Error": "다음 강조 표시된 오류",
   "Previous Highlighted Error": "이전 강조 표시된 오류",
-  "Restart Pyright Language Server": "Pyright 언어 서버 다시 시작"
+  "Restart Pyright Language Server": "Pyright 언어 서버 다시 시작",
+  "{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.": "{name}을(를) 바꿀 수 없습니다: UTF-8 파일이 아니고 변경 위치가 ASCII가 아닌 문자가 있는 줄에 있습니다."
 }

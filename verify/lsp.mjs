@@ -157,6 +157,10 @@ try {
   check(await js(`ide.findTab(ide.util.joinPath(ide.root, 'models.py')).model.getLineContent(10).includes('def say_hello(')`), 'rename updates the declaration in another open file');
   const cli = await js(`ide.api.read(ide.util.joinPath(ide.root, 'cli.py'))`);
   check(cli.includes('.say_hello("cli")'), 'rename rewrites a closed file on disk');
+  // A closed CP949 file keeps its encoding (it was written back as UTF-8, breaking its Korean text).
+  const kr = await js(`ide.api.invoke('fs:readText', ide.util.joinPath(ide.root, 'kr_cp949.py'))`);
+  check(kr.encoding === 'cp949' && kr.text.includes('make_greeter("kr").say_hello("kr"))  # 인사') && kr.text.includes('# 한글 인사'),
+    `rename rewrites a closed CP949 file in CP949 (${JSON.stringify(kr)})`);
   await shot('rename.png');
   await press('Ctrl+S');
 

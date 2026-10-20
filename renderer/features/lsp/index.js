@@ -9,7 +9,8 @@
 
   // ---------- uris, positions, ranges ----------
   const toUri = (p) => monaco.Uri.file(p).toString();
-  const toPath = (uri) => decodeURIComponent(String(uri).replace(/^file:\/\/\//i, ''))
+  // file:///c%3A/x.py -> C:\x.py; file://server/share/x.py (UNC) -> \\server\share\x.py
+  const toPath = (uri) => decodeURIComponent(String(uri).replace(/^file:\/\/\//i, '').replace(/^file:\/\//i, '//'))
     .replace(/\//g, '\\').replace(/^([a-z]):/, (_m, d) => `${d.toUpperCase()}:`);
   const isPy = (p) => /\.pyi?$/i.test(p || '');
   const lspPos = (pos) => ({ line: pos.lineNumber - 1, character: pos.column - 1 });
@@ -235,24 +236,58 @@
     return out;
   }
 
-  // Applies edits to open models (undoable) and rewrites closed files on disk. With keepOpenEdits the
-  // edits for open models are returned as Monaco workspace edits instead (rename applies them itself).
+  // Pyright reads a closed file from disk as UTF-8, so its positions are in that text. A CP949 file is rewritten in
+  // CP949 (writing it as UTF-8 broke it), which is only safe where the text before each edit on its line is ASCII:
+  // there both readings agree. Otherwise, and for UTF-16, the edit is refused rather than applied at wrong columns.
+  const ASCII = /^[\x00-\x7f]*$/;
+  function closedFileEdit(file, edits) {
+    if (file.encoding === 'utf-8') return applyTextEdits(file.text, edits);
+    // Node's UTF-8 reading keeps the BOM as U+FEFF, and line 0's columns count it.
+    if (file.encoding === 'utf-8-bom') return applyTextEdits(`﻿${file.text}`, edits).replace(/^﻿/, '');
+    if (file.encoding !== 'cp949') return null;
+    const lines = file.text.split('\n');
+    const asciiBefore = (p) => ASCII.test((lines[p.line] ?? '').slice(0, p.character));
+    return edits.every((e) => asciiBefore(e.range.start) && asciiBefore(e.range.end)) ? applyTextEdits(file.text, edits) : null;
+  }
+
+  // Applies edits to open models (undoable) and rewrites closed files on disk, in their own encoding. With
+  // keepOpenEdits the edits for open models are returned as Monaco workspace edits instead (rename applies them
+  // itself). Nothing is applied when a closed file cannot take its edits: {refused} says why.
   async function applyWorkspaceEdit(we, { keepOpenEdits = false } = {}) {
+    const closed = [];
+    for (const [uri, edits] of editsByUri(we)) {
+      const path = toPath(uri);
+      if (ide.findTab(path)?.model) continue;
+      let file;
+      try {
+        file = await ide.api.invoke('fs:readText', path);
+      } catch (err) {
+        console.warn(`could not apply edit to ${path}`, err);
+        continue;
+      }
+      if (file.text === undefined) {
+        console.warn(`could not apply edit to ${path}: binary or too large`);
+        continue;
+      }
+      const text = closedFileEdit(file, edits);
+      if (text === null) {
+        return { edits: [], written: [], refused: tr('{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.', { name: basename(path) }) };
+      }
+      closed.push({ path, text, encoding: file.encoding });
+    }
     await ide.localHistory?.checkpoint('Before Refactoring', { paths: [...editsByUri(we).keys()].map(toPath) });
     const monacoEdits = [];
     const written = [];
     for (const [uri, edits] of editsByUri(we)) {
-      const path = toPath(uri);
-      const tab = ide.findTab(path);
-      if (tab?.model) {
-        const ops = edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
-        if (keepOpenEdits) for (const op of ops) monacoEdits.push({ resource: tab.model.uri, textEdit: op, versionId: undefined });
-        else tab.model.pushEditOperations([], ops, () => null);
-        continue;
-      }
+      const tab = ide.findTab(toPath(uri));
+      if (!tab?.model) continue;
+      const ops = edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
+      if (keepOpenEdits) for (const op of ops) monacoEdits.push({ resource: tab.model.uri, textEdit: op, versionId: undefined });
+      else tab.model.pushEditOperations([], ops, () => null);
+    }
+    for (const { path, text, encoding } of closed) {
       try {
-        const text = await ide.api.read(path);
-        await ide.api.write(path, applyTextEdits(text, edits));
+        await ide.api.invoke('fs:writeText', path, text, encoding);
         written.push(path);
       } catch (err) {
         console.warn(`could not apply edit to ${path}`, err);
@@ -262,7 +297,11 @@
     if (!keepOpenEdits) ide.renderTabs();
     return { edits: monacoEdits, written };
   }
-  ide.api.on('lsp:applyEdit', (p) => { if (p.gen === gen) applyWorkspaceEdit(p.edit); });
+  const applyOrExplain = async (we) => {
+    const { refused } = await applyWorkspaceEdit(we);
+    if (refused) ide.ui.alert(refused);
+  };
+  ide.api.on('lsp:applyEdit', (p) => { if (p.gen === gen) applyOrExplain(p.edit).catch((err) => console.warn('workspace edit failed', err)); });
 
   // ---------- Monaco providers ----------
   const K = monaco.languages.CompletionItemKind;
@@ -442,15 +481,15 @@
       if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: tr("'{name}' is not a valid identifier", { name: newName }) };
       const we = doc && await request('textDocument/rename', { textDocument: { uri: doc.uri }, position: lspPos(position), newName });
       if (!we) return { edits: [], rejectReason: tr('Rename failed') };
-      const { edits } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
-      return { edits };
+      const { edits, refused } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
+      return refused ? { edits: [], rejectReason: refused } : { edits };
     },
   });
 
   // ---------- quick fixes (Alt+Enter) ----------
   const APPLY_ACTION = 'pyide.lsp.applyCodeAction';
   monaco.editor.registerCommand(APPLY_ACTION, async (_accessor, action) => {
-    if (action.edit) await applyWorkspaceEdit(action.edit);
+    if (action.edit) await applyOrExplain(action.edit);
     const cmd = typeof action.command === 'string' ? action : action.command;
     if (cmd?.command) await request('workspace/executeCommand', { command: cmd.command, arguments: cmd.arguments });
   });
