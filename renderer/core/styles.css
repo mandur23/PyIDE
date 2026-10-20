@@ -336,3 +336,4 @@ body.detached #statusInterp { display: none !important; }
 .trust-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: var(--warning-bg, #4a3b16); color: var(--warning-fg, #f0d58c); font-size: 12px; border-bottom: 1px solid var(--border, #393b40); }
 .trust-bar span { flex: 1; }
 .trust-bar.hidden { display: none; }
+:root[data-theme="light"] .trust-bar { background: #fff4d6; color: #6b4a00; border-bottom-color: #ebd9a3; }
