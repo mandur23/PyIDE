@@ -28,7 +28,13 @@ async function attach(predicate) {
   let seq = 0;
   const pending = new Map();
   ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data); pending.get(msg.id)?.(msg); pending.delete(msg.id); });
-  const cdp = (method, params = {}) => new Promise((r) => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+  ws.addEventListener('close', () => { for (const r of pending.values()) r({}); pending.clear(); });
+  const cdp = (method, params = {}) => new Promise((r) => {
+    if (ws.readyState !== WebSocket.OPEN) return r({});
+    const id = ++seq;
+    pending.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
   const ejs = async (expr) => (await cdp('Runtime.evaluate', { expression: `(async () => (${expr}))()`, awaitPromise: true, returnByValue: true })).result?.result?.value;
   const euntil = async (expr, label, ms = 15000) => {
     const end = Date.now() + ms;

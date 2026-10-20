@@ -210,6 +210,9 @@
   }
   let renderQueued = false;
   const scheduleRender = () => {
+    // Reported now, not on the next frame: a window that renders no frames (hidden, occluded) must still ask
+    // before closing with unsaved changes.
+    reportDirty();
     if (renderQueued) return;
     renderQueued = true;
     requestAnimationFrame(() => { renderQueued = false; renderAllTabs(); });

@@ -47,7 +47,15 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
     if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
   });
-  const cdp = (method, params = {}) => new Promise((r) => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+  // Once the window is gone, calls fail instead of waiting forever, so until() times out with its label.
+  const GONE = { result: { exceptionDetails: { text: 'the CDP connection closed' } } };
+  ws.addEventListener('close', () => { for (const r of pending.values()) r(GONE); pending.clear(); });
+  const cdp = (method, params = {}) => new Promise((r) => {
+    if (ws.readyState !== WebSocket.OPEN) return r(GONE);
+    const id = ++seq;
+    pending.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
   await cdp('Runtime.enable');
   // Test windows run beside other windows; without this, losing OS focus closes Monaco hovers and hints mid-check.
   await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
