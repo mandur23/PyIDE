@@ -395,6 +395,20 @@ try {
     await clickMenu(again, 'Include in Semantic Index');
     await again.until(`ide.semantic.progress()?.phase === 'indexing' && ide.semantic.progress().total === 2000`, 'gen indexed again', 15000);
     check(menu2.includes('Include in Semantic Index') && !menu2.includes('Exclude from Semantic Index'), 'an excluded folder offers Include in Semantic Index, which indexes it again');
+
+    // Opening another project stops this run (what it embedded is saved); reopening the project indexes the rest.
+    const other = mkdtempSync(path.join(tmpdir(), 'pyide-semantic-other-'));
+    writeFileSync(path.join(other, 'other.py'), 'def other():\n    return 1\n');
+    await again.js(`(window.confirm = () => true, ide.openProject(${JSON.stringify(other)}).then(() => true))`);
+    await again.until(`ide.api.invoke('semantic:indexInfo', ${JSON.stringify(proj)}).then((i) => !i.indexing)`, 'previous project run stopped', 10000);
+    const stoppedAt = await again.js(`ide.api.invoke('semantic:indexInfo', ${JSON.stringify(proj)})`);
+    await sleep(3000);
+    const later = await again.js(`ide.api.invoke('semantic:indexInfo', ${JSON.stringify(proj)})`);
+    check(stoppedAt.files < files && later.files === stoppedAt.files && !later.indexing,
+      `opening another project stops the previous project's run (${stoppedAt.files} of ${files} files, still ${later.files} 3 s later)`);
+    await again.js(`ide.openProject(${JSON.stringify(proj)}).then(() => true)`);
+    await again.until(`ide.api.invoke('semantic:indexInfo', ide.root).then((i) => !i.indexing && i.files === ${files})`, 'rest indexed after reopening', 60000);
+    check(true, 'reopening the project indexes the rest of it');
     again.close();
 
     // A first index over the threshold asks first: untick a folder and Index, or Not Now and Index Now later.

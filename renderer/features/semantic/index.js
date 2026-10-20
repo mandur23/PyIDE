@@ -204,9 +204,12 @@
       const i = await refreshIndexState();
       progress = { phase: i.asking ? 'confirm' : i.declined ? 'declined' : 'ready', done: 0, total: 0, files: i.files, chunks: i.chunks, capped: i.capped, skipped: i.skipped.length, paused: i.paused };
       renderStatus();
-      if (i.asking) askSize(i.asking); else index();
+      if (i.asking) askSize(i.asking);
+      // Also tells main this is the project shown, so a run for the previous one stops (and resumes on its return).
+      index();
     }
   });
+  ide.on('projectClosed', () => ide.api.invoke('semantic:index', null));
   ide.on('fileSaved', (tab) => {
     if (!tab?.path) return;
     pendingPaths.add(tab.path);

@@ -615,9 +615,13 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     await fs.promises.mkdir(base, { recursive: true });
     await fs.promises.writeFile(exclusionsFile, JSON.stringify(exclusions, null, 1));
   }
+  // The project the window shows (semantic:index, semantic:confirm, ...): a run for any other project stops at its
+  // next turn, after saving what it embedded, and resumes when that project is opened again.
+  let activeKey = null;
+  const setActive = (root) => { activeKey = root ? keyOf(root) : null; };
   // Waits while indexing is paused or the user is typing. Searches do not wait: they embed on their own.
-  async function waitTurn() {
-    while (paused || Date.now() - typingAt < TYPING_PAUSE_MS) await sleep(paused ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
+  async function waitTurn(away) {
+    while ((paused || Date.now() - typingAt < TYPING_PAUSE_MS) && !away()) await sleep(paused ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
   }
 
   // At most ten progress messages a second while indexing; phase changes always go out. `eta` is in seconds, from
@@ -640,6 +644,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     if (confirmed) Object.assign(idx, { confirmed: true, declined: false });
     if (idx.declined) return;
     if (idx.job) { idx.rerun = true; return idx.job; }
+    const away = () => keyOf(root) !== activeKey;
     idx.job = (async () => {
       try {
         do {
@@ -679,8 +684,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
             const ms = (Date.now() - started) / n;
             idx.msPerChunk = idx.msPerChunk ? 0.8 * idx.msPerChunk + 0.2 * ms : ms;
           };
-          for (;;) {
-            await waitTurn();
+          pages: for (;;) {
+            await waitTurn(away);
+            if (away()) break;
             const pageStarted = Date.now();
             const page = await inWorker('take', root, TAKE, fake);
             if (!page.length) break;
@@ -699,7 +705,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
             }
             const items = page.flatMap((w) => w.chunks.filter((c) => !c.vector).map((c) => [w, c]));
             for (let i = 0; i < items.length; i += BATCH) {
-              await waitTurn();
+              await waitTurn(away);
+              if (away()) break pages;
               const started = Date.now();
               const batch = items.slice(i, i + BATCH);
               const vecs = await embed(batch.map(([, c]) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text })), 'document');
@@ -715,6 +722,12 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
               progress(idx, 'indexing');
             }
             progress(idx, 'indexing');
+          }
+          if (away()) {
+            // Files whose chunks were not all embedded are not in the index, so the next run collects them again.
+            await inWorker('drop', root);
+            saveNow(idx);
+            return;
           }
           onlyPaths = null;
         } while (idx.rerun);
@@ -789,7 +802,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     sidecar?.idle();
     for (const k of Object.keys(limits)) if (Number(rest[k]) > 0) limits[k] = Number(rest[k]);
   });
-  ipcMain.handle('semantic:index', (_e, root, paths) => { update(root, paths); return true; });
+  // Also says which project the window shows; null when it shows none.
+  ipcMain.handle('semantic:index', (_e, root, paths) => { setActive(root); if (root) update(root, paths); return true; });
   ipcMain.on('semantic:typing', () => { typingAt = Date.now(); });
   ipcMain.handle('semantic:pause', (_e, on) => {
     paused = !!on;
@@ -816,6 +830,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   // The answer to a first index's size question, optionally with folders to exclude first; a yes without a question
   // pending starts indexing a project the user said no to.
   ipcMain.handle('semantic:confirm', async (_e, root, yes, exclude = []) => {
+    setActive(root);
     const idx = await loadIndex(root);
     if (yes && exclude.length) await withExcluded(root, exclude, true);
     if (idx.answer) idx.answer(yes ? (exclude.length ? 'again' : true) : false);
@@ -824,11 +839,13 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
   // Excludes (on) or includes again a project folder; the index drops or picks up its files right away.
   ipcMain.handle('semantic:exclude', async (_e, root, folder, on) => {
+    setActive(root);
     await withExcluded(root, [folder], on);
     update(root);
     return excludedOf(root);
   });
   ipcMain.handle('semantic:rebuild', async (_e, root) => {
+    setActive(root);
     const idx = await loadIndex(root);
     idx.io = idx.io.then(async () => {
       Object.assign(idx, { files: {}, chunks: 0, pending: new Map(), vectors: newVectors(), onDisk: false, records: 0 });
