@@ -167,12 +167,33 @@ function createStore(dir, root, limits, onChange) {
   // What the worker needs to tell an unchanged recorded file from a changed one.
   const item = (rel) => { const rec = tracked(rel); return { rel, m: rec?.m, s: rec?.s }; };
 
-  function flush() {
+  // At close (and quit) the index is written synchronously, so it is on disk before the store goes away.
+  function flushSync() {
     clearTimeout(saveTimer);
     saveTimer = null;
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(`${indexFile}.tmp`, JSON.stringify(index));
-    fs.renameSync(`${indexFile}.tmp`, indexFile);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(`${indexFile}.tmp`, JSON.stringify(index));
+      fs.renameSync(`${indexFile}.tmp`, indexFile);
+    } catch (err) {
+      console.error('local history: could not save the index:', err.message);
+    }
+  }
+  // While the project is open the index (which can be megabytes) is written off the main thread, one write at a time,
+  // to a temporary file of its own that replaces index.json at the end. A write still running when the store closes
+  // is dropped: close() has written the newer index by then.
+  let writing = null;
+  let writes = 0;
+  function flush() {
+    saveTimer = null;
+    if (writing) { writing.then(scheduleSave); return; }
+    const tmp = `${indexFile}.${process.pid}-${++writes}.tmp`;
+    const data = JSON.stringify(index);
+    writing = fs.promises.mkdir(dir, { recursive: true })
+      .then(() => fs.promises.writeFile(tmp, data))
+      .then(() => { if (closed) fs.rmSync(tmp, { force: true }); else fs.renameSync(tmp, indexFile); })
+      .catch((err) => { fs.promises.rm(tmp, { force: true }).catch(() => {}); console.error('local history: could not save the index:', err.message); })
+      .finally(() => { writing = null; });
   }
   // A closed store wrote its index at close(); work still queued then must not write a stale index over the one a
   // store opened again for the same project (Close Project and reopen) keeps.
@@ -343,7 +364,7 @@ function createStore(dir, root, limits, onChange) {
       watcher?.close();
       clearTimeout(watchTimer);
       clearTimeout(changeTimer);
-      flush();
+      flushSync();
     },
     setLimits(l) { limits = l; },
     // kind: 'save' or 'revert' after the IDE wrote the file; 'opened' when the editor opened it, with the text it

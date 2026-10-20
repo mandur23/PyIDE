@@ -4,7 +4,7 @@
 // Ctrl+F11 assigns a mnemonic, Ctrl+digit jumps, bookmarks follow edits, the Alt+2 tool window lists them, and both
 // bookmarks and history survive a restart. Then the same surfaces in Korean. Ports 9710-9712.
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdtempSync, chmodSync } from 'fs';
+import { readFileSync, readdirSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdtempSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -229,6 +229,17 @@ try {
   await until(`(ide.settings.get('bookmarks.' + ide.root) || []).length === 3 && ide.settings.get('bookmarks.' + ide.root).some(m => m.description === 'entry point')`, 'bookmarks saved');
   before = { main: (await h.kinds('main.py')).length, notes: await h.kinds('notes.txt') };
   check(before.notes.join() === 'initial', 'an opened file that never changed keeps its single revision');
+  // The index is written in the background while the project is open: whole, and without temporary files left over.
+  const lhDirs = () => readdirSync(path.join(t.userData, 'local-history')).map((d) => path.join(t.userData, 'local-history', d));
+  const onDisk = () => lhDirs().some((d) => {
+    try {
+      const index = JSON.parse(read(path.join(d, 'index.json')));
+      return index.files['main.py']?.revs.length === before.main && !readdirSync(d).some((n) => n.endsWith('.tmp'));
+    } catch { return false; }
+  });
+  let written = false;
+  for (let end = Date.now() + 10000; !written && Date.now() < end; await t.sleep(200)) written = onDisk();
+  check(written, 'the local history index reaches the disk while the project is open, with no temporary file left');
   t.close();
   writeFileSync(file('notes.txt'), 'Edited while the IDE was closed.\n');
 } catch (err) {
