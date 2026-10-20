@@ -3,6 +3,7 @@
 #   powershell -File verify/on-desktop.ps1 -Out verify/out/run.txt node verify/core.mjs
 param(
   [Parameter(Mandatory = $true)][string]$Out,
+  [int]$TimeoutMinutes = 30,
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$Command
 )
 $ErrorActionPreference = 'Stop'
@@ -38,7 +39,8 @@ public static class OtherDesktop {
   const uint CREATE_NO_WINDOW = 0x08000000;
 
   // Child processes inherit the desktop, so everything the command starts opens its windows there.
-  public static int Run(string name, string commandLine, string cwd) {
+  // A command still running after timeoutMs (a test stuck on something nobody can see) is ended with its whole tree.
+  public static int Run(string name, string commandLine, string cwd, uint timeoutMs) {
     IntPtr desktop = CreateDesktop(name, IntPtr.Zero, IntPtr.Zero, 0, GENERIC_ALL, IntPtr.Zero);
     if (desktop == IntPtr.Zero) throw new Win32Exception();
     try {
@@ -48,7 +50,10 @@ public static class OtherDesktop {
       PROCESS_INFORMATION pi;
       if (!CreateProcess(null, commandLine, IntPtr.Zero, IntPtr.Zero, false, CREATE_NO_WINDOW, IntPtr.Zero, cwd, ref si, out pi))
         throw new Win32Exception();
-      WaitForSingleObject(pi.hProcess, 0xFFFFFFFF);
+      if (WaitForSingleObject(pi.hProcess, timeoutMs) != 0) {
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("taskkill", "/PID " + pi.dwProcessId + " /T /F") { CreateNoWindow = true, UseShellExecute = false }).WaitForExit();
+        WaitForSingleObject(pi.hProcess, 10000);
+      }
       uint code;
       GetExitCodeProcess(pi.hProcess, out code);
       CloseHandle(pi.hThread);
@@ -65,6 +70,6 @@ $root = Split-Path $PSScriptRoot -Parent
 $outPath = [IO.Path]::GetFullPath((Join-Path $root $Out))
 New-Item -ItemType Directory -Force (Split-Path $outPath) | Out-Null
 $quoted = ($Command | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
-$code = [OtherDesktop]::Run("PyIDE-Tests-$PID", "cmd.exe /d /s /c `"$quoted > `"$outPath`" 2>&1`"", $root)
+$code = [OtherDesktop]::Run("PyIDE-Tests-$PID", "cmd.exe /d /s /c `"$quoted > `"$outPath`" 2>&1`"", $root, [uint32]($TimeoutMinutes * 60000))
 Get-Content $outPath -Encoding UTF8
 exit $code
