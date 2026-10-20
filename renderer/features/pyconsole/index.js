@@ -6,6 +6,7 @@
   const MARKER = /\x02(ps1|ps2|q[^\x03]*)\x03/;
   const HISTORY_KEY = 'pyconsole.history';
   let procId = null;
+  let shownId = null; // the process whose output the console shows; a console cleared for a new one drops the old one's
   let con, promptEl, input;
   let carry = '';
   let ps = 'ps1';
@@ -92,10 +93,11 @@
       con.append(`${tr('{command} (Python Console)', { command: [interp.cmd, ...interp.args].join(' ') })}\n`, 'sys');
       const id = (procId = await ide.api.invoke('pyconsole:start', interp, ide.root || undefined, ide.root ? [ide.root] : []));
       input.disabled = false;
+      shownId = id;
       ide.proc.attach(id, {
-        data: onData,
+        data: (text, stream) => shownId === id && onData(text, stream),
         exit(code) {
-          con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 0 })}\n`, 'sys');
+          if (shownId === id) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 0 })}\n`, 'sys');
           if (procId !== id) return;
           procId = null;
           setPrompt('ps1');
@@ -121,9 +123,12 @@
     ide.emit('pyconsoleChanged');
   }
 
+  // After stop(): the old process ends a little later, and its last output must not land in the cleared console.
+  const clearForNewProcess = () => { con.clear(); shownId = null; };
+
   async function restart() {
     await stop();
-    con.clear();
+    clearForNewProcess();
     setPrompt('ps1');
     await start();
     input.focus();
@@ -256,7 +261,7 @@
     if (starting) await starting.catch(() => {});
     if (!procId) return;
     await stop();
-    con.clear();
+    clearForNewProcess();
     setPrompt('ps1');
     if (tw.isVisible()) start();
   });

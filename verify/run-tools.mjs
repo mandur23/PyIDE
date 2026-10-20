@@ -139,6 +139,15 @@ try {
   await until(`document.querySelector('#runOut').textContent.includes('Process finished with exit code')`, 'slow stopped');
   check(!(await js(`ide.run.sessions().some(s => s.running)`)), 'Stop ends the selected run');
   await shot('run-tabs.png');
+  // Rerun while running replaces the process in the same tab; the stopped one's exit line stays out of the new console.
+  await js(`ide.runAction('Rerun'), true`);
+  await until(`document.querySelector('#runOut')?.textContent.includes('slow started') && ide.run.activeSession().running`, 'slow.py rerun');
+  await js(`ide.runAction('Rerun'), true`);
+  await until(`document.querySelector('#runOut')?.textContent.includes('slow started') && ide.run.activeSession().running`, 'slow.py rerun again');
+  await sleep(1500);
+  check(!(await js(`document.querySelector('#runOut').textContent.includes('Process finished')`)), 'the replaced process writes nothing into the new run console');
+  await click('#bottomActions button[title="Stop"]');
+  await until(`document.querySelector('#runOut').textContent.includes('Process finished with exit code')`, 'slow stopped again');
 
   // ---------- project tree "Run" creates a temporary configuration ----------
   await js(`(() => { const n = [...document.querySelectorAll('#tree .node')].find(n => n.textContent.includes('scratch.py')); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
@@ -305,6 +314,11 @@ try {
   await until(`document.querySelector('#pyconsoleOut').textContent.includes('y is 1024')`, 'line by line');
   check(true, 'line-by-line execution keeps console state');
   await shot('python-console.png');
+  // Rerun Python Console: the stopped interpreter's exit line stays out of the fresh console.
+  await click('#bottomActions button[title="Rerun Python Console"]');
+  await until(`ide.pyconsole.isRunning() && document.querySelector('#pyconsoleOut').textContent.includes('Python 3') && !document.querySelector('#pyconsoleOut').textContent.includes('y is 1024')`, 'console restarted');
+  await sleep(1500);
+  check(!(await js(`document.querySelector('#pyconsoleOut').textContent.includes('Process finished')`)), 'Rerun Python Console starts with a clean console');
   await press('Alt+8');
   check(!(await js(`ide.toolWindows.get('PythonConsole').isVisible()`)), 'Alt+8 hides the Python Console');
 

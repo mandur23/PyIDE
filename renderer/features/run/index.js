@@ -215,14 +215,17 @@
         if (activeSession === s) renderActions();
         for (const hook of s.exitHooks.splice(0)) hook();
       },
-      // Streams a process into the session console and prints PyCharm's exit line.
+      // Streams a process into the session console and prints PyCharm's exit line. A process that a rerun in this
+      // tab replaced (s.procId moved on) writes nothing more: its console is gone and s.con is the new run's.
       attach(id, { onExit } = {}) {
         s.started(id);
         ide.proc.attach(id, {
-          data: (text, stream) => s.con?.append(text, stream === 'err' ? 'err' : null),
+          data: (text, stream) => s.procId === id && s.con?.append(text, stream === 'err' ? 'err' : null),
           exit(code) {
-            s.con?.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
-            if (s.procId === id) s.setIcon('▶', code === 0 ? 'done' : 'failed');
+            if (s.procId === id) {
+              s.con?.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
+              s.setIcon('▶', code === 0 ? 'done' : 'failed');
+            }
             onExit?.(code);
             s.exited(id);
           },
