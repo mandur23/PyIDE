@@ -637,7 +637,11 @@
 
     async function uninstall(p) {
       if (!confirm(tr('Uninstall {name}?', { name: localized(p).name }))) return;
-      await ide.api.invoke('plugins:uninstall', p.id);
+      // Windows refuses to delete a folder another program has open.
+      try { await ide.api.invoke('plugins:uninstall', p.id); } catch (e) {
+        status.textContent = tr('Could not uninstall {name}: {error}', { name: localized(p).name, error: String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') });
+        return;
+      }
       ctx.pluginChanges.delete(p.id);
       status.textContent = tr('Uninstalled {name}. Restart the IDE to unload it.', { name: localized(p).name });
       ctx.markRestart();

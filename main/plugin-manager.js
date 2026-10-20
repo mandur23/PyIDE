@@ -102,14 +102,15 @@ function createPluginManager({ appDir, userDataDir }) {
   function install(source) {
     let from = source;
     let temp = null;
-    if (/\.zip$/i.test(source)) {
-      temp = fs.mkdtempSync(path.join(userDataDir, 'plugin-zip-'));
-      execFileSync('tar', ['-xf', source, '-C', temp]);
-      const inner = fs.existsSync(path.join(temp, 'plugin.json')) ? temp : subdirs(temp).find((d) => fs.existsSync(path.join(d, 'plugin.json')));
-      if (!inner) throw new Error('The archive does not contain a plugin.json');
-      from = inner;
-    }
+    // The extraction folder is removed also when the archive cannot be extracted or holds no plugin.
     try {
+      if (/\.zip$/i.test(source)) {
+        temp = fs.mkdtempSync(path.join(userDataDir, 'plugin-zip-'));
+        execFileSync('tar', ['-xf', source, '-C', temp]);
+        const inner = fs.existsSync(path.join(temp, 'plugin.json')) ? temp : subdirs(temp).find((d) => fs.existsSync(path.join(d, 'plugin.json')));
+        if (!inner) throw new Error('The archive does not contain a plugin.json');
+        from = inner;
+      }
       const meta = readJson(path.join(from, 'plugin.json'), null);
       if (!meta) throw new Error('plugin.json is missing or not valid JSON');
       if (!ID.test(meta.id || '')) throw new Error('plugin.json needs an "id" of letters, digits, ".", "_" or "-"');

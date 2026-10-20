@@ -19,6 +19,7 @@
   "Changing the language requires restarting the IDE.": "언어를 변경하면 IDE를 다시 시작해야 합니다.",
   "Code Style": "코드 스타일",
   "Could not install the plugin: {error}": "플러그인을 설치할 수 없습니다: {error}",
+  "Could not uninstall {name}: {error}": "{name}을(를) 제거할 수 없습니다: {error}",
   "Create": "생성",
   "Create Virtualenv Environment…": "Virtualenv 환경 생성…",
   "Created {path}": "{path}을(를) 생성했습니다",
