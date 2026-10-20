@@ -273,7 +273,7 @@
     { id: 'SearchEverywhere', title: tr('Search Everywhere'), keys: 'Shift Shift', run: () => ide.runAction('GotoFile') },
     { id: 'GetFromVcs', title: tr('Get from VCS…'), run: getFromVcs },
     { id: 'CloseProject', title: tr('Close Project'), run: () => ide.closeProject() },
-    { id: 'Exit', title: tr('Exit'), run: () => window.close() },
+    { id: 'Exit', title: tr('Exit'), run: () => ide.api.invoke('window:close') },
     { id: 'Undo', title: tr('Undo'), run: editorCmd('undo') },
     { id: 'Redo', title: tr('Redo'), run: editorCmd('redo') },
     { id: 'Cut', title: tr('Cut'), run: editorCmd('editor.action.clipboardCutAction') },

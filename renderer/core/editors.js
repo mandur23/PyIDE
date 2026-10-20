@@ -301,7 +301,7 @@
     } else renderTabs(g);
     if (!g.tabs.length) {
       if (groups.length > 1) removeGroup(g);
-      else if (ide.detached) window.close();
+      else if (ide.detached) ide.api.invoke('window:close');
     }
     reportDirty();
     return true;

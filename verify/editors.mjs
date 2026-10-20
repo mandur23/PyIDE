@@ -187,7 +187,7 @@ try {
   // Save All in the close confirmation keeps the window open when a file cannot be written (read-only here).
   await js(`(window.__alerts = [], ide.ui.alert = (m) => window.__alerts.push(String(m)), true)`);
   chmodSync(notes, 0o444);
-  t.cdp('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 0)' });
+  t.cdp('Runtime.evaluate', { expression: "setTimeout(() => ide.api.invoke('window:close'), 0)" });
   await until(`document.querySelector('.dialog-title')?.textContent === 'Save Changes?'`, 'close confirmation (main window)', 8000);
   await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Save All').click()`);
   // notes.txt also changed on disk above: unless the project watcher already reloaded it before the typing, the save
@@ -231,7 +231,7 @@ try {
   check(readFileSync(path.join(t.project, 'c.py'), 'utf8').includes('FROM_DETACHED'), 'saving in the detached window writes the file and clears the modified marker in both windows');
   await w.js(`(ide.editor.trigger('test', 'type', { text: 'UNSAVED = 1\\n' }), true)`);
   // Not awaited: the evaluation may never answer while the window is closing.
-  w.cdp('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 0)' });
+  w.cdp('Runtime.evaluate', { expression: "setTimeout(() => ide.api.invoke('window:close'), 0)" });
   await w.until(`document.querySelector('.dialog-title')?.textContent === 'Save Changes?'`, 'close confirmation', 8000);
   check(true, 'closing a window with unsaved changes asks first');
   w.cdp('Runtime.evaluate', { expression: `setTimeout(() => [...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === "Don't Save").click(), 0)` });

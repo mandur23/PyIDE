@@ -75,6 +75,9 @@ function createWindowManager({ appDir }) {
     dirty.delete(e.sender.id);
     BrowserWindow.fromWebContents(e.sender)?.close();
   });
+  // Close as the title bar's X does (asks about unsaved files): a sandboxed page's window.close() is ignored for a
+  // window that no script opened.
+  ipcMain.handle('window:close', (e) => { BrowserWindow.fromWebContents(e.sender)?.close(); });
   ipcMain.handle('window:setTitle', (e, title) => BrowserWindow.fromWebContents(e.sender)?.setTitle(title));
 
   // Document sync: {path, text} for edits, {path, text} for saves, {path} when a window opens a document.
