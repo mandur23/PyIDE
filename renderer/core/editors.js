@@ -31,10 +31,12 @@
   const settingOn = (k, d) => ide.settings.get(k, d);
 
   // ---------- documents ----------
-  async function loadDoc(path) {
+  // asText (Open as Text): a file that looks binary is read as text all the same, in the encoding detected.
+  async function loadDoc(path, { asText } = {}) {
     const existing = docs.get(key(path));
     if (existing) return existing;
-    const r = await ide.api.invoke('fs:readText', path);
+    let r = await ide.api.invoke('fs:readText', path);
+    if (r.binary && asText) r = { ...(await ide.api.invoke('fs:decode', path, 'auto')), forcedText: true };
     if (r.binary || r.tooLarge) return { unsupported: r };
     const again = docs.get(key(path));
     if (again) return again;
@@ -42,7 +44,7 @@
     const model = ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(r.text, languageFor(path), uri);
     // fresh: fileOpened is announced once the first tab for it exists. diskHash fingerprints the text last read from
     // or written to the file, so auto save can tell when the file changed underneath.
-    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [] };
+    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText };
     docs.set(key(path), doc);
     model.onDidChangeContent((e) => {
       // The tab bars change only when the modified mark does, not on every keystroke.
@@ -54,6 +56,8 @@
     return doc;
   }
 
+  // A document opened with Open as Text is read back from disk the same way, in its encoding.
+  const readDisk = (doc) => (doc.forcedText ? ide.api.invoke('fs:decode', doc.path, doc.encoding) : ide.api.invoke('fs:readText', doc.path));
   const docDirty = (doc) => !!doc && !doc.model.isDisposed() && doc.model.getAlternativeVersionId() !== doc.savedVersion;
   const tabsOfDoc = (doc) => groups.flatMap((g) => g.tabs.filter((t) => t.doc === doc));
   const firstTabFor = (doc) => tabsOfDoc(doc)[0] || null;
@@ -659,21 +663,23 @@
     if (opts.group === 'window') { await openInNewWindow([{ path, line: opts.line }]); return null; }
     let viewer = opts.asText ? null : viewerFor(path);
     let doc = null;
+    let unsupported = null; // {binary} or {tooLarge}: why the text editor cannot show the file
     if (!viewer || viewer.text) {
-      doc = await loadDoc(path).catch((e) => ({ error: e }));
+      doc = await loadDoc(path, { asText: opts.asText }).catch((e) => ({ error: e }));
       if (doc.error) {
         ide.ui.alert(tr('Cannot open {name}: {error}', { name: basename(path), error: ide.util.errorText(doc.error) }));
         return null;
       }
       if (doc.unsupported) {
         viewer = viewerFor(path, { binary: true }) || binaryViewer;
+        unsupported = doc.unsupported;
         doc = null;
       }
     }
     const g = resolveGroup(opts.group);
     // A viewer (also one that edits text, like Markdown) is found by path and viewer; a plain editor by its document.
     let tab = g.tabs.find((t) => (viewer ? samePath(t.path, path) && t.kind === 'custom' && t.viewer === viewer : t.doc === doc && t.kind === 'file'));
-    if (!tab && viewer) tab = openViewerTab(g, path, viewer, doc);
+    if (!tab && viewer) tab = openViewerTab(g, path, viewer, doc, unsupported);
     else if (!tab) {
       const preview = opts.preview && settingOn('editor.previewTab', false);
       const old = preview ? g.tabs.find((t) => t.preview && !ide.isDirty(t)) : null;
@@ -695,11 +701,11 @@
     return tab;
   };
 
-  function openViewerTab(g, path, viewer, doc) {
+  function openViewerTab(g, path, viewer, doc, unsupported = null) {
     const host = el('div', 'custom-tab hidden');
     host.tabIndex = -1;
     g.customHost.appendChild(host);
-    const tab = { kind: 'custom', group: g, path, title: basename(path), icon: viewer.icon || '◆', host, viewer, doc, model: doc?.model, pinned: false };
+    const tab = { kind: 'custom', group: g, path, title: basename(path), icon: viewer.icon || '◆', host, viewer, doc, model: doc?.model, pinned: false, unsupported };
     addTab(g, tab);
     const r = safeMount(() => viewer.mount(host, { path, doc, tab }));
     tab.dispose = () => r?.dispose?.();
@@ -709,7 +715,7 @@
 
   const binaryViewer = {
     id: 'binary', icon: '📦', match: () => false,
-    mount(host, { path }) {
+    mount(host, { path, tab }) {
       host.classList.add('binary-viewer');
       host.appendChild(el('div', 'binary-title', basename(path)));
       host.appendChild(el('div', 'muted', tr('This file is binary or too large to show as text.')));
@@ -719,6 +725,11 @@
       const reveal = el('button', 'secondary', tr('Show in Explorer'));
       reveal.onclick = () => ide.api.invoke('shell:showInFolder', path);
       row.append(open, reveal);
+      if (!tab.unsupported?.tooLarge) {
+        const asText = el('button', 'secondary', tr('Open as Text'));
+        asText.onclick = () => ide.openFile(path, { asText: true, group: tab.group });
+        row.prepend(asText);
+      }
       host.appendChild(row);
     },
   };
@@ -857,7 +868,7 @@
     if (!tabsOfDoc(doc).some((t) => t.kind === 'file')) return false;
     if (doc.autoSaveFailed === doc.model.getAlternativeVersionId()) return false;
     let r = null;
-    try { r = await ide.api.invoke('fs:readText', doc.path); } catch {}
+    try { r = await readDisk(doc); } catch {}
     if (r?.text !== undefined && textHash(r.text) === doc.diskHash) return true;
     if (!doc.conflict) { doc.conflict = true; ide.emit('autoSaveSkipped', { path: doc.path, reason: r ? 'changedOnDisk' : 'unreadable' }); }
     return false;
@@ -868,7 +879,7 @@
   async function confirmOverwrite(doc) {
     if (doc.untitled || doc.model.uri.scheme !== 'file') return true;
     let r = null;
-    try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { return true; } // gone: write recreates it
+    try { r = await readDisk(doc); } catch { return true; } // gone: write recreates it
     if (r?.text === undefined || textHash(r.text) === doc.diskHash) return true;
     if (r.text === doc.model.getValue()) return true;
     return new Promise((resolve) => {
@@ -951,7 +962,7 @@
     for (const doc of [...docs.values()].filter((d) => !paths || paths.some((p) => samePath(p, d.path)))) {
       if (docDirty(doc)) continue;
       let r;
-      try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { continue; }
+      try { r = await readDisk(doc); } catch { continue; }
       // Typed into or closed while the file was read: the editor's text wins.
       if (doc.model.isDisposed() || docDirty(doc)) continue;
       if (r.text === undefined || r.text === doc.model.getValue()) continue;
@@ -971,7 +982,7 @@
     for (const doc of list) {
       if (doc.untitled || doc.saving || doc.model.isDisposed() || doc.model.uri.scheme !== 'file') continue;
       let r;
-      try { r = await ide.api.invoke('fs:readText', doc.path, doc.encoding); } catch { continue; }
+      try { r = await readDisk(doc); } catch { continue; }
       if (r?.text === undefined || doc.model.isDisposed() || doc.saving || textHash(r.text) === doc.diskHash) continue;
       if (!docDirty(doc)) await ide.reloadFromDisk([doc.path]);
       else doc.conflict = true;
@@ -990,7 +1001,7 @@
   window.addEventListener('focus', () => checkDisk([...docs.values()]));
 
   // ---------- status bar: encoding ----------
-  const ENCODING_LABEL = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 BOM', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE', cp949: 'CP949 (EUC-KR)' };
+  const ENCODING_LABEL = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 BOM', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE', 'utf-16le-nobom': 'UTF-16 LE (no BOM)', 'utf-16be-nobom': 'UTF-16 BE (no BOM)', cp949: 'CP949 (EUC-KR)' };
   const encodingItem = el('span', 'status-encoding');
   encodingItem.id = 'statusEncoding';
   encodingItem.title = tr('File encoding');
@@ -1073,7 +1084,7 @@
       { label: tr('Open in New Window'), hint: 'Shift+F4', disabled: !isFile, run: () => openInNewWindow([tabPayload(t)]) },
       { label: tr('Move to New Window'), disabled: !isFile, run: () => moveToNewWindow(t) },
       ...(ide.detached ? [{ label: tr('Move to Main Window'), run: () => dockToMain([t]) }] : []),
-      ...(t.viewer && t.viewer.id !== 'binary' ? [{ label: tr('Open as Text'), run: () => ide.openFile(t.path, { asText: true, group: g }) }] : []),
+      ...(t.viewer && !t.unsupported?.tooLarge ? [{ label: tr('Open as Text'), run: () => ide.openFile(t.path, { asText: true, group: g }) }] : []),
       { separator: true },
       { label: tr('Copy Path'), hint: 'Ctrl+Shift+C', disabled: !isFile, run: () => copyPath(t.path) },
       { label: tr('Copy Relative Path'), disabled: !isFile, run: () => copyPath(ide.util.rel(t.path)) },
@@ -1168,7 +1179,7 @@
   // ---------- detached windows ----------
   const tabPayload = (t) => {
     const pos = t.kind === 'file' && t.group.active === t ? t.group.editor.getPosition() : null;
-    return { path: t.path, line: pos?.lineNumber, col: pos?.column, text: t.doc && docDirty(t.doc) ? t.doc.model.getValue() : undefined, asText: t.kind === 'file' && !!viewerFor(t.path) };
+    return { path: t.path, line: pos?.lineNumber, col: pos?.column, text: t.doc && docDirty(t.doc) ? t.doc.model.getValue() : undefined, asText: t.kind === 'file' && (!!viewerFor(t.path) || !!t.doc?.forcedText) };
   };
   const openInNewWindow = (files) => ide.api.invoke('window:openDetached', { files });
   async function moveToNewWindow(t) {

@@ -162,6 +162,29 @@ try {
   await js(`ide.openFile(ide.util.joinPath(ide.root, 'data.bin'))`);
   await until(`!!document.querySelector('.custom-tab:not(.hidden) .binary-actions, .custom-tab:not(.hidden) [data-viewer]')`, 'binary viewer');
   check(true, 'a binary file opens a viewer instead of garbage text');
+  // The binary viewer's Open as Text reads the file as text all the same.
+  await js(`[...document.querySelectorAll('.custom-tab:not(.hidden) .binary-actions button')].find(b => b.textContent === 'Open as Text').click()`);
+  await until(`ide.activeTab()?.kind === 'file' && ide.activeTab().title === 'data.bin'`, 'data.bin as text');
+  check(await js(`ide.editor.getModel().getValue().includes('\\0')`), 'Open as Text on a binary file opens it in the text editor');
+  await js(`ide.closeTab(ide.activeTab().path, true)`);
+
+  // UTF-16 without a byte order mark (many NULs beside ASCII) is text, and is saved without a BOM again.
+  const wideText = '# 한글 주석 😀\r\nprint("wide")\r\n';
+  for (const [name, enc, label] of [['wide_le.py', 'utf-16le', 'UTF-16 LE (no BOM)'], ['wide_be.txt', 'utf-16be', 'UTF-16 BE (no BOM)']]) {
+    const file = path.join(t.project, name);
+    writeFileSync(file, iconv.encode(wideText, enc));
+    await js(`ide.openFile(${JSON.stringify(file)})`);
+    await until(`ide.activeTab()?.title === ${JSON.stringify(name)}`, `${name} open`);
+    check(await js(`ide.activeTab().kind === 'file' && ide.editor.getModel().getValue() === ${JSON.stringify(wideText)} && document.querySelector('#statusEncoding').textContent === ${JSON.stringify(label)}`),
+      `${enc.toUpperCase()} without a BOM opens as text (${await js(`document.querySelector('#statusEncoding').textContent`)})`);
+    await js(`(ide.editor.setPosition({ lineNumber: 3, column: 1 }), ide.editor.focus(), true)`);
+    await type('x = 1\r\n');
+    await press('Ctrl+S');
+    await until(`!document.querySelector('.tab.active .dirty')`, `${name} saved`);
+    const bytes = readFileSync(file);
+    check(bytes.equals(iconv.encode(`${wideText}x = 1\r\n`, enc)), `saving keeps ${enc.toUpperCase()} without adding a BOM`);
+    await js(`ide.closeTab(ide.activeTab().path, true)`);
+  }
 
   // ---------- saving and reloading while the user types ----------
   // One IPC channel is slowed down so an edit lands while a save or a reload is waiting for the main process.
