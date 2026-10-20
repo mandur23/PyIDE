@@ -576,17 +576,42 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   }
 
   // ---------- per-project index ----------
+  // An index holds every chunk's text and vector (about 35 MB for 24,000 chunks), so only the shown project's and the
+  // one shown before it stay in memory. Any other is released once its run has stopped and its changes are on disk,
+  // and read from disk again when it is needed.
+  const KEEP_INDEXES = 2;
   const indexes = new Map(); // root key -> idx (newIndex)
+  const recent = []; // root keys, the shown project first
+  const answers = new Map(); // root key -> {confirmed, declined}: the answer to the size question outlives the index
   const keyOf = (root) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
   function loadIndex(root) {
     const k = keyOf(root);
     if (!indexes.has(k)) {
-      const idx = newIndex(root, path.join(base, 'indexes', k), backend);
+      const idx = Object.assign(newIndex(root, path.join(base, 'indexes', k), backend), answers.get(k));
       idx.loaded = readIndex(idx).catch(() => {});
       indexes.set(k, idx);
     }
     const idx = indexes.get(k);
     return idx.loaded.then(() => idx);
+  }
+  const kept = (k) => recent.slice(0, KEEP_INDEXES).includes(k);
+  function releaseIdle() {
+    for (const [k, idx] of indexes) {
+      if (kept(k) || idx.job || idx.releasing) continue;
+      idx.releasing = true;
+      clearTimeout(idx.saveTimer);
+      idx.saveTimer = null;
+      idx.io = idx.io.then(() => idx.loaded).then(() => flush(idx))
+        .catch((err) => send('semantic:log', `index save failed: ${err.message}\n`))
+        .then(() => {
+          idx.releasing = false;
+          // Shown again, indexing again, or a save that failed: it stays.
+          if (indexes.get(k) !== idx || kept(k) || idx.job || idx.pending.size) return;
+          indexes.delete(k);
+          if (idx.confirmed || idx.declined) answers.set(k, { confirmed: !!idx.confirmed, declined: !!idx.declined });
+          else answers.delete(k);
+        });
+    }
   }
   function scheduleSave(idx) {
     clearTimeout(idx.saveTimer);
@@ -626,7 +651,11 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   // The project the window shows (semantic:index, semantic:confirm, ...): a run for any other project stops at its
   // next turn, after saving what it embedded, and resumes when that project is opened again.
   let activeKey = null;
-  const setActive = (root) => { activeKey = root ? keyOf(root) : null; };
+  const setActive = (root) => {
+    activeKey = root ? keyOf(root) : null;
+    if (activeKey && recent[0] !== activeKey) recent.splice(0, recent.length, activeKey, ...recent.filter((k) => k !== activeKey).slice(0, KEEP_INDEXES - 1));
+    releaseIdle();
+  };
   // Waits while indexing is paused or the user is typing. Searches do not wait: they embed on their own.
   async function waitTurn(away) {
     while ((paused || Date.now() - typingAt < TYPING_PAUSE_MS) && !away()) await sleep(paused ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
@@ -745,6 +774,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
         send('semantic:progress', { root, phase: 'error', error: String(err.message || err) });
       } finally {
         idx.job = null;
+        releaseIdle(); // a run for a project no longer shown has stopped
       }
     })();
     return idx.job;
@@ -879,13 +909,16 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     return true;
   });
   ipcMain.handle('semantic:query', async (_e, root, query, opts) => {
-    try { return { ok: true, results: await search(root, query, opts) }; } catch (err) { return { ok: false, error: String(err.message || err) }; }
+    // A search in a project not shown reads its index from disk, which is released again afterwards.
+    try { return { ok: true, results: await search(root, query, opts) }; } catch (err) { return { ok: false, error: String(err.message || err) }; } finally { releaseIdle(); }
   });
   ipcMain.handle('semantic:indexInfo', async (_e, root) => {
     const idx = await loadIndex(root);
-    return { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped, paused,
+    const info = { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped, paused,
       asking: idx.asking || null, declined: !!idx.declined, skipped: idx.skipped || [], excluded: excludedOf(root),
       heavy: heaviest(Object.entries(idx.files).map(([rel, f]) => [rel, f.chunks.length])) };
+    releaseIdle();
+    return info;
   });
 
   app.on('before-quit', () => {
