@@ -173,6 +173,7 @@ try {
   await until(`${visible('.suggest-widget .monaco-list-row')} && [...document.querySelectorAll('.suggest-widget .monaco-list-row')].some(r => /say_hello/.test(r.getAttribute('aria-label')))`, 'member completion after "."', 20000);
   const sugg = await js(`[...document.querySelectorAll('.suggest-widget .monaco-list-row')].map(r => r.getAttribute('aria-label'))`);
   check(sugg.some((s) => /greeting/.test(s)), `'.' completion lists members (${sugg.slice(0, 4).join(', ')})`);
+  check(!sugg.some((s) => /^(pass|return|class|def|while)\b/.test(s || '')), `member completion offers no keywords or statement snippets (${sugg.filter((s) => /^(pass|return|class|def|while)\b/.test(s || '')).join(', ') || 'none'})`);
   await type('say');
   await until(`/say_hello/.test(document.querySelector('.suggest-widget .monaco-list-row.focused')?.getAttribute('aria-label'))`, 'say_hello focused');
   if (!(await js(visible('.suggest-details')))) {

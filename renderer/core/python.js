@@ -42,6 +42,9 @@ window.pythonBasicCompletions = (monaco) => (model, position) => {
   const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber,
     startColumn: word.startColumn, endColumn: word.endColumn };
   const K = monaco.languages.CompletionItemKind;
+  // After a dot (os.pa|) only members make sense: no keywords or statement snippets.
+  const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
+  if (/\.\s*$/.test(before)) return { suggestions: [] };
   // main, try and the other Python templates are live templates (renderer/features/live-templates).
   const snippets = [
     ['def', 'def ${1:name}(${2}):\n    ${0:pass}', 'function'],
