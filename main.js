@@ -7,7 +7,7 @@ if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_
 const diagnostics = require('./main/diagnostics').install();
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { createPluginManager } = require('./main/plugin-manager');
 const textCodec = require('./main/text-codec');
 const iconv = require('iconv-lite');
@@ -46,6 +46,8 @@ function startProcess(cmd, args, opts = {}) {
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
   proc.on('error', (err) => { procLog.warn(`#${id} ${err.message}`); send('proc:data', { id, stream: 'err', text: `${err.message}\n` }); });
+  // Input typed after the program closed its stdin or exited (EPIPE, write after end) has nowhere to go.
+  proc.stdin?.on('error', (err) => procLog.info(`#${id} stdin: ${err.code || err.message}`));
   proc.on('close', (code) => {
     procLog.info(`#${id} exited with code ${code}`);
     procs.delete(id);
@@ -54,11 +56,15 @@ function startProcess(cmd, args, opts = {}) {
   return id;
 }
 
-function killProcess(id) {
+// sync: wait for taskkill. At quit it must finish before the IDE exits, since Windows ends the IDE's own child
+// processes with it (taskkill included) but not their children, such as the programs a cmd.exe or a script started.
+function killProcess(id, { sync = false } = {}) {
   const proc = procs.get(id);
-  if (!proc) return;
+  if (!proc?.pid) return;
   proc.remoteKill?.(); // a program in a remote interpreter target outlives its local client (wsl.exe, ssh, docker)
-  spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']);
+  const args = ['/pid', String(proc.pid), '/T', '/F'];
+  if (sync) spawnSync('taskkill', args, { windowsHide: true, timeout: 5000 });
+  else spawn('taskkill', args, { windowsHide: true });
 }
 
 // Probe results by command, kept in userData/interpreters.json while the interpreter's python.exe and, for a venv,
@@ -174,7 +180,8 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
 });
 
 ipcMain.handle('proc:input', (_e, id, text) => procs.get(id)?.stdin.write(text));
-ipcMain.handle('proc:closeInput', (_e, id) => procs.get(id)?.stdin.end());
+// stdin.end() returns the stream, which cannot cross IPC; the handler answers nothing.
+ipcMain.handle('proc:closeInput', (_e, id) => { procs.get(id)?.stdin.end(); });
 ipcMain.handle('proc:kill', (_e, id) => killProcess(id));
 
 const plugins = createPluginManager({ appDir: __dirname, userDataDir: app.getPath('userData') });
@@ -198,9 +205,11 @@ ipcMain.handle('core:features', async (e) => {
   return plugins.rendererEntries({ detached: e.sender.id !== win?.webContents.id });
 });
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
+// A normal quit, not app.exit(): windows with unsaved files still ask, and the plugins' before-quit/will-quit handlers
+// (index and history flushes, terminals, servers, lock files) run before the new instance starts.
 ipcMain.handle('core:relaunch', () => {
   app.relaunch();
-  app.exit(0);
+  app.quit();
 });
 ipcMain.handle('plugins:list', () => plugins.list());
 ipcMain.handle('plugins:setEnabled', (_e, id, enabled) => plugins.setEnabled(id, enabled));
@@ -272,7 +281,9 @@ app.whenReady().then(() => {
   createWindow();
   registerFeatures();
 });
-app.on('window-all-closed', () => {
-  for (const id of procs.keys()) killProcess(id);
-  app.quit();
+app.on('window-all-closed', () => app.quit());
+// will-quit, not window-all-closed: app.quit() (a relaunch, a plugin's deferred quit) closes the windows without
+// emitting window-all-closed, and the programs started here must not outlive the IDE either way.
+app.on('will-quit', () => {
+  for (const id of procs.keys()) killProcess(id, { sync: true });
 });

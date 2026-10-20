@@ -70,6 +70,25 @@ try {
   const traceback = '  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "C:\\p\\app.py", line 3, in <module>\n';
   const links = await js(`(() => { const host = document.createElement('div'); ide.ui.console(host).append(${JSON.stringify(traceback)}); return [...host.querySelectorAll('a')].map(a => a.textContent); })()`);
   check(links.length === 1 && links[0] === 'File "C:\\p\\app.py", line 3', `traceback frames without a file ("<frozen runpy>") are not links (${JSON.stringify(links)})`);
+  // Input sent while a program exits meets a closed pipe (EPIPE), and input after closeInput a finished stream.
+  const writes = await js(`(async () => {
+    let n = 0;
+    for (let i = 0; i < 3; i++) {
+      const id = await ide.api.invoke('project:exec', 'cmd.exe', ['/c', 'exit 0'], ide.root);
+      let done = false;
+      ide.proc.attach(id, { exit: () => { done = true; } });
+      while (!done) { await ide.proc.input(id, 'typed while the program exits\\n'); n++; }
+    }
+    const id = await ide.api.invoke('project:exec', 'cmd.exe', ['/c', 'ping -n 3 127.0.0.1 >nul'], ide.root);
+    ide.proc.attach(id, {});
+    await ide.proc.closeInput(id);
+    await ide.proc.input(id, 'typed after the input was closed\\n');
+    ide.proc.kill(id);
+    return n;
+  })()`);
+  await t.sleep(500);
+  const internal = await js(`ide.api.invoke('diagnostics:errors').then(list => list.map(e => e.message))`);
+  check(!internal.some((m) => /write after end|EPIPE/i.test(m)), `input to a process that exits or whose stdin is closed is not an internal error (${writes} writes; ${JSON.stringify(internal)})`);
   await shot('final.png');
 } catch (err) {
   t.check(false, err.message);
