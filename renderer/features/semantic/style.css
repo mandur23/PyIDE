@@ -24,3 +24,8 @@
 .sem-preview { overflow: auto; padding: 6px 12px; }
 .sem-preview-head { color: var(--gray7); font-size: 12px; margin-bottom: 6px; }
 .sem-preview-code { margin: 0; font: 13px/1.45 var(--mono); white-space: pre; }
+.sem-notice { display: flex; gap: 6px; white-space: nowrap; font-size: 12px; }
+.sem-confirm p { margin: 0 0 8px; line-height: 1.5; }
+.sem-confirm-head { margin: 10px 0 4px; color: var(--gray9); }
+.sem-confirm-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 2px 0; }
+.sem-confirm-name { font-family: var(--mono); color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

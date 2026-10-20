@@ -8,6 +8,7 @@ Prompts follow the model card's CodeRetrieval task (text only; the vision and au
 """
 import base64
 import json
+import os
 import sys
 
 MODEL_ID = "google/embeddinggemma-2"
@@ -19,11 +20,29 @@ def emit(obj):
     sys.stdout.flush()
 
 
+def be_gentle(torch):
+    """Indexing runs beside the user's work: half the cores torch would take (PYIDE_SEMANTIC_THREADS overrides),
+    and below-normal priority on Windows, so the editor and the user's own programs come first."""
+    threads = int(os.environ.get("PYIDE_SEMANTIC_THREADS") or 0) or max(1, torch.get_num_threads() // 2)
+    torch.set_num_threads(threads)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:  # only settable before torch's first parallel work
+        pass
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+    return threads
+
+
 def load():
     global model
     import torch
     from sentence_transformers import SentenceTransformer
 
+    threads = be_gentle(torch)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # float16 degrades this model (model card); bfloat16 on GPU, float32 on CPU.
     model_kwargs = {"torch_dtype": torch.bfloat16} if device == "cuda" else {}
@@ -33,7 +52,7 @@ def load():
         config_kwargs={"vision_config": None, "audio_config": None},
         model_kwargs=model_kwargs,
     )
-    emit({"event": "ready", "device": device})
+    emit({"event": "ready", "device": device, "threads": threads})
 
 
 def prompt(item, kind):

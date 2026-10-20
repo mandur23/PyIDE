@@ -3,6 +3,7 @@
 // a private venv that reuses the system torch. Project files are split into code-aware chunks (functions, classes,
 // methods, doc sections), embedded once, and stored per project; only files that changed are embedded again. Queries mix cosine similarity with a small
 // keyword score so exact identifiers still rank well.
+const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -22,10 +23,15 @@ const TAKE = 200; // files per page handed from the worker to main, so no one me
 const SLICE_CHUNKS = 300; // chunks encoded per main-thread slice when the index is written (a few ms each)
 const SLICE_MS = 8; // the longest a slice of index loading runs before the main thread gets a turn
 const SAVE_DELAY = 2000; // changed files reach the index on disk this long after the last update (and at quit)
+const SAVE_EVERY_BATCHES = 40; // a long run saves what it has embedded this often...
+const SAVE_EVERY_MS = 20000; // ...or after this long, whichever comes first
+const TYPING_PAUSE_MS = 1500; // indexing waits until the user has not typed for this long
+const REST_MS = 30; // the embedding server's break between two batches
 const TEXT_EXT = new Set(['py', 'pyi', 'md', 'rst', 'txt', 'toml', 'cfg', 'ini', 'yaml', 'yml', 'json', 'js', 'mjs', 'cjs',
   'ts', 'tsx', 'jsx', 'html', 'css', 'java', 'kt', 'lua', 'luau', 'sql', 'sh', 'ps1', 'bat', 'go', 'rs', 'c', 'cpp', 'h', 'cs', 'jsp']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.idea', '.vscode', '.mypy_cache', '.pytest_cache',
   '.ruff_cache', '.cache', 'site-packages', 'dist', 'build', '.tox', '.next', 'target']);
+const DATA_EXT = new Set(['json', 'txt', 'yaml', 'yml', 'toml', 'cfg', 'ini']); // indexable, but not source
 
 // ---------- chunking ----------
 const DEF = /^(\s*)(?:async\s+def|def|class)\s+([A-Za-z_]\w*)/;
@@ -129,25 +135,86 @@ function fakeEmbed(text) {
   return v;
 }
 
-function walk(root) {
+// What Git ignores under root, as lowercase root-relative keys with forward slashes: ignored folders once ("data"),
+// not every file in them. Not a repository, or no git: nothing.
+function gitIgnored(root) {
+  let out;
+  try {
+    out = execFileSync('git', ['-c', 'core.quotepath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+      { cwd: root, encoding: 'utf8', timeout: 30000, maxBuffer: 256 << 20, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch { return new Set(); }
+  return new Set(out.split('\0').filter(Boolean).map((p) => p.replace(/\/$/, '').toLowerCase()));
+}
+const isVenv = (p, name) => /^\.?venv/i.test(name) || ['pyvenv.cfg', 'conda-meta'].some((m) => fs.existsSync(path.join(p, m)));
+
+// The files to index under root. Left out: SKIP_DIRS, virtual environments at any depth, what Git ignores, the
+// user's excluded folders, and data folders: more than `dataFiles` files or `dataMB` of indexable text, of which
+// less than a fifth is source. `skipped` lists the folders left out and why.
+function walk(root, { ignored = new Set(), excluded = [], dataFiles = 1000, dataMB = 50 } = {}) {
   const out = [];
+  const skipped = [];
+  const excludedKeys = new Set(excluded.map((r) => r.replace(/\\/g, '/').toLowerCase()));
+  const keyOf = (p) => path.relative(root, p).replace(/\\/g, '/').toLowerCase();
+  const skip = (p, reason, files) => skipped.push({ rel: path.relative(root, p), reason, ...(files ? { files } : {}) });
+  // -> {all, source, bytes}: files of any kind, source files, and bytes of indexable text in the subtree.
   const visit = (dir) => {
     let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return { all: 0, source: 0, bytes: 0 }; }
+    const first = out.length;
+    const firstSkipped = skipped.length;
+    const sum = { all: 0, source: 0, bytes: 0 };
     for (const d of entries) {
       const p = path.join(dir, d.name);
+      const key = keyOf(p);
       if (d.isDirectory()) {
-        if (SKIP_DIRS.has(d.name) || /^\.?venv/i.test(d.name) || fs.existsSync(path.join(p, 'pyvenv.cfg'))) continue;
-        visit(p);
-      } else if (TEXT_EXT.has(d.name.split('.').pop().toLowerCase())) {
-        let st;
-        try { st = fs.statSync(p); } catch { continue; }
-        if (st.size > 0 && st.size <= MAX_FILE_BYTES) out.push({ abs: p, rel: path.relative(root, p), mtime: st.mtimeMs, size: st.size });
+        if (SKIP_DIRS.has(d.name)) continue;
+        if (excludedKeys.has(key)) skip(p, 'excluded');
+        else if (ignored.has(key)) skip(p, 'ignored');
+        else if (isVenv(p, d.name)) skip(p, 'venv');
+        else {
+          const s = visit(p);
+          sum.all += s.all;
+          sum.source += s.source;
+          sum.bytes += s.bytes;
+        }
+        continue;
       }
+      sum.all++;
+      const ext = d.name.split('.').pop().toLowerCase();
+      if (!TEXT_EXT.has(ext) || ignored.has(key)) continue;
+      let st;
+      try { st = fs.statSync(p); } catch { continue; }
+      if (!(st.size > 0 && st.size <= MAX_FILE_BYTES)) continue;
+      out.push({ abs: p, rel: path.relative(root, p), mtime: st.mtimeMs, size: st.size });
+      sum.bytes += st.size;
+      if (!DATA_EXT.has(ext)) sum.source++;
     }
+    if (dir !== root && (sum.all > dataFiles || sum.bytes > dataMB * 2 ** 20) && sum.source * 5 < sum.all) {
+      out.length = first;
+      skipped.length = firstSkipped; // the data folders inside it go with it
+      skip(dir, 'data', sum.all);
+      // Its parent is judged without it, so a package with a large fixtures folder keeps its code.
+      return { all: 0, source: 0, bytes: 0 };
+    }
+    return sum;
   };
   visit(root);
-  return out;
+  return { files: out, skipped };
+}
+
+// The folders holding the most chunks, two levels deep, for the size prompt and the exclude picker.
+function heaviest(entries, n = 12) {
+  const by = new Map();
+  for (const [rel, chunks] of entries) {
+    const parts = rel.split(/[\\/]/).slice(0, -1);
+    for (let d = 1; d <= Math.min(2, parts.length); d++) {
+      const dir = parts.slice(0, d).join(path.sep);
+      const e = by.get(dir) || by.set(dir, { rel: dir, files: 0, chunks: 0 }).get(dir);
+      e.files++;
+      e.chunks += chunks;
+    }
+  }
+  return [...by.values()].sort((a, b) => b.chunks - a.chunks).slice(0, n);
 }
 
 // The disk half of an index update, run on a worker thread so a large project never stalls the main process:
@@ -156,11 +223,12 @@ function walk(root) {
 // thread boundary in a few ms where 20k small objects take tens. The changed files wait here, under their root, and
 // main takes them a page at a time (take), so a 20k-file project never crosses to main in one message either and
 // two projects indexing at once never take each other's files.
+// `opts` are the walk's limits and exclusions (see walk); Git is asked for its ignored paths here, off the main thread.
 const queued = new Map(); // root -> changed files not yet taken
-function collect(root, knownFlat, onlyPaths) {
+function collect(root, knownFlat, onlyPaths, opts = {}) {
   const known = new Map();
   for (let i = 0; i < knownFlat.length; i += 4) known.set(knownFlat[i], { mtime: knownFlat[i + 1], size: knownFlat[i + 2], chunks: knownFlat[i + 3] });
-  const disk = walk(root);
+  const { files: disk, skipped } = walk(root, { ...opts, ignored: gitIgnored(root) });
   const seen = new Set(disk.map((f) => f.rel.toLowerCase()));
   let stale = disk.filter((f) => { const old = known.get(f.rel); return !old || old.mtime !== f.mtime || old.size !== f.size; });
   if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known.has(f.rel));
@@ -179,8 +247,10 @@ function collect(root, knownFlat, onlyPaths) {
     work.push({ f, chunks });
   }
   queued.set(root, work);
-  return { seen: [...seen], files: work.length, chunks: work.reduce((n, w) => n + w.chunks.length, 0), capped };
+  return { seen: [...seen], files: work.length, chunks: work.reduce((n, w) => n + w.chunks.length, 0), capped,
+    skipped: skipped.slice(0, 500), heavy: heaviest(work.map((w) => [w.f.rel, w.chunks.length])) };
 }
+const drop = (root) => { queued.delete(root); };
 const fakeEmbedAll = (items) => items.map((it) => fakeEmbed(`${it.title || ''} ${it.text}`));
 // The next page of a root's changed files; with `embed`, their chunks come back already embedded by the test backend
 // (one round trip per page instead of one per batch, which adds up to seconds on a 20k-file project).
@@ -191,7 +261,7 @@ function take(root, n, embed) {
   return page;
 }
 
-const WORKER_OPS = { collect, take, fakeEmbed: fakeEmbedAll };
+const WORKER_OPS = { collect, take, drop, fakeEmbed: fakeEmbedAll };
 if (!isMainThread && workerData?.role === 'pyide-semantic') {
   parentPort.on('message', ({ id, op, args }) => {
     try { parentPort.postMessage({ id, result: WORKER_OPS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
@@ -199,6 +269,7 @@ if (!isMainThread && workerData?.role === 'pyide-semantic') {
 }
 const inWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-semantic') : null;
 const yieldTurn = () => new Promise((resolve) => setImmediate(resolve));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------- the index on disk ----------
 // In memory: files = {rel: {mtime, size, chunks: [{start, end, symbol, title, text, vector}]}}. On disk, in the
@@ -445,6 +516,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const base = path.join(app.getPath('userData'), 'semantic');
   const server = path.join(unpackedDir, 'main', 'semantic', 'embed_server.py');
   const fake = process.env.PYIDE_SEMANTIC_BACKEND === 'fake';
+  // Tests: the test backend takes this long per page of files, so a run can be paused or killed part-way.
+  const fakePageMs = fake ? Number(process.env.PYIDE_SEMANTIC_FAKE_PAGE_MS) || 0 : 0;
   const backend = fake ? 'fake' : MODEL_ID;
   const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
@@ -467,7 +540,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       idleMs: () => idleMs,
       onEvent: (msg) => {
         if (msg.event === 'loading') model = { state: 'loading', device: null, error: null };
-        else if (msg.event === 'ready') model = { state: 'ready', device: msg.device, error: null };
+        else if (msg.event === 'ready') model = { state: 'ready', device: msg.device, threads: msg.threads, error: null };
         pushStatus();
       },
       onLog: (text) => send('semantic:log', text),
@@ -517,17 +590,55 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     }, SAVE_DELAY);
   }
 
-  // At most ten progress messages a second while indexing; phase changes always go out.
+  // A save now rather than SAVE_DELAY from now: during a long run, when indexing pauses, at quit.
+  function saveNow(idx) {
+    clearTimeout(idx.saveTimer);
+    idx.saveTimer = null;
+    if (idx.pending.size) idx.io = idx.io.then(() => flush(idx)).catch((err) => send('semantic:log', `index save failed: ${err.message}\n`));
+  }
+
+  // ---------- limits, pause, typing, exclusions ----------
+  // The renderer passes the user's settings (semantic:configure); confirmChunks is the size of a first index above
+  // which the user is asked before it starts.
+  const limits = { dataFiles: 1000, dataMB: 50, confirmChunks: 5000 };
+  let paused = false; // Pause Indexing, for every project, until Resume or the next launch
+  let typingAt = 0; // the renderer reports edits (semantic:typing); indexing waits until the user stops typing
+  const exclusionsFile = path.join(base, 'exclusions.json');
+  let exclusions = null; // {root key: [project-relative folder]}
+  const excludedOf = (root) => {
+    if (!exclusions) { try { exclusions = JSON.parse(fs.readFileSync(exclusionsFile, 'utf8')); } catch { exclusions = {}; } }
+    return exclusions[keyOf(root)] || [];
+  };
+  async function setExcluded(root, rels) {
+    excludedOf(root);
+    if (rels.length) exclusions[keyOf(root)] = rels; else delete exclusions[keyOf(root)];
+    await fs.promises.mkdir(base, { recursive: true });
+    await fs.promises.writeFile(exclusionsFile, JSON.stringify(exclusions, null, 1));
+  }
+  // Waits while indexing is paused or the user is typing. Searches do not wait: they embed on their own.
+  async function waitTurn() {
+    while (paused || Date.now() - typingAt < TYPING_PAUSE_MS) await sleep(paused ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
+  }
+
+  // At most ten progress messages a second while indexing; phase changes always go out. `eta` is in seconds, from
+  // the recent embedding rate (paused time not counted).
   const progress = (idx, phase, force) => {
     const now = Date.now();
     if (!force && now - idx.sentAt < 100) return;
     idx.sentAt = now;
-    send('semantic:progress', { root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length, chunks: idx.chunks, capped: idx.capped });
+    const eta = phase === 'indexing' && idx.msPerChunk ? Math.round(((idx.total - idx.done) * idx.msPerChunk) / 1000) : null;
+    send('semantic:progress', { root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length, chunks: idx.chunks,
+      capped: idx.capped, paused, eta, skipped: idx.skipped?.length || 0, asking: idx.asking || null });
   };
 
-  // Brings the index up to date with the files on disk; concurrent calls share one run.
-  async function update(root, onlyPaths) {
+  // Brings the index up to date with the files on disk; concurrent calls share one run. Each file reaches the index
+  // as soon as its last chunk is embedded, and the index is saved every SAVE_EVERY_BATCHES batches or SAVE_EVERY_MS,
+  // so a restart resumes where the run stopped. A first index larger than limits.confirmChunks waits for the user's
+  // answer (semantic:confirm); after a no, the project is not indexed until the user asks (`confirmed`).
+  async function update(root, onlyPaths, { confirmed } = {}) {
     const idx = await loadIndex(root);
+    if (confirmed) Object.assign(idx, { confirmed: true, declined: false });
+    if (idx.declined) return;
     if (idx.job) { idx.rerun = true; return idx.job; }
     idx.job = (async () => {
       try {
@@ -535,28 +646,75 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
           idx.rerun = false;
           const known = [];
           for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length);
-          const { seen, chunks, capped } = await inWorker('collect', root, known, onlyPaths);
-          const seenSet = new Set(seen);
+          const { dataFiles, dataMB } = limits;
+          const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, excluded: excludedOf(root) });
+          const seenSet = new Set(plan.seen);
           for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) forget(idx, rel);
-          idx.capped = capped;
-          idx.total = chunks;
-          idx.done = 0;
-          progress(idx, 'indexing', true);
-          for (let page = await inWorker('take', root, TAKE, fake); page.length; page = await inWorker('take', root, TAKE, fake)) {
-            const items = page.flatMap((w) => w.chunks).filter((c) => !c.vector);
-            for (let i = 0; i < items.length; i += BATCH) {
-              const batch = items.slice(i, i + BATCH);
-              const vecs = await embed(batch.map((c) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text })), 'document');
-              batch.forEach((c, j) => { c.vector = vecs[j]; });
-              idx.done += batch.length;
-              progress(idx, 'indexing');
+          Object.assign(idx, { capped: plan.capped, skipped: plan.skipped, total: plan.chunks, done: 0, msPerChunk: 0 });
+          if (!idx.confirmed && !Object.keys(idx.files).length && plan.chunks > limits.confirmChunks) {
+            idx.asking = { files: plan.files, chunks: plan.chunks, heavy: plan.heavy, skipped: plan.skipped.length };
+            progress(idx, 'confirm', true);
+            // true, false, or 'again': yes after excluding folders, so the files are collected again without them.
+            const answer = await new Promise((resolve) => { idx.answer = resolve; });
+            Object.assign(idx, { asking: null, answer: null, confirmed: !!answer, declined: !answer });
+            if (answer !== true) {
+              await inWorker('drop', root);
+              idx.rerun = !!answer;
+              if (answer) continue;
+              progress(idx, 'declined', true);
+              return;
             }
-            idx.done += page.reduce((n, w) => n + w.chunks.length, 0) - items.length;
-            progress(idx, 'indexing');
-            for (const w of page) {
+          }
+          progress(idx, 'indexing', true);
+          let batches = 0;
+          let savedAt = Date.now();
+          const saveEvery = (n) => {
+            batches += n;
+            if (batches < SAVE_EVERY_BATCHES && Date.now() - savedAt <= SAVE_EVERY_MS) return;
+            batches = 0;
+            savedAt = Date.now();
+            saveNow(idx);
+          };
+          const timed = (started, n) => {
+            const ms = (Date.now() - started) / n;
+            idx.msPerChunk = idx.msPerChunk ? 0.8 * idx.msPerChunk + 0.2 * ms : ms;
+          };
+          for (;;) {
+            await waitTurn();
+            const pageStarted = Date.now();
+            const page = await inWorker('take', root, TAKE, fake);
+            if (!page.length) break;
+            if (fakePageMs) await sleep(fakePageMs);
+            const left = new Map(page.map((w) => [w, w.chunks.filter((c) => !c.vector).length]));
+            const finish = (w) => {
               forget(idx, w.f.rel);
               remember(idx, w.f.rel, { mtime: w.f.mtime, size: w.f.size, chunks: w.chunks });
+            };
+            const ready = page.filter((w) => !left.get(w));
+            for (const w of ready) { finish(w); idx.done += w.chunks.length; }
+            const readyChunks = ready.reduce((n, w) => n + w.chunks.length, 0);
+            if (readyChunks) {
+              timed(pageStarted, readyChunks);
+              saveEvery(Math.ceil(readyChunks / BATCH));
             }
+            const items = page.flatMap((w) => w.chunks.filter((c) => !c.vector).map((c) => [w, c]));
+            for (let i = 0; i < items.length; i += BATCH) {
+              await waitTurn();
+              const started = Date.now();
+              const batch = items.slice(i, i + BATCH);
+              const vecs = await embed(batch.map(([, c]) => ({ title: c.symbol ? `${c.title} ${c.symbol}` : c.title, text: c.text })), 'document');
+              batch.forEach(([w, c], j) => {
+                c.vector = vecs[j];
+                left.set(w, left.get(w) - 1);
+                if (!left.get(w)) finish(w);
+              });
+              idx.done += batch.length;
+              await sleep(REST_MS);
+              timed(started, batch.length);
+              saveEvery(1);
+              progress(idx, 'indexing');
+            }
+            progress(idx, 'indexing');
           }
           onlyPaths = null;
         } while (idx.rerun);
@@ -626,11 +784,50 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   ipcMain.handle('semantic:cancelSetup', () => setupJob?.cancel());
 
   ipcMain.handle('semantic:status', () => status());
-  ipcMain.handle('semantic:configure', (_e, { idleMinutes } = {}) => {
+  ipcMain.handle('semantic:configure', (_e, { idleMinutes, ...rest } = {}) => {
     idleMs = runtime.idleMsOf(idleMinutes);
     sidecar?.idle();
+    for (const k of Object.keys(limits)) if (Number(rest[k]) > 0) limits[k] = Number(rest[k]);
   });
   ipcMain.handle('semantic:index', (_e, root, paths) => { update(root, paths); return true; });
+  ipcMain.on('semantic:typing', () => { typingAt = Date.now(); });
+  ipcMain.handle('semantic:pause', (_e, on) => {
+    paused = !!on;
+    for (const idx of indexes.values()) {
+      if (!idx.job) continue;
+      progress(idx, 'indexing', true);
+      if (paused) saveNow(idx);
+    }
+    return paused;
+  });
+  // A project folder as a relative path, or null for the root itself and paths outside it.
+  const folderRel = (root, folder) => {
+    const rel = path.relative(root, path.resolve(root, folder));
+    return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? null : rel;
+  };
+  const withExcluded = (root, folders, on) => {
+    let list = excludedOf(root);
+    for (const rel of folders.map((f) => folderRel(root, f)).filter(Boolean)) {
+      list = list.filter((r) => r.toLowerCase() !== rel.toLowerCase());
+      if (on) list.push(rel);
+    }
+    return setExcluded(root, list);
+  };
+  // The answer to a first index's size question, optionally with folders to exclude first; a yes without a question
+  // pending starts indexing a project the user said no to.
+  ipcMain.handle('semantic:confirm', async (_e, root, yes, exclude = []) => {
+    const idx = await loadIndex(root);
+    if (yes && exclude.length) await withExcluded(root, exclude, true);
+    if (idx.answer) idx.answer(yes ? (exclude.length ? 'again' : true) : false);
+    else if (yes) update(root, null, { confirmed: true });
+    return true;
+  });
+  // Excludes (on) or includes again a project folder; the index drops or picks up its files right away.
+  ipcMain.handle('semantic:exclude', async (_e, root, folder, on) => {
+    await withExcluded(root, [folder], on);
+    update(root);
+    return excludedOf(root);
+  });
   ipcMain.handle('semantic:rebuild', async (_e, root) => {
     const idx = await loadIndex(root);
     idx.io = idx.io.then(async () => {
@@ -638,7 +835,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       await fs.promises.rm(idx.dir, { recursive: true, force: true });
     }).catch(() => {});
     await idx.io;
-    update(root);
+    update(root, null, { confirmed: true });
     return true;
   });
   ipcMain.handle('semantic:query', async (_e, root, query, opts) => {
@@ -646,7 +843,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
   ipcMain.handle('semantic:indexInfo', async (_e, root) => {
     const idx = await loadIndex(root);
-    return { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped };
+    return { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped, paused,
+      asking: idx.asking || null, declined: !!idx.declined, skipped: idx.skipped || [], excluded: excludedOf(root),
+      heavy: heaviest(Object.entries(idx.files).map(([rel, f]) => [rel, f.chunks.length])) };
   });
 
   app.on('before-quit', () => {
@@ -658,4 +857,4 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
 };
 
-exports._test = { chunkFile, chunkPython, keywordScore, tokens, fakeEmbed, collect, take, newIndex, readIndex, remember, forget, flush, compact, flushSync };
+exports._test = { chunkFile, chunkPython, keywordScore, tokens, fakeEmbed, walk, gitIgnored, collect, take, newIndex, readIndex, remember, forget, flush, compact, flushSync };

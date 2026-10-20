@@ -2,11 +2,13 @@
 // (appended per change, flushed at quit), find similar code, persistence, the setup screen, and Korean UI. Uses the
 // deterministic test backend unless SEMANTIC_REAL=1 (then it runs against the installed EmbeddingGemma 2 and also
 // checks a Korean natural-language query).
+import { execSync } from 'child_process';
 import { createHash } from 'crypto';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, truncateSync, writeFileSync } from 'fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, truncateSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
@@ -142,6 +144,35 @@ const appendToStrings = (t, code) => t.js(`(() => { const m = ide.editor.getMode
   const quit = await reread(dir7);
   check(filesOf(quit) === 'a.py,b.py,c.py' && sameVector(quit, 'a.py', 1) && sameVector(quit, 'b.py', 2) && sameVector(quit, 'c.py', 3) && rowsOnDisk(quit) === 3 && quit.records === 3,
     'the save at quit during a save in flight writes the later changes after it, every record on its own row');
+
+  // ---------- what is indexed: Git-ignored paths, virtual environments anywhere, data folders, exclusions ----------
+  const repo = tmp();
+  const put = (rel, text = 'def f():\n    return 1\n') => { mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); writeFileSync(path.join(repo, rel), text); };
+  put('.gitignore', 'data/\nmodels/\n*.log.txt\n');
+  for (const rel of ['src/app.py', 'data/train.py', 'models/m.py', 'tools/nested/.venv-rvc/lib.py', 'envs/py311/lib.py', 'pkg/core.py', 'docs/guide.md']) put(rel);
+  put('src/run.log.txt', 'epoch 1\n');
+  put('tools/nested/.venv-rvc/pyvenv.cfg', 'home = C:\\Python311\n');
+  put('envs/py311/conda-meta/history', '');
+  for (let i = 0; i < 1100; i++) put(`datasets/rec${i}.json`, '{"a": 1}\n');
+  for (let i = 0; i < 1100; i++) put(`pkg/fixtures/f${i}.json`, '{"b": 2}\n');
+  const relsOf = (w) => w.files.map((f) => f.rel.replace(/\\/g, '/')).sort().join();
+  const reasonsOf = (w) => Object.fromEntries(w.skipped.map((s) => [s.rel.replace(/\\/g, '/'), s.reason]));
+  const plain = t.walk(repo, { ignored: t.gitIgnored(repo) });
+  check(t.gitIgnored(repo).size === 0, 'a folder that is not a Git repository has nothing ignored');
+  execSync('git init -q', { cwd: repo });
+  const ignored = t.gitIgnored(repo);
+  const w1 = t.walk(repo, { ignored });
+  const r1 = reasonsOf(w1);
+  check(relsOf(w1) === 'docs/guide.md,pkg/core.py,src/app.py' && r1.data === 'ignored' && r1.models === 'ignored',
+    `folders and files Git ignores are not indexed (${relsOf(w1)})`);
+  check(r1['tools/nested/.venv-rvc'] === 'venv' && r1['envs/py311'] === 'venv', 'virtual environments are skipped at any depth (pyvenv.cfg, conda-meta)');
+  check(r1.datasets === 'data' && r1['pkg/fixtures'] === 'data' && relsOf(w1).includes('pkg/core.py'),
+    'folders of mostly data over the file limit are skipped, and a package keeps its code next to a large fixtures folder');
+  check(relsOf(plain).includes('data/train.py') && relsOf(plain).includes('models/m.py') && relsOf(plain).includes('src/run.log.txt'),
+    'without Git the same project indexes those folders as before');
+  const w2 = t.walk(repo, { ignored, dataFiles: 5000, excluded: ['src'] });
+  check(relsOf(w2).includes('datasets/rec7.json') && !relsOf(w2).includes('src/app.py') && reasonsOf(w2).src === 'excluded',
+    'the data folder limit is a setting, and excluded folders are left out');
 }
 
 let a;
@@ -255,6 +286,147 @@ try {
   check(false, err.message);
   a?.close();
 }
+
+// ---------- a large Git project: ignored folders, saves during the run and resume, pause, typing, exclusion, size prompt ----------
+// The test backend takes PYIDE_SEMANTIC_FAKE_PAGE_MS per page of 200 files, so the run lasts long enough to pause and
+// kill part-way. With SEMANTIC_REAL=1 only the ignored folder and the embedding server's thread cap are checked.
+const sem = createRequire(import.meta.url)('../main/features/semantic.js')._test;
+function makeProject(generated, ignoredFiles) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pyide-semantic-git-'));
+  cpSync(fileURLToPath(new URL('./fixtures/semantic', import.meta.url)), dir, { recursive: true });
+  writeFileSync(path.join(dir, '.gitignore'), 'data/\n');
+  const put = (rel, text) => { mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); writeFileSync(path.join(dir, rel), text); };
+  for (let i = 0; i < generated; i++) put(`gen/g${i % 10}/m${i}.py`, `def generated_helper_${i}(x):\n    return x + ${i}\n`);
+  for (let i = 0; i < ignoredFiles; i++) put(`data/d${i}.py`, `def ignored_dataset_marker_${i}():\n    return ${i}\n`);
+  execSync('git init -q', { cwd: dir });
+  return dir;
+}
+const records = (file) => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(1) : []);
+const rowOf = (name) => `[...document.querySelectorAll('#tree .node')].find((n) => n.querySelector('.name').textContent === ${JSON.stringify(name)})`;
+async function treeMenu(t, name) {
+  await t.until(`!!${rowOf(name)}`, `tree row ${name}`);
+  await t.js(`(() => { const n = ${rowOf(name)}; const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
+  await t.until(`!!document.querySelector('.context-menu')`, 'tree context menu');
+  return t.js(`[...document.querySelectorAll('.context-menu .menu-label')].map((l) => l.textContent)`);
+}
+const clickMenu = (t, label) => t.js(`[...document.querySelectorAll('.context-menu .menu-label')].find((l) => l.textContent === ${JSON.stringify(label)}).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))`);
+const progressOf = (t) => t.js('ide.semantic.progress()');
+const infoOf = (t) => t.js(`ide.api.invoke('semantic:indexInfo', ide.root)`);
+const seeded = (settings) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pyide-semantic-ud-'));
+  writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
+  return dir;
+};
+
+const live = [];
+try {
+  const proj = makeProject(REAL ? 0 : 2000, REAL ? 20 : 300);
+  const plan = sem.collect(proj, [], null, {});
+  sem.take(proj, 1e9);
+  const files = plan.files;
+  const env = { PYIDE_SEMANTIC_FAKE_PAGE_MS: '1500' };
+  const big = await launch({ projectDir: proj, port: 9535, name: 'semantic-git', env });
+  live.push(big);
+  if (REAL) {
+    await big.until(`ide.semantic.progress()?.phase === 'ready' && ide.semantic.progress().files === ${files}`, 'index ready', 600000);
+    check(!(await big.js(`ide.semantic.query('ignored dataset marker').then((r) => r.some((x) => x.rel.startsWith('data')))`)) && plan.skipped.some((s) => s.rel === 'data' && s.reason === 'ignored'),
+      `the Git-ignored data folder is not indexed (${(await infoOf(big)).files} files)`);
+    const st = await big.js(`ide.api.invoke('semantic:status')`);
+    check(st.model.threads >= 1 && st.model.threads <= Math.ceil((await import('os')).cpus().length / 2), `the embedding server runs on ${st.model.threads} torch threads`);
+  } else {
+    await big.until(`ide.semantic.progress()?.phase === 'indexing' && ide.semantic.progress().done > 0`, 'indexing started', 30000);
+    const first = await progressOf(big);
+    check(first.total === plan.chunks && plan.skipped.some((s) => s.rel === 'data' && s.reason === 'ignored'),
+      `the Git-ignored data folder is not embedded (${first.total} chunks in the run, ${plan.chunks} expected)`);
+    await big.until(`/Semantic index \\d+% · .+ left/.test(document.querySelector('#semanticStatus').textContent)`, 'progress with time left', 10000);
+    check(true, `the status bar shows progress and the time left ("${await big.js(`document.querySelector('#semanticStatus').textContent`)}")`);
+
+    // Pause from the tool window, resume from the project tree.
+    await big.js(`ide.toolWindows.get('SemanticSearch').show()`);
+    await big.until(`!!document.querySelector('button[title="Pause Indexing"]')`, 'pause button');
+    await big.js(`document.querySelector('button[title="Pause Indexing"]').click()`);
+    await big.until(`ide.semantic.progress().paused && document.querySelector('#semanticStatus').textContent.includes('paused')`, 'paused status');
+    await sleep(2000); // the page in flight finishes
+    const atPause = (await progressOf(big)).done;
+    await sleep(4000);
+    check((await progressOf(big)).done === atPause && await big.js(`!!document.querySelector('button[title="Resume Indexing"]')`),
+      `Pause Indexing in the tool window holds the run (${atPause}/${first.total} for 4 s)`);
+    const menu = await treeMenu(big, 'gen');
+    await big.shot('paused.png');
+    check(menu.includes('Resume Semantic Indexing') && menu.includes('Exclude from Semantic Index'), 'the project tree offers Resume and Exclude from Semantic Index');
+    await clickMenu(big, 'Resume Semantic Indexing');
+    await big.until(`!ide.semantic.progress().paused && ide.semantic.progress().done > ${atPause}`, 'resumed', 15000);
+    check(true, 'Resume from the project tree continues the run');
+
+    // Typing holds the run too.
+    await openFile(big, 'utils/strings.py');
+    const typing = big.js(`(async () => { const m = ide.editor.getModel(); for (let i = 0; i < 25; i++) { m.applyEdits([{ range: new ide.monaco.Range(1, 1, 1, 1), text: '#' }]); await new Promise((r) => setTimeout(r, 200)); } return true; })()`);
+    await sleep(2500);
+    const midTyping = (await progressOf(big)).done;
+    await typing;
+    const afterTyping = (await progressOf(big)).done;
+    check(afterTyping === midTyping && (await progressOf(big)).phase === 'indexing', `indexing waits while the user types (${midTyping}/${first.total} through 2.5 s of typing)`);
+
+    // Killed after a save during the run: the next launch embeds only the rest.
+    for (let i = 0; i < 300 && records(indexLog(big)).length < 800; i++) await sleep(100);
+    const killedAt = await progressOf(big);
+    const saved = records(indexLog(big));
+    big.close();
+    const savedChunks = saved.reduce((n, l) => { try { return n + (JSON.parse(l)[1]?.chunks.length || 0); } catch { return n; } }, 0);
+    check(killedAt.phase === 'indexing' && saved.length >= 800 && saved.length < files,
+      `the index is saved during the run (${saved.length} of ${files} files on disk when the app was killed at ${killedAt.done}/${killedAt.total} chunks)`);
+    await sleep(1000);
+    const again = await launch({ projectDir: proj, port: 9536, name: 'semantic-git-2', env, userData: big.userData });
+    live.push(again);
+    await again.until(`ide.semantic.progress()?.phase === 'ready' && ide.semantic.progress().files === ${files}`, 'resumed run done', 60000);
+    const rest = await progressOf(again);
+    check(rest.total >= plan.chunks - savedChunks && rest.total <= plan.chunks - savedChunks + 200,
+      `after a restart only the rest is embedded (${rest.total} of ${plan.chunks} chunks; ${savedChunks} came from disk)`);
+    check(!(await again.js(`ide.semantic.query('ignored dataset marker').then((r) => r.some((x) => x.rel.startsWith('data')))`)), 'nothing from the ignored folder is found');
+
+    // Exclude and include again from the project tree.
+    await treeMenu(again, 'gen');
+    await clickMenu(again, 'Exclude from Semantic Index');
+    await again.until(`ide.api.invoke('semantic:indexInfo', ide.root).then((i) => !i.indexing && i.files === ${files - 2000})`, 'gen excluded', 30000);
+    const exclusions = JSON.parse(readFileSync(path.join(again.userData, 'semantic', 'exclusions.json'), 'utf8'));
+    check(!(await again.js(`ide.semantic.query('generated helper').then((r) => r.some((x) => x.rel.startsWith('gen')))`)) && Object.values(exclusions).some((l) => l.includes('gen')),
+      'Exclude from Semantic Index drops the folder from the index and remembers it');
+    const menu2 = await treeMenu(again, 'gen');
+    await clickMenu(again, 'Include in Semantic Index');
+    await again.until(`ide.semantic.progress()?.phase === 'indexing' && ide.semantic.progress().total === 2000`, 'gen indexed again', 15000);
+    check(menu2.includes('Include in Semantic Index') && !menu2.includes('Exclude from Semantic Index'), 'an excluded folder offers Include in Semantic Index, which indexes it again');
+    again.close();
+
+    // A first index over the threshold asks first: untick a folder and Index, or Not Now and Index Now later.
+    const ask = await launch({ projectDir: proj, port: 9537, name: 'semantic-ask', userData: seeded({ 'semantic.confirmChunks': 100 }) });
+    live.push(ask);
+    await ask.until(`!!document.querySelector('#semanticConfirm')`, 'size prompt', 30000);
+    const prompt = await ask.js(`document.querySelector('#semanticConfirm').textContent`);
+    check(prompt.includes(`${files} files`) && prompt.includes(`${plan.chunks} chunks`) && await ask.js(`!!document.querySelector('#semanticConfirm input[data-rel="gen"]')`),
+      'a first index over the threshold shows its files and chunks and the largest folders before it starts');
+    check((await infoOf(ask)).files === 0 && (await progressOf(ask)).phase === 'confirm', 'nothing is embedded while the question is open');
+    await ask.shot('size-prompt.png');
+    await ask.js(`(document.querySelector('#semanticConfirm input[data-rel="gen"]').click(), document.querySelector('#semanticConfirm .dialog-buttons .primary').click(), true)`);
+    await ask.until(`ide.api.invoke('semantic:indexInfo', ide.root).then((i) => !i.indexing && i.files === ${files - 2000} && i.excluded.includes('gen'))`, 'indexed without gen', 30000);
+    check(true, 'Index with a folder unticked indexes the project without it');
+    ask.close();
+    const no = await launch({ projectDir: proj, port: 9538, name: 'semantic-ask-2', userData: seeded({ 'semantic.confirmChunks': 100 }) });
+    live.push(no);
+    await no.until(`!!document.querySelector('#semanticConfirm')`, 'size prompt', 30000);
+    await no.js(`(document.querySelector('#semanticConfirm .dialog-buttons .secondary').click(), true)`);
+    await no.js(`ide.toolWindows.get('SemanticSearch').show()`);
+    await no.until(`ide.semantic.progress()?.phase === 'declined' && !document.querySelector('.sem-notice').classList.contains('hidden')`, 'declined notice');
+    check((await infoOf(no)).files === 0, 'Not Now leaves the project unindexed and says so in the tool window');
+    await no.js(`(document.querySelector('#semanticIndexNow').click(), true)`);
+    await no.until(`ide.api.invoke('semantic:indexInfo', ide.root).then((i) => !i.indexing && i.files === ${files})`, 'Index Now', 60000);
+    check(true, 'Index Now indexes it');
+    for (const t of live) check(t.consoleErrors.length === 0, `no renderer exceptions (${t.outDir.split(/[\\/]/).pop()})`);
+  }
+} catch (err) {
+  check(false, err.message);
+}
+for (const t of live) t.close();
+
 const failed = results.filter((r) => !r).length;
 console.log(`${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);
