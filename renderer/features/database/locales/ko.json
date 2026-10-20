@@ -67,5 +67,18 @@
   "No server yet? Install one locally in the Install Manager": "서버가 없나요? 설치 관리자에서 로컬 서버를 설치하세요",
   "{name} database": "{name} 데이터베이스",
   "{names} driver ({package})": "{names} 드라이버 ({package})",
-  "Lets the Database tool window connect to {names}.": "데이터베이스 도구 창에서 {names}에 연결할 수 있게 합니다."
+  "Lets the Database tool window connect to {names}.": "데이터베이스 도구 창에서 {names}에 연결할 수 있게 합니다.",
+  "Instance name": "인스턴스 이름",
+  "Encrypt connection": "연결 암호화",
+  "Trust server certificate": "서버 인증서 신뢰",
+  "Connect by": "연결 방식",
+  "Service name": "서비스 이름",
+  "SID": "SID",
+  "Service name or SID": "서비스 이름 또는 SID",
+  "Show all accessible schemas": "접근 가능한 모든 스키마 표시",
+  "In-memory database (nothing is saved)": "메모리 내 데이터베이스(저장되지 않음)",
+  "Read-only": "읽기 전용",
+  "URL (instead of host and port)": "URL(호스트와 포트 대신)",
+  "Use HTTPS": "HTTPS 사용",
+  "Embedded analytical database in a file or in memory. It queries CSV, Parquet and JSON files directly, e.g. SELECT * FROM read_csv_auto('data.csv').": "파일이나 메모리에 두는 임베디드 분석 데이터베이스입니다. CSV, Parquet, JSON 파일을 바로 쿼리할 수 있습니다(예: SELECT * FROM read_csv_auto('data.csv'))."
 }

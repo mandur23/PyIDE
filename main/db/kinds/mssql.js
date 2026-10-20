@@ -1,0 +1,206 @@
+// Microsoft SQL Server through the mssql package (tedious, pure JS). See main/db/drivers.js for the kind module contract.
+// Identifiers are quoted with double quotes, not brackets: the renderer quotes with one character on both sides, and
+// tedious opens every connection with QUOTED_IDENTIFIER ON, so "name" is an identifier there as in standard SQL.
+
+// T-SQL scripts: a line holding only GO (optionally `GO 3` and a trailing -- comment) ends a batch, as in sqlcmd and
+// SSMS. GO inside a string, a [bracketed] or "quoted" name, or a /* comment */ (which nests in T-SQL) is text.
+// Returns [{text, line, repeat}], line being the 1-based line the batch starts on; blank batches are dropped.
+const GO_LINE = /[ \t]*GO(?:[ \t]+(\d+))?[ \t]*(?:--[^\n]*)?(?=\r?\n|$)/iy;
+function splitGoBatches(text) {
+  const batches = [];
+  let start = 0;
+  let startLine = 1;
+  let line = 1;
+  let depth = 0; // block comment nesting
+  let quote = null; // ', " or ]
+  const push = (end, repeat) => {
+    const body = text.slice(start, end);
+    if (body.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()) {
+      const lead = body.match(/^\s*/)[0];
+      batches.push({ text: body.trim(), line: startLine + (lead.match(/\n/g) || []).length, repeat });
+    }
+  };
+  for (let i = 0; i <= text.length; i++) {
+    const atLineStart = i === 0 || text[i - 1] === '\n';
+    if (atLineStart && !depth && !quote) {
+      GO_LINE.lastIndex = i;
+      const m = GO_LINE.exec(text);
+      if (m) {
+        push(i, m[1] ? Math.max(1, Number(m[1])) : 1);
+        i += m[0].length;
+        if (text[i] === '\r') i++;
+        start = i + 1;
+        line++;
+        startLine = line;
+        continue;
+      }
+    }
+    if (i === text.length) break;
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '\n') line++;
+    if (quote) {
+      if (c === quote) {
+        if (next === quote) i++;
+        else quote = null;
+      }
+    } else if (depth) {
+      if (c === '/' && next === '*') { depth++; i++; } else if (c === '*' && next === '/') { depth--; i++; }
+    } else if (c === '/' && next === '*') { depth = 1; i++; } else if (c === '-' && next === '-') {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++;
+    } else if (c === "'" || c === '"') quote = c;
+    else if (c === '[') quote = ']';
+  }
+  push(text.length, 1);
+  return batches;
+}
+
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
+  // tedious gives BIGINT as a string, DATE/TIME as a Date, and binary as a Buffer.
+  function cellOf(value, type) {
+    if (value === null || value === undefined) return null;
+    if (type === 'bigint' && typeof value === 'string') return Number.isSafeInteger(Number(value)) ? Number(value) : value;
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      if (type === 'date') return value.toISOString().slice(0, 10);
+      if (type === 'time') return value.toISOString().slice(11, 23);
+    }
+    return jsonSafe(value);
+  }
+
+  const LOST = new Set(['ESOCKET', 'ECONNCLOSED', 'ECONNRESET', 'ENOTOPEN']);
+
+  // Messages from tedious that say little on their own.
+  function readable(err, cfg, lineBase) {
+    let message = err.message || String(err);
+    if (/Could not connect \(sequence\)/.test(message)) {
+      message = `${message.replace(/ - Could not connect \(sequence\)/, '')}: nothing accepted the connection. Check that SQL Server is running and that TCP/IP is enabled for this port${cfg.instance ? ' (and the SQL Server Browser service for a named instance)' : ''}.`;
+    } else if (/self[- ]signed|certificate/i.test(message) && !cfg.trustServerCertificate) {
+      message += ' Turn on "Trust server certificate" for a server with a self-signed certificate.';
+    }
+    const lineNumber = err.lineNumber ?? err.originalError?.info?.lineNumber;
+    if (lineBase && lineNumber) message = `Line ${lineBase + lineNumber - 1}: ${message}`;
+    const out = new Error(message);
+    out.code = err.code;
+    return out;
+  }
+
+  async function openMssql(cfg, { onLost = () => {} } = {}) {
+    const sql = loadPackage('mssql');
+    // One connection that stays open, so session state (USE, #temp tables, SET options) lasts across queries.
+    const pool = new sql.ConnectionPool({
+      server: cfg.host || 'localhost',
+      port: cfg.instance ? undefined : cfg.port,
+      user: cfg.user,
+      password: cfg.password,
+      database: cfg.database || undefined,
+      connectionTimeout: 10000,
+      requestTimeout: 0,
+      pool: { max: 1, min: 0, idleTimeoutMillis: 2 ** 31 - 1 },
+      options: { instanceName: cfg.instance || undefined, encrypt: !!cfg.encrypt, trustServerCertificate: !!cfg.trustServerCertificate, appName: 'PyIDE' },
+    });
+    pool.on('error', onLost);
+    try {
+      await pool.connect();
+    } catch (err) {
+      pool.close().catch(() => {});
+      throw readable(err, cfg);
+    }
+
+    // Streams one batch: the rows of each result set up to maxRows are kept, the rest are read and dropped, so no
+    // TOP is added to the user's SQL and every statement of the batch still runs.
+    const runBatch = (text, maxRows) => new Promise((resolve, reject) => {
+      const req = pool.request();
+      req.stream = true;
+      req.arrayRowMode = true;
+      const sets = [];
+      let affected = null;
+      let failed = null;
+      req.on('recordset', (columns) => sets.push({ columns, rows: [], total: 0 }));
+      req.on('row', (row) => {
+        const set = sets[sets.length - 1];
+        set.total++;
+        if (set.rows.length < maxRows) set.rows.push(row);
+      });
+      req.on('rowsaffected', (n) => { affected = (affected || 0) + n; });
+      req.on('error', (err) => { failed ||= err; });
+      req.on('done', () => (failed ? reject(failed) : resolve({ sets, affected })));
+      req.query(text);
+    });
+
+    async function run(text, maxRows) {
+      const batches = splitGoBatches(text);
+      const many = batches.length > 1 || text.includes('\n');
+      let last = { sets: [], affected: null, text: '' };
+      for (const b of batches) {
+        for (let n = 0; n < b.repeat; n++) {
+          try {
+            last = { ...(await runBatch(b.text, maxRows)), text: b.text };
+          } catch (err) {
+            if (LOST.has(err.code)) onLost(err);
+            throw readable(err, cfg, many ? b.line : 0);
+          }
+        }
+      }
+      const command = commandOf(last.text);
+      const set = last.sets.filter((s) => s.columns.length).pop();
+      if (!set) return { columns: [], rows: [], rowCount: DML.has(command) ? last.affected : null, truncated: false, command };
+      const types = set.columns.map((c) => String(c.type?.declaration || '').toLowerCase());
+      return {
+        columns: set.columns.map((c, i) => ({ name: c.name, type: types[i] })),
+        rows: set.rows.map((row) => row.map((v, i) => cellOf(v, types[i]))),
+        rowCount: set.rows.length,
+        truncated: set.total > set.rows.length,
+        command,
+      };
+    }
+
+    const typeName = (r) => {
+      if (r.len === -1) return `${r.ty}(max)`;
+      if (r.len && /char|binary/.test(r.ty)) return `${r.ty}(${r.len})`;
+      if (/^(decimal|numeric)$/.test(r.ty)) return `${r.ty}(${r.p},${r.sc})`;
+      return r.ty;
+    };
+
+    return {
+      query: (text, { maxRows }) => timed(() => run(text, maxRows)),
+      async schema() {
+        const { recordset } = await pool.request().query(`
+          SELECT c.TABLE_SCHEMA s, c.TABLE_NAME t, tb.TABLE_TYPE tt, c.COLUMN_NAME col, c.DATA_TYPE ty, c.CHARACTER_MAXIMUM_LENGTH len,
+                 c.NUMERIC_PRECISION p, c.NUMERIC_SCALE sc, c.IS_NULLABLE n, CASE WHEN k.COLUMN_NAME IS NULL THEN 0 ELSE 1 END pk
+          FROM INFORMATION_SCHEMA.COLUMNS c
+          JOIN INFORMATION_SCHEMA.TABLES tb ON tb.TABLE_SCHEMA = c.TABLE_SCHEMA AND tb.TABLE_NAME = c.TABLE_NAME
+          LEFT JOIN (SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                     JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku ON ku.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                     WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY') k
+            ON k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.COLUMN_NAME = c.COLUMN_NAME
+          ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`);
+        return groupSchema(recordset.map((r) => ({ schema: r.s, table: r.t, view: r.tt === 'VIEW', column: r.col, type: typeName(r), nullable: r.n === 'YES', pk: !!r.pk })));
+      },
+      async version() {
+        const { recordset } = await pool.request().query('SELECT @@VERSION AS v');
+        return recordset[0].v.split('\n')[0].replace(/\s*\(KB\d+\)/, '').trim();
+      },
+      close: () => pool.close(),
+    };
+  }
+
+  const [host, port, user, password, database] = NETWORK_FIELDS;
+  const OPEN = 'SELECT TOP 200 * FROM {qualified};';
+  return {
+    packages: { mssql: 'mssql@12.7.4' },
+    kinds: {
+      mssql: {
+        label: 'Microsoft SQL Server', order: 40, package: 'mssql', defaultPort: 1433, quote: '"', implicitSchemas: ['dbo'], open: openMssql,
+        fields: [
+          host, port,
+          { key: 'instance', label: 'Instance name', placeholder: 'SQLEXPRESS' },
+          user, password, database,
+          { key: 'encrypt', label: 'Encrypt connection', type: 'checkbox', default: true },
+          { key: 'trustServerCertificate', label: 'Trust server certificate', type: 'checkbox', default: false },
+        ],
+        ui: { statementSeparator: 'go-line', openData: { table: OPEN, view: OPEN } },
+      },
+    },
+  };
+};
+module.exports.splitGoBatches = splitGoBatches;

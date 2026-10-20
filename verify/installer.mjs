@@ -3,6 +3,7 @@
 // a fake command runner, portable database status under a temp install root, and Korean UI.
 // INSTALLER_REAL=1 also downloads, initializes, starts, queries, stops and removes real portable PostgreSQL and MariaDB.
 import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -73,7 +74,9 @@ try {
   check(counts.python >= 8 && counts.databases === 2 && counts.system === 3 && counts.all >= 13, `categories render with counts ${JSON.stringify(counts)}`);
   const aiIds = await a.js(`ide.installables.filter(i => i.category === 'ai').map(i => i.id).sort().join(',')`);
   check(aiIds === 'ai:claude-code,ai:embeddinggemma-2,ai:qwen2.5-coder-0.5b,ai:qwen2.5-coder-1.5b' && await count(a, 'cat:ai') === 4, `EmbeddingGemma 2, Claude Code and the completion models are listed under AI Models (${aiIds})`);
-  check(await count(a, 'cat:drivers') === 2, 'the database plugin lists its PostgreSQL and MySQL drivers');
+  // One driver entry per npm package that the database kinds in main/db/kinds/ load.
+  const driverPackages = Object.keys(createRequire(import.meta.url)('../main/db/drivers.js').PACKAGES).length;
+  check(await count(a, 'cat:drivers') === driverPackages, `the database plugin lists one driver per npm package (${await count(a, 'cat:drivers')} of ${driverPackages})`);
 
   // ---------- installables contract ----------
   await a.js(`(() => {
