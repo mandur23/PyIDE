@@ -9,7 +9,9 @@
     api.saveSettingsSync(saved);
   }
   window.__initialSettings = saved;
-  const pref = saved['appearance.language'] || 'system';
+  // Only a language PyIDE has: the locale also names the Monaco message bundle, and one that does not exist would
+  // keep the editor from loading at all.
+  const pref = ['en', 'ko'].includes(saved['appearance.language']) ? saved['appearance.language'] : 'system';
   const systemLocale = navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en';
   const locale = pref === 'system' ? systemLocale : pref;
   const dict = locale === 'en' ? {} : api.localeSync(locale);

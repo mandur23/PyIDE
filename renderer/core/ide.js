@@ -74,6 +74,11 @@ ide.emit = (evt, ...args) => {
 // Persisted by the main process (userData/settings.json). The changes made in one task are written together right
 // after it, synchronously, and pending changes are written before the window unloads or the app restarts.
 const settingsCache = window.__initialSettings || {};
+// settings.json is the user's file (hand-edited, written by another version): a value of another kind than the
+// caller's fallback reads as the fallback, so a list read as a list never meets a number. Number fallbacks are
+// left alone (their readers convert), and so are recent projects without a path string, which are dropped here.
+const kindOf = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
+if (Array.isArray(settingsCache.recentProjects)) settingsCache.recentProjects = settingsCache.recentProjects.filter((p) => typeof p?.path === 'string' && p.path);
 let settingsDirty = false;
 const flushSettings = () => {
   if (!settingsDirty) return;
@@ -88,7 +93,11 @@ const flushSettings = () => {
 addEventListener('beforeunload', flushSettings);
 addEventListener('pagehide', flushSettings);
 ide.settings = {
-  get: (key, fallback) => (key in settingsCache ? settingsCache[key] : fallback),
+  get: (key, fallback) => {
+    if (!(key in settingsCache)) return fallback;
+    const v = settingsCache[key];
+    return fallback == null || typeof fallback === 'number' || kindOf(v) === kindOf(fallback) ? v : fallback;
+  },
   set(key, value) {
     settingsCache[key] = value;
     if (!settingsDirty) {
@@ -1087,7 +1096,7 @@ async function loadInterpreters(seq) {
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));
   if (!ide.interps.length) sel.add(new Option(tr('<No interpreter>')));
-  const preferred = ide.settings.get(`interpreter.${ide.root}`);
+  const preferred = ide.settings.get(`interpreter.${ide.root}`, '');
   const idx = ide.interps.findIndex((i) => samePath(i.executable, preferred));
   if (idx >= 0) sel.selectedIndex = idx;
   $('statusInterpLabel').textContent = ide.currentInterp()?.label || tr('No interpreter');

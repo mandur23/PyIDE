@@ -745,6 +745,8 @@
   ide.on('projectOpened', () => {
     const saved = ide.settings.get(storeKey(), null);
     state = saved ? JSON.parse(JSON.stringify(saved)) : { configs: [], selected: CURRENT };
+    // A hand-edited settings file keeps only the configurations that are objects with an id.
+    state.configs = Array.isArray(state.configs) ? state.configs.filter((c) => c && typeof c === 'object' && typeof c.id === 'string') : [];
     if (!findConfig(state.selected)) state.selected = CURRENT;
     renderTarget();
   });
