@@ -37,11 +37,13 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     s.proc.stdin.on('error', () => {});
     s.proc.on('error', (err) => fail(err.message));
     s.proc.on('exit', (code) => fail(`The refactoring process exited with code ${code}`));
+    s.fail = fail;
     return s;
   }
 
+  // Requests still waiting on the stopped process (an interpreter switch replaces it) are answered, not left hanging.
   function stop() {
-    if (side && !side.dead) { side.dead = true; try { side.proc.kill(); } catch {} }
+    if (side && !side.dead) { side.fail('The refactoring process was stopped'); try { side.proc.kill(); } catch {} }
     side = null;
   }
 
