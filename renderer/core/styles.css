@@ -331,4 +331,5 @@ body.detached #statusInterp { display: none !important; }
 :root[data-theme="light"] .file-icon .fi-dark { display: none; }
 .file-icon .fi-dark { display: contents; }
 .file-icon[data-type="database"] { color: var(--gray9); }
-.node .file-icon { margin-right: 4px; }.dialog-message { white-space: pre-wrap; user-select: text; max-width: 100%; overflow-wrap: anywhere; }
+.node .file-icon { margin-right: 4px; }
+.dialog-message { white-space: pre-wrap; user-select: text; max-width: 100%; overflow-wrap: anywhere; }
