@@ -4,9 +4,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-exports.register = ({ ipcMain, unpackedDir }) => {
+exports.register = ({ ipcMain, app, unpackedDir }) => {
   const boot = path.join(unpackedDir, 'renderer', 'features', 'profiler', 'pyide_profile_run.py');
   const runs = new Set(); // temp folders handed out and not read yet
+  // A run whose result is never read (replaced by a rerun while it ran, or never started) leaves its folder until quit.
+  app.on('will-quit', () => { for (const dir of runs) fs.rmSync(dir, { recursive: true, force: true }); });
 
   ipcMain.handle('profiler:prepare', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-profile-'));

@@ -5,9 +5,11 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 
-exports.register = ({ ipcMain, unpackedDir }) => {
+exports.register = ({ ipcMain, app, unpackedDir }) => {
   const boot = path.join(unpackedDir, 'renderer', 'features', 'coverage', 'pyide_coverage_run.py');
   const runs = new Set(); // temp folders handed out and not read yet
+  // A run whose result is never read (replaced by a rerun while it ran, or never started) leaves its folder until quit.
+  app.on('will-quit', () => { for (const dir of runs) fs.rmSync(dir, { recursive: true, force: true }); });
 
   // -> coverage.py version in the interpreter, or null when it is not installed
   ipcMain.handle('coverage:version', (_e, interp) => new Promise((resolve) => {
