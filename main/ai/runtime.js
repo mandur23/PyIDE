@@ -176,15 +176,18 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
   diagnostics.watchProcess(proc, { name: path.basename(script) });
   // A write racing the process's exit fails with EPIPE; the exit handler already answers pending requests.
   proc.stdin.on('error', () => {});
-  proc.on('error', (err) => onLog(`${err.message}\n`));
-  proc.on('exit', (code) => {
+  const exit = (code) => {
+    if (!alive) return;
     alive = false;
     clearTimeout(idleTimer);
     for (const resolve of pending.values()) resolve({ error: `server exited (${code})` });
     pending.clear();
     onExit(code);
     exited(code);
-  });
+  };
+  proc.on('exit', exit);
+  // A process that never started (python.exe missing or blocked) emits 'error' and no 'exit'.
+  proc.on('error', (err) => { onLog(`${err.message}\n`); if (proc.pid === undefined) exit(-1); });
   const write = (msg) => { if (alive && !stopping) proc.stdin.write(`${JSON.stringify(msg)}\n`); };
   return {
     // -> {id, reply: Promise<message>}
