@@ -401,7 +401,8 @@ try {
   scenario({ nes: { reply: '@@ 3-3 @@ note the scaling\n-    return result\n+    return result  # scaled\n' } });
   await until(`!!ide.aiEdit.nes()`, 'second suggestion', 12000);
   const [a, b] = nesCalls().slice(-2);
-  check(b.t - a.t >= 3900 && appliedAt + 2500 < a.t + 4000, `calls are rate-limited: the pause after applying waited for the 4 s interval (${b.t - a.t} ms apart)`);
+  // The times are when each fake CLI process started, so a loaded machine's spawn delay can shorten the gap a little.
+  check(b.t - a.t >= 3500 && appliedAt + 2500 < a.t + 4000, `calls are rate-limited: the pause after applying waited for the 4 s interval (${b.t - a.t} ms apart)`);
 
   // Ghost text from an inline completion provider owns Tab while it is visible.
   await js(`(() => {

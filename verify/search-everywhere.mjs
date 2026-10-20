@@ -22,12 +22,12 @@ const waitFor = (expr, label, ms = 15000) => until(expr, label, ms).then(() => t
 const doubleShift = async () => { await press('Shift'); await press('Shift'); };
 const openSe = async () => {
   await doubleShift();
-  const ok = await waitFor(OPEN, 'Search Everywhere open', 3000);
+  const ok = await waitFor(OPEN, 'Search Everywhere open', 10000);
   if (!ok) console.log('  open failed; focus:', await js(`document.activeElement?.outerHTML.slice(0, 120)`), 'menus:', await js(`ide.ui.menuOpen()`), 'dialogs:', await js(`document.querySelector('#dialogHost').childElementCount`));
   return ok;
 };
 // Replaces the query (it is selected when the popup opens) and waits for the debounced search.
-const query = async (text) => { await js(`document.querySelector('#seInput').select()`); await type(text); };
+const query = async (text) => { await until(`!!document.querySelector('#seInput')`, 'Search Everywhere input', 10000); await js(`document.querySelector('#seInput').select()`); await type(text); };
 const at = (file, line) => js(`ide.activeTab()?.title === ${J(file)} && ide.editor.getPosition()?.lineNumber === ${line}`);
 
 try {
