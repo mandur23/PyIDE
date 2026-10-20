@@ -108,6 +108,7 @@
     if (peers < 2) return;
     clearTimeout(syncTimers.get(doc));
     syncTimers.set(doc, setTimeout(() => {
+      syncTimers.delete(doc);
       if (!doc.model.isDisposed()) ide.api.send('doc:changed', { path: doc.path, text: doc.model.getValue() });
     }, 120));
   }
@@ -280,9 +281,10 @@
       closedTabs.push({ path: tab.path, kind: tab.kind, viewer: tab.viewer?.id });
       if (closedTabs.length > 30) closedTabs.shift();
     }
+    // A viewer or plugin tab that fails to clean up must not leave the tab half closed.
     if (tab.kind === 'custom') {
-      tab.dispose?.();
-      tab.onClose?.();
+      safe(() => tab.dispose?.());
+      safe(() => tab.onClose?.());
       tab.host.remove();
     }
     if (tab.doc) releaseDoc(tab.doc);
