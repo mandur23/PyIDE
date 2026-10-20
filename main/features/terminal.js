@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const claude = require('../ai/claude');
+const claudeIde = require('./claude-ide');
 const remote = require('../remote');
 
 const sessions = new Map(); // id -> {proc, owner}
@@ -85,7 +86,8 @@ exports.register = ({ ipcMain, app }) => {
       else args = [...args, '-NoExit', '-Command', opts.command];
     }
     const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
-    const env = { ...process.env, ...venvEnv(opts.interpreter), ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
+    // claudeIde.ideEnv(): CLAUDE_CODE_SSE_PORT, so claude started in any PyIDE terminal connects to this window.
+    const env = { ...process.env, ...venvEnv(opts.interpreter), ...claudeIde.ideEnv(), ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
     // The official Claude Code installer puts claude.exe in ~/.local/bin without adding it to PATH; make `claude` work here.
     const localBin = path.join(os.homedir(), '.local', 'bin');
     if (fs.existsSync(localBin) && !(env.PATH || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env.PATH = `${localBin};${env.PATH}`;

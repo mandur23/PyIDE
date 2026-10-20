@@ -1,0 +1,9 @@
+{
+  "id": "claude-ide",
+  "name": "Claude Code IDE Integration",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Claude Code started in a PyIDE terminal connects to this window: it sees the open files, the selection and the problems, opens files here, and shows its edits as diffs to accept or reject.",
+  "depends": ["terminal"],
+  "main": ["claude-ide.js"]
+}

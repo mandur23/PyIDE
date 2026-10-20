@@ -1,0 +1,6 @@
+.cide-status { color: #d97757; cursor: default; }
+.cide-diff { display: flex; flex-direction: column; }
+.cide-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); background: var(--gray2); flex-shrink: 0; }
+.cide-title { font-weight: 600; color: var(--gray12); }
+.cide-spacer { flex: 1; }
+.cide-editor { flex: 1; min-height: 0; }
