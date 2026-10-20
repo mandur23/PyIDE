@@ -1725,7 +1725,9 @@
   ide.registerFileViewer({ id: 'model', icon: '🧠', match: byExt(...MODEL_EXT.filter((e) => e !== 'bin')), mount: mountModel });
   ide.registerFileViewer({ id: 'model-bin', icon: '🧠', binaryOnly: true, match: (p) => ext(p) === 'bin' && /pytorch_model|model|weights/i.test(basename(p)), mount: mountModel });
   ide.registerFileViewer({ id: 'markdown', icon: '📝', text: true, match: byExt('md', 'markdown'), mount: mountMarkdown });
-  ide.registerFileViewer({ id: 'html', icon: '🌐', text: true, match: byExt('html', 'htm', 'xhtml'), mount: mountHtml });
+  // Django and Jinja2 templates stay in the editor with their template language: {% %} and {{ }} do not preview.
+  const isPage = byExt('html', 'htm', 'xhtml');
+  ide.registerFileViewer({ id: 'html', icon: '🌐', text: true, match: (p) => isPage(p) && !ide.frameworks?.templateLanguage?.(p), mount: mountHtml });
   ide.registerFileViewer({ id: 'csv', icon: '▦', text: true, match: byExt('csv', 'tsv'),
     mount: (host, ctx) => mountTableViewer(host, ctx, { kind: 'csv', build: (text) => tableFromCsv(text, ctx.path) }) });
   ide.registerFileViewer({ id: 'jsonl', icon: '▤', text: true, match: byExt('jsonl', 'ndjson'),
