@@ -22,14 +22,21 @@
 
   const emit = () => { for (const fn of listeners) { try { fn(info); } catch (err) { console.error(err); } } };
 
+  // One inspection runs at a time (it parses up to 4,000 files); one asked for meanwhile waits for it, and one
+  // that a newer request superseded before it started never runs.
   function inspect() {
     const my = ++seq;
-    const root = ide.root;
-    const interp = ide.currentInterp();
+    const before = current;
     current = (async () => {
+      await before.catch(() => {});
+      if (my !== seq) return info;
+      const root = ide.root;
+      const interp = ide.currentInterp();
       if (!root || !interp) return null;
       const r = await ide.api.invoke('frameworks:inspect', interp, root).catch((err) => ({ ok: false, error: String(err.message || err) }));
-      if (my !== seq || !samePath(root, ide.root || '')) return info;
+      // Runs finish in order, so a result is applied even when a newer run is queued: saving more often than an
+      // inspection takes must not keep the info from ever updating.
+      if (!samePath(root, ide.root || '')) return info;
       info = r.ok ? r.info : null;
       error = r.ok ? null : r.error;
       if (error) console.warn('frameworks: inspection failed', error);

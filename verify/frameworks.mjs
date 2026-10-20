@@ -139,6 +139,19 @@ async function stopAll(t) {
     const cfgs = await js(`ide.run.configs().filter((c) => c.type === 'django-server').map((c) => ({ name: c.name, temporary: !!c.temporary }))`);
     check(cfgs.length === 1 && !cfgs[0].temporary && cfgs[0].name === 'project', 'a saved Django Server run configuration is created for the project');
     check(await js(`ide.run.selected()?.type === 'django-server'`), 'and selected, since nothing else was');
+    // Saves and file events in a burst run one inspection at a time, and the last one still lands.
+    const burst = await js(`(async () => {
+      const real = ide.api;
+      let now = 0, peak = 0, calls = 0;
+      ide.api = { ...real, invoke: async (ch, ...args) => {
+        if (ch !== 'frameworks:inspect') return real.invoke(ch, ...args);
+        calls++; peak = Math.max(peak, ++now);
+        try { return await real.invoke(ch, ...args); } finally { now--; }
+      } };
+      try { await Promise.all(Array.from({ length: 6 }, () => ide.frameworks.refresh())); } finally { ide.api = real; }
+      return { peak, calls, django: !!ide.frameworks.info()?.django };
+    })()`);
+    check(burst.peak === 1 && burst.calls <= 2 && burst.django, `six refreshes at once inspect the project one run at a time (${burst.calls} runs, ${burst.peak} at once)`);
 
     // ---------- Django Structure ----------
     await js(`(ide.toolWindows.get('DjangoStructure').show(), true)`);
