@@ -97,6 +97,13 @@ try {
   check((await a.js(`${activeConsole}.querySelector('.db-error').textContent`)).includes('no such table: missing_table'), 'bad SQL shows the database error');
   check(await a.js(`getComputedStyle(${activeConsole}.querySelector('.db-error')).color === 'rgb(219, 92, 92)'`), 'the error is red');
 
+  // A long statement runs on the SQLite worker thread: the main process keeps answering IPC meanwhile.
+  await a.js(`(window.__longQuery = ide.database.query(ide.database.list()[0].id, 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 15000000) SELECT count(*) FROM c', { maxRows: 1 }), true)`);
+  await a.sleep(300);
+  const ipcMs = await a.js(`(async () => { const t0 = performance.now(); await ide.api.invoke('db:list'); return Math.round(performance.now() - t0); })()`);
+  const longQuery = await a.js('window.__longQuery');
+  check(longQuery.ok && longQuery.rows[0][0] === 15000000 && longQuery.ms > 3 * ipcMs && ipcMs < 500, `IPC answers in ${ipcMs} ms while a ${Math.round(longQuery.ms)} ms SQLite statement runs`);
+
   // ---------- schema tree ----------
   await clickText(a, '#dbTree .db-node.db-source', 'app-db');
   await a.until(`[...document.querySelectorAll('#dbTree .db-node.db-table')].some(n => n.textContent.includes('users'))`, 'users table in tree');

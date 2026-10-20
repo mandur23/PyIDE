@@ -24,45 +24,104 @@ const COMPLETION = {
   dataTypes: list('INTEGER, REAL, TEXT, BLOB, NUMERIC, ANY'),
 };
 
+// The database lives on a worker thread: node:sqlite is synchronous, and a long statement (a recursive CTE, a scan of a
+// large file) run in the main process would stop every window's IPC until it ended. The worker evaluates this function's
+// text, so it needs nothing but built-in modules; values come back raw (BigInt, Uint8Array) and are made JSON-safe here.
+function sqliteWorker() {
+  const { parentPort } = require('worker_threads');
+  const { DatabaseSync } = require('node:sqlite');
+  let db = null;
+  const ops = {
+    open(file) { db = new DatabaseSync(file); },
+    query(sql, maxRows) {
+      const stmt = db.prepare(sql);
+      const cols = stmt.columns();
+      if (!cols.length) return { columns: [], changes: Number(stmt.run().changes) };
+      stmt.setReadBigInts(true);
+      stmt.setReturnArrays(true);
+      const rows = [];
+      let truncated = false;
+      for (const row of stmt.iterate()) {
+        if (rows.length >= maxRows) { truncated = true; break; }
+        rows.push(row);
+      }
+      return { columns: cols.map((c) => ({ name: c.name, type: c.type || '' })), rows, truncated };
+    },
+    schema() {
+      const tables = db.prepare("SELECT name, type FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+      return [{
+        name: 'main',
+        kind: 'schema',
+        children: tables.map((t) => ({
+          name: t.name,
+          kind: t.type,
+          columns: db.prepare(`PRAGMA table_xinfo("${t.name.replace(/"/g, '""')}")`).all()
+            .filter((c) => !c.hidden).map((c) => ({ name: c.name, type: c.type, pk: c.pk > 0, nullable: !c.notnull })),
+        })),
+      }];
+    },
+    version() { return db.prepare('SELECT sqlite_version() AS v').get().v; },
+    close() { db?.close(); db = null; },
+  };
+  parentPort.on('message', ({ id, op, args }) => {
+    try { parentPort.postMessage({ id, result: ops[op](...args) }); } catch (err) { parentPort.postMessage({ id, error: String(err?.message || err) }); }
+  });
+}
+
 module.exports = ({ jsonSafe, commandOf, DML, timed }) => {
-  function openSqlite(cfg) {
-    const { DatabaseSync } = require('node:sqlite');
+  async function openSqlite(cfg, { onLost = () => {} } = {}) {
     if (!cfg.file) throw new Error('No database file is set');
-    const db = new DatabaseSync(cfg.file);
+    const { Worker } = require('worker_threads');
+    const worker = new Worker(`(${sqliteWorker})()`, { eval: true });
+    worker.unref();
+    const waiting = new Map();
+    let seq = 0;
+    let closed = false;
+    const settle = (err) => {
+      for (const w of waiting.values()) w.reject(err);
+      waiting.clear();
+    };
+    worker.on('message', ({ id, result, error }) => {
+      const w = waiting.get(id);
+      waiting.delete(id);
+      if (error !== undefined) w?.reject(new Error(error)); else w?.resolve(result);
+    });
+    const lost = (err) => {
+      settle(err);
+      if (!closed) { closed = true; onLost(err); }
+    };
+    worker.on('error', lost);
+    worker.on('exit', () => lost(new Error('Connection closed')));
+    const call = (op, ...args) => new Promise((resolve, reject) => {
+      if (closed) { reject(new Error('Connection closed')); return; }
+      const id = ++seq;
+      waiting.set(id, { resolve, reject });
+      worker.postMessage({ id, op, args });
+    });
+    try {
+      await call('open', cfg.file);
+    } catch (err) {
+      closed = true;
+      worker.terminate();
+      throw err;
+    }
     return {
-      query: (sql, { maxRows }) => timed(() => {
-        const stmt = db.prepare(sql);
+      query: (sql, { maxRows }) => timed(async () => {
         const command = commandOf(sql);
-        const cols = stmt.columns();
-        if (!cols.length) {
-          const r = stmt.run();
-          return { columns: [], rows: [], rowCount: DML.has(command) ? Number(r.changes) : null, truncated: false, command };
-        }
-        stmt.setReadBigInts(true);
-        stmt.setReturnArrays(true);
-        const rows = [];
-        let truncated = false;
-        for (const row of stmt.iterate()) {
-          if (rows.length >= maxRows) { truncated = true; break; }
-          rows.push(row.map(jsonSafe));
-        }
-        return { columns: cols.map((c) => ({ name: c.name, type: c.type || '' })), rows, rowCount: rows.length, truncated, command };
+        const r = await call('query', sql, maxRows);
+        if (!r.columns.length) return { columns: [], rows: [], rowCount: DML.has(command) ? r.changes : null, truncated: false, command };
+        return { columns: r.columns, rows: r.rows.map((row) => row.map(jsonSafe)), rowCount: r.rows.length, truncated: r.truncated, command };
       }),
-      async schema() {
-        const tables = db.prepare("SELECT name, type FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
-        return [{
-          name: 'main',
-          kind: 'schema',
-          children: tables.map((t) => ({
-            name: t.name,
-            kind: t.type,
-            columns: db.prepare(`PRAGMA table_xinfo("${t.name.replace(/"/g, '""')}")`).all()
-              .filter((c) => !c.hidden).map((c) => ({ name: c.name, type: c.type, pk: c.pk > 0, nullable: !c.notnull })),
-          })),
-        }];
+      schema: () => call('schema'),
+      async version() { return `SQLite ${await call('version')}`; },
+      // A statement still running is abandoned: its caller gets an error now, and the thread ends when SQLite returns.
+      async close() {
+        if (closed) return;
+        if (!waiting.size) await call('close').catch(() => {});
+        closed = true;
+        settle(new Error('Disconnected'));
+        worker.terminate();
       },
-      async version() { return `SQLite ${db.prepare('SELECT sqlite_version() AS v').get().v}`; },
-      close: () => db.close(),
     };
   }
 
