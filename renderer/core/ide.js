@@ -407,7 +407,8 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   box.style.width = `${width}px`;
   const head = el('div', 'dialog-title', title);
   const content = el('div', 'dialog-body');
-  if (typeof body === 'string') content.innerHTML = body; else if (body) content.appendChild(body);
+  // A string body is text: messages carry names (run configurations, files) that must never become markup.
+  if (typeof body === 'string') content.textContent = body; else if (body) content.appendChild(body);
   const foot = el('div', 'dialog-buttons');
   const dlg = {
     el: box,
