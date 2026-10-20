@@ -116,6 +116,9 @@ try {
   const printed = await outputsText(t, 4);
   check(printed.includes('hello from kernel'), 'stdout from the kernel is shown');
   check(printed.toLowerCase().includes(VENV_PY.toLowerCase()), 'the kernel runs in the selected project interpreter');
+  await runAt(t, 4, 'for i in range(3):\n    print(f"step {i}", end="\\r")\nprint("finished words")\nprint("ab\\bc")', 'progress output');
+  const progress = await js(`${H}.querySelectorAll('.nb-cell')[4].querySelector('.nb-stream').textContent`);
+  check(progress === 'finished words\nac\n', `\\r rewinds the line and \\b deletes a character, keeping the words (${JSON.stringify(progress)})`);
   await runAt(t, 4, 'import helper\nhelper.greet("notebook")', 'project import');
   check((await outputsText(t, 4)).includes("'hello notebook'"), 'modules next to the notebook import (cwd is its folder)');
 

@@ -118,8 +118,11 @@
         const parts = cur.split('\r');
         cur = parts.reduce((acc, p) => p + acc.slice(p.length), '');
       }
-      while (/[^\b]\b/.test(cur)) cur = cur.replace(/[^\b]\b/, '');
-      return cur.replace(/\b/g, '');
+      if (!cur.includes('\b')) return cur;
+      // (\b outside a character class is a word boundary in a regex, so the deletion is done by hand.)
+      const out = [];
+      for (const ch of cur) { if (ch === '\b') out.pop(); else out.push(ch); }
+      return out.join('');
     }).join('\n');
   }
 
