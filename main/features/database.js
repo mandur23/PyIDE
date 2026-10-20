@@ -22,7 +22,11 @@ function register({ ipcMain, app, send }) {
 
   // ---------- data sources ----------
   let sources = (() => {
-    try { return JSON.parse(fs.readFileSync(sourcesFile, 'utf8')).sources || []; } catch { return []; }
+    // A hand-edited file keeps only the entries that are data sources at all.
+    try {
+      const saved = JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))?.sources;
+      return Array.isArray(saved) ? saved.filter((s) => s && typeof s === 'object' && typeof s.id === 'string') : [];
+    } catch { return []; }
   })();
   const save = () => writeAtomic(sourcesFile, JSON.stringify({ version: 1, sources }, null, 2));
   const byId = (id) => {

@@ -139,7 +139,10 @@ function createStore(dir, root, limits, onChange) {
   const blobDir = path.join(dir, 'blobs');
   let index;
   try { index = JSON.parse(fs.readFileSync(indexFile, 'utf8')); } catch { index = null; }
-  if (!index || index.version !== 1) index = { version: 1, root, files: {}, labels: [] };
+  // An index of another shape (another version, a hand edit) starts over, as an unreadable one does.
+  if (!index || index.version !== 1 || !index.files || typeof index.files !== 'object' || Array.isArray(index.files) || !Array.isArray(index.labels)) {
+    index = { version: 1, root, files: {}, labels: [] };
+  }
   let saveTimer = null;
   let added = 0;
   let changeTimer = null;

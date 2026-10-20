@@ -610,7 +610,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   let exclusions = null; // {root key: [project-relative folder]}
   const excludedOf = (root) => {
     if (!exclusions) { try { exclusions = JSON.parse(fs.readFileSync(exclusionsFile, 'utf8')); } catch { exclusions = {}; } }
-    return exclusions[keyOf(root)] || [];
+    if (!exclusions || typeof exclusions !== 'object' || Array.isArray(exclusions)) exclusions = {};
+    const rels = exclusions[keyOf(root)];
+    return Array.isArray(rels) ? rels.filter((r) => typeof r === 'string') : [];
   };
   async function setExcluded(root, rels) {
     excludedOf(root);
