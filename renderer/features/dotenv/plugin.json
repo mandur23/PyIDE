@@ -1,0 +1,8 @@
+{
+  "id": "dotenv",
+  "name": ".env Files",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Syntax highlighting for .env files. Run configurations, the test runner, the Python Console and new terminals load them (main/dotenv.js).",
+  "detached": true
+}

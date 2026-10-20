@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { withPath } = require('./run.js');
+const { withEnvFiles } = require('../dotenv');
 const remote = require('../remote');
 
 exports.register = (ctx) => {
@@ -25,11 +26,11 @@ exports.register = (ctx) => {
     return p;
   });
 
-  // opts: {runner: 'pytest'|'unittest', targets: string[], args: string[], cwd, root, env}
-  ipcMain.handle('tests:start', async (_e, interp, { runner, targets = [], args = [], cwd, root, env = {} }) => {
+  // opts: {runner: 'pytest'|'unittest', targets: string[], args: string[], cwd, root, env, envFiles?} (envFiles as for run:start)
+  ipcMain.handle('tests:start', async (_e, interp, { runner, targets = [], args = [], cwd, root, env = {}, envFiles }) => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-tests-')), 'report.jsonl');
     fs.writeFileSync(file, '');
-    const runEnv = withPath({ ...env, PYIDE_TEST_REPORT: file }, [helpers, root]);
+    const runEnv = withPath({ ...withEnvFiles(env, envFiles, root), PYIDE_TEST_REPORT: file }, [helpers, root]);
     const pyArgs = runner === 'pytest'
       ? ['-m', 'pytest', '-p', 'pyide_pytest_plugin', ...args, ...targets]
       : ['-u', path.join(helpers, 'pyide_unittest_runner.py'), root, ...targets];

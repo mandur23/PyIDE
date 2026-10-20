@@ -44,6 +44,16 @@
     }
     return env;
   };
+  // A configuration's .env files ("Env files", ;-separated, relative to the project root), as absolute paths.
+  // Configurations saved before the field existed get the default, the project root's .env.
+  const DEFAULT_ENV_FILES = '.env';
+  const envFilesFor = (cfg) => (cfg?.envFiles ?? DEFAULT_ENV_FILES).split(/[;\n]/).map((p) => p.trim()).filter(Boolean).map(resolvePath);
+  // Listed env files that do not exist; the default .env is optional, so it is never reported.
+  async function missingEnvFiles(cfg) {
+    const listed = (cfg?.envFiles ?? DEFAULT_ENV_FILES).split(/[;\n]/).map((p) => p.trim()).filter((p) => p && p !== DEFAULT_ENV_FILES);
+    const exists = await Promise.all(listed.map((p) => ide.api.exists(resolvePath(p))));
+    return listed.map(resolvePath).filter((_p, i) => !exists[i]);
+  }
   const newId = () => `cfg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const quoteArg = (a) => (/\s/.test(a) ? `"${a}"` : a);
 
@@ -301,6 +311,12 @@
   }
 
   // ---------- built-in type: Python script ----------
+  // Shared with other configuration types; the explicit environment variables override the files.
+  const ENV_FILES_FIELD = { key: 'envFiles', label: tr('Env files'), placeholder: tr('.env;config/local.env (relative to the project root)') };
+  // Prints a warning line for each listed env file that does not exist.
+  async function warnMissingEnvFiles(cfg, write) {
+    for (const p of await missingEnvFiles(cfg)) write(`${tr('Env file not found: {path}', { path: p })}\n`);
+  }
   types.set('python', {
     type: 'python', title: 'Python', icon: '🐍',
     fields: [
@@ -308,9 +324,10 @@
       { key: 'params', label: tr('Script parameters') },
       { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the script folder') },
       { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
+      ENV_FILES_FIELD,
       { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
     ],
-    defaults: () => ({ script: '', params: '', cwd: '', env: '', interp: '' }),
+    defaults: () => ({ script: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '' }),
     identity: (c) => resolvePath(c.script).toLowerCase(),
     file: (c) => resolvePath(c.script),
     forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path }),
@@ -321,7 +338,8 @@
       const cwd = resolvePath(cfg.cwd) || dirname(script);
       const params = parseArgs(cfg.params);
       con.append(`${[interp.cmd, ...interp.args].map(quoteArg).join(' ')} ${quoteArg(script)}${params.length ? ` ${params.map(quoteArg).join(' ')}` : ''}\n`, 'sys');
-      const id = await ide.api.invoke('run:start', interp, script, cwd, params, parseEnv(cfg.env), ide.root ? [ide.root] : []);
+      await warnMissingEnvFiles(cfg, (text) => con.append(text, 'err'));
+      const id = await ide.api.invoke('run:start', interp, script, cwd, params, parseEnv(cfg.env), ide.root ? [ide.root] : [], envFilesFor(cfg));
       s.attach(id);
     },
   });
@@ -431,7 +449,7 @@
     if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
       const r = cfg.type === 'python' ? ide.run.resolvePython(cfg) : { ...(await debugTarget(cfg, interpFor(cfg))), interp: interpFor(cfg) };
-      return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env });
+      return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg) });
     }
     const file = types.get(cfg.type)?.file?.(cfg);
     const go = () => ide.runAction(debugActionId());
@@ -776,5 +794,10 @@
     resolvePath,
     parseArgs,
     parseEnv,
+    // .env files: the field for a configuration type, its absolute paths, and warnings for missing ones.
+    envFilesField: ENV_FILES_FIELD,
+    defaultEnvFiles: DEFAULT_ENV_FILES,
+    envFiles: envFilesFor,
+    warnMissingEnvFiles,
   };
 })();

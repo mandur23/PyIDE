@@ -4,6 +4,7 @@
 const net = require('net');
 const path = require('path');
 const remote = require('../remote');
+const { withEnvFiles } = require('../dotenv');
 const log = require('../diagnostics').logger('#debugger');
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -118,8 +119,10 @@ exports.register = (ctx) => {
     // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
     const ep = remote.isRemote(interp) ? await remote.debugEndpoint(interp) : null;
     const port = ep ? ep.port : await freePort();
-    const pythonPath = [vendorDir, ...(opts.roots || []), opts.env?.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
-    const env = { ...(opts.env || {}), PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
+    // opts.envFiles: .env files under opts.env (undefined: the project root's .env), as for run:start.
+    const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
+    const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+    const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
     const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
       '--wait-for-client', file, ...(opts.params || [])];
     const id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })

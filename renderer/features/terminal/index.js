@@ -2,6 +2,7 @@
 (() => {
   const { el, basename, dirname, joinPath, samePath, isUnder } = ide.util;
   const XTERM = '../node_modules/@xterm';
+  const LOAD_ENV_FILE = 'terminal.loadEnvFile';
 
   // xterm ships UMD bundles; with Monaco's AMD loader present they would register as AMD modules instead of globals.
   function loadScript(src) {
@@ -90,6 +91,7 @@
       rows: s.term.rows,
       command,
       interpreter: ide.settings.get('terminal.activateVenv', true) ? ide.currentInterp()?.executable : undefined,
+      envFiles: ide.settings.get(LOAD_ENV_FILE, true) && ide.root ? [joinPath(ide.root, '.env')] : [],
       // With a remote project interpreter (WSL, SSH, Docker), a plain new session is a shell in that target.
       target: !shell && !command ? ide.currentInterp()?.target : undefined,
     });
@@ -346,6 +348,16 @@
     if (id !== 'Terminal') return;
     if (!sessions.length) createSession();
     else if (active) requestAnimationFrame(() => { try { active.fit.fit(); } catch {} active.term.focus(); });
+  });
+
+  (ide.settingsPages ||= []).push({
+    id: 'terminal', title: () => tr('Terminal'), keywords: 'terminal shell env dotenv environment 터미널 셸 환경 변수',
+    defaults: { [LOAD_ENV_FILE]: true },
+    mount(host, ctx) {
+      const s = ctx.ui.section(host, tr('Terminal'));
+      s.appendChild(ctx.ui.checkbox(LOAD_ENV_FILE, tr('Load the project .env file into new terminals')));
+      host.appendChild(el('p', 'muted settings-note', tr('New sessions get the variables of the .env file in the project root. Sessions that are already open keep their environment.')));
+    },
   });
 
   ide.on('settingsChanged', (key) => {

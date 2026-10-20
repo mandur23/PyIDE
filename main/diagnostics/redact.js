@@ -24,8 +24,17 @@ const AUTH_HEADER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const ASSIGNMENT = new RegExp(`(["']?[\\w.-]*(?:${SECRET_KEY.source})[\\w.-]*["']?\\s*[:=]\\s*)("[^"]*"|'[^']*'|[^\\s,;&}]+)`, 'gi');
 const URL_CREDENTIALS = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi;
 
+// Values known to be secret whatever their shape, such as the values loaded from .env files (main/dotenv.js).
+// Booleans and short numbers are left alone: masking every "true" in the log would hide nothing worth hiding.
+let knownSecrets = [];
+function addSecretValues(values) {
+  const fresh = values.filter((v) => typeof v === 'string' && v.length >= 4 && !/^(true|false|yes|no|on|off|null|none|\d{1,5})$/i.test(v) && !knownSecrets.includes(v));
+  if (fresh.length) knownSecrets = [...knownSecrets, ...fresh].sort((a, b) => b.length - a.length);
+}
+
 function scrubText(text) {
   let s = String(text);
+  for (const v of knownSecrets) if (s.includes(v)) s = s.split(v).join(MASK);
   for (const re of TEXT_PATTERNS) s = s.replace(re, MASK);
   return s
     .replace(AUTH_HEADER, (_m, kind) => `${kind} ${MASK}`)
@@ -47,4 +56,4 @@ function redactObject(value, key = '') {
   return value;
 }
 
-module.exports = { MASK, scrubText, redactObject };
+module.exports = { MASK, scrubText, redactObject, addSecretValues };

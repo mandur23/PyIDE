@@ -26,5 +26,7 @@
   "This runs the official installer in a Terminal session: `irm https://claude.ai/install.ps1 | iex`": "터미널 세션에서 공식 설치 프로그램을 실행합니다: `irm https://claude.ai/install.ps1 | iex`",
   "Running the official installer in the Terminal…": "터미널에서 공식 설치 프로그램을 실행하는 중…",
   "Cancelled": "취소됨",
-  "The installer did not finish within 15 minutes.": "설치 프로그램이 15분 안에 끝나지 않았습니다."
+  "The installer did not finish within 15 minutes.": "설치 프로그램이 15분 안에 끝나지 않았습니다.",
+  "Load the project .env file into new terminals": "새 터미널에 프로젝트 .env 파일 로드",
+  "New sessions get the variables of the .env file in the project root. Sessions that are already open keep their environment.": "새 세션은 프로젝트 루트에 있는 .env 파일의 변수를 받습니다. 이미 열려 있는 세션은 기존 환경을 유지합니다."
 }

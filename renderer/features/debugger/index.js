@@ -297,7 +297,7 @@
     }
   }
 
-  // cfg (from a run configuration): {interp?, cwd?, params?, env?}
+  // cfg (from a run configuration): {interp?, cwd?, params?, env?, envFiles?} (envFiles: absolute .env paths; default the root's .env)
   async function debugFile(file, cfg = {}) {
     if (!file) return;
     const interp = cfg.interp || ide.currentInterp();
@@ -317,7 +317,7 @@
     const files = [...bps.values()].map((f) => bpPayload(f.path)).filter((p) => p.lines.length);
     let id;
     try {
-      const opts = { params: cfg.params || [], env: cfg.env || {}, roots: ide.root ? [ide.root] : [] };
+      const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [] };
       ({ id } = await ide.api.invoke('debug:start', interp, file, cfg.cwd || dirname(file), files, opts));
     } catch (err) {
       con.append(`${remoteError(err)}\n`, 'err');

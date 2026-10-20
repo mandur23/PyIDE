@@ -63,9 +63,10 @@
       { key: 'args', label: tr('Additional arguments'), placeholder: tr('e.g. -x -k "fast"') },
       { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project root') },
       { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
+      run.envFilesField,
       { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
     ],
-    defaults: () => ({ target: '', args: '', cwd: '', env: '', interp: '' }),
+    defaults: () => ({ target: '', args: '', cwd: '', env: '', envFiles: run.defaultEnvFiles, interp: '' }),
     identity: (c) => (c.target || '').toLowerCase(),
     file: (c) => {
       const p = (c.target || '').split('::')[0];
@@ -326,8 +327,9 @@
     }
     const targets = opts.targets || (cfg.target ? [cfg.target] : []);
     const cwd = run.resolvePath(cfg.cwd) || ide.root;
+    await run.warnMissingEnvFiles(cfg, (text) => view.log(text, 'err'));
     const { id, command } = await ide.api.invoke('tests:start', interp, {
-      runner, targets, args: runner === 'pytest' ? run.parseArgs(cfg.args) : [], cwd, root: ide.root, env: run.parseEnv(cfg.env),
+      runner, targets, args: runner === 'pytest' ? run.parseArgs(cfg.args) : [], cwd, root: ide.root, env: run.parseEnv(cfg.env), envFiles: run.envFiles(cfg),
     });
     view.log(`${command}\n`, 'sys');
 

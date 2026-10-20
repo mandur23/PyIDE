@@ -8,6 +8,7 @@ const { execFile } = require('child_process');
 const claude = require('../ai/claude');
 const claudeIde = require('./claude-ide');
 const remote = require('../remote');
+const { loadFiles } = require('../dotenv');
 
 const sessions = new Map(); // id -> {proc, owner}
 let nextId = 1;
@@ -87,7 +88,9 @@ exports.register = ({ ipcMain, app }) => {
     }
     const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
     // claudeIde.ideEnv(): CLAUDE_CODE_SSE_PORT, so claude started in any PyIDE terminal connects to this window.
-    const env = { ...process.env, ...venvEnv(opts.interpreter), ...claudeIde.ideEnv(), ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
+    // opts.envFiles: the project's .env files (Settings › Terminal); a remote session's shell does not get them.
+    const fileEnv = opts.envFiles?.length && !opts.target ? loadFiles(opts.envFiles) : {};
+    const env = { ...process.env, ...venvEnv(opts.interpreter), ...claudeIde.ideEnv(), ...fileEnv, ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
     // The official Claude Code installer puts claude.exe in ~/.local/bin without adding it to PATH; make `claude` work here.
     const localBin = path.join(os.homedir(), '.local', 'bin');
     if (fs.existsSync(localBin) && !(env.PATH || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env.PATH = `${localBin};${env.PATH}`;
