@@ -179,6 +179,22 @@
   let selected = null;
   let seq = 0;
   const historySize = () => Math.max(1, Number(ide.settings.get('httpClient.historySize', 50)) || 50);
+  // Bodies are kept up to 5 MB of text or 20 MB of image each, so 50 entries could hold a gigabyte. Past this many
+  // characters of bodies, older responses keep their status, headers and timing but not their body.
+  const HISTORY_BODY_BUDGET = 64 * 1024 * 1024;
+  function trimHistoryBodies() {
+    let total = 0;
+    for (const e of history) {
+      const r = e.result?.response;
+      if (!r || r.bodyDropped) continue;
+      const n = (r.text?.length || 0) + (r.base64?.length || 0);
+      if (total && total + n > HISTORY_BODY_BUDGET) {
+        delete r.text;
+        delete r.base64;
+        r.bodyDropped = true;
+      } else total += n;
+    }
+  }
 
   function requestAt(model, lineNumber) {
     const parsed = parse(model.getValue());
@@ -201,6 +217,7 @@
       timeoutMs: Number(ide.settings.get('httpClient.timeoutSeconds', 60)) * 1000,
     });
     Object.assign(entry, { pending: false, result, request: result.request || entry.request });
+    trimHistoryBodies();
     render();
     ide.emit('httpResponse', entry);
     return entry;
@@ -397,6 +414,7 @@
 
   function renderBody(pane, resp) {
     pane.dataset.kind = resp.kind;
+    if (resp.bodyDropped) { pane.append(el('div', 'muted', tr('The body of this older response is no longer kept.'))); return; }
     if (resp.kind === 'image') {
       const img = el('img', 'http-image');
       img.src = `data:${resp.contentType.split(';')[0]};base64,${resp.base64}`;

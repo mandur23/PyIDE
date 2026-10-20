@@ -198,6 +198,23 @@ try {
   await until(`ide.activeTab()?.path.endsWith('scratch.http') && ide.editor.getModel().getLanguageId() === 'http'`, 'new .http file opened');
   check(await js(`ide.httpClient.parse(ide.editor.getModel().getValue()).requests.length === 1`), 'New HTTP Request creates scratch.http with an example request');
 
+  // Many large responses: the history keeps the bodies of the newest only (64 MB of them), the rest their status.
+  await js(`(ide.editor.getModel().setValue('GET http://127.0.0.1:9995/endless\\n'), true)`);
+  for (let i = 0; i < 14; i++) {
+    const n = await js(`ide.httpClient.history().length`);
+    await js(`(ide.httpClient.runAtLine(ide.editor, 1), true)`);
+    await until(`ide.httpClient.history()[0]?.id && !ide.httpClient.history()[0].pending && ide.httpClient.history().length >= ${Math.min(n + 1, 50)}`, `large response ${i + 1}`, 30000);
+  }
+  const kept = await js(`(() => { const h = ide.httpClient.history().slice(0, 14).map((e) => e.result.response);
+    return { bodies: h.filter((r) => r.text).length, dropped: h.filter((r) => r.bodyDropped && r.text === undefined).length, status: h.every((r) => r.status === 200),
+      chars: ide.httpClient.history().reduce((a, e) => a + (e.result?.response?.text?.length || 0) + (e.result?.response?.base64?.length || 0), 0) }; })()`);
+  check(kept.bodies === 12 && kept.dropped === 2 && kept.status && kept.chars <= 64 * 1024 * 1024,
+    `older responses beyond 64 MB of bodies keep only their status and headers (${JSON.stringify(kept)})`);
+  await js(`document.querySelectorAll('.http-row')[13].click()`);
+  await js(`(document.querySelector('.http-tab[data-tab="body"]')?.click(), true)`);
+  check(await js(`document.querySelector('.http-status')?.textContent.startsWith('200') && document.querySelector('.http-pane')?.textContent.includes('no longer kept')`),
+    'an older response without its body says so');
+
   // Frameworks: the route menu gains "Generate Request in HTTP Client".
   if (await js(`!!ide.frameworks`)) {
     check(await js(`ide.frameworks.routeActions.some((a) => a.title() === 'Generate Request in HTTP Client')`), 'the frameworks route menu has Generate Request in HTTP Client');

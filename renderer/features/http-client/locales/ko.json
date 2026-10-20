@@ -26,6 +26,7 @@
   "Select environment": "환경 선택",
   "Sending request…": "요청을 보내는 중…",
   "Source": "소스",
+  "The body of this older response is no longer kept.": "이전 응답의 본문은 더 이상 보관하지 않습니다.",
   "The body was cut at 5 MB.": "본문이 5 MB에서 잘렸습니다.",
   "The connection to {target} was closed by the server.": "서버가 {target} 연결을 닫았습니다.",
   "The request failed: {detail}": "요청이 실패했습니다: {detail}",
