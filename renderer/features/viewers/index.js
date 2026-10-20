@@ -1019,7 +1019,8 @@
     return markedLoad;
   }
 
-  const BLOCKED = 'script,style,iframe,frame,frameset,object,embed,applet,link,meta,base,form,input,button,textarea,select,option,noscript,template';
+  // SVG animations can set an attribute (a link's href) after the sanitizer looked at it.
+  const BLOCKED = 'script,style,iframe,frame,frameset,object,embed,applet,link,meta,base,form,input,button,textarea,select,option,noscript,template,portal,animate,set,animateMotion,animateTransform';
   const hasScheme = (u) => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) && !/^[a-zA-Z]:[\\/]/.test(u);
   const safeHref = (u) => /^https?:\/\//i.test(u) || u.startsWith('#') || !hasScheme(u);
 
@@ -1196,8 +1197,9 @@
     preview.addEventListener('scroll', previewToEditor);
 
     // Links: http(s) open in the browser, anchors scroll, relative files open in the IDE.
+    // An image map's <area> is a link too; left to itself it would navigate the IDE window.
     preview.addEventListener('click', async (e) => {
-      const a = e.target.closest('a');
+      const a = e.target.closest('a, area');
       if (!a) return;
       e.preventDefault();
       const href = a.getAttribute('href');
