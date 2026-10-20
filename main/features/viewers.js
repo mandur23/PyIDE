@@ -239,7 +239,7 @@ const PREVIEW_HELPER = `<script>(() => {
   }, true);
 })();</script>`;
 const sites = new Map(); // id -> root folder
-const overrides = new Map(); // lowercase absolute path -> unsaved text
+const overrides = new Map(); // site id -> Map(lowercase absolute path -> unsaved text)
 const isInside = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
 const injectHelper = (html) => (/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + PREVIEW_HELPER) : PREVIEW_HELPER + html);
 
@@ -259,7 +259,7 @@ async function servePreview(req) {
   let file = path.resolve(root, `.${rel}`);
   if (!isInside(file, root) && file.toLowerCase() !== root.toLowerCase()) return new Response('Outside the preview folder', { status: 403 });
   try { if (fs.statSync(file).isDirectory()) file = path.join(file, 'index.html'); } catch {}
-  const over = overrides.get(file.toLowerCase());
+  const over = overrides.get(u.hostname)?.get(file.toLowerCase());
   let body = over !== undefined ? Buffer.from(over, 'utf8') : await fs.promises.readFile(file).catch(() => null);
   if (!body) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   const type = MIME[path.extname(file).slice(1).toLowerCase()] || 'application/octet-stream';
@@ -274,10 +274,10 @@ exports.register = ({ ipcMain }) => {
     const rel = path.relative(root, file).split(path.sep).map(encodeURIComponent).join('/');
     return { url: `pyide-preview://${siteFor(root)}/${rel}`, root };
   });
-  // The unsaved text of open documents: {absolutePath: text}; replaces the previous set.
-  ipcMain.handle('viewers:previewOverrides', (_e, map) => {
-    overrides.clear();
-    for (const [p, text] of Object.entries(map || {})) overrides.set(p.toLowerCase(), String(text));
+  // The unsaved text of open documents in a site (the host of its preview URL): {absolutePath: text}; replaces that
+  // site's previous set. Each site has its own, so previews of two sites do not take each other's away.
+  ipcMain.handle('viewers:previewOverrides', (_e, site, map) => {
+    overrides.set(String(site), new Map(Object.entries(map || {}).map(([p, text]) => [p.toLowerCase(), String(text)])));
     return true;
   });
   // Opens a saved HTML file in the system browser.

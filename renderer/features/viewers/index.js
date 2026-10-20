@@ -1317,7 +1317,7 @@
       if (!url) ({ url, root } = await invoke('viewers:previewUrl', path, ide.root));
       const unsaved = {};
       for (const t of openDocs()) if (ide.isDirty(t) && ide.util.isUnder(t.path, root)) unsaved[t.path] = t.doc.model.getValue();
-      await invoke('viewers:previewOverrides', unsaved);
+      await invoke('viewers:previewOverrides', new URL(url).hostname, unsaved);
       if (disposed) return;
       errors = [];
       renderStatus();

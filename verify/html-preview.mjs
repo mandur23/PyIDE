@@ -71,6 +71,31 @@ try {
   await js(`ide.openFile(${JSON.stringify(html)})`);
   check(await js(`ide.groups()[0].tabs.filter((x) => x.title === 'index.html').length`) === 1, 'opening the page again returns to its tab instead of adding a second one');
 
+  // A preview of another site (a page outside the project) keeps its own unsaved files: this site's stay.
+  const other = path.join(t.project, '..', 'other-site', 'page.html');
+  mkdirSync(path.dirname(other), { recursive: true });
+  writeFileSync(other, `<!doctype html><html><head><meta charset="utf-8"></head><body><script>
+addEventListener('load', () => parent.postMessage({ probe: true, title: 'other site' }, '*'));
+</script></body></html>\n`);
+  await js(`ide.openFile(${JSON.stringify(other)})`);
+  check((await nextProbe('preview of another site')).title === 'other site', 'a page outside the project previews from its own folder');
+  // The stylesheet is changed again without saving (switching tabs would save it), then both previews reload at
+  // once: the other site's (empty) set of unsaved files reaches the server while this page loads its stylesheet.
+  await js(`(ide.settings.set('autosave.onTabSwitch', false), ide.settings.set('autosave.onIdle', false), true)`);
+  const before4 = await js(`window.__probes.length`);
+  await js(`(ide.groups().flatMap((g) => g.tabs).find((x) => x.title === 'style.css').doc.model.setValue('h1 { color: rgb(0, 0, 200); }\\n'), true)`);
+  await until(`window.__probes.slice(${before4}).some((p) => p.h1 === 'rgb(0, 0, 200)')`, 'unsaved stylesheet in the page', 15000);
+  const before5 = await js(`window.__probes.length`);
+  await js(`(() => { const v = [...document.querySelectorAll('.vw-html')].map((h) => h._viewer);
+    const mine = v.find((x) => x.frame.src.includes('index.html')); const theirs = v.find((x) => x.frame.src.includes('page.html'));
+    mine.reload(); theirs.reload(); return true; })()`);
+  await until(`window.__probes.slice(${before5}).some((p) => p.h1)`, 'reload together with another site', 15000);
+  const p4 = await js(`window.__probes.slice(${before5}).find((p) => p.h1)`);
+  check(p4.h1 === 'rgb(0, 0, 200)', `previewing another site does not drop this site's unsaved stylesheet (${p4.h1})`);
+  await js(`(ide.settings.set('autosave.onTabSwitch', true), ide.settings.set('autosave.onIdle', true), true)`);
+  await js(`ide.openFile(${JSON.stringify(html)})`);
+  await js(`(ide.closeTab(${JSON.stringify(other)}, true), true)`);
+
   // Script errors and the width presets.
   await js(`(() => { const m = document.querySelector('.vw-html')._viewer.editor.getModel(); m.applyEdits([{ range: new ide.monaco.Range(m.getLineCount(), 1, m.getLineCount(), 1), text: '<script>undefinedFunction()</script>\\n' }]); return true; })()`);
   await until(`document.querySelector('.vw-html-errors').textContent.includes('1')`, 'script error counted', 15000);
