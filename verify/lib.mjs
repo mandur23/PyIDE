@@ -25,7 +25,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const child = spawn(exe || ELECTRON, exe ? args : [APP_DIR, ...args], {
     // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their
     // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
-    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
+    // Test instances keep their Claude Code IDE lock files to themselves (a killed instance cannot remove its own).
+    env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
 

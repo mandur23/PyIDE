@@ -11,8 +11,9 @@ import { launch, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const REAL = process.env.CLAUDE_IDE_REAL === '1';
-const configDir = REAL ? path.join(homedir(), '.claude') : mkdtempSync(path.join(tmpdir(), 'pyide-claude-config-'));
-if (!REAL) process.env.CLAUDE_CONFIG_DIR = configDir;
+// The real CLI only looks in the real lock folder; otherwise every instance shares one temp folder.
+const lockDir = REAL ? path.join(homedir(), '.claude', 'ide') : mkdtempSync(path.join(tmpdir(), 'pyide-claude-ide-locks-'));
+process.env.PYIDE_CLAUDE_IDE_DIR = lockDir;
 
 // A minimal WebSocket client (masked frames, as clients must send them).
 function connect(port, token) {
@@ -61,7 +62,7 @@ let lockPath = null;
 try {
   await until(`ide.api.invoke('claudeIde:status').then(s => !!s.port)`, 'IDE server listening');
   const { port } = await js(`ide.api.invoke('claudeIde:status')`);
-  lockPath = path.join(configDir, 'ide', `${port}.lock`);
+  lockPath = path.join(lockDir, `${port}.lock`);
   const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
   check(lock.transport === 'ws' && lock.ideName === 'PyIDE' && /^[0-9a-f]{32}$/.test(lock.authToken) && lock.workspaceFolders[0]?.toLowerCase() === t.project.toLowerCase() && lock.runningInWindows === true,
     'the lock file names PyIDE, the project folder, a WebSocket transport and a 128-bit token');
@@ -143,7 +144,7 @@ t.close();
 const k = await launch({ fixture: 'core', port: 9811, name: 'claude-ide-ko', lang: 'ko-KR' });
 try {
   const { port } = await k.js(`ide.api.invoke('claudeIde:status')`).then((s) => s.port ? s : k.until(`ide.api.invoke('claudeIde:status').then(s => !!s.port)`, 'port').then(() => k.js(`ide.api.invoke('claudeIde:status')`)));
-  const lock = JSON.parse(readFileSync(path.join(configDir, 'ide', `${port}.lock`), 'utf8'));
+  const lock = JSON.parse(readFileSync(path.join(lockDir, `${port}.lock`), 'utf8'));
   const c = await connect(port, lock.authToken);
   await c.call('initialize', { protocolVersion: '2025-03-26', capabilities: {} });
   await openFile(k, 'hello.py');
@@ -179,7 +180,7 @@ if (REAL) {
   for (const x of r.results) t.results.push(x);
   r.close();
   // A killed test instance cannot remove its own lock file.
-  if (port) try { unlinkSync(path.join(configDir, 'ide', `${port}.lock`)); } catch {}
+  if (port) try { unlinkSync(path.join(lockDir, `${port}.lock`)); } catch {}
 }
 if (REAL && lockPath) for (const f of [lockPath]) try { unlinkSync(f); } catch {}
 const failed = t.results.filter((x) => !x.ok).length;

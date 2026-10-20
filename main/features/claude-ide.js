@@ -34,7 +34,8 @@ const TOOLS = [
 let server = null;
 let port = null;
 const authToken = crypto.randomBytes(16).toString('hex');
-const lockDir = () => path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'ide');
+// PYIDE_CLAUDE_IDE_DIR keeps test instances out of the user's real lock folder (verify/lib.mjs sets it).
+const lockDir = () => process.env.PYIDE_CLAUDE_IDE_DIR || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'ide');
 
 // The environment for terminals: empty until the server listens, or when the plugin is disabled.
 exports.ideEnv = () => (port ? { CLAUDE_CODE_SSE_PORT: String(port), ENABLE_IDE_INTEGRATION: 'true' } : {});

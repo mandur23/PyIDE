@@ -88,15 +88,25 @@ try {
   await type('py -3 broken.py');
   await press('Enter');
   await until(`/broken[.]py", line [0-9]+/.test(ide.terminal.text())`, 'traceback printed', 20000);
+  // The prompt line after the traceback can scroll the view; aim only once the output has settled.
+  await until(`/project>\s*$/.test(ide.terminal.text().trimEnd())`, 'prompt back after the traceback', 20000);
+  await sleep(300);
   // The path is long enough to wrap; aim at the first cell of "broken.py" wherever it landed.
   const target = await js(`(() => {
     const p = ide.terminal.locate('broken.py"');
     const g = ide.terminal.geometry();
     const screen = document.querySelector('.term-session:not(.hidden) .xterm-screen').getBoundingClientRect();
     return { x: screen.left + (p.col + 1.5) * screen.width / g.cols, y: screen.top + (p.row - g.viewportY + 0.5) * screen.height / g.rows };
-  })()`);  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y });
+  })()`);
+  // Chromium stops painting a window that other windows cover; a tiny screenshot forces a frame so xterm's link layer
+  // has rendered the hovered link before the click.
+  const frame = () => cdp('Page.captureScreenshot', { format: 'jpeg', quality: 1 });
+  await frame();
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y });
   await sleep(300);
+  await frame();
   for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: target.x, y: target.y, button: 'left', clickCount: 1 });
+  await frame();
   await until(`ide.activeTab()?.title === 'broken.py'`, 'file opened from link', 8000);
   check(true, 'clicking a traceback location opens the file in the editor');
 
