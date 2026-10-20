@@ -76,6 +76,12 @@ const exercise = async (t) => {
     'plugins/broken-plugin/plugin.json': JSON.stringify({ id: 5, main: { file: 'x.js' }, depends: 7 }),
     [`local-history/${sha16(project)}/index.json`]: JSON.stringify({ version: 1, root: project, files: null, labels: 5 }),
     'semantic/exclusions.json': 'null',
+    // A readable header, then records of another shape.
+    [`semantic/indexes/${sha16(project)}/index.jsonl`]: [
+      { version: 3, backend: 'fake', dim: 256, root: project, vectors: 'vectors-x.bin' },
+      ['a.py', { chunks: 5 }], [5, null], ['b.py', { chunks: [null] }], ['c.py', 7],
+    ].map((l) => JSON.stringify(l)).join('\n') + '\n',
+    [`semantic/indexes/${sha16(project)}/vectors-x.bin`]: '',
     'database/sources.json': JSON.stringify({ version: 1, sources: 'x' }),
     'installer/servers.json': '"x"',
   });
@@ -86,6 +92,8 @@ const exercise = async (t) => {
       check(await t.js('ide.root === ' + JSON.stringify(project)), 'the project opens with values of the wrong kind');
       await exercise(t);
       check(true, 'files, run configurations, Database, Local History and Settings open');
+      const search = await t.js(`ide.api.invoke('semantic:query', ide.root, 'greet', {}).catch((e) => ({ error: e.message }))`);
+      check(search?.ok === true, `semantic search answers with a damaged index (${JSON.stringify(search).slice(0, 120)})`);
       // The welcome screen lists only the recent projects that have a path.
       await t.js(`ide.closeProject()`);
       await t.until(`!document.getElementById('welcome').classList.contains('hidden')`, 'welcome screen');
