@@ -1,0 +1,2 @@
+# Packages with known vulnerabilities (the test serves a fake OSV database)
+pyide-vuln-demo==1.0

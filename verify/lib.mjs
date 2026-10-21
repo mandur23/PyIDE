@@ -10,6 +10,8 @@ const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 process.env.PYIDE_TRUST_ALL ??= '1';
 // Installed copies check GitHub Releases for updates by default; tests never do unless they set a feed.
 process.env.PYIDE_UPDATE_FEED ??= 'off';
+// The vulnerabilities plugin asks osv.dev about listed packages; tests never do unless they set a (fake) server.
+process.env.PYIDE_OSV_URL ??= 'off';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

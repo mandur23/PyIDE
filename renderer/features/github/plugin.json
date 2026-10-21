@@ -1,0 +1,13 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Share Project on GitHub and the Pull Requests tool window, through the GitHub CLI (gh).",
+  "main": [
+    "github.js"
+  ],
+  "depends": [
+    "vcs"
+  ]
+}

@@ -22,3 +22,5 @@
 .deps-banner-actions { display: flex; gap: 14px; flex-shrink: 0; }
 .deps-banner-link { color: var(--blue8); cursor: pointer; }
 .deps-banner-link:hover { text-decoration: underline; }
+.pkgs-notes:empty { display: none; }
+.pkgs-notes { margin: 0 8px 4px; font-size: 12px; }

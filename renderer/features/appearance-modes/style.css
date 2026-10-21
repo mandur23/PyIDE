@@ -1,0 +1,14 @@
+/* Distraction-Free, Zen and Presentation modes hide the IDE chrome; tool windows still open by their shortcuts. */
+body.appearance-chromeless #toolbar, body.appearance-chromeless #stripe, body.appearance-chromeless #stripeRight,
+body.appearance-chromeless #status, body.appearance-chromeless .editor-group .group-tabs,
+body.appearance-chromeless .editor-group .nb-bar { display: none !important; }
+
+/* Distraction-Free and Zen: the editor is centered at the column width the plugin computes. */
+body.appearance-centered .editor-group .editor-host {
+  left: max(0px, calc((100% - var(--appearance-editor-width, 100%)) / 2));
+  right: max(0px, calc((100% - var(--appearance-editor-width, 100%)) / 2));
+}
+
+.appearance-notice { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: min(640px, 90vw);
+  padding: 8px 14px; border-radius: 6px; background: var(--gray3); color: var(--gray12); border: 1px solid var(--gray5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3); font-size: 13px; pointer-events: none; }

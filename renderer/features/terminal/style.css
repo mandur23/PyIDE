@@ -24,3 +24,11 @@
 .claude-install p { margin: 0 0 8px; line-height: 1.5; }
 .claude-install-cmd { display: block; padding: 8px 10px; border-radius: 5px; background: var(--gray1); border: 1px solid var(--gray4);
   font: 12px var(--mono); user-select: all; }
+/* Split terminals: a tab's panes laid out with the editor's split classes (.split, .split-handle). */
+.term-layout { position: absolute; inset: 0; display: flex; }
+.term-layout > .term-pane, .term-layout > .split { flex: 1; }
+.term-pane { position: relative; min-width: 60px; min-height: 30px; isolation: isolate; }
+.term-layout.split-mode .term-session { inset: 4px 3px 2px 8px; }
+.term-layout.split-mode .term-pane.active::after { content: ''; position: absolute; inset: 0; border: 1px solid var(--blue6);
+  pointer-events: none; z-index: 3; }
+.term-tab-count { font-size: 10px; color: var(--gray8); background: var(--gray4); border-radius: 6px; padding: 0 4px; }

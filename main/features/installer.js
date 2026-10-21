@@ -24,6 +24,9 @@ const SYSTEM = {
       path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Python313', 'python.exe')] },
   node: { probe: ['node', ['--version']], parse: /v(\d+(?:\.\d+)+)/,
     known: () => [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe')] },
+  gh: { probe: ['gh', ['--version']], parse: /gh version (\d+(?:\.\d+)+)/,
+    known: () => [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'GitHub CLI', 'gh.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'GitHub CLI', 'gh.exe')] },
 };
 
 class Cancelled extends Error {

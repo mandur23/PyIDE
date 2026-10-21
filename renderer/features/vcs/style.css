@@ -177,3 +177,31 @@
 .vcs-act-value { font-weight: 600; }
 .vcs-act-who { width: 120px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .vcs-act-time { width: 70px; flex-shrink: 0; text-align: right; }
+
+/* Commit | Shelf tabs and the Shelf */
+.vcs-changes-pane, .vcs-shelf { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vcs-commit-tabs { padding: 4px 6px; }
+/* not .vcs-subtab: that class names the Git window's Log | Activity | Console tabs */
+.vcs-ctab { padding: 2px 10px; border-radius: 4px; color: var(--gray9); }
+.vcs-ctab.active { color: var(--gray12); background: var(--gray3); }
+.vcs-shelf-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px 0; flex-shrink: 0; }
+.vcs-shelf-bar .secondary { padding: 2px 10px; }
+.vcs-shelf .vcs-shelf-remove { padding: 0 8px; flex-shrink: 0; font-size: 12px; }
+.vcs-shelf-list { flex: 1; overflow: auto; padding: 2px 0 6px; outline: none; user-select: none; border-top: 1px solid var(--gray3); }
+.vcs-shelf-row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 4px; white-space: nowrap; cursor: default; }
+.vcs-shelf-row:hover { background: var(--gray3); }
+.vcs-shelf-row .arrow { width: 14px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
+.vcs-shelf-name { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.vcs-shelf-count, .vcs-shelf-date { font-size: 12px; flex-shrink: 0; }
+.vcs-shelf-row.selected, .vcs-shelf-file.selected { background: var(--blue2); }
+:root[data-theme="light"] .vcs-shelf-row.selected, :root[data-theme="light"] .vcs-shelf-file.selected { background: #dfe1e5; }
+.vcs-shelf-list:focus .selected { background: var(--vcs-selected-focus); }
+.vcs-shelf-file[data-status="deleted"] .vcs-name { text-decoration: line-through; }
+.vcs-shelf .vcs-check, .vcs-shelve .vcs-check { display: flex; align-items: center; gap: 6px; margin: 6px 0; cursor: pointer; }
+.vcs-shelf .vcs-check input, .vcs-shelve input[type=checkbox] { margin: 0; accent-color: var(--blue6); }
+.vcs-shelve .field { grid-template-columns: 60px 1fr; }
+.vcs-shelve-count { margin-left: 4px; font-size: 12px; }
+.vcs-shelve-files { max-height: 260px; margin-top: 0; font-family: inherit; }
+.vcs-shelve-file { display: flex; align-items: center; gap: 6px; height: 22px; white-space: nowrap; cursor: pointer; }
+.vcs-shelve-file .icon { width: 18px; flex-shrink: 0; }
+.vcs-shelve-file .vcs-name { overflow: hidden; text-overflow: ellipsis; font: 12px var(--mono); }

@@ -71,7 +71,7 @@ try {
   await settled(a);
   const counts = { python: await count(a, 'cat:python'), databases: await count(a, 'cat:databases'), system: await count(a, 'cat:system'), all: await count(a, 'all') };
   // Other plugins add their own pip items (rope, coverage, pandas...), so Python Tools has at least the eight built in.
-  check(counts.python >= 8 && counts.databases === 3 && counts.system === 3 && counts.all >= 13, `categories render with counts ${JSON.stringify(counts)}`);
+  check(counts.python >= 8 && counts.databases === 3 && counts.system === 4 && counts.all >= 14, `categories render with counts ${JSON.stringify(counts)}`);
   const aiIds = await a.js(`ide.installables.filter(i => i.category === 'ai').map(i => i.id).sort().join(',')`);
   check(aiIds === 'ai:claude-code,ai:embeddinggemma-2,ai:qwen2.5-coder-0.5b,ai:qwen2.5-coder-1.5b' && await count(a, 'cat:ai') === 4, `EmbeddingGemma 2, Claude Code and the completion models are listed under AI Models (${aiIds})`);
   // One driver entry per npm package that the database kinds in main/db/kinds/ load.

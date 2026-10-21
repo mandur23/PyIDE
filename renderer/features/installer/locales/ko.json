@@ -49,6 +49,7 @@
   "Distributed version control, used by the Git tool window and commit dialog.": "분산 버전 관리 시스템으로, Git 도구 창과 커밋 대화상자에서 사용합니다.",
   "The Python 3.13 interpreter from python.org, for new virtual environments.": "python.org의 Python 3.13 인터프리터로, 새 가상 환경을 만들 때 사용합니다.",
   "JavaScript runtime with npm, needed by many web and tooling projects.": "npm이 포함된 JavaScript 런타임으로, 많은 웹 및 도구 프로젝트에 필요합니다.",
+  "GitHub on the command line, used to share projects on GitHub and list pull requests.": "명령줄용 GitHub로, 프로젝트를 GitHub에 공유하고 풀 리퀘스트를 나열하는 데 사용합니다.",
   "winget is not available on this computer. Install App Installer from the Microsoft Store.": "이 컴퓨터에서 winget을 사용할 수 없습니다. Microsoft Store에서 앱 설치 관리자를 설치하세요.",
   "{name} will be installed system-wide with winget:": "{name}을(를) winget으로 시스템 전체에 설치합니다:",
   "Windows may ask for administrator permission. Restart PyIDE afterwards so the new PATH applies.": "Windows에서 관리자 권한을 요청할 수 있습니다. 설치 후 새 PATH가 적용되도록 PyIDE를 다시 시작하세요.",

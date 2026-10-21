@@ -43,21 +43,118 @@
   }
   const fontSize = () => Number(ide.settings.get('terminal.fontSize', 13)) || 13;
 
-  const sessions = [];
-  let active = null;
+  // A session is one PTY shown in one pane. A tab holds a tree of panes like PyCharm's split terminals:
+  // a leaf {kind: 'leaf', s} or a split {kind: 'split', dir: 'row'|'column', ratio, a, b}.
+  const sessions = []; // every pane of every tab, in creation order
+  const tabs = []; // {root, active, el (layout), tabEl}
+  let active = null; // the active pane of the active tab
   let tw;
   let tabBar;
   let host;
   let shells = [];
   let claude = { installed: false };
+  let sessionsRoot = null; // the project the open sessions belong to
+  let localHost = ''; // this computer's name in lower case (from pty:create), for OSC 7
+
+  const leaves = (node) => (!node ? [] : node.kind === 'leaf' ? [node.s] : [...leaves(node.a), ...leaves(node.b)]);
+  const parentOf = (node, target) => {
+    if (!node || node.kind !== 'split') return null;
+    if (node.a === target || node.b === target) return node;
+    return parentOf(node.a, target) || parentOf(node.b, target);
+  };
+  const MIN_PANE = { row: 80, column: 40 }; // px a divider leaves to each side
+
+  function renderLayout(t) {
+    const build = (node, depth = 0) => {
+      if (node.kind === 'leaf') { node.s.pane.style.flex = ''; return node.s.pane; }
+      const box = el('div', `split split-${node.dir}`);
+      const a = build(node.a, depth + 1);
+      const b = build(node.b, depth + 1);
+      const apply = () => { a.style.flex = `${node.ratio} 1 0`; b.style.flex = `${1 - node.ratio} 1 0`; };
+      apply();
+      const handle = el('div', 'split-handle term-divider');
+      // Where a nested divider meets its parent's, the parent's (the longer one) takes the mouse.
+      handle.style.zIndex = String(20 - depth);
+      handle.onmousedown = (down) => {
+        down.preventDefault();
+        const r = box.getBoundingClientRect();
+        const size = node.dir === 'row' ? r.width : r.height;
+        const lo = Math.min(0.5, MIN_PANE[node.dir] / Math.max(1, size));
+        const move = (e) => {
+          const pos = node.dir === 'row' ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+          node.ratio = Math.min(1 - lo, Math.max(lo, pos));
+          apply();
+        };
+        const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+        addEventListener('mousemove', move);
+        addEventListener('mouseup', up);
+      };
+      handle.ondblclick = () => { node.ratio = 0.5; apply(); };
+      box.append(a, handle, b);
+      return box;
+    };
+    t.el.replaceChildren(build(t.root));
+    t.el.classList.toggle('split-mode', t.root.kind === 'split');
+  }
+
+  // Panes fit their PTY to their own size; a pane in a hidden tab or window keeps its size until it shows again.
+  function fitPane(s) {
+    if (s.closed || !s.pane.isConnected || !s.pane.offsetWidth || s.pane.closest('.hidden')) return;
+    try { s.fit.fit(); } catch {}
+  }
+  const fitTab = (t) => { for (const s of leaves(t?.root)) fitPane(s); };
+
+  function makeTab() {
+    const t = { root: null, active: null };
+    t.el = el('div', 'term-layout hidden');
+    host.appendChild(t.el);
+    t.tabEl = el('div', 'term-tab');
+    t.tabEl.onclick = () => selectPane(t.active);
+    t.tabEl.onauxclick = (e) => e.button === 1 && closeTab(t);
+    t.tabEl.ondblclick = () => renameSession(t.active);
+    t.tabEl.addEventListener('contextmenu', (e) => { e.preventDefault(); tabMenu(t, e.clientX, e.clientY); });
+    tabBar.insertBefore(t.tabEl, tabBar.querySelector('.term-new'));
+    tabs.push(t);
+    return t;
+  }
 
   // ---------- sessions ----------
-  async function createSession({ name, command, cwd, shell, focus = true, kind = 'shell' } = {}) {
+  // A new tab with one pane.
+  async function createSession(opts = {}) {
     await ready;
-    const s = { name, kind, exited: false, cwd: cwd || ide.root || '' };
+    return startPane(makeTab(), opts);
+  }
+
+  // Splits pane `from` (default: the active one); the new pane starts in that pane's folder with the same shell.
+  async function splitPane(from, side) {
+    from ||= active;
+    if (!from) { tw.show(); return null; }
+    await ready;
+    if (from.closed) return null;
+    if (!tw.isVisible()) tw.show();
+    return startPane(from.t, {
+      cwd: from.cwd || ide.root || undefined,
+      // A Claude Code or installer pane splits into a plain shell, not a second copy of its command.
+      shell: from.kind === 'shell' && !from.command ? from.shellOpt : undefined,
+    }, { from, side });
+  }
+
+  // projectless: the session is not tied to the project (the Claude Code installer) and outlives a project switch.
+  async function startPane(t, { name, command, cwd, shell, focus = true, kind = 'shell', projectless = false } = {}, place = null) {
+    const s = { name, kind, exited: false, cwd: cwd || ide.root || '', shellOpt: shell, command, t, projectless };
+    s.pane = el('div', 'term-pane');
     s.el = el('div', 'term-session hidden');
     s.el.dataset.terminal = '';
-    host.appendChild(s.el);
+    s.pane.appendChild(s.el);
+    s.leaf = { kind: 'leaf', s };
+    if (!place) t.root = s.leaf;
+    else {
+      const old = place.from.leaf;
+      const split = { kind: 'split', dir: place.side === 'down' ? 'column' : 'row', ratio: 0.5, a: old, b: s.leaf };
+      const p = parentOf(t.root, old);
+      if (!p) t.root = split; else if (p.a === old) p.a = split; else p.b = split;
+    }
+    renderLayout(t);
     s.term = new window.Terminal({
       allowProposedApi: true,
       fontFamily: "'JetBrains Mono', D2Coding, Consolas, 'Malgun Gothic', monospace",
@@ -75,15 +172,16 @@
     s.term.unicode.activeVersion = '11';
     s.term.loadAddon(new window.WebLinksAddon.WebLinksAddon((_e, url) => ide.api.invoke('shell:openExternal', url)));
     s.term.registerLinkProvider(fileLinkProvider(s));
+    trackCwd(s);
     s.term.open(s.el);
     s.term.attachCustomKeyEventHandler((e) => keyHandler(s, e));
     s.el.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY); });
+    // Clicking or tabbing into a pane makes it the active one (focus outline, tab title).
+    s.pane.addEventListener('focusin', () => { if (active !== s && !s.closed) selectPane(s, false); });
+    s.size = ide.util.observeSize(s.pane, () => fitPane(s));
     sessions.push(s);
-    s.tab = el('div', 'term-tab');
-    renderTab(s);
-    tabBar.insertBefore(s.tab, tabBar.querySelector('.term-new'));
-    select(s, focus);
-    s.fit.fit();
+    selectPane(s, focus);
+    try { s.fit.fit(); } catch {}
     const size = { cols: s.term.cols, rows: s.term.rows };
     let r;
     try {
@@ -102,25 +200,55 @@
       const message = ide.util.errorText(err);
       s.exited = true;
       s.name ??= shell || ide.settings.get('terminal.shell', 'powershell');
+      if (s.closed) return s;
       s.term.write(`\x1b[31m${tr('The terminal could not start: {message}', { message })}\x1b[0m\r\n\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);
-      renderTab(s);
+      renderTab(s.t);
       return s;
     }
     const pending = orphanOutput.get(r.id) || [];
     orphanOutput.delete(r.id);
-    // The tab was closed while the shell started (a remote target can take seconds): end it instead of orphaning it.
+    // The pane was closed while the shell started (a remote target can take seconds): end it instead of orphaning it.
     if (s.closed) { closedIds.add(r.id); ide.api.invoke('pty:kill', r.id); return s; }
     s.id = r.id;
+    s.pid = r.pid;
+    if (r.host) localHost = String(r.host).toLowerCase();
+    s.pane.dataset.session = r.id;
     s.shellName = r.shellName;
     s.name ??= r.shellName;
-    renderTab(s);
+    renderTab(s.t);
     for (const d of pending) s.term.write(d);
     s.term.onData((data) => !s.exited && ide.api.send('pty:write', { id: s.id, data }));
     s.term.onResize(({ cols, rows }) => ide.api.send('pty:resize', { id: s.id, cols, rows }));
     // A resize while the shell started (the panel settling after it opened) did not reach the pty.
     if (s.term.cols !== size.cols || s.term.rows !== size.rows) ide.api.send('pty:resize', { id: s.id, cols: s.term.cols, rows: s.term.rows });
-    s.term.onTitleChange((title) => { if (kind === 'shell' && title) { s.title = title; renderTab(s); } });
+    s.term.onTitleChange((title) => { if (kind === 'shell' && title) { s.title = title; renderTab(s.t); } });
     return s;
+  }
+
+  // The folder a shell reports (OSC 7 file://host/path, or Windows Terminal's OSC 9;9 "path") is where a split of
+  // that pane starts; a shell that reports nothing keeps the folder it started in. Any program can print these, so
+  // only a local drive path is taken: a UNC path (\\host\share) would make the split's folder check open an SMB
+  // connection to that host and offer it the user's NTLM credentials. OSC 7 must name no host, localhost or this
+  // computer.
+  const localPath = (p) => /^[A-Za-z]:[\\/]/.test(p) && !/[\x00-\x1f]/.test(p);
+  function trackCwd(s) {
+    const set = (p) => { if (localPath(p)) s.cwd = p.replace(/\//g, '\\'); };
+    s.term.parser.registerOscHandler(7, (data) => {
+      try {
+        const u = new URL(data);
+        const host = u.hostname.toLowerCase();
+        if (u.protocol === 'file:' && (!host || host === 'localhost' || (localHost && host === localHost))) {
+          set(decodeURIComponent(u.pathname).replace(/^\/(?=[A-Za-z]:)/, ''));
+        }
+      } catch {}
+      return true;
+    });
+    s.term.parser.registerOscHandler(9, (data) => {
+      const m = /^9;"?([^"]*)"?$/.exec(data);
+      if (!m) return false;
+      set(m[1]);
+      return true;
+    });
   }
 
   const byId = (id) => sessions.find((s) => s.id === id);
@@ -138,53 +266,105 @@
     closedIds.delete(id);
     if (!s) return;
     s.exited = true;
+    // A split pane whose shell ends (`exit`) closes, as in PyCharm; a tab's only pane keeps its output until Enter.
+    if (s.t.root.kind === 'split') { closeSession(s); return; }
     s.term.write(`\r\n\x1b[90m${tr('Process exited with code {code}. Press Enter to close this tab.', { code })}\x1b[0m\r\n`);
-    renderTab(s);
+    renderTab(s.t);
   });
 
-  function select(s, focus = true) {
+  // Shows pane s (its tab becomes the visible one); null shows the empty state.
+  function selectPane(s, focus = true) {
+    const t = s?.t || null;
     active = s;
+    if (t) t.active = s;
+    for (const o of tabs) {
+      o.el.classList.toggle('hidden', o !== t);
+      o.tabEl.classList.toggle('active', o === t);
+    }
     for (const o of sessions) {
-      o.el.classList.toggle('hidden', o !== s);
-      o.tab.classList.toggle('active', o === s);
+      o.el.classList.toggle('hidden', o.t !== t);
+      o.pane.classList.toggle('active', o === s);
     }
     host.querySelector('.term-empty')?.classList.toggle('hidden', !!s);
+    if (t) renderTab(t);
     if (s) {
-      requestAnimationFrame(() => { try { s.fit.fit(); } catch {} });
+      requestAnimationFrame(() => fitTab(t));
       if (focus) s.term.focus();
     }
   }
+  const select = selectPane;
 
+  // Closes one pane: its PTY (and everything running in it) ends. The last pane of a tab closes the tab.
   function closeSession(s) {
+    if (!s || s.closed) return;
     s.closed = true;
     if (s.id && !s.exited) { closedIds.add(s.id); ide.api.invoke('pty:kill', s.id); }
+    s.size.disconnect();
     // xterm 5.5 never disposes the device-pixel-ratio monitor its CoreBrowserService creates, so every closed terminal
     // left a window 'resize' and a media-query listener behind (verify/soak.mjs counted 4 per session).
     s.term._core?._coreBrowserService?._screenDprMonitor?.dispose();
     s.term.dispose();
-    s.el.remove();
-    s.tab.remove();
+    s.pane.remove();
     sessions.splice(sessions.indexOf(s), 1);
-    if (active === s) select(sessions[sessions.length - 1] || null);
+    const t = s.t;
+    const p = parentOf(t.root, s.leaf);
+    let next = null;
+    if (!p) t.root = null;
+    else {
+      const sibling = p.a === s.leaf ? p.b : p.a;
+      const gp = parentOf(t.root, p);
+      if (!gp) t.root = sibling; else if (gp.a === p) gp.a = sibling; else gp.b = sibling;
+      const near = leaves(sibling);
+      next = p.a === s.leaf ? near[0] : near[near.length - 1];
+    }
+    if (!t.root) {
+      t.el.remove();
+      t.tabEl.remove();
+      tabs.splice(tabs.indexOf(t), 1);
+      if (active === s) select(tabs[tabs.length - 1]?.active || null);
+      return;
+    }
+    renderLayout(t);
+    if (t.active === s) t.active = next;
+    if (active === s) select(next);
+    else renderTab(t);
   }
 
-  function renderTab(s) {
-    s.tab.replaceChildren();
-    s.tab.title = s.shellName || '';
-    s.tab.append(el('span', 'term-tab-icon' + (s.kind === 'claude' ? ' claude' : ''), s.kind === 'claude' ? '✳' : '❯'));
+  function closeTab(t) {
+    for (const s of leaves(t.root)) closeSession(s);
+  }
+
+  function renderTab(t) {
+    const s = t.active;
+    if (!s) return;
+    t.tabEl.replaceChildren();
+    t.tabEl.title = s.shellName || '';
+    t.tabEl.append(el('span', 'term-tab-icon' + (s.kind === 'claude' ? ' claude' : ''), s.kind === 'claude' ? '✳' : '❯'));
     const label = el('span', 'term-tab-name' + (s.exited ? ' exited' : ''), s.name || '…');
     label.dataset.userText = '';
-    s.tab.append(label);
+    t.tabEl.append(label);
+    const n = leaves(t.root).length;
+    if (n > 1) t.tabEl.append(el('span', 'term-tab-count', String(n)));
     const close = el('button', 'term-tab-close', '×');
-    close.title = tr('Close Session');
-    close.onclick = (e) => { e.stopPropagation(); closeSession(s); };
-    s.tab.append(close);
-    s.tab.onclick = () => select(s);
-    s.tab.onauxclick = (e) => e.button === 1 && closeSession(s);
-    s.tab.ondblclick = async () => {
-      const name = await ide.ui.prompt(tr('Rename Session'), s.name);
-      if (name) { s.name = name; renderTab(s); }
-    };
+    close.title = tr('Close Tab');
+    close.onclick = (e) => { e.stopPropagation(); closeTab(t); };
+    t.tabEl.append(close);
+  }
+
+  async function renameSession(s) {
+    if (!s) return;
+    const name = await ide.ui.prompt(tr('Rename Session'), s.name);
+    if (name && !s.closed) { s.name = name; renderTab(s.t); }
+  }
+
+  // Next/previous pane of the active tab, in reading order of the split tree.
+  function cycleSplit(step) {
+    const t = active?.t;
+    if (!t) return;
+    const list = leaves(t.root);
+    if (list.length < 2) return;
+    if (!tw.isVisible()) tw.show();
+    select(list[(list.indexOf(active) + step + list.length) % list.length]);
   }
 
   // ---------- keys, clipboard, links ----------
@@ -254,8 +434,24 @@
       { label: tr('Find in terminal'), hint: 'Ctrl+Shift+F', run: () => findInTerminal(s) },
       { label: tr('Clear Buffer'), run: () => s.term.clear() },
       { separator: true },
-      { label: tr('Rename Session'), run: () => s.tab.ondblclick() },
-      { label: tr('Close Session'), run: () => closeSession(s) },
+      ...splitItems(s),
+      { separator: true },
+      { label: tr('Rename Session'), run: () => renameSession(s) },
+      { label: tr('Close Session'), keyAction: 'Terminal.CloseSession', run: () => closeSession(s) },
+    ]);
+  }
+
+  const splitItems = (s) => [
+    { label: tr('Split Right'), keyAction: 'Terminal.SplitRight', run: () => splitPane(s, 'right') },
+    { label: tr('Split Down'), keyAction: 'Terminal.SplitDown', run: () => splitPane(s, 'down') },
+  ];
+  function tabMenu(t, x, y) {
+    if (!t.active) return;
+    ide.ui.contextMenu(x, y, [
+      ...splitItems(t.active),
+      { separator: true },
+      { label: tr('Rename Session'), run: () => renameSession(t.active) },
+      { label: tr('Close Tab'), run: () => closeTab(t) },
     ]);
   }
 
@@ -294,7 +490,7 @@
       width: 520,
       buttons: [
         { label: tr('Install in Terminal'), primary: true, run: () => {
-          createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex' });
+          createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex', projectless: true });
         } },
         { label: tr('Cancel') },
       ],
@@ -358,11 +554,12 @@
       empty.appendChild(start);
       host.appendChild(empty);
       container.append(tabBar, host);
-      ide.util.observeSize(host, () => { if (active && !host.closest('.hidden')) { try { active.fit.fit(); } catch {} } });
     },
   });
   tw.setActions([
     { icon: '✳', title: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
+    { icon: '◫', title: tr('Split Right'), keyAction: 'Terminal.SplitRight', id: 'terminal-split-right', run: () => splitPane(active, 'right') },
+    { icon: '⊟', title: tr('Split Down'), keyAction: 'Terminal.SplitDown', id: 'terminal-split-down', run: () => splitPane(active, 'down') },
     { icon: '⌫', title: tr('Clear Buffer'), run: () => active?.term.clear() },
   ]);
 
@@ -370,7 +567,7 @@
   ide.on('toolWindowShown', (id) => {
     if (id !== 'Terminal') return;
     if (!sessions.length) createSession();
-    else if (active) requestAnimationFrame(() => { try { active.fit.fit(); } catch {} active.term.focus(); });
+    else if (active) requestAnimationFrame(() => { fitTab(active.t); active.term.focus(); });
   });
 
   (ide.settingsPages ||= []).push({
@@ -385,7 +582,7 @@
 
   ide.on('settingsChanged', (key) => {
     if (key === 'appearance.theme') requestAnimationFrame(() => { for (const s of sessions) s.term.options.theme = theme(); });
-    if (key === 'terminal.fontSize') for (const s of sessions) { s.term.options.fontSize = fontSize(); s.fit.fit(); }
+    if (key === 'terminal.fontSize') for (const s of sessions) { s.term.options.fontSize = fontSize(); fitPane(s); }
   });
 
   // Toolbar button and stripe icon for Claude Code.
@@ -397,6 +594,12 @@
   ide.registerAction({ id: 'ClaudeCode', title: tr('Claude Code'), keys: 'Ctrl+Escape', run: openClaude, terminal: true });
   ide.registerAction({ id: 'ClaudeCodeSendReference', title: tr('Send File Reference to Claude Code'), keys: 'Ctrl+Alt+K', run: sendReference });
   ide.registerAction({ id: 'TerminalNewSession', title: tr('New Terminal Session'), keys: 'Ctrl+Shift+T', when: () => !!document.activeElement?.closest('[data-terminal]'), run: () => createSession(), terminal: true });
+  // Split terminals (PyCharm's Split Right / Split Down / Next and Previous Splitter): unbound, as in PyCharm.
+  ide.registerAction({ id: 'Terminal.SplitRight', title: tr('Split Terminal Right'), run: () => splitPane(active, 'right'), terminal: true });
+  ide.registerAction({ id: 'Terminal.SplitDown', title: tr('Split Terminal Down'), run: () => splitPane(active, 'down'), terminal: true });
+  ide.registerAction({ id: 'Terminal.NextSplitter', title: tr('Next Terminal Split'), run: () => cycleSplit(1), terminal: true });
+  ide.registerAction({ id: 'Terminal.PreviousSplitter', title: tr('Previous Terminal Split'), run: () => cycleSplit(-1), terminal: true });
+  ide.registerAction({ id: 'Terminal.CloseSession', title: tr('Close Terminal Session'), run: () => closeSession(active), terminal: true });
   ide.registerAction({ id: 'InstallClaudeCode', title: tr('Install Claude Code'), run: showInstallPrompt });
   // The official installer runs in a visible Terminal session, so the user sees exactly what it does; the Install
   // Manager card waits until the claude binary shows up.
@@ -410,7 +613,7 @@
     },
     install: async (log, _progress, signal) => {
       tw.show();
-      await createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex' });
+      await createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex', projectless: true });
       log(`${tr('Running the official installer in the Terminal…')}\n`);
       const end = Date.now() + 15 * 60000;
       while (!(await refreshClaude())?.installed) {
@@ -432,12 +635,40 @@
   });
 
   // Commands run in the project root; a new project means new sessions start there.
-  ide.on('projectOpened', () => refreshClaude());
+  ide.on('projectOpened', (root) => {
+    refreshClaude();
+    // Sessions belong to their project: opening another one in this window ends them, like closing the project.
+    if (sessionsRoot && !samePath(sessionsRoot, root)) closeAll();
+    sessionsRoot = root;
+  });
+  ide.on('projectClosed', () => { closeAll(); sessionsRoot = null; });
+  // The installer's session is not the project's: it keeps running (and keeps its tab) while it has not exited.
+  function closeAll() { for (const s of [...sessions]) if (!s.projectless || s.exited) closeSession(s); }
 
+  // Like PyCharm, ending sessions that still run asks first; Cancel keeps the project (and every session) open.
+  // A reload (Trust Project) ends every session, the installer's too.
+  ide.beforeProjectChange?.push(async (next, { reload = false } = {}) => {
+    if (!reload && next && (!sessionsRoot || samePath(sessionsRoot, next))) return true;
+    const running = sessions.filter((s) => !s.exited && !s.closed && (reload || !s.projectless));
+    if (!running.length) return true;
+    const text = running.length === 1
+      ? tr('A terminal session is still running: {names}. Terminate it?', { names: running[0].name || '…' })
+      : tr('{count} terminal sessions are still running: {names}. Terminate them?',
+        { count: running.length, names: running.map((s) => s.name || '…').join(', ') });
+    return ide.ui.confirm(text, { title: tr('Terminate Processes'), ok: tr('Terminate') });
+  });
+
+  const layoutOf = (n) => (!n ? null : n.kind === 'leaf' ? { id: n.s.id, cols: n.s.term.cols, rows: n.s.term.rows }
+    : { dir: n.dir, ratio: n.ratio, a: layoutOf(n.a), b: layoutOf(n.b) });
   ide.terminal = {
     open: (opts) => { tw.show(); return createSession(opts); },
-    sessions: () => sessions.map((s) => ({ id: s.id, name: s.name, kind: s.kind, exited: s.exited })),
-    active: () => active && { id: active.id, name: active.name, kind: active.kind },
+    sessions: () => sessions.map((s) => ({ id: s.id, name: s.name, kind: s.kind, exited: s.exited, pid: s.pid, cwd: s.cwd, tab: tabs.indexOf(s.t), projectless: s.projectless })),
+    // Tabs with their split tree: a pane is {id, cols, rows}, a split {dir: 'row'|'column', ratio, a, b}.
+    tabs: () => tabs.map((t) => ({ name: t.active?.name, active: t.active?.id, panes: leaves(t.root).map((s) => s.id), layout: layoutOf(t.root) })),
+    split: (side, id) => splitPane(id ? byId(id) : active, side),
+    focus: (id) => { const s = byId(id); if (s) select(s); return !!s; },
+    close: (id) => closeSession(id ? byId(id) : active),
+    active: () => active && { id: active.id, name: active.name, kind: active.kind, pid: active.pid },
     // Plain text of a session's buffer as logical lines (rows that wrap are joined back together).
     text: (id) => logicalLines(id ? byId(id) : active).map((l) => l.text).join('\n'),
     // Buffer position (0-based row, column) of the last occurrence of `needle`, following wrapped rows.

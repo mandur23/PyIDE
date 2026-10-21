@@ -1,0 +1,13 @@
+{
+  "id": "vulnerabilities",
+  "name": "Vulnerable Packages",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Marks installed packages and project dependencies with known vulnerabilities (OSV database) and offers the upgrade that fixes them.",
+  "depends": [
+    "packages"
+  ],
+  "main": [
+    "vulnerabilities.js"
+  ]
+}

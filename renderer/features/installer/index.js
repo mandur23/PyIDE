@@ -279,6 +279,7 @@
     ['git', 'Git.Git', 'Git', tr('Distributed version control, used by the Git tool window and commit dialog.'), 'https://git-scm.com/'],
     ['python313', 'Python.Python.3.13', 'Python 3.13', tr('The Python 3.13 interpreter from python.org, for new virtual environments.'), 'https://www.python.org/'],
     ['node', 'OpenJS.NodeJS.LTS', 'Node.js LTS', tr('JavaScript runtime with npm, needed by many web and tooling projects.'), 'https://nodejs.org/'],
+    ['gh', 'GitHub.cli', 'GitHub CLI', tr('GitHub on the command line, used to share projects on GitHub and list pull requests.'), 'https://cli.github.com/'],
   ];
   const systemStatus = () => (systemState ||= ide.api.invoke('installer:system', SYSTEM.map(([key]) => key)));
 

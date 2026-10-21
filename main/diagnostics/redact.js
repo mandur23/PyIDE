@@ -56,4 +56,4 @@ function redactObject(value, key = '') {
   return value;
 }
 
-module.exports = { MASK, scrubText, redactObject, addSecretValues };
+module.exports = { MASK, SECRET_KEY, scrubText, redactObject, addSecretValues };

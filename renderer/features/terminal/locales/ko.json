@@ -30,5 +30,17 @@
   "Cancelled": "취소됨",
   "The installer did not finish within 15 minutes.": "설치 프로그램이 15분 안에 끝나지 않았습니다.",
   "Load the project .env file into new terminals": "새 터미널에 프로젝트 .env 파일 로드",
-  "New sessions get the variables of the .env file in the project root. Sessions that are already open keep their environment.": "새 세션은 프로젝트 루트에 있는 .env 파일의 변수를 받습니다. 이미 열려 있는 세션은 기존 환경을 유지합니다."
+  "New sessions get the variables of the .env file in the project root. Sessions that are already open keep their environment.": "새 세션은 프로젝트 루트에 있는 .env 파일의 변수를 받습니다. 이미 열려 있는 세션은 기존 환경을 유지합니다.",
+  "Split Right": "오른쪽으로 분할",
+  "Split Down": "아래로 분할",
+  "Close Tab": "탭 닫기",
+  "Split Terminal Right": "터미널 오른쪽으로 분할",
+  "Split Terminal Down": "터미널 아래로 분할",
+  "Next Terminal Split": "다음 터미널 분할 창",
+  "Previous Terminal Split": "이전 터미널 분할 창",
+  "Close Terminal Session": "터미널 세션 닫기",
+  "A terminal session is still running: {names}. Terminate it?": "터미널 세션이 아직 실행 중입니다: {names}. 종료하시겠습니까?",
+  "{count} terminal sessions are still running: {names}. Terminate them?": "터미널 세션 {count}개가 아직 실행 중입니다: {names}. 모두 종료하시겠습니까?",
+  "Terminate Processes": "프로세스 종료",
+  "Terminate": "종료"
 }

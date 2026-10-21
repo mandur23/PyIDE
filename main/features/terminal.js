@@ -55,7 +55,28 @@ function venvEnv(interpExe) {
   return { VIRTUAL_ENV: venv, PATH: `${path.join(venv, 'Scripts')};${process.env.PATH}` };
 }
 
+// A session's folder must be a local absolute path (C:\...). A UNC path (\\host\share) is refused before any fs call:
+// the folder can come from what a program printed in the terminal (OSC 7 / OSC 9;9), and touching \\host\share
+// would open an SMB connection to that host and offer it the user's NTLM credentials.
+const localDir = (p) => typeof p === 'string' && /^[A-Za-z]:[\\/]/.test(p) && !/[\x00-\x1f]/.test(p);
+
 exports.register = ({ ipcMain, app }) => {
+  // A page reload (Trust Project reopens the page) leaves nothing to show a window's sessions: they end, or they would
+  // keep running unseen until quit. The renderer asks the user first.
+  const navigations = new WeakMap(); // webContents -> main-frame navigations since its first session
+  const watchNavigation = (wc) => {
+    if (navigations.has(wc)) return;
+    navigations.set(wc, 0);
+    wc.on('did-navigate', () => {
+      const n = navigations.get(wc) + 1;
+      navigations.set(wc, n);
+      for (const [id, s] of sessions) {
+        if (s.owner !== wc || s.nav >= n) continue;
+        try { s.proc.kill(); } catch {}
+        sessions.delete(id);
+      }
+    });
+  };
   let shells = null; // promise of the detected shells
   ipcMain.handle('pty:shells', () => (shells ??= detectShells()));
   ipcMain.handle('claude:status', () => findClaude());
@@ -63,6 +84,7 @@ exports.register = ({ ipcMain, app }) => {
   // opts: {shell, cwd, cols, rows, interpreter, command?: string to run in the shell, env?, target?}
   // target: a remote interpreter's target (WSL, SSH, Docker); the session is then a login shell in it.
   ipcMain.handle('pty:create', async (e, opts = {}) => {
+    opts = { ...opts, cwd: localDir(opts.cwd) ? opts.cwd : undefined };
     const known = await (shells ??= detectShells());
     let shell = known.find((s) => s.id === opts.shell) || known.find((s) => s.id === 'powershell');
     let args = [...shell.args];
@@ -106,7 +128,8 @@ exports.register = ({ ipcMain, app }) => {
     });
     const id = nextId++;
     const owner = e.sender;
-    sessions.set(id, { proc, owner });
+    watchNavigation(owner);
+    sessions.set(id, { proc, owner, nav: navigations.get(owner) });
     // Output is coalesced per tick so a flood (e.g. a long `dir`) costs a few IPC messages, not thousands.
     let buffer = '';
     let scheduled = false;
@@ -130,7 +153,8 @@ exports.register = ({ ipcMain, app }) => {
       owner.removeListener('destroyed', onWindowGone);
       if (!owner.isDestroyed()) setImmediate(() => owner.send('pty:exit', { id, code: exitCode }));
     });
-    return { id, shell: shell.id, shellName: shell.name, pid: proc.pid };
+    // host: this computer's name, the only host besides localhost whose OSC 7 file:// URLs the renderer accepts.
+    return { id, shell: shell.id, shellName: shell.name, pid: proc.pid, host: os.hostname() };
   });
 
   ipcMain.on('pty:write', (_e, { id, data }) => sessions.get(id)?.proc.write(data));

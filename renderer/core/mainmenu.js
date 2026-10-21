@@ -99,13 +99,18 @@
     return [...ide.toolWindows.values()].sort((a, b) => a.order - b.order)
       .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, run: () => tw.show() }));
   }
+  // File › Manage IDE Settings (the settings-sync plugin); left out when that plugin is disabled.
+  function manageSettingsItem() {
+    const items = tidy([act('ImportSettings'), act('ExportSettings')]);
+    return items.length ? { label: tr('Manage IDE Settings'), submenu: () => items } : null;
+  }
   const MENUS = () => [
     { label: tr('File'), submenu: () => tidy([
       act('NewProject'), act('NewPythonFile'), act('NewScratchFile'), act('NewHttpRequest'), { separator: true },
       act('OpenProject'), act('OpenFile'), act('GetFromVcs'),
       { label: tr('Recent Projects'), submenu: () => recentItems(15), disabled: !recentProjects().length },
       act('CloseProject'), { separator: true },
-      act('SaveAll'), act('ShowSettings'), { separator: true },
+      act('SaveAll'), act('ShowSettings'), manageSettingsItem(), { separator: true },
       act('Exit'),
     ]) },
     { label: tr('Edit'), submenu: () => tidy([
@@ -117,10 +122,12 @@
     ]) },
     { label: tr('View'), submenu: () => tidy([
       { label: tr('Tool Windows'), submenu: toolWindowItems },
-      { label: tr('Appearance'), submenu: () => [
+      { label: tr('Appearance'), submenu: () => tidy([
+        // appearance-modes plugin; their titles say Enter or Exit.
+        act('TogglePresentationMode'), act('ToggleDistractionFreeMode'), act('ToggleFullScreen'), act('ToggleZenMode'), { separator: true },
         { label: tr('Dark'), checked: ide.settings.get('appearance.theme', 'dark') !== 'light', run: () => ide.settings.set('appearance.theme', 'dark') },
         { label: tr('Light'), checked: ide.settings.get('appearance.theme', 'dark') === 'light', run: () => ide.settings.set('appearance.theme', 'light') },
-      ] },
+      ]) },
       act('HideAllWindows'), { separator: true },
       act('FileStructurePopup'), act('QuickJavaDoc'), act('ParameterInfo'), act('RecentFiles'), act('RecentLocations'),
     ]) },
@@ -157,8 +164,10 @@
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },
-      act('Git.Merge'), act('Git.Rebase'), act('Git.ResolveConflicts'), act('Git.Stash'), act('Git.Unstash'), { separator: true },
+      act('Git.Merge'), act('Git.Rebase'), act('Git.ResolveConflicts'), act('Git.Stash'), act('Git.Unstash'), act('ChangesView.Shelve'), act('Vcs.Show.Shelf'), { separator: true },
       act('Git.Log'), act('Annotate'), act('ChangesView.Revert'), act('Compare.SameVersion'), act('Git.Init'),
+      // Git › GitHub (github plugin), as in PyCharm.
+      ...(act('Github.Share.Project') ? [{ separator: true }, { label: 'GitHub', submenu: () => tidy([act('Github.Share.Project'), act('Github.View.Pull.Request')]) }] : []),
     ]) },
     { label: tr('Window'), submenu: () => tidy([
       act('SplitVertically'), act('SplitHorizontally'), act('Unsplit'), act('UnsplitAll'), act('ChangeSplitOrientation'),

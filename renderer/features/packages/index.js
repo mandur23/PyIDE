@@ -10,7 +10,12 @@
   let packages = [];
   let selected = null;
   let busy = false;
-  let search, listEl, details, con, interpLabel, depsRow;
+  let search, listEl, details, con, interpLabel, depsRow, notes;
+  // Extension points for other plugins (ide.packages below): row marks, details sections, toolbar actions.
+  const rowDecorators = [];
+  const detailSections = [];
+  const extraActions = [];
+  const baseActions = [{ icon: '⟳', title: tr('Refresh'), run: () => { refresh(); checkDeps({ fresh: true }); } }];
 
   const tw = ide.registerToolWindow({
     id: 'PythonPackages', title: tr('Python Packages'), icon: '📦', side: 'bottom', order: 60,
@@ -30,9 +35,10 @@
       interpLabel = el('div', 'pkgs-interp muted');
       depsRow = el('div', 'pkgs-deps hidden');
       depsRow.id = 'depsSummary';
+      notes = el('div', 'pkgs-notes');
       listEl = el('div', 'list pkgs-list');
       listEl.id = 'pkgList';
-      left.append(search, interpLabel, depsRow, listEl);
+      left.append(search, interpLabel, depsRow, notes, listEl);
       const right = el('div', 'pkgs-right');
       details = el('div', 'pkgs-details');
       details.id = 'pkgDetails';
@@ -42,7 +48,7 @@
       right.append(details, out);
       root.append(left, right);
       container.appendChild(root);
-      tw.setActions([{ icon: '⟳', title: tr('Refresh'), run: () => { refresh(); checkDeps({ fresh: true }); } }]);
+      tw.setActions([...baseActions, ...extraActions]);
     },
   });
 
@@ -60,6 +66,7 @@
     if (selected && !packages.some((p) => norm(p.name) === norm(selected))) selected = null;
     renderList();
     renderDetails();
+    if (r.ok) ide.emit('packagesListed', { interp, packages });
   }
 
   function renderList() {
@@ -71,6 +78,7 @@
       row.dataset.name = p.name;
       row.append(userText(el('span', 'pkg-name', p.name)), userText(el('span', 'pkg-ver', p.version)));
       row.onclick = () => select(p.name);
+      for (const fn of rowDecorators) fn(row, p);
       listEl.appendChild(row);
     }
     if (q && !packages.some((p) => norm(p.name) === norm(q))) {
@@ -117,6 +125,7 @@
       btns.appendChild(add);
     }
     details.append(head, btns);
+    for (const fn of detailSections) { const n = fn(p, { busy }); if (n) details.appendChild(n); }
   }
 
   function install(spec) {
@@ -205,6 +214,7 @@
     deps = r;
     if (r.error) ide.log.warn(`dependencies: ${r.error}`);
     applyDeps();
+    ide.emit('dependenciesChecked', deps);
     return deps;
   }
   let checkTimer = null;
@@ -389,4 +399,18 @@
   if (ide.root) checkDeps();
 
   ide.dependencies = { check: checkDeps, state: () => deps, install: (path, opts) => installDeps(depFile(path), opts) };
+  // The Python Packages window for other plugins (vulnerabilities). Event packagesListed({interp, packages}) follows
+  // every successful listing, dependenciesChecked(state) every dependency check.
+  ide.packages = {
+    list: () => packages,
+    busy: () => busy,
+    toolWindow: tw,
+    notes: () => notes,
+    install,
+    select,
+    render: () => { renderList(); renderDetails(); },
+    decorateRow: (fn) => { rowDecorators.push(fn); renderList(); },
+    addDetails: (fn) => { detailSections.push(fn); renderDetails(); },
+    addAction: (action) => { extraActions.push(action); tw.setActions([...baseActions, ...extraActions]); },
+  };
 })();

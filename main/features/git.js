@@ -1,6 +1,7 @@
 // Git integration: every operation shells out to the git CLI in the project folder.
 // Errors composed here carry a `reason` the renderer translates; git's own output is passed through untranslated.
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -10,7 +11,8 @@ const trust = require('../trust');
 // No credential/editor prompts can be answered from the IDE, so fail fast instead of hanging.
 const ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
 
-function git(cwd, args, input) {
+// env: extra variables for this one command (the shelf builds its patches in a private GIT_INDEX_FILE).
+function git(cwd, args, input, env) {
   // A repository's own .git/config can make even `git status` run programs (core.fsmonitor, filter.*.clean), so
   // git does not run in a project the user has not trusted (main/trust.js).
   if (!trust.isTrusted(cwd)) return Promise.resolve({ code: -1, out: '', err: 'This project is not trusted', reason: 'untrusted' });
@@ -21,7 +23,7 @@ function git(cwd, args, input) {
       // stash commands here take no user paths.
       const literal = args[0] === 'stash' ? [] : ['--literal-pathspecs'];
       p = spawn('git', ['-c', 'core.quotepath=false', '-c', 'color.ui=false', ...literal, ...args],
-        { cwd, env: { ...process.env, ...ENV }, windowsHide: true });
+        { cwd, env: { ...process.env, ...ENV, ...env }, windowsHide: true });
     } catch (e) {
       return resolve({ code: -1, out: '', err: e.message });
     }
@@ -102,7 +104,7 @@ async function status(root) {
     } else if (line.startsWith('2 ')) {
       const f = line.split(' ');
       const orig = parts[++i];
-      res.files.push({ status: 'modified', xy: f[1], rel: f.slice(9).join(' '), orig: toAbs(root, info, orig) });
+      res.files.push({ status: 'modified', xy: f[1], rel: f.slice(9).join(' '), orig: toAbs(root, info, orig), origRel: orig });
     } else if (line.startsWith('u ')) {
       res.files.push({ status: 'conflict', xy: line.split(' ')[1], rel: line.split(' ').slice(10).join(' ') });
     }
@@ -163,8 +165,336 @@ async function nameOf(root, rev) {
   return name || (await git(root, ['rev-parse', '--short', rev])).out.trim() || null;
 }
 
-exports.register = ({ ipcMain }) => {
+// ---------- shelf ----------
+// PyCharm's shelf: named sets of changes put aside without committing. A shelf is a folder
+// <userData>/shelf/<project id>/<shelf id>/ holding changes.patch, a `git diff --binary --full-index` of the shelved
+// files against HEAD (untracked files as new files), and shelf.json. PyCharm keeps shelves in .idea/shelf; PyIDE has
+// no .idea folder, and a shelf inside the work tree would show up as a change and could be committed or cleaned away.
+let shelfRoot = null;
+const sha1 = (s) => crypto.createHash('sha1').update(s).digest('hex');
+// The same project opened through an 8.3 short path or another letter case keeps its shelves.
+function projectId(root) {
+  let p = path.resolve(root);
+  try { p = fs.realpathSync.native(p); } catch {}
+  return sha1(p.toLowerCase()).slice(0, 16);
+}
+const shelfDir = (root, id) => {
+  if (!/^[0-9a-z-]{1,40}$/.test(String(id))) throw new Error(`Bad shelf id: ${id}`);
+  return path.join(shelfRoot, projectId(root), id);
+};
+const SHELF_META = 'shelf.json';
+const SHELF_PATCH = 'changes.patch';
+// Commands on paths relative to the work tree's top, whatever folder of it the project is.
+const atTop = (info, args) => ['-C', info.top, ...args];
+// CR line ends and trailing blanks are content here, not whitespace errors to refuse (apply.whitespace=error).
+const APPLY = ['apply', '--whitespace=nowarn'];
+const PATCH_ARGS = ['--no-ext-diff', '--no-textconv', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', '-M'];
+
+// One `diff --git` section per file. "diff --git " starts a line only at a section start: hunk lines start with
+// ' ', '+', '-' or '\', and the base85 lines of a binary patch have no spaces.
+function splitPatch(buf) {
+  const marker = Buffer.from('diff --git ');
+  const starts = [];
+  for (let i = buf.indexOf(marker); i !== -1; i = buf.indexOf(marker, i + 1)) if (i === 0 || buf[i - 1] === 10) starts.push(i);
+  return starts.map((s, k) => buf.subarray(s, k + 1 < starts.length ? starts[k + 1] : buf.length));
+}
+
+// `--name-status -z`: "M\0path\0", and "R100\0old\0new\0" for a rename.
+function parseNameStatus(out) {
+  const parts = out.split('\0');
+  const list = [];
+  for (let i = 0; i < parts.length && parts[i];) {
+    const code = parts[i++][0];
+    if (code === 'R' || code === 'C') list.push({ code, orig: parts[i++], rel: parts[i++] });
+    else list.push({ code, rel: parts[i++] });
+  }
+  return list;
+}
+// `--numstat -z`: "1\t2\tpath\0", "1\t2\t\0old\0new\0" for a rename, "-\t-\t…" for a binary file.
+function parseBinary(out) {
+  const parts = out.split('\0');
+  const list = [];
+  for (let i = 0; i < parts.length && parts[i];) {
+    const head = parts[i++];
+    list.push(head.startsWith('-\t-\t'));
+    if (/^[-\d]+\t[-\d]+\t$/.test(head)) i += 2;
+  }
+  return list;
+}
+const SHELF_STATUS = { A: 'added', C: 'added', D: 'deleted', R: 'renamed' };
+
+function readShelf(root, id) {
+  const dir = shelfDir(root, id);
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, SHELF_META), 'utf8'));
+  const sections = splitPatch(fs.readFileSync(path.join(dir, SHELF_PATCH)));
+  if (sections.length !== meta.files.length) throw new Error(`The shelf "${meta.name}" is damaged: its patch does not match its file list.`);
+  return { dir, meta, sections };
+}
+
+function writeShelf(dir, meta, sections) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, SHELF_PATCH), Buffer.concat(sections));
+  // the file list last: a folder without one is not listed
+  fs.writeFileSync(path.join(dir, SHELF_META), JSON.stringify(meta, null, 1));
+}
+
+function listShelves(root) {
+  const base = path.join(shelfRoot, projectId(root));
+  let names = [];
+  try { names = fs.readdirSync(base); } catch {}
+  const list = [];
+  for (const id of names) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(base, id, SHELF_META), 'utf8'));
+      list.push({ id, name: meta.name, time: meta.time, branch: meta.branch || null, files: meta.files });
+    } catch {}
+  }
+  return list.sort((a, b) => b.time - a.time);
+}
+
+// A private index, so building a shelf or reading one never touches what the user staged.
+function tempIndex() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-shelf-'));
+  return { dir, env: { GIT_INDEX_FILE: path.join(dir, 'index') }, file: (name, buf) => { const p = path.join(dir, name); fs.writeFileSync(p, buf); return p; },
+    dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+}
+
+// Which repo-relative paths exist in `rev`; null when git could not tell (the command failed, or did not answer one
+// line per path), which callers must not read as "none of them".
+async function existingAt(root, info, rev, rels) {
+  if (!rels.length) return new Set();
+  const r = await git(root, atTop(info, ['cat-file', '--batch-check']), rels.map((rel) => `${rev}:${rel}\n`).join(''));
+  const lines = r.out.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  if (r.code || lines.length !== rels.length || lines.some((l) => !l)) return null;
+  return new Set(rels.filter((_rel, i) => !lines[i].endsWith(' missing')));
+}
+
+// Puts the shelved files (shelf.json entries) back to HEAD in the index and the work tree; paths HEAD lacks are
+// deleted. Deleting is only safe for a file the patch holds in full: a new file, or a rename's new name (its old one
+// comes back from HEAD). Any other path that seems to be missing from HEAD means git answered wrongly, and nothing is
+// touched. Stops at the first step that fails. Returns null when done, else the error.
+async function revertPaths(root, info, files, log) {
+  const rels = [...new Set(files.flatMap((f) => (f.orig ? [f.rel, f.orig] : [f.rel])))];
+  const whole = new Set(files.filter((f) => f.status === 'added' || f.orig).map((f) => f.rel));
+  const head = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+  const inHead = head ? await existingAt(root, info, 'HEAD', rels) : new Set();
+  if (!inHead) return 'Git could not tell which of the shelved files are in HEAD, so they were left as they are.';
+  const restore = rels.filter((r) => inHead.has(r));
+  const remove = rels.filter((r) => !inHead.has(r));
+  const unsure = remove.filter((r) => !whole.has(r));
+  if (unsure.length) return `Git reports these shelved files as missing from HEAD although the shelf holds only their changes, so nothing was rolled back: ${unsure.join(', ')}`;
+  const run = async (args, list) => {
+    if (!list.length) return null;
+    const r = await git(root, atTop(info, args), list.join('\0'));
+    log.push({ cmd: cmdLine(args.filter((a) => !a.startsWith('--pathspec'))), out: r.out, err: r.err });
+    return r.code ? (r.err || r.out || `${cmdLine(args)} failed`).trim() : null;
+  };
+  const failed = await run(['restore', '--source=HEAD', '--staged', '--worktree', '--pathspec-from-file=-', '--pathspec-file-nul'], restore)
+    || await run(['rm', '--cached', '--quiet', '--ignore-unmatch', '--pathspec-from-file=-', '--pathspec-file-nul'], remove);
+  if (failed) return failed;
+  const errors = [];
+  for (const rel of remove) {
+    const abs = path.join(info.top, rel);
+    try { fs.unlinkSync(abs); } catch (err) { if (err.code !== 'ENOENT') errors.push(err.message); }
+    // folders the shelved files were alone in go too, as PyCharm leaves no empty package behind
+    for (let dir = path.dirname(abs); dir.length > info.top.length && dir.startsWith(info.top); dir = path.dirname(dir)) {
+      try { fs.rmdirSync(dir); } catch { break; }
+    }
+  }
+  return errors.length ? errors.join('\n') : null;
+}
+
+// paths: the changed files (absolute, as git:status lists them) to shelve; keep: leave them changed in the work tree.
+async function shelve(root, { name, paths, keep }) {
+  const info = await repoInfo(root);
+  if (!info) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+  const st = await status(root);
+  const want = new Set((paths || []).map((p) => path.resolve(p).toLowerCase()));
+  const files = st.files.filter((f) => f.status !== 'conflict' && want.has(path.resolve(f.path).toLowerCase()));
+  if (!files.length) return { ok: false, reason: 'noShelfChanges', err: 'No changes to shelve' };
+  const rels = [...new Set(files.flatMap((f) => (f.origRel ? [f.rel, f.origRel] : [f.rel])))];
+  const idx = tempIndex();
+  const log = [];
+  try {
+    const head = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+    const step = async (args, input) => {
+      const r = await git(root, atTop(info, args), input, idx.env);
+      if (r.code) throw Object.assign(new Error(r.err || r.out), { git: r, cmd: cmdLine(args) });
+      return r;
+    };
+    // HEAD plus the work tree state of exactly these paths: their diff from HEAD is the shelf.
+    await step(head ? ['read-tree', 'HEAD'] : ['read-tree', '--empty']);
+    await step(['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], rels.join('\0'));
+    const [patch, names, nums] = await Promise.all([
+      step(['diff', '--cached', ...PATCH_ARGS, '--binary', '--full-index']),
+      step(['diff', '--cached', ...PATCH_ARGS, '--name-status', '-z']),
+      step(['diff', '--cached', ...PATCH_ARGS, '--numstat', '-z']),
+    ]);
+    const entries = parseNameStatus(names.out);
+    const binary = parseBinary(nums.out);
+    const sections = splitPatch(patch.buf);
+    if (!entries.length) return { ok: false, reason: 'noShelfChanges', err: 'No changes to shelve' };
+    if (sections.length !== entries.length) return { ok: false, err: 'git diff returned a patch PyIDE cannot split into files.' };
+    const byRel = new Map(st.files.map((f) => [f.rel, f]));
+    const meta = {
+      version: 1, name: String(name || '').trim() || 'Shelved changes', time: Date.now(), branch: st.branch || st.detached || null, head: head || null,
+      files: entries.map((e, i) => {
+        const f = byRel.get(e.rel);
+        return { rel: e.rel, ...(e.orig ? { orig: e.orig } : {}), status: SHELF_STATUS[e.code] || 'modified', binary: binary[i] || false,
+          // added to the index before shelving (git add, or a staged rename): staged again when unshelved
+          staged: !!f && (f.status === 'added' || !!f.origRel) };
+      }),
+    };
+    const id = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    const dir = shelfDir(root, id);
+    writeShelf(dir, meta, sections);
+    let reverted = false;
+    let revertError = null;
+    if (!keep) {
+      // Only when the patch undoes cleanly is it safe to drop the changes from the work tree: reversing a new file's
+      // section checks the file on disk is byte for byte the shelved one (a binary one by its full-index hash).
+      const check = await git(root, atTop(info, [...APPLY, '-R', '--check', path.join(dir, SHELF_PATCH)]));
+      if (check.code) revertError = check.err || check.out || 'git apply -R --check failed';
+      else {
+        revertError = await revertPaths(root, info, meta.files, log);
+        reverted = !revertError;
+      }
+    }
+    return { ok: true, id, name: meta.name, files: meta.files.length, reverted, revertError,
+      paths: meta.files.flatMap((f) => (f.orig ? [f.rel, f.orig] : [f.rel])).map((rel) => toAbs(root, info, rel)), log };
+  } catch (err) {
+    return { ok: false, cmd: err.cmd || '', out: err.git?.out || '', err: err.message, log };
+  } finally {
+    idx.dispose();
+  }
+}
+
+// rels: the shelved files (repo-relative, as shelf.json lists them) to apply, or null for all; remove: drop the files
+// that applied cleanly from the shelf (the shelf goes when none are left); files with conflicts always stay.
+async function unshelve(root, id, { rels = null, remove = true } = {}) {
+  const info = await repoInfo(root);
+  if (!info) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+  let shelf;
+  try { shelf = readShelf(root, id); } catch (err) { return { ok: false, err: err.message }; }
+  const { dir, meta, sections } = shelf;
+  const pick = meta.files.map((f, i) => ({ f, sec: sections[i], i })).filter((x) => !rels || rels.includes(x.f.rel));
+  if (!pick.length) return { ok: false, reason: 'noShelfChanges', err: 'No changes to shelve' };
+  const tmp = tempIndex();
+  const log = [];
+  const run = async (args, input) => {
+    const r = await git(root, atTop(info, args), input);
+    log.push({ cmd: cmdLine(args.map((a) => (a.startsWith(tmp.dir) ? path.basename(a) : a))), out: r.out, err: r.err, ok: !r.code });
+    return r;
+  };
+  const pathsOf = (x) => (x.f.orig ? [x.f.rel, x.f.orig] : [x.f.rel]);
+  const applied = [];
+  const conflicts = [];
+  const failed = [];
+  try {
+    // Whatever applies to the work tree as it is goes in first, in one step and without touching the index.
+    let clean = pick;
+    let rest = [];
+    if ((await git(root, atTop(info, [...APPLY, '--check', tmp.file('all.patch', Buffer.concat(pick.map((x) => x.sec)))]))).code) {
+      clean = [];
+      for (const x of pick) ((await git(root, atTop(info, [...APPLY, '--check', tmp.file(`check-${x.i}.patch`, x.sec)]))).code ? rest : clean).push(x);
+    }
+    if (clean.length) {
+      const r = await run([...APPLY, tmp.file('clean.patch', Buffer.concat(clean.map((x) => x.sec)))]);
+      if (r.code) rest = [...clean, ...rest];
+      else applied.push(...clean);
+    }
+    // The rest is merged three ways (base: the shelved files' HEAD version). git apply --3way needs the index to
+    // match the work tree for these paths; a file that merges cleanly or not at all gets its index entry back, and
+    // one with conflicts is left unmerged in the index for the Conflicts dialog, as a conflicting unstash is.
+    const zero = '0'.repeat(40);
+    for (const x of rest) {
+      const paths = pathsOf(x);
+      const saved = (await git(root, atTop(info, ['ls-files', '-s', '-z', '--', ...paths]))).out.split('\0').filter(Boolean);
+      const savedPaths = new Set(saved.map((l) => l.slice(l.indexOf('\t') + 1)));
+      const restoreIndex = () => git(root, atTop(info, ['update-index', '-z', '--index-info']),
+        [...paths.filter((p) => !savedPaths.has(p)).map((p) => `0 ${zero}\t${p}`), ...saved].map((l) => `${l}\0`).join(''));
+      await git(root, atTop(info, ['add', '-A', '--', ...paths]));
+      const r = await run([...APPLY, '--3way', tmp.file(`merge-${x.i}.patch`, x.sec)]);
+      const unmerged = (await git(root, atTop(info, ['ls-files', '-u', '-z', '--', ...paths]))).out;
+      if (unmerged) conflicts.push(x);
+      else {
+        await restoreIndex();
+        if (r.code) failed.push({ x, err: (r.err || r.out).trim() });
+        else applied.push(x);
+      }
+    }
+    const staged = applied.filter((x) => x.f.staged).flatMap(pathsOf);
+    if (staged.length) await run(['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], staged.join('\0'));
+  } finally {
+    tmp.dispose();
+  }
+  let shelfRemoved = false;
+  if (remove) {
+    // Only files that applied cleanly leave the shelf. A file with conflicts stays, as in PyCharm: resolving it with
+    // "Accept Yours" (or aborting) drops the shelved change from the work tree, and the shelf is then its only copy.
+    const done = new Set(applied.map((x) => x.i));
+    const left = meta.files.map((f, i) => ({ f, sec: sections[i], i })).filter((x) => !done.has(x.i));
+    if (!left.length) { fs.rmSync(dir, { recursive: true, force: true }); shelfRemoved = true; }
+    else if (done.size) writeShelf(dir, { ...meta, files: left.map((x) => x.f) }, left.map((x) => x.sec));
+  }
+  const abs = (x) => toAbs(root, info, x.f.rel);
+  return {
+    ok: !failed.length && !conflicts.length, applied: applied.map(abs), conflicts: conflicts.map(abs),
+    // the files with conflicts that are still on the shelf (all of them, whether or not `remove` was asked for)
+    keptConflicts: conflicts.map((x) => x.f.rel),
+    failed: failed.map((e) => ({ path: abs(e.x), rel: e.x.f.rel, err: e.err })), shelfRemoved,
+    paths: [...applied, ...conflicts].flatMap(pathsOf).map((rel) => toAbs(root, info, rel)), log,
+  };
+}
+
+// The shelved file's text before and after (null for a side that has no such file), rebuilt from the patch: the
+// file as it was in HEAD when shelved, with the shelved section applied to it in a private index.
+async function shelfDiff(root, id, rel) {
+  const info = await repoInfo(root);
+  if (!info) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+  let shelf;
+  try { shelf = readShelf(root, id); } catch (err) { return { ok: false, err: err.message }; }
+  const i = shelf.meta.files.findIndex((f) => f.rel === rel);
+  if (i < 0) return { ok: false, err: `${rel} is not in this shelf` };
+  const f = shelf.meta.files[i];
+  if (f.binary) return { ok: true, binary: true, status: f.status };
+  const sec = shelf.sections[i];
+  const hunks = sec.indexOf('\n@@');
+  const head = sec.subarray(0, hunks < 0 ? sec.length : hunks).toString('utf8');
+  const pre = /^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: (\d+))?$/m.exec(head);
+  const mode = pre?.[3] || /^(?:old|deleted file) mode (\d+)$/m.exec(head)?.[1] || '100644';
+  const idx = tempIndex();
+  try {
+    const g = (args, input) => git(root, atTop(info, args), input, idx.env);
+    await g(['read-tree', '--empty']);
+    let before = null;
+    if (f.status !== 'added') {
+      let oid = pre && !/^0+$/.test(pre[1]) ? pre[1] : null;
+      // a pure rename has no index line: the file is as it was in the commit the shelf was made on
+      if (!oid && shelf.meta.head) oid = (await g(['rev-parse', '-q', '--verify', `${shelf.meta.head}:${f.orig || f.rel}`])).out.trim() || null;
+      const blob = oid && await g(['cat-file', 'blob', oid]);
+      if (!blob || blob.code) return { ok: false, err: `The original version of ${f.orig || f.rel} is no longer in the repository.` };
+      before = fileText(blob.buf);
+      const add = await g(['update-index', '--add', '--cacheinfo', `${mode},${oid},${f.orig || f.rel}`]);
+      if (add.code) return { ok: false, err: add.err };
+    }
+    let after = null;
+    if (f.status !== 'deleted') {
+      const r = await g([...APPLY, '--cached', idx.file('one.patch', sec)]);
+      if (r.code) return { ok: false, err: r.err || r.out };
+      const shown = await g(['show', `:${f.rel}`]);
+      after = shown.code ? null : fileText(shown.buf);
+    }
+    return { ok: true, binary: false, status: f.status, before, after };
+  } finally {
+    idx.dispose();
+  }
+}
+
+exports.register = ({ ipcMain, app }) => {
   const h = (name, fn) => ipcMain.handle(`git:${name}`, (_e, ...args) => fn(...args));
+  shelfRoot = path.join(app.getPath('userData'), 'shelf');
 
   h('status', status);
 
@@ -458,5 +788,27 @@ exports.register = ({ ipcMain }) => {
       list.push({ status: s === 'A' ? 'added' : s === 'D' ? 'deleted' : 'modified', rel: parts[i + 1], path: info ? toAbs(root, info, parts[i + 1]) : parts[i + 1] });
     }
     return list;
+  });
+
+  // ---------- shelf ----------
+  h('shelve', shelve);
+  h('unshelve', unshelve);
+  h('shelfDiff', shelfDiff);
+  // Shelves of the project, newest first; each file's path is absolute for the project as open now.
+  h('shelves', async (root) => {
+    const info = await repoInfo(root);
+    return listShelves(root).map((s) => ({ ...s, files: s.files.map((f) => ({ ...f, path: info ? toAbs(root, info, f.rel) : path.join(root, f.rel) })) }));
+  });
+  h('shelfRename', (root, id, name) => {
+    try {
+      const file = path.join(shelfDir(root, id), SHELF_META);
+      const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+      meta.name = String(name).trim() || meta.name;
+      fs.writeFileSync(file, JSON.stringify(meta, null, 1));
+      return { ok: true };
+    } catch (err) { return { ok: false, err: err.message }; }
+  });
+  h('shelfDelete', (root, id) => {
+    try { fs.rmSync(shelfDir(root, id), { recursive: true, force: true }); return { ok: true }; } catch (err) { return { ok: false, err: err.message }; }
   });
 };

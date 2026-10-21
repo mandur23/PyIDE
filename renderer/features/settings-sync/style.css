@@ -1,0 +1,11 @@
+.settings-sync-intro { margin-bottom: 8px; }
+.settings-sync-list { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--gray4); border-radius: 4px; padding: 6px 4px; }
+.settings-sync-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 3px; cursor: pointer; }
+.settings-sync-row:hover { background: var(--gray3); }
+.settings-sync-row.disabled { cursor: default; color: var(--gray7); }
+.settings-sync-row.disabled:hover { background: none; }
+.settings-sync-name { flex: 1; }
+.settings-sync-detail { color: var(--gray7); font-size: 12px; }
+.settings-sync-note { margin-top: 10px; color: var(--gray7); font-size: 12px; }
+.settings-sync-message { display: flex; flex-direction: column; gap: 8px; user-select: text; word-break: break-word; }
+.settings-sync-message.error .settings-sync-line:first-child { font-weight: 600; }

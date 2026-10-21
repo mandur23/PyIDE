@@ -1505,7 +1505,7 @@ function showTrustBar(dir) {
     await ide.api.invoke('trust:add', dir);
     // Every feature starts over as for a trusted project: interpreters, Git, Pyright with the project venv. The page
     // reopens this project (the window's own ?open= is the folder it was started with).
-    if (!(await ide.closeAllTabs(false))) return;
+    if (!(await projectChangeAllowed(dir, { reload: true })) || !(await ide.closeAllTabs(false))) return;
     const url = new URL(location.href);
     url.searchParams.set('open', dir);
     url.searchParams.delete('file');
@@ -1515,12 +1515,23 @@ function showTrustBar(dir) {
   trustBar.classList.remove('hidden');
 }
 
+// Hooks that may veto opening another project, closing it, or reloading the page for Trust Project:
+// `async (next, {reload}) => false` cancels (next is the folder to open, null when closing). They run before unsaved
+// files are asked about, so a cancel leaves everything as it was. The terminal asks before ending running sessions.
+ide.beforeProjectChange = [];
+async function projectChangeAllowed(next, opts = {}) {
+  for (const fn of ide.beforeProjectChange) {
+    try { if ((await fn(next, opts)) === false) return false; } catch (e) { ide.log.error(`beforeProjectChange: ${e?.stack || e}`); }
+  }
+  return true;
+}
+
 // Returns false if the user kept unsaved files of the current project open (each one asks, as Close Project does),
-// or did not open an untrusted folder.
+// did not open an untrusted folder, or a beforeProjectChange hook cancelled.
 ide.openProject = async (dir) => {
   const trust = await askTrust(dir);
   if (!trust) return false;
-  if (!(await ide.closeAllTabs(false))) return false;
+  if (!(await projectChangeAllowed(dir)) || !(await ide.closeAllTabs(false))) return false;
   ide.trusted = trust === 'trusted';
   if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
   ide.root = dir;
@@ -1571,9 +1582,10 @@ ide.probeProject = async (dir) => {
   return null;
 };
 
-// Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open.
+// Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open
+// or a beforeProjectChange hook cancelled.
 ide.closeProject = async () => {
-  if (!ide.root || !(await ide.closeAllTabs(false))) return false;
+  if (!ide.root || !(await projectChangeAllowed(null)) || !(await ide.closeAllTabs(false))) return false;
   ide.root = null;
   cutEntry = null;
   trustBar.classList.add('hidden');

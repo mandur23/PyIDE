@@ -5,6 +5,7 @@
     pull: 'Before Update Project', checkout: 'Before Checkout', rollback: 'Before Rollback', merge: 'Before Merge',
     rebase: 'Before Rebase', cherryPick: 'Before Cherry-pick', revert: 'Before Git Revert', stash: 'Before Stash',
     unstash: 'Before Unstash', acceptSide: 'Before Accepting a Merge Side', resolve: 'Before Resolving a Conflict',
+    shelve: 'Before Shelve', unshelve: 'Before Unshelve',
   };
   const OPERATION_CHECKPOINTS = { continue: 'Before Continuing', skip: 'Before Skipping', abort: 'Before Aborting' };
   const invoke = async (ch, ...args) => {
@@ -32,6 +33,7 @@
     detached: tr('Cannot push from a detached HEAD.'),
     noOperation: tr('No merge, rebase, cherry-pick or revert is in progress.'),
     noLocalChanges: tr('No local changes to save'),
+    noShelfChanges: tr('No changes to shelve'),
   };
   // The operation git stopped in the middle of, as the branch widget shows it.
   const OP_LABEL = { merge: tr('Merging'), rebase: tr('Rebasing'), 'cherry-pick': tr('Cherry-picking'), revert: tr('Reverting') };
@@ -222,6 +224,12 @@
   // Conflicted files are left out until resolved: committing one as is would record its conflict markers.
   const fileIncluded = (f) => f.status !== 'conflict' && (included.get(key(f.path)) ?? f.status !== 'unversioned');
   let prefilled = null; // the merge message put into an empty commit message box
+  // The Shelf tab (drawn by the shelf section below; declared here because the tool window can mount at once).
+  let commitTabs, changesPane, shelfPane, shelfList, shelfTabBtn;
+  let shelves = []; // git:shelves, newest first
+  const shelfOpen = new Set(); // ids of expanded shelves
+  const shelfSel = { id: null, rels: new Set() }; // the selected shelf, or files of it
+  const shelfShown = () => !!shelfPane && !shelfPane.classList.contains('hidden');
 
   function prefillMergeMessage() {
     if (!msgEl) return;
@@ -261,11 +269,24 @@
       const msgBox = el('div', 'vcs-msg-box');
       msgBox.append(msgEl, msgActions);
       commitBody.append(headerEl, listEl, msgBox, btns);
-      container.append(initBox, commitBody);
+      // Commit | Shelf tabs, as in PyCharm's Commit tool window (shown while the project is a repository).
+      changesPane = el('div', 'vcs-changes-pane');
+      changesPane.append(initBox, commitBody);
+      commitTabs = el('div', 'vcs-subtabs vcs-commit-tabs hidden');
+      const changesTab = el('button', 'vcs-ctab active', tr('Commit'));
+      changesTab.id = 'vcsChangesTab';
+      shelfTabBtn = el('button', 'vcs-ctab', tr('Shelf'));
+      shelfTabBtn.id = 'vcsShelfTab';
+      changesTab.onclick = () => switchCommitTab('changes');
+      shelfTabBtn.onclick = () => switchCommitTab('shelf');
+      commitTabs.append(changesTab, shelfTabBtn);
+      shelfPane = buildShelfPane();
+      container.append(commitTabs, changesPane, shelfPane);
       tw.setActions([
-        { icon: '⟳', title: tr('Refresh'), run: refresh },
+        { icon: '⟳', title: tr('Refresh'), run: () => (shelfShown() ? loadShelves() : refresh()) },
         { icon: '↶', title: tr('Rollback…'), keyAction: 'ChangesView.Revert', run: () => rollbackFiles(selectedFiles()) },
         { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openChange(selectedFiles()[0].path) },
+        { icon: '⊟', title: tr('Shelve Changes…'), id: 'vcsShelveAction', keyAction: 'ChangesView.Shelve', run: () => openShelveDialog() },
       ]);
       prefillMergeMessage();
     },
@@ -283,6 +304,8 @@
     if (!listEl) return;
     initBox.classList.toggle('hidden', !!repo || !ide.root);
     commitBody.classList.toggle('hidden', !repo);
+    commitTabs.classList.toggle('hidden', !repo);
+    if (!repo && shelfShown()) switchCommitTab('changes');
     commitTw.setBadge(repo?.files.length ? String(repo.files.length) : '');
     if (!repo) { headerEl.replaceChildren(); return; }
     headerEl.replaceChildren(...commitHeaders.map((fn) => fn(repo)).filter(Boolean));
@@ -1323,8 +1346,286 @@
     });
   }
 
+  // ---------- shelf ----------
+  // PyCharm's shelf. Shelve Changes… puts chosen files aside as a named patch (main/features/git.js keeps it outside
+  // the repository) and rolls them back unless asked to keep them; the Commit window's Shelf tab lists the shelves and
+  // unshelves all or some of their files, three-way merging where the files changed since.
+  const SHELF_COLORS = { modified: COLORS.modified, renamed: COLORS.modified, added: COLORS.added, deleted: COLORS.deleted };
+  const SHELF_STATUS_LABEL = { modified: tr('Modified'), added: tr('Added'), deleted: tr('Deleted'), renamed: tr('Renamed') };
+  const removeApplied = () => ide.settings.get('vcs.shelf.removeApplied', true);
+  const currentShelf = () => shelves.find((s) => s.id === shelfSel.id) || null;
+  function checkbox(label, cls, checked, onchange) {
+    const box = el('label', `vcs-check ${cls}`);
+    const input = el('input');
+    input.type = 'checkbox';
+    input.checked = checked;
+    if (onchange) input.onchange = () => onchange(input.checked);
+    box.append(input, el('span', null, label));
+    return { box, input };
+  }
+
+  // Called from the Commit tool window's mount, which can run before this section: only DOM and hoisted functions.
+  function buildShelfPane() {
+    const pane = el('div', 'vcs-shelf hidden');
+    const bar = el('div', 'vcs-shelf-bar');
+    const btn = (label, cls, run) => { const b = el('button', `secondary ${cls}`, label); b.onclick = run; return b; };
+    bar.append(
+      btn(tr('Unshelve'), 'vcs-shelf-unshelve', () => unshelve(currentShelf(), shelfSel.rels.size ? [...shelfSel.rels] : null)),
+      btn(tr('Rename…'), 'vcs-shelf-rename', () => renameShelf(currentShelf())),
+      btn(tr('Delete…'), 'vcs-shelf-delete', () => deleteShelf(currentShelf())));
+    const remove = checkbox(tr('Remove successfully applied files from the shelf'), 'vcs-shelf-remove',
+      ide.settings.get('vcs.shelf.removeApplied', true), (on) => ide.settings.set('vcs.shelf.removeApplied', on));
+    shelfList = el('div', 'vcs-shelf-list');
+    shelfList.id = 'vcsShelfList';
+    const isFile = (row) => row.dataset.rel != null;
+    ide.ui.listKeys(shelfList, {
+      rows: '.vcs-shelf-row, .vcs-shelf-file',
+      select: (row) => selectShelfRow(row, false),
+      open: (row) => (isFile(row) ? showShelfDiff(row.dataset.id, row.dataset.rel) : toggleShelf(row.dataset.id)),
+      expanded: (row) => (isFile(row) ? null : shelfOpen.has(row.dataset.id)),
+      toggle: (row) => toggleShelf(row.dataset.id),
+    });
+    shelfList.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete' && e.target === shelfList && currentShelf()) { e.preventDefault(); deleteShelf(currentShelf()); }
+    });
+    pane.append(bar, remove.box, shelfList);
+    return pane;
+  }
+
+  function switchCommitTab(which) {
+    const shelf = which === 'shelf';
+    [...commitTabs.children].forEach((b) => b.classList.toggle('active', (b === shelfTabBtn) === shelf));
+    changesPane.classList.toggle('hidden', shelf);
+    shelfPane.classList.toggle('hidden', !shelf);
+    if (shelf) loadShelves();
+  }
+
+  function showShelf() {
+    if (!ide.root) return;
+    commitTw.show();
+    if (!repo) return notify(tr('Shelf'), tr('This project is not under Git version control.'), 'warn');
+    switchCommitTab('shelf');
+    shelfList.focus();
+  }
+
+  let shelfSeq = 0;
+  async function loadShelves() {
+    const root = ide.root;
+    if (!root) return;
+    const my = ++shelfSeq;
+    const list = await invoke('shelves', root);
+    if (my !== shelfSeq || root !== ide.root) return;
+    shelves = list;
+    if (!currentShelf()) { shelfSel.id = shelves[0]?.id || null; shelfSel.rels.clear(); }
+    const shelf = currentShelf();
+    for (const rel of [...shelfSel.rels]) if (!shelf?.files.some((f) => f.rel === rel)) shelfSel.rels.delete(rel);
+    renderShelves();
+  }
+
+  function renderShelves() {
+    if (!shelfList) return;
+    const scroll = shelfList.scrollTop;
+    shelfList.replaceChildren();
+    if (!shelves.length) shelfList.appendChild(el('div', 'vcs-empty muted', tr('No shelved changes')));
+    for (const s of shelves) {
+      const open = shelfOpen.has(s.id);
+      const row = el('div', 'vcs-shelf-row' + (s.id === shelfSel.id && !shelfSel.rels.size ? ' selected' : ''));
+      Object.assign(row.dataset, { id: s.id, key: `s:${s.id}`, depth: '0' });
+      const arrow = el('span', 'arrow', open ? '▾' : '▸');
+      arrow.onclick = (e) => { e.stopPropagation(); toggleShelf(s.id); };
+      row.append(arrow, userText('span', 'vcs-shelf-name', s.name), el('span', 'muted vcs-shelf-count', nFiles(s.files.length)),
+        el('span', 'muted vcs-shelf-date', fmtDate(s.time / 1000)));
+      row.onclick = () => selectShelfRow(row, false);
+      row.ondblclick = () => toggleShelf(s.id);
+      row.oncontextmenu = (e) => { e.preventDefault(); selectShelfRow(row, false); shelfMenu(e); };
+      shelfList.appendChild(row);
+      if (!open) continue;
+      for (const f of s.files) {
+        const fr = el('div', 'vcs-file vcs-shelf-file' + (s.id === shelfSel.id && shelfSel.rels.has(f.rel) ? ' selected' : ''));
+        Object.assign(fr.dataset, { id: s.id, rel: f.rel, key: `f:${s.id}:${f.rel}`, depth: '1', status: f.status, path: f.path });
+        const name = userText('span', 'vcs-name', basename(f.path));
+        name.style.color = SHELF_COLORS[f.status] || COLORS.modified;
+        const dir = dirname(f.path);
+        fr.append(Object.assign(ide.fileIcon(f.path), { className: 'file-icon icon' }), name,
+          userText('span', 'muted vcs-dir', samePath(dir, ide.root) ? '' : ide.util.rel(dir)));
+        fr.title = `${f.orig ? `${f.orig} → ` : ''}${f.rel} — ${SHELF_STATUS_LABEL[f.status] || f.status}`;
+        fr.onclick = (e) => selectShelfRow(fr, e.ctrlKey);
+        fr.ondblclick = () => showShelfDiff(s.id, f.rel);
+        fr.oncontextmenu = (e) => { e.preventDefault(); if (!fr.classList.contains('selected')) selectShelfRow(fr, false); shelfMenu(e); };
+        shelfList.appendChild(fr);
+      }
+    }
+    shelfList.scrollTop = scroll;
+  }
+
+  // A shelf row selects the shelf; file rows select files of one shelf (Ctrl adds or removes one).
+  function selectShelfRow(row, ctrl) {
+    const { id, rel } = row.dataset;
+    if (rel == null || shelfSel.id !== id || !ctrl) shelfSel.rels.clear();
+    shelfSel.id = id;
+    if (rel != null) { if (ctrl && shelfSel.rels.has(rel)) shelfSel.rels.delete(rel); else shelfSel.rels.add(rel); }
+    shelfList.focus();
+    renderShelves();
+  }
+
+  function toggleShelf(id) {
+    if (!shelfOpen.delete(id)) shelfOpen.add(id);
+    renderShelves();
+  }
+
+  function shelfMenu(e) {
+    const s = currentShelf();
+    if (!s) return;
+    const rels = [...shelfSel.rels];
+    ide.ui.contextMenu(e.clientX, e.clientY, [
+      { label: tr('Unshelve'), run: () => unshelve(s, null) },
+      ...(rels.length ? [
+        { label: tr('Unshelve Selected Files'), run: () => unshelve(s, rels) },
+        { label: tr('Show Diff'), run: () => showShelfDiff(s.id, rels[0]) },
+      ] : []),
+      { separator: true },
+      { label: tr('Rename…'), run: () => renameShelf(s) },
+      { label: tr('Delete…'), run: () => deleteShelf(s) },
+    ]);
+  }
+
+  async function openShelveDialog() {
+    if (!repo) return notify(tr('Shelve Changes'), tr('This project is not under Git version control.'), 'warn');
+    await ide.saveAll();
+    await refresh();
+    const files = repo.files.filter((f) => f.status !== 'conflict');
+    if (!files.length) return notify(tr('Nothing to shelve'), tr('There are no local changes.'), 'warn');
+    // As in PyCharm: the changes selected in the Commit window, else those ticked for commit.
+    const sel = selectedFiles().filter((f) => f.status !== 'conflict');
+    const chosen = new Set((sel.length ? sel : files.filter(fileIncluded)).map((f) => key(f.path)));
+    const body = el('div', 'vcs-shelve');
+    const nameField = el('label', 'field');
+    const nameIn = el('input', 'vcs-shelve-name');
+    nameIn.value = tr('Changes from {date}', { date: new Date().toLocaleString(dateLocale, { dateStyle: 'medium', timeStyle: 'short' }) });
+    nameField.append(el('span', null, tr('Name')), nameIn);
+    const all = checkbox(tr('Changes'), 'vcs-shelve-all', false);
+    const count = el('span', 'muted vcs-shelve-count');
+    all.box.appendChild(count);
+    const list = el('div', 'vcs-dialog-list vcs-shelve-files');
+    const boxes = files.map((f) => {
+      const row = el('label', 'vcs-shelve-file');
+      row.dataset.path = f.path;
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = chosen.has(key(f.path));
+      cb.onchange = () => { if (cb.checked) chosen.add(key(f.path)); else chosen.delete(key(f.path)); sync(); };
+      const name = userText('span', 'vcs-name', ide.util.rel(f.path));
+      name.style.color = COLORS[f.status];
+      row.title = STATUS_LABEL[f.status] || f.status;
+      row.append(cb, Object.assign(ide.fileIcon(f.path), { className: 'file-icon icon' }), name);
+      list.appendChild(row);
+      return cb;
+    });
+    const sync = () => {
+      all.input.checked = chosen.size === files.length;
+      all.input.indeterminate = chosen.size > 0 && chosen.size < files.length;
+      count.textContent = `${chosen.size} / ${files.length}`;
+    };
+    all.input.onchange = () => {
+      files.forEach((f, i) => { boxes[i].checked = all.input.checked; if (all.input.checked) chosen.add(key(f.path)); else chosen.delete(key(f.path)); });
+      sync();
+    };
+    sync();
+    const keep = checkbox(tr('Keep changes in working tree'), 'vcs-shelve-keep', ide.settings.get('vcs.shelf.keep', false));
+    body.append(nameField, all.box, list, keep.box);
+    ide.ui.dialog({
+      title: tr('Shelve Changes'), body, width: 560,
+      buttons: [
+        { label: tr('Shelve Changes'), primary: true, run: () => {
+          const name = nameIn.value.trim();
+          if (!name) { nameIn.focus(); return false; }
+          const picked = files.filter((f) => chosen.has(key(f.path)));
+          if (!picked.length) { notify(tr('No changes selected'), tr('Select the files to shelve.'), 'warn'); return false; }
+          ide.settings.set('vcs.shelf.keep', keep.input.checked);
+          shelveFiles(picked, name, keep.input.checked);
+        } },
+        { label: tr('Cancel') },
+      ],
+    });
+  }
+
+  async function shelveFiles(files, name, keep) {
+    const r = await invoke('shelve', ide.root, { name, paths: files.map((f) => f.path), keep });
+    logResult(r);
+    if (!r.ok) return notify(tr('Shelve failed'), errorText(r), 'error', !r.reason);
+    for (const f of files) { selection.delete(key(f.path)); included.delete(key(f.path)); }
+    if (r.reverted) await reloadTabs(r.paths, true);
+    ide.refreshTree();
+    await refresh();
+    shelfSel.id = r.id;
+    shelfSel.rels.clear();
+    shelfOpen.add(r.id);
+    commitTw.show();
+    switchCommitTab('shelf');
+    if (r.revertError) notify(tr('Changes were shelved but not rolled back'), r.revertError, 'warn', true);
+    else notify(trn(r.files, 'Shelved {n} file: {name}', 'Shelved {n} files: {name}', { name: r.name }), '', 'ok');
+  }
+
+  // rels: the shelved files to apply (repo-relative), or null for the whole shelf.
+  async function unshelve(s, rels) {
+    if (!s || !repo) return;
+    await ide.saveAll();
+    const r = await invoke('unshelve', ide.root, s.id, { rels, remove: removeApplied() });
+    logResult(r);
+    await reloadTabs(r.paths || [], false);
+    ide.refreshTree();
+    await refresh();
+    await loadShelves();
+    if (!r.applied) return notify(tr('Unshelve failed'), errorText(r), 'error', !r.reason);
+    if (r.failed.length) {
+      notify(trn(r.failed.length, '{n} file could not be unshelved and stays on the shelf', '{n} files could not be unshelved and stay on the shelf'),
+        r.failed.map((f) => `${f.rel}: ${f.err}`).join('\n'), 'error', true);
+    }
+    if (r.conflicts.length) {
+      if (conflictHandler) conflictHandler.stopped(r);
+      else notify(trn(r.conflicts.length, 'Unshelved with conflicts in {n} file', 'Unshelved with conflicts in {n} files'), r.conflicts.map((p) => ide.util.rel(p)).join('\n'), 'warn', true);
+      // "Accept Yours" would otherwise lose the shelved change, so the shelf keeps it until the user deletes it there
+      if (r.keptConflicts?.length) {
+        notify(trn(r.keptConflicts.length, 'The file with conflicts stays on the shelf until you delete it', 'The {n} files with conflicts stay on the shelf until you delete them'),
+          r.keptConflicts.join('\n'), 'info', true);
+      }
+    } else if (r.applied.length) {
+      notify(trn(r.applied.length, 'Unshelved {n} file from {name}', 'Unshelved {n} files from {name}', { name: s.name }), '', 'ok');
+    }
+  }
+
+  async function showShelfDiff(id, rel) {
+    const s = shelves.find((x) => x.id === id);
+    const f = s?.files.find((x) => x.rel === rel);
+    if (!f) return;
+    const r = await invoke('shelfDiff', ide.root, id, rel);
+    if (!r.ok) return notify(tr('Cannot show the shelved change'), errorText(r), 'error', !r.reason);
+    if (r.binary) return notify(tr('Binary file'), tr('{name} is a binary file; its shelved change cannot be shown as text.', { name: basename(f.path) }), 'warn');
+    openTextDiff({
+      id: `${f.path} [${s.name}]`, title: tr('{name} (shelved)', { name: basename(f.path) }), name: basename(f.path),
+      left: r.before ?? '', right: r.after ?? '', leftTitle: tr('Before shelving'), rightTitle: { user: s.name },
+    });
+  }
+
+  async function renameShelf(s) {
+    if (!s) return;
+    const name = (await ide.ui.prompt(tr('Shelf name'), s.name))?.trim();
+    if (!name || name === s.name) return;
+    const r = await invoke('shelfRename', ide.root, s.id, name);
+    if (!r.ok) return notify(tr('Rename failed'), errorText(r), 'error', true);
+    await loadShelves();
+  }
+
+  async function deleteShelf(s) {
+    if (!s) return;
+    if (!(await ide.ui.confirm(tr('Delete the shelf "{name}"? Its changes will be lost.', { name: s.name }), { title: tr('Delete Shelf'), ok: tr('Delete') }))) return;
+    const r = await invoke('shelfDelete', ide.root, s.id);
+    if (!r.ok) return notify(tr('Delete failed'), errorText(r), 'error', true);
+    await loadShelves();
+  }
+
   // ---------- actions ----------
-  const commitFocused = () => !!listEl && listEl.closest('.tool').contains(document.activeElement) && document.activeElement !== msgEl;
+  const commitFocused =() => !!listEl && listEl.closest('.tool').contains(document.activeElement) && document.activeElement !== msgEl;
   [
     { id: 'CheckinProject', title: tr('Commit…'), keys: 'Ctrl+K', run: focusCommitMessage },
     { id: 'Vcs.Push', title: tr('Push…'), keys: 'Ctrl+Shift+K', run: openPushDialog },
@@ -1343,6 +1644,8 @@
     { id: 'Git.Init', title: tr('Create Git Repository…'), run: createRepository },
     { id: 'Git.Log', title: tr('Show Git Log'), run: () => { gitTw.show(); subTabs.switchTo(true); } },
     { id: 'Compare.SameVersion', title: tr('Show Diff with HEAD'), run: () => ide.activeTab()?.kind === 'file' && openWorkingDiff(ide.activeTab().path) },
+    { id: 'ChangesView.Shelve', title: tr('Shelve Changes…'), run: () => openShelveDialog() },
+    { id: 'Vcs.Show.Shelf', title: tr('Show Shelf'), run: showShelf },
   ].forEach(ide.registerAction);
   ide.registerTreeAction({ title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
   ide.registerTreeAction({ title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
@@ -1350,6 +1653,8 @@
   ide.vcs = {
     invoke, notify, logResult, errorText, userText, trn, nFiles, refresh, showConsole, openTextDiff, diffLines,
     repo: () => repo,
+    // Output of another tool's long command (the github plugin's gh) as it arrives; kind: 'cmd' | 'sys' | 'err'.
+    appendConsole: (text, kind) => gitConsole?.append(text, kind),
     // Reloads editors and the log after git moved HEAD or rewrote files (unsaved edits were saved beforehand).
     reload: afterCheckout,
     showCommit,
@@ -1368,6 +1673,11 @@
   ide.on('projectOpened', () => {
     repo = null;
     lastHead = undefined;
+    shelves = [];
+    shelfOpen.clear();
+    shelfSel.id = null;
+    shelfSel.rels.clear();
+    if (shelfShown()) loadShelves();
     byPath.clear();
     included.clear();
     selection.clear();

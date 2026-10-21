@@ -1,0 +1,20 @@
+{
+  "1 known vulnerability": "알려진 취약점 1개",
+  "{count} known vulnerabilities": "알려진 취약점 {count}개",
+  "Checking for vulnerabilities…": "취약점 확인 중…",
+  "Could not check for vulnerabilities:": "취약점을 확인할 수 없습니다:",
+  "Retry": "다시 시도",
+  "Safe Mode: packages are not checked for vulnerabilities automatically.": "안전 모드: 패키지 취약점을 자동으로 확인하지 않습니다.",
+  "Check for Vulnerabilities": "취약점 확인",
+  "1 vulnerable package found": "취약한 패키지 1개를 찾았습니다",
+  "{count} vulnerable packages found": "취약한 패키지 {count}개를 찾았습니다",
+  "No known vulnerabilities found": "알려진 취약점이 없습니다",
+  "Vulnerable dependency: '{name}' {version} has 1 known vulnerability": "취약한 의존성: '{name}' {version}에 알려진 취약점이 1개 있습니다",
+  "Vulnerable dependency: '{name}' {version} has {count} known vulnerabilities": "취약한 의존성: '{name}' {version}에 알려진 취약점이 {count}개 있습니다",
+  "Fixed in {version}": "{version}에서 수정됨",
+  "No fixed version is known": "수정된 버전이 알려지지 않았습니다",
+  "Upgrade to {version}": "{version}(으)로 업그레이드",
+  "Vulnerable Packages": "취약한 패키지",
+  "Check installed packages and project dependencies for known vulnerabilities": "설치된 패키지와 프로젝트 의존성에서 알려진 취약점 확인",
+  "Package names and versions are sent to the OSV database (osv.dev), at most once a day per version. In Safe Mode nothing is sent until you use Check for Vulnerabilities.": "패키지 이름과 버전이 OSV 데이터베이스(osv.dev)로 전송되며, 버전마다 하루에 한 번까지만 전송됩니다. 안전 모드에서는 '취약점 확인'을 사용하기 전에는 아무것도 전송하지 않습니다."
+}

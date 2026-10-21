@@ -1,0 +1,16 @@
+.pkg-vuln-icon { color: var(--yellow); flex-shrink: 0; }
+.pkg-vulnerable .pkg-name { color: var(--yellow); }
+.vuln-status { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; color: var(--gray9); }
+.vuln-status[data-kind="error"] .vuln-status-text::before { content: '⚠ '; color: var(--yellow); }
+.vuln-status-detail { color: var(--gray8); overflow: hidden; text-overflow: ellipsis; }
+.vuln-status button.link { background: none; border: 0; padding: 0; color: var(--blue8); cursor: pointer; font-size: 12px; }
+.pkg-vulns { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; }
+.pkg-vulns-head { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--gray12); }
+.pkg-vulns-head button { font-weight: normal; }
+.pkg-vuln { padding: 4px 8px; border-left: 2px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 6%, transparent); font-size: 12px; }
+.pkg-vuln-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.pkg-vuln-id { color: var(--blue8); cursor: pointer; font-family: var(--mono); }
+.pkg-vuln-aliases { color: var(--gray9); font-family: var(--mono); }
+.pkg-vuln-sev { padding: 0 5px; border-radius: 3px; background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--gray12); }
+.pkg-vuln-summary { margin-top: 2px; color: var(--gray11); }
+.pkg-vuln-fixed { margin-top: 2px; }

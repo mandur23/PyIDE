@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { DRIVERS, PACKAGES, driverDir, packageVersion } = require('../db/drivers');
+const { sameConnection } = require('../settings-sync/same-connection');
 
 function register({ ipcMain, app, send }) {
   const { safeStorage } = require('electron');
@@ -181,7 +182,9 @@ function register({ ipcMain, app, send }) {
     const cfg = liftUrlPassword(input);
     const record = normalize(cfg);
     const old = sources.find((s) => s.id === record.id);
-    let secret = old?.secret;
+    // No password given keeps the saved one only for the same server and user; a record pointing elsewhere (edited, or
+    // imported with a matching id) has none until the user types it, so the saved password never goes to another host.
+    let secret = old && sameConnection(old, record) ? old.secret : undefined;
     if (cfg.password !== undefined) secret = cfg.password ? encrypt(cfg.password) : undefined;
     if (secret) record.secret = secret;
     sources = old ? sources.map((s) => (s.id === record.id ? record : s)) : [...sources, record];
@@ -204,7 +207,8 @@ function register({ ipcMain, app, send }) {
     try {
       const record = normalize(cfg);
       const stored = sources.find((s) => s.id === cfg.id);
-      adapter = await DRIVERS[record.kind].open(openConfig({ ...record, password: cfg.password }, stored?.secret));
+      const secret = stored && sameConnection(stored, record) ? stored.secret : undefined;
+      adapter = await DRIVERS[record.kind].open(openConfig({ ...record, password: cfg.password }, secret));
       return { ok: true, version: await adapter.version(), ms: Math.round(performance.now() - t0) };
     } catch (err) {
       return failure(err);
