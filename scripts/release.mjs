@@ -26,7 +26,10 @@ const TAG = 'pyide';
 const FEED = `https://github.com/${REPO}/releases/download/${TAG}/`;
 const AUTHOR = ['-c', 'user.name=PyIDE', '-c', 'user.email=ms01048913077@gmail.com'];
 const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
-const DIST = path.join(ROOT, 'dist');
+// PYIDE_DIST_DIR builds somewhere else than dist/, for when another program holds files in dist/win-unpacked open
+// (the Claude desktop app does in its own workspace folders). verify/installed.mjs reads the same variable.
+const DIST = process.env.PYIDE_DIST_DIR ? path.resolve(process.env.PYIDE_DIST_DIR) : path.join(ROOT, 'dist');
+if (/["%^&|<>!]/.test(DIST)) throw new Error(`PYIDE_DIST_DIR must not contain " % ^ & | < > !: ${DIST}`);
 const PKG = path.join(ROOT, 'package.json');
 const LOCK = path.join(ROOT, 'package-lock.json');
 export const INSTALL_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'PyIDE');
@@ -103,7 +106,7 @@ delete ENV.npm_config_dry_run;
 const quote = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
 const show = (cmd, args) => [cmd, ...args].map(quote).join(' ');
 // Runs a command without a shell (Node quotes each argument); output goes to the console unless captured.
-// Fails the release on a non-zero exit unless allowFail. Only `npm run dist` uses a shell: npm is a .cmd, the line is fixed.
+// Fails the release on a non-zero exit unless allowFail. Only `npm run dist` uses a shell: npm is a .cmd, and the line is fixed apart from a PYIDE_DIST_DIR checked for cmd metacharacters.
 function sh(cmd, args = [], { capture = false, allowFail = false, shell = false } = {}) {
   const r = io.spawnSync(cmd, args, { cwd: ROOT, env: ENV, encoding: 'utf8', shell, windowsHide: true, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
   if (r.error && !allowFail) fail(`${show(cmd, args)}: ${r.error.message}`);
@@ -406,7 +409,7 @@ async function main() {
   } else {
     step(3, 'npm run dist');
     if (dryRun && io.existsSync(latestYml)) state.latestYmlBefore = io.readFileSync(latestYml);
-    sh('npm run dist', [], { shell: true });
+    sh(process.env.PYIDE_DIST_DIR ? `npm run dist -- "-c.directories.output=${DIST}"` : 'npm run dist', [], { shell: true });
     const problem = distProblem(files, V);
     if (problem) fail(`after npm run dist: ${problem}`);
     log(`  dist/${path.basename(exe)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);

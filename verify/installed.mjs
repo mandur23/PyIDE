@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import { launch } from './lib.mjs';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = path.join(APP_DIR, 'dist');
+const DIST = process.env.PYIDE_DIST_DIR ? path.resolve(process.env.PYIDE_DIST_DIR) : path.join(APP_DIR, 'dist');
 const OUT = path.join(APP_DIR, 'verify', 'out', 'installed');
 mkdirSync(OUT, { recursive: true });
 const [kindArg = 'all', fileArg] = process.argv.slice(2);
