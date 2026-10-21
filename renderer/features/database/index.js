@@ -827,7 +827,7 @@
     const bar = el('div', 'db-console-bar');
     const runBtn = el('button', 'db-run');
     runBtn.append(ide.icon('runRun', '▶'));
-    runBtn.title = tr('Execute (Ctrl+Enter)');
+    ide.keymap.tooltip(runBtn, tr('Execute'), 'Database.RunStatement');
     const sourceLabel = userEl('span', 'db-console-source');
     const stateEl = el('span', 'db-console-state');
     bar.append(runBtn, sourceLabel, stateEl);
@@ -850,7 +850,8 @@
     copyCsv.disabled = copyTsv.disabled = true;
     resultBar.append(status, viewSwitch, copyCsv, copyTsv);
     const output = el('div', 'db-output');
-    output.append(el('div', 'db-placeholder muted', tr('Press Ctrl+Enter to run the statement at the caret, or the selection.')));
+    output.append(ide.keymap.text(el('div', 'db-placeholder muted'),
+      () => tr('Use {action} to run the statement at the caret, or the selection.', { action: ide.keymap.withKeys(tr('Execute'), 'Database.RunStatement') })));
     results.append(resultBar, output);
     host.append(bar, editorHost, splitter, results);
 

@@ -703,7 +703,8 @@
   const findTw = ide.registerToolWindow({
     id: 'FindUsages', title: tr('Find'), icon: '⌕', side: 'bottom', order: 18,
     mount(container) {
-      findHead = el('div', 'lsp-find-head muted', tr('Use Alt+F7 on a symbol to find its usages'));
+      findHead = el('div', 'lsp-find-head muted');
+      findHead.append(ide.keymap.text(el('span'), () => tr('Use {action} on a symbol to find its usages', { action: ide.keymap.withKeys(tr('Find Usages'), 'FindUsages') })));
       findList = el('div', 'list lsp-find');
       findList.id = 'lspFindList';
       container.append(findHead, findList);

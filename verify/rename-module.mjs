@@ -1,12 +1,14 @@
 // End-to-end check for renaming and moving Python modules and packages from the project tree (renderer/core/ide.js
 // tree hooks, renderer/features/refactor renameModule/move, refactor_server.py): Shift+F6 and Rename… with Search for
 // references, Ctrl+X / Ctrl+V and drag-and-drop moves, imports rewritten in open and closed files (absolute, from,
-// dotted and relative imports), unsaved editor text kept, one undo step, plain renames with the checkbox off, files
+// dotted and relative imports; a move keeps each importer's style: relative stays relative where it can, from-imports
+// keep unqualified uses, `import a.b` stays qualified), unsaved editor text kept, one undo step, plain renames with the checkbox off, files
 // that keep the plain rename (non-Python, untrusted projects), the rope install offer with its plain fallback, and the
 // Korean dialog. The fixture program's output is compared after every refactoring.
-// rope comes from verify/out/refactor-venv, the venv verify/refactor.mjs keeps (made here when missing). Ports 9110-9111.
+// A src-layout project (src/shop, tests/) checks that importers are named relative to rope's source folder.
+// rope comes from verify/out/refactor-venv, the venv verify/refactor.mjs keeps (made here when missing). Ports 9110-9112.
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -83,6 +85,18 @@ function helpers(t) {
   const exists = (rel) => existsSync(P(rel));
   return { P, disk, doc, selectRow, contextMenu, drag, dialog, gone, setInput, button, exists, press };
 }
+
+// A package with relative and absolute importers, moved with Cut / Paste (written into the fixture project, and under
+// src/ in the src-layout project).
+const SHOP = {
+  'shop/__init__.py': '',
+  'shop/models/__init__.py': '',
+  'shop/models/price.py': 'RATE = 2\n\n\ndef total(n):\n    return RATE * n\n',
+  'shop/models/cart.py': 'from .price import total\nfrom . import price as pr\n\n\ndef cart():\n    return total(1) + pr.total(2)\n',
+  'shop/views/__init__.py': '',
+  'shop/views/page.py': 'from ..models.price import total as tot, RATE\nfrom ..models import price\n\n\ndef page():\n    return tot(3) + price.total(4) + RATE\n',
+  'shop_main.py': 'from shop.models import price\nimport shop.models.price\nimport shop.models.price as sp\n\n\ndef run():\n    return price.total(5) + shop.models.price.total(6) + sp.total(7)\n',
+};
 
 // ======================================================================
 const t = await launch({ fixture: 'rename-module', port: 9110 });
@@ -184,7 +198,8 @@ try {
     && main3.includes('print(tools.figures.area(2), figures.area(3)'), `importers are rewritten and keep their import order (${main3.split('\n').slice(0, 5).join(' | ')})`);
   check((await h.doc('tools/calc.py')).startsWith('from tools.figures import area\n'), 'the importer in the destination package is rewritten');
   const report3 = h.disk('geometry/report.py');
-  check(/^import tools\.figures\nfrom tools\.figures import area\n/.test(report3) && report3.includes('tools.figures.area(1) + area(1)'), `relative imports of the moved module become absolute (${report3.split('\n').slice(0, 2).join(' | ')})`);
+  check(report3 === 'from tools import figures\nfrom tools.figures import area\n\n\ndef report():\n    return figures.area(1) + area(1)\n',
+    `relative from-imports of a module moved to another top-level package become absolute from-imports, call sites unchanged (${report3.split('\n').slice(0, 2).join(' | ')})`);
   check(h.disk('tools/figures.py') === '# edited\n"""Shape formulas."""\n\n\ndef area(r):\n    return 3 * r * r\n', 'the moved module keeps its text (rope\'s blank-line change is dropped)');
   check((await appOutput()) === baseline, 'the program prints the same after moving the module');
 
@@ -199,6 +214,34 @@ try {
   const main4 = await h.doc('main.py');
   check(main4.includes('import geometry.scripts.extra\n') && main4.includes('geometry.scripts.extra.run()'), 'imports of the namespace package are rewritten');
   check((await appOutput()) === baseline, 'the program prints the same after moving the namespace package');
+
+  // ---- Cut / Paste from the context menu: importers keep their import style (relative, absolute, aliased) ----
+  for (const [rel, text] of Object.entries(SHOP)) {
+    mkdirSync(path.dirname(h.P(rel)), { recursive: true });
+    writeFileSync(h.P(rel), text);
+  }
+  await js('ide.refreshTree()');
+  const shopOutput = () => run(VENV_PY, ['-c', 'import shop_main, shop.models.cart, shop.views.page; print(shop_main.run(), shop.models.cart.cart(), shop.views.page.page())'],
+    { cwd: t.project, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }).trim();
+  const shopBefore = shopOutput();
+  check(shopBefore === '36 6 16', `the shop package runs (${shopBefore})`);
+  await h.contextMenu('shop/models/price.py', 'Cut');
+  await h.contextMenu('shop/views', 'Paste');
+  await h.dialog('rfMoveDialog');
+  await h.button('rfMoveDialog', 'refactor');
+  await h.gone('rfMoveDialog');
+  await until(`(async () => await ide.api.exists(${q(h.P('shop/views/price.py'))}))()`, 'shop price moved', 60000);
+  check(!h.exists('shop/models/price.py') && h.disk('shop/views/price.py') === SHOP['shop/models/price.py'], 'Cut and Paste in the context menu move the module');
+  const cart = h.disk('shop/models/cart.py');
+  check(cart === 'from ..views.price import total\nfrom ..views import price as pr\n\n\ndef cart():\n    return total(1) + pr.total(2)\n',
+    `\`from .x import y\` and \`from . import x as a\` stay relative and point at the new place (${cart.split('\n').slice(0, 2).join(' | ')})`);
+  const page = h.disk('shop/views/page.py');
+  check(page === 'from .price import total as tot, RATE\nfrom . import price\n\n\ndef page():\n    return tot(3) + price.total(4) + RATE\n',
+    `\`from ..pkg.x import y as z\` and \`from ..pkg import x\` become the shortest relative imports (${page.split('\n').slice(0, 2).join(' | ')})`);
+  const shopMain = h.disk('shop_main.py');
+  check(shopMain === 'from shop.views import price\nimport shop.views.price\nimport shop.views.price as sp\n\n\ndef run():\n    return price.total(5) + shop.views.price.total(6) + sp.total(7)\n',
+    `\`from pkg import x\` keeps x.f() unqualified, \`import a.b\` and \`import a.b as c\` keep the qualified style (${shopMain.split('\n').slice(0, 3).join(' | ')})`);
+  check(shopOutput() === shopBefore, 'the shop package prints the same after the move');
 
   // ---- Search for references off: a plain rename, nothing else changes ----
   await js('ide.saveAll()');
@@ -260,12 +303,52 @@ try {
 t.close();
 
 // ======================================================================
+// src layout: rope's source folder is src/, so the package is `shop` (not `src.shop`); relative importers stay relative
+// and point at the new place, and the absolute importer in tests/ is rewritten.
+const srcDir = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-rm-src-')), 'project');
+const SRC = Object.fromEntries(Object.entries(SHOP).map(([rel, text]) => (rel === 'shop_main.py' ? ['tests/test_shop.py', text] : [`src/${rel}`, text])));
+for (const [rel, text] of Object.entries(SRC)) {
+  mkdirSync(path.dirname(path.join(srcDir, rel)), { recursive: true });
+  writeFileSync(path.join(srcDir, rel), text);
+}
+const s = await launch({ port: 9112, name: 'rename-module-src', projectDir: srcDir });
+const hs = helpers(s);
+try {
+  await useInterpreter(s, VENV_PY);
+  const srcOutput = () => run(VENV_PY, ['-c', 'import sys; sys.path[:0] = ["src", "tests"]; import test_shop, shop.models.cart, shop.views.page; print(test_shop.run(), shop.models.cart.cart(), shop.views.page.page())'],
+    { cwd: srcDir, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }).trim();
+  const srcBefore = srcOutput();
+  s.check(srcBefore === '36 6 16', `the src-layout shop package runs (${srcBefore})`);
+  await hs.contextMenu('src/shop/models/price.py', 'Cut');
+  await hs.contextMenu('src/shop/views', 'Paste');
+  await hs.dialog('rfMoveDialog');
+  await hs.button('rfMoveDialog', 'refactor');
+  await hs.gone('rfMoveDialog');
+  await s.until(`(async () => await ide.api.exists(${q(hs.P('src/shop/views/price.py'))}))()`, 'src-layout price moved', 60000);
+  s.check(!hs.exists('src/shop/models/price.py') && hs.disk('src/shop/views/price.py') === SHOP['shop/models/price.py'], 'src layout: the module moves');
+  const srcCart = hs.disk('src/shop/models/cart.py');
+  s.check(srcCart === 'from ..views.price import total\nfrom ..views import price as pr\n\n\ndef cart():\n    return total(1) + pr.total(2)\n',
+    `src layout: \`from .x import y\` and \`from . import x as a\` stay relative and point at the new place (${srcCart.split('\n').slice(0, 2).join(' | ')})`);
+  const srcPage = hs.disk('src/shop/views/page.py');
+  s.check(srcPage === 'from .price import total as tot, RATE\nfrom . import price\n\n\ndef page():\n    return tot(3) + price.total(4) + RATE\n',
+    `src layout: \`from ..pkg.x import y as z\` and \`from ..pkg import x\` become the shortest relative imports (${srcPage.split('\n').slice(0, 2).join(' | ')})`);
+  const srcTest = hs.disk('tests/test_shop.py');
+  s.check(srcTest === 'from shop.views import price\nimport shop.views.price\nimport shop.views.price as sp\n\n\ndef run():\n    return price.total(5) + shop.views.price.total(6) + sp.total(7)\n',
+    `src layout: absolute importers outside src/ name \`shop.views.price\` (${srcTest.split('\n').slice(0, 3).join(' | ')})`);
+  s.check(srcOutput() === srcBefore, 'the src-layout shop package prints the same after the move');
+} catch (err) {
+  s.check(false, `unexpected error (src layout): ${err.stack || err.message}`);
+  await s.shot('error.png').catch(() => {});
+}
+s.close();
+
+// ======================================================================
 // Korean UI
 const k = await launch({ fixture: 'rename-module', port: 9111, name: 'rename-module-ko', lang: 'ko-KR' });
 const hk = helpers(k);
 const finishAll = () => {
-  const results = [...t.results, ...k.results];
-  const errors = [...t.consoleErrors, ...k.consoleErrors];
+  const results = [...t.results, ...s.results, ...k.results];
+  const errors = [...t.consoleErrors, ...s.consoleErrors, ...k.consoleErrors];
   k.close();
   if (errors.length) console.log(`renderer exceptions:\n  ${errors.join('\n  ')}`);
   const failed = results.filter((r) => !r.ok).length;

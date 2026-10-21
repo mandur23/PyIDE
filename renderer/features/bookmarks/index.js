@@ -238,7 +238,8 @@
     if (!listEl) return;
     listEl.replaceChildren();
     if (!marks.length) {
-      listEl.appendChild(el('div', 'bm-empty muted', tr('No bookmarks. Press F11 in the editor to add one.')));
+      listEl.appendChild(ide.keymap.text(el('div', 'bm-empty muted'),
+        () => tr('No bookmarks. Use {action} in the editor to add one.', { action: ide.keymap.withKeys(tr('Toggle Bookmark'), 'ToggleBookmark') })));
       return;
     }
     if (!marks.includes(selected)) selected = null;

@@ -345,7 +345,7 @@
         ide.ui.contextMenu(r.left, r.bottom, [
           ...shells.map((sh) => ({ label: sh.name, hint: sh.id === ide.settings.get('terminal.shell', 'powershell') ? '✓' : '', run: () => createSession({ shell: sh.id }) })),
           { separator: true },
-          { label: tr('Claude Code'), hint: 'Ctrl+Esc', run: openClaude },
+          { label: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
         ]);
         e.stopPropagation();
       };
@@ -362,7 +362,7 @@
     },
   });
   tw.setActions([
-    { icon: '✳', title: tr('Claude Code'), run: openClaude },
+    { icon: '✳', title: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
     { icon: '⌫', title: tr('Clear Buffer'), run: () => active?.term.clear() },
   ]);
 
@@ -390,7 +390,7 @@
 
   // Toolbar button and stripe icon for Claude Code.
   const claudeBtn = el('button', 'tb-icon claude-btn', '✳');
-  claudeBtn.title = `${tr('Claude Code')} (Ctrl+Esc)`;
+  ide.keymap.tooltip(claudeBtn, tr('Claude Code'), 'ClaudeCode');
   claudeBtn.onclick = openClaude;
   ide.registerToolbarItem({ side: 'right', order: 150, el: claudeBtn });
 

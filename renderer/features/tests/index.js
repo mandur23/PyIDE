@@ -412,7 +412,7 @@
   } });
   ide.registerTreeAction({
     title: tr("Run 'pytest in …'"),
-    hint: 'Ctrl+Shift+F10',
+    keyAction: 'RunClass',
     when: (e) => e.dir || isTestFileName(e.name),
     run: (e) => run.runContext({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
   });

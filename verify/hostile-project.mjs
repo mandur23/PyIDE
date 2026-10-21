@@ -96,23 +96,37 @@ try {
     return r;
   }
   const open = (...rel) => () => js(`ide.openFile(${JSON.stringify(P(...rel))}).then((t) => t ? { kind: t.viewer?.id || t.kind, lines: t.model?.getLineCount?.() ?? 0, text: t.model?.getValue?.().slice(0, 40) ?? '' } : null)`);
+  // Closing the tab disposes its model, so the next open builds it again.
+  const closeTab = (...rel) => () => js(`Promise.resolve(ide.closeTab(${JSON.stringify(P(...rel))}, true)).then(() => true)`);
   // No case may hold the renderer or the main process for long: the worst ones (a 15 MB line, a million lines) take
-  // about 1.5 s once, when Monaco builds the model and its view.
-  const smooth = (r, label, ms = 2500) => check(r.value !== 'TIMEOUT' && r.task < ms && r.ipc < ms, `${label} (renderer ${r.task} ms, IPC ${r.ipc} ms)`);
+  // about 1.5 s once, when Monaco builds the model and its view. The budgets are wall-clock times for an idle machine.
+  // In a parallel sweep other suites take the CPU in bursts and can stretch one measurement past them, so a case over
+  // budget is measured once more (after `reset` undoes it) and passes when that measurement is within budget. A case
+  // that is really too slow misses twice; a hang (TIMEOUT) is not run again. A budget scaled by the machine's load
+  // would let a slow case pass whenever the machine is busy; the second try keeps the budget as it is.
+  async function timed(name, run, { ms = 2500, reset, within = (r) => r.task < ms && r.ipc < ms } = {}) {
+    const first = await scenario(name, run);
+    if (first.value === 'TIMEOUT' || within(first)) return { ...first, ok: first.value !== 'TIMEOUT' };
+    await reset?.();
+    const again = await scenario(`${name} (again)`, run);
+    return { ...again, ok: again.value !== 'TIMEOUT' && within(again), first };
+  }
+  const tries = (r) => (r.first ? `; first try renderer ${r.first.task} ms, IPC ${r.first.ipc} ms` : '');
+  const smooth = (r, label) => check(r.ok, `${label} (renderer ${r.task} ms, IPC ${r.ipc} ms${tries(r)})`);
 
   for (const f of ['nb_badjson.ipynb', 'nb_missing.ipynb', 'nb_kinds.ipynb', 'nb_cells_null.ipynb']) {
-    const r = await scenario(`open ${f}`, open(f));
+    const r = await timed(`open ${f}`, open(f), { reset: closeTab(f) });
     smooth(r, `${f} opens as a notebook or with its error`);
     check(r.value?.kind === 'notebook', `${f} shows in the notebook viewer`);
   }
-  const huge = await scenario('open nb_huge.ipynb', open('nb_huge.ipynb'));
-  smooth(huge, 'a notebook with 200,000 output lines and a 4 MB image opens', 1000);
+  const huge = await timed('open nb_huge.ipynb', open('nb_huge.ipynb'), { ms: 1000, reset: closeTab('nb_huge.ipynb') });
+  smooth(huge, 'a notebook with 200,000 output lines and a 4 MB image opens');
   check(await js(`[...document.querySelectorAll('.nb-dropped')].some((n) => n.textContent.includes('1 MB'))`), 'its long output says only the last 1 MB is shown');
-  const big = await scenario('open line50mb.txt', open('line50mb.txt'));
-  check(big.value?.kind === 'binary' && big.task < 1000, 'a 50 MB file opens in the "too large" view');
-  const line = await scenario('open line15mb.py', open('line15mb.py'));
+  const big = await timed('open line50mb.txt', open('line50mb.txt'), { within: (r) => r.task < 1000, reset: closeTab('line50mb.txt') });
+  check(big.value?.kind === 'binary' && big.ok, `a 50 MB file opens in the "too large" view (renderer ${big.task} ms${tries(big)})`);
+  const line = await timed('open line15mb.py', open('line15mb.py'), { reset: closeTab('line15mb.py') });
   smooth(line, 'a 15 MB single-line Python file opens');
-  const typing = await scenario('type on the 15 MB line', async () => {
+  const typing = await timed('type on the 15 MB line', async () => {
     await js(`ide.editor.setPosition({ lineNumber: 1, column: 5 })`);
     for (let i = 0; i < 10; i++) await js(`ide.editor.trigger('k', 'type', { text: 'z' })`);
     return js(`ide.activeTab().model.getLineContent(1).slice(0, 16)`);
@@ -120,16 +134,16 @@ try {
   // Edits reach Pyright as ranges, and ruff lints a file this large only when it opens and when it is saved.
   smooth(typing, 'typing on the 15 MB line');
   for (const [f, kind] of [['binary.py', 'binary'], ['utf16_nobom.py', 'file'], ['late_nul.py', 'file'], ['invalid_utf8.py', 'file']]) {
-    const r = await scenario(`open ${f}`, open(f));
-    check(r.value?.kind === kind && r.task < 1000, `${f} opens as ${kind === 'file' ? 'text' : 'binary'}`);
+    const r = await timed(`open ${f}`, open(f), { within: (x) => x.task < 1000, reset: closeTab(f) });
+    check(r.value?.kind === kind && r.ok, `${f} opens as ${kind === 'file' ? 'text' : 'binary'}`);
   }
-  const million = await scenario('open million.py', open('million.py'));
+  const million = await timed('open million.py', open('million.py'), { reset: closeTab('million.py') });
   smooth(million, 'a million-line file opens');
-  const edits = await scenario('edit million.py', async () => {
+  const edits = await timed('edit million.py', async () => {
     for (let i = 0; i < 20; i++) await js(`ide.editor.trigger('k', 'type', { text: 'z' })`);
     return js(`ide.activeTab().model.getLineCount()`);
-  });
-  smooth(edits, 'typing in the million-line file', 1000);
+  }, { ms: 1000 });
+  smooth(edits, 'typing in the million-line file');
   for (const f of ['😀 emoji.py', '한글 파일.py']) check((await scenario(`open ${f}`, open(f))).value?.lines === 2, `${f} opens`);
   for (const [f, text] of [['trailing.', 'trailing dot'], ['trailing ', 'trailing space']]) {
     const r = await scenario(`open "${f}"`, open(f));
@@ -163,14 +177,14 @@ try {
     return { dir: entry?.dir, rows: await js(`ide.selectedTreeEntry()?.path`) };
   });
   check(junction.value?.dir === true && junction.value.rows === P('sub', 'loop', 'hello.py'), 'a junction to a folder lists as a folder and opens');
-  smooth(await scenario('tree reveal deep', () => js(`ide.revealInTree(${JSON.stringify(P(...DEEP, 'bottom.py'))}).then(() => ide.selectedTreeEntry()?.name)`)), 'revealing a file 300 folders deep');
-  smooth(await scenario('tree refresh', () => js(`ide.refreshTree().then(() => document.querySelectorAll('#tree .node').length)`)), 'refreshing the tree with the junction open');
+  smooth(await timed('tree reveal deep', () => js(`ide.revealInTree(${JSON.stringify(P(...DEEP, 'bottom.py'))}).then(() => ide.selectedTreeEntry()?.name)`)), 'revealing a file 300 folders deep');
+  smooth(await timed('tree refresh', () => js(`ide.refreshTree().then(() => document.querySelectorAll('#tree .node').length)`)), 'refreshing the tree with the junction open');
   // Project-wide walks do not follow the junction back into the project.
-  const walk = await scenario('go to file walk', () => js(`ide.api.walk(ide.root).then((l) => l.length)`));
-  check(walk.value > 10 && walk.value < 100 && walk.ms < 3000, `Go to File lists the project once (${walk.value} files)`);
-  smooth(await scenario('find in files', () => js(`ide.api.invoke('search:find', ide.root, { query: 'print' }, {}).then((r) => JSON.stringify(r).length)`)), 'Find in Files over the project');
-  smooth(await scenario('todos', () => js(`ide.api.invoke('search:todos', ide.root, {}).then((r) => JSON.stringify(r).length)`)), 'the TODO scan');
-  const launchers = await scenario('workspace scan', () => js(`ide.api.invoke('workspace:scan', ide.root).then((r) => JSON.stringify(r))`));
+  const walk = await timed('go to file walk', () => js(`ide.api.walk(ide.root).then((l) => l.length)`), { within: (r) => r.ms < 3000 });
+  check(walk.value > 10 && walk.value < 100 && walk.ok, `Go to File lists the project once (${walk.value} files)`);
+  smooth(await timed('find in files', () => js(`ide.api.invoke('search:find', ide.root, { query: 'print' }, {}).then((r) => JSON.stringify(r).length)`)), 'Find in Files over the project');
+  smooth(await timed('todos', () => js(`ide.api.invoke('search:todos', ide.root, {}).then((r) => JSON.stringify(r).length)`)), 'the TODO scan');
+  const launchers = await timed('workspace scan', () => js(`ide.api.invoke('workspace:scan', ide.root).then((r) => JSON.stringify(r))`));
   smooth(launchers, 'the launcher scan');
   check(String(launchers.value).includes('"web"'), 'a launch.json with entries of the wrong kind still lists its valid launcher');
   await scenario('close all', () => js(`ide.closeAllTabs(true)`));

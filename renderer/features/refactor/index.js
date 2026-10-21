@@ -867,7 +867,7 @@
     for (const id of REFACTORINGS) {
       if (!id) { items.push({ separator: true }); continue; }
       const a = ide.actions.find((x) => x.id === id);
-      if (a) items.push({ label: a.title, hint: a.keys.join(', '), run: () => a.run() });
+      if (a) items.push({ label: a.title, keyAction: a.id, run: () => a.run() });
     }
     const menu = ide.ui.contextMenu(box.left + at.left, box.top + at.top + at.height, items);
     if (menu) menu.id = 'rfRefactorThis';
@@ -890,6 +890,7 @@
 
   ide.registerTreeAction({
     title: tr('Move…'),
+    keyAction: 'Move',
     when: (entry) => (entry.dir ? !samePath(entry.path, ide.root) : isPy(entry.path)),
     run: (entry) => moveElement(entry.path),
   });

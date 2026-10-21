@@ -8,7 +8,8 @@
   const CHUNK = 4000; // items matched between yields, so typing stays smooth on a 20,000-file project
   const userText = (node) => { node.dataset.userText = ''; return node; };
   const tick = () => new Promise((r) => setTimeout(r));
-  const keyHint = (keys) => keys.map((k) => (k === 'Shift Shift' ? tr('Double Shift') : k)).join(', ');
+  // As the main menu shows keys: 'Ctrl+K, C' for two strokes, Double Shift, arrows.
+  const keyHint = (keys) => keys.map(ide.keymap.format).join(', ');
 
   // A plain subsequence ("mdl" -> models) only counts from three characters on; shorter ones match nearly anything.
   const score = (text, q) => {

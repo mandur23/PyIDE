@@ -110,7 +110,10 @@ try {
   await sleep(2500);
   const slow = starts().slice(beforeSlow);
   check(slow.length === 2, `a save during a run gives exactly one more run (${slow.length})`);
-  check(slow.length === 2 && Number(slow[1][2]) - Number(slow[0][2]) < 4.5, `the running tests were stopped instead of finishing first (${slow.length === 2 ? (Number(slow[1][2]) - Number(slow[0][2])).toFixed(1) : '?'} s apart)`);
+  // Stopped, not finished: the 5 s run has no "end" in the log, or one written less than 5 s after its start.
+  const slowEnd = log().find((l) => l[0] === 'end' && slow[0] && l[1] === slow[0][1]);
+  const ranFor = slowEnd ? Number(slowEnd[2]) - Number(slow[0][2]) : null;
+  check(slow.length === 2 && (ranFor === null || ranFor < 5), `the running tests were stopped instead of finishing first (${ranFor === null ? 'no end logged' : `ended after ${ranFor.toFixed(1)} s`})`);
   check((await testStatus()).includes('Tests passed: 1 of 1 test'), `the last run passes (${await testStatus()})`);
   check(overlaps() === 0, `runs never overlap (${overlaps()} overlaps)`);
 

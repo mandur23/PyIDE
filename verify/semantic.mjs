@@ -335,6 +335,11 @@ const big = await launch({ projectDir: proj, port: 9535, name: 'semantic-git', e
     const st = await big.js(`ide.api.invoke('semantic:status')`);
     check(st.model.threads >= 1 && st.model.threads <= Math.ceil((await import('os')).cpus().length / 2), `the embedding server runs on ${st.model.threads} torch threads`);
   } else {
+    // Before the first 'indexing' message the worker reads every file of the run. These 2,300 were written a moment
+    // ago, and the IDE's first read of a fresh file costs about 6 ms on a Windows machine with real-time scanning
+    // (0.15 ms once read): 13 s alone, over 30 s when other suites write and read files too. That wait is the disk's;
+    // once the files are read, the first page must still be embedded within the old 30 s.
+    await big.until(`ide.semantic.progress()?.phase === 'indexing'`, 'files collected for indexing', 120000);
     await big.until(`ide.semantic.progress()?.phase === 'indexing' && ide.semantic.progress().done > 0`, 'indexing started', 30000);
     const first = await progressOf(big);
     check(first.total === plan.chunks && plan.skipped.some((s) => s.rel === 'data' && s.reason === 'ignored'),

@@ -135,7 +135,7 @@
       findList = el('div', 'list sn-tree');
       findList.id = 'snFindResults';
       groupKeys(findList);
-      findHead.textContent = tr('Use Find in Files (Ctrl+Shift+F) to search the project');
+      findHead.append(ide.keymap.text(el('span'), () => tr('Use {action} to search the project', { action: ide.keymap.withKeys(tr('Find in Files'), 'FindInPath') })));
       container.append(findHead, findList);
       tw.setActions([
         { icon: '⟳', title: tr('Rerun Search'), run: () => findState && showFindResults(findState.opts, findState.replace) },
@@ -842,8 +842,8 @@
   ide.on('toolWindowShown', (id) => id === 'Structure' && refreshStructure());
   ide.on('interpreterChanged', () => { outline = null; refreshStructure(); });
 
-  ide.registerTreeAction({ title: tr('Find in Files…'), hint: 'Ctrl+Shift+F', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
-  ide.registerTreeAction({ title: tr('Replace in Files…'), hint: 'Ctrl+Shift+R', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
+  ide.registerTreeAction({ title: tr('Find in Files…'), keyAction: 'FindInPath', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
+  ide.registerTreeAction({ title: tr('Replace in Files…'), keyAction: 'ReplaceInPath', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });
 
   [
     { id: 'FindInPath', title: tr('Find in Files…'), keys: 'Ctrl+Shift+F', run: () => openFindDialog(false) },

@@ -36,8 +36,9 @@
   "Stop": "중지",
   "Stop generating": "생성 중지",
   "Stopped.": "중지되었습니다.",
-  "The current file goes along with each question. Type @ to add more files, or select code and press Alt+Enter › Ask AI about Selection.": "질문마다 현재 파일이 함께 전송됩니다. @를 입력해 파일을 더 추가하거나, 코드를 선택하고 Alt+Enter › 선택 영역에 대해 AI에게 질문을 누르세요.",
+  "The current file goes along with each question. Type @ to add more files, or select code and use {action} › Ask AI about Selection.": "질문마다 현재 파일이 함께 전송됩니다. @를 입력해 파일을 더 추가하거나, 코드를 선택하고 {action} › 선택 영역에 대해 AI에게 질문을 사용하세요.",
   "Thinking…": "생각 중…",
   "current file": "현재 파일",
-  "{n} messages": "메시지 {n}개"
+  "{n} messages": "메시지 {n}개",
+  "Show Context Actions": "컨텍스트 액션 표시"
 }

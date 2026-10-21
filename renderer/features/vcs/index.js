@@ -264,7 +264,7 @@
       container.append(initBox, commitBody);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: refresh },
-        { icon: '↶', title: tr('Rollback… (Ctrl+Alt+Z)'), run: () => rollbackFiles(selectedFiles()) },
+        { icon: '↶', title: tr('Rollback…'), keyAction: 'ChangesView.Revert', run: () => rollbackFiles(selectedFiles()) },
         { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openChange(selectedFiles()[0].path) },
       ]);
       prefillMergeMessage();
@@ -852,11 +852,11 @@
     const h = hunkAt(tab, line);
     if (!h || !e.event.leftButton) return;
     ide.ui.contextMenu(e.event.posx, e.event.posy, [
-      { label: tr('Rollback Lines'), hint: 'Ctrl+Alt+Z', run: () => rollbackHunk(tab, h) },
+      { label: tr('Rollback Lines'), keyAction: 'ChangesView.Revert', run: () => rollbackHunk(tab, h) },
       { label: tr('Show Diff'), run: () => openWorkingDiff(tab.path) },
       { separator: true },
-      { label: tr('Next Change'), hint: 'Ctrl+Alt+Shift+Down', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(1, ed); } },
-      { label: tr('Previous Change'), hint: 'Ctrl+Alt+Shift+Up', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1, ed); } },
+      { label: tr('Next Change'), keyAction: 'VcsShowNextChangeMarker', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(1, ed); } },
+      { label: tr('Previous Change'), keyAction: 'VcsShowPrevChangeMarker', run: () => { ed.setPosition({ lineNumber: line, column: 1 }); gotoChange(-1, ed); } },
     ]);
   }
 
@@ -941,8 +941,8 @@
       container.append(subTabs, logPane, activityPane, consolePane);
       tw.setActions([
         { icon: '⟳', title: tr('Refresh'), run: loadLog },
-        { icon: '↓', title: tr('Update Project… (Ctrl+T)'), run: updateProject },
-        { icon: '↑', title: tr('Push… (Ctrl+Shift+K)'), run: openPushDialog },
+        { icon: '↓', title: tr('Update Project…'), keyAction: 'Vcs.UpdateProject', run: updateProject },
+        { icon: '↑', title: tr('Push…'), keyAction: 'Vcs.Push', run: openPushDialog },
       ]);
     },
   });
@@ -1248,7 +1248,7 @@
     await ide.saveAll();
     const r = await invoke('pull', ide.root);
     logResult(r);
-    if (r.noRemote) return notify(tr("Can't update"), tr('No remotes are defined for this repository. Define a remote in the Push dialog (Ctrl+Shift+K).'), 'warn');
+    if (r.noRemote) return notify(tr("Can't update"), tr('No remotes are defined for this repository. Define a remote in {dialog}.', { dialog: ide.keymap.withKeys(tr('the Push dialog'), 'Vcs.Push') }), 'warn');
     if (!r.ok && r.conflicts?.length && conflictHandler) { await afterCheckout(); return conflictHandler.stopped(r); }
     if (!r.ok) return notify(tr('Update failed'), errorText(r), 'error', true);
     if (r.upToDate) notify(tr('All files are up-to-date'), '', 'ok');

@@ -24,7 +24,7 @@
   "Similarity {sem}, keyword match {kw}": "유사도 {sem}, 키워드 일치 {kw}",
   "Test backend": "테스트 백엔드",
   "Cancel": "취소",
-  "Google's local embedding model behind Semantic Search (Ctrl+Alt+F). Your code never leaves this computer.": "의미 기반 검색(Ctrl+Alt+F)에 쓰이는 Google의 로컬 임베딩 모델입니다. 코드는 이 컴퓨터 밖으로 나가지 않습니다.",
+  "Google's local embedding model behind {action}. Your code never leaves this computer.": "{action}에 쓰이는 Google의 로컬 임베딩 모델입니다. 코드는 이 컴퓨터 밖으로 나가지 않습니다.",
   "{n} s": "{n}초",
   "{n} min": "{n}분",
   "{h} h {m} min": "{h}시간 {m}분",

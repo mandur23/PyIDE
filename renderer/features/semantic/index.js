@@ -406,7 +406,9 @@
   ide.registerAction({ id: 'SemanticSearchPopup', title: tr('Semantic Search…'), keys: 'Ctrl+Alt+F', run: searchPopup });
   (ide.installables ||= []).push({
     id: 'ai:embeddinggemma-2', category: 'ai', name: 'EmbeddingGemma 2', size: '1.4 GB', homepage: 'https://huggingface.co/google/embeddinggemma-2',
-    description: tr('Google\'s local embedding model behind Semantic Search (Ctrl+Alt+F). Your code never leaves this computer.'),
+    get description() {
+      return tr('Google\'s local embedding model behind {action}. Your code never leaves this computer.', { action: ide.keymap.withKeys(tr('Semantic Search'), 'SemanticSearchPopup') });
+    },
     status: async () => {
       const s = await refreshStatus();
       return { installed: !!ready(), version: s?.dim ? `${s.dim}d` : undefined, detail: s?.model?.device ? s.model.device.toUpperCase() : undefined };

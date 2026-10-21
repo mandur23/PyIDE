@@ -385,7 +385,8 @@
     bodyIn.rows = 6;
     const row = (label, control) => { const r = el('label', 'lt-field'); r.append(el('span', null, label), control); return r; };
     form.append(row(tr('Abbreviation'), abbrIn), row(tr('Description'), descIn), row(tr('Template text'), bodyIn),
-      el('div', 'field-hint muted', tr('$NAME$ is a variable the caret visits in order, $END$ is where the caret ends, and $SELECTION$ is the text that Surround With (Ctrl+Alt+J) wraps.')));
+      el('div', 'field-hint muted', tr('$NAME$ is a variable the caret visits in order, $END$ is where the caret ends, and $SELECTION$ is the text that {action} wraps.',
+        { action: ide.keymap.withKeys(tr('Surround With'), 'SurroundWithLiveTemplate') })));
 
     const current = () => merge(custom).find((t) => t.abbr === selected);
     const entry = (abbr) => (custom[abbr] ||= {});

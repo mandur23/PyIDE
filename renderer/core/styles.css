@@ -90,6 +90,8 @@ input, select, textarea { font: inherit; }
 .node .arrow { width: 16px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
 .node .icon { width: 20px; font-size: 12px; flex-shrink: 0; }
 .tree-badge { margin-left: 6px; color: var(--gray7); font-size: 11px; }
+/* An entry cut with Ctrl+X, until it is pasted (PyCharm and Explorer dim it). */
+.node.cut .icon, .node.cut .name, .node.cut .tree-badge { opacity: 0.5; }
 
 .splitter.v { width: 1px; background: var(--gray1); cursor: col-resize; position: relative; }
 .splitter.v::after { content: ''; position: absolute; inset: 0 -3px; z-index: 5; }

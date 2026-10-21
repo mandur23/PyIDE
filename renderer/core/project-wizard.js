@@ -48,16 +48,22 @@ Accept: application/json
 
 ###
 `;
-  // PyCharm's welcome script, with its comments in the UI language.
-  const welcomeScript = () => `# ${tr('This is a sample Python script.')}
-
-# ${tr('Press Shift+F10 to execute it or replace it with your code.')}
-# ${tr('Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.')}
+  // PyCharm's welcome script, with its comments in the UI language and the user's shortcuts (a comment about an
+  // action without one is left out, and with neither Run nor Search Everywhere bound, so is their paragraph).
+  const press = (id, text) => { const keys = ide.keymap.label(id); return keys ? text(keys) : ''; };
+  const welcomeIntro = () => {
+    const lines = [
+      press('Run', (keys) => `# ${tr('Press {keys} to execute it or replace it with your code.', { keys })}`),
+      press('SearchEverywhere', (keys) => `# ${tr('Press {keys} to search everywhere for classes, files, tool windows, actions, and settings.', { keys })}`),
+    ].filter(Boolean);
+    return [`# ${tr('This is a sample Python script.')}`, ...(lines.length ? ['', ...lines] : [])].join('\n');
+  };
+  const welcomeScript = () => `${welcomeIntro()}
 
 
 def print_hi(name):
     # ${tr('Use a breakpoint in the code line below to debug your script.')}
-    print(f'Hi, {name}')  # ${tr('Press Ctrl+F8 to toggle the breakpoint.')}
+    print(f'Hi, {name}')${press('ToggleLineBreakpoint', (keys) => `  # ${tr('Press {keys} to toggle the breakpoint.', { keys })}`)}
 
 
 # ${tr('Press the green button in the gutter to run the script.')}

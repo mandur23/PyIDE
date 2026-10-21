@@ -398,10 +398,8 @@
     },
   });
   // The window's shortcut is AiChat.Toggle's (registered below), as the keymap has it.
-  tw.keys = 'Ctrl+Shift+L';
   tw.keyAction = 'AiChat.Toggle';
-  tw.button.title = `${tr('AI Chat')} (Ctrl+Shift+L)`;
-  tw.button.dataset.keymapAction = 'AiChat.Toggle';
+  ide.keymap.tooltip(tw.button, tr('AI Chat'), 'AiChat.Toggle');
   tw.setActions([
     { icon: '＋', title: tr('New Chat'), run: newChat },
     { icon: '🕘', title: tr('Chat History'), run: showHistory },
@@ -441,7 +439,8 @@
     if (!chat?.messages.length) {
       const empty = el('div', 'aic-empty');
       empty.append(el('div', 'aic-empty-title', tr('Chat with Claude about your code')),
-        el('div', 'muted', tr('The current file goes along with each question. Type @ to add more files, or select code and press Alt+Enter › Ask AI about Selection.')));
+        ide.keymap.text(el('div', 'muted'), () => tr('The current file goes along with each question. Type @ to add more files, or select code and use {action} › Ask AI about Selection.',
+          { action: ide.keymap.withKeys(tr('Show Context Actions'), 'ShowIntentionActions') })));
       list.appendChild(empty);
     }
     for (const m of chat?.messages || []) {

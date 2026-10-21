@@ -345,7 +345,8 @@ $('popupIn').onkeydown = (e) => {
 };
 $('popupIn').onblur = () => setTimeout(() => document.activeElement !== $('popupIn') && closePopup(), 120);
 
-// Menus: items are [{label, hint?, icon?, checked?, disabled?, run?, submenu?: items | () => items} | {separator: true}].
+// Menus: items are [{label, hint?, keyAction?, icon?, checked?, disabled?, run?, submenu?: items | () => items} | {separator: true}].
+// keyAction: the id of the action whose current shortcut is the hint (none when the user removed it), instead of a fixed hint.
 // Submenus open on hover or Right; Up/Down move, Enter runs, Left closes a submenu, Esc closes the menu.
 const menuStack = [];
 let menuCleanup = null;
@@ -402,7 +403,8 @@ function showMenu(x, y, items, level, leftEdge) {
     // The label stays the first child (callers read row.firstChild); CSS order draws the icon before it.
     row.append(label, icon);
     if (it.detail) { const d = el('span', 'menu-detail', it.detail); d.dataset.userText = ''; row.appendChild(d); }
-    if (it.hint) row.appendChild(el('span', 'hint-right', it.hint));
+    const hint = it.keyAction ? ide.keymap.hint(it.keyAction) : it.hint;
+    if (hint) row.appendChild(el('span', 'hint-right', hint));
     if (it.submenu) row.appendChild(el('span', 'menu-arrow', '›'));
     row.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); activate(level, row); };
     row.onmouseenter = () => {
@@ -575,6 +577,27 @@ ide.keymap = {
   format: (k) => (k === 'Shift Shift' ? tr('Double Shift') : k.split(' ').join(', ')
     .replace(/Arrow(Up|Down|Left|Right)/g, (m) => ({ ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' })[m]).replace(/Escape/g, 'Esc')),
   label: (id) => (ide.actions.find((a) => a.id === id)?.keys || []).map(ide.keymap.format).join(' / '),
+  // As menus and lists (main menu, context menus, Find Action, Search Everywhere) show an action's keys.
+  hint: (id) => (ide.actions.find((a) => a.id === id)?.keys || []).map(ide.keymap.format).join(', '),
+  // 'Run (Shift+F10)', or just the text when the action has no shortcut, so a removed shortcut never shows.
+  withKeys: (text, id) => { const k = ide.keymap.label(id); return k ? `${text} (${k})` : text; },
+  // A tooltip that follows the keymap (see data-keymap-action below).
+  tooltip: (node, text, id) => {
+    node.dataset.keymapAction = id;
+    node.dataset.tooltip = text;
+    node.title = ide.keymap.withKeys(text, id);
+    return node;
+  },
+  // Text that names a shortcut: fn() fills the node now and again whenever the keymap changes.
+  text: (node, fn) => { node._keymapText = fn; node.dataset.keymapText = ''; node.textContent = fn(); return node; },
+};
+const keymapTooltip = (n) => {
+  n.dataset.tooltip ??= n.title.replace(/\s*\([^()]*\)$/, '');
+  n.title = ide.keymap.withKeys(n.dataset.tooltip, n.dataset.keymapAction);
+};
+const refreshKeymapTexts = () => {
+  for (const n of document.querySelectorAll('[data-keymap-text]')) if (n._keymapText) n.textContent = n._keymapText();
+  for (const n of document.querySelectorAll('[data-keymap-action]')) keymapTooltip(n);
 };
 ide.on('settingsChanged', (key) => {
   if (key !== 'keymap.overrides') return;
@@ -582,13 +605,13 @@ ide.on('settingsChanged', (key) => {
   for (const a of ide.actions) a.keys = keymapOverrides.get(a.id) || (a.defaultKeys ??= normalizeKeys(a.keys));
   ide.emit('keymapChanged');
 });
+// Texts made before the action they name registered (plugins load later) get its keys once everything is loaded.
+ide.on('keymapChanged', refreshKeymapTexts);
+ide.on('ready', refreshKeymapTexts);
 // Elements with data-keymap-action="<action id>" show that action's current shortcut in their tooltip: "Run (Shift+F10)".
 addEventListener('mouseover', (e) => {
   const n = e.target.closest?.('[data-keymap-action]');
-  if (!n) return;
-  n.dataset.tooltip ??= n.title.replace(/\s*\([^()]*\)$/, '');
-  const keys = ide.keymap.label(n.dataset.keymapAction);
-  n.title = keys ? `${n.dataset.tooltip} (${keys})` : n.dataset.tooltip;
+  if (n) keymapTooltip(n);
 }, true);
 
 // {id, title, keys?: 'Ctrl+Shift+F' | [...], run, when?: () => bool}. Later registrations win on key clashes.
@@ -729,7 +752,9 @@ function renderAreaActions(area) {
   area.actions.innerHTML = '';
   for (const a of area.active?.actionList || []) {
     const b = el('button', null, a.icon);
-    b.title = a.title;
+    // keyAction: the action whose current shortcut the tooltip shows.
+    if (a.keyAction) ide.keymap.tooltip(b, a.title, a.keyAction);
+    else b.title = a.title;
     b.onclick = a.run;
     if (a.id) b.dataset.action = a.id;
     // A toggle action ({toggled: boolean}) shows its state like PyCharm's toggle buttons.
@@ -936,6 +961,10 @@ const treeDecorators = [];
 const treeActions = [];
 let rows = [];
 let selected = null;
+// The entry cut with Ctrl+X (or Cut), drawn dimmed until it is pasted, Escape in the tree, another cut, or the project
+// closes. setCut redraws, so the mark follows the entry through scrolling and refreshes.
+let cutEntry = null;
+const setCut = (entry) => { cutEntry = entry; drawTree(); };
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
 // {title, when?(entry), run(entry)}; entry = {name, path, dir}
@@ -948,6 +977,7 @@ const treeRoots = [];
 ide.registerTreeRoot = (root) => {
   treeRoots.push(root);
   treeRoots.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  restoreRootExpanded(root);
   if (ide.root) renderTree();
 };
 const treeRootOf = (entry) => (entry?.treeRoot ? treeRoots.find((r) => r.id === entry.treeRoot) : null);
@@ -1005,6 +1035,7 @@ function rowNode({ entry, depth }, index) {
   node.style.paddingLeft = `${depth * 16 + 4}px`;
   node.draggable = depth > 0 && !entry.treeRoot;
   if (entry.treeRoot) node.classList.add('tree-extra');
+  else if (cutEntry && samePath(entry.path, cutEntry.path)) node.classList.add('cut');
   node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
   const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: entry.iconType });
   icon.classList.add('icon');
@@ -1061,6 +1092,28 @@ function saveExpanded() {
   }, 1000);
 }
 
+// The extra top-level nodes (Scratches and Consoles) show the same folders in every project, so their open folders
+// are one global setting: {rootId: [lower-cased paths relative to the node, '' for the node itself]}. A folder inside
+// a closed node keeps its state, as in PyCharm.
+const ROOTS_EXPANDED_KEY = 'projectTree.rootsExpanded';
+const rootsExpanded = () => {
+  const v = ide.settings.get(ROOTS_EXPANDED_KEY, {});
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+};
+function restoreRootExpanded(r) {
+  const saved = Object.hasOwn(rootsExpanded(), r.id) ? rootsExpanded()[r.id] : null;
+  if (!Array.isArray(saved)) return;
+  for (const rel of saved) if (typeof rel === 'string') expanded.add(keyOf(rel ? joinPath(r.entry.path, rel) : r.entry.path));
+}
+function saveRootsExpanded() {
+  const saved = { ...rootsExpanded() };
+  for (const r of treeRoots) {
+    const base = keyOf(r.entry.path).replace(/[\\/]+$/, '');
+    saved[r.id] = [...expanded].filter((k) => isUnder(k, base)).map((k) => (samePath(k, base) ? '' : k.slice(base.length + 1))).slice(0, 200);
+  }
+  ide.settings.set(ROOTS_EXPANDED_KEY, saved);
+}
+
 // Lists every open folder again (files may have changed on disk) and redraws. Calls made while one is waiting to
 // start share it; a call made while one runs gets its own run afterwards.
 let pendingRefresh = null;
@@ -1103,7 +1156,7 @@ const toggleDir = (entry) => enqueueTree(async () => {
     if (!samePath(rootPath, ide.root)) return;
     rows = rows.slice(0, i + 1).concat(below, rows.slice(i + 1));
   }
-  saveExpanded();
+  if (entry.treeRoot) saveRootsExpanded(); else saveExpanded();
   drawTree();
 });
 
@@ -1115,7 +1168,7 @@ ide.revealInTree = async (path) => {
   await renderTree();
   const i = rowIndexOf(path, base.id);
   if (i >= 0) selectRow(i);
-  saveExpanded();
+  if (base.id) saveRootsExpanded(); else saveExpanded();
 };
 
 const selectedDir = () => (!selected || selected.treeRoot ? ide.root : selected.dir ? selected.path : dirname(selected.path));
@@ -1210,28 +1263,34 @@ function showTreeMenu(entry, x, y) {
   // A row under an extra top-level node gets that node's own items instead of the project's.
   const treeRoot = treeRootOf(entry);
   const own = treeRoot && (treeRoot.menu?.(entry) || []);
-  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry)).map((a) => ({ label: a.title, hint: a.hint, run: () => a.run(entry) }));
+  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry)).map((a) => ({ label: a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry) }));
   const fixed = samePath(entry.path, ide.root) || !!entry.fixed;
   ide.ui.contextMenu(x, y, [
     ...(treeRoot ? [] : [
-      { label: tr('New Python File'), hint: 'Alt+Insert', run: () => createEntry(false) },
+      { label: tr('New Python File'), keyAction: 'NewPythonFile', run: () => createEntry(false) },
       { label: tr('New Directory'), run: () => createEntry(true) },
       { separator: true },
     ]),
     ...(extra.length ? [...extra, { separator: true }] : []),
     ...(treeRoot ? [] : [
-      { label: tr('Cut'), hint: 'Ctrl+X', run: () => { cutEntry = entry; }, disabled: fixed },
+      { label: tr('Cut'), hint: 'Ctrl+X', run: () => setCut(entry), disabled: fixed },
       { label: tr('Paste'), hint: 'Ctrl+V', run: () => pasteInto({ entry }), disabled: !cutEntry },
     ]),
-    { label: tr('Rename…'), hint: 'Shift+F6', run: () => renameEntry(entry), disabled: fixed },
+    { label: tr('Rename…'), keyAction: 'RenameElement', run: () => renameEntry(entry), disabled: fixed },
     { label: tr('Delete'), hint: 'Delete', run: () => deleteEntry(entry), disabled: fixed },
   ]);
 }
 
 // Up/Down/Home/End/PageUp/PageDown move the selection, Right opens a folder or enters it, Left closes it or goes to
 // the parent, Enter opens a file or toggles a folder, Delete moves the selection to the Recycle Bin.
-// Shift+F6 renames the selection; Ctrl+X and then Ctrl+V on a folder (or a file in it) moves it there.
-let cutEntry = null;
+// Shift+F6 renames the selection; Ctrl+X and then Ctrl+V on a folder (or a file in it) moves it there, Escape
+// cancels the cut. Escape is an action registered on ready, after core's FocusEditor (also Escape), so it wins while
+// the tree has the keyboard and something is cut; the global keymap handler runs before the tree's own keys.
+ide.on('ready', () => ide.registerAction({
+  id: 'ProjectView.CancelCut', keys: 'Escape',
+  when: () => !!cutEntry && document.activeElement === $('tree'),
+  run: () => setCut(null),
+}));
 const movable = (row) => !!row && row.depth > 0 && !row.entry.fixed && !row.entry.treeRoot && !treeRootOf(row.entry);
 // Only into the project: rows under Scratches and Consoles (and their nodes) are not paste targets, even when the
 // project folder contains them, and the cut entry stays cut for another try.
@@ -1240,14 +1299,14 @@ const pasteInto = (row) => {
   if (!entry || row?.entry.treeRoot) return;
   const dir = !row ? ide.root : row.entry.dir ? row.entry.path : dirname(row.entry.path);
   if (!isUnder(dir, ide.root) || !isUnder(entry.path, ide.root) || treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path))) return;
-  cutEntry = null;
+  setCut(null);
   moveEntry(entry, dir);
 };
 function treeKey(e) {
   if (!rows.length || e.altKey || e.metaKey) return;
   const i = selected ? rowIndexOf(selected.path, selected.treeRoot) : -1;
   const row = rows[i];
-  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) cutEntry = row.entry; }, KeyV: () => pasteInto(row) }[e.code]
+  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) setCut(row.entry); }, KeyV: () => pasteInto(row) }[e.code]
     : !e.ctrlKey && e.shiftKey && e.key === 'F6' ? () => movable(row) && renameEntry(row.entry) : null;
   if (special) {
     e.preventDefault();
@@ -1469,6 +1528,7 @@ ide.openProject = async (dir) => {
   expanded.clear();
   expanded.add(keyOf(dir));
   for (const rel of ide.settings.get(EXPANDED_KEY, {})[keyOf(dir)] || []) expanded.add(keyOf(joinPath(dir, rel)));
+  for (const r of treeRoots) restoreRootExpanded(r);
   selected = null;
   rows = [];
   drawTree();
@@ -1570,7 +1630,7 @@ async function gotoFile() {
 async function findAction() {
   const action = await ide.ui.pick({
     placeholder: tr('Search actions'),
-    items: ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.join(', '), value: a })),
+    items: ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.map(ide.keymap.format).join(', '), value: a })),
   });
   action?.run();
 }

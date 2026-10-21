@@ -138,7 +138,9 @@ try {
   check(true, 'watches re-evaluated on each stop (NameError for total in scale)');
   await press('F8');
   await stoppedAt('helper.py', 3);
-  check((await varsText()).includes('factor = {int} 10'), 'F8 steps over a line');
+  // The frames arrive first; the variables need two more requests to debugpy.
+  check(await until(`document.querySelector('#dbgVars').textContent.includes('factor = {int} 10')`, 'variables after F8').catch(() => false),
+    `F8 steps over a line (variables: ${(await varsText()).slice(0, 80)})`);
   await press('Shift+F8');
   await until(`(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx]; return f && f.path?.endsWith('main.py'); })()`, 'back in main.py');
   check(true, 'Shift+F8 steps out to the caller');
@@ -173,7 +175,8 @@ try {
   await cursorTo(8);
   await press('Alt+F9');
   await stoppedAt('main.py', 8);
-  check((await varsText()).includes('total = {int} 60'), 'Alt+F9 runs to the caret line (loop finished, total 60)');
+  check(await until(`document.querySelector('#dbgVars').textContent.includes('total = {int} 60')`, 'variables after Alt+F9').catch(() => false),
+    `Alt+F9 runs to the caret line (loop finished, total 60; variables: ${(await varsText()).slice(0, 80)})`);
 
   // ---- breakpoints dialog ----
   await press('Ctrl+Shift+F8');
@@ -203,7 +206,9 @@ try {
   await openFile(t, 'loop.py');
   await click('#debugBtn');
   await until(`window.__debugger.state()?.state === 'running'`, 'loop running');
-  await t.sleep(500);
+  // The session runs once debugpy has its configuration, but on a busy machine the program can still be starting
+  // (debugpy, runpy) for a second or more: a Pause there stops outside loop.py, where there is no `count`.
+  await until(`document.querySelector('#dbgOut').textContent.includes('loop started')`, 'loop.py inside its loop');
   await click('#dbgPause');
   await until(`window.__debugger.state()?.state === 'suspended'`, 'paused');
   await until(`document.querySelector('#dbgVars').textContent.includes('count = {int}')`, 'paused variables');

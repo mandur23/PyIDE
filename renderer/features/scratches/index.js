@@ -67,7 +67,7 @@
 
   // ---------- project tree: Scratches and Consoles › Scratches ----------
   function menu(entry) {
-    const items = [{ label: tr('New Scratch File'), hint: 'Ctrl+Alt+Shift+Insert', run: newScratch }];
+    const items = [{ label: tr('New Scratch File'), keyAction: 'NewScratchFile', run: newScratch }];
     if (!entry.dir && isPy(entry.path) && ide.run) {
       const name = basename(entry.path).replace(/\.pyw?$/i, '');
       items.push({ separator: true }, { label: tr("Run '{name}'", { name }), run: () => run(entry.path) });

@@ -735,7 +735,7 @@
   (ide.settingsPages ||= []).push({
     id: 'ai-edit', group: 'ai', title: () => tr('Claude Edits'), keywords: 'claude ai edit ctrl+i next edit suggestion nes model 수정 제안 모델',
     mount(host, ctx) {
-      const main = ctx.ui.section(host, tr('Inline Edit (Ctrl+I)'));
+      const main = ctx.ui.section(host, ide.keymap.withKeys(tr('Inline Edit'), 'AiEdit.InlineEdit'));
       main.appendChild(ctx.ui.fieldRow(tr('Model:'), ctx.ui.selectInput(SETTINGS.model, MODELS.map((m) => [m.id, m.label]), 'haiku')));
       const nes = ctx.ui.section(host, tr('Next Edit Suggestions'));
       nes.appendChild(ctx.ui.checkbox(SETTINGS.nes, tr('Suggest the next edit after I pause typing')));
@@ -770,7 +770,7 @@
     statusEl.classList.toggle('nes-on', nesEnabled());
     statusEl.classList.toggle('problem', !!nesProblem);
     statusEl.title = [
-      tr('AI edits with Claude (Ctrl+I)'),
+      ide.keymap.withKeys(tr('AI edits with Claude'), 'AiEdit.InlineEdit'),
       nesEnabled() ? tr('Next edit suggestions: on') : tr('Next edit suggestions: off'),
       nesProblem,
     ].filter(Boolean).join('\n');
@@ -778,7 +778,7 @@
   statusEl.onclick = (e) => {
     const r = statusEl.getBoundingClientRect();
     ide.ui.contextMenu(r.left, r.top - 4, [
-      { label: tr('Edit with Claude…'), hint: 'Ctrl+I', disabled: !ide.editor?.getModel(), run: () => { ide.editor.focus(); openPrompt(contexts.get(ide.editor)); } },
+      { label: tr('Edit with Claude…'), keyAction: 'AiEdit.InlineEdit', disabled: !ide.editor?.getModel(), run: () => { ide.editor.focus(); openPrompt(contexts.get(ide.editor)); } },
       { label: tr('Next Edit Suggestions'), checked: nesEnabled(), run: () => setNes(!nesEnabled()) },
       { label: tr('Model'), submenu: () => MODELS.map((m) => ({ label: m.label, checked: modelId() === m.id, run: () => ide.settings.set(SETTINGS.model, m.id) })) },
       { separator: true },
@@ -788,6 +788,7 @@
   };
   ide.registerStatusItem({ order: 85, el: statusEl });
   renderStatus();
+  ide.on('keymapChanged', renderStatus);
 
   ide.onEditor(attach);
 

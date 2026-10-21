@@ -387,6 +387,8 @@ try {
   const call1 = nesCalls().at(-1);
   check(call1.stdin.includes('-def scale(value, factor):\n+def scale(value, ratio):') && call1.stdin.includes('2|     result = value * factor'),
     'after a rename and a pause, the recent edit and the numbered file go to Claude Code');
+  // nes() is set at once; the gutter glyph is a decoration Monaco draws on its next frame, which a busy machine delays.
+  await until(`!!document.querySelector('.ai-nes-glyph') && !!document.querySelector('.ai-nes-hint .ai-nes-key')?.textContent && !!document.querySelector('.ai-nes-add .ai-line')`, 'suggestion drawn', 5000).catch(() => {});
   const hint = await js(`({ hint: document.querySelector('.ai-nes-hint .ai-nes-key')?.textContent, glyph: !!document.querySelector('.ai-nes-glyph'),
     add: [...document.querySelectorAll('.ai-nes-add .ai-line')].map((n) => n.textContent.replace(/\\u00a0/g, ' ')) })`);
   check(hint.hint === 'Tab to jump here' && hint.glyph && hint.add.join() === '    result = value * ratio', 'the suggestion shows at line 2 with a gutter hint and the proposed line');

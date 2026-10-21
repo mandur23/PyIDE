@@ -56,7 +56,7 @@ try {
 
   // ---- Find in Files tool window before any search ----
   await js(`ide.runAction('ActivateFindToolWindow')`);
-  check(await waitText('#snFindHead', '프로젝트를 검색하려면 파일에서 찾기(Ctrl+Shift+F)를 사용하세요', 'find head'), 'empty Find window explains Ctrl+Shift+F');
+  check(await waitText('#snFindHead', '프로젝트를 검색하려면 파일에서 찾기 (Ctrl+Shift+F)을(를) 사용하세요', 'find head'), 'empty Find window explains Ctrl+Shift+F');
   await noLeaks('#snFindHead, #bottomActions', 'empty Find window and its toolbar');
 
   // ---- TODO ----

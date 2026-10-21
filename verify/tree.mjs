@@ -126,6 +126,39 @@ try {
   await js(`ide.revealInTree(ide.util.joinPath(ide.root, 'big\\\\f2500.py'))`);
   await until(`${selectedName} === 'f2500.py'`, 'revealed row selected');
   check(await js(`(() => { const n = document.querySelector('#tree .node.selected'); const r = n.getBoundingClientRect(); const v = document.getElementById('tree').getBoundingClientRect(); return r.top >= v.top && r.bottom <= v.bottom; })()`), 'revealing a file opens its folders and scrolls it into view');
+
+  // Cut rows are dimmed until a paste, Escape, or another cut; the mark survives scrolling and refreshes.
+  const at = (rel) => `[...document.querySelectorAll('#tree .node')].find((n) => !n._entry.treeRoot && n._entry.path.toLowerCase() === ${q(path.join(t.project, rel).toLowerCase())})`;
+  const cutRows = `[...document.querySelectorAll('#tree .node.cut')].map((n) => n._entry.name).join(',')`;
+  const pick = async (rel) => {
+    await js(`ide.revealInTree(${q(path.join(t.project, rel))})`);
+    await until(`!!${at(rel)}?.classList.contains('selected')`, `${rel} selected`);
+    await js(`(document.getElementById('tree').focus(), true)`);
+  };
+  await pick('docs\\notes.md');
+  check(await js(`${cutRows} === ''`), 'no row is dimmed before a cut');
+  await press('Ctrl+X');
+  check(await js(`${cutRows} === 'notes.md' && getComputedStyle(${at('docs\\notes.md')}.querySelector('.name')).opacity === '0.5'`), 'Ctrl+X dims the cut row');
+  await js(`document.getElementById('tree').scrollTop = 0`);
+  await js(`ide.refreshTree()`);
+  await js(`document.getElementById('tree').scrollTop = 1e9`);
+  await pick('docs\\notes.md');
+  check(await js(`${cutRows} === 'notes.md'`), 'the cut row stays dimmed after scrolling and a tree refresh');
+  await press('Escape');
+  const afterEsc = await js(`[${cutRows}, document.activeElement?.id || document.activeElement?.className]`);
+  check(afterEsc[0] === '' && afterEsc[1] === 'tree', `Escape in the tree cancels the cut and the tree keeps the keyboard (${afterEsc})`);
+  await press('Ctrl+X');
+  await pick('docs\\main.py');
+  await js(`(() => { const n = ${at('docs\\main.py')}; const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
+  await until(`!!document.querySelector('.context-menu')`, 'tree context menu for Cut');
+  await js(`[...document.querySelectorAll('.context-menu .menu-item')].find((r) => r.querySelector('.menu-label')?.textContent === 'Cut').dispatchEvent(new MouseEvent('mousedown', { bubbles: true })), true`);
+  await until(`!document.querySelector('.context-menu')`, 'menu closed');
+  check(await js(`${cutRows} === 'main.py'`), 'Cut in the context menu dims its row and a new cut replaces the old one');
+  await pick('pkg');
+  await press('Ctrl+V');
+  await until(`(async () => await ide.api.exists(${q(path.join(t.project, 'pkg', 'main.py'))}))()`, 'pasted into pkg');
+  await until(`!!${at('pkg\\main.py')}`, 'moved row drawn');
+  check(await js(`${cutRows} === ''`), 'pasting moves the file and the dimming is gone');
   await sleep(1500);
 } catch (err) {
   check(false, err.message);

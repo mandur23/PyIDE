@@ -107,7 +107,7 @@ try {
 
   // ---- Find tool window ----
   const findText = async () => js(`ide.toolWindows.get('FindUsages').container.textContent`);
-  check((await findText()).includes('심볼에서 Alt+F7을 누르면 사용 위치를 찾습니다'), 'Find window empty state is Korean');
+  check((await findText()).includes('심볼에서 사용 위치 찾기 (Alt+F7)을(를) 사용하면 사용 위치를 찾습니다'), 'Find window empty state is Korean');
   await caret(8, 14);
   await press('Alt+F7');
   await until(`document.querySelectorAll('#lspFindList .lsp-find-row').length >= 3`, 'usages of Greeter');

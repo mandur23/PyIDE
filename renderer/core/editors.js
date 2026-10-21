@@ -326,7 +326,7 @@
     g.tabListSize = ide.util.observeSize(g.tabList, () => g.tabList.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     const actions = el('div', 'group-actions');
     const splitBtn = el('button', null, '◫');
-    splitBtn.title = tr('Split Right');
+    ide.keymap.tooltip(splitBtn, tr('Split Right'), 'SplitVertically');
     splitBtn.onclick = () => splitGroup(g, 'right', g.active, { clone: true });
     const more = el('button', null, '⋮');
     more.title = tr('More');
@@ -337,10 +337,15 @@
     g.editorHost = el('div', 'editor-host');
     g.customHost = el('div', 'custom-host');
     g.empty = el('div', 'group-empty');
-    for (const [label, keys] of [[tr('Search Everywhere'), tr('Double Shift')], [tr('Go to File'), 'Ctrl+Shift+N'], [tr('Recent Files'), 'Ctrl+E'], [tr('Split Right'), 'Ctrl+\\'], [tr('Drop files here to open them'), '']]) {
+    // The shortcuts follow the keymap (RecentFiles and Search Everywhere's own action come from plugins, later); a row
+    // whose action has no shortcut (unbound, or its plugin disabled) is hidden.
+    for (const [label, id] of [[tr('Search Everywhere'), 'SearchEverywhere'], [tr('Go to File'), 'GotoFile'], [tr('Recent Files'), 'RecentFiles'], [tr('Split Right'), 'SplitVertically'], [tr('Drop files here to open them')]]) {
       const row = el('div', 'empty-row');
-      row.append(el('span', null, label), el('kbd', null, keys));
-      if (!keys) row.lastChild.remove();
+      row.append(el('span', null, label));
+      if (id) {
+        row.dataset.action = id;
+        row.appendChild(ide.keymap.text(el('kbd'), () => { const keys = ide.keymap.hint(id); row.style.display = keys ? '' : 'none'; return keys; }));
+      }
       g.empty.appendChild(row);
     }
     if (!groups.length) { g.editorHost.id = 'editor'; g.customHost.id = 'customHost'; g.tabList.id = 'tabs'; }
@@ -1072,7 +1077,7 @@
     const other = oppositeGroup(g);
     const isFile = t.kind === 'file' || !!t.doc || !!t.viewer;
     ide.ui.contextMenu(x, y, [
-      { label: tr('Close'), hint: 'Ctrl+F4', run: () => closeTabObj(t) },
+      { label: tr('Close'), keyAction: 'CloseContent', run: () => closeTabObj(t) },
       { label: tr('Close Other Tabs'), run: () => closeMany(fileTabs(g).filter((o) => o !== t && !o.pinned)) },
       { label: tr('Close All Tabs'), run: () => closeMany(fileTabs(g).filter((o) => !o.pinned)) },
       { label: tr('Close Tabs to the Left'), disabled: i === 0, run: () => closeMany(g.tabs.slice(0, i).filter((o) => !o.pinned)) },
@@ -1081,19 +1086,19 @@
       { separator: true },
       { label: t.pinned ? tr('Unpin Tab') : tr('Pin Tab'), run: () => togglePin(t) },
       { separator: true },
-      { label: tr('Split Right'), hint: 'Ctrl+\\', run: () => splitGroup(g, 'right', t, { clone: true }) },
-      { label: tr('Split Down'), hint: 'Ctrl+Shift+\\', run: () => splitGroup(g, 'down', t, { clone: true }) },
+      { label: tr('Split Right'), keyAction: 'SplitVertically', run: () => splitGroup(g, 'right', t, { clone: true }) },
+      { label: tr('Split Down'), keyAction: 'SplitHorizontally', run: () => splitGroup(g, 'down', t, { clone: true }) },
       { label: tr('Split and Move Right'), disabled: g.tabs.length < 2, run: () => splitGroup(g, 'right', t, { clone: false }) },
       { label: tr('Split and Move Down'), disabled: g.tabs.length < 2, run: () => splitGroup(g, 'down', t, { clone: false }) },
       { label: tr('Move to Opposite Group'), disabled: !other, run: () => placeTab(t, other, { clone: false }) },
-      { label: tr('Open in New Window'), hint: 'Shift+F4', disabled: !isFile, run: () => openInNewWindow([tabPayload(t)]) },
+      { label: tr('Open in New Window'), keyAction: 'OpenInNewWindow', disabled: !isFile, run: () => openInNewWindow([tabPayload(t)]) },
       { label: tr('Move to New Window'), disabled: !isFile, run: () => moveToNewWindow(t) },
       ...(ide.detached ? [{ label: tr('Move to Main Window'), run: () => dockToMain([t]) }] : []),
       ...(t.viewer && !t.unsupported?.tooLarge ? [{ label: tr('Open as Text'), run: () => ide.openFile(t.path, { asText: true, group: g }) }] : []),
       { separator: true },
-      { label: tr('Copy Path'), hint: 'Ctrl+Shift+C', disabled: !isFile, run: () => copyPath(t.path) },
+      { label: tr('Copy Path'), keyAction: 'CopyPaths', disabled: !isFile, run: () => copyPath(t.path) },
       { label: tr('Copy Relative Path'), disabled: !isFile, run: () => copyPath(ide.util.rel(t.path)) },
-      { label: tr('Select in Project View'), hint: 'Alt+F1', disabled: !isFile || ide.detached, run: () => selectInProject(t.path) },
+      { label: tr('Select in Project View'), keyAction: 'SelectInProjectView', disabled: !isFile || ide.detached, run: () => selectInProject(t.path) },
       { label: tr('Show in Explorer'), disabled: !isFile, run: () => ide.api.invoke('shell:showInFolder', t.path) },
       { label: tr('Open with Default App'), disabled: !isFile, run: () => ide.api.invoke('shell:openPath', t.path) },
     ]);
@@ -1102,14 +1107,14 @@
   function showGroupMenu(g, x, y) {
     setActiveGroup(g);
     ide.ui.contextMenu(x, y, [
-      { label: tr('Split Right'), hint: 'Ctrl+\\', run: () => splitGroup(g, 'right', g.active, { clone: true }) },
-      { label: tr('Split Down'), hint: 'Ctrl+Shift+\\', run: () => splitGroup(g, 'down', g.active, { clone: true }) },
+      { label: tr('Split Right'), keyAction: 'SplitVertically', run: () => splitGroup(g, 'right', g.active, { clone: true }) },
+      { label: tr('Split Down'), keyAction: 'SplitHorizontally', run: () => splitGroup(g, 'down', g.active, { clone: true }) },
       { label: tr('Unsplit'), disabled: groups.length < 2, run: () => unsplit(g) },
       { label: tr('Unsplit All'), disabled: groups.length < 2, run: unsplitAll },
       { label: tr('Change Splitter Orientation'), disabled: groups.length < 2, run: () => flipOrientation(g) },
       { separator: true },
       { label: tr('Close All Tabs'), run: () => closeMany(g.tabs.filter((o) => !o.pinned)) },
-      { label: tr('Reopen Closed Tab'), hint: 'Ctrl+Shift+T', disabled: !closedTabs.length, run: reopenClosed },
+      { label: tr('Reopen Closed Tab'), keyAction: 'ReopenClosedTab', disabled: !closedTabs.length, run: reopenClosed },
     ]);
   }
 

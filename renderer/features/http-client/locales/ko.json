@@ -21,8 +21,8 @@
   "Preview": "미리보기",
   "Request": "요청",
   "Run HTTP Request": "HTTP 요청 실행",
-  "Run a request from a .http file with ▶ or Ctrl+Enter.": ".http 파일에서 ▶ 또는 Ctrl+Enter로 요청을 실행하세요.",
-  "Run {method} request (Ctrl+Enter)": "{method} 요청 실행 (Ctrl+Enter)",
+  "Run a request from a .http file with ▶ or {keys}.": ".http 파일에서 ▶ 또는 {keys}(으)로 요청을 실행하세요.",
+  "Run {method} request": "{method} 요청 실행",
   "Select environment": "환경 선택",
   "Sending request…": "요청을 보내는 중…",
   "Source": "소스",
@@ -37,5 +37,6 @@
   "none": "없음",
   "{ms} ms": "{ms}ms",
   "{name} already exists": "{name}이(가) 이미 있습니다",
-  "{n} bytes": "{n}바이트"
+  "{n} bytes": "{n}바이트",
+  "Run a request from a .http file with ▶.": ".http 파일에서 ▶로 요청을 실행하세요."
 }

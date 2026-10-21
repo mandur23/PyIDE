@@ -215,7 +215,7 @@
     title.dataset.userText = '';
     const fields = bpFields(bp, null, { condition: 'dbgBpCondition', hit: 'dbgBpHit', log: 'dbgBpLog' });
     const foot = el('div', 'dbg-bp-popup-foot');
-    const more = el('button', 'link', withKeys(tr('More'), 'Ctrl+Shift+F8'));
+    const more = el('button', 'link', ide.keymap.withKeys(tr('More'), 'ViewBreakpoints'));
     const rm = el('button', 'secondary', tr('Remove'));
     const done = el('button', 'primary', tr('Done'));
     foot.append(more, el('span', 'spacer'), rm, done);
@@ -232,13 +232,14 @@
       if (apply && findBp(path, line) === bp) setBp(path, line, fields.props());
     };
     const onKey = (e) => {
-      const combo = `${e.ctrlKey ? 'Ctrl+' : ''}${e.shiftKey ? 'Shift+' : ''}${e.key}`;
       if (e.isComposing) return;
-      if (e.key === 'Escape' || e.key === 'Enter' || combo === 'Ctrl+Shift+F8') {
+      // View Breakpoints' own shortcut (as the keymap has it) opens the full dialog, like the More link.
+      const viewAll = !!ide.actions.find((a) => a.id === 'ViewBreakpoints')?.keys.includes(ide.keymap.comboOf(e));
+      if (e.key === 'Escape' || e.key === 'Enter' || viewAll) {
         e.preventDefault();
         e.stopPropagation();
         close();
-        if (combo === 'Ctrl+Shift+F8') breakpointsDialog({ path, line });
+        if (viewAll) breakpointsDialog({ path, line });
         else ed.focus();
       }
     };
@@ -611,7 +612,9 @@
     s.frameIdx = i;
     renderFrames();
     const frame = s.frames[i];
-    if (!frame) return;
+    // A pause while debugpy is still starting the program stops with only library frames, which justMyCode hides:
+    // nothing to show, rather than the text the Variables pane had before.
+    if (!frame) { renderVars([]); renderWatches(); return; }
     if (frame.source?.path) await ide.openFile(frame.source.path, { line: frame.line, focus: false });
     let vars = [];
     let scopes = [];
@@ -1014,8 +1017,6 @@
     for (const [k, p] of Object.entries(subPanes)) p.classList.toggle('hidden', k !== which);
   }
 
-  const withKeys = (title, keys) => `${title} (${keys})`;
-
   function pane(title, actions = []) {
     const p = el('div', 'dbg-pane');
     const head = el('div', 'dbg-pane-head');
@@ -1045,26 +1046,28 @@
       subTabs.debugger.onclick = () => showSub('debugger');
       subTabs.console.onclick = () => { showSub('console'); con.input.focus(); };
       bar.append(subTabs.debugger, subTabs.console, el('span', 'dbg-sep'));
-      const mk = (id, icon, title, run, cls = '') => {
+      // action: the action whose current shortcut the tooltip shows.
+      const mk = (id, icon, title, run, cls = '', action = null) => {
         const b = el('button', `dbg-btn ${cls}`, icon);
         b.id = `dbg${id}`;
-        b.title = title;
+        if (action) ide.keymap.tooltip(b, title, action);
+        else b.title = title;
         b.onclick = run;
         bar.appendChild(b);
         btns[id] = b;
       };
       mk('Rerun', '↻', tr('Rerun'), () => lastRun?.(), 'green');
-      mk('Resume', '▶', withKeys(tr('Resume Program'), 'F9'), () => step('continue'), 'green');
+      mk('Resume', '▶', tr('Resume Program'), () => step('continue'), 'green', 'Resume');
       mk('Pause', '⏸', tr('Pause Program'), pause);
-      mk('Stop', '■', withKeys(tr('Stop'), 'Ctrl+F2'), stopDebug, 'red');
+      mk('Stop', '■', tr('Stop'), stopDebug, 'red', 'StopDebug');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('StepOver', '↷', withKeys(tr('Step Over'), 'F8'), () => step('next'), 'blue');
-      mk('StepInto', '↘', withKeys(tr('Step Into'), 'F7'), () => step('stepIn'), 'blue');
-      mk('StepOut', '↖', withKeys(tr('Step Out'), 'Shift+F8'), () => step('stepOut'), 'blue');
-      mk('RunToCursor', '⇥', withKeys(tr('Run to Cursor'), 'Alt+F9'), runToCursor, 'blue');
+      mk('StepOver', '↷', tr('Step Over'), () => step('next'), 'blue', 'StepOver');
+      mk('StepInto', '↘', tr('Step Into'), () => step('stepIn'), 'blue', 'StepInto');
+      mk('StepOut', '↖', tr('Step Out'), () => step('stepOut'), 'blue', 'StepOut');
+      mk('RunToCursor', '⇥', tr('Run to Cursor'), runToCursor, 'blue', 'RunToCursor');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('Evaluate', '⌨', withKeys(tr('Evaluate Expression'), 'Alt+F8'), evaluateDialog);
-      mk('Breakpoints', '●', withKeys(tr('View Breakpoints'), 'Ctrl+Shift+F8'), () => breakpointsDialog(), 'red');
+      mk('Evaluate', '⌨', tr('Evaluate Expression'), evaluateDialog, '', 'EvaluateExpression');
+      mk('Breakpoints', '●', tr('View Breakpoints'), () => breakpointsDialog(), 'red', 'ViewBreakpoints');
 
       const vars = el('div', 'dbg-panes');
       const frames = pane(tr('Frames'));
@@ -1084,7 +1087,7 @@
       });
       const watchPane = pane(tr('Watches'), [
         { id: 'dbgWatchAdd', icon: '+', title: tr('New Watch'), run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
-        { id: 'dbgWatchRemove', icon: '−', title: withKeys(tr('Remove Watch'), 'Delete'), run: () => removeWatch() },
+        { id: 'dbgWatchRemove', icon: '−', title: `${tr('Remove Watch')} (Delete)`, run: () => removeWatch() },
       ]);
       watchesList = watchPane.list;
       watchesList.id = 'dbgWatches';
@@ -1152,7 +1155,7 @@
     btns.Pause.disabled = sess?.state !== 'running';
     btns.Stop.disabled = !active;
     // Stop on an attached process detaches from it, as in PyCharm.
-    btns.Stop.title = sess?.attach ? withKeys(tr('Detach'), 'Ctrl+F2') : withKeys(tr('Stop'), 'Ctrl+F2');
+    ide.keymap.tooltip(btns.Stop, sess?.attach ? tr('Detach') : tr('Stop'), 'StopDebug');
     btns.Rerun.disabled = !lastRun;
     for (const k of ['StepOver', 'StepInto', 'StepOut', 'RunToCursor', 'Evaluate']) btns[k].disabled = !susp;
     debugBtn.classList.toggle('active', active);
@@ -1163,7 +1166,7 @@
   // ---------- toolbar, actions ----------
   const debugBtn = el('button', 'tb-icon dbg-tb-btn');
   debugBtn.id = 'debugBtn';
-  debugBtn.title = withKeys(tr('Debug'), 'Shift+F9');
+  ide.keymap.tooltip(debugBtn, tr('Debug'), 'Debug');
   debugBtn.appendChild(ide.icon('runDebug', '🐞'));
   ide.registerToolbarItem({ order: 80, el: debugBtn });
 

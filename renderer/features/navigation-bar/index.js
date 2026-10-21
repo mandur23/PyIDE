@@ -221,7 +221,8 @@
         modeButtons[id] = b;
         bar.appendChild(b);
       }
-      headEl = el('div', 'nb-ch-head muted', tr('Use Ctrl+Alt+H on a function to see its callers and callees'));
+      headEl = el('div', 'nb-ch-head muted');
+      headEl.append(ide.keymap.text(el('span'), () => tr('Use {action} on a function to see its callers and callees', { action: ide.keymap.withKeys(tr('Call Hierarchy'), 'CallHierarchy') })));
       treeEl = el('div', 'list nb-ch-tree');
       treeEl.id = 'nbCallTree';
       treeEl.tabIndex = 0;

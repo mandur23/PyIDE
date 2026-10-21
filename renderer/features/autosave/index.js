@@ -127,7 +127,7 @@
         s.appendChild(ctx.ui.checkbox('tools.formatOnSave', tr('Reformat code (ruff format)')));
         s.appendChild(ctx.ui.checkbox('tools.optimizeImportsOnSave', tr('Optimize imports (ruff)')));
       }
-      note(s, tr('Actions run on explicit saves (Ctrl+S) and auto saves. One Ctrl+Z undoes them.'));
+      note(s, tr('Actions run on {saves} and auto saves. One Ctrl+Z undoes them.', { saves: ide.keymap.withKeys(tr('explicit saves'), 'SaveAll') }));
     },
   });
 })();

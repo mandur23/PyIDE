@@ -20,5 +20,6 @@
   "Ensure every saved file ends with a line break": "저장되는 모든 파일이 줄바꿈으로 끝나도록 보장",
   "Reformat code (ruff format)": "코드 서식 다시 지정 (ruff format)",
   "Optimize imports (ruff)": "import 최적화 (ruff)",
-  "Actions run on explicit saves (Ctrl+S) and auto saves. One Ctrl+Z undoes them.": "액션은 직접 저장(Ctrl+S)과 자동 저장 모두에서 실행됩니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다."
+  "Actions run on {saves} and auto saves. One Ctrl+Z undoes them.": "액션은 {saves}과 자동 저장 모두에서 실행됩니다. Ctrl+Z 한 번으로 되돌릴 수 있습니다.",
+  "explicit saves": "직접 저장"
 }

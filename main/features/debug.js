@@ -305,7 +305,10 @@ exports.register = (ctx) => {
     });
     const initialized = dap.waitEvent('initialized');
     // debugpy answers attach only after configurationDone, so it is awaited last.
-    const attached = dap.request('attach', { justMyCode: true, redirectOutput: false, showReturnValue: true, subProcess: false, ...extra,
+    // The bundled debugpy is not under site-packages, so justMyCode would take it for the program's own code: a Pause
+    // while it is still starting the program would stop in debugpy's frames and show its locals.
+    const attached = dap.request('attach', { justMyCode: true, rules: [{ module: 'debugpy', include: false }], redirectOutput: false,
+      showReturnValue: true, subProcess: false, ...extra,
       // A Linux debugpy translates this side's backslash paths only when told the client is Windows.
       ...(pathMappings.length ? { pathMappings, clientOS: process.platform === 'win32' ? 'windows' : 'unix' } : {}) });
     attached.catch(() => {});

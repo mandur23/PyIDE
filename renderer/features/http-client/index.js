@@ -254,7 +254,7 @@
       range: new monaco.Range(r.line, 1, r.line, 1),
       options: {
         glyphMarginClassName: 'http-run-gutter',
-        glyphMarginHoverMessage: { value: tr('Run {method} request (Ctrl+Enter)', { method: r.method }) },
+        glyphMarginHoverMessage: { value: ide.keymap.withKeys(tr('Run {method} request', { method: r.method }), 'HttpClient.RunRequest') },
         glyphMargin: { position: monaco.editor.GlyphMarginLane.Left },
       },
     })));
@@ -281,6 +281,8 @@
     ed.onDidDispose(() => { clearTimeout(g.timer); gutters.delete(ed); });
     refreshGutter(ed);
   });
+  // The gutter hover names Run HTTP Request's current shortcut.
+  ide.on('keymapChanged', () => { for (const ed of gutters.keys()) refreshGutter(ed); });
 
   // ---------- tool window ----------
   let ui = null;
@@ -334,7 +336,10 @@
 
   function render() {
     if (!ui) return;
-    ui.list.replaceChildren(...(history.length ? history.map(historyRow) : [el('div', 'http-empty muted', tr('Run a request from a .http file with ▶ or Ctrl+Enter.'))]));
+    ui.list.replaceChildren(...(history.length ? history.map(historyRow) : [ide.keymap.text(el('div', 'http-empty muted'), () => {
+      const keys = ide.keymap.label('HttpClient.RunRequest');
+      return keys ? tr('Run a request from a .http file with ▶ or {keys}.', { keys }) : tr('Run a request from a .http file with ▶.');
+    })]));
     renderDetail();
   }
 

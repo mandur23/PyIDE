@@ -13,7 +13,7 @@
   "Edit Mnemonic Bookmark": "니모닉 북마크 편집",
   "Go to Bookmark {mnemonic}": "북마크 {mnemonic}(으)로 이동",
   "Jump to Source": "소스로 이동",
-  "No bookmarks. Press F11 in the editor to add one.": "북마크가 없습니다. 에디터에서 F11을 눌러 추가하세요.",
+  "No bookmarks. Use {action} in the editor to add one.": "북마크가 없습니다. 에디터에서 {action}을(를) 사용해 추가하세요.",
   "OK": "확인",
   "Press a digit or a letter to assign it to this line.": "이 줄에 지정할 숫자나 문자를 누르세요.",
   "Show Bookmarks": "북마크 표시",

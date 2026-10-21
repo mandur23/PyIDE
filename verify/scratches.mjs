@@ -3,7 +3,7 @@
 // scratch, Find in Files / semantic index leave scratches out, Search Everywhere finds them, rename and delete from the
 // tree, files added outside, restart with the same user data, another project, Ctrl+X / Ctrl+V never pasting into
 // Scratches and Consoles, reveal under the right top-level node (project holding the user data, longer project path),
-// and Korean. Ports 9140-9149.
+// the nodes' expanded state kept globally across projects and restarts, and Korean. Ports 9140-9149.
 // lib.mjs gives every launch a temporary PYIDE_USER_DATA, so the user's own scratches are never touched.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -208,6 +208,9 @@ try {
   await until(`!!${rowSel('outside.md')}`, 'file added outside shows in the tree');
   check(true, 'the tree updates when a scratch file is added');
 
+  const saved = await js(`ide.settings.get('projectTree.rootsExpanded', {}).scratches`);
+  check(Array.isArray(saved) && saved.includes('') && saved.includes('scratches'), `the open Scratches and Consoles and Scratches nodes are saved in a global setting (${S(saved)})`);
+  await js('(ide.settings.flush(), true)');
   await t.shot('scratches.png');
 } catch (err) {
   t.check(false, err.message);
@@ -221,6 +224,8 @@ t = await launch({ fixture: 'scratches', port: 9141, name: 'scratches-2', userDa
 try {
   const { js, until, check } = t;
   const h = helpers(t);
+  await until(`!!${rowSel('scratch.py')}`, 'Scratches open after a restart');
+  check(true, 'Scratches and Consoles and Scratches are still expanded after a restart');
   await h.openScratches();
   for (const f of ['scratch.py', 'scratch_1.py', 'notes.json', 'outside.md']) await until(`!!${rowSel(f)}`, `after restart: ${f}`);
   check(true, 'scratches survive a restart');
@@ -230,6 +235,8 @@ try {
   cpSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'core'), other, { recursive: true });
   await js(`ide.openProject(${S(other)})`);
   await until(`ide.util.samePath(ide.root, ${S(other)})`, 'other project open');
+  await until(`!!${rowSel('scratch.py')}`, 'Scratches open in another project');
+  check(true, 'another project opens with Scratches and Consoles and Scratches expanded');
   await h.openScratches();
   for (const f of ['scratch.py', 'notes.json']) await until(`!!${rowSel(f)}`, `in another project: ${f}`);
   check(true, 'another project shows the same scratches');
@@ -277,6 +284,9 @@ try {
   await js(`ide.closeProject().then(() => true)`);
   await js(`ide.openProject(${S(other)}).then(() => true)`);
   await until(`ide.util.samePath(ide.root, ${S(other)})`, 'project reopened');
+  await until(`!!${rowSel('Scratches')}`, 'Scratches node after reopening');
+  check(await js(`${rowSel('Scratches and Consoles')}.querySelector('.arrow').textContent === '▾' && ${rowSel('Scratches')}.querySelector('.arrow').textContent === '▸' && !${rowSel('scratch.py')}`),
+    'after reopening a project, Scratches and Consoles is open and the Scratches node closed with ArrowLeft stays closed');
   await reveal(path.join(other, 'root.txt'));
   await treeKey('Ctrl+V');
   check(!(await dialogOpen()) && existsSync(path.join(other, 'dest', 'cut_me.txt')), 'Ctrl+V after reopening the project does nothing (the cut was reset)');
@@ -302,6 +312,12 @@ try {
   await reveal(path.join(scratchDir, 'scratch.py'));
   check(await js(`ide.selectedTreeEntry()?.treeRoot === 'scratches' && ${rowSel('Scratches')}?.querySelector('.arrow').textContent === '▾' && document.querySelector('#tree .node.selected .name')?.textContent === 'scratch.py'`),
     'with a project path longer than the user data path, reveal expands Scratches and selects the scratch');
+  // Closing the top node keeps the open Scratches inside it for the next time (checked in the Korean run).
+  await js(`(${rowSel('Scratches and Consoles')}.click(), true)`);
+  await until(`!${rowSel('Scratches')}`, 'Scratches and Consoles closed');
+  await sleep(200);
+  check(S(await js(`ide.settings.get('projectTree.rootsExpanded', {}).scratches`)) === S(['scratches']), 'closing Scratches and Consoles saves it closed with Scratches still open inside');
+  await js('(ide.settings.flush(), true)');
 } catch (err) {
   t.check(false, err.message);
 }
@@ -313,6 +329,11 @@ try {
   const { js, until, check } = k;
   const h = helpers(k);
   await until(`!!${rowSel('스크래치 및 콘솔')}`, 'Korean node');
+  await k.sleep(500);
+  check(await js(`${rowSel('스크래치 및 콘솔')}.querySelector('.arrow').textContent === '▸' && !${rowSel('스크래치')}`), 'after a restart the closed Scratches and Consoles node is still closed');
+  await js(`(${rowSel('스크래치 및 콘솔')}.click(), true)`);
+  await until(`!!${rowSel('scratch.py')}`, 'Scratches open inside the reopened node');
+  check(true, 'opening it shows Scratches still expanded inside');
   await h.openScratches();
   check(true, 'Korean: 스크래치 및 콘솔 › 스크래치');
   await h.rowMenu('scratch.py');

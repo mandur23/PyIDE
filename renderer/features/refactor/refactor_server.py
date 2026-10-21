@@ -495,6 +495,7 @@ class Workspace:
         self.real = {}
         self.moves = []
         self.created = set()
+        self.sources = None
         for path, text in (overlay or {}).items():
             k = key(path)
             self.texts[k] = self.original[k] = text.replace('\r\n', '\n')
@@ -1294,10 +1295,13 @@ def move(params):
     if os.path.exists(os.path.join(dest, os.path.basename(source))):
         raise Fail('dest-exists', f"{os.path.basename(source)} already exists in the destination",
                    name=os.path.basename(source))
+    target = os.path.join(dest, os.path.basename(source))
+    relative = absolutize_importers(ws, source)
     with namespace_init(source):
         rope_step(ws, lambda project: rope.refactor.move.MoveModule(
             project, ws.resource(project, source)).get_changes(ws.resource(project, dest)))
-    finish_module_change(ws, source, os.path.join(dest, os.path.basename(source)), reorder=True)
+    relativize_importers(ws, relative, target)
+    finish_module_change(ws, source, target, reorder=True)
     return ws.result(f"Move {info['module']} to {module_name(ws.root, dest) or '.'}")
 
 
@@ -1405,6 +1409,175 @@ def finish_module_change(ws, source, target, reorder=False):
     ws.moves = [(a, b) for a, b in ws.moves if key(a) != temp]
     if not any(key(a) == key(source) for a, _ in ws.moves):
         ws.moves.append((source, target))
+
+
+# ---------- Move: importers keep their import style ----------
+# Rope's MoveModule turns a relative `from .figures import area` (or `from . import figures`) into `import
+# tools.figures` with qualified uses, and fails on `from ..pkg import mod`. Absolute `from` imports come through in
+# their own style. So before rope runs, the relative imports that name the moved module are made absolute (in memory),
+# and afterwards those imports, now naming the new place, become relative again where the new place is in the same
+# top-level package as the importer, as PyCharm does.
+# Dotted names are taken relative to rope's source folders (the project root, or `src` in a src layout), so they are
+# the names rope itself resolves.
+def source_folders(ws, project):
+    """Rope's source folders, deepest first (the project root when rope finds none)."""
+    if ws.sources is None:
+        folders = {key(f.real_path): os.path.abspath(f.real_path) for f in project.get_source_folders()}
+        ws.sources = sorted(folders.values(), key=len, reverse=True) or [ws.root]
+    return ws.sources
+
+
+def is_within(path, folder):
+    return os.path.commonpath([key(path), key(folder)]) == key(folder)
+
+
+def folders_holding(ws, path):
+    """The source folders holding `path`, deepest first (the project root when none does)."""
+    return [f for f in ws.sources or [] if is_within(path, f)] or [ws.root]
+
+
+def import_name(ws, path, folder=None):
+    """The dotted name `path` (a module file or package folder, existing or not) is imported by from `folder`, by
+    default the deepest source folder holding it."""
+    folder = folder or folders_holding(ws, path)[0]
+    return '' if key(path) == key(folder) else module_name(folder, path)
+
+
+def package_parts(ws, path, folder=None):
+    """The package a module file is in, as a list of names (empty directly in the source folder)."""
+    name = import_name(ws, os.path.dirname(os.path.abspath(path)), folder)
+    return name.split('.') if name else []
+
+
+def relative_target(path, level, module):
+    """The file or folder (without .py) a relative `from` import in `path` names."""
+    base = os.path.dirname(os.path.abspath(path))
+    for _ in range(level - 1):
+        base = os.path.dirname(base)
+    return os.path.join(base, *module.split('.')) if module else base
+
+
+def resolves_to(project, name, target):
+    """Whether rope finds the module `name` at `target` (a folder, or a module file without .py)."""
+    try:
+        found = project.find_module(name)
+    except Exception:
+        return False
+    return found is not None and key(found.real_path) in (key(target), key(target + '.py'))
+
+
+def absolute_module(ws, project, path, level, module):
+    """The absolute name rope resolves to what a relative `from` import in `path` names, trying each source folder
+    holding `path` (deepest first), or None when there is none."""
+    target = relative_target(path, level, module)
+    for folder in folders_holding(ws, path):
+        parts = package_parts(ws, path, folder)
+        if level > len(parts):
+            continue
+        name = '.'.join(parts[:len(parts) - level + 1] + ([module] if module else []))
+        if resolves_to(project, name, target):
+            return name
+    return None
+
+
+def names_moved(path, node, source):
+    """Whether a relative `from` import in `path` imports from, or imports, the module or package being moved."""
+    moved = re.sub(r'\.pyi?$', '', os.path.abspath(source), flags=re.I)
+    target = relative_target(path, node.level, node.module)
+    return is_within(target, moved) or any(key(os.path.join(target, a.name)) == key(moved) for a in node.names)
+
+
+def relative_module(ws, path, module):
+    """`module` as seen from `path` with a relative import (`..pkg.mod`), or None outside the importer's package tree."""
+    parts, target = package_parts(ws, path), module.split('.')
+    common = 0
+    while common < min(len(parts), len(target)) and parts[common] == target[common]:
+        common += 1
+    if not common:
+        return None
+    return '.' * (len(parts) - common + 1) + '.'.join(target[common:])
+
+
+IMPORT_KEYWORD = re.compile(r'\bimport\b')
+
+
+def from_module_edit(src, node, module):
+    """Replaces the `from <module>` part of a from-import statement, keeping the imported names as they are written."""
+    s, e = src.span(node)
+    at = IMPORT_KEYWORD.search(src.text, s + 4, e)
+    return s, at.start(), f'from {module} '
+
+
+def apply_edits(text, edits):
+    for s, e, new in sorted(edits, reverse=True):
+        text = text[:s] + new + text[e:]
+    return text
+
+
+def bindings_of(node):
+    return {a.asname or a.name for a in node.names}
+
+
+def absolutize_importers(ws, source):
+    """Makes the relative imports that name the module or package being moved absolute in ws.texts. Returns, per
+    changed file, its text before rope, the names those imports bind and the modules they import from. A file with such
+    an import that has no absolute name rope resolves to the same module is left to rope as it is."""
+    project = ws.project()
+    try:
+        source_folders(ws, project)
+        plan = {}
+        for path in [r.real_path for r in project.get_python_files()]:
+            if is_within(path, source):
+                continue  # rope handles the moved module's own imports
+            text = ws.read(path)
+            if not re.search(r'^[ \t]*from[ \t]*\.', text, re.M):
+                continue
+            try:
+                src = Source(text)
+            except Fail:
+                continue
+            edits, binds, modules, resolved = [], set(), set(), True
+            for node in ast.walk(src.tree):
+                if not isinstance(node, ast.ImportFrom) or not node.level or not names_moved(path, node, source):
+                    continue
+                absolute = absolute_module(ws, project, path, node.level, node.module)
+                if absolute is None:
+                    resolved = False
+                    break
+                edits.append(from_module_edit(src, node, absolute))
+                binds |= bindings_of(node)
+                modules.add(absolute)
+            if edits and resolved:
+                text = apply_edits(text, edits)
+                ws.texts[key(path)] = text
+                plan[key(path)] = {'pre': text, 'bindings': binds, 'modules': modules}
+        return plan
+    finally:
+        project.close()
+
+
+def relativize_importers(ws, plan, target):
+    """Turns the imports absolutize_importers made absolute back into relative ones, now naming the new place."""
+    new = import_name(ws, target)
+    for k, info in plan.items():
+        text = ws.texts[k]
+        if text == info['pre']:
+            ws.texts[k] = ws.original[k]
+            continue
+        modules = set(info['modules']) | {new.rpartition('.')[0]}
+        try:
+            src = Source(text)
+        except Fail:
+            continue
+        edits = []
+        for node in ast.walk(src.tree):
+            if (isinstance(node, ast.ImportFrom) and not node.level and node.module
+                    and (node.module in modules or node.module == new or node.module.startswith(new + '.'))
+                    and bindings_of(node) <= info['bindings']):
+                relative = relative_module(ws, ws.real[k], node.module)
+                if relative:
+                    edits.append(from_module_edit(src, node, relative))
+        ws.texts[k] = apply_edits(text, edits)
 
 
 def rename_module(params):

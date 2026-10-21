@@ -121,7 +121,10 @@
       container.classList.add('run-tool');
       tabBar = el('div', 'run-tabs hidden');
       bodies = el('div', 'run-bodies');
-      emptyNote = el('div', 'run-empty muted', tr('Nothing to show. Run a configuration with Shift+F10.'));
+      emptyNote = ide.keymap.text(el('div', 'run-empty muted'), () => {
+        const keys = ide.keymap.label('Run');
+        return keys ? tr('Nothing to show. Run a configuration with {keys}.', { keys }) : tr('Nothing to show.');
+      });
       bodies.appendChild(emptyNote);
       container.append(tabBar, bodies);
     },
@@ -351,13 +354,11 @@
   // ---------- run widget (toolbar) ----------
   const runBtn = el('button', 'tb-icon run-btn');
   runBtn.appendChild(ide.icon('runRun', '▶'));
-  runBtn.title = tr('Run (Shift+F10)');
-  runBtn.dataset.keymapAction = 'Run';
+  ide.keymap.tooltip(runBtn, tr('Run'), 'Run');
   let debugActive = false; // a debugger session is active (see 'debugSessionChanged')
   const stopBtn = el('button', 'tb-icon stop-btn');
   stopBtn.appendChild(ide.icon('runStop', '■'));
-  stopBtn.title = tr('Stop (Ctrl+F2)');
-  stopBtn.dataset.keymapAction = 'Stop';
+  ide.keymap.tooltip(stopBtn, tr('Stop'), 'Stop');
   stopBtn.disabled = true;
   const target = el('button', 'run-target');
   target.title = tr('Run/Debug Configurations');
@@ -507,7 +508,7 @@
   ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && runConfig(activeSession.cfg, { executor: activeSession.executor }) });
   ide.registerTreeAction({
     title: tr("Run '…'"),
-    hint: 'Ctrl+Shift+F10',
+    keyAction: 'RunClass',
     when: (e) => !e.dir && /\.pyw?$/i.test(e.name) && contextConfigForFile(e.path)?.type === 'python',
     run: (e) => runContext(contextConfigForFile(e.path)),
   });
@@ -704,7 +705,7 @@
   function showGutterMenu(ed, item, x, y) {
     const cfg = () => item.config();
     ide.ui.contextMenu(x, y, [
-      { label: `▶  ${tr("Run '{name}'", { name: item.title })}`, hint: 'Ctrl+Shift+F10', run: () => runContext(cfg()) },
+      { label: `▶  ${tr("Run '{name}'", { name: item.title })}`, keyAction: 'RunClass', run: () => runContext(cfg()) },
       ...(canDebug(cfg()) ? [{ label: `🐞  ${tr("Debug '{name}'", { name: item.title })}`, run: () => {
         ed.setPosition({ lineNumber: item.line, column: 1 });
         debugConfig(addTemporary(cfg()));

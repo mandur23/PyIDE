@@ -1,7 +1,7 @@
 {
   "Live Templates": "라이브 템플릿",
   "PyCharm-style live templates and postfix completion for Python: abbreviations that expand with Tab, Surround With (Ctrl+Alt+J), and templates such as .if, .for and .print after an expression.": "PyCharm 스타일의 Python 라이브 템플릿과 후위 완성: Tab으로 펼쳐지는 약어, 다음으로 감싸기(Ctrl+Alt+J), 표현식 뒤의 .if, .for, .print 같은 템플릿을 제공합니다.",
-  "$NAME$ is a variable the caret visits in order, $END$ is where the caret ends, and $SELECTION$ is the text that Surround With (Ctrl+Alt+J) wraps.": "$NAME$은 캐럿이 차례로 방문하는 변수이고, $END$는 캐럿이 마지막에 놓이는 위치이며, $SELECTION$은 다음으로 감싸기(Ctrl+Alt+J)가 감싸는 텍스트입니다.",
+  "$NAME$ is a variable the caret visits in order, $END$ is where the caret ends, and $SELECTION$ is the text that {action} wraps.": "$NAME$은 캐럿이 차례로 방문하는 변수이고, $END$는 캐럿이 마지막에 놓이는 위치이며, $SELECTION$은 {action}이(가) 감싸는 텍스트입니다.",
   "Abbreviation": "약어",
   "Add Template": "템플릿 추가",
   "Call the superclass method": "슈퍼클래스 메서드 호출",
@@ -44,5 +44,6 @@
   "pytest test function": "pytest 테스트 함수",
   "try / except": "try / except",
   "user": "사용자",
-  "with statement": "with 문"
+  "with statement": "with 문",
+  "Surround With": "다음으로 감싸기"
 }
