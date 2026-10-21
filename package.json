@@ -1,8 +1,9 @@
 {
   "name": "pyide",
   "productName": "PyIDE",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PyCharm-style Python IDE",
+  "updateFeed": "https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/",
   "author": {
     "name": "PyIDE",
     "email": "ms01048913077@gmail.com"
@@ -67,7 +68,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.pyide.invalid/"
+        "url": "https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/"
       }
     ],
     "win": {

@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Suites that call main-process modules directly (dotenv, git helpers) run outside the app, where nothing is trusted.
 process.env.PYIDE_TRUST_ALL ??= '1';
+// Installed copies check GitHub Releases for updates by default; tests never do unless they set a feed.
+process.env.PYIDE_UPDATE_FEED ??= 'off';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

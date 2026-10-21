@@ -36,6 +36,15 @@ function serveFolder(dir) {
   });
 }
 
+// The feed an installed copy uses until the user sets one: package.json `updateFeed` (GitHub Releases). Source runs have
+// none. PYIDE_UPDATE_FEED overrides it, and 'off' turns it off (the verify suites do, so they never reach GitHub).
+function defaultFeed(app) {
+  const env = process.env.PYIDE_UPDATE_FEED;
+  if (env != null) return env === 'off' ? '' : env;
+  if (!app.isPackaged) return '';
+  try { return String(require(path.join(app.getAppPath(), 'package.json')).updateFeed || ''); } catch { return ''; }
+}
+
 // {url, dir}: dir is set for a local folder feed.
 function resolveFeed(feed) {
   const value = String(feed || '').trim();
@@ -51,7 +60,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   const kind = installKind(app);
   let updater = null;
   let feed = null; // {key, url, dir, server}
-  let state = { kind, version: app.getVersion(), phase: 'idle' }; // idle | checking | available | downloading | downloaded | error
+  let state = { kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle' }; // idle | checking | available | downloading | downloaded | error
   const setState = (patch) => {
     state = { ...state, ...patch };
     send('updater:state', state);

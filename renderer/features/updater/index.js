@@ -9,7 +9,8 @@
   const log = ide.logger?.('#updater') || console;
   let state = { phase: 'idle' };
 
-  const feed = () => String(ide.settings.get(FEED, '') || '').trim();
+  // An unset feed means the installation default (state.defaultFeed); an empty one, set by the user, turns updates off.
+  const feed = () => String(ide.settings.get(FEED, state.defaultFeed || '') ?? '').trim();
 
   // ---------- status bar ----------
   const item = el('span', 'upd-status hidden');
@@ -125,7 +126,7 @@
       const input = el('input', 'upd-feed');
       input.dataset.key = FEED;
       input.placeholder = tr('Web address or local folder');
-      input.value = ctx.value(FEED) || '';
+      input.value = ctx.value(FEED) ?? state.defaultFeed ?? '';
       input.oninput = () => ctx.set(FEED, input.value.trim());
       const browse = el('button', 'secondary', tr('Browse…'));
       browse.onclick = async () => {
@@ -150,7 +151,7 @@
       }
       const now = el('button', 'secondary', tr('Check Now'));
       now.id = 'updatesCheckNow';
-      now.onclick = () => check({ manual: true, feedUrl: String(ctx.value(FEED) || '').trim() });
+      now.onclick = () => check({ manual: true, feedUrl: String(ctx.value(FEED) ?? state.defaultFeed ?? '').trim() });
       info.appendChild(now);
     },
   });
