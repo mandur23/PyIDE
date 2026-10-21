@@ -110,6 +110,7 @@ Projects, notebooks, READMEs, HTTP responses, AI replies and program output are 
 ## Verification
 
 `verify/lib.mjs` launches an isolated instance: a temp copy of `verify/fixtures/<fixture>/` as the project, temp user data, and a CDP port. It returns `js(expr)`, `until(expr, label)`, `press('Ctrl+Shift+F')` (real key events), `type(text)`, `click(selector)`, `shot(file)`, `check(ok, label)`, `finish()`. A run fails on any failed check or uncaught renderer exception. See `verify/core.mjs`. Each feature uses its own port so instances can run side by side.
+Temp folders: every `%TEMP%pyide-*` folder a suite makes (its launches' project copies and user data, and its own `mkdtempSync` folders, which `lib.mjs` registers by wrapping `fs.mkdtempSync`) is removed when the suite exits, after its instances are ended and their helper processes have let go (about 1.5 s). `PYIDE_KEEP_TEST_DIRS=1` keeps them for debugging. `verify/clean.mjs` (`npm run clean:tests`, `--age <minutes>`, default 360, `--dry-run`) removes what a crashed suite left; `lib.mjs` starts it detached at most once an hour. The `*-venv` folders in `verify/out` are reused caches and are not removed.
 
 ## Semantic search (EmbeddingGemma 2)
 

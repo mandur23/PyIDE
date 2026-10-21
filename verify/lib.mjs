@@ -1,6 +1,7 @@
 // Launches an isolated PyIDE instance (temp user data + temp copy of a fixture project) and drives it over CDP.
 import { spawn, execSync } from 'child_process';
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import fs, { cpSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { syncBuiltinESMExports } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,12 +16,48 @@ process.env.PYIDE_OSV_URL ??= 'off';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Every launch gets a temp folder (project copy, user data with Chromium's profile: tens of MB). They are removed when
+// the suite exits, after its instances are ended, since a later launch in the same suite may reuse one's user data.
+// PYIDE_KEEP_TEST_DIRS=1 keeps them for debugging. verify/clean.mjs removes what crashed suites left behind.
+const workDirs = new Set();
+const runningPids = new Set();
+let killedAny = false;
+const realMkdtemp = fs.mkdtempSync;
+export function tempDir(prefix) {
+  const dir = realMkdtemp(path.join(tmpdir(), `pyide-${prefix}-`));
+  workDirs.add(dir);
+  return dir;
+}
+// Suites also make their own pyide-* folders in %TEMP% with mkdtempSync: those are removed at exit too.
+fs.mkdtempSync = (prefix, ...rest) => {
+  const dir = realMkdtemp(prefix, ...rest);
+  if (/^pyide-/i.test(path.basename(String(prefix))) && path.resolve(path.dirname(String(prefix))).toLowerCase() === path.resolve(tmpdir()).toLowerCase()) workDirs.add(dir);
+  return dir;
+};
+syncBuiltinESMExports();
+// Once an hour, a detached verify/clean.mjs removes old test folders that crashed suites left behind.
+try {
+  const mark = path.join(tmpdir(), 'pyide-clean.stamp');
+  if (!existsSync(mark) || Date.now() - statSync(mark).mtimeMs > 3600000) {
+    writeFileSync(mark, String(Date.now()));
+    spawn(process.execPath, [path.join(APP_DIR, 'verify', 'clean.mjs')], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  }
+} catch {}
+process.on('exit', () => {
+  for (const pid of runningPids) try { execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); } catch {}
+  if (runningPids.size) killedAny = true;
+  if (process.env.PYIDE_KEEP_TEST_DIRS === '1' || !workDirs.size) return;
+  // A killed Electron's GPU and utility processes let go of the profile a moment later.
+  if (killedAny) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+  for (const dir of workDirs) try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {}
+});
+
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
 // userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
 // exe: an installed PyIDE.exe to run instead of the source tree; open: a project file to pass instead of the folder.
 // projectDir: an existing project folder to open in place, instead of a copy of a fixture; args: extra command-line flags.
 export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [] }) {
-  const work = mkdtempSync(path.join(tmpdir(), `pyide-${name}-`));
+  const work = tempDir(name);
   const project = projectDir || path.join(work, 'project');
   if (!projectDir) cpSync(path.join(APP_DIR, 'verify', 'fixtures', fixture), project, { recursive: true });
   const outDir = path.join(APP_DIR, 'verify', 'out', name);
@@ -36,6 +73,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_TRUST_ALL: '1', PYIDE_CLAUDE_IDE_DIR: path.join(work, 'claude-ide'), ...process.env, ...env, PYIDE_USER_DATA: userData || path.join(work, 'userdata') },
     stdio: 'ignore',
   });
+  runningPids.add(child.pid);
 
   let page;
   for (let i = 0; i < 100 && !page; i++) {
@@ -114,6 +152,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const close = () => {
     ws.close();
     try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' }); } catch {}
+    runningPids.delete(child.pid);
+    killedAny = true;
   };
   const finish = () => {
     close();
