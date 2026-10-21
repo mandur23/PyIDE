@@ -1649,14 +1649,49 @@ METHODS = {
 }
 
 
+PATH_PARAMS = ('root', 'file', 'path', 'target', 'dest', 'source')
+
+
+def long_paths(params):
+    """A project opened through an 8.3 short path (C:\\Users\\RUNNER~1\\...) gets long paths from rope, which resolves
+    its root with os.path.realpath, so nothing it returns would match the IDE's open files. Requests are made long here;
+    the returned function maps results back to the IDE's spelling of the root."""
+    root = params.get('root')
+    if not isinstance(root, str) or not root:
+        return params, lambda value: value
+    ide_root, long_root = os.path.abspath(root), os.path.realpath(root)
+    if os.path.normcase(ide_root) == os.path.normcase(long_root):
+        return params, lambda value: value
+    params = dict(params)
+    for name in PATH_PARAMS:
+        if isinstance(params.get(name), str) and params[name]:
+            params[name] = os.path.realpath(params[name])
+    if isinstance(params.get('overlay'), dict):
+        params['overlay'] = {os.path.realpath(p): text for p, text in params['overlay'].items()}
+    prefix = os.path.normcase(long_root)
+
+    def back(value):
+        if isinstance(value, dict):
+            return {k: back(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [back(v) for v in value]
+        if isinstance(value, str) and '\n' not in value and os.path.normcase(value[:len(long_root)]) == prefix \
+                and value[len(long_root):len(long_root) + 1] in ('', '\\', '/'):
+            return ide_root + value[len(long_root):]
+        return value
+    return params, back
+
+
 def handle(msg):
+    back = lambda value: value
     try:
         method = METHODS.get(msg.get('method'))
         if method is None:
             raise Fail('unknown-method', f"Unknown method {msg.get('method')}")
-        return {'id': msg.get('id'), 'result': method(msg.get('params') or {})}
+        params, back = long_paths(msg.get('params') or {})
+        return {'id': msg.get('id'), 'result': back(method(params))}
     except Fail as f:
-        return {'id': msg.get('id'), 'error': {'code': f.code, 'message': f.message, 'params': f.params}}
+        return {'id': msg.get('id'), 'error': {'code': f.code, 'message': f.message, 'params': back(f.params)}}
     except Exception as err:
         return {'id': msg.get('id'), 'error': {'code': 'internal', 'message': f'{type(err).__name__}: {err}',
                                                'params': {'detail': traceback.format_exc()}}}
