@@ -12,7 +12,8 @@
   "scripts": {
     "start": "electron .",
     "vendor": "python -m pip install --upgrade --target vendor debugpy==1.8.22 ruff==0.17.1",
-    "dist": "electron-builder --win nsis msi --x64"
+    "dist": "electron-builder --win nsis msi --x64",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "electron": "^38.8.6",

@@ -1,5 +1,7 @@
 # PyIDE
 
+[![CI](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml/badge.svg)](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml)
+
 PyCharm 스타일의 Windows용 Python IDE입니다. Electron 38과 Monaco 에디터로 만들었습니다.
 
 **설치 파일 다운로드:** [PyIDE-Setup.exe](https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/PyIDE-Setup.exe) · [릴리스 페이지 (EXE / MSI)](https://github.com/mandur23/Portfolio-Nano-/releases/tag/pyide)
@@ -37,9 +39,21 @@ npm run dist
 
 `dist/`에 `PyIDE-Setup-<버전>.exe` (NSIS)와 `PyIDE-<버전>.msi`가 만들어집니다.
 
+## 릴리스
+
+`CHANGELOG.md`에 `## <버전>` 절을 추가해 커밋한 뒤, `master`에서 실행합니다 (`gh` 로그인 필요).
+
+```bash
+npm run release -- 0.2.1 --dry-run   # 확인만: 빌드와 테스트 후 실행할 git/gh 명령을 출력
+npm run release -- 0.2.1
+npm run release -- 0.2.1 --publish-only   # 푸시 뒤에 멈춘 릴리스 이어 가기: dist의 파일만 업로드
+```
+
+버전 올리기, 빌드, 설치 파일 테스트, 커밋과 `v<버전>` 태그, 푸시, GitHub 릴리스 업로드(`latest.yml`은 마지막)까지 한 번에 합니다. 중간에 멈추면 어디까지 진행됐는지에 따라 되돌리는 방법이나 `--publish-only`로 이어 가는 방법을 알려 줍니다. 옵션은 [FEATURES.md](FEATURES.md)의 Updates 절에 있습니다.
+
 ## 테스트
 
-`verify/` 폴더의 스크립트가 Chrome DevTools Protocol로 실제 앱을 띄워 검사합니다. 창이 사용 중인 화면에 뜨지 않도록 별도 데스크톱에서 실행합니다.
+푸시와 PR마다 GitHub Actions(`.github/workflows/ci.yml`)가 주요 테스트를 실행합니다. `verify/` 폴더의 스크립트가 Chrome DevTools Protocol로 실제 앱을 띄워 검사합니다. 창이 사용 중인 화면에 뜨지 않도록 별도 데스크톱에서 실행합니다.
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out verify/out/core.txt node verify/core.mjs

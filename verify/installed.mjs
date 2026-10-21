@@ -16,7 +16,10 @@ const DIST = path.join(APP_DIR, 'dist');
 const OUT = path.join(APP_DIR, 'verify', 'out', 'installed');
 mkdirSync(OUT, { recursive: true });
 const [kindArg = 'all', fileArg] = process.argv.slice(2);
-const inDist = (pattern) => {
+// dist keeps the installers of earlier versions too: take package.json's version, else the first match.
+const VERSION = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
+const inDist = (pattern, name) => {
+  if (existsSync(path.join(DIST, name))) return path.join(DIST, name);
   const f = existsSync(DIST) && readdirSync(DIST).find((n) => pattern.test(n));
   return f ? path.join(DIST, f) : null;
 };
@@ -50,7 +53,7 @@ const msiLog = (name) => path.join(OUT, `msi-${name}.log`);
 
 const KINDS = {
   nsis: {
-    file: () => fileArg || inDist(/^PyIDE-Setup-.*\.exe$/),
+    file: () => fileArg || inDist(/^PyIDE-Setup-.*\.exe$/, `PyIDE-Setup-${VERSION}.exe`),
     dir: () => path.join(mkdtempSync(path.join(tmpdir(), 'pyide-installed-')), 'PyIDE'),
     install: (file, dir) => spawnSync(file, ['/S', `/D=${dir}`], { stdio: 'ignore' }).status,
     // The uninstaller copies itself to %TEMP% and returns at once; the caller waits for the files to go.
@@ -61,7 +64,7 @@ const KINDS = {
     openWithGone: () => unregistered() && 'registry',
   },
   msi: {
-    file: () => fileArg || inDist(/^PyIDE-.*\.msi$/),
+    file: () => fileArg || inDist(/^PyIDE-.*\.msi$/, `PyIDE-${VERSION}.msi`),
     dir: () => path.join(process.env.LOCALAPPDATA, 'Programs', 'PyIDE'),
     install: (file) => spawnSync('msiexec', ['/i', file, '/qn', '/l*v', msiLog('install')], { stdio: 'ignore' }).status,
     uninstall: (file) => spawnSync('msiexec', ['/x', file, '/qn', '/l*v', msiLog('uninstall')], { stdio: 'ignore' }).status,

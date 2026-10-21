@@ -1,0 +1,133 @@
+# Runs the verify suites that need no network, AI models, databases, Docker or WSL, one after another, on a Windows
+# runner. The runner has an interactive desktop, so the suites run directly (verify/on-desktop.ps1 is for a desktop
+# someone is working on). verify/out is uploaded when something fails.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # The IDE's default interpreter is `py -3`, then `python`; both must be the 3.13 that has pytest.
+      PY_PYTHON: '3.13'
+      PY_PYTHON3: '3.13'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # The checkout this repo is developed in has core.autocrlf=false; the runner's Git for Windows defaults to true,
+      # which would give the fixtures CRLF line endings the suites compare against.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.11.0'
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Bundled tools (ruff, debugpy)
+        run: npm run vendor
+
+      - name: pytest for the default interpreter
+        run: python -m pip install --disable-pip-version-check pytest
+
+      # verify/rename-module.mjs (like verify/refactor.mjs) runs rope from this venv; it would make it itself.
+      - name: rope venv
+        id: ready
+        run: |
+          python -m venv verify/out/refactor-venv
+          verify/out/refactor-venv/Scripts/python.exe -m pip install --disable-pip-version-check rope
+
+      - name: core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/core.mjs
+      - name: editors
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/editors.mjs
+      - name: keyboard
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/keyboard.mjs
+      - name: tree
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/tree.mjs
+      - name: settings
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/settings.mjs
+      - name: search-nav
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/search-nav.mjs
+      - name: workspace
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/workspace.mjs
+      - name: i18n-static
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/i18n-static.mjs
+      - name: security
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/security.mjs
+      - name: live-templates
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/live-templates.mjs
+      - name: autosave
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/autosave.mjs
+      - name: rename-module
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/rename-module.mjs
+      - name: scratches
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/scratches.mjs
+      - name: keymap-edit
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/keymap-edit.mjs
+      - name: auto-test
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/auto-test.mjs
+
+      - name: Upload verify/out
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: verify-out
+          path: |
+            verify/out/
+            !verify/out/refactor-venv/
+          if-no-files-found: ignore
+          retention-days: 14
