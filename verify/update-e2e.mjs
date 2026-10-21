@@ -21,6 +21,10 @@ const version = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf
 const next = version.replace(/\d+$/, (n) => String(Number(n) + 1));
 const installer = path.join(APP_DIR, 'dist', `PyIDE-Setup-${version}.exe`);
 if (!existsSync(installer)) throw new Error(`no ${installer}: run npm run dist first`);
+// The NSIS installer removes an existing per-user PyIDE before installing anywhere, so a temp install here would
+// uninstall the real one (settings in %APPDATA%\PyIDE survive, the app does not).
+const localInstall = path.join(process.env.LOCALAPPDATA, 'Programs', 'PyIDE', 'Uninstall PyIDE.exe');
+if (existsSync(localInstall)) throw new Error(`PyIDE is installed in ${path.dirname(localInstall)}; installing a test copy would remove it. Uninstall it first (or use npm run release -- <v> --replace-local-install, which reinstalls it).`);
 
 const results = [];
 const check = (ok, label) => { results.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
