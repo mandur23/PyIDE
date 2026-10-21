@@ -252,7 +252,16 @@
   renderActions();
 
   ide.on('toolWindowShown', (id) => {
-    if (id === 'PythonConsole' && !procId) start().then(() => input.focus());
+    // The console starts in the background; once it is ready it takes the keyboard, unless the keyboard moved somewhere
+    // outside it meanwhile (Esc back to the editor while it was starting must stick).
+    if (id === 'PythonConsole' && !procId) {
+      let left = false;
+      const watch = (e) => { if (!root?.contains(e.target)) left = true; };
+      document.addEventListener('focusin', watch, true);
+      start().finally(() => document.removeEventListener('focusin', watch, true)).then(() => {
+        if (tw.isVisible() && !left) input.focus();
+      });
+    }
     else if (id === 'PythonConsole') varsPane?.refresh();
   });
 
