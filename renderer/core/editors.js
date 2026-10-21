@@ -41,10 +41,11 @@
     const again = docs.get(key(path));
     if (again) return again;
     const uri = ide.monaco.Uri.file(path);
-    const model = ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(r.text, languageFor(path), uri);
+    const preview = adoptPreview(uri, r.text);
+    const model = preview?.model || ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(r.text, languageFor(path), uri);
     // fresh: fileOpened is announced once the first tab for it exists. diskHash fingerprints the text last read from
     // or written to the file, so auto save can tell when the file changed underneath.
-    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText };
+    const doc = { path, model, savedVersion: preview ? preview.savedVersion : model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText };
     docs.set(key(path), doc);
     model.onDidChangeContent((e) => {
       // The tab bars change only when the modified mark does, not on every keystroke.
@@ -54,6 +55,50 @@
     });
     if (peers > 1) ide.api.send('doc:opened', { path });
     return doc;
+  }
+
+  // ---------- preview models ----------
+  // Monaco's Ctrl+hover preview and peek views open a definition or usage through its model service, which only knows
+  // models that exist ("Model not found" otherwise). A target file with no tab gets a preview model read from disk;
+  // it is disposed once no editor (a peek view) has shown it for a while, or adopted by loadDoc when a tab opens it.
+  const previews = new Map(); // uri string -> {model, timer, version}
+  const PREVIEW_TTL = 120000;
+  function expirePreview(uri) {
+    const p = previews.get(uri);
+    if (!p) return;
+    if (p.model.isAttachedToEditor()) { p.timer = setTimeout(() => expirePreview(uri), PREVIEW_TTL); return; }
+    previews.delete(uri);
+    if (!p.model.isDisposed()) p.model.dispose();
+  }
+  ide.previewModel = async (path) => {
+    const uri = ide.monaco.Uri.file(path);
+    const id = uri.toString();
+    const live = ide.monaco.editor.getModel(uri);
+    if (live) {
+      const p = previews.get(id);
+      if (p) { clearTimeout(p.timer); p.timer = setTimeout(() => expirePreview(id), PREVIEW_TTL); }
+      return live;
+    }
+    let r;
+    try { r = await ide.api.invoke('fs:readText', path); } catch { return null; }
+    if (!r || r.binary || r.tooLarge || typeof r.text !== 'string') return null;
+    const raced = ide.monaco.editor.getModel(uri);
+    if (raced) return raced;
+    const model = ide.monaco.editor.createModel(r.text, languageFor(path), uri);
+    previews.set(id, { model, version: model.getAlternativeVersionId(), timer: setTimeout(() => expirePreview(id), PREVIEW_TTL) });
+    return model;
+  };
+  // A tab takes over a preview model: unedited, it is brought up to the disk text; edited in a peek view, it keeps
+  // those edits as unsaved changes.
+  function adoptPreview(uri, text) {
+    const p = previews.get(uri.toString());
+    if (!p) return null;
+    previews.delete(uri.toString());
+    clearTimeout(p.timer);
+    if (p.model.isDisposed()) return null;
+    const edited = p.model.getAlternativeVersionId() !== p.version;
+    if (!edited && p.model.getValue() !== text) p.model.setValue(text);
+    return { model: p.model, savedVersion: edited ? p.version : p.model.getAlternativeVersionId() };
   }
 
   // A document opened with Open as Text is read back from disk the same way, in its encoding.

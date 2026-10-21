@@ -296,8 +296,9 @@
 
   for (const id of [...LANGS, 'python']) {
     monaco.languages.registerDefinitionProvider(id, {
-      provideDefinition(model, position) {
+      async provideDefinition(model, position) {
         const t = targetAt(model, position);
+        if (t) await ide.previewModel?.(t.path); // Ctrl+hover previews the target through its model
         return t ? [{ uri: monaco.Uri.file(t.path), range: new monaco.Range(t.line, 1, t.line, 1) }] : null;
       },
     });

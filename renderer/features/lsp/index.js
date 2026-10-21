@@ -425,15 +425,24 @@
     fullRange: l.targetRange || l.range,
     origin: l.originSelectionRange,
   }));
+  // Uris spelled as the tabs spell them (Uri.file of the path), so a target matches its open model.
+  const fileUri = (uri) => monaco.Uri.file(toPath(uri));
+  // Monaco previews (Ctrl+hover, peek) need a model for every target file; ide.previewModel loads the closed ones.
+  const PREVIEW_FILES = 100;
+  async function withModels(items) {
+    const paths = [...new Set(items.filter((i) => i.uri.scheme === 'file').map((i) => i.uri.fsPath))];
+    if (ide.previewModel && paths.length <= PREVIEW_FILES) await Promise.all(paths.map((p) => ide.previewModel(p)));
+    return items;
+  }
   const toMonacoLinks = (locs) => locs.map((l) => ({
-    uri: monaco.Uri.parse(l.uri), range: toRange(l.fullRange), targetSelectionRange: toRange(l.range),
+    uri: fileUri(l.uri), range: toRange(l.fullRange), targetSelectionRange: toRange(l.range),
     originSelectionRange: l.origin ? toRange(l.origin) : undefined,
   }));
   const locationProvider = (method) => async (model, position, token) => {
     const doc = docFor(model);
     if (!doc) return undefined;
     const r = await request(method, { textDocument: { uri: doc.uri }, position: lspPos(position) });
-    return token.isCancellationRequested ? undefined : toMonacoLinks(toLocations(r));
+    return token.isCancellationRequested ? undefined : withModels(toMonacoLinks(toLocations(r)));
   };
   monaco.languages.registerDefinitionProvider('python', { provideDefinition: locationProvider('textDocument/definition') });
   monaco.languages.registerTypeDefinitionProvider('python', { provideTypeDefinition: locationProvider('textDocument/typeDefinition') });
@@ -443,7 +452,7 @@
       const doc = docFor(model);
       if (!doc) return undefined;
       const r = await request('textDocument/references', { textDocument: { uri: doc.uri }, position: lspPos(position), context: { includeDeclaration: context.includeDeclaration } });
-      return token.isCancellationRequested ? undefined : (r || []).map((l) => ({ uri: monaco.Uri.parse(l.uri), range: toRange(l.range) }));
+      return token.isCancellationRequested ? undefined : withModels((r || []).map((l) => ({ uri: fileUri(l.uri), range: toRange(l.range) })));
     },
   });
 
