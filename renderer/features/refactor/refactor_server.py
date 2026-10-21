@@ -1219,9 +1219,19 @@ def top_level_at(src, offset):
     return None
 
 
+def move_source(params):
+    """open_file for Move, whose target may be a folder (a package moved from the project tree)."""
+    if not params.get('pos') and os.path.isdir(params.get('target') or ''):
+        ws = Workspace(params['root'], params.get('overlay'))
+        path = os.path.abspath(params['target'])
+        ws.check_inside(path)
+        return ws, path, ''
+    return open_file(params)
+
+
 def prepare_move(params):
     require_rope()
-    ws, path, text = open_file(params)
+    ws, path, text = move_source(params)
     if params.get('pos'):
         src = Source(text)
         node = top_level_at(src, offset_of(text, params['pos']['line'], params['pos']['col']))
@@ -1236,7 +1246,7 @@ def prepare_move(params):
 
 def move(params):
     require_rope()
-    ws, path, text = open_file(params)
+    ws, path, text = move_source(params)
     info = prepare_move(params)
     dest = os.path.abspath(params['dest'])
     ws.check_inside(dest)
@@ -1284,9 +1294,147 @@ def move(params):
     if os.path.exists(os.path.join(dest, os.path.basename(source))):
         raise Fail('dest-exists', f"{os.path.basename(source)} already exists in the destination",
                    name=os.path.basename(source))
-    rope_step(ws, lambda project: rope.refactor.move.MoveModule(
-        project, ws.resource(project, source)).get_changes(ws.resource(project, dest)))
+    with namespace_init(source):
+        rope_step(ws, lambda project: rope.refactor.move.MoveModule(
+            project, ws.resource(project, source)).get_changes(ws.resource(project, dest)))
+    finish_module_change(ws, source, os.path.join(dest, os.path.basename(source)), reorder=True)
     return ws.result(f"Move {info['module']} to {module_name(ws.root, dest) or '.'}")
+
+
+# ---------- Rename a module or package (project tree), and helpers shared with Move ----------
+class namespace_init:
+    """Rope renames and moves only regular packages. While it analyses a namespace package (a folder of modules
+    without __init__.py), the folder gets an empty __init__.py, which is removed again afterwards."""
+
+    def __init__(self, path):
+        init = os.path.join(path, '__init__.py')
+        self.path = init if os.path.isdir(path) and not os.path.exists(init) else None
+
+    def __enter__(self):
+        if self.path:
+            open(self.path, 'w').close()
+        return self
+
+    def __exit__(self, *exc):
+        if self.path:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+        return False
+
+
+def code_lines(text):
+    return [line.rstrip() for line in (text or '').split('\n') if line.strip()]
+
+
+def import_bindings(st):
+    if isinstance(st, ast.Import):
+        return {a.asname or a.name.split('.')[0] for a in st.names}
+    return {a.asname or a.name for a in st.names}
+
+
+def import_block(text):
+    """The top-level import statements of a module as [(node, source)] when they form one run of consecutive lines."""
+    tree = ast.parse(text)
+    lines = text.split('\n')
+    stmts = [st for st in tree.body if isinstance(st, (ast.Import, ast.ImportFrom))]
+    if not stmts:
+        return [], 0, 0
+    first, last = stmts[0].lineno, stmts[-1].end_lineno
+    if sum(st.end_lineno - st.lineno + 1 for st in stmts) != last - first + 1:
+        return None, 0, 0
+    return [(st, '\n'.join(lines[st.lineno - 1:st.end_lineno])) for st in stmts], first, last
+
+
+def restore_import_order(old, new):
+    """Rope's MoveModule drops each rewritten import and adds its replacement at the end of the import block. This puts
+    every replacement where the import it replaces was (matched by the names they bind, else in order), as PyCharm does."""
+    try:
+        olds, _, _ = import_block(old)
+        news, first, last = import_block(new)
+    except SyntaxError:
+        return new
+    if not olds or not news:
+        return new
+    old_texts = {t for _, t in olds}
+    new_texts = {t for _, t in news}
+    removed = [st for st, t in olds if t not in new_texts]
+    added = [(st, t) for st, t in news if t not in old_texts]
+    if not removed or not added or [t for _, t in olds if t in new_texts] != [t for _, t in news if t in old_texts]:
+        return new
+    free = list(range(len(added)))
+    match = {}
+    for i, st in enumerate(removed):
+        j = next((j for j in free if import_bindings(added[j][0]) & import_bindings(st)), None)
+        if j is not None:
+            match[i] = [j]
+            free.remove(j)
+    for i in range(len(removed)):
+        if i not in match:
+            match[i] = [free.pop(0)] if free else []
+    match[len(removed) - 1] = match[len(removed) - 1] + free
+    order = []
+    i = 0
+    for _, t in olds:
+        if t in new_texts:
+            order.append(t)
+        else:
+            order.extend(added[j][1] for j in match[i])
+            i += 1
+    lines = new.split('\n')
+    lines[first - 1:last] = '\n'.join(order).split('\n')
+    return '\n'.join(lines)
+
+
+def finish_module_change(ws, source, target, reorder=False):
+    """Cleans up rope's module rename or move: changes that only touch blank lines are dropped (rope strips them in the
+    moved module), imports keep their places, nothing is left for a temporary __init__.py, and the file or folder moves
+    even when rope leaves that out."""
+    temp = key(os.path.join(source, '__init__.py'))
+    for k in list(ws.texts):
+        old, new = ws.original.get(k), ws.texts[k]
+        if k == temp or new == old or old is None:
+            if k == temp:
+                ws.texts[k] = old
+            continue
+        if code_lines(old) == code_lines(new):
+            ws.texts[k] = old
+        elif reorder:
+            ws.texts[k] = restore_import_order(old, new)
+    ws.moves = [(a, b) for a, b in ws.moves if key(a) != temp]
+    if not any(key(a) == key(source) for a, _ in ws.moves):
+        ws.moves.append((source, target))
+
+
+def rename_module(params):
+    """Renames a module (a .py file) or a package (a folder, regular or namespace) and every import of it."""
+    require_rope()
+    ws = Workspace(params['root'], params.get('overlay'))
+    target = os.path.abspath(params['target'])
+    ws.check_inside(target)
+    if key(target) == key(ws.root):
+        raise Fail('outside-project', 'The project folder itself cannot be renamed')
+    folder = os.path.isdir(target)
+    name = (params.get('name') or '').strip()
+    if not name:
+        raise Fail('empty-name', 'Enter a name')
+    new_mod = name if folder else re.sub(r'\.py$', '', name, flags=re.I)
+    check_identifier(new_mod)
+    if not folder and not target.lower().endswith('.py'):
+        raise Fail('dest-not-python', 'Only Python modules are renamed with their references')
+    new_path = os.path.join(os.path.dirname(target), new_mod if folder else new_mod + '.py')
+    if key(new_path) == key(target) and os.path.basename(new_path) == os.path.basename(target):
+        raise Fail('nothing', 'Nothing to change')
+    if os.path.exists(new_path) and key(new_path) != key(target):
+        raise Fail('dest-exists', f'{os.path.basename(new_path)} already exists', name=os.path.basename(new_path))
+    old_module = module_name(ws.root, target)
+    with namespace_init(target):
+        rope_step(ws, lambda project: rope.refactor.rename.Rename(
+            project, ws.resource(project, target)).get_changes(new_mod))
+    finish_module_change(ws, target, new_path)
+    ws.moves = [(a, new_path) if key(a) == key(target) else (a, b) for a, b in ws.moves]
+    return ws.result(f'Rename {old_module} to {new_mod}')
 
 
 def append_moved(text, name, original):
@@ -1324,6 +1472,7 @@ METHODS = {
     'changeSignature': change_signature,
     'prepareMove': prepare_move,
     'move': move,
+    'renameModule': rename_module,
 }
 
 

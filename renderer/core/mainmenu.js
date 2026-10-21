@@ -35,12 +35,12 @@
 
   const recentProjects = () => ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, ide.root));
 
-  const keyHint = (keys) => keys?.map((k) => (k === 'Shift Shift' ? tr('Double Shift') : k.replace(/Arrow(Up|Down|Left|Right)/g, (m) => ({ ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' })[m]).replace('Escape', 'Esc'))).join(', ') || '';
+  const keyHint = (keys) => keys?.map(ide.keymap.format).join(', ') || '';
   // A menu item for a registered action, or null when the plugin that owns it is disabled.
   function act(id, extra = {}) {
     const a = ide.actions.find((x) => x.id === id);
     if (!a) return null;
-    return { label: a.title || id, hint: a.menuHint || keyHint(a.keys), run: () => ide.runAction(id), ...extra };
+    return { label: a.title || id, hint: keyHint(a.keys) || a.menuHint, run: () => ide.runAction(id), ...extra };
   }
   // Drops separators left dangling by missing items.
   function tidy(items) {
@@ -101,7 +101,7 @@
   }
   const MENUS = () => [
     { label: tr('File'), submenu: () => tidy([
-      act('NewProject'), act('NewPythonFile'), act('NewHttpRequest'), { separator: true },
+      act('NewProject'), act('NewPythonFile'), act('NewScratchFile'), act('NewHttpRequest'), { separator: true },
       act('OpenProject'), act('OpenFile'), act('GetFromVcs'),
       { label: tr('Recent Projects'), submenu: () => recentItems(15), disabled: !recentProjects().length },
       act('CloseProject'), { separator: true },
@@ -142,7 +142,7 @@
     { label: tr('Run'), submenu: () => tidy([
       act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
       act('ChooseDebugConfiguration'),
-      act('editRunConfigurations'), { separator: true },
+      act('editRunConfigurations'), act('AttachToProcess'), { separator: true },
       act('Stop'), act('StopDebug'), act('Rerun'), act('RerunFailedTests'), act('HideCoverage'), act('ShowCoverage'),
       { separator: true },
       act('StepOver'), act('StepInto'), act('StepOut'), act('RunToCursor'), act('Resume'), act('Pause'),

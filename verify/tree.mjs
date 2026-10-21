@@ -8,7 +8,8 @@ const BIG = 3000;
 const t = await launch({ fixture: 'tree', port: 9760 });
 const { js, until, press, check, sleep } = t;
 const q = JSON.stringify;
-const names = `[...document.querySelectorAll('#tree .node .name')].map((n) => n.textContent)`;
+// Project rows only: top-level nodes after the project (Scratches and Consoles) are left out.
+const names = `[...document.querySelectorAll('#tree .node:not(.tree-extra) .name')].map((n) => n.textContent)`;
 const row = (name) => `[...document.querySelectorAll('#tree .node')].find((n) => n.querySelector('.name').textContent === ${q(name)})`;
 const selectedName = `document.querySelector('#tree .node.selected .name')?.textContent`;
 
@@ -49,11 +50,14 @@ try {
   check(true, 'Left on an open folder closes it');
   await press('ArrowUp');
   check(await js(`${selectedName} === 'pkg'`), 'Up selects the previous row');
+  // The last row is main.py, or Scratches and Consoles (a sibling of the project root) with the scratches plugin.
+  const extraRoot = await js(`!!document.querySelector('#tree .node.tree-extra')`);
   await press('End');
-  check(await js(`${selectedName} === 'main.py'`), 'End selects the last row');
+  check(await js(`${selectedName} === ${q(extraRoot ? 'Scratches and Consoles' : 'main.py')}`), 'End selects the last row');
   await press('Home');
   check(await js(`${selectedName} === 'project'`), 'Home selects the root');
   await press('End');
+  if (extraRoot) await press('ArrowUp');
   await press('Enter');
   await until(`ide.activeTab()?.title === 'main.py'`, 'Enter opens the file');
   check(true, 'Enter on a file opens it');
@@ -69,8 +73,10 @@ try {
   await press('Escape');
 
   // Drag main.py onto docs: moves it after the confirmation. Drag a.py onto the editor: opens it there.
+  // The core's plain move: the refactor plugin's Move dialog for Python modules is verify/rename-module.mjs's.
   await js(`(() => {
     ide.ui.confirm = async () => true;
+    ide.treeMoveHandlers.length = 0;
     const dt = new DataTransfer();
     const fire = (type, node) => node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
     fire('dragstart', ${row('main.py')});

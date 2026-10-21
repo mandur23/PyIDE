@@ -37,5 +37,11 @@
   "pytest is not installed for {interp}. Running with unittest instead. Install pytest: {command}": "{interp}에 pytest가 설치되어 있지 않아 대신 unittest로 실행합니다. pytest 설치: {command}",
   "pytest is not installed in the selected interpreter; falling back to unittest discovery.": "선택한 인터프리터에 pytest가 설치되어 있지 않아 unittest 검색으로 대체합니다.",
   "To install it: {command}": "설치하려면: {command}",
-  "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스"
+  "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스",
+  "Toggle Auto-test": "자동 테스트 전환",
+  "Auto-test": "자동 테스트",
+  "Python Integrated Tools": "Python 통합 도구",
+  "Testing": "테스트",
+  "Auto-test delay (ms):": "자동 테스트 지연(ms):",
+  "With Toggle Auto-test on in a test tab, saving a Python file in the project runs its tests again after this delay.": "테스트 탭에서 자동 테스트 전환이 켜져 있으면 프로젝트의 Python 파일을 저장할 때 이 지연 시간 후에 테스트를 다시 실행합니다."
 }

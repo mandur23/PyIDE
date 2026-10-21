@@ -333,7 +333,8 @@
     defaults: () => ({ script: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '' }),
     identity: (c) => resolvePath(c.script).toLowerCase(),
     file: (c) => resolvePath(c.script),
-    forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path }),
+    // A scratch file (scratches plugin) runs in the project root, as in PyCharm.
+    forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path, ...(ide.root && ide.scratches?.isScratch(path) ? { cwd: ide.root } : {}) }),
     async start(cfg, s, interp) {
       const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
       const script = resolvePath(cfg.script);
@@ -351,10 +352,12 @@
   const runBtn = el('button', 'tb-icon run-btn');
   runBtn.appendChild(ide.icon('runRun', '▶'));
   runBtn.title = tr('Run (Shift+F10)');
+  runBtn.dataset.keymapAction = 'Run';
   let debugActive = false; // a debugger session is active (see 'debugSessionChanged')
   const stopBtn = el('button', 'tb-icon stop-btn');
   stopBtn.appendChild(ide.icon('runStop', '■'));
   stopBtn.title = tr('Stop (Ctrl+F2)');
+  stopBtn.dataset.keymapAction = 'Stop';
   stopBtn.disabled = true;
   const target = el('button', 'run-target');
   target.title = tr('Run/Debug Configurations');

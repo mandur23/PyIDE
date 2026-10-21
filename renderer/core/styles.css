@@ -73,6 +73,7 @@ input, select, textarea { font: inherit; }
 .panel-actions { display: flex; gap: 2px; }
 .panel-actions button { color: var(--gray9); padding: 2px 6px; border-radius: 4px; }
 .panel-actions button:hover { background: var(--gray3); }
+.panel-actions button.toggled { background: var(--gray4); color: var(--gray12); }
 #sideBody, #bottomBody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tool { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
 .tool.active { display: flex; }

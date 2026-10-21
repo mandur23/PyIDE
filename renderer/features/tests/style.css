@@ -22,3 +22,7 @@
 .tr-name { overflow: hidden; text-overflow: ellipsis; }
 .tr-row[data-kind="root"] .tr-name { font-weight: 600; }
 .tr-time { margin-left: auto; padding-left: 12px; color: var(--gray7); font-size: 12px; }
+/* Auto-test is on in this Run tab (PyCharm marks the tab the same way). */
+.run-tab-autotest { font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 3px; color: var(--green6);
+  border: 1px solid currentColor; white-space: nowrap; }
+.run-tab-autotest.hidden { display: none; }

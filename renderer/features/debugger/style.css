@@ -130,3 +130,20 @@
 :root[data-theme="light"] .dbg-value.num { color: #1750eb; }
 :root[data-theme="light"] .dbg-err { color: #c7222d; }
 :root[data-theme="light"] .dbg-frame.muted .dbg-frame-name { color: var(--gray9); }
+
+/* Attach to Process (Ctrl+Alt+F5) */
+.dbg-attach { display: flex; flex-direction: column; gap: 8px; }
+.dbg-attach-filter { width: 100%; box-sizing: border-box; }
+.dbg-attach-list { height: 340px; overflow: auto; border: 1px solid var(--gray4); border-radius: 4px; background: var(--gray1); }
+.dbg-attach-group { padding: 6px 10px 3px; font-size: 11px; color: var(--gray8); text-transform: none; }
+.dbg-attach-row { padding: 4px 10px; cursor: default; border-left: 2px solid transparent; }
+.dbg-attach-row:hover { background: var(--gray3); }
+.dbg-attach-row.selected { background: var(--blue6); color: #fff; }
+.dbg-attach-row.selected .muted { color: rgba(255, 255, 255, 0.75); }
+.dbg-attach-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.dbg-attach-pid { font-family: var(--mono); min-width: 52px; text-align: right; flex-shrink: 0; }
+.dbg-attach-cmd { font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dbg-attach-tag { flex-shrink: 0; font-size: 11px; padding: 0 5px; border-radius: 3px; background: var(--gray4); color: var(--gray11); }
+.dbg-attach-interp { padding-left: 62px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbg-attach-status { min-height: 16px; font-size: 12px; }
+.dbg-attach-status.err { color: var(--red); }

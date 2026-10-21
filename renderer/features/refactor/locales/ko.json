@@ -96,5 +96,11 @@
   "new file": "새 파일",
   "rope could not perform the refactoring: {detail}": "rope가 리팩터링을 수행하지 못했습니다: {detail}",
   "{name} already exists in the destination.": "대상에 {name}이(가) 이미 있습니다.",
-  "{name} changed while the refactoring was prepared. Try again.": "리팩터링을 준비하는 동안 {name}이(가) 변경되었습니다. 다시 시도하세요."
+  "{name} changed while the refactoring was prepared. Try again.": "리팩터링을 준비하는 동안 {name}이(가) 변경되었습니다. 다시 시도하세요.",
+  "Rename": "이름 변경",
+  "Rename module '{name}' to:": "모듈 '{name}'의 이름을 다음으로 변경:",
+  "Rename package '{name}' to:": "패키지 '{name}'의 이름을 다음으로 변경:",
+  "Search for references": "참조 검색",
+  "Rename Without References": "참조 없이 이름 변경",
+  "Move Without References": "참조 없이 이동"
 }

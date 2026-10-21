@@ -70,6 +70,26 @@
 .keymap-row:hover { background: var(--gray2); }
 .keymap-keys { display: flex; gap: 4px; flex-wrap: wrap; }
 .keymap-keys kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--gray4); border-radius: 3px; background: var(--gray2); color: var(--gray11); }
+.keymap-bar { display: flex; gap: 12px; align-items: center; }
+.keymap-bar .keymap-filter { flex: 1; }
+.keymap-bar .settings-check { margin: 0; white-space: nowrap; }
+.keymap-buttons { display: flex; gap: 6px; margin-bottom: 8px; }
+.keymap-spacer { flex: 1; }
+.keymap-table:focus-visible { outline: 1px solid var(--blue6); }
+.keymap-row { cursor: default; user-select: none; }
+.keymap-row.selected, .keymap-row.selected:hover { background: var(--blue2); }
+/* Modified actions are blue, as in PyCharm's keymap tree. */
+.keymap-row.modified .keymap-title { color: var(--blue8); }
+:root[data-theme="light"] .keymap-row.modified .keymap-title { color: var(--blue6); }
+.keymap-empty { padding: 8px 10px; }
+.keymap-capture-body { display: flex; flex-direction: column; gap: 6px; }
+.keymap-capture-body .field { grid-template-columns: 110px 1fr; }
+.keymap-capture { font-family: var(--mono); }
+.keymap-capture-body > .keymap-capture { margin-left: 28px; }
+.keymap-conflicts { min-height: 18px; color: var(--yellow); font-size: 12px; }
+:root[data-theme="light"] .keymap-conflicts { color: #a46704; }
+.keymap-conflict { padding-left: 12px; }
+.keymap-conflict-ask .keymap-conflict { color: var(--gray11); }
 
 /* Plugins */
 .settings-page.plugins-page { padding-bottom: 8px; }

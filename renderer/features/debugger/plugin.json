@@ -3,8 +3,9 @@
   "name": "Python Debugger",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "Breakpoints, stepping, frames, variables, watches and inline values via debugpy.",
+  "description": "Breakpoints, stepping, frames, variables, watches and inline values via debugpy, and Attach to Process.",
   "main": [
-    "debug.js"
+    "debug.js",
+    "debug-attach.js"
   ]
 }

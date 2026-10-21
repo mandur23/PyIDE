@@ -322,7 +322,17 @@
   }
 
   async function startTests(cfg, s, interp, opts = {}) {
+    // What auto-test runs again: the same tests as this run (all of them, or the failed ones a rerun picked).
+    s.autoTestLast = { targets: opts.targets, executor: s.executor };
+    clearTimeout(s.autoTestTimer); // this run already includes the saves that armed the timer
     const view = createView(s);
+    s.setActions([
+      { id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
+        const failed = view.failedIds();
+        if (failed.length) run.runConfig(s.cfg, { targets: failed });
+      } },
+      autoTestAction(s),
+    ]);
     const fresh = !!opts.fresh;
     const version = await ide.api.invoke('tests:hasPytest', interp, fresh);
     const runner = version ? 'pytest' : 'unittest';
@@ -349,12 +359,6 @@
     s.dispose = () => clearInterval(timer);
     s.started(id);
     s.setIcon('◷', 'running');
-    s.setActions([
-      { id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
-        const failed = view.failedIds();
-        if (failed.length) run.runConfig(s.cfg, { targets: failed });
-      } },
-    ]);
     ide.proc.attach(id, {
       data: (text, stream) => view.log(text, stream === 'err' ? 'err' : null),
       async exit(code) {
@@ -413,6 +417,110 @@
     run: (e) => run.runContext({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
   });
 
+  // ---------- auto-test ----------
+  // PyCharm's Toggle Auto-test: per test tab, off by default and not kept across restarts. While it is on, saving a
+  // .py file in the project runs that tab's last tests again, autoTestDelay ms after the last save. A run in progress
+  // is stopped first and one run follows; saves during that wait fold into it, so runs never overlap or pile up.
+  const AUTO_TEST_DELAY = 1000;
+  const autoTestDelay = () => Math.max(100, Number(ide.settings.get('tests.autoTestDelay', AUTO_TEST_DELAY)) || AUTO_TEST_DELAY);
+  let debugActive = false;
+  ide.on('debugSessionChanged', (active) => { debugActive = active; });
+  let autoStarting = 0; // auto-test runs being set up; their own Save All before the run is not a new change
+
+  function autoTestAction(s) {
+    return {
+      id: 'autoTest', icon: '↻',
+      get title() { return tr('Toggle Auto-test'); },
+      get toggled() { return !!s.autoTest; },
+      run: () => setAutoTest(s, !s.autoTest),
+    };
+  }
+
+  function setAutoTest(s, on) {
+    s.autoTest = !!on && !s.closed;
+    clearTimeout(s.autoTestTimer);
+    if (!s.autoTestBadge) {
+      s.autoTestBadge = el('span', 'run-tab-autotest hidden', tr('Auto-test'));
+      s.tab.insertBefore(s.autoTestBadge, s.tab.querySelector('.run-tab-close'));
+    }
+    s.autoTestBadge.classList.toggle('hidden', !s.autoTest);
+    s.tab.classList.toggle('auto-test', s.autoTest);
+    s.setActions(s.extraActions); // redraw the toolbar's toggle state
+  }
+
+  async function autoRun(s) {
+    if (s.autoTestBusy) { s.autoTestAgain = true; return; }
+    s.autoTestBusy = true;
+    try {
+      do {
+        s.autoTestAgain = false;
+        while (s.starting) await s.starting;
+        if (s.running) {
+          // Stop the current run and wait for its process to end (the timeout covers a process that never reports).
+          const ended = new Promise((resolve) => { s.exitHooks.push(resolve); setTimeout(resolve, 15000); });
+          s.stop();
+          await ended;
+        }
+        if (!s.autoTest || s.closed || debugActive || ide.trusted === false || !run.sessions().includes(s)) return;
+        // Keep the keyboard where the user is typing (showing the Run window may focus a field in it).
+        const focused = document.activeElement;
+        autoStarting++;
+        try {
+          await run.runConfig(s.cfg, { targets: s.autoTestLast?.targets, executor: s.autoTestLast?.executor || undefined });
+        } finally { autoStarting--; }
+        if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus();
+      } while (s.autoTestAgain && s.autoTest && !s.closed);
+    } finally { s.autoTestBusy = false; }
+  }
+
+  // Run tabs survive a project switch, but auto-test belongs to the project it was turned on in: another project's
+  // save must not re-run the old configuration against the new root.
+  const autoTestOffAll = () => {
+    for (const s of run.sessions()) {
+      clearTimeout(s.autoTestTimer);
+      s.autoTestAgain = false;
+      if (s.autoTest) setAutoTest(s, false);
+    }
+  };
+  ide.on('projectOpened', autoTestOffAll);
+  ide.on('projectClosed', autoTestOffAll);
+
+  ide.on('fileSaved', (tab) => {
+    if (ide.trusted === false) return;
+    if (autoStarting || debugActive || !tab?.path || !/\.pyw?$/i.test(tab.path) || !ide.root || !ide.util.isUnder(tab.path, ide.root)) return;
+    for (const s of run.sessions()) {
+      if (!s.autoTest || s.closed || s.cfg?.type !== 'pytest') continue;
+      clearTimeout(s.autoTestTimer);
+      s.autoTestTimer = setTimeout(() => autoRun(s), autoTestDelay());
+    }
+  });
+
+  const testSession = () => {
+    const s = run.activeSession();
+    return s?.cfg?.type === 'pytest' ? s : null;
+  };
+  ide.registerAction({ id: 'ToggleAutoTest', title: tr('Toggle Auto-test'), run: () => {
+    const s = testSession();
+    if (s) setAutoTest(s, !s.autoTest);
+  } });
+
+  (ide.settingsPages ||= []).push({
+    id: 'python-tests', title: () => tr('Python Integrated Tools'), defaults: { 'tests.autoTestDelay': AUTO_TEST_DELAY },
+    keywords: 'testing pytest unittest auto-test autotest delay 테스트 자동 테스트 지연',
+    mount(host, ctx) {
+      const s = ctx.ui.section(host, tr('Testing'));
+      s.appendChild(ctx.ui.fieldRow(tr('Auto-test delay (ms):'), ctx.ui.numberInput('tests.autoTestDelay', { min: 100, max: 60000, fallback: AUTO_TEST_DELAY })));
+      s.appendChild(el('div', 'muted settings-note', tr('With Toggle Auto-test on in a test tab, saving a Python file in the project runs its tests again after this delay.')));
+    },
+  });
+
   ide.on('fileSaved', () => classLines.clear());
-  ide.tests = { isTestFileName, testsIn, contextAt, configFor };
+  ide.tests = {
+    isTestFileName, testsIn, contextAt, configFor,
+    // Auto-test of a test session (default: the active Run tab).
+    autoTest: {
+      enabled: (s = testSession()) => !!s?.autoTest,
+      set: (on, s = testSession()) => { if (s) setAutoTest(s, on); },
+    },
+  };
 })();

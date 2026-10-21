@@ -405,36 +405,287 @@
     s.appendChild(el('div', 'muted settings-note', tr('Current language: {name}', { name: i18n.locale === 'ko' ? '한국어' : 'English' })));
   }
 
-  const ARROWS = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Escape: 'Esc' };
-  const prettyKeys = (k) => k.replace(/Arrow(Up|Down|Left|Right)|Escape/g, (m) => ARROWS[m]);
+  // ---------- Keymap page ----------
+  // Edits the `keymap.overrides` setting (action id -> keys) like PyCharm's Settings › Keymap; the core applies it to the
+  // actions (ide.keymap). Changes wait for OK / Apply like the other pages.
+  const KEYMAP_KEY = 'keymap.overrides';
+  const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'];
+  const sameKeys = (a, b) => a.length === b.length && a.every((k, i) => k === b[i]);
+  const actionName = (a) => a.title || a.id;
 
-  function mountKeymap(host) {
+  function mountKeymap(host, ctx) {
+    host.classList.add('keymap-page');
     host.appendChild(el('div', 'muted settings-note', tr('PyCharm default keymap for Windows. Search by action name or shortcut.')));
+    const bar = el('div', 'keymap-bar');
     const filter = el('input', 'input keymap-filter');
     filter.placeholder = tr('Search actions or shortcuts');
     filter.dataset.enter = 'ignore';
+    const modifiedOnly = el('label', 'settings-check keymap-modified-only');
+    const modifiedBox = el('input');
+    modifiedBox.type = 'checkbox';
+    modifiedBox.id = 'keymapModifiedOnly';
+    modifiedOnly.append(modifiedBox, el('span', null, tr('Show modified only')));
+    const button = (id, label) => { const b = el('button', 'secondary', label); b.id = id; return b; };
+    const addBtn = button('keymapAdd', tr('Add Keyboard Shortcut…'));
+    const removeBtn = button('keymapRemove', tr('Remove Shortcut'));
+    const resetBtn = button('keymapReset', tr('Reset Shortcuts'));
+    const resetAllBtn = button('keymapResetAll', tr('Reset All'));
+    bar.append(filter, modifiedOnly);
+    const buttons = el('div', 'keymap-buttons');
+    buttons.append(addBtn, removeBtn, resetBtn, el('span', 'keymap-spacer'), resetAllBtn);
     const table = el('div', 'keymap-table');
-    host.append(filter, table);
-    const actions = ide.actions.filter((a) => a.title).sort((a, b) => a.title.localeCompare(b.title));
+    table.tabIndex = 0;
+    host.append(bar, buttons, table);
+
+    // The setting as edited so far. Ids of actions that are not loaded now (a disabled plugin's) are kept as they are.
+    const raw = () => { const v = ctx.value(KEYMAP_KEY); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+    const overrides = () => ide.keymap.parse(raw());
+    const defaultsOf = (a) => a.defaultKeys || a.keys;
+    const keysOf = (a, ov = overrides()) => ov.get(a.id) || defaultsOf(a);
+    // changes: [[actionId, keys | null (back to the defaults)]]
+    function setKeys(changes) {
+      const next = { ...raw() };
+      for (const [id, keys] of changes) {
+        const a = ide.actions.find((x) => x.id === id);
+        if (!keys || (a && sameKeys(keys, defaultsOf(a)))) delete next[id]; else next[id] = keys;
+      }
+      ctx.set(KEYMAP_KEY, next);
+      render();
+    }
+    // Actions whose keys clash with `key`: the same key, or one is the first stroke of the other.
+    function conflicts(key, self) {
+      const ov = overrides();
+      const clash = (k) => k === key || (k !== 'Shift Shift' && key !== 'Shift Shift' && (k.startsWith(`${key} `) || key.startsWith(`${k} `)));
+      return ide.actions.filter((a) => a !== self).map((a) => ({ action: a, keys: keysOf(a, ov).filter(clash) })).filter((c) => c.keys.length);
+    }
+
+    let selectedId = null;
+    const selected = () => ide.actions.find((a) => a.id === selectedId);
+    let shown = [];
     function render() {
       const q = filter.value.trim().toLowerCase();
+      const ov = overrides();
+      shown = ide.actions.filter((a) => a.title).sort((a, b) => a.title.localeCompare(b.title)).filter((a) => {
+        const keys = keysOf(a, ov);
+        if (modifiedBox.checked && !ov.has(a.id)) return false;
+        return !q || a.title.toLowerCase().includes(q) || `${keys.join(' ')} ${keys.map(ide.keymap.format).join(' ')}`.toLowerCase().includes(q);
+      });
+      if (!shown.some((a) => a.id === selectedId)) selectedId = shown[0]?.id || null;
       table.replaceChildren();
       const head = el('div', 'keymap-head');
       head.append(el('span', null, tr('Action')), el('span', null, tr('Shortcut')));
       table.appendChild(head);
-      for (const a of actions) {
-        const keys = a.keys.join(', ');
-        if (q && !a.title.toLowerCase().includes(q) && !keys.toLowerCase().includes(q)) continue;
-        const row = el('div', 'keymap-row');
+      for (const a of shown) {
+        const modified = ov.has(a.id);
+        const row = el('div', `keymap-row${modified ? ' modified' : ''}${a.id === selectedId ? ' selected' : ''}`);
+        row.dataset.id = a.id;
+        const title = el('span', 'keymap-title', a.title);
+        if (modified) title.title = tr('Modified');
         const keyCell = el('span', 'keymap-keys');
-        for (const k of a.keys) keyCell.appendChild(el('kbd', null, k === 'Shift Shift' ? tr('Double Shift') : prettyKeys(k)));
-        row.append(el('span', null, a.title), keyCell);
+        for (const k of keysOf(a, ov)) keyCell.appendChild(el('kbd', null, ide.keymap.format(k)));
+        row.append(title, keyCell);
+        row.onclick = () => select(a.id);
+        row.ondblclick = () => { select(a.id); addShortcut(a); };
+        row.oncontextmenu = (e) => { e.preventDefault(); select(a.id); actionMenu(row); };
         table.appendChild(row);
       }
+      if (!shown.length) table.appendChild(el('div', 'muted keymap-empty', tr('No actions found')));
+      updateButtons();
     }
+    function select(id) {
+      selectedId = id;
+      for (const r of table.querySelectorAll('.keymap-row')) r.classList.toggle('selected', r.dataset.id === id);
+      table.querySelector('.keymap-row.selected')?.scrollIntoView({ block: 'nearest' });
+      updateButtons();
+    }
+    function updateButtons() {
+      const a = selected();
+      addBtn.disabled = !a;
+      removeBtn.disabled = !a || !keysOf(a).length;
+      resetBtn.disabled = !a || !overrides().has(a.id);
+      resetAllBtn.disabled = !Object.keys(raw()).length;
+    }
+    const removeKey = (a, k) => setKeys([[a.id, keysOf(a).filter((x) => x !== k)]]);
+    function actionMenu(anchor) {
+      const a = selected();
+      if (!a) return;
+      dialogMenu(anchor, [
+        [tr('Add Keyboard Shortcut…'), () => addShortcut(a)],
+        ...keysOf(a).map((k) => [tr('Remove {key}', { key: ide.keymap.format(k) }), () => removeKey(a, k)]),
+        ...(overrides().has(a.id) ? [[tr('Reset Shortcuts'), () => setKeys([[a.id, null]])]] : []),
+      ], 'keymapMenu');
+    }
+
     filter.oninput = render;
+    modifiedBox.onchange = render;
+    addBtn.onclick = () => selected() && addShortcut(selected());
+    removeBtn.onclick = () => {
+      const a = selected();
+      const keys = a ? keysOf(a) : [];
+      if (keys.length === 1) removeKey(a, keys[0]);
+      else if (keys.length) dialogMenu(removeBtn, keys.map((k) => [tr('Remove {key}', { key: ide.keymap.format(k) }), () => removeKey(a, k)]), 'keymapRemoveMenu');
+    };
+    resetBtn.onclick = () => selected() && setKeys([[selected().id, null]]);
+    resetAllBtn.onclick = () => { ctx.set(KEYMAP_KEY, {}); render(); };
+    table.onkeydown = (e) => {
+      const i = shown.findIndex((a) => a.id === selectedId);
+      const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: shown.length - 1 }[e.key];
+      if (to === undefined || !shown.length) return;
+      e.preventDefault();
+      select(shown[Math.max(0, Math.min(shown.length - 1, to))].id);
+    };
+
+    // PyCharm's Keyboard Shortcut dialog: the next key press (with its modifiers) is the stroke, Shift twice is Double
+    // Shift, and a second stroke makes a two-stroke shortcut. Tab and Shift+Tab still move between the controls.
+    function addShortcut(a) {
+      const strokes = ['', ''];
+      const field = (id) => { const f = el('input', 'input keymap-capture'); f.id = id; f.readOnly = true; f.placeholder = tr('Press a key combination'); return f; };
+      const first = field('keymapFirstStroke');
+      const second = field('keymapSecondStroke');
+      second.disabled = true;
+      const twoBox = el('input');
+      twoBox.type = 'checkbox';
+      twoBox.id = 'keymapTwoStrokes';
+      const twoRow = el('label', 'settings-check');
+      twoRow.append(twoBox, el('span', null, tr('Second stroke:')));
+      const warn = el('div', 'keymap-conflicts');
+      warn.id = 'keymapConflicts';
+      const body = el('div', 'keymap-capture-body');
+      body.append(fieldRow(tr('First stroke:'), first), twoRow, second, warn);
+      const chord = () => (strokes[0] === 'Shift Shift' || !twoBox.checked || !strokes[1] ? strokes[0] : `${strokes[0]} ${strokes[1]}`);
+      function update() {
+        first.value = strokes[0] ? ide.keymap.format(strokes[0]) : '';
+        second.value = strokes[1] ? ide.keymap.format(strokes[1]) : '';
+        const k = chord();
+        const found = k ? conflicts(k, a) : [];
+        warn.replaceChildren();
+        if (k && keysOf(a).includes(k)) warn.append(el('div', null, tr('The action already has this shortcut.')));
+        else if (found.length) {
+          warn.append(el('div', 'keymap-conflict-title', tr('Conflicts with:')));
+          for (const c of found) warn.append(el('div', 'keymap-conflict', `${actionName(c.action)} (${c.keys.map(ide.keymap.format).join(' / ')})`));
+        }
+      }
+      twoBox.onchange = () => {
+        second.disabled = !twoBox.checked || strokes[0] === 'Shift Shift';
+        if (!second.disabled) second.focus();
+        update();
+      };
+      let lastShift = 0;
+      const onKey = (e) => {
+        const target = document.activeElement;
+        if ((target !== first && target !== second) || e.isComposing) return;
+        if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const i = target === first ? 0 : 1;
+        if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          if (i === 0 && !e.repeat && e.timeStamp - lastShift < 350) {
+            strokes[0] = 'Shift Shift';
+            lastShift = 0;
+            second.disabled = true;
+            update();
+          } else lastShift = e.timeStamp;
+          return;
+        }
+        if (MODIFIERS.includes(e.key)) return;
+        lastShift = 0;
+        strokes[i] = ide.keymap.comboOf(e);
+        if (i === 0) second.disabled = !twoBox.checked;
+        update();
+      };
+      // Registered before the dialog's own key handler, so Enter and Esc are recorded instead of closing it.
+      addEventListener('keydown', onKey, true);
+      const dlg = ide.ui.dialog({
+        title: tr('Keyboard Shortcut: {action}', { action: a.title }),
+        body,
+        width: 440,
+        onClose: () => removeEventListener('keydown', onKey, true),
+        buttons: [
+          { label: tr('OK'), primary: true, run: async () => {
+            const k = chord();
+            if (!k) return false;
+            if (keysOf(a).includes(k)) return undefined;
+            const found = conflicts(k, a);
+            const changes = [[a.id, [...keysOf(a), k]]];
+            if (found.length) {
+              const choice = await askConflict(k, found);
+              if (!choice) return false;
+              if (choice === 'remove') for (const c of found) changes.push([c.action.id, keysOf(c.action).filter((x) => !c.keys.includes(x))]);
+            }
+            setKeys(changes);
+            return undefined;
+          } },
+          { label: tr('Cancel') },
+        ],
+      });
+      dlg.el.classList.add('keymap-capture-dialog');
+      dlg.el.id = 'keymapCaptureDialog';
+    }
+
+    // PyCharm's question when a new shortcut is taken: Remove (the other assignments), Leave (both keep it), Cancel.
+    const askConflict = (key, found) => new Promise((resolve) => {
+      let choice = null;
+      const body = el('div', 'keymap-conflict-ask');
+      body.append(el('div', 'dialog-message', tr('The shortcut {key} is already assigned to other actions. Do you want to remove other assignments?', { key: ide.keymap.format(key) })));
+      for (const c of found) body.append(el('div', 'keymap-conflict', actionName(c.action)));
+      const dlg = ide.ui.dialog({
+        title: tr('Warning'),
+        body,
+        width: 460,
+        onClose: () => resolve(choice),
+        buttons: [
+          { label: tr('Remove'), primary: true, run: () => { choice = 'remove'; } },
+          { label: tr('Leave'), run: () => { choice = 'leave'; } },
+          { label: tr('Cancel') },
+        ],
+      });
+      dlg.el.id = 'keymapConflictDialog';
+    });
+
     render();
   }
+
+  // Monaco's own keybindings of editor actions (editorCommand on the action or on its run function, such as Comment
+  // with Line Comment) stay as they are while the action is unmodified. A modified one drops them and binds the
+  // keymap's keys instead, so editors embedded in viewers, notebook cells and consoles follow the keymap too, and the
+  // old key no longer runs the command anywhere.
+  const MONACO_KEYS = { ArrowUp: 'UpArrow', ArrowDown: 'DownArrow', ArrowLeft: 'LeftArrow', ArrowRight: 'RightArrow',
+    '/': 'Slash', '\\': 'Backslash', '-': 'Minus', '=': 'Equal', ',': 'Comma', '.': 'Period', ';': 'Semicolon',
+    "'": 'Quote', '[': 'BracketLeft', ']': 'BracketRight', '`': 'Backquote' };
+  function monacoStroke(stroke) {
+    const [, mods, key] = /^((?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?)(.+)$/.exec(stroke) || [];
+    const name = /^[A-Z]$/.test(key) ? `Key${key}` : /^\d$/.test(key) ? `Digit${key}` : MONACO_KEYS[key] || key;
+    const code = monaco.KeyCode[name];
+    if (typeof code !== 'number' || !code) return 0;
+    const { KeyMod } = monaco;
+    return code | (mods.includes('Ctrl') ? KeyMod.CtrlCmd : 0) | (mods.includes('Alt') ? KeyMod.Alt : 0) | (mods.includes('Shift') ? KeyMod.Shift : 0);
+  }
+  function monacoKeybinding(key) {
+    if (key === 'Shift Shift') return 0;
+    const strokes = key.split(' ').map(monacoStroke);
+    if (strokes.some((s) => !s)) return 0;
+    return strokes.length === 2 ? monaco.KeyMod.chord(strokes[0], strokes[1]) : strokes[0];
+  }
+  let monacoRules = null;
+  let monacoRulesKey = '[]';
+  function syncMonacoKeymap() {
+    const rules = [];
+    for (const a of ide.actions) {
+      const command = a.editorCommand || a.run?.editorCommand;
+      if (!command || !ide.keymap?.isModified(a.id)) continue;
+      // No keybinding: removes every default Monaco keybinding of the command.
+      rules.push({ keybinding: 0, command: `-${command}` });
+      for (const k of a.keys) { const kb = monacoKeybinding(k); if (kb) rules.push({ keybinding: kb, command }); }
+    }
+    const key = JSON.stringify(rules);
+    if (key === monacoRulesKey) return;
+    monacoRulesKey = key;
+    monacoRules?.dispose();
+    monacoRules = rules.length ? monaco.editor.addKeybindingRules(rules) : null;
+  }
+  ide.on('keymapChanged', syncMonacoKeymap);
+  ide.on('ready', syncMonacoKeymap);
+  syncMonacoKeymap();
 
   function mountEditor(host, ctx) {
     const font = section(host, tr('Font'));
@@ -816,9 +1067,9 @@
   gear.onclick = () => {
     const r = gear.getBoundingClientRect();
     const menu = ide.ui.contextMenu(r.right - 240, r.bottom + 4, [
-      { label: tr('Settings…'), hint: 'Ctrl+Alt+S', icon: 'settings', run: () => openSettings('appearance') },
+      { label: tr('Settings…'), hint: ide.keymap.label('ShowSettings'), icon: 'settings', run: () => openSettings('appearance') },
       { label: tr('Plugins…'), run: () => openSettings('plugins') },
-      { label: tr('Python Interpreter…'), hint: 'Ctrl+Alt+Shift+S', icon: 'python', run: () => openSettings('interpreter') },
+      { label: tr('Python Interpreter…'), hint: ide.keymap.label('ShowProjectStructureSettings'), icon: 'python', run: () => openSettings('interpreter') },
       { separator: true },
       { label: tr('Theme'), submenu: () => [themeItem('dark', tr('Dark')), themeItem('light', tr('Light'))] },
       { label: tr('Keymap…'), run: () => openSettings('keymap') },

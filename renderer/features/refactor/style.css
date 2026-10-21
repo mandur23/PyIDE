@@ -35,3 +35,4 @@
 .rf-diff { border: 1px solid var(--gray4); border-radius: 4px; min-height: 0; overflow: hidden; }
 .rf-warnings { border: 1px solid var(--yellow); border-radius: 4px; padding: 6px 10px; }
 .rf-warnings-title { font-weight: 600; color: var(--yellow); margin-bottom: 2px; }
+#rfRenameModuleDialog .rf-form > .rf-name { display: block; width: 100%; box-sizing: border-box; }

@@ -3,7 +3,9 @@
 // Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
 const net = require('net');
 const path = require('path');
+const os = require('os');
 const remote = require('../remote');
+const attachTo = require('./debug-attach');
 const { withEnvFiles } = require('../dotenv');
 const log = require('../diagnostics').logger('#debugger');
 
@@ -87,17 +89,20 @@ class DapClient {
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 
-async function connectWithRetry(port, isAlive, timeoutMs = 20000) {
+const connectOnce = (port) => new Promise((resolve, reject) => {
+  const s = net.connect(port, '127.0.0.1');
+  s.once('connect', () => { log.info(`connected to the debugpy adapter on port ${port}`); resolve(s); });
+  s.once('error', reject);
+});
+
+// giveUp(err) -> Error: what to throw once the target is gone or the time is up (attach words it its own way).
+async function connectWithRetry(port, isAlive, timeoutMs = 20000, giveUp = null) {
   const end = Date.now() + timeoutMs;
   for (;;) {
     try {
-      return await new Promise((resolve, reject) => {
-        const s = net.connect(port, '127.0.0.1');
-        s.once('connect', () => { log.info(`connected to the debugpy adapter on port ${port}`); resolve(s); });
-        s.once('error', reject);
-      });
+      return await connectOnce(port);
     } catch (err) {
-      if (!isAlive() || Date.now() > end) throw new Error(`Could not connect to debugpy on port ${port}: ${err.message}`);
+      if (!isAlive() || Date.now() > end) throw giveUp?.(err) || new Error(`Could not connect to debugpy on port ${port}: ${err.message}`);
       await new Promise((r) => setTimeout(r, 150));
     }
   }
@@ -179,14 +184,128 @@ exports.register = (ctx) => {
     }
   });
 
-  async function configure(dap, breakpoints, pathMappings = []) {
+  // ---------- Attach to Process ----------
+  const ownDirs = attachTo.ownDirsFor({ appDir: ctx.appDir, unpackedDir: ctx.unpackedDir, vendorDir,
+    userData: ctx.app?.getPath('userData'), home: os.homedir() });
+  ipcMain.handle('debug:processes', () => attachTo.listProcesses({ ownDirs }));
+
+  const ATTACH_TIMEOUT_MS = Number(process.env.PYIDE_ATTACH_TIMEOUT_MS) || 20000;
+  // pid -> {port, created}: where the debugpy injected into that process listens (it can listen only once per process).
+  // created, the process start time, tells that process from a later one that reuses its pid.
+  const listening = new Map();
+  const forget = (pid) => { if (!attachTo.pidState(pid)) listening.delete(pid); };
+  const aborts = new Set(); // abort() of every debug:attach in progress
+  let attachSeq = 0;
+  // Quitting mid-attach: no injector may outlive PyIDE (it would leave the target's debugpy listening for nobody).
+  ctx.app?.on('will-quit', () => {
+    attachTo.killInjectors();
+    for (const abort of [...aborts]) abort();
+  });
+
+  // target: {pid, created?} of an entry of debug:processes. The process is looked up again here: its interpreter and
+  // debugpy port come from that listing, never from the renderer, and a pid that now names a process started at another
+  // time (the listed one exited and its pid was reused) is refused. Resolves {id, pid, version} once the session runs;
+  // the target keeps running when it ends (debug:stop detaches).
+  ipcMain.handle('debug:attach', async (_e, target, breakpoints = [], opts = {}) => {
+    const pid = Number(target?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('No process selected');
+    let stopped = false;
+    let fail;
+    const failed = new Promise((_r, reject) => { fail = reject; });
+    failed.catch(() => {});
+    let injector = null;
+    const abort = (kill = true) => {
+      if (stopped) return;
+      stopped = true;
+      if (kill) attachTo.killTree(injector);
+      fail(new Error('Debugging stopped'));
+    };
+    const abortOnQuit = () => abort(false); // the injectors are already killed by then
+    aborts.add(abortOnQuit);
+    const key = opts.startKey;
+    if (key != null) starting.set(key, () => abort());
+    const stoppedError = () => new Error('Debugging stopped');
+    // Every await before the session exists is raced with a Stop and followed by this check, so a Stop at any point
+    // (process lookup, version probe, injection, connecting) ends the attach right there.
+    const step = async (p) => {
+      const v = await Promise.race([p, failed]);
+      if (stopped) throw stoppedError();
+      return v;
+    };
+    const id = `attach-${++attachSeq}`;
+    let timer;
+    let socket = null;
+    try {
+      const state = attachTo.pidState(pid);
+      if (!state) throw new Error(`Process ${pid} is not running`);
+      if (state === 'denied') throw new Error(`Access denied: cannot attach to process ${pid}`);
+      const proc = (await step(attachTo.listProcesses({ ownDirs }))).find((p) => p.pid === pid);
+      if (!proc || (target.created && proc.created && target.created !== proc.created)) throw new Error(`Process ${pid} is not running`);
+      let version = proc.version || null;
+      const known = listening.get(pid);
+      if (known && !(known.created && known.created === proc.created)) listening.delete(pid);
+      // A process whose debugpy already listens (attached before, or a program that called debugpy.listen()) is
+      // connected to directly: injecting again would call debugpy.listen() a second time, which debugpy refuses.
+      for (const port of new Set([listening.get(pid)?.port, proc.debugPort].filter(attachTo.validPort))) {
+        socket = await connectOnce(port).catch(() => null);
+        if (stopped) throw stoppedError();
+        if (socket) break;
+      }
+      if (!socket) {
+        if (!proc.exe) throw new Error(`Access denied: cannot attach to process ${pid}`);
+        const port = await step(freePort());
+        const injecting = attachTo.inject({ exe: proc.exe, pid, port, vendorDir, isStopped: () => stopped,
+          onChild: (c) => { injector = c; if (stopped) attachTo.killTree(c); } });
+        // Also when a Stop won the race: the target's debugpy now listens there, and a later attach must connect to it
+        // instead of injecting again.
+        injecting.then(() => listening.set(pid, { port, created: proc.created }), () => {});
+        ({ version } = await step(injecting));
+        const alive = () => !stopped && !!attachTo.pidState(pid);
+        const connecting = connectWithRetry(port, alive, ATTACH_TIMEOUT_MS, () => (stopped ? stoppedError()
+          : !attachTo.pidState(pid) ? new Error(`Process ${pid} exited before the debugger connected`)
+            : new Error(`Process ${pid} did not start the debugger within ${ATTACH_TIMEOUT_MS / 1000} seconds; it may be blocked in native code or waiting for input`)));
+        // A socket that connects after a stop has nobody to talk to.
+        connecting.then((s) => { if (stopped) s.destroy(); }, () => {});
+        socket = await step(connecting);
+      }
+      if (stopped) throw stoppedError();
+      socket.setNoDelay(true);
+      const sock = socket;
+      const dap = new DapClient(sock, (event, body) => send('debug:event', { id, event, body }));
+      sessions.set(id, { dap, socket: sock, attach: pid });
+      // Detaching, the target exiting and a lost connection all end an attach session through 'closed'.
+      sock.on('close', () => {
+        sessions.delete(id);
+        forget(pid);
+        send('debug:event', { id, event: 'closed', body: {} });
+      });
+      timer = setTimeout(() => fail(new Error(`debugpy did not start the debug session within ${HANDSHAKE_TIMEOUT_MS / 1000} seconds`)),
+        HANDSHAKE_TIMEOUT_MS);
+      await Promise.race([configure(dap, breakpoints, [], { redirectOutput: true }), failed]);
+      log.info(`attached to pid ${pid} (${id})`);
+      return { id, pid, version };
+    } catch (err) {
+      if (sessions.has(id)) {
+        await Promise.race([sessions.get(id).dap.request('disconnect', { terminateDebuggee: false }).catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
+        closeSession(id);
+      } else socket?.destroy();
+      forget(pid);
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      aborts.delete(abortOnQuit);
+      if (key != null) starting.delete(key);
+    }
+  });
+
+  async function configure(dap, breakpoints, pathMappings = [], extra = {}) {
     await dap.request('initialize', {
       clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
     });
     const initialized = dap.waitEvent('initialized');
     // debugpy answers attach only after configurationDone, so it is awaited last.
-    const attached = dap.request('attach', { justMyCode: true, redirectOutput: false, showReturnValue: true, subProcess: false,
+    const attached = dap.request('attach', { justMyCode: true, redirectOutput: false, showReturnValue: true, subProcess: false, ...extra,
       // A Linux debugpy translates this side's backslash paths only when told the client is Windows.
       ...(pathMappings.length ? { pathMappings, clientOS: process.platform === 'win32' ? 'windows' : 'unix' } : {}) });
     attached.catch(() => {});
@@ -210,9 +329,10 @@ exports.register = (ctx) => {
     if (id == null) return starting.get(startKey)?.();
     const s = sessions.get(id);
     if (s) {
-      await Promise.race([s.dap.request('disconnect', { terminateDebuggee: true }).catch(() => {}), new Promise((r) => setTimeout(r, 800))]);
+      // An attached process is only detached from, never ended (PyCharm's Stop on an attached process detaches).
+      await Promise.race([s.dap.request('disconnect', { terminateDebuggee: !s.attach }).catch(() => {}), new Promise((r) => setTimeout(r, 800))]);
       closeSession(id);
     }
-    if (procs.has(id)) killProcess(id);
+    if (!s?.attach && procs.has(id)) killProcess(id);
   });
 };

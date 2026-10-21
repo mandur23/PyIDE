@@ -147,7 +147,8 @@
     let filesP = null;
     let symbolsP = null;
     const session = {
-      files: () => (filesP ||= ide.api.walk(ide.root)),
+      // Scratch files (scratches plugin) are found too, as in PyCharm, though they are outside the project.
+      files: () => (filesP ||= Promise.all([ide.api.walk(ide.root), ide.scratches?.list() ?? []]).then(([a, b]) => [...a, ...b])),
       symbols: () => (symbolsP ||= nav.symbols()),
       cache: {},
     };

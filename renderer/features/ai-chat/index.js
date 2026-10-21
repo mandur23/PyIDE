@@ -397,8 +397,11 @@
       });
     },
   });
+  // The window's shortcut is AiChat.Toggle's (registered below), as the keymap has it.
   tw.keys = 'Ctrl+Shift+L';
+  tw.keyAction = 'AiChat.Toggle';
   tw.button.title = `${tr('AI Chat')} (Ctrl+Shift+L)`;
+  tw.button.dataset.keymapAction = 'AiChat.Toggle';
   tw.setActions([
     { icon: '＋', title: tr('New Chat'), run: newChat },
     { icon: '🕘', title: tr('Chat History'), run: showHistory },

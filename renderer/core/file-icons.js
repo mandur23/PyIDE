@@ -52,7 +52,7 @@
   const svgOf = (variant, type) => window.PYIDE_FILE_ICONS?.[variant]?.[type];
   ide.fileIconType = (nameOrPath, { dir = false } = {}) => typeOf(nameOrPath.split(/[\\/]/).pop(), dir);
   ide.fileIcon = (nameOrPath, opts = {}) => {
-    const type = ide.fileIconType(nameOrPath, opts);
+    const type = opts.type || ide.fileIconType(nameOrPath, opts);
     const span = document.createElement('span');
     span.className = 'file-icon';
     span.dataset.type = type;

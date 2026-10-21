@@ -91,7 +91,8 @@
   }
   ide.on('installablesChanged', () => { if (!ropeItem && ide.installer?.pip) installItem(); });
 
-  function offerRope(retry) {
+  // fallback: {label, run} for a second way out, such as a plain rename from the project tree.
+  function offerRope(retry, fallback) {
     const item = installItem();
     const python = ide.currentInterp()?.executable || '';
     const body = el('div', 'rf-install');
@@ -125,18 +126,20 @@
         },
       });
     }
+    if (fallback) buttons.push({ label: fallback.label, run: () => { setTimeout(fallback.run); } });
     buttons.push({ label: tr('Cancel') });
     const dlg = ide.ui.dialog({ title: tr('Install rope'), body, width: 520, buttons });
     dlg.el.id = 'rfInstallDialog';
+    if (fallback) dlg.el.querySelectorAll('.dialog-buttons button')[buttons.length - 2].dataset.action = 'fallback';
     return dlg;
   }
 
   // Runs a step that talks to the sidecar from an editor action: errors become an editor hint.
-  async function guarded(fn, retry) {
+  async function guarded(fn, retry, fallback) {
     try {
       return await fn();
     } catch (err) {
-      if (err?.code === 'no-rope') offerRope(retry);
+      if (err?.code === 'no-rope') offerRope(retry, fallback);
       else if (err instanceof RefactorError || err?.code) hint(cannot(err));
       else { console.error(err); hint(cannot(err)); }
       return null;
@@ -171,27 +174,37 @@
   }
 
   // A refactoring dialog: Preview, Refactor and Cancel. collect() returns the request or throws a RefactorError,
-  // shown inside the dialog, which stays open.
-  function refactorDialog({ title, body, width = 520, id, collect, method, label }) {
+  // shown inside the dialog, which stays open. plain(params) may return a function that does the job without the
+  // refactoring (a rename with Search for references off); fallback(params) is the second button of the rope offer.
+  function refactorDialog({ title, body, width = 520, id, collect, method, label, plain, fallback }) {
     const err = el('div', 'rf-error');
     body.appendChild(err);
     let dlg;
+    const labelText = () => (typeof label === 'function' ? label() : label);
     const go = async (wantPreview) => {
       err.textContent = '';
       let result;
+      let params;
       try {
-        const params = collect();
+        params = collect();
+        const instead = plain?.(params);
+        if (instead) { dlg.close(); await instead(); return false; }
         setBusy(dlg, true);
         result = await call(method, params);
       } catch (e) {
         setBusy(dlg, false);
-        if (e?.code === 'no-rope') { dlg.close(); offerRope(); return false; }
+        if (e?.code === 'no-rope') {
+          dlg.close();
+          const again = () => guarded(async () => finish(await call(method, params), labelText(), wantPreview));
+          offerRope(again, fallback?.(params));
+          return false;
+        }
         err.textContent = e?.code ? errorText(e) : String(e?.message || e);
         if (!e?.code) console.error(e);
         return false;
       }
       dlg.close();
-      await finish(result, typeof label === 'function' ? label() : label, wantPreview);
+      await finish(result, labelText(), wantPreview);
       return false;
     };
     dlg = ide.ui.dialog({
@@ -736,11 +749,14 @@
     dlg.rows = rows;
   }
 
-  async function moveElement(target) {
+  // target: a module or package from the project tree; dest: the folder it was dropped or pasted on.
+  async function moveElement(target, { dest: destDir } = {}) {
     const ctx = target ? null : caretContext();
     if (!target && !ctx) return;
     const file = target || ctx.file;
-    const info = await guarded(() => call('prepareMove', { file, pos: ctx?.pos || null, target: target || null }), () => moveElement(target));
+    const plainMove = (dir) => ide.moveTreeEntry?.({ name: basename(target), path: target, dir: !isPy(target) }, joinPath(dir, basename(target)));
+    const fallback = target && destDir && ide.moveTreeEntry ? { label: tr('Move Without References'), run: () => plainMove(destDir) } : null;
+    const info = await guarded(() => call('prepareMove', { file, pos: ctx?.pos || null, target: target || null }), () => moveElement(target, { dest: destDir }), fallback);
     if (!info) return;
     const body = el('div', 'rf-form');
     const head = el('div', 'rf-message');
@@ -755,9 +771,13 @@
     }
     body.appendChild(head);
     const relDir = (p) => { const r = rel(p); return r === p ? '' : r; };
-    const initial = info.kind === 'global' ? `${relDir(ide.util.dirname(info.path)) ? `${relDir(ide.util.dirname(info.path))}\\` : ''}` : relDir(info.folder);
+    const initial = info.kind === 'global' ? `${relDir(ide.util.dirname(info.path)) ? `${relDir(ide.util.dirname(info.path))}\\` : ''}`
+      : relDir(destDir || info.folder);
     const dest = textInput(initial, 'rf-dest');
     body.appendChild(field(info.kind === 'global' ? tr('To file:') : tr('To directory:'), dest));
+    // PyCharm's Search for references: off, the module moves on disk and nothing else changes.
+    const refs = info.kind === 'module' && target && ide.moveTreeEntry ? checkRow(tr('Search for references'), true, 'rf-refs') : null;
+    if (refs) body.appendChild(refs);
     body.appendChild(el('div', 'muted rf-note', info.kind === 'global'
       ? tr('A path relative to the project. A file that does not exist is created.')
       : tr('A path relative to the project. Imports of the module are updated across the project.')));
@@ -769,11 +789,68 @@
         const path = /^[a-z]:\\/i.test(v) ? v : v ? joinPath(ide.root, v) : ide.root;
         return { file, pos: ctx?.pos || null, target: target || null, dest: path };
       },
+      plain: (params) => (refs && !refs.input.checked ? () => plainMove(params.dest) : null),
+      fallback: (params) => (refs ? { label: tr('Move Without References'), run: () => plainMove(params.dest) } : null),
     });
     dest.focus();
     dest.setSelectionRange(dest.value.length, dest.value.length);
     return dlg;
   }
+
+  // ---------- renaming and moving modules from the project tree ----------
+  // A .py file (not __init__.py) or a folder that is a package (__init__.py) or a namespace package (holds .py files),
+  // inside a trusted project. Anything else keeps the tree's plain rename and move.
+  async function moduleEntry(entry) {
+    if (!ide.root || ide.trusted === false || !entry?.path || entry.fixed || entry.treeRoot) return null;
+    if (samePath(entry.path, ide.root) || !isUnder(entry.path, ide.root)) return null;
+    if (!entry.dir) return /\.py$/i.test(entry.name) && entry.name.toLowerCase() !== '__init__.py' ? 'module' : null;
+    let children;
+    try { children = await ide.api.list(entry.path); } catch { return null; }
+    if (children.some((c) => !c.dir && c.name.toLowerCase() === '__init__.py')) return 'package';
+    return children.some((c) => !c.dir && /\.py$/i.test(c.name)) ? 'package' : null;
+  }
+  const dottedName = (path) => rel(path).replace(/\.py$/i, '').split(/[\\/]+/).filter((p) => p && p !== '__init__').join('.');
+
+  // PyCharm's Rename dialog for a module or package: the new name and Search for references (on). With it on, rope
+  // renames the module and rewrites every import of it; off, the file or folder is only renamed.
+  function renameModule(entry, kind) {
+    const body = el('div', 'rf-form');
+    const head = el('div', 'rf-message');
+    const [before, after = ''] = (kind === 'package' ? tr("Rename package '{name}' to:") : tr("Rename module '{name}' to:")).split('{name}');
+    head.append(before, userText(el('b', null, dottedName(entry.path))), after);
+    body.appendChild(head);
+    const name = textInput(entry.name, 'rf-name');
+    body.appendChild(name);
+    const refs = checkRow(tr('Search for references'), true, 'rf-refs');
+    body.appendChild(refs);
+    const plainRename = (n) => ide.moveTreeEntry({ ...entry }, joinPath(ide.util.dirname(entry.path), n));
+    // A module renamed to a name without .py is no longer a module: only the file is renamed.
+    const plain = ({ name: n }) => (!refs.input.checked || (kind === 'module' && !/\.py$/i.test(n)) ? () => plainRename(n) : null);
+    const title = tr('Rename');
+    const dlg = refactorDialog({
+      title, body, width: 520, id: 'rfRenameModuleDialog', method: 'renameModule', label: title,
+      collect: () => {
+        const n = name.value.trim();
+        if (!n) throw new RefactorError('empty-name');
+        if (/[\\/:*?"<>|]/.test(n)) throw new RefactorError('invalid-name', { name: n });
+        return { target: entry.path, name: n };
+      },
+      plain: (params) => (params.name === entry.name ? () => {} : plain(params)),
+      fallback: (params) => ({ label: tr('Rename Without References'), run: () => plainRename(params.name) }),
+    });
+    // As in PyCharm, the name without its extension is selected.
+    const stem = kind === 'module' ? entry.name.replace(/\.py$/i, '').length : entry.name.length;
+    name.setSelectionRange(0, stem);
+    return dlg;
+  }
+
+  ide.treeMoveHandlers?.push(async ({ kind, entry, dir }) => {
+    const what = await moduleEntry(entry);
+    if (!what) return false;
+    if (kind === 'rename') renameModule(entry, what);
+    else moveElement(entry.path, { dest: dir });
+    return true;
+  });
 
   // ---------- Refactor This (Ctrl+Alt+Shift+T) ----------
   const REFACTORINGS = [

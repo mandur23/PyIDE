@@ -278,6 +278,22 @@
     [/^debugpy did not start the debug session within (\d+) seconds$/, (m) => tr('debugpy did not start the debug session within {seconds} seconds', { seconds: m[1] })],
     [/^No debug session$/, () => tr('No debug session')],
     [/^(\w+) failed$/, (m) => tr('{command} failed', { command: m[1] })],
+    // Attach to Process (main/features/debug-attach.js and debug.js)
+    [/^Process (\d+) is not running$/, (m) => tr('Process {pid} is not running (it may have exited)', { pid: m[1] })],
+    [/^Access denied: cannot attach to process (\d+)$/, (m) => tr('Access denied: process {pid} runs as administrator or as another user. Run PyIDE as administrator to attach to it.', { pid: m[1] })],
+    [/^Process (\d+) exited before the debugger connected$/, (m) => tr('Process {pid} exited before the debugger connected', { pid: m[1] })],
+    [/^Process (\d+) did not start the debugger within (\d+) seconds; it may be blocked in native code or waiting for input$/,
+      (m) => tr('Process {pid} did not start the debugger within {seconds} seconds; it may be blocked in native code or waiting for input', { pid: m[1], seconds: m[2] })],
+    [/^Python (\S+) is not supported by the bundled debugpy \(Python (\S+) or later is required\)$/,
+      (m) => tr('Python {version} is not supported by the bundled debugpy (Python {min} or later is required)', { version: m[1], min: m[2] })],
+    [/^Injecting the debugger into process (\d+) timed out after (\d+) seconds$/, (m) => tr('Injecting the debugger into process {pid} timed out after {seconds} seconds', { pid: m[1], seconds: m[2] })],
+    [/^Could not inject the debugger into process (\d+): ([\s\S]*)$/, (m) => tr('Could not inject the debugger into process {pid}: {error}', { pid: m[1], error: m[2] })],
+    [/^Cannot run the interpreter of process (\d+): ([\s\S]*)$/, (m) => tr('Cannot run the interpreter of process {pid}: {path}', { pid: m[1], path: m[2] })],
+    [/^Listing processes timed out after (\d+) seconds$/, (m) => tr('Listing processes timed out after {seconds} seconds', { seconds: m[1] })],
+    [/^Could not list processes: ([\s\S]*)$/, (m) => tr('Could not list processes: {error}', { error: m[1] })],
+    [/^No Python interpreter found\.$/, () => tr('No Python interpreter found.')],
+    [/^No process selected$/, () => tr('No process selected')],
+    [/^Debugging stopped$/, () => tr('Debugging stopped')],
   ];
   function remoteError(err) {
     const msg = ide.util.errorText(err);
@@ -296,6 +312,11 @@
     else if (event === 'output') {
       if (body.category === 'telemetry') return;
       con.append(body.output, body.category === 'stderr' ? 'err' : body.category === 'stdout' ? null : 'sys');
+    } else if (sess?.attach && event === 'exited') {
+      sess.exitCode = body.exitCode;
+    } else if (sess?.attach && event === 'closed') {
+      // An attach session ends when its connection does: after Detach, or when the target exits.
+      endSession(sess, sess.exitCode);
     } else if (event === 'terminated' || event === 'exited' || event === 'closed') {
       if (sess) setRunning();
     }
@@ -312,6 +333,7 @@
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     lastFile = file;
     lastCfg = cfg;
+    lastRun = () => debugFile(file, cfg);
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
     sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
@@ -358,7 +380,9 @@
 
   function endSession(s, code) {
     if (sess !== s) return;
-    con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
+    if (!s.attach) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
+    else if (code != null) con.append(`\n${tr('Process {pid} finished with exit code {code}', { pid: s.attach, code })}\n`, 'sys');
+    else con.append(`\n${tr('Detached from process {pid}', { pid: s.attach })}\n`, 'sys');
     sess = null;
     con.input.disabled = true;
     clearFrameDecorations();
@@ -372,13 +396,180 @@
   async function stopDebug() {
     if (!sess) return;
     const s = sess;
-    if (s.id) await ide.api.invoke('debug:stop', s.id);
-    else {
+    if (s.id) {
+      await ide.api.invoke('debug:stop', s.id);
+      // Detaching leaves the target running, so no process exit ends the session.
+      if (s.attach) endSession(s, null);
+    } else {
       // Still starting: end the session now and have main abort the startup, which kills the debuggee even when
       // debugpy never completes the handshake (debugFile also stops it should 'debug:start' still return an id).
       endSession(s, null);
       await ide.api.invoke('debug:stop', null, s.startKey).catch(() => {});
     }
+  }
+
+  // ---------- Attach to Process (Ctrl+Alt+F5) ----------
+  // proc: an entry of 'debug:processes' ({pid, exe, interpreter, version, cmd, debugPort}). Breakpoints, stepping,
+  // variables and the console work as in a launched session; Stop detaches and leaves the process running.
+  async function attachToProcess(proc) {
+    if (!proc?.pid) return;
+    tw.show();
+    showSub('console');
+    if (sess) await stopDebug();
+    lastRun = () => attachToProcess(proc);
+    con.clear();
+    con.append(`${tr('Attaching to process {pid}…', { pid: proc.pid })}${proc.cmd ? `  ${proc.cmd}` : ''}\n`, 'sys');
+    sess = { id: null, startKey: ++startKeys, attach: proc.pid, file: null, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
+    earlyEvents = [];
+    const mine = sess;
+    updateControls();
+    const files = [...bps.values()].map((f) => bpPayload(f.path)).filter((p) => p.lines.length);
+    let res;
+    try {
+      // Main looks the process up again by pid (its interpreter and debugpy port); created guards against a reused pid.
+      res = await ide.api.invoke('debug:attach', { pid: proc.pid, created: proc.created || null }, files, { startKey: mine.startKey });
+    } catch (err) {
+      if (sess === mine) {
+        con.append(`${tr('Cannot attach to process {pid}: {error}', { pid: proc.pid, error: remoteError(err) })}\n`, 'err');
+        sess = null;
+        updateControls();
+      }
+      return;
+    }
+    if (sess !== mine) {
+      ide.api.invoke('debug:stop', res.id).catch(() => {});
+      return;
+    }
+    sess.id = res.id;
+    if (sess.state === 'starting') sess.state = 'running';
+    con.append(`${res.version ? tr('Attached to process {pid} (Python {version})', { pid: proc.pid, version: res.version })
+      : tr('Attached to process {pid}', { pid: proc.pid })}\n`, 'sys');
+    updateControls();
+    for (const p of mine.pendingBps) sendBps(p);
+    mine.pendingBps.clear();
+    const queued = earlyEvents.filter((m) => m.id === res.id);
+    earlyEvents = [];
+    for (const m of queued) handleEvent(m.event, m.body);
+  }
+
+  // Processes whose command line (or working directory, where the OS tells it) is inside the project come first.
+  const norm = (p) => String(p || '').replace(/\//g, '\\').toLowerCase();
+  function inProject(proc) {
+    if (!ide.root) return false;
+    const root = norm(ide.root).replace(/\\+$/, '');
+    return norm(proc.cmd).includes(`${root}\\`) || isUnder(norm(proc.cwd), root);
+  }
+  // What a row shows as the program: the command line without the interpreter.
+  const programText = (proc) => (proc.cmd ? (proc.args.length ? proc.args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ') : proc.name) : tr('(command line not available)'));
+
+  function attachDialog() {
+    const body = el('div', 'dbg-attach');
+    const filter = el('input', 'input dbg-attach-filter');
+    filter.id = 'dbgAttachFilter';
+    filter.placeholder = tr('Filter by PID, script or command line');
+    filter.spellcheck = false;
+    const list = el('div', 'dbg-attach-list');
+    list.id = 'dbgAttachList';
+    const status = el('div', 'dbg-attach-status muted');
+    status.id = 'dbgAttachStatus';
+    body.append(filter, list, status);
+    let procs = [];
+    let shown = [];
+    let selected = null; // pid
+    let loading = null;
+    let dlg;
+
+    const select = (pid, scroll = true) => {
+      selected = pid;
+      for (const r of list.querySelectorAll('.dbg-attach-row')) {
+        r.classList.toggle('selected', Number(r.dataset.pid) === pid);
+        if (scroll && Number(r.dataset.pid) === pid) r.scrollIntoView({ block: 'nearest' });
+      }
+    };
+    const render = () => {
+      const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = (p) => `${p.pid} ${p.name} ${p.cmd || ''} ${p.interpreter || ''}`.toLowerCase();
+      shown = procs.filter((p) => words.every((w) => hay(p).includes(w)));
+      const groups = [[tr('In this project'), shown.filter((p) => p.inProject)], [tr('Other Python processes'), shown.filter((p) => !p.inProject)]];
+      const rows = [];
+      for (const [title, items] of groups) {
+        if (!items.length) continue;
+        rows.push(el('div', 'dbg-attach-group', title));
+        for (const p of items) {
+          const row = el('div', 'dbg-attach-row');
+          row.dataset.pid = p.pid;
+          const line = el('div', 'dbg-attach-line');
+          line.append(data('dbg-attach-pid', String(p.pid)), data('dbg-attach-cmd', programText(p), p.cmd || ''));
+          if (p.debugPort) line.append(el('span', 'dbg-attach-tag', tr('debugpy listening')));
+          const interp = el('div', 'dbg-attach-interp muted');
+          interp.append(data(null, `${p.version ? `Python ${p.version}` : 'Python'}${p.interpreter ? ` · ${p.interpreter}` : ''}`));
+          row.append(line, interp);
+          row.title = p.cmd || '';
+          row.onmousedown = () => select(p.pid, false);
+          row.ondblclick = () => { select(p.pid, false); attachSelected(); };
+          rows.push(row);
+        }
+      }
+      list.replaceChildren(...rows);
+      const ordered = [...groups[0][1], ...groups[1][1]];
+      if (!ordered.some((p) => p.pid === selected)) selected = ordered[0]?.pid ?? null;
+      select(selected);
+      if (loading) status.textContent = tr('Looking for Python processes…');
+      else if (!procs.length) status.textContent = tr('No Python processes found');
+      else if (!shown.length) status.textContent = tr('Nothing matches the filter');
+      else status.textContent = tr('{count} Python processes', { count: shown.length });
+    };
+    const load = async () => {
+      const my = (loading = {});
+      status.textContent = tr('Looking for Python processes…');
+      status.classList.remove('err');
+      try {
+        const res = await ide.api.invoke('debug:processes');
+        if (loading !== my) return;
+        procs = res.map((p) => ({ ...p, inProject: inProject(p) }))
+          .sort((a, b) => (b.inProject - a.inProject) || String(b.created || '').localeCompare(String(a.created || '')) || b.pid - a.pid);
+        loading = null;
+        render();
+      } catch (err) {
+        if (loading !== my) return;
+        loading = null;
+        procs = [];
+        render();
+        status.textContent = remoteError(err);
+        status.classList.add('err');
+      }
+    };
+    function attachSelected() {
+      const p = procs.find((x) => x.pid === selected);
+      if (!p) return false;
+      dlg.close();
+      attachToProcess(p);
+      return true;
+    }
+    filter.oninput = render;
+    filter.onkeydown = (e) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'PageDown' && e.key !== 'PageUp') return;
+      e.preventDefault();
+      const order = [...list.querySelectorAll('.dbg-attach-row')].map((r) => Number(r.dataset.pid));
+      if (!order.length) return;
+      const i = order.indexOf(selected);
+      const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : e.key === 'PageDown' ? 8 : -8;
+      select(order[Math.max(0, Math.min(order.length - 1, i < 0 ? 0 : i + step))]);
+    };
+    dlg = ide.ui.dialog({
+      title: tr('Attach to Process'),
+      body,
+      width: 760,
+      buttons: [
+        { label: tr('Refresh'), run: () => { load(); filter.focus(); return false; } },
+        { label: tr('Cancel') },
+        { label: tr('Attach'), primary: true, run: () => { attachSelected(); return false; } },
+      ],
+    });
+    dlg.el.classList.add('dbg-dialog', 'dbg-attach-dialog');
+    dlg.el.id = 'dbgAttachDialog';
+    render();
+    load();
   }
 
   function setRunning() {
@@ -815,6 +1006,7 @@
 
   // ---------- tool window ----------
   let con, tw, subTabs, subPanes, lastFile = null, lastCfg = {};
+  let lastRun = null; // Rerun: debugs the last file again or attaches to the last process again
   const btns = {};
 
   function showSub(which) {
@@ -861,7 +1053,7 @@
         bar.appendChild(b);
         btns[id] = b;
       };
-      mk('Rerun', '↻', tr('Rerun'), () => debugFile(sess?.file || lastFile, lastCfg), 'green');
+      mk('Rerun', '↻', tr('Rerun'), () => lastRun?.(), 'green');
       mk('Resume', '▶', withKeys(tr('Resume Program'), 'F9'), () => step('continue'), 'green');
       mk('Pause', '⏸', tr('Pause Program'), pause);
       mk('Stop', '■', withKeys(tr('Stop'), 'Ctrl+F2'), stopDebug, 'red');
@@ -959,7 +1151,9 @@
     btns.Resume.disabled = !susp;
     btns.Pause.disabled = sess?.state !== 'running';
     btns.Stop.disabled = !active;
-    btns.Rerun.disabled = !(sess?.file || lastFile);
+    // Stop on an attached process detaches from it, as in PyCharm.
+    btns.Stop.title = sess?.attach ? withKeys(tr('Detach'), 'Ctrl+F2') : withKeys(tr('Stop'), 'Ctrl+F2');
+    btns.Rerun.disabled = !lastRun;
     for (const k of ['StepOver', 'StepInto', 'StepOut', 'RunToCursor', 'Evaluate']) btns[k].disabled = !susp;
     debugBtn.classList.toggle('active', active);
     tw.setBadge(susp ? '●' : '');
@@ -975,7 +1169,8 @@
 
   function debugCurrent() {
     const tab = ide.activeTab();
-    if (tab?.kind === 'file' && tab.path.endsWith('.py')) return debugFile(tab.path);
+    // A scratch file (scratches plugin) runs in the project root, as in PyCharm.
+    if (tab?.kind === 'file' && tab.path.endsWith('.py')) return debugFile(tab.path, ide.root && ide.scratches?.isScratch(tab.path) ? { cwd: ide.root } : {});
     if (lastFile) return debugFile(lastFile, lastCfg);
     tw.show();
     showSub('console');
@@ -995,6 +1190,7 @@
   }
   [
     { id: 'Debug', title: tr('Debug'), keys: 'Shift+F9', run: debugCurrent },
+    { id: 'AttachToProcess', title: tr('Attach to Process…'), keys: 'Ctrl+Alt+F5', run: attachDialog },
     { id: 'ToggleLineBreakpoint', title: tr('Toggle Line Breakpoint'), keys: 'Ctrl+F8', when: hasFile,
       run: () => toggleBp(activeFile().path, ide.editor.getPosition().lineNumber) },
     { id: 'ViewBreakpoints', title: tr('View Breakpoints…'), keys: 'Ctrl+Shift+F8', run: viewOrEditBreakpoint },
@@ -1014,10 +1210,11 @@
   // 'debugContextChanged' fires when the selected frame changes or the program resumes or ends.
   ide.debugger = {
     debugFile,
+    attachToProcess,
     isActive: () => !!sess,
     isSuspended: suspended,
     evaluate: (expression, context = 'repl') => (suspended() ? evaluate(expression, context) : Promise.resolve({ error: tr('Not suspended') })),
     addVariableDecorator: (fn) => varDecorators.push(fn),
   };
-  window.__debugger = { state: () => sess && { id: sess.id, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
+  window.__debugger = { state: () => sess && { id: sess.id, attach: sess.attach || null, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
 })();

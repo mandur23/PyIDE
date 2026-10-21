@@ -1,0 +1,12 @@
+{
+  "Scratch Files": "스크래치 파일",
+  "PyCharm's scratch files: File › New Scratch File (Ctrl+Alt+Shift+Insert) creates a Python, Markdown, JSON or other file outside the project, shared by all projects and listed under Scratches and Consoles in the project tree.": "PyCharm의 스크래치 파일: 파일 › 새 스크래치 파일(Ctrl+Alt+Shift+Insert)로 프로젝트 밖에 Python, Markdown, JSON 등의 파일을 만듭니다. 모든 프로젝트가 함께 쓰며 프로젝트 트리의 스크래치 및 콘솔 아래에 표시됩니다.",
+  "New Scratch File": "새 스크래치 파일",
+  "Plain Text": "일반 텍스트",
+  "Could not create a scratch file: {error}": "스크래치 파일을 만들 수 없음: {error}",
+  "Run '{name}'": "'{name}' 실행",
+  "Debug '{name}'": "'{name}' 디버그",
+  "Show in Explorer": "탐색기에서 표시",
+  "Scratches and Consoles": "스크래치 및 콘솔",
+  "Scratches": "스크래치"
+}
