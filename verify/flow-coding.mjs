@@ -796,8 +796,13 @@ try {
     await saveActive();
     await js(`(ide.runAction('LocalHistory.ShowHistory'), true)`);
     await until(`ide.activeTab()?.title === 'Local History: main.py' && document.querySelectorAll('.lh-view:not(.hidden) .lh-row').length >= 2`, 'local history');
-    await js(`(() => { const rows = [...document.querySelectorAll('.lh-view:not(.hidden) .lh-row:not(.label)')]; rows[1].id = 'lhPick'; return true; })()`);
-    await click('#lhPick');
+    // The view redraws its rows once more after opening (up to ~200 ms later), replacing a row picked before that.
+    for (let i = 0; i < 10; i++) {
+      await js(`(() => { const rows = [...document.querySelectorAll('.lh-view:not(.hidden) .lh-row:not(.label)')]; rows[1].id = 'lhPick'; return true; })()`);
+      await click('#lhPick');
+      if (await js(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.id === 'lhPick'`)) break;
+      await sleep(300);
+    }
     await until(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.id === 'lhPick'`, 'revision selected');
     await shot('14-local-history.png');
     await click('.lh-view:not(.hidden) .lh-revert');
