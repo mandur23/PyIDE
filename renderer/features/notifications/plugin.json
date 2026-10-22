@@ -1,0 +1,9 @@
+{
+  "id": "notifications",
+  "name": "Notifications",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "The Notifications tool window: this session's notifications with their actions, an unread badge, and the last 200 kept across restarts.",
+  "main": ["notifications.js"],
+  "required": true
+}

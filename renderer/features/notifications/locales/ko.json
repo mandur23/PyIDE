@@ -1,0 +1,16 @@
+{
+  "Notifications": "알림",
+  "The Notifications tool window: this session's notifications with their actions, an unread badge, and the last 200 kept across restarts.": "알림 도구 창: 이 세션의 알림과 그 동작, 읽지 않은 알림 배지, 다시 시작해도 유지되는 최근 알림 200개를 표시합니다.",
+  "Information": "정보",
+  "Warning": "경고",
+  "Error": "오류",
+  "No notifications": "알림 없음",
+  "Earlier sessions": "이전 세션",
+  "Mark All as Read": "모두 읽음으로 표시",
+  "Clear All": "모두 지우기",
+  "Clear All Notifications": "모든 알림 지우기",
+  "Show Balloons Again ({groups})": "풍선 알림 다시 표시 ({groups})",
+  "Notifications: {n} unread": "알림: 읽지 않음 {n}개",
+  "Git": "Git",
+  "Install Manager": "설치 관리자"
+}

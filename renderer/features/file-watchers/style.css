@@ -1,0 +1,15 @@
+.fw-note { margin-bottom: 6px; }
+.fw-warn { margin-bottom: 6px; color: var(--yellow); }
+.fw-bar { display: flex; gap: 2px; }
+.fw-tool { width: 26px; height: 24px; border-radius: 4px; color: var(--gray11); }
+.fw-tool:hover { background: var(--gray3); }
+.fw-list { border: 1px solid var(--gray3); border-radius: 6px; min-height: 80px; max-height: 180px; overflow: auto; margin: 2px 0 10px; }
+.fw-row { display: grid; grid-template-columns: 28px 160px 130px 1fr; align-items: center; gap: 6px; padding: 3px 6px; cursor: default; }
+.fw-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-row:not(.fw-head):hover { background: var(--gray3); }
+.fw-row.selected { background: var(--blue2); }
+.fw-head { color: var(--gray9); font-weight: 600; border-bottom: 1px solid var(--gray3); }
+.fw-none { padding: 8px; }
+.fw-form .field { grid-template-columns: 160px 1fr; }
+.fw-hint { margin: 2px 0 6px 168px; font-size: 12px; }
+.fw-check { display: flex; align-items: center; gap: 4px; margin: 4px 0 4px 168px; color: var(--gray11); }

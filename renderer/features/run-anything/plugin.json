@@ -1,0 +1,11 @@
+{
+  "id": "run-anything",
+  "name": "Run Anything",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "PyCharm's Run Anything (Double Ctrl): run a configuration, a Python file, pytest, pip or any command from one popup, with per-project history and suggestions as you type.",
+  "depends": [
+    "run",
+    "terminal"
+  ]
+}

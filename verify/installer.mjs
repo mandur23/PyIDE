@@ -39,6 +39,13 @@ const settled = (t) => t.until(`document.querySelectorAll('.inst-card').length &
 const press = async (t, sel) => {
   await t.until(`!!document.querySelector(${JSON.stringify(sel)})`, sel);
   await t.js(`(document.querySelector(${JSON.stringify(sel)}).scrollIntoView({ block: 'center' }), true)`);
+  // A finished job's notification balloon (bottom right) can sit over the button; close it as a user would.
+  await t.js(`(() => {
+    const n = document.querySelector(${JSON.stringify(sel)}), r = n.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    if (hit && !n.contains(hit)) for (const b of document.querySelectorAll('.ide-balloon')) b.remove();
+    return true;
+  })()`);
   await t.click(sel);
 };
 const showFilter = async (t, filter) => { await t.click(`.inst-nav[data-filter="${filter}"]`); await t.until(`document.querySelector('.inst-nav.selected')?.dataset.filter === '${filter}'`, `filter ${filter}`); };

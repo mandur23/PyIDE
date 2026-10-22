@@ -1,0 +1,2 @@
+.layout-name-row { display: flex; align-items: center; gap: 10px; }
+.layout-name-row .input { flex: 1; }

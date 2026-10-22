@@ -32,6 +32,7 @@
     starting: { label: () => '' },
     setup: { label: () => tr('AI Completion: set up'), title: () => tr('Download a local code model to get AI completions.') },
     off: { label: () => tr('AI Completion: off'), title: () => tr('Click to turn AI completion on.') },
+    powerSave: { label: () => tr('AI Completion: paused'), title: () => tr('Paused in Power Save Mode.') },
     snoozed: { label: () => tr('AI Completion: snoozed'), title: () => tr('Snoozed until {time}', { time: new Date(Number(setting('snoozeUntil'))).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) },
     loading: { label: () => tr('AI Completion: loading…'), title: () => tr('Loading {model}…', { model: selectedModel()?.name }) },
     error: { label: () => tr('AI Completion: error'), title: () => status.engine.error },
@@ -42,6 +43,7 @@
     if (!selectedModel()?.installed) return 'setup';
     if (!setting('enabled')) return 'off';
     if (snoozed()) return 'snoozed';
+    if (ide.powerSave?.on()) return 'powerSave';
     if (status.engine.state === 'loading') return 'loading';
     if (status.engine.error) return 'error';
     return 'on';
@@ -66,6 +68,11 @@
   ide.on('settingsChanged', (key) => {
     if (key === KEYS.idle) configure();
     if (Object.values(KEYS).includes(key)) render();
+  });
+  // Power Save Mode: automatic suggestions stop (Trigger AI Completion still works) and visible ghost text goes.
+  ide.on('powerSaveChanged', (on) => {
+    render();
+    if (on) for (const ed of ide.editors()) ed.trigger('powerSave', 'editor.action.inlineSuggest.hide', null);
   });
   configure();
   let snoozeTimer = null;
@@ -255,7 +262,7 @@
     const tab = docTab(model);
     const editor = editorFor(model);
     if (!tab || !editor || !selectedModel()?.installed) return NONE;
-    if (!explicit && (!setting('enabled') || snoozed())) return NONE;
+    if (!explicit && (!setting('enabled') || snoozed() || ide.powerSave?.on())) return NONE;
     if (context.selectedSuggestionInfo || suggestWidgetOpen() || inSnippet(editor)) return NONE;
     if (editor.getSelections().some((s) => !s.isEmpty()) || editor.getSelections().length > 1) return NONE;
 

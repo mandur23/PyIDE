@@ -1,0 +1,18 @@
+{
+  "Tool Window Layouts": "도구 창 레이아웃",
+  "Window › Layouts, as in PyCharm: save the open tool windows, their sizes and the sidebar under a name, restore them later or restore the default layout.": "PyCharm처럼 창 › 레이아웃에서 열린 도구 창, 크기, 사이드바를 이름을 붙여 저장하고 나중에 복원하거나 디폴트 레이아웃을 복원합니다.",
+  "Layouts": "레이아웃",
+  "Save Current Layout As…": "현재 레이아웃을 새 이름으로 저장…",
+  "Save Current Layout As": "현재 레이아웃을 새 이름으로 저장",
+  "Restore Default Layout": "디폴트 레이아웃 복원",
+  "Restore Current Layout": "현재 레이아웃 복원",
+  "Save Changes in Current Layout": "현재 선택된 레이아웃의 변경 사항 저장",
+  "Rename Layout": "레이아웃 이름 변경",
+  "Name:": "이름:",
+  "Custom": "사용자 지정",
+  "OK": "확인",
+  "Cancel": "취소",
+  "Restore": "복원",
+  "Rename…": "이름 변경…",
+  "Delete": "삭제"
+}

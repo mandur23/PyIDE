@@ -4,6 +4,13 @@
   "version": "0.2.2",
   "description": "PyCharm-style Python IDE",
   "updateFeed": "https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mandur23/PyIDE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mandur23/PyIDE/issues"
+  },
   "author": {
     "name": "PyIDE",
     "email": "ms01048913077@gmail.com"

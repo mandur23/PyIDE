@@ -1,0 +1,10 @@
+{
+  "id": "clipboard-history",
+  "name": "Paste from History",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "PyCharm's Paste from History (Ctrl+Shift+V): the last texts copied or cut in PyIDE, filtered as you type, pasted into the editor at every caret.",
+  "main": [
+    "clipboard-history.js"
+  ]
+}

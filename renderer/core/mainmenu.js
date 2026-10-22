@@ -111,11 +111,12 @@
       { label: tr('Recent Projects'), submenu: () => recentItems(15), disabled: !recentProjects().length },
       act('CloseProject'), { separator: true },
       act('SaveAll'), act('ShowSettings'), manageSettingsItem(), { separator: true },
+      act('TogglePowerSave', { checked: !!ide.powerSave?.on() }), { separator: true },
       act('Exit'),
     ]) },
     { label: tr('Edit'), submenu: () => tidy([
       act('Undo'), act('Redo'), { separator: true },
-      act('Cut'), act('Copy'), act('Paste'), act('CopyPaths'), { separator: true },
+      act('Cut'), act('Copy'), act('Paste'), act('PasteMultiple'), act('CopyPaths'), { separator: true },
       act('SelectAll'), act('EditorSelectWord'), { separator: true },
       act('Find'), act('Replace'), act('FindInPath'), act('ReplaceInPath'), act('FindUsages'), { separator: true },
       act('EditorDuplicate'), act('EditorDeleteLine'), act('MoveLineUp'), act('MoveLineDown'),
@@ -125,8 +126,8 @@
       { label: tr('Appearance'), submenu: () => tidy([
         // appearance-modes plugin; their titles say Enter or Exit.
         act('TogglePresentationMode'), act('ToggleDistractionFreeMode'), act('ToggleFullScreen'), act('ToggleZenMode'), { separator: true },
-        { label: tr('Dark'), checked: ide.settings.get('appearance.theme', 'dark') !== 'light', run: () => ide.settings.set('appearance.theme', 'dark') },
-        { label: tr('Light'), checked: ide.settings.get('appearance.theme', 'dark') === 'light', run: () => ide.settings.set('appearance.theme', 'light') },
+        // Dark, Light, Sync with OS (settings plugin).
+        ...(ide.theme?.menuItems() || []),
       ]) },
       act('HideAllWindows'), { separator: true },
       act('FileStructurePopup'), act('QuickJavaDoc'), act('ParameterInfo'), act('RecentFiles'), act('RecentLocations'),
@@ -147,7 +148,7 @@
       act('IntroduceVariable'), act('IntroduceConstant'), act('IntroduceParameter'), act('ExtractMethod'),
     ]) },
     { label: tr('Run'), submenu: () => tidy([
-      act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
+      act('RunAnything'), act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
       act('ChooseDebugConfiguration'),
       act('editRunConfigurations'), act('AttachToProcess'), { separator: true },
       act('Stop'), act('StopDebug'), act('Rerun'), act('RerunFailedTests'), act('HideCoverage'), act('ShowCoverage'),
@@ -160,7 +161,7 @@
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
       act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
       ...(ide.frameworks?.kinds().length ? [act('Frameworks.RunServer'), act('Frameworks.DebugServer'), ...(ide.frameworks.info().django ? [act('Django.RunManageTask'), act('Django.MakeMigrations'), act('Django.Migrate')] : []), { separator: true }] : []),
-      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'),
+      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'), act('CreateVirtualEnvironment'),
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },
@@ -170,12 +171,14 @@
       ...(act('Github.Share.Project') ? [{ separator: true }, { label: 'GitHub', submenu: () => tidy([act('Github.Share.Project'), act('Github.View.Pull.Request')]) }] : []),
     ]) },
     { label: tr('Window'), submenu: () => tidy([
+      // Window › Layouts (layouts plugin).
+      ide.layouts?.menu(), { separator: true },
       act('SplitVertically'), act('SplitHorizontally'), act('Unsplit'), act('UnsplitAll'), act('ChangeSplitOrientation'),
       { separator: true }, act('OpenInNewWindow'), act('MoveToNewWindow'), { separator: true },
       act('PreviousTab'), act('NextTab'), act('ReopenClosedTab'), act('PinActiveTab'), act('CloseContent'),
     ]) },
     { label: tr('Help'), submenu: () => tidy([act('KeymapReference'), act('FindActionHelp') || act('GotoAction'), { separator: true },
-      act('OpenLogInEditor'), act('ShowLogInExplorer'), act('CollectZippedLogs'), act('LogDebugConfigure'), { separator: true }, act('CheckForUpdates'), act('AboutPyIDE')]) },
+      act('OpenLogInEditor'), act('ShowLogInExplorer'), act('CollectZippedLogs'), act('LogDebugConfigure'), { separator: true }, act('ReportProblem'), act('CheckForUpdates'), act('AboutPyIDE')]) },
   ];
   function openMainMenu() {
     const r = $('mainMenuBtn').getBoundingClientRect();

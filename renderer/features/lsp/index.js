@@ -805,5 +805,12 @@
     { id: 'Pyright.Restart', title: tr('Restart Pyright Language Server'), run: restart },
   ].forEach(ide.registerAction);
 
-  ide.lsp = { request, documentSymbols, ready, status: () => status, restart };
+  // Packages installed into or removed from the interpreter: Pyright keeps its import resolution until its settings
+  // change, so ask it to read them again (it re-resolves imports and re-checks the open files).
+  const refreshImports = () => { if (status === 'ready') notify('workspace/didChangeConfiguration', { settings: {} }); };
+  ide.on('packagesChanged', refreshImports);
+
+  // diagnostics(path): Pyright's last raw LSP diagnostics for a file (with `code`, e.g. reportMissingImports).
+  const diagnostics = (path) => (path && status === 'ready' ? rawDiagnostics.get(path.toLowerCase()) || [] : []);
+  ide.lsp = { request, documentSymbols, ready, status: () => status, restart, diagnostics, refreshImports };
 })();

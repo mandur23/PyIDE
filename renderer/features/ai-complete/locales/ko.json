@@ -38,5 +38,7 @@
   "Local Models": "로컬 모델",
   "Unload idle models after (minutes)": "유휴 모델 해제까지 시간 (분)",
   "0 keeps them loaded": "0이면 계속 로드 상태로 둡니다",
-  "Applies to the completion model and to EmbeddingGemma 2 (Semantic Search). An unloaded model loads again on the next request.": "코드 완성 모델과 EmbeddingGemma 2(의미 검색)에 적용됩니다. 해제된 모델은 다음 요청 때 다시 로드됩니다."
+  "Applies to the completion model and to EmbeddingGemma 2 (Semantic Search). An unloaded model loads again on the next request.": "코드 완성 모델과 EmbeddingGemma 2(의미 검색)에 적용됩니다. 해제된 모델은 다음 요청 때 다시 로드됩니다.",
+  "AI Completion: paused": "AI 코드 완성: 일시 중지됨",
+  "Paused in Power Save Mode.": "절전 모드에서 일시 중지되었습니다."
 }

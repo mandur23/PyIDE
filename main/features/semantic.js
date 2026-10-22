@@ -633,6 +633,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   // which the user is asked before it starts.
   const limits = { dataFiles: 1000, dataMB: 50, confirmChunks: 1000 };
   let paused = false; // Pause Indexing, for every project, until Resume or the next launch
+  let powerSave = false; // Power Save Mode (semantic:powerSave): indexing waits as while paused, apart from the user's Pause
   let typingAt = 0; // the renderer reports edits (semantic:typing); indexing waits until the user stops typing
   const exclusionsFile = path.join(base, 'exclusions.json');
   let exclusions = null; // {root key: [project-relative folder]}
@@ -658,7 +659,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   };
   // Waits while indexing is paused or the user is typing. Searches do not wait: they embed on their own.
   async function waitTurn(away) {
-    while ((paused || Date.now() - typingAt < TYPING_PAUSE_MS) && !away()) await sleep(paused ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
+    while ((paused || powerSave || Date.now() - typingAt < TYPING_PAUSE_MS) && !away()) await sleep(paused || powerSave ? 200 : TYPING_PAUSE_MS - (Date.now() - typingAt) + 20);
   }
 
   // At most ten progress messages a second while indexing; phase changes always go out. `eta` is in seconds, from
@@ -669,7 +670,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     idx.sentAt = now;
     const eta = phase === 'indexing' && idx.msPerChunk ? Math.round(((idx.total - idx.done) * idx.msPerChunk) / 1000) : null;
     send('semantic:progress', { root: idx.root, phase, done: idx.done, total: idx.total, files: Object.keys(idx.files).length, chunks: idx.chunks,
-      capped: idx.capped, paused, eta, skipped: idx.skipped?.length || 0, asking: idx.asking || null });
+      capped: idx.capped, paused, powerSave, eta, skipped: idx.skipped?.length || 0, asking: idx.asking || null });
   };
 
   // Brings the index up to date with the files on disk; concurrent calls share one run. Each file reaches the index
@@ -686,6 +687,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       try {
         do {
           idx.rerun = false;
+          // Power Save Mode: not even the walk runs until it ends.
+          while (powerSave && !away()) await sleep(200);
           const known = [];
           for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length);
           const { dataFiles, dataMB } = limits;
@@ -867,6 +870,15 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     }
     return paused;
   });
+  ipcMain.handle('semantic:powerSave', (_e, on) => {
+    powerSave = !!on;
+    for (const idx of indexes.values()) {
+      if (!idx.job) continue;
+      progress(idx, 'indexing', true);
+      if (powerSave) saveNow(idx);
+    }
+    return powerSave;
+  });
   // A project folder as a relative path, or null for the root itself and paths outside it.
   const folderRel = (root, folder) => {
     const rel = path.relative(root, path.resolve(root, folder));
@@ -914,7 +926,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
   ipcMain.handle('semantic:indexInfo', async (_e, root) => {
     const idx = await loadIndex(root);
-    const info = { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped, paused,
+    const info = { files: Object.keys(idx.files).length, chunks: idx.chunks, indexing: !!idx.job, capped: idx.capped, paused, powerSave,
       asking: idx.asking || null, declined: !!idx.declined, skipped: idx.skipped || [], excluded: excludedOf(root),
       heavy: heaviest(Object.entries(idx.files).map(([rel, f]) => [rel, f.chunks.length])) };
     releaseIdle();

@@ -1,0 +1,1 @@
+pyide-venv-demo==1.0

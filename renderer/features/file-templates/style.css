@@ -1,0 +1,23 @@
+/* Settings › Editor › File and Code Templates */
+.ft-page { display: flex; flex-direction: column; gap: 6px; }
+.ft-toolbar { display: flex; gap: 4px; }
+.ft-toolbar button { min-width: 28px; padding: 2px 8px; }
+.ft-list { border: 1px solid var(--gray3); border-radius: 4px; max-height: 190px; overflow-y: auto; background: var(--gray1); }
+.ft-row { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; cursor: default; white-space: nowrap; }
+.ft-row:hover { background: var(--gray2); }
+.ft-row.selected { background: var(--blue2); }
+.ft-row.modified .ft-row-name { color: var(--blue6); }
+.ft-row-name { color: var(--gray12); }
+.ft-tag { margin-left: auto; font-size: 11px; }
+.ft-form { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.ft-field { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: start; gap: 8px; }
+.ft-field > span { padding-top: 4px; }
+.ft-field input.invalid { border-color: var(--red); }
+.ft-body { font-family: var(--mono); font-size: 13px; resize: vertical; min-height: 140px; tab-size: 4; }
+.ft-help { display: flex; flex-direction: column; gap: 2px; font-size: 12px; margin-top: 4px; }
+.ft-help-row { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 8px; }
+.ft-help-row code { font-family: var(--mono); color: var(--gray11); }
+/* Variables asked for when a file is created */
+.ft-vars { display: flex; flex-direction: column; gap: 6px; }
+.ft-var-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 8px; }
+.ft-var-row > span { font-family: var(--mono); }

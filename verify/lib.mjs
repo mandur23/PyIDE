@@ -1,6 +1,6 @@
 // Launches an isolated PyIDE instance (temp user data + temp copy of a fixture project) and drives it over CDP.
-import { spawn, execSync } from 'child_process';
-import fs, { cpSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { spawn, execFileSync, execSync } from 'child_process';
+import fs, { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { syncBuiltinESMExports } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -13,6 +13,8 @@ process.env.PYIDE_TRUST_ALL ??= '1';
 process.env.PYIDE_UPDATE_FEED ??= 'off';
 // The vulnerabilities plugin asks osv.dev about listed packages; tests never do unless they set a (fake) server.
 process.env.PYIDE_OSV_URL ??= 'off';
+// New installs follow the OS theme; tests run as if the OS were dark, whatever this machine uses (main/system-theme.js).
+process.env.PYIDE_OS_THEME ??= 'dark';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -43,9 +45,83 @@ try {
     spawn(process.execPath, [path.join(APP_DIR, 'verify', 'clean.mjs')], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   }
 } catch {}
+// The system clipboard: suites copy, cut and Copy Path for real, and the hidden desktop shares the user's clipboard.
+// It is saved before a suite's first launch and, when a test window wrote to it (a copy or cut event, the clipboard
+// IPC, navigator.clipboard), put back when the last suite running at the same time exits. A run that copies nothing
+// leaves it alone, also what the user copies meanwhile. verify/clipboard-keeper.cjs, an Electron script without a
+// window, reads and writes it. PYIDE_TEST_CLIPBOARD=off turns this off.
+const CLIP_DIR = path.join(tmpdir(), 'pyide-clipboard-keeper');
+const CLIP_FILE = path.join(CLIP_DIR, 'snapshot.json');
+const CLIP_TOUCHED = path.join(CLIP_DIR, 'touched');
+const CLIP_HOLDER = path.join(CLIP_DIR, `holder-${process.pid}`);
+let clipUserData = null;
+let clipTouched = false;
+function markClipboardTouched() {
+  if (clipTouched || !existsSync(CLIP_HOLDER)) return;
+  clipTouched = true;
+  try { writeFileSync(CLIP_TOUCHED, ''); } catch {}
+}
+// Runs in the IDE page: reports each way the page writes the clipboard through the __pyideClipboardTouched binding.
+const CLIPBOARD_HOOK = `(() => {
+  if (window.__pyideClipboardHook) return true;
+  window.__pyideClipboardHook = true;
+  const touched = () => { try { window.__pyideClipboardTouched(''); } catch {} };
+  for (const ev of ['copy', 'cut']) document.addEventListener(ev, touched, true);
+  const c = navigator.clipboard;
+  if (c) for (const m of ['writeText', 'write']) { const f = c[m] && c[m].bind(c); if (f) c[m] = (...a) => { touched(); return f(...a); }; }
+  window.ide?.on?.('clipboardWritten', touched);
+  return true;
+})()`;
+// Other suites holding the snapshot: their process still runs and their mark is recent (a pid can be reused).
+function otherClipHolders() {
+  const holders = [];
+  try {
+    for (const f of readdirSync(CLIP_DIR)) {
+      const pid = Number(/^holder-(\d+)$/.exec(f)?.[1]);
+      if (!pid || pid === process.pid) continue;
+      let alive = Date.now() - statSync(path.join(CLIP_DIR, f)).mtimeMs < 3 * 3600000;
+      if (alive) try { process.kill(pid, 0); } catch (err) { alive = err.code === 'EPERM'; }
+      if (alive) holders.push(pid); else rmSync(path.join(CLIP_DIR, f), { force: true });
+    }
+  } catch {}
+  return holders;
+}
+function clipboardKeeper(mode) {
+  const env = { ...process.env, PYIDE_CLIPBOARD_MODE: mode, PYIDE_CLIPBOARD_FILE: CLIP_FILE };
+  delete env.ELECTRON_RUN_AS_NODE;
+  execFileSync(ELECTRON, [path.join(APP_DIR, 'verify', 'clipboard-keeper.cjs'), `--user-data-dir=${clipUserData}`],
+    { env, stdio: 'ignore', windowsHide: true, timeout: 30000 });
+}
+function saveClipboard() {
+  if (clipUserData || process.env.PYIDE_TEST_CLIPBOARD === 'off') return;
+  clipUserData = tempDir('clipboard');
+  try {
+    mkdirSync(CLIP_DIR, { recursive: true });
+    // A suite running now saved the user's clipboard already: share its snapshot.
+    if (!(otherClipHolders().length && existsSync(CLIP_FILE))) {
+      rmSync(CLIP_TOUCHED, { force: true });
+      clipboardKeeper('save');
+    }
+    writeFileSync(CLIP_HOLDER, '');
+  } catch (err) {
+    console.log(`note: the clipboard could not be saved and will not be restored (${err.message.split('\n')[0]})`);
+  }
+}
+function restoreClipboard() {
+  if (!existsSync(CLIP_HOLDER)) return;
+  rmSync(CLIP_HOLDER, { force: true });
+  if (otherClipHolders().length) return;
+  try {
+    if (existsSync(CLIP_TOUCHED)) clipboardKeeper('restore');
+    rmSync(CLIP_FILE, { force: true });
+    rmSync(CLIP_TOUCHED, { force: true });
+  } catch (err) { console.log(`note: the clipboard could not be restored (${err.message.split('\n')[0]})`); }
+}
+
 process.on('exit', () => {
   for (const pid of runningPids) try { execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); } catch {}
   if (runningPids.size) killedAny = true;
+  restoreClipboard();
   if (process.env.PYIDE_KEEP_TEST_DIRS === '1' || !workDirs.size) return;
   // A killed Electron's GPU and utility processes let go of the profile a moment later.
   if (killedAny) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
@@ -57,6 +133,7 @@ process.on('exit', () => {
 // exe: an installed PyIDE.exe to run instead of the source tree; open: a project file to pass instead of the folder.
 // projectDir: an existing project folder to open in place, instead of a copy of a fixture; args: extra command-line flags.
 export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [] }) {
+  saveClipboard();
   const work = tempDir(name);
   const project = projectDir || path.join(work, 'project');
   if (!projectDir) cpSync(path.join(APP_DIR, 'verify', 'fixtures', fixture), project, { recursive: true });
@@ -90,6 +167,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   ws.addEventListener('message', (m) => {
     const msg = JSON.parse(m.data);
     if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.method === 'Runtime.bindingCalled' && msg.params.name === '__pyideClipboardTouched') markClipboardTouched();
     if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
   });
   // Once the window is gone, calls fail instead of waiting forever, so until() times out with its label.
@@ -102,6 +180,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     ws.send(JSON.stringify({ id, method, params }));
   });
   await cdp('Runtime.enable');
+  await cdp('Runtime.addBinding', { name: '__pyideClipboardTouched' });
   // Test windows run beside other windows; without this, losing OS focus closes Monaco hovers and hints mid-check.
   await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
 
@@ -171,6 +250,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     close();
     throw new Error(`IDE never became ready; renderer exceptions after reload:\n  ${consoleErrors.join('\n  ') || '(none)'}`);
   }
+  await js(CLIPBOARD_HOOK).catch(() => {});
   return { project, outDir, userData: userData || path.join(work, 'userdata'), pid: child.pid, spawnedAt, cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
 }
 

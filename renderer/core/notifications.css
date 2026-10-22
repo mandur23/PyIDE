@@ -1,0 +1,44 @@
+/* Notification balloons and the background tasks widget (renderer/core/notifications.js). */
+:root { --balloon-shadow: #0008; }
+:root[data-theme="light"] { --balloon-shadow: #0003; }
+
+.ide-balloons { position: fixed; right: 56px; bottom: 34px; z-index: 55; display: flex; flex-direction: column; gap: 8px;
+  width: 360px; max-width: calc(100vw - 70px); pointer-events: none; }
+.ide-balloon { position: relative; pointer-events: auto; background: var(--gray2); border: 1px solid var(--gray4); border-left: 3px solid var(--blue6);
+  border-radius: 6px; padding: 10px 44px 10px 12px; box-shadow: 0 8px 24px var(--balloon-shadow); }
+:root[data-theme="light"] .ide-balloon { background: #ffffff; }
+.ide-balloon.clickable { cursor: pointer; }
+.ide-balloon.ok { border-left-color: var(--green6); }
+.ide-balloon.warn { border-left-color: var(--yellow); }
+.ide-balloon.error { border-left-color: var(--red); }
+.ide-balloon-title { font-weight: 600; color: var(--gray12); overflow-wrap: anywhere; }
+.ide-balloon-text { margin-top: 4px; color: var(--gray9); white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; overflow-wrap: anywhere; }
+.ide-balloon-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
+.ide-balloon-action, .notes-action { color: var(--blue8); font-size: 12px; padding: 0; }
+.ide-balloon-action:hover, .notes-action:hover { text-decoration: underline; }
+:root[data-theme="light"] :is(.ide-balloon-action, .notes-action) { color: #2257c6; }
+.ide-balloon-tools { position: absolute; top: 5px; right: 6px; display: flex; gap: 2px; }
+.ide-balloon-tools button { color: var(--gray7); width: 18px; height: 18px; border-radius: 3px; line-height: 1; }
+.ide-balloon-tools button:hover { background: var(--gray3); color: var(--gray11); }
+
+/* background tasks: status bar widget and its popup */
+.bg-tasks { display: flex; align-items: center; gap: 6px; color: inherit; font: inherit; padding: 0 4px; height: 20px; border-radius: 3px; max-width: 340px; }
+.bg-tasks:hover { background: var(--gray3); }
+.bg-tasks.hidden { display: none; }
+.bg-tasks-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.bg-bar { position: relative; display: block; flex: 0 0 auto; width: 110px; height: 4px; border-radius: 2px; background: var(--gray4); overflow: hidden; }
+.bg-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue6); border-radius: 2px; transition: width .2s; }
+.bg-bar.indeterminate .bg-fill { width: 30%; animation: bg-indeterminate 1.2s ease-in-out infinite; transition: none; }
+@keyframes bg-indeterminate { from { left: -30%; } to { left: 100%; } }
+.bg-popup { position: fixed; bottom: 30px; z-index: 58; width: 380px; max-width: calc(100vw - 16px); max-height: 60vh; overflow: auto; padding: 4px 0;
+  background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 8px 24px var(--balloon-shadow); font-size: 12px; }
+:root[data-theme="light"] .bg-popup { background: #fff; }
+.bg-popup-head { padding: 6px 12px; color: var(--gray8); font-weight: 600; }
+.bg-popup-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; }
+.bg-popup-row + .bg-popup-row { border-top: 1px solid var(--gray3); }
+.bg-popup-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.bg-popup-main .bg-bar { width: 100%; }
+.bg-popup-title { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-popup-text { color: var(--gray8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-popup-cancel { color: var(--gray8); width: 22px; height: 22px; border-radius: 4px; font-size: 15px; }
+.bg-popup-cancel:hover { background: var(--red); color: #fff; }

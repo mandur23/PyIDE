@@ -44,6 +44,8 @@
   const logActions = [];
   const commitHeaders = [];
   const msgActions = el('div', 'vcs-msg-actions'); // buttons other plugins put on the commit message box
+  const commitOpts = el('div', 'vcs-commit-opts'); // controls other plugins put after the commit buttons
+  const beforeCommit = []; // async ({files, message, andPush}) => false to stop the commit (commit checks)
   let conflictHandler = null;
   const errorText = (r) => (r.reason && REASONS[r.reason]) || r.err || r.out || '';
 
@@ -53,20 +55,10 @@
   let lastHead;
 
   // ---------- notifications and the Git console ----------
-  const notes = el('div', 'vcs-notes');
-  document.body.appendChild(notes);
-  // raw: the text is git output or a path, shown untranslated.
+  // A balloon through ide.notifications (kept in the Notifications tool window); clicking it shows the Git console.
+  // raw: the text is git output or a path, shown untranslated. Returns the note ({remove(), expire()}).
   function notify(title, text = '', kind = 'info', raw = false) {
-    const note = el('div', `vcs-note ${kind}`);
-    note.appendChild(el('div', 'vcs-note-title', title));
-    if (text) note.appendChild((raw ? userText : el)('div', 'vcs-note-text', text.trim()));
-    const close = el('button', 'vcs-note-close', '×');
-    close.onclick = (e) => { e.stopPropagation(); note.remove(); };
-    note.appendChild(close);
-    note.onclick = () => { showConsole(); note.remove(); };
-    notes.appendChild(note);
-    setTimeout(() => note.remove(), kind === 'error' ? 20000 : 10000);
-    return note;
+    return ide.notifications.notify({ title, text, kind, raw, group: 'Git', balloonClass: 'vcs-note', onClick: () => showConsole() });
   }
 
   let gitConsole = null;
@@ -162,13 +154,125 @@
   branchBtn.title = tr('Git Branches');
   ide.registerToolbarItem({ side: 'left', order: 10, el: branchBtn });
 
+  // Incoming/outgoing commits of the current branch against its upstream ("↓3 ↑1"), kept current by auto-fetch.
+  const syncBtn = el('button', 'tb-btn vcs-sync hidden');
+  syncBtn.id = 'vcsSync';
+  ide.registerToolbarItem({ side: 'left', order: 11, el: syncBtn });
+
   function renderWidget() {
     branchBtn.classList.toggle('hidden', !repo);
+    renderSync();
     if (!repo) return;
     const parts = [ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.opBranch || repo.detached || 'HEAD')];
     if (repo.op) parts.push(el('span', 'vcs-branch-op', OP_LABEL[repo.op]));
     branchBtn.replaceChildren(...parts, ide.icon('chevronDown', '▾'));
   }
+
+  function renderSync() {
+    const show = !!repo?.upstream && (repo.behind > 0 || repo.ahead > 0);
+    syncBtn.classList.toggle('hidden', !show);
+    if (!show) return;
+    const parts = [];
+    if (repo.behind) parts.push(el('span', 'vcs-sync-in', `↓${repo.behind}`));
+    if (repo.ahead) parts.push(el('span', 'vcs-sync-out', `↑${repo.ahead}`));
+    syncBtn.replaceChildren(...parts);
+    syncBtn.dataset.behind = repo.behind;
+    syncBtn.dataset.ahead = repo.ahead;
+    const lines = [];
+    if (repo.behind) lines.push(trn(repo.behind, '{n} incoming commit from {upstream}', '{n} incoming commits from {upstream}', { upstream: repo.upstream }));
+    if (repo.ahead) lines.push(trn(repo.ahead, '{n} outgoing commit to {upstream}', '{n} outgoing commits to {upstream}', { upstream: repo.upstream }));
+    if (fetchState.lastFetch) lines.push(tr('Last fetched at {time}', { time: new Date(fetchState.lastFetch).toLocaleTimeString(dateLocale, { hour: 'numeric', minute: '2-digit' }) }));
+    lines.push(tr('Click to update the project'));
+    syncBtn.title = lines.join('\n');
+  }
+
+  syncBtn.onclick = () => {
+    const r = syncBtn.getBoundingClientRect();
+    ide.ui.contextMenu(r.left, r.bottom, [
+      { label: tr('Update Project…'), keyAction: 'Vcs.UpdateProject', run: updateProject },
+      ...(repo?.ahead ? [{ label: tr('Push…'), keyAction: 'Vcs.Push', run: openPushDialog }] : []),
+      { separator: true },
+      { label: tr('Fetch'), run: () => runAutoFetch(true) },
+    ]);
+  };
+
+  // ---------- auto-fetch ----------
+  // Every vcs.autoFetchMinutes minutes (default 10, 0 = off) a quiet `git fetch --all --prune` (git:backgroundFetch,
+  // main/features/git.js: never while another git operation runs, never prompts) keeps ↓/↑ current. Failures (offline,
+  // credentials needed) only go to the IDE log and stretch the interval, doubling up to an hour; a success resets it.
+  const fetchState = { attempts: 0, failures: 0, skipped: 0, lastFetch: null, lastError: null, nextDelay: 0, running: false, timer: null };
+  const MAX_FETCH_BACKOFF = 60 * 60000;
+  const fetchMinutes = () => { const n = Number(ide.settings.get('vcs.autoFetchMinutes', 10)); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const fetchInterval = () => Math.max(1000, fetchMinutes() * 60000);
+  let fetchGen = 0;
+
+  // delay: the wait before the next fetch; by default the interval, stretched after failures.
+  function scheduleAutoFetch(delay) {
+    clearTimeout(fetchState.timer);
+    fetchState.timer = null;
+    fetchState.nextDelay = 0;
+    if (!fetchMinutes() || !ide.root) return;
+    const interval = fetchInterval();
+    const wait = delay ?? (fetchState.failures ? Math.min(interval * 2 ** fetchState.failures, Math.max(interval, MAX_FETCH_BACKOFF)) : interval);
+    fetchState.nextDelay = wait;
+    const gen = fetchGen;
+    fetchState.timer = setTimeout(() => { if (gen === fetchGen) runAutoFetch(false); }, wait);
+  }
+
+  // A new project, or a new interval: the first fetch comes soon (within 20 s), then every interval.
+  function restartAutoFetch() {
+    fetchGen++;
+    Object.assign(fetchState, { failures: 0, lastFetch: null, lastError: null });
+    scheduleAutoFetch(Math.min(fetchInterval(), 20000));
+  }
+
+  async function runAutoFetch(manual) {
+    const root = ide.root;
+    const gen = fetchGen;
+    if (!root || fetchState.running) { if (!manual) scheduleAutoFetch(); return; }
+    // Power Save Mode: no automatic fetch (the timer keeps running; a fetch the user asks for still runs).
+    if (!manual && ide.powerSave?.on()) { scheduleAutoFetch(); return; }
+    // Safe Mode runs no git at all (main refuses too); a project without remotes has nothing to fetch.
+    if (ide.trusted === false || !repo?.remotes.length) {
+      if (manual) notify(tr('Nothing to fetch'), repo ? REASONS.noRemote : tr('This project is not under Git version control.'), 'warn');
+      else scheduleAutoFetch();
+      return;
+    }
+    fetchState.running = true;
+    let r;
+    try { r = await ide.api.invoke('git:backgroundFetch', root); } catch (err) { r = { ok: false, err: err.message }; } finally { fetchState.running = false; }
+    if (gen !== fetchGen || root !== ide.root) return; // the project or the interval changed meanwhile: its own timer runs
+    if (r.skipped === 'busy' || r.skipped === 'running') {
+      // Another git operation is running: try again shortly, without counting it as a failure.
+      fetchState.skipped++;
+      if (manual) notify(tr('Fetch postponed'), tr('Another Git operation is running.'), 'info');
+      scheduleAutoFetch(Math.min(fetchInterval(), 30000));
+      return;
+    }
+    if (!r.skipped) fetchState.attempts++;
+    if (r.ok) {
+      Object.assign(fetchState, { failures: 0, lastFetch: Date.now(), lastError: null });
+      await refresh();
+      if (manual) notify(tr('Fetched successfully'), '', 'ok');
+    } else if (!r.skipped) {
+      fetchState.failures++;
+      fetchState.lastError = r.err || '';
+      // Quiet: main wrote the reason to the IDE log; only a fetch the user asked for reports it.
+      if (manual) notify(tr('Fetch failed'), r.err || '', 'error', true);
+    }
+    renderSync();
+    scheduleAutoFetch();
+  }
+  ide.on('settingsChanged', (k) => k === 'vcs.autoFetchMinutes' && restartAutoFetch());
+  (ide.settingsPages ||= []).push({
+    id: 'vcs-git', title: () => 'Git', defaults: { 'vcs.autoFetchMinutes': 10 },
+    keywords: 'git fetch auto-fetch remote incoming outgoing 페치 원격',
+    mount(host, ctx) {
+      const s = ctx.ui.section(host, tr('Fetch'));
+      s.appendChild(ctx.ui.fieldRow(tr('Fetch from remotes every (minutes):'), ctx.ui.numberInput('vcs.autoFetchMinutes', { min: 0, max: 1440, fallback: 10 })));
+      s.appendChild(el('div', 'muted settings-note', tr('Keeps the incoming and outgoing commit counts next to the branch current. 0 turns automatic fetching off.')));
+    },
+  });
 
   async function afterCheckout() {
     headCache.clear();
@@ -265,7 +369,7 @@
       commitBtn.onclick = () => doCommit(false);
       const pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
       pushBtn.onclick = () => doCommit(true);
-      btns.append(commitBtn, pushBtn);
+      btns.append(commitBtn, pushBtn, commitOpts);
       const msgBox = el('div', 'vcs-msg-box');
       msgBox.append(msgEl, msgActions);
       commitBody.append(headerEl, listEl, msgBox, btns);
@@ -410,15 +514,32 @@
     if (repo) msgEl.focus();
   }
 
+  let committing = false;
   async function doCommit(andPush) {
-    if (!repo) return;
+    if (!repo || committing) return;
+    committing = true;
+    try { await commitNow(andPush); } finally { committing = false; }
+  }
+
+  async function commitNow(andPush) {
     await ide.saveAll();
     await refresh();
-    const files = repo.files.filter(fileIncluded);
+    if (!repo) return;
+    let files = repo.files.filter(fileIncluded);
     const message = msgEl.value.trim();
     // A merge whose result equals HEAD still needs its merge commit.
     if (!files.length && repo.op !== 'merge') return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
     if (!message) { msgEl.focus(); return notify(tr('Commit message is empty'), tr('Enter a commit message.'), 'warn'); }
+    // Commit checks (vcs-checks plugin): a hook returning false stops the commit; one may rewrite and save the files.
+    if (beforeCommit.length) {
+      for (const hook of beforeCommit) if ((await hook({ files, message, andPush })) === false) return;
+      await ide.saveAll();
+      const chosen = new Set(files.map((f) => key(f.path)));
+      await refresh();
+      if (!repo) return;
+      files = repo.files.filter((f) => chosen.has(key(f.path)) && f.status !== 'conflict');
+      if (!files.length && repo.op !== 'merge') return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
+    }
     const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })));
     logResult(r);
     if (!r.ok) return notify(tr('Commit failed'), errorText(r), 'error', true);
@@ -1665,6 +1786,13 @@
     commitMessage: () => msgEl,
     includedFiles: () => (repo ? repo.files.filter(fileIncluded) : []),
     addMessageAction: (node) => msgActions.appendChild(node),
+    // Commit checks: a control after the Commit buttons, and a hook run before every commit (Commit and Commit and
+    // Push) once the files and message are valid; returning false stops it. Files a hook rewrites must be saved.
+    addCommitOption: (node) => commitOpts.appendChild(node),
+    addBeforeCommit: (fn) => beforeCommit.push(fn),
+    committing: () => committing,
+    // Auto-fetch (vcs.autoFetchMinutes): {failures, attempts, lastFetch, lastError, nextDelay, running}, and fetch now.
+    autoFetch: { state: () => ({ ...fetchState, timer: undefined }), now: () => runAutoFetch(true) },
     // {open(path): merge tool for one file, resolve(): the conflicts dialog, stopped(result): after a pull stopped on conflicts}
     setConflictHandler: (handler) => { conflictHandler = handler; renderChanges(); },
   };
@@ -1689,6 +1817,7 @@
     commits = [];
     if (msgEl) msgEl.value = '';
     refresh();
+    restartAutoFetch();
   });
   ide.on('fileSaved', (tab) => {
     scheduleRefresh();
@@ -1696,7 +1825,7 @@
   });
   ide.on('filesChanged', () => scheduleRefresh());
   // overview-ruler marks carry concrete colors; recolor them for the new theme
-  ide.on('settingsChanged', (k) => k === 'appearance.theme' && setTimeout(updateVisibleGutters));
+  ide.on('themeChanged', () => setTimeout(updateVisibleGutters));
   ide.on('activeTabChanged', (tab) => { updateGutter(tab); layoutAnnotations(); });
   ide.on('fileClosed', (path) => { gutters.delete(key(path)); headCache.delete(key(path)); if (blames.delete(key(path))) rebuildBlameCss(); });
   window.addEventListener('focus', () => scheduleRefresh(50));

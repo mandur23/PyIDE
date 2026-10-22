@@ -68,6 +68,10 @@ function venvOf(executable) {
   return fs.existsSync(path.join(root, 'pyvenv.cfg')) ? root : null;
 }
 
+// venv-setup uses these to pick `uv venv` and to tell a venv from a base interpreter.
+exports.findTool = findTool;
+exports.venvOf = venvOf;
+
 exports.register = (ctx) => {
   const { ipcMain, startProcess } = ctx;
   // -> {ok, packages: [{name, version}]} | {ok: false, error}

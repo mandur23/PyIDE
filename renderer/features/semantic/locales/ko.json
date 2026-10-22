@@ -57,5 +57,8 @@
   "Skip mostly-data folders with more files than": "파일 수가 이보다 많은 데이터 위주 폴더 건너뛰기",
   "…or more text than (MB)": "…또는 텍스트가 이보다 큰 경우 (MB)",
   "Ask before a first index larger than (chunks)": "첫 색인이 이보다 크면 먼저 묻기 (청크)",
-  "A folder counts as data when less than a fifth of its files are source code. Folders Git ignores and virtual environments are never indexed; exclude other folders from the project tree's context menu.": "파일 중 소스 코드가 5분의 1 미만인 폴더는 데이터 폴더로 봅니다. Git이 무시하는 폴더와 가상 환경은 색인하지 않으며, 다른 폴더는 프로젝트 트리의 컨텍스트 메뉴에서 제외할 수 있습니다."
+  "A folder counts as data when less than a fifth of its files are source code. Folders Git ignores and virtual environments are never indexed; exclude other folders from the project tree's context menu.": "파일 중 소스 코드가 5분의 1 미만인 폴더는 데이터 폴더로 봅니다. Git이 무시하는 폴더와 가상 환경은 색인하지 않으며, 다른 폴더는 프로젝트 트리의 컨텍스트 메뉴에서 제외할 수 있습니다.",
+  "Updating semantic index": "의미 색인 업데이트 중",
+  "{eta} left": "{eta} 남음",
+  "Semantic index paused at {pct}% (Power Save Mode)": "의미 색인 {pct}%에서 일시 중지됨 (절전 모드)"
 }

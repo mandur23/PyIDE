@@ -6,3 +6,4 @@
 .upd-feed { flex: 1; min-width: 0; }
 .upd-skipped { display: flex; align-items: center; gap: 10px; }
 #updatesCheckNow { margin-top: 6px; }
+.upd-auto { display: flex; align-items: center; gap: 12px; }

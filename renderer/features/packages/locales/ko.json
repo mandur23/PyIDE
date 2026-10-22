@@ -35,5 +35,7 @@
   "Install uv…": "uv 설치…",
   "Install with pip": "pip로 설치",
   "Install {name}": "{name} 설치",
-  "Show Context Actions": "컨텍스트 액션 표시"
+  "Show Context Actions": "컨텍스트 액션 표시",
+  "Done": "완료",
+  "Failed with exit code {code}": "종료 코드 {code}(으)로 실패했습니다"
 }

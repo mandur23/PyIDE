@@ -38,11 +38,13 @@
     if (status && !ready()) text = tr('Semantic search: setup needed');
     else if (progress?.phase === 'confirm') text = tr('Semantic index: waiting for your answer');
     else if (indexing() && paused) text = tr('Semantic index paused at {pct}%', { pct: pct() });
+    else if (indexing() && ide.powerSave?.on()) text = tr('Semantic index paused at {pct}% (Power Save Mode)', { pct: pct() });
     else if (indexing() && progress.eta) text = tr('Semantic index {pct}% · {eta} left', { pct: pct(), eta: duration(progress.eta) });
     else if (indexing()) text = tr('Semantic index {pct}%', { pct: pct() });
     else if (status?.model?.state === 'loading') text = tr('Loading EmbeddingGemma 2…');
     statusItem.textContent = text ? `✦ ${text}` : '';
     statusItem.classList.toggle('hidden', !text);
+    syncTask();
     if (tw) renderActions();
     if (!info) return;
     const parts = [];
@@ -59,6 +61,20 @@
     notice.classList.toggle('hidden', !(ready() && progress?.phase === 'declined'));
     setupBox.classList.toggle('hidden', ready());
     input.disabled = !ready();
+  }
+
+  // A running index is also a background task (status bar progress and popup); Cancel there pauses indexing.
+  let indexTask = null;
+  function syncTask() {
+    if (!ide.tasks) return;
+    if (!indexing() || paused) { indexTask?.done(); indexTask = null; return; }
+    if (!indexTask?.active) {
+      indexTask = ide.tasks.start({ title: tr('Updating semantic index'), onCancel: () => { indexTask = null; paused = true; setPaused(true); } });
+    }
+    indexTask.update({
+      fraction: progress.done / progress.total,
+      text: [tr('Indexing {done}/{total}', { done: progress.done, total: progress.total }), progress.eta ? tr('{eta} left', { eta: duration(progress.eta) }) : ''].filter(Boolean).join(' · '),
+    });
   }
 
   // Pause/Resume shows while there is something to pause; the list is set again only when that changes.
@@ -121,6 +137,11 @@
     typedAt = Date.now();
     ide.api.send('semantic:typing');
   }));
+
+  // Power Save Mode pauses indexing in main apart from the user's Pause (main/features/semantic.js waitTurn).
+  const sendPowerSave = () => ide.api.invoke('semantic:powerSave', !!ide.powerSave?.on()).then(renderStatus).catch(() => {});
+  sendPowerSave();
+  ide.on('powerSaveChanged', sendPowerSave);
 
   async function setPaused(on) {
     paused = await ide.api.invoke('semantic:pause', on);

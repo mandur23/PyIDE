@@ -56,4 +56,71 @@ function redactObject(value, key = '') {
   return value;
 }
 
-module.exports = { MASK, SECRET_KEY, scrubText, redactObject, addSecretValues };
+// Text meant to leave the computer (a GitHub issue): scrubText, and nothing that names the user or their projects.
+// - each project folder becomes <project> and the home folder ~, in either slash style, any case, inside file:/// URLs;
+// - any other user folder (C:\Users\<name>, /home/<name>, /Users/<name>, /mnt/c/Users/<name>, \\wsl$\<distro>\home\<name>)
+//   keeps its parent and shows the name, spaces included, as <user>;
+// - e-mail addresses become <email>, and the user (and password) of scheme://user:password@host <user>;
+// - the project folder names, and the git repository names passed in `names`, become <project> wherever they stand
+//   as a whole word.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function replacePath(text, dir, by) {
+  const base = String(dir || '').replace(/[\\/]+$/, '');
+  if (base.length < 3) return text;
+  const pattern = base.split(/[\\/]+/).map(escapeRe).join('[\\\\/]+');
+  return text.replace(new RegExp(`${pattern}(?=[\\\\/]|$|[^\\w.-])`, 'gi'), by);
+}
+// The name after a Users/home folder: no separator, space or character Windows forbids, except that spaces may stand
+// inside it when a separator follows (C:\Users\John Smith\x); otherwise it ends at a space, comma or bracket.
+const USER_DIR = /(?<=[\\/])((?:Users|home|Documents and Settings)[\\/]+)(?:[^\\/"'<>:|*?\s](?:[^\\/"'<>:|*?\r\n]*[^\\/"'<>:|*?\s])?(?=[\\/])|[^\\/"'<>:|*?\s,;()]+)/gi;
+const URL_USER = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@?#]+@/gi;
+// git@host:owner/repo (an ssh remote) is not an address; package@1.2.3 has no domain.
+const EMAIL = /(?<![\w.%+-])(?!git@)[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])/g;
+// Folder names too common to identify anyone: replacing them would garble the text (the app's own name included).
+const GENERIC_NAMES = new Set(['project', 'projects', 'src', 'app', 'apps', 'test', 'tests', 'code', 'python', 'main', 'demo',
+  'repo', 'workspace', 'untitled', 'temp', 'tmp', 'home', 'users', 'user', 'desktop', 'documents', 'downloads', 'pyide', 'git']);
+const folderName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]+/).pop();
+function replaceName(text, name) {
+  if (!name || name.length < 3 || GENERIC_NAMES.has(name.toLowerCase())) return text;
+  return text.replace(new RegExp(`(?<![\\p{L}\\p{N}_<-])${escapeRe(name)}(?![\\p{L}\\p{N}_>-])`, 'giu'), '<project>');
+}
+
+// The repository names of the git remotes in a text (the IDE log): URLs ending in .git, ssh:// and git:// URLs,
+// git@host:owner/name, and code-host https URLs on a line that talks about git. The log holds them with the password
+// already masked (https://user:<redacted>@host/...).
+const REMOTE_URL = /\b(?:[a-z][a-z0-9+.-]*:\/\/[^\s'"()`]+|[\w.-]+@[\w.-]+:[\w.~-]+\/[^\s'"()`]+)/gi;
+const CODE_HOST = /(?:^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|dev\.azure\.com)$/i;
+const GIT_LINE = /\bgit\b|\b(?:remote|fetch|push|pull|clone|repository)\b/i;
+function remoteRepoNames(text) {
+  const names = new Set();
+  for (const line of String(text).split(/\r?\n/)) {
+    for (const [url] of line.matchAll(REMOTE_URL)) {
+      const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1].toLowerCase();
+      if (scheme && !['http', 'https', 'ssh', 'git'].includes(scheme)) continue;
+      const after = scheme ? url.slice(scheme.length + 3) : url;
+      const host = scheme ? after.split(/[/?#]/)[0].replace(/^.*@/, '').replace(/:\d*$/, '') : after.split('@')[1].split(':')[0];
+      const rest = scheme ? after.replace(/^[^/?#]*/, '') : after.slice(after.indexOf(':') + 1);
+      const segs = rest.replace(/[?#].*$/, '').replace(/[.,;:!'>]+$/, '').split('/').filter(Boolean);
+      const last = segs[segs.length - 1] || '';
+      let name = null;
+      if (!scheme || scheme === 'ssh' || scheme === 'git' || /\.git$/i.test(last)) name = last;
+      else if (CODE_HOST.test(host) && segs.length >= 2 && GIT_LINE.test(line)) name = segs[1];
+      name = name && name.replace(/\.git$/i, '');
+      if (name && /^[\w.-]+$/.test(name)) names.add(name);
+    }
+  }
+  return [...names];
+}
+
+function redactPaths(text, { home, projects = [], names = [] } = {}) {
+  let s = String(text);
+  const dirs = [...new Set(projects.filter((p) => typeof p === 'string' && p))];
+  for (const p of dirs.sort((a, b) => b.length - a.length)) s = replacePath(s, p, '<project>');
+  if (home) s = replacePath(s, home, '~');
+  s = s.replace(USER_DIR, '$1<user>').replace(URL_USER, '$1<user>@').replace(EMAIL, '<email>');
+  const words = [...new Set([...dirs.map(folderName), ...names].filter((n) => typeof n === 'string'))];
+  for (const name of words.sort((a, b) => b.length - a.length)) s = replaceName(s, name);
+  return scrubText(s);
+}
+
+module.exports = { MASK, SECRET_KEY, scrubText, redactObject, addSecretValues, redactPaths, remoteRepoNames };

@@ -73,6 +73,7 @@
   "More": "더 보기",
   "Search Everywhere": "어디서나 검색",
   "Double Shift": "Shift 두 번",
+  "Double Ctrl": "Ctrl 두 번",
   "Go to File": "파일로 이동",
   "Recent Files": "최근 파일",
   "Drop files here to open them": "파일을 여기에 끌어다 놓으면 열립니다",
@@ -208,5 +209,11 @@
   "A part of the path is a file, not a folder": "경로의 일부가 폴더가 아니라 파일입니다",
   "The disk is full": "디스크가 가득 찼습니다",
   "The disk is read-only": "디스크가 읽기 전용입니다",
-  "The path is too long": "경로가 너무 깁니다"
+  "The path is too long": "경로가 너무 깁니다",
+  "{title} failed": "{title} 실패",
+  "Show Log": "로그 표시",
+  "Don't Show Again": "다시 표시 안 함",
+  "{n} processes running": "프로세스 {n}개 실행 중",
+  "Show all background tasks": "모든 백그라운드 작업 표시",
+  "Background Tasks": "백그라운드 작업"
 }

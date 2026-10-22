@@ -35,5 +35,6 @@
   "Suggest the next edit after I pause typing": "입력을 멈추면 다음 수정을 제안",
   "Pause before asking (ms):": "요청 전 대기 시간(ms):",
   "Minimum time between requests (ms):": "요청 사이 최소 간격(ms):",
-  "Requests go through the Claude Code CLI with your Claude subscription. Only the edited region and nearby lines are sent.": "요청은 Claude 구독으로 로그인된 Claude Code CLI를 거칩니다. 수정하는 영역과 그 주변 줄만 전송됩니다."
+  "Requests go through the Claude Code CLI with your Claude subscription. Only the edited region and nearby lines are sent.": "요청은 Claude 구독으로 로그인된 Claude Code CLI를 거칩니다. 수정하는 영역과 그 주변 줄만 전송됩니다.",
+  "Next edit suggestions: paused in Power Save Mode": "다음 편집 제안: 절전 모드에서 일시 중지됨"
 }

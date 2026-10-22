@@ -5,7 +5,9 @@
   // Settings predating the settings file were kept in localStorage; read them once and move them over.
   let saved = api.loadSettingsSync();
   if (!saved) {
-    try { saved = JSON.parse(localStorage.getItem('pyide.settings')) || {}; } catch { saved = {}; }
+    try { saved = JSON.parse(localStorage.getItem('pyide.settings')); } catch { saved = null; }
+    // A new install follows the OS theme (Sync with OS); existing settings keep theirs (Dark when never chosen).
+    if (!saved || typeof saved !== 'object') saved = { 'appearance.theme': 'system' };
     api.saveSettingsSync(saved);
   }
   window.__initialSettings = saved;

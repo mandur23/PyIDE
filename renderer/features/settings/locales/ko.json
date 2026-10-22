@@ -152,5 +152,16 @@
   "The shortcut {key} is already assigned to other actions. Do you want to remove other assignments?": "{key} 단축키가 이미 다른 액션에 할당되어 있습니다. 다른 할당을 제거하시겠습니까?",
   "Warning": "경고",
   "Remove": "제거",
-  "Leave": "유지"
+  "Leave": "유지",
+  "Sync with OS": "OS와 동기화",
+  "Mouse Control": "마우스 제어",
+  "Change font size with Ctrl+Mouse Wheel": "Ctrl+마우스 휠로 글꼴 크기 변경",
+  "Font size: {size}pt": "글꼴 크기: {size}pt",
+  "Reset to {size}pt": "{size}pt로 재설정",
+  "Increase Font Size": "글꼴 크기 크게",
+  "Decrease Font Size": "글꼴 크기 작게",
+  "Reset Font Size": "글꼴 크기 재설정",
+  "Increase Font Size in All Editors": "모든 에디터에서 글꼴 크기 늘리기",
+  "Decrease Font Size in All Editors": "모든 에디터에서 글꼴 크기 줄이기",
+  "Reset Font Size in All Editors": "모든 에디터에서 글꼴 크기 초기화"
 }

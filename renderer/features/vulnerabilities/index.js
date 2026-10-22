@@ -48,7 +48,7 @@
     clearTimeout(timer);
     if (!manual && !enabled()) { apply(EMPTY); setNote(); return result; }
     const my = ++seq;
-    const network = manual || ide.trusted !== false;
+    const network = manual || autoNetwork();
     const dep = ide.dependencies?.state() || { files: [] };
     const installed = ide.packages.list().map((p) => ({ name: p.name, version: p.version }));
     if (manual) setNote('busy', tr('Checking for vulnerabilities…'));
@@ -61,6 +61,8 @@
     if (r.error) {
       ide.log.warn(`vulnerabilities: ${r.error}`);
       setNote('error', tr('Could not check for vulnerabilities:'), r.error, { label: tr('Retry'), run: () => check({ manual: true }) });
+    } else if (!network && r.unknown && ide.powerSave?.on() && ide.trusted !== false) {
+      setNote('powerSave', tr('Power Save Mode: packages are not checked for vulnerabilities automatically.'), '', { label: tr('Check for Vulnerabilities'), run: () => check({ manual: true }) });
     } else if (!network && r.unknown) {
       setNote('safe', tr('Safe Mode: packages are not checked for vulnerabilities automatically.'), '', { label: tr('Check for Vulnerabilities'), run: () => check({ manual: true }) });
     } else if (manual) {
@@ -71,6 +73,8 @@
     return result;
   }
   const schedule = (ms) => { clearTimeout(timer); timer = setTimeout(() => check(), ms); };
+  // Automatic checks go online only in a trusted project and outside Power Save Mode; cached answers always show.
+  function autoNetwork() { return ide.trusted !== false && !ide.powerSave?.on(); }
 
   function problemText(r, pkg) {
     const head = pkg.vulns.length === 1
@@ -189,6 +193,7 @@
   ide.on('dependenciesChecked', () => schedule(800));
   ide.on('projectClosed', () => { seq++; clearTimeout(timer); apply(EMPTY); setNote(); });
   ide.on('settingsChanged', (key) => { if (key === SETTING) schedule(0); });
+  ide.on('powerSaveChanged', (on) => { if (!on && ide.root) schedule(0); });
 
   // ---------- settings ----------
   (ide.settingsPages ||= []).push({
@@ -201,5 +206,6 @@
     },
   });
 
-  ide.vulnerabilities = { check, state: () => result };
+  // autoCheck(): whether automatic checks may ask OSV now (setting on, trusted project, not in Power Save Mode).
+  ide.vulnerabilities = { check, state: () => result, autoCheck: () => enabled() && autoNetwork() };
 })();

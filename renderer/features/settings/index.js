@@ -51,6 +51,7 @@
     'appearance.theme': 'dark',
     'appearance.language': 'system',
     'editor.fontSize': 14,
+    'editor.wheelZoom': true,
     'editor.lineHeight': 1.6,
     'editor.tabSize': 4,
     'editor.showWhitespace': false,
@@ -72,15 +73,37 @@
     'tools.ruffLineLength': [0, 400],
   };
   const RESTART_KEYS = new Set(['appearance.language']);
+  // The theme choices of Settings › Appearance, the gear's Theme menu and View › Appearance.
+  const THEMES = () => [['dark', tr('Dark')], ['light', tr('Light')], ['system', tr('Sync with OS')]];
   // Plugin settings pages may declare defaults for their keys ({defaults: {key: value}}).
   const pluginDefault = (k) => (ide.settingsPages || []).find((p) => p.defaults && k in p.defaults)?.defaults[k];
   const get = (k) => ide.settings.get(k, k in DEFAULTS ? DEFAULTS[k] : pluginDefault(k));
 
+  // appearance.theme: 'dark', 'light' or 'system' (Sync with OS, the default of new installs; renderer/core/i18n.js). The OS
+  // mode is main's nativeTheme (main/system-theme.js); prefers-color-scheme, which follows it, is the first paint's guess.
+  let systemDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const effectiveTheme = () => {
+    const t = get('appearance.theme');
+    return t === 'system' ? (systemDark ? 'dark' : 'light') : t === 'light' ? 'light' : 'dark';
+  };
   function applyTheme() {
-    const light = get('appearance.theme') === 'light';
-    document.documentElement.dataset.theme = light ? 'light' : 'dark';
-    monaco.editor.setTheme(light ? 'pycharm-light' : 'pycharm-dark');
+    const theme = effectiveTheme();
+    const changed = document.documentElement.dataset.theme !== theme;
+    document.documentElement.dataset.theme = theme;
+    monaco.editor.setTheme(theme === 'light' ? 'pycharm-light' : 'pycharm-dark');
+    if (changed) ide.emit('themeChanged', theme);
   }
+  const setSystemDark = (dark) => {
+    if (typeof dark !== 'boolean' || dark === systemDark) return;
+    systemDark = dark;
+    if (get('appearance.theme') === 'system') applyTheme();
+  };
+  ide.api.invoke('theme:system').then((s) => setSystemDark(s?.dark)).catch(() => {});
+  ide.api.on('theme:systemChanged', (s) => setSystemDark(s?.dark));
+  // current(): the theme shown ('dark' | 'light'); preference(): the setting; systemDark(): the OS mode main reported.
+  // menuItems(): Dark / Light / Sync with OS as checked menu items.
+  ide.theme = { current: effectiveTheme, preference: () => get('appearance.theme'), systemDark: () => systemDark,
+    menuItems: () => THEMES().map(([value, label]) => ({ label, checked: get('appearance.theme') === value, run: () => ide.settings.set('appearance.theme', value) })) };
 
   function applyModel(model) {
     const n = Math.max(1, Number(get('editor.tabSize')) || 4);
@@ -110,6 +133,112 @@
     else if (key.startsWith('editor.')) applyEditor();
   });
 
+  // ---------- font size: Ctrl+Mouse Wheel, Increase/Decrease/Reset Font Size ----------
+  // As PyCharm's "Change font size with Ctrl+Mouse Wheel in: All editors": every editor follows and the size is kept as
+  // the editor font setting. During Presentation Mode the presentation font size changes instead, so leaving the mode
+  // still restores the editor font (appearance-modes plugin).
+  const presenting = () => ide.appearanceModes?.mode() === 'presentation';
+  const fontKey = () => (presenting() ? 'appearance.presentationFontSize' : 'editor.fontSize');
+  const fontRange = () => (presenting() ? [8, 72] : RANGES['editor.fontSize']);
+  const fontDefault = () => (presenting() ? 24 : DEFAULTS['editor.fontSize']);
+  const clampFont = (n) => { const [lo, hi] = fontRange(); return Math.min(hi, Math.max(lo, Math.round(n))); };
+  // A Ctrl+wheel size the editors show but settings.json does not hold yet: {key, size}.
+  let zoom = null;
+  let zoomFrame = 0;
+  let zoomFrameTimer = 0;
+  let zoomTimer = 0;
+  const currentFont = () => (zoom && zoom.key === fontKey() ? zoom.size : clampFont(Number(ide.settings.get(fontKey(), fontDefault())) || fontDefault()));
+  let fontHint = null;
+  let fontHintTimer = 0;
+  // A short note at the editor's top right, like PyCharm's zoom indicator: the size and a reset link.
+  function showFontHint(size) {
+    if (!fontHint) {
+      fontHint = el('div', 'font-zoom-hint hidden');
+      fontHint.id = 'fontZoomHint';
+      fontHint.onmouseenter = () => clearTimeout(fontHintTimer);
+      fontHint.onmouseleave = () => { fontHintTimer = setTimeout(() => fontHint.classList.add('hidden'), 1500); };
+    }
+    (document.getElementById('editorArea') || document.body).appendChild(fontHint);
+    fontHint.replaceChildren(el('span', 'font-zoom-size', tr('Font size: {size}pt', { size })));
+    if (size !== fontDefault()) {
+      const reset = el('a', 'font-zoom-reset', tr('Reset to {size}pt', { size: fontDefault() }));
+      reset.onclick = () => setFontSize(fontDefault());
+      fontHint.appendChild(reset);
+    }
+    fontHint.classList.remove('hidden');
+    clearTimeout(fontHintTimer);
+    fontHintTimer = setTimeout(() => fontHint.classList.add('hidden'), 2500);
+  }
+  function dropZoom() {
+    clearTimeout(zoomTimer);
+    cancelAnimationFrame(zoomFrame);
+    clearTimeout(zoomFrameTimer);
+    zoomFrame = 0;
+    zoom = null;
+  }
+  function setFontSize(n) {
+    const size = clampFont(n);
+    // The editors may show an unsaved wheel size: setting the value again makes them follow the saved one.
+    const previewed = !!zoom;
+    dropZoom();
+    if (previewed || size !== Number(ide.settings.get(fontKey()))) ide.settings.set(fontKey(), size);
+    showFontHint(size);
+    return size;
+  }
+  // Ctrl+wheel over any editor; a wheel notch (100 px) or several small trackpad deltas make one step. Saving a size
+  // writes settings.json and lays out every editor again, so a wheel burst only resizes the open editors (once per
+  // frame) and the size is saved once, 300 ms after the last step (or when the window closes).
+  function saveZoom() {
+    const pending = zoom;
+    dropZoom();
+    if (pending && pending.size !== Number(ide.settings.get(pending.key))) ide.settings.set(pending.key, pending.size);
+  }
+  function previewZoom() {
+    cancelAnimationFrame(zoomFrame);
+    clearTimeout(zoomFrameTimer);
+    zoomFrame = 0;
+    if (!zoom || zoom.key !== fontKey()) return;
+    // The line height as applyEditor and Presentation Mode will set it.
+    const g = ide.editorOptions?.() || {};
+    const ratio = zoom.key === 'editor.fontSize' ? Number(get('editor.lineHeight')) || 1.6 : (g.lineHeight || 22) / (g.fontSize || 14);
+    for (const ed of ide.editors()) ed.updateOptions({ fontSize: zoom.size, lineHeight: Math.round(zoom.size * ratio) });
+  }
+  addEventListener('beforeunload', saveZoom);
+  let wheelDelta = 0;
+  addEventListener('wheel', (e) => {
+    if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || !e.target.closest?.('.monaco-editor') || get('editor.wheelZoom') === false) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const d = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    wheelDelta = Math.abs(d) >= 50 ? d : wheelDelta + d;
+    if (Math.abs(wheelDelta) < 50) return;
+    const step = wheelDelta < 0 ? 1 : -1;
+    wheelDelta = 0;
+    if (zoom && zoom.key !== fontKey()) saveZoom();
+    zoom = { key: fontKey(), size: clampFont(currentFont() + step) };
+    showFontHint(zoom.size);
+    if (!zoomFrame) {
+      zoomFrame = requestAnimationFrame(previewZoom);
+      // A window that gets no frames (hidden, occluded) resizes anyway.
+      zoomFrameTimer = setTimeout(previewZoom, 100);
+    }
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(saveZoom, 300);
+  }, { capture: true, passive: false });
+  // PyCharm's Windows keymap binds only the "in All Editors" variants; here all of them change every editor.
+  const changeFont = (d) => () => setFontSize(currentFont() + d);
+  const resetFont = () => setFontSize(fontDefault());
+  [
+    { id: 'EditorIncreaseFontSize', title: tr('Increase Font Size'), run: changeFont(1) },
+    { id: 'EditorDecreaseFontSize', title: tr('Decrease Font Size'), run: changeFont(-1) },
+    { id: 'EditorResetFontSize', title: tr('Reset Font Size'), run: resetFont },
+    { id: 'EditorIncreaseFontSizeGlobal', title: tr('Increase Font Size in All Editors'), keys: 'Alt+Shift+.', run: changeFont(1) },
+    { id: 'EditorDecreaseFontSizeGlobal', title: tr('Decrease Font Size in All Editors'), keys: 'Alt+Shift+,', run: changeFont(-1) },
+    { id: 'EditorResetFontSizeGlobal', title: tr('Reset Font Size in All Editors'), run: resetFont },
+  ].forEach(ide.registerAction);
+  // size(): the size the zoom actions change (the presentation size during Presentation Mode).
+  ide.fontZoom = { size: currentFont, set: setFontSize, reset: resetFont };
+
   // ---------- restart ----------
   let restartPending = false;
   function askRestart() {
@@ -135,7 +264,7 @@
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap },
     { group: 'editor-group', title: () => tr('Editor'), children: [
-      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit 글꼴 크기 줄 높이 공백 탭 미리보기', mount: mountEditor },
+      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap 탭 들여쓰기 눈금자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins },
@@ -393,7 +522,7 @@
 
   function mountAppearance(host, ctx) {
     const s = section(host, tr('Theme'));
-    s.appendChild(fieldRow(tr('Theme:'), selectInput(ctx, 'appearance.theme', [['dark', tr('Dark')], ['light', tr('Light')]])));
+    s.appendChild(fieldRow(tr('Theme:'), selectInput(ctx, 'appearance.theme', THEMES())));
   }
 
   function mountLanguage(host, ctx) {
@@ -552,7 +681,7 @@
       warn.id = 'keymapConflicts';
       const body = el('div', 'keymap-capture-body');
       body.append(fieldRow(tr('First stroke:'), first), twoRow, second, warn);
-      const chord = () => (strokes[0] === 'Shift Shift' || !twoBox.checked || !strokes[1] ? strokes[0] : `${strokes[0]} ${strokes[1]}`);
+      const chord = () => (strokes[0] === 'Shift Shift' || strokes[0] === 'Ctrl Ctrl' || !twoBox.checked || !strokes[1] ? strokes[0] : `${strokes[0]} ${strokes[1]}`);
       function update() {
         first.value = strokes[0] ? ide.keymap.format(strokes[0]) : '';
         second.value = strokes[1] ? ide.keymap.format(strokes[1]) : '';
@@ -566,14 +695,28 @@
         }
       }
       twoBox.onchange = () => {
-        second.disabled = !twoBox.checked || strokes[0] === 'Shift Shift';
+        second.disabled = !twoBox.checked || strokes[0] === 'Shift Shift' || strokes[0] === 'Ctrl Ctrl';
         if (!second.disabled) second.focus();
         update();
       };
       let lastShift = 0;
+      // Double Ctrl: Ctrl pressed and released twice with nothing in between (see the core keymap); recorded on release.
+      let ctrlTap = null;
+      const onKeyUp = (e) => {
+        if (e.key !== 'Control' || !ctrlTap || document.activeElement !== first) return;
+        if (ctrlTap.step === 'first') { ctrlTap = { step: 'released', t: e.timeStamp }; return; }
+        ctrlTap = null;
+        strokes[0] = 'Ctrl Ctrl';
+        second.disabled = true;
+        update();
+      };
+      addEventListener('keyup', onKeyUp, true);
       const onKey = (e) => {
         const target = document.activeElement;
         if ((target !== first && target !== second) || e.isComposing) return;
+        if (e.key === 'Control' && !e.altKey && !e.shiftKey && !e.metaKey && target === first) {
+          if (!e.repeat) ctrlTap = ctrlTap?.step === 'released' && e.timeStamp - ctrlTap.t < 350 ? { step: 'second' } : { step: 'first' };
+        } else ctrlTap = null;
         if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) return;
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -599,7 +742,7 @@
         title: tr('Keyboard Shortcut: {action}', { action: a.title }),
         body,
         width: 440,
-        onClose: () => removeEventListener('keydown', onKey, true),
+        onClose: () => { removeEventListener('keydown', onKey, true); removeEventListener('keyup', onKeyUp, true); },
         buttons: [
           { label: tr('OK'), primary: true, run: async () => {
             const k = chord();
@@ -661,7 +804,7 @@
     return code | (mods.includes('Ctrl') ? KeyMod.CtrlCmd : 0) | (mods.includes('Alt') ? KeyMod.Alt : 0) | (mods.includes('Shift') ? KeyMod.Shift : 0);
   }
   function monacoKeybinding(key) {
-    if (key === 'Shift Shift') return 0;
+    if (key === 'Shift Shift' || key === 'Ctrl Ctrl') return 0;
     const strokes = key.split(' ').map(monacoStroke);
     if (strokes.some((s) => !s)) return 0;
     return strokes.length === 2 ? monaco.KeyMod.chord(strokes[0], strokes[1]) : strokes[0];
@@ -691,6 +834,8 @@
     const font = section(host, tr('Font'));
     font.appendChild(fieldRow(tr('Size:'), numberInput(ctx, 'editor.fontSize'), '6 – 48'));
     font.appendChild(fieldRow(tr('Line height:'), numberInput(ctx, 'editor.lineHeight', { step: 0.1 }), '1.0 – 3.0'));
+    const mouse = section(host, tr('Mouse Control'));
+    mouse.appendChild(checkbox(ctx, 'editor.wheelZoom', tr('Change font size with Ctrl+Mouse Wheel')));
     const look = section(host, tr('Appearance'));
     look.appendChild(checkbox(ctx, 'editor.showWhitespace', tr('Show whitespaces')));
     look.appendChild(checkbox(ctx, 'editor.softWrap', tr('Soft-wrap files')));
@@ -1063,7 +1208,6 @@
   const gear = el('button', 'tb-icon settings-gear');
   gear.appendChild(ide.icon('settings', '⚙'));
   gear.title = tr('IDE and Project Settings');
-  const themeItem = (value, label) => ({ label, checked: get('appearance.theme') === value, run: () => ide.settings.set('appearance.theme', value) });
   gear.onclick = () => {
     const r = gear.getBoundingClientRect();
     const menu = ide.ui.contextMenu(r.right - 240, r.bottom + 4, [
@@ -1071,7 +1215,7 @@
       { label: tr('Plugins…'), run: () => openSettings('plugins') },
       { label: tr('Python Interpreter…'), hint: ide.keymap.label('ShowProjectStructureSettings'), icon: 'python', run: () => openSettings('interpreter') },
       { separator: true },
-      { label: tr('Theme'), submenu: () => [themeItem('dark', tr('Dark')), themeItem('light', tr('Light'))] },
+      { label: tr('Theme'), submenu: ide.theme.menuItems },
       { label: tr('Keymap…'), run: () => openSettings('keymap') },
       { label: tr('Language and Region'), run: () => openSettings('language') },
       { separator: true },

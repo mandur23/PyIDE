@@ -1,0 +1,7 @@
+{
+  "Power Save Mode": "절전 모드",
+  "File › Power Save Mode, as in PyCharm: pauses semantic indexing, AI completion, next edit suggestions, spell checking and automatic vulnerability checks, with a status bar indicator.": "PyCharm처럼 파일 › 절전 모드로 시맨틱 인덱싱, AI 완성, 다음 편집 제안, 맞춤법 검사, 자동 취약점 검사를 일시 중지하고 상태 표시줄에 표시합니다.",
+  "Power Save Mode: on": "절전 모드: 켜짐",
+  "Code analysis and background tasks are disabled.": "코드 분석 기능 및 백그라운드 작업이 비활성화되었습니다.",
+  "Disable Power Save Mode": "절전 모드 비활성화"
+}

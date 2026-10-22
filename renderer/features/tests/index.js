@@ -371,7 +371,7 @@
         }
         run.refreshGutter();
         if (s.procId === id) s.setIcon(c.failed ? '✗' : '✓', c.failed ? 'failed' : 'passed');
-        s.exited(id);
+        s.exited(id, code);
       },
     });
   }

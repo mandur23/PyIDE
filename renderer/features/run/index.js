@@ -145,7 +145,7 @@
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
-      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => runConfig(s.cfg, { executor: s.executor }) },
+      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
       ...(busy(s) ? [{ icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
       ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
@@ -167,6 +167,7 @@
   function closeSession(s) {
     s.closed = true;
     s.stop();
+    s.finish?.(-1);
     s.dispose?.();
     sessions.splice(sessions.indexOf(s), 1);
     s.tab.remove();
@@ -183,6 +184,9 @@
       executor: null, exitHooks: [],
       // starting: a promise while a run is being set up (its process may exist before started() gets its id).
       starting: null, cancelStart: false, closed: false,
+      // finished: resolves with the exit code of the current run (-1: it did not start, was replaced or closed);
+      // launched: the current run started a process. rerun: what the tab's Rerun does instead of runConfig(cfg).
+      finished: Promise.resolve(-1), finish: null, launched: false, rerun: null,
       host: el('div', 'run-session hidden'),
       tab: el('div', 'run-tab'),
       // A console in the session (or in `parent`); typed lines go to the running process's stdin.
@@ -203,6 +207,7 @@
       started(id) {
         s.procId = id;
         s.running = true;
+        s.launched = true;
         // Stop (or closing the tab) was asked for before the process id arrived.
         if (s.cancelStart || s.closed) { s.cancelStart = false; ide.proc.kill(id); }
         s.setIcon('▶', 'running');
@@ -210,13 +215,15 @@
         updateToolbar();
         if (activeSession === s) renderActions();
       },
-      exited(id) {
+      exited(id, code) {
         if (s.procId !== id) return;
         s.running = false;
         if (s.con?.input) s.con.input.disabled = true;
         updateToolbar();
         if (activeSession === s) renderActions();
         for (const hook of s.exitHooks.splice(0)) hook();
+        // A type that does not report the exit code (undefined) is taken as success; a killed process (null) as failure.
+        s.finish?.(code === undefined ? 0 : code ?? 1);
       },
       // Streams a process into the session console and prints PyCharm's exit line. A process that a rerun in this
       // tab replaced (s.procId moved on) writes nothing more: its console is gone and s.con is the new run's.
@@ -230,7 +237,7 @@
               s.setIcon('▶', code === 0 ? 'done' : 'failed');
             }
             onExit?.(code);
-            s.exited(id);
+            s.exited(id, code);
           },
         });
       },
@@ -261,6 +268,16 @@
     return s;
   }
 
+  // A new run in the session: the previous run's waiters learn it was replaced.
+  function armFinished(s) {
+    const previous = s.finish;
+    let resolve;
+    s.finished = new Promise((r) => (resolve = r));
+    s.finish = (code) => resolve(code);
+    s.launched = false;
+    previous?.(-1);
+  }
+
   // Reuses the configuration's tab (stopping what runs there), like PyCharm without "Allow multiple instances".
   // A run still starting in the tab is waited out first, so its process is stopped here instead of being orphaned
   // (two quick Shift+F10 presses would otherwise both spawn, and the first could no longer be stopped).
@@ -282,6 +299,8 @@
     } else s = createSession(cfg);
     s.executor = executor?.id || null;
     s.cancelStart = false;
+    s.rerun = null;
+    armFinished(s);
     let done;
     s.starting = new Promise((r) => (done = r));
     s.startDone = () => { s.starting = null; done(); updateToolbar(); if (activeSession === s) renderActions(); };
@@ -290,15 +309,139 @@
     return s;
   }
 
+  // ---------- before launch tasks ----------
+  // cfg.beforeLaunch: [{kind: 'config', id} | {kind: 'tool', name?, program, args?, cwd?}], PyCharm's "Before launch"
+  // list. They run in order before Run and Debug start the configuration, and the first that fails (or is stopped)
+  // cancels the launch. "Save all files" is not a task: the autosave.beforeRun setting saves before every launch.
+  // The tasks live in the run configuration (the user's settings), never in the project.
+  const cleanTasks = (list) => (Array.isArray(list) ? list : []).filter((t) => t && typeof t === 'object'
+    && (t.kind === 'config' ? typeof t.id === 'string' : t.kind === 'tool' && typeof t.program === 'string'));
+  const beforeLaunchOf = (cfg) => cleanTasks(cfg?.beforeLaunch);
+  const TOOL_MACROS = '$ProjectDir$, $FilePath$, $FileName$, $FileNameWithoutExtension$, $FileDir$, $PyInterpreterPath$';
+  const toolTitle = (t) => t.name?.trim() || [t.program, t.args].filter((x) => x?.trim()).join(' ').trim() || tr('Unnamed');
+  function describeTask(t, configs = state.configs) {
+    if (t.kind === 'tool') return tr('Run External Tool: {name}', { name: toolTitle(t) });
+    const c = configs.find((x) => x.id === t.id);
+    return c ? tr("Run '{name}'", { name: c.name }) : tr('Run Another Configuration (missing)');
+  }
+
+  // Configurations that would run before themselves, as names (A, B, A); null when there is no cycle.
+  function findCycle(startId, configs, startCfg) {
+    const byId = new Map(configs.map((c) => [c.id, c]));
+    if (startCfg) byId.set(startCfg.id, startCfg);
+    const stack = [];
+    const done = new Set();
+    const visit = (id) => {
+      const at = stack.indexOf(id);
+      if (at >= 0) return [...stack.slice(at), id];
+      const c = byId.get(id);
+      if (done.has(id) || !c) return null;
+      stack.push(id);
+      for (const t of beforeLaunchOf(c)) {
+        const cycle = t.kind === 'config' ? visit(t.id) : null;
+        if (cycle) return cycle;
+      }
+      stack.pop();
+      done.add(id);
+      return null;
+    };
+    const ids = visit(startId);
+    return ids && ids.map((id) => byId.get(id)?.name || id);
+  }
+
+  function notifyError(title, text) {
+    if (ide.notifications?.notify) return ide.notifications.notify({ title, text, kind: 'error', group: 'Run', raw: true });
+    ide.ui.dialog({ title, body: text });
+  }
+
+  // Macros of external tools: $ProjectDir$, $FilePath$ (the active editor's file) and the rest (main/features/run.js).
+  function macroContext() {
+    const tab = ide.activeTab();
+    return { projectDir: ide.root || '', filePath: tab?.kind === 'file' ? tab.path : '', pyInterpreter: ide.currentInterp()?.executable || '' };
+  }
+  const toolError = (r) => (r.error === 'noCwd' ? tr('Working directory does not exist: {path}', { path: r.cwd })
+    : r.error === 'noProgram' ? tr('Program is not specified.')
+    : r.error === 'untrusted' ? tr('The project is not trusted (Safe Mode).') : String(r.error));
+
+  // Runs an external tool in its own Run tab (one per tool name, as PyCharm's); -> true, or why it failed.
+  async function runTool(t, onSession = () => {}) {
+    const s = await prepareSession({ id: `tool:${toolTitle(t)}`, name: toolTitle(t), type: '' }, null);
+    s.rerun = () => runTool(t);
+    onSession(s);
+    const con = s.console();
+    try {
+      const r = await ide.api.invoke('run:startTool', { program: t.program, args: t.args || '', cwd: t.cwd || '', macros: macroContext() });
+      if (r.error) {
+        con.append(`${toolError(r)}\n`, 'err');
+        return toolError(r);
+      }
+      con.append(`${r.command}\n`, 'sys');
+      s.attach(r.id);
+    } catch (err) {
+      con.append(`${err.message}\n`, 'err');
+      return err.message;
+    } finally {
+      if (!s.launched) s.finish(-1);
+      s.startDone();
+    }
+    const code = await s.finished;
+    return code === 0 || tr('Exit code {code}', { code });
+  }
+
+  // Runs another configuration (with its own before launch tasks) and waits for it to finish; -> true, or why not.
+  async function runDependency(t, onSession) {
+    const other = findConfig(t.id);
+    if (!other) return tr('The configuration no longer exists.');
+    const s = await runConfig(other);
+    if (!s) return tr('It was not started.');
+    onSession(s);
+    const code = await s.finished;
+    return code === 0 || tr('Exit code {code}', { code });
+  }
+
+  // Runs cfg's before launch tasks in order. false: a task failed or was cancelled, or the tasks form a cycle, so the
+  // configuration must not start (an error notification says why).
+  async function runBeforeLaunch(cfg) {
+    const tasks = beforeLaunchOf(cfg);
+    if (!tasks.length) return true;
+    const cycle = findCycle(cfg.id, state.configs, cfg);
+    if (cycle) {
+      notifyError(tr("'{name}' was not started", { name: cfg.name }), tr('Before launch tasks form a cycle: {cycle}', { cycle: cycle.join(' → ') }));
+      return false;
+    }
+    let running = null;
+    let cancelled = false;
+    const progress = ide.tasks?.start({
+      title: tr("Before launch: '{name}'", { name: cfg.name }), fraction: 0,
+      onCancel: () => { cancelled = true; running?.stop(); },
+    });
+    try {
+      for (const [i, t] of tasks.entries()) {
+        progress?.update({ text: describeTask(t), fraction: i / tasks.length });
+        const result = t.kind === 'config' ? await runDependency(t, (s) => (running = s)) : await runTool(t, (s) => (running = s));
+        running = null;
+        if (cancelled) return false;
+        if (result !== true) {
+          notifyError(tr("'{name}' was not started", { name: cfg.name }), `${tr('Before launch task failed: {task}', { task: describeTask(t) })}\n${result}`);
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      progress?.done();
+    }
+  }
+
   let lastRun = null;
   // opts are passed through to the type (e.g. {targets} for rerunning failed tests); opts.executor names an executor.
   async function runConfig(cfg, opts = {}) {
     const type = types.get(cfg?.type);
     if (!type) return;
     const executor = executors.get(opts.executor) || null;
-    lastRun = cfg;
     tw.show();
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
+    if (!(await runBeforeLaunch(cfg))) return;
+    lastRun = cfg;
     const s = await prepareSession(cfg, executor);
     try {
       let interp = interpFor(cfg);
@@ -311,6 +454,7 @@
       s.running = false;
       updateToolbar();
     } finally {
+      if (!s.launched) s.finish(-1);
       s.startDone();
     }
     return s;
@@ -452,6 +596,10 @@
   // A type with debugTarget(cfg, interp) -> {script, cwd, params, env} (script may be '-m') is debugged like a script.
   const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile));
   async function debugConfig(cfg) {
+    if (beforeLaunchOf(cfg).length) {
+      if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
+      if (!(await runBeforeLaunch(cfg))) return;
+    }
     const debugTarget = types.get(cfg.type)?.debugTarget;
     if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
@@ -642,6 +790,104 @@
           field(`${fd.label}:`, wrap);
         } else field(`${fd.label}:`, input);
       }
+      renderBeforeLaunch();
+    }
+
+    // ---------- Before launch (in the form) ----------
+    let blSelected = 0;
+    let blFor = null; // the configuration blSelected belongs to
+    let blError = '';
+    function renderBeforeLaunch() {
+      if (blFor !== current) { blFor = current; blSelected = 0; blError = ''; }
+      const tasks = (current.beforeLaunch = cleanTasks(current.beforeLaunch));
+      blSelected = Math.max(0, Math.min(blSelected, tasks.length - 1));
+      const sec = el('div', 'rc-bl');
+      sec.appendChild(el('div', 'rc-bl-title', tr('Before launch')));
+      const blBar = el('div', 'rc-bl-bar');
+      const blButton = (id, icon, title, run, disabled) => {
+        const b = el('button', 'rc-bl-btn', icon);
+        b.dataset.bl = id;
+        b.title = title;
+        b.disabled = !!disabled;
+        b.onclick = (e) => { e.preventDefault(); run(e); };
+        blBar.appendChild(b);
+      };
+      const move = (d) => {
+        const [t] = tasks.splice(blSelected, 1);
+        tasks.splice(blSelected + d, 0, t);
+        blSelected += d;
+        renderForm();
+      };
+      blButton('add', '＋', tr('Add Task'), (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        const others = draft.filter((c) => c !== current);
+        ide.ui.contextMenu(r.left, r.bottom + 2, [
+          { header: tr('Run Another Configuration') },
+          ...others.map((c) => ({ label: `${types.get(c.type)?.icon || '▶'}  ${c.name || tr('Unnamed')}`, run: () => {
+            tasks.push({ kind: 'config', id: c.id });
+            const cycle = findCycle(current.id, draft);
+            if (cycle) {
+              tasks.pop();
+              blError = tr("'{name}' cannot run before itself: {cycle}", { name: current.name, cycle: cycle.join(' → ') });
+            } else {
+              blError = '';
+              blSelected = tasks.length - 1;
+            }
+            renderForm();
+          } })),
+          ...(others.length ? [] : [{ label: tr('No other configurations'), disabled: true }]),
+          { separator: true },
+          { label: tr('Run External Tool'), run: () => {
+            tasks.push({ kind: 'tool', name: '', program: '', args: '', cwd: '' });
+            blSelected = tasks.length - 1;
+            blError = '';
+            renderForm();
+            form.querySelector('[data-bl-key="program"]')?.focus();
+          } },
+        ]);
+        // Core menus sit below dialogs; this one opens from a dialog.
+        for (const m of document.querySelectorAll('#menuHost .context-menu')) m.style.zIndex = 80;
+      });
+      blButton('remove', '−', tr('Remove Task'), () => { tasks.splice(blSelected, 1); blError = ''; renderForm(); }, !tasks.length);
+      blButton('up', '▲', tr('Move Up'), () => move(-1), blSelected <= 0);
+      blButton('down', '▼', tr('Move Down'), () => move(1), blSelected >= tasks.length - 1);
+      const blList = el('div', 'rc-bl-list');
+      tasks.forEach((t, i) => {
+        const row = el('div', `rc-bl-item${i === blSelected ? ' selected' : ''}`, describeTask(t, draft));
+        row.dataset.index = i;
+        row.dataset.kind = t.kind;
+        row.onclick = () => { blSelected = i; renderForm(); };
+        blList.appendChild(row);
+      });
+      if (!tasks.length) blList.appendChild(el('div', 'rc-bl-none muted', tr('There are no tasks to run before launch')));
+      sec.append(blBar, blList);
+      if (blError) sec.appendChild(el('div', 'rc-bl-error', blError));
+      const t = tasks[blSelected];
+      if (t?.kind === 'tool') {
+        const tool = el('div', 'rc-bl-tool');
+        for (const [key, label, placeholder] of [
+          ['name', tr('Name'), tr('Optional')],
+          ['program', tr('Program'), tr('For example node, black or $PyInterpreterPath$')],
+          ['args', tr('Arguments'), '$FilePath$'],
+          ['cwd', tr('Working directory'), tr('Defaults to the project folder')],
+        ]) {
+          const input = el('input');
+          input.dataset.blKey = key;
+          input.value = t[key] || '';
+          input.placeholder = placeholder;
+          input.oninput = () => {
+            t[key] = input.value;
+            const row = blList.querySelector(`[data-index="${blSelected}"]`);
+            if (row) row.textContent = describeTask(t, draft);
+          };
+          const f = el('label', 'field');
+          f.append(el('span', null, `${label}:`), input);
+          tool.appendChild(f);
+        }
+        tool.appendChild(el('div', 'rc-bl-hint muted', tr('Macros: {macros}. The output shows in the Run window.', { macros: TOOL_MACROS })));
+        sec.appendChild(tool);
+      }
+      form.appendChild(sec);
     }
 
     function render() { renderList(); renderForm(); }
@@ -655,6 +901,17 @@
         { label: tr('Cancel') },
         { label: tr('OK'), primary: true, run() {
           for (const c of draft) if (!c.name?.trim()) c.name = tr('Unnamed');
+          // A cycle made some other way (a copied configuration) is refused here too.
+          for (const c of draft) {
+            const cycle = findCycle(c.id, draft);
+            if (!cycle) continue;
+            current = c;
+            renderList();
+            blFor = c;
+            blError = tr("'{name}' cannot run before itself: {cycle}", { name: c.name, cycle: cycle.join(' → ') });
+            renderForm();
+            return false;
+          }
           state.configs = draft;
           state.selected = current ? current.id : findConfig(state.selected) ? state.selected : CURRENT;
           persist();
@@ -751,6 +1008,8 @@
     state = saved ? JSON.parse(JSON.stringify(saved)) : { configs: [], selected: CURRENT };
     // A hand-edited settings file keeps only the configurations that are objects with an id.
     state.configs = Array.isArray(state.configs) ? state.configs.filter((c) => c && typeof c === 'object' && typeof c.id === 'string') : [];
+    // Configurations saved before "Before launch" existed have none; malformed tasks are dropped.
+    for (const c of state.configs) if ('beforeLaunch' in c) c.beforeLaunch = cleanTasks(c.beforeLaunch);
     if (!findConfig(state.selected)) state.selected = CURRENT;
     renderTarget();
   });
@@ -788,6 +1047,14 @@
     executors,
     debugConfig,
     canDebug,
+    // Before launch tasks: runBeforeLaunch(cfg) -> Promise<bool>, findCycle(id, configs) -> names | null.
+    runBeforeLaunch,
+    findCycle,
+    // A Run tool window tab that is not a configuration's (File Watchers); an existing one keeps its console.
+    outputSession: (key, title) => sessions.find((o) => o.key === key) || createSession({ id: key, name: title, type: '' }),
+    // Shows the Run window with this session selected.
+    show(session) { tw.show(); if (session) selectSession(session); },
+    notifyError,
     editConfigurations,
     sessions: () => sessions,
     activeSession: () => activeSession,

@@ -110,6 +110,13 @@ ide.settings = {
   flush: flushSettings,
 };
 
+// ---------- power save mode ----------
+// File › Power Save Mode (power-save plugin), kept across restarts like PyCharm's. Background work that can wait checks
+// ide.powerSave.on() and listens for powerSaveChanged(on): semantic indexing, AI completion, next edit suggestions,
+// spell checking and automatic vulnerability checks pause while it is on.
+ide.powerSave = { on: () => ide.settings.get('powerSave.enabled', false) === true, set: (on) => ide.settings.set('powerSave.enabled', !!on) };
+ide.on('settingsChanged', (key, value) => { if (key === 'powerSave.enabled') ide.emit('powerSaveChanged', value === true); });
+
 // ---------- processes ----------
 const procHandlers = new Map();
 const procBuffers = new Map();
@@ -557,7 +564,7 @@ const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 // that are not lists of such keys are ignored.
 const STROKE = /^(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(\S|[A-Z][A-Za-z0-9]+)$/;
 const validStroke = (s) => { const m = STROKE.exec(s); return !!m && !MODIFIER_KEYS.includes(m[1]); };
-const validKey = (k) => typeof k === 'string' && (k === 'Shift Shift' || (k.split(' ').length <= 2 && k.split(' ').every(validStroke)));
+const validKey = (k) => typeof k === 'string' && (k === 'Shift Shift' || k === 'Ctrl Ctrl' || (k.split(' ').length <= 2 && k.split(' ').every(validStroke)));
 function parseKeymap(raw) {
   const map = new Map();
   for (const [id, keys] of Object.entries(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {})) {
@@ -574,7 +581,7 @@ ide.keymap = {
   parse: parseKeymap,
   isModified: (id) => keymapOverrides.has(id),
   // As menus show a key: 'Ctrl+K, C' for two strokes (PyCharm's way), arrows and Esc shortened.
-  format: (k) => (k === 'Shift Shift' ? tr('Double Shift') : k.split(' ').join(', ')
+  format: (k) => (k === 'Shift Shift' ? tr('Double Shift') : k === 'Ctrl Ctrl' ? tr('Double Ctrl') : k.split(' ').join(', ')
     .replace(/Arrow(Up|Down|Left|Right)/g, (m) => ({ ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' })[m]).replace(/Escape/g, 'Esc')),
   label: (id) => (ide.actions.find((a) => a.id === id)?.keys || []).map(ide.keymap.format).join(' / '),
   // As menus and lists (main menu, context menus, Find Action, Search Everywhere) show an action's keys.
@@ -677,6 +684,25 @@ document.addEventListener('keydown', (e) => {
   fireCombo(combo, e);
 }, true);
 
+// Double Ctrl ('Ctrl Ctrl', PyCharm's Run Anything): Ctrl pressed and released twice with no other key, mouse button or
+// wheel in between, the second press within 350 ms of the first release. It fires on the second release, so Ctrl+C,
+// Ctrl+S or Ctrl+click right after a Ctrl tap never count, and holding Ctrl for a chord never does. Listened to on the
+// window in the capture phase, before dialogs and editors can swallow the keys in between.
+let ctrlTap = null; // {step: 'first' | 'released' | 'second', t}
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Control' || e.altKey || e.shiftKey || e.metaKey) { ctrlTap = null; return; }
+  if (e.repeat) return;
+  ctrlTap = ctrlTap?.step === 'released' && e.timeStamp - ctrlTap.t < 350 ? { step: 'second' } : { step: 'first' };
+}, true);
+addEventListener('keyup', (e) => {
+  if (e.key !== 'Control' || !ctrlTap) return;
+  if (ctrlTap.step === 'first') { ctrlTap = { step: 'released', t: e.timeStamp }; return; }
+  const fire = ctrlTap.step === 'second';
+  ctrlTap = null;
+  if (fire && !popupState && !$('dialogHost').childElementCount && !menusOpen()) { cancelChord(); fireCombo('Ctrl Ctrl', e); }
+}, true);
+for (const type of ['mousedown', 'wheel', 'blur']) addEventListener(type, (e) => { if (type !== 'blur' || e.target === window) ctrlTap = null; }, true);
+
 // Inside a terminal, keys belong to the program running there (Esc, Ctrl+T, Ctrl+K... matter to Claude Code, readline,
 // vim); only actions marked terminal: true (tool windows and a few window-level ones) still fire, like PyCharm's
 // "Override IDE shortcuts" terminal option.
@@ -729,7 +755,7 @@ ide.icon = (name, fallback = '') => {
 
 // Like PyCharm's New UI, the sidebar shows only pinned tool windows (plus whichever is open right now); the rest live
 // behind the "More" button. The pinned set is a user setting.
-const DEFAULT_PINNED = ['Project', 'Commit', 'Structure', 'Run', 'Debug', 'Terminal', 'Problems'];
+const DEFAULT_PINNED = ['Project', 'Commit', 'Structure', 'Run', 'Debug', 'Terminal', 'Problems', 'Notifications'];
 const pinnedIds = () => ide.settings.get('sidebar.pinned', DEFAULT_PINNED);
 const isPinned = (id) => pinnedIds().includes(id);
 function setPinned(id, pinned) {
@@ -746,7 +772,7 @@ function refreshStripe() {
     tw.tab?.classList.toggle('hidden', !shown);
   }
 }
-ide.sidebar = { isPinned, setPinned, pinned: pinnedIds };
+ide.sidebar = { isPinned, setPinned, pinned: pinnedIds, defaultPinned: () => [...DEFAULT_PINNED] };
 
 function renderAreaActions(area) {
   area.actions.innerHTML = '';
@@ -1192,6 +1218,23 @@ const ipcError = (e) => {
 };
 ide.util.errorText = ipcError;
 
+// Hooks that give a new file (New Python File) its first text: `async (path) => text | false | undefined`; the first
+// string wins (file-templates: the "Python Script" template), false cancels the new file (a template variable dialog
+// was cancelled), and a hook that throws is skipped.
+ide.newFileHooks = [];
+async function newFileText(path) {
+  for (const hook of ide.newFileHooks) {
+    try {
+      const text = await hook(path);
+      if (text === false) return null;
+      if (typeof text === 'string') return text;
+    } catch (e) { ide.log.warn(`newFileHooks: ${e?.message || e}`); }
+  }
+  return '';
+}
+
+// Items for the project tree's context menu next to New Python File / New Directory: `(entry) => [menu items]`.
+ide.treeNewItems = [];
 async function createEntry(isDir) {
   if (!ide.root) return;
   const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
@@ -1199,7 +1242,10 @@ async function createEntry(isDir) {
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
   if (await ide.api.exists(target)) return void ide.ui.alert(tr('{path} already exists', { path: basename(target) }));
   try {
+    const text = isDir ? '' : await newFileText(target);
+    if (text === null) return;
     await ide.api.create(target, isDir);
+    if (text) await ide.api.write(target, text);
     expanded.add(keyOf(dirname(target)));
     await renderTree();
     ide.emit('filesChanged', { created: [target] });
@@ -1269,6 +1315,8 @@ function showTreeMenu(entry, x, y) {
     ...(treeRoot ? [] : [
       { label: tr('New Python File'), keyAction: 'NewPythonFile', run: () => createEntry(false) },
       { label: tr('New Directory'), run: () => createEntry(true) },
+      // Plugins add more ways to create something here (file-templates: New › Python Package, HTML File…).
+      ...ide.treeNewItems.flatMap((fn) => { try { return fn(entry) || []; } catch (e) { console.error(e); return []; } }),
       { separator: true },
     ]),
     ...(extra.length ? [...extra, { separator: true }] : []),
@@ -1514,6 +1562,13 @@ function showTrustBar(dir) {
   trustBar.appendChild(btn);
   trustBar.classList.remove('hidden');
 }
+// The trust bar's Trust Project for plugins that need a trusted project (Run Anything): trusts it and reopens the page.
+// Returns false when the project is not in Safe Mode.
+ide.trustProject = () => {
+  const btn = !trustBar.classList.contains('hidden') && trustBar.querySelector('button.primary');
+  if (btn) btn.click();
+  return !!btn;
+};
 
 // Hooks that may veto opening another project, closing it, or reloading the page for Trust Project:
 // `async (next, {reload}) => false` cancels (next is the folder to open, null when closing). They run before unsaved
@@ -1677,7 +1732,12 @@ const editorAction = (id) => Object.assign(() => ide.editor?.trigger('keymap', i
 $('welcomeOpen').onclick = pickFolder;
 
 // ---------- boot ----------
-ide.api = window.api;
+// Text the IDE puts on the clipboard (Copy Path, terminal and console copies...) is announced as
+// `clipboardWritten(text)`, so Paste from History (clipboard-history plugin) keeps it.
+ide.api = { ...window.api, invoke: (channel, ...args) => {
+  if (channel === 'clipboard:writeText' && typeof args[0] === 'string') ide.emit('clipboardWritten', args[0]);
+  return window.api.invoke(channel, ...args);
+} };
 // Monaco cancels in-flight provider requests (e.g. word highlight) when the model switches and leaves the
 // rejection unhandled; Monaco itself treats these as non-errors.
 addEventListener('unhandledrejection', (e) => { if (e.reason?.name === 'Canceled' && e.reason?.message === 'Canceled') e.preventDefault(); });

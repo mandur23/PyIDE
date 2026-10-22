@@ -116,7 +116,7 @@
   }
 
   // Re-runs `fn` when the theme changes (canvas colors come from CSS variables).
-  const onTheme = (fn) => ide.on('settingsChanged', (k) => { if (k === 'appearance.theme') requestAnimationFrame(fn); });
+  const onTheme = (fn) => ide.on('themeChanged', () => requestAnimationFrame(fn));
 
   // Interpreter for Python probes. Detached windows have no project, so they look interpreters up once.
   let interpLookup = null;

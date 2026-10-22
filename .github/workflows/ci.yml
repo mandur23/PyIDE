@@ -150,6 +150,48 @@ jobs:
         timeout-minutes: 10
         run: node verify/peek-definition.mjs
 
+      - name: redact
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/redact.mjs
+
+      - name: notifications-log
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/notifications-log.mjs
+      - name: tasks-notifications
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/tasks-notifications.mjs
+      - name: report-update
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/report-update.mjs
+      - name: import-install
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/import-install.mjs
+      - name: venv-prompt
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/venv-prompt.mjs
+      - name: commit-checks
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/commit-checks.mjs
+      - name: run-automation
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/run-automation.mjs
+      - name: ui-comfort
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/ui-comfort.mjs
+      - name: editing-comfort
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/editing-comfort.mjs
+
       - name: Upload verify/out
         if: ${{ failure() }}
         uses: actions/upload-artifact@v5

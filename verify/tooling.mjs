@@ -182,7 +182,8 @@ try {
   await js(`(document.querySelector('.settings-nav-row[data-page="appearance"]').scrollIntoView(), true)`);
   await click('.settings-nav-row[data-page="appearance"]');
   await js(`document.querySelector('[data-key="appearance.theme"]').focus()`);
-  await press('ArrowDown');
+  // The combo lists Dark, Light, Sync with OS; a fresh profile starts on Sync with OS (new installs), an older one on Dark.
+  await press((await js(`document.querySelector('[data-key="appearance.theme"]').value`)) === 'system' ? 'ArrowUp' : 'ArrowDown');
   check(await js(`document.querySelector('[data-key="appearance.theme"]').value === 'light'`), 'theme combo switched to Light');
   await shot('settings.png');
   await click('#settingsOk');

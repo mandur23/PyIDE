@@ -300,7 +300,7 @@ try {
   await kh.clearNotes();
   await kh.mouse(`document.querySelector('.dialog .primary')`, { label: '변경 사항 셸브' });
   await kh.until(kh.noteWith('파일 7개를 셸브함'), 'ko shelved', 20000);
-  await noLeaks('.vcs-notes', 'shelved notification');
+  await noLeaks('.ide-balloons', 'shelved notification');
   await kh.until(`document.querySelectorAll('.vcs-shelf-file').length === 7`, 'ko shelf tab');
   await noLeaks('.vcs-shelf', 'Shelf tab');
   await noLeaks('.vcs-commit-tabs', 'Commit window tabs');
@@ -316,7 +316,7 @@ try {
   await kh.clearNotes();
   await kh.mouse(kh.menuItem('선택한 파일 셸브 해제'), { label: '선택한 파일 셸브 해제' });
   await kh.until(kh.noteWith('파일 1개를 셸브 해제함'), 'ko unshelved', 20000);
-  await noLeaks('.vcs-notes', 'unshelved notification');
+  await noLeaks('.ide-balloons', 'unshelved notification');
   k.check(readFileSync(path.join(k.project, 'main.py'), 'utf8') === MAIN_NEW && await k.js(`document.querySelectorAll('.vcs-shelf-file').length`) === 7,
     'with the option off the unshelved file stays on the shelf');
   await kh.mouse(`document.querySelector('.vcs-shelf-delete')`, { label: '삭제…' });
@@ -353,8 +353,8 @@ k.close();
   process.env.PYIDE_TRUST_ALL = '1';
   const handlers = {};
   require(path.join(APP, 'main/features/git.js')).register({
-    ipcMain: { handle: (name, fn) => { handlers[name] = fn; } },
-    app: { getPath: () => mkdtempSync(path.join(tmpdir(), 'pyide-shelve-main-')) },
+    ipcMain: { handle: (name, fn) => { handlers[name] = fn; }, on: () => {} },
+    app: { getPath: () => mkdtempSync(path.join(tmpdir(), 'pyide-shelve-main-')), on: () => {} },
   });
   const call = (name, ...args) => handlers[`git:${name}`](null, ...args);
   try {

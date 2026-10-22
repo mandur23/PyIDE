@@ -103,17 +103,34 @@
     s.seq++;
     set(item, { phase: BUSY[op], error: null, notice: null, progress: null, ctl });
     appendLog(item, `${s.log ? '\n' : ''}── ${OP_TITLES[op]} · ${new Date().toLocaleTimeString()} ──\n`);
-    const log = (t) => appendLog(item, String(t).endsWith('\n') ? String(t) : `${t}\n`);
+    // The job is also a background task (status bar progress and popup, where Cancel cancels it) and ends with a notification.
+    const title = tr('{op}: {name}', { op: OP_TITLES[op], name: item.name });
+    const task = ide.tasks?.start({ title, onCancel: () => ctl.abort() });
+    const lastLine = (t) => {
+      const line = String(t).split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean).pop();
+      if (line) task?.update({ text: line.slice(0, 200) });
+    };
+    const log = (t) => { lastLine(t); appendLog(item, String(t).endsWith('\n') ? String(t) : `${t}\n`); };
     // Process output arrives in arbitrary chunks; main jobs append it as is instead of a line per chunk.
-    log.raw = (t) => appendLog(item, t);
-    const progress = (f) => { if (entry(item.id).ctl === ctl) set(item, { progress: Math.max(0, Math.min(1, Number(f) || 0)) }); };
+    log.raw = (t) => { lastLine(t); appendLog(item, t); };
+    const progress = (f) => {
+      if (entry(item.id).ctl !== ctl) return;
+      const fraction = Math.max(0, Math.min(1, Number(f) || 0));
+      task?.update({ fraction });
+      set(item, { progress: fraction });
+    };
     const cancelled = new Promise((_, reject) => ctl.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    const notify = (kind, text) => ide.notifications?.notify({ title, text, kind, raw: kind === 'error', group: 'Install Manager',
+      actions: [{ label: tr('Open Install Manager'), run: () => open(item.category) }] });
     try {
       await Promise.race([item[op](log, progress, ctl.signal), cancelled]);
+      task?.done();
       appendLog(item, `${tr('Done.')}\n`);
       set(item, { ctl: null, phase: s.status ? phaseOf(s.status) : 'unknown' });
+      if (op !== 'start' && op !== 'stop') notify('ok', tr('Done.'));
       await check(item);
     } catch (err) {
+      task?.done();
       if (ctl.signal.aborted) {
         appendLog(item, `${tr('Cancelled.')}\n`);
         set(item, { ctl: null, phase: s.status ? phaseOf(s.status) : 'unknown' });
@@ -123,6 +140,7 @@
         appendLog(item, `${tr('Failed: {error}', { error: message })}\n`);
         set(item, { ctl: null, phase: 'failed', error: message });
         cards.get(item.id)?.logBox.setAttribute('open', '');
+        notify('error', message);
       }
     }
   }

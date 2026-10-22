@@ -580,8 +580,9 @@
     },
   });
 
+  // themeChanged: also when the OS switches under the Sync with OS theme.
+  ide.on('themeChanged', () => requestAnimationFrame(() => { for (const s of sessions) s.term.options.theme = theme(); }));
   ide.on('settingsChanged', (key) => {
-    if (key === 'appearance.theme') requestAnimationFrame(() => { for (const s of sessions) s.term.options.theme = theme(); });
     if (key === 'terminal.fontSize') for (const s of sessions) { s.term.options.fontSize = fontSize(); fitPane(s); }
   });
 

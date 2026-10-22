@@ -14,6 +14,8 @@
   const MODELS = [{ id: 'haiku', label: 'Haiku' }, { id: 'sonnet', label: 'Sonnet' }, { id: 'opus', label: 'Opus' }];
   const modelId = () => ide.settings.get(SETTINGS.model, 'haiku');
   const nesEnabled = () => ide.settings.get(SETTINGS.nes, false) === true;
+  // Suggestions are requested only while on and not in Power Save Mode (the setting itself stays as the user left it).
+  const nesActive = () => nesEnabled() && !ide.powerSave?.on();
   const CONTEXT_BEFORE = 60;
   const CONTEXT_AFTER = 30;
   const NES_WINDOW = 60;
@@ -169,7 +171,7 @@
     contexts.set(editor, ctx);
     editor.onDidChangeModelContent((e) => onContentChange(ctx, e));
     // The edit history starts from the text as it was opened, so the first edit is recorded too.
-    const track = () => { if (nesEnabled() && editor.getModel()) historyOf(editor.getModel()); };
+    const track = () => { if (nesActive() && editor.getModel()) historyOf(editor.getModel()); };
     track();
     editor.onDidChangeModel(() => { endSession(ctx); clearNes(ctx); track(); });
     editor.onDidChangeCursorPosition(() => { if (ctx.nes.suggestion) renderNesHint(ctx); });
@@ -566,7 +568,7 @@
       scheduleRender(ctx);
     }
     if (ctx.nes.suggestion || ctx.nes.request) clearNes(ctx);
-    if (!nesEnabled()) return;
+    if (!nesActive()) return;
     const history = historyOf(model);
     if (!ctx.editor.hasTextFocus()) return;
     clearTimeout(history.timer);
@@ -591,7 +593,7 @@
   function maybeRequestNes(ctx) {
     clearTimeout(deferredNes);
     const model = ctx.editor.getModel();
-    if (!nesEnabled() || ctx.session || !model || !historyOf(model).edits.length) return;
+    if (!nesActive() || ctx.session || !model || !historyOf(model).edits.length) return;
     const wait = lastNesAt + ide.settings.get(SETTINGS.interval, 5000) - performance.now();
     if (wait > 0) { deferredNes = setTimeout(() => maybeRequestNes(ctx), wait); return; }
     lastNesAt = performance.now();
@@ -748,9 +750,8 @@
 
   const setNes = (on) => ide.settings.set(SETTINGS.nes, on);
   // The Settings dialog writes the setting directly, so its effects follow the setting, not setNes.
-  ide.on('settingsChanged', (key) => {
-    if (key !== SETTINGS.nes) return;
-    const on = nesEnabled();
+  function nesStateChanged() {
+    const on = nesActive();
     for (const ctx of contexts.values()) {
       const model = ctx.editor.getModel();
       if (on) { if (model) historyOf(model); continue; }
@@ -760,18 +761,20 @@
     // Edits made while suggestions are off are not recorded; turning them on starts from the text as it is then.
     if (!on) histories = new WeakMap();
     renderStatus();
-  });
+  }
+  ide.on('settingsChanged', (key) => { if (key === SETTINGS.nes) nesStateChanged(); });
+  ide.on('powerSaveChanged', nesStateChanged);
 
   // ---------- status bar ----------
   let nesProblem = null;
   const statusEl = el('span', 'ai-edit-statusbar', '✳');
   function renderStatus() {
     statusEl.classList.toggle('busy', inflight > 0);
-    statusEl.classList.toggle('nes-on', nesEnabled());
+    statusEl.classList.toggle('nes-on', nesActive());
     statusEl.classList.toggle('problem', !!nesProblem);
     statusEl.title = [
       ide.keymap.withKeys(tr('AI edits with Claude'), 'AiEdit.InlineEdit'),
-      nesEnabled() ? tr('Next edit suggestions: on') : tr('Next edit suggestions: off'),
+      !nesEnabled() ? tr('Next edit suggestions: off') : nesActive() ? tr('Next edit suggestions: on') : tr('Next edit suggestions: paused in Power Save Mode'),
       nesProblem,
     ].filter(Boolean).join('\n');
   }
@@ -807,6 +810,7 @@
       return n ? { line: n.line, hunk: { ...n.hunk }, reason: n.reason } : null;
     },
     nesEnabled,
+    nesActive,
     setNes,
   };
 })();

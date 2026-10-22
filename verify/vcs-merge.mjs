@@ -378,7 +378,7 @@ try {
   await kh.until(`!!document.querySelector('.dialog .vcs-conflicts')`, 'ko conflicts dialog', 20000);
   k.check(await k.js(`document.querySelector('.dialog-title').textContent`) === '충돌' && await k.js(kh.noteWith('파일 2개에 충돌이 있습니다')), 'the Conflicts dialog and its notification are Korean');
   await noLeaks('#dialogHost', 'Conflicts dialog');
-  await noLeaks('.vcs-notes', 'conflict notification');
+  await noLeaks('.ide-balloons', 'conflict notification');
   await k.shot('conflicts-ko.png');
   await kh.mouse(kh.conflictRow('main.py'), { label: 'main.py' });
   await kh.mouse(`document.querySelector('.vcs-merge-btn')`, { label: '병합…' });
@@ -399,7 +399,7 @@ try {
   await kh.clearNotes();
   await kh.mouse(`document.querySelector('.vcs-op-abort')`, { label: '중단' });
   await kh.until(kh.noteWith('병합을 중단했습니다'), 'ko merge aborted');
-  await noLeaks('.vcs-notes', 'merge aborted notification');
+  await noLeaks('.ide-balloons', 'merge aborted notification');
   k.check(git(k.project, 'diff', '--name-only', '--diff-filter=U') === '' && !existsSync(path.join(k.project, '.git', 'MERGE_HEAD')), 'Abort from the Korean banner aborts the merge');
 
   writeFileSync(path.join(k.project, 'main.py'), 'print("edited")\n');
@@ -419,7 +419,7 @@ try {
   await k.shot('unstash-ko.png');
   await kh.mouse(`document.querySelector('.dialog .primary')`, { label: '스태시 적용' });
   await kh.until(kh.noteWith('stash@{0}을(를) 적용했습니다'), 'ko applied');
-  await noLeaks('.vcs-notes', 'unstash notification');
+  await noLeaks('.ide-balloons', 'unstash notification');
 
   await k.js(`(ide.toolWindows.get('Git').show(), true)`);
   await kh.until(`document.querySelectorAll('.vcs-log-rows .vcs-log-row').length >= 3`, 'ko log');

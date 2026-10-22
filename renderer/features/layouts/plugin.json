@@ -1,0 +1,7 @@
+{
+  "id": "layouts",
+  "name": "Tool Window Layouts",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Window › Layouts, as in PyCharm: save the open tool windows, their sizes and the sidebar under a name, restore them later or restore the default layout."
+}

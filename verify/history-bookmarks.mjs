@@ -98,7 +98,11 @@ try {
   check(true, 'the reverted state is recorded as a "revert" revision');
 
   // ---------- Revert the whole file ----------
+  // The view redraws (up to 200 ms after the store) when the "revert" revision arrives, which moves every row down; a
+  // click aimed at "Initial content" before that redraw would land on the row above it.
+  await until(`document.querySelector('.lh-view:not(.hidden) .lh-row')?.textContent.includes('Reverted')`, 'revert revision listed');
   await h.clickText('.lh-row', 'Initial content');
+  await until(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.textContent.includes('Initial content')`, 'Initial content selected');
   await click('.lh-view:not(.hidden) .lh-revert');
   await until(`ide.api.read(ide.util.joinPath(ide.root, 'main.py')).then(s => !s.includes('# greeting helper'))`, 'whole revert');
   check(read(file('main.py')) === ORIGINAL_MAIN, 'Revert restores the file to the selected revision');

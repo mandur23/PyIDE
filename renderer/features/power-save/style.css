@@ -1,0 +1,3 @@
+.power-save-status { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0 4px; color: var(--yellow); cursor: pointer; font: inherit; }
+.power-save-status.hidden { display: none; }
+.power-save-status:hover { background: var(--gray3); border-radius: 4px; }

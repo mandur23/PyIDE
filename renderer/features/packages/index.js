@@ -152,7 +152,9 @@
   }
 
   // Runs a process in the tool window's console, then lists the packages and checks the dependencies again.
-  // start() -> {id, command?} | {error}; exit(code) writes the closing line.
+  // start() -> {id, command?} | {error}; exit(code) writes the closing line. Resolves with the exit code once the
+  // list and the check are done (-1 when the process did not start). A successful run emits packagesChanged(interp),
+  // which tells Pyright to resolve imports again.
   async function runInConsole(header, start, exit) {
     busy = true;
     renderDetails();
@@ -166,16 +168,22 @@
       con.append(`${r.error}\n`, 'err');
       renderDetails();
       renderBusy();
-      return;
+      return -1;
     }
     if (r.command) con.append(`> ${r.command}\n`, 'sys'); // the command line is user data
-    ide.proc.attach(r.id, {
-      data: (text, stream) => con.append(text, stream === 'err' && !/^\s*(WARNING|DEPRECATION)/.test(text) ? 'err' : null),
-      async exit(code) {
-        busy = false;
-        await exit(code);
-        await Promise.all([refresh(), checkDeps({ fresh: true })]);
-      },
+    const interp = ide.currentInterp();
+    return new Promise((resolve) => {
+      ide.proc.attach(r.id, {
+        data: (text, stream) => con.append(text, stream === 'err' && !/^\s*(WARNING|DEPRECATION)/.test(text) ? 'err' : null),
+        async exit(code) {
+          busy = false;
+          try {
+            await exit(code);
+            await Promise.all([refresh(), checkDeps({ fresh: true })]);
+            if (code === 0) ide.emit('packagesChanged', interp);
+          } finally { resolve(code); }
+        },
+      });
     });
   }
 
@@ -263,12 +271,13 @@
 
   // Installs a file's requirements with the project's manager (pip -r, uv sync / uv pip install, poetry install).
   // specs: only these requirement strings (a quick fix); pip: use pip even in a uv or Poetry project.
+  // Resolves with the exit code, or null when nothing was started.
   async function installDeps(f, { specs, pip = false } = {}) {
     const interp = ide.currentInterp();
-    if (!f || !interp || busy) return;
+    if (!f || !interp || busy) return null;
     const names = specs ? specs.join(' ') : ide.util.basename(f.path);
     tw.show();
-    await runInConsole(tr('Installing {name} into {interpreter}', { name: names, interpreter: interp.label }),
+    return runInConsole(tr('Installing {name} into {interpreter}', { name: names, interpreter: interp.label }),
       () => ide.api.invoke('packages:depsInstall', ide.root, interp, { file: f.path, kind: f.kind, specs, pip, unsatisfied: unsatisfied(f).map((r) => r.raw) }),
       async (code) => con.append(`\n${code === 0 ? tr('Installed {name}', { name: names }) : tr('Failed to install {name} (exit code {code})', { name: names, code })}\n`, code === 0 ? 'ok' : 'err'));
   }
@@ -279,7 +288,7 @@
       || deps.files.find((f) => f.kind === 'pyproject' && f.editable)
       || { path: ide.util.joinPath(ide.root, 'requirements.txt'), kind: 'requirements', created: true };
   }
-  const pinned = (p) => (/^\d+(\.\d+)+/.test(p.version) ? `${p.name}~=${p.version}` : `${p.name}>=${p.version}`);
+  const pinned = (p) => (!p.version ? p.name : /^\d+(\.\d+)+/.test(p.version) ? `${p.name}~=${p.version}` : `${p.name}>=${p.version}`);
 
   async function addToRequirements(p, target) {
     const doc = ide.getDocument(target.path);
@@ -398,7 +407,24 @@
   });
   if (ide.root) checkDeps();
 
-  ide.dependencies = { check: checkDeps, state: () => deps, install: (path, opts) => installDeps(depFile(path), opts) };
+  // installSpecs(specs): installs requirement strings with the project's tool (uv pip install in a uv project, pip
+  // otherwise, as the requirement quick fix does), in the Packages console; resolves with the exit code or null.
+  // requirementsFile(): the existing file "Add to requirements" writes to (requirements.txt, else a pyproject.toml
+  // with [project]), or null. addRequirement({name, version?}): adds name~=version (or the bare name) to it.
+  const existingTarget = () => deps.files.find((f) => f.kind === 'requirements') || deps.files.find((f) => f.kind === 'pyproject' && f.editable) || null;
+  ide.dependencies = {
+    check: checkDeps,
+    state: () => deps,
+    install: (path, opts) => installDeps(depFile(path), opts),
+    installSpecs: (specs) => installDeps(deps.files[0] || { path: ide.util.joinPath(ide.root, 'requirements.txt'), kind: 'requirements', reqs: [] },
+      { specs, pip: deps.manager === 'poetry' }),
+    requirementsFile: () => existingTarget()?.path || null,
+    addRequirement: async (p) => {
+      const target = existingTarget() || requirementsTarget();
+      await addToRequirements(p, target);
+      return target.path;
+    },
+  };
   // The Python Packages window for other plugins (vulnerabilities). Event packagesListed({interp, packages}) follows
   // every successful listing, dependenciesChecked(state) every dependency check.
   ide.packages = {
@@ -407,6 +433,13 @@
     toolWindow: tw,
     notes: () => notes,
     install,
+    // run(header, start): runs start() -> {id, command?} | {error} in the window's console like an install (shown,
+    // then the list and the dependency check refresh); resolves with the exit code, null when another job is running.
+    run: (header, start) => {
+      if (busy) return Promise.resolve(null);
+      tw.show();
+      return runInConsole(header, start, (code) => con.append(`\n${code === 0 ? tr('Done') : tr('Failed with exit code {code}', { code })}\n`, code === 0 ? 'ok' : 'err'));
+    },
     select,
     render: () => { renderList(); renderDetails(); },
     decorateRow: (fn) => { rowDecorators.push(fn); renderList(); },

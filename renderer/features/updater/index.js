@@ -1,11 +1,14 @@
-// Updates: checks the update feed on startup and from Help > Check for Updates…, downloads in the background with
-// progress in the status bar, then offers Restart to Update (NSIS installs) or Download the new installer (MSI).
+// Updates: checks the update feed on startup, then daily or weekly while PyIDE runs, and from Help > Check for Updates…,
+// downloads in the background with progress in the status bar, then offers Restart to Update (NSIS installs) or
+// Download the new installer (MSI).
 (() => {
   const { el } = ide.util;
   const FEED = 'updates.feedUrl';
+  // Automatic checks on or off (the key predates the interval and keeps the user's choice).
   const ON_STARTUP = 'updates.checkOnStartup';
+  const INTERVAL = 'updates.checkInterval'; // 'startup' | 'daily' | 'weekly'
   const SKIPPED = 'updates.skippedVersion';
-  const DEFAULTS = { [ON_STARTUP]: true };
+  const DEFAULTS = { [ON_STARTUP]: true, [INTERVAL]: 'daily' };
   const log = ide.logger?.('#updater') || console;
   let state = { phase: 'idle' };
 
@@ -25,7 +28,13 @@
     item.title = state.phase === 'downloaded' ? tr('PyIDE {version} is ready to install', { version: state.available }) : '';
     item.classList.toggle('hidden', !text);
     item.classList.toggle('ready', state.phase === 'downloaded');
+    // The download is also a background task (the status bar progress widget and its popup).
+    if (state.phase === 'downloading' && ide.tasks) {
+      if (!task?.active) task = ide.tasks.start({ title: tr('Downloading PyIDE {version}', { version: state.available }), cancellable: false });
+      task.update({ fraction: (state.percent || 0) / 100, text: `${state.percent || 0}%` });
+    } else if (task) { task.done(); task = null; }
   }
+  let task = null;
   ide.api.on('updater:state', (s) => {
     const was = state.phase;
     state = s;
@@ -33,11 +42,19 @@
     if (s.phase === 'downloaded' && was !== 'downloaded') offerRestart();
   });
 
-  const message = (title, text, buttons) => {
+  const message = (title, text, buttons, onClose) => {
     const body = el('div', 'upd-message');
     for (const line of [].concat(text)) body.appendChild(el('p', null, line));
-    return ide.ui.dialog({ title, body, buttons, width: 460 });
+    return ide.ui.dialog({ title, body, buttons, width: 460, onClose });
   };
+  // The open Update Available dialog ({version}): an automatic check does not open a second one for the same version.
+  let announced = null;
+  function announce(version, manual, text, buttons) {
+    if (!manual && announced?.version === version) return;
+    const entry = { version };
+    announced = entry;
+    message(tr('Update Available'), text, buttons, () => { if (announced === entry) announced = null; });
+  }
   // What main threw, without Electron's "Error invoking remote method '…': Error: " prefix.
   const reasonOf = (err) => ide.util.errorText(err);
   const skip = (version) => ({ label: tr('Skip This Version'), run: () => ide.settings.set(SKIPPED, version) });
@@ -74,11 +91,11 @@
         message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
       });
     } else if (state.kind === 'msi') {
-      message(tr('Update Available'), [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
+      announce(version, manual, [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
         tr('This copy was installed from an MSI package, so update it with the new MSI installer.')], [
         { label: tr('Download the new installer'), primary: true, run: () => ide.api.invoke('updater:openInstaller') }, skip(version), later]);
     } else {
-      message(tr('Update Available'), [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
+      announce(version, manual, [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
         tr('PyIDE updates itself only when it was installed with the PyIDE installer.')], [{ label: tr('Close'), primary: true }]);
     }
     return result;
@@ -109,20 +126,90 @@
 
   ide.registerAction({ id: 'CheckForUpdates', title: tr('Check for Updates…'), run: () => check({ manual: true }) });
 
+  // ---------- automatic checks ----------
+  // 3 s after startup, then whenever the interval has passed since the last check that read the feed (main keeps its
+  // time across restarts, so a restart does not check again). "On startup only" checks once per start, as before.
+  // After failed checks the next one comes sooner, backing off: 1/24 of the interval (an hour for daily), doubling up
+  // to the interval. Nothing is checked while a check runs or an update downloads or waits for its restart, in Power
+  // Save mode (`ide.powerSave.on()`) or while offline.
+  const DAY = 24 * 3600 * 1000;
+  const STARTUP_DELAY = 3000;
+  const MAX_WAIT = 3600 * 1000; // looked at again at least hourly (sleep, clock changes, Power Save turned off)
+  let timer = null;
+  let started = false;
+  let startupChecked = false;
+  let decision = { reason: null, at: 0, due: null }; // the last scheduling decision, for ide.updater.status()
+  let decisions = 0;
+  const history = []; // automatic checks this session: {at, ok}
+
+  const period = () => {
+    const mode = ide.settings.get(INTERVAL, 'daily');
+    return mode === 'startup' ? null : (state.intervalMs || DAY) * (mode === 'weekly' ? 7 : 1);
+  };
+  const retryDelay = (failures, p) => Math.min(p, (p / 24) * 2 ** (failures - 1));
+  const nextDue = (p) => (state.failures > 0 && state.lastAttempt ? state.lastAttempt + retryDelay(state.failures, p) : (state.lastCheck || 0) + p);
+  const powerSave = () => !!ide.powerSave?.on?.();
+
+  function schedule(ms) {
+    clearTimeout(timer);
+    timer = setTimeout(tick, Math.max(0, Math.min(ms, MAX_WAIT)));
+  }
+
+  async function tick() {
+    timer = null;
+    state = await ide.api.invoke('updater:state');
+    const p = period();
+    const now = Date.now();
+    const due = p == null ? (startupChecked ? null : now) : nextDue(p);
+    const reason = !ide.settings.get(ON_STARTUP, true) ? 'off'
+      : !feed() ? 'noFeed'
+      : due == null ? 'startupOnly'
+      : ['checking', 'downloading', 'downloaded'].includes(state.phase) ? state.phase
+      : powerSave() ? 'powerSave'
+      : navigator.onLine === false ? 'offline'
+      : due > now ? (state.failures ? 'backoff' : 'recent')
+      : null;
+    decision = { reason: reason || 'check', at: now, due };
+    decisions++;
+    if (!reason) {
+      startupChecked = true;
+      const result = await check();
+      history.push({ at: now, ok: !!result });
+      if (history.length > 50) history.shift();
+      state = await ide.api.invoke('updater:state');
+    }
+    if (['off', 'noFeed', 'startupOnly'].includes(reason) || (p == null && startupChecked)) return; // a settings change schedules again
+    if (p == null) schedule(60000);
+    else schedule(!reason || reason === 'recent' || reason === 'backoff' ? nextDue(p) - Date.now() : Math.min(p, 5 * 60000));
+  }
+
   ide.on('ready', async () => {
     state = await ide.api.invoke('updater:state');
     render();
-    if (ide.detached || !ide.settings.get(ON_STARTUP, true) || !feed()) return;
-    setTimeout(() => check(), 3000);
+    if (ide.detached) return;
+    started = true;
+    schedule(STARTUP_DELAY);
   });
+  ide.on('settingsChanged', (key) => { if (started && [ON_STARTUP, INTERVAL, FEED].includes(key)) schedule(STARTUP_DELAY); });
+  addEventListener('online', () => { if (started && decision.reason === 'offline') schedule(STARTUP_DELAY); });
+  ide.on('powerSaveChanged', (on) => { if (started && !on && decision.reason === 'powerSave') schedule(STARTUP_DELAY); });
+
+  ide.updater = {
+    check: (opts) => check(opts),
+    // The scheduler's last decision ({reason, at, due}), how many it made, the automatic checks and the interval.
+    status: () => ({ ...decision, decisions, history: history.slice(), period: period(), retryDelay: (n) => retryDelay(n, period() ?? DAY) }),
+  };
 
   // ---------- Settings > Updates ----------
   (ide.settingsPages ||= []).push({
     id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS,
-    keywords: 'updates update check feed latest.yml version skip restart 업데이트 확인 피드 버전 건너뛰기',
+    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval 업데이트 확인 피드 버전 건너뛰기 매일 매주',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Updates'));
-      s.appendChild(ctx.ui.checkbox(ON_STARTUP, tr('Check for updates on startup')));
+      const auto = el('div', 'upd-auto');
+      auto.append(ctx.ui.checkbox(ON_STARTUP, tr('Check for updates')),
+        ctx.ui.selectInput(INTERVAL, [['startup', tr('On startup only')], ['daily', tr('Daily')], ['weekly', tr('Weekly')]], 'daily'));
+      s.appendChild(auto);
       const input = el('input', 'upd-feed');
       input.dataset.key = FEED;
       input.placeholder = tr('Web address or local folder');
@@ -141,6 +228,7 @@
       const kinds = { nsis: tr('PyIDE installer (updates itself)'), msi: tr('MSI package (update with the new MSI)'), source: tr('Run from source (no updates)') };
       info.appendChild(ctx.ui.fieldRow(tr('Version:'), el('span', 'upd-version', state.version || '')));
       info.appendChild(ctx.ui.fieldRow(tr('Installed with:'), el('span', null, kinds[state.kind] || '')));
+      if (state.lastCheck) info.appendChild(ctx.ui.fieldRow(tr('Last checked:'), el('span', 'upd-last-check', new Date(state.lastCheck).toLocaleString())));
       const skipped = ctx.value(SKIPPED);
       if (skipped) {
         const row = el('div', 'upd-skipped');

@@ -73,7 +73,15 @@
   const IGNORE = new Set();
   for (const block of [KEYWORDS, BUILTINS, PROGRAMMING]) for (const w of block.split(/\s+/)) if (w) IGNORE.add(w);
 
-  let enabled = ide.settings.get(KEY_ENABLED, true) !== false;
+  // Checking runs while the setting is on and Power Save Mode is off (PyCharm's power save stops inspections).
+  const wanted = () => ide.settings.get(KEY_ENABLED, true) !== false && !ide.powerSave?.on();
+  let enabled = wanted();
+  const followSetting = () => {
+    if (enabled === wanted()) return;
+    enabled = wanted();
+    if (enabled) rescanAll(); else clearAll();
+  };
+  ide.on('powerSaveChanged', followSetting);
   let userWords = new Set((ide.settings.get(KEY_USER, []) || []).map((w) => w.toLowerCase()));
   let projectWords = new Set();
   // Names that code imports or reads as attributes in the open files (library names such as linspace, getcwd).
@@ -554,8 +562,7 @@
   });
   ide.on('settingsChanged', async (key, value) => {
     if (key === KEY_ENABLED) {
-      enabled = value !== false;
-      if (enabled) rescanAll(); else clearAll();
+      followSetting();
     } else if (key === KEY_USER) {
       userWords = new Set((value || []).map((w) => w.toLowerCase()));
       rescanAll();

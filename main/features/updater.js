@@ -55,12 +55,29 @@ function resolveFeed(feed) {
   return { dir: path.resolve(dir) };
 }
 
+// When checks ran, kept across restarts so the periodic check (renderer) can skip one that ran recently and back off
+// after failures: {lastCheck, lastAttempt, failures, lastError}. lastCheck is the last check that read the feed.
+function readHistory(file) {
+  const num = (v) => (Number.isFinite(v) && v > 0 ? v : null);
+  try {
+    const h = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { lastCheck: num(h.lastCheck), lastAttempt: num(h.lastAttempt), failures: Math.max(0, Math.floor(Number(h.failures) || 0)),
+      lastError: typeof h.lastError === 'string' ? h.lastError : null };
+  } catch { return { lastCheck: null, lastAttempt: null, failures: 0, lastError: null }; }
+}
+
+exports.installKind = installKind;
+
 exports.register = ({ ipcMain, app, send, diagnostics }) => {
   const log = diagnostics?.logger('#updater') || console;
   const kind = installKind(app);
   let updater = null;
   let feed = null; // {key, url, dir, server}
-  let state = { kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle' }; // idle | checking | available | downloading | downloaded | error
+  const historyFile = path.join(app.getPath('userData'), 'updater.json');
+  // PYIDE_UPDATE_INTERVAL_MS replaces the length of a day for the periodic check (verify/report-update.mjs).
+  const intervalMs = Number(process.env.PYIDE_UPDATE_INTERVAL_MS) > 0 ? Number(process.env.PYIDE_UPDATE_INTERVAL_MS) : null;
+  // phase: idle | checking | available | downloading | downloaded | error. checks: checks run this session.
+  let state = { kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle', intervalMs, checks: 0, ...readHistory(historyFile) };
   const setState = (patch) => {
     state = { ...state, ...patch };
     send('updater:state', state);
@@ -93,12 +110,17 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     return feed;
   }
 
+  function saveHistory() {
+    const { lastCheck, lastAttempt, failures, lastError } = state;
+    try { fs.writeFileSync(historyFile, JSON.stringify({ lastCheck, lastAttempt, failures, lastError }, null, 2)); } catch (err) { log.warn(`could not save ${historyFile}: ${err.message}`); }
+  }
+
   ipcMain.handle('updater:state', () => state);
 
   // -> {available: version | null}; throws with a readable message when the feed cannot be read.
   ipcMain.handle('updater:check', async (_e, feedValue) => {
     if (state.phase === 'downloading' || state.phase === 'downloaded') return { available: state.available };
-    setState({ phase: 'checking', error: null });
+    setState({ phase: 'checking', error: null, checks: state.checks + 1, lastAttempt: Date.now() });
     try {
       await useFeed(feedValue);
       const u = getUpdater();
@@ -107,13 +129,18 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
       const result = await u.checkForUpdates();
       const latest = result?.updateInfo?.version;
       const available = result?.isUpdateAvailable && latest ? latest : null;
-      setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null });
+      setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null, lastCheck: Date.now(), failures: 0, lastError: null });
+      saveHistory();
       return { available };
     } catch (err) {
-      setState({ phase: 'error', error: err.message });
+      setState({ phase: 'error', error: err.message, failures: state.failures + 1, lastError: err.message });
+      saveHistory();
       throw err;
     }
   });
+
+  // Test hook for verify/report-update.mjs: a source run cannot download, so the test sets the phase itself.
+  if (process.env.PYIDE_UPDATE_TEST === '1') ipcMain.handle('updater:testPhase', (_e, phase) => { setState({ phase }); return state; });
 
   ipcMain.handle('updater:download', async () => {
     if (kind !== 'nsis') throw new Error('Only the PyIDE installer (.exe) updates itself');

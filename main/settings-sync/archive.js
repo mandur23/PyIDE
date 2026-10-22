@@ -72,7 +72,7 @@ const EXCLUDED = new Map([
 ]);
 // Groups whose keys are IDE preferences. A key outside them is not exported: a new feature's keys are left out until
 // they are classified here.
-const PREFERENCE = /^(appearance|editor|tools|autosave|save|terminal|tests|httpClient|viewers|dataView|plots|coverage|searchNav|sidebar|spellcheck|ai|aiComplete|aiEdit|aiChat|semantic|localHistory|diagnostics|database|newProject|updates|workspace|pyconsole|packages|vcs)\./;
+const PREFERENCE = /^(appearance|editor|tools|autosave|save|terminal|tests|httpClient|viewers|dataView|plots|coverage|searchNav|sidebar|spellcheck|ai|aiComplete|aiEdit|aiChat|semantic|localHistory|diagnostics|database|newProject|updates|workspace|pyconsole|packages|vcs|fileTemplates|clipboardHistory)\./;
 const ABS_PATH = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 const holdsPath = (v, depth = 0) => (typeof v === 'string' ? ABS_PATH.test(v)
   : depth < 8 && !!v && typeof v === 'object' && Object.values(v).some((x) => holdsPath(x, depth + 1)));

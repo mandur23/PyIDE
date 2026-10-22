@@ -535,7 +535,14 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       kernelText.textContent = kernel.info && ['idle', 'busy'].includes(state) ? `Python ${kernel.info.version}: ${label}` : label;
       kernelEl.title = kernel.info ? kernel.info.python : '';
       interruptBtn.disabled = state !== 'busy';
+      // Starting or restarting shows as a background task in the status bar; Cancel stops the kernel.
+      const starting = state === 'starting' || state === 'restarting';
+      if (starting && !kernelTask?.active && ide.tasks) {
+        kernelTask = ide.tasks.start({ title: tr('Starting Jupyter kernel: {name}', { name: basename(path) }), text: label,
+          onCancel: () => { kernel.stop(); setKernelState('stopped'); } });
+      } else if (!starting && kernelTask) { kernelTask.done(); kernelTask = null; }
     }
+    let kernelTask = null;
     setKernelState('none');
 
     function showBanner(kind, text, buttons = [], detail = '') {
@@ -647,9 +654,12 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       const write = (t) => { log = (log + t).slice(-8000); logEl.textContent = log; logEl.scrollTop = logEl.scrollHeight; };
       const logger = (t) => write(String(t).endsWith('\n') ? String(t) : `${t}\n`);
       logger.raw = write;
+      const task = ide.tasks?.start({ title: tr('Installing ipykernel…') });
       try {
         await item.install(logger, () => {}, new AbortController().signal);
+        task?.done();
       } catch (e) {
+        task?.done();
         showBanner('error', tr('Could not install ipykernel: {error}', { error: cleanError(e) }), [
           { label: tr('Open Install Manager'), run: () => ide.installer.open('python') },
         ], log.trim());
@@ -1267,6 +1277,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         flush();
         clearTimeout(reloadTimer);
         views.delete(authority);
+        kernelTask?.done();
         kernel.stop();
         observer.disconnect();
         for (const c of cells) disposeCell(c);

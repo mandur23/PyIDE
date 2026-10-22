@@ -76,7 +76,7 @@ try {
   check(await js(`document.querySelector('.vcs-msg').placeholder`) === '커밋 메시지', 'Commit Message placeholder is Korean');
   check(await js(`document.querySelector('.vcs-commit-btn').textContent === '커밋' && document.querySelector('.vcs-commit-push-btn').textContent === '커밋 및 푸시…'`), 'Commit / Commit and Push buttons are Korean');
   check(await js(noteWith('Git 저장소를 생성했습니다')), 'init notification is Korean');
-  await noLeaks(`${SIDE}, .vcs-notes`, 'Commit window with unversioned files and init notification');
+  await noLeaks(`${SIDE}, .ide-balloons`, 'Commit window with unversioned files and init notification');
   check(await js(`document.querySelector('.vcs-branch').title`) === 'Git 브랜치', 'branch widget tooltip is Korean');
   await shot('commit-ko.png');
 
@@ -84,12 +84,12 @@ try {
   await clearNotes();
   await t.click('.vcs-commit-btn');
   await until(noteWith('커밋할 변경 사항이 선택되지 않았습니다'), 'nothing selected warning');
-  await noLeaks('.vcs-notes', 'no-selection warning');
+  await noLeaks('.ide-balloons', 'no-selection warning');
   await mouse(`[...document.querySelectorAll('.vcs-group')].find(g => g.textContent.includes('버전 관리되지 않는')).querySelector('input')`, { label: 'unversioned group checkbox' });
   await clearNotes();
   await t.click('.vcs-commit-btn');
   await until(noteWith('커밋 메시지가 비어 있습니다'), 'empty message warning');
-  await noLeaks('.vcs-notes', 'empty message warning');
+  await noLeaks('.ide-balloons', 'empty message warning');
 
   // --- commit ---
   await js(`document.querySelector('.vcs-msg').focus()`);
@@ -99,7 +99,7 @@ try {
   await until(`document.querySelectorAll('.vcs-changes .vcs-file').length === 0`, 'clean after commit');
   check(git(project, 'log', '--format=%s') === 'Initial commit', 'commit from the Korean UI works');
   check(await js(noteWith('파일 4개 커밋됨: Initial commit')), 'commit notification is Korean and keeps the message as is');
-  await noLeaks(`${SIDE}, .vcs-notes`, 'Commit window after commit');
+  await noLeaks(`${SIDE}, .ide-balloons`, 'Commit window after commit');
 
   writeFileSync(path.join(project, 'util', 'helpers.py'), 'def double(x):\n    return x * 2\n\n\ndef triple(x):\n    return x * 3  # by Bob\n');
   git(project, '-c', 'user.name=Bob', '-c', 'user.email=bob@example.com', 'commit', '-qam', 'Bob tweaks triple');
@@ -187,7 +187,7 @@ try {
   await clearNotes();
   await press('Enter');
   await until(noteWith('main 체크아웃됨'), 'checkout notification');
-  await noLeaks('.vcs-notes', 'checkout notification');
+  await noLeaks('.ide-balloons', 'checkout notification');
   git(project, 'checkout', '-q', '--', 'main.py');
   await js(`ide.reloadFromDisk()`);
 
@@ -195,7 +195,7 @@ try {
   await clearNotes();
   await press('Ctrl+T');
   await until(noteWith('업데이트할 수 없음'), 'no remote note');
-  await noLeaks('.vcs-notes', 'Update Project without a remote');
+  await noLeaks('.ide-balloons', 'Update Project without a remote');
   const bare = path.join(gitHome, 'remote.git');
   git(gitHome, 'init', '-q', '--bare', bare);
   await clearNotes();
@@ -209,11 +209,11 @@ try {
   await t.click('.dialog .primary');
   await until(noteWith('origin/main에 푸시했습니다'), 'push note');
   check(await js(noteWith('커밋 2개를 origin/main에 푸시했습니다')), 'push notification is Korean');
-  await noLeaks('.vcs-notes', 'push notification');
+  await noLeaks('.ide-balloons', 'push notification');
   await clearNotes();
   await press('Ctrl+T');
   await until(noteWith('모든 파일이 최신 상태입니다'), 'up-to-date note');
-  await noLeaks('.vcs-notes', 'Update Project up to date');
+  await noLeaks('.ide-balloons', 'Update Project up to date');
 
   // --- Commit and Push opens the push dialog for the tracked branch ---
   writeFileSync(path.join(project, 'README.md'), '# VCS fixture\n\nEdited.\n');

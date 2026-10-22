@@ -13,7 +13,7 @@
   }
 
   ide.on('ready', apply);
-  ide.on('settingsChanged', (key) => key === 'appearance.theme' && setTimeout(apply));
+  ide.on('themeChanged', () => setTimeout(apply));
   ide.registerAction({ id: 'RainbowBracketsToggle', title: tr('Toggle Rainbow Brackets'), run: () => {
     const on = !ide.editorOptions().bracketPairColorization?.enabled;
     ide.updateEditorOptions({ bracketPairColorization: { enabled: on, independentColorPoolPerBracketType: false } });

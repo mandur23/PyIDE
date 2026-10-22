@@ -1,0 +1,28 @@
+/* Commit checks: the gear after the Commit buttons, its popup, the progress strip and the Review tab */
+.vcs-checks-gear { display: inline-flex; align-items: center; justify-content: center; }
+.vcs-checks-popup { position: fixed; z-index: 60; min-width: 240px; padding: 6px 0; background: var(--gray2);
+  border: 1px solid var(--gray4); border-radius: 6px; box-shadow: 0 8px 24px #0008; }
+:root[data-theme="light"] .vcs-checks-popup { background: #fff; box-shadow: 0 8px 28px #0003; border-color: #b9bdc9; }
+.vcs-checks-head { padding: 2px 12px 6px; color: var(--gray9); font-size: 12px; font-weight: 600; }
+.vcs-checks-option { display: flex; align-items: center; gap: 8px; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+.vcs-checks-option:hover { background: var(--gray3); }
+.vcs-checks-option:has(input:disabled) { opacity: 0.55; cursor: default; }
+.vcs-checks-config { max-width: 200px; min-width: 0; }
+.vcs-checks-progress { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--gray10); }
+.vcs-checks-progress.hidden { display: none; }
+.vcs-checks-progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vcs-checks-cancel { color: var(--blue6); text-decoration: none; cursor: pointer; }
+.vcs-checks-cancel:hover { text-decoration: underline; }
+.vcs-checks-spinner { width: 10px; height: 10px; flex-shrink: 0; border: 2px solid var(--gray6); border-top-color: var(--blue6);
+  border-radius: 50%; animation: vcs-checks-spin 0.8s linear infinite; }
+@keyframes vcs-checks-spin { to { transform: rotate(360deg); } }
+.vcs-checks-ask { display: flex; flex-direction: column; gap: 6px; }
+.vcs-checks-results { padding: 8px 0; overflow: auto; height: 100%; box-sizing: border-box; }
+.vcs-checks-file { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-weight: 600; }
+.vcs-checks-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 12px 3px 34px; cursor: pointer; }
+.vcs-checks-row:hover, .vcs-checks-row:focus { background: var(--gray3); outline: none; }
+.vcs-checks-sev { font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.vcs-checks-sev.error { color: var(--red); }
+.vcs-checks-sev.warning { color: var(--yellow); }
+.vcs-checks-sev.todo { color: var(--blue6); }
+.vcs-checks-msg { flex: 1; min-width: 0; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }

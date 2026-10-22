@@ -31,3 +31,9 @@
 .diag-facts { border-collapse: collapse; margin: 10px 0; font-size: 12px; }
 .diag-facts td { padding: 2px 12px 2px 0; vertical-align: top; }
 .diag-facts td:last-child { font-family: var(--mono); color: var(--gray11); overflow-wrap: anywhere; }
+
+.diag-detail-actions { display: flex; justify-content: flex-end; }
+.diag-report-preview p { margin: 0 0 8px; line-height: 1.5; }
+.diag-report-title { margin: 2px 0 8px; color: var(--gray12); font-weight: 600; overflow-wrap: anywhere; }
+.diag-report-body { max-height: 420px; margin: 0; padding: 8px; overflow: auto; border-radius: 4px; background: var(--gray2); color: var(--gray11);
+  font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }

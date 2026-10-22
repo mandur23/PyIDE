@@ -12,7 +12,9 @@ const trust = require('../trust');
 const ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
 
 // env: extra variables for this one command (the shelf builds its patches in a private GIT_INDEX_FILE).
-function git(cwd, args, input, env) {
+// opts.timeout: milliseconds after which the command is killed (the result then has `timedOut`).
+// opts.onSpawn(child): the started process, for a caller that must be able to kill it (backgroundFetch).
+function git(cwd, args, input, env, opts = {}) {
   // A repository's own .git/config can make even `git status` run programs (core.fsmonitor, filter.*.clean), so
   // git does not run in a project the user has not trusted (main/trust.js).
   if (!trust.isTrusted(cwd)) return Promise.resolve({ code: -1, out: '', err: 'This project is not trusted', reason: 'untrusted' });
@@ -27,14 +29,18 @@ function git(cwd, args, input, env) {
     } catch (e) {
       return resolve({ code: -1, out: '', err: e.message });
     }
+    opts.onSpawn?.(p);
     const out = [];
     const err = [];
+    let timedOut = false;
+    const timer = opts.timeout ? setTimeout(() => { timedOut = true; try { p.kill(); } catch {} }, opts.timeout) : null;
     p.stdout.on('data', (d) => out.push(d));
     p.stderr.on('data', (d) => err.push(d));
-    p.on('error', (e) => resolve({ code: -1, out: '', err: e.message }));
+    p.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out: '', err: e.message }); });
     p.on('close', (code) => {
+      clearTimeout(timer);
       const buf = Buffer.concat(out);
-      resolve({ code, buf, out: buf.toString('utf8'), err: Buffer.concat(err).toString('utf8') });
+      resolve({ code, buf, out: buf.toString('utf8'), err: Buffer.concat(err).toString('utf8'), ...(timedOut ? { timedOut } : {}) });
     });
     p.stdin.on('error', () => {});
     p.stdin.end(input ?? '');
@@ -492,9 +498,121 @@ async function shelfDiff(root, id, rel) {
   }
 }
 
+// ---------- background fetch ----------
+// Auto-fetch (the renderer's timer, setting vcs.autoFetchMinutes) runs `git fetch --all --prune` quietly. It never
+// starts while a git operation of the IDE runs for the project (or another program holds the index lock), and push
+// and pull wait for one in flight, since two fetches writing FETCH_HEAD and remote refs at once fail on ref locks.
+// It must never ask for anything: no terminal prompt, no askpass program (git's own GUI one, or one a parent shell
+// set), credential helpers in non-interactive mode (Git Credential Manager only answers from its store), and ssh in
+// batch mode unless the user configured an ssh command. A remote that needs credentials it does not have just fails.
+const operations = new Map(); // project key -> IDE git operations (anything that is not a read) running
+const fetches = new Map(); // project key -> the background fetch in flight (a promise)
+const projectKey = (root) => path.resolve(String(root || '')).toLowerCase();
+// Channels that only read: they neither hold off a background fetch nor wait for one.
+const READS = new Set(['status', 'branches', 'show', 'fileAt', 'log', 'reflog', 'identity', 'commitDetails', 'blame', 'outgoing',
+  'conflictSides', 'mergeVersions', 'stashList', 'stashFiles', 'shelves', 'shelfDiff', 'backgroundFetch']);
+// Commands that write remote-tracking refs themselves.
+const REMOTE_WRITERS = new Set(['push', 'pull']);
+const FETCH_TIMEOUT = Number(process.env.PYIDE_GIT_FETCH_TIMEOUT_MS) || 120000;
+const fetchLog = require('../diagnostics').logger('#git');
+// The fetches' git processes, with the window that asked. git fetch runs helpers (git-remote-https, ssh) that a plain
+// kill leaves running, so the whole tree is killed: at the time limit, when that window reloads or closes, and at quit
+// (synchronously there, since Windows does not end a quitting program's children).
+const fetchProcs = new Map(); // child process -> {owner, stopped, timedOut}
+function killFetchTree(p, { sync = false } = {}) {
+  if (!p?.pid || p.exitCode !== null || p.signalCode) return;
+  if (process.platform !== 'win32') { try { p.kill(); } catch {} return; }
+  const args = ['/pid', String(p.pid), '/T', '/F'];
+  if (sync) require('child_process').spawnSync('taskkill', args, { windowsHide: true, timeout: 5000 });
+  else spawn('taskkill', args, { windowsHide: true }).on('error', () => {});
+}
+function stopFetches({ owner = null, sync = false } = {}) {
+  for (const [p, f] of fetchProcs) {
+    if (owner && f.owner !== owner) continue;
+    f.stopped = true;
+    killFetchTree(p, { sync });
+  }
+}
+
+async function asOperation(name, root, fn) {
+  const k = projectKey(root);
+  operations.set(k, (operations.get(k) || 0) + 1);
+  try {
+    if (REMOTE_WRITERS.has(name) && fetches.has(k)) await fetches.get(k);
+    return await fn();
+  } finally {
+    const n = operations.get(k) - 1;
+    if (n > 0) operations.set(k, n); else operations.delete(k);
+  }
+}
+
+// -> {ok, skipped?: 'untrusted' | 'running' | 'busy' | 'notRepo' | 'noRemote', err?, timedOut?, stopped?, ms}
+// owner: the webContents that asked (its reload or close stops the fetch).
+async function backgroundFetch(root, { owner = null } = {}) {
+  if (!trust.isTrusted(root)) return { ok: false, skipped: 'untrusted' };
+  const k = projectKey(root);
+  if (fetches.has(k)) return { ok: false, skipped: 'running' };
+  if (operations.get(k)) return { ok: false, skipped: 'busy' };
+  const run = (async () => {
+    const info = await repoInfo(root);
+    if (!info) return { ok: false, skipped: 'notRepo' };
+    // another git (a terminal, another tool) is changing the repository
+    if (fs.existsSync(path.join(info.gitDir, 'index.lock'))) return { ok: false, skipped: 'busy' };
+    const remotes = (await git(root, ['remote'])).out.split(/\r?\n/).filter(Boolean);
+    if (!remotes.length) return { ok: false, skipped: 'noRemote' };
+    if (operations.get(k)) return { ok: false, skipped: 'busy' };
+    // An empty GIT_ASKPASS / SSH_ASKPASS is "no askpass program" (also over core.askPass), so git goes on to the
+    // disabled terminal prompt and fails.
+    const env = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never' };
+    const ssh = (await git(root, ['config', '--get', 'core.sshCommand'])).out.trim();
+    if (!ssh && !process.env.GIT_SSH_COMMAND && !process.env.GIT_SSH) env.GIT_SSH_COMMAND = 'ssh -o BatchMode=yes';
+    const args = ['-c', 'credential.interactive=never', '-c', 'core.askPass=', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
+      'fetch', '--all', '--prune', '--quiet', '--no-progress', '--no-recurse-submodules'];
+    const started = Date.now();
+    const track = { owner, stopped: false, timedOut: false };
+    let child = null;
+    const timer = setTimeout(() => { track.timedOut = true; killFetchTree(child); }, FETCH_TIMEOUT);
+    let r;
+    try {
+      r = await git(root, args, '', env, { onSpawn: (p) => { child = p; fetchProcs.set(p, track); } });
+    } finally {
+      clearTimeout(timer);
+      if (child) fetchProcs.delete(child);
+    }
+    const ms = Date.now() - started;
+    if (track.stopped) return { ok: false, stopped: true, ms };
+    if (r.code) {
+      const err = (track.timedOut ?`git fetch did not finish in ${Math.round(FETCH_TIMEOUT / 1000)} s` : (r.err || r.out).trim()) || `git fetch exited with code ${r.code}`;
+      fetchLog.warn(`Background fetch failed in ${root}: ${err.split(/\r?\n/).slice(-3).join(' | ')}`);
+      return { ok: false, err, ms, ...(track.timedOut ? { timedOut: true } : {}) };
+    }
+    fetchLog.debug(`Background fetch of ${remotes.join(', ')} in ${root} took ${ms} ms`);
+    return { ok: true, ms, remotes };
+  })();
+  fetches.set(k, run);
+  try { return await run; } finally { fetches.delete(k); }
+}
+exports.backgroundFetch = backgroundFetch;
+exports.stopFetches = stopFetches;
+exports.fetchPids = () => [...fetchProcs.keys()].map((p) => p.pid).filter(Boolean);
+
 exports.register = ({ ipcMain, app }) => {
-  const h = (name, fn) => ipcMain.handle(`git:${name}`, (_e, ...args) => fn(...args));
+  const h = (name, fn) => ipcMain.handle(`git:${name}`, (_e, ...args) => (READS.has(name) ? fn(...args) : asOperation(name, args[0], () => fn(...args))));
   shelfRoot = path.join(app.getPath('userData'), 'shelf');
+  // Not through h(): the fetch belongs to the window that asked (a read, so no operation bookkeeping either).
+  const watched = new WeakSet();
+  ipcMain.handle('git:backgroundFetch', (e, root) => {
+    const wc = e?.sender;
+    if (wc?.on && !watched.has(wc)) {
+      watched.add(wc);
+      const gone = () => stopFetches({ owner: wc });
+      wc.on('did-navigate', gone);
+      wc.on('render-process-gone', gone);
+      wc.once('destroyed', gone);
+    }
+    return backgroundFetch(root, { owner: wc || null });
+  });
+  app.on('will-quit', () => stopFetches({ sync: true }));
 
   h('status', status);
 

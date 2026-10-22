@@ -186,5 +186,19 @@
   "Delete Shelf": "셸프 삭제",
   "Delete": "삭제",
   "Delete failed": "삭제 실패",
-  "No changes to shelve": "셸브할 변경 사항이 없습니다"
+  "No changes to shelve": "셸브할 변경 사항이 없습니다",
+  "{n} incoming commit from {upstream}": "{upstream}에서 들어오는 커밋 {n}개",
+  "{n} incoming commits from {upstream}": "{upstream}에서 들어오는 커밋 {n}개",
+  "{n} outgoing commit to {upstream}": "{upstream}(으)로 나가는 커밋 {n}개",
+  "{n} outgoing commits to {upstream}": "{upstream}(으)로 나가는 커밋 {n}개",
+  "Last fetched at {time}": "마지막 페치: {time}",
+  "Click to update the project": "클릭하여 프로젝트 업데이트",
+  "Fetch": "페치",
+  "Nothing to fetch": "페치할 대상이 없습니다",
+  "Fetch postponed": "페치가 연기되었습니다",
+  "Another Git operation is running.": "다른 Git 작업이 실행 중입니다.",
+  "Fetched successfully": "페치했습니다",
+  "Fetch failed": "페치 실패",
+  "Fetch from remotes every (minutes):": "원격에서 페치하는 간격(분):",
+  "Keeps the incoming and outgoing commit counts next to the branch current. 0 turns automatic fetching off.": "브랜치 옆에 표시되는 들어오는 커밋과 나가는 커밋 수를 최신으로 유지합니다. 0이면 자동 페치를 끕니다."
 }

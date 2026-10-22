@@ -1,0 +1,18 @@
+/* Notifications tool window (balloons and action links are in renderer/core/notifications.css). */
+.notes-list { height: 100%; overflow: auto; padding: 4px 0; font-size: 12px; outline: none; }
+.notes-empty { padding: 24px 12px; color: var(--gray7); text-align: center; }
+.notes-section { padding: 10px 12px 4px; color: var(--gray7); font-weight: 600; text-transform: none; }
+.notes-item { position: relative; padding: 8px 12px 8px 15px; border-bottom: 1px solid var(--gray3); }
+.notes-item::before { content: ''; position: absolute; left: 4px; top: 12px; width: 6px; height: 6px; border-radius: 50%; background: var(--blue6); }
+.notes-item.ok::before { background: var(--green6); }
+.notes-item.warn::before { background: var(--yellow); }
+.notes-item.error::before { background: var(--red); }
+.notes-item.unread { background: color-mix(in srgb, var(--blue6) 8%, transparent); }
+.notes-item.earlier { opacity: .75; }
+.notes-head { display: flex; gap: 8px; align-items: baseline; }
+.notes-title { flex: 1; min-width: 0; font-weight: 600; color: var(--gray12); overflow-wrap: anywhere; }
+.notes-item.unread .notes-title::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--blue8); vertical-align: middle; }
+.notes-time { flex: 0 0 auto; color: var(--gray7); font-size: 11px; }
+.notes-text { margin-top: 4px; color: var(--gray9); white-space: pre-wrap; max-height: 160px; overflow: auto; overflow-wrap: anywhere; }
+.notes-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin-top: 6px; }
+.notes-meta { color: var(--gray7); font-size: 11px; margin-right: auto; }

@@ -125,18 +125,6 @@
 :root[data-theme="light"] .vcs-push-warn { color: #a46704; }
 .vcs-push .field { grid-template-columns: 60px 1fr; }
 
-/* notification balloons */
-.vcs-notes { position: fixed; right: 14px; bottom: 34px; z-index: 65; display: flex; flex-direction: column; gap: 8px; width: 360px; pointer-events: none; }
-.vcs-note { position: relative; pointer-events: auto; background: var(--gray2); border: 1px solid var(--gray4); border-left: 3px solid var(--blue6);
-  border-radius: 6px; padding: 10px 28px 10px 12px; box-shadow: 0 8px 24px var(--vcs-shadow); cursor: pointer; }
-:root[data-theme="light"] .vcs-note { background: #ffffff; }
-.vcs-note.ok { border-left-color: var(--green6); }
-.vcs-note.warn { border-left-color: var(--yellow); }
-.vcs-note.error { border-left-color: var(--red); }
-.vcs-note-title { font-weight: 600; color: var(--gray12); }
-.vcs-note-text { margin-top: 4px; color: var(--gray9); white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; }
-.vcs-note-close { position: absolute; top: 6px; right: 6px; color: var(--gray7); }
-
 /* Log graph, filters and the Activity timeline */
 .vcs-log-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
 .vcs-log-search { flex: 1; min-width: 80px; max-width: 360px; padding: 3px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
@@ -205,3 +193,10 @@
 .vcs-shelve-file { display: flex; align-items: center; gap: 6px; height: 22px; white-space: nowrap; cursor: pointer; }
 .vcs-shelve-file .icon { width: 18px; flex-shrink: 0; }
 .vcs-shelve-file .vcs-name { overflow: hidden; text-overflow: ellipsis; font: 12px var(--mono); }
+
+/* Incoming/outgoing commits next to the branch widget, and room for commit options after the Commit buttons */
+.vcs-sync { display: flex; align-items: center; gap: 6px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--gray10); }
+.vcs-sync-in { color: var(--blue6); }
+.vcs-sync-out { color: var(--green6); }
+.vcs-commit-opts { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; }
+.vcs-commit-opts:empty { display: none; }

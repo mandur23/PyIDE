@@ -146,3 +146,11 @@
 .pkg-head, .pkg-trow { display: grid; grid-template-columns: 1fr 160px; padding: 3px 10px; }
 .pkg-head { position: sticky; top: 0; background: var(--gray2); color: var(--gray9); border-bottom: 1px solid var(--gray3); }
 .pkg-table > .muted { padding: 8px 10px; }
+
+/* Ctrl+Mouse Wheel / Increase Font Size: the size, briefly, at the editor's top right (PyCharm's zoom indicator). */
+.font-zoom-hint { position: absolute; top: 40px; right: 24px; z-index: 30; display: flex; gap: 10px; align-items: center;
+  padding: 5px 10px; background: var(--gray3); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 5px;
+  box-shadow: 0 4px 14px #0004; font-size: 12px; }
+.font-zoom-hint.hidden { display: none; }
+.font-zoom-reset { color: var(--blue6); cursor: pointer; }
+.font-zoom-reset:hover { text-decoration: underline; }

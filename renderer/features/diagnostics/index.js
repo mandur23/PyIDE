@@ -118,6 +118,11 @@
         detail.append(el('div', 'diag-failing', tr('{name} keeps failing ({count} errors). You can disable it.', { name: pluginName(e.plugin), count: total })));
       }
       detail.append(userText(el('div', 'diag-message', e.title ? `${e.title}: ${e.message}` : e.message)), el('pre', 'diag-stack', e.stack));
+      const report = el('button', 'secondary diag-report', tr('Report on GitHub…'));
+      report.onclick = () => reportProblem(e.id);
+      const actions = el('div', 'diag-detail-actions');
+      actions.appendChild(report);
+      detail.appendChild(actions);
     }
 
     openDialog = {
@@ -151,6 +156,43 @@
         { label: tr('Cancel') },
       ],
     });
+  }
+
+  // ---------- Report on GitHub ----------
+  // Shows exactly what the new issue will hold (built and redacted in main: no secrets, the home folder as ~, project
+  // folders as <project>), with Copy. Open in Browser opens GitHub's new-issue page filled in; nothing is sent until
+  // the user submits it there.
+  async function reportProblem(errorId = null) {
+    const plugins = await invoke('plugins:list').catch(() => []);
+    const draft = await invoke('diagnostics:reportDraft', { errorId, plugins, root: ide.root || null });
+    if (draft.error) {
+      ide.ui.dialog({ title: tr('Report on GitHub'), body: el('p', null, tr('Could not prepare the report: {reason}', { reason: draft.error })) });
+      return null;
+    }
+    const body = el('div', 'diag-report-preview');
+    body.append(el('p', 'muted', tr('This text opens in your browser as a new GitHub issue. Nothing is sent until you submit it there. Passwords, tokens, your user folder and project names were removed; check it before you submit.')));
+    if (draft.truncated) body.append(el('p', 'muted diag-report-truncated', tr('Part of the log or stack trace was left out so that the report fits in a link.')));
+    if (draft.title) body.append(el('div', 'muted', tr('Title:')), userText(el('div', 'diag-report-title', draft.title)));
+    body.append(userText(el('pre', 'diag-report-body', draft.body)));
+    const text = draft.title ? `${draft.title}\n\n${draft.body}` : draft.body;
+    const dlg = ide.ui.dialog({
+      title: tr('Report on GitHub'),
+      body,
+      width: 760,
+      buttons: [
+        { label: tr('Open in Browser'), primary: true, run: async () => {
+          try { await invoke('diagnostics:openReport', { title: draft.title, body: draft.body }); } catch (err) {
+            ide.ui.dialog({ title: tr('Report on GitHub'), body: el('p', null, ide.util.errorText(err)) });
+          }
+        } },
+        { label: tr('Copy'), run: async () => { await invoke('clipboard:writeText', text); copy.textContent = tr('Copied'); return false; } },
+        { label: tr('Cancel') },
+      ],
+    });
+    dlg.el.classList.add('diag-report-dialog');
+    const copy = dlg.el.querySelectorAll('.dialog-buttons button')[1];
+    copy.id = 'diagReportCopy';
+    return draft;
   }
 
   // ---------- log ----------
@@ -257,7 +299,8 @@
     { id: 'CollectZippedLogs', title: tr('Collect Logs and Diagnostic Data'), run: collect },
     { id: 'LogDebugConfigure', title: tr('Debug Log Settings…'), run: logSettings },
     { id: 'AboutPyIDE', title: tr('About PyIDE'), run: about },
+    { id: 'ReportProblem', title: tr('Report a Problem…'), run: () => reportProblem() },
   ].forEach(ide.registerAction);
 
-  ide.diagnostics = { openErrors, showLog, collect, about, summary: () => summary };
+  ide.diagnostics = { openErrors, showLog, collect, about, reportProblem, summary: () => summary };
 })();
