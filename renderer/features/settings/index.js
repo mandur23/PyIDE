@@ -5,7 +5,8 @@
   const monaco = ide.monaco;
 
   // Light colors from PyCharm expUI_light.theme.json / expUI_lightScheme.xml (Python colors from the Python plugin's Light scheme).
-  monaco.editor.defineTheme('pycharm-light', {
+  // window.PYCHARM_LIGHT, like core's PYCHARM_DARK, lets semantic-highlight define the theme again with its rules added.
+  monaco.editor.defineTheme('pycharm-light', window.PYCHARM_LIGHT = {
     base: 'vs',
     inherit: true,
     rules: [
@@ -264,8 +265,8 @@
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap },
     { group: 'editor-group', title: () => tr('Editor'), children: [
-      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대', mount: mountEditor },
-      { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap 탭 들여쓰기 눈금자', mount: mountCodeStyle },
+      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄', mount: mountEditor },
+      { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap line separator crlf lf 탭 들여쓰기 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins },
     { group: 'project', title: projectGroup, children: [
@@ -581,11 +582,13 @@
       ctx.set(KEYMAP_KEY, next);
       render();
     }
-    // Actions whose keys clash with `key`: the same key, or one is the first stroke of the other.
+    // Actions whose keys clash with `key`: the same key, or one is the first stroke of the other. Actions of another
+    // context (editor, project view) never fire together with `self`, so they do not clash.
     function conflicts(key, self) {
       const ov = overrides();
       const clash = (k) => k === key || (k !== 'Shift Shift' && key !== 'Shift Shift' && (k.startsWith(`${key} `) || key.startsWith(`${k} `)));
-      return ide.actions.filter((a) => a !== self).map((a) => ({ action: a, keys: keysOf(a, ov).filter(clash) })).filter((c) => c.keys.length);
+      const together = (a) => !a.context || !self.context || a.context === self.context;
+      return ide.actions.filter((a) => a !== self && together(a)).map((a) => ({ action: a, keys: keysOf(a, ov).filter(clash) })).filter((c) => c.keys.length);
     }
 
     let selectedId = null;
@@ -839,12 +842,21 @@
     const look = section(host, tr('Appearance'));
     look.appendChild(checkbox(ctx, 'editor.showWhitespace', tr('Show whitespaces')));
     look.appendChild(checkbox(ctx, 'editor.softWrap', tr('Soft-wrap files')));
+    // Sticky lines belong to the editor-assists plugin, which also holds their defaults.
+    if (ide.editorAssists) {
+      look.appendChild(checkbox(ctx, 'editor.stickyLines', tr('Show sticky lines')));
+      look.appendChild(fieldRow(tr('Maximum number of sticky lines:'), numberInput(ctx, 'editor.stickyLinesMax', { min: 1, max: 20 }), '1 – 20'));
+    }
     const tabs = section(host, tr('Editor Tabs'));
     tabs.appendChild(checkbox(ctx, 'editor.previewTab', tr('Open files in a preview tab on single click')));
     tabs.appendChild(fieldRow(tr('Tab limit:'), numberInput(ctx, 'editor.tabLimit'), tr('0 means no limit')));
   }
 
   function mountCodeStyle(host, ctx) {
+    const general = section(host, tr('General'));
+    // Used by new files and file templates; an existing file keeps its own separator (core editors.js).
+    general.appendChild(fieldRow(tr('Line separator for new files:'), selectInput(ctx, 'editor.lineSeparator',
+      [['system', tr('System-Dependent')], ['lf', tr('Unix and macOS (\\n)')], ['crlf', tr('Windows (\\r\\n)')]], 'system')));
     const style = section(host, tr('Python'));
     style.appendChild(fieldRow(tr('Tab size / Indent:'), numberInput(ctx, 'editor.tabSize')));
     style.appendChild(fieldRow(tr('Hard wrap at (ruler):'), numberInput(ctx, 'editor.ruler'), tr('0 hides the ruler')));

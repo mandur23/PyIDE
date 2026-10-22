@@ -511,6 +511,8 @@
       const s = ctx.ui.section(host, tr('Testing'));
       s.appendChild(ctx.ui.fieldRow(tr('Auto-test delay (ms):'), ctx.ui.numberInput('tests.autoTestDelay', { min: 100, max: 60000, fallback: AUTO_TEST_DELAY })));
       s.appendChild(el('div', 'muted settings-note', tr('With Toggle Auto-test on in a test tab, saving a Python file in the project runs its tests again after this delay.')));
+      // Other plugins add sections to this page (ai-generate: Docstrings), as functions (host, ctx).
+      for (const add of ide.pythonToolsSections || []) add(host, ctx);
     },
   });
 

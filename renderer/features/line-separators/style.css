@@ -1,0 +1,4 @@
+.lsep-status { display: inline-flex; align-items: center; height: 20px; background: none; border: 0; padding: 0 4px;
+  border-radius: 3px; color: inherit; font: inherit; cursor: pointer; }
+.lsep-status[hidden] { display: none; }
+.lsep-status:hover { background: var(--gray3); }

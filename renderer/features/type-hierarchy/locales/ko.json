@@ -1,0 +1,9 @@
+{
+  "Type Hierarchy": "타입 계층 구조",
+  "PyCharm's Type Hierarchy (Ctrl+H): the supertypes and subtypes of the Python class at the caret, in the Hierarchy tool window, using the Pyright language server.": "PyCharm의 타입 계층 구조(Ctrl+H): Pyright 언어 서버를 사용해 캐럿 위치에 있는 Python 클래스의 상위 타입과 하위 타입을 계층 구조 도구 창에 표시합니다.",
+  "Supertypes Hierarchy": "상위 타입 계층 구조",
+  "Subtypes Hierarchy": "하위 타입 계층 구조",
+  "Supertypes of {name}": "{name}의 상위 타입",
+  "Subtypes of {name}": "{name}의 하위 타입",
+  "No type hierarchy for the element at the caret": "캐럿 위치의 요소에 대한 타입 계층 구조가 없습니다"
+}

@@ -122,7 +122,7 @@ const COMPLETION = {
     NCLOB, BLOB, BFILE, RAW(n), LONG, ROWID, UROWID, XMLTYPE, JSON, BOOLEAN, VECTOR, PLS_INTEGER, BINARY_INTEGER, SYS_REFCURSOR`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, exportError }) => {
   // NUMBER comes as text so big or precise values survive; it becomes a JS number only when that is exact.
   const numberOf = (s) => {
     if (s === null || s === undefined) return null;
@@ -142,10 +142,12 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema })
     const connectString = cfg.connectBy === 'sid'
       ? `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=${host})(PORT=${port}))(CONNECT_DATA=(SID=${target})))`
       : `${host}:${port}/${target}`;
-    let conn;
-    try {
-      conn = await oracledb.getConnection({ user: cfg.user, password: cfg.password, connectString, connectTimeout: 10 });
-    } catch (err) { throw readable(err); }
+    const connect = async () => {
+      try {
+        return await oracledb.getConnection({ user: cfg.user, password: cfg.password, connectString, connectTimeout: 10 });
+      } catch (err) { throw readable(err); }
+    };
+    const conn = await connect();
 
     const fetchTypeHandler = (meta) => {
       if (meta.dbType === oracledb.DB_TYPE_NUMBER) return { type: oracledb.STRING, converter: numberOf };
@@ -211,6 +213,48 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema })
         return groupSchema(r.rows.map((x) => ({ schema: x.OWNER, table: x.TABLE_NAME, view: !!x.IS_VIEW, column: x.COLUMN_NAME, type: typeName(x), nullable: x.NULLABLE === 'Y', pk: !!x.IS_PK })));
       },
       async version() { return `Oracle Database ${conn.oracleServerVersionString}`; },
+      // Export Data: a result set (getRows(n)) on a connection of its own, so the console stays usable. NUMBER keeps
+      // Oracle's digits ({$number}), BLOB and RAW their bytes. readOnly makes it a read-only transaction (SET
+      // TRANSACTION READ ONLY), rolled back at the end.
+      async cursor(sql, { readOnly = false } = {}) {
+        const text = splitOracleScript(sql)[0]?.text || sql.trim();
+        const own = await connect();
+        const exactTypes = (meta) => {
+          if (meta.dbType === oracledb.DB_TYPE_NUMBER) return { type: oracledb.STRING, converter: (s) => (s === null || s === undefined ? null : { $number: s }) };
+          return fetchTypeHandler(meta);
+        };
+        let rs = null;
+        let closed = false;
+        try {
+          if (readOnly) await own.execute('SET TRANSACTION READ ONLY');
+          const r = await own.execute(text, [], { outFormat: oracledb.OUT_FORMAT_ARRAY, resultSet: true, autoCommit: !readOnly, fetchTypeHandler: exactTypes });
+          rs = r.resultSet;
+          if (!rs || !r.metaData) throw exportError('NO_ROWS');
+          let done = false;
+          return {
+            columns: r.metaData.map((m) => ({ name: m.name, type: m.dbTypeName || '' })),
+            async next(n) {
+              if (done) return null;
+              const rows = await rs.getRows(n);
+              if (rows.length < n) done = true;
+              return rows.length ? rows : null;
+            },
+            async close() {
+              if (closed) return;
+              closed = true;
+              // Closed early (Cancel), a fetch may still be running: break it off first.
+              if (!done) await own.break().catch(() => {});
+              try { await rs.close(); } catch {}
+              if (readOnly) await own.rollback().catch(() => {});
+              await own.close().catch(() => {});
+            },
+          };
+        } catch (err) {
+          try { await rs?.close(); } catch {}
+          own.close().catch(() => {});
+          throw err.exportCode ? err : readable(err);
+        }
+      },
       close: () => conn.close(),
     };
   }
@@ -220,7 +264,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema })
     packages: { oracledb: 'oracledb@7.0.1' },
     kinds: {
       oracle: {
-        label: 'Oracle', order: 45, package: 'oracledb', defaultPort: 1521, quote: '"', implicitSchemas: [], open: openOracle,
+        label: 'Oracle', order: 45, package: 'oracledb', defaultPort: 1521, quote: '"', sqlDialect: 'oracle', implicitSchemas: [], open: openOracle,
         fields: [
           'host', 'port', 'user', 'password',
           { key: 'connectBy', label: 'Connect by', type: 'select', options: [['service', 'Service name'], ['sid', 'SID']], default: 'service' },

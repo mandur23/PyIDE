@@ -163,5 +163,9 @@
   "Reset Font Size": "글꼴 크기 재설정",
   "Increase Font Size in All Editors": "모든 에디터에서 글꼴 크기 늘리기",
   "Decrease Font Size in All Editors": "모든 에디터에서 글꼴 크기 줄이기",
-  "Reset Font Size in All Editors": "모든 에디터에서 글꼴 크기 초기화"
+  "Reset Font Size in All Editors": "모든 에디터에서 글꼴 크기 초기화",
+  "Line separator for new files:": "새 파일의 줄 구분자:",
+  "System-Dependent": "시스템 종속",
+  "Unix and macOS (\\n)": "Unix 및 macOS(\\n)",
+  "Windows (\\r\\n)": "Windows(\\r\\n)"
 }

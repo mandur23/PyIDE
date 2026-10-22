@@ -31,6 +31,8 @@ function sqliteWorker() {
   const { parentPort } = require('worker_threads');
   const { DatabaseSync } = require('node:sqlite');
   let db = null;
+  const cursors = new Map();
+  let cursorSeq = 0;
   const ops = {
     open(file) { db = new DatabaseSync(file); },
     query(sql, maxRows) {
@@ -61,14 +63,60 @@ function sqliteWorker() {
       }];
     },
     version() { return db.prepare('SELECT sqlite_version() AS v').get().v; },
-    close() { db?.close(); db = null; },
+    // Export Data pages a statement through an open iterator, a batch per call, so a large table never sits whole in
+    // either thread. Other statements may run between batches.
+    cursorOpen(sql) {
+      const stmt = db.prepare(sql);
+      const cols = stmt.columns();
+      if (!cols.length) return { id: null, columns: [] };
+      stmt.setReadBigInts(true);
+      stmt.setReturnArrays(true);
+      const id = ++cursorSeq;
+      cursors.set(id, stmt.iterate());
+      return { id, columns: cols.map((c) => ({ name: c.name, type: c.type || '' })) };
+    },
+    cursorNext(id, n) {
+      const it = cursors.get(id);
+      if (!it) return { rows: [], done: true };
+      const rows = [];
+      while (rows.length < n) {
+        const r = it.next();
+        if (r.done) { cursors.delete(id); return { rows, done: true }; }
+        rows.push(r.value);
+      }
+      return { rows, done: false };
+    },
+    cursorClose(id) {
+      const it = cursors.get(id);
+      cursors.delete(id);
+      try { it?.return?.(); } catch {}
+    },
+    close() { cursors.clear(); db?.close(); db = null; },
   };
   parentPort.on('message', ({ id, op, args }) => {
     try { parentPort.postMessage({ id, result: ops[op](...args) }); } catch (err) { parentPort.postMessage({ id, error: String(err?.message || err) }); }
   });
 }
 
-module.exports = ({ jsonSafe, commandOf, DML, timed }) => {
+// SQLite's own text for a REAL, which JS would shorten: 2.0 stays 2.0 (not 2), 1e20 is 1.0e+20, infinities are Inf.
+function realText(v) {
+  if (!Number.isFinite(v)) return Number.isNaN(v) ? 'NaN' : v > 0 ? 'Inf' : '-Inf';
+  if (Number.isInteger(v) && Math.abs(v) < 1e15) return (Object.is(v, -0) ? '-0' : String(v)) + '.0';
+  if (Number.isInteger(v)) return v.toExponential().replace(/^(-?\d+)e/, '$1.0e');
+  return String(v);
+}
+
+// Values keep the database's text: rows are read with BigInts, so a JS number is always a REAL. A REAL whose JS text
+// would lose its fraction and an INTEGER beyond 2^53 become {$number: text} (shown, copied and exported as that text);
+// blobs stay whole for export (exact) and become hex or a size for the grid (jsonSafe).
+function fidelity(v) {
+  if (typeof v === 'number') return Number.isInteger(v) || !Number.isFinite(v) ? { $number: realText(v) } : v;
+  if (typeof v === 'bigint') return Number.isSafeInteger(Number(v)) ? Number(v) : { $number: v.toString() };
+  return v;
+}
+
+module.exports = ({ jsonSafe, commandOf, DML, timed, exportError }) => {
+  const gridValue = (v) => { const f = fidelity(v); return f !== null && typeof f === 'object' && '$number' in f ? f : jsonSafe(f); };
   async function openSqlite(cfg, { onLost = () => {} } = {}) {
     if (!cfg.file) throw new Error('No database file is set');
     const { Worker } = require('worker_threads');
@@ -110,8 +158,24 @@ module.exports = ({ jsonSafe, commandOf, DML, timed }) => {
         const command = commandOf(sql);
         const r = await call('query', sql, maxRows);
         if (!r.columns.length) return { columns: [], rows: [], rowCount: DML.has(command) ? r.changes : null, truncated: false, command };
-        return { columns: r.columns, rows: r.rows.map((row) => row.map(jsonSafe)), rowCount: r.rows.length, truncated: r.truncated, command };
+        return { columns: r.columns, rows: r.rows.map((row) => row.map(gridValue)), rowCount: r.rows.length, truncated: r.truncated, command };
       }),
+      // {columns, next(n) -> rows | null, close()}: rows with exact values (see fidelity) for Export Data.
+      async cursor(sql) {
+        const { id, columns } = await call('cursorOpen', sql);
+        if (id === null) throw exportError('NO_ROWS');
+        let done = false;
+        return {
+          columns,
+          async next(n) {
+            if (done) return null;
+            const r = await call('cursorNext', id, n);
+            done = r.done;
+            return r.rows.length || !done ? r.rows.map((row) => row.map(fidelity)) : null;
+          },
+          close: () => (done ? Promise.resolve() : call('cursorClose', id).catch(() => {})),
+        };
+      },
       schema: () => call('schema'),
       async version() { return `SQLite ${await call('version')}`; },
       // A statement still running is abandoned: its caller gets an error now, and the thread ends when SQLite returns.

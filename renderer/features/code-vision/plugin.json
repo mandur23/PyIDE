@@ -1,0 +1,8 @@
+{
+  "id": "code-vision",
+  "name": "Code Vision",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Shows the number of usages and the Git authors above Python classes and functions, as PyCharm's code vision does.",
+  "depends": ["lsp"]
+}

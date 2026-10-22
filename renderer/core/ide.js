@@ -627,7 +627,10 @@ addEventListener('mouseover', (e) => {
   if (n) keymapTooltip(n);
 }, true);
 
-// {id, title, keys?: 'Ctrl+Shift+F' | [...], run, when?: () => bool}. Later registrations win on key clashes.
+// {id, title, keys?: 'Ctrl+Shift+F' | [...], run, when?: () => bool, context?: 'editor' | 'projectView'}. Later
+// registrations win on key clashes. context names where `when` lets the action fire (PyCharm's Editor Actions and
+// Project View): actions of two different contexts never fire together, so the keymap page does not report them as
+// conflicts (Ctrl+D is Duplicate Line in the editor and Compare in the project tree).
 ide.registerAction = (action) => {
   ide.actions = ide.actions.filter((a) => a.id !== action.id);
   const defaultKeys = normalizeKeys(action.keys);
@@ -1018,15 +1021,21 @@ const treeDecorators = [];
 const treeActions = [];
 let rows = [];
 let selected = null;
+// More rows added to the selection with Ctrl+click (two files for Compare Files); any plain selection clears them.
+let alsoSelected = [];
+const sameEntry = (a, b) => samePath(a.path, b.path) && (a.treeRoot || null) === (b.treeRoot || null);
+const inSelection = (entry) => !!selected && (sameEntry(entry, selected) || alsoSelected.some((s) => sameEntry(entry, s)));
 // The entry cut with Ctrl+X (or Cut), drawn dimmed until it is pasted, Escape in the tree, another cut, or the project
 // closes. setCut redraws, so the mark follows the entry through scrolling and refreshes.
 let cutEntry = null;
 const setCut = (entry) => { cutEntry = entry; drawTree(); };
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
-// {title, when?(entry), run(entry)}; entry = {name, path, dir}
+// {title, when?(entry, selection), run(entry, selection)}; entry = {name, path, dir}; selection = the selected entries.
 ide.registerTreeAction = (action) => { treeActions.push(action); };
 ide.selectedTreeEntry = () => selected;
+// Every selected entry, the focused one first (Ctrl+click adds and removes rows).
+ide.selectedTreeEntries = () => (selected ? [selected, ...alsoSelected] : []);
 // Top-level nodes after the project (PyCharm's Scratches and Consoles): {id, order, entry: {name, path, dir: true, label?,
 // iconType?}, list?(dir) -> entries | null (null: list the folder), menu?(entry) -> context menu items}. Their rows'
 // entries carry treeRoot (the id); a `fixed` entry cannot be renamed, deleted or dragged, and none of them is a drop target.
@@ -1086,7 +1095,7 @@ async function subtreeRows(entry, depth) {
 
 function rowNode({ entry, depth }, index) {
   const open = entry.dir && expanded.has(keyOf(entry.path));
-  const node = el('div', 'node' + (selected && samePath(entry.path, selected.path) && (entry.treeRoot || null) === (selected.treeRoot || null) ? ' selected' : ''));
+  const node = el('div', 'node' + (inSelection(entry) ? ' selected' : ''));
   node._entry = entry;
   node.style.top = `${index * ROW_HEIGHT}px`;
   node.style.paddingLeft = `${depth * 16 + 4}px`;
@@ -1131,6 +1140,7 @@ function selectRow(i) {
   if (!rows.length) return;
   i = Math.max(0, Math.min(rows.length - 1, i));
   selected = rows[i].entry;
+  alsoSelected = [];
   scrollToRow(i);
   drawTree();
 }
@@ -1222,6 +1232,7 @@ ide.revealInTree = async (path) => {
   if (!base) return;
   for (let d = dirname(path); d && isUnder(d, base.path); d = dirname(d)) expanded.add(keyOf(d));
   selected = { name: basename(path), path, dir: false, ...(base.id ? { treeRoot: base.id } : {}) };
+  alsoSelected = [];
   await renderTree();
   const i = rowIndexOf(path, base.id);
   if (i >= 0) selectRow(i);
@@ -1276,7 +1287,8 @@ async function createEntry(isDir) {
     const text = isDir ? '' : await newFileText(target);
     if (text === null) return;
     await ide.api.create(target, isDir);
-    if (text) await ide.api.write(target, text);
+    // Written with Settings › Editor › Code Style › Line separator for new files.
+    if (text) await ide.api.write(target, ide.lineSeparators.forNewFile(text));
     expanded.add(keyOf(dirname(target)));
     await renderTree();
     ide.emit('filesChanged', { created: [target] });
@@ -1331,7 +1343,10 @@ async function deleteEntry(entry) {
   try { await ide.api.trash(entry.path); } catch (e) {
     return void ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
   }
-  ide.tabs.filter((t) => t.path && isUnder(t.path, entry.path)).forEach((t) => ide.closeTab(t.path, true));
+  // Every tab of a deleted file in every group, also a compare tab holding its document under another name (its own
+  // path is only a title), so nothing saves the document back to the deleted path.
+  const gone = (p) => !!p && isUnder(p, entry.path);
+  ide.groups().flatMap((g) => g.tabs).filter((t) => gone(t.path) || gone(t.doc?.path)).forEach((t) => ide.closeTabObject(t, true));
   renderTree();
   ide.emit('filesChanged', { deleted: [entry.path] });
 }
@@ -1340,7 +1355,8 @@ function showTreeMenu(entry, x, y) {
   // A row under an extra top-level node gets that node's own items instead of the project's.
   const treeRoot = treeRootOf(entry);
   const own = treeRoot && (treeRoot.menu?.(entry) || []);
-  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry)).map((a) => ({ label: a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry) }));
+  const sel = ide.selectedTreeEntries();
+  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry, sel)).map((a) => ({ label: a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry, sel) }));
   const fixed = samePath(entry.path, ide.root) || !!entry.fixed;
   ide.ui.contextMenu(x, y, [
     ...(treeRoot ? [] : [
@@ -1427,7 +1443,15 @@ function wireTree(tree) {
   tree.addEventListener('click', (e) => {
     const entry = entryAt(e);
     if (!entry) return;
+    // Ctrl+click adds the row to the selection or takes it out, and opens nothing.
+    if (e.ctrlKey && selected) {
+      if (sameEntry(entry, selected)) [selected, ...alsoSelected] = alsoSelected.length ? alsoSelected : [selected];
+      else if (alsoSelected.some((s) => sameEntry(s, entry))) alsoSelected = alsoSelected.filter((s) => !sameEntry(s, entry));
+      else alsoSelected.push(entry);
+      return drawTree();
+    }
     selected = entry;
+    alsoSelected = [];
     drawTree();
     // Shift+click opens a file beside the current pane; a single click opens it as a preview tab.
     if (entry.dir) toggleDir(entry);
@@ -1442,7 +1466,8 @@ function wireTree(tree) {
     const entry = entryAt(e);
     if (!entry) return;
     e.preventDefault();
-    selected = entry;
+    // A right-click inside a multiple selection keeps it (Compare Files acts on both).
+    if (!inSelection(entry)) { selected = entry; alsoSelected = []; }
     drawTree();
     showTreeMenu(entry, e.clientX, e.clientY);
   });
@@ -1627,6 +1652,7 @@ ide.openProject = async (dir) => {
   for (const rel of ide.settings.get(EXPANDED_KEY, {})[keyOf(dir)] || []) expanded.add(keyOf(joinPath(dir, rel)));
   for (const r of treeRoots) restoreRootExpanded(r);
   selected = null;
+  alsoSelected = [];
   rows = [];
   drawTree();
   $('tree').scrollTop = 0;
@@ -1677,6 +1703,7 @@ ide.closeProject = async () => {
   trustBar.classList.add('hidden');
   expanded.clear();
   selected = null;
+  alsoSelected = [];
   rows = [];
   drawTree();
   document.title = 'PyIDE';
@@ -1758,7 +1785,7 @@ const editorAction = (id) => Object.assign(() => ide.editor?.trigger('keymap', i
   { id: 'MoveLineDown', title: tr('Move Line Down'), keys: 'Alt+Shift+ArrowDown', when: inEditor, run: editorAction('editor.action.moveLinesDownAction') },
   { id: 'CollapseRegion', title: tr('Collapse'), keys: 'Ctrl+-', when: inEditor, run: editorAction('editor.fold') },
   { id: 'ExpandRegion', title: tr('Expand'), keys: 'Ctrl+=', when: inEditor, run: editorAction('editor.unfold') },
-].forEach(ide.registerAction);
+].forEach((a) => ide.registerAction(a.when === inEditor ? { context: 'editor', ...a } : a));
 
 $('welcomeOpen').onclick = pickFolder;
 

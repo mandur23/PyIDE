@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch, openFile } from './lib.mjs';
+import { launch, lensesShown, openFile } from './lib.mjs';
 
 // Isolate git from the user's global/system config, as verify/vcs.mjs does.
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-split-git-'));
@@ -66,6 +66,9 @@ try {
   await js(`ide.runAction('SplitVertically')`);
   await until(`ide.groups().length === 2 && ${ed(RIGHT)}.getModel() === ${ed(LEFT)}.getModel()`, 'split right');
   check(true, 'Split Right shows main.py in a second pane');
+  // Code vision's lens above compute() pushes its lines down a moment after each pane shows the file: positions are
+  // taken once it is there.
+  await until(`${lensesShown(ed(LEFT))} && ${lensesShown(ed(RIGHT))}`, 'code lenses in both panes');
   // Focus the left pane, then click into the right one, as a user would.
   await mouseAt(await textPoint(LEFT, 2, 1));
   await until(`ide.activeGroup()?.editor === ${ed(LEFT)}`, 'left pane focused');
@@ -179,8 +182,11 @@ try {
   // ---- a pane created later gets the same plugin behavior ----
   await js(`ide.runAction('SplitHorizontally')`);
   await until(`ide.groups().length === 3`, 'third pane');
+  await until(lensesShown(ed(2)), 'code lenses in the third pane');
   check(await js(`ide.editors()[2].getOption(ide.monaco.editor.EditorOption.fontSize) === 17`), 'a new pane gets the font size setting');
-  await until(`${count(2, '.dbg-bp:not(.hover)')} === 1 && ${count(2, '.vcs-modified')} === 1`, 'decorations in third pane');
+  // The new pane is short (the Debug window is open below it) and the lens above compute() takes room too, so the
+  // marked lines 5-7 are scrolled into view first: Monaco draws decorations only on the lines it renders.
+  await until(`(${ed(2)}.revealLinesInCenterIfOutsideViewport(5, 7), ${count(2, '.dbg-bp:not(.hover)')} === 1 && ${count(2, '.vcs-modified')} === 1)`, 'decorations in third pane');
   check(true, 'a new pane shows the breakpoint and the change marker');
   await mouseAt(await glyphPoint(2, 8));
   check((await bpLines()) === '7,8', 'the new pane\'s glyph margin toggles breakpoints');

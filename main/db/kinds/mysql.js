@@ -27,11 +27,21 @@ const COMPLETION = {
   dataTypes: list('TINYINT, SMALLINT, MEDIUMINT, INT, BIGINT, DECIMAL, FLOAT, DOUBLE, BIT, BOOLEAN, CHAR, VARCHAR, BINARY, VARBINARY, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT, BLOB, MEDIUMBLOB, LONGBLOB, ENUM, SET, DATE, TIME, DATETIME, TIMESTAMP, YEAR, JSON, GEOMETRY, POINT'),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, pushCursor, NETWORK_FIELDS }) => {
+  // Export Data's values: numbers as the server's text ({$number}), binary (BLOB, BINARY, BIT) as a Buffer, the rest as
+  // the driver gives it (dates as text: dateStrings).
+  const NUMERIC = new Set(['DECIMAL', 'NEWDECIMAL', 'TINY', 'SHORT', 'LONG', 'INT24', 'LONGLONG', 'FLOAT', 'DOUBLE', 'YEAR']);
+  const exactCast = (field, next) => {
+    if (!NUMERIC.has(field.type)) return next();
+    const s = field.string();
+    return s === null ? null : { $number: s };
+  };
+
   async function openMysql(cfg, { onLost = () => {} } = {}) {
     const mysql = loadPackage('mysql2', 'mysql2/promise');
-    const conn = await mysql.createConnection({ host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database || undefined,
-      connectTimeout: 10000, supportBigNumbers: true, bigNumberStrings: true, dateStrings: true });
+    const options = { host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database || undefined,
+      connectTimeout: 10000, supportBigNumbers: true, bigNumberStrings: true, dateStrings: true };
+    const conn = await mysql.createConnection(options);
     conn.on('error', onLost);
     conn.on('end', () => onLost(new Error('Connection closed')));
     return {
@@ -81,6 +91,38 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
         return groupSchema(rows.map((r) => ({ schema: r.s, table: r.t, view: r.tt === 'VIEW', column: r.col, type: r.ty, nullable: r.n === 'YES', pk: r.k === 'PRI' })));
       },
       async version() { const [rows] = await conn.query('SELECT VERSION() AS v'); return rows[0].v; },
+      // Export Data: the statement's rows streamed on a connection of its own (the console stays usable), with the
+      // socket paused while rows wait for the file. readOnly runs it in a read-only transaction, rolled back after.
+      // The first result set with columns is exported (a CALL may answer with several).
+      async cursor(sql, { readOnly = false } = {}) {
+        const own = await mysql.createConnection(options);
+        own.on('error', () => {});
+        const core = own.connection;
+        try {
+          if (readOnly) await own.query('START TRANSACTION READ ONLY');
+        } catch (err) { own.destroy(); throw err; }
+        let sets = 0;
+        const { cursor, feed, ready } = pushCursor({
+          pause: () => core.pause(),
+          resume: () => core.resume(),
+          cancel: () => own.destroy(),
+          async finish(early) {
+            if (early) return;
+            if (readOnly) await own.query('ROLLBACK').catch(() => {});
+            await own.end().catch(() => {});
+          },
+        });
+        const q = core.query({ sql, rowsAsArray: true, typeCast: exactCast });
+        q.on('fields', (fields) => {
+          if (++sets === 1) feed.columns(fields.map((f) => ({ name: f.name, type: String(f.columnType ?? f.type ?? '') })));
+        });
+        q.on('result', (row) => { if (sets === 1 && Array.isArray(row)) feed.row(row); });
+        q.on('error', (err) => feed.fail(err));
+        q.on('end', () => feed.end());
+        // A connection that drops mid-stream ends the query with no event of its own.
+        core.once('end', () => feed.fail(new Error('Connection closed')));
+        try { return await ready; } catch (err) { own.destroy(); throw err; }
+      },
       close: () => conn.end(),
     };
   }
@@ -88,8 +130,8 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
   return {
     packages: { mysql2: 'mysql2@3' },
     kinds: {
-      mysql: { label: 'MySQL', order: 30, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
-      mariadb: { label: 'MariaDB', order: 31, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
+      mysql: { label: 'MySQL', order: 30, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
+      mariadb: { label: 'MariaDB', order: 31, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
     },
   };
 };

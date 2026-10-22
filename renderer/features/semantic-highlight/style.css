@@ -1,0 +1,6 @@
+.sh-row { align-items: center; }
+.sh-head { margin-top: 6px; }
+.sh-swatches { display: inline-flex; gap: 12px; align-items: center; }
+.sh-col { width: 48px; text-align: center; font-size: 11px; color: var(--gray8); }
+.sh-color { width: 48px; height: 22px; padding: 0 2px; border: 1px solid var(--gray4); border-radius: 4px; background: var(--gray2); cursor: pointer; }
+.sh-reset { margin-top: 8px; }

@@ -1,0 +1,8 @@
+{
+  "id": "regex-check",
+  "name": "Regular Expression Checker",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Check RegExp, a context action on the pattern of re.compile, re.search and the other re functions, tests it on sample text with Python's own re; regex syntax is colored inside those strings.",
+  "main": ["regex-check.js"]
+}

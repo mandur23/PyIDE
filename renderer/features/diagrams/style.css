@@ -1,0 +1,29 @@
+/* Class diagrams (index.js). The --dg-* colours are the diagram's theme; exports copy their current values. */
+:root {
+  --dg-bg: #1e1f22; --dg-box: #2b2d30; --dg-head: #393b40; --dg-border: #6f737a; --dg-text: #dfe1e5; --dg-muted: #9da0a8;
+  --dg-field: #c77d55; --dg-enum: #8a9b3a; --dg-method: #c75450; --dg-property: #9876aa; --dg-ext: #b4b8bf;
+  --dg-assoc: #548af7; --dg-sel: #3574f0;
+}
+:root[data-theme="light"] {
+  --dg-bg: #ffffff; --dg-box: #ffffff; --dg-head: #ebecf0; --dg-border: #a8adbd; --dg-text: #1e1f22; --dg-muted: #6c707e;
+  --dg-field: #c26a00; --dg-enum: #5f7d00; --dg-method: #d1474a; --dg-property: #8250df; --dg-ext: #494b57;
+  --dg-assoc: #2d63d4; --dg-sel: #3574f0;
+}
+.dg-root { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--dg-bg); }
+.dg-toolbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 3px 6px; border-bottom: 1px solid var(--gray3);
+  background: var(--gray2); flex-shrink: 0; min-height: 30px; }
+.dg-btn { background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--gray11); padding: 2px 8px; height: 24px;
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.dg-btn:hover { background: var(--gray4); }
+.dg-btn.dg-toggle[aria-pressed="true"] { background: var(--gray4); border-color: var(--gray6); color: var(--gray12); }
+.dg-btn:focus-visible { outline: 2px solid var(--blue6); outline-offset: -2px; }
+.dg-sep-v { width: 1px; height: 18px; background: var(--gray5); margin: 0 6px; }
+.dg-status { margin-left: auto; padding: 0 6px; color: var(--gray8); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; outline: none; cursor: default; user-select: none; }
+.dg-canvas.dg-space, .dg-canvas.dg-panning { cursor: grabbing; }
+/* No hit testing of thousands of SVG elements while the view moves. */
+.dg-canvas.dg-panning .dg-layer { pointer-events: none; }
+.dg-errmark { color: var(--yellow); padding: 0 4px; cursor: default; }
+.dg-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.dg-svg { display: block; overflow: visible; }
+.dg-svg .dg-node { cursor: pointer; }

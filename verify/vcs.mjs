@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch, openFile } from './lib.mjs';
+import { launch, lensesShown, openFile } from './lib.mjs';
 
 // Isolate git from the user's global/system config (identity, autocrlf, default branch, hooks).
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcs-git-'));
@@ -151,6 +151,9 @@ try {
 
   // --- annotate (git blame) from the editor context menu ---
   await openFile(t, 'util/helpers.py');
+  // Code vision's lens above double() pushes the lines down a moment after the file opens (later on a busy machine):
+  // the annotation clicked below is the one on Bob's line only once it is there.
+  await until(lensesShown(), 'code lenses shown');
   await js(`ide.editor.setPosition({ lineNumber: 1, column: 1 })`);
   await frame();
   const textBox = await js(`(() => { const r = document.querySelector('#editor .view-line').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8 }; })()`);
@@ -167,7 +170,9 @@ try {
   await mouse(`[...document.querySelectorAll('#editor .vcs-blame')].find(n => getComputedStyle(n, '::after').content.includes('Bob'))`, { label: 'Bob blame' });
   await until(`ide.toolWindows.get('Git').isVisible() && document.querySelector('.vcs-log-row.selected')?.textContent.includes('Bob tweaks triple')`, 'blame opens commit');
   check(true, 'clicking an annotation shows its commit in the Git log');
-  for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: textBox.x + 100, y: textBox.y, button: 'right', clickCount: 1 });
+  // Line 1 again: code vision's lens above the first declaration may have moved the lines since.
+  const textBox2 = await js(`(() => { const r = document.querySelector('#editor .view-line').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: textBox2.x + 100, y: textBox2.y, button: 'right', clickCount: 1 });
   await until(`!!${menuItem('Close Annotations')}`, 'close annotations item');
   await mouse(menuItem('Close Annotations'), { label: 'Close Annotations' });
   await until(`document.querySelectorAll('#editor .vcs-blame').length === 0`, 'annotations closed');

@@ -1,0 +1,9 @@
+{
+  "Sticky Lines and f-string Conversion": "고정 줄 및 f-문자열 변환",
+  "Sticky lines at the top of the editor show the classes and functions around the visible code, and a plain Python string becomes an f-string when you type a {name} into it, as in PyCharm.": "PyCharm처럼 에디터 위쪽의 고정 줄에 보이는 코드를 둘러싼 클래스와 함수를 표시하고, 일반 Python 문자열에 {name}을 입력하면 f-문자열로 바꿉니다.",
+  "Smart Keys": "스마트 키",
+  "Convert to f-string automatically": "자동으로 f-문자열로 변환",
+  "Typing a closing brace after a name in a plain string literal, as in \"Hello {name}\", adds the f prefix. Undo removes the prefix only.": "일반 문자열 리터럴에서 \"Hello {name}\"처럼 이름 뒤에 닫는 중괄호를 입력하면 f 접두사를 붙입니다. 실행 취소하면 접두사만 제거됩니다.",
+  "Show sticky lines": "고정 줄 표시",
+  "Maximum number of sticky lines:": "최대 고정 줄 수:"
+}

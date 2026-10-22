@@ -5,6 +5,10 @@
 //   idle 20 s: whole process tree ~0.2 s CPU (budget 2 s), renderer script ~0 ms (budget 250 ms)
 //   typing 2 lines: Pyright busy ~10 s CPU and quiet ~2 s after the last key (before the fixes: ~50 s, and 19 s of
 //   inlay hint requests after typing); completion answers in ~50 ms while typing (before: ~10 s behind queued hints)
+//   signatureHelp while typing 2 lines: inlay hints 16 (once per printed signature; budget 30; before the fixes: one
+//   per visible call after every pause); Monaco's Parameter Info 9 on a quiet machine, 25 with two other suites running
+//   and ~50 on a loaded one: it asks again on every key typed inside a call that comes more than 120 ms after the
+//   previous one, so it follows the typing cadence, and is held to at most one per such key
 //   Markdown open/close: no growth (before: +22 DOM nodes, +23 listeners and a whole editor per open)
 // Numbers go to verify/out/perf-runtime/results.json.
 import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
@@ -13,7 +17,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 
-const BUDGET = { idleCpuMs: 2000, idleScriptMs: 250, pyrightMs: 30000, quietMs: 10000, completionMs: 1500, keyPaintMs: 50, signatureHelps: 60 };
+const BUDGET = { idleCpuMs: 2000, idleScriptMs: 250, pyrightMs: 30000, quietMs: 10000, completionMs: 1500, keyPaintMs: 50, inlaySignatureHelps: 30 };
 const results = {};
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
 const round = (x) => Math.round(x * 10) / 10;
@@ -87,13 +91,18 @@ try {
 
   // ---- typing ----
   await js(`(() => {
-    window.__perf = { lat: [], sig: 0 };
+    window.__perf = { lat: [], sig: 0, paramInfo: 0 };
     addEventListener('keydown', (e) => {
       const ts = e.timeStamp;
       requestAnimationFrame(() => { const ch = new MessageChannel(); ch.port1.onmessage = () => __perf.lat.push(performance.now() - ts); ch.port2.postMessage(0); });
     }, true);
     const invoke = ide.api.invoke;
-    ide.api.invoke = function (ch, method, ...rest) { if (ch === 'lsp:request' && method === 'textDocument/signatureHelp') __perf.sig++; return invoke.call(this, ch, method, ...rest); };
+    ide.api.invoke = function (ch, method, ...rest) { if (ch === 'lsp:request' && method === 'textDocument/signatureHelp') {
+      // The inlay hints plugin asks as an invoked request (triggerKind 1); Monaco's Parameter Info, opened by typing,
+      // asks on a trigger character (2) or a content change (3).
+      if (rest[0]?.context?.triggerKind === 1) __perf.sig++; else __perf.paramInfo++;
+    }
+    return invoke.call(this, ch, method, ...rest); };
     return 1;
   })()`);
   // Completion asked at the caret while typing goes on, as the suggest widget does.
@@ -104,6 +113,10 @@ try {
     return performance.now() - t0;
   })()`);
   const text = '    value = helper_12(os.path.join("data", "recieved"), mode="w") + Recieved3("n").total(4)\n';
+
+  // Keys typed inside a call (its "(" included): where Monaco's Parameter Info may ask.
+  let depth = 0;
+  const keysInCalls = 2 * [...text].filter((ch) => { const inside = ch === '(' || depth > 0; if (ch === '(') depth++; else if (ch === ')') depth--; return inside; }).length;
   const completions = [];
   const t0 = cpuOfTree();
   let keys = 0;
@@ -137,9 +150,9 @@ try {
   const quietMs = Date.now() - q0 - 2000;
   while (completions.length < Math.floor(keys / 20)) await sleep(200);
   const pyrightMs = round(cpuSince(t0, prev).pyright || 0);
-  const perf = await js(`(() => { const p = __perf; return { lat: p.lat.splice(0), sig: p.sig }; })()`);
+  const perf = await js(`(() => { const p = __perf; return { lat: p.lat.splice(0), sig: p.sig, paramInfo: p.paramInfo }; })()`);
   results.typing = {
-    keys, pyrightMs, pyrightWhileTypingMs: typedCpu.pyright || 0, quietAfterMs: quietMs, signatureHelps: perf.sig,
+    keys, pyrightMs, pyrightWhileTypingMs: typedCpu.pyright || 0, quietAfterMs: quietMs, signatureHelps: { inlayHints: perf.sig, parameterInfo: perf.paramInfo, keysInCalls },
     completionMs: { median: round(median(completions)), max: round(Math.max(...completions)), n: completions.length },
     keyToPaintMs: { median: round(median(perf.lat)), p90: round([...perf.lat].sort((a, b) => a - b)[Math.floor(perf.lat.length * 0.9)]) },
     rendererCpuMs: typedCpu.renderer,
@@ -149,7 +162,8 @@ try {
   check(quietMs < BUDGET.quietMs, `Pyright is quiet ${quietMs} ms after the last key (< ${BUDGET.quietMs})`);
   check(results.typing.completionMs.median < BUDGET.completionMs, `completion while typing answers in ${results.typing.completionMs.median} ms (median, < ${BUDGET.completionMs})`);
   check(results.typing.keyToPaintMs.median < BUDGET.keyPaintMs, `keydown to paint ${results.typing.keyToPaintMs.median} ms (median, < ${BUDGET.keyPaintMs})`);
-  check(perf.sig < BUDGET.signatureHelps, `${perf.sig} signatureHelp requests while typing and after (< ${BUDGET.signatureHelps}; inlay hints ask once per printed signature)`);
+  check(perf.sig < BUDGET.inlaySignatureHelps, `inlay hints ask ${perf.sig} signatureHelps while typing and after (< ${BUDGET.inlaySignatureHelps}; once per printed signature)`);
+  check(perf.paramInfo <= keysInCalls, `Parameter Info asks ${perf.paramInfo} signatureHelps while typing (at most one per key typed inside a call: ${keysInCalls})`);
 
   // The hints are still there, with the same names a signatureHelp per call gives.
   const hints = await js(`(async () => {

@@ -5,7 +5,7 @@ export const KEEP_ENGLISH = [
   'virtualenv', 'debugpy', 'PowerShell', 'UTF-8', 'TODO', 'FIXME', 'HEAD', 'JSON', 'PyPI', 'PATH', 'PYTHONPATH',
   'Ctrl', 'Alt', 'Shift', 'Esc', 'Enter', 'Tab', 'Insert', 'Delete', 'Space', 'Backspace', 'noqa', 'Pyright',
   'OK', 'stdin', 'stdout', 'stderr', 'py', 'launcher', 'English', 'Windows', 'Monaco', 'LSP', 'DAP', 'regex', 'Regex',
-  'Claude', 'Code', 'Anthropic',
+  'Claude', 'Code', 'Anthropic', 'LF', 'CRLF', 'CR',
 ];
 
 // Elements whose text is user data, not UI chrome.
@@ -13,6 +13,8 @@ const SKIP = [
   '.monaco-editor .view-lines', '.monaco-editor .margin', '.console', 'pre', 'code', '#tree .name', '.tab .name',
   '#statusPath', '#statusInterp', '#interpSelect', '#projectWidget', '[data-user-text]', '.monaco-diff-editor .view-lines',
   'input', 'textarea', 'option', '.monaco-alert', '.monaco-aria-container', '.xterm',
+  // Code vision lenses show Git author names; their own words go through tr() (missingTranslations covers them).
+  '.monaco-editor .codelens-decoration',
 ];
 
 // Returns [{text, where}] for visible text under `selector` that still contains English words.

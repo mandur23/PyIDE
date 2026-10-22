@@ -1,0 +1,20 @@
+{
+  "Code Vision": "코드 비전",
+  "Shows the number of usages and the Git authors above Python classes and functions, as PyCharm's code vision does.": "PyCharm의 코드 비전처럼 Python 클래스와 함수 위에 사용 위치 수와 Git 작성자를 표시합니다.",
+  "no usages": "사용 위치 없음",
+  "1 usage": "사용 위치 1개",
+  "{count} usages": "사용 위치 {count}개",
+  "Show usages of {name}": "{name}의 사용 위치 표시",
+  "Last changed by {author} on {date}": "마지막 변경: {author}, {date}",
+  "Authors: {names}": "작성자: {names}",
+  "* has uncommitted changes": "* 커밋되지 않은 변경 사항이 있습니다",
+  "Cannot search for usages: Pyright is not ready": "사용 위치를 검색할 수 없습니다: Pyright가 준비되지 않았습니다",
+  "No usages of '{name}' found in Project Files": "프로젝트 파일에서 '{name}'의 사용 위치를 찾을 수 없습니다",
+  "Open in Find Tool Window": "찾기 도구 창에서 열기",
+  "Usages of {name}": "{name}의 사용 위치",
+  "Annotate with Git Blame": "Git Blame으로 어노테이트",
+  "Commits that changed {name}": "{name}을(를) 변경한 커밋",
+  "Usages": "사용 위치",
+  "Code author (Git)": "코드 작성자 (Git)",
+  "Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; authors come from git blame in trusted projects. Code vision is off in Power Save Mode.": "클래스와 함수 위에 표시됩니다. 사용 위치는 Pyright에서 가져오며 화면에 보이는 코드에 대해서만 계산하고, 작성자는 신뢰할 수 있는 프로젝트에서 git blame으로 가져옵니다. 절전 모드에서는 코드 비전이 꺼집니다."
+}

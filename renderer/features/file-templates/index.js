@@ -126,7 +126,7 @@
   const exists = (p) => ide.api.exists(p);
   async function writeNew(target, text) {
     await ide.api.create(target, false);
-    if (text) await ide.api.write(target, text);
+    if (text) await ide.api.write(target, ide.lineSeparators?.forNewFile(text) ?? text);
   }
   async function finish(target, created) {
     await ide.refreshTree();

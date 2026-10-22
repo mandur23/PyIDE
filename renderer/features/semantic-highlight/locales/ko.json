@@ -1,0 +1,21 @@
+{
+  "Semantic Highlighting": "의미 강조",
+  "Colors Python names by what they are: parameters, self and cls, classes, functions and methods, properties, modules, constants, builtins, decorators and type parameters.": "Python 이름을 그 의미에 따라 색으로 구분합니다: 매개변수, self와 cls, 클래스, 함수와 메서드, 프로퍼티, 모듈, 상수, 내장 이름, 데코레이터, 타입 매개변수.",
+  "Parameter": "매개변수",
+  "Self parameter": "self 매개변수",
+  "Class": "클래스",
+  "Type parameter": "타입 매개변수",
+  "Function": "함수",
+  "Method": "메서드",
+  "Property or attribute": "프로퍼티 또는 속성",
+  "Module": "모듈",
+  "Constant": "상수",
+  "Builtin name": "내장 이름",
+  "Decorator": "데코레이터",
+  "Color Scheme": "색 구성표",
+  "Semantic highlighting": "의미 강조",
+  "Colors names by what they are, such as parameters, classes, methods and modules.": "매개변수, 클래스, 메서드, 모듈처럼 이름을 그 의미에 따라 색으로 구분합니다.",
+  "Dark": "다크",
+  "Light": "라이트",
+  "Restore Defaults": "기본값 복원"
+}

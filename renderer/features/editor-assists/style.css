@@ -1,0 +1,16 @@
+/* Sticky lines in PyCharm's New UI colors: the editor background, a separator line and a soft shadow below, and the
+   hovered line in the editor's line highlight shade. Monaco reads these variables from the theme; the PyCharm themes
+   do not define them, so they are set here (more specific than Monaco's own `.monaco-editor` theme rule). */
+:root .monaco-editor {
+  --vscode-editorStickyScroll-background: #1e1f22;
+  --vscode-editorStickyScrollHover-background: #2b2d30;
+  --vscode-editorStickyScroll-border: #393b40;
+  --vscode-editorStickyScroll-shadow: #00000066;
+  --vscode-peekViewEditorStickyScroll-background: var(--vscode-peekViewEditor-background, #1e1f22);
+}
+:root[data-theme="light"] .monaco-editor {
+  --vscode-editorStickyScroll-background: #ffffff;
+  --vscode-editorStickyScrollHover-background: #f0f1f5;
+  --vscode-editorStickyScroll-border: #ebecf0;
+  --vscode-editorStickyScroll-shadow: #0000001f;
+}

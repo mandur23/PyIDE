@@ -113,16 +113,25 @@ const COMPLETION = {
     GEOGRAPHY, GEOMETRY, TABLE, CURSOR`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, pushCursor, NETWORK_FIELDS }) => {
   // tedious gives BIGINT as a string, DATE/TIME as a Date, and binary as a Buffer.
+  const dateText = (value, type) => {
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) return value;
+    if (type === 'date') return value.toISOString().slice(0, 10);
+    if (type === 'time') return value.toISOString().slice(11, 23);
+    return value;
+  };
   function cellOf(value, type) {
     if (value === null || value === undefined) return null;
     if (type === 'bigint' && typeof value === 'string') return Number.isSafeInteger(Number(value)) ? Number(value) : value;
-    if (value instanceof Date && !Number.isNaN(value.getTime())) {
-      if (type === 'date') return value.toISOString().slice(0, 10);
-      if (type === 'time') return value.toISOString().slice(11, 23);
-    }
-    return jsonSafe(value);
+    return jsonSafe(dateText(value, type));
+  }
+  // Export Data keeps the bytes (Buffer) and BIGINT's digits ({$number}). DECIMAL and MONEY come from tedious as JS
+  // numbers already, so they are exact up to 15 significant digits.
+  function exactOf(value, type) {
+    if (value === null || value === undefined) return null;
+    if (type === 'bigint' && typeof value === 'string') return { $number: value };
+    return dateText(value, type);
   }
 
   const LOST = new Set(['ESOCKET', 'ECONNCLOSED', 'ECONNRESET', 'ENOTOPEN']);
@@ -145,7 +154,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
   async function openMssql(cfg, { onLost = () => {} } = {}) {
     const sql = loadPackage('mssql');
     // One connection that stays open, so session state (USE, #temp tables, SET options) lasts across queries.
-    const pool = new sql.ConnectionPool({
+    const poolConfig = {
       server: cfg.host || 'localhost',
       port: cfg.instance ? undefined : cfg.port,
       user: cfg.user,
@@ -155,7 +164,8 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
       requestTimeout: 0,
       pool: { max: 1, min: 0, idleTimeoutMillis: 2 ** 31 - 1 },
       options: { instanceName: cfg.instance || undefined, encrypt: !!cfg.encrypt, trustServerCertificate: !!cfg.trustServerCertificate, appName: 'PyIDE' },
-    });
+    };
+    const pool = new sql.ConnectionPool(poolConfig);
     pool.on('error', onLost);
     try {
       await pool.connect();
@@ -238,6 +248,39 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
         const { recordset } = await pool.request().query('SELECT @@VERSION AS v');
         return recordset[0].v.split('\n')[0].replace(/\s*\(KB\d+\)/, '').trim();
       },
+      // Export Data: the batch's rows streamed (request.stream) on a connection of its own, paused while rows wait for
+      // the file; Cancel cancels the request. The first result set with columns is exported. SQL Server has no
+      // read-only transaction to put it in, so readOnly changes nothing here: the renderer runs again only statements
+      // it judged read-only or the user confirmed.
+      async cursor(text) {
+        const own = new sql.ConnectionPool(poolConfig);
+        own.on('error', () => {});
+        try { await own.connect(); } catch (err) { own.close().catch(() => {}); throw readable(err, cfg); }
+        const req = own.request();
+        req.stream = true;
+        req.arrayRowMode = true;
+        let set = 0;
+        let exported = 0;
+        let types = [];
+        const { cursor, feed, ready } = pushCursor({
+          pause: () => req.pause(),
+          resume: () => req.resume(),
+          cancel: () => req.cancel(),
+          finish: () => own.close().catch(() => {}),
+        });
+        req.on('recordset', (columns) => {
+          set++;
+          if (exported || !columns?.length) return;
+          exported = set;
+          types = columns.map((c) => String(c.type?.declaration || '').toLowerCase());
+          feed.columns(columns.map((c, i) => ({ name: c.name, type: types[i] })));
+        });
+        req.on('row', (row) => { if (set === exported) feed.row(row.map((v, i) => exactOf(v, types[i]))); });
+        req.on('error', (err) => feed.fail(readable(err, cfg)));
+        req.on('done', () => feed.end());
+        req.query(text);
+        try { return await ready; } catch (err) { own.close().catch(() => {}); throw err; }
+      },
       close: () => pool.close(),
     };
   }
@@ -248,7 +291,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, N
     packages: { mssql: 'mssql@12.7.4' },
     kinds: {
       mssql: {
-        label: 'Microsoft SQL Server', order: 40, package: 'mssql', defaultPort: 1433, quote: '"', implicitSchemas: ['dbo'], open: openMssql,
+        label: 'Microsoft SQL Server', order: 40, package: 'mssql', defaultPort: 1433, quote: '"', sqlDialect: 'mssql', implicitSchemas: ['dbo'], open: openMssql,
         fields: [
           host, port,
           { key: 'instance', label: 'Instance name', placeholder: 'SQLEXPRESS' },

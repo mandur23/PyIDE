@@ -1,0 +1,8 @@
+{
+  "id": "type-hierarchy",
+  "name": "Type Hierarchy",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "PyCharm's Type Hierarchy (Ctrl+H): the supertypes and subtypes of the Python class at the caret, in the Hierarchy tool window, using the Pyright language server.",
+  "depends": ["lsp", "navigation-bar"]
+}

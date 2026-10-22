@@ -7,6 +7,10 @@
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
   const SQLITE_FILE = /\.(sqlite3?|db)$/i;
   const MAX_ROWS = 500;
+  // A cell value: null, a number, {$number: 'exact text'} (a number JS would print differently: SQLite REAL 2.0,
+  // integers past 2^53), or text. The grid, Copy as CSV/TSV and Export Data all show a number by its database text.
+  const isNumber = (v) => typeof v === 'number' || typeof v?.$number === 'string';
+  const cellText = (v) => (v === null ? 'NULL' : typeof v?.$number === 'string' ? v.$number : String(v));
 
   // ---------- state ----------
   let drivers = [];
@@ -249,8 +253,10 @@
       treeEl.append(empty);
       return;
     }
+    shownRows = rows;
     for (const r of rows) treeEl.append(treeRow(r));
   }
+  let shownRows = [];
 
   // The tree below a source is what the kind's schema() returns: nodes {name, kind, detail?, children?, lazy?, open?,
   // emptyText?} (schemas/tables, databases/collections/fields, databases/key groups/keys). SQL tables list `columns`
@@ -358,6 +364,7 @@
       return [
         ...(cmd ? [{ label: tr('Open Data'), run: () => openData(s.id, cmd) }] : []),
         ...(r.node.columns && uiOf(s.kind).language === 'sql' ? [{ label: tr('Generate SELECT'), run: () => generateSelect(s.id, r.path, r.node) }] : []),
+        ...(exportableNode(r) ? [{ label: tr('Export Data…'), run: () => exportTable(s.id, r.path, r.node) }] : []),
         { label: tr('Copy Name'), run: () => invoke('clipboard:writeText', r.node.name) },
         ...(r.leaf ? [] : common),
       ];
@@ -765,8 +772,9 @@
       const line = el('tr');
       line.append(el('td', 'db-rownum', String(i + 1)));
       for (const v of row) {
-        const td = el('td', v === null ? 'db-null' : typeof v === 'number' ? 'db-num' : null, v === null ? 'NULL' : String(v));
-        if (v !== null) { user(td); if (String(v).length > 60) td.title = String(v); }
+        const text = cellText(v);
+        const td = el('td', v === null ? 'db-null' : isNumber(v) ? 'db-num' : null, text);
+        if (v !== null) { user(td); if (text.length > 60) td.title = text; }
         line.append(td);
       }
       tbody.append(line);
@@ -847,8 +855,9 @@
     viewSwitch.append(...viewButtons);
     const copyCsv = el('button', 'db-copy', tr('Copy as CSV'));
     const copyTsv = el('button', 'db-copy', tr('Copy as TSV'));
-    copyCsv.disabled = copyTsv.disabled = true;
-    resultBar.append(status, viewSwitch, copyCsv, copyTsv);
+    const exportBtn = el('button', 'db-export', tr('Export Data…'));
+    copyCsv.disabled = copyTsv.disabled = exportBtn.disabled = true;
+    resultBar.append(status, viewSwitch, copyCsv, copyTsv, exportBtn);
     const output = el('div', 'db-output');
     output.append(ide.keymap.text(el('div', 'db-placeholder muted'),
       () => tr('Use {action} to run the statement at the caret, or the selection.', { action: ide.keymap.withKeys(tr('Execute'), 'Database.RunStatement') })));
@@ -908,6 +917,7 @@
         try {
           for (const stmt of statements) {
             r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
+            c.lastStatement = stmt;
             if (!r.ok) break;
             done++;
             if (r.schemaChanged || /^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
@@ -955,6 +965,15 @@
       },
       // 'grid' or 'json': how the current result shows (JSON only for document results).
       view: () => (last?.documents ? ide.settings.get(VIEW_KEY, 'grid') : 'grid'),
+      lastStatement: null,
+      result: () => last,
+      // Export Data… for the shown result: a read-only SQL statement runs again and streams every row to the file; for
+      // anything else the user chooses between the rows shown and running it again (export.js exportResult).
+      exportResult() {
+        if (!(last?.ok && last.columns.length)) return null;
+        const src = sourceOf(id);
+        return ide.database.exportResult({ sourceId: id, sql: c.lastStatement || '', language: uiOf(src?.kind).language, result: last, name: src?.name || 'result' });
+      },
     };
 
     // Status line and output for a result: {columns, rows, rowCount, truncated, ms} plus, from some kinds, documents
@@ -965,7 +984,7 @@
       lastDone = done;
       lastTotal = total;
       output.replaceChildren();
-      copyCsv.disabled = copyTsv.disabled = !(r?.ok && r.columns.length);
+      copyCsv.disabled = copyTsv.disabled = exportBtn.disabled = !(r?.ok && r.columns.length);
       viewSwitch.classList.toggle('hidden', !(r?.ok && r.documents));
       const parts = [];
       if (total > 1) parts.push(tr('{done} of {total} statements executed', { done, total }));
@@ -998,7 +1017,7 @@
     const delimited = (sep) => {
       const cell = (v) => {
         if (v === null) return '';
-        const s = String(v);
+        const s = cellText(v);
         if (sep === '\t') return s.replace(/[\t\r\n]+/g, ' ');
         return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
@@ -1006,6 +1025,17 @@
     };
     copyCsv.onclick = () => last?.ok && invoke('clipboard:writeText', delimited(','));
     copyTsv.onclick = () => last?.ok && invoke('clipboard:writeText', delimited('\t'));
+    exportBtn.onclick = () => c.exportResult();
+    output.addEventListener('contextmenu', (e) => {
+      if (!e.target.closest('.db-grid') || !(last?.ok && last.columns.length)) return;
+      e.preventDefault();
+      ide.ui.contextMenu(e.clientX, e.clientY, [
+        { label: tr('Export Data…'), keyAction: 'Database.ExportData', run: () => c.exportResult() },
+        { separator: true },
+        { label: tr('Copy as CSV'), run: () => invoke('clipboard:writeText', delimited(',')) },
+        { label: tr('Copy as TSV'), run: () => invoke('clipboard:writeText', delimited('\t')) },
+      ]);
+    });
     runBtn.onclick = () => c.runAtCaret();
     c.renderState();
     return c;
@@ -1017,6 +1047,13 @@
   async function openData(id, command) {
     const c = await openConsole(id);
     return c?.appendAndRun(command);
+  }
+
+  // ---------- Export Data ----------
+  const exportableNode = (r) => !!r.node?.columns && ['table', 'view'].includes(r.kind) && uiOf(r.source.kind).language === 'sql';
+  function exportTable(id, path, table) {
+    const schema = path.length > 1 ? path[path.length - 2] : null;
+    return ide.database.exportData({ sourceId: id, table: { schema, name: table.name }, name: table.name });
   }
 
   async function generateSelect(id, path, table) {
@@ -1113,6 +1150,16 @@
   // ---------- actions ----------
   ide.registerAction({ id: 'Database.NewDataSource', title: tr('Database: New Data Source…'), run: () => { tw.show(); showAddMenu(document.querySelector('#dbAdd')); } });
   ide.registerAction({ id: 'Database.OpenConsole', title: tr('Database: Open Query Console'), run: openQueryConsole });
+  // Export Data… for the active console's result, else for the table or view selected in the tree.
+  ide.registerAction({
+    id: 'Database.ExportData', title: tr('Database: Export Data…'),
+    run: () => {
+      const c = activeConsole();
+      if (c?.result()?.ok && c.result().columns.length) return c.exportResult();
+      const r = selectedKey && shownRows.find((x) => x.key === selectedKey);
+      return r && exportableNode(r) ? exportTable(r.source.id, r.path, r.node) : null;
+    },
+  });
   ide.registerAction({
     id: 'Database.RunStatement', title: tr('Database: Execute Statement'), keys: 'Ctrl+Enter',
     when: () => !!focusedConsole(),
@@ -1168,6 +1215,10 @@
     splitStatements,
     statementAt,
     toolWindow: tw,
+    cellText,
+    isNumber,
+    exportTable,
+    // exportData(spec) comes from export.js: {sourceId, table: {schema, name}} | {sourceId, sql} | {columns, rows}, plus name.
     // For completion.js: console lookup and the trees the tool window loads (shared cache, refreshed after DDL).
     completionHost: {
       consoleFor(model) {
@@ -1206,4 +1257,8 @@
   script.src = `${here}completion.js`;
   script.async = false;
   document.body.appendChild(script);
+  const exportScript = el('script');
+  exportScript.src = `${here}export.js`;
+  exportScript.async = false;
+  document.body.appendChild(exportScript);
 })();

@@ -8,7 +8,9 @@
   const ON_STARTUP = 'updates.checkOnStartup';
   const INTERVAL = 'updates.checkInterval'; // 'startup' | 'daily' | 'weekly'
   const SKIPPED = 'updates.skippedVersion';
-  const DEFAULTS = { [ON_STARTUP]: true, [INTERVAL]: 'daily' };
+  // Download only the changed blocks of the installer when possible (main falls back to the full installer).
+  const DIFFERENTIAL = 'updates.differential';
+  const DEFAULTS = { [ON_STARTUP]: true, [INTERVAL]: 'daily', [DIFFERENTIAL]: true };
   const log = ide.logger?.('#updater') || console;
   let state = { phase: 'idle' };
 
@@ -20,9 +22,12 @@
   item.id = 'updateStatus';
   item.onclick = () => (state.phase === 'downloaded' ? offerRestart() : null);
   ide.registerStatusItem({ order: 7, el: item });
+  const size = (n) => (n < 100 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
   function render() {
     let text = '';
-    if (state.phase === 'downloading') text = tr('Downloading PyIDE {version}… {percent}%', { version: state.available, percent: state.percent || 0 });
+    const delta = state.download?.mode === 'delta' && state.download.bytes != null ? size(state.download.bytes) : null;
+    if (state.phase === 'downloading' && delta) text = tr('Downloading PyIDE {version} (delta {size})… {percent}%', { version: state.available, size: delta, percent: state.percent || 0 });
+    else if (state.phase === 'downloading') text = tr('Downloading PyIDE {version}… {percent}%', { version: state.available, percent: state.percent || 0 });
     else if (state.phase === 'downloaded') text = tr('Restart to Update');
     item.textContent = text;
     item.title = state.phase === 'downloaded' ? tr('PyIDE {version} is ready to install', { version: state.available }) : '';
@@ -86,7 +91,7 @@
     if (!manual && ide.settings.get(SKIPPED) === version) return result;
     if (state.kind === 'nsis') {
       if (state.phase === 'downloaded') offerRestart();
-      else ide.api.invoke('updater:download').catch((err) => {
+      else ide.api.invoke('updater:download', { differential: ide.settings.get(DIFFERENTIAL, true) !== false }).catch((err) => {
         log.warn(`update download failed: ${reasonOf(err)}`);
         message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
       });
@@ -203,7 +208,7 @@
   // ---------- Settings > Updates ----------
   (ide.settingsPages ||= []).push({
     id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS,
-    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval 업데이트 확인 피드 버전 건너뛰기 매일 매주',
+    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Updates'));
       const auto = el('div', 'upd-auto');
@@ -223,6 +228,7 @@
       const feedRow = el('div', 'upd-feed-row');
       feedRow.append(input, browse);
       s.appendChild(ctx.ui.fieldRow(tr('Update feed:'), feedRow, tr('An http(s) URL or a local folder with latest.yml. Leave it empty to turn updates off.')));
+      s.appendChild(ctx.ui.checkbox(DIFFERENTIAL, tr('Download only the changed parts of an update when possible')));
 
       const info = ctx.ui.section(host, tr('This Installation'));
       const kinds = { nsis: tr('PyIDE installer (updates itself)'), msi: tr('MSI package (update with the new MSI)'), source: tr('Run from source (no updates)') };

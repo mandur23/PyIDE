@@ -52,6 +52,14 @@
 .db-copy { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
 .db-copy:hover:not(:disabled) { background: var(--gray3); }
 .db-copy:disabled { opacity: .4; cursor: default; }
+.db-export { padding: 2px 8px; border-radius: 4px; color: var(--gray10); }
+.db-export:hover:not(:disabled) { background: var(--gray3); }
+.db-export:disabled { opacity: .4; cursor: default; }
+.db-export-dialog .field { grid-template-columns: 130px 1fr; }
+.db-export-what { margin-bottom: 10px; color: var(--gray9); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-export-name { color: var(--gray12); font-family: var(--mono); }
+.db-export-check { display: flex; align-items: center; gap: 6px; margin: 6px 0 6px 130px; }
+.db-export-rerun-detail { margin-top: 8px; color: var(--gray10); }
 .db-output { flex: 1; min-height: 0; overflow: auto; }
 .db-placeholder, .db-message { padding: 10px 12px; }
 .db-error { padding: 10px 12px; color: var(--red); font-family: var(--mono); white-space: pre-wrap; display: flex; gap: 10px; }

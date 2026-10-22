@@ -43,5 +43,7 @@
   "Version:": "버전:",
   "Web address or local folder": "웹 주소 또는 로컬 폴더",
   "Weekly": "매주",
-  "Downloading PyIDE {version}": "PyIDE {version} 다운로드 중"
+  "Downloading PyIDE {version}": "PyIDE {version} 다운로드 중",
+  "Downloading PyIDE {version} (delta {size})… {percent}%": "PyIDE {version} 다운로드 중 (변경분 {size})… {percent}%",
+  "Download only the changed parts of an update when possible": "가능하면 업데이트에서 변경된 부분만 다운로드"
 }

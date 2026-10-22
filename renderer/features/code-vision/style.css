@@ -1,0 +1,6 @@
+/* Code vision (code-vision plugin): muted text above declarations, items apart as in PyCharm instead of Monaco's
+   " | " separators (a lens group's DOM alternates item, separator, item...). This is the only code lens provider. */
+.monaco-editor .contentWidgets .codelens-decoration { color: var(--gray8); }
+.monaco-editor .contentWidgets .codelens-decoration > :nth-child(even) { display: none; }
+.monaco-editor .contentWidgets .codelens-decoration > :nth-child(odd):not(:first-child) { margin-left: 1.5em; }
+.monaco-editor .contentWidgets .codelens-decoration > a:hover { text-decoration: underline; }

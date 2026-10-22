@@ -309,6 +309,9 @@ try {
   await press('Escape');
 
   // ---------------------------------------------------------------- File and Code Templates
+  // The files are compared byte for byte with LF; the default "System-Dependent" line separator for new files writes
+  // CRLF on Windows (covered by verify/line-endings.mjs).
+  await js(`(ide.settings.set('editor.lineSeparator', 'lf'), true)`);
   check(await js(`ide.fileTemplates.find('Python Script').body === ''`), 'the Python Script template is empty by default');
   // Core's New Python File with the default (empty) template.
   await js(`ide.revealInTree(ide.util.joinPath(ide.root, 'app.py'))`);

@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { launch, lensesShown, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 // Same git isolation as verify/vcs.mjs.
@@ -109,6 +109,8 @@ try {
   await js(`ide.editor.setPosition({ lineNumber: 5, column: 29 }), ide.editor.focus()`);
   await type('  # changed');
   await until(`!!document.querySelector('#editor .vcs-modified')`, 'modified marker');
+  // The marker moves down when code vision's lens above greet() comes in, a moment after the file opens.
+  await until(lensesShown(), 'code lenses shown');
   await mouse(`document.querySelector('#editor .vcs-modified')`, { label: 'gutter marker' });
   await until(`!!document.querySelector('#menuHost .context-menu')`, 'gutter popup');
   check(await js(`[...document.querySelectorAll('#menuHost .menu-item > span:first-child')].map(s => s.textContent).join('|')`) === '줄 롤백|차이 표시|다음 변경 사항|이전 변경 사항', 'gutter popup: 줄 롤백, 차이 표시, 다음/이전 변경 사항');

@@ -1,0 +1,11 @@
+{
+  "Line Separators": "줄 구분자",
+  "The status bar's line separator widget (LF, CRLF, CR), as in PyCharm: shows the current file's separator and converts the file to another one.": "PyCharm처럼 상태 표시줄에 현재 파일의 줄 구분자(LF, CRLF, CR)를 표시하고 파일을 다른 줄 구분자로 변환합니다.",
+  "LF - Unix and macOS (\\n)": "LF - Unix 및 macOS(\\n)",
+  "CRLF - Windows (\\r\\n)": "CRLF - Windows(\\r\\n)",
+  "CR - Classic Mac OS (\\r)": "CR - 클래식 Mac OS(\\r)",
+  "Line separator: {name}": "줄 구분자: {name}",
+  "The file has mixed line separators. Saving it writes {name} everywhere.": "파일에 여러 종류의 줄 구분자가 섞여 있습니다. 저장하면 모두 {name}(으)로 바뀝니다.",
+  "Click to change": "클릭하여 변경",
+  "Line Separator": "줄 구분자"
+}

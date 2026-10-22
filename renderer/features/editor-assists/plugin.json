@@ -1,0 +1,8 @@
+{
+  "id": "editor-assists",
+  "name": "Sticky Lines and f-string Conversion",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Sticky lines at the top of the editor show the classes and functions around the visible code, and a plain Python string becomes an f-string when you type a {name} into it, as in PyCharm.",
+  "detached": true
+}

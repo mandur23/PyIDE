@@ -1,0 +1,8 @@
+.aig-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.aig-bar { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid var(--gray4); background: var(--gray2); }
+.aig-info { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.aig-file { font-family: var(--mono); color: var(--gray12); }
+.aig-summary, .aig-renamed { font-size: 12px; }
+.aig-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.aig-note { padding: 5px 10px; font-size: 12px; color: var(--gray11); background: rgba(240, 167, 50, 0.12); border-bottom: 1px solid var(--gray4); }
+.aig-diff { flex: 1; min-height: 0; }

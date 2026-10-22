@@ -1,0 +1,40 @@
+/* File compare diff tabs: PyCharm Darcula by default, PyCharm Light under data-theme="light". */
+:root { --cmp-mod: #263552; --cmp-mod-char: #2f4a7c; }
+:root[data-theme="light"] { --cmp-mod: #e8effa; --cmp-mod-char: #c9d8f5; }
+
+.cmp-bar { display: flex; align-items: center; gap: 4px; height: 32px; flex-shrink: 0; padding: 0 8px; background: var(--gray2);
+  border-bottom: 1px solid var(--gray3); }
+.cmp-tool { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; background: none;
+  border: 0; border-radius: 4px; color: var(--gray10); font: inherit; cursor: pointer; }
+.cmp-tool:hover { background: var(--gray3); }
+.cmp-count { margin-left: 8px; color: var(--gray8); font-size: 12px; white-space: nowrap; }
+.cmp-spacer { flex: 1; }
+.cmp-mode { max-width: 200px; }
+.cmp-head { display: grid; grid-template-columns: 1fr 1fr; height: 28px; flex-shrink: 0; background: var(--gray2);
+  border-bottom: 1px solid var(--gray3); }
+.cmp-unified .cmp-head { grid-template-columns: auto 1fr; }
+.cmp-unified .cmp-head .cmp-left-title::after { content: ' →'; }
+.cmp-side { padding: 0 12px; line-height: 28px; color: var(--gray9); font-size: 12px; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; min-width: 0; }
+.cmp-ro { color: var(--gray8); }
+.cmp-body { flex: 1; min-height: 0; position: relative; }
+/* changed blocks are blue on both sides, as in PyCharm (over Monaco's inserted/removed backgrounds) */
+.cmp-body .monaco-editor .cmp-mod { background: var(--cmp-mod); }
+.cmp-body .monaco-editor .cmp-mod-char { background: var(--cmp-mod-char); }
+:root[data-theme="light"] .cmp-body .monaco-diff-editor,
+:root[data-theme="light"] .cmp-body .monaco-editor {
+  --vscode-diffEditor-insertedLineBackground: #e9f5e6;
+  --vscode-diffEditor-insertedTextBackground: #c8e6c1a0;
+  --vscode-diffEditorGutter-insertedLineBackground: #e9f5e6;
+  --vscode-diffEditor-removedLineBackground: #f5e7e8;
+  --vscode-diffEditor-removedTextBackground: #f1c5c9a0;
+  --vscode-diffEditorGutter-removedLineBackground: #f5e7e8;
+  --vscode-diffEditor-diagonalFill: #d3d5db;
+  --vscode-diffEditor-border: #ebecf0;
+}
+
+.cmp-message { align-items: center; justify-content: center; }
+.cmp-message-box { max-width: 560px; padding: 24px; display: flex; flex-direction: column; gap: 8px; color: var(--gray10); }
+.cmp-message-title { font-weight: 600; color: var(--gray12); }
+.cmp-message-verdict { font-weight: 600; }
+.cmp-message-paths { margin-top: 8px; color: var(--gray8); font-size: 12px; word-break: break-all; }

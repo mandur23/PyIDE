@@ -195,12 +195,18 @@
     },
   });
 
-  // ---------- Call Hierarchy tool window ----------
-  let mode = 'callers'; // 'callers' (incoming calls) | 'callees' (outgoing calls)
+  // ---------- Hierarchy tool window ----------
+  // One window shows one hierarchy at a time, as in PyCharm: Call Hierarchy (here) or another kind a plugin shows
+  // through ide.navigationBar.showHierarchy (type-hierarchy: Type Hierarchy). A kind is
+  // {id, modes: () => [[mode, label]], mode, head(mode) -> 'Callers of {name}', children(node, mode) ->
+  //  [{item, sites?, siteUri?, leaf?}], sort?: false}; items are LSP CallHierarchyItem-shaped ({name, kind, detail?, uri, range,
+  //  selectionRange}), and a node opens at its first site (else at its item's name).
+  let kind = null;
   let rootItem = null;
   let root = null;
   let selected = null;
   let visibleNodes = [];
+  let barEl;
   let headEl;
   let treeEl;
   let modeButtons = {};
@@ -213,44 +219,75 @@
     return { item, parent, sites, siteUri, children: recursive ? [] : null, expanded: false, loading: false, recursive };
   };
 
+  const callKind = {
+    id: 'call',
+    mode: 'callers', // 'callers' (incoming calls) | 'callees' (outgoing calls)
+    modes: () => [['callers', tr('Caller Hierarchy')], ['callees', tr('Callee Hierarchy')]],
+    head: (m) => (m === 'callers' ? tr('Callers of {name}') : tr('Callees of {name}')),
+    // Incoming call sites are in the caller; outgoing ones are in this node's own file.
+    async children(node, m) {
+      const incoming = m === 'callers';
+      const res = await ide.lsp.request(incoming ? 'callHierarchy/incomingCalls' : 'callHierarchy/outgoingCalls', { item: node.item });
+      return (res || []).map((c) => (incoming ? { item: c.from, sites: c.fromRanges, siteUri: c.from.uri } : { item: c.to, sites: c.fromRanges, siteUri: node.item.uri }));
+    },
+  };
+
   const tw = ide.registerToolWindow({
     id: 'CallHierarchy', title: tr('Hierarchy'), icon: '⇅', side: 'bottom', order: 19,
     mount(container) {
-      const bar = el('div', 'nb-ch-toolbar');
-      for (const [id, label] of [['callers', tr('Caller Hierarchy')], ['callees', tr('Callee Hierarchy')]]) {
-        const b = el('button', 'nb-ch-mode', label);
-        b.dataset.mode = id;
-        b.onclick = () => setMode(id);
-        modeButtons[id] = b;
-        bar.appendChild(b);
-      }
+      barEl = el('div', 'nb-ch-toolbar');
       headEl = el('div', 'nb-ch-head muted');
       headEl.append(ide.keymap.text(el('span'), () => tr('Use {action} on a function to see its callers and callees', { action: ide.keymap.withKeys(tr('Call Hierarchy'), 'CallHierarchy') })));
       treeEl = el('div', 'list nb-ch-tree');
       treeEl.id = 'nbCallTree';
       treeEl.tabIndex = 0;
       treeEl.onkeydown = onTreeKey;
-      bar.appendChild(headEl);
-      container.append(bar, treeEl);
+      container.append(barEl, treeEl);
       paintModes();
     },
   });
 
+  // The mode buttons of the kind shown (Call Hierarchy's before anything is shown).
   function paintModes() {
-    for (const [id, b] of Object.entries(modeButtons)) b.classList.toggle('on', id === mode);
+    if (!barEl) return;
+    const k = kind || callKind;
+    if (barEl.dataset.kind !== k.id) {
+      barEl.dataset.kind = k.id;
+      modeButtons = {};
+      barEl.replaceChildren();
+      for (const [id, label] of k.modes()) {
+        const b = el('button', 'nb-ch-mode', label);
+        b.dataset.mode = id;
+        b.onclick = () => setMode(id);
+        modeButtons[id] = b;
+        barEl.appendChild(b);
+      }
+      barEl.appendChild(headEl);
+    }
+    for (const [id, b] of Object.entries(modeButtons)) b.classList.toggle('on', id === k.mode);
   }
 
   function setMode(m) {
-    mode = m;
+    (kind || callKind).mode = m;
     paintModes();
     if (rootItem) setRoot(rootItem);
+  }
+
+  // Shows `item`'s hierarchy of kind `k` (in its current mode, or `mode`).
+  function showHierarchy(k, item, mode) {
+    kind = k;
+    if (mode) k.mode = mode;
+    tw.show();
+    paintModes();
+    setRoot(item);
   }
 
   function setRoot(item) {
     rootItem = item;
     root = newNode(item, null);
     selected = root;
-    const [before, after = ''] = (mode === 'callers' ? tr('Callers of {name}') : tr('Callees of {name}')).split('{name}');
+    const k = kind || callKind;
+    const [before, after = ''] = k.head(k.mode).split('{name}');
     headEl.replaceChildren(el('span', null, before), userText(el('b', null, item.name)), el('span', null, after));
     headEl.classList.remove('muted');
     toggle(root, true);
@@ -260,13 +297,14 @@
     if (node.children || node.loading) return;
     node.loading = true;
     const owner = root;
-    const incoming = mode === 'callers';
-    const res = await ide.lsp.request(incoming ? 'callHierarchy/incomingCalls' : 'callHierarchy/outgoingCalls', { item: node.item });
+    const k = kind || callKind;
+    let res = [];
+    try { res = await k.children(node, k.mode); } catch (err) { console.warn('hierarchy children failed', err); }
     node.loading = false;
     if (owner !== root) return;
-    // Incoming call sites are in the caller; outgoing ones are in this node's own file.
-    node.children = (res || []).map((c) => (incoming ? newNode(c.from, node, c.fromRanges, c.from.uri) : newNode(c.to, node, c.fromRanges, node.item.uri)))
-      .sort((a, b) => ide.util.rel(toPath(a.item.uri)).localeCompare(ide.util.rel(toPath(b.item.uri))) || a.item.range.start.line - b.item.range.start.line);
+    node.children = (res || []).map((c) => Object.assign(newNode(c.item, node, c.sites || [], c.siteUri || c.item.uri), c.leaf ? { children: [] } : {}));
+    // By file and line, unless the kind's order means something (a class's bases in declaration order).
+    if (k.sort !== false) node.children.sort((a, b) => ide.util.rel(toPath(a.item.uri)).localeCompare(ide.util.rel(toPath(b.item.uri))) || a.item.range.start.line - b.item.range.start.line);
     paint();
   }
 
@@ -346,8 +384,7 @@
       if (inner) items = await prepare(inner.selectionRange.start);
     }
     if (!items?.length) return hint(ed, tr('No call hierarchy for the element at the caret'));
-    tw.show();
-    setRoot(items[0]);
+    showHierarchy(callKind, items[0]);
   }
 
   const editorPython = () => !!ide.editor?.hasTextFocus() && isPy(modelPath(ide.editor.getModel()));
@@ -361,5 +398,8 @@
     precondition: 'editorLangId == python', run: () => showCallHierarchy(ed),
   }));
 
-  ide.navigationBar = { showCallHierarchy: () => showCallHierarchy(ide.editor), mode: () => mode, setMode };
+  // showHierarchy(kind, item, mode?): another plugin's hierarchy in this window (see the Hierarchy tool window above);
+  // kind(): the id of the kind shown ('call' or the plugin's); mode()/setMode(): the mode of the kind shown.
+  ide.navigationBar = { showCallHierarchy: () => showCallHierarchy(ide.editor), mode: () => (kind || callKind).mode, setMode,
+    showHierarchy, kind: () => (kind || callKind).id, hint };
 })();

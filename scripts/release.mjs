@@ -6,8 +6,9 @@
 // 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
-// 7. publishes to the `pyide` release of mandur23/Portfolio-Nano- (never marked Latest): the installers, title and notes,
-//    then latest.yml (the update feed switches here), then deletes older versions' installers
+// 7. publishes to the `pyide` release of mandur23/Portfolio-Nano- (never marked Latest): the installers and the exe's
+//    blockmap, title and notes, then latest.yml (the update feed switches here), then deletes older versions' files
+//    except the previous version's blockmap, which installed copies of that version need for a differential update
 // 8. reads the feed back
 // Nothing is uploaded before the push and the feed switches last, so a stop leaves one clear way on; the error says which.
 // --dry-run runs steps 1-4, prints the git and gh commands of steps 5-8 instead of running them, and puts the version
@@ -19,6 +20,7 @@ import * as fs from 'fs';
 import { constants as osConstants, tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { gunzipSync } from 'zlib';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = 'mandur23/Portfolio-Nano-';
@@ -218,11 +220,21 @@ function releaseAssets() {
   const r = sh('gh', ['release', 'view', TAG, '-R', REPO, '--json', 'assets', '--jq', '.assets[].name'], { capture: true, allowFail: true });
   return r.status === 0 ? r.out.split(/\r?\n/).filter(Boolean) : null;
 }
-// Installers (and blockmaps) of any version other than v; PyIDE-Setup.exe and latest.yml are replaced, not deleted.
-const isOldAsset = (name, v) => {
-  const m = /^PyIDE-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^PyIDE-(.+)\.msi(\.blockmap)?$/.exec(name);
-  return !!m && m[1] !== v;
-};
+// The version of an installer or blockmap asset, or null (PyIDE-Setup.exe and latest.yml are replaced, not deleted).
+const assetVersion = (name) => (/^PyIDE-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^PyIDE-(.+)\.msi(\.blockmap)?$/.exec(name))?.[1] ?? null;
+// The version installed copies run until this release: the newest one below v on the release.
+export function previousVersion(assets, v) {
+  return assets.map(assetVersion).filter((x) => x && /^\d+\.\d+\.\d+$/.test(x) && compare(x, v) < 0).sort(compare).pop() || null;
+}
+// What a differential update from the previous version reads from the feed besides the new installer: its old blockmap
+// (electron-updater derives <feed>/PyIDE-Setup-<old>.exe.blockmap from the new installer's URL; the old installer itself
+// comes from the user's %LOCALAPPDATA%\pyide-updater cache).
+export const keptBlockmap = (prev) => (prev ? `PyIDE-Setup-${prev}.exe.blockmap` : null);
+// Files of other versions to delete: everything except the previous version's blockmap.
+export function oldAssets(assets, v) {
+  const keep = keptBlockmap(previousVersion(assets, v));
+  return assets.filter((n) => { const x = assetVersion(n); return !!x && x !== v && n !== keep; });
+}
 async function feedVersion() {
   const res = await io.fetch(`${FEED}latest.yml`, { redirect: 'follow', headers: { 'Cache-Control': 'no-cache' } });
   if (!res.ok) return `HTTP ${res.status}`;
@@ -230,15 +242,25 @@ async function feedVersion() {
 }
 
 // ---------- dist ----------
-const distFiles = (v) => ({ exe: path.join(DIST, `PyIDE-Setup-${v}.exe`), msi: path.join(DIST, `PyIDE-${v}.msi`), latestYml: path.join(DIST, 'latest.yml') });
-// Both installers there, and latest.yml naming this version's exe with that file's hash. Returns the problem, or null.
-function distProblem({ exe, msi, latestYml }, v) {
-  const missing = [exe, msi, latestYml].filter((f) => !io.existsSync(f)).map((f) => path.relative(ROOT, f));
+const distFiles = (v) => ({ exe: path.join(DIST, `PyIDE-Setup-${v}.exe`), blockmap: path.join(DIST, `PyIDE-Setup-${v}.exe.blockmap`), msi: path.join(DIST, `PyIDE-${v}.msi`), latestYml: path.join(DIST, 'latest.yml') });
+// The length of the file a blockmap describes (gzipped JSON; electron-builder writes one file entry).
+function blockmapLength(file) {
+  const entry = JSON.parse(gunzipSync(io.readFileSync(file)).toString()).files?.[0];
+  return (entry?.offset || 0) + (entry?.sizes || []).reduce((a, b) => a + b, 0);
+}
+// Both installers there, latest.yml naming this version's exe with that file's hash, and the exe's blockmap describing
+// that exe (differential updates rebuild the exe from it). Returns the problem, or null.
+function distProblem({ exe, blockmap, msi, latestYml }, v) {
+  const missing = [exe, blockmap, msi, latestYml].filter((f) => !io.existsSync(f)).map((f) => path.relative(ROOT, f));
   if (missing.length) return `dist has no ${missing.join(', ')}`;
   const yml = io.readFileSync(latestYml, 'utf8');
   const field = (k) => new RegExp(`^${k}:\\s*['"]?([^'"\\s]+)`, 'm').exec(yml)?.[1];
   if (field('version') !== v || field('path') !== path.basename(exe)) return `dist/latest.yml says version ${field('version')}, path ${field('path')}; expected ${v}, ${path.basename(exe)}`;
-  if (field('sha512') !== createHash('sha512').update(io.readFileSync(exe)).digest('base64')) return `dist/latest.yml's sha512 does not match dist/${path.basename(exe)}`;
+  const exeBytes = io.readFileSync(exe);
+  if (field('sha512') !== createHash('sha512').update(exeBytes).digest('base64')) return `dist/latest.yml's sha512 does not match dist/${path.basename(exe)}`;
+  let length = null;
+  try { length = blockmapLength(blockmap); } catch {}
+  if (length !== exeBytes.length) return `dist/${path.basename(blockmap)} does not describe dist/${path.basename(exe)} (${length ?? 'unreadable'} vs ${exeBytes.length} bytes)`;
   return null;
 }
 
@@ -401,19 +423,19 @@ async function main() {
   log('  done');
 
   const files = distFiles(V);
-  const { exe, msi, latestYml } = files;
+  const { exe, blockmap, msi, latestYml } = files;
   if (opts.noBuild) {
     step(3, 'npm run dist: skipped (--no-build, a dry-run testing aid); checking what dist already holds');
     const problem = distProblem(files, V);
     if (problem) blocker(problem);
-    else log(`  dist/${path.basename(exe)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
+    else log(`  dist/${path.basename(exe)}, dist/${path.basename(blockmap)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
   } else {
     step(3, 'npm run dist');
     if (dryRun && io.existsSync(latestYml)) state.latestYmlBefore = io.readFileSync(latestYml);
     sh(process.env.PYIDE_DIST_DIR ? `npm run dist -- "-c.directories.output=${DIST}"` : 'npm run dist', [], { shell: true });
     const problem = distProblem(files, V);
     if (problem) fail(`after npm run dist: ${problem}`);
-    log(`  dist/${path.basename(exe)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
+    log(`  dist/${path.basename(exe)}, dist/${path.basename(blockmap)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
   }
 
   step(4, 'installer tests (verify/installed.mjs all, on a hidden desktop)');
@@ -463,7 +485,7 @@ async function publishOnly() {
   const files = distFiles(V);
   const problem = distProblem(files, V);
   if (problem) blocker(problem);
-  else log(`  dist/${path.basename(files.exe)}, dist/${path.basename(files.msi)}, dist/latest.yml (version ${V}, hash matches)`);
+  else log(`  dist/${path.basename(files.exe)}, dist/${path.basename(files.blockmap)}, dist/${path.basename(files.msi)}, dist/latest.yml (version ${V}, hash matches)`);
   const origin = originRefs();
   if (origin.error) blocker(`could not read origin (git ls-remote): ${origin.error}`);
   else if (!origin.tag) blocker(`tag v${V} is not on origin; --publish-only finishes a run that stopped after its push (step 6)`);
@@ -476,7 +498,7 @@ async function publishOnly() {
   await publish(files, notes);
 }
 
-async function publish({ exe, msi, latestYml }, notes) {
+async function publish({ exe, blockmap, msi, latestYml }, notes) {
   step(7, `publish to the ${TAG} release of ${REPO}: installers, title and notes, then latest.yml`);
   const before = latestRelease();
   if (before.error) blocker(`gh release list failed: ${before.error}`);
@@ -488,7 +510,8 @@ async function publish({ exe, msi, latestYml }, notes) {
   if (!dryRun) io.copyFileSync(exe, stable);
   io.writeFileSync(notesFile, notes?.text || '');
   const rel = (f) => path.relative(ROOT, f); // gh runs in the repo root
-  act('gh', ['release', 'upload', TAG, rel(exe), rel(msi), stable, '-R', REPO, '--clobber']);
+  // The blockmap goes up with the exe, before latest.yml: an update to this version reads it first.
+  act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), stable, '-R', REPO, '--clobber']);
   state.installersUploaded = !dryRun;
   act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `PyIDE ${V}`, '--notes-file', notesFile, '--latest=false']);
   if (!dryRun) try { io.rmSync(stage, { recursive: true, force: true }); } catch {} // the uploaded copy and notes are done with
@@ -511,8 +534,14 @@ async function publish({ exe, msi, latestYml }, notes) {
   state.live = !dryRun;
   const assets = releaseAssets();
   if (!assets) blocker(`could not list the assets of the ${TAG} release`);
-  const old = (assets || []).filter((n) => isOldAsset(n, V));
+  const old = oldAssets(assets || [], V);
   if (dryRun) log(`  current assets: ${(assets || []).join(', ') || '(unknown)'}`);
+  // Installed copies of the previous version update differentially with its blockmap; older versions download in full.
+  const prev = previousVersion(assets || [], V);
+  const keep = keptBlockmap(prev);
+  if (!prev) log('  no previous version on the release');
+  else if ((assets || []).includes(keep)) log(`  keeping ${keep}: ${prev} updates to ${V} differentially`);
+  else log(`  ${keep} is not on the release: copies of ${prev} download the full installer`);
   for (const name of old) act('gh', ['release', 'delete-asset', TAG, name, '-R', REPO, '--yes']);
   if (!old.length) log('  no assets of older versions to delete');
 

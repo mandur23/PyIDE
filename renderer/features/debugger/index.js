@@ -1198,7 +1198,8 @@
       run: () => toggleBp(activeFile().path, ide.editor.getPosition().lineNumber) },
     { id: 'ViewBreakpoints', title: tr('View Breakpoints…'), keys: 'Ctrl+Shift+F8', run: viewOrEditBreakpoint },
     { id: 'StepOver', title: tr('Step Over'), keys: 'F8', when: suspended, run: () => step('next') },
-    { id: 'StepInto', title: tr('Step Into'), keys: 'F7', when: suspended, run: () => step('stepIn') },
+    // F7 in a focused diff tab is Next Difference (compare plugin), as in PyCharm, also while suspended.
+    { id: 'StepInto', title: tr('Step Into'), keys: 'F7', when: () => suspended() && !ide.compare?.diffFocused(), run: () => step('stepIn') },
     { id: 'StepOut', title: tr('Step Out'), keys: 'Shift+F8', when: suspended, run: () => step('stepOut') },
     { id: 'Resume', title: tr('Resume Program'), keys: 'F9', when: suspended, run: () => step('continue') },
     { id: 'Pause', title: tr('Pause Program'), when: () => sess?.state === 'running', run: pause },

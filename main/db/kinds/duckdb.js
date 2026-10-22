@@ -61,7 +61,7 @@ const COMPLETION = {
     UUID, JSON, ENUM, LIST, ARRAY, STRUCT, MAP, UNION, VARIANT, GEOMETRY`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema, exportError }) => {
   // DuckDB locks a database file per process, so connections to one file share an instance; the last close
   // releases the file for other programs (a Python script using duckdb, say).
   const shared = new Map(); // key -> {instance: Promise, refs}
@@ -94,6 +94,15 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
       || v instanceof duck.DuckDBTimestampMillisecondsValue || v instanceof duck.DuckDBTimestampNanosecondsValue) return v.toString().replace(' ', 'T');
     // Decimals, dates, UUIDs, intervals, lists, structs, maps: DuckDB's own text.
     return v.toString();
+  }
+
+  // Export Data keeps BIGINT/HUGEINT as bigint, DECIMAL as its digits ({$number}) and BLOB as its bytes.
+  function exactOf(duck, v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'object') return v;
+    if (v instanceof duck.DuckDBBlobValue) return v.bytes;
+    if (duck.DuckDBDecimalValue && v instanceof duck.DuckDBDecimalValue) return { $number: v.toString() };
+    return cellOf(duck, v);
   }
 
   async function openDuckdb(cfg) {
@@ -157,6 +166,32 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
         })));
       },
       async version() { return `DuckDB ${(await all('SELECT version() AS v'))[0].v}`; },
+      // Export Data: the statement's streaming result read a chunk at a time on the source's connection (an in-memory
+      // database exists only there). DuckDB has no read-only transaction per statement, so readOnly changes nothing.
+      async cursor(sql) {
+        const prepared = await conn.prepare(sql.trim().replace(/;\s*$/, ''));
+        let result;
+        try { result = await prepared.stream(); } finally { prepared.destroySync(); }
+        if (result.returnType !== duck.ResultReturnType.QUERY_RESULT) throw exportError('NO_ROWS');
+        const types = result.columnTypes().map(String);
+        let buffer = [];
+        let done = false;
+        return {
+          columns: result.columnNames().map((name, i) => ({ name, type: types[i] })),
+          async next(n) {
+            while (!done && buffer.length < n) {
+              const chunk = await result.fetchChunk();
+              if (!chunk || !chunk.rowCount) { done = true; break; }
+              for (const row of chunk.getRows()) buffer.push(row.map((v) => exactOf(duck, v)));
+            }
+            if (!buffer.length) return null;
+            const out = buffer.length > n ? buffer.splice(0, n) : buffer;
+            if (out === buffer) buffer = [];
+            return out;
+          },
+          async close() { done = true; buffer = []; },
+        };
+      },
       async close() {
         conn.closeSync();
         release(instance);
@@ -168,7 +203,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema }) => {
     packages: { '@duckdb/node-api': '@duckdb/node-api@1.5.6-r.1' },
     kinds: {
       duckdb: {
-        label: 'DuckDB', order: 15, package: '@duckdb/node-api', quote: '"', implicitSchemas: ['main'], open: openDuckdb,
+        label: 'DuckDB', order: 15, package: '@duckdb/node-api', quote: '"', sqlDialect: 'duckdb', implicitSchemas: ['main'], open: openDuckdb,
         fields: [
           { key: 'file', label: 'File', type: 'file', extensions: ['duckdb', 'db', 'ddb'] },
           { key: 'memory', label: 'In-memory database (nothing is saved)', type: 'checkbox', default: false },

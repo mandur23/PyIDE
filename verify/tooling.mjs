@@ -37,6 +37,15 @@ const text = () => js('ide.editor.getModel().getValue()');
 const line = (n) => js(`ide.editor.getModel().getLineContent(${n})`);
 const disk = (rel) => readFileSync(path.join(t.project, rel), 'utf8');
 
+// The Settings category list scrolls in a small window (more plugin pages since 0.2.4: Code Vision, Color Scheme,
+// Smart Keys, …), so a row is brought into view before it is clicked, as verify/settings.mjs does.
+async function openSettingsPage(page) {
+  const row = `.settings-nav-row[data-page="${page}"]`;
+  await js(`(document.querySelector(${S(row)}).scrollIntoView({ block: 'center' }), true)`);
+  await click(row);
+  await until(`document.querySelector('.settings-page')?.dataset.page === ${S(page)}`, `settings page ${page}`);
+}
+
 async function clickText(selector, label) {
   const box = await js(`(() => { const n = [...document.querySelectorAll(${S(selector)})].find(n => n.textContent.includes(${S(label)})); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
   if (!box) throw new Error(`no ${selector} with "${label}"`);
@@ -155,11 +164,11 @@ try {
   check(await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Editor|General|Code Style' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');
   await press('Ctrl+A');
   await press('Backspace');
-  await click('.settings-nav-row[data-page="editor"]');
+  await openSettingsPage('editor');
   await setNumber('editor.fontSize', 18);
   await click('[data-key="editor.showWhitespace"]');
   await click('[data-key="editor.softWrap"]');
-  await click('.settings-nav-row[data-page="codestyle"]');
+  await openSettingsPage('codestyle');
   await setNumber('editor.tabSize', 2);
   await setNumber('editor.ruler', 100);
   check(await js(`!document.querySelector('#settingsApply').disabled`), 'Apply enabled after edits');
@@ -173,14 +182,12 @@ try {
   check(await settingsOpen(), 'Apply keeps the dialog open');
 
   // ---------- Settings: Tools ----------
-  await click('.settings-nav-row[data-page="tools"]');
+  await openSettingsPage('tools');
   await until(`document.querySelector('.settings-note')?.textContent.includes('ruff 0.')`, 'ruff version shown');
-  await js(`(document.querySelector('.settings-nav-row[data-page="actionsOnSave"]').scrollIntoView(), true)`);
-  await click('.settings-nav-row[data-page="actionsOnSave"]');
+  await openSettingsPage('actionsOnSave');
   await click('[data-key="tools.formatOnSave"]');
   // ---------- Settings: Appearance -> Light ----------
-  await js(`(document.querySelector('.settings-nav-row[data-page="appearance"]').scrollIntoView(), true)`);
-  await click('.settings-nav-row[data-page="appearance"]');
+  await openSettingsPage('appearance');
   await js(`document.querySelector('[data-key="appearance.theme"]').focus()`);
   // The combo lists Dark, Light, Sync with OS; a fresh profile starts on Sync with OS (new installs), an older one on Dark.
   await press((await js(`document.querySelector('[data-key="appearance.theme"]').value`)) === 'system' ? 'ArrowUp' : 'ArrowDown');

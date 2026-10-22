@@ -58,15 +58,25 @@ function groupSchema(rows) {
 // Every file in main/db/kinds/ is a kind module: module.exports = (lib) => ({ kinds: {key: kind}, packages?: {name: spec} }),
 // where lib is the shared helpers below and packages are the npm specs its kinds load with lib.loadPackage(name).
 // A kind: { label, order (menu position), open(cfg, {onLost}) -> adapter, fields, builtin? | package, defaultPort?,
-//   quote (identifier quote), implicitSchemas (schemas generated SQL leaves unqualified), ui? (passed to the renderer
-//   as is: console language, statement splitting, tree shape) }.
+//   quote (identifier quote), implicitSchemas (schemas generated SQL leaves unqualified), sqlDialect? (the literals
+//   Export Data's SQL INSERT format writes: a key of SQL_DIALECTS in main/db/export.js, 'standard' by default),
+//   ui? (passed to the renderer as is: console language, statement splitting, tree shape) }.
 // fields: built-in names ('file', 'host', 'port', 'user', 'password', 'database') or specs
 //   { key, label (English, translated in the renderer), type: 'text' | 'number' | 'password' | 'checkbox' | 'select' | 'file',
 //     options?: [[value, label]], placeholder?, default?, extensions? (for 'file') }.
 // The adapter: { query(text, {maxRows}) -> {columns: [{name, type}], rows: [[...]], rowCount, truncated, command, ms},
 //   schema() -> [{name, kind, children: [{name, kind, columns: [{name, type, pk, nullable}]}]}], version(), close() },
-// every value JSON-safe (lib.jsonSafe). Adding a database is adding one file here.
-const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'] };
+// every value JSON-safe (lib.jsonSafe; a number whose JS text differs from the database's may be {$number: text}).
+// A SQL kind also has cursor(sql, {readOnly}) -> {columns, next(n) -> rows | null, close(), capped?} for Export Data
+// (main/db/export.js): the driver's own streaming (a server-side cursor, a row stream with pause/resume, a result set),
+// never re-running the statement per page, with exact values: {$number: 'database text'} for numbers, bigint, Buffer /
+// Uint8Array for binary, the database's text for the rest. readOnly (a table, or a statement the renderer judged
+// read-only) runs it in a read-only transaction where the database has one. Network kinds stream on a connection of
+// their own, so the console stays usable and nothing it runs lands inside the export's transaction. Without a cursor
+// Export Data refuses (EXPORT_UNSUPPORTED). lib.pushCursor / lib.resultCursor / lib.exportError (main/db/cursors.js)
+// are the shared pieces. Adding a database is adding one file here.
+const { exportError, pushCursor, resultCursor, EXPORT_ROW_CAP } = require('./cursors');
+const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, exportError, pushCursor, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'] };
 const DRIVERS = {};
 const PACKAGES = {};
 for (const file of fs.readdirSync(path.join(__dirname, 'kinds')).filter((f) => f.endsWith('.js')).sort()) {

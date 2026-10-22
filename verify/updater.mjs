@@ -1,5 +1,7 @@
 // Updates from source: Help > Check for Updates… with no feed, a local folder feed with a newer version, the same
-// version, and a feed that cannot be read; the Settings > Updates page; a skipped version; and the Korean strings.
+// version, and a feed that cannot be read; the Settings > Updates page; a skipped version; the status bar text of a
+// differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); and the Korean strings.
+// The differential download itself is verify/update-delta.mjs.
 // The real download and restart of an installed build is verify/update-e2e.mjs.
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -22,7 +24,7 @@ const pressButton = (t, label) => t.js(`([...[...document.querySelectorAll('.dia
 const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, what);
 
 {
-  const t = await launch({ fixture: 'core', port: 9800, name: 'updater' });
+  const t = await launch({ fixture: 'core', port: 9800, name: 'updater', env: { PYIDE_UPDATE_TEST: '1' } });
   const { js, until, check } = t;
   try {
     const current = (await js(`ide.api.invoke('app:info')`)).version;
@@ -42,6 +44,7 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
     await until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Updates settings page');
     check(await js(`document.querySelector('[data-key="updates.checkOnStartup"]').checked`), 'Settings > Updates: check on startup is on by default');
     check(await js(`document.querySelector('.settings-dialog').textContent.includes('Run from source (no updates)')`), 'Settings > Updates names the installation kind');
+    check(await js(`document.querySelector('[data-key="updates.differential"]')?.checked === true`), 'Settings > Updates: differential downloads are on by default');
 
     // ---------- a newer version in a local folder feed, set through the page ----------
     const newer = feedFolder('9.9.9');
@@ -68,6 +71,17 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
     check((await dialogText(t)).includes('No latest.yml in'), 'a folder without latest.yml is reported');
     await pressButton(t, 'Close');
 
+    // ---------- status bar during a download: delta size when the download is differential ----------
+    const statusText = () => js(`document.getElementById('updateStatus').textContent`);
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'downloading', available: '9.9.9', percent: 42, download: { mode: 'delta', size: 102933452, bytes: 4729305, reason: null } })`);
+    await until(`document.getElementById('updateStatus').textContent.includes('delta')`, 'delta status text');
+    check(await statusText() === 'Downloading PyIDE 9.9.9 (delta 4.5 MB)… 42%', `a differential download shows its size: ${await statusText()}`);
+    await js(`ide.api.invoke('updater:testPhase', { download: { mode: 'full', size: 102933452, bytes: 102933452, reason: 'fallback' }, percent: 3 })`);
+    await until(`document.getElementById('updateStatus').textContent === 'Downloading PyIDE 9.9.9… 3%'`, 'full download status text');
+    check(true, 'after a fallback to the full installer the status bar shows the plain text');
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, percent: 0, download: null })`);
+    await until(`document.getElementById('updateStatus').classList.contains('hidden')`, 'status hidden');
+
     // ---------- a skipped version shows in Settings and can be cleared ----------
     await js(`(ide.settings.set('updates.skippedVersion', '9.9.9'), ide.openSettings('updates'), true)`);
     await until(`document.querySelector('.settings-dialog')?.textContent.includes('Skipped version:')`, 'skipped row');
@@ -83,7 +97,7 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
 }
 
 // ---------- Korean ----------
-const k = await launch({ fixture: 'core', port: 9801, name: 'updater-ko', lang: 'ko-KR' });
+const k = await launch({ fixture: 'core', port: 9801, name: 'updater-ko', lang: 'ko-KR', env: { PYIDE_UPDATE_TEST: '1' } });
 try {
   await k.js(`(ide.settings.set('updates.feedUrl', ${S(feedFolder('9.9.9'))}), true)`);
   await k.js(`(ide.runAction('CheckForUpdates'), true)`);
@@ -92,6 +106,10 @@ try {
   const dialogLeaks = await englishLeaks(k, '.dialog');
   k.check(!dialogLeaks.length, `no English in the Korean update dialog${dialogLeaks.length ? `: ${S(dialogLeaks)}` : ''}`);
   await pressButton(k, '닫기');
+  await k.js(`ide.api.invoke('updater:testPhase', { phase: 'downloading', available: '9.9.9', percent: 42, download: { mode: 'delta', size: 102933452, bytes: 4729305, reason: null } })`);
+  await k.until(`document.getElementById('updateStatus').textContent.includes('9.9.9')`, 'Korean delta status');
+  k.check(await k.js(`document.getElementById('updateStatus').textContent`) === 'PyIDE 9.9.9 다운로드 중 (변경분 4.5 MB)… 42%', 'the delta status text is in Korean');
+  await k.js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, percent: 0, download: null })`);
   await k.js(`(ide.openSettings('updates'), true)`);
   await k.until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Korean settings page');
   const pageLeaks = await englishLeaks(k, '.settings-page');

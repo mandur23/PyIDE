@@ -4,6 +4,16 @@
 
 // One TSV cell to a JSON-safe value by its ClickHouse type. Exported for verify/database-sql.mjs.
 const TSV_ESCAPES = { b: '\b', f: '\f', r: '\r', n: '\n', t: '\t', 0: '\0', "'": "'", '\\': '\\' };
+// Export Data's value: numbers keep ClickHouse's text ({$number}), Bool is a boolean, the rest is the text as is.
+function exactTsv(raw, type) {
+  if (raw === '\\N') return null;
+  const s = raw.replace(/\\(.)/g, (_m, c) => TSV_ESCAPES[c] ?? c);
+  const base = type.replace(/^(?:LowCardinality\(|Nullable\()+/, '').replace(/\)+$/, '');
+  if (/^(U?Int\d+|Float\d+|BFloat16|Decimal(\d+)?\b.*)$/.test(base)) return { $number: s };
+  if (base === 'Bool') return s === 'true';
+  return s;
+}
+
 function tsvValue(raw, type) {
   if (raw === '\\N') return null;
   const s = raw.replace(/\\(.)/g, (_m, c) => TSV_ESCAPES[c] ?? c);
@@ -75,7 +85,7 @@ const COMPLETION = {
     SimpleAggregateFunction(name, T), Point, Ring, Polygon, MultiPolygon, Interval`),
 };
 
-module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, exportError, NETWORK_FIELDS }) => {
   // Statements that answer with rows; everything else (DDL, INSERT, SET...) is sent as a command.
   const ROWS = new Set(['SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'EXISTS', 'VALUES']);
   const NETWORK = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNABORTED']);
@@ -132,8 +142,49 @@ module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIE
       });
     }
 
+    // Export Data: the result streamed over HTTP and read a block at a time (the response is paused in between), with
+    // numbers as ClickHouse prints them ({$number}). Cancel closes the response. ClickHouse has no transaction to
+    // make read-only, so readOnly changes nothing here.
+    async function cursor(sql) {
+      const query = sql.replace(/(\s|;)+$/, '');
+      if (!ROWS.has(commandOf(query))) throw exportError('NO_ROWS');
+      const rs = await call(() => client.query({ query, format: 'TabSeparatedWithNamesAndTypes' }));
+      const it = rs.stream()[Symbol.asyncIterator]();
+      let names = null;
+      let types = null;
+      let buffer = [];
+      let done = false;
+      const pull = async () => {
+        const r = await it.next();
+        if (r.done) { done = true; return; }
+        for (const row of r.value) {
+          const cells = row.text.split('\t');
+          if (!names) names = cells;
+          else if (!types) types = cells;
+          else buffer.push(cells.map((c, i) => exactTsv(c, types[i])));
+        }
+      };
+      while (!types && !done) await pull();
+      if (!names) { rs.close(); throw exportError('NO_ROWS'); }
+      return {
+        columns: names.map((name, i) => ({ name, type: types?.[i] || '' })),
+        async next(n) {
+          while (!done && buffer.length < n) await pull();
+          if (!buffer.length) return null;
+          const out = buffer.length > n ? buffer.splice(0, n) : buffer;
+          if (out === buffer) buffer = [];
+          return out;
+        },
+        async close() {
+          if (!done) { done = true; try { rs.close(); } catch {} }
+          buffer = [];
+        },
+      };
+    }
+
     return {
       query: (sql, { maxRows }) => timed(() => run(sql, maxRows)),
+      cursor,
       async schema() {
         const rows = await json(`
           SELECT c.database AS s, c.table AS t, t.engine AS e, c.name AS col, c.type AS ty, c.is_in_primary_key AS pk
@@ -154,7 +205,7 @@ module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIE
     packages: { '@clickhouse/client': '@clickhouse/client@1.24.0' },
     kinds: {
       clickhouse: {
-        label: 'ClickHouse', order: 50, package: '@clickhouse/client', defaultPort: 8123, quote: '`', implicitSchemas: ['default'], open: openClickhouse,
+        label: 'ClickHouse', order: 50, package: '@clickhouse/client', defaultPort: 8123, quote: '`', sqlDialect: 'clickhouse', implicitSchemas: ['default'], open: openClickhouse,
         fields: [
           { key: 'url', label: 'URL (instead of host and port)', type: 'url', placeholder: 'https://example.clickhouse.cloud:8443' },
           host, port,
@@ -167,3 +218,4 @@ module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, NETWORK_FIE
   };
 };
 module.exports.tsvValue = tsvValue;
+module.exports.exactTsv = exactTsv;

@@ -1,0 +1,8 @@
+{
+  "id": "semantic-highlight",
+  "name": "Semantic Highlighting",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Colors Python names by what they are: parameters, self and cls, classes, functions and methods, properties, modules, constants, builtins, decorators and type parameters.",
+  "main": ["semantic-highlight.js"]
+}

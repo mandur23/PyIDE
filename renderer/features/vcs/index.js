@@ -133,6 +133,8 @@
       lastHead = head;
       headCache.clear();
       if (gitTw.isVisible()) loadLog();
+      // Commits, checkouts, resets: code vision blames its files again.
+      ide.emit('vcsHeadChanged', { root, head });
     }
     setRepoKey(!!repo);
     // Other plugins (the Workspace home's branch chip) follow Create Git Repository, checkouts and rebases, which change

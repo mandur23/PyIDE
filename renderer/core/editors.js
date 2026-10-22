@@ -30,6 +30,45 @@
 
   const settingOn = (k, d) => ide.settings.get(k, d);
 
+  // ---------- line separators ----------
+  // A document keeps its file's line separator (doc.lineSeparator: '\n', '\r\n' or '\r'), as PyCharm does: the most
+  // frequent one in the file (doc.mixedSeparators when there are several), or the new-file setting for a file without
+  // any. Monaco knows only LF and CRLF, so the model holds CRLF for a CR file and the text is turned back on save.
+  const NEW_FILE_SEPARATOR = { lf: '\n', crlf: '\r\n' };
+  const newFileSeparator = () => NEW_FILE_SEPARATOR[settingOn('editor.lineSeparator', 'system')]
+    || (/Win/i.test(navigator.platform) ? '\r\n' : '\n');
+  function detectSeparator(text) {
+    let crlf = 0, lf = 0, cr = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c === 13) { if (text.charCodeAt(i + 1) === 10) { crlf++; i++; } else cr++; } else if (c === 10) lf++;
+    }
+    const kinds = [['\n', lf], ['\r\n', crlf], ['\r', cr]].filter(([, n]) => n);
+    if (!kinds.length) return { sep: newFileSeparator(), mixed: false };
+    kinds.sort((a, b) => b[1] - a[1]);
+    return { sep: kinds[0][0], mixed: kinds.length > 1 };
+  }
+  // Makes the model use the separator found in `text` (setEOL is not an undo step). -> true when the model changed.
+  // lineSeparatorChanged(doc) tells the status bar widget (line-separators plugin).
+  function adoptSeparator(doc, text) {
+    const { sep, mixed } = detectSeparator(text);
+    Object.assign(doc, { lineSeparator: sep, mixedSeparators: mixed });
+    const eol = sep === '\n' ? '\n' : '\r\n';
+    const changed = doc.model.getEOL() !== eol;
+    if (changed) doc.model.setEOL(eol === '\n' ? ide.monaco.editor.EndOfLineSequence.LF : ide.monaco.editor.EndOfLineSequence.CRLF);
+    ide.emit('lineSeparatorChanged', doc);
+    return changed;
+  }
+  // The text written to disk: the model's, with a CR file's separators turned back from CRLF.
+  const diskText = (doc) => (doc.lineSeparator === '\r' ? doc.model.getValue().replace(/\r\n/g, '\r') : doc.model.getValue());
+  ide.lineSeparators = {
+    detect: detectSeparator,
+    newFile: newFileSeparator,
+    // Text for a new file (New Python File, file templates) with the new-file separator.
+    forNewFile: (text) => String(text).replace(/\r\n|\r|\n/g, newFileSeparator()),
+    diskText,
+  };
+
   // ---------- documents ----------
   // asText (Open as Text): a file that looks binary is read as text all the same, in the encoding detected.
   async function loadDoc(path, { asText } = {}) {
@@ -46,6 +85,8 @@
     // fresh: fileOpened is announced once the first tab for it exists. diskHash fingerprints the text last read from
     // or written to the file, so auto save can tell when the file changed underneath.
     const doc = { path, model, savedVersion: preview ? preview.savedVersion : model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText };
+    const clean = doc.savedVersion === model.getAlternativeVersionId();
+    if (adoptSeparator(doc, r.text) && clean) doc.savedVersion = model.getAlternativeVersionId();
     docs.set(key(path), doc);
     model.onDidChangeContent((e) => {
       // The tab bars change only when the modified mark does, not on every keystroke.
@@ -711,6 +752,11 @@
   ide.activeTab = () => activeGroup?.active || null;
   ide.isDirty = (t) => !!t?.doc && docDirty(t.doc);
   ide.getDocument = (path) => docs.get(key(path)) || null;
+  // The document for `path`, loaded without opening a tab -> doc | {unsupported: {binary | tooLarge, size}}. A loaded
+  // document is released when its last tab closes, so hand it to ide.openCustomTab({doc}) (or open the file) at once.
+  ide.loadDocument = (path) => loadDoc(path);
+  // Releases a document from ide.loadDocument that no tab took after all (a no-op while a tab holds it).
+  ide.releaseDocument = (doc) => { if (doc?.model && !doc.model.isDisposed() && docs.get(key(doc.path)) === doc) releaseDoc(doc); };
 
   function resolveGroup(target) {
     if (target && typeof target === 'object') return groups.includes(target) ? target : activeGroup;
@@ -802,14 +848,16 @@
     },
   };
 
-  // {id, title, icon?, mount(host, tab), onClose?()} -> tab; reopening an existing id just activates it.
-  ide.openCustomTab = ({ id, title, icon = '◆', mount, onClose, group }) => {
+  // {id, title, icon?, mount(host, tab), onClose?(), doc?} -> tab; reopening an existing id just activates it.
+  // doc (from ide.loadDocument) makes the tab hold that file's document like a viewer tab: it stays loaded while the tab
+  // is open, Save All writes it, closing the tab asks about unsaved changes, and the status bar shows its encoding.
+  ide.openCustomTab = ({ id, title, icon = '◆', mount, onClose, group, doc }) => {
     let tab = ide.findTab(id);
     if (!tab) {
       const g = resolveGroup(group);
       const host = el('div', 'custom-tab hidden');
       g.customHost.appendChild(host);
-      tab = { kind: 'custom', group: g, path: id, title, icon, host, onClose, pinned: false };
+      tab = { kind: 'custom', group: g, path: id, title, icon, host, onClose, pinned: false, ...(doc ? { doc, model: doc.model } : {}) };
       addTab(g, tab);
       mount(host, tab);
     }
@@ -950,7 +998,7 @@
     let r = null;
     try { r = await readDisk(doc); } catch { return true; } // gone: write recreates it
     if (r?.text === undefined || textHash(r.text) === doc.diskHash) return true;
-    if (r.text === doc.model.getValue()) return true;
+    if (r.text === diskText(doc)) return true;
     return new Promise((resolve) => {
       let choice = false;
       ide.ui.dialog({
@@ -962,6 +1010,7 @@
           { label: tr('Load File System Changes'), run: () => {
             if (!doc.model.isDisposed()) {
               doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
+              adoptSeparator(doc, r.text);
               doc.savedVersion = doc.model.getAlternativeVersionId();
               Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
               clearChanged(doc);
@@ -992,7 +1041,8 @@
     if (!(await runSaveActions(doc, auto)) && auto) return;
     if (doc.model.isDisposed()) return;
     // The version written, not the one after the write: edits typed while it runs are not on disk yet.
-    const text = doc.model.getValue();
+    // In the file's own line separator (diskText); a file with mixed ones is written with the main one only.
+    const text = diskText(doc);
     const version = doc.model.getAlternativeVersionId();
     try {
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
@@ -1008,8 +1058,9 @@
     doc.savedVersion = version;
     doc.diskHash = textHash(text);
     doc.conflict = false;
+    doc.mixedSeparators = false;
     if (!docDirty(doc)) clearChanged(doc);
-    if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text });
+    if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text: doc.lineSeparator === '\r' ? text.replace(/\r/g, '\r\n') : text });
     for (const t of tabsOfDoc(doc)) t.preview = false;
     ide.emit('fileSaved', tab);
   }
@@ -1034,8 +1085,9 @@
       try { r = await readDisk(doc); } catch { continue; }
       // Typed into or closed while the file was read: the editor's text wins.
       if (doc.model.isDisposed() || docDirty(doc)) continue;
-      if (r.text === undefined || r.text === doc.model.getValue()) continue;
+      if (r.text === undefined || r.text === diskText(doc)) continue;
       doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
+      adoptSeparator(doc, r.text);
       doc.savedVersion = doc.model.getAlternativeVersionId();
       Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
       clearChanged(doc);
@@ -1100,6 +1152,7 @@
           if (res.text === undefined || doc.model.isDisposed() || docDirty(doc)) return;
           doc.encoding = enc;
           doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: res.text }], () => null);
+          adoptSeparator(doc, res.text);
           doc.savedVersion = doc.model.getAlternativeVersionId();
           doc.diskHash = textHash(res.text);
           clearChanged(doc);
@@ -1113,7 +1166,7 @@
         run: async () => {
           const prev = doc.encoding;
           doc.encoding = enc;
-          try { await ide.api.invoke('fs:writeText', doc.path, doc.model.getValue(), enc); } catch (e) {
+          try { await ide.api.invoke('fs:writeText', doc.path, diskText(doc), enc); } catch (e) {
             doc.encoding = prev;
             ide.ui.alert(ide.util.errorText(e));
             return;
@@ -1134,7 +1187,8 @@
     const g = t.group;
     const i = g.tabs.indexOf(t);
     const other = oppositeGroup(g);
-    const isFile = t.kind === 'file' || !!t.doc || !!t.viewer;
+    // A custom tab that only holds a document (a compare diff) is not that file's tab: its path is an id.
+    const isFile = t.kind === 'file' || !!t.viewer;
     ide.ui.contextMenu(x, y, [
       { label: tr('Close'), keyAction: 'CloseContent', run: () => closeTabObj(t) },
       { label: tr('Close Other Tabs'), run: () => closeMany(fileTabs(g).filter((o) => o !== t && !o.pinned)) },
@@ -1152,7 +1206,7 @@
       { label: tr('Move to Opposite Group'), disabled: !other, run: () => placeTab(t, other, { clone: false }) },
       { label: tr('Open in New Window'), keyAction: 'OpenInNewWindow', disabled: !isFile, run: () => openInNewWindow([tabPayload(t)]) },
       { label: tr('Move to New Window'), disabled: !isFile, run: () => moveToNewWindow(t) },
-      ...(ide.detached ? [{ label: tr('Move to Main Window'), run: () => dockToMain([t]) }] : []),
+      ...(ide.detached ? [{ label: tr('Move to Main Window'), disabled: !isFile, run: () => dockToMain([t]) }] : []),
       ...(t.viewer && !t.unsupported?.tooLarge ? [{ label: tr('Open as Text'), run: () => ide.openFile(t.path, { asText: true, group: g }) }] : []),
       { separator: true },
       { label: tr('Copy Path'), keyAction: 'CopyPaths', disabled: !isFile, run: () => copyPath(t.path) },
@@ -1293,6 +1347,10 @@
 
   // ---------- actions ----------
   const inGroup = () => !!activeGroup;
+  // The active tab when it is a file (or a viewer of one): a compare or custom tab's path is only a title, and its
+  // document must not be sent to another window under that name.
+  const activeFileTab = () => { const t = activeGroup?.active; return t && (t.kind === 'file' || t.viewer) ? t : null; };
+  const onFile = (fn) => () => { const t = activeFileTab(); if (t) fn(t); };
   [
     { id: 'CloseContent', title: tr('Close Tab'), keys: 'Ctrl+F4', run: () => activeGroup?.active && closeTabObj(activeGroup.active) },
     { id: 'PreviousTab', title: tr('Previous Tab'), keys: 'Alt+ArrowLeft', run: () => cycleTab(-1) },
@@ -1312,11 +1370,11 @@
     { id: 'FocusGroup3', title: tr('Focus Editor Group {n}', { n: 3 }), keys: 'Ctrl+3', run: () => focusGroupAt(2) },
     { id: 'PinActiveTab', title: tr('Pin Tab'), run: () => activeGroup?.active && togglePin(activeGroup.active) },
     { id: 'ReopenClosedTab', title: tr('Reopen Closed Tab'), keys: 'Ctrl+Shift+T', run: reopenClosed },
-    { id: 'OpenInNewWindow', title: tr('Open in New Window'), keys: 'Shift+F4', run: () => activeGroup?.active && openInNewWindow([tabPayload(activeGroup.active)]) },
-    { id: 'MoveToNewWindow', title: tr('Move to New Window'), run: () => activeGroup?.active && moveToNewWindow(activeGroup.active) },
-    { id: 'CopyPaths', title: tr('Copy Path'), keys: 'Ctrl+Shift+C', run: () => activeGroup?.active && copyPath(activeGroup.active.path) },
-    { id: 'SelectInProjectView', title: tr('Select in Project View'), keys: 'Alt+F1', run: () => activeGroup?.active && selectInProject(activeGroup.active.path) },
-    { id: 'ShowInExplorer', title: tr('Show in Explorer'), run: () => activeGroup?.active && ide.api.invoke('shell:showInFolder', activeGroup.active.path) },
+    { id: 'OpenInNewWindow', title: tr('Open in New Window'), keys: 'Shift+F4', run: onFile((t) => openInNewWindow([tabPayload(t)])) },
+    { id: 'MoveToNewWindow', title: tr('Move to New Window'), run: onFile(moveToNewWindow) },
+    { id: 'CopyPaths', title: tr('Copy Path'), keys: 'Ctrl+Shift+C', run: onFile((t) => copyPath(t.path)) },
+    { id: 'SelectInProjectView', title: tr('Select in Project View'), keys: 'Alt+F1', run: onFile((t) => selectInProject(t.path)) },
+    { id: 'ShowInExplorer', title: tr('Show in Explorer'), run: onFile((t) => ide.api.invoke('shell:showInFolder', t.path)) },
     { id: 'OpenFile', title: tr('Open File…'), run: async () => { const p = await ide.api.openFileDialog(); if (p) ide.openFile(p); } },
     { id: 'HideAllWindows', title: tr('Hide All Tool Windows'), keys: 'Ctrl+Shift+F12', run: toggleMaximizeEditor, terminal: true },
   ].forEach(ide.registerAction);

@@ -522,6 +522,9 @@
       const r = await invoke('resolve', ide.root, path, text);
       logResult(r);
       if (!r.ok) return notify(tr('Cannot resolve'), errorText(r), 'error', true);
+      // The file's editor takes the result before the tool goes, as PyCharm's merge writes into the document: closing
+      // first showed the old text until vcs.reload's pass over every open file got to it (seconds on a busy machine).
+      await ide.reloadFromDisk([path]);
       close();
       await vcs.reload();
       afterResolve();

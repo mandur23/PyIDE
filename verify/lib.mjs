@@ -289,6 +289,17 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   return { project, outDir, userData: userData || path.join(work, 'userdata'), pid: child.pid, spawnedAt, cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
 }
 
+// A page expression, true once every code lens of the file shown in `editor` has its view zone above its line. Code
+// vision draws its lenses (empty placeholders first) as view zones a moment after a file shows in an editor pane:
+// Monaco asks the providers after a debounce, about a second on a busy machine, and each pane asks on its own. The
+// zones push the lines below them down, so a suite that clicks at the screen position of a line waits for this
+// before taking the position. True when code vision is off or its plugin is not loaded.
+export const lensesShown = (editor = 'ide.editor') => `(() => { const e = ${editor}; const m = e?.getModel();
+  if (!m || !ide.codeVision) return true;
+  const lh = e.getOption(ide.monaco.editor.EditorOption.lineHeight);
+  return [...new Set(ide.codeVision.lenses(m).map((l) => l.line))]
+    .every((L) => e.getTopForLineNumber(L) - (L > 1 ? e.getTopForLineNumber(L - 1) : -lh) > lh); })()`;
+
 // Opens a project file in the editor and waits for its tab.
 export async function openFile(ctx, relPath) {
   await ctx.js(`ide.openFile(ide.util.joinPath(ide.root, ${JSON.stringify(relPath.replace(/\//g, '\\'))}))`);
