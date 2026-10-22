@@ -9,6 +9,8 @@ const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const navRows = (t) => t.js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|')`);
 const openPage = async (t, page) => {
+  // The category list scrolls in a small window (more plugin pages since 0.2.3): bring the row into view first.
+  await t.js(`(document.querySelector('.settings-nav-row[data-page="${page}"]').scrollIntoView({ block: 'center' }), true)`);
   await t.click(`.settings-nav-row[data-page="${page}"]`);
   await t.until(`document.querySelector('.settings-page').dataset.page === '${page}'`, `page ${page}`);
 };
