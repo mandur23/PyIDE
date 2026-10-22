@@ -89,7 +89,7 @@
       const body = el('div', 'ft-vars');
       const inputs = names.map((n) => {
         const row = el('label', 'ft-var-row');
-        const input = el('input');
+        const input = el('input', 'input');
         input.dataset.var = n;
         row.append(el('span', null, n), input);
         body.append(row);

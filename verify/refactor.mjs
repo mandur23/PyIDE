@@ -231,6 +231,15 @@ try {
   await press('Ctrl+F6');
   await h.dialog('rfSignatureDialog');
   check(await js(`[...document.querySelectorAll('#rfSignatureDialog .rf-param-name')].map(i => i.value).join(',')`) === 'price,quantity', 'Change Signature lists the parameters');
+  // Real keys and clicks: a parameter field that gets the keyboard keeps it (selecting its row used to re-insert the rows,
+  // which dropped the focus to the page, so no parameter could be edited).
+  await js(`(document.querySelector('#rfSignatureDialog .rf-name').focus(), true)`);
+  await press('Tab');
+  check(await js(`document.activeElement === document.querySelectorAll('#rfSignatureDialog .rf-param-name')[0] && document.querySelectorAll('#rfSignatureDialog .rf-param-rows .rf-param')[0].classList.contains('selected')`),
+    'Tab from the name goes into the first parameter and keeps the keyboard there');
+  await t.click('#rfSignatureDialog .rf-param-rows .rf-param:nth-child(2) .rf-param-default');
+  check(await js(`document.activeElement === document.querySelectorAll('#rfSignatureDialog .rf-param-default')[1] && document.querySelectorAll('#rfSignatureDialog .rf-param-rows .rf-param')[1].classList.contains('selected')`),
+    'clicking a parameter field keeps the keyboard in it and selects its row');
   await h.setInput('#rfSignatureDialog .rf-name', 'line_total');
   await js(`(document.querySelectorAll('#rfSignatureDialog .rf-param-name')[1].dispatchEvent(new Event('focus')), true)`);
   await t.click('#rfSignatureDialog .rf-up');

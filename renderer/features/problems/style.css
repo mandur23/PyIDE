@@ -3,3 +3,4 @@
 .problem .sev.error { color: var(--red); }
 .problem .sev.warning { color: var(--yellow); }
 .problem .sev.info { color: var(--blue8); }
+:root[data-theme="light"] .problem .sev.warning { color: #b07800; }

@@ -461,14 +461,18 @@
   ide.registerAction({ id: 'Github.View.Pull.Request', title: tr('View Pull Requests'), run: () => { tw.show(); load(); } });
 
   ide.on('toolWindowShown', (id) => id === 'PullRequests' && load());
-  ide.on('projectOpened', () => {
+  // Another project, or none: closing shows "No project" instead of the closed project's pull requests (gh runs only
+  // while the tool window is shown, and never without a project).
+  const forget = () => {
     status = null;
     remote = null;
     prs = [];
     selected = null;
     current = null;
-    if (tw.isVisible()) load();
-  });
+    if (stateEl && (tw.isVisible() || !ide.root)) load();
+  };
+  ide.on('projectOpened', forget);
+  ide.on('projectClosed', forget);
 
   ide.github = { share: shareProject, load, status: () => status };
 })();

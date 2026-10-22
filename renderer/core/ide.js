@@ -155,6 +155,11 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   host.classList.add('console-host');
   const out = el('pre', 'console');
   host.appendChild(out);
+  // Output follows the end unless the user scrolled up. Measured on scroll, not on append: a hidden console (a tool
+  // window or tab not shown) has no size, and once shown it must open at its latest output, not at its first line.
+  let stick = true;
+  out.addEventListener('scroll', () => { if (out.clientHeight) stick = out.scrollHeight - out.scrollTop - out.clientHeight < 40; });
+  observeSize(out, () => { if (stick) out.scrollTop = out.scrollHeight; });
   let inp;
   if (input) {
     inp = el('input', 'console-in');
@@ -182,9 +187,8 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
         last = m.index + m[0].length;
       }
       span.append(text.slice(last));
-      const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
       out.appendChild(span);
-      if (atBottom) out.scrollTop = out.scrollHeight;
+      if (stick) out.scrollTop = out.scrollHeight;
     },
     clear: () => out.replaceChildren(),
     text: () => out.textContent,
@@ -503,14 +507,16 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   const shown = (n) => !n.disabled && n.getClientRects().length > 0;
   // Only the topmost dialog takes keys, and none while a menu opened from it is up (the menu's Esc and Enter come first).
   // Tab and Shift+Tab cycle inside it (never into the editor behind); Enter on a focused button presses that button, in
-  // a textarea it is a new line, and while an IME composes it commits the text.
+  // a textarea it is a new line, and while an IME composes it commits the text. A dialog without a primary button leaves
+  // Enter to its content (the Conflicts dialog's file list merges the selected file).
   const onKey = (e) => {
     if (backdrop !== $('dialogHost').lastElementChild || menusOpen()) return;
     if (e.key === 'Escape') { e.stopPropagation(); dlg.close(); }
-    if (e.key === 'Enter' && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) {
+    const primary = foot.querySelector('.primary');
+    if (e.key === 'Enter' && primary && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) {
       e.preventDefault(); // the keystroke must not also type into the field that gets the keyboard back
       e.stopPropagation();
-      foot.querySelector('.primary')?.click();
+      primary.click();
     }
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.target.closest?.('.monaco-editor')) {
       const stops = [...box.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')].filter((n) => n.tabIndex >= 0 && shown(n));
@@ -734,6 +740,31 @@ ide.registerToolbarItem = ({ side = 'right', order = 100, el: node }) => placeOr
   side === 'left' ? $('toolbarLeft') : order >= 60 && order < 100 ? $('runWidget') : $('toolbarRight'), node, order);
 ide.registerStatusItem = ({ order = 100, el: node }) => placeOrdered($('statusItems'), node, order);
 $('projectWidget').dataset.order = 0;
+// Status bar widgets never wrap (styles.css). When they do not all fit, the file path gives way first (down to 120px,
+// with an ellipsis), then the widgets with the highest order are hidden (.status-overflow), as PyCharm drops the
+// widgets that do not fit, so the caret position, encoding and interpreter always stay on screen.
+{
+  const bar = $('status'), path = $('statusPath'), items = $('statusItems');
+  let frame = 0;
+  const fit = () => {
+    frame = 0;
+    for (const n of items.querySelectorAll(':scope > .status-overflow')) n.classList.remove('status-overflow');
+    const crowded = () => bar.scrollWidth > bar.clientWidth + 1 || (path.scrollWidth > path.clientWidth && path.clientWidth < 120);
+    while (crowded()) {
+      const last = [...items.children].reverse().find((n) => !n.classList.contains('status-overflow') && n.getClientRects().length);
+      if (!last) break;
+      last.classList.add('status-overflow');
+    }
+    mo.takeRecords();
+  };
+  const later = () => { if (!frame) frame = requestAnimationFrame(fit); };
+  const mo = new MutationObserver((records) => { if (records.some((r) => !$('statusPos').contains(r.target))) later(); });
+  mo.observe(bar, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+  observeSize(bar, later);
+  // A font that loads after the first fit changes the widgets' widths without any DOM change.
+  document.fonts?.addEventListener?.('loadingdone', later);
+  document.fonts?.ready?.then(later);
+}
 
 // ---------- tool windows ----------
 const areas = {

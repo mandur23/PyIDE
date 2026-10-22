@@ -898,7 +898,6 @@
       body,
       width: 780,
       buttons: [
-        { label: tr('Cancel') },
         { label: tr('OK'), primary: true, run() {
           for (const c of draft) if (!c.name?.trim()) c.name = tr('Unnamed');
           // A cycle made some other way (a copied configuration) is refused here too.
@@ -918,6 +917,7 @@
           // Open tabs keep running their old copy; a rerun picks up the edited configuration.
           for (const s of sessions) { const c = findConfig(s.key); if (c) s.cfg = c; }
         } },
+        { label: tr('Cancel') },
       ],
     });
   }
@@ -1011,6 +1011,11 @@
     // Configurations saved before "Before launch" existed have none; malformed tasks are dropped.
     for (const c of state.configs) if ('beforeLaunch' in c) c.beforeLaunch = cleanTasks(c.beforeLaunch);
     if (!findConfig(state.selected)) state.selected = CURRENT;
+    renderTarget();
+  });
+  // The configurations belong to the closed project: the run widget must not offer (and Run must not start) them.
+  ide.on('projectClosed', () => {
+    state = { configs: [], selected: CURRENT };
     renderTarget();
   });
   renderTarget();

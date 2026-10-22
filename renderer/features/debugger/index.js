@@ -562,9 +562,9 @@
       body,
       width: 760,
       buttons: [
-        { label: tr('Refresh'), run: () => { load(); filter.focus(); return false; } },
-        { label: tr('Cancel') },
         { label: tr('Attach'), primary: true, run: () => { attachSelected(); return false; } },
+        { label: tr('Cancel') },
+        { label: tr('Refresh'), run: () => { load(); filter.focus(); return false; } },
       ],
     });
     dlg.el.classList.add('dbg-dialog', 'dbg-attach-dialog');
@@ -920,8 +920,6 @@
       body,
       width: 620,
       buttons: [
-        { label: tr('Add Watch'), run: () => { addWatch(input.value); return false; } },
-        { label: tr('Close') },
         { label: tr('Evaluate'), primary: true, run: async () => {
           const expr = input.value.trim();
           if (!expr) return false;
@@ -930,6 +928,8 @@
           input.select();
           return false;
         } },
+        { label: tr('Close') },
+        { label: tr('Add Watch'), run: () => { addWatch(input.value); return false; } },
       ],
     });
     dlg.el.classList.add('dbg-dialog');

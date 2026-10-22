@@ -44,8 +44,8 @@
   border-radius: 6px; padding: 6px 8px; outline: none; font: 13px/1.45 inherit; font-family: inherit; }
 .aic-input:focus { border-color: var(--blue6); }
 .aic-foot { display: flex; align-items: center; gap: 8px; }
-.aic-status { flex: 1; color: var(--gray8); font-size: 12px; }
-.aic-status.error { color: var(--red); }
+.aic-chat-status { flex: 1; color: var(--gray8); font-size: 12px; }
+.aic-chat-status.error { color: var(--red); }
 .aic-send { min-width: 64px; }
 .aic-send.stop { background: var(--red); border-color: var(--red); }
 .aic-complete { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 30; padding: 4px; background: var(--gray2);

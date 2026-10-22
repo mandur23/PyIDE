@@ -29,7 +29,7 @@
   const djangoTw = ide.registerToolWindow({
     id: 'DjangoStructure', title: tr('Django Structure'), icon: '🌐', iconName: 'djangoStructure', side: 'left', order: 45,
     mount(container) {
-      container.classList.add('fw-tool');
+      container.classList.add('fwk-tool');
       djangoBody = el('div', 'fw-tree');
       djangoBody.id = 'djangoStructure';
       container.appendChild(djangoBody);
@@ -48,7 +48,7 @@
     const hasChildren = typeof key === 'string';
     const arrow = el('span', 'fw-arrow', hasChildren ? (collapsed.has(key) ? '▸' : '▾') : '');
     row.append(arrow, el('span', 'fw-icon', icon || ''));
-    const name = el('span', 'fw-name');
+    const name = el('span', 'fwk-name');
     if (label instanceof Node) name.appendChild(label); else name.textContent = label;
     row.appendChild(name);
     if (detail) row.appendChild(userText(el('span', 'fw-detail muted', detail)));
@@ -107,13 +107,13 @@
   const endpointsTw = ide.registerToolWindow({
     id: 'Endpoints', title: tr('Endpoints'), icon: '⇄', iconName: 'endpoints', side: 'bottom', order: 58,
     mount(container) {
-      container.classList.add('fw-tool', 'fw-endpoints');
+      container.classList.add('fwk-tool', 'fw-endpoints');
       const bar = el('div', 'fw-endpoints-bar');
       filterInput = el('input', 'fw-filter');
       filterInput.placeholder = tr('Filter by path, method or endpoint');
       filterInput.oninput = () => renderEndpoints(fw.info());
       bar.appendChild(filterInput);
-      const head = el('div', 'fw-row fw-head');
+      const head = el('div', 'fwk-row fwk-head');
       for (const h of [tr('Method'), tr('Path'), tr('Endpoint'), tr('Source')]) head.appendChild(el('span', null, h));
       endpointsList = el('div', 'fw-endpoint-rows');
       endpointsList.id = 'endpointsList';
@@ -137,7 +137,7 @@
       if (!group.length) continue;
       if (fw.kinds().length > 1) endpointsList.appendChild(userText(el('div', 'fw-group', fw.names[kind])));
       for (const r of group) {
-        const row = userText(el('div', 'fw-row fw-endpoint'));
+        const row = userText(el('div', 'fwk-row fw-endpoint'));
         row.dataset.path = r.path;
         row.append(
           userText(el('span', `fw-method m-${(r.methods[0] || 'any').toLowerCase()}`, methodsOf(r))),

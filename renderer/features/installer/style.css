@@ -17,7 +17,7 @@
 .inst-interp { color: var(--gray12); }
 .inst-link { color: var(--blue8); font-size: 12px; padding: 1px 6px; border-radius: 4px; }
 .inst-link:hover { background: var(--gray3); }
-.inst-cards { flex: 1; overflow: auto; padding: 4px 24px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+.inst-cards { flex: 1; overflow: auto; padding: 4px 24px 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 12px; align-content: start; }
 .inst-empty { padding: 20px 4px; }
 .inst-card { background: var(--gray2); border: 1px solid var(--gray3); border-radius: 8px; padding: 12px 14px 10px; min-width: 0;

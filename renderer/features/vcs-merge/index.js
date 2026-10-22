@@ -57,12 +57,23 @@
     notify(failed, errorText(r), 'error', true);
   }
 
+  // Git names the sides of a merge, rebase, cherry-pick or revert; conflicts an unstash or unshelve leaves have no
+  // operation, so the command that stopped names the incoming side (the stash or shelf) until they are resolved.
+  let incoming = null; // {root, name}
+  async function conflictSides() {
+    const sides = await invoke('conflictSides', ide.root);
+    if (!sides.op && !sides.theirs && incoming && ide.util.samePath(incoming.root, ide.root || '')) sides.theirs = incoming.name;
+    return sides;
+  }
+
   function stopped(r) {
+    incoming = !r.op && r.theirs ? { root: ide.root, name: r.theirs } : null;
     notify(trn(r.conflicts.length, 'Conflicts in {n} file', 'Conflicts in {n} files'), r.op ? tr('Resolve them, then continue or abort.') : tr('Resolve them to finish.'), 'warn');
     openConflicts();
   }
 
   function allResolved() {
+    incoming = null;
     const op = vcs.repo()?.op;
     notify(tr('All conflicts resolved'), op ? NEXT_STEP[op] : '', 'ok');
   }
@@ -159,7 +170,7 @@
     if (!inRepo()) return;
     await vcs.refresh();
     if (!conflictedFiles().length) return allResolved();
-    const sides = await invoke('conflictSides', ide.root);
+    const sides = await conflictSides();
     conflictsDialog?.close();
     const selected = new Set();
     const body = el('div', 'vcs-conflicts');
@@ -215,6 +226,14 @@
       onClose: () => { if (conflictsDialog === dlg) conflictsDialog = null; },
     });
     conflictsDialog = dlg;
+    // The keyboard starts in the file list: Up/Down choose the file the buttons act on, Enter merges it.
+    ide.ui.listKeys(rows, {
+      rows: '.vcs-conflict-row',
+      id: (row) => row.dataset.path,
+      select: (row) => { selected.clear(); selected.add(row.dataset.path); render(); },
+      open: (row) => mergeFile(row.dataset.path),
+    });
+    rows.focus();
     function mergeFile(path) { dlg.close(); openMergeTool(path); }
   }
 
@@ -263,7 +282,7 @@
   async function openMergeTool(path) {
     const id = `${path} [${tr('merge')}]`; // tab ids double as the status-bar path
     if (ide.findTab(id)) return ide.openCustomTab({ id });
-    const [v, sides] = await Promise.all([invoke('mergeVersions', ide.root, path), invoke('conflictSides', ide.root)]);
+    const [v, sides] = await Promise.all([invoke('mergeVersions', ide.root, path), conflictSides()]);
     if (v.ours == null || v.theirs == null) {
       notify(tr('Cannot merge {name}', { name: basename(path) }), tr('One side deleted the file. Choose Accept Yours or Accept Theirs in the Conflicts dialog.'), 'warn');
       return openConflicts();
@@ -660,7 +679,7 @@
           await ide.saveAll();
           const r = await invoke('unstash', ide.root, s.ref, { pop: popped, index: index.input.checked, branch: branch || null });
           const done = branch ? tr('Unstashed {ref} onto the new branch {branch}', { ref: s.ref, branch }) : popped ? tr('Unstashed {ref}', { ref: s.ref }) : tr('Applied {ref}', { ref: s.ref });
-          finish(r, done, tr('Unstash failed'));
+          finish({ ...r, theirs: s.ref }, done, tr('Unstash failed'));
         } },
         { label: tr('Cancel') },
       ],

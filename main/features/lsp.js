@@ -69,6 +69,7 @@ class Server {
     this.dead = false;
     this.log = [];
     this.buf = Buffer.alloc(0);
+    this.tickets = new Map(); // the renderer's ticket -> request id, for lsp:cancel
     this.proc = spawn(process.execPath, [path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
       cwd: root,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
@@ -168,22 +169,41 @@ class Server {
     }
   }
 
-  request(method, params) {
+  // ticket: a key the renderer can later pass to cancel(ticket).
+  request(method, params, ticket) {
     if (this.dead) return Promise.reject(Object.assign(new Error('language server is not running'), { expected: true }));
     const id = this.nextId++;
     const ms = timeoutFor(method);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (!this.pending.delete(id)) return;
-        this.write({ method: '$/cancelRequest', params: { id } });
+        if (!this.pending.has(id)) return;
+        this.cancelId(id);
+        if (ticket != null) this.tickets.delete(ticket);
         // Expected on a very large file (a million lines): the renderer treats it as no answer, and it is not an
         // IDE internal error (main/diagnostics).
         reject(Object.assign(new Error(`Pyright did not answer ${method} within ${ms / 1000} s`), { expected: true }));
       }, ms);
-      const settle = (fn) => (v) => { clearTimeout(timer); fn(v); };
+      const settle = (fn) => (v) => { clearTimeout(timer); if (ticket != null) this.tickets.delete(ticket); fn(v); };
       this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      if (ticket != null) this.tickets.set(ticket, id);
       this.write({ id, method, params });
     });
+  }
+
+  // A cancelled request answers null at once, and Pyright drops it if it has not started on it yet. (One it is working
+  // on runs to the end: Pyright reads $/cancelRequest between requests. Its file-based cancellation, which it checks
+  // while working, stops its background analysis from publishing diagnostics in this version.)
+  cancel(ticket) {
+    const id = this.tickets.get(ticket);
+    const p = id !== undefined && this.pending.get(id);
+    if (!p) return;
+    this.cancelId(id);
+    p.resolve(null);
+  }
+
+  cancelId(id) {
+    this.pending.delete(id);
+    this.write({ method: '$/cancelRequest', params: { id } });
   }
 
   notify(method, params) {
@@ -212,20 +232,33 @@ class Server {
   }
 
   // Pyright only learns about edits to closed files through didChangeWatchedFiles, so mirror the project folder.
+  // A checkout changes thousands of files, so the callback only collects names (a file added or removed shows as a
+  // 'rename' event); a batch goes once nothing has arrived for 250 ms, after checking which of its files still exist
+  // off the main thread. (An existsSync per event kept the main process, and every window's IPC, busy for most of a
+  // second when 10,000 files changed.)
   watch() {
-    let batch = new Map();
+    let batch = new Map(); // full path -> renamed (added or removed) at some point in the batch
     let timer = null;
+    let last = 0;
+    const flush = async () => {
+      const quiet = Date.now() - last;
+      if (quiet < 250) { timer = setTimeout(flush, 250 - quiet); return; }
+      timer = null;
+      const events = batch;
+      batch = new Map();
+      const changes = await Promise.all([...events].map(async ([full, renamed]) => {
+        const exists = await fs.promises.access(full).then(() => true, () => false);
+        return { uri: pathToFileURL(full).href, type: exists ? (renamed ? 1 : 2) : 3 };
+      }));
+      if (this.initialized && !this.dead) this.notify('workspace/didChangeWatchedFiles', { changes });
+    };
     try {
       this.watcher = fs.watch(this.root, { recursive: true }, (event, file) => {
         if (!file || WATCH_IGNORED.test(`\\${file}`) || !/\.(py|pyi)$|(^|[\\/])(pyrightconfig\.json|pyproject\.toml)$/i.test(file)) return;
         const full = path.join(this.root, file);
-        batch.set(full, fs.existsSync(full) ? (event === 'rename' ? 1 : 2) : 3);
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          const changes = [...batch].map(([p, type]) => ({ uri: pathToFileURL(p).href, type }));
-          batch = new Map();
-          if (this.initialized) this.notify('workspace/didChangeWatchedFiles', { changes });
-        }, 250);
+        batch.set(full, batch.get(full) || event === 'rename');
+        last = Date.now();
+        if (!timer) timer = setTimeout(flush, 250);
       });
       this.watcher.on('error', () => {});
     } catch {}
@@ -239,6 +272,7 @@ class Server {
     // renderer treats that as none, and the exit itself is reported, so these are not internal errors as well.
     for (const p of this.pending.values()) p.reject(Object.assign(new Error(`language server ${reason}`), { expected: true }));
     this.pending.clear();
+    this.tickets.clear();
     if (!this.stopping) {
       this.addLog(`server ${reason}\n`);
       this.send('lsp:status', { gen: this.gen, state: 'error', message: `Pyright ${reason}` });
@@ -284,12 +318,14 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   // -> {gen, incremental} | null
   ipcMain.handle('lsp:start', (_e, root, pythonPath) => start(root, remote.isRemoteExecutable(pythonPath) ? remote.pyrightPython(pythonPath) : pythonPath));
   ipcMain.handle('lsp:stop', () => { server?.stop(); server = null; });
-  ipcMain.handle('lsp:request', async (_e, method, params) => {
+  // ticket (optional): a key for lsp:cancel, which answers the request with null and tells Pyright to drop it.
+  ipcMain.handle('lsp:request', async (_e, method, params, ticket) => {
     const s = server;
     if (!s) throw new Error('no language server');
     await s.ready;
-    return s.request(method, params);
+    return s.request(method, params, ticket);
   });
+  ipcMain.handle('lsp:cancel', (_e, ticket) => { server?.cancel(ticket); });
   ipcMain.handle('lsp:notify', (_e, method, params) => { server?.notify(method, params); });
   ipcMain.handle('lsp:log', () => server?.log.join('') || '');
   app.on('will-quit', () => server?.stop(true));

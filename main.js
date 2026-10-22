@@ -3,6 +3,9 @@ const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol } = requ
 // resolution (relative stylesheets, scripts, images) only when it is declared before the app is ready.
 protocol.registerSchemesAsPrivileged([{ scheme: 'pyide-preview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
 if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_DATA);
+// Each main module that holds a process or a server stops it on will-quit; with more than ten of them Node printed a
+// MaxListenersExceededWarning at every start, which the IDE log recorded as an ERROR.
+app.setMaxListeners(50);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();
 // No window may leave the IDE page: links and popups go to the system browser, permissions are denied (main/security.js).

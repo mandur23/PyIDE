@@ -200,5 +200,9 @@
   "Fetched successfully": "페치했습니다",
   "Fetch failed": "페치 실패",
   "Fetch from remotes every (minutes):": "원격에서 페치하는 간격(분):",
-  "Keeps the incoming and outgoing commit counts next to the branch current. 0 turns automatic fetching off.": "브랜치 옆에 표시되는 들어오는 커밋과 나가는 커밋 수를 최신으로 유지합니다. 0이면 자동 페치를 끕니다."
+  "Keeps the incoming and outgoing commit counts next to the branch current. 0 turns automatic fetching off.": "브랜치 옆에 표시되는 들어오는 커밋과 나가는 커밋 수를 최신으로 유지합니다. 0이면 자동 페치를 끕니다.",
+  "Pushing…": "푸시 중…",
+  "Updating project…": "프로젝트 업데이트 중…",
+  "Fetching…": "페치 중…",
+  "shelf {name}": "셸프 {name}"
 }

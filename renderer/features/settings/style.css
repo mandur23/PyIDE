@@ -49,7 +49,11 @@
 .settings-page { flex: 1; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 0 16px 16px; display: flex; flex-direction: column; }
 .settings-section { border: 0; border-top: 1px solid var(--gray3); margin: 8px 0; padding: 6px 0 4px 12px; min-width: 0; }
 .settings-section legend { padding: 0 6px 0 0; margin-left: -12px; color: var(--gray9); }
-.settings-section .field { grid-template-columns: 170px minmax(120px, 240px) auto; }
+/* Every row's control gets the same width (an auto hint column used to squeeze the controls of rows with a hint), and
+   the label column fits most Korean labels on one line. */
+.settings-section .field { grid-template-columns: 190px minmax(120px, 240px) minmax(0, 1fr); }
+/* The dialog follows the window: below 940px its page is too narrow for a hint beside the control, so it goes below. */
+@media (max-width: 940px) { .settings-section .field > .field-hint { grid-column: 2 / -1; margin-top: -4px; } }
 .field-hint { font-size: 12px; }
 .field input.invalid { border-color: var(--red); }
 .settings-check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }

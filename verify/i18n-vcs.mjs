@@ -77,7 +77,7 @@ try {
   check(await js(`document.querySelector('.vcs-commit-btn').textContent === '커밋' && document.querySelector('.vcs-commit-push-btn').textContent === '커밋 및 푸시…'`), 'Commit / Commit and Push buttons are Korean');
   check(await js(noteWith('Git 저장소를 생성했습니다')), 'init notification is Korean');
   await noLeaks(`${SIDE}, .ide-balloons`, 'Commit window with unversioned files and init notification');
-  check(await js(`document.querySelector('.vcs-branch').title`) === 'Git 브랜치', 'branch widget tooltip is Korean');
+  check((await js(`document.querySelector('.vcs-branch').title`)).startsWith('Git 브랜치 — '), 'branch widget tooltip is Korean (with the full branch name)');
   await shot('commit-ko.png');
 
   // --- empty-commit and empty-message warnings ---

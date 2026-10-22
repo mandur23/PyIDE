@@ -1,3 +1,5 @@
 .power-save-status { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0 4px; color: var(--yellow); cursor: pointer; font: inherit; }
 .power-save-status.hidden { display: none; }
 .power-save-status:hover { background: var(--gray3); border-radius: 4px; }
+/* The light status bar: PyCharm yellow (#ffaf0f) as text is unreadable on #f7f8fa (1.7:1). */
+:root[data-theme="light"] .power-save-status { color: #8a5a00; }

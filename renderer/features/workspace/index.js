@@ -746,6 +746,14 @@
     setTimeout(() => { if (ide.root && !ide.tabs.length && !closedHomeLast) openHome(); });
   });
   ide.on('interpreterChanged', () => { if (homeHost) renderHome(); if (selectedId) renderDetail(); });
+  // The branch chip follows Git (vcs plugin): creating the repository or a checkout changes no file the watcher reports.
+  ide.on('vcsBranchChanged', async ({ root }) => {
+    if (!ide.root || !samePath(root, ide.root)) return;
+    const i = await invoke('info', root).catch(() => null);
+    if (!i || !ide.root || !samePath(root, ide.root) || i.branch === info.branch) return;
+    info = { ...info, branch: i.branch };
+    renderHome();
+  });
   let fsTimer;
   ide.on('filesChanged', () => { clearTimeout(fsTimer); fsTimer = setTimeout(refresh, 1500); });
 

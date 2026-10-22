@@ -11,7 +11,7 @@
 .vcs-checks-progress { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--gray10); }
 .vcs-checks-progress.hidden { display: none; }
 .vcs-checks-progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vcs-checks-cancel { color: var(--blue6); text-decoration: none; cursor: pointer; }
+.vcs-checks-cancel { color: var(--blue6); text-decoration: none; cursor: pointer; flex-shrink: 0; white-space: nowrap; }
 .vcs-checks-cancel:hover { text-decoration: underline; }
 .vcs-checks-spinner { width: 10px; height: 10px; flex-shrink: 0; border: 2px solid var(--gray6); border-top-color: var(--blue6);
   border-radius: 50%; animation: vcs-checks-spin 0.8s linear infinite; }
@@ -24,5 +24,7 @@
 .vcs-checks-sev { font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .vcs-checks-sev.error { color: var(--red); }
 .vcs-checks-sev.warning { color: var(--yellow); }
+/* The dark theme's yellow is unreadable on white (1.8:1): the light theme's warning text color, as elsewhere. */
+:root[data-theme="light"] .vcs-checks-sev.warning { color: #a46704; }
 .vcs-checks-sev.todo { color: var(--blue6); }
 .vcs-checks-msg { flex: 1; min-width: 0; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }

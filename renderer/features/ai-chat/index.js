@@ -379,7 +379,7 @@
       input.placeholder = tr('Ask about your code. @ adds a file, Enter sends, Shift+Enter adds a line.');
       completeEl = el('div', 'aic-complete hidden');
       const foot = el('div', 'aic-foot');
-      statusEl = el('span', 'aic-status');
+      statusEl = el('span', 'aic-chat-status');
       sendBtn = el('button', 'primary aic-send');
       sendBtn.onclick = () => (pending ? stop() : send());
       foot.append(statusEl, sendBtn);
@@ -412,7 +412,7 @@
 
   function setStatus(text, kind = '') {
     statusEl.textContent = text || '';
-    statusEl.className = `aic-status ${kind}`;
+    statusEl.className = `aic-chat-status ${kind}`;
   }
 
   async function showHistory() {

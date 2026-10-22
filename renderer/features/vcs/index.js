@@ -8,10 +8,13 @@
     shelve: 'Before Shelve', unshelve: 'Before Unshelve',
   };
   const OPERATION_CHECKPOINTS = { continue: 'Before Continuing', skip: 'Before Skipping', abort: 'Before Aborting' };
+  // Commands that talk to a remote show in the status bar's background tasks while they run, as in PyCharm.
+  const TASKS = { push: () => tr('Pushing…'), pull: () => tr('Updating project…') };
   const invoke = async (ch, ...args) => {
     const label = ch === 'operation' ? OPERATION_CHECKPOINTS[args[1]] : CHECKPOINTS[ch];
     if (label) await ide.localHistory?.checkpoint(label);
-    return ide.api.invoke(`git:${ch}`, ...args);
+    const task = TASKS[ch] && ide.tasks?.start({ title: TASKS[ch]() });
+    try { return await ide.api.invoke(`git:${ch}`, ...args); } finally { task?.done(); }
   };
   const key = (p) => p.toLowerCase();
   // PyCharm file status colors, defined per theme in style.css (Darcula / Light).
@@ -53,6 +56,7 @@
   const byPath = new Map(); // lower-cased path -> changed file
   const ignored = new Set(); // lower-cased paths of ignored files and folders (a folder covers what it holds)
   let lastHead;
+  let lastBranch; // what vcsBranchChanged last announced: the branch, '' for no branch, null outside a repository
 
   // ---------- notifications and the Git console ----------
   // A balloon through ide.notifications (kept in the Notifications tool window); clicking it shows the Git console.
@@ -131,6 +135,10 @@
       if (gitTw.isVisible()) loadLog();
     }
     setRepoKey(!!repo);
+    // Other plugins (the Workspace home's branch chip) follow Create Git Repository, checkouts and rebases, which change
+    // no project file they would notice.
+    const branch = repo ? repo.branch || repo.detached || '' : null;
+    if (branch !== lastBranch) { lastBranch = branch; ide.emit('vcsBranchChanged', { root, branch, isRepo: !!repo }); }
     renderWidget();
     renderChanges();
     if (treeSig() !== before) ide.refreshTree();
@@ -163,7 +171,10 @@
     branchBtn.classList.toggle('hidden', !repo);
     renderSync();
     if (!repo) return;
-    const parts = [ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', repo.branch || repo.opBranch || repo.detached || 'HEAD')];
+    const name = repo.branch || repo.opBranch || repo.detached || 'HEAD';
+    const parts = [ide.icon('branch', '⑂'), userText('span', 'vcs-branch-name', name)];
+    // A long name ends in an ellipsis in the toolbar; the tooltip keeps all of it.
+    branchBtn.title = tr('Git Branches — {branch}', { branch: name });
     if (repo.op) parts.push(el('span', 'vcs-branch-op', OP_LABEL[repo.op]));
     branchBtn.replaceChildren(...parts, ide.icon('chevronDown', '▾'));
   }
@@ -239,8 +250,9 @@
       return;
     }
     fetchState.running = true;
+    const task = manual ? ide.tasks?.start({ title: tr('Fetching…') }) : null;
     let r;
-    try { r = await ide.api.invoke('git:backgroundFetch', root); } catch (err) { r = { ok: false, err: err.message }; } finally { fetchState.running = false; }
+    try { r = await ide.api.invoke('git:backgroundFetch', root); } catch (err) { r = { ok: false, err: err.message }; } finally { fetchState.running = false; task?.done(); }
     if (gen !== fetchGen || root !== ide.root) return; // the project or the interval changed meanwhile: its own timer runs
     if (r.skipped === 'busy' || r.skipped === 'running') {
       // Another git operation is running: try again shortly, without counting it as a failure.
@@ -511,6 +523,8 @@
     if (!ide.root) return;
     commitTw.show();
     scheduleRefresh(0);
+    // From the Shelf tab (where shelving leaves the window) Commit… goes back to the changes, as in PyCharm.
+    if (shelfShown()) switchCommitTab('changes');
     if (repo) msgEl.focus();
   }
 
@@ -1703,7 +1717,7 @@
         r.failed.map((f) => `${f.rel}: ${f.err}`).join('\n'), 'error', true);
     }
     if (r.conflicts.length) {
-      if (conflictHandler) conflictHandler.stopped(r);
+      if (conflictHandler) conflictHandler.stopped({ ...r, theirs: tr('shelf {name}', { name: s.name }) });
       else notify(trn(r.conflicts.length, 'Unshelved with conflicts in {n} file', 'Unshelved with conflicts in {n} files'), r.conflicts.map((p) => ide.util.rel(p)).join('\n'), 'warn', true);
       // "Accept Yours" would otherwise lose the shelved change, so the shelf keeps it until the user deletes it there
       if (r.keptConflicts?.length) {
@@ -1798,9 +1812,11 @@
   };
 
   // ---------- events ----------
-  ide.on('projectOpened', () => {
+  // A new project, or none: nothing of the previous repository stays (state, widgets, timers).
+  function forgetRepository() {
     repo = null;
     lastHead = undefined;
+    lastBranch = undefined;
     shelves = [];
     shelfOpen.clear();
     shelfSel.id = null;
@@ -1816,7 +1832,20 @@
     rebuildBlameCss();
     commits = [];
     if (msgEl) msgEl.value = '';
+  }
+  ide.on('projectOpened', () => {
+    forgetRepository();
     refresh();
+    restartAutoFetch();
+  });
+  // Back on the welcome screen: no branch widget, ↓↑ counts, changes or log of the closed project, and no auto-fetch.
+  ide.on('projectClosed', () => {
+    refreshSeq++;
+    forgetRepository();
+    setRepoKey(false);
+    renderWidget();
+    renderChanges();
+    loadLog();
     restartAutoFetch();
   });
   ide.on('fileSaved', (tab) => {

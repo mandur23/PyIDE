@@ -406,9 +406,22 @@
     });
     wireDrop(g);
     groups.push(g);
+    ownActions(g.editor);
     for (const fn of editorHooks) safe(() => fn(g.editor));
     ide.emit('editorCreated', g.editor);
     return g;
+  }
+  // Monaco leaves an editor's addAction/addCommand registrations (a global command, keybinding and menu item whose
+  // handler holds the editor) in place when the editor is disposed, so every embedded editor that plugins added
+  // actions to stayed in memory with its DOM: one per Markdown or HTML file opened, per notebook cell. They now go
+  // with the editor.
+  function ownActions(ed) {
+    const addAction = ed.addAction.bind(ed);
+    ed.addAction = (...args) => {
+      const reg = addAction(...args);
+      if (reg?.dispose) ed.onDidDispose(() => reg.dispose());
+      return reg;
+    };
   }
   const safe = (fn) => { try { fn(); } catch (err) { console.error(err); } };
 
@@ -683,6 +696,7 @@
     const ed = ide.monaco.editor.create(host, { ...editorOptions, ...opts });
     embedded.add(ed);
     ed.onDidDispose(() => embedded.delete(ed));
+    ownActions(ed);
     for (const fn of editorHooks) safe(() => fn(ed));
     ide.emit('editorCreated', ed);
     return ed;

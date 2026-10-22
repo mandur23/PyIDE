@@ -274,6 +274,14 @@
     setPrompt('ps1');
     if (tw.isVisible()) start();
   });
+  // Close Project (back to the welcome screen): the interpreter belongs to the closed project and holds its venv.
+  ide.on('projectClosed', async () => {
+    if (starting) await starting.catch(() => {});
+    if (!procId) return;
+    await stop();
+    clearForNewProcess();
+    setPrompt('ps1');
+  });
 
   // Alt+Shift+E: selection, or the current line (then the caret moves down), like PyCharm.
   function executeSelection(ed = ide.editor) {

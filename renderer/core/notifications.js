@@ -86,16 +86,20 @@
     if (entry.kind === 'error' && !entry.actions.some((a) => a.log)) entry.actions.push(logAction());
     history.push(entry);
     if (history.length > 1000) history.shift(); // a long session keeps its last 1000
+    // The history keeps every note of the session; a balloon that is gone (closed, timed out) must not stay in memory
+    // through it, so the note holds it weakly and reports it only while it is shown.
+    let balloonRef = null;
     const note = {
-      id: entry.id, entry, balloon: null,
+      id: entry.id, entry,
+      get balloon() { const b = balloonRef?.deref(); return b?.isConnected ? b : null; },
       get expired() { return entry.expired; },
       expire() { if (entry.expired) return; entry.expired = true; note.remove(); notesChanged({ type: 'expired', entry }); },
       // Hides the balloon; the notification stays in the tool window.
-      remove() { note.balloon?.remove(); },
+      remove() { balloonRef?.deref()?.remove(); },
     };
     entry.note = note;
     const muted = entry.group && hiddenGroups().includes(entry.group);
-    if (opts.balloon !== false && !muted) note.balloon = showBalloon(entry, note, opts);
+    if (opts.balloon !== false && !muted) balloonRef = new WeakRef(showBalloon(entry, note, opts));
     notesChanged({ type: 'added', entry });
     return note;
   }
@@ -146,6 +150,9 @@
     b.onclick = () => { if (opts.onClick) { opts.onClick(note); b.remove(); } };
     if (opts.onClick) b.classList.add('clickable');
     balloons.appendChild(b);
+    // Balloons stack up from the status bar; once the stack would reach the toolbar the oldest ones go (they stay in the
+    // Notifications tool window), so no balloon's text or close button is ever above the window's top edge.
+    while (balloons.childElementCount > 1 && balloons.getClientRects().length && balloons.getBoundingClientRect().top < 48) balloons.firstElementChild.remove();
     const timeout = opts.timeout ?? (entry.kind === 'error' ? 20000 : 10000);
     if (timeout > 0) setTimeout(() => b.remove(), timeout);
     return b;

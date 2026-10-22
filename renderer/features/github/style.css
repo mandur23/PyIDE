@@ -69,7 +69,9 @@
 
 .gh-share { display: flex; flex-direction: column; gap: 6px; }
 .gh-checkbox { cursor: pointer; }
-.gh-share .gh-checkbox { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.gh-share .field { margin: 2px 0; }
+/* Private sits in the input column, under the repository name (the core .field label column is 140px + an 8px gap). */
+.gh-share .gh-checkbox { display: flex; align-items: center; gap: 6px; margin: 0 0 0 148px; }
 .gh-share .gh-checkbox input { margin: 0; accent-color: var(--blue6); }
 .gh-share-error { color: var(--red); min-height: 16px; }
 .gh-share-account { font-size: 12px; }

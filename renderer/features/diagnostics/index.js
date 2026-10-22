@@ -77,15 +77,15 @@
       body,
       width: 860,
       buttons: [
+        { label: tr('Close'), primary: true },
         { label: tr('Copy'), run: async () => { const e = current(); if (e) await invoke('clipboard:writeText', copyText(e)); copyBtn.textContent = tr('Copied'); return false; } },
         { label: tr('Clear All'), run: async () => { await invoke('diagnostics:clear'); } },
         { label: tr('Disable Plugin'), run: () => { const e = current(); if (e?.plugin) disablePlugin(e.plugin); } },
-        { label: tr('Close'), primary: true },
       ],
       onClose: () => { openDialog = null; },
     });
     dlg.el.classList.add('diag-dialog');
-    const [copyBtn, clearBtn, disableBtn] = dlg.el.querySelectorAll('.dialog-buttons button');
+    const [, copyBtn, clearBtn, disableBtn] = dlg.el.querySelectorAll('.dialog-buttons button');
     copyBtn.id = 'diagCopy';
     clearBtn.id = 'diagClear';
     disableBtn.id = 'diagDisable';
@@ -250,12 +250,12 @@
       body,
       width: 620,
       buttons: [
-        { label: tr('Copy'), run: async () => { await invoke('clipboard:writeText', v.text); copy.textContent = tr('Copied'); return false; } },
         { label: tr('Close'), primary: true },
+        { label: tr('Copy'), run: async () => { await invoke('clipboard:writeText', v.text); copy.textContent = tr('Copied'); return false; } },
       ],
     });
     dlg.el.classList.add('diag-about-dialog');
-    const copy = dlg.el.querySelector('.dialog-buttons button');
+    const copy = dlg.el.querySelector('.dialog-buttons button:not(.primary)');
     copy.id = 'aboutCopy';
   }
 

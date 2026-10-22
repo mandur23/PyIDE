@@ -90,6 +90,9 @@
     return ropeItem;
   }
   ide.on('installablesChanged', () => { if (!ropeItem && ide.installer?.pip) installItem(); });
+  // The sidecar runs in the project's interpreter: a closed project's venv python.exe kept running (and its folder
+  // could not be deleted) until the next refactoring elsewhere. The next request starts one again.
+  for (const ev of ['projectClosed', 'projectOpened']) ide.on(ev, () => ide.api.invoke('refactor:stop').catch(() => {}));
 
   // fallback: {label, run} for a second way out, such as a plain rename from the project tree.
   function offerRope(retry, fallback) {
@@ -685,7 +688,14 @@
     const rows = [];
     let selected = null;
     const render = () => {
-      rowsHost.replaceChildren(...rows.map((r) => r.el));
+      // Rows are put back only when their order changed: taking out the row whose field has the keyboard would drop the
+      // focus to the page (render runs on that field's focus), so neither Tab nor a click could reach a parameter.
+      const order = rows.map((r) => r.el);
+      if (order.length !== rowsHost.children.length || order.some((n, i) => rowsHost.children[i] !== n)) {
+        const had = document.activeElement;
+        rowsHost.replaceChildren(...order);
+        if (had && document.activeElement !== had && order.some((n) => n.contains(had))) had.focus();
+      }
       for (const r of rows) r.el.classList.toggle('selected', r === selected);
       const params = rows.map((r) => {
         const n = r.name.value.trim() || '?';

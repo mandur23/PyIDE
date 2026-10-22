@@ -153,7 +153,7 @@ try {
   await press('Alt+F8');
   await until(`!!document.querySelector('#dbgEvalInput')`, 'evaluate dialog');
   check(await js(`document.querySelector('.dbg-dialog .dialog-title').textContent`) === '평가', 'evaluate dialog title 평가');
-  check(await js(`[...document.querySelectorAll('.dbg-dialog .dialog-buttons button')].map(b => b.textContent).join()`) === '감시 추가,닫기,평가', 'evaluate dialog buttons in Korean');
+  check(await js(`[...document.querySelectorAll('.dbg-dialog .dialog-buttons button')].map(b => b.textContent).join()`) === '평가,닫기,감시 추가', 'evaluate dialog buttons in Korean');
   await js(`(document.querySelector('#dbgEvalInput').value = '', document.querySelector('#dbgEvalInput').focus())`);
   await type('{"sum": sum(values)}');
   await press('Enter');

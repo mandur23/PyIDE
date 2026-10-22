@@ -161,7 +161,7 @@ try {
   check(['이름:', '스크립트 경로:', '스크립트 매개변수:', '작업 디렉터리:', '환경 변수:', 'Python 인터프리터:'].every((l) => dlg.labels.includes(l)), `Python configuration labels (${dlg.labels.join(' | ')})`);
   check(hangul(dlg.keep), `temporary configuration toggle (${dlg.keep})`);
   check(dlg.tools.join('|') === '새 구성 추가|구성 제거|구성 복사', `list toolbar tooltips (${dlg.tools.join(' | ')})`);
-  check(dlg.buttons.join('|') === '취소|확인', `dialog buttons (${dlg.buttons.join(' | ')})`);
+  check(dlg.buttons.join('|') === '확인|취소', `dialog buttons (${dlg.buttons.join(' | ')})`);
   check(dlg.interp.startsWith('프로젝트 기본값 ('), `interpreter default option (${dlg.interp})`);
   await noLeaks('.dialog', 'Python configuration form');
   await shot('ko-configurations.png');

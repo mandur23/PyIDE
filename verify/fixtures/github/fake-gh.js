@@ -1,6 +1,7 @@
 // Stand-in for the GitHub CLI in verify/github.mjs (PYIDE_GH points at a copy of gh.cmd, which runs this file). It
 // records every call as a JSON line {argv, cwd} in FAKE_GH_LOG and answers the subcommands the github plugin runs from
-// FAKE_GH_STATE, a JSON file the test writes: {auth: 'in' | 'out', account, prs: [gh pr list rows], views: {n: gh pr view}}.
+// FAKE_GH_STATE, a JSON file the test writes: {auth: 'in' | 'out', account, prs: [gh pr list rows], views: {n: gh pr view},
+// realCheckout?: true}.
 // It never touches the network. `repo create` adds the remote itself with git, as gh does, but pushes nothing.
 const fs = require('fs');
 const { execFileSync } = require('child_process');
@@ -39,7 +40,15 @@ if (cmd === '--version') {
 } else if (cmd === 'pr' && sub === 'checkout') {
   const pr = state.views[argv[2]];
   if (!pr) fail(`could not find pull request #${argv[2]}\n`);
-  else out(`Switched to branch '${pr.headRefName}'\n`);
+  else {
+    // With `realCheckout` (verify/flow-tools.mjs) the head branch is fetched from the repository's remotes and checked
+    // out, as gh does.
+    if (state.realCheckout) {
+      execFileSync('git', ['fetch', '--all', '-q'], { cwd: process.cwd(), stdio: 'ignore' });
+      execFileSync('git', ['checkout', '-q', pr.headRefName], { cwd: process.cwd(), stdio: 'ignore' });
+    }
+    out(`Switched to branch '${pr.headRefName}'\n`);
+  }
 } else {
   fail(`fake gh: unknown command ${argv.join(' ')}\n`);
 }

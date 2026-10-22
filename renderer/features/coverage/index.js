@@ -62,7 +62,6 @@
       ide.ui.dialog({
         title: tr('Run with Coverage'), body, width: 560, onClose: () => settle(false),
         buttons: [
-          { label: tr('Cancel') },
           { label: tr('Install coverage.py'), primary: true, async run(dlg) {
             const buttons = [...dlg.el.querySelectorAll('.dialog-buttons button')];
             buttons.forEach((b) => (b.disabled = true));
@@ -81,6 +80,7 @@
             settle(true);
             return true;
           } },
+          { label: tr('Cancel') },
         ],
       });
     });

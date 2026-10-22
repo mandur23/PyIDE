@@ -1,7 +1,7 @@
 /* Colors from PyCharm expUI_dark.theme.json (extracted with REA). Features reuse these variables. */
 :root {
   --gray1: #1e1f22; --gray2: #2b2d30; --gray3: #393b40; --gray4: #43454a;
-  --gray5: #4e5157; --gray7: #6f737a; --gray9: #9da0a8; --gray11: #ced0d6; --gray12: #dfe1e5;
+  --gray5: #4e5157; --gray6: #5a5d63; --gray7: #6f737a; --gray8: #868a91; --gray9: #9da0a8; --gray10: #b4b8bf; --gray11: #ced0d6; --gray12: #dfe1e5;
   --blue2: #2e436e; --blue6: #3574f0; --blue8: #548af7; --green6: #57965c; --red: #db5c5c; --yellow: #f2c55c;
   --text: #bcbec4; --mono: 'JetBrains Mono', Consolas, 'Courier New', monospace;
 }
@@ -44,12 +44,12 @@ input, select, textarea { font: inherit; }
 .stripe-more { margin-top: 4px; color: var(--gray9); }
 .more-panel { position: fixed; z-index: 60; min-width: 280px; max-height: calc(100vh - 16px); overflow: auto; padding: 4px;
   background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 8px 24px #0008; }
-.more-group { padding: 6px 10px 2px; color: var(--gray7); font-size: 12px; }
+.more-group { padding: 6px 10px 2px; color: var(--gray8); font-size: 12px; }
 .more-row { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 10px; border-radius: 5px; cursor: default; }
 .more-row:hover { background: var(--blue2); }
 .more-row.visible .more-title { font-weight: 600; }
 .more-title { flex: 1; white-space: nowrap; }
-.more-keys { color: var(--gray7); font-size: 12px; }
+.more-keys { color: var(--gray8); font-size: 12px; }
 .more-pin { width: 22px; height: 22px; border-radius: 4px; color: var(--gray7); display: grid; place-items: center; opacity: 0; }
 .more-row:hover .more-pin, .more-pin.pinned, .more-pin:focus-visible { opacity: 1; }
 .more-pin.pinned { color: var(--blue8); }
@@ -98,9 +98,11 @@ input, select, textarea { font: inherit; }
 .splitter.h { height: 1px; background: var(--gray1); cursor: row-resize; position: relative; }
 .splitter.h::after { content: ''; position: absolute; inset: -3px 0; z-index: 5; }
 
-#center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* The editor keeps a usable width when both side panels are open in a small window: the panels shrink first (to their
+   140px minimum). Likewise the editor keeps some height under a tall bottom panel. */
+#center { flex: 1; display: flex; flex-direction: column; min-width: min(320px, 35vw); }
 /* Editor groups (split panes): each has a tab bar and its own editor. */
-#editorArea { flex: 1; position: relative; min-height: 0; display: flex; }
+#editorArea { flex: 1; position: relative; min-height: min(120px, 20vh); display: flex; }
 #editorGroups { flex: 1; display: flex; min-width: 0; min-height: 0; }
 #editorGroups > .editor-group, #editorGroups > .split { flex: 1; }
 .split { display: flex; min-width: 0; min-height: 0; }
@@ -121,6 +123,9 @@ input, select, textarea { font: inherit; }
 .group-actions button:hover { background: var(--gray3); color: var(--gray12); }
 .group-body { flex: 1; position: relative; min-height: 0; }
 .editor-host, .custom-host { position: absolute; inset: 0; }
+/* Monaco outlines a focused editor in the theme's focusBorder blue (a 1px frame around the whole pane, bright in the
+   Light theme); PyCharm's editor shows focus by its caret and current line only. */
+.editor-host > .monaco-editor { outline: none; }
 .custom-host { pointer-events: none; }
 .group-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; color: var(--gray9); pointer-events: none; }
@@ -202,33 +207,45 @@ input, select, textarea { font: inherit; }
 .list-row.selected { background: var(--blue2); }
 /* Keyboard focus on lists, trees and tool windows, whose own rules turn the browser's ring off. */
 #tree:focus-visible, :is(.tool, .dialog) div[tabindex]:focus-visible, .tool:focus-visible { outline: 1px solid var(--blue6); outline-offset: -1px; }
-.muted { color: var(--gray7); }
+/* Secondary text: PyCharm's info foreground (Gray8); Gray7 was below 3:1 on the panel background. */
+.muted { color: var(--gray8); }
 
 #status { height: 24px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 10px;
   background: var(--gray2); color: var(--gray9); font-size: 12px; border-top: 1px solid var(--gray1); }
 #statusItems { display: flex; gap: 14px; align-items: center; }
+/* Status bar text stays on one line (Korean otherwise breaks between any two syllables); the path shrinks with an
+   ellipsis and widgets that still do not fit are hidden by ide.js (.status-overflow). */
+#status > *, #statusItems > * { white-space: nowrap; flex-shrink: 0; }
+#statusPath { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#statusItems > .status-overflow { display: none !important; }
+.status-interp { max-width: 280px; }
+#statusInterpLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 #popup { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); width: 640px; max-width: 90vw;
   background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px;
   box-shadow: 0 12px 40px #0009; z-index: 50; overflow: hidden; }
 #popupIn { width: 100%; padding: 10px 12px; font-size: 14px; background: var(--gray2); color: var(--gray12);
   border: 0; border-bottom: 1px solid var(--gray4); outline: none; }
-#popupList { max-height: 380px; overflow: auto; }
+#popupList { max-height: min(380px, calc(100vh - 150px)); overflow: auto; }
 .popup-item { padding: 5px 12px; display: flex; gap: 10px; cursor: pointer; align-items: center; white-space: nowrap; }
 .popup-item .detail { color: var(--gray7); overflow: hidden; text-overflow: ellipsis; }
-.popup-item .hint-right, .menu-item .hint-right { margin-left: auto; color: var(--gray7); padding-left: 16px; }
+.popup-item .hint-right, .menu-item .hint-right { margin-left: auto; color: var(--gray8); padding-left: 16px; }
+/* Shortcuts and submenu arrows stay readable on the selected row's blue. */
+:is(.popup-item.active, .menu-item:hover, .menu-item.active) :is(.hint-right, .menu-arrow, .detail) { color: var(--gray9); }
 .popup-item.active { background: var(--blue2); }
 .popup-item.hint { color: var(--gray7); cursor: default; }
 
 .context-menu { position: fixed; z-index: 60; min-width: 200px; padding: 4px; background: var(--gray2);
-  border: 1px solid var(--gray4); border-radius: 6px; box-shadow: 0 8px 24px #0008; }
+  border: 1px solid var(--gray4); border-radius: 6px; box-shadow: 0 8px 24px #0008;
+  /* A menu taller than a small window scrolls instead of running past its bottom edge. */
+  max-height: calc(100vh - 8px); overflow-y: auto; overflow-x: hidden; }
 .menu-item { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px 0 6px; border-radius: 4px; cursor: default; white-space: nowrap; }
 .menu-item:hover, .menu-item.active { background: var(--blue2); }
 .menu-icon { order: -1; width: 16px; flex-shrink: 0; display: grid; place-items: center; color: var(--gray9); font-size: 12px; }
 .menu-icon .ide-icon { filter: none; }
 .menu-label { flex-shrink: 0; }
 .menu-detail { color: var(--gray7); overflow: hidden; text-overflow: ellipsis; max-width: 320px; font-size: 12px; }
-.menu-arrow { margin-left: auto; padding-left: 16px; color: var(--gray7); }
+.menu-arrow { margin-left: auto; padding-left: 16px; color: var(--gray8); }
 .menu-item .hint-right + .menu-arrow { padding-left: 8px; margin-left: 0; }
 .menu-header { padding: 6px 10px 2px 30px; color: var(--gray7); font-size: 12px; }
 .menu-item.disabled { color: var(--gray5); }
@@ -241,6 +258,9 @@ input, select, textarea { font: inherit; }
 .dialog-title { padding: 12px 16px; font-weight: 600; font-size: 14px; color: var(--gray12); }
 .dialog-body { padding: 4px 16px 12px; overflow: auto; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--gray3); }
+/* Keyboard focus in dialogs is the IDE's blue, not the browser's ring (orange on Windows in the Light theme, white in Dark). */
+.dialog :is(button, a[href], input[type="checkbox"], input[type="radio"]):focus-visible { outline: 2px solid var(--blue6); outline-offset: 1px; }
+.dialog :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea:not(.inputarea)):focus-visible { outline: 1px solid var(--blue6); outline-offset: -1px; }
 .field { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; margin: 8px 0; }
 .field input, .field select, .field textarea, .input { background: var(--gray1); color: var(--gray12);
   border: 1px solid var(--gray4); border-radius: 4px; padding: 5px 8px; outline: none; }
@@ -262,6 +282,10 @@ body.detached #statusInterp { display: none !important; }
 .run-target-arrow .ide-icon svg { width: 12px; height: 12px; }
 .project-widget { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px 0 6px; font-weight: 600; color: var(--gray12); }
 .project-widget .ide-icon { filter: none; color: var(--gray9); }
+/* Toolbar widgets keep one line; long project and branch names end in an ellipsis that leaves room for the run widget. */
+#toolbar .tb-btn { white-space: nowrap; }
+#toolbarRight { flex-shrink: 0; }
+.project-widget-name { max-width: clamp(80px, 16vw, 240px); overflow: hidden; text-overflow: ellipsis; }
 .project-avatar { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; flex-shrink: 0;
   color: #fff; font: 700 10px 'Inter', 'Segoe UI', sans-serif; letter-spacing: .2px; }
 .run-widget { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 2px; border-radius: 7px;
@@ -342,4 +366,7 @@ body.detached #statusInterp { display: none !important; }
 .trust-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: var(--warning-bg, #4a3b16); color: var(--warning-fg, #f0d58c); font-size: 12px; border-bottom: 1px solid var(--border, #393b40); }
 .trust-bar span { flex: 1; }
 .trust-bar.hidden { display: none; }
+/* The light theme (settings plugin) maps gray1..gray12 but not these in-between shades that plugins use too. */
+:root[data-theme="light"] { --gray6: #959aa9; --gray8: #737786; --gray10: #383a42; }
+:root[data-theme="light"] #toolbar { --gray6: #6c707e; --gray8: #9a9fae; --gray10: #c9ccd6; }
 :root[data-theme="light"] .trust-bar { background: #fff4d6; color: #6b4a00; border-bottom-color: #ebd9a3; }

@@ -124,7 +124,7 @@
       parts.push(crumb);
     }
     const nodes = [];
-    parts.forEach((p, i) => { if (i) nodes.push(el('span', 'nb-sep', '›')); nodes.push(p); });
+    parts.forEach((p, i) => { if (i) nodes.push(el('span', 'nb-crumb-sep', '›')); nodes.push(p); });
     bar.replaceChildren(...nodes);
     // Long paths keep the innermost crumbs in view; the bar's height never changes.
     bar.scrollLeft = bar.scrollWidth;
@@ -138,6 +138,9 @@
     const visible = shown() && !!path;
     bar.classList.toggle('hidden', !visible);
     if (!visible) { state.key = ''; return; }
+    // Another file: its path at once. The symbols wait for Pyright, which may be busy (Find Usages) for seconds,
+    // and until then the bar named the file shown before (main.py › main above shapes.py).
+    if (!state.key.startsWith(`${path}|`)) { state.key = `${path}|`; render(state, path, []); }
     const symbols = await symbolsOf(model);
     if (seq !== state.seq || ed.getModel() !== model) return;
     const pos = ed.getPosition();

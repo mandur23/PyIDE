@@ -172,11 +172,14 @@
     }
     if (r.command) con.append(`> ${r.command}\n`, 'sys'); // the command line is user data
     const interp = ide.currentInterp();
+    // The job shows in the status bar's background tasks (its header as the title), where Cancel stops it.
+    const task = ide.tasks?.start({ title: header, onCancel: () => ide.proc.kill(r.id) });
     return new Promise((resolve) => {
       ide.proc.attach(r.id, {
         data: (text, stream) => con.append(text, stream === 'err' && !/^\s*(WARNING|DEPRECATION)/.test(text) ? 'err' : null),
         async exit(code) {
           busy = false;
+          task?.done();
           try {
             await exit(code);
             await Promise.all([refresh(), checkDeps({ fresh: true })]);
@@ -390,6 +393,13 @@
   ide.on('filesChanged', (c) => {
     const paths = [...(c.created || []), ...(c.deleted || []), ...(c.renamed || []).flat()].filter((p) => typeof p === 'string');
     if (paths.some((p) => DEP_FILE.test(p) || /(^|[\\/])(uv|poetry)\.lock$/i.test(p))) checkDeps();
+  });
+  // Written outside the IDE: `pip freeze > requirements.txt` in the terminal, another editor, a git checkout. Without
+  // this a project that had no dependency file never noticed a new one (the focus check below skips such projects).
+  ide.api.on('watch:changed', ({ root, paths = [], overflow }) => {
+    if (!ide.root || !ide.util.samePath(root, ide.root)) return;
+    const inRoot = (p) => ide.util.samePath(ide.util.dirname(p), ide.root);
+    if (overflow || paths.some((p) => inRoot(p) && (DEP_FILE.test(p) || /(^|[\\/])(uv|poetry)\.lock$/i.test(p)))) checkSoon();
   });
   ide.onEditor((editor) => editor.onDidChangeModelContent(() => {
     if (DEP_FILE.test(tabOf(editor.getModel())?.path || '')) checkSoon();

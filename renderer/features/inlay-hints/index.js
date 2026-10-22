@@ -104,6 +104,9 @@
       }
       const top = stack[stack.length - 1];
       if (top?.call) {
+        // A generator argument, `sum(p * q for p, q in items)`: its commas separate loop targets, not arguments.
+        if (t.text === 'for') { top.call.positional = false; top.comprehension = true; continue; }
+        if (t.text === ',' && top.comprehension) continue;
         if (t.text === ',') { top.expectArg = true; continue; }
         if (top.expectArg) {
           top.expectArg = false;
@@ -191,8 +194,8 @@
   };
   const shorten = (type) => (type.length > MAX_TYPE ? `${type.slice(0, MAX_TYPE - 1)}…` : type);
 
-  async function variableType(uri, tok) {
-    const r = await ide.lsp.request('textDocument/hover', { textDocument: { uri }, position: { line: tok.line - 1, character: tok.col - 1 } });
+  async function variableType(uri, tok, token) {
+    const r = await ide.lsp.request('textDocument/hover', { textDocument: { uri }, position: { line: tok.line - 1, character: tok.col - 1 } }, token);
     const code = codeOf(r?.contents);
     const m = /^\((?:variable|constant)\)\s+[\w.]+:\s*([\s\S]+)$/.exec(code.split('\n\n')[0]);
     if (!m) return null;
@@ -200,8 +203,8 @@
     return /\bUnknown\b/.test(type) ? null : widen(type);
   }
 
-  async function returnType(uri, def) {
-    const r = await ide.lsp.request('textDocument/hover', { textDocument: { uri }, position: { line: def.name.line - 1, character: def.name.col - 1 } });
+  async function returnType(uri, def, token) {
+    const r = await ide.lsp.request('textDocument/hover', { textDocument: { uri }, position: { line: def.name.line - 1, character: def.name.col - 1 } }, token);
     const code = codeOf(r?.contents).split('\n\n')[0];
     const at = code.indexOf(`${def.name.text}(`);
     if (!/^\((?:function|method)\)/.test(code) || at < 0) return null;
@@ -219,11 +222,33 @@
   }
 
   // Parameter names for a call's positional arguments; positional-only and variadic parameters get none.
-  async function parameterNames(uri, call) {
+  // Pyright's signatureHelp also looks up the callee's documentation, which for an overloaded builtin takes seconds
+  // every time (open(): 6 s, mapping each overload's stub to a source that does not exist). The callee's hover is
+  // quick and prints its signature with the parameter names, so the names are asked once per printed signature
+  // (and argument count) and reused at every call with the same one, in any file and after edits. A signature that
+  // changes prints differently, so it is asked again.
+  const namesBySignature = new Map();
+  const SIGNATURE_CACHE = 1000;
+  const forgetSignatures = () => namesBySignature.clear();
+  ide.on('interpreterChanged', forgetSignatures);
+  ide.on('projectOpened', forgetSignatures);
+  async function parameterNames(uri, call, token) {
+    const h = await ide.lsp.request('textDocument/hover', { textDocument: { uri }, position: { line: call.callee.line - 1, character: call.callee.col - 1 } }, token);
+    const printed = codeOf(h?.contents);
+    const key = /^(\((?:function|method|variable)\)\s*def |class )/.test(printed) ? `${call.args.length}|${printed}` : null;
+    if (key && namesBySignature.has(key)) return namesBySignature.get(key);
     const r = await ide.lsp.request('textDocument/signatureHelp', {
       textDocument: { uri }, position: { line: call.open.line - 1, character: call.open.col },
       context: { triggerKind: 1, isRetrigger: false },
-    });
+    }, token);
+    const names = namesOf(r);
+    if (key && r && !token?.isCancellationRequested) {
+      namesBySignature.set(key, names);
+      if (namesBySignature.size > SIGNATURE_CACHE) namesBySignature.delete(namesBySignature.keys().next().value);
+    }
+    return names;
+  }
+  function namesOf(r) {
     const sig = r?.signatures?.[r.activeSignature ?? 0];
     if (!sig || (r.signatures.length > 1 && sig.parameters?.length !== r.signatures[0].parameters?.length)) return [];
     const labels = (sig.parameters || []).map((p) => (Array.isArray(p.label) ? sig.label.slice(p.label[0], p.label[1]) : p.label));
@@ -239,12 +264,46 @@
 
   // ---------- provider ----------
   const changed = new monaco.Emitter();
+  // Every hint is a Pyright request (a screen of code asks a few dozen), and Pyright answers one request at a time,
+  // so they go a few at a time: completion, hover and the rest typed meanwhile wait behind at most these, not behind
+  // a whole screen of hints. Monaco cancels a provide call when the text changes or the view moves on; its requests
+  // that have not started are dropped and the ones sent are cancelled (ide.lsp.request with a token).
+  const PARALLEL = 2;
+  let running = 0;
+  const waiting = [];
+  function limited(token, fn) {
+    return new Promise((resolve) => {
+      const run = async () => {
+        if (token.isCancellationRequested) { resolve(CANCELLED); next(); return; }
+        running++;
+        try { resolve(await fn()); } catch { resolve(null); } finally { running--; next(); }
+      };
+      waiting.push(run);
+      next();
+    });
+  }
+  function next() {
+    while (running < PARALLEL && waiting.length) waiting.shift()();
+  }
+  const CANCELLED = Symbol('cancelled');
+  // One answer per model version and place, shared by the provide calls of that version. An answer cut short by its
+  // caller's cancellation is not kept: a later caller asks again.
   const cache = new WeakMap(); // model -> {version, map}
-  function memo(model, key, fn) {
-    let c = cache.get(model);
-    if (!c || c.version !== model.getVersionId()) cache.set(model, (c = { version: model.getVersionId(), map: new Map() }));
-    if (!c.map.has(key)) c.map.set(key, fn().catch(() => null));
-    return c.map.get(key);
+  async function memo(model, key, token, fn) {
+    for (;;) {
+      let c = cache.get(model);
+      if (!c || c.version !== model.getVersionId()) cache.set(model, (c = { version: model.getVersionId(), map: new Map() }));
+      let p = c.map.get(key);
+      if (!p) {
+        p = limited(token, () => fn(token)).then((v) => (token.isCancellationRequested ? CANCELLED : v));
+        c.map.set(key, p);
+        const map = c.map;
+        p.then((v) => { if (v === CANCELLED && map.get(key) === p) map.delete(key); });
+      }
+      const v = await p;
+      if (v !== CANCELLED) return v;
+      if (token.isCancellationRequested) return null;
+    }
   }
 
   const inRange = (range, line) => line >= range.startLineNumber && line <= range.endLineNumber;
@@ -267,21 +326,21 @@
     if (on('types')) {
       for (const v of sites.vars) {
         if (!inRange(range, v.tok.line)) continue;
-        jobs.push(memo(model, `v${v.tok.line}:${v.tok.col}`, () => variableType(uri, v.tok)).then((type) => (type && !obviousType(v.rhs, type)
+        jobs.push(memo(model, `v${v.tok.line}:${v.tok.col}`, token, (t) => variableType(uri, v.tok, t)).then((type) => (type && !obviousType(v.rhs, type)
           ? { label: `: ${shorten(type)}`, position: { lineNumber: v.tok.line, column: v.tok.end }, kind: K.Type } : null)));
       }
     }
     if (on('returns')) {
       for (const d of sites.defs) {
         if (!inRange(range, d.close.line)) continue;
-        jobs.push(memo(model, `r${d.name.line}:${d.name.col}`, () => returnType(uri, d)).then((type) => (type
+        jobs.push(memo(model, `r${d.name.line}:${d.name.col}`, token, (t) => returnType(uri, d, t)).then((type) => (type
           ? { label: `-> ${shorten(type)}`, position: { lineNumber: d.close.line, column: d.close.col + 1 }, kind: K.Type, paddingLeft: true } : null)));
       }
     }
     if (on('params')) {
       for (const c of sites.calls) {
         if (!c.args.some((a) => inRange(range, a.line))) continue;
-        jobs.push(memo(model, `c${c.open.line}:${c.open.col}`, () => parameterNames(uri, c)).then((names) => (names || []).map((name, i) => {
+        jobs.push(memo(model, `c${c.open.line}:${c.open.col}`, token, (t) => parameterNames(uri, c, t)).then((names) => (names || []).map((name, i) => {
           const a = c.args[i];
           if (!name || !a || a.simple === name || a.simple?.toLowerCase().endsWith(name.toLowerCase())) return null;
           return { label: `${name}:`, position: { lineNumber: a.line, column: a.col }, kind: K.Parameter, paddingRight: true };

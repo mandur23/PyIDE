@@ -18,6 +18,9 @@
 .ft-help-row { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 8px; }
 .ft-help-row code { font-family: var(--mono); color: var(--gray11); }
 /* Variables asked for when a file is created */
-.ft-vars { display: flex; flex-direction: column; gap: 6px; }
-.ft-var-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 8px; }
-.ft-var-row > span { font-family: var(--mono); }
+/* One grid for all rows: the name column is as wide as the longest name (up to 220px, then it wraps), so names are never
+   cut off and every input starts at the same place. */
+.ft-vars { display: grid; grid-template-columns: minmax(0, max-content) minmax(160px, 1fr); align-items: center; gap: 6px 12px; }
+.ft-var-row { display: contents; }
+.ft-var-row > span { font-family: var(--mono); font-size: 12px; max-width: 220px; overflow-wrap: anywhere; }
+.ft-var-row > input { min-width: 0; }

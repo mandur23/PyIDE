@@ -80,7 +80,7 @@
     for (const doc of docs.values()) doc.opened = 0;
     ide.problems.clear(SOURCE);
     for (const tab of ide.tabs) if (tab.model) monaco.editor.setModelMarkers(tab.model, HINT_OWNER, []);
-    rawDiagnostics.clear();
+    clearDiagnostics();
     probeCache.clear();
     setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
     let started = null;
@@ -110,15 +110,24 @@
 
   const notify = (method, params) => ide.api.invoke('lsp:notify', method, params).catch(() => {});
 
-  // Resolves to the result, or null when the server is unavailable or the request failed.
-  async function request(method, params) {
+  // Resolves to the result, or null when the server is unavailable or the request failed. token: a Monaco
+  // CancellationToken; once it is cancelled (the text changed, the hover moved on) the request answers null and
+  // Pyright drops it unless it has started on it (main/features/lsp.js), so stale requests queued in Pyright do not
+  // hold up the ones that matter.
+  let ticketSeq = 0;
+  async function request(method, params, token) {
     flushAll();
-    if (!(await ready())) return null;
+    if (!(await ready()) || token?.isCancellationRequested) return null;
+    const cancellable = typeof token?.onCancellationRequested === 'function';
+    const ticket = cancellable ? ++ticketSeq : undefined;
+    const sub = cancellable ? token.onCancellationRequested(() => ide.api.invoke('lsp:cancel', ticket).catch(() => {})) : null;
     try {
-      return await ide.api.invoke('lsp:request', method, params);
+      return await ide.api.invoke('lsp:request', method, params, ticket);
     } catch (err) {
       console.warn(`pyright ${method} failed:`, err.message);
       return null;
+    } finally {
+      sub?.dispose();
     }
   }
 
@@ -189,6 +198,8 @@
     docs.delete(path.toLowerCase());
     clearTimeout(doc.timer);
     doc.sub.dispose();
+    trackRanges(path.toLowerCase(), null, []);
+    publishedVersion.delete(path.toLowerCase());
     if (doc.opened === gen && status === 'ready') notify('textDocument/didClose', { textDocument: { uri: doc.uri } });
   });
   ide.on('projectOpened', () => ensureServer());
@@ -198,7 +209,7 @@
     startSeq++;
     serverKey = null;
     ide.problems.clear(SOURCE);
-    rawDiagnostics.clear();
+    clearDiagnostics();
     probeCache.clear();
     ide.api.invoke('lsp:stop').catch(() => {});
     setStatus('off');
@@ -212,13 +223,41 @@
 
   // ---------- diagnostics ----------
   const rawDiagnostics = new Map(); // pathLower -> LSP diagnostics
+  // pathLower -> {model, ids}: one decoration per diagnostic of an open file, so its range moves with the edits made
+  // after Pyright published it (an auto-import above, a pasted line); the quick fixes and diagnostics() read it there.
+  const diagRanges = new Map();
+  // pathLower -> the document version Pyright's last diagnostics are for, and checks run on every publish.
+  const publishedVersion = new Map();
+  const publishWaiters = new Set();
   const SEVERITY = { 1: 'error', 2: 'warning', 3: 'info' };
+
+  function clearDiagnostics() {
+    rawDiagnostics.clear();
+    publishedVersion.clear();
+    for (const { model, ids } of diagRanges.values()) if (!model.isDisposed()) model.deltaDecorations(ids, []);
+    diagRanges.clear();
+  }
+
+  function trackRanges(key, model, diagnostics) {
+    const old = diagRanges.get(key);
+    const keep = old && old.model === model && !model.isDisposed();
+    if (old && !keep && !old.model.isDisposed()) old.model.deltaDecorations(old.ids, []);
+    if (!model || model.isDisposed()) return diagRanges.delete(key);
+    const ids = model.deltaDecorations(keep ? old.ids : [], diagnostics.map((d) => ({
+      range: toRange(d.range), options: { description: 'pyright-diagnostic', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+    })));
+    diagRanges.set(key, { model, ids });
+  }
 
   ide.api.on('lsp:diagnostics', (p) => {
     if (p.gen !== gen || status === 'off') return;
     const path = toPath(p.uri);
     if (basename(path) === PROBE_NAME) return;
     rawDiagnostics.set(path.toLowerCase(), p.diagnostics);
+    if (typeof p.version === 'number') publishedVersion.set(path.toLowerCase(), p.version);
+    const open = ide.findTab(path)?.model;
+    trackRanges(path.toLowerCase(), open, p.diagnostics);
+    for (const check of [...publishWaiters]) check();
     // Hints (unused names, deprecated) are greyed out in the editor like PyCharm, not listed as problems.
     const isHint = (d) => !d.severity || d.severity === 4;
     ide.problems.set(SOURCE, path, p.diagnostics.filter((d) => !isHint(d)).map((d) => ({
@@ -340,7 +379,7 @@
       const res = await request('textDocument/completion', {
         textDocument: { uri: doc.uri }, position: lspPos(position),
         context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
-      });
+      }, token);
       if (!res || token.isCancellationRequested || model.isDisposed()) return undefined;
       const items = Array.isArray(res) ? res : res.items || [];
       const word = model.getWordUntilPosition(position);
@@ -372,7 +411,7 @@
     },
     async resolveCompletionItem(item, token) {
       if (!item.lsp || item.lsp.documentation) return item;
-      const r = await request('completionItem/resolve', item.lsp);
+      const r = await request('completionItem/resolve', item.lsp, token);
       if (!r || token.isCancellationRequested) return item;
       if (r.documentation) item.documentation = docOf(r.documentation);
       if (r.detail) item.detail = r.detail;
@@ -385,7 +424,7 @@
     async provideHover(model, position, token) {
       const doc = docFor(model);
       if (!doc) return undefined;
-      const r = await request('textDocument/hover', { textDocument: { uri: doc.uri }, position: lspPos(position) });
+      const r = await request('textDocument/hover', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
       if (!r?.contents || token.isCancellationRequested) return undefined;
       const value = toMarkdown(r.contents);
       return value ? { contents: [{ value }], range: r.range ? toRange(r.range) : undefined } : undefined;
@@ -401,7 +440,7 @@
       const r = await request('textDocument/signatureHelp', {
         textDocument: { uri: doc.uri }, position: lspPos(position),
         context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter, isRetrigger: context.isRetrigger },
-      });
+      }, token);
       if (!r?.signatures?.length || token.isCancellationRequested) return undefined;
       return {
         value: {
@@ -441,7 +480,7 @@
   const locationProvider = (method) => async (model, position, token) => {
     const doc = docFor(model);
     if (!doc) return undefined;
-    const r = await request(method, { textDocument: { uri: doc.uri }, position: lspPos(position) });
+    const r = await request(method, { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
     return token.isCancellationRequested ? undefined : withModels(toMonacoLinks(toLocations(r)));
   };
   monaco.languages.registerDefinitionProvider('python', { provideDefinition: locationProvider('textDocument/definition') });
@@ -460,7 +499,7 @@
     async provideDocumentHighlights(model, position, token) {
       const doc = docFor(model);
       if (!doc) return undefined;
-      const r = await request('textDocument/documentHighlight', { textDocument: { uri: doc.uri }, position: lspPos(position) });
+      const r = await request('textDocument/documentHighlight', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
       if (!r || token.isCancellationRequested) return undefined;
       return r.map((h) => ({ range: toRange(h.range), kind: (h.kind || 1) - 1 }));
     },
@@ -479,7 +518,7 @@
     async provideDocumentSymbols(model, token) {
       const doc = docFor(model);
       if (!doc) return undefined;
-      const r = await request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } });
+      const r = await request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } }, token);
       return !r || token.isCancellationRequested ? undefined : r.filter((s) => s.range).map(toMonacoSymbol);
     },
   });
@@ -579,16 +618,63 @@
     return after + 1;
   }
 
+  // `from mod import a, b` at the top level (one line, no parentheses or star): a new name from mod joins it, as
+  // PyCharm's auto-import does, instead of a second import line of the same module.
+  function fromImportEdit(model, line) {
+    const m = /^from\s+(\S+)\s+import\s+/.exec(line);
+    if (!m) return null;
+    for (let i = 1; i <= model.getLineCount(); i++) {
+      const text = model.getLineContent(i);
+      if (!text.startsWith(`from ${m[1]} import `) || /[()*\\]/.test(text)) continue;
+      const code = text.replace(/\s*#.*$/, '');
+      const name = line.slice(m[0].length);
+      if (code.slice(m[0].length).split(',').some((n) => n.trim().split(/\s+as\s+/)[0] === name)) return null;
+      return { range: new monaco.Range(i, code.length + 1, i, code.length + 1), text: `, ${name}` };
+    }
+    return null;
+  }
+
+  // Pyright's diagnostics where they are now (see diagRanges).
+  function currentDiagnostics(model, path) {
+    const raw = rawDiagnostics.get(path.toLowerCase()) || [];
+    const tracked = diagRanges.get(path.toLowerCase());
+    if (!tracked || tracked.model !== model || model.isDisposed()) return raw;
+    return raw.map((d, i) => {
+      const r = model.getDecorationRange(tracked.ids[i]);
+      return r ? { ...d, range: { start: { line: r.startLineNumber - 1, character: r.startColumn - 1 }, end: { line: r.endLineNumber - 1, character: r.endColumn - 1 } } } : d;
+    });
+  }
+
+  // Alt+Enter right after typing waits briefly for Pyright's diagnostics of the text as it is now. Its diagnostics of
+  // the text before the last edits sit on the old lines, so the import fix for the name under the caret was missing.
+  // The wait comes before Monaco's request: Monaco drops an explicit request that is still running 750 ms after a
+  // marker change (its automatic lightbulb request replaces it), which a wait inside the provider would run into.
+  function diagnosticsSettled(doc, ms = 2500) {
+    flush(doc);
+    const key = doc.path.toLowerCase();
+    const want = doc.model.getVersionId();
+    const settled = () => !publishedVersion.has(key) || publishedVersion.get(key) >= want || doc.model.isDisposed() || docs.get(key) !== doc;
+    if (settled()) return Promise.resolve();
+    return new Promise((resolve) => {
+      const finish = () => { clearTimeout(timer); publishWaiters.delete(check); resolve(); };
+      const check = () => { if (settled()) finish(); };
+      const timer = setTimeout(finish, ms);
+      publishWaiters.add(check);
+    });
+  }
+
   monaco.languages.registerCodeActionProvider('python', {
     async provideCodeActions(model, range, context, token) {
       const doc = docFor(model);
       if (!doc) return undefined;
-      const diags = (rawDiagnostics.get(doc.path.toLowerCase()) || [])
+      const invoked = context.trigger === monaco.languages.CodeActionTriggerType.Invoke;
+      const diags = currentDiagnostics(model, doc.path)
         .filter((d) => d.range.start.line + 1 <= range.endLineNumber && d.range.end.line + 1 >= range.startLineNumber);
       const actions = [];
+      // A name used twice on the line, or one diagnostic code twice, gives one action, not one per diagnostic.
+      const offered = new Set();
       // The lightbulb asks on every caret move; answer it synchronously from the cached diagnostics and leave
       // the server round trips (Pyright actions, import lookup) to an explicit Alt+Enter.
-      const invoked = context.trigger === monaco.languages.CodeActionTriggerType.Invoke;
       const lspActions = invoked && await request('textDocument/codeAction', {
         textDocument: { uri: doc.uri },
         range: { start: lspPos(range.getStartPosition()), end: lspPos(range.getEndPosition()) },
@@ -599,22 +685,27 @@
       }
       for (const d of diags) {
         const undefinedName = d.code === 'reportUndefinedVariable' && /"([\w]+)" is not defined/.exec(d.message)?.[1];
-        if (undefinedName && invoked) {
+        if (undefinedName && invoked && !offered.has(`import:${undefinedName}`)) {
+          offered.add(`import:${undefinedName}`);
           const at = importInsertLine(model);
           const last = model.getLineCount();
           for (const c of await importCandidates(undefinedName, doc.path)) {
-            const textEdit = at > last
+            const textEdit = fromImportEdit(model, c.line) || (at > last
               ? { range: new monaco.Range(last, model.getLineMaxColumn(last), last, model.getLineMaxColumn(last)), text: `\n${c.line}` }
-              : { range: new monaco.Range(at, 1, at, 1), text: `${c.line}\n` };
+              : { range: new monaco.Range(at, 1, at, 1), text: `${c.line}\n` });
+            // Monaco lists the actions tied to a marker first (ruff's "# noqa" for its F821 is one), so the import
+            // names Pyright's marker too; being preferred, it then leads the list and Alt+Enter, Enter imports.
             actions.push({
-              title: c.title, kind: 'quickfix', isPreferred: !actions.some((a) => a.isPreferred), diagnostics: [],
+              title: c.title, kind: 'quickfix', isPreferred: !actions.some((a) => a.isPreferred),
+              diagnostics: context.markers.filter((m) => m.source === SOURCE && m.message === d.message),
               edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit }] },
             });
           }
         }
         if (d.code && d.source !== 'Pylance') {
           const line = d.range.start.line + 1;
-          if (line > model.getLineCount()) continue;
+          if (line > model.getLineCount() || offered.has(`suppress:${line}:${d.code}`)) continue;
+          offered.add(`suppress:${line}:${d.code}`);
           const end = model.getLineMaxColumn(line);
           const text = model.getLineContent(line);
           const existing = /# pyright: ignore\[([^\]]*)\]/.exec(text);
@@ -644,6 +735,12 @@
   // ---------- actions ----------
   const editorPython = () => !!ide.editor?.hasTextFocus() && isPy(modelPath(ide.editor.getModel()));
   const editorTrigger = (id) => () => ide.editor.trigger('keyboard', id, null);
+  async function showContextActions() {
+    const editor = ide.editor;
+    const doc = docFor(editor.getModel());
+    if (doc) await diagnosticsSettled(doc);
+    if (editor.getModel() === doc?.model || !doc) editor.trigger('keyboard', 'editor.action.quickFix', null);
+  }
   const hint = (text) => {
     const ctl = ide.editor.getContribution('editor.contrib.messageController');
     if (ctl) ctl.showMessage(text, ide.editor.getPosition());
@@ -799,7 +896,7 @@
     { id: 'RenameElement', title: tr('Rename…'), keys: 'Shift+F6', when: editorPython, run: editorTrigger('editor.action.rename') },
     { id: 'QuickJavaDoc', title: tr('Quick Documentation'), keys: 'Ctrl+Q', when: editorPython, run: editorTrigger('editor.action.showHover') },
     { id: 'ParameterInfo', title: tr('Parameter Info'), keys: 'Ctrl+P', when: editorPython, run: editorTrigger('editor.action.triggerParameterHints') },
-    { id: 'ShowIntentionActions', title: tr('Show Context Actions'), keys: 'Alt+Enter', when: editorPython, run: editorTrigger('editor.action.quickFix') },
+    { id: 'ShowIntentionActions', title: tr('Show Context Actions'), keys: 'Alt+Enter', when: editorPython, run: showContextActions },
     { id: 'GotoNextError', title: tr('Next Highlighted Error'), keys: 'F2', when: editorPython, run: () => gotoProblem(1) },
     { id: 'GotoPreviousError', title: tr('Previous Highlighted Error'), keys: 'Shift+F2', when: editorPython, run: () => gotoProblem(-1) },
     { id: 'Pyright.Restart', title: tr('Restart Pyright Language Server'), run: restart },
@@ -810,7 +907,12 @@
   const refreshImports = () => { if (status === 'ready') notify('workspace/didChangeConfiguration', { settings: {} }); };
   ide.on('packagesChanged', refreshImports);
 
-  // diagnostics(path): Pyright's last raw LSP diagnostics for a file (with `code`, e.g. reportMissingImports).
-  const diagnostics = (path) => (path && status === 'ready' ? rawDiagnostics.get(path.toLowerCase()) || [] : []);
+  // diagnostics(path): Pyright's last raw LSP diagnostics for a file (with `code`, e.g. reportMissingImports), at
+  // their current place in an open file.
+  const diagnostics = (path) => {
+    if (!path || status !== 'ready') return [];
+    const model = ide.findTab(path)?.model;
+    return model && !model.isDisposed() ? currentDiagnostics(model, path) : rawDiagnostics.get(path.toLowerCase()) || [];
+  };
   ide.lsp = { request, documentSymbols, ready, status: () => status, restart, diagnostics, refreshImports };
 })();

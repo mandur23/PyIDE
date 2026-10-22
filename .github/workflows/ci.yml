@@ -19,7 +19,7 @@ concurrency:
 jobs:
   verify:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       # The IDE's default interpreter is `py -3`, then `python`; both must be the 3.13 that has pytest.
       PY_PYTHON: '3.13'
@@ -191,6 +191,22 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15
         run: node verify/editing-comfort.mjs
+      - name: ui-inspect-main
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/ui-inspect-main.mjs
+      - name: ui-inspect-dialogs
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/ui-inspect-dialogs.mjs
+      - name: flow-tools
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 20
+        run: node verify/flow-tools.mjs
+      - name: flow-coding
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 20
+        run: node verify/flow-coding.mjs
 
       - name: Upload verify/out
         if: ${{ failure() }}

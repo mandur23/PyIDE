@@ -24,7 +24,7 @@
 .nb-crumb { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
 .nb-crumb:hover { background: var(--gray3); color: var(--gray12); }
 .nb-crumb:last-child { color: var(--gray12); }
-.nb-sep { color: var(--gray7); flex-shrink: 0; }
+.nb-crumb-sep { color: var(--gray7); flex-shrink: 0; }
 .nb-drop { color: var(--gray8); font-size: 10px; padding: 0 1px; }
 .nb-crumb:hover .nb-drop, .nb-drop:hover { color: var(--gray12); }
 .nb-menu .menu-item.nb-current .menu-label { font-weight: 600; }

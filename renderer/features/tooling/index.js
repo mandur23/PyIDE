@@ -204,9 +204,12 @@
           });
         }
       }
+      // One # noqa action per line and code (a name used twice on a line gives two diagnostics, one comment).
+      const suppressed = new Set();
       for (const d of hits) {
         const textEdit = noqaEdit(model, d);
-        if (!textEdit) continue;
+        if (!textEdit || suppressed.has(`${d.location.row}:${d.code}`)) continue;
+        suppressed.add(`${d.location.row}:${d.code}`);
         actions.push({
           title: tr('Suppress {code} for line with # noqa', { code: d.code }),
           kind: 'quickfix',
