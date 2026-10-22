@@ -141,7 +141,17 @@ async function mainWindowChecks(t, lang) {
       const s = await js(`__uiInspect.status()`);
       check(!s.bad.length, `${lang} ${theme} ${w}px: every status bar widget is on one line inside the bar and the window, none overlapping (${s.bad.join('; ') || s.shown.length + ' shown'})`);
       check(['statusPos', 'statusEncoding', 'statusInterp'].every((id) => s.shown.includes(id)), `${lang} ${theme} ${w}px: caret position, encoding and interpreter always show`);
-      if (w === 1600) check(!s.overflow.length, `${lang} ${theme} 1600px: nothing is hidden when everything fits (${s.overflow.join(', ') || 'none'})`);
+      // Whether everything fits depends on the fonts (the CI runner's Korean font is wider): what must hold is that
+      // the first hidden widget would not fit if it were shown.
+      const needed = await js(`(() => {
+        const bar = document.getElementById('status'), first = document.querySelector('#statusItems > .status-overflow');
+        if (!first) return true;
+        first.classList.remove('status-overflow');
+        const over = bar.scrollWidth > bar.clientWidth + 1;
+        first.classList.add('status-overflow');
+        return over;
+      })()`);
+      if (w === 1600) check(needed, `${lang} ${theme} 1600px: a widget is hidden only when it would not fit (${s.overflow.join(', ') || 'none hidden'})`);
       if (w === 900) {
         const orders = await js(`[...document.querySelectorAll('#statusItems > *')].filter(n => n.classList.contains('status-overflow') || __uiInspect.shown(n)).map(n => [Number(n.dataset.order), n.classList.contains('status-overflow')])`);
         const firstHidden = orders.findIndex(([, hidden]) => hidden);
