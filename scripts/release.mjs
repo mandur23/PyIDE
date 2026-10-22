@@ -46,6 +46,7 @@ export const io = {
   writeFileSync: fs.writeFileSync,
   copyFileSync: fs.copyFileSync,
   mkdtempSync: fs.mkdtempSync,
+  rmSync: fs.rmSync,
   fetch: (...a) => fetch(...a),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   log: (s) => console.log(s),
@@ -490,8 +491,10 @@ async function publish({ exe, msi, latestYml }, notes) {
   act('gh', ['release', 'upload', TAG, rel(exe), rel(msi), stable, '-R', REPO, '--clobber']);
   state.installersUploaded = !dryRun;
   act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `PyIDE ${V}`, '--notes-file', notesFile, '--latest=false']);
+  if (!dryRun) try { io.rmSync(stage, { recursive: true, force: true }); } catch {} // the uploaded copy and notes are done with
   if (dryRun) {
     log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);
+    try { io.rmSync(stage, { recursive: true, force: true }); } catch {}
     log(`  [dry-run] then gh release list -R ${REPO}: Latest must still be ${before.tag || 'a non-pyide release'}`);
   } else {
     const after = latestRelease();

@@ -194,6 +194,7 @@ let probeFile = null;
 function probeScript() {
   if (probeFile && fs.existsSync(probeFile)) return probeFile;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-viewers-'));
+  process.once('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
   probeFile = path.join(dir, 'pyide_viewers_probe.py');
   fs.writeFileSync(probeFile, PROBE, 'utf8');
   return probeFile;
