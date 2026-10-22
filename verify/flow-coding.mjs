@@ -205,9 +205,11 @@ const ctrlChord = async (l) => {
 const setInput = (sel, value) => js(`(() => { const n = document.querySelector(${J(sel)}); n.value = ${J(value)}; n.dispatchEvent(new Event(n.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); return true; })()`);
 const clickSeen = async (sel) => { await js(`(document.querySelector(${J(sel)}).scrollIntoView({ block: 'center' }), true)`); await click(sel); };
 // Every process below the IDE's main process, with its start time (a pid can be reused once it is gone).
+// Children must have started after their parent: PIDs are reused, so an old system process whose long-gone parent
+// had the same PID as PyIDE would otherwise count as PyIDE's child (seen on the CI runner).
 const processTree = (rootPid) => JSON.parse(sh('powershell', ['-NoProfile', '-Command',
-  `$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate; $out = @(); $q = @(${rootPid});
-   while ($q.Count) { $p = $q[0]; $q = @($q | Select-Object -Skip 1); foreach ($c in $all) { if ($c.ParentProcessId -eq $p) { $out += [pscustomobject]@{ pid = $c.ProcessId; name = $c.Name; cmd = [string]$c.CommandLine; created = [string]$c.CreationDate }; $q += $c.ProcessId } } }
+  `$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate; $out = @(); $root = $all | Where-Object { $_.ProcessId -eq ${rootPid} } | Select-Object -First 1; $q = @(@{ pid = ${rootPid}; at = $root.CreationDate });
+   while ($q.Count) { $p = $q[0]; $q = @($q | Select-Object -Skip 1); foreach ($c in $all) { if ($c.ParentProcessId -eq $p.pid -and (-not $p.at -or $c.CreationDate -ge $p.at)) { $out += [pscustomobject]@{ pid = $c.ProcessId; name = $c.Name; cmd = [string]$c.CommandLine; created = [string]$c.CreationDate }; $q += @{ pid = $c.ProcessId; at = $c.CreationDate } } } }
    ConvertTo-Json -Compress -InputObject @($out)`]) || '[]');
 const liveProcesses = (list) => {
   if (!list.length) return [];

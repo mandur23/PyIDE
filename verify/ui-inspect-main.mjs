@@ -142,12 +142,14 @@ async function mainWindowChecks(t, lang) {
       check(!s.bad.length, `${lang} ${theme} ${w}px: every status bar widget is on one line inside the bar and the window, none overlapping (${s.bad.join('; ') || s.shown.length + ' shown'})`);
       check(['statusPos', 'statusEncoding', 'statusInterp'].every((id) => s.shown.includes(id)), `${lang} ${theme} ${w}px: caret position, encoding and interpreter always show`);
       // Whether everything fits depends on the fonts (the CI runner's Korean font is wider): what must hold is that
-      // the first hidden widget would not fit if it were shown.
+      // the first hidden widget would not fit if it were shown (the bar would overflow or the path drop below 120px).
       const needed = await js(`(() => {
         const bar = document.getElementById('status'), first = document.querySelector('#statusItems > .status-overflow');
         if (!first) return true;
         first.classList.remove('status-overflow');
-        const over = bar.scrollWidth > bar.clientWidth + 1;
+        const path = document.getElementById('statusPath');
+        // the same rule as the fit in renderer/core/ide.js: the bar overflows, or the path is cut below 120px
+        const over = bar.scrollWidth > bar.clientWidth + 1 || (path.scrollWidth > path.clientWidth && path.clientWidth < 120);
         first.classList.add('status-overflow');
         return over;
       })()`);
