@@ -253,9 +253,12 @@ ipcMain.on('settings:saveSync', (e, settings) => {
   }
 });
 
+// The OS light/dark mode for the "Sync with OS" theme (theme:system, theme:systemChanged).
+require('./main/system-theme').register({ ipcMain });
+
 // Detached editor windows load only the plugins that declare "detached": true.
 ipcMain.handle('core:features', async (e) => {
-  await featuresRegistered;
+  await registerFeatures(); // started at the window's dom-ready; here too in case that never came
   return plugins.rendererEntries({ detached: e.sender.id !== win?.webContents.id });
 });
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
@@ -299,13 +302,14 @@ const featureContext = {
   diagnostics,
 };
 
-// Feature modules register one per event-loop turn, so the window's first synchronous IPC calls (settings, locale)
-// are answered in between. core:features answers only after the last one, and the plugin scripts it lists are the
-// only callers of feature channels.
+// Feature modules register one per event-loop turn, starting once the window's page is parsed (dom-ready): until
+// then the renderer waits on this process for its synchronous IPC calls (settings, locale) and for every file it loads
+// (security.js checks file: URLs here), and module loading would hold those up. Monaco loads meanwhile, and
+// core:features answers only after the last module, so the plugin scripts it lists, the only callers of feature
+// channels, find them registered. Returns the promise of that.
 let featuresRegistered = null;
 function registerFeatures() {
-  // Before anything else: interpreter discovery and git ask it about the first project right away.
-  trust.register(featureContext);
+  if (featuresRegistered) return featuresRegistered;
   const files = [require.resolve('./main/new-project'), require.resolve('./main/project-watch'), ...plugins.mainModules()];
   featuresRegistered = new Promise((resolve) => {
     const next = (i) => {
@@ -319,6 +323,7 @@ function registerFeatures() {
     };
     next(0);
   });
+  return featuresRegistered;
 }
 
 const windows = createWindowManager({ appDir: __dirname });
@@ -341,7 +346,11 @@ async function createWindow() {
 // load. Core renderer code only uses channels registered above; see registerFeatures for the feature channels.
 app.whenReady().then(async () => {
   await createWindow();
-  registerFeatures();
+  // Before anything else: interpreter discovery and git ask it about the first project right away.
+  trust.register(featureContext);
+  win.webContents.once('dom-ready', registerFeatures);
+  // A page that never gets that far (it crashed, or hangs) still gets them, for its reload.
+  setTimeout(registerFeatures, 3000);
 });
 app.on('window-all-closed', () => app.quit());
 // will-quit, not window-all-closed: app.quit() (a relaunch, a plugin's deferred quit) closes the windows without

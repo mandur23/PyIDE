@@ -39,6 +39,8 @@ function createPluginManager({ appDir, userDataDir }) {
     const strings = (v) => [].concat(v || []).filter((s) => typeof s === 'string');
     const id = (typeof meta?.id === 'string' && meta.id) || path.basename(dir);
     const mains = strings(meta?.main);
+    // One listing of the folder instead of a check per file: this runs for every plugin before the window opens.
+    const has = filesIn(dir);
     return {
       id,
       name: meta?.name || id,
@@ -51,12 +53,21 @@ function createPluginManager({ appDir, userDataDir }) {
       detached: !!meta?.detached,
       bundled,
       dir,
-      script: fs.existsSync(path.join(dir, 'index.js')) ? path.join(dir, 'index.js') : null,
-      style: fs.existsSync(path.join(dir, 'style.css')) ? path.join(dir, 'style.css') : null,
+      script: has('index.js') ? path.join(dir, 'index.js') : null,
+      style: has('style.css') ? path.join(dir, 'style.css') : null,
       mainModules: mains.map((m) => (bundled ? path.join(bundledMainDir, m) : path.join(dir, m))),
-      locales: fs.existsSync(path.join(dir, 'locales'))
-        ? fs.readdirSync(path.join(dir, 'locales')).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)) : [],
+      // Its translations are locales/<lang>.json, read when a language asks for them (localeDictionary).
+      hasLocales: has('locales'),
     };
+  }
+
+  // Whether a folder holds an entry, by name (ignoring case on Windows, as existsSync does there).
+  const caseless = process.platform === 'win32';
+  function filesIn(dir) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch {}
+    const set = new Set(caseless ? names.map((n) => n.toLowerCase()) : names);
+    return (name) => set.has(caseless ? name.toLowerCase() : name);
   }
 
   const subdirs = (root) => (fs.existsSync(root)
@@ -86,8 +97,12 @@ function createPluginManager({ appDir, userDataDir }) {
     return plugins;
   }
 
-  const loaded = discover();
-  const loadedIds = new Set(loaded.filter((p) => p.enabled).map((p) => p.id));
+  // Taken on first use (main.js registers the feature modules right after creating the window), so reading every
+  // plugin folder does not hold up the window.
+  let snapshot = null;
+  const loadedList = () => (snapshot ??= discover());
+  let loadedIdSet = null;
+  const loadedIds = () => (loadedIdSet ??= new Set(loadedList().filter((p) => p.enabled).map((p) => p.id)));
 
   function list() {
     const disabled = new Set(state().disabled);
@@ -95,7 +110,7 @@ function createPluginManager({ appDir, userDataDir }) {
       id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n,
       depends: p.depends, required: p.required, bundled: p.bundled, dir: p.dir, blockedBy: p.blockedBy || null,
       enabled: p.required || !disabled.has(p.id),
-      loaded: loadedIds.has(p.id),
+      loaded: loadedIds().has(p.id),
     }));
   }
 
@@ -162,7 +177,7 @@ function createPluginManager({ appDir, userDataDir }) {
   }
 
   // Renderer assets of the plugins running this session, in a stable order (bundled first, dependencies first).
-  const rendererEntries = ({ detached = false } = {}) => dependencyOrder(loaded.filter((p) => p.enabled && p.script && (!detached || p.detached))).map((p) => ({
+  const rendererEntries = ({ detached = false } = {}) => dependencyOrder(loadedList().filter((p) => p.enabled && p.script && (!detached || p.detached))).map((p) => ({
     id: p.id,
     script: p.bundled ? `features/${path.basename(p.dir)}/index.js` : require('url').pathToFileURL(p.script).href,
     css: p.style ? (p.bundled ? `features/${path.basename(p.dir)}/style.css` : require('url').pathToFileURL(p.style).href) : null,
@@ -170,16 +185,20 @@ function createPluginManager({ appDir, userDataDir }) {
 
   function localeDictionary(lang) {
     const dict = { ...readJson(path.join(appDir, 'renderer', 'locales', `${lang}.json`), {}) };
-    for (const p of loaded) {
-      if (p.enabled && p.locales.includes(lang)) Object.assign(dict, readJson(path.join(p.dir, 'locales', `${lang}.json`), {}));
+    for (const p of loadedList()) {
+      if (!p.hasLocales || typeof lang !== 'string' || path.basename(lang) !== lang) continue;
+      const own = readJson(path.join(p.dir, 'locales', `${lang}.json`), {}); // {} when the plugin has no such language
+      if (p.enabled) Object.assign(dict, own);
+      // A disabled plugin's strings stay out, except its name and description, which the Plugins page still shows.
+      else for (const k of [p.name, p.description]) if (k && typeof own[k] === 'string' && !(k in dict)) dict[k] = own[k];
     }
     return dict;
   }
 
   // Main modules owned by disabled plugins are skipped; modules no plugin claims always load.
   function mainModules() {
-    const claimed = new Set(loaded.flatMap((p) => p.mainModules.map((m) => m.toLowerCase())));
-    const enabled = loaded.filter((p) => p.enabled).flatMap((p) => p.mainModules);
+    const claimed = new Set(loadedList().flatMap((p) => p.mainModules.map((m) => m.toLowerCase())));
+    const enabled = loadedList().filter((p) => p.enabled).flatMap((p) => p.mainModules);
     const unclaimed = fs.existsSync(bundledMainDir)
       ? fs.readdirSync(bundledMainDir).filter((f) => f.endsWith('.js')).map((f) => path.join(bundledMainDir, f)).filter((m) => !claimed.has(m.toLowerCase()))
       : [];
@@ -189,7 +208,7 @@ function createPluginManager({ appDir, userDataDir }) {
   // The plugin a source file belongs to (inside its folder, or one of its main modules), for error reports.
   function ownerOf(file) {
     const f = path.resolve(file).toLowerCase();
-    const p = loaded.find((x) => x.mainModules.some((m) => m.toLowerCase() === f) || f.startsWith(x.dir.toLowerCase() + path.sep));
+    const p = loadedList().find((x) => x.mainModules.some((m) => m.toLowerCase() === f) || f.startsWith(x.dir.toLowerCase() + path.sep));
     return p ? { id: p.id, name: p.name, i18n: p.i18n, required: p.required, bundled: p.bundled } : null;
   }
 
