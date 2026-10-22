@@ -794,14 +794,16 @@ try {
     await saveActive();
     await js(`(ide.runAction('LocalHistory.ShowHistory'), true)`);
     await until(`ide.activeTab()?.title === 'Local History: main.py' && document.querySelectorAll('.lh-view:not(.hidden) .lh-row').length >= 2`, 'local history');
-    // The view redraws its rows once more after opening (up to ~200 ms later), replacing a row picked before that.
+    // The view redraws its rows (on save and watch events), keeping the selection but replacing the row elements, so
+    // the pick is identified by its text, not by an id put on an element that may be gone.
+    const pickText = await js(`[...document.querySelectorAll('.lh-view:not(.hidden) .lh-row:not(.label)')][1].textContent`);
     for (let i = 0; i < 10; i++) {
-      await js(`(() => { const rows = [...document.querySelectorAll('.lh-view:not(.hidden) .lh-row:not(.label)')]; rows[1].id = 'lhPick'; return true; })()`);
+      await js(`(() => { const n = [...document.querySelectorAll('.lh-view:not(.hidden) .lh-row:not(.label)')].find((r) => r.textContent === ${JSON.stringify(pickText)}); n.id = 'lhPick'; n.scrollIntoView({ block: 'center' }); return true; })()`);
       await click('#lhPick');
-      if (await js(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.id === 'lhPick'`)) break;
+      if (await js(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.textContent === ${JSON.stringify(pickText)}`)) break;
       await sleep(300);
     }
-    await until(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.id === 'lhPick'`, 'revision selected');
+    await until(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.textContent === ${JSON.stringify(pickText)}`, 'revision selected');
     await shot('14-local-history.png');
     await click('.lh-view:not(.hidden) .lh-revert');
     await until(`(async () => (await ide.api.read(${J(file('main.py'))})).includes('def make_shapes'))()`, 'reverted', 15000);
