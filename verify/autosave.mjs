@@ -121,8 +121,10 @@ try {
   await sleep(800);
   await js(`ide.autoSave().then(() => true)`);
   check(disk('d.py') === 'external = True\n' && await dirty('d.py'), 'a file changed on disk is not overwritten by auto save');
-  check(await js(`!document.querySelector('#autosaveStatus').classList.contains('hidden') && document.querySelector('#autosaveStatus').textContent.includes('d.py changed on disk')`),
-    'the status bar names the file auto save left alone');
+  // The status note follows the save on the next render; a slow runner may show it a moment later.
+  const leftAlone = `!document.querySelector('#autosaveStatus').classList.contains('hidden') && document.querySelector('#autosaveStatus').textContent.includes('d.py changed on disk')`;
+  for (let i = 0; i < 25 && !(await js(leftAlone)); i++) await sleep(200);
+  check(await js(leftAlone), 'the status bar names the file auto save left alone');
   // The explicit save asks first (File Cache Conflict, verify/external-changes.mjs); keeping the editor text writes it.
   const saving = save('d.py');
   await until(`document.querySelector('.dialog-title')?.textContent === 'File Cache Conflict'`, 'file cache conflict');

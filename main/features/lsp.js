@@ -59,6 +59,9 @@ const CLIENT_CAPABILITIES = {
   general: { positionEncodings: ['utf-16'] },
 };
 
+// Requests never sent $/cancelRequest (see Server.cancel).
+const NO_CANCEL = new Set(['textDocument/references']);
+
 class Server {
   constructor({ unpackedDir, root, pythonPath, gen, send }) {
     Object.assign(this, { root, pythonPath, gen, send });
@@ -120,7 +123,9 @@ class Server {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
-      if (msg.error) p.reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
+      // A request Pyright reports as cancelled, or failed while cancelling, is no answer, not an IDE internal error.
+      if (msg.error && (msg.error.code === -32800 || /_token.cancel|cancell?ed/i.test(msg.error.message || ''))) p.resolve(null);
+      else if (msg.error) p.reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
       else p.resolve(msg.result ?? null);
       return;
     }
@@ -184,7 +189,7 @@ class Server {
         reject(Object.assign(new Error(`Pyright did not answer ${method} within ${ms / 1000} s`), { expected: true }));
       }, ms);
       const settle = (fn) => (v) => { clearTimeout(timer); if (ticket != null) this.tickets.delete(ticket); fn(v); };
-      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
+      this.pending.set(id, { method, resolve: settle(resolve), reject: settle(reject) });
       if (ticket != null) this.tickets.set(ticket, id);
       this.write({ id, method, params });
     });
@@ -197,7 +202,10 @@ class Server {
     const id = this.tickets.get(ticket);
     const p = id !== undefined && this.pending.get(id);
     if (!p) return;
-    this.cancelId(id);
+    // Pyright 1.1.406 fails a references request it is told to cancel ("this._token.cancel is not a function", seen
+    // on the CI runner), so that one is only dropped here; its late answer finds no pending entry and is ignored.
+    if (NO_CANCEL.has(p.method)) this.pending.delete(id);
+    else this.cancelId(id);
     p.resolve(null);
   }
 
