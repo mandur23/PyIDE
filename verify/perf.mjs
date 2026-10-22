@@ -2,8 +2,7 @@
 // Prints every number and writes them to verify/out/perf/results.json; a budget miss fails the run.
 // PERF_RUNS=n sets the number of measured startups (default 3, after one unmeasured warm-up launch);
 // PERF_ONLY=startup stops after the startup measurements.
-import { launch } from './lib.mjs';
-import { execFileSync } from 'child_process';
+import { descendants, launch, processSnapshot } from './lib.mjs';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -34,22 +33,13 @@ function generateProject() {
 // Working set of a process and all its descendants (electron renderers/GPU, node workers, Python sidecars), by
 // process kind (electron's --type flag, or the executable name).
 function treeMemory(rootPid) {
-  const procs = JSON.parse(execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,WorkingSetSize,CommandLine | ConvertTo-Json -Compress'],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
-  const children = new Map();
-  for (const p of procs) (children.get(p.ParentProcessId) || children.set(p.ParentProcessId, []).get(p.ParentProcessId)).push(p);
-  const out = [];
-  const visit = (pid) => { for (const c of children.get(pid) || []) { out.push(c); visit(c.ProcessId); } };
-  const root = procs.find((p) => p.ProcessId === rootPid);
-  if (root) out.push(root);
-  visit(rootPid);
+  const out = descendants(processSnapshot(), rootPid, { includeRoot: true });
   const byName = {};
   for (const p of out) {
-    const kind = p.Name === 'electron.exe' ? `electron ${/--type=([\w-]+)/.exec(p.CommandLine || '')?.[1] || 'main'}` : p.Name;
-    byName[kind] = Math.round(((byName[kind] || 0) + p.WorkingSetSize / 1048576) * 10) / 10;
+    const kind = p.name === 'electron.exe' ? `electron ${/--type=([\w-]+)/.exec(p.cmd)?.[1] || 'main'}` : p.name;
+    byName[kind] = Math.round(((byName[kind] || 0) + p.workingSet / 1048576) * 10) / 10;
   }
-  return { totalMB: Math.round(out.reduce((s, p) => s + p.WorkingSetSize, 0) / 1048576), processes: out.length, byName };
+  return { totalMB: Math.round(out.reduce((s, p) => s + p.workingSet, 0) / 1048576), processes: out.length, byName };
 }
 
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];

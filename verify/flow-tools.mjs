@@ -18,7 +18,7 @@ import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch } from './lib.mjs';
+import { descendants, launch, processSnapshot } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(HERE, '..');
@@ -101,25 +101,8 @@ const osv = http.createServer((req, res) => {
 });
 await new Promise((r) => osv.listen(OSV_PORT, '127.0.0.1', r));
 
-// ---------- process trees (as verify/terminal-split.mjs and verify/commit-checks.mjs check them) ----------
-function processTable() {
-  const out = execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)|$($_.CommandLine)" }'], { encoding: 'utf8', maxBuffer: 64 << 20 });
-  const rows = [];
-  for (const line of out.split(/\r?\n/)) {
-    const [pid, ppid, name, ...cmd] = line.trim().split('|');
-    if (pid && name) rows.push({ pid: Number(pid), ppid: Number(ppid), name, cmd: cmd.join('|') });
-  }
-  return rows;
-}
-function descendants(rootPid, table = processTable()) {
-  const kids = new Map();
-  for (const r of table) (kids.get(r.ppid) || kids.set(r.ppid, []).get(r.ppid)).push(r);
-  const all = [];
-  const walk = (pid) => { for (const c of kids.get(pid) || []) { all.push(c); walk(c.pid); } };
-  walk(rootPid);
-  return all;
-}
+// ---------- process trees (verify/lib.mjs: descendants started no earlier than their parents) ----------
+const ideProcesses = () => descendants(processSnapshot(), t.pid);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 // ---------- UI helpers ----------
@@ -888,7 +871,7 @@ await phase('settings', async () => {
 
 // ===================================================================== close the project and quit: nothing may be left
 await phase('close', async () => {
-  const before = descendants(t.pid);
+  const before = ideProcesses();
   const kernel = before.filter((p) => /kernel_bridge|ipykernel|kernel_launcher/i.test(p.cmd));
   const shells = before.filter((p) => shellPids.includes(p.pid) || /^PING\.EXE$/i.test(p.name));
   console.log(`processes under the IDE before closing: ${before.map((p) => `${p.name}:${p.pid}`).join(', ')}`);
@@ -918,12 +901,12 @@ await phase('close', async () => {
   while (Date.now() < end && !(gone(kernel) && gone(shells))) await sleep(300);
   check(gone(kernel), `closing the project ends the notebook kernel (${kernel.filter((p) => alive(p.pid)).map((p) => `${p.name}:${p.pid}`).join(', ') || 'none left'})`);
   check(gone(shells), `closing the project ends the terminal shells and their ping (${shells.filter((p) => alive(p.pid)).map((p) => `${p.name}:${p.pid}`).join(', ') || 'none left'})`);
-  const lingering = descendants(t.pid).filter((p) => /^(git|gh|node)\.exe$/i.test(p.name) && /git|gh|fake-gh/i.test(p.cmd));
+  const lingering = ideProcesses().filter((p) => /^(git|gh|node)\.exe$/i.test(p.name) && /git|gh|fake-gh/i.test(p.cmd));
   check(!lingering.length, `no git or gh process lingers with the project closed (${lingering.map((p) => `${p.name}:${p.cmd.slice(0, 60)}`).join(' | ')})`);
   await snap('closed');
 });
 // Quit (File › Exit) and check that the IDE and every process it started are gone.
-const tree = descendants(t.pid);
+const tree = ideProcesses();
 const errs = await internalErrors();
 check(!errs.length, `no IDE internal errors in the session (${q(errs)})`);
 await js(`(ide.runAction('Exit'), true)`).catch(() => {});

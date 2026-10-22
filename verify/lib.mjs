@@ -128,6 +128,41 @@ process.on('exit', () => {
   for (const dir of workDirs) try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {}
 });
 
+// ---------- process trees ----------
+// Every process on the machine, from one Win32_Process query: [{pid, ppid, name, cmd, created (ms since the epoch, 0 when
+// Windows does not say), workingSet (bytes), kernelMs, userMs}].
+const SUITE_STARTED = Date.now();
+export function processSnapshot() {
+  const out = execFileSync('powershell', ['-NoProfile', '-Command',
+    'ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; name = $_.Name; cmd = $_.CommandLine; ' +
+    'created = if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }; ws = $_.WorkingSetSize; k = $_.KernelModeTime; u = $_.UserModeTime } })'],
+  { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true });
+  return JSON.parse(out || '[]').map((r) => ({ pid: r.pid, ppid: r.ppid, name: r.name || '', cmd: r.cmd || '', created: Number(r.created) || 0,
+    workingSet: Number(r.ws) || 0, kernelMs: (Number(r.k) || 0) / 1e4, userMs: (Number(r.u) || 0) / 1e4 }));
+}
+// rootPid's descendants in a snapshot, depth first (the root first with includeRoot, when it is still running). A child
+// counts only if it started no earlier than its parent: PIDs are reused, so a system process (csrss, services, …) whose
+// long-gone parent had the root's PID would otherwise look like the root's child (seen on the CI runner). When the root
+// has exited, its children must have started after `since` (by default, when this suite started).
+export function descendants(rows, rootPid, { includeRoot = false, since = SUITE_STARTED } = {}) {
+  const kids = new Map();
+  for (const r of rows) (kids.get(r.ppid) || kids.set(r.ppid, []).get(r.ppid)).push(r);
+  const root = rows.find((r) => r.pid === rootPid);
+  const out = [];
+  const seen = new Set([rootPid]);
+  if (root && includeRoot) out.push(root);
+  const walk = (pid, after) => {
+    for (const c of kids.get(pid) || []) {
+      if (seen.has(c.pid) || !c.created || c.created < after) continue;
+      seen.add(c.pid);
+      out.push(c);
+      walk(c.pid, c.created);
+    }
+  };
+  walk(rootPid, root ? root.created : since);
+  return out;
+}
+
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
 // userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
 // exe: an installed PyIDE.exe to run instead of the source tree; open: a project file to pass instead of the folder.

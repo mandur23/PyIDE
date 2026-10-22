@@ -1,29 +1,18 @@
 // Split terminals (PyCharm's Split Right / Split Down): nested panes, each its own PTY in its own folder, output that
 // stays in its pane, divider resizing reaching the PTY, closing and `exit`, focus actions, shortcut labels, and no
 // shell left running after a pane, a tab, the project or the app closes. Ports 9210-9211.
-import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { launch } from './lib.mjs';
+import { descendants, launch, processSnapshot } from './lib.mjs';
 import { missingTranslations } from './i18n-lib.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 // pid -> [pid and all its descendants], from one process snapshot.
 function withDescendants(pids) {
-  const out = execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.Name)" }'], { encoding: 'utf8' });
-  const children = new Map();
-  const names = new Map();
-  for (const line of out.split(/\r?\n/)) {
-    const [pid, ppid, ...name] = line.trim().split(' ');
-    if (!pid) continue;
-    names.set(Number(pid), name.join(' '));
-    (children.get(Number(ppid)) || children.set(Number(ppid), []).get(Number(ppid))).push(Number(pid));
-  }
+  const rows = processSnapshot();
   const all = [];
-  const walk = (p) => { if (all.some((x) => x.pid === p)) return; all.push({ pid: p, name: names.get(p) }); for (const c of children.get(p) || []) walk(c); };
-  for (const p of pids) walk(p);
-  return all.filter((x) => x.name);
+  for (const p of pids) for (const r of descendants(rows, p, { includeRoot: true })) if (!all.some((x) => x.pid === r.pid)) all.push(r);
+  return all;
 }
 async function gone(procs, ms = 15000) {
   const end = Date.now() + ms;

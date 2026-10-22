@@ -1,11 +1,10 @@
 // Idle unloading of the local AI models: the setting in Settings › AI › AI Completion (fake backends), then, when both
 // real models are installed, the sidecars stopping after the idle time without an internal error, the process tree's
 // working set before and after, and the reload on the next request with the status-bar loading hint.
-import { execFileSync } from 'child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch, openFile } from './lib.mjs';
+import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
 
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
@@ -14,19 +13,10 @@ const IDLE = 0.05; // minutes: three seconds
 // Working set of a process and its descendants, in MB, by image name, and how many Python sidecars the IDE runs
 // (its direct python.exe children: a venv launcher may run the interpreter as a child of its own).
 function treeMemory(rootPid) {
-  const procs = JSON.parse(execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,WorkingSetSize | ConvertTo-Json -Compress'],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
-  const children = new Map();
-  for (const p of procs) (children.get(p.ParentProcessId) || children.set(p.ParentProcessId, []).get(p.ParentProcessId)).push(p);
-  const tree = [];
-  const visit = (pid) => { for (const c of children.get(pid) || []) { tree.push(c); visit(c.ProcessId); } };
-  const root = procs.find((p) => p.ProcessId === rootPid);
-  if (root) tree.push(root);
-  visit(rootPid);
+  const tree = descendants(processSnapshot(), rootPid, { includeRoot: true });
   const byName = {};
-  for (const p of tree) byName[p.Name] = Math.round((byName[p.Name] || 0) + p.WorkingSetSize / 1048576);
-  return { totalMB: Math.round(tree.reduce((s, p) => s + p.WorkingSetSize, 0) / 1048576), python: tree.filter((p) => p.Name === 'python.exe' && p.ParentProcessId === rootPid).length, byName };
+  for (const p of tree) byName[p.name] = Math.round((byName[p.name] || 0) + p.workingSet / 1048576);
+  return { totalMB: Math.round(tree.reduce((s, p) => s + p.workingSet, 0) / 1048576), python: tree.filter((p) => p.name === 'python.exe' && p.ppid === rootPid).length, byName };
 }
 const states = (t) => t.js(`({ complete: ide.aiComplete.status()?.engine?.state, semantic: ide.semantic.status()?.model?.state })`);
 // Polls the two status-bar items and records every text they show, so a hint that lasts seconds is not missed.

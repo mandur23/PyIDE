@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { launch } from './lib.mjs';
+import { descendants, launch, processSnapshot } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -196,24 +196,14 @@ const ruff = (args, input) => execFileSync(path.join(APP, 'vendor', 'bin', 'ruff
 // one snapshot; `match` keeps only the subtrees under processes whose command line matches it.
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 function withDescendants(pids, match = null) {
-  const out = execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)|$($_.CommandLine)" }'], { encoding: 'utf8' });
-  const children = new Map();
-  const info = new Map();
-  for (const line of out.split(/\r?\n/)) {
-    const [pid, ppid, name, ...cmd] = line.trim().split('|');
-    if (!pid || !name) continue;
-    info.set(Number(pid), { name, cmd: cmd.join('|') });
-    (children.get(Number(ppid)) || children.set(Number(ppid), []).get(Number(ppid))).push(Number(pid));
-  }
+  const rows = processSnapshot();
   const all = [];
-  const walk = (p, on) => {
-    if (all.some((x) => x.pid === p) || !info.has(p)) return;
-    const here = on || !match || match.test(info.get(p).cmd);
-    if (here) all.push({ pid: p, ...info.get(p) });
-    for (const c of children.get(p) || []) walk(c, here);
-  };
-  for (const p of pids) walk(p, false);
+  for (const p of pids) {
+    if (!rows.some((r) => r.pid === p)) continue;
+    const tree = descendants(rows, p, { includeRoot: true });
+    const tops = match ? tree.filter((r) => match.test(r.cmd)) : [tree[0]];
+    for (const top of tops) for (const r of descendants(rows, top.pid, { includeRoot: true })) if (!all.some((x) => x.pid === r.pid)) all.push(r);
+  }
   return all;
 }
 async function gone(procs, ms = 15000) {

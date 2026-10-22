@@ -4,8 +4,7 @@
 // renderer's JS heap after garbage collection, DOM nodes and JS event listeners (Memory.getDOMCounters), Monaco
 // models, the main process's heap (Node inspector) and the IDE's child processes, and fails on growth that scales
 // with the number of rounds (ports 9867-9868). SOAK_SCALE=0.2 runs a fifth of the rounds.
-import { launch } from './lib.mjs';
-import { execFileSync } from 'child_process';
+import { descendants, launch, processSnapshot } from './lib.mjs';
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -43,22 +42,9 @@ const mainEval = async (expr) => (await main('Runtime.evaluate', { expression: e
 
 // Processes below the IDE's main process: Chromium's own helpers (renderer, GPU, utility) and everything the IDE started.
 function children() {
-  const rows = JSON.parse(execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
-  const below = new Set([t.pid]);
-  const out = [];
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const r of rows) {
-      if (below.has(r.ParentProcessId) && !below.has(r.ProcessId)) {
-        below.add(r.ProcessId);
-        out.push(r);
-        grew = true;
-      }
-    }
-  }
-  const helpers = out.filter((r) => /--type=/.test(r.CommandLine || ''));
-  return { helpers: helpers.length, others: out.filter((r) => !helpers.includes(r)).map((r) => r.Name) };
+  const out = descendants(processSnapshot(), t.pid);
+  const helpers = out.filter((r) => /--type=/.test(r.cmd));
+  return { helpers: helpers.length, others: out.filter((r) => !helpers.includes(r)).map((r) => r.name) };
 }
 
 async function metrics() {

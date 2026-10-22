@@ -7,7 +7,7 @@
 //   inlay hint requests after typing); completion answers in ~50 ms while typing (before: ~10 s behind queued hints)
 //   Markdown open/close: no growth (before: +22 DOM nodes, +23 listeners and a whole editor per open)
 // Numbers go to verify/out/perf-runtime/results.json.
-import { launch, openFile } from './lib.mjs';
+import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
 import { execFileSync } from 'child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -50,19 +50,10 @@ const { js, until, check, sleep, cdp } = t;
 
 // CPU ms of the IDE's processes (main, renderer, GPU, Pyright, sidecars), by kind.
 function cpuOfTree() {
-  const rows = JSON.parse(execFileSync('powershell', ['-NoProfile', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,KernelModeTime,UserModeTime | ConvertTo-Json -Compress'],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
-  const below = new Set([t.pid]);
-  const mine = rows.filter((r) => r.ProcessId === t.pid);
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const r of rows) if (below.has(r.ParentProcessId) && !below.has(r.ProcessId)) { below.add(r.ProcessId); mine.push(r); grew = true; }
-  }
   const out = new Map();
-  for (const r of mine) {
-    const kind = /langserver/.test(r.CommandLine || '') ? 'pyright' : r.Name === 'electron.exe' ? (/--type=([\w-]+)/.exec(r.CommandLine || '')?.[1] || 'main') : r.Name;
-    out.set(r.ProcessId, { kind, ms: (Number(r.KernelModeTime) + Number(r.UserModeTime)) / 1e4 });
+  for (const r of descendants(processSnapshot(), t.pid, { includeRoot: true })) {
+    const kind = /langserver/.test(r.cmd) ? 'pyright' : r.name === 'electron.exe' ? (/--type=([\w-]+)/.exec(r.cmd)?.[1] || 'main') : r.name;
+    out.set(r.pid, { kind, ms: r.kernelMs + r.userMs });
   }
   return out;
 }

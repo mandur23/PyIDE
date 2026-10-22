@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const J = JSON.stringify;
@@ -204,16 +204,12 @@ const ctrlChord = async (l) => {
 };
 const setInput = (sel, value) => js(`(() => { const n = document.querySelector(${J(sel)}); n.value = ${J(value)}; n.dispatchEvent(new Event(n.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); return true; })()`);
 const clickSeen = async (sel) => { await js(`(document.querySelector(${J(sel)}).scrollIntoView({ block: 'center' }), true)`); await click(sel); };
-// Every process below the IDE's main process, with its start time (a pid can be reused once it is gone).
-// Children must have started after their parent: PIDs are reused, so an old system process whose long-gone parent
-// had the same PID as PyIDE would otherwise count as PyIDE's child (seen on the CI runner).
-const processTree = (rootPid) => JSON.parse(sh('powershell', ['-NoProfile', '-Command',
-  `$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate; $out = @(); $root = $all | Where-Object { $_.ProcessId -eq ${rootPid} } | Select-Object -First 1; $q = @(@{ pid = ${rootPid}; at = $root.CreationDate });
-   while ($q.Count) { $p = $q[0]; $q = @($q | Select-Object -Skip 1); foreach ($c in $all) { if ($c.ParentProcessId -eq $p.pid -and (-not $p.at -or $c.CreationDate -ge $p.at)) { $out += [pscustomobject]@{ pid = $c.ProcessId; name = $c.Name; cmd = [string]$c.CommandLine; created = [string]$c.CreationDate }; $q += @{ pid = $c.ProcessId; at = $c.CreationDate } } } }
-   ConvertTo-Json -Compress -InputObject @($out)`]) || '[]');
+// Every process below the IDE's main process, with its start time (a pid can be reused once it is gone; verify/lib.mjs
+// also skips system processes whose long-gone parent had PyIDE's pid).
+const processTree = (rootPid) => descendants(processSnapshot(), rootPid);
 const liveProcesses = (list) => {
   if (!list.length) return [];
-  const now = JSON.parse(sh('powershell', ['-NoProfile', '-Command', `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; created = [string]$_.CreationDate } })`]));
+  const now = processSnapshot();
   return list.filter((p) => now.some((n) => n.pid === p.pid && n.created === p.created));
 };
 const projectPythons = () => JSON.parse(sh('powershell', ['-NoProfile', '-Command',
