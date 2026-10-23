@@ -1,0 +1,13 @@
+{
+  "id": "visual-script",
+  "name": "Visual Scripting",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Opens .pyflow files as a node graph editor (Blueprint style) that turns into readable Python.",
+  "main": [
+    "visual-script.js"
+  ],
+  "depends": [
+    "run"
+  ]
+}

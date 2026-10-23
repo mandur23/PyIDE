@@ -549,9 +549,13 @@
   };
 
   // ---------- run actions ----------
+  // The active file Run can start: a Python file, or a file (also in a viewer tab) that another configuration type's
+  // forFile claims, such as a visual script (.pyflow).
   function currentPyFile() {
     const tab = ide.activeTab();
-    return tab?.kind === 'file' && /\.pyw?$/i.test(tab.path) ? tab.path : null;
+    const path = tab?.kind === 'file' || tab?.viewer ? tab.path : null;
+    if (!path) return null;
+    return /\.pyw?$/i.test(path) || [...types.values()].some((t) => t.type !== 'python' && t.forFile?.(path)) ? path : null;
   }
 
   const currentFileConfig = (file) => {

@@ -699,6 +699,8 @@ try {
     check((await runText(title)).includes('scratch 12.6'), 'a Python scratch runs in the project and imports its package');
     await press('Alt+8');
     await until(`ide.pyconsole.isRunning() && document.activeElement?.id === 'pyconsoleIn'`, 'Python Console', 60000);
+    // Lines typed before the interpreter's banner arrives are echoed above it, and their results below it.
+    await until(`document.querySelector('#pyconsoleOut').textContent.includes('Python 3.')`, 'Python Console banner', 60000);
     await type('from geo.plane.figures import Rect');
     await press('Enter');
     await type('Rect(3, 4).area');

@@ -12,7 +12,7 @@
     'build.bazel': 'bazel', build: 'bazel', workspace: 'bazel', '.flake8': 'config', '.pylintrc': 'config', readme: 'text',
   };
   const EXTENSIONS = {
-    py: 'python', pyw: 'python', pyi: 'python', pyx: 'python', pxd: 'python', ipynb: 'jupyter',
+    py: 'python', pyw: 'python', pyi: 'python', pyx: 'python', pxd: 'python', ipynb: 'jupyter', pyflow: 'nodeGraph',
     txt: 'text', log: 'text', rst: 'rst', md: 'markdown', markdown: 'markdown',
     json: 'json', jsonc: 'json', json5: 'json', geojson: 'json', yml: 'yaml', yaml: 'yaml', toml: 'toml',
     ini: 'config', cfg: 'config', conf: 'config', env: 'config', properties: 'properties',

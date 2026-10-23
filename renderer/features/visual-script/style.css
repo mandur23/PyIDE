@@ -1,0 +1,178 @@
+/* Visual Scripting editor (editor.js). --vs-type-* colour pins and wires by value type, --vs-cat-* node headers by category. */
+:root {
+  --vs-canvas: #1e1f22; --vs-grid: #393b40; --vs-grid-major: #43454a; --vs-node: #2b2d30; --vs-node-border: #43454a;
+  --vs-text: #dfe1e5; --vs-muted: #9da0a8; --vs-field: #1e1f22; --vs-field-border: #4e5157; --vs-sel: #3574f0;
+  --vs-type-exec: #dfe1e5; --vs-type-any: #9da0a8; --vs-type-number: #2aacb8; --vs-type-int: #56a8f5;
+  --vs-type-string: #6aab73; --vs-type-bool: #cf8e6d; --vs-type-list: #c77dbb; --vs-type-dict: #b3ae60; --vs-type-none: #868a91;
+  --vs-cat-flow: #6f737a; --vs-cat-variables: #57965c; --vs-cat-values: #8a6fc7; --vs-cat-math: #2a9aa6;
+  --vs-cat-text: #b5664a; --vs-cat-input-output: #3574f0; --vs-cat-lists: #a8762a; --vs-cat-functions: #b0477a;
+  --vs-cat-python: #b39b2e; --vs-cat-other: #6f737a;
+  --vs-comment: #3d3a2a; --vs-comment-border: #6b6236;
+}
+:root[data-theme="light"] {
+  --vs-canvas: #f7f8fa; --vs-grid: #d3d5db; --vs-grid-major: #c4c7d0; --vs-node: #ffffff; --vs-node-border: #c9ccd6;
+  --vs-text: #1e1f22; --vs-muted: #6c707e; --vs-field: #ffffff; --vs-field-border: #c9ccd6; --vs-sel: #3574f0;
+  --vs-type-exec: #494b57; --vs-type-any: #818594; --vs-type-number: #00838f; --vs-type-int: #2d63d4;
+  --vs-type-string: #208a3c; --vs-type-bool: #c35a00; --vs-type-list: #a53c94; --vs-type-dict: #8a7d00; --vs-type-none: #818594;
+  --vs-cat-flow: #818594; --vs-cat-variables: #3f9a4c; --vs-cat-values: #8a64d6; --vs-cat-math: #1f9ca8;
+  --vs-cat-text: #c86a43; --vs-cat-input-output: #3574f0; --vs-cat-lists: #c08a1e; --vs-cat-functions: #c4407c;
+  --vs-cat-python: #b89a12; --vs-cat-other: #818594;
+  --vs-comment: #fff7d6; --vs-comment-border: #e6cf7a;
+}
+
+.vs-host { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--vs-canvas); color: var(--vs-text); outline: none; }
+.vs-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px 6px; min-height: 30px; flex-shrink: 0;
+  background: var(--gray2); border-bottom: 1px solid var(--gray3); }
+.vs-toolbar-slot { display: flex; align-items: center; gap: 2px; }
+.vs-btn { height: 24px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; color: var(--gray11); font-size: 12px; white-space: nowrap; }
+.vs-btn:hover { background: var(--gray4); }
+.vs-btn:focus-visible { outline: 2px solid var(--blue6); outline-offset: -2px; }
+.vs-btn[aria-pressed="true"] { background: var(--gray4); border-color: var(--gray6); color: var(--gray12); }
+.vs-zoom-label { min-width: 52px; font-variant-numeric: tabular-nums; }
+.vs-zoom-in, .vs-zoom-out { width: 26px; padding: 0; font-size: 14px; }
+.vs-sep { width: 1px; height: 18px; background: var(--gray5); margin: 0 6px; }
+.vs-sep:last-child, .vs-sep:has(+ .vs-toolbar-slot:empty) { display: none; }
+
+.vs-banner { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-shrink: 0; font-size: 12px;
+  background: color-mix(in srgb, var(--red) 16%, var(--gray2)); border-bottom: 1px solid color-mix(in srgb, var(--red) 40%, var(--gray3)); }
+.vs-banner-icon { color: var(--red); }
+.vs-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.vs-banner-btn { border-color: var(--gray6); }
+
+.vs-main { flex: 1; display: flex; min-height: 0; }
+.vs-side { flex: 0 0 40%; min-width: 0; border-left: 1px solid var(--gray3); display: flex; flex-direction: column; }
+.vs-canvas { position: relative; flex: 1; min-width: 0; overflow: hidden; outline: none; user-select: none; cursor: default;
+  background-color: var(--vs-canvas); }
+.vs-grid { position: absolute; inset: -128px; pointer-events: none; will-change: transform; background-position: 0 0;
+  background-image: radial-gradient(circle, var(--vs-grid) 1px, transparent 1.2px), radial-gradient(circle, var(--vs-grid-major) 1.5px, transparent 1.8px);
+  background-size: 16px 16px, 128px 128px; }
+/* While the view pans or nodes move, the moving content is its own compositor layer, so frames only recomposite. */
+.vs-canvas.vs-panning .vs-layer, .vs-canvas.vs-moving .vs-node.vs-sel { will-change: transform; }
+.vs-canvas.vs-space, .vs-canvas.vs-panning { cursor: grabbing; }
+
+.vs-canvas.vs-panning .vs-layer { pointer-events: none; }
+.vs-canvas.vs-inert .vs-layer { opacity: .45; pointer-events: none; }
+.vs-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.vs-wires { position: absolute; left: -100000px; top: -100000px; overflow: visible; pointer-events: none; }
+.vs-wire { fill: none; stroke-width: 2px; }
+.vs-wire-exec { stroke-width: 3px; }
+.vs-wire-hit { fill: none; stroke: transparent; stroke-width: 12px; pointer-events: stroke; }
+.vs-wire-hit:hover { stroke: color-mix(in srgb, var(--vs-sel) 30%, transparent); }
+.vs-canvas:not(.vs-wiring) .vs-wire-hit:hover { cursor: pointer; }
+.vs-temp { fill: none; stroke-width: 2.5px; stroke-dasharray: 6 4; pointer-events: none; }
+.vs-temp.vs-temp-ok { stroke-dasharray: none; }
+.vs-temp.vs-temp-bad { stroke: var(--red) !important; }
+.vs-nodes { position: absolute; left: 0; top: 0; }
+.vs-box { position: absolute; border: 1px solid var(--vs-sel); background: color-mix(in srgb, var(--vs-sel) 14%, transparent); pointer-events: none; }
+
+/* The node layer has no width, so a node would shrink to its narrowest content; max-content sizes it to its rows. */
+.vs-node { position: absolute; width: max-content; min-width: 150px; max-width: 360px; background: var(--vs-node); border: 1px solid var(--vs-node-border);
+  border-radius: 6px; font-size: 12px; line-height: 16px; color: var(--vs-text); box-shadow: 0 2px 8px rgba(0, 0, 0, .28); }
+:root[data-theme="light"] .vs-node { box-shadow: 0 1px 4px rgba(0, 0, 0, .12); }
+.vs-node.vs-sel { border-color: var(--vs-sel); box-shadow: 0 0 0 1px var(--vs-sel), 0 2px 8px rgba(0, 0, 0, .28); }
+.vs-node.vs-err { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.vs-node.vs-err.vs-sel { box-shadow: 0 0 0 1px var(--red), 0 0 0 3px color-mix(in srgb, var(--vs-sel) 70%, transparent); }
+.vs-node.vs-warn { border-color: var(--yellow); }
+.vs-node.vs-runtime-err { border-color: var(--red); box-shadow: 0 0 0 2px var(--red); }
+.vs-node.vs-unknown { border-style: dashed; }
+.vs-head { display: flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px; border-radius: 5px 5px 0 0;
+  background: color-mix(in srgb, var(--vs-cat) 42%, var(--vs-node)); border-bottom: 1px solid color-mix(in srgb, var(--vs-cat) 55%, var(--vs-node)); }
+:root[data-theme="light"] .vs-head { background: color-mix(in srgb, var(--vs-cat) 20%, var(--vs-node)); border-bottom-color: color-mix(in srgb, var(--vs-cat) 40%, var(--vs-node)); }
+.vs-head:only-child { border-radius: 5px; border-bottom: 0; }
+.vs-title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vs-subtitle { font-weight: 400; color: var(--vs-muted); }
+.vs-title:first-child { padding-left: 4px; }
+.vs-title:last-child { padding-right: 4px; }
+
+.vs-rows { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.vs-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vs-outs { align-items: flex-end; }
+.vs-row { display: flex; align-items: center; gap: 4px; min-height: 22px; white-space: nowrap; }
+.vs-ins .vs-row { padding-left: 2px; }
+.vs-outs .vs-row { padding-right: 2px; }
+.vs-label { color: var(--vs-muted); }
+.vs-props { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--vs-node-border); }
+.vs-rows + .vs-props { border-top-style: dashed; }
+.vs-prop { display: flex; align-items: center; gap: 6px; }
+.vs-prop-name { color: var(--vs-muted); white-space: nowrap; }
+.vs-prop:has(.vs-code) { flex-direction: column; align-items: stretch; gap: 2px; }
+
+.vs-field { min-width: 0; height: 20px; padding: 0 5px; border: 1px solid var(--vs-field-border); border-radius: 3px;
+  background: var(--vs-field); color: var(--vs-text); font: 12px var(--mono); outline: none; user-select: text; }
+.vs-field:focus { border-color: var(--vs-sel); box-shadow: 0 0 0 1px var(--vs-sel); }
+.vs-field.vs-invalid { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.vs-num { width: 64px; }
+.vs-text { width: auto; }
+.vs-prop .vs-text { flex: 1; width: auto; min-width: 90px; }
+.vs-select { height: 22px; padding: 0 2px; font-family: inherit; flex: 1; }
+.vs-select option { background: var(--gray2); color: var(--gray12); }
+.vs-check { width: 14px; height: 14px; margin: 0 2px; accent-color: var(--vs-sel); }
+.vs-code { height: auto; min-height: 40px; min-width: 200px; padding: 3px 5px; resize: vertical; white-space: pre; tab-size: 4; }
+
+/* A pin is a 16px hit area; ::before draws the circle or triangle and ::after its hollow middle while unconnected. */
+.vs-pin { position: relative; flex: 0 0 16px; width: 16px; height: 16px; cursor: crosshair; }
+.vs-pin::before, .vs-pin::after { content: ''; position: absolute; }
+.vs-data::before { left: 3px; top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--vs-pin); }
+.vs-data::after { left: 5px; top: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--vs-node); }
+.vs-exec::before { left: 3px; top: 2px; width: 11px; height: 12px; background: var(--vs-pin); clip-path: polygon(0 0, 45% 0, 100% 50%, 45% 100%, 0 100%); }
+.vs-exec::after { left: 5px; top: 4.5px; width: 6px; height: 7px; clip-path: polygon(0 0, 40% 0, 100% 50%, 40% 100%, 0 100%);
+  background: color-mix(in srgb, var(--vs-cat) 42%, var(--vs-node)); }
+:root[data-theme="light"] .vs-exec::after { background: color-mix(in srgb, var(--vs-cat) 20%, var(--vs-node)); }
+.vs-rows .vs-exec::after { background: var(--vs-node); }
+.vs-pin.vs-linked::after { display: none; }
+.vs-pin:hover::before { transform: scale(1.3); }
+.vs-pin.vs-pin-err::before { box-shadow: 0 0 0 2px var(--red); }
+.vs-canvas.vs-wiring .vs-pin:hover::before { transform: scale(1.4); }
+
+.vs-badge { position: absolute; top: -8px; right: -8px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--red); color: #fff; font: 700 11px/1 'Inter', 'Segoe UI', sans-serif; cursor: help; }
+.vs-badge.vs-badge-warn { background: var(--yellow); color: #000; }
+.vs-runtime { position: absolute; left: 0; top: calc(100% + 6px); max-width: 320px; padding: 4px 8px; border-radius: 4px;
+  background: var(--red); color: #fff; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Comments are notes on the canvas: other nodes are drawn over them. */
+.vs-node { z-index: 1; }
+.vs-comment { z-index: 0; min-width: 120px; background: var(--vs-comment); border-color: var(--vs-comment-border); }
+.vs-comment-text { padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 32px; }
+.vs-comment-text.vs-placeholder { color: var(--vs-muted); font-style: italic; }
+.vs-comment-edit { display: block; width: 260px; height: 90px; padding: 6px 8px; resize: both; white-space: pre-wrap; border: 0; font-family: inherit; }
+
+.vs-status { display: flex; align-items: center; gap: 12px; height: 24px; padding: 0 8px; flex-shrink: 0; font-size: 12px;
+  background: var(--gray2); border-top: 1px solid var(--gray3); color: var(--gray9); }
+.vs-problems { padding: 0 4px; border-radius: 3px; color: var(--gray9); white-space: nowrap; }
+.vs-problems:hover { background: var(--gray4); }
+.vs-problems.vs-has-errors { color: var(--red); }
+.vs-problems.vs-has-warnings { color: var(--yellow); }
+:root[data-theme="light"] .vs-problems.vs-has-warnings { color: #a86c00; }
+.vs-hint { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vs-hint.vs-hint-bad { color: var(--red); }
+.vs-spacer { flex: 1; }
+.vs-counts { white-space: nowrap; }
+
+.vs-palette { position: absolute; z-index: 20; width: 280px; display: flex; flex-direction: column; background: var(--gray2);
+  border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .4); overflow: hidden; }
+:root[data-theme="light"] .vs-palette { box-shadow: 0 6px 24px rgba(0, 0, 0, .18); }
+.vs-pal-input { margin: 6px; height: 28px; padding: 0 8px; border: 1px solid var(--gray5); border-radius: 5px; background: var(--gray1);
+  color: var(--gray12); outline: none; }
+.vs-pal-input:focus { border-color: var(--blue6); box-shadow: 0 0 0 1px var(--blue6); }
+.vs-pal-list { max-height: 320px; overflow-y: auto; padding: 0 4px 4px; }
+.vs-pal-cat { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; margin-top: 2px; color: var(--gray9);
+  font-size: 11px; font-weight: 600; cursor: pointer; }
+.vs-pal-arrow { display: inline-block; width: 12px; transition: transform .1s; }
+.vs-pal-arrow.vs-closed { transform: rotate(-90deg); }
+.vs-pal-item { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px 0 22px; border-radius: 4px; cursor: pointer; color: var(--gray12); }
+.vs-pal-item.vs-active { background: var(--blue2); }
+:root[data-theme="light"] .vs-pal-item.vs-active { background: #d4e2ff; }
+.vs-pal-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--vs-cat); flex-shrink: 0; }
+.vs-pal-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vs-pal-hint { color: var(--gray8); font-size: 11px; white-space: nowrap; }
+.vs-pal-empty { padding: 8px 12px 12px; color: var(--gray8); }
+
+/* Integration (index.js): the tab's Run button and the Show Python Code pane. */
+.vs-btn { display: inline-flex; align-items: center; gap: 5px; }
+.vs-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+.vs-code-head { flex-shrink: 0; height: 26px; padding: 0 10px; display: flex; align-items: center; font-size: 12px; color: var(--gray9);
+  background: var(--gray2); border-bottom: 1px solid var(--gray3); }
+.vs-code { flex: 1; min-height: 0; position: relative; }
+.vs-code .vs-code-sel { background: color-mix(in srgb, var(--vs-sel) 22%, transparent); }
+.vs-code .vs-code-sel-mark { border-left: 3px solid var(--vs-sel); margin-left: 3px; }

@@ -1,0 +1,172 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "core.start",
+      "x": 64,
+      "y": 128
+    },
+    {
+      "id": "n2",
+      "type": "io.input",
+      "x": 256,
+      "y": 112,
+      "inputs": {
+        "prompt": "What is your name? "
+      }
+    },
+    {
+      "id": "n3",
+      "type": "text.format",
+      "x": 256,
+      "y": 288,
+      "props": {
+        "template": "Hello {name}!"
+      }
+    },
+    {
+      "id": "n4",
+      "type": "io.print",
+      "x": 576,
+      "y": 112
+    },
+    {
+      "id": "n5",
+      "type": "flow.forRange",
+      "x": 832,
+      "y": 112,
+      "inputs": {
+        "stop": 3
+      }
+    },
+    {
+      "id": "n6",
+      "type": "io.print",
+      "x": 1120,
+      "y": 96
+    },
+    {
+      "id": "n7",
+      "type": "math.binary",
+      "x": 832,
+      "y": 352,
+      "props": {
+        "op": "*"
+      },
+      "inputs": {
+        "b": 10
+      }
+    },
+    {
+      "id": "n8",
+      "type": "io.print",
+      "x": 1120,
+      "y": 288,
+      "inputs": {
+        "value": "Done"
+      }
+    },
+    {
+      "id": "n9",
+      "type": "ui.comment",
+      "x": 64,
+      "y": 448,
+      "props": {
+        "text": "Asks for a name, greets the user,\nthen counts in tens."
+      }
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "node": "n1",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n2",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "answer"
+      },
+      "to": {
+        "node": "n3",
+        "pin": "name"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n4",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n3",
+        "pin": "text"
+      },
+      "to": {
+        "node": "n4",
+        "pin": "value"
+      }
+    },
+    {
+      "from": {
+        "node": "n4",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n5",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n5",
+        "pin": "body"
+      },
+      "to": {
+        "node": "n6",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n5",
+        "pin": "done"
+      },
+      "to": {
+        "node": "n8",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n5",
+        "pin": "index"
+      },
+      "to": {
+        "node": "n7",
+        "pin": "a"
+      }
+    },
+    {
+      "from": {
+        "node": "n7",
+        "pin": "result"
+      },
+      "to": {
+        "node": "n6",
+        "pin": "value"
+      }
+    }
+  ]
+}

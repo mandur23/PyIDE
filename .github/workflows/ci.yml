@@ -104,6 +104,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/i18n-static.mjs
+      - name: visual-script-codegen
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/visual-script-codegen.mjs
       - name: security
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -243,6 +247,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/diagrams.mjs
+      - name: visual-script-editor
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/visual-script-editor.mjs
+      - name: visual-script
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/visual-script.mjs
       - name: code-vision
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

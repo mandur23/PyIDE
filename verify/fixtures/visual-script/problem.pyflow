@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "core.start",
+      "x": 80,
+      "y": 120
+    },
+    {
+      "id": "n2",
+      "type": "io.print",
+      "x": 320,
+      "y": 112
+    },
+    {
+      "id": "n3",
+      "type": "var.get",
+      "x": 80,
+      "y": 272,
+      "props": {
+        "name": "missing"
+      }
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "node": "n1",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n2",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n3",
+        "pin": "value"
+      },
+      "to": {
+        "node": "n2",
+        "pin": "value"
+      }
+    }
+  ]
+}

@@ -121,6 +121,7 @@ Bundled tools: `node_modules/pyright` (`langserver.index.js`, run with `process.
 | run-anything | Ctrl Ctrl (Double Ctrl, Run Anything); Enter / Shift+Enter / Tab / Delete / Esc only inside its popup |
 | file-templates | none (New › … in the project tree; core's New Python File keeps Alt+Insert) |
 | compare | Ctrl+D while the Project tool window has the keyboard (Compare With…; core's Duplicate Line keeps it in editors), F7 / Shift+F7 while a diff tab is active (Next / Previous Difference, registered on `ready`, ahead of the debugger's Step Into, whose F7 also stands back while `ide.compare.diffFocused()`) |
+| visual-script | none global (canvas keys only while the canvas has focus; Shift+F10 / Ctrl+Shift+F10 are run's, through the visual-script configuration type) |
 | diagrams | Ctrl+Alt+Shift+U (Show Diagram); Delete / Enter / Esc / + / - / Space only while a diagram has focus |
 | regex-check | none (Check RegExp is a context action under lsp's Alt+Enter); Esc only inside its popup |
 | database (export) | none (Export Data… is in the result bar, the grid and tree context menus and Find Action) |
@@ -863,6 +864,78 @@ Decision: keep Pyright, compute both features in PyIDE. No new dependency.
 - Semantic highlighting: `renderer/features/semantic-highlight` (plugin `semantic-highlight`), `main/features/semantic-highlight.js` and `semantic_server.py`. A Monaco document semantic tokens provider for Python (Monaco asks 300 ms or more after the last edit) sends the text to the sidecar, which builds the module's scopes with `ast` and classifies every name: parameters, `self`/`cls`, classes, functions and methods (declarations and uses), properties and attributes, modules, constants (UPPER_CASE at module or class level), builtins, decorators (`@` and the name), type parameters (TypeVar assignments and PEP 695), keyword arguments, forward references in string annotations. Imported names resolve by reading, never importing, the other module: the project, Pyright's bundled typeshed stdlib stubs, then the interpreter's sys.path (cached by mtime; a missing module is looked for again after 10 s). Instances of classes it can see are followed through constructor calls, annotations and return annotations; an attribute of a value of unknown type is a method when called and a property otherwise. It runs in the project interpreter, else the newest other local interpreter (any Python 3.8+; remote interpreters are skipped; one that cannot start is skipped until the interpreter list changes), isolated (`-I -X utf8 -B`: nothing on PYTHONPATH, in the user site-packages or next to the script can shadow what it imports; PYTHONPATH and the user site-packages are still searched when it reads modules), and stops when the project closes or another opens and on an interpreter change. A file that does not parse (typing in progress) keeps its last colors, moved with the edits. Colors are theme rules for the token types `py-<type>[.<modifier>]` added to `pycharm-dark` and `pycharm-light` (`window.PYCHARM_LIGHT`, exposed by the settings plugin like core's `PYCHARM_DARK`), so Dark and Light each have PyCharm-like defaults. Settings › Editor › Color Scheme: the switch `editor.semanticHighlighting` (default on) and Dark/Light colors per kind in `editor.colorScheme.python` (`{dark: {kind: '#rrggbb'}, light: {...}}`, Restore Defaults). `ide.semanticHighlight`: `enabled()`, `tokens(model)` (decoded), `colors(theme)`, `stats()`.
 - Type Hierarchy: `renderer/features/type-hierarchy` (plugin `type-hierarchy`, depends on `lsp` and `navigation-bar`), action `TypeHierarchy` (Ctrl+H in a Python editor, the editor context menu, Navigate › Type Hierarchy, which also lists Call Hierarchy now). The class is the one the name at the caret refers to (definition + document symbols, so a usage in another file works), else the innermost class around the caret. Supertypes read the class statement's bases from the editor's text (unsaved edits included) and ask for each one's definition; `Container[Dog]` is Container, keyword arguments are not bases, and a class without bases derives from `object`. Subtypes are the class's references that are a base in another class statement, across the project. Bases keep their declaration order; nodes load their children when expanded; double-click or Enter opens a class at its name; rows name the module (`animals.base`). It shows in navigation-bar's Hierarchy tool window (bottom, order 19) with Supertypes Hierarchy / Subtypes Hierarchy (the default) toggles; navigation-bar now hosts hierarchy kinds: `ide.navigationBar.showHierarchy(kind, item, mode?)` with `kind = {id, modes(), mode, head(mode), children(node, mode) -> [{item, sites?, siteUri?, leaf?}], sort?}`, and `kind()` names the one shown. `ide.typeHierarchy`: `show(mode?)`, `classAt`, `supertypes`, `subtypes`, `basesOf`.
 - Tests: `verify/semantic-highlight.mjs` (ports 9030-9031; in CI): 51 names' kinds on `verify/fixtures/semantic-highlight/shapes.py`, the colors Monaco draws for each kind in Dark and Light, a custom color and Restore Defaults, the switch off (no requests while typing) and on, a function typed just now, a syntax error keeping the colors, the interpreter fallback and no-python answer, the settings page, Korean. `verify/type-hierarchy.mjs` (ports 9032-9033; in CI) on `verify/fixtures/type-hierarchy`: subtypes across files and their expansion, supertypes with multiple inheritance in order up to object, generics both ways, Ctrl+H from a usage, from inside a method and outside any class, unsaved edits, double-click and Enter, the context menu, Call Hierarchy and Type Hierarchy sharing the window, Korean.
+
+## Visual Scripting (`*.pyflow`)
+
+`renderer/features/visual-script` (plugin `visual-script`, depends on `run`; main module
+`main/features/visual-script.js`) opens `*.pyflow` files as a Blueprint-style node graph that turns into readable
+Python and runs like a script. `model.js` owns the file format and pure edit helpers, `nodes.js` the node types,
+`codegen.js` the generator and `editor.js` the canvas; all four add to `window.PyideVisualScript` (`VS`), and
+`index.js` loads them in that order, registers the `visual-script` text viewer and connects the graph to the IDE.
+
+- File format (`model.js`): `{format: 1, nodes: [{id, type, x, y, props?, inputs?}], links: [{from: {node, pin}, to:
+  {node, pin}}]}`, serialized deterministically (2-space indent, fixed key order, nodes by id number, links by
+  from/to, defaults left out, unknown keys kept, final newline) so diffs stay readable; `VS.parse` throws readable
+  errors with line and column, and an empty file is a new graph with one Start. The edit helpers (`addNode`,
+  `removeNodes`, `moveNodes`, `setProp`, `setInputLiteral`, `connect`, `disconnect`, `disconnectAll`, `duplicate`,
+  `pasteNodes`) return a new graph and never mutate; `connect` refuses incompatible types and cycles through
+  `VS.lastError`.
+- Node types (`nodes.js`): the registry (`VS.registerNodeType`, `nodeTypes`, `nodeType`, `pinsOf(node, graph)`) and the
+  built-in library: Flow (Start, If, While, For Range, For Each, Break, Continue), Variables, Values, Math, Text (Join,
+  conversions, Format Text), Input/Output (Print, Ask User), Lists, Functions (Define Function, Return, Call Function),
+  Python (Call Python, Python Expression, Python Code) and Comment. Data types are any, number, int, string, bool,
+  list, dict, none; `any` connects to everything and `int` to `number`. Pins a type makes from the node (Format Text
+  fields, parameters) are user names and are never translated.
+- Code (`codegen.js`, `VS.compile(graph, {fileName}) -> {code, map, errors}`): one statement per exec node under
+  `def main():` and one `def` per Define Function, pure nodes inlined with only the parentheses Python needs,
+  exec-node outputs in locals such as `answer_n7`, and `map[line]` -> node id for every generated line. Errors (no or
+  two Start nodes, a required input left empty, a cycle, incompatible wires, an unset variable, an unknown function,
+  invalid names, Break/Continue outside a loop, Return outside a function) still produce code where the node in error
+  raises `RuntimeError`; unreachable steps are a warning.
+- The tab (`editor.js`): a `text: true` viewer over the file's document, and the document is the only state: every user
+  operation (a drag, a wire, a literal, a paste) is one edit between undo stack marks, so dirty state, Ctrl+S, close
+  prompts, Local History, crash recovery and Open as Text come from the core, and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z on the
+  canvas are the document's undo and redo. Another change of the document is parsed and drawn again; invalid JSON dims
+  the canvas and shows the error with Open as Text. HTML nodes over an SVG layer of cubic wires on a 16 px grid; exec
+  pins are triangles, data pins circles coloured by type (`--vs-type-*`), headers tinted by category (`--vs-cat-*`);
+  inline literal fields and props in the node body; comments are notes behind nodes. Pan with the middle or right
+  button or Space+drag, wheel zoom 25% to 200%, Ctrl+0, Fit. The first open fits the graph, never above 100%, and a
+  graph that fits at 100% stays at 100%. The view is kept per file in `visualScript.view`.
+- Editing: double-click, Tab or right-click › Add Node… opens the palette (search by English or Korean title and
+  keywords: 출력 finds Print); a wire dropped on empty space offers only the types that fit and wires the pick. Drag
+  between pins to connect (an incompatible pin turns the wire red and the status line says why), Alt+click a wire or
+  pin to delete its wires, click / Shift / Ctrl / box selection, drag to move (16 px snap, Alt for none), Delete,
+  Ctrl+C / Ctrl+X / Ctrl+V (JSON as `application/x-pyide-pyflow` and text), Ctrl+D, Ctrl+A. These keys are the
+  canvas's own and fire only while it has focus. Problems are compiled 300 ms after each change: red outline, badge,
+  and "No problems" / "N problems" in the status line (click: select the first).
+- Run (`index.js`): configuration type `visual-script` (`forFile` claims `*.pyflow`, so Shift+F10 on the tab,
+  Ctrl+Shift+F10, the run widget, Run › Run, Rerun, Stop and stdin work as for a script; the run plugin's
+  `currentPyFile` accepts a viewer tab whose file another type's `forFile` claims). A script with problems is not run:
+  the Run console lists them with their nodes and the canvas selects the first. Otherwise main writes the code to
+  `<userData>/visual-script/<sha1 of the lower-cased path>/<name>.py` (`<name>_pyflow.py` when the code imports a
+  module of that name) and runs it in the configuration's interpreter with the .pyflow's folder as working directory
+  and on PYTHONPATH. Traceback links into the generated file open the .pyflow and select the node instead, and a
+  failed run marks the innermost frame's node with the exception line (`markRuntimeError`).
+- The tab's toolbar: Run (this script as its context configuration), Show Code (a read-only Monaco pane beside the
+  canvas that recompiles as the graph changes; selected nodes highlight their lines, a click on a line selects its
+  node; remembered in `visualScript.showCode`) and Export as Python… (`<name>.py` next to the script, asks before
+  overwriting with a Local History checkpoint, then opens it; also Find Action `VisualScript.ExportPython`).
+  Project tree › New › Visual Script (after Python Package in file-templates' submenu) makes Start wired to Print
+  "Hello" and opens it. The file icon is `nodeGraph` (`tools/file-icons/nodeGraph*.svg`).
+- `tab.visualScript` (editor API): `graph()`, `selection()`, `select(ids)`, `centerOn(id)`, `fit()`, `view()`,
+  `setView(v)`, `errors()`, `markErrors(list)`, `markRuntimeError(nodeId, message)`, `onChange(fn)`, `onSelect(fn)`,
+  `toolbar`, `side`, `codePane()`.
+- 200 nodes pan, zoom and drag at 60 fps with about 6 ms of main-thread work per frame (drag uses transforms, the grid
+  is its own compositor layer, `will-change` only during the gesture).
+- Tests: `verify/visual-script-codegen.mjs` (pure Node: a dozen graphs run with the system Python, traceback mapping,
+  every error, parse errors, determinism, immutability, Korean coverage, 150 random graphs, 250 random expression
+  trees against their parenthesized form, py_compile of every generated file); `verify/visual-script-editor.mjs`
+  (ports 9090-9094: every canvas interaction with real CDP input, save/reload, Open as Text, close prompt, broken
+  files, 200-node frame times, Light theme); `verify/visual-script.mjs` (ports 9095-9096: Run by Shift+F10, Run menu,
+  Rerun, the tab button and Ctrl+Shift+F10 with stdin, compile-error refusal, runtime error mark and link, Show Code
+  both ways, Export and overwrite, New › Visual Script, icon, readable labels at 100% in both themes, and a Korean
+  session without English in the tab, palette, menus and dialogs). Fixtures: `verify/fixtures/visual-script`.
+```
 
 ## Monaco 0.57 and IME input
 
