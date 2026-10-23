@@ -12,6 +12,19 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return fallback; }
 }
 
+// Copies a folder tree with the fs calls Electron supports inside app.asar (fs.cpSync is not one of them, so the
+// Marketplace's plugins-catalog, packed in the installed app's asar, could not be installed). Symbolic links are skipped.
+function copyTree(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const name of fs.readdirSync(from)) {
+    const src = path.join(from, name);
+    const dst = path.join(to, name);
+    const st = fs.lstatSync(src);
+    if (st.isDirectory()) copyTree(src, dst);
+    else if (st.isFile()) fs.writeFileSync(dst, fs.readFileSync(src));
+  }
+}
+
 function createPluginManager({ appDir, userDataDir }) {
   const bundledDir = path.join(appDir, 'renderer', 'features');
   const bundledMainDir = path.join(appDir, 'main', 'features');
@@ -142,7 +155,7 @@ function createPluginManager({ appDir, userDataDir }) {
       const target = path.join(userDir, meta.id);
       fs.mkdirSync(userDir, { recursive: true });
       fs.rmSync(target, { recursive: true, force: true });
-      fs.cpSync(from, target, { recursive: true });
+      copyTree(from, target);
       return { id: meta.id, name: meta.name || meta.id };
     } finally {
       if (temp) fs.rmSync(temp, { recursive: true, force: true });
@@ -215,4 +228,4 @@ function createPluginManager({ appDir, userDataDir }) {
   return { list, setEnabled, install, uninstall, catalog, rendererEntries, localeDictionary, mainModules, ownerOf };
 }
 
-module.exports = { createPluginManager };
+module.exports = { createPluginManager, copyTree };
