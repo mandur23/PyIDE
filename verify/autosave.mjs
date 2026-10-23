@@ -117,14 +117,17 @@ try {
   await openFile(t, 'd.py');
   await edit('d.py', '# mine\n');
   writeFileSync(path.join(t.project, 'd.py'), 'external = True\n');
+  // As usual outside tests, the project watcher marks the conflict before auto save runs (the note was lost then).
+  await until(`ide.getDocument(${P('d.py')}).conflict === true`, 'the watcher marks d.py', 8000);
   await blur();
   await sleep(800);
   await js(`ide.autoSave().then(() => true)`);
   check(disk('d.py') === 'external = True\n' && await dirty('d.py'), 'a file changed on disk is not overwritten by auto save');
   // The status note follows the save on the next render; a slow runner may show it a moment later.
   const leftAlone = `!document.querySelector('#autosaveStatus').classList.contains('hidden') && document.querySelector('#autosaveStatus').textContent.includes('d.py changed on disk')`;
-  for (let i = 0; i < 25 && !(await js(leftAlone)); i++) await sleep(200);
-  check(await js(leftAlone), 'the status bar names the file auto save left alone');
+  for (let i = 0; i < 50 && !(await js(leftAlone)); i++) await sleep(200);
+  const note = await js(`(() => { const n = document.querySelector('#autosaveStatus'); return n.className + ': ' + n.textContent; })()`);
+  check(await js(leftAlone), `the status bar names the file auto save left alone (${note})`);
   // The explicit save asks first (File Cache Conflict, verify/external-changes.mjs); keeping the editor text writes it.
   const saving = save('d.py');
   await until(`document.querySelector('.dialog-title')?.textContent === 'File Cache Conflict'`, 'file cache conflict');

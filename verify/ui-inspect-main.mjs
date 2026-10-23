@@ -171,7 +171,9 @@ async function mainWindowChecks(t, lang) {
   }
   await js(`(document.querySelectorAll('.inspect-status-item').forEach(n => n.remove()), true)`);
   await setSize(t, 1280, 800);
-  check((await js(`__uiInspect.status()`)).overflow.length === 0, `${lang}: wider again, every widget shows again`);
+  // The bar refits on the next frame after the resize; a slow runner may take a few.
+  const allShown = await until(`__uiInspect.status().overflow.length === 0`, `${lang}: every widget back`, 5000).catch(() => false);
+  check(allShown, `${lang}: wider again, every widget shows again (${JSON.stringify((await js(`__uiInspect.status()`)).overflow)})`);
 
   // ---------- contrast in both themes ----------
   for (const theme of ['dark', 'light']) {

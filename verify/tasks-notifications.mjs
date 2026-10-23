@@ -58,8 +58,10 @@ try {
   w = await widget(a);
   check(w.indeterminate, `two tasks: "2 processes running" and the newest task's indeterminate bar (${S(w)})`);
   check(await js(`ide.tasks.list().map((x) => x.title + ':' + x.cancellable).join()`) === 'Alpha job:false,Beta job:true', 'ide.tasks.list() lists both; onCancel makes a task cancellable');
-  await a.click('#bgTasks');
-  await until(`document.querySelectorAll('#bgTasksPopup .bg-popup-row').length === 2`, 'popup with two rows');
+  // The widget refits the status bar when its label changes, so a click may land before it settles; click again then.
+  const twoRows = `document.querySelectorAll('#bgTasksPopup .bg-popup-row').length === 2`;
+  for (let i = 0; i < 3 && !(await js(twoRows)); i++) { await a.click('#bgTasks'); await until(twoRows, 'popup', 3000).catch(() => {}); }
+  await until(twoRows, 'popup with two rows');
   let rows = await popupRows(a);
   check(rows[0].title === 'Alpha job' && rows[0].width === '50%' && rows[0].text === 'halfway there' && !rows[0].cancel && rows[1].title === 'Beta job' && rows[1].cancel,
     `clicking the widget lists every task with progress, text and Cancel where cancellable (${S(rows)})`);

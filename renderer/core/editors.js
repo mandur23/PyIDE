@@ -240,7 +240,7 @@
       // what is on disk; without the disk fingerprint the next save would report a false File Cache Conflict.
       set savedVersion(v) {
         doc.savedVersion = v;
-        if (v === doc.model.getAlternativeVersionId()) Object.assign(doc, { diskHash: textHash(doc.model.getValue()), conflict: false });
+        if (v === doc.model.getAlternativeVersionId()) Object.assign(doc, { diskHash: textHash(doc.model.getValue()), conflict: false, skipNoted: false });
       },
     };
   }
@@ -987,7 +987,9 @@
     let r = null;
     try { r = await readDisk(doc); } catch {}
     if (r?.text !== undefined && textHash(r.text) === doc.diskHash) return true;
-    if (!doc.conflict) { doc.conflict = true; ide.emit('autoSaveSkipped', { path: doc.path, reason: r ? 'changedOnDisk' : 'unreadable' }); }
+    // Announced once per conflict, whether auto save or the project watcher (checkDisk) noticed the change first.
+    doc.conflict = true;
+    if (!doc.skipNoted) { doc.skipNoted = true; ide.emit('autoSaveSkipped', { path: doc.path, reason: r ? 'changedOnDisk' : 'unreadable' }); }
     return false;
   }
 
@@ -1012,7 +1014,7 @@
               doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
               adoptSeparator(doc, r.text);
               doc.savedVersion = doc.model.getAlternativeVersionId();
-              Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
+              Object.assign(doc, { diskHash: textHash(r.text), conflict: false, skipNoted: false });
               clearChanged(doc);
               renderAllTabs();
             }
@@ -1057,7 +1059,7 @@
     }
     doc.savedVersion = version;
     doc.diskHash = textHash(text);
-    doc.conflict = false;
+    doc.conflict = doc.skipNoted = false;
     doc.mixedSeparators = false;
     if (!docDirty(doc)) clearChanged(doc);
     if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text: doc.lineSeparator === '\r' ? text.replace(/\r/g, '\r\n') : text });
@@ -1089,7 +1091,7 @@
       doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
       adoptSeparator(doc, r.text);
       doc.savedVersion = doc.model.getAlternativeVersionId();
-      Object.assign(doc, { diskHash: textHash(r.text), conflict: false });
+      Object.assign(doc, { diskHash: textHash(r.text), conflict: false, skipNoted: false });
       clearChanged(doc);
     }
     renderAllTabs();
