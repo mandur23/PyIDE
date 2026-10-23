@@ -4,7 +4,8 @@
 // Enabling, disabling, installing and uninstalling take effect after a restart, as in PyCharm.
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { extractZip } = require('./zip');
+const market = require('./marketplace');
 
 const ID = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
 
@@ -135,15 +136,16 @@ function createPluginManager({ appDir, userDataDir }) {
     return list();
   }
 
-  // Copies a plugin folder (or a .zip containing one) into the user plugin directory.
-  function install(source) {
+  // Copies a plugin folder (or a .zip containing one) into the user plugin directory. expect: {id, version} that the
+  // archive's plugin.json must have (a Marketplace download, whose index named them).
+  function install(source, expect = null) {
     let from = source;
     let temp = null;
     // The extraction folder is removed also when the archive cannot be extracted or holds no plugin.
     try {
       if (/\.zip$/i.test(source)) {
         temp = fs.mkdtempSync(path.join(userDataDir, 'plugin-zip-'));
-        execFileSync('tar', ['-xf', source, '-C', temp]);
+        extractZip(source, temp);
         const inner = fs.existsSync(path.join(temp, 'plugin.json')) ? temp : subdirs(temp).find((d) => fs.existsSync(path.join(d, 'plugin.json')));
         if (!inner) throw new Error('The archive does not contain a plugin.json');
         from = inner;
@@ -152,6 +154,9 @@ function createPluginManager({ appDir, userDataDir }) {
       if (!meta) throw new Error('plugin.json is missing or not valid JSON');
       if (!ID.test(meta.id || '')) throw new Error('plugin.json needs an "id" of letters, digits, ".", "_" or "-"');
       if (subdirs(bundledDir).some((d) => describe(d, true).id === meta.id)) throw new Error(`"${meta.id}" is a bundled plugin`);
+      if (expect && (meta.id !== expect.id || meta.version !== expect.version)) {
+        throw new Error(`The archive holds ${meta.id} ${meta.version || ''}, not ${expect.id} ${expect.version} as the Marketplace lists it`);
+      }
       const target = path.join(userDir, meta.id);
       fs.mkdirSync(userDir, { recursive: true });
       fs.rmSync(target, { recursive: true, force: true });
@@ -173,6 +178,61 @@ function createPluginManager({ appDir, userDataDir }) {
   const catalog = () => subdirs(catalogDir).map((d) => describe(d, false)).filter(Boolean).map((p) => ({
     id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n, dir: p.dir,
   }));
+
+  // The Marketplace: the sample plugins in plugins-catalog/ plus the online index, one entry per id (the online one when
+  // its version is newer). `value` is the index location ('' for none); the online index is read again after ten
+  // minutes or with `refresh`. The last listing is what installListed installs from.
+  const appVersion = readJson(path.join(appDir, 'package.json'), {}).version || '0.0.0';
+  let cached = null; // {href, at, entries}
+  let listed = new Map();
+  async function marketplace(value, { refresh = false } = {}) {
+    const bundledIds = new Set(subdirs(bundledDir).map((d) => describe(d, true).id));
+    const byId = new Map(catalog().map((p) => [p.id, { ...p, origin: 'bundled' }]));
+    let online = { state: 'off' };
+    let source = null;
+    try {
+      source = market.resolveSource(value);
+      if (source) {
+        if (refresh || cached?.href !== source.href || Date.now() - cached.at > 600000) {
+          cached = { href: source.href, at: Date.now(), entries: await market.fetchIndex(source) };
+        }
+        const usable = cached.entries.filter((e) => !bundledIds.has(e.id));
+        const fits = usable.filter((e) => !e.minIdeVersion || market.compareVersions(e.minIdeVersion, appVersion) <= 0);
+        for (const e of fits) {
+          const have = byId.get(e.id);
+          if (!have || market.compareVersions(e.version, have.version) > 0) byId.set(e.id, { ...e, origin: 'online' });
+        }
+        online = { state: 'ok', source: source.href, hidden: usable.length - fits.length };
+      }
+    } catch (err) {
+      online = { state: 'error', source: source?.href || String(value), error: err.message };
+    }
+    listed = byId;
+    const have = new Map(subdirs(userDir).map((d) => describe(d, false)).filter(Boolean).map((p) => [p.id, p.version]));
+    const plugins = [...byId.values()].map((p) => ({
+      ...p,
+      installedVersion: have.get(p.id) ?? null,
+      update: have.has(p.id) && market.compareVersions(p.version, have.get(p.id)) > 0,
+    }));
+    return { plugins, online };
+  }
+
+  // Installs a plugin from the last Marketplace listing; an online one is downloaded and checked against the index
+  // (size, sha256, then the id and version in its plugin.json) before it is unpacked.
+  async function installListed(id) {
+    const p = listed.get(id);
+    if (!p) throw new Error(`${id} is not in the Marketplace`);
+    if (p.origin === 'bundled') return install(p.dir);
+    const body = await market.download(p);
+    const temp = fs.mkdtempSync(path.join(userDataDir, 'plugin-download-'));
+    try {
+      const zip = path.join(temp, `${p.id}-${p.version}.zip`);
+      fs.writeFileSync(zip, body);
+      return install(zip, { id: p.id, version: p.version });
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
 
   // Discovery order, except that a plugin's dependencies come before it, so it can use their APIs while it loads.
   function dependencyOrder(list) {
@@ -225,7 +285,7 @@ function createPluginManager({ appDir, userDataDir }) {
     return p ? { id: p.id, name: p.name, i18n: p.i18n, required: p.required, bundled: p.bundled } : null;
   }
 
-  return { list, setEnabled, install, uninstall, catalog, rendererEntries, localeDictionary, mainModules, ownerOf };
+  return { list, setEnabled, install, uninstall, catalog, marketplace, installListed, rendererEntries, localeDictionary, mainModules, ownerOf };
 }
 
 module.exports = { createPluginManager, copyTree };

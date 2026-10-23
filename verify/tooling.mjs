@@ -158,7 +158,7 @@ try {
   // ---------- Settings: Editor ----------
   await press('Ctrl+Alt+S');
   await until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
-  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|').replace('|Presentation and Distraction-Free Modes', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|')`), 'Ctrl+Alt+S opens Settings with categories');
+  check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|').replace('|Presentation and Distraction-Free Modes', '').replace('|Crash Recovery', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|')`), 'Ctrl+Alt+S opens Settings with categories');
   check(await js(`document.querySelector('#settingsApply').disabled`), 'Apply disabled until something changes');
   await type('wrap');
   check(await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Editor|General|Code Style' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');

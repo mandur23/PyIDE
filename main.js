@@ -178,6 +178,18 @@ ipcMain.handle('fs:create', (_e, p, isDir) => {
   else fs.writeFileSync(p, '');
 });
 ipcMain.handle('fs:rename', (_e, from, to) => fs.renameSync(from, to));
+// Files and folders dropped on the project tree from Explorer -> the copies made. A name that exists in dir is skipped
+// unless overwrite (a folder is then merged into the existing one).
+ipcMain.handle('fs:copyInto', (_e, sources, dir, overwrite = false) => {
+  const copied = [];
+  for (const src of sources) {
+    const to = path.join(dir, path.basename(src));
+    if (fs.existsSync(to) && !overwrite) continue;
+    fs.cpSync(src, to, { recursive: true, force: true });
+    copied.push(to);
+  }
+  return copied;
+});
 // Encoding-aware text IO for editor documents (UTF-8, UTF-8 with BOM, UTF-16, CP949/EUC-KR).
 ipcMain.handle('fs:readText', (_e, p) => textCodec.read(p));
 ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.write(p, text, encoding));
@@ -275,7 +287,12 @@ ipcMain.handle('plugins:list', () => plugins.list());
 ipcMain.handle('plugins:setEnabled', (_e, id, enabled) => plugins.setEnabled(id, enabled));
 ipcMain.handle('plugins:install', (_e, source) => plugins.install(source));
 ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
-ipcMain.handle('plugins:catalog', () => plugins.catalog());
+// value: the plugins.marketplaceUrl setting, or null while it is unset (the installation's default index).
+ipcMain.handle('plugins:marketplace', (_e, value, opts) => {
+  const fallback = require('./main/marketplace').defaultSource({ packaged: app.isPackaged });
+  return plugins.marketplace(value ?? fallback, opts).then((r) => ({ ...r, defaultUrl: fallback }));
+});
+ipcMain.handle('plugins:installListed', (_e, id) => plugins.installListed(id));
 ipcMain.handle('dialog:openPlugin', async () => {
   const r = await dialog.showOpenDialog(win, {
     title: 'Install Plugin from Disk',

@@ -48,5 +48,9 @@
   "Download only the changed parts of an update when possible": "가능하면 업데이트에서 변경된 부분만 다운로드",
   "What's New": "새로운 기능",
   "What's New in PyIDE {version}": "PyIDE {version}의 새로운 기능",
-  "No release notes for this version.": "이 버전의 변경 내역이 없습니다."
+  "No release notes for this version.": "이 버전의 변경 내역이 없습니다.",
+  "Update channel:": "업데이트 채널:",
+  "Stable": "안정 릴리스",
+  "Beta": "베타 릴리스",
+  "Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.": "베타 릴리스는 테스트 버전을 먼저 받고, 모든 안정 릴리스도 받습니다. 안정 릴리스로 다시 바꿔도 이전 버전을 다시 설치하지 않으며, 더 새로운 안정 릴리스가 나올 때까지 지금 버전을 그대로 씁니다."
 }

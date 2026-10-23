@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "plugins": [
+    {
+      "id": "key-promoter",
+      "name": "Key Promoter X",
+      "version": "2.0.0",
+      "vendor": "PyIDE Samples",
+      "description": "Learn the keyboard shortcuts: whenever you click a button that has a shortcut, a notification shows the key you could have pressed and how often you clicked it.",
+      "i18n": {
+        "ko": {
+          "name": "Key Promoter X",
+          "description": "단축키를 익혀 보세요. 단축키가 있는 버튼을 마우스로 누를 때마다 대신 누를 수 있었던 키와 클릭 횟수를 알림으로 보여 줍니다."
+        }
+      },
+      "url": "key-promoter-2.0.0.zip",
+      "sha256": "e2d631316f0c39d1d8f7ce68dd09b7dc86d54df07ed2dd2eff08357195c08eed",
+      "size": 1791
+    },
+    {
+      "id": "rainbow-brackets",
+      "name": "Rainbow Brackets",
+      "version": "1.2.0",
+      "vendor": "PyIDE Samples",
+      "description": "Colors matching brackets by nesting depth and draws a bracket-pair guide, so deeply nested Python is easier to read.",
+      "i18n": {
+        "ko": {
+          "name": "무지개 괄호",
+          "description": "짝이 맞는 괄호를 중첩 깊이별로 색칠하고 괄호 쌍 가이드를 그려서 깊게 중첩된 Python 코드를 읽기 쉽게 해 줍니다."
+        }
+      },
+      "url": "rainbow-brackets-1.2.0.zip",
+      "sha256": "3c65009eef86d1ae3a523bc1a0e9e0f07b73ea93dcaae7467ad7609a63178e12",
+      "size": 1322
+    },
+    {
+      "id": "word-count",
+      "name": "Statistic: Lines and Words",
+      "version": "0.9.1",
+      "vendor": "PyIDE Samples",
+      "description": "Shows the line, word and character count of the current file (or of the selection) in the status bar.",
+      "i18n": {
+        "ko": {
+          "name": "통계: 줄 수와 단어 수",
+          "description": "현재 파일(또는 선택 영역)의 줄 수, 단어 수, 문자 수를 상태 표시줄에 보여 줍니다."
+        }
+      },
+      "url": "word-count-0.9.1.zip",
+      "sha256": "12367fca198d04a832dcb6cd49433f5092edece18b4b3bdd36f175d694bc8503",
+      "size": 1272
+    }
+  ]
+}

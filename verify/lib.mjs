@@ -13,6 +13,8 @@ process.env.PYIDE_TRUST_ALL ??= '1';
 process.env.PYIDE_UPDATE_FEED ??= 'off';
 // The vulnerabilities plugin asks osv.dev about listed packages; tests never do unless they set a (fake) server.
 process.env.PYIDE_OSV_URL ??= 'off';
+// Installed copies read the plugin Marketplace index from GitHub; tests never do unless they set an index.
+process.env.PYIDE_MARKETPLACE_URL ??= 'off';
 // New installs follow the OS theme; tests run as if the OS were dark, whatever this machine uses (main/system-theme.js).
 process.env.PYIDE_OS_THEME ??= 'dark';
 const ELECTRON = path.join(APP_DIR, 'node_modules', 'electron', 'dist', 'electron.exe');

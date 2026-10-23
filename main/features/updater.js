@@ -1,6 +1,6 @@
 // Updates, main side: electron-updater with a generic feed. The feed is the renderer's `updates.feedUrl` setting: an
 // http(s) URL, or a local folder (or file: URL) holding latest.yml and the installers, which is served on 127.0.0.1
-// while PyIDE runs. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
+// while PyIDE runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
 // is pointed at the new .msi instead, since MSI installs are upgraded by Windows Installer. Source runs only check.
 // NSIS downloads are differential when they can be: electron-updater rebuilds the new installer from the one this version
 // was installed with, which the NSIS installer copies to %LOCALAPPDATA%\pyide-updater\installer.exe, and the blocks that
@@ -96,30 +96,58 @@ function readHistory(file) {
   } catch { return { lastCheck: null, lastAttempt: null, failures: 0, lastError: null, seenVersion: undefined }; }
 }
 
-// CHANGELOG.md (shipped in the app) as [{version, text}], newest first: each "## <version>" heading and the lines under it.
+// CHANGELOG.md (shipped in the app) as [{version, text}], newest first: each "## <version>" heading (0.2.5, or a beta
+// such as 0.2.5-beta.1) and the lines under it.
 function readChangelog(file) {
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
   const sections = [];
   for (const line of text.split(/\r?\n/)) {
-    const head = /^##\s+v?(\d+(?:\.\d+)*)\s*$/.exec(line);
+    const head = /^##\s+v?(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)\s*$/.exec(line);
     if (head) sections.push({ version: head[1], lines: [] });
     else if (/^#{1,2}\s/.test(line)) sections.push(null);
     else if (sections.at(-1)) sections.at(-1).lines.push(line);
   }
   return sections.filter(Boolean).map(({ version, lines }) => ({ version, text: lines.join('\n').trim() })).filter((s) => s.text);
 }
-const compareVersions = (a, b) => {
-  const x = a.split('.').map(Number), y = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+
+// Semantic version precedence, which electron-updater also uses: 0.2.5-beta.1 < 0.2.5-beta.2 < 0.2.5-beta.10 < 0.2.5
+// < 0.2.6. Build metadata (+…) is ignored. scripts/release.mjs uses this too.
+function compareVersions(a, b) {
+  const split = (v) => {
+    const [core, pre] = String(v).split('+')[0].split(/-(.*)/s);
+    return { core: core.split('.').map(Number), pre: pre ? pre.split('.') : [] };
+  };
+  const x = split(a), y = split(b);
+  for (let i = 0; i < Math.max(x.core.length, y.core.length); i++) if ((x.core[i] || 0) !== (y.core[i] || 0)) return (x.core[i] || 0) - (y.core[i] || 0);
+  if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length; // a release ranks above its prereleases
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i], q = y.pre[i];
+    if (p === q) continue;
+    if (p === undefined || q === undefined) return p === undefined ? -1 : 1;
+    const pn = /^\d+$/.test(p), qn = /^\d+$/.test(q);
+    if (pn && qn) return Number(p) - Number(q);
+    if (pn !== qn) return pn ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
   return 0;
-};
+}
+const isPrerelease = (v) => /^[^+]*-/.test(v);
+const coreVersion = (v) => v.split(/[-+]/)[0];
+
+// The sections a build of `version` lists: those up to it. A stable build leaves out beta sections (its own section
+// covers them). A beta also lists the section of the release it previews, so "## 0.2.5" shows in 0.2.5-beta.1.
+function sectionsUpTo(changelog, version) {
+  const beta = isPrerelease(version);
+  return changelog.filter((s) => (beta || !isPrerelease(s.version))
+    && (compareVersions(s.version, version) <= 0 || (beta && s.version === coreVersion(version))));
+}
 
 // The notes to show once after an update: the sections newer than the version that last ran, up to this one. After an
 // update from a version that did not record itself, only this version's section; nothing on a fresh install.
 function notesAfterUpdate(changelog, version, seenVersion) {
   if (seenVersion === undefined || (seenVersion && compareVersions(seenVersion, version) >= 0)) return [];
-  return changelog.filter((s) => compareVersions(s.version, version) <= 0 && (seenVersion ? compareVersions(s.version, seenVersion) > 0 : compareVersions(s.version, version) === 0));
+  return sectionsUpTo(changelog, version).filter((s) => (seenVersion ? compareVersions(s.version, seenVersion) > 0 : s.version === version || s.version === coreVersion(version)));
 }
 
 // A current.blockmap that electron-updater kept from an earlier download describes the installer of that download, which
@@ -151,6 +179,8 @@ exports.installKind = installKind;
 exports.serveFolder = serveFolder;
 exports.byteRange = byteRange;
 exports.readChangelog = readChangelog;
+exports.compareVersions = compareVersions;
+exports.sectionsUpTo = sectionsUpTo;
 exports.notesAfterUpdate = notesAfterUpdate;
 
 exports.register = ({ ipcMain, app, send, diagnostics }) => {
@@ -231,13 +261,30 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   ipcMain.handle('updater:state', () => state);
   // -> {version, afterUpdate: [{version, text}] (given to the first window that asks), all: the whole changelog}.
   ipcMain.handle('updater:releaseNotes', () => {
-    const notes = { version: state.version, afterUpdate, all: changelog.filter((s) => compareVersions(s.version, state.version) <= 0) };
+    const notes = { version: state.version, afterUpdate, all: sectionsUpTo(changelog, state.version) };
     afterUpdate = [];
     return notes;
   });
 
+  // The update channel's file: latest.yml (Stable) or beta.yml (Beta), which every release keeps at the newest beta or
+  // stable version, so a beta install also gets stable releases. A feed without beta.yml (a folder with only latest.yml)
+  // is read as Stable. Setting a channel turns electron-updater's allowDowngrade on; it is turned off again, so a copy
+  // switched from Beta back to Stable keeps its beta until a newer stable release comes out.
+  async function checkChannel(u, channel) {
+    u.channel = channel;
+    u.allowDowngrade = false;
+    try {
+      return await u.checkForUpdates();
+    } catch (err) {
+      if (channel === 'latest' || err?.code !== 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') throw err;
+      log.info(`the feed has no ${channel}.yml; checking latest.yml`);
+      return checkChannel(u, 'latest');
+    }
+  }
+
+  // options: {channel: 'stable' | 'beta'} (the setting updates.channel).
   // -> {available: version | null}; throws with a readable message when the feed cannot be read.
-  ipcMain.handle('updater:check', async (_e, feedValue) => {
+  ipcMain.handle('updater:check', async (_e, feedValue, options) => {
     if (state.phase === 'downloading' || state.phase === 'downloaded') return { available: state.available };
     setState({ phase: 'checking', error: null, checks: state.checks + 1, lastAttempt: Date.now() });
     try {
@@ -245,7 +292,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
       const u = getUpdater();
       // electron-updater only checks packaged apps; a source run still reports what the feed offers.
       if (!app.isPackaged) u.forceDevUpdateConfig = true;
-      const result = await u.checkForUpdates();
+      const result = await checkChannel(u, options?.channel === 'beta' ? 'beta' : 'latest');
       const latest = result?.updateInfo?.version;
       const available = result?.isUpdateAvailable && latest ? latest : null;
       setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null, lastCheck: Date.now(), failures: 0, lastError: null });

@@ -3,16 +3,21 @@
 //   npm run release -- <version> --publish-only [--dry-run] [--notes <file>]
 // 1. checks: clean tree on master, local master contains origin's, a semver version above package.json's, no tag v<v>
 //    here or on origin, release notes, gh signed in
-// 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml
+// 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml (beta.yml)
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
 // 7. publishes to the `pyide` release of mandur23/Portfolio-Nano- (never marked Latest): the installers and the exe's
-//    blockmap, title and notes, then latest.yml (the update feed switches here), then deletes older versions' files
-//    except the previous version's blockmap, which installed copies of that version need for a differential update
+//    blockmap, title and notes, then latest.yml and beta.yml (the update feed switches here), then deletes older
+//    versions' files except the previous versions' blockmaps, which installed copies of those versions need for a
+//    differential update
 // 8. reads the feed back
+// A beta (x.y.z-beta.N, which electron-builder builds with dist/beta.yml instead of latest.yml) goes only to beta
+// installs: step 7 uploads its installers and blockmap and then beta.yml, and leaves latest.yml, PyIDE-Setup.exe, the
+// title, the notes and every stable version's files alone. A stable release writes beta.yml too (a copy of latest.yml),
+// so beta installs get it, unless the release holds a newer beta.
 // Nothing is uploaded before the push and the feed switches last, so a stop leaves one clear way on; the error says which.
 // --dry-run runs steps 1-4, prints the git and gh commands of steps 5-8 instead of running them, and puts the version
-// (and dist/latest.yml) back at the end. --no-build (a testing aid, --dry-run only) skips step 3 and checks what dist holds.
+// (and dist/latest.yml or beta.yml) back at the end. --no-build (a testing aid, --dry-run only) skips step 3 and checks what dist holds.
 // --publish-only runs steps 7-8 from dist for a version whose tag is already on origin (after a stop past step 6).
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
@@ -20,9 +25,12 @@ import * as fs from 'fs';
 import { constants as osConstants, tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { gunzipSync } from 'zlib';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// The app's own version order (semver: 0.2.5-beta.1 < 0.2.5), so the release and installed copies agree.
+const { compareVersions: compare } = createRequire(import.meta.url)('../main/features/updater.js');
 const REPO = 'mandur23/Portfolio-Nano-';
 const TAG = 'pyide';
 const FEED = `https://github.com/${REPO}/releases/download/${TAG}/`;
@@ -37,8 +45,12 @@ const LOCK = path.join(ROOT, 'package-lock.json');
 export const INSTALL_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'PyIDE');
 const LOCAL_UNINSTALLER = path.join(INSTALL_DIR, 'Uninstall PyIDE.exe');
 const USAGE = 'usage: npm run release -- <version> [--dry-run [--no-build]] [--skip-tests] [--notes <file>] [--replace-local-install]\n'
-  + '       npm run release -- <version> --publish-only [--dry-run] [--notes <file>]';
-const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+  + '       npm run release -- <version> --publish-only [--dry-run] [--notes <file>]\n'
+  + '       <version> is x.y.z for everyone, or x.y.z-beta.N for beta installs only';
+// x.y.z, or x.y.z-beta.N: the prerelease tag names electron-builder's channel file, and PyIDE reads only beta.yml.
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-beta\.(0|[1-9]\d*))?$/;
+const isBeta = (v) => v.includes('-');
+const channelFile = (v) => (isBeta(v) ? 'beta.yml' : 'latest.yml');
 
 // Everything that reaches outside the script goes through io, so a test harness can stub it.
 export const io = {
@@ -93,7 +105,7 @@ export function configure(argv, env = process.env) {
 }
 
 const newState = () => ({
-  fromVersion: null, versionSet: false, latestYmlBefore: null,
+  fromVersion: null, versionSet: false, ymlBefore: null,
   localInstall: null, uninstalled: false, reinstall: null, // reinstall: { installer, ok, status }
   committed: false, tagged: false, pushAttempted: false, pushed: false,
   installersUploaded: false, feedUploadStarted: false, live: false,
@@ -131,9 +143,6 @@ function blocker(msg) {
 }
 
 // ---------- versions ----------
-const parse = (v) => v.split('.').map(Number);
-const compare = (a, b) => { const x = parse(a), y = parse(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
-
 // Rewrites only the version lines, so the files keep their formatting (and edits made meanwhile survive a restore).
 function withVersion(text, v, lock) {
   let out = text.replace(/^(  "version": ")[^"]*(")/m, `$1${v}$2`);
@@ -177,6 +186,12 @@ function releaseNotes(v) {
     if (!io.existsSync(file)) fail(`--notes: ${file} does not exist`);
     return { text: io.readFileSync(file, 'utf8'), source: file };
   }
+  if (isBeta(v)) {
+    // The release page describes the stable version and is not edited; this only makes sure What's New has notes.
+    const core = v.split('-')[0];
+    const own = changelogSection(v);
+    return (own || changelogSection(core)) ? { source: `CHANGELOG.md, ## ${own ? v : core} (a beta leaves the release page's notes alone)`, text: null } : null;
+  }
   const section = changelogSection(v);
   if (!section) return null;
   return {
@@ -197,6 +212,8 @@ function releaseNotes(v) {
     ].join('\n'),
   };
 }
+
+const noNotes = () => `no release notes: pass --notes <file> or add a "## ${V}" section${isBeta(V) ? ` (or "## ${V.split('-')[0]}", the release it previews)` : ''} to CHANGELOG.md`;
 
 // ---------- git origin and GitHub (read-only queries run in a dry run too) ----------
 // ls-remote reads origin without fetching, so nothing local changes (a dry run included).
@@ -220,44 +237,53 @@ function releaseAssets() {
   const r = sh('gh', ['release', 'view', TAG, '-R', REPO, '--json', 'assets', '--jq', '.assets[].name'], { capture: true, allowFail: true });
   return r.status === 0 ? r.out.split(/\r?\n/).filter(Boolean) : null;
 }
-// The version of an installer or blockmap asset, or null (PyIDE-Setup.exe and latest.yml are replaced, not deleted).
+// The version of an installer or blockmap asset, or null (PyIDE-Setup.exe, latest.yml and beta.yml are replaced, not deleted).
 const assetVersion = (name) => (/^PyIDE-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^PyIDE-(.+)\.msi(\.blockmap)?$/.exec(name))?.[1] ?? null;
-// The version installed copies run until this release: the newest one below v on the release.
-export function previousVersion(assets, v) {
-  return assets.map(assetVersion).filter((x) => x && /^\d+\.\d+\.\d+$/.test(x) && compare(x, v) < 0).sort(compare).pop() || null;
+const versionsOn = (assets) => [...new Set(assets.map(assetVersion).filter((x) => x && VERSION.test(x)))].sort(compare);
+// The version installed copies run until this release: the newest stable one (with beta, the newest beta) below v.
+export function previousVersion(assets, v, beta = false) {
+  return versionsOn(assets).filter((x) => isBeta(x) === beta && compare(x, v) < 0).pop() || null;
 }
-// What a differential update from the previous version reads from the feed besides the new installer: its old blockmap
+// The beta that beta.yml offers: the newest beta whose installer is on the release (older ones are deleted).
+export const liveBeta = (assets) => versionsOn(assets).filter((x) => isBeta(x) && assets.includes(`PyIDE-Setup-${x}.exe`)).pop() || null;
+// What a differential update from a previous version reads from the feed besides the new installer: its old blockmap
 // (electron-updater derives <feed>/PyIDE-Setup-<old>.exe.blockmap from the new installer's URL; the old installer itself
 // comes from the user's %LOCALAPPDATA%\pyide-updater cache).
 export const keptBlockmap = (prev) => (prev ? `PyIDE-Setup-${prev}.exe.blockmap` : null);
-// Files of other versions to delete: everything except the previous version's blockmap.
+// The versions whose blockmaps stay: a stable release keeps the previous stable's and the previous beta's (beta installs
+// update to it too); a beta keeps the previous beta's (stable versions' files are not a beta's to delete).
+const keptVersions = (assets, v) => [...(isBeta(v) ? [] : [previousVersion(assets, v)]), previousVersion(assets, v, true)].filter(Boolean);
+// Files of older versions to delete: a stable release deletes every older version's, a beta only older betas', except
+// the kept blockmaps. Newer versions (a beta ahead of a stable fix) stay.
 export function oldAssets(assets, v) {
-  const keep = keptBlockmap(previousVersion(assets, v));
-  return assets.filter((n) => { const x = assetVersion(n); return !!x && x !== v && n !== keep; });
+  const keep = keptVersions(assets, v).map(keptBlockmap);
+  return assets.filter((n) => { const x = assetVersion(n); return !!x && VERSION.test(x) && compare(x, v) < 0 && (!isBeta(v) || isBeta(x)) && !keep.includes(n); });
 }
-async function feedVersion() {
-  const res = await io.fetch(`${FEED}latest.yml`, { redirect: 'follow', headers: { 'Cache-Control': 'no-cache' } });
+async function feedVersion(file) {
+  const res = await io.fetch(`${FEED}${file}`, { redirect: 'follow', headers: { 'Cache-Control': 'no-cache' } });
   if (!res.ok) return `HTTP ${res.status}`;
   return /^version:\s*['"]?([^'"\s]+)/m.exec(await res.text())?.[1] || '(no version line)';
 }
 
 // ---------- dist ----------
-const distFiles = (v) => ({ exe: path.join(DIST, `PyIDE-Setup-${v}.exe`), blockmap: path.join(DIST, `PyIDE-Setup-${v}.exe.blockmap`), msi: path.join(DIST, `PyIDE-${v}.msi`), latestYml: path.join(DIST, 'latest.yml') });
+// yml: the channel file electron-builder writes for v (latest.yml, or beta.yml for a beta).
+const distFiles = (v) => ({ exe: path.join(DIST, `PyIDE-Setup-${v}.exe`), blockmap: path.join(DIST, `PyIDE-Setup-${v}.exe.blockmap`), msi: path.join(DIST, `PyIDE-${v}.msi`), yml: path.join(DIST, channelFile(v)) });
 // The length of the file a blockmap describes (gzipped JSON; electron-builder writes one file entry).
 function blockmapLength(file) {
   const entry = JSON.parse(gunzipSync(io.readFileSync(file)).toString()).files?.[0];
   return (entry?.offset || 0) + (entry?.sizes || []).reduce((a, b) => a + b, 0);
 }
-// Both installers there, latest.yml naming this version's exe with that file's hash, and the exe's blockmap describing
-// that exe (differential updates rebuild the exe from it). Returns the problem, or null.
-function distProblem({ exe, blockmap, msi, latestYml }, v) {
-  const missing = [exe, blockmap, msi, latestYml].filter((f) => !io.existsSync(f)).map((f) => path.relative(ROOT, f));
+// Both installers there, the channel file naming this version's exe with that file's hash, and the exe's blockmap
+// describing that exe (differential updates rebuild the exe from it). Returns the problem, or null.
+function distProblem({ exe, blockmap, msi, yml: ymlFile }, v) {
+  const missing = [exe, blockmap, msi, ymlFile].filter((f) => !io.existsSync(f)).map((f) => path.relative(ROOT, f));
   if (missing.length) return `dist has no ${missing.join(', ')}`;
-  const yml = io.readFileSync(latestYml, 'utf8');
+  const yml = io.readFileSync(ymlFile, 'utf8');
+  const name = `dist/${path.basename(ymlFile)}`;
   const field = (k) => new RegExp(`^${k}:\\s*['"]?([^'"\\s]+)`, 'm').exec(yml)?.[1];
-  if (field('version') !== v || field('path') !== path.basename(exe)) return `dist/latest.yml says version ${field('version')}, path ${field('path')}; expected ${v}, ${path.basename(exe)}`;
+  if (field('version') !== v || field('path') !== path.basename(exe)) return `${name} says version ${field('version')}, path ${field('path')}; expected ${v}, ${path.basename(exe)}`;
   const exeBytes = io.readFileSync(exe);
-  if (field('sha512') !== createHash('sha512').update(exeBytes).digest('base64')) return `dist/latest.yml's sha512 does not match dist/${path.basename(exe)}`;
+  if (field('sha512') !== createHash('sha512').update(exeBytes).digest('base64')) return `${name}'s sha512 does not match dist/${path.basename(exe)}`;
   let length = null;
   try { length = blockmapLength(blockmap); } catch {}
   if (length !== exeBytes.length) return `dist/${path.basename(blockmap)} does not describe dist/${path.basename(exe)} (${length ?? 'unreadable'} vs ${exeBytes.length} bytes)`;
@@ -305,9 +331,11 @@ export function failureAdvice() {
   if (dryRun) return [];
   const pub = `npm run release -- ${V} --publish-only`;
   const push = `git push --atomic origin master refs/tags/v${V}`;
+  const yml = channelFile(V);
+  const who = isBeta(V) ? 'beta installs' : 'installed copies';
   if (state.live) {
     return [
-      `Release ${V} IS LIVE: the feed's latest.yml names ${V} and installed copies will update to it.`,
+      `Release ${V} IS LIVE: the feed's ${yml} names ${V} and ${who} will update to it.`,
       `Do not reset, delete the tag v${V} or remove the uploaded files. Fix the problem, then finish with ${pub}`,
       '(it uploads the same files again and repeats the remaining steps) or do the rest by hand.',
     ];
@@ -316,8 +344,8 @@ export function failureAdvice() {
     return [
       `The commit "Release ${V}" and tag v${V} are on origin: do not reset or delete the tag.`,
       state.feedUploadStarted
-        ? `The latest.yml upload did not finish: if ${FEED}latest.yml already names ${V}, the release is live.`
-        : `The feed's latest.yml was not changed, so installed copies still see the previous version${state.installersUploaded ? ' (the new installers may already be on the release page)' : ''}.`,
+        ? `The ${yml} upload did not finish: if ${FEED}${yml} already names ${V}, the release is live.`
+        : `The feed's ${yml} was not changed, so ${who} still see the previous version${state.installersUploaded ? ' (the new installers may already be on the release page)' : ''}.`,
       `Fix the problem, then run ${pub}: it skips steps 1-6 and uploads from dist.`,
     ];
   }
@@ -345,16 +373,16 @@ function printAdvice() {
 // Idempotent: the normal exit and a signal handler both call it.
 export function cleanup() {
   if (state.uninstalled && !state.reinstall) reinstallLocal(false);
-  // A dry run, or a real one that stopped before its commit, leaves the version (and dist/latest.yml) as it found them.
+  // A dry run, or a real one that stopped before its commit, leaves the version (and dist's channel file) as it found them.
   if (state.versionSet && (dryRun || !state.committed)) {
     for (const [file, lock] of [[PKG, false], [LOCK, true]]) io.writeFileSync(file, withVersion(io.readFileSync(file, 'utf8'), state.fromVersion, lock));
     state.versionSet = false;
     log(`version in package.json and package-lock.json put back to ${state.fromVersion}`);
   }
-  if (state.latestYmlBefore) {
-    io.writeFileSync(path.join(DIST, 'latest.yml'), state.latestYmlBefore);
-    state.latestYmlBefore = null;
-    log('dist/latest.yml put back');
+  if (state.ymlBefore) {
+    io.writeFileSync(path.join(DIST, channelFile(V)), state.ymlBefore);
+    state.ymlBefore = null;
+    log(`dist/${channelFile(V)} put back`);
   }
 }
 // Ctrl+C (SIGINT), SIGTERM and Ctrl+Break (SIGBREAK, Windows): the same cleanup, then exit.
@@ -378,8 +406,8 @@ export function installSignalHandlers() {
 // ---------- the release ----------
 async function main() {
   log(`PyIDE release ${V}${opts.publishOnly ? ', publish only' : ''}${dryRun ? ' (dry run: nothing is committed, tagged, pushed or uploaded)' : ''}`);
-  if (!SEMVER.test(V)) fail(`"${V}" is not a semantic version (x.y.z)`);
-  if (/[-+]/.test(V)) fail(`"${V}": pre-release and build versions make electron-builder write a channel file instead of latest.yml, which the ${TAG} feed serves; use x.y.z`);
+  if (!VERSION.test(V)) fail(`"${V}" is not x.y.z (a release) or x.y.z-beta.N (a beta); PyIDE reads only latest.yml and beta.yml`);
+  if (isBeta(V)) log(`  a beta: only installs on the Beta channel get it (beta.yml); latest.yml stays as it is`);
   if (opts.publishOnly) return publishOnly();
 
   step(1, 'checks');
@@ -406,7 +434,7 @@ async function main() {
   }
   const notes = releaseNotes(V);
   if (notes) log(`  release notes: ${notes.source}`);
-  else blocker(`no release notes: pass --notes <file> or add a "## ${V}" section to CHANGELOG.md`);
+  else blocker(noNotes());
   checkGh();
   if (!opts.skipTests && io.existsSync(LOCAL_UNINSTALLER) && !opts.replace) {
     fail(`PyIDE is installed per-user in ${INSTALL_DIR}, where the installer tests install and then remove the MSI build.\n`
@@ -423,19 +451,20 @@ async function main() {
   log('  done');
 
   const files = distFiles(V);
-  const { exe, blockmap, msi, latestYml } = files;
+  const { exe, blockmap, msi, yml } = files;
+  const built = `dist/${path.basename(exe)}, dist/${path.basename(blockmap)}, dist/${path.basename(msi)}, dist/${path.basename(yml)} (version ${V})`;
   if (opts.noBuild) {
     step(3, 'npm run dist: skipped (--no-build, a dry-run testing aid); checking what dist already holds');
     const problem = distProblem(files, V);
     if (problem) blocker(problem);
-    else log(`  dist/${path.basename(exe)}, dist/${path.basename(blockmap)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
+    else log(`  ${built}`);
   } else {
     step(3, 'npm run dist');
-    if (dryRun && io.existsSync(latestYml)) state.latestYmlBefore = io.readFileSync(latestYml);
+    if (dryRun && io.existsSync(yml)) state.ymlBefore = io.readFileSync(yml);
     sh(process.env.PYIDE_DIST_DIR ? `npm run dist -- "-c.directories.output=${DIST}"` : 'npm run dist', [], { shell: true });
     const problem = distProblem(files, V);
     if (problem) fail(`after npm run dist: ${problem}`);
-    log(`  dist/${path.basename(exe)}, dist/${path.basename(blockmap)}, dist/${path.basename(msi)}, dist/latest.yml (version ${V})`);
+    log(`  ${built}`);
   }
 
   step(4, 'installer tests (verify/installed.mjs all, on a hidden desktop)');
@@ -485,79 +514,106 @@ async function publishOnly() {
   const files = distFiles(V);
   const problem = distProblem(files, V);
   if (problem) blocker(problem);
-  else log(`  dist/${path.basename(files.exe)}, dist/${path.basename(files.blockmap)}, dist/${path.basename(files.msi)}, dist/latest.yml (version ${V}, hash matches)`);
+  else log(`  dist/${path.basename(files.exe)}, dist/${path.basename(files.blockmap)}, dist/${path.basename(files.msi)}, dist/${path.basename(files.yml)} (version ${V}, hash matches)`);
   const origin = originRefs();
   if (origin.error) blocker(`could not read origin (git ls-remote): ${origin.error}`);
   else if (!origin.tag) blocker(`tag v${V} is not on origin; --publish-only finishes a run that stopped after its push (step 6)`);
   else log(`  tag v${V} is on origin`);
   const notes = releaseNotes(V);
   if (notes) log(`  release notes: ${notes.source}`);
-  else blocker(`no release notes: pass --notes <file> or add a "## ${V}" section to CHANGELOG.md`);
+  else blocker(noNotes());
   checkGh();
   state.pushed = !dryRun;
   await publish(files, notes);
 }
 
-async function publish({ exe, blockmap, msi, latestYml }, notes) {
-  step(7, `publish to the ${TAG} release of ${REPO}: installers, title and notes, then latest.yml`);
+async function publish({ exe, blockmap, msi, yml }, notes) {
+  const beta = isBeta(V);
+  step(7, beta ? `publish the beta to the ${TAG} release of ${REPO}: installers, then beta.yml (latest.yml, title and notes stay)`
+    : `publish to the ${TAG} release of ${REPO}: installers, title and notes, then latest.yml and beta.yml`);
   const before = latestRelease();
   if (before.error) blocker(`gh release list failed: ${before.error}`);
   else if (!before.tag || before.tag === TAG) blocker(`the Latest release is ${before.tag || 'not set'}; it must be one of the other releases (the APK) before publishing`);
   else log(`  Latest release now: ${before.tag} (must stay so)`);
-  const stage = io.mkdtempSync(path.join(tmpdir(), 'pyide-release-'));
-  const stable = path.join(stage, 'PyIDE-Setup.exe');
-  const notesFile = path.join(stage, 'notes.md');
-  if (!dryRun) io.copyFileSync(exe, stable);
-  io.writeFileSync(notesFile, notes?.text || '');
+  // Read before anything is uploaded: which beta beta.yml offers, and which older files go at the end.
+  const listed = releaseAssets();
+  if (!listed) blocker(`could not list the assets of the ${TAG} release`);
+  const assets = listed || [];
+  if (dryRun) log(`  current assets: ${assets.join(', ') || '(unknown)'}`);
   const rel = (f) => path.relative(ROOT, f); // gh runs in the repo root
-  // The blockmap goes up with the exe, before latest.yml: an update to this version reads it first.
-  act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), stable, '-R', REPO, '--clobber']);
-  state.installersUploaded = !dryRun;
-  act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `PyIDE ${V}`, '--notes-file', notesFile, '--latest=false']);
-  if (!dryRun) try { io.rmSync(stage, { recursive: true, force: true }); } catch {} // the uploaded copy and notes are done with
-  if (dryRun) {
-    log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);
-    try { io.rmSync(stage, { recursive: true, force: true }); } catch {}
-    log(`  [dry-run] then gh release list -R ${REPO}: Latest must still be ${before.tag || 'a non-pyide release'}`);
-  } else {
-    const after = latestRelease();
-    if (after.error || !after.tag || after.tag === TAG) {
-      if (before.tag && before.tag !== TAG) act('gh', ['release', 'edit', before.tag, '-R', REPO, '--latest']);
-      fail(`!!! after publishing, gh release list shows Latest = ${after.tag || after.error || 'none'}, not ${before.tag}. `
-        + `The APK links (releases/latest/download/...) depend on it: ${before.tag ? `${before.tag} was set back to Latest; check` : 'set the right release as Latest yourself at'} https://github.com/${REPO}/releases`);
+  const stage = io.mkdtempSync(path.join(tmpdir(), 'pyide-release-'));
+  // The channel files, uploaded last. A stable release points beta.yml at itself too (beta installs get every stable
+  // release), unless the release holds a newer beta for them.
+  const feedFiles = [yml];
+  try {
+    if (!beta) {
+      const ahead = liveBeta(assets);
+      if (ahead && compare(ahead, V) > 0) log(`  beta.yml stays at ${ahead}, which is newer than ${V}`);
+      else {
+        feedFiles.push(path.join(stage, 'beta.yml'));
+        io.writeFileSync(feedFiles[1], io.readFileSync(yml));
+      }
     }
-    log(`  Latest release is still ${after.tag}`);
+    // The blockmap goes up with the exe, before the channel files: an update to this version reads it first.
+    if (beta) {
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), '-R', REPO, '--clobber']);
+      state.installersUploaded = !dryRun;
+      log('  PyIDE-Setup.exe, the title and the notes stay as they are (they belong to the stable version)');
+    } else {
+      const stable = path.join(stage, 'PyIDE-Setup.exe');
+      const notesFile = path.join(stage, 'notes.md');
+      if (!dryRun) io.copyFileSync(exe, stable);
+      io.writeFileSync(notesFile, notes?.text || '');
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), stable, '-R', REPO, '--clobber']);
+      state.installersUploaded = !dryRun;
+      act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `PyIDE ${V}`, '--notes-file', notesFile, '--latest=false']);
+      if (dryRun) log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);
+    }
+    if (dryRun) log(`  [dry-run] then gh release list -R ${REPO}: Latest must still be ${before.tag || 'a non-pyide release'}`);
+    else {
+      const after = latestRelease();
+      if (after.error || !after.tag || after.tag === TAG) {
+        if (before.tag && before.tag !== TAG) act('gh', ['release', 'edit', before.tag, '-R', REPO, '--latest']);
+        fail(`!!! after publishing, gh release list shows Latest = ${after.tag || after.error || 'none'}, not ${before.tag}. `
+          + `The APK links (releases/latest/download/...) depend on it: ${before.tag ? `${before.tag} was set back to Latest; check` : 'set the right release as Latest yourself at'} https://github.com/${REPO}/releases`);
+      }
+      log(`  Latest release is still ${after.tag}`);
+    }
+    // The feed switches here, last: until now installed copies saw the previous version, whose installers are still up.
+    state.feedUploadStarted = !dryRun;
+    act('gh', ['release', 'upload', TAG, ...feedFiles.map((f) => (f.startsWith(stage) ? f : rel(f))), '-R', REPO, '--clobber']);
+    state.live = !dryRun;
+  } finally {
+    try { io.rmSync(stage, { recursive: true, force: true }); } catch {} // the uploaded copies and notes are done with
   }
-  // The feed switches here, last: until now installed copies saw the previous version, whose installers are still up.
-  state.feedUploadStarted = !dryRun;
-  act('gh', ['release', 'upload', TAG, rel(latestYml), '-R', REPO, '--clobber']);
-  state.live = !dryRun;
-  const assets = releaseAssets();
-  if (!assets) blocker(`could not list the assets of the ${TAG} release`);
-  const old = oldAssets(assets || [], V);
-  if (dryRun) log(`  current assets: ${(assets || []).join(', ') || '(unknown)'}`);
-  // Installed copies of the previous version update differentially with its blockmap; older versions download in full.
-  const prev = previousVersion(assets || [], V);
-  const keep = keptBlockmap(prev);
-  if (!prev) log('  no previous version on the release');
-  else if ((assets || []).includes(keep)) log(`  keeping ${keep}: ${prev} updates to ${V} differentially`);
-  else log(`  ${keep} is not on the release: copies of ${prev} download the full installer`);
+  // Installed copies of the previous versions update differentially with their blockmaps; older versions download in full.
+  const kept = keptVersions(assets, V);
+  if (!kept.length) log('  no previous version on the release');
+  for (const prev of kept) {
+    const keep = keptBlockmap(prev);
+    if (assets.includes(keep)) log(`  keeping ${keep}: ${prev} updates to ${V} differentially`);
+    else log(`  ${keep} is not on the release: copies of ${prev} download the full installer`);
+  }
+  const old = oldAssets(assets, V);
   for (const name of old) act('gh', ['release', 'delete-asset', TAG, name, '-R', REPO, '--yes']);
   if (!old.length) log('  no assets of older versions to delete');
 
-  step(8, `check ${FEED}latest.yml`);
-  if (dryRun) {
-    log(`  [dry-run] would read ${FEED}latest.yml (following redirects) until it reports ${V}`);
-    log(`  it reports ${await feedVersion().catch((e) => e.message)} now`);
-  } else {
+  const names = feedFiles.map((f) => path.basename(f));
+  step(8, `check ${names.map((n) => FEED + n).join(' and ')}`);
+  for (const name of names) {
+    if (dryRun) {
+      log(`  [dry-run] would read ${FEED}${name} (following redirects) until it reports ${V}`);
+      log(`  it reports ${await feedVersion(name).catch((e) => e.message)} now`);
+      continue;
+    }
     let seen = '';
     for (let i = 0; i < 18; i++) {
-      seen = await feedVersion().catch((e) => e.message);
+      seen = await feedVersion(name).catch((e) => e.message);
       if (seen === V) break;
       await io.sleep(10000);
     }
-    if (seen !== V) fail(`the feed's latest.yml reports ${seen}, not ${V} (after 3 minutes)`);
-    log(`  latest.yml reports ${seen}`);
+    if (seen !== V) fail(`the feed's ${name} reports ${seen}, not ${V} (after 3 minutes)`);
+    log(`  ${name} reports ${seen}`);
   }
 }
 

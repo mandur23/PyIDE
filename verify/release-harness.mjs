@@ -1,7 +1,8 @@
 // Pure-Node checks of scripts/release.mjs (in CI): io (spawnSync, fs, fetch, sleep, exit) is stubbed with a fake world,
 // so no git, gh, installer, network or file outside it is touched; it only reads package.json, package-lock.json and
-// CHANGELOG.md. Covers failure advice by phase, the order of a release, local-install handling, signals, and the
-// blockmap rules of differential updates. Usage: node verify/release-harness.mjs
+// CHANGELOG.md. Covers failure advice by phase, the order of a release, local-install handling, signals, the
+// blockmap rules of differential updates, and the beta channel (a beta publishes only beta.yml and leaves latest.yml
+// alone; a stable release writes both). Usage: node verify/release-harness.mjs
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import path from 'path';
@@ -11,7 +12,8 @@ import { gzipSync } from 'zlib';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 delete process.env.PYIDE_DIST_DIR; // the fake world's installers are in dist/
 const R = await import(pathToFileURL(path.join(ROOT, 'scripts', 'release.mjs')).href);
-const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets } = R;
+const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets, liveBeta } = R;
+const REPO_ARG = 'mandur23/Portfolio-Nano-';
 
 const V = '0.2.1';
 const PKG = path.join(ROOT, 'package.json');
@@ -40,16 +42,20 @@ let W;
 const ASSETS = ['latest.yml', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup.exe', `PyIDE-Setup-${V}.exe`];
 // A blockmap (gzipped JSON) describing a file of that length.
 const blockmapOf = (length) => gzipSync(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, checksums: ['a', 'b'], sizes: [length - 3, 3] }] }));
-function world({ failAt = null, originMaster = 'abc', tagOnOrigin = false, ahead = true, installed = false, testsPass = true, reinstallOk = true, uninstallFails = false, feed = V, ymlVersion = V, onSleep = null, assets = ASSETS } = {}) {
+const ymlText = (version, exeName, sha) => `version: ${version}\nfiles:\n  - url: ${exeName}\n    sha512: ${sha}\npath: ${exeName}\nsha512: ${sha}\n`;
+// version: what dist holds; a beta has dist/beta.yml instead of latest.yml, and staleLatest adds an old dist/latest.yml.
+function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin = false, ahead = true, installed = false, testsPass = true, reinstallOk = true, uninstallFails = false, feed = version, ymlVersion = version, onSleep = null, assets = ASSETS, staleLatest = null } = {}) {
   const exeBody = 'fake exe bytes';
   const sha = createHash('sha512').update(exeBody).digest('base64');
+  const exe = path.join(DIST, `PyIDE-Setup-${version}.exe`);
   const files = new Map([
     [PKG, pkgText], [LOCK, lockText], [path.join(ROOT, 'CHANGELOG.md'), changelog],
-    [EXE, exeBody], [BLOCKMAP, blockmapOf(exeBody.length)], [path.join(DIST, `PyIDE-${V}.msi`), 'msi'], [PREV, 'prev exe'],
-    [path.join(DIST, 'latest.yml'), `version: ${ymlVersion}\nfiles:\n  - url: PyIDE-Setup-${V}.exe\n    sha512: ${sha}\npath: PyIDE-Setup-${V}.exe\nsha512: ${sha}\n`],
+    [exe, exeBody], [`${exe}.blockmap`, blockmapOf(exeBody.length)], [path.join(DIST, `PyIDE-${version}.msi`), 'msi'], [PREV, 'prev exe'],
+    [path.join(DIST, version.includes('-') ? 'beta.yml' : 'latest.yml'), ymlText(ymlVersion, path.basename(exe), sha)],
   ]);
+  if (staleLatest) files.set(path.join(DIST, 'latest.yml'), ymlText(staleLatest, `PyIDE-Setup-${staleLatest}.exe`, 'old'));
   if (installed) { files.set(UNINST, 'u'); files.set(INSTALLED, 'old'); }
-  W = { files, calls: [], spawns: [], out: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets };
+  W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets };
   return W;
 }
 const line = (cmd, args) => [path.basename(cmd), ...args].join(' ');
@@ -71,7 +77,7 @@ function fakeSpawn(cmd, args, opts) {
   if (l.startsWith('git status')) return res(0, '');
   if (l.startsWith('git rev-parse -q --verify')) return res(1);
   if (l.startsWith('git rev-parse HEAD')) return res(0, 'abc');
-  if (l.startsWith('git ls-remote')) return res(0, `${W.originMaster}\trefs/heads/master\n${W.tagOnOrigin ? `t1\trefs/tags/v${V}\n` : ''}`);
+  if (l.startsWith('git ls-remote')) return res(0, `${W.originMaster}\trefs/heads/master\n${W.tagOnOrigin ? `t1\trefs/tags/v${W.version}\n` : ''}`);
   if (l.startsWith('git merge-base')) return res(W.ahead ? 0 : 1);
   if (l.startsWith('git rev-list --count')) return res(0, '2');
   if (l.startsWith('gh release list')) return res(0, 'v1.4.3');
@@ -88,13 +94,15 @@ Object.assign(io, {
   copyFileSync: (a, b) => { W.files.set(b, W.files.get(a)); },
   mkdtempSync: (p) => `${p}STAGE`,
   rmSync: () => {},
-  fetch: async () => ({ ok: true, text: async () => `version: ${W.feed}\n` }),
+  fetch: async (url) => { W.fetched.push(String(url)); return { ok: true, text: async () => `version: ${W.feed}\n` }; },
   sleep: async () => { if (W.onSleep) { const f = W.onSleep; W.onSleep = null; f(); return new Promise(() => {}); } },
   log: (s) => W.out.push(String(s)),
   error: (s) => W.out.push(String(s)),
   exit: (c) => { W.exitCode = c; },
 });
 const text = () => W.out.join('\n');
+// The feed switch of a stable release: dist/latest.yml (with the staged beta.yml) in one upload.
+const FEED_UP = `upload pyide dist${path.sep}latest.yml`;
 const idx = (s) => W.calls.findIndex((c) => c.includes(s));
 const has = (s) => idx(s) >= 0;
 const pkgVersion = () => /"version": "([^"]+)"/.exec(W.files.get(PKG))[1];
@@ -156,9 +164,9 @@ ok(code === 1 && !has('gh release upload') && /git tag -d v0.2.1/.test(text()) &
 
 world({ failAt: 'release upload pyide dist' + path.sep + 'PyIDE-Setup' });
 code = await run([V, '--skip-tests']);
-ok(code === 1 && !has('latest.yml -R') && /--publish-only/.test(text()) && !/reset --hard|tag -d/.test(text()), 'installer upload fails after push: --publish-only, no reset');
+ok(code === 1 && !has(FEED_UP) && /--publish-only/.test(text()) && !/reset --hard|tag -d/.test(text()), 'installer upload fails after push: --publish-only, no reset');
 
-world({ failAt: 'latest.yml -R' });
+world({ failAt: FEED_UP });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && /did not finish/.test(text()) && !/reset --hard/.test(text()), 'latest.yml upload fails: check feed, no reset');
 
@@ -173,7 +181,7 @@ ok(code === 1 && /after 3 minutes/.test(text()) && /IS LIVE/.test(text()), 'feed
 // --publish-only
 world({ tagOnOrigin: true });
 code = await run([V, '--publish-only']);
-ok(code === 0 && !has(' commit ') && !has('git push') && !has('npm run dist') && idx('release upload pyide dist' + path.sep + 'PyIDE') < idx('latest.yml -R'), 'publish-only: no commit/push/build, installers then latest.yml');
+ok(code === 0 && !has(' commit ') && !has('git push') && !has('npm run dist') && idx('release upload pyide dist' + path.sep + 'PyIDE') < idx(FEED_UP), 'publish-only: no commit/push/build, installers then latest.yml');
 world({ tagOnOrigin: false });
 code = await run([V, '--publish-only']);
 ok(code === 1 && /is not on origin/.test(text()) && !has('gh release upload'), 'publish-only without the tag on origin: stops before uploading');
@@ -216,11 +224,11 @@ world();
 code = await run([V, '--skip-tests']);
 const upload = W.calls.find((c) => c.startsWith('gh release upload pyide dist'));
 ok(code === 0 && upload.includes(`PyIDE-Setup-${V}.exe.blockmap`) && upload.includes(`PyIDE-Setup-${V}.exe `), 'the exe\'s blockmap is uploaded together with the installers');
-ok(idx(`PyIDE-Setup-${V}.exe.blockmap`) < idx('latest.yml -R'), 'the blockmap is up before latest.yml (which still goes last)');
+ok(idx(`PyIDE-Setup-${V}.exe.blockmap`) < idx(FEED_UP), 'the blockmap is up before latest.yml (which still goes last)');
 ok(deletes().sort().join() === ['PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup-0.2.0.exe'].join(), `previous version's installers and older blockmaps deleted (${deletes().join(', ')})`);
 ok(!deletes().some((n) => ['PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-Setup.exe', 'latest.yml'].includes(n) || n.includes(V)), 'kept: the previous version\'s blockmap, PyIDE-Setup.exe, latest.yml and this version\'s files');
 ok(/keeping PyIDE-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates to 0\.2\.1 differentially/.test(text()), 'the run says which blockmap it keeps and why');
-ok(idx('delete-asset') > idx('latest.yml -R'), 'deletes come after the feed switch');
+ok(idx('delete-asset') > idx(FEED_UP), 'deletes come after the feed switch');
 
 world({ assets: ['latest.yml', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-0.2.0.msi', 'PyIDE-Setup.exe'] });
 code = await run([V, '--skip-tests']);
@@ -298,6 +306,96 @@ process.emit('SIGINT');
 process.emit('SIGINT');
 re = W.spawns.filter((s) => s.cmd === PREV || s.cmd === EXE);
 ok(W.exitCode === 130 && re.length === 1 && /!!! PyIDE IS NOT INSTALLED ANY MORE/.test(text()) && text().includes(PREV), 'SIGINT, reinstall fails: loud message, non-zero, second signal ignored');
+
+// ---------- F. beta channel ----------
+console.log('-- F. beta channel');
+const B1 = `${V}-beta.1`;
+const B2 = `${V}-beta.2`;
+const sep = path.sep;
+const uploads = () => W.calls.filter((c) => c.startsWith('gh release upload'));
+const betaYmlUp = `upload pyide dist${sep}beta.yml -R`;
+// A stable 0.2.0 is live; the previous cycle left a beta blockmap; 0.2.1-beta.1 is the beta.yml version.
+const BETA_ASSETS = ['latest.yml', 'beta.yml', 'PyIDE-Setup.exe', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap',
+  'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', `PyIDE-Setup-${B1}.exe`, `PyIDE-Setup-${B1}.exe.blockmap`, `PyIDE-${B1}.msi`];
+
+world({ version: B1, staleLatest: '0.2.0', assets: BETA_ASSETS.filter((n) => !n.includes(B1)) });
+code = await run([B1, '--skip-tests']);
+ok(code === 0 && pkgVersion() === B1 && has(`commit -m Release ${B1}`) && has(`tag -a v${B1}`) && has(`push --atomic origin master refs/tags/v${B1}`), `beta ${B1}: version set, committed, tagged and pushed like a release`);
+ok(/release notes: CHANGELOG\.md, ## 0\.2\.1 \(a beta/.test(text()), 'beta without its own CHANGELOG section: the section of the release it previews (## 0.2.1)');
+let ups = uploads();
+ok(ups.length === 2 && ups[0] === `gh release upload pyide dist${sep}PyIDE-Setup-${B1}.exe dist${sep}PyIDE-Setup-${B1}.exe.blockmap dist${sep}PyIDE-${B1}.msi -R ${REPO_ARG} --clobber`, `beta: installers and blockmap first, without PyIDE-Setup.exe (${ups[0]})`);
+ok(ups[1].includes(betaYmlUp) && idx(betaYmlUp) > idx(`PyIDE-Setup-${B1}.exe.blockmap`), 'beta: beta.yml uploaded last, after the blockmap');
+ok(!W.calls.some((c) => /latest\.yml/.test(c)), 'beta: latest.yml is neither uploaded nor touched (dist holds a stale one of 0.2.0)');
+ok(!has('release edit pyide') && !has('--latest'), 'beta: the release title, notes and Latest flag are not edited');
+ok(!deletes().length && /keeping PyIDE-Setup-0\.2\.0-beta\.3\.exe\.blockmap: 0\.2\.0-beta\.3 updates to 0\.2\.1-beta\.1 differentially/.test(text()), `beta: stable versions' files untouched, the previous beta's blockmap kept (deleted: ${deletes().join(', ') || 'none'})`);
+ok(W.fetched.length === 1 && W.fetched[0].endsWith('/beta.yml') && /beta\.yml reports 0\.2\.1-beta\.1/.test(text()), `beta: step 8 reads beta.yml back (${W.fetched.join(', ')})`);
+
+world({ version: B2, assets: BETA_ASSETS });
+code = await run([B2, '--skip-tests']);
+ok(code === 0 && deletes().sort().join() === ['PyIDE-0.2.1-beta.1.msi', 'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', 'PyIDE-Setup-0.2.1-beta.1.exe'].join(), `second beta: the previous beta's installers go, its blockmap stays (${deletes().join(', ')})`);
+ok(/keeping PyIDE-Setup-0\.2\.1-beta\.1\.exe\.blockmap: 0\.2\.1-beta\.1 updates to 0\.2\.1-beta\.2 differentially/.test(text()), 'second beta: says it keeps the previous beta\'s blockmap');
+
+// Promotion: the stable release after the betas.
+world({ assets: [...BETA_ASSETS, `PyIDE-Setup-${B2}.exe`, `PyIDE-Setup-${B2}.exe.blockmap`, `PyIDE-${B2}.msi`].filter((n) => !n.includes(B1) || n.endsWith('.blockmap')) });
+code = await run([V, '--skip-tests']);
+ups = uploads();
+let feedUp = ups.find((c) => c.includes(FEED_UP));
+const stagedBeta = feedUp?.split(' ').find((a) => a.endsWith(`${sep}beta.yml`));
+ok(code === 0 && ups.length === 2 && ups[0].includes(`PyIDE-Setup-${V}.exe `) && ups[0].includes('PyIDE-Setup.exe -R'), 'stable after betas: installers and PyIDE-Setup.exe first');
+ok(feedUp && stagedBeta && idx(FEED_UP) > idx('release edit pyide') && feedUp.indexOf('latest.yml') < feedUp.indexOf('beta.yml'), `stable: latest.yml and beta.yml uploaded together, last (${feedUp})`);
+ok(stagedBeta && W.files.get(stagedBeta) === W.files.get(path.join(DIST, 'latest.yml')), 'stable: the uploaded beta.yml is a copy of dist/latest.yml, so beta installs get the release');
+ok(deletes().sort().join() === ['PyIDE-0.2.0.msi', 'PyIDE-0.2.1-beta.2.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.1-beta.1.exe.blockmap', 'PyIDE-Setup-0.2.1-beta.2.exe'].join(),
+  `stable: older versions and betas deleted except the previous stable's and the previous beta's blockmaps (${deletes().join(', ')})`);
+ok(/keeping PyIDE-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates/.test(text()) && /keeping PyIDE-Setup-0\.2\.1-beta\.2\.exe\.blockmap: 0\.2\.1-beta\.2 updates to 0\.2\.1/.test(text()), 'stable: says which two blockmaps it keeps');
+ok(W.fetched.map((u) => u.split('/').pop()).join() === 'latest.yml,beta.yml', `stable: step 8 reads latest.yml and beta.yml back (${W.fetched.join(', ')})`);
+
+// A stable fix while a newer beta is out: beta.yml keeps the beta, whose files stay.
+world({ assets: [...ASSETS, 'beta.yml', 'PyIDE-Setup-0.3.0-beta.1.exe', 'PyIDE-Setup-0.3.0-beta.1.exe.blockmap', 'PyIDE-0.3.0-beta.1.msi'] });
+code = await run([V, '--skip-tests']);
+feedUp = uploads().find((c) => c.includes(FEED_UP));
+ok(code === 0 && feedUp && !feedUp.includes('beta.yml') && /beta\.yml stays at 0\.3\.0-beta\.1, which is newer than 0\.2\.1/.test(text()), 'stable with a newer beta out: only latest.yml uploaded, beta.yml stays');
+ok(!deletes().some((n) => n.includes('0.3.0')), 'stable with a newer beta out: the beta\'s files are not deleted');
+
+// Advice, versions, notes and dist checks.
+world({ version: B1, failAt: betaYmlUp, assets: BETA_ASSETS });
+code = await run([B1, '--skip-tests']);
+ok(code === 1 && /The beta\.yml upload did not finish: if .*beta\.yml already names 0\.2\.1-beta\.1/.test(text()) && !/reset --hard/.test(text()), 'beta.yml upload fails: advice names beta.yml');
+world({ version: B2, failAt: 'delete-asset', assets: BETA_ASSETS });
+code = await run([B2, '--skip-tests']);
+ok(code === 1 && /IS LIVE: the feed's beta\.yml names 0\.2\.1-beta\.2 and beta installs will update to it/.test(text()), 'beta live: advice says beta installs get it');
+for (const bad of [`${V}-rc.1`, `${V}-beta`, `${V}+7`, `${V}-beta.01`]) {
+  world({ version: bad });
+  code = await run([bad, '--skip-tests']);
+  ok(code === 1 && /is not x\.y\.z \(a release\) or x\.y\.z-beta\.N/.test(text()) && !has('npm run dist'), `${bad}: refused before anything runs`);
+}
+world({ version: '0.2.0-beta.4' });
+code = await run(['0.2.0-beta.4', '--skip-tests']);
+ok(code === 1 && /0\.2\.0-beta\.4 is not greater than package\.json's 0\.2\.0/.test(text()), 'a beta below package.json\'s release (0.2.0-beta.4 < 0.2.0): refused');
+world({ version: B1 });
+W.files.set(path.join(ROOT, 'CHANGELOG.md'), `# x\n\n## ${B1}\n\n- beta notes\n\n## 0.2.0\n\n- old\n`);
+code = await run([B1, '--skip-tests']);
+ok(code === 0 && new RegExp(`release notes: CHANGELOG\\.md, ## ${B1.replace(/\./g, '\\.')} `).test(text()), 'beta with its own CHANGELOG section: that section');
+world({ version: B1 });
+W.files.set(path.join(ROOT, 'CHANGELOG.md'), '# x\n\n## 0.2.0\n\n- old\n');
+code = await run([B1, '--skip-tests']);
+ok(code === 1 && /add a "## 0\.2\.1-beta\.1" section \(or "## 0\.2\.1", the release it previews\)/.test(text()), 'beta without any section: stops, naming both headings');
+world({ version: B1, tagOnOrigin: true, ymlVersion: '0.2.0-beta.3' });
+code = await run([B1, '--publish-only']);
+ok(code === 1 && /dist\/beta\.yml says version 0\.2\.0-beta\.3/.test(text()) && !has('gh release upload'), 'beta publish-only checks dist/beta.yml');
+world({ version: B1, tagOnOrigin: true, assets: BETA_ASSETS });
+code = await run([B1, '--publish-only']);
+ok(code === 0 && uploads().at(-1).includes(betaYmlUp) && !W.calls.some((c) => /latest\.yml/.test(c)), 'beta publish-only: installers then beta.yml, latest.yml untouched');
+world({ version: B1, staleLatest: '0.2.0', assets: BETA_ASSETS });
+const ymlBefore = W.files.get(path.join(DIST, 'beta.yml'));
+const latestBefore = W.files.get(path.join(DIST, 'latest.yml'));
+code = await run([B1, '--dry-run', '--skip-tests']);
+const dryBeta = text();
+ok(code === 0 && dryBeta.includes(`[dry-run] gh release upload pyide dist${sep}beta.yml -R`) && !dryBeta.includes(`dist${sep}latest.yml`) && !W.calls.some((c) => /^gh release (upload|edit|delete-asset)|^git (commit|tag|push)/.test(c)), 'beta dry run: prints the beta.yml upload, runs nothing');
+ok(/dist\/beta\.yml put back/.test(dryBeta) && W.files.get(path.join(DIST, 'beta.yml')) === ymlBefore && W.files.get(path.join(DIST, 'latest.yml')) === latestBefore && pkgVersion() === '0.2.0', 'beta dry run: dist/beta.yml and the version put back, dist/latest.yml untouched');
+
+ok(previousVersion(['PyIDE-Setup-0.2.5-beta.9.exe.blockmap', 'PyIDE-Setup-0.2.5-beta.10.exe', 'PyIDE-Setup-0.2.4.exe'], '0.2.5', true) === '0.2.5-beta.10', 'previous beta: numeric prerelease order (beta.10 > beta.9)');
+ok(previousVersion(['PyIDE-Setup-0.2.5-beta.1.exe', 'PyIDE-Setup-0.2.4.exe'], '0.2.5') === '0.2.4', 'previous stable: betas are not stable versions');
+ok(liveBeta(['PyIDE-Setup-0.3.0-beta.1.exe.blockmap', 'PyIDE-Setup-0.2.9-beta.2.exe']) === '0.2.9-beta.2', 'the beta beta.yml offers: the newest beta with its installer on the release');
 
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

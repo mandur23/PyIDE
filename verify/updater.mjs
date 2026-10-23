@@ -1,23 +1,54 @@
 // Updates from source: Help > Check for Updates… with no feed, a local folder feed with a newer version, the same
 // version, and a feed that cannot be read; the Settings > Updates page; a skipped version; the status bar text of a
-// differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); and the Korean strings.
+// differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); the Stable and Beta channels
+// (port 9070) and the version order and What's New sections of betas (pure Node); and the Korean strings.
 // The differential download itself is verify/update-delta.mjs.
 // The real download and restart of an installed build is verify/update-e2e.mjs.
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
-function feedFolder(version) {
+const channelFile = (version) => {
+  const sha = 'A'.repeat(86) + '==';
+  return `version: ${version}\nfiles:\n  - url: PyIDE-Setup-${version}.exe\n    sha512: ${sha}\n    size: 1\npath: PyIDE-Setup-${version}.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`;
+};
+// latest.yml naming `version`, and beta.yml naming `beta` when given.
+function feedFolder(version, beta = null) {
   const dir = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-feed-')), 'feed');
   mkdirSync(dir);
-  const sha = 'A'.repeat(86) + '==';
-  writeFileSync(path.join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: PyIDE-Setup-${version}.exe\n    sha512: ${sha}\n    size: 1\npath: PyIDE-Setup-${version}.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`);
+  writeFileSync(path.join(dir, 'latest.yml'), channelFile(version));
+  if (beta) writeFileSync(path.join(dir, 'beta.yml'), channelFile(beta));
   return dir;
 }
 
 const S = JSON.stringify;
+
+// ---------- versions and What's New sections of betas (pure Node) ----------
+const pure = [];
+const pureCheck = (ok, label) => { pure.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
+{
+  const U = createRequire(import.meta.url)('../main/features/updater.js');
+  const order = ['0.2.5', '0.2.5-beta.10', '0.2.4', '0.2.5-beta.2', '0.2.6', '0.2.5-beta.1', '0.10.0'].sort(U.compareVersions);
+  pureCheck(S(order) === S(['0.2.4', '0.2.5-beta.1', '0.2.5-beta.2', '0.2.5-beta.10', '0.2.5', '0.2.6', '0.10.0']), `versions order as semver: ${order.join(' < ')}`);
+  const file = path.join(tempDir('changelog-beta'), 'CHANGELOG.md');
+  writeFileSync(file, '# 변경 내역\n\n## 0.2.6\n\n- six\n\n## 0.2.5\n\n- five\n\n## 0.2.5-beta.2\n\n- beta two\n\n## 0.2.5-beta.1\n\n- beta one\n\n## 0.2.4\n\n- four\n');
+  const all = U.readChangelog(file);
+  const releases = all.filter((s) => !s.version.includes('-'));
+  const vs = (list) => list.map((s) => s.version).join(' ');
+  pureCheck(vs(all) === '0.2.6 0.2.5 0.2.5-beta.2 0.2.5-beta.1 0.2.4', `"## 0.2.5-beta.1" headings are sections (${vs(all)})`);
+  pureCheck(vs(U.sectionsUpTo(all, '0.2.5-beta.1')) === '0.2.5 0.2.5-beta.1 0.2.4', "Help > What's New in 0.2.5-beta.1: the release it previews (## 0.2.5), betas up to it, older releases");
+  pureCheck(vs(U.sectionsUpTo(all, '0.2.5')) === '0.2.5 0.2.4', "Help > What's New in 0.2.5 leaves the beta sections out");
+  pureCheck(vs(U.notesAfterUpdate(releases, '0.2.5-beta.1', '0.2.4')) === '0.2.5', 'after 0.2.4 -> 0.2.5-beta.1 with only "## 0.2.5" written: the 0.2.5 notes');
+  pureCheck(vs(U.notesAfterUpdate(all, '0.2.5-beta.1', '0.2.4')) === '0.2.5 0.2.5-beta.1', 'after 0.2.4 -> 0.2.5-beta.1: ## 0.2.5 and ## 0.2.5-beta.1');
+  pureCheck(vs(U.notesAfterUpdate(all, '0.2.5-beta.2', '0.2.5-beta.1')) === '0.2.5 0.2.5-beta.2', 'after beta.1 -> beta.2: ## 0.2.5 again and ## 0.2.5-beta.2');
+  pureCheck(vs(U.notesAfterUpdate(all, '0.2.5', '0.2.5-beta.2')) === '0.2.5', 'after beta.2 -> 0.2.5 (promoted): the final 0.2.5 notes');
+  pureCheck(vs(U.notesAfterUpdate(all, '0.2.5', '0.2.4')) === '0.2.5', 'after 0.2.4 -> 0.2.5 on Stable: no beta sections');
+  pureCheck(vs(U.notesAfterUpdate(all, '0.2.5-beta.1', null)) === '0.2.5 0.2.5-beta.1', 'after an update to a beta from a version that recorded none: this beta and its release');
+  pureCheck(!U.notesAfterUpdate(all, '0.2.4', '0.2.5-beta.1').length && !U.notesAfterUpdate(all, '0.2.5-beta.1', '0.2.5-beta.1').length, 'an older or the same version than the one that ran: nothing');
+}
 const dialogText = (t) => t.js(`[...document.querySelectorAll('.dialog')].pop()?.textContent || ''`);
 const dialogButtons = (t) => t.js(`[...[...document.querySelectorAll('.dialog')].pop()?.querySelectorAll('.dialog-buttons button') || []].map(b => b.textContent)`);
 const pressButton = (t, label) => t.js(`([...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].find(b => b.textContent === ${S(label)}).click(), true)`);
@@ -96,6 +127,60 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
   var errorsEn = t.consoleErrors;
 }
 
+// ---------- update channels ----------
+{
+  const t = await launch({ fixture: 'core', port: 9070, name: 'updater-channel' });
+  const { js, until, check } = t;
+  // What a manual check reports: the offered version, 'latest', or the dialog text.
+  const offered = async (what) => {
+    await js(`(ide.runAction('CheckForUpdates'), true)`);
+    await until(`/is available|latest version|Could not/.test([...document.querySelectorAll('.dialog')].pop()?.textContent || '')`, what);
+    const text = await dialogText(t);
+    await pressButton(t, 'Close');
+    await until(`!document.querySelector('.dialog')`, `${what}: dialog closed`);
+    return /PyIDE (\S+) is available/.exec(text)?.[1] || (text.includes('is the latest version') ? 'latest' : text);
+  };
+  const setFeed = (dir) => js(`(ide.settings.set('updates.feedUrl', ${S(dir)}), true)`);
+  try {
+    await js(`(ide.settings.set('updates.checkOnStartup', false), ide.openSettings('updates'), true)`);
+    await until(`!!document.querySelector('.settings-dialog [data-key="updates.channel"]')`, 'channel setting');
+    check(await js(`document.querySelector('[data-key="updates.channel"]').value`) === 'stable', 'Settings > Updates: the channel is Stable by default');
+    check(await js(`[...document.querySelector('[data-key="updates.channel"]').options].map((o) => o.textContent).join()`) === 'Stable,Beta', 'the channel choices are Stable and Beta');
+    check((await js(`document.querySelector('[data-key="updates.channel"]').closest('.field').textContent`)).includes('Switching back to Stable does not reinstall an older version'), 'the page says switching back to Stable does not downgrade');
+    await t.shot('updater-channel-en.png');
+    await js(`(document.getElementById('settingsCancel').click(), true)`);
+
+    const both = feedFolder('0.3.0', '9.9.9-beta.1');
+    await setFeed(both);
+    check(await offered('Stable check') === '0.3.0', 'a Stable install sees 0.3.0 from latest.yml, not 9.9.9-beta.1 from beta.yml');
+    await js(`(ide.settings.set('updates.channel', 'beta'), true)`);
+    check(await offered('Beta check') === '9.9.9-beta.1', 'a Beta install sees 9.9.9-beta.1 from beta.yml');
+    await setFeed(feedFolder('0.3.0', '0.3.0'));
+    check(await offered('Beta, stable release') === '0.3.0', 'a Beta install sees a newer stable release (beta.yml names 0.3.0, as a stable release writes it)');
+    await setFeed(feedFolder('0.3.0'));
+    check(await offered('Beta, no beta.yml') === '0.3.0', 'a Beta install reads latest.yml when the feed has no beta.yml');
+    await setFeed(feedFolder('0.0.1', '0.0.1-beta.1'));
+    check(await offered('Beta, older beta') === 'latest', 'Beta: an older version in beta.yml is not offered (no downgrade)');
+    await js(`(ide.settings.set('updates.channel', 'stable'), true)`);
+    check(await offered('back to Stable') === 'latest', 'back on Stable after Beta: an older latest.yml is not offered (no downgrade)');
+
+    await setFeed(both);
+    await js(`(ide.openSettings('updates'), true)`);
+    await until(`!!document.querySelector('.settings-dialog [data-key="updates.channel"]')`, 'channel setting again');
+    await js(`(() => { const s = document.querySelector('[data-key="updates.channel"]'); s.value = 'beta'; s.dispatchEvent(new Event('change')); document.getElementById('updatesCheckNow').click(); return true; })()`);
+    await until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('9.9.9-beta.1')`, 'Check Now on Beta');
+    check(true, 'Check Now uses the channel chosen on the page before OK');
+    await pressButton(t, 'Close');
+    await js(`(document.getElementById('settingsOk').click(), true)`);
+    check(await js(`ide.settings.get('updates.channel')`) === 'beta', 'the channel setting is saved with OK');
+  } catch (err) {
+    check(false, err.message);
+  }
+  t.close();
+  var resultsChannel = t.results;
+  var errorsChannel = t.consoleErrors;
+}
+
 // ---------- what's new ----------
 // A CHANGELOG with this version, two older ones and a future one; user data whose updater.json says which version ran.
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -169,17 +254,20 @@ try {
   await k.until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Korean settings page');
   const pageLeaks = await englishLeaks(k, '.settings-page');
   k.check(!pageLeaks.length, `no English on the Korean Updates page${pageLeaks.length ? `: ${S(pageLeaks)}` : ''}`);
+  const channelRow = await k.js(`(() => { const s = document.querySelector('[data-key="updates.channel"]'); return { options: [...s.options].map((o) => o.textContent), text: s.closest('.field').textContent }; })()`);
+  k.check(S(channelRow.options) === S(['안정 릴리스', '베타 릴리스']) && channelRow.text.includes('업데이트 채널:') && channelRow.text.includes('이전 버전을 다시 설치하지 않으며'), `the channel row is in Korean (${S(channelRow)})`);
+  await k.shot('updater-channel-ko.png');
   await k.js(`(ide.runAction('WhatsNew'), true)`);
   await k.until(`!!document.querySelector('.upd-notes')`, 'Korean What\x27s New');
   k.check((await notesShown(k)).title === `PyIDE ${version}의 새로운 기능`, `Help > What\x27s New is titled in Korean (${(await notesShown(k)).title})`);
   await k.shot('whatsnew-ko.png');
   await pressButton(k, '닫기');
-  const missing = (await missingTranslations(k)).filter((s) => /What\x27s New|release notes|update|PyIDE \{version\}|feed|Skip This|Restart to|installer|Installed with|This Installation|Check Now/i.test(s));
+  const missing = (await missingTranslations(k)).filter((s) => /What\x27s New|release notes|update|PyIDE \{version\}|feed|Skip This|Restart to|installer|Installed with|This Installation|Check Now|channel|^Stable$|^Beta/i.test(s));
   k.check(!missing.length, `every updater string has a Korean entry${missing.length ? `: ${S(missing)}` : ''}`);
   await k.shot('updater-ko.png');
 } catch (err) {
   k.check(false, err.message);
 }
-k.results.unshift(...resultsEn, ...resultsNew);
-k.consoleErrors.unshift(...errorsEn, ...errorsNew);
+k.results.unshift(...pure, ...resultsEn, ...resultsChannel, ...resultsNew);
+k.consoleErrors.unshift(...errorsEn, ...errorsChannel, ...errorsNew);
 k.finish();

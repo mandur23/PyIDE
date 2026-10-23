@@ -1,7 +1,7 @@
 // Electron main process for verify/update-delta.mjs: registers main/features/updater.js with a fake ipcMain, checks the
 // feed and downloads the update exactly as an NSIS install would (PYIDE_UPDATE_TEST_KIND=nsis), with the real
 // electron-updater and Electron's net module, then writes what happened to a JSON file and quits. Nothing is installed.
-// PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, userData, out}. LOCALAPPDATA points at a temp folder,
+// PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, channel, userData, out}. LOCALAPPDATA points at a temp folder,
 // so electron-updater's cache (<LOCALAPPDATA>\pyide-updater) is the test's own.
 const { app } = require('electron');
 const fs = require('fs');
@@ -54,7 +54,7 @@ app.whenReady().then(async () => {
   const result = { kind: null, check: null, download: null, error: null, states, logs, file: null };
   try {
     result.kind = (await handlers['updater:state']()).kind;
-    result.check = await handlers['updater:check'](null, feed);
+    result.check = await handlers['updater:check'](null, feed, { channel: cfg.channel });
     const started = Date.now();
     await handlers['updater:download'](null, cfg.differential == null ? undefined : { differential: cfg.differential });
     result.ms = Date.now() - started;

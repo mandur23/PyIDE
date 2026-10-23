@@ -703,7 +703,8 @@ try {
     await press('Enter');
     await type('Rect(3, 4).area');
     await press('Enter');
-    await until(`document.querySelector('#pyconsoleOut').textContent.includes('>>> Rect(3, 4).area\\n12')`, 'console result', 30000);
+    await until(`document.querySelector('#pyconsoleOut').textContent.includes('>>> Rect(3, 4).area\\n12')`, 'console result', 30000)
+      .catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify((await js(`document.querySelector('#pyconsoleOut').textContent`)).slice(-600))}`); });
     check(true, 'the Python Console imports the project package and evaluates');
     await press('Alt+8');
   });

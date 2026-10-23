@@ -1,0 +1,11 @@
+{
+  "id": "recovery",
+  "name": "Crash Recovery",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Backs up unsaved changes a moment after each edit and offers to restore them when PyIDE starts again after it closed unexpectedly.",
+  "main": [
+    "recovery.js"
+  ],
+  "detached": true
+}

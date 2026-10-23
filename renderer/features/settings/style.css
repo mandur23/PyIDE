@@ -131,6 +131,17 @@
 .plugin-path { word-break: break-all; }
 .plugins-empty { padding: 16px; }
 .plugins-status { min-height: 18px; }
+.plugin-badge.new { background: var(--blue2); color: var(--gray12); }
+.plugins-online { margin: 4px 12px 6px; padding: 6px 8px; border-radius: 5px; background: var(--gray2); font-size: 12px; }
+.plugins-online.error { color: var(--gray11); }
+.plugins-online-error { margin: 2px 0 6px; color: var(--red); word-break: break-word; }
+.plugins-online button { padding: 2px 10px; font-size: 12px; }
+.plugin-source .plugin-path { font-family: var(--mono); }
+.plugin-trust-row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; margin: 3px 0; }
+.plugin-trust-value { word-break: break-all; }
+.plugin-trust-warning { margin: 12px 0 0; padding: 8px 10px; border-radius: 5px; line-height: 1.5; background: #5e4d33; color: #f5d273; }
+:root[data-theme="light"] .plugin-trust-warning { background: #fdf3d1; color: #8a5f00; }
+.plugin-repo .input { width: 100%; box-sizing: border-box; margin: 6px 0; }
 
 .interp-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .interp-row > span, .interp-row > button { flex-shrink: 0; }

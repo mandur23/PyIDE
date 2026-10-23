@@ -11,8 +11,10 @@
     try { return JSON.stringify(v); } catch { return String(v); }
   };
   const report = (payload) => send('diagnostics:report', { window: windowKind, ...payload });
-  // Monaco cancels in-flight provider requests and leaves the rejection unhandled; these are not errors.
-  const isCanceled = (r) => r?.name === 'Canceled' && r?.message === 'Canceled';
+  // Monaco cancels in-flight provider requests and leaves the rejection unhandled; these are not errors. Nor is a diff
+  // editor's diff whose models were disposed while the worker computed it (Monaco 0.57 reports that as "no diff result
+  // available" once the diff view is already gone).
+  const isCanceled = (r) => (r?.name === 'Canceled' && r?.message === 'Canceled') || (r instanceof Error && r.message.startsWith('no diff result available'));
   // ResizeObserver's loop notice is not an exception: the browser reports it when some size notifications wait for the
   // next frame, and nothing is lost. It goes to the log once per window instead of the internal errors list.
   const RO_NOTICE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
@@ -27,7 +29,7 @@
       return;
     }
     const err = e.error;
-    if (isCanceled(err)) return;
+    if (isCanceled(err)) return void e.preventDefault();
     if (!err && RO_NOTICE.test(e.message || '')) {
       if (!roNoticeLogged) send('diagnostics:log', { level: 'WARN', category: `#renderer.${windowKind}`, message: `${e.message} (logged once per window)` });
       roNoticeLogged = true;
@@ -38,7 +40,7 @@
   }, true);
 
   addEventListener('unhandledrejection', (e) => {
-    if (isCanceled(e.reason)) return;
+    if (isCanceled(e.reason)) return void e.preventDefault();
     const r = e.reason;
     const message = r instanceof Error || r?.message ? `${r.name || 'Error'}: ${r.message}` : `Unhandled promise rejection: ${text(r)}`;
     report({ kind: 'rejection', message, stack: r?.stack || message });
@@ -56,7 +58,7 @@
       const err = args.find((a) => a instanceof Error);
       if (level === 'ERROR' && err && !isCanceled(err)) {
         report({ kind: 'logged', message: args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : text(a))).join(' '), stack: err.stack });
-      } else send('diagnostics:log', { level, category: `#renderer.${windowKind}`, message: args.map(text).join(' ') });
+      } else send('diagnostics:log', { level: err && isCanceled(err) ? 'DEBUG' : level, category: `#renderer.${windowKind}`, message: args.map(text).join(' ') });
     };
   }
 

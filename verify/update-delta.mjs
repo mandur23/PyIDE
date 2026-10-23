@@ -9,7 +9,7 @@
 // installer and downloads it through electron-updater. The test then compares the downloaded file with the new installer
 // byte for byte and looks at what the feed server sent. Cases: delta over http and from a folder feed; a stale cached
 // current.blockmap; fallbacks to the full installer with no old blockmap on the feed, no cached installer and a corrupt
-// cached installer; PYIDE_UPDATE_DIFFERENTIAL=0 and the setting turned off.
+// cached installer; PYIDE_UPDATE_DIFFERENTIAL=0 and the setting turned off; a delta to a beta (beta.yml, Beta channel).
 import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import fs from 'fs';
@@ -94,7 +94,9 @@ function sameFile(a, b) {
 const link = (from, to) => { try { fs.linkSync(from, to); } catch { fs.copyFileSync(from, to); } };
 
 // ---------- one case: a fresh Electron process ----------
-async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInstaller = 'old', cachedBlockmap = null, differential = undefined, env = {} } = {}) {
+// beta: the new installer is offered as <new>-beta.1 in beta.yml only (the same bytes under a beta's file names, so the
+// old blockmap's URL is derived from a prerelease version), and the case checks on the Beta channel.
+async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInstaller = 'old', cachedBlockmap = null, differential = undefined, env = {}, beta = false } = {}) {
   console.log(`\n-- ${name}`);
   const dir = mkTemp('pyide-delta-case-');
   const feedDir = path.join(dir, 'feed');
@@ -102,9 +104,12 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
   const cache = path.join(local, 'pyide-updater');
   const appDir = path.join(dir, 'app');
   for (const d of [feedDir, cache, appDir]) fs.mkdirSync(d, { recursive: true });
-  link(NEW.exe, path.join(feedDir, path.basename(NEW.exe)));
-  fs.copyFileSync(NEW.blockmap, path.join(feedDir, path.basename(NEW.blockmap)));
-  fs.copyFileSync(NEW.latestYml, path.join(feedDir, 'latest.yml'));
+  const offered = beta ? `${NEW.version}-beta.1` : NEW.version;
+  const exeName = `PyIDE-Setup-${offered}.exe`;
+  link(NEW.exe, path.join(feedDir, exeName));
+  fs.copyFileSync(NEW.blockmap, path.join(feedDir, `${exeName}.blockmap`));
+  fs.copyFileSync(beta ? OLD.latestYml : NEW.latestYml, path.join(feedDir, 'latest.yml'));
+  if (beta) fs.writeFileSync(path.join(feedDir, 'beta.yml'), fs.readFileSync(NEW.latestYml, 'utf8').replaceAll(path.basename(NEW.exe), exeName).replace(/^version: .*$/m, `version: ${offered}`));
   if (oldBlockmapOnFeed) fs.copyFileSync(OLD.blockmap, path.join(feedDir, path.basename(OLD.blockmap)));
   const installer = path.join(cache, 'installer.exe');
   if (cachedInstaller === 'old') link(OLD.exe, installer);
@@ -125,7 +130,7 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
   fs.writeFileSync(path.join(appDir, 'dev-app-update.yml'), 'provider: generic\nurl: http://127.0.0.1:9/\nupdaterCacheDirName: pyide-updater\n');
   const out = path.join(dir, 'result.json');
   const childEnv = { ...process.env, PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', LOCALAPPDATA: local, PYIDE_UPDATE_FEED: 'off',
-    PYIDE_DELTA_CASE: JSON.stringify({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir, http, differential, userData: path.join(dir, 'userData'), out }), ...env };
+    PYIDE_DELTA_CASE: JSON.stringify({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir, http, differential, channel: beta ? 'beta' : 'stable', userData: path.join(dir, 'userData'), out }), ...env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   if (!('PYIDE_UPDATE_DIFFERENTIAL' in env)) delete childEnv.PYIDE_UPDATE_DIFFERENTIAL;
   const child = spawn(ELECTRON, [appDir], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -141,7 +146,6 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
     return null;
   }
   const r = JSON.parse(fs.readFileSync(out, 'utf8'));
-  const exeName = path.basename(NEW.exe);
   r.exeRequests = r.requests.filter((q) => q.path.endsWith(`/${exeName}`) && q.method === 'GET');
   r.exeBytes = r.exeRequests.reduce((a, q) => a + q.bytes, 0);
   r.blockmapRequests = r.requests.filter((q) => q.path.endsWith('.blockmap'));
@@ -149,7 +153,7 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
   if (r.error) console.log(`  error: ${r.error}`);
   console.log(`  download: ${JSON.stringify(r.download)}, ${r.exeRequests.length} request(s) for the exe, ${MB(r.exeBytes)} of it sent, ${r.ms} ms`);
   for (const l of r.logs.filter((x) => /differential|blockmap|full installer|Full:|Cannot download/i.test(x))) console.log(`  log: ${l.split('\n')[0].slice(0, 220)}`);
-  check(!r.error && r.kind === 'nsis' && r.check?.available === NEW.version && r.phase === 'downloaded', `${name}: ${OLD.version} finds ${NEW.version} and downloads it`);
+  check(!r.error && r.kind === 'nsis' && r.check?.available === offered && r.phase === 'downloaded', `${name}: ${OLD.version} finds ${offered} and downloads it`);
   check(r.same, `${name}: the downloaded file equals PyIDE-Setup-${NEW.version}.exe byte for byte`);
   return r;
 }
@@ -165,13 +169,13 @@ const snapshot = () => {
 const before = snapshot();
 
 try {
-  const deltaOk = (r, name) => {
+  const deltaOk = (r, name, version = NEW.version) => {
     if (!r) return;
     const ranged = r.exeRequests.every((q) => q.range && q.status === 206);
     check(r.download?.mode === 'delta' && r.download.bytes === planBytes && r.download.size === NEW.size, `${name}: state.download says delta, ${MB(planBytes)} of ${MB(NEW.size)}`);
     check(ranged && r.exeRequests.length === planDownload.length && r.exeBytes === planBytes, `${name}: only the ${planDownload.length} changed ranges of the exe were sent (${MB(r.exeBytes)}, ${(100 * r.exeBytes / NEW.size).toFixed(1)}%)`);
     check(r.states.some((s) => s.phase === 'downloading' && s.download?.mode === 'delta' && s.download.bytes === planBytes), `${name}: progress states carry the delta size (status bar "(delta ${(planBytes / 1048576).toFixed(1)} MB)")`);
-    check(r.logs.some((l) => l.includes(`downloaded ${NEW.version} differentially`)), `${name}: the log says the download was differential`);
+    check(r.logs.some((l) => l.includes(`downloaded ${version} differentially`)), `${name}: the log says the download was differential`);
   };
   const fullOk = (r, name, reason) => {
     if (!r) return;
@@ -185,6 +189,10 @@ try {
 
   r = await runCase('delta from a local folder feed', { http: false });
   deltaOk(r, 'folder feed');
+
+  r = await runCase('delta to a beta on the Beta channel', { beta: true });
+  deltaOk(r, 'beta', `${NEW.version}-beta.1`);
+  check(r && r.blockmapRequests.map((q) => q.path).sort().join() === [`/PyIDE-Setup-${NEW.version}-beta.1.exe.blockmap`, `/${path.basename(OLD.blockmap)}`].sort().join(), 'beta: the old blockmap URL is derived from the beta file name');
 
   r = await runCase('stale cached current.blockmap', { cachedBlockmap: NEW.blockmap });
   deltaOk(r, 'stale current.blockmap');

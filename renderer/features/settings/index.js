@@ -880,6 +880,11 @@
     return p.bundled ? { name: tr(p.name), description: tr(p.description) } : { name: p.name, description: p.description };
   };
 
+  // plugins.marketplaceUrl: the online Marketplace index (an https URL, or a local folder or .json file). Unset means
+  // the installation's default (main/marketplace.js), and an empty one turns the online Marketplace off.
+  const MARKET_KEY = 'plugins.marketplaceUrl';
+  const sizeText = (n) => (n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
   function mountPlugins(host, ctx) {
     host.classList.add('plugins-page');
     const bar = el('div', 'plugins-bar');
@@ -908,24 +913,55 @@
 
     let tab = 'installed';
     let installed = [];
-    let catalog = [];
+    // {plugins: [{id, name, version, vendor, description, i18n, origin: 'bundled' | 'online', url?, size?, homepage?,
+    // installedVersion, update}], online: {state: 'off' | 'ok' | 'error', source?, hidden?, error?}, defaultUrl}; null
+    // while it loads.
+    let market = null;
     let selectedId = null;
 
     const effectiveEnabled = (p) => (ctx.pluginChanges.has(p.id) ? ctx.pluginChanges.get(p.id) : p.enabled);
     const needsRestart = (p) => p.loaded !== effectiveEnabled(p) || p.justInstalled;
+    const updateOf = (p) => (p.bundled ? null : market?.plugins.find((m) => m.id === p.id && m.update));
 
-    async function load() {
-      [installed, catalog] = await Promise.all([ide.api.invoke('plugins:list'), ide.api.invoke('plugins:catalog')]);
+    async function load({ refresh = false } = {}) {
+      const justInstalled = new Set(installed.filter((p) => p.justInstalled).map((p) => p.id));
+      installed = await ide.api.invoke('plugins:list');
+      for (const p of installed) if (justInstalled.has(p.id)) p.justInstalled = true;
+      if (refresh) market = null;
+      render();
+      market = await ide.api.invoke('plugins:marketplace', ide.settings.get(MARKET_KEY, null), { refresh });
       render();
     }
 
     function badge(text, cls = '') { return el('span', `plugin-badge ${cls}`, text); }
 
+    // The online index's state above the Marketplace list: loading, could not be read (with Retry), or plugins that
+    // need a newer PyIDE.
+    function onlineNote() {
+      const o = market?.online;
+      if (market && o.state !== 'error' && !o.hidden) return null;
+      const n = el('div', 'plugins-online muted');
+      n.id = 'pluginsOnline';
+      if (!market) n.textContent = tr('Loading the online Marketplace…');
+      else if (o.state === 'ok') n.textContent = tr('Not shown because they need a newer PyIDE: {count}', { count: o.hidden });
+      else {
+        n.classList.add('error');
+        const why = el('div', 'plugins-online-error', o.error);
+        why.dataset.userText = '';
+        const retry = el('button', 'secondary', tr('Retry'));
+        retry.id = 'pluginsRetry';
+        retry.onclick = () => load({ refresh: true });
+        n.append(el('div', null, tr('Could not load the online Marketplace')), why, retry);
+      }
+      return n;
+    }
+
     function render() {
       tabMarket.classList.toggle('active', tab === 'marketplace');
       tabInstalled.classList.toggle('active', tab === 'installed');
       const q = filter.value.trim().toLowerCase();
-      const items = (tab === 'installed' ? installed : catalog).filter((p) => {
+      const all = tab === 'installed' ? installed : market?.plugins || [];
+      const items = all.filter((p) => {
         const l = localized(p);
         return !q || `${l.name} ${p.name} ${l.description} ${p.vendor}`.toLowerCase().includes(q);
       });
@@ -938,13 +974,23 @@
           for (const p of group) list.appendChild(row(p));
         }
       } else {
+        const note = onlineNote();
+        if (note) list.appendChild(note);
         for (const p of items) list.appendChild(row(p));
       }
-      if (!list.querySelector('.plugin-row')) list.appendChild(el('div', 'muted plugins-empty', tr('No plugins found')));
-      const all = tab === 'installed' ? installed : catalog;
+      if (!list.querySelector('.plugin-row') && market) list.appendChild(el('div', 'muted plugins-empty', tr('No plugins found')));
       if (!all.some((p) => p.id === selectedId)) selectedId = items[0]?.id || null;
       for (const r of list.querySelectorAll('.plugin-row')) r.classList.toggle('selected', r.dataset.id === selectedId);
       renderDetail(all.find((p) => p.id === selectedId));
+    }
+
+    // The Marketplace button of a listed plugin: Install, Update (an older version is installed) or Installed.
+    function marketButton(m, cls) {
+      const current = m.installedVersion != null && !m.update;
+      const b = el('button', `${current ? 'secondary' : 'primary'} ${cls}`, m.update ? tr('Update') : current ? tr('Installed') : tr('Install'));
+      b.disabled = current;
+      b.onclick = (e) => { e.stopPropagation(); installListed(m); };
+      return b;
     }
 
     function row(p) {
@@ -958,6 +1004,8 @@
       text.append(el('div', 'plugin-name', l.name), sub);
       r.append(icon, text);
       if (tab === 'installed') {
+        const update = updateOf(p);
+        if (update) r.appendChild(marketButton(update, 'plugin-install plugin-update'));
         const c = el('input');
         c.type = 'checkbox';
         c.className = 'plugin-toggle';
@@ -968,11 +1016,7 @@
         c.onchange = () => toggle(p, c.checked);
         r.appendChild(c);
       } else {
-        const isInstalled = installed.some((x) => x.id === p.id);
-        const b = el('button', isInstalled ? 'secondary plugin-install' : 'primary plugin-install', isInstalled ? tr('Installed') : tr('Install'));
-        b.disabled = isInstalled;
-        b.onclick = (e) => { e.stopPropagation(); installFromCatalog(p); };
-        r.appendChild(b);
+        r.appendChild(marketButton(p, 'plugin-install'));
       }
       r.onclick = () => { selectedId = p.id; render(); };
       return r;
@@ -997,13 +1041,20 @@
       head.appendChild(titles);
       const badges = el('div', 'plugin-badges');
       const inst = installed.find((x) => x.id === p.id);
+      const listed = tab === 'installed' ? updateOf(p) : p;
       if (inst?.bundled) badges.appendChild(badge(tr('Bundled')));
       if (inst?.required) badges.appendChild(badge(tr('Required')));
       if (inst && !effectiveEnabled(inst)) badges.appendChild(badge(tr('Disabled'), 'off'));
       if (inst?.blockedBy) badges.appendChild(badge(tr('Needs {id}', { id: inst.blockedBy }), 'warn'));
       if (inst && needsRestart(inst)) badges.appendChild(badge(tr('Restart required'), 'warn'));
+      if (tab === 'installed' && listed) badges.appendChild(badge(tr('Version {version} available', { version: listed.version }), 'new'));
       const actions = el('div', 'plugin-actions');
       if (tab === 'installed' && inst) {
+        if (listed) {
+          const b = marketButton(listed, '');
+          b.id = 'pluginUpdateBtn';
+          actions.appendChild(b);
+        }
         if (!inst.required) {
           const b = el('button', 'secondary', effectiveEnabled(inst) ? tr('Disable') : tr('Enable'));
           b.id = 'pluginEnableBtn';
@@ -1017,20 +1068,32 @@
           actions.appendChild(u);
         }
       } else if (tab === 'marketplace') {
-        const b = el('button', inst ? 'secondary' : 'primary', inst ? tr('Installed') : tr('Install'));
-        b.disabled = !!inst;
-        b.onclick = () => installFromCatalog(p);
+        const b = marketButton(p, '');
+        b.id = 'pluginMarketBtn';
         actions.appendChild(b);
+      }
+      if (listed?.homepage) {
+        const h = el('button', 'secondary', tr('Homepage'));
+        h.id = 'pluginHomepageBtn';
+        h.onclick = () => ide.api.invoke('shell:openExternal', listed.homepage);
+        actions.appendChild(h);
       }
       const desc = el('p', 'plugin-desc', l.description || tr('No description'));
       detail.append(head, badges, actions, desc);
       if (p.depends?.length) detail.appendChild(el('div', 'muted settings-note', tr('Depends on: {list}', { list: p.depends.join(', ') })));
+      if (listed?.origin === 'online') {
+        const from = el('div', 'muted settings-note plugin-source');
+        const url = el('span', 'plugin-path', listed.url);
+        url.dataset.userText = '';
+        from.append(el('span', null, tr('Download ({size}):', { size: sizeText(listed.size) })), ' ', url);
+        detail.appendChild(from);
+      }
       if (inst && !inst.bundled) detail.appendChild(el('div', 'muted settings-note plugin-path', inst.dir));
     }
 
-    async function installFrom(source, label) {
+    async function install(run, label) {
       try {
-        const r = await ide.api.invoke('plugins:install', source);
+        const r = await run();
         status.textContent = tr('Installed {name}. Restart the IDE to activate it.', { name: label || r.name });
         await load();
         const p = installed.find((x) => x.id === r.id);
@@ -1041,7 +1104,42 @@
         status.textContent = tr('Could not install the plugin: {error}', { error: ide.util.errorText(e) });
       }
     }
-    const installFromCatalog = (p) => installFrom(p.dir, localized(p).name);
+
+    // Plugins are code with the IDE's full access, so a download names its vendor and source and asks first.
+    function trustOnline(m) {
+      const field = (label, value) => {
+        const r = el('div', 'plugin-trust-row');
+        const v = el('span', 'plugin-trust-value', value);
+        v.dataset.userText = '';
+        r.append(el('span', 'muted', label), v);
+        return r;
+      };
+      const box = el('div', 'plugin-trust');
+      box.append(
+        field(tr('Plugin:'), `${localized(m).name} ${m.version}`),
+        field(tr('Vendor:'), m.vendor),
+        field(tr('Source:'), m.url),
+        el('p', 'plugin-trust-warning', tr('Plugins run with the same access as PyIDE: they can read and change your files, start programs and use the network. Install plugins only from vendors you trust.')),
+      );
+      return new Promise((resolve) => {
+        let yes = false;
+        ide.ui.dialog({
+          title: m.update ? tr('Update Third-Party Plugin') : tr('Install Third-Party Plugin'),
+          body: box,
+          width: 560,
+          onClose: () => resolve(yes),
+          buttons: [{ label: m.update ? tr('Update') : tr('Install'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+        }).el.id = 'pluginTrustDialog';
+      });
+    }
+
+    async function installListed(m) {
+      if (m.origin === 'online') {
+        if (!(await trustOnline(m))) return;
+        status.textContent = tr('Downloading {name}…', { name: localized(m).name });
+      }
+      await install(() => ide.api.invoke('plugins:installListed', m.id), localized(m).name);
+    }
 
     async function uninstall(p) {
       if (!(await ide.ui.confirm(tr('Uninstall {name}?', { name: localized(p).name }), { ok: tr('Uninstall') }))) return;
@@ -1056,11 +1154,40 @@
       await load();
     }
 
+    // The online index location. Saved at once, as PyCharm's Manage Plugin Repositories does.
+    function editRepository() {
+      const form = el('div', 'plugin-repo');
+      const input = el('input', 'input');
+      input.id = 'pluginsRepoUrl';
+      input.value = ide.settings.get(MARKET_KEY, null) ?? market?.defaultUrl ?? '';
+      form.append(
+        el('div', null, tr('Marketplace index (https URL, or a local folder or .json file):')),
+        input,
+        el('div', 'muted settings-note', tr('Leave it empty to turn the online Marketplace off.')),
+      );
+      const save = (value) => {
+        ide.settings.set(MARKET_KEY, value === (market?.defaultUrl ?? '') ? undefined : value);
+        tab = 'marketplace';
+        load({ refresh: true });
+      };
+      ide.ui.dialog({
+        title: tr('Manage Plugin Repositories'),
+        body: form,
+        width: 560,
+        buttons: [
+          { label: tr('OK'), primary: true, run: () => save(input.value.trim()) },
+          { label: tr('Reset to Default'), run: () => save(market?.defaultUrl ?? '') },
+          { label: tr('Cancel') },
+        ],
+      }).el.id = 'pluginRepoDialog';
+    }
+
     gear.onclick = () => dialogMenu(gear, [
       [tr('Install Plugin from Disk…'), async () => {
         const source = await ide.api.invoke('dialog:openPlugin');
-        if (source) installFrom(source);
+        if (source) install(() => ide.api.invoke('plugins:install', source));
       }],
+      [tr('Manage Plugin Repositories…'), editRepository],
       [tr('Disable All Downloaded Plugins'), () => { for (const p of installed.filter((x) => !x.bundled && x.enabled)) toggle(p, false); }],
     ], 'pluginsGearMenu');
     tabMarket.onclick = () => { tab = 'marketplace'; selectedId = null; render(); };

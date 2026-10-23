@@ -215,5 +215,9 @@
   "Don't Show Again": "다시 표시 안 함",
   "{n} processes running": "프로세스 {n}개 실행 중",
   "Show all background tasks": "모든 백그라운드 작업 표시",
-  "Background Tasks": "백그라운드 작업"
+  "Background Tasks": "백그라운드 작업",
+  "Overwrite": "덮어쓰기",
+  "Skip": "건너뛰기",
+  "{names} already exist in {dir}.": "{dir}에 {names}이(가) 이미 있습니다.",
+  "Could not copy to {dir}: {error}": "{dir}(으)로 복사할 수 없습니다: {error}"
 }

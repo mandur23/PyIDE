@@ -1339,6 +1339,36 @@ async function moveEntry(entry, dir) {
   await moveTo(entry, joinPath(dir, entry.name));
 }
 
+// Files and folders dropped from Explorer are copied into dir, as PyCharm does. A source already in dir, or one that
+// holds dir, is left out; names that exist there are overwritten or skipped as the user chooses.
+async function copyDropped(paths, dir) {
+  const sources = paths.filter((p) => !samePath(dirname(p), dir) && !isUnder(dir, p));
+  if (!sources.length) return;
+  const where = ide.util.rel(dir) || basename(dir);
+  const existing = [];
+  for (const p of sources) if (await ide.api.exists(joinPath(dir, basename(p)))) existing.push(basename(p));
+  let overwrite = false;
+  if (existing.length) {
+    const choice = await new Promise((resolve) => ide.ui.dialog({
+      title: tr('Copy'),
+      body: tr('{names} already exist in {dir}.', { names: existing.join(', '), dir: where }),
+      buttons: [{ label: tr('Overwrite'), run: () => resolve('overwrite') }, { label: tr('Skip'), primary: true, run: () => resolve('skip') }, { label: tr('Cancel'), run: () => resolve(null) }],
+      width: 460,
+      onClose: () => resolve(null),
+    }));
+    if (!choice) return;
+    overwrite = choice === 'overwrite';
+  }
+  let copied;
+  try { copied = await ide.api.copyInto(sources, dir, overwrite); } catch (e) {
+    return void ide.ui.alert(tr('Could not copy to {dir}: {error}', { dir: where, error: ipcError(e) }));
+  }
+  if (!copied.length) return;
+  if (!samePath(dir, ide.root)) expanded.add(keyOf(dir));
+  renderTree();
+  ide.emit('filesChanged', { created: copied });
+}
+
 async function deleteEntry(entry) {
   if (!(await ide.ui.confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }), { ok: tr('Delete') }))) return;
   // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
@@ -1480,6 +1510,18 @@ function wireTree(tree) {
     return entry && dragged && !entry.treeRoot && (entry.dir ? entry.path : dirname(entry.path));
   };
   const clearDropMark = () => tree.querySelectorAll('.drop-into').forEach((n) => n.classList.remove('drop-into'));
+  const markDrop = (dir) => {
+    const i = rowIndexOf(dir);
+    [...tree.firstChild.children].find((n) => n._entry === rows[i]?.entry)?.classList.add('drop-into');
+  };
+  // From Explorer: the folder under the pointer, the folder of the file under it, or the project root below the rows.
+  // Elsewhere in the window, dropped files open (editors.js).
+  const fromOutside = (e) => !dragged && [...e.dataTransfer.types].includes('Files');
+  const outsideDir = (e) => {
+    const entry = entryAt(e);
+    const dir = !entry ? ide.root : entry.dir ? entry.path : dirname(entry.path);
+    return dir && ide.root && isUnder(dir, ide.root) && !treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path)) ? dir : null;
+  };
   tree.addEventListener('dragstart', (e) => {
     dragged = entryAt(e);
     if (!dragged) return;
@@ -1490,15 +1532,34 @@ function wireTree(tree) {
   // On the document: the row the drag started from may have been redrawn (auto-scroll, a refresh) and detached.
   document.addEventListener('dragend', () => { dragged = null; clearDropMark(); });
   tree.addEventListener('dragover', (e) => {
+    if (fromOutside(e)) {
+      const dir = outsideDir(e);
+      clearDropMark();
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!samePath(dir, ide.root)) markDrop(dir);
+      return;
+    }
     const dir = dropDir(e);
     clearDropMark();
     if (!dir || samePath(dirname(dragged.path), dir) || isUnder(dir, dragged.path)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    const i = rowIndexOf(dir);
-    [...tree.firstChild.children].find((n) => n._entry === rows[i]?.entry)?.classList.add('drop-into');
+    markDrop(dir);
   });
+  tree.addEventListener('dragleave', (e) => { if (!tree.contains(e.relatedTarget)) clearDropMark(); });
   tree.addEventListener('drop', (e) => {
+    if (fromOutside(e)) {
+      const dir = outsideDir(e);
+      clearDropMark();
+      if (!dir) return;
+      e.preventDefault();
+      e.stopPropagation();
+      copyDropped([...e.dataTransfer.files].map((f) => ide.api.pathForFile(f)).filter(Boolean), dir);
+      return;
+    }
     const dir = dropDir(e);
     const entry = dragged;
     clearDropMark();
@@ -1798,9 +1859,6 @@ ide.api = { ...window.api, invoke: (channel, ...args) => {
   if (channel === 'clipboard:writeText' && typeof args[0] === 'string') ide.emit('clipboardWritten', args[0]);
   return window.api.invoke(channel, ...args);
 } };
-// Monaco cancels in-flight provider requests (e.g. word highlight) when the model switches and leaves the
-// rejection unhandled; Monaco itself treats these as non-errors.
-addEventListener('unhandledrejection', (e) => { if (e.reason?.name === 'Canceled' && e.reason?.message === 'Canceled') e.preventDefault(); });
 
 // Plugin scripts are fetched in parallel; async = false still runs them in list order (dependencies first).
 async function loadFeatures() {

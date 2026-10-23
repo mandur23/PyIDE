@@ -171,6 +171,55 @@ const bigOpen = await t2.until(`${names}.includes('f0000.py')`, 'big folder open
 await t2.js(`document.getElementById('tree').scrollTop = 1e9`);
 const pkgOpen = await t2.until(`${names}.includes('a.py')`, 'pkg open after restart').then(() => true, () => false);
 t2.check(bigOpen && pkgOpen, 'open folders are restored when the project opens again');
+
+// Files and a folder dragged in from Explorer (a real drag through CDP, with file paths) are copied into the folder under
+// the pointer, or into the project root below the rows; names that exist there ask first.
+try {
+  const outside = path.join(path.dirname(t2.project), 'outside');
+  mkdirSync(path.join(outside, 'assets'), { recursive: true });
+  writeFileSync(path.join(outside, 'notes.txt'), 'first\n');
+  writeFileSync(path.join(outside, 'assets', 'logo.svg'), '<svg/>');
+  writeFileSync(path.join(outside, 'setup.cfg'), '[metadata]\n');
+  const inProject = (p) => path.join(t2.project, p);
+  const lastDialog = `[...document.querySelectorAll('.dialog')].pop()`;
+  const press = (label) => t2.js(`([...${lastDialog}.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === ${q(label)}).click(), true)`);
+  const drop = async (target, files) => {
+    const box = await t2.js(`(() => { const r = (${target}).getBoundingClientRect(); return { x: r.x + 30, y: r.bottom - 6 }; })()`);
+    const data = { items: [], files, dragOperationsMask: 1 };
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await t2.cdp('Input.dispatchDragEvent', { type, x: box.x, y: box.y, data });
+  };
+  await t2.js(`(document.getElementById('tree').scrollTop = 0, true)`);
+  await t2.until(`!!${row('big')}`, 'top of the tree');
+  await t2.js(`(${row('big')}.click(), true)`);
+  await t2.until(`!${names}.includes('f0000.py')`, 'big folder collapsed');
+  const root = await t2.js('ide.root');
+
+  await drop(row('docs'), [path.join(outside, 'notes.txt'), path.join(outside, 'assets')]);
+  const copied = await t2.until(`${names}.includes('notes.txt') && ${names}.includes('assets')`, 'copied rows').then(() => true, () => false);
+  t2.check(copied && readFileSync(inProject('docs/notes.txt'), 'utf8') === 'first\n' && readFileSync(inProject('docs/assets/logo.svg'), 'utf8') === '<svg/>',
+    'a file and a folder dropped on docs are copied into it (nested files too) and shown in the tree');
+  t2.check(existsSync(path.join(outside, 'notes.txt')) && existsSync(path.join(outside, 'assets', 'logo.svg')), 'the dropped originals stay where they were (a copy, not a move)');
+  t2.check(await t2.js('ide.root') === root && !(await t2.js(`!!document.querySelector('.dialog')`)), 'dropping a folder on the tree does not open it as the project');
+
+  writeFileSync(path.join(outside, 'notes.txt'), 'second\n');
+  await drop(row('docs'), [path.join(outside, 'notes.txt')]);
+  await t2.until(`${lastDialog}?.textContent.includes('notes.txt already exist')`, 'conflict dialog');
+  t2.check((await t2.js(`${lastDialog}.querySelector('.dialog-title').textContent`)) === 'Copy', 'a name that exists asks before copying (Copy: Overwrite, Skip, Cancel)');
+  await press('Skip');
+  await t2.sleep(500);
+  t2.check(readFileSync(inProject('docs/notes.txt'), 'utf8') === 'first\n', 'Skip keeps the file in the project');
+  await drop(row('docs'), [path.join(outside, 'notes.txt')]);
+  await t2.until(`${lastDialog}?.textContent.includes('notes.txt already exist')`, 'conflict dialog again');
+  await press('Overwrite');
+  const overwritten = await t2.until(`ide.api.read(${q(inProject('docs/notes.txt'))}).then((s) => s === 'second\\n')`, 'overwritten').then(() => true, () => false);
+  t2.check(overwritten, 'Overwrite replaces it with the dropped file');
+
+  await drop(`document.getElementById('tree')`, [path.join(outside, 'setup.cfg')]);
+  const atRoot = await t2.until(`${names}.includes('setup.cfg')`, 'copied to the root').then(() => true, () => false);
+  t2.check(atRoot && existsSync(inProject('setup.cfg')), 'dropped below the rows, a file is copied into the project root');
+} catch (err) {
+  t2.check(false, err.message);
+}
 t2.results.unshift(...t.results);
 t2.consoleErrors.unshift(...t.consoleErrors);
 t2.finish();

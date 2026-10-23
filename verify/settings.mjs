@@ -25,7 +25,7 @@ try {
   await a.until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
   // Plugins add their own pages (under Appearance & Behavior, Editor, AI, or at the end), so the core tree is checked in order around them.
   const tree = await navRows(a);
-  check(tree.replace('|Presentation and Distraction-Free Modes', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|') && tree.includes('|Plugins|Project: project|Python Interpreter|Tools|AI|AI Chat|AI Completion|Claude Edits'),
+  check(tree.replace('|Presentation and Distraction-Free Modes', '').replace('|Crash Recovery', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|') && tree.includes('|Plugins|Project: project|Python Interpreter|Tools|AI|AI Chat|AI Completion|Claude Edits'),
     `category tree lists groups and pages, plugin pages under AI (${tree})`);
   const indents = await a.js(`(() => { const x = (sel) => [...document.querySelectorAll(sel)].map(n => Math.round(n.querySelector('.settings-nav-label').getBoundingClientRect().left)); return { top: [...new Set(x('.settings-nav-row:not(.child)'))], child: [...new Set(x('.settings-nav-row.child'))] }; })()`);
   check(indents.top.length === 1 && indents.child.length === 1 && indents.child[0] > indents.top[0], `top-level and child labels each share one indent (${JSON.stringify(indents)})`);

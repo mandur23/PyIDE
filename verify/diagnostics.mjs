@@ -97,6 +97,11 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     check((await findError(t, 'diag-flaky: rejected promise')).plugin?.id === 'diag-flaky', 'renderer rejection mapped to diag-flaky');
     await untilError(t, 'diag core renderer failure', 'core renderer error listed');
     check((await findError(t, 'diag core renderer failure')).plugin === null, 'renderer error outside plugins is core');
+    // A diff whose models went away while the worker computed it: Monaco rethrows it from a timer, as message + stack.
+    await js(`(setTimeout(() => { const e = new Error('no diff result available'); throw new Error(e.message + '\\n\\n' + e.stack); }), Promise.reject(new Error('no diff result available')), true)`);
+    await sleep(800);
+    check(!(await js(`ide.api.invoke('diagnostics:errors').then(l => l.some(e => e.message.includes('no diff result available')))`)) && !t.consoleErrors.some((m) => m.includes('no diff result available')),
+      'Monaco\'s "no diff result available" (a diff editor closed mid-computation) is neither an internal error nor a renderer exception');
 
     // ---- a crashing Python sidecar and a killed Pyright ----
     const interp = await js(`(() => { const i = ide.currentInterp(); return i && { cmd: i.cmd, args: i.args }; })()`);

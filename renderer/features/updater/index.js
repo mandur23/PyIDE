@@ -10,7 +10,9 @@
   const SKIPPED = 'updates.skippedVersion';
   // Download only the changed blocks of the installer when possible (main falls back to the full installer).
   const DIFFERENTIAL = 'updates.differential';
-  const DEFAULTS = { [ON_STARTUP]: true, [INTERVAL]: 'daily', [DIFFERENTIAL]: true };
+  // 'stable' reads latest.yml; 'beta' reads beta.yml, which also carries every stable release.
+  const CHANNEL = 'updates.channel';
+  const DEFAULTS = { [ON_STARTUP]: true, [INTERVAL]: 'daily', [DIFFERENTIAL]: true, [CHANNEL]: 'stable' };
   const log = ide.logger?.('#updater') || console;
   let state = { phase: 'idle' };
 
@@ -66,7 +68,7 @@
   const later = { label: tr('Later') };
 
   // manual: from the menu or Settings, so it reports "no update" and errors, and ignores a skipped version.
-  async function check({ manual = false, feedUrl = feed() } = {}) {
+  async function check({ manual = false, feedUrl = feed(), channel = ide.settings.get(CHANNEL, 'stable') } = {}) {
     if (!feedUrl) {
       if (manual) {
         message(tr('Check for Updates'), tr('Updates are off: no update feed is set.'), [
@@ -76,7 +78,7 @@
     }
     let result;
     try {
-      result = await ide.api.invoke('updater:check', feedUrl);
+      result = await ide.api.invoke('updater:check', feedUrl, { channel });
     } catch (err) {
       const reason = reasonOf(err);
       log.warn(`update check failed: ${reason}`);
@@ -225,7 +227,7 @@
     started = true;
     schedule(STARTUP_DELAY);
   });
-  ide.on('settingsChanged', (key) => { if (started && [ON_STARTUP, INTERVAL, FEED].includes(key)) schedule(STARTUP_DELAY); });
+  ide.on('settingsChanged', (key) => { if (started && [ON_STARTUP, INTERVAL, FEED, CHANNEL].includes(key)) schedule(STARTUP_DELAY); });
   addEventListener('online', () => { if (started && decision.reason === 'offline') schedule(STARTUP_DELAY); });
   ide.on('powerSaveChanged', (on) => { if (started && !on && decision.reason === 'powerSave') schedule(STARTUP_DELAY); });
 
@@ -238,7 +240,7 @@
   // ---------- Settings > Updates ----------
   (ide.settingsPages ||= []).push({
     id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS,
-    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주',
+    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta channel beta stable 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주 채널 베타 안정',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Updates'));
       const auto = el('div', 'upd-auto');
@@ -258,6 +260,8 @@
       const feedRow = el('div', 'upd-feed-row');
       feedRow.append(input, browse);
       s.appendChild(ctx.ui.fieldRow(tr('Update feed:'), feedRow, tr('An http(s) URL or a local folder with latest.yml. Leave it empty to turn updates off.')));
+      s.appendChild(ctx.ui.fieldRow(tr('Update channel:'), ctx.ui.selectInput(CHANNEL, [['stable', tr('Stable')], ['beta', tr('Beta')]], 'stable'),
+        tr('Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.')));
       s.appendChild(ctx.ui.checkbox(DIFFERENTIAL, tr('Download only the changed parts of an update when possible')));
 
       const info = ctx.ui.section(host, tr('This Installation'));
@@ -275,7 +279,7 @@
       }
       const now = el('button', 'secondary', tr('Check Now'));
       now.id = 'updatesCheckNow';
-      now.onclick = () => check({ manual: true, feedUrl: String(ctx.value(FEED) ?? state.defaultFeed ?? '').trim() });
+      now.onclick = () => check({ manual: true, feedUrl: String(ctx.value(FEED) ?? state.defaultFeed ?? '').trim(), channel: ctx.value(CHANNEL) ?? 'stable' });
       info.appendChild(now);
     },
   });
