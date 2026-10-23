@@ -45,11 +45,14 @@ try {
   live.push(a);
   const { js, until } = a;
   check(await js(`typeof ide.tasks?.start === 'function' && typeof ide.notifications?.notify === 'function'`), 'ide.tasks and ide.notifications exist');
-  check(!(await widget(a)).shown, 'no task: the status bar widget is hidden');
+  // The IDE's own startup tasks (indexing on a slow runner) come and go by themselves; the checks start once none runs.
+  for (let quiet = 0, end = Date.now() + 60000; quiet < 10 && Date.now() < end; await a.sleep(200)) quiet = (await js(`ide.tasks.list().length`)) ? 0 : quiet + 1;
+  const startup = await js(`ide.tasks.list().map((x) => x.title)`);
+  check(!startup.length && !(await widget(a)).shown, `no task: the status bar widget is hidden${startup.length ? ` (still running: ${S(startup)})` : ''}`);
   await js(`(window.__a = ide.tasks.start({ title: 'Alpha job', fraction: 0.25 }), true)`);
   await until(`!document.querySelector('#bgTasks').classList.contains('hidden')`, 'widget shown');
   let w = await widget(a);
-  check(w.label === 'Alpha job' && w.width === '25%' && !w.indeterminate, `one task: its title and a 25% bar (${S(w)})`);
+  check(w.label === 'Alpha job' && w.width === '25%' && !w.indeterminate, `one task: its title and a 25% bar (${S(w)}, tasks ${S(await js(`ide.tasks.list().map((x) => x.title)`))})`);
   await js(`(window.__a.update({ fraction: 0.5, text: 'halfway there' }), true)`);
   await until(`document.querySelector('#bgTasks .bg-fill').style.width === '50%'`, 'progress update');
   check((await widget(a)).title.includes('halfway there'), 'update() changes the bar and the text (tooltip)');
