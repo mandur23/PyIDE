@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "core.start",
+      "x": 80,
+      "y": 120
+    }
+  ],
+  "links": []
+}

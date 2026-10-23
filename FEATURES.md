@@ -937,7 +937,58 @@ Python and runs like a script. `model.js` owns the file format and pure edit hel
   session without English in the tab, palette, menus and dialogs). Fixtures: `verify/fixtures/visual-script`.
 ```
 
-`verify/visual-script-editor.mjs` and `verify/visual-script.mjs` take `--viewport=1008x681` to emulate CI's 1024x768 screen (inner 1008x681, canvas 647x263); run both sizes before pushing changes to the editor.
+- Project and package functions (`symbols.js`, `python/vs_symbols.py`, `main/features/visual-script.js`): the palette's
+  Project category lists the project's modules as branches (`pkg.sub.mod` from the root, or from `src/` in a src
+  layout): top-level functions, `New Class` (the constructor) and `Class.method` entries, with the signature and the
+  docstring's first line as tooltip; typing searches them too. Typing a module name and a dot (`math.`, `random.`,
+  `pandas.`) or Browse Package… loads an installed module. A pick makes a Python Function (`py.function`), Create
+  Object (`py.new`) or Python Method (`py.method`) node that stores the signature in its props (`{module, name,
+  params: [{name, kind?, default?, annotation?}], returns?, async?}`, plus `class` and `kind` for methods), so a graph
+  compiles without the index: one input per parameter typed from its annotation (optional when it has a default,
+  `*args` a list, `**kwargs` a dict), `result` typed from the return annotation. Codegen writes `from geo.figures import
+  area` and `area(2)`, or `import geo.figures` and `geo.figures.area(2)` when two modules give the same name or the
+  name is taken; an empty optional argument is left out and later ones go by keyword; async functions run through
+  `asyncio.run`. When the index has a different signature the node says "The function's parameters changed" with
+  Update (keeps the wires of parameters that still exist); a function that is gone is a problem ("geo.figures.area no
+  longer exists.") and Run refuses.
+- The index (`visual-script:symbols`): .py files read with `ast` in the project interpreter (`-I`, never imported),
+  skipping virtual environments, `node_modules`, hidden, cache and build folders, files over 1 MB, at most 3000 files
+  and 20 s; cached in main per project by path, mtime and size, read when a .pyflow first opens and refreshed after a
+  .py save (debounced), a file change and an interpreter change. A package module (`visual-script:module`) is imported
+  in the project interpreter with `inspect`, only when it resolves outside the project folder (stdlib, site-packages:
+  main refuses names of the project's own top-level files and folders, and the helper checks every step's location
+  before importing), with a 10 s limit, cached per interpreter. Safe Mode: nothing is read or loaded, and every
+  channel refuses an untrusted project.
+- `VS.compile` also returns `nodeLines[nodeId]` (the node's own generated lines, imports left out) and
+  `pinExpr[nodeId][pin]` (the Python expression of a data output once its node ran) for the debugger.
+- Tests: `verify/visual-script-codegen.mjs` adds the three node types run against the fixture project with the
+  system Python (optional, keyword, `*args`/`**kwargs`, classes, methods, dataclass, async, name clashes and aliases,
+  packages), pins and annotation types, stale and missing symbols, Update, `pinExpr` and `nodeLines`.
+  `verify/visual-script-project.mjs` (ports 9086-9087, fixture `verify/fixtures/visual-script-project`): the index's
+  modules and what it leaves out, palette branches, tooltips and picks with real keys, a graph of project calls run with
+  real output, math/random/json through a dotted search with the same output as Python, Browse Package…, main refusing
+  project modules, a signature edited and saved (warning, Update, run), a removed function refusing the run, Korean,
+  and Safe Mode (no entries, main refuses).
+- Debugging (`debug.js`): Shift+F9, the Debug button and Run › Debug on a script's tab debug it like a Python file
+  (the type's `debugTarget` compiles the graph and the debugger runs the generated file with debugpy; Rerun compiles
+  again). Steps take breakpoints (F9 or Ctrl+F8 on the selected node, the dot on its top-left corner, node menu ›
+  Add Breakpoint; Edit Condition… adds a Python condition); they are kept per script in the
+  `visualScript.breakpoints` and `visualScript.breakpointConditions` settings, never in the file, and become line
+  breakpoints on each node's first generated line (`nodeLines`) at start and whenever toggled. While paused the
+  script's node is outlined and brought into view, Frames name the script and node (`main, demo.pyflow: Print (n3)`),
+  Step Into a project function opens its .py and coming back outlines the node again, and resting the pointer on a
+  data pin or wire shows its value (`pinExpr` evaluated in the selected frame; only locals and side-effect-free
+  pure nodes, Python Expression is never run again). An uncaught exception marks its node. F9 is Resume while paused.
+  The debugger's hook: `ide.debugger.registerGeneratedSource({owns, breakpoints, label})` (a generated file's
+  breakpoints and frame labels come from its owner and a stop there does not open it), `ide.debugger.stopped()`,
+  `ide.debugger.sendBreakpoints(path)`; Shift+F9 debugs a viewer tab whose file a run type with `debugTarget`
+  claims; `debugFile(file, {rerun})`.
+- Run and Debug put the project root, `src/` in a src layout, and the script's folder on PYTHONPATH.
+- `tab.visualScript` also has `revealNode(id)`, `setDebugState(state)`, `onBreakpointClick(fn)`, `addNodeMenu(fn)`,
+  `setValueProvider(fn)`.
+- Test: `verify/visual-script-debug.mjs` (ports 9082-9084, fixture `verify/fixtures/visual-script-debug`).
+
+`verify/visual-script-editor.mjs`, `verify/visual-script.mjs`, `verify/visual-script-project.mjs` and `verify/visual-script-debug.mjs` take `--viewport=1008x681` to emulate CI's 1024x768 screen (inner 1008x681, canvas 647x263); run both sizes before pushing changes to the editor.
 
 ## Monaco 0.57 and IME input
 

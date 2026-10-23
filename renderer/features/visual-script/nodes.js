@@ -27,7 +27,7 @@
   VS.nodeTypes = () => [...registry.values()];
   VS.nodeType = (type) => registry.get(type) || null;
 
-  VS.CATEGORIES = ['Flow', 'Variables', 'Values', 'Math', 'Text', 'Input/Output', 'Lists', 'Functions', 'Python', 'Other'];
+  VS.CATEGORIES = ['Flow', 'Variables', 'Values', 'Math', 'Text', 'Input/Output', 'Lists', 'Functions', 'Python', 'Project', 'Packages', 'Other'];
   VS.TYPES = ['any', 'number', 'int', 'string', 'bool', 'list', 'dict', 'none'];
   const TYPE_LABELS = { any: 'Any', number: 'Number', int: 'Integer', string: 'Text', bool: 'True/False', list: 'List', dict: 'Dictionary', none: 'None', exec: 'Run order' };
   VS.typeLabel = (type) => tr(TYPE_LABELS[type] || type);
@@ -45,9 +45,12 @@
     return { ...out, ...(node.props || {}) };
   };
 
+  // def.label(props) names one node from its props (a project function's name); def.title stays the type's name.
   VS.titleOf = (node) => {
     const def = VS.nodeType(node.type);
     if (!def) return node.type;
+    const label = def.label ? def.label(propsOf(node)) : '';
+    if (label) return label;
     return typeof def.title === 'function' ? def.title(propsOf(node)) : tr(def.title);
   };
   // A short detail shown after the title (the variable or function name, the operator); '' when there is none.
@@ -619,6 +622,237 @@
         return 'next';
       },
       output: (c, pin) => ({ code: c.identValue(pin, 'outputs'), prec: c.P.ATOM }),
+    },
+  });
+
+  // ---------- Project and package functions ----------
+  // A function, class or method from the symbol index (symbols.js) is stored by value in the node's props, so a graph
+  // compiles without the index and a signature that moved on is visible:
+  //   py.function {module, name, params, returns?, async?}   py.new {module, class, params}
+  //   py.method   {module, class, name, params, returns?, async?, kind: 'method' | 'static' | 'class'}
+  // params: [{name, kind?, default?, annotation?}], kind 'positional' (left out), 'positional-only', 'keyword-only',
+  // 'var-positional' (*args) or 'var-keyword' (**kwargs); default and annotation are Python source text.
+  VS.SYMBOL_TYPES = ['py.function', 'py.new', 'py.method'];
+  const PARAM_KINDS = ['positional', 'positional-only', 'keyword-only', 'var-positional', 'var-keyword'];
+  const text = (v) => (typeof v === 'string' ? v : null);
+  const normParam = (p) => ({
+    name: p.name,
+    kind: PARAM_KINDS.includes(p.kind) ? p.kind : 'positional',
+    default: text(p.default),
+    annotation: text(p.annotation),
+  });
+  VS.symbolParams = (params) => (Array.isArray(params) ? params.filter((p) => p && typeof p.name === 'string' && p.name) : []).map(normParam);
+  // The compact form stored in a node: the common case (a positional parameter without default or annotation) is {name}.
+  const storedParam = (p) => {
+    const out = { name: p.name };
+    if (p.kind !== 'positional') out.kind = p.kind;
+    if (p.default !== null) out.default = p.default;
+    if (p.annotation !== null) out.annotation = p.annotation;
+    return out;
+  };
+
+  // A pin type from an annotation's source text: int, float, str, bool, list, dict and None, else any. An input
+  // annotated int takes any number, so a Math result can go into it.
+  VS.annotationType = (annotation, { input = false } = {}) => {
+    let a = String(annotation ?? '').trim().replace(/^(['"])(.*)\1$/s, '$2').replace(/^typing\./, '').replace(/\s+/g, '');
+    a = a.replace(/\[.*\]$/s, '');
+    const t = { int: input ? 'number' : 'int', float: 'number', str: 'string', bool: 'bool', list: 'list', List: 'list', dict: 'dict', Dict: 'dict', None: input ? 'any' : 'none' }[a];
+    return t || 'any';
+  };
+
+  const symbolProps = (node) => node.props || {};
+  const RESERVED_PINS = new Set(['in', 'next', 'result', 'object']);
+  // One input pin per parameter, its id the parameter's name (a name the node's own pins use gets a trailing _).
+  function paramPins(params, taken) {
+    return params.map((p) => {
+      let id = p.name;
+      while (taken.has(id)) id += '_';
+      taken.add(id);
+      const pin = { id, label: p.name, type: VS.annotationType(p.annotation, { input: true }), param: p.name, kind: p.kind };
+      if (p.kind === 'var-positional') Object.assign(pin, { label: `*${p.name}`, type: 'list', optional: true });
+      else if (p.kind === 'var-keyword') Object.assign(pin, { label: `**${p.name}`, type: 'dict', optional: true });
+      else if (p.default !== null) Object.assign(pin, { optional: true, placeholder: p.default });
+      return pin;
+    });
+  }
+  const resultPin = (returns) => (String(returns ?? '').trim() === 'None' ? [] : [{ id: 'result', label: 'Result', type: VS.annotationType(returns) }]);
+
+  // "area(r: float, n: int = 2) -> float", with / and * where Python puts them.
+  VS.signatureText = (name, params, returns) => {
+    const list = VS.symbolParams(params);
+    const parts = [];
+    let starDone = false;
+    list.forEach((p, i) => {
+      const ann = p.annotation !== null ? `: ${p.annotation}` : '';
+      const def = p.default !== null ? (ann ? ` = ${p.default}` : `=${p.default}`) : '';
+      if (p.kind === 'keyword-only' && !starDone) { parts.push('*'); starDone = true; }
+      if (p.kind === 'var-positional') { parts.push(`*${p.name}${ann}`); starDone = true; } else if (p.kind === 'var-keyword') parts.push(`**${p.name}${ann}`);
+      else parts.push(`${p.name}${ann}${def}`);
+      if (p.kind === 'positional-only' && (list[i + 1]?.kind !== 'positional-only')) parts.push('/');
+    });
+    return `${name}(${parts.join(', ')})${returns ? ` -> ${returns}` : ''}`;
+  };
+
+  // What the index says about a node's symbol: null (not a symbol node), {status: 'unknown'} (the index has not
+  // read its module), 'missing' (the module no longer has it), 'changed' (its signature differs) or 'ok'.
+  // symbols: {lookup(module, cls, name)} -> undefined | null | the symbol; VS.symbols in the IDE.
+  const sameSymbol = (node, sym) => {
+    const p = symbolProps(node);
+    const sig = (params, returns, isAsync, kind) => JSON.stringify([VS.symbolParams(params), node.type === 'py.new' ? null : text(returns), node.type === 'py.new' ? false : !!isAsync, kind || null]);
+    return sig(p.params, p.returns, p.async, node.type === 'py.method' ? p.kind || 'method' : null)
+      === sig(sym.params, sym.returns, sym.async, node.type === 'py.method' ? sym.kind || 'method' : null);
+  };
+  VS.symbolState = (node, symbols = VS.symbols) => {
+    if (!VS.SYMBOL_TYPES.includes(node.type)) return null;
+    const p = symbolProps(node);
+    if (!symbols || !symbols.lookup || !p.module) return { status: 'unknown' };
+    const sym = node.type === 'py.function' ? symbols.lookup(p.module, null, p.name)
+      : node.type === 'py.new' ? symbols.lookup(p.module, p.class, null) : symbols.lookup(p.module, p.class, p.name);
+    if (sym === undefined) return { status: 'unknown' };
+    if (!sym) return { status: 'missing' };
+    return { status: sameSymbol(node, sym) ? 'ok' : 'changed', symbol: sym };
+  };
+  VS.symbolPath = (node) => {
+    const p = symbolProps(node);
+    return [p.module, node.type === 'py.function' ? null : p.class, node.type === 'py.new' ? null : p.name].filter(Boolean).join('.');
+  };
+
+  // The node for a symbol the palette offers: what = 'function' | 'class' | 'method'.
+  VS.symbolNode = (what, module, sym, cls) => {
+    const params = VS.symbolParams(sym.params).map(storedParam);
+    const extra = {};
+    if (text(sym.returns)) extra.returns = sym.returns;
+    if (sym.async) extra.async = true;
+    if (what === 'class') return { type: 'py.new', props: { module, class: sym.name, params } };
+    if (what === 'method') return { type: 'py.method', props: { module, class: cls, name: sym.name, params, ...extra, kind: sym.kind || 'method' } };
+    return { type: 'py.function', props: { module, name: sym.name, params, ...extra } };
+  };
+  // Update: the node takes the symbol's current signature. Wires and typed-in values of parameters whose names still
+  // exist stay; those of parameters that are gone are removed.
+  VS.updateSymbolNode = (g, id, sym) => {
+    const node = g.nodes.find((n) => n.id === id);
+    if (!node || !VS.SYMBOL_TYPES.includes(node.type)) return g;
+    const p = symbolProps(node);
+    const fresh = VS.symbolNode(node.type === 'py.new' ? 'class' : node.type === 'py.method' ? 'method' : 'function', p.module, { ...sym, name: node.type === 'py.new' ? p.class : p.name }, p.class).props;
+    let next = g;
+    for (const key of ['params', 'returns', 'async', 'kind']) {
+      if (key === 'kind' && node.type !== 'py.method') continue;
+      if (JSON.stringify(p[key]) !== JSON.stringify(fresh[key])) next = VS.setProp(next, id, key, fresh[key]);
+    }
+    const pins = new Set(VS.pinsOf(next.nodes.find((n) => n.id === id), next).inputs.map((x) => x.id));
+    for (const pin of Object.keys(node.inputs || {})) if (!pins.has(pin)) next = VS.setInputLiteral(next, id, pin, undefined);
+    return next;
+  };
+
+  // The call itself: positional arguments in order; an optional parameter left empty is left out, and the parameters
+  // after it are passed by keyword (or, when *args is given, the skipped ones get their default text).
+  function callArgs(c) {
+    const pins = c.pins.inputs.filter((p) => p.param);
+    const given = (p) => c.linked(p.id) || (c.node.inputs && c.node.inputs[p.id] !== undefined);
+    const starGiven = pins.some((p) => p.kind === 'var-positional' && given(p));
+    const args = [];
+    let skipped = [];
+    const fill = () => {
+      for (const s of skipped) {
+        if (!s.placeholder || s.placeholder.startsWith('<')) {
+          c.failPin(c.tr('"{pin}" needs a value here, because a later argument is given.', { pin: s.label }), s.id);
+          args.push('None');
+        } else args.push(s.placeholder);
+      }
+      skipped = [];
+    };
+    for (const p of pins) {
+      if (p.kind === 'var-positional') { if (given(p)) { fill(); args.push(`*${c.arg(p.id)}`); } continue; }
+      if (p.kind === 'var-keyword') { if (given(p)) args.push(`**${c.arg(p.id)}`); continue; }
+      if (!given(p) && p.optional) { if (p.kind !== 'keyword-only') skipped.push(p); continue; }
+      if (p.kind === 'keyword-only' || (skipped.length && p.kind === 'positional' && !starGiven)) args.push(`${p.param}=${c.arg(p.id)}`);
+      else { fill(); args.push(c.arg(p.id)); }
+    }
+    return args.join(', ');
+  }
+  // Checks the stored names and what the index says. Returns false when no call can be generated.
+  function symbolUsable(c) {
+    const fail = (message) => { c.fail(message); return false; };
+    const p = symbolProps(c.node);
+    const module = String(p.module || '');
+    if (!c.dotted(module)) return fail(module ? c.tr('"{name}" is not a valid module name.', { name: module }) : c.tr('This node has no module. Add it again from the palette.'));
+    const names = [c.node.type !== 'py.function' && p.class, c.node.type !== 'py.new' && p.name].filter((n) => n !== false);
+    const bad = names.findIndex((n) => !VS.isIdentifier(n));
+    if (bad >= 0) return fail(c.tr('"{name}" is not a valid function name.', { name: String(names[bad] ?? '') }));
+    const state = VS.symbolState(c.node, c.symbols);
+    if (state.status === 'missing') return fail(c.tr('{name} no longer exists.', { name: VS.symbolPath(c.node) }));
+    if (state.status === 'changed') c.warn(c.tr('The function\'s parameters changed. Update the node to use the new ones.'));
+    return true;
+  }
+  function emitCall(c, call, out) {
+    const p = symbolProps(c.node);
+    if (p.async && c.node.type !== 'py.new') c.import('asyncio');
+    const run = p.async && c.node.type !== 'py.new' ? `asyncio.run(${call})` : call;
+    c.line(c.used(out) ? `${c.local(out)} = ${run}` : run);
+    return 'next';
+  }
+  const SYMBOL_KEYWORDS = 'project package module library import function call 프로젝트 패키지 모듈 함수 호출';
+  reg({
+    type: 'py.function', category: 'Python', title: 'Python Function', palette: false,
+    description: 'Calls a function from your project or an installed package.',
+    keywords: SYMBOL_KEYWORDS,
+    exec: EXEC,
+    label: (p) => (typeof p.name === 'string' ? p.name : ''),
+    subtitle: (p) => p.module,
+    pins: (node) => {
+      const p = symbolProps(node);
+      return { inputs: paramPins(VS.symbolParams(p.params), new Set(RESERVED_PINS)), outputs: resultPin(p.returns) };
+    },
+    compile: {
+      stmt(c) {
+        if (!symbolUsable(c)) return 'next';
+        const p = symbolProps(c.node);
+        return emitCall(c, `${c.symbol(p.module, p.name)}(${callArgs(c)})`, 'result');
+      },
+    },
+  });
+  reg({
+    type: 'py.new', category: 'Python', title: 'Create Object', palette: false,
+    description: 'Creates an object of a class from your project or an installed package.',
+    keywords: `${SYMBOL_KEYWORDS} class object new create 클래스 객체 생성`,
+    exec: EXEC,
+    label: (p) => (typeof p.class === 'string' && p.class ? tr('New {name}', { name: p.class }) : ''),
+    subtitle: (p) => p.module,
+    pins: (node) => ({
+      inputs: paramPins(VS.symbolParams(symbolProps(node).params), new Set(RESERVED_PINS)),
+      outputs: [{ id: 'object', label: 'Object', type: 'any' }],
+    }),
+    compile: {
+      stmt(c) {
+        if (!symbolUsable(c)) return 'next';
+        const p = symbolProps(c.node);
+        return emitCall(c, `${c.symbol(p.module, p.class)}(${callArgs(c)})`, 'object');
+      },
+    },
+  });
+  reg({
+    type: 'py.method', category: 'Python', title: 'Python Method', palette: false,
+    description: 'Calls a method of an object, or a static or class method of a class.',
+    keywords: `${SYMBOL_KEYWORDS} method 메서드`,
+    exec: EXEC,
+    label: (p) => (typeof p.name === 'string' && p.name ? `${p.class || ''}.${p.name}` : ''),
+    subtitle: (p) => p.module,
+    pins: (node) => {
+      const p = symbolProps(node);
+      const self = (p.kind || 'method') === 'method' ? [{ id: 'object', label: 'Object', type: 'any' }] : [];
+      return { inputs: [...self, ...paramPins(VS.symbolParams(p.params), new Set(RESERVED_PINS))], outputs: resultPin(p.returns) };
+    },
+    compile: {
+      stmt(c) {
+        if (!symbolUsable(c)) return 'next';
+        const p = symbolProps(c.node);
+        let target;
+        if ((p.kind || 'method') === 'method') {
+          target = c.arg('object', c.P.ATOM);
+          if (/^\d+$/.test(target)) target = `(${target})`;
+        } else target = c.symbol(p.module, p.class);
+        return emitCall(c, `${target}.${p.name}(${callArgs(c)})`, 'result');
+      },
     },
   });
 

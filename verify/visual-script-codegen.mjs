@@ -485,6 +485,209 @@ links: [{ from: { node: 'n1', pin: 'next' }, to: { node: 'n2', pin: 'in' } }, { 
   check(r.code.includes(KO['Break can only be used inside a loop body.']), 'the raise in the generated code carries the translated message', r.code);
 }
 
+// ---------- project and package functions (py.function, py.new, py.method) ----------
+// The symbols come from python/vs_symbols.py reading verify/fixtures/visual-script-project with ast, as the IDE does.
+const FIX = path.join(APP, 'verify', 'fixtures', 'visual-script-project');
+const INDEX = (() => {
+  const files = [['geo/figures.py', 'geo.figures'], ['geo/points.py', 'geo.points'], ['tools/text.py', 'tools.text'], ['helpers.py', 'helpers']]
+    .map(([p, module]) => ({ path: path.join(FIX, p), module }));
+  const res = python([path.join(DIR, 'python', 'vs_symbols.py'), 'project'], JSON.stringify({ files, seconds: 20 }));
+  const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
+  check(res.status === 0 && lines.filter((l) => l.ok).length === 4 && lines[lines.length - 1].done, 'vs_symbols.py reads the fixture modules', res.stderr);
+  return new Map(lines.filter((l) => l.ok).map((l) => [l.module.name, l.module]));
+})();
+const symbolsFrom = (index) => ({
+  lookup(module, cls, name) {
+    const m = index.get(module);
+    if (!m) return undefined;
+    if (cls == null) return m.functions.find((f) => f.name === name) || null;
+    const c = m.classes.find((x) => x.name === cls);
+    if (!c || name == null) return c || null;
+    return c.methods.find((x) => x.name === name) || null;
+  },
+});
+const SYMBOLS = symbolsFrom(INDEX);
+const fnNode = (module, name, extra = {}) => ['py.function', { props: VS.symbolNode('function', module, INDEX.get(module).functions.find((f) => f.name === name)).props, ...extra }];
+const newNode = (module, cls, extra = {}) => ['py.new', { props: VS.symbolNode('class', module, INDEX.get(module).classes.find((c) => c.name === cls)).props, ...extra }];
+const methodNode = (module, cls, name, extra = {}) => ['py.method', { props: VS.symbolNode('method', module, INDEX.get(module).classes.find((c) => c.name === cls).methods.find((m) => m.name === name), cls).props, ...extra }];
+// Runs a graph that calls the fixture project (on PYTHONPATH, as the IDE's run puts the project root there).
+function runsProject(name, g, expected, { lines = [] } = {}) {
+  for (const n of g.nodes) usedTypes.add(n.type);
+  const r = VS.compile(g, { fileName: `${name}.pyflow`, symbols: SYMBOLS });
+  check(!r.errors.length, `${name}: compiles without problems`, JSON.stringify(r.errors));
+  check(VS.compile(VS.parse(VS.serialize(g)), { fileName: `${name}.pyflow`, symbols: SYMBOLS }).code === r.code, `${name}: the same graph read back from its file gives the same code`);
+  for (const [text, node] of lines) {
+    const at = lineOf(r.code, text);
+    check(at > 0, `${name}: generates the line ${JSON.stringify(text)}`, r.code);
+    if (at > 0 && node) check(r.map[at] === node, `${name}: line ${at} ${JSON.stringify(text)} maps to ${node}`, `got ${r.map[at]}`);
+  }
+  const file = writePy(r.code);
+  const res = spawnSync(PYTHON[0], [...PYTHON[1], '-X', 'utf8', file], { encoding: 'utf8', timeout: 30000, cwd: tmp, env: { ...process.env, PYTHONPATH: FIX, PYTHONDONTWRITEBYTECODE: '1', PYTHONIOENCODING: 'utf-8' } });
+  check(res.status === 0 && res.stdout.replace(/\r\n/g, '\n') === expected, `${name}: runs and prints the expected output`,
+    `status ${res.status}\n--- stdout\n${res.stdout}\n--- expected\n${expected}\n--- stderr\n${res.stderr}\n--- code\n${r.code}`);
+  return r;
+}
+
+runsProject('project-function', withStart({ n2: fnNode('geo.figures', 'area', { inputs: { r: 2 } }), n3: ['io.print'] },
+  ['n1.next -> n2.in', 'n2.next -> n3.in', 'n2.result -> n3.value']), '12.57\n', {
+  lines: [['from geo.figures import area', 'n2'], ['    result_n2 = area(2)', 'n2'], ['    print(result_n2)', 'n3']],
+});
+runsProject('optional-and-keyword-arguments', withStart({
+  n2: fnNode('geo.figures', 'perimeter', { inputs: { w: 3, double: true } }), n3: ['io.print'],
+  n4: fnNode('geo.figures', 'perimeter', { inputs: { w: 3, h: 2 } }), n5: ['io.print'],
+  n6: fnNode('tools.text', 'shout', { inputs: { text: 'hi', sep: '-' } }), n7: ['io.print'],
+  n8: fnNode('tools.text', 'shout', { inputs: { text: 'hi', times: 2, sep: '-' } }), n9: ['io.print'],
+}, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n4.next -> n5.in', 'n5.next -> n6.in', 'n6.next -> n7.in', 'n7.next -> n8.in', 'n8.next -> n9.in',
+  'n2.result -> n3.value', 'n4.result -> n5.value', 'n6.result -> n7.value', 'n8.result -> n9.value']), '16\n10\nHI!\nHI!-HI!\n', {
+  lines: [['    result_n2 = perimeter(3, double=True)', 'n2'], ['    result_n4 = perimeter(3, 2)', 'n4'], ['    result_n6 = shout("hi", sep="-")', 'n6'], ['    result_n8 = shout("hi", 2, "-")', 'n8']],
+});
+runsProject('star-arguments', withStart({
+  n2: fnNode('geo.figures', 'total', { inputs: { scale: 2 } }), n3: ['io.print'], n4: ['value.list', { props: { count: 3 }, inputs: { item0: 1, item1: 2, item2: 3 } }],
+  n5: fnNode('geo.figures', 'describe'), n6: ['io.print'], n7: ['py.expr', { props: { code: "{'b': 2, 'a': 1}", inputs: '' } }],
+  n8: fnNode('geo.figures', 'total'), n9: ['io.print'],
+}, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n5.in', 'n5.next -> n6.in', 'n6.next -> n8.in', 'n8.next -> n9.in',
+  'n4.list -> n2.values', 'n2.result -> n3.value', 'n7.result -> n5.fields', 'n5.result -> n6.value', 'n8.result -> n9.value']), '12\na=1, b=2\n0\n', {
+  lines: [['    result_n2 = total(*[1, 2, 3], scale=2)', 'n2'], ["    result_n5 = describe(**{'b': 2, 'a': 1})", 'n5'], ['    result_n8 = total()', 'n8']],
+});
+runsProject('same-name-in-two-modules', withStart({
+  n2: fnNode('geo.figures', 'area', { inputs: { r: 1 } }), n3: ['io.print'], n4: fnNode('tools.text', 'area', { inputs: { w: 2, h: 3 } }), n5: ['io.print'],
+  n6: fnNode('helpers', 'greet', { inputs: { name: 'Ada' } }), n7: ['io.print'], n8: fnNode('helpers', '인사', { inputs: { 이름: '세종' } }), n9: ['io.print'],
+}, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n4.next -> n5.in', 'n5.next -> n6.in', 'n6.next -> n7.in', 'n7.next -> n8.in', 'n8.next -> n9.in',
+  'n2.result -> n3.value', 'n4.result -> n5.value', 'n6.result -> n7.value', 'n8.result -> n9.value']), '3.14\n6\nHello, Ada\n안녕, 세종\n', {
+  lines: [['import geo.figures', 'n2'], ['import tools.text', 'n4'], ['from helpers import greet, 인사', 'n6'], ['    result_n2 = geo.figures.area(1)', 'n2'], ['    result_n4 = tools.text.area(2, 3)', 'n4']],
+});
+runsProject('classes-and-methods', withStart({
+  n2: newNode('geo.figures', 'Rect', { inputs: { w: 2, h: 3 } }), n3: methodNode('geo.figures', 'Rect', 'area'), n4: ['io.print'],
+  n5: methodNode('geo.figures', 'Rect', 'square', { inputs: { side: 4 } }), n6: methodNode('geo.figures', 'Rect', 'area'), n7: ['io.print'],
+  n8: methodNode('geo.figures', 'Rect', 'unit'), n9: newNode('geo.points', 'Point', { inputs: { x: 3, y: 4 } }), n10: methodNode('geo.points', 'Point', 'dist'), n11: ['io.print'],
+}, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n4.next -> n5.in', 'n5.next -> n6.in', 'n6.next -> n7.in', 'n7.next -> n8.in', 'n8.next -> n9.in', 'n9.next -> n10.in', 'n10.next -> n11.in',
+  'n2.object -> n3.object', 'n3.result -> n4.value', 'n5.result -> n6.object', 'n6.result -> n7.value', 'n9.object -> n10.object', 'n10.result -> n11.value']), '6\n16\n5.0\n', {
+  lines: [['from geo.figures import Rect', 'n2'], ['from geo.points import Point', 'n9'], ['    object_n2 = Rect(2, 3)', 'n2'], ['    result_n3 = object_n2.area()', 'n3'],
+    ['    result_n5 = Rect.square(4)', 'n5'], ['    Rect.unit()', 'n8'], ['    result_n10 = object_n9.dist()', 'n10']],
+});
+runsProject('async-function', withStart({ n2: fnNode('geo.figures', 'slow_square', { inputs: { x: 5 } }), n3: ['io.print'] },
+  ['n1.next -> n2.in', 'n2.next -> n3.in', 'n2.result -> n3.value']), '25\n', {
+  lines: [['import asyncio', 'n2'], ['from geo.figures import slow_square', 'n2'], ['    result_n2 = asyncio.run(slow_square(5))', 'n2']],
+});
+runsProject('package-functions', withStart({
+  n2: ['py.function', { props: { module: 'math', name: 'sqrt', params: [{ name: 'x', kind: 'positional-only' }] }, inputs: { x: 16 } }], n3: ['io.print'],
+  n4: ['py.function', { props: { module: 'json', name: 'dumps', params: [{ name: 'obj' }, { name: 'indent', kind: 'keyword-only', default: 'None' }] }, inputs: { indent: 1 } }], n5: ['io.print'],
+  n6: ['value.list', { props: { count: 1 }, inputs: { item0: 'a' } }],
+}, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n4.next -> n5.in', 'n2.result -> n3.value', 'n6.list -> n4.obj', 'n4.result -> n5.value']), '4.0\n[\n "a"\n]\n', {
+  lines: [['from json import dumps', 'n4'], ['from math import sqrt', 'n2'], ['    result_n4 = dumps(["a"], indent=1)', 'n4']],
+});
+
+// Names taken by the script itself: a variable, a function or a variable named like the module's package.
+{
+  const g = withStart({
+    n2: ['var.set', { props: { name: 'area' }, inputs: { value: 1 } }], n3: fnNode('geo.figures', 'area', { inputs: { r: 1 } }),
+    n4: ['fn.define', { props: { name: 'greet' } }], n5: fnNode('helpers', 'greet', { inputs: { name: 'x' } }),
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n5.in']);
+  const r = VS.compile(g, { symbols: SYMBOLS });
+  check(r.code.includes('import geo.figures\n') && r.code.includes('    geo.figures.area(1)') && r.code.includes('import helpers\n') && r.code.includes('    helpers.greet("x")') && !r.errors.some((e) => !e.warning),
+    'a function named like a variable or a Define Function is called through its module', `${r.code}\n${JSON.stringify(r.errors)}`);
+  const g2 = withStart({ n2: ['var.set', { props: { name: 'geo' }, inputs: { value: 1 } }], n3: fnNode('geo.figures', 'area', { inputs: { r: 1 } }), n4: fnNode('tools.text', 'area', { inputs: { w: 1, h: 1 } }) },
+    ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in']);
+  const r2 = VS.compile(g2, { symbols: SYMBOLS });
+  check(r2.code.includes('import geo.figures as geo_figures_module\n') && r2.code.includes('geo_figures_module.area(1)') && !r2.errors.some((e) => !e.warning),
+    'a module whose package name is a variable is imported under another name', `${r2.code}\n${JSON.stringify(r2.errors)}`);
+  written.push(writePy(r.code), writePy(r2.code));
+}
+
+// Arguments that cannot be left out when a later one is given.
+{
+  const props = { module: 'geo.figures', name: 'f', params: [{ name: 'a', kind: 'positional-only' }, { name: 'b', kind: 'positional-only', default: '5' }, { name: 'c', kind: 'positional-only' }, { name: 'd', default: '7' }, { name: 'rest', kind: 'var-positional' }] };
+  const r = VS.compile(withStart({ n2: ['py.function', { props, inputs: { a: 1, c: 3 } }], n3: ['value.list', { props: { count: 1 }, inputs: { item0: 9 } }] }, ['n1.next -> n2.in', 'n3.list -> n2.rest']), { symbols: null });
+  check(r.code.includes('    f(1, 5, 3, 7, *[9])') && !r.errors.length, 'a skipped positional-only argument, or any skipped argument before *args, is passed its default', r.code);
+  const odd = { ...props, params: [{ name: 'a', kind: 'positional-only', default: '<object object at 0x01>' }, { name: 'b', kind: 'positional-only' }] };
+  const r2 = VS.compile(withStart({ n2: ['py.function', { props: odd, inputs: { b: 2 } }] }, ['n1.next -> n2.in']), { symbols: null });
+  check(r2.errors.some((e) => e.node === 'n2' && e.pin === 'a' && e.message.includes('needs a value here')), 'a default that is not Python source makes the skipped argument required', JSON.stringify(r2.errors));
+  const req = VS.compile(withStart({ n2: fnNode('geo.figures', 'area') }, ['n1.next -> n2.in']), { symbols: SYMBOLS });
+  check(req.errors.some((e) => e.node === 'n2' && e.pin === 'r' && e.message.includes('needs a value')), 'a parameter without a default needs a value', JSON.stringify(req.errors));
+  written.push(writePy(r.code), writePy(r2.code), writePy(req.code));
+}
+
+// Pins: one per parameter, typed from annotations; reserved pin names; no Result for -> None.
+{
+  const g = withStart({
+    n2: fnNode('geo.figures', 'perimeter'), n3: fnNode('geo.figures', 'total'), n4: methodNode('geo.figures', 'Rect', 'square'),
+    n5: ['py.function', { props: { module: 'm', name: 'f', params: [{ name: 'result' }, { name: 'next' }, { name: 'object' }], returns: 'None' } }],
+  });
+  const pins = (id) => VS.pinsOf(g.nodes.find((n) => n.id === id), g);
+  check(JSON.stringify(pins('n2').inputs.map((p) => [p.id, p.type, !!p.optional])) === JSON.stringify([['w', 'number', false], ['h', 'number', true], ['double', 'bool', true]])
+    && pins('n2').outputs[0].type === 'number' && pins('n2').execIn && pins('n2').execOut.length === 1, 'a function node: run order in and out, an input per parameter typed by its annotation, a typed Result', JSON.stringify(pins('n2')));
+  check(JSON.stringify(pins('n3').inputs.map((p) => [p.id, p.label, p.type])) === JSON.stringify([['values', '*values', 'list'], ['scale', 'scale', 'any']]), '*args takes a list and is labelled *name', JSON.stringify(pins('n3').inputs));
+  check(pins('n4').inputs.map((p) => p.id).join() === 'side' && VS.titleOf(g.nodes.find((n) => n.id === 'n4')) === 'Rect.square' && VS.subtitleOf(g.nodes.find((n) => n.id === 'n4')) === 'geo.figures',
+    'a class method has no object input; its title is Class.method and its subtitle the module');
+  check(pins('n5').inputs.map((p) => p.id).join() === 'result_,next_,object_' && pins('n5').outputs.length === 0, 'parameters named like the node\'s own pins get a trailing _, and -> None has no Result', JSON.stringify(pins('n5')));
+  const types = ['int', 'float', 'str', 'bool', 'list[int]', 'List[str]', 'dict', 'typing.Dict[str, int]', 'None', "'int'", 'Optional[int]', 'tuple'].map((a) => VS.annotationType(a));
+  check(types.join() === 'int,number,string,bool,list,list,dict,dict,none,int,any,any' && VS.annotationType('int', { input: true }) === 'number', 'annotations become pin types', types.join());
+  check(VS.signatureText('f', [{ name: 'a', kind: 'positional-only' }, { name: 'b', default: '1', annotation: 'int' }, { name: 'c', kind: 'keyword-only', default: '2' }, { name: 'kw', kind: 'var-keyword' }], 'str')
+    === 'f(a, /, b: int = 1, *, c=2, **kw) -> str', 'signature text puts / and * where Python does', VS.signatureText('f', [{ name: 'a', kind: 'positional-only' }, { name: 'b', default: '1', annotation: 'int' }, { name: 'c', kind: 'keyword-only', default: '2' }, { name: 'kw', kind: 'var-keyword' }], 'str'));
+  const stored = JSON.parse(VS.serialize(g)).nodes.find((n) => n.id === 'n2').props;
+  check(JSON.stringify(stored) === JSON.stringify({ module: 'geo.figures', name: 'perimeter', params: [{ name: 'w', annotation: 'float' }, { name: 'h', default: '1', annotation: 'float' }, { name: 'double', kind: 'keyword-only', default: 'False', annotation: 'bool' }], returns: 'float' }),
+    'the signature is stored compactly in the node', JSON.stringify(stored));
+}
+
+// The index says a symbol changed or is gone.
+{
+  const g = withStart({ n2: fnNode('geo.figures', 'area', { inputs: { r: 2 } }), n3: ['io.print'], n4: ['value.number', { props: { value: 3 } }] },
+    ['n1.next -> n2.in', 'n2.next -> n3.in', 'n2.result -> n3.value', 'n4.value -> n2.r']);
+  const node = () => g.nodes.find((n) => n.id === 'n2');
+  check(VS.symbolState(node(), SYMBOLS).status === 'ok' && VS.symbolState(node(), symbolsFrom(new Map())).status === 'unknown' && VS.symbolState(node(), null).status === 'unknown', 'symbolState: ok, and unknown without an index or for a module it has not read');
+  const changedIndex = new Map(INDEX);
+  const fig = INDEX.get('geo.figures');
+  changedIndex.set('geo.figures', { ...fig, functions: fig.functions.map((f) => (f.name === 'area' ? { ...f, params: [{ name: 'radius', kind: 'positional', default: null, annotation: 'float' }, { name: 'digits', kind: 'positional', default: '2', annotation: 'int' }] } : f)) });
+  const changed = symbolsFrom(changedIndex);
+  const st = VS.symbolState(node(), changed);
+  check(st.status === 'changed' && st.symbol.params.length === 2, 'symbolState: changed when the index has other parameters');
+  const rc = VS.compile(g, { symbols: changed });
+  check(!VS.hasErrors(rc) && rc.errors.some((e) => e.node === 'n2' && e.warning && e.message.includes('parameters changed')) && rc.code.includes('area(3)'), 'a changed signature is a warning and the stored call is still generated', JSON.stringify(rc.errors));
+  const keep = withStart({ n2: fnNode('geo.figures', 'perimeter', { inputs: { w: 2, h: 5 } }), n3: ['io.print'], n4: ['value.number'] },
+    ['n1.next -> n2.in', 'n2.next -> n3.in', 'n2.result -> n3.value', 'n4.value -> n2.w']);
+  const per = fig.functions.find((f) => f.name === 'perimeter');
+  const newPer = { ...per, params: [per.params[0], { name: 'depth', kind: 'positional', default: '0', annotation: 'float' }], returns: 'int' };
+  const up = VS.updateSymbolNode(keep, 'n2', newPer);
+  const n2 = up.nodes.find((n) => n.id === 'n2');
+  check(n2.props.params.map((p) => p.name).join() === 'w,depth' && n2.props.returns === 'int' && up.links.some((l) => l.to.node === 'n2' && l.to.pin === 'w') && up.links.some((l) => l.from.node === 'n2' && l.from.pin === 'result')
+    && !(n2.inputs && 'h' in n2.inputs) && VS.serialize(keep) !== VS.serialize(up) && keep.nodes.find((n) => n.id === 'n2').props.params.length === 3,
+  'Update takes the new signature, keeps the wires of parameters that still exist, drops the old values, and leaves the old graph alone', JSON.stringify(n2));
+  const goneIndex = new Map(INDEX);
+  goneIndex.set('geo.figures', { ...fig, functions: fig.functions.filter((f) => f.name !== 'area') });
+  const rg = VS.compile(g, { symbols: symbolsFrom(goneIndex) });
+  check(VS.hasErrors(rg) && rg.errors.some((e) => e.node === 'n2' && e.message === 'geo.figures.area no longer exists.') && !rg.code.includes('import area') && rg.code.includes('raise RuntimeError("geo.figures.area no longer exists.")'),
+    'a function the index no longer has is an error: no import, and the node raises', `${JSON.stringify(rg.errors)}\n${rg.code}`);
+  const methodGone = VS.compile(withStart({ n2: methodNode('geo.figures', 'Rect', 'square', { inputs: { side: 1 } }) }, ['n1.next -> n2.in']), { symbols: symbolsFrom(new Map([['geo.figures', { ...fig, classes: [] }]])) });
+  check(methodGone.errors.some((e) => e.message === 'geo.figures.Rect.square no longer exists.'), 'a method whose class is gone is an error too', JSON.stringify(methodGone.errors));
+  const noModule = VS.compile(withStart({ n2: ['py.function', { props: { name: 'f' } }] }, ['n1.next -> n2.in']), { symbols: null });
+  check(noModule.errors.some((e) => e.node === 'n2' && e.message.includes('no module')), 'a symbol node without a module is an error', JSON.stringify(noModule.errors));
+  const noClass = VS.compile(withStart({ n2: ['py.new', { props: { module: 'geo.figures' } }] }, ['n1.next -> n2.in']), { symbols: null });
+  check(noClass.errors.some((e) => e.node === 'n2' && e.message.includes('not a valid function name')) && !noClass.code.includes('undefined'), 'a Create Object node without a class is an error', JSON.stringify(noClass.errors));
+  written.push(writePy(noClass.code));
+  written.push(writePy(rc.code), writePy(rg.code), writePy(methodGone.code), writePy(noModule.code));
+}
+
+// pinExpr and nodeLines (for the debugger).
+{
+  const g = withStart({
+    n2: ['flow.forRange', { inputs: { stop: 3 } }], n3: fnNode('geo.figures', 'area'), n4: ['io.print'], n5: ['math.binary', { props: { op: '*' }, inputs: { b: 2 } }],
+    n6: ['flow.if'], n7: ['math.compare', { props: { op: '>' }, inputs: { b: 1 } }], n8: ['io.print', { inputs: { value: 'big' } }], n9: ['io.print', { inputs: { value: 'small' } }],
+    n10: fnNode('geo.figures', 'perimeter', { inputs: { w: 1 } }), n11: ['var.get', { props: { name: 'nope' } }],
+  }, ['n1.next -> n2.in', 'n2.body -> n3.in', 'n2.index -> n3.r', 'n3.next -> n4.in', 'n3.result -> n5.a', 'n5.result -> n4.value', 'n4.next -> n6.in',
+    'n2.index -> n7.a', 'n7.result -> n6.cond', 'n6.then -> n8.in', 'n6.else -> n9.in', 'n2.done -> n10.in']);
+  const r = VS.compile(g, { symbols: SYMBOLS });
+  const at = (text) => lineOf(r.code, text);
+  check(JSON.stringify(r.pinExpr.n2) === '{"index":"index_n2"}' && JSON.stringify(r.pinExpr.n3) === '{"result":"result_n3"}' && r.pinExpr.n5.result === 'result_n3 * 2' && r.pinExpr.n7.result === 'index_n2 > 1',
+    'pinExpr: exec-node outputs are their locals, pure nodes their inline expression', JSON.stringify(r.pinExpr));
+  check(!r.pinExpr.n10 && r.pinExpr.n11.value === 'nope' && r.errors.every((e) => e.node !== 'n11'), 'pinExpr: an output nothing uses has no local and is left out; an unused pure node is described without reporting its problems', JSON.stringify({ pinExpr: r.pinExpr, errors: r.errors }));
+  check(JSON.stringify(r.nodeLines.n3) === JSON.stringify([at('        result_n3 = area(index_n2)')]) && JSON.stringify(r.nodeLines.n6) === JSON.stringify([at('        if index_n2 > 1:'), at('        else:')])
+    && r.nodeLines.n2[0] === at('    for index_n2 in range(3):') && !r.nodeLines.n5 && !r.nodeLines.n7 && r.nodeLines.n10[0] === at('    perimeter(1)'),
+  'nodeLines: each exec node\'s own lines, first line first, no lines for pure nodes', `${JSON.stringify(r.nodeLines)}\n${r.code}`);
+  check(Object.values(r.nodeLines).flat().every((l) => !/^(import|from) /.test(r.code.split('\n')[l - 1])), 'nodeLines never points at an import line');
+  check(Object.entries(r.nodeLines).every(([id, ls]) => ls.every((l) => r.map[l] === id)), 'nodeLines agrees with map');
+  written.push(writePy(r.code));
+}
+
 // ---------- random graphs (fixed seed): compile never throws, round-trips, and the code still parses ----------
 {
   let seed = 20261023;

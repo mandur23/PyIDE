@@ -1,8 +1,9 @@
 // Visual Scripting: *.pyflow files open as a node graph (Blueprint style) that compiles to Python. model.js owns the
 // file format and the pure edit helpers, nodes.js the node types, codegen.js the Python generator and editor.js the
 // canvas tab; all four add to window.PyideVisualScript. This file loads them, registers the viewer, and connects the
-// graph to the IDE: a run configuration type (Shift+F10, Rerun, stdin, tracebacks mapped to nodes), the Show Python
-// Code pane, Export as Python… and Project tree › New › Visual Script.
+// graph to the IDE: a run configuration type (Shift+F10, Rerun, stdin, tracebacks mapped to nodes; Shift+F9 debugs it
+// with debug.js mapping breakpoints and the paused position to nodes), the Show Python Code pane, Export as Python…
+// and Project tree › New › Visual Script.
 (() => {
   const { el, basename, dirname, joinPath, samePath } = ide.util;
   const here = document.currentScript.src.replace(/[^/]*$/, '');
@@ -10,11 +11,11 @@
 
   let markLoaded;
   const loaded = new Promise((resolve) => { markLoaded = resolve; });
-  for (const file of ['model.js', 'nodes.js', 'codegen.js', 'editor.js']) {
+  for (const file of ['model.js', 'nodes.js', 'codegen.js', 'symbols.js', 'editor.js', 'debug.js']) {
     const s = el('script');
     s.src = here + file;
     s.async = false;
-    if (file === 'editor.js') { s.onload = markLoaded; s.onerror = markLoaded; }
+    if (file === 'debug.js') { s.onload = markLoaded; s.onerror = markLoaded; }
     document.body.appendChild(s);
   }
 
@@ -91,6 +92,15 @@
     };
   }
 
+  // Where the generated file imports the project from: the project root, its src/ folder in a src layout (the symbol
+  // index names src/shop/cart.py shop.cart), and the script's folder, since the generated file lives elsewhere and
+  // modules beside the .pyflow must import as they would beside a .py file.
+  async function importRoots(cwd) {
+    const src = ide.root && joinPath(ide.root, 'src');
+    const srcLayout = src && (await ide.api.exists(src)) && !(await ide.api.exists(joinPath(src, '__init__.py')));
+    return [...new Set([ide.root, srcLayout ? src : null, cwd].filter(Boolean))];
+  }
+
   async function startScript(cfg, s, interp) {
     const run = ide.run;
     const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
@@ -114,11 +124,39 @@
     con.append(`${[interp.cmd, ...interp.args, file, ...params].map(quoteArg).join(' ')}\n`, 'sys');
     await run.warnMissingEnvFiles(cfg, (text) => con.append(text, 'err'));
     const trace = followTraceback(con, path, file, result.map);
-    // The script's folder is on PYTHONPATH too: the generated file lives elsewhere, and modules beside the .pyflow
-    // must import as they would beside a .py file.
-    const roots = [...new Set([ide.root, cwd].filter(Boolean))];
+    const roots = await importRoots(cwd);
     const id = await ide.api.invoke('run:start', interp, file, cwd, params, run.parseEnv(cfg.env), roots, run.envFiles(cfg));
     s.attach(id, { onExit: (code) => { if (code !== 0) trace.markFailure(); } });
+  }
+
+  // Shift+F9: the debugger runs the generated file with debugpy; debug.js maps its lines, breakpoints and values to
+  // nodes. A script with problems is not debugged ({script: null} starts nothing), as it is not run.
+  async function debugTarget(cfg) {
+    const none = { script: null };
+    const path = ide.run.resolvePath(cfg.file);
+    if (!path) { ide.ui.alert(tr('The visual script is not specified. Edit the configuration first.')); return none; }
+    let graph;
+    try { graph = await readGraph(path); } catch (err) {
+      ide.ui.alert(tr('Cannot debug {name}: {error}', { name: basename(path), error: ide.util.errorText(err) }));
+      return none;
+    }
+    for (const view of viewsOf(path)) view.markRuntimeError(null);
+    const result = compile(graph, path);
+    if (VS.hasErrors(result)) {
+      await revealProblems(path, result.errors);
+      const bad = result.errors.filter((e) => !e.warning);
+      ide.ui.alert(`${tr('Fix the problems in {name} before debugging it:', { name: basename(path) })}\n${bad.map((e) => describe(graph, e)).join('\n')}`);
+      return none;
+    }
+    const file = await ide.api.invoke('visual-script:write', path, result.code);
+    await loaded;
+    VS.debugSession({ path, file, graph, result });
+    const cwd = dirname(path);
+    const env = ide.run.parseEnv(cfg.env);
+    // As for Run (the debugger adds the project root itself).
+    const roots = (await importRoots(cwd)).filter((r) => !samePath(r, ide.root));
+    env.PYTHONPATH = [...roots, env.PYTHONPATH].filter(Boolean).join(/Win/i.test(navigator.platform) ? ';' : ':');
+    return { script: file, cwd, params: ide.run.parseArgs(cfg.params), env };
   }
 
   const configFor = (path) => ({ type: 'visual-script', name: nameOf(path), file: path });
@@ -137,6 +175,7 @@
       file: (c) => ide.run.resolvePath(c.file),
       forFile: (path) => (isScript(path) ? configFor(path) : null),
       start: startScript,
+      debugTarget,
     });
     ide.registerTreeAction({
       title: tr("Run '…'"),
@@ -325,12 +364,15 @@
       view = VS.mountEditor(host, ctx);
       ctx.tab.visualScript = view;
       extras = integrate(view, ctx.path);
+      detachDebug = VS.attachDebug?.(view, ctx.path);
     };
-    if (VS.mountEditor) start();
+    let detachDebug = null;
+    if (VS.mountEditor && VS.attachDebug) start();
     else loaded.then(start);
     return {
       dispose() {
         disposed = true;
+        detachDebug?.();
         extras?.dispose();
         view?.dispose();
         if (ctx.tab.visualScript === view) delete ctx.tab.visualScript;

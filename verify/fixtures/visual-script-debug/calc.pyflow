@@ -1,0 +1,62 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "core.start",
+      "x": 80,
+      "y": 120
+    },
+    {
+      "id": "n2",
+      "type": "py.call",
+      "x": 288,
+      "y": 112,
+      "props": {
+        "function": "double",
+        "module": "helpers"
+      },
+      "inputs": {
+        "arg0": 4
+      }
+    },
+    {
+      "id": "n3",
+      "type": "io.print",
+      "x": 560,
+      "y": 112
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "node": "n1",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n2",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n3",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "result"
+      },
+      "to": {
+        "node": "n3",
+        "pin": "value"
+      }
+    }
+  ]
+}

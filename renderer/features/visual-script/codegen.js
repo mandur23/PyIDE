@@ -1,6 +1,8 @@
 // Turns a graph into readable Python. Exec nodes become one statement each, following the run-order wires from
 // Start (under `def main():`) and from each Define Function; pure nodes are inlined as expressions with only the
 // parentheses Python needs. `map[line]` is the node that produced each generated line, so a traceback finds its node.
+// VS.compile(graph, {fileName, tr, symbols}) -> {code, map, errors, pinExpr, nodeLines}; `symbols` (default VS.symbols)
+// tells project and package nodes whether their function still exists.
 //
 // The context `c` a node's compile hook gets:
 //   c.node, c.pins, c.P (precedences), c.tr, c.inLoop, c.inFunction
@@ -9,6 +11,7 @@
 //   c.line(text), c.block(execPin, {loop, fn}), c.fail(message, prop) -> null
 //   c.ident(prop), c.identValue(value, prop), c.variable(prop), c.dotted(name), c.functionExists(name)
 //   c.literal(value, type), c.formatText(template), c.pythonExpression(code, names), c.dedent(code), c.import(module)
+//   c.symbol(module, name) -> the name to call it by (its import added), c.symbols, c.warn(message)
 (function (root) {
   'use strict';
   const VS = root.PyideVisualScript || (root.PyideVisualScript = {});
@@ -165,7 +168,9 @@
 
     const errors = [];
     const reported = new Set();
+    let silent = false; // while pinExpr compiles pure nodes again, their problems are already known
     const report = (node, message, extra = {}) => {
+      if (silent) return;
       const k = `${node}\u0000${extra.pin || ''}\u0000${extra.prop || ''}\u0000${message}`;
       if (reported.has(k)) return;
       reported.add(k);
@@ -250,13 +255,42 @@
     }
     const moduleRoots = new Set(sorted.filter((n) => n.type === 'py.call')
       .map((n) => String(VS.propOf(n, 'module') || '').trim().split('.')[0]).filter(Boolean));
-    const reserved = new Set([...BUILTINS_USED, ...moduleRoots]);
     const variables = new Set();
     for (const n of sorted) {
       if (n.type === 'var.set') variables.add(VS.propOf(n, 'name'));
       if (n.type === 'fn.define') VS.parseNames(VS.propOf(n, 'params')).forEach((p) => variables.add(p));
       if (n.type === 'py.code') ['inputs', 'outputs'].forEach((k) => VS.parseNames(VS.propOf(n, k)).forEach((p) => variables.add(p)));
     }
+
+    // Project and package symbols: `from geo.figures import area` and `area(2)`, unless two modules give the same
+    // name or the name is taken by the script itself; then `import geo.figures` and `geo.figures.area(2)`.
+    const symbols = opts.symbols !== undefined ? opts.symbols : VS.symbols;
+    const symbolNodes = sorted.filter((n) => (VS.SYMBOL_TYPES || []).includes(n.type));
+    const providers = new Map();
+    for (const n of symbolNodes) {
+      const p = n.props || {};
+      const name = n.type === 'py.function' ? p.name : p.class;
+      if (typeof name !== 'string' || typeof p.module !== 'string') continue;
+      if (!providers.has(name)) providers.set(name, new Set());
+      providers.get(name).add(p.module);
+    }
+    const usesAsync = symbolNodes.some((n) => n.type !== 'py.new' && n.props && n.props.async);
+    const taken = new Set([...BUILTINS_USED, ...moduleRoots, ...variables, ...functions.keys(), ...(usesAsync ? ['asyncio'] : [])]);
+    const symbolRefs = new Map(); // module \0 name -> {module, name, ref, from?, alias?}
+    for (const [name, modules] of providers) {
+      for (const module of modules) {
+        const ref = { module, name };
+        if (modules.size === 1 && !taken.has(name)) Object.assign(ref, { from: true, ref: name });
+        else if (taken.has(module.split('.')[0])) {
+          const alias = `${module.replace(/\./g, '_')}_module`;
+          Object.assign(ref, { alias, ref: `${alias}.${name}` });
+        }
+        else ref.ref = `${module}.${name}`;
+        symbolRefs.set(`${module}\u0000${name}`, ref);
+      }
+    }
+    const reserved = new Set([...BUILTINS_USED, ...moduleRoots, ...(usesAsync ? ['asyncio'] : [])]);
+    for (const r of symbolRefs.values()) reserved.add(r.from ? r.name : r.alias || r.module.split('.')[0]);
 
     if (!starts.length) report(null, tr('The script has no Start node. Add one to say where it begins.'));
     for (const s of starts.slice(1)) report(s.id, tr('A script can have only one Start node.'));
@@ -266,6 +300,7 @@
     let indent = 0;
     const emit = (text, node) => lines.push({ text: text ? '    '.repeat(indent) + text : '', node });
     const imports = new Map();
+    const fromImports = new Map(); // module -> Map(name -> first node)
     const visited = new Set();
     const path = new Set();
     const evaluating = new Set();
@@ -307,6 +342,17 @@
         },
         import(module) {
           if (!imports.has(module)) imports.set(module, node.id);
+        },
+        symbols,
+        warn: (message) => report(node.id, message, { warning: true }),
+        // The name that refers to `name` from `module` in the generated code; its import is added.
+        symbol(module, name) {
+          const r = symbolRefs.get(`${module}\u0000${name}`);
+          if (r.from) {
+            if (!fromImports.has(module)) fromImports.set(module, new Map());
+            if (!fromImports.get(module).has(name)) fromImports.get(module).set(name, node.id);
+          } else c.import(r.alias ? `${module} as ${r.alias}` : module);
+          return r.ref;
         },
         dotted: (s) => typeof s === 'string' && s.split('.').every(VS.isIdentifier),
         functionExists: (name) => functions.has(name),
@@ -515,10 +561,15 @@
 
     const out = [{ text: `# Generated by PyIDE from ${fileName}. Edit the .pyflow file, not this file.`, node: null }];
     const blank = () => out.push({ text: '', node: null });
-    if (imports.size) {
+    if (imports.size || fromImports.size) {
       blank();
       for (const m of [...imports.keys()].sort()) out.push({ text: `import ${m}`, node: imports.get(m) });
+      for (const m of [...fromImports.keys()].sort()) {
+        const names = fromImports.get(m);
+        out.push({ text: `from ${m} import ${[...names.keys()].sort().join(', ')}`, node: names.values().next().value });
+      }
     }
+    const bodyStart = out.length;
     for (const b of [...blocks, main]) {
       blank();
       blank();
@@ -527,10 +578,35 @@
     blank();
     blank();
     out.push({ text: 'if __name__ == "__main__":', node: null }, { text: '    main()', node: null });
+
+    // For a debugger: each node's own lines (import lines left out), and the expression that gives each data output's
+    // value once its node has run: the generated local of an exec node, the inline expression of a pure node.
+    const nodeLines = {};
+    for (let i = bodyStart; i < out.length; i++) {
+      const id = out[i].node;
+      if (id) (nodeLines[id] || (nodeLines[id] = [])).push(i + 1);
+    }
+    const pinExpr = {};
+    silent = true;
+    for (const n of sorted) {
+      const def = defOf(n);
+      if (!def || !def.compile) continue;
+      for (const p of pinsOf(n).outputs) {
+        let code = null;
+        try {
+          if (isPure(n) || def.compile.output) code = valueOf(n, p.id, { pending: [] }).code;
+          else if (usedOut.has(key(n.id, p.id))) code = `${p.id}_${n.id}`;
+        } catch {}
+        if (code !== null) (pinExpr[n.id] || (pinExpr[n.id] = {}))[p.id] = code;
+      }
+    }
+    silent = false;
     return {
       code: `${out.map((l) => l.text).join('\n')}\n`,
       map: [null, ...out.map((l) => l.node)],
       errors,
+      pinExpr,
+      nodeLines,
     };
   };
 

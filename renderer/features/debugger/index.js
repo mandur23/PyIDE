@@ -110,9 +110,16 @@
   let bpListener = null;
   const bpListChanged = () => bpListener?.();
 
+  // Code a plugin generates and debugs for the user (a visual script's Python) stands for what the user edits: the
+  // plugin owns its breakpoints and frame labels, and shows a stop in it on 'debugContextChanged' instead of the file
+  // being opened. source: {owns(path), breakpoints(path) -> DAP SourceBreakpoints, label(path, line) -> text}.
+  const generatedSources = [];
+  const generatedFor = (path) => (path ? generatedSources.find((g) => g.owns(path)) : null);
+
   function bpPayload(path) {
     const lines = fileBps(path).filter((b) => b.enabled).map((b) => ({ line: b.line, ...(b.condition ? { condition: b.condition } : {}),
       ...(b.hitCondition ? { hitCondition: b.hitCondition } : {}), ...(b.logMessage ? { logMessage: b.logMessage } : {}) }));
+    for (const b of generatedFor(path)?.breakpoints(path) || []) if (!lines.some((l) => l.line === b.line)) lines.push(b);
     if (sess?.tempBp && samePath(sess.tempBp.path, path) && !lines.some((l) => l.line === sess.tempBp.line)) lines.push({ line: sess.tempBp.line });
     return { path, lines };
   }
@@ -334,14 +341,16 @@
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     lastFile = file;
     lastCfg = cfg;
-    lastRun = () => debugFile(file, cfg);
+    // cfg.rerun: how a run configuration debugs again (a visual script is compiled again first).
+    lastRun = cfg.rerun || (() => debugFile(file, cfg));
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
     sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
     earlyEvents = [];
     const mine = sess;
     updateControls();
-    const files = [...bps.values()].map((f) => bpPayload(f.path)).filter((p) => p.lines.length);
+    const files = [...bps.values()].map((f) => f.path).concat(generatedFor(file) && !bps.has(key(file)) ? [file] : [])
+      .map(bpPayload).filter((p) => p.lines.length);
     let id;
     try {
       const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [],
@@ -589,6 +598,8 @@
     sess.state = 'suspended';
     sess.threadId = body.threadId ?? sess.threadId ?? 1;
     sess.stopReason = body.reason;
+    sess.stopText = body.text || '';
+    sess.stopDescription = body.description || '';
     if (sess.tempBp) {
       const p = sess.tempBp.path;
       sess.tempBp = null;
@@ -615,7 +626,7 @@
     // A pause while debugpy is still starting the program stops with only library frames, which justMyCode hides:
     // nothing to show, rather than the text the Variables pane had before.
     if (!frame) { renderVars([]); renderWatches(); return; }
-    if (frame.source?.path) await ide.openFile(frame.source.path, { line: frame.line, focus: false });
+    if (frame.source?.path && !generatedFor(frame.source.path)) await ide.openFile(frame.source.path, { line: frame.line, focus: false });
     let vars = [];
     let scopes = [];
     try {
@@ -833,8 +844,9 @@
     }
     framesList.replaceChildren(...sess.frames.map((f, i) => {
       const row = el('div', 'dbg-frame' + (i === sess.frameIdx ? ' selected' : '') + (f.source?.path ? '' : ' muted'));
-      row.append(data('dbg-frame-name', f.name), data('dbg-frame-loc', `, ${f.source?.path ? basename(f.source.path) : f.source?.name || '?'}:${f.line}`));
-      row.title = f.source?.path || '';
+      const generated = generatedFor(f.source?.path)?.label(f.source.path, f.line);
+      row.append(data('dbg-frame-name', f.name), data('dbg-frame-loc', `, ${generated || `${f.source?.path ? basename(f.source.path) : f.source?.name || '?'}:${f.line}`}`));
+      row.title = generated || f.source?.path || '';
       row.onclick = () => selectFrame(i);
       return row;
     }));
@@ -1174,7 +1186,10 @@
     const tab = ide.activeTab();
     // A scratch file (scratches plugin) runs in the project root, as in PyCharm.
     if (tab?.kind === 'file' && tab.path.endsWith('.py')) return debugFile(tab.path, ide.root && ide.scratches?.isScratch(tab.path) ? { cwd: ide.root } : {});
-    if (lastFile) return debugFile(lastFile, lastCfg);
+    // A file (also in a viewer tab) that a run configuration type claims and debugs through its debugTarget: a visual script.
+    const type = tab?.path && [...(ide.run?.types.values() || [])].find((t) => t.debugTarget && t.forFile?.(tab.path));
+    if (type) return ide.run.debugConfig({ ...type.defaults(), ...type.forFile(tab.path) });
+    if (lastFile) return lastCfg.rerun ? lastCfg.rerun() : debugFile(lastFile, lastCfg);
     tw.show();
     showSub('console');
     con.append(`${tr('Open a .py file to debug it.')}\n`, 'sys');
@@ -1219,6 +1234,13 @@
     isSuspended: suspended,
     evaluate: (expression, context = 'repl') => (suspended() ? evaluate(expression, context) : Promise.resolve({ error: tr('Not suspended') })),
     addVariableDecorator: (fn) => varDecorators.push(fn),
+    // While suspended: why it stopped (an exception's type in text, its message in description), the stack and the
+    // selected frame's index; else null.
+    stopped: () => (suspended() ? { reason: sess.stopReason, text: sess.stopText, description: sess.stopDescription, index: sess.frameIdx,
+      frames: sess.frames.map((f) => ({ id: f.id, name: f.name, line: f.line, path: f.source?.path || null })) } : null),
+    registerGeneratedSource: (source) => generatedSources.push(source),
+    // Sends a file's breakpoints to the running session again (a generated source's changed).
+    sendBreakpoints: sendBps,
   };
   window.__debugger = { state: () => sess && { id: sess.id, attach: sess.attach || null, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
 })();

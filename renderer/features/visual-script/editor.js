@@ -139,6 +139,11 @@
     let selection = new Set();
     let errors = [];
     let runtime = null; // {node, message}
+    // Debugging (debug.js): breakpoints by node id -> condition, the paused node, and the hooks it gives the canvas.
+    let debugState = { breakpoints: new Map(), paused: null };
+    let onBreakpoint = null; // fn(nodeId): a click on a step's breakpoint dot
+    const nodeMenus = []; // fn(nodeId) -> extra node menu items
+    let valueProvider = null; // fn(ref) -> Promise<{text, note} | null>, the value of a pin or wire while paused
     const listeners = new Set();
     const selectListeners = new Set();
     const savedViews = root.ide.settings.get(VIEW_KEY, {}) || {};
@@ -309,6 +314,11 @@
       banner.classList.add('hidden');
     }
     disposers.push(model.onDidChangeContent(() => { if (!applying && !disposed) load(); }));
+    // The symbol index decides which project and package nodes show "parameters changed" and which no longer exist.
+    if (VS.symbols) {
+      VS.symbols.use();
+      disposers.push(VS.symbols.onChange(() => { if (!disposed && graph) { render(); compileNow(); } }));
+    }
 
     // ---------- live errors ----------
     let compileTimer = 0;
@@ -367,6 +377,21 @@
       problems.title = errors.map((e) => e.message).join('\n');
       host.dataset.problems = String(nErr);
     }
+    function applyDebug() {
+      const { breakpoints, paused } = debugState;
+      for (const [id, v] of views) {
+        const dot = v.el.querySelector(':scope > .vs-bp');
+        if (dot) {
+          const on = breakpoints.has(id);
+          const cond = on ? breakpoints.get(id) : '';
+          dot.classList.toggle('on', on);
+          dot.classList.toggle('cond', !!cond);
+          dot.title = !on ? tr('Add a breakpoint (F9)') : cond ? tr('Breakpoint: suspends when {condition}. Click to remove.', { condition: cond }) : tr('Breakpoint. Click to remove (F9).');
+        }
+        v.el.classList.toggle('vs-paused', paused?.node === id);
+        v.el.classList.toggle('vs-paused-frame', paused?.node === id && !paused.top);
+      }
+    }
 
     // ---------- rendering ----------
     // node id -> Set of 'in:pin' / 'out:pin' with a wire, rebuilt once per render.
@@ -410,6 +435,7 @@
       f.spellcheck = false;
       const shown = type === 'any' ? anyText(value) : value === undefined || value === null ? '' : String(value);
       f.value = shown;
+      if (pin.placeholder) f.placeholder = pin.placeholder;
       if (!numeric) f.size = Math.max(10, Math.min(28, shown.length + 1));
       f.setAttribute('data-user-text', '');
       f.title = type === 'any'
@@ -536,6 +562,8 @@
       const headOut = pins.execOut.length === 1 && !pins.execOut[0].label;
       if (headOut) head.appendChild(pinEl(node, 'out', pins.execOut[0].id, 'exec', 'exec', tr('Next')));
       n.appendChild(head);
+      // Steps (nodes with a run-order input) have a line of their own, so they can take a breakpoint.
+      if (pins.execIn) n.appendChild(h('span', 'vs-bp'));
 
       const ins = h('div', 'vs-col vs-ins');
       for (const p of pins.inputs) {
@@ -569,10 +597,32 @@
         for (const p of props) box.appendChild(propField(node, p));
         n.appendChild(box);
       }
+      const state = symbolState(node);
+      if (state) {
+        const p = node.props || {};
+        const sym = state.symbol || p;
+        const name = node.type === 'py.new' ? p.class : node.type === 'py.method' ? `${p.class}.${p.name}` : p.name;
+        head.title = [`${VS.symbolPath(node)}`, VS.signatureText(String(name ?? ''), sym.params, node.type === 'py.new' ? null : sym.returns), sym.doc || ''].filter(Boolean).join('\n');
+        head.setAttribute('data-user-text', '');
+      }
+      if (state?.status === 'changed') {
+        const box = h('div', 'vs-props vs-stale');
+        const text = h('span', 'vs-prop-name vs-stale-text', tr("The function's parameters changed"));
+        const update = h('button', 'vs-btn vs-update', tr('Update'));
+        update.type = 'button';
+        const p = node.props || {};
+        update.title = tr('Use the new parameters: {signature}', { signature: VS.signatureText(String((node.type === 'py.new' ? p.class : p.name) ?? ''), state.symbol.params, state.symbol.returns) });
+        update.addEventListener('mousedown', (e) => e.stopPropagation());
+        update.addEventListener('click', (e) => { e.stopPropagation(); commit(VS.updateSymbolNode(graph, node.id, state.symbol)); canvas.focus(); });
+        box.append(text, update);
+        n.appendChild(box);
+      }
       return n;
     }
+    const symbolState = (node) => { try { return VS.symbolState ? VS.symbolState(node) : null; } catch { return null; } };
     const signature = (node) => JSON.stringify([node.type, node.props, node.inputs, connectedInputs(node.id).sort(),
-      defOf(node)?.pins ? pinsOf(node, graph) : 0, defOf(node)?.props?.some((p) => p.suggest === 'functions') && VS.functionNames ? VS.functionNames(graph) : 0]);
+      defOf(node)?.pins ? pinsOf(node, graph) : 0, defOf(node)?.props?.some((p) => p.suggest === 'functions') && VS.functionNames ? VS.functionNames(graph) : 0,
+      symbolState(node)?.status || 0]);
 
     function measure(v) {
       const s = drawnScale;
@@ -616,6 +666,7 @@
       drawWires();
       applySelection();
       applyErrors();
+      applyDebug();
       counts.textContent = graph.nodes.length === 1 ? tr('1 node') : tr('{n} nodes', { n: graph.nodes.length });
       host.dataset.nodes = String(graph.nodes.length);
       host.dataset.links = String(graph.links.length);
@@ -742,7 +793,7 @@
     // origin: a pin the user dragged a wire from; the palette then lists only types with a pin that fits it, and
     // the new node is wired to that pin.
     function candidateTypes(origin) {
-      const defs = VS.nodeTypes().filter((d) => d.type !== 'core.start' || !graph.nodes.some((n) => n.type === 'core.start'));
+      const defs = VS.nodeTypes().filter((d) => d.palette !== false && (d.type !== 'core.start' || !graph.nodes.some((n) => n.type === 'core.start')));
       if (!origin) return defs.map((def) => ({ def }));
       const out = [];
       for (const def of defs) {
@@ -759,72 +810,170 @@
       }
       return out;
     }
+    // The pin of a node made from `fields` ({type, props}) that a wire dragged from `origin` connects to, or null.
+    function fittingPin(fields, origin) {
+      const pins = pinsOf({ id: '\u0000new', x: 0, y: 0, ...fields }, graph);
+      const from = VS.findPin(graph, { node: origin.node, pin: origin.pin });
+      if (!from) return null;
+      if (from.kind === 'exec') return origin.side === 'out' ? (pins.execIn ? 'in' : null) : pins.execOut[0]?.id || null;
+      const found = origin.side === 'out' ? pins.inputs.find((p) => VS.compatible(from.type, p.type)) : pins.outputs.find((p) => VS.compatible(p.type, from.type));
+      return found ? found.id : null;
+    }
+    // Palette entries for the functions, classes and methods of symbol-index modules (VS.symbols): cat is 'Project' or
+    // 'Packages', group the module. Each entry creates a py.function, py.new or py.method node with its props filled.
+    function symbolItems(modules, cat, origin) {
+      const out = [];
+      const add = (what, module, sym, cls) => {
+        const fields = VS.symbolNode(what, module, sym, cls);
+        const pin = origin ? fittingPin(fields, origin) : null;
+        if (origin && !pin) return;
+        const title = what === 'class' ? tr('New {name}', { name: sym.name }) : what === 'method' ? `${cls}.${sym.name}` : sym.name;
+        const shown = what === 'class' ? sym.name : what === 'method' ? `${cls}.${sym.name}` : sym.name;
+        const sig = VS.signatureText(shown, sym.params, what === 'class' ? null : sym.returns);
+        const tip = [`${sym.async ? 'async ' : ''}${sig}`, sym.doc || ''].filter(Boolean).join('\n');
+        const hay = [title, sym.name, cls || '', module, tr(cat), cat, sym.doc || ''].join(' ').toLowerCase();
+        out.push({ def: VS.nodeType(fields.type), fields, pin, title, cat, group: module, name: sym.name.toLowerCase(), hay, tip });
+      };
+      for (const m of modules) {
+        if (!m || m.error) continue;
+        for (const f of m.functions || []) add('function', m.name, f);
+        for (const c of m.classes || []) {
+          add('class', m.name, c);
+          for (const meth of c.methods || []) add('method', m.name, meth, c.name);
+        }
+      }
+      return out;
+    }
+    const DOTTED_QUERY = /^([\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*)\.([\p{L}\p{N}_]*)$/u;
     function openPalette(point, origin = null) {
       closePalette();
       const at = toCanvas(point.clientX, point.clientY);
+      const symbols = VS.symbols && VS.SYMBOL_TYPES && root.ide?.trusted !== false ? VS.symbols : null;
       const cands = candidateTypes(origin);
       const items = cands.map(({ def, pin }) => {
         const title = titleOf({ type: def.type });
         const cat = def.category || 'Other';
         const hay = [title, englishTitle(def), tr(cat), cat, def.keywords || '', tr(def.description || ''), def.description || '', def.type]
           .join(' ').toLowerCase();
-        return { def, pin, title, cat, hay };
+        return { def, pin, title, cat, hay, tip: tr(def.description || '') };
       });
+      const projectItems = symbols ? symbolItems(symbols.project(), 'Project', origin) : [];
+      items.push(...projectItems);
+      if (symbols && !origin) items.push({ browse: true, title: tr('Browse Package…'), cat: 'Packages', hay: `${tr('Browse Package…')} browse package packages`.toLowerCase(), tip: tr('Type a module name and a dot to see its functions, like math.') });
       const order = VS.CATEGORIES || [];
       const catIndex = (c) => { const i = order.indexOf(c); return i === -1 ? order.length : i; };
       items.sort((a, b) => catIndex(a.cat) - catIndex(b.cat) || a.cat.localeCompare(b.cat));
+      const packageItems = new Map(); // module name -> its palette entries, once loaded
+      const loadErrors = new Map();
 
       const el = h('div', 'vs-palette');
       const input = h('input', 'vs-pal-input');
       input.type = 'text';
       input.spellcheck = false;
-      input.placeholder = origin ? tr('Search nodes that fit this pin') : tr('Search nodes');
+      const placeholder = origin ? tr('Search nodes that fit this pin') : tr('Search nodes');
+      input.placeholder = placeholder;
       input.setAttribute('aria-label', tr('Search nodes'));
       const list = h('div', 'vs-pal-list');
       list.setAttribute('role', 'listbox');
+      const note = h('div', 'vs-pal-empty vs-pal-note hidden');
       const empty = h('div', 'vs-pal-empty hidden', tr('No matching nodes'));
-      el.append(input, list, empty);
+      el.append(input, list, note, empty);
       host.appendChild(el);
-      const collapsed = new Set();
+      // A project with many modules shows them folded; typing searches all of them.
+      const collapsed = new Set(projectItems.length > 40 ? projectItems.map((it) => `${it.cat}\u0000${it.group}`) : []);
+      let browsing = null; // Browse Package…: the names of the modules that can be loaded
       let shown = [];
       let active = 0;
-      function draw() {
-        const q = input.value.trim().toLowerCase();
-        const tokens = q.split(/\s+/).filter(Boolean);
-        let matches = items.filter((it) => tokens.every((t) => it.hay.includes(t)));
-        if (q) {
-          const rank = (it) => (it.title.toLowerCase().startsWith(q) || englishTitle(it.def).toLowerCase().startsWith(q) ? 0 : 1);
-          matches = matches.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
+      const catColour = (cat) => `var(--vs-cat-${slug(cat)}, var(--vs-cat-python))`;
+      function header(key, label, cat, indent) {
+        const head = h('div', `vs-pal-cat${indent ? ' vs-pal-mod' : ''}`);
+        head.dataset.cat = key;
+        head.style.setProperty('--vs-cat', catColour(cat));
+        const name = h('span', '', label);
+        if (indent) { head.style.paddingLeft = '22px'; name.setAttribute('data-user-text', ''); }
+        head.append(h('span', `vs-pal-arrow${collapsed.has(key) ? ' vs-closed' : ''}`, '▾'), name);
+        head.addEventListener('mousedown', (e) => { e.preventDefault(); if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); draw(); });
+        list.appendChild(head);
+      }
+      function addRow(it, hintText) {
+        const row = h('div', 'vs-pal-item');
+        row.setAttribute('role', 'option');
+        if (it.def) row.dataset.type = it.def.type;
+        if (it.group) { row.dataset.module = it.group; row.dataset.name = it.title; }
+        if (it.browse) row.dataset.action = 'browse';
+        if (it.goto) row.dataset.goto = it.goto;
+        row.style.setProperty('--vs-cat', catColour(it.cat));
+        // A function, module or package entry is the project's or the package's own text: names, signature, docstring.
+        if (it.group || it.goto) row.setAttribute('data-user-text', '');
+        row.append(h('span', 'vs-pal-dot'), h('span', 'vs-pal-title', it.title));
+        if (hintText) row.appendChild(h('span', 'vs-pal-hint', hintText));
+        row.title = it.tip || '';
+        const index = shown.length;
+        row.addEventListener('mousemove', () => { if (active !== index) { active = index; mark(); } });
+        row.addEventListener('mousedown', (e) => { e.preventDefault(); pick(it); });
+        list.appendChild(row);
+        shown.push({ it, row });
+      }
+      function showNote(text) {
+        note.textContent = text || '';
+        note.classList.toggle('hidden', !text);
+      }
+      // "math." or "geo.figures.ar": the module's entries (a package module is loaded first), filtered by the rest.
+      function dottedMatches(moduleName, rest) {
+        const byName = (list) => list.filter((it) => !rest || it.name.startsWith(rest) || it.title.toLowerCase().includes(rest))
+          .sort((a, b) => (b.name.startsWith(rest) ? 1 : 0) - (a.name.startsWith(rest) ? 1 : 0));
+        if (symbols.isProject(moduleName)) {
+          return byName(projectItems.filter((it) => it.group === moduleName || it.group.startsWith(`${moduleName}.`)));
         }
+        if (loadErrors.has(moduleName)) { showNote(loadErrors.get(moduleName)); return []; }
+        if (!packageItems.has(moduleName)) {
+          showNote(tr('Loading {name}…', { name: moduleName }));
+          symbols.module(moduleName).then((m) => {
+            const subs = origin ? [] : (m.submodules || []).map((s) => ({ goto: s, title: s, cat: 'Packages', name: s.slice(moduleName.length + 1).toLowerCase(), hay: s.toLowerCase(), tip: tr('Show the functions of {name}', { name: s }) }));
+            packageItems.set(moduleName, [...symbolItems([m], 'Packages', origin), ...subs]);
+          }, (err) => loadErrors.set(moduleName, tr('Cannot load {name}: {error}', { name: moduleName, error: err.message })))
+            .then(() => { if (palette?.el === el) draw(); });
+          return [];
+        }
+        return byName(packageItems.get(moduleName));
+      }
+      function draw() {
+        const raw = input.value.trim();
+        const q = raw.toLowerCase();
         list.replaceChildren();
         shown = [];
-        let lastCat = null;
-        for (const it of matches) {
-          if (!q && it.cat !== lastCat) {
-            lastCat = it.cat;
-            const head = h('div', 'vs-pal-cat');
-            head.dataset.cat = it.cat;
-            head.append(h('span', `vs-pal-arrow${collapsed.has(it.cat) ? ' vs-closed' : ''}`, '▾'), h('span', '', tr(it.cat)));
-            head.style.setProperty('--vs-cat', `var(--vs-cat-${slug(it.cat)}, var(--vs-cat-other))`);
-            head.addEventListener('mousedown', (e) => { e.preventDefault(); if (collapsed.has(it.cat)) collapsed.delete(it.cat); else collapsed.add(it.cat); draw(); });
-            list.appendChild(head);
+        showNote('');
+        if (browsing) {
+          const names = browsing.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 300);
+          for (const n of names) addRow({ goto: n, title: n, cat: 'Packages', tip: tr('Show the functions of {name}', { name: n }) });
+          active = Math.min(active, Math.max(0, shown.length - 1));
+          empty.classList.toggle('hidden', shown.length > 0);
+          mark();
+          return;
+        }
+        // "Rect.ar" is a method of a project class; "math.sq" is a module.
+        const dotted = symbols && !projectItems.some((it) => it.title.toLowerCase().startsWith(q)) && DOTTED_QUERY.exec(raw);
+        if (dotted) {
+          for (const it of dottedMatches(dotted[1], dotted[2].toLowerCase())) addRow(it, it.group);
+        } else {
+          const tokens = q.split(/\s+/).filter(Boolean);
+          let matches = items.filter((it) => tokens.every((t) => it.hay.includes(t)));
+          if (q) {
+            const rank = (it) => (it.title.toLowerCase().startsWith(q) || (it.def && !it.group && englishTitle(it.def).toLowerCase().startsWith(q)) ? 0 : 1);
+            matches = matches.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
           }
-          if (!q && collapsed.has(it.cat)) continue;
-          const row = h('div', 'vs-pal-item');
-          row.setAttribute('role', 'option');
-          row.dataset.type = it.def.type;
-          row.style.setProperty('--vs-cat', `var(--vs-cat-${slug(it.cat)}, var(--vs-cat-other))`);
-          row.append(h('span', 'vs-pal-dot'), h('span', 'vs-pal-title', it.title));
-          if (q) row.appendChild(h('span', 'vs-pal-hint', tr(it.cat)));
-          row.title = tr(it.def.description || '');
-          const index = shown.length;
-          row.addEventListener('mousemove', () => { if (active !== index) { active = index; mark(); } });
-          row.addEventListener('mousedown', (e) => { e.preventDefault(); pick(it); });
-          list.appendChild(row);
-          shown.push({ it, row });
+          let lastCat = null;
+          let lastGroup = null;
+          for (const it of matches) {
+            if (!q && it.cat !== lastCat) { lastCat = it.cat; lastGroup = null; header(it.cat, tr(it.cat), it.cat, false); }
+            if (!q && collapsed.has(it.cat)) continue;
+            if (!q && it.group && it.group !== lastGroup) { lastGroup = it.group; header(`${it.cat}\u0000${it.group}`, it.group, it.cat, true); }
+            if (!q && it.group && collapsed.has(`${it.cat}\u0000${it.group}`)) continue;
+            addRow(it, q ? (it.group || tr(it.cat)) : '');
+          }
         }
         active = Math.min(active, Math.max(0, shown.length - 1));
-        empty.classList.toggle('hidden', shown.length > 0);
+        empty.classList.toggle('hidden', shown.length > 0 || !note.classList.contains('hidden'));
         mark();
       }
       function mark() {
@@ -837,8 +986,25 @@
         }
       }
       function pick(it) {
+        if (it.browse) {
+          input.value = '';
+          input.placeholder = tr('Search packages');
+          showNote(tr('Loading {name}…', { name: tr('Packages') }));
+          symbols.packages().then((names) => { browsing = names; }, (err) => showNote(err.message)).then(() => { if (palette?.el === el && browsing) draw(); });
+          input.focus();
+          return;
+        }
+        if (it.goto) {
+          browsing = null;
+          input.placeholder = placeholder;
+          input.value = `${it.goto}.`;
+          active = 0;
+          draw();
+          input.focus();
+          return;
+        }
         closePalette();
-        addNodeAt(it.def, at, origin, it.pin);
+        addNodeAt(it.def, at, origin, it.pin, it.fields);
       }
       input.addEventListener('input', () => { active = 0; draw(); });
       input.addEventListener('keydown', (e) => {
@@ -879,10 +1045,10 @@
       delete host.dataset.palette;
       if (focus && !disposed) canvas.focus();
     }
-    function addNodeAt(def, at, origin, pin) {
+    function addNodeAt(def, at, origin, pin, fields) {
       const id = VS.nextId(graph);
       const x = origin?.side === 'in' ? at.x - 200 : at.x;
-      let g = VS.addNode(graph, { id, type: def.type, x: snap(x), y: snap(at.y - 12) });
+      let g = VS.addNode(graph, { ...fields, id, type: def.type, x: snap(x), y: snap(at.y - 12) });
       if (origin && pin) g = VS.connect(g, { node: origin.node, pin: origin.pin }, { node: id, pin });
       commit(g, { select: [id] });
       return id;
@@ -899,6 +1065,8 @@
         { label: tr('Disconnect All'), disabled: !graph.links.some((l) => l.from.node === id || l.to.node === id), run: () => disconnectAll(id) },
       ];
       if (node?.type === 'ui.comment') items.push({ separator: true }, { label: tr('Edit Text'), run: () => editComment(id) });
+      const extra = nodeMenus.flatMap((fn) => { try { return fn(id) || []; } catch (err) { console.error(err); return []; } });
+      if (extra.length) items.push({ separator: true }, ...extra);
       root.ide.ui.contextMenu(e.clientX, e.clientY, items);
     }
     function canvasMenu(e) {
@@ -977,6 +1145,13 @@
       lastPointer.clientY = e.clientY;
       if (invalid) return;
       canvas.focus({ preventScroll: true });
+      hideValue();
+      const dot = e.button === 0 && !e.altKey && e.target.closest('.vs-bp');
+      if (dot) {
+        e.preventDefault();
+        onBreakpoint?.(dot.parentElement.dataset.id);
+        return;
+      }
       const pinNode = e.target.closest('.vs-pin');
       const nodeEl = e.target.closest('.vs-node');
       const hit = e.target.closest('.vs-wire-hit');
@@ -1161,6 +1336,51 @@
     }, { passive: false });
     canvas.addEventListener('mousemove', (e) => { lastPointer.clientX = e.clientX; lastPointer.clientY = e.clientY; });
 
+    // ---------- values while the debugger is paused ----------
+    // Resting on a data pin or a wire asks the value provider; its answer shows in a bubble by the pointer.
+    const valueTip = h('div', 'vs-value-tip hidden');
+    valueTip.setAttribute('data-user-text', '');
+    canvas.appendChild(valueTip);
+    let valueTimer = 0;
+    let valueFor = null; // the pin or wire element the bubble is (being) shown for
+    function hideValue() {
+      clearTimeout(valueTimer);
+      valueTimer = 0;
+      valueFor = null;
+      valueTip.classList.add('hidden');
+    }
+    function valueRef(target) {
+      const p = target.closest?.('.vs-pin.vs-data');
+      if (p) return { el: p, ref: { node: p.dataset.node, pin: p.dataset.pin, side: p.dataset.side } };
+      const w = target.closest?.('.vs-wire-hit');
+      const link = w && graph?.links[Number(w.dataset.link)];
+      return link ? { el: w, ref: { link } } : null;
+    }
+    canvas.addEventListener('mouseover', (e) => {
+      if (!valueProvider || gesture || !graph) return;
+      const hit = valueRef(e.target);
+      if (hit?.el === valueFor) return;
+      hideValue();
+      if (!hit) return;
+      valueFor = hit.el;
+      const { clientX, clientY } = e;
+      valueTimer = setTimeout(async () => {
+        let v = null;
+        try { v = await valueProvider(hit.ref); } catch (err) { console.error(err); }
+        if (valueFor !== hit.el || disposed || !v) return;
+        valueTip.textContent = String(v.text);
+        valueTip.classList.toggle('vs-value-note', !!v.note);
+        valueTip.classList.remove('hidden');
+        const r = canvasRect();
+        const x = Math.min(clientX - r.left + 12, r.width - valueTip.offsetWidth - 4);
+        const y = clientY - r.top - valueTip.offsetHeight - 10;
+        valueTip.style.left = `${Math.max(4, x)}px`;
+        valueTip.style.top = `${y < 4 ? clientY - r.top + 18 : y}px`;
+      }, 250);
+    });
+    canvas.addEventListener('mouseleave', hideValue);
+    canvas.addEventListener('wheel', hideValue, { passive: true });
+
     // ---------- keyboard ----------
     const pointerInCanvas = () => {
       const r = canvasRect();
@@ -1239,6 +1459,7 @@
         if (saveTimer) { clearTimeout(saveTimer); saveView(); }
         if (viewFrame) cancelAnimationFrame(viewFrame);
         if (moveFrame) cancelAnimationFrame(moveFrame);
+        hideValue();
         document.removeEventListener('copy', onCopy, true);
         for (const d of disposers) (typeof d === 'function' ? d() : d.dispose());
         listeners.clear();
@@ -1259,6 +1480,25 @@
       onSelect(fn) { selectListeners.add(fn); return () => selectListeners.delete(fn); },
       openPalette: (point) => openPalette(point || centerPoint()),
       compileNow,
+      // Centres the node only when it is not wholly in view.
+      revealNode(id) {
+        const el = views.get(id)?.el;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const c = canvasRect();
+        if (r.left < c.left || r.right > c.right || r.top < c.top || r.bottom > c.bottom) centerOn(id);
+      },
+      // Debugging (debug.js): state {breakpoints: [{node, condition}], paused: {node, top} | null} draws the steps'
+      // breakpoint dots and the paused outline (top false: a caller's frame).
+      setDebugState(state) {
+        debugState = { breakpoints: new Map((state?.breakpoints || []).map((b) => [b.node, b.condition || ''])), paused: state?.paused || null };
+        if (!debugState.paused) hideValue();
+        applyDebug();
+      },
+      onBreakpointClick(fn) { onBreakpoint = fn; },
+      addNodeMenu(fn) { nodeMenus.push(fn); },
+      // fn({node, pin, side} | {link}) -> Promise<{text, note} | null>: shown in a bubble while the pointer rests on it.
+      setValueProvider(fn) { valueProvider = fn; },
     };
     host.visualScript = api;
     return api;

@@ -1,0 +1,71 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "type": "core.start",
+      "x": 80,
+      "y": 120
+    },
+    {
+      "id": "n2",
+      "type": "py.function",
+      "x": 288,
+      "y": 112,
+      "props": {
+        "module": "shop.cart",
+        "name": "total",
+        "params": [
+          {
+            "name": "price"
+          },
+          {
+            "name": "qty"
+          }
+        ]
+      },
+      "inputs": {
+        "price": 3,
+        "qty": 4
+      }
+    },
+    {
+      "id": "n3",
+      "type": "io.print",
+      "x": 560,
+      "y": 112
+    }
+  ],
+  "links": [
+    {
+      "from": {
+        "node": "n1",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n2",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "next"
+      },
+      "to": {
+        "node": "n3",
+        "pin": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "n2",
+        "pin": "result"
+      },
+      "to": {
+        "node": "n3",
+        "pin": "value"
+      }
+    }
+  ]
+}

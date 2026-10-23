@@ -608,7 +608,9 @@
     if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
       const r = cfg.type === 'python' ? ide.run.resolvePython(cfg) : { ...(await debugTarget(cfg, interpFor(cfg))), interp: interpFor(cfg) };
-      return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg) });
+      // A debugTarget may build its script (a visual script compiles its graph), so Rerun asks it again.
+      return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg),
+        ...(debugTarget ? { rerun: () => debugConfig(cfg) } : {}) });
     }
     const file = types.get(cfg.type)?.file?.(cfg);
     const go = () => ide.runAction(debugActionId());

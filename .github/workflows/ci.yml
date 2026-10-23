@@ -255,6 +255,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/visual-script.mjs
+      - name: visual-script-project
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/visual-script-project.mjs
+      - name: visual-script-debug
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/visual-script-debug.mjs
       - name: code-vision
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
