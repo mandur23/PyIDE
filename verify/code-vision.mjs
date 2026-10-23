@@ -80,18 +80,25 @@ const newLine = (t, group, line) => t.js(`(() => {
   return true;
 })()`);
 
-async function clickLens(t, text, group = 0) {
-  const box = await t.js(`(() => {
-    const host = ide.editors()[${group}].getContainerDomNode();
+// line: the lens line of the declaration (its lens sits right above that line), when other declarations in view have
+// a lens with the same text; waits for that lens to be drawn.
+async function clickLens(t, text, group = 0, line = null) {
+  const find = () => t.js(`(() => {
+    const ed = ide.editors()[${group}];
+    const host = ed.getContainerDomNode();
     const box = host.getBoundingClientRect();
+    const lineTop = ${line} === null ? null : box.top + ed.getTopForLineNumber(${line}) - ed.getScrollTop();
     const a = [...host.querySelectorAll('.codelens-decoration > a')].find((n) => {
       const r = n.getBoundingClientRect();
-      return n.textContent === ${S(text)} && r.height > 0 && r.top >= box.top && r.bottom <= box.bottom;
+      return n.textContent === ${S(text)} && r.height > 0 && r.top >= box.top && r.bottom <= box.bottom
+        && (lineTop === null || (r.bottom <= lineTop + 1 && r.bottom >= lineTop - 2 * r.height));
     });
     if (!a) return null;
     const r = a.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   })()`);
+  let box = await find();
+  for (let i = 0; line !== null && !box && i < 50; i++) { await t.sleep(200); box = await find(); }
   if (!box) throw new Error(`no lens "${text}"`);
   for (const type of ['mousePressed', 'mouseReleased']) await t.cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
   await t.sleep(100);
@@ -209,9 +216,12 @@ await run('A', async () => {
     // One usage: the click goes there.
     await js(`ide.openFile(ide.util.joinPath(ide.root, 'app.py'))`);
     await until(`ide.activeTab()?.title === 'app.py'`, 'app.py');
+    // main has "1 usage" too, and in a short editor (the CI runner's small screen) app.py may be scrolled past
+    // total_area, so the click aims at total_area's lens.
+    await reveal('app.py', 'total_area');
     await untilLens('app.py', 'total_area', 'usages', '1 usage', 'total_area: 1 usage');
     await until(`__cvDom().includes('1 usage')`, '1 usage drawn');
-    await clickLens(t, '1 usage');
+    await clickLens(t, '1 usage', 0, await js(`ide.codeVision.symbols(__cvModel('app.py')).find((s) => s.qual === 'total_area').line`));
     await until(`ide.editor.getPosition().lineNumber === 13`, 'navigated to the only usage');
     check(true, '"1 usage" goes straight to the usage');
 
@@ -283,6 +293,8 @@ await run('A', async () => {
     console.log(`typing 200 chars in ${typingMs} ms: ${during} references requests while typing, ${after} in all (${visible} declarations in view)`);
     check(during <= 1, `typing 200 characters sends ${during} references requests while typing (<= 1)`);
     check(after <= visible, `after typing: ${after} references requests in all, at most one per declaration in view (${visible})`);
+    // Only declarations in view are counted; a short editor (the CI runner's small screen) may have scrolled past it.
+    await js(`(ide.editors()[1].revealLineInCenter(ide.codeVision.symbols(__cvModel('app.py')).find((s) => s.qual === 'total_area').line), true)`);
     await untilLens('app.py', 'total_area', 'usages', '5 usages', 'total_area recounted after typing');
     check(true, 'the counts follow the typed calls once typing pauses');
 
@@ -349,7 +361,9 @@ await run('B', async () => {
     await until(`__cv('shapes.py', 'Shape', 'usages') === '사용 위치 4개'`, 'Korean count', 60000);
     await until(`__cvDom().includes('사용 위치 4개')`, 'Korean count drawn');
     check(true, 'Korean: 사용 위치 4개');
-    await js(`(ide.editor.revealLine(__cvModel('shapes.py').getLineCount()), true)`);
+    // Counted once in view: centred, since a short editor (the CI runner's small screen) showing the last lines may
+    // not show unused_helper.
+    await js(`(ide.editor.revealLineInCenter(ide.codeVision.symbols(__cvModel('shapes.py')).find((s) => s.qual === 'unused_helper').line), true)`);
     await until(`__cv('shapes.py', 'unused_helper', 'usages') === '사용 위치 없음'`, 'Korean no usages', 30000);
     check(true, 'Korean: 사용 위치 없음');
     check(await js(`__cv('shapes.py', 'Shape', 'authors')`) === null && await js(`ide.codeVision.stats().blames`) === 0, 'a project that is not a Git repository runs no git blame and shows no authors');

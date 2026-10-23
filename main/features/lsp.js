@@ -12,6 +12,7 @@ const REQUEST_TIMEOUT = 30000;
 const LONG_REQUESTS = new Set(['initialize', 'textDocument/references', 'textDocument/rename', 'workspace/symbol',
   'callHierarchy/incomingCalls', 'callHierarchy/outgoingCalls', 'workspace/executeCommand']);
 const timeoutFor = (method) => (LONG_REQUESTS.has(method) ? 120000 : REQUEST_TIMEOUT);
+const notRunning = () => Object.assign(new Error('language server is not running'), { expected: true });
 
 const WATCH_IGNORED = /[\\/](\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.idea)([\\/]|$)/;
 
@@ -62,6 +63,15 @@ const CLIENT_CAPABILITIES = {
 // Requests never sent $/cancelRequest (see Server.cancel).
 const NO_CANCEL = new Set(['textDocument/references']);
 
+// Requests about the whole project. Pyright lists the project's source files after it has started (the initialize
+// answer comes first) and logs "Found N source files" when it has; asked before that, it answers from the open files
+// only: Type Hierarchy right after opening a project showed no subtypes in closed files (seen on the CI runner, whose
+// small screen made the suite press Ctrl+H a little sooner), and Find Usages or a rename would miss them too. These
+// wait for the list, or for LISTING_TIMEOUT after the server started if the log never comes.
+const PROJECT_WIDE = new Set(['textDocument/references', 'textDocument/rename', 'workspace/symbol', 'callHierarchy/incomingCalls']);
+const FILES_LISTED = /^(Found \d+ source files?|No source files found)/;
+const LISTING_TIMEOUT = 20000;
+
 class Server {
   constructor({ unpackedDir, root, pythonPath, gen, send }) {
     Object.assign(this, { root, pythonPath, gen, send });
@@ -73,6 +83,10 @@ class Server {
     this.log = [];
     this.buf = Buffer.alloc(0);
     this.tickets = new Map(); // the renderer's ticket -> request id, for lsp:cancel
+    this.waiting = new Map(); // the renderer's ticket -> drop(), for a PROJECT_WIDE request waiting for the file list
+    this.filesListed = false;
+    this.listed = new Promise((resolve) => { this.markListed = () => { this.filesListed = true; clearTimeout(this.listingTimer); resolve(); }; });
+    this.listingTimer = setTimeout(this.markListed, LISTING_TIMEOUT);
     this.proc = spawn(process.execPath, [path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
       cwd: root,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
@@ -144,6 +158,7 @@ class Server {
         break;
       case 'window/logMessage':
         this.addLog(`${msg.params.message}\n`);
+        if (!this.filesListed && FILES_LISTED.test(msg.params.message || '')) this.markListed();
         break;
       default:
         break;
@@ -176,7 +191,22 @@ class Server {
 
   // ticket: a key the renderer can later pass to cancel(ticket).
   request(method, params, ticket) {
-    if (this.dead) return Promise.reject(Object.assign(new Error('language server is not running'), { expected: true }));
+    if (this.dead) return Promise.reject(notRunning());
+    if (this.filesListed || !PROJECT_WIDE.has(method)) return this.call(method, params, ticket);
+    return new Promise((resolve, reject) => {
+      // Cancelled while waiting for the file list: no answer, and it is never sent.
+      let dropped = false;
+      if (ticket != null) this.waiting.set(ticket, () => { dropped = true; resolve(null); });
+      this.listed.then(() => {
+        if (ticket != null) this.waiting.delete(ticket);
+        if (dropped) return;
+        if (this.dead) return reject(notRunning());
+        this.call(method, params, ticket).then(resolve, reject);
+      });
+    });
+  }
+
+  call(method, params, ticket) {
     const id = this.nextId++;
     const ms = timeoutFor(method);
     return new Promise((resolve, reject) => {
@@ -199,6 +229,8 @@ class Server {
   // on runs to the end: Pyright reads $/cancelRequest between requests. Its file-based cancellation, which it checks
   // while working, stops its background analysis from publishing diagnostics in this version.)
   cancel(ticket) {
+    const drop = this.waiting.get(ticket);
+    if (drop) { this.waiting.delete(ticket); drop(); return; }
     const id = this.tickets.get(ticket);
     const p = id !== undefined && this.pending.get(id);
     if (!p) return;
@@ -281,6 +313,7 @@ class Server {
     for (const p of this.pending.values()) p.reject(Object.assign(new Error(`language server ${reason}`), { expected: true }));
     this.pending.clear();
     this.tickets.clear();
+    this.markListed(); // requests waiting for the file list get "not running"
     if (!this.stopping) {
       this.addLog(`server ${reason}\n`);
       this.send('lsp:status', { gen: this.gen, state: 'error', message: `Pyright ${reason}` });
