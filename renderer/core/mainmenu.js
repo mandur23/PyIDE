@@ -181,7 +181,7 @@
       act('PreviousTab'), act('NextTab'), act('ReopenClosedTab'), act('PinActiveTab'), act('CloseContent'),
     ]) },
     { label: tr('Help'), submenu: () => tidy([act('KeymapReference'), act('FindActionHelp') || act('GotoAction'), { separator: true },
-      act('OpenLogInEditor'), act('ShowLogInExplorer'), act('CollectZippedLogs'), act('LogDebugConfigure'), { separator: true }, act('ReportProblem'), act('CheckForUpdates'), act('AboutPyIDE')]) },
+      act('OpenLogInEditor'), act('ShowLogInExplorer'), act('CollectZippedLogs'), act('LogDebugConfigure'), { separator: true }, act('ReportProblem'), act('CheckForUpdates'), act('WhatsNew'), act('AboutPyIDE')]) },
   ];
   function openMainMenu() {
     const r = $('mainMenuBtn').getBoundingClientRect();

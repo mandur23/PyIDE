@@ -3,10 +3,10 @@
 // differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); and the Korean strings.
 // The differential download itself is verify/update-delta.mjs.
 // The real download and restart of an installed build is verify/update-e2e.mjs.
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { launch, tempDir } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 function feedFolder(version) {
@@ -96,6 +96,61 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
   var errorsEn = t.consoleErrors;
 }
 
+// ---------- what's new ----------
+// A CHANGELOG with this version, two older ones and a future one; user data whose updater.json says which version ran.
+const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const changelog = path.join(tempDir('changelog'), 'CHANGELOG.md');
+writeFileSync(changelog, `# 변경 내역\r\n\r\n안내 문장\r\n\r\n## 99.0.0\r\n\r\n- 미래 항목\r\n\r\n## ${version}\r\n\r\n- 새 항목 \`code\` 강조\r\n- 둘째 항목\r\n\r\n## 0.0.2\r\n\r\n- 이전 항목\r\n\r\n## 0.0.1\r\n\r\n- 오래된 항목\r\n`);
+const userDataWith = (history) => {
+  const dir = tempDir('whatsnew-userdata');
+  if (history) writeFileSync(path.join(dir, 'updater.json'), JSON.stringify(history));
+  return dir;
+};
+const notesShown = (t) => t.js(`(() => { const n = [...document.querySelectorAll('.dialog')].find((d) => d.querySelector('.upd-notes'));
+  return n && { title: n.querySelector('.dialog-title').textContent, versions: [...n.querySelectorAll('.upd-notes h3')].map((h) => h.textContent),
+    items: [...n.querySelectorAll('.upd-notes li')].map((li) => li.textContent), code: [...n.querySelectorAll('.upd-notes li code')].map((c) => c.textContent) }; })()`);
+const settle = (t) => t.until(`!!ide.updater`, 'updater plugin').then(() => t.sleep(1500));
+{
+  const userData = userDataWith({ lastCheck: Date.now(), seenVersion: '0.0.1' });
+  const t = await launch({ fixture: 'core', port: 9805, name: 'updater-whatsnew', userData, env: { PYIDE_CHANGELOG: changelog } });
+  try {
+    await t.until(`!!document.querySelector('.upd-notes')`, "What's New after an update");
+    const n = await notesShown(t);
+    t.check(n.title.includes(`What's New in PyIDE ${version}`), `after an update the first window shows What's New in PyIDE ${version} (${n.title})`);
+    t.check(S(n.versions) === S([`PyIDE ${version}`, 'PyIDE 0.0.2']), `it lists the versions since the one that ran before, newest first, not the future one (${S(n.versions)})`);
+    t.check(S(n.items) === S(['새 항목 code 강조', '둘째 항목', '이전 항목']) && S(n.code) === S(['code']), `bullets become list items with code spans (${S(n.items)})`);
+    const saved = JSON.parse(readFileSync(path.join(userData, 'updater.json'), 'utf8'));
+    t.check(saved.seenVersion === version && saved.lastCheck, `updater.json now records ${version} and keeps the last check (${S(saved)})`);
+    await t.shot('whatsnew-en.png');
+    await pressButton(t, 'Close');
+  } catch (err) { t.check(false, err.message); }
+  t.close();
+  const again = await launch({ fixture: 'core', port: 9805, name: 'updater-whatsnew-2', userData, env: { PYIDE_CHANGELOG: changelog } });
+  try {
+    await settle(again);
+    again.check(!(await notesShown(again)), 'the next start of the same version shows nothing');
+    await again.js(`(ide.runAction('WhatsNew'), true)`);
+    await again.until(`!!document.querySelector('.upd-notes')`, 'Help > What\'s New');
+    const n = await notesShown(again);
+    again.check(S(n.versions) === S([`PyIDE ${version}`, 'PyIDE 0.0.2', 'PyIDE 0.0.1']), `Help > What's New lists every version up to this one (${S(n.versions)})`);
+  } catch (err) { again.check(false, err.message); }
+  again.close();
+  const old = await launch({ fixture: 'core', port: 9805, name: 'updater-whatsnew-3', userData: userDataWith({ lastCheck: Date.now() }), env: { PYIDE_CHANGELOG: changelog } });
+  try {
+    await old.until(`!!document.querySelector('.upd-notes')`, "What's New after an update from 0.2.4");
+    old.check(S((await notesShown(old)).versions) === S([`PyIDE ${version}`]), 'after an update from a version that recorded none (0.2.4 and older), only this version');
+  } catch (err) { old.check(false, err.message); }
+  old.close();
+  const fresh = await launch({ fixture: 'core', port: 9805, name: 'updater-whatsnew-4', env: { PYIDE_CHANGELOG: changelog } });
+  try {
+    await settle(fresh);
+    fresh.check(!(await notesShown(fresh)), 'a fresh install shows nothing');
+  } catch (err) { fresh.check(false, err.message); }
+  fresh.close();
+  var resultsNew = [t, again, old, fresh].flatMap((x) => x.results);
+  var errorsNew = [t, again, old, fresh].flatMap((x) => x.consoleErrors);
+}
+
 // ---------- Korean ----------
 const k = await launch({ fixture: 'core', port: 9801, name: 'updater-ko', lang: 'ko-KR', env: { PYIDE_UPDATE_TEST: '1' } });
 try {
@@ -114,12 +169,17 @@ try {
   await k.until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Korean settings page');
   const pageLeaks = await englishLeaks(k, '.settings-page');
   k.check(!pageLeaks.length, `no English on the Korean Updates page${pageLeaks.length ? `: ${S(pageLeaks)}` : ''}`);
-  const missing = (await missingTranslations(k)).filter((s) => /update|PyIDE \{version\}|feed|Skip This|Restart to|installer|Installed with|This Installation|Check Now/i.test(s));
+  await k.js(`(ide.runAction('WhatsNew'), true)`);
+  await k.until(`!!document.querySelector('.upd-notes')`, 'Korean What\x27s New');
+  k.check((await notesShown(k)).title === `PyIDE ${version}의 새로운 기능`, `Help > What\x27s New is titled in Korean (${(await notesShown(k)).title})`);
+  await k.shot('whatsnew-ko.png');
+  await pressButton(k, '닫기');
+  const missing = (await missingTranslations(k)).filter((s) => /What\x27s New|release notes|update|PyIDE \{version\}|feed|Skip This|Restart to|installer|Installed with|This Installation|Check Now/i.test(s));
   k.check(!missing.length, `every updater string has a Korean entry${missing.length ? `: ${S(missing)}` : ''}`);
   await k.shot('updater-ko.png');
 } catch (err) {
   k.check(false, err.message);
 }
-k.results.unshift(...resultsEn);
-k.consoleErrors.unshift(...errorsEn);
+k.results.unshift(...resultsEn, ...resultsNew);
+k.consoleErrors.unshift(...errorsEn, ...errorsNew);
 k.finish();

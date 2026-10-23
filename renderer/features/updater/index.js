@@ -131,6 +131,34 @@
 
   ide.registerAction({ id: 'CheckForUpdates', title: tr('Check for Updates…'), run: () => check({ manual: true }) });
 
+  // ---------- what's new ----------
+  // After an update, the first window shows the CHANGELOG.md sections since the version that ran before (main decides,
+  // once). Help > What's New shows every section up to this version. Lines are "- item" bullets with `code` spans.
+  function notesBody(sections) {
+    const body = el('div', 'upd-notes');
+    for (const { version, text } of sections) {
+      body.appendChild(el('h3', null, `PyIDE ${version}`));
+      let list = null;
+      for (const line of text.split('\n')) {
+        if (!line.trim()) { list = null; continue; }
+        const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+        if (bullet && !list) list = body.appendChild(el('ul'));
+        const node = bullet ? list.appendChild(el('li')) : body.appendChild(el('p'));
+        if (!bullet) list = null;
+        (bullet ? bullet[1] : line).split('`').forEach((part, i) => { if (part) node.appendChild(i % 2 ? el('code', null, part) : document.createTextNode(part)); });
+      }
+    }
+    return body;
+  }
+  function showNotes(version, sections) {
+    const body = sections.length ? notesBody(sections) : el('p', null, tr('No release notes for this version.'));
+    return ide.ui.dialog({ title: tr("What's New in PyIDE {version}", { version }), body, buttons: [{ label: tr('Close'), primary: true }], width: 620 });
+  }
+  ide.registerAction({ id: 'WhatsNew', title: tr("What's New"), run: async () => {
+    const notes = await ide.api.invoke('updater:releaseNotes');
+    showNotes(notes.version, notes.all);
+  } });
+
   // ---------- automatic checks ----------
   // 3 s after startup, then whenever the interval has passed since the last check that read the feed (main keeps its
   // time across restarts, so a restart does not check again). "On startup only" checks once per start, as before.
@@ -192,6 +220,8 @@
     state = await ide.api.invoke('updater:state');
     render();
     if (ide.detached) return;
+    const notes = await ide.api.invoke('updater:releaseNotes');
+    if (notes.afterUpdate.length) showNotes(notes.version, notes.afterUpdate);
     started = true;
     schedule(STARTUP_DELAY);
   });

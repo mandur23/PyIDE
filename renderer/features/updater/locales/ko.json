@@ -45,5 +45,8 @@
   "Weekly": "매주",
   "Downloading PyIDE {version}": "PyIDE {version} 다운로드 중",
   "Downloading PyIDE {version} (delta {size})… {percent}%": "PyIDE {version} 다운로드 중 (변경분 {size})… {percent}%",
-  "Download only the changed parts of an update when possible": "가능하면 업데이트에서 변경된 부분만 다운로드"
+  "Download only the changed parts of an update when possible": "가능하면 업데이트에서 변경된 부분만 다운로드",
+  "What's New": "새로운 기능",
+  "What's New in PyIDE {version}": "PyIDE {version}의 새로운 기능",
+  "No release notes for this version.": "이 버전의 변경 내역이 없습니다."
 }

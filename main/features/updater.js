@@ -85,13 +85,41 @@ function resolveFeed(feed) {
 
 // When checks ran, kept across restarts so the periodic check (renderer) can skip one that ran recently and back off
 // after failures: {lastCheck, lastAttempt, failures, lastError}. lastCheck is the last check that read the feed.
+// seenVersion: the version that last ran with this user data. null when the file predates it (0.2.4 and older wrote
+// no seenVersion), undefined when there is no file (a fresh install).
 function readHistory(file) {
   const num = (v) => (Number.isFinite(v) && v > 0 ? v : null);
   try {
     const h = JSON.parse(fs.readFileSync(file, 'utf8'));
     return { lastCheck: num(h.lastCheck), lastAttempt: num(h.lastAttempt), failures: Math.max(0, Math.floor(Number(h.failures) || 0)),
-      lastError: typeof h.lastError === 'string' ? h.lastError : null };
-  } catch { return { lastCheck: null, lastAttempt: null, failures: 0, lastError: null }; }
+      lastError: typeof h.lastError === 'string' ? h.lastError : null, seenVersion: typeof h.seenVersion === 'string' ? h.seenVersion : null };
+  } catch { return { lastCheck: null, lastAttempt: null, failures: 0, lastError: null, seenVersion: undefined }; }
+}
+
+// CHANGELOG.md (shipped in the app) as [{version, text}], newest first: each "## <version>" heading and the lines under it.
+function readChangelog(file) {
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const sections = [];
+  for (const line of text.split(/\r?\n/)) {
+    const head = /^##\s+v?(\d+(?:\.\d+)*)\s*$/.exec(line);
+    if (head) sections.push({ version: head[1], lines: [] });
+    else if (/^#{1,2}\s/.test(line)) sections.push(null);
+    else if (sections.at(-1)) sections.at(-1).lines.push(line);
+  }
+  return sections.filter(Boolean).map(({ version, lines }) => ({ version, text: lines.join('\n').trim() })).filter((s) => s.text);
+}
+const compareVersions = (a, b) => {
+  const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  return 0;
+};
+
+// The notes to show once after an update: the sections newer than the version that last ran, up to this one. After an
+// update from a version that did not record itself, only this version's section; nothing on a fresh install.
+function notesAfterUpdate(changelog, version, seenVersion) {
+  if (seenVersion === undefined || (seenVersion && compareVersions(seenVersion, version) >= 0)) return [];
+  return changelog.filter((s) => compareVersions(s.version, version) <= 0 && (seenVersion ? compareVersions(s.version, seenVersion) > 0 : compareVersions(s.version, version) === 0));
 }
 
 // A current.blockmap that electron-updater kept from an earlier download describes the installer of that download, which
@@ -122,6 +150,8 @@ const mb = (n) => (n == null ? '?' : n < 100 * 1024 ? `${(n / 1024).toFixed(1)} 
 exports.installKind = installKind;
 exports.serveFolder = serveFolder;
 exports.byteRange = byteRange;
+exports.readChangelog = readChangelog;
+exports.notesAfterUpdate = notesAfterUpdate;
 
 exports.register = ({ ipcMain, app, send, diagnostics }) => {
   const log = diagnostics?.logger('#updater') || console;
@@ -135,6 +165,10 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   // download: how the current or last download goes, {mode: 'delta' | 'full', size (of the installer), bytes (to
   // download; for a delta, the changed blocks), reason (why full: 'off' or 'fallback')}.
   let state = { kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle', intervalMs, checks: 0, download: null, ...readHistory(historyFile) };
+  // PYIDE_CHANGELOG replaces the shipped CHANGELOG.md (verify/updater.mjs).
+  const changelog = readChangelog(process.env.PYIDE_CHANGELOG || path.join(app.getAppPath(), 'CHANGELOG.md'));
+  let afterUpdate = notesAfterUpdate(changelog, state.version, state.seenVersion);
+  if (state.seenVersion !== state.version) { state.seenVersion = state.version; saveHistory(); }
   const setState = (patch) => {
     state = { ...state, ...patch };
     send('updater:state', state);
@@ -190,11 +224,17 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   }
 
   function saveHistory() {
-    const { lastCheck, lastAttempt, failures, lastError } = state;
-    try { fs.writeFileSync(historyFile, JSON.stringify({ lastCheck, lastAttempt, failures, lastError }, null, 2)); } catch (err) { log.warn(`could not save ${historyFile}: ${err.message}`); }
+    const { lastCheck, lastAttempt, failures, lastError, seenVersion } = state;
+    try { fs.writeFileSync(historyFile, JSON.stringify({ lastCheck, lastAttempt, failures, lastError, seenVersion }, null, 2)); } catch (err) { log.warn(`could not save ${historyFile}: ${err.message}`); }
   }
 
   ipcMain.handle('updater:state', () => state);
+  // -> {version, afterUpdate: [{version, text}] (given to the first window that asks), all: the whole changelog}.
+  ipcMain.handle('updater:releaseNotes', () => {
+    const notes = { version: state.version, afterUpdate, all: changelog.filter((s) => compareVersions(s.version, state.version) <= 0) };
+    afterUpdate = [];
+    return notes;
+  });
 
   // -> {available: version | null}; throws with a readable message when the feed cannot be read.
   ipcMain.handle('updater:check', async (_e, feedValue) => {

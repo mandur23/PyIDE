@@ -59,6 +59,7 @@
       "main.js",
       "preload.js",
       "package.json",
+      "CHANGELOG.md",
       "main/**/*",
       "renderer/**/*",
       "plugins-catalog/**/*",
