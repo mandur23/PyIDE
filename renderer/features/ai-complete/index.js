@@ -309,7 +309,7 @@
   }
 
   for (const language of LANGUAGES) {
-    monaco.languages.registerInlineCompletionsProvider(language, { provideInlineCompletions, freeInlineCompletions() {} });
+    monaco.languages.registerInlineCompletionsProvider(language, { provideInlineCompletions, disposeInlineCompletions() {} });
   }
   // Monaco's hover toolbar on ghost text is English-only and duplicates the keys shown in the status bar tooltip.
   ide.updateEditorOptions({ inlineSuggest: { enabled: true, showToolbar: 'never' } });

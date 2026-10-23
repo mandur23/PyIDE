@@ -73,7 +73,10 @@ try {
   await waitSticky(EXPECTED, 'maximum back at 5');
 
   // Dark and Light colors.
-  const colors = () => js(`(() => { const w = ide.editor.getDomNode().querySelector('.sticky-widget'); const s = getComputedStyle(w); return { bg: s.backgroundColor, border: s.borderBottomColor, editorBg: getComputedStyle(ide.editor.getDomNode().querySelector('.monaco-editor-background')).backgroundColor }; })()`);
+  // Monaco paints the lines part and the line-number gutter of the sticky widget separately.
+  const colors = () => js(`(() => { const w = ide.editor.getDomNode().querySelector('.sticky-widget'); const s = getComputedStyle(w);
+    const bg = getComputedStyle(w.querySelector('.sticky-widget-lines-scrollable')).backgroundColor, gutter = getComputedStyle(w.querySelector('.sticky-widget-line-numbers')).backgroundColor;
+    return { bg: bg === gutter ? bg : bg + ' / gutter ' + gutter, border: s.borderBottomColor, editorBg: getComputedStyle(ide.editor.getDomNode().querySelector('.monaco-editor-background')).backgroundColor }; })()`);
   let c = await colors();
   check(c.bg === 'rgb(30, 31, 34)' && c.bg === c.editorBg && c.border === 'rgb(57, 59, 64)', `Dark: the editor background with a #393b40 separator (${J(c)})`);
   await js(`(ide.settings.set('appearance.theme', 'light'), true)`);

@@ -411,7 +411,7 @@ try {
     window.__ghost = true;
     ide.monaco.languages.registerInlineCompletionsProvider('python', {
       provideInlineCompletions: (model, pos) => (window.__ghost && pos.lineNumber === 1 ? { items: [{ insertText: '  # GHOST', range: new ide.monaco.Range(1, pos.column, 1, pos.column) }] } : { items: [] }),
-      freeInlineCompletions() {},
+      disposeInlineCompletions() {},
     });
     ide.editor.setPosition({ lineNumber: 1, column: ide.editor.getModel().getLineMaxColumn(1) });
     ide.editor.focus();

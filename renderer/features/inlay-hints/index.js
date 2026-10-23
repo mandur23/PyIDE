@@ -316,7 +316,42 @@
     return rhs[1]?.text === '(' && (callee.text === type || callee.text === type.replace(/\[.*$/, ''));
   };
 
-  async function provide(model, range, token) {
+  // Monaco (since 0.53) asks for hints while the user types (after its own short debounce) and cancels a provide call
+  // only when it asks again, no longer when the text changes. Every hint is a Pyright request (a screen asks a few
+  // dozen), so typing would keep Pyright busy with hovers for versions already gone (about 27 hovers per key). As with Monaco 0.52,
+  // hints are computed once typing pauses for EDIT_PAUSE ms; an edit meanwhile cancels the call's requests, and the call
+  // then answers only when Monaco cancels it too (an answer for an older version is dropped then, while an answer given
+  // before would replace the hints on screen with an empty set).
+  const EDIT_PAUSE = 1250;
+  const lastEdit = new WeakMap();
+  const track = (m) => m.onDidChangeContent(() => lastEdit.set(m, Date.now()));
+  monaco.editor.getModels().forEach(track);
+  monaco.editor.onDidCreateModel(track);
+  async function provide(model, range, monacoToken) {
+    const empty = { hints: [], dispose() {} };
+    if (!on('enabled') || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
+    const cts = new monaco.CancellationTokenSource(monacoToken);
+    const edited = model.onDidChangeContent(() => cts.cancel());
+    // Resolves when the token is cancelled or after ms.
+    const whenCancelled = (token, ms) => new Promise((resolve) => {
+      let sub = null;
+      const timer = setTimeout(() => { sub?.dispose(); resolve(); }, ms);
+      sub = token.onCancellationRequested(() => { sub?.dispose(); clearTimeout(timer); resolve(); });
+    });
+    try {
+      const wait = (lastEdit.get(model) || 0) + EDIT_PAUSE - Date.now();
+      if (wait > 0) await whenCancelled(cts.token, wait);
+      const result = cts.token.isCancellationRequested ? empty : await provideFor(model, range, cts.token);
+      if (!cts.token.isCancellationRequested || monacoToken.isCancellationRequested) return result;
+      await whenCancelled(monacoToken, 10000);
+      return empty;
+    } finally {
+      edited.dispose();
+      cts.dispose();
+    }
+  }
+
+  async function provideFor(model, range, token) {
     const empty = { hints: [], dispose() {} };
     if (!on('enabled') || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
     const uri = model.uri.toString();
@@ -386,6 +421,6 @@
   ide.inlayHints = {
     refresh: () => changed.fire(),
     // Hints for the whole model or a range of it, as the provider computes them (verify/refactor.mjs).
-    hints: async (model, range = model.getFullModelRange()) => (await provide(model, range, { isCancellationRequested: false })).hints,
+    hints: async (model, range = model.getFullModelRange()) => (await provideFor(model, range, { isCancellationRequested: false })).hints,
   };
 })();

@@ -507,13 +507,14 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   const shown = (n) => !n.disabled && n.getClientRects().length > 0;
   // Only the topmost dialog takes keys, and none while a menu opened from it is up (the menu's Esc and Enter come first).
   // Tab and Shift+Tab cycle inside it (never into the editor behind); Enter on a focused button presses that button, in
-  // a textarea it is a new line, and while an IME composes it commits the text. A dialog without a primary button leaves
-  // Enter to its content (the Conflicts dialog's file list merges the selected file).
+  // a textarea or a Monaco editor (whose input is an EditContext element, .native-edit-context) it is a new line, and
+  // while an IME composes it commits the text. A dialog without a primary button leaves Enter to its content (the
+  // Conflicts dialog's file list merges the selected file).
   const onKey = (e) => {
     if (backdrop !== $('dialogHost').lastElementChild || menusOpen()) return;
     if (e.key === 'Escape') { e.stopPropagation(); dlg.close(); }
     const primary = foot.querySelector('.primary');
-    if (e.key === 'Enter' && primary && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) {
+    if (e.key === 'Enter' && primary && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName) && !e.target.matches?.('.native-edit-context')) {
       e.preventDefault(); // the keystroke must not also type into the field that gets the keyboard back
       e.stopPropagation();
       primary.click();
@@ -530,8 +531,9 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   box.append(head, content, foot);
   backdrop.appendChild(box);
   $('dialogHost').appendChild(backdrop);
-  // The keyboard starts in the first field, or on the primary button of a dialog without fields.
-  ([...content.querySelectorAll('input,select,textarea')].find(shown) || foot.querySelector('.primary') || foot.querySelector('button'))?.focus();
+  // The keyboard starts in the first field (a Monaco editor's is its EditContext element; its .ime-text-area is only
+  // Monaco's IME helper), or on the primary button of a dialog without fields.
+  ([...content.querySelectorAll('input,select,textarea:not(.ime-text-area),.native-edit-context')].find(shown) || foot.querySelector('.primary') || foot.querySelector('button'))?.focus();
   return dlg;
 };
 // A message in the IDE's own dialog. window.alert() blocks the whole renderer until it is dismissed.
@@ -1825,11 +1827,17 @@ async function loadFeatures() {
 ide.restart = () => { flushSettings(); return ide.api.relaunch(); };
 
 require.config({ paths: { vs: '../node_modules/monaco-editor/min/vs' } });
-// Monaco's default blob worker cannot importScripts() a file:// URL (uncaught ErrorEvent); load the worker script directly.
-window.MonacoEnvironment = { getWorkerUrl: () => new URL('../node_modules/monaco-editor/min/vs/base/worker/workerMain.js', location.href).href };
-// Monaco's own UI strings (find widget, context menu, command palette) come from its NLS bundle for the locale.
-const monacoNls = i18n.locale === 'en' ? [] : [`vs/nls.messages.${i18n.locale}`];
-require(monacoNls, () => require(['vs/editor/editor.main'], async () => {
+// Monaco's own UI strings (find widget, context menu, command palette) come from its message bundle for the locale,
+// vs/nls/lang/<locale>.js: a plain script that sets the globals Monaco reads, so it runs before editor.main. (Monaco's
+// vs/nls loader plugin would require() it as an AMD module, which never resolves: the script calls no define().)
+const monacoNls = new Promise((resolve) => {
+  if (i18n.locale === 'en') return resolve();
+  const s = document.createElement('script');
+  s.src = `../node_modules/monaco-editor/min/vs/nls/lang/${i18n.locale}.js`;
+  s.onload = s.onerror = resolve;
+  document.head.appendChild(s);
+});
+monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   const monaco = (ide.monaco = window.monaco);
   // Diff editors leave their hunk gutter menu subscribed after dispose, and it throws "AbstractContextKeyService has
   // been disposed" whenever an editor action is registered later. PyIDE puts nothing in that menu.

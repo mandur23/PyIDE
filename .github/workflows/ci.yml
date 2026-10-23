@@ -68,6 +68,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/editors.mjs
+      - name: ime-korean
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/ime-korean.mjs
       - name: keyboard
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -251,6 +255,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/process-tree.mjs
+      - name: plugin-install-asar
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/plugin-install-asar.mjs
       - name: release-harness
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

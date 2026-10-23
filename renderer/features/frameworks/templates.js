@@ -80,6 +80,12 @@
     return { language, conf: { ...mod.conf, comments: { blockComment: ['{#', '#}'] } } };
   }
 
+  // Monaco starts a language's worker by its label (the language id) and gives the HTML worker only to html, handlebars
+  // and razor; any other label gets the plain editor worker, which has no HTML service (findDocumentLinks fails there).
+  const env = self.MonacoEnvironment;
+  const getWorker = env?.getWorker;
+  if (getWorker) env.getWorker = (moduleId, label) => getWorker.call(env, moduleId, LANGS.includes(label) ? 'html' : label);
+
   const ready = (async () => {
     const { language, conf } = await grammar();
     for (const id of LANGS) {
