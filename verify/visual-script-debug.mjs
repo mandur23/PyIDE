@@ -80,7 +80,12 @@ const bps = (ctx) => ctx.js(`document.querySelector(${S(HOST)}).dataset.breakpoi
 const pausedAt = (ctx) => ctx.js(`document.querySelector(${S(HOST)}).dataset.paused`);
 const stopped = (ctx) => ctx.js('ide.debugger.stopped()');
 const debugOut = (ctx) => ctx.js(`document.querySelector('#dbgOut')?.textContent || ''`);
-const waitPaused = (ctx, id, label) => ctx.until(`ide.debugger.stopped() && document.querySelector(${S(HOST)})?.dataset.paused === ${S(id)} && !!document.querySelector(${S(`${node(id)}.vs-paused`)})`, label, 30000);
+// A first debug session on a cold runner starts debugpy slowly; a timeout says what the debugger and the window showed.
+const waitPaused = (ctx, id, label, ms = 30000) => ctx.until(`ide.debugger.stopped() && document.querySelector(${S(HOST)})?.dataset.paused === ${S(id)} && !!document.querySelector(${S(`${node(id)}.vs-paused`)})`, label, ms)
+  .catch(async (e) => {
+    const seen = await ctx.js(`JSON.stringify({ active: ide.debugger.isActive(), stopped: ide.debugger.stopped(), paused: document.querySelector(${S(HOST)})?.dataset.paused || null, out: (document.querySelector('#dbgOut')?.textContent || '').slice(-800), dialogs: [...document.querySelectorAll('.dialog')].map((d) => d.textContent.slice(0, 300)) })`).catch(() => 'n/a');
+    throw new Error(`${e.message}: ${seen}`);
+  });
 const waitEnded = (ctx, label) => ctx.until(`!ide.debugger.isActive() && (document.querySelector('#dbgOut')?.textContent || '').includes('Process finished with exit code')`, label, 30000);
 // Hovers a point and resolves the value bubble's text.
 async function hoverValue(ctx, ui, p, label) {
@@ -131,7 +136,7 @@ try {
   // ---- Shift+F9: paused on a node in a loop ----
   await selectNode(t, ui, 'n2');
   await press('Shift+F9');
-  await waitPaused(t, 'n4', 'paused on the breakpoint node');
+  await waitPaused(t, 'n4', 'paused on the breakpoint node', 90000);
   check(true, 'Shift+F9 on the canvas debugs the script and pauses on the breakpoint node, outlined as paused');
   check(await js(`ide.activeTab().path`) === loopPath && await js(`!ide.groups().flatMap((g) => g.tabs).some((t) => /\\.py$/i.test(t.path))`), 'the .pyflow stays in front; the generated file is not opened');
   await until(`/index_n3 = \\{int\\} 0/.test(document.querySelector('#dbgVars').textContent)`, 'loop index in Variables');

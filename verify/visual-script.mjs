@@ -5,7 +5,7 @@
 // lines and nodes both ways; Export as Python writes a file that prints the same output and asks before overwriting;
 // Project tree › New › Visual Script makes a working script; the file icon; readable labels at 100% in both themes;
 // and a Korean session without English left in the tab, the palette and the dialogs.
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, realpathSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import path from 'path';
@@ -117,7 +117,9 @@ const readability = `(() => {
 })()`;
 
 const ctx = await sized(await launch({ fixture: 'visual-script', port: 9095, name: 'visual-script' }));
-const { js, until, press, type, shot, check, sleep, project, userData } = ctx;
+const { js, until, press, type, shot, check, sleep, project } = ctx;
+// The generated file is named by its long path (CI's TEMP is an 8.3 short path).
+const userData = realpathSync.native(ctx.userData);
 const ui = inputs(ctx);
 const interp = await js(`(() => { const i = ide.currentInterp(); return i && { cmd: i.cmd, args: i.args }; })()`);
 try {

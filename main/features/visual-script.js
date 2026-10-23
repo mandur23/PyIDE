@@ -118,7 +118,9 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     const imports = new Set([...code.matchAll(/^(?:import|from)\s+(\w+)/gm)].map((m) => m[1].toLowerCase()));
     const file = path.join(dir, `${imports.has(base.toLowerCase()) ? `${base}_pyflow` : base}.py`);
     fs.writeFileSync(file, code, 'utf8');
-    return file;
+    // The long form of the path: debugpy reports frames by it, so a user data folder reached through an 8.3 short
+    // name (C:\Users\RUNNER~1\…) would otherwise not match the file the script registered its breakpoints on.
+    return fs.realpathSync.native(file);
   });
 
   const script = path.join(unpackedDir, 'renderer', 'features', 'visual-script', 'python', 'vs_symbols.py');
