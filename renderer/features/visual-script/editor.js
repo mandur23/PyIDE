@@ -859,6 +859,8 @@
       });
       draw();
       const hr = host.getBoundingClientRect();
+      // In a short tab (a small screen, a tool window open below) the list gets shorter so the palette stays inside it.
+      list.style.maxHeight = `${Math.max(96, Math.min(320, hr.height - 8 - (el.offsetHeight - list.offsetHeight)))}px`;
       const w = el.offsetWidth;
       const ht = el.offsetHeight;
       el.style.left = `${Math.max(4, Math.min(point.clientX - hr.left, hr.width - w - 4))}px`;

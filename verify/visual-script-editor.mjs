@@ -20,6 +20,12 @@ const VS = require(path.join(VSDIR, 'codegen.js'));
 
 const ctx = await launch({ fixture: 'visual-script', port: 9090, name: 'visual-script-editor' });
 const { js, until, press, type, shot, check, cdp, sleep, project } = ctx;
+// `--viewport=1008x681` gives the window the inner size it has on CI's 1024x768 screen.
+const viewport = process.argv.find((a) => a.startsWith('--viewport='))?.slice(11).split('x').map(Number);
+if (viewport) {
+  await cdp('Emulation.setDeviceMetricsOverride', { width: viewport[0], height: viewport[1], deviceScaleFactor: 1, mobile: false });
+  await until(`Math.abs(innerWidth - ${viewport[0]}) <= 1 && Math.abs(innerHeight - ${viewport[1]}) <= 1`, 'the emulated viewport');
+}
 const demoPath = path.join(project, 'demo.pyflow');
 
 const V = 'ide.activeTab().visualScript';
@@ -32,17 +38,41 @@ const selection = () => js(`${V}.selection().join(',')`);
 const view = () => js(`${V}.view()`);
 const center = (selector) => js(`(() => { const n = document.querySelector(${S(selector)}); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 const pin = (node, side, id) => center(`.vs-host:not(.hidden) .vs-pin[data-node="${node}"][data-side="${side}"][data-pin="${id}"]`);
-// A node's header; for a Comment (drawn behind other nodes) a point near its top-left corner.
+// A node's header; for a Comment (drawn behind other nodes) the first point from its top-left corner that no other
+// node covers.
 const head = (node) => js(`(() => { const n = document.querySelector('.vs-host:not(.hidden) .vs-node[data-id="${node}"]'); if (!n) return null;
   const h = n.querySelector('.vs-head'); const r = (h || n).getBoundingClientRect();
-  return h ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: r.left + 10, y: r.top + 8 }; })()`);
-// A canvas point with nothing under it, searched on a grid from the bottom-left of the canvas.
-const emptySpot = () => js(`(() => { const c = document.querySelector('.vs-host:not(.hidden) .vs-canvas').getBoundingClientRect();
-  for (let y = c.bottom - 30; y > c.top + 30; y -= 20) for (let x = c.left + 30; x < c.right - 30; x += 20) {
-    const t = document.elementFromPoint(x, y);
-    if (t && (t.classList.contains('vs-canvas') || t.classList.contains('vs-nodes')) && !document.elementsFromPoint(x, y).some((e) => e.closest?.('.vs-node, .vs-palette'))) return { x, y };
-  }
+  if (h) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  for (let y = r.top + 8; y < r.bottom - 2; y += 4) for (let x = r.left + 10; x < r.right - 2; x += 6) if (document.elementFromPoint(x, y)?.closest('.vs-node') === n) return { x, y };
   return null; })()`);
+// What the pointer would hit at a point, for failure messages.
+const hitAt = (p) => js(`(() => { const e = document.elementFromPoint(${p?.x}, ${p?.y}); if (!e) return 'nothing'; const n = e.closest('.vs-node');
+  return (e.className?.baseVal ?? e.className) + (e.dataset.pin ? ' ' + e.dataset.node + '.' + e.dataset.pin : n ? ' in ' + n.dataset.id : ''); })()`);
+// A canvas point with nothing under it, searched on a grid from the bottom-left of the canvas. With `room` ({w, h} in
+// graph units), a node added at the point must also fit inside the canvas without covering another node, so later steps
+// can reach every pin and field; the view is zoomed out until there is such a spot, as a user would make room.
+const emptySpot = async (room) => {
+  for (;;) {
+    const spot = await js(`(() => { const c = document.querySelector('.vs-host:not(.hidden) .vs-canvas').getBoundingClientRect();
+      const s = ${V}.view().s; const room = ${S(room || null)};
+      const taken = [...document.querySelectorAll('.vs-host:not(.hidden) .vs-node, .vs-host:not(.hidden) .vs-palette')].map((e) => e.getBoundingClientRect());
+      const fits = (x, y) => { if (!room) return true;
+        const a = { left: x - 16 * s, top: y - 24 * s, right: x + room.w * s, bottom: y + room.h * s };
+        return a.left >= c.left + 2 && a.top >= c.top + 2 && a.right <= c.right - 2 && a.bottom <= c.bottom - 2
+          && !taken.some((q) => q.left < a.right && q.right > a.left && q.top < a.bottom && q.bottom > a.top); };
+      for (let y = c.bottom - 30; y > c.top + 30; y -= 20) for (let x = c.left + 30; x < c.right - 30; x += 20) {
+        const t = document.elementFromPoint(x, y);
+        if (t && (t.classList.contains('vs-canvas') || t.classList.contains('vs-nodes')) && !document.elementsFromPoint(x, y).some((e) => e.closest?.('.vs-node, .vs-palette')) && fits(x, y)) return { x, y };
+      }
+      return null; })()`);
+    if (spot || !room) return spot;
+    if (!(await js(`(() => { const v = ${V}.view(); if (v.s <= 0.26) return false; const c = document.querySelector('.vs-host:not(.hidden) .vs-canvas');
+      const s = Math.max(0.25, v.s / 1.2); const cx = c.clientWidth / 2; const cy = c.clientHeight / 2;
+      ${V}.setView({ s, tx: cx - ((cx - v.tx) / v.s) * s, ty: cy - ((cy - v.ty) / v.s) * s }); return true; })()`))) return null;
+    await sleep(60);
+  }
+};
+const NODE_ROOM = { w: 260, h: 120 };
 
 const BUTTONS = { left: 1, right: 2, middle: 4 };
 const mouse = (type, p, { button = 'left', clickCount = 1, modifiers = 0, pressed = button } = {}) => cdp('Input.dispatchMouseEvent', {
@@ -132,11 +162,14 @@ try {
   await shot('dark.png');
 
   await focusCanvas();
-  let spot = await emptySpot();
+  let spot = await emptySpot(NODE_ROOM);
   await move(spot);
   await press('Tab');
   await until(`document.querySelector('.vs-host:not(.hidden)')?.dataset.palette === 'open'`, 'palette on Tab');
   check(await js(`document.activeElement?.classList.contains('vs-pal-input')`), 'Tab opens the palette with the search field focused');
+  const palBox = await js(`(() => { const r = (e) => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom].map(Math.round); };
+    return { palette: r(document.querySelector('.vs-host:not(.hidden) .vs-palette')), tab: r(document.querySelector('.vs-host:not(.hidden)')) }; })()`);
+  check(palBox.palette[0] >= palBox.tab[0] && palBox.palette[1] >= palBox.tab[1] && palBox.palette[2] <= palBox.tab[2] && palBox.palette[3] <= palBox.tab[3], `the palette stays inside the tab (${S(palBox)})`);
   check(await js(`document.querySelectorAll('.vs-host:not(.hidden) .vs-pal-cat').length >= 6 && !document.querySelector('.vs-host:not(.hidden) .vs-pal-item[data-type="core.start"]')`), 'the palette lists node types under categories (no second Start)');
   await type('set var');
   await sleep(100);
@@ -166,7 +199,7 @@ try {
   await until(`!document.querySelector('.vs-host:not(.hidden) .vs-palette')`, 'palette closed');
   check(await js(`document.activeElement?.classList.contains('vs-canvas')`), 'Escape closes the palette and gives the keyboard back to the canvas');
   await press('ArrowDown');
-  spot = await emptySpot();
+  spot = await emptySpot(NODE_ROOM);
   await move(spot);
   await press('Tab');
   await until(`document.querySelector('.vs-host:not(.hidden)')?.dataset.palette === 'open'`, 'palette again');
@@ -180,10 +213,13 @@ try {
 
   const setId = added.id;
   const numId = (await graph()).nodes.find((n) => n.type === 'value.number').id;
-  await drag(await pin('n8', 'out', 'next'), await pin(setId, 'in', 'in'));
-  check((await linksInto(setId, 'in')).some((l) => l.from.node === 'n8' && l.from.pin === 'next'), 'dragging from an exec output to an exec input connects them');
-  await drag(await pin(setId, 'in', 'value'), await pin(numId, 'out', 'value'));
-  check((await linksInto(setId, 'value')).some((l) => l.from.node === numId), 'dragging from a data input to a data output connects them too');
+  const ends = async (a, b) => { const [p, q] = [await pin(...a), await pin(...b)]; return { p, q, seen: `under the start: ${await hitAt(p)}, under the end: ${await hitAt(q)}` }; };
+  let wire = await ends(['n8', 'out', 'next'], [setId, 'in', 'in']);
+  await drag(wire.p, wire.q);
+  check((await linksInto(setId, 'in')).some((l) => l.from.node === 'n8' && l.from.pin === 'next'), `dragging from an exec output to an exec input connects them (${wire.seen})`);
+  wire = await ends([setId, 'in', 'value'], [numId, 'out', 'value']);
+  await drag(wire.p, wire.q);
+  check((await linksInto(setId, 'value')).some((l) => l.from.node === numId), `dragging from a data input to a data output connects them too (${wire.seen})`);
   const linkCount = (await graph()).links.length;
   const verdict = await drag(await pin('n2', 'out', 'answer'), await pin('n5', 'in', 'stop'), {
     during: () => js(`({ wire: document.querySelector('.vs-host:not(.hidden) .vs-canvas').dataset.wire, red: getComputedStyle(document.querySelector('.vs-host:not(.hidden) .vs-temp')).stroke, hint: document.querySelector('.vs-host:not(.hidden) .vs-hint').textContent })`),
@@ -198,7 +234,7 @@ try {
   await until(`${V}.graph().links.some((l) => l.to.node === 'n6' && l.from.node === 'n7')`, 'undo replace');
   check((await linksInto('n6', 'value')).length === 1, 'one Ctrl+Z restores the replaced link');
 
-  spot = await emptySpot();
+  spot = await emptySpot(NODE_ROOM);
   await drag(await pin('n2', 'out', 'answer'), spot);
   await until(`document.querySelector('.vs-host:not(.hidden)')?.dataset.palette === 'open'`, 'palette after a dropped wire');
   const fits = await js(`[...document.querySelectorAll('.vs-host:not(.hidden) .vs-pal-item')].map((e) => e.dataset.type)`);
@@ -264,10 +300,11 @@ try {
   await js(`${V}.centerOn('${setId}')`);
   await sleep(100);
   const nameField = await center(`.vs-host:not(.hidden) .vs-node[data-id="${setId}"] .vs-prop .vs-field`);
+  const nameSeen = await hitAt(nameField);
   await click(nameField);
   await press('Ctrl+A');
   await type('2bad');
-  check(await js(`document.activeElement.classList.contains('vs-invalid') && !!document.activeElement.title`), 'an identifier field marks a name that is not valid Python, with a tooltip');
+  check(await js(`document.activeElement.classList.contains('vs-invalid') && !!document.activeElement.title`), `an identifier field marks a name that is not valid Python, with a tooltip (under the click: ${nameSeen})`);
   await press('Ctrl+A');
   await type('total');
   await press('Enter');
@@ -493,7 +530,7 @@ try {
   await until(`!!ide.activeTab()?.visualScript`, 'back on the canvas');
   check(await dirty(), 'the edit made in the text tab is the same unsaved document');
 
-  spot = await emptySpot();
+  spot = await emptySpot(NODE_ROOM);
   await move(spot);
   await focusCanvas();
   await press('Tab');

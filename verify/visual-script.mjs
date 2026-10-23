@@ -59,12 +59,21 @@ const sha1 = (p) => createHash('sha1').update(path.resolve(p).toLowerCase()).dig
 // The program's own output in the Run console: what it printed, without the command line, the echoed stdin lines and
 // the exit line.
 const programOutput = `[...document.querySelectorAll('#runOut > span')].filter((s) => !s.classList.contains('cmd') && !s.classList.contains('sys')).map((s) => s.textContent).join('').replace(/\\r\\n/g, '\\n')`;
-// The zoom a script opened at, and its graph's size at 100% beside the canvas size.
+// The zoom a script opened at, its graph's size at 100% beside the canvas size, and whether every node is in view.
 const viewInfo = `(() => { const h = document.querySelector('.vs-host:not(.hidden)'); const z = Number(h.dataset.zoom); const c = h.querySelector('.vs-canvas').getBoundingClientRect();
     const rs = [...h.querySelectorAll('.vs-node')].map((n) => n.getBoundingClientRect());
     const w = (Math.max(...rs.map((r) => r.right)) - Math.min(...rs.map((r) => r.left))) / z; const ht = (Math.max(...rs.map((r) => r.bottom)) - Math.min(...rs.map((r) => r.top))) / z;
-    return { zoom: z, graph: [Math.round(w), Math.round(ht)], canvas: [Math.round(c.width), Math.round(c.height)] }; })()`;
+    const inside = rs.every((r) => r.left >= c.left && r.right <= c.right && r.top >= c.top && r.bottom <= c.bottom);
+    return { zoom: z, graph: [Math.round(w), Math.round(ht)], canvas: [Math.round(c.width), Math.round(c.height)], inside }; })()`;
 const runText = `(document.querySelector('#runOut')?.textContent || '')`;
+// `--viewport=1008x681` gives the window the inner size it has on CI's 1024x768 screen.
+const viewport = process.argv.find((a) => a.startsWith('--viewport='))?.slice(11).split('x').map(Number);
+async function sized(ctx) {
+  if (!viewport) return ctx;
+  await ctx.cdp('Emulation.setDeviceMetricsOverride', { width: viewport[0], height: viewport[1], deviceScaleFactor: 1, mobile: false });
+  await ctx.until(`Math.abs(innerWidth - ${viewport[0]}) <= 1 && Math.abs(innerHeight - ${viewport[1]}) <= 1`, 'the emulated viewport');
+  return ctx;
+}
 
 async function openScript(ctx, name) {
   await ctx.js(`ide.openFile(ide.util.joinPath(ide.root, ${S(name)}))`);
@@ -107,7 +116,7 @@ const readability = `(() => {
   return out;
 })()`;
 
-const ctx = await launch({ fixture: 'visual-script', port: 9095, name: 'visual-script' });
+const ctx = await sized(await launch({ fixture: 'visual-script', port: 9095, name: 'visual-script' }));
 const { js, until, press, type, shot, check, sleep, project, userData } = ctx;
 const ui = inputs(ctx);
 const interp = await js(`(() => { const i = ide.currentInterp(); return i && { cmd: i.cmd, args: i.args }; })()`);
@@ -124,7 +133,7 @@ try {
   await sleep(300);
   const demoFirst = await js(viewInfo);
   const demoFits = demoFirst.graph[0] <= demoFirst.canvas[0] - 32 && demoFirst.graph[1] <= demoFirst.canvas[1] - 32;
-  check(demoFits ? demoFirst.zoom === 1 : demoFirst.zoom < 1, `demo.pyflow opens at 100% when it fits and is fitted when it does not (${S({ ...demoFirst, fits: demoFits })})`);
+  check(demoFits ? demoFirst.zoom === 1 : demoFirst.zoom < 1 && demoFirst.inside, `demo.pyflow opens at 100% when it fits and is fitted when it does not (${S({ ...demoFirst, fits: demoFits })})`);
   check(/^Run 'demo' \(Ctrl\+Shift\+F10\)$/.test(await js(`document.querySelector('.vs-host:not(.hidden) .vs-run').title`)), 'the Run button says what it runs and its shortcut');
 
   // ---- Run with Shift+F10, answer Ask User on stdin ----
@@ -180,7 +189,8 @@ try {
   await openScript(ctx, 'zero.pyflow');
   await sleep(300);
   const firstView = await js(viewInfo);
-  check(firstView.graph[0] <= firstView.canvas[0] - 32 && firstView.graph[1] <= firstView.canvas[1] - 32 && firstView.zoom === 1, `a graph that fits the canvas opens at 100% the first time (${S(firstView)})`);
+  const zeroFits = firstView.graph[0] <= firstView.canvas[0] - 32 && firstView.graph[1] <= firstView.canvas[1] - 32;
+  check(zeroFits ? firstView.zoom === 1 : firstView.zoom < 1 && firstView.inside, `the first time, a graph that fits the canvas opens at 100% and a bigger one is fitted into it (${S({ ...firstView, fits: zeroFits })})`);
   await focusCanvas(ctx, ui);
   await press('Shift+F10');
   await until(`${runText}.includes('Process finished with exit code 1')`, 'the failing script ends', 30000);
@@ -345,7 +355,7 @@ try {
 ctx.close();
 
 // ---- Korean ----
-const ko = await launch({ fixture: 'visual-script', port: 9096, name: 'visual-script-ko', lang: 'ko-KR' });
+const ko = await sized(await launch({ fixture: 'visual-script', port: 9096, name: 'visual-script-ko', lang: 'ko-KR' }));
 const kui = inputs(ko);
 try {
   await openScript(ko, 'demo.pyflow');

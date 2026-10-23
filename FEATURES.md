@@ -937,6 +937,8 @@ Python and runs like a script. `model.js` owns the file format and pure edit hel
   session without English in the tab, palette, menus and dialogs). Fixtures: `verify/fixtures/visual-script`.
 ```
 
+`verify/visual-script-editor.mjs` and `verify/visual-script.mjs` take `--viewport=1008x681` to emulate CI's 1024x768 screen (inner 1008x681, canvas 647x263); run both sizes before pushing changes to the editor.
+
 ## Monaco 0.57 and IME input
 
 PyIDE uses monaco-editor 0.57 (pinned exactly in package.json) through its AMD build in `min/vs`, loaded by `renderer/index.html` (`min/vs/loader.js`) and `renderer/core/ide.js`. Since 0.53 that build is made by Vite: `vs/editor/editor.main` appends its own `editor.main.css` and sets `self.MonacoEnvironment.getWorker`, which starts the editor, JSON, CSS, HTML and TypeScript workers from the hashed scripts in `min/vs/assets` (a blob worker that calls `importScripts` on their `file:` URL). PyIDE keeps that `getWorker` and does not define `MonacoEnvironment` itself. Monaco's message bundle for the UI language (`min/vs/nls/lang/ko.js`) is a plain script that sets globals, so `ide.js` adds it as a `<script>` before it requires `editor.main`. (Monaco's `vs/nls` loader plugin would `require()` it as an AMD module, which never resolves.) Internal AMD modules (`vs/...` other than `vs/editor/editor.main`) are no longer reachable. Inline completion providers must implement `disposeInlineCompletions` (it was `freeInlineCompletions`).
