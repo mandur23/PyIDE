@@ -209,7 +209,10 @@ try {
   check(await js(`document.querySelector('#rfMoveDialog .rf-dest').value`) === 'geometry', 'dropping a folder opens Move with the drop target');
   await h.button('rfMoveDialog', 'refactor');
   await h.gone('rfMoveDialog');
-  await until(`(async () => await ide.api.exists(${q(h.P('geometry/scripts/extra.py'))}))()`, 'namespace package moved', 60000);
+  await until(`(async () => await ide.api.exists(${q(h.P('geometry/scripts/extra.py'))}))()`, 'namespace package moved', 60000).catch(async (e) => {
+    const seen = await js(`[...document.querySelectorAll('.dialog, .notification, .balloon, .ide-notification')].map((n) => n.textContent.slice(0, 200)).join(' || ')`);
+    throw new Error(`${e.message} (geometry: ${readdirSync(h.P('geometry')).join(',')}; on screen: ${seen || 'nothing'})`);
+  });
   check(readdirSync(h.P('geometry/scripts')).join(',') === 'extra.py', 'no __init__.py is left in the namespace package');
   const main4 = await h.doc('main.py');
   check(main4.includes('import geometry.scripts.extra\n') && main4.includes('geometry.scripts.extra.run()'), 'imports of the namespace package are rewritten');

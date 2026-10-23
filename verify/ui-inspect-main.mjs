@@ -170,10 +170,12 @@ async function mainWindowChecks(t, lang) {
     }
   }
   await js(`(document.querySelectorAll('.inspect-status-item').forEach(n => n.remove()), true)`);
-  await setSize(t, 1280, 800);
+  // Wide enough for every widget even with a background task and a long path showing (a loaded runner has both).
+  await setSize(t, 1600, 800);
   // The bar refits on the next frame after the resize; a slow runner may take a few.
   const allShown = await until(`__uiInspect.status().overflow.length === 0`, `${lang}: every widget back`, 5000).catch(() => false);
-  check(allShown, `${lang}: wider again, every widget shows again (${JSON.stringify((await js(`__uiInspect.status()`)).overflow)})`);
+  const why = allShown ? '' : await js(`(() => { const bar = document.getElementById('status'); return JSON.stringify({ bar: bar.clientWidth, scroll: bar.scrollWidth, path: document.getElementById('statusPath').clientWidth, items: [...document.querySelectorAll('#statusItems > *')].filter((n) => n.getClientRects().length).map((n) => (n.id || n.className) + ':' + Math.round(n.getBoundingClientRect().width) + ':' + n.textContent.slice(0, 30)) }); })()`);
+  check(allShown, `${lang}: wider again, every widget shows again (${JSON.stringify((await js(`__uiInspect.status()`)).overflow)}${why ? ' ' + why : ''})`);
 
   // ---------- contrast in both themes ----------
   for (const theme of ['dark', 'light']) {

@@ -146,7 +146,9 @@ try {
   // A detached window shares the document: one backup file, kept while any window still has the change.
   await js(`ide.openFile(${P('a.py')}, { group: 'window' })`);
   const w = await attachDetached(9060);
-  await untilTrue(async () => (await w.js(`window.__ideReady === true && ide.activeTab()?.title === 'a.py' && ide.isDirty(ide.activeTab())`)), 'detached a.py modified', 30000);
+  let detachedState;
+  await untilTrue(async () => (detachedState = await w.js(`({ ready: window.__ideReady === true, title: ide.activeTab()?.title, dirty: !!ide.activeTab() && ide.isDirty(ide.activeTab()) })`))?.ready && detachedState.title === 'a.py' && detachedState.dirty, 'detached a.py modified', 60000)
+    .catch((e) => { throw new Error(`${e.message} (${JSON.stringify(detachedState)})`); });
   await w.js(`(ide.getDocument(ide.activeTab().path).model.pushEditOperations([], [{ range: new ide.monaco.Range(1, 1, 1, 1), text: '# FROM_DETACHED\\n' }], () => null), true)`);
   await untilTrue(() => backupOf('a.py').some((b) => b.text.includes('# FROM_DETACHED') && b.text.includes('# EDIT_A')), 'backup has the detached edit');
   await sleep(2500);

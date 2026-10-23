@@ -25,7 +25,9 @@
   const closedTabs = [];
   const mru = []; // most recently activated tabs, newest first
   let editorOptions = {};
-  let peers = 1;
+  // A detached window always has the main window as a peer, also before main's first window:peers arrives: a document it
+  // opens that early must still ask the main window for its unsaved text (doc:opened).
+  let peers = ide.detached ? 2 : 1;
   let applyingRemote = false;
 
   const settingOn = (k, d) => ide.settings.get(k, d);
