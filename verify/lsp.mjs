@@ -44,6 +44,9 @@ try {
   check(await js(`monaco.editor.getModelMarkers({ owner: 'pyright.hints' }).some(m => /sys/.test(m.message) && m.tags?.includes(1))`), 'unused import is greyed out as an unnecessary-code hint');
   check(!diags.some((p) => /"sys" is not accessed/.test(p.msg)), 'hints are kept out of the Problems list');
   check(await js(`[...document.querySelectorAll('#problemList .problem')].some(r => r.textContent.includes('undefined_name'))`), 'Problems tool window lists pyright problems');
+  // Pyright checks files on its background thread (main/features/lsp.js), so requests do not wait for a check.
+  const pyrightLog = await js(`ide.api.invoke('lsp:log')`);
+  check(/BG: Background analysis\(\d+\) started/.test(pyrightLog), 'Pyright runs its background-analysis thread');
 
   // ---- F2 / Shift+F2 ----
   await caret(1, 1);

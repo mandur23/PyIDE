@@ -112,7 +112,9 @@
 
   // Code a plugin generates and debugs for the user (a visual script's Python) stands for what the user edits: the
   // plugin owns its breakpoints and frame labels, and shows a stop in it on 'debugContextChanged' instead of the file
-  // being opened. source: {owns(path), breakpoints(path) -> DAP SourceBreakpoints, label(path, line) -> text}.
+  // being opened. source: {owns(path), breakpoints(path) -> DAP SourceBreakpoints, label(path, line) -> text,
+  // variableLabel?(path, name) -> text | null}: variableLabel names a variable of a frame in the file in Variables (a
+  // node's title for a generated local); the name itself stays in the row's tooltip and in evaluation.
   const generatedSources = [];
   const generatedFor = (path) => (path ? generatedSources.find((g) => g.owns(path)) : null);
 
@@ -809,7 +811,7 @@
     'function variables': tr('function variables'), 'class variables': tr('class variables'), 'protected variables': tr('protected variables') };
   const groupLabel = (name) => (Object.hasOwn(GROUP_LABELS, name) ? GROUP_LABELS[name] : name);
 
-  function varNode(v, parentPath, depth) {
+  function varNode(v, parentPath, depth, shownName = v.name) {
     const nodePath = `${parentPath}/${v.name}`;
     const wrap = el('div', 'dbg-node');
     const row = el('div', 'dbg-var');
@@ -823,7 +825,7 @@
       row.classList.add('dbg-group');
       row.append(arrow, el('span', 'dbg-name', groupLabel(v.name)));
     } else {
-      row.append(arrow, v.label ? el('span', 'dbg-name', v.label) : data('dbg-name', v.name, tip));
+      row.append(arrow, v.label ? el('span', 'dbg-name', v.label) : data('dbg-name', shownName, tip));
     }
     if (v.error) row.append(el('span', 'dbg-eq', ' = '), data('dbg-err', v.error, tip));
     else if (!group) {
@@ -862,8 +864,10 @@
     if (!varsList) return;
     if (!vars) return varsList.replaceChildren(el('div', 'dbg-empty', sess ? tr('Variables are not available while running') : tr('Not suspended')));
     if (!sess) return varsList.replaceChildren(el('div', 'dbg-empty', tr('Not debugging. Start with {keys}', { keys: 'Shift+F9' })));
+    const path = currentFrame()?.source?.path;
+    const generated = generatedFor(path);
     varsList.replaceChildren(
-      ...vars.map((v) => varNode(v, 'L', 0)),
+      ...vars.map((v) => varNode(v, 'L', 0, generated?.variableLabel?.(path, v.name) || v.name)),
       ...extraScopes.map((sc) => varNode({ name: sc.name, group: true, variablesReference: sc.variablesReference }, 'S', 0)),
     );
     if (!vars.length && !extraScopes.length) varsList.appendChild(el('div', 'dbg-empty', tr('No variables')));

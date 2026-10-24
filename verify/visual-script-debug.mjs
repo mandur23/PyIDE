@@ -1,7 +1,8 @@
 // Debugging visual scripts on their nodes (renderer/features/visual-script/debug.js, the debugger's generated-source
 // hook). Ports 9082-9085. With real CDP mouse and key input: F9, Ctrl+F8, the header dot and the node menu toggle
 // breakpoints on steps (not on pure nodes); Shift+F9 pauses on a breakpoint in a loop with the node outlined, the loop
-// index in Variables and on hover over a pin and a wire (the bubble beside the node, never over the paused node's
+// index in Variables named after its node (the generated name in the tooltip and usable in a watch; Set Variable names
+// as they are) and on hover over a pin and a wire (the bubble beside the node, never over the paused node's
 // title); Python Expression is never evaluated again; Step Over moves the outline; Resume runs to the next hit; a condition limits hits; a breakpoint removed while paused stops pausing;
 // Step Into a project function opens its .py and Step Out comes back to the node; Frames name the .pyflow; Rerun
 // compiles the graph again; an uncaught exception marks its node; a graph calling a src-layout module runs and steps
@@ -144,8 +145,23 @@ try {
   await waitPaused(t, 'n4', 'paused on the breakpoint node', 90000);
   check(true, 'Shift+F9 on the canvas debugs the script and pauses on the breakpoint node, outlined as paused');
   check(await js(`ide.activeTab().path`) === loopPath && await js(`!ide.groups().flatMap((g) => g.tabs).some((t) => /\\.py$/i.test(t.path))`), 'the .pyflow stays in front; the generated file is not opened');
-  await until(`/index_n3 = \\{int\\} 0/.test(document.querySelector('#dbgVars').textContent)`, 'loop index in Variables');
-  check(true, 'Variables shows the loop index (index_n3 = 0)');
+  await until(`document.querySelector('#dbgVars').textContent.includes('For Range (n3) = {int} 0')`, 'loop index in Variables');
+  const indexName = await js(`(() => { const n = [...document.querySelectorAll('#dbgVars .dbg-name')].find((x) => x.textContent === 'For Range (n3)');
+    return { title: n?.title, vars: document.querySelector('#dbgVars').textContent }; })()`);
+  check(indexName.title === 'index_n3 = 0' && !indexName.vars.includes('index_n3'), `Variables names the loop index after its node (For Range (n3) = 0), the generated name index_n3 in its tooltip (${S(indexName)})`);
+  await js(`[...document.querySelectorAll('#dbgVars .dbg-group .dbg-name')].find((n) => n.textContent === 'Globals').parentElement.id = 'vsdGlobals'`);
+  await ui.clickOn('#vsdGlobals');
+  await until(`[...document.querySelectorAll('#dbgVars .dbg-kids:not(.hidden) .dbg-name')].some((n) => n.textContent === 'total')
+    && document.querySelector('#dbgVars .dbg-kids:not(.hidden)').textContent.includes('total = {int} 0')`, 'the Set Variable variable under Globals');
+  check(true, 'a Set Variable variable keeps its own name (total = 0 under Globals)');
+  await ui.clickOn('#dbgWatchAdd');
+  await js(`document.querySelector('#dbgWatchInput').focus()`);
+  await type('index_n3');
+  await press('Enter');
+  await until(`document.querySelector('#dbgWatches').textContent.includes('index_n3 = {int} 0')`, 'a watch on index_n3');
+  check(true, 'a watch on the generated name still evaluates (index_n3 = 0)');
+  await ui.clickOn('#dbgWatches .dbg-watch-del');
+  await until(`!document.querySelector('#dbgWatches .dbg-watch')`, 'the watch removed');
   const frames = await js(`document.querySelector('#dbgFrames').textContent`);
   check(frames.includes('main, loop.pyflow: Set Variable (n4)') && !frames.includes('loop.py:'), `Frames name the .pyflow and the node (${frames})`);
   check(await js(`(() => { const c = document.querySelector(${S(`${HOST} .vs-canvas`)}).getBoundingClientRect(); const r = document.querySelector(${S(node('n4'))}).getBoundingClientRect();
@@ -185,7 +201,7 @@ try {
   await js(`document.querySelector(${S(`${HOST} .vs-canvas`)}).focus()`);
   await press('F9');
   await waitPaused(t, 'n4', 'the conditional hit');
-  await until(`/index_n3 = \\{int\\} 3/.test(document.querySelector('#dbgVars').textContent)`, 'index 3 in Variables', 10000);
+  await until(`document.querySelector('#dbgVars').textContent.includes('For Range (n3) = {int} 3')`, 'index 3 in Variables', 10000);
   check(true, 'with the condition total >= 3 the next pause is at index 3, skipping 2');
 
   // ---- removing a breakpoint during the session ----
@@ -219,6 +235,8 @@ try {
   await press('F8');
   await waitPaused(t, 'n3', 'Step Over to Print');
   check(true, 'Step Over then goes to the next node');
+  await until(`document.querySelector('#dbgVars').textContent.includes('Call Python (n2) = {int} 8')`, 'the call result in Variables');
+  check(true, "Variables names a step's result after its node (Call Python (n2) = 8)");
   await press('F9');
   await waitEnded(t, 'calc ends');
   check(/^8$/m.test(await debugOut(t)), 'calc prints 8');
@@ -305,7 +323,7 @@ try {
     await selectNode(r, rui, 'n2');
     await r.press('Shift+F9');
     await waitPaused(r, 'n5', 'paused after the restart');
-    await r.until(`/index_n3 = \\{int\\} 2/.test(document.querySelector('#dbgVars').textContent)`, 'index 2', 10000);
+    await r.until(`document.querySelector('#dbgVars').textContent.includes('For Range (n3) = {int} 2')`, 'index 2', 10000);
     r.check(true, 'and debugging pauses there when its condition holds (index 2)');
     await r.press('F9');
     await waitEnded(r, 'ends after the restart');
@@ -332,6 +350,9 @@ try {
     await waitPaused(ko, 'n4', 'Korean: paused');
     const frames3 = await ko.js(`document.querySelector('#dbgFrames').textContent`);
     ko.check(frames3.includes('loop.pyflow: 변수 설정 (n4)'), `Korean: Frames use the node's Korean title (${frames3})`);
+    await ko.until(`document.querySelector('#dbgVars').textContent.includes('범위 반복 (for range) (n3) = {int} 0')`, 'Korean: the loop index in Variables');
+    const koIndex = await ko.js(`[...document.querySelectorAll('#dbgVars .dbg-name')].find((x) => x.textContent === '범위 반복 (for range) (n3)')?.title`);
+    ko.check(koIndex === 'index_n3 = 0', `Korean: Variables names the loop index with the node's Korean title, index_n3 in the tooltip (${koIndex})`);
     const ne = await hoverValue(ko, kui, await kui.center(pin('n10', 'out', 'result')), 'Korean Python Expression');
     ko.check(ne === '(평가하지 않음: 코드를 다시 실행하게 됩니다)', `Korean: the not-evaluated note (${ne})`);
     ko.check(await hoverValue(ko, kui, await kui.center(pin('n3', 'out', 'index')), 'Korean index') === '0', 'Korean: values on hover');

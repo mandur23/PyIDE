@@ -2,14 +2,15 @@
 // the file's document symbols (breadcrumbs, sticky lines, the outline), and Pyright's CPU until it is quiet, in a
 // 20,000-line file and a 2,000-line control. Not in CI (it times things), like perf-runtime.mjs.
 //   node verify/perf-bigfile.mjs [--lines 20000] [--port 9180]   (default: both sizes, one launch each)
-// Medians of 5 runs each, interleaved with the code before the fix, on a 16-thread laptop running other suites
-// (machine 24-47% busy; numbers in verify/out/perf-bigfile-*/results.json):
-//   documentSymbol requests per typed line: 20,000 lines 19 -> 0.5, 2,000 lines 10.5 -> 0.5 (one after typing stops)
-//   Pyright CPU while typing 2 lines in 20,000: 30.4 s -> 25.8 s; completion while typing: 7.8 s -> 5.6 s, ranges
-//   overlapping (3.8-20.5 s, 4.6-12.2 s). 2,000 lines: completion ~40 ms either way.
-// What still bounds completion in the large file is Pyright's own check of the open file after each edit (65% of its
-// CPU in a profile): it runs on the thread that answers requests and cannot be interrupted, and Pyright 1.1.406's
-// background-analysis thread (--cancellationReceive) publishes no diagnostics here, so it is not used.
+// Then a name typed at the end of the module must be reported on its line (and go once replaced) soon after the last key.
+// 0.2.7 (one documentSymbol request per file): requests per typed line 19 -> 0.5 in 20,000 lines, 10.5 -> 0.5 in 2,000.
+// 0.2.8 (Pyright checks on its background thread, main/features/lsp.js), medians of 5 runs per side interleaved with
+// 0.2.7, machine 13-22% busy (others 3-6%):
+//   20,000 lines: completion while typing 3,071 ms [2,270-4,126] -> 178 ms [177-190]; diagnostics of the name typed
+//   last 5.6 s -> 6.2 s; Pyright working set 670 -> 778 MB. 2,000 lines: completion 32 ms [28-41] -> 41 ms [34-52],
+//   diagnostics 0.8 s either way, working set 402 -> 515 MB.
+// What bounds completion now is Pyright parsing and binding the whole file again after an edit before it answers
+// (~200 ms at 20,000 lines; ~10 ms for the same text unchanged); the check (~5 s) runs on the other thread.
 import { descendants, launch, processSnapshot } from './lib.mjs';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { cpus, tmpdir } from 'os';
@@ -19,9 +20,9 @@ const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 
 const SIZES = arg('lines') ? [Number(arg('lines'))] : [2000, 20000];
 const BASE_PORT = Number(arg('port')) || 9180;
 const BUDGET = {
-  2000: { symbolsPerLine: 2, completionMs: 1500 },
-  // Completion waits for Pyright's check of the file (above); the budget catches answers stuck behind a request queue.
-  20000: { symbolsPerLine: 2, completionMs: 15000 },
+  2000: { symbolsPerLine: 2, completionMs: 1500, diagnosticsMs: 5000 },
+  // Completion waited for Pyright's check of the file (2-4 s) when the check ran on the thread that answers requests.
+  20000: { symbolsPerLine: 2, completionMs: 1500, diagnosticsMs: 20000 },
 };
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
 const round = (x) => Math.round(x * 10) / 10;
@@ -53,7 +54,7 @@ async function run(lines, port) {
     const out = new Map();
     for (const r of descendants(processSnapshot(), t.pid, { includeRoot: true })) {
       const kind = /langserver/.test(r.cmd) ? 'pyright' : r.name === 'electron.exe' ? (/--type=([\w-]+)/.exec(r.cmd)?.[1] || 'main') : r.name;
-      out.set(r.pid, { kind, ms: r.kernelMs + r.userMs });
+      out.set(r.pid, { kind, ms: r.kernelMs + r.userMs, mb: r.workingSet / 1048576 });
     }
     return out;
   };
@@ -168,13 +169,12 @@ async function run(lines, port) {
       // Every request the plugins sent Pyright while typing and until it was quiet: count, unanswered (cancelled), median ms.
       requests: Object.fromEntries(Object.entries(perf.methods).map(([k, m]) => [k.replace(/^textDocument\//, ''), { n: m.n, nulls: m.nulls, medianMs: median(m.ms) }])),
       pyrightCpuMs: { whileTyping: typedCpu.pyright || 0, untilQuiet: all.pyright || 0 },
+      pyrightWorkingSetMB: Math.round([...prevQ.values()].filter((v) => v.kind === 'pyright').reduce((sum, v) => sum + v.mb, 0)),
       rendererCpuMs: typedCpu.renderer || 0,
       quietAfterMs: quietMs,
       // Load on the machine while typing: all cores' busy share, and how much of it was not this IDE.
       machine: { cores: cpus().length, busyPct: round(machineBusy * 100), othersPct: round(Math.max(0, machineBusy - ourCpu / (typedMs * cpus().length)) * 100) },
     });
-    console.log(`RESULT ${JSON.stringify(result)}`);
-
     // The breadcrumbs and the outline caught up with the text: the chain names the class and method typed in.
     await until(`[...document.querySelectorAll('.nb-bar:not(.hidden) .nb-crumb[data-kind=symbol]')].map((n) => n.dataset.name).join('/') === '${cls}/total'`, 'breadcrumbs after typing', 60000)
       .then(() => check(true, `${lines} lines: the breadcrumbs show the method typed in after typing stops`))
@@ -186,9 +186,34 @@ async function run(lines, port) {
     check(result.completionMs.median < b.completionMs, `${lines} lines: completion while typing answers in ${result.completionMs.median} ms (median of ${result.completionMs.n}, < ${b.completionMs})`);
     check(result.documentSymbol.perTypedLine <= b.symbolsPerLine, `${lines} lines: ${result.documentSymbol.perTypedLine} documentSymbol requests per typed line (<= ${b.symbolsPerLine})`);
     check(result.documentSymbol.lastForFinalVersion, `${lines} lines: the last documentSymbol request is for the final text`);
+
+    // Diagnostics catch up once typing stops: a name typed last is reported on its line, and goes when it is replaced.
+    // It is typed at the end of the module (the lines above sit after a return, where Pyright reports no names).
+    const marker = 'undefined_name_28';
+    const reported = `ide.problems.all().find((p) => p.source === 'pyright' && /big\\.py$/i.test(p.path) && p.msg.includes('${marker}'))`;
+    await js(`(() => { const ed = ide.editor; const m = ed.getModel(); const ln = m.getLineCount(); ed.setPosition({ lineNumber: ln, column: m.getLineMaxColumn(ln) }); return 1; })()`);
+    for (const ch of `\nbroken = ${marker}`) { await key(ch); await sleep(100); }
+    const typedLine = await js(`ide.editor.getPosition().lineNumber`);
+    const d0 = Date.now();
+    await until(`!!${reported}`, 'Pyright reports the undefined name typed last', 120000).catch(async (err) => {
+      throw new Error(`${err.message} (line ${typedLine}: ${JSON.stringify(await js(`ide.editor.getModel().getLineContent(ide.editor.getPosition().lineNumber)`))}; ${await js(`JSON.stringify(ide.problems.all().filter((p) => p.source === 'pyright').slice(0, 5))`)})`);
+    });
+    result.diagnostics = { reportedMs: Date.now() - d0, line: await js(`${reported}.line`), typedLine };
+    for (let i = 0; i < marker.length; i++) {
+      await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      await sleep(100);
+    }
+    await key('1');
+    const r0 = Date.now();
+    await until(`!${reported}`, 'the undefined name is no longer reported', 120000);
+    result.diagnostics.clearedMs = Date.now() - r0;
+    check(result.diagnostics.line === typedLine, `${lines} lines: Pyright reports the name typed last on its line (${result.diagnostics.line}, typed on ${typedLine})`);
+    check(result.diagnostics.reportedMs < b.diagnosticsMs && result.diagnostics.clearedMs < b.diagnosticsMs, `${lines} lines: diagnostics catch up after typing stops: reported in ${result.diagnostics.reportedMs} ms, cleared in ${result.diagnostics.clearedMs} ms (< ${b.diagnosticsMs})`);
   } catch (err) {
     check(false, `${lines} lines: ${err.message}`);
   }
+  console.log(`RESULT ${JSON.stringify(result)}`);
   mkdirSync(t.outDir, { recursive: true });
   writeFileSync(path.join(t.outDir, 'results.json'), JSON.stringify(result, null, 2));
   return t;

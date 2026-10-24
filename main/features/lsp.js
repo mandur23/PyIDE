@@ -1,6 +1,7 @@
 // Pyright language server client: one server per project root, JSON-RPC over stdio with Content-Length framing.
 const { spawn } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const remote = require('../remote');
@@ -72,6 +73,34 @@ const PROJECT_WIDE = new Set(['textDocument/references', 'textDocument/rename', 
 const FILES_LISTED = /^(Found \d+ source files?|No source files found)/;
 const LISTING_TIMEOUT = 20000;
 
+// Pyright checks an open file after each edit (a 20,000-line file: about 5 s). Without its background-analysis thread
+// it checks on the thread that answers requests, and a completion asked meanwhile waited for the whole check. The
+// thread runs when Pyright gets --cancellationReceive, but the bundled Pyright starts it from the bundle chunk that
+// holds its code, which only defines modules, so the thread did nothing and no diagnostics came. BOOT runs Pyright with
+// worker_threads.Worker started from the language server entry instead (argv[1]), where a worker runs the analysis.
+const BOOT = "const wt=require('worker_threads');const entry=process.argv[1];if(wt.isMainThread){const W=wt.Worker;"
+  + 'wt.Worker=class extends W{constructor(_file,options){super(entry,options)}}}require(entry)';
+// Pyright reads cancellations, and its two threads exchange them, as files in this folder under the temp folder.
+const cancellationDir = (name) => path.join(os.tmpdir(), 'python-languageserver-cancellation', name);
+
+// With checking on the background thread, the thread that answers requests binds a file (collects its names) only
+// when a request needs it, and completion offers auto-imports only from files bound there: a function added to an
+// open shapes.py was missing from completion in main.py, and Pyright unbinds every file when one is added to the
+// project. The check of the open files used to bind them. Now each open file is bound again BIND_PAUSE ms after its
+// last edit or the project's last file change, by a request that needs nothing else (a hover at its start).
+const BIND_PAUSE = 1000;
+
+// Folders left by IDE processes that ended without stopping Pyright (killed, crashed): named pyide-<pid>-<gen>.
+function removeStaleCancellationDirs() {
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
+  fs.readdir(cancellationDir(''), (_err, names) => {
+    for (const name of names || []) {
+      const pid = Number(/^pyide-(\d+)-\d+$/.exec(name)?.[1]);
+      if (pid && pid !== process.pid && !alive(pid)) fs.rm(cancellationDir(name), { recursive: true, force: true }, () => {});
+    }
+  });
+}
+
 class Server {
   constructor({ unpackedDir, root, pythonPath, locale, gen, send }) {
     Object.assign(this, { root, pythonPath, gen, send });
@@ -85,9 +114,15 @@ class Server {
     this.tickets = new Map(); // the renderer's ticket -> request id, for lsp:cancel
     this.waiting = new Map(); // the renderer's ticket -> drop(), for a PROJECT_WIDE request waiting for the file list
     this.filesListed = false;
+    this.openUris = new Set();
+    this.bindTimers = new Map(); // uri -> timer of bindSoon
     this.listed = new Promise((resolve) => { this.markListed = () => { this.filesListed = true; clearTimeout(this.listingTimer); resolve(); }; });
     this.listingTimer = setTimeout(this.markListed, LISTING_TIMEOUT);
-    this.proc = spawn(process.execPath, [path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
+    const cancellation = `pyide-${process.pid}-${gen}`;
+    this.cancellationDir = cancellationDir(cancellation);
+    try { fs.mkdirSync(this.cancellationDir, { recursive: true }); } catch {}
+    const entry = path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js');
+    this.proc = spawn(process.execPath, ['-e', BOOT, entry, '--stdio', `--cancellationReceive=file:${cancellation}`], {
       cwd: root,
       // Pyright writes its diagnostics and hovers in the locale VSCODE_NLS_CONFIG names (the IDE's language); without it
       // it falls back to LC_ALL/LANG, which Windows does not set.
@@ -98,7 +133,10 @@ class Server {
     this.proc.stderr.on('data', (d) => this.addLog(d.toString('utf8')));
     this.proc.on('error', (err) => this.onExit(err.message));
     this.proc.stdin.on('error', () => {}); // writes until 'exit' marks the server dead would otherwise throw EPIPE
-    this.proc.on('exit', (code) => this.onExit(`exited with code ${code}`));
+    this.proc.on('exit', (code) => {
+      fs.rm(this.cancellationDir, { recursive: true, force: true }, () => {});
+      this.onExit(`exited with code ${code}`);
+    });
     diagnostics.watchProcess(this.proc, { name: 'Pyright language server' });
     this.ready = this.initialize();
     this.ready.catch(() => {});
@@ -228,8 +266,7 @@ class Server {
   }
 
   // A cancelled request answers null at once, and Pyright drops it if it has not started on it yet. (One it is working
-  // on runs to the end: Pyright reads $/cancelRequest between requests. Its file-based cancellation, which it checks
-  // while working, stops its background analysis from publishing diagnostics in this version.)
+  // on runs to the end: Pyright reads $/cancelRequest between requests.)
   cancel(ticket) {
     const drop = this.waiting.get(ticket);
     if (drop) { this.waiting.delete(ticket); drop(); return; }
@@ -251,6 +288,24 @@ class Server {
   notify(method, params) {
     if (this.initialized) this.write({ method, params });
     else this.queue.push({ method, params });
+    const uri = params?.textDocument?.uri;
+    if (method === 'textDocument/didOpen' || method === 'textDocument/didChange') {
+      this.openUris.add(uri);
+      this.bindSoon([uri]);
+    } else if (method === 'textDocument/didClose') {
+      this.openUris.delete(uri);
+    }
+  }
+
+  bindSoon(uris) {
+    for (const uri of uris) {
+      clearTimeout(this.bindTimers.get(uri));
+      this.bindTimers.set(uri, setTimeout(() => {
+        this.bindTimers.delete(uri);
+        if (!this.openUris.has(uri)) return;
+        this.ready.then(() => this.request('textDocument/hover', { textDocument: { uri }, position: { line: 0, character: 0 } })).catch(() => {});
+      }, BIND_PAUSE));
+    }
   }
 
   async initialize() {
@@ -292,7 +347,9 @@ class Server {
         const exists = await fs.promises.access(full).then(() => true, () => false);
         return { uri: pathToFileURL(full).href, type: exists ? (renamed ? 1 : 2) : 3 };
       }));
-      if (this.initialized && !this.dead) this.notify('workspace/didChangeWatchedFiles', { changes });
+      if (!this.initialized || this.dead) return;
+      this.notify('workspace/didChangeWatchedFiles', { changes });
+      this.bindSoon(this.openUris);
     };
     try {
       this.watcher = fs.watch(this.root, { recursive: true }, (event, file) => {
@@ -310,6 +367,7 @@ class Server {
     if (this.dead) return;
     this.dead = true;
     this.watcher?.close();
+    for (const timer of this.bindTimers.values()) clearTimeout(timer);
     // Requests in flight when the server stops (another project, another interpreter) or exits get no answer; the
     // renderer treats that as none, and the exit itself is reported, so these are not internal errors as well.
     for (const p of this.pending.values()) p.reject(Object.assign(new Error(`language server ${reason}`), { expected: true }));
@@ -327,8 +385,10 @@ class Server {
     this.watcher?.close();
     if (this.dead) return;
     const kill = () => { try { this.proc.kill(); } catch {} };
-    if (immediate) kill();
-    else {
+    if (immediate) {
+      kill();
+      try { fs.rmSync(this.cancellationDir, { recursive: true, force: true }); } catch {}
+    } else {
       this.request('shutdown').then(() => this.write({ method: 'exit' })).catch(() => {});
       setTimeout(kill, 500);
     }
@@ -337,6 +397,7 @@ class Server {
 }
 
 exports.register = ({ ipcMain, app, send, unpackedDir }) => {
+  removeStaleCancellationDirs();
   let server = null;
   let gen = 0;
 

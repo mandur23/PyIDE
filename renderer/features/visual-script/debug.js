@@ -79,6 +79,12 @@
       const id = session.result.map[line];
       return id ? `${basename(session.path)}: ${nodeLabel(session.graph, id)}` : basename(session.path);
     },
+    // A step's output is the local `<pin>_<node id>` (index_n3); Set Variable names and Python Code outputs are the
+    // user's own names and stay as they are. Every such step has one data output, so the node names it.
+    variableLabel: (p, name) => {
+      const id = Object.keys(session.result.pinExpr || {}).find((n) => Object.entries(session.result.pinExpr[n]).some(([pin, code]) => code === name && code === `${pin}_${n}`));
+      return id ? nodeLabel(session.graph, id) : null;
+    },
   };
   VS.debugSession = (s) => {
     session = s;
