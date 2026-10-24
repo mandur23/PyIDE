@@ -1,4 +1,6 @@
+const { execFile } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const remote = require('../remote');
 const { withEnvFiles } = require('../dotenv');
@@ -11,6 +13,29 @@ const withPath = (env = {}, extra = []) => {
 };
 
 exports.withPath = withPath;
+
+// ---------- working directory ----------
+// Windows starts no process in a working directory longer than this (MAX_PATH less the trailing backslash and the
+// NUL), whatever the long path setting; spawn then fails with ENOENT, as if the program were missing.
+const MAX_CWD = 258;
+
+// The 8.3 form of a folder (C:\Users\NAME~1\…) when its volume keeps short names; null when it does not, or on error.
+const shortPath = (dir) => new Promise((resolve) => {
+  if (process.platform !== 'win32') return resolve(null);
+  execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"for %I in ("${dir}") do @echo %~sI"`],
+    { windowsHide: true, windowsVerbatimArguments: true, timeout: 5000, encoding: 'utf8' },
+    (err, stdout) => resolve(err ? null : String(stdout).trim() || null));
+});
+
+// A folder a program can be started in for cwd: cwd itself, its 8.3 form (the same folder), or else the first usable
+// of fallbacks (the project root) or the home folder. -> {cwd, tooLong}; tooLong: cwd, when another folder stands in.
+async function workingDir(cwd, fallbacks = []) {
+  if (process.platform !== 'win32' || !cwd || path.resolve(cwd).length <= MAX_CWD) return { cwd, tooLong: null };
+  const usable = (d) => !!d && path.resolve(d).length <= MAX_CWD && isDir(d);
+  const short = await shortPath(path.resolve(cwd));
+  if (usable(short)) return { cwd: short, tooLong: null };
+  return { cwd: [...fallbacks, os.homedir()].find(usable) || cwd, tooLong: cwd };
+}
 
 // ---------- external tools (before launch tasks, file watchers) ----------
 // Shell-like split, as the renderer's ide.run.parseArgs: whitespace separates, quotes group and are removed.
@@ -133,14 +158,19 @@ function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
   return { id, command: [file, ...argv].map(show).join(' '), cwd: dir };
 }
 
-Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool });
+Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir });
 
 exports.register = (ctx) => {
   // envFiles: .env files under the explicit env (undefined: the project root's .env, roots[0])
-  ctx.ipcMain.handle('run:start', (_e, interp, file, cwd, params = [], env = {}, roots = [], envFiles) => {
+  // The Run and Debug consoles ask first, to say which folder stands in for one that is too long (run:start and
+  // debug:start then get a usable one; other callers get the same replacement without a word).
+  ctx.ipcMain.handle('run:workingDir', (_e, cwd, fallbacks = []) => workingDir(cwd, fallbacks));
+  ctx.ipcMain.handle('run:start', async (_e, interp, file, cwd, params = [], env = {}, roots = [], envFiles) => {
     const args = ['-u', file, ...params];
     const opts = { cwd, env: withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
-    return remote.isRemote(interp) ? remote.startPython(ctx, interp, args, opts) : ctx.startProcess(interp.cmd, [...interp.args, ...args], opts);
+    if (remote.isRemote(interp)) return remote.startPython(ctx, interp, args, opts);
+    opts.cwd = (await workingDir(cwd, roots)).cwd;
+    return ctx.startProcess(interp.cmd, [...interp.args, ...args], opts);
   });
   // A before launch "Run External Tool" task. Its definition comes from the run configuration, which lives in the
   // user's settings, never in the project; still, like a file watcher, it starts nothing for a project the user has

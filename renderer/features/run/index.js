@@ -399,8 +399,13 @@
     return code === 0 || tr('Exit code {code}', { code });
   }
 
+  // cfg.id -> the latest launch of the configuration still in its before launch tasks. Run or Debug pressed again
+  // while they run starts them over, and the earlier launch ends quietly once its current task returns: the newer one
+  // reuses that task's tab and stops it, which is not the task failing.
+  const latestLaunch = new Map();
+
   // Runs cfg's before launch tasks in order. false: a task failed or was cancelled, or the tasks form a cycle, so the
-  // configuration must not start (an error notification says why).
+  // configuration must not start (an error notification says why), or a newer launch of it took over.
   async function runBeforeLaunch(cfg) {
     const tasks = beforeLaunchOf(cfg);
     if (!tasks.length) return true;
@@ -409,6 +414,9 @@
       notifyError(tr("'{name}' was not started", { name: cfg.name }), tr('Before launch tasks form a cycle: {cycle}', { cycle: cycle.join(' → ') }));
       return false;
     }
+    const launch = {};
+    latestLaunch.set(cfg.id, launch);
+    const superseded = () => latestLaunch.get(cfg.id) !== launch;
     let running = null;
     let cancelled = false;
     const progress = ide.tasks?.start({
@@ -420,7 +428,7 @@
         progress?.update({ text: describeTask(t), fraction: i / tasks.length });
         const result = t.kind === 'config' ? await runDependency(t, (s) => (running = s)) : await runTool(t, (s) => (running = s));
         running = null;
-        if (cancelled) return false;
+        if (cancelled || superseded()) return false;
         if (result !== true) {
           notifyError(tr("'{name}' was not started", { name: cfg.name }), `${tr('Before launch task failed: {task}', { task: describeTask(t) })}\n${result}`);
           return false;
@@ -429,6 +437,7 @@
       return true;
     } finally {
       progress?.done();
+      if (!superseded()) latestLaunch.delete(cfg.id);
     }
   }
 
@@ -463,6 +472,13 @@
   // ---------- built-in type: Python script ----------
   // Shared with other configuration types; the explicit environment variables override the files.
   const ENV_FILES_FIELD = { key: 'envFiles', label: tr('Env files'), placeholder: tr('.env;config/local.env (relative to the project root)') };
+  // A working directory Windows can start a program in (main/features/run.js): one that is too long is replaced by its
+  // short form, or else by the project root, and write() says which folder stands in for it.
+  async function workingDir(cwd, write) {
+    const r = await ide.api.invoke('run:workingDir', cwd, ide.root ? [ide.root] : []);
+    if (r.tooLong) write(`${tr('The working directory is longer than Windows allows ({length} characters): {path}', { length: r.tooLong.length, path: r.tooLong })}\n${tr('The program runs in {path} instead.', { path: r.cwd })}\n`);
+    return r.cwd;
+  }
   // Prints a warning line for each listed env file that does not exist.
   async function warnMissingEnvFiles(cfg, write) {
     for (const p of await missingEnvFiles(cfg)) write(`${tr('Env file not found: {path}', { path: p })}\n`);
@@ -486,9 +502,9 @@
       const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
       const script = resolvePath(cfg.script);
       if (!script) return con.append(`${tr('Script path is not specified. Edit the configuration first.')}\n`, 'err');
-      const cwd = resolvePath(cfg.cwd) || dirname(script);
       const params = parseArgs(cfg.params);
       con.append(`${[interp.cmd, ...interp.args].map(quoteArg).join(' ')} ${quoteArg(script)}${params.length ? ` ${params.map(quoteArg).join(' ')}` : ''}\n`, 'sys');
+      const cwd = await workingDir(resolvePath(cfg.cwd) || dirname(script), (text) => con.append(text, 'err'));
       await warnMissingEnvFiles(cfg, (text) => con.append(text, 'err'));
       const id = await ide.api.invoke('run:start', interp, script, cwd, params, parseEnv(cfg.env), ide.root ? [ide.root] : [], envFilesFor(cfg));
       s.attach(id);
@@ -1086,5 +1102,7 @@
     defaultEnvFiles: DEFAULT_ENV_FILES,
     envFiles: envFilesFor,
     warnMissingEnvFiles,
+    // workingDir(cwd, write) -> a folder a program can start in; write(text) says when another one stands in.
+    workingDir,
   };
 })();

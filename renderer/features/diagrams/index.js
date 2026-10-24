@@ -496,7 +496,7 @@
   // The project interpreter, or a local one when the project runs remotely (the files are read here).
   function localInterp() {
     const cur = ide.currentInterp?.();
-    const pick = cur && !cur.target ? cur : (ide.interps || []).find((i) => !i.target && i.cmd);
+    const pick = cur && !cur.target ? cur : (ide.interps || []).find((i) => !i.target && i.cmd && !i.invalid);
     return pick ? { cmd: pick.cmd, args: pick.args || [] } : null;
   }
   // Unsaved Python editors under the scope are read from their text, as the editor shows it.

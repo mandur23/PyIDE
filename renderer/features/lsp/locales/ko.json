@@ -12,6 +12,8 @@
   "Pyright exited with code {code}": "Pyright가 종료 코드 {code}(으)로 종료되었습니다",
   "Pyright stopped": "Pyright가 중지되었습니다",
   "Pyright error: {message}": "Pyright 오류: {message}",
+  "The Pyright language server crashed {count} times in the last {minutes} minutes and is not restarted automatically.": "Pyright 언어 서버가 최근 {minutes}분 동안 {count}번 비정상 종료되어 자동으로 다시 시작하지 않습니다.",
+  "Restart": "다시 시작",
   "This element cannot be renamed": "이 요소는 이름을 변경할 수 없습니다",
   "'{name}' is not a valid identifier": "'{name}'은(는) 올바른 식별자가 아닙니다",
   "Rename failed": "이름 변경에 실패했습니다",

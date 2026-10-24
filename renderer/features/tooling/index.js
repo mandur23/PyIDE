@@ -106,14 +106,32 @@
     msg: `${d.code} ${d.message}`, severity: 'warning',
   });
 
+  // Ruff that cannot check at all (a configuration it cannot read, ruff.exe blocked) is one problem, on the
+  // configuration file at the place ruff names, else on the file being checked; before, every file just looked clean.
+  let failure = null; // {path, error} of the problem shown for it
+  function setFailure(tab, r) {
+    const next = r && { path: r.config || tab.path, error: r.error };
+    if (failure && failure.path.toLowerCase() !== next?.path.toLowerCase()) ide.problems.set('ruff', failure.path, []);
+    if (next && next.error !== failure?.error) showHint(tr('Ruff cannot check Python files: {error}', { error: next.error }), true);
+    failure = next;
+    if (next) ide.problems.set('ruff', next.path, [{ line: r.line || 1, col: r.col || 1, msg: tr('Ruff cannot check Python files: {error}', { error: r.error }), severity: 'error' }]);
+  }
+
   async function lint(tab) {
     if (!isPy(tab) || !lintEnabled()) return null;
     const model = tab.model;
     const version = model.getVersionId();
-    const diags = (await ide.api.invoke('tooling:check', model.getValue(), tab.path, opts())).filter((d) => d.code);
+    const r = await ide.api.invoke('tooling:check', model.getValue(), tab.path, opts());
     if (model.isDisposed() || model.getVersionId() !== version || !ide.findTab(tab.path)) return null;
+    const diags = Array.isArray(r) ? r.filter((d) => d.code) : [];
     const state = { version, diags };
     lintState.set(tab.path.toLowerCase(), state);
+    if (!Array.isArray(r)) {
+      if ((r.config || tab.path).toLowerCase() !== tab.path.toLowerCase()) ide.problems.set('ruff', tab.path, []);
+      setFailure(tab, r);
+      return state;
+    }
+    setFailure(tab, null);
     ide.problems.set('ruff', tab.path, diags.map(toProblem));
     return state;
   }
@@ -150,7 +168,7 @@
     ide.problems.set('ruff', path, []);
   });
   ide.on('settingsChanged', (key) => {
-    if (key === 'tools.ruffOnSave' && !lintEnabled()) { lintState.clear(); ide.problems.clear('ruff'); return; }
+    if (key === 'tools.ruffOnSave' && !lintEnabled()) { lintState.clear(); failure = null; ide.problems.clear('ruff'); return; }
     if (key === 'tools.ruffOnSave' || key === 'tools.ruffLineLength') ide.tabs.filter(isPy).forEach((t) => lint(t));
   });
 

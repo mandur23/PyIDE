@@ -187,5 +187,11 @@
   "Manage Plugin Repositories…": "플러그인 저장소 관리…",
   "Marketplace index (https URL, or a local folder or .json file):": "마켓플레이스 인덱스 (https URL, 로컬 폴더 또는 .json 파일):",
   "Leave it empty to turn the online Marketplace off.": "비워 두면 온라인 마켓플레이스를 사용하지 않습니다.",
-  "Reset to Default": "기본값으로 재설정"
+  "Reset to Default": "기본값으로 재설정",
+  "Broken": "손상됨",
+  "Failed to load": "로드 실패",
+  "Failed to load:": "로드 실패:",
+  "The plugin folder has no plugin.json.": "플러그인 폴더에 plugin.json이 없습니다.",
+  "plugin.json is not valid JSON.": "plugin.json이 올바른 JSON이 아닙니다.",
+  "Fix the file and restart the IDE, or uninstall the plugin.": "파일을 고친 뒤 IDE를 다시 시작하거나 플러그인을 제거하세요."
 }

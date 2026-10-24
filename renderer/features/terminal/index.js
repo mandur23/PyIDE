@@ -3,6 +3,7 @@
   const { el, basename, dirname, joinPath, samePath, isUnder } = ide.util;
   const XTERM = '../node_modules/@xterm';
   const LOAD_ENV_FILE = 'terminal.loadEnvFile';
+  const SHELL = 'terminal.shell';
 
   // xterm ships UMD bundles; with Monaco's AMD loader present they would register as AMD modules instead of globals.
   function loadScript(src) {
@@ -186,7 +187,7 @@
     let r;
     try {
       r = await ide.api.invoke('pty:create', {
-        shell: shell || ide.settings.get('terminal.shell', 'powershell'),
+        shell: shell || ide.settings.get(SHELL, 'powershell'),
         cwd: cwd || ide.root || undefined,
         ...size,
         command,
@@ -196,12 +197,18 @@
         target: !shell && !command ? ide.currentInterp()?.target : undefined,
       });
     } catch (err) {
-      // The shell could not start (missing executable, unreachable target): say why instead of a tab stuck at "…".
-      const message = ide.util.errorText(err);
+      r = { error: ide.util.errorText(err) };
+    }
+    // The shell could not start (not installed, unreachable target): say why instead of a tab stuck at "…".
+    if (r.error) {
       s.exited = true;
-      s.name ??= shell || ide.settings.get('terminal.shell', 'powershell');
+      s.name ??= r.shellName || shell || ide.settings.get(SHELL, 'powershell');
       if (s.closed) return s;
-      s.term.write(`\x1b[31m${tr('The terminal could not start: {message}', { message })}\x1b[0m\r\n\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);
+      const lines = r.error === 'shellNotFound'
+        ? [tr('The terminal could not start: {shell} was not found ({file}).', { shell: r.shellName, file: r.file }),
+          tr('Start another shell with New Session with… (▾), or choose the default shell in Settings › Terminal.')]
+        : [tr('The terminal could not start: {message}', { message: r.error })];
+      s.term.write(`\x1b[31m${lines[0]}\x1b[0m\r\n${lines.slice(1).map((l) => `${l}\r\n`).join('')}\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);
       renderTab(s.t);
       return s;
     }
@@ -539,7 +546,7 @@
         shells = shells.length ? shells : await ide.api.invoke('pty:shells');
         const r = pick.getBoundingClientRect();
         ide.ui.contextMenu(r.left, r.bottom, [
-          ...shells.map((sh) => ({ label: sh.name, hint: sh.id === ide.settings.get('terminal.shell', 'powershell') ? '✓' : '', run: () => createSession({ shell: sh.id }) })),
+          ...shells.map((sh) => ({ label: sh.name, hint: sh.id === ide.settings.get(SHELL, 'powershell') ? '✓' : '', run: () => createSession({ shell: sh.id }) })),
           { separator: true },
           { label: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
         ]);
@@ -575,6 +582,17 @@
     defaults: { [LOAD_ENV_FILE]: true },
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Terminal'));
+      // The shells found on this computer; the setting may name one that is gone, which is kept until changed.
+      const pick = ctx.ui.selectInput(SHELL, [], 'powershell');
+      pick.id = 'terminalShell';
+      s.appendChild(ctx.ui.fieldRow(tr('Default shell:'), pick));
+      ide.api.invoke('pty:shells').then((list) => {
+        shells = list;
+        const current = ctx.value(SHELL) ?? 'powershell';
+        for (const sh of list) pick.add(new Option(sh.name, sh.id));
+        if (!list.some((sh) => sh.id === current)) pick.add(new Option(current, current));
+        pick.value = current;
+      }).catch(() => {});
       s.appendChild(ctx.ui.checkbox(LOAD_ENV_FILE, tr('Load the project .env file into new terminals')));
       host.appendChild(el('p', 'muted settings-note', tr('New sessions get the variables of the .env file in the project root. Sessions that are already open keep their environment.')));
     },

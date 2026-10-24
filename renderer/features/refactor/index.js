@@ -62,6 +62,7 @@
     nothing: () => tr('Nothing to change.'),
     encoding: () => tr('Only UTF-8 files can be refactored.'),
     stale: (p) => tr('{name} changed while the refactoring was prepared. Try again.', p),
+    unsaved: (p) => tr('{name} has unsaved changes that could not be saved, so it was not moved.', p),
     'empty-name': () => tr('Enter a name.'),
     timeout: (p) => tr('The refactoring took longer than {seconds} seconds and was stopped.', p),
   };
@@ -389,7 +390,7 @@
     const moves = result.moves || [];
     const underMove = (p) => moves.some((m) => isUnder(p, m.from));
     // A file that moves is written to disk first, so its open tab saves (an unsaved buffer was already in the overlay).
-    for (const t of [...ide.tabs]) if (t.kind === 'file' && t.path && underMove(t.path) && ide.isDirty(t)) await ide.saveTab(t);
+    await saveMoving(moves.map((m) => m.from));
     const plan = [];
     for (const c of result.changes) {
       const doc = ide.getDocument(c.path);
@@ -434,8 +435,19 @@
     return rec;
   }
 
-  // Moves a file or folder; tabs inside it close first and are returned for reopening at the new place.
+  // Saves the open files inside the paths about to move. One that stays modified (its save failed or was cancelled)
+  // stops the refactoring before anything changes: its tab would be closed for the move and its text lost.
+  async function saveMoving(froms) {
+    const moving = () => ide.tabs.filter((t) => t.kind === 'file' && t.path && froms.some((f) => isUnder(t.path, f)));
+    for (const t of moving()) if (ide.isDirty(t)) await ide.saveTab(t);
+    const unsaved = moving().find((t) => ide.isDirty(t));
+    if (unsaved) throw new RefactorError('unsaved', { name: basename(unsaved.path) });
+  }
+
+  // Moves a file or folder; tabs inside it close first and are returned for reopening at the new place. Documents
+  // other windows have open move along there (ide.documentsMoved).
   async function moveOnDisk(from, to) {
+    await saveMoving([from]);
     const active = ide.activeTab();
     const tabs = ide.tabs.filter((t) => t.kind === 'file' && t.path && isUnder(t.path, from));
     const reopen = tabs.map((t) => ({
@@ -444,6 +456,7 @@
     }));
     for (const t of tabs) ide.closeTab(t.path, true);
     await ide.api.rename(from, to);
+    await ide.documentsMoved(from, to);
     ide.emit('filesChanged', { renamed: [[from, to]] });
     return reopen;
   }
@@ -485,6 +498,12 @@
   }
 
   async function replay(rec, dir, skip) {
+    try {
+      await saveMoving(rec.moves.map((m) => (dir === 'undo' ? m.to : m.from)));
+    } catch (err) {
+      hint(errorText(err));
+      return;
+    }
     replaying = true;
     const skipped = [];
     try {

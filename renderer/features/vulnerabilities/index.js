@@ -16,6 +16,13 @@
   const userText = (n) => { n.dataset.userText = ''; return n; };
   const countText = (n) => (n === 1 ? tr('1 known vulnerability') : tr('{count} known vulnerabilities', { count: n }));
 
+  // The main process's errorKind for a failed OSV request.
+  const ERROR_TEXT = {
+    network: tr('Cannot reach the vulnerability database (osv.dev). Check your internet connection or proxy settings.'),
+    timeout: tr('The vulnerability database (osv.dev) did not answer in time.'),
+    server: tr('The vulnerability database (osv.dev) answered with an error. Try again later.'),
+  };
+
   const EMPTY = { packages: [], requirements: [] };
   let result = EMPTY;
   let byKey = new Map(); // keyOf(name, version) -> {name, version, vulns, fixed}
@@ -30,6 +37,7 @@
   ide.packages.notes()?.appendChild(note);
   function setNote(kind, text, detail, action) {
     note.replaceChildren();
+    note.title = '';
     note.dataset.kind = kind || '';
     if (!text) return;
     note.appendChild(el('span', 'vuln-status-text', text));
@@ -60,7 +68,14 @@
     apply(r);
     if (r.error) {
       ide.log.warn(`vulnerabilities: ${r.error}`);
-      setNote('error', tr('Could not check for vulnerabilities:'), r.error, { label: tr('Retry'), run: () => check({ manual: true }) });
+      // A known failure reads as a sentence in the UI's language; Node's own text (ECONNREFUSED 127.0.0.1:443) stays in
+      // the log and the tooltip.
+      const known = ERROR_TEXT[r.errorKind];
+      const retry = { label: tr('Retry'), run: () => check({ manual: true }) };
+      if (known) {
+        setNote('error', `${tr('Could not check for vulnerabilities:')} ${known}`, '', retry);
+        note.title = r.error;
+      } else setNote('error', tr('Could not check for vulnerabilities:'), r.error, retry);
     } else if (!network && r.unknown && ide.powerSave?.on() && ide.trusted !== false) {
       setNote('powerSave', tr('Power Save Mode: packages are not checked for vulnerabilities automatically.'), '', { label: tr('Check for Vulnerabilities'), run: () => check({ manual: true }) });
     } else if (!network && r.unknown) {

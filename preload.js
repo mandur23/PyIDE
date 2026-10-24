@@ -14,7 +14,7 @@ if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWo
   pathForFile: (file) => webUtils.getPathForFile(file),
   localeSync: (lang) => ipcRenderer.sendSync('core:localeSync', lang),
   loadSettingsSync: () => ipcRenderer.sendSync('settings:loadSync'),
-  saveSettingsSync: (settings) => ipcRenderer.sendSync('settings:saveSync', settings),
+  saveSettingsSync: (settings, changed) => ipcRenderer.sendSync('settings:saveSync', settings, changed),
   relaunch: invoke('core:relaunch'),
   openFolder: invoke('dialog:openFolder'),
   openFileDialog: invoke('dialog:openFile'),

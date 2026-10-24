@@ -102,5 +102,6 @@
   "Rename package '{name}' to:": "패키지 '{name}'의 이름을 다음으로 변경:",
   "Search for references": "참조 검색",
   "Rename Without References": "참조 없이 이름 변경",
-  "Move Without References": "참조 없이 이동"
+  "Move Without References": "참조 없이 이동",
+  "{name} has unsaved changes that could not be saved, so it was not moved.": "{name}에 저장할 수 없는 변경 내용이 있어 이동하지 않았습니다."
 }

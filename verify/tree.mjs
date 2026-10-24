@@ -108,8 +108,11 @@ try {
   })()`);
   await until(`${names}.includes('notes.md') && ${names}.includes('main.py') && ${names}.indexOf('main.py') < ${names}.indexOf('pkg')`, 'main.py under docs');
   check(existsSync(path.join(t.project, 'docs', 'main.py')) && !existsSync(path.join(t.project, 'main.py')), 'dropping a file on a folder moves it on disk');
-  await until(`ide.activeTab()?.path.toLowerCase().endsWith('docs\\\\main.py')`, 'moved file reopened');
-  check(readFileSync(path.join(t.project, 'docs', 'main.py'), 'utf8') === 'print("edited")\n', 'unsaved edits are saved before the move and the file reopens from its new place');
+  const moved = `ide.tabs.find((t) => t.kind === 'file' && t.path.toLowerCase().endsWith('docs\\\\main.py'))`;
+  await until(`!!${moved} && !ide.tabs.some((t) => t.kind === 'file' && /project\\\\main\\.py$/i.test(t.path))`, 'moved file tab follows');
+  check(await js(`${moved}.model.getValue() === 'print("edited")\\n'`), 'the open tab follows the move with its edit');
+  await js(`ide.saveTab(${moved})`);
+  check(readFileSync(path.join(t.project, 'docs', 'main.py'), 'utf8') === 'print("edited")\n', 'saving it writes the file at its new place');
 
   writeFileSync(path.join(t.project, 'docs', 'a.py'), 'KEEP = 1\n');
   await js(`ide.refreshTree()`);

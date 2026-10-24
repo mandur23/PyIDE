@@ -51,6 +51,14 @@
   ide.api.on('localHistory:changed', ({ root }) => {
     if (samePath(root, ide.root)) for (const v of views) v.reload();
   });
+  // The user data folder cannot be written (no permission, a full disk): main says so once per project open.
+  ide.api.on('localHistory:writeFailed', ({ dir, error }) => {
+    ide.notifications.notify({
+      title: tr('Local History is not being saved'),
+      text: `${tr('Saves and labels are not recorded while this folder cannot be written: {folder}', { folder: dir })}\n${ide.util.errorText(error)}`,
+      raw: true, kind: 'warn', group: 'Local History',
+    });
+  });
 
   // Unsaved text of open documents now, before the caller changes anything (only `paths`, when given). Saved ones
   // are on disk, where the store already has them.
@@ -118,9 +126,10 @@
     doc.model.pushStackElement();
   }
 
+  // A revert writes the revision the user picked, also over a file deleted or changed on disk: no question about it.
   async function saveReverted(doc) {
     reverting.add(key(doc.path));
-    await ide.saveTab({ doc });
+    await ide.saveTab({ doc }, { overwrite: true });
     reverting.delete(key(doc.path));
   }
 

@@ -173,6 +173,11 @@ function dropStaleBlockmap(cacheDir, log) {
   }
 }
 
+// electron-updater's own 60 s timeout never fires with Electron's net requests (it arms on a 'socket' event they do not
+// emit), so a server that accepts the connection and never answers (a captive portal, a broken proxy) would keep a
+// check going forever. PYIDE_UPDATE_TIMEOUT_MS shortens the deadline for verify/env-failures.mjs.
+const CHECK_TIMEOUT_MS = Number(process.env.PYIDE_UPDATE_TIMEOUT_MS) > 0 ? Number(process.env.PYIDE_UPDATE_TIMEOUT_MS) : 30000;
+
 const mb = (n) => (n == null ? '?' : n < 100 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 exports.installKind = installKind;
@@ -266,6 +271,19 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     return notes;
   });
 
+  // A check that outlives the deadline is abandoned: its request cannot be cancelled, but electron-updater is made to
+  // forget it, or every later check would wait on the same request.
+  function withDeadline(u, check) {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        u.checkForUpdatesPromise = null;
+        reject(Object.assign(new Error(`ETIMEDOUT: the update server did not answer within ${Math.round(CHECK_TIMEOUT_MS / 1000)} s`), { code: 'ETIMEDOUT' }));
+      }, CHECK_TIMEOUT_MS);
+    });
+    return Promise.race([check, deadline]).finally(() => clearTimeout(timer));
+  }
+
   // The update channel's file: latest.yml (Stable) or beta.yml (Beta), which every release keeps at the newest beta or
   // stable version, so a beta install also gets stable releases. A feed without beta.yml (a folder with only latest.yml)
   // is read as Stable. Setting a channel turns electron-updater's allowDowngrade on; it is turned off again, so a copy
@@ -292,7 +310,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
       const u = getUpdater();
       // electron-updater only checks packaged apps; a source run still reports what the feed offers.
       if (!app.isPackaged) u.forceDevUpdateConfig = true;
-      const result = await checkChannel(u, options?.channel === 'beta' ? 'beta' : 'latest');
+      const result = await withDeadline(u, checkChannel(u, options?.channel === 'beta' ? 'beta' : 'latest'));
       const latest = result?.updateInfo?.version;
       const available = result?.isUpdateAvailable && latest ? latest : null;
       setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null, lastCheck: Date.now(), failures: 0, lastError: null });
@@ -301,6 +319,8 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     } catch (err) {
       setState({ phase: 'error', error: err.message, failures: state.failures + 1, lastError: err.message });
       saveHistory();
+      // Offline, a feed that is not there or not an update feed: the renderer tells the user; not an IDE error.
+      if (diagnostics?.isEnvironmentError(err) || /^(HTTP_ERROR_|ERR_UPDATER_)/.test(err?.code)) diagnostics?.markExpected(err);
       throw err;
     }
   });

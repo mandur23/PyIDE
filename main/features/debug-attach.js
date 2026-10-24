@@ -11,6 +11,9 @@ const VERSION_TIMEOUT_MS = 5000;
 const INJECT_TIMEOUT_MS = 30000;
 const MIN_PYTHON = [3, 10]; // the bundled debugpy's Requires-Python
 
+// The user's Stop during a startup or an attach: the renderer says so itself, so it is not an IDE internal error.
+const stoppedError = () => Object.assign(new Error('Debugging stopped'), { expected: true });
+
 const run = (cmd, args, opts = {}) => new Promise((resolve) => {
   execFile(cmd, args, { windowsHide: true, maxBuffer: 16 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
     resolve({ err, stdout: String(stdout || ''), stderr: String(stderr || ''), timedOut: !!err?.killed && err.signal === 'SIGTERM' });
@@ -200,7 +203,7 @@ function injectError(pid, output, state = pidState(pid)) {
 async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => false }) {
   if (!validPort(port)) throw new Error(`Invalid debugger port: ${port}`);
   const version = await pythonVersion(exe);
-  if (isStopped()) throw new Error('Debugging stopped');
+  if (isStopped()) throw stoppedError();
   if (!version) throw new Error(`Cannot run the interpreter of process ${pid}: ${exe}`);
   if (versionTooOld(version)) {
     throw new Error(`Python ${version} is not supported by the bundled debugpy (Python ${MIN_PYTHON.join('.')} or later is required)`);
@@ -224,7 +227,7 @@ async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => fa
   if (r.timedOut) throw new Error(`Injecting the debugger into process ${pid} timed out after ${INJECT_TIMEOUT_MS / 1000} seconds`);
   // debugpy logs a failed sys.remote_exec() as a warning and falls back to its DLL injector, so only the exit code counts.
   if (r.err) {
-    if (isStopped()) throw new Error('Debugging stopped');
+    if (isStopped()) throw stoppedError();
     log.warn(`debugpy --pid ${pid} failed (${r.err.code}): ${r.out.trim().slice(-2000)}`);
     throw injectError(pid, r.out);
   }
@@ -233,7 +236,7 @@ async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => fa
 
 module.exports = {
   listProcesses, filterProcesses, ownDirsFor, inject, injectError, pidState, splitArgs, pythonVersion, validPort,
-  killTree, killInjectors, injectorCount: () => injectors.size, MIN_PYTHON,
+  killTree, killInjectors, injectorCount: () => injectors.size, MIN_PYTHON, stoppedError,
 };
 
 // Loaded as a main module of the debugger plugin (plugin.json "main"); the IPC lives in debug.js.

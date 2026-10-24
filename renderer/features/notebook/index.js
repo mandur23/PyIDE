@@ -1208,9 +1208,14 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       flushTimer = 0;
       if (disposed || !meta) return;
       const text = serialize();
-      if (text === doc.model.getValue()) return;
+      if (text === doc.model.getValue(monaco.editor.EndOfLinePreference.LF)) return;
+      // setValue would take the line separator from the new text: a CRLF notebook would be saved with LF.
+      const eol = doc.model.getEOL();
       applying = true;
-      try { doc.model.setValue(text); } finally { applying = false; }
+      try {
+        doc.model.setValue(text);
+        if (doc.model.getEOL() !== eol) doc.model.setEOL(eol === '\r\n' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF);
+      } finally { applying = false; }
       ide.renderTabs();
     }
     // The first change after a save is written at once so the tab turns dirty before a quick Ctrl+S; later ones batch.

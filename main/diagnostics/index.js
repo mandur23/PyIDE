@@ -80,9 +80,26 @@ let resolveOwner = null; // file path -> {id, name, required, bundled} | null, f
 let changedTimer = null;
 const rawDialogs = [];
 const watched = new Set();
+// Main modules that failed to load (lower-case path -> message), for the Plugins page; clearing the error list keeps them.
+const loadFailures = new Map();
 // Errors an IPC handler threw that the renderer shows to the user (see install); Node error codes of the user's files.
 const expectedErrors = new WeakSet();
 const FS_USER_ERRORS = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EROFS', 'ENAMETOOLONG', 'ELOOP', 'UNKNOWN']);
+// Failures of the computer the IDE runs on rather than of the IDE: a folder it may not write, a full disk, a program that
+// is not installed (spawn ENOENT), a network or server that does not answer. Whoever meets one tells the user.
+const ENVIRONMENT_ERRORS = new Set(['EPERM', 'EACCES', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY', 'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED',
+  'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN']);
+// A worker thread's error comes back as its message only ("EPERM: operation not permitted, mkdir '…'"), and Electron's
+// net module names its errors in the message (net::ERR_CONNECTION_REFUSED).
+function isEnvironmentError(err) {
+  const message = String(err?.message ?? '');
+  const code = err?.code || /^([A-Z][A-Z_]+):/.exec(message)?.[1];
+  return ENVIRONMENT_ERRORS.has(code) || /^net::ERR_/.test(message);
+}
+function markExpected(err) {
+  if (err && typeof err === 'object') err.expected = true;
+  return err;
+}
 let quitting = false;
 
 const errorText = (v) => {
@@ -132,6 +149,7 @@ function report({ source = 'main', kind = 'error', error, message, stack, window
   const e = error !== undefined ? errorText(error) : { name: 'Error', message: String(message ?? ''), stack: String(stack || message || '') };
   const text = message || e.message;
   const fullStack = stack || e.stack;
+  if (kind === 'load') for (const f of files || []) loadFailures.set(path.resolve(f).toLowerCase(), scrubText(text));
   const signature = `${source}|${text}|${String(fullStack).split('\n').slice(0, 6).join('|')}`;
   const now = Date.now();
   let entry = errors.find((x) => x.signature === signature);
@@ -160,6 +178,7 @@ function listErrors() {
   return errors.map(({ signature, ...e }) => e);
 }
 function clearErrors() { errors.length = 0; broadcast(); }
+const loadFailure = (file) => loadFailures.get(path.resolve(file).toLowerCase()) || null;
 function markRead() { for (const e of errors) e.read = true; broadcast(); }
 
 // ---------- sidecar processes ----------
@@ -225,7 +244,7 @@ function install() {
     console[method] = (...args) => {
       try { original[method](...args); } catch {}
       const err = args.find((a) => a instanceof Error);
-      if (level === 'ERROR' && err && !expectedErrors.has(err)) {
+      if (level === 'ERROR' && err && !expectedErrors.has(err) && !err.expected && !isEnvironmentError(err)) {
         const message = args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : toText(a))).join(' ');
         report({ source: 'main', kind: 'logged', message, stack: err.stack });
       } else write(level, '#console', args.map(toText).join(' '));
@@ -233,15 +252,16 @@ function install() {
   }
 
   // IPC handlers that throw answer the renderer with the error; the log keeps the stack. Errors about the user's files
-  // in the core fs: handlers (a file another program holds, a read-only file, a folder opened as a file) and errors a
-  // handler marks `expected` (a language server that did not answer in time) are the renderer's to show; they are
-  // not IDE internal errors, which Electron's "Error occurred in handler" console line would otherwise make them.
+  // in the core fs: handlers (a file another program holds, a read-only file, a folder opened as a file), failures of
+  // the environment on any channel, and errors a handler marks `expected` (a language server that did not answer in
+  // time) are the renderer's to show; they are not IDE internal errors, which Electron's "Error occurred in handler"
+  // console line would otherwise make them.
   const handle = ipcMain.handle.bind(ipcMain);
   const ipcLog = logger('#ipc');
   ipcMain.handle = (channel, fn) => handle(channel, async (...args) => {
     try { return await fn(...args); } catch (err) {
       ipcLog.warn(`${channel} failed: ${err?.stack || err}`);
-      if (err instanceof Error && (err.expected || (channel.startsWith('fs:') && FS_USER_ERRORS.has(err.code)))) expectedErrors.add(err);
+      if (err instanceof Error && (err.expected || isEnvironmentError(err) || (channel.startsWith('fs:') && FS_USER_ERRORS.has(err.code)))) expectedErrors.add(err);
       throw err;
     }
   });
@@ -282,7 +302,7 @@ function install() {
 function setPluginResolver(fn) { resolveOwner = fn; }
 
 const api = {
-  install, setPluginResolver, configure, logger, report, listErrors, clearErrors, markRead, watchProcess,
+  install, setPluginResolver, configure, logger, report, listErrors, clearErrors, markRead, watchProcess, isEnvironmentError, markExpected, loadFailure,
   logFile: () => logFile, logDir: () => logDir,
 };
 module.exports = api;

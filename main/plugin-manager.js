@@ -45,16 +45,22 @@ function createPluginManager({ appDir, userDataDir }) {
     fs.writeFileSync(stateFile, JSON.stringify(s, null, 2));
   };
 
+  // An installed plugin whose plugin.json is missing or unreadable is listed by its folder name with `broken`
+  // ('missing' | 'invalid') and never loads, so the Plugins page can show it and uninstall it.
   function describe(dir, bundled) {
     const json = readJson(path.join(dir, 'plugin.json'), null);
     const meta = json && typeof json === 'object' && !Array.isArray(json) ? json : null;
-    if (!meta && !bundled) return null;
+    // One listing of the folder instead of a check per file: this runs for every plugin before the window opens.
+    const has = filesIn(dir);
+    if (!meta && !bundled) {
+      const id = path.basename(dir);
+      return { id, name: id, version: '', vendor: '', description: '', i18n: {}, depends: [], required: false, detached: false, bundled,
+        dir, script: null, style: null, mainModules: [], hasLocales: false, broken: has('plugin.json') ? 'invalid' : 'missing' };
+    }
     // An installed plugin's plugin.json is read at every start: fields of the wrong kind are left out, not thrown on.
     const strings = (v) => [].concat(v || []).filter((s) => typeof s === 'string');
     const id = (typeof meta?.id === 'string' && meta.id) || path.basename(dir);
     const mains = strings(meta?.main);
-    // One listing of the folder instead of a check per file: this runs for every plugin before the window opens.
-    const has = filesIn(dir);
     return {
       id,
       name: meta?.name || id,
@@ -93,11 +99,11 @@ function createPluginManager({ appDir, userDataDir }) {
     const all = [
       ...subdirs(bundledDir).map((d) => describe(d, true)),
       ...subdirs(userDir).map((d) => describe(d, false)),
-    ].filter(Boolean);
+    ];
     const byId = new Map();
     for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
     const plugins = [...byId.values()];
-    for (const p of plugins) p.enabled = p.required || !disabled.has(p.id);
+    for (const p of plugins) p.enabled = !p.broken && (p.required || !disabled.has(p.id));
     // A plugin whose dependency is off or missing cannot load.
     let changed = true;
     while (changed) {
@@ -118,13 +124,18 @@ function createPluginManager({ appDir, userDataDir }) {
   let loadedIdSet = null;
   const loadedIds = () => (loadedIdSet ??= new Set(loadedList().filter((p) => p.enabled).map((p) => p.id)));
 
+  // broken: plugin.json is 'missing' or 'invalid'. loadError: why a main module of the running plugin failed to load.
   function list() {
     const disabled = new Set(state().disabled);
+    const running = new Map(loadedList().map((p) => [p.id, p]));
+    const { loadFailure } = require('./diagnostics');
     return discover().map((p) => ({
       id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n,
       depends: p.depends, required: p.required, bundled: p.bundled, dir: p.dir, blockedBy: p.blockedBy || null,
-      enabled: p.required || !disabled.has(p.id),
+      enabled: !p.broken && (p.required || !disabled.has(p.id)),
       loaded: loadedIds().has(p.id),
+      broken: p.broken || null,
+      loadError: (loadedIds().has(p.id) && running.get(p.id).mainModules.map(loadFailure).find(Boolean)?.split('\n')[0]) || null,
     }));
   }
 
@@ -216,7 +227,7 @@ function createPluginManager({ appDir, userDataDir }) {
     saveState({ ...s, disabled: s.disabled.filter((d) => d !== id) });
   }
 
-  const catalog = () => subdirs(catalogDir).map((d) => describe(d, false)).filter(Boolean).map((p) => ({
+  const catalog = () => subdirs(catalogDir).map((d) => describe(d, false)).filter((p) => !p.broken).map((p) => ({
     id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n, dir: p.dir,
   }));
 
@@ -249,7 +260,7 @@ function createPluginManager({ appDir, userDataDir }) {
       online = { state: 'error', source: source?.href || String(value), error: err.message };
     }
     listed = byId;
-    const have = new Map(subdirs(userDir).map((d) => describe(d, false)).filter(Boolean).map((p) => [p.id, p.version]));
+    const have = new Map(subdirs(userDir).map((d) => describe(d, false)).filter((p) => !p.broken).map((p) => [p.id, p.version]));
     const plugins = [...byId.values()].map((p) => ({
       ...p,
       installedVersion: have.get(p.id) ?? null,

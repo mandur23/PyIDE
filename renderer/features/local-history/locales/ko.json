@@ -46,5 +46,7 @@
   "Before Accepting AI Edit": "AI 수정 수락 전",
   "Cannot revert: {error}": "되돌릴 수 없습니다: {error}",
   "Before Shelve": "셸브 전",
-  "Before Unshelve": "셸브 해제 전"
+  "Before Unshelve": "셸브 해제 전",
+  "Local History is not being saved": "로컬 기록이 저장되지 않습니다",
+  "Saves and labels are not recorded while this folder cannot be written: {folder}": "이 폴더에 쓸 수 없는 동안에는 저장과 레이블이 기록되지 않습니다: {folder}"
 }

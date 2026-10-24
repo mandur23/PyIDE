@@ -75,7 +75,9 @@
     const python = ide.currentInterp()?.executable || null;
     const key = `${root}|${python}`;
     if (!force && key === serverKey) return;
+    if (key !== serverKey) crashes = [];
     serverKey = key;
+    clearTimeout(restartTimer);
     const my = ++startSeq;
     for (const doc of docs.values()) doc.opened = 0;
     ide.problems.clear(SOURCE);
@@ -92,7 +94,32 @@
     for (const doc of docs.values()) sendOpen(doc);
     setStatus('ready', python ? tr('Pyright ready ({python})', { python }) : tr('Pyright ready'));
   }
-  const restart = () => ensureServer(true);
+  // The user's restart (status bar, action, notification) starts the crash count over.
+  const restart = () => { crashes = []; return ensureServer(true); };
+
+  // A server that crashes is restarted, each time a little later, as VS Code's language clients do. After more than
+  // MAX_RESTARTS crashes within CRASH_WINDOW_MS it stays stopped and a notification says so.
+  const MAX_RESTARTS = 5;
+  const CRASH_WINDOW_MS = 3 * 60 * 1000;
+  let crashes = []; // times of the current server's recent crashes
+  let restartTimer = null;
+  function serverCrashed(message) {
+    const now = Date.now();
+    crashes = crashes.filter((t) => now - t < CRASH_WINDOW_MS).concat(now);
+    setStatus('error', message);
+    if (crashes.length > MAX_RESTARTS) {
+      ide.notifications?.notify({
+        title: tr('Pyright stopped'), kind: 'error', group: 'Pyright',
+        text: tr('The Pyright language server crashed {count} times in the last {minutes} minutes and is not restarted automatically.', { count: crashes.length, minutes: CRASH_WINDOW_MS / 60000 }),
+        actions: [{ label: tr('Restart'), run: (note) => { note.expire(); restart(); } }],
+      });
+      return;
+    }
+    restartTimer = setTimeout(async () => {
+      await ensureServer(true);
+      if (status === 'error') serverCrashed(tr('Pyright failed to start'));
+    }, 500 * 2 ** (crashes.length - 1));
+  }
 
   // main/features/lsp.js reports 'Pyright exited with code N', 'Pyright stopped' or a raw system error.
   const serverError = (message = '') => {
@@ -102,7 +129,7 @@
     return tr('Pyright error: {message}', { message });
   };
   ide.api.on('lsp:status', (p) => {
-    if (p.gen === gen && p.state === 'error') setStatus('error', serverError(p.message));
+    if (p.gen === gen && p.state === 'error') serverCrashed(serverError(p.message));
   });
   ide.api.on('lsp:message', (p) => {
     if (p.gen === gen && p.type === 1) console.warn(`Pyright: ${p.message}`);
@@ -209,6 +236,7 @@
   // Pyright holds the closed project's analysis (hundreds of MB on a large one); the welcome screen needs none.
   ide.on('projectClosed', () => {
     startSeq++;
+    clearTimeout(restartTimer);
     serverKey = null;
     ide.problems.clear(SOURCE);
     clearDiagnostics();

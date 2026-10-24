@@ -84,6 +84,53 @@ const replacementOf = (opts) => (opts.regex
   ? (opts.replacement || '').replace(/\\([nt\\])/g, (_m, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'))
   : (opts.replacement || '').replace(/\$/g, '$$$$'));
 
+// Monaco's isMultilineRegexSource: a pattern that can match a line break (\n, \r, \W, or a typed line break). The editor
+// matches any other regex line by line, so `\s+$` trims each line instead of joining it with the next; Find and Replace
+// in Files do the same, or a CRLF file's \r and its blank lines went with the trailing spaces.
+function isMultiline({ query, regex }) {
+  if (query.includes('\n')) return true;
+  if (!regex) return false;
+  for (let i = 0; i < query.length; i++) {
+    if (query[i] === '\\' && ++i < query.length && 'nrW'.includes(query[i])) return true;
+  }
+  return false;
+}
+
+const compile = (opts) => ({ re: buildRegex(opts), rep: replacementOf(opts), perLine: !!opts.regex && !isMultiline(opts) });
+
+// The text with each \r\n as \n, as the editor searches it, and crlf: the offsets in that text of the \n that were \r\n.
+function normalized(text) {
+  const crlf = [];
+  if (!text.includes('\r\n')) return { flat: text, crlf };
+  const parts = [];
+  let from = 0;
+  for (let i = text.indexOf('\r\n'); i >= 0; i = text.indexOf('\r\n', i + 2)) {
+    parts.push(text.slice(from, i));
+    crlf.push(i - crlf.length);
+    from = i + 1;
+  }
+  parts.push(text.slice(from));
+  return { flat: parts.join(''), crlf };
+}
+
+// The non-empty matches of `re` in text with \n line breaks: {m, index, str}, str being the text m was found in.
+function* matchesOf(flat, re, perLine) {
+  function* scan(str, base) {
+    re.lastIndex = 0;
+    for (let m = re.exec(str); m; m = re.exec(str)) {
+      if (m[0].length === 0) { re.lastIndex++; continue; }
+      yield { m, index: base + m.index, str };
+    }
+  }
+  if (!perLine) { yield* scan(flat, 0); return; }
+  for (let s = 0; s <= flat.length;) {
+    let e = flat.indexOf('\n', s);
+    if (e < 0) e = flat.length;
+    yield* scan(flat.slice(s, e), s);
+    s = e + 1;
+  }
+}
+
 function maskMatcher(mask) {
   const parts = (mask || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean);
   const toRe = (g) => new RegExp(`^${g.split('*').map((s) => s.split('?').map(escapeRe).join('.')).join('.*')}$`, 'i');
@@ -128,14 +175,14 @@ function describe(text, starts, index, length) {
   return { line: li + 1, col: col + 1, len, text: line, start: col - from, end: col - from + len, clipped: from > 0 };
 }
 
-function findIn(text, re, limit) {
+function findIn(text, { re, perLine }, limit) {
   const out = [];
+  const { flat } = normalized(text);
   let starts;
-  re.lastIndex = 0;
-  for (let m = re.exec(text); m && out.length < limit; m = re.exec(text)) {
-    if (m[0].length === 0) { re.lastIndex++; continue; }
-    starts ??= lineStarts(text);
-    out.push(describe(text, starts, m.index, m[0].length));
+  for (const { m, index } of matchesOf(flat, re, perLine)) {
+    if (out.length >= limit) break;
+    starts ??= lineStarts(flat);
+    out.push(describe(flat, starts, index, m[0].length));
   }
   return out;
 }
@@ -144,8 +191,8 @@ const lowerMap = (obj) => new Map(Object.entries(obj || {}).map(([k, v]) => [k.t
 
 function find(root, opts, overrides) {
   if (!opts.query) return { files: [], count: 0 };
-  let re;
-  try { re = buildRegex(opts); } catch (e) { return { error: e.message.replace(/^Invalid regular expression: \/.*\/[a-z]*: /, ''), files: [], count: 0 }; }
+  let c;
+  try { c = compile(opts); } catch (e) { return { error: e.message.replace(/^Invalid regular expression: \/.*\/[a-z]*: /, ''), files: [], count: 0 }; }
   const accept = maskMatcher(opts.mask);
   const ov = lowerMap(overrides);
   const files = [];
@@ -155,7 +202,7 @@ function find(root, opts, overrides) {
     if (!accept(p)) return;
     const text = ov.get(p.toLowerCase()) ?? readText(p);
     if (text == null) return;
-    const matches = findIn(text, re, MAX_MATCHES - count);
+    const matches = findIn(text, c, MAX_MATCHES - count);
     if (!matches.length) return;
     files.push({ path: p, matches });
     count += matches.length;
@@ -185,39 +232,61 @@ function expandReplacement(rep, args) {
 }
 
 // Replaces exactly the matches findIn reports: empty matches are skipped there, so they must be here too, or a regex
-// like `a*` would also insert the replacement at every gap of the file while the preview counted one match.
-function replaceText(text, re, rep) {
+// like `a*` would also insert the replacement at every gap of the file while the preview counted one match. The text
+// between matches is copied as it was, separators included; a line break the replacement brings in is the file's
+// own (CRLF when most of its line breaks are, as the editor decides).
+function replaceText(text, { re, rep, perLine }) {
+  const { flat, crlf } = normalized(text);
+  const sep = crlf.length * 2 > text.split('\n').length - 1 ? '\r\n' : '\n';
+  const raw = (n) => {
+    let lo = 0;
+    let hi = crlf.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (crlf[mid] < n) lo = mid + 1; else hi = mid; }
+    return n + lo;
+  };
+  let out = '';
+  let at = 0;
   let count = 0;
-  re.lastIndex = 0;
-  const next = text.replace(re, (...args) => {
-    if (args[0] === '') return '';
+  for (const { m, index, str } of matchesOf(flat, re, perLine)) {
+    const args = [...m, m.index, str];
+    if (m.groups !== undefined) args.push(m.groups);
+    out += text.slice(at, raw(index)) + expandReplacement(rep, args).replace(/\n/g, sep);
+    at = raw(index + m[0].length);
     count++;
-    return expandReplacement(rep, args);
-  });
-  return { text: next, count };
+  }
+  return { text: count ? out + text.slice(at) : text, count };
 }
+
+// A file the preview listed that Replace left as it was: {path, reason: 'tooLarge'|'binary'|'encoding'|'error', ...}.
+const skip = (p, reason, e) => ({ path: p, reason, ...(e ? { message: e.message, code: e.code } : {}) });
 
 // UTF-8 files only; the others are returned as `foreign` for the main side to rewrite in their own encoding.
 function replaceIn(paths, opts) {
-  const re = buildRegex(opts);
-  const rep = replacementOf(opts);
+  const c = compile(opts);
   const changed = [];
   const foreign = [];
+  const skipped = [];
   let count = 0;
   for (const p of paths) {
-    let raw;
-    try { if (fs.statSync(p).size > MAX_SIZE) continue; raw = fs.readFileSync(p); } catch { continue; }
-    if (utf16Of(raw)) { foreign.push(p); continue; }
-    if (raw.subarray(0, 8000).includes(0)) continue;
-    if (!isUtf8(raw)) { foreign.push(p); continue; }
-    const text = raw.toString('utf8');
-    const { text: next, count: n } = replaceText(text, re, rep);
-    if (!n || next === text) continue;
-    fs.writeFileSync(p, next, 'utf8');
-    changed.push(p);
-    count += n;
+    try {
+      if (fs.statSync(p).size > MAX_SIZE) { skipped.push(skip(p, 'tooLarge')); continue; }
+      const raw = fs.readFileSync(p);
+      if (utf16Of(raw)) { foreign.push(p); continue; }
+      if (raw.subarray(0, 8000).includes(0)) { skipped.push(skip(p, 'binary')); continue; }
+      if (!isUtf8(raw)) { foreign.push(p); continue; }
+      // The byte order mark is not text that a pattern such as ^\s+ may remove.
+      const text = raw.toString('utf8');
+      const bom = text.charCodeAt(0) === 0xfeff ? '﻿' : '';
+      const { text: next, count: n } = replaceText(text.slice(bom.length), c);
+      if (!n || bom + next === text) continue;
+      fs.writeFileSync(p, bom + next, 'utf8');
+      changed.push(p);
+      count += n;
+    } catch (e) {
+      skipped.push(skip(p, 'error', e));
+    }
   }
-  return { changed, count, foreign };
+  return { changed, count, foreign, skipped };
 }
 
 const COMMENT = { js: '//', ts: '//', jsx: '//', tsx: '//', java: '//', c: '//', h: '//', cpp: '//', go: '//', rs: '//', kt: '//', swift: '//' };
@@ -291,7 +360,7 @@ function invalidateScans(paths) {
 const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), todos, pyFiles, invalidate: invalidateScans };
 if (!isMainThread && workerData?.role === 'pyide-search') {
   parentPort.on('message', ({ id, op, args }) => {
-    try { parentPort.postMessage({ id, result: SCANS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+    try { parentPort.postMessage({ id, result: SCANS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message, code: e.code }); }
   });
 }
 
@@ -302,22 +371,31 @@ const scan = isMainThread ? require('../worker-host').fileWorker(__filename, 'py
 const indexScan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
 const textCodec = isMainThread ? require('../text-codec') : null;
 
-// Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding.
+// Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding. A file whose
+// encoding cannot hold the new text (an emoji into CP949) is left as it was and reported.
 function replaceForeign(paths, opts) {
+  const c = compile(opts);
   const changed = [];
+  const skipped = [];
   let count = 0;
   for (const p of paths) {
     try {
       const file = textCodec.read(p);
-      if (file.text === undefined) continue;
-      const { text, count: n } = replaceText(file.text, buildRegex(opts), replacementOf(opts));
+      if (file.text === undefined) { skipped.push(skip(p, file.binary ? 'binary' : 'tooLarge')); continue; }
+      const { text, count: n } = replaceText(file.text, c);
       if (!n || text === file.text) continue;
+      if (textCodec.decode(textCodec.encode(text, file.encoding), file.encoding) !== text) {
+        skipped.push({ path: p, reason: 'encoding', encoding: file.encoding });
+        continue;
+      }
       textCodec.write(p, text, file.encoding);
       changed.push(p);
       count += n;
-    } catch {}
+    } catch (e) {
+      skipped.push(skip(p, 'error', e));
+    }
   }
-  return { changed, count };
+  return { changed, count, skipped };
 }
 
 // A user's regex can backtrack for hours (`(a+)+$` on a long line), and every later scan waits behind it on the
@@ -554,7 +632,8 @@ async function buildIndex(interp, root) {
 exports.register = ({ ipcMain }) => {
   ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides])
     : (dropPreviews(), findOnWorker([root, opts, overrides], FIND_TIMEOUT))));
-  // {changed, count}, or {stopped} when the worker was stopped partway: some of `paths` may then have been replaced.
+  // {changed, count, skipped}, or {stopped} when the worker was stopped partway: some of `paths` may then have been
+  // replaced.
   ipcMain.handle('search:replace', async (_e, opts, paths) => {
     let res;
     try {
@@ -564,10 +643,10 @@ exports.register = ({ ipcMain }) => {
       throw e;
     }
     const other = replaceForeign(res.foreign, opts);
-    return { changed: [...res.changed, ...other.changed], count: res.count + other.count };
+    return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped] };
   });
   // The same replacement applied to an unsaved buffer's text -> {text, count}.
-  ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, buildRegex(opts), replacementOf(opts)));
+  ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, compile(opts)));
   ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text, 30000)) || { error: 'Python interpreter failed' });
   ipcMain.handle('search:symbols', (_e, interp, root) => {

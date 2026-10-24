@@ -305,6 +305,8 @@
         const file = await readFile(f.path);
         if (!file) continue;
         const diags = await ide.api.invoke('tooling:check', file.text, f.path, ruffOpts());
+        // ruff could not run (a broken ruff.toml): say so once instead of reporting the files as clean.
+        if (diags?.error) { vcs.notify(tr('ruff could not check the files being committed'), diags.error, 'warn', true); break; }
         for (const d of Array.isArray(diags) ? diags : []) {
           problems.push({
             path: f.path, line: d.location?.row || 1, col: d.location?.column || 1, endLine: d.end_location?.row, endCol: d.end_location?.column,

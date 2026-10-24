@@ -11,6 +11,9 @@ const trust = require('../trust');
 // No credential/editor prompts can be answered from the IDE, so fail fast instead of hanging.
 const ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_EDITOR: 'true', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
 
+// git.exe not found on PATH: every operation then fails with reason gitMissing, which the renderer translates.
+const missing = (e) => (e.code === 'ENOENT' ? { reason: 'gitMissing' } : {});
+
 // env: extra variables for this one command (the shelf builds its patches in a private GIT_INDEX_FILE).
 // opts.timeout: milliseconds after which the command is killed (the result then has `timedOut`).
 // opts.onSpawn(child): the started process, for a caller that must be able to kill it (backgroundFetch).
@@ -27,7 +30,7 @@ function git(cwd, args, input, env, opts = {}) {
       p = spawn('git', ['-c', 'core.quotepath=false', '-c', 'color.ui=false', ...literal, ...args],
         { cwd, env: { ...process.env, ...ENV, ...env }, windowsHide: true });
     } catch (e) {
-      return resolve({ code: -1, out: '', err: e.message });
+      return resolve({ code: -1, out: '', err: e.message, ...missing(e) });
     }
     opts.onSpawn?.(p);
     const out = [];
@@ -36,7 +39,7 @@ function git(cwd, args, input, env, opts = {}) {
     const timer = opts.timeout ? setTimeout(() => { timedOut = true; try { p.kill(); } catch {} }, opts.timeout) : null;
     p.stdout.on('data', (d) => out.push(d));
     p.stderr.on('data', (d) => err.push(d));
-    p.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out: '', err: e.message }); });
+    p.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, out: '', err: e.message, ...missing(e) }); });
     p.on('close', (code) => {
       clearTimeout(timer);
       const buf = Buffer.concat(out);
@@ -58,11 +61,28 @@ const relOf = (root, abs) => path.relative(root, abs).replace(/\\/g, '/');
 
 // The project may be a subfolder of the work tree; map repo-relative paths through the prefix so
 // returned paths keep the exact spelling of `root` (temp dirs can differ in 8.3/long form).
-async function repoInfo(root) {
+// -> {info} for a repository, else {failed: git's result}.
+async function probeRepo(root) {
   const r = await git(root, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--show-prefix']);
-  if (r.code) return null;
+  if (r.code) return { failed: r };
   const [top, gitDir, prefix = ''] = r.out.split(/\r?\n/);
-  return { top: path.resolve(top), gitDir: path.resolve(gitDir), prefix };
+  return { info: { top: path.resolve(top), gitDir: path.resolve(gitDir), prefix } };
+}
+const repoInfo = async (root) => (await probeRepo(root)).info || null;
+
+// Why a project is not shown as a repository: {isRepo: false, reason?}. Git missing, and a .git in the project or a
+// folder above it that git refuses (a damaged HEAD, a repository owned by another user), are not "no repository":
+// offering Create Git Repository there failed, or would put a new repository over the user's history.
+function notRepo(root, r) {
+  if (r.reason === 'gitMissing') return { isRepo: false, reason: 'gitMissing' };
+  if (r.reason) return { isRepo: false };
+  for (let dir = path.resolve(root); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.git'))) {
+      const error = (r.err || r.out).split(/\r?\n/).find((l) => /^(fatal|error):/.test(l)) || (r.err || r.out).trim();
+      return { isRepo: false, reason: 'damaged', top: dir, error: error.replace(/^(fatal|error):\s*/, '') };
+    }
+    if (path.dirname(dir) === dir) return { isRepo: false };
+  }
 }
 const toAbs = (root, info, rel) => (rel.startsWith(info.prefix) ? path.join(root, rel.slice(info.prefix.length)) : path.join(info.top, rel));
 
@@ -85,8 +105,8 @@ const STATUS_OF = (xy) => {
 };
 
 async function status(root) {
-  const info = await repoInfo(root);
-  if (!info) return { isRepo: false };
+  const { info, failed } = await probeRepo(root);
+  if (!info) return notRepo(root, failed);
   const [st, remotes] = await Promise.all([
     // --ignored=matching lists an ignored folder once ("build/") instead of every file in it.
     git(root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--ignored=matching']),
@@ -618,7 +638,7 @@ exports.register = ({ ipcMain, app }) => {
 
   h('init', async (root) => {
     const r = await git(root, ['init']);
-    return { ok: !r.code, cmd: cmdLine(['init']), out: r.out, err: r.err };
+    return { ok: !r.code, cmd: cmdLine(['init']), out: r.out, err: r.err, reason: r.reason };
   });
 
   h('branches', async (root) => {

@@ -338,12 +338,13 @@ const isUtf8 = (file) => {
 // The launcher scan reads the project's scripts; it runs on a worker thread so a large project never stalls the main process.
 if (!isMainThread && workerData?.role === 'pyide-workspace') {
   parentPort.on('message', ({ id, args }) => {
-    try { parentPort.postMessage({ id, result: scan(...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message }); }
+    try { parentPort.postMessage({ id, result: scan(...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message, code: e.code }); }
   });
 }
 const scanInWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-workspace') : null;
 
 exports.register = ({ ipcMain, app, startProcess }) => {
+  const { toolCommand, resolveProgram } = require('./run');
   const fakeOpen = process.env.PYIDE_FAKE_OPEN_EXTERNAL === '1';
   const opened = [];
   // Windows PowerShell writes to a pipe in the OEM code page; this wrapper switches it to UTF-8 and forwards
@@ -390,32 +391,46 @@ exports.register = ({ ipcMain, app, startProcess }) => {
     let argv;
     let env = entry.env || {};
     const opts = {};
+    let shown = null;
     const py = (rest) => {
       if (!interp?.cmd) throw new Error('no-interpreter');
       cmd = interp.cmd;
       argv = [...(interp.args || []), '-u', ...rest];
       env = withPath(env, [root]);
     };
+    // A .cmd/.bat goes through cmd.exe with External Tools' escaping (main/features/run.js), so a project path holding
+    // &, ^ or % reaches it intact; `call` would parse its carets and percent signs a second time.
+    const viaTool = (file, toolArgs) => {
+      const c = toolCommand(file, toolArgs);
+      const { env: toolEnv, ...rest } = c.opts;
+      cmd = c.cmd;
+      argv = c.args;
+      Object.assign(opts, rest);
+      env = { ...env, ...toolEnv };
+    };
     switch (entry.kind) {
       case 'launch':
         if (entry.python && interp?.cmd) py([...entry.runtimeArgs, ...extra]);
-        else if (path.isAbsolute(entry.exe) && /\.exe$/i.test(entry.exe)) { cmd = entry.exe; argv = [...entry.runtimeArgs, ...extra]; } else {
-          // npm, mvn and friends are .cmd shims that only cmd.exe resolves.
-          cmd = 'cmd.exe';
-          argv = ['/d', '/s', '/c', `"${[entry.exe, ...entry.runtimeArgs, ...extra].map(quote).join(' ')}"`];
-          opts.windowsVerbatimArguments = true;
+        else {
+          // npm, mvn and friends are .cmd shims found on PATH.
+          const file = resolveProgram(entry.exe, entry.cwd || root);
+          viaTool(file, [...entry.runtimeArgs, ...extra]);
+          shown = [file, ...entry.runtimeArgs, ...extra].map(quote).join(' ');
         }
         break;
       case 'script': py([entry.file, ...extra]); break;
       case 'module': py(['-m', entry.module, ...extra]); break;
       case 'pycharm': py(entry.module ? ['-m', entry.module, ...extra] : [entry.script, ...extra]); break;
-      case 'bat':
-        cmd = 'cmd.exe';
-        argv = ['/d', '/s', '/c', `"${isUtf8(entry.file) ? 'chcp 65001>nul & ' : ''}call ${quote(entry.file)}${args?.trim() ? ` ${args.trim()}` : ''}"`];
-        opts.windowsVerbatimArguments = true;
+      case 'bat': {
+        // The arguments the user typed are cmd syntax and are passed on as typed.
+        viaTool(entry.file, []);
+        const utf8 = isUtf8(entry.file);
+        argv = [...argv.slice(0, -1), `"${utf8 ? 'chcp 65001>nul & ' : ''}${argv.at(-1).slice(1, -1)}${args?.trim() ? ` ${args.trim()}` : ''}"`];
         // A non-UTF-8 batch file runs in the console code page, which is CP949 on Korean Windows.
-        if (!isUtf8(entry.file)) opts.encoding = 'cp949';
+        if (!utf8) opts.encoding = 'cp949';
+        shown = `cmd /c ${quote(entry.file)}${args?.trim() ? ` ${args.trim()}` : ''}`;
         break;
+      }
       case 'ps1':
         ensureWrapper();
         cmd = 'powershell.exe';
@@ -433,9 +448,9 @@ exports.register = ({ ipcMain, app, startProcess }) => {
       }
       default: throw new Error(`unknown launcher kind ${entry.kind}`);
     }
-    const shown = entry.kind === 'ps1'
+    shown ??= entry.kind === 'ps1'
       ? ['powershell', '-ExecutionPolicy', 'Bypass', '-File', entry.file, ...extra].map(quote).join(' ')
-      : opts.windowsVerbatimArguments ? `cmd /c ${argv[3].slice(1, -1).replace(/^chcp 65001>nul & /, '').replace(/^call /, '')}` : [cmd, ...argv].map(quote).join(' ');
+      : opts.windowsVerbatimArguments ? `cmd /c ${argv[3].slice(1, -1)}` : [cmd, ...argv].map(quote).join(' ');
     const id = startProcess(cmd, argv, { cwd: entry.cwd || root, env, windowsHide: true, ...opts });
     return { id, command: shown };
   });

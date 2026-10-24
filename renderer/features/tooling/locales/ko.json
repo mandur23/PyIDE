@@ -21,5 +21,6 @@
   "Fix with ruff: {message} ({code})": "ruff로 수정: {message} ({code})",
   "Fix with ruff: {message} ({code}) [unsafe]": "ruff로 수정: {message} ({code}) [안전하지 않음]",
   "Suppress {code} for line with # noqa": "이 줄에서 {code} 억제 (# noqa)",
-  "Fix all ruff problems in file": "파일의 모든 ruff 문제 수정"
+  "Fix all ruff problems in file": "파일의 모든 ruff 문제 수정",
+  "Ruff cannot check Python files: {error}": "Ruff가 Python 파일을 검사할 수 없습니다: {error}"
 }

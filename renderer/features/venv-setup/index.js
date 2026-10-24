@@ -18,7 +18,8 @@
   let seq = 0;
   let hideTimer = null;
 
-  const localInterps = () => ide.interps.filter((i) => !i.target);
+  // Working local interpreters: not remote targets, and not the project's chosen one when it is invalid.
+  const localInterps = () => ide.interps.filter((i) => !i.target && !i.invalid);
   const versionKey = (v) => String(v || '').split('.').map((n) => parseInt(n, 10) || 0);
   const newer = (a, b) => {
     const x = versionKey(a.version);
@@ -31,16 +32,18 @@
 
   const inspect = () => ide.api.invoke('venv-setup:inspect', ide.root, localInterps().map((i) => i.executable)).catch(() => null);
 
-  // Why the prompt shows ({missing: the configured interpreter that is gone, or null}), or null when it does not.
+  // Why the prompt shows ({missing: the configured interpreter that is gone, or null; broken: a virtual environment
+  // of the project whose python.exe is gone or does not start, or null}), or null when it does not.
   function reason(info) {
     const root = ide.root;
     if (!root || ide.trusted === false || !info?.trusted) return null;
     if (ide.settings.get(IGNORE(root), false) || closed.has(root.toLowerCase())) return null;
-    if (!info.files.length || info.venv) return null;
+    if (!info.files.length) return null;
     if (localInterps().some((i) => isUnder(i.executable, root))) return null;
     const configured = ide.settings.get(`interpreter.${root}`, '');
-    if (configured && ide.interps.some((i) => samePath(i.executable, configured))) return null;
-    return { missing: configured || null };
+    if (configured && ide.interps.some((i) => !i.invalid && samePath(i.executable, configured))) return null;
+    // A venv no working interpreter is listed from counts as none.
+    return { missing: configured || null, broken: info.venv || null };
   }
 
   function hide() {
@@ -86,12 +89,16 @@
     const useUv = !!info.uv;
     const files = info.files.join(', ');
     const text = el('span', 'venv-bar-text');
-    const detail = why.missing
-      ? tr('The project interpreter {path} was not found. The project has {files} but no virtual environment.', { path: why.missing, files })
-      : tr('No Python interpreter is configured for this project. It has {files} but no virtual environment.', { files });
-    text.append(el('b', null, tr('Create a virtual environment?')), ' ', detail);
+    const detail = why.broken
+      ? tr('The virtual environment {path} does not work. The project has {files}.', { path: why.broken, files })
+      : why.missing
+        ? tr('The project interpreter {path} was not found. The project has {files} but no virtual environment.', { path: why.missing, files })
+        : tr('No Python interpreter is configured for this project. It has {files} but no virtual environment.', { files });
+    text.append(el('b', null, why.broken ? tr('Recreate the virtual environment?') : tr('Create a virtual environment?')), ' ', detail);
     const actions = el('span', 'venv-bar-actions');
-    if (useUv || base) {
+    if (why.broken && (useUv || base)) {
+      actions.append(link(tr('Recreate {name}', { name: basename(why.broken) }), 'recreate', () => recreate(why.broken)));
+    } else if (useUv || base) {
       const create = link(tr('Create .venv'), 'create', async () => create_({ dir: await freeDir(root), base, uv: useUv, install: true }));
       create.title = useUv ? 'uv venv' : `${base.label} -m venv`; // command lines are user data
       actions.append(create);
@@ -182,6 +189,25 @@
     }
   }
 
+  // A virtual environment that does not work (its base Python was uninstalled, its python.exe deleted) goes to the
+  // Recycle Bin, after a confirmation, and is made again in the same place with the newest base interpreter.
+  async function recreate(dir) {
+    if (!ide.root || working) return false;
+    if (ide.trusted === false) { ide.ui.alert(SAFE_MODE()); return false; }
+    const info = await inspect();
+    if (!info?.trusted) { ide.ui.alert(SAFE_MODE()); return false; }
+    const base = basesOf(info)[0] || null;
+    if (!info.uv && !base) { ide.ui.alert(tr('No Python interpreter was found. Install Python first.')); return false; }
+    const ok = await ide.ui.confirm(tr('Move the virtual environment {path} to the Recycle Bin and create it again?', { path: dir }),
+      { title: tr('Recreate Virtual Environment'), ok: tr('Recreate') });
+    if (!ok) return false;
+    try { await ide.api.trash(dir); } catch (e) {
+      ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: basename(dir), error: ide.util.errorText(e) }));
+      return false;
+    }
+    return create_({ dir, base, uv: !!info.uv, install: info.files.length > 0 });
+  }
+
   // Tools › Create Virtual Environment…: location, base interpreter (or uv) and whether to install the dependencies.
   async function openDialog() {
     if (!ide.root) { ide.ui.alert(tr('Open a project to configure its interpreter.')); return; }
@@ -246,5 +272,5 @@
   });
   if (ide.root) evaluate();
 
-  ide.venvSetup = { create: create_, openDialog, evaluate, state: () => bar.dataset.state || null };
+  ide.venvSetup = { create: create_, recreate, openDialog, evaluate, state: () => bar.dataset.state || null };
 })();

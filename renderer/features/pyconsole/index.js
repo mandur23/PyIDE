@@ -123,7 +123,6 @@
           procId = null;
           ended();
           setPrompt('ps1');
-          markReady?.();
           renderActions();
           ide.emit('pyconsoleChanged');
         },
@@ -134,7 +133,11 @@
     try { return await starting; } catch (err) { pending.length = 0; throw err; } finally { starting = null; }
   }
 
+  // The process is gone (it exited, or stop() let go of it): a start still waiting for its first prompt is over, or
+  // every later start() would return that start's promise forever.
   function ended() {
+    markReady?.();
+    markReady = null;
     pending.length = 0;
     prompted = false;
     setBusy(false);

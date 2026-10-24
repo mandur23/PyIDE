@@ -1,6 +1,7 @@
 // Reads and writes editor documents in their own encoding. Korean Windows files are often CP949 (EUC-KR superset);
 // saving them as UTF-8 silently breaks the tools that read them (e.g. cmd.exe running a .bat), so the encoding is kept.
 const fs = require('fs');
+const path = require('path');
 const iconv = require('iconv-lite');
 
 const MAX_TEXT_BYTES = 20 * 1024 * 1024;
@@ -52,7 +53,10 @@ function detect(buf) {
     new TextDecoder('utf-8', { fatal: true }).decode(buf);
     return 'utf-8';
   } catch {
-    return 'cp949';
+    // Not valid UTF-8: CP949 when it decodes the bytes cleanly. A UTF-8 file with a stray byte (a Latin-1 é pasted in)
+    // stays UTF-8 with one replacement character, as in VS Code and PyCharm, instead of all its Korean turning to
+    // CP949 mojibake that a save would then write for good.
+    return iconv.decode(buf, 'cp949').includes('�') ? 'utf-8' : 'cp949';
   }
 }
 
@@ -90,13 +94,56 @@ function read(p, forced) {
   return { text: decode(buf, encoding), encoding, size };
 }
 
-// Characters the target encoding cannot represent are refused rather than turned into '?'.
+// Characters the target encoding cannot represent are refused rather than turned into '?'. The refusal is the user's
+// to read (expected), not an IDE internal error.
 function write(p, text, encoding = 'utf-8') {
   const buf = encode(text, encoding);
   if (encoding === 'cp949' && iconv.decode(buf, 'cp949') !== text) {
-    throw new Error('Some characters cannot be saved in CP949. Convert the file to UTF-8 first.');
+    throw Object.assign(new Error('Some characters cannot be saved in CP949. Convert the file to UTF-8 first.'), { code: 'EUNMAPPABLE', expected: true });
   }
-  fs.writeFileSync(p, buf);
+  replaceFile(p, buf);
 }
 
-module.exports = { read, write, ENCODINGS, looksBinary, detect, decode, encode };
+// Writes a new file next to the old one and renames it over, so a write that fails halfway (a full disk) or a crash
+// never leaves a truncated file. In place, as before, where replacing would change what the file is or cannot work:
+// a read-only file (the write fails as it should), a hard link (a new file would split it from its other names), a
+// folder the user cannot create files in, or a file another program holds open without delete sharing.
+// Files a save just replaced by rename: a file watcher sees a rename there, which is not a new file (the language
+// server would take it as one and forget what it knew about every file).
+const replaced = new Map();
+const replacedRecently = (p) => {
+  const k = path.resolve(p).toLowerCase();
+  const t = replaced.get(k);
+  if (t && Date.now() - t < 10000) return true;
+  replaced.delete(k);
+  return false;
+};
+
+function replaceFile(p, buf) {
+  let target = p;
+  let st;
+  try {
+    if (fs.lstatSync(p).isSymbolicLink()) target = fs.realpathSync(p);
+    st = fs.statSync(target);
+  } catch {
+    return fs.writeFileSync(p, buf);
+  }
+  if (st.nlink > 1 || !(st.mode & 0o200)) return fs.writeFileSync(p, buf);
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.pyide-tmp`);
+  try {
+    fs.writeFileSync(tmp, buf);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    if (err.code === 'EPERM' || err.code === 'EACCES') return fs.writeFileSync(p, buf);
+    throw err;
+  }
+  try {
+    fs.renameSync(tmp, target);
+    replaced.set(path.resolve(target).toLowerCase(), Date.now());
+  } catch {
+    fs.rmSync(tmp, { force: true });
+    fs.writeFileSync(p, buf);
+  }
+}
+
+module.exports = { read, write, ENCODINGS, looksBinary, detect, decode, encode, replacedRecently };

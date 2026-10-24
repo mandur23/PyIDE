@@ -1100,6 +1100,9 @@
       const sub = el('div', 'plugin-sub muted', [p.vendor, p.version].filter(Boolean).join(' · '));
       sub.dataset.userText = '';
       text.append(el('div', 'plugin-name', l.name), sub);
+      if (tab === 'installed' && (p.broken || p.loadError)) {
+        sub.replaceChildren(el('span', 'plugin-error plugins-online-error', p.broken ? tr('Broken') : tr('Failed to load')));
+      }
       r.append(icon, text);
       if (tab === 'installed') {
         const update = updateOf(p);
@@ -1108,7 +1111,7 @@
         c.type = 'checkbox';
         c.className = 'plugin-toggle';
         c.checked = effectiveEnabled(p);
-        c.disabled = p.required;
+        c.disabled = p.required || !!p.broken;
         c.title = p.required ? tr('Required by PyIDE') : '';
         c.onclick = (e) => e.stopPropagation();
         c.onchange = () => toggle(p, c.checked);
@@ -1144,6 +1147,8 @@
       if (inst?.required) badges.appendChild(badge(tr('Required')));
       if (inst && !effectiveEnabled(inst)) badges.appendChild(badge(tr('Disabled'), 'off'));
       if (inst?.blockedBy) badges.appendChild(badge(tr('Needs {id}', { id: inst.blockedBy }), 'warn'));
+      if (inst?.broken) badges.appendChild(badge(tr('Broken'), 'warn'));
+      if (inst?.loadError) badges.appendChild(badge(tr('Failed to load'), 'warn'));
       if (inst && needsRestart(inst)) badges.appendChild(badge(tr('Restart required'), 'warn'));
       if (tab === 'installed' && listed) badges.appendChild(badge(tr('Version {version} available', { version: listed.version }), 'new'));
       const actions = el('div', 'plugin-actions');
@@ -1153,7 +1158,7 @@
           b.id = 'pluginUpdateBtn';
           actions.appendChild(b);
         }
-        if (!inst.required) {
+        if (!inst.required && !inst.broken) {
           const b = el('button', 'secondary', effectiveEnabled(inst) ? tr('Disable') : tr('Enable'));
           b.id = 'pluginEnableBtn';
           b.onclick = () => toggle(inst, !effectiveEnabled(inst));
@@ -1178,6 +1183,19 @@
       }
       const desc = el('p', 'plugin-desc', l.description || tr('No description'));
       detail.append(head, badges, actions, desc);
+      // What is wrong with an installed plugin: its plugin.json, or the error its main-process code threw this session.
+      if (inst?.broken || inst?.loadError) {
+        const why = el('div', 'settings-note plugins-online-error');
+        why.id = 'pluginError';
+        if (inst.broken) {
+          why.textContent = `${inst.broken === 'missing' ? tr('The plugin folder has no plugin.json.') : tr('plugin.json is not valid JSON.')} ${tr('Fix the file and restart the IDE, or uninstall the plugin.')}`;
+        } else {
+          const message = el('span', null, inst.loadError);
+          message.dataset.userText = '';
+          why.append(el('span', null, tr('Failed to load:')), ' ', message);
+        }
+        detail.appendChild(why);
+      }
       if (p.depends?.length) detail.appendChild(el('div', 'muted settings-note', tr('Depends on: {list}', { list: p.depends.join(', ') })));
       if (listed?.origin === 'online') {
         const from = el('div', 'muted settings-note plugin-source');

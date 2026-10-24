@@ -24,7 +24,8 @@ function fileWorker(file, role) {
   const start = () => {
     const w = (worker = new Worker(fs.readFileSync(file, 'utf8'), { eval: true, workerData: { role } }));
     w.unref();
-    w.on('message', ({ id, result, error }) => {
+    // An error keeps its code (EPERM, ENOENT): the diagnostics log tells a user's file problem from an IDE fault by it.
+    w.on('message', ({ id, result, error, code }) => {
       if (worker !== w) return;
       const r = waiting.get(id);
       if (!r) return;
@@ -32,7 +33,7 @@ function fileWorker(file, role) {
       clearTimeout(r.timer);
       next();
       if (r.abandoned) return;
-      if (error !== undefined) r.reject(new Error(error)); else r.resolve(result);
+      if (error !== undefined) r.reject(errorWith(error, code)); else r.resolve(result);
     });
     // Events of a worker this host already replaced (terminated, or an 'exit' after its 'error') are ignored: they
     // would otherwise reject the requests of the worker that replaced it.

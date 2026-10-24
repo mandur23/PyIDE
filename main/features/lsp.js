@@ -6,6 +6,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const remote = require('../remote');
 const diagnostics = require('../diagnostics');
+const textCodec = require('../text-codec');
 
 // A request Pyright never answers (a hang, a lost response) is cancelled and rejected after this many ms, so the
 // feature waiting on it does not wait forever. Project-wide searches get longer on a large project.
@@ -345,7 +346,8 @@ class Server {
       batch = new Map();
       const changes = await Promise.all([...events].map(async ([full, renamed]) => {
         const exists = await fs.promises.access(full).then(() => true, () => false);
-        return { uri: pathToFileURL(full).href, type: exists ? (renamed ? 1 : 2) : 3 };
+        // A save that replaced the file by rename is a change, not a new file.
+        return { uri: pathToFileURL(full).href, type: exists ? (renamed && !textCodec.replacedRecently(full) ? 1 : 2) : 3 };
       }));
       if (!this.initialized || this.dead) return;
       this.notify('workspace/didChangeWatchedFiles', { changes });

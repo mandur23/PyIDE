@@ -77,7 +77,7 @@
   const local = (i) => i && i.cmd && !i.target; // remote interpreters (WSL, SSH, Docker) cannot run the sidecar here
   function candidates() {
     const cur = ide.currentInterp?.();
-    const rest = (ide.interps || []).filter((i) => i !== cur)
+    const rest = (ide.interps || []).filter((i) => i !== cur && !i.invalid)
       .sort((a, b) => String(b.version || '').localeCompare(String(a.version || ''), undefined, { numeric: true }));
     return [cur, ...rest].filter(local).map((i) => ({ cmd: i.cmd, args: i.args || [], executable: i.executable }));
   }

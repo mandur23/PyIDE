@@ -37,6 +37,7 @@
     noOperation: tr('No merge, rebase, cherry-pick or revert is in progress.'),
     noLocalChanges: tr('No local changes to save'),
     noShelfChanges: tr('No changes to shelve'),
+    gitMissing: tr('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart PyIDE.'),
   };
   // The operation git stopped in the middle of, as the branch widget shows it.
   const OP_LABEL = { merge: tr('Merging'), rebase: tr('Rebasing'), 'cherry-pick': tr('Cherry-picking'), revert: tr('Reverting') };
@@ -53,6 +54,7 @@
   const errorText = (r) => (r.reason && REASONS[r.reason]) || r.err || r.out || '';
 
   let repo = null; // git:status result while the project is a repository
+  let noRepo = null; // git:status result otherwise: {reason: 'gitMissing' | 'damaged', top, error} or no reason
   const byPath = new Map(); // lower-cased path -> changed file
   const ignored = new Set(); // lower-cased paths of ignored files and folders (a folder covers what it holds)
   let lastHead;
@@ -122,6 +124,7 @@
     if (my !== refreshSeq || root !== ide.root) return;
     const before = treeSig();
     repo = st.isRepo ? st : null;
+    noRepo = st.isRepo ? null : st;
     byPath.clear();
     for (const f of repo?.files || []) byPath.set(key(f.path), f);
     ignored.clear();
@@ -362,10 +365,7 @@
     id: 'Commit', title: tr('Commit'), icon: '✓', side: 'left', keys: 'Alt+0', order: 10,
     mount(container, tw) {
       initBox = el('div', 'vcs-init');
-      initBox.appendChild(el('div', 'muted', tr('Version control is not configured for this project.')));
-      const initBtn = el('button', 'primary vcs-init-btn', tr('Create Git Repository…'));
-      initBtn.onclick = createRepository;
-      initBox.appendChild(initBtn);
+      renderInitBox();
 
       commitBody = el('div', 'vcs-commit hidden');
       headerEl = el('div', 'vcs-commit-header');
@@ -418,8 +418,32 @@
 
   const selectedFiles = () => [...selection].map((k) => byPath.get(k)).filter(Boolean);
 
+  // What the Commit window says outside a repository: Create Git Repository only when there is none and Git can make
+  // one. A missing Git or a repository git refuses is named, with git's own message.
+  function renderInitBox() {
+    const reason = noRepo?.reason;
+    const shown = JSON.stringify([reason, noRepo?.top, noRepo?.error]);
+    if (initBox.dataset.shown === shown) return;
+    initBox.dataset.shown = shown;
+    if (reason === 'gitMissing') initBox.replaceChildren(el('div', 'muted', REASONS.gitMissing));
+    else if (reason === 'damaged') {
+      initBox.replaceChildren(el('div', 'muted', tr('Git cannot use the repository in {path}. It may be damaged:', { path: noRepo.top })),
+        userText('div', 'vcs-init-error', noRepo.error));
+    } else {
+      const initBtn = el('button', 'primary vcs-init-btn', tr('Create Git Repository…'));
+      initBtn.onclick = createRepository;
+      initBox.replaceChildren(el('div', 'muted', tr('Version control is not configured for this project.')), initBtn);
+    }
+    if (reason) {
+      const again = el('button', 'secondary vcs-init-retry', tr('Refresh'));
+      again.onclick = () => refresh();
+      initBox.appendChild(again);
+    }
+  }
+
   function renderChanges() {
     if (!listEl) return;
+    renderInitBox();
     initBox.classList.toggle('hidden', !!repo || !ide.root);
     commitBody.classList.toggle('hidden', !repo);
     commitTabs.classList.toggle('hidden', !repo);
@@ -514,6 +538,9 @@
 
   async function createRepository() {
     if (!ide.root) return;
+    if (noRepo?.reason === 'damaged') {
+      return notify(tr('Git init failed'), `${tr('Git cannot use the repository in {path}. It may be damaged:', { path: noRepo.top })} ${noRepo.error}`, 'error', true);
+    }
     const r = await invoke('init', ide.root);
     logResult(r);
     if (!r.ok) return notify(tr('Git init failed'), errorText(r), 'error', true);
@@ -1820,6 +1847,7 @@
   // A new project, or none: nothing of the previous repository stays (state, widgets, timers).
   function forgetRepository() {
     repo = null;
+    noRepo = null;
     lastHead = undefined;
     lastBranch = undefined;
     shelves = [];

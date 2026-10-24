@@ -81,5 +81,7 @@
   "For example node, black or $PyInterpreterPath$": "예: node, black 또는 $PyInterpreterPath$",
   "Arguments": "인수",
   "Defaults to the project folder": "기본값: 프로젝트 폴더",
-  "Macros: {macros}. The output shows in the Run window.": "매크로: {macros}. 출력은 실행 창에 표시됩니다."
+  "Macros: {macros}. The output shows in the Run window.": "매크로: {macros}. 출력은 실행 창에 표시됩니다.",
+  "The working directory is longer than Windows allows ({length} characters): {path}": "작업 디렉터리가 Windows에서 허용하는 길이보다 깁니다({length}자): {path}",
+  "The program runs in {path} instead.": "대신 {path}에서 프로그램을 실행합니다."
 }

@@ -227,8 +227,20 @@
     refreshTodos();
     if (r.stopped) return showFindResults(o, true, tr('Replace was stopped after {seconds} seconds; some files may have been changed.', { seconds: r.stopped }));
     if (r.failed) return showFindResults(o, true, tr('Replace failed: {message}', { message: r.failed }));
-    await showFindResults(o, true, nt2(count, changed.length, ['Replaced {count} occurrence in {files} file', 'Replaced {count} occurrence in {files} files',
-      'Replaced {count} occurrences in {files} file', 'Replaced {count} occurrences in {files} files']));
+    const done = nt2(count, changed.length, ['Replaced {count} occurrence in {files} file', 'Replaced {count} occurrence in {files} files',
+      'Replaced {count} occurrences in {files} file', 'Replaced {count} occurrences in {files} files']);
+    await showFindResults(o, true, r.skipped?.length ? `${done}. ${skippedText(r.skipped)}` : done);
+  }
+
+  // Files the preview listed that Replace left as they were (main/features/search.js), each with why.
+  function skippedText(skipped) {
+    const why = (s) => (s.reason === 'tooLarge' ? tr('larger than 2 MB')
+      : s.reason === 'binary' ? tr('not a text file')
+        : s.reason === 'encoding' ? tr('{encoding} cannot store the new text', { encoding: s.encoding.toUpperCase() })
+          : ipcError(s.message || ''));
+    const named = skipped.slice(0, 5).map((s) => `${basename(s.path)} (${why(s)})`);
+    if (skipped.length > 5) named.push(tr('{n} more', { n: skipped.length - 5 }));
+    return `${nt(skipped.length, 'Not replaced in {n} file:', 'Not replaced in {n} files:')} ${named.join(', ')}`;
   }
 
   function selectedText() {

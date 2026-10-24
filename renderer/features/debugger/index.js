@@ -304,14 +304,18 @@
     [/^No Python interpreter found\.$/, () => tr('No Python interpreter found.')],
     [/^No process selected$/, () => tr('No process selected')],
     [/^Debugging stopped$/, () => tr('Debugging stopped')],
+    [/^The program exited before the debugger could connect$/, () => tr('The program exited before the debugger could connect')],
   ];
+  // The debugger's own messages first: errorText words a bare network code as the internet being unreachable, which
+  // a debugpy on this machine that did not answer is not.
   function remoteError(err) {
-    const msg = ide.util.errorText(err);
+    const msg = String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
     for (const [re, fn] of MAIN_ERRORS) { const m = re.exec(msg); if (m) return fn(m); }
-    return msg;
+    return ide.util.errorText(err);
   }
 
   ide.api.on('debug:event', (m) => {
+    if (m.event === 'process') return followProcess(startups.get(m.startKey), m.body.id);
     if (sess && !sess.id) { earlyEvents.push(m); return; }
     if (sess && m.id === sess.id) handleEvent(m.event, m.body);
   });
@@ -330,6 +334,17 @@
     } else if (event === 'terminated' || event === 'exited' || event === 'closed') {
       if (sess) setRunning();
     }
+  }
+
+  // The debuggee's output and exit from the moment main starts it, so a program that ends while debugpy is still
+  // starting shows its own output and exit code. A startup already stopped or replaced (s is not sess) shows nothing.
+  const startups = new Map(); // startKey -> the session of a debug:start in progress
+  function followProcess(s, id) {
+    if (s) s.procId = id;
+    ide.proc.attach(id, {
+      data: (text, stream) => s && sess === s && con.append(text, stream === 'err' ? 'err' : null),
+      exit: (code) => s && endSession(s, code),
+    });
   }
 
   // cfg (from a run configuration): {interp?, cwd?, params?, env?, envFiles?} (envFiles: absolute .env paths; default the root's .env)
@@ -364,13 +379,18 @@
     const files = [...bps.values()].map((f) => f.path).concat(generatedFor(file) && !bps.has(key(file)) ? [file] : [])
       .map(bpPayload).filter((p) => p.lines.length);
     let id;
+    startups.set(mine.startKey, mine);
     try {
       const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [],
         startKey: mine.startKey };
-      ({ id } = await ide.api.invoke('debug:start', interp, file, cfg.cwd || dirname(file), files, opts));
+      const write = (text) => sess === mine && con.append(text, 'err');
+      const cwd = ide.run?.workingDir ? await ide.run.workingDir(cfg.cwd || dirname(file), write) : cfg.cwd || dirname(file);
+      if (sess !== mine) return;
+      ({ id } = await ide.api.invoke('debug:start', interp, file, cwd, files, opts));
     } catch (err) {
       mine.unwatch();
-      // A startup the user stopped (or replaced) ends quietly: the console already says the process finished.
+      // A startup the user stopped (or replaced) ends quietly: the console already says the process finished, as it
+      // does for a program that ended before debugpy listened.
       if (sess === mine) {
         con.append(`${remoteError(err)}\n`, 'err');
         sess = null;
@@ -378,11 +398,13 @@
         updateControls();
       }
       return;
+    } finally {
+      startups.delete(mine.startKey);
     }
+    if (mine.procId !== id) followProcess(mine, id);
     if (sess !== mine) {
       mine.unwatch();
       // Stopped or superseded while debugpy was starting: tear this debuggee down instead of leaving it running unseen.
-      ide.proc.attach(id, {}); // drop its buffered and future output
       ide.api.invoke('debug:stop', id).catch(() => {});
       return;
     }
@@ -391,11 +413,6 @@
     con.append(`${tr('Connected to pydev debugger (build debugpy)')}\n`, 'sys');
     updateControls();
     focusInput();
-    ide.proc.attach(id, {
-      // A session replaced by a new one (Rerun) must not write into the console the new one cleared.
-      data: (text, stream) => sess === mine && con.append(text, stream === 'err' ? 'err' : null),
-      exit: (code) => endSession(mine, code),
-    });
     for (const text of mine.typed.splice(0)) ide.proc.input(id, `${text}\n`);
     for (const p of mine.pendingBps) sendBps(p);
     mine.pendingBps.clear();

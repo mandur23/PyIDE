@@ -25,8 +25,7 @@
   const closedTabs = [];
   const mru = []; // most recently activated tabs, newest first
   let editorOptions = {};
-  // A detached window always has the main window as a peer, also before main's first window:peers arrives: a document it
-  // opens that early must still ask the main window for its unsaved text (doc:opened).
+  // A detached window always has the main window as a peer, also before main's first window:peers arrives.
   let peers = ide.detached ? 2 : 1;
   let applyingRemote = false;
 
@@ -86,7 +85,9 @@
     const model = preview?.model || ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel(r.text, languageFor(path), uri);
     // fresh: fileOpened is announced once the first tab for it exists. diskHash fingerprints the text last read from
     // or written to the file, so auto save can tell when the file changed underneath.
-    const doc = { path, model, savedVersion: preview ? preview.savedVersion : model.getAlternativeVersionId(), encoding: r.encoding, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText };
+    // encodingPinned: the user chose the encoding (Reload in, Convert to, Open as Text), so a reload decodes the file
+    // in it instead of detecting one again.
+    const doc = { path, model, savedVersion: preview ? preview.savedVersion : model.getAlternativeVersionId(), encoding: r.encoding, encodingPinned: !!r.forcedText, fresh: true, diskHash: textHash(r.text), changed: [], forcedText: !!r.forcedText, sync: newSync() };
     const clean = doc.savedVersion === model.getAlternativeVersionId();
     if (adoptSeparator(doc, r.text) && clean) doc.savedVersion = model.getAlternativeVersionId();
     docs.set(key(path), doc);
@@ -94,9 +95,9 @@
       // The tab bars change only when the modified mark does, not on every keystroke.
       if (docDirty(doc) !== doc.shownDirty) scheduleRender(); else reportDirty();
       markChanged(doc, e);
-      if (!applyingRemote) syncOut(doc);
+      if (!applyingRemote) localEdit(doc, e);
     });
-    if (peers > 1) ide.api.send('doc:opened', { path });
+    ide.api.send('doc:join', { path });
     return doc;
   }
 
@@ -144,8 +145,13 @@
     return { model: p.model, savedVersion: edited ? p.version : p.model.getAlternativeVersionId() };
   }
 
-  // A document opened with Open as Text is read back from disk the same way, in its encoding.
-  const readDisk = (doc) => (doc.forcedText ? ide.api.invoke('fs:decode', doc.path, doc.encoding) : ide.api.invoke('fs:readText', doc.path));
+  // The file's text in the document's own encoding, to tell whether the file changed since PyIDE read or wrote it.
+  // Detecting the encoding again could decode the same bytes differently (after Reload in another encoding, or BOM-less
+  // UTF-16 that is mostly Korean, which detection takes for binary) and report a change that is not there.
+  const readDisk = (doc) => ide.api.invoke('fs:decode', doc.path, doc.encoding);
+  // The file's text for a reload: in the encoding the user chose, else detected again, since a program outside PyIDE
+  // may have re-encoded the file.
+  const readForReload = (doc) => (doc.encodingPinned ? readDisk(doc) : ide.api.invoke('fs:readText', doc.path));
   const docDirty = (doc) => !!doc && !doc.model.isDisposed() && doc.model.getAlternativeVersionId() !== doc.savedVersion;
   const tabsOfDoc = (doc) => groups.flatMap((g) => g.tabs.filter((t) => t.doc === doc));
   const firstTabFor = (doc) => tabsOfDoc(doc)[0] || null;
@@ -153,6 +159,7 @@
   function releaseDoc(doc) {
     if (tabsOfDoc(doc).length) return;
     docs.delete(key(doc.path));
+    ide.api.send('doc:leave', { path: doc.path });
     doc.model.dispose();
     ide.emit('fileClosed', doc.path);
   }
@@ -195,18 +202,105 @@
   const clearChanged = (doc) => { if (!doc.model.isDisposed()) doc.changed = doc.model.deltaDecorations(doc.changed, []); };
 
   // ---------- multi-window document sync ----------
-  const syncTimers = new Map();
-  function syncOut(doc) {
-    if (peers < 2) return;
-    clearTimeout(syncTimers.get(doc));
-    syncTimers.set(doc, setTimeout(() => {
-      syncTimers.delete(doc);
-      if (!doc.model.isDisposed()) ide.api.send('doc:changed', { path: doc.path, text: doc.model.getValue() });
-    }, 120));
+  // A document open in several windows is one sequence of edits. While it is shared, every window sends its edits to the
+  // main process (main/windows.js) with the revision they were made on; the main process puts them in one order and
+  // refuses an edit made on an older revision. A window applies the other windows' edits shifted past its own
+  // unconfirmed ones, and sends a refused edit again shifted past the ones it had not seen (operational
+  // transformation), so edits typed in two windows at the same moment are all kept, in every window.
+  // An op is {c: [{at, del, ins}], eol?}: changes sorted by `at`, positions in the text before the op, as Monaco reports
+  // them; eol when the op switched the line separator.
+  const newSync = () => ({ rev: 0, shared: false, sent: null, buffer: [] });
+
+  // `pos` in the text after `op`. after: a point where op inserted text goes behind that text.
+  function mapPoint(pos, op, after) {
+    let shift = 0;
+    for (const c of op.c) {
+      const end = c.at + c.del;
+      if (end < pos || (end === pos && (c.del > 0 || after))) { shift += c.ins.length - c.del; continue; }
+      if (c.at < pos) return c.at + shift + (after ? c.ins.length : 0);
+      break;
+    }
+    return pos + shift;
+  }
+  // The parts of [s, e) that `op` left in place, as [start, length] in the text after it: text another window inserted
+  // inside a range this one deletes is kept.
+  function survivors(s, e, op) {
+    const parts = [];
+    let x = s;
+    for (const c of op.c) {
+      if (c.at >= e) break;
+      if (c.at + c.del < x) continue;
+      if (c.at > x) parts.push([x, c.at]);
+      x = Math.max(x, c.at + c.del);
+    }
+    if (x < e) parts.push([x, e]);
+    return parts.map(([p, q]) => [mapPoint(p, op, true), q - p]);
+  }
+  // Op a made on the same text as op b, moved to apply after b. aFirst: a comes first in the shared order, so at the
+  // same point a's insertion goes before b's.
+  function over(a, b, aFirst) {
+    const out = [];
+    const put = (at, del, ins) => {
+      const last = out[out.length - 1];
+      if (last && last.at + last.del === at) Object.assign(last, { del: last.del + del, ins: last.ins + ins });
+      else out.push({ at, del, ins });
+    };
+    for (const c of a.c) {
+      if (!c.del) { put(mapPoint(c.at, b, !aFirst), 0, c.ins); continue; }
+      const parts = survivors(c.at, c.at + c.del, b);
+      put(parts.length ? parts[0][0] : mapPoint(c.at, b, true), 0, c.ins);
+      for (const [p, n] of parts) put(p, n, '');
+    }
+    return { ...a, c: out.filter((c) => c.del || c.ins) };
+  }
+  // Two op lists made on the same text -> [as after bs, bs after as].
+  function xform(as, bs, aFirst) {
+    const a = [...as];
+    const b2 = bs.map((b) => {
+      for (let i = 0; i < a.length; i++) {
+        const ai = a[i];
+        a[i] = over(ai, b, aFirst);
+        b = over(b, ai, !aFirst);
+      }
+      return b;
+    });
+    return [a, b2];
   }
 
-  // Applies another window's text as one minimal edit so cursors and undo history survive.
-  function applyRemoteText(doc, text) {
+  const setModelEOL = (model, eol) => model.setEOL(eol === '\n' ? ide.monaco.editor.EndOfLineSequence.LF : ide.monaco.editor.EndOfLineSequence.CRLF);
+  function applyOps(doc, ops) {
+    const m = doc.model;
+    applyingRemote = true;
+    try {
+      for (const op of ops) {
+        const edits = op.c.map((c) => ({ range: ide.monaco.Range.fromPositions(m.getPositionAt(c.at), m.getPositionAt(c.at + c.del)), text: c.ins }));
+        if (edits.length) m.pushEditOperations([], edits, () => null);
+        if (op.eol && m.getEOL() !== op.eol) setModelEOL(m, op.eol);
+      }
+    } finally { applyingRemote = false; }
+    // A save announced by another window before its last edits arrived (see doc:saved).
+    if (doc.savedText !== undefined && m.getValue() === doc.savedText) markSaved(doc, doc.savedText);
+  }
+
+  function localEdit(doc, e) {
+    doc.savedText = undefined;
+    const s = doc.sync;
+    if (!s.shared) return;
+    const c = e.changes.map((x) => ({ at: x.rangeOffset, del: x.rangeLength, ins: x.text })).sort((x, y) => x.at - y.at);
+    s.buffer.push(e.isEolChange ? { c, eol: e.eol } : { c });
+    flushSync(doc);
+  }
+  function flushSync(doc) {
+    const s = doc.sync;
+    if (!s.shared || s.sent || !s.buffer.length) return;
+    s.sent = s.buffer;
+    s.buffer = [];
+    ide.api.send('doc:op', { path: doc.path, base: s.rev, ops: s.sent });
+  }
+
+  // Applies another window's text as one minimal edit so cursors and undo history survive. remote: the text is the
+  // shared document's already, so it is not sent on as this window's edit.
+  function applyText(doc, text, { remote = true } = {}) {
     const cur = doc.model.getValue();
     if (cur === text) return;
     let start = 0;
@@ -215,20 +309,70 @@
     let endNew = text.length;
     while (endCur > start && endNew > start && cur[endCur - 1] === text[endNew - 1]) { endCur--; endNew--; }
     const range = ide.monaco.Range.fromPositions(doc.model.getPositionAt(start), doc.model.getPositionAt(endCur));
-    applyingRemote = true;
+    applyingRemote = remote;
     try { doc.model.pushEditOperations([], [{ range, text: text.slice(start, endNew) }], () => null); } finally { applyingRemote = false; }
   }
 
+  const docAt = (path) => docs.get(key(path));
   ide.api.on('window:peers', (n) => { peers = n; });
-  ide.api.on('doc:changed', ({ path, text }) => { const d = docs.get(key(path)); if (d) applyRemoteText(d, text); });
-  ide.api.on('doc:saved', ({ path, text }) => {
-    const d = docs.get(key(path));
-    if (d && d.model.getValue() === text) { d.savedVersion = d.model.getAlternativeVersionId(); d.diskHash = textHash(text); clearChanged(d); renderAllTabs(); }
+  // Joined: alone with the document (shared false, its own text stands), or sharing it from revision `rev` on, with the
+  // shared text.
+  ide.api.on('doc:synced', ({ path, rev, text, shared }) => {
+    const d = docAt(path);
+    if (!d) return;
+    d.sync = { ...newSync(), rev, shared };
+    if (text === undefined) return;
+    applyText(d, text);
+    const crlf = text.includes('\r\n');
+    if (/\r\n|\n/.test(text) && crlf !== (d.model.getEOL() === '\r\n')) { applyingRemote = true; try { setModelEOL(d.model, crlf ? '\r\n' : '\n'); } finally { applyingRemote = false; } }
   });
-  ide.api.on('doc:opened', ({ path }) => {
-    const d = docs.get(key(path));
-    if (d && docDirty(d)) ide.api.send('doc:changed', { path: d.path, text: d.model.getValue() });
+  // Another window opened this document: this one hands over the text, and from now on sends its edits.
+  ide.api.on('doc:share', ({ path }) => {
+    const d = docAt(path);
+    if (!d) return void ide.api.send('doc:leave', { path });
+    Object.assign(d.sync, { shared: true, sent: null, buffer: [] });
+    ide.api.send('doc:snapshot', { path, rev: d.sync.rev, text: d.model.getValue() });
   });
+  ide.api.on('doc:unshared', ({ path }) => { const d = docAt(path); if (d) d.sync = { ...newSync(), rev: d.sync.rev }; });
+  ide.api.on('doc:op', ({ path, rev, ops, mine }) => {
+    const d = docAt(path);
+    if (!d || !d.sync.shared) return;
+    const s = d.sync;
+    s.rev = rev;
+    if (mine) { s.sent = null; flushSync(d); return; }
+    let remote = ops;
+    if (s.sent) [remote, s.sent] = xform(remote, s.sent, true);
+    [remote, s.buffer] = xform(remote, s.buffer, true);
+    applyOps(d, remote);
+  });
+  // Refused (another window's edit came first, and has arrived here since): sent again on top of it.
+  ide.api.on('doc:nack', ({ path }) => {
+    const d = docAt(path);
+    if (!d?.sync.sent) return;
+    d.sync.buffer = [...d.sync.sent, ...d.sync.buffer];
+    d.sync.sent = null;
+    flushSync(d);
+  });
+
+  // A save (or reload) in another window. Its last edits may still be on their way: the document turns unmodified once
+  // its text is the saved one.
+  function markSaved(d, text) {
+    d.savedText = undefined;
+    d.savedVersion = d.model.getAlternativeVersionId();
+    Object.assign(d, { diskHash: textHash(text), conflict: false, skipNoted: false });
+    clearChanged(d);
+    renderAllTabs();
+  }
+  ide.api.on('doc:saved', ({ path, text, encoding, encodingPinned }) => {
+    const d = docAt(path);
+    if (!d) return;
+    if (encoding) { Object.assign(d, { encoding, encodingPinned }); updateStatus(); }
+    if (d.model.getValue() === text) markSaved(d, text); else d.savedText = text;
+  });
+  // Tells the other windows that the document's text is now the file's (saved, reloaded, converted).
+  function announceSaved(doc, text = doc.model.getValue()) {
+    if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text, encoding: doc.encoding, encodingPinned: doc.encodingPinned });
+  }
 
   // ---------- tabs ----------
   function makeFileTab(doc, group) {
@@ -359,10 +503,12 @@
     requestAnimationFrame(() => { renderQueued = false; renderAllTabs(); });
   };
 
-  let lastDirty = false;
+  // The main process keeps every window's modified files, so closing the main window can ask about all of them at once.
+  let lastDirty = '[]';
   function reportDirty() {
-    const any = [...docs.values()].some(docDirty);
-    if (any !== lastDirty) { lastDirty = any; ide.api.send('window:setDirty', any); }
+    const paths = [...docs.values()].filter(docDirty).map((d) => d.path);
+    const now = JSON.stringify(paths);
+    if (now !== lastDirty) { lastDirty = now; ide.api.send('window:setDirty', paths); }
   }
 
   // Returns true once closed; when a modified document has to ask first, a promise of whether it closed (false: the
@@ -811,7 +957,7 @@
     if (doc?.fresh) { delete doc.fresh; ide.emit('fileOpened', tab); }
     setActiveGroup(g);
     activateTab(g, tab);
-    if (opts.text !== undefined && doc && doc.model.getValue() !== opts.text) applyRemoteText(doc, opts.text);
+    if (opts.text !== undefined && doc) applyText(doc, opts.text, { remote: false });
     if (opts.line && tab.kind === 'file') {
       const pos = { lineNumber: opts.line, column: opts.col || 1 };
       g.editor.setPosition(pos);
@@ -1004,7 +1150,12 @@
   async function confirmOverwrite(doc) {
     if (doc.untitled || doc.model.uri.scheme !== 'file') return true;
     let r = null;
-    try { r = await readDisk(doc); } catch { return true; } // gone: write recreates it
+    try { r = await readDisk(doc); } catch {
+      // Renamed or deleted elsewhere (another window, Explorer, git): bringing the file back is the user's call. A file
+      // that exists but cannot be read is written, as before.
+      if (await ide.api.exists(doc.path).catch(() => true)) return true;
+      return ide.ui.confirm(tr('{name} no longer exists on disk. Save it again?', { name: basename(doc.path) }), { ok: tr('Save') });
+    }
     if (r?.text === undefined || textHash(r.text) === doc.diskHash) return true;
     if (r.text === diskText(doc)) return true;
     return new Promise((resolve) => {
@@ -1015,15 +1166,10 @@
         width: 480,
         onClose: () => resolve(choice),
         buttons: [
-          { label: tr('Load File System Changes'), run: () => {
-            if (!doc.model.isDisposed()) {
-              doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
-              adoptSeparator(doc, r.text);
-              doc.savedVersion = doc.model.getAlternativeVersionId();
-              Object.assign(doc, { diskHash: textHash(r.text), conflict: false, skipNoted: false });
-              clearChanged(doc);
-              renderAllTabs();
-            }
+          { label: tr('Load File System Changes'), run: async () => {
+            let fresh = r;
+            try { fresh = await readForReload(doc); } catch {}
+            if (!doc.model.isDisposed() && fresh.text !== undefined) adoptDisk(doc, fresh);
           } },
           // The disk version is now acknowledged: a save that then fails (read-only file) does not ask again.
           { label: tr('Keep Memory Changes'), primary: true, run: () => { choice = true; doc.diskHash = textHash(r.text); } },
@@ -1033,21 +1179,26 @@
     });
   }
 
-  async function saveDoc(doc, { auto = false, overwrite = false } = {}) {
+  // force: write a document without unsaved changes too (Convert to). -> the text written, or null.
+  async function saveDoc(doc, { auto = false, overwrite = false, force = false } = {}) {
     while (doc.saving) await doc.saving;
-    if (!docDirty(doc) || doc.model.isDisposed()) return;
-    if (auto && !(await autoSavable(doc))) return;
-    if (!auto && !overwrite && !(await confirmOverwrite(doc))) return;
+    if (doc.model.isDisposed() || !(docDirty(doc) || force)) return null;
+    if (auto && !(await autoSavable(doc))) return null;
+    if (!auto && !overwrite && !(await confirmOverwrite(doc))) return null;
     let done;
     doc.saving = new Promise((r) => { done = r; });
-    try { await writeDoc(doc, auto); } finally { doc.saving = null; done(); }
+    try { return await writeDoc(doc, auto); } finally { doc.saving = null; done(); }
   }
+
+  // A refused CP949 save says so in the UI language.
+  const saveError = (e) => (/\bCP949\b/.test(String(e?.message || e))
+    ? tr('Some characters cannot be saved in CP949. Convert the file to UTF-8 first.') : ide.util.errorText(e));
 
   async function writeDoc(doc, auto) {
     const tab = firstTabFor(doc) || { kind: 'file', path: doc.path, model: doc.model, doc };
     ide.emit('beforeSave', tab);
-    if (!(await runSaveActions(doc, auto)) && auto) return;
-    if (doc.model.isDisposed()) return;
+    if (!(await runSaveActions(doc, auto)) && auto) return null;
+    if (doc.model.isDisposed()) return null;
     // The version written, not the one after the write: edits typed while it runs are not on disk yet.
     // In the file's own line separator (diskText); a file with mixed ones is written with the main one only.
     const text = diskText(doc);
@@ -1055,22 +1206,23 @@
     try {
       await ide.api.invoke('fs:writeText', doc.path, text, doc.encoding);
     } catch (e) {
-      const error = ide.util.errorText(e);
+      const error = saveError(e);
       if (!auto) ide.ui.alert(tr('Could not save {name}: {error}', { name: basename(doc.path), error }));
       else {
         doc.autoSaveFailed = version;
         ide.emit('autoSaveSkipped', { path: doc.path, reason: 'failed', error });
       }
-      return;
+      return null;
     }
     doc.savedVersion = version;
     doc.diskHash = textHash(text);
     doc.conflict = doc.skipNoted = false;
     doc.mixedSeparators = false;
     if (!docDirty(doc)) clearChanged(doc);
-    if (peers > 1) ide.api.send('doc:saved', { path: doc.path, text: doc.lineSeparator === '\r' ? text.replace(/\r/g, '\r\n') : text });
+    announceSaved(doc, doc.lineSeparator === '\r' ? text.replace(/\r/g, '\r\n') : text);
     for (const t of tabsOfDoc(doc)) t.preview = false;
     ide.emit('fileSaved', tab);
+    return text;
   }
   // overwrite: the user already chose to write over a disk change (no File Cache Conflict question).
   ide.saveTab = async (tab, { overwrite = false } = {}) => { if (tab?.doc) await saveDoc(tab.doc, { overwrite }); renderAllTabs(); };
@@ -1085,21 +1237,35 @@
     if (list.length) renderAllTabs();
   };
 
+  // Takes text just read from the file as the document's saved state, with the file's line separator and the encoding
+  // it was read in (a file re-encoded outside PyIDE keeps its new encoding on the next save). Other windows showing the
+  // document take it as saved too.
+  function adoptDisk(doc, r) {
+    if (r.text !== diskText(doc)) doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
+    adoptSeparator(doc, r.text);
+    if (r.encoding) doc.encoding = r.encoding;
+    doc.savedVersion = doc.model.getAlternativeVersionId();
+    Object.assign(doc, { diskHash: textHash(r.text), conflict: false, skipNoted: false });
+    clearChanged(doc);
+    announceSaved(doc);
+    renderAllTabs();
+    updateStatus();
+  }
+
+  async function reloadDoc(doc) {
+    if (docDirty(doc)) return;
+    let r;
+    try { r = await readForReload(doc); } catch { return; }
+    // Typed into or closed while the file was read: the editor's text wins.
+    if (doc.model.isDisposed() || docDirty(doc) || r.text === undefined) return;
+    if (r.text !== diskText(doc)) return adoptDisk(doc, r);
+    // The same text in another encoding: re-encoded outside PyIDE when the document's own encoding no longer reads it
+    // (not a CP949 file that is all ASCII, which detection calls UTF-8).
+    if (r.encoding !== doc.encoding && (await readDisk(doc).catch(() => null))?.text !== r.text) adoptDisk(doc, r);
+  }
   // Reloads open documents whose file changed on disk (after formatters, git checkout, replace-in-files...).
   ide.reloadFromDisk = async (paths) => {
-    for (const doc of [...docs.values()].filter((d) => !paths || paths.some((p) => samePath(p, d.path)))) {
-      if (docDirty(doc)) continue;
-      let r;
-      try { r = await readDisk(doc); } catch { continue; }
-      // Typed into or closed while the file was read: the editor's text wins.
-      if (doc.model.isDisposed() || docDirty(doc)) continue;
-      if (r.text === undefined || r.text === diskText(doc)) continue;
-      doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: r.text }], () => null);
-      adoptSeparator(doc, r.text);
-      doc.savedVersion = doc.model.getAlternativeVersionId();
-      Object.assign(doc, { diskHash: textHash(r.text), conflict: false, skipNoted: false });
-      clearChanged(doc);
-    }
+    for (const doc of [...docs.values()].filter((d) => !paths || paths.some((p) => samePath(p, d.path)))) await reloadDoc(doc);
     renderAllTabs();
   };
 
@@ -1113,7 +1279,7 @@
       let r;
       try { r = await readDisk(doc); } catch { continue; }
       if (r?.text === undefined || doc.model.isDisposed() || doc.saving || textHash(r.text) === doc.diskHash) continue;
-      if (!docDirty(doc)) await ide.reloadFromDisk([doc.path]);
+      if (!docDirty(doc)) await reloadDoc(doc);
       else doc.conflict = true;
     }
   }
@@ -1128,6 +1294,53 @@
     checkDisk([...docs.values()].filter((d) => overflow || paths.some((p) => samePath(p, d.path))));
   });
   window.addEventListener('focus', () => checkDisk([...docs.values()]));
+
+  // ---------- files renamed, moved or deleted ----------
+  // A document follows its file in every window. Renamed or moved (to: the new path), its tabs keep their place, pin and
+  // caret, and its unsaved text stays unsaved under the new name; deleted (to: null), its tabs close. The window that
+  // renamed or deleted calls ide.documentsMoved once the disk operation succeeded; the other windows hear doc:moved.
+  async function followMove(from, to) {
+    for (const doc of [...docs.values()].filter((d) => isUnder(d.path, from))) {
+      const tabs = groups.flatMap((g) => g.tabs.filter((t) => t.doc === doc));
+      if (!to) { for (const t of tabs) closeTabObj(t, true); continue; }
+      const target = to + doc.path.slice(from.length);
+      if (key(target) === key(doc.path)) { doc.path = target; continue; }
+      const moved = await loadDoc(target, { asText: doc.forcedText }).catch(() => null);
+      if (!moved?.model) continue;
+      // A tab that shows the file (not a compare tab holding its document) is replaced in its place, without becoming
+      // active (no tab switch, so nothing is auto-saved); a modified document shown nowhere else gets a tab so its text
+      // is not lost. The unsaved text stays unsaved.
+      const shown = tabs.filter((t) => t.kind === 'file' || t.viewer);
+      const places = shown.length ? shown : docDirty(doc) ? [null] : [];
+      for (const t of places) {
+        const g = t?.group || activeGroup;
+        let nt;
+        if (t?.viewer) {
+          nt = openViewerTab(g, target, t.viewer, moved);
+          g.tabs.splice(g.tabs.indexOf(nt), 1);
+          g.tabs.splice(g.tabs.indexOf(t), 0, nt);
+        } else {
+          nt = makeFileTab(moved, g);
+          addTab(g, nt, t ? g.tabs.indexOf(t) : undefined);
+        }
+        if (t) Object.assign(nt, { pinned: t.pinned, viewState: g.active === t && t.kind === 'file' ? g.editor.saveViewState() : t.viewState });
+        if (moved.fresh) { delete moved.fresh; ide.emit('fileOpened', nt); }
+        if (t && g.active === t) activateTab(g, nt);
+      }
+      if (docDirty(doc)) applyText(moved, doc.model.getValue(), { remote: false });
+      for (const t of tabs) closeTabObj(t, true, { moving: true });
+      if (!tabsOfDoc(moved).length) releaseDoc(moved);
+    }
+    renderAllTabs();
+    updateStatus();
+  }
+  let moves = Promise.resolve();
+  const queueMove = (from, to) => (moves = moves.then(() => followMove(from, to)).catch((err) => console.error(err)));
+  ide.documentsMoved = (from, to) => {
+    if (peers > 1) ide.api.send('doc:moved', { from, to });
+    return queueMove(from, to);
+  };
+  ide.api.on('doc:moved', ({ from, to }) => queueMove(from, to));
 
   // ---------- status bar: encoding ----------
   const ENCODING_LABEL = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 BOM', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE', 'utf-16le-nobom': 'UTF-16 LE (no BOM)', 'utf-16be-nobom': 'UTF-16 BE (no BOM)', cp949: 'CP949 (EUC-KR)' };
@@ -1158,34 +1371,37 @@
           }
           // Too large to read as text, or the tab was closed or edited while the file was read.
           if (res.text === undefined || doc.model.isDisposed() || docDirty(doc)) return;
-          doc.encoding = enc;
-          doc.model.pushEditOperations([], [{ range: doc.model.getFullModelRange(), text: res.text }], () => null);
-          adoptSeparator(doc, res.text);
-          doc.savedVersion = doc.model.getAlternativeVersionId();
-          doc.diskHash = textHash(res.text);
-          clearChanged(doc);
-          renderAllTabs();
-          updateStatus();
+          doc.encodingPinned = true;
+          adoptDisk(doc, { text: res.text, encoding: enc });
         },
       })),
       { separator: true },
       ...Object.entries(ENCODING_LABEL).filter(([enc]) => enc !== doc.encoding).map(([enc, label]) => ({
-        label: tr('Convert to {encoding}', { encoding: label }),
-        run: async () => {
-          const prev = doc.encoding;
-          doc.encoding = enc;
-          try { await ide.api.invoke('fs:writeText', doc.path, diskText(doc), enc); } catch (e) {
-            doc.encoding = prev;
-            ide.ui.alert(ide.util.errorText(e));
-            return;
-          }
-          doc.savedVersion = doc.model.getAlternativeVersionId();
-          renderAllTabs();
-          updateStatus();
-        },
+        label: tr('Convert to {encoding}', { encoding: label }), run: () => convertTo(doc, enc, label),
       })),
     ]);
   };
+
+  // Writes the document in another encoding through the normal save (save actions, File Cache Conflict, the other
+  // windows told), unsaved changes included. A file PyIDE would not read back as the same text (BOM-less UTF-16 of
+  // text with hardly any ASCII looks binary to detection) goes back to its old encoding instead.
+  async function convertTo(doc, enc, label) {
+    // Asked in the old encoding, which is the one the file on disk is in.
+    if (!(await confirmOverwrite(doc))) return;
+    const prev = { encoding: doc.encoding, encodingPinned: doc.encodingPinned };
+    Object.assign(doc, { encoding: enc, encodingPinned: true });
+    const written = await saveDoc(doc, { force: true, overwrite: true });
+    if (written === null) { Object.assign(doc, prev); updateStatus(); return; }
+    let back = null;
+    try { back = await ide.api.invoke('fs:readText', doc.path); } catch {}
+    if (back && back.text !== written) {
+      Object.assign(doc, prev);
+      await saveDoc(doc, { force: true, overwrite: true });
+      ide.ui.alert(tr('{name} was not converted to {encoding}: PyIDE could not read the file back as text in that encoding when it is opened again.', { name: basename(doc.path), encoding: label }));
+    }
+    renderAllTabs();
+    updateStatus();
+  }
 
   // ---------- menus ----------
   const fileTabs = (g) => g.tabs;
@@ -1327,15 +1543,18 @@
     for (const f of files) await ide.openFile(f.path, { line: f.line, col: f.col, text: f.text, asText: f.asText });
   });
 
-  // A window with unsaved documents asks before it closes (the main process holds the close until then).
-  // Clicking the window's close button again while it asks does not stack a second dialog.
+  // A window with unsaved documents asks before it closes (the main process holds the close until then). Closing the
+  // main window closes them all, so it asks about every window's files at once (others: modified files open only in
+  // other windows) and nothing closes before the answer. Clicking the close button again while it asks does not stack
+  // a second dialog.
   let confirmingClose = false;
-  ide.api.on('window:confirmClose', () => {
+  ide.api.on('window:confirmClose', ({ others = [] } = {}) => {
     if (confirmingClose) return;
-    const dirtyDocs = [...docs.values()].filter(docDirty);
-    if (!dirtyDocs.length) { ide.api.invoke('window:closeNow'); return; }
+    const own = [...docs.values()].filter(docDirty).map((d) => d.path);
+    const paths = [...own, ...others.filter((p) => !own.some((o) => samePath(o, p)))];
+    if (!paths.length) { ide.api.invoke('window:closeNow'); return; }
     const list = el('ul', 'close-confirm-list');
-    for (const d of dirtyDocs) list.appendChild(el('li', null, ide.util.rel(d.path)));
+    for (const p of paths) list.appendChild(el('li', null, ide.util.rel(p)));
     const body = el('div');
     body.append(el('div', null, tr('These files have unsaved changes:')), list);
     confirmingClose = true;
@@ -1345,12 +1564,22 @@
       width: 460,
       onClose: () => { confirmingClose = false; },
       buttons: [
-        // A file that could not be saved (its error was shown) keeps the window open.
-        { label: tr('Save All'), primary: true, run: async () => { await ide.saveAll(); if (![...docs.values()].some(docDirty)) ide.api.invoke('window:closeNow'); } },
-        { label: tr("Don't Save"), run: () => { ide.api.send('window:setDirty', false); ide.api.invoke('window:closeNow'); } },
+        // A file that could not be saved (its error was shown) keeps the windows open.
+        { label: tr('Save All'), primary: true, run: async () => {
+          await ide.saveAll();
+          const othersSaved = !others.length || await ide.api.invoke('window:saveOthers');
+          if (othersSaved && ![...docs.values()].some(docDirty)) ide.api.invoke('window:closeNow');
+        } },
+        { label: tr("Don't Save"), run: () => ide.api.invoke('window:closeNow') },
         { label: tr('Cancel') },
       ],
     });
+  });
+  // The main window's Save All, for the files open only here.
+  ide.api.on('window:saveAll', async (id) => {
+    await ide.saveAll();
+    reportDirty();
+    ide.api.send('window:saved', id);
   });
 
   // ---------- actions ----------

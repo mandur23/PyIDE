@@ -159,6 +159,27 @@ try {
   check((await h.doc('main.py')).startsWith('import geo.figures\n') && h.disk('geo/report.py').startsWith('from . import figures\n'), 'Ctrl+Shift+Z redoes it');
   check((await appOutput()) === baseline, 'the program prints the same after undo and redo');
 
+  // Undoing the rename while the renamed module has unsaved text: the text is saved and moves back with the file.
+  const TYPED = '# typed after the rename\n';
+  await openFile(t, 'geo/figures.py');
+  await js(`(() => { const m = ide.editor.getModel(); m.pushEditOperations([], [{ range: new monaco.Range(1, 1, 1, 1), text: ${q(TYPED)} }], () => null); return true; })()`);
+  await openFile(t, 'main.py');
+  await js(`ide.editor.focus(), true`);
+  await press('Ctrl+Z');
+  await until(`(async () => await ide.api.exists(${q(h.P('geo/shapes.py'))}))()`, 'rename undone with the module modified', 30000);
+  await until(`ide.tabs.some((t) => t.kind === 'file' && /geo\\\\shapes\\.py$/i.test(t.path))`, 'module tab back').catch(() => {});
+  const shapesText = h.disk('geo/shapes.py');
+  check(shapesText.startsWith(TYPED) || ((await h.doc('geo/shapes.py')) || '').startsWith(TYPED), 'unsaved text in the moved module survives undoing the rename');
+  if (shapesText.startsWith(TYPED)) {
+    await openFile(t, 'geo/shapes.py');
+    await js(`(() => { const m = ide.editor.getModel(); m.pushEditOperations([], [{ range: new monaco.Range(1, 1, 2, 1), text: '' }], () => null); return true; })()`);
+    await js('ide.saveAll()');
+  }
+  await openFile(t, 'main.py');
+  await js(`ide.editor.focus(), true`);
+  await press('Ctrl+Shift+Z');
+  await until(`(async () => await ide.api.exists(${q(h.P('geo/figures.py'))}))()`, 'rename redone again', 30000);
+
   // ---- Rename… on a package from the context menu, through the preview ----
   await h.contextMenu('geo', 'Rename…');
   await h.dialog('rfRenameModuleDialog');

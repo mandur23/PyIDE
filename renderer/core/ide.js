@@ -79,15 +79,26 @@ const settingsCache = window.__initialSettings || {};
 // left alone (their readers convert), and so are recent projects without a path string, which are dropped here.
 const kindOf = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
 if (Array.isArray(settingsCache.recentProjects)) settingsCache.recentProjects = settingsCache.recentProjects.filter((p) => typeof p?.path === 'string' && p.path);
-let settingsDirty = false;
+// The keys set since the last write: only these are written onto the file, so another PyIDE instance on the same
+// user data (or a detached window) keeps the keys it set.
+const changedKeys = new Set();
+let retryTimer = 0;
+let failedWrites = 0;
 const flushSettings = () => {
-  if (!settingsDirty) return;
-  settingsDirty = false;
+  if (!changedKeys.size) return;
+  const keys = [...changedKeys];
+  changedKeys.clear();
+  const result = api.saveSettingsSync(settingsCache, keys);
+  if (result === true) { failedWrites = 0; return; }
   // The main process could not write the file (it was locked, the disk full): keep the changes pending and retry.
-  if (api.saveSettingsSync(settingsCache) === false) {
-    settingsDirty = true;
-    setTimeout(flushSettings, 2000);
-  }
+  // When the retry fails too, say so, once until a write succeeds again.
+  for (const k of keys) changedKeys.add(k);
+  if (!retryTimer) retryTimer = setTimeout(() => { retryTimer = 0; flushSettings(); }, 2000);
+  if (++failedWrites !== 2) return;
+  ide.notifications?.notify({
+    title: tr('Settings cannot be saved'), kind: 'warning', group: 'Settings', raw: true,
+    text: tr('PyIDE cannot write settings.json: {error}. Your changes stay in effect and PyIDE keeps retrying.', { error: ipcError(result) }),
+  });
 };
 // pagehide comes after every beforeunload listener, so changes those listeners make are written too.
 addEventListener('beforeunload', flushSettings);
@@ -100,10 +111,8 @@ ide.settings = {
   },
   set(key, value) {
     settingsCache[key] = value;
-    if (!settingsDirty) {
-      settingsDirty = true;
-      setTimeout(flushSettings);
-    }
+    if (!changedKeys.size) setTimeout(flushSettings);
+    changedKeys.add(key);
     ide.emit('settingsChanged', key, value);
   },
   all: () => ({ ...settingsCache }),
@@ -1270,10 +1279,20 @@ const FS_ERRORS = {
   EROFS: tr('The disk is read-only'),
   ENAMETOOLONG: tr('The path is too long'),
 };
+// Node's and Chromium's network failures (connect ECONNREFUSED 203.0.113.5:443, getaddrinfo ENOTFOUND host,
+// net::ERR_CONNECTION_REFUSED), and a program spawn could not find (spawn git ENOENT), read as a sentence too. A
+// failure on this computer's own address (a debugger or helper on 127.0.0.1) is not the internet's: it keeps its text.
+const NETWORK = /\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)\b|\bnet::ERR_[A-Z_]+/;
+const LOOPBACK = /\b127\.\d+\.\d+\.\d+\b|\blocalhost\b|(?<![\w:])::1(?![\w.])/i;
 const ipcError = (e) => {
   const text = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
   const code = /^([A-Z]+): /.exec(text)?.[1];
-  return FS_ERRORS[code] || text;
+  if (FS_ERRORS[code]) return FS_ERRORS[code];
+  const network = NETWORK.exec(text);
+  if (network && !LOOPBACK.test(text)) return tr('Cannot reach the server ({code}). Check the internet connection or the proxy settings.', { code: network[0] });
+  const program = /^spawn (.+) ENOENT$/.exec(text)?.[1];
+  if (program) return tr('{program} is not installed or not on PATH.', { program: basename(program) });
+  return text;
 };
 ide.util.errorText = ipcError;
 
@@ -1315,16 +1334,14 @@ async function createEntry(isDir) {
 }
 
 // Renames or moves a file or folder. Windows' rename replaces an existing file, so an existing target is refused.
-// Open files under it are saved first and reopened from their new place.
+// Open documents under it, in every window, move along with their unsaved text: nothing is saved first, so a save
+// that fails (a read-only file) or is cancelled (File Cache Conflict) cannot lose an edit.
 async function moveTo(entry, to) {
   if (!samePath(entry.path, to) && await ide.api.exists(to)) return void ide.ui.alert(tr('{path} already exists', { path: to }));
-  const open = ide.tabs.filter((t) => t.kind === 'file' && isUnder(t.path, entry.path));
-  for (const t of open) if (ide.isDirty(t)) await ide.saveTab(t);
   try { await ide.api.rename(entry.path, to); } catch (e) { return void ide.ui.alert(ipcError(e)); }
-  for (const t of open) ide.closeTab(t.path, true);
+  await ide.documentsMoved(entry.path, to);
   renderTree();
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
-  for (const p of new Set(open.map((t) => t.path))) ide.openFile(to + p.slice(entry.path.length));
 }
 
 // A plugin can take over a rename or move from the tree (refactor: a Python module with its imports):
@@ -1402,10 +1419,8 @@ async function deleteEntry(entry) {
   try { await ide.api.trash(entry.path); } catch (e) {
     return void ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
   }
-  // Every tab of a deleted file in every group, also a compare tab holding its document under another name (its own
-  // path is only a title), so nothing saves the document back to the deleted path.
-  const gone = (p) => !!p && isUnder(p, entry.path);
-  ide.groups().flatMap((g) => g.tabs).filter((t) => gone(t.path) || gone(t.doc?.path)).forEach((t) => ide.closeTabObject(t, true));
+  // Every tab of a deleted file closes, in every window, so nothing saves the document back to the deleted path.
+  await ide.documentsMoved(entry.path, null);
   renderTree();
   ide.emit('filesChanged', { deleted: [entry.path] });
 }
@@ -1640,7 +1655,58 @@ ide.toLocalPath = (p) => {
   }
   return p;
 };
-ide.currentInterp = () => ide.interps[$('interpSelect').selectedIndex] || null;
+// The selected interpreter, or null: none found, or the project's chosen one is invalid (see invalidInterp).
+ide.currentInterp = () => {
+  const it = ide.interps[$('interpSelect').selectedIndex];
+  return it && !it.invalid ? it : null;
+};
+function showInterp(it) {
+  $('statusInterpLabel').textContent = it?.invalid ? tr('Invalid interpreter: {name}', { name: it.name }) : it?.label || tr('No interpreter');
+  $('statusInterp').classList.toggle('invalid', !!it?.invalid);
+}
+// The IDE's helper scripts (console, debugger, package tools) need Python 3.8 or newer.
+const tooOld = (version) => {
+  const [major, minor] = String(version || '').split('.').map((n) => parseInt(n, 10));
+  return Number.isInteger(major) && Number.isInteger(minor) && (major < 3 || (major === 3 && minor < 8));
+};
+// The project's chosen interpreter is not in the list: its python.exe is gone, or it does not start (a venv whose
+// base Python was uninstalled). Another Python does not silently take its place: it is listed as invalid and stays
+// selected, so nothing runs until the user chooses (PyCharm's "Invalid Python interpreter selected for the project").
+// One that starts but is not found by the list (a Python the py launcher no longer names) is listed as it is.
+// Safe Mode keeps the project's own venvs unstarted, so there a venv is not checked.
+async function chosenInterp(root, interps) {
+  const chosen = root ? ide.settings.get(`interpreter.${root}`, '') : '';
+  if (!/^([a-z]:[\\/]|\\\\)/i.test(chosen) || interps.some((i) => samePath(i.executable, chosen))) return null;
+  const d = await ide.api.invoke('py:diagnose', root, chosen).catch(() => null);
+  const venv = /[\\/]Scripts[\\/]python\.exe$/i.test(chosen) ? dirname(dirname(chosen)) : null;
+  const name = venv ? (isUnder(venv, root) ? ide.util.rel(venv) : basename(venv)) : chosen;
+  if (d?.state === 'ok') return { cmd: chosen, args: [], label: `${name} (Python ${d.version})`, executable: chosen, version: d.version };
+  if (d?.state !== 'missing' && d?.state !== 'fails') return null;
+  const reason = d.state === 'missing' ? tr('{path} does not exist.', { path: chosen }) : tr('{path} does not start: {detail}', { path: chosen, detail: d.detail });
+  return { cmd: chosen, args: [], label: tr('{name} (invalid)', { name }), name, executable: chosen, invalid: true, reason, venv, state: d.state };
+}
+const toldInvalid = new Set();
+function tellInvalid(it) {
+  const key = `${ide.root}|${it.executable}|${it.state}`.toLowerCase();
+  if (toldInvalid.has(key)) return;
+  toldInvalid.add(key);
+  const actions = [{ label: tr('Choose Interpreter…'), run: () => ide.openSettings?.('interpreter') }];
+  if (it.venv && isUnder(it.venv, ide.root) && ide.venvSetup?.recreate) actions.push({ label: tr('Recreate {name}', { name: basename(it.venv) }), run: () => ide.venvSetup.recreate(it.venv) });
+  ide.notifications?.notify({
+    title: tr('Invalid Python interpreter selected for the project'), kind: 'warning', group: 'Python Interpreter', raw: true, actions,
+    text: `${it.reason}\n${tr('PyIDE does not run the project with another Python in its place. Choose an interpreter, or recreate the virtual environment.')}`,
+  });
+}
+const toldOld = new Set();
+ide.on('interpreterChanged', (it) => {
+  if (!it?.unsupported || toldOld.has(it.executable.toLowerCase())) return;
+  toldOld.add(it.executable.toLowerCase());
+  ide.notifications?.notify({
+    title: tr('Unsupported Python version'), kind: 'warning', group: 'Python Interpreter', raw: true,
+    text: tr('{name} is Python {version}. The Python Console, the debugger and the package tools need Python 3.8 or newer.', { name: it.executable, version: it.version }),
+    actions: [{ label: tr('Choose Interpreter…'), run: () => ide.openSettings?.('interpreter') }],
+  });
+});
 // Only the latest call applies its list: probing a project's venvs can take seconds, and a call for the project
 // that was open before must not replace the list of the one opened since. An overtaken call resolves with the latest.
 let interpSeq = 0;
@@ -1648,13 +1714,15 @@ let interpLoad = null;
 ide.reloadInterpreters = () => (interpLoad = loadInterpreters(++interpSeq));
 async function loadInterpreters(seq) {
   const root = ide.root;
-  const interps = await ide.api.interpreters(root, ide.settings.get('interpreters.extra', []));
+  const found = await ide.api.interpreters(root, ide.settings.get('interpreters.extra', []));
   // Plugins add interpreters that are not local executables (remote-interp: WSL, SSH, Docker targets).
   for (const provide of ide.interpreterProviders) {
-    try { interps.push(...await provide(root)); } catch (err) { console.warn('interpreter provider failed', err); }
+    try { found.push(...await provide(root)); } catch (err) { console.warn('interpreter provider failed', err); }
   }
+  const chosen = await chosenInterp(root, found);
   if (seq !== interpSeq) return interpLoad;
-  ide.interps = interps;
+  if (chosen) found.push(chosen);
+  ide.interps = found.map((it) => (!it.invalid && tooOld(it.version) ? { ...it, unsupported: true, label: tr('{label} [unsupported]', { label: it.label }) } : it));
   const sel = $('interpSelect');
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));
@@ -1662,7 +1730,8 @@ async function loadInterpreters(seq) {
   const preferred = ide.settings.get(`interpreter.${ide.root}`, '');
   const idx = ide.interps.findIndex((i) => samePath(i.executable, preferred));
   if (idx >= 0) sel.selectedIndex = idx;
-  $('statusInterpLabel').textContent = ide.currentInterp()?.label || tr('No interpreter');
+  showInterp(ide.interps[sel.selectedIndex]);
+  if (chosen?.invalid) tellInvalid(chosen);
   ide.emit('interpreterChanged', ide.currentInterp());
 }
 // Selects an interpreter by its python.exe (the status-bar widget and the New Project wizard use this).
@@ -1675,7 +1744,7 @@ ide.setInterpreter = (executable) => {
 };
 $('interpSelect').onchange = () => {
   const it = ide.currentInterp();
-  $('statusInterpLabel').textContent = it?.label || '';
+  showInterp(ide.interps[$('interpSelect').selectedIndex]);
   if (it && ide.root) ide.settings.set(`interpreter.${ide.root}`, it.executable);
   ide.emit('interpreterChanged', it);
 };
@@ -1741,11 +1810,16 @@ async function projectChangeAllowed(next, opts = {}) {
 }
 
 // Returns false if the user kept unsaved files of the current project open (each one asks, as Close Project does),
-// did not open an untrusted folder, or a beforeProjectChange hook cancelled.
+// did not open an untrusted folder, a beforeProjectChange hook cancelled, or another open (or Close Project) started
+// meanwhile: only the latest one goes on after each wait, so two Recent Projects clicks in a row end on the second
+// project with one projectOpened, and every plugin follows that one.
+let openSeq = 0;
 ide.openProject = async (dir) => {
+  const my = ++openSeq;
+  const latest = () => my === openSeq;
   const trust = await askTrust(dir);
-  if (!trust) return false;
-  if (!(await projectChangeAllowed(dir)) || !(await ide.closeAllTabs(false))) return false;
+  if (!trust || !latest()) return false;
+  if (!(await projectChangeAllowed(dir)) || !latest() || !(await ide.closeAllTabs(false)) || !latest()) return false;
   ide.trusted = trust === 'trusted';
   if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
   ide.root = dir;
@@ -1763,8 +1837,13 @@ ide.openProject = async (dir) => {
   $('welcome').classList.add('hidden');
   document.body.classList.remove('no-project');
   await Promise.all([renderTree(), ide.reloadInterpreters()]);
+  if (!latest()) return false;
   try { localStorage.setItem('lastProject', dir); } catch {}
-  const recent = ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, dir));
+  // The list as the settings file has it now: another PyIDE instance on the same user data may have opened a project
+  // since this window read it (unless this window's own change to it is not written yet).
+  const onDisk = changedKeys.has('recentProjects') ? null : api.loadSettingsSync()?.recentProjects;
+  const recent = (Array.isArray(onDisk) ? onDisk : ide.settings.get('recentProjects', []))
+    .filter((p) => typeof p?.path === 'string' && p.path && !samePath(p.path, dir));
   ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
   ide.emit('projectOpened', dir);
   return true;
@@ -1802,6 +1881,7 @@ ide.probeProject = async (dir) => {
 // or a beforeProjectChange hook cancelled.
 ide.closeProject = async () => {
   if (!ide.root || !(await projectChangeAllowed(null)) || !(await ide.closeAllTabs(false))) return false;
+  openSeq++;
   ide.root = null;
   cutEntry = null;
   trustBar.classList.add('hidden');
@@ -1941,8 +2021,18 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   const monaco = (ide.monaco = window.monaco);
   // Diff editors leave their hunk gutter menu subscribed after dispose, and it throws "AbstractContextKeyService has
   // been disposed" whenever an editor action is registered later. PyIDE puts nothing in that menu.
+  // Disposed with its models attached, a diff editor also stays subscribed to theme changes, which keeps the whole
+  // widget (~230 KB, its DOM and listeners) alive: every diff view closed leaked one. Detaching the models first does not.
   const createDiffEditor = monaco.editor.createDiffEditor;
-  monaco.editor.createDiffEditor = (el, options, override) => createDiffEditor(el, { renderGutterMenu: false, ...options }, override);
+  monaco.editor.createDiffEditor = (el, options, override) => {
+    const diff = createDiffEditor(el, { renderGutterMenu: false, ...options }, override);
+    const dispose = diff.dispose.bind(diff);
+    diff.dispose = () => {
+      try { diff.setModel(null); } catch {}
+      dispose();
+    };
+    return diff;
+  };
   monaco.languages.setMonarchTokensProvider('python', PYTHON_GRAMMAR);
   monaco.languages.setLanguageConfiguration('python', {
     comments: { lineComment: '#' },

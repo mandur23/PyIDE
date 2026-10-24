@@ -48,6 +48,17 @@ function saveCache(file, cache, now = Date.now()) {
   }
 }
 
+// What went wrong asking OSV, for the renderer's translated note: 'timeout', 'network' (no connection: refused, DNS,
+// reset, proxy or certificate trouble; fetch's own error then carries a cause), 'server' (OSV answered an error), or
+// null for anything else, whose raw message is shown.
+function kindOf(err) {
+  const code = String(err?.cause?.code || err?.code || '');
+  if (err?.name === 'TimeoutError' || /TIMEOUT|ETIMEDOUT/.test(code)) return 'timeout';
+  if (/^OSV \d/.test(err?.message || '')) return 'server';
+  if (code || err?.cause || /fetch failed/i.test(err?.message || '')) return 'network';
+  return null;
+}
+
 exports.loadCache = loadCache;
 exports.saveCache = saveCache;
 
@@ -129,6 +140,7 @@ exports.register = (ctx) => {
     }
 
     let error = null;
+    let errorKind = null;
     let queried = 0;
     // PYIDE_OSV_URL=off (the test default): never online; only a manual check says so.
     if (payload.network && /^off$/i.test(process.env.PYIDE_OSV_URL || '')) {
@@ -142,6 +154,7 @@ exports.register = (ctx) => {
         if (missing.length) await fetchVulns(missing);
       } catch (err) {
         error = err?.name === 'TimeoutError' ? 'the request timed out' : String(err?.cause?.message || err?.message || err);
+        errorKind = kindOf(err);
       }
       save();
     }
@@ -156,7 +169,7 @@ exports.register = (ctx) => {
     const byKey = new Map(packages.map((p) => [p.key, p]));
     const requirements = reqs.filter((r) => byKey.has(r.key));
     const unknown = [...wanted.keys()].filter((k) => !cache.queries[k]).length;
-    return { packages, requirements, queried, unknown, error };
+    return { packages, requirements, queried, unknown, error, errorKind };
   });
 
   // The "Upgrade to <fixed>" quick fix: {kind, text: the requirement as the editor holds it now (requirements.txt:

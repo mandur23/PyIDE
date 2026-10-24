@@ -10,6 +10,8 @@ const NOISE = /(^|[\\/])(\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_ca
 
 function register({ ipcMain }) {
   const watchers = new Map(); // webContents id -> {close()}
+  // One 'destroyed' listener per window, however often it opens another project: it closes whatever watches then.
+  const tracked = new WeakSet();
 
   function watch(sender, root) {
     watchers.get(sender.id)?.close();
@@ -49,7 +51,11 @@ function register({ ipcMain }) {
     start();
     const entry = { close: () => { clearTimeout(timer); try { watcher?.close(); } catch {} } };
     watchers.set(sender.id, entry);
-    sender.once('destroyed', () => { if (watchers.get(sender.id) === entry) { entry.close(); watchers.delete(sender.id); } });
+    if (!tracked.has(sender)) {
+      tracked.add(sender);
+      const { id } = sender;
+      sender.once('destroyed', () => { watchers.get(id)?.close(); watchers.delete(id); });
+    }
     return !!watcher;
   }
 

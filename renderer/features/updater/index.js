@@ -63,7 +63,8 @@
     message(tr('Update Available'), text, buttons, () => { if (announced === entry) announced = null; });
   }
   // What main threw, without Electron's "Error invoking remote method '…': Error: " prefix.
-  const reasonOf = (err) => ide.util.errorText(err);
+  const reasonOf = (err) => (/ETIMEDOUT: the update server/.test(String(err?.message || err))
+    ? tr('The update server did not answer. Check your internet connection or proxy settings.') : ide.util.errorText(err));
   const skip = (version) => ({ label: tr('Skip This Version'), run: () => ide.settings.set(SKIPPED, version) });
   const later = { label: tr('Later') };
 
@@ -80,6 +81,8 @@
       return null;
     }
     let result;
+    // A manual check from the menu shows that it runs (the status bar's background tasks); Settings shows it on its page.
+    const checking = manual && !report ? ide.tasks?.start({ title: tr('Checking for updates…'), cancellable: false }) : null;
     try {
       result = await ide.api.invoke('updater:check', feedUrl, { channel });
     } catch (err) {
@@ -87,6 +90,8 @@
       log.warn(`update check failed: ${reason}`);
       if (manual) tell([tr('Could not check for updates.'), reason], [{ label: tr('Close'), primary: true }], true);
       return null;
+    } finally {
+      checking?.done();
     }
     const version = result.available;
     if (!version) {

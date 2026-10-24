@@ -238,7 +238,7 @@
   // ---------- evaluation ----------
   const localInterp = () => {
     const local = (i) => i && !i.target && (i.executable || i.cmd);
-    const it = local(ide.currentInterp()) ? ide.currentInterp() : ide.interps.find(local);
+    const it = local(ide.currentInterp()) ? ide.currentInterp() : ide.interps.find((i) => !i.invalid && local(i));
     return it ? { cmd: it.cmd, args: it.args || [], executable: it.executable } : null;
   };
   const interpKey = (i) => (i ? i.executable || i.cmd : null);

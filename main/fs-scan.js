@@ -22,12 +22,18 @@ const SCANS = {
     .filter((d) => !IGNORED.has(d.name))
     .map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() || (d.isSymbolicLink() && isFolderLink(path.join(dir, d.name))) }))
     .sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name)),
-  // Every file under root (at most 20,000), skipping caches, virtualenvs and the excluded folders.
+  // Every file under root (at most 20,000), skipping caches, virtualenvs and the excluded folders. A folder inside the
+  // project that cannot be read (no access, removed meanwhile) is left out; it must not cost Go to File the whole list.
   walk(root, excludedDirs = []) {
     const out = [];
     const excluded = new Set(excludedDirs.map((d) => d.toLowerCase()));
     const walk = (dir) => {
-      for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) {
+        if (dir === root) throw e;
+        return;
+      }
+      for (const d of entries) {
         if (out.length >= 20000) return;
         if (IGNORED.has(d.name) || ['.venv', 'venv', 'env'].includes(d.name)) continue;
         const p = path.join(dir, d.name);
@@ -69,7 +75,7 @@ const SCANS = {
 if (!isMainThread && workerData?.role === 'pyide-fs') {
   parentPort.on('message', ({ id, op, args }) => {
     Promise.resolve().then(() => SCANS[op](...args))
-      .then((result) => parentPort.postMessage({ id, result }), (e) => parentPort.postMessage({ id, error: e.message }));
+      .then((result) => parentPort.postMessage({ id, result }), (e) => parentPort.postMessage({ id, error: e.message, code: e.code }));
   });
 }
 

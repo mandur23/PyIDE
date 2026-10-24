@@ -54,10 +54,14 @@ function looksBinary(buf) {
   return false;
 }
 
+// A blob stored again is touched: another PyIDE instance collecting garbage spares blobs younger than GC_GRACE_MS, and
+// this one may be about to refer to an old blob its index had dropped.
 function storeBlob(blobDir, buf) {
   const h = sha1(buf);
   const p = blobPath(blobDir, h);
-  if (!fs.existsSync(p)) {
+  if (fs.existsSync(p)) {
+    try { const now = new Date(); fs.utimesSync(p, now, now); } catch {}
+  } else {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(`${p}.tmp`, zlib.gzipSync(buf));
     fs.renameSync(`${p}.tmp`, p);
@@ -148,16 +152,26 @@ if (!isMainThread && workerData?.role === 'pyide-local-history') {
 const disk = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-local-history') : null;
 const textCodec = isMainThread ? require('../text-codec') : null;
 
-// onChange: called (at most every 200 ms) after revisions or labels were added.
-function createStore(dir, root, limits, onChange) {
+// An index of another shape (another version, a hand edit) counts as none, as an unreadable one does.
+function parseIndex(text) {
+  let index = null;
+  try { index = JSON.parse(text); } catch {}
+  const ok = index && index.version === 1 && index.files && typeof index.files === 'object' && !Array.isArray(index.files) && Array.isArray(index.labels);
+  return ok ? index : null;
+}
+
+const revId = (r) => `${r.t}|${r.h}`;
+const labelId = (l) => `${l.t}|${l.l}`;
+
+// onChange: called (at most every 200 ms) after revisions or labels were added. isEnvironmentError: whether an error is
+// the computer's (a folder that cannot be written, a full disk; main/diagnostics). onWriteError(message): called once
+// when a revision or the index cannot be written.
+function createStore(dir, root, limits, onChange, { isEnvironmentError = () => false, onWriteError = () => {} } = {}) {
   const indexFile = path.join(dir, 'index.json');
   const blobDir = path.join(dir, 'blobs');
   let index;
-  try { index = JSON.parse(fs.readFileSync(indexFile, 'utf8')); } catch { index = null; }
-  // An index of another shape (another version, a hand edit) starts over, as an unreadable one does.
-  if (!index || index.version !== 1 || !index.files || typeof index.files !== 'object' || Array.isArray(index.files) || !Array.isArray(index.labels)) {
-    index = { version: 1, root, files: {}, labels: [] };
-  }
+  try { index = parseIndex(fs.readFileSync(indexFile, 'utf8')); } catch { index = null; }
+  index ||= { version: 1, root, files: {}, labels: [] };
   let saveTimer = null;
   let added = 0;
   let changeTimer = null;
@@ -170,6 +184,22 @@ function createStore(dir, root, limits, onChange) {
     queue = run.catch((err) => console.error('local history:', err));
     return run;
   };
+  // A revision that cannot be stored is skipped, and the user is told once.
+  let told = false;
+  function writeFailed(err) {
+    if (!isEnvironmentError(err)) return console.error('local history: could not save the index:', err);
+    console.warn(`local history: cannot write ${dir}: ${err?.message || err}`);
+    if (told) return;
+    told = true;
+    onWriteError(String(err?.message || err));
+  }
+  const recording = (fn) => serial(async () => {
+    try { return await fn(); } catch (err) {
+      if (!isEnvironmentError(err)) throw err;
+      writeFailed(err);
+      return false;
+    }
+  });
   const ignored = createIgnore(root);
 
   const relOf = (abs) => {
@@ -185,32 +215,75 @@ function createStore(dir, root, limits, onChange) {
   // What the worker needs to tell an unchanged recorded file from a changed one.
   const item = (rel) => { const rec = tracked(rel); return { rel, m: rec?.m, s: rec?.s }; };
 
+  // ---------- several instances ----------
+  // PyIDE instances sharing the user data (one per project, or two on one project) share index.json. Every write first
+  // merges the index on disk into this one, so neither instance drops what the other recorded, and garbage collection
+  // keeps the blobs the other's revisions use. What this store removed itself (expired revisions, a renamed file's old
+  // entry) is remembered, so it does not come back from the disk. A revision only this store still lists whose blob is
+  // gone was collected by the other instance and is dropped.
+  const removed = new Set(); // `${key}\n${revId}`
+  const removedLabels = new Set();
+  const forget = (k, revs) => { for (const r of revs) removed.add(`${k}\n${revId(r)}`); };
+  const hasBlob = (h) => h == null || fs.existsSync(blobPath(blobDir, h));
+
+  // Merges in place: an operation waiting on the worker may hold a record of this index.
+  function merge(disk) {
+    if (!disk) return;
+    for (const [k, theirs] of Object.entries(disk.files)) {
+      if (!theirs || !Array.isArray(theirs.revs) || typeof theirs.p !== 'string') continue;
+      const revs = theirs.revs.filter((r) => r && Number.isFinite(r.t) && !removed.has(`${k}\n${revId(r)}`));
+      const mine = index.files[k];
+      if (!mine) {
+        if (revs.length) index.files[k] = { ...theirs, revs };
+        continue;
+      }
+      const onDisk = new Set(revs.map(revId));
+      const own = mine.revs.filter((r) => onDisk.has(revId(r)) || hasBlob(r.h));
+      const ids = new Set(own.map(revId));
+      const newer = (revs.at(-1)?.t ?? -Infinity) > (own.at(-1)?.t ?? -Infinity);
+      // Both instances may have recorded one change (a save in one, seen by the other's watcher): as addRevision does,
+      // a revision with the content of the one before it is left out.
+      const all = [...own, ...revs.filter((r) => !ids.has(revId(r)))].sort((a, b) => a.t - b.t);
+      mine.revs = all.filter((r, i) => i === 0 || r.h !== all[i - 1].h);
+      if (newer) Object.assign(mine, { m: theirs.m, s: theirs.s, d: theirs.d });
+    }
+    const labels = new Set(index.labels.map(labelId));
+    for (const l of disk.labels) if (l && !labels.has(labelId(l)) && !removedLabels.has(labelId(l))) index.labels.push(l);
+    index.labels.sort((a, b) => a.t - b.t);
+  }
+  const readDisk = () => fs.promises.readFile(indexFile, 'utf8').then(parseIndex, () => null);
+
   // At close (and quit) the index is written synchronously, so it is on disk before the store goes away.
   function flushSync() {
     clearTimeout(saveTimer);
     saveTimer = null;
     try {
+      let disk = null;
+      try { disk = parseIndex(fs.readFileSync(indexFile, 'utf8')); } catch {}
+      merge(disk);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(`${indexFile}.tmp`, JSON.stringify(index));
       fs.renameSync(`${indexFile}.tmp`, indexFile);
     } catch (err) {
-      console.error('local history: could not save the index:', err.message);
+      writeFailed(err);
     }
   }
   // While the project is open the index (which can be megabytes) is written off the main thread, one write at a time,
   // to a temporary file of its own that replaces index.json at the end. A write still running when the store closes
-  // is dropped: close() has written the newer index by then.
+  // is dropped: close() has written the newer index by then. The merge runs between the index's operations.
   let writing = null;
   let writes = 0;
   function flush() {
     saveTimer = null;
     if (writing) { writing.then(scheduleSave); return; }
     const tmp = `${indexFile}.${process.pid}-${++writes}.tmp`;
-    const data = JSON.stringify(index);
-    writing = fs.promises.mkdir(dir, { recursive: true })
-      .then(() => fs.promises.writeFile(tmp, data))
-      .then(() => { if (closed) fs.rmSync(tmp, { force: true }); else fs.renameSync(tmp, indexFile); })
-      .catch((err) => { fs.promises.rm(tmp, { force: true }).catch(() => {}); console.error('local history: could not save the index:', err.message); })
+    writing = serial(async () => { merge(await readDisk()); return JSON.stringify(index); })
+      .then(async (data) => {
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(tmp, data);
+        if (closed) fs.rmSync(tmp, { force: true }); else fs.renameSync(tmp, indexFile);
+      })
+      .catch((err) => { fs.promises.rm(tmp, { force: true }).catch(() => {}); writeFailed(err); })
       .finally(() => { writing = null; });
   }
   // A closed store wrote its index at close(); work still queued then must not write a stale index over the one a
@@ -329,14 +402,19 @@ function createStore(dir, root, limits, onChange) {
 
   // ---------- limits ----------
   async function prune() {
+    merge(await readDisk());
     const cutoff = Date.now() - limits.days * DAY;
     for (const [k, rec] of Object.entries(index.files)) {
       const n = rec.revs.length;
       const last = rec.revs[n - 1];
       // Kept: recent revisions, a file's latest, and the content just before a recent deletion.
-      rec.revs = rec.revs.filter((r, i) => r.t >= cutoff || (i === n - 1 && rec.d != null) || (i === n - 2 && last.h === null && last.t >= cutoff));
+      const keep = rec.revs.filter((r, i) => r.t >= cutoff || (i === n - 1 && rec.d != null) || (i === n - 2 && last.h === null && last.t >= cutoff));
+      const kept = new Set(keep);
+      forget(k, rec.revs.filter((r) => !kept.has(r)));
+      rec.revs = keep;
       if (!rec.revs.length && rec.d == null) delete index.files[k];
     }
+    for (const l of index.labels) if (l.t < cutoff) removedLabels.add(labelId(l));
     index.labels = index.labels.filter((l) => l.t >= cutoff);
     const refs = new Map();
     for (const rec of Object.values(index.files)) for (const r of rec.revs) if (r.h) refs.set(r.h, (refs.get(r.h) || 0) + 1);
@@ -349,6 +427,7 @@ function createStore(dir, root, limits, onChange) {
       for (const { rec, r } of candidates) {
         if (total <= max) break;
         rec.revs.splice(rec.revs.indexOf(r), 1);
+        forget(keyOf(rec.p), [r]);
         if (r.h && refs.set(r.h, refs.get(r.h) - 1).get(r.h) === 0) { total -= sizes[r.h] || 0; refs.delete(r.h); }
       }
     }
@@ -375,7 +454,7 @@ function createStore(dir, root, limits, onChange) {
     // Watches the project and rechecks the files recorded before (changes made while the IDE was closed).
     open() {
       startWatching();
-      return serial(async () => { await checkFolder(''); await prune(); });
+      return recording(async () => { await checkFolder(''); await prune(); return true; });
     },
     close() {
       closed = true;
@@ -388,7 +467,7 @@ function createStore(dir, root, limits, onChange) {
     // kind: 'save' or 'revert' after the IDE wrote the file; 'opened' when the editor opened it, with the text it
     // loaded ({text, encoding}): the first revision of a file seen for the first time, or a change the watcher has
     // not reported yet.
-    record: (abs, kind, doc) => serial(async () => {
+    record: (abs, kind, doc) => recording(async () => {
       const rel = relOf(abs);
       if (!rel || ignored(rel)) return false;
       const rec = tracked(rel);
@@ -403,7 +482,7 @@ function createStore(dir, root, limits, onChange) {
       return apply(r, kind);
     }),
     // A labeled point in time, plus the unsaved text of open documents ({path, text, encoding}) where it differs.
-    checkpoint: (label, user, docs) => serial(() => {
+    checkpoint: (label, user, docs) => recording(() => {
       const t = Date.now();
       for (const doc of docs) {
         const rel = relOf(doc.path);
@@ -451,6 +530,7 @@ function createStore(dir, root, limits, onChange) {
       for (const [k, rec] of Object.entries(index.files)) {
         if (k !== fk && !k.startsWith(`${fk}${path.sep}`)) continue;
         const rel = to + rec.p.slice(from.length);
+        forget(k, rec.revs);
         delete index.files[k];
         const target = index.files[keyOf(rel)];
         index.files[keyOf(rel)] = target
@@ -463,7 +543,7 @@ function createStore(dir, root, limits, onChange) {
 }
 
 function register(ctx) {
-  const { ipcMain, app } = ctx;
+  const { ipcMain, app, diagnostics } = ctx;
   const base = path.join(app.getPath('userData'), 'local-history');
   const stores = new Map(); // lower-cased root -> store
   const storeDir = (root) => path.join(base, sha1(root.toLowerCase()).slice(0, 16));
@@ -477,7 +557,11 @@ function register(ctx) {
     for (const [k, s] of stores) if (k !== root.toLowerCase()) { s.close(); stores.delete(k); }
     let s = stores.get(root.toLowerCase());
     if (s) { s.setLimits({ ...DEFAULT_LIMITS, ...limits }); return true; }
-    s = createStore(storeDir(root), root, { ...DEFAULT_LIMITS, ...limits }, () => ctx.send('localHistory:changed', { root }));
+    const dir = storeDir(root);
+    s = createStore(dir, root, { ...DEFAULT_LIMITS, ...limits }, () => ctx.send('localHistory:changed', { root }), {
+      isEnvironmentError: (err) => !!diagnostics?.isEnvironmentError(err),
+      onWriteError: (error) => ctx.send('localHistory:writeFailed', { root, dir, error }),
+    });
     stores.set(root.toLowerCase(), s);
     return s.open().then(() => true);
   });

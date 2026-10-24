@@ -30,5 +30,12 @@
   "Virtual Environment Setup": "가상 환경 설정",
   "Offers to create a .venv (python -m venv or uv venv) for a project with requirements but no interpreter, sets it as the project interpreter and installs the dependencies.": "요구 사항은 있지만 인터프리터가 없는 프로젝트에 .venv(python -m venv 또는 uv venv) 생성을 제안하고, 이를 프로젝트 인터프리터로 설정한 뒤 종속성을 설치합니다.",
   "Created {path}, but {project} was closed before the environment was set up for it. Check Settings › Python Interpreter when you open {project} again.": "{path}을(를) 생성했지만 환경을 설정하기 전에 {project}이(가) 닫혔습니다. {project}을(를) 다시 열면 설정 › Python 인터프리터를 확인하세요.",
-  "Created {path} and set it as the interpreter of {project}, but {project} was closed before the dependencies were installed.": "{path}을(를) 생성하여 {project}의 인터프리터로 설정했지만 종속성을 설치하기 전에 {project}이(가) 닫혔습니다."
+  "Created {path} and set it as the interpreter of {project}, but {project} was closed before the dependencies were installed.": "{path}을(를) 생성하여 {project}의 인터프리터로 설정했지만 종속성을 설치하기 전에 {project}이(가) 닫혔습니다.",
+  "The virtual environment {path} does not work. The project has {files}.": "가상 환경 {path}이(가) 작동하지 않습니다. 프로젝트에 {files}이(가) 있습니다.",
+  "Recreate the virtual environment?": "가상 환경을 다시 생성하시겠습니까?",
+  "Recreate {name}": "{name} 다시 생성",
+  "Move the virtual environment {path} to the Recycle Bin and create it again?": "가상 환경 {path}을(를) 휴지통으로 이동하고 다시 생성하시겠습니까?",
+  "Recreate Virtual Environment": "가상 환경 다시 생성",
+  "Recreate": "다시 생성",
+  "Could not move {name} to the Recycle Bin: {error}": "{name}을(를) 휴지통으로 이동할 수 없습니다: {error}"
 }

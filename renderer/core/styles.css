@@ -220,6 +220,7 @@ input, select, textarea { font: inherit; }
 #statusItems > .status-overflow { display: none !important; }
 .status-interp { max-width: 280px; }
 #statusInterpLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#statusInterp.invalid { color: var(--red); }
 
 #popup { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); width: 640px; max-width: 90vw;
   background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px;

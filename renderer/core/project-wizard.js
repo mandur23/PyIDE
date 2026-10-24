@@ -160,7 +160,7 @@ if __name__ == '__main__':
     for (const b of bases) base.add(new Option(`${b.label}   ${b.executable}`, b.executable));
     const custom = el('select');
     custom.id = 'npCustom';
-    const allInterps = await oncePerFile([...bases, ...ide.interps]);
+    const allInterps = await oncePerFile([...bases, ...ide.interps.filter((i) => !i.invalid)]);
     for (const b of allInterps) custom.add(new Option(`${b.label}   ${b.executable}`, b.executable));
     custom.add(new Option(tr('Add Local Interpreter…'), '__browse'));
     const venvPath = el('div', 'np-preview muted');

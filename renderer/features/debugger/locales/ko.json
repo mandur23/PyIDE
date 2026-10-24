@@ -119,5 +119,6 @@
   "Could not list processes: {error}": "프로세스 목록을 가져올 수 없습니다: {error}",
   "No process selected": "선택된 프로세스가 없습니다",
   "Debugging stopped": "디버그가 중지되었습니다",
+  "The program exited before the debugger could connect": "디버거가 연결되기 전에 프로그램이 종료되었습니다",
   "Breakpoints, stepping, frames, variables, watches and inline values via debugpy, and Attach to Process.": "debugpy로 중단점, 단계 실행, 프레임, 변수, 감시, 인라인 값과 프로세스에 연결을 제공합니다."
 }

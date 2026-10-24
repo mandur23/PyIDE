@@ -12,7 +12,7 @@ const diagnostics = require('./main/diagnostics').install();
 require('./main/security').install({ appDir: __dirname });
 const path = require('path');
 const fs = require('fs');
-const { spawn, spawnSync } = require('child_process');
+const { execFile, spawn, spawnSync } = require('child_process');
 const { createPluginManager } = require('./main/plugin-manager');
 const textCodec = require('./main/text-codec');
 const trust = require('./main/trust');
@@ -63,7 +63,16 @@ function startProcess(cmd, args, opts = {}) {
   };
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
-  proc.on('error', (err) => { procLog.warn(`#${id} ${err.message}`); send('proc:data', { id, stream: 'err', text: `${err.message}\n` }); });
+  // The pipes of a process Windows did not start fail with ENOTCONN; the process's own 'error' below says why.
+  for (const s of [proc.stdout, proc.stderr]) s.on('error', (err) => procLog.info(`#${id} pipe: ${err.code || err.message}`));
+  proc.on('error', (err) => {
+    // CreateProcess refuses a working directory longer than MAX_PATH, and Node reports that as the program missing.
+    const cwd = String(spawnOpts.cwd || '');
+    const text = err.code === 'ENOENT' && cwd.length > 258
+      ? `Cannot start ${cmd}: the working directory path is too long for Windows (${cwd.length} characters): ${cwd}` : err.message;
+    procLog.warn(`#${id} ${text}`);
+    send('proc:data', { id, stream: 'err', text: `${text}\n` });
+  });
   // Input typed after the program closed its stdin or exited (EPIPE, write after end) has nowhere to go.
   proc.stdin?.on('error', (err) => procLog.info(`#${id} stdin: ${err.code || err.message}`));
   proc.on('close', (code) => {
@@ -252,6 +261,25 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   interpLog.info(`${found.length} of ${candidates.length} candidates in ${Math.round(performance.now() - t0)} ms, ${probesStarted - started} probed`);
   return found;
 });
+// Why an interpreter chosen for a project is not in the list: {state: 'ok', version} (it works, it is just not one the
+// list finds), {state: 'missing'}, {state: 'fails', detail: the end of what it printed}, or {state: 'untrusted'} for a
+// python.exe inside a project the user has not trusted, which is not started.
+ipcMain.handle('py:diagnose', async (_e, root, exe) => {
+  const inside = root && path.resolve(exe).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep);
+  if (inside && !trust.isTrusted(root)) return { state: 'untrusted' };
+  if (!(await exists(exe))) return { state: 'missing' };
+  return new Promise((resolve) => {
+    execFile(exe, ['-c', 'import platform;print(platform.python_version())'], { encoding: 'buffer', timeout: 10000, windowsHide: true }, (err, out, errOut) => {
+      if (!err && out.length) return resolve({ state: 'ok', version: out.toString().trim() });
+      // The venv launcher's message ends in a Windows error text in the console's code page.
+      const utf8 = errOut.toString('utf8');
+      const text = utf8.includes('�') ? iconv.decode(errOut, 'cp949') : utf8;
+      // A Windows error text the launcher could not put in the pipe's code page comes out as question marks.
+      const detail = text.replace(/:[\s?.]*\?[\s?.]*$/gm, '').trim().split(/\r?\n/).slice(-3).join('\n') || err?.message || '';
+      resolve({ state: 'fails', detail });
+    });
+  });
+});
 
 ipcMain.handle('proc:input', (_e, id, text) => procs.get(id)?.stdin.write(text));
 // stdin.end() returns the stream, which cannot cross IPC; the handler answers nothing.
@@ -264,29 +292,84 @@ diagnostics.setPluginResolver(plugins.ownerOf);
 // Settings live in a file, not localStorage: a restart (app.exit) can drop localStorage writes that were not flushed yet.
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 const settingsLog = diagnostics.logger('#settings');
+// Another PyIDE instance replacing the file, or a virus scanner looking at it, makes it unreadable or unreplaceable
+// for a moment (EPERM, EBUSY, even ENOENT): such an error is tried again a few times before it counts.
+const BRIEF = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function patiently(fn, codes = BRIEF) {
+  for (let i = 0; ; i++) {
+    try { return fn(); } catch (err) {
+      if (i === 4 || !codes.includes(err.code)) throw err;
+      pause(25);
+    }
+  }
+}
+// Two instances must not interleave a read and a write of settings.json: each would write back the file it read,
+// without the key the other just wrote. The merge holds settings.json.lock, created exclusively, for the few
+// milliseconds it takes. A lock older than 5 s was left by an instance that crashed; after 1 s the write goes ahead.
+function withSettingsLock(fn) {
+  const lock = `${SETTINGS_FILE}.lock`;
+  let held = false;
+  for (let i = 0; i < 100 && !held; i++) {
+    try {
+      fs.closeSync(fs.openSync(lock, 'wx'));
+      held = true;
+    } catch (err) {
+      if (err.code !== 'EEXIST') break;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 5000) fs.rmSync(lock, { force: true }); } catch {}
+      pause(10);
+    }
+  }
+  try { return fn(); } finally {
+    if (held) try { fs.rmSync(lock, { force: true }); } catch {}
+  }
+}
 // A file that cannot be read as settings (hand-edited, truncated) is kept as settings.json.bak before the renderer
-// starts over with defaults and writes a new one.
-ipcMain.on('settings:loadSync', (e) => {
+// starts over with defaults and writes a new one. null: no file, or not settings. Other read errors are thrown.
+function readSettings() {
   let text;
-  try { text = fs.readFileSync(SETTINGS_FILE, 'utf8'); } catch { e.returnValue = null; return; }
+  try { text = patiently(() => fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
   try {
     const settings = JSON.parse(text);
-    if (settings && typeof settings === 'object' && !Array.isArray(settings)) { e.returnValue = settings; return; }
+    if (settings && typeof settings === 'object' && !Array.isArray(settings)) return settings;
   } catch {}
-  settingsLog.warn(`${SETTINGS_FILE} is not valid settings JSON; kept as settings.json.bak, starting with defaults`);
+  settingsLog.warn(`${SETTINGS_FILE} is not valid settings JSON; kept as settings.json.bak`);
   try { fs.copyFileSync(SETTINGS_FILE, `${SETTINGS_FILE}.bak`); } catch {}
-  e.returnValue = null;
+  return null;
+}
+ipcMain.on('settings:loadSync', (e) => {
+  try { e.returnValue = readSettings(); } catch { e.returnValue = null; }
 });
-// A failed write (disk full, the file locked by a virus scanner) answers false; the renderer tries again later.
-ipcMain.on('settings:saveSync', (e, settings) => {
+// changed: the keys the window set since its last write. Only those go onto the file's current content, so two PyIDE
+// instances on one user data folder (and the detached windows) keep each other's settings; a key whose value is
+// undefined is removed. Without it, or with no settings file to merge onto, the window's settings are written whole.
+// Answers true, or why the write failed (disk full, the file locked by a virus scanner); the renderer tries again later.
+ipcMain.on('settings:saveSync', (e, settings, changed) => {
+  // Per process: two instances writing at once must not write into one temporary file.
+  const tmp = `${SETTINGS_FILE}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-    fs.writeFileSync(`${SETTINGS_FILE}.tmp`, JSON.stringify(settings, null, 2));
-    fs.renameSync(`${SETTINGS_FILE}.tmp`, SETTINGS_FILE);
+    withSettingsLock(() => {
+      let merged = settings;
+      const current = Array.isArray(changed) ? readSettings() : null;
+      if (current) {
+        merged = current;
+        for (const key of changed) {
+          if (settings[key] === undefined) delete merged[key];
+          else merged[key] = settings[key];
+        }
+      }
+      fs.writeFileSync(tmp, JSON.stringify(merged, null, 2));
+      patiently(() => fs.renameSync(tmp, SETTINGS_FILE), ['EPERM', 'EBUSY', 'EACCES']);
+    });
     e.returnValue = true;
   } catch (err) {
     settingsLog.warn(`saving settings failed: ${err.message}`);
-    e.returnValue = false;
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    e.returnValue = err.message || String(err);
   }
 });
 
@@ -359,7 +442,9 @@ function registerFeatures() {
       try {
         require(files[i]).register(featureContext);
       } catch (err) {
-        diagnostics.report({ source: 'plugin', kind: 'load', error: err, title: `Plugin module ${path.basename(files[i])} failed to load`, files: [files[i]] });
+        const owner = plugins.ownerOf(files[i]);
+        const title = owner ? `Plugin ${owner.name} failed to load (${path.basename(files[i])})` : `Plugin module ${path.basename(files[i])} failed to load`;
+        diagnostics.report({ source: 'plugin', kind: 'load', error: err, title, files: [files[i]] });
       }
       setImmediate(next, i + 1);
     };

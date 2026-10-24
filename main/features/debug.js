@@ -8,7 +8,10 @@ const os = require('os');
 const remote = require('../remote');
 const attachTo = require('./debug-attach');
 const { withEnvFiles } = require('../dotenv');
+const { workingDir } = require('./run');
 const log = require('../diagnostics').logger('#debugger');
+
+const { stoppedError } = attachTo;
 
 const freePort = () => new Promise((resolve, reject) => {
   const srv = net.createServer();
@@ -144,14 +147,14 @@ exports.register = (ctx) => {
     const failed = new Promise((_r, reject) => { fail = reject; });
     failed.catch(() => {});
     const key = opts.startKey;
-    if (key != null) starting.set(key, () => { stopped = true; fail(new Error('Debugging stopped')); });
+    if (key != null) starting.set(key, () => { stopped = true; fail(stoppedError()); });
     let id = null;
     let timer;
     try {
       // A remote interpreter's debugpy listens in the target; the endpoint says where and how this side reaches it.
       const ep = remote.isRemote(interp) ? await remote.debugEndpoint(interp) : null;
       const port = ep ? ep.port : await freePort();
-      if (stopped) { ep?.release(); throw new Error('Debugging stopped'); }
+      if (stopped) { ep?.release(); throw stoppedError(); }
       // opts.envFiles: .env files under opts.env (undefined: the project root's .env), as for run:start.
       const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
       const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
@@ -159,13 +162,17 @@ exports.register = (ctx) => {
       const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
         '--wait-for-client', file, ...(opts.params || [])];
       id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
-        : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd, env });
-      if (stopped) throw new Error('Debugging stopped');
+        : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: (await workingDir(cwd, opts.roots)).cwd, env });
+      // The renderer shows the debuggee's output from now on, so a program that ends before debugpy listens (a Python
+      // debugpy cannot run on, an import error) shows why, and its output is not left buffered for nobody.
+      if (key != null) send('debug:event', { id: null, startKey: key, event: 'process', body: { id } });
+      if (stopped) throw stoppedError();
 
       const alive = () => procs.has(id) && !stopped;
       const connecting = (async () => {
         await ep?.ready(alive);
-        return connectWithRetry(port, alive);
+        return connectWithRetry(port, alive, undefined, () => (stopped ? stoppedError()
+          : !procs.has(id) ? Object.assign(new Error('The program exited before the debugger could connect'), { expected: true }) : null));
       })();
       // A socket that connects after a stop has nobody to talk to.
       connecting.then((sock) => { if (stopped) sock.destroy(); }, () => {});
@@ -232,13 +239,12 @@ exports.register = (ctx) => {
       if (stopped) return;
       stopped = true;
       if (kill) attachTo.killTree(injector);
-      fail(new Error('Debugging stopped'));
+      fail(stoppedError());
     };
     const abortOnQuit = () => abort(false); // the injectors are already killed by then
     aborts.add(abortOnQuit);
     const key = opts.startKey;
     if (key != null) starting.set(key, () => abort());
-    const stoppedError = () => new Error('Debugging stopped');
     // Every await before the session exists is raced with a Stop and followed by this check, so a Stop at any point
     // (process lookup, version probe, injection, connecting) ends the attach right there.
     const step = async (p) => {
