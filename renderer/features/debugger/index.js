@@ -609,12 +609,29 @@
     const s = sess;
     let frames = [];
     try { ({ stackFrames: frames } = await req('stackTrace', { threadId: s.threadId, startFrame: 0, levels: 200 })); } catch {}
+    await toIdePaths(frames);
     if (sess !== s || s.state !== 'suspended') return;
     s.frames = frames;
     if (!tw.isVisible()) tw.show();
     showSub('debugger');
     renderFrames();
     await selectFrame(Math.max(0, frames.findIndex((f) => f.source?.path)));
+  }
+
+  // debugpy reports frames by the long form of their path, while the project, its tabs and breakpoints may name a
+  // folder by its 8.3 short name (C:\Users\RUNNER~1\…). Such frame paths are put back in the IDE's form, so a stop
+  // shows in the tab already open rather than in a second one without the breakpoints.
+  async function toIdePaths(frames) {
+    const known = [...new Set([ide.root, ...ide.tabs.filter((t) => t.kind === 'file').map((t) => t.path), ...[...bps.values()].map((f) => f.path)]
+      .filter((p) => p?.includes('~')))];
+    if (!known.length || !frames.some((f) => f.source?.path)) return;
+    const longs = await ide.api.invoke('debug:longPaths', known).catch(() => known);
+    for (const f of frames) {
+      const p = f.source?.path;
+      let best = -1;
+      longs.forEach((l, i) => { if (!samePath(l, known[i]) && isUnder(p, l) && (best < 0 || l.length > longs[best].length)) best = i; });
+      if (best >= 0) f.source.path = known[best] + p.slice(longs[best].length);
+    }
   }
 
   async function selectFrame(i) {

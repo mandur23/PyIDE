@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import { writeFileSync } from 'fs';
 import path from 'path';
-import { launch, openFile } from './lib.mjs';
+import { launch, lensesShown, openFile } from './lib.mjs';
 
 // Live Python processes whose command line names `file` (a venv launcher and its child may both count).
 const pyProcs = (file) => Number(execFileSync('powershell', ['-NoProfile', '-Command',
@@ -27,6 +27,7 @@ const stoppedAt = (file, line) => until(`(() => { const s = window.__debugger.st
 
 // Real mouse events on the editor gutter (glyph margin) for a given line.
 async function gutter(line, button = 'left') {
+  await until(lensesShown(), 'code lenses shown');
   const p = await js(`(() => { const e = ide.editor; e.revealLineInCenterIfOutsideViewport(${line}); const li = e.getLayoutInfo();
     const pos = e.getScrolledVisiblePosition({ lineNumber: ${line}, column: 1 }); const r = e.getDomNode().getBoundingClientRect();
     return { x: r.left + li.glyphMarginLeft + li.glyphMarginWidth / 2, y: r.top + pos.top + pos.height / 2 }; })()`);
@@ -134,6 +135,8 @@ try {
   await press('F7');
   await stoppedAt('helper.py', 2);
   check(await js(`ide.activeTab().title === 'helper.py'`), 'F7 steps into scale() and opens helper.py');
+  // debugpy names frames by the long path; a project reached through an 8.3 short name (CI's TEMP) must not get a second tab.
+  check(await js(`ide.tabs.filter((t) => t.kind === 'file').map((t) => t.title).sort().join() === 'helper.py,main.py'`), 'the stop shows in the tab already open');
   await until(`document.querySelector('#dbgWatches .dbg-err')`, 'watch re-evaluated in new frame');
   check(true, 'watches re-evaluated on each stop (NameError for total in scale)');
   await press('F8');

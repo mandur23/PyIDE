@@ -263,6 +263,11 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/visual-script-debug.mjs
+      # The runner's TEMP names its user folder by the 8.3 short name (C:\Users\RUNNER~1), which debugpy expands.
+      - name: debugger
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/debugger.mjs
       - name: code-vision
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

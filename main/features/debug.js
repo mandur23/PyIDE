@@ -1,6 +1,7 @@
 // Debugger backend: runs the program under `python -m debugpy --listen` as a normal IDE process (so stdout,
 // stderr and stdin flow through ctx.startProcess) and talks DAP to debugpy's adapter over TCP.
 // Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
+const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const os = require('os');
@@ -106,6 +107,19 @@ async function connectWithRetry(port, isAlive, timeoutMs = 20000, giveUp = null)
       await new Promise((r) => setTimeout(r, 150));
     }
   }
+}
+
+// The long form of a path that names folders by their 8.3 short names (C:\Users\RUNNER~1\…), the form debugpy
+// reports frames in (GetLongPathName): each short name becomes the long one, and links are not followed.
+function longPath(p) {
+  if (process.platform !== 'win32' || !p.includes('~')) return p;
+  const parent = path.dirname(p);
+  if (parent === p) return p;
+  let name = path.basename(p);
+  if (name.includes('~')) {
+    try { if (!fs.lstatSync(p).isSymbolicLink()) name = path.basename(fs.realpathSync.native(p)); } catch {}
+  }
+  return path.join(longPath(parent), name);
 }
 
 exports.register = (ctx) => {
@@ -320,6 +334,8 @@ exports.register = (ctx) => {
     await dap.request('configurationDone');
     await attached;
   }
+
+  ipcMain.handle('debug:longPaths', (_e, paths) => paths.map((p) => longPath(String(p))));
 
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);
