@@ -73,7 +73,7 @@ const FILES_LISTED = /^(Found \d+ source files?|No source files found)/;
 const LISTING_TIMEOUT = 20000;
 
 class Server {
-  constructor({ unpackedDir, root, pythonPath, gen, send }) {
+  constructor({ unpackedDir, root, pythonPath, locale, gen, send }) {
     Object.assign(this, { root, pythonPath, gen, send });
     this.nextId = 1;
     this.pending = new Map();
@@ -89,7 +89,9 @@ class Server {
     this.listingTimer = setTimeout(this.markListed, LISTING_TIMEOUT);
     this.proc = spawn(process.execPath, [path.join(unpackedDir, 'node_modules', 'pyright', 'langserver.index.js'), '--stdio'], {
       cwd: root,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      // Pyright writes its diagnostics and hovers in the locale VSCODE_NLS_CONFIG names (the IDE's language); without it
+      // it falls back to LC_ALL/LANG, which Windows does not set.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', VSCODE_NLS_CONFIG: JSON.stringify({ locale }) },
       windowsHide: true,
     });
     this.proc.stdout.on('data', (d) => this.onData(d));
@@ -338,11 +340,11 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   let server = null;
   let gen = 0;
 
-  const start = async (root, pythonPath) => {
+  const start = async (root, pythonPath, locale) => {
     server?.stop();
     server = null;
     if (!root) return null;
-    const s = (server = new Server({ unpackedDir, root, pythonPath, gen: ++gen, send }));
+    const s = (server = new Server({ unpackedDir, root, pythonPath, locale, gen: ++gen, send }));
     send('lsp:status', { gen: s.gen, state: 'starting' });
     try {
       await s.ready;
@@ -357,7 +359,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
 
   // A remote interpreter's Pyright runs here against a synced copy of its libraries (main/remote/index.js).
   // -> {gen, incremental} | null
-  ipcMain.handle('lsp:start', (_e, root, pythonPath) => start(root, remote.isRemoteExecutable(pythonPath) ? remote.pyrightPython(pythonPath) : pythonPath));
+  // locale: the UI language ('en', 'ko'), for Pyright's messages.
+  ipcMain.handle('lsp:start', (_e, root, pythonPath, locale = 'en') => start(root, remote.isRemoteExecutable(pythonPath) ? remote.pyrightPython(pythonPath) : pythonPath,
+    /^[a-z]{2}(-[a-z]{2,4})?$/i.test(locale) ? locale.toLowerCase() : 'en'));
   ipcMain.handle('lsp:stop', () => { server?.stop(); server = null; });
   // ticket (optional): a key for lsp:cancel, which answers the request with null and tells Pyright to drop it.
   ipcMain.handle('lsp:request', async (_e, method, params, ticket) => {

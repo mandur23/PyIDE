@@ -139,6 +139,8 @@
     const nodes = data.nodes.map((n, i) => {
       if (!isObj(n)) throw bad('Node {index} is not an object.', { index: i + 1 });
       if (typeof n.id !== 'string' || !n.id) throw bad('Node {index} has no "id".', { index: i + 1 });
+      // The generated code names its locals after node ids (answer_n3), so an id is never anything but a name part.
+      if (!/^[A-Za-z0-9_]+$/.test(n.id)) throw bad('Node {index} has the id "{id}". An id can contain only the letters A-Z and a-z, digits and _.', { index: i + 1, id: n.id });
       if (ids.has(n.id)) throw bad('Two nodes have the id "{id}".', { id: n.id });
       ids.add(n.id);
       if (typeof n.type !== 'string' || !n.type) throw bad('Node "{id}" has no "type".', { id: n.id });

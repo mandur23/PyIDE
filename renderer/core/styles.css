@@ -271,6 +271,8 @@ body.detached #stripe, body.detached #sidePanel, body.detached #sideSplitter, bo
 body.detached #stripeRight, body.detached #rightPanel, body.detached #rightSplitter,
 body.detached #bottomSplitter, body.detached #welcome, body.detached #toolbarRight, body.detached #projectWidget, body.detached #mainMenuBtn,
 body.detached #statusInterp { display: none !important; }
+/* No project: the welcome screen without tool windows or the run widget, like PyCharm's welcome window. */
+body.no-project :is(#stripe, #stripeRight, #sidePanel, #sideSplitter, #bottom, #bottomSplitter, #rightPanel, #rightSplitter, #runWidget) { display: none !important; }
 
 /* Main toolbar (PyCharm New UI): main menu, project widget, run widget, search, settings. */
 #toolbar { padding: 0 6px; }

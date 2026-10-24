@@ -53,6 +53,15 @@ const dialogText = (t) => t.js(`[...document.querySelectorAll('.dialog')].pop()?
 const dialogButtons = (t) => t.js(`[...[...document.querySelectorAll('.dialog')].pop()?.querySelectorAll('.dialog-buttons button') || []].map(b => b.textContent)`);
 const pressButton = (t, label) => t.js(`([...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].find(b => b.textContent === ${S(label)}).click(), true)`);
 const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, what);
+// Settings > Updates > Check Now: the result appears under the button and no dialog opens over Settings.
+async function checkNowInline(t, text, label) {
+  const dialogs = await t.js(`document.querySelectorAll('.dialog').length`);
+  await t.js(`(document.getElementById('updatesCheckNow').scrollIntoView({ block: 'center' }), true)`);
+  await t.click('#updatesCheckNow');
+  await t.until(`document.getElementById('updatesCheckResult')?.textContent.includes(${S(text)})`, label);
+  await t.sleep(300);
+  t.check(await t.js(`document.querySelectorAll('.dialog').length === ${dialogs} && !!document.querySelector('.settings-dialog')`), label);
+}
 
 {
   const t = await launch({ fixture: 'core', port: 9800, name: 'updater', env: { PYIDE_UPDATE_TEST: '1' } });
@@ -76,9 +85,15 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
     check(await js(`document.querySelector('[data-key="updates.checkOnStartup"]').checked`), 'Settings > Updates: check on startup is on by default');
     check(await js(`document.querySelector('.settings-dialog').textContent.includes('Run from source (no updates)')`), 'Settings > Updates names the installation kind');
     check(await js(`document.querySelector('[data-key="updates.differential"]')?.checked === true`), 'Settings > Updates: differential downloads are on by default');
+    await checkNowInline(t, 'Updates are off: no update feed is set.', 'with no feed, Check Now on the page says updates are off on the page, with no dialog over Settings');
 
     // ---------- a newer version in a local folder feed, set through the page ----------
     const newer = feedFolder('9.9.9');
+    await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${S(newer)}; i.dispatchEvent(new Event('input')); return true; })()`);
+    await checkNowInline(t, `PyIDE 9.9.9 is available. You have ${current}.`, 'Check Now on the page shows a newer version on the page');
+    await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${S(path.join(tmpdir(), 'pyide-no-such-feed'))}; i.dispatchEvent(new Event('input')); return true; })()`);
+    await checkNowInline(t, 'Could not check for updates.', 'Check Now on the page shows a failed check on the page');
+    check(await js(`document.getElementById('updatesCheckResult').classList.contains('err')`), 'a failed check is drawn as an error');
     await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${S(newer)}; i.dispatchEvent(new Event('input')); return true; })()`);
     await js(`(document.getElementById('settingsOk').click(), true)`);
     check(await js(`ide.settings.get('updates.feedUrl')`) === newer, 'the feed setting is saved with OK');
@@ -168,9 +183,8 @@ const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, w
     await js(`(ide.openSettings('updates'), true)`);
     await until(`!!document.querySelector('.settings-dialog [data-key="updates.channel"]')`, 'channel setting again');
     await js(`(() => { const s = document.querySelector('[data-key="updates.channel"]'); s.value = 'beta'; s.dispatchEvent(new Event('change')); document.getElementById('updatesCheckNow').click(); return true; })()`);
-    await until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('9.9.9-beta.1')`, 'Check Now on Beta');
+    await until(`document.getElementById('updatesCheckResult')?.textContent.includes('9.9.9-beta.1')`, 'Check Now on Beta');
     check(true, 'Check Now uses the channel chosen on the page before OK');
-    await pressButton(t, 'Close');
     await js(`(document.getElementById('settingsOk').click(), true)`);
     check(await js(`ide.settings.get('updates.channel')`) === 'beta', 'the channel setting is saved with OK');
   } catch (err) {
@@ -252,6 +266,15 @@ try {
   await k.js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, percent: 0, download: null })`);
   await k.js(`(ide.openSettings('updates'), true)`);
   await k.until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Korean settings page');
+  await k.js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ''; i.dispatchEvent(new Event('input')); return true; })()`);
+  await checkNowInline(k, '업데이트 피드가 설정되지 않아 업데이트를 사용하지 않습니다.', 'Korean: Check Now with no feed answers on the page in Korean, with no dialog');
+  await k.cdp('Emulation.setDeviceMetricsOverride', { width: 1008, height: 681, deviceScaleFactor: 1, mobile: false });
+  await k.until(`innerWidth === 1008 && Math.abs(innerHeight - 681) <= 1`, 'viewport 1008x681');
+  await k.js(`(document.getElementById('updatesCheckResult').scrollIntoView({ block: 'center' }), true)`);
+  k.check(await k.js(`(() => { const p = document.querySelector('.settings-page'); const r = document.getElementById('updatesCheckResult').getBoundingClientRect(); const b = p.getBoundingClientRect();
+    return r.width > 100 && r.left >= b.left && r.right <= b.right + 0.5 && p.scrollWidth <= p.clientWidth; })()`), 'at 1008x681 the Check Now result fits the page');
+  await k.shot('updater-check-now-ko-small.png');
+  await k.cdp('Emulation.clearDeviceMetricsOverride');
   const pageLeaks = await englishLeaks(k, '.settings-page');
   k.check(!pageLeaks.length, `no English on the Korean Updates page${pageLeaks.length ? `: ${S(pageLeaks)}` : ''}`);
   const channelRow = await k.js(`(() => { const s = document.querySelector('[data-key="updates.channel"]'); return { options: [...s.options].map((o) => o.textContent), text: s.closest('.field').textContent }; })()`);

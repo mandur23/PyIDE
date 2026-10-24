@@ -5,7 +5,10 @@
 .upd-feed-row { display: flex; gap: 6px; flex: 1; min-width: 0; }
 .upd-feed { flex: 1; min-width: 0; }
 .upd-skipped { display: flex; align-items: center; gap: 10px; }
-#updatesCheckNow { margin-top: 6px; }
+.upd-check-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 6px; }
+#updatesCheckNow { flex-shrink: 0; }
+.upd-result { min-width: 0; line-height: 1.6; word-break: break-word; }
+.upd-result.err { color: var(--red); }
 .upd-auto { display: flex; align-items: center; gap: 12px; }
 .upd-notes { max-height: min(60vh, 520px); overflow-y: auto; line-height: 1.5; padding-right: 4px; }
 .upd-notes h3 { margin: 4px 0 6px; font-size: 13px; }

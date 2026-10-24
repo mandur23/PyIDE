@@ -1,7 +1,7 @@
 // Test runner: the 'pytest' run configuration type, the Test Results view inside the Run tool window,
 // gutter icons on tests, and Ctrl+Shift+F10 on the test at the caret.
 (() => {
-  const { el, basename, samePath } = ide.util;
+  const { el, basename, dirname, isUnder, samePath } = ide.util;
   const run = ide.run;
   const lastResults = new Map(); // node id -> 'passed' | 'failed' (for gutter icons)
 
@@ -410,10 +410,36 @@
     const s = run.activeSession();
     s?.extraActions.find((a) => a.id === 'rerunFailed')?.run();
   } });
+  // Folders with a test file at any depth (lower-case paths), from a walk of the project after it opens or its files
+  // change; null until the first walk. The tree offers Run 'pytest in <folder>' only on these.
+  let testDirs = null;
+  let scanTimer = 0;
+  let scans = 0;
+  async function scanTestDirs() {
+    const root = ide.root;
+    const scan = ++scans;
+    let files = [];
+    try { files = root ? await ide.api.walk(root) : []; } catch {}
+    if (scan !== scans) return; // a later walk (another project, newer files) answers instead
+    const dirs = new Set();
+    for (const f of files) {
+      if (!isTestFileName(basename(f))) continue;
+      for (let d = dirname(f); isUnder(d, root) && !dirs.has(d.toLowerCase()); d = dirname(d)) dirs.add(d.toLowerCase());
+    }
+    testDirs = dirs;
+  }
+  ide.on('projectOpened', scanTestDirs);
+  ide.on('filesChanged', () => { clearTimeout(scanTimer); scanTimer = setTimeout(scanTestDirs, 500); });
+  if (ide.root) scanTestDirs();
+  // The tree reads `title` right after `when` accepted the entry, so the label names that entry.
+  let menuEntry = null;
   ide.registerTreeAction({
-    title: tr("Run 'pytest in …'"),
+    get title() { return tr("Run 'pytest in {name}'", { name: menuEntry?.name ?? '' }); },
     keyAction: 'RunClass',
-    when: (e) => e.dir || isTestFileName(e.name),
+    when: (e) => {
+      menuEntry = e;
+      return e.dir ? !!testDirs?.has(e.path.toLowerCase()) : isTestFileName(e.name);
+    },
     run: (e) => run.runContext({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
   });
 

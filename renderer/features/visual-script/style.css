@@ -205,3 +205,8 @@
   background: var(--gray2); color: var(--gray12); font: 12px/16px 'JetBrains Mono', Consolas, monospace; white-space: pre-wrap;
   overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .3); }
 .vs-value-tip.vs-value-note { font-family: inherit; color: var(--gray10); font-style: italic; }
+
+/* Export as Python: the file name asked for when <name>.py would hide a module. */
+.vs-export-input { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; padding: 4px 6px; border: 1px solid var(--gray5);
+  border-radius: 3px; background: var(--gray1); color: var(--gray12); }
+.vs-export-input.vs-invalid { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }

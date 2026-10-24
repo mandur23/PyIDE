@@ -1,8 +1,9 @@
 // Crash recovery of unsaved edits (renderer/features/recovery, main/features/recovery.js): debounced backups of
 // modified file and untitled documents, one backup per document across detached windows, a hard kill of the process
 // tree, the restore dialog (Restore, Discard), a file changed on disk in between restored as a conflict, a clean quit
-// leaving nothing behind, the setting, and Korean. Ports 9060-9064.
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+// leaving nothing behind, the setting, and Korean. Ports 9060-9064. Then (port 9105) a running session whose backup
+// folder is deleted or cannot be written: the backups are written again, and repeated failures are told once.
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { launch, openFile } from './lib.mjs';
@@ -24,6 +25,17 @@ const edit = (f, text) => t.js(`(() => {
   return true;
 })()`);
 const gone = (pid) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+// Where the keyboard is, once the restore dialog is gone: in the active tab (its editor, or its page), in the Project
+// view when the active tab is a page that cannot take it (the Workspace page), or else where.
+const inActiveTab = `(() => {
+  const tab = ide.activeTab();
+  if (tab?.kind === 'file') return ide.editor.hasTextFocus();
+  return !!tab?.host?.contains(document.activeElement) || (!!tab && !tab.host.hasAttribute('tabindex') && document.activeElement?.id === 'tree');
+})()`;
+const keyboardPlace = async () => {
+  for (const end = Date.now() + 5000; Date.now() < end; await sleep(150)) if (await t.js(inActiveTab)) return 'active tab';
+  return t.js(`(() => { const a = document.activeElement; return a?.tagName + '.' + a?.className + ' (active tab ' + ide.activeTab()?.title + ')'; })()`);
+};
 async function untilTrue(fn, label, ms = 15000) {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await fn()) return true;
   throw new Error(`timeout waiting for: ${label}`);
@@ -171,10 +183,13 @@ try {
   const items = await t.js(`[...document.querySelectorAll('#recoveryDialog li')].map(n => n.textContent)`);
   t.check(items.length === 3 && items.includes('a.py') && items.includes('c.py') && items.includes('u.py (untitled)'), `the dialog lists the backed-up files (${items.join(' | ')})`);
   t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-body').textContent.includes('PyIDE closed unexpectedly')`), 'the dialog says PyIDE closed unexpectedly');
-  await t.js(`[...document.querySelectorAll('#recoveryDialog .dialog-buttons button')].find(b => b.textContent === 'Restore').click()`);
+  t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-buttons .primary').textContent === 'Restore'`), 'Restore is the main button');
+  await t.click('#recoveryDialog .dialog-buttons .primary');
   await t.until(`ide.isDirty(${tab('a.py')}) && ide.isDirty(${tab('c.py')})`, 'a.py and c.py restored');
   t.check(await t.js(`ide.getDocument(${P('a.py')}).model.getValue().startsWith('# FROM_DETACHED\\n# EDIT_A\\ndef a():')`), 'Restore brings back the unsaved text of a.py as an unsaved change');
   t.check(readFileSync(path.join(project, 'a.py'), 'utf8') === "def a():\n    return 'a'\n", 'restoring does not write the file');
+  const afterRestore = await keyboardPlace();
+  t.check(afterRestore === 'active tab', `after Restore the keyboard is in the active tab (${afterRestore})`);
   await t.until(`ide.tabs.some(t => /scratch\\.py$/.test(t.path) && ide.isDirty(t))`, 'untitled restored');
   t.check(await t.js(`ide.tabs.find(t => /scratch\\.py$/.test(t.path)).model.getValue() === '# UNTITLED_TEXT\\nU = \\'u\\'\\n'`), 'the untitled document comes back, unsaved, in a new scratch file');
   const c = await t.js(`(() => { const d = ide.getDocument(${P('c.py')}); return { text: d.model.getValue(), conflict: !!d.conflict }; })()`);
@@ -191,9 +206,12 @@ try {
   // ================= restart: Discard, the setting =================
   t = await start(9062);
   await t.until(`!!document.querySelector('#recoveryDialog')`, 'restore dialog after the second crash');
-  await t.js(`[...document.querySelectorAll('#recoveryDialog .dialog-buttons button')].find(b => b.textContent === 'Discard').click()`);
+  t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-buttons .secondary').textContent === 'Discard'`), 'Discard is the other button');
+  await t.click('#recoveryDialog .dialog-buttons .secondary');
   await sleep(1500);
   t.check(await t.js(`!ide.tabs.some(t => ide.isDirty(t))`), 'Discard leaves every document unmodified');
+  const afterDiscard = await keyboardPlace();
+  t.check(afterDiscard === 'active tab', `after Discard the keyboard is in the active tab, or in the Project view when that is the Workspace page (${afterDiscard})`);
   await untilTrue(() => backups().length === 0, 'backups deleted after Discard', 5000);
   t.check(true, 'Discard deletes the backups');
   t.check((await t.js(`ide.api.invoke('recovery:pending', ide.root)`)).length === 0, 'nothing is offered again after Discard');
@@ -246,8 +264,50 @@ try {
   const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'features', 'recovery', 'index.js'), 'utf8');
   const missing = (await missingTranslations(t)).filter((m) => source.includes(`'${m}'`));
   t.check(missing.length === 0, `no missing Korean strings for recovery (${missing.join(', ')})`);
+  const koDict = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'features', 'recovery', 'locales', 'ko.json'), 'utf8'));
+  const untranslated = [...new Set([...source.matchAll(/\btr\('([^']*)'/g)].map((m) => m[1]))].filter((m) => !(m in koDict));
+  t.check(untranslated.length === 0, `every string the plugin translates has a Korean entry, also those not shown here (${untranslated.join(', ')})`);
   await t.shot('recovery-ko.png');
   await t.press('Escape');
+
+  // ================= the session folder deleted or unwritable while PyIDE runs =================
+  retire();
+  t.close();
+  t = await launch({ fixture: 'recovery', port: 9105, name: 'recovery-9105' });
+  ({ userData, project } = t);
+  await t.cdp('Emulation.setDeviceMetricsOverride', { width: 1008, height: 681, deviceScaleFactor: 1, mobile: false });
+  await t.until(`Math.abs(innerWidth - 1008) <= 1 && Math.abs(innerHeight - 681) <= 1`, 'viewport 1008x681');
+  await t.js(`(['autosave.onFrameDeactivation', 'autosave.onTabSwitch', 'autosave.onIdle'].forEach(k => ide.settings.set(k, false)), ide.settings.flush(), true)`);
+  await openFile(t, 'a.py');
+  await edit('a.py', '# LIVE_A\n');
+  await openFile(t, 'c.py');
+  await edit('c.py', '# LIVE_C\n');
+  await untilTrue(() => backupOf('a.py').length === 1 && backupOf('c.py').length === 1, 'a.py and c.py backed up');
+  const live = path.join(backupsDir(), backups()[0].session);
+  rmSync(live, { recursive: true, force: true });
+  await untilTrue(() => backupOf('a.py').some((b) => b.text.includes('# LIVE_A')) && backupOf('c.py').some((b) => b.text.includes('# LIVE_C')), 'backups written again', 20000);
+  t.check(true, 'with the session folder deleted under a running PyIDE, both backups are written again without another edit');
+  await edit('c.py', '# LIVE_C2\n');
+  await untilTrue(() => backupOf('c.py').some((b) => b.text.includes('# LIVE_C2')), 'later edit backed up');
+  t.check(true, 'later edits are backed up again');
+
+  rmSync(live, { recursive: true, force: true });
+  writeFileSync(live, '');
+  await edit('a.py', '# FAILING\n');
+  const failNotes = `ide.notifications.list().filter((n) => n.title === 'Unsaved changes are not being backed up')`;
+  await t.until(`${failNotes}.length === 1`, 'backup failure notification', 25000);
+  const balloon = await t.js(`(() => {
+    const b = [...document.querySelectorAll('#balloons > *')].find((n) => n.textContent.includes('Unsaved changes are not being backed up'));
+    const r = b?.getBoundingClientRect();
+    return r ? { inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, text: b.textContent } : null;
+  })()`);
+  t.check(balloon?.inside, `backups failing again and again are told in a notification balloon, inside a 1008x681 window (${S(balloon)})`);
+  await t.shot('recovery-failure-1008.png');
+  await sleep(12000);
+  t.check(await t.js(`${failNotes}.length`) === 1, `and only once while they keep failing (${await t.js(`${failNotes}.length`)})`);
+  rmSync(live, { force: true });
+  await untilTrue(() => backupOf('a.py').some((b) => b.text.includes('# FAILING')) && backupOf('c.py').some((b) => b.text.includes('# LIVE_C2')), 'backups after the failure', 20000);
+  t.check(true, 'once the folder can be made again, every backup is written again');
 } catch (err) {
   t?.check(false, err.message);
 }

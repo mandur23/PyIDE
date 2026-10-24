@@ -157,20 +157,61 @@ function createPluginManager({ appDir, userDataDir }) {
       if (expect && (meta.id !== expect.id || meta.version !== expect.version)) {
         throw new Error(`The archive holds ${meta.id} ${meta.version || ''}, not ${expect.id} ${expect.version} as the Marketplace lists it`);
       }
-      const target = path.join(userDir, meta.id);
       fs.mkdirSync(userDir, { recursive: true });
-      fs.rmSync(target, { recursive: true, force: true });
-      copyTree(from, target);
+      sweepLeftovers();
+      const staged = fs.mkdtempSync(path.join(userDataDir, 'plugin-new-'));
+      try {
+        copyTree(from, staged);
+        replaceFolder(path.join(userDir, meta.id), staged, meta.id);
+      } finally {
+        fs.rmSync(staged, { recursive: true, force: true });
+      }
       return { id: meta.id, name: meta.name || meta.id };
     } finally {
       if (temp) fs.rmSync(temp, { recursive: true, force: true });
     }
   }
 
+  // A plugin folder is replaced or removed only by renaming it aside first: Windows refuses that rename while another
+  // program holds something inside (a helper running in it, an antivirus scan), and the plugin is then left complete,
+  // where deleting it in place would stop halfway. The staging and old folders live in the user data folder, beside
+  // plugins/ (one volume, so renames are atomic) but outside it, so discovery never sees them.
+  function replaceFolder(target, staged, id) {
+    let old = null;
+    if (fs.existsSync(target)) {
+      old = path.join(fs.mkdtempSync(path.join(userDataDir, 'plugin-old-')), id);
+      try { fs.renameSync(target, old); } catch (err) {
+        fs.rmSync(path.dirname(old), { recursive: true, force: true });
+        throw inUse(err, id);
+      }
+    }
+    if (staged) {
+      try { fs.renameSync(staged, target); } catch (err) {
+        if (old) fs.renameSync(old, target);
+        throw err;
+      }
+    }
+    // The new version is in place; an old copy that cannot be deleted yet goes with the next install.
+    if (old) try { fs.rmSync(path.dirname(old), { recursive: true, force: true, maxRetries: 3 }); } catch {}
+  }
+  const inUse = (err, id) => (['EBUSY', 'EPERM', 'EACCES'].includes(err.code)
+    ? new Error(`The folder of ${id} is in use by another program (${err.code}). Close the program and try again.`) : err);
+  // What an interrupted install or a still-locked old folder left; a staging folder younger than ten minutes may belong
+  // to another PyIDE instance installing right now.
+  function sweepLeftovers() {
+    for (const name of fs.readdirSync(userDataDir)) {
+      if (!/^plugin-(new|old)-/.test(name)) continue;
+      const dir = path.join(userDataDir, name);
+      try {
+        if (name.startsWith('plugin-old-') || Date.now() - fs.statSync(dir).mtimeMs > 600000) fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+
   function uninstall(id) {
     const p = discover().find((x) => x.id === id);
     if (!p || p.bundled) throw new Error('Only installed plugins can be uninstalled');
-    fs.rmSync(p.dir, { recursive: true, force: true });
+    replaceFolder(p.dir, null, id);
     const s = state();
     saveState({ ...s, disabled: s.disabled.filter((d) => d !== id) });
   }

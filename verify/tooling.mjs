@@ -161,7 +161,8 @@ try {
   check(await js(`document.querySelector('.settings-nav-row.selected').textContent === 'Appearance' && [...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|').replace('|Presentation and Distraction-Free Modes', '').replace('|Crash Recovery', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|')`), 'Ctrl+Alt+S opens Settings with categories');
   check(await js(`document.querySelector('#settingsApply').disabled`), 'Apply disabled until something changes');
   await type('wrap');
-  check(await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|') === 'Editor|General|Code Style' && document.querySelector('.settings-page').dataset.page === 'editor'`), 'settings search filters categories');
+  const navShown = await js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|')`);
+  check(navShown.startsWith('Editor|General|Code Style') && await js(`document.querySelector('.settings-page').dataset.page === 'editor'`), `settings search filters categories (${navShown})`);
   await press('Ctrl+A');
   await press('Backspace');
   await openSettingsPage('editor');

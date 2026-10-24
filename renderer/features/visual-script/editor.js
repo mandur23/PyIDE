@@ -53,20 +53,6 @@
     try { return VS.pinsOf(node, graph) || EMPTY_PINS; } catch (err) { console.error(err); return EMPTY_PINS; }
   }
   let datalistSeq = 0;
-  // An "any" input's field: 42 is the number 42, other text is text, and "42" (in quotes) is the text 42.
-  const NUMBER_RE = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
-  const anyValue = (text) => {
-    const t = text.trim();
-    if (NUMBER_RE.test(t) && Number.isFinite(Number(t))) return Number(t);
-    const q = /^"(.*)"$/s.exec(t);
-    return q ? q[1] : text;
-  };
-  const anyText = (v) => {
-    if (v === undefined || v === null) return '';
-    if (typeof v === 'number') return String(v);
-    const s = String(v);
-    return typeof anyValue(s) === 'number' || /^".*"$/s.test(s.trim()) ? `"${s}"` : s;
-  };
   const typeName = (type) => (VS.typeLabel ? VS.typeLabel(type) : type);
 
   function mountEditor(host, { doc, path, tab }) {
@@ -433,7 +419,8 @@
       const f = h('input', `vs-field ${numeric ? 'vs-num' : 'vs-text'}`);
       f.type = 'text';
       f.spellcheck = false;
-      const shown = type === 'any' ? anyText(value) : value === undefined || value === null ? '' : String(value);
+      f.dataset.field = `in:${pin.id}`;
+      const shown = type === 'any' ? VS.anyText(value) : value === undefined || value === null ? '' : String(value);
       f.value = shown;
       if (pin.placeholder) f.placeholder = pin.placeholder;
       if (!numeric) f.size = Math.max(10, Math.min(28, shown.length + 1));
@@ -442,12 +429,10 @@
         ? tr('Value of {name}: a number like 42, or text. Put text that looks like a number in quotes: "42".', { name: pinLabel(node, pin) || pin.id })
         : tr('Value of {name}', { name: pinLabel(node, pin) || pin.id });
       const parse = () => {
-        if (type === 'any') return { ok: true, v: anyValue(f.value) };
+        if (type === 'any') return { ok: true, v: VS.anyValue(f.value) };
         if (!numeric) return { ok: true, v: f.value };
-        const t = f.value.trim();
-        const v = Number(t);
-        const ok = t !== '' && Number.isFinite(v) && (type !== 'int' || Number.isInteger(v));
-        return { ok, v };
+        const v = VS.numberValue(f.value);
+        return { ok: typeof v === 'string' || (Number.isFinite(v) && (type !== 'int' || Number.isInteger(v))), v };
       };
       f.addEventListener('input', () => f.classList.toggle('vs-invalid', !parse().ok));
       f.addEventListener('change', () => {
@@ -464,6 +449,7 @@
       label.appendChild(name);
       const set = (v) => commit(VS.setProp(graph, node.id, prop.id, v));
       let f;
+      const keyed = (field) => { field.dataset.field = `prop:${prop.id}`; return field; };
       if (prop.kind === 'select') {
         f = h('select', 'vs-field vs-select');
         for (const o of optionsOf(prop)) {
@@ -479,14 +465,14 @@
         f.checked = !!value;
         f.addEventListener('change', () => set(f.checked));
       } else if (prop.kind === 'code') {
-        f = h('textarea', 'vs-field vs-code');
+        f = keyed(h('textarea', 'vs-field vs-code'));
         f.spellcheck = false;
         f.rows = Math.min(8, Math.max(2, String(value ?? '').split('\n').length));
         f.value = value ?? '';
         f.setAttribute('data-user-text', '');
         f.addEventListener('change', () => set(f.value));
       } else {
-        f = h('input', `vs-field ${prop.kind === 'number' ? 'vs-num' : 'vs-text'}`);
+        f = keyed(h('input', `vs-field ${prop.kind === 'number' ? 'vs-num' : 'vs-text'}`));
         f.type = 'text';
         f.spellcheck = false;
         f.value = value === undefined || value === null ? '' : String(value);
@@ -520,7 +506,7 @@
         f.addEventListener('change', () => {
           if (prop.kind === 'number') {
             if (!check()) { f.value = value === undefined || value === null ? '' : String(value); mark(); return; }
-            set(Number(f.value.trim()));
+            set(VS.numberValue(f.value));
           } else set(prop.kind === 'identifier' ? f.value.trim() : f.value);
         });
       }
@@ -855,7 +841,8 @@
         const cat = def.category || 'Other';
         const hay = [title, englishTitle(def), tr(cat), cat, def.keywords || '', tr(def.description || ''), def.description || '', def.type]
           .join(' ').toLowerCase();
-        return { def, pin, title, cat, hay, tip: tr(def.description || '') };
+        const keys = new Set(String(def.keywords || '').toLowerCase().split(/\s+/).filter(Boolean));
+        return { def, pin, title, cat, hay, keys, tip: tr(def.description || '') };
       });
       const projectItems = symbols ? symbolItems(symbols.project(), 'Project', origin) : [];
       items.push(...projectItems);
@@ -959,7 +946,14 @@
           const tokens = q.split(/\s+/).filter(Boolean);
           let matches = items.filter((it) => tokens.every((t) => it.hay.includes(t)));
           if (q) {
-            const rank = (it) => (it.title.toLowerCase().startsWith(q) || (it.def && !it.group && englishTitle(it.def).toLowerCase().startsWith(q)) ? 0 : 1);
+            // The node's name, then a keyword or Python name typed whole (input, 입력, print), then the start of a
+            // name, then text found anywhere (a description, a category).
+            const rank = (it) => {
+              const titles = [it.title.toLowerCase(), it.def && !it.group ? englishTitle(it.def).toLowerCase() : ''].filter(Boolean);
+              if (titles.includes(q)) return 0;
+              if (it.keys?.has(q) || it.name === q) return 1;
+              return titles.some((t) => t.startsWith(q)) ? 2 : 3;
+            };
             matches = matches.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
           }
           let lastCat = null;
@@ -1356,6 +1350,31 @@
       const link = w && graph?.links[Number(w.dataset.link)];
       return link ? { el: w, ref: { link } } : null;
     }
+    // A pin's bubble goes beside its node, on the pin's side, so it never hides the node (its title, its other pins);
+    // a wire's goes by the pointer. Neither covers the paused node's title.
+    function placeValueTip(hit, clientX, clientY) {
+      const r = canvasRect();
+      const w = valueTip.offsetWidth;
+      const ht = valueTip.offsetHeight;
+      const nodeEl = hit.el.closest?.('.vs-node');
+      const pausedHead = debugState.paused && views.get(debugState.paused.node)?.el.querySelector('.vs-head');
+      const avoid = [nodeEl, pausedHead].filter(Boolean).map((e) => e.getBoundingClientRect());
+      const spots = [];
+      if (nodeEl) {
+        const n = nodeEl.getBoundingClientRect();
+        const p = hit.el.getBoundingClientRect();
+        const py = p.top + p.height / 2 - ht / 2;
+        const px = p.left + p.width / 2 - w / 2;
+        const left = [n.left - w - 8, py];
+        const right = [n.right + 8, py];
+        spots.push(...(hit.ref.side === 'in' ? [left, right] : [right, left]), [px, n.bottom + 6], [px, n.top - ht - 6]);
+      } else spots.push([clientX + 12, clientY - ht - 10], [clientX + 12, clientY + 18], [clientX - w - 12, clientY - ht - 10], [clientX - w - 12, clientY + 18]);
+      const inside = ([x, y]) => x >= r.left + 4 && y >= r.top + 4 && x + w <= r.right - 4 && y + ht <= r.bottom - 4;
+      const clear = ([x, y]) => !avoid.some((a) => x < a.right && x + w > a.left && y < a.bottom && y + ht > a.top);
+      const [x, y] = spots.find((p) => inside(p) && clear(p)) || spots.find(clear) || spots[0];
+      valueTip.style.left = `${Math.max(4, Math.min(x - r.left, r.width - w - 4))}px`;
+      valueTip.style.top = `${Math.max(4, Math.min(y - r.top, r.height - ht - 4))}px`;
+    }
     canvas.addEventListener('mouseover', (e) => {
       if (!valueProvider || gesture || !graph) return;
       const hit = valueRef(e.target);
@@ -1371,11 +1390,7 @@
         valueTip.textContent = String(v.text);
         valueTip.classList.toggle('vs-value-note', !!v.note);
         valueTip.classList.remove('hidden');
-        const r = canvasRect();
-        const x = Math.min(clientX - r.left + 12, r.width - valueTip.offsetWidth - 4);
-        const y = clientY - r.top - valueTip.offsetHeight - 10;
-        valueTip.style.left = `${Math.max(4, x)}px`;
-        valueTip.style.top = `${y < 4 ? clientY - r.top + 18 : y}px`;
+        placeValueTip(hit, clientX, clientY);
       }, 250);
     });
     canvas.addEventListener('mouseleave', hideValue);
@@ -1426,12 +1441,36 @@
     // The custom tab's host gets the focus when the tab is activated; the canvas takes the keys.
     host.addEventListener('focus', (e) => { if (e.target === host) canvas.focus({ preventScroll: true }); });
 
-    // A field being typed in is written before the document is saved.
+    // A field being typed in commits when it is left. Saving, closing the tab or any other IDE shortcut pressed while
+    // typing (Ctrl+S, Ctrl+F4, Shift+F10) acts on the document, so the field is written first; the keyboard stays in
+    // it (the node is drawn again with the new value).
+    function flushField(f, { keep = true } = {}) {
+      if (!f || !host.contains(f) || !isField(f) || palette?.el.contains(f)) return;
+      const field = f.dataset.field;
+      const id = f.closest('.vs-node')?.dataset.id;
+      const sel = [f.selectionStart, f.selectionEnd];
+      // Leaving the field is what commits it (its change event, a comment's blur), once, as the browser decides.
+      f.blur();
+      const again = keep && field && id ? host.querySelector(`.vs-node[data-id="${id}"] [data-field="${CSS.escape(field)}"]`) : null;
+      if (!again) return;
+      again.focus({ preventScroll: true });
+      try { again.setSelectionRange(...sel); } catch {}
+    }
     disposers.push(root.ide.on('beforeSave', (t) => {
       if (t?.doc !== doc && t?.path !== path) return;
-      const f = document.activeElement;
-      if (f && host.contains(f) && isField(f)) f.dispatchEvent(new Event('change'));
+      flushField(document.activeElement);
     }));
+    // Keys a text field handles itself (undo, select all, clipboard, word moves) never commit it.
+    const FIELD_KEYS = /^Ctrl\+(?:Shift\+)?(?:[ZYAXCV]|ArrowLeft|ArrowRight|Backspace|Delete|Home|End)$/;
+    const onShortcut = (e) => {
+      const f = document.activeElement;
+      if (disposed || !f || !host.contains(f) || !isField(f)) return;
+      const combo = root.ide.keymap?.comboOf?.(e);
+      if (!combo || FIELD_KEYS.test(combo)) return;
+      if ((root.ide.actions || []).some((a) => a.keys?.includes(combo) && (!a.when || a.when()))) flushField(f);
+    };
+    window.addEventListener('keydown', onShortcut, true);
+    disposers.push(() => window.removeEventListener('keydown', onShortcut, true));
 
     // ---------- startup ----------
     applyView();
@@ -1450,9 +1489,8 @@
       path,
       dispose() {
         if (disposed) return;
+        flushField(document.activeElement, { keep: false });
         disposed = true;
-        const f = document.activeElement;
-        if (f && host.contains(f) && isField(f)) f.dispatchEvent(new Event('change'));
         closePalette({ focus: false });
         clearTimeout(compileTimer);
         clearTimeout(bannerTimer);

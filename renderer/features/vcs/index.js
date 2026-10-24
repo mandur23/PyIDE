@@ -1053,7 +1053,10 @@
       authorSelect.onchange = () => renderLog();
       const authorLabel = el('label', 'muted', tr('User:'));
       authorLabel.htmlFor = authorSelect.id; // names the list for screen readers
-      bar.append(logSearch, authorLabel, authorSelect);
+      // One unit, so a narrow bar wraps it whole onto the next line instead of breaking the label.
+      const authorFilter = el('span', 'vcs-log-user');
+      authorFilter.append(authorLabel, authorSelect);
+      bar.append(logSearch, authorFilter);
       const header = el('div', 'vcs-log-row vcs-log-header');
       header.append(el('span', 'vcs-c-subject', tr('Commit')), el('span', 'vcs-c-author', tr('Author')), el('span', 'vcs-c-date', tr('Date')));
       logRows = el('div', 'vcs-log-rows');

@@ -108,13 +108,22 @@
 .vcs-log-header:hover { background: none; }
 .vcs-c-subject { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
 .vcs-subject-text { overflow: hidden; text-overflow: ellipsis; }
-.vcs-c-author { width: 140px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gray11); }
-.vcs-c-date { width: 150px; flex-shrink: 0; color: var(--gray9); }
+/* In a narrow panel author and date give way first; the subject keeps room for its first words. */
+.vcs-log-row .vcs-c-subject { min-width: 120px; }
+.vcs-c-author { flex: 0 1 140px; min-width: 50px; overflow: hidden; text-overflow: ellipsis; color: var(--gray11); }
+.vcs-c-date { flex: 0 1 150px; min-width: 60px; overflow: hidden; text-overflow: ellipsis; color: var(--gray9); }
 .vcs-ref { font-size: 11px; padding: 0 5px; border-radius: 3px; background: var(--vcs-ref-bg); color: var(--vcs-ref-fg); }
 .vcs-ref.head { background: var(--vcs-ref-head-bg); color: var(--vcs-ref-head-fg); }
 .vcs-ref.remote { background: var(--vcs-ref-remote-bg); color: var(--vcs-ref-remote-fg); }
 .vcs-ref.tag { background: var(--vcs-ref-tag-bg); color: var(--vcs-ref-tag-fg); }
 .vcs-log-side { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; }
+/* A narrow Git window (a small screen, tool windows open beside it) puts the changed files below the commits. */
+.tool:has(> .vcs-log) { container: vcs-git / inline-size; }
+@container vcs-git (max-width: 720px) {
+  .vcs-log { flex-direction: column; }
+  .vcs-log-table { flex: 3 1 0; min-height: 0; border-right: 0; }
+  .vcs-log-side { width: auto; flex: 2 1 0; border-top: 1px solid var(--gray3); }
+}
 .vcs-log-files { flex: 1; overflow: auto; min-height: 0; }
 .vcs-log-file { padding-left: 10px; }
 .vcs-side-title { padding: 4px 10px; color: var(--gray7); font-size: 12px; }
@@ -130,9 +139,10 @@
 .vcs-push .field { grid-template-columns: 60px 1fr; }
 
 /* Log graph, filters and the Activity timeline */
-.vcs-log-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
-.vcs-log-search { flex: 1; min-width: 80px; max-width: 360px; padding: 3px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
+.vcs-log-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }
+.vcs-log-search { flex: 1 1 160px; min-width: 120px; max-width: 360px; padding: 3px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
 .vcs-log-search:focus { border-color: var(--blue6); }
+.vcs-log-user { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
 .vcs-log-bar select { background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; padding: 2px 6px; max-width: 220px; }
 .vcs-spacer { flex: 1; }
 .vcs-log-row .vcs-c-subject { gap: 6px; }

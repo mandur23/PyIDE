@@ -235,6 +235,10 @@
         nodes.push(...shown.map(rowOf));
         if (tab === 'all' && r.items.length > GROUP_LIMIT) nodes.push(rowOf({ key: `more:${c.id}`, more: c.id }));
       }
+      // Just after a big project opens the symbol index is still being built: say so where Classes and Symbols will appear.
+      if (pending && input.value.trim() && nav.indexing?.() && ['classes', 'symbols'].some((id) => (tab === 'all' || tab === id) && !results.has(id))) {
+        nodes.push(el('div', 'se-empty se-indexing', tr('Indexing…')));
+      }
       if (!nodes.length) nodes.push(el('div', 'se-empty', pending ? tr('Searching…') : input.value.trim() ? tr('Nothing found') : tr('Type to search everywhere')));
       list.replaceChildren(...nodes);
       rows = [...list.querySelectorAll('.se-row')];

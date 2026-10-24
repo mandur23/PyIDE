@@ -105,6 +105,35 @@ try {
   check(await k.js(`[...document.querySelectorAll('.vcs-subtab')].map(s => s.textContent).join('|')`) === '로그|활동|콘솔', 'sub-tabs are 로그 | 활동 | 콘솔');
   check(await k.js(`document.querySelector('.vcs-log-row.merge .vcs-badge').textContent === '병합'`), 'the merge badge reads 병합');
   const leaks = await englishLeaks(k, '.vcs-log-bar, .vcs-log-header');
+
+  // ---------- the filter bar in a narrow bottom panel ----------
+  const barLayout = () => k.js(`(() => {
+    const box = (n) => n.getBoundingClientRect();
+    const bar = box(document.querySelector('.vcs-log-bar'));
+    const label = document.querySelector('.vcs-log-bar label');
+    const search = box(document.querySelector('#vcsLogSearch'));
+    const author = box(document.querySelector('#vcsLogAuthor'));
+    return { table: Math.round(box(document.querySelector('.vcs-log-table')).width), labelLines: Math.round(box(label).height / (parseFloat(getComputedStyle(label).fontSize) * 1.3)),
+      search: Math.round(search.width), searchInside: search.left >= bar.left && search.right <= bar.right + 0.5, authorInside: author.right <= bar.right + 0.5,
+      subject: Math.round(box(document.querySelector('.vcs-log-rows .vcs-log-row .vcs-c-subject')).width) };
+  })()`);
+  const barChecks = async (where) => {
+    const b = await barLayout();
+    k.check(b.labelLines === 1, `${where}: the 사용자: label stays on one line (${JSON.stringify(b)})`);
+    k.check(b.searchInside && b.authorInside && b.search >= 120, `${where}: the search box and the user list are whole (${JSON.stringify(b)})`);
+    k.check(b.subject >= 120, `${where}: the subject column keeps its minimum width (${JSON.stringify(b)})`);
+  };
+  await barChecks('normal size');
+  await k.cdp('Emulation.setDeviceMetricsOverride', { width: 1008, height: 681, deviceScaleFactor: 1, mobile: false });
+  // The emulated height can come out a pixel taller.
+  await k.until(`innerWidth === 1008 && Math.abs(innerHeight - 681) <= 1`, 'viewport 1008x681');
+  await k.js(`(ide.toolWindows.get('Notifications').show(), true)`);
+  await k.until(`ide.toolWindows.get('Notifications').isVisible()`, 'right tool window');
+  await k.sleep(400);
+  await barChecks('1008x681 with a right tool window');
+  await k.shot('log-narrow-ko.png');
+  await k.js(`(ide.toolWindows.get('Notifications').hide(), true)`);
+  await k.cdp('Emulation.clearDeviceMetricsOverride');
   await k.js(`document.querySelector('#vcsActivityTab').click()`);
   await k.until(`document.querySelectorAll('#vcsActivity .vcs-act-row').length >= 9`, 'ko activity');
   check(await k.js(`[...document.querySelectorAll('#vcsActivity .vcs-act-row[data-kind="checkout"] .vcs-act-text')][0].textContent`) === 'feature에서 main(으)로 전환함', 'a branch switch reads in Korean');

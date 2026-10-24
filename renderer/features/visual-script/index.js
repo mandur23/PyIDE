@@ -186,6 +186,79 @@
   }
 
   // ---------- Export as Python… ----------
+  // Python's standard modules (sys.stdlib_module_names of 3.14 and those older versions still have), for when the
+  // interpreter cannot be asked (Safe Mode, no interpreter).
+  const STDLIB = new Set(('abc annotationlib antigravity argparse array ast asynchat asyncio asyncore atexit audioop base64 bdb '
+    + 'binascii bisect builtins bz2 cProfile calendar cgi cgitb chunk cmath cmd code codecs codeop collections colorsys '
+    + 'compileall compression concurrent configparser contextlib contextvars copy copyreg crypt csv ctypes curses dataclasses '
+    + 'datetime dbm decimal difflib dis distutils doctest email encodings ensurepip enum errno faulthandler fcntl filecmp '
+    + 'fileinput fnmatch fractions ftplib functools gc genericpath getopt getpass gettext glob graphlib grp gzip hashlib heapq '
+    + 'hmac html http idlelib imaplib imghdr imp importlib inspect io ipaddress itertools json keyword lib2to3 linecache '
+    + 'locale logging lzma mailbox mailcap marshal math mimetypes mmap modulefinder msilib msvcrt multiprocessing netrc nis '
+    + 'nntplib nt ntpath nturl2path numbers opcode operator optparse os ossaudiodev pathlib pdb pickle pickletools pipes '
+    + 'pkgutil platform plistlib poplib posix posixpath pprint profile pstats pty pwd py_compile pyclbr pydoc pydoc_data '
+    + 'pyexpat queue quopri random re readline reprlib resource rlcompleter runpy sched secrets select selectors shelve shlex '
+    + 'shutil signal site smtpd smtplib sndhdr socket socketserver spwd sqlite3 sre_compile sre_constants sre_parse ssl stat '
+    + 'statistics string stringprep struct subprocess sunau symtable sys sysconfig syslog tabnanny tarfile telnetlib tempfile '
+    + 'termios textwrap this threading time timeit tkinter token tokenize tomllib trace traceback tracemalloc tty turtle '
+    + 'turtledemo types typing unicodedata unittest urllib uu uuid venv warnings wave weakref webbrowser winreg winsound '
+    + 'wsgiref xdrlib xml xmlrpc zipapp zipfile zipimport zlib zoneinfo').split(' '));
+  // The top-level modules `code` imports, at any indentation (a Python Code node's import inside main()).
+  function importedModules(code) {
+    const out = new Set();
+    for (const m of code.matchAll(/^[ \t]*import[ \t]+([^\n#;]+)/gm)) {
+      for (const part of m[1].split(',')) { const name = part.trim().split(/[\s.]/)[0]; if (name) out.add(name); }
+    }
+    for (const m of code.matchAll(/^[ \t]*from[ \t]+([^\s.]+)/gm)) out.add(m[1]);
+    return out;
+  }
+  // Would `<name>.py` beside the script hide a module: one the code imports, a standard one or an installed one?
+  async function hidesModule(name, code) {
+    if (importedModules(code).has(name) || STDLIB.has(name)) return true;
+    const installed = await VS.symbols?.packages().catch(() => []);
+    return !!installed?.includes(name);
+  }
+  // Asks for a file name that hides no module; resolves the name (with .py) or null.
+  async function exportName(stem, code) {
+    if (!(await hidesModule(stem, code))) return `${stem}.py`;
+    let suggestion = `${stem}_script`;
+    for (let i = 2; await hidesModule(suggestion, code); i++) suggestion = `${stem}_script${i}`;
+    return new Promise((resolve) => {
+      let chosen = null;
+      const message = el('div', 'dialog-message');
+      const say = (module) => {
+        message.textContent = tr('{file} would hide the Python module {module}: "import {module}" in this script or in a file next to it would load {file} instead. Export it under another name:', { file: `${module}.py`, module });
+      };
+      say(stem);
+      const input = el('input', 'vs-export-input');
+      input.type = 'text';
+      input.spellcheck = false;
+      input.value = `${suggestion}.py`;
+      input.setAttribute('aria-label', tr('File name'));
+      const body = el('div');
+      body.append(message, input);
+      const refuse = () => { input.classList.add('vs-invalid'); input.focus(); return false; };
+      ide.ui.dialog({
+        title: tr('Export as Python'),
+        body,
+        onClose: () => resolve(chosen),
+        buttons: [
+          {
+            label: tr('Export'), primary: true,
+            run: async () => {
+              const name = input.value.trim().replace(/\.py$/i, '');
+              if (!name || /[\\/:*?"<>|]/.test(name)) return refuse();
+              if (await hidesModule(name, code)) { say(name); return refuse(); }
+              chosen = `${name}.py`;
+              return true;
+            },
+          },
+          { label: tr('Cancel') },
+        ],
+      });
+      input.select();
+    });
+  }
   async function exportPython(path) {
     let graph;
     try { graph = await readGraph(path); } catch (err) { ide.ui.alert(ide.util.errorText(err)); return null; }
@@ -195,7 +268,9 @@
       ide.ui.alert(tr('Fix the problems in {name} before exporting it.', { name: basename(path) }));
       return null;
     }
-    const target = joinPath(dirname(path), `${nameOf(path)}.py`);
+    const fileName = await exportName(nameOf(path), result.code);
+    if (!fileName) return null;
+    const target = joinPath(dirname(path), fileName);
     const existed = await ide.api.exists(target);
     try {
       if (existed) {

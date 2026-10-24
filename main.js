@@ -178,18 +178,38 @@ ipcMain.handle('fs:create', (_e, p, isDir) => {
   else fs.writeFileSync(p, '');
 });
 ipcMain.handle('fs:rename', (_e, from, to) => fs.renameSync(from, to));
-// Files and folders dropped on the project tree from Explorer -> the copies made. A name that exists in dir is skipped
-// unless overwrite (a folder is then merged into the existing one).
-ipcMain.handle('fs:copyInto', (_e, sources, dir, overwrite = false) => {
+// Files and folders dropped on the project tree from Explorer -> {copied: [paths], failed: [{name, code, error}]}.
+// Each source is copied on its own, so one failure does not stop the rest. A name that exists in dir is skipped unless
+// overwrite (a folder is then merged into the existing one); a second source with the name of an earlier one is not
+// copied over it (code ESAMENAME). Not fs.cpSync: under Electron 38 (Node 22) it aborts the whole main process for non-ASCII
+// paths (a folder 과제, an overwritten 숙제.py), and it would hold every window's IPC while a big tree copies.
+ipcMain.handle('fs:copyInto', async (_e, sources, dir, overwrite = false) => {
   const copied = [];
+  const failed = [];
+  const names = new Set();
   for (const src of sources) {
-    const to = path.join(dir, path.basename(src));
-    if (fs.existsSync(to) && !overwrite) continue;
-    fs.cpSync(src, to, { recursive: true, force: true });
-    copied.push(to);
+    const name = path.basename(src);
+    if (names.has(name.toLowerCase())) { failed.push({ name, code: 'ESAMENAME', error: 'another dropped item has the same name' }); continue; }
+    names.add(name.toLowerCase());
+    const to = path.join(dir, name);
+    if (!overwrite && await exists(to)) continue;
+    try {
+      await fs.promises.cp(src, to, { recursive: true, force: true });
+      copied.push(to);
+    } catch (e) { failed.push({ name, code: e.code, error: e.message }); }
   }
-  return copied;
+  return { copied, failed };
 });
+// What a path is (null when it cannot be read): a dropped path's kind, without the error fs:list records for a file.
+ipcMain.handle('fs:stat', async (_e, p) => {
+  try {
+    const s = await fs.promises.stat(p);
+    return { isDirectory: s.isDirectory(), size: s.size, mtimeMs: s.mtimeMs };
+  } catch { return null; }
+});
+// The file a path finally names (links, junctions and 8.3 short names resolved, the disk's own case), or the path itself
+// when it cannot be resolved: two spellings of one python.exe are one interpreter.
+ipcMain.handle('fs:realpath', (_e, p) => fs.promises.realpath(p).catch(() => p));
 // Encoding-aware text IO for editor documents (UTF-8, UTF-8 with BOM, UTF-16, CP949/EUC-KR).
 ipcMain.handle('fs:readText', (_e, p) => textCodec.read(p));
 ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.write(p, text, encoding));
@@ -221,10 +241,12 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
   const found = [];
   const seen = new Set();
+  // One entry per real file: a junction or an 8.3 spelling of a listed python.exe is the same interpreter.
+  const real = await Promise.all(infos.map((info) => (info ? fs.promises.realpath(info.executable).catch(() => info.executable) : null)));
   candidates.forEach(([cmd, args, label], i) => {
     const info = infos[i];
-    if (!info || seen.has(info.executable.toLowerCase())) return;
-    seen.add(info.executable.toLowerCase());
+    if (!info || seen.has(real[i].toLowerCase())) return;
+    seen.add(real[i].toLowerCase());
     found.push({ cmd, args, label: `${label} (Python ${info.version})`, executable: info.executable, version: info.version });
   });
   interpLog.info(`${found.length} of ${candidates.length} candidates in ${Math.round(performance.now() - t0)} ms, ${probesStarted - started} probed`);

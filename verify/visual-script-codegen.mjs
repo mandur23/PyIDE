@@ -1,10 +1,13 @@
 // Pure Node (no window): renderer/features/visual-script model.js, nodes.js and codegen.js. Generates Python for
 // realistic graphs and runs it with the system Python, checks the line -> node map against real tracebacks, every
-// compile error and parse error, deterministic serialization, the edit helpers, and the Korean dictionary.
+// compile error and parse error, deterministic serialization, the edit helpers, and the Korean dictionary. Also script
+// variables across functions, values used before their step runs, file content that must never become code, Python
+// Code strings, numbers fields cannot hold as doubles, and an incomplete symbol index (symbols.js in a sandbox).
 import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import os from 'os';
+import vm from 'vm';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -1007,6 +1010,140 @@ for (const text of ['', '   \n\t ']) {
     'edit: pasteNodes keeps the wires between pasted nodes only');
 
   check(VS.serialize(base) === before, `edit: none of the ${ops.length} helpers changed the original graph`);
+}
+
+// ---------- script variables, run order of wired values, name clashes ----------
+{
+  const r = runs('variable-read-in-function', withStart({
+    n2: ['var.set', { props: { name: 'score' }, inputs: { value: 5 } }], n3: ['fn.call', { props: { function: 'show' } }], n4: ['io.print'], n5: ['var.get', { props: { name: 'count' } }],
+    n6: ['fn.define', { props: { name: 'show' } }], n7: ['io.print'], n8: ['var.get', { props: { name: 'score' } }], n9: ['var.set', { props: { name: 'count' }, inputs: { value: 1 } }],
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n5.value -> n4.value', 'n6.body -> n7.in', 'n7.next -> n9.in', 'n8.value -> n7.value']), '5\n1\n', {
+    lines: [['def show():', 'n6'], ['    global count', 'n6'], ['def main():', 'n1'], ['    global score', 'n1']],
+  });
+  check(r.code.split('\n').filter((l) => l.trim().startsWith('global')).length === 2,
+    'variable-read-in-function: only a function that sets a variable declares it global; reading needs nothing', r.code);
+  runs('parameter-shadows-variable', withStart({
+    n2: ['var.set', { props: { name: 'score' }, inputs: { value: 5 } }], n3: ['fn.call', { props: { function: 'bump' }, inputs: { score: 5 } }], n4: ['io.print'], n5: ['var.get', { props: { name: 'score' } }],
+    n6: ['fn.define', { props: { name: 'bump', params: 'score' } }], n7: ['var.set', { props: { name: 'score' } }], n8: ['math.binary', { inputs: { b: 1 } }], n9: ['io.print'], n10: ['var.get', { props: { name: 'score' } }],
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n4.in', 'n5.value -> n4.value', 'n6.body -> n7.in', 'n6.score -> n8.a', 'n8.result -> n7.value', 'n7.next -> n9.in', 'n10.value -> n9.value']), '6\n5\n', {
+    lines: [['def bump(score):', 'n6'], ['    score = score + 1', 'n7']],
+  });
+  runs('values-that-run-first', withStart({
+    n2: ['io.input'], n3: ['flow.if', { inputs: { cond: true } }], n4: ['io.print'],
+    n5: ['flow.forRange', { inputs: { stop: 2 } }], n6: ['io.input'], n7: ['io.print'], n8: ['math.binary', { inputs: { b: 10 } }], n9: ['io.print'],
+    n10: ['fn.call', { props: { function: 'twice' }, inputs: { v: 1 } }], n11: ['fn.define', { props: { name: 'twice', params: 'v' } }], n12: ['flow.forRange', { inputs: { stop: 2 } }], n13: ['io.print'],
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.then -> n4.in', 'n2.answer -> n4.value', 'n4.next -> n5.in',
+    'n5.body -> n6.in', 'n6.next -> n7.in', 'n6.answer -> n7.value', 'n7.next -> n9.in', 'n5.index -> n8.a', 'n8.result -> n9.value', 'n5.done -> n10.in',
+    'n11.body -> n12.in', 'n12.body -> n13.in', 'n11.v -> n13.value']), 'a\nb\n10\nc\n11\n1\n1\n', { stdin: 'a\nb\nc\n' });
+
+  const runBefore = 'does not always run before it';
+  const later = problems('wired-to-a-later-step', withStart({ n2: ['io.print'], n3: ['io.input'] }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.answer -> n2.value']),
+    [['n2', runBefore, { pin: 'value' }]]);
+  check(later.errors.some((e) => e.message.includes('Ask User (n3)')), 'wired-to-a-later-step: the message names the step the value comes from', JSON.stringify(later.errors));
+  const old = python([writePy(VS.compile(withStart({ n2: ['io.print'], n3: ['io.input'] }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.answer -> n2.value'])).code)], 'x\n');
+  check(old.status !== 0 && old.stderr.includes('UnboundLocalError'), 'wired-to-a-later-step: Python cannot run such a graph (UnboundLocalError), which is why it is refused', old.stderr);
+  problems('loop-index-after-the-loop', withStart({ n2: ['flow.forRange', { inputs: { stop: 0 } }], n3: ['io.print'], n4: ['math.binary', { inputs: { b: 1 } }] },
+    ['n1.next -> n2.in', 'n2.done -> n3.in', 'n2.index -> n4.a', 'n4.result -> n3.value']), [['n3', runBefore, { pin: 'value' }]]);
+  problems('value-from-one-branch', withStart({ n2: ['flow.if', { inputs: { cond: false } }], n3: ['io.input'], n4: ['io.print'], n5: ['io.print', { inputs: { value: 'after' } }] },
+    ['n1.next -> n2.in', 'n2.then -> n3.in', 'n2.else -> n5.in', 'n5.next -> n4.in', 'n3.answer -> n4.value']), [['n4', runBefore, { pin: 'value' }]]);
+  problems('value-from-the-loop-body-in-the-condition', withStart({ n2: ['flow.while'], n3: ['io.input'], n4: ['math.compare', { inputs: { b: 'q' }, props: { op: '!=' } }] },
+    ['n1.next -> n2.in', 'n2.body -> n3.in', 'n3.answer -> n4.a', 'n4.result -> n2.cond']), [['n2', runBefore, { pin: 'cond' }]]);
+  problems('value-from-another-function', withStart({
+    n2: ['io.input'], n3: ['fn.call', { props: { function: 'greet' }, inputs: { who: 'x' } }], n4: ['fn.define', { props: { name: 'greet', params: 'who' } }], n5: ['io.print'], n6: ['io.print'],
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in', 'n3.next -> n6.in', 'n4.body -> n5.in', 'n2.answer -> n5.value', 'n4.who -> n6.value']),
+  [['n5', runBefore, { pin: 'value' }], ['n6', runBefore, { pin: 'value' }]]);
+
+  const clash = problems('function-and-variable-named-alike', withStart({
+    n2: ['var.set', { props: { name: 'score' }, inputs: { value: 1 } }], n3: ['fn.call', { props: { function: 'score' } }], n4: ['fn.define', { props: { name: 'score' } }],
+    n5: ['fn.define', { props: { name: 'helper', params: 'score' } }],
+  }, ['n1.next -> n2.in', 'n2.next -> n3.in']), [
+    ['n2', 'A function is also named "score"', { prop: 'name' }], ['n4', 'A variable is also named "score"', { prop: 'name' }], ['n5', 'A function is also named "score"', { prop: 'params' }],
+  ]);
+  check(clash.errors.filter((e) => e.message.includes('also named')).length === 3, 'function-and-variable-named-alike: one problem on each node that uses the name', JSON.stringify(clash.errors));
+}
+
+// ---------- file content never becomes code ----------
+{
+  const parseError = (text) => { try { VS.parse(text); return null; } catch (err) { return err.message; } };
+  const nodeWithId = (id) => JSON.stringify({ format: 1, nodes: [{ id: 'n1', type: 'core.start' }, { id, type: 'io.input' }], links: [] });
+  for (const id of ["n2 = 0; print('pwned')  #", 'n-2', 'n 2', 'n2\nimport os', '노드', '']) {
+    const message = parseError(nodeWithId(id));
+    check(message !== null && (id ? message.includes('An id can contain only') : message.includes('has no "id"')), `parse refuses the node id ${JSON.stringify(id)} with a readable error`, message);
+  }
+  check(parseError(nodeWithId('N_2b')) === null, 'parse accepts ids of letters, digits and _');
+  check(KO['Node {index} has the id "{id}". An id can contain only the letters A-Z and a-z, digits and _.'] !== undefined, 'the id error has a Korean entry');
+
+  const evil = "__import__('os').system('echo PWNED')";
+  const named = VS.compile(withStart({ n2: ['py.function', { props: { module: 'json', name: 'dumps', params: [{ name: `obj=${evil}, x` }] }, inputs: {} }] }, ['n1.next -> n2.in']), { symbols: null });
+  check(named.errors.some((e) => e.node === 'n2' && e.message.includes('cannot be used as a name')) && named.code.split('\n').every((l) => !l.includes('__import__') || l.trim().startsWith('raise RuntimeError(')), 'a stored parameter name that is not a name is an error on its node and never reaches the code', `${JSON.stringify(named.errors)}\n${named.code}`);
+  const defaults = { module: 'm', name: 'f', params: [{ name: 'a', default: evil }, { name: 'rest', kind: 'var-positional' }] };
+  const dr = VS.compile(withStart({ n2: ['py.function', { props: defaults }], n3: ['value.list', { props: { count: 1 }, inputs: { item0: 1 } }] }, ['n1.next -> n2.in', 'n3.list -> n2.rest']), { symbols: null });
+  check(dr.errors.some((e) => e.node === 'n2' && e.pin === 'a' && e.message.includes('needs a value here')) && !dr.code.includes('__import__'), 'a stored default that is not a literal is never pasted into the call', `${JSON.stringify(dr.errors)}\n${dr.code}`);
+  const ok = { module: 'm', name: 'f', params: [{ name: 'a', default: "('x', -1.5e3, None, {'k': [True, b'\\x00']})" }, { name: 'rest', kind: 'var-positional' }] };
+  const okr = VS.compile(withStart({ n2: ['py.function', { props: ok }], n3: ['value.list', { props: { count: 1 }, inputs: { item0: 1 } }] }, ['n1.next -> n2.in', 'n3.list -> n2.rest']), { symbols: null });
+  check(okr.code.includes("f(('x', -1.5e3, None, {'k': [True, b'\\x00']}), *[1])") && !okr.errors.length, 'a literal default is still passed for a skipped argument before *args', `${JSON.stringify(okr.errors)}\n${okr.code}`);
+  const literals = ['1', '-2', '0x1F', '1_000', '1.5e-3', '2j', "'a'", '"b"', "r'\\d'", "b'x'", "'''t'''", 'None', 'True', '...', '()', '(1,)', '[1, [2]]', "{'a': 1}", '{1, 2}', "u'x'"];
+  const notLiterals = [evil, 'os.sep', 're.I', 'object()', "f'{x}'", 'x', '1, 2', 'a: 1', '(1', "'open", "'a' if x else 'b'", 'lambda: 0', '[i for i in y]', '1 # c', '"a"\n"b"', '(x := 1)', '', '[1].pop()', "''.join"];
+  check(literals.every(VS.isPythonLiteral) && !notLiterals.some(VS.isPythonLiteral), 'isPythonLiteral: literals and containers of literals only',
+    `${literals.filter((l) => !VS.isPythonLiteral(l)).join(' | ')} || ${notLiterals.filter(VS.isPythonLiteral).join(' | ')}`);
+  const py = python(['-c', 'import ast, sys, json\nfor s in json.loads(sys.stdin.read()):\n    ast.literal_eval(s)\nprint("ok")'], JSON.stringify(literals));
+  check(py.stdout.trim() === 'ok', 'every string isPythonLiteral accepts is one ast.literal_eval reads', py.stderr);
+  const spec = VS.compile(withStart({ n2: ['io.print'], n3: ['text.format', { props: { template: `{n:{${evil}}}}` } }], n4: ['value.number', { props: { value: 5 } }] },
+    ['n1.next -> n2.in', 'n3.text -> n2.value', 'n4.value -> n3.n']));
+  check(VS.hasErrors(spec) && spec.errors.some((e) => e.node === 'n3' && e.prop === 'template') && !spec.code.includes('__import__'), 'a format spec with a nested {field} is an error and never reaches the f-string', `${JSON.stringify(spec.errors)}\n${spec.code}`);
+}
+
+// ---------- Python Code keeps the inside of its strings ----------
+{
+  const code = 's = """1. 시작\n   2. 종료\n\tend\n"""\nt = "a\\\n  b"\nif s:\n    print(s + t)';
+  const indented = ['    s = """1. 시작', '   2. 종료', '\tend', '"""', '    t = "a\\', '  b"', '    if s:', '        print(s + t)'].join('\n');
+  runs('python-code-strings', withStart({
+    n2: ['flow.if', { inputs: { cond: true } }], n3: ['py.code', { props: { code, inputs: '' } }], n4: ['fn.call', { props: { function: 'again' } }],
+    n5: ['fn.define', { props: { name: 'again' } }], n6: ['py.code', { props: { code: indented, inputs: '' } }],
+  }, ['n1.next -> n2.in', 'n2.then -> n3.in', 'n3.next -> n4.in', 'n5.body -> n6.in']), '1. 시작\n   2. 종료\n\tend\na  b\n1. 시작\n   2. 종료\n\tend\na  b\n', {
+    lines: [['        s = """1. 시작', 'n3'], ['   2. 종료', 'n6'], ['\tend', 'n6'], ['    s = """1. 시작', 'n6']],
+  });
+}
+
+// ---------- numbers typed into fields ----------
+{
+  const anyCases = [['42', 42], ['-0.5', -0.5], ['0', 0], ['1e3', 1000], ['01012345678', '01012345678'], ['-007', '-007'], ['12345678901234567890', '12345678901234567890'],
+    ['123456789012345', 123456789012345], ['"42"', '42'], ['hello', 'hello'], [' 7 ', 7]];
+  const bad = anyCases.filter(([text, v]) => !Object.is(VS.anyValue(text), v));
+  check(!bad.length, 'anyValue: a number unless a double would change it (leading zero, more than 15 digits)', JSON.stringify(bad.map(([t]) => [t, VS.anyValue(t)])));
+  const roundTrip = [42, -0.5, '01012345678', '12345678901234567890', '42', 'hello', '"quoted"', ''].filter((v) => VS.anyValue(VS.anyText(v)) !== v);
+  check(!roundTrip.length && VS.anyText('01012345678') === '01012345678' && VS.anyText('42') === '"42"', 'anyText shows each value so that typing it back gives the same value', JSON.stringify(roundTrip));
+  check(VS.numberValue('12345678901234567890') === '12345678901234567890' && VS.numberValue('-98765432109876543210') === '-98765432109876543210' && VS.numberValue('007') === 7 && VS.numberValue('2.5') === 2.5 && Number.isNaN(VS.numberValue('')),
+    'numberValue keeps an integer a double cannot hold as its digits');
+  runs('big-numbers', withStart({
+    n2: ['io.print'], n3: ['math.binary', { inputs: { a: '12345678901234567890', b: 1 } }], n4: ['io.print'], n5: ['value.number', { props: { value: '-98765432109876543210' } }],
+    n6: ['io.print', { inputs: { value: '01012345678' } }],
+  }, ['n1.next -> n2.in', 'n3.result -> n2.value', 'n2.next -> n4.in', 'n5.value -> n4.value', 'n4.next -> n6.in']), '12345678901234567891\n-98765432109876543210\n01012345678\n', {
+    lines: [['    print(12345678901234567890 + 1)', 'n2'], ['    print(-98765432109876543210)', 'n4'], ['    print("01012345678")', 'n6']],
+  });
+}
+
+// ---------- the symbol index: a module it did not read is unknown, not gone ----------
+{
+  const src = readFileSync(path.join(DIR, 'symbols.js'), 'utf8');
+  const lookupWith = async (reply) => {
+    const ide = { root: 'C:\\p', trusted: true, interps: [{ cmd: 'python' }], currentInterp: () => ({ cmd: 'python' }), on() {}, api: { invoke: async () => reply } };
+    const sandbox = { ide, console, PyideVisualScript: { tr: (s) => s } };
+    vm.runInNewContext(src, sandbox);
+    await sandbox.PyideVisualScript.symbols.refresh();
+    return sandbox.PyideVisualScript.symbols.lookup;
+  };
+  const geo = { name: 'geo.figures', functions: [{ name: 'area', params: [] }], classes: [] };
+  const full = await lookupWith({ trusted: true, modules: [geo], truncated: false, skipped: [] });
+  check(full('geo.figures', null, 'area')?.name === 'area' && full('geo.figures', null, 'gone') === null && full('geo.shapes', null, 'x') === null && full('numpy', null, 'x') === undefined,
+    'a complete index: a function or project module it lacks is gone; a package it never read is unknown');
+  const truncated = await lookupWith({ trusted: true, modules: [geo], truncated: true, skipped: [] });
+  check(truncated('geo.shapes', null, 'x') === undefined && truncated('geo.figures', null, 'gone') === null, 'a truncated index: a module it lacks is unknown (a module it read still knows its functions)');
+  const skipped = await lookupWith({ trusted: true, modules: [geo], truncated: false, skipped: ['geo.big'] });
+  check(skipped('geo.big', null, 'x') === undefined && skipped('geo.shapes', null, 'x') === null, 'a module whose file was too large to read is unknown');
+  const node = ['py.function', { props: { module: 'geo.big', name: 'x', params: [] } }];
+  const r = VS.compile(withStart({ n2: node }, ['n1.next -> n2.in']), { symbols: { lookup: skipped } });
+  check(!VS.hasErrors(r), 'Run goes ahead for a function in a module the index skipped', JSON.stringify(r.errors));
 }
 
 // ---------- Korean ----------

@@ -234,11 +234,11 @@ try {
   // project tree: a test file is offered as pytest, and the project folder runs every test
   // (a sixth temporary configuration pushes out the oldest)
   await js(`(() => { const n = [...document.querySelectorAll('#tree .node')].find(n => n.textContent.includes('test_units.py')); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
-  check(!(await menuItems()).some((m) => m.startsWith("Run '…'")) && (await menuItems()).some((m) => m.startsWith("Run 'pytest in …'")), 'test files are offered as pytest runs, not plain Python runs, in the tree');
+  check(!(await menuItems()).some((m) => m.startsWith("Run '…'")) && (await menuItems()).some((m) => m.startsWith("Run 'pytest in test_units.py'")), 'test files are offered as pytest runs (named after the file), not plain Python runs, in the tree');
   await click('#status');
   check(!(await js(`document.querySelector('.context-menu')`)), 'clicking elsewhere closes the tree menu');
   await js(`(() => { const n = document.querySelector('#tree .node'); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
-  await clickMenu("Run 'pytest in …'");
+  await clickMenu("Run 'pytest in project'");
   await until(`document.querySelector('.run-tab.active .run-tab-title')?.textContent === 'pytest in project'`, 'tree pytest tab');
   await waitTests('tree pytest done');
   check((await testStatus()).includes('Tests failed: 3, passed: 3, ignored: 2 of 8 tests'), `Run 'pytest in project' from the project tree runs every test (${await testStatus()})`);

@@ -1,5 +1,5 @@
 // Editor groups (split panes), tab management, preview/pinned tabs, encodings, binary files and detached windows.
-import { chmodSync, readFileSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 import { launch, openFile } from './lib.mjs';
@@ -277,6 +277,40 @@ try {
   await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Close').click()`);
   await until(`!ide.findTab(ide.util.joinPath(ide.root, 'c.py'))`, 'tab closed');
   check(true, 'Close closes it without saving');
+
+  // ---------- files dragged in from Explorer (real CDP drags with file paths, copy only) ----------
+  const outside = path.join(path.dirname(t.project), 'outside');
+  mkdirSync(outside, { recursive: true });
+  for (const name of ['탭.py', '본문.py', '가장자리.py']) writeFileSync(path.join(outside, name), `# ${name}\n`);
+  const long = Array.from({ length: 80 }, (_, i) => `line_${i} = ${i}\n`).join('');
+  writeFileSync(path.join(t.project, 'long.py'), long);
+  await js(`(ide.runAction('UnsplitAll'), true)`);
+  await until(`ide.groups().length === 1`, 'one pane');
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'long.py'))`);
+  await until(`ide.activeTab()?.title === 'long.py'`, 'long.py open');
+  const errorCount = () => js(`ide.api.invoke('diagnostics:errors').then((l) => l.map((e) => e.message))`);
+  const errorsBefore = (await errorCount()).length;
+  const dropFile = async (pointExpr, file) => {
+    const p = await js(pointExpr);
+    const data = { items: [], files: [path.join(outside, file)], dragOperationsMask: 1 };
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await t.cdp('Input.dispatchDragEvent', { type, x: p.x, y: p.y, data });
+  };
+  await dropFile(`(() => { const r = ide.groups()[0].el.querySelector('.tab-list').getBoundingClientRect(); return { x: r.right - 30, y: r.top + r.height / 2 }; })()`, '탭.py');
+  const onStrip = await until(`ide.activeTab()?.title === '탭.py'`, 'opened from the tab strip').then(() => true, () => false);
+  await sleep(300);
+  const newErrors = (await errorCount()).slice(errorsBefore);
+  check(onStrip && !newErrors.length, `a file dropped on the tab strip opens with no IDE internal error (${JSON.stringify(newErrors)})`);
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'long.py'))`);
+  await until(`ide.activeTab()?.title === 'long.py'`, 'long.py again');
+  await dropFile(`(() => { const b = ide.groups()[0].el.querySelector('.group-body').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`, '본문.py');
+  const overText = await until(`ide.activeTab()?.title === '본문.py'`, 'opened over the text').then(() => true, () => false);
+  await sleep(300);
+  check(overText && await js(`ide.groups().length === 1 && !ide.isDirty(ide.findTab(ide.util.joinPath(ide.root, 'long.py')))`) && readFileSync(path.join(t.project, 'long.py'), 'utf8') === long,
+    'a file dropped over the editor text opens in that pane, and nothing is typed into the document under it');
+  await dropFile(`(() => { const b = ide.groups()[0].el.querySelector('.group-body').getBoundingClientRect(); return { x: b.right - 12, y: b.top + b.height / 2 }; })()`, '가장자리.py');
+  const onEdge = await until(`ide.groups().length === 2 && ide.activeTab()?.title === '가장자리.py'`, 'split by an Explorer drop').then(() => true, () => false);
+  check(onEdge, 'a file dropped on a pane edge opens in a new split, like a dragged tab');
+  check((await errorCount()).length === errorsBefore, 'no IDE internal error from the Explorer drops');
   await shot('final.png');
 } catch (err) {
   check(false, err.message);

@@ -521,10 +521,17 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
     }
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.target.closest?.('.monaco-editor')) {
       const stops = [...box.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')].filter((n) => n.tabIndex >= 0 && shown(n));
-      const i = stops.indexOf(document.activeElement);
+      const now = document.activeElement;
+      const i = stops.indexOf(now);
       if (i !== -1 && i !== (e.shiftKey ? 0 : stops.length - 1)) return;
       e.preventDefault();
-      stops[e.shiftKey ? stops.length - 1 : 0]?.focus();
+      // Focus on something in the dialog that is no stop (a scroller Chromium focuses, a list row) goes on from where
+      // it is, not back to the first stop.
+      const pos = (n) => now.compareDocumentPosition(n);
+      const next = i !== -1 || !box.contains(now) ? null : e.shiftKey
+        ? stops.findLast((n) => pos(n) & Node.DOCUMENT_POSITION_PRECEDING && !(pos(n) & Node.DOCUMENT_POSITION_CONTAINS))
+        : stops.find((n) => pos(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+      (next || stops[e.shiftKey ? stops.length - 1 : 0])?.focus();
     }
   };
   addEventListener('keydown', onKey, true);
@@ -640,7 +647,15 @@ ide.registerAction = (action) => {
   if (keymapOverrides.has(action.id)) ide.emit('keymapChanged', action.id);
   return action;
 };
-ide.runAction = (id) => ide.actions.find((a) => a.id === id)?.run();
+// With no project the window is PyCharm's welcome screen: tool windows and what runs or debugs code do nothing (their
+// stripes, panels and the run widget are hidden by body.no-project in styles.css).
+const PROJECT_ACTIONS = new Set(['Run', 'Debug', 'RunClass', 'Rerun', 'ChooseRunConfiguration', 'ChooseDebugConfiguration',
+  'editRunConfigurations', 'RunCoverage', 'Profile', 'RunAnything', 'AttachToProcess', 'RunPythonConsole', 'TerminalNewSession']);
+ide.actionEnabled = (a) => !!ide.root || !(a.needsProject || PROJECT_ACTIONS.has(a.id));
+ide.runAction = (id) => {
+  const a = ide.actions.find((x) => x.id === id);
+  return a && ide.actionEnabled(a) ? a.run() : undefined;
+};
 ide.keysFor = (id) => ide.actions.find((a) => a.id === id)?.keys.join(', ') || '';
 
 let lastShift = 0;
@@ -723,7 +738,7 @@ function fireCombo(combo, e) {
   const terminalFocused = inTerminal();
   for (let i = ide.actions.length - 1; i >= 0; i--) {
     const a = ide.actions[i];
-    if (!a.keys.includes(combo) || (a.when && !a.when())) continue;
+    if (!a.keys.includes(combo) || (a.when && !a.when()) || !ide.actionEnabled(a)) continue;
     if (terminalFocused && !a.terminal) continue;
     // No event when the first stroke of a chord runs late: its keydown was already taken.
     e?.preventDefault();
@@ -903,7 +918,7 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
     container.focus();
   };
   if (keys) {
-    ide.registerAction({ id: tw.keyAction, title: tr('Tool Window: {title}', { title }), keys, run: activate, terminal: true });
+    ide.registerAction({ id: tw.keyAction, title: tr('Tool Window: {title}', { title }), keys, run: activate, terminal: true, needsProject: true });
     button.dataset.keymapAction = tw.keyAction;
     button.title = `${title}${tw.keys ? ` (${tw.keys})` : ''}`;
   }
@@ -1277,7 +1292,8 @@ async function newFileText(path) {
   return '';
 }
 
-// Items for the project tree's context menu next to New Python File / New Directory: `(entry) => [menu items]`.
+// Items for the project tree's context menu: `(entry) => [menu items]`. An item labelled New with a submenu is merged
+// into the menu's New › (file-templates: File, Python File, Python Package…).
 ide.treeNewItems = [];
 async function createEntry(isDir) {
   if (!ide.root) return;
@@ -1339,6 +1355,12 @@ async function moveEntry(entry, dir) {
   await moveTo(entry, joinPath(dir, entry.name));
 }
 
+// fs:copyInto's failures that Node words as a long sentence with both paths in it.
+const COPY_ERRORS = {
+  ESAMENAME: tr('another dropped item has the same name'),
+  ERR_FS_CP_DIR_TO_NON_DIR: tr('a file with this name is already there'),
+  ERR_FS_CP_NON_DIR_TO_DIR: tr('a folder with this name is already there'),
+};
 // Files and folders dropped from Explorer are copied into dir, as PyCharm does. A source already in dir, or one that
 // holds dir, is left out; names that exist there are overwritten or skipped as the user chooses.
 async function copyDropped(paths, dir) {
@@ -1359,9 +1381,14 @@ async function copyDropped(paths, dir) {
     if (!choice) return;
     overwrite = choice === 'overwrite';
   }
-  let copied;
-  try { copied = await ide.api.copyInto(sources, dir, overwrite); } catch (e) {
+  let result;
+  try { result = await ide.api.copyInto(sources, dir, overwrite); } catch (e) {
     return void ide.ui.alert(tr('Could not copy to {dir}: {error}', { dir: where, error: ipcError(e) }));
+  }
+  const { copied, failed } = result;
+  if (failed.length) {
+    const lines = failed.map((f) => `${f.name}: ${COPY_ERRORS[f.code] || ipcError(f.error)}`);
+    ide.ui.alert(`${tr('Could not copy to {dir}:', { dir: where })}\n${lines.join('\n')}`);
   }
   if (!copied.length) return;
   if (!samePath(dir, ide.root)) expanded.add(keyOf(dir));
@@ -1383,6 +1410,22 @@ async function deleteEntry(entry) {
   ide.emit('filesChanged', { deleted: [entry.path] });
 }
 
+// PyCharm's New ›: File, Directory, Python File (Alt+Insert), Python Package… Core adds Directory, and Python File when
+// no plugin offers one; plugins' other items stay beside it.
+function newItems(entry) {
+  const items = ide.treeNewItems.flatMap((fn) => { try { return fn(entry) || []; } catch (e) { console.error(e); return []; } });
+  const isNew = (it) => it.label === tr('New') && it.submenu;
+  const submenu = () => {
+    const sub = items.filter(isNew).flatMap((it) => (typeof it.submenu === 'function' ? it.submenu() : it.submenu));
+    const python = sub.find((it) => it.label === tr('Python File'));
+    if (python) python.keyAction = 'NewPythonFile';
+    else sub.unshift({ label: tr('Python File'), keyAction: 'NewPythonFile', run: () => createEntry(false) });
+    sub.splice(sub.findIndex((it) => it.label === tr('File')) + 1, 0, { label: tr('Directory'), run: () => createEntry(true) });
+    return sub;
+  };
+  return [{ label: tr('New'), submenu }, ...items.filter((it) => !isNew(it))];
+}
+
 function showTreeMenu(entry, x, y) {
   // A row under an extra top-level node gets that node's own items instead of the project's.
   const treeRoot = treeRootOf(entry);
@@ -1392,10 +1435,7 @@ function showTreeMenu(entry, x, y) {
   const fixed = samePath(entry.path, ide.root) || !!entry.fixed;
   ide.ui.contextMenu(x, y, [
     ...(treeRoot ? [] : [
-      { label: tr('New Python File'), keyAction: 'NewPythonFile', run: () => createEntry(false) },
-      { label: tr('New Directory'), run: () => createEntry(true) },
-      // Plugins add more ways to create something here (file-templates: New › Python Package, HTML File…).
-      ...ide.treeNewItems.flatMap((fn) => { try { return fn(entry) || []; } catch (e) { console.error(e); return []; } }),
+      ...newItems(entry),
       { separator: true },
     ]),
     ...(extra.length ? [...extra, { separator: true }] : []),
@@ -1721,6 +1761,7 @@ ide.openProject = async (dir) => {
   $('tree').scrollTop = 0;
   document.title = `${basename(dir)} - PyIDE`;
   $('welcome').classList.add('hidden');
+  document.body.classList.remove('no-project');
   await Promise.all([renderTree(), ide.reloadInterpreters()]);
   try { localStorage.setItem('lastProject', dir); } catch {}
   const recent = ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, dir));
@@ -1771,6 +1812,7 @@ ide.closeProject = async () => {
   drawTree();
   document.title = 'PyIDE';
   $('welcome').classList.remove('hidden');
+  document.body.classList.add('no-project');
   try { localStorage.removeItem('lastProject'); } catch {}
   await ide.reloadInterpreters();
   ide.emit('projectClosed');
@@ -1947,6 +1989,7 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   const reachable = (p) => Promise.race([ide.api.exists(p), new Promise((r) => { setTimeout(r, 3000, false); })]);
   if (last && await reachable(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
+  if (!ide.root) document.body.classList.add('no-project');
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   performance.mark('pyide:ready');
   window.__ideReady = true;

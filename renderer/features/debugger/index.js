@@ -345,9 +345,19 @@
     lastRun = cfg.rerun || (() => debugFile(file, cfg));
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
-    sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
+    sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set(), typed: [] };
     earlyEvents = [];
     const mine = sess;
+    // The program's input takes the keyboard now, so an answer to input() never lands in the file; lines typed
+    // before debugpy has started the program wait in mine.typed. Once it runs, the input takes the keyboard again
+    // unless the user has moved it elsewhere meanwhile.
+    con.input.disabled = false;
+    con.input.focus();
+    let left = false;
+    const watch = (e) => { if (!con.out.parentElement.contains(e.target)) left = true; };
+    document.addEventListener('focusin', watch, true);
+    mine.unwatch = () => document.removeEventListener('focusin', watch, true);
+    const focusInput = () => { mine.unwatch(); if (!left && sess === mine && tw.isVisible() && con.input.offsetParent) con.input.focus(); };
     updateControls();
     const files = [...bps.values()].map((f) => f.path).concat(generatedFor(file) && !bps.has(key(file)) ? [file] : [])
       .map(bpPayload).filter((p) => p.lines.length);
@@ -357,15 +367,18 @@
         startKey: mine.startKey };
       ({ id } = await ide.api.invoke('debug:start', interp, file, cfg.cwd || dirname(file), files, opts));
     } catch (err) {
+      mine.unwatch();
       // A startup the user stopped (or replaced) ends quietly: the console already says the process finished.
       if (sess === mine) {
         con.append(`${remoteError(err)}\n`, 'err');
         sess = null;
+        con.input.disabled = true;
         updateControls();
       }
       return;
     }
     if (sess !== mine) {
+      mine.unwatch();
       // Stopped or superseded while debugpy was starting: tear this debuggee down instead of leaving it running unseen.
       ide.proc.attach(id, {}); // drop its buffered and future output
       ide.api.invoke('debug:stop', id).catch(() => {});
@@ -374,13 +387,14 @@
     sess.id = id;
     if (sess.state === 'starting') sess.state = 'running';
     con.append(`${tr('Connected to pydev debugger (build debugpy)')}\n`, 'sys');
-    con.input.disabled = false;
     updateControls();
+    focusInput();
     ide.proc.attach(id, {
       // A session replaced by a new one (Rerun) must not write into the console the new one cleared.
       data: (text, stream) => sess === mine && con.append(text, stream === 'err' ? 'err' : null),
       exit: (code) => endSession(mine, code),
     });
+    for (const text of mine.typed.splice(0)) ide.proc.input(id, `${text}\n`);
     for (const p of mine.pendingBps) sendBps(p);
     mine.pendingBps.clear();
     const queued = earlyEvents.filter((m) => m.id === id);
@@ -393,6 +407,7 @@
     if (!s.attach) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
     else if (code != null) con.append(`\n${tr('Process {pid} finished with exit code {code}', { pid: s.attach, code })}\n`, 'sys');
     else con.append(`\n${tr('Detached from process {pid}', { pid: s.attach })}\n`, 'sys');
+    s.unwatch?.();
     sess = null;
     con.input.disabled = true;
     clearFrameDecorations();
@@ -608,12 +623,18 @@
     updateControls();
     const s = sess;
     let frames = [];
+    // The stopped thread's own name (MainThread, or a worker's) for the Frames header.
+    const threads = req('threads').then((r) => r.threads || [], () => []);
     try { ({ stackFrames: frames } = await req('stackTrace', { threadId: s.threadId, startFrame: 0, levels: 200 })); } catch {}
+    s.threadName = (await threads).find((th) => th.id === s.threadId)?.name || '';
     await toIdePaths(frames);
     if (sess !== s || s.state !== 'suspended') return;
     s.frames = frames;
     if (!tw.isVisible()) tw.show();
+    // The program's input is hidden with the console: stepping and editing continue in the editor.
+    const hadInput = document.activeElement === con.input;
     showSub('debugger');
+    if (hadInput) ide.editor?.focus();
     renderFrames();
     await selectFrame(Math.max(0, frames.findIndex((f) => f.source?.path)));
   }
@@ -855,7 +876,7 @@
 
   function renderFrames() {
     if (!framesList) return;
-    threadLabel.textContent = !sess ? '' : suspended() ? `MainThread · ${stopReasonLabel(sess.stopReason)}` : tr('Running');
+    threadLabel.textContent = !sess ? '' : suspended() ? `${sess.threadName ? `${sess.threadName} · ` : ''}${stopReasonLabel(sess.stopReason)}` : tr('Running');
     if (!suspended()) {
       return framesList.replaceChildren(el('div', 'dbg-empty', sess ? tr('Frames are not available in non-suspended state') : tr('Not debugging')));
     }
@@ -1137,9 +1158,10 @@
         input: true,
         placeholder: tr('stdin: type program input and press Enter'),
         onInput(text) {
-          if (!sess?.id) return;
+          if (!sess || sess.attach) return;
           con.append(`${text}\n`, 'cmd');
-          ide.proc.input(sess.id, `${text}\n`);
+          if (sess.id) ide.proc.input(sess.id, `${text}\n`);
+          else sess.typed.push(text);
         },
       });
       con.out.id = 'dbgOut';

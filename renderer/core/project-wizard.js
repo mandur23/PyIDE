@@ -83,14 +83,24 @@ if __name__ == '__main__':
       files: () => ({}) },
   ];
 
+  // One entry per python.exe: a junction, a link or an 8.3 spelling of a listed one is the same interpreter (the first
+  // entry stays). Interpreters that are not local files (remote-interp) keep their own executable as the key.
+  const fileKey = async (p) => String((p && await ide.api.invoke('fs:realpath', p)) || '').toLowerCase();
+  async function oncePerFile(list) {
+    const keys = await Promise.all(list.map((b) => fileKey(b.executable)));
+    return list.filter((_, i) => keys.indexOf(keys[i]) === i);
+  }
+
   async function openWizard() {
     const info = await ide.api.invoke('app:info');
-    const bases = await ide.api.interpreters(null, ide.settings.get('interpreters.extra', []));
+    const bases = await oncePerFile(await ide.api.interpreters(null, ide.settings.get('interpreters.extra', [])));
     const parent = ide.settings.get('newProject.location') || joinPath(info.home, 'PycharmProjects');
     let type = TYPES[0];
 
     const root = el('div', 'np');
     const nav = el('div', 'np-types');
+    nav.setAttribute('role', 'listbox');
+    nav.setAttribute('aria-label', tr('Project type'));
     const form = el('div', 'np-form');
     root.append(nav, form);
 
@@ -150,7 +160,7 @@ if __name__ == '__main__':
     for (const b of bases) base.add(new Option(`${b.label}   ${b.executable}`, b.executable));
     const custom = el('select');
     custom.id = 'npCustom';
-    const allInterps = [...bases, ...ide.interps.filter((x) => !bases.some((b) => ide.util.samePath(b.executable, x.executable)))];
+    const allInterps = await oncePerFile([...bases, ...ide.interps]);
     for (const b of allInterps) custom.add(new Option(`${b.label}   ${b.executable}`, b.executable));
     custom.add(new Option(tr('Add Local Interpreter…'), '__browse'));
     const venvPath = el('div', 'np-preview muted');
@@ -188,24 +198,34 @@ if __name__ == '__main__':
       venvPath.classList.toggle('hidden', m !== 'venv');
       venvPath.textContent = tr('Location: {path}', { path: joinPath(projectDir(), '.venv') });
       customRow.classList.toggle('hidden', m !== 'custom');
-      for (const b of nav.children) b.classList.toggle('selected', b.dataset.type === type.id);
+      for (const b of nav.children) {
+        b.classList.toggle('selected', b.dataset.type === type.id);
+        b.setAttribute('aria-selected', String(b.dataset.type === type.id));
+      }
       error.textContent = '';
     }
     for (const t of TYPES) {
       const b = el('div', 'np-type');
       b.dataset.type = t.id;
+      b.setAttribute('role', 'option');
       b.append(ide.icon(t.icon, '◆'), el('span', null, t.name()));
       b.onclick = () => { type = t; update(); };
       nav.appendChild(b);
     }
+    // The type list takes the keyboard like PyCharm's: a Tab stop where Up/Down/Home/End choose the type.
+    ide.ui.listKeys(nav, { rows: '.np-type', select: (row) => row.click() });
     name.oninput = update;
     loc.oninput = update;
     custom.onchange = async () => {
       if (custom.value !== '__browse') return;
       const file = await ide.api.openFileDialog([{ name: tr('Python interpreter'), extensions: ['exe'] }]);
       if (!file) { custom.selectedIndex = 0; return; }
-      custom.add(new Option(file, file), custom.options.length - 1);
-      custom.value = file;
+      const key = await fileKey(file);
+      const listed = [...custom.options].filter((o) => o.value !== '__browse');
+      const keys = await Promise.all(listed.map((o) => fileKey(o.value)));
+      const known = listed[keys.indexOf(key)];
+      if (!known) custom.add(new Option(file, file), custom.options.length - 1);
+      custom.value = known ? known.value : file;
     };
     update();
 

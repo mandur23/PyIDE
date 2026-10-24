@@ -169,3 +169,5 @@
 .font-zoom-hint.hidden { display: none; }
 .font-zoom-reset { color: var(--blue6); cursor: pointer; }
 .font-zoom-reset:hover { text-decoration: underline; }
+/* Rows whose labels match the settings search. */
+.settings-page .settings-hit { background: color-mix(in srgb, var(--yellow) 22%, transparent); border-radius: 3px; }

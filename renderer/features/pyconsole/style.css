@@ -3,3 +3,6 @@
 .pyc-input { border: 0; resize: none; line-height: 1.45; overflow: auto; }
 .tool.pyc-root { flex-direction: row; }
 .pyc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* Hidden only once a statement has run a moment, so quick statements do not make the prompt flicker. */
+.pyc-prompt.pyc-running { visibility: hidden; transition: visibility 0s linear .15s; }
+#pyconsoleOut .stdin { color: var(--green6); }

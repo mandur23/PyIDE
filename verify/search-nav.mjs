@@ -156,6 +156,9 @@ try {
   await at('main.py', 19, 'Ctrl+Alt+Shift+N "greet" opens the method');
 
   // ---- Edits: live Structure, TODO refresh on save, index invalidation ----
+  // The TODO list is kept fresh while its window is shown (a hidden one scans when shown again).
+  await js(`ide.runAction('ActivateTODOToolWindow')`);
+  await until(`document.querySelectorAll('#snTodo .sn-todo').length === 3`, 'TODO window shown');
   await js(`ide.editor.focus(), ide.editor.setPosition({ lineNumber: 52, column: 1 })`);
   await type('class AddedThing: pass  # TODO: added later');
   await until(`[...document.querySelectorAll('#snStructure .sn-node[data-kind=class]')].some(n => n.dataset.name === 'AddedThing')`, 'structure updates while typing');
@@ -170,6 +173,13 @@ try {
   check(true, 'symbol index picks up the saved file');
   await press('Enter');
   await at('main.py', 52, 'Go to Class opens the new class');
+
+  // An index batch Python could not parse (here an interpreter that does not exist) is not cached as files without
+  // symbols: the next build parses them again.
+  await js(`ide.api.invoke('search:invalidate', null)`);
+  const broken = await js(`ide.api.invoke('search:symbols', { cmd: 'C:/no/such/python.exe', args: [] }, ide.root).then((s) => s.length)`);
+  const healed = await js(`ide.api.invoke('search:symbols', ide.currentInterp(), ide.root).then((s) => s.filter((x) => x.kind === 'class').map((x) => x.name))`);
+  check(broken === 0 && healed.includes('UserModel') && healed.includes('AddedThing'), `a failed index run is not cached: the next one finds the classes (${broken} then ${healed.length})`);
 
   // ---- Back / Forward ----
   await press('Ctrl+N');

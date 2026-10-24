@@ -629,15 +629,19 @@
   // A row dragged from the project tree carries its path.
   const treePath = (e) => ([...e.dataTransfer.types].includes(ide.TREE_PATH_TYPE) ? e.dataTransfer.getData(ide.TREE_PATH_TYPE) || true : null);
 
+  // The pane's own drags are taken in the capture phase, before Monaco's drop-into-editor sees them over the text. Files
+  // from Explorer are always a copy: a drag source that allows only copying refuses 'move', and the drop never comes.
   function wireDrop(g) {
     g.body.addEventListener('dragover', (e) => {
       if (!hasTabData(e) && !hasFiles(e) && !treePath(e)) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = hasFiles(e) || e.ctrlKey ? 'copy' : 'move';
       showDropOverlay(g, dropZone(g, e));
-    });
+    }, true);
     g.body.addEventListener('dragleave', (e) => { if (!g.body.contains(e.relatedTarget)) hideDropOverlay(); });
     g.body.addEventListener('drop', (e) => {
+      if (!hasTabData(e) && !hasFiles(e) && !treePath(e)) return;
       e.preventDefault();
       e.stopPropagation();
       hideDropOverlay();
@@ -652,7 +656,7 @@
         const ng = splitGroup(g, zone, null);
         placeTab(tab, ng, { clone: e.ctrlKey });
       }
-    });
+    }, true);
     g.tabList.addEventListener('dragover', (e) => {
       if (!hasTabData(e) && !hasFiles(e) && !treePath(e)) return;
       e.preventDefault();
@@ -684,9 +688,9 @@
   async function openDroppedFiles(e, group) {
     const paths = [...e.dataTransfer.files].map((f) => ide.api.pathForFile(f)).filter(Boolean);
     for (const p of paths) {
-      const listing = await ide.api.list(p).then(() => true, () => false);
-      if (listing && !ide.detached) { await ide.openProject(p); return; }
-      if (!listing) await ide.openFile(p, { group });
+      const st = await ide.api.stat(p);
+      if (st?.isDirectory && !ide.detached) { await ide.openProject(p); return; }
+      if (st && !st.isDirectory) await ide.openFile(p, { group });
     }
   }
   document.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });

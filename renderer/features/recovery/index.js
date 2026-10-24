@@ -38,8 +38,17 @@
     });
     return s;
   }
-  // Backups of one document are written and dropped in order.
-  const enqueue = (s, fn) => (s.queue = s.queue.then(fn).catch((err) => log.warn(`backup failed: ${ide.util.errorText(err)}`)));
+  // Backups of one document are written and dropped in order. Three failures in a row (a full disk, a user data
+  // folder that cannot be written) are told once, in a notification; a backup written again starts the count over.
+  let failures = 0;
+  const enqueue = (s, fn) => (s.queue = s.queue.then(fn).catch(failed));
+  function failed(err) {
+    log.warn(`backup failed: ${ide.util.errorText(err)}`);
+    if (++failures !== 3) return;
+    ide.notifications.notify({
+      title: tr('Unsaved changes are not being backed up'), text: ide.util.errorText(err), raw: true, kind: 'error', group: 'Crash Recovery',
+    });
+  }
   const release = async (s) => {
     if (!s.held) return;
     const id = s.held;
@@ -59,6 +68,7 @@
       language: model.getLanguageId(), encoding: doc.encoding, lineSeparator: doc.lineSeparator, diskHash: doc.diskHash,
       asText: !!doc.forcedText, time: Date.now(), text: model.getValue(),
     });
+    failures = 0;
     Object.assign(s, { held: id, version });
   }
   const flush = (model) => {
@@ -86,6 +96,11 @@
   ide.api.on('doc:saved', () => setTimeout(flushAll));
   // A plugin can mark a document saved without changing its text (tab.savedVersion after writing the file).
   setInterval(() => { for (const [model, s] of states) if (s.held) flush(model); }, 5000);
+  // The session folder was deleted and made again: every backup this window holds is written again.
+  ide.api.on('recovery:lost', () => {
+    for (const s of states.values()) s.version = 0;
+    flushAll();
+  });
   invoke('hello').catch(() => {});
 
   // ---------- restoring ----------
@@ -123,6 +138,9 @@
   }
   // -> true once the text is back in an editor.
   async function restoreOne(rec) {
+    const text = await invoke('text', rec.ref);
+    if (typeof text !== 'string') return false;
+    rec = { ...rec, text };
     if (rec.path && !rec.untitled && await ide.api.exists(rec.path)) {
       const doc = await open(rec.path, rec);
       if (doc && rec.diskHash && doc.diskHash !== rec.diskHash) Object.assign(doc, { diskHash: rec.diskHash, conflict: true });
@@ -154,6 +172,15 @@
     const choice = await ask(list);
     if (choice === 'restore') await restore(list);
     else if (choice === 'discard') await invoke('consume', list.flatMap((r) => r.refs));
+    if (choice && document.activeElement === document.body) focusActiveTab();
+  }
+  // The dialog had the keyboard, and what it restored opened behind it without taking it. The active tab gets it (its
+  // editor, or its page when the page can take it); otherwise the Project view does, as in PyCharm with no editor open.
+  function focusActiveTab() {
+    const tab = ide.activeTab();
+    if (tab?.kind === 'file') ide.editor.focus();
+    else if (tab?.host?.hasAttribute('tabindex')) tab.host.focus();
+    else document.getElementById('tree')?.focus();
   }
   const offerOnce = () => { offering = (offering || Promise.resolve()).then(offer).catch((err) => log.warn(`recovery: ${ide.util.errorText(err)}`)); };
 

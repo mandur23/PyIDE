@@ -1,5 +1,5 @@
 // Korean UI of the lsp, problems and terminal plugins, plus their Light theme colors.
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { launch, openFile } from './lib.mjs';
@@ -47,8 +47,16 @@ try {
   await until(`ide.toolWindows.get('Problems').isVisible() && document.querySelectorAll('#problemList .problem').length >= 3`, 'Problems window');
   check(await js(`ide.toolWindows.get('Problems').tab.textContent.startsWith('문제')`), 'Problems tool window tab is "문제"');
   check(await js(`[...document.querySelectorAll('#problemList .sev')].every(s => ['오류', '경고', '정보'].includes(s.title))`), 'severity icons have Korean tooltips');
-  check(await js(`[...document.querySelectorAll('#problemList .problem')].some(r => r.textContent.includes('"undefined_name" is not defined'))`), 'Pyright messages are shown as Pyright wrote them');
+  // Pyright runs in the UI language (VSCODE_NLS_CONFIG), as PyCharm's inspections do; verify/lsp.mjs checks English.
+  const korean = await js(`[...document.querySelectorAll('#problemList .problem')].map(r => r.textContent).join(' | ')`);
+  check(korean.includes('"undefined_name"이(가) 정의되지 않았습니다'), `Pyright's messages are Korean (${korean})`);
   await noLeaks('#problemList', 'Problems list');
+  writeFileSync(path.join(t.project, 'paren.py'), 'total = sum((1, 2)\n');
+  await openFile(t, 'paren.py');
+  const parenMsgs = `ide.problems.all().filter(p => p.source === 'pyright' && p.path.endsWith('paren.py')).map(p => p.msg).join(' | ')`;
+  await until(`(${parenMsgs}).length > 0`, 'pyright diagnostics for paren.py', 30000).catch(() => {});
+  check((await js(parenMsgs)).includes('"("가 닫혀 있지 않음'), `an unclosed parenthesis is reported in Korean (${await js(parenMsgs)})`);
+  await openFile(t, 'errors.py');
   await shot('problems.png');
 
   // ---- F2 and the "no problems" hint ----

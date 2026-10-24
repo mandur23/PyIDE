@@ -4,13 +4,18 @@
 // VS.compile(graph, {fileName, tr, symbols}) -> {code, map, errors, pinExpr, nodeLines}; `symbols` (default VS.symbols)
 // tells project and package nodes whether their function still exists.
 //
+// Set Variable names are script variables, as Blueprint's graph variables are: every function that sets one declares
+// it `global`, and any function reads it. A value wired from a step (a generated local such as answer_n3, a loop
+// index, a function parameter) is only usable where that step has always run before, in the same function.
+//
 // The context `c` a node's compile hook gets:
 //   c.node, c.pins, c.P (precedences), c.tr, c.inLoop, c.inFunction
 //   c.prop(key), c.input(pin) -> {code, prec, type, literal, value}, c.arg(pin, minPrec = 0) -> code
 //   c.linked(pin), c.execLinked(pin), c.used(outPin), c.local(outPin)
-//   c.line(text), c.block(execPin, {loop, fn}), c.fail(message, prop) -> null
-//   c.ident(prop), c.identValue(value, prop), c.variable(prop), c.dotted(name), c.functionExists(name)
-//   c.literal(value, type), c.formatText(template), c.pythonExpression(code, names), c.dedent(code), c.import(module)
+//   c.line(text), c.rawLine(text) (no indent added), c.block(execPin, {loop, fn}), c.fail(message, prop) -> null
+//   c.ident(prop), c.identValue(value, prop), c.variable(prop), c.assign(name), c.dotted(name), c.functionExists(name)
+//   c.literal(value, type), c.formatText(template), c.pythonExpression(code, names), c.import(module)
+//   c.dedent(code) -> [{text, raw}] (raw: the line starts inside a string, so it is kept exactly)
 //   c.symbol(module, name) -> the name to call it by (its import added), c.symbols, c.warn(message)
 (function (root) {
   'use strict';
@@ -146,6 +151,54 @@
     return prec;
   }
 
+  // Lines (0-based) of `code` that start inside a string: a triple-quoted string's later lines, a line continued with \.
+  function stringLines(code) {
+    const inside = new Set();
+    let line = 0;
+    for (const t of tokenize(code)) {
+      for (const ch of t.text) {
+        if (ch !== '\n') continue;
+        line++;
+        if (t.kind === 'string') inside.add(line);
+      }
+    }
+    return inside;
+  }
+
+  // A string token that ends with its own closing quote(s).
+  function closedString(t) {
+    const body = t.text.slice(t.prefix.length);
+    const q = body[0];
+    const delim = body.startsWith(q.repeat(3)) && body.length >= 6 ? q.repeat(3) : q;
+    for (let i = delim.length; i < body.length; i++) {
+      if (body[i] === '\\') i++;
+      else if (body.startsWith(delim, i)) return i + delim.length === body.length;
+    }
+    return false;
+  }
+  const PY_NUMBER = /^(?:0[xX](?:_?[0-9a-fA-F])+|0[oO](?:_?[0-7])+|0[bB](?:_?[01])+|(?:(?:\d(?:_?\d)*)?\.\d(?:_?\d)*|\d(?:_?\d)*\.?)(?:[eE][+-]?\d(?:_?\d)*)?[jJ]?)$/;
+  const PAIRS = { ')': '(', ']': '[', '}': '{' };
+  // One Python literal on one line: numbers, strings (not f-strings), True, False, None, ... and lists, tuples, sets and
+  // dicts of them. No name other than those three can appear, so nothing in it can call or import anything.
+  VS.isPythonLiteral = (text) => {
+    const s = String(text ?? '');
+    if (!s.trim() || /[\r\n]/.test(s)) return false;
+    const open = [];
+    for (const t of tokenize(s)) {
+      if (t.kind === 'space') continue;
+      if (t.kind === 'name') { if (!['True', 'False', 'None'].includes(t.text)) return false; continue; }
+      if (t.kind === 'number') { if (!PY_NUMBER.test(t.text)) return false; continue; }
+      if (t.kind === 'string') { if (/f/i.test(t.prefix) || !closedString(t)) return false; continue; }
+      if (t.kind !== 'op') return false;
+      if ('([{'.includes(t.text)) open.push(t.text);
+      else if (t.text in PAIRS) { if (open.pop() !== PAIRS[t.text]) return false; }
+      else if (t.text === ',') { if (!open.length) return false; }
+      else if (t.text === ':') { if (open[open.length - 1] !== '{') return false; }
+      else if (!['-', '+', '...'].includes(t.text)) return false;
+    }
+    return !open.length;
+  };
+
   const wrap = (e, min) => (e.prec < min ? `(${e.code})` : e.code);
 
   VS.hasErrors = (result) => result.errors.some((e) => !e.warning);
@@ -255,11 +308,21 @@
     }
     const moduleRoots = new Set(sorted.filter((n) => n.type === 'py.call')
       .map((n) => String(VS.propOf(n, 'module') || '').trim().split('.')[0]).filter(Boolean));
-    const variables = new Set();
+    // Every name a node stores a value under: [node, prop, name].
+    const named = [];
     for (const n of sorted) {
-      if (n.type === 'var.set') variables.add(VS.propOf(n, 'name'));
-      if (n.type === 'fn.define') VS.parseNames(VS.propOf(n, 'params')).forEach((p) => variables.add(p));
-      if (n.type === 'py.code') ['inputs', 'outputs'].forEach((k) => VS.parseNames(VS.propOf(n, k)).forEach((p) => variables.add(p)));
+      if (n.type === 'var.set') named.push([n, 'name', VS.propOf(n, 'name')]);
+      if (n.type === 'fn.define') VS.parseNames(VS.propOf(n, 'params')).forEach((p) => named.push([n, 'params', p]));
+      if (n.type === 'py.code') ['inputs', 'outputs'].forEach((k) => VS.parseNames(VS.propOf(n, k)).forEach((p) => named.push([n, k, p])));
+    }
+    const variables = new Set(named.map(([, , name]) => name));
+    const scriptVariables = new Set(named.filter(([n]) => n.type === 'var.set').map(([, , name]) => name));
+    // Calling a function whose name a variable also holds would call the value (or fail before it is set).
+    for (const [n, prop, name] of named) {
+      if (functions.has(name)) report(n.id, tr('A function is also named "{name}". Give the variable or the function another name.', { name }), { prop });
+    }
+    for (const [name, d] of functions) {
+      if (variables.has(name)) report(d.id, tr('A variable is also named "{name}". Give the variable or the function another name.', { name }), { prop: 'name' });
     }
 
     // Project and package symbols: `from geo.figures import area` and `area(2)`, unless two modules give the same
@@ -305,10 +368,41 @@
     const path = new Set();
     const evaluating = new Set();
 
+    // Where each step was emitted: {fn: its entry node, path: [[block, index], ...]} from the function's body down to
+    // the block it is in. `fn` is the entry being compiled: {id, assigned: names it stores, params}.
+    const position = new Map();
+    let fn = null;
+    let openBlocks = []; // the blocks being emitted, outermost first: {id, n: steps so far, at: the step being compiled}
+    let blockSeq = 0;
+    const uses = []; // {stmt, pin, producer}: a step reads a value an earlier step (or its entry) made
+    function enterBlock() {
+      openBlocks.push({ id: ++blockSeq, n: 0, at: -1 });
+    }
+    function place(id) {
+      const top = openBlocks[openBlocks.length - 1];
+      position.set(id, { fn: fn.id, path: [...openBlocks.slice(0, -1).map((b) => [b.id, b.at]), [top.id, top.n]] });
+      top.at = top.n++;
+    }
+    // Does `producer` always run before `stmt`? Steps run in their block's order; a loop's outputs exist only inside
+    // its body; an entry's (its parameters) everywhere in its function.
+    function runsBefore(producer, stmt) {
+      const a = position.get(producer);
+      const b = position.get(stmt);
+      if (!a || !b || a.fn !== b.fn) return false;
+      const k = a.path.length - 1;
+      if (k < 0) return true;
+      const s = b.path;
+      if (s.length <= k || s[k][0] !== a.path[k][0]) return false;
+      if (defOf(nodes.get(producer)).outputScope === 'body') return s[k][1] === a.path[k][1] && s.length > k + 1;
+      return s[k][1] > a.path[k][1];
+    }
+
     function context(node, scope, owner) {
       const def = defOf(node);
       const c = {
         node, P, tr,
+        stmt: owner ? owner.stmt : node.id,
+        via: null,
         pins: pinsOf(node),
         inLoop: !!scope.loop,
         inFunction: !!scope.fn,
@@ -331,14 +425,23 @@
           flush(c);
           emit(text, node.id);
         },
+        rawLine(text) {
+          flush(c);
+          lines.push({ text, node: node.id });
+        },
         block(pin, opts = {}) {
           flush(c);
           indent++;
           const before = lines.length;
           const target = execNext.get(key(node.id, pin));
+          enterBlock();
           if (target) chain(target, { loop: scope.loop || opts.loop, fn: scope.fn || opts.fn });
+          openBlocks.pop();
           if (lines.length === before) emit('pass', node.id);
           indent--;
+        },
+        assign(name) {
+          if (fn) fn.assigned.add(name);
         },
         import(module) {
           if (!imports.has(module)) imports.set(module, node.id);
@@ -390,13 +493,18 @@
             return { ...c.literal(v, pinDef ? pinDef.type : 'any', pin), literal: true, value: v };
           }
           const from = nodes.get(src.node);
-          return { ...valueOf(from, src.pin, c), type: src.type, literal: false };
+          return { ...valueOf(from, src.pin, c, c.via ?? pin), type: src.type, literal: false };
         },
         arg: (pin, min = 0) => wrap(c.input(pin), min),
         literal(v, type, pin) {
           if (v === null) return { code: 'None', prec: P.ATOM, type: 'none' };
           if (typeof v === 'boolean') return { code: v ? 'True' : 'False', prec: P.ATOM, type: 'bool' };
           if (typeof v === 'string' && (type === 'number' || type === 'int')) {
+            // An integer a double cannot hold exactly is kept as typed: Python's int has no limit.
+            if (/^\s*[+-]?\d+\s*$/.test(v) && !Number.isSafeInteger(Number(v))) {
+              const big = BigInt(v.trim());
+              return { code: big.toString(), prec: big < 0n ? P.UNARY : P.ATOM, type: 'int' };
+            }
             const n = v.trim() === '' ? NaN : Number(v);
             if (!Number.isFinite(n)) {
               const message = tr('"{value}" is not a number.', { value: v });
@@ -416,7 +524,9 @@
         },
         formatText(template) {
           const t = VS.templateFields(template);
-          if (t.error) c.fail(tr('The template has a { or } without its partner. Write {{ or }} for a brace that should show.'), 'template');
+          // A spec like {name:{width}} would be a nested replacement field: code inside the f-string.
+          const nested = t.parts.some((p) => typeof p !== 'string' && p.spec.includes('{'));
+          if (t.error || nested) c.fail(tr('The template has a { or } without its partner. Write {{ or }} for a brace that should show.'), 'template');
           for (const f of t.fields) if (!VS.isIdentifier(f)) c.fail(tr('"{name}" in the template is not a valid name. Use names like {name_example}.', { name: f, name_example: '{name}' }), 'template');
           let body = '';
           let plain = '';
@@ -437,7 +547,7 @@
             const code = wrap(inp, P.LOW);
             if (/['"\\{}#\n!:]/.test(code)) safe = false;
             dynamic = true;
-            body += `{${code}${part.conv ? `!${part.conv}` : ''}${part.spec ? `:${part.spec}` : ''}}`;
+            body += `{${code}${part.conv ? `!${part.conv}` : ''}${part.spec && !part.spec.includes('{') ? `:${part.spec}` : ''}}`;
           }
           if (!dynamic) return { code: pyStr(plain), prec: P.ATOM };
           if (safe) return { code: `f${pyStr(body)}`, prec: P.ATOM };
@@ -482,12 +592,16 @@
           return { code: out.join('').trim(), prec };
         },
         dedent(code) {
-          const all = String(code ?? '').split(/\r?\n/).map((l) => l.replace(/^[ \t]+/, (m) => m.replace(/\t/g, '    ')));
-          while (all.length && !all[0].trim()) all.shift();
-          while (all.length && !all[all.length - 1].trim()) all.pop();
-          const widths = all.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length);
+          const src = String(code ?? '').replace(/\r\n?/g, '\n');
+          const inside = stringLines(src);
+          const all = src.split('\n').map((l, i) => (inside.has(i) ? { text: l, raw: true }
+            : { text: l.replace(/^[ \t]+/, (m) => m.replace(/\t/g, '    ')), raw: false }));
+          const blank = (l) => !l.raw && !l.text.trim();
+          while (all.length && blank(all[0])) all.shift();
+          while (all.length && blank(all[all.length - 1])) all.pop();
+          const widths = all.filter((l) => !l.raw && l.text.trim()).map((l) => l.text.length - l.text.trimStart().length);
           const cut = widths.length ? Math.min(...widths) : 0;
-          return all.map((l) => (l.trim() ? l.slice(cut) : ''));
+          return all.map((l) => (l.raw ? l : { text: l.text.trim() ? l.text.slice(cut) : '', raw: false }));
         },
       };
       c.def = def;
@@ -502,17 +616,21 @@
       }
     }
 
-    function valueOf(from, pin, consumer) {
+    // via: the input pin of the step being compiled that the value reaches it through.
+    function valueOf(from, pin, consumer, via) {
       const def = defOf(from);
       if (isPure(from)) {
         if (evaluating.has(from.id)) return { code: 'None', prec: P.ATOM };
         evaluating.add(from.id);
         try {
-          return def.compile.expr(context(from, {}, consumer), pin);
+          const c = context(from, {}, consumer);
+          c.via = via;
+          return def.compile.expr(c, pin);
         } finally {
           evaluating.delete(from.id);
         }
       }
+      if (!silent) uses.push({ stmt: consumer.stmt, pin: via, producer: from.id });
       if (def.compile && def.compile.output) return def.compile.output(context(from, {}, consumer), pin);
       return { code: `${pin}_${from.id}`, prec: P.ATOM };
     }
@@ -532,6 +650,7 @@
         path.add(id);
         mine.push(id);
         visited.add(id);
+        place(id);
         const c = context(node, scope);
         const next = c.def.compile.stmt(c);
         flush(c);
@@ -542,9 +661,17 @@
 
     function entry(node, scope) {
       lines = [];
+      fn = { id: node.id, assigned: new Set(), params: new Set(node.type === 'fn.define' ? VS.parseNames(VS.propOf(node, 'params')) : []) };
+      openBlocks = [];
+      enterBlock();
+      position.set(node.id, { fn: node.id, path: [] });
       const c = context(node, scope);
       c.def.compile.entry(c);
       flush(c);
+      const globals = [...fn.assigned].filter((n) => scriptVariables.has(n) && !fn.params.has(n)).sort();
+      const at = lines.findIndex((l) => /^def /.test(l.text));
+      if (globals.length && at >= 0) lines.splice(at + 1, 0, { text: `    global ${globals.join(', ')}`, node: node.id });
+      fn = null;
       return lines;
     }
 
@@ -553,6 +680,12 @@
     if (starts.length) main = entry(starts[0], {});
     else main = [{ text: 'def main():', node: null }, { text: '    pass', node: null }];
 
+    for (const u of uses) {
+      if (u.producer === u.stmt || runsBefore(u.producer, u.stmt)) continue;
+      const p = nodes.get(u.producer);
+      report(u.stmt, tr('This step uses a value from {node}, which does not always run before it. Wire the value from a step that runs earlier, or store it with Set Variable.',
+        { node: `${VS.titleOf(p)} (${p.id})` }), u.pin ? { pin: u.pin } : {});
+    }
     for (const n of sorted) {
       if (isStatement(n) && !visited.has(n.id)) {
         report(n.id, tr('This step never runs: nothing connects it to Start or a Define Function.'), { warning: true });

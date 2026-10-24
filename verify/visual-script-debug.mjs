@@ -1,8 +1,8 @@
 // Debugging visual scripts on their nodes (renderer/features/visual-script/debug.js, the debugger's generated-source
 // hook). Ports 9082-9085. With real CDP mouse and key input: F9, Ctrl+F8, the header dot and the node menu toggle
 // breakpoints on steps (not on pure nodes); Shift+F9 pauses on a breakpoint in a loop with the node outlined, the loop
-// index in Variables and on hover over a pin and a wire; Python Expression is never evaluated again; Step Over moves
-// the outline; Resume runs to the next hit; a condition limits hits; a breakpoint removed while paused stops pausing;
+// index in Variables and on hover over a pin and a wire (the bubble beside the node, never over the paused node's
+// title); Python Expression is never evaluated again; Step Over moves the outline; Resume runs to the next hit; a condition limits hits; a breakpoint removed while paused stops pausing;
 // Step Into a project function opens its .py and Step Out comes back to the node; Frames name the .pyflow; Rerun
 // compiles the graph again; an uncaught exception marks its node; a graph calling a src-layout module runs and steps
 // into it; the changed-signature row's style in both themes; breakpoints survive a restart; Korean.
@@ -96,6 +96,11 @@ async function hoverValue(ctx, ui, p, label) {
   return ctx.js(`document.querySelector('.vs-value-tip:not(.hidden)').textContent`);
 }
 
+// The shown value bubble, and the header and box of a node, as client rectangles.
+const tipOver = (ctx, id) => ctx.js(`(() => { const b = (e) => { const r = e.getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top), r: Math.round(r.right), b: Math.round(r.bottom) }; };
+  return { tip: b(document.querySelector('.vs-value-tip:not(.hidden)')), head: b(document.querySelector(${S(`${node(id)} .vs-head`)})), node: b(document.querySelector(${S(node(id))})) }; })()`);
+const overlaps = (a, c) => a.l < c.r && a.r > c.l && a.t < c.b && a.b > c.t;
+
 const t = await sized(await launch({ fixture: 'visual-script-debug', port: 9082, name: 'visual-script-debug' }));
 const { js, until, press, type, check, shot } = t;
 const ui = inputs(t);
@@ -149,8 +154,12 @@ try {
 
   check(await hoverValue(t, ui, await ui.center(pin('n3', 'out', 'index')), 'the index pin') === '0', 'hovering the loop index pin shows 0');
   check(await hoverValue(t, ui, await ui.wireMid('n8', 'n4'), 'the Math wire') === '0', 'hovering a wire shows its value (total + index = 0)');
+  const wireTip = await tipOver(t, 'n4');
+  check(!overlaps(wireTip.tip, wireTip.head), `the wire's value bubble leaves the paused node's title visible (${S(wireTip)})`);
   check(await hoverValue(t, ui, await ui.center(pin('n9', 'out', 'text')), 'Join Text') === "'i=0'", 'a pure Text node is evaluated (\'i=0\')');
   check(await hoverValue(t, ui, await ui.center(pin('n4', 'in', 'value')), 'an input pin') === '0', 'hovering a wired input shows the value it gets');
+  const pinTip = await tipOver(t, 'n4');
+  check(!overlaps(pinTip.tip, pinTip.head) && !overlaps(pinTip.tip, pinTip.node), `the value bubble of the paused node's own pin sits beside the node, not over its title (${S(pinTip)})`);
   const notEvaluated = await hoverValue(t, ui, await ui.center(pin('n10', 'out', 'result')), 'Python Expression');
   check(notEvaluated === '(not evaluated: it would run the code again)', `Python Expression is not evaluated again (${notEvaluated})`);
   await ui.move({ x: 5, y: 5 });

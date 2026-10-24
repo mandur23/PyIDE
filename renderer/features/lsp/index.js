@@ -84,7 +84,7 @@
     probeCache.clear();
     setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
     let started = null;
-    try { started = await ide.api.invoke('lsp:start', root, python); } catch (err) { console.warn('pyright failed to start', err); }
+    try { started = await ide.api.invoke('lsp:start', root, python, window.i18n?.locale || 'en'); } catch (err) { console.warn('pyright failed to start', err); }
     // A restart while this start was in flight stopped its server; that is not a failure to report.
     if (my !== startSeq) return;
     if (!started) return setStatus('error', tr('Pyright failed to start'));
@@ -173,8 +173,9 @@
 
   function trackTab(tab) {
     if (tab?.kind !== 'file' || !isPy(tab.path) || docs.has(tab.path.toLowerCase())) return;
-    const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, changes: [], timer: null };
+    const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, changes: [], timer: null, editedAt: 0, symbols: null };
     doc.sub = tab.model.onDidChangeContent((e) => {
+      doc.editedAt = Date.now();
       if (doc.opened !== gen) return;
       recordChanges(doc, e);
       doc.pending = true;
@@ -198,6 +199,7 @@
     docs.delete(path.toLowerCase());
     clearTimeout(doc.timer);
     doc.sub.dispose();
+    dropSymbols(doc);
     trackRanges(path.toLowerCase(), null, []);
     publishedVersion.delete(path.toLowerCase());
     if (doc.opened === gen && status === 'ready') notify('textDocument/didClose', { textDocument: { uri: doc.uri } });
@@ -513,12 +515,68 @@
     range: toRange(s.range), selectionRange: toRange(s.selectionRange || s.range),
     children: (s.children || []).map(toMonacoSymbol),
   });
+  // The breadcrumbs, sticky lines, the outline and editor-assists each asked Pyright for the symbols of the file being
+  // typed in, after every key (19 requests per typed line in a 20,000-line file); Pyright answers one request at a
+  // time, so they came back 2-20 s later and completion waited behind them. They now share one request per open file. It goes once the text has not changed for
+  // SYMBOLS_PAUSE ms (LARGE_PAUSE in a large file, where it is expensive), for the text as it is then; an edit made
+  // while it runs cancels it, and its callers get the next answer instead.
+  const SYMBOLS_PAUSE = 150;
+  const LARGE_LINES = 5000;
+  const LARGE_PAUSE = 1000;
+
+  // -> LSP DocumentSymbol[] for the document's current text (or a later one), or null without an answer.
+  function sharedSymbols(doc) {
+    const last = doc.symbols;
+    if (last && (last.state === 'waiting' || last.version === doc.model.getVersionId())) return last.promise;
+    const entry = { state: 'waiting', version: null, cts: null, timer: 0 };
+    entry.promise = new Promise((resolve) => { entry.resolve = resolve; });
+    if (last?.state === 'sent') {
+      last.state = 'superseded';
+      last.cts.cancel();
+      last.resolve(entry.promise);
+    }
+    doc.symbols = entry;
+    const send = () => {
+      if (doc.symbols !== entry) return;
+      const wait = (doc.model.getLineCount() > LARGE_LINES ? LARGE_PAUSE : SYMBOLS_PAUSE) - (Date.now() - doc.editedAt);
+      if (wait > 0) { entry.timer = setTimeout(send, wait); return; }
+      entry.state = 'sent';
+      entry.version = doc.model.getVersionId();
+      entry.cts = new monaco.CancellationTokenSource();
+      request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } }, entry.cts.token).then((r) => {
+        if (entry.state !== 'sent') return;
+        entry.state = 'done';
+        // No answer (Pyright starting or restarted): the next caller asks again.
+        if (!r && doc.symbols === entry) doc.symbols = null;
+        entry.resolve(r);
+      });
+    };
+    send();
+    return entry.promise;
+  }
+
+  function dropSymbols(doc) {
+    const entry = doc.symbols;
+    doc.symbols = null;
+    if (!entry || entry.state === 'done') return;
+    clearTimeout(entry.timer);
+    entry.cts?.cancel();
+    entry.state = 'done';
+    entry.resolve(null);
+  }
+
+  // A cancelled token answers null at once; the shared request goes on for the other callers.
+  const unlessCancelled = (promise, token) => new Promise((resolve) => {
+    const sub = token.onCancellationRequested(() => resolve(null));
+    promise.then((v) => { sub.dispose(); resolve(v); });
+  });
+
   monaco.languages.registerDocumentSymbolProvider('python', {
     displayName: 'Pyright',
     async provideDocumentSymbols(model, token) {
       const doc = docFor(model);
       if (!doc) return undefined;
-      const r = await request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } }, token);
+      const r = await unlessCancelled(sharedSymbols(doc), token);
       return !r || token.isCancellationRequested ? undefined : r.filter((s) => s.range).map(toMonacoSymbol);
     },
   });
@@ -526,7 +584,7 @@
   // Hierarchical DocumentSymbols (LSP shape) plus kindName and 1-based line/col of the name, for other features.
   async function documentSymbols(path) {
     const doc = docs.get(path.toLowerCase());
-    const r = await request('textDocument/documentSymbol', { textDocument: { uri: doc?.uri || toUri(path) } });
+    const r = doc ? await sharedSymbols(doc) : await request('textDocument/documentSymbol', { textDocument: { uri: toUri(path) } });
     const decorate = (s) => {
       const sel = s.selectionRange || s.range || s.location?.range;
       return { ...s, kindName: SYMBOL_KINDS[s.kind] || 'Symbol', line: sel.start.line + 1, col: sel.start.character + 1, children: (s.children || []).map(decorate) };
@@ -663,6 +721,16 @@
     });
   }
 
+  // The name a reportUndefinedVariable diagnostic covers. Pyright writes its messages in the UI language, so the quoted
+  // name in the message is only the fallback.
+  const IDENTIFIER = /^[\p{ID_Start}_][\p{ID_Continue}]*$/u;
+  function undefinedNameOf(model, d) {
+    const text = model.getValueInRange(toRange(d.range));
+    if (IDENTIFIER.test(text)) return text;
+    const quoted = /"([^"]+)"/.exec(d.message)?.[1];
+    return quoted && IDENTIFIER.test(quoted) ? quoted : null;
+  }
+
   monaco.languages.registerCodeActionProvider('python', {
     async provideCodeActions(model, range, context, token) {
       const doc = docFor(model);
@@ -684,7 +752,7 @@
         actions.push({ title: a.title, kind: a.kind || 'quickfix', isPreferred: a.isPreferred, command: { id: APPLY_ACTION, title: a.title, arguments: [a] } });
       }
       for (const d of diags) {
-        const undefinedName = d.code === 'reportUndefinedVariable' && /"([\w]+)" is not defined/.exec(d.message)?.[1];
+        const undefinedName = d.code === 'reportUndefinedVariable' && undefinedNameOf(model, d);
         if (undefinedName && invoked && !offered.has(`import:${undefinedName}`)) {
           offered.add(`import:${undefinedName}`);
           const at = importInsertLine(model);

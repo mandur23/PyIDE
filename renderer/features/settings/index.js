@@ -263,19 +263,21 @@
       { id: 'appearance', title: () => tr('Appearance'), keywords: 'theme dark light look feel 테마 다크 라이트', mount: mountAppearance },
       { id: 'language', title: () => tr('Language and Region'), keywords: 'language korean english locale 언어 한국어 영어', mount: mountLanguage },
     ] },
-    { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap },
+    { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap, index: false },
     { group: 'editor-group', title: () => tr('Editor'), children: [
       { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap line separator crlf lf 탭 들여쓰기 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
-    { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins },
+    { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false },
     { group: 'project', title: projectGroup, children: [
-      { id: 'interpreter', title: () => tr('Python Interpreter'), keywords: 'interpreter venv virtualenv environment packages python sdk 인터프리터 가상 환경 패키지', mount: mountInterpreter },
+      { id: 'interpreter', title: () => tr('Python Interpreter'), keywords: 'interpreter venv virtualenv environment packages python sdk 인터프리터 가상 환경 패키지', mount: mountInterpreter, index: false },
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, mount(host, ctx)}
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, index?, mount(host, ctx)}
   // to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
+  // Search mounts every page off screen once per dialog to read its labels; index: false (a page whose mount lists
+  // data or starts slow work) is found by its title and keywords only.
   let TREE, PAGES;
   function buildTree() {
     const pluginPages = ide.settingsPages || [];
@@ -293,6 +295,27 @@
     id: p.id, title: p.title(), group: n.children ? n.title() : '', keywords: p.keywords || '' })));
   rebuildTree();
   const groupOf = (id) => TREE.find((n) => n.children?.some((c) => c.id === id));
+
+  // A settings page's labelled rows (a section title, a field with its label and hint, a check box, a note, a button),
+  // outermost only, and the text the user reads on one: not the choices of a list or what a field holds.
+  const LABEL_ROWS = 'legend, label, .field, .settings-check, .settings-note, .settings-subtitle, button, h3, h4';
+  const labelRows = (host) => {
+    const all = [...host.querySelectorAll(LABEL_ROWS)];
+    return all.filter((r) => !host.contains(r.parentElement.closest(LABEL_ROWS)));
+  };
+  function labelText(row) {
+    let text = '';
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!n.parentElement.closest('select, textarea')) text += ` ${n.nodeValue}`;
+    return text.replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  // {own, section}: a row's text and its section's title, so "글꼴 크기" finds "Size:" in the Font section.
+  const rowLabel = (row) => {
+    const legend = row.tagName === 'LEGEND' ? null : row.closest('fieldset')?.querySelector(':scope > legend');
+    return { own: labelText(row), section: legend ? labelText(legend) : '' };
+  };
+  // A row matches when its own text holds every word, or holds one and its section title the rest.
+  const rowMatches = ({ own, section }, q) => q.every((w) => own.includes(w)) || (q.some((w) => own.includes(w)) && q.every((w) => own.includes(w) || section.includes(w)));
 
   function openSettings(pageId = 'appearance') {
     if (open) return open.show(pageId);
@@ -358,6 +381,31 @@
         for (const c of node.children) rows.get(c.id).classList.toggle('collapsed', isCollapsed);
       }
     }
+    // The category list is a tree for the keyboard, as in PyCharm: Up/Down/Home/End switch pages, Left/Right collapse
+    // and expand a group or go to it. A group chosen with the keys is drawn selected in place of the page's row.
+    let chosenGroup = null;
+    const chooseGroup = (row) => {
+      chosenGroup?.classList.remove('selected');
+      chosenGroup = row;
+      row?.classList.add('selected');
+      rows.get(current)?.classList.toggle('selected', !row);
+    };
+    nav.addEventListener('mousedown', () => chooseGroup(null));
+    ide.ui.listKeys(nav, {
+      rows: '.settings-nav-row',
+      selected: () => chosenGroup || rows.get(current) || null,
+      select: (row) => {
+        chooseGroup(row.dataset.page ? null : row);
+        if (row.dataset.page) show(row.dataset.page);
+      },
+      expanded: (row) => (row.dataset.page ? null : !collapsed.has(row.dataset.group)),
+      toggle: (row) => {
+        if (!collapsed.delete(row.dataset.group)) collapsed.add(row.dataset.group);
+        renderCollapse();
+      },
+      parent: (row) => (row.classList.contains('child') ? groupRows.get(groupOf(row.dataset.page).group) : null),
+      id: (row) => row.dataset.page || row.dataset.group,
+    });
 
     function show(id) {
       const p = PAGES.find((x) => x.id === id) || PAGES[0];
@@ -370,23 +418,73 @@
       crumb.append(el('span', null, p.title()));
       pageHost.replaceChildren();
       pageHost.dataset.page = p.id;
-      p.mount(pageHost, ctx);
+      const mounted = p.mount(pageHost, ctx);
+      markHits();
+      if (mounted?.then) mounted.then(() => { if (current === p.id) markHits(); }, () => {});
     }
 
-    search.oninput = () => {
-      const q = search.value.trim().toLowerCase();
-      let firstVisible = null;
+    // ---------- search ----------
+    // Each page's labels as rendered in this session's language ({id -> [rowLabel]}), read once per dialog from off-screen
+    // mounts, so "탭 크기" finds Code Style by its "탭 크기:" field. Pages are ranked by how many of their rows match
+    // every word of the query, and the shown page highlights those rows.
+    let labels = null;
+    let indexing = null;
+    const words = () => search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hasAll = (text, q) => q.every((w) => text.includes(w));
+    function indexPages() {
+      indexing ||= (async () => {
+        const mounts = PAGES.filter((p) => p.index !== false).map((p) => {
+          const host = el('div', 'settings-page');
+          let done = null;
+          try { done = p.mount(host, ctx); } catch {}
+          return { p, host, done };
+        });
+        await Promise.race([Promise.allSettled(mounts.map((m) => m.done)), new Promise((r) => setTimeout(r, 500))]);
+        labels = new Map(mounts.map(({ p, host }) => [p.id, labelRows(host).map(rowLabel).filter((l) => l.own)]));
+        if (!root.isConnected) return;
+        // A page keeps references to what it mounted last: the shown one is mounted again so they point at it.
+        if (labels.has(current)) show(current);
+        runSearch();
+      })();
+    }
+    // -1: no match; else higher ranks first.
+    function score(p, q) {
+      const title = p.title().toLowerCase();
+      const own = labels?.get(p.id) || [];
+      if (!hasAll([title, p.keywords || '', ...own.map((l) => l.own)].join(' ').toLowerCase(), q)) return -1;
+      return (hasAll(title, q) ? 1000 : 0) + 10 * own.filter((l) => rowMatches(l, q)).length + (q.some((w) => title.includes(w)) ? 1 : 0);
+    }
+    function runSearch() {
+      const q = words();
+      let best = null;
+      let bestScore = -1;
       for (const node of TREE) {
         let any = false;
         for (const p of node.children || [node]) {
-          const hit = !q || `${p.title()} ${p.keywords}`.toLowerCase().includes(q);
-          rows.get(p.id).classList.toggle('hidden', !hit);
-          if (hit) { any = true; firstVisible ??= p.id; }
+          const s = q.length ? score(p, q) : 0;
+          rows.get(p.id).classList.toggle('hidden', s < 0);
+          if (s >= 0) any = true;
+          if (s > bestScore) { best = p.id; bestScore = s; }
         }
         if (node.children) groupRows.get(node.group).classList.toggle('hidden', !any);
       }
-      if (q) { collapsed.clear(); renderCollapse(); }
-      if (firstVisible && rows.get(current).classList.contains('hidden')) show(firstVisible);
+      if (!q.length) return markHits();
+      collapsed.clear();
+      renderCollapse();
+      if (best && best !== current) show(best);
+      else markHits();
+    }
+    function markHits() {
+      const q = words();
+      for (const r of pageHost.querySelectorAll('.settings-hit')) r.classList.remove('settings-hit');
+      if (!q.length) return;
+      const hits = labelRows(pageHost).filter((r) => rowMatches(rowLabel(r), q));
+      for (const r of hits) r.classList.add('settings-hit');
+      hits[0]?.scrollIntoView({ block: 'nearest' });
+    }
+    search.oninput = () => {
+      if (words().length && !labels) indexPages();
+      runSearch();
     };
 
     async function applyPending() {

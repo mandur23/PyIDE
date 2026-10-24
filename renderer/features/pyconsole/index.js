@@ -1,6 +1,7 @@
 // Python Console tool window: a persistent interpreter driven by pyide_repl.py, which reports its prompt state
 // with \x02ps1\x03 / \x02ps2\x03 markers on stdout. ide.pyconsole.evaluate(expr) sends a \x05 query between
-// statements and gets \x02q[id, ok, text]\x03 back; 'pyconsoleChanged' fires after each statement.
+// statements and gets \x02q[id, ok, text]\x03 back; 'pyconsoleChanged' fires after each statement. A \x03 line is
+// Interrupt (KeyboardInterrupt in the running statement).
 (() => {
   const { el } = ide.util;
   const MARKER = /\x02(ps1|ps2|q[^\x03]*)\x03/;
@@ -47,10 +48,20 @@
 
   const fit = () => { input.rows = Math.min(12, input.value.split('\n').length); };
   const promptText = () => (ps === 'ps2' ? '... ' : '>>> ');
+  // While a statement runs there is no prompt: what the user types then is the program's input.
+  const setBusy = (on) => {
+    busy = on;
+    promptEl?.classList.toggle('pyc-running', on && prompted);
+  };
   const setPrompt = (next) => {
     ps = next;
     promptEl.textContent = promptText();
   };
+
+  // Entries submitted before the interpreter's first prompt (or while earlier ones wait): sent one per prompt, in order,
+  // so each is echoed right before its own output rather than above the banner.
+  const pending = [];
+  let prompted = false;
 
   function onData(text, stream) {
     if (stream === 'err') return con.append(text.replace(/\r/g, ''), 'err');
@@ -60,13 +71,18 @@
       if (m.index) con.append(rest.slice(0, m.index));
       rest = rest.slice(m.index + m[0].length);
       if (m[1][0] === 'q') { answerQuery(m[1].slice(1)); continue; }
+      prompted = true;
       setPrompt(m[1]);
-      busy = false;
-      for (const fn of idleWaiters.splice(0)) fn();
-      if (m[1] === 'ps1') ide.emit('pyconsoleChanged');
-      if (m[1] === 'ps2' && !input.value) { input.value = continuationIndent(); fit(); }
+      setBusy(false);
       markReady?.();
       markReady = null;
+      if (m[1] === 'ps1') ide.emit('pyconsoleChanged');
+      // A queued entry goes first, so a query never lands in the input() of the statement it would run.
+      if (pending.length) send(pending.shift());
+      else {
+        for (const fn of idleWaiters.splice(0)) fn();
+        if (m[1] === 'ps2' && !input.value) { input.value = continuationIndent(); fit(); }
+      }
     }
     // Keep a possibly split marker for the next chunk.
     const cut = rest.lastIndexOf('\x02');
@@ -85,10 +101,15 @@
     if (procId) return ready;
     if (starting) return starting;
     const interp = ide.currentInterp();
-    if (!interp) { con.append(`${tr('No Python interpreter found.')}\n`, 'err'); return null; }
+    if (!interp) {
+      pending.length = 0;
+      con.append(`${tr('No Python interpreter found.')}\n`, 'err');
+      return null;
+    }
     starting = (async () => {
       carry = '';
-      busy = true;
+      prompted = false;
+      setBusy(true);
       ready = new Promise((r) => (markReady = r));
       con.append(`${tr('{command} (Python Console)', { command: [interp.cmd, ...interp.args].join(' ') })}\n`, 'sys');
       const id = (procId = await ide.api.invoke('pyconsole:start', interp, ide.root || undefined, ide.root ? [ide.root] : []));
@@ -100,9 +121,9 @@
           if (shownId === id) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 0 })}\n`, 'sys');
           if (procId !== id) return;
           procId = null;
+          ended();
           setPrompt('ps1');
           markReady?.();
-          dropQueries();
           renderActions();
           ide.emit('pyconsoleChanged');
         },
@@ -110,17 +131,33 @@
       renderActions();
       return ready;
     })();
-    try { return await starting; } finally { starting = null; }
+    try { return await starting; } catch (err) { pending.length = 0; throw err; } finally { starting = null; }
+  }
+
+  function ended() {
+    pending.length = 0;
+    prompted = false;
+    setBusy(false);
+    dropQueries();
   }
 
   async function stop() {
     if (!procId) return;
     const id = procId;
     procId = null;
-    dropQueries();
+    ended();
     await ide.proc.kill(id);
     renderActions();
     ide.emit('pyconsoleChanged');
+  }
+
+  // Ctrl+C in the console input and the toolbar's Interrupt: KeyboardInterrupt in the running statement (pyide_repl.py
+  // keeps the session), or at the prompt the block being typed is dropped, as in a terminal. Entries waiting to run go too.
+  function interrupt() {
+    if (!procId) return;
+    pending.length = 0;
+    if (!busy) { input.value = ''; fit(); }
+    ide.proc.input(procId, '\x03\n');
   }
 
   // After stop(): the old process ends a little later, and its last output must not land in the cleared console.
@@ -143,38 +180,51 @@
     draft = '';
   }
 
-  async function submitLine(raw) {
-    if (!procId) await start();
-    if (!procId) return;
+  // entry: {line} typed at the prompt, or {block} run in one go.
+  function send(entry) {
+    if (entry.block != null) {
+      con.append(entry.block.split('\n').map((l, i) => `${i ? '... ' : '>>> '}${l}`).join('\n') + '\n', 'cmd');
+      remember(entry.block);
+      ide.proc.input(procId, `\x01${JSON.stringify(entry.block)}\n`);
+    } else {
+      con.append(`${promptText()}${entry.line}\n`, 'cmd');
+      remember(entry.line);
+      lastLine = entry.line;
+      ide.proc.input(procId, `${entry.line}\n`);
+    }
+    setBusy(true);
+  }
+
+  function submit(entry) {
+    if (procId && prompted && !busy && !pending.length) return send(entry);
+    pending.push(entry);
+    if (!procId) start().catch(() => {});
+  }
+
+  function submitLine(raw) {
+    // A running statement reads it (input(), sys.stdin): it is the program's input, not a command.
+    if (procId && prompted && busy && !pending.length) {
+      con.append(`${raw}\n`, 'stdin');
+      ide.proc.input(procId, `${raw}\n`);
+      return;
+    }
     // A whitespace-only line ends a block, like an empty one.
-    const line = raw.trim() ? raw : '';
-    con.append(`${promptText()}${line}\n`, 'cmd');
-    remember(line);
-    lastLine = line;
-    busy = true;
-    ide.proc.input(procId, `${line}\n`);
+    submit({ line: raw.trim() ? raw : '' });
   }
 
   // Runs a multi-line block in one go (Execute Selection, multi-line paste).
-  async function executeBlock(code) {
+  function executeBlock(code) {
     code = code.replace(/\r/g, '').replace(/\s+$/, '');
     if (!code.trim()) return;
     tw.show();
-    if (!procId) await start();
-    else await ready;
-    if (!procId) return;
-    const lines = code.split('\n');
-    con.append(lines.map((l, i) => `${i ? '... ' : '>>> '}${l}`).join('\n') + '\n', 'cmd');
-    remember(code);
-    ready = new Promise((r) => (markReady = r));
-    busy = true;
-    ide.proc.input(procId, `\x01${JSON.stringify(code)}\n`);
+    submit({ block: code });
   }
 
   function renderActions() {
     tw.setActions([
       { icon: '⟳', title: tr('Rerun Python Console'), run: restart },
-      ...(procId ? [{ icon: '■', title: tr('Stop Console'), run: stop }] : []),
+      ...(procId ? [{ id: 'pyconsoleInterrupt', icon: '⊘', title: `${tr('Interrupt')} (Ctrl+C)`, run: interrupt },
+        { icon: '■', title: tr('Stop Console'), run: stop }] : []),
       { icon: '⌫', title: tr('Clear All'), run: () => con.clear() },
       ...(ide.dataView?.consoleVariables ? [{ icon: '𝑥', title: varsPane ? tr('Hide Variables') : tr('Show Variables'), run: toggleVariables }] : []),
     ]);
@@ -239,6 +289,13 @@
           return;
         }
         if (e.key === 'Tab') { e.preventDefault(); input.setRangeText('    ', input.selectionStart, input.selectionEnd, 'end'); return; }
+        // With a selection Ctrl+C copies it.
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyC' && input.selectionStart === input.selectionEnd && procId) {
+          e.preventDefault();
+          e.stopPropagation();
+          interrupt();
+          return;
+        }
         if (e.key !== 'Enter') return;
         if (e.shiftKey) return setTimeout(fit);
         e.preventDefault();
@@ -318,5 +375,5 @@
     run: (editor) => executeSelection(editor),
   }));
 
-  ide.pyconsole = { execute: executeBlock, restart, isRunning: () => !!procId, evaluate };
+  ide.pyconsole = { execute: executeBlock, restart, interrupt, isRunning: () => !!procId, evaluate };
 })();

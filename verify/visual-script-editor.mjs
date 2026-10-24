@@ -3,7 +3,9 @@
 // pins), the palette (Tab, double-click, typing, Korean keywords, a wire dropped on empty space), wiring (connect,
 // refuse an incompatible pin, replace a data link, Alt+click), literals and props, select / box-select / move /
 // delete / copy / paste / duplicate, undo and redo through the document, save and reload from disk, Open as Text,
-// closing a dirty tab, pan / zoom / Fit, live problems, empty and broken files, the frame time of a 200-node graph,
+// closing a dirty tab (also with Ctrl+F4 while a field is being typed in), Ctrl+S keeping the keyboard in a field, numbers
+// fields keep exact (01012345678, 20 digits), the palette ranking a whole keyword first, pan / zoom / Fit, live
+// problems, empty and broken files, the frame time of a 200-node graph,
 // and the Light theme.
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
@@ -646,6 +648,61 @@ try {
   await until(`${V}.graph().nodes.find((n) => n.id === 'n2').x !== ${g200.nodes.find((n) => n.id === 'n2').x}`, 'big drag committed');
   check(await js(`ide.activeTab().doc.model.getAlternativeVersionId()`) === bigVersion + 1 && (await graph()).nodes.every((n) => n.x !== g200.nodes.find((m) => m.id === n.id).x), 'dragging all 200 nodes moves every one of them in one edit');
   console.log(`FRAMES ${S(perf)}`);
+  await js(`ide.closeTab(ide.activeTab().path, true)`);
+
+  // ---- the palette ranks a whole keyword above a name's start; fields keep what is typed ----
+  let fg = VS.newGraph();
+  fg = VS.addNode(fg, { id: 'n2', type: 'io.print', x: 320, y: 112 });
+  fg = VS.addNode(fg, { id: 'n3', type: 'math.binary', x: 320, y: 300 });
+  fg = VS.connect(fg, { node: 'n1', pin: 'next' }, { node: 'n2', pin: 'in' });
+  const fieldsPath = path.join(project, 'fields.pyflow');
+  writeFileSync(fieldsPath, VS.serialize(fg));
+  await openFile(ctx, 'fields.pyflow');
+  await until(`${V}?.host.dataset.nodes === '3'`, 'fields.pyflow');
+  await js(`(${V}.fit(), new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))))`);
+  for (const [query, type] of [['input', 'io.input'], ['print', 'io.print'], ['ask', 'io.input']]) {
+    await focusCanvas();
+    await press('Tab');
+    await until(`document.querySelector('.vs-host:not(.hidden)')?.dataset.palette === 'open'`, 'palette');
+    await ctx.type(query);
+    await until(`document.querySelector('.vs-host:not(.hidden) .vs-pal-item.vs-active')?.dataset.type === ${S(type)} && document.querySelector('.vs-host:not(.hidden) .vs-pal-item')?.dataset.type === ${S(type)}`, `${query} ranks ${type} first`)
+      .catch(async (err) => { throw new Error(`${err.message}: ${S(await js(`[...document.querySelectorAll('.vs-host:not(.hidden) .vs-pal-item')].slice(0, 4).map((r) => r.dataset.type)`))}`); });
+    check(true, `typing "${query}" puts ${type} first in the palette, so Enter adds it`);
+    await press('Escape');
+  }
+  const printField = '.vs-host:not(.hidden) .vs-node[data-id="n2"] .vs-field';
+  const aField = '.vs-host:not(.hidden) .vs-node[data-id="n3"] .vs-row:nth-child(1) .vs-field';
+  const typeInto = async (selector, text) => { await click(await center(selector)); await press('Ctrl+A'); await ctx.type(text); };
+  for (const text of ['01012345678', '12345678901234567890']) {
+    await typeInto(printField, text);
+    await press('Enter');
+    await settle();
+    check((await nodeOf('n2')).inputs.value === text && await js(`document.querySelector(${S(printField)}).value`) === text,
+      `an "any" field keeps ${text} as the text typed, not a rounded number`);
+  }
+  await typeInto(aField, '12345678901234567890');
+  await press('Enter');
+  await settle();
+  check((await nodeOf('n3')).inputs.a === '12345678901234567890' && await js(`PyideVisualScript.compile(${V}.graph()).pinExpr.n3.result`) === '12345678901234567890 + 0',
+    'a Number field keeps a 20-digit integer exact, and the code has it as typed');
+
+  await typeInto(printField, 'saved while typing');
+  await press('Ctrl+S');
+  await until(`!ide.isDirty(ide.activeTab())`, 'saved');
+  check(readFileSync(fieldsPath, 'utf8').includes('"value": "saved while typing"'), 'Ctrl+S while typing in a field saves what was typed');
+  check(await js(`document.activeElement?.matches(${S(printField)}) && document.activeElement.selectionStart === 'saved while typing'.length`), 'and the keyboard stays in the field, at the end of the text');
+  await press('Ctrl+A');
+  await ctx.type('typed before closing');
+  check(!(await dirty()), 'typing alone does not write the document yet');
+  await press('Ctrl+F4');
+  await until(`!!document.querySelector('#dialogHost .dialog')`, 'the close question')
+    .catch(async (err) => { throw new Error(`${err.message}: tab ${await js(`ide.activeTab()?.path`)}`); });
+  check(/fields\.pyflow/.test(await js(`document.querySelector('#dialogHost .dialog').textContent`)) && (await docText()).includes('typed before closing'),
+    'Ctrl+F4 while typing in a field writes it first, so the tab asks before closing and nothing is lost');
+  await press('Escape');
+  await until(`!document.querySelector('#dialogHost .dialog')`, 'kept open');
+  check(await js(`!!ide.activeTab()?.visualScript && document.activeElement?.matches(${S(printField)}) && document.activeElement.value === 'typed before closing'`), 'Cancel keeps the tab, the text and the keyboard in the field');
+  await press('Escape');
   await js(`ide.closeTab(ide.activeTab().path, true)`);
 
   await openFile(ctx, 'demo.pyflow');

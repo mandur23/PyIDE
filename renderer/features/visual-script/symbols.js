@@ -15,6 +15,9 @@
   let projectByName = new Map();
   let projectTops = new Set();
   let ready = false;
+  // Whether the index read every project file: a module it lacks is gone only then, and never one it skipped.
+  let complete = false;
+  let unread = new Set();
   let used = false;
   let loading = null;
   let again = false;
@@ -55,6 +58,8 @@
       if (r.error) console.warn('visual-script: reading the project symbols failed', r.error);
       setProject(r.trusted ? r.modules || [] : []);
       ready = !!r.trusted && !r.error;
+      complete = !r.truncated;
+      unread = new Set(Array.isArray(r.skipped) ? r.skipped : []);
       return project;
     })();
     try { return await loading; } finally {
@@ -103,7 +108,7 @@
     const mod = projectByName.get(moduleName) || loadedValue.get(moduleName);
     if (!mod) {
       // A project module that is gone (renamed, deleted): its package is still the project's.
-      return ready && projectTops.has(String(moduleName || '').split('.')[0]) ? null : undefined;
+      return ready && complete && !unread.has(moduleName) && projectTops.has(String(moduleName || '').split('.')[0]) ? null : undefined;
     }
     if (mod.error) return undefined;
     if (cls == null) return (mod.functions || []).find((f) => f.name === name) || null;

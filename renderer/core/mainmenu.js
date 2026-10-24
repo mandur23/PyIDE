@@ -36,11 +36,12 @@
   const recentProjects = () => ide.settings.get('recentProjects', []).filter((p) => !samePath(p.path, ide.root));
 
   const keyHint = (keys) => keys?.map(ide.keymap.format).join(', ') || '';
-  // A menu item for a registered action, or null when the plugin that owns it is disabled.
+  // A menu item for a registered action, or null when the plugin that owns it is disabled; disabled when it needs a
+  // project and none is open.
   function act(id, extra = {}) {
     const a = ide.actions.find((x) => x.id === id);
     if (!a) return null;
-    return { label: a.title || id, hint: keyHint(a.keys) || a.menuHint, run: () => ide.runAction(id), ...extra };
+    return { label: a.title || id, hint: keyHint(a.keys) || a.menuHint, disabled: !ide.actionEnabled(a), run: () => ide.runAction(id), ...extra };
   }
   // Drops separators left dangling by missing items.
   function tidy(items) {
@@ -97,7 +98,7 @@
   };
   function toolWindowItems() {
     return [...ide.toolWindows.values()].sort((a, b) => a.order - b.order)
-      .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, run: () => tw.show() }));
+      .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, disabled: !ide.root, run: () => tw.show() }));
   }
   // File › Manage IDE Settings (the settings-sync plugin); left out when that plugin is disabled.
   function manageSettingsItem() {

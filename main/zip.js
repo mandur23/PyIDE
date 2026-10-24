@@ -6,9 +6,18 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const iconv = require('iconv-lite');
 
 const LIMITS = { archive: 50 * 1024 * 1024, total: 100 * 1024 * 1024, entries: 2000 };
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
+
+// A name without the UTF-8 flag is in the OEM code page of the computer that zipped it: CP949 from Korean Windows
+// Explorer, otherwise CP437 as the zip format specifies. CP949 is taken only when the bytes are valid CP949 (they
+// decode and encode back unchanged).
+function legacyName(raw) {
+  const korean = iconv.decode(raw, 'cp949');
+  return iconv.encode(korean, 'cp949').equals(raw) ? korean : iconv.decode(raw, 'cp437');
+}
 
 // [{name, dir, method, crc, compressed, size, offset}] from the central directory, or a thrown readable reason.
 function entries(buf, limits) {
@@ -38,7 +47,7 @@ function entries(buf, limits) {
     const mode = buf.readUInt32LE(p + 38) >>> 16;
     const offset = buf.readUInt32LE(p + 42);
     const raw = buf.subarray(p + 46, p + 46 + nameLen);
-    const name = (flags & 0x800 ? raw.toString('utf8') : raw.toString('latin1')).replace(/\\/g, '/');
+    const name = (flags & 0x800 ? raw.toString('utf8') : legacyName(raw)).replace(/\\/g, '/');
     p = next;
     if (flags & 1) throw new Error(`${name} is encrypted`);
     const dir = name.endsWith('/');

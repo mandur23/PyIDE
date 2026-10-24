@@ -72,6 +72,28 @@ try {
   check(await js(`[...document.querySelectorAll('.context-menu .menu-label')].some((l) => l.textContent === 'Rename…') && ${selectedName} === 'a.py'`), 'right-click selects the row and opens its menu');
   await press('Escape');
 
+  // As in PyCharm, everything that creates something is under New ›, once.
+  const menuLabels = (level) => `[...document.querySelectorAll('.context-menu[data-level="${level}"] .menu-item')].map((r) => [r.querySelector('.menu-label').textContent, r.querySelector('.hint-right')?.textContent || ''])`;
+  const menuRow = (level, label) => `[...document.querySelectorAll('.context-menu[data-level="${level}"] .menu-item')].find((r) => r.querySelector('.menu-label').textContent === ${q(label)})`;
+  await js(`(() => { const n = ${row('docs')}; const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
+  await until(`!!document.querySelector('.context-menu')`, 'menu of docs');
+  const top = (await js(menuLabels(0))).map(([l]) => l);
+  check(top[0] === 'New' && !top.includes('New Python File') && !top.includes('New Directory'), `the tree menu starts with New › and does not repeat its items at the top (${top.slice(0, 4)})`);
+  await js(`(${menuRow(0, 'New')}.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })), true)`);
+  await until(`!!document.querySelector('.context-menu[data-level="1"]')`, 'New submenu');
+  const sub = await js(menuLabels(1));
+  const pos = (l) => sub.findIndex(([x]) => x === l);
+  check(pos('File') === 0 && pos('Directory') === 1 && pos('Python File') > 1 && pos('Python Package') > 1 && sub[pos('Python File')][1] === 'Alt+Insert' && sub.filter(([l]) => l === 'Python File').length === 1,
+    `New › lists File, Directory, Python File (with its Alt+Insert shortcut) and Python Package once each (${JSON.stringify(sub.slice(0, 5))})`);
+  await js(`(window.__prompt = ide.ui.prompt, ide.ui.prompt = async () => 'made_dir', ${menuRow(1, 'Directory')}.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })), true)`);
+  const madeDir = await until(`${names}.includes('made_dir')`, 'directory created').then(() => true, () => false);
+  check(madeDir && existsSync(path.join(t.project, 'docs', 'made_dir')), 'New › Directory creates the folder inside the folder that was right-clicked');
+  await js(`(ide.ui.prompt = async () => 'by_keys', ${row('docs')}.click(), document.getElementById('tree').focus(), true)`);
+  await press('Alt+Insert');
+  const byKeys = await until(`ide.activeTab()?.title === 'by_keys.py'`, 'Alt+Insert file').then(() => true, () => false);
+  check(byKeys && existsSync(path.join(t.project, 'docs', 'by_keys.py')), 'Alt+Insert still creates a Python file in the selected folder');
+  await js(`(ide.ui.prompt = window.__prompt, true)`);
+
   // Drag main.py onto docs: moves it after the confirmation. Drag a.py onto the editor: opens it there.
   // The core's plain move: the refactor plugin's Move dialog for Python modules is verify/rename-module.mjs's.
   await js(`(() => {
@@ -217,6 +239,48 @@ try {
   await drop(`document.getElementById('tree')`, [path.join(outside, 'setup.cfg')]);
   const atRoot = await t2.until(`${names}.includes('setup.cfg')`, 'copied to the root').then(() => true, () => false);
   t2.check(atRoot && existsSync(inProject('setup.cfg')), 'dropped below the rows, a file is copied into the project root');
+
+  // Korean names: Electron 38's fs.cpSync aborted the main process on them (a folder, an overwrite) or failed with a
+  // bogus ENOENT (a file inside a Korean folder).
+  const ko = path.join(path.dirname(t2.project), '바깥');
+  mkdirSync(path.join(ko, '과제', '하위'), { recursive: true });
+  writeFileSync(path.join(ko, '과제', '숙제1.py'), 'v = 1\n');
+  writeFileSync(path.join(ko, '과제', '하위', '노트.txt'), '메모\n');
+  writeFileSync(path.join(ko, '숙제.py'), 'answer = 1\n');
+  await t2.js(`(window.__changed = [], ide.on('filesChanged', (e) => window.__changed.push(...(e.created || []))), true)`);
+  await drop(row('docs'), [path.join(ko, '과제'), path.join(ko, '숙제.py')]);
+  const koCopied = await t2.until(`${names}.includes('과제') && ${names}.includes('숙제.py')`, 'Korean rows').then(() => true, () => false);
+  t2.check(koCopied && readFileSync(inProject('docs/과제/숙제1.py'), 'utf8') === 'v = 1\n' && readFileSync(inProject('docs/과제/하위/노트.txt'), 'utf8') === '메모\n'
+    && readFileSync(inProject('docs/숙제.py'), 'utf8') === 'answer = 1\n', 'a Korean-named folder (nested files too) and file are copied, and the IDE keeps running');
+  writeFileSync(path.join(ko, '숙제.py'), 'answer = 2\n');
+  writeFileSync(path.join(ko, '과제', '숙제1.py'), 'v = 2\n');
+  await drop(row('docs'), [path.join(ko, '숙제.py'), path.join(ko, '과제')]);
+  await t2.until(`${lastDialog}?.textContent.includes('숙제.py, 과제 already exist')`, 'Korean conflict dialog');
+  await press('Overwrite');
+  const koOverwritten = await t2.until(`ide.api.read(${q(inProject('docs/과제/숙제1.py'))}).then((s) => s === 'v = 2\\n')`, 'Korean overwrite').then(() => true, () => false);
+  t2.check(koOverwritten && readFileSync(inProject('docs/숙제.py'), 'utf8') === 'answer = 2\n' && !(await t2.js(`!!document.querySelector('.dialog')`)),
+    'Overwrite replaces a Korean-named file and a file inside a Korean-named folder, with no error');
+
+  // One drop, several outcomes: each source is copied on its own and the failures are listed by name.
+  mkdirSync(path.join(ko, '자료'), { recursive: true });
+  writeFileSync(path.join(ko, '자료', 'x.txt'), 'x\n');
+  writeFileSync(inProject('docs/자료'), 'a file named like the dropped folder\n');
+  mkdirSync(path.join(ko, 'second'), { recursive: true });
+  writeFileSync(path.join(ko, '성공.txt'), 'ok\n');
+  writeFileSync(path.join(ko, 'second', '성공.txt'), 'the same name from another folder\n');
+  await t2.js(`(window.__changed = [], true)`);
+  await drop(row('docs'), [path.join(ko, '성공.txt'), path.join(ko, 'second', '성공.txt'), path.join(ko, '자료')]);
+  await t2.until(`${lastDialog}?.textContent.includes('자료 already exist')`, 'conflict dialog for the mixed drop');
+  await press('Overwrite');
+  const report = await t2.until(`${lastDialog}?.querySelector('.dialog-message')?.textContent.includes('자료')`, 'failure report').then(() => t2.js(`${lastDialog}.querySelector('.dialog-message').textContent`), () => '');
+  t2.check(/성공\.txt/.test(report) && /자료/.test(report) && /same name/.test(report),
+    `a mixed drop reports each failed item by name: the folder over a file and the second source of the same name (${JSON.stringify(report)})`);
+  await t2.js(`(${lastDialog}.querySelector('.dialog-buttons .primary').click(), true)`);
+  const mixedShown = await t2.until(`${names}.includes('성공.txt')`, 'copied row of the mixed drop').then(() => true, () => false);
+  const changed = await t2.js('window.__changed');
+  t2.check(mixedShown && readFileSync(inProject('docs/성공.txt'), 'utf8') === 'ok\n' && readFileSync(inProject('docs/자료'), 'utf8') === 'a file named like the dropped folder\n'
+    && changed.length === 1 && changed[0].toLowerCase() === inProject('docs/성공.txt').toLowerCase(),
+  `what could be copied is copied, shown in the tree and reported as created; the first of two same-named sources wins and nothing else is touched (${JSON.stringify(changed)})`);
 } catch (err) {
   t2.check(false, err.message);
 }

@@ -219,5 +219,13 @@
   "Overwrite": "덮어쓰기",
   "Skip": "건너뛰기",
   "{names} already exist in {dir}.": "{dir}에 {names}이(가) 이미 있습니다.",
-  "Could not copy to {dir}: {error}": "{dir}(으)로 복사할 수 없습니다: {error}"
+  "Could not copy to {dir}: {error}": "{dir}(으)로 복사할 수 없습니다: {error}",
+  "Could not copy to {dir}:": "{dir}(으)로 복사할 수 없습니다:",
+  "another dropped item has the same name": "끌어 놓은 다른 항목과 이름이 같습니다",
+  "a file with this name is already there": "같은 이름의 파일이 이미 있습니다",
+  "a folder with this name is already there": "같은 이름의 폴더가 이미 있습니다",
+  "New": "새로 만들기",
+  "Python File": "Python 파일",
+  "Directory": "디렉터리",
+  "Project type": "프로젝트 유형"
 }

@@ -6,6 +6,7 @@
 //   exec node:  stmt(c) -> the exec output pin that runs next (or null); output(c, pin) -> {code, prec} for a data
 //               output that is not a generated local
 //   entry node: entry(c) (Start, Define Function)
+// def.outputScope 'body': the node's outputs exist only inside its body (a loop's index), not after it.
 (function (root) {
   'use strict';
   const VS = root.PyideVisualScript || (root.PyideVisualScript = {});
@@ -72,6 +73,31 @@
       inputs: dyn.inputs || def.inputs,
       outputs: dyn.outputs || def.outputs,
     };
+  };
+
+  // An Any input's field: 42 is the number 42, other text is text, and "42" (in quotes) is the text 42. A number a
+  // double would change stays text as typed: a leading zero (a phone number 01012345678) or more than 15 digits.
+  const NUMBER_RE = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+  VS.anyValue = (text) => {
+    const t = String(text).trim();
+    const digits = t.replace(/^-/, '');
+    const exact = !/^0\d/.test(digits) && !(/^\d+$/.test(digits) && digits.length > 15);
+    if (NUMBER_RE.test(t) && exact && Number.isFinite(Number(t))) return Number(t);
+    const q = /^"(.*)"$/s.exec(t);
+    return q ? q[1] : String(text);
+  };
+  // The field text that gives v back.
+  VS.anyText = (v) => {
+    if (v === undefined || v === null) return '';
+    if (typeof v === 'number') return String(v);
+    const s = String(v);
+    return typeof VS.anyValue(s) === 'number' || /^".*"$/s.test(s.trim()) ? `"${s}"` : s;
+  };
+  // A Number or Integer field: a number, or the text of an integer too long for a double (codegen writes it as typed).
+  VS.numberValue = (text) => {
+    const t = String(text).trim();
+    if (/^[+-]?\d+$/.test(t) && !Number.isSafeInteger(Number(t))) return BigInt(t).toString();
+    return t === '' ? NaN : Number(t);
   };
 
   // "a, b" -> ['a', 'b'] (commas or spaces, duplicates dropped).
@@ -178,6 +204,7 @@
     description: 'Counts from Start up to (not including) Stop and runs Loop body for each number.',
     keywords: 'loop range count repeat times 반복 범위 횟수',
     exec: LOOP,
+    outputScope: 'body',
     inputs: [
       { id: 'start', label: 'Start', type: 'number', default: 0 },
       { id: 'stop', label: 'Stop', type: 'number', default: 10 },
@@ -201,6 +228,7 @@
     description: 'Runs Loop body once for every item of a list.',
     keywords: 'loop each list items iterate 반복 각각 목록',
     exec: LOOP,
+    outputScope: 'body',
     inputs: [{ id: 'list', label: 'List', type: 'list' }],
     outputs: out('item', 'Item', 'any'),
     compile: {
@@ -250,6 +278,7 @@
     compile: {
       stmt(c) {
         const name = c.ident('name');
+        c.assign(name);
         c.line(`${name} = ${c.arg('value', -1)}`);
         return 'next';
       },
@@ -615,10 +644,15 @@
     pins: (node) => ({ inputs: namedPins(node, 'inputs'), outputs: namedPins(node, 'outputs') }),
     compile: {
       stmt(c) {
-        for (const p of c.pins.inputs) c.line(`${c.identValue(p.id, 'inputs')} = ${c.arg(p.id, -1)}`);
+        for (const p of c.pins.inputs) {
+          const name = c.identValue(p.id, 'inputs');
+          c.assign(name);
+          c.line(`${name} = ${c.arg(p.id, -1)}`);
+        }
+        for (const p of c.pins.outputs) c.assign(p.id);
         const lines = c.dedent(c.prop('code'));
         if (!lines.length && !c.pins.inputs.length) c.line('pass');
-        for (const l of lines) c.line(l);
+        for (const l of lines) (l.raw ? c.rawLine(l.text) : c.line(l.text));
         return 'next';
       },
       output: (c, pin) => ({ code: c.identValue(pin, 'outputs'), prec: c.P.ATOM }),
@@ -754,7 +788,8 @@
     let skipped = [];
     const fill = () => {
       for (const s of skipped) {
-        if (!s.placeholder || s.placeholder.startsWith('<')) {
+        // The default's text is pasted into the call, so only a plain literal is (never re.I, never a call).
+        if (!s.placeholder || !VS.isPythonLiteral(s.placeholder)) {
           c.failPin(c.tr('"{pin}" needs a value here, because a later argument is given.', { pin: s.label }), s.id);
           args.push('None');
         } else args.push(s.placeholder);
@@ -779,6 +814,9 @@
     const names = [c.node.type !== 'py.function' && p.class, c.node.type !== 'py.new' && p.name].filter((n) => n !== false);
     const bad = names.findIndex((n) => !VS.isIdentifier(n));
     if (bad >= 0) return fail(c.tr('"{name}" is not a valid function name.', { name: String(names[bad] ?? '') }));
+    // A parameter's name is written into the call (name=value).
+    const badParam = VS.symbolParams(p.params).find((x) => !VS.isIdentifier(x.name));
+    if (badParam) return fail(c.tr('"{name}" cannot be used as a name. Use letters, digits and _, and do not start with a digit.', { name: badParam.name }));
     const state = VS.symbolState(c.node, c.symbols);
     if (state.status === 'missing') return fail(c.tr('{name} no longer exists.', { name: VS.symbolPath(c.node) }));
     if (state.status === 'changed') c.warn(c.tr('The function\'s parameters changed. Update the node to use the new ones.'));

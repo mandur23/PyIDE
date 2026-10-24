@@ -9,5 +9,6 @@
   "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스",
   "Show Variables": "변수 표시",
   "Hide Variables": "변수 숨기기",
-  "The Python Console is not running.": "Python 콘솔이 실행 중이 아닙니다."
+  "The Python Console is not running.": "Python 콘솔이 실행 중이 아닙니다.",
+  "Interrupt": "인터럽트"
 }

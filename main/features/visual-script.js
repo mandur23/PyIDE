@@ -104,19 +104,22 @@ async function projectFiles(root) {
 }
 
 exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
-  // The Python a visual script runs as: <userData>/visual-script/<sha1 of the .pyflow path>/<name>.py. One folder per
-  // script keeps the file name the user sees in tracebacks while two demo.pyflow files in different folders never
-  // share a file. The path is hashed in lower case because Windows paths are case-insensitive.
+  // The Python a visual script runs as: <userData>/visual-script/<sha1 of the .pyflow path>/<name>_pyflow.py. One
+  // folder per script keeps the script's name in tracebacks while two demo.pyflow files in different folders never
+  // share a file. The path is hashed in lower case because Windows paths are case-insensitive. Python puts the
+  // script's folder first on sys.path, so the file is never named like a module: random.py would be imported by any
+  // `import random`, including one deep inside another module (json imports re), instead of the real module.
   ipcMain.handle('visual-script:write', (_e, pyflowPath, code) => {
     if (typeof pyflowPath !== 'string' || !path.isAbsolute(pyflowPath) || typeof code !== 'string') throw new Error('visual-script:write needs an absolute .pyflow path and the code');
     const hash = crypto.createHash('sha1').update(path.resolve(pyflowPath).toLowerCase()).digest('hex');
     const dir = path.join(app.getPath('userData'), 'visual-script', hash);
     fs.mkdirSync(dir, { recursive: true });
     const base = path.basename(pyflowPath).replace(/\.pyflow$/i, '') || 'script';
-    // Python puts the script's folder first on sys.path, so random.pyflow run as random.py would import itself
-    // instead of the module its Call Python node names.
-    const imports = new Set([...code.matchAll(/^(?:import|from)\s+(\w+)/gm)].map((m) => m[1].toLowerCase()));
-    const file = path.join(dir, `${imports.has(base.toLowerCase()) ? `${base}_pyflow` : base}.py`);
+    const file = path.join(dir, `${base}_pyflow.py`);
+    // A file an older version wrote here as <name>.py would still shadow the module.
+    for (const old of fs.readdirSync(dir)) {
+      if (/\.py$/i.test(old) && old !== path.basename(file)) fs.rmSync(path.join(dir, old), { force: true });
+    }
     fs.writeFileSync(file, code, 'utf8');
     // The long form of the path: debugpy reports frames by it, so a user data folder reached through an 8.3 short
     // name (C:\Users\RUNNER~1\…) would otherwise not match the file the script registered its breakpoints on.
@@ -136,13 +139,13 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     parsed.set(root.toLowerCase(), cache);
     const seen = new Set();
     const need = [];
-    let skipped = 0;
+    const skipped = [];
     for (const f of files) {
       const k = f.path.toLowerCase();
       seen.add(k);
       let st;
       try { st = await fs.promises.stat(f.path); } catch { continue; }
-      if (st.size > MAX_BYTES) { skipped++; cache.delete(k); continue; }
+      if (st.size > MAX_BYTES) { skipped.push(f.module); cache.delete(k); continue; }
       const c = cache.get(k);
       if (c && c.mtimeMs === st.mtimeMs && c.size === st.size && c.module === f.module) continue;
       need.push({ ...f, mtimeMs: st.mtimeMs, size: st.size });
@@ -171,7 +174,8 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     return { trusted: true, modules: list, truncated: truncated || partial, skipped, parsed: need.length, ms: Date.now() - started };
   }
 
-  // req: {root, interp: {cmd, args}} -> {trusted, modules, truncated, skipped, parsed, ms} | {trusted: false}
+  // req: {root, interp: {cmd, args}} -> {trusted, modules, truncated, skipped, parsed, ms} | {trusted: false}.
+  // truncated: not every file was read (too many, or out of time); skipped: the modules of files too large to read.
   ipcMain.handle('visual-script:symbols', async (_e, req) => {
     const root = typeof req?.root === 'string' && path.isAbsolute(req.root) ? path.resolve(req.root) : null;
     if (!root || !trust.isTrusted(root)) return { trusted: false, modules: [] };

@@ -26,6 +26,7 @@ if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWo
   create: invoke('fs:create'),
   rename: invoke('fs:rename'),
   copyInto: invoke('fs:copyInto'),
+  stat: invoke('fs:stat'),
   trash: invoke('fs:trash'),
   interpreters: invoke('py:interpreters'),
   input: invoke('proc:input'),

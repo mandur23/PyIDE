@@ -230,7 +230,7 @@ try {
 
   // ---------- project tree actions ----------
   let tmenu = await treeMenu('test_units.py');
-  check(tmenu.some((s) => s.includes("'…의 pytest' 실행")) && !tmenu.some((s) => s.startsWith('Run ')), `tree menu on a test file (${tmenu.join(' | ')})`);
+  check(tmenu.some((s) => s.includes("'test_units.py의 pytest' 실행")) && !tmenu.some((s) => s.startsWith('Run ')), `tree menu on a test file (${tmenu.join(' | ')})`);
   await closeMenu();
   tmenu = await treeMenu('scratch.py');
   check(tmenu.some((s) => s.includes("'…' 실행")), `tree menu on a script (${tmenu.join(' | ')})`);

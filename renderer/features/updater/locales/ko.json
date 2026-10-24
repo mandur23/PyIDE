@@ -52,5 +52,7 @@
   "Update channel:": "업데이트 채널:",
   "Stable": "안정 릴리스",
   "Beta": "베타 릴리스",
-  "Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.": "베타 릴리스는 테스트 버전을 먼저 받고, 모든 안정 릴리스도 받습니다. 안정 릴리스로 다시 바꿔도 이전 버전을 다시 설치하지 않으며, 더 새로운 안정 릴리스가 나올 때까지 지금 버전을 그대로 씁니다."
+  "Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.": "베타 릴리스는 테스트 버전을 먼저 받고, 모든 안정 릴리스도 받습니다. 안정 릴리스로 다시 바꿔도 이전 버전을 다시 설치하지 않으며, 더 새로운 안정 릴리스가 나올 때까지 지금 버전을 그대로 씁니다.",
+  "Checking for updates…": "업데이트 확인 중…",
+  "It is downloading in the background; the status bar shows its progress.": "백그라운드에서 다운로드하고 있으며 진행률은 상태 표시줄에 표시됩니다."
 }

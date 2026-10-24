@@ -3,6 +3,7 @@
 // an index. Then the Settings › Plugins page against a local HTTP server and a folder index: listing, search, the
 // trust dialog, a tampered download, install, update of an older installed version, a bad index, offline and Retry,
 // plugins that need a newer PyIDE, and after a restart the installed plugins running and the page in Korean.
+import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { createServer } from 'http';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
@@ -17,6 +18,7 @@ process.env.PYIDE_MARKETPLACE_URL ??= 'off';
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const market = require('../main/marketplace.js');
+const iconv = require('iconv-lite');
 const { extractZip } = require('../main/zip.js');
 const { createPluginManager } = require('../main/plugin-manager.js');
 const APP_VERSION = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
@@ -176,6 +178,19 @@ async function pure() {
   check(/symbolic link/.test(tryZip('link', link)), 'a symbolic link entry is refused');
   check(/twice/.test(tryZip('dupe', zipFiles([plain('A.txt'), plain('a.txt')]))), 'two entries that are the same file on Windows are refused');
   check(/not a zip archive/.test(tryZip('notzip', Buffer.from('hello'))), 'a file that is not a zip is refused');
+  // Windows Explorer's "Send to › Compressed folder" writes names in the OEM code page without the UTF-8 flag.
+  const legacy = Buffer.from(zipFiles([plain('plugin.json', '{}'), plain('locales/XXXXXX.md', '# help'), plain('caf_.txt'), plain('YYYY/ZZZZ.txt')]));
+  const swaps = [['XXXXXX', iconv.encode('도움말', 'cp949')], ['caf_', Buffer.from([0x63, 0x61, 0x66, 0x82])], ['YYYY', iconv.encode('과제', 'cp949')], ['ZZZZ', iconv.encode('숙제', 'cp949')]];
+  for (const [from, to] of swaps) for (let i = legacy.indexOf(from); i >= 0; i = legacy.indexOf(from, i + to.length)) to.copy(legacy, i);
+  for (let i = 0; i + 4 <= legacy.length; i++) {
+    const at = { [0x04034b50]: 6, [0x02014b50]: 8 }[legacy.readUInt32LE(i)];
+    if (at) legacy.writeUInt16LE(legacy.readUInt16LE(i + at) & ~0x800, i + at);
+  }
+  const legacyError = tryZip('legacy', legacy);
+  const unpacked = existsSync(dest('legacy')) ? readdirSync(dest('legacy'), { recursive: true }).map(String).sort().join() : '';
+  check(!legacyError && unpacked === ['café.txt', 'locales', 'locales\\도움말.md', 'plugin.json', '과제', '과제\\숙제.txt'].sort().join()
+    && readFileSync(path.join(dest('legacy'), 'locales', '도움말.md'), 'utf8') === '# help',
+  `names without the UTF-8 flag unpack as CP949 when they are CP949, else CP437 (${legacyError || unpacked})`);
 
   // The plugin manager installing from an index, over HTTP
   const feed = makeFeed();
@@ -192,7 +207,7 @@ async function pure() {
       'a download whose sha256 differs from the index is not installed');
     check((await pm.installListed('hello-online'))?.id === 'hello-online' && readJson(path.join(userData, 'plugins', 'hello-online', 'plugin.json')).version === '1.0.0'
       && requests.includes('hello-online-1.0.0.zip'), 'an online plugin downloads over HTTP and installs');
-    check(!readdirSync(userData).some((f) => /^plugin-(zip|download)-/.test(f)), 'no download or extraction folder is left in user data');
+    check(!readdirSync(userData).some((f) => /^plugin-(zip|download|new|old)-/.test(f)), 'no download, extraction, staging or old folder is left in user data');
     const older = path.join(userData, 'plugins', 'word-count');
     mkdirSync(older, { recursive: true });
     writeFileSync(path.join(older, 'plugin.json'), JSON.stringify({ id: 'word-count', name: 'Word Count', version: '0.9.0' }));
@@ -213,6 +228,41 @@ async function pure() {
   } finally {
     server.close();
   }
+  await reinstallHeld();
+}
+
+// Reinstalling over a plugin whose folder another program holds (a helper process running in it, an antivirus scan).
+async function reinstallHeld() {
+  const userData = tempDir('market-held');
+  const pm = createPluginManager({ appDir: APP_DIR, userDataDir: userData });
+  const src = tempDir('market-held-src');
+  const v1 = writePlugin(path.join(src, 'v1'), { id: 'held', name: 'Held', version: '1.0.0' }, { 'helper.txt': 'v1 helper' });
+  mkdirSync(path.join(v1, 'bin'), { recursive: true });
+  writeFileSync(path.join(v1, 'bin', 'tool.txt'), 'v1 tool');
+  const v2 = writePlugin(path.join(src, 'v2'), { id: 'held', name: 'Held', version: '2.0.0' });
+  const installed = path.join(userData, 'plugins', 'held');
+  const snapshot = (dir) => readdirSync(dir, { recursive: true }).map(String).sort().join();
+  pm.install(v1);
+  const before = snapshot(installed);
+  const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: path.join(installed, 'bin'), stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 500));
+  let error = '';
+  try {
+    error = throws(() => pm.install(v2));
+    check(snapshot(installed) === before && readJson(path.join(installed, 'plugin.json')).version === '1.0.0'
+      && readFileSync(path.join(installed, 'bin', 'tool.txt'), 'utf8') === 'v1 tool',
+    `a reinstall that cannot replace the folder leaves version 1 complete (${snapshot(installed)})`);
+    check(/in use/.test(error) && error.includes('held'), `the error says the plugin folder is in use (${error || 'no error'})`);
+    check(pm.list().filter((p) => p.id === 'held').map((p) => p.version).join() === '1.0.0', 'the plugin list still shows version 1 once');
+    check(/in use/.test(throws(() => pm.uninstall('held'))) && readJson(path.join(installed, 'plugin.json')).version === '1.0.0', 'an uninstall that cannot remove the folder leaves the plugin intact');
+  } finally {
+    helper.kill();
+  }
+  await new Promise((r) => helper.once('exit', r));
+  check(pm.install(v2)?.id === 'held' && readJson(path.join(installed, 'plugin.json')).version === '2.0.0' && !existsSync(path.join(installed, 'bin')),
+    'once the folder is free the reinstall replaces version 1 with version 2 (no file of version 1 left)');
+  check(readdirSync(userData).join() === 'plugins' && readdirSync(path.join(userData, 'plugins')).join() === 'held',
+    `no staging or old folder is left behind (${readdirSync(userData).join()} / ${readdirSync(path.join(userData, 'plugins')).join()})`);
 }
 
 // ---------- the Plugins page ----------

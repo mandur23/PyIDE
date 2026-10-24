@@ -1,5 +1,6 @@
 // Search and navigation backend: find/replace in files, TODO scan, and ast-based outline and symbol index.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
@@ -296,6 +297,9 @@ if (!isMainThread && workerData?.role === 'pyide-search') {
 
 // Main side; worker-host evaluates this file as the worker (the role check above).
 const scan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
+// The symbol index lists the project's files on a worker of its own: behind the TODO scan, which reads every file,
+// Go to Class stayed empty for 19 s after a 3,000-module project opened (5.6 s now; verify/perf-index.mjs).
+const indexScan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
 const textCodec = isMainThread ? require('../text-codec') : null;
 
 // Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding.
@@ -511,21 +515,31 @@ function runAst(interp, mode, input, timeout) {
 // pathLower -> {path, mtime, symbols}; entries are dropped by search:invalidate and refreshed by mtime.
 const symbolCache = new Map();
 let indexQueue = Promise.resolve();
+const BATCH = 400;
+// Python parses the batches side by side: 3,000 modules take 1.2 s instead of 3.2 s one batch after another.
+const PARALLEL = Math.max(1, Math.min(4, os.cpus().length - 1));
 
 async function buildIndex(interp, root) {
   const live = new Set();
   const stale = [];
-  for (const { p, mtime } of await scan('pyFiles', root)) {
+  for (const { p, mtime } of await indexScan('pyFiles', root)) {
     const key = p.toLowerCase();
     live.add(key);
     const hit = symbolCache.get(key);
     if (!hit || hit.mtime !== mtime) stale.push({ p, mtime });
   }
-  for (let i = 0; i < stale.length; i += 400) {
-    const batch = stale.slice(i, i + 400);
-    const res = (await runAst(interp, 'index', JSON.stringify(batch.map((b) => b.p)), 120000)) || {};
-    for (const { p, mtime } of batch) symbolCache.set(p.toLowerCase(), { path: p, mtime, symbols: res[p] || [] });
-  }
+  const batches = [];
+  for (let i = 0; i < stale.length; i += BATCH) batches.push(stale.slice(i, i + BATCH));
+  const parse = async () => {
+    for (let batch; (batch = batches.shift());) {
+      const res = await runAst(interp, 'index', JSON.stringify(batch.map((b) => b.p)), 120000);
+      // Python failed or timed out: that says nothing about these files. They keep what they had and are parsed again
+      // next time, instead of being cached as files without symbols until they change.
+      if (!res) continue;
+      for (const { p, mtime } of batch) symbolCache.set(p.toLowerCase(), { path: p, mtime, symbols: res[p] || [] });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PARALLEL, batches.length) }, parse));
   // With the separator, so indexing C:\proj does not drop the cached files of C:\proj2.
   const rootKey = root.toLowerCase().replace(/[\\/]*$/, path.sep);
   const out = [];

@@ -68,10 +68,13 @@
   const later = { label: tr('Later') };
 
   // manual: from the menu or Settings, so it reports "no update" and errors, and ignores a skipped version.
-  async function check({ manual = false, feedUrl = feed(), channel = ide.settings.get(CHANNEL, 'stable') } = {}) {
+  // report(lines, error): Settings › Updates shows the result on its page instead of in a dialog over the settings;
+  // only a choice to make (the MSI installer) still asks in a dialog.
+  async function check({ manual = false, feedUrl = feed(), channel = ide.settings.get(CHANNEL, 'stable'), report = null } = {}) {
+    const tell = (lines, buttons, error = false) => (report ? report([].concat(lines), error) : message(tr('Check for Updates'), lines, buttons));
     if (!feedUrl) {
       if (manual) {
-        message(tr('Check for Updates'), tr('Updates are off: no update feed is set.'), [
+        tell(tr('Updates are off: no update feed is set.'), [
           { label: tr('Open Settings'), primary: true, run: () => ide.openSettings?.('updates') }, { label: tr('Close') }]);
       }
       return null;
@@ -82,28 +85,31 @@
     } catch (err) {
       const reason = reasonOf(err);
       log.warn(`update check failed: ${reason}`);
-      if (manual) message(tr('Check for Updates'), [tr('Could not check for updates.'), reason], [{ label: tr('Close'), primary: true }]);
+      if (manual) tell([tr('Could not check for updates.'), reason], [{ label: tr('Close'), primary: true }], true);
       return null;
     }
     const version = result.available;
     if (!version) {
-      if (manual) message(tr('Check for Updates'), tr('PyIDE {version} is the latest version.', { version: state.version }), [{ label: tr('Close'), primary: true }]);
+      if (manual) tell(tr('PyIDE {version} is the latest version.', { version: state.version }), [{ label: tr('Close'), primary: true }]);
       return result;
     }
     if (!manual && ide.settings.get(SKIPPED) === version) return result;
+    const available = tr('PyIDE {version} is available. You have {current}.', { version, current: state.version });
     if (state.kind === 'nsis') {
+      report?.([available, tr('It is downloading in the background; the status bar shows its progress.')]);
       if (state.phase === 'downloaded') offerRestart();
       else ide.api.invoke('updater:download', { differential: ide.settings.get(DIFFERENTIAL, true) !== false }).catch((err) => {
         log.warn(`update download failed: ${reasonOf(err)}`);
         message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
       });
     } else if (state.kind === 'msi') {
-      announce(version, manual, [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
-        tr('This copy was installed from an MSI package, so update it with the new MSI installer.')], [
+      report?.([available]);
+      announce(version, manual, [available, tr('This copy was installed from an MSI package, so update it with the new MSI installer.')], [
         { label: tr('Download the new installer'), primary: true, run: () => ide.api.invoke('updater:openInstaller') }, skip(version), later]);
+    } else if (report) {
+      report([available, tr('PyIDE updates itself only when it was installed with the PyIDE installer.')]);
     } else {
-      announce(version, manual, [tr('PyIDE {version} is available. You have {current}.', { version, current: state.version }),
-        tr('PyIDE updates itself only when it was installed with the PyIDE installer.')], [{ label: tr('Close'), primary: true }]);
+      announce(version, manual, [available, tr('PyIDE updates itself only when it was installed with the PyIDE installer.')], [{ label: tr('Close'), primary: true }]);
     }
     return result;
   }
@@ -279,8 +285,25 @@
       }
       const now = el('button', 'secondary', tr('Check Now'));
       now.id = 'updatesCheckNow';
-      now.onclick = () => check({ manual: true, feedUrl: String(ctx.value(FEED) ?? state.defaultFeed ?? '').trim(), channel: ctx.value(CHANNEL) ?? 'stable' });
-      info.appendChild(now);
+      const result = el('div', 'upd-result');
+      result.id = 'updatesCheckResult';
+      result.setAttribute('role', 'status');
+      const show = (lines, error = false) => {
+        result.classList.toggle('err', error);
+        result.replaceChildren(...lines.map((line) => el('div', null, line)));
+      };
+      now.onclick = async () => {
+        now.disabled = true;
+        show([tr('Checking for updates…')]);
+        try {
+          await check({ manual: true, feedUrl: String(ctx.value(FEED) ?? state.defaultFeed ?? '').trim(), channel: ctx.value(CHANNEL) ?? 'stable', report: show });
+        } finally {
+          now.disabled = false;
+        }
+      };
+      const row = el('div', 'upd-check-row');
+      row.append(now, result);
+      info.appendChild(row);
     },
   });
 })();

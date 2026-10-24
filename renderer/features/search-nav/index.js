@@ -755,22 +755,30 @@
   }
 
   // An empty index when the scan fails (the worker stopped), so callers and the warm-up after a project opens never reject.
+  const building = new Set(); // index loads still running
   const loadIndex = () => {
     const interp = ide.currentInterp();
     if (!interp || !ide.root) return Promise.resolve([]);
-    return ide.api.invoke('search:symbols', interp, ide.root).catch((e) => {
+    const load = ide.api.invoke('search:symbols', interp, ide.root).catch((e) => {
       console.warn('symbol index failed', e);
       return [];
     });
+    building.add(load);
+    load.then(() => building.delete(load));
+    return load;
   };
 
   async function gotoSymbol(classesOnly) {
     if (!ide.root) return;
     const index = loadIndex();
-    const s = await ide.ui.pick({
+    const chosen = ide.ui.pick({
       placeholder: classesOnly ? tr('Enter class name') : tr('Enter symbol name'),
       items: async (q) => rankSymbols((await index).filter((x) => !classesOnly || x.kind === 'class'), q),
     });
+    // Until the index answers (seconds after a large project opens) the list says so, not "Nothing found"; the picker
+    // draws the results over it.
+    document.getElementById('popupList').replaceChildren(el('div', 'popup-item hint sn-indexing', tr('Indexing…')));
+    const s = await chosen;
     if (s) goTo(s.path, s.line, s.col, s.name.length);
   }
 
@@ -795,8 +803,10 @@
     },
   });
 
+  // Scanned while the TODO window is shown: a project opened with it hidden reads none of its files for it (on a
+  // 3,000-module project the scan at open took the search worker 20 s).
   async function refreshTodosNow() {
-    if (!ide.root) return;
+    if (!ide.root || !todoTw.isVisible()) return;
     let res;
     try {
       res = await ide.api.invoke('search:todos', ide.root, dirtyTexts());
@@ -839,7 +849,7 @@
     ide.api.invoke('search:invalidate', paths.length ? paths : null).catch(() => {});
     refreshTodos();
   });
-  ide.on('toolWindowShown', (id) => id === 'Structure' && refreshStructure());
+  ide.on('toolWindowShown', (id) => (id === 'Structure' ? refreshStructure() : id === 'TODO' && refreshTodosNow()));
   ide.on('interpreterChanged', () => { outline = null; refreshStructure(); });
 
   ide.registerTreeAction({ title: tr('Find in Files…'), keyAction: 'FindInPath', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
@@ -857,13 +867,14 @@
     { id: 'GotoClass', title: tr('Go to Class…'), keys: 'Ctrl+N', run: () => gotoSymbol(true) },
     { id: 'GotoSymbol', title: tr('Go to Symbol…'), keys: 'Ctrl+Alt+Shift+N', run: () => gotoSymbol(false) },
     { id: 'ActivateFindToolWindow', title: tr('Tool Window: {title}', { title: tr('Find in Files') }), run: () => findTw.show() },
-    { id: 'ActivateTODOToolWindow', title: tr('Tool Window: {title}', { title: 'TODO' }), run: () => { todoTw.show(); refreshTodosNow(); } },
+    { id: 'ActivateTODOToolWindow', title: tr('Tool Window: {title}', { title: 'TODO' }), run: () => todoTw.show() },
   ].forEach(ide.registerAction);
 
   // Providers for Search Everywhere (search-everywhere plugin), so it shows exactly what Go to Class/Symbol finds.
   ide.searchNav = {
     match, rankSymbols, kindIcon, goTo,
     symbols: loadIndex,
+    indexing: () => building.size > 0,
     recentFiles: () => [...recent],
   };
 })();

@@ -2,7 +2,7 @@
   "Python Test Runner": "Python 테스트 러너",
   "pytest for {name}": "{name}에 대한 pytest",
   "pytest in {name}": "{name}의 pytest",
-  "Run 'pytest in …'": "'…의 pytest' 실행",
+  "Run 'pytest in {name}'": "'{name}의 pytest' 실행",
   "Run Test at Caret": "캐럿 위치의 테스트 실행",
   "Rerun Failed Tests": "실패한 테스트 다시 실행",
   "Target": "대상",

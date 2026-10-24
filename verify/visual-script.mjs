@@ -2,10 +2,12 @@
 // With real CDP mouse and key input: Shift+F10, the Run menu, Rerun and the tab's Run button run a .pyflow through the
 // Run tool window (Ask User answered on the console's stdin); a graph with a compile error refuses to run and selects
 // the node; a division by zero marks its node and the traceback link selects it; Show Code follows edits and maps
-// lines and nodes both ways; Export as Python writes a file that prints the same output and asks before overwriting;
+// lines and nodes both ways; Export as Python writes a file that prints the same output and asks before overwriting,
+// and asks for another name when <name>.py would hide a module; the generated file is <name>_pyflow.py, so random.pyflow
+// importing random (indented, in a Python Code node) gets the real module;
 // Project tree › New › Visual Script makes a working script; the file icon; readable labels at 100% in both themes;
 // and a Korean session without English left in the tab, the palette and the dialogs.
-import { readFileSync, writeFileSync, existsSync, realpathSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import path from 'path';
@@ -144,8 +146,8 @@ try {
   await until(`${runText}.includes('What is your name?')`, 'the program asks for a name in the Run console', 30000);
   check(await js(`document.querySelector('.run-tab.active .run-tab-title')?.textContent`) === 'demo', 'the Run tab is titled with the script name');
   const demoPath = await js(`ide.activeTab().path`);
-  const generated = path.join(userData, 'visual-script', sha1(demoPath), 'demo.py');
-  check(existsSync(generated), `the code is written to <userData>/visual-script/<sha1 of the path>/demo.py`);
+  const generated = path.join(userData, 'visual-script', sha1(demoPath), 'demo_pyflow.py');
+  check(existsSync(generated), `the code is written to <userData>/visual-script/<sha1 of the path>/demo_pyflow.py`);
   check(await js(`${runText}.split('\\n')[0].includes(${S(generated)})`), 'the console shows the command that runs the generated file');
   await answer(ctx, ui, 'Ada');
   await until(`${runText}.includes('Process finished with exit code 0')`, 'the run finishes', 30000);
@@ -201,7 +203,7 @@ try {
   check(await js(`document.querySelectorAll('.vs-host:not(.hidden) .vs-runtime-err').length`) === 1, 'only that node is marked');
   const zeroOut = await js(programOutput);
   check(zeroOut.startsWith('Start\nTraceback') && !zeroOut.includes('never'), 'the steps before the error ran and the ones after did not');
-  const zeroPy = path.join(userData, 'visual-script', sha1(await js(`ide.activeTab().path`)), 'zero.py');
+  const zeroPy = path.join(userData, 'visual-script', sha1(await js(`ide.activeTab().path`)), 'zero_pyflow.py');
   await openScript(ctx, 'demo.pyflow');
   const link = `[...document.querySelectorAll('#runOut a')].find((a) => a.textContent === ${S(`File "${zeroPy}", line 6`)})`;
   check(await js(`!!${link}`), 'the traceback line in the generated file is a link');
@@ -210,7 +212,7 @@ try {
   await ui.click(linkAt);
   await until(`ide.activeTab()?.path.toLowerCase().endsWith('\\\\zero.pyflow')`, 'the link opens the .pyflow tab');
   await until(`${V}.selection().join(',') === 'n3'`, 'the link selects the node');
-  check(!(await js(`ide.groups().flatMap((g) => g.tabs).some((t) => /zero\\.py$/i.test(t.path))`)), 'the generated file is not opened');
+  check(!(await js(`ide.groups().flatMap((g) => g.tabs).some((t) => /zero_pyflow\\.py$/i.test(t.path))`)), 'the generated file is not opened');
   check(await js(`(() => { const n = document.querySelector('.vs-host:not(.hidden) .vs-node[data-id="n3"]').getBoundingClientRect(); const c = document.querySelector('.vs-host:not(.hidden) .vs-canvas').getBoundingClientRect(); return n.left >= c.left && n.right <= c.right && n.top >= c.top && n.bottom <= c.bottom; })()`), 'the node is brought into view');
   await shot('runtime-error.png');
 
@@ -228,6 +230,51 @@ try {
   await press('Shift+F10');
   await until(`${runText}.includes('Process finished with exit code')`, 'math.pyflow ends', 30000);
   check(await js(programOutput) === '4.0\n', `math.pyflow calling math.sqrt runs as math_pyflow.py instead of importing itself (${S(await js(programOutput))})`);
+
+  // random.pyflow importing random inside main() (a Python Code node), with a random.py an older version left in the
+  // generated file's folder.
+  let randomGraph = VS.newGraph();
+  randomGraph = VS.addNode(randomGraph, { id: 'n2', type: 'py.code', x: 320, y: 112, props: { code: 'import random\nrandom.seed(7)\nprint(random.randint(5, 5))', inputs: '' } });
+  randomGraph = VS.connect(randomGraph, { node: 'n1', pin: 'next' }, { node: 'n2', pin: 'in' });
+  const randomPath = path.join(project, 'random.pyflow');
+  writeFileSync(randomPath, VS.serialize(randomGraph));
+  const randomDir = path.join(userData, 'visual-script', sha1(await js(`ide.util.joinPath(ide.root, 'random.pyflow')`)));
+  mkdirSync(randomDir, { recursive: true });
+  writeFileSync(path.join(randomDir, 'random.py'), 'raise SystemExit("the stale random.py was imported")\n');
+  await openScript(ctx, 'random.pyflow');
+  await focusCanvas(ctx, ui);
+  await press('Shift+F10');
+  await until(`${runText}.includes('Process finished with exit code')`, 'random.pyflow ends', 30000);
+  check(await js(programOutput) === '5\n' && existsSync(path.join(randomDir, 'random_pyflow.py')) && !existsSync(path.join(randomDir, 'random.py')),
+    `random.pyflow with an indented import random runs as random_pyflow.py, and an old random.py beside it is removed (${S(await js(programOutput))})`);
+
+  // Export: random.py beside the script would hide the module (standard, and imported by the script).
+  await ui.clickOn('.vs-host:not(.hidden) .vs-export');
+  await until(`!!document.querySelector('#dialogHost .dialog .vs-export-input')`, 'Export asks for another name');
+  const shadowText = await js(`document.querySelector('#dialogHost .dialog').textContent`);
+  const suggested = await js(`document.querySelector('#dialogHost .vs-export-input').value`);
+  check(shadowText.includes('random.py would hide the Python module random') && suggested === 'random_script.py' && await js(`document.activeElement?.classList.contains('vs-export-input')`),
+    `Export of random.pyflow warns that random.py would hide the module and suggests random_script.py, focused (${S(shadowText)})`);
+  await press('Ctrl+a');
+  await type('json');
+  await press('Enter');
+  await sleep(300);
+  check(await js(`document.querySelector('#dialogHost .vs-export-input')?.classList.contains('vs-invalid') && document.querySelector('#dialogHost .dialog').textContent.includes('json.py would hide the Python module json')`),
+    'a name that hides another module (json) is refused in the same dialog');
+  check(!existsSync(path.join(project, 'json.py')) && !existsSync(path.join(project, 'random.py')), 'nothing is written while the name hides a module');
+  await press('Ctrl+a');
+  await type('dice.py');
+  await press('Enter');
+  await until(`ide.activeTab()?.path.toLowerCase().endsWith('\\\\dice.py')`, 'Export writes and opens dice.py');
+  const dice = spawnSync(interp.cmd, [...interp.args, path.join(project, 'dice.py')], { encoding: 'utf8', cwd: project });
+  check(dice.status === 0 && dice.stdout.trim() === '5' && !existsSync(path.join(project, 'random.py')), `the exported dice.py runs and prints 5 (${S(dice.stdout + dice.stderr)})`);
+  await js(`ide.closeTab(ide.activeTab().path, true)`);
+  await openScript(ctx, 'random.pyflow');
+  await ui.clickOn('.vs-host:not(.hidden) .vs-export');
+  await until(`!!document.querySelector('#dialogHost .dialog .vs-export-input')`, 'the name question again');
+  await press('Escape');
+  await until(`!document.querySelector('#dialogHost .dialog')`, 'Escape cancels');
+  check(!existsSync(path.join(project, 'random_script.py')) && !existsSync(path.join(project, 'random.py')), 'cancelling the name question exports nothing');
 
   // ---- Show Code ----
   await openScript(ctx, 'demo.pyflow');
@@ -357,6 +404,10 @@ try {
 ctx.close();
 
 // ---- Korean ----
+const randomKo = () => {
+  const g = VS.addNode(VS.newGraph(), { id: 'n2', type: 'py.code', x: 320, y: 112, props: { code: 'import random', inputs: '' } });
+  return VS.connect(g, { node: 'n1', pin: 'next' }, { node: 'n2', pin: 'in' });
+};
 const ko = await sized(await launch({ fixture: 'visual-script', port: 9096, name: 'visual-script-ko', lang: 'ko-KR' }));
 const kui = inputs(ko);
 try {
@@ -377,6 +428,15 @@ try {
   await ko.until(`document.querySelector('.vs-palette .vs-pal-item.vs-active .vs-pal-title')?.textContent === '출력 (print)'`, 'typing 출력 finds Print');
   ko.check(true, 'typing 출력 in the palette finds Print (출력 (print))');
   await ko.press('Escape');
+  for (const [query, type, title] of [['입력', 'io.input', '사용자에게 묻기 (input)'], ['input', 'io.input', '사용자에게 묻기 (input)'], ['print', 'io.print', '출력 (print)']]) {
+    await ko.press('Tab');
+    await ko.until(`!!document.querySelector('.vs-host:not(.hidden) .vs-palette')`, 'palette');
+    await ko.type(query);
+    await ko.until(`document.querySelector('.vs-palette .vs-pal-item')?.dataset.type === ${S(type)} && document.querySelector('.vs-palette .vs-pal-item.vs-active')?.dataset.type === ${S(type)}`, `typing ${query} puts ${type} first`)
+      .catch(async (err) => { throw new Error(`${err.message}: ${S(await ko.js(`[...document.querySelectorAll('.vs-palette .vs-pal-item')].slice(0, 4).map((r) => r.textContent)`))}`); });
+    ko.check(true, `typing ${query} in the Korean palette puts ${title} first, so Enter adds it`);
+    await ko.press('Escape');
+  }
 
   await ko.press('Shift+F10');
   await ko.until(`(document.querySelector('#runOut')?.textContent || '').includes('What is your name?')`, 'Korean run asks', 30000);
@@ -395,6 +455,16 @@ try {
   ko.check(!dlgLeaks.length && dlgText.includes('demo.py이(가) 이미 있습니다. 덮어쓸까요?') && dlgText.includes('덮어쓰기'), `the overwrite question is Korean (${S(dlgText)}${dlgLeaks.length ? ` leaks ${S(dlgLeaks)}` : ''})`);
   await kui.clickOn('#dialogHost .dialog button.secondary');
   await ko.until(`!document.querySelector('#dialogHost .dialog')`, 'cancelled');
+
+  writeFileSync(path.join(ko.project, 'random.pyflow'), VS.serialize(randomKo()));
+  await openScript(ko, 'random.pyflow');
+  await kui.clickOn('.vs-host:not(.hidden) .vs-export');
+  await ko.until(`!!document.querySelector('#dialogHost .dialog .vs-export-input')`, 'the export name question in Korean');
+  const nameLeaks = await englishLeaks(ko, '#dialogHost');
+  const nameText = await ko.js(`document.querySelector('#dialogHost .dialog').textContent`);
+  ko.check(!nameLeaks.length && nameText.includes('random.py은(는) Python 모듈 random을(를) 가립니다') && nameText.includes('내보내기'), `the export name question is Korean (${S(nameText)}${nameLeaks.length ? ` leaks ${S(nameLeaks)}` : ''})`);
+  await ko.press('Escape');
+  await ko.until(`!document.querySelector('#dialogHost .dialog')`, 'closed');
 
   await openScript(ko, 'problem.pyflow');
   await focusCanvas(ko, kui);

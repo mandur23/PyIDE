@@ -84,6 +84,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/settings.mjs
+      - name: settings-search
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/settings-search.mjs
       - name: marketplace
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -124,6 +128,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/recovery.mjs
+      - name: recovery-main
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/recovery-main.mjs
       - name: rename-module
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -140,6 +148,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/auto-test.mjs
+      - name: tests-tree-menu
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/tests-tree-menu.mjs
       - name: appearance-modes
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -227,6 +239,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/ui-inspect-dialogs.mjs
+      - name: dialog-keyboard
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/dialog-keyboard.mjs
       - name: flow-tools
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 20
@@ -268,6 +284,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15
         run: node verify/debugger.mjs
+      - name: debugger-input
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/debugger-input.mjs
+      - name: pyconsole
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/pyconsole.mjs
       - name: code-vision
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

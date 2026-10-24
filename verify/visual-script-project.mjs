@@ -5,7 +5,7 @@
 // **kwargs, a class and its methods, a dataclass, an async function, two modules with the same function name); math,
 // random and json through a dotted search and Browse Package…; main refuses to import a project module; editing a
 // function's signature and saving shows "parameters changed" and Update rewires; a removed function is a problem that
-// stops the run; Korean; and Safe Mode lists and loads nothing.
+// stops the run, one in a file the index skipped as too large is not; Korean; and Safe Mode lists and loads nothing.
 // `--viewport=1008x681` gives the window the inner size it has on CI's 1024x768 screen.
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, cpSync } from 'fs';
 import { spawnSync } from 'child_process';
@@ -132,6 +132,7 @@ try {
   mkdirSync(path.join(project, '.hidden'));
   writeFileSync(path.join(project, '.hidden', 'secret.py'), 'def hidden():\n    pass\n');
   writeFileSync(path.join(project, 'big.py'), `def big():\n    pass\n${'# padding\n'.repeat(120000)}`);
+  writeFileSync(path.join(project, 'geo', 'huge.py'), `def huge():\n    pass\n${'# padding\n'.repeat(120000)}`);
 
   await openScript(ctx, 'calls.pyflow');
   await until(`${VSJ}.symbols.ready() && ${VSJ}.symbols.project().length >= 6`, 'the project index is read', 30000);
@@ -295,6 +296,12 @@ try {
   await run(ctx, ui);
   check(await js(`${runText}.includes('geo.figures.slow_square no longer exists.')`), 'and the run is refused with that problem');
   writeFileSync(figPath, original);
+
+  // ---- a project module the index skipped (geo/huge.py is over 1 MB) is unknown, not gone ----
+  const bigState = await js(`(() => { const n = { id: 'x', type: 'py.function', props: { module: 'geo.huge', name: 'huge', params: [] } };
+    const g = ${VSJ}.parse(JSON.stringify({ format: 1, nodes: [{ id: 'n1', type: 'core.start' }, n], links: [{ from: { node: 'n1', pin: 'next' }, to: { node: 'x', pin: 'in' } }] }));
+    return { status: ${VSJ}.symbolState(g.nodes[1]).status, errors: ${VSJ}.compile(g).errors }; })()`);
+  check(bigState.status === 'unknown' && !bigState.errors.some((e) => !e.warning), `a function in geo/huge.py, which the index skipped as too large, is unknown and does not stop the run (${S(bigState)})`);
 
   await ctx.shot('project.png');
   check(ctx.consoleErrors.length === 0, `no renderer exceptions${ctx.consoleErrors.length ? ` ${S(ctx.consoleErrors)}` : ''}`);
