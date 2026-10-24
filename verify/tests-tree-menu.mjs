@@ -1,4 +1,4 @@
-// The Project tree's Run 'pytest in <name>' (tests plugin): named after the folder or file, offered on folders with a
+// The Project tree's Run and Debug 'pytest in <name>' (tests plugin): named after the folder or file, offered on folders with a
 // test file at any depth and on test files, not on folders without tests or on other files, following files created
 // and deleted, running pytest on that folder, and in Korean. Ports 9106-9107.
 import { rmSync, writeFileSync } from 'fs';
@@ -36,12 +36,13 @@ try {
   await until(`ide.root && !!document.querySelector('#tree .node')`, 'project tree');
   await t.sleep(1000);
   const offered = async (rel) => pytestItems(await menuOn(t, rel)).join(' | ');
+  const both = (name) => `Run 'pytest in ${name}' | Debug 'pytest in ${name}'`;
   const expected = {
-    '': `Run 'pytest in ${project}'`,
-    tests: "Run 'pytest in tests'",
-    pkg: "Run 'pytest in pkg'",
-    'pkg\\sub': "Run 'pytest in sub'",
-    'tests\\test_calc.py': "Run 'pytest in test_calc.py'",
+    '': both(project),
+    tests: both('tests'),
+    pkg: both('pkg'),
+    'pkg\\sub': both('sub'),
+    'tests\\test_calc.py': both('test_calc.py'),
     src: '',
     docs: '',
     'src\\calc.py': '',
@@ -55,7 +56,7 @@ try {
   writeFileSync(path.join(t.project, 'src', 'test_calc_src.py'), 'def test_src():\n    assert True\n');
   await filesChanged('src\\test_calc_src.py', 'created');
   await t.sleep(1500);
-  check(await offered('src') === "Run 'pytest in src'", 'a folder gets the entry once a test file is created in it');
+  check(await offered('src') === both('src'), 'a folder gets the entry once a test file is created in it');
   for (const rel of ['tests\\test_calc.py', 'pkg\\sub\\test_deep.py', 'src\\test_calc_src.py']) {
     rmSync(path.join(t.project, rel));
     await filesChanged(rel, 'deleted');
@@ -87,12 +88,12 @@ try {
   await k.until(`ide.root && !!document.querySelector('#tree .node')`, 'Korean project tree');
   await k.sleep(1000);
   const ko = pytestItems(await menuOn(k, 'tests')).concat(pytestItems(await menuOn(k, 'tests\\test_calc.py')));
-  k.check(ko.join(' | ') === "'tests의 pytest' 실행 | 'test_calc.py의 pytest' 실행", `the entry in Korean (${ko.join(' | ')})`);
+  k.check(ko.join(' | ') === "'tests의 pytest' 실행 | 'tests의 pytest' 디버그 | 'test_calc.py의 pytest' 실행 | 'test_calc.py의 pytest' 디버그", `the entry in Korean (${ko.join(' | ')})`);
   await k.cdp('Emulation.setDeviceMetricsOverride', { width: 1008, height: 681, deviceScaleFactor: 1, mobile: false });
   await k.until(`Math.abs(innerWidth - 1008) <= 1 && Math.abs(innerHeight - 681) <= 1`, 'viewport 1008x681');
   await k.sleep(250);
   const small = pytestItems(await menuOn(k, 'pkg\\sub'));
-  k.check(small.length === 1 && !menuCut.length, `at 1008x681 the entry shows whole inside the window (${small.join()}${menuCut.length ? `; cut: ${menuCut.join()}` : ''})`);
+  k.check(small.length === 2 && !menuCut.length, `at 1008x681 the entry shows whole inside the window (${small.join()}${menuCut.length ? `; cut: ${menuCut.join()}` : ''})`);
 } catch (err) {
   k.check(false, err.message.split('\n')[0]);
 }

@@ -74,3 +74,5 @@
 .rc-bl-tool { margin-top: 6px; }
 .rc-bl-tool .field { grid-template-columns: 160px 1fr; }
 .rc-bl-hint { margin: 2px 0 0 168px; font-size: 12px; }
+.run-confirm-again { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--gray11); }
+.run-tab-debug .run-tab-title::before { content: "🐞 "; }

@@ -17,7 +17,7 @@
 .tr-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; }
 .tr-icon.passed { color: var(--green6); }
 .tr-icon.failed, .tr-icon.error { color: var(--red); }
-.tr-icon.skipped, .tr-icon.pending { color: var(--gray7); }
+.tr-icon.skipped, .tr-icon.pending, .tr-icon.stopped { color: var(--gray7); }
 .tr-icon.running { color: var(--tr-running); }
 .tr-name { overflow: hidden; text-overflow: ellipsis; }
 .tr-row[data-kind="root"] .tr-name { font-weight: 600; }

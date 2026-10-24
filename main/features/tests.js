@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
-const { withPath } = require('./run.js');
+const { withPath, workingDir } = require('./run.js');
 const { withEnvFiles } = require('../dotenv');
 const remote = require('../remote');
 
@@ -26,18 +26,39 @@ exports.register = (ctx) => {
     return p;
   });
 
-  // opts: {runner: 'pytest'|'unittest', targets: string[], args: string[], cwd, root, env, envFiles?} (envFiles as for run:start)
-  ipcMain.handle('tests:start', async (_e, interp, { runner, targets = [], args = [], cwd, root, env = {}, envFiles }) => {
+  // A test run's report file, environment and arguments. opts: {runner: 'pytest'|'unittest', targets: string[],
+  // args: string[], cwd, root, env, envFiles?} (envFiles as for run:start).
+  function prepare({ runner, targets = [], args = [], cwd, root, env = {}, envFiles }) {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-tests-')), 'report.jsonl');
     fs.writeFileSync(file, '');
     const runEnv = withPath({ ...withEnvFiles(env, envFiles, root), PYIDE_TEST_REPORT: file }, [helpers, root]);
+    // A folder longer than Windows allows runs from its 8.3 form (run.js workingDir), from which pytest picks a rootdir
+    // above the project (the temp folder) and collects whatever else is there; the project root is the rootdir then.
+    const rootdir = cwd && path.resolve(cwd).length > 258 && !args.some((x) => x.startsWith('--rootdir')) ? [`--rootdir=${root}`] : [];
     const pyArgs = runner === 'pytest'
-      ? ['-m', 'pytest', '-p', 'pyide_pytest_plugin', ...args, ...targets]
+      ? ['-m', 'pytest', '-p', 'pyide_pytest_plugin', ...rootdir, ...args, ...targets]
       : ['-u', path.join(helpers, 'pyide_unittest_runner.py'), root, ...targets];
-    const opts = { cwd: cwd || root, env: runEnv };
-    const id = await (remote.isRemote(interp) ? remote.startPython(ctx, interp, pyArgs, opts) : startProcess(interp.cmd, [...interp.args, ...pyArgs], opts));
+    return { file, pyArgs, cwd: cwd || root, env: runEnv };
+  }
+
+  ipcMain.handle('tests:start', async (_e, interp, opts) => {
+    const { file, pyArgs, cwd, env } = prepare(opts);
+    // A local test folder longer than Windows allows runs from its short form or the project root, as Run does.
+    const id = await (remote.isRemote(interp) ? remote.startPython(ctx, interp, pyArgs, { cwd, env })
+      : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: (await workingDir(cwd, [opts.root])).cwd, env }));
     reports.set(id, { file, offset: 0 });
     return { id, command: [interp.cmd, ...interp.args, ...pyArgs].join(' ') };
+  });
+
+  // The same run for the debugger, which starts the process (debug:start): what to hand to it, and the report id for
+  // tests:poll. The env already holds the .env files, so debug:start applying them again changes nothing.
+  let debugRuns = 0;
+  ipcMain.handle('tests:debugTarget', (_e, interp, opts) => {
+    const { file, pyArgs, cwd, env } = prepare(opts);
+    const id = `debug-${++debugRuns}`;
+    reports.set(id, { file, offset: 0 });
+    const [script, ...params] = pyArgs[0] === '-u' ? pyArgs.slice(1) : pyArgs;
+    return { id, script, params, cwd, env, command: [interp.cmd, ...interp.args, '-m', 'debugpy', ...pyArgs].join(' ') };
   });
 
   // Returns events appended since the last poll; `final` releases the report.

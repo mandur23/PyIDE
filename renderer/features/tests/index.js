@@ -74,6 +74,7 @@
     },
     forFile: (path) => (isTestFileName(basename(path)) ? configFor(path, null) : null),
     start: (cfg, s, interp, opts) => startTests(cfg, s, interp, opts),
+    debugTarget: (cfg, interp, opts) => debugTests(cfg, interp, opts),
   });
 
   // ---------- Test Results view ----------
@@ -116,6 +117,8 @@
     let finished = false;
     let started = performance.now();
     let elapsed = 0;
+    let exitStatus = null; // the runner's own exit status, from its last event
+    let stopped = false; // the run ended before the runner did
 
     const add = (parent, node) => { node.children = node.children || []; node.parent = parent; parent.children.push(node); nodes.set(node.id, node); return node; };
     function groupFor(t) {
@@ -170,6 +173,10 @@
         const vars = { counts: parts.filter(Boolean).join(', '), total: c.total, time };
         text = c.total === 1 ? tr('{counts} of {total} test – {time}', vars) : tr('{counts} of {total} tests – {time}', vars);
         cls = c.failed ? 'failed' : 'passed';
+      }
+      if (finished && stopped) {
+        text = tr('Stopped. {status}', { status: text });
+        if (!c.failed) cls = 'stopped';
       }
       status.replaceChildren(el('span', `tr-icon ${cls}`, finished ? ICONS[cls === 'passed' ? 'passed' : cls === 'failed' ? 'failed' : 'skipped'] : ICONS.running), el('span', null, text));
       status.dataset.state = cls;
@@ -278,6 +285,8 @@
             }
             if (ev.output) n.output = (n.output || '') + ev.output;
             if (n === selected) showOutput(n);
+          } else if (ev.e === 'done') {
+            exitStatus = ev.exit;
           } else if (ev.e === 'collecterror') {
             const id = ev.id || 'collection';
             const fileNode = nodes.get(`file:${id}`) || add(rootNode, { id: `file:${id}`, kind: 'file', name: id.split('/').pop(), status: 'error' });
@@ -287,8 +296,9 @@
         renderStatus();
         renderTree();
       },
-      finish() {
+      finish(stoppedRun = false) {
         finished = true;
+        stopped = stoppedRun;
         elapsed = performance.now() - started;
         for (const n of leaves()) if (n.status === 'running' || n.status === 'pending') n.status = 'skipped';
         renderStatus();
@@ -302,6 +312,7 @@
       },
       failedIds: () => leaves().filter((n) => (n.status === 'failed' || n.status === 'error') && !n.id.endsWith('::<collection>')).map((n) => n.id),
       results: () => leaves().map((n) => ({ id: n.id, status: n.status })),
+      exitStatus: () => exitStatus,
     };
     renderStatus();
     renderTree();
@@ -321,6 +332,50 @@
     return line;
   }
 
+  // pytest when the interpreter has it, else unittest discovery with a hint on how to install pytest.
+  async function chooseRunner(interp, view, fresh) {
+    const version = await ide.api.invoke('tests:hasPytest', interp, !!fresh);
+    if (!version) {
+      const install = `${[interp.cmd, ...interp.args].join(' ')} -m pip install pytest`;
+      view.hint(tr('pytest is not installed for {interp}. Running with unittest instead. Install pytest: {command}', { interp: interp.label || interp.cmd, command: install }));
+      view.log(`${tr('pytest is not installed in the selected interpreter; falling back to unittest discovery.')}\n${tr('To install it: {command}', { command: install })}\n\n`, 'sys');
+    }
+    return version ? 'pytest' : 'unittest';
+  }
+
+  // What tests:start and tests:debugTarget run for a configuration.
+  async function testRun(cfg, interp, view, opts) {
+    const runner = await chooseRunner(interp, view, opts.fresh);
+    await run.warnMissingEnvFiles(cfg, (text) => view.log(text, 'err'));
+    return {
+      runner, targets: opts.targets || (cfg.target ? [cfg.target] : []), args: runner === 'pytest' ? run.parseArgs(cfg.args) : [],
+      cwd: run.resolvePath(cfg.cwd) || ide.root, root: ide.root, env: run.parseEnv(cfg.env), envFiles: run.envFiles(cfg),
+    };
+  }
+
+  // Reads the run's report every 250 ms; end() reads the rest and releases it.
+  function follow(view, id) {
+    let polling = false;
+    const poll = async (final) => {
+      if (polling && !final) return;
+      polling = true;
+      try { view.apply(await ide.api.invoke('tests:poll', id, final)); } finally { polling = false; }
+    };
+    const timer = setInterval(() => poll(false), 250);
+    return { stop: () => clearInterval(timer), end: () => { clearInterval(timer); return poll(true); } };
+  }
+
+  // The results of a finished run: the tree's final state, the gutter icons and the tab's icon.
+  function finishRun(s, view, code, stopped = false) {
+    view.log(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
+    const c = view.finish(stopped);
+    for (const r of view.results()) {
+      if (r.status === 'passed' || r.status === 'failed' || r.status === 'error') lastResults.set(r.id, r.status === 'passed' ? 'passed' : 'failed');
+    }
+    run.refreshGutter();
+    return c;
+  }
+
   async function startTests(cfg, s, interp, opts = {}) {
     // What auto-test runs again: the same tests as this run (all of them, or the failed ones a rerun picked).
     s.autoTestLast = { targets: opts.targets, executor: s.executor };
@@ -333,47 +388,77 @@
       } },
       autoTestAction(s),
     ]);
-    const fresh = !!opts.fresh;
-    const version = await ide.api.invoke('tests:hasPytest', interp, fresh);
-    const runner = version ? 'pytest' : 'unittest';
-    if (!version) {
-      const install = `${[interp.cmd, ...interp.args].join(' ')} -m pip install pytest`;
-      view.hint(tr('pytest is not installed for {interp}. Running with unittest instead. Install pytest: {command}', { interp: interp.label || interp.cmd, command: install }));
-      view.log(`${tr('pytest is not installed in the selected interpreter; falling back to unittest discovery.')}\n${tr('To install it: {command}', { command: install })}\n\n`, 'sys');
-    }
-    const targets = opts.targets || (cfg.target ? [cfg.target] : []);
-    const cwd = run.resolvePath(cfg.cwd) || ide.root;
-    await run.warnMissingEnvFiles(cfg, (text) => view.log(text, 'err'));
-    const { id, command } = await ide.api.invoke('tests:start', interp, {
-      runner, targets, args: runner === 'pytest' ? run.parseArgs(cfg.args) : [], cwd, root: ide.root, env: run.parseEnv(cfg.env), envFiles: run.envFiles(cfg),
-    });
+    const { id, command } = await ide.api.invoke('tests:start', interp, await testRun(cfg, interp, view, opts));
     view.log(`${command}\n`, 'sys');
-
-    let polling = false;
-    const poll = async (final) => {
-      if (polling && !final) return;
-      polling = true;
-      try { view.apply(await ide.api.invoke('tests:poll', id, final)); } finally { polling = false; }
-    };
-    const timer = setInterval(() => poll(false), 250);
-    s.dispose = () => clearInterval(timer);
+    const report = follow(view, id);
+    s.dispose = report.stop;
     s.started(id);
     s.setIcon('◷', 'running');
     ide.proc.attach(id, {
       data: (text, stream) => view.log(text, stream === 'err' ? 'err' : null),
       async exit(code) {
-        clearInterval(timer);
-        await poll(true);
-        view.log(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
-        const c = view.finish();
-        for (const r of view.results()) {
-          if (r.status === 'passed' || r.status === 'failed' || r.status === 'error') lastResults.set(r.id, r.status === 'passed' ? 'passed' : 'failed');
-        }
-        run.refreshGutter();
-        if (s.procId === id) s.setIcon(c.failed ? '✗' : '✓', c.failed ? 'failed' : 'passed');
+        await report.end();
+        // No exit status in the report: the runner did not get to its end (Stop), as for a debug run.
+        const stopped = view.exitStatus() == null;
+        const c = finishRun(s, view, code, stopped);
+        if (s.procId === id) s.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
         s.exited(id, code);
       },
     });
+  }
+
+  // Debug: the same run under debugpy. The debugger starts the process and shows its console and frames; the
+  // configuration's debug tab in the Run window shows the Test Results, read from the report until the debug session
+  // ends. Its Rerun and Rerun Failed Tests debug again.
+  async function debugTests(cfg, interp, opts = {}) {
+    if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return null; }
+    const s = await run.debugSession(cfg);
+    s.rerun = () => run.debugConfig(cfg, opts);
+    const view = createView(s);
+    s.setActions([{ id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
+      const failed = view.failedIds();
+      if (failed.length) run.debugConfig(cfg, { targets: failed });
+    } }]);
+    s.setIcon('◷', 'running');
+    let target;
+    try {
+      target = await ide.api.invoke('tests:debugTarget', interp, await testRun(cfg, interp, view, opts));
+    } catch (err) {
+      view.log(`${ide.util.errorText(err)}\n`, 'err');
+      view.finish();
+      s.setIcon('✗', 'failed');
+      s.startDone();
+      return null;
+    }
+    view.log(`${target.command}\n${tr('The output is in the Debug tool window.')}\n`, 'sys');
+    const report = follow(view, target.id);
+    s.launched = true;
+    s.startDone();
+    let ended = false;
+    const end = async ({ replaced = false } = {}) => {
+      if (ended) return;
+      ended = true;
+      await report.end();
+      // pytest's exit status from the report; the debugger does not tell the exit code. Without one pytest did not get
+      // to its end: the session was stopped or another one took its place.
+      const code = view.exitStatus();
+      const stopped = code == null;
+      const c = finishRun(s, view, code, stopped);
+      s.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
+      s.finish(code ?? 1);
+      // The Debug window stays on the session that replaced this one.
+      if (!s.closed && !replaced) run.show(s);
+    };
+    s.dispose = () => { if (!ended) { ended = true; report.end(); } };
+    return {
+      script: target.script, params: target.params, cwd: target.cwd, env: target.env, interp,
+      // debugFile settles once its session runs, failed or already ended, with that session's {ended}.
+      started: (p) => Promise.resolve(p).catch(() => {}).then((session) => {
+        if (ended) return;
+        if (!session) return end();
+        session.ended.then(end);
+      }),
+    };
   }
 
   // ---------- gutter, actions, tree ----------
@@ -433,15 +518,36 @@
   if (ide.root) scanTestDirs();
   // The tree reads `title` right after `when` accepted the entry, so the label names that entry.
   let menuEntry = null;
+  const hasTests = (e) => {
+    menuEntry = e;
+    return e.dir ? !!testDirs?.has(e.path.toLowerCase()) : isTestFileName(e.name);
+  };
+  const treeConfig = (e) => ({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) });
   ide.registerTreeAction({
     get title() { return tr("Run 'pytest in {name}'", { name: menuEntry?.name ?? '' }); },
     keyAction: 'RunClass',
-    when: (e) => {
-      menuEntry = e;
-      return e.dir ? !!testDirs?.has(e.path.toLowerCase()) : isTestFileName(e.name);
-    },
-    run: (e) => run.runContext({ type: 'pytest', name: tr('pytest in {name}', { name: e.name }), target: samePath(e.path, ide.root) ? '.' : relPosix(e.path) }),
+    when: hasTests,
+    run: (e) => run.runContext(treeConfig(e)),
   });
+  ide.registerTreeAction({
+    get title() { return tr("Debug 'pytest in {name}'", { name: menuEntry?.name ?? '' }); },
+    when: (e) => hasTests(e) && run.canDebug({ type: 'pytest' }),
+    run: (e) => run.debugConfig(run.addTemporary(treeConfig(e))),
+  });
+
+  // Debug (Shift+F9) on a test file with Current File selected, or with a pytest configuration selected, debugs the
+  // tests, as Run runs them there. Registered once every plugin has loaded, so it comes before the debugger's Debug.
+  function debugTestsTarget() {
+    const cfg = run.selected();
+    if (cfg) return cfg.type === 'pytest' ? cfg : null;
+    const tab = ide.activeTab();
+    return tab?.kind === 'file' && isTestFileName(basename(tab.path)) ? run.selectedTarget() : null;
+  }
+  ide.on('ready', () => ide.registerAction({
+    id: 'DebugTests', title: tr('Debug Tests'), keys: 'Shift+F9', needsProject: true,
+    when: () => !!debugTestsTarget() && run.canDebug(debugTestsTarget()),
+    run: () => { const cfg = debugTestsTarget(); if (cfg) run.debugConfig(cfg); },
+  }));
 
   // ---------- auto-test ----------
   // PyCharm's Toggle Auto-test: per test tab, off by default and not kept across restarts. While it is on, saving a
@@ -492,7 +598,7 @@
         const focused = document.activeElement;
         autoStarting++;
         try {
-          await run.runConfig(s.cfg, { targets: s.autoTestLast?.targets, executor: s.autoTestLast?.executor || undefined });
+          await run.runConfig(s.cfg, { targets: s.autoTestLast?.targets, executor: s.autoTestLast?.executor || undefined, confirm: false });
         } finally { autoStarting--; }
         if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus();
       } while (s.autoTestAgain && s.autoTest && !s.closed);

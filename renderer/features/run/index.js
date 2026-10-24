@@ -145,8 +145,8 @@
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
-      { icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
-      ...(busy(s) ? [{ icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
+      { id: 'rerun', icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
+      ...(busy(s) ? [{ id: 'stop', icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
       ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
     ]);
@@ -389,10 +389,12 @@
   }
 
   // Runs another configuration (with its own before launch tasks) and waits for it to finish; -> true, or why not.
+  // A run of it still going (often an earlier launch's task, see latestLaunch) is replaced without the rerun question:
+  // the user asked to run this configuration, and a Cancel on a question about another one would drop that launch.
   async function runDependency(t, onSession) {
     const other = findConfig(t.id);
     if (!other) return tr('The configuration no longer exists.');
-    const s = await runConfig(other);
+    const s = await runConfig(other, { confirm: false });
     if (!s) return tr('It was not started.');
     onSession(s);
     const code = await s.finished;
@@ -441,11 +443,36 @@
     }
   }
 
+  // PyCharm's "Process 'x' Is Running" question before a run replaces its configuration's run that is still going (no
+  // configuration allows multiple instances here). "Don't ask again" turns run.confirmRerun off (Settings › Run/Debug).
+  // -> false when the user keeps the running one.
+  const CONFIRM_RERUN = 'run.confirmRerun';
+  async function confirmRerun(cfg) {
+    const s = sessions.find((o) => o.key === cfg.id);
+    if (!s || !busy(s) || !ide.settings.get(CONFIRM_RERUN, true)) return true;
+    const again = el('input');
+    again.type = 'checkbox';
+    again.dataset.key = 'dontAskAgain';
+    const check = el('label', 'run-confirm-again');
+    check.append(again, el('span', null, tr("Don't ask again")));
+    const body = el('div', 'run-confirm');
+    body.append(el('div', 'dialog-message', tr("'{name}' is running. Stop and rerun?", { name: cfg.name })), check);
+    let yes = false;
+    await new Promise((resolve) => ide.ui.dialog({
+      title: tr("Process '{name}' Is Running", { name: cfg.name }), body, width: 460, onClose: resolve,
+      buttons: [{ label: tr('Stop and Rerun'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+    }));
+    if (yes && again.checked) ide.settings.set(CONFIRM_RERUN, false);
+    return yes;
+  }
+
   let lastRun = null;
-  // opts are passed through to the type (e.g. {targets} for rerunning failed tests); opts.executor names an executor.
+  // opts are passed through to the type (e.g. {targets} for rerunning failed tests); opts.executor names an executor;
+  // opts.confirm: false stops a run of the configuration that is still going without asking (auto-test, before launch).
   async function runConfig(cfg, opts = {}) {
     const type = types.get(cfg?.type);
     if (!type) return;
+    if (opts.confirm !== false && !(await confirmRerun(cfg))) return;
     const executor = executors.get(opts.executor) || null;
     tw.show();
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
@@ -483,30 +510,49 @@
   async function warnMissingEnvFiles(cfg, write) {
     for (const p of await missingEnvFiles(cfg)) write(`${tr('Env file not found: {path}', { path: p })}\n`);
   }
+  // PyCharm's "Run: Script path / Module name": cfg.runMode 'module' runs `python -m <cfg.module>` (configurations saved
+  // before the switch run their script). A module runs in the project root unless a working directory is given.
+  const isModule = (cfg) => cfg?.runMode === 'module';
+  // A Python configuration resolved to what a launcher needs: script is '-m' for a module, which then leads params.
+  // missing: the script or module is not specified.
+  function resolvePython(cfg) {
+    const params = parseArgs(cfg.params);
+    const base = { cwd: resolvePath(cfg.cwd), env: parseEnv(cfg.env), interp: interpFor(cfg) };
+    if (isModule(cfg)) {
+      const module = (cfg.module || '').trim();
+      return { ...base, missing: !module, script: '-m', params: [module, ...params], cwd: base.cwd || ide.root || '' };
+    }
+    const script = resolvePath(cfg.script);
+    return { ...base, missing: !script, script, params, cwd: base.cwd || (script && dirname(script)) };
+  }
   types.set('python', {
     type: 'python', title: 'Python', icon: '🐍',
     fields: [
-      { key: 'script', label: tr('Script path'), placeholder: tr('path\\to\\script.py'), browse: true },
+      { key: 'runMode', label: tr('Run'), kind: 'select', options: () => [['script', tr('Script path')], ['module', tr('Module name')]] },
+      { key: 'script', label: tr('Script path'), placeholder: tr('path\\to\\script.py'), browse: true, shown: (c) => !isModule(c) },
+      { key: 'module', label: tr('Module name'), placeholder: tr('e.g. package.module'), shown: isModule },
       { key: 'params', label: tr('Script parameters') },
-      { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the script folder') },
+      { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the script folder'), placeholderFor: (c) => (isModule(c) ? tr('Defaults to the project root') : null) },
       { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
       ENV_FILES_FIELD,
       { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
     ],
-    defaults: () => ({ script: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '' }),
-    identity: (c) => resolvePath(c.script).toLowerCase(),
-    file: (c) => resolvePath(c.script),
+    defaults: () => ({ runMode: 'script', script: '', module: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '' }),
+    identity: (c) => (isModule(c) ? `module:${(c.module || '').trim().toLowerCase()}` : resolvePath(c.script).toLowerCase()),
+    file: (c) => (isModule(c) ? null : resolvePath(c.script)),
     // A scratch file (scratches plugin) runs in the project root, as in PyCharm.
     forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path, ...(ide.root && ide.scratches?.isScratch(path) ? { cwd: ide.root } : {}) }),
     async start(cfg, s, interp) {
       const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
-      const script = resolvePath(cfg.script);
-      if (!script) return con.append(`${tr('Script path is not specified. Edit the configuration first.')}\n`, 'err');
-      const params = parseArgs(cfg.params);
-      con.append(`${[interp.cmd, ...interp.args].map(quoteArg).join(' ')} ${quoteArg(script)}${params.length ? ` ${params.map(quoteArg).join(' ')}` : ''}\n`, 'sys');
-      const cwd = await workingDir(resolvePath(cfg.cwd) || dirname(script), (text) => con.append(text, 'err'));
+      const r = resolvePython(cfg);
+      if (r.missing) {
+        return con.append(`${isModule(cfg) ? tr('Module name is not specified. Edit the configuration first.') : tr('Script path is not specified. Edit the configuration first.')}\n`, 'err');
+      }
+      con.append(`${[interp.cmd, ...interp.args, r.script, ...r.params].map(quoteArg).join(' ')}\n`, 'sys');
+      const cwd = await workingDir(r.cwd, (text) => con.append(text, 'err'));
       await warnMissingEnvFiles(cfg, (text) => con.append(text, 'err'));
-      const id = await ide.api.invoke('run:start', interp, script, cwd, params, parseEnv(cfg.env), ide.root ? [ide.root] : [], envFilesFor(cfg));
+      // run:start runs `python -u <script> <params…>`, so '-m' goes where the script would.
+      const id = await ide.api.invoke('run:start', interp, r.script, cwd, r.params, r.env, ide.root ? [ide.root] : [], envFilesFor(cfg));
       s.attach(id);
     },
   });
@@ -613,9 +659,11 @@
 
   // The debugger debugs the active file; 'DebugCurrent' is the contract name, 'Debug' is PyCharm's action id.
   const debugActionId = () => ['DebugCurrent', 'Debug'].find((id) => ide.actions.some((a) => a.id === id));
-  // A type with debugTarget(cfg, interp) -> {script, cwd, params, env} (script may be '-m') is debugged like a script.
+  // A type with debugTarget(cfg, interp, opts) -> {script, cwd, params, env, started?} (script may be '-m'; null cancels)
+  // is debugged like a script. started(promise) gets debugFile's promise, which settles once the session runs or failed.
   const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile));
-  async function debugConfig(cfg) {
+  // opts are passed through to the type's debugTarget (e.g. {targets} for debugging the failed tests again).
+  async function debugConfig(cfg, opts = {}) {
     if (beforeLaunchOf(cfg).length) {
       if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
       if (!(await runBeforeLaunch(cfg))) return;
@@ -623,10 +671,17 @@
     const debugTarget = types.get(cfg.type)?.debugTarget;
     if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
-      const r = cfg.type === 'python' ? ide.run.resolvePython(cfg) : { ...(await debugTarget(cfg, interpFor(cfg))), interp: interpFor(cfg) };
+      const target = cfg.type === 'python' ? resolvePython(cfg) : await debugTarget(cfg, interpFor(cfg), opts);
+      if (!target) return;
+      if (target.missing) {
+        return ide.ui.alert(isModule(cfg) ? tr('Module name is not specified. Edit the configuration first.') : tr('Script path is not specified. Edit the configuration first.'));
+      }
+      const r = { interp: interpFor(cfg), ...target };
       // A debugTarget may build its script (a visual script compiles its graph), so Rerun asks it again.
-      return ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg),
-        ...(debugTarget ? { rerun: () => debugConfig(cfg) } : {}) });
+      const started = ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg),
+        ...(debugTarget ? { rerun: () => debugConfig(cfg, opts) } : {}) });
+      r.started?.(started);
+      return started;
     }
     const file = types.get(cfg.type)?.file?.(cfg);
     const go = () => ide.runAction(debugActionId());
@@ -675,7 +730,7 @@
   ide.registerAction({ id: 'ChooseRunConfiguration', title: tr('Run…'), keys: 'Alt+Shift+F10', run: () => chooseConfiguration(false) });
   ide.registerAction({ id: 'ChooseDebugConfiguration', title: tr('Debug…'), keys: 'Alt+Shift+F9', run: () => chooseConfiguration(true) });
   ide.registerAction({ id: 'editRunConfigurations', title: tr('Edit Configurations…'), run: () => editConfigurations() });
-  ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && runConfig(activeSession.cfg, { executor: activeSession.executor }) });
+  ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && (activeSession.rerun ? activeSession.rerun() : runConfig(activeSession.cfg, { executor: activeSession.executor })) });
   ide.registerTreeAction({
     title: tr("Run '…'"),
     keyAction: 'RunClass',
@@ -779,8 +834,20 @@
       }
       form.appendChild(el('div', 'rc-type muted', `${t.icon} ${t.title}`));
       for (const fd of t.fields) {
+        if (fd.shown && !fd.shown(current)) continue;
         let input;
-        if (fd.kind === 'interp') {
+        if (fd.kind === 'select') {
+          input = el('select');
+          const options = fd.options();
+          for (const [value, label] of options) input.add(new Option(label, value));
+          input.value = options.some(([v]) => v === current[fd.key]) ? current[fd.key] : options[0][0];
+          // The form shows other fields for another choice (Script path or Module name).
+          input.onchange = () => {
+            current[fd.key] = input.value;
+            renderForm();
+            form.querySelector(`[data-key="${fd.key}"]`)?.focus();
+          };
+        } else if (fd.kind === 'interp') {
           input = el('select');
           input.add(new Option(tr('Project Default ({interp})', { interp: ide.currentInterp()?.label || tr('none') }), ''));
           for (const it of ide.interps) input.add(new Option(it.label, it.executable));
@@ -795,7 +862,7 @@
         } else {
           input = el('input');
           input.value = current[fd.key] || '';
-          input.placeholder = fd.placeholder || '';
+          input.placeholder = fd.placeholderFor?.(current) || fd.placeholder || '';
           input.oninput = () => (current[fd.key] = input.value);
         }
         input.dataset.key = fd.key;
@@ -1042,6 +1109,16 @@
   });
   renderTarget();
 
+  (ide.settingsPages ||= []).push({
+    id: 'run-debug', title: () => tr('Run/Debug'), defaults: { [CONFIRM_RERUN]: true },
+    keywords: 'run debug rerun confirm stop process running ask 실행 디버그 다시 실행 확인 중지 프로세스',
+    mount(host, ctx) {
+      const sec = ctx.ui.section(host, tr('Run/Debug'));
+      sec.appendChild(ctx.ui.checkbox(CONFIRM_RERUN, tr('Confirm rerun with process termination')));
+      sec.appendChild(el('div', 'muted settings-note', tr('Asks before Run or Rerun stops a run of the same configuration that is still going.')));
+    },
+  });
+
   // __main__ blocks get a run icon, like PyCharm.
   gutterProviders.push((model, path) => {
     const items = [];
@@ -1081,6 +1158,14 @@
     outputSession: (key, title) => sessions.find((o) => o.key === key) || createSession({ id: key, name: title, type: '' }),
     // Shows the Run window with this session selected.
     show(session) { tw.show(); if (session) selectSession(session); },
+    // The Run tab of a configuration being debugged (its own tab, apart from the configuration's runs) for what the
+    // debugger does not show, such as Test Results; the debugger owns the process. Like a run being started, the caller
+    // ends the setup with session.startDone() and reports the end with session.finish(code).
+    async debugSession(cfg) {
+      const s = await prepareSession({ ...cfg, id: `debug:${cfg.id}` }, null);
+      s.tab.classList.add('run-tab-debug');
+      return s;
+    },
     notifyError,
     editConfigurations,
     sessions: () => sessions,
@@ -1090,10 +1175,7 @@
     refreshGutter,
     interpFor,
     // A Python configuration resolved to what a launcher needs (e.g. for a debugger).
-    resolvePython: (cfg) => {
-      const script = resolvePath(cfg.script);
-      return { script, cwd: resolvePath(cfg.cwd) || dirname(script), params: parseArgs(cfg.params), env: parseEnv(cfg.env), interp: interpFor(cfg) };
-    },
+    resolvePython,
     resolvePath,
     parseArgs,
     parseEnv,

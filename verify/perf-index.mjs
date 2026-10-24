@@ -1,11 +1,15 @@
 // Go to Class right after a 3,000-module project opens (ports 9184-9185): how long the popup waits for the symbol
-// index, what it shows meanwhile, and the same index built again later with warm disks as the control. Not in CI (it
-// times things), like perf-bigfile.mjs.
+// index, what it shows meanwhile, a later popup, the same index built again later with warm disks as the control, and
+// the project opened again. Not in CI (it times things), like perf-bigfile.mjs.
 //   node verify/perf-index.mjs [--port 9184]
 // Medians of 5 runs each, interleaved with the code before the fix (16-thread laptop, other suites running):
 //   classes listed after the project opened: 18.9 s -> 5.6 s (18.1-19.4 -> 5.5-5.8); the same index rebuilt later on:
 //   3.2 s -> 1.2 s. Before, the popup said "Nothing found" meanwhile, the index waited for the TODO scan on the shared
 //   search worker, and Python parsed its batches one at a time.
+// 0.2.8 (scratchpad probe, same project, 5 runs each, interleaved): after a reopen 1.53 s -> 0.45 s (index kept on
+//   disk); a later popup 321 ms -> 69 ms (the window keeps the index, main sends what changed); the first open 7.0 s ->
+//   4.2 s (Python reads each batch on threads: the project's files are new, and each first read waits for the virus
+//   scanner).
 import { launch } from './lib.mjs';
 import { cpus, tmpdir } from 'os';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
@@ -13,7 +17,7 @@ import path from 'path';
 
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : null; };
 const PORT = Number(arg('port')) || 9184;
-const BUDGET = { classesMs: 15000 };
+const BUDGET = { classesMs: 15000, popupMs: 150, reopenMs: 1000 };
 const machineTimes = () => cpus().reduce((a, c) => { const t = c.times; a.busy += t.user + t.nice + t.sys + t.irq; a.all += t.user + t.nice + t.sys + t.irq + t.idle; return a; }, { busy: 0, all: 0 });
 
 const project = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-perfidx-')), 'proj');
@@ -65,6 +69,10 @@ try {
   const m1 = machineTimes();
   result.machineBusyPct = Math.round(((m1.busy - m0.busy) / (m1.all - m0.all)) * 1000) / 10;
   result.todoScansWhileHidden = await js('__todoScans');
+  // Later popups: nothing changed, so the window's copy of the index is used as it is.
+  const warm = [];
+  for (let i = 0; i < 5; i++) warm.push(await js(`(async () => { const t0 = performance.now(); await ide.searchNav.symbols(); return Math.round(performance.now() - t0); })()`));
+  result.popupMs = warm.sort((a, b) => a - b)[2];
 
   // The TODO window scans when it is shown.
   const s0 = Date.now();
@@ -87,11 +95,28 @@ try {
   result.seIndexing = await until(`!!document.querySelector('#seList .se-indexing')`, 'Indexing… row', 3000).then(() => true, () => false);
   await until(`!!document.querySelector('#seList .se-group[data-group="classes"]')`, 'Classes group', 30000);
   result.seIndexingGone = !(await js(`!!document.querySelector('#seList .se-indexing')`));
+  await until(`!ide.searchNav.indexing()`, 'index built', 60000);
+  await sleep(2000);
+
+  // The project opened again: its index comes from disk.
+  t.close();
+  const t2 = await launch({ fixture: 'core', port: PORT, name: 'perf-index', projectDir: project, userData: t.userData });
+  try {
+    await t2.until('ide.root && ide.currentInterp()', 'project and interpreter after the reopen');
+    await t2.js(`(window.__idx = { t0: performance.now() }, ide.searchNav.symbols().then((s) => Object.assign(__idx, { ms: performance.now() - __idx.t0, n: s.length })), 1)`);
+    await t2.until('__idx.ms !== undefined', 'symbol index after the reopen', 180000);
+    const again = await t2.js('__idx');
+    Object.assign(result, { reopenClassesMs: Math.round(again.ms), reopenSymbols: again.n });
+  } finally {
+    t2.close();
+  }
   console.log(`RESULT ${JSON.stringify(result)}`);
 
   check(/Indexing…/.test(result.hintWhileIndexing) && result.hintInside, `the popup says "Indexing…" while the index builds, inside a 1008x681 window (${result.hintWhileIndexing || 'nothing'})`);
   check(result.firstRows.length === 3 && result.firstRows.every((n) => /^Model\d+x\d+x\d$/.test(n)), `Go to Class lists the project's classes (${result.firstRows.join(', ')})`);
   check(result.classesMs < BUDGET.classesMs, `Go to Class lists classes ${result.classesMs} ms after the project opened (< ${BUDGET.classesMs}; ${result.laterClassesMs} ms later on)`);
+  check(result.popupMs < BUDGET.popupMs, `a later Go to Class popup has the index after ${result.popupMs} ms (< ${BUDGET.popupMs})`);
+  check(result.reopenSymbols === result.symbols && result.reopenClassesMs < BUDGET.reopenMs, `the project opened again lists its ${result.reopenSymbols} symbols after ${result.reopenClassesMs} ms (< ${BUDGET.reopenMs})`);
   check(result.todoScansWhileHidden === 0, `no TODO scan while the TODO window stays hidden, from the IDE being ready on (${result.todoScansWhileHidden})`);
   check(result.seIndexing && result.seIndexingGone, `Search Everywhere shows "Indexing…" while the index rebuilds, then the Classes group (${result.seIndexing}, ${result.seIndexingGone})`);
   check(result.todoItems === 300, `the TODO window lists the project's 300 TODO comments once shown (${result.todoItems}, ${result.todoShownMs} ms)`);

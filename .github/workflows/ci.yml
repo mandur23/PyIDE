@@ -116,6 +116,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/search-nav.mjs
+      - name: symbol-index
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/symbol-index.mjs
+      - name: symbol-index (Korean, 1008x681)
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/symbol-index.mjs --lang ko --viewport 1008x681
       - name: workspace
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -176,6 +184,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/tests-tree-menu.mjs
+      - name: tests-debug-run
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/tests-debug-run.mjs
+      - name: tests-debug-target
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/tests-debug-target.mjs
       - name: appearance-modes
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -204,6 +220,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/shelve.mjs
+      - name: vcs-daily
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/vcs-daily.mjs
 
       - name: peek-definition
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -328,6 +348,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/debugger-input.mjs
+      - name: debugger-exceptions
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/debugger-exceptions.mjs
+      - name: debugger-values
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/debugger-values.mjs
       - name: pyconsole
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

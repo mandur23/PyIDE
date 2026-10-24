@@ -83,5 +83,16 @@
   "Defaults to the project folder": "기본값: 프로젝트 폴더",
   "Macros: {macros}. The output shows in the Run window.": "매크로: {macros}. 출력은 실행 창에 표시됩니다.",
   "The working directory is longer than Windows allows ({length} characters): {path}": "작업 디렉터리가 Windows에서 허용하는 길이보다 깁니다({length}자): {path}",
-  "The program runs in {path} instead.": "대신 {path}에서 프로그램을 실행합니다."
+  "The program runs in {path} instead.": "대신 {path}에서 프로그램을 실행합니다.",
+  "Module name": "모듈 이름",
+  "e.g. package.module": "예: package.module",
+  "Defaults to the project root": "기본값: 프로젝트 루트",
+  "Module name is not specified. Edit the configuration first.": "모듈 이름이 지정되지 않았습니다. 먼저 구성을 편집하세요.",
+  "Don't ask again": "다시 묻지 않음",
+  "'{name}' is running. Stop and rerun?": "'{name}'이(가) 실행 중입니다. 중지하고 다시 실행하시겠습니까?",
+  "Process '{name}' Is Running": "'{name}' 프로세스가 실행 중입니다",
+  "Stop and Rerun": "중지 후 다시 실행",
+  "Run/Debug": "실행/디버그",
+  "Confirm rerun with process termination": "프로세스를 종료하고 다시 실행하기 전에 확인",
+  "Asks before Run or Rerun stops a run of the same configuration that is still going.": "같은 구성이 아직 실행 중일 때 실행 또는 다시 실행이 그 실행을 중지하기 전에 묻습니다."
 }

@@ -1,12 +1,16 @@
 import { execFileSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { realpathSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, lensesShown, openFile } from './lib.mjs';
 
-// Live Python processes whose command line names `file` (a venv launcher and its child may both count).
-const pyProcs = (file) => Number(execFileSync('powershell', ['-NoProfile', '-Command',
-  `@(Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${file.replace(/'/g, "''")}') }).Count`],
-{ encoding: 'utf8' }).trim());
+// Live Python processes whose command line names `file` (a venv launcher and its child may both count), as given or in
+// long form: Debug hands debugpy the long form of a project behind an 8.3 short path (TEMP on GitHub runners).
+const pyProcs = (file) => {
+  const names = [...new Set([file, realpathSync.native(file)])].map((f) => `$_.CommandLine.Contains('${f.replace(/'/g, "''")}')`);
+  return Number(execFileSync('powershell', ['-NoProfile', '-Command',
+    `@(Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -and (${names.join(' -or ')}) }).Count`],
+  { encoding: 'utf8' }).trim());
+};
 async function noProcs(file, ms = 10000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {

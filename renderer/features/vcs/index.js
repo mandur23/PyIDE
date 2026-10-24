@@ -37,6 +37,7 @@
     noOperation: tr('No merge, rebase, cherry-pick or revert is in progress.'),
     noLocalChanges: tr('No local changes to save'),
     noShelfChanges: tr('No changes to shelve'),
+    currentBranch: tr('The current branch cannot be deleted.'),
     gitMissing: tr('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart PyIDE.'),
   };
   // The operation git stopped in the middle of, as the branch widget shows it.
@@ -62,9 +63,10 @@
 
   // ---------- notifications and the Git console ----------
   // A balloon through ide.notifications (kept in the Notifications tool window); clicking it shows the Git console.
-  // raw: the text is git output or a path, shown untranslated. Returns the note ({remove(), expire()}).
-  function notify(title, text = '', kind = 'info', raw = false) {
-    return ide.notifications.notify({ title, text, kind, raw, group: 'Git', balloonClass: 'vcs-note', onClick: () => showConsole() });
+  // raw: the text is git output or a path, shown untranslated; actions: links on the balloon ([{label, run(note)}]).
+  // Returns the note ({remove(), expire()}).
+  function notify(title, text = '', kind = 'info', raw = false, actions = []) {
+    return ide.notifications.notify({ title, text, kind, raw, actions, group: 'Git', balloonClass: 'vcs-note', onClick: () => showConsole() });
   }
 
   let gitConsole = null;
@@ -308,7 +310,10 @@
     if (repo.op) items.unshift(...extra); else items.push(...extra);
     for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? tr('current') : tr('Local'), value: { name: b } });
     for (const b of remote) items.push({ label: b, icon: '☁', hint: tr('Remote'), value: { name: b, remote: true } });
+    const watch = watchBranchPopup(local);
     const choice = await ide.ui.pick({ placeholder: tr('Git Branches — {branch}', { branch: repo.branch || repo.detached }), items });
+    watch.dispose();
+    if (watch.menu) return branchMenu(watch.menu, local);
     if (!choice) return;
     if (choice.run) return choice.run();
     if (choice.create) {
@@ -320,19 +325,109 @@
       if (!r.ok) return notify(tr('Branch creation failed'), errorText(r), 'error', true);
       return afterCheckout();
     }
-    if (choice.name === repo.branch) return;
-    await ide.saveAll();
-    let r;
-    if (choice.remote) {
-      const localName = choice.name.split('/').slice(1).join('/');
-      r = local.includes(localName) ? await invoke('checkout', ide.root, localName) : await invoke('checkout', ide.root, choice.name, true);
-    } else r = await invoke('checkout', ide.root, choice.name);
-    logResult(r);
-    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
-    notify(tr('Checked out {branch}', { branch: choice.remote ? choice.name.split('/').slice(1).join('/') : choice.name }), '', 'ok');
-    afterCheckout();
+    return checkoutBranch(choice, local);
   }
   branchBtn.onclick = showBranches;
+
+  async function checkoutBranch({ name, remote }, local) {
+    if (name === repo?.branch) return;
+    await ide.saveAll();
+    const localName = remote ? name.split('/').slice(1).join('/') : name;
+    const r = !remote ? await invoke('checkout', ide.root, name)
+      : local.includes(localName) ? await invoke('checkout', ide.root, localName) : await invoke('checkout', ide.root, name, true);
+    logResult(r);
+    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
+    notify(tr('Checked out {branch}', { branch: localName }), '', 'ok');
+    afterCheckout();
+  }
+
+  // A local branch's own actions, as in PyCharm's branch popup: Right on the selected branch, or a right-click on one,
+  // closes the popup and opens them beside that row. ide.ui.pick has no submenus, so the popup is watched while open.
+  function watchBranchPopup(local) {
+    const input = document.getElementById('popupIn');
+    const list = document.getElementById('popupList');
+    const watch = { menu: null };
+    const open = (row, e) => {
+      const v = row?._item?.value;
+      if (!v?.name || v.remote || !local.includes(v.name)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const r = row.getBoundingClientRect();
+      watch.menu = { name: v.name, x: Math.min(r.right - 8, r.left + 260), y: r.top };
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    };
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) open(list.querySelector('.popup-item.active'), e);
+    };
+    const onMouse = (e) => { if (e.button === 2) open(e.target.closest('.popup-item'), e); };
+    input.addEventListener('keydown', onKey, true);
+    list.addEventListener('mousedown', onMouse, true);
+    watch.dispose = () => { input.removeEventListener('keydown', onKey, true); list.removeEventListener('mousedown', onMouse, true); };
+    return watch;
+  }
+
+  function branchMenu({ name, x, y }, local) {
+    const current = name === repo?.branch;
+    const menu = ide.ui.contextMenu(x, y, [
+      { label: tr('Checkout'), disabled: current, run: () => checkoutBranch({ name }, local) },
+      { label: tr('Rename…'), run: () => renameBranch(name) },
+      { label: tr('Delete'), disabled: current, run: () => deleteBranch(name) },
+    ]);
+    if (menu) menu.id = 'vcsBranchMenu';
+  }
+
+  async function renameBranch(from) {
+    const to = (await ide.ui.prompt(tr('Rename branch {branch} to', { branch: from }), from))?.replace(/\s+/g, '-');
+    if (!to || to === from) return;
+    const r = await invoke('renameBranch', ide.root, from, to);
+    logResult(r);
+    if (!r.ok) return notify(tr('Branch rename failed'), errorText(r), 'error', true);
+    notify(tr('Renamed branch {from} to {to}', { from, to }), '', 'ok');
+    await refresh();
+    if (gitTw.isVisible()) loadLog();
+  }
+
+  // As in PyCharm: a branch with commits no other branch has is deleted only after a question listing them, and the
+  // notification offers to restore it.
+  async function deleteBranch(name) {
+    let r = await invoke('deleteBranch', ide.root, name);
+    if (r.reason === 'notMerged') {
+      logResult(r);
+      if (!(await askDeleteUnmerged(name, r))) return;
+      r = await invoke('deleteBranch', ide.root, name, { force: true });
+    }
+    logResult(r);
+    if (!r.ok) return notify(tr('Branch deletion failed'), errorText(r), 'error', !r.reason);
+    const restore = { label: tr('Restore'), run: async (note) => {
+      note?.expire();
+      const back = await invoke('restoreBranch', ide.root, name, r.hash, r.upstream);
+      logResult(back);
+      if (!back.ok) return notify(tr('Branch restore failed'), errorText(back), 'error', true);
+      notify(tr('Restored branch {branch}', { branch: name }), '', 'ok');
+      if (gitTw.isVisible()) loadLog();
+    } };
+    notify(tr('Deleted branch {branch}', { branch: name }), '', 'ok', false, r.hash ? [restore] : []);
+    if (gitTw.isVisible()) loadLog();
+  }
+
+  function askDeleteUnmerged(name, r) {
+    return new Promise((resolve) => {
+      let yes = false;
+      const body = el('div', 'vcs-unmerged');
+      body.appendChild(el('div', null, tr('The branch {branch} is not fully merged to the branch {target}. Below is the list of unmerged commits.', { branch: name, target: r.target })));
+      const list = userText('div', 'vcs-dialog-list vcs-unmerged-commits');
+      for (const c of r.commits) {
+        const row = el('div', 'vcs-push-commit');
+        row.append(el('span', 'muted', c.short), el('span', null, ` ${c.subject}`), el('span', 'muted', `  ${c.author}`));
+        list.appendChild(row);
+      }
+      body.appendChild(list);
+      ide.ui.dialog({
+        title: tr('Branch Is Not Fully Merged'), body, width: 520, onClose: () => resolve(yes),
+        buttons: [{ label: tr('Delete'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+      });
+    });
+  }
 
   // ---------- Commit tool window ----------
   const included = new Map(); // lower path -> explicit checkbox choice
@@ -345,6 +440,9 @@
   // Conflicted files are left out until resolved: committing one as is would record its conflict markers.
   const fileIncluded = (f) => f.status !== 'conflict' && (included.get(key(f.path)) ?? f.status !== 'unversioned');
   let prefilled = null; // the merge message put into an empty commit message box
+  let commitBtn, pushBtn, amendInput;
+  // While Amend is ticked the box shows the last commit's message: {text: the box before, message: what was put in}.
+  let amendSaved = null;
   // The Shelf tab (drawn by the shelf section below; declared here because the tool window can mount at once).
   let commitTabs, changesPane, shelfPane, shelfList, shelfTabBtn;
   let shelves = []; // git:shelves, newest first
@@ -378,15 +476,18 @@
         if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); doCommit(false); }
       };
       const btns = el('div', 'vcs-commit-btns');
-      const commitBtn = el('button', 'primary vcs-commit-btn', tr('Commit'));
+      commitBtn = el('button', 'primary vcs-commit-btn', tr('Commit'));
       commitBtn.title = tr('Commit (Ctrl+Enter)');
       commitBtn.onclick = () => doCommit(false);
-      const pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
+      pushBtn = el('button', 'secondary vcs-commit-push-btn', tr('Commit and Push…'));
       pushBtn.onclick = () => doCommit(true);
       btns.append(commitBtn, pushBtn, commitOpts);
+      // A row of its own: the buttons' labels grow with Amend, and a second click must not land on them.
+      amendInput = checkbox(tr('Amend'), 'vcs-amend', false, setAmend).input;
+      amendInput.id = 'vcsAmend';
       const msgBox = el('div', 'vcs-msg-box');
       msgBox.append(msgEl, msgActions);
-      commitBody.append(headerEl, listEl, msgBox, btns);
+      commitBody.append(headerEl, listEl, msgBox, amendInput.parentElement, btns);
       // Commit | Shelf tabs, as in PyCharm's Commit tool window (shown while the project is a repository).
       changesPane = el('div', 'vcs-changes-pane');
       changesPane.append(initBox, commitBody);
@@ -449,6 +550,7 @@
     commitTabs.classList.toggle('hidden', !repo);
     if (!repo && shelfShown()) switchCommitTab('changes');
     commitTw.setBadge(repo?.files.length ? String(repo.files.length) : '');
+    renderAmend();
     if (!repo) { headerEl.replaceChildren(); return; }
     headerEl.replaceChildren(...commitHeaders.map((fn) => fn(repo)).filter(Boolean));
     const scroll = listEl.scrollTop;
@@ -557,6 +659,32 @@
     if (repo) msgEl.focus();
   }
 
+  // Amend, as in PyCharm: the box takes the last commit's message (the text typed before comes back when Amend is
+  // turned off with the message unedited) and the buttons say Amend Commit. No commit yet, or git stopped in a merge,
+  // rebase or cherry-pick: there is nothing git would amend.
+  async function setAmend(on) {
+    if (on) {
+      const last = await invoke('lastCommit', ide.root);
+      if (!amendInput.checked) return;
+      if (!last) { amendInput.checked = false; return renderAmend(); }
+      amendSaved = { text: msgEl.value, message: last.message };
+      msgEl.value = last.message;
+    } else if (amendSaved) {
+      if (msgEl.value === amendSaved.message) msgEl.value = amendSaved.text;
+      amendSaved = null;
+    }
+    renderAmend();
+  }
+
+  function renderAmend() {
+    if (!amendInput) return;
+    const can = !!repo?.head && !repo.op;
+    amendInput.disabled = !can;
+    if (!can && amendInput.checked) { amendInput.checked = false; setAmend(false); return; }
+    commitBtn.textContent = amendInput.checked ? tr('Amend Commit') : tr('Commit');
+    pushBtn.textContent = amendInput.checked ? tr('Amend Commit and Push…') : tr('Commit and Push…');
+  }
+
   let committing = false;
   async function doCommit(andPush) {
     if (!repo || committing) return;
@@ -570,26 +698,37 @@
     if (!repo) return;
     let files = repo.files.filter(fileIncluded);
     const message = msgEl.value.trim();
-    // A merge whose result equals HEAD still needs its merge commit.
-    if (!files.length && repo.op !== 'merge') return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
+    const amend = !!amendInput?.checked;
+    // A merge whose result equals HEAD still needs its merge commit; Amend with no files changes only the message.
+    const filesOptional = repo.op === 'merge' || amend;
+    if (!files.length && !filesOptional) return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
     if (!message) { msgEl.focus(); return notify(tr('Commit message is empty'), tr('Enter a commit message.'), 'warn'); }
+    if (amend) {
+      const last = await invoke('lastCommit', ide.root);
+      if (last?.pushedTo && !(await ide.ui.confirm(tr('The last commit is already pushed to {upstream}. Amending it rewrites history: pushing it again needs a force push, and anyone who pulled it has to recover their copy. Amend anyway?', { upstream: last.pushedTo }), { title: tr('Amend Commit'), ok: tr('Amend Commit') }))) return;
+    }
     // Commit checks (vcs-checks plugin): a hook returning false stops the commit; one may rewrite and save the files.
     if (beforeCommit.length) {
-      for (const hook of beforeCommit) if ((await hook({ files, message, andPush })) === false) return;
+      for (const hook of beforeCommit) if ((await hook({ files, message, andPush, amend })) === false) return;
       await ide.saveAll();
       const chosen = new Set(files.map((f) => key(f.path)));
       await refresh();
       if (!repo) return;
       files = repo.files.filter((f) => chosen.has(key(f.path)) && f.status !== 'conflict');
-      if (!files.length && repo.op !== 'merge') return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
+      if (!files.length && !filesOptional) return notify(tr('No changes selected for commit'), tr('Select files with the checkboxes in the Commit tool window.'), 'warn');
     }
-    const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })));
+    const r = await invoke('commit', ide.root, msgEl.value.replace(/\s+$/, ''), files.map((f) => ({ path: f.path, orig: f.orig })), { amend });
     logResult(r);
     if (!r.ok) return notify(tr('Commit failed'), errorText(r), 'error', true);
     msgEl.value = '';
     included.clear();
     selection.clear();
-    notify(trn(files.length, '{n} file committed: {message}', '{n} files committed: {message}', { message: message.split('\n')[0] }), '', 'ok');
+    if (amend) {
+      amendInput.checked = false;
+      amendSaved = null;
+      renderAmend();
+      notify(tr('Amended the last commit: {message}', { message: message.split('\n')[0] }), '', 'ok');
+    } else notify(trn(files.length, '{n} file committed: {message}', '{n} files committed: {message}', { message: message.split('\n')[0] }), '', 'ok');
     await refresh();
     if (andPush) openPushDialog();
   }
@@ -651,7 +790,8 @@
   // A header title is UI text, or {user} for text that is user data (hashes, commit messages).
   const diffSide = (t) => (typeof t === 'string' ? el('span', 'vcs-diff-side', t) : userText('span', 'vcs-diff-side', t.user));
 
-  function mountDiff(host, { leftTitle, rightTitle, left, right, rightModel, name }) {
+  // inline: one column with removed and added lines interleaved, for a narrow pane.
+  function mountDiff(host, { leftTitle, rightTitle, left, right, rightModel, name, inline = false }) {
     const head = el('div', 'vcs-diff-head');
     head.append(diffSide(leftTitle), diffSide(rightTitle));
     const box = el('div', 'vcs-diff-body');
@@ -660,7 +800,7 @@
     const original = monaco.editor.createModel(left ?? '', undefined, diffUri(name));
     const modified = rightModel || monaco.editor.createModel(right ?? '', undefined, diffUri(name));
     const diff = monaco.editor.createDiffEditor(box, {
-      automaticLayout: true, readOnly: !rightModel, originalEditable: false, renderSideBySide: true,
+      automaticLayout: true, readOnly: !rightModel, originalEditable: false, renderSideBySide: !inline,
       fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: 14, lineHeight: 22, minimap: { enabled: false },
       scrollBeyondLastLine: false, ignoreTrimWhitespace: false, renderMarginRevertIcon: false,
     });
@@ -684,17 +824,23 @@
     if (ide.findTab(id)) return ide.openCustomTab({ id });
     const f = byPath.get(key(path));
     const left = f?.status === 'unversioned' || f?.status === 'added' ? '' : await invoke('show', ide.root, f?.orig || path, 'HEAD');
+    openLocalDiff({ id, path, left, deleted: f?.status === 'deleted',
+      leftTitle: lastHead ? tr('HEAD ({hash}) — read-only', { hash: lastHead.slice(0, 8) }) : 'HEAD' });
+  }
+
+  // A diff tab of `left` against the file as it is now: the open editor's model (edits show at once and can be made in
+  // the diff), else the text on disk, read-only.
+  async function openLocalDiff({ id, path, left, leftTitle, deleted = false }) {
     const tab = ide.findTab(path);
     let right = null;
-    if (!tab && f?.status !== 'deleted') { try { right = (await ide.api.invoke('fs:readText', path)).text ?? ''; } catch { right = ''; } }
+    if (!tab && !deleted) { try { right = (await ide.api.invoke('fs:readText', path)).text ?? ''; } catch { right = ''; } }
     let dispose;
     let unsub;
     ide.openCustomTab({
       id, title: tr('Diff: {name}', { name: basename(path) }), icon: '⇆',
       mount(host) {
         dispose = mountDiff(host, {
-          name: basename(path), left, right, rightModel: tab?.model,
-          leftTitle: lastHead ? tr('HEAD ({hash}) — read-only', { hash: lastHead.slice(0, 8) }) : 'HEAD',
+          name: basename(path), left, right, rightModel: tab?.model, leftTitle,
           rightTitle: tab ? tr('Your version') : tr('Your version — read-only'),
         });
         // the right side shares the open editor's model, so the diff cannot outlive that tab
@@ -704,13 +850,19 @@
     });
   }
 
+  // A file before and after a commit (a rename's old name on the left): '' where it does not exist, {binary: true}
+  // for a binary version.
+  const commitSides = (hash, { status, rel, orig }) => Promise.all([
+    status === 'added' ? '' : invoke('fileAt', ide.root, `${hash}^`, orig || rel, { binary: true }),
+    status === 'deleted' ? '' : invoke('fileAt', ide.root, hash, rel, { binary: true }),
+  ]).then((sides) => sides.map((s) => s ?? ''));
+  const notifyBinary = (rel) => notify(tr('Binary file'), tr('{name} is a binary file; it cannot be shown as text.', { name: basename(rel) }), 'warn');
+
   async function openCommitDiff(commit, file) {
     const id = `${file.path} [${commit.hash.slice(0, 8)}]`;
     if (ide.findTab(id)) return ide.openCustomTab({ id });
-    const [left, right] = await Promise.all([
-      file.status === 'added' ? '' : invoke('fileAt', ide.root, `${commit.hash}^`, file.rel),
-      file.status === 'deleted' ? '' : invoke('fileAt', ide.root, commit.hash, file.rel),
-    ]);
+    const [left, right] = await commitSides(commit.hash, file);
+    if (left.binary || right.binary) return notifyBinary(file.rel);
     openTextDiff({
       id, title: `${basename(file.rel)} (${commit.hash.slice(0, 7)})`, name: basename(file.rel), left, right,
       leftTitle: tr('{hash}^ (parent)', { hash: commit.hash.slice(0, 7) }),
@@ -1017,6 +1169,7 @@
     ed.onDidChangeModel(() => applyAnnotationLayout(ed));
     ed.addAction({ id: 'vcs.annotate', label: tr('Annotate with Git Blame'), contextMenuGroupId: '9_vcs', precondition: 'vcsRepo && !vcsAnnotated', run: () => toggleAnnotate(ed) });
     ed.addAction({ id: 'vcs.closeAnnotations', label: tr('Close Annotations'), contextMenuGroupId: '9_vcs', precondition: 'vcsAnnotated', run: () => toggleAnnotate(ed) });
+    ed.addAction({ id: 'vcs.showHistory', label: tr('Git: Show History'), contextMenuGroupId: '9_vcs', precondition: 'vcsRepo', run: () => { const t = fileTabOf(ed); if (t) showHistory(t.path); } });
     ed.onMouseDown((e) => gutterMouseDown(ed, e));
     applyAnnotationLayout(ed);
   });
@@ -1048,8 +1201,10 @@
   }
 
   // ---------- Git tool window: Log, Activity and Console ----------
-  let logRows, filesEl, detailsEl, logPane, activityPane, activityRows, consolePane, subTabs, logSearch, authorSelect, kindSelect;
+  let logRows, filesEl, detailsEl, logPane, activityPane, activityRows, consolePane, subTabs, logSearch, authorSelect, kindSelect, historyChip;
   let commits = [];
+  let historyOf = null; // the file whose history the Log shows (Show History), or null for every commit
+  let disposePreview = null; // the history's diff preview, while it shows
   let layout = { rows: new Map(), lanes: 0 };
   let activity = [];
   let me = null;
@@ -1083,12 +1238,20 @@
       // One unit, so a narrow bar wraps it whole onto the next line instead of breaking the label.
       const authorFilter = el('span', 'vcs-log-user');
       authorFilter.append(authorLabel, authorSelect);
-      bar.append(logSearch, authorFilter);
+      historyChip = el('span', 'vcs-log-path hidden');
+      historyChip.id = 'vcsLogPath';
+      bar.append(logSearch, authorFilter, historyChip);
       const header = el('div', 'vcs-log-row vcs-log-header');
       header.append(el('span', 'vcs-c-subject', tr('Commit')), el('span', 'vcs-c-author', tr('Author')), el('span', 'vcs-c-date', tr('Date')));
       logRows = el('div', 'vcs-log-rows');
       logRows.tabIndex = 0;
       logRows.onkeydown = (e) => {
+        if (e.key === 'Enter' && historyOf && selectedCommit) {
+          e.preventDefault();
+          const c = commits.find((x) => x.hash === selectedCommit);
+          if (c) showHistoryDiff(c);
+          return;
+        }
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         e.preventDefault();
         const shown = visibleCommits();
@@ -1236,11 +1399,12 @@
       activity = [];
       logRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? tr('No Git repository in this project') : tr('No project')));
       activityRows.replaceChildren(el('div', 'vcs-empty muted', ide.root ? tr('No Git repository in this project') : tr('No project')));
+      setHistoryOf(null);
       filesEl.replaceChildren();
       detailsEl.replaceChildren();
       return;
     }
-    const [list, who] = await Promise.all([invoke('log', ide.root), invoke('identity', ide.root)]);
+    const [list, who] = await Promise.all([historyOf ? invoke('fileHistory', ide.root, historyOf) : invoke('log', ide.root), invoke('identity', ide.root)]);
     if (my !== logSeq) return;
     commits = list;
     me = who;
@@ -1249,7 +1413,7 @@
     if (!commits.some((c) => c.hash === selectedCommit)) selectedCommit = commits[0]?.hash || null;
     renderLog();
     if (selectedCommit) selectCommit(selectedCommit);
-    else { filesEl.replaceChildren(); detailsEl.replaceChildren(el('div', 'muted', tr('No commits yet'))); }
+    else { closePreview(); filesEl.replaceChildren(); detailsEl.replaceChildren(el('div', 'muted', tr('No commits yet'))); }
     if (!activityPane.classList.contains('hidden')) loadActivity();
   }
 
@@ -1257,8 +1421,8 @@
     logRows.replaceChildren();
     if (!commits.length) logRows.appendChild(el('div', 'vcs-empty muted', tr('No commits yet')));
     const shown = visibleCommits();
-    // A filtered list has gaps, so lines between its commits would lie; it keeps only the dots.
-    const filtered = shown.length !== commits.length;
+    // A filtered list (a file's history too) has gaps, so lines between its commits would lie; it keeps only the dots.
+    const filtered = !!historyOf || shown.length !== commits.length;
     logRows.classList.toggle('filtered', filtered);
     if (commits.length && !shown.length) logRows.appendChild(el('div', 'vcs-empty muted', tr('No commits match the filter')));
     for (const c of shown) {
@@ -1282,7 +1446,12 @@
       row.oncontextmenu = (e) => {
         e.preventDefault();
         selectCommit(c.hash);
-        const items = logActions.flatMap((fn) => fn(c));
+        const own = historyOf ? [
+          { label: tr('Show Diff'), run: () => showHistoryDiff(c) },
+          { label: tr('Compare with Local'), run: () => compareWithLocal(c) },
+        ] : [];
+        const more = logActions.flatMap((fn) => fn(c));
+        const items = own.length && more.length ? [...own, { separator: true }, ...more] : [...own, ...more];
         if (items.length) ide.ui.contextMenu(e.clientX, e.clientY, items);
       };
       logRows.appendChild(row);
@@ -1293,11 +1462,14 @@
     selectedCommit = hash;
     for (const r of logRows.querySelectorAll('.vcs-log-row')) r.classList.toggle('selected', r.dataset.hash === hash);
     logRows.querySelector('.vcs-log-row.selected')?.scrollIntoView({ block: 'nearest' });
-    const d = await invoke('commitDetails', ide.root, hash);
+    const entry = historyOf && commits.find((c) => c.hash === hash);
+    const [d, sides] = await Promise.all([invoke('commitDetails', ide.root, hash), entry ? commitSides(entry.hash, entry) : null]);
     if (selectedCommit !== hash) return;
     details = d;
-    filesEl.replaceChildren(el('div', 'vcs-side-title', trn(d.files.length, '{n} file changed', '{n} files changed')));
-    for (const f of d.files) {
+    closePreview();
+    if (entry) showPreview(entry, sides);
+    else filesEl.replaceChildren(el('div', 'vcs-side-title', trn(d.files.length, '{n} file changed', '{n} files changed')));
+    for (const f of entry ? [] : d.files) {
       const row = el('div', 'vcs-file vcs-log-file');
       row.dataset.rel = f.rel;
       row.title = `${f.rel} — ${STATUS_LABEL[f.status] || f.status}`;
@@ -1331,8 +1503,67 @@
     gitTw.show();
     subTabs.switchTo('log');
     if (logSearch.value || authorSelect.value) { logSearch.value = ''; authorSelect.value = ''; }
+    setHistoryOf(null);
     await loadLog();
     if (commits.some((c) => c.hash === hash)) await selectCommit(hash);
+  }
+
+  // ---------- Show History: the Log of one file ----------
+  // PyCharm's Git › Show History: only the commits that changed the file, followed through renames, with the file's
+  // change in the selected commit beside them, Show Diff (Enter) and Compare with Local. null lists every commit again.
+  async function showHistory(path) {
+    if (path && !repo) return notify(tr('Show History'), tr('This project is not under Git version control.'), 'warn');
+    gitTw.show();
+    subTabs.switchTo('log');
+    if (logSearch.value || authorSelect.value) { logSearch.value = ''; authorSelect.value = ''; }
+    selectedCommit = null;
+    setHistoryOf(path);
+    await loadLog();
+    logRows.focus();
+  }
+
+  function setHistoryOf(path) {
+    historyOf = path || null;
+    if (!historyChip) return;
+    logPane.classList.toggle('history', !!historyOf);
+    historyChip.classList.toggle('hidden', !historyOf);
+    if (!historyOf) { closePreview(); historyChip.replaceChildren(); return; }
+    const all = el('button', 'vcs-log-path-close', '×');
+    all.title = tr('Show All Commits');
+    all.onclick = () => showHistory(null);
+    historyChip.replaceChildren(el('span', 'muted', tr('Path:')), userText('span', 'vcs-log-path-name', ide.util.rel(historyOf)), all);
+  }
+
+  function showPreview(c, [left, right]) {
+    filesEl.classList.add('vcs-history-preview');
+    const title = el('div', 'vcs-side-title');
+    title.append(userText('span', null, c.orig ? `${c.orig} → ${c.rel}` : c.rel));
+    if (left.binary || right.binary) return filesEl.replaceChildren(title, el('div', 'vcs-history-binary muted', tr('Binary file')));
+    const host = el('div', 'vcs-history-diff');
+    filesEl.replaceChildren(title, host);
+    disposePreview = mountDiff(host, {
+      name: basename(c.rel), left, right, inline: true,
+      leftTitle: tr('{hash}^ (parent)', { hash: c.short }), rightTitle: { user: `${c.short} — ${c.subject}` },
+    });
+  }
+
+  function closePreview() {
+    disposePreview?.();
+    disposePreview = null;
+    filesEl?.classList.remove('vcs-history-preview');
+  }
+
+  function showHistoryDiff(c) {
+    openCommitDiff({ hash: c.hash, message: c.subject }, { path: historyOf, rel: c.rel, orig: c.orig, status: c.status });
+  }
+
+  async function compareWithLocal(c) {
+    const path = historyOf;
+    const id = `${path} [${tr('{hash} vs. Local', { hash: c.short })}]`;
+    if (ide.findTab(id)) return ide.openCustomTab({ id });
+    const left = (await invoke('fileAt', ide.root, c.hash, c.rel, { binary: true })) ?? '';
+    if (left.binary) return notifyBinary(c.rel);
+    openLocalDiff({ id, path, left, leftTitle: { user: `${c.short} — ${c.subject}` } });
   }
 
   // ---------- Activity: git reflog as a timeline ----------
@@ -1809,12 +2040,14 @@
     { id: 'Annotate', title: tr('Annotate with Git Blame'), run: () => toggleAnnotate() },
     { id: 'Git.Branches', title: tr('Branches…'), run: showBranches },
     { id: 'Git.Init', title: tr('Create Git Repository…'), run: createRepository },
-    { id: 'Git.Log', title: tr('Show Git Log'), run: () => { gitTw.show(); subTabs.switchTo(true); } },
+    { id: 'Git.Log', title: tr('Show Git Log'), run: () => { if (historyOf) return showHistory(null); gitTw.show(); subTabs.switchTo(true); } },
+    { id: 'Vcs.ShowTabbedFileHistory', title: tr('Show History'), when: () => ide.activeTab()?.kind === 'file', run: () => showHistory(ide.activeTab().path) },
     { id: 'Compare.SameVersion', title: tr('Show Diff with HEAD'), run: () => ide.activeTab()?.kind === 'file' && openWorkingDiff(ide.activeTab().path) },
     { id: 'ChangesView.Shelve', title: tr('Shelve Changes…'), run: () => openShelveDialog() },
     { id: 'Vcs.Show.Shelf', title: tr('Show Shelf'), run: showShelf },
   ].forEach(ide.registerAction);
   ide.registerTreeAction({ title: tr('Git: Show Diff'), when: (e) => !e.dir && byPath.has(key(e.path)), run: (e) => openWorkingDiff(e.path) });
+  ide.registerTreeAction({ title: tr('Git: Show History'), when: (e) => !e.dir && !!repo && !isIgnored(e.path) && !['unversioned', 'added'].includes(byPath.get(key(e.path))?.status), run: (e) => showHistory(e.path) });
   ide.registerTreeAction({ title: tr('Git: Rollback…'), when: (e) => !e.dir && byPath.get(key(e.path))?.status !== 'unversioned' && byPath.has(key(e.path)), run: (e) => rollbackFiles([byPath.get(key(e.path))]) });
 
   ide.vcs = {
@@ -1824,7 +2057,7 @@
     appendConsole: (text, kind) => gitConsole?.append(text, kind),
     // Reloads editors and the log after git moved HEAD or rewrote files (unsaved edits were saved beforehand).
     reload: afterCheckout,
-    showCommit,
+    showCommit, showHistory,
     addBranchActions: (fn) => branchActions.push(fn),
     addLogActions: (fn) => logActions.push(fn),
     addCommitHeader: (fn) => { commitHeaders.push(fn); renderChanges(); },
@@ -1864,7 +2097,10 @@
     blames.clear();
     rebuildBlameCss();
     commits = [];
+    setHistoryOf(null);
     if (msgEl) msgEl.value = '';
+    if (amendInput) amendInput.checked = false;
+    amendSaved = null;
   }
   ide.on('projectOpened', () => {
     forgetRepository();

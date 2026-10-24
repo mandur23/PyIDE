@@ -215,3 +215,26 @@
 .vcs-sync-out { color: var(--green6); }
 .vcs-commit-opts { display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0; }
 .vcs-commit-opts:empty { display: none; }
+
+/* Amend, between the message and the Commit buttons */
+.vcs-commit > .vcs-amend { display: flex; align-self: flex-start; align-items: center; gap: 6px; padding: 6px 8px 0; flex-shrink: 0; white-space: nowrap; cursor: pointer; }
+.vcs-commit > .vcs-amend input { margin: 0; accent-color: var(--blue6); }
+.vcs-commit > .vcs-amend:has(input:disabled) { color: var(--gray7); cursor: default; }
+
+/* Show History: the Log of one file, with the file's change in the selected commit beside it */
+.vcs-log-path { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; padding: 1px 2px 1px 8px; border-radius: 4px; background: var(--gray3); white-space: nowrap; }
+.vcs-log-path-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--gray12); }
+.vcs-log-path-close { padding: 0 5px; border-radius: 3px; color: var(--gray9); line-height: 18px; }
+.vcs-log-path-close:hover { background: var(--gray4); color: var(--gray12); }
+/* The rows already show subject, author and date: the preview takes the whole side, and more of a narrow panel. */
+.vcs-log.history .vcs-log-side { width: 50%; }
+.vcs-log.history .vcs-log-details { display: none; }
+@container vcs-git (max-width: 720px) {
+  .vcs-log.history .vcs-log-table { flex: 2 1 0; }
+  .vcs-log.history .vcs-log-side { width: auto; flex: 3 1 0; }
+}
+.vcs-log-files.vcs-history-preview { display: flex; flex-direction: column; overflow: hidden; }
+.vcs-history-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vcs-history-diff .vcs-diff-head { height: 24px; }
+.vcs-history-diff .vcs-diff-side { line-height: 24px; }
+.vcs-history-binary { padding: 8px 10px; }

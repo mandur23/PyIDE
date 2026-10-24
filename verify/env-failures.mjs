@@ -3,7 +3,7 @@
 // main module, and a user data folder that cannot be written. Each is told to the user in words that name the cause,
 // and none becomes an IDE internal error. Port 9282.
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import net from 'net';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -91,13 +91,16 @@ try {
   const psStarted = await until(`/PS [A-Za-z]:\\\\/.test(ide.terminal.text())`, 'PowerShell prompt', 25000).then(() => true, () => false);
   check(psStarted, `the default PowerShell starts although PATH lacks its folder (${S((await js('ide.terminal.text()')).slice(-160))})`);
   const shells = await js(`ide.api.invoke('pty:shells').then((l) => l.map((s) => s.id + '=' + s.file))`);
-  check(shells.includes(`pwsh=${fakePwsh}`), `PowerShell 7 is detected on PATH (${S(shells)})`);
+  // where.exe names the file in long form, while TEMP may be an 8.3 short path (RUNNER~1 on GitHub runners).
+  const pwshFile = shells.find((s) => s.startsWith('pwsh='))?.slice(5) || '';
+  const samePath = (a, b) => existsSync(a) && realpathSync.native(a).toLowerCase() === realpathSync.native(b).toLowerCase();
+  check(samePath(pwshFile, fakePwsh), `PowerShell 7 is detected on PATH (${S(shells)})`);
   rmSync(fakePwsh);
   await js(`ide.terminal.open({ shell: 'pwsh' }).then(() => true)`);
   await until(`ide.terminal.sessions().at(-1)?.exited === true`, 'pwsh session failed', 10000).catch(() => {});
   await sleep(500);
   const pwshText = await js(`ide.terminal.text(ide.terminal.sessions().at(-1).id)`);
-  check(/PowerShell 7 was not found/.test(pwshText) && pwshText.includes(fakePwsh) && /Settings › Terminal/.test(pwshText),
+  check(/PowerShell 7 was not found/.test(pwshText) && !!pwshFile && pwshText.includes(pwshFile) && /Settings › Terminal/.test(pwshText),
     `a shell that cannot be found is named with its file and the way out (${S(pwshText.slice(-260))})`);
   const ptyErrors = await internal(`/pty:create|File not found/`);
   check(!ptyErrors.length, `a shell that cannot start is not an IDE internal error (${S(ptyErrors)})`);

@@ -3,15 +3,15 @@
 // debuggee that exits before debugpy listens, a script folder longer than Windows allows, and Pyright crashing.
 // Ports 9286-9287.
 import { execSync } from 'child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
-import { launch, processSnapshot, descendants } from './lib.mjs';
+import { launch, openFile, processSnapshot, descendants } from './lib.mjs';
 
 const q = JSON.stringify;
 const errorsNow = (t) => t.js(`ide.api.invoke('diagnostics:errors').then((list) => list.map((e) => e.message))`);
 
 const t = await launch({ fixture: 'debugger', port: 9286, name: 'run-debug-edges' });
-const { js, until, check, click, sleep } = t;
+const { js, until, check, click, sleep, press } = t;
 const P = (...f) => path.join(t.project, ...f);
 const PYC_OUT = `document.querySelector('#pyconsoleOut').textContent`;
 const DBG_OUT = `document.querySelector('#dbgOut').textContent`;
@@ -111,9 +111,12 @@ await section('A script folder longer than Windows allows', async () => {
   while (deep.length < 300) deep = path.join(deep, 'abcdefghijklmnop');
   let deeper = deep;
   while (deeper.length < 560) deeper = path.join(deeper, 'abcdefghijklmnop');
-  const script = 'import os\nprint("REAL=" + os.path.realpath(os.getcwd()))\n';
+  const script = 'import os\nmarker = 1\nprint("REAL=" + os.path.realpath(os.getcwd()))\n';
   for (const d of [deep, deeper]) { mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'over.py'), script); }
+  // The program prints its folder in long form; the project may be named by an 8.3 short one (TEMP on GitHub runners).
   const realIn = (text) => /REAL=(.*)/.exec(text)?.[1]?.trim().toLowerCase();
+  const real = (dir) => realpathSync.native(dir).toLowerCase();
+  const pydevdLost = (text) => /(?:unable to get real case|Unable to find: )[^]{0,400}/.exec(text)?.[0] || '';
 
   const runIn = async (dir) => {
     await js(`(ide.run.runContext(ide.run.types.get('python').forFile(${q(path.join(dir, 'over.py'))})), true)`);
@@ -121,22 +124,53 @@ await section('A script folder longer than Windows allows', async () => {
     return js(RUN_OUT);
   };
   let out = await runIn(deep);
-  check(realIn(out) === deep.toLowerCase() && out.includes('exit code 0'), `Run in a ${deep.length}-character folder runs there (${q(out.slice(-300))})`);
+  check(realIn(out) === real(deep) && out.includes('exit code 0'), `Run in a ${deep.length}-character folder runs there (${q(out.slice(-300))})`);
   out = await runIn(deeper);
-  check(realIn(out) === t.project.toLowerCase() && out.includes('exit code 0') && out.includes('longer than Windows allows'),
+  check(realIn(out) === real(t.project) && out.includes('exit code 0') && out.includes('longer than Windows allows'),
     `Run in a ${deeper.length}-character folder whose short form is too long runs in the project root and says so (${q(out.slice(-400))})`);
 
   const errs2 = (await errorsNow(t)).length;
-  const debugIn = async (dir) => {
+  // stop: {} to resume at the first breakpoint, after recording its top frame in stop.frame.
+  const debugIn = async (dir, stop = null) => {
     await js(`(ide.debugger.debugFile(${q(path.join(dir, 'over.py'))}), true)`);
+    if (stop) {
+      await until(`!!ide.debugger.stopped()`, 'stopped in over.py', 40000).catch(() => {});
+      stop.frame = await js(`ide.debugger.stopped()?.frames[0] || null`);
+      await press('F9');
+    }
     await until(`${DBG_OUT}.includes(${q(path.join(dir, 'over.py'))}) && ${DBG_OUT}.includes('Process finished')`, 'debugged over.py finished', 40000).catch(() => {});
     return js(DBG_OUT);
   };
-  out = await debugIn(deep);
-  check(realIn(out) === deep.toLowerCase() && out.includes('exit code 0'), `Debug in a ${deep.length}-character folder runs there (${q(out.slice(-300))})`);
+  await openFile(t, path.relative(t.project, path.join(deep, 'over.py')));
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }))`);
+  await press('Ctrl+F8');
+  const stop = {};
+  out = await debugIn(deep, stop);
+  check(stop.frame?.line === 2 && stop.frame.path?.toLowerCase() === path.join(deep, 'over.py').toLowerCase(),
+    `Debug stops at a breakpoint in a ${deep.length}-character folder (${q(stop.frame)})`);
+  check(realIn(out) === real(deep) && out.includes('exit code 0'), `Debug in a ${deep.length}-character folder runs there (${q(out.slice(-300))})`);
+  check(!pydevdLost(out), `and debugpy finds the script by its real name (${q(pydevdLost(out))})`);
   out = await debugIn(deeper);
-  check(realIn(out) === t.project.toLowerCase() && out.includes('exit code 0') && out.includes('longer than Windows allows'),
+  check(realIn(out) === real(t.project) && out.includes('exit code 0') && out.includes('longer than Windows allows'),
     `Debug in a folder whose short form is too long runs in the project root and says so (${q(out.slice(-400))})`);
+  check(!pydevdLost(out), `and debugpy finds that script by its real name too (${q(pydevdLost(out))})`);
+
+  // Module name and pytest runs hand debugpy `-m`, so no script names the folder pydevd watches. Known limit: `-m`
+  // imports over.py through the 8.3 working folder, and a breakpoint in it still gets pydevd's error, so it goes.
+  writeFileSync(path.join(deep, 'test_over.py'), 'def test_over():\n    assert True\n');
+  await openFile(t, path.relative(t.project, path.join(deep, 'over.py')));
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }))`);
+  await press('Ctrl+F8');
+  const debugCfg = async (cfg, mark) => {
+    await js(`(ide.run.debugConfig(ide.run.addTemporary(${q(cfg)})), true)`);
+    await until(`${DBG_OUT}.split('\\n')[0].includes(${q(mark)}) && ${DBG_OUT}.includes('Process finished')`, `${mark} debugged`, 60000).catch(() => {});
+    return js(DBG_OUT);
+  };
+  out = await debugCfg({ type: 'python', name: 'over module', runMode: 'module', module: 'over', cwd: deep }, '-m over');
+  check(realIn(out) === real(deep) && out.includes('exit code 0') && !pydevdLost(out),
+    `Debug of a Module name configuration in a ${deep.length}-character folder runs there with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
+  out = await debugCfg({ type: 'pytest', name: 'pytest over', target: path.join(deep, 'test_over.py'), cwd: deep, args: '-p no:cacheprovider' }, '-m pytest');
+  check(/1 passed/.test(out) && !pydevdLost(out), `Debug of pytest in a ${deep.length}-character folder runs the test with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
   const longErrs = (await errorsNow(t)).slice(errs2);
   check(!longErrs.length, `long folders record no internal error (${q(longErrs)})`);
 });

@@ -1,5 +1,6 @@
 // Search and navigation backend: find/replace in files, TODO scan, and ast-based outline and symbol index.
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -551,7 +552,9 @@ def flatten(items, container, out):
     return out
 
 mode = sys.argv[1]
-if mode == 'outline':
+if mode == 'tag':
+    print(json.dumps('%s-%d.%d' % (sys.implementation.name, sys.version_info[0], sys.version_info[1])))
+elif mode == 'outline':
     src = sys.stdin.buffer.read().decode('utf-8', 'replace')
     try:
         tree = ast.parse(src)
@@ -559,14 +562,25 @@ if mode == 'outline':
     except SyntaxError as e:
         print(json.dumps({'error': e.msg, 'line': e.lineno or 1}))
 else:
-    result = {}
-    for p in json.loads(sys.stdin.buffer.read().decode('utf-8')):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def source(p):
         try:
             with open(p, 'rb') as f:
-                src = f.read().decode('utf-8', 'replace')
-            result[p] = flatten(outline(ast.parse(src), src.splitlines()), '', [])
+                return f.read().decode('utf-8', 'replace')
         except Exception:
-            result[p] = []
+            return None
+
+    # A file the virus scanner has not seen (a project just cloned or generated) is held at its first open until it
+    # is scanned; reading on threads overlaps those waits while the files read so far are parsed.
+    paths = json.loads(sys.stdin.buffer.read().decode('utf-8'))
+    result = {}
+    with ThreadPoolExecutor(16) as pool:
+        for p, src in zip(paths, pool.map(source, paths)):
+            try:
+                result[p] = flatten(outline(ast.parse(src), src.splitlines()), '', []) if src is not None else []
+            except Exception:
+                result[p] = []
     print(json.dumps(result))
 `;
 
@@ -590,22 +604,114 @@ function runAst(interp, mode, input, timeout) {
   });
 }
 
-// pathLower -> {path, mtime, symbols}; entries are dropped by search:invalidate and refreshed by mtime.
+// The symbol index: pathLower -> {path, mtime, py, symbols, v}, refreshed by mtime and by the Python that parsed the
+// file: `py` is its tag (implementation-major.minor), because a file in newer syntax parses to nothing under an older
+// Python. `v` is the index version that last changed the file's symbols, so a window that already holds version n is
+// sent only what changed after n.
 const symbolCache = new Map();
+const removedAt = new Map(); // pathLower -> the version that dropped the file
+let indexVersion = 0;
+let fullSince = 0; // a window holding an older version than this is sent the whole index
 let indexQueue = Promise.resolve();
 const BATCH = 400;
 // Python parses the batches side by side: 3,000 modules take 1.2 s instead of 3.2 s one batch after another.
 const PARALLEL = Math.max(1, Math.min(4, os.cpus().length - 1));
+// interpreter -> its tag, asked once per session. The renderer's version is in the key, so a venv made again with
+// another Python at the same path is asked again. A Python that does not answer has no tag (null, asked again at the
+// next build), and then the entries are checked by mtime alone.
+const pyTags = new Map();
+async function pyTag(interp) {
+  const key = JSON.stringify([interp.cmd, interp.args, interp.version]);
+  if (!pyTags.has(key)) {
+    const tag = await runAst(interp, 'tag', '', 15000);
+    if (typeof tag !== 'string') return null;
+    pyTags.set(key, tag);
+  }
+  return pyTags.get(key);
+}
+const rootKeyOf = (root) => root.toLowerCase().replace(/[\\/]*$/, path.sep);
 
-async function buildIndex(interp, root) {
+// Each project's index is kept on disk, so a project opened again lists its symbols at once instead of after Python
+// has parsed every file (3,000 modules: 1.4 s, or 5-9 s when the files are new to the virus scanner). Entries are
+// checked against the files' mtime and Python like the ones in memory; a store written by another version of
+// AST_SCRIPT is ignored.
+let storeDir = null;
+const STORE_KEEP = 20; // projects whose index stays on disk
+let storeFormat;
+const formatOf = () => (storeFormat ||= crypto.createHash('sha1').update(AST_SCRIPT).digest('hex').slice(0, 12));
+const storeFile = (root) => path.join(storeDir, `${crypto.createHash('sha1').update(rootKeyOf(root)).digest('hex').slice(0, 16)}.json`);
+const storedRoots = new Set(); // rootKeys whose store was read this session
+
+async function loadStore(root) {
+  const rootKey = rootKeyOf(root);
+  if (!storeDir || storedRoots.has(rootKey)) return;
+  storedRoots.add(rootKey);
+  let data;
+  try { data = JSON.parse(await fs.promises.readFile(storeFile(root), 'utf8')); } catch { return; }
+  if (data?.format !== formatOf() || rootKeyOf(String(data.root)) !== rootKey || !Array.isArray(data.files)) return;
+  const v = ++indexVersion;
+  for (const [p, mtime, symbols, py] of data.files) {
+    const key = String(p).toLowerCase();
+    if (!key.startsWith(rootKey) || symbolCache.has(key) || !Array.isArray(symbols)) continue;
+    symbolCache.set(key, { path: p, mtime, py, v, symbols: symbols.map(([name, kind, line, col, container]) => ({ name, kind, line, col, container })) });
+  }
+}
+
+// A failed write only costs a parse the next time the project opens.
+let storeQueue = Promise.resolve();
+function saveStore(root) {
+  if (!storeDir) return;
+  const rootKey = rootKeyOf(root);
+  const files = [];
+  for (const [key, e] of symbolCache) {
+    if (key.startsWith(rootKey)) files.push([e.path, e.mtime, e.symbols.map((s) => [s.name, s.kind, s.line, s.col, s.container]), e.py]);
+  }
+  const text = JSON.stringify({ format: formatOf(), root, files });
+  storeQueue = storeQueue.then(async () => {
+    const file = storeFile(root);
+    // Two PyIDE processes with the same project open write the same store, each through its own temporary file.
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.promises.mkdir(storeDir, { recursive: true });
+    await fs.promises.writeFile(tmp, text);
+    await fs.promises.rename(tmp, file).catch((e) => fs.promises.rm(tmp, { force: true }).then(() => { throw e; }));
+    const stores = (await fs.promises.readdir(storeDir)).filter((n) => n.endsWith('.json'));
+    if (stores.length <= STORE_KEEP) return;
+    const dated = await Promise.all(stores.map(async (n) => ({ n, t: (await fs.promises.stat(path.join(storeDir, n))).mtimeMs })));
+    for (const { n } of dated.sort((a, b) => b.t - a.t).slice(STORE_KEEP)) await fs.promises.rm(path.join(storeDir, n), { force: true });
+  }).catch(() => {});
+}
+
+function setSymbols(p, mtime, py, symbols) {
+  const key = p.toLowerCase();
+  const old = symbolCache.get(key);
+  // A save that leaves the symbols as they were (an edit inside a function body) is no change to send.
+  if (old && JSON.stringify(old.symbols) === JSON.stringify(symbols)) {
+    old.mtime = mtime;
+    old.py = py;
+    return;
+  }
+  symbolCache.set(key, { path: p, mtime, py, symbols, v: ++indexVersion });
+  removedAt.delete(key);
+}
+
+// -> {version, full, files: [[path, symbols]], removed: [pathLower]}: the files whose symbols changed after `since`
+// (all of them when `full`), and the files dropped since then.
+async function buildIndex(interp, root, since = 0) {
+  const asking = pyTag(interp);
+  await loadStore(root);
+  // With the separator, so indexing C:\proj does not drop the cached files of C:\proj2.
+  const rootKey = rootKeyOf(root);
   const live = new Set();
   const stale = [];
-  for (const { p, mtime } of await indexScan('pyFiles', root)) {
+  const scanned = await indexScan('pyFiles', root);
+  const py = await asking;
+  for (const { p, mtime } of scanned) {
     const key = p.toLowerCase();
     live.add(key);
     const hit = symbolCache.get(key);
-    if (!hit || hit.mtime !== mtime) stale.push({ p, mtime });
+    if (!hit || hit.mtime !== mtime || (py && hit.py !== py)) stale.push({ p, mtime });
   }
+  let stored = true; // the store still matches: no file parsed (new mtimes) or dropped
   const batches = [];
   for (let i = 0; i < stale.length; i += BATCH) batches.push(stale.slice(i, i + BATCH));
   const parse = async () => {
@@ -614,22 +720,34 @@ async function buildIndex(interp, root) {
       // Python failed or timed out: that says nothing about these files. They keep what they had and are parsed again
       // next time, instead of being cached as files without symbols until they change.
       if (!res) continue;
-      for (const { p, mtime } of batch) symbolCache.set(p.toLowerCase(), { path: p, mtime, symbols: res[p] || [] });
+      stored = false;
+      for (const { p, mtime } of batch) setSymbols(p, mtime, py, res[p] || []);
     }
   };
   await Promise.all(Array.from({ length: Math.min(PARALLEL, batches.length) }, parse));
-  // With the separator, so indexing C:\proj does not drop the cached files of C:\proj2.
-  const rootKey = root.toLowerCase().replace(/[\\/]*$/, path.sep);
-  const out = [];
-  for (const [key, entry] of symbolCache) {
-    if (!key.startsWith(rootKey)) continue;
-    if (!live.has(key)) { symbolCache.delete(key); continue; }
-    for (const s of entry.symbols) out.push({ ...s, path: entry.path });
+  for (const key of symbolCache.keys()) {
+    if (key.startsWith(rootKey) && !live.has(key)) {
+      symbolCache.delete(key);
+      removedAt.set(key, ++indexVersion);
+      stored = false;
+    }
   }
-  return out;
+  if (!stored) saveStore(root);
+  const full = !since || since < fullSince;
+  const files = [];
+  for (const [key, e] of symbolCache) if (key.startsWith(rootKey) && (full || e.v > since)) files.push([e.path, e.symbols]);
+  const removed = full ? [] : [...removedAt].filter(([key, v]) => v > since && key.startsWith(rootKey)).map(([key]) => key);
+  return { version: indexVersion, full, files, removed };
 }
 
-exports.register = ({ ipcMain }) => {
+const indexed = (interp, root, since) => {
+  const run = indexQueue.then(() => buildIndex(interp, root, since));
+  indexQueue = run.catch(() => {});
+  return run;
+};
+
+exports.register = ({ ipcMain, app }) => {
+  storeDir = path.join(app.getPath('userData'), 'symbol-index');
   ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides])
     : (dropPreviews(), findOnWorker([root, opts, overrides], FIND_TIMEOUT))));
   // {changed, count, skipped}, or {stopped} when the worker was stopped partway: some of `paths` may then have been
@@ -649,14 +767,21 @@ exports.register = ({ ipcMain }) => {
   ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, compile(opts)));
   ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text, 30000)) || { error: 'Python interpreter failed' });
-  ipcMain.handle('search:symbols', (_e, interp, root) => {
-    const run = indexQueue.then(() => buildIndex(interp, root));
-    indexQueue = run.catch(() => {});
-    return run;
-  });
+  // The index as one list of {name, kind, line, col, container, path}.
+  ipcMain.handle('search:symbols', async (_e, interp, root) => (await indexed(interp, root)).files.flatMap(([p, symbols]) => symbols.map((s) => ({ ...s, path: p }))));
+  // What changed since the version the window holds (see buildIndex): Go to Class and Search Everywhere keep the
+  // index in the window, so a popup does not copy 50,000 symbols from this process again.
+  ipcMain.handle('search:symbolIndex', (_e, interp, root, since) => indexed(interp, root, since));
+  // Named files are parsed again at the next build, or dropped from the index if they are gone; without names the
+  // whole index is built again.
   ipcMain.handle('search:invalidate', (_e, paths) => {
-    if (!paths) symbolCache.clear();
-    else for (const p of paths) symbolCache.delete(String(p).toLowerCase());
+    if (!paths) {
+      symbolCache.clear();
+      removedAt.clear();
+      fullSince = ++indexVersion;
+    } else {
+      for (const p of paths) { const e = symbolCache.get(String(p).toLowerCase()); if (e) e.mtime = -1; }
+    }
     return scan('invalidate', paths || null);
   });
 };

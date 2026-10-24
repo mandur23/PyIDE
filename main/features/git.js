@@ -247,7 +247,7 @@ function parseBinary(out) {
   }
   return list;
 }
-const SHELF_STATUS = { A: 'added', C: 'added', D: 'deleted', R: 'renamed' };
+const CHANGE_STATUS = { A: 'added', C: 'added', D: 'deleted', R: 'renamed' };
 
 function readShelf(root, id) {
   const dir = shelfDir(root, id);
@@ -367,7 +367,7 @@ async function shelve(root, { name, paths, keep }) {
       version: 1, name: String(name || '').trim() || 'Shelved changes', time: Date.now(), branch: st.branch || st.detached || null, head: head || null,
       files: entries.map((e, i) => {
         const f = byRel.get(e.rel);
-        return { rel: e.rel, ...(e.orig ? { orig: e.orig } : {}), status: SHELF_STATUS[e.code] || 'modified', binary: binary[i] || false,
+        return { rel: e.rel, ...(e.orig ? { orig: e.orig } : {}), status: CHANGE_STATUS[e.code] || 'modified', binary: binary[i] || false,
           // added to the index before shelving (git add, or a staged rename): staged again when unshelved
           staged: !!f && (f.status === 'added' || !!f.origRel) };
       }),
@@ -530,7 +530,7 @@ const fetches = new Map(); // project key -> the background fetch in flight (a p
 const projectKey = (root) => path.resolve(String(root || '')).toLowerCase();
 // Channels that only read: they neither hold off a background fetch nor wait for one.
 const READS = new Set(['status', 'branches', 'show', 'fileAt', 'log', 'reflog', 'identity', 'commitDetails', 'blame', 'outgoing',
-  'conflictSides', 'mergeVersions', 'stashList', 'stashFiles', 'shelves', 'shelfDiff', 'backgroundFetch']);
+  'conflictSides', 'mergeVersions', 'stashList', 'stashFiles', 'shelves', 'shelfDiff', 'backgroundFetch', 'lastCommit', 'fileHistory']);
 // Commands that write remote-tracking refs themselves.
 const REMOTE_WRITERS = new Set(['push', 'pull']);
 const FETCH_TIMEOUT = Number(process.env.PYIDE_GIT_FETCH_TIMEOUT_MS) || 120000;
@@ -665,22 +665,69 @@ exports.register = ({ ipcMain, app }) => {
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
   });
 
+  // Deletes a local branch, never the current one. Without force git refuses a branch that is not merged into its
+  // upstream (or HEAD when it has none); the answer then lists the commits only that branch has, for the question
+  // whether to delete it anyway. `hash` is the branch's last commit and `upstream` its branch.<name>.remote and .merge,
+  // which git drops with the branch, so it can be restored as it was.
+  h('deleteBranch', async (root, name, { force = false } = {}) => {
+    const current = (await git(root, ['branch', '--show-current'])).out.trim();
+    if (name === current) return { ok: false, reason: 'currentBranch', err: `Cannot delete the current branch ${name}.` };
+    const hash = (await git(root, ['rev-parse', '-q', '--verify', `refs/heads/${name}`])).out.trim();
+    const [remote, merge] = await Promise.all(['remote', 'merge'].map(async (k) => (await git(root, ['config', '--get', `branch.${name}.${k}`])).out.trim()));
+    const args = ['branch', force ? '-D' : '-d', name];
+    const r = await git(root, args);
+    const res = { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, hash, ...(remote && merge ? { upstream: { remote, merge } } : {}) };
+    if (!r.code || !/not fully merged/.test(r.err)) return res;
+    const unmerged = (base) => git(root, ['log', '-n50', '--format=%h%x1f%s%x1f%an', `refs/heads/${name}`, '--not', base]);
+    let target = current || 'HEAD';
+    let log = await unmerged('HEAD');
+    if (!log.out.trim()) {
+      const up = (await git(root, ['for-each-ref', '--format=%(upstream:short)', `refs/heads/${name}`])).out.trim();
+      if (up) { target = up; log = await unmerged(up); }
+    }
+    const commits = log.out.split(/\r?\n/).filter(Boolean).map((l) => { const [short, subject, author] = l.split('\x1f'); return { short, subject, author }; });
+    return { ...res, reason: 'notMerged', target, commits };
+  });
+
+  // upstream: {remote, merge} from deleteBranch.
+  h('restoreBranch', async (root, name, hash, upstream) => {
+    const steps = [['branch', name, hash], ...(upstream ? [['config', `branch.${name}.remote`, upstream.remote], ['config', `branch.${name}.merge`, upstream.merge]] : [])];
+    const log = [];
+    for (const args of steps) {
+      const r = await git(root, args);
+      log.push({ cmd: cmdLine(args), out: r.out, err: r.err });
+      if (r.code) return { ok: false, log, err: r.err };
+    }
+    return { ok: true, log };
+  });
+
+  // A change of case only needs -M on Windows, where refs/heads/<to> is the file of the branch being renamed.
+  h('renameBranch', async (root, from, to) => {
+    const args = ['branch', from !== to && from.toLowerCase() === to.toLowerCase() ? '-M' : '-m', from, to];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+  });
+
   // Content of a project file at `rev` (null when the file does not exist there).
   h('show', async (root, abs, rev = 'HEAD') => {
     const r = await git(root, ['show', `${rev}:./${relOf(root, abs)}`]);
     return r.code ? null : fileText(r.buf);
   });
 
-  // Content of a repo-relative path at `rev`, for diffs of historical commits.
-  h('fileAt', async (root, rev, repoRel) => {
+  // Content of a repo-relative path at `rev`, for diffs of historical commits. opts.binary: a binary file (as the
+  // editor judges one, main/text-codec.js) gives {binary: true} instead of its bytes decoded as text.
+  h('fileAt', async (root, rev, repoRel, { binary = false } = {}) => {
     const info = await repoInfo(root);
     const r = await git(info?.top || root, ['show', `${rev}:${repoRel}`]);
-    return r.code ? null : fileText(r.buf);
+    if (r.code) return null;
+    if (binary && textCodec.looksBinary(r.buf) && !textCodec.detect(r.buf.subarray(0, 8000)).startsWith('utf-16')) return { binary: true };
+    return fileText(r.buf);
   });
 
   // files: [path | {path, orig}]. A staged rename's original path is committed too (its deletion is already staged and
   // `git commit <paths>` implies --only), but is not passed to `git add`, which rejects a path gone from index and disk.
-  h('commit', async (root, message, files) => {
+  // amend: replace the last commit; with no files only its message changes (--only keeps out what else is staged).
+  h('commit', async (root, message, files, { amend = false } = {}) => {
     const paths = files.map((f) => (typeof f === 'string' ? f : f.path));
     const origs = files.map((f) => (typeof f === 'string' ? null : f.orig)).filter(Boolean);
     const rels = paths.map((p) => relOf(root, p)).join('\0');
@@ -693,11 +740,14 @@ exports.register = ({ ipcMain, app }) => {
     // git refuses a partial commit while a merge, cherry-pick or rebase is stopped: that commit takes the whole index.
     const info = await repoInfo(root);
     const whole = !!(info && operationOf(info.gitDir));
-    const args = whole ? ['commit', '-F', msgFile] : ['commit', '-F', msgFile, '--pathspec-from-file=-', '--pathspec-file-nul'];
+    const commit = amend ? ['commit', '--amend'] : ['commit'];
+    const args = whole ? [...commit, '-F', msgFile]
+      : amend && !paths.length ? [...commit, '--only', '-F', msgFile]
+        : [...commit, '-F', msgFile, '--pathspec-from-file=-', '--pathspec-file-nul'];
     const r = await git(root, args, [...paths, ...origs].map((p) => relOf(root, p)).join('\0'));
     try { fs.unlinkSync(msgFile); } catch {}
     const hash = r.code ? null : (await git(root, ['rev-parse', '--short', 'HEAD'])).out.trim();
-    const shown = ['commit', '-m', message.split('\n')[0], ...(whole ? [] : ['--', ...paths.map((p) => relOf(root, p))])];
+    const shown = [...commit, '-m', message.split('\n')[0], ...(whole || !paths.length ? [] : ['--', ...paths.map((p) => relOf(root, p))])];
     return { ok: !r.code, cmd: cmdLine(shown), out: r.out, err: r.err, hash };
   });
 
@@ -738,6 +788,41 @@ exports.register = ({ ipcMain, app }) => {
       const [hash, short, selector, action, who, subject] = rec.split('\x1f');
       return { hash, short, time: Number(/\{(\d+)\}/.exec(selector)?.[1]) || 0, action, who, subject };
     });
+  });
+
+  // Commits that changed one file, newest first, followed through renames (git log --follow). `rel` is the file's
+  // repo-relative path in that commit, `orig` its path before a rename there; a commit git lists without the file's
+  // change (a merge) keeps the path the file had then.
+  h('fileHistory', async (root, abs, max = 1000) => {
+    const info = await repoInfo(root);
+    if (!info) return [];
+    const r = await git(root, ['log', '--follow', `-n${max}`, '-z', '--name-status',
+      '--format=%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%P', '--', relOf(root, abs)]);
+    if (r.code) return [];
+    let at = info.prefix + relOf(root, abs);
+    return r.out.split('\x1e').filter(Boolean).map((rec) => {
+      const end = rec.indexOf('\0');
+      const [hash, short, author, email, time, subject, refs, parents] = (end < 0 ? rec : rec.slice(0, end)).split('\x1f');
+      const [change] = end < 0 ? [] : parseNameStatus(rec.slice(end + 1).replace(/^\n/, ''));
+      const entry = { hash, short, author, email, time: Number(time), subject, refs: refs ? refs.split(', ') : [], parents: parents ? parents.split(' ') : [],
+        rel: change?.rel || at, ...(change?.orig ? { orig: change.orig } : {}), status: CHANGE_STATUS[change?.code] || 'modified' };
+      at = entry.orig || entry.rel;
+      return entry;
+    });
+  });
+
+  // The last commit, for Amend: its message, and the upstream that already has it (amending it rewrites history
+  // others may have pulled).
+  h('lastCommit', async (root) => {
+    const head = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+    if (!head) return null;
+    const [msg, up] = await Promise.all([
+      git(root, ['log', '-1', '--format=%B', 'HEAD']),
+      git(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
+    ]);
+    const upstream = up.code ? null : up.out.trim();
+    const pushed = !!upstream && !(await git(root, ['merge-base', '--is-ancestor', 'HEAD', '@{u}'])).code;
+    return { hash: head, message: msg.out.replace(/\s+$/, ''), pushedTo: pushed ? upstream : null };
   });
 
   h('identity', async (root) => {

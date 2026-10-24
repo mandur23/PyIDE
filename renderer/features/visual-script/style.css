@@ -46,11 +46,9 @@
 .vs-grid { position: absolute; inset: -128px; pointer-events: none; will-change: transform; background-position: 0 0;
   background-image: radial-gradient(circle, var(--vs-grid) 1px, transparent 1.2px), radial-gradient(circle, var(--vs-grid-major) 1.5px, transparent 1.8px);
   background-size: 16px 16px, 128px 128px; }
-/* While the view pans or nodes move, the moving content is its own compositor layer, so frames only recomposite. */
-.vs-canvas.vs-panning .vs-layer, .vs-canvas.vs-moving .vs-node.vs-sel { will-change: transform; }
-.vs-canvas.vs-space, .vs-canvas.vs-panning { cursor: grabbing; }
+/* While nodes move they are their own compositor layer, so frames only recomposite (the view's layer: editor.js). */
+.vs-canvas.vs-moving .vs-node.vs-sel { will-change: transform; }
 
-.vs-canvas.vs-panning .vs-layer { pointer-events: none; }
 .vs-canvas.vs-inert .vs-layer { opacity: .45; pointer-events: none; }
 .vs-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .vs-wires { position: absolute; left: -100000px; top: -100000px; overflow: visible; pointer-events: none; }

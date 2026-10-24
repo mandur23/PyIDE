@@ -766,12 +766,30 @@
     }));
   }
 
+  // The project's symbols, kept here between popups: main sends only the files whose symbols changed since `version`
+  // (a whole index of 50,000 symbols took 200-300 ms to arrive, on every popup).
+  let index = { root: null, version: 0, files: new Map(), list: [] }; // files: pathLower -> symbols with their path
+  function applyIndex(root, r) {
+    if (index.root !== root || r.full) index = { root, version: 0, files: new Map(), list: null };
+    else if (r.version <= index.version) return index.list;
+    for (const [p, symbols] of r.files) {
+      for (const s of symbols) s.path = p;
+      index.files.set(p.toLowerCase(), symbols);
+    }
+    for (const key of r.removed) index.files.delete(key);
+    if (r.files.length || r.removed.length) index.list = null;
+    index.version = r.version;
+    return (index.list ||= [...index.files.values()].flat());
+  }
+
   // An empty index when the scan fails (the worker stopped), so callers and the warm-up after a project opens never reject.
   const building = new Set(); // index loads still running
   const loadIndex = () => {
     const interp = ide.currentInterp();
-    if (!interp || !ide.root) return Promise.resolve([]);
-    const load = ide.api.invoke('search:symbols', interp, ide.root).catch((e) => {
+    const root = ide.root;
+    if (!interp || !root) return Promise.resolve([]);
+    const since = index.root === root ? index.version : 0;
+    const load = ide.api.invoke('search:symbolIndex', interp, root, since).then((r) => applyIndex(root, r), (e) => {
       console.warn('symbol index failed', e);
       return [];
     });
@@ -862,7 +880,12 @@
     refreshTodos();
   });
   ide.on('toolWindowShown', (id) => (id === 'Structure' ? refreshStructure() : id === 'TODO' && refreshTodosNow()));
-  ide.on('interpreterChanged', () => { outline = null; refreshStructure(); });
+  // Main parses again the files another Python parsed (see buildIndex); starting now spares the next popup that wait.
+  ide.on('interpreterChanged', () => {
+    outline = null;
+    refreshStructure();
+    if (index.root && index.root === ide.root) loadIndex();
+  });
 
   ide.registerTreeAction({ title: tr('Find in Files…'), keyAction: 'FindInPath', when: (e) => e.dir, run: (e) => openFindDialog(false, e.path) });
   ide.registerTreeAction({ title: tr('Replace in Files…'), keyAction: 'ReplaceInPath', when: (e) => e.dir, run: (e) => openFindDialog(true, e.path) });

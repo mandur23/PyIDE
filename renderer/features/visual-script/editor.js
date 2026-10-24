@@ -142,8 +142,20 @@
     // ---------- view (pan and zoom) ----------
     let viewFrame = 0;
     let drawnScale = 1; // the scale the layer is drawn at now; setView applies a new one in the next frame
+    let shownScale = null; // the scale the zoom label shows
+    // While the view rests the layer is a compositor layer of its own, so a pan only moves it: promoting it when the pan
+    // started painted all the nodes into a new layer in that first frame. A zoom drops it until the wheel rests, so the
+    // nodes are drawn again at the new scale instead of being stretched.
+    let promoteTimer = 0;
+    const promote = () => { clearTimeout(promoteTimer); promoteTimer = 0; layer.style.willChange = 'transform'; };
+    disposers.push(() => clearTimeout(promoteTimer));
     function applyView() {
       viewFrame = 0;
+      if (view.s !== drawnScale) {
+        layer.style.willChange = '';
+        clearTimeout(promoteTimer);
+        promoteTimer = setTimeout(promote, 400);
+      }
       drawnScale = view.s;
       layer.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.s})`;
       // The grid is a layer one major cell larger than the canvas, shifted by the pan modulo that cell, so panning
@@ -157,8 +169,12 @@
       }
       const mod = (v) => ((v % major) + major) % major;
       grid.style.transform = `translate(${mod(view.tx)}px, ${mod(view.ty)}px)`;
-      zoomLabel.textContent = `${Math.round(view.s * 100)}%`;
-      host.dataset.zoom = view.s.toFixed(3);
+      // Only when the scale changes: the label's text set in every pan frame repainted the toolbar in every frame.
+      if (shownScale !== view.s) {
+        shownScale = view.s;
+        zoomLabel.textContent = `${Math.round(view.s * 100)}%`;
+        host.dataset.zoom = view.s.toFixed(3);
+      }
     }
     let saveTimer = 0;
     function setView(v) {
@@ -1104,6 +1120,18 @@
     // ---------- mouse ----------
     let gesture = null;
     let spaceDown = false;
+    // While a pan runs or Space is held, a sheet over the canvas shows the grab cursor and keeps the pointer off the
+    // nodes and wires. Setting the cursor on the canvas, or pointer-events on the layer, restyled every element of the
+    // graph instead (6,700 for 300 nodes: 40-90 ms when a pan started and again when it ended).
+    const panSheet = h('div', 'vs-pan-sheet');
+    panSheet.style.cssText = 'position: absolute; inset: 0; cursor: grabbing;';
+    const syncPanSheet = () => {
+      if (gesture?.kind === 'pan' || spaceDown) { if (panSheet.parentNode !== canvas || canvas.lastChild !== panSheet) canvas.appendChild(panSheet); } else panSheet.remove();
+    };
+    const startPan = () => {
+      if (!layer.style.willChange) promote();
+      syncPanSheet();
+    };
     const lastPointer = { clientX: 0, clientY: 0 };
     let suppressMenu = false;
 
@@ -1152,7 +1180,7 @@
       if (e.button === 1 || e.button === 2 || (e.button === 0 && spaceDown)) {
         e.preventDefault();
         gesture = { kind: e.button === 2 ? 'maybe-pan' : 'pan', x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
-        if (gesture.kind === 'pan') canvas.classList.add('vs-panning');
+        if (gesture.kind === 'pan') startPan();
         return;
       }
       if (e.button !== 0) return;
@@ -1199,7 +1227,7 @@
       if (g.kind === 'maybe-pan') {
         if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < DRAG_SLOP) return;
         g.kind = 'pan';
-        canvas.classList.add('vs-panning');
+        startPan();
       }
       if (g.kind === 'pan') {
         setView({ s: view.s, tx: g.tx + e.clientX - g.x, ty: g.ty + e.clientY - g.y });
@@ -1269,8 +1297,8 @@
       if (moveFrame) { cancelAnimationFrame(moveFrame); moveFrame = 0; flushMove(); }
       gesture = null;
       pendingMove = null;
-      canvas.classList.remove('vs-panning', 'vs-moving', 'vs-wiring');
-      if (g.kind === 'pan') { if (e.button === 2) suppressMenu = true; return; }
+      canvas.classList.remove('vs-moving', 'vs-wiring');
+      if (g.kind === 'pan') { syncPanSheet(); if (e.button === 2) suppressMenu = true; return; }
       if (g.kind === 'move') {
         if (g.moved && (g.dx || g.dy)) commit(VS.moveNodes(graph, g.ids, g.dx, g.dy));
         else if (g.moved) render();
@@ -1317,7 +1345,7 @@
       else canvasMenu(e);
     });
     canvas.addEventListener('dblclick', (e) => {
-      if (invalid || isField(e.target)) return;
+      if (invalid || isField(e.target) || e.target === panSheet) return;
       const nodeEl = e.target.closest('.vs-node');
       if (nodeEl) { if (nodeEl.classList.contains('vs-comment')) editComment(nodeEl.dataset.id); return; }
       if (e.target.closest('.vs-pin')) return;
@@ -1429,15 +1457,15 @@
         if (k === 'Delete' || k === 'Backspace') run = deleteSelected;
         else if (k === 'Tab') run = () => openPalette(pointerInCanvas());
         else if (k === 'Escape' && selection.size) run = () => select([]);
-        else if (k === ' ') run = () => { spaceDown = true; canvas.classList.add('vs-space'); };
+        else if (k === ' ') run = () => { spaceDown = true; syncPanSheet(); };
       }
       if (!run) return;
       e.preventDefault();
       e.stopPropagation();
       run();
     });
-    host.addEventListener('keyup', (e) => { if (e.key === ' ') { spaceDown = false; canvas.classList.remove('vs-space'); } });
-    canvas.addEventListener('blur', () => { spaceDown = false; canvas.classList.remove('vs-space'); });
+    host.addEventListener('keyup', (e) => { if (e.key === ' ') { spaceDown = false; syncPanSheet(); } });
+    canvas.addEventListener('blur', () => { spaceDown = false; syncPanSheet(); });
     // The custom tab's host gets the focus when the tab is activated; the canvas takes the keys.
     host.addEventListener('focus', (e) => { if (e.target === host) canvas.focus({ preventScroll: true }); });
 
@@ -1474,6 +1502,7 @@
 
     // ---------- startup ----------
     applyView();
+    promote();
     load();
     root.ide.util.observeSize(canvas, () => {
       if (disposed || !canvas.clientWidth) return;

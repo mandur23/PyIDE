@@ -1,6 +1,6 @@
 // Run configurations, multiple run tabs, gutter run icons, test runner (pytest + unittest fallback), Python Console.
 import { execFileSync } from 'child_process';
-import { mkdtempSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -139,10 +139,13 @@ try {
   await until(`document.querySelector('#runOut').textContent.includes('Process finished with exit code')`, 'slow stopped');
   check(!(await js(`ide.run.sessions().some(s => s.running)`)), 'Stop ends the selected run');
   await shot('run-tabs.png');
-  // Rerun while running replaces the process in the same tab; the stopped one's exit line stays out of the new console.
+  // Rerun while running replaces the process in the same tab once the user agrees ("Process 'slow' Is Running"); the
+  // stopped one's exit line stays out of the new console.
   await js(`ide.runAction('Rerun'), true`);
   await until(`document.querySelector('#runOut')?.textContent.includes('slow started') && ide.run.activeSession().running`, 'slow.py rerun');
   await js(`ide.runAction('Rerun'), true`);
+  await until(`!!document.querySelector('.run-confirm')`, 'Stop and rerun question');
+  await press('Enter');
   await until(`document.querySelector('#runOut')?.textContent.includes('slow started') && ide.run.activeSession().running`, 'slow.py rerun again');
   await sleep(1500);
   check(!(await js(`document.querySelector('#runOut').textContent.includes('Process finished')`)), 'the replaced process writes nothing into the new run console');
@@ -328,6 +331,46 @@ try {
   await until(`window.__ideReady === true && !!ide.root`, 'reloaded', 30000);
   await until(`document.querySelector('.run-target-name')?.textContent === 'units'`, 'restored selection');
   check(await js(`ide.run.configs().map(c => c.name).join('|') === 'App with args|scratch|pytest for test_calc.TestDiv.test_div|pytest in test_calc.py|calc|units|pytest in project'`), `configurations survive a restart (${await js(`ide.run.configs().map(c => c.name).join('|')`)})`);
+
+  // ---------- Run again while a before launch configuration runs ----------
+  const P = (f) => path.join(t.project, f);
+  writeFileSync(P('dep.py'), 'import time\nprint("dep started", flush=True)\ntime.sleep(4)\n');
+  writeFileSync(P('main_bl.py'), 'import time\nopen("main.txt", "ab").write(b"ran\\n")\nprint("main started", flush=True)\ntime.sleep(4)\n');
+  await js(`(() => {
+    const py = (id, name, script) => ({ id, name, type: 'python', script, params: '', cwd: '', env: '', envFiles: '.env', interp: '' });
+    ide.run.configs().push(py('cfg-dep', 'Dep', 'dep.py'), { ...py('cfg-main', 'Main', 'main_bl.py'), beforeLaunch: [{ kind: 'config', id: 'cfg-dep' }] });
+    return true;
+  })()`);
+  const cancelQuestion = async () => {
+    await js(`[...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Cancel').classList.add('pick-cancel')`);
+    await click('#dialogHost .pick-cancel');
+  };
+  const mainCfg = `ide.run.configs().find((c) => c.id === 'cfg-main')`;
+  const notes = () => js(`ide.notifications.list().map((e) => e.title + ' | ' + e.text)`);
+  const depProc = () => js(`ide.run.sessions().find((s) => s.title === 'Dep')?.procId ?? null`);
+  await js(`(ide.run.runConfig(${mainCfg}), true)`);
+  await until(`ide.run.sessions().some((s) => s.title === 'Dep' && s.running)`, 'Dep runs before Main');
+  await sleep(500);
+  await js(`(ide.run.runConfig(${mainCfg}), true)`);
+  await sleep(1000);
+  const asked = await js(`!!document.querySelector('.run-confirm')`);
+  if (asked) await cancelQuestion();
+  check(!asked, 'Run again while its before launch configuration runs starts that configuration over without asking');
+  let mainRan = true;
+  try { await until(`ide.run.sessions().some((s) => s.title === 'Main' && s.running && s.con?.out?.textContent.includes('main started'))`, 'Main started', 20000); } catch { mainRan = false; }
+  const mainOut = existsSync(P('main.txt')) ? readFileSync(P('main.txt'), 'utf8') : null;
+  check(mainRan && mainOut === 'ran\n', `Main runs once after its before launch configuration (${JSON.stringify(mainOut)})`);
+  check(!(await notes()).some((n) => n.includes('was not started')), `no "was not started" error (${JSON.stringify(await notes())})`);
+  if (mainRan) {
+    const dep = await depProc();
+    await js(`(ide.run.runConfig(${mainCfg}), true)`);
+    await until(`!!document.querySelector('.run-confirm')`, 'rerun question for Main');
+    check(await js(`document.querySelector('.run-confirm .dialog-message').textContent`) === "'Main' is running. Stop and rerun?", 'Run on the running Main asks about Main');
+    await cancelQuestion();
+    await sleep(1500);
+    check(await js(`ide.run.sessions().some((s) => s.title === 'Main' && s.running)`) && await depProc() === dep && !(await notes()).some((n) => n.includes('was not started')),
+      'Cancel keeps Main running, starts no before launch task and reports nothing');
+  }
 } catch (err) {
   check(false, err.message);
   try { console.log('sessions:', await sessionTitles(), 'selected:', await js(`ide.run.selected()?.name`)); } catch {}

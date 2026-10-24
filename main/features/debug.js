@@ -141,6 +141,7 @@ exports.register = (ctx) => {
   // as they are (a logMessage makes a logpoint). Resolves {id} once the program runs with breakpoints set.
   // opts: {params?: string[], env?: object, roots?: string[]} from a run configuration (roots go on PYTHONPATH like Run).
   // opts.startKey: names this startup for debug:stop(null, startKey), which ends it before the renderer has its id.
+  // opts.exceptions: the DAP setExceptionBreakpoints arguments (default: suspend on uncaught exceptions).
   ipcMain.handle('debug:start', async (_e, interp, file, cwd, breakpoints = [], opts = {}) => {
     let stopped = false;
     let fail;
@@ -159,10 +160,13 @@ exports.register = (ctx) => {
       const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
       const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
       const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
+      // A local script goes by its long form: pydevd resolves an 8.3 short name only while the long form fits MAX_PATH,
+      // and past that prints "unable to get real case" tracebacks into the output. Breakpoints are sent in the same form.
       const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
-        '--wait-for-client', file, ...(opts.params || [])];
+        '--wait-for-client', ep ? file : longPath(file), ...(opts.params || [])];
+      const wd = ep ? cwd : (await workingDir(cwd, opts.roots)).cwd;
       id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
-        : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: (await workingDir(cwd, opts.roots)).cwd, env });
+        : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: wd, env });
       // The renderer shows the debuggee's output from now on, so a program that ends before debugpy listens (a Python
       // debugpy cannot run on, an import error) shows why, and its output is not left buffered for nobody.
       if (key != null) send('debug:event', { id: null, startKey: key, event: 'process', body: { id } });
@@ -182,7 +186,7 @@ exports.register = (ctx) => {
         send('debug:event', { id, event, body });
         if (event === 'terminated' || event === 'exited') setTimeout(() => closeSession(id), 300);
       });
-      sessions.set(id, { dap, socket });
+      sessions.set(id, { dap, socket, remote: !!ep });
       socket.on('close', () => {
         if (sessions.delete(id)) send('debug:event', { id, event: 'closed', body: {} });
       });
@@ -190,7 +194,12 @@ exports.register = (ctx) => {
       // startup (and the Stop button) waiting forever.
       timer = setTimeout(() => fail(new Error(`debugpy did not start the debug session within ${HANDSHAKE_TIMEOUT_MS / 1000} seconds`)),
         HANDSHAKE_TIMEOUT_MS);
-      await Promise.race([configure(dap, breakpoints, ep?.pathMappings), failed]);
+      // pydevd resolves its auto-reload folders even with auto-reload off, by default the working folder, which may be
+      // an 8.3 one (run.js workingDir) it cannot resolve either; the script's folder stands in, or for `-m` (a module, the
+      // test runner) the working folder's long form.
+      const watched = file === '-m' ? longPath(path.resolve(wd || '')) : path.dirname(longPath(file));
+      const local = ep ? {} : { autoReload: { enable: false, watchDirectories: [watched] } };
+      await Promise.race([configure(dap, breakpoints, opts.exceptions, ep?.pathMappings, local), failed]);
       return { id };
     } catch (err) {
       // A failed or stopped startup must not leave the debuggee running (or listening) with nobody attached.
@@ -301,7 +310,7 @@ exports.register = (ctx) => {
       });
       timer = setTimeout(() => fail(new Error(`debugpy did not start the debug session within ${HANDSHAKE_TIMEOUT_MS / 1000} seconds`)),
         HANDSHAKE_TIMEOUT_MS);
-      await Promise.race([configure(dap, breakpoints, [], { redirectOutput: true }), failed]);
+      await Promise.race([configure(dap, breakpoints, opts.exceptions, [], { redirectOutput: true }), failed]);
       log.info(`attached to pid ${pid} (${id})`);
       return { id, pid, version };
     } catch (err) {
@@ -318,7 +327,7 @@ exports.register = (ctx) => {
     }
   });
 
-  async function configure(dap, breakpoints, pathMappings = [], extra = {}) {
+  async function configure(dap, breakpoints, exceptions = { filters: ['uncaught'] }, pathMappings = [], extra = {}) {
     await dap.request('initialize', {
       clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
@@ -334,9 +343,10 @@ exports.register = (ctx) => {
     attached.catch(() => {});
     await initialized;
     for (const bp of breakpoints) {
-      await dap.request('setBreakpoints', { source: { path: bp.path }, breakpoints: bp.lines, sourceModified: false }).catch(() => {});
+      const source = { path: pathMappings.length ? bp.path : longPath(bp.path) };
+      await dap.request('setBreakpoints', { source, breakpoints: bp.lines, sourceModified: false }).catch(() => {});
     }
-    await dap.request('setExceptionBreakpoints', { filters: ['uncaught'] }).catch(() => {});
+    await dap.request('setExceptionBreakpoints', exceptions).catch(() => {});
     await dap.request('configurationDone');
     await attached;
   }
@@ -346,6 +356,7 @@ exports.register = (ctx) => {
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);
     if (!s) throw new Error('No debug session');
+    if (command === 'setBreakpoints' && !s.remote && args?.source?.path) args = { ...args, source: { ...args.source, path: longPath(args.source.path) } };
     return s.dap.request(command, args);
   });
 

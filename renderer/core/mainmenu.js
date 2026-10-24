@@ -170,7 +170,7 @@
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },
       act('Git.Merge'), act('Git.Rebase'), act('Git.ResolveConflicts'), act('Git.Stash'), act('Git.Unstash'), act('ChangesView.Shelve'), act('Vcs.Show.Shelf'), { separator: true },
-      act('Git.Log'), act('Annotate'), act('ChangesView.Revert'), act('Compare.SameVersion'), act('Git.CompareWithBranch'), act('Git.Init'),
+      act('Git.Log'), act('Vcs.ShowTabbedFileHistory'), act('Annotate'), act('ChangesView.Revert'), act('Compare.SameVersion'), act('Git.CompareWithBranch'), act('Git.Init'),
       // Git › GitHub (github plugin), as in PyCharm.
       ...(act('Github.Share.Project') ? [{ separator: true }, { label: 'GitHub', submenu: () => tidy([act('Github.Share.Project'), act('Github.View.Pull.Request')]) }] : []),
     ]) },
