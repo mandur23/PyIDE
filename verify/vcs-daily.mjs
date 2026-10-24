@@ -324,7 +324,12 @@ try {
     'Compare with Local shows that version against the open editor\'s text');
   await shot('history-compare-local.png');
 
-  await mouse(`document.querySelector('#vcsLogPath .vcs-log-path-close')`, { label: 'Show All Commits' });
+  // After Compare with Local the diff tab has the focus; on a small screen the log's path bar can be covered or out of
+  // view for a moment, so the click waits until the × is what the pointer would hit (and says what covers it if not).
+  const closeX = `document.querySelector('#vcsLogPath .vcs-log-path-close')`;
+  const hitX = `(() => { const n = ${closeX}; if (!n) return 'missing'; n.scrollIntoView?.({ block: 'nearest' }); const r = n.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return n.contains(e) ? 'ok' : (e ? (e.id || e.className || e.tagName) : 'nothing') + ' at ' + Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height); })()`;
+  await until(`${hitX} === 'ok'`, 'the × of the path filter can be clicked', 10000).catch(async (e) => { throw new Error(`${e.message}: ${await js(hitX)}`); });
+  await mouse(closeX, { label: 'Show All Commits' });
   await until(`document.querySelector('#vcsLogPath').classList.contains('hidden') && ${h.logSubjects}.includes('Initial commit') && ${h.logSubjects}.includes('Add a friendly greeting!')`, 'all commits again');
   await until(`!document.querySelector('.vcs-history-diff') && !!document.querySelector('.vcs-log-files .vcs-side-title')?.textContent.endsWith('changed')`, 'changed files beside the log');
   check(true, 'the × on the Path filter lists every commit again, with the changed files beside them');
