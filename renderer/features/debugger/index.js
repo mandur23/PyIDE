@@ -212,24 +212,26 @@
   const matchExpr = (list) => `(lambda b: (lambda t, cs: b.max([(b.len(c.__mro__), i) for i, c in b.enumerate(cs) if c in t.__mro__] or [(0, -1)])[1])`
     + `(__exception__[0], [${list.map((x) => pyClass(x.type)).join(', ')}]))(__import__('builtins'))`;
   const stackKey = (frames) => frames.map((f) => `${f.name}\n${f.source?.path || ''}\n${f.line}`);
-  const stepping = (s) => !!s.resumedBy && s.resumedBy !== 'continue';
+  const stepping = (p) => !!p.resumedBy && p.resumedBy !== 'continue';
   // How to go on from an exception stop that is passed over: a step over that ended up deeper (the exception was
   // raised in a call it steps over) first steps out back towards the frame it started in.
-  const resumeAfterPassOver = (s, frames) => (!stepping(s) ? 'continue'
-    : s.resumedBy === 'next' && frames.length > s.resumeDepth ? 'stepOut' : s.resumedBy);
+  const resumeAfterPassOver = (p, frames) => (!stepping(p) ? 'continue'
+    : p.resumedBy === 'next' && frames.length > p.resumeDepth ? 'stepOut' : p.resumedBy);
 
   // Whether a stop on an exception is shown. pydevd stops on a raised exception again in each caller it propagates
   // through, where PyCharm's "On raise" suspends once: a stop for the same exception whose stack is the last one's
   // minus its top frame is passed over, unless a step brought it there (a step out of the raise ends in the caller).
   // Conditions are evaluated here, because pydevd takes none through DAP.
-  async function wantExceptionStop(s, threadId, frames) {
+  // p: the process that stopped (sess.procs).
+  async function wantExceptionStop(p, threadId, frames) {
+    const req = (command, args) => reqTo(p.id, command, args);
     const info = await req('exceptionInfo', { threadId }).catch(() => null);
-    s.exceptionMode = info?.breakMode || null;
+    p.exceptionMode = info?.breakMode || null;
     const keys = stackKey(frames);
     if (info?.breakMode === 'always') {
-      const last = s.raised;
-      s.raised = { id: info.exceptionId, description: info.description, keys };
-      if (!stepping(s) && last && last.id === info.exceptionId && last.description === info.description
+      const last = p.raised;
+      p.raised = { id: info.exceptionId, description: info.description, keys };
+      if (!stepping(p) && last && last.id === info.exceptionId && last.description === info.description
         && last.keys.length === keys.length + 1 && last.keys.slice(1).every((k, i) => k === keys[i])) return false;
     }
     const field = { always: 'onRaise', unhandled: 'onTerminate' }[info?.breakMode];
@@ -391,10 +393,17 @@
 
   // ---------- session ----------
   let lastActive = false; // last value sent as 'debugSessionChanged'
-  let sess = null; // {id, file, state: 'starting'|'running'|'suspended', threadId, frames, frameIdx, tempBp}
+  // sess.procs: the session's processes, the program (or attached process, under sess.id) and each Python process it
+  // started (subprocess, multiprocessing; debugpy attaches to them as PyCharm's "Attach to subprocess automatically"
+  // does): id -> {id, pid, name, child, stop (the 'stopped' body while it is suspended), resumedBy, resumeDepth,
+  // raised, exceptionMode}. sess.cur is the one Frames, Variables, Watches and the stepping actions are for.
+  let sess = null; // {id, file, state: 'starting'|'running'|'suspended', threadId, frames, frameIdx, tempBp, procs, cur}
   let earlyEvents = [];
   let startKeys = 0;
-  const req = (command, args) => ide.api.invoke('debug:request', sess.id, command, args);
+  const reqTo = (id, command, args) => ide.api.invoke('debug:request', id, command, args);
+  const req = (command, args) => reqTo(sess.cur, command, args);
+  const addProc = (s, id, props = {}) => s.procs.set(id, { id, pid: null, name: null, child: false, stop: null, ...props });
+  const SUBPROCESS_SETTING = 'debugger.attachSubprocess';
   const suspended = () => sess?.state === 'suspended';
 
   // Errors from main/features/debug.js arrive as English text; its own messages are translated here, while
@@ -432,25 +441,74 @@
   }
 
   ide.api.on('debug:event', (m) => {
-    if (m.event === 'process') return followProcess(startups.get(m.startKey), m.body.id);
+    if (m.id === null && m.event === 'process') return followProcess(startups.get(m.startKey), m.body.id);
     if (sess && !sess.id) { earlyEvents.push(m); return; }
-    if (sess && m.id === sess.id) handleEvent(m.event, m.body);
+    if (sess && (m.root ?? m.id) === sess.id) handleEvent(m);
   });
 
-  function handleEvent(event, body) {
-    if (event === 'stopped') onStopped(body);
-    else if (event === 'continued') setRunning();
+  // m: {id, root?, event, body}; root is the session's id for an event of a process the program started.
+  function handleEvent({ id, root, event, body }) {
+    if (event === 'subprocess') {
+      addProc(sess, id, { pid: body.pid, child: true });
+      con.append(`${tr('Attached to subprocess {pid}', { pid: body.pid })}\n`, 'sys');
+      return renderFrames();
+    }
+    const p = sess.procs.get(id);
+    if (!p) return;
+    if (event === 'process') {
+      p.pid = body.systemProcessId ?? p.pid;
+      p.name = body.name || null;
+      renderFrames();
+    } else if (event === 'stopped') onStopped(body, id);
+    else if (event === 'continued') onContinued(id);
     else if (event === 'output') {
       if (body.category === 'telemetry') return;
       con.append(body.output, body.category === 'stderr' ? 'err' : body.category === 'stdout' ? null : 'sys');
-    } else if (sess?.attach && event === 'exited') {
+    } else if (root != null) {
+      if (event === 'terminated' || event === 'exited' || event === 'closed') dropProc(id);
+    } else if (sess.attach && event === 'exited') {
       sess.exitCode = body.exitCode;
-    } else if (sess?.attach && event === 'closed') {
+    } else if (sess.attach && event === 'closed') {
       // An attach session ends when its connection does: after Detach, or when the target exits.
+      sess.exited = !!body.exited;
       endSession(sess, sess.exitCode);
     } else if (event === 'terminated' || event === 'exited' || event === 'closed') {
-      if (sess) setRunning();
+      p.stop = null;
+      if (sess.cur === id) setRunning();
     }
+  }
+
+  // A process the program started has ended: the view goes back to a stop another one holds, or to the program.
+  function dropProc(id) {
+    if (!sess.procs.delete(id)) return;
+    if (sess.cur !== id) return renderFrames();
+    sess.cur = sess.id;
+    if (!showNextStop()) showProc(sess.id);
+  }
+
+  // Shows the stop another process holds, if there is one.
+  function showNextStop() {
+    const next = [...sess.procs.values()].find((p) => p.stop && p.id !== sess.cur);
+    if (next) showProc(next.id);
+    return !!next;
+  }
+
+  // The process list's choice: its frames and variables when it is suspended, "Running" otherwise.
+  function showProc(id) {
+    const p = sess?.procs.get(id);
+    if (!p) return;
+    sess.cur = id;
+    setRunning();
+    if (p.stop) onStopped(p.stop, id, { again: true });
+  }
+
+  function onContinued(id) {
+    const p = sess.procs.get(id);
+    p.stop = null;
+    if (sess.cur !== id) return renderFrames();
+    // A Resume shows where another process is suspended; a step stays with this one until it stops again.
+    if (!stepping(p) && showNextStop()) return;
+    setRunning();
   }
 
   // The debuggee's output and exit from the moment main starts it, so a program that ends while debugpy is still
@@ -483,7 +541,7 @@
     lastRun = cfg.rerun || (() => debugFile(file, cfg));
     con.clear();
     con.append(`${[interp.cmd, ...interp.args].join(' ')} -m debugpy ${[file, ...(cfg.params || [])].join(' ')}\n`, 'sys');
-    sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set(), typed: [] };
+    sess = { id: null, startKey: ++startKeys, file, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set(), typed: [], procs: new Map(), cur: null };
     earlyEvents = [];
     const mine = sess;
     const handle = { ended: new Promise((resolve) => { mine.end = resolve; }) };
@@ -504,7 +562,7 @@
     startups.set(mine.startKey, mine);
     try {
       const opts = { params: cfg.params || [], env: cfg.env || {}, envFiles: cfg.envFiles, roots: ide.root ? [ide.root] : [],
-        startKey: mine.startKey, exceptions: excPayload() };
+        startKey: mine.startKey, exceptions: excPayload(), subProcess: ide.settings.get(SUBPROCESS_SETTING, true) !== false };
       const write = (text) => sess === mine && con.append(text, 'err');
       const cwd = ide.run?.workingDir ? await ide.run.workingDir(cfg.cwd || dirname(file), write) : cfg.cwd || dirname(file);
       if (sess !== mine) return handle;
@@ -532,6 +590,8 @@
       return handle;
     }
     sess.id = id;
+    sess.cur = id;
+    addProc(sess, id);
     if (sess.state === 'starting') sess.state = 'running';
     con.append(`${tr('Connected to pydev debugger (build debugpy)')}\n`, 'sys');
     updateControls();
@@ -540,9 +600,9 @@
     for (const p of mine.pendingBps) sendBps(p);
     mine.pendingBps.clear();
     if (mine.pendingExc) sendExcBps();
-    const queued = earlyEvents.filter((m) => m.id === id);
+    const queued = earlyEvents.filter((m) => (m.root ?? m.id) === id);
     earlyEvents = [];
-    for (const m of queued) handleEvent(m.event, m.body);
+    for (const m of queued) handleEvent(m);
     return handle;
   }
 
@@ -552,6 +612,7 @@
     if (sess !== s) return;
     if (!s.attach) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
     else if (code != null) con.append(`\n${tr('Process {pid} finished with exit code {code}', { pid: s.attach, code })}\n`, 'sys');
+    else if (s.exited) con.append(`\n${tr('Process {pid} finished', { pid: s.attach })}\n`, 'sys');
     else con.append(`\n${tr('Detached from process {pid}', { pid: s.attach })}\n`, 'sys');
     s.unwatch?.();
     sess = null;
@@ -597,7 +658,7 @@
     lastRun = () => attachToProcess(proc);
     con.clear();
     con.append(`${tr('Attaching to process {pid}…', { pid: proc.pid })}${proc.cmd ? `  ${proc.cmd}` : ''}\n`, 'sys');
-    sess = { id: null, startKey: ++startKeys, attach: proc.pid, file: null, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set() };
+    sess = { id: null, startKey: ++startKeys, attach: proc.pid, file: null, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set(), procs: new Map(), cur: null };
     earlyEvents = [];
     const mine = sess;
     updateControls();
@@ -605,7 +666,8 @@
     let res;
     try {
       // Main looks the process up again by pid (its interpreter and debugpy port); created guards against a reused pid.
-      res = await ide.api.invoke('debug:attach', { pid: proc.pid, created: proc.created || null }, files, { startKey: mine.startKey, exceptions: excPayload() });
+      res = await ide.api.invoke('debug:attach', { pid: proc.pid, created: proc.created || null }, files,
+        { startKey: mine.startKey, exceptions: excPayload(), subProcess: ide.settings.get(SUBPROCESS_SETTING, true) !== false });
     } catch (err) {
       if (sess === mine) {
         con.append(`${tr('Cannot attach to process {pid}: {error}', { pid: proc.pid, error: remoteError(err) })}\n`, 'err');
@@ -619,6 +681,8 @@
       return;
     }
     sess.id = res.id;
+    sess.cur = res.id;
+    addProc(sess, res.id, { pid: proc.pid });
     if (sess.state === 'starting') sess.state = 'running';
     con.append(`${res.version ? tr('Attached to process {pid} (Python {version})', { pid: proc.pid, version: res.version })
       : tr('Attached to process {pid}', { pid: proc.pid })}\n`, 'sys');
@@ -626,9 +690,9 @@
     for (const p of mine.pendingBps) sendBps(p);
     mine.pendingBps.clear();
     if (mine.pendingExc) sendExcBps();
-    const queued = earlyEvents.filter((m) => m.id === res.id);
+    const queued = earlyEvents.filter((m) => (m.root ?? m.id) === res.id);
     earlyEvents = [];
-    for (const m of queued) handleEvent(m.event, m.body);
+    for (const m of queued) handleEvent(m);
   }
 
   // Processes whose command line (or working directory, where the OS tells it) is inside the project come first.
@@ -763,21 +827,32 @@
     ide.emit('debugContextChanged');
   }
 
-  async function onStopped(body) {
+  // id: the process that stopped. again: a stop shown before (the process list), not checked as an exception stop again.
+  async function onStopped(body, id, { again = false } = {}) {
     const s = sess;
-    const threadId = body.threadId ?? s.threadId ?? 1;
+    const p = s.procs.get(id);
+    if (!p) return;
+    p.stop = body;
+    const threadId = body.threadId ?? 1;
     // The stopped thread's own name (MainThread, or a worker's) for the Frames header.
-    const threads = req('threads').then((r) => r.threads || [], () => []);
+    const threads = reqTo(id, 'threads').then((r) => r.threads || [], () => []);
     let frames = [];
-    try { ({ stackFrames: frames } = await req('stackTrace', { threadId, startFrame: 0, levels: 200 })); } catch {}
+    try { ({ stackFrames: frames } = await reqTo(id, 'stackTrace', { threadId, startFrame: 0, levels: 200 })); } catch {}
     // An exception stop that is passed over leaves the session running (the controls never flicker) and goes on with
     // what resumed it, so a step is not turned into a run.
-    if (body.reason === 'exception' && sess === s && !(await wantExceptionStop(s, threadId, frames))) {
-      if (sess === s) req(resumeAfterPassOver(s, frames), { threadId }).catch(() => {});
+    if (!again && body.reason === 'exception' && sess === s && !(await wantExceptionStop(p, threadId, frames))) {
+      if (sess === s && p.stop === body) {
+        p.stop = null;
+        reqTo(id, resumeAfterPassOver(p, frames), { threadId }).catch(() => {});
+      }
       return;
     }
-    if (sess !== s) return;
+    if (sess !== s || p.stop !== body) return;
+    // While another process's stop is shown, this one waits in the process list.
+    if (suspended() && s.cur !== id) return renderFrames();
+    s.cur = id;
     s.state = 'suspended';
+    s.exceptionMode = p.exceptionMode || null;
     s.threadId = threadId;
     s.stopReason = body.reason;
     s.stopText = body.text || '';
@@ -790,7 +865,7 @@
     updateControls();
     s.threadName = (await threads).find((th) => th.id === s.threadId)?.name || '';
     await toIdePaths(frames);
-    if (sess !== s || s.state !== 'suspended') return;
+    if (sess !== s || s.state !== 'suspended' || s.cur !== id) return;
     s.frames = frames;
     if (!tw.isVisible()) tw.show();
     // The program's input is hidden with the console: stepping and editing continue in the editor.
@@ -847,10 +922,13 @@
   function step(command) {
     if (!suspended()) return;
     const threadId = sess.threadId;
-    sess.resumedBy = command;
-    sess.resumeDepth = sess.frames.length;
+    const p = sess.procs.get(sess.cur);
+    p.resumedBy = command;
+    p.resumeDepth = sess.frames.length;
+    p.stop = null;
     setRunning();
-    req(command, { threadId }).catch((err) => con.append(`${tr('{command} failed: {error}', { command, error: remoteError(err) })}\n`, 'err'));
+    reqTo(p.id, command, { threadId }).catch((err) => con.append(`${tr('{command} failed: {error}', { command, error: remoteError(err) })}\n`, 'err'));
+    if (command === 'continue') showNextStop();
   }
   const pause = () => sess?.state === 'running' && req('pause', { threadId: sess.threadId || 1 }).catch(() => {});
 
@@ -1030,7 +1108,7 @@
     return wrap;
   }
 
-  let varsList, framesList, watchesList, threadLabel, excBar;
+  let varsList, framesList, watchesList, threadLabel, procSelect, excBar;
 
   // ---------- Set Value, Copy Value, Copy Name, Add to Watches ----------
   // Rows of the Variables and Watches lists carry row._var = {v, path, parentRef, expr}: the DAP variable, its key in
@@ -1195,8 +1273,25 @@
     excBar.replaceChildren(el('span', 'dbg-exc-dot'), data('dbg-exc-text', text, text), ...(mode ? [el('span', 'dbg-exc-mode muted', mode)] : []));
   }
 
+  const procLabel = (p) => {
+    const name = p.name && !p.name.startsWith('-') ? basename(p.name) : p.child ? tr('Subprocess') : tr('Main process');
+    return p.pid ? tr('{name} (pid {pid})', { name, pid: p.pid }) : name;
+  };
+  // The session's processes, once the program has started one: each with its state, the shown one selected.
+  function renderProcs() {
+    const list = sess ? [...sess.procs.values()] : [];
+    procSelect.classList.toggle('hidden', list.length < 2);
+    procSelect.replaceChildren(...(list.length < 2 ? [] : list.map((p) => {
+      const o = el('option', null, `${procLabel(p)} · ${p.stop ? stopReasonLabel(p.stop.reason) : tr('Running')}`);
+      o.selected = p.id === sess.cur;
+      o.dataset.userText = '';
+      return o;
+    })));
+  }
+
   function renderFrames() {
     if (!framesList) return;
+    renderProcs();
     renderException();
     threadLabel.textContent = !sess ? '' : suspended() ? `${sess.threadName ? `${sess.threadName} · ` : ''}${stopReasonLabel(sess.stopReason)}` : tr('Running');
     if (!suspended()) {
@@ -1602,6 +1697,11 @@
       const frames = pane(tr('Frames'));
       threadLabel = el('span', 'dbg-thread muted');
       frames.head.insertBefore(threadLabel, frames.head.children[1]);
+      procSelect = el('select', 'dbg-procs hidden');
+      procSelect.id = 'dbgProcesses';
+      procSelect.title = tr('Processes');
+      procSelect.onchange = () => showProc([...sess.procs.keys()][procSelect.selectedIndex]);
+      frames.head.insertBefore(procSelect, threadLabel);
       framesList = frames.list;
       framesList.id = 'dbgFrames';
       ide.ui.listKeys(framesList, { rows: '.dbg-frame', select: (row) => row.click() });
@@ -1754,6 +1854,18 @@
   // A file a configuration type claims has that type's own Debug entry (Debug 'pytest in …').
   ide.registerTreeAction({ title: tr("Debug '…'"), when: (e) => !e.dir && e.name.endsWith('.py') && !claimingType(e.path), run: (e) => debugFile(e.path) });
 
+  // PyCharm's Settings › Build, Execution, Deployment › Python Debugger. Off, the Python processes a debugged program
+  // starts run without the debugger (debugpy --configure-subProcess False; an attached process's are let go).
+  (ide.settingsPages ||= []).push({
+    id: 'python-debugger', title: () => tr('Python Debugger'), defaults: { [SUBPROCESS_SETTING]: true },
+    keywords: 'debugger subprocess multiprocessing child process attach automatically 디버거 하위 프로세스 자동 연결',
+    mount(host, ctx) {
+      const sec = ctx.ui.section(host, tr('Python Debugger'));
+      sec.appendChild(ctx.ui.checkbox(SUBPROCESS_SETTING, tr('Attach to subprocess automatically while debugging')));
+      sec.appendChild(el('div', 'muted settings-note', tr('Breakpoints also suspend the Python processes a debugged program starts (subprocess, multiprocessing). Off, they run without the debugger.')));
+    },
+  });
+
   // evaluate(expression, context) runs in the selected frame and resolves {value, type} or {error}.
   // 'debugContextChanged' fires when the selected frame changes or the program resumes or ends.
   ide.debugger = {
@@ -1771,5 +1883,6 @@
     // Sends a file's breakpoints to the running session again (a generated source's changed).
     sendBreakpoints: sendBps,
   };
-  window.__debugger = { state: () => sess && { id: sess.id, attach: sess.attach || null, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
+  window.__debugger = { state: () => sess && { id: sess.id, attach: sess.attach || null, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })),
+    cur: sess.cur, procs: [...sess.procs.values()].map((p) => ({ id: p.id, pid: p.pid, child: p.child, stopped: !!p.stop })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };
 })();

@@ -3,6 +3,7 @@
 // Messages thrown here are English; the renderer (renderer/features/debugger/index.js, MAIN_ERRORS) translates them.
 const fs = require('fs');
 const net = require('net');
+const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
 const remote = require('../remote');
@@ -177,23 +178,81 @@ function ignoresPythonPath(args = []) {
   return false;
 }
 
+const DEFAULT_EXCEPTIONS = { filters: ['uncaught'] };
+
 exports.register = (ctx) => {
   const { ipcMain, send, startProcess, killProcess, procs, vendorDir } = ctx;
-  const sessions = new Map(); // procId -> {dap, socket}
+  // id -> {dap, socket, group, remote?, attach?, pid?}. A debuggee and the Python processes it starts (subprocess,
+  // multiprocessing) form a group: one session each, under the debuggee's id (root) and `<root>/<pid>` for the others.
+  const sessions = new Map();
   const starting = new Map(); // opts.startKey of a debug:start in progress -> its stop()
+
+  // group: {root, port, remote, subProcess, members: Set<id>, bps: Map<path key, setBreakpoints args>, exceptions}.
+  // bps and exceptions are what the IDE last set, so a process that starts later gets the breakpoints of now.
+  const newGroup = (root, port, { remote = false, subProcess = true, breakpoints = [], exceptions = DEFAULT_EXCEPTIONS } = {}) => ({
+    root, port, remote, subProcess, members: new Set([root]), exceptions,
+    bps: new Map(breakpoints.map((bp) => {
+      const args = { source: { path: remote ? bp.path : longPath(bp.path) }, breakpoints: bp.lines, sourceModified: false };
+      return [args.source.path.toLowerCase(), args];
+    })),
+  });
 
   const closeSession = (id) => {
     const s = sessions.get(id);
     if (!s) return;
     sessions.delete(id);
     s.socket.destroy();
+    s.group.members.delete(id);
+    // The debuggee's session ends its group: processes it started that still run go on without the debugger.
+    if (s.group.root === id) for (const m of [...s.group.members]) closeSession(m);
   };
+
+  // debugpy holds a process the debuggee starts until a client attaches to it, and announces it with debugpyAttach
+  // (body: the attach arguments for it, with subProcessId). It gets its own connection to the same adapter, set up with
+  // the group's breakpoints. With "Attach to subprocess automatically" off it is only let go (a launch then has no such
+  // event at all: the debuggee runs with --configure-subProcess False).
+  async function attachChild(group, body) {
+    const pid = Number(body.subProcessId);
+    const id = `${group.root}/${pid}`;
+    if (!sessions.has(group.root) || sessions.has(id)) return;
+    const socket = await connectOnce(group.port).catch((err) => { log.warn(`subprocess ${pid}: ${err.message}`); return null; });
+    if (!socket) return;
+    if (!sessions.has(group.root)) { socket.destroy(); return; }
+    socket.setNoDelay(true);
+    const root = sessions.get(group.root);
+    const dap = new DapClient(socket, (event, b) => {
+      if (event === 'debugpyAttach') return void attachChild(group, b);
+      send('debug:event', { id, root: group.root, event, body: b });
+      if (event === 'terminated' || event === 'exited') setTimeout(() => closeSession(id), 300);
+    });
+    sessions.set(id, { dap, socket, group, remote: root.remote, attach: root.attach, pid });
+    group.members.add(id);
+    socket.on('close', () => {
+      group.members.delete(id);
+      if (sessions.delete(id)) send('debug:event', { id, root: group.root, event: 'closed', body: {} });
+    });
+    if (group.subProcess) send('debug:event', { id, root: group.root, event: 'subprocess', body: { pid, name: body.name } });
+    let timer;
+    try {
+      const timeout = new Promise((_r, reject) => { timer = setTimeout(() => reject(new Error('timed out')), HANDSHAKE_TIMEOUT_MS); });
+      const bps = group.subProcess ? [...group.bps.values()] : [];
+      await Promise.race([configure(dap, body, bps, group.subProcess ? group.exceptions : { filters: [] }), timeout]);
+      log.info(`${group.subProcess ? 'attached to' : 'released'} subprocess ${pid} of #${group.root}`);
+      if (!group.subProcess) await dap.request('disconnect', { terminateDebuggee: false }).catch(() => {});
+    } catch (err) {
+      log.warn(`subprocess ${pid}: ${err.message}`);
+      closeSession(id);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   // breakpoints: [{path, lines: [{line, condition?, hitCondition?, logMessage?}]}], DAP SourceBreakpoints passed to debugpy
   // as they are (a logMessage makes a logpoint). Resolves {id} once the program runs with breakpoints set.
   // opts: {params?: string[], env?: object, roots?: string[]} from a run configuration (roots go on PYTHONPATH like Run).
   // opts.startKey: names this startup for debug:stop(null, startKey), which ends it before the renderer has its id.
   // opts.exceptions: the DAP setExceptionBreakpoints arguments (default: suspend on uncaught exceptions).
+  // opts.subProcess: false runs the Python processes the program starts without the debugger (default: debugged too).
   ipcMain.handle('debug:start', async (_e, interp, file, cwd, breakpoints = [], opts = {}) => {
     let stopped = false;
     let fail;
@@ -219,8 +278,12 @@ exports.register = (ctx) => {
       const longWd = !ep && wd ? longPath(path.resolve(wd)) : null;
       const fixes = [!ep && ignoresPythonPath(interp.args) ? vendorDir : '', longWd && longWd !== path.resolve(wd) ? '1' : ''];
       const launcher = fixes.some(Boolean) ? ['-c', DEBUGPY_LAUNCHER, ...fixes] : ['-m', 'debugpy'];
+      // In a remote target the processes the program starts run without the debugger: their debugpy would reach the
+      // adapter through this side's forward, and their paths would need the target's mappings, neither of which is
+      // tested (the fake targets map paths for the program's own debugpy only).
+      const subProcess = opts.subProcess !== false && !ep;
       const pyArgs = ['-X', 'frozen_modules=off', ...launcher, '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
-        '--wait-for-client', ep ? file : longPath(file), ...(opts.params || [])];
+        '--wait-for-client', ...(subProcess ? [] : ['--configure-subProcess', 'False']), ep ? file : longPath(file), ...(opts.params || [])];
       id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
         : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: wd, env });
       // The renderer shows the debuggee's output from now on, so a program that ends before debugpy listens (a Python
@@ -238,13 +301,17 @@ exports.register = (ctx) => {
       connecting.then((sock) => { if (stopped) sock.destroy(); }, () => {});
       const socket = await Promise.race([connecting, failed]);
       socket.setNoDelay(true);
+      const group = newGroup(id, port, { remote: !!ep, subProcess, breakpoints, exceptions: opts.exceptions });
       const dap = new DapClient(socket, (event, body) => {
+        if (event === 'debugpyAttach') return void attachChild(group, body);
         send('debug:event', { id, event, body });
         if (event === 'terminated' || event === 'exited') setTimeout(() => closeSession(id), 300);
       });
-      sessions.set(id, { dap, socket, remote: !!ep });
+      sessions.set(id, { dap, socket, group, remote: !!ep });
       socket.on('close', () => {
-        if (sessions.delete(id)) send('debug:event', { id, event: 'closed', body: {} });
+        const open = sessions.has(id);
+        closeSession(id);
+        if (open) send('debug:event', { id, event: 'closed', body: {} });
       });
       // A debugpy that accepts the connection but never answers or never sends 'initialized' would otherwise keep this
       // startup (and the Stop button) waiting forever.
@@ -255,7 +322,7 @@ exports.register = (ctx) => {
       // test runner) the working folder's long form.
       const watched = file === '-m' ? longWd || path.resolve(wd || '') : path.dirname(longPath(file));
       const local = ep ? {} : { autoReload: { enable: false, watchDirectories: [watched] } };
-      await Promise.race([configure(dap, breakpoints, opts.exceptions, ep?.pathMappings, local), failed]);
+      await Promise.race([configure(dap, attachArgs(ep?.pathMappings, local), [...group.bps.values()], group.exceptions), failed]);
       return { id };
     } catch (err) {
       // A failed or stopped startup must not leave the debuggee running (or listening) with nobody attached.
@@ -320,6 +387,7 @@ exports.register = (ctx) => {
     const id = `attach-${++attachSeq}`;
     let timer;
     let socket = null;
+    let port = null;
     try {
       const state = attachTo.pidState(pid);
       if (!state) throw new Error(`Process ${pid} is not running`);
@@ -331,14 +399,14 @@ exports.register = (ctx) => {
       if (known && !(known.created && known.created === proc.created)) listening.delete(pid);
       // A process whose debugpy already listens (attached before, or a program that called debugpy.listen()) is
       // connected to directly: injecting again would call debugpy.listen() a second time, which debugpy refuses.
-      for (const port of new Set([listening.get(pid)?.port, proc.debugPort].filter(attachTo.validPort))) {
-        socket = await connectOnce(port).catch(() => null);
+      for (const p of new Set([listening.get(pid)?.port, proc.debugPort].filter(attachTo.validPort))) {
+        socket = await connectOnce(p).catch(() => null);
         if (stopped) throw stoppedError();
-        if (socket) break;
+        if (socket) { port = p; break; }
       }
       if (!socket) {
         if (!proc.exe) throw new Error(`Access denied: cannot attach to process ${pid}`);
-        const port = await step(freePort());
+        port = await step(freePort());
         const injecting = attachTo.inject({ exe: proc.exe, pid, port, vendorDir, isStopped: () => stopped,
           onChild: (c) => { injector = c; if (stopped) attachTo.killTree(c); } });
         // Also when a Stop won the race: the target's debugpy now listens there, and a later attach must connect to it
@@ -356,17 +424,30 @@ exports.register = (ctx) => {
       if (stopped) throw stoppedError();
       socket.setNoDelay(true);
       const sock = socket;
-      const dap = new DapClient(sock, (event, body) => send('debug:event', { id, event, body }));
-      sessions.set(id, { dap, socket: sock, attach: pid });
-      // Detaching, the target exiting and a lost connection all end an attach session through 'closed'.
-      sock.on('close', () => {
-        sessions.delete(id);
+      const subProcess = opts.subProcess !== false;
+      const group = newGroup(id, port, { subProcess, breakpoints, exceptions: opts.exceptions });
+      let terminated = false;
+      const dap = new DapClient(sock, (event, body) => {
+        if (event === 'debugpyAttach') return void attachChild(group, body);
+        send('debug:event', { id, event, body });
+        // The adapter debugpy.listen() started outlives the program, so its connection stays open after the program ends.
+        if (event === 'terminated') {
+          terminated = true;
+          setTimeout(() => closeSession(id), 300);
+        }
+      });
+      sessions.set(id, { dap, socket: sock, group, attach: pid });
+      // Detaching, the target exiting and a lost connection all end an attach session through 'closed' (exited: the
+      // process is gone, waited for a little after 'terminated' while it finishes exiting).
+      sock.on('close', async () => {
+        closeSession(id);
+        for (let i = 0; terminated && i < 30 && attachTo.pidState(pid); i++) await new Promise((r) => setTimeout(r, 100));
         forget(pid);
-        send('debug:event', { id, event: 'closed', body: {} });
+        send('debug:event', { id, event: 'closed', body: { exited: !attachTo.pidState(pid) } });
       });
       timer = setTimeout(() => fail(new Error(`debugpy did not start the debug session within ${HANDSHAKE_TIMEOUT_MS / 1000} seconds`)),
         HANDSHAKE_TIMEOUT_MS);
-      await Promise.race([configure(dap, breakpoints, opts.exceptions, [], { redirectOutput: true }), failed]);
+      await Promise.race([configure(dap, attachArgs([], { redirectOutput: true }), [...group.bps.values()], group.exceptions), failed]);
       log.info(`attached to pid ${pid} (${id})`);
       return { id, pid, version };
     } catch (err) {
@@ -383,25 +464,26 @@ exports.register = (ctx) => {
     }
   });
 
-  async function configure(dap, breakpoints, exceptions = { filters: ['uncaught'] }, pathMappings = [], extra = {}) {
+  // The bundled debugpy is not under site-packages, so justMyCode would take it for the program's own code: a Pause
+  // while it is still starting the program would stop in debugpy's frames and show its locals. debugpy hands these
+  // arguments on to the processes the program starts, in debugpyAttach.
+  const attachArgs = (pathMappings = [], extra = {}) => ({ justMyCode: true, rules: [{ module: 'debugpy', include: false }],
+    redirectOutput: false, showReturnValue: true, ...extra,
+    // A Linux debugpy translates this side's backslash paths only when told the client is Windows.
+    ...(pathMappings.length ? { pathMappings, clientOS: process.platform === 'win32' ? 'windows' : 'unix' } : {}) });
+
+  // breakpoints: setBreakpoints arguments, the path in the form debugpy reports (longPath for a local one).
+  async function configure(dap, args, breakpoints, exceptions) {
     await dap.request('initialize', {
       clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
     });
     const initialized = dap.waitEvent('initialized');
     // debugpy answers attach only after configurationDone, so it is awaited last.
-    // The bundled debugpy is not under site-packages, so justMyCode would take it for the program's own code: a Pause
-    // while it is still starting the program would stop in debugpy's frames and show its locals.
-    const attached = dap.request('attach', { justMyCode: true, rules: [{ module: 'debugpy', include: false }], redirectOutput: false,
-      showReturnValue: true, subProcess: false, ...extra,
-      // A Linux debugpy translates this side's backslash paths only when told the client is Windows.
-      ...(pathMappings.length ? { pathMappings, clientOS: process.platform === 'win32' ? 'windows' : 'unix' } : {}) });
+    const attached = dap.request('attach', args);
     attached.catch(() => {});
     await initialized;
-    for (const bp of breakpoints) {
-      const source = { path: pathMappings.length ? bp.path : longPath(bp.path) };
-      await dap.request('setBreakpoints', { source, breakpoints: bp.lines, sourceModified: false }).catch(() => {});
-    }
+    for (const bp of breakpoints) await dap.request('setBreakpoints', bp).catch(() => {});
     await dap.request('setExceptionBreakpoints', exceptions).catch(() => {});
     await dap.request('configurationDone');
     await attached;
@@ -409,10 +491,16 @@ exports.register = (ctx) => {
 
   ipcMain.handle('debug:longPaths', (_e, paths) => paths.map((p) => longPath(String(p))));
 
+  // Breakpoints belong to the whole group: kept for the processes that start later and sent to the others too.
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);
     if (!s) throw new Error('No debug session');
     if (command === 'setBreakpoints' && !s.remote && args?.source?.path) args = { ...args, source: { ...args.source, path: longPath(args.source.path) } };
+    const { group } = s;
+    if (command === 'setBreakpoints' && args?.source?.path) group.bps.set(args.source.path.toLowerCase(), args);
+    else if (command === 'setExceptionBreakpoints') group.exceptions = args;
+    else return s.dap.request(command, args);
+    for (const m of group.members) if (m !== id) sessions.get(m)?.dap.request(command, args).catch(() => {});
     return s.dap.request(command, args);
   });
 
@@ -421,8 +509,14 @@ exports.register = (ctx) => {
     if (id == null) return starting.get(startKey)?.();
     const s = sessions.get(id);
     if (s) {
-      // An attached process is only detached from, never ended (PyCharm's Stop on an attached process detaches).
-      await Promise.race([s.dap.request('disconnect', { terminateDebuggee: !s.attach }).catch(() => {}), new Promise((r) => setTimeout(r, 800))]);
+      // An attached process is only detached from, never ended (PyCharm's Stop on an attached process detaches). A
+      // launched one ends with the processes it started, which do not all die with it (a Popen it does not wait for).
+      const group = [...s.group.members].map((m) => sessions.get(m)).filter(Boolean);
+      await Promise.race([Promise.all(group.map((m) => m.dap.request('disconnect', { terminateDebuggee: !s.attach }).catch(() => {}))),
+        new Promise((r) => setTimeout(r, 800))]);
+      if (!s.attach && !s.remote) {
+        for (const m of group) if (m.pid) spawn('taskkill', ['/pid', String(m.pid), '/T', '/F'], { windowsHide: true }).on('error', () => {});
+      }
       closeSession(id);
     }
     if (!s?.attach && procs.has(id)) killProcess(id);

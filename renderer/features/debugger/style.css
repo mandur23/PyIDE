@@ -42,6 +42,8 @@
 .dbg-pane-head { height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 0 8px;
   color: var(--gray9); font-size: 12px; border-bottom: 1px solid var(--gray2); }
 .dbg-thread { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbg-procs { min-width: 0; max-width: 60%; flex-shrink: 1; height: 20px; font-size: 11px; background: var(--gray1);
+  color: var(--gray11); border: 1px solid var(--gray3); border-radius: 4px; }
 .dbg-mini { width: 20px; height: 20px; border-radius: 4px; color: var(--gray11); font-size: 15px; line-height: 1; }
 .dbg-mini:hover { background: var(--gray3); }
 .dbg-list { flex: 1; overflow: auto; padding: 2px 0; outline: none; font: 12.5px/1.6 var(--mono); }
