@@ -464,7 +464,8 @@
     });
   }
 
-  // cfg (from a run configuration): {interp?, cwd?, params?, env?, envFiles?} (envFiles: absolute .env paths; default the root's .env)
+  // cfg (from a run configuration): {interp?, cwd?, params?, env?, envFiles?, rerun?, tabs?} (envFiles: absolute .env paths;
+  // default the root's .env; tabs: the session's plugin sub-tabs, see setSessionTabs)
   // Resolves once the session runs, failed to start or already ended, to {ended}: a promise of {replaced} that settles
   // when this session ends (replaced: another debug session took its place). Undefined when no session was started.
   async function debugFile(file, cfg = {}) {
@@ -474,6 +475,7 @@
     showSub('console');
     if (!interp) { con.append(`${tr('No Python interpreter found.')}\n`, 'err'); return; }
     if (sess) await replaceSession();
+    setSessionTabs(cfg.tabs);
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     lastFile = file;
     lastCfg = cfg;
@@ -591,6 +593,7 @@
     tw.show();
     showSub('console');
     if (sess) await replaceSession();
+    setSessionTabs();
     lastRun = () => attachToProcess(proc);
     con.clear();
     con.append(`${tr('Attaching to process {pid}…', { pid: proc.pid })}${proc.cmd ? `  ${proc.cmd}` : ''}\n`, 'sys');
@@ -1494,13 +1497,52 @@
   }
 
   // ---------- tool window ----------
-  let con, tw, subTabs, subPanes, lastFile = null, lastCfg = {};
+  let con, tw, subTabs, subPanes, subSep, shownSub = 'debugger', lastFile = null, lastCfg = {};
   let lastRun = null; // Rerun: debugs the last file again or attaches to the last process again
   const btns = {};
 
   function showSub(which) {
+    if (!subTabs[which]) which = 'console';
+    shownSub = which;
     for (const [k, b] of Object.entries(subTabs)) b.classList.toggle('active', k === which);
     for (const [k, p] of Object.entries(subPanes)) p.classList.toggle('hidden', k !== which);
+  }
+
+  // A plugin's sub-tabs of the session (debugFile's cfg.tabs: [{id, title, select?, mount(host, tab) -> {dispose?}}]),
+  // after Threads & Variables and Console, as PyCharm shows a debugged test run's Test Results there. They belong to
+  // the session that started with them and stay after it ends, until the next session starts. tab: {show(), setIcon}.
+  let sessionTabs = [];
+  function setSessionTabs(list = []) {
+    for (const t of sessionTabs.splice(0)) {
+      t.closed = true;
+      try { t.mounted?.dispose?.(); } catch (err) { ide.log.error(`debugger tab ${t.id}: ${err?.stack || err}`); }
+      t.button.remove();
+      t.pane.remove();
+      delete subTabs[t.key];
+      delete subPanes[t.key];
+    }
+    for (const def of list) {
+      const key = `tab:${def.id}`;
+      const icon = el('span', 'dbg-subtab-icon hidden');
+      const button = el('button', 'dbg-subtab dbg-plugin-tab');
+      button.dataset.tab = def.id;
+      button.append(icon, el('span', null, def.title));
+      const pane = el('div', 'dbg-plugin-pane hidden');
+      pane.dataset.tab = def.id;
+      const t = { id: def.id, key, button, pane, closed: false, select: !!def.select };
+      const handle = {
+        show() { if (t.closed) return false; tw.show(); showSub(key); return true; },
+        setIcon(glyph, cls = '') { icon.textContent = glyph || ''; icon.className = `dbg-subtab-icon ${cls}${glyph ? '' : ' hidden'}`; },
+      };
+      button.onclick = () => showSub(key);
+      subSep.before(button);
+      subPanes.console.after(pane);
+      subTabs[key] = button;
+      subPanes[key] = pane;
+      sessionTabs.push(t);
+      try { t.mounted = def.mount(pane, handle) || null; } catch (err) { ide.log.error(`debugger tab ${def.id}: ${err?.stack || err}`); }
+    }
+    showSub(sessionTabs.find((t) => t.select)?.key || shownSub);
   }
 
   function pane(title, actions = []) {
@@ -1531,7 +1573,8 @@
       subTabs.console.id = 'dbgTabConsole';
       subTabs.debugger.onclick = () => showSub('debugger');
       subTabs.console.onclick = () => { showSub('console'); con.input.focus(); };
-      bar.append(subTabs.debugger, subTabs.console, el('span', 'dbg-sep'));
+      subSep = el('span', 'dbg-sep');
+      bar.append(subTabs.debugger, subTabs.console, subSep);
       // action: the action whose current shortcut the tooltip shows.
       const mk = (id, icon, title, run, cls = '', action = null) => {
         const b = el('button', `dbg-btn ${cls}`, icon);

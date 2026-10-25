@@ -28,12 +28,33 @@ function observeSize(target, fn) {
 }
 const dirname = (p) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')));
 const joinPath = (a, b) => `${a.replace(/[\\/]+$/, '')}\\${b}`;
-const samePath = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+// A file's identity: its path in lower case, except the names inside folders with case sensitivity turned on, where
+// a.py and A.py are two files. Main finds those folders (main/path-case.js, which keys paths the same way) when a
+// project or document opens (learnPathCase), before the document is keyed.
+const caseSensitive = new Set(); // dirKey of each case-sensitive folder
+const caseSensitiveLower = [];
+const dirKey = (key) => key.replace(/[\\/]+/g, '\\').replace(/\\$/, '');
+const pathKey = (p) => {
+  const lower = p.toLowerCase();
+  if (!caseSensitive.size) return lower;
+  const probe = `${dirKey(lower)}\\`;
+  if (!caseSensitiveLower.some((d) => probe.startsWith(`${d}\\`))) return lower;
+  const parts = p.split(/([\\/]+)/);
+  let key = '';
+  for (let i = 0; i < parts.length; i += 2) key += (i && caseSensitive.has(dirKey(key)) ? parts[i] : parts[i].toLowerCase()) + (parts[i + 1] || '');
+  return key;
+};
+const learnPathCase = async (folder) => {
+  for (const k of await window.api.invoke('fs:caseSensitiveDirs', folder).catch(() => [])) {
+    if (!caseSensitive.has(k)) { caseSensitive.add(k); caseSensitiveLower.push(k.toLowerCase()); }
+  }
+};
+const samePath = (a, b) => !!a && !!b && pathKey(a) === pathKey(b);
 // `p` is `dir` itself or inside it: a whole-segment prefix, so C:\proj\pkg does not contain C:\proj\pkg2.
 const isUnder = (p, dir) => {
   if (!p || !dir) return false;
-  const a = p.toLowerCase();
-  const b = dir.toLowerCase().replace(/[\\/]+$/, '');
+  const a = pathKey(p);
+  const b = pathKey(dir.replace(/[\\/]+$/, ''));
   return a === b || (a.startsWith(b) && '\\/'.includes(a[b.length]));
 };
 
@@ -52,10 +73,12 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, basename, dirname, joinPath, samePath, isUnder, observeSize, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');
+// Which of `folder` and its parents are case-sensitive; editors ask for each document they open, before keying it.
+ide.learnPathCase = learnPathCase;
 
 // ---------- events ----------
 const listeners = new Map();
@@ -992,13 +1015,13 @@ moreBtn.onclick = () => {
 ide.on('settingsChanged', (key) => { if (key === 'sidebar.pinned') refreshStripe(); });
 
 // ---------- problems ----------
-const problemStore = new Map(); // source -> Map(pathLower -> {path, items})
+const problemStore = new Map(); // source -> Map(pathKey -> {path, items})
 const SEVERITY = () => ({ error: ide.monaco.MarkerSeverity.Error, warning: ide.monaco.MarkerSeverity.Warning, info: ide.monaco.MarkerSeverity.Info });
 
 function applyMarkers(tab) {
   if (!tab?.model) return;
   for (const [source, files] of problemStore) {
-    const entry = files.get(tab.path.toLowerCase());
+    const entry = files.get(pathKey(tab.path));
     ide.monaco.editor.setModelMarkers(tab.model, source, (entry?.items || []).map((p) => ({
       severity: SEVERITY()[p.severity || 'error'], message: p.msg, source,
       startLineNumber: p.line, startColumn: p.col || 1,
@@ -1012,7 +1035,7 @@ ide.problems = {
   set(source, path, items) {
     if (!problemStore.has(source)) problemStore.set(source, new Map());
     const files = problemStore.get(source);
-    if (items?.length) files.set(path.toLowerCase(), { path, items }); else files.delete(path.toLowerCase());
+    if (items?.length) files.set(pathKey(path), { path, items }); else files.delete(pathKey(path));
     const tab = ide.findTab(path);
     if (tab) applyMarkers(tab);
     ide.emit('problemsChanged');
@@ -1819,6 +1842,7 @@ ide.openProject = async (dir) => {
   const latest = () => my === openSeq;
   const trust = await askTrust(dir);
   if (!trust || !latest()) return false;
+  await learnPathCase(dir);
   if (!(await projectChangeAllowed(dir)) || !latest() || !(await ide.closeAllTabs(false)) || !latest()) return false;
   ide.trusted = trust === 'trusted';
   if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
@@ -1982,7 +2006,9 @@ ide.api = { ...window.api, invoke: (channel, ...args) => {
   return window.api.invoke(channel, ...args);
 } };
 
-// Plugin scripts are fetched in parallel; async = false still runs them in list order (dependencies first).
+// Plugin scripts are fetched in parallel; async = false still runs them in list order (dependencies first). Each runs
+// as its own script, so one that cannot be read or throws stops only itself; diagnostics.js reports it and keeps the
+// reason for the Plugins page (ideDiagnostics.pluginLoadErrors), told apart from later errors by data-plugin.
 async function loadFeatures() {
   const plugins = await ide.api.invoke('core:features');
   await Promise.all(plugins.map((p) => {
@@ -1996,8 +2022,8 @@ async function loadFeatures() {
       const s = el('script');
       s.src = p.script;
       s.async = false;
-      s.onload = resolve;
-      s.onerror = () => { console.error(`plugin ${p.id} failed to load`); resolve(); };
+      Object.assign(s.dataset, { plugin: p.id, pluginName: p.name });
+      s.onload = s.onerror = resolve;
       document.body.appendChild(s);
     });
   }));

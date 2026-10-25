@@ -155,22 +155,45 @@ await section('A script folder longer than Windows allows', async () => {
     `Debug in a folder whose short form is too long runs in the project root and says so (${q(out.slice(-400))})`);
   check(!pydevdLost(out), `and debugpy finds that script by its real name too (${q(pydevdLost(out))})`);
 
-  // Module name and pytest runs hand debugpy `-m`, so no script names the folder pydevd watches. Known limit: `-m`
-  // imports over.py through the 8.3 working folder, and a breakpoint in it still gets pydevd's error, so it goes.
+  // Module name and pytest runs hand debugpy `-m`, so no script names the folder pydevd watches, and `-m` imports over.py
+  // through the working folder, here its 8.3 form. The breakpoint on its line 2 stays.
   writeFileSync(path.join(deep, 'test_over.py'), 'def test_over():\n    assert True\n');
-  await openFile(t, path.relative(t.project, path.join(deep, 'over.py')));
-  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }))`);
-  await press('Ctrl+F8');
-  const debugCfg = async (cfg, mark) => {
+  const debugCfg = async (cfg, mark, stop = null) => {
     await js(`(ide.run.debugConfig(ide.run.addTemporary(${q(cfg)})), true)`);
+    if (stop) {
+      await until(`!!ide.debugger.stopped()`, `${mark} stopped`, 60000).catch(() => {});
+      stop.frame = await js(`ide.debugger.stopped()?.frames[0] || null`);
+      await press('F9');
+    }
     await until(`${DBG_OUT}.split('\\n')[0].includes(${q(mark)}) && ${DBG_OUT}.includes('Process finished')`, `${mark} debugged`, 60000).catch(() => {});
     return js(DBG_OUT);
   };
-  out = await debugCfg({ type: 'python', name: 'over module', runMode: 'module', module: 'over', cwd: deep }, '-m over');
+  const modStop = {};
+  out = await debugCfg({ type: 'python', name: 'over module', runMode: 'module', module: 'over', cwd: deep }, '-m over', modStop);
+  check(modStop.frame?.line === 2 && modStop.frame.path?.toLowerCase() === path.join(deep, 'over.py').toLowerCase(),
+    `Debug of a Module name configuration stops at a breakpoint in the module it runs (${q(modStop.frame)})`);
   check(realIn(out) === real(deep) && out.includes('exit code 0') && !pydevdLost(out),
     `Debug of a Module name configuration in a ${deep.length}-character folder runs there with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
   out = await debugCfg({ type: 'pytest', name: 'pytest over', target: path.join(deep, 'test_over.py'), cwd: deep, args: '-p no:cacheprovider' }, '-m pytest');
   check(/1 passed/.test(out) && !pydevdLost(out), `Debug of pytest in a ${deep.length}-character folder runs the test with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
+
+  const NODE_CWD = `-e "console.log('CWD=' + process.cwd())"`;
+  const toolOut = (call) => js(`${call}.then((r) => r.error ? { error: r.error } : new Promise((resolve) => {
+    let out = '';
+    const timer = setTimeout(() => resolve({ out, code: 'timeout' }), 20000);
+    ide.proc.attach(r.id, { data: (s) => (out += s), exit: (code) => { clearTimeout(timer); resolve({ out, code }); } });
+  }))`);
+  const cwdOf = (r) => {
+    const m = /CWD=(.*)/.exec(r.out || '');
+    try { return m && realpathSync.native(m[1].trim()).toLowerCase(); } catch { return m?.[1]; }
+  };
+  const startTool = (dir) => toolOut(`ide.api.invoke('run:startTool', { program: ${q(process.execPath)}, args: ${q(NODE_CWD)}, cwd: ${q(dir)}, macros: { projectDir: ide.root } })`);
+  let tool = await startTool(deep);
+  check(tool.code === 0 && cwdOf(tool) === real(deep), `a Before launch tool in a ${deep.length}-character folder runs there (${q(tool)})`);
+  tool = await startTool(deeper);
+  check(tool.code === 0 && cwdOf(tool) === real(t.project), `a Before launch tool in a folder whose short form is too long runs in the project root (${q(tool)})`);
+  tool = await toolOut(`ide.api.invoke('fileWatchers:run', { root: ide.root, file: ${q(path.join(deep, 'over.py'))}, program: ${q(process.execPath)}, args: ${q(NODE_CWD)}, cwd: '' })`);
+  check(tool.code === 0 && cwdOf(tool) === real(deep), `a File Watcher for a file in a ${deep.length}-character folder runs in the file's folder (${q(tool)})`);
   const longErrs = (await errorsNow(t)).slice(errs2);
   check(!longErrs.length, `long folders record no internal error (${q(longErrs)})`);
 });

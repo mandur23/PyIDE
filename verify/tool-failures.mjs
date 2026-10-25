@@ -109,7 +109,8 @@ const commitBox = (js) => js(`(ide.toolWindows.get('Commit').show(), new Promise
         const cwd = path.join(base, dir);
         mkdirSync(cwd);
         writeFileSync(path.join(cwd, 'run.bat'), '@echo off\r\necho hi %1\r\nnosuchcommand-f3\r\nexit /b 3\r\n');
-        writeFileSync(path.join(cwd, 'tool.cmd'), '@echo off\r\necho tool "%~1"\r\n');
+        writeFileSync(path.join(cwd, 'tool.cmd'), '@echo off\r\necho tool "%~1"\r\nnosuchcommand-f3\r\nexit /b 0\r\n');
+        writeFileSync(path.join(cwd, 'kr949.cmd'), iconv.encode('@echo off\r\necho 한글 출력\r\n', 'cp949'));
         const run = (entry, args) => js(`ide.api.invoke('workspace:start', ${J(cwd)}, ${J(entry)}, ${J(args)}, null).then(({ id, command }) => new Promise((resolve) => {
           let out = '';
           const timer = setTimeout(() => resolve({ out, code: 'timeout', command }), 20000);
@@ -120,6 +121,9 @@ const commitBox = (js) => js(`(ide.toolWindows.get('Commit').show(), new Promise
           `a .bat launcher runs in ${dir} with its exit code, cmd's own message readable (${J(bat)})`);
         const cmd = await run({ kind: 'launch', name: 'tool', exe: path.join(cwd, 'tool.cmd'), runtimeArgs: ['a & b'], cwd, env: {} }, '');
         check(cmd.out.includes('tool "a & b"') && cmd.code === 0, `a launch.json .cmd runs in ${dir} with its arguments intact (${J(cmd)})`);
+        check(cmd.out.includes('nosuchcommand-f3') && !/�/.test(cmd.out), `and cmd's own message there is readable (${J(cmd.out)})`);
+        const kr = await run({ kind: 'launch', name: 'kr', exe: path.join(cwd, 'kr949.cmd'), runtimeArgs: [], cwd, env: {} }, '');
+        check(kr.out.includes('한글 출력') && kr.code === 0, `a launch.json .cmd written in CP949 shows its Korean output (${J(kr)})`);
       }
     });
 

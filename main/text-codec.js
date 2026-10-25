@@ -119,6 +119,26 @@ const replacedRecently = (p) => {
   return false;
 };
 
+// Over the existing file's bytes, then cut to length: Windows refuses to recreate ('w') a Hidden or System file, and a
+// full disk can stop only the part past the old length.
+function writeOver(p, buf) {
+  let fd;
+  try {
+    fd = fs.openSync(p, 'r+');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fs.writeFileSync(p, buf);
+    throw err;
+  }
+  try {
+    fs.writeFileSync(fd, buf);
+    fs.ftruncateSync(fd, buf.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// The temp file starts as a copy of the file (CopyFile), so it carries the file's attributes (Hidden, System…) and
+// alternate data streams (Zone.Identifier) through the rename; the new text is written over the copy.
 function replaceFile(p, buf) {
   let target = p;
   let st;
@@ -128,13 +148,14 @@ function replaceFile(p, buf) {
   } catch {
     return fs.writeFileSync(p, buf);
   }
-  if (st.nlink > 1 || !(st.mode & 0o200)) return fs.writeFileSync(p, buf);
+  if (st.nlink > 1 || !(st.mode & 0o200)) return writeOver(p, buf);
   const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.pyide-tmp`);
   try {
-    fs.writeFileSync(tmp, buf);
+    fs.copyFileSync(target, tmp);
+    writeOver(tmp, buf);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
-    if (err.code === 'EPERM' || err.code === 'EACCES') return fs.writeFileSync(p, buf);
+    if (err.code === 'EPERM' || err.code === 'EACCES') return writeOver(p, buf);
     throw err;
   }
   try {
@@ -142,7 +163,7 @@ function replaceFile(p, buf) {
     replaced.set(path.resolve(target).toLowerCase(), Date.now());
   } catch {
     fs.rmSync(tmp, { force: true });
-    fs.writeFileSync(p, buf);
+    writeOver(p, buf);
   }
 }
 

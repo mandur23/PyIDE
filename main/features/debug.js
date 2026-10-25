@@ -125,6 +125,25 @@ function longPath(p) {
   return path.join(longPath(parent), name);
 }
 
+// `python -m debugpy` and debugpy's own `-m` put the working folder first on sys.path (as its absolute path and as
+// ''), so in an 8.3 working folder the modules a run imports from it get 8.3 file names, which pydevd cannot resolve
+// once their long form exceeds MAX_PATH ("unable to get real case"). This launcher, given the folder's long form,
+// makes that sys.path entry import through a finder rooted at the long form (when Python can read it there) and then
+// runs debugpy as `-m debugpy` does.
+const LONG_CWD_DEBUGPY = [
+  'import os, sys',
+  '_long = sys.argv.pop(1)',
+  'if os.path.isdir(_long):',
+  '    for _hook in sys.path_hooks:',
+  '        try:',
+  '            sys.path_importer_cache[os.getcwd()] = _hook(_long)',
+  '            break',
+  '        except ImportError:',
+  '            pass',
+  'from debugpy.server import cli',
+  'cli.main()',
+].join('\n');
+
 exports.register = (ctx) => {
   const { ipcMain, send, startProcess, killProcess, procs, vendorDir } = ctx;
   const sessions = new Map(); // procId -> {dap, socket}
@@ -162,9 +181,11 @@ exports.register = (ctx) => {
       const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
       // A local script goes by its long form: pydevd resolves an 8.3 short name only while the long form fits MAX_PATH,
       // and past that prints "unable to get real case" tracebacks into the output. Breakpoints are sent in the same form.
-      const pyArgs = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
-        '--wait-for-client', ep ? file : longPath(file), ...(opts.params || [])];
       const wd = ep ? cwd : (await workingDir(cwd, opts.roots)).cwd;
+      const longWd = !ep && wd ? longPath(path.resolve(wd)) : null;
+      const launcher = longWd && longWd !== path.resolve(wd) ? ['-c', LONG_CWD_DEBUGPY, longWd] : ['-m', 'debugpy'];
+      const pyArgs = ['-X', 'frozen_modules=off', ...launcher, '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
+        '--wait-for-client', ep ? file : longPath(file), ...(opts.params || [])];
       id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })
         : startProcess(interp.cmd, [...interp.args, ...pyArgs], { cwd: wd, env });
       // The renderer shows the debuggee's output from now on, so a program that ends before debugpy listens (a Python
@@ -197,7 +218,7 @@ exports.register = (ctx) => {
       // pydevd resolves its auto-reload folders even with auto-reload off, by default the working folder, which may be
       // an 8.3 one (run.js workingDir) it cannot resolve either; the script's folder stands in, or for `-m` (a module, the
       // test runner) the working folder's long form.
-      const watched = file === '-m' ? longPath(path.resolve(wd || '')) : path.dirname(longPath(file));
+      const watched = file === '-m' ? longWd || path.resolve(wd || '') : path.dirname(longPath(file));
       const local = ep ? {} : { autoReload: { enable: false, watchDirectories: [watched] } };
       await Promise.race([configure(dap, breakpoints, opts.exceptions, ep?.pathMappings, local), failed]);
       return { id };

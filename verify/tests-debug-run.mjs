@@ -1,6 +1,7 @@
 // Debugging tests (pytest under debugpy from the gutter, Shift+F9, the project tree, Rerun and Rerun Failed Tests, with
-// the results in the Test Results view), the Python configuration's "Run: Script path / Module name" switch, and the
-// "Process 'x' Is Running" question before a rerun, in English, at 1008x681 and in Korean. Ports 9053-9054.
+// the results in the debug session's Test Results sub-tab of the Debug window), the Python configuration's "Run: Script
+// path / Module name" switch, and the "Process 'x' Is Running" question before a rerun, in English, at 1008x681 and in
+// Korean. Ports 9053-9054.
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
@@ -41,12 +42,16 @@ function helpers(t) {
   const stoppedAt = (file, line, ms = 30000) => until(`(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx];
     return !!f && f.path?.toLowerCase().endsWith(${S(file)}) && f.line === ${line}; })()`, `suspended at ${file}:${line}`, ms);
   const where = () => js(`(() => { const s = window.__debugger.state(); const f = s?.frames[s.frameIdx]; return s ? s.state + ' ' + (f ? f.path + ':' + f.line : '') : 'no session'; })()`);
-  const debugTab = () => js(`(() => { const s = ide.run.activeSession(); return s && { title: s.title, debug: s.tab.classList.contains('run-tab-debug'), key: s.key,
-    state: s.host.querySelector('.tr-status')?.dataset.state || null, status: s.host.querySelector('.tr-status')?.textContent || '' }; })()`);
-  const resultsDone = (title, ms = 30000) => until(`(() => { const s = ide.run.activeSession(); const st = s?.host.querySelector('.tr-status');
-    return s?.title === ${S(title)} && s.tab.classList.contains('run-tab-debug') && st && st.dataset.state !== 'running' && !window.__debugger.state(); })()`, `debug results of ${title}`, ms);
+  // The Test Results sub-tab of the debug session in the Debug window.
+  const debugTab = () => js(`(() => { const b = document.querySelector('.dbg-bar .dbg-plugin-tab[data-tab="testResults"]'); const p = document.querySelector('.dbg-plugin-pane[data-tab="testResults"]');
+    if (!b || !p) return null; const st = p.querySelector('.tr-status');
+    return { label: b.textContent, icon: b.querySelector('.dbg-subtab-icon').textContent, active: b.classList.contains('active'), shown: !!p.offsetParent,
+      state: st?.dataset.state || null, status: st?.textContent || '', files: [...p.querySelectorAll('.tr-row[data-kind="file"] .tr-name')].map((r) => r.textContent) }; })()`);
+  const resultsDone = (label, ms = 30000) => until(`(() => { const st = document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-status');
+    return st && st.dataset.state !== 'running' && !window.__debugger.state(); })()`, `debug results of ${label}`, ms);
+  const noRunTab = () => js(`!ide.run.sessions().some((s) => s.key.startsWith('debug:') || s.tab.classList.contains('run-tab-debug'))`);
   const dialogTitle = () => js(`[...document.querySelectorAll('#dialogHost .dialog-title')].pop()?.textContent || null`);
-  return { menuLabels, clickMenu, clickRunGutter, treeMenu, caretTo, stoppedAt, where, debugTab, resultsDone, dialogTitle, sleep };
+  return { menuLabels, clickMenu, clickRunGutter, treeMenu, caretTo, stoppedAt, where, debugTab, resultsDone, noRunTab, dialogTitle, sleep };
 }
 
 const t = await launch({ fixture: 'tests-debug-run', port: 9053 });
@@ -73,15 +78,19 @@ try {
   await h.stoppedAt('test_calc.py', 5);
   check(true, 'Debug from the gutter pauses on the breakpoint inside the test');
   const running = await h.debugTab();
-  check(running?.debug && running.title === 'pytest for test_calc.test_add' && running.state === 'running', `a debug tab shows the Test Results while the test runs (${S(running)})`);
+  check(running?.state === 'running' && running.label.includes('Test Results') && running.icon === '◷',
+    `the debug session has a Test Results sub-tab in the Debug window while the test runs (${S(running)})`);
+  check(await h.noRunTab(), 'a debug test run opens no tab in the Run window');
+  check(await js(`!!document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-debug-btn[data-action="rerunFailed"]')?.disabled`), 'Rerun Failed Tests is off while nothing has failed');
   await press('F9');
   await h.stoppedAt('calc.py', 2);
   check(await js(`window.__debugger.state().frames.some((f) => f.name === 'test_add')`), 'Resume runs on to the breakpoint in the code under test, called from the test');
   await press('F9');
   await h.resultsDone('pytest for test_calc.test_add');
   const one = await h.debugTab();
-  check(one.status.includes('Tests passed: 1 of 1 test'), `Resume finishes with the result in the Test Results view (${one.status})`);
-  check(await js(`!!document.querySelector('.run-session:not(.hidden) .tr-row[data-kind="test"][data-status="passed"]')?.offsetParent`), 'the Run window shows the debug tab with the passed test');
+  check(one.status.includes('Tests passed: 1 of 1 test') && one.icon === '✓', `Resume finishes with the result in the Test Results sub-tab (${S(one)})`);
+  check(one.active && await js(`!!document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-row[data-kind="test"][data-status="passed"]')?.offsetParent && ide.toolWindows.get('Debug').isVisible()`),
+    'when the session ends the Debug window shows the Test Results with the passed test');
   check(await js(`ide.run.configs().some((c) => c.name === 'pytest for test_calc.test_add' && c.temporary)`), 'the gutter Debug creates the temporary configuration');
 
   // ---------- Shift+F9 on the test file ----------
@@ -90,7 +99,8 @@ try {
   await h.caretTo(1);
   await press('Shift+F9');
   await h.stoppedAt('test_calc.py', 5);
-  check(await js(`ide.run.activeSession()?.title === 'pytest in test_calc.py' && ide.run.activeSession().tab.classList.contains('run-tab-debug')`), 'Shift+F9 on a test file debugs pytest on the file (tab "pytest in test_calc.py")');
+  check(await js(`document.querySelector('#dbgTabVars').classList.contains('active') && document.querySelectorAll('.dbg-bar .dbg-plugin-tab').length === 1`),
+    'a breakpoint shows Threads & Variables; the new session has its own single Test Results sub-tab');
   await press('F9');
   await h.stoppedAt('calc.py', 2);
   await press('F9');
@@ -99,57 +109,57 @@ try {
   await press('F9');
   await h.resultsDone('pytest in test_calc.py');
   const file = await h.debugTab();
-  check(file.status.includes('Tests failed: 1, passed: 1 of 2 tests'), `both tests ran under the debugger (${file.status})`);
+  check(file.status.includes('Tests failed: 1, passed: 1 of 2 tests') && file.files.join() === 'test_calc.py' && file.icon === '✗',
+    `Shift+F9 on a test file debugs pytest on the file: both tests ran under the debugger (${S(file)})`);
   await openFile(t, 'test_calc.py');
   await until(`ide.editor.getModel().getAllDecorations().some((d) => /run-gutter-icon failed/.test(d.options.glyphMarginClassName || ''))`, 'failed gutter icon', 5000).catch(() => {});
   check(await js(`ide.findTab(${S(path.join(t.project, 'test_calc.py'))}).model.getAllDecorations().some((d) => /run-gutter-icon failed/.test(d.options.glyphMarginClassName || ''))`), 'the gutter shows the failed test from the debug run');
+  check(await h.noRunTab(), 'still no Run window tab for debug runs');
 
   // ---------- Rerun from the Debug window, Stop ----------
-  check(await js(`!!document.querySelector('#dbgRerun') && !document.querySelector('#dbgRerun').offsetParent`), 'the finished debug run shows the Run window with its Test Results');
-  await press('Alt+5');
-  await until(`!!document.querySelector('#dbgRerun')?.offsetParent && !document.querySelector('#dbgRerun').disabled`, 'Debug window');
+  check(await js(`!!document.querySelector('#dbgRerun')?.offsetParent && !document.querySelector('#dbgRerun').disabled`), 'the finished debug run stays in the Debug window with its Rerun');
   await click('#dbgRerun');
   await h.stoppedAt('test_calc.py', 5);
   check(true, "the Debug window's Rerun debugs the tests again");
   await press('Ctrl+F2');
   await until(`!window.__debugger.state()`, 'debug session stopped');
   await h.resultsDone('pytest in test_calc.py');
-  check(await js(`ide.run.activeSession().host.querySelector('.tr-status').dataset.state !== 'running'`), `Stop ends the Test Results run too (${(await h.debugTab()).status})`);
   const stoppedTab = await h.debugTab();
-  check(stoppedTab.state === 'stopped' && stoppedTab.status.includes('Stopped.') && await js(`ide.run.activeSession().tab.querySelector('.run-tab-icon').textContent !== '✓'`),
-    `a stopped debug run with no test passed shows as stopped, not passed (${stoppedTab.status})`);
+  check(stoppedTab.state === 'stopped' && stoppedTab.status.includes('Stopped.') && stoppedTab.icon === '⊘',
+    `Stop ends the Test Results run too, shown as stopped, not passed (${S(stoppedTab)})`);
 
   // ---------- another debug session replaces a debug test run ----------
-  await click('#bottomActions button[data-action="rerun"]');
+  await click('#dbgRerun');
   await h.stoppedAt('test_calc.py', 5);
   await js(`(ide.debugger.debugFile(${S(path.join(t.project, 'slow.py'))}), true)`);
   await until(`document.querySelector('#dbgOut')?.textContent.includes('tick 2')`, 'slow.py debugged');
-  const replaced = `(() => { const s = ide.run.sessions().find((x) => x.title === 'pytest in test_calc.py' && x.tab.classList.contains('run-tab-debug'));
-    return s && { state: s.host.querySelector('.tr-status').dataset.state, status: s.host.querySelector('.tr-status').textContent, icon: s.tab.querySelector('.run-tab-icon').textContent }; })()`;
-  const ended = await until(`${replaced}?.state === 'stopped'`, 'replaced test run stopped', 10000).then(() => true, () => false);
-  const whileSlow = await js(replaced);
-  check(ended && whileSlow.status.includes('Stopped.') && whileSlow.icon !== '✓', `debugging another file ends the debug test run as stopped while that file is debugged (${S(whileSlow)})`);
+  check(await js(`!document.querySelector('.dbg-plugin-tab') && !document.querySelector('.dbg-plugin-pane')`), "debugging another file ends the test session and its Test Results sub-tab goes with it");
   check(await js(`!!document.querySelector('#dbgOut')?.offsetParent && window.__debugger.state()?.state === 'running'`), 'and the Debug window stays on the new session');
   await press('Ctrl+F2');
   await until(`!window.__debugger.state()`, 'slow.py debug stopped');
   await sleep(1000);
-  check(S(await js(replaced)) === S(whileSlow), `ending the new session leaves the replaced run's results as they were (${S(await js(replaced))})`);
-  await js(`(ide.run.show(ide.run.sessions().find((x) => x.title === 'pytest in test_calc.py' && x.tab.classList.contains('run-tab-debug'))), true)`);
+  check(await js(`!document.querySelector('.dbg-plugin-tab') && !!document.querySelector('#dbgOut')?.offsetParent`), 'ending the new session brings no Test Results back over it');
 
-  // ---------- Rerun (all) from the Run tab, then Rerun Failed Tests ----------
-  await click('#bottomActions button[data-action="rerun"]');
+  // ---------- Debug again, then Rerun Failed Tests in the sub-tab ----------
+  await openFile(t, 'test_calc.py');
+  await h.caretTo(1);
+  await press('Shift+F9');
   await h.stoppedAt('test_calc.py', 5);
-  check(true, "the debug tab's Rerun debugs all the tests again");
   for (const [f, l] of [['calc.py', 2], ['calc.py', 2]]) { await press('F9'); await h.stoppedAt(f, l); }
   await press('F9');
   await h.resultsDone('pytest in test_calc.py');
-  check((await h.debugTab()).status.includes('Tests failed: 1, passed: 1 of 2 tests'), 'Rerun gives both results again');
-  await click('#bottomActions button[data-action="rerunFailed"]');
+  check((await h.debugTab()).status.includes('Tests failed: 1, passed: 1 of 2 tests'), 'debugging the file again gives both results again');
+  await click('.dbg-plugin-pane[data-tab="testResults"] .tr-debug-btn[data-action="rerunFailed"]');
   await h.stoppedAt('calc.py', 2);
-  check(await js(`window.__debugger.state().frames.some((f) => f.name === 'test_wrong') && !window.__debugger.state().frames.some((f) => f.name === 'test_add')`), 'Rerun Failed Tests debugs only the failed test');
+  check(await js(`window.__debugger.state().frames.some((f) => f.name === 'test_wrong') && !window.__debugger.state().frames.some((f) => f.name === 'test_add')`), "the sub-tab's Rerun Failed Tests debugs only the failed test");
   await press('F9');
   await h.resultsDone('pytest in test_calc.py');
   check((await h.debugTab()).status.includes('Tests failed: 1 of 1 test'), `the failed test alone (${(await h.debugTab()).status})`);
+  await click('#dbgRerun');
+  await h.stoppedAt('calc.py', 2);
+  check(await js(`!window.__debugger.state().frames.some((f) => f.name === 'test_add')`), "the Debug window's Rerun after Rerun Failed Tests debugs the failed test again");
+  await press('F9');
+  await h.resultsDone('pytest in test_calc.py');
 
   // ---------- project tree: Debug 'pytest in test_calc.py' ----------
   const treeLabels = await h.treeMenu('test_calc.py');
@@ -309,6 +319,12 @@ try {
   await h.treeMenu('test_calc.py');
   check(await inside('.context-menu .menu-item'), "at 1008x681 the tree's Debug 'pytest in …' is inside the window");
   await press('Escape');
+  await js(`(ide.run.debugConfig(ide.tests.configFor(${S(path.join(t.project, 'test_calc.py'))}, null)), true)`);
+  await h.resultsDone('pytest in test_calc.py (small)');
+  await until(`ide.toolWindows.get('Debug').isVisible() && !!document.querySelector('.dbg-plugin-tab.active')?.offsetParent`, 'Debug window with Test Results (small)');
+  const bar = await js(`(() => { const b = document.querySelector('.dbg-bar'); return { fits: b.scrollWidth <= b.clientWidth + 1, inside: [...b.children].every((n) => n.getBoundingClientRect().right <= innerWidth), tree: !!document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-row')?.offsetParent }; })()`);
+  check(bar.fits && bar.inside && bar.tree, `at 1008x681 the Debug window's bar with the Test Results sub-tab fits, and the results show (${S(bar)})`);
+  await t.shot('debug-results-small.png');
   await t.cdp('Emulation.clearDeviceMetricsOverride');
 } catch (err) {
   check(false, `${err.message.split('\n')[0]} [${await h.where().catch(() => '?')}]`);
@@ -326,9 +342,11 @@ try {
   k.check(treeKo.join(' | ') === "'test_calc.py의 pytest' 실행 | 'test_calc.py의 pytest' 디버그", `the tree entries in Korean (${treeKo.join(' | ')})`);
   await hk.clickMenu("'test_calc.py의 pytest' 디버그");
   await hk.resultsDone('test_calc.py의 pytest');
-  k.check((await hk.debugTab()).status.includes('테스트 실패: 1'), `the debug results in Korean (${(await hk.debugTab()).status})`);
+  const koTab = await hk.debugTab();
+  k.check(koTab.status.includes('테스트 실패: 1') && koTab.label.includes('테스트 결과') && koTab.shown, `the debug results in Korean, in the 테스트 결과 sub-tab (${S(koTab)})`);
   const runLeaks = await englishLeaks(k, '#bottom');
-  k.check(!runLeaks.length, `the Run window with the debug results has no English UI text (${S(runLeaks)})`);
+  k.check(!runLeaks.length, `the Debug window with the test results has no English UI text (${S(runLeaks)})`);
+  await k.shot('debug-results-ko.png');
   await k.js(`(ide.run.runContext({ type: 'python', name: 'slow', script: ${S(path.join(k.project, 'slow.py'))} }), true)`);
   await k.until(`ide.run.activeSession()?.title === 'slow' && ide.run.activeSession().running`, 'slow running (ko)');
   await k.js(`ide.editor?.focus()`);

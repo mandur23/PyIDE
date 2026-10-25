@@ -304,6 +304,7 @@ function createPluginManager({ appDir, userDataDir }) {
   // Renderer assets of the plugins running this session, in a stable order (bundled first, dependencies first).
   const rendererEntries = ({ detached = false } = {}) => dependencyOrder(loadedList().filter((p) => p.enabled && p.script && (!detached || p.detached))).map((p) => ({
     id: p.id,
+    name: p.name,
     script: p.bundled ? `features/${path.basename(p.dir)}/index.js` : require('url').pathToFileURL(p.script).href,
     css: p.style ? (p.bundled ? `features/${path.basename(p.dir)}/style.css` : require('url').pathToFileURL(p.style).href) : null,
   }));

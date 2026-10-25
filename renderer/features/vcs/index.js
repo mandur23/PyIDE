@@ -283,13 +283,26 @@
     scheduleAutoFetch();
   }
   ide.on('settingsChanged', (k) => k === 'vcs.autoFetchMinutes' && restartAutoFetch());
+  // PyCharm's Protected branches setting: names or * patterns, separated by commas or
+  // semicolons. Force Push to one asks again with a warning.
+  const PROTECTED_DEFAULT = 'master, main';
+  const globRe = (p) => new RegExp(`^${p.replace(/[.+?^$()|[\]{}\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  const isProtected = (branch) => String(ide.settings.get('vcs.protectedBranches', PROTECTED_DEFAULT) ?? '').split(/[,;]/).map((s) => s.trim()).filter(Boolean)
+    .some((p) => globRe(p).test(branch));
   (ide.settingsPages ||= []).push({
-    id: 'vcs-git', title: () => 'Git', defaults: { 'vcs.autoFetchMinutes': 10 },
-    keywords: 'git fetch auto-fetch remote incoming outgoing 페치 원격',
+    id: 'vcs-git', title: () => 'Git', defaults: { 'vcs.autoFetchMinutes': 10, 'vcs.protectedBranches': PROTECTED_DEFAULT },
+    keywords: 'git fetch auto-fetch remote incoming outgoing push force protected branches 페치 원격 푸시 강제 보호된 브랜치',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Fetch'));
       s.appendChild(ctx.ui.fieldRow(tr('Fetch from remotes every (minutes):'), ctx.ui.numberInput('vcs.autoFetchMinutes', { min: 0, max: 1440, fallback: 10 })));
       s.appendChild(el('div', 'muted settings-note', tr('Keeps the incoming and outgoing commit counts next to the branch current. 0 turns automatic fetching off.')));
+      const p = ctx.ui.section(host, tr('Push'));
+      const branches = el('input', 'vcs-protected-input');
+      branches.dataset.key = 'vcs.protectedBranches';
+      branches.value = ctx.value('vcs.protectedBranches') ?? PROTECTED_DEFAULT;
+      branches.oninput = () => ctx.set('vcs.protectedBranches', branches.value);
+      p.appendChild(ctx.ui.fieldRow(tr('Protected branches:'), branches));
+      p.appendChild(el('div', 'muted settings-note', tr('Force Push to these branches asks first. Separate names with commas; * matches any text.')));
     },
   });
 
@@ -1681,14 +1694,55 @@
     if (gitTw.isVisible()) loadLog();
   }
 
-  async function doPush() {
-    const r = await invoke('push', ide.root);
+  // lease: Force Push with the remote branch's commit that the Push Rejected dialog showed (git:push).
+  async function doPush(lease) {
+    const r = await invoke('push', ide.root, lease ? { lease } : {});
     logResult(r);
     if (r.noRemote) return notify(tr('Push failed'), tr('No remotes are defined for this repository.'), 'warn');
+    if (!r.ok && r.lease && !lease) return pushRejected(r);
+    if (!r.ok && lease && r.rejected === 'stale info') {
+      return notify(tr('Push failed'), tr('Force Push was refused: {target} changed after the Push Rejected question. Update the project to get the new commits, then push again.', { target: r.target }), 'error');
+    }
     if (!r.ok) return notify(tr('Push failed'), errorText(r), 'error', !r.reason);
-    notify(r.pushed ? trn(r.pushed, 'Pushed {n} commit to {target}', 'Pushed {n} commits to {target}', { target: r.target }) : tr('Everything is up to date'), '', 'ok');
+    if (r.forced) notify(tr('Force pushed {branch} to {target}', { branch: repo?.branch || r.branch, target: r.target }), '', 'ok');
+    else notify(r.pushed ? trn(r.pushed, 'Pushed {n} commit to {target}', 'Pushed {n} commits to {target}', { target: r.target }) : tr('Everything is up to date'), '', 'ok');
     await refresh();
     if (gitTw.isVisible()) loadLog();
+  }
+
+  // A push git refused as non-fast-forward, typically after Amend Commit and Push… on a pushed commit: PyCharm's Push
+  // Rejected question, offering Force Push (--force-with-lease) and listing the commits it would remove.
+  function pushRejected(r) {
+    const body = el('div', 'vcs-push vcs-push-rejected');
+    body.appendChild(el('div', 'dialog-message', tr('Push of current branch {branch} was rejected: {target} has commits that are not in your branch.', { branch: repo?.branch || r.branch, target: r.target })));
+    if (r.dropped?.length) {
+      body.appendChild(el('div', 'vcs-push-note', tr('Force Push replaces {target} with your branch and removes these commits from it:', { target: r.target })));
+      const list = userText('div', 'vcs-dialog-list vcs-push-commits');
+      for (const c of r.dropped) {
+        const row = el('div', 'vcs-push-commit');
+        row.append(el('span', 'muted', c.short), el('span', null, ` ${c.subject}`), el('span', 'muted', `  ${c.author}`));
+        list.appendChild(row);
+      }
+      body.appendChild(list);
+    }
+    body.appendChild(el('div', 'muted vcs-push-note', tr('Force Push is refused if {target} has changed since the last fetch.', { target: r.target })));
+    let chosen = false;
+    ide.ui.dialog({
+      title: tr('Push Rejected'), body, width: 560,
+      onClose: () => { if (!chosen) notify(tr('Push rejected'), r.err || r.out || '', 'warn', true); },
+      buttons: [
+        { label: tr('Force Push'), primary: true, run: async () => {
+          chosen = true;
+          if (isProtected(r.branch) && !(await ide.ui.confirm(tr('{branch} is a protected branch. Force pushing to it rewrites history that others may have built on. Force push to {target} anyway?', { branch: r.branch, target: r.target }),
+            { title: tr('Force Push to Protected Branch'), ok: tr('Force Push') }))) {
+            notify(tr('Push rejected'), tr('Force Push to the protected branch {branch} was canceled.', { branch: r.branch }), 'warn');
+            return;
+          }
+          doPush(r.lease);
+        } },
+        { label: tr('Cancel') },
+      ],
+    });
   }
 
   async function openPushDialog() {

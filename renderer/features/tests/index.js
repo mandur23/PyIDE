@@ -366,7 +366,7 @@
   }
 
   // The results of a finished run: the tree's final state, the gutter icons and the tab's icon.
-  function finishRun(s, view, code, stopped = false) {
+  function finishRun(view, code, stopped = false) {
     view.log(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
     const c = view.finish(stopped);
     for (const r of view.results()) {
@@ -400,40 +400,44 @@
         await report.end();
         // No exit status in the report: the runner did not get to its end (Stop), as for a debug run.
         const stopped = view.exitStatus() == null;
-        const c = finishRun(s, view, code, stopped);
+        const c = finishRun(view, code, stopped);
         if (s.procId === id) s.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
         s.exited(id, code);
       },
     });
   }
 
-  // Debug: the same run under debugpy. The debugger starts the process and shows its console and frames; the
-  // configuration's debug tab in the Run window shows the Test Results, read from the report until the debug session
-  // ends. Its Rerun and Rerun Failed Tests debug again.
+  // Debug: the same run under debugpy, with the Test Results as a sub-tab of the session in the Debug window, as in
+  // PyCharm. run.debugConfig passes no sub-tabs to the debugger, so this starts the debugger itself and answers null
+  // (nothing more for debugConfig to start). The results are read from the report until the session ends; the Debug
+  // window's Rerun and the tab's Rerun Failed Tests debug again.
   async function debugTests(cfg, interp, opts = {}) {
     if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return null; }
-    const s = await run.debugSession(cfg);
-    s.rerun = () => run.debugConfig(cfg, opts);
-    const view = createView(s);
-    s.setActions([{ id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
+    if (!ide.debugger?.debugFile) return null;
+    const host = el('div', 'tr-debug');
+    const bar = el('div', 'tr-debug-bar');
+    const body = el('div', 'tr-debug-body');
+    host.append(bar, body);
+    const view = createView({ host: body, console: ({ parent }) => ide.ui.console(parent, {}) });
+    const rerunFailed = el('button', 'tr-debug-btn', '⟲');
+    rerunFailed.dataset.action = 'rerunFailed';
+    rerunFailed.title = tr('Rerun Failed Tests');
+    rerunFailed.disabled = true;
+    rerunFailed.onclick = () => {
       const failed = view.failedIds();
       if (failed.length) run.debugConfig(cfg, { targets: failed });
-    } }]);
-    s.setIcon('◷', 'running');
+    };
+    bar.appendChild(rerunFailed);
     let target;
     try {
       target = await ide.api.invoke('tests:debugTarget', interp, await testRun(cfg, interp, view, opts));
     } catch (err) {
-      view.log(`${ide.util.errorText(err)}\n`, 'err');
-      view.finish();
-      s.setIcon('✗', 'failed');
-      s.startDone();
+      run.notifyError(tr("Cannot debug '{name}'", { name: cfg.name }), ide.util.errorText(err));
       return null;
     }
-    view.log(`${target.command}\n${tr('The output is in the Debug tool window.')}\n`, 'sys');
+    view.log(`${target.command}\n${tr('The program output is in the Console tab.')}\n`, 'sys');
     const report = follow(view, target.id);
-    s.launched = true;
-    s.startDone();
+    let tab = null; // the debugger's handle of the sub-tab
     let ended = false;
     const end = async ({ replaced = false } = {}) => {
       if (ended) return;
@@ -443,22 +447,26 @@
       // to its end: the session was stopped or another one took its place.
       const code = view.exitStatus();
       const stopped = code == null;
-      const c = finishRun(s, view, code, stopped);
-      s.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
-      s.finish(code ?? 1);
-      // The Debug window stays on the session that replaced this one.
-      if (!s.closed && !replaced) run.show(s);
+      const c = finishRun(view, code, stopped);
+      tab?.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
+      rerunFailed.disabled = !view.failedIds().length;
+      // A replaced session's sub-tab is gone with it; the Debug window stays on the new session.
+      if (!replaced) tab?.show();
     };
-    s.dispose = () => { if (!ended) { ended = true; report.end(); } };
-    return {
-      script: target.script, params: target.params, cwd: target.cwd, env: target.env, interp,
-      // debugFile settles once its session runs, failed or already ended, with that session's {ended}.
-      started: (p) => Promise.resolve(p).catch(() => {}).then((session) => {
+    const tabs = [{ id: 'testResults', title: tr('Test Results'), select: true, mount(pane, handle) {
+      tab = handle;
+      if (!ended) handle.setIcon('◷', 'running');
+      pane.appendChild(host);
+    } }];
+    // debugFile settles once its session runs, failed or already ended, with that session's {ended}.
+    Promise.resolve(ide.debugger.debugFile(target.script, { interp, cwd: target.cwd, params: target.params, env: target.env,
+      envFiles: run.envFiles(cfg), rerun: () => run.debugConfig(cfg, opts), tabs }))
+      .catch(() => {}).then((session) => {
         if (ended) return;
         if (!session) return end();
         session.ended.then(end);
-      }),
-    };
+      });
+    return null;
   }
 
   // ---------- gutter, actions, tree ----------

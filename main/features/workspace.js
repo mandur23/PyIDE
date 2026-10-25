@@ -330,11 +330,6 @@ const withPath = (env = {}, roots = []) => {
   return parts.length ? { ...env, PYTHONPATH: parts.join(';') } : env;
 };
 
-// A .bat that is plain UTF-8 runs under code page 65001 so its echo output reaches the console intact.
-const isUtf8 = (file) => {
-  try { new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file)); return true; } catch { return false; }
-};
-
 // The launcher scan reads the project's scripts; it runs on a worker thread so a large project never stalls the main process.
 if (!isMainThread && workerData?.role === 'pyide-workspace') {
   parentPort.on('message', ({ id, args }) => {
@@ -424,10 +419,7 @@ exports.register = ({ ipcMain, app, startProcess }) => {
       case 'bat': {
         // The arguments the user typed are cmd syntax and are passed on as typed.
         viaTool(entry.file, []);
-        const utf8 = isUtf8(entry.file);
-        argv = [...argv.slice(0, -1), `"${utf8 ? 'chcp 65001>nul & ' : ''}${argv.at(-1).slice(1, -1)}${args?.trim() ? ` ${args.trim()}` : ''}"`];
-        // A non-UTF-8 batch file runs in the console code page, which is CP949 on Korean Windows.
-        if (!utf8) opts.encoding = 'cp949';
+        argv = [...argv.slice(0, -1), `"${argv.at(-1).slice(1, -1)}${args?.trim() ? ` ${args.trim()}` : ''}"`];
         shown = `cmd /c ${quote(entry.file)}${args?.trim() ? ` ${args.trim()}` : ''}`;
         break;
       }

@@ -227,5 +227,18 @@
   "Show All Commits": "모든 커밋 표시",
   "Path:": "경로:",
   "Compare with Local": "로컬과 비교",
-  "{hash} vs. Local": "{hash}와(과) 로컬 비교"
+  "{hash} vs. Local": "{hash}와(과) 로컬 비교",
+  "Force pushed {branch} to {target}": "{branch}을(를) {target}에 강제 푸시했습니다",
+  "Push of current branch {branch} was rejected: {target} has commits that are not in your branch.": "현재 브랜치 {branch}의 푸시가 거부되었습니다. {target}에 현재 브랜치에 없는 커밋이 있습니다.",
+  "Force Push replaces {target} with your branch and removes these commits from it:": "강제 푸시하면 {target}이(가) 현재 브랜치로 바뀌고 다음 커밋이 {target}에서 제거됩니다:",
+  "Force Push is refused if {target} has changed since the last fetch.": "마지막 페치 이후 {target}이(가) 변경되었으면 강제 푸시가 거부됩니다.",
+  "Push Rejected": "푸시 거부됨",
+  "Push rejected": "푸시 거부됨",
+  "Force Push": "강제 푸시",
+  "{branch} is a protected branch. Force pushing to it rewrites history that others may have built on. Force push to {target} anyway?": "{branch}은(는) 보호된 브랜치입니다. 강제 푸시하면 다른 사람이 이어서 작업했을 수 있는 기록이 다시 작성됩니다. 그래도 {target}에 강제 푸시하시겠습니까?",
+  "Force Push to Protected Branch": "보호된 브랜치에 강제 푸시",
+  "Force Push to the protected branch {branch} was canceled.": "보호된 브랜치 {branch}에 대한 강제 푸시를 취소했습니다.",
+  "Protected branches:": "보호된 브랜치:",
+  "Force Push to these branches asks first. Separate names with commas; * matches any text.": "이 브랜치에 강제 푸시할 때는 먼저 확인합니다. 이름은 쉼표로 구분하고, *는 임의의 텍스트와 일치합니다.",
+  "Force Push was refused: {target} changed after the Push Rejected question. Update the project to get the new commits, then push again.": "강제 푸시가 거부되었습니다. 푸시 거부 질문 이후 {target}이(가) 변경되었습니다. 프로젝트를 업데이트해 새 커밋을 가져온 다음 다시 푸시하세요."
 }

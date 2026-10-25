@@ -1,6 +1,7 @@
 // Documents and their encodings: detection, a chosen encoding that sticks, re-encodings made outside PyIDE, Convert to,
 // CP949 refusals, notebooks with CRLF, and saves that cannot leave a half-written file. Ports 9270.
-import { chmodSync, linkSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { chmodSync, linkSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -62,6 +63,42 @@ const unit = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : '
   try { codec.write(f('ro.py'), 'ro = 2\n', 'utf-8'); } catch (e) { ro = e; }
   unit(ro && ['EPERM', 'EACCES'].includes(ro.code) && readFileSync(f('ro.py'), 'utf8') === 'ro = 1\n', `a read-only file is still refused (${ro?.code})`);
   chmodSync(f('ro.py'), 0o666);
+
+  const attrs = (n) => execFileSync('attrib', [f(n)], { encoding: 'utf8' }).slice(0, 12).replace(/\s/g, '');
+  writeFileSync(f('marked.py'), 'm = 1\n');
+  writeFileSync(`${f('marked.py')}:Zone.Identifier`, '[ZoneTransfer]\r\nZoneId=3\r\n');
+  writeFileSync(`${f('marked.py')}:pyide.note`, 'kept');
+  utimesSync(f('marked.py'), new Date(2020, 0, 1), new Date(2020, 0, 1));
+  execFileSync('attrib', ['+h', '+s', f('marked.py')]);
+  const before = attrs('marked.py');
+  codec.write(f('marked.py'), 'm = 2\n', 'utf-8');
+  const stream = (s) => { try { return readFileSync(`${f('marked.py')}:${s}`, 'utf8'); } catch (e) { return e.code; } };
+  unit(readFileSync(f('marked.py'), 'utf8') === 'm = 2\n' && attrs('marked.py') === before && before.includes('S') && before.includes('H'),
+    `a Hidden System file is saved and stays Hidden and System (${before} -> ${attrs('marked.py')})`);
+  unit(stream('Zone.Identifier').includes('ZoneId=3') && stream('pyide.note') === 'kept',
+    `and keeps its alternate data streams (${JSON.stringify([stream('Zone.Identifier'), stream('pyide.note')])})`);
+  unit(statSync(f('marked.py')).mtimeMs > Date.now() - 60000 && !readdirSync(dir).some((n) => n.includes('pyide-tmp')),
+    `and its modified time is the save's, with no temporary file left (${statSync(f('marked.py')).mtime.toISOString()})`);
+  execFileSync('attrib', ['-h', '-s', f('marked.py')]);
+  writeFileSync(f('hidden.py'), 'h = 1\n');
+  linkSync(f('hidden.py'), f('hidden-link.py'));
+  execFileSync('attrib', ['+h', f('hidden.py')]);
+  let linked = null;
+  try { codec.write(f('hidden.py'), 'h = 2\n', 'utf-8'); } catch (e) { linked = e.code; }
+  unit(!linked && readFileSync(f('hidden-link.py'), 'utf8') === 'h = 2\n' && attrs('hidden.py').includes('H'),
+    `a Hidden hard-linked file is written in place (${linked || attrs('hidden.py')})`);
+  execFileSync('attrib', ['-h', f('hidden.py')]);
+
+  writeFileSync(f('timed.py'), 'x = 1\n'.repeat(400));
+  const times = [];
+  for (let i = 0; i < 100; i++) {
+    const t0 = performance.now();
+    codec.write(f('timed.py'), `x = ${i}\n`.repeat(400), 'utf-8');
+    times.push(performance.now() - t0);
+  }
+  times.sort((a, b) => a - b);
+  console.log(`save of a 2.4 KB file: median ${times[50].toFixed(2)} ms, p90 ${times[90].toFixed(2)} ms`);
+  unit(times[50] < 20, `a small file saves in a few ms (median ${times[50].toFixed(2)} ms)`);
   rmSync(dir, { recursive: true, force: true });
 }
 

@@ -1,6 +1,6 @@
-// The main window and a detached editor window on the same documents: edits typed in both at once, a reload from
-// disk, a rename or delete in one window, a save of a file that is gone, and File > Exit with unsaved files in another
-// window. Port 9271.
+// The main window and a detached editor window on the same documents: edits typed in both at once (also in a CRLF file,
+// beside a line separator conversion, and while the second window is still joining), a reload from disk, a rename or
+// delete in one window, a save of a file that is gone, and File > Exit with unsaved files in another window. Port 9271.
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch } from './lib.mjs';
@@ -50,13 +50,22 @@ const text = (n) => `${doc(n)}?.model.getValue()`;
 const dirty = (n) => `ide.isDirty(ide.findTab(${q(p(n))}))`;
 const append = (n, s) => `(() => { const m = ${doc(n)}.model; const l = m.getLineCount(); m.pushEditOperations([], [{ range: new ide.monaco.Range(l, m.getLineMaxColumn(l), l, m.getLineMaxColumn(l)), text: ${q(s)} }], () => null); return true; })()`;
 
+const ROWS = [...Array(10).keys()].map((i) => `row${i}`).concat('');
+// Runs `body` in a window after keeping that window busy for `ms`: what other windows send meanwhile waits, so the
+// edits `body` makes are concurrent with theirs.
+const busyThen = (ms, body) => `(setTimeout(() => { const end = Date.now() + ${ms}; while (Date.now() < end); ${body} }, 0), true)`;
+const typeAt = (n, line, col, s) => `${doc(n)}.model.pushEditOperations([], [{ range: new ide.monaco.Range(${line}, ${col}, ${line}, ${col}), text: ${q(s)} }], () => null)`;
+const removeLine = (n, line) => `${doc(n)}.model.pushEditOperations([], [{ range: new ide.monaco.Range(${line}, 1, ${line}, ${doc(n)}.model.getLineMaxColumn(${line})), text: '' }], () => null)`;
+
 // Each scenario runs even when an earlier one failed.
 const section = async (label, fn) => { try { await fn(); } catch (err) { check(false, `${label}: ${err.message}`); } };
 let w;
 try {
-  for (const n of ['b.py', 'c.py', 'd.py', 'r.py', 'e.py', 'notes.txt']) writeFileSync(p(n), `# ${n}\nvalue = 1\n`);
-  for (const n of ['b.py', 'c.py', 'd.py', 'r.py', 'e.py']) await js(`ide.openFile(${q(p(n))})`);
-  await js(`ide.api.invoke('window:openDetached', { files: ${q(['b.py', 'c.py', 'd.py', 'r.py', 'notes.txt'].map((n) => ({ path: p(n) })))} })`);
+  for (const n of ['b.py', 'c.py', 'd.py', 'r.py', 'e.py', 'notes.txt', 'join.py']) writeFileSync(p(n), `# ${n}\nvalue = 1\n`);
+  writeFileSync(p('eol.py'), ROWS.join('\n'));
+  writeFileSync(p('crlf.py'), ROWS.join('\r\n'));
+  for (const n of ['b.py', 'c.py', 'd.py', 'r.py', 'e.py', 'eol.py', 'crlf.py', 'join.py']) await js(`ide.openFile(${q(p(n))})`);
+  await js(`ide.api.invoke('window:openDetached', { files: ${q(['b.py', 'c.py', 'd.py', 'r.py', 'notes.txt', 'eol.py', 'crlf.py'].map((n) => ({ path: p(n) })))} })`);
   w = await attach((url) => url.includes('detached=1'));
   await w.until(`window.__ideReady === true && ide.tabs.length >= 4`, 'detached window with its files');
   await sleep(500);
@@ -106,6 +115,69 @@ try {
     await w.until(`${text('r.py')} === '# changed on disk\\n'`, 'detached gets the reloaded text', 8000);
     await sleep(500);
     check(!(await w.js(dirty('r.py'))), 'the detached window shows the reloaded file as unmodified');
+  });
+
+  // Convert line separators in one window while the other edits: the conversion carries no text, so the edits made
+  // beside it keep their place, whichever reaches the main process first.
+  await section('line separators converted during edits', async () => {
+    const both = async () => [await js(text('eol.py')), await w.js(text('eol.py')), await js(`${doc('eol.py')}.model.getEOL()`), await w.js(`${doc('eol.py')}.model.getEOL()`)];
+    const rows = [...ROWS];
+    await js(busyThen(1200, `ide.lineSeparators.convert(${doc('eol.py')}, '\\r\\n')`));
+    await w.js(`(${typeAt('eol.py', 5, 1, 'X')}, ${removeLine('eol.py', 9)}, true)`);
+    rows[4] = 'Xrow4';
+    rows[8] = '';
+    await sleep(2500);
+    let [m, d, me, de] = await both();
+    check(m === d && m === rows.join('\r\n') && me === '\r\n' && de === '\r\n',
+      `a conversion to CRLF made while the other window typed and deleted keeps both edits in place, in both windows (${q(m)} / ${q(d)}, ${q(me)} / ${q(de)})`);
+    await w.js(busyThen(1200, `${typeAt('eol.py', 2, 5, 'Y')}; ${removeLine('eol.py', 7)}`));
+    await js(`ide.lineSeparators.convert(${doc('eol.py')}, '\\n')`);
+    rows[1] = 'row1Y';
+    rows[6] = '';
+    await sleep(2500);
+    [m, d, me, de] = await both();
+    check(m === d && m === rows.join('\n') && me === '\n' && de === '\n',
+      `edits made while the other window converted to LF land where they were typed, in both windows (${q(m)} / ${q(d)}, ${q(me)} / ${q(de)})`);
+    await w.js(`ide.saveTab(ide.findTab(${q(p('eol.py'))}))`);
+    await until(`!${dirty('eol.py')}`, 'main sees eol.py saved', 8000);
+    check(readFileSync(p('eol.py'), 'utf8') === rows.join('\n'), 'the converted file saves with its edits and LF');
+  });
+
+  // Random edits with line breaks in a CRLF file, made in both windows at once.
+  await section('concurrent edits in a CRLF file', async () => {
+    const burst = `(async () => {
+      const m = ${doc('crlf.py')}.model;
+      for (let i = 0; i < 60; i++) {
+        const v = m.getValue();
+        const a = Math.floor(Math.random() * (v.length + 1));
+        const b = Math.min(v.length, a + Math.floor(Math.random() * 8));
+        const ins = ['', 'x', '\\n', 'a\\r\\nb', '\\r\\n\\r\\n', 'é한'][Math.floor(Math.random() * 6)];
+        m.pushEditOperations([], [{ range: ide.monaco.Range.fromPositions(m.getPositionAt(a), m.getPositionAt(Math.random() < 0.5 ? a : b)), text: ins }], () => null);
+        await new Promise(r => setTimeout(r, Math.random() * 8));
+      }
+      return true;
+    })()`;
+    await Promise.all([js(burst), w.js(burst)]);
+    await sleep(1500);
+    const [m, d] = [await js(text('crlf.py')), await w.js(text('crlf.py'))];
+    check(m === d && !/\r(?!\n)|(^|[^\r])\n/.test(m), `random edits with line breaks in a CRLF file end with the same CRLF text in both windows (${m.length} / ${d.length} characters)`);
+    await js(`ide.saveTab(ide.findTab(${q(p('crlf.py'))}))`);
+    await w.until(`!${dirty('crlf.py')}`, 'detached sees crlf.py saved', 8000);
+    check(readFileSync(p('crlf.py'), 'utf8') === m, 'the CRLF file saves the shared text');
+  });
+
+  // Text typed in the window that opens a shared document before the shared text arrives is kept.
+  await section('typing while joining', async () => {
+    await js(append('join.py', '\nMAIN_UNSAVED = 1'));
+    await js(busyThen(1500, ''));
+    await w.js(`ide.openFile(${q(p('join.py'))}).then(() => (${typeAt('join.py', 1, 1, 'TYPED_EARLY ')}, true))`);
+    await sleep(3000);
+    const [m, d] = [await js(text('join.py')), await w.js(text('join.py'))];
+    check(m === d && m.startsWith('TYPED_EARLY # join.py') && m.includes('MAIN_UNSAVED = 1'),
+      `text typed while the shared text was on its way is kept, with the other window's unsaved edit, in both windows (${q(m)} / ${q(d)})`);
+    await js(append('join.py', '\nAFTER = 2'));
+    await w.until(`${text('join.py')}?.endsWith('AFTER = 2')`, 'later edits still shared', 8000).catch(() => {});
+    check(await w.js(text('join.py')) === await js(text('join.py')), 'edits after the join are shared as before');
   });
 
   // C2: a rename in one window moves the document in the other, unsaved text included.

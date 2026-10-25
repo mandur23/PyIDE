@@ -138,6 +138,8 @@
 .vcs-push-warn { color: var(--yellow); }
 :root[data-theme="light"] .vcs-push-warn { color: #a46704; }
 .vcs-push .field { grid-template-columns: 60px 1fr; }
+.vcs-push-note { margin-top: 10px; }
+.vcs-push-rejected .vcs-dialog-list { margin-top: 4px; }
 
 /* Log graph, filters and the Activity timeline */
 .vcs-log-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; }

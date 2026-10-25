@@ -19,17 +19,32 @@
   // next frame, and nothing is lost. It goes to the log once per window instead of the internal errors list.
   const RO_NOTICE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
   let roNoticeLogged = false;
+  // Plugins whose index.js could not be read or threw while it ran (id -> reason), for the Plugins page. Each is
+  // reported once, as main reports a main module that fails to load. The plugin's <script> (core's loadFeatures) carries
+  // data-plugin and data-plugin-name; an error event while it runs has it as document.currentScript.
+  const pluginLoadErrors = new Map();
+  const pluginFailed = (script, reason, stack) => {
+    const { plugin, pluginName } = script.dataset;
+    if (pluginLoadErrors.has(plugin)) return;
+    pluginLoadErrors.set(plugin, reason.split('\n')[0]);
+    report({ kind: 'load', message: `Plugin ${pluginName} failed to load (index.js): ${reason}`, stack });
+  };
 
   addEventListener('error', (e) => {
     // A <script> or stylesheet that failed to load (a plugin's index.js, for example).
     // Images and media that fail (a broken picture in Markdown) are content, not IDE errors.
     if (e.target && e.target !== window) {
       const src = e.target.src || e.target.href;
-      if (src && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) report({ kind: 'load', message: `Failed to load ${src}`, stack: `    at ${src}:1:1` });
+      if (src && e.target.dataset?.plugin) pluginFailed(e.target, 'the file could not be read', `    at ${src}:1:1`);
+      else if (src && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) report({ kind: 'load', message: `Failed to load ${src}`, stack: `    at ${src}:1:1` });
       return;
     }
     const err = e.error;
     if (isCanceled(err)) return void e.preventDefault();
+    if (document.currentScript?.dataset.plugin) {
+      const reason = err?.message || e.message || 'Script error';
+      return void pluginFailed(document.currentScript, reason, `${err?.stack || reason}\n    at ${e.filename}:${e.lineno}:${e.colno}`);
+    }
     if (!err && RO_NOTICE.test(e.message || '')) {
       if (!roNoticeLogged) send('diagnostics:log', { level: 'WARN', category: `#renderer.${windowKind}`, message: `${e.message} (logged once per window)` });
       roNoticeLogged = true;
@@ -64,6 +79,7 @@
 
   window.ideDiagnostics = {
     logger,
+    pluginLoadErrors,
     // For errors a plugin catches but still wants listed as internal errors.
     report: (error, message) => report({ kind: 'reported', message: message || error?.message || String(error), stack: error?.stack || String(error) }),
   };

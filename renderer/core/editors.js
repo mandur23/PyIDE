@@ -4,8 +4,7 @@
 // tab bar and its own Monaco editor; the same document can be open in several groups (they share the model, so
 // edits show everywhere). Groups are arranged in a binary split tree. `ide.editor` is the active group's editor.
 (() => {
-  const { $, el, basename, dirname, samePath, isUnder } = ide.util;
-  const key = (p) => p.toLowerCase();
+  const { $, el, basename, dirname, samePath, isUnder, pathKey: key } = ide.util;
 
   const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
     ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', css: 'css', yml: 'yaml',
@@ -75,7 +74,8 @@
   async function loadDoc(path, { asText } = {}) {
     const existing = docs.get(key(path));
     if (existing) return existing;
-    let r = await ide.api.invoke('fs:readText', path);
+    // The folder's case sensitivity is known before the document is keyed (a.py and A.py may be two files).
+    let [r] = await Promise.all([ide.api.invoke('fs:readText', path), ide.learnPathCase(dirname(path))]);
     if (r.binary && asText) r = { ...(await ide.api.invoke('fs:decode', path, 'auto')), forcedText: true };
     if (r.binary || r.tooLarge) return { unsupported: r };
     const again = docs.get(key(path));
@@ -91,12 +91,16 @@
     const clean = doc.savedVersion === model.getAlternativeVersionId();
     if (adoptSeparator(doc, r.text) && clean) doc.savedVersion = model.getAlternativeVersionId();
     docs.set(key(path), doc);
+    let eol = model.getEOL();
     model.onDidChangeContent((e) => {
+      const eolBefore = eol;
+      eol = e.eol;
       // The tab bars change only when the modified mark does, not on every keystroke.
       if (docDirty(doc) !== doc.shownDirty) scheduleRender(); else reportDirty();
       markChanged(doc, e);
-      if (!applyingRemote) localEdit(doc, e);
+      if (!applyingRemote) localEdit(doc, e, eolBefore);
     });
+    doc.sync.joining = lfText(model.getValue());
     ide.api.send('doc:join', { path });
     return doc;
   }
@@ -207,9 +211,44 @@
   // refuses an edit made on an older revision. A window applies the other windows' edits shifted past its own
   // unconfirmed ones, and sends a refused edit again shifted past the ones it had not seen (operational
   // transformation), so edits typed in two windows at the same moment are all kept, in every window.
-  // An op is {c: [{at, del, ins}], eol?}: changes sorted by `at`, positions in the text before the op, as Monaco reports
-  // them; eol when the op switched the line separator.
+  // An op is {c: [{at, del, ins}], eol?}: changes sorted by `at`, positions in the text before the op; eol when the op
+  // switched the model's line separator. Positions and text count every line break as one '\n', whatever the
+  // separator, so a conversion ({c: [], eol}) moves nothing and the edits other windows made beside it keep their place.
+  // joining: this window's text (as LF) when it asked to join; what it types until the shared text arrives is kept in
+  // `buffer` and moved past the difference then.
   const newSync = () => ({ rev: 0, shared: false, sent: null, buffer: [] });
+  const lfText = (s) => s.replace(/\r\n?/g, '\n');
+  function opOf(e, eolBefore) {
+    if (e.isEolChange) return { c: [], eol: e.eol };
+    const n = eolBefore.length - 1;
+    const c = e.changes.map((x) => ({
+      at: x.rangeOffset - (x.range.startLineNumber - 1) * n,
+      del: x.rangeLength - (x.range.endLineNumber - x.range.startLineNumber) * n,
+      ins: lfText(x.text),
+    })).sort((x, y) => x.at - y.at);
+    return e.eol !== eolBefore ? { c, eol: e.eol } : { c };
+  }
+  // The model position of an op position.
+  function positionAt(m, at) {
+    if (m.getEOL() === '\n') return m.getPositionAt(at);
+    const lineStart = (l) => m.getOffsetAt({ lineNumber: l, column: 1 }) - (l - 1);
+    let lo = 1;
+    let hi = m.getLineCount();
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStart(mid) <= at) lo = mid; else hi = mid - 1;
+    }
+    return { lineNumber: lo, column: Math.min(at - lineStart(lo) + 1, m.getLineMaxColumn(lo)) };
+  }
+  // One change that turns text a into text b (both as LF).
+  function diffOp(a, b) {
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    let endA = a.length;
+    let endB = b.length;
+    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
+    return { c: a === b ? [] : [{ at: start, del: endA - start, ins: b.slice(start, endB) }] };
+  }
 
   // `pos` in the text after `op`. after: a point where op inserted text goes behind that text.
   function mapPoint(pos, op, after) {
@@ -273,7 +312,7 @@
     applyingRemote = true;
     try {
       for (const op of ops) {
-        const edits = op.c.map((c) => ({ range: ide.monaco.Range.fromPositions(m.getPositionAt(c.at), m.getPositionAt(c.at + c.del)), text: c.ins }));
+        const edits = op.c.map((c) => ({ range: ide.monaco.Range.fromPositions(positionAt(m, c.at), positionAt(m, c.at + c.del)), text: c.ins }));
         if (edits.length) m.pushEditOperations([], edits, () => null);
         if (op.eol && m.getEOL() !== op.eol) setModelEOL(m, op.eol);
       }
@@ -282,12 +321,11 @@
     if (doc.savedText !== undefined && m.getValue() === doc.savedText) markSaved(doc, doc.savedText);
   }
 
-  function localEdit(doc, e) {
+  function localEdit(doc, e, eolBefore) {
     doc.savedText = undefined;
     const s = doc.sync;
-    if (!s.shared) return;
-    const c = e.changes.map((x) => ({ at: x.rangeOffset, del: x.rangeLength, ins: x.text })).sort((x, y) => x.at - y.at);
-    s.buffer.push(e.isEolChange ? { c, eol: e.eol } : { c });
+    if (!s.shared && s.joining === undefined) return;
+    s.buffer.push(opOf(e, eolBefore));
     flushSync(doc);
   }
   function flushSync(doc) {
@@ -301,37 +339,36 @@
   // Applies another window's text as one minimal edit so cursors and undo history survive. remote: the text is the
   // shared document's already, so it is not sent on as this window's edit.
   function applyText(doc, text, { remote = true } = {}) {
-    const cur = doc.model.getValue();
-    if (cur === text) return;
-    let start = 0;
-    while (start < cur.length && start < text.length && cur[start] === text[start]) start++;
-    let endCur = cur.length;
-    let endNew = text.length;
-    while (endCur > start && endNew > start && cur[endCur - 1] === text[endNew - 1]) { endCur--; endNew--; }
-    const range = ide.monaco.Range.fromPositions(doc.model.getPositionAt(start), doc.model.getPositionAt(endCur));
+    const [c] = diffOp(doc.model.getValue(), text).c;
+    if (!c) return;
+    const range = ide.monaco.Range.fromPositions(doc.model.getPositionAt(c.at), doc.model.getPositionAt(c.at + c.del));
     applyingRemote = remote;
-    try { doc.model.pushEditOperations([], [{ range, text: text.slice(start, endNew) }], () => null); } finally { applyingRemote = false; }
+    try { doc.model.pushEditOperations([], [{ range, text: c.ins }], () => null); } finally { applyingRemote = false; }
   }
 
   const docAt = (path) => docs.get(key(path));
   ide.api.on('window:peers', (n) => { peers = n; });
   // Joined: alone with the document (shared false, its own text stands), or sharing it from revision `rev` on, with the
-  // shared text.
-  ide.api.on('doc:synced', ({ path, rev, text, shared }) => {
+  // shared text (as LF) and line separator. What was typed meanwhile was made on this window's text when it joined:
+  // moved past the difference to the shared text, it is kept and sent.
+  ide.api.on('doc:synced', ({ path, rev, text, eol, shared }) => {
     const d = docAt(path);
     if (!d) return;
+    const { joining, buffer } = d.sync;
     d.sync = { ...newSync(), rev, shared };
     if (text === undefined) return;
-    applyText(d, text);
-    const crlf = text.includes('\r\n');
-    if (/\r\n|\n/.test(text) && crlf !== (d.model.getEOL() === '\r\n')) { applyingRemote = true; try { setModelEOL(d.model, crlf ? '\r\n' : '\n'); } finally { applyingRemote = false; } }
+    const [[toShared], typed] = xform([diffOp(joining ?? lfText(d.model.getValue()), text)], buffer, true);
+    const ownEol = typed.some((op) => op.eol);
+    applyOps(d, [ownEol ? toShared : { ...toShared, eol }]);
+    d.sync.buffer = typed;
+    flushSync(d);
   });
   // Another window opened this document: this one hands over the text, and from now on sends its edits.
   ide.api.on('doc:share', ({ path }) => {
     const d = docAt(path);
     if (!d) return void ide.api.send('doc:leave', { path });
     Object.assign(d.sync, { shared: true, sent: null, buffer: [] });
-    ide.api.send('doc:snapshot', { path, rev: d.sync.rev, text: d.model.getValue() });
+    ide.api.send('doc:snapshot', { path, rev: d.sync.rev, text: lfText(d.model.getValue()), eol: d.model.getEOL() });
   });
   ide.api.on('doc:unshared', ({ path }) => { const d = docAt(path); if (d) d.sync = { ...newSync(), rev: d.sync.rev }; });
   ide.api.on('doc:op', ({ path, rev, ops, mine }) => {
@@ -1327,7 +1364,12 @@
         if (moved.fresh) { delete moved.fresh; ide.emit('fileOpened', nt); }
         if (t && g.active === t) activateTab(g, nt);
       }
-      if (docDirty(doc)) applyText(moved, doc.model.getValue(), { remote: false });
+      // While the moved document joins, its unsaved text is where this window starts from, not an edit typed while
+      // joining: the other windows that follow the move bring the same text, which would otherwise be added twice.
+      if (docDirty(doc) && moved.sync.joining !== undefined) {
+        applyText(moved, doc.model.getValue());
+        moved.sync.joining = lfText(moved.model.getValue());
+      } else if (docDirty(doc)) applyText(moved, doc.model.getValue(), { remote: false });
       for (const t of tabs) closeTabObj(t, true, { moving: true });
       if (!tabsOfDoc(moved).length) releaseDoc(moved);
     }

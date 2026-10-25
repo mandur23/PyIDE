@@ -869,16 +869,40 @@ exports.register = ({ ipcMain, app }) => {
     return { remotes: st.remotes, remote, branch: st.branch, upstream: st.upstream, commits };
   });
 
-  h('push', async (root) => {
+  // opts.lease: Force Push after a rejection, with the remote branch's commit the Push Rejected dialog showed. It runs
+  // `--force-with-lease=<branch>:<lease>`, so a push someone made after that (seen by a later fetch or not) is refused
+  // instead of overwritten; plain --force is never used.
+  // A rejected push answers `rejected` (git's reason: 'non-fast-forward', 'fetch first', 'stale info'…); a
+  // non-fast-forward one also `branch` (the remote branch), `lease` (its commit as last fetched) and `dropped`, the
+  // commits there that HEAD does not have and a force push would remove.
+  h('push', async (root, opts = {}) => {
     const st = await status(root);
     if (!st.isRepo) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
     if (!st.remotes.length) return { ok: false, noRemote: true, reason: 'noRemote', err: 'No remotes are defined for this repository.' };
     if (!st.branch) return { ok: false, reason: 'detached', err: 'Cannot push from a detached HEAD.' };
+    const [remoteOf, mergeOf] = await Promise.all([git(root, ['config', `branch.${st.branch}.remote`]), git(root, ['config', `branch.${st.branch}.merge`])]);
+    const tracked = st.upstream && remoteOf.out.trim() && mergeOf.out.trim().startsWith('refs/heads/');
+    const remote = tracked ? remoteOf.out.trim() : pickRemote(st.remotes);
+    const branch = tracked ? mergeOf.out.trim().slice('refs/heads/'.length) : st.branch;
+    const target = st.upstream || `${remote}/${branch}`;
+    let args;
+    if (opts.lease !== undefined) {
+      if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(opts.lease)) return { ok: false, err: 'Invalid lease' };
+      args = ['push', '--porcelain', `--force-with-lease=refs/heads/${branch}:${opts.lease}`, ...(st.upstream ? [] : ['-u']), remote, `HEAD:refs/heads/${branch}`];
+    } else args = st.upstream ? ['push', '--porcelain'] : ['push', '--porcelain', '-u', remote, st.branch];
     const count = await git(root, ['rev-list', '--count', ...(st.upstream ? ['@{u}..HEAD'] : ['HEAD', '--not', '--remotes'])]);
-    const args = st.upstream ? ['push', '--porcelain'] : ['push', '--porcelain', '-u', pickRemote(st.remotes), st.branch];
     const r = await git(root, args);
-    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, pushed: Number(count.out.trim()) || 0,
-      target: st.upstream || `${pickRemote(st.remotes)}/${st.branch}` };
+    const res = { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, pushed: Number(count.out.trim()) || 0, target, branch, forced: opts.lease !== undefined };
+    const rejected = !res.ok && /^!\t\S+\t\[rejected\] \(([^)]*)\)/m.exec(r.out);
+    if (!rejected) return res;
+    res.rejected = rejected[1];
+    if (res.rejected !== 'non-fast-forward') return res;
+    const lease = (await git(root, ['rev-parse', '-q', '--verify', `refs/remotes/${remote}/${branch}^{commit}`])).out.trim();
+    if (!lease) return res;
+    const dropped = await git(root, ['log', '-50', '--format=%h%x1f%s%x1f%an', `HEAD..${lease}`]);
+    res.lease = lease;
+    res.dropped = dropped.out.split(/\r?\n/).filter(Boolean).map((l) => { const [short, subject, author] = l.split('\x1f'); return { short, subject, author }; });
+    return res;
   });
 
   h('pull', async (root) => {

@@ -1024,6 +1024,8 @@
     async function load({ refresh = false } = {}) {
       const justInstalled = new Set(installed.filter((p) => p.justInstalled).map((p) => p.id));
       installed = await ide.api.invoke('plugins:list');
+      // A renderer script that failed while it loaded in this window (renderer/core/diagnostics.js).
+      for (const p of installed) if (p.loaded && !p.loadError) p.loadError = window.ideDiagnostics.pluginLoadErrors.get(p.id) || null;
       for (const p of installed) if (justInstalled.has(p.id)) p.justInstalled = true;
       if (refresh) market = null;
       render();
@@ -1183,7 +1185,7 @@
       }
       const desc = el('p', 'plugin-desc', l.description || tr('No description'));
       detail.append(head, badges, actions, desc);
-      // What is wrong with an installed plugin: its plugin.json, or the error its main-process code threw this session.
+      // What is wrong with an installed plugin: its plugin.json, or the error its code threw while it loaded this session.
       if (inst?.broken || inst?.loadError) {
         const why = el('div', 'settings-note plugins-online-error');
         why.id = 'pluginError';

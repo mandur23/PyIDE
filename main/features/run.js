@@ -131,20 +131,28 @@ function isNpmShim(file) {
     return text.includes('%*') && /:find_dp0\b|Created by npm/i.test(text);
   } catch { return false; }
 }
+const isUtf8 = (file) => {
+  try { new TextDecoder('utf-8', { fatal: true }).decode(fs.readFileSync(file)); return true; } catch { return false; }
+};
+// cmd reads a batch file and writes its own messages ("is not recognized…") in the console code page, so a UTF-8 file
+// runs after chcp 65001. One that is not UTF-8 was written in that code page (CP949 on Korean Windows): it runs in it,
+// and its output is read as CP949.
 function toolCommand(file, args) {
   if (!/\.(cmd|bat)$/i.test(file)) return { cmd: file, args, opts: {} };
   const twice = isNpmShim(file);
+  const utf8 = isUtf8(file);
   const line = [path.normalize(file).replace(META, '^$1'), ...args.map((a) => cmdArg(a, twice))].join(' ');
   return {
     cmd: process.env.ComSpec || 'cmd.exe',
-    args: ['/d', '/s', '/c', `"${line}"`],
-    opts: { windowsVerbatimArguments: true, env: { NoDefaultCurrentDirectoryInExePath: '1' } },
+    args: ['/d', '/s', '/c', `"${utf8 ? 'chcp 65001>nul & ' : ''}${line}"`],
+    opts: { windowsVerbatimArguments: true, env: { NoDefaultCurrentDirectoryInExePath: '1' }, ...(utf8 ? {} : { encoding: 'cp949' }) },
   };
 }
 
 // Starts an external tool: {program, args (one string), cwd, defaultCwd, macros: {projectDir, filePath, pyInterpreter}}.
-// -> {id, command, cwd} or {error}. Output streams as process events (ide.proc.attach).
-function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
+// -> {id, command, cwd} or {error}. Output streams as process events (ide.proc.attach). A folder longer than Windows
+// allows is replaced as for run:start (workingDir); cwd is the folder the tool runs in.
+async function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
   const values = macroValues(macros);
   const prog = expandMacros(program, values).trim();
   if (!prog) return { error: 'noProgram' };
@@ -153,9 +161,10 @@ function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
   const argv = splitArgs(args).map((a) => expandMacros(a, values));
   const file = resolveProgram(prog, dir);
   const c = toolCommand(file, argv);
-  const id = ctx.startProcess(c.cmd, c.args, { cwd: dir, ...c.opts });
+  const run = (await workingDir(dir, [values.ProjectDir])).cwd;
+  const id = ctx.startProcess(c.cmd, c.args, { cwd: run, ...c.opts });
   const show = (a) => (/[\s"]/.test(a) || a === '' ? `"${a}"` : a);
-  return { id, command: [file, ...argv].map(show).join(' '), cwd: dir };
+  return { id, command: [file, ...argv].map(show).join(' '), cwd: run };
 }
 
 Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir });

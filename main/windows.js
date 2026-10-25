@@ -4,6 +4,7 @@
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { pathKey, caseSensitiveDirs } = require('./path-case');
 
 function createWindowManager({ appDir }) {
   const all = new Set();
@@ -117,9 +118,11 @@ function createWindowManager({ appDir }) {
   // text and numbers the edits: an edit made on the current revision is applied and sent to every window holding the
   // document (to its sender as the confirmation); one made on an older revision is refused, and its window sends it
   // again shifted past the edits it had not seen yet (renderer/core/editors.js). One order, so every window ends with
-  // the same text.
-  const shared = new Map(); // lower-cased path -> {holders: Set of webContents ids, waiting: Set, rev, text | null}
-  const docKey = (p) => String(p).toLowerCase();
+  // the same text. The text has '\n' for every line break, as the ops count them; eol is the document's separator.
+  // Keyed like the renderer's documents (main/path-case.js): a window asks about a document's folder before it joins.
+  const shared = new Map(); // pathKey -> {holders: Set of webContents ids, waiting: Set, rev, text | null, eol}
+  const docKey = pathKey;
+  ipcMain.handle('fs:caseSensitiveDirs', (_e, folder) => caseSensitiveDirs(folder));
   const sendTo = (id, channel, msg) => alive().find((w) => w.webContents.id === id)?.webContents.send(channel, msg);
   const applyOps = (text, ops) => ops.reduce((t, op) => {
     let out = '';
@@ -141,27 +144,29 @@ function createWindowManager({ appDir }) {
   }
   ipcMain.on('doc:join', (e, { path: p }) => {
     const k = docKey(p);
-    const s = shared.get(k) || shared.set(k, { holders: new Set(), waiting: new Set(), rev: 0, text: null }).get(k);
     const id = e.sender.id;
-    if (s.holders.has(id)) return;
+    // A window joins only with a new document; one it held before went with its page (a reload), so it joins afresh
+    // and always gets its doc:synced.
+    if (shared.get(k)?.holders.has(id) || shared.get(k)?.waiting.has(id)) leave(k, id);
+    const s = shared.get(k) || shared.set(k, { holders: new Set(), waiting: new Set(), rev: 0, text: null }).get(k);
     if (!s.holders.size) {
       s.holders.add(id);
       e.sender.send('doc:synced', { path: p, rev: s.rev, shared: false });
     } else if (s.text !== null) {
       s.holders.add(id);
-      e.sender.send('doc:synced', { path: p, rev: s.rev, text: s.text, shared: true });
+      e.sender.send('doc:synced', { path: p, rev: s.rev, text: s.text, eol: s.eol, shared: true });
     } else {
       s.waiting.add(id);
       if (s.waiting.size === 1) askHolder(s, p);
     }
   });
-  ipcMain.on('doc:snapshot', (e, { path: p, rev, text }) => {
+  ipcMain.on('doc:snapshot', (e, { path: p, rev, text, eol }) => {
     const s = shared.get(docKey(p));
     if (!s || !s.holders.has(e.sender.id)) return;
-    Object.assign(s, { rev, text });
+    Object.assign(s, { rev, text, eol });
     for (const id of s.waiting) {
       s.holders.add(id);
-      sendTo(id, 'doc:synced', { path: p, rev, text, shared: true });
+      sendTo(id, 'doc:synced', { path: p, rev, text, eol, shared: true });
     }
     s.waiting.clear();
   });
@@ -170,6 +175,7 @@ function createWindowManager({ appDir }) {
     if (!s || s.text === null || !s.holders.has(e.sender.id)) return;
     if (base !== s.rev) return void e.sender.send('doc:nack', { path: p });
     s.text = applyOps(s.text, ops);
+    s.eol = ops.reduce((eol, op) => op.eol || eol, s.eol);
     s.rev++;
     for (const id of s.holders) sendTo(id, 'doc:op', { path: p, rev: s.rev, ops, mine: id === e.sender.id });
   });

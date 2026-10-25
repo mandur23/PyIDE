@@ -47,6 +47,7 @@
   "With Toggle Auto-test on in a test tab, saving a Python file in the project runs its tests again after this delay.": "테스트 탭에서 자동 테스트 전환이 켜져 있으면 프로젝트의 Python 파일을 저장할 때 이 지연 시간 후에 테스트를 다시 실행합니다.",
   "Debug 'pytest in {name}'": "'{name}의 pytest' 디버그",
   "Debug Tests": "테스트 디버그",
-  "The output is in the Debug tool window.": "출력은 디버그 도구 창에 표시됩니다.",
-  "No Python interpreter found.": "Python 인터프리터를 찾을 수 없습니다."
+  "No Python interpreter found.": "Python 인터프리터를 찾을 수 없습니다.",
+  "Cannot debug '{name}'": "'{name}'을(를) 디버그할 수 없습니다",
+  "The program output is in the Console tab.": "프로그램 출력은 콘솔 탭에 있습니다."
 }
