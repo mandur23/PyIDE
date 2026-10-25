@@ -127,44 +127,26 @@ function longPath(p) {
   return path.join(longPath(parent), name);
 }
 
-// Starts debugpy as `python -m debugpy` does, after two optional fixes chosen by its first two arguments ('' for none).
-// - The bundled debugpy's folder: -E or -I among the interpreter options make Python ignore PYTHONPATH, which is how
-//   debugpy is found otherwise, so the launcher puts it on sys.path itself.
-// - Long file names ('1'): in an 8.3 working folder the modules a run imports from there get 8.3 file names, which
-//   pydevd cannot resolve once their long form exceeds MAX_PATH ("unable to get real case"). That covers `-m over`
-//   (the folder and '' on sys.path) and pytest's test files, which pytest imports through a sys.path entry it builds
-//   from the folder (`<folder>\tests`, partly resolved). Every sys.path entry with a short name in it then imports
-//   through a finder rooted at its long form (GetLongPathNameW on the \\?\ form, which has no MAX_PATH limit), when
-//   Python can read it there. Changing to the long folder would do as much for pytest, but a process whose current
-//   folder is past MAX_PATH cannot start a child (CreateProcess fails with "The parameter is incorrect").
+// -E or -I among the interpreter options make Python ignore PYTHONPATH, which is how the bundled debugpy (and the long
+// names of main/features/debugpy-long-paths) are found otherwise, so this launcher puts them on sys.path itself and
+// starts debugpy as `python -m debugpy` does. Its arguments: the bundled debugpy's folder, then the long names' folder
+// or ''. pydevd then shows an exception that ends the program with a note ("execution is paused at: <module>"), since
+// the outermost frame is the launcher's.
 const DEBUGPY_LAUNCHER = [
-  'import os, sys',
+  'import sys',
   '_vendor, _long_names = sys.argv.pop(1), sys.argv.pop(1)',
-  'if _vendor:',
-  '    sys.path.insert(0, _vendor)',
+  'sys.path.insert(0, _vendor)',
   'if _long_names:',
-  '    import ctypes',
-  '    _hooks = list(sys.path_hooks)',
-  '    def _long_form(entry):',
-  '        full = os.path.abspath(entry or os.getcwd())',
-  '        buf = ctypes.create_unicode_buffer(32768)',
-  '        prefix = os.sep * 2 + "?" + os.sep',
-  '        if "~" not in full or not 0 < ctypes.windll.kernel32.GetLongPathNameW(prefix + full, buf, 32768) < 32768:',
-  '            raise ImportError(entry)',
-  '        long = buf.value[len(prefix):] if buf.value.startswith(prefix) else buf.value',
-  '        if long == full or not os.path.isdir(long):',
-  '            raise ImportError(entry)',
-  '        for hook in _hooks:',
-  '            try:',
-  '                return hook(long)',
-  '            except ImportError:',
-  '                pass',
-  '        raise ImportError(entry)',
-  '    sys.path_hooks.insert(0, _long_form)',
-  '    sys.path_importer_cache.clear()',
+  '    sys.path.insert(0, _long_names)',
+  '    import pyide_long_paths',
+  '    pyide_long_paths.install()',
   'from debugpy.server import cli',
   'cli.main()',
 ].join('\n');
+
+// In an 8.3 working folder the modules a debuggee imports get their long names: this folder's sitecustomize, first on
+// PYTHONPATH, installs them before `python -m debugpy` starts.
+const longPathsDir = (unpackedDir) => path.join(unpackedDir, 'main', 'features', 'debugpy-long-paths');
 
 // -E or -I among the interpreter's arguments, alone or in a group of flags (-IB); what follows -W or -X is its value.
 function ignoresPythonPath(args = []) {
@@ -276,8 +258,9 @@ exports.register = (ctx) => {
       // and past that prints "unable to get real case" tracebacks into the output. Breakpoints are sent in the same form.
       const wd = ep ? cwd : (await workingDir(cwd, opts.roots)).cwd;
       const longWd = !ep && wd ? longPath(path.resolve(wd)) : null;
-      const fixes = [!ep && ignoresPythonPath(interp.args) ? vendorDir : '', longWd && longWd !== path.resolve(wd) ? '1' : ''];
-      const launcher = fixes.some(Boolean) ? ['-c', DEBUGPY_LAUNCHER, ...fixes] : ['-m', 'debugpy'];
+      const longNames = longWd && longWd !== path.resolve(wd) ? longPathsDir(ctx.unpackedDir) : '';
+      const launcher = !ep && ignoresPythonPath(interp.args) ? ['-c', DEBUGPY_LAUNCHER, vendorDir, longNames] : ['-m', 'debugpy'];
+      if (longNames && launcher[0] === '-m') env.PYTHONPATH = [longNames, env.PYTHONPATH].join(path.delimiter);
       // In a remote target the processes the program starts run without the debugger: their debugpy would reach the
       // adapter through this side's forward, and their paths would need the target's mappings, neither of which is
       // tested (the fake targets map paths for the program's own debugpy only).

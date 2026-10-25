@@ -113,7 +113,19 @@ for (const name of ['pyide_pytest_plugin.py', 'pyide_unittest_runner.py', 'pyide
   pureCheck(S(d('test_caught_then_other_eq')) === S({ expected: '[6]', actual: '[5]' }), `pytest: after a caught ==, the == that fails is the diff (${S(d('test_caught_then_other_eq'))})`);
   pureCheck(S(d('test_multiline_message')) === S({ expected: "{'k': [1, 3]}", actual: "{'k': [1, 2]}" }), `pytest: an assert over several lines with a message has the diff (${S(d('test_multiline_message'))})`);
   pureCheck(S(d('TestUnit::test_caught_then_equal')) === S({ expected: '[4]', actual: '[3]' }), `pytest: the assertEqual that fails is the diff, not a caught one (${S(d('TestUnit::test_caught_then_equal'))})`);
-  pureCheck(failedWithout('test_big_caught') && r.test_big_caught.duration < 3, `pytest: five caught == on 1,000,000-element lists cost no formatting (${r.test_big_caught?.duration?.toFixed(2)} s)`);
+  const big = tempDir('goto-test-edges-big');
+  write(big, { 'test_big.py': ['BIG = list(range(1_000_000))', 'BIG2 = list(range(1, 1_000_001))', '', '', 'def test_big_caught():', '    for _ in range(5):',
+    '        try:', '            assert BIG == BIG2', '        except AssertionError:', '            pass', '    assert False', ''].join('\n') });
+  const timed = (plugin) => {
+    const started = Date.now();
+    try { py(['-m', 'pytest', ...(plugin ? ['-p', 'pyide_pytest_plugin'] : []), '-q', '-p', 'no:cacheprovider', 'test_big.py'], { cwd: big, env: { PYIDE_TEST_REPORT: path.join(big, 'report.jsonl'), PYTHONPATH: HELPERS }, stdio: 'ignore' }); } catch {}
+    return (Date.now() - started) / 1000;
+  };
+  const without = timed(false);
+  const withPlugin = timed(true);
+  pureCheck(failedWithout('test_big_caught') && withPlugin - without < Math.max(3, without / 2),
+    `pytest: five caught == on 1,000,000-element lists cost the plugin no formatting (${withPlugin.toFixed(2)} s with it, ${without.toFixed(2)} s for pytest alone)`);
+  rmSync(big, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });
 }
 {

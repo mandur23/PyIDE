@@ -150,6 +150,7 @@ try {
     'Soft moves the branch and stages the differences');
   git(project, 'commit', '-m', 'Back again');
   await js(`(window.dispatchEvent(new Event('focus')), true)`);
+  await until(`!!${logRow('Back again')}`, 'the log shows the commit made outside the IDE', 20000);
   await run('Initial commit', 'Reset Current Branch to Here…');
   await until(`document.querySelector('.dialog-title')?.textContent === 'Git Reset'`, 'Git Reset dialog again');
   await mouse(`[...document.querySelectorAll('.dialog .vcs-reset-mode')].find(r => r.querySelector('input').value === 'hard')`, { label: 'Hard' });

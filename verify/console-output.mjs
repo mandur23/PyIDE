@@ -200,6 +200,7 @@ try {
   check(run.bold === '700', 'bold text is bold in the Run console');
   check(run.link, 'the traceback frame is a link');
   if (run.link) {
+    await js(`(document.getElementById('runLink').scrollIntoView({ block: 'center' }), true)`);
     await click('#runLink');
     await until(`ide.activeTab()?.path?.endsWith('progress.py') && ide.editor.getPosition().lineNumber === 9`, 'link opens progress.py:9', 10000).catch(() => {});
     check(await js(`ide.activeTab()?.path?.endsWith('progress.py') && ide.editor.getPosition().lineNumber === 9`), 'clicking the link opens the file at the frame line');

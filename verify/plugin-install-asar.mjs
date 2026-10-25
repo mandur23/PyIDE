@@ -41,6 +41,7 @@ try { fs.cpSync(path.join(appDir, 'plugins-catalog', 'demo-plugin'), path.join($
 catch (e) { out.cpSync = e.code || e.message; }
 const pm = createPluginManager({ appDir, userDataDir: ${JSON.stringify(userData)} });
 const cat = pm.catalog();
+try { out.listing = fs.readdirSync(path.join(appDir, 'plugins-catalog')); out.json = fs.readFileSync(path.join(appDir, 'plugins-catalog', 'demo-plugin', 'plugin.json'), 'utf8'); } catch (e) { out.listing = e.code || e.message; }
 out.catalog = cat.map((p) => p.id);
 try { out.installed = pm.install(cat.find((p) => p.id === 'demo-plugin').dir); } catch (e) { out.error = e.message; }
 process.stdout.write(JSON.stringify(out));
@@ -49,6 +50,7 @@ const r = spawnSync(ELECTRON, [script], { env: { ...process.env, ELECTRON_RUN_AS
 let out = {};
 try { out = JSON.parse(r.stdout); } catch { console.log(r.stdout, r.stderr); }
 check(out.cpSync && out.cpSync !== 'ok', `fs.cpSync cannot copy out of an asar here (${out.cpSync}), so this setup reproduces the report`);
+if (JSON.stringify(out.catalog) !== '["demo-plugin"]') console.log('DIAG', JSON.stringify({ listing: out.listing, json: out.json, status: r.status, stderr: String(r.stderr).slice(0, 2000), archive: archive.length }));
 check(JSON.stringify(out.catalog) === '["demo-plugin"]', `the Marketplace lists the plugin inside app.asar (${JSON.stringify(out.catalog)})`);
 check(out.installed?.id === 'demo-plugin' && !out.error, `installing it from app.asar works (${out.error || JSON.stringify(out.installed)})`);
 const target = path.join(userData, 'plugins', 'demo-plugin');
