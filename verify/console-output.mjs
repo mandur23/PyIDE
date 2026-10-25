@@ -1,5 +1,6 @@
 // Program output in the IDE's consoles: \r progress lines, \b, ANSI colors, traceback links, the size cap, a flood of
-// output, and main's output batching (main/output-batch.js).
+// output, following the end while the user scrolls with the wheel, stray escape sequences, the Python Packages
+// console's stderr colors, and main's output batching (main/output-batch.js).
 import { createRequire } from 'module';
 import { writeFileSync } from 'fs';
 import path from 'path';
@@ -38,7 +39,7 @@ const batchResults = [];
 }
 
 const t = await launch({ fixture: 'core', port: 9290, name: 'console-output' });
-const { js, until, check, click } = t;
+const { js, until, check, click, cdp, sleep } = t;
 for (const [ok, label] of batchResults) check(ok, label);
 
 const put = (name, text) => writeFileSync(path.join(t.project, name), text);
@@ -63,7 +64,7 @@ try {
   await js(`(() => {
     const host = document.createElement('div');
     host.id = 'conTest';
-    host.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:200px;display:flex';
+    host.style.cssText = 'position:fixed;left:0;top:0;width:400px;height:200px;display:flex;z-index:100000;background:#000';
     document.body.appendChild(host);
     window.__con = ide.ui.console(host);
     window.__feed = (chunks, cls) => { __con.clear(); for (const c of chunks) __con.append(c, cls); return __con.text(); };
@@ -93,6 +94,14 @@ try {
   await feed(['  File "C:/x/m', 'od.py", line 7, in f\n'], 'err');
   check(await js(`[...__con.out.querySelectorAll('a')].map((a) => a.textContent).join('|') === 'File "C:/x/mod.py", line 7'`), 'a traceback frame split across chunks is one link');
   check(await feed(['Name: ']) === 'Name: ' && await js(`__con.out.lastElementChild.textContent === 'Name: '`), 'an unfinished line (an input() prompt) shows at once');
+  const lines = Array.from({ length: 2000 }, (_, i) => `line ${i}\n`);
+  const stray = await feed(['start\n\x1b]0;title-without-terminator', ...lines]);
+  check(stray.endsWith('line 1999\n') && (stray.match(/line \d+\n/g) || []).length === 2000, `a stray ESC ] (an OSC sequence with no end) does not hide the 2,000 lines after it (${stray.length} characters)`);
+  const longOsc = await feed(['x\x1b]', ...Array(20).fill('a'.repeat(100))]);
+  check(longOsc === `x]${'a'.repeat(2000)}`, `an ESC ] longer than any real sequence is written out as text, not held (${longOsc.length} characters)`);
+  const interleaved = await js(`(() => { __con.clear(); for (const [s, c] of ${JSON.stringify([['a \x1b[3', null], ['warn\n', 'err'], ['1mRED\x1b[0m\n', null]])}) __con.append(s, c);
+    return { text: __con.text(), red: [...document.querySelectorAll('#conTest .ansi-fg1')].map((s) => s.textContent).join('') }; })()`);
+  check(interleaved.text === 'a warn\nRED\n' && interleaved.red === 'RED', `an escape sequence split by the other stream's output still applies (${JSON.stringify(interleaved)})`);
 
   await js(`(ide.settings.set('console.cycleBufferKB', 64), true)`);
   const capped = await js(`(() => {
@@ -104,27 +113,73 @@ try {
   await js(`(ide.settings.set('console.cycleBufferKB', 1024), true)`);
   check(capped.len >= 63 * 1024 && capped.len <= 128 * 1024 + 1000, `the console keeps about its cycle buffer size (${capped.len} characters of 400,000)`);
   check(/^row \d{4}/.test(capped.first) && capped.last === 'row 0399 x', `the oldest lines go first, cut at a line start (${capped.first} ... ${capped.last})`);
-  const scrolling = await js(`(async () => {
-    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const out = __con.out;
-    const atEnd = () => out.scrollHeight - out.scrollTop - out.clientHeight < 40;
-    __con.clear();
-    for (let i = 0; i < 200; i++) __con.append(\`a \${i}\\n\`);
-    await frames();
-    const followed = atEnd();
-    out.scrollTop = 0;
-    await frames();
-    for (let i = 0; i < 200; i++) __con.append(\`b \${i}\\n\`);
-    await frames();
-    const stayed = out.scrollTop === 0;
-    out.scrollTop = out.scrollHeight;
-    await frames();
-    for (let i = 0; i < 200; i++) __con.append(\`c \${i}\\n\`);
-    await frames();
-    return { followed, stayed, again: atEnd() };
-  })()`);
-  check(scrolling.followed && scrolling.stayed && scrolling.again, `output follows the end, stops while the user is scrolled up, and follows again at the end (${JSON.stringify(scrolling)})`);
+  const frames = 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))';
+  const gap = () => js(`${frames}.then(() => __con.out.scrollHeight - __con.out.scrollTop - __con.out.clientHeight)`);
+  const wheel = async (deltaY, times = 1) => {
+    for (let i = 0; i < times; i++) await cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 200, y: 100, deltaX: 0, deltaY });
+    await sleep(300);
+  };
+  const appendRows = (tag) => js(`(() => { for (let i = 0; i < 200; i++) __con.append('${tag} ' + i + '\\n'); return ${frames}.then(() => true); })()`);
+  await js('(__con.clear(), true)');
+  await appendRows('a');
+  const followed = await gap() < 40;
+  await wheel(-100000);
+  const top = await js('__con.out.scrollTop');
+  await appendRows('b');
+  const stayed = top === 0 && await js('__con.out.scrollTop') === 0;
+  await wheel(100000);
+  await appendRows('c');
+  check(followed && stayed && await gap() < 40, `output follows the end, stops while the user is scrolled up with the wheel, and follows again at the end (followed ${followed}, stayed ${stayed})`);
+  for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: 200, y: 100, button: 'left', clickCount: 1 });
+  for (const type of ['rawKeyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, key: 'PageUp', code: 'PageUp', windowsVirtualKeyCode: 33 });
+  await sleep(300);
+  await appendRows('d');
+  const paged = await gap();
+  check(paged > 40, `PageUp in the clicked console stops the following too (${Math.round(paged)} px from the end)`);
+  // A flood that trims the console every frame (64 KB kept, 80 KB a frame): the wheel still stops the following.
+  await js(`(ide.settings.set('console.cycleBufferKB', 64), true)`);
+  const flooding = (on) => js(on ? `(() => { __con.clear(); window.__flooding = true; const chunk = ('y'.repeat(79) + '\\n').repeat(1024);
+    const loop = () => { if (!window.__flooding) return; __con.append(chunk); requestAnimationFrame(loop); }; loop(); return true; })()` : '(window.__flooding = false, true)');
+  await flooding(true);
+  await sleep(500);
+  await wheel(-300, 4);
+  await sleep(1200);
+  await flooding(false);
+  const floodUp = await gap();
+  await flooding(true);
+  await sleep(500);
+  await wheel(-300, 4);
+  await sleep(500);
+  await wheel(100000, 3);
+  await sleep(800);
+  await flooding(false);
+  const floodBack = await gap();
+  await js(`(ide.settings.set('console.cycleBufferKB', 1024), true)`);
+  check(floodUp > 1000, `during a flood that trims the console, the wheel up stops the following (${Math.round(floodUp)} px from the end)`);
+  check(floodBack < 40, `during the flood, the wheel back down to the end follows again (${Math.round(floodBack)} px from the end)`);
   await js(`(document.getElementById('conTest').remove(), true)`);
+
+  // ---- Python Packages: stderr colored per line ----
+  const pkg = await js(`(async () => {
+    const attach = ide.proc.attach;
+    ide.proc.attach = (id, h) => {
+      ide.proc.attach = attach;
+      h.data('Collecting nothere\\n', 'out');
+      h.data('WARNING: Retrying after a broken connection\\nERROR: No matching distribution found for nothere\\n', 'err');
+      h.data('WARNING: pip is', 'err');
+      h.data(' out of date\\n', 'err');
+      h.exit(1);
+    };
+    await ide.packages.run('Probe', async () => ({ id: 'probe-1' }));
+    const out = document.getElementById('pkgOut');
+    const classOf = (needle) => {
+      const w = document.createTreeWalker(out, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) if (n.data.includes(needle)) return n.parentElement.className;
+      return 'missing';
+    };
+    return { warning: classOf('WARNING: Retrying'), error: classOf('ERROR: No matching'), split: classOf(' out of date') };
+  })()`);
+  check(pkg.warning === '' && pkg.error === 'err' && pkg.split === '', `Python Packages colors each stderr line: a WARNING and an ERROR in one message, a warning split over two (${JSON.stringify(pkg)})`);
 
   // ---- Run: progress, colors and traceback links ----
   await openFile(t, 'progress.py');

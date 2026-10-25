@@ -374,8 +374,12 @@
     diff.setModel({ original, modified });
     diff.onDidUpdateDiff(() => {
       const k = diff.getLineChanges()?.length || 0;
-      // Unequal values can print the same (objects that share a __repr__ but have no __eq__).
-      count.textContent = !k ? tr('Contents are identical') : k === 1 ? tr('1 difference') : tr('{n} differences', { n: k });
+      const { expected, actual } = n.diff;
+      // Monaco's models normalize line separators. Unequal values can also print the same (objects that share a
+      // __repr__ but have no __eq__).
+      count.textContent = k ? (k === 1 ? tr('1 difference') : tr('{n} differences', { n: k }))
+        : expected !== actual && expected.replace(/\r\n?/g, '\n') === actual.replace(/\r\n?/g, '\n') ? tr('Contents have differences only in line separators')
+          : tr('Contents are identical');
       body.dataset.differences = String(k);
     });
   }

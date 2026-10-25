@@ -294,10 +294,19 @@
     ed.trigger('keymap', 'type', { text: '\n' });
   }
 
+  // Keywords that start a statement and cannot continue an expression inside brackets; if/for/else also start
+  // comprehensions and conditional expressions, but those are indented when they open a line.
+  const STATEMENT_KW = new Set(['def', 'class', 'return', 'import', 'from', 'raise', 'pass', 'break', 'continue', 'del', 'global',
+    'nonlocal', 'assert', 'try', 'except', 'finally', 'while', 'with', 'if', 'elif', 'else', 'for', 'async']);
+  // Keywords that join two operands (`a and b`, `x if c else y`), so an operand cannot end or start with them.
+  const JOINING_KW = new Set(['and', 'or', 'not', 'in', 'is', 'if', 'else', 'for', 'lambda', 'await', 'yield', 'from', 'as', 'async']);
+  const endsOperand = (t) => t.type === 'string' || (t.type === 'name' && !JOINING_KW.has(t.value)) || (t.type === 'op' && (isCloser(t) || /\d/.test(t.value)));
+  const startsOperand = (t) => t.type === 'string' || (t.type === 'name' && !JOINING_KW.has(t.value)) || (t.type === 'op' && /\d/.test(t.value));
   // The logical statements of Python code, from its tokens: each is {first, last} (token indexes, comments left out),
-  // the brackets left open at its end, and its first line's indentation. A bracket still open at a line end continues
-  // the statement only when the next line is indented deeper or starts with a closing bracket, so an unclosed call
-  // does not swallow the statements below it.
+  // the brackets left open at its end, and its first line's indentation. Inside brackets the statement goes on over
+  // lines of any indentation, as in Python, except that a line not indented past the statement ends it when it starts
+  // with a statement keyword or puts an operand right after an operand (`print("a"` then `x = 1`), so an unclosed call
+  // does not swallow the statements below it, the way PyCharm's parser recovers.
   function statements(text, tokens) {
     const out = [];
     let cur = null;
@@ -308,7 +317,8 @@
       const t = tokens[k];
       if (t.type === 'comment') continue;
       const newLine = !prev || (text.slice(prev.end, t.start).includes('\n') && !(prev.type === 'op' && prev.value === '\\'));
-      if (newLine && stack.length && cur && !isCloser(t) && leading(text, lineStartAt(text, t.start)).length <= cur.indent.length) close();
+      if (newLine && stack.length && cur && !isCloser(t) && leading(text, lineStartAt(text, t.start)).length <= cur.indent.length
+        && ((t.type === 'name' && STATEMENT_KW.has(t.value)) || (endsOperand(prev) && startsOperand(t)))) close();
       if (!cur || (newLine && !stack.length) || (prev?.type === 'op' && prev.value === ';' && !stack.length)) {
         close();
         cur = { first: k, last: k, indent: leading(text, lineStartAt(text, t.start)) };
@@ -403,8 +413,9 @@
   const CLAUSE = /^(?:elif|else|except|finally)\b/;
   // Move Statement Up/Down (0-based `line`, dir -1 or 1): the statement at the line, with its decorators, the comment
   // lines right above it, its block and its elif/else/except/finally clauses, trades places with the neighbouring
-  // statement of the same block; the blank lines between them stay where they are. {from, to, lines, shift} replaces
-  // lines from..to and moves the caret by `shift` lines; false at the edge of the block; null on a blank or comment line.
+  // statement of the same block; the blank lines between them stay where they are. {from, to, lines, upper, lower}
+  // replaces lines from..to, where `upper` and `lower` ([first, last]) are the two statements that trade places; false at
+  // the edge of the block; null on a blank or comment line.
   function statementMove(text, line, dir) {
     const lines = text.split(/\r?\n/);
     const cont = continuationLines(text, lines.length);
@@ -440,7 +451,17 @@
     if (j < 0 || j >= ranges.length) return false;
     const [a, b] = dir < 0 ? [ranges[j], ranges[i]] : [ranges[i], ranges[j]];
     const moved = [...lines.slice(b[0], b[1] + 1), ...lines.slice(a[1] + 1, b[0]), ...lines.slice(a[0], a[1] + 1)];
-    return { from: a[0], to: b[1], lines: moved, shift: dir < 0 ? a[0] - b[0] : b[1] - a[1] };
+    return { from: a[0], to: b[1], lines: moved, upper: a, lower: b };
+  }
+
+  // Where 0-based line `l` is after the move `m`: the upper statement ends where the lower one ended, the lower one
+  // starts where the upper one started, the blank lines between them shift by the difference in length.
+  function lineAfterMove(m, l) {
+    const [[a0, a1], [b0, b1]] = [m.upper, m.lower];
+    if (l < a0 || l > b1) return l;
+    if (l <= a1) return l + b1 - a1;
+    if (l >= b0) return l - b0 + a0;
+    return l + (b1 - b0) - (a1 - a0);
   }
 
   function moveStatement(dir, ed = ide.editor) {
@@ -451,11 +472,12 @@
     if (m === false) return;
     if (!m) return ed.trigger('keymap', dir < 0 ? 'editor.action.moveLinesUpAction' : 'editor.action.moveLinesDownAction', null);
     const range = new Range(m.from + 1, 1, m.to + 1, model.getLineMaxColumn(m.to + 1));
-    const sels = ed.getSelections().map((s) => new Selection(s.selectionStartLineNumber + m.shift, s.selectionStartColumn, s.positionLineNumber + m.shift, s.positionColumn));
+    const after = (lineNumber) => lineAfterMove(m, lineNumber - 1) + 1;
+    const sels = ed.getSelections().map((s) => new Selection(after(s.selectionStartLineNumber), s.selectionStartColumn, after(s.positionLineNumber), s.positionColumn));
     ed.pushUndoStop();
     ed.executeEdits('pyide.moveStatement', [{ range, text: m.lines.join(model.getEOL()) }], sels);
     ed.pushUndoStop();
-    ed.revealLine(pos.lineNumber + m.shift);
+    ed.revealLine(after(pos.lineNumber));
   }
 
   // PyCharm's Toggle Case: upper case unless the text (the selection, else the word at the caret) has no lower case.
@@ -571,6 +593,24 @@
     return true;
   }
 
+  // The third quote of a typed `"""` that closes the open string drops the closing quotes right after the caret (the
+  // ones closeTripleQuote added, or any others), so `"""Summary"""` typed in full stays as typed, as in PyCharm.
+  // Monaco overtypes only the quotes it paired itself.
+  function overtypeTripleQuote(ed) {
+    const model = ed.getModel();
+    const sels = ed.getSelections();
+    if (!isPython(model) || !editable(ed) || sels?.length !== 1 || !sels[0].isEmpty()) return false;
+    const pos = sels[0].getPosition();
+    const line = model.getLineContent(pos.lineNumber);
+    const q = line[pos.column - 2];
+    if ((q !== '"' && q !== "'") || !line.startsWith(q.repeat(3), pos.column - 1)) return false;
+    const caret = model.getOffsetAt(pos);
+    const last = tokenize(model.getValue().slice(0, caret)).at(-1);
+    if (last?.type !== 'string' || !last.triple || last.quote !== q || last.end !== caret || last.contentEnd === last.end) return false;
+    ed.executeEdits('pyide.overtypeQuotes', [{ range: new Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column + 3), text: '' }], [sels[0]]);
+    return true;
+  }
+
   // Enter between fresh quotes on the first line of a def or class body: the stub in the docstring format.
   function insertDocstringStub(ed) {
     const model = ed.getModel();
@@ -599,7 +639,7 @@
     if (typeof ed.onDidType !== 'function') return;
     ed.onDidType((typed) => {
       if (typed.endsWith('}')) convertAtCaret(ed);
-      else if (typed.endsWith('"') || typed.endsWith("'")) closeTripleQuote(ed);
+      else if (typed.endsWith('"') || typed.endsWith("'")) overtypeTripleQuote(ed) || closeTripleQuote(ed);
       else if (typed.endsWith('\n')) insertDocstringStub(ed);
     });
   });

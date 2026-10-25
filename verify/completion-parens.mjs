@@ -1,8 +1,9 @@
 // Completing a function or method adds its parentheses, as PyCharm does (renderer/features/lsp, CALL_PARENS). Port 9375.
 // A temp project with bank.py (Account.deposit(amount), Account.close(), make_account, deco). Real typing and Enter in
 // the suggest widget: the caret lands inside `()` with parameter info for a callable with parameters, after `()` for
-// one without, and a typed `)` steps over the added one; a `(` typed right after the pair steps into it. No parentheses after `@`, in imports (one line or in
-// parentheses), for a class, or where `(` already follows.
+// one without, and a typed `)` steps over the added one; a `(` typed right after the pair steps into it. Closing the
+// call by hand after strings, brackets, inner calls and a nested completion, at once or key by key, leaves one `)`.
+// No parentheses after `@`, in imports (one line or in parentheses), for a class, or where `(` already follows.
 import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile, tempDir } from './lib.mjs';
@@ -100,6 +101,35 @@ try {
   await caretAtEnd(4);
   await complete('pri', 'print');
   check(await lineText(4) === 'print()' && await column() === 'print('.length + 1, `completing print inserts print() with the caret inside (${S(await lineText(4))}, column ${await column()})`);
+  await press('Escape');
+
+  // Closing the call by hand after completing print: strings, brackets and calls typed inside (Monaco closes and
+  // steps over their own closers), a nested completion with its own pair, `)` right away, the `(` deleted. Each key
+  // is its own insert unless the step says `at once`. The line must end up balanced, with the caret at its end.
+  const keys = (text) => [...text].map((ch) => ({ key: ch }));
+  for (const [what, steps, want] of [
+    ['a string', keys('"hi")'), 'print("hi")'],
+    ['a list', keys('[1])'), 'print([1])'],
+    ['a call typed in full', keys('len(items))'), 'print(len(items))'],
+    ['a string holding )', keys('")")'), 'print(")")'],
+    ['len completed inside, then its argument', [{ complete: ['le', 'len'] }, ...keys('items))')], 'print(len(items))'],
+    ['len completed inside, the rest at once', [{ complete: ['le', 'len'] }, { key: 'items))' }], 'print(len(items))'],
+    ['a string at once', [{ key: '"hi")' }], 'print("hi")'],
+    ['a string holding ) at once', [{ key: '")")' }], 'print(")")'],
+    [') right away', keys(')'), 'print()'],
+    ['Backspace on the (, then the call typed', [{ press: 'Backspace' }, ...keys('("hi")')], 'print("hi")'],
+  ]) {
+    await press('Escape');
+    await setText('from bank import Account, deco\n\nacct = Account("kim")\n\n');
+    await caretAtEnd(4);
+    await complete('pri', 'print');
+    for (const step of steps) {
+      if (step.complete) await complete(...step.complete);
+      else if (step.press) await press(step.press);
+      else await type(step.key);
+    }
+    check(await lineText(4) === want && await column() === want.length + 1, `print completed, then ${what}: ${want} (${S(await lineText(4))}, column ${await column()})`);
+  }
   await press('Escape');
 
   // `(` already follows: nothing added.

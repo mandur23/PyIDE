@@ -174,9 +174,21 @@
     const interp = ide.currentInterp();
     // The job shows in the status bar's background tasks (its header as the title), where Cancel stops it.
     const task = ide.tasks?.start({ title: header, onCancel: () => ide.proc.kill(r.id) });
+    // pip writes its warnings to stderr too, and main joins stderr reads, so each stderr line is red unless it starts
+    // with WARNING or DEPRECATION; a line split over two messages keeps the class its start got.
+    let errCls = null;
+    let lineStart = true;
+    const data = (text, stream) => {
+      if (stream !== 'err') return con.append(text, null);
+      for (const part of text.split(/(?<=\n)/)) {
+        if (lineStart) errCls = /^(?:\s|\x1b\[[0-9;]*m)*(WARNING|DEPRECATION)/.test(part) ? null : 'err';
+        con.append(part, errCls);
+        lineStart = part.endsWith('\n');
+      }
+    };
     return new Promise((resolve) => {
       ide.proc.attach(r.id, {
-        data: (text, stream) => con.append(text, stream === 'err' && !/^\s*(WARNING|DEPRECATION)/.test(text) ? 'err' : null),
+        data,
         async exit(code) {
           busy = false;
           task?.done();

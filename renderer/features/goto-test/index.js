@@ -122,9 +122,14 @@
   }
 
   // ---------- Create New Test ----------
-  // The module to import: the packages (folders with __init__.py) above the file; when they stop below the project
-  // root, at a folder named src (the src layout), from there, else from the project root.
+  // The module to import. The Sources Roots and the project root are on sys.path, so with roots marked it is the path
+  // from the deepest of them that holds the file. With none marked: the packages (folders with __init__.py) above the
+  // file; when they stop below the project root, at a folder named src (the src layout), from there, else from the
+  // project root.
   async function moduleOf(path) {
+    const roots = ide.projectRoots?.sourceRoots() || [];
+    const base = roots.length && [...roots, ide.root].filter((r) => isUnder(path, r) && !samePath(path, r)).sort((a, b) => b.length - a.length)[0];
+    if (base) return path.slice(base.replace(/[\\/]+$/, '').length + 1).replace(/\.py$/i, '').split(/[\\/]/).join('.');
     const parts = [moduleBase(path)];
     let dir = dirname(path);
     while (!samePath(dir, ide.root) && isUnder(dir, ide.root) && await ide.api.exists(joinPath(dir, '__init__.py'))) {
@@ -137,45 +142,87 @@
     return parts.join('.');
   }
 
-  // The text of the test: a class with test methods, or test functions, after the import of what they test.
+  // The text of the test: a class with test methods, or test functions, after the import of what they test. `names`:
+  // what it defines at the top level of the file.
   function testCode({ module, subject, className, chosen }) {
     const imported = subject.kind === 'class' ? [subject.name] : chosen;
     const importLine = imported.length ? `from ${module} import ${imported.join(', ')}` : `import ${module}`;
-    let body;
     if (className) {
-      body = `class ${className}:\n${chosen.length ? chosen.map((n) => `    def ${testName(n)}(self):\n        assert False\n`).join('\n') : '    pass\n'}`;
-    } else {
-      body = (chosen.length ? chosen : [module.split('.').pop()]).map((n) => `def ${testName(n)}():\n    assert False\n`).join('\n\n');
+      const body = `class ${className}:\n${chosen.length ? chosen.map((n) => `    def ${testName(n)}(self):\n        assert False\n`).join('\n') : '    pass\n'}`;
+      return { importLine, body, names: [className] };
     }
-    return { importLine, body };
+    const names = (chosen.length ? chosen : [module.split('.').pop()]).map((n) => testName(n));
+    return { importLine, body: names.map((n) => `def ${n}():\n    assert False\n`).join('\n\n'), names };
   }
 
-  // `existing` with the import added after its imports (unless it is there) and the body at the end.
+  // Python's logical lines as [first, last] line indexes: a statement goes on over open brackets, strings and
+  // backslash continuations.
+  function statements(lines) {
+    const out = [];
+    let first = -1;
+    let depth = 0;
+    let quote = null;
+    lines.forEach((text, i) => {
+      if (first < 0) {
+        if (!text.trim() || /^\s*#/.test(text)) return;
+        first = i;
+      }
+      let j = 0;
+      let comment = false;
+      while (j < text.length) {
+        const c = text[j];
+        if (quote) {
+          if (c === '\\') j += 2;
+          else if (text.startsWith(quote, j)) { j += quote.length; quote = null; } else j++;
+        } else if (c === '#') {
+          comment = true;
+          break;
+        } else if (c === '"' || c === "'") {
+          quote = text.startsWith(c.repeat(3), j) ? c.repeat(3) : c;
+          j += quote.length;
+        } else {
+          if ('([{'.includes(c)) depth++;
+          else if (')]}'.includes(c)) depth = Math.max(0, depth - 1);
+          j++;
+        }
+      }
+      const continued = !comment && text.endsWith('\\');
+      if (quote?.length === 1 && !continued) quote = null;
+      if (!quote && !depth && !continued) { out.push([first, i]); first = -1; }
+    });
+    if (first >= 0) out.push([first, lines.length - 1]);
+    return out;
+  }
+
+  // `existing` with the import added (unless it is there) after the module docstring and the imports above the first
+  // definition, and the body at the end.
   function addTo(existing, { importLine, body }) {
     const lines = existing.replace(/\s+$/, '').split(/\r?\n/);
     if (!lines.some((l) => l.trim() === importLine)) {
       let at = 0;
-      // After a module docstring, then after the last import before the first definition.
-      const first = lines.findIndex((l) => l.trim());
-      if (first >= 0 && /^[rbuRBU]?("""|''')/.test(lines[first].trim())) {
-        const q = lines[first].trim().match(/("""|''')/)[1];
-        let end = first;
-        if (lines[first].trim().split(q).length < 3) while (end + 1 < lines.length && !lines[++end].includes(q));
-        at = end + 1;
+      for (const [k, [first, last]] of statements(lines).entries()) {
+        const head = lines[first];
+        if (/^(class|def|async\s+def|@)\b/.test(head)) break;
+        if (/^(import|from)\b/.test(head) || (k === 0 && /^[rbuRBU]{0,2}["']/.test(head))) at = last + 1;
       }
-      for (let i = at; i < lines.length && !/^(class|def|async\s+def|@)\b/.test(lines[i]); i++) if (/^(import|from)\s/.test(lines[i])) at = i + 1;
       lines.splice(at, 0, importLine);
     }
     return `${lines.join('\n')}\n\n\n${body}`;
   }
 
-  async function writeTest(file, code, className) {
+  // Which of `names` the top level of a file's text already defines.
+  const clashes = (text, names) => {
+    const defined = new Set(outline(text.split(/\r?\n/)).map((e) => e.name));
+    return names.filter((n) => defined.has(n));
+  };
+
+  async function writeTest(file, code) {
     const doc = ide.getDocument?.(file);
     const exists = !!doc || await ide.api.exists(file);
     const before = exists ? await textOf(file) : '';
-    if (className && new RegExp(`^class\\s+${className}\\b`, 'm').test(before)) {
-      throw new Error(tr('{name} already exists in {file}', { name: className, file: basename(file) }));
-    }
+    // A second definition would silently replace the first: Python keeps the last one.
+    const taken = clashes(before, code.names);
+    if (taken.length) throw new Error(tr('{name} already exists in {file}', { name: taken.join(', '), file: basename(file) }));
     const text = exists && before.trim() ? addTo(before, code) : `${code.importLine}\n\n\n${code.body}`;
     const created = [];
     if (doc && !doc.model.isDisposed()) {
@@ -216,10 +263,15 @@
       return input;
     };
     const input = (value, name) => { const i = el('input', 'input'); i.value = value; i.name = name; i.spellcheck = false; return i; };
-    const dirIn = field(tr('Target directory:'), input(await defaultTargetDir(path), 'dir'));
-    const fileIn = field(tr('Test file name:'), input(`test_${moduleBase(path)}.py`, 'file'));
+    const targetDir = await defaultTargetDir(path);
+    const targetFile = `test_${moduleBase(path)}.py`;
+    const dirIn = field(tr('Target directory:'), input(targetDir, 'dir'));
+    const fileIn = field(tr('Test file name:'), input(targetFile, 'file'));
     const classIn = field(tr('Test class name:'), input(cls ? testName(cls.name, 'class') : '', 'class'));
     const checks = [];
+    // Functions the default test file already has start unchecked: writing them again is refused.
+    const defaultTarget = joinPath(targetDir, targetFile);
+    const existing = cls || !(await ide.api.exists(defaultTarget)) ? [] : clashes(await textOf(defaultTarget), candidates.map((n) => testName(n)));
     if (candidates.length) {
       body.append(el('div', 'gt-list-title', cls ? tr('Test methods:') : tr('Test functions:')));
       const list = el('div', 'gt-list');
@@ -229,7 +281,7 @@
         box.type = 'checkbox';
         box.value = name;
         // Private and special methods start unchecked, the public ones checked.
-        box.checked = !name.startsWith('_');
+        box.checked = !name.startsWith('_') && !existing.includes(testName(name));
         const label = el('span', null, testName(name));
         label.dataset.userText = '';
         row.append(box, label);
@@ -252,7 +304,7 @@
         const chosen = checks.filter((c) => c.checked).map((c) => c.value);
         const code = testCode({ module, subject, className, chosen });
         try {
-          await writeTest(target, code, className);
+          await writeTest(target, code);
         } catch (err) {
           ide.ui.alert(tr('Cannot create the test: {error}', { error: ide.util.errorText(err) }));
           return false;

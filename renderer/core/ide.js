@@ -278,9 +278,19 @@ const consoleCap = () => Math.max(64, Number(ide.settings.get('console.cycleBuff
 const LIVE_MAX = 4096;
 // Finished output goes into spans of at most this many characters, so appending to one stays cheap.
 const SPAN_MAX = 16384;
-const CONTROL = /\r?\n|\r|\x08|\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-// What a chunk may end with that the next chunk completes: the \r of a \r\n, or the start of an escape sequence.
-const SPLIT_TAIL = /\r$|\x1b(?:\[[0-9;?]*|\][^\x07\x1b]*\x1b?)?$/;
+// An OSC sequence (a window title, a hyperlink) never holds a line break, so a stray ESC ] in binary output does not
+// hide the lines after it.
+const CONTROL = /\r?\n|\r|\x08|\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)/g;
+// What a chunk may end with that the next chunk completes: the \r of a \r\n, or the start of an escape sequence. A
+// start longer than any real sequence is not held but written out as text, so later output does not wait behind it.
+const SPLIT_TAIL = /\r$|\x1b(?:\[[0-9;?]{0,32}|\][^\x07\x1b\n]{0,510}\x1b?)?$/;
+
+// When the page last got a key that scrolls up the scroller the user clicked (the console's <pre> takes no focus, so
+// its keys go to the body).
+let scrollUpKeyAt = -Infinity;
+document.addEventListener('keydown', (e) => {
+  if ((e.target === document.body || e.target?.closest?.('.console')) && /^(PageUp|ArrowUp|Home)$/.test(e.key)) scrollUpKeyAt = performance.now();
+}, true);
 
 // Program output as a terminal shows it. The unfinished last line stays editable: \r returns to its start and later
 // text overwrites it (progress bars), \b steps back, colors carry across chunks. Finished lines are written once.
@@ -292,27 +302,43 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   host.appendChild(out);
   // Output follows the end unless the user scrolled up. Measured on scroll, not on append: a hidden console (a tool
   // window or tab not shown) has no size, and once shown it must open at its latest output, not at its first line.
-  // A scroll event comes a frame after the scroll, when more output may have arrived, so only a move above where the
-  // console last scrolled itself (the user scrolling up) stops the following.
+  // What stops the following is the user's own input (the wheel turned up, or a scrollbar drag, touch scroll or
+  // PageUp/Up/Home away from the end), not the scroll position alone: in a flood the oldest lines are trimmed every
+  // frame and scroll anchoring moves the view by itself. Scrolling back to the end follows again. The browser clamps
+  // a scroll to the end it last laid out while more output may have come since, so that end is the one measured at
+  // the last frame.
   let stick = true;
-  let autoTop = 0;
+  let endTop = 0;
+  let pointerDown = false;
   const toEnd = () => {
     out.scrollTop = out.scrollHeight;
-    autoTop = out.scrollTop;
+    endTop = out.scrollTop;
   };
+  out.addEventListener('wheel', (e) => { if (e.deltaY < 0) stick = false; }, { passive: true });
+  out.addEventListener('pointerdown', () => {
+    pointerDown = true;
+    const up = () => {
+      pointerDown = false;
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+    };
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+  });
   out.addEventListener('scroll', () => {
     if (!out.clientHeight) return;
-    if (out.scrollHeight - out.scrollTop - out.clientHeight < 40) stick = true;
-    else if (out.scrollTop < autoTop - 1) stick = false;
+    if (out.scrollTop >= Math.min(endTop, out.scrollHeight - out.clientHeight) - 40) stick = true;
+    else if (pointerDown || performance.now() - scrollUpKeyAt < 500) stick = false;
   });
   observeSize(out, () => { if (stick) toEnd(); });
-  let scrollQueued = false;
+  let frameQueued = false;
   const follow = () => {
-    if (!stick || scrollQueued) return;
-    scrollQueued = true;
+    if (frameQueued) return;
+    frameQueued = true;
     requestAnimationFrame(() => {
-      scrollQueued = false;
+      frameQueued = false;
       if (stick) toEnd();
+      else endTop = out.scrollHeight - out.clientHeight;
     });
   };
   let inp;
@@ -329,8 +355,9 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   }
 
   let st = PLAIN;
-  let held = '';
-  let heldCls = null;
+  // Per stream class, the \r or escape sequence start a chunk ended with: stdout and stderr come interleaved, so the
+  // rest may arrive after the other stream's text.
+  const held = new Map();
   // The unfinished line: runs of {text, cls, st}, its length and the caret column.
   let line = [];
   let len = 0;
@@ -340,10 +367,9 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   let tailLen = 0;
   let kept = 0;
   const reset = () => {
-    st = PLAIN; held = ''; heldCls = null; line = []; len = 0; col = 0; live = null; tail = null; tailLen = 0; kept = 0;
-    // Cleared output starts at its end again; the scroll back to the top is not the user scrolling up.
+    st = PLAIN; held.clear(); line = []; len = 0; col = 0; live = null; tail = null; tailLen = 0; kept = 0;
     stick = true;
-    autoTop = -Infinity;
+    endTop = 0;
   };
   const pushRun = (runs, run) => {
     const last = runs[runs.length - 1];
@@ -403,8 +429,6 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
       node = next;
     }
     kept -= removed;
-    // Scroll anchoring moves the view up by what was cut; that is not the user leaving the end.
-    if (stick) autoTop = -Infinity;
     while (out.firstChild && out.firstChild !== live && !out.firstChild.textContent) out.firstChild.remove();
     for (const e of [...(out.firstChild?.querySelectorAll?.('*') || [])]) if (!e.textContent) e.remove();
     if (tail && !tail.isConnected) { tail = null; tailLen = 0; }
@@ -434,8 +458,10 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
       }
     } else {
       let last = 0;
+      // An ESC that starts no sequence (a stray one, or the start of an over-long one) is dropped, as a terminal does.
+      const textOf = (a, b) => text.slice(a, b).replaceAll('\x1b', '');
       for (const m of text.matchAll(CONTROL)) {
-        if (m.index > last) put(text.slice(last, m.index), cls);
+        if (m.index > last) put(textOf(last, m.index), cls);
         last = m.index + m[0].length;
         const c = m[0];
         if (c === '\n' || c === '\r\n') {
@@ -453,7 +479,7 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
           if (m[1] === '2') { line = []; len = 0; } else if (!m[1] || m[1] === '0') { line = slice(0, col); len = Math.min(len, col); }
         }
       }
-      if (last < text.length) put(text.slice(last), cls);
+      if (last < text.length) put(textOf(last), cls);
     }
     if (len > LIVE_MAX) {
       for (const r of line) pushRun(done, r);
@@ -470,17 +496,13 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
     append(text, cls) {
       cls ||= null;
       text = String(text);
-      // Another stream comes in between: a held \r still rewinds the line, half an escape sequence is dropped.
-      if (held && heldCls !== cls) {
-        if (held === '\r') feed(held, heldCls);
-        held = '';
-      }
-      text = held + text;
-      held = '';
+      // Another stream comes in between: a held \r can no longer start a \r\n, so it rewinds the line now.
+      for (const [c, h] of held) if (c !== cls && h === '\r') { held.delete(c); feed(h, c); }
+      text = (held.get(cls) || '') + text;
+      held.delete(cls);
       const split = SPLIT_TAIL.exec(text);
       if (split) {
-        held = split[0];
-        heldCls = cls;
+        held.set(cls, split[0]);
         text = text.slice(0, split.index);
       }
       feed(text, cls);

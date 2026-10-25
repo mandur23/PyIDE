@@ -1,5 +1,6 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
+const { pipeline } = require('stream');
 const os = require('os');
 const path = require('path');
 const remote = require('../remote');
@@ -173,19 +174,33 @@ async function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
 Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir });
 
 // The program's standard input from a file (Redirect input from): the file is streamed in and then closed, so the
-// program reads it to the end and gets EOF, as with `python script.py < file`.
+// program reads it to the end and gets EOF, as with `python script.py < file`. A program that exits before reading it
+// all closes the pipe, and the file is closed then too.
 function feedInput(ctx, id, file) {
   const stdin = ctx.procs.get(id)?.stdin;
   if (!stdin) return;
-  fs.createReadStream(file).on('error', () => stdin.end()).pipe(stdin);
+  pipeline(fs.createReadStream(file), stdin, () => {});
 }
 
 // ---------- Emulate terminal in output console ----------
 // The program runs in a pseudo-console (ConPTY, as the Terminal does), so isatty() is true and libraries draw colors,
 // progress bars and prompts as in a terminal; the Run tab shows it with xterm.js. Output, input and size travel on
 // run:terminal* channels to the window that started it.
-const terminals = new Map(); // id -> {proc, owner}
+const terminals = new Map(); // id -> {proc, owner, nav}
 let nextTerminal = 1;
+// A page reload leaves nothing to show a window's terminal runs, so they end, as the Terminal's sessions do
+// (terminal.js). webContents -> main-frame navigations since its first terminal run; a run started after the latest
+// one is the new page's.
+const navigations = new WeakMap();
+function watchNavigation(wc) {
+  if (navigations.has(wc)) return;
+  navigations.set(wc, 0);
+  wc.on('did-navigate', () => {
+    const n = navigations.get(wc) + 1;
+    navigations.set(wc, n);
+    for (const [id, t] of terminals) if (t.owner === wc && t.nav < n) killTerminal(id);
+  });
+}
 
 // node-pty's ConPTY agent keeps the input pipe and, for a program that exits by itself, the output reader thread
 // (see releasePty in terminal.js); both go once the exit event has drained the output.
@@ -214,7 +229,8 @@ async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles,
   });
   const id = nextTerminal++;
   const owner = e.sender;
-  terminals.set(id, { proc, owner });
+  watchNavigation(owner);
+  terminals.set(id, { proc, owner, nav: navigations.get(owner) });
   let buffer = '';
   let scheduled = false;
   proc.onData((data) => {

@@ -176,6 +176,20 @@ await section('A script folder longer than Windows allows', async () => {
     `Debug of a Module name configuration in a ${deep.length}-character folder runs there with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
   out = await debugCfg({ type: 'pytest', name: 'pytest over', target: path.join(deep, 'test_over.py'), cwd: deep, args: '-p no:cacheprovider' }, '-m pytest');
   check(/1 passed/.test(out) && !pydevdLost(out), `Debug of pytest in a ${deep.length}-character folder runs the test with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
+  // A test file in a subfolder, named relative to the working folder: pytest imports it through `<8.3 folder>\tests`
+  // on sys.path. The breakpoint in it stops under its long name, and the test can still start a child process (not a
+  // Python one: debugpy would hold that for a debugger to attach).
+  const testsDir = path.join(deep, 'tests');
+  mkdirSync(testsDir, { recursive: true });
+  writeFileSync(path.join(testsDir, 'test_deep.py'), 'import subprocess\n\n\ndef test_deep():\n    answer = subprocess.run(["cmd", "/d", "/c", "echo 42"], capture_output=True, text=True).stdout.strip()\n    assert answer == "42"\n');
+  await openFile(t, path.relative(t.project, path.join(testsDir, 'test_deep.py')));
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 6, column: 1 }))`);
+  await press('Ctrl+F8');
+  const testStop = {};
+  out = await debugCfg({ type: 'pytest', name: 'pytest deep', target: 'tests\\test_deep.py', cwd: deep, args: '-p no:cacheprovider' }, 'test_deep.py', testStop);
+  check(testStop.frame?.line === 6 && testStop.frame.path?.toLowerCase() === path.join(testsDir, 'test_deep.py').toLowerCase(),
+    `Debug of pytest stops at a breakpoint in tests\\test_deep.py under its long name (${q(testStop.frame)})`);
+  check(/1 passed/.test(out) && !pydevdLost(out), `and the test, which starts a child process, passes with no pydevd path error (${q(pydevdLost(out) || out.slice(-300))})`);
 
   const NODE_CWD = `-e "console.log('CWD=' + process.cwd())"`;
   const toolOut = (call) => js(`${call}.then((r) => r.error ? { error: r.error } : new Promise((resolve) => {

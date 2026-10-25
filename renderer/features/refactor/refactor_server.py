@@ -1796,17 +1796,33 @@ def enclosing_method_class(src, node):
     return None
 
 
+CODING_COOKIE = re.compile(r'^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+')
+FILE_PRAGMA = re.compile(r'^#\s*(type:\s*ignore\b|mypy:|pyright:)')
+
+
+def file_header_end(lines):
+    """How many lines at the top of the file must stay first: the shebang, the coding cookie (line 1 or 2) and
+    file-level checker pragmas right after them."""
+    n = 0
+    while n < len(lines) and (n == 0 and lines[0].startswith('#!') or n < 2 and CODING_COOKIE.match(lines[n])
+                              or FILE_PRAGMA.match(lines[n])):
+        n += 1
+    return n
+
+
 def insert_top_level(src, anchor, block):
-    """Puts `block` (lines) above the module-level statement `anchor` and the comments right above it, with two
-    blank lines around it. Returns the new text and the 0-based index of the block's first line."""
+    """Puts `block` (lines) above the module-level statement `anchor` and the comments right above it (never above
+    the file's header lines), with two blank lines around it. Returns the new text and the 0-based index of the
+    block's first line."""
     lines = src.lines[:]
+    floor = file_header_end(lines)
     at = node_lines(anchor)[0] - 1
-    while at > 0 and lines[at - 1].lstrip().startswith('#'):
+    while at > floor and lines[at - 1].lstrip().startswith('#'):
         at -= 1
     start = at
-    while start > 0 and not lines[start - 1].strip():
+    while start > floor and not lines[start - 1].strip():
         start -= 1
-    above = ['', ''] if start > 0 else []
+    above = ['', ''] if start > floor else [''] if floor else []
     out = lines[:start] + above + block + ['', ''] + lines[at:]
     return '\n'.join(out), start + len(above)
 
@@ -1842,11 +1858,16 @@ def create_definition(src, path, fix, kind):
 
 
 def statement_of(src, node):
-    """The statement holding the node, as a line a new statement can go above (an `elif` is part of its `if`)."""
-    stmt = next(a for a in (node, *src.ancestors(node)) if isinstance(a, ast.stmt))
-    while src.lines[stmt.lineno - 1].lstrip().startswith(('elif', 'else')) and isinstance(src.parents.get(stmt), ast.stmt):
-        stmt = src.parents[stmt]
-    return stmt
+    """The statement holding the node, as one whose first line a new statement can go above: that line must begin
+    with a statement (`a = 1; b = x` and `if a: b = x` do), so a statement on a clause line (`else: return x`,
+    `except E: x`, `case 1: x`) or in an `elif` test climbs to the compound statement around it."""
+    starts = {src.span(n)[0] for n in ast.walk(src.tree) if isinstance(n, ast.stmt)}
+    stmts = [a for a in (node, *src.ancestors(node)) if isinstance(a, ast.stmt)]
+    for stmt in stmts[:-1]:
+        line = src.lines[stmt.lineno - 1]
+        if src.starts[stmt.lineno - 1] + indent_of(line) in starts and not re.match(r'elif\b', line[indent_of(line):]):
+            return stmt
+    return stmts[-1]
 
 
 def create_variable(src, path, fix):
@@ -1930,7 +1951,36 @@ def add_method(ws, src, path, fix):
 # ----- Convert to f-string literal -----
 PERCENT_SPEC = re.compile(r'%(?:\((?P<key>[^)]*)\))?(?P<flags>[#0\- +]*)(?P<width>\*|\d+)?(?:\.(?P<prec>\*|\d+))?'
                           r'[hlL]?(?P<type>[diouxXeEfFgGcrsa%])')
-SIMPLE_EXPR = (ast.Name, ast.Attribute, ast.Constant)
+
+
+def plain(node):
+    """A constant, a name, or an attribute or subscript of those: reading it again, earlier, later or not at all
+    gives the same value as long as no call runs in between."""
+    if isinstance(node, (ast.Constant, ast.Name)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return plain(node.value)
+    if isinstance(node, ast.Subscript):
+        index = node.slice.value if type(node.slice).__name__ == 'Index' else node.slice
+        return plain(node.value) and plain(index)
+    return False
+
+
+def same_evaluation(args, used):
+    """True when an f-string that evaluates `used` (its field expressions, in template order) does what the `%` or
+    `.format` did, which evaluated each of `args` once, in order: every expression that is not plain is used exactly
+    once and in the same order, and each plain read happens between the same two of those as before (or not at all)."""
+    def trace(seq):
+        calls, reads = [], set()
+        for node in seq:
+            if plain(node):
+                reads.add((id(node), len(calls)))
+            else:
+                calls.append(id(node))
+        return calls, reads
+    calls, reads = trace(args)
+    used_calls, used_reads = trace(used)
+    return used_calls == calls and used_reads <= reads
 
 
 def string_literal(src, node):
@@ -1984,7 +2034,7 @@ def format_fields(src, call, body):
         fields = list(string.Formatter().parse(body))
     except ValueError:
         return None
-    out, auto, numbered, uses = [], 0, False, {}
+    out, auto, numbered, used = [], 0, False, []
     for literal, field, spec, conv in fields:
         out.append(braces(literal))
         if field is None:
@@ -2006,15 +2056,15 @@ def format_fields(src, call, body):
             return None
         if '{' in (spec or '') or any(not k.isdigit() for k in re.findall(r'\[([^\]]*)\]', rest)):
             return None
-        uses[id(node)] = uses.get(id(node), 0) + 1
-        if uses[id(node)] > 1 and not isinstance(node, SIMPLE_EXPR):
-            return None
+        used.append(node)
         expr = field_expr(src, node)
         if expr is None:
             return None
         if rest and not isinstance(node, (ast.Name, ast.Attribute, ast.Call, ast.Subscript)) and not expr.startswith('('):
             expr = f'({expr})'
         out.append('{' + expr + rest + (f'!{conv}' if conv else '') + (f':{spec}' if spec else '') + '}')
+    if not same_evaluation(call.args + [k.value for k in call.keywords], used):
+        return None
     return ''.join(out)
 
 
@@ -2054,7 +2104,7 @@ def percent_fields(src, binop, body):
             return None
         mapping = {k.value: v for k, v in zip(right.keys, right.values)}
         values = [mapping.get(m.group('key')) for m in real]
-        if None in values:
+        if None in values or not same_evaluation(right.values, values):
             return None
     else:
         values = list(right.elts) if isinstance(right, ast.Tuple) else [right]
@@ -2082,10 +2132,16 @@ def fstring_conversion(src, offset):
     node = innermost(src, offset, fstring_operands)
     if node is None:
         return None
-    literal = string_literal(src, fstring_operands(node))
+    string_node = fstring_operands(node)
+    literal = string_literal(src, string_node)
     if literal is None:
         return None
     raw, quote, body = literal
+    # The template is read from the source text, so an escape that makes a brace (or, for %, a percent sign) in the
+    # string's value would be missed: `'{}\x7d\x7d'.format(5)` is "5}", while f'{5}\x7d\x7d' is "5}}".
+    specials = '{}' if isinstance(node, ast.Call) else '%'
+    if any(string_node.value.count(c) != body.count(c) for c in specials):
+        return None
     inner = format_fields(src, node, body) if isinstance(node, ast.Call) else percent_fields(src, node, body)
     if inner is None:
         return None
@@ -2325,9 +2381,62 @@ def candidates(ws, path, classes):
     return own, out
 
 
-def signature(c, bound):
+def base_module(ws, entry):
+    """The dotted name another module imports the base class's module by, else None."""
+    if entry.get('object'):
+        return None
+    try:
+        inside = is_within(entry['path'], ws.root)
+    except ValueError:
+        inside = False
+    module = import_name(ws, entry['path']) if inside else entry.get('module')
+    return module if module and all(p.isidentifier() for p in module.split('.')) else None
+
+
+def binding_import(ws, c, name):
+    """An import that binds `name` to what it is at module level in the base class's module: that module's own
+    import of it when absolute, else `from <base module> import name`, as (module, name or None, asname). None when
+    the base module does not bind it at module level (a class attribute) or cannot be named."""
+    tree = c['src'].tree
+
+    def visit(body):
+        for st in body:
+            if isinstance(st, ast.Import):
+                for a in st.names:
+                    if (a.asname or a.name.split('.')[0]) == name:
+                        return a.name, None, a.asname
+            elif isinstance(st, ast.ImportFrom) and st.level == 0:
+                for a in st.names:
+                    if (a.asname or a.name) == name:
+                        return st.module, a.name, a.asname
+            for field in ('body', 'orelse', 'finalbody'):
+                if isinstance(st, (ast.If, ast.Try, ast.With)) and (found := visit(getattr(st, field, None) or [])):
+                    return found
+        return None
+    found = visit(tree.body)
+    if found:
+        return found
+    module = base_module(ws, c['entry'])
+    return (module, name, None) if module and name in module_bindings(tree) else None
+
+
+def default_text(ws, c, default, bound, needed):
+    """The default as written when the target module can name everything it reads, adding to `needed` the imports
+    that make it so; `...` when some name cannot be imported (defaults are evaluated when the def runs, so a name
+    the module lacks would stop it from importing)."""
+    names = {n.id for n in ast.walk(default) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    names -= {n.id for n in ast.walk(default) if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
+    names -= {n.arg for n in ast.walk(default) if isinstance(n, ast.arg)}
+    imports = [binding_import(ws, c, n) for n in sorted(names - bound)]
+    if None in imports:
+        return '...'
+    needed.extend(i for i in imports if i not in needed)
+    return one_line(c['src'].segment(default))
+
+
+def signature(ws, c, bound, needed):
     """`name(params) -> ret` for the generated method; annotations that use names the target module does not have
-    are left out."""
+    are left out, defaults are kept (see default_text)."""
     fn, src = c['fn'], c['src']
     a = fn.args
 
@@ -2340,7 +2449,7 @@ def signature(c, bound):
         if t:
             text += f': {t}'
         if default is not None:
-            d = one_line(src.segment(default))
+            d = default_text(ws, c, default, bound, needed)
             text += f' = {d}' if t else f'={d}'
         return text
     posonly = getattr(a, 'posonlyargs', [])
@@ -2398,14 +2507,40 @@ DECORATOR_TEXT = [('staticmethod', 'staticmethod'), ('abstractstaticmethod', 'st
                   ('property', 'property'), ('abstractproperty', 'property')]
 
 
-def generated_method(c, bound, mode, indent, unit):
+def add_imports(text, needed):
+    """Adds the imports (module, name or None, asname) below the module's leading imports, joining a `from` import
+    to a one-line `from <module> import ...` already there. Returns the new text and how many lines it added; the
+    new lines all go above the first class or function."""
+    if not needed:
+        return text, 0
+    tree = ast.parse(text)
+    lines = text.split('\n')
+    new = []
+    for module, name, asname in needed:
+        alias = (name or module) + (f' as {asname}' if asname else '')
+        st = name and next((st for st in tree.body if isinstance(st, ast.ImportFrom) and st.level == 0 and st.module == module
+                            and st.lineno == st.end_lineno and all(a.name != '*' for a in st.names)), None)
+        if st:
+            line = lines[st.lineno - 1].encode('utf-8')
+            head, tail = line[:st.end_col_offset].decode('utf-8'), line[st.end_col_offset:].decode('utf-8')
+            head = f'{head[:-1].rstrip()}, {alias})' if head.endswith(')') else f'{head}, {alias}'
+            lines[st.lineno - 1] = head + tail
+        else:
+            new.append(f'from {module} import {alias}' if name else f'import {alias}')
+    at = max(import_block_end(tree), file_header_end(lines))
+    if new and at < len(lines) and lines[at].strip() and not any(isinstance(st, (ast.Import, ast.ImportFrom)) for st in tree.body):
+        new += ['', '']
+    return '\n'.join(lines[:at] + new + lines[at:]), len(new)
+
+
+def generated_method(ws, c, bound, needed, mode, indent, unit):
     decos = []
     for name, text in DECORATOR_TEXT:
         if name in c['decos'] and f'{indent}@{text}' not in decos:
             decos.append(f'{indent}@{text}')
     head = 'async def' if isinstance(c['fn'], ast.AsyncFunctionDef) else 'def'
     body = 'pass' if mode == 'implement' else override_body(c, bound)
-    return decos + [f'{indent}{head} {signature(c, bound)}:', f'{indent}{unit}{body}']
+    return decos + [f'{indent}{head} {signature(ws, c, bound, needed)}:', f'{indent}{unit}{body}']
 
 
 def class_entry(params):
@@ -2426,7 +2561,7 @@ def class_members(params):
     (src, _), found = candidates(ws, path, params['classes'])
     bound = BUILTIN_BINDINGS | module_bindings(src.tree)
     return {'methods': [{'name': c['name'], 'owner': c['entry'].get('name'), 'module': c['entry'].get('module', ''),
-                         'signature': signature(c, bound), 'abstract': c['abstract']} for c in found]}
+                         'signature': signature(ws, c, bound, []), 'abstract': c['abstract']} for c in found]}
 
 
 def insert_methods(params):
@@ -2438,7 +2573,8 @@ def insert_methods(params):
         raise Fail('nothing', 'Nothing to change')
     bound = BUILTIN_BINDINGS | module_bindings(src.tree)
     indent, unit = body_indent(src, cls), indent_unit(src)
-    blocks = [generated_method(c, bound, params['mode'], indent, unit) for c in picked]
+    needed = []
+    blocks = [generated_method(ws, c, bound, needed, params['mode'], indent, unit) for c in picked]
     line = params['pos']['line']
     after = None
     if line > cls.lineno:
@@ -2446,8 +2582,9 @@ def insert_methods(params):
             if node_lines(st)[0] <= line:
                 after = st
     new, starts = insert_members(src, cls, blocks, after)
+    new, added = add_imports(new, needed)
     ws.write(path, checked(new))
-    body_index = starts[0] + len(blocks[0]) - 1
+    body_index = starts[0] + added + len(blocks[0]) - 1
     body_text = new.split('\n')[body_index]
     implement = params['mode'] == 'implement'
     col = indent_of(body_text) + 1 if implement else len(body_text) + 1

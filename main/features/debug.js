@@ -126,24 +126,56 @@ function longPath(p) {
   return path.join(longPath(parent), name);
 }
 
-// `python -m debugpy` and debugpy's own `-m` put the working folder first on sys.path (as its absolute path and as
-// ''), so in an 8.3 working folder the modules a run imports from it get 8.3 file names, which pydevd cannot resolve
-// once their long form exceeds MAX_PATH ("unable to get real case"). This launcher, given the folder's long form,
-// makes that sys.path entry import through a finder rooted at the long form (when Python can read it there) and then
-// runs debugpy as `-m debugpy` does.
-const LONG_CWD_DEBUGPY = [
+// Starts debugpy as `python -m debugpy` does, after two optional fixes chosen by its first two arguments ('' for none).
+// - The bundled debugpy's folder: -E or -I among the interpreter options make Python ignore PYTHONPATH, which is how
+//   debugpy is found otherwise, so the launcher puts it on sys.path itself.
+// - Long file names ('1'): in an 8.3 working folder the modules a run imports from there get 8.3 file names, which
+//   pydevd cannot resolve once their long form exceeds MAX_PATH ("unable to get real case"). That covers `-m over`
+//   (the folder and '' on sys.path) and pytest's test files, which pytest imports through a sys.path entry it builds
+//   from the folder (`<folder>\tests`, partly resolved). Every sys.path entry with a short name in it then imports
+//   through a finder rooted at its long form (GetLongPathNameW on the \\?\ form, which has no MAX_PATH limit), when
+//   Python can read it there. Changing to the long folder would do as much for pytest, but a process whose current
+//   folder is past MAX_PATH cannot start a child (CreateProcess fails with "The parameter is incorrect").
+const DEBUGPY_LAUNCHER = [
   'import os, sys',
-  '_long = sys.argv.pop(1)',
-  'if os.path.isdir(_long):',
-  '    for _hook in sys.path_hooks:',
-  '        try:',
-  '            sys.path_importer_cache[os.getcwd()] = _hook(_long)',
-  '            break',
-  '        except ImportError:',
-  '            pass',
+  '_vendor, _long_names = sys.argv.pop(1), sys.argv.pop(1)',
+  'if _vendor:',
+  '    sys.path.insert(0, _vendor)',
+  'if _long_names:',
+  '    import ctypes',
+  '    _hooks = list(sys.path_hooks)',
+  '    def _long_form(entry):',
+  '        full = os.path.abspath(entry or os.getcwd())',
+  '        buf = ctypes.create_unicode_buffer(32768)',
+  '        prefix = os.sep * 2 + "?" + os.sep',
+  '        if "~" not in full or not 0 < ctypes.windll.kernel32.GetLongPathNameW(prefix + full, buf, 32768) < 32768:',
+  '            raise ImportError(entry)',
+  '        long = buf.value[len(prefix):] if buf.value.startswith(prefix) else buf.value',
+  '        if long == full or not os.path.isdir(long):',
+  '            raise ImportError(entry)',
+  '        for hook in _hooks:',
+  '            try:',
+  '                return hook(long)',
+  '            except ImportError:',
+  '                pass',
+  '        raise ImportError(entry)',
+  '    sys.path_hooks.insert(0, _long_form)',
+  '    sys.path_importer_cache.clear()',
   'from debugpy.server import cli',
   'cli.main()',
 ].join('\n');
+
+// -E or -I among the interpreter's arguments, alone or in a group of flags (-IB); what follows -W or -X is its value.
+function ignoresPythonPath(args = []) {
+  for (const a of args) {
+    if (!/^-[A-Za-z]+$/.test(a)) continue;
+    for (const ch of a.slice(1)) {
+      if ('WXcm'.includes(ch)) break;
+      if (ch === 'E' || ch === 'I') return true;
+    }
+  }
+  return false;
+}
 
 exports.register = (ctx) => {
   const { ipcMain, send, startProcess, killProcess, procs, vendorDir } = ctx;
@@ -185,7 +217,8 @@ exports.register = (ctx) => {
       // and past that prints "unable to get real case" tracebacks into the output. Breakpoints are sent in the same form.
       const wd = ep ? cwd : (await workingDir(cwd, opts.roots)).cwd;
       const longWd = !ep && wd ? longPath(path.resolve(wd)) : null;
-      const launcher = longWd && longWd !== path.resolve(wd) ? ['-c', LONG_CWD_DEBUGPY, longWd] : ['-m', 'debugpy'];
+      const fixes = [!ep && ignoresPythonPath(interp.args) ? vendorDir : '', longWd && longWd !== path.resolve(wd) ? '1' : ''];
+      const launcher = fixes.some(Boolean) ? ['-c', DEBUGPY_LAUNCHER, ...fixes] : ['-m', 'debugpy'];
       const pyArgs = ['-X', 'frozen_modules=off', ...launcher, '--listen', ep ? ep.listen : `127.0.0.1:${port}`,
         '--wait-for-client', ep ? file : longPath(file), ...(opts.params || [])];
       id = ep ? await remote.startPython(ctx, interp, pyArgs, { cwd, env, forwards: ep.forwards, onExit: ep.release })

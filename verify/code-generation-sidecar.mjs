@@ -116,6 +116,37 @@ try {
     const r2 = await apply(file, text, elif[0]);
     check(newText(r2, file) === 'def area(r):\n    limit = None\n    if r > 0:\n        return r * r * pi\n    elif r == limit:\n        return 0\n',
       `a name in an elif test is created above the whole if (${J(newText(r2, file))})`);
+    const variable = async (src, name) => {
+      const fx = await fixesAt(file, src, at(src, name), [{ code: 'reportUndefinedVariable', range: range(src, name) }]);
+      return newText(await apply(file, src, fx[0]), file);
+    };
+    const elsewhere = await variable('def f(flag):\n    if flag:\n        elsewhere = missing + 1\n', 'missing');
+    check(elsewhere === 'def f(flag):\n    if flag:\n        missing = None\n        elsewhere = missing + 1\n',
+      `a statement whose first word only starts with "else" keeps the variable in its block (${J(elsewhere)})`);
+    const decorated = await variable('import functools\n\n\n@functools.cache\ndef f():\n    else_value = missing\n    return else_value\n', 'missing');
+    check(decorated === 'import functools\n\n\n@functools.cache\ndef f():\n    missing = None\n    else_value = missing\n    return else_value\n',
+      `in a decorated function the variable stays in the function (${J(decorated)})`);
+    const oneLine = await variable('def g(a):\n    if a:\n        return 1\n    else: return missing\n', 'missing');
+    check(oneLine === 'def g(a):\n    missing = None\n    if a:\n        return 1\n    else: return missing\n',
+      `a statement on the else line itself is created above the whole if (${J(oneLine)})`);
+    const semicolon = await variable('def f(a):\n    x = 1; y = missing\n', 'missing');
+    check(semicolon === 'def f(a):\n    missing = None\n    x = 1; y = missing\n', `a second statement after ; stays in its function (${J(semicolon)})`);
+    const handler = await variable('def f():\n    try:\n        pass\n    except OSError: return missing\n', 'missing');
+    check(handler === 'def f():\n    missing = None\n    try:\n        pass\n    except OSError: return missing\n', `a statement on an except line goes above the try (${J(handler)})`);
+  }
+  {
+    const P = project({});
+    const file = P('tool.py');
+    const create = async (src) => {
+      const fx = await fixesAt(file, src, at(src, 'main', 1), [{ code: 'reportUndefinedVariable', range: range(src, 'main') }]);
+      return newText(await apply(file, src, fx.find((f) => f.kind === 'createFunction')), file);
+    };
+    const cookie = await create('#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\nmain()\n');
+    check(cookie === '#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\ndef main():\n    pass\n\n\nmain()\n',
+      `Create function stays below the shebang and the coding line (${J(cookie)})`);
+    const commented = await create('#!/usr/bin/env python3\n# type: ignore\n# start here\nmain()\n');
+    check(commented === '#!/usr/bin/env python3\n# type: ignore\n\ndef main():\n    pass\n\n\n# start here\nmain()\n',
+      `a file-level pragma stays on top, the comment over the call stays with it (${J(commented)})`);
   }
 
   // ---------- Add method ----------
@@ -158,6 +189,11 @@ try {
       ['"{}".format({1: 2})', 'f"{({1: 2})}"'],
       ['r"\\d+ %s" % pattern', 'fr"\\d+ {pattern}"'],
       ["'{}'.format(d['k'])", `f"{d['k']}"`],
+      ['"%(a)s-%(a)s" % {"a": x}', 'f"{x}-{x}"'],
+      ['"{} {}".format(x, f())', 'f"{x} {f()}"'],
+      ['"{0}{0}{1}".format(o.x, f())', 'f"{o.x}{o.x}{f()}"'],
+      ['"{}".format(1, x)', 'f"{1}"'],
+      ["'\\x7b%s' % a", "f'\\x7b{a}'"],
     ];
     for (const [src, want] of cases) {
       const text = `v = ${src}\n`;
@@ -168,6 +204,11 @@ try {
     const refused = [
       '"%s %s" % (a,)', '"%*d" % (w, n)', '"{}{}".format(f())', '"{0}{}".format(a, b)', '"{x}".format(**kw)',
       '"%(a)s" % mapping', 'b"%s" % x', '"a" "b %s" % x', '"{:{w}}".format(a, w=3)', '"{0}{0}".format(f())',
+      // Each would evaluate differently as an f-string: a call twice, a dropped side effect, calls in another order,
+      // a read moved after a call, escapes that make braces or % signs.
+      "'%(a)s-%(a)s' % {'a': next(it)}", "'%(a)s' % {'a': 1, 'b': calls.append(1)}", "'%(a)s' % {'a': f(), 'a': g()}",
+      "'{}'.format(1, calls.append(1))", "'{0}'.format(1, k=log())", "'{1}{0}'.format(a(), b())", "'{1}{0}'.format(a, b())",
+      "'{0.x}{1}{0.x}'.format(o, f())", "'{}\\x7d\\x7d'.format(5)", "'\\x7b0\\x7d'.format(5)", "'\\u007b\\u007d'.format()", "'%s\\x25s' % (a,)", "'\\N{BULLET} {}'.format(a)",
     ];
     for (const src of refused) {
       const text = `v = ${src}\n`;
@@ -226,6 +267,28 @@ try {
     const members = (await call('classMembers', { file, classes })).result.methods;
     const run = members.find((m) => m.name === 'run');
     check(run && run.owner === 'C' && !run.abstract, `the MRO is C3: run comes from C, so nothing is left to implement (${J(run)})`);
+  }
+  {
+    // Defaults are evaluated when the def runs: a name the target module lacks is imported the way the base module
+    // has it (as PyCharm does); a name no import can reach (a class attribute) becomes `...`.
+    const P = project({
+      'consts.py': 'LIMIT = 7\n',
+      'base.py': 'import os\nfrom consts import LIMIT as CAP\n\nDEFAULT_TIMEOUT = 5\n\n\nclass Base:\n    RETRIES = 3\n\n    def connect(self, timeout=DEFAULT_TIMEOUT, sep=os.sep, cap=CAP, retries=RETRIES, n=1):\n        return (timeout, sep, cap, n)\n',
+    });
+    const file = P('m.py');
+    const text = 'from base import Base\n\n\nclass Sub(Base):\n    pass\n';
+    const classes = [{ path: file, line: 4, name: 'Sub', module: 'm', bases: [1] }, { path: P('base.py'), line: 7, name: 'Base', module: 'base', bases: [] }];
+    const members = (await call('classMembers', { root: path.dirname(file), file, classes, overlay: { [file]: text } })).result.methods;
+    const sig = members.find((m) => m.name === 'connect')?.signature;
+    check(sig === 'connect(self, timeout=DEFAULT_TIMEOUT, sep=os.sep, cap=CAP, retries=..., n=1)', `the chooser shows the defaults as they will be written (${J(sig)})`);
+    const r = await call('insertMethods', { root: path.dirname(file), file, pos: at(text, 'class Sub'), classes, names: ['connect'], mode: 'override', overlay: { [file]: text } });
+    const got = newText(r, file);
+    check(got === 'from base import Base, DEFAULT_TIMEOUT\nimport os\nfrom consts import LIMIT as CAP\n\n\nclass Sub(Base):\n    def connect(self, timeout=DEFAULT_TIMEOUT, sep=os.sep, cap=CAP, retries=..., n=1):\n        return super().connect(timeout, sep, cap, retries, n)\n',
+      `Override imports the names its defaults use (${J(got ?? r.error)})`);
+    check(r.result?.place?.line === 8, `the caret still lands on the super call (${J(r.result?.place)})`);
+    writeFileSync(file, got || '');
+    const run = spawnSync(PYTHON, [...PY_ARGS, '-c', 'import m; print(m.Sub().connect())'], { cwd: path.dirname(file), encoding: 'utf8', windowsHide: true });
+    check(run.status === 0 && run.stdout.trim() === `(5, '${path.sep === '\\' ? '\\\\' : '/'}', 7, 1)`, `the generated module imports and its defaults reach the base (${J(run.stdout.trim() || run.stderr.trim())})`);
   }
   {
     // A project opened through an 8.3 short path: the nested paths (a fix's owner, the class graph) are matched to the

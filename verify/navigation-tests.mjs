@@ -1,5 +1,5 @@
-// Go to Implementation(s), Go to Super Method and the override gutter markers (type-hierarchy), Go to Test and Create
-// New Test (goto-test), and <Click to see difference> for failed assertions (tests), on verify/fixtures/nav-tests:
+// Go to Implementation(s), Go to Super Method and the override gutter markers (type-hierarchy; found without references
+// requests, none in Power Save Mode), Go to Test and Create New Test (goto-test), and <Click to see difference> for failed assertions (tests), on verify/fixtures/nav-tests:
 // shapes/base.py (Shape(ABC) with an abstract area, Polygon(Shape)), shapes/figures.py (Square(Polygon),
 // Circle(Shape)), shapes/util.py (no tests), tests/test_figures.py, shapes/base_test.py and tests/test_base.py (two tests
 // for base.py), tests/test_diffs.py (failing comparisons). First the reporters on their own (pytest plugin and unittest
@@ -102,6 +102,10 @@ const diffTab = () => js(`(() => {
 try {
   check(await js(`['GotoImplementation', 'GotoSuperMethod', 'GotoTest', 'CreateTest'].every((id) => ide.actions.some((a) => a.id === id))`), 'actions GotoImplementation, GotoSuperMethod, GotoTest and CreateTest are registered');
   check(await js(`ide.actions.find((a) => a.id === 'GotoImplementation').title === 'Go to Implementation(s)' && ide.actions.find((a) => a.id === 'GotoSuperMethod').title === 'Go to Super Method' && ide.actions.find((a) => a.id === 'GotoTest').title === 'Go to Test'`), 'their titles follow PyCharm');
+  // Pyright requests sent for the gutter markers (the async stack names the gutter's functions), by method.
+  await js(`(() => { window.__gutterReq = {}; Error.stackTraceLimit = 50; const inv = ide.api.invoke; ide.api.invoke = function (ch, m, ...rest) {
+    if (ch === 'lsp:request' && /spelledSubtypes|classMarks/.test(new Error().stack)) __gutterReq[m] = (__gutterReq[m] || 0) + 1;
+    return inv.call(this, ch, m, ...rest); }; return true; })()`);
   await openFile(t, 'shapes/base.py');
   await until(`ide.lsp.status() === 'ready'`, 'Pyright ready', 60000);
   const base = 'shapes/base.py';
@@ -170,6 +174,8 @@ try {
   const baseOk = await untilMarks('markers in base.py', `(m) => m.length >= 5`);
   const bm = Object.fromEntries((await marks()).map((m) => [m.line, m]));
   check(baseOk && bm[L.shape]?.kind === 'down' && bm[L.polygon]?.kind === 'down', `subclassed classes get a down marker (${S(await marks())})`);
+  const gutterReq = await js(`__gutterReq`);
+  check(!gutterReq['textDocument/references'] && gutterReq['textDocument/definition'] > 0, `the markers find subclasses without references requests (${S(gutterReq)})`);
   check(bm[L.area]?.kind === 'down' && bm[L.area].implements && bm[L.area].hover === 'Is implemented in Circle, Square', `the abstract area: implemented in Circle and Square (${S(bm[L.area])})`);
   check(bm[L.describe]?.kind === 'down' && !bm[L.describe].implements && bm[L.describe].hover === 'Is overridden in Square', `describe: overridden in Square (${S(bm[L.describe])})`);
   check(bm[L.sides]?.kind === 'down' && bm[L.shape].hover === 'Is subclassed by Circle, Polygon, Square', `sides is overridden; Shape is subclassed by Circle, Polygon and Square (${S(bm[L.shape])})`);
@@ -202,6 +208,16 @@ try {
   const edited = await untilMarks('markers follow the edit', `(m) => m.some((x) => x.line === ${L.sqArea} && x.kind === 'updown') && m.some((x) => x.line === ${L.square} && x.kind === 'down')`);
   check(edited, `after typing a subclass, Square is subclassed and Square.area both implements and is overridden (${S(await marks())})`);
   await js(`(ide.editor.getModel().undo(), true)`);
+
+  // Power Save Mode: no markers and no requests for them, back when it is turned off.
+  await js(`(ide.powerSave.set(true), true)`);
+  const savedGone = await untilMarks('no markers in Power Save Mode', `(m) => m.length === 0`, 10000);
+  await js(`(window.__gutterReq = {}, true)`);
+  await js(`(() => { const m = ide.editor.getModel(); m.pushEditOperations([], [{ range: new ide.monaco.Range(${L.circle - 1}, 1, ${L.circle - 1}, 1), text: '\\nclass Big(Square):\\n    pass\\n\\n' }], () => null); return true; })()`);
+  await sleep(3000);
+  check(savedGone && S(await js(`__gutterReq`)) === '{}' && (await marks()).length === 0, `Power Save Mode: no markers, no requests for them after an edit (${S(await js(`__gutterReq`))})`);
+  await js(`(ide.editor.getModel().undo(), ide.powerSave.set(false), true)`);
+  check(await untilMarks('markers after Power Save Mode', `(m) => m.some((x) => x.line === ${L.sqArea} && x.kind === 'up')`), 'turning Power Save Mode off brings the markers back');
 
   // ---------- Go to Test ----------
   await caret(L.sqDescribe, 9);

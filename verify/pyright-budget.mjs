@@ -7,7 +7,9 @@
 //   over the limit;
 // - semantic highlighting sends no request while the user types and colors the new text after the pause; main
 //   answers a request that a newer one for the same file replaced with `superseded`;
-// - the decorated document symbols are shared between callers.
+// - the decorated document symbols are shared between callers;
+// - the word index names the files whose class statements spell a word in their bases (the type-hierarchy gutter's
+//   candidates) and leaves out folders marked Excluded.
 // Instance B: the uncounted lens, its tooltip and the Code Vision settings page in Korean.
 import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
@@ -186,6 +188,20 @@ await run('A', async () => {
       return rs.map((r) => (r.error ? r.error.code : r.result?.data?.length > 0 ? 'tokens' : 'empty'));
     })()`);
     check(S(answers) === S(['tokens', 'superseded', 'tokens']), `of three requests for one file, the middle one is superseded (${S(answers)})`);
+
+    // ---- the files that may subclass a name (type-hierarchy gutter); folders marked Excluded are left out ----
+    mkdirSync(path.join(project, 'kinds'));
+    writeFileSync(path.join(project, 'kinds', 'k.py'), 'import shapes\n\n\nclass Round(shapes.Shape, metaclass=type):\n    pass\n\n\nclass Boxy(\n    Generic[int],  # a comment\n):\n    pass\n');
+    const ask = (op, names) => js(`ide.api.invoke(${S(op)}, ide.root, ${S(names)}, 'pyright-budget')`);
+    const spelled = await ask('type-hierarchy:subclassFiles', ['Shape', 'shapes', 'Generic', 'type', 'int', 'Round']);
+    const names = Object.entries(spelled).filter(([, files]) => files.length === 1 && /k\.py$/.test(files[0])).map(([n]) => n);
+    check(S(names) === S(['Shape', 'shapes', 'Generic']), `class statements give the words of their bases, not keyword arguments, subscripts or their own name (${S(spelled)})`);
+    const pkg = `ide.util.joinPath(ide.root, 'pkg')`;
+    await js(`ide.api.invoke('project-roots:mark', ide.root, ${pkg}, 'excluded')`);
+    const excluded = (await ask('code-vision:fileCounts', ['area'])).counts.area;
+    await js(`ide.api.invoke('project-roots:mark', ide.root, ${pkg}, null)`);
+    const unmarked = (await ask('code-vision:fileCounts', ['area'])).counts.area;
+    check(excluded === 1 && unmarked === 321, `a folder marked Excluded is left out of the word index (area in ${excluded} files, ${unmarked} once unmarked)`);
   } catch (err) {
     check(false, err.stack || err.message);
   }

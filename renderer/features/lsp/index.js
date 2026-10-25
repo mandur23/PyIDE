@@ -422,82 +422,123 @@
     }
     return true;
   }
-  // The added pair is stepped through as in PyCharm: a `(` typed into the empty pair or right after it (users who
-  // type the call themselves) goes inside it instead of opening another, and a `)` typed just before the added `)`
-  // steps over it, whether the text comes one key at a time or at once. Decorations follow the pair through the
-  // edits; each typing is compared with the line as it was just before (onWillType). The pair stops being followed
-  // once the caret leaves it or it is closed. editor -> {model, ids: [open, close], before}
+  // The `(` is typed through Monaco's own auto-closing, so Monaco knows the `)` as one it added: a `)` typed before it
+  // steps over it, Backspace in the empty pair deletes both, and the closers of strings, brackets and inner calls typed
+  // inside step over their own `)` key by key, as in PyCharm. On top of that each added pair is followed (decorations,
+  // compared with the line as it was just before each typing, onWillType) for what Monaco does not do: a `(` typed
+  // into the empty pair or right after it (users who type the call themselves) goes inside it instead of opening
+  // another, and text typed at once that closes the call (`(5)`, `"hi")`) replaces the added `)`, the closers of
+  // nested pairs too. A pair stops being followed once the caret leaves it or it is closed.
+  // editor -> {model, pairs: [[openId, closeId]] (outermost first), before}
   const added = new WeakMap();
   const PAIR = { description: 'pyide-call-parens', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges };
-  function forgetPair(editor) {
-    const a = added.get(editor);
-    added.delete(editor);
-    if (a && !a.model.isDisposed()) a.model.deltaDecorations(a.ids, []);
-  }
-  function addPair(editor, line, open) {
-    forgetPair(editor);
-    const model = editor.getModel();
-    const ids = model.deltaDecorations([], [open, open + 1].map((c) => ({ range: new monaco.Range(line, c, line, c + 1), options: PAIR })));
-    added.set(editor, { model, ids, before: null });
-  }
-  // -> the pair now ({line, open, close, caret, text}), or null when it is gone or the caret left it.
-  function pairAt(editor) {
-    const a = added.get(editor);
-    const model = editor.getModel();
-    if (!a || model !== a.model) return null;
-    const [o, c] = a.ids.map((id) => model.getDecorationRange(id));
-    const p = editor.getPosition();
-    if (!o || !c || o.isEmpty() || c.isEmpty() || o.startLineNumber !== p.lineNumber || c.startLineNumber !== p.lineNumber) return null;
-    const text = model.getLineContent(p.lineNumber);
-    if (text[o.startColumn - 1] !== '(' || text[c.startColumn - 1] !== ')' || p.column <= o.startColumn || p.column > c.startColumn + 1) return null;
-    return { line: p.lineNumber, open: o.startColumn, close: c.startColumn, caret: p.column, text };
-  }
-  const depthOf = (s) => [...s].reduce((d, ch) => d + (ch === '(') - (ch === ')'), 0);
-  function beforeTyping(editor) {
+  let typingParens = false;
+  function forgetPairs(editor, gone) {
     const a = added.get(editor);
     if (!a) return;
-    a.before = pairAt(editor);
-    if (!a.before) forgetPair(editor);
+    gone = new Set(gone ?? a.pairs);
+    if (!a.model.isDisposed()) a.model.deltaDecorations([...gone].flat(), []);
+    a.pairs = a.pairs.filter((ids) => !gone.has(ids));
+    if (!a.pairs.length) added.delete(editor);
   }
-  function afterTyping(editor, typed) {
-    const b = added.get(editor)?.before;
-    if (!b) return;
+  // -> the followed pairs the caret is in or right after, innermost first: [{ids, open, close}]. Those it is not in
+  // are forgotten.
+  function pairsAt(editor) {
+    const a = added.get(editor);
+    const model = editor.getModel();
+    if (!a) return [];
+    if (model !== a.model) { forgetPairs(editor); return []; }
+    const p = editor.getPosition();
+    const text = model.getLineContent(p.lineNumber);
+    const live = [];
+    for (const ids of a.pairs) {
+      const [o, c] = ids.map((id) => model.getDecorationRange(id));
+      if (!o || !c || o.isEmpty() || c.isEmpty() || o.startLineNumber !== p.lineNumber || c.startLineNumber !== p.lineNumber) continue;
+      if (text[o.startColumn - 1] !== '(' || text[c.startColumn - 1] !== ')' || p.column <= o.startColumn || p.column > c.startColumn + 1) continue;
+      live.push({ ids, open: o.startColumn, close: c.startColumn });
+    }
+    forgetPairs(editor, a.pairs.filter((ids) => !live.some((l) => l.ids === ids)));
+    return live.sort((x, y) => y.open - x.open);
+  }
+  function addPair(editor, line, open) {
+    pairsAt(editor);
+    const model = editor.getModel();
+    if (!added.has(editor)) added.set(editor, { model, pairs: [], before: null });
+    added.get(editor).pairs.push(model.deltaDecorations([], [open, open + 1].map((c) => ({ range: new monaco.Range(line, c, line, c + 1), options: PAIR }))));
+  }
+  // Parentheses opened minus closed, outside string literals.
+  function depthOf(s) {
+    let depth = 0;
+    let quote = null;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (quote) {
+        if (ch === '\\') i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else depth += (ch === '(') - (ch === ')');
+    }
+    return depth;
+  }
+  function beforeTyping(editor) {
+    if (typingParens || !added.has(editor)) return;
+    const pairs = pairsAt(editor);
+    const a = added.get(editor);
+    if (!a) return;
+    const p = editor.getPosition();
+    a.before = { line: p.lineNumber, caret: p.column, text: editor.getModel().getLineContent(p.lineNumber), pairs };
+  }
+  function afterTyping(editor) {
+    const a = added.get(editor);
+    const b = a?.before;
+    if (!b || typingParens) return;
+    a.before = null;
     const model = editor.getModel();
     const p = editor.getPosition();
     const text = model.getLineContent(b.line);
     const grown = text.length - b.text.length;
-    if (p.lineNumber !== b.line || grown <= 0 || !text.startsWith(b.text.slice(0, b.caret - 1)) || !text.endsWith(b.text.slice(b.caret - 1))) {
-      forgetPair(editor);
+    if (p.lineNumber !== b.line) return;
+    // A pair whose `)` Monaco stepped over is closed.
+    const closeNow = (pr) => pr.close + (b.caret <= pr.close ? grown : 0);
+    const done = b.pairs.filter((pr) => b.caret <= pr.close && p.column > closeNow(pr)).map((pr) => pr.ids);
+    if (grown <= 0 || !text.startsWith(b.text.slice(0, b.caret - 1)) || !text.endsWith(b.text.slice(b.caret - 1))) {
+      forgetPairs(editor, done);
       return;
     }
-    const inserted = text.slice(b.caret - 1, b.caret - 1 + grown);
-    const close = b.close + (b.caret <= b.close ? grown : 0); // the added `)` now
+    // The text typed (with what Monaco closed for it) ends at `end`.
+    const end = b.caret + grown;
+    const inserted = text.slice(b.caret - 1, end - 1);
+    const inner = b.pairs[0];
     let drop = [];
     let caret = null;
-    let done = false;
-    if (inserted.startsWith('(') && (b.caret === b.close || b.caret === b.close + 1) && b.close === b.open + 1) {
+    if (inserted.startsWith('(') && (b.caret === inner.close || b.caret === inner.close + 1) && inner.close === inner.open + 1) {
       if (depthOf(inserted) === 0) {
         // A whole pair was typed (or Monaco closed the typed one): it takes the added pair's place.
-        drop = [b.open, close];
-        done = true;
+        drop = [inner.open, closeNow(inner)];
+        done.push(inner.ids);
       } else {
         drop = [b.caret];
-        if (b.caret === b.close + 1) caret = b.close;
+        if (b.caret === inner.close + 1) caret = inner.close;
       }
-    } else if (inserted.endsWith(')') && b.caret === b.close && depthOf(text.slice(b.open, close - 1)) < 0) {
-      drop = [close];
-      done = true;
+    } else if (inserted.includes(')')) {
+      // From the innermost pair out: its `)` follows the typed text (after the closers of the pairs inside it that this
+      // text closes too), and the text up to there leaves one `(` too few.
+      for (const pr of b.pairs) {
+        if (b.caret > pr.close || pr.close + grown !== end + drop.length || depthOf(text.slice(pr.open, end - 1)) >= 0) break;
+        drop.push(pr.close + grown);
+        done.push(pr.ids);
+      }
     }
     if (drop.length) {
       const at = caret ?? p.column - drop.filter((c) => c < p.column).length;
       editor.executeEdits('pyide.callParens', drop.map((c) => ({ range: new monaco.Range(b.line, c, b.line, c + 1), text: '' })),
         [new monaco.Selection(b.line, at, b.line, at)]);
     }
-    if (done || !pairAt(editor)) forgetPair(editor);
+    forgetPairs(editor, done);
   }
   ide.onEditor((ed) => {
     ed.onWillType?.(() => beforeTyping(ed));
-    ed.onDidType?.((typed) => afterTyping(ed, typed));
+    ed.onDidType?.(() => afterTyping(ed));
   });
 
   monaco.editor.registerCommand(CALL_PARENS, async (_accessor, uri) => {
@@ -510,7 +551,21 @@
     // A commit character may have typed it already.
     if (line[pos.column - 2] === '(' || /^\s*\(/.test(line.slice(pos.column - 1))) return;
     const inside = new monaco.Selection(pos.lineNumber, pos.column + 1, pos.lineNumber, pos.column + 1);
-    editor.executeEdits('pyide.callParens', [{ range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: '()' }], [inside]);
+    // Typed as a key, closed whatever follows. Monaco does not auto-close on a line it has not tokenized yet, as after
+    // an auto-import line was added above.
+    model.tokenization.forceTokenization(pos.lineNumber);
+    const closing = editor.getRawOptions().autoClosingBrackets;
+    typingParens = true;
+    try {
+      editor.updateOptions({ autoClosingBrackets: 'always' });
+      editor.trigger('keyboard', 'type', { text: '(' });
+    } finally {
+      typingParens = false;
+      editor.updateOptions({ autoClosingBrackets: closing ?? 'languageDefined' });
+    }
+    const typed = model.getLineContent(pos.lineNumber);
+    if (typed[pos.column - 1] !== '(' || !editor.getPosition().equals(inside.getPosition())) return;
+    if (typed.length !== line.length + 2) editor.executeEdits('pyide.callParens', [{ range: monaco.Range.fromPositions(inside.getPosition()), text: ')' }], [inside]);
     addPair(editor, pos.lineNumber, pos.column);
     editor.trigger('keyboard', 'editor.action.triggerParameterHints', {});
     const version = model.getVersionId();

@@ -11,13 +11,14 @@ const projectRoots = require('../project-roots');
 
 // Pyright's search paths and exclusions from the project's roots (Mark Directory As): the source roots replace its own
 // guess (autoSearchPaths adds src/), so the editor resolves imports as Run does, and excluded folders leave its file
-// list. Its default exclusions apply only while `exclude` is unset, so they are repeated.
+// list. Its default exclusions apply only while `exclude` is unset, so they are repeated, and the virtualenvs it would
+// skip by itself (venv/ with its pyvenv.cfg) are listed.
 function rootSettings(root) {
   const excluded = projectRoots.excludedDirs(root);
   return {
     autoSearchPaths: false,
     extraPaths: projectRoots.pythonPaths(root),
-    ...(excluded.length ? { exclude: ['**/node_modules', '**/__pycache__', '**/.*', ...excluded] } : {}),
+    ...(excluded.length ? { exclude: ['**/node_modules', '**/__pycache__', '**/.*', ...excluded, ...projectRoots.venvDirs(root)] } : {}),
   };
 }
 

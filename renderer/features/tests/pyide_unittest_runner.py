@@ -79,11 +79,11 @@ class Result(unittest.TestResult):
         super().__init__()
         self.info = info
         self.buffer = True
-        self.diff = None  # (pair, exception) of the running test's last failed assertEqual
+        self.diff = None  # ((first, second), exception) of the running test's last failed assertEqual
         pyide_test_diff.capture_assert_equal(self.record)
 
-    def record(self, diff, exc):
-        self.diff = (diff, exc)
+    def record(self, operands, exc):
+        self.diff = (operands, exc)
 
     def startTest(self, test):
         self.diff = None
@@ -110,7 +110,7 @@ class Result(unittest.TestResult):
 
     def addFailure(self, test, err):
         # Only the assertEqual that failed the test, not one it caught before failing otherwise.
-        diff = self.diff[0] if self.diff and self.diff[1] is err[1] else None
+        diff = pyide_test_diff.pair(*self.diff[0]) if self.diff and self.diff[1] is err[1] else None
         self.report(test, "failed", self._exc_info_to_string(err, test), diff)
         super().addFailure(test, err)
 

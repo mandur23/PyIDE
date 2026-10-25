@@ -52,15 +52,50 @@ function save() {
 
 const isPython = (name) => /\.pyi?$/i.test(name);
 const entries = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
-// src/ is the root of a src layout when it is no package itself and holds a module or a folder of Python code (a
-// package, or a namespace package without __init__.py). Build leftovers (*.egg-info, __pycache__, dot folders) do not count.
+// Folders that hold no code of the project: build leftovers, caches, dot folders (Pyright skips the last three too).
+const skipped = (name) => name.startsWith('.') || name === '__pycache__' || name === 'node_modules' || name.endsWith('.egg-info');
+// Breadth first through dir and its folders (not skipped ones), the first `budget` of them. visit(dir, entries) returns
+// 'stop' to end the walk (walkFolders then returns true), 'prune' not to go below dir, or nothing.
+function walkFolders(dir, budget, visit) {
+  const queue = [dir];
+  for (let n = 0; n < queue.length && n < budget; n++) {
+    const list = entries(queue[n]);
+    const next = visit(queue[n], list);
+    if (next === 'stop') return true;
+    if (next !== 'prune') for (const d of list) if (d.isDirectory() && !skipped(d.name)) queue.push(path.join(queue[n], d.name));
+  }
+  return false;
+}
+// src/ is the root of a src layout when it is no package itself and holds Python code: a module, a package, or a
+// namespace package (folders without __init__.py, such as src/acme/tools/helper.py). Pyright's own rule (any src
+// without __init__.py) is narrowed to a src holding code within its first 200 folders, so a web project's src is left alone.
 function srcLayout(root) {
   const src = path.join(root, 'src');
-  const list = entries(src);
-  if (!list.length || list.some((d) => d.isFile() && d.name === '__init__.py')) return false;
-  return list.some((d) => (d.isFile() ? isPython(d.name)
-    : d.isDirectory() && !d.name.startsWith('.') && d.name !== '__pycache__' && !d.name.endsWith('.egg-info')
-      && entries(path.join(src, d.name)).some((e) => e.isFile() && isPython(e.name))));
+  const top = entries(src);
+  if (!top.length || top.some((d) => d.isFile() && d.name === '__init__.py')) return false;
+  return walkFolders(src, 200, (_dir, list) => (list.some((d) => d.isFile() && isPython(d.name)) ? 'stop' : null));
+}
+
+// The virtualenvs in the project (Pyright's markers: pyvenv.cfg, conda-meta, Scripts/activate, bin/activate), four
+// levels down at most and not inside excluded folders. Pyright leaves them out of its files by itself only while no
+// `exclude` is set (autoExcludeVenv), so features/lsp.js adds them to the excluded folders it sends.
+function venvDirs(root) {
+  const excluded = new Set(excludedDirs(root).map((d) => d.toLowerCase()));
+  const top = path.resolve(root);
+  const depth = (dir) => path.relative(top, dir).split(path.sep).length;
+  const found = [];
+  walkFolders(top, 2000, (dir, list) => {
+    if (dir === top) return null;
+    if (excluded.has(dir.toLowerCase())) return 'prune';
+    const has = (name, isDir) => list.some((d) => d.name.toLowerCase() === name && (isDir ? d.isDirectory() : true));
+    const activate = (sub) => has(sub, true) && entries(path.join(dir, sub)).some((d) => d.name.toLowerCase() === 'activate');
+    if (has('pyvenv.cfg') || has('conda-meta', true) || activate('scripts') || activate('bin')) {
+      found.push(dir);
+      return 'prune';
+    }
+    return depth(dir) >= 4 ? 'prune' : null;
+  });
+  return found;
 }
 
 // The project's roots: its record, or the src layout's default. -> {sources, tests, excluded} (relative paths)
@@ -112,4 +147,4 @@ function adoptDetected(root) {
   return 'src';
 }
 
-Object.assign(exports, { rootsOf, pythonPaths, excludedDirs, withSources, mark, onChange, srcLayout, adoptDetected });
+Object.assign(exports, { rootsOf, pythonPaths, excludedDirs, venvDirs, withSources, mark, onChange, srcLayout, adoptDetected });

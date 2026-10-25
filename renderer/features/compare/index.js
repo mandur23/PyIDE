@@ -97,8 +97,11 @@
     return b;
   }
 
-  // left: {title, text}; right: {title, doc} (editable) or {title, text} (read-only).
-  function mountView(host, { left, right, language }) {
+  const differOnlyInSeparators = (a, b) => a !== b && a.replace(/\r\n?/g, '\n') === b.replace(/\r\n?/g, '\n');
+
+  // left: {title, text}; right: {title, doc} (editable) or {title, text} (read-only). separators: the texts' line
+  // separators count, which Monaco's models normalize away.
+  function mountView(host, { left, right, language, separators }) {
     host.classList.add('cmp-view');
     const bar = el('div', 'cmp-bar');
     const count = el('span', 'cmp-count');
@@ -134,9 +137,11 @@
     diff.setModel({ original, modified });
     const marks = { orig: diff.getOriginalEditor().createDecorationsCollection(), mod: diff.getModifiedEditor().createDecorationsCollection() };
     let computed = false;
+    const onlySeparators = separators && differOnlyInSeparators(left.text, right.text);
     const update = () => {
       const n = changesOf(diff).length;
-      count.textContent = !computed ? tr('Comparing…') : n ? (n === 1 ? tr('1 difference') : tr('{n} differences', { n })) : tr('Contents are identical');
+      count.textContent = !computed ? tr('Comparing…') : n ? (n === 1 ? tr('1 difference') : tr('{n} differences', { n }))
+        : onlySeparators ? tr('Contents have differences only in line separators') : tr('Contents are identical');
       host.dataset.differences = computed ? String(n) : '';
     };
     update();
@@ -181,7 +186,7 @@
   }
 
   // A diff tab. The tab holds the right side's document (core editors.js: ide.openCustomTab({doc})).
-  function openDiffTab({ id, title, left, right, language }) {
+  function openDiffTab({ id, title, left, right, language, separators }) {
     if (ide.findTab(id)) {
       // The same comparison opened while this one was reading the files: a document loaded for it is not needed.
       if (right.doc) ide.releaseDocument(right.doc);
@@ -191,7 +196,7 @@
       id, title, icon: '⇆', doc: right.doc,
       mount(host, tab) {
         host.classList.add('cmp-tab');
-        const view = mountView(host, { left, right, language });
+        const view = mountView(host, { left, right, language, separators });
         views.set(tab, view);
         tab.dispose = () => { views.delete(tab); view.dispose(); };
       },
@@ -202,7 +207,7 @@
   // again shows the new texts in a fresh tab: a test run again may fail with other values.
   function compareTexts({ id, title, left, right, language = 'plaintext' }) {
     if (ide.findTab(id)) ide.closeTab(id, true);
-    return openDiffTab({ id, title, language, left, right });
+    return openDiffTab({ id, title, language, left, right, separators: true });
   }
 
   // Why a side cannot be shown as text (r from readSide, or a document's {binary | tooLarge}), or null.

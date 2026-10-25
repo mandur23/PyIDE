@@ -12,6 +12,7 @@
   "1 difference": "차이 1개",
   "{n} differences": "차이 {n}개",
   "Contents are identical": "콘텐츠가 동일합니다",
+  "Contents have differences only in line separators": "내용에서 줄 구분 기호만 다릅니다",
   "Cannot read {name}: {error}": "{name}을(를) 읽을 수 없습니다: {error}",
   "{name} is a binary file ({size}).": "{name}은(는) 바이너리 파일입니다({size}).",
   "{name} is too large to compare as text ({size}; the limit is {limit}).": "{name}이(가) 너무 커서 텍스트로 비교할 수 없습니다({size}, 한도 {limit}).",

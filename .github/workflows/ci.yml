@@ -80,6 +80,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/multi-window.mjs
+      - name: case-sensitive
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/case-sensitive.mjs
       - name: ime-korean
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -116,6 +120,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/search-nav.mjs
+      - name: search-cache
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/search-cache.mjs
       - name: symbol-index
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -168,6 +176,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/rename-unsaved.mjs
+      - name: code-generation-sidecar
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/code-generation-sidecar.mjs
+      - name: code-generation
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/code-generation.mjs
       - name: scratches
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -192,6 +208,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/tests-debug-target.mjs
+      - name: run-roots
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/run-roots.mjs
+      - name: run-roots-wiring
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/run-roots-wiring.mjs
       - name: appearance-modes
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -224,6 +248,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/vcs-daily.mjs
+      - name: vcs-force-push
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/vcs-force-push.mjs
+      - name: vcs-log-actions
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/vcs-log-actions.mjs
 
       - name: peek-definition
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -251,6 +283,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/env-failures.mjs
+      - name: plugin-load-errors
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/plugin-load-errors.mjs
       - name: history-instances
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -315,6 +351,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/editor-assists.mjs
+      - name: editor-keys
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/editor-keys.mjs
+      - name: console-output
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/console-output.mjs
       - name: ai-generate
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -368,6 +412,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/code-vision.mjs
+      - name: pyright-budget
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 12
+        run: node verify/pyright-budget.mjs
+      - name: completion-parens
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 8
+        run: node verify/completion-parens.mjs
       - name: db-export
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -384,6 +436,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/type-hierarchy.mjs
+      - name: navigation-tests
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/navigation-tests.mjs
       - name: process-tree
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

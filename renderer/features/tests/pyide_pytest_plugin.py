@@ -1,6 +1,7 @@
 """pytest plugin that streams collection and results as JSON lines to $PYIDE_TEST_REPORT for the Test Results view."""
 import json
 import os
+import sys
 
 import pytest
 
@@ -33,24 +34,43 @@ def _text(longrepr):
     return str(longrepr)
 
 
-# The expected/actual pair of the running test's last failed `==` (pytest_assertrepr_compare) or assertEqual, with the
-# exception assertEqual raised (None for `==`, whose exception is raised after the hook).
+# The operands (actual, expected) of the running test's last failed `==` (pytest_assertrepr_compare) or assertEqual,
+# with where it failed: the exception assertEqual raised, or the frame and line of the `assert`, whose exception is
+# raised after the hook.
 _current = None
 _diffs = {}
 
 
-def _record(diff, exc=None):
+def _record(operands, origin):
     if _current is not None:
-        _diffs[_current] = (diff, exc)
+        _diffs[_current] = (operands, origin)
 
 
 def pytest_configure(config):
     pyide_test_diff.capture_assert_equal(_record)
 
 
+def _asserting_frame():
+    frame = sys._getframe(1)
+    while frame is not None and frame.f_globals.get("__name__", "").partition(".")[0] in ("_pytest", "pluggy", "pytest", __name__):
+        frame = frame.f_back
+    return frame
+
+
 def pytest_assertrepr_compare(config, op, left, right):
     if op == "==":
-        _record(pyide_test_diff.pair(left, right))
+        frame = _asserting_frame()
+        if frame is not None:
+            _record((left, right), (frame, frame.f_lineno))
+
+
+def _failed_at(origin, excinfo):
+    if isinstance(origin, BaseException):
+        return origin is excinfo.value
+    tb = excinfo.tb
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    return (tb.tb_frame, tb.tb_lineno) == origin
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -58,11 +78,10 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     if call.when != "call":
         return
-    diff, exc = _diffs.pop(item.nodeid, (None, None))
-    err = call.excinfo.value if call.excinfo is not None else None
-    # Only the assertion that failed the test: not one the test caught, nor a later error of another kind.
-    if diff and isinstance(err, AssertionError) and (exc is None or exc is err):
-        outcome.get_result().pyide_diff = diff
+    operands, origin = _diffs.pop(item.nodeid, (None, None))
+    # Only the assertion that failed the test: not one the test caught, nor a later failure elsewhere.
+    if operands and isinstance(call.excinfo and call.excinfo.value, AssertionError) and _failed_at(origin, call.excinfo):
+        outcome.get_result().pyide_diff = pyide_test_diff.pair(*operands)
 
 
 def pytest_collection_finish(session):

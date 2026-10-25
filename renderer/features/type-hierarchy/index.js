@@ -23,20 +23,27 @@
   const closedOnce = (kind, uri, load) => {
     const key = kind + uri;
     // An empty answer (Pyright not started yet, a failed read) is not kept.
-    if (!closed.has(key)) closed.set(key, load().catch(() => null).then((r) => { if (!r?.length) closed.delete(key); return r || (kind === 'l' ? '' : []); }));
+    if (!closed.has(key)) closed.set(key, load().catch(() => null).then((r) => { if (!r?.length) closed.delete(key); return r || []; }));
     return closed.get(key);
   };
   for (const ev of ['filesChanged', 'fileSaved', 'fileOpened', 'fileClosed', 'projectOpened']) ide.on(ev, () => closed.clear());
+  // A Python file that is not open changed on disk (a git checkout, a tool, another editor); open ones say so by events.
+  const changedOnDisk = ({ paths = [], overflow } = {}) => overflow || paths.some((p) => isPy(p) && !ide.getDocument?.(p));
+  ide.api.on('watch:changed', (e) => { if (changedOnDisk(e)) closed.clear(); });
   const openModel = (uri) => {
     const model = ide.getDocument?.(toPath(uri))?.model;
     return model && !model.isDisposed() ? model : null;
   };
 
-  // The text of a file as the editor has it (unsaved changes included), else as it is on disk.
+  // The lines of a file as the editor has them (unsaved changes included), else as they are on disk. Read only: the
+  // markers ask for the same lines once per class.
+  const modelLines = new WeakMap(); // model -> {version, lines}
   async function linesOf(uri) {
     const model = openModel(uri);
-    const text = model ? model.getValue() : await closedOnce('l', uri, () => ide.api.read(toPath(uri)));
-    return text.split(/\r?\n/);
+    if (!model) return closedOnce('l', uri, () => ide.api.read(toPath(uri)).then((text) => text.split(/\r?\n/)));
+    let c = modelLines.get(model);
+    if (c?.version !== model.getVersionId()) modelLines.set(model, (c = { version: model.getVersionId(), lines: model.getLinesContent() }));
+    return c.lines;
   }
 
   const flatten = (list, out = []) => {
@@ -217,14 +224,14 @@
     return m ? [{ cls: node.info.item, sym: m.sym, abstract: m.abstract }] : findUp(node.bases, name);
   });
 
-  // Every class below a class, nearest first, at most `limit`.
-  async function allSubtypes(item, limit = 100) {
+  // Every class below a class, nearest first, at most `limit`; find(cls) gives the direct subclasses.
+  async function allSubtypes(item, limit = 100, find = subtypes) {
     const out = [];
     const seen = new Set([keyOf(item)]);
     for (let level = [item]; level.length && out.length < limit;) {
       const next = [];
       for (const cls of level) {
-        for (const { item: sub } of await subtypes(cls)) {
+        for (const { item: sub } of await find(cls)) {
           if (seen.has(keyOf(sub)) || out.length >= limit) continue;
           seen.add(keyOf(sub));
           out.push(sub);
@@ -323,32 +330,86 @@
   // ---------- gutter markers ----------
   // A method that overrides (or implements, when that one is abstract) a method of a base gets an up marker; one that
   // subclasses override (implement, when it is abstract) a down marker, a class with subclasses a down marker; clicking
-  // one opens the target or lists them. Worked out per file after a pause in typing, at most MAX_CLASSES classes.
+  // one opens the target or lists them. Worked out after a pause in typing for the classes in view (at most
+  // MAX_CLASSES at a time) and kept per class, document version and epoch; none in Power Save Mode.
+  // Subclasses are not looked for with references as the Type Hierarchy window does: that request parses and binds every
+  // project file that mentions the name, and cannot be cancelled once Pyright has started it (40 classes of a
+  // 2,000-line module cost 35 s of Pyright's only request thread). The candidates are the files whose class statements
+  // spell the name in their bases (main/features/type-hierarchy.js; at most MAX_FILES of them) and the open documents
+  // that mention it, and each base found there is checked with Pyright's definition.
   const MAX_CLASSES = 40;
+  const MAX_FILES = 100;
+  const VIEW_MARGIN = 20; // lines above and below the view
   const names = (targets) => {
     const list = [...new Set(byLabel(targets).map((t) => t.cls.name))];
     return list.length > 5 ? `${list.slice(0, 5).join(', ')}, …` : list.join(', ');
   };
 
-  // -> Map(line -> {up: targets, down: targets, upAbstract, downAbstract, isClass}), or null when the file changed
-  // meanwhile (stale()).
-  async function markersOf(uri, stale) {
-    const marks = new Map();
-    for (const sym of (await classSymbols(uri)).slice(0, MAX_CLASSES)) {
-      if (stale()) return null;
-      const cls = itemOf(sym, uri);
-      const [own, tree, subs] = await Promise.all([classInfo(cls), baseTree(cls), allSubtypes(cls, 50)]);
-      const subInfos = [];
-      for (const sub of subs) subInfos.push(await classInfo(sub));
-      if (subs.length) marks.set(sym.selectionRange.start.line + 1, { up: [], down: subs.map((c) => ({ cls: c, sym: null })), isClass: true });
-      for (const [name, m] of own.methods) {
-        const up = findUp(tree, name);
-        const down = findDown(subInfos, name);
-        if (!up.length && !down.length) continue;
-        marks.set(m.sym.selectionRange.start.line + 1, { up, down, upAbstract: up.length > 0 && up.every((u) => u.abstract), downAbstract: m.abstract });
+  let epoch = 0; // bumped when another file may have changed what a file's markers are
+  // The worker is shared by every window and by code vision, so the epoch it gets says whose it is.
+  const windowId = Math.random().toString(36).slice(2);
+  const spelled = new Map(); // name -> Promise<[path]>: the files on disk whose class statements name it, for spelledEpoch
+  let spelledEpoch = -1;
+  // Asks for the names not asked since files last changed, all at once.
+  function subclassFiles(list) {
+    if (spelledEpoch !== epoch) { spelled.clear(); spelledEpoch = epoch; }
+    const missing = [...new Set(list)].filter((n) => !spelled.has(n));
+    if (missing.length) {
+      const asked = ide.root ? ide.api.invoke('type-hierarchy:subclassFiles', ide.root, missing, `th-${windowId}:${epoch}`).catch(() => null) : Promise.resolve(null);
+      for (const n of missing) spelled.set(n, asked.then((r) => r?.[n] || []));
+    }
+    return Promise.all(list.map((n) => spelled.get(n)));
+  }
+  const openDocs = () => ide.monaco.editor.getModels().filter((m) => {
+    const p = modelPath(m);
+    return isPy(p) && ide.getDocument?.(p)?.model === m;
+  });
+  const wordAt = (lines, at) => /^[\w\u00c0-\uffff]+/.exec(lines[at.line].slice(at.character))?.[0];
+  const isClassAt = (uri, at, item) => !!uri && !!at && at.line === item.selectionRange.start.line
+    && toPath(uri).toLowerCase() === toPath(item.uri).toLowerCase();
+
+  // The direct subclasses of a class for the gutter, as subtypes() finds them but from the candidate files above.
+  async function spelledSubtypes(item, stale) {
+    const [onDisk] = await subclassFiles([item.name]);
+    const docs = openDocs();
+    const open = new Set(docs.map((m) => modelPath(m).toLowerCase()));
+    const uris = [
+      ...docs.filter((m) => m.findMatches(item.name, false, false, true, null, false, 1).length).map((m) => m.uri.toString()),
+      ...onDisk.filter((p) => !open.has(p.toLowerCase())).map((p) => ide.monaco.Uri.file(p).toString()),
+    ].slice(0, MAX_FILES);
+    const out = [];
+    for (const uri of uris) {
+      if (stale()) return out;
+      const lines = await linesOf(uri);
+      for (const sym of await classSymbols(uri)) {
+        for (const b of basesOf(lines, sym.selectionRange)) {
+          if (wordAt(lines, b.head) !== item.name || stale()) continue;
+          const defs = await ide.lsp.request('textDocument/definition', { textDocument: { uri }, position: b.head });
+          if (![].concat(defs || []).some((d) => isClassAt(d.targetUri || d.uri, (d.targetSelectionRange || d.range)?.start, item))) continue;
+          out.push({ item: itemOf(sym, uri) });
+          break;
+        }
       }
     }
-    return marks;
+    return out;
+  }
+
+  // The markers of a class and its methods: [[line, {up: targets, down: targets, upAbstract, downAbstract, isClass}]],
+  // or null when the file changed meanwhile (stale()).
+  async function classMarks(sym, uri, stale) {
+    const cls = itemOf(sym, uri);
+    const [own, tree, subs] = await Promise.all([classInfo(cls), baseTree(cls), allSubtypes(cls, 50, (c) => spelledSubtypes(c, stale))]);
+    const subInfos = [];
+    for (const sub of subs) subInfos.push(await classInfo(sub));
+    const marks = [];
+    if (subs.length) marks.push([sym.selectionRange.start.line + 1, { up: [], down: subs.map((c) => ({ cls: c, sym: null })), isClass: true }]);
+    for (const [name, m] of own.methods) {
+      const up = findUp(tree, name);
+      const down = findDown(subInfos, name);
+      if (!up.length && !down.length) continue;
+      marks.push([m.sym.selectionRange.start.line + 1, { up, down, upAbstract: up.length > 0 && up.every((u) => u.abstract), downAbstract: m.abstract }]);
+    }
+    return stale() ? null : marks;
   }
 
   function hoverOf(mark) {
@@ -362,27 +423,37 @@
   }
   const markClass = (mark) => `th-gutter ${mark.up.length && mark.down.length ? 'th-updown' : mark.up.length ? 'th-up' : 'th-down'}${(mark.up.length ? mark.upAbstract : mark.downAbstract) ? ' th-impl' : ''}`;
 
-  let epoch = 0; // bumped when another file may have changed what a file's markers are
-  const cache = new Map(); // `${uri}@${version}#${epoch}` -> Promise<marks | null>
+  const computed = new Map(); // uri -> {key: `${version}#${epoch}`, classes: Map(class line -> Promise<marks | null>)}
   const gutters = new Map(); // editor -> {deco, marks, timer}
 
   async function refreshGutter(ed) {
     const g = gutters.get(ed);
     const model = ed.getModel();
     const path = model && modelPath(model);
-    if (!g || !path || !isPy(path) || !ide.findTab?.(path)) { g?.deco.clear(); if (g) g.marks = new Map(); return; }
+    if (!g || !path || !isPy(path) || !ide.findTab?.(path) || ide.powerSave?.on()) { g?.deco.clear(); if (g) g.marks = new Map(); return; }
     if (!(await ide.lsp.ready())) return;
     const uri = model.uri.toString();
     const version = model.getVersionId();
-    const key = `${uri}@${version}#${epoch}`;
-    if (!cache.has(key)) {
-      for (const k of cache.keys()) if (k.startsWith(`${uri}@`)) cache.delete(k);
-      const mine = epoch;
-      cache.set(key, markersOf(uri, () => model.isDisposed() || model.getVersionId() !== version || epoch !== mine).catch(() => null));
+    const mine = epoch;
+    const stale = () => model.isDisposed() || model.getVersionId() !== version || epoch !== mine || !!ide.powerSave?.on();
+    const key = `${version}#${mine}`;
+    if (computed.get(uri)?.key !== key) computed.set(uri, { key, classes: new Map() });
+    const { classes } = computed.get(uri);
+    const ranges = ed.getVisibleRanges();
+    const from = (ranges[0]?.startLineNumber ?? 1) - VIEW_MARGIN;
+    const to = (ranges[ranges.length - 1]?.endLineNumber ?? 1) + VIEW_MARGIN;
+    const shown = (await classSymbols(uri)).filter((s) => s.range.end.line + 1 >= from && s.range.start.line + 1 <= to).slice(0, MAX_CLASSES);
+    if (stale()) return;
+    await subclassFiles(shown.map((s) => s.name));
+    for (const sym of shown) {
+      const line = sym.selectionRange.start.line;
+      if (!classes.has(line)) classes.set(line, classMarks(sym, uri, stale).catch(() => null));
+      if (!(await classes.get(line))) { classes.delete(line); return; }
     }
-    const marks = await cache.get(key);
-    if (!marks) { cache.delete(key); return; }
-    if (ed.getModel() !== model || model.getVersionId() !== version) return;
+    if (stale() || ed.getModel() !== model) return;
+    const marks = new Map();
+    for (const p of [...classes.values()]) for (const [line, mark] of (await p) || []) marks.set(line, mark);
+    if (stale() || ed.getModel() !== model) return;
     g.marks = marks;
     g.deco.set([...marks].map(([line, mark]) => ({
       range: new ide.monaco.Range(line, 1, line, 1),
@@ -393,7 +464,7 @@
     const g = gutters.get(ed);
     if (!g) return;
     clearTimeout(g.timer);
-    g.timer = setTimeout(() => refreshGutter(ed), ms);
+    g.timer = setTimeout(() => { g.timer = null; refreshGutter(ed); }, ms);
   };
   const scheduleAll = (ms) => { for (const ed of gutters.keys()) schedule(ed, ms); };
 
@@ -428,13 +499,18 @@
     // Another file's markers never stay up while this file's are worked out.
     ed.onDidChangeModel(() => { g.deco.clear(); g.marks = new Map(); schedule(ed, 300); });
     ed.onDidChangeModelContent(() => schedule(ed, 1500));
+    // Classes scrolled into view; a refresh already waiting (after typing) keeps its time.
+    ed.onDidScrollChange((e) => { if (e.scrollTopChanged && !g.timer) schedule(ed, 300); });
     ed.onDidDispose(() => { clearTimeout(g.timer); gutters.delete(ed); });
     schedule(ed, 300);
   });
   const otherFilesChanged = () => { epoch++; scheduleAll(1500); };
   ide.on('fileSaved', otherFilesChanged);
   ide.on('filesChanged', otherFilesChanged);
+  ide.api.on('watch:changed', (e) => { if (changedOnDisk(e)) otherFilesChanged(); });
+  ide.on('fileClosed', (p) => { for (const uri of computed.keys()) if (toPath(uri).toLowerCase() === String(p).toLowerCase()) computed.delete(uri); });
   ide.on('activeTabChanged', () => scheduleAll(300));
+  ide.on('powerSaveChanged', () => scheduleAll(0));
 
   const typeKind = {
     id: 'type',

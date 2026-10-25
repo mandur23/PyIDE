@@ -3,7 +3,7 @@
 // Toggle Case, Add/Unselect/Select All Occurrences, Move Statement (a table and real keys), Collapse/Expand All, Quick
 // Definition, Type Info, Ctrl+F5 Rerun, Ctrl+Shift+T no longer reopening a tab, keys bound by action id to other
 // plugins' actions, Find Action listing Monaco's actions, the main menu, triple quotes closed as typed, docstring stubs
-// in each format, and the Korean titles and settings. Ports 9510-9511.
+// in each format, closing triple quotes typed over, and the Korean titles and settings. Ports 9510-9511.
 import { launch, openFile } from './lib.mjs';
 import { missingTranslations } from './i18n-lib.mjs';
 
@@ -100,6 +100,9 @@ try {
     ['while (a and\n       b|', '):', true, 'condition over two lines'],
     ['foo(a,|\n    b)\nx = 1', '', false, 'call that continues on the next line'],
     ['print("a"|\nx = 1', ')', false, 'unclosed call followed by another statement'],
+    ['x = foo(a,|\nb)\n', '', false, 'call continued on a line that is not indented'],
+    ["data = {|\n'a': 1,\n}\n", '', false, 'dict literal whose lines are not indented'],
+    ['foo(a,|\ndef g():\n    pass\n', ')', false, 'unclosed call followed by a def'],
   ];
   const fixed = cases.map(([src]) => { const i = src.indexOf('|'); return src.slice(0, i) + src.slice(i + 1); }).map((s, i) => [s, cases[i][0].indexOf('|')]);
   const results = await js(`${J(fixed)}.map(([s, at]) => ide.editorAssists.statementCompletion(s, at))`);
@@ -160,6 +163,12 @@ try {
   check(await text() === 'def b():\n    return 2\n\n\ndef a():\n    return 1\n' && J(await caret()) === '[1,5]', `Ctrl+Shift+Up on the def b line moves the function above def a and the caret along (${J(await text())} ${J(await caret())})`);
   await key('Ctrl+Shift+ArrowDown');
   check(await text() === 'def a():\n    return 1\n\n\ndef b():\n    return 2\n' && J(await caret()) === '[5,5]', `Ctrl+Shift+Down moves it back (${J(await caret())})`);
+  await setText('def a():\n    return 1\n\n\ndef b():\n    return 2\n\n\nx = 1\n', 5, 5);
+  await js(`(ide.editor.setSelections([new ide.monaco.Selection(5, 5, 5, 5), new ide.monaco.Selection(2, 7, 2, 7), new ide.monaco.Selection(9, 3, 9, 3)]), true)`);
+  await key('Ctrl+Shift+ArrowUp');
+  const carets = await js(`ide.editor.getSelections().map((s) => [s.positionLineNumber, s.positionColumn]).sort((a, b) => a[0] - b[0])`);
+  check(await text() === 'def b():\n    return 2\n\n\ndef a():\n    return 1\n\n\nx = 1\n' && J(carets) === J([[1, 5], [6, 7], [9, 3]]),
+    `with three carets each moves with its own line: def b to line 1, "return 1" of def a to line 6, the caret on x = 1 stays (${J(carets)})`);
 
   // ---------------- Collapse All / Expand All ----------------
   await setText('def a():\n    x = 1\n    return x\n\n\ndef b():\n    return 2\n', 1, 1);
@@ -283,6 +292,11 @@ try {
   const inComment = await stubFor('x = 1  # \n', 1, 10, '"""');
   check(!inComment.includes('"'.repeat(5)), `in a comment, """ gets no closing quotes (${J(inComment)})`);
   check(await stubFor('s = \n', 1, 5, "'''") === "s = ''''''\n", "''' is closed too");
+  check(await stubFor('def f():\n    \n', 2, 5, '"""Summary"""') === 'def f():\n    """Summary"""\n', `typing """Summary""" key by key leaves """Summary""", as in PyCharm (${J(await text())})`);
+  check(J(await caret()) === '[2,18]', `the caret ends after the closing quotes (${J(await caret())})`);
+  check(await stubFor('s = \n', 1, 5, "'''text''' + x") === "s = '''text''' + x\n", `the same for '''text''' with code after it (${J(await text())})`);
+  check(await stubFor('def f():\n    \n', 2, 5, '"""Say "hi" now"""') === 'def f():\n    """Say "hi" now"""\n', `quotes inside the string do not close it early (${J(await text())})`);
+  check(await stubFor('def f():\n    \n', 2, 5, '"""Summary') === 'def f():\n    """Summary"""\n', `without the closing quotes typed, the added ones stay (${J(await text())})`);
   await js(`(ide.settings.set('editor.docstringStub', false), true)`);
   check(await stubFor('def f(a):\n    \n', 2, 5) === 'def f(a):\n    """\n    """\n', 'with Insert documentation comment stub off, Enter only opens the line');
   await js(`(ide.settings.set('editor.docstringStub', true), true)`);
