@@ -200,10 +200,12 @@ try {
   check(run.bold === '700', 'bold text is bold in the Run console');
   check(run.link, 'the traceback frame is a link');
   if (run.link) {
-    await js(`(document.getElementById('runLink').scrollIntoView({ block: 'center' }), true)`);
-    await click('#runLink');
+    const at = await js(`(() => { const a = document.getElementById('runLink'); a.scrollIntoView({ block: 'center' }); const r = a.getClientRects()[0]; return { x: r.x + Math.min(40, r.width / 2), y: r.y + r.height / 2 }; })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await t.cdp('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
     await until(`ide.activeTab()?.path?.endsWith('progress.py') && ide.editor.getPosition().lineNumber === 9`, 'link opens progress.py:9', 10000).catch(() => {});
-    check(await js(`ide.activeTab()?.path?.endsWith('progress.py') && ide.editor.getPosition().lineNumber === 9`), 'clicking the link opens the file at the frame line');
+    const opened = await js(`(() => { const a = document.getElementById('runLink'); const r = a?.getBoundingClientRect(); const top = r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { path: ide.activeTab()?.path, line: ide.editor.getPosition()?.lineNumber, link: a?.textContent, box: r && [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], hit: top && (top === a || a.contains(top) ? 'link' : top.className || top.tagName), view: [innerWidth, innerHeight] }; })()`);
+    check(opened.path?.endsWith('progress.py') && opened.line === 9, `clicking the link opens the file at the frame line (${JSON.stringify(opened)})`);
   }
 
   // ---- Run: a flood of 100,000 lines ----
