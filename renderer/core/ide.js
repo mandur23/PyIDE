@@ -2352,8 +2352,14 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   // been disposed" whenever an editor action is registered later. PyIDE puts nothing in that menu.
   // Disposed with its models attached, a diff editor also stays subscribed to theme changes, which keeps the whole
   // widget (~230 KB, its DOM and listeners) alive: every diff view closed leaked one. Detaching the models first does not.
+  // An editor's context menu is drawn in a shadow root appended to the editor's container, and Monaco defines the theme
+  // colors (--vscode-menu-background…) only on .monaco-editor and .monaco-component in the document, so the menu got
+  // no background and its items were drawn over the code. As a .monaco-component the container passes them down.
+  const create = monaco.editor.create;
+  monaco.editor.create = (el, options, override) => { el.classList.add('monaco-component'); return create(el, options, override); };
   const createDiffEditor = monaco.editor.createDiffEditor;
   monaco.editor.createDiffEditor = (el, options, override) => {
+    el.classList.add('monaco-component');
     const diff = createDiffEditor(el, { renderGutterMenu: false, ...options }, override);
     const dispose = diff.dispose.bind(diff);
     diff.dispose = () => {

@@ -312,8 +312,8 @@
   ].forEach(ide.registerAction);
 
   ide.onEditor((ed) => {
-    ed.addAction({ id: 'bookmarks.toggle', label: tr('Toggle Bookmark'), contextMenuGroupId: '8_bookmarks', run: () => { ed.focus(); toggle(); } });
-    ed.addAction({ id: 'bookmarks.mnemonic', label: tr('Toggle Bookmark with Mnemonic'), contextMenuGroupId: '8_bookmarks', run: () => { ed.focus(); mnemonicDialog(); } });
+    ed.addAction({ id: 'bookmarks.toggle', label: tr('Toggle Bookmark'), contextMenuGroupId: '8_bookmarks', contextMenuOrder: 1, run: () => { ed.focus(); toggle(); } });
+    ed.addAction({ id: 'bookmarks.mnemonic', label: tr('Toggle Bookmark with Mnemonic'), contextMenuGroupId: '8_bookmarks', contextMenuOrder: 2, run: () => { ed.focus(); mnemonicDialog(); } });
   });
 
   ide.on('projectOpened', load);

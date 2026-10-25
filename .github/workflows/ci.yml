@@ -359,6 +359,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/editor-keys.mjs
+      - name: context-menu
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 6
+        run: node verify/context-menu.mjs
       - name: console-output
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

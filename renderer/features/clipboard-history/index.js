@@ -217,7 +217,7 @@
   ide.registerAction({ id: 'PasteMultiple', title: tr('Paste from History…'), keys: 'Ctrl+Shift+V', run: () => open() });
   // The editor's context menu, next to Monaco's Cut / Copy / Paste.
   ide.onEditor((ed) => {
-    ed.addAction({ id: 'pyide.pasteFromHistory', label: tr('Paste from History…'), contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 4, run: () => open(ed) });
+    ed.addAction({ id: 'pyide.pasteFromHistory', label: tr('Paste from History…'), contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 4.5, run: () => open(ed) });
   });
 
   // ---------- Settings › Editor › Clipboard ----------
