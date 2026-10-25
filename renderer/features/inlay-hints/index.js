@@ -11,6 +11,8 @@
   };
   const DEFAULTS = Object.fromEntries(Object.values(KEYS).map((k) => [k, true]));
   const on = (name) => ide.settings.get(KEYS[name], true) !== false;
+  // PyCharm turns inlays off in Power Save Mode; every hint is a Pyright request.
+  const shown = () => on('enabled') && !ide.powerSave?.on();
   const MAX_TYPE = 60;
 
   // ---------- where hints go ----------
@@ -329,7 +331,7 @@
   monaco.editor.onDidCreateModel(track);
   async function provide(model, range, monacoToken) {
     const empty = { hints: [], dispose() {} };
-    if (!on('enabled') || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
+    if (!shown() || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
     const cts = new monaco.CancellationTokenSource(monacoToken);
     const edited = model.onDidChangeContent(() => cts.cancel());
     // Resolves when the token is cancelled or after ms.
@@ -353,7 +355,7 @@
 
   async function provideFor(model, range, token) {
     const empty = { hints: [], dispose() {} };
-    if (!on('enabled') || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
+    if (!shown() || model.uri.scheme !== 'file' || !ide.lsp || ide.lsp.status() !== 'ready') return empty;
     const uri = model.uri.toString();
     const sites = tokensOf(model, range);
     const jobs = [];
@@ -393,9 +395,10 @@
   const refresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => changed.fire(), 250); };
   ide.on('problemsChanged', refresh);
 
-  const applyOption = () => ide.updateEditorOptions({ inlayHints: { enabled: on('enabled') ? 'on' : 'off', padding: false } });
+  const applyOption = () => ide.updateEditorOptions({ inlayHints: { enabled: shown() ? 'on' : 'off', padding: false } });
   ide.on('ready', applyOption);
   applyOption();
+  ide.on('powerSaveChanged', () => { applyOption(); changed.fire(); });
   ide.on('settingsChanged', (key) => {
     if (!Object.values(KEYS).includes(key)) return;
     applyOption();

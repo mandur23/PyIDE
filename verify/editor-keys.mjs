@@ -3,7 +3,8 @@
 // Toggle Case, Add/Unselect/Select All Occurrences, Move Statement (a table and real keys), Collapse/Expand All, Quick
 // Definition, Type Info, Ctrl+F5 Rerun, Ctrl+Shift+T no longer reopening a tab, keys bound by action id to other
 // plugins' actions, Find Action listing Monaco's actions, the main menu, triple quotes closed as typed, docstring stubs
-// in each format, closing triple quotes typed over, and the Korean titles and settings. Ports 9510-9511.
+// in each format, closing triple quotes typed over, brackets typed in strings, comments and f-strings, and the Korean
+// titles and settings. Ports 9510-9511.
 import { launch, openFile } from './lib.mjs';
 import { missingTranslations } from './i18n-lib.mjs';
 
@@ -23,11 +24,13 @@ async function key(combo) {
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: mods, key: name, code, windowsVirtualKeyCode: vk });
   await sleep(80);
 }
-// Typed characters, as a keyboard sends them (Monaco's auto-closing and onDidType see them).
+// Typed characters, as a keyboard sends them (Monaco's auto-closing and onDidType see them). Characters whose code
+// is also a key's code (`(` is ArrowDown, `#` is End) carry the code of their key on a US keyboard.
+const TYPED_VK = { '"': 222, "'": 222, '(': 57, ')': 48, '[': 219, ']': 221, '{': 219, '}': 221, '#': 51 };
 async function typeKeys(text) {
   for (const ch of text) {
     const enter = ch === '\n';
-    const ev = enter ? { key: 'Enter', code: 'Enter', text: '\r', windowsVirtualKeyCode: 13 } : { key: ch, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch === '"' || ch === "'" ? 222 : ch.toUpperCase().charCodeAt(0) };
+    const ev = enter ? { key: 'Enter', code: 'Enter', text: '\r', windowsVirtualKeyCode: 13 } : { key: ch, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: TYPED_VK[ch] ?? ch.toUpperCase().charCodeAt(0) };
     await cdp('Input.dispatchKeyEvent', { type: 'keyDown', ...ev });
     await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: ev.key, code: ev.code, windowsVirtualKeyCode: ev.windowsVirtualKeyCode });
     await sleep(60);
@@ -300,6 +303,36 @@ try {
   await js(`(ide.settings.set('editor.docstringStub', false), true)`);
   check(await stubFor('def f(a):\n    \n', 2, 5) === 'def f(a):\n    """\n    """\n', 'with Insert documentation comment stub off, Enter only opens the line');
   await js(`(ide.settings.set('editor.docstringStub', true), true)`);
+
+  // ---------------- brackets in strings and comments ----------------
+  for (const [keys, want, what] of [
+    ['print("(")', 'print("(")', 'a ( in a string gets no ), as in PyCharm'],
+    ["print('[')", "print('[')", 'a [ in a string gets no ]'],
+    ['s = "{', 's = "{"', 'a { in a plain string gets no }'],
+    ['print("{}")', 'print("{}")', 'a format string typed in full'],
+    ['# call(', '# call(', 'a ( in a comment gets no )'],
+    ['x = "abc"[', 'x = "abc"[]', 'a [ right after a string is code: it gets its ]'],
+    ['x = [(', 'x = [()]', 'brackets in code still close'],
+    ['s = f"{', 's = f"{}', 'a { in an f-string opens a replacement field: it gets its }'],
+    ['s = rf"{', 's = rf"{}', 'the same in an rf-string'],
+    ['s = b"{', 's = b"{', 'not in a bytes literal'],
+    ['s = f"{len(', 's = f"{len()}', 'brackets inside a replacement field are code'],
+    ['s = f"{x} (', 's = f"{x} (', "a ( in an f-string's text gets no )"],
+    ['print(f"{x}")', 'print(f"{x}")', 'an f-string call typed in full'],
+  ]) {
+    await setText('\n', 1, 1);
+    await typeKeys(keys);
+    const line = await js(`ide.editor.getModel().getLineContent(1)`);
+    const at = J(await caret());
+    check(line === want && at === J([1, keys.length + 1]), `typing ${keys} key by key: ${what} (${J(line)} ${at})`);
+  }
+  for (const [keys, want] of [['print("(")', 'print("(")'], ['# call(', '# call('], ['x = f"{len(', 'x = f"{len()}']]) {
+    await setText('\n', 1, 1);
+    await cdp('Input.insertText', { text: keys });
+    await sleep(100);
+    const line = await js(`ide.editor.getModel().getLineContent(1)`);
+    check(line === want, `typing ${keys} at once (an IME commit) gives ${want} (${J(line)})`);
+  }
 
   // Settings › Editor › Smart Keys
   await js(`(ide.runAction('ShowSettings'), true)`);

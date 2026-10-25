@@ -2371,6 +2371,57 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
     onEnterRules: [{ beforeText: /:\s*(#.*)?$/, action: { indentAction: monaco.languages.IndentAction.Indent } }],
     indentationRules: { increaseIndentPattern: /^\s*.*:\s*(#.*)?$/, decreaseIndentPattern: /^\s*(return|pass|break|continue|raise)\b.*$/ },
   });
+  // PyCharm pairs a bracket only where it starts code: not in a string literal or a comment, except in an f-string,
+  // where `{` opens a replacement field and the field is code. Monaco's notIn judges by the character before the caret,
+  // which would also stop `"abc"[` and every f-string `{` from pairing, so each typed bracket is judged here by the
+  // token it lands in, and auto-closing is off for that typing when it lands in text. Monaco closes the brackets of text
+  // typed at once (an IME commit) one character at a time, so each bracket in it is judged, against the line as it
+  // will read.
+  const COMMENT = 1;
+  const STRING = 2;
+  const OPENERS = new Set(['(', '[', '{']);
+  // Whether the bracket at `offset` of the line `text` (tokenized as `tokens`) is in a string literal or comment.
+  function bracketInText(text, tokens, offset) {
+    let i = tokens.findTokenIndexAtOffset(offset);
+    const type = tokens.getStandardTokenType(i);
+    if (type !== STRING) return type === COMMENT;
+    // The string from its prefix. One continued from an earlier line counts as plain text.
+    while (i > 0 && tokens.getStandardTokenType(i - 1) === STRING) i--;
+    const before = text.slice(tokens.getStartOffset(i), offset);
+    const fstring = /^[rR]?[fF][rR]?("""|'''|"|')/.exec(before);
+    if (!fstring) return true;
+    if (text[offset] === '{') return false;
+    let depth = 0;
+    for (const [m] of before.slice(fstring[0].length).matchAll(/\{\{|\}\}|[{}]/g)) if (m.length === 1) depth = Math.max(0, depth + (m === '{' ? 1 : -1));
+    return depth === 0;
+  }
+  function typedBracketInText(model, selections, typed) {
+    if (/[\r\n]/.test(typed) || ![...typed].some((c) => OPENERS.has(c))) return false;
+    return selections.some((s) => {
+      const { lineNumber, column } = s.getPosition();
+      if (!s.isEmpty() || !model.tokenization.isCheapToTokenize(lineNumber)) return false;
+      const line = model.getLineContent(lineNumber);
+      const text = line.slice(0, column - 1) + typed + line.slice(column - 1);
+      const tokens = model.tokenization.tokenizeLinesAt(lineNumber, [text])?.[0];
+      if (!tokens?.getCount()) return false;
+      for (let k = 0; k < typed.length; k++) if (OPENERS.has(typed[k]) && bracketInText(text, tokens, column - 1 + k)) return true;
+      return false;
+    });
+  }
+  monaco.editor.onDidCreateEditor((ed) => {
+    let restore;
+    ed.onWillType((typed) => {
+      const model = ed.getModel();
+      if (model?.getLanguageId() !== 'python' || !typedBracketInText(model, ed.getSelections(), typed)) return;
+      restore = ed.getRawOptions().autoClosingBrackets ?? 'languageDefined';
+      ed.updateOptions({ autoClosingBrackets: 'never' });
+    });
+    ed.onDidType(() => {
+      if (restore === undefined) return;
+      ed.updateOptions({ autoClosingBrackets: restore });
+      restore = undefined;
+    });
+  });
   monaco.languages.registerCompletionItemProvider('python', { provideCompletionItems: pythonBasicCompletions(monaco) });
   monaco.editor.defineTheme('pycharm-dark', PYCHARM_DARK);
 
