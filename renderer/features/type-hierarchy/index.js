@@ -431,7 +431,7 @@
     const model = ed.getModel();
     const path = model && modelPath(model);
     if (!g || !path || !isPy(path) || !ide.findTab?.(path) || ide.powerSave?.on()) { g?.deco.clear(); if (g) g.marks = new Map(); return; }
-    if (!(await ide.lsp.ready())) return;
+    if (!(await ide.lsp.ready()) || model.isDisposed()) return;
     const uri = model.uri.toString();
     const version = model.getVersionId();
     const mine = epoch;

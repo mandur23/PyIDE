@@ -57,5 +57,6 @@
   "Contents are identical": "콘텐츠가 동일합니다",
   "Contents have differences only in line separators": "내용에서 줄 구분 기호만 다릅니다",
   "1 difference": "차이 1개",
-  "{n} differences": "차이 {n}개"
+  "{n} differences": "차이 {n}개",
+  "Close": "닫기"
 }
