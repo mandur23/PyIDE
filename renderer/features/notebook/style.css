@@ -101,28 +101,3 @@ img.nb-image[data-mime="image/svg+xml"] { background: transparent; }
 .nb-tail-btn { height: 26px; padding: 0 12px; border: 1px dashed var(--gray4); border-radius: 5px; color: var(--gray9); }
 .nb-tail-btn:hover { border-color: var(--blue6); color: var(--gray12); }
 
-/* ANSI colors in console output and tracebacks */
-.nb-bold { font-weight: 700; }
-.nb-italic { font-style: italic; }
-.nb-underline { text-decoration: underline; }
-.nb-fg0 { color: #6e7079; } .nb-fg1 { color: #e06c6c; } .nb-fg2 { color: #6aab73; } .nb-fg3 { color: #d5b778; }
-.nb-fg4 { color: #5f9ef0; } .nb-fg5 { color: #c77dbb; } .nb-fg6 { color: #2aacb8; } .nb-fg7 { color: #bcbec4; }
-.nb-fg8 { color: #868a91; } .nb-fg9 { color: #f28b82; } .nb-fg10 { color: #8fd694; } .nb-fg11 { color: #f2c55c; }
-.nb-fg12 { color: #8ab4f8; } .nb-fg13 { color: #e0a3e0; } .nb-fg14 { color: #5fd7d7; } .nb-fg15 { color: #ffffff; }
-.nb-bg0 { background: #4e5157; } .nb-bg1 { background: #7a2e2e; } .nb-bg2 { background: #2e5a34; } .nb-bg3 { background: #6b5a23; }
-.nb-bg4 { background: #2e436e; } .nb-bg5 { background: #5b3361; } .nb-bg6 { background: #1f5c63; } .nb-bg7 { background: #9da0a8; }
-.nb-bg8 { background: #6f737a; } .nb-bg9 { background: #a04545; } .nb-bg10 { background: #3f7a46; } .nb-bg11 { background: #8d7a2e; }
-.nb-bg12 { background: #3d5c9a; } .nb-bg13 { background: #7d4a85; } .nb-bg14 { background: #2a7b85; } .nb-bg15 { background: #ced0d6; }
-:root[data-theme="light"] .nb-fg0 { color: #000; }
-:root[data-theme="light"] .nb-fg1 { color: #c4262b; }
-:root[data-theme="light"] .nb-fg2 { color: #1f7a33; }
-:root[data-theme="light"] .nb-fg3 { color: #8a6300; }
-:root[data-theme="light"] .nb-fg4 { color: #1750c8; }
-:root[data-theme="light"] .nb-fg5 { color: #9c2f9a; }
-:root[data-theme="light"] .nb-fg6 { color: #0e7c86; }
-:root[data-theme="light"] .nb-fg7 { color: #5a5d63; }
-:root[data-theme="light"] .nb-fg9 { color: #d93a3a; }
-:root[data-theme="light"] .nb-fg10 { color: #2f8f45; }
-:root[data-theme="light"] .nb-fg11 { color: #a87a00; }
-:root[data-theme="light"] .nb-fg12 { color: #2c64e0; }
-:root[data-theme="light"] .nb-fg15 { color: #222; }

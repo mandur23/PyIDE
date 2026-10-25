@@ -140,6 +140,7 @@
 
   // A session is stoppable while its process runs and while a run is still starting there.
   const busy = (s) => s.running || !!s.starting;
+  const killProcess = (id) => ide.proc.kill(id);
 
   function renderActions() {
     const s = activeSession;
@@ -187,6 +188,8 @@
       // finished: resolves with the exit code of the current run (-1: it did not start, was replaced or closed);
       // launched: the current run started a process. rerun: what the tab's Rerun does instead of runConfig(cfg).
       finished: Promise.resolve(-1), finish: null, launched: false, rerun: null,
+      // kill(id): ends the current run's process; a run in an emulated terminal replaces it (run:terminalKill).
+      kill: killProcess,
       host: el('div', 'run-session hidden'),
       tab: el('div', 'run-tab'),
       // A console in the session (or in `parent`); typed lines go to the running process's stdin.
@@ -209,7 +212,7 @@
         s.running = true;
         s.launched = true;
         // Stop (or closing the tab) was asked for before the process id arrived.
-        if (s.cancelStart || s.closed) { s.cancelStart = false; ide.proc.kill(id); }
+        if (s.cancelStart || s.closed) { s.cancelStart = false; s.kill(id); }
         s.setIcon('▶', 'running');
         if (s.con?.input) { s.con.input.disabled = false; s.con.input.focus(); }
         updateToolbar();
@@ -242,7 +245,7 @@
         });
       },
       stop() {
-        if (s.running) ide.proc.kill(s.procId);
+        if (s.running) s.kill(s.procId);
         else if (s.starting) s.cancelStart = true;
       },
       setIcon(icon, cls) {
@@ -285,7 +288,8 @@
     let s;
     while ((s = sessions.find((o) => o.key === cfg.id))?.starting) await s.starting;
     if (s) {
-      if (s.running) { const old = s.procId; s.procId = null; s.running = false; ide.proc.kill(old); }
+      if (s.running) { const old = s.procId; s.procId = null; s.running = false; s.kill(old); }
+      s.kill = killProcess;
       s.dispose?.();
       s.dispose = null;
       s.extraActions = [];
@@ -510,14 +514,119 @@
   async function warnMissingEnvFiles(cfg, write) {
     for (const p of await missingEnvFiles(cfg)) write(`${tr('Env file not found: {path}', { path: p })}\n`);
   }
+  const commandLine = (interp, r) => [interp.cmd, ...interp.args, ...r.interpOptions, r.script, ...r.params].map(quoteArg).join(' ');
+
+  // ---------- Emulate terminal in output console ----------
+  // The run's tab shows an xterm.js terminal on a pseudo-console (run:startTerminal in main/features/run.js), so the
+  // program's isatty() is true: colors, progress bars and prompts behave as in a terminal, keys go to the program.
+  const XTERM = '../node_modules/@xterm';
+  // xterm ships UMD bundles; with Monaco's AMD loader present they would register as AMD modules instead of globals
+  // (the Terminal plugin loads them the same way, and usually first).
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const amd = window.define?.amd;
+      if (amd) window.define.amd = undefined;
+      const tag = el('script');
+      tag.src = src;
+      tag.onload = () => { if (amd) window.define.amd = amd; resolve(); };
+      tag.onerror = () => { if (amd) window.define.amd = amd; reject(new Error(`failed to load ${src}`)); };
+      document.head.appendChild(tag);
+    });
+  }
+  let xterm = null;
+  const loadXterm = () => (xterm ||= (async () => {
+    if (!document.querySelector('link[href$="xterm/css/xterm.css"]')) {
+      const css = el('link');
+      css.rel = 'stylesheet';
+      css.href = `${XTERM}/xterm/css/xterm.css`;
+      document.head.appendChild(css);
+    }
+    if (!window.Terminal) await loadScript(`${XTERM}/xterm/lib/xterm.js`);
+    if (!window.FitAddon) await loadScript(`${XTERM}/addon-fit/lib/addon-fit.js`);
+  })());
+  // Output and exit of each run in a terminal, by id; what arrives before its tab listens waits in `early`.
+  const terminalRuns = new Map();
+  const early = new Map();
+  const deliver = (id, m) => {
+    const run = terminalRuns.get(id);
+    if (run) run(m); else early.set(id, [...(early.get(id) || []), m]);
+  };
+  ide.api.on('run:terminalData', ({ id, data }) => deliver(id, { data }));
+  ide.api.on('run:terminalExit', ({ id, code }) => deliver(id, { exit: true, code }));
+  const termTheme = () => {
+    const v = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return { background: v('--gray1'), foreground: v('--text'), cursor: v('--gray11'), cursorAccent: v('--gray1') };
+  };
+
+  async function startInTerminal(cfg, s, interp, r) {
+    await loadXterm();
+    // Not a [data-terminal] like the Terminal's panes: as in PyCharm's Run console, the IDE's shortcuts (Stop, Rerun)
+    // still work while it has the keyboard; other keys go to the program.
+    const box = el('div', 'run-term');
+    s.host.appendChild(box);
+    const term = new window.Terminal({
+      fontFamily: "'JetBrains Mono', D2Coding, Consolas, 'Malgun Gothic', monospace", fontSize: 13, scrollback: 10000,
+      theme: termTheme(), windowsPty: { backend: 'conpty' },
+    });
+    const fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(box);
+    try { fit.fit(); } catch {}
+    s.term = term;
+    const line = (text) => term.write(`${text.replace(/\r?\n/g, '\r\n')}`);
+    line(`${commandLine(interp, r)}\n`);
+    if (r.stdin) line(`${tr('Redirect input from is not used while Emulate terminal in output console is on.')}\n`);
+    const cwd = await workingDir(r.cwd, line);
+    await warnMissingEnvFiles(cfg, line);
+    let id = null;
+    const size = ide.util.observeSize(box, () => {
+      if (!box.offsetWidth || box.closest('.hidden')) return;
+      try { fit.fit(); } catch {}
+      if (id != null) ide.api.send('run:terminalResize', { id, cols: term.cols, rows: term.rows });
+    });
+    const input = term.onData((data) => { if (id != null && s.procId === id && s.running) ide.api.send('run:terminalWrite', { id, data }); });
+    s.dispose = () => {
+      size.disconnect();
+      input.dispose();
+      term.dispose();
+      if (s.term === term) s.term = null;
+      // A replaced run's last output and exit still arrive; they are dropped instead of waiting in `early`.
+      if (terminalRuns.has(id)) terminalRuns.set(id, (m) => { if (m.exit) terminalRuns.delete(id); });
+    };
+    let res;
+    try {
+      res = await ide.api.invoke('run:startTerminal', interp, r.script, cwd, r.params, r.env, ide.root ? [ide.root] : [], envFilesFor(cfg),
+        { interpOptions: r.interpOptions, cols: term.cols, rows: term.rows });
+    } catch (err) {
+      return line(`${ide.util.errorText(err)}\n`);
+    }
+    if (res.error) return line(`${tr('Emulate terminal in output console is not available for a remote interpreter.')}\n`);
+    id = res.id;
+    s.kill = (pid) => ide.api.invoke('run:terminalKill', pid);
+    s.started(id);
+    term.focus();
+    terminalRuns.set(id, (m) => {
+      if (!m.exit) return void (s.procId === id && term.write(m.data));
+      terminalRuns.delete(id);
+      if (s.procId === id) {
+        line(`\n${tr('Process finished with exit code {code}', { code: m.code ?? 1 })}\n`);
+        s.setIcon('▶', m.code === 0 ? 'done' : 'failed');
+      }
+      s.exited(id, m.code);
+    });
+    for (const m of early.get(id) || []) terminalRuns.get(id)?.(m);
+    early.delete(id);
+  }
   // PyCharm's "Run: Script path / Module name": cfg.runMode 'module' runs `python -m <cfg.module>` (configurations saved
   // before the switch run their script). A module runs in the project root unless a working directory is given.
   const isModule = (cfg) => cfg?.runMode === 'module';
   // A Python configuration resolved to what a launcher needs: script is '-m' for a module, which then leads params.
-  // missing: the script or module is not specified.
+  // missing: the script or module is not specified. interpOptions: PyCharm's Interpreter options (-X dev, -O, -W error),
+  // which go before the script; stdin: the file of Redirect input from (absolute), or ''.
   function resolvePython(cfg) {
     const params = parseArgs(cfg.params);
-    const base = { cwd: resolvePath(cfg.cwd), env: parseEnv(cfg.env), interp: interpFor(cfg) };
+    const base = { cwd: resolvePath(cfg.cwd), env: parseEnv(cfg.env), interp: interpFor(cfg), interpOptions: parseArgs(cfg.interpOptions),
+      stdin: resolvePath(cfg.stdinFile) };
     if (isModule(cfg)) {
       const module = (cfg.module || '').trim();
       return { ...base, missing: !module, script: '-m', params: [module, ...params], cwd: base.cwd || ide.root || '' };
@@ -536,23 +645,32 @@
       { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
       ENV_FILES_FIELD,
       { key: 'interp', label: tr('Python interpreter'), kind: 'interp' },
+      { key: 'interpOptions', label: tr('Interpreter options'), placeholder: tr('e.g. -X dev -W error') },
+      { key: 'stdinFile', label: tr('Redirect input from'), placeholder: tr('A file the program reads as its standard input'), browse: [] },
+      { key: 'emulateTerminal', label: tr('Emulate terminal in output console'), kind: 'checkbox' },
     ],
-    defaults: () => ({ runMode: 'script', script: '', module: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '' }),
+    defaults: () => ({ runMode: 'script', script: '', module: '', params: '', cwd: '', env: '', envFiles: DEFAULT_ENV_FILES, interp: '',
+      interpOptions: '', stdinFile: '', emulateTerminal: false }),
     identity: (c) => (isModule(c) ? `module:${(c.module || '').trim().toLowerCase()}` : resolvePath(c.script).toLowerCase()),
     file: (c) => (isModule(c) ? null : resolvePath(c.script)),
     // A scratch file (scratches plugin) runs in the project root, as in PyCharm.
     forFile: (path) => ({ type: 'python', name: basename(path).replace(/\.pyw?$/, ''), script: path, ...(ide.root && ide.scratches?.isScratch(path) ? { cwd: ide.root } : {}) }),
     async start(cfg, s, interp) {
-      const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
       const r = resolvePython(cfg);
+      // A remote interpreter's program gets no pseudo-console here; it runs with the output console.
+      if (cfg.emulateTerminal && !interp.target && !r.missing) return startInTerminal(cfg, s, interp, r);
+      const con = s.console({ input: !r.stdin, placeholder: tr('stdin: type input and press Enter') });
       if (r.missing) {
         return con.append(`${isModule(cfg) ? tr('Module name is not specified. Edit the configuration first.') : tr('Script path is not specified. Edit the configuration first.')}\n`, 'err');
       }
-      con.append(`${[interp.cmd, ...interp.args, r.script, ...r.params].map(quoteArg).join(' ')}\n`, 'sys');
+      con.append(`${commandLine(interp, r)}${r.stdin ? ` < ${quoteArg(r.stdin)}` : ''}\n`, 'sys');
+      if (cfg.emulateTerminal) con.append(`${tr('Emulate terminal in output console is not available for a remote interpreter.')}\n`, 'err');
+      if (r.stdin && !(await ide.api.exists(r.stdin))) return con.append(`${tr("Input file doesn't exist: {path}", { path: r.stdin })}\n`, 'err');
       const cwd = await workingDir(r.cwd, (text) => con.append(text, 'err'));
       await warnMissingEnvFiles(cfg, (text) => con.append(text, 'err'));
-      // run:start runs `python -u <script> <params…>`, so '-m' goes where the script would.
-      const id = await ide.api.invoke('run:start', interp, r.script, cwd, r.params, r.env, ide.root ? [ide.root] : [], envFilesFor(cfg));
+      // run:start runs `python <options> -u <script> <params…>`, so '-m' goes where the script would.
+      const id = await ide.api.invoke('run:start', interp, r.script, cwd, r.params, r.env, ide.root ? [ide.root] : [], envFilesFor(cfg),
+        { interpOptions: r.interpOptions, stdin: r.stdin || undefined });
       s.attach(id);
     },
   });
@@ -659,8 +777,9 @@
 
   // The debugger debugs the active file; 'DebugCurrent' is the contract name, 'Debug' is PyCharm's action id.
   const debugActionId = () => ['DebugCurrent', 'Debug'].find((id) => ide.actions.some((a) => a.id === id));
-  // A type with debugTarget(cfg, interp, opts) -> {script, cwd, params, env, started?} (script may be '-m'; null cancels)
-  // is debugged like a script. started(promise) gets debugFile's promise, which settles once the session runs or failed.
+  // A type with debugTarget(cfg, interp, opts) -> {script, cwd, params, env, tabs?, started?} (script may be '-m'; null
+  // cancels) is debugged like a script; tabs are debugFile's plugin sub-tabs of the session. started(promise) gets
+  // debugFile's promise, which settles once the session runs or failed.
   const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile));
   // opts are passed through to the type's debugTarget (e.g. {targets} for debugging the failed tests again).
   async function debugConfig(cfg, opts = {}) {
@@ -677,9 +796,12 @@
         return ide.ui.alert(isModule(cfg) ? tr('Module name is not specified. Edit the configuration first.') : tr('Script path is not specified. Edit the configuration first.'));
       }
       const r = { interp: interpFor(cfg), ...target };
-      // A debugTarget may build its script (a visual script compiles its graph), so Rerun asks it again.
-      const started = ide.debugger.debugFile(r.script, { interp: r.interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg),
-        ...(debugTarget ? { rerun: () => debugConfig(cfg, opts) } : {}) });
+      // Interpreter options go with the interpreter's own arguments, ahead of debugpy's.
+      const interp = r.interp && r.interpOptions?.length ? { ...r.interp, args: [...r.interp.args, ...r.interpOptions] } : r.interp;
+      // A debugTarget may build its script (a visual script compiles its graph), so Rerun asks it again. Its tabs are
+      // sub-tabs of the session in the Debug window (the pytest type's Test Results).
+      const started = ide.debugger.debugFile(r.script, { interp, cwd: r.cwd, params: r.params, env: r.env, envFiles: envFilesFor(cfg),
+        ...(r.tabs ? { tabs: r.tabs } : {}), ...(debugTarget ? { rerun: () => debugConfig(cfg, opts) } : {}) });
       r.started?.(started);
       return started;
     }
@@ -872,7 +994,8 @@
           b.title = tr('Browse');
           b.onclick = async (e) => {
             e.preventDefault();
-            const p = await ide.api.openFileDialog([{ name: 'Python', extensions: ['py', 'pyw'] }]);
+            // fd.browse: the dialog's filters (an empty list shows every file), or true for Python files.
+            const p = await ide.api.openFileDialog(Array.isArray(fd.browse) ? fd.browse : [{ name: 'Python', extensions: ['py', 'pyw'] }]);
             if (p) { input.value = p; current[fd.key] = p; }
           };
           wrap.append(input, b);

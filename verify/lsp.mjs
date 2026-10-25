@@ -125,12 +125,12 @@ try {
   await until(`ide.activeTab()?.title === 'app.py' && ide.editor.getPosition().lineNumber === 8`, 'navigated from usage row');
   check(true, 'clicking a usage opens the file at that line');
 
-  // ---- Ctrl+Alt+B ----
+  // ---- Ctrl+Shift+B ----
   await caret(5, 7);
-  await press('Ctrl+Alt+B');
+  await press('Ctrl+Shift+B');
   await until(`ide.activeTab()?.title === 'models.py'`, 'type declaration');
   p = await where();
-  check(p.line === 4, `Ctrl+Alt+B goes to the type declaration (models.py:${p.line})`);
+  check(p.line === 4, `Ctrl+Shift+B goes to the type declaration (models.py:${p.line})`);
 
   // ---- Ctrl+Click ----
   await openFile(t, 'app.py');

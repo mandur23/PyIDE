@@ -240,3 +240,17 @@
 .vcs-history-diff .vcs-diff-head { height: 24px; }
 .vcs-history-diff .vcs-diff-side { line-height: 24px; }
 .vcs-history-binary { padding: 8px 10px; }
+/* the Log's Git Reset, Edit Commit Message and Create New Branch dialogs */
+.vcs-reset { display: flex; flex-direction: column; gap: 8px; }
+.vcs-reset-target { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vcs-reset-mode { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.vcs-reset-mode input { margin: 3px 0 0; accent-color: var(--blue6); }
+.vcs-reset-label { font-weight: 600; color: var(--gray12); }
+.vcs-reset-warn { color: var(--yellow); }
+.vcs-reword-text { width: 100%; box-sizing: border-box; resize: vertical; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4);
+  border-radius: 4px; padding: 6px 8px; outline: none; font: 13px var(--mono); }
+.vcs-reword-text:focus, .vcs-new-branch-name:focus { border-color: var(--blue6); }
+.vcs-new-branch { display: flex; flex-direction: column; gap: 6px; }
+.vcs-new-branch-name { padding: 4px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
+.vcs-new-branch-checkout { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.vcs-new-branch-checkout input { margin: 0; accent-color: var(--blue6); }

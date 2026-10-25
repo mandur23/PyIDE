@@ -58,6 +58,9 @@
 .field input.invalid { border-color: var(--red); }
 .settings-check { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .settings-check input { accent-color: var(--blue6); }
+.settings-check .settings-buffer-size { width: 96px; }
+.settings-check .settings-buffer-size:disabled { opacity: 0.6; }
+.settings-check .settings-buffer-size.invalid { border-color: var(--red); }
 .settings-note { margin: 6px 0; font-size: 12px; }
 .settings-subtitle { font-weight: 600; margin-bottom: 4px; }
 .settings-restart-note { margin-right: auto; color: var(--yellow); font-size: 12px; }

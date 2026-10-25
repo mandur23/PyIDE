@@ -880,6 +880,8 @@
     refreshTodos();
   });
   ide.on('toolWindowShown', (id) => (id === 'Structure' ? refreshStructure() : id === 'TODO' && refreshTodosNow()));
+  // Main leaves the Excluded folders out of the scan (main/features/search.js).
+  ide.on('projectRootsChanged', refreshTodos);
   // Main parses again the files another Python parsed (see buildIndex); starting now spares the next popup that wait.
   ide.on('interpreterChanged', () => {
     outline = null;

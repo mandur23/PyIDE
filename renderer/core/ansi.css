@@ -1,0 +1,26 @@
+/* ANSI colors in program output (ide.ui.console, ide.ui.ansi): Run, Debug, tests, packages and notebook outputs */
+.ansi-bold { font-weight: 700; }
+.ansi-dim { opacity: 0.7; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+.ansi-fg0 { color: #6e7079; } .ansi-fg1 { color: #e06c6c; } .ansi-fg2 { color: #6aab73; } .ansi-fg3 { color: #d5b778; }
+.ansi-fg4 { color: #5f9ef0; } .ansi-fg5 { color: #c77dbb; } .ansi-fg6 { color: #2aacb8; } .ansi-fg7 { color: #bcbec4; }
+.ansi-fg8 { color: #868a91; } .ansi-fg9 { color: #f28b82; } .ansi-fg10 { color: #8fd694; } .ansi-fg11 { color: #f2c55c; }
+.ansi-fg12 { color: #8ab4f8; } .ansi-fg13 { color: #e0a3e0; } .ansi-fg14 { color: #5fd7d7; } .ansi-fg15 { color: #ffffff; }
+.ansi-bg0 { background: #4e5157; } .ansi-bg1 { background: #7a2e2e; } .ansi-bg2 { background: #2e5a34; } .ansi-bg3 { background: #6b5a23; }
+.ansi-bg4 { background: #2e436e; } .ansi-bg5 { background: #5b3361; } .ansi-bg6 { background: #1f5c63; } .ansi-bg7 { background: #9da0a8; }
+.ansi-bg8 { background: #6f737a; } .ansi-bg9 { background: #a04545; } .ansi-bg10 { background: #3f7a46; } .ansi-bg11 { background: #8d7a2e; }
+.ansi-bg12 { background: #3d5c9a; } .ansi-bg13 { background: #7d4a85; } .ansi-bg14 { background: #2a7b85; } .ansi-bg15 { background: #ced0d6; }
+:root[data-theme="light"] .ansi-fg0 { color: #000; }
+:root[data-theme="light"] .ansi-fg1 { color: #c4262b; }
+:root[data-theme="light"] .ansi-fg2 { color: #1f7a33; }
+:root[data-theme="light"] .ansi-fg3 { color: #8a6300; }
+:root[data-theme="light"] .ansi-fg4 { color: #1750c8; }
+:root[data-theme="light"] .ansi-fg5 { color: #9c2f9a; }
+:root[data-theme="light"] .ansi-fg6 { color: #0e7c86; }
+:root[data-theme="light"] .ansi-fg7 { color: #5a5d63; }
+:root[data-theme="light"] .ansi-fg9 { color: #d93a3a; }
+:root[data-theme="light"] .ansi-fg10 { color: #2f8f45; }
+:root[data-theme="light"] .ansi-fg11 { color: #a87a00; }
+:root[data-theme="light"] .ansi-fg12 { color: #2c64e0; }
+:root[data-theme="light"] .ansi-fg15 { color: #222; }

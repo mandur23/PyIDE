@@ -4,7 +4,7 @@
   const CHECKPOINTS = {
     pull: 'Before Update Project', checkout: 'Before Checkout', rollback: 'Before Rollback', merge: 'Before Merge',
     rebase: 'Before Rebase', cherryPick: 'Before Cherry-pick', revert: 'Before Git Revert', stash: 'Before Stash',
-    unstash: 'Before Unstash', acceptSide: 'Before Accepting a Merge Side', resolve: 'Before Resolving a Conflict',
+    unstash: 'Before Unstash', reset: 'Before Reset', acceptSide: 'Before Accepting a Merge Side', resolve: 'Before Resolving a Conflict',
     shelve: 'Before Shelve', unshelve: 'Before Unshelve',
   };
   const OPERATION_CHECKPOINTS = { continue: 'Before Continuing', skip: 'Before Skipping', abort: 'Before Aborting' };
@@ -38,6 +38,13 @@
     noLocalChanges: tr('No local changes to save'),
     noShelfChanges: tr('No changes to shelve'),
     currentBranch: tr('The current branch cannot be deleted.'),
+    pushed: tr('The commit is already pushed. Rewriting it would need a force push.'),
+    notHead: tr('Only the last commit can be undone.'),
+    mergeCommit: tr('A merge commit cannot be undone.'),
+    operationInProgress: tr('A merge, rebase, cherry-pick or revert is in progress.'),
+    notInBranch: tr('The commit is not in the current branch.'),
+    emptyMessage: tr('The commit message is empty.'),
+    badTagName: tr('This is not a valid tag name.'),
     gitMissing: tr('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart PyIDE.'),
   };
   // The operation git stopped in the middle of, as the branch widget shows it.
@@ -147,7 +154,8 @@
     const branch = repo ? repo.branch || repo.detached || '' : null;
     if (branch !== lastBranch) { lastBranch = branch; ide.emit('vcsBranchChanged', { root, branch, isRepo: !!repo }); }
     renderWidget();
-    renderChanges();
+    // Most refreshes (a save, a window focus) find the list as it was; rebuilding 600 rows took ~45 ms each time.
+    if (changesKey() !== drawnKey) renderChanges();
     if (treeSig() !== before) ide.refreshTree();
     updateVisibleGutters();
   }
@@ -555,8 +563,13 @@
     }
   }
 
+  // Everything the changes list is drawn from, as of its last drawing.
+  let drawnKey = null;
+  const changesKey = () => JSON.stringify([ide.root, repo, noRepo, [...selection], [...included], [...groupRows], commitHeaders.length, !!conflictHandler]);
+
   function renderChanges() {
     if (!listEl) return;
+    drawnKey = changesKey();
     renderInitBox();
     initBox.classList.toggle('hidden', !!repo || !ide.root);
     commitBody.classList.toggle('hidden', !repo);
@@ -1221,6 +1234,7 @@
   let layout = { rows: new Map(), lanes: 0 };
   let activity = [];
   let me = null;
+  let unpushed = new Set(); // hashes of HEAD's commits no remote branch has: Undo Commit and Edit Commit Message
   let selectedCommit = null;
   let details = null;
   // Activity badges; defined before the tool window because its mount can run as soon as it is registered.
@@ -1417,10 +1431,12 @@
       detailsEl.replaceChildren();
       return;
     }
-    const [list, who] = await Promise.all([historyOf ? invoke('fileHistory', ide.root, historyOf) : invoke('log', ide.root), invoke('identity', ide.root)]);
+    const [list, who, mine] = await Promise.all([historyOf ? invoke('fileHistory', ide.root, historyOf) : invoke('log', ide.root), invoke('identity', ide.root),
+      invoke('unpushed', ide.root)]);
     if (my !== logSeq) return;
     commits = list;
     me = who;
+    unpushed = new Set(mine);
     layout = layoutGraph(commits);
     fillAuthors();
     if (!commits.some((c) => c.hash === selectedCommit)) selectedCommit = commits[0]?.hash || null;
@@ -1462,13 +1478,160 @@
         const own = historyOf ? [
           { label: tr('Show Diff'), run: () => showHistoryDiff(c) },
           { label: tr('Compare with Local'), run: () => compareWithLocal(c) },
+          { separator: true },
         ] : [];
-        const more = logActions.flatMap((fn) => fn(c));
-        const items = own.length && more.length ? [...own, { separator: true }, ...more] : [...own, ...more];
-        if (items.length) ide.ui.contextMenu(e.clientX, e.clientY, items);
+        const menu = ide.ui.contextMenu(e.clientX, e.clientY, [...own, ...commitActions(c)]);
+        if (menu) menu.id = 'vcsLogMenu';
       };
       logRows.appendChild(row);
     }
+  }
+
+  // ---------- the Log's commit menu ----------
+  // PyCharm's menu for one commit. Cherry-Pick and Revert Commit come from the vcs-merge plugin (addLogActions). Undo
+  // Commit and Edit Commit Message rewrite only commits no remote branch has, as PyCharm allows.
+  function commitActions(c) {
+    const busy = !!repo?.op;
+    const mine = unpushed.has(c.hash);
+    return [
+      { label: tr('Copy Revision Number'), run: () => ide.api.invoke('clipboard:writeText', c.hash) },
+      { separator: true },
+      ...logActions.flatMap((fn) => fn(c)),
+      { label: tr('Checkout Revision'), disabled: busy, run: () => checkoutRevision(c) },
+      { separator: true },
+      { label: tr('Reset Current Branch to Here…'), disabled: !repo?.head, run: () => resetToHere(c) },
+      { label: tr('Undo Commit'), disabled: busy || !mine || c.hash !== repo?.head || c.parents.length > 1, run: () => undoCommit(c) },
+      { label: tr('Edit Commit Message…'), disabled: busy || !mine, run: () => editMessage(c) },
+      { separator: true },
+      { label: tr('New Branch…'), run: () => branchHere(c) },
+      { label: tr('New Tag…'), run: () => tagHere(c) },
+    ];
+  }
+
+  // After a command that moved HEAD: the editors, the changes and the log, with `select` the commit to show.
+  async function afterRewrite(select) {
+    if (select) selectedCommit = select;
+    await afterCheckout();
+  }
+
+  async function checkoutRevision(c) {
+    await ide.saveAll();
+    const r = await invoke('checkout', ide.root, c.hash);
+    logResult(r);
+    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
+    notify(tr('Checked out {branch}', { branch: c.short }), '', 'ok');
+    afterRewrite(c.hash);
+  }
+
+  // PyCharm's Git Reset dialog: git reset's four modes, Mixed first chosen.
+  function resetToHere(c) {
+    const modes = [
+      { mode: 'soft', label: tr('Soft'), text: tr("Files won't change, differences will be staged for commit.") },
+      { mode: 'mixed', label: tr('Mixed'), text: tr("Files won't change, differences won't be staged.") },
+      { mode: 'hard', label: tr('Hard'), text: tr('Files will be reverted to the state of the selected commit.'), warn: tr('Warning: any local changes will be lost.') },
+      { mode: 'keep', label: tr('Keep'), text: tr('Files will be reverted to the state of the selected commit, but local changes will be kept intact.') },
+    ];
+    const body = el('div', 'vcs-reset');
+    body.append(el('div', null, tr('This will reset the current branch head to the selected commit, and update the working tree and the index according to the selected mode:')),
+      userText('div', 'vcs-reset-target muted', `${c.short} ${c.subject}`));
+    for (const m of modes) {
+      const row = el('label', 'vcs-reset-mode');
+      const radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'vcsResetMode';
+      radio.value = m.mode;
+      radio.checked = m.mode === 'mixed';
+      const text = el('div', 'vcs-reset-text');
+      text.append(el('div', 'vcs-reset-label', m.label), el('div', 'muted', m.text), ...(m.warn ? [el('div', 'vcs-reset-warn', m.warn)] : []));
+      row.append(radio, text);
+      body.appendChild(row);
+    }
+    ide.ui.dialog({
+      title: tr('Git Reset'), body, width: 560,
+      buttons: [{ label: tr('Reset'), primary: true, run: () => { reset(c, body.querySelector('input[name=vcsResetMode]:checked').value); } }, { label: tr('Cancel') }],
+    });
+  }
+
+  async function reset(c, mode) {
+    await ide.saveAll();
+    const r = await invoke('reset', ide.root, c.hash, mode);
+    logResult(r);
+    if (!r.ok) return notify(tr('Reset failed'), errorText(r), 'error', true);
+    afterRewrite(c.hash);
+  }
+
+  // The commit's changes stay as local changes and its message goes back into the commit box, as in PyCharm.
+  async function undoCommit(c) {
+    const r = await invoke('undoCommit', ide.root, c.hash);
+    logResult(r);
+    if (!r.ok) return notify(tr('Undo Commit failed'), errorText(r), 'error', !r.reason);
+    commitTw.show();
+    if (amendInput?.checked) { amendInput.checked = false; await setAmend(false); }
+    if (msgEl) msgEl.value = r.message;
+    await afterRewrite(c.parents[0] || null);
+  }
+
+  async function editMessage(c) {
+    const d = await invoke('commitDetails', ide.root, c.hash);
+    const box = el('textarea', 'vcs-reword-text');
+    box.value = d.message;
+    box.rows = 8;
+    box.spellcheck = false;
+    box.onkeydown = (e) => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); dlg.el.querySelector('.dialog-buttons .primary').click(); } };
+    const dlg = ide.ui.dialog({
+      title: tr('Edit Commit Message'), body: box, width: 560,
+      buttons: [{ label: tr('OK'), primary: true, run: () => {
+        const message = box.value.trim();
+        if (!message) { box.focus(); return false; }
+        if (message !== d.message.trim()) reword(c, message);
+      } }, { label: tr('Cancel') }],
+    });
+    box.setSelectionRange(0, 0);
+  }
+
+  async function reword(c, message) {
+    const r = await invoke('reword', ide.root, c.hash, message);
+    logResult(r);
+    if (!r.ok) return notify(tr('Edit Commit Message failed'), errorText(r), 'error', !r.reason);
+    afterRewrite(r.hash);
+  }
+
+  function branchHere(c) {
+    const body = el('div', 'vcs-new-branch');
+    const name = el('input', 'vcs-new-branch-name');
+    name.spellcheck = false;
+    const checkout = el('input');
+    checkout.type = 'checkbox';
+    checkout.checked = true;
+    const box = el('label', 'vcs-new-branch-checkout');
+    box.append(checkout, ' ', tr('Checkout branch'));
+    body.append(el('div', null, tr('New branch name:')), name, box);
+    ide.ui.dialog({
+      title: tr('Create New Branch'), body, width: 420,
+      buttons: [{ label: tr('Create'), primary: true, run: () => {
+        const branch = name.value.trim().replace(/\s+/g, '-');
+        if (!branch) { name.focus(); return false; }
+        createBranch(c, branch, checkout.checked);
+      } }, { label: tr('Cancel') }],
+    });
+  }
+
+  async function createBranch(c, name, checkout) {
+    if (checkout) await ide.saveAll();
+    const r = await invoke('newBranch', ide.root, name, { at: c.hash, checkout });
+    logResult(r);
+    if (!r.ok) return notify(tr('Branch creation failed'), errorText(r), 'error', true);
+    if (checkout) return afterRewrite(c.hash);
+    if (gitTw.isVisible()) loadLog();
+  }
+
+  async function tagHere(c) {
+    const name = (await ide.ui.prompt(tr('New tag name'), ''))?.trim().replace(/\s+/g, '-');
+    if (!name) return;
+    const r = await invoke('tag', ide.root, name, c.hash);
+    logResult(r);
+    if (!r.ok) return notify(tr('Tag creation failed'), errorText(r), 'error', !r.reason);
+    if (gitTw.isVisible()) loadLog();
   }
 
   async function selectCommit(hash) {
@@ -1585,6 +1748,7 @@
   const ACTIVITY = [
     { kind: 'commit', re: /^commit \(initial\): (.*)$/s, say: (m) => ['Initial commit: {message}', { message: m[1] }] },
     { kind: 'amend', re: /^commit \(amend\): (.*)$/s, say: (m) => ['Amended the last commit: {message}', { message: m[1] }] },
+    { kind: 'amend', re: /^reword: (.*)$/s, say: (m) => ['Edited a commit message: {message}', { message: m[1] }] },
     { kind: 'merge', re: /^commit \(merge\): (.*)$/s, say: (m) => ['Committed a merge: {message}', { message: m[1] }] },
     { kind: 'commit', re: /^commit: (.*)$/s, say: (m) => ['Committed: {message}', { message: m[1] }] },
     { kind: 'merge', re: /^merge (.+?): (.*)$/s, say: (m) => ['Merged {branch} ({how})', { branch: m[1], how: m[2] }] },
@@ -1603,6 +1767,7 @@
   const SENTENCES = {
     'Initial commit: {message}': () => tr('Initial commit: {message}'),
     'Amended the last commit: {message}': () => tr('Amended the last commit: {message}'),
+    'Edited a commit message: {message}': () => tr('Edited a commit message: {message}'),
     'Committed a merge: {message}': () => tr('Committed a merge: {message}'),
     'Committed: {message}': () => tr('Committed: {message}'),
     'Merged {branch} ({how})': () => tr('Merged {branch} ({how})'),

@@ -11,6 +11,8 @@ import sys
 import time
 import unittest
 
+import pyide_test_diff
+
 ROOT = os.path.abspath(sys.argv[1])
 TARGETS = sys.argv[2:] or [ROOT]
 REPORT = os.environ["PYIDE_TEST_REPORT"]  # a path, or fd:N from remote interpreters (see pyide_pytest_plugin.py)
@@ -77,28 +79,39 @@ class Result(unittest.TestResult):
         super().__init__()
         self.info = info
         self.buffer = True
+        self.diff = None  # (pair, exception) of the running test's last failed assertEqual
+        pyide_test_diff.capture_assert_equal(self.record)
+
+    def record(self, diff, exc):
+        self.diff = (diff, exc)
 
     def startTest(self, test):
+        self.diff = None
         self.started = time.perf_counter()
         emit({"e": "start", "id": self.info[test]["id"]})
         super().startTest(test)
 
-    def report(self, test, outcome, text=""):
+    def report(self, test, outcome, text="", diff=None):
         out = ""
         if self._stdout_buffer is not None:
             out += self._stdout_buffer.getvalue()
         if self._stderr_buffer is not None:
             out += self._stderr_buffer.getvalue()
-        emit({"e": "result", "id": self.info[test]["id"], "when": "call", "outcome": outcome,
-              "duration": time.perf_counter() - self.started, "text": text,
-              "output": ("\n----- Captured output -----\n" + out) if out else ""})
+        event = {"e": "result", "id": self.info[test]["id"], "when": "call", "outcome": outcome,
+                 "duration": time.perf_counter() - self.started, "text": text,
+                 "output": ("\n----- Captured output -----\n" + out) if out else ""}
+        if diff:
+            event["diff"] = diff
+        emit(event)
 
     def addSuccess(self, test):
         self.report(test, "passed")
         super().addSuccess(test)
 
     def addFailure(self, test, err):
-        self.report(test, "failed", self._exc_info_to_string(err, test))
+        # Only the assertEqual that failed the test, not one it caught before failing otherwise.
+        diff = self.diff[0] if self.diff and self.diff[1] is err[1] else None
+        self.report(test, "failed", self._exc_info_to_string(err, test), diff)
         super().addFailure(test, err)
 
     def addError(self, test, err):

@@ -119,9 +119,9 @@ try {
   await js(`ide.openFile(ide.util.joinPath(ide.root, 'notes.txt'))`);
   await press('Ctrl+F4');
   await until(`(${fileTabCount(0)}) === 1`, 'closed');
-  await press('Ctrl+Shift+T');
+  await js(`(ide.runAction('ReopenClosedTab'), true)`);
   await until(`ide.groups()[0].tabs.some(t => t.title === 'notes.txt')`, 'reopened');
-  check(true, 'Ctrl+Shift+T reopens the last closed tab');
+  check(true, 'Reopen Closed Tab reopens the last closed tab');
 
   // ---------- preview tab and tab limit ----------
   await js(`ide.settings.set('editor.previewTab', true)`);

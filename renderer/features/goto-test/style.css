@@ -1,0 +1,5 @@
+/* Create Test dialog: the fields, then the methods to write test stubs for. */
+.gt-create .field { grid-template-columns: 150px 1fr; }
+.gt-list-title { margin: 12px 0 4px; color: var(--gray11); }
+.gt-list { max-height: 180px; overflow: auto; border: 1px solid var(--gray4); border-radius: 4px; padding: 4px 0; background: var(--gray1); }
+.gt-check { display: flex; align-items: center; gap: 6px; padding: 2px 8px; font-family: var(--mono); font-size: 12px; }

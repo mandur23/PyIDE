@@ -88,9 +88,9 @@ try {
   check(await textOf(overlayMessage) === '이동할 선언을 찾을 수 없습니다', `Ctrl+B on nothing says so in Korean (${await textOf(overlayMessage)})`);
   await press('Escape');
   await caret(2, 1);
-  await press('Ctrl+Alt+B');
-  await until(visible(overlayMessage), 'Ctrl+Alt+B hint', 30000);
-  check(await textOf(overlayMessage) === '이동할 타입 선언을 찾을 수 없습니다', 'Ctrl+Alt+B on nothing says so in Korean');
+  await press('Ctrl+Shift+B');
+  await until(visible(overlayMessage), 'Ctrl+Shift+B hint', 30000);
+  check(await textOf(overlayMessage) === '이동할 타입 선언을 찾을 수 없습니다', 'Ctrl+Shift+B on nothing says so in Korean');
   await press('Escape');
   await caret(11, 2);
   await press('Alt+F7');

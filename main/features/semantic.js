@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { isMainThread, parentPort, workerData } = require('worker_threads');
+const projectRoots = isMainThread ? require('../project-roots') : null;
 // This file is also the worker that reads and chunks project files (see collect()), where relative requires do not
 // resolve, and verify/semantic.mjs loads it in plain Node for the index log checks, so the Electron-bound runtime is
 // required by register() alone.
@@ -692,7 +693,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
           const known = [];
           for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length);
           const { dataFiles, dataMB } = limits;
-          const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, excluded: excludedOf(root) });
+          // The folders excluded from the semantic index and those marked Excluded (Mark Directory As).
+          const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, excluded: [...excludedOf(root), ...projectRoots.rootsOf(root).excluded] });
           const seenSet = new Set(plan.seen);
           for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) forget(idx, rel);
           Object.assign(idx, { capped: plan.capped, skipped: plan.skipped, total: plan.chunks, done: 0, msPerChunk: 0 });
@@ -909,6 +911,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     update(root);
     return excludedOf(root);
   });
+  // A folder marked or unmarked Excluded (Mark Directory As) leaves or rejoins the index of the project shown.
+  projectRoots.onChange((root) => { if (keyOf(root) === activeKey) update(root); });
   ipcMain.handle('semantic:rebuild', async (_e, root) => {
     setActive(root);
     const idx = await loadIndex(root);

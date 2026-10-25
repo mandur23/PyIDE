@@ -1648,7 +1648,8 @@
     { id: 'FocusGroup2', title: tr('Focus Editor Group {n}', { n: 2 }), keys: 'Ctrl+2', run: () => focusGroupAt(1) },
     { id: 'FocusGroup3', title: tr('Focus Editor Group {n}', { n: 3 }), keys: 'Ctrl+3', run: () => focusGroupAt(2) },
     { id: 'PinActiveTab', title: tr('Pin Tab'), run: () => activeGroup?.active && togglePin(activeGroup.active) },
-    { id: 'ReopenClosedTab', title: tr('Reopen Closed Tab'), keys: 'Ctrl+Shift+T', run: reopenClosed },
+    // No key, as in PyCharm: Ctrl+Shift+T is Go to Test.
+    { id: 'ReopenClosedTab', title: tr('Reopen Closed Tab'), run: reopenClosed },
     { id: 'OpenInNewWindow', title: tr('Open in New Window'), keys: 'Shift+F4', run: onFile((t) => openInNewWindow([tabPayload(t)])) },
     { id: 'MoveToNewWindow', title: tr('Move to New Window'), run: onFile(moveToNewWindow) },
     { id: 'CopyPaths', title: tr('Copy Path'), keys: 'Ctrl+Shift+C', run: onFile((t) => copyPath(t.path)) },

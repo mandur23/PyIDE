@@ -5,10 +5,13 @@ const path = require('path');
 const remote = require('../remote');
 const { withEnvFiles } = require('../dotenv');
 const { isTrusted } = require('../trust');
+const projectRoots = require('../project-roots');
 
-// PyCharm adds the content root to PYTHONPATH for every Python run configuration; keep any PYTHONPATH the user set.
+// PyCharm adds the content root and its source roots (Mark Directory As) to PYTHONPATH for every Python run
+// configuration; keep any PYTHONPATH the user set. extra: the content roots (the project root), each followed by its
+// source and test source roots.
 const withPath = (env = {}, extra = []) => {
-  const parts = [...extra, env.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean);
+  const parts = [...projectRoots.withSources(extra), env.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean);
   return parts.length ? { ...env, PYTHONPATH: parts.join(';') } : env;
 };
 
@@ -169,18 +172,102 @@ async function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
 
 Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir });
 
+// The program's standard input from a file (Redirect input from): the file is streamed in and then closed, so the
+// program reads it to the end and gets EOF, as with `python script.py < file`.
+function feedInput(ctx, id, file) {
+  const stdin = ctx.procs.get(id)?.stdin;
+  if (!stdin) return;
+  fs.createReadStream(file).on('error', () => stdin.end()).pipe(stdin);
+}
+
+// ---------- Emulate terminal in output console ----------
+// The program runs in a pseudo-console (ConPTY, as the Terminal does), so isatty() is true and libraries draw colors,
+// progress bars and prompts as in a terminal; the Run tab shows it with xterm.js. Output, input and size travel on
+// run:terminal* channels to the window that started it.
+const terminals = new Map(); // id -> {proc, owner}
+let nextTerminal = 1;
+
+// node-pty's ConPTY agent keeps the input pipe and, for a program that exits by itself, the output reader thread
+// (see releasePty in terminal.js); both go once the exit event has drained the output.
+function releasePty(proc) {
+  const agent = proc._agent;
+  try { agent?._inSocket?.destroy(); } catch {}
+  try { agent?._outSocket?.destroy(); } catch {}
+  try { agent?._conoutSocketWorker?.dispose(); } catch {}
+}
+
+function killTerminal(id) {
+  const t = terminals.get(id);
+  if (!t) return;
+  // The program's own children (a subprocess it started) go with it, as for a piped run (main.js killProcess).
+  if (t.proc.pid) execFile('taskkill', ['/pid', String(t.proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
+  try { t.proc.kill(); } catch {}
+}
+
+async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles, { interpOptions = [], cols = 80, rows = 24 } = {}) {
+  const pty = require('@lydell/node-pty');
+  const runEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
+  delete runEnv.ELECTRON_RUN_AS_NODE;
+  const dir = (await workingDir(cwd, roots)).cwd;
+  const proc = pty.spawn(resolveProgram(interp.cmd, dir), [...interp.args, ...interpOptions, '-u', file, ...params], {
+    name: 'xterm-256color', cols: Math.max(2, cols), rows: Math.max(2, rows), cwd: dir, env: runEnv, useConpty: true,
+  });
+  const id = nextTerminal++;
+  const owner = e.sender;
+  terminals.set(id, { proc, owner });
+  let buffer = '';
+  let scheduled = false;
+  proc.onData((data) => {
+    buffer += data;
+    if (scheduled) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      if (!owner.isDestroyed()) owner.send('run:terminalData', { id, data: buffer });
+      buffer = '';
+    });
+  });
+  const onWindowGone = () => killTerminal(id);
+  owner.once('destroyed', onWindowGone);
+  proc.onExit(({ exitCode }) => {
+    releasePty(proc);
+    terminals.delete(id);
+    owner.removeListener('destroyed', onWindowGone);
+    // After the last output, which onData coalesces with setImmediate.
+    if (!owner.isDestroyed()) setImmediate(() => owner.send('run:terminalExit', { id, code: exitCode }));
+  });
+  return { id, cwd: dir };
+}
+
 exports.register = (ctx) => {
   // envFiles: .env files under the explicit env (undefined: the project root's .env, roots[0])
   // The Run and Debug consoles ask first, to say which folder stands in for one that is too long (run:start and
   // debug:start then get a usable one; other callers get the same replacement without a word).
   ctx.ipcMain.handle('run:workingDir', (_e, cwd, fallbacks = []) => workingDir(cwd, fallbacks));
-  ctx.ipcMain.handle('run:start', async (_e, interp, file, cwd, params = [], env = {}, roots = [], envFiles) => {
-    const args = ['-u', file, ...params];
-    const opts = { cwd, env: withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
-    if (remote.isRemote(interp)) return remote.startPython(ctx, interp, args, opts);
-    opts.cwd = (await workingDir(cwd, roots)).cwd;
-    return ctx.startProcess(interp.cmd, [...interp.args, ...args], opts);
+  // opts: {interpOptions?: string[] (before the script: -X dev, -O, -W error), stdin?: a file to read standard input from}
+  ctx.ipcMain.handle('run:start', async (_e, interp, file, cwd, params = [], env = {}, roots = [], envFiles, opts = {}) => {
+    const args = [...(opts.interpOptions || []), '-u', file, ...params];
+    const spawnOpts = { cwd, env: withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
+    let id;
+    if (remote.isRemote(interp)) id = await remote.startPython(ctx, interp, args, spawnOpts);
+    else {
+      spawnOpts.cwd = (await workingDir(cwd, roots)).cwd;
+      id = ctx.startProcess(interp.cmd, [...interp.args, ...args], spawnOpts);
+    }
+    if (opts.stdin) feedInput(ctx, id, opts.stdin);
+    return id;
   });
+  // The same run in a pseudo-console (a local interpreter only). opts: {interpOptions?, cols, rows} -> {id, cwd}
+  ctx.ipcMain.handle('run:startTerminal', (e, interp, file, cwd, params = [], env = {}, roots = [], envFiles, opts = {}) => {
+    if (remote.isRemote(interp)) return { error: 'remote' };
+    return startTerminal(e, interp, file, cwd, params, env, roots, envFiles, opts);
+  });
+  ctx.ipcMain.on('run:terminalWrite', (_e, { id, data } = {}) => { try { terminals.get(id)?.proc.write(String(data)); } catch {} });
+  ctx.ipcMain.on('run:terminalResize', (_e, { id, cols, rows } = {}) => {
+    try { terminals.get(id)?.proc.resize(Math.max(2, cols | 0), Math.max(2, rows | 0)); } catch {}
+  });
+  ctx.ipcMain.handle('run:terminalKill', (_e, id) => killTerminal(id));
+  ctx.app.on('before-quit', () => { for (const id of terminals.keys()) killTerminal(id); });
   // A before launch "Run External Tool" task. Its definition comes from the run configuration, which lives in the
   // user's settings, never in the project; still, like a file watcher, it starts nothing for a project the user has
   // not trusted (main/trust.js), since the tool runs in and on the project's files.

@@ -7,6 +7,19 @@ const { pathToFileURL } = require('url');
 const remote = require('../remote');
 const diagnostics = require('../diagnostics');
 const textCodec = require('../text-codec');
+const projectRoots = require('../project-roots');
+
+// Pyright's search paths and exclusions from the project's roots (Mark Directory As): the source roots replace its own
+// guess (autoSearchPaths adds src/), so the editor resolves imports as Run does, and excluded folders leave its file
+// list. Its default exclusions apply only while `exclude` is unset, so they are repeated.
+function rootSettings(root) {
+  const excluded = projectRoots.excludedDirs(root);
+  return {
+    autoSearchPaths: false,
+    extraPaths: projectRoots.pythonPaths(root),
+    ...(excluded.length ? { exclude: ['**/node_modules', '**/__pycache__', '**/.*', ...excluded] } : {}),
+  };
+}
 
 // A request Pyright never answers (a hang, a lost response) is cancelled and rejected after this many ms, so the
 // feature waiting on it does not wait forever. Project-wide searches get longer on a large project.
@@ -207,7 +220,7 @@ class Server {
   }
 
   settingsFor(section) {
-    const analysis = { autoSearchPaths: true, useLibraryCodeForTypes: true, diagnosticMode: 'openFilesOnly', typeCheckingMode: 'standard' };
+    const analysis = { useLibraryCodeForTypes: true, diagnosticMode: 'openFilesOnly', typeCheckingMode: 'standard', ...rootSettings(this.root) };
     if (section === 'python') return { pythonPath: this.pythonPath, analysis };
     if (section === 'python.analysis') return analysis;
     if (section === 'python.pythonPath') return this.pythonPath;
@@ -402,6 +415,12 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   removeStaleCancellationDirs();
   let server = null;
   let gen = 0;
+  // New roots reach a running server as new settings, which Pyright reads back through workspace/configuration.
+  projectRoots.onChange((root) => {
+    const s = server;
+    if (!s?.initialized || s.dead || path.resolve(root).toLowerCase() !== path.resolve(s.root).toLowerCase()) return;
+    s.write({ method: 'workspace/didChangeConfiguration', params: { settings: { python: s.settingsFor('python') } } });
+  });
 
   const start = async (root, pythonPath, locale) => {
     server?.stop();

@@ -20,6 +20,7 @@ const iconv = require('iconv-lite');
 const { createWindowManager } = require('./main/windows');
 // Folder listings, project walks and interpreter probes run on a worker thread (see main/fs-scan.js).
 const { scan: fsScan } = require('./main/fs-scan');
+const { outputBatch } = require('./main/output-batch');
 
 let win;
 const procs = new Map();
@@ -54,12 +55,11 @@ function startProcess(cmd, args, opts = {}) {
   // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.
   // Streaming decoders keep multi-byte characters intact across chunk boundaries.
   // opts.filter(text, stream) -> text: lets a launcher take its own marker lines out of the output (remote targets).
+  // stdout and stderr share one batch, so their order survives the batching.
+  const batch = outputBatch((text, stream) => send('proc:data', { id, stream, text }));
   const forward = (stream) => {
     const decoder = iconv.getDecoder(opts.encoding || 'utf8');
-    return (d) => {
-      const text = filter ? filter(decoder.write(d), stream) : decoder.write(d);
-      if (text) send('proc:data', { id, stream, text });
-    };
+    return (d) => batch.push(filter ? filter(decoder.write(d), stream) : decoder.write(d), stream);
   };
   proc.stdout.on('data', forward('out'));
   proc.stderr.on('data', forward('err'));
@@ -71,6 +71,7 @@ function startProcess(cmd, args, opts = {}) {
     const text = err.code === 'ENOENT' && cwd.length > 258
       ? `Cannot start ${cmd}: the working directory path is too long for Windows (${cwd.length} characters): ${cwd}` : err.message;
     procLog.warn(`#${id} ${text}`);
+    batch.flush();
     send('proc:data', { id, stream: 'err', text: `${text}\n` });
   });
   // Input typed after the program closed its stdin or exited (EPIPE, write after end) has nowhere to go.
@@ -78,6 +79,7 @@ function startProcess(cmd, args, opts = {}) {
   proc.on('close', (code) => {
     procLog.info(`#${id} exited with code ${code}`);
     procs.delete(id);
+    batch.flush();
     send('proc:exit', { id, code });
   });
   return id;
@@ -155,7 +157,8 @@ ipcMain.handle('dialog:openFolder', async () => picked(await dialog.showOpenDial
 ipcMain.handle('dialog:openFile', async (_e, filters) => picked(await dialog.showOpenDialog(win, { properties: ['openFile'], filters })));
 
 ipcMain.handle('fs:list', (_e, dir) => fsScan('list', dir));
-ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, excludedDirs));
+// Go to File leaves out the folders marked Excluded (Mark Directory As) as well.
+ipcMain.handle('fs:walk', (_e, root, excludedDirs = []) => fsScan('walk', root, [...excludedDirs, ...require('./main/project-roots').excludedDirs(root)]));
 
 // Not existsSync: a path on an unreachable network share takes ~20 s to fail, and the main process (every window's
 // IPC) would wait for it. The renderer checks the last project and recent projects with this.

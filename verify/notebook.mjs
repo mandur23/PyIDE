@@ -148,7 +148,7 @@ try {
   await runAt(t, err, undefined, 'error cell');
   const tb = await outputsText(t, err);
   check(tb.includes('ZeroDivisionError') && tb.includes('boom()'), 'errors show the traceback');
-  check(await js(`!!${H}.querySelectorAll('.nb-cell')[${err}].querySelector('.nb-error span[class*="nb-fg"]')`), 'traceback ANSI colors are rendered');
+  check(await js(`!!${H}.querySelectorAll('.nb-cell')[${err}].querySelector('.nb-error span[class*="ansi-fg"]')`), 'traceback ANSI colors are rendered');
   check(await js(`${H}.querySelectorAll('.nb-cell')[${err}].querySelector('.nb-status').classList.contains('failed')`), 'a failed cell is marked');
 
   // Run All stops at the error: later cells are aborted, not run.

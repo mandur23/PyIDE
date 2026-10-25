@@ -177,21 +177,144 @@ ide.proc = {
 };
 
 // ---------- UI primitives ----------
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 // Frames from code without a file ("<string>", "<frozen runpy>", "<stdin>") are not links.
 const TRACEBACK = /File "([^"<][^"]*)", line (\d+)/g;
 
 ide.ui = {};
 
+// ---------- ANSI text ----------
+// SGR sequences (`ESC[...m`) set colors and weight, `ESC[K` erases to the end of the line; other CSI sequences and
+// OSC ones (window titles, hyperlinks) are dropped. Colors 0-15 are classes (core/ansi.css follows the theme), the
+// 256-color cube and 24-bit colors are inline.
+const ANSI = /\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const PLAIN = Object.freeze({ fg: null, bg: null, bold: false, dim: false, italic: false, underline: false });
+document.head.appendChild(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'core/ansi.css' }));
+function color256(n) {
+  if (n < 16) return n;
+  if (n >= 232) { const g = 8 + (n - 232) * 10; return `rgb(${g},${g},${g})`; }
+  const i = n - 16;
+  const lv = (x) => (x ? 55 + x * 40 : 0);
+  return `rgb(${lv(Math.floor(i / 36))},${lv(Math.floor(i / 6) % 6)},${lv(i % 6)})`;
+}
+// The style after an SGR sequence with parameters `params` ("1;31", "38;5;208", "" for a reset).
+function sgr(st, params) {
+  const codes = params ? params.split(';').map(Number) : [0];
+  const s = { ...st };
+  for (let i = 0; i < codes.length; i++) {
+    const c = codes[i];
+    if (c === 0) Object.assign(s, PLAIN);
+    else if (c === 1) s.bold = true;
+    else if (c === 2) s.dim = true;
+    else if (c === 3) s.italic = true;
+    else if (c === 4) s.underline = true;
+    else if (c === 22) s.bold = s.dim = false;
+    else if (c === 23) s.italic = false;
+    else if (c === 24) s.underline = false;
+    else if (c >= 30 && c <= 37) s.fg = c - 30;
+    else if (c >= 90 && c <= 97) s.fg = c - 90 + 8;
+    else if (c === 39) s.fg = null;
+    else if (c >= 40 && c <= 47) s.bg = c - 40;
+    else if (c >= 100 && c <= 107) s.bg = c - 100 + 8;
+    else if (c === 49) s.bg = null;
+    else if ((c === 38 || c === 48) && codes[i + 1] === 5) {
+      s[c === 38 ? 'fg' : 'bg'] = color256(codes[i + 2]);
+      i += 2;
+    } else if ((c === 38 || c === 48) && codes[i + 1] === 2) {
+      s[c === 38 ? 'fg' : 'bg'] = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+      i += 4;
+    }
+  }
+  return Object.keys(PLAIN).every((k) => s[k] === PLAIN[k]) ? PLAIN : s;
+}
+function styleSpan(st) {
+  const span = document.createElement('span');
+  const cls = [];
+  if (typeof st.fg === 'number') cls.push(`ansi-fg${st.fg}`); else if (st.fg) span.style.color = st.fg;
+  if (typeof st.bg === 'number') cls.push(`ansi-bg${st.bg}`); else if (st.bg) span.style.background = st.bg;
+  for (const k of ['bold', 'dim', 'italic', 'underline']) if (st[k]) cls.push(`ansi-${k}`);
+  span.className = cls.join(' ');
+  return span;
+}
+const appendText = (host, s) => {
+  if (!s) return;
+  const t = host.lastChild;
+  if (t?.nodeType === Node.TEXT_NODE) t.appendData(s); else host.append(s);
+};
+// Writes `text` in style `st` at the end of `host`; with `links`, traceback frames become links to the file and line.
+function writeStyled(host, text, st, links) {
+  if (st !== PLAIN) host = host.appendChild(styleSpan(st));
+  let last = 0;
+  if (links) {
+    for (const m of text.matchAll(TRACEBACK)) {
+      appendText(host, text.slice(last, m.index));
+      const a = el('a', null, m[0]);
+      a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
+      host.append(a);
+      last = m.index + m[0].length;
+    }
+  }
+  appendText(host, text.slice(last));
+}
+ide.ui.ansi = {
+  strip: (text) => text.replace(ANSI, ''),
+  // Text with SGR colors as a fragment of styled spans.
+  fragment(text) {
+    const frag = document.createDocumentFragment();
+    let st = PLAIN;
+    let last = 0;
+    for (const m of text.matchAll(ANSI)) {
+      if (m.index > last) writeStyled(frag, text.slice(last, m.index), st, false);
+      last = m.index + m[0].length;
+      if (m[2] === 'm') st = sgr(st, m[1]);
+    }
+    if (last < text.length) writeStyled(frag, text.slice(last), st, false);
+    return frag;
+  },
+};
+
+// Characters a console keeps, like PyCharm's console cycle buffer (1024 KB by default): the oldest lines go first.
+const consoleCap = () => Math.max(64, Number(ide.settings.get('console.cycleBufferKB', 1024)) || 1024) * 1024;
+// A line longer than this without a line break is written out as it is; \r then rewinds only within what follows.
+const LIVE_MAX = 4096;
+// Finished output goes into spans of at most this many characters, so appending to one stays cheap.
+const SPAN_MAX = 16384;
+const CONTROL = /\r?\n|\r|\x08|\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// What a chunk may end with that the next chunk completes: the \r of a \r\n, or the start of an escape sequence.
+const SPLIT_TAIL = /\r$|\x1b(?:\[[0-9;?]*|\][^\x07\x1b]*\x1b?)?$/;
+
+// Program output as a terminal shows it. The unfinished last line stays editable: \r returns to its start and later
+// text overwrites it (progress bars), \b steps back, colors carry across chunks. Finished lines are written once.
+// append() writes at once and only the scroll to the end, which lays out the whole output, waits for the next frame,
+// so a flood of output costs one layout per frame instead of one per chunk.
 ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   host.classList.add('console-host');
   const out = el('pre', 'console');
   host.appendChild(out);
   // Output follows the end unless the user scrolled up. Measured on scroll, not on append: a hidden console (a tool
   // window or tab not shown) has no size, and once shown it must open at its latest output, not at its first line.
+  // A scroll event comes a frame after the scroll, when more output may have arrived, so only a move above where the
+  // console last scrolled itself (the user scrolling up) stops the following.
   let stick = true;
-  out.addEventListener('scroll', () => { if (out.clientHeight) stick = out.scrollHeight - out.scrollTop - out.clientHeight < 40; });
-  observeSize(out, () => { if (stick) out.scrollTop = out.scrollHeight; });
+  let autoTop = 0;
+  const toEnd = () => {
+    out.scrollTop = out.scrollHeight;
+    autoTop = out.scrollTop;
+  };
+  out.addEventListener('scroll', () => {
+    if (!out.clientHeight) return;
+    if (out.scrollHeight - out.scrollTop - out.clientHeight < 40) stick = true;
+    else if (out.scrollTop < autoTop - 1) stick = false;
+  });
+  observeSize(out, () => { if (stick) toEnd(); });
+  let scrollQueued = false;
+  const follow = () => {
+    if (!stick || scrollQueued) return;
+    scrollQueued = true;
+    requestAnimationFrame(() => {
+      scrollQueued = false;
+      if (stick) toEnd();
+    });
+  };
   let inp;
   if (input) {
     inp = el('input', 'console-in');
@@ -204,25 +327,166 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
     };
     host.appendChild(inp);
   }
+
+  let st = PLAIN;
+  let held = '';
+  let heldCls = null;
+  // The unfinished line: runs of {text, cls, st}, its length and the caret column.
+  let line = [];
+  let len = 0;
+  let col = 0;
+  let live = null; // the element showing `line`, last in `out` while the line is not empty
+  let tail = null; // the last span of finished output, and its length
+  let tailLen = 0;
+  let kept = 0;
+  const reset = () => {
+    st = PLAIN; held = ''; heldCls = null; line = []; len = 0; col = 0; live = null; tail = null; tailLen = 0; kept = 0;
+    // Cleared output starts at its end again; the scroll back to the top is not the user scrolling up.
+    stick = true;
+    autoTop = -Infinity;
+  };
+  const pushRun = (runs, run) => {
+    const last = runs[runs.length - 1];
+    if (last && last.cls === run.cls && last.st === run.st) last.text += run.text;
+    else runs.push({ ...run });
+  };
+  const slice = (from, to) => {
+    const res = [];
+    let at = 0;
+    for (const r of line) {
+      const s = Math.max(from, at);
+      const e = Math.min(to, at + r.text.length);
+      if (s < e) res.push({ ...r, text: r.text.slice(s - at, e - at) });
+      at += r.text.length;
+    }
+    return res;
+  };
+  const put = (text, cls) => {
+    if (col > len) { pushRun(line, { text: ' '.repeat(col - len), cls, st: PLAIN }); len = col; }
+    if (col === len) pushRun(line, { text, cls, st });
+    else line = [...slice(0, col), { text, cls, st }, ...slice(col + text.length, Infinity)];
+    col += text.length;
+    len = Math.max(len, col);
+  };
+
+  function writeFinished(runs) {
+    for (const r of runs) {
+      if (!tail || tail.className !== (r.cls || '') || tailLen >= SPAN_MAX) {
+        tail = el('span', r.cls);
+        tailLen = 0;
+        out.insertBefore(tail, live?.parentNode === out ? live : null);
+      }
+      writeStyled(tail, r.text, r.st, true);
+      tailLen += r.text.length;
+      kept += r.text.length;
+    }
+    if (kept > consoleCap() + 65536) trim(kept - consoleCap());
+  }
+  // Drops the first `n` characters of finished output, up to the end of that line when it is near.
+  function trim(n) {
+    const walker = document.createTreeWalker(out, NodeFilter.SHOW_TEXT);
+    let removed = 0;
+    for (let node = walker.nextNode(); node && removed < n;) {
+      if (live?.contains(node)) break;
+      const next = walker.nextNode();
+      if (removed + node.length <= n) {
+        removed += node.length;
+        node.remove();
+      } else {
+        let at = n - removed;
+        const nl = node.data.indexOf('\n', at);
+        if (nl >= 0 && nl - at < 4096) at = nl + 1;
+        node.deleteData(0, at);
+        removed += at;
+        break;
+      }
+      node = next;
+    }
+    kept -= removed;
+    // Scroll anchoring moves the view up by what was cut; that is not the user leaving the end.
+    if (stick) autoTop = -Infinity;
+    while (out.firstChild && out.firstChild !== live && !out.firstChild.textContent) out.firstChild.remove();
+    for (const e of [...(out.firstChild?.querySelectorAll?.('*') || [])]) if (!e.textContent) e.remove();
+    if (tail && !tail.isConnected) { tail = null; tailLen = 0; }
+  }
+  function drawLine() {
+    if (!len) { live?.remove(); return; }
+    live ||= el('span');
+    live.replaceChildren();
+    for (const r of line) writeStyled(r.cls ? live.appendChild(el('span', r.cls)) : live, r.text, r.st, true);
+    if (live.parentNode !== out) out.appendChild(live);
+  }
+
+  function feed(text, cls) {
+    if (!text) return;
+    const done = [];
+    if (col === len && !/\r(?!\n)|[\x08\x1b]/.test(text)) {
+      // Plain lines, the common case of a flood.
+      text = text.replace(/\r\n/g, '\n');
+      const nl = text.lastIndexOf('\n');
+      if (nl < 0) put(text, cls);
+      else {
+        for (const r of line) pushRun(done, r);
+        pushRun(done, { text: text.slice(0, nl + 1), cls, st });
+        line = [];
+        len = col = 0;
+        if (nl + 1 < text.length) put(text.slice(nl + 1), cls);
+      }
+    } else {
+      let last = 0;
+      for (const m of text.matchAll(CONTROL)) {
+        if (m.index > last) put(text.slice(last, m.index), cls);
+        last = m.index + m[0].length;
+        const c = m[0];
+        if (c === '\n' || c === '\r\n') {
+          for (const r of line) pushRun(done, r);
+          pushRun(done, { text: '\n', cls, st });
+          line = [];
+          len = col = 0;
+        } else if (c === '\r') col = 0;
+        else if (c === '\x08') {
+          // At the end of the line a backspace deletes, as in Jupyter; inside it, it moves the caret back.
+          if (col && col === len) { line = slice(0, col - 1); len--; }
+          col = Math.max(0, col - 1);
+        } else if (m[2] === 'm') st = sgr(st, m[1]);
+        else if (m[2] === 'K') {
+          if (m[1] === '2') { line = []; len = 0; } else if (!m[1] || m[1] === '0') { line = slice(0, col); len = Math.min(len, col); }
+        }
+      }
+      if (last < text.length) put(text.slice(last), cls);
+    }
+    if (len > LIVE_MAX) {
+      for (const r of line) pushRun(done, r);
+      line = [];
+      len = col = 0;
+    }
+    if (done.length) writeFinished(done);
+    drawLine();
+  }
+
   return {
     out,
     input: inp,
     append(text, cls) {
-      text = text.replace(ANSI, '');
-      const span = el('span', cls);
-      let last = 0;
-      for (const m of text.matchAll(TRACEBACK)) {
-        span.append(text.slice(last, m.index));
-        const a = el('a', null, m[0]);
-        a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
-        span.append(a);
-        last = m.index + m[0].length;
+      cls ||= null;
+      text = String(text);
+      // Another stream comes in between: a held \r still rewinds the line, half an escape sequence is dropped.
+      if (held && heldCls !== cls) {
+        if (held === '\r') feed(held, heldCls);
+        held = '';
       }
-      span.append(text.slice(last));
-      out.appendChild(span);
-      if (stick) out.scrollTop = out.scrollHeight;
+      text = held + text;
+      held = '';
+      const split = SPLIT_TAIL.exec(text);
+      if (split) {
+        held = split[0];
+        heldCls = cls;
+        text = text.slice(0, split.index);
+      }
+      feed(text, cls);
+      follow();
     },
-    clear: () => out.replaceChildren(),
+    clear: () => { out.replaceChildren(); reset(); },
     text: () => out.textContent,
   };
 };
@@ -672,9 +936,14 @@ addEventListener('mouseover', (e) => {
 // registrations win on key clashes. context names where `when` lets the action fire (PyCharm's Editor Actions and
 // Project View): actions of two different contexts never fire together, so the keymap page does not report them as
 // conflicts (Ctrl+D is Duplicate Line in the editor and Compare in the project tree).
+// PyCharm's keys for actions whose plugin registers them without `keys`, so the keymap binds them by id (as PyCharm's
+// keymap does) whichever plugin provides the action. `keys: []` still means no shortcut.
+const KEYMAP_DEFAULTS = {
+  GotoImplementation: 'Ctrl+Alt+B', GotoSuperMethod: 'Ctrl+U', GotoTest: 'Ctrl+Shift+T', Rerun: 'Ctrl+F5',
+};
 ide.registerAction = (action) => {
   ide.actions = ide.actions.filter((a) => a.id !== action.id);
-  const defaultKeys = normalizeKeys(action.keys);
+  const defaultKeys = normalizeKeys(action.keys ?? KEYMAP_DEFAULTS[action.id]);
   ide.actions.push({ ...action, defaultKeys, keys: keymapOverrides.get(action.id) || defaultKeys });
   if (keymapOverrides.has(action.id)) ide.emit('keymapChanged', action.id);
   return action;
@@ -1152,15 +1421,16 @@ function rowNode({ entry, depth }, index) {
   if (entry.treeRoot) node.classList.add('tree-extra');
   else if (cutEntry && samePath(entry.path, cutEntry.path)) node.classList.add('cut');
   node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
-  const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: entry.iconType });
+  const decorations = treeDecorators.map((deco) => deco(entry)).filter(Boolean);
+  // A decorator's iconType draws another icon for the entry (a sources root's blue folder, Mark Directory As).
+  const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: decorations.find((d) => d.iconType)?.iconType || entry.iconType });
   icon.classList.add('icon');
   node.appendChild(icon);
   const name = el('span', 'name', entry.label || entry.name);
   node.appendChild(name);
-  for (const deco of treeDecorators) {
-    const d = deco(entry);
-    if (d?.color) name.style.color = d.color;
-    if (d?.badge) node.appendChild(el('span', 'tree-badge', d.badge));
+  for (const d of decorations) {
+    if (d.color) name.style.color = d.color;
+    if (d.badge) node.appendChild(el('span', 'tree-badge', d.badge));
   }
   return node;
 }
@@ -1961,10 +2231,20 @@ async function gotoFile() {
   if (path) ide.openFile(path);
 }
 
+// Find Action also lists the editor's own Monaco actions (Sort Lines Ascending, Transform to Title Case, Fold All…)
+// that no IDE action already runs. They show no shortcut: the IDE keymap may give their Monaco key to another action.
+function monacoActions() {
+  const ed = ide.editor;
+  if (!ed?.getModel()) return [];
+  const covered = new Set(ide.actions.map((a) => a.editorCommand || a.run?.editorCommand).filter(Boolean));
+  return ed.getSupportedActions()
+    .filter((m) => /^(editor|actions)\./.test(m.id) && m.id !== 'editor.action.quickCommand' && m.label && !covered.has(m.id) && m.isSupported())
+    .map((m) => ({ label: m.label, value: { run: () => { ed.focus(); return m.run(); } } }));
+}
 async function findAction() {
   const action = await ide.ui.pick({
     placeholder: tr('Search actions'),
-    items: ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.map(ide.keymap.format).join(', '), value: a })),
+    items: [...ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.map(ide.keymap.format).join(', '), value: a })), ...monacoActions()],
   });
   action?.run();
 }
@@ -1974,7 +2254,8 @@ const inEditor = () => ide.editor?.hasTextFocus();
 const editorAction = (id) => Object.assign(() => ide.editor?.trigger('keymap', id, null), { editorCommand: id });
 [
   { id: 'SaveAll', title: tr('Save All'), keys: 'Ctrl+S', run: () => ide.saveAll() },
-  { id: 'OpenProject', title: tr('Open Folder…'), keys: 'Ctrl+O', run: pickFolder },
+  // No key, as in PyCharm: Ctrl+O is Override Methods.
+  { id: 'OpenProject', title: tr('Open Folder…'), run: pickFolder },
   { id: 'GotoFile', title: tr('Go to File…'), keys: 'Ctrl+Shift+N', run: gotoFile },
   { id: 'GotoAction', title: tr('Find Action…'), keys: 'Ctrl+Shift+A', run: findAction, terminal: true },
   { id: 'NewPythonFile', title: tr('New Python File'), keys: 'Alt+Insert', run: () => createEntry(false) },

@@ -140,68 +140,7 @@
     o.dropped = (o.dropped || 0) + from;
   }
 
-  const ANSI_RE =/\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-  const stripAnsi = (s) => s.replace(ANSI_RE, '');
-  function color256(n) {
-    if (n < 16) return null;
-    if (n >= 232) { const g = 8 + (n - 232) * 10; return `rgb(${g},${g},${g})`; }
-    const i = n - 16;
-    const lv = (x) => (x ? 55 + x * 40 : 0);
-    return `rgb(${lv(Math.floor(i / 36))},${lv(Math.floor(i / 6) % 6)},${lv(i % 6)})`;
-  }
-  function ansiFragment(text) {
-    const frag = document.createDocumentFragment();
-    const st = { fg: null, bg: null, bold: false, italic: false, underline: false };
-    let last = 0;
-    const push = (s) => {
-      if (!s) return;
-      if (st.fg === null && st.bg === null && !st.bold && !st.italic && !st.underline) { frag.append(s); return; }
-      const span = document.createElement('span');
-      const classes = [];
-      if (typeof st.fg === 'number') classes.push(`nb-fg${st.fg}`); else if (st.fg) span.style.color = st.fg;
-      if (typeof st.bg === 'number') classes.push(`nb-bg${st.bg}`); else if (st.bg) span.style.background = st.bg;
-      if (st.bold) classes.push('nb-bold');
-      if (st.italic) classes.push('nb-italic');
-      if (st.underline) classes.push('nb-underline');
-      span.className = classes.join(' ');
-      span.textContent = s;
-      frag.append(span);
-    };
-    for (const m of text.matchAll(ANSI_RE)) {
-      push(text.slice(last, m.index));
-      last = m.index + m[0].length;
-      if (m[1] === undefined) continue;
-      const codes = m[1] ? m[1].split(';').map(Number) : [0];
-      for (let i = 0; i < codes.length; i++) {
-        const c = codes[i];
-        if (c === 0) Object.assign(st, { fg: null, bg: null, bold: false, italic: false, underline: false });
-        else if (c === 1) st.bold = true;
-        else if (c === 3) st.italic = true;
-        else if (c === 4) st.underline = true;
-        else if (c === 22) st.bold = false;
-        else if (c === 23) st.italic = false;
-        else if (c === 24) st.underline = false;
-        else if (c >= 30 && c <= 37) st.fg = c - 30;
-        else if (c >= 90 && c <= 97) st.fg = c - 90 + 8;
-        else if (c === 39) st.fg = null;
-        else if (c >= 40 && c <= 47) st.bg = c - 40;
-        else if (c >= 100 && c <= 107) st.bg = c - 100 + 8;
-        else if (c === 49) st.bg = null;
-        else if ((c === 38 || c === 48) && codes[i + 1] === 5) {
-          const n = codes[i + 2];
-          const v = n < 16 ? n : color256(n);
-          if (c === 38) st.fg = v; else st.bg = v;
-          i += 2;
-        } else if ((c === 38 || c === 48) && codes[i + 1] === 2) {
-          const v = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
-          if (c === 38) st.fg = v; else st.bg = v;
-          i += 4;
-        }
-      }
-    }
-    push(text.slice(last));
-    return frag;
-  }
+  const { strip: stripAnsi, fragment: ansiFragment } = ide.ui.ansi;
 
   // ---------- Markdown ----------
   let markedLoad = null;

@@ -9,6 +9,7 @@ const remote = require('../remote');
 const attachTo = require('./debug-attach');
 const { withEnvFiles } = require('../dotenv');
 const { workingDir } = require('./run');
+const projectRoots = require('../project-roots');
 const log = require('../diagnostics').logger('#debugger');
 
 const { stoppedError } = attachTo;
@@ -177,7 +178,8 @@ exports.register = (ctx) => {
       if (stopped) { ep?.release(); throw stoppedError(); }
       // opts.envFiles: .env files under opts.env (undefined: the project root's .env), as for run:start.
       const userEnv = withEnvFiles(opts.env, opts.envFiles, opts.roots?.[0]);
-      const pythonPath = [vendorDir, ...(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+      // The roots go on PYTHONPATH with their source roots (Mark Directory As), as for run:start.
+      const pythonPath = [vendorDir, ...projectRoots.withSources(opts.roots || []), userEnv.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
       const env = { ...userEnv, PYTHONPATH: pythonPath, PYDEVD_DISABLE_FILE_VALIDATION: '1' };
       // A local script goes by its long form: pydevd resolves an 8.3 short name only while the long form fits MAX_PATH,
       // and past that prints "unable to get real case" tracebacks into the output. Breakpoints are sent in the same form.

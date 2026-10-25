@@ -1,0 +1,18 @@
+{
+  "Go to Test": "테스트로 이동",
+  "PyCharm's Navigate › Test: jump between a Python module, class or function and its tests (test_<module>.py or <module>_test.py), and Create New Test… with pytest stubs for the chosen methods.": "PyCharm의 탐색 › 테스트: Python 모듈, 클래스, 함수와 그 테스트(test_<module>.py 또는 <module>_test.py) 사이를 이동하고, 새 테스트 생성…으로 선택한 메서드의 pytest 테스트 틀을 만듭니다.",
+  "No test subjects found": "테스트 대상을 찾을 수 없습니다",
+  "Choose Test Subject for {name} ({n} found)": "{name}의 테스트 대상 선택({n}개 찾음)",
+  "Choose Test for {name} ({n} found)": "{name}의 테스트 선택({n}개 찾음)",
+  "Create New Test…": "새 테스트 생성…",
+  "Create Test": "테스트 생성",
+  "Target directory:": "대상 디렉터리:",
+  "Test file name:": "테스트 파일 이름:",
+  "Test class name:": "테스트 클래스 이름:",
+  "Test methods:": "테스트 메서드:",
+  "Test functions:": "테스트 함수:",
+  "The test file name must end with .py": "테스트 파일 이름은 .py로 끝나야 합니다",
+  "'{name}' is not a valid class name": "'{name}'은(는) 올바른 클래스 이름이 아닙니다",
+  "{name} already exists in {file}": "{file}에 {name}이(가) 이미 있습니다",
+  "Cannot create the test: {error}": "테스트를 생성할 수 없습니다: {error}"
+}

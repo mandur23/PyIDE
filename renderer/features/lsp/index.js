@@ -401,6 +401,128 @@
   const coreKeywords = new Set(typeof PY_KEYWORDS !== 'undefined' ? PY_KEYWORDS : []);
   const monacoEdit = (e) => ({ range: toRange(e.range), text: e.newText });
 
+  // Completing a function or method adds its parentheses, as PyCharm does: `()` after the name with the caret inside
+  // and the parameter info shown, or the caret after it for a callable that takes no arguments. Not after `@` (a
+  // decorator is often used without a call), in an import, in a def/class header, or where a `(` or the rest of a
+  // word follows.
+  const CALLABLE = new Set([2, 3]); // LSP CompletionItemKind Method, Function
+  const CALL_PARENS = 'pyide.lsp.callParens';
+  function parensFit(model, position, wordStart) {
+    const line = model.getLineContent(position.lineNumber);
+    const before = line.slice(0, wordStart - 1);
+    if (/^\s*@[\w.]*$/.test(before) || /^\s*(async\s+)?(def|class)\s+$/.test(before)) return false;
+    if (/^\s*(from\s+\S+\s+)?import\b/.test(before) || /^\s*from\s/.test(before)) return false;
+    if (/^[\w(]|^\s+\(/.test(line.slice(position.column - 1))) return false;
+    // A name inside `from mod import (` ... `)` spread over lines.
+    for (let ln = position.lineNumber - 1; ln >= Math.max(1, position.lineNumber - 50); ln--) {
+      const text = model.getLineContent(ln);
+      if (text.includes(')')) break;
+      if (/^\s*from\s+\S+\s+import\s*\(/.test(text)) return false;
+      if (/^\S/.test(text)) break;
+    }
+    return true;
+  }
+  // The added pair is stepped through as in PyCharm: a `(` typed into the empty pair or right after it (users who
+  // type the call themselves) goes inside it instead of opening another, and a `)` typed just before the added `)`
+  // steps over it, whether the text comes one key at a time or at once. Decorations follow the pair through the
+  // edits; each typing is compared with the line as it was just before (onWillType). The pair stops being followed
+  // once the caret leaves it or it is closed. editor -> {model, ids: [open, close], before}
+  const added = new WeakMap();
+  const PAIR = { description: 'pyide-call-parens', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges };
+  function forgetPair(editor) {
+    const a = added.get(editor);
+    added.delete(editor);
+    if (a && !a.model.isDisposed()) a.model.deltaDecorations(a.ids, []);
+  }
+  function addPair(editor, line, open) {
+    forgetPair(editor);
+    const model = editor.getModel();
+    const ids = model.deltaDecorations([], [open, open + 1].map((c) => ({ range: new monaco.Range(line, c, line, c + 1), options: PAIR })));
+    added.set(editor, { model, ids, before: null });
+  }
+  // -> the pair now ({line, open, close, caret, text}), or null when it is gone or the caret left it.
+  function pairAt(editor) {
+    const a = added.get(editor);
+    const model = editor.getModel();
+    if (!a || model !== a.model) return null;
+    const [o, c] = a.ids.map((id) => model.getDecorationRange(id));
+    const p = editor.getPosition();
+    if (!o || !c || o.isEmpty() || c.isEmpty() || o.startLineNumber !== p.lineNumber || c.startLineNumber !== p.lineNumber) return null;
+    const text = model.getLineContent(p.lineNumber);
+    if (text[o.startColumn - 1] !== '(' || text[c.startColumn - 1] !== ')' || p.column <= o.startColumn || p.column > c.startColumn + 1) return null;
+    return { line: p.lineNumber, open: o.startColumn, close: c.startColumn, caret: p.column, text };
+  }
+  const depthOf = (s) => [...s].reduce((d, ch) => d + (ch === '(') - (ch === ')'), 0);
+  function beforeTyping(editor) {
+    const a = added.get(editor);
+    if (!a) return;
+    a.before = pairAt(editor);
+    if (!a.before) forgetPair(editor);
+  }
+  function afterTyping(editor, typed) {
+    const b = added.get(editor)?.before;
+    if (!b) return;
+    const model = editor.getModel();
+    const p = editor.getPosition();
+    const text = model.getLineContent(b.line);
+    const grown = text.length - b.text.length;
+    if (p.lineNumber !== b.line || grown <= 0 || !text.startsWith(b.text.slice(0, b.caret - 1)) || !text.endsWith(b.text.slice(b.caret - 1))) {
+      forgetPair(editor);
+      return;
+    }
+    const inserted = text.slice(b.caret - 1, b.caret - 1 + grown);
+    const close = b.close + (b.caret <= b.close ? grown : 0); // the added `)` now
+    let drop = [];
+    let caret = null;
+    let done = false;
+    if (inserted.startsWith('(') && (b.caret === b.close || b.caret === b.close + 1) && b.close === b.open + 1) {
+      if (depthOf(inserted) === 0) {
+        // A whole pair was typed (or Monaco closed the typed one): it takes the added pair's place.
+        drop = [b.open, close];
+        done = true;
+      } else {
+        drop = [b.caret];
+        if (b.caret === b.close + 1) caret = b.close;
+      }
+    } else if (inserted.endsWith(')') && b.caret === b.close && depthOf(text.slice(b.open, close - 1)) < 0) {
+      drop = [close];
+      done = true;
+    }
+    if (drop.length) {
+      const at = caret ?? p.column - drop.filter((c) => c < p.column).length;
+      editor.executeEdits('pyide.callParens', drop.map((c) => ({ range: new monaco.Range(b.line, c, b.line, c + 1), text: '' })),
+        [new monaco.Selection(b.line, at, b.line, at)]);
+    }
+    if (done || !pairAt(editor)) forgetPair(editor);
+  }
+  ide.onEditor((ed) => {
+    ed.onWillType?.(() => beforeTyping(ed));
+    ed.onDidType?.((typed) => afterTyping(ed, typed));
+  });
+
+  monaco.editor.registerCommand(CALL_PARENS, async (_accessor, uri) => {
+    const editor = ide.editors().find((e) => e.hasTextFocus() && e.getModel()?.uri.toString() === uri)
+      || (ide.editor?.getModel()?.uri.toString() === uri ? ide.editor : null);
+    const model = editor?.getModel();
+    if (!model) return;
+    const pos = editor.getPosition();
+    const line = model.getLineContent(pos.lineNumber);
+    // A commit character may have typed it already.
+    if (line[pos.column - 2] === '(' || /^\s*\(/.test(line.slice(pos.column - 1))) return;
+    const inside = new monaco.Selection(pos.lineNumber, pos.column + 1, pos.lineNumber, pos.column + 1);
+    editor.executeEdits('pyide.callParens', [{ range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column), text: '()' }], [inside]);
+    addPair(editor, pos.lineNumber, pos.column);
+    editor.trigger('keyboard', 'editor.action.triggerParameterHints', {});
+    const version = model.getVersionId();
+    const doc = docFor(model);
+    const help = doc && await request('textDocument/signatureHelp', { textDocument: { uri: doc.uri }, position: lspPos(inside.getPosition()), context: { triggerKind: 1, isRetrigger: false } });
+    if (!help?.signatures?.length || help.signatures.some((s) => s.parameters?.length)) return;
+    // Typed on meanwhile, or moved: the user has taken over.
+    if (model.getVersionId() !== version || !editor.getPosition().equals(inside.getPosition())) return;
+    editor.setPosition({ lineNumber: pos.lineNumber, column: pos.column + 2 });
+    editor.trigger('keyboard', 'closeParameterHints', {});
+  });
+
   monaco.languages.registerCompletionItemProvider('python', {
     triggerCharacters: ['.'],
     async provideCompletionItems(model, position, context, token) {
@@ -414,6 +536,7 @@
       const items = Array.isArray(res) ? res : res.items || [];
       const word = model.getWordUntilPosition(position);
       const wordRange = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column);
+      const parens = parensFit(model, position, word.startColumn) ? { id: CALL_PARENS, title: '', arguments: [model.uri.toString()] } : undefined;
       const suggestions = items.filter((it) => !(it.kind === 14 && coreKeywords.has(it.label))).map((it) => {
         let range = wordRange;
         let insertText = it.insertText ?? it.label;
@@ -434,6 +557,7 @@
           additionalTextEdits: it.additionalTextEdits?.map(monacoEdit),
           tags: it.deprecated || it.tags?.includes(1) ? [monaco.languages.CompletionItemTag.Deprecated] : undefined,
           commitCharacters: it.commitCharacters,
+          command: CALLABLE.has(it.kind) && !insertText.includes('(') ? parens : undefined,
           lsp: it,
         };
       });
@@ -609,15 +733,20 @@
     },
   });
 
-  // Hierarchical DocumentSymbols (LSP shape) plus kindName and 1-based line/col of the name, for other features.
+  // Hierarchical DocumentSymbols (LSP shape) plus kindName and 1-based line/col of the name, for other features. The
+  // breadcrumbs, sticky lines and type hierarchy each ask for every new answer, and the tree of a 20,000-line file has
+  // thousands of symbols (100 ms to copy), so it is decorated once per answer and shared: callers only read it.
+  const decorate = (s) => {
+    const sel = s.selectionRange || s.range || s.location?.range;
+    return { ...s, kindName: SYMBOL_KINDS[s.kind] || 'Symbol', line: sel.start.line + 1, col: sel.start.character + 1, children: (s.children || []).map(decorate) };
+  };
+  const decorated = new WeakMap(); // shared answer -> its decorated tree
   async function documentSymbols(path) {
     const doc = docs.get(path.toLowerCase());
     const r = doc ? await sharedSymbols(doc) : await request('textDocument/documentSymbol', { textDocument: { uri: toUri(path) } });
-    const decorate = (s) => {
-      const sel = s.selectionRange || s.range || s.location?.range;
-      return { ...s, kindName: SYMBOL_KINDS[s.kind] || 'Symbol', line: sel.start.line + 1, col: sel.start.character + 1, children: (s.children || []).map(decorate) };
-    };
-    return (r || []).map(decorate);
+    if (!Array.isArray(r)) return [];
+    if (!decorated.has(r)) decorated.set(r, r.map(decorate));
+    return decorated.get(r);
   }
 
   monaco.languages.registerRenameProvider('python', {
@@ -987,7 +1116,7 @@
 
   [
     { id: 'GotoDeclaration', title: tr('Go to Declaration or Usages'), keys: 'Ctrl+B', when: editorPython, run: gotoDeclaration },
-    { id: 'GotoTypeDeclaration', title: tr('Go to Type Declaration'), keys: 'Ctrl+Alt+B', when: editorPython, run: gotoTypeDeclaration },
+    { id: 'GotoTypeDeclaration', title: tr('Go to Type Declaration'), keys: 'Ctrl+Shift+B', when: editorPython, run: gotoTypeDeclaration },
     { id: 'FindUsages', title: tr('Find Usages'), keys: 'Alt+F7', when: editorPython, run: findUsages },
     { id: 'RenameElement', title: tr('Rename…'), keys: 'Shift+F6', when: editorPython, run: editorTrigger('editor.action.rename') },
     { id: 'QuickJavaDoc', title: tr('Quick Documentation'), keys: 'Ctrl+Q', when: editorPython, run: editorTrigger('editor.action.showHover') },

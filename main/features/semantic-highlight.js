@@ -106,13 +106,41 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     return null;
   }
 
-  // -> {result: {data}} | {error: {code, message}}; never rejects.
-  // candidates: [{cmd, args, executable}] in order of preference; params: {text, path, root}.
-  ipcMain.handle('semantic-highlight:tokens', async (_e, candidates, params) => {
+  async function tokens(candidates, params) {
     const s = await sidecar(candidates || []);
     if (!s) return { error: { code: 'no-python', message: 'No local Python 3.8 or later can run the semantic highlighter' } };
     return send(s, 'tokens', { ...params, stubs });
-  });
+  }
+
+  // The sidecar answers one request at a time, about a second each for a 20,000-line file, so requests for one file
+  // could pile up behind each other with texts already gone. While one runs for a window's file, only the newest
+  // request for that file waits; the one it replaces answers {error: {code: 'superseded'}} at once.
+  const running = new Set(); // `${window}|${path}`
+  const waiting = new Map(); // `${window}|${path}` -> {candidates, params, resolve}
+  function run(key, candidates, params, resolve) {
+    if (key) running.add(key);
+    tokens(candidates, params)
+      .catch((err) => ({ error: { code: 'sidecar', message: String(err?.message || err) } }))
+      .then(resolve)
+      .finally(() => {
+        if (!key) return;
+        running.delete(key);
+        const next = waiting.get(key);
+        if (!next) return;
+        waiting.delete(key);
+        run(key, next.candidates, next.params, next.resolve);
+      });
+  }
+
+  // -> {result: {data}} | {error: {code, message}}; never rejects.
+  // candidates: [{cmd, args, executable}] in order of preference; params: {text, path, root}.
+  ipcMain.handle('semantic-highlight:tokens', (e, candidates, params) => new Promise((resolve) => {
+    if (!params?.path) return run(null, candidates, params, resolve);
+    const key = `${e?.sender?.id}|${params.path.toLowerCase()}`;
+    if (!running.has(key)) return run(key, candidates, params, resolve);
+    waiting.get(key)?.resolve({ error: { code: 'superseded', message: 'A newer request for this file replaced this one' } });
+    waiting.set(key, { candidates, params, resolve });
+  }));
   // The interpreter list changed: interpreters that failed get another chance.
   ipcMain.handle('semantic-highlight:reset', () => { failed.clear(); });
   ipcMain.handle('semantic-highlight:stop', () => stop());

@@ -33,3 +33,8 @@
 .tr-debug-btn:hover:not(:disabled) { background: var(--gray3); }
 .tr-debug-btn:disabled { color: var(--gray5); cursor: default; }
 .tr-debug-body { flex: 1; min-height: 0; display: flex; }
+/* Comparison Failure: <Click to see difference> in a failed test's output, and the Expected / Actual diff viewer. */
+.tr-diff { display: flex; flex-direction: column; height: min(560px, 62vh); }
+.tr-diff-head { display: grid; grid-template-columns: 1fr 1fr; padding: 0 0 4px; color: var(--gray11); font-weight: 600; }
+.tr-diff-box { flex: 1; min-height: 0; border: 1px solid var(--gray4); }
+.tr-diff-count { padding-top: 6px; color: var(--gray9); font-size: 12px; }

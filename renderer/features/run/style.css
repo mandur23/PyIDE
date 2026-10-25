@@ -29,6 +29,10 @@
 .run-bodies { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .run-session { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .run-empty { margin: auto; }
+/* Emulate terminal in output console: an xterm.js terminal fills the run's tab. */
+.run-term { flex: 1; min-height: 0; position: relative; margin: 4px 0 0 8px; }
+.run-term .xterm { height: 100%; }
+.run-term .xterm-viewport { background: transparent !important; }
 
 /* Monaco glyph margin icon (green triangle, PyCharm's run marker); test results tint it. */
 :root { --run-gutter-green: #5fb865; }

@@ -518,6 +518,106 @@ async function shelfDiff(root, id, rel) {
   }
 }
 
+// ---------- rewriting commits from the Log ----------
+const isHash = (s) => typeof s === 'string' && /^[0-9a-f]{7,64}$/.test(s);
+const RESET_MODES = new Set(['soft', 'mixed', 'hard', 'keep']);
+
+// Why the commit must not be rewritten (null when it may): pushed commits are other people's history, and a stopped
+// merge, rebase, cherry-pick or revert owns HEAD.
+async function rewritable(root, hash) {
+  const info = await repoInfo(root);
+  if (!info) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
+  if (!isHash(hash)) return { ok: false, err: 'Invalid commit' };
+  if (operationOf(info.gitDir)) return { ok: false, reason: 'operationInProgress', err: 'A merge, rebase, cherry-pick or revert is in progress.' };
+  const remote = (await git(root, ['for-each-ref', '--count=1', '--contains', hash, '--format=%(refname:short)', 'refs/remotes'])).out.trim();
+  if (remote) return { ok: false, reason: 'pushed', remote, err: `The commit is already pushed to ${remote}.` };
+  return null;
+}
+
+const splitLines = (buf) => {
+  const lines = [];
+  for (let at = 0; at <= buf.length;) {
+    const nl = buf.indexOf(10, at);
+    const end = nl < 0 ? buf.length : nl;
+    lines.push(buf.subarray(at, end));
+    at = end + 1;
+  }
+  return lines;
+};
+
+// Edit Commit Message: `hash` gets `message`, and the commits after it on HEAD's history are made again on top of it
+// with their own trees, authors and messages, the way an interactive rebase rewords but without touching the work
+// tree or the index (PyCharm rewords in memory too), so local changes are no obstacle. The new commit objects are
+// hashed here and written by one git process: a commit under thousands of others is reworded as fast as the last.
+async function reword(root, hash, message) {
+  const refused = await rewritable(root, hash);
+  if (refused) return refused;
+  const text = String(message || '').replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  if (!text) return { ok: false, reason: 'emptyMessage', err: 'The commit message is empty.' };
+  const [head, target] = await Promise.all(['HEAD', `${hash}^{commit}`].map(async (rev) => (await git(root, ['rev-parse', '-q', '--verify', rev])).out.trim()));
+  if (!head || !target || (await git(root, ['merge-base', '--is-ancestor', target, 'HEAD'])).code) return { ok: false, reason: 'notInBranch', err: 'The commit is not in the current branch.' };
+  const [after, format, ident] = await Promise.all([
+    git(root, ['rev-list', '--topo-order', '--reverse', '--ancestry-path', `${target}..HEAD`]),
+    git(root, ['rev-parse', '--show-object-format']),
+    git(root, ['var', 'GIT_COMMITTER_IDENT']),
+  ]);
+  if (after.code || ident.code) return { ok: false, err: (after.err || ident.err).trim() };
+  const order = [target, ...after.out.split(/\r?\n/).filter(Boolean)];
+  const cat = await git(root, ['cat-file', '--batch'], `${order.join('\n')}\n`);
+  const bodies = new Map();
+  for (let at = 0; at < cat.buf.length;) {
+    const nl = cat.buf.indexOf(10, at);
+    const [sha, type, size] = cat.buf.subarray(at, nl).toString('latin1').split(' ');
+    if (type !== 'commit') return { ok: false, err: `Cannot read commit ${sha}` };
+    bodies.set(sha, cat.buf.subarray(nl + 1, nl + 1 + Number(size)));
+    at = nl + 1 + Number(size) + 1;
+  }
+  const algo = format.out.trim() === 'sha256' ? 'sha256' : 'sha1';
+  const committer = Buffer.from(`committer ${ident.out.trim()}`);
+  const made = new Map(); // old commit -> its new one
+  const objects = [];
+  for (const sha of order) {
+    const body = bodies.get(sha);
+    const split = body.indexOf('\n\n');
+    const headers = split < 0 ? body : body.subarray(0, split);
+    const lines = [];
+    let dropped = false;
+    for (const line of splitLines(headers)) {
+      if (line[0] === 0x20) { if (!dropped) lines.push(line); continue; } // a multi-line header's continuation
+      const keyword = line.subarray(0, line.indexOf(0x20)).toString('latin1');
+      // A signature does not hold for the new commit; the new message is UTF-8 whatever the old one's encoding.
+      dropped = keyword === 'gpgsig' || keyword === 'gpgsig-sha256' || (sha === target && keyword === 'encoding');
+      if (dropped) continue;
+      if (keyword === 'parent') {
+        const parent = line.subarray(7).toString('latin1');
+        lines.push(Buffer.from(`parent ${made.get(parent) || parent}`));
+      } else lines.push(keyword === 'committer' ? committer : line);
+    }
+    const msg = sha === target ? Buffer.from(`${text}\n`) : split < 0 ? Buffer.alloc(0) : body.subarray(split + 2);
+    const content = Buffer.concat([...lines.flatMap((l, i) => (i ? [Buffer.from('\n'), l] : [l])), Buffer.from('\n\n'), msg]);
+    const id = crypto.createHash(algo).update(`commit ${content.length}\0`).update(content).digest('hex');
+    made.set(sha, id);
+    objects.push({ id, content });
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyide-reword-'));
+  try {
+    const files = objects.map(({ content }, i) => {
+      const f = path.join(dir, String(i));
+      fs.writeFileSync(f, content);
+      return f;
+    });
+    const wrote = await git(root, ['hash-object', '-t', 'commit', '-w', '--stdin-paths'], `${files.join('\n')}\n`);
+    const ids = wrote.out.split(/\r?\n/).filter(Boolean);
+    if (wrote.code || ids.join() !== objects.map((o) => o.id).join()) return { ok: false, err: wrote.err.trim() || 'git wrote other commits than expected' };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const newHead = made.get(order[order.length - 1]);
+  const args = ['update-ref', '-m', `reword: ${text.split('\n')[0]}`, 'HEAD', newHead, head];
+  const r = await git(root, args);
+  return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, hash: made.get(target), rewritten: order.length };
+}
+
 // ---------- background fetch ----------
 // Auto-fetch (the renderer's timer, setting vcs.autoFetchMinutes) runs `git fetch --all --prune` quietly. It never
 // starts while a git operation of the IDE runs for the project (or another program holds the index lock), and push
@@ -530,7 +630,7 @@ const fetches = new Map(); // project key -> the background fetch in flight (a p
 const projectKey = (root) => path.resolve(String(root || '')).toLowerCase();
 // Channels that only read: they neither hold off a background fetch nor wait for one.
 const READS = new Set(['status', 'branches', 'show', 'fileAt', 'log', 'reflog', 'identity', 'commitDetails', 'blame', 'outgoing',
-  'conflictSides', 'mergeVersions', 'stashList', 'stashFiles', 'shelves', 'shelfDiff', 'backgroundFetch', 'lastCommit', 'fileHistory']);
+  'conflictSides', 'mergeVersions', 'stashList', 'stashFiles', 'shelves', 'shelfDiff', 'backgroundFetch', 'lastCommit', 'fileHistory', 'unpushed']);
 // Commands that write remote-tracking refs themselves.
 const REMOTE_WRITERS = new Set(['push', 'pull']);
 const FETCH_TIMEOUT = Number(process.env.PYIDE_GIT_FETCH_TIMEOUT_MS) || 120000;
@@ -659,8 +759,23 @@ exports.register = ({ ipcMain, app }) => {
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
   });
 
-  h('newBranch', async (root, name) => {
-    const args = ['checkout', '-b', name];
+  // opts.at: the commit to start the branch at (the Log's New Branch…), HEAD by default; opts.checkout: false only
+  // creates it.
+  h('newBranch', async (root, name, { at = null, checkout = true } = {}) => {
+    if (at !== null && !isHash(at)) return { ok: false, err: 'Invalid commit' };
+    // `git branch -d <commit>` would delete instead of create
+    if (String(name).startsWith('-')) return { ok: false, err: `'${name}' is not a valid branch name.` };
+    const args = checkout ? ['checkout', '-b', name, ...(at ? [at] : [])] : ['branch', name, ...(at ? [at] : [])];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+  });
+
+  // A lightweight tag on a commit (the Log's New Tag…).
+  h('tag', async (root, name, at) => {
+    if (!isHash(at)) return { ok: false, err: 'Invalid commit' };
+    const args = ['tag', name, at];
+    const check = await git(root, ['check-ref-format', `refs/tags/${name}`]);
+    if (check.code || name.startsWith('-')) return { ok: false, reason: 'badTagName', cmd: cmdLine(args), out: '', err: `'${name}' is not a valid tag name.` };
     const r = await git(root, args);
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
   });
@@ -919,6 +1034,40 @@ exports.register = ({ ipcMain, app }) => {
   // A merge commit is picked or reverted against its first parent, as PyCharm does.
   h('cherryPick', (root, hash, isMerge) => runStoppable(root, ['cherry-pick', ...(isMerge ? ['-m', '1'] : []), hash]));
   h('revert', (root, hash, isMerge) => runStoppable(root, ['revert', '--no-edit', ...(isMerge ? ['-m', '1'] : []), hash]));
+
+  // ---------- the Log's commit actions: reset, undo, reword ----------
+  // Commits of HEAD's history that no remote branch has, newest first: the ones Undo Commit and Edit Commit Message
+  // may rewrite.
+  h('unpushed', async (root, max = 1000) => {
+    const r = await git(root, ['rev-list', `-n${max}`, 'HEAD', '--not', '--remotes']);
+    return r.code ? [] : r.out.split(/\r?\n/).filter(Boolean);
+  });
+
+  // Reset Current Branch to Here: git reset --soft | --mixed | --hard | --keep <commit>.
+  h('reset', async (root, hash, mode) => {
+    if (!isHash(hash) || !RESET_MODES.has(mode)) return { ok: false, err: 'Invalid reset' };
+    const args = ['reset', `--${mode}`, hash];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+  });
+
+  // Undo Commit on the last commit: HEAD goes back to its parent and the commit's changes stay in the work tree and
+  // the index (git reset --soft HEAD~1; the first commit empties the branch and its files stay added). `message` is
+  // the commit's message, which goes back into the commit box.
+  h('undoCommit', async (root, hash) => {
+    const refused = await rewritable(root, hash);
+    if (refused) return refused;
+    const head = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
+    if (head !== hash) return { ok: false, reason: 'notHead', err: 'Only the last commit can be undone.' };
+    const [msg, line] = await Promise.all([git(root, ['log', '-1', '--format=%B', hash]), git(root, ['rev-list', '--parents', '-n1', hash])]);
+    const parents = line.out.trim().split(' ').length - 1;
+    if (parents > 1) return { ok: false, reason: 'mergeCommit', err: 'A merge commit cannot be undone.' };
+    const args = parents ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD', hash];
+    const r = await git(root, args);
+    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, message: msg.out.replace(/\s+$/, '') };
+  });
+
+  h('reword', reword);
 
   // action: 'abort' | 'continue' | 'skip', applied to whichever operation is stopped.
   h('operation', async (root, action) => {

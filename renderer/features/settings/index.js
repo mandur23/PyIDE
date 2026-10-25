@@ -60,6 +60,7 @@
     'editor.ruler': 120,
     'editor.previewTab': false,
     'editor.tabLimit': 10,
+    'console.cycleBufferKB': 1024,
     'tools.formatOnSave': false,
     'tools.ruffOnSave': true,
     'tools.ruffLineLength': 0,
@@ -71,6 +72,7 @@
     'editor.tabSize': [1, 16],
     'editor.ruler': [0, 400],
     'editor.tabLimit': [0, 50],
+    'console.cycleBufferKB': [64, 1048576],
     'tools.ruffLineLength': [0, 400],
   };
   const RESTART_KEYS = new Set(['appearance.language']);
@@ -265,7 +267,7 @@
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap, index: false },
     { group: 'editor-group', title: () => tr('Editor'), children: [
-      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄', mount: mountEditor },
+      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines console cycle buffer 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄 콘솔 순환 버퍼', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap line separator crlf lf 탭 들여쓰기 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false },
@@ -948,6 +950,30 @@
     const tabs = section(host, tr('Editor Tabs'));
     tabs.appendChild(checkbox(ctx, 'editor.previewTab', tr('Open files in a preview tab on single click')));
     tabs.appendChild(fieldRow(tr('Tab limit:'), numberInput(ctx, 'editor.tabLimit'), tr('0 means no limit')));
+    consoleSection(host, ctx);
+  }
+
+  // PyCharm's "Override console cycle buffer size": unticked, consoles keep the default 1024 KB (ide.ui.console reads
+  // console.cycleBufferKB on each trim).
+  function consoleSection(host, ctx) {
+    const key = 'console.cycleBufferKB';
+    const s = section(host, tr('Console'));
+    const size = numberInput(ctx, key);
+    size.classList.add('input', 'settings-buffer-size');
+    const row = el('label', 'settings-check');
+    const c = el('input');
+    c.type = 'checkbox';
+    c.dataset.key = `${key}.override`;
+    c.checked = ctx.value(key) !== DEFAULTS[key];
+    size.disabled = !c.checked;
+    c.onchange = () => {
+      size.disabled = !c.checked;
+      size.classList.remove('invalid');
+      if (!c.checked) size.value = DEFAULTS[key];
+      ctx.set(key, c.checked && !Number.isNaN(Number(size.value)) ? Number(size.value) : DEFAULTS[key]);
+    };
+    row.append(c, el('span', null, tr('Override console cycle buffer size (KB):')), size);
+    s.appendChild(row);
   }
 
   function mountCodeStyle(host, ctx) {

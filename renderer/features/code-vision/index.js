@@ -9,7 +9,13 @@
 //   edit cancels the run (its request in Pyright is cancelled through the token);
 // - a count stays valid while the text Pyright sees for that name cannot have changed: the occurrences of the name
 //   in every open Python document, Python files changed on disk, the interpreter and project;
-// - a stale count stays on screen until its new value arrives, so lenses never blink or move while typing.
+// - a stale count stays on screen until its new value arrives, so lenses never blink or move while typing;
+// - Pyright's cost grows with the number of project files whose text holds the name (main/features/code-vision.js
+//   counts them on a worker), so a name found in more than MANY_FILES files is counted only on click. A count that
+//   takes longer than COUNT_BUDGET_MS shows as not counted until its answer comes; Pyright cannot stop a references
+//   request it has started, so the run waits for that answer (and shows it) before it asks the next. Such a name is
+//   then counted only on click too, unless it is in FEW_FILES files or fewer: that count was slow because Pyright was
+//   busy (just started, checking a file), not because of the name.
 (() => {
   const monaco = ide.monaco;
   const { basename } = ide.util;
@@ -21,7 +27,10 @@
   const CACHE_LIMIT = 20000;
   const CMD_USAGES = 'pyide.codeVision.usages';
   const CMD_AUTHORS = 'pyide.codeVision.authors';
-  const stats = { references: 0, cancelled: 0, blames: 0, runs: 0 };
+  const MANY_FILES = 300;
+  const COUNT_BUDGET_MS = 2000;
+  const FEW_FILES = 30;
+  const stats = { references: 0, cancelled: 0, blames: 0, runs: 0, uncounted: 0, overBudget: 0 };
   const dateLocale = i18n.locale === 'ko' ? 'ko-KR' : 'en-US';
 
   // ---------- documents ----------
@@ -162,7 +171,7 @@
   }
   let diskEpoch = 0; // Python files changed on disk outside the open documents
   let lspEpoch = 0; // another interpreter or project
-  const usageCache = new Map(); // `${path}|${symbol key}` -> {count | null, sig, disk, lsp}
+  const usageCache = new Map(); // `${path}|${symbol key}` -> {count | null, uncounted?: {files} | {ms}, sig, disk, lsp}
   const ukey = (doc, sym) => `${pkey(doc)}|${sym.key}`;
   const fresh = (e, sym) => e && e.disk === diskEpoch && e.lsp === lspEpoch && e.sig === nameSig(sym.name);
   function remember(k, entry) {
@@ -170,6 +179,28 @@
     usageCache.set(k, entry);
     if (usageCache.size > CACHE_LIMIT) usageCache.delete(usageCache.keys().next().value);
   }
+  // How many project files mention each name (main/features/code-vision.js), for the file contents of fileEpoch.
+  // The epoch is spelled with this window's id, so the worker, which every window shares, checks the files again
+  // whenever any window saw them change.
+  const windowId = Math.random().toString(36).slice(2);
+  let fileEpoch = 0;
+  const spread = new Map(); // name -> number of files, for spreadEpoch
+  let spreadEpoch = -1;
+  const slow = new Set(); // names in more than FEW_FILES files whose count took longer than COUNT_BUDGET_MS
+  async function learnSpread(view) {
+    if (spreadEpoch !== fileEpoch) { spread.clear(); spreadEpoch = fileEpoch; }
+    const names = new Set();
+    for (const { symbols } of view.values()) for (const s of symbols) if (!spread.has(s.name)) names.add(s.name);
+    if (!names.size) return;
+    const epoch = fileEpoch;
+    let r = null;
+    try { r = await ide.api.invoke('code-vision:fileCounts', ide.root, [...names], `${windowId}:${epoch}`); } catch {}
+    if (!r || epoch !== fileEpoch) return;
+    for (const n of names) spread.set(n, r.counts[n] ?? 0);
+  }
+  // Why a name is not counted automatically, or null.
+  const uncountedWhy = (name) => (slow.has(name) ? { ms: COUNT_BUDGET_MS }
+    : spread.get(name) > MANY_FILES ? { files: spread.get(name) } : null);
   const referencesParams = (doc, sym) => ({
     textDocument: { uri: doc.model.uri.toString() },
     position: { line: sym.nameLine - 1, character: sym.nameCol - 1 },
@@ -230,6 +261,9 @@
   }
   // Monaco reads `$(name)` in a lens title as an icon.
   const plain = (s) => String(s).replace(/\$\(/g, '$​(');
+  const uncountedTip = (name, why) => (why.files
+    ? tr('Click to count the usages of {name}: the name appears in {files} files', { name, files: why.files })
+    : tr('Click to count the usages of {name}: counting took longer than {seconds} s', { name, seconds: why.ms / 1000 }));
   const usageText = (n) => (n === 0 ? tr('no usages') : n === 1 ? tr('1 usage') : tr('{count} usages', { count: n }));
   const authorText = (a) => plain(`${a.author}${a.authors.length > 1 ? ` +${a.authors.length - 1}` : ''}${a.modified ? ' *' : ''}`);
   const fmtDate = (t) => new Date(t * 1000).toLocaleDateString(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -292,6 +326,8 @@
         const e = usageCache.get(ukey(doc, s));
         if (e && e.count !== null) {
           lenses.push({ range, command: { id: CMD_USAGES, title: usageText(e.count), tooltip: tr('Show usages of {name}', { name: s.name }), arguments: args } });
+        } else if (e?.uncounted) {
+          lenses.push({ range, command: { id: CMD_USAGES, title: tr('usages'), tooltip: uncountedTip(s.name, e.uncounted), arguments: args } });
         } else if (!e && placeholders) {
           lenses.push({ range });
         }
@@ -370,6 +406,8 @@
       if (status === 'starting') { ide.lsp.ready().then((ok) => ok && schedule(0)); return; }
       if (status !== 'ready') return;
       if (!serverAnalyzed()) { schedule(1000); return; }
+      await learnSpread(view);
+      if (token.isCancellationRequested) return;
       for (const { doc, symbols } of view.values()) {
         for (const sym of [...symbols].sort((a, b) => a.line - b.line)) {
           if (token.isCancellationRequested) return;
@@ -382,10 +420,24 @@
           const sig = nameSig(sym.name);
           const disk = diskEpoch;
           const lsp = lspEpoch;
+          const why = uncountedWhy(sym.name);
+          if (why) {
+            stats.uncounted++;
+            remember(k, { count: null, uncounted: why, sig, disk, lsp });
+            fireSoon();
+            continue;
+          }
           stats.references++;
+          const budget = setTimeout(() => {
+            stats.overBudget++;
+            if (!(spread.get(sym.name) <= FEW_FILES)) slow.add(sym.name);
+            remember(k, { count: null, uncounted: { ms: COUNT_BUDGET_MS }, sig, disk, lsp });
+            fireSoon();
+          }, COUNT_BUDGET_MS);
           const refs = await ide.lsp.request('textDocument/references', referencesParams(doc, sym), token);
+          clearTimeout(budget);
           if (token.isCancellationRequested) { stats.cancelled++; return; }
-          remember(k, { count: Array.isArray(refs) ? refs.length : null, sig, disk, lsp });
+          remember(k, Array.isArray(refs) ? { count: refs.length, sig, disk, lsp } : { count: null, uncounted: uncountedWhy(sym.name), sig, disk, lsp });
           fireSoon();
         }
       }
@@ -425,6 +477,8 @@
   function forget() {
     usageCache.clear();
     blames.clear();
+    slow.clear();
+    fileEpoch++;
     lspEpoch++;
     analyzedGen = null;
     readySince = 0;
@@ -434,18 +488,19 @@
   }
   ide.on('projectOpened', forget);
   ide.on('projectClosed', forget);
-  ide.on('interpreterChanged', () => { lspEpoch++; schedule(500); });
+  ide.on('interpreterChanged', () => { lspEpoch++; slow.clear(); schedule(500); });
   ide.on('activeTabChanged', () => schedule(50));
   ide.on('fileOpened', () => schedule(50));
-  ide.on('fileSaved', () => schedule(IDLE_MS));
+  ide.on('fileSaved', (tab) => { if (isPyPath(tab?.path)) fileEpoch++; schedule(IDLE_MS); });
   ide.on('fileClosed', (path) => { if (blames.delete(String(path).toLowerCase())) schedule(50); });
   ide.on('problemsChanged', () => { if (!runTimer && !running) schedule(300); });
   ide.on('vcsHeadChanged', () => schedule(100));
   ide.on('vcsBranchChanged', () => schedule(100));
-  ide.on('filesChanged', () => { diskEpoch++; schedule(300); });
+  ide.on('filesChanged', () => { diskEpoch++; fileEpoch++; schedule(300); });
   // A Python file changed on disk outside the open documents (a git checkout, a tool, another editor). Writes of open
   // documents are their saves; Pyright already had that text.
   ide.api.on('watch:changed', ({ paths = [], overflow } = {}) => {
+    if (overflow || paths.some(isPyPath)) fileEpoch++;
     if (overflow || paths.some((p) => isPyPath(p) && !ide.getDocument(p))) { diskEpoch++; schedule(500); }
   });
   ide.on('powerSaveChanged', () => { if (ide.powerSave.on()) runSource?.cancel(); changed.fire(); schedule(100); });
@@ -485,7 +540,16 @@
     const t = target(arg);
     if (!t) return;
     const { doc, sym } = t;
-    const refs = await ide.lsp.request('textDocument/references', referencesParams(doc, sym));
+    // A name found in thousands of files takes Pyright many seconds: past a moment the status bar says so.
+    let task = null;
+    const later = setTimeout(() => { task = ide.tasks?.start({ title: tr('Finding usages of {name}', { name: sym.name }) }); }, 500);
+    let refs;
+    try {
+      refs = await ide.lsp.request('textDocument/references', referencesParams(doc, sym));
+    } finally {
+      clearTimeout(later);
+      task?.done();
+    }
     if (!Array.isArray(refs)) return hint(editorOf(doc), tr('Cannot search for usages: Pyright is not ready'));
     remember(ukey(doc, sym), { count: refs.length, sig: nameSig(sym.name), disk: diskEpoch, lsp: lspEpoch });
     fireSoon();
@@ -541,7 +605,7 @@
       s.appendChild(ctx.ui.checkbox(KEYS.authors, tr('Code author (Git)')));
       host.appendChild(Object.assign(document.createElement('div'), {
         className: 'muted settings-note',
-        textContent: tr('Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; authors come from git blame in trusted projects. Code vision is off in Power Save Mode.'),
+        textContent: tr('Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; names found in more than {count} project files are counted when clicked. Authors come from git blame in trusted projects. Code vision is off in Power Save Mode.', { count: MANY_FILES }),
       }));
     },
   });
@@ -556,6 +620,7 @@
       key: l.command?.arguments?.[0]?.key ?? null,
     })),
     stats: () => ({ ...stats, running, scheduled: !!runTimer }),
+    limits: { manyFiles: MANY_FILES, fewFiles: FEW_FILES, budgetMs: COUNT_BUDGET_MS },
     refresh: () => schedule(0),
     showUsages, showAuthors,
   };

@@ -222,6 +222,8 @@
           if (n.kind === 'test' && !t.text && !t.output) con.append(`${t.status === 'passed' ? tr('Test passed.') : STATUS_TEXT[t.status] || t.status}\n`, 'sys');
         }
       }
+      // Last, where the console's end (which it scrolls to) shows it; nothing is written after it.
+      if (n.kind === 'test' && n.diff) con.out.append(diffLink(n));
     }
 
     // Single click shows the output and navigates without leaving the tree; double click focuses the editor.
@@ -246,6 +248,11 @@
         const kids = !!selected?.children?.length;
         if (kids && !!selected.collapsed === (e.key === 'ArrowRight')) { selected.collapsed = !selected.collapsed; renderTree(); }
         else if (e.key === 'ArrowLeft' && selected?.parent) { selected = selected.parent; renderTree(); showOutput(selected); tree.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }); }
+      } else if (e.key.toLowerCase() === 'd' && e.ctrlKey && !e.shiftKey && !e.altKey && selected?.diff) {
+        // PyCharm's View Difference in the test tree.
+        e.preventDefault();
+        e.stopPropagation();
+        showDiff(selected);
       } else if ((e.key === 'Enter' || e.key === 'F4') && selected?.file) {
         e.preventDefault();
         e.stopPropagation();
@@ -282,6 +289,7 @@
             if (worse) {
               n.status = ev.outcome;
               if (ev.text) n.text = ev.text;
+              n.diff = ev.diff || null;
             }
             if (ev.output) n.output = (n.output || '') + ev.output;
             if (n === selected) showOutput(n);
@@ -317,6 +325,59 @@
     renderStatus();
     renderTree();
     return view;
+  }
+
+  // ---------- Comparison Failure ----------
+  // A failed assertion with an expected/actual pair (pyide_test_diff.py) gets PyCharm's <Click to see difference>, which
+  // opens the two values side by side in a compare tab (ide.compare.texts), or a dialog when the compare plugin is off.
+  function diffLink(n) {
+    const line = el('span', 'tr-diff-line');
+    const a = el('a', 'tr-diff-link', tr('<Click to see difference>'));
+    a.onclick = () => showDiff(n);
+    line.append(a, '\n');
+    return line;
+  }
+
+  function showDiff(n) {
+    const title = tr('Comparison Failure ({name})', { name: n.name });
+    if (ide.compare?.texts) {
+      ide.compare.texts({ id: `${n.id} [diff]`, title, left: { title: tr('Expected'), text: n.diff.expected }, right: { title: tr('Actual'), text: n.diff.actual } });
+      return;
+    }
+    const monaco = ide.monaco;
+    const body = el('div', 'tr-diff');
+    const head = el('div', 'tr-diff-head');
+    head.append(el('span', null, tr('Expected')), el('span', null, tr('Actual')));
+    const box = el('div', 'tr-diff-box');
+    const count = el('div', 'tr-diff-count');
+    body.append(head, box, count);
+    const original = monaco.editor.createModel(n.diff.expected, 'plaintext');
+    const modified = monaco.editor.createModel(n.diff.actual, 'plaintext');
+    let diff = null;
+    ide.ui.dialog({
+      title, body, width: 900,
+      buttons: [{ label: tr('Close'), primary: true }],
+      onClose() {
+        diff?.dispose();
+        // Monaco keeps a global hover-delegate factory bound to the last editor's services; a throwaway editor rebinds
+        // it after a diff editor goes (as the compare plugin does).
+        monaco.editor.create(el('div')).dispose();
+        original.dispose();
+        modified.dispose();
+      },
+    });
+    diff = monaco.editor.createDiffEditor(box, {
+      ...ide.editorOptions(), automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: true,
+      useInlineViewWhenSpaceIsLimited: false, ignoreTrimWhitespace: false, renderMarginRevertIcon: false,
+      minimap: { enabled: false }, scrollBeyondLastLine: false, glyphMargin: false, wordWrap: 'off',
+    });
+    diff.setModel({ original, modified });
+    diff.onDidUpdateDiff(() => {
+      const k = diff.getLineChanges()?.length || 0;
+      // Unequal values can print the same (objects that share a __repr__ but have no __eq__).
+      count.textContent = !k ? tr('Contents are identical') : k === 1 ? tr('1 difference') : tr('{n} differences', { n: k });
+      body.dataset.differences = String(k);
+    });
   }
 
   // Test classes navigate to their own line, found from the open model or the file text cache.
@@ -408,9 +469,8 @@
   }
 
   // Debug: the same run under debugpy, with the Test Results as a sub-tab of the session in the Debug window, as in
-  // PyCharm. run.debugConfig passes no sub-tabs to the debugger, so this starts the debugger itself and answers null
-  // (nothing more for debugConfig to start). The results are read from the report until the session ends; the Debug
-  // window's Rerun and the tab's Rerun Failed Tests debug again.
+  // PyCharm (the target's tabs, which run.debugConfig hands to the debugger). The results are read from the report
+  // until the session ends; the Debug window's Rerun and the tab's Rerun Failed Tests debug again.
   async function debugTests(cfg, interp, opts = {}) {
     if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return null; }
     if (!ide.debugger?.debugFile) return null;
@@ -458,15 +518,14 @@
       if (!ended) handle.setIcon('◷', 'running');
       pane.appendChild(host);
     } }];
-    // debugFile settles once its session runs, failed or already ended, with that session's {ended}.
-    Promise.resolve(ide.debugger.debugFile(target.script, { interp, cwd: target.cwd, params: target.params, env: target.env,
-      envFiles: run.envFiles(cfg), rerun: () => run.debugConfig(cfg, opts), tabs }))
-      .catch(() => {}).then((session) => {
-        if (ended) return;
-        if (!session) return end();
-        session.ended.then(end);
-      });
-    return null;
+    // run.debugConfig starts the session with these sub-tabs; debugFile's promise settles once its session runs, failed
+    // or already ended, with that session's {ended}.
+    const started = (debugging) => Promise.resolve(debugging).catch(() => {}).then((session) => {
+      if (ended) return;
+      if (!session) return end();
+      session.ended.then(end);
+    });
+    return { script: target.script, cwd: target.cwd, params: target.params, env: target.env, tabs, started };
   }
 
   // ---------- gutter, actions, tree ----------

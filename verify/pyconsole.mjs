@@ -50,6 +50,31 @@ try {
   check(await js(`${OUT}.includes('Name? Hong\\n') && !${OUT}.includes('>>> Hong')`), 'the answer is echoed after the program\'s prompt, not as a >>> command');
   check(await js(`[...document.querySelectorAll('#pyconsoleOut .stdin')].map(s => s.textContent).join('|') === 'Hong\\n'`), 'the answer is drawn as program input');
 
+  // ---------- \r progress lines and ANSI colors ----------
+  writeFileSync(path.join(t.project, 'pyc_progress.py'), [
+    'import sys, time',
+    'for i in range(5):',
+    "    print(f'\\rPRG {i}', end='', flush=True)",
+    "print(' done')",
+    'time.sleep(0.2)',
+    'for i in range(3):',
+    "    sys.stderr.write(f'\\rERRBAR {i}'); sys.stderr.flush()",
+    "sys.stderr.write('\\n'); sys.stderr.flush()",
+    'time.sleep(0.2)',
+    "print('\\x1b[31mREDTXT\\x1b[0m')",
+    '',
+  ].join('\n'));
+  await enter(t, 'import pyc_progress');
+  await until(`${OUT}.includes('REDTXT') && ${PROMPT_SHOWN}`, 'progress script ran', 20000);
+  const shown = await js(OUT);
+  check(shown.includes('PRG 4 done\n') && !shown.includes('PRG 0'), `a \\r progress line is rewritten in place (${JSON.stringify(shown.slice(shown.indexOf('PRG'), shown.indexOf('PRG') + 30))})`);
+  check(shown.includes('ERRBAR 2\n') && !shown.includes('ERRBAR 0'), 'a \\r progress line on stderr too');
+  check(await js(`[...document.querySelectorAll('#pyconsoleOut .ansi-fg1')].some((s) => s.textContent.includes('REDTXT'))`) && !shown.includes('[31m'),
+    'ANSI colors are drawn, not printed');
+  await enter(t, 'print(6 * 7 + 1)');
+  await until(`${OUT}.includes('>>> print(6 * 7 + 1)\\n43\\n')`, 'console after progress');
+  check(true, 'the prompt markers still work after \\r output');
+
   // ---------- Interrupt ----------
   await enter(t, 'import time');
   await enter(t, 'time.sleep(60)');

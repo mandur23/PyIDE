@@ -46,6 +46,25 @@ try {
   await a.until(`ide.editor.getOption(ide.monaco.editor.EditorOption.fontSize) === 16`, 'font applied');
   check(true, 'Apply changes the editor font live');
 
+  // ---------- console cycle buffer ----------
+  const buf = `document.querySelector('[data-key="console.cycleBufferKB"]')`;
+  const override = `document.querySelector('[data-key="console.cycleBufferKB.override"]')`;
+  check(await a.js(`!${override}.checked && ${buf}.disabled && ${buf}.value === '1024' && ${override}.closest('fieldset').querySelector('legend').textContent === 'Console' && ${override}.closest('label').textContent === 'Override console cycle buffer size (KB):'`),
+    'Editor › General › Console: Override console cycle buffer size (KB) is off, its 1024 greyed out');
+  await a.js(`(${override}.scrollIntoView({ block: 'center' }), true)`);
+  await a.click('[data-key="console.cycleBufferKB.override"]');
+  await a.js(`(() => { const i = ${buf}; i.focus(); i.select(); })()`);
+  await a.type('128');
+  await a.click('#settingsApply');
+  check(await a.js(`ide.settings.get('console.cycleBufferKB') === 128`), 'ticked, the size typed is applied (console.cycleBufferKB 128)');
+  const kept = await a.js(`(() => { const host = document.createElement('div'); document.body.append(host); const c = ide.ui.console(host); const line = 'x'.repeat(99) + '\\n';
+    for (let i = 0; i < 3000; i++) c.append(line); const n = c.text().length; host.remove(); return n; })()`);
+  check(kept >= 120 * 1024 && kept <= (128 + 64) * 1024, `and a console keeps about 128 KB of 300 KB written (${kept} characters)`);
+  await a.click('[data-key="console.cycleBufferKB.override"]');
+  check(await a.js(`${buf}.disabled && ${buf}.value === '1024'`), 'unticked, the field greys out at 1024');
+  await a.click('#settingsApply');
+  check(await a.js(`ide.settings.get('console.cycleBufferKB') === 1024`), 'and consoles go back to the default 1024 KB');
+
   // ---------- search ----------
   await a.js(`document.querySelector('.settings-search').focus()`);
   await a.type('shortcut');

@@ -63,9 +63,11 @@
   const pending = [];
   let prompted = false;
 
+  // \r, \b and ANSI colors go to the console as they are (ide.ui.console draws them as a terminal does), so a progress
+  // bar updates its line in place.
   function onData(text, stream) {
-    if (stream === 'err') return con.append(text.replace(/\r/g, ''), 'err');
-    let rest = carry + text.replace(/\r/g, '');
+    if (stream === 'err') return con.append(text, 'err');
+    let rest = carry + text;
     carry = '';
     for (let m = rest.match(MARKER); m; m = rest.match(MARKER)) {
       if (m.index) con.append(rest.slice(0, m.index));

@@ -3,6 +3,6 @@
   "name": "Type Hierarchy",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "PyCharm's Type Hierarchy (Ctrl+H): the supertypes and subtypes of the Python class at the caret, in the Hierarchy tool window, using the Pyright language server.",
+  "description": "PyCharm's Type Hierarchy (Ctrl+H), Go to Implementation(s) and Go to Super Method for Python classes and methods, with gutter markers on overriding and overridden methods, using the Pyright language server.",
   "depends": ["lsp", "navigation-bar"]
 }

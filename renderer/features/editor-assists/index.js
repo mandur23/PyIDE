@@ -1,11 +1,13 @@
-// Editor assists: Sticky Lines (PyCharm's name for Monaco's sticky scroll) in the main editor panes, and automatic
-// f-string conversion when a {name} is typed into a plain Python string.
+// Editor assists: Sticky Lines (PyCharm's name for Monaco's sticky scroll) in the main editor panes, automatic
+// f-string conversion when a {name} is typed into a plain Python string, PyCharm's editing actions that Monaco lacks or
+// binds to other keys (Start New Line, Complete Current Statement, Move Statement, Toggle Case…), and docstring stubs.
 (() => {
   const monaco = ide.monaco;
   const STICKY = 'editor.stickyLines';
   const STICKY_MAX = 'editor.stickyLinesMax';
   const FSTRING = 'editor.autoFString';
-  const DEFAULTS = { [STICKY]: true, [STICKY_MAX]: 5, [FSTRING]: true };
+  const DOC_STUB = 'editor.docstringStub';
+  const DEFAULTS = { [STICKY]: true, [STICKY_MAX]: 5, [FSTRING]: true, [DOC_STUB]: true };
   const get = (k) => ide.settings.get(k, DEFAULTS[k]);
   const isPython = (model) => !!model && !model.isDisposed() && model.getLanguageId() === 'python';
 
@@ -260,22 +262,364 @@
     return true;
   }
 
+  // ---------- PyCharm editing actions ----------
+  const { Range, Selection } = monaco;
+  const unitOf = (model) => { const o = model.getOptions(); return o.insertSpaces ? ' '.repeat(o.indentSize || o.tabSize) : '\t'; };
+  const editable = (ed) => !!ed?.getModel() && !ed.getOption(monaco.editor.EditorOption.readOnly);
+  const inEditor = () => !!ide.editor?.hasTextFocus();
+  const trigger = (id) => Object.assign(() => ide.editor?.trigger('keymap', id, null), { editorCommand: id });
+  // Enter-like keys take the selected completion first, as PyCharm's lookup does.
+  const acceptSuggestion = (ed) => {
+    if (ed.getDomNode()?.querySelector('.suggest-widget.visible')) ed.trigger('keymap', 'acceptSelectedSuggestion', {});
+  };
+  const OPENERS = { '(': ')', '[': ']', '{': '}' };
+  const isCloser = (t) => t?.type === 'op' && ')]}'.includes(t.value);
+  const lineStartAt = (text, o) => text.lastIndexOf('\n', o - 1) + 1;
+  const lineEndAt = (text, o) => {
+    const nl = text.indexOf('\n', o);
+    const end = nl < 0 ? text.length : nl;
+    return text[end - 1] === '\r' ? end - 1 : end;
+  };
+  const leading = (text, lineStart) => /^[ \t]*/.exec(text.slice(lineStart, lineStart + 200))[0];
+
+  // As PyCharm: the line stays as it is and a new line opens below it (End, then Enter).
+  function startNewLine(ed = ide.editor) {
+    if (!editable(ed)) return;
+    acceptSuggestion(ed);
+    const model = ed.getModel();
+    ed.setSelections(ed.getSelections().map((s) => {
+      const c = model.getLineMaxColumn(s.positionLineNumber);
+      return new Selection(s.positionLineNumber, c, s.positionLineNumber, c);
+    }));
+    ed.trigger('keymap', 'type', { text: '\n' });
+  }
+
+  // The logical statements of Python code, from its tokens: each is {first, last} (token indexes, comments left out),
+  // the brackets left open at its end, and its first line's indentation. A bracket still open at a line end continues
+  // the statement only when the next line is indented deeper or starts with a closing bracket, so an unclosed call
+  // does not swallow the statements below it.
+  function statements(text, tokens) {
+    const out = [];
+    let cur = null;
+    let stack = [];
+    let prev = null;
+    const close = () => { if (cur) { cur.open = stack; out.push(cur); } stack = []; cur = null; };
+    for (let k = 0; k < tokens.length; k++) {
+      const t = tokens[k];
+      if (t.type === 'comment') continue;
+      const newLine = !prev || (text.slice(prev.end, t.start).includes('\n') && !(prev.type === 'op' && prev.value === '\\'));
+      if (newLine && stack.length && cur && !isCloser(t) && leading(text, lineStartAt(text, t.start)).length <= cur.indent.length) close();
+      if (!cur || (newLine && !stack.length) || (prev?.type === 'op' && prev.value === ';' && !stack.length)) {
+        close();
+        cur = { first: k, last: k, indent: leading(text, lineStartAt(text, t.start)) };
+      }
+      cur.last = k;
+      if (t.type === 'op') {
+        if (OPENERS[t.value]) stack.push(t.value);
+        else if (isCloser(t) && stack.length) stack.pop();
+      }
+      prev = t;
+    }
+    close();
+    return out;
+  }
+
+  const COMPOUND = new Set(['if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'with', 'def', 'class']);
+  // Complete Current Statement at `offset`: {at, insert, end, indent, block} inserts `insert` at `at` (the closing
+  // quote and brackets the statement lacks, then `:` for a compound statement, `():` for `def name`) and opens a new
+  // line after `end` with `indent` (one level deeper when `block`), or null when the caret is in no statement.
+  function statementCompletion(text, offset) {
+    const tokens = tokenize(text);
+    const lineStart = lineStartAt(text, offset);
+    const lineEnd = lineEndAt(text, offset);
+    if (tokens.some((t) => t.type === 'string' && t.start < lineStart && t.end > lineEnd)) return null;
+    const stmt = statements(text, tokens).findLast((s) => tokens[s.first].start <= lineEnd);
+    if (!stmt || tokens[stmt.last].end < lineStart) return null;
+    const own = tokens.slice(stmt.first, stmt.last + 1).filter((t) => t.type !== 'comment');
+    const last = own.at(-1);
+    let insert = last.type === 'string' && !last.triple && last.end === last.contentEnd ? last.quote : '';
+    insert += [...stmt.open].reverse().map((o) => OPENERS[o]).join('');
+    const isAsync = own[0].type === 'name' && own[0].value === 'async';
+    const kw = own[isAsync ? 1 : 0]?.type === 'name' ? own[isAsync ? 1 : 0].value : '';
+    let depth = 0;
+    let colon = false;
+    for (const t of own) {
+      if (t.type !== 'op') continue;
+      if (OPENERS[t.value]) depth++;
+      else if (isCloser(t)) depth--;
+      else if (t.value === ':' && depth === 0 && text[t.start + 1] !== '=') colon = true;
+    }
+    let block = last.type === 'op' && last.value === ':' && !stmt.open.length;
+    if (COMPOUND.has(kw) && !colon) {
+      if (kw === 'def' && own.length === 2 + isAsync && own.at(-1).type === 'name') insert += '()';
+      insert += ':';
+      block = true;
+    }
+    return { at: last.end, insert, end: lineEndAt(text, last.end), indent: stmt.indent, block };
+  }
+
+  function completeCurrentStatement(ed = ide.editor) {
+    if (!editable(ed)) return;
+    acceptSuggestion(ed);
+    const model = ed.getModel();
+    const c = isPython(model) && model.getValueLength() < 2_000_000 ? statementCompletion(model.getValue(), model.getOffsetAt(ed.getPosition())) : null;
+    if (!c) return startNewLine(ed);
+    const indent = c.indent + (c.block ? unitOf(model) : '');
+    const at = model.getPositionAt(c.at);
+    const end = model.getPositionAt(c.end);
+    const newLine = model.getEOL() + indent;
+    const edits = c.at === c.end ? [{ range: Range.fromPositions(at), text: c.insert + newLine }]
+      : [{ range: Range.fromPositions(at), text: c.insert }, { range: Range.fromPositions(end), text: newLine }];
+    const caret = new Selection(end.lineNumber + 1, indent.length + 1, end.lineNumber + 1, indent.length + 1);
+    ed.pushUndoStop();
+    ed.executeEdits('pyide.completeStatement', edits, [caret]);
+    ed.pushUndoStop();
+    ed.revealPosition(caret.getPosition());
+  }
+
+  // Python lines that continue the logical line above them: inside brackets, inside a string over several lines, or
+  // after a backslash.
+  function continuationLines(text, lineCount) {
+    const starts = [0];
+    for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+    const lineOf = (o) => {
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= o) lo = mid; else hi = mid - 1; }
+      return lo;
+    };
+    const cont = new Uint8Array(lineCount + 1);
+    const mark = (a, b) => { for (let l = a + 1; l <= b && l < cont.length; l++) cont[l] = 1; };
+    const stack = [];
+    for (const t of tokenize(text)) {
+      if (t.type === 'string') mark(lineOf(t.start), lineOf(Math.max(t.start, t.end - 1)));
+      else if (t.type === 'op' && OPENERS[t.value]) stack.push(t.start);
+      else if (isCloser(t) && stack.length) mark(lineOf(stack.pop()), lineOf(t.start));
+      else if (t.type === 'op' && t.value === '\\') mark(lineOf(t.start), lineOf(t.start) + 1);
+    }
+    return cont;
+  }
+
+  const CLAUSE = /^(?:elif|else|except|finally)\b/;
+  // Move Statement Up/Down (0-based `line`, dir -1 or 1): the statement at the line, with its decorators, the comment
+  // lines right above it, its block and its elif/else/except/finally clauses, trades places with the neighbouring
+  // statement of the same block; the blank lines between them stay where they are. {from, to, lines, shift} replaces
+  // lines from..to and moves the caret by `shift` lines; false at the edge of the block; null on a blank or comment line.
+  function statementMove(text, line, dir) {
+    const lines = text.split(/\r?\n/);
+    const cont = continuationLines(text, lines.length);
+    const blank = (l) => !lines[l].trim();
+    const comment = (l) => !cont[l] && lines[l].trim().startsWith('#');
+    const indent = (l) => /^[ \t]*/.exec(lines[l])[0].length;
+    const code = (l) => !blank(l) && !comment(l) && !cont[l];
+    let at = line;
+    while (at > 0 && cont[at]) at--;
+    if (!code(at)) return null;
+    const ind = indent(at);
+    let top = at;
+    while (top > 0 && !(code(top - 1) && indent(top - 1) < ind)) top--;
+    let bottom = at;
+    while (bottom < lines.length - 1 && !(code(bottom + 1) && indent(bottom + 1) < ind)) bottom++;
+    const starts = [];
+    for (let l = top; l <= bottom; l++) {
+      if (!code(l) || indent(l) !== ind) continue;
+      const prev = starts.at(-1);
+      if (prev && (CLAUSE.test(lines[l].trim()) || lines[prev.head].trim().startsWith('@'))) { prev.head = l; continue; }
+      let first = l;
+      while (first - 1 >= top && comment(first - 1)) first--;
+      starts.push({ first, head: l });
+    }
+    const ranges = starts.map((s, i) => {
+      let last = i + 1 < starts.length ? starts[i + 1].first - 1 : bottom;
+      while (last > s.first && (blank(last) || (comment(last) && indent(last) <= ind))) last--;
+      return [s.first, last];
+    });
+    const i = ranges.findIndex(([a, b]) => a <= line && line <= b);
+    if (i < 0) return null;
+    const j = i + dir;
+    if (j < 0 || j >= ranges.length) return false;
+    const [a, b] = dir < 0 ? [ranges[j], ranges[i]] : [ranges[i], ranges[j]];
+    const moved = [...lines.slice(b[0], b[1] + 1), ...lines.slice(a[1] + 1, b[0]), ...lines.slice(a[0], a[1] + 1)];
+    return { from: a[0], to: b[1], lines: moved, shift: dir < 0 ? a[0] - b[0] : b[1] - a[1] };
+  }
+
+  function moveStatement(dir, ed = ide.editor) {
+    if (!editable(ed)) return;
+    const model = ed.getModel();
+    const pos = ed.getPosition();
+    const m = isPython(model) && model.getValueLength() < 2_000_000 ? statementMove(model.getValue(), pos.lineNumber - 1, dir) : null;
+    if (m === false) return;
+    if (!m) return ed.trigger('keymap', dir < 0 ? 'editor.action.moveLinesUpAction' : 'editor.action.moveLinesDownAction', null);
+    const range = new Range(m.from + 1, 1, m.to + 1, model.getLineMaxColumn(m.to + 1));
+    const sels = ed.getSelections().map((s) => new Selection(s.selectionStartLineNumber + m.shift, s.selectionStartColumn, s.positionLineNumber + m.shift, s.positionColumn));
+    ed.pushUndoStop();
+    ed.executeEdits('pyide.moveStatement', [{ range, text: m.lines.join(model.getEOL()) }], sels);
+    ed.pushUndoStop();
+    ed.revealLine(pos.lineNumber + m.shift);
+  }
+
+  // PyCharm's Toggle Case: upper case unless the text (the selection, else the word at the caret) has no lower case.
+  function toggleCase(ed = ide.editor) {
+    if (!editable(ed)) return;
+    const model = ed.getModel();
+    const sel = ed.getSelection();
+    const text = sel.isEmpty() ? model.getWordAtPosition(sel.getPosition())?.word || '' : model.getValueInRange(sel);
+    ed.trigger('keymap', /\p{Ll}/u.test(text) ? 'editor.action.transformToUppercase' : 'editor.action.transformToLowercase', null);
+  }
+
+  const editorActions = [
+    { id: 'EditorStartNewLine', title: tr('Start New Line'), keys: 'Shift+Enter', run: () => startNewLine() },
+    { id: 'EditorStartNewLineBefore', title: tr('Start New Line Before Current'), keys: 'Ctrl+Alt+Enter', run: trigger('editor.action.insertLineBefore') },
+    { id: 'EditorCompleteStatement', title: tr('Complete Current Statement'), keys: 'Ctrl+Shift+Enter', run: () => completeCurrentStatement() },
+    { id: 'EditorJoinLines', title: tr('Join Lines'), keys: 'Ctrl+Shift+J', run: trigger('editor.action.joinLines') },
+    { id: 'EditorToggleCase', title: tr('Toggle Case'), keys: 'Ctrl+Shift+U', run: () => toggleCase() },
+    { id: 'SelectNextOccurrence', title: tr('Add Selection for Next Occurrence'), keys: 'Alt+J', run: trigger('editor.action.addSelectionToNextFindMatch') },
+    { id: 'UnselectPreviousOccurrence', title: tr('Unselect Occurrence'), keys: 'Alt+Shift+J', run: trigger('cursorUndo') },
+    { id: 'SelectAllOccurrences', title: tr('Select All Occurrences'), keys: 'Ctrl+Alt+Shift+J', run: trigger('editor.action.selectHighlights') },
+    { id: 'MoveStatementUp', title: tr('Move Statement Up'), keys: 'Ctrl+Shift+ArrowUp', run: () => moveStatement(-1) },
+    { id: 'MoveStatementDown', title: tr('Move Statement Down'), keys: 'Ctrl+Shift+ArrowDown', run: () => moveStatement(1) },
+    { id: 'CollapseAllRegions', title: tr('Collapse All'), keys: 'Ctrl+Shift+-', run: trigger('editor.foldAll') },
+    { id: 'ExpandAllRegions', title: tr('Expand All'), keys: ['Ctrl+Shift+=', 'Ctrl+Shift++'], run: trigger('editor.unfoldAll') },
+    { id: 'QuickImplementations', title: tr('Quick Definition'), keys: 'Ctrl+Shift+I', run: trigger('editor.action.peekDefinition') },
+    { id: 'ExpressionTypeInfo', title: tr('Type Info'), keys: 'Ctrl+Shift+P', run: trigger('editor.action.showHover') },
+  ];
+  for (const a of editorActions) ide.registerAction({ context: 'editor', when: inEditor, ...a });
+
+  // ---------- docstrings ----------
+  const DOC_FORMATS = ['restructuredtext', 'google', 'numpy', 'plain'];
+  // Settings › Python Integrated Tools › Docstrings (python.docstringFormat), shared with AI Write Documentation; on
+  // Auto-detect the file's own docstrings decide, else reStructuredText, PyCharm's default.
+  function docstringFormat(text) {
+    const set = ide.settings.get('python.docstringFormat', '');
+    if (DOC_FORMATS.includes(set)) return set;
+    if (/^[ \t]*(?:Parameters|Returns|Yields|Raises)[ \t]*\r?\n[ \t]*-{3,}[ \t]*$/m.test(text)) return 'numpy';
+    if (/^[ \t]*(?:Args|Arguments|Returns|Yields|Raises):[ \t]*\r?\n[ \t]+\S/m.test(text)) return 'google';
+    return 'restructuredtext';
+  }
+
+  // The stub's lines below the opening quotes, without the docstring's indentation; the caret goes on the first one.
+  function docstringBody(format, params, returns, unit = '    ') {
+    if (format === 'plain' || (!params.length && !returns)) return [''];
+    if (format === 'restructuredtext') return ['', ...params.map((p) => `:param ${p.name}:`), ...(returns ? [':return:'] : [])];
+    const sections = format === 'google'
+      ? [params.length && ['Args:', ...params.map((p) => `${unit}${p.stars}${p.name}:`)], returns && ['Returns:']]
+      : [params.length && ['Parameters', '----------', ...params.map((p) => p.name)], returns && ['Returns', '-------']];
+    return ['', ...sections.filter(Boolean).flatMap((s) => ['', ...s])];
+  }
+
+  // The def or class whose header (over one or more lines) ends on the line before `lineStart`: {kind, params,
+  // returns}, or null when that line ends no header, so the docstring would not open a body.
+  // As PyCharm's stub, a function gets a return entry unless it is __init__ or annotated `-> None`.
+  const HEADER = /^([ \t]*)(?:async[ \t]+)?(def|class)[ \t]+([\p{ID_Start}_][\p{ID_Continue}]*)/u;
+  function headerAbove(text, lineStart, bodyIndent) {
+    const lines = text.slice(0, Math.max(0, lineStart - 1)).split('\n');
+    for (let k = lines.length - 1; k >= Math.max(0, lines.length - 40); k--) {
+      const m = HEADER.exec(lines[k]);
+      if (!m) continue;
+      if (m[1].length >= bodyIndent) return null;
+      const header = lines.slice(k).join('\n');
+      const toks = tokenize(header).filter((t) => t.type !== 'comment');
+      const last = toks.at(-1);
+      let depth = 0;
+      let open = -1;
+      let close = -1;
+      for (let i = 0; i < toks.length; i++) {
+        const t = toks[i];
+        if (t.type !== 'op') continue;
+        if (OPENERS[t.value] && depth++ === 0 && open < 0) open = i;
+        else if (isCloser(t) && --depth === 0 && close < 0 && open >= 0) close = i;
+        else if (t.value === ':' && depth === 0 && t !== last) return null;
+      }
+      if (!(last?.type === 'op' && last.value === ':') || depth !== 0) return null;
+      if (m[2] === 'class' || open < 0 || close < 0) return { kind: m[2], params: [], returns: false };
+      const segments = [];
+      let segStart = toks[open].end;
+      depth = 0;
+      for (let i = open + 1; i < close; i++) {
+        const t = toks[i];
+        if (t.type !== 'op') continue;
+        if (OPENERS[t.value]) depth++;
+        else if (isCloser(t)) depth--;
+        else if (t.value === ',' && depth === 0) { segments.push(header.slice(segStart, t.start)); segStart = t.end; }
+      }
+      segments.push(header.slice(segStart, toks[close].start));
+      const params = segments.map((s) => /^\s*(\**)\s*([\p{ID_Start}_][\p{ID_Continue}]*)/u.exec(s))
+        .filter(Boolean).map((p) => ({ stars: p[1], name: p[2] }));
+      if (params[0] && !params[0].stars && (params[0].name === 'self' || params[0].name === 'cls')) params.shift();
+      const ann = /->\s*([\s\S]*?)\s*$/.exec(header.slice(toks[close].end, last.start));
+      return { kind: 'def', params, returns: m[3] !== '__init__' && ann?.[1] !== 'None' };
+    }
+    return null;
+  }
+
+  // `"""` (or `'''`) typed where a string may start, with nothing but the quotes Monaco paired after it, gets its
+  // closing quotes, as PyCharm's smart quotes do. Not when it closes a string that is already open, or in a comment.
+  function closeTripleQuote(ed) {
+    const model = ed.getModel();
+    const sels = ed.getSelections();
+    if (!isPython(model) || !editable(ed) || sels?.length !== 1 || !sels[0].isEmpty()) return false;
+    const pos = sels[0].getPosition();
+    const line = model.getLineContent(pos.lineNumber);
+    const before = line.slice(0, pos.column - 1);
+    const after = line.slice(pos.column - 1);
+    const q = before.at(-1);
+    if ((q !== '"' && q !== "'") || !before.endsWith(q.repeat(3)) || before.endsWith(q.repeat(4)) || after.length > 2 || [...after].some((c) => c !== q)) return false;
+    const start = model.getOffsetAt(pos) - 3;
+    const last = tokenize(model.getValue().slice(0, start)).at(-1);
+    if (last && ((last.type === 'string' && last.end === last.contentEnd) || (last.type === 'comment' && last.end === start))) return false;
+    ed.executeEdits('pyide.closeQuotes', [{ range: new Range(pos.lineNumber, pos.column, pos.lineNumber, line.length + 1), text: q.repeat(3) }], [sels[0]]);
+    return true;
+  }
+
+  // Enter between fresh quotes on the first line of a def or class body: the stub in the docstring format.
+  function insertDocstringStub(ed) {
+    const model = ed.getModel();
+    const sels = ed.getSelections();
+    if (get(DOC_STUB) === false || !isPython(model) || !editable(ed) || sels?.length !== 1 || !sels[0].isEmpty()) return false;
+    const pos = sels[0].getPosition();
+    if (pos.lineNumber < 2) return false;
+    const line = model.getLineContent(pos.lineNumber);
+    const open = /^([ \t]*)[rRuU]?("""|''')[ \t]*$/.exec(model.getLineContent(pos.lineNumber - 1));
+    if (!open || line.slice(0, pos.column - 1).trim() || line.slice(pos.column - 1).trim() !== open[2]) return false;
+    const text = model.getValue();
+    const head = headerAbove(text, model.getOffsetAt({ lineNumber: pos.lineNumber - 1, column: 1 }), open[1].length);
+    if (!head) return false;
+    const body = docstringBody(docstringFormat(text), head.params, head.returns, unitOf(model));
+    const ind = open[1];
+    const stub = [...body.map((s, i) => (s || i === 0 ? ind + s : s)), ind + open[2]].join(model.getEOL());
+    ed.pushUndoStop();
+    ed.executeEdits('pyide.docstringStub', [{ range: new Range(pos.lineNumber, 1, pos.lineNumber, line.length + 1), text: stub }],
+      [new Selection(pos.lineNumber, ind.length + 1, pos.lineNumber, ind.length + 1)]);
+    ed.pushUndoStop();
+    return true;
+  }
+
   // onDidType fires for typed text only (keys, IME), not for pastes, undo or edits other features make.
   ide.onEditor((ed) => {
     if (typeof ed.onDidType !== 'function') return;
-    ed.onDidType((typed) => { if (typed.endsWith('}')) convertAtCaret(ed); });
+    ed.onDidType((typed) => {
+      if (typed.endsWith('}')) convertAtCaret(ed);
+      else if (typed.endsWith('"') || typed.endsWith("'")) closeTripleQuote(ed);
+      else if (typed.endsWith('\n')) insertDocstringStub(ed);
+    });
   });
 
   (ide.settingsPages ||= []).push({
     id: 'smart-keys', group: 'editor', title: () => tr('Smart Keys'), defaults: DEFAULTS,
-    keywords: 'smart keys python f-string format string convert automatically brace 스마트 키 f-문자열 자동 변환 중괄호',
+    keywords: 'smart keys python f-string format string convert automatically brace docstring stub documentation comment 스마트 키 f-문자열 자동 변환 중괄호 독스트링 문서 주석 스텁',
     mount(host, ctx) {
       const s = ctx.ui.section(host, 'Python');
       s.appendChild(ctx.ui.checkbox(FSTRING, tr('Convert to f-string automatically')));
-      host.appendChild(ide.util.el('div', 'muted settings-note',
+      s.appendChild(ide.util.el('div', 'muted settings-note',
         tr('Typing a closing brace after a name in a plain string literal, as in "Hello {name}", adds the f prefix. Undo removes the prefix only.')));
+      s.appendChild(ctx.ui.checkbox(DOC_STUB, tr('Insert documentation comment stub')));
+      s.appendChild(ide.util.el('div', 'muted settings-note',
+        tr('Enter after the opening triple quotes of a docstring adds the parameters and return value of the function, in the format set under Python Integrated Tools › Docstrings.')));
     },
   });
 
-  ide.editorAssists = { stickyOptions, refreshSticky, fstringInsertAt, convertAtCaret, keys: { STICKY, STICKY_MAX, FSTRING } };
+  ide.editorAssists = {
+    stickyOptions, refreshSticky, fstringInsertAt, convertAtCaret, statementCompletion, statementMove, docstringBody, docstringFormat,
+    keys: { STICKY, STICKY_MAX, FSTRING, DOC_STUB },
+  };
 })();

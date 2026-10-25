@@ -305,7 +305,7 @@ try {
   await until(`!!${h.logRow('Pick me')}`, 'log shows Pick me', 20000);
   await mouse(h.logRow('Pick me'), { button: 'right', label: 'Pick me row' });
   await until(`!!${h.menuItem('Cherry-Pick')}`, 'log context menu');
-  check(await js(`[...document.querySelectorAll('#menuHost .menu-item')].map(m => m.firstChild.textContent).join('|')`) === 'Cherry-Pick|Revert Commit', 'a Log row\'s context menu has Cherry-Pick and Revert Commit');
+  check(await js(`[...document.querySelectorAll('#menuHost .menu-item')].map(m => m.firstChild.textContent).slice(1, 3).join('|')`) === 'Cherry-Pick|Revert Commit', 'a Log row\'s context menu has Cherry-Pick and Revert Commit after Copy Revision Number');
   await clearNotes();
   await mouse(h.menuItem('Cherry-Pick'), { label: 'Cherry-Pick' });
   await until(noteWith('Cherry-picked'), 'cherry-picked');

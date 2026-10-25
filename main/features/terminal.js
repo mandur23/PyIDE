@@ -9,6 +9,7 @@ const claude = require('../ai/claude');
 const claudeIde = require('./claude-ide');
 const remote = require('../remote');
 const { loadFiles } = require('../dotenv');
+const { outputBatch } = require('../output-batch');
 
 const sessions = new Map(); // id -> {proc, owner}
 let nextId = 1;
@@ -154,19 +155,10 @@ exports.register = ({ ipcMain, app }) => {
     const owner = e.sender;
     watchNavigation(owner);
     sessions.set(id, { proc, owner, nav: navigations.get(owner) });
-    // Output is coalesced per tick so a flood (e.g. a long `dir`) costs a few IPC messages, not thousands.
-    let buffer = '';
-    let scheduled = false;
-    proc.onData((data) => {
-      buffer += data;
-      if (scheduled) return;
-      scheduled = true;
-      setImmediate(() => {
-        scheduled = false;
-        if (!owner.isDestroyed()) owner.send('pty:data', { id, data: buffer });
-        buffer = '';
-      });
-    });
+    // ConPTY delivers about one chunk per line and one per event-loop turn, so a flood (a long `dir`, a chatty build)
+    // is batched by time: at most one message per 10 ms window, the first after a pause sent at once.
+    const batch = outputBatch((data) => { if (!owner.isDestroyed()) owner.send('pty:data', { id, data }); });
+    proc.onData((data) => batch.push(data));
     // Closing the window ends its shells; a shell that ends first takes its listener with it, or every session ever
     // opened would keep one on the window (and its proc alive).
     const onWindowGone = () => { try { proc.kill(); } catch {} sessions.delete(id); };
@@ -176,7 +168,10 @@ exports.register = ({ ipcMain, app }) => {
       release?.();
       sessions.delete(id);
       owner.removeListener('destroyed', onWindowGone);
-      if (!owner.isDestroyed()) setImmediate(() => owner.send('pty:exit', { id, code: exitCode }));
+      setImmediate(() => {
+        batch.flush();
+        if (!owner.isDestroyed()) owner.send('pty:exit', { id, code: exitCode });
+      });
     });
     // host: this computer's name, the only host besides localhost whose OSC 7 file:// URLs the renderer accepts.
     return { id, shell: shell.id, shellName: shell.name, pid: proc.pid, host: os.hostname() };

@@ -1,9 +1,25 @@
 {
-  "Sticky Lines and f-string Conversion": "고정 줄 및 f-문자열 변환",
-  "Sticky lines at the top of the editor show the classes and functions around the visible code, and a plain Python string becomes an f-string when you type a {name} into it, as in PyCharm.": "PyCharm처럼 에디터 위쪽의 고정 줄에 보이는 코드를 둘러싼 클래스와 함수를 표시하고, 일반 Python 문자열에 {name}을 입력하면 f-문자열로 바꿉니다.",
+  "Editor Assists": "에디터 지원",
+  "Sticky lines at the top of the editor show the classes and functions around the visible code, a plain Python string becomes an f-string when you type a {name} into it, PyCharm's editing keys (Start New Line, Complete Current Statement, Move Statement, Join Lines, Toggle Case and more) do what they do in PyCharm, and Enter inside new triple quotes under a def writes a docstring stub.": "PyCharm처럼 에디터 위쪽의 고정 줄에 보이는 코드를 둘러싼 클래스와 함수를 표시하고, 일반 Python 문자열에 {name}을 입력하면 f-문자열로 바꾸며, PyCharm의 편집 키(새 줄 시작, 현재 문 완성, 문 이동, 줄 연결, 대/소문자 전환 등)가 PyCharm과 같이 동작하고, def 아래에서 새 삼중 따옴표 안에 Enter를 누르면 독스트링 스텁을 작성합니다.",
   "Smart Keys": "스마트 키",
   "Convert to f-string automatically": "자동으로 f-문자열로 변환",
   "Typing a closing brace after a name in a plain string literal, as in \"Hello {name}\", adds the f prefix. Undo removes the prefix only.": "일반 문자열 리터럴에서 \"Hello {name}\"처럼 이름 뒤에 닫는 중괄호를 입력하면 f 접두사를 붙입니다. 실행 취소하면 접두사만 제거됩니다.",
   "Show sticky lines": "고정 줄 표시",
-  "Maximum number of sticky lines:": "최대 고정 줄 수:"
+  "Maximum number of sticky lines:": "최대 고정 줄 수:",
+  "Start New Line": "새 줄 시작",
+  "Start New Line Before Current": "현재 줄 앞에 새 줄 시작",
+  "Complete Current Statement": "현재 문 완성",
+  "Join Lines": "줄 연결",
+  "Toggle Case": "대/소문자 전환",
+  "Add Selection for Next Occurrence": "다음 항목에 선택 추가",
+  "Unselect Occurrence": "항목 선택 해제",
+  "Select All Occurrences": "모든 항목 선택",
+  "Move Statement Up": "문 위로 이동",
+  "Move Statement Down": "문 아래로 이동",
+  "Collapse All": "모두 접기",
+  "Expand All": "모두 펼치기",
+  "Quick Definition": "빠른 정의",
+  "Type Info": "타입 정보",
+  "Insert documentation comment stub": "문서 주석 스텁 삽입",
+  "Enter after the opening triple quotes of a docstring adds the parameters and return value of the function, in the format set under Python Integrated Tools › Docstrings.": "독스트링의 여는 삼중 따옴표 뒤에서 Enter를 누르면 Python 통합 도구 › 독스트링에서 설정한 형식으로 함수의 매개변수와 반환값을 추가합니다."
 }

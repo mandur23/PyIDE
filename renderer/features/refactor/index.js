@@ -924,5 +924,5 @@
     run: (entry) => moveElement(entry.path),
   });
 
-  ide.refactor = { call, applyResult, preview, records: () => records.map(({ label, state, files, moves }) => ({ label, state, files: files.map((f) => f.path), moves })) };
+  ide.refactor = { call, applyResult, preview, errorText, hint, records:() => records.map(({ label, state, files, moves }) => ({ label, state, files: files.map((f) => f.path), moves })) };
 })();

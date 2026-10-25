@@ -2,6 +2,10 @@
 import json
 import os
 
+import pytest
+
+import pyide_test_diff
+
 _out = None
 # Remote interpreters pass a descriptor (PYIDE_TEST_REPORT=fd:3) that shares a stream with other output, so each
 # line is marked for the IDE to take out.
@@ -29,6 +33,38 @@ def _text(longrepr):
     return str(longrepr)
 
 
+# The expected/actual pair of the running test's last failed `==` (pytest_assertrepr_compare) or assertEqual, with the
+# exception assertEqual raised (None for `==`, whose exception is raised after the hook).
+_current = None
+_diffs = {}
+
+
+def _record(diff, exc=None):
+    if _current is not None:
+        _diffs[_current] = (diff, exc)
+
+
+def pytest_configure(config):
+    pyide_test_diff.capture_assert_equal(_record)
+
+
+def pytest_assertrepr_compare(config, op, left, right):
+    if op == "==":
+        _record(pyide_test_diff.pair(left, right))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    if call.when != "call":
+        return
+    diff, exc = _diffs.pop(item.nodeid, (None, None))
+    err = call.excinfo.value if call.excinfo is not None else None
+    # Only the assertion that failed the test: not one the test caught, nor a later error of another kind.
+    if diff and isinstance(err, AssertionError) and (exc is None or exc is err):
+        outcome.get_result().pyide_diff = diff
+
+
 def pytest_collection_finish(session):
     tests = []
     for item in session.items:
@@ -50,7 +86,15 @@ def pytest_collectreport(report):
 
 
 def pytest_runtest_logstart(nodeid, location):
+    global _current
+    _current = nodeid
+    _diffs.pop(nodeid, None)
     _emit({"e": "start", "id": nodeid})
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    global _current
+    _current = None
 
 
 def pytest_runtest_logreport(report):
@@ -65,7 +109,7 @@ def pytest_runtest_logreport(report):
     if hasattr(report, "wasxfail"):
         outcome = "skipped" if report.skipped else "passed"
     sections = "".join("\n----- %s -----\n%s" % (title, body) for title, body in report.sections if body)
-    _emit({
+    event = {
         "e": "result",
         "id": report.nodeid,
         "when": report.when,
@@ -73,7 +117,11 @@ def pytest_runtest_logreport(report):
         "duration": report.duration,
         "text": _text(report.longrepr),
         "output": sections,
-    })
+    }
+    diff = getattr(report, "pyide_diff", None)
+    if diff and outcome == "failed":
+        event["diff"] = diff
+    _emit(event)
 
 
 def pytest_sessionfinish(session, exitstatus):

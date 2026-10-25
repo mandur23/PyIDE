@@ -1,0 +1,7 @@
+.cg-list { max-height: 50vh; overflow: auto; border: 1px solid var(--gray4); border-radius: 4px; padding: 2px 0; }
+.cg-owner { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 2px; font-weight: 600; }
+.cg-owner-module { font-weight: normal; font-size: 12px; }
+.cg-method { display: flex; align-items: center; gap: 8px; padding: 2px 8px 2px 22px; cursor: pointer; }
+.cg-method:hover { background: var(--gray3); }
+.cg-method:focus-within { background: var(--gray4); }
+.cg-signature { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

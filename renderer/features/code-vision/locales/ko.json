@@ -16,5 +16,9 @@
   "Commits that changed {name}": "{name}을(를) 변경한 커밋",
   "Usages": "사용 위치",
   "Code author (Git)": "코드 작성자 (Git)",
-  "Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; authors come from git blame in trusted projects. Code vision is off in Power Save Mode.": "클래스와 함수 위에 표시됩니다. 사용 위치는 Pyright에서 가져오며 화면에 보이는 코드에 대해서만 계산하고, 작성자는 신뢰할 수 있는 프로젝트에서 git blame으로 가져옵니다. 절전 모드에서는 코드 비전이 꺼집니다."
+  "Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; names found in more than {count} project files are counted when clicked. Authors come from git blame in trusted projects. Code vision is off in Power Save Mode.": "클래스와 함수 위에 표시됩니다. 사용 위치는 Pyright에서 가져오며 화면에 보이는 코드에 대해서만 계산하고, 프로젝트 파일 {count}개보다 많은 곳에 나오는 이름은 클릭할 때 계산합니다. 작성자는 신뢰할 수 있는 프로젝트에서 git blame으로 가져옵니다. 절전 모드에서는 코드 비전이 꺼집니다.",
+  "usages": "사용 위치",
+  "Click to count the usages of {name}: the name appears in {files} files": "클릭하면 {name}의 사용 위치를 계산합니다. 이 이름은 파일 {files}개에 나옵니다",
+  "Click to count the usages of {name}: counting took longer than {seconds} s": "클릭하면 {name}의 사용 위치를 계산합니다. 계산에 {seconds}초 넘게 걸렸습니다",
+  "Finding usages of {name}": "{name}의 사용 위치 찾는 중"
 }

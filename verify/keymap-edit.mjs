@@ -129,11 +129,11 @@ try {
 
   // ---------- two-stroke shortcut for Duplicate Line ----------
   await h.select('EditorDuplicate');
-  await h.capture('Ctrl+Alt+Shift+J', 'D');
+  await h.capture('Ctrl+Alt+Shift+Y', 'D');
   check(await h.conflictText() === '', `no conflict for the two-stroke chord (${await h.conflictText()})`);
   await h.captureOk();
   await until(`!document.getElementById('keymapCaptureDialog')`, 'capture dialog closed (two strokes)');
-  check(await h.rowKeys('EditorDuplicate') === 'Ctrl+Alt+Shift+J, D', 'the row shows the two-stroke shortcut as "Ctrl+Alt+Shift+J, D"');
+  check(await h.rowKeys('EditorDuplicate') === 'Ctrl+Alt+Shift+Y, D', 'the row shows the two-stroke shortcut as "Ctrl+Alt+Shift+Y, D"');
 
   // ---------- editor action: Comment with Line Comment (Ctrl+/ -> Ctrl+Shift+/) ----------
   await h.select('CommentByLineComment');
@@ -144,7 +144,7 @@ try {
   check(await h.rowKeys('CommentByLineComment') === 'Ctrl+Shift+/', 'Comment with Line Comment is now Ctrl+Shift+/');
   await h.closeSettings();
   check(S(await js(`ide.settings.get('keymap.overrides')`)) === S({
-    ActivateProjectToolWindow: ['Ctrl+Alt+Shift+1'], EditorDeleteLine: ['Ctrl+D'], EditorDuplicate: ['Ctrl+Alt+Shift+J D'], CommentByLineComment: ['Ctrl+Shift+/'],
+    ActivateProjectToolWindow: ['Ctrl+Alt+Shift+1'], EditorDeleteLine: ['Ctrl+D'], EditorDuplicate: ['Ctrl+Alt+Shift+Y D'], CommentByLineComment: ['Ctrl+Shift+/'],
   }), `OK stores the overrides (${S(await js(`ide.settings.get('keymap.overrides')`))})`);
 
   // ---------- the new keys run the actions, the old ones do not ----------
@@ -164,10 +164,10 @@ try {
   const beforeY = await h.lines();
   await press('Ctrl+Y');
   check(S(await h.lines()) === S(beforeY), 'Ctrl+Y (removed) no longer deletes the line');
-  await press('Ctrl+Alt+Shift+J');
+  await press('Ctrl+Alt+Shift+Y');
   await press('D');
   after = await h.lines();
-  check(after.length === beforeY.length + 1 && after[1] === beforeY[1] && after[2] === beforeY[1], 'Ctrl+Alt+Shift+J then D duplicates the line, and the D is not typed');
+  check(after.length === beforeY.length + 1 && after[1] === beforeY[1] && after[2] === beforeY[1], 'Ctrl+Alt+Shift+Y then D duplicates the line, and the D is not typed');
 
   // ---------- a single-stroke action beside a chord that starts with the same stroke ----------
   // As in PyCharm and VS Code: the single stroke runs when the wait for a second stroke runs out or the second stroke
@@ -248,7 +248,7 @@ try {
   await js(`(() => { const r = [...document.querySelectorAll('#mainMenu .menu-item')].find((x) => x.textContent.startsWith('Edit')); r.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return true; })()`);
   await sleep(200);
   check(await js(`[...document.querySelectorAll('.context-menu .menu-item')].find((x) => x.textContent.startsWith('Delete Line'))?.querySelector('.hint-right')?.textContent`) === 'Ctrl+D', 'Edit › Delete Line shows Ctrl+D in the main menu');
-  check(await js(`[...document.querySelectorAll('.context-menu .menu-item')].find((x) => x.textContent.startsWith('Duplicate Line'))?.querySelector('.hint-right')?.textContent`) === 'Ctrl+Alt+Shift+J, D', 'Edit › Duplicate Line shows the two-stroke shortcut');
+  check(await js(`[...document.querySelectorAll('.context-menu .menu-item')].find((x) => x.textContent.startsWith('Duplicate Line'))?.querySelector('.hint-right')?.textContent`) === 'Ctrl+Alt+Shift+Y, D', 'Edit › Duplicate Line shows the two-stroke shortcut');
   await press('Escape');
   await press('Escape');
   await js(`(ide.settings.flush(), true)`);
@@ -264,7 +264,7 @@ const b = await launch({ fixture: 'keyboard', port: 9121, name: 'keymap-edit-res
 const hb = await helpers(b);
 try {
   await openFile(b, 'main.py');
-  check(await b.js(`ide.keysFor('ActivateProjectToolWindow')`) === 'Ctrl+Alt+Shift+1' && await b.js(`ide.keysFor('EditorDuplicate')`) === 'Ctrl+Alt+Shift+J D',
+  check(await b.js(`ide.keysFor('ActivateProjectToolWindow')`) === 'Ctrl+Alt+Shift+1' && await b.js(`ide.keysFor('EditorDuplicate')`) === 'Ctrl+Alt+Shift+Y D',
     'the overrides apply at startup');
   await hb.caret(1);
   const p0 = await hb.projectVisible();

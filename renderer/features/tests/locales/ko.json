@@ -49,5 +49,12 @@
   "Debug Tests": "테스트 디버그",
   "No Python interpreter found.": "Python 인터프리터를 찾을 수 없습니다.",
   "Cannot debug '{name}'": "'{name}'을(를) 디버그할 수 없습니다",
-  "The program output is in the Console tab.": "프로그램 출력은 콘솔 탭에 있습니다."
+  "The program output is in the Console tab.": "프로그램 출력은 콘솔 탭에 있습니다.",
+  "<Click to see difference>": "<클릭하여 차이 보기>",
+  "Expected": "예상",
+  "Actual": "실제",
+  "Comparison Failure ({name})": "비교 실패 ({name})",
+  "Contents are identical": "콘텐츠가 동일합니다",
+  "1 difference": "차이 1개",
+  "{n} differences": "차이 {n}개"
 }

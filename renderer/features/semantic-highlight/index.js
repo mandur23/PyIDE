@@ -1,6 +1,6 @@
 // Semantic highlighting for Python, as in PyCharm: names are colored by what they are (parameters, self and cls,
 // classes, functions and methods, properties, modules, constants, builtins, decorators, type parameters), not only by
-// how they look. Monaco asks for document semantic tokens after edits pause; the tokens come from
+// how they look. Monaco asks for document semantic tokens once typing pauses; the tokens come from
 // semantic_server.py (main/features/semantic-highlight.js), which reads the syntax tree and resolves imports through
 // typeshed and the interpreter's sources without running anything. Pyright 1.1.406 has no semantic tokens, and
 // basedpyright's cost Pyright's queue too much while typing (FEATURES.md, Semantic highlighting).
@@ -88,6 +88,31 @@
   // since) instead of clearing them, so a syntax error while typing does not flash the colors away.
   const busy = (why) => new Error(`busy: ${why}`);
 
+  // Monaco throttles document semantic tokens instead of debouncing them: while the user types it asks every few
+  // hundred ms, and each request makes the sidecar parse the whole file (about a second for 20,000 lines). The provider
+  // first waits until the text has not changed for EDIT_PAUSE ms (LARGE_PAUSE above LARGE_LINES lines, as document
+  // symbols do); an edit meanwhile answers busy, so Monaco keeps the last colors, moves them with the edits and asks
+  // again. Monaco moves an answer by the edits made after it asked, so the text sent must be the text it asked about.
+  const EDIT_PAUSE = 400;
+  const LARGE_LINES = 5000;
+  const LARGE_PAUSE = 1000;
+  const lastEdit = new WeakMap();
+  const track = (m) => m.onDidChangeContent(() => lastEdit.set(m, Date.now()));
+  monaco.editor.getModels().forEach(track);
+  monaco.editor.onDidCreateModel(track);
+  // -> true once the model has rested for the pause, false if it was edited (or the request cancelled) first.
+  function typingPaused(model, token) {
+    const pause = model.getLineCount() > LARGE_LINES ? LARGE_PAUSE : EDIT_PAUSE;
+    const wait = (lastEdit.get(model) || 0) + pause - Date.now();
+    if (wait <= 0) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const subs = [];
+      const done = (ok) => { clearTimeout(timer); subs.forEach((s) => s.dispose()); resolve(ok); };
+      const timer = setTimeout(() => done(true), wait);
+      subs.push(model.onDidChangeContent(() => done(false)), token.onCancellationRequested(() => done(false)));
+    });
+  }
+
   async function compute(model) {
     const text = model.getValue(monaco.editor.EndOfLinePreference.LF);
     if (text.length > MAX_TEXT) return null;
@@ -106,7 +131,7 @@
         warnedNoPython = true;
         return null;
       }
-      if (r.error.code !== 'syntax') ide.log.warn(`Semantic highlighting: ${r.error.message}`);
+      if (r.error.code !== 'syntax' && r.error.code !== 'superseded') ide.log.warn(`Semantic highlighting: ${r.error.message}`);
       throw busy(r.error.code);
     }
     return r.result.data;
@@ -119,6 +144,7 @@
       getLegend: () => legend,
       async provideDocumentSemanticTokens(model, _lastResultId, token) {
         if (!enabled()) return null;
+        if (!(await typingPaused(model, token))) throw busy('typing');
         const data = await compute(model);
         if (token.isCancellationRequested) throw busy('cancelled');
         return data ? { data: Uint32Array.from(data) } : null;

@@ -13,8 +13,11 @@ const MAX_MATCHES = 5000;
 const MAX_FILES = 20000;
 const PY_EXT = /\.py[iw]?$/i;
 
-function walk(root, onFile) {
+// excluded: the folders marked Excluded (absolute; main/project-roots.js excludedDirs), compared without case as
+// fs-scan.js does. A walk that starts inside one (Find in Files with that directory chosen) still searches it.
+function walk(root, onFile, excluded = []) {
   let n = 0;
+  const skipped = new Set(excluded.map((d) => d.toLowerCase()));
   const visit = (dir) => {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -23,7 +26,7 @@ function walk(root, onFile) {
     for (const d of entries) {
       if (n >= MAX_FILES) return;
       const p = path.join(dir, d.name);
-      if (d.isDirectory()) { if (!SKIP_DIRS.has(d.name)) visit(p); } else if (d.isFile()) { n++; if (onFile(p) === false) { n = MAX_FILES; return; } }
+      if (d.isDirectory()) { if (!SKIP_DIRS.has(d.name) && !skipped.has(p.toLowerCase())) visit(p); } else if (d.isFile()) { n++; if (onFile(p) === false) { n = MAX_FILES; return; } }
     }
   };
   visit(root);
@@ -58,6 +61,16 @@ function decodeUtf16(buf, wide) {
   return UTF16.decode(wide === 'utf-16be' ? Buffer.from(b).swap16() : b);
 }
 
+// null for bytes that look binary.
+function decodeText(buf) {
+  const wide = utf16Of(buf);
+  if (wide) return decodeUtf16(buf, wide);
+  if (buf.subarray(0, 8000).includes(0)) return null;
+  let text;
+  try { text = UTF8.decode(buf); } catch { text = CP949.decode(buf); }
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 // Returns null for files that are too large or look binary.
 function readText(p) {
   let buf;
@@ -65,12 +78,62 @@ function readText(p) {
     if (fs.statSync(p).size > MAX_SIZE) return null;
     buf = fs.readFileSync(p);
   } catch { return null; }
-  const wide = utf16Of(buf);
-  if (wide) return decodeUtf16(buf, wide);
-  if (buf.subarray(0, 8000).includes(0)) return null;
-  const text = isUtf8(buf) ? buf.toString('utf8') : CP949.decode(buf);
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return decodeText(buf);
 }
+
+// path -> {mtime, size, text}: what Find in Files read, so the next search (the dialog searches again at every pause
+// in typing) reads only the files whose mtime or size changed. Each search stats every file instead of trusting the
+// project watcher alone (search:invalidate), which can miss a change. Keyed by the path as walked: in a case-sensitive
+// folder a.py and A.py are two entries. Oldest entries go first past TEXT_CACHE_MAX characters (UTF-16, so 64 MB).
+const textCache = new Map();
+const TEXT_CACHE_MAX = 32 * 1024 * 1024;
+let textCacheChars = 0;
+
+function forgetText(p) {
+  const hit = textCache.get(p);
+  if (!hit) return;
+  textCache.delete(p);
+  textCacheChars -= hit.text?.length || 0;
+}
+
+function rememberText(p, st, text) {
+  forgetText(p);
+  textCache.set(p, { mtime: st.mtimeMs, size: st.size, text });
+  textCacheChars += text?.length || 0;
+  for (const [old] of textCache) {
+    if (textCacheChars <= TEXT_CACHE_MAX) break;
+    forgetText(old);
+  }
+}
+
+// Callback fs, and one read of the size stat gave: with fs.promises.readFile (five thread-pool round trips per file)
+// a first search of 6,000 files took 5-15 s on the main process's worker in Electron, against 0.3-0.4 s this way.
+const statOf = (p) => new Promise((resolve) => fs.stat(p, (e, st) => resolve(e ? null : st)));
+const readOf = (p, size) => new Promise((resolve, reject) => fs.open(p, 'r', (e, fd) => {
+  if (e) return reject(e);
+  const buf = Buffer.allocUnsafe(size);
+  fs.read(fd, buf, 0, size, 0, (err, n) => {
+    fs.close(fd, () => {});
+    if (err) reject(err); else resolve(n === size ? buf : buf.subarray(0, n));
+  });
+}));
+
+async function cachedText(p) {
+  const st = await statOf(p);
+  if (!st) { forgetText(p); return null; }
+  const hit = textCache.get(p);
+  if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit.text;
+  let text = null;
+  if (st.size <= MAX_SIZE) {
+    try { text = decodeText(await readOf(p, st.size)); } catch { forgetText(p); return null; }
+  }
+  rememberText(p, st, text);
+  return text;
+}
+
+// Files are read this many ahead of the one being searched: one synchronous read at a time spent most of a search
+// opening files (about 70 µs each on NTFS), and parallel reads overlap that.
+const READ_AHEAD = 16;
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -188,27 +251,50 @@ function findIn(text, { re, perLine }, limit) {
   return out;
 }
 
-const lowerMap = (obj) => new Map(Object.entries(obj || {}).map(([k, v]) => [k.toLowerCase(), v]));
+// main/path-case.js's pathKey with the case-sensitive folders passed in (`dirs`: their dirKeys), which the worker
+// cannot require: the path in lower case, except the names inside those folders.
+const dirKeyOf = (key) => key.replace(/[\\/]+/g, '\\').replace(/\\$/, '');
+function pathKeyIn(p, dirs) {
+  const lower = p.toLowerCase();
+  if (!dirs.size) return lower;
+  const parts = p.split(/([\\/]+)/);
+  let key = '';
+  for (let i = 0; i < parts.length; i += 2) key += (i && dirs.has(dirKeyOf(key)) ? parts[i] : parts[i].toLowerCase()) + (parts[i + 1] || '');
+  return key;
+}
 
-function find(root, opts, overrides) {
+// Unsaved texts as the main side sends them ({texts: {pathKey: text}, dirs}, see keyedOverrides) -> p => text | undefined.
+function overrideOf(overrides) {
+  const texts = new Map(Object.entries(overrides?.texts || {}));
+  const dirs = new Set(overrides?.dirs || []);
+  return (p) => (texts.size ? texts.get(pathKeyIn(p, dirs)) : undefined);
+}
+
+async function find(root, opts, overrides, excluded) {
   if (!opts.query) return { files: [], count: 0 };
   let c;
   try { c = compile(opts); } catch (e) { return { error: e.message.replace(/^Invalid regular expression: \/.*\/[a-z]*: /, ''), files: [], count: 0 }; }
   const accept = maskMatcher(opts.mask);
-  const ov = lowerMap(overrides);
+  const unsaved = overrideOf(overrides);
+  const paths = [];
+  walk(opts.dir || root, (p) => { if (accept(p)) paths.push(p); }, excluded);
+  const texts = new Array(paths.length);
+  let ahead = 0;
   const files = [];
   let count = 0;
   let truncated = false;
-  walk(opts.dir || root, (p) => {
-    if (!accept(p)) return;
-    const text = ov.get(p.toLowerCase()) ?? readText(p);
-    if (text == null) return;
+  for (let i = 0; i < paths.length; i++) {
+    for (; ahead < paths.length && ahead < i + READ_AHEAD; ahead++) texts[ahead] = unsaved(paths[ahead]) ?? cachedText(paths[ahead]);
+    const text = await texts[i];
+    texts[i] = undefined;
+    if (text == null) continue;
     const matches = findIn(text, c, MAX_MATCHES - count);
-    if (!matches.length) return;
-    files.push({ path: p, matches });
+    if (!matches.length) continue;
+    files.push({ path: paths[i], matches });
     count += matches.length;
-    if (count >= MAX_MATCHES) { truncated = true; return false; }
-  });
+    if (count >= MAX_MATCHES) { truncated = true; break; }
+  }
+  // Reads started ahead of a truncated search still land in the cache; they are not waited for.
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, count, truncated };
 }
@@ -309,59 +395,70 @@ function todoItems(text, marker) {
   return items;
 }
 
-// pathLower -> {mtime, size, items}. The TODO list is rescanned on every save and file change, so a rescan rereads
+// path -> {mtime, size, items}. The TODO list is rescanned on every save and file change, so a rescan rereads
 // only files whose mtime or size moved; unsaved buffers (overrides) always count fresh.
 const todoCache = new Map();
 
-function todos(root, overrides) {
-  const ov = lowerMap(overrides);
+function todos(root, overrides, excluded) {
+  const unsaved = overrideOf(overrides);
   const files = [];
   let count = 0;
   walk(root, (p) => {
     const ext = path.extname(p).slice(1).toLowerCase();
     const marker = COMMENT[ext] || (HASH_EXT.has(ext) ? '#' : null);
     if (!marker) return;
-    const key = p.toLowerCase();
+    const text = unsaved(p);
     let items;
-    if (ov.has(key)) items = todoItems(ov.get(key), marker);
+    if (text !== undefined) items = todoItems(text, marker);
     else {
       let st;
       try { st = fs.statSync(p); } catch { return; }
-      const hit = todoCache.get(key);
+      const hit = todoCache.get(p);
       if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) items = hit.items;
       else {
         items = todoItems(readText(p), marker);
-        todoCache.set(key, { mtime: st.mtimeMs, size: st.size, items });
+        todoCache.set(p, { mtime: st.mtimeMs, size: st.size, items });
       }
     }
     if (items.length) { files.push({ path: p, items }); count += items.length; }
     if (count >= 5000) return false;
-  });
+  }, excluded);
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, count };
 }
 
 // Python files under root with their mtime, for the symbol index.
-function pyFiles(root) {
+function pyFiles(root, excluded) {
   const out = [];
   walk(root, (p) => {
     if (!PY_EXT.test(p)) return;
     try { const st = fs.statSync(p); if (st.size <= MAX_SIZE) out.push({ p, mtime: st.mtimeMs }); } catch {}
-  });
+  }, excluded);
   return out;
 }
 
+// The renderer names paths as its tabs and the watcher spell them, which may differ in case from the walk's.
 function invalidateScans(paths) {
-  if (!paths) todoCache.clear();
-  else for (const p of paths) todoCache.delete(String(p).toLowerCase());
+  if (!paths) {
+    todoCache.clear();
+    textCache.clear();
+    textCacheChars = 0;
+    return;
+  }
+  const gone = new Set(paths.map((p) => String(p).toLowerCase()));
+  for (const p of [...todoCache.keys()]) if (gone.has(p.toLowerCase())) todoCache.delete(p);
+  for (const p of [...textCache.keys()]) if (gone.has(p.toLowerCase())) forgetText(p);
 }
 
 // File scans run on a worker thread: on a large project they read thousands of files, and doing that on the main
 // process froze every window and IPC call until it finished.
 const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), todos, pyFiles, invalidate: invalidateScans };
 if (!isMainThread && workerData?.role === 'pyide-search') {
+  // One request at a time, answered in order (worker-host times the first one waiting), although find awaits reads.
+  let queue = Promise.resolve();
   parentPort.on('message', ({ id, op, args }) => {
-    try { parentPort.postMessage({ id, result: SCANS[op](...args) }); } catch (e) { parentPort.postMessage({ id, error: e.message, code: e.code }); }
+    queue = queue.then(() => SCANS[op](...args)).then((result) => parentPort.postMessage({ id, result }),
+      (e) => parentPort.postMessage({ id, error: e.message, code: e.code }));
   });
 }
 
@@ -371,6 +468,26 @@ const scan = isMainThread ? require('../worker-host').fileWorker(__filename, 'py
 // Go to Class stayed empty for 19 s after a 3,000-module project opened (5.6 s now; verify/perf-index.mjs).
 const indexScan = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-search') : null;
 const textCodec = isMainThread ? require('../text-codec') : null;
+const pathCase = isMainThread ? require('../path-case') : null;
+// The worker cannot read the user data the Excluded folders are kept in, so main passes them with each scan.
+const excludedOf = isMainThread ? require('../project-roots').excludedDirs : null;
+
+// The renderer sends unsaved texts by path. They are keyed as documents are (main/path-case.js's pathKey), with the
+// case-sensitive folders above them, so in such a folder a.py and A.py each find their own unsaved text.
+// -> {texts: {pathKey: text}, dirs: [dirKey]}
+function keyedOverrides(overrides) {
+  const texts = {};
+  const dirs = new Set();
+  for (const [p, text] of Object.entries(overrides || {})) {
+    texts[pathCase.pathKey(p)] = text;
+    for (let d = path.dirname(p); ; d = path.dirname(d)) {
+      // A name inside a case-sensitive folder keeps its case in the key.
+      if (pathCase.pathKey(path.join(d, 'A')).endsWith('A')) dirs.add(dirKeyOf(pathCase.pathKey(d)));
+      if (path.dirname(d) === d) break;
+    }
+  }
+  return { texts, dirs: [...dirs] };
+}
 
 // Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding. A file whose
 // encoding cannot hold the new text (an emoji into CP949) is left as it was and reported.
@@ -703,7 +820,7 @@ async function buildIndex(interp, root, since = 0) {
   const rootKey = rootKeyOf(root);
   const live = new Set();
   const stale = [];
-  const scanned = await indexScan('pyFiles', root);
+  const scanned = await indexScan('pyFiles', root, excludedOf(root));
   const py = await asking;
   for (const { p, mtime } of scanned) {
     const key = p.toLowerCase();
@@ -748,8 +865,10 @@ const indexed = (interp, root, since) => {
 
 exports.register = ({ ipcMain, app }) => {
   storeDir = path.join(app.getPath('userData'), 'symbol-index');
-  ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => (live ? liveFind([root, opts, overrides])
-    : (dropPreviews(), findOnWorker([root, opts, overrides], FIND_TIMEOUT))));
+  ipcMain.handle('search:find', (_e, root, opts, overrides, { live } = {}) => {
+    const args = [root, opts, keyedOverrides(overrides), excludedOf(root)];
+    return live ? liveFind(args) : (dropPreviews(), findOnWorker(args, FIND_TIMEOUT));
+  });
   // {changed, count, skipped}, or {stopped} when the worker was stopped partway: some of `paths` may then have been
   // replaced.
   ipcMain.handle('search:replace', async (_e, opts, paths) => {
@@ -765,7 +884,7 @@ exports.register = ({ ipcMain, app }) => {
   });
   // The same replacement applied to an unsaved buffer's text -> {text, count}.
   ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, compile(opts)));
-  ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, overrides));
+  ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, keyedOverrides(overrides), excludedOf(root)));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text, 30000)) || { error: 'Python interpreter failed' });
   // The index as one list of {name, kind, line, col, container, path}.
   ipcMain.handle('search:symbols', async (_e, interp, root) => (await indexed(interp, root)).files.flatMap(([p, symbols]) => symbols.map((s) => ({ ...s, path: p }))));

@@ -118,9 +118,11 @@
     { label: tr('Edit'), submenu: () => tidy([
       act('Undo'), act('Redo'), { separator: true },
       act('Cut'), act('Copy'), act('Paste'), act('PasteMultiple'), act('CopyPaths'), { separator: true },
-      act('SelectAll'), act('EditorSelectWord'), { separator: true },
+      act('SelectAll'), act('EditorSelectWord'), act('SelectNextOccurrence'), act('UnselectPreviousOccurrence'), act('SelectAllOccurrences'), { separator: true },
       act('Find'), act('Replace'), act('FindInPath'), act('ReplaceInPath'), act('FindUsages'), { separator: true },
-      act('EditorDuplicate'), act('EditorDeleteLine'), act('MoveLineUp'), act('MoveLineDown'),
+      // editor-assists: PyCharm's Edit menu order.
+      act('EditorCompleteStatement'), act('EditorJoinLines'), act('EditorDuplicate'), act('EditorDeleteLine'), act('EditorToggleCase'),
+      act('EditorStartNewLine'), act('EditorStartNewLineBefore'), act('MoveLineUp'), act('MoveLineDown'),
     ]) },
     { label: tr('View'), submenu: () => tidy([
       { label: tr('Tool Windows'), submenu: toolWindowItems },
@@ -133,18 +135,22 @@
       act('HideAllWindows'), { separator: true },
       // compare plugin
       act('CompareTwoFiles'), act('CompareClipboardWithSelection'), { separator: true },
-      act('FileStructurePopup'), act('QuickJavaDoc'), act('ParameterInfo'), act('RecentFiles'), act('RecentLocations'),
+      act('FileStructurePopup'), act('QuickImplementations'), act('QuickJavaDoc'), act('ParameterInfo'), act('ExpressionTypeInfo'),
+      act('RecentFiles'), act('RecentLocations'),
     ]) },
     { label: tr('Navigate'), submenu: () => tidy([
       act('Back'), act('Forward'), act('JumpToLastChange'), { separator: true },
       act('SearchEverywhere'), act('GotoFile'), act('GotoClass'), act('GotoSymbol'), act('GotoAction'), act('GotoLine'), { separator: true },
-      act('GotoDeclaration'), act('GotoTypeDeclaration'), act('GotoNextError'), act('GotoPreviousError'),
+      act('GotoDeclaration'), act('GotoImplementation'), act('GotoTypeDeclaration'), act('GotoSuperMethod'), act('GotoTest'),
+      act('GotoNextError'), act('GotoPreviousError'),
       act('TypeHierarchy'), act('CallHierarchy'), // type-hierarchy, navigation-bar
       act('SelectInProjectView'),
     ]) },
     { label: tr('Code'), submenu: () => tidy([
-      act('ShowIntentionActions'), act('ReformatCode'), act('OptimizeImports'), act('RuffFixAll') || act('tooling.ruffFixAll'),
-      { separator: true }, act('CommentByLineComment'), act('CollapseRegion'), act('ExpandRegion'),
+      act('ShowIntentionActions'), act('OverrideMethods'), act('ImplementMethods'), { separator: true },
+      act('ReformatCode'), act('OptimizeImports'), act('RuffFixAll') || act('tooling.ruffFixAll'), { separator: true },
+      act('CommentByLineComment'), act('MoveStatementUp'), act('MoveStatementDown'), { separator: true },
+      act('CollapseRegion'), act('ExpandRegion'), act('CollapseAllRegions'), act('ExpandAllRegions'),
     ]) },
     { label: tr('Refactor'), submenu: () => tidy([
       act('Refactorings.QuickListPopupAction'), { separator: true },

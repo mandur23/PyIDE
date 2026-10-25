@@ -1,0 +1,9 @@
+{
+  "id": "project-roots",
+  "name": "Project Structure",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Mark Directory As: Sources Root, Test Sources Root and Excluded, as in PyCharm. Source roots go on PYTHONPATH for Run and tests and to Pyright, and a src layout is detected when a project opens.",
+  "required": true,
+  "main": ["project-roots.js"]
+}

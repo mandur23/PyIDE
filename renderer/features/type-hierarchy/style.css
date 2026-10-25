@@ -1,0 +1,11 @@
+/* Gutter markers for overriding / overridden methods and subclassed classes (PyCharm's O and I arrows): a circle with
+   an arrow up (overrides a base's method), down (overridden in subclasses, or a class with subclasses) or both. */
+:root { --th-override: #548af7; --th-implement: #5fb865; }
+:root[data-theme="light"] { --th-override: #3574f0; --th-implement: #208a3c; }
+.th-gutter { cursor: pointer; }
+.th-gutter::before { content: ''; display: block; width: 100%; height: 100%; background: var(--th-override);
+  -webkit-mask: var(--th-icon) center / 14px 14px no-repeat; }
+.th-gutter.th-impl::before { background: var(--th-implement); }
+.th-up { --th-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.5' cy='9' r='3'/%3E%3Cpath d='M11 12.5V2M8.6 4.4 11 2l2.4 2.4'/%3E%3C/svg%3E"); }
+.th-down { --th-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.5' cy='5' r='3'/%3E%3Cpath d='M11 1.5V12M8.6 9.6 11 12l2.4-2.4'/%3E%3C/svg%3E"); }
+.th-updown { --th-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.5' cy='7' r='3'/%3E%3Cpath d='M11 1.5v11M8.8 3.7 11 1.5l2.2 2.2M8.8 10.3l2.2 2.2 2.2-2.2'/%3E%3C/svg%3E"); }

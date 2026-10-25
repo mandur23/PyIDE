@@ -1,0 +1,16 @@
+{
+  "Project Structure": "프로젝트 구조",
+  "Mark Directory As: Sources Root, Test Sources Root and Excluded, as in PyCharm. Source roots go on PYTHONPATH for Run and tests and to Pyright, and a src layout is detected when a project opens.": "디렉터리를 다음으로 표시: PyCharm처럼 소스 루트, 테스트 소스 루트, 제외됨. 소스 루트는 실행과 테스트의 PYTHONPATH와 Pyright에 추가되며, 프로젝트를 열 때 src 레이아웃을 탐지합니다.",
+  "Mark Directory As": "디렉터리를 다음으로 표시",
+  "Sources Root": "소스 루트",
+  "Test Sources Root": "테스트 소스 루트",
+  "Excluded": "제외됨",
+  "Unmark as Sources Root": "소스 루트 표시 해제",
+  "Unmark as Test Sources Root": "테스트 소스 루트 표시 해제",
+  "Cancel Exclusion": "제외 취소",
+  "'{name}' has been marked as source root": "'{name}'이(가) 소스 루트로 표시됨",
+  "Ok": "확인",
+  "Revert": "되돌리기",
+  "Don't show again": "다시 표시 안 함",
+  "Python source root detection": "Python 소스 루트 탐지"
+}

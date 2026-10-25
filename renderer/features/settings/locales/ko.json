@@ -193,5 +193,7 @@
   "Failed to load:": "로드 실패:",
   "The plugin folder has no plugin.json.": "플러그인 폴더에 plugin.json이 없습니다.",
   "plugin.json is not valid JSON.": "plugin.json이 올바른 JSON이 아닙니다.",
-  "Fix the file and restart the IDE, or uninstall the plugin.": "파일을 고친 뒤 IDE를 다시 시작하거나 플러그인을 제거하세요."
+  "Fix the file and restart the IDE, or uninstall the plugin.": "파일을 고친 뒤 IDE를 다시 시작하거나 플러그인을 제거하세요.",
+  "Console": "콘솔",
+  "Override console cycle buffer size (KB):": "콘솔 순환 버퍼 크기 재정의(KB):"
 }

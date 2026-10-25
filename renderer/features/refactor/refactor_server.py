@@ -15,11 +15,14 @@ Requests: {"id", "method", "params"}. Replies: {"id", "result"} or {"id", "error
 import ast
 import difflib
 import importlib
+import io
 import json
 import keyword
 import os
 import re
+import string
 import sys
+import tokenize
 import traceback
 
 rope = None
@@ -1631,6 +1634,826 @@ def append_moved(text, name, original):
     return body + '\n\n\n' + moved + '\n'
 
 
+# ---------- quick fixes and code generation (plain ast, no rope) ----------
+# The code-generation plugin's Alt+Enter fixes (Create function/class/local variable, Add method, Implement abstract
+# methods, Convert to f-string literal) and Code › Override/Implement Methods. Pyright resolves what crosses files
+# (the class of a receiver, base classes); these requests only read and write text, so they work without rope.
+# Every result is parsed again before it is returned: a generated edit never leaves the file broken.
+
+def checked(text):
+    try:
+        ast.parse(text)
+    except SyntaxError as e:
+        raise Fail('result-syntax', f'The result would not be valid Python (line {e.lineno})', line=e.lineno or 0)
+    return text
+
+
+def innermost(src, offset, accept):
+    """The smallest node whose span holds the offset and for which accept(node) is truthy."""
+    best, size = None, None
+    for node in ast.walk(src.tree):
+        if not hasattr(node, 'end_lineno') or not accept(node):
+            continue
+        s, e = src.span(node)
+        if s <= offset <= e and (size is None or e - s < size):
+            best, size = node, e - s
+    return best
+
+
+def indent_unit(src):
+    """The file's indentation step, from its first indented block; four spaces when it has none."""
+    for node in ast.walk(src.tree):
+        body = getattr(node, 'body', None)
+        if isinstance(node, ast.stmt) and isinstance(body, list) and body and body[0].lineno > node.lineno:
+            outer = src.lines[node.lineno - 1]
+            inner = src.lines[body[0].lineno - 1]
+            step = inner[:indent_of(inner)][indent_of(outer):]
+            if step:
+                return step
+    return '    '
+
+
+def body_indent(src, cls):
+    first = cls.body[0]
+    if first.lineno > cls.lineno:
+        line = src.lines[first.lineno - 1]
+        return line[:indent_of(line)]
+    line = src.lines[cls.lineno - 1]
+    return line[:indent_of(line)] + indent_unit(src)
+
+
+def class_at_line(src, line):
+    for node in ast.walk(src.tree):
+        if isinstance(node, ast.ClassDef) and node.lineno == line:
+            return node
+    raise Fail('no-class', 'No class at that place')
+
+
+def module_bindings(tree):
+    """Names bound at module level (imports, definitions, assignments), also inside if/try/with blocks."""
+    names = set()
+
+    def visit(body):
+        for st in body:
+            if isinstance(st, (ast.Import, ast.ImportFrom)):
+                names.update((a.asname or a.name).split('.')[0] for a in st.names)
+            elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(st.name)
+            elif isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                for t in (st.targets if isinstance(st, ast.Assign) else [st.target]):
+                    names.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+            for field in ('body', 'orelse', 'finalbody'):
+                if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    visit(getattr(st, field, None) or [])
+            for h in getattr(st, 'handlers', None) or []:
+                visit(h.body)
+    visit(tree.body)
+    return names
+
+
+BUILTIN_BINDINGS = set(dir(importlib.import_module('builtins')))
+
+
+def uses_only(node, bound):
+    """True when every name the expression reads is in `bound` (a string annotation is read as an expression)."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and n is node:
+            try:
+                return uses_only(ast.parse(n.value, mode='eval').body, bound)
+            except SyntaxError:
+                return False
+        if isinstance(n, ast.Name) and n.id not in bound:
+            return False
+    return True
+
+
+def one_line(text):
+    return re.sub(r'\s*\n\s*', ' ', text)
+
+
+# ----- Create function / class / local variable, Add method -----
+def call_of(src, node):
+    parent = src.parents.get(node)
+    return parent if isinstance(parent, ast.Call) and parent.func is node else None
+
+
+def awaited(src, call):
+    return call is not None and isinstance(src.parents.get(call), ast.Await)
+
+
+def call_params(call, taken=()):
+    """Parameter names for a new function from the arguments of its first call, as PyCharm names them."""
+    seen = set(taken)
+    names = []
+    star = kwargs = None
+
+    def fresh(base):
+        name, i = base, 1
+        while name in seen:
+            name = f'{base}{i}'
+            i += 1
+        seen.add(name)
+        return name
+    for a in (call.args if call else []):
+        if isinstance(a, ast.Starred):
+            star = star or '*args'
+            continue
+        if star:
+            continue
+        base = a.id if isinstance(a, ast.Name) else a.attr if isinstance(a, ast.Attribute) else 'param'
+        names.append(fresh(base if is_identifier(base) else 'param'))
+    for k in (call.keywords if call else []):
+        if k.arg is None:
+            kwargs = '**kwargs'
+        else:
+            names.append(fresh(k.arg))
+    return names + ([star] if star else []) + ([kwargs] if kwargs else [])
+
+
+def name_node_at(src, s, e, name=None):
+    node = innermost(src, s, lambda n: isinstance(n, ast.Name))
+    if node is None or (name and node.id != name) or src.span(node)[1] < e:
+        return None
+    return node
+
+
+def attribute_at(src, s, e):
+    """The `receiver.name` node whose attribute name lies in [s, e]."""
+    node = innermost(src, s, lambda n: isinstance(n, ast.Attribute))
+    if node is None or src.span(node)[1] != e:
+        return None
+    return node
+
+
+def enclosing_method_class(src, node):
+    """The class whose method (directly in its body) holds the node, else None."""
+    func = None
+    for a in src.ancestors(node):
+        if isinstance(a, (ast.FunctionDef, ast.AsyncFunctionDef)) and func is None:
+            func = a
+        elif isinstance(a, ast.ClassDef):
+            return a if func is not None and func in a.body else None
+    return None
+
+
+def insert_top_level(src, anchor, block):
+    """Puts `block` (lines) above the module-level statement `anchor` and the comments right above it, with two
+    blank lines around it. Returns the new text and the 0-based index of the block's first line."""
+    lines = src.lines[:]
+    at = node_lines(anchor)[0] - 1
+    while at > 0 and lines[at - 1].lstrip().startswith('#'):
+        at -= 1
+    start = at
+    while start > 0 and not lines[start - 1].strip():
+        start -= 1
+    above = ['', ''] if start > 0 else []
+    out = lines[:start] + above + block + ['', ''] + lines[at:]
+    return '\n'.join(out), start + len(above)
+
+
+def top_statement(src, node):
+    for a in (node, *src.ancestors(node)):
+        if src.parents.get(a) is src.tree:
+            return a
+    return node
+
+
+def create_definition(src, path, fix, kind):
+    s = offset_of(src.text, fix['at']['line'], fix['at']['col'])
+    node = name_node_at(src, s, s, fix['name'])
+    if node is None:
+        raise Fail('no-target', 'No name to create at that place')
+    call = call_of(src, node)
+    unit = indent_unit(src)
+    params = call_params(call)
+    if kind == 'createFunction':
+        head = 'async def' if awaited(src, call) else 'def'
+        block = [f'{head} {node.id}({", ".join(params)}):', f'{unit}pass']
+        body_line = 1
+    elif params:
+        block = [f'class {node.id}:', f'{unit}def __init__(self, {", ".join(params)}):', f'{unit * 2}pass']
+        body_line = 2
+    else:
+        block = [f'class {node.id}:', f'{unit}pass']
+        body_line = 1
+    text, first = insert_top_level(src, top_statement(src, node), block)
+    line = first + body_line
+    return checked(text), {'path': path, 'line': line + 1, 'col': len(text.split('\n')[line]) - 3, 'select': True}
+
+
+def statement_of(src, node):
+    """The statement holding the node, as a line a new statement can go above (an `elif` is part of its `if`)."""
+    stmt = next(a for a in (node, *src.ancestors(node)) if isinstance(a, ast.stmt))
+    while src.lines[stmt.lineno - 1].lstrip().startswith(('elif', 'else')) and isinstance(src.parents.get(stmt), ast.stmt):
+        stmt = src.parents[stmt]
+    return stmt
+
+
+def create_variable(src, path, fix):
+    s = offset_of(src.text, fix['at']['line'], fix['at']['col'])
+    node = name_node_at(src, s, s, fix['name'])
+    if node is None:
+        raise Fail('no-target', 'No name to create at that place')
+    stmt = statement_of(src, node)
+    first = node_lines(stmt)[0]
+    line = src.lines[first - 1]
+    indent = line[:indent_of(line)]
+    new = f'{indent}{node.id} = None'
+    lines = src.lines[:first - 1] + [new] + src.lines[first - 1:]
+    return checked('\n'.join(lines)), {'path': path, 'line': first, 'col': len(new) - 3, 'select': True}
+
+
+def method_block(indent, unit, name, params, receiver, is_async):
+    deco = [f'{indent}@classmethod'] if receiver == 'cls' else []
+    head = 'async def' if is_async else 'def'
+    return deco + [f'{indent}{head} {name}({", ".join([receiver] + params)}):', f'{indent}{unit}pass']
+
+
+def placeholder_only(cls):
+    """True for a class body that is just `pass` or `...` (after an optional docstring), on its own line."""
+    body = cls.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    return len(body) == 1 and body[0].lineno > cls.lineno and (
+        isinstance(body[0], ast.Pass) or isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and body[0].value.value is Ellipsis)
+
+
+def insert_members(src, cls, blocks, after=None):
+    """Adds method blocks (lists of lines) to the class, after the statement `after` (default: the last one), one
+    blank line apart. A body that is only `pass` or `...` is replaced. Returns the new text and the 0-based line
+    index where each block starts."""
+    lines = src.lines[:]
+    if placeholder_only(cls):
+        at = cls.body[-1].lineno - 1
+        del lines[at]
+        new, starts = [], []
+        for b in blocks:
+            if new:
+                new.append('')
+            starts.append(at + len(new))
+            new.extend(b)
+        return '\n'.join(lines[:at] + new + lines[at:]), starts
+    anchor = after if after is not None else cls.body[-1]
+    at = node_lines(anchor)[1]
+    new, starts = [], []
+    for b in blocks:
+        new.append('')
+        starts.append(at + len(new))
+        new.extend(b)
+    if at < len(lines) and lines[at].strip() and indent_of(lines[at]) >= indent_of(blocks[0][0]):
+        new.append('')
+    return '\n'.join(lines[:at] + new + lines[at:]), starts
+
+
+def add_method(ws, src, path, fix):
+    s = offset_of(src.text, fix['at']['line'], fix['at']['col'])
+    attr = innermost(src, s, lambda n: isinstance(n, ast.Attribute) and n.attr == fix['name'])
+    call = call_of(src, attr) if attr is not None else None
+    if call is None:
+        raise Fail('no-target', 'No method call at that place')
+    receiver = 'cls' if isinstance(attr.value, ast.Name) and attr.value.id == 'cls' else 'self'
+    params = call_params(call, taken=(receiver,))
+    owner = fix['owner']
+    owner_path = os.path.abspath(owner['path'])
+    ws.check_inside(owner_path)
+    osrc = src if key(owner_path) == key(path) else Source(ws.read(owner_path))
+    cls = class_at_line(osrc, owner['line'])
+    if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and m.name == fix['name'] for m in cls.body):
+        raise Fail('name-exists', f"'{fix['name']}' is already defined in this scope.", name=fix['name'])
+    block = method_block(body_indent(osrc, cls), indent_unit(osrc), fix['name'], params, receiver, awaited(src, call))
+    text, (start,) = insert_members(osrc, cls, [block])
+    line = start + len(block) - 1
+    ws.write(owner_path, checked(text))
+    return {'path': owner_path, 'line': line + 1, 'col': len(text.split('\n')[line]) - 3, 'select': True}
+
+
+# ----- Convert to f-string literal -----
+PERCENT_SPEC = re.compile(r'%(?:\((?P<key>[^)]*)\))?(?P<flags>[#0\- +]*)(?P<width>\*|\d+)?(?:\.(?P<prec>\*|\d+))?'
+                          r'[hlL]?(?P<type>[diouxXeEfFgGcrsa%])')
+SIMPLE_EXPR = (ast.Name, ast.Attribute, ast.Constant)
+
+
+def string_literal(src, node):
+    """(prefix, quote, body) of a single plain (not bytes, not f-) string token, else None."""
+    seg = src.segment(node)
+    try:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(seg).readline) if t.type == tokenize.STRING]
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    if len(toks) != 1 or toks[0].string != seg:
+        return None
+    m = re.match(r'(?s)([A-Za-z]*)(\'\'\'|"""|\'|")(.*)\2$', seg)
+    if not m or set(m.group(1).lower()) - {'r', 'u'}:
+        return None
+    raw = 'r' in m.group(1).lower()
+    if not raw and '\\N{' in m.group(3):
+        return None
+    return ('r' if raw else ''), m.group(2), m.group(3)
+
+
+def fstring_operands(node):
+    """The string literal of `'...' % x` or `'...'.format(...)`, else None."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and isinstance(node.left, ast.Constant) \
+            and type(node.left.value) is str:
+        return node.left
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'format' \
+            and isinstance(node.func.value, ast.Constant) and type(node.func.value.value) is str:
+        return node.func.value
+    return None
+
+
+def braces(text):
+    return text.replace('{', '{{').replace('}', '}}')
+
+
+def field_expr(src, node):
+    text = src.segment(node)
+    if '\n' in text:
+        return None
+    wrap = isinstance(node, (ast.Lambda, ast.NamedExpr, ast.Yield, ast.YieldFrom, ast.Dict, ast.Set, ast.DictComp,
+                             ast.SetComp, ast.Starred)) or text.startswith('{')
+    return f'({text})' if wrap else text
+
+
+def format_fields(src, call, body):
+    """The f-string body for `body.format(*call args)`, else None."""
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
+        return None
+    keywords = {k.arg: k.value for k in call.keywords}
+    try:
+        fields = list(string.Formatter().parse(body))
+    except ValueError:
+        return None
+    out, auto, numbered, uses = [], 0, False, {}
+    for literal, field, spec, conv in fields:
+        out.append(braces(literal))
+        if field is None:
+            continue
+        head, rest = re.match(r'([^.\[]*)(.*)', field).groups()
+        if head == '':
+            if numbered:
+                return None
+            if auto >= len(call.args):
+                return None
+            node, auto = call.args[auto], auto + 1
+        elif head.isdigit():
+            if auto or int(head) >= len(call.args):
+                return None
+            numbered, node = True, call.args[int(head)]
+        elif head in keywords:
+            node = keywords[head]
+        else:
+            return None
+        if '{' in (spec or '') or any(not k.isdigit() for k in re.findall(r'\[([^\]]*)\]', rest)):
+            return None
+        uses[id(node)] = uses.get(id(node), 0) + 1
+        if uses[id(node)] > 1 and not isinstance(node, SIMPLE_EXPR):
+            return None
+        expr = field_expr(src, node)
+        if expr is None:
+            return None
+        if rest and not isinstance(node, (ast.Name, ast.Attribute, ast.Call, ast.Subscript)) and not expr.startswith('('):
+            expr = f'({expr})'
+        out.append('{' + expr + rest + (f'!{conv}' if conv else '') + (f':{spec}' if spec else '') + '}')
+    return ''.join(out)
+
+
+def percent_field(expr, flags, width, prec, typ):
+    if '*' in (width or '', prec or '') or typ == 'c':
+        return None
+    precision = f'.{prec}' if prec else ''
+    if typ in 'rsa':
+        conv = '' if typ == 's' and not (flags or width or prec) else f'!{typ}'
+        spec = (('<' if '-' in flags else '>') + (width or '') if width else '') + precision
+    else:
+        spec = ('<' if '-' in flags else '') + ('+' if '+' in flags else ' ' if ' ' in flags else '') \
+            + ('#' if '#' in flags else '') + ('0' if '0' in flags and '-' not in flags else '') \
+            + (width or '') + precision + ('d' if typ in 'iu' else typ)
+        conv = ''
+    return '{' + expr + conv + (f':{spec}' if spec else '') + '}'
+
+
+def percent_fields(src, binop, body):
+    """The f-string body for `body % right`, else None."""
+    specs = list(PERCENT_SPEC.finditer(body))
+    gaps, pos = [], 0
+    for m in specs:
+        gaps.append(body[pos:m.start()])
+        pos = m.end()
+    gaps.append(body[pos:])
+    if any('%' in g for g in gaps):
+        return None
+    real = [m for m in specs if m.group('type') != '%']
+    if any(m.group('type') == '%' and m.group(0) != '%%' for m in specs):
+        return None
+    right = binop.right
+    keyed = [m.group('key') is not None for m in real]
+    if any(keyed):
+        if not all(keyed) or not isinstance(right, ast.Dict) or any(
+                not (isinstance(k, ast.Constant) and isinstance(k.value, str)) for k in right.keys):
+            return None
+        mapping = {k.value: v for k, v in zip(right.keys, right.values)}
+        values = [mapping.get(m.group('key')) for m in real]
+        if None in values:
+            return None
+    else:
+        values = list(right.elts) if isinstance(right, ast.Tuple) else [right]
+        if len(values) != len(real) or any(isinstance(v, ast.Starred) for v in values):
+            return None
+    out, k = [], 0
+    for gap, m in zip(gaps, specs + [None]):
+        out.append(braces(gap))
+        if m is None:
+            break
+        if m.group('type') == '%':
+            out.append('%')
+            continue
+        expr = field_expr(src, values[k])
+        k += 1
+        piece = expr and percent_field(expr, m.group('flags'), m.group('width'), m.group('prec'), m.group('type'))
+        if piece is None:
+            return None
+        out.append(piece)
+    return ''.join(out)
+
+
+def fstring_conversion(src, offset):
+    """(node, f-string text) for the innermost `%` or `.format` string operation around the offset, else None."""
+    node = innermost(src, offset, fstring_operands)
+    if node is None:
+        return None
+    literal = string_literal(src, fstring_operands(node))
+    if literal is None:
+        return None
+    raw, quote, body = literal
+    inner = format_fields(src, node, body) if isinstance(node, ast.Call) else percent_fields(src, node, body)
+    if inner is None:
+        return None
+    # An expression that brought the string's own quote character in (d['k'] in '...') reads better, and stays valid
+    # before Python 3.12, with the other quote.
+    other = {'"': "'", "'": '"'}.get(quote)
+    quotes = [quote]
+    if other and other not in body:
+        quotes = [other, quote] if inner.count(quote) > body.count(quote) else [quote, other]
+    for q in quotes:
+        candidate = f'f{raw}{q}{inner}{q}'
+        try:
+            ast.parse(candidate, mode='eval')
+            return node, candidate
+        except SyntaxError:
+            continue
+    return None
+
+
+def convert_fstring(src, fix):
+    found = fstring_conversion(src, offset_of(src.text, fix['at']['line'], fix['at']['col']))
+    if found is None:
+        raise Fail('not-convertible', 'The string cannot be converted to an f-string')
+    node, literal = found
+    s, e = src.span(node)
+    return checked(src.text[:s] + literal + src.text[e:])
+
+
+# ----- offering the fixes -----
+def class_header_at(src, offset):
+    line = position_of(src.text, offset)['line']
+    return innermost(src, offset, lambda n: isinstance(n, ast.ClassDef) and n.lineno <= line < max(n.body[0].lineno, n.lineno + 1))
+
+
+def quick_fixes(params):
+    """The fixes Alt+Enter can offer at the caret, from Pyright's diagnostics on its line and the code there."""
+    ws, path, text = open_file(params)
+    try:
+        src = Source(text)
+    except Fail:
+        return {'fixes': []}
+    fixes = []
+
+    # A name used twice on the line gives one fix, at its first use.
+    def offer(fix):
+        if not any(f['kind'] == fix['kind'] and f.get('name') == fix.get('name') for f in fixes):
+            fixes.append(fix)
+    for d in params.get('diagnostics') or []:
+        s, e = selection(d, text)
+        at = position_of(text, s)
+        if d.get('code') == 'reportUndefinedVariable':
+            node = name_node_at(src, s, e)
+            if node is None or not isinstance(node.ctx, ast.Load):
+                continue
+            if call_of(src, node) is not None:
+                kinds = ['createClass', 'createFunction'] if node.id[:1].isupper() else ['createFunction', 'createClass']
+            else:
+                kinds = ['createVariable']
+            for kind in kinds:
+                offer({'kind': kind, 'name': node.id, 'at': at})
+        elif d.get('code') == 'reportAttributeAccessIssue':
+            attr = attribute_at(src, s, e)
+            if attr is None or call_of(src, attr) is None:
+                continue
+            value = attr.value
+            cls = enclosing_method_class(src, attr) if isinstance(value, ast.Name) and value.id in ('self', 'cls') else None
+            if cls is not None:
+                offer({'kind': 'addMethod', 'name': attr.attr, 'at': at, 'owner': {'path': path, 'line': cls.lineno, 'name': cls.name}})
+            elif isinstance(value, (ast.Name, ast.Attribute)):
+                vs, ve = src.span(value)
+                head = ve - len(value.attr) if isinstance(value, ast.Attribute) else vs
+                offer({'kind': 'addMethod', 'name': attr.attr, 'at': at, 'receiver': position_of(text, head)})
+    offset = offset_of(text, params['pos']['line'], params['pos']['col'])
+    cls = class_header_at(src, offset)
+    if cls is not None:
+        offer({'kind': 'implementAbstract', 'name': cls.name, 'at': position_of(text, offset)})
+    if fstring_conversion(src, offset):
+        offer({'kind': 'fstring', 'at': position_of(text, offset)})
+    return {'fixes': fixes}
+
+
+def generate(params):
+    ws, path, text = open_file(params)
+    src = Source(text)
+    fix = params['fix']
+    kind = fix['kind']
+    caret = None
+    if kind in ('createFunction', 'createClass'):
+        new, caret = create_definition(src, path, fix, kind)
+        ws.write(path, new)
+    elif kind == 'createVariable':
+        new, caret = create_variable(src, path, fix)
+        ws.write(path, new)
+    elif kind == 'addMethod':
+        caret = add_method(ws, src, path, fix)
+    elif kind == 'fstring':
+        ws.write(path, convert_fstring(src, fix))
+    else:
+        raise Fail('unknown-method', f'Unknown fix {kind}')
+    return ws.result(kind, place=caret)
+
+
+# ----- Override Methods / Implement Methods -----
+# object's methods as PyCharm offers them, written as a stub so they go through the same reader as any base class.
+OBJECT_STUB = '''class object:
+    def __init__(self) -> None: ...
+    def __new__(cls): ...
+    def __setattr__(self, name: str, value) -> None: ...
+    def __delattr__(self, name: str) -> None: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __ne__(self, other: object) -> bool: ...
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def __hash__(self) -> int: ...
+    def __format__(self, format_spec: str) -> str: ...
+    def __getattribute__(self, name: str): ...
+    def __sizeof__(self) -> int: ...
+    def __reduce__(self): ...
+    def __reduce_ex__(self, protocol): ...
+    def __dir__(self): ...
+    def __init_subclass__(cls) -> None: ...
+'''
+ABSTRACT_DECORATORS = {'abstractmethod', 'abstractproperty', 'abstractclassmethod', 'abstractstaticmethod'}
+
+
+def decorator_names(fn):
+    out = set()
+    for d in fn.decorator_list:
+        d = d.func if isinstance(d, ast.Call) else d
+        if isinstance(d, ast.Name):
+            out.add(d.id)
+        elif isinstance(d, ast.Attribute):
+            out.add(d.attr)
+    return out
+
+
+def raises_not_implemented(fn):
+    body = fn.body[1:] if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant) else fn.body
+    if len(body) != 1 or not isinstance(body[0], ast.Raise) or body[0].exc is None:
+        return False
+    exc = body[0].exc.func if isinstance(body[0].exc, ast.Call) else body[0].exc
+    return isinstance(exc, ast.Name) and exc.id == 'NotImplementedError'
+
+
+def class_methods(src, cls):
+    """{name: (function node, decorator names)} in source order; stubs' `if sys.version_info` blocks are read too.
+    A property's setter and deleter belong to its getter; of overloads, the implementation (else the first) counts."""
+    found = {}
+
+    def visit(body):
+        for st in body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = decorator_names(st)
+                if names & {'setter', 'deleter'}:
+                    continue
+                if st.name not in found or ('overload' in found[st.name][1] and 'overload' not in names):
+                    found[st.name] = (st, names)
+            elif isinstance(st, ast.If):
+                visit(st.body)
+                visit(st.orelse)
+            elif isinstance(st, ast.Try):
+                visit(st.body)
+    visit(cls.body)
+    return found
+
+
+def mro(classes):
+    """C3 linearization of the class graph (index 0 is the class itself); breadth-first order if C3 fails."""
+    memo = {}
+
+    def lin(i, path=()):
+        if i in memo:
+            return memo[i]
+        if i in path:
+            raise ValueError('cycle')
+        seqs = [list(lin(b, path + (i,))) for b in classes[i]['bases']] + [list(classes[i]['bases'])]
+        out = [i]
+        while True:
+            seqs = [s for s in seqs if s]
+            if not seqs:
+                break
+            head = next((s[0] for s in seqs if not any(s[0] in t[1:] for t in seqs)), None)
+            if head is None:
+                raise ValueError('inconsistent')
+            out.append(head)
+            for s in seqs:
+                if s[0] == head:
+                    del s[0]
+        memo[i] = out
+        return out
+    try:
+        return lin(0)
+    except (ValueError, RecursionError):
+        order, queue = [], [0]
+        while queue:
+            i = queue.pop(0)
+            if i not in order:
+                order.append(i)
+                queue.extend(classes[i]['bases'])
+        return order
+
+
+def load_class(ws, entry):
+    """(Source, ClassDef) of a class entry {path, line}, or of object; None when it cannot be read."""
+    if entry.get('object'):
+        src = Source(OBJECT_STUB)
+        return src, src.tree.body[0]
+    try:
+        src = Source(ws.read(entry['path']))
+        return src, class_at_line(src, entry['line'])
+    except Fail:
+        return None
+
+
+def candidates(ws, path, classes):
+    """The methods the class at classes[0] could override, first definition along the MRO for each name, with
+    `abstract` set when that definition is abstract (abstractmethod, or a body that only raises NotImplementedError)."""
+    classes = [dict(c, bases=[b for b in c.get('bases', []) if 0 < b < len(classes)]) for c in classes]
+    order = mro(classes)
+    entries = [classes[i] for i in order] + [{'object': True, 'name': 'object', 'module': 'builtins'}]
+    own = load_class(ws, classes[0])
+    if own is None:
+        raise Fail('no-class', 'No class at that place')
+    taken = set(class_methods(*own))
+    out = []
+    for n, entry in enumerate(entries[1:], 1):
+        loaded = load_class(ws, entry)
+        if loaded is None:
+            continue
+        src, cls = loaded
+        for name, (fn, decos) in class_methods(src, cls).items():
+            if name in taken or (name.startswith('__') and not name.endswith('__')):
+                continue
+            taken.add(name)
+            out.append({'name': name, 'owner': n, 'fn': fn, 'decos': decos, 'src': src, 'entry': entry,
+                        'abstract': bool(decos & ABSTRACT_DECORATORS) or raises_not_implemented(fn)})
+    return own, out
+
+
+def signature(c, bound):
+    """`name(params) -> ret` for the generated method; annotations that use names the target module does not have
+    are left out."""
+    fn, src = c['fn'], c['src']
+    a = fn.args
+
+    def ann(node):
+        return one_line(src.segment(node)) if node is not None and uses_only(node, bound) else None
+
+    def param(arg, default):
+        text = arg.arg
+        t = ann(arg.annotation)
+        if t:
+            text += f': {t}'
+        if default is not None:
+            d = one_line(src.segment(default))
+            text += f' = {d}' if t else f'={d}'
+        return text
+    posonly = getattr(a, 'posonlyargs', [])
+    positional = posonly + a.args
+    defaults = [None] * (len(positional) - len(a.defaults)) + list(a.defaults)
+    parts = []
+    for i, (p, d) in enumerate(zip(positional, defaults)):
+        parts.append(param(p, d))
+        if posonly and i == len(posonly) - 1:
+            parts.append('/')
+    if a.vararg:
+        parts.append('*' + param(a.vararg, None))
+    elif a.kwonlyargs:
+        parts.append('*')
+    parts += [param(p, d) for p, d in zip(a.kwonlyargs, a.kw_defaults)]
+    if a.kwarg:
+        parts.append('**' + param(a.kwarg, None))
+    ret = ann(fn.returns)
+    return f'{fn.name}({", ".join(parts)})' + (f' -> {ret}' if ret else '')
+
+
+NO_RETURN = {'__init__', '__init_subclass__', '__setattr__', '__delattr__'}
+
+
+def override_body(c, bound):
+    fn, decos = c['fn'], c['decos']
+    if 'property' in decos or 'abstractproperty' in decos:
+        return f'return super().{fn.name}'
+    a = fn.args
+    positional = getattr(a, 'posonlyargs', []) + a.args
+    static = 'staticmethod' in decos or 'abstractstaticmethod' in decos
+    # __new__ is a static method that takes the class explicitly.
+    args = [p.arg for p in (positional if static or fn.name == '__new__' else positional[1:])]
+    if a.vararg:
+        args.append('*' + a.vararg.arg)
+    args += [f'{p.arg}={p.arg}' for p in a.kwonlyargs]
+    if a.kwarg:
+        args.append('**' + a.kwarg.arg)
+    owner = c['entry'].get('name')
+    if static:
+        if owner not in bound:
+            return 'pass'
+        target = owner
+    else:
+        target = 'super()'
+    call = f'{target}.{fn.name}({", ".join(args)})'
+    if isinstance(fn, ast.AsyncFunctionDef):
+        call = f'await {call}'
+    none = fn.name in NO_RETURN or (isinstance(fn.returns, ast.Constant) and fn.returns.value is None)
+    return call if none else f'return {call}'
+
+
+DECORATOR_TEXT = [('staticmethod', 'staticmethod'), ('abstractstaticmethod', 'staticmethod'),
+                  ('classmethod', 'classmethod'), ('abstractclassmethod', 'classmethod'),
+                  ('property', 'property'), ('abstractproperty', 'property')]
+
+
+def generated_method(c, bound, mode, indent, unit):
+    decos = []
+    for name, text in DECORATOR_TEXT:
+        if name in c['decos'] and f'{indent}@{text}' not in decos:
+            decos.append(f'{indent}@{text}')
+    head = 'async def' if isinstance(c['fn'], ast.AsyncFunctionDef) else 'def'
+    body = 'pass' if mode == 'implement' else override_body(c, bound)
+    return decos + [f'{indent}{head} {signature(c, bound)}:', f'{indent}{unit}{body}']
+
+
+def class_entry(params):
+    """The innermost class around the caret: {name, line, col} (col: where its name starts)."""
+    ws, path, text = open_file(params)
+    src = Source(text)
+    cls = innermost(src, offset_of(text, params['pos']['line'], params['pos']['col']), lambda n: isinstance(n, ast.ClassDef))
+    if cls is None:
+        raise Fail('no-class', 'The caret is not inside a class')
+    m = re.compile(r'class\s+(' + re.escape(cls.name) + r')\b').search(src.lines[cls.lineno - 1])
+    col = index_to_u16(src.lines[cls.lineno - 1], m.start(1)) + 1 if m else 1
+    return {'name': cls.name, 'line': cls.lineno, 'col': col}
+
+
+def class_members(params):
+    """The methods offered by Override Methods (all) and Implement Methods (`abstract`), grouped by class in MRO order."""
+    ws, path, _ = open_file(params)
+    (src, _), found = candidates(ws, path, params['classes'])
+    bound = BUILTIN_BINDINGS | module_bindings(src.tree)
+    return {'methods': [{'name': c['name'], 'owner': c['entry'].get('name'), 'module': c['entry'].get('module', ''),
+                         'signature': signature(c, bound), 'abstract': c['abstract']} for c in found]}
+
+
+def insert_methods(params):
+    ws, path, text = open_file(params)
+    own, found = candidates(ws, path, params['classes'])
+    src, cls = own
+    picked = [c for c in found if c['name'] in set(params['names'])]
+    if not picked:
+        raise Fail('nothing', 'Nothing to change')
+    bound = BUILTIN_BINDINGS | module_bindings(src.tree)
+    indent, unit = body_indent(src, cls), indent_unit(src)
+    blocks = [generated_method(c, bound, params['mode'], indent, unit) for c in picked]
+    line = params['pos']['line']
+    after = None
+    if line > cls.lineno:
+        for st in cls.body:
+            if node_lines(st)[0] <= line:
+                after = st
+    new, starts = insert_members(src, cls, blocks, after)
+    ws.write(path, checked(new))
+    body_index = starts[0] + len(blocks[0]) - 1
+    body_text = new.split('\n')[body_index]
+    implement = params['mode'] == 'implement'
+    col = indent_of(body_text) + 1 if implement else len(body_text) + 1
+    return ws.result(params['mode'], place={'path': path, 'line': body_index + 1, 'col': col, 'select': implement})
+
+
 # ---------- dispatch ----------
 METHODS = {
     'ping': lambda p: {'python': sys.version.split()[0], 'rope': load_rope()},
@@ -1646,6 +2469,11 @@ METHODS = {
     'prepareMove': prepare_move,
     'move': move,
     'renameModule': rename_module,
+    'quickFixes': quick_fixes,
+    'generate': generate,
+    'classEntry': class_entry,
+    'classMembers': class_members,
+    'insertMethods': insert_methods,
 }
 
 
@@ -1662,10 +2490,15 @@ def long_paths(params):
     ide_root, long_root = os.path.abspath(root), os.path.realpath(root)
     if os.path.normcase(ide_root) == os.path.normcase(long_root):
         return params, lambda value: value
-    params = dict(params)
-    for name in PATH_PARAMS:
-        if isinstance(params.get(name), str) and params[name]:
-            params[name] = os.path.realpath(params[name])
+    # Also nested ones: a fix's owner class and the class graph of Override Methods carry paths.
+    def long(value):
+        if isinstance(value, dict):
+            return {k: os.path.realpath(v) if k in PATH_PARAMS and isinstance(v, str) and v else long(v)
+                    for k, v in value.items()}
+        if isinstance(value, list):
+            return [long(v) for v in value]
+        return value
+    params = {**long({k: v for k, v in params.items() if k != 'overlay'}), 'overlay': params.get('overlay')}
     if isinstance(params.get('overlay'), dict):
         params['overlay'] = {os.path.realpath(p): text for p, text in params['overlay'].items()}
     prefix = os.path.normcase(long_root)

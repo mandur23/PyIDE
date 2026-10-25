@@ -198,6 +198,13 @@
     });
   }
 
+  // Two texts, both read-only (the tests plugin's Comparison Failure). left, right: {title, text}. The same id opened
+  // again shows the new texts in a fresh tab: a test run again may fail with other values.
+  function compareTexts({ id, title, left, right, language = 'plaintext' }) {
+    if (ide.findTab(id)) ide.closeTab(id, true);
+    return openDiffTab({ id, title, language, left, right });
+  }
+
   // Why a side cannot be shown as text (r from readSide, or a document's {binary | tooLarge}), or null.
   const problemOf = (name, r) => (r.error !== undefined ? tr('Cannot read {name}: {error}', { name, error: r.error })
     : r.binary ? tr('{name} is a binary file ({size}).', { name, size: sizeText(r.size) })
@@ -375,7 +382,7 @@
   });
 
   ide.compare = {
-    files: compareFiles, with: compareWith, clipboard: compareWithClipboard, branch: compareWithBranch,
+    files: compareFiles, with: compareWith, clipboard: compareWithClipboard, branch: compareWithBranch, texts: compareTexts,
     // The diff view of a tab (tests, other plugins): {diff, go(dir), count(), ready(), setUnified(on)}.
     view: (tab = ide.activeTab()) => views.get(tab) || null,
     // Whether the active tab is a diff (this plugin's or the vcs plugin's) and the keyboard is in it (or nowhere).
