@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch, lensesShown, openFile } from './lib.mjs';
+import { clickMenuPath, launch, lensesShown, openFile } from './lib.mjs';
 
 // Isolate git from the user's global/system config (identity, autocrlf, default branch, hooks).
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcs-git-'));
@@ -46,9 +46,6 @@ const treeNode = (name) => `[...document.querySelectorAll('#tree .node')].find(n
 const treeColor = (name) => js(`getComputedStyle(${treeNode(name)}.querySelector('.name')).color`);
 const noteWith = (text) => `[...document.querySelectorAll('.vcs-note')].some(n => n.textContent.includes(${q(text)}))`;
 const clearNotes = () => js(`document.querySelectorAll('.vcs-note').forEach(n => n.remove())`);
-// Monaco's context menu may live in a shadow root.
-const menuItem = (label) => `(() => { const roots = [document, ...[...document.querySelectorAll('*')].filter(e => e.shadowRoot).map(e => e.shadowRoot)];
-  for (const r of roots) for (const a of r.querySelectorAll('.monaco-menu .action-label')) if (a.textContent.trim() === ${q(label)}) return a; return null; })()`;
 const cursorLine = () => js(`ide.editor.getPosition().lineNumber`);
 
 try {
@@ -158,8 +155,7 @@ try {
   await frame();
   const textBox = await js(`(() => { const r = document.querySelector('#editor .view-line').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8 }; })()`);
   for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: textBox.x, y: textBox.y, button: 'right', clickCount: 1 });
-  await until(`!!${menuItem('Annotate with Git Blame')}`, 'context menu item');
-  await mouse(menuItem('Annotate with Git Blame'), { label: 'Annotate menu item' });
+  await clickMenuPath(t, ['Git', 'Annotate with Git Blame']);
   await until(`document.querySelectorAll('#editor .vcs-blame').length >= 6`, 'blame annotations');
   await frame();
   const blameText = await js(`[...document.querySelectorAll('#editor .vcs-blame')].map(n => getComputedStyle(n, '::after').content).join('|')`);
@@ -173,8 +169,7 @@ try {
   // Line 1 again: code vision's lens above the first declaration may have moved the lines since.
   const textBox2 = await js(`(() => { const r = document.querySelector('#editor .view-line').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8 }; })()`);
   for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: textBox2.x + 100, y: textBox2.y, button: 'right', clickCount: 1 });
-  await until(`!!${menuItem('Close Annotations')}`, 'close annotations item');
-  await mouse(menuItem('Close Annotations'), { label: 'Close Annotations' });
+  await clickMenuPath(t, ['Git', 'Close Annotations']);
   await until(`document.querySelectorAll('#editor .vcs-blame').length === 0`, 'annotations closed');
   check(true, 'Close Annotations removes them');
 

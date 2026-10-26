@@ -32,6 +32,8 @@ Settings › Plugins › Marketplace lists the sample plugins of `plugins-catalo
 
 - `ide.editor` is the active group's editor and changes when the user focuses another pane. Never cache it. Anything attached to an editor (`onMouseDown`, `onDidChangeCursorPosition`, `addAction`, `createDecorationsCollection`, content widgets, view zones) must go through `ide.onEditor(editor => …)`. It runs for every existing editor and for each pane created later, including editors that viewers embed. It returns an unsubscribe function. `ide.editors()` lists them, and `activeEditorChanged(editor)` and `editorCreated(editor)` are events.
 - Editor options that apply everywhere (font, wrap, rulers, bracket colors) go through `ide.updateEditorOptions(opts)`, never `ide.editor.updateOptions`.
+- Context menu: every editor the core creates (group panes and `ide.createEditor`) shows the IDE's popup instead of Monaco's (`contextmenu: false`), PyCharm style: Show Context Actions, Cut, Copy, Paste and the common actions at the top, the rest under Copy / Paste Special, Refactor, Folding, Go To, Generate, AI, Bookmarks, Local History and Git (only in a repository). `EDITOR_MENU` in `renderer/core/mainmenu.js` names each entry's IDE action and the editor action that does the same in one editor: a tab runs the IDE action, an embedded editor (a notebook cell, a viewer) the editor action. An entry is left out when its IDE action's `when` is false or its editor action's precondition fails. An editor action a plugin adds with a `contextMenuGroupId` that no entry names is listed at the end (`ide.editorMenuActions(editor)`). A right click outside the selection moves the caret there first; the Menu key and Shift+F10 open the menu below the caret without moving it (Monaco's controller would move it to the line start). Test: `verify/context-menu.mjs` (port 9298); suites click its items with `lib.mjs`'s `clickMenuPath(ctx, ['Git', 'Show History'])`.
+- Tooltips: Monaco puts a button's tooltip in the editor's container and places it from its measured size; `styles.css` keeps it `max-content` wide, since near the container's right edge it wrapped after it was placed and covered the button (the find widget's Close blinked).
 - `ide.tabs` lists one tab per open document plus custom tabs. `ide.findTab(path)` prefers the active group. A file tab has `{kind: 'file', path, title, model, doc, group, pinned, preview}`. `ide.openFile(path, {line, col, focus, group: 'right'|'down'|'window'|group, preview, asText})`. Also `ide.closeTab(path, force)`, `ide.closeAllTabs(force)`, `ide.getDocument(path)`, `ide.saveAll()`, `ide.reloadFromDisk(paths)`.
 - Do not rely on DOM ids inside the editor area except `#editor` and `#customHost`, which always belong to the first group. Put overlays in `#editorArea`.
 - File viewers: `ide.registerFileViewer({id, icon, match(path), binaryOnly?, text?, mount(host, {path, doc, tab}) -> {dispose?}})`. A matching viewer opens in a custom tab instead of a text editor. `text: true` viewers also get the file's document (use `ide.createEditor(host, {model: doc.model})` to embed an editor that plugins attach to). `binaryOnly` viewers take only files the text loader rejects. "Open as Text" (tab menu, and a button in the binary viewer) bypasses viewers and reads even a file that looks binary as text.
@@ -1184,6 +1186,37 @@ Python and runs like a script. `model.js` owns the file format and pure edit hel
 - `tab.visualScript` also has `revealNode(id)`, `setDebugState(state)`, `onBreakpointClick(fn)`, `addNodeMenu(fn)`,
   `setValueProvider(fn)`.
 - Test: `verify/visual-script-debug.mjs` (ports 9082-9084, fixture `verify/fixtures/visual-script-debug`).
+
+- Python files as visual scripts (`python/py2flow.py`, `visual-script:fromPython(req: {root, interp, source})` ->
+  `{ok, graph, lines: {nodeId: [first, last line]}, statements, fallback}` or `{ok: false, error: {message, line?},
+  reason?}`; the text is parsed with `ast` in the project interpreter, `-I`, never run, and refused in Safe Mode): Show as
+  Visual Script (`VisualScript.ShowAsFlow`, the editor context menu of a .py file, the project tree) opens a read-only
+  canvas of the file in a tab to the right (`mountEditor(host, {..., readOnly: true})`: no Add Node, read-only fields,
+  nodes select and the view pans and zooms, but a drag, a wire, Delete, a paste, Ctrl+Z or a double-click change
+  nothing). It follows the document 500 ms after typing stops; a syntax error dims the last graph and the note names
+  the line. Selecting a node puts the caret on its first line in the .py editors, and a click in the editor selects the
+  node of its line. Closing the file closes its preview. Convert to Visual Script… (`VisualScript.ConvertFromPython`,
+  the preview's button, the tree) writes `<name>.pyflow` next to the file (asks before overwriting, with a Local
+  History checkpoint), opens it and says how many statements stayed Python Code.
+- What becomes nodes: a statement becomes nodes only when the generated code does what it did, otherwise it is a
+  Python Code node with its own text (comments in it kept), so a converted file prints and exits as before. Set Variable
+  names are script variables, so a function's own variables become nodes only when no other scope uses those names and
+  the function is not recursive; functions with defaults, decorators, `*args`, `yield`, `global` or a name the
+  generated code uses (`main`) stay Python Code. A loop variable used only in its body is wired from the loop; one used
+  after it starts the body with Set Variable. Module code runs inside `main()`, so names a Python Code node binds there
+  (import, def, class) that a function made of nodes reads, or a `global` statement names, are declared `global` in a
+  Python Code node right after Start. `input()` and calls of functions made of nodes become steps of their own (Ask
+  User, Call Function) only when nothing with a side effect would then run in another order (`x = int(input())`, not
+  `total += f(x)`). Other calls are Call Python without a module (`bump()`, `p.move(1)`, `print(a, b)`) or a Python
+  Expression. Float literals that Number fields would print differently (`1.0`, `1e20`) and integers beyond 2^53 stay
+  Python Expressions. Standalone comment lines and docstrings become Comment nodes. Layout: steps in a column per block
+  depth, the values wired into a step to its left.
+- If has a third run-order output, Done, as loops have: the steps after the if statement.
+- Tests: `verify/visual-script-from-python.mjs` (pure Node with the system Python: programs converted, compiled and run
+  with the same output and exit code as the original, which statements stay Python Code, line ranges, comments, layout,
+  a syntax error, and every fixture .py of the suites converting without problems); `verify/visual-script-preview.mjs`
+  (ports 9068-9069, fixture `verify/fixtures/visual-script-preview`: the menus, the read-only canvas with real input,
+  both ways of selecting, typing and a syntax error, Convert and the overwrite question, closing, Korean).
 
 `verify/visual-script-editor.mjs`, `verify/visual-script.mjs`, `verify/visual-script-project.mjs` and `verify/visual-script-debug.mjs` take `--viewport=1008x681` to emulate CI's 1024x768 screen (inner 1008x681, canvas 647x263); run both sizes before pushing changes to the editor.
 

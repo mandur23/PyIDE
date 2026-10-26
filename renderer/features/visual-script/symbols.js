@@ -34,6 +34,7 @@
     const pick = cur && !cur.target ? cur : (ide.interps || []).find((i) => !i.target && i.cmd);
     return pick ? { cmd: pick.cmd, args: pick.args || [] } : null;
   }
+  VS.localInterp = localInterp;
   const enabled = () => !!(ide && ide.root && ide.trusted !== false);
 
   function setProject(list) {

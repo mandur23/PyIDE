@@ -96,6 +96,10 @@
     ed.focus();
     ed.trigger('menu', handler, null);
   };
+  const pasteInto = async (ed) => {
+    const text = await ide.api.invoke('clipboard:readText');
+    if (ed && text) { ed.focus(); ed.trigger('menu', 'type', { text }); }
+  };
   function toolWindowItems() {
     return [...ide.toolWindows.values()].sort((a, b) => a.order - b.order)
       .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, disabled: !ide.root, run: () => tw.show() }));
@@ -305,7 +309,7 @@
     { id: 'Redo', title: tr('Redo'), run: editorCmd('redo') },
     { id: 'Cut', title: tr('Cut'), run: editorCmd('editor.action.clipboardCutAction') },
     { id: 'Copy', title: tr('Copy'), run: editorCmd('editor.action.clipboardCopyAction') },
-    { id: 'Paste', title: tr('Paste'), run: async () => { const t = await ide.api.invoke('clipboard:readText'); const ed = ide.editor; if (ed && t) { ed.focus(); ed.trigger('menu', 'type', { text: t }); } } },
+    { id: 'Paste', title: tr('Paste'), run: () => pasteInto(ide.editor) },
     { id: 'SelectAll', title: tr('Select All'), run: editorCmd('editor.action.selectAll') },
     { id: 'KeymapReference', title: tr('Keymap Reference'), run: () => ide.openSettings?.('keymap') },
   ].forEach(ide.registerAction);
@@ -314,6 +318,91 @@
     ide.actions.find((x) => x.id === id).menuHint = keys;
   }
   $('searchBtn').onclick = () => ide.runAction('SearchEverywhere');
+
+  // ---------- editor context menu ----------
+  // PyCharm's editor popup: the common actions at the top, the rest in submenus (Monaco's flat menu had grown past 30
+  // rows). An entry names the IDE action and the editor action that does the same in one editor ({ide, ed}): a tab's
+  // editor runs the IDE action (its key, Korean title and enablement), an embedded editor (a notebook cell, a viewer)
+  // the editor action, since IDE actions act on the active tab. Monaco registers the clipboard commands as no editor
+  // action, so those entries give `run(editor)` instead (`edits`: not in a read-only editor). `needs` names an editor
+  // action whose precondition the entry shares (Git: a repository). Items that do not apply are left out. Editor actions that plugins add with a contextMenuGroupId and that no entry names are listed at the end.
+  const EDITOR_MENU = () => [
+    { ide: 'ShowIntentionActions', ed: 'editor.action.quickFix' },
+    { separator: true },
+    { ide: 'Cut', edits: true, run: (ed) => ed.trigger('menu', 'editor.action.clipboardCutAction', null) },
+    { ide: 'Copy', run: (ed) => ed.trigger('menu', 'editor.action.clipboardCopyAction', null) },
+    { ide: 'Paste', edits: true, run: pasteInto },
+    { label: tr('Copy / Paste Special'), submenu: [{ ide: 'CopyPaths' }, { ide: 'PasteMultiple', ed: 'pyide.pasteFromHistory' }, { ide: 'CompareClipboardWithSelection', ed: 'pyide.compareWithClipboard' }] },
+    { separator: true },
+    { ide: 'FindUsages', ed: 'editor.action.goToReferences' }, { ide: 'FindSimilarCode', ed: 'pyide.semantic.findSimilar' },
+    { label: tr('Refactor'), submenu: [
+      { ide: 'RenameElement', ed: 'editor.action.rename' }, { ide: 'ChangeSignature' }, { ide: 'Move' }, { ide: 'Inline' }, { separator: true },
+      { ide: 'IntroduceVariable' }, { ide: 'IntroduceConstant' }, { ide: 'IntroduceParameter' }, { ide: 'ExtractMethod' }, { separator: true },
+      { ide: 'Refactorings.QuickListPopupAction' },
+    ] },
+    { label: tr('Folding'), submenu: [
+      { ide: 'ExpandRegion', ed: 'editor.unfold' }, { ide: 'CollapseRegion', ed: 'editor.fold' }, { ide: 'ExpandAllRegions', ed: 'editor.unfoldAll' }, { ide: 'CollapseAllRegions', ed: 'editor.foldAll' },
+    ] },
+    { label: tr('Go To'), submenu: [
+      { ide: 'GotoDeclaration', ed: 'editor.action.revealDefinition' }, { ide: 'GotoImplementation', ed: 'pyide.gotoImplementation' },
+      { ide: 'GotoTypeDeclaration', ed: 'editor.action.goToTypeDefinition' }, { ide: 'GotoSuperMethod', ed: 'pyide.gotoSuperMethod' }, { ide: 'GotoTest', ed: 'pyide.gotoTest' },
+      { separator: true },
+      { ide: 'QuickImplementations', ed: 'editor.action.peekDefinition' }, { ide: 'TypeHierarchy', ed: 'pyide.typeHierarchy' }, { ide: 'CallHierarchy', ed: 'pyide.callHierarchy' },
+    ] },
+    { label: tr('Generate'), submenu: [
+      { ide: 'OverrideMethods' }, { ide: 'ImplementMethods' }, { separator: true }, { ide: 'AiGenerate.WriteDocumentation' }, { ide: 'AiGenerate.GenerateTests' },
+    ] },
+    { separator: true },
+    { ide: 'RunClass' }, { ide: 'ExecuteInPyConsoleAction', ed: 'pyide.executeInConsole' },
+    { separator: true },
+    { label: tr('AI'), submenu: [
+      { ed: 'aiChat.askAboutSelection' }, { ide: 'AiEdit.InlineEdit' }, { ide: 'AiGenerate.Menu', ed: 'aiGenerate.menu' }, { ed: 'aiChat.open' },
+      { separator: true }, { ide: 'ClaudeCodeSendReference', ed: 'pyide.claude.sendReference' },
+    ] },
+    { label: tr('Bookmarks'), submenu: [
+      { ide: 'ToggleBookmark', ed: 'bookmarks.toggle' }, { ide: 'ToggleBookmarkWithMnemonic', ed: 'bookmarks.mnemonic' }, { ide: 'ShowBookmarks' },
+    ] },
+    { label: tr('Local History'), submenu: [
+      { ide: 'LocalHistory.ShowHistory', ed: 'localHistory.show', label: tr('Show History') }, { ide: 'LocalHistory.PutLabel', label: tr('Put Label…') },
+    ] },
+    { label: 'Git', needs: 'vcs.showHistory', submenu: [
+      { ed: 'vcs.annotate' }, { ed: 'vcs.closeAnnotations' }, { ide: 'Vcs.ShowTabbedFileHistory', ed: 'vcs.showHistory' }, { ide: 'Compare.SameVersion' }, { ide: 'Git.CompareWithBranch' },
+    ] },
+    { ide: 'ShowUmlDiagram', ed: 'pyide.showUmlDiagram' }, { ide: 'VisualScript.ShowAsFlow' },
+  ];
+  const menuEntryIds = (entries) => entries.flatMap((e) => (e.submenu ? menuEntryIds(e.submenu) : e.ed ? [e.ed] : []));
+
+  function editorMenuItems(ed) {
+    const inTab = ide.editors().includes(ed);
+    const editorAction = (id, label) => {
+      const a = id && ed.getAction(id);
+      return a && a.isSupported() ? { label: label || a.label, run: () => { ed.focus(); a.run(); } } : null;
+    };
+    const supported = (id) => ed.getAction(id)?.isSupported();
+    const item = (e) => {
+      if (e.separator) return e;
+      // An editor action's precondition (vcsRepo, a rename provider…) and an IDE action's `when` say whether it applies.
+      if ((e.needs && !supported(e.needs)) || (e.ed && ed.getAction(e.ed) && !supported(e.ed))) return null;
+      if (e.submenu) {
+        const sub = tidy(e.submenu.map(item));
+        return sub.length ? { label: e.label, submenu: sub } : null;
+      }
+      const a = inTab && e.ide && ide.actions.find((x) => x.id === e.ide);
+      if (a) return ide.actionEnabled(a) && (!a.when || a.when()) ? act(e.ide, e.label ? { label: e.label } : {}) : null;
+      if (e.run) {
+        const title = e.label || ide.actions.find((a) => a.id === e.ide)?.title;
+        if (!title || (e.edits && ed.getOption(ide.monaco.editor.EditorOption.readOnly))) return null;
+        return { label: title, run: () => { ed.focus(); e.run(ed); } };
+      }
+      return editorAction(e.ed, e.label);
+    };
+    const entries = EDITOR_MENU();
+    const named = new Set(menuEntryIds(entries));
+    const extras = (ide.editorMenuActions?.(ed) || []).filter((d) => !named.has(d.id))
+      .sort((a, b) => a.group.localeCompare(b.group) || (a.order ?? 0) - (b.order ?? 0)).map((d) => editorAction(d.id));
+    return tidy([...entries.map(item), { separator: true }, ...extras]);
+  }
+  ide.ui.editorContextMenu = (ed, x, y) => ide.ui.contextMenu(x, y, editorMenuItems(ed));
 
   ide.on('projectOpened', renderProjectWidget);
   ide.on('projectClosed', () => { renderProjectWidget(); renderWelcomeRecent(); });

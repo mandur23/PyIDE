@@ -3,7 +3,7 @@
 // animals/pets.py (Dog(Animal), Duck(Animal, Swimmer), Puppy(Dog), Kennel(Container[Dog])) and app.py
 // (RubberDuck(Duck)). Supertypes with multiple inheritance and generics, subtypes across files, the class at the caret
 // from a usage or from inside a method, navigation, the menus, Call Hierarchy in the same window, Korean. Ports 9032-9033.
-import { launch, openFile } from './lib.mjs';
+import { launch, menuRow, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const J = JSON.stringify;
@@ -115,9 +115,11 @@ try {
   await caret(6, 13);
   await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...(await js(`(() => { const p = ide.editor.getScrolledVisiblePosition({ lineNumber: 6, column: 13 }); const r = ide.editor.getDomNode().getBoundingClientRect(); return { x: r.left + p.left, y: r.top + p.top + 5 }; })()`)), button: 'right', clickCount: 1 });
   await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...(await js(`(() => { const p = ide.editor.getScrolledVisiblePosition({ lineNumber: 6, column: 13 }); const r = ide.editor.getDomNode().getBoundingClientRect(); return { x: r.left + p.left, y: r.top + p.top + 5 }; })()`)), button: 'right', clickCount: 1 });
-  const menuItem = `[...document.querySelectorAll('.shadow-root-host')].flatMap(h => [...(h.shadowRoot?.querySelectorAll('.action-label') || [])]).find(n => n.textContent.trim() === 'Type Hierarchy')`;
-  await until(`!!${menuItem}`, 'Type Hierarchy in the editor context menu', 8000)
-    .then(() => check(true, 'the editor context menu has Type Hierarchy'), () => check(false, 'the editor context menu has Type Hierarchy'));
+  await until(`!!${menuRow('Go To')}`, 'editor context menu', 8000);
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...(await js(`(() => { const r = ${menuRow('Go To')}.getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`)) });
+  await until(`!!${menuRow('Type Hierarchy', 1)}`, 'Type Hierarchy in the editor context menu', 8000)
+    .then(() => check(true, 'the editor context menu has Go To › Type Hierarchy'), () => check(false, 'the editor context menu has Go To › Type Hierarchy'));
+  await press('Escape');
   await press('Escape');
   await caret(6, 12);
   await press('Ctrl+Alt+H'); // Call Hierarchy of speak in the same window

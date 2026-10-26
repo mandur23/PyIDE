@@ -456,4 +456,143 @@
   }
 
   ide.registerFileViewer({ id: 'visual-script', icon: '🧩', text: true, match: isScript, mount });
+
+  // ---------- a .py file as a visual script: the preview and Convert to Visual Script ----------
+  // python/py2flow.py reads the file (the open document's text) with `ast` in the project interpreter and lays it out
+  // as a graph; statements the graph cannot run the same way stay Python Code nodes, so a converted file runs as before.
+  const isPython = (p) => /\.pyw?$/i.test(p || '');
+  const activePythonPath = () => { const t = ide.activeTab(); return t?.kind === 'file' && isPython(t.path) ? t.path : null; };
+  async function pythonGraph(path) {
+    const interp = VS.localInterp?.();
+    if (!interp) return { ok: false, error: { message: tr('No Python interpreter found.') } };
+    const source = ide.getDocument(path)?.model.getValue() ?? await ide.api.read(path);
+    return ide.api.invoke('visual-script:fromPython', { root: ide.root, interp, source })
+      .catch((err) => ({ ok: false, error: { message: ide.util.errorText(err) } }));
+  }
+  const problemText = (r) => (r.reason === 'untrusted' ? tr('Trust the project to show its Python files as visual scripts.')
+    : r.error?.line ? tr('Line {line}: {message}', { line: r.error.line, message: r.error.message }) : r.error?.message || tr('The file could not be read.'));
+  const fallbackText = (r) => (r.fallback
+    ? tr('{count} of {total} statements stay Python Code nodes, since nodes would not run them the same way.', { count: r.fallback, total: r.statements })
+    : tr('Every statement is a node.'));
+
+  async function convertToScript(path) {
+    const r = await pythonGraph(path);
+    if (!r.ok) { ide.ui.alert(problemText(r)); return null; }
+    const text = VS.serialize(VS.parse(JSON.stringify(r.graph)));
+    const target = joinPath(dirname(path), `${basename(path).replace(/\.pyw?$/i, '')}.pyflow`);
+    const existed = await ide.api.exists(target);
+    try {
+      if (existed) {
+        const ok = await ide.ui.confirm(tr('{name} already exists. Overwrite it?', { name: basename(target) }), { title: tr('Convert to Visual Script'), ok: tr('Overwrite') });
+        if (!ok) return null;
+        await ide.localHistory?.checkpoint('Before Convert to Visual Script', { paths: [target] });
+      }
+      await ide.api.write(target, ide.lineSeparators?.forNewFile(text) ?? text);
+    } catch (err) { ide.ui.alert(ide.util.errorText(err)); return null; }
+    if (existed) await ide.reloadFromDisk([target]);
+    await ide.refreshTree();
+    if (!existed) ide.emit('filesChanged', { created: [target] });
+    await ide.openFile(target);
+    ide.notifications?.notify({ title: tr('Converted {name} to {target}', { name: basename(path), target: basename(target) }), text: fallbackText(r), kind: r.fallback ? 'info' : 'ok', group: 'Visual Scripting' });
+    return target;
+  }
+
+  const PREVIEW = 'visual-script-preview:';
+  let previewModels = 0;
+  // The read-only canvas of a .py file, in its own tab beside it. It follows the file as it is typed; a node selects
+  // its lines in the editor, and the caret selects the node of its line.
+  function mountPreview(host, tab, path) {
+    const monaco = ide.monaco;
+    const model = monaco.editor.createModel('', 'json', monaco.Uri.parse(`pyide-visual-script-preview:/${++previewModels}/${nameOf(basename(path))}.pyflow`));
+    const view = VS.mountEditor(host, { doc: { model }, path: `${path}.pyflow`, tab, readOnly: true });
+    host.classList.add('vs-preview');
+    const note = el('span', 'vs-preview-note');
+    const convertBtn = el('button', 'vs-btn vs-convert', tr('Convert to Visual Script…'));
+    convertBtn.type = 'button';
+    convertBtn.title = tr('Write this file as {name} next to it', { name: `${basename(path).replace(/\.pyw?$/i, '')}.pyflow` });
+    convertBtn.addEventListener('click', () => convertToScript(path));
+    view.toolbar.append(convertBtn, note);
+    let lines = {};
+    let generation = 0;
+    let fitted = false;
+    async function update() {
+      const my = ++generation;
+      const r = await pythonGraph(path);
+      if (my !== generation || disposed) return;
+      host.classList.toggle('vs-preview-stale', !r.ok);
+      note.textContent = r.ok ? fallbackText(r) : problemText(r);
+      host.dataset.preview = r.ok ? 'ok' : r.reason || 'error';
+      if (!r.ok) return;
+      lines = r.lines || {};
+      const text = VS.serialize(VS.parse(JSON.stringify(r.graph)));
+      if (model.getValue() !== text) model.setValue(text);
+      // The canvas fitted the empty document it mounted with; the first graph is shown whole.
+      if (!fitted) { fitted = true; view.fit(); }
+      host.dataset.version = String((Number(host.dataset.version) || 0) + 1);
+    }
+    let timer = 0;
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(update, 500); };
+    const disposers = [];
+    const doc = ide.getDocument(path);
+    if (doc) disposers.push(doc.model.onDidChangeContent(schedule));
+    disposers.push(ide.on('interpreterChanged', schedule));
+    const editorsOf = () => (doc ? ide.editors().filter((e) => e.getModel() === doc.model) : []);
+    // The node whose lines hold `line` most closely (a statement's step before the values inside it).
+    const nodeAt = (line) => Object.entries(lines).filter(([, [a, b]]) => a <= line && line <= b)
+      .sort(([, [a1, b1]], [, [a2, b2]]) => (b1 - a1) - (b2 - a2) || a2 - a1)[0]?.[0];
+    let fromEditor = false;
+    disposers.push(view.onSelect((ids) => {
+      if (fromEditor || ids.length !== 1 || !lines[ids[0]]) return;
+      const [a, b] = lines[ids[0]];
+      for (const ed of editorsOf()) {
+        ed.setSelection(new monaco.Selection(a, 1, a, 1));
+        ed.revealLinesInCenterIfOutsideViewport(a, b);
+      }
+    }));
+    disposers.push(ide.onEditor((ed) => {
+      const sub = ed.onDidChangeCursorPosition((e) => {
+        if (!doc || ed.getModel() !== doc.model || !ed.hasTextFocus() || e.source === 'api') return;
+        const id = nodeAt(e.position.lineNumber);
+        if (!id) return;
+        fromEditor = true;
+        try { view.select([id]); view.revealNode(id); } finally { fromEditor = false; }
+      });
+      disposers.push(sub);
+    }));
+    let disposed = false;
+    tab.preview = { view, update, lines: () => lines, path };
+    // The core calls a custom tab's dispose when it closes.
+    tab.dispose = () => {
+      disposed = true;
+      clearTimeout(timer);
+      for (const d of disposers) (typeof d === 'function' ? d() : d.dispose());
+      view.dispose();
+      model.dispose();
+    };
+    update();
+  }
+  async function showPreview(path) {
+    const id = PREVIEW + ide.util.pathKey(path);
+    if (ide.findTab(id)) return ide.openCustomTab({ id });
+    await loaded;
+    return ide.openCustomTab({
+      id, title: tr('{name} (Visual Script)', { name: basename(path) }), icon: '🧩', group: 'right',
+      mount: (host, tab) => mountPreview(host, tab, path),
+    });
+  }
+  ide.on('fileClosed', (path) => { if (path && isPython(path)) ide.closeTab(PREVIEW + ide.util.pathKey(path), true); });
+
+  ide.registerAction({
+    id: 'VisualScript.ShowAsFlow', title: tr('Show as Visual Script'), context: 'editor',
+    when: () => !!activePythonPath() && !!ide.root, run: () => { const p = activePythonPath(); if (p) showPreview(p); },
+  });
+  ide.registerAction({
+    id: 'VisualScript.ConvertFromPython', title: tr('Convert to Visual Script…'),
+    when: () => !!activePythonPath() && !!ide.root, run: () => { const p = activePythonPath(); if (p) convertToScript(p); },
+  });
+  const pythonEntry = (e) => !e.dir && isPython(e.name) && !!ide.root;
+  ide.registerTreeAction({ title: tr('Show as Visual Script'), when: pythonEntry, run: async (e) => { await ide.openFile(e.path); showPreview(e.path); } });
+  ide.registerTreeAction({ title: tr('Convert to Visual Script…'), when: pythonEntry, run: (e) => convertToScript(e.path) });
+  VS.showPreview = showPreview;
+  VS.convertToScript = convertToScript;
 })();

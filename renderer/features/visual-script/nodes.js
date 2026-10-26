@@ -169,9 +169,10 @@
   });
   reg({
     type: 'flow.if', category: 'Flow', title: 'If',
-    description: 'Runs Then when the condition is true, otherwise Else.',
+    description: 'Runs Then when the condition is true, otherwise Else, and then Done.',
     keywords: 'branch condition else 만약 조건 분기',
-    exec: { in: true, out: [{ id: 'then', label: 'Then' }, { id: 'else', label: 'Else' }] },
+    // Done, as a loop's: the steps after the if statement (a converted .py has them).
+    exec: { in: true, out: [{ id: 'then', label: 'Then' }, { id: 'else', label: 'Else' }, { id: 'done', label: 'Done' }] },
     inputs: [{ id: 'cond', label: 'Condition', type: 'bool' }],
     compile: {
       stmt(c) {
@@ -181,7 +182,7 @@
           c.line('else:');
           c.block('else');
         }
-        return null;
+        return 'done';
       },
     },
   });

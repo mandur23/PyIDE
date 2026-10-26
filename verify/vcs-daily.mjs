@@ -11,7 +11,7 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, lensesShown, openFile } from './lib.mjs';
+import { clickMenuPath, launch, lensesShown, menuRow, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -82,9 +82,6 @@ function helpers(t) {
   }
   const popupOpen = `!document.querySelector('#popup').classList.contains('hidden')`;
   const menuItem = (label) => `[...document.querySelectorAll('.context-menu .menu-item')].find(r => r.querySelector('.menu-label')?.textContent === ${q(label)})`;
-  // Monaco's own context menu may live in a shadow root.
-  const monacoItem = (label) => `(() => { const roots = [document, ...[...document.querySelectorAll('*')].filter(e => e.shadowRoot).map(e => e.shadowRoot)];
-    for (const r of roots) for (const a of r.querySelectorAll('.monaco-menu .action-label')) if (a.textContent.trim() === ${q(label)}) return a; return null; })()`;
   const dialog = (title) => `[...document.querySelectorAll('.dialog')].find(d => d.querySelector('.dialog-title').textContent === ${q(title)})`;
   const dialogButton = (title, label) => `[...${dialog(title)}?.querySelectorAll('.dialog-buttons button') || []].find(b => b.textContent === ${q(label)})`;
   const noteWith = (text) => `[...document.querySelectorAll('.vcs-note')].find(n => n.textContent.includes(${q(text)}))`;
@@ -104,19 +101,19 @@ function helpers(t) {
     await t.press('ArrowRight');
     await until(`!!document.querySelector('#vcsBranchMenu') && !document.querySelector('#popup:not(.hidden)')`, `branch menu of ${name}`);
   }
-  // Right-click in the editor's text until Monaco's context menu shows `label` (a click while code lenses still move
-  // the lines can land outside the text).
-  async function editorMenu(label) {
+  // Right-click in the editor's text until its context menu shows `path` (a click while code lenses still move the
+  // lines can land outside the text), then click it.
+  async function editorMenu(path) {
     await until(lensesShown(), 'code lenses shown');
     for (let i = 0; ; i++) {
       await frame();
       const box = await js(`(() => { const r = document.querySelector('#editor .view-line').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8 }; })()`);
       for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'right', clickCount: 1 });
-      try { return await until(`!!${monacoItem(label)}`, `editor context menu item ${label}`, 5000); } catch (err) { if (i === 2) throw err; }
+      try { await until(`!!${menuRow(path[0])}`, `editor context menu item ${path[0]}`, 5000); return clickMenuPath(t, path); } catch (err) { if (i === 2) throw err; }
       await t.press('Escape');
     }
   }
-  return { frame, until, mouse, editorMenu, popupOpen, menuItem, monacoItem, dialog, dialogButton, noteWith, logSubjects, logRow, diffTexts, tabDiff, branchPopup, branchMenu };
+  return { frame, until, mouse, editorMenu, popupOpen, menuItem, dialog, dialogButton, noteWith, logSubjects, logRow, diffTexts, tabDiff, branchPopup, branchMenu };
 }
 
 async function untilNode(fn, label, ms = 15000) {
@@ -290,8 +287,7 @@ try {
   // ---------- Show History ----------
   await openFile(t, 'mathx.py');
   const mathx = path.join(project, 'mathx.py');
-  await h.editorMenu('Git: Show History');
-  await mouse(h.monacoItem('Git: Show History'), { label: 'Git: Show History' });
+  await h.editorMenu(['Git', 'Show History']);
   const HISTORY = 'Extend mathx|Rename calc to mathx|Tweak calc|Add calc';
   await until(`ide.toolWindows.get('Git').isVisible() && ${h.logSubjects} === ${q(HISTORY)}`, 'file history', 20000);
   check(await js(`!document.querySelector('#vcsLogPath').classList.contains('hidden') && document.querySelector('#vcsLogPath .vcs-log-path-name').textContent === 'mathx.py'`),
@@ -473,8 +469,7 @@ try {
   k.check(await k.js(`[...${hk.noteWith('wip 브랜치를 삭제했습니다')}.querySelectorAll('.ide-balloon-action')].some(b => b.textContent === '복원')`), 'the deleted-branch notification offers 복원');
 
   await openFile(k, 'mathx.py');
-  await hk.editorMenu('Git: 기록 표시');
-  await hk.mouse(hk.monacoItem('Git: 기록 표시'), { label: 'ko Git: 기록 표시' });
+  await hk.editorMenu(['Git', '기록 표시']);
   await hk.until(`${hk.logSubjects} === 'Extend mathx|Rename calc to mathx|Tweak calc|Add calc' && !!document.querySelector('.vcs-history-diff')?._vcsDiff`, 'ko history', 20000);
   k.check(await k.js(`document.querySelector('#vcsLogPath').textContent.startsWith('경로:') && document.querySelector('#vcsLogPath .vcs-log-path-close').title === '모든 커밋 표시'`), 'the Path filter reads in Korean');
   const chip = await k.js(`(() => { const b = document.querySelector('.vcs-log-bar').getBoundingClientRect(); const c = document.querySelector('#vcsLogPath').getBoundingClientRect(); return c.right <= b.right + 0.5 && c.height < 28; })()`);

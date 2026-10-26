@@ -220,6 +220,19 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     return result;
   });
 
+  // A .py file as a graph (python/py2flow.py: parsed with `ast`, never run), for the preview and Convert to Visual
+  // Script. req: {root, interp, source} -> {ok: true, graph, lines, statements, fallback} | {ok: false, error, reason?}
+  const fromPython = path.join(unpackedDir, 'renderer', 'features', 'visual-script', 'python', 'py2flow.py');
+  ipcMain.handle('visual-script:fromPython', async (_e, req) => {
+    const root = typeof req?.root === 'string' && path.isAbsolute(req.root) ? path.resolve(req.root) : null;
+    if (!root || !trust.isTrusted(root)) return { ok: false, reason: 'untrusted', error: { message: 'The project is not trusted.' } };
+    if (!validInterp(req.interp)) return { ok: false, reason: 'interpreter', error: { message: 'No Python interpreter' } };
+    if (typeof req.source !== 'string' || req.source.length > MAX_BYTES) return { ok: false, reason: 'size', error: { message: 'The file is larger than 1 MB.' } };
+    const r = await runHelper(fromPython, req.interp, [], { input: req.source, timeoutMs: MODULE_MS });
+    if (r.timedOut) return { ok: false, reason: 'timeout', error: { message: `Reading the file took longer than ${MODULE_MS / 1000} seconds.` } };
+    return marked(r.stdout) || { ok: false, reason: 'error', error: { message: r.stderr.trim().split(/\r?\n/).pop() || `exit code ${r.code}` } };
+  });
+
   // Installed packages changed (pip install, another interpreter's venv): describe modules again when asked.
   ipcMain.handle('visual-script:forgetPackages', () => { modules.clear(); packageLists.clear(); return true; });
 };

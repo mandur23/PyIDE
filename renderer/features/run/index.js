@@ -844,7 +844,7 @@
   runBtn.onclick = runSelected;
   stopBtn.onclick = stop;
   ide.registerAction({ id: 'Run', title: tr('Run'), keys: 'Shift+F10', run: runSelected });
-  ide.registerAction({ id: 'RunClass', title: tr('Run Context Configuration'), keys: 'Ctrl+Shift+F10', run: () => {
+  ide.registerAction({ id: 'RunClass', title: tr('Run Context Configuration'), keys: 'Ctrl+Shift+F10', when: () => !!currentPyFile(), run: () => {
     const file = currentPyFile();
     if (file) runContext(contextConfigForFile(file));
   } });

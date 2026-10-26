@@ -307,3 +307,17 @@ export async function openFile(ctx, relPath) {
   await ctx.js(`ide.openFile(ide.util.joinPath(ide.root, ${JSON.stringify(relPath.replace(/\//g, '\\'))}))`);
   await ctx.until(`ide.activeTab()?.path.toLowerCase().endsWith(${JSON.stringify(relPath.replace(/\//g, '\\').toLowerCase())})`, `tab ${relPath}`);
 }
+
+// A row of the open IDE context menu (ide.ui.contextMenu, also the editor's): `level` 0 is the menu, 1 its submenu.
+export const menuRow = (label, level = 0) => `[...document.querySelectorAll('.context-menu[data-level="${level}"] > .menu-item')].find((r) => r.querySelector('.menu-label')?.textContent === ${JSON.stringify(label)})`;
+
+// Moves the pointer onto each submenu of `path` in the open context menu, as a user does, and clicks its last item:
+// clickMenuPath(t, ['Git', 'Show History']).
+export async function clickMenuPath(ctx, path) {
+  for (const [level, label] of path.entries()) {
+    await ctx.until(`!!${menuRow(label, level)}`, `menu item ${path.slice(0, level + 1).join(' › ')}`);
+    const p = await ctx.js(`(() => { const r = ${menuRow(label, level)}.getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`);
+    await ctx.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+    if (level === path.length - 1) for (const type of ['mousePressed', 'mouseReleased']) await ctx.cdp('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  }
+}

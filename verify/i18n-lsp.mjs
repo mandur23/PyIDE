@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { launch, menuRow, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -141,16 +141,18 @@ try {
   check(await textOf(overlayMessage) === '이 요소는 이름을 변경할 수 없습니다', `rename on a keyword is refused in Korean (${await textOf(overlayMessage)})`);
   await press('Escape');
 
-  // ---- editor context menu (Monaco's NLS bundle) ----
+  // ---- editor context menu ----
   await caret(6, 25);
   const pos = await js(`(() => { const v = ide.editor.getScrolledVisiblePosition({ lineNumber: 6, column: 25 }); const r = ide.editor.getDomNode().getBoundingClientRect(); return { x: r.left + v.left + 2, y: r.top + v.top + v.height / 2 }; })()`);
   for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: pos.x, y: pos.y, button: 'right', clickCount: 1 });
-  // Monaco renders its context menu inside a shadow root, out of reach of englishLeaks().
-  const menuLabels = `[...document.querySelectorAll('.shadow-root-host')].flatMap(h => [...(h.shadowRoot?.querySelectorAll('.action-label') || [])]).map(n => n.textContent.trim()).filter(Boolean)`;
-  await until(`${menuLabels}.length > 3`, 'editor context menu');
-  const menu = await js(menuLabels);
-  check(menu.some((l) => /정의로 이동/.test(l)) && menu.every((l) => /[가-힣]/.test(l)), `editor context menu is Korean (${menu.join(', ')})`);
+  await until(`!!${menuRow('이동')}`, 'editor context menu');
+  await noLeaks('.context-menu', 'editor context menu');
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...(await js(`(() => { const r = ${menuRow('이동')}.getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`)) });
+  await until(`!!${menuRow('선언 또는 사용 위치로 이동', 1)}`, 'Go To submenu in Korean')
+    .then(() => check(true, "the editor context menu's Go To submenu is Korean"), () => check(false, "the editor context menu's Go To submenu is Korean"));
+  await noLeaks('.context-menu', 'editor context menu with Go To open');
   await shot('context-menu.png');
+  await press('Escape');
   await press('Escape');
 
   // ---- actions (Find Action) ----

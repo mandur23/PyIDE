@@ -208,3 +208,10 @@
 .vs-export-input { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; padding: 4px 6px; border: 1px solid var(--gray5);
   border-radius: 3px; background: var(--gray1); color: var(--gray12); }
 .vs-export-input.vs-invalid { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+
+/* The read-only preview of a .py file: a note on what stays Python Code, and the last good graph dimmed while the
+   file does not parse. */
+.vs-preview-note { margin-left: 8px; color: var(--gray9); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.vs-preview-stale .vs-canvas { opacity: 0.55; }
+.vs-preview-stale .vs-preview-note { color: var(--red); }
+.vs-readonly .vs-field { cursor: default; }

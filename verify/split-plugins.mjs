@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch, lensesShown, openFile } from './lib.mjs';
+import { clickMenuPath, launch, lensesShown, menuRow, openFile } from './lib.mjs';
 
 // Isolate git from the user's global/system config, as verify/vcs.mjs does.
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-split-git-'));
@@ -56,9 +56,6 @@ const caretOf = (i) => js(`(() => { const p = ${ed(i)}.getPosition(); return p &
 const fileOf = (i) => js(`(() => { const m = ${ed(i)}.getModel(); return m ? m.uri.path.split('/').pop() : null; })()`);
 const bpLines = () => js(`window.__debugger.breakpoints().filter(b => b.path.endsWith('main.py')).map(b => b.line).join()`);
 const menuItems = () => js(`[...document.querySelectorAll('.context-menu .menu-item')].map(n => n.textContent)`);
-// Monaco's context menu may live in a shadow root.
-const monacoMenuItem = (label) => `(() => { const roots = [document, ...[...document.querySelectorAll('*')].filter(e => e.shadowRoot).map(e => e.shadowRoot)];
-  for (const r of roots) for (const a of r.querySelectorAll('.monaco-menu .action-label')) if (a.textContent.trim() === ${q(label)}) return a; return null; })()`;
 
 try {
   // ---- split right, then work in the right pane ----
@@ -164,18 +161,17 @@ try {
 
   const tp = await textPoint(RIGHT, 2, 1);
   await mouseAt(tp, 'right');
-  await until(`!!${monacoMenuItem('Annotate with Git Blame')}`, 'annotate in right pane context menu');
-  check(await js(`!${monacoMenuItem('Annotate with Git Blame')}.closest('.action-item').classList.contains('disabled')`), 'the right pane\'s context menu offers an enabled "Annotate with Git Blame"');
+  await until(`!!${menuRow('Git')}`, 'Git in the right pane context menu');
   const before = await js(`${ed(RIGHT)}.getLayoutInfo().decorationsWidth`);
-  await mouseAt(await js(`(() => { const r = ${monacoMenuItem('Annotate with Git Blame')}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`));
+  await clickMenuPath(t, ['Git', 'Annotate with Git Blame']);
+  check(true, "the right pane's context menu offers Git › Annotate with Git Blame");
   await until(`${count(RIGHT, '.vcs-blame')} >= 3`, 'blame in right pane');
   check(await js(`${ed(RIGHT)}.getLayoutInfo().decorationsWidth`) > before + 30, 'annotating from the right pane widens its gutter');
   check(await js(`${count(LEFT, '.vcs-blame')} >= 3 && ${ed(LEFT)}.getLayoutInfo().decorationsWidth > ${before} + 30`), 'the left pane, showing the same file, is annotated and widened too');
   await shot('split-blame.png');
   // The text moved right with the wider gutter.
   await mouseAt(await textPoint(RIGHT, 2, 1), 'right');
-  await until(`!!${monacoMenuItem('Close Annotations')}`, 'close annotations item');
-  await mouseAt(await js(`(() => { const r = ${monacoMenuItem('Close Annotations')}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`));
+  await clickMenuPath(t, ['Git', 'Close Annotations']);
   await until(`${count(RIGHT, '.vcs-blame')} === 0 && ${count(LEFT, '.vcs-blame')} === 0`, 'annotations closed');
   check(true, 'Close Annotations from the right pane clears both panes');
 

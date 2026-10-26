@@ -126,6 +126,10 @@ input, select, textarea { font: inherit; }
 /* Monaco outlines a focused editor in the theme's focusBorder blue (a 1px frame around the whole pane, bright in the
    Light theme); PyCharm's editor shows focus by its caret and current line only. */
 .editor-host > .monaco-editor { outline: none; }
+/* Monaco puts a button's tooltip in the editor's container and places it from its measured size. Absolutely
+   positioned, it is only as wide as the room left before the container's right edge, so a tooltip near that edge (the
+   find widget's Close) wrapped to two lines after it was placed, grew over the button and blinked on and off. */
+.context-view:has(.workbench-hover) { width: max-content !important; }
 .custom-host { pointer-events: none; }
 .group-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; color: var(--gray9); pointer-events: none; }

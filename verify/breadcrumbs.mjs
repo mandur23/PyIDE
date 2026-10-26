@@ -3,7 +3,7 @@
 // app.py main/report -> shapes.compute -> scale/offset. Ports 9930-9931.
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
-import { launch, openFile } from './lib.mjs';
+import { clickMenuPath, launch, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const J = JSON.stringify;
@@ -186,18 +186,12 @@ try {
   await caret(9, 2);
   const at = await js(`(() => { const v = ide.editor.getScrolledVisiblePosition({ lineNumber: 9, column: 2 }); const r = ide.editor.getDomNode().getBoundingClientRect(); return { x: r.left + v.left + 2, y: r.top + v.top + v.height / 2 }; })()`);
   for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'right', clickCount: 1 });
-  const menuItem = `[...document.querySelectorAll('.shadow-root-host')].flatMap(h => [...(h.shadowRoot?.querySelectorAll('.action-label') || [])]).find(n => n.textContent.trim() === 'Call Hierarchy')`;
-  await until(`!!${menuItem}`, 'Call Hierarchy in the editor context menu', 8000).catch(() => {});
-  const item = await js(`(() => { const n = ${menuItem}; if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
-  check(!!item, 'the editor context menu has Call Hierarchy');
+  const item = await clickMenuPath(t, ['Go To', 'Call Hierarchy']).then(() => true, () => false);
+  check(item, 'the editor context menu has Go To › Call Hierarchy');
   if (item) {
-    // Monaco's menu ignores a click that arrives without the pointer having moved onto the item.
-    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: item.x, y: item.y });
-    await sleep(300);
-    for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: item.x, y: item.y, button: 'left', clickCount: 1 });
     await until(`document.querySelector('#nbCallTree .nb-ch-row[data-depth="0"]')?.dataset.name === 'report'`, 'hierarchy of report', 10000).catch(() => {});
     const rootName = await js(`document.querySelector('#nbCallTree .nb-ch-row[data-depth="0"]')?.dataset.name`);
-    check(rootName === 'report', `from inside report() the context menu roots the tree at report (${rootName} at ${J(await pos())}, menu open: ${await js(`!!${menuItem}`)})`);
+    check(rootName === 'report', `from inside report() the context menu roots the tree at report (${rootName} at ${J(await pos())}, menu open: ${await js(`!!document.querySelector('.context-menu')`)})`);
   }
 
   // ---- no layout loops, no exceptions ----

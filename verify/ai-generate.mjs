@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { clickMenuPath, launch, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const require = createRequire(import.meta.url);
@@ -194,7 +194,7 @@ async function helpers(t) {
       }
       return false;
     },
-    // Right-click on the caret's line opens Monaco's context menu.
+    // Right-click on the caret's line opens the editor's context menu.
     async contextMenu(line) {
       await frame();
       const pt = await js(`(() => { const ed = ide.editor; const p = ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: 5 }); const r = ed.getDomNode().getBoundingClientRect();
@@ -260,7 +260,7 @@ let failedApp = false;
     await js(`(ide.settings.set('python.docstringFormat', 'restructuredtext'), true)`);
     const classLine = await h.caret('class Rect', 7);
     await h.contextMenu(classLine);
-    await h.clickText('.monaco-menu .action-label', 'AI Actions…');
+    await clickMenuPath(t, ['AI', 'AI Actions…']);
     await until(`[...document.querySelectorAll('.context-menu .menu-item')].some((n) => n.textContent.includes('Write Documentation'))`, 'AI Actions popup');
     await h.clickText('.context-menu .menu-item', 'Write Documentation');
     await until(`ide.aiEdit.session()?.phase === 'reviewing'`, 'class docstring review', 20000);
@@ -375,7 +375,7 @@ let failedApp = false;
     await openFile(t, 'shapes.py');
     const checkedLine = await h.caret('def checked', 6);
     await h.contextMenu(checkedLine);
-    await h.clickText('.monaco-menu .action-label', 'AI Actions…');
+    await clickMenuPath(t, ['AI', 'AI Actions…']);
     await until(`[...document.querySelectorAll('.context-menu .menu-item')].some((n) => n.textContent.includes('Generate Unit Tests'))`, 'AI Actions popup (tests)');
     await h.clickText('.context-menu .menu-item', 'Generate Unit Tests');
     await until(`!!document.querySelector('.aig-preview .aig-write')`, 'preview 2', 20000);
@@ -501,7 +501,7 @@ let failedApp = false;
     const n0 = calls().length;
     const line = await h.caret('def area(', 6);
     await h.contextMenu(line);
-    await h.clickText('.monaco-menu .action-label', 'AI Actions…');
+    await clickMenuPath(t, ['AI', 'AI Actions…']);
     await until(`[...document.querySelectorAll('.context-menu .menu-item')].some((n) => n.textContent.includes('Write Documentation'))`, 'AI Actions popup (safe)');
     check(await js(`[...document.querySelectorAll('.context-menu .menu-item')].filter((n) => /Write Documentation|Generate Unit Tests/.test(n.textContent)).every((n) => n.classList.contains('disabled') && n.textContent.includes('Safe Mode'))`),
       'in Safe Mode the AI Actions are disabled with a note');

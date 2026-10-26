@@ -55,7 +55,9 @@
   let datalistSeq = 0;
   const typeName = (type) => (VS.typeLabel ? VS.typeLabel(type) : type);
 
-  function mountEditor(host, { doc, path, tab }) {
+  // readOnly: a view that edits nothing (the preview of a .py file): nodes select and the view pans and zooms, but no
+  // node, wire or value changes, and the document is never written.
+  function mountEditor(host, { doc, path, tab, readOnly = false }) {
     const monaco = root.ide?.monaco || root.monaco;
     const model = doc.model;
     const fileName = path.split(/[\\/]/).pop();
@@ -73,9 +75,9 @@
       return b;
     };
     const zoomLabel = button('vs-zoom-label', '100%', tr('Reset Zoom (Ctrl+0)'), () => zoomTo(1));
+    if (readOnly) host.classList.add('vs-readonly');
     bar.append(
-      button('vs-add', tr('Add Node'), tr('Add a node (Tab or double-click the canvas)'), () => openPalette(centerPoint())),
-      h('span', 'vs-sep'),
+      ...(readOnly ? [] : [button('vs-add', tr('Add Node'), tr('Add a node (Tab or double-click the canvas)'), () => openPalette(centerPoint())), h('span', 'vs-sep')]),
       button('vs-fit', tr('Fit'), tr('Fit all nodes in the view'), () => fit()),
       button('vs-zoom-out', '−', tr('Zoom Out'), () => zoomBy(1 / 1.2)),
       zoomLabel,
@@ -265,7 +267,7 @@
       root.ide.renderTabs?.();
     }
     function commit(next, { select: ids } = {}) {
-      if (!next || next === graph || invalid) return false;
+      if (readOnly || !next || next === graph || invalid) return false;
       const text = VS.serialize(next);
       graph = next;
       if (text !== lastText) {
@@ -428,6 +430,7 @@
         c.indeterminate = value === undefined;
         c.title = pinLabel(node, pin);
         c.addEventListener('change', () => commit(VS.setInputLiteral(graph, node.id, pin.id, c.checked)));
+        c.disabled = readOnly;
         return c;
       }
       if (!['any', 'number', 'int', 'string'].includes(type)) return null;
@@ -456,6 +459,7 @@
         if (!r.ok) { f.value = shown; f.classList.remove('vs-invalid'); return; }
         commit(VS.setInputLiteral(graph, node.id, pin.id, r.v));
       });
+      f.readOnly = readOnly;
       return f;
     }
     function propField(node, prop) {
@@ -527,6 +531,7 @@
         });
       }
       f.title ||= tr(prop.label || prop.id);
+      if (readOnly) { if (f.tagName === 'SELECT' || f.type === 'checkbox') f.disabled = true; else f.readOnly = true; }
       label.appendChild(f);
       return label;
     }
@@ -1184,6 +1189,12 @@
         return;
       }
       if (e.button !== 0) return;
+      if (readOnly) {
+        e.preventDefault();
+        if (nodeEl) select([nodeEl.dataset.id], { add: e.shiftKey || e.ctrlKey });
+        else gesture = { kind: 'box', x: e.clientX, y: e.clientY, add: e.shiftKey || e.ctrlKey, base: new Set(selection), moved: false };
+        return;
+      }
       if (e.altKey && (pinNode || hit)) {
         e.preventDefault();
         if (pinNode) {
@@ -1338,14 +1349,14 @@
 
     canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (suppressMenu || invalid) { suppressMenu = false; return; }
+      if (suppressMenu || invalid || readOnly) { suppressMenu = false; return; }
       if (isField(e.target)) return;
       const nodeEl = e.target.closest('.vs-node');
       if (nodeEl) nodeMenu(e, nodeEl.dataset.id);
       else canvasMenu(e);
     });
     canvas.addEventListener('dblclick', (e) => {
-      if (invalid || isField(e.target) || e.target === panSheet) return;
+      if (invalid || readOnly || isField(e.target) || e.target === panSheet) return;
       const nodeEl = e.target.closest('.vs-node');
       if (nodeEl) { if (nodeEl.classList.contains('vs-comment')) editComment(nodeEl.dataset.id); return; }
       if (e.target.closest('.vs-pin')) return;
@@ -1441,6 +1452,7 @@
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       let run = null;
+      if (readOnly && (ctrl ? !['a', 'c', '0', '=', '+', '-'].includes(k) && e.code !== 'Digit0' : ['Delete', 'Backspace', 'Tab'].includes(k))) return;
       if (ctrl && !e.altKey) {
         if (k === 'z' && !e.shiftKey) run = () => model.undo();
         else if ((k === 'y' && !e.shiftKey) || (k === 'z' && e.shiftKey)) run = () => model.redo();

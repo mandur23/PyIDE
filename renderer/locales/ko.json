@@ -246,5 +246,14 @@
   "{name} no longer exists on disk. Save it again?": "{name}이(가) 디스크에 더 이상 없습니다. 다시 저장하시겠습니까?",
   "Save": "저장",
   "Some characters cannot be saved in CP949. Convert the file to UTF-8 first.": "일부 문자는 CP949로 저장할 수 없습니다. 먼저 파일을 UTF-8로 변환하세요.",
-  "{name} was not converted to {encoding}: PyIDE could not read the file back as text in that encoding when it is opened again.": "{name}을(를) {encoding}(으)로 변환하지 않았습니다: 다시 열 때 PyIDE가 이 인코딩의 텍스트로 파일을 읽을 수 없습니다."
+  "{name} was not converted to {encoding}: PyIDE could not read the file back as text in that encoding when it is opened again.": "{name}을(를) {encoding}(으)로 변환하지 않았습니다: 다시 열 때 PyIDE가 이 인코딩의 텍스트로 파일을 읽을 수 없습니다.",
+  "Copy / Paste Special": "특수 복사/붙여넣기",
+  "Folding": "접기",
+  "Go To": "이동",
+  "Generate": "생성",
+  "AI": "AI",
+  "Bookmarks": "북마크",
+  "Local History": "로컬 기록",
+  "Show History": "기록 표시",
+  "Put Label…": "레이블 넣기…"
 }

@@ -740,6 +740,8 @@ function showMenu(x, y, items, level, leftEdge) {
       setActiveRow(level, it.disabled ? null : row);
       clearTimeout(hoverTimer);
       hoverTimer = setTimeout(() => {
+        // An item clicked before its timer ran closed this menu; the timer must not close the next menu's submenu.
+        if (!menu.isConnected) return;
         if (it.submenu && !it.disabled) openSubmenu(level, row);
         else closeMenus(level + 1);
       }, it.submenu ? 120 : 200);
@@ -758,7 +760,7 @@ function showMenu(x, y, items, level, leftEdge) {
 
 ide.ui.contextMenu = (x, y, items) => {
   closeMenus(0);
-  showMenu(x, y, items, 0);
+  const root = showMenu(x, y, items, 0);
   const dismiss = (e) => { if (!e.target.closest?.('.context-menu')) closeMenus(0); };
   const keys = (e) => {
     if (!menusOpen()) return;
@@ -781,7 +783,8 @@ ide.ui.contextMenu = (x, y, items) => {
     handled();
   };
   setTimeout(() => {
-    if (!menuStack.length) return;
+    // A menu opened again before this task has its own handlers; these would never be removed (Up/Down moved twice).
+    if (menuStack[0]?.el !== root) return;
     addEventListener('mousedown', dismiss, true);
     addEventListener('keydown', keys, true);
     addEventListener('blur', ide.ui.closeMenus);

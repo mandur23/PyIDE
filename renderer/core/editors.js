@@ -641,14 +641,47 @@
   // handler holds the editor) in place when the editor is disposed, so every embedded editor that plugins added
   // actions to stayed in memory with its DOM: one per Markdown or HTML file opened, per notebook cell. They now go
   // with the editor.
+  // The context menu actions are remembered for the IDE's editor context menu (ide.ui.editorContextMenu in mainmenu.js),
+  // which replaces Monaco's.
+  const menuActions = new WeakMap(); // editor -> [{id, group, order}]
   function ownActions(ed) {
     const addAction = ed.addAction.bind(ed);
+    const listed = [];
+    menuActions.set(ed, listed);
     ed.addAction = (...args) => {
       const reg = addAction(...args);
+      const d = args[0];
+      if (d?.contextMenuGroupId) listed.push({ id: d.id, group: d.contextMenuGroupId, order: d.contextMenuOrder });
       if (reg?.dispose) ed.onDidDispose(() => reg.dispose());
       return reg;
     };
+    ed.updateOptions({ contextmenu: false });
+    // A right click outside the selection moves the caret there and focuses the editor before the items are chosen
+    // (Run Context Configuration, the actions' `when`); Monaco's context menu controller, even with the menu off, does
+    // the same, but only after this listener.
+    // Only the text area has the menu, as with Monaco's: the gutter's right click is the breakpoint's (debugger).
+    const { CONTENT_TEXT, CONTENT_EMPTY } = ide.monaco.editor.MouseTargetType;
+    ed.onContextMenu((e) => {
+      if (e.target.type !== CONTENT_TEXT && e.target.type !== CONTENT_EMPTY) return;
+      e.event.preventDefault();
+      const pos = e.target.position;
+      const sel = ed.getSelection();
+      if (pos && !(sel && !sel.isEmpty() && sel.containsPosition(pos))) ed.setPosition(pos);
+      ed.focus();
+      ide.ui.editorContextMenu?.(ed, e.event.browserEvent.clientX, e.event.browserEvent.clientY);
+    });
+    // The Menu key and Shift+F10 send a contextmenu event of no right button, placed at the start of the caret's line,
+    // where that controller would move the caret. Monaco never gets it, and the menu opens below the caret.
+    ed.getContainerDomNode().addEventListener('contextmenu', (e) => {
+      if (e.button === 2 || !ed.getDomNode()?.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const at = ed.getScrolledVisiblePosition(ed.getPosition());
+      const r = ed.getDomNode().getBoundingClientRect();
+      ide.ui.editorContextMenu?.(ed, r.left + (at?.left ?? 0), r.top + (at?.top ?? 0) + (at?.height ?? 0));
+    }, true);
   }
+  ide.editorMenuActions = (ed) => [...(menuActions.get(ed) || [])];
   const safe = (fn) => { try { fn(); } catch (err) { console.error(err); } };
 
   function findParent(node, target, parent = null) {
