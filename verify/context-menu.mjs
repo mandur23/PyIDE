@@ -2,11 +2,13 @@
 // in submenus), opened by a right click or the Menu key, with an opaque background in the dark and light themes, Korean
 // titles, the caret moved as Monaco moved it, and an embedded editor (a notebook cell) offering only its editor actions.
 // The compare view keeps Monaco's menu, which must still have a background. The find widget's Close tooltip must not
-// cover the button (it wrapped against the editor's right edge and blinked). Port 9298.
+// cover the button (it wrapped against the editor's right edge and blinked). Port 9298; `--viewport=1008x681` for CI's size.
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const J = JSON.stringify;
+// `--viewport=1008x681` gives the window the inner size it has on CI's 1024x768 screen.
+const viewport = process.argv.find((a) => a.startsWith('--viewport='))?.slice(11).split('x').map(Number);
 const ideMenu = `(() => {
   const menus = [...document.querySelectorAll('.context-menu')];
   if (!menus.length) return null;
@@ -47,6 +49,7 @@ let earlier = [];
 for (const lang of ['en-US', 'ko']) {
   const t = await launch({ fixture: 'nav-tests', port: 9298, name: `context-menu-${lang}`, lang });
   t.results.push(...earlier);
+  if (viewport) await t.cdp('Emulation.setDeviceMetricsOverride', { width: viewport[0], height: viewport[1], deviceScaleFactor: 1, mobile: false });
   const { check, js, until, sleep, cdp } = t;
   const ko = lang === 'ko';
   const L = ko
@@ -108,9 +111,12 @@ for (const lang of ['en-US', 'ko']) {
       await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ContextMenu', code: 'ContextMenu', windowsVirtualKeyCode: 93 });
       await until(`!!${ideMenu}`, 'menu from the Menu key').then(() => check(true, 'the Menu key opens the menu'), () => check(false, 'the Menu key opens the menu'));
       check(!(await js(ideMenu))?.monaco, 'the Menu key opens no Monaco menu');
+      // Below the caret, or as far down as the window lets a menu that does not fit there (CI's 1024x768 screen).
       const placed = await js(`(() => { const e = ide.editor; const p = e.getScrolledVisiblePosition(e.getPosition()); const r = e.getDomNode().getBoundingClientRect();
-        const m = document.querySelector('.context-menu').getBoundingClientRect(); return Math.abs(m.left - (r.left + p.left)) < 8 && Math.abs(m.top - (r.top + p.top + p.height)) < 8; })()`);
-      check(placed, 'the Menu key opens it below the caret');
+        const m = document.querySelector('.context-menu').getBoundingClientRect();
+        const left = Math.max(4, Math.min(r.left + p.left, innerWidth - m.width - 4)), top = Math.max(4, Math.min(r.top + p.top + p.height, innerHeight - m.height - 4));
+        return { ok: Math.abs(m.left - left) < 8 && Math.abs(m.top - top) < 8 && m.bottom <= innerHeight, menu: [m.left, m.top, m.height].map(Math.round), want: [left, top].map(Math.round), window: innerHeight }; })()`);
+      check(placed.ok, `the Menu key opens it below the caret, inside the window (${JSON.stringify(placed)})`);
       check(await js(`(() => { const p = ide.editor.getPosition(); return p.lineNumber === 4 && p.column === 3; })()`), 'the Menu key leaves the caret where it was');
       await sleep(100);
       await t.press('ArrowDown');
