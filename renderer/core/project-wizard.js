@@ -1,5 +1,11 @@
 // New Project (PyCharm's File > New Project): a project type, name and location, a Git repository, and an
 // interpreter (a new .venv, a base interpreter, or an existing one); framework types install their packages.
+// Plugins add project types of their own, whatever the load order, with their own options in place of the interpreter:
+//   (ide.projectTypes ||= []).push({ id, name: () => label, icon: () => element, main: 'the file to open, relative',
+//     form: ({ name, dir, step }) => ({ el, files() -> {path: text | null}, gitignore?: text,
+//       validate?: async () => {},   // throw to keep the wizard open with the message
+//       main?() -> the file to open when it depends on the options, setup?: async (dir) => failed, opened?: async (dir) => {} }) });
+// name() and dir() read the wizard's fields; step(title, cmd, args, cwd) runs a setup command into the wizard's log.
 (() => {
   const { el, joinPath, basename } = ide.util;
 
@@ -95,7 +101,9 @@ if __name__ == '__main__':
     const info = await ide.api.invoke('app:info');
     const bases = await oncePerFile(await ide.api.interpreters(null, ide.settings.get('interpreters.extra', [])));
     const parent = ide.settings.get('newProject.location') || joinPath(info.home, 'PycharmProjects');
-    let type = TYPES[0];
+    const types = [...TYPES, ...(ide.projectTypes || []).filter((t) => t && typeof t.id === 'string' && typeof t.form === 'function')
+      .map((t) => ({ packages: [], ...t }))];
+    let type = types[0];
 
     const root = el('div', 'np');
     const nav = el('div', 'np-types');
@@ -172,6 +180,9 @@ if __name__ == '__main__':
     const log = el('pre', 'np-log hidden');
     log.id = 'npLog';
     const error = el('div', 'np-error');
+    // A plugin type's own options, built the first time it is chosen.
+    const typeOptions = el('div', 'np-type-options');
+    const typeForms = new Map();
     form.append(
       el('div', 'np-title'),
       field(tr('Name:'), name),
@@ -179,15 +190,28 @@ if __name__ == '__main__':
       preview,
       git.row, welcome.row, install.row,
       interpSection,
+      typeOptions,
       error,
       log,
     );
 
     const selectedMode = () => modes.querySelector('input:checked').value;
     const projectDir = () => joinPath(loc.value.trim(), name.value.trim());
+    function formOf(t) {
+      if (!t.form) return null;
+      if (!typeForms.has(t.id)) {
+        const f = t.form({ name: () => name.value.trim(), dir: projectDir, step: (...a) => step(...a) });
+        typeForms.set(t.id, f);
+        typeOptions.appendChild(f.el);
+      }
+      return typeForms.get(t.id);
+    }
 
     function update() {
       form.querySelector('.np-title').textContent = type.name();
+      const own = formOf(type);
+      for (const f of typeForms.values()) f.el.classList.toggle('hidden', f !== own);
+      interpSection.classList.toggle('hidden', !!own);
       preview.textContent = tr('Project will be created in: {path}', { path: projectDir() });
       welcome.row.classList.toggle('hidden', type.id !== 'python');
       install.row.classList.toggle('hidden', !type.packages.length);
@@ -204,11 +228,11 @@ if __name__ == '__main__':
       }
       error.textContent = '';
     }
-    for (const t of TYPES) {
+    for (const t of types) {
       const b = el('div', 'np-type');
       b.dataset.type = t.id;
       b.setAttribute('role', 'option');
-      b.append(ide.icon(t.icon, '◆'), el('span', null, t.name()));
+      b.append(typeof t.icon === 'function' ? t.icon() : ide.icon(t.icon, '◆'), el('span', null, t.name()));
       b.onclick = () => { type = t; update(); };
       nav.appendChild(b);
     }
@@ -293,6 +317,7 @@ if __name__ == '__main__':
       const n = name.value.trim();
       if (!n || /[<>:"/\\|?*]/.test(n)) throw new Error(tr('Enter a valid project name.'));
       if (!loc.value.trim()) throw new Error(tr('Choose a location.'));
+      if (type.form) return createWith(d, formOf(type));
       const dir = projectDir();
       const m = selectedMode();
       const baseInterp = bases.find((b) => b.executable === base.value) || bases[0];
@@ -325,6 +350,20 @@ if __name__ == '__main__':
       if (!failed && type.id === 'django' && await step(tr('Creating the Django project'), python.cmd, [...python.args, '-m', 'django', 'startproject', n.replace(/\W/g, '_'), '.'], dir)) failed = true;
       if (git.input.checked && await step(tr('Creating the Git repository'), 'git', ['init'], dir)) failed = true;
 
+      done(d, failed);
+      if (m !== 'venv') {
+        const extra = ide.settings.get('interpreters.extra', []);
+        if (!extra.some((p) => ide.util.samePath(p, python.cmd))) ide.settings.set('interpreters.extra', [...extra, python.cmd]);
+      }
+      ide.settings.set(`interpreter.${dir}`, python.cmd);
+      if (!(await ide.openProject(dir))) return;
+      ide.setInterpreter(python.cmd);
+      const main = joinPath(dir, type.main);
+      if (await ide.api.exists(main)) await ide.openFile(main);
+    }
+
+    // Closes the wizard; a failed setup step is reported with the setup log.
+    function done(d, failed) {
       finished = true;
       d.close();
       if (failed && !cancelled) {
@@ -334,14 +373,25 @@ if __name__ == '__main__':
         ide.ui.dialog({ title: tr('Project created, but a setup step failed'), body: report, width: 760 });
         report.scrollTop = report.scrollHeight;
       }
-      if (m !== 'venv') {
-        const extra = ide.settings.get('interpreters.extra', []);
-        if (!extra.some((p) => ide.util.samePath(p, python.cmd))) ide.settings.set('interpreters.extra', [...extra, python.cmd]);
-      }
-      ide.settings.set(`interpreter.${dir}`, python.cmd);
+    }
+
+    // A plugin's project type: its files and setup instead of an interpreter.
+    async function createWith(d, f) {
+      await f.validate?.();
+      const dir = projectDir();
+      log.classList.remove('hidden');
+      log.textContent = tr('Creating {path}…', { path: dir });
+      const files = { ...f.files() };
+      if (git.input.checked) files['.gitignore'] = f.gitignore ?? GITIGNORE;
+      await ide.api.invoke('project:create', dir, files);
+      ide.settings.set('newProject.location', loc.value.trim());
+      ide.settings.set('newProject.git', git.input.checked);
+      let failed = !!(await f.setup?.(dir));
+      if (git.input.checked && await step(tr('Creating the Git repository'), 'git', ['init'], dir)) failed = true;
+      done(d, failed);
       if (!(await ide.openProject(dir))) return;
-      ide.setInterpreter(python.cmd);
-      const main = joinPath(dir, type.main);
+      await f.opened?.(dir);
+      const main = joinPath(dir, f.main?.() || type.main);
       if (await ide.api.exists(main)) await ide.openFile(main);
     }
   }

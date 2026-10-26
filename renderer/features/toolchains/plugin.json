@@ -1,0 +1,13 @@
+{
+  "id": "toolchains",
+  "name": "Java and C/C++",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Java and C/C++ projects: built-in Eclipse Temurin JDK and w64devkit (GCC, GDB) in the Install Manager, Java and C/C++ types in New Project, and Java Application and C/C++ Application run configurations with compiler errors in Problems.",
+  "depends": [
+    "run"
+  ],
+  "main": [
+    "toolchains.js"
+  ]
+}

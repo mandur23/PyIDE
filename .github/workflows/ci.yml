@@ -144,6 +144,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/i18n-static.mjs
+      - name: toolchains
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/toolchains.mjs
       - name: visual-script-codegen
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
