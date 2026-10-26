@@ -10,7 +10,7 @@
   const { el } = ide.util;
   const TAB_ID = 'installer:manager';
   const CATEGORIES = {
-    python: tr('Python Tools'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
+    interpreters: tr('Python Interpreters'), python: tr('Python Tools'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
   };
   const BUSY = { install: 'installing', update: 'updating', uninstall: 'removing', start: 'starting', stop: 'stopping' };
   const BUSY_PHASES = new Set(Object.values(BUSY));
@@ -320,7 +320,82 @@
     };
   }
 
+  // ---------- built-in catalog: PyIDE's own Python ----------
+  // The official python.org build (main/installer/python.js) under ~/.pyide/python/<version>, listed by the interpreter
+  // picker through the interpreters.extra setting once it is installed, and taken off the list when it is removed.
+  let pythonList = null;
+  const pythons = () => (pythonList ||= ide.api.invoke('installer:pythons').then((list) => new Map(list.map((p) => [p.key, p]))));
+  async function listInterpreter(exe, on) {
+    const extra = ide.settings.get('interpreters.extra', []);
+    const has = extra.some((p) => ide.util.samePath(p, exe));
+    if (on === has) return;
+    ide.settings.set('interpreters.extra', on ? [...extra, exe] : extra.filter((p) => !ide.util.samePath(p, exe)));
+    await ide.reloadInterpreters?.();
+  }
+  // Is `interp` this Python, or a venv made from it (pyvenv.cfg's home)?
+  async function basedOn(interp, dir) {
+    if (!interp?.executable || interp.invalid) return false;
+    if (ide.util.isUnder(interp.executable, dir)) return true;
+    const file = ide.util.joinPath(ide.util.dirname(ide.util.dirname(interp.executable)), 'pyvenv.cfg');
+    const cfg = (await ide.api.exists(file)) ? await ide.api.read(file).catch(() => '') : '';
+    const home = /^\s*home\s*=\s*(.+?)\s*$/im.exec(cfg || '')?.[1];
+    return !!home && ide.util.isUnder(home, dir);
+  }
+  // The IDE's own helpers (semantic highlighting, refactoring, the console) run in the project interpreter and hold its
+  // files; before this Python is removed the project moves to another interpreter, or to none.
+  async function release(p) {
+    await listInterpreter(p.exe, false);
+    if (ide.root && await basedOn(ide.currentInterp(), p.dir)) {
+      const others = [];
+      for (const i of ide.interps || []) if (!i.unsupported && !(await basedOn(i, p.dir))) others.push(i);
+      const key = `interpreter.${ide.root}`;
+      if (others[0]) ide.settings.set(key, others[0].executable); else ide.settings.set(key, undefined);
+      await ide.reloadInterpreters?.();
+      if (!others[0] && ide.currentInterp() && await basedOn(ide.currentInterp(), p.dir)) {
+        ide.interps = (ide.interps || []).filter((i) => !ide.util.isUnder(i.executable, p.dir));
+        ide.emit('interpreterChanged', ide.currentInterp());
+      }
+    }
+  }
+  function pythonItem(key) {
+    const name = tr('PyIDE Python {version}', { version: key });
+    const job = (kind) => async (log, progress, signal) => {
+      const p = (await pythons()).get(key);
+      if (kind === 'python-uninstall') await release(p);
+      try {
+        await mainJob({ kind, name: key }, log, progress, signal);
+      } catch (err) {
+        if (kind === 'python-uninstall') await listInterpreter(p.exe, true);
+        throw err;
+      } finally { pythonList = null; }
+      if (kind === 'python-install') await listInterpreter(p.exe, true);
+    };
+    return {
+      id: `python:${key}`, category: 'interpreters', name, homepage: 'https://www.nuget.org/packages/python',
+      description: tr('The official Python {version} from python.org, installed for PyIDE only: no administrator rights and nothing added to PATH. It includes pip and venv; tkinter is not included.', { version: key }),
+      async status() {
+        const p = (await pythons()).get(key);
+        return { installed: p.installed, version: p.version, size: mb(p.size), detail: p.installed ? p.exe : tr('Installs into {path}', { path: p.dir }) };
+      },
+      install: job('python-install'),
+      uninstall: job('python-uninstall'),
+      confirmUninstall: tr('Virtual environments made from {name} stop working once it is removed.', { name }),
+      actions: [{
+        label: tr('Use as Project Interpreter'),
+        when: (st) => st.installed && !!ide.root,
+        run: async () => {
+          const p = (await pythons()).get(key);
+          await listInterpreter(p.exe, true);
+          ide.setInterpreter(p.exe);
+          return tr('{name} is now the project interpreter.', { name });
+        },
+      }],
+    };
+  }
+  const OWN_PYTHON = '3.13';
+
   const builtins = [
+    pythonItem(OWN_PYTHON),
     ...PYTHON_TOOLS.map(([pkg, name, description]) => pip({ package: pkg, name, description })),
     serverItem('postgresql', 'PostgreSQL', tr('Open-source relational database server, from the EDB Windows binaries.'), 'https://www.postgresql.org/'),
     serverItem('mariadb', 'MariaDB', tr('MySQL-compatible database server, from the official MariaDB zip.'), 'https://mariadb.org/'),
@@ -580,6 +655,22 @@
   }
 
   ide.registerAction({ id: 'InstallManager', title: tr('Install Manager'), run: () => open() });
-  ide.installer = { open, refresh, register, pip, state: (id) => ({ ...entry(id), ctl: undefined }) };
+  // An installed PyIDE Python missing from the list (settings reset or copied) is listed again; with no usable
+  // interpreter at all, one notification per session offers to install it.
+  ide.on('ready', async () => {
+    const list = await pythons().catch(() => new Map());
+    for (const p of list.values()) if (p.installed) await listInterpreter(p.exe, true);
+    await ide.reloadInterpreters?.();
+    if ((ide.interps || []).some((i) => !i.invalid && !i.unsupported)) return;
+    const item = items().find((it) => it.id === `python:${OWN_PYTHON}`);
+    ide.notifications?.notify({
+      title: tr('No Python interpreter found'),
+      text: tr('Install {name} ({size}) to run, debug and test Python code without installing Python on the system.', { name: item.name, size: mb(list.get(OWN_PYTHON)?.size || 0) }),
+      kind: 'warn', group: 'Python Interpreter',
+      actions: [{ label: tr('Install {name}', { name: item.name }), run: () => { open(item.category); run(item, 'install'); } }],
+    });
+  });
+
+  ide.installer = { open, refresh, register, pip, run: (id, op) => { const it = items().find((x) => x.id === id); return it ? run(it, op) : null; }, state: (id) => ({ ...entry(id), ctl: undefined }) };
   ide.emit('installablesChanged');
 })();

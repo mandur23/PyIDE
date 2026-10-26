@@ -61,6 +61,7 @@
     const monaco = root.ide?.monaco || root.monaco;
     const model = doc.model;
     const fileName = path.split(/[\\/]/).pop();
+    const language = VS.languageOf ? VS.languageOf(path) : 'python';
     host.classList.add('vs-host');
     host.tabIndex = -1;
 
@@ -219,7 +220,9 @@
       }
       return x0 === Infinity ? null : { x0, y0, x1, y1 };
     }
-    function fit() {
+    // minScale: the smallest scale worth reading at (the .py preview asks for more than MIN_SCALE). A graph that does not
+    // fit at it shows its top left, where it starts, instead of a centred middle with its start cut off.
+    function fit({ minScale = MIN_SCALE } = {}) {
       const r = canvasRect();
       const b = bounds();
       if (!r.width || !r.height) return;
@@ -227,7 +230,9 @@
       const pad = 48;
       // A graph that fits at 100% with a slim margin stays at 100%: shrinking it only for the margin makes text smaller.
       const fitsAt100 = b.x1 - b.x0 <= r.width - 32 && b.y1 - b.y0 <= r.height - 32;
-      const s = fitsAt100 ? 1 : clampScale(Math.min(1, (r.width - 2 * pad) / (b.x1 - b.x0), (r.height - 2 * pad) / (b.y1 - b.y0)));
+      const want = fitsAt100 ? 1 : Math.min(1, (r.width - 2 * pad) / (b.x1 - b.x0), (r.height - 2 * pad) / (b.y1 - b.y0));
+      const s = clampScale(Math.max(minScale, want));
+      if (want < s) { setView({ s, tx: pad - b.x0 * s, ty: pad - b.y0 * s }); return; }
       setView({ s, tx: (r.width - (b.x1 - b.x0) * s) / 2 - b.x0 * s, ty: (r.height - (b.y1 - b.y0) * s) / 2 - b.y0 * s });
     }
     function centerOn(id) {
@@ -319,7 +324,7 @@
     }
     disposers.push(model.onDidChangeContent(() => { if (!applying && !disposed) load(); }));
     // The symbol index decides which project and package nodes show "parameters changed" and which no longer exist.
-    if (VS.symbols) {
+    if (VS.symbols && language === 'python') {
       VS.symbols.use();
       disposers.push(VS.symbols.onChange(() => { if (!disposed && graph) { render(); compileNow(); } }));
     }
@@ -336,7 +341,7 @@
       compileTimer = 0;
       if (disposed || !graph || !VS.compile) return;
       let r;
-      try { r = VS.compile(graph, { fileName }); } catch (err) { console.error(err); return; }
+      try { r = VS.compile(graph, { fileName, language }); } catch (err) { console.error(err); return; }
       errors = r?.errors || [];
       applyErrors();
     }
@@ -800,7 +805,9 @@
     // origin: a pin the user dragged a wire from; the palette then lists only types with a pin that fits it, and
     // the new node is wired to that pin.
     function candidateTypes(origin) {
-      const defs = VS.nodeTypes().filter((d) => d.palette !== false && (d.type !== 'core.start' || !graph.nodes.some((n) => n.type === 'core.start')));
+      // A Java script lists the node types with Java code generation (and comments); a Python script those with Python's.
+      const forLanguage = (d) => d.comment || !!(language === 'java' ? d.java : d.compile);
+      const defs = VS.nodeTypes().filter((d) => d.palette !== false && forLanguage(d) && (d.type !== 'core.start' || !graph.nodes.some((n) => n.type === 'core.start')));
       if (!origin) return defs.map((def) => ({ def }));
       const out = [];
       for (const def of defs) {
@@ -855,7 +862,7 @@
     function openPalette(point, origin = null) {
       closePalette();
       const at = toCanvas(point.clientX, point.clientY);
-      const symbols = VS.symbols && VS.SYMBOL_TYPES && root.ide?.trusted !== false ? VS.symbols : null;
+      const symbols = language === 'python' && VS.symbols && VS.SYMBOL_TYPES && root.ide?.trusted !== false ? VS.symbols : null;
       const cands = candidateTypes(origin);
       const items = cands.map(({ def, pin }) => {
         const title = titleOf({ type: def.type });

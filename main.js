@@ -248,7 +248,12 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
       if (await exists(exe)) candidates.push([exe, [], path.relative(root, v)]);
     }
   }
-  for (const p of extraPaths) if (await exists(p)) candidates.push([p, [], path.basename(path.dirname(path.dirname(p))) || p]);
+  // PyIDE's own Python (Install Manager, main/installer/python.js) lives under <install root>/python/<version>.
+  const ownPython = path.join(process.env.PYIDE_INSTALL_ROOT || path.join(require('os').homedir(), '.pyide'), 'python').toLowerCase() + path.sep;
+  for (const p of extraPaths) {
+    if (!(await exists(p))) continue;
+    candidates.push([p, [], path.resolve(p).toLowerCase().startsWith(ownPython) ? 'PyIDE Python' : path.basename(path.dirname(path.dirname(p))) || p]);
+  }
   candidates.push(['py', ['-3'], 'py launcher'], ['python', [], 'python']);
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
   const found = [];

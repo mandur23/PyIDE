@@ -19,7 +19,8 @@
     document.body.appendChild(s);
   }
 
-  const SCRIPT = /\.pyflow$/i;
+  // .pyflow: a Python visual script; .jflow: a Java one (VS.languageOf), the same graph format.
+  const SCRIPT = /\.(pyflow|jflow)$/i;
   const isScript = (p) => SCRIPT.test(p || '');
   const nameOf = (p) => basename(p).replace(SCRIPT, '');
   const SHOW_CODE = 'visualScript.showCode';
@@ -32,7 +33,8 @@
   async function readGraph(path) {
     return VS.parse(ide.getDocument(path)?.model.getValue() ?? await ide.api.read(path));
   }
-  const compile = (graph, path) => VS.compile(graph, { fileName: basename(path) });
+  const isJava = (p) => VS.languageOf?.(p) === 'java';
+  const compile = (graph, path) => VS.compile(graph, { fileName: basename(path), language: VS.languageOf?.(path) });
   const describe = (graph, e) => {
     const node = e.node && graph.nodes.find((n) => n.id === e.node);
     return node ? `${VS.titleOf(node)} (${node.id}): ${e.message}` : e.message;
@@ -99,6 +101,70 @@
     const src = ide.root && joinPath(ide.root, 'src');
     const srcLayout = src && (await ide.api.exists(src)) && !(await ide.api.exists(joinPath(src, '__init__.py')));
     return [...new Set([ide.root, srcLayout ? src : null, cwd].filter(Boolean))];
+  }
+
+  // Java: a compile error (`<file>:12: error: …`) or an uncaught exception's first frame in the script's class (not
+  // its Rt runtime) points at a node through the compile map; its console link selects the node and a failed run
+  // marks it.
+  function followJava(con, path, file, map) {
+    let errText = '';
+    const fileName = basename(file);
+    const escaped = fileName.replace(/[.$]/g, '\\$&');
+    const frame = new RegExp(`^\\s*at (?![\\w$.]*\\$Rt\\.)[\\w$.<>]+\\(${escaped}:(\\d+)\\)`, 'm');
+    const compileError = new RegExp(`${escaped}:(\\d+): error: (.*)`);
+    const failure = () => {
+      const c = compileError.exec(errText);
+      if (c && map[Number(c[1])]) return { node: map[Number(c[1])], message: c[2].trim() };
+      const f = frame.exec(errText);
+      if (!f || !map[Number(f[1])]) return null;
+      const line = errText.split(/\r?\n/).find((l) => /Exception in thread|RuntimeException: /.test(l)) || '';
+      return { node: map[Number(f[1])], message: line.replace(/^.*RuntimeException: /, '').replace(/^Exception in thread "\w+" /, '').trim() };
+    };
+    const append = con.append;
+    con.append = (text, cls) => {
+      append(text, cls);
+      if (cls !== 'err') return;
+      errText += text;
+      const f = failure();
+      const last = con.out.lastElementChild;
+      if (f && last && !last.querySelector('.vs-node-link') && (frame.test(text) || compileError.test(text))) {
+        const a = el('a', 'vs-node-link', tr('Show the node in {name}', { name: basename(path) }));
+        a.href = '#';
+        a.onclick = (e) => { e.preventDefault(); revealNode(path, f.node, f.message); };
+        last.append(' ', a);
+      }
+    };
+    return {
+      markFailure() {
+        const f = failure();
+        if (f) for (const view of viewsOf(path)) view.markRuntimeError(f.node, f.message);
+      },
+    };
+  }
+
+  async function startJava(cfg, s) {
+    const run = ide.run;
+    const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
+    const path = run.resolvePath(cfg.file);
+    if (!path) return con.append(`${tr('The visual script is not specified. Edit the configuration first.')}\n`, 'err');
+    for (const view of viewsOf(path)) view.markRuntimeError(null);
+    let graph;
+    try { graph = await readGraph(path); } catch (err) {
+      return con.append(`${tr('Cannot run {name}: {error}', { name: basename(path), error: ide.util.errorText(err) })}\n`, 'err');
+    }
+    const result = compile(graph, path);
+    if (VS.hasErrors(result)) {
+      const bad = result.errors.filter((e) => !e.warning);
+      con.append(`${tr('Fix the problems in {name} before running it:', { name: basename(path) })}\n${bad.map((e) => `  ${describe(graph, e)}\n`).join('')}`, 'err');
+      await revealProblems(path, result.errors);
+      return;
+    }
+    const file = await ide.api.invoke('visual-script:writeJava', path, result.code);
+    const started = await ide.api.invoke('visual-script:runJava', { file, cwd: dirname(path), params: run.parseArgs(cfg.params), env: run.parseEnv(cfg.env) });
+    if (started.error) return con.append(`${tr('No JDK 11 or newer was found. Install one (or set JAVA_HOME) to run Java visual scripts.')}\n`, 'err');
+    con.append(`${[started.java, ...started.args].map(quoteArg).join(' ')}\n`, 'sys');
+    const trace = followJava(con, path, file, result.map);
+    s.attach(started.id, { onExit: (code) => { if (code !== 0) trace.markFailure(); } });
   }
 
   async function startScript(cfg, s, interp) {
@@ -173,15 +239,29 @@
       defaults: () => ({ file: '', params: '', env: '', envFiles: ide.run.defaultEnvFiles, interp: '' }),
       identity: (c) => ide.run.resolvePath(c.file).toLowerCase(),
       file: (c) => ide.run.resolvePath(c.file),
-      forFile: (path) => (isScript(path) ? configFor(path) : null),
+      forFile: (path) => (isScript(path) && !isJava(path) ? configFor(path) : null),
       start: startScript,
       debugTarget,
+    });
+    // A Java visual script needs no Python interpreter; it is not debugged yet.
+    ide.run.registerType({
+      type: 'java-visual-script', title: tr('Java Visual Script'), icon: '🧩',
+      fields: [
+        { key: 'file', label: tr('Visual script'), placeholder: tr('path\\to\\script.jflow') },
+        { key: 'params', label: tr('Program arguments') },
+        { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
+      ],
+      defaults: () => ({ file: '', params: '', env: '' }),
+      identity: (c) => ide.run.resolvePath(c.file).toLowerCase(),
+      file: (c) => ide.run.resolvePath(c.file),
+      forFile: (path) => (isJava(path) ? { type: 'java-visual-script', name: nameOf(path), file: path } : null),
+      start: startJava,
     });
     ide.registerTreeAction({
       title: tr("Run '…'"),
       keyAction: 'RunClass',
       when: (e) => !e.dir && isScript(e.name),
-      run: (e) => ide.run.runContext(configFor(e.path)),
+      run: (e) => ide.run.runContext(isJava(e.path) ? { type: 'java-visual-script', name: nameOf(e.path), file: e.path } : configFor(e.path)),
     });
   }
 
@@ -288,7 +368,37 @@
   }
   ide.registerAction({
     id: 'VisualScript.ExportPython', title: tr('Export as Python…'),
-    when: () => !!activeScriptPath(), run: () => { const p = activeScriptPath(); if (p) exportPython(p); },
+    when: () => !!activeScriptPath() && !isJava(activeScriptPath()), run: () => { const p = activeScriptPath(); if (p) exportPython(p); },
+  });
+  // Java: <ClassName>.java next to the script, the file name javac wants for the public class.
+  async function exportJava(path) {
+    let graph;
+    try { graph = await readGraph(path); } catch (err) { ide.ui.alert(ide.util.errorText(err)); return null; }
+    const result = compile(graph, path);
+    if (VS.hasErrors(result)) {
+      await revealProblems(path, result.errors);
+      ide.ui.alert(tr('Fix the problems in {name} before exporting it.', { name: basename(path) }));
+      return null;
+    }
+    const target = joinPath(dirname(path), `${VS.javaClassName(basename(path))}.java`);
+    const existed = await ide.api.exists(target);
+    try {
+      if (existed) {
+        const ok = await ide.ui.confirm(tr('{name} already exists. Overwrite it?', { name: basename(target) }), { title: tr('Export as Java'), ok: tr('Overwrite') });
+        if (!ok) return null;
+        await ide.localHistory?.checkpoint('Before Export as Java', { paths: [target] });
+      }
+      await ide.api.write(target, ide.lineSeparators?.forNewFile(result.code) ?? result.code);
+    } catch (err) { ide.ui.alert(ide.util.errorText(err)); return null; }
+    await ide.reloadFromDisk([target]);
+    await ide.refreshTree();
+    if (!existed) ide.emit('filesChanged', { created: [target] });
+    await ide.openFile(target);
+    return target;
+  }
+  ide.registerAction({
+    id: 'VisualScript.ExportJava', title: tr('Export as Java…'),
+    when: () => isJava(activeScriptPath()), run: () => { const p = activeScriptPath(); if (p) exportJava(p); },
   });
 
   // ---------- Project tree › New › Visual Script ----------
@@ -301,10 +411,10 @@
     g = VS.setInputLiteral(g, id, 'value', 'Hello');
     return VS.connect(g, { node: start.id, pin: 'next' }, { node: id, pin: 'in' });
   }
-  async function newVisualScript(dir) {
+  async function newVisualScript(dir, ext = '.pyflow') {
     const name = (await ide.ui.prompt(tr('New visual script name'), ''))?.trim();
     if (!name) return null;
-    const target = joinPath(dir, isScript(name) ? name : `${name}.pyflow`);
+    const target = joinPath(dir, isScript(name) ? name : `${name}${ext}`);
     if (await ide.api.exists(target)) { ide.ui.alert(tr('{path} already exists', { path: basename(target) })); return null; }
     const text = VS.serialize(helloGraph());
     try {
@@ -332,10 +442,11 @@
       const items = producers.flatMap((fn) => { try { return fn(entry) || []; } catch (err) { console.error(err); return []; } });
       if (!ide.root) return items;
       const item = { label: tr('Visual Script'), detail: '.pyflow', run: () => newVisualScript(dirOf(entry)) };
+      const javaItem = { label: tr('Visual Script (Java)'), detail: '.jflow', run: () => newVisualScript(dirOf(entry), '.jflow') };
       const menu = items.find((it) => it.label === tr('New') && it.submenu);
-      if (!menu) return [...items, { label: tr('New'), submenu: [item] }];
+      if (!menu) return [...items, { label: tr('New'), submenu: [item, javaItem] }];
       const inner = menu.submenu;
-      menu.submenu = () => withScriptItem(typeof inner === 'function' ? inner() : inner, item);
+      menu.submenu = () => withScriptItem(withScriptItem(typeof inner === 'function' ? inner() : inner, javaItem), item);
       return items;
     });
   });
@@ -345,11 +456,13 @@
   // The read-only Python beside the canvas follows the graph; a node's lines are highlighted while it is selected,
   // and clicking a line selects its node.
   function codePane(view, path) {
-    const head = el('div', 'vs-code-head', tr('Python code (read-only)'));
+    const head = el('div', 'vs-code-head', isJava(path) ? tr('Java code (read-only)') : tr('Python code (read-only)'));
     const box = el('div', 'vs-code');
     view.side.append(head, box);
     const monaco = ide.monaco;
-    const model = monaco.editor.createModel('', 'python', monaco.Uri.parse(`pyide-visual-script:/${++codeModels}/${nameOf(path)}.py`));
+    const model = isJava(path)
+      ? monaco.editor.createModel('', 'java', monaco.Uri.parse(`pyide-visual-script:/${++codeModels}/${VS.javaClassName(basename(path))}.java`))
+      : monaco.editor.createModel('', 'python', monaco.Uri.parse(`pyide-visual-script:/${++codeModels}/${nameOf(path)}.py`));
     const ed = ide.createEditor(box, {
       model, readOnly: true, domReadOnly: true, glyphMargin: false, folding: false, lineNumbersMinChars: 3,
       rulers: [], renderLineHighlight: 'none', contextmenu: false, minimap: { enabled: false },
@@ -407,11 +520,11 @@
       view.toolbar.appendChild(b);
       return b;
     };
-    const runBtn = button('vs-run', tr('Run'), '', () => ide.run?.runContext(configFor(path)), 'runRun');
+    const runBtn = button('vs-run', tr('Run'), '', () => ide.run?.runContext(isJava(path) ? { type: 'java-visual-script', name: nameOf(path), file: path } : configFor(path)), 'runRun');
     ide.keymap.tooltip(runBtn, tr("Run '{name}'", { name: nameOf(path) }), 'RunClass');
     runBtn.hidden = !ide.run;
     let pane = null;
-    const codeBtn = button('vs-show-code', tr('Show Code'), tr('Show the Python code of this script'), () => {
+    const codeBtn = button('vs-show-code', tr('Show Code'), isJava(path) ? tr('Show the Java code of this script') : tr('Show the Python code of this script'), () => {
       const on = codeBtn.getAttribute('aria-pressed') !== 'true';
       ide.settings.set(SHOW_CODE, on);
       showCode(on);
@@ -422,7 +535,8 @@
       if (on && !pane) pane = codePane(view, path);
       else if (on) pane.update();
     }
-    button('vs-export', tr('Export as Python…'), tr('Write this script as {name} next to it', { name: `${nameOf(path)}.py` }), () => exportPython(path));
+    if (isJava(path)) button('vs-export', tr('Export as Java…'), tr('Write this script as {name} next to it', { name: `${VS.javaClassName(basename(path))}.java` }), () => exportJava(path));
+    else button('vs-export', tr('Export as Python…'), tr('Write this script as {name} next to it', { name: `${nameOf(path)}.py` }), () => exportPython(path));
     showCode(!!ide.settings.get(SHOW_CODE, false));
     view.codePane = () => pane;
     return { dispose: () => pane?.dispose() };
@@ -439,7 +553,7 @@
       view = VS.mountEditor(host, ctx);
       ctx.tab.visualScript = view;
       extras = integrate(view, ctx.path);
-      detachDebug = VS.attachDebug?.(view, ctx.path);
+      if (!isJava(ctx.path)) detachDebug = VS.attachDebug?.(view, ctx.path);
     };
     let detachDebug = null;
     if (VS.mountEditor && VS.attachDebug) start();
@@ -527,7 +641,19 @@
       const text = VS.serialize(VS.parse(JSON.stringify(r.graph)));
       if (model.getValue() !== text) model.setValue(text);
       // The canvas fitted the empty document it mounted with; the first graph is shown whole.
-      if (!fitted) { fitted = true; view.fit(); }
+      if (!fitted) {
+        fitted = true;
+        view.fit({ minScale: 0.7 });
+        // Too big to fit: the steps run down from Start with their values to the left, so Start comes a third of the
+        // way in rather than the leftmost value at the edge and the steps cut off.
+        const start = view.graph()?.nodes.find((n) => n.type === 'core.start');
+        const v = view.view();
+        const width = view.canvas.clientWidth;
+        const left = Math.min(...view.graph().nodes.map((n) => n.x));
+        if (start && start.x * v.s + v.tx > width * 0.6) {
+          view.setView({ tx: Math.min(48 - left * v.s, width / 3 - start.x * v.s) });
+        }
+      }
       host.dataset.version = String((Number(host.dataset.version) || 0) + 1);
     }
     let timer = 0;

@@ -28,7 +28,7 @@
   VS.nodeTypes = () => [...registry.values()];
   VS.nodeType = (type) => registry.get(type) || null;
 
-  VS.CATEGORIES = ['Flow', 'Variables', 'Values', 'Math', 'Text', 'Input/Output', 'Lists', 'Functions', 'Python', 'Project', 'Packages', 'Other'];
+  VS.CATEGORIES = ['Flow', 'Variables', 'Values', 'Math', 'Text', 'Input/Output', 'Lists', 'Functions', 'Python', 'Java', 'Project', 'Packages', 'Other'];
   VS.TYPES = ['any', 'number', 'int', 'string', 'bool', 'list', 'dict', 'none'];
   const TYPE_LABELS = { any: 'Any', number: 'Number', int: 'Integer', string: 'Text', bool: 'True/False', list: 'List', dict: 'Dictionary', none: 'None', exec: 'Run order' };
   VS.typeLabel = (type) => tr(TYPE_LABELS[type] || type);
@@ -902,6 +902,175 @@
     keywords: 'comment note memo 주석 메모 설명',
     props: [{ id: 'text', label: 'Text', kind: 'code', default: 'Comment' }],
     comment: true,
+  });
+
+  // ---------- Java (a .jflow file) ----------
+  // The `java` hooks of the node types above, for codegen.js with language 'java'. Values are Object; Rt (codegen.js
+  // VS.javaRuntime) does what Python does with them. Every block's braces are the node's own lines; a function body
+  // sits in `if (true) { … }` so the `return null;` after it is never an unreachable statement.
+  const call = (fn, ...args) => ({ code: `Rt.${fn}(${args.join(', ')})`, prec: VS.PREC ? VS.PREC.ATOM : 14 });
+  const RT_MATH = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div', '//': 'floordiv', '%': 'mod', '**': 'pow' };
+  const RT_CMP = { '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' };
+  const javaHooks = {
+    'core.start': { entry(c) { c.line('public static void main(String[] args) {'); c.block('next'); c.line('}'); } },
+    'flow.if': {
+      stmt(c) {
+        c.line(`if (Rt.truthy(${c.arg('cond')})) {`);
+        c.block('then');
+        if (c.execLinked('else')) {
+          c.line('} else {');
+          c.block('else');
+        }
+        c.line('}');
+        return 'done';
+      },
+    },
+    'flow.while': {
+      stmt(c) {
+        c.line(`while (Rt.truthy(${c.arg('cond')})) {`);
+        c.block('body', { loop: true });
+        c.line('}');
+        return 'done';
+      },
+    },
+    'flow.forRange': {
+      stmt(c) {
+        c.line(`for (Object ${c.local('index')} : Rt.range(${c.arg('start')}, ${c.arg('stop')}, ${c.arg('step')})) {`);
+        c.block('body', { loop: true });
+        c.line('}');
+        return 'done';
+      },
+    },
+    'flow.forEach': {
+      stmt(c) {
+        c.line(`for (Object ${c.local('item')} : Rt.iter(${c.arg('list')})) {`);
+        c.block('body', { loop: true });
+        c.line('}');
+        return 'done';
+      },
+    },
+    'flow.break': { stmt(c) { if (!c.inLoop) return c.fail(c.tr('Break can only be used inside a loop body.')); c.line('break;'); return null; } },
+    'flow.continue': { stmt(c) { if (!c.inLoop) return c.fail(c.tr('Continue can only be used inside a loop body.')); c.line('continue;'); return null; } },
+    'var.set': {
+      stmt(c) {
+        const name = c.ident('name');
+        c.assign(name);
+        c.line(`${name} = ${c.arg('value')};`);
+        return 'next';
+      },
+    },
+    'var.get': { expr: (c) => ({ code: c.variable('name'), prec: c.P.ATOM }) },
+    'value.number': { expr: (c) => c.literal(c.prop('value'), 'number') },
+    'value.text': { expr: (c) => c.literal(String(c.prop('value') ?? ''), 'string') },
+    'value.bool': { expr: (c) => c.literal(!!c.prop('value'), 'bool') },
+    'value.none': { expr: (c) => ({ code: 'null', prec: c.P.ATOM }) },
+    'value.list': { expr: (c) => call('list', ...c.pins.inputs.map((p) => c.arg(p.id))) },
+    'math.binary': {
+      expr(c) {
+        const op = c.prop('op');
+        if (!RT_MATH[op]) { c.fail(c.tr('Unknown operator "{op}".', { op })); return { code: 'null', prec: c.P.ATOM }; }
+        return call(RT_MATH[op], c.arg('a'), c.arg('b'));
+      },
+    },
+    'math.compare': {
+      expr(c) {
+        const op = c.prop('op');
+        if (!RT_CMP[op]) { c.fail(c.tr('Unknown operator "{op}".', { op })); return { code: 'null', prec: c.P.ATOM }; }
+        return call(RT_CMP[op], c.arg('a'), c.arg('b'));
+      },
+    },
+    // Python's `a and b` is a when a is false, else b (b runs only then); `or` the other way round.
+    'math.and': { expr: (c) => ({ code: `(Rt.truthy(${c.arg('a')}) ? ${c.arg('b')} : ${c.arg('a')})`, prec: c.P.ATOM }) },
+    'math.or': { expr: (c) => ({ code: `(Rt.truthy(${c.arg('a')}) ? ${c.arg('a')} : ${c.arg('b')})`, prec: c.P.ATOM }) },
+    'math.not': { expr: (c) => call('not', c.arg('value')) },
+    'math.negate': { expr: (c) => call('neg', c.arg('value')) },
+    'text.join': { expr: (c) => call('join', c.arg('a'), c.arg('b')) },
+    'convert.str': { expr: (c) => call('str', c.arg('value')) },
+    'convert.int': { expr: (c) => call('toInt', c.arg('value')) },
+    'convert.float': { expr: (c) => call('toFloat', c.arg('value')) },
+    'text.format': { expr: (c) => c.formatText(c.prop('template')) },
+    'io.print': { stmt(c) { c.line(`Rt.print(${c.arg('value')});`); return 'next'; } },
+    'io.input': {
+      stmt(c) {
+        const read = `Rt.input(${c.arg('prompt')})`;
+        c.line(c.used('answer') ? `Object ${c.local('answer')} = ${read};` : `${read};`);
+        return 'next';
+      },
+    },
+    'list.append': { stmt(c) { c.line(`Rt.append(${c.arg('list')}, ${c.arg('item')});`); return 'next'; } },
+    'list.len': { expr: (c) => call('len', c.arg('list')) },
+    'list.get': { expr: (c) => call('get', c.arg('list'), c.arg('index')) },
+    'fn.define': {
+      entry(c) {
+        const params = VS.parseNames(c.prop('params')).map((p) => `Object ${c.identValue(p, 'params')}`);
+        c.line(`static Object ${c.ident('name')}(${params.join(', ')}) {`);
+        c.line('if (true) {');
+        c.block('body', { fn: true });
+        c.line('}');
+        c.line('return null;');
+        c.line('}');
+      },
+      output: (c, pin) => ({ code: c.identValue(pin, 'params'), prec: c.P.ATOM }),
+    },
+    'fn.return': {
+      stmt(c) {
+        if (!c.inFunction) return c.fail(c.tr('Return can only be used inside a Define Function.'));
+        c.line(c.linked('value') || c.input('value').value !== undefined ? `return ${c.arg('value')};` : 'return null;');
+        return null;
+      },
+    },
+    'fn.call': {
+      stmt(c) {
+        const name = c.prop('function');
+        if (!c.functionExists(name)) {
+          return c.fail(name ? c.tr('There is no Define Function named "{name}".', { name }) : c.tr('Choose the function to call.'), 'function');
+        }
+        const run = `${c.ident('function')}(${c.pins.inputs.map((p) => c.arg(p.id)).join(', ')})`;
+        c.line(c.used('result') ? `Object ${c.local('result')} = ${run};` : `${run};`);
+        return 'next';
+      },
+    },
+  };
+  for (const [type, hooks] of Object.entries(javaHooks)) VS.nodeType(type).java = hooks;
+
+  const javaPins = (node, key) => VS.parseNames(VS.propOf(node, key)).map((p) => ({ id: p, label: p, type: 'any' }));
+  reg({
+    type: 'java.expr', category: 'Java', title: 'Java Expression',
+    description: 'Computes a Java expression. Its inputs are available under the names you list, as Object.',
+    keywords: 'java expression code formula 자바 식 표현식 수식',
+    props: [
+      { id: 'code', label: 'Expression', kind: 'code', default: 'String.valueOf(x)' },
+      { id: 'inputs', label: 'Input names', kind: 'string', default: 'x', placeholder: 'x, y' },
+    ],
+    outputs: out('result', 'Result', 'any'),
+    pins: (node) => ({ inputs: javaPins(node, 'inputs') }),
+    java: { expr: (c) => c.javaExpression(c.prop('code'), VS.parseNames(c.prop('inputs'))) },
+  });
+  reg({
+    type: 'java.code', category: 'Java', title: 'Java Code',
+    description: 'Runs lines of Java you write. Inputs are Object variables first; assign the outputs you list (they start as null).',
+    keywords: 'java code statements 자바 코드',
+    exec: EXEC,
+    props: [
+      { id: 'code', label: 'Code', kind: 'code', default: 'System.out.println(x);' },
+      { id: 'inputs', label: 'Input names', kind: 'string', default: 'x', placeholder: 'x, y' },
+      { id: 'outputs', label: 'Output names', kind: 'string', default: '', placeholder: 'result' },
+    ],
+    pins: (node) => ({ inputs: javaPins(node, 'inputs'), outputs: javaPins(node, 'outputs') }),
+    java: {
+      stmt(c) {
+        for (const p of c.pins.outputs) {
+          const name = c.identValue(p.id, 'outputs');
+          if (c.declare(name)) c.line(`Object ${name} = null;`);
+        }
+        c.line('{');
+        for (const p of c.pins.inputs) c.line(`    Object ${c.identValue(p.id, 'inputs')} = ${c.arg(p.id)};`);
+        for (const l of c.dedent(c.prop('code'))) c.line(l.text ? `    ${l.text}` : '');
+        c.line('}');
+        return 'next';
+      },
+      output: (c, pin) => ({ code: c.identValue(pin, 'outputs'), prec: c.P.ATOM }),
+    },
   });
 
   if (typeof module === 'object' && module.exports) module.exports = VS;

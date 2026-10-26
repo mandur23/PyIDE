@@ -103,7 +103,48 @@ async function projectFiles(root) {
   return { files, truncated };
 }
 
-exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
+// A JDK to run Java visual scripts with (`java File.java`, source-file mode, needs Java 11): JAVA_HOME, a JDK PyIDE
+// installed under ~/.pyide, java on PATH, then the usual install folders. -> {java, version} or {error}.
+async function findJava() {
+  const os = require('os');
+  const candidates = [];
+  if (process.env.JAVA_HOME) candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'));
+  const own = path.join(process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide'));
+  const walk = (dir, depth) => {
+    if (depth < 0) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const p = path.join(dir, e.name);
+      if (e.name === 'bin' && fs.existsSync(path.join(p, 'java.exe')) && fs.existsSync(path.join(p, 'javac.exe'))) candidates.push(path.join(p, 'java.exe'));
+      else walk(p, depth - 1);
+    }
+  };
+  walk(own, 4);
+  candidates.push('java');
+  const pf = process.env.ProgramFiles || 'C:\\Program Files';
+  for (const vendor of ['Java', 'Eclipse Adoptium', 'Microsoft', 'Zulu', 'Amazon Corretto', 'BellSoft']) walk(path.join(pf, vendor), 2);
+  for (const java of candidates) {
+    const r = await runHelperless(java, ['-version']);
+    const m = /version "(\d+)(?:\.(\d+))?[^"]*"/.exec(r);
+    if (!m) continue;
+    const major = Number(m[1]) === 1 ? Number(m[2]) : Number(m[1]);
+    if (major >= 11) return { java, version: major };
+  }
+  return { error: 'No JDK 11 or newer was found. Install one (or set JAVA_HOME) to run Java visual scripts.' };
+}
+const runHelperless = (cmd, args) => new Promise((resolve) => {
+  let out = '';
+  let proc;
+  try { proc = spawn(cmd, args, { windowsHide: true }); } catch { resolve(''); return; }
+  proc.stdout.on('data', (d) => { out += d; });
+  proc.stderr.on('data', (d) => { out += d; });
+  proc.on('error', () => resolve(''));
+  proc.on('close', () => resolve(out));
+});
+
+exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir, startProcess }) => {
   // The Python a visual script runs as: <userData>/visual-script/<sha1 of the .pyflow path>/<name>_pyflow.py. One
   // folder per script keeps the script's name in tracebacks while two demo.pyflow files in different folders never
   // share a file. The path is hashed in lower case because Windows paths are case-insensitive. Python puts the
@@ -124,6 +165,35 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     // The long form of the path: debugpy reports frames by it, so a user data folder reached through an 8.3 short
     // name (C:\Users\RUNNER~1\…) would otherwise not match the file the script registered its breakpoints on.
     return fs.realpathSync.native(file);
+  });
+
+  // A Java visual script runs as <userData>/visual-script/<sha1 of the .jflow path>/<name>_jflow.java in source-file
+  // mode, which takes any file name for the class it declares.
+  const javaDir = (jflowPath) => path.join(app.getPath('userData'), 'visual-script', crypto.createHash('sha1').update(path.resolve(jflowPath).toLowerCase()).digest('hex'));
+  ipcMain.handle('visual-script:writeJava', (_e, jflowPath, code) => {
+    if (typeof jflowPath !== 'string' || !path.isAbsolute(jflowPath) || typeof code !== 'string') throw new Error('visual-script:writeJava needs an absolute .jflow path and the code');
+    const dir = javaDir(jflowPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${path.basename(jflowPath).replace(/\.jflow$/i, '') || 'script'}_jflow.java`);
+    for (const old of fs.readdirSync(dir)) if (/\.java$/i.test(old) && old !== path.basename(file)) fs.rmSync(path.join(dir, old), { force: true });
+    fs.writeFileSync(file, code, 'utf8');
+    return fs.realpathSync.native(file);
+  });
+  let javaFound = null;
+  ipcMain.handle('visual-script:java', async (_e, { refresh = false } = {}) => {
+    if (!javaFound || refresh || javaFound.error) javaFound = await findJava();
+    return javaFound;
+  });
+  // Runs a generated file of visual-script:writeJava with the JDK visual-script:java found; output and exit stream as a
+  // process of the IDE (ide.proc).
+  ipcMain.handle('visual-script:runJava', async (_e, { file, cwd, params = [], env = {} } = {}) => {
+    const base = path.join(app.getPath('userData'), 'visual-script');
+    if (typeof file !== 'string' || !path.resolve(file).toLowerCase().startsWith(base.toLowerCase() + path.sep) || !/_jflow\.java$/i.test(file)) throw new Error('visual-script:runJava runs only generated Java files');
+    const found = javaFound && !javaFound.error ? javaFound : (javaFound = await findJava());
+    if (found.error) return { error: found.error };
+    const args = ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', file, ...params.map(String)];
+    const id = startProcess(found.java, args, { cwd: typeof cwd === 'string' && fs.existsSync(cwd) ? cwd : path.dirname(file), env: { ...env } });
+    return { id, java: found.java, args };
   });
 
   const script = path.join(unpackedDir, 'renderer', 'features', 'visual-script', 'python', 'vs_symbols.py');

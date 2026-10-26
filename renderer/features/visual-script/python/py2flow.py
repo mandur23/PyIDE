@@ -806,7 +806,8 @@ class Converter:
                 continue
             node = by_id[nid]
             w, h = self.size(node)
-            node['x'], node['y'] = depth * indent, y
+            # A comment sits beside its column, so the run-order wire down the column does not cross it.
+            node['x'], node['y'] = depth * indent + (260 if kind == 'comment' else 0), y
             placed.add(nid)
             used = 0
             for c in self.children.get(nid, []):

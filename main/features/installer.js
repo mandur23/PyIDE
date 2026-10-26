@@ -8,6 +8,7 @@ const path = require('path');
 const { safeStorage } = require('electron');
 const iconv = require('iconv-lite');
 const { createServers } = require('../installer/servers');
+const { createPythons } = require('../installer/python');
 
 const PIP = ['-m', 'pip', '--disable-pip-version-check', '--no-color'];
 const PACKAGE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?$/;
@@ -130,6 +131,7 @@ exports.register = ({ ipcMain, app, send }) => {
     return child;
   }
   const servers = createServers({ root, store, spawnServer, run: runProcess });
+  const pythons = createPythons({ root, run: runProcess });
 
   // ---------- jobs ----------
   const exec = (job) => async (cmd, args, opts = {}) => {
@@ -165,6 +167,11 @@ exports.register = ({ ipcMain, app, send }) => {
       parse: (s) => servers.names().includes(s.name),
       lane: (s) => `server:${s.name}`,
       run: (s, job) => servers[op](s.name, { ...job, exec: exec(job) }),
+    }])),
+    ...Object.fromEntries(['install', 'uninstall'].map((op) => [`python-${op}`, {
+      parse: (s) => pythons.names().includes(s.name),
+      lane: (s) => `python:${s.name}`,
+      run: (s, job) => pythons[op](s.name, { ...job, exec: exec(job) }),
     }])),
   };
 
@@ -246,6 +253,7 @@ exports.register = ({ ipcMain, app, send }) => {
   });
 
   ipcMain.handle('installer:servers', async () => Promise.all(servers.names().map((n) => servers.status(n))));
+  ipcMain.handle('installer:pythons', async () => Promise.all(pythons.names().map((n) => pythons.status(n))));
   ipcMain.handle('installer:serverConnection', (_e, name) => (servers.names().includes(name) ? servers.connection(name) : null));
   ipcMain.handle('installer:root', () => root);
 
