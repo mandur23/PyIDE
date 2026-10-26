@@ -314,4 +314,4 @@ function createServers({ root, store, spawnServer, run }) {
   return { status, install, start, stop, uninstall, connection, ownedNames, names: () => Object.keys(SERVERS) };
 }
 
-module.exports = { SERVERS, createServers, portOpen, download };
+module.exports = { SERVERS, createServers, portOpen, download, tarExe };

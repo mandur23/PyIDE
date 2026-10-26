@@ -10,7 +10,7 @@
   const { el } = ide.util;
   const TAB_ID = 'installer:manager';
   const CATEGORIES = {
-    interpreters: tr('Python Interpreters'), python: tr('Python Tools'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
+    interpreters: tr('Python Interpreters'), python: tr('Python Tools'), toolchains: tr('Toolchains'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
   };
   const BUSY = { install: 'installing', update: 'updating', uninstall: 'removing', start: 'starting', stop: 'stopping' };
   const BUSY_PHASES = new Set(Object.values(BUSY));
@@ -671,6 +671,9 @@
     });
   });
 
-  ide.installer = { open, refresh, register, pip, run: (id, op) => { const it = items().find((x) => x.id === id); return it ? run(it, op) : null; }, state: (id) => ({ ...entry(id), ctl: undefined }) };
+  // run(id, op): an operation started from elsewhere (New Project's Download JDK), with the card's log, task and notification.
+  const runById = (id, op = 'install') => { const it = items().find((i) => i.id === id); return it ? run(it, op) : Promise.resolve(); };
+  // job(spec, log, progress, signal): a job of main/features/installer.js (toolchain-install…) for another plugin's installable.
+  ide.installer = { open, refresh, register, pip, run: runById, job: mainJob, state: (id) => ({ ...entry(id), ctl: undefined }) };
   ide.emit('installablesChanged');
 })();

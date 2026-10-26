@@ -59,7 +59,7 @@ try {
   await a.click('#welcomeNew');
   await a.until(`!!document.querySelector('.np-dialog #npName')`, 'wizard from welcome');
   const typeList = await a.js(`(() => { const l = document.querySelector('.np-types'); return [l.getAttribute('role'), l.tabIndex, [...l.children].map((n) => n.getAttribute('role') + ':' + n.getAttribute('aria-selected')).join()]; })()`);
-  check(typeList[0] === 'listbox' && typeList[1] === 0 && typeList[2] === 'option:true,option:false,option:false,option:false', `the project types are a listbox the keyboard reaches (${JSON.stringify(typeList)})`);
+  check(typeList[0] === 'listbox' && typeList[1] === 0 && typeList[2] === 'option:true,option:false,option:false,option:false,option:false,option:false', `the project types are a listbox the keyboard reaches (${JSON.stringify(typeList)})`);
   await a.press('Shift+Tab');
   const onList = await a.js(`document.activeElement === document.querySelector('.np-types')`);
   await a.press('ArrowDown');
@@ -68,10 +68,10 @@ try {
   const last = await a.js(`document.querySelector('.np-title').textContent`);
   await a.press('Home');
   await a.press('Tab');
-  check(onList && second.join() === 'Flask,flask' && last === 'Django' && await a.js(`document.querySelector('.np-title').textContent === 'Pure Python' && document.activeElement.id === 'npName'`),
+  check(onList && second.join() === 'Flask,flask' && last === 'C/C++' && await a.js(`document.querySelector('.np-title').textContent === 'Pure Python' && document.activeElement.id === 'npName'`),
     `Shift+Tab from the name reaches the type list, the arrow keys choose the type, Tab goes back to the name (${second}, ${last})`);
   const types = await a.js(`[...document.querySelectorAll('.np-type')].map(n => n.lastChild.textContent).join('|')`);
-  check(types === 'Pure Python|Flask|FastAPI|Django', `project types: Pure Python, Flask, FastAPI, Django (${types})`);
+  check(types === 'Pure Python|Flask|FastAPI|Django|Java|C/C++', `project types: Pure Python, Flask, FastAPI, Django, then the toolchains plugin's Java and C/C++ (${types})`);
   check(await a.js(`document.querySelector('#npName').value.startsWith('pythonProject') && document.querySelector('#npLocation').value === ${q(where)}`), 'defaults: pythonProject in the last location');
   await setValue(a, '#npName', 'demo');
   check(await a.js(`document.querySelector('#npPreview').textContent.endsWith(${q(path.join(where, 'demo'))})`), 'path preview follows the name');
@@ -164,7 +164,7 @@ try {
   const k = await launch({ fixture: 'core', port: 9546, name: 'new-project-ko', lang: 'ko-KR' });
   await openWizard(k);
   await k.js(`document.querySelector('.np-type[data-type="fastapi"]').click()`);
-  const leaks = await englishLeaks(k, '.np-dialog', ['Flask', 'FastAPI', 'Django', 'fastapi', 'uvicorn']);
+  const leaks = await englishLeaks(k, '.np-dialog', ['Flask', 'FastAPI', 'Django', 'Java', 'fastapi', 'uvicorn']);
   check(!leaks.length && (await k.js(`document.querySelector('.np-dialog .dialog-title').textContent`)) === '새 프로젝트', `wizard is Korean${leaks.length ? ` ${JSON.stringify(leaks.slice(0, 5))}` : ''}`);
   await k.shot('wizard-ko.png');
   await k.press('Escape');

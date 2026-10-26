@@ -9,6 +9,7 @@ const { safeStorage } = require('electron');
 const iconv = require('iconv-lite');
 const { createServers } = require('../installer/servers');
 const { createPythons } = require('../installer/python');
+const { createToolchains } = require('../installer/toolchains');
 
 const PIP = ['-m', 'pip', '--disable-pip-version-check', '--no-color'];
 const PACKAGE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?$/;
@@ -132,6 +133,7 @@ exports.register = ({ ipcMain, app, send }) => {
   }
   const servers = createServers({ root, store, spawnServer, run: runProcess });
   const pythons = createPythons({ root, run: runProcess });
+  const toolchains = createToolchains({ root });
 
   // ---------- jobs ----------
   const exec = (job) => async (cmd, args, opts = {}) => {
@@ -172,6 +174,11 @@ exports.register = ({ ipcMain, app, send }) => {
       parse: (s) => pythons.names().includes(s.name),
       lane: (s) => `python:${s.name}`,
       run: (s, job) => pythons[op](s.name, { ...job, exec: exec(job) }),
+    }])),
+    ...Object.fromEntries(['install', 'uninstall'].map((op) => [`toolchain-${op}`, {
+      parse: (s) => toolchains.names().includes(s.name),
+      lane: (s) => `toolchain:${s.name}`,
+      run: (s, job) => toolchains[op](s.name, { ...job, exec: exec(job) }),
     }])),
   };
 
@@ -255,6 +262,7 @@ exports.register = ({ ipcMain, app, send }) => {
   ipcMain.handle('installer:servers', async () => Promise.all(servers.names().map((n) => servers.status(n))));
   ipcMain.handle('installer:pythons', async () => Promise.all(pythons.names().map((n) => pythons.status(n))));
   ipcMain.handle('installer:serverConnection', (_e, name) => (servers.names().includes(name) ? servers.connection(name) : null));
+  ipcMain.handle('installer:toolchains', () => toolchains.names().map((n) => toolchains.status(n)));
   ipcMain.handle('installer:root', () => root);
 
   // Servers started here belong to this IDE session: shut them down cleanly before quitting.

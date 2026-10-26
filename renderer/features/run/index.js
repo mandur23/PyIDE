@@ -484,10 +484,13 @@
     lastRun = cfg;
     const s = await prepareSession(cfg, executor);
     try {
-      let interp = interpFor(cfg);
-      if (!interp) return s.console().append(`${tr('No Python interpreter found.')}\n`, 'err');
-      // The executor returns the interpreter to start instead (null cancels the run) and may add exit hooks.
-      if (executor && !(interp = await executor.prepare(cfg, interp, s))) return s;
+      // A type that starts no Python (Java, C/C++: needsInterp false) gets no interpreter and no executor.
+      let interp = type.needsInterp === false ? null : interpFor(cfg);
+      if (type.needsInterp !== false) {
+        if (!interp) return s.console().append(`${tr('No Python interpreter found.')}\n`, 'err');
+        // The executor returns the interpreter to start instead (null cancels the run) and may add exit hooks.
+        if (executor && !(interp = await executor.prepare(cfg, interp, s))) return s;
+      }
       await type.start(cfg, s, interp, opts);
     } catch (err) {
       (s.con || s.console()).append(`${err.message}\n`, 'err');
@@ -1255,7 +1258,8 @@
   });
 
   ide.run = {
-    // type: {type, title, icon, fields, defaults(), identity(cfg), file(cfg), forFile?(path), start(cfg, session, interp, opts)}
+    // type: {type, title, icon, fields, defaults(), identity(cfg), file(cfg), forFile?(path), start(cfg, session, interp, opts),
+    //   needsInterp?: false for a type that starts no Python (start then gets interp null)}
     registerType: (t) => types.set(t.type, t),
     types,
     configs: () => state.configs,
