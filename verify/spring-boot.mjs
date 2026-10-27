@@ -8,11 +8,11 @@
 // Gradle war project too. Also in Korean.
 // SPRING_REAL=1 uses start.spring.io instead and only checks that a Maven project arrives.
 import http from 'http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import zlib from 'zlib';
-import { launch } from './lib.mjs';
+import { launch, openFile } from './lib.mjs';
 
 const REAL = process.env.SPRING_REAL === '1';
 const results = [];
@@ -111,7 +111,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 // An empty home: the first Maven or Gradle run is announced as one that downloads.
 const buildHome = path.join(work, 'home');
 mkdirSync(buildHome);
-const env = REAL ? {} : { PYIDE_INITIALIZR_URL: `http://127.0.0.1:${server.address().port}/`, PYIDE_BUILD_HOME: buildHome, SPRING_GATE: gate };
+const env = REAL ? {} : { PYIDE_INITIALIZR_URL: `http://127.0.0.1:${server.address().port}/`, PYIDE_BUILD_HOME: buildHome, SPRING_GATE: gate, PYIDE_TEST_NODE: process.execPath };
 
 const setValue = (t, sel, value) => t.js(`(() => { const i = document.querySelector(${q(sel)}); i.value = ${q(value)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 const toggle = (t, id) => t.js(`(() => { const b = document.querySelector('#npSpringDeps input[value="${id}"]'); b.click(); return b.checked; })()`);
@@ -330,6 +330,53 @@ try {
     const again = await a.js(`['npSpringLanguage', 'npSpringBuild', 'npSpringPackaging'].map((n) => document.querySelector('#' + n + ' input:checked').value).join()`);
     check(again === 'kotlin,gradle-project-kotlin,war', `the wizard comes back with the last project's language, type and packaging (${again})`);
     await a.click('#npCancel');
+
+    // ---------- debugging (Shift+F9 on the Maven / Gradle configuration) ----------
+    // A project whose wrappers stand in for Maven and Gradle: they read the debug agent the IDE passes (Maven's
+    // -Dspring-boot.run.jvmArguments, Gradle's init script), compile the application and run it in a real JVM.
+    const app = path.join(where, 'debugapp');
+    const putApp = (rel, text) => { mkdirSync(path.dirname(path.join(app, rel)), { recursive: true }); writeFileSync(path.join(app, rel), text); };
+    putApp('pom.xml', '<project><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n');
+    putApp('build.gradle', "plugins { id 'org.springframework.boot' version '4.1.2' }\n");
+    putApp('src/main/java/demo/DemoApplication.java', 'package demo;\n\npublic class DemoApplication {\n    public static void main(String[] args) {\n        int answer = 6 * 7;\n        System.out.println("answer " + answer);\n    }\n}\n');
+    putApp('fake-build.cjs', `const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+console.log('build tool got: ' + args.join(' '));
+let agent = (args.find((a) => a.startsWith('-Dspring-boot.run.jvmArguments=')) || '').slice('-Dspring-boot.run.jvmArguments='.length);
+const init = args[args.indexOf('--init-script') + 1];
+if (args.includes('--init-script')) agent = /jvmArgs '([^']+)'/.exec(fs.readFileSync(init, 'utf8'))[1];
+const bin = path.join(process.env.JAVA_HOME, 'bin');
+const out = path.join(__dirname, 'target', 'classes');
+spawnSync(path.join(bin, 'javac.exe'), ['-g', '-d', out, path.join(__dirname, 'src', 'main', 'java', 'demo', 'DemoApplication.java')], { stdio: 'inherit' });
+const r = spawnSync(path.join(bin, 'java.exe'), [...(agent ? [agent] : []), '-cp', out, 'demo.DemoApplication'], { stdio: 'inherit' });
+process.exit(r.status ?? 1);
+`);
+    putApp('mvnw.cmd', '@"%PYIDE_TEST_NODE%" "%~dp0fake-build.cjs" %*\r\n');
+    putApp('gradlew.bat', '@"%PYIDE_TEST_NODE%" "%~dp0fake-build.cjs" %*\r\n');
+    await a.js(`ide.openProject(${q(app)})`);
+    await a.until(`ide.root && ide.root.toLowerCase() === ${q(app.toLowerCase())}`, 'debugapp opened', 30000);
+    await a.js(`ide.settings.set(${q(`toolchains.jdk:${app}`)}, ${q(jdk.id)})`);
+    await openFile(a, 'src/main/java/demo/DemoApplication.java');
+    // A breakpoint on line 6 (the println), set from the gutter as a user would.
+    const p6 = await a.js(`(() => { const e = ide.editor; const li = e.getLayoutInfo(); const pos = e.getScrolledVisiblePosition({ lineNumber: 6, column: 1 });
+      const r = e.getDomNode().getBoundingClientRect(); return { x: r.left + li.glyphMarginLeft + li.glyphMarginWidth / 2, y: r.top + pos.top + pos.height / 2 }; })()`);
+    await a.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p6.x, y: p6.y });
+    for (const type of ['mousePressed', 'mouseReleased']) await a.cdp('Input.dispatchMouseEvent', { type, x: p6.x, y: p6.y, button: 'left', clickCount: 1, buttons: 1 });
+    await a.until(`ide.debugger.breakpoints?.().some((b) => b.line === 6) ?? window.__debugger.breakpoints().some((b) => b.line === 6)`, 'breakpoint set', 5000).catch(() => {});
+    const stoppedAt6 = `(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx]; return !!f && f.path?.endsWith('DemoApplication.java') && f.line === 6; })()`;
+    for (const [tool, goals, sign] of [['maven', 'spring-boot:run', '-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:'], ['gradle', 'bootRun', '--init-script']]) {
+      await a.js(`(ide.run.debugConfig({ ...ide.run.types.get('build').defaults(), id: 'dbg-${tool}', type: 'build', name: 'DemoApplication', tool: '${tool}', goals: '${goals}' }), true)`);
+      const hit = await a.until(stoppedAt6, `${tool} stops at the breakpoint`, 120000).then(() => true, () => false);
+      const out = await a.js(`document.querySelector('#dbgOut')?.textContent || ''`);
+      const vars = await a.js(`document.querySelector('#dbgVars')?.textContent || ''`);
+      check(hit && out.includes(sign) && vars.includes('answer = {int} 42'), `Debug on a ${tool} ${goals} configuration stops at a breakpoint in the application, with its variables (${q(out.split('\n').slice(0, 2).join(' | ').slice(0, 220))}; ${q(vars.slice(0, 80))})`);
+      await a.js(`(ide.runAction('Resume'), true)`);
+      await a.until(`(document.querySelector('#dbgOut')?.textContent || '').includes('answer 42') && !ide.debugger.isActive()`, `${tool} run finishes`, 60000).catch(() => {});
+      check((await a.js(`document.querySelector('#dbgOut')?.textContent || ''`)).includes('answer 42') && !(await a.js('ide.debugger.isActive()')), `after Resume the ${tool} application finishes`);
+    }
+    check(!readdirSync(tmpdir()).some((n) => /^pyide-debug-\d+-\d+\.gradle$/.test(n)), 'the Gradle init script is deleted when the build ends');
   }
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${q(a.consoleErrors)}` : ''}`);
   const internal = await a.js(`ide.api.invoke('diagnostics:errors')`);
@@ -339,7 +386,7 @@ try {
 
   if (!REAL) {
     metaFails = 0;
-    b = await launch({ fixture: 'core', port: 9774, name: 'spring-boot-ko', lang: 'ko', env });
+    b = await launch({ fixture: 'core', port: 9776, name: 'spring-boot-ko', lang: 'ko', env });
     await openSpring(b);
     await b.until(`document.querySelector('#npName').value === 'demo'`, 'Spring Boot suggests the name demo', 10000);
     check(true, 'choosing Spring Boot suggests the project name demo');
@@ -354,6 +401,23 @@ try {
     const two = await labels();
     check(two === 'Spring Boot:|의존성:|추가된 의존성|생성' && await b.js(`document.querySelector('#npPrevious').textContent`) === '이전', `the second page is in Korean (${two})`);
     await b.shot('spring-wizard-ko-2.png');
+    check(b.consoleErrors.length === 0, `no renderer exceptions in Korean${b.consoleErrors.length ? ` ${q(b.consoleErrors)}` : ''}`);
+    await b.close();
+    b = null;
+
+    // ---------- the Spring Boot plugin turned off ----------
+    // Spring Boot is a plugin of its own (renderer/features/spring-boot) on top of toolchains: turned off, New Project
+    // has no Spring Boot type and its channel is gone, while Java and C/C++ and the Maven / Gradle configuration stay.
+    const off = mkdtempSync(path.join(tmpdir(), 'pyide-spring-off-'));
+    writeFileSync(path.join(off, 'plugin-state.json'), q({ disabled: ['spring-boot'] }));
+    b = await launch({ fixture: 'core', port: 9777, name: 'spring-boot-off', env, userData: off });
+    await b.js(`ide.runAction('NewProject')`);
+    await b.until(`!!document.querySelector('.np-dialog #npName')`, 'wizard without Spring Boot');
+    const typesOff = await b.js(`[...document.querySelectorAll('.np-type')].map((n) => n.dataset.type).join()`);
+    check(typesOff.includes('java') && typesOff.includes('cpp') && !typesOff.includes('spring'), `with the Spring Boot plugin off, New Project keeps Java and C/C++ and has no Spring Boot (${typesOff})`);
+    check(await b.js(`!!ide.run.types.get('build') && !!ide.run.types.get('java') && !document.querySelector('#npSpring')`), 'the Maven / Gradle and Java Application configurations stay with the toolchains plugin');
+    check(await b.js(`ide.api.invoke('spring:defaultServer').then(() => false, () => true)`), 'the Spring Initializr channels are not registered');
+    check(b.consoleErrors.length === 0, `no renderer exceptions with the plugin off${b.consoleErrors.length ? ` ${q(b.consoleErrors)}` : ''}`);
   }
 } catch (err) {
   if (/^SKIP/.test(err.message)) console.log(err.message);

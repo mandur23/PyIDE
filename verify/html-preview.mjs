@@ -119,8 +119,12 @@ t.close();
 const k = await launch({ fixture: 'core', port: 9851, name: 'html-preview-ko', lang: 'ko-KR' });
 try {
   writeSite(k.project);
+  await k.js(`(window.__probes = [], addEventListener('message', (e) => { if (e.data?.probe) window.__probes.push(e.data); }), true)`);
   await openFile(k, 'site/index.html');
   await k.until(`!!document.querySelector('.vw-html .vw-toolbar')`, 'ko viewer');
+  // The screenshot shows the page, not the moment before it loads.
+  await k.until(`window.__probes.length > 0`, 'ko page loaded in the preview', 20000);
+  k.check((await k.js(`window.__probes.at(-1).title`)) === 'Hello preview', 'the page shows in the Korean UI too');
   const leaks = await englishLeaks(k, '.vw-html .vw-toolbar', ['px', 'HTML']);
   k.check(!leaks.length, `the HTML preview toolbar is Korean${leaks.length ? ` ${JSON.stringify(leaks)}` : ''}`);
   await k.shot('korean.png');

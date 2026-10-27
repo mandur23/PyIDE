@@ -2,6 +2,11 @@
 
 `npm run release -- <버전>`은 이 파일의 `## <버전>` 절을 GitHub 릴리스 노트로 씁니다. 릴리스 전에 새 버전의 절을 맨 위에 추가하세요.
 
+## 0.2.15
+
+- Spring Boot를 별도 플러그인 "Spring Boot"로 분리: 플러그인 관리자에서 Java 및 C/C++와 따로 켜고 끌 수 있음. 끄면 새 프로젝트에서 Spring Boot 유형만 빠지고 Java·C/C++ 프로젝트와 Maven / Gradle 실행 구성은 그대로
+- Spring Boot 앱 디버그: Maven / Gradle 실행 구성(`spring-boot:run`, `bootRun`)을 디버그(Shift+F9, 애플리케이션 클래스의 거터, 프로젝트 트리)하면 앱 JVM에 디버거가 붙어 중단점에서 멈추고 변수·단계 실행·평가를 IntelliJ처럼 사용. Maven은 `-Dspring-boot.run.jvmArguments`, Gradle은 초기화 스크립트로 디버그 에이전트를 넘기며, 빌드가 오래 걸려도 최대 30분까지 기다림
+
 ## 0.2.14
 
 - 의미 색인: 내용이 바뀌지 않은 파일은 다시 임베딩하지 않음. 브랜치 전환이나 동기화 프로그램 때문에 수정 시각만 바뀐 파일은 기존 색인을 그대로 쓰고 시각만 갱신 (이전에는 내용이 같아도 시각이나 크기가 바뀌면 다시 임베딩)

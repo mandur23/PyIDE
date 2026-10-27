@@ -35,9 +35,13 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
   // The project's wrapper (mvnw.cmd, gradlew.bat) wins over mvn or gradle on PATH; it is named with .\ because cmd.exe
   // skips the current folder when NoDefaultCurrentDirectoryInExePath is set. Goals are words, so cmd.exe gets no syntax.
   // sync: true downloads the build tool and the dependencies instead (SYNC_GOALS), and only in a trusted project, since
-  // nobody asked for it.
+  // nobody asked for it. debugPort: the application's JVM listens there for the debugger (JDWP, suspended until it
+  // attaches): Maven's spring-boot:run gets it as -Dspring-boot.run.jvmArguments (the plugin forks that JVM), other
+  // Maven goals through MAVEN_OPTS (exec:java runs in Maven's own JVM), and Gradle's JavaExec tasks (bootRun, run)
+  // through an init script.
+  let debugScripts = 0;
   ipcMain.handle('toolchains:build', (_e, spec = {}) => {
-    const { tool, cwd, env = {}, jdk, sync } = spec;
+    const { tool, cwd, env = {}, jdk, sync, debugPort } = spec;
     if (!['maven', 'gradle'].includes(tool)) throw new Error(`Unknown build tool ${tool}`);
     if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('No working directory');
     if (sync && !isTrusted(cwd)) throw Object.assign(new Error('The project is not trusted (Safe Mode)'), { expected: true });
@@ -46,7 +50,18 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
     const wrapper = tool === 'maven' ? 'mvnw.cmd' : 'gradlew.bat';
     const program = fs.existsSync(path.join(cwd, wrapper)) ? `.\\${wrapper}` : tool === 'maven' ? 'mvn' : 'gradle';
     const extra = jdk?.home && path.isAbsolute(jdk.home) ? { JAVA_HOME: jdk.home } : {};
-    const command = `${program} ${goals.trim()}`;
+    let command = `${program} ${goals.trim()}`;
+    let initScript = null;
+    if (debugPort !== undefined) {
+      if (!Number.isInteger(debugPort) || debugPort < 1024 || debugPort > 65535) throw new Error(`Bad debug port ${debugPort}`);
+      const agent = `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`;
+      if (tool === 'gradle') {
+        initScript = path.join(os.tmpdir(), `pyide-debug-${process.pid}-${++debugScripts}.gradle`);
+        fs.writeFileSync(initScript, `allprojects {\n    tasks.withType(JavaExec).configureEach { jvmArgs '${agent}' }\n}\n`);
+        command += ` --init-script "${initScript}"`;
+      } else if (/(^| )spring-boot:run( |$)/.test(goals.trim())) command += ` "-Dspring-boot.run.jvmArguments=${agent}"`;
+      else extra.MAVEN_OPTS = `${env.MAVEN_OPTS || process.env.MAVEN_OPTS || ''} ${agent}`.trim();
+    }
     // Nothing downloaded yet (the wrapper's build tool, the dependency cache): the first run takes minutes.
     const home = process.env.PYIDE_BUILD_HOME || os.homedir();
     const cache = tool === 'maven' ? [path.join(home, '.m2', 'repository'), ...(program.startsWith('.') ? [path.join(home, '.m2', 'wrapper', 'dists')] : [])]
@@ -57,6 +72,11 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
       // Java writes piped output in the native code page (CP949 on Korean Windows).
       encoding: 'cp949',
     });
+    if (initScript) {
+      const child = procs.get(id);
+      if (child) child.once('exit', () => fs.rm(initScript, { force: true }, () => {}));
+      else fs.rm(initScript, { force: true }, () => {});
+    }
     return { id, command, firstRun };
   });
 
