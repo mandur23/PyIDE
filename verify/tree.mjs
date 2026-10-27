@@ -209,7 +209,16 @@ try {
   const lastDialog = `[...document.querySelectorAll('.dialog')].pop()`;
   const press = (label) => t2.js(`([...${lastDialog}.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === ${q(label)}).click(), true)`);
   const drop = async (target, files) => {
-    const box = await t2.js(`(() => { const r = (${target}).getBoundingClientRect(); return { x: r.x + 30, y: r.bottom - 6 }; })()`);
+    // A copy just made refreshes the tree, which moves the rows: the drop waits until the target stays put, or on a
+    // slow machine it lands on whatever row slid under the pointer.
+    const where = () => t2.js(`(() => { const r = (${target}).getBoundingClientRect(); return { x: r.x + 30, y: r.bottom - 6 }; })()`);
+    let box = await where();
+    for (let i = 0; i < 20; i++) {
+      await t2.sleep(150);
+      const again = await where();
+      if (again.x === box.x && again.y === box.y) break;
+      box = again;
+    }
     const data = { items: [], files, dragOperationsMask: 1 };
     for (const type of ['dragEnter', 'dragOver', 'drop']) await t2.cdp('Input.dispatchDragEvent', { type, x: box.x, y: box.y, data });
   };

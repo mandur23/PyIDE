@@ -22,6 +22,9 @@ setTimeout(() => process.stderr.write('INF Requesting new quick Tunnel on tryclo
   + 'INF +--------------------------------------------------------------------------------------------+\\n'
   + 'INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |\\n'
   + 'INF |  https://fake-port-' + port + '.trycloudflare.com                                           |\\n'), 300);
+// As the real one does, a long connectivity report comes between the address and the registration.
+setTimeout(() => process.stderr.write('INF precheck: DNS, UDP and TCP connectivity pass '.repeat(120) + '\\n'), 450);
+setTimeout(() => process.stderr.write('INF Registered tunnel connection connIndex=0 location=icn01 protocol=quic\\n'), 600);
 setInterval(() => {}, 1000);
 `);
 const env = { PYIDE_CLOUDFLARED: q([process.execPath, fake]), PYIDE_INSTALL_ROOT: path.join(work, 'root') };

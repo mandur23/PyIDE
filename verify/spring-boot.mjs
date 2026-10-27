@@ -371,10 +371,14 @@ process.exit(r.status ?? 1);
       const hit = await a.until(stoppedAt6, `${tool} stops at the breakpoint`, 120000).then(() => true, () => false);
       const out = await a.js(`document.querySelector('#dbgOut')?.textContent || ''`);
       const vars = await a.js(`document.querySelector('#dbgVars')?.textContent || ''`);
-      check(hit && out.includes(sign) && vars.includes('answer = {int} 42'), `Debug on a ${tool} ${goals} configuration stops at a breakpoint in the application, with its variables (${q(out.split('\n').slice(0, 2).join(' | ').slice(0, 220))}; ${q(vars.slice(0, 80))})`);
+      const ok = hit && out.includes(sign) && vars.includes('answer = {int} 42');
+      // A failure shows the whole Debug console, so a run on CI says where it stopped.
+      check(ok, `Debug on a ${tool} ${goals} configuration stops at a breakpoint in the application, with its variables (${ok ? q(out.split('\n').slice(0, 2).join(' | ').slice(0, 220)) : q(out.slice(-1500))}; ${q(vars.slice(0, 80))})`);
       await a.js(`(ide.runAction('Resume'), true)`);
       await a.until(`(document.querySelector('#dbgOut')?.textContent || '').includes('answer 42') && !ide.debugger.isActive()`, `${tool} run finishes`, 60000).catch(() => {});
       check((await a.js(`document.querySelector('#dbgOut')?.textContent || ''`)).includes('answer 42') && !(await a.js('ide.debugger.isActive()')), `after Resume the ${tool} application finishes`);
+      // The build tool's own processes (cmd.exe, the wrapper) end a moment after the application; the next debug waits.
+      await new Promise((r) => setTimeout(r, 1500));
     }
     check(!readdirSync(tmpdir()).some((n) => /^pyide-debug-\d+-\d+\.gradle$/.test(n)), 'the Gradle init script is deleted when the build ends');
   }

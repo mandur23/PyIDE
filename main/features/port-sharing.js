@@ -67,7 +67,7 @@ exports.register = ({ ipcMain, app, send }) => {
 
   const state = () => ({
     ports,
-    tunnels: [...tunnels].map(([port, t]) => ({ port, state: t.state, url: t.url || null, error: t.error || null })),
+    tunnels: [...tunnels].map(([port, t]) => ({ port, state: t.state, url: t.url || null, error: t.error || null, log: t.state === 'shared' ? '' : t.log.slice(-1500) })),
     cloudflared: !!cloudflared(),
   });
   const changed = () => send('ports:changed', state());
@@ -140,11 +140,19 @@ exports.register = ({ ipcMain, app, send }) => {
     tunnels.set(port, t);
     const child = spawn(argv[0], [...argv.slice(1), 'tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`], { windowsHide: true });
     t.child = child;
+    // The address is printed before Cloudflare serves it. Opened that early, a resolver caches "no such name" and the
+    // address fails for minutes, so it counts as shared once cloudflared has registered a connection to Cloudflare.
+    // Each is taken from its chunk as it arrives: cloudflared prints a long connectivity report between the two, which
+    // pushes the address out of the kept log tail.
+    let registered = false;
+    let address = null;
     const read = (chunk) => {
-      t.log = (t.log + chunk.toString()).slice(-4000);
-      const m = URL_RE.exec(t.log);
-      if (m && !t.url && tunnels.get(port) === t) {
-        Object.assign(t, { url: m[0], state: 'shared' });
+      const text = chunk.toString();
+      t.log = (t.log + text).slice(-4000);
+      address ||= URL_RE.exec(t.log)?.[0] || null;
+      registered ||= /Registered tunnel connection/i.test(t.log);
+      if (address && registered && !t.url && tunnels.get(port) === t) {
+        Object.assign(t, { url: address, state: 'shared' });
         changed();
       }
     };

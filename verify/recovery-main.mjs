@@ -64,6 +64,9 @@ try {
     await a.put('two.py', 'two');
     const folder = path.join(userData, 'backups', readdirSync(path.join(userData, 'backups'))[0]);
     rmSync(folder, { recursive: true, force: true });
+    // Windows finishes a delete only when the last handle closes (an antivirus scan of a file just written); the folder
+    // made again before that would vanish with it.
+    for (let i = 0; i < 50 && existsSync(folder); i++) await sleep(100);
     const again = await tryCall(() => a.put('one.py', 'one again'));
     const file = path.join(folder, fileOf('untitled:one.py'));
     check(!again.error && existsSync(file) && readFileSync(file, 'utf8').endsWith('\none again'),

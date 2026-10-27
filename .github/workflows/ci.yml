@@ -80,6 +80,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/multi-window.mjs
+      - name: doc-sync-fuzz
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/doc-sync-fuzz.mjs
       - name: case-sensitive
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

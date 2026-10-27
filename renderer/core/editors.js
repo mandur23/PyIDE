@@ -251,12 +251,16 @@
   }
 
   // `pos` in the text after `op`. after: a point where op inserted text goes behind that text.
+  // A point inside a range op replaced lands after op's new text, whatever `after`: the windows must agree, and the
+  // replacing window puts its text at the start of the range, before what the other window typed inside it. A point at
+  // the start of a replaced range is a tie with op's text and follows `after`.
   function mapPoint(pos, op, after) {
     let shift = 0;
     for (const c of op.c) {
       const end = c.at + c.del;
       if (end < pos || (end === pos && (c.del > 0 || after))) { shift += c.ins.length - c.del; continue; }
-      if (c.at < pos) return c.at + shift + (after ? c.ins.length : 0);
+      if (c.at < pos) return c.at + shift + c.ins.length;
+      if (c.at === pos && after) return pos + shift + c.ins.length;
       break;
     }
     return pos + shift;
@@ -287,7 +291,8 @@
     for (const c of a.c) {
       if (!c.del) { put(mapPoint(c.at, b, !aFirst), 0, c.ins); continue; }
       const parts = survivors(c.at, c.at + c.del, b);
-      put(parts.length ? parts[0][0] : mapPoint(c.at, b, true), 0, c.ins);
+      // The new text goes where a plain insertion at the range's start would: the shared order breaks a tie there.
+      put(mapPoint(c.at, b, !aFirst), 0, c.ins);
       for (const [p, n] of parts) put(p, n, '');
     }
     return { ...a, c: out.filter((c) => c.del || c.ins) };

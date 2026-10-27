@@ -208,7 +208,15 @@ try {
   const link = `[...document.querySelectorAll('#runOut a')].find((a) => a.textContent === ${S(`File "${zeroPy}", line 6`)})`;
   check(await js(`!!${link}`), 'the traceback line in the generated file is a link');
   check(await js(`${link}.title`) === 'Show the node in zero.pyflow', 'the link says it shows the node');
-  const linkAt = await js(`(() => { const a = ${link}; a.scrollIntoView({ block: 'center' }); const r = a.getClientRects()[0]; return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  // The tab just switched, so the Run window may still be settling: the link is clicked once it stays put.
+  const linkPoint = () => js(`(() => { const a = ${link}; a.scrollIntoView({ block: 'center' }); const r = a.getClientRects()[0]; return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  let linkAt = await linkPoint();
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 150));
+    const again = await linkPoint();
+    if (S(again) === S(linkAt)) break;
+    linkAt = again;
+  }
   await ui.click(linkAt);
   await until(`ide.activeTab()?.path.toLowerCase().endsWith('\\\\zero.pyflow')`, 'the link opens the .pyflow tab');
   await until(`${V}.selection().join(',') === 'n3'`, 'the link selects the node');

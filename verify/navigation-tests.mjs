@@ -67,7 +67,19 @@ const marks = () => js(`ide.typeHierarchy.gutterMarks()`);
 const markAt = async (line) => (await marks()).find((m) => m.line === line) || null;
 const untilMarks = (label, test, ms = 30000) => until(`(() => { const m = ide.typeHierarchy.gutterMarks(); return (${test})(m); })()`, label, ms).then(() => true, () => false);
 // The gutter icon drawn for a line, as a point to click.
-const iconPoint = (line) => js(`(() => {
+// The icon's point once it stays put: code lenses arriving in a second batch push the lines down, and a click aimed
+// before that lands on the line below (seen on CI).
+const iconPoint = async (line) => {
+  let pt = await iconPointNow(line);
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 150));
+    const again = await iconPointNow(line);
+    if (S(again) === S(pt)) return pt;
+    pt = again;
+  }
+  return pt;
+};
+const iconPointNow = (line) => js(`(() => {
   const ed = ide.editor; const r = ed.getDomNode().getBoundingClientRect();
   const y = r.top + ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: 1 }).top + ed.getOption(ide.monaco.editor.EditorOption.lineHeight) / 2;
   const icons = [...ed.getDomNode().querySelectorAll('.th-gutter')].map((n) => n.getBoundingClientRect()).filter((b) => b.height);
