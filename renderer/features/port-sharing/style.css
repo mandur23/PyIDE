@@ -1,0 +1,19 @@
+.ports-tool { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.ports-bar { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); }
+.ports-auto { display: flex; align-items: center; gap: 6px; }
+.ports-auto input { accent-color: var(--blue6); }
+.ports-bar .secondary { margin-left: auto; }
+.ports-list { flex: 1; overflow: auto; padding: 4px 10px; }
+.ports-empty { padding: 12px 0; }
+.ports-row { display: grid; grid-template-columns: 70px minmax(120px, 1fr) minmax(170px, 1fr) minmax(220px, 2fr) 120px; gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--gray2); }
+.ports-head { color: var(--gray9); font-size: 12px; }
+.ports-port { font-variant-numeric: tabular-nums; }
+.ports-proc, .ports-public { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ports-public { display: flex; align-items: center; gap: 6px; }
+.ports-row a { color: var(--blue7, #4a90e2); text-decoration: none; }
+.ports-row a:hover { text-decoration: underline; }
+.ports-copy { border: 0; background: none; color: var(--gray9); cursor: pointer; padding: 0 2px; }
+.ports-error { color: var(--red7, #e5534b); }
+.ports-actions { text-align: right; }
+.ports-warning p { margin: 0 0 10px; line-height: 1.5; }
+.ports-dont-ask { display: flex; align-items: center; gap: 6px; }

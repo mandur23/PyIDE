@@ -46,6 +46,21 @@ const TOOLCHAINS = {
     top: '',
     probe: 'config_win/config.ini',
   },
+  // Port sharing's tunnel (main/features/port-sharing.js): one program, no archive (`single` names the file it is
+  // saved as). 2026.10.0, not the newest: a build some weeks old.
+  cloudflared: {
+    kind: 'cloudflared',
+    title: 'cloudflared',
+    version: '2026.10.0',
+    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe',
+    size: 55365048,
+    // The digest GitHub lists for the release asset.
+    sha256: '86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c',
+    folder: 'cloudflared',
+    top: '',
+    probe: 'cloudflared.exe',
+    single: 'cloudflared.exe',
+  },
 };
 
 const installRoot = () => process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide');
@@ -129,12 +144,17 @@ function createToolchains({ root = installRoot(), run } = {}) {
     const staging = `${dir}.extract`;
     fs.rmSync(staging, { recursive: true, force: true });
     fs.mkdirSync(staging, { recursive: true });
-    log(`Extracting to ${dir}\n`);
-    try {
-      await exec(tarExe(), ['-xf', archive, '-C', staging]);
-    } catch (err) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      throw err;
+    if (s.single) {
+      // A program on its own: moved into place under its name.
+      fs.renameSync(archive, path.join(staging, s.top, s.single));
+    } else {
+      log(`Extracting to ${dir}\n`);
+      try {
+        await exec(tarExe(), ['-xf', archive, '-C', staging]);
+      } catch (err) {
+        fs.rmSync(staging, { recursive: true, force: true });
+        throw err;
+      }
     }
     if (!isFile(path.join(staging, s.top, s.probe))) {
       fs.rmSync(staging, { recursive: true, force: true });

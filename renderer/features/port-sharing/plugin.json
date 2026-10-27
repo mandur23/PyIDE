@@ -1,0 +1,13 @@
+{
+  "id": "port-sharing",
+  "name": "Ports",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "A Ports tool window like VS Code's: the ports that servers started from PyIDE listen on, and a public https address for any of them through a Cloudflare quick tunnel (cloudflared from the Install Manager), with an optional automatic share.",
+  "depends": [
+    "installer"
+  ],
+  "main": [
+    "port-sharing.js"
+  ]
+}

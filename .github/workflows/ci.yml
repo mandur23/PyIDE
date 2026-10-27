@@ -152,6 +152,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/spring-boot.mjs
+      - name: port-sharing
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/port-sharing.mjs
       - name: visual-script-codegen
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
