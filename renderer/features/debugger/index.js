@@ -305,11 +305,12 @@
   };
   const fieldRow = (label, ...nodes) => { const r = el('div', 'dbg-bp-field'); r.append(el('span', 'dbg-bp-label', label), ...nodes); return r; };
 
-  // The fields PyCharm's breakpoint popup and the Breakpoints dialog share. onChange gets the edited props.
-  function bpFields(bp, onChange, ids = {}) {
+  // The fields PyCharm's breakpoint popup and the Breakpoints dialog share. onChange gets the edited props; path is
+  // the breakpoint's file (a .java file's condition is a Java expression).
+  function bpFields(bp, onChange, ids = {}, path = '') {
     const box = el('div', 'dbg-bp-fields');
     const en = checkRow(tr('Enabled'), bp.enabled);
-    const cond = textInput(ids.condition, bp.condition, tr('Python expression, e.g. i == 3'));
+    const cond = textInput(ids.condition, bp.condition, /\.java$/i.test(path) ? tr('Java expression, e.g. i == 3') : tr('Python expression, e.g. i == 3'));
     const hit = textInput(ids.hit, bp.hitCondition, tr('e.g. 3, >= 3 or % 3'));
     hit.classList.add('dbg-bp-hit');
     const log = checkRow(tr('Log message instead of suspending'), !!bp.logMessage);
@@ -341,7 +342,7 @@
     pop.id = 'dbgBpPopup';
     const title = el('div', 'dbg-bp-popup-title', `${basename(path)}:${line}`);
     title.dataset.userText = '';
-    const fields = bpFields(bp, null, { condition: 'dbgBpCondition', hit: 'dbgBpHit', log: 'dbgBpLog' });
+    const fields = bpFields(bp, null, { condition: 'dbgBpCondition', hit: 'dbgBpHit', log: 'dbgBpLog' }, path);
     const foot = el('div', 'dbg-bp-popup-foot');
     const more = el('button', 'link', ide.keymap.withKeys(tr('More'), 'ViewBreakpoints'));
     const rm = el('button', 'secondary', tr('Remove'));
@@ -431,6 +432,21 @@
     [/^No process selected$/, () => tr('No process selected')],
     [/^Debugging stopped$/, () => tr('Debugging stopped')],
     [/^The program exited before the debugger could connect$/, () => tr('The program exited before the debugger could connect')],
+    // Java (main/features/debug-jvm.js and debug-jvm-eval.js)
+    [/^Unable to open debugger port \(([^)]+)\): ([\s\S]*)$/, (m) => tr('Unable to open debugger port ({address}): {error}', { address: m[1], error: m[2] })],
+    [/^The JVM did not answer the JDWP handshake$/, () => tr('The JVM did not answer the JDWP handshake')],
+    [/^Not a JDWP agent$/, () => tr('The port is not a JDWP debug port')],
+    [/^The JVM closed the connection$/, () => tr('The JVM closed the connection')],
+    [/^Not suspended$/, () => tr('Not suspended')],
+    [/^The frame is no longer available$/, () => tr('The frame is no longer available')],
+    [/^Evaluation is available only while the program is suspended$/, () => tr('Evaluation is available only while the program is suspended')],
+    [/^Methods can be called only in a thread suspended by a breakpoint or a step$/, () => tr('Methods can be called only in a thread suspended by a breakpoint or a step')],
+    [/^Cannot find symbol (\S+)$/, (m) => tr("Cannot find symbol '{name}'", { name: m[1] })],
+    [/^Cannot find method (\S+?)\((…?)\) in (\S+)$/, (m) => tr("Cannot find method '{name}' in {type}", { name: m[1], type: m[3] })],
+    [/^Method threw '(\S+)' exception\.$/, (m) => tr("Method threw '{type}' exception.", { type: m[1] })],
+    [/^Unexpected end of expression$/, () => tr('Unexpected end of expression')],
+    [/^Unexpected '(.+)'$/, (m) => tr("Unexpected '{text}'", { text: m[1] })],
+    [/^'(\S+)' is not supported$/, (m) => tr("'{text}' is not supported in evaluation", { text: m[1] })],
   ];
   // The debugger's own messages first: errorText words a bare network code as the internet being unreachable, which
   // a debugpy on this machine that did not answer is not.
@@ -463,9 +479,17 @@
     else if (event === 'continued') onContinued(id);
     else if (event === 'output') {
       if (body.category === 'telemetry') return;
+      if (body.condition != null) {
+        return con.append(`${tr("Breakpoint condition '{condition}' could not be evaluated: {error}", { condition: body.condition, error: remoteError(body.error) })}\n`, 'err');
+      }
       con.append(body.output, body.category === 'stderr' ? 'err' : body.category === 'stdout' ? null : 'sys');
     } else if (root != null) {
       if (event === 'terminated' || event === 'exited' || event === 'closed') dropProc(id);
+    } else if (sess.jvm && event === 'closed') {
+      con.append(`${tr("Disconnected from the target VM, address: '{address}', transport: 'socket'", { address: sess.address })}\n`, 'sys');
+      p.stop = null;
+      if (sess.attach) endSession(sess, null);
+      else if (sess.cur === id) setRunning();
     } else if (sess.attach && event === 'exited') {
       sess.exitCode = body.exitCode;
     } else if (sess.attach && event === 'closed') {
@@ -545,16 +569,7 @@
     earlyEvents = [];
     const mine = sess;
     const handle = { ended: new Promise((resolve) => { mine.end = resolve; }) };
-    // The program's input takes the keyboard now, so an answer to input() never lands in the file; lines typed
-    // before debugpy has started the program wait in mine.typed. Once it runs, the input takes the keyboard again
-    // unless the user has moved it elsewhere meanwhile.
-    con.input.disabled = false;
-    con.input.focus();
-    let left = false;
-    const watch = (e) => { if (!con.out.parentElement.contains(e.target)) left = true; };
-    document.addEventListener('focusin', watch, true);
-    mine.unwatch = () => document.removeEventListener('focusin', watch, true);
-    const focusInput = () => { mine.unwatch(); if (!left && sess === mine && tw.isVisible() && con.input.offsetParent) con.input.focus(); };
+    const focusInput = takeInput(mine);
     updateControls();
     const files = [...bps.values()].map((f) => f.path).concat(generatedFor(file) && !bps.has(key(file)) ? [file] : [])
       .map(bpPayload).filter((p) => p.lines.length);
@@ -594,15 +609,100 @@
     addProc(sess, id);
     if (sess.state === 'starting') sess.state = 'running';
     con.append(`${tr('Connected to pydev debugger (build debugpy)')}\n`, 'sys');
+    sessionStarted(sess, focusInput);
+    return handle;
+  }
+
+  // The program's input takes the keyboard now, so an answer to input() never lands in the file; lines typed before
+  // the debugger has started the program wait in s.typed. Once it runs, the returned focusInput() gives the input the
+  // keyboard again unless the user has moved it elsewhere meanwhile.
+  function takeInput(s) {
+    con.input.disabled = false;
+    con.input.focus();
+    let left = false;
+    const watch = (e) => { if (!con.out.parentElement.contains(e.target)) left = true; };
+    document.addEventListener('focusin', watch, true);
+    s.unwatch = () => document.removeEventListener('focusin', watch, true);
+    return () => { s.unwatch(); if (!left && sess === s && tw.isVisible() && con.input.offsetParent) con.input.focus(); };
+  }
+
+  // Once the session has its id: the input typed meanwhile, the breakpoints changed meanwhile and the queued events.
+  function sessionStarted(s, focusInput) {
     updateControls();
-    focusInput();
-    for (const text of mine.typed.splice(0)) ide.proc.input(id, `${text}\n`);
-    for (const p of mine.pendingBps) sendBps(p);
-    mine.pendingBps.clear();
-    if (mine.pendingExc) sendExcBps();
-    const queued = earlyEvents.filter((m) => (m.root ?? m.id) === id);
+    focusInput?.();
+    for (const text of s.typed?.splice(0) || []) ide.proc.input(s.id, `${text}\n`);
+    for (const p of s.pendingBps) sendBps(p);
+    s.pendingBps.clear();
+    if (s.pendingExc) sendExcBps();
+    const queued = earlyEvents.filter((m) => (m.root ?? m.id) === s.id);
     earlyEvents = [];
     for (const m of queued) handleEvent(m);
+  }
+
+  // ---------- Java (main/features/debug-jvm.js, a JDWP client) ----------
+  // spec: {launch({con, port, cancelled}) -> {procId, sourceRoots?, suspended?, timeoutMs?} | null, rerun?, tabs?}.
+  // launch builds the program into the console and starts it with -agentlib:jdwp=transport=dt_socket,server=y,
+  // suspend=y,address=127.0.0.1:<port> (null: it did not, and said why in con). procId is the process that runs it
+  // (java, or a build tool that starts the JVM, which timeoutMs gives longer to listen), followed as a run is; null
+  // attaches to a JVM that runs elsewhere, and Stop then detaches. Resolves like debugFile.
+  async function debugJvm(spec) {
+    tw.show();
+    showSub('console');
+    if (sess) await replaceSession();
+    setSessionTabs(spec.tabs);
+    if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
+    lastFile = null;
+    lastRun = spec.rerun || (() => debugJvm(spec));
+    con.clear();
+    sess = { id: null, startKey: ++startKeys, jvm: true, file: null, state: 'starting', frames: [], frameIdx: 0, pendingBps: new Set(), typed: [], procs: new Map(), cur: null };
+    earlyEvents = [];
+    const mine = sess;
+    const handle = { ended: new Promise((resolve) => { mine.end = resolve; }) };
+    const focusInput = takeInput(mine);
+    updateControls();
+    const files = [...bps.values()].filter((f) => /\.java$/i.test(f.path)).map((f) => bpPayload(f.path)).filter((p) => p.lines.length);
+    const quit = (text) => {
+      mine.unwatch();
+      if (sess === mine) {
+        if (text) con.append(`${text}\n`, 'err');
+        sess = null;
+        con.input.disabled = true;
+        updateControls();
+      }
+      mine.end({ replaced: !!mine.replaced });
+      return handle;
+    };
+    let id;
+    startups.set(mine.startKey, mine);
+    try {
+      const port = await ide.api.invoke('debug:freePort');
+      const target = await spec.launch({ con, port, cancelled: () => sess !== mine });
+      if (!target) return quit();
+      mine.address = `127.0.0.1:${port}`;
+      if (target.procId == null) mine.attach = mine.address;
+      else followProcess(mine, target.procId);
+      if (sess !== mine) {
+        if (target.procId != null) ide.proc.kill(target.procId);
+        return handle;
+      }
+      ({ id } = await ide.api.invoke('debug:jvm', { port, procId: target.procId ?? null }, files, { startKey: mine.startKey,
+        sourceRoots: target.sourceRoots || [], suspended: target.suspended !== false, timeoutMs: target.timeoutMs }));
+    } catch (err) {
+      return quit(remoteError(err));
+    } finally {
+      startups.delete(mine.startKey);
+    }
+    if (sess !== mine) {
+      mine.unwatch();
+      ide.api.invoke('debug:stop', id).catch(() => {});
+      return handle;
+    }
+    sess.id = id;
+    sess.cur = id;
+    addProc(sess, id);
+    if (sess.state === 'starting') sess.state = 'running';
+    con.append(`${tr("Connected to the target VM, address: '{address}', transport: 'socket'", { address: mine.address })}\n`, 'sys');
+    sessionStarted(sess, focusInput);
     return handle;
   }
 
@@ -610,10 +710,12 @@
   function endSession(s, code) {
     s.end?.({ replaced: !!s.replaced });
     if (sess !== s) return;
-    if (!s.attach) con.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
-    else if (code != null) con.append(`\n${tr('Process {pid} finished with exit code {code}', { pid: s.attach, code })}\n`, 'sys');
-    else if (s.exited) con.append(`\n${tr('Process {pid} finished', { pid: s.attach })}\n`, 'sys');
-    else con.append(`\n${tr('Detached from process {pid}', { pid: s.attach })}\n`, 'sys');
+    // A JVM attached to, or one still being built, has no exit of its own to report.
+    const text = s.jvm && (s.attach || s.procId == null) ? null
+      : !s.attach ? tr('Process finished with exit code {code}', { code: code ?? 1 })
+        : code != null ? tr('Process {pid} finished with exit code {code}', { pid: s.attach, code })
+          : s.exited ? tr('Process {pid} finished', { pid: s.attach }) : tr('Detached from process {pid}', { pid: s.attach });
+    if (text) con.append(`\n${text}\n`, 'sys');
     s.unwatch?.();
     sess = null;
     con.input.disabled = true;
@@ -686,13 +788,7 @@
     if (sess.state === 'starting') sess.state = 'running';
     con.append(`${res.version ? tr('Attached to process {pid} (Python {version})', { pid: proc.pid, version: res.version })
       : tr('Attached to process {pid}', { pid: proc.pid })}\n`, 'sys');
-    updateControls();
-    for (const p of mine.pendingBps) sendBps(p);
-    mine.pendingBps.clear();
-    if (mine.pendingExc) sendExcBps();
-    const queued = earlyEvents.filter((m) => (m.root ?? m.id) === res.id);
-    earlyEvents = [];
-    for (const m of queued) handleEvent(m);
+    sessionStarted(sess);
   }
 
   // Processes whose command line (or working directory, where the OS tells it) is inside the project come first.
@@ -972,19 +1068,22 @@
 
   // PyCharm-style inline values: "name: value" after each line (up to the execution line) that mentions a local.
   function inlineValueDecorations(model, frame, vars) {
-    const byName = new Map(vars.filter((v) => /^[A-Za-z_]\w*$/.test(v.name) && !SKIP_TYPES.has(v.type)).map((v) => [v.name, v]));
+    const java = /\.java$/i.test(frame.source?.path || '');
+    const byName = new Map(vars.filter((v) => /^[A-Za-z_]\w*$/.test(v.name) && !SKIP_TYPES.has(v.type) && !(java && v.name === 'this')).map((v) => [v.name, v]));
     if (!byName.size) return [];
     const stop = Math.min(frame.line, model.getLineCount());
     const indent = (l) => model.getLineContent(l).search(/\S/);
     const stopIndent = indent(stop);
     let start = Math.max(1, stop - 300);
+    // From the function's (or Java method's) first line.
+    const header = java ? /^\s*[\w<>[\],.?@\s]*\b(?!(?:if|for|while|switch|catch|synchronized)\b)\w+\s*\([^;]*$/ : /^\s*(async\s+)?def\s/;
     for (let l = stop; l >= start; l--) {
       const t = model.getLineContent(l);
-      if (/^\s*(async\s+)?def\s/.test(t) && t.search(/\S/) < stopIndent) { start = l; break; }
+      if (header.test(t) && t.search(/\S/) < stopIndent) { start = l; break; }
     }
     const out = [];
     for (let l = start; l <= stop; l++) {
-      const code = model.getLineContent(l).replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""').replace(/#.*/, '');
+      const code = model.getLineContent(l).replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""').replace(java ? /\/\/.*/ : /#.*/, '');
       if (frame.name === '<module>' && /^\s/.test(code)) continue;
       const names = [];
       for (const m of code.matchAll(/(^|[^.\w])([A-Za-z_]\w*)/g)) {
@@ -1039,7 +1138,9 @@
   const expandedVars = new Set(); // "parent/child" paths kept open across steps, like PyCharm
   // Other plugins add links to value rows (the Data View's "View as DataFrame"): fn(row, variable, expression).
   const varDecorators = [];
-  const valueClass = (v) => (v.type === 'str' ? 'str' : ['int', 'float', 'complex', 'bool'].includes(v.type) ? 'num' : '');
+  // Python's types, then Java's (main/features/debug-jvm.js names a value's type as IntelliJ IDEA does).
+  const valueClass = (v) => (v.type === 'str' || v.type === 'String' ? 'str'
+    : ['int', 'float', 'complex', 'bool', 'long', 'short', 'byte', 'double', 'boolean', 'char'].includes(v.type) ? 'num' : '');
   // Names, types, values and debugpy's error text are program data: never translated (data-user-text).
   const data = (cls, text, title) => {
     const n = el('span', cls, text);
@@ -1519,7 +1620,7 @@
         const fields = bpFields(bp, (props) => {
           fromDetail = true;
           try { setBp(path, bp.line, props); } finally { fromDetail = false; }
-        }, { condition: 'dbgBpListCondition', hit: 'dbgBpListHit', log: 'dbgBpListLog' });
+        }, { condition: 'dbgBpListCondition', hit: 'dbgBpListHit', log: 'dbgBpListLog' }, path);
         const go = el('button', 'secondary', tr('Go to Source'));
         go.onclick = () => { dlg.close(); ide.openFile(path, { line: bp.line }); };
         actions.append(go);
@@ -1806,8 +1907,11 @@
 
   // The run configuration type that debugs a file its own way through its debugTarget: pytest for a test file, a visual
   // script (also in a viewer tab). Such a file is never debugged as a plain script, as with PyCharm's Current File.
-  const claimingType = (path) => (path ? [...(ide.run?.types.values() || [])].find((t) => t.debugTarget && t.forFile?.(path)) : null);
+  // A type with its own debug(cfg) (Java Application) debugs its selected configuration too, as IntelliJ IDEA does.
+  const claimingType = (path) => (path ? [...(ide.run?.types.values() || [])].find((t) => (t.debugTarget || t.debug) && t.forFile?.(path)) : null);
   function debugCurrent() {
+    const selected = ide.run?.selected?.();
+    if (selected && ide.run.types.get(selected.type)?.debug) return ide.run.debugConfig(selected);
     const tab = ide.activeTab();
     const type = claimingType(tab?.path);
     if (type) return ide.run.debugConfig({ ...type.defaults(), ...type.forFile(tab.path) });
@@ -1870,6 +1974,7 @@
   // 'debugContextChanged' fires when the selected frame changes or the program resumes or ends.
   ide.debugger = {
     debugFile,
+    debugJvm,
     attachToProcess,
     isActive: () => !!sess,
     isSuspended: suspended,

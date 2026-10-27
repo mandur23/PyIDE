@@ -782,14 +782,18 @@
   const debugActionId = () => ['DebugCurrent', 'Debug'].find((id) => ide.actions.some((a) => a.id === id));
   // A type with debugTarget(cfg, interp, opts) -> {script, cwd, params, env, tabs?, started?} (script may be '-m'; null
   // cancels) is debugged like a script; tabs are debugFile's plugin sub-tabs of the session. started(promise) gets
-  // debugFile's promise, which settles once the session runs or failed.
-  const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile));
+  // debugFile's promise, which settles once the session runs or failed. A type with debug(cfg, opts) (Java
+  // Application, which hands the debugger a JVM) debugs its configurations itself and answers the same promise.
+  const canDebug = (cfg) => !!debugActionId() && (!cfg || cfg.type === 'python' || (!!types.get(cfg.type)?.debugTarget && !!ide.debugger?.debugFile)
+    || (!!types.get(cfg.type)?.debug && !!ide.debugger?.debugJvm));
   // opts are passed through to the type's debugTarget (e.g. {targets} for debugging the failed tests again).
   async function debugConfig(cfg, opts = {}) {
     if (beforeLaunchOf(cfg).length) {
       if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
       if (!(await runBeforeLaunch(cfg))) return;
     }
+    const own = types.get(cfg.type)?.debug;
+    if (own && ide.debugger?.debugJvm) return own(cfg, opts);
     const debugTarget = types.get(cfg.type)?.debugTarget;
     if ((cfg.type === 'python' || debugTarget) && ide.debugger?.debugFile) {
       // Debug with the configuration's interpreter, working directory, parameters and environment.
