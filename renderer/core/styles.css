@@ -332,6 +332,7 @@ body.no-project :is(#stripe, #stripeRight, #sidePanel, #sideSplitter, #bottom, #
 
 /* New Project, Get from VCS, About */
 .np-dialog .dialog-body { padding: 0; }
+.np-dialog .np-prev { order: -1; margin-right: auto; }
 .np { display: grid; grid-template-columns: 200px 1fr; min-height: 470px; }
 .np-types { background: var(--gray2); border-right: 1px solid var(--gray3); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
 .np-type { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 5px; cursor: default; }

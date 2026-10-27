@@ -90,7 +90,7 @@ async function openWizard(t, type) {
   await t.js(`(document.querySelector('.np-type[data-type="${type}"]').click(), true)`);
 }
 const closeWizard = async (t) => {
-  await t.js(`(document.querySelector('.np-dialog .dialog-buttons button:not(.primary)').click(), true)`);
+  await t.js(`(document.querySelector('#npCancel').click(), true)`);
   await t.until(`!document.querySelector('.np-dialog')`, 'wizard closed');
 };
 
@@ -113,7 +113,7 @@ try {
   // ---------- New Project: Java without a JDK ----------
   await openWizard(a, 'java');
   const types = await a.js(`[...document.querySelectorAll('.np-type')].map(n => n.lastChild.textContent).join('|')`);
-  check(types === 'Pure Python|Flask|FastAPI|Django|Java|C/C++', `New Project lists Java and C/C++ after the Python types (${types})`);
+  check(types === 'Pure Python|Flask|FastAPI|Django|Java|Spring Boot|C/C++', `New Project lists Java, Spring Boot and C/C++ after the Python types (${types})`);
   await a.until(`document.querySelector('#npJdkDownload')?.textContent.includes('99.0.1')`, 'download offer');
   const javaForm = await a.js(`(() => {
     const interp = [...document.querySelectorAll('.np-dialog fieldset')].find((f) => f.querySelector('legend').textContent === 'Interpreter type');

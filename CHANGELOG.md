@@ -2,6 +2,16 @@
 
 `npm run release -- <버전>`은 이 파일의 `## <버전>` 절을 GitHub 릴리스 노트로 씁니다. 릴리스 전에 새 버전의 절을 맨 위에 추가하세요.
 
+## 0.2.13
+
+- 새 프로젝트에 Spring Boot 유형 추가: IntelliJ IDEA처럼 Spring Initializr(start.spring.io)로 두 페이지에 걸쳐 만듦. 첫 페이지에서 서버 URL, 언어(Java, Kotlin, Groovy), 유형(Maven, Gradle - Groovy, Gradle - Kotlin), 그룹, 아티팩트, 패키지 이름, JDK, Java 버전, 패키징(Jar, War)을 고르고 "다음"을 누르면, Spring Boot 버전과 의존성(검색, 그룹 접기, 오른쪽 "추가된 의존성" 목록에서 ×로 빼기, 아래에 설명, 버전 범위 밖은 비활성)을 고름. "이전"으로 돌아갈 수 있고, 마지막에 고른 서버·언어·유형·그룹·패키징을 다음에 기억. 만든 뒤에는 애플리케이션 클래스를 열고, 그 이름의 실행 구성을 저장·선택해 실행 버튼과 Shift+F10이 바로 앱을 시작. 실행 도구 창에도 `mvnw spring-boot:run`(Gradle은 `gradlew bootRun`)을 표시. 유형을 고르면 프로젝트 이름으로 `demo`를 제안. Initializr가 요청을 거부하면 이유를 보여 주고 폴더를 만들지 않음
+- 새 Spring Boot 프로젝트를 만들면 IntelliJ IDEA의 프로젝트 가져오기처럼 백그라운드에서 Maven/Gradle과 의존성을 미리 다운로드(Maven은 `mvnw -B dependency:go-offline`, Gradle은 `gradlew classes testClasses`)해서 첫 실행이 몇 분씩 기다리지 않고 바로 시작. 상태 표시줄에 "의존성 다운로드 중…"과 진행 중인 파일이 보이고 거기서 취소할 수 있으며, 출력은 실행 창의 "동기화: <프로젝트>" 탭에 표시(중지, 다시 실행 가능). 끝나면 완료 또는 실패 알림("출력 표시")을 띄우고, 편집기는 그동안 그대로 사용 가능. 다운로드 중에 실행(Shift+F10)하거나 실행 도구에서 실행하면 두 래퍼가 같은 캐시에 동시에 받지 않도록 다운로드가 끝날 때까지 기다린다고 안내한 뒤 시작(실행 창의 중지는 실행만 취소). 다운로드가 끝난 프로젝트는 첫 실행 안내를 표시하지 않음. 안전 모드(신뢰하지 않는 프로젝트)에서는 다운로드하지 않음
+- 실행 창: 파일 감시자나 의존성 다운로드처럼 실행 구성이 아닌 탭이 처음 생기면, 선택된 탭이 없을 때 그 탭을 선택해 실행 창을 열면 바로 보임 (탭이 숨겨져 "표시할 내용이 없습니다"만 보이던 문제)
+- 실행 구성 "Maven / Gradle" 추가: 골이나 태스크를 프로젝트의 래퍼(`mvnw.cmd`, `gradlew.bat`) 또는 PATH의 mvn·gradle로 프로젝트 JDK와 함께 실행. Spring Boot 애플리케이션 클래스의 거터 실행 아이콘과 프로젝트 트리의 실행도 javac 대신 빌드 도구로 실행 (javac로는 Spring 클래스를 찾지 못해 오류가 나던 문제)
+- Spring Boot 실행 창: 서버가 뜨면 "애플리케이션이 http://localhost:8080/에서 실행 중입니다"와 "브라우저에서 열기" 버튼을 표시. 처음 실행할 때는 Maven/Gradle과 의존성을 내려받느라 몇 분 걸린다고 안내하고, 포트가 이미 사용 중이면 다른 실행을 중지하거나 `server.port`를 바꾸라고 안내
+- 새 프로젝트: 프로젝트를 만든 뒤에도 프로젝트 트리가 그대로 보임. 네트워크 오류나 Initializr의 요청 거부가 상태 표시줄의 IDE 내부 오류로 잡히던 문제 수정
+- 실행 도구: 프로젝트에 Maven 래퍼(`mvnw.cmd`)가 있으면 `mvn` 대신 래퍼로 실행하고, 래퍼 스크립트를 배치 스크립트로 따로 표시하지 않음. Maven·Gradle 실행에 프로젝트의 JDK를 `JAVA_HOME`으로 넘겨 내장 JDK로 만든 프로젝트도 바로 실행
+
 ## 0.2.12
 
 - Java 및 C/C++ 프로젝트: 새 프로젝트에 Java(빌드 시스템 IntelliJ, Maven, Gradle)와 C/C++(C++ 또는 C, 언어 표준 선택) 유형 추가. JDK와 툴체인은 이 컴퓨터에 설치된 것(JAVA_HOME, PATH, Program Files, IntelliJ의 `~\.jdks`, MSYS2, w64devkit)에서 고르고, 없으면 마법사에서 바로 내장 버전을 다운로드

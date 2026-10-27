@@ -1,7 +1,7 @@
 // Finds English UI text left untranslated in a Korean session. User content (code, file names, paths, console
 // output, package names) and product names are not UI text and are skipped.
 export const KEEP_ENGLISH = [
-  'PyIDE', 'PyCharm', 'Python', 'Pyright', 'Git', 'GitHub', 'ruff', 'Ruff', 'pytest', 'unittest', 'pip', 'venv',
+  'PyIDE', 'PyCharm', 'Spring', 'Boot', 'Python', 'Pyright', 'Git', 'GitHub', 'ruff', 'Ruff', 'pytest', 'unittest', 'pip', 'venv',
   'virtualenv', 'debugpy', 'PowerShell', 'UTF-8', 'TODO', 'FIXME', 'HEAD', 'JSON', 'PyPI', 'PATH', 'PYTHONPATH',
   'Ctrl', 'Alt', 'Shift', 'Esc', 'Enter', 'Tab', 'Insert', 'Delete', 'Space', 'Backspace', 'noqa', 'Pyright',
   'OK', 'stdin', 'stdout', 'stderr', 'py', 'launcher', 'English', 'Windows', 'Monaco', 'LSP', 'DAP', 'regex', 'Regex',

@@ -59,7 +59,7 @@ try {
   await a.click('#welcomeNew');
   await a.until(`!!document.querySelector('.np-dialog #npName')`, 'wizard from welcome');
   const typeList = await a.js(`(() => { const l = document.querySelector('.np-types'); return [l.getAttribute('role'), l.tabIndex, [...l.children].map((n) => n.getAttribute('role') + ':' + n.getAttribute('aria-selected')).join()]; })()`);
-  check(typeList[0] === 'listbox' && typeList[1] === 0 && typeList[2] === 'option:true,option:false,option:false,option:false,option:false,option:false', `the project types are a listbox the keyboard reaches (${JSON.stringify(typeList)})`);
+  check(typeList[0] === 'listbox' && typeList[1] === 0 && typeList[2] === 'option:true,option:false,option:false,option:false,option:false,option:false,option:false', `the project types are a listbox the keyboard reaches (${JSON.stringify(typeList)})`);
   await a.press('Shift+Tab');
   const onList = await a.js(`document.activeElement === document.querySelector('.np-types')`);
   await a.press('ArrowDown');
@@ -71,7 +71,7 @@ try {
   check(onList && second.join() === 'Flask,flask' && last === 'C/C++' && await a.js(`document.querySelector('.np-title').textContent === 'Pure Python' && document.activeElement.id === 'npName'`),
     `Shift+Tab from the name reaches the type list, the arrow keys choose the type, Tab goes back to the name (${second}, ${last})`);
   const types = await a.js(`[...document.querySelectorAll('.np-type')].map(n => n.lastChild.textContent).join('|')`);
-  check(types === 'Pure Python|Flask|FastAPI|Django|Java|C/C++', `project types: Pure Python, Flask, FastAPI, Django, then the toolchains plugin's Java and C/C++ (${types})`);
+  check(types === 'Pure Python|Flask|FastAPI|Django|Java|Spring Boot|C/C++', `project types: Pure Python, Flask, FastAPI, Django, then the toolchains plugin's Java, Spring Boot and C/C++ (${types})`);
   check(await a.js(`document.querySelector('#npName').value.startsWith('pythonProject') && document.querySelector('#npLocation').value === ${q(where)}`), 'defaults: pythonProject in the last location');
   await setValue(a, '#npName', 'demo');
   check(await a.js(`document.querySelector('#npPreview').textContent.endsWith(${q(path.join(where, 'demo'))})`), 'path preview follows the name');
@@ -124,7 +124,7 @@ try {
   await a.js(`(document.querySelector('input[name="npMode"][value="venv"]').click(), true)`);
   await a.click('#npCreate');
   await a.until(`/-m venv/.test(document.querySelector('#npLog').textContent)`, 'venv step running');
-  await a.js(`(document.querySelector('.np-dialog .dialog-buttons .secondary').click(), true)`);
+  await a.js(`(document.querySelector('#npCancel').click(), true)`);
   await a.until(`!document.querySelector('.np-dialog') && ide.root && ide.root.toLowerCase().endsWith('\\\\stopped')`, 'cancelled', 30000);
   check(!(await a.js(`!!document.querySelector('#npFailLog')`)), 'Cancel during a setup step stops it, closes the wizard and opens the project without an error report');
 
@@ -146,7 +146,7 @@ try {
   await a.click('#npCreate');
   await a.until(`/already exists/.test(document.querySelector('.np-error').textContent)`, 'error');
   check(await a.js(`!!document.querySelector('.np-dialog')`), 'an existing non-empty folder is refused and the dialog stays open');
-  await a.click('.np-dialog .dialog-buttons .secondary');
+  await a.click('#npCancel');
 
   // ---------- Get from VCS ----------
   await a.js(`ide.runAction('GetFromVcs')`);
@@ -156,7 +156,10 @@ try {
   await a.js(`[...document.querySelectorAll('.dialog-buttons .primary')].pop().click()`);
   await a.until(`ide.root && ide.root.toLowerCase().endsWith('\\\\cloned')`, 'cloned project opened', 60000);
   check(existsSync(path.join(where, 'cloned', 'tool.py')), 'Get from VCS clones the repository and opens it');
-  check((await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|') === 'cloned|escaped|stopped|broken', 'recent projects keep the newest first');
+  // openProject sets ide.root first and records the project once its tree and interpreters are loaded.
+  await a.until(`(ide.settings.get('recentProjects')[0]?.path || '').toLowerCase().endsWith('\\\\cloned')`, 'cloned project recorded', 30000).catch(() => {});
+  const recent = (await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|');
+  check(recent === 'cloned|escaped|stopped|broken', `recent projects keep the newest first (${recent})`);
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${JSON.stringify(a.consoleErrors)}` : ''}`);
   a.close();
 

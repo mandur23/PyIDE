@@ -1281,8 +1281,16 @@
     // Before launch tasks: runBeforeLaunch(cfg) -> Promise<bool>, findCycle(id, configs) -> names | null.
     runBeforeLaunch,
     findCycle,
-    // A Run tool window tab that is not a configuration's (File Watchers); an existing one keeps its console.
-    outputSession: (key, title) => sessions.find((o) => o.key === key) || createSession({ id: key, name: title, type: '' }),
+    // A Run tool window tab that is not a configuration's (File Watchers, a dependency download); an existing one keeps
+    // its console. A new one is selected when no tab is, so it shows once the window opens; the window stays as it is.
+    outputSession(key, title) {
+      let s = sessions.find((o) => o.key === key);
+      if (s) return s;
+      s = createSession({ id: key, name: title, type: '' });
+      if (!activeSession) selectSession(s);
+      else tabBar.classList.remove('hidden');
+      return s;
+    },
     // Shows the Run window with this session selected.
     show(session) { tw.show(); if (session) selectSession(session); },
     // The Run tab of a configuration being debugged (its own tab, apart from the configuration's runs) for what the

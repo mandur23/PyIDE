@@ -20,6 +20,7 @@ const SKIP_DIRS = new Set(['node_modules', '.git', '.hg', '.svn', '__pycache__',
 const skipDir = (name) => SKIP_DIRS.has(name.toLowerCase()) || /^\.?venv/i.test(name) || name.endsWith('.egg-info');
 const SCRIPT_DIRS = /^(scripts?|tools|bin)$/i;
 const LAUNCH_NAME = /^(run|start|launch|serve)/i;
+const BUILD_WRAPPER = /^(mvnw\.cmd|gradlew\.bat)$/i;
 
 const readText = (file, max = MAX_READ) => {
   try {
@@ -194,7 +195,8 @@ function scan(root) {
     for (const f of files) {
       const abs = path.join(dir, f);
       const ext = path.extname(f).toLowerCase();
-      if (['.bat', '.cmd', '.ps1'].includes(ext) && (depth === 0 || LAUNCH_NAME.test(f) || SCRIPT_DIRS.test(dirName))) {
+      // mvnw.cmd and gradlew.bat run through their Maven and Gradle launchers.
+      if (['.bat', '.cmd', '.ps1'].includes(ext) && !BUILD_WRAPPER.test(f) && (depth === 0 || LAUNCH_NAME.test(f) || SCRIPT_DIRS.test(dirName))) {
         const text = readText(abs, 64 * 1024);
         entries.push({ kind: ext === '.ps1' ? 'ps1' : 'bat', name: f, file: abs, cwd: dir, port: findPort(text) });
       } else if (f === '__main__.py' && depth > 0) {
@@ -213,7 +215,8 @@ function scan(root) {
         const goal = /jetty-maven-plugin|jetty-ee\d+-maven-plugin/.test(pom) ? 'jetty:run'
           : /spring-boot-maven-plugin/.test(pom) ? 'spring-boot:run'
             : /javafx-maven-plugin/.test(pom) ? 'javafx:run' : /exec-maven-plugin/.test(pom) ? 'exec:java' : 'package';
-        entries.push({ kind: 'maven', name: `mvn ${goal}`, goal, file: abs, cwd: dir, port: findPort(pom) });
+        const wrapper = isFile(path.join(dir, 'mvnw.cmd'));
+        entries.push({ kind: 'maven', name: `${wrapper ? 'mvnw' : 'mvn'} ${goal}`, goal, wrapper, file: abs, cwd: dir, port: findPort(pom) });
       } else if (/^build\.gradle(\.kts)?$/.test(f) && depth <= 2) {
         const g = readText(abs) || '';
         const task = /org\.springframework\.boot/.test(g) ? 'bootRun' : /\bapplication\b|org\.openjfx/.test(g) ? 'run' : 'build';
@@ -430,7 +433,9 @@ exports.register = ({ ipcMain, app, startProcess }) => {
         break;
       case 'maven':
       case 'gradle': {
-        const tool = entry.kind === 'maven' ? `mvn ${entry.goal}` : `${entry.wrapper ? 'gradlew.bat' : 'gradle'} ${entry.task}`;
+        // The project's wrapper (mvnw.cmd, gradlew.bat) downloads the build tool it was made with. It is named with .\
+        // because cmd.exe skips the current folder when NoDefaultCurrentDirectoryInExePath is set.
+        const tool = entry.kind === 'maven' ? `${entry.wrapper ? '.\\mvnw.cmd' : 'mvn'} ${entry.goal}` : `${entry.wrapper ? '.\\gradlew.bat' : 'gradle'} ${entry.task}`;
         cmd = 'cmd.exe';
         argv = ['/d', '/s', '/c', `"${tool}${args?.trim() ? ` ${args.trim()}` : ''}"`];
         opts.windowsVerbatimArguments = true;

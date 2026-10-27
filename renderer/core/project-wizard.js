@@ -2,10 +2,16 @@
 // interpreter (a new .venv, a base interpreter, or an existing one); framework types install their packages.
 // Plugins add project types of their own, whatever the load order, with their own options in place of the interpreter:
 //   (ide.projectTypes ||= []).push({ id, name: () => label, icon: () => element, main: 'the file to open, relative',
-//     form: ({ name, dir, step }) => ({ el, files() -> {path: text | null}, gitignore?: text,
+//     defaultName?: 'the suggested project name (pythonProject otherwise)',
+//     form: ({ name, dir, step, log }) => ({ el, files() -> {path: text | null}, gitignore?: text,
 //       validate?: async () => {},   // throw to keep the wizard open with the message
-//       main?() -> the file to open when it depends on the options, setup?: async (dir) => failed, opened?: async (dir) => {} }) });
-// name() and dir() read the wizard's fields; step(title, cmd, args, cwd) runs a setup command into the wizard's log.
+//       main?() -> the file to open when it depends on the options, setup?: async (dir) => failed, opened?: async (dir) => {},
+//       pages?: 2, showPage?(n), validatePage?: async (n) => {} }) });
+// A form with pages is a wizard of its own, like IntelliJ's Spring Initializr: Next checks the page (validatePage throws
+// to stay) and shows the next one, the last page has Previous and Create, and pages after the first hide the name,
+// location and Git fields.
+// name() and dir() read the wizard's fields; step(title, cmd, args, cwd) runs a setup command into the wizard's log,
+// and log(text) adds a line of its own there.
 (() => {
   const { el, joinPath, basename } = ide.util;
 
@@ -131,7 +137,10 @@ if __name__ == '__main__':
 
     const name = el('input');
     name.id = 'npName';
-    name.value = await ide.api.invoke('project:suggestName', parent, 'pythonProject');
+    // The suggested name follows the type (pythonProject, demo for Spring Boot) until the user types one.
+    const suggest = (t) => ide.api.invoke('project:suggestName', loc.value.trim() || parent, t.defaultName || 'pythonProject');
+    let suggested = await ide.api.invoke('project:suggestName', parent, 'pythonProject');
+    name.value = suggested;
     const loc = el('input');
     loc.id = 'npLocation';
     loc.value = parent;
@@ -183,12 +192,12 @@ if __name__ == '__main__':
     // A plugin type's own options, built the first time it is chosen.
     const typeOptions = el('div', 'np-type-options');
     const typeForms = new Map();
+    // The fields every type shares; a type's later pages hide them.
+    const common = el('div', 'np-common');
+    common.append(field(tr('Name:'), name), field(tr('Location:'), loc, browse), preview, git.row, welcome.row, install.row);
     form.append(
       el('div', 'np-title'),
-      field(tr('Name:'), name),
-      field(tr('Location:'), loc, browse),
-      preview,
-      git.row, welcome.row, install.row,
+      common,
       interpSection,
       typeOptions,
       error,
@@ -200,11 +209,27 @@ if __name__ == '__main__':
     function formOf(t) {
       if (!t.form) return null;
       if (!typeForms.has(t.id)) {
-        const f = t.form({ name: () => name.value.trim(), dir: projectDir, step: (...a) => step(...a) });
+        const f = t.form({
+          name: () => name.value.trim(), dir: projectDir, step: (...a) => step(...a),
+          log: (text) => { log.textContent += `\n${text}\n`; },
+        });
         typeForms.set(t.id, f);
         typeOptions.appendChild(f.el);
       }
       return typeForms.get(t.id);
+    }
+
+    let page = 0; // the type form's page
+    const lastPage = (f) => Math.max(1, f?.pages || 1) - 1;
+    function showPage(n) {
+      const own = formOf(type);
+      page = Math.min(Math.max(0, n), lastPage(own));
+      own?.showPage?.(page);
+      common.classList.toggle('hidden', page > 0);
+      if (!createBtn) return;
+      createBtn.textContent = page < lastPage(own) ? tr('Next') : tr('Create');
+      prevBtn.classList.toggle('hidden', page === 0);
+      error.textContent = '';
     }
 
     function update() {
@@ -233,7 +258,16 @@ if __name__ == '__main__':
       b.dataset.type = t.id;
       b.setAttribute('role', 'option');
       b.append(typeof t.icon === 'function' ? t.icon() : ide.icon(t.icon, '◆'), el('span', null, t.name()));
-      b.onclick = () => { type = t; update(); };
+      b.onclick = async () => {
+        if (type !== t) { type = t; showPage(0); }
+        update();
+        if (name.value !== suggested) return;
+        const next = await suggest(t);
+        if (name.value === suggested && type === t) {
+          suggested = name.value = next;
+          name.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      };
       nav.appendChild(b);
     }
     // The type list takes the keyboard like PyCharm's: a Tab stop where Up/Down/Home/End choose the type.
@@ -253,6 +287,8 @@ if __name__ == '__main__':
     };
     update();
 
+    let createBtn = null;
+    let prevBtn = null;
     let busy = false;
     let cancelled = false;
     let finished = false;
@@ -272,7 +308,13 @@ if __name__ == '__main__':
           if (busy) return false;
           busy = true;
           createBtn.disabled = true;
-          try { await create(d); } catch (e) { error.textContent = ide.util.errorText(e); }
+          const own = formOf(type);
+          try {
+            if (page < lastPage(own)) {
+              await own.validatePage?.(page);
+              showPage(page + 1);
+            } else await create(d);
+          } catch (e) { error.textContent = ide.util.errorText(e); }
           busy = false;
           createBtn.disabled = false;
           return false;
@@ -286,8 +328,15 @@ if __name__ == '__main__':
       ],
     });
     dlg.el.classList.add('np-dialog');
-    const createBtn = dlg.el.querySelector('.dialog-buttons .primary');
+    createBtn = dlg.el.querySelector('.dialog-buttons .primary');
     createBtn.id = 'npCreate';
+    dlg.el.querySelector('.dialog-buttons .secondary').id = 'npCancel';
+    // Previous sits at the left end of the button bar; the primary button stays first among them, as in every dialog.
+    prevBtn = el('button', 'secondary np-prev hidden', tr('Previous'));
+    prevBtn.id = 'npPrevious';
+    prevBtn.onclick = () => { if (!busy) showPage(page - 1); };
+    dlg.el.querySelector('.dialog-buttons').append(prevBtn);
+    showPage(page);
     name.focus();
     name.select();
 

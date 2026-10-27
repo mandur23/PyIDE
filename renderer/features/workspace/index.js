@@ -193,6 +193,14 @@
     return new Promise((resolve) => { r.exitWaiters.push(resolve); ide.proc.kill(r.procId); });
   }
 
+  // Maven and Gradle use the JDK the project was created with (New Project's Java and Spring Boot types remember
+  // it), so a built-in JDK works without JAVA_HOME; otherwise the computer's own setup applies.
+  async function withJdk(entry) {
+    if (!['maven', 'gradle'].includes(entry.kind) || !ide.toolchains || !ide.settings.get(`toolchains.jdk:${ide.root}`, '')) return entry;
+    const jdk = await ide.toolchains.resolve('jdk');
+    return jdk?.home ? { ...entry, env: { ...entry.env, JAVA_HOME: jdk.home } } : entry;
+  }
+
   async function runEntry(entry, { show = true } = {}) {
     if (!ide.root) return;
     const r = ensureRun(entry);
@@ -222,7 +230,9 @@
         return;
       }
       await ide.saveAll();
-      const { id, command } = await invoke('start', ide.root, entry, args, interp && { cmd: interp.cmd, args: interp.args });
+      // New Project's dependency download goes first, so two wrappers do not fill the same cache at once.
+      if (['maven', 'gradle'].includes(entry.kind)) await ide.toolchains?.afterSync(entry.cwd, (text) => r.con.append(text, 'sys'));
+      const { id, command } = await invoke('start', ide.root, await withJdk(entry), args, interp && { cmd: interp.cmd, args: interp.args });
       r.con.append(`${command}\n`, 'sys');
       attach(r, id);
     } catch (err) {
