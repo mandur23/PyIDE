@@ -33,6 +33,19 @@ const TOOLCHAINS = {
     top: 'w64devkit',
     probe: 'bin/gcc.exe',
   },
+  // Code insight for Java (main/features/java-lsp.js runs it on a JDK 21 or later). The archive has no top folder.
+  jdtls: {
+    kind: 'jdtls',
+    title: 'Eclipse JDT Language Server',
+    version: '1.63.0',
+    url: 'https://download.eclipse.org/jdtls/milestones/1.63.0/jdt-language-server-1.63.0-202610191322.tar.gz',
+    size: 51143565,
+    // Published by Eclipse next to the archive (<url>.sha256).
+    sha256: 'b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4',
+    folder: 'jdtls',
+    top: '',
+    probe: 'config_win/config.ini',
+  },
 };
 
 const installRoot = () => process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide');

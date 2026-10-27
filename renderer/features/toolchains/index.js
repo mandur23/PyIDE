@@ -1057,5 +1057,8 @@ int main() {
   list('jdk');
   list('cpp');
 
-  ide.toolchains = { list, refresh, resolve, label, install: installBuiltin, parseJavac, parseGcc, sync: syncDependencies, afterSync };
+  // installable(name, title, description, homepage): an Install Manager item for another built-in download of
+  // main/installer/toolchains.js (java-lsp's Eclipse JDT Language Server).
+  ide.toolchains = { list, refresh, resolve, label, install: installBuiltin, installable: toolchainItem, parseJavac, parseGcc,
+    sync: syncDependencies, afterSync };
 })();

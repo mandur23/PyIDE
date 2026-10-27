@@ -160,7 +160,7 @@ try {
   await a.js(`(ide.installer.open('toolchains'), true)`);
   await a.until(`!!document.querySelector('#installManager')`, 'Install Manager');
   await settled(a);
-  check(await count(a, 'cat:toolchains') === 2 && (await text(a, '.inst-nav[data-filter="cat:toolchains"]')).includes('Toolchains'), 'the Install Manager has a Toolchains category with the JDK and w64devkit');
+  check(await count(a, 'cat:toolchains') === 3 && (await text(a, '.inst-nav[data-filter="cat:toolchains"]')).includes('Toolchains'), 'the Install Manager has a Toolchains category with the JDK, w64devkit and the Eclipse JDT Language Server (java-lsp)');
   check(await phase(a, 'toolchain:jdk') === 'installed' && (await text(a, `${card('toolchain:jdk')} .inst-meta`)).includes(path.join(root, 'jdk')), 'the JDK installed from the wizard shows as Installed, with its folder');
   check(await phase(a, 'toolchain:cpp') === 'notInstalled' && (await text(a, `${card('toolchain:cpp')} .inst-meta`)).includes('MB download'), 'w64devkit is not installed and shows its download size');
 

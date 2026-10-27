@@ -1,9 +1,10 @@
-// Code intelligence from the bundled Pyright language server (main/features/lsp.js runs the server).
+// Code intelligence from language servers: the bundled Pyright for Python (main/features/lsp.js runs it), and any
+// server another plugin adds with ide.lsp.createClient(spec) (java-lsp: Eclipse JDT LS). Each client owns its server's
+// status item, document sync and diagnostics; the Monaco providers and the actions (Ctrl+B, Alt+F7, Shift+F6, Alt+Enter)
+// go to the client of the file in the editor.
 (() => {
   const { el, basename, dirname, joinPath, samePath } = ide.util;
   const monaco = ide.monaco;
-  const SOURCE = 'pyright';
-  const HINT_OWNER = 'pyright.hints';
   const PROBE_NAME = '__pyide_probe__.py';
   const CHANGE_DEBOUNCE = 300;
 
@@ -12,7 +13,7 @@
   // file:///c%3A/x.py -> C:\x.py; file://server/share/x.py (UNC) -> \\server\share\x.py
   const toPath = (uri) => decodeURIComponent(String(uri).replace(/^file:\/\/\//i, '').replace(/^file:\/\//i, '//'))
     .replace(/\//g, '\\').replace(/^([a-z]):/, (_m, d) => `${d.toUpperCase()}:`);
-  const isPy = (p) => /\.pyi?$/i.test(p || '');
+  const isFileUri = (uri) => /^file:/i.test(String(uri));
   const lspPos = (pos) => ({ line: pos.lineNumber - 1, character: pos.column - 1 });
   const toRange = (r) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
   const modelPath = (model) => (model?.uri.scheme === 'file' ? toPath(model.uri.toString()) : null);
@@ -33,281 +34,487 @@
     return contents.value || '';
   };
   const docOf = (d) => (d ? { value: toMarkdown(d) } : undefined);
-
-  // ---------- server lifecycle & status ----------
-  let status = 'off';
-  let gen = 0;
-  let incremental = false; // the server takes edits (TextDocumentSyncKind.Incremental), not only the whole text
-  let serverKey = null;
-  let startSeq = 0; // the latest start; an earlier one still in flight was superseded
-  let readyWaiters = [];
-
-  // Each status text is a complete entry in the locale files.
-  const STATUS_TEXT = {
-    off: () => tr('Pyright: off'), starting: () => tr('Pyright: starting'),
-    ready: () => tr('Pyright: ready'), error: () => tr('Pyright: error'),
-  };
-  const statusTitle = (message) => tr('{message}. Click to restart.', { message: message || tr('Pyright language server') });
-  const statusEl = el('span', 'lsp-status', STATUS_TEXT.off());
-  statusEl.id = 'lspStatus';
-  statusEl.title = statusTitle();
-  statusEl.onclick = () => restart();
-  ide.registerStatusItem({ order: 20, el: statusEl });
-
-  function setStatus(state, message) {
-    status = state;
-    statusEl.textContent = STATUS_TEXT[state]();
-    statusEl.dataset.state = state;
-    statusEl.title = statusTitle(message);
-    if (state === 'ready' || state === 'error' || state === 'off') {
-      const waiters = readyWaiters;
-      readyWaiters = [];
-      for (const w of waiters) w(state === 'ready');
-    }
-  }
-
-  const ready = () => (status === 'ready' ? Promise.resolve(true)
-    : status === 'starting' ? new Promise((r) => readyWaiters.push(r)) : Promise.resolve(false));
-
-  async function ensureServer(force) {
-    const root = ide.root;
-    if (!root) return;
-    const python = ide.currentInterp()?.executable || null;
-    const key = `${root}|${python}`;
-    if (!force && key === serverKey) return;
-    if (key !== serverKey) crashes = [];
-    serverKey = key;
-    clearTimeout(restartTimer);
-    const my = ++startSeq;
-    for (const doc of docs.values()) doc.opened = 0;
-    ide.problems.clear(SOURCE);
-    for (const tab of ide.tabs) if (tab.model) monaco.editor.setModelMarkers(tab.model, HINT_OWNER, []);
-    clearDiagnostics();
-    probeCache.clear();
-    setStatus('starting', tr('Starting Pyright for {name}', { name: basename(root) }));
-    let started = null;
-    try { started = await ide.api.invoke('lsp:start', root, python, window.i18n?.locale || 'en'); } catch (err) { console.warn('pyright failed to start', err); }
-    // A restart while this start was in flight stopped its server; that is not a failure to report.
-    if (my !== startSeq) return;
-    if (!started) return setStatus('error', tr('Pyright failed to start'));
-    ({ gen, incremental } = started);
-    for (const doc of docs.values()) sendOpen(doc);
-    setStatus('ready', python ? tr('Pyright ready ({python})', { python }) : tr('Pyright ready'));
-  }
-  // The user's restart (status bar, action, notification) starts the crash count over.
-  const restart = () => { crashes = []; return ensureServer(true); };
-
-  // A server that crashes is restarted, each time a little later, as VS Code's language clients do. After more than
-  // MAX_RESTARTS crashes within CRASH_WINDOW_MS it stays stopped and a notification says so.
-  const MAX_RESTARTS = 5;
-  const CRASH_WINDOW_MS = 3 * 60 * 1000;
-  let crashes = []; // times of the current server's recent crashes
-  let restartTimer = null;
-  function serverCrashed(message) {
-    const now = Date.now();
-    crashes = crashes.filter((t) => now - t < CRASH_WINDOW_MS).concat(now);
-    setStatus('error', message);
-    if (crashes.length > MAX_RESTARTS) {
-      ide.notifications?.notify({
-        title: tr('Pyright stopped'), kind: 'error', group: 'Pyright',
-        text: tr('The Pyright language server crashed {count} times in the last {minutes} minutes and is not restarted automatically.', { count: crashes.length, minutes: CRASH_WINDOW_MS / 60000 }),
-        actions: [{ label: tr('Restart'), run: (note) => { note.expire(); restart(); } }],
-      });
-      return;
-    }
-    restartTimer = setTimeout(async () => {
-      await ensureServer(true);
-      if (status === 'error') serverCrashed(tr('Pyright failed to start'));
-    }, 500 * 2 ** (crashes.length - 1));
-  }
-
-  // main/features/lsp.js reports 'Pyright exited with code N', 'Pyright stopped' or a raw system error.
-  const serverError = (message = '') => {
-    const exit = /^Pyright exited with code (.*)$/.exec(message);
-    if (exit) return tr('Pyright exited with code {code}', { code: exit[1] });
-    if (message === 'Pyright stopped') return tr('Pyright stopped');
-    return tr('Pyright error: {message}', { message });
-  };
-  ide.api.on('lsp:status', (p) => {
-    if (p.gen === gen && p.state === 'error') serverCrashed(serverError(p.message));
-  });
-  ide.api.on('lsp:message', (p) => {
-    if (p.gen === gen && p.type === 1) console.warn(`Pyright: ${p.message}`);
-  });
-
-  const notify = (method, params) => ide.api.invoke('lsp:notify', method, params).catch(() => {});
-
-  // Resolves to the result, or null when the server is unavailable or the request failed. token: a Monaco
-  // CancellationToken; once it is cancelled (the text changed, the hover moved on) the request answers null and
-  // Pyright drops it unless it has started on it (main/features/lsp.js), so stale requests queued in Pyright do not
-  // hold up the ones that matter.
-  let ticketSeq = 0;
-  async function request(method, params, token) {
-    flushAll();
-    if (!(await ready()) || token?.isCancellationRequested) return null;
-    const cancellable = typeof token?.onCancellationRequested === 'function';
-    const ticket = cancellable ? ++ticketSeq : undefined;
-    const sub = cancellable ? token.onCancellationRequested(() => ide.api.invoke('lsp:cancel', ticket).catch(() => {})) : null;
-    try {
-      return await ide.api.invoke('lsp:request', method, params, ticket);
-    } catch (err) {
-      console.warn(`pyright ${method} failed:`, err.message);
-      return null;
-    } finally {
-      sub?.dispose();
-    }
-  }
-
-  // ---------- document sync ----------
-  // pathLower -> {path, uri, model, opened (gen), timer, pending, changes, sub}. changes: the edits since the last
-  // sync, in order, or null when the whole text has to be sent.
-  const docs = new Map();
-  // More edits than this in one sync (a Replace All) are sent as the whole text.
-  const MAX_CHANGES = 1000;
-
-  function sendOpen(doc) {
-    if (status === 'off' || !gen || doc.model.isDisposed()) return;
-    clearTimeout(doc.timer);
-    doc.pending = false;
-    doc.changes = [];
-    doc.opened = gen;
-    notify('textDocument/didOpen', { textDocument: { uri: doc.uri, languageId: 'python', version: doc.model.getVersionId(), text: doc.model.getValue() } });
-  }
-
-  function flush(doc) {
-    clearTimeout(doc.timer);
-    if (!doc.pending || doc.opened !== gen || doc.model.isDisposed()) return;
-    const changes = doc.changes || [{ text: doc.model.getValue() }];
-    doc.pending = false;
-    doc.changes = [];
-    notify('textDocument/didChange', { textDocument: { uri: doc.uri, version: doc.model.getVersionId() }, contentChanges: changes });
-  }
-  const flushAll = () => docs.forEach(flush);
-
-  // Monaco lists an event's edits from the end of the document to the start, so applied in order they give the new
-  // text; its columns count UTF-16 code units, as LSP positions do.
-  function recordChanges(doc, e) {
-    if (!doc.changes) return;
-    if (!incremental || e.isFlush || e.isEolChange) { doc.changes = null; return; }
-    for (const c of e.changes) {
-      doc.changes.push({
-        range: { start: { line: c.range.startLineNumber - 1, character: c.range.startColumn - 1 }, end: { line: c.range.endLineNumber - 1, character: c.range.endColumn - 1 } },
-        text: c.text,
-      });
-    }
-    if (doc.changes.length > MAX_CHANGES) doc.changes = null;
-  }
-
-  function trackTab(tab) {
-    if (tab?.kind !== 'file' || !isPy(tab.path) || docs.has(tab.path.toLowerCase())) return;
-    const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, changes: [], timer: null, editedAt: 0, symbols: null };
-    doc.sub = tab.model.onDidChangeContent((e) => {
-      doc.editedAt = Date.now();
-      if (doc.opened !== gen) return;
-      recordChanges(doc, e);
-      doc.pending = true;
-      clearTimeout(doc.timer);
-      doc.timer = setTimeout(() => flush(doc), CHANGE_DEBOUNCE);
-    });
-    docs.set(tab.path.toLowerCase(), doc);
-    if (status === 'ready') sendOpen(doc);
-  }
-
-  ide.on('fileOpened', trackTab);
-  ide.on('fileSaved', (tab) => {
-    const doc = docs.get(tab.path.toLowerCase());
-    if (!doc || doc.opened !== gen) return;
-    flush(doc);
-    notify('textDocument/didSave', { textDocument: { uri: doc.uri } });
-  });
-  ide.on('fileClosed', (path) => {
-    const doc = docs.get(path.toLowerCase());
-    if (!doc) return;
-    docs.delete(path.toLowerCase());
-    clearTimeout(doc.timer);
-    doc.sub.dispose();
-    dropSymbols(doc);
-    trackRanges(path.toLowerCase(), null, []);
-    publishedVersion.delete(path.toLowerCase());
-    if (doc.opened === gen && status === 'ready') notify('textDocument/didClose', { textDocument: { uri: doc.uri } });
-  });
-  ide.on('projectOpened', () => ensureServer());
-  ide.on('interpreterChanged', () => ensureServer());
-  // Pyright holds the closed project's analysis (hundreds of MB on a large one); the welcome screen needs none.
-  ide.on('projectClosed', () => {
-    startSeq++;
-    clearTimeout(restartTimer);
-    serverKey = null;
-    ide.problems.clear(SOURCE);
-    clearDiagnostics();
-    probeCache.clear();
-    ide.api.invoke('lsp:stop').catch(() => {});
-    setStatus('off');
-  });
-
-  const docFor = (model) => {
-    const p = modelPath(model);
-    const doc = p && docs.get(p.toLowerCase());
-    return doc && doc.opened === gen && status === 'ready' ? doc : null;
-  };
-
-  // ---------- diagnostics ----------
-  const rawDiagnostics = new Map(); // pathLower -> LSP diagnostics
-  // pathLower -> {model, ids}: one decoration per diagnostic of an open file, so its range moves with the edits made
-  // after Pyright published it (an auto-import above, a pasted line); the quick fixes and diagnostics() read it there.
-  const diagRanges = new Map();
-  // pathLower -> the document version Pyright's last diagnostics are for, and checks run on every publish.
-  const publishedVersion = new Map();
-  const publishWaiters = new Set();
   const SEVERITY = { 1: 'error', 2: 'warning', 3: 'info' };
 
-  function clearDiagnostics() {
-    rawDiagnostics.clear();
-    publishedVersion.clear();
-    for (const { model, ids } of diagRanges.values()) if (!model.isDisposed()) model.deltaDecorations(ids, []);
-    diagRanges.clear();
-  }
+  // ---------- clients ----------
+  const clients = [];
+  const clientForPath = (p) => (p ? clients.find((c) => c.spec.match.test(p)) : null) || null;
+  const clientForModel = (model) => clientForPath(modelPath(model));
 
-  function trackRanges(key, model, diagnostics) {
-    const old = diagRanges.get(key);
-    const keep = old && old.model === model && !model.isDisposed();
-    if (old && !keep && !old.model.isDisposed()) old.model.deltaDecorations(old.ids, []);
-    if (!model || model.isDisposed()) return diagRanges.delete(key);
-    const ids = model.deltaDecorations(keep ? old.ids : [], diagnostics.map((d) => ({
-      range: toRange(d.range), options: { description: 'pyright-diagnostic', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
-    })));
-    diagRanges.set(key, { model, ids });
-  }
+  // spec: {
+  //   id, language (Monaco language id), match (RegExp on a path), channel (the main feature serving the server),
+  //   source (ide.problems source), statusId, statusOrder, hideWhenOff,
+  //   text: {status: {off, starting, ready, error, ...} (the item's text per state), server (its name for the item's
+  //     title), starting(name),
+  //     failed, ready(detail), exited(code), stopped, error(message), stoppedTitle, crashed(count, minutes), notReady},
+  //   start() -> {key, args, detail?} to start (args after the root), {state, message} to show instead (a state of
+  //     text: not installed, Safe Mode), or null to stay off,
+  //   failed?(answer) -> {state, message} for a start main refused ({error, code}),
+  //   restartOn: ide events after which start() is asked again,
+  //   onProgress?(client, payload) for <channel>:progress,
+  //   completion?: {triggerCharacters, skip(item), command(model, position, word) -> (item, insertText) => command,
+  //     adapt(suggestion, item, {position, wordRange}) -> suggestion (ownEdits: additional edits kept after resolve)},
+  //   codeActions?(client, {model, doc, diags, context, invoked}) -> extra Monaco code actions,
+  //   openUri?(client, uri, range) / loadModel?(client, uri) for locations outside files (jdt://),
+  //   formatting?: true when the server formats documents,
+  //   reset?() when a server (re)starts or stops,
+  // }
+  function createClient(spec) {
+    const { channel, text } = spec;
+    const invoke = (what, ...args) => ide.api.invoke(`${channel}:${what}`, ...args);
+    const client = { spec };
 
-  ide.api.on('lsp:diagnostics', (p) => {
-    if (p.gen !== gen || status === 'off') return;
-    const path = toPath(p.uri);
-    if (basename(path) === PROBE_NAME) return;
-    rawDiagnostics.set(path.toLowerCase(), p.diagnostics);
-    if (typeof p.version === 'number') publishedVersion.set(path.toLowerCase(), p.version);
-    const open = ide.findTab(path)?.model;
-    trackRanges(path.toLowerCase(), open, p.diagnostics);
-    for (const check of [...publishWaiters]) check();
-    // Hints (unused names, deprecated) are greyed out in the editor like PyCharm, not listed as problems.
-    const isHint = (d) => !d.severity || d.severity === 4;
-    ide.problems.set(SOURCE, path, p.diagnostics.filter((d) => !isHint(d)).map((d) => ({
-      line: d.range.start.line + 1, col: d.range.start.character + 1,
-      endLine: d.range.end.line + 1, endCol: d.range.end.character + 1,
-      msg: d.message, severity: SEVERITY[d.severity] || 'info',
-    })));
-    const tab = ide.findTab(path);
-    if (tab?.model && !tab.model.isDisposed()) {
-      monaco.editor.setModelMarkers(tab.model, HINT_OWNER, p.diagnostics.filter(isHint).map((d) => ({
-        startLineNumber: d.range.start.line + 1, startColumn: d.range.start.character + 1,
-        endLineNumber: d.range.end.line + 1, endColumn: d.range.end.character + 1,
-        message: d.message, severity: monaco.MarkerSeverity.Hint, source: SOURCE,
-        tags: (d.tags || []).filter((t) => t === 1 || t === 2),
-      })));
+    // ---------- server lifecycle & status ----------
+    let status = 'off';
+    let gen = 0;
+    let incremental = false; // the server takes edits (TextDocumentSyncKind.Incremental), not only the whole text
+    let serverKey = null;
+    let startSeq = 0; // the latest start; an earlier one still in flight was superseded
+    let planSeq = 0; // the latest spec.start() asked
+    let readyWaiters = [];
+
+    const statusTitle = (message) => tr('{message}. Click to restart.', { message: message || text.server() });
+    const statusEl = el('span', 'lsp-status', text.status.off());
+    statusEl.id = spec.statusId;
+    statusEl.title = statusTitle();
+    statusEl.onclick = () => (spec.onStatusClick ? spec.onStatusClick(client, status) : restart());
+    statusEl.classList.toggle('hidden', !!spec.hideWhenOff);
+    ide.registerStatusItem({ order: spec.statusOrder, el: statusEl });
+
+    const RESTARTABLE = new Set(['off', 'starting', 'ready', 'error']);
+    // label: the item's text when it is not the state's own (progress).
+    function setStatus(state, message, label) {
+      status = state;
+      statusEl.textContent = label || text.status[state]();
+      statusEl.dataset.state = state;
+      // A state of the spec's own (not installed, Safe Mode) says in its message what a click does.
+      statusEl.title = RESTARTABLE.has(state) ? statusTitle(message) : message;
+      statusEl.classList.toggle('hidden', !!spec.hideWhenOff && state === 'off');
+      if (state !== 'starting') {
+        const waiters = readyWaiters;
+        readyWaiters = [];
+        for (const w of waiters) w(state === 'ready');
+      }
     }
-  });
+    client.setStatus = setStatus;
+
+    const ready = () => (status === 'ready' ? Promise.resolve(true)
+      : status === 'starting' ? new Promise((r) => readyWaiters.push(r)) : Promise.resolve(false));
+
+    function resetState() {
+      for (const doc of docs.values()) doc.opened = 0;
+      ide.problems.clear(spec.source);
+      for (const doc of docs.values()) if (!doc.model.isDisposed()) monaco.editor.setModelMarkers(doc.model, `${spec.source}.hints`, []);
+      clearDiagnostics();
+      spec.reset?.();
+      // Until the next server answers, what the old one still sends while it shuts down is not for these documents.
+      gen = 0;
+    }
+
+    let forced = false; // a restart asked for by a call a later one superseded
+    async function ensureServer(force) {
+      const root = ide.root;
+      if (!root) return;
+      // The latest call decides: an earlier one still asking (the project opening) knows less than one after it (a
+      // Java file opened meanwhile), and takes over its restart. A spec that answers at once (Pyright) shows
+      // 'starting' in the same task, as before.
+      const asked = ++planSeq;
+      forced ||= !!force;
+      const answer = spec.start(client);
+      const plan = answer instanceof Promise ? await answer : answer;
+      if (asked !== planSeq || ide.root !== root) return;
+      force = forced;
+      forced = false;
+      if (!plan) {
+        // Not wanted in this project (no Java in it): the server of the project before goes.
+        if (serverKey !== null || status !== 'off') { stopServer(); setStatus('off'); }
+        return;
+      }
+      if (!plan.key) {
+        // Not startable now (not installed, Safe Mode): stop what runs and say why.
+        if (serverKey !== null || status === 'starting' || status === 'ready') stopServer();
+        serverKey = null;
+        setStatus(plan.state, plan.message);
+        return;
+      }
+      const key = `${root}|${plan.key}`;
+      if (!force && key === serverKey) return;
+      if (key !== serverKey) crashes = [];
+      serverKey = key;
+      clearTimeout(restartTimer);
+      const my = ++startSeq;
+      resetState();
+      setStatus('starting', text.starting(basename(root)));
+      let started = null;
+      try { started = await invoke('start', root, ...plan.args); } catch (err) { console.warn(`${spec.id} language server failed to start`, err); }
+      // A restart while this start was in flight stopped its server; that is not a failure to report.
+      if (my !== startSeq) return;
+      if (started?.error) {
+        serverKey = null;
+        const shown = spec.failed?.(started) || { state: 'error', message: started.error };
+        return setStatus(shown.state, shown.message);
+      }
+      if (!started) return setStatus('error', text.failed());
+      ({ gen, incremental } = started);
+      for (const doc of docs.values()) sendOpen(doc);
+      setStatus('ready', text.ready(plan.detail));
+    }
+    // The user's restart (status bar, action, notification) starts the crash count over.
+    const restart = () => { crashes = []; return ensureServer(true); };
+
+    function stopServer() {
+      planSeq++;
+      startSeq++;
+      clearTimeout(restartTimer);
+      serverKey = null;
+      resetState();
+      invoke('stop').catch(() => {});
+    }
+
+    // A server that crashes is restarted, each time a little later, as VS Code's language clients do. After more than
+    // MAX_RESTARTS crashes within CRASH_WINDOW_MS it stays stopped and a notification says so.
+    const MAX_RESTARTS = 5;
+    const CRASH_WINDOW_MS = 3 * 60 * 1000;
+    let crashes = []; // times of the current server's recent crashes
+    let restartTimer = null;
+    function serverCrashed(message) {
+      const now = Date.now();
+      crashes = crashes.filter((t) => now - t < CRASH_WINDOW_MS).concat(now);
+      setStatus('error', message);
+      if (crashes.length > MAX_RESTARTS) {
+        ide.notifications?.notify({
+          title: text.stoppedTitle(), kind: 'error', group: spec.serverName,
+          text: text.crashed(crashes.length, CRASH_WINDOW_MS / 60000),
+          actions: [{ label: tr('Restart'), run: (note) => { note.expire(); restart(); } }],
+        });
+        return;
+      }
+      restartTimer = setTimeout(async () => {
+        await ensureServer(true);
+        if (status === 'error') serverCrashed(text.failed());
+      }, 500 * 2 ** (crashes.length - 1));
+    }
+
+    // main/lsp-server.js reports '<name> exited with code N', '<name> stopped' or a raw system error.
+    const serverError = (message = '') => {
+      const exit = new RegExp(`^${spec.serverName} exited with code (.*)$`).exec(message);
+      if (exit) return text.exited(exit[1]);
+      if (message === `${spec.serverName} stopped`) return text.stopped();
+      return text.error(message);
+    };
+    ide.api.on(`${channel}:status`, (p) => {
+      if (p.gen === gen && p.state === 'error') serverCrashed(serverError(p.message));
+    });
+    ide.api.on(`${channel}:message`, (p) => {
+      if (p.gen === gen && p.type === 1) console.warn(`${spec.serverName}: ${p.message}`);
+    });
+    if (spec.onProgress) ide.api.on(`${channel}:progress`, (p) => { if (status === 'starting') spec.onProgress(client, p); });
+
+    const notify = (method, params) => invoke('notify', method, params).catch(() => {});
+
+    // Resolves to the result, or null when the server is unavailable or the request failed. token: a Monaco
+    // CancellationToken; once it is cancelled (the text changed, the hover moved on) the request answers null and the
+    // server drops it unless it has started on it (main/lsp-server.js), so stale requests queued in the server do not
+    // hold up the ones that matter.
+    let ticketSeq = 0;
+    async function request(method, params, token) {
+      flushAll();
+      if (!(await ready()) || token?.isCancellationRequested) return null;
+      const cancellable = typeof token?.onCancellationRequested === 'function';
+      const ticket = cancellable ? ++ticketSeq : undefined;
+      const sub = cancellable ? token.onCancellationRequested(() => invoke('cancel', ticket).catch(() => {})) : null;
+      try {
+        return await invoke('request', method, params, ticket);
+      } catch (err) {
+        console.warn(`${spec.id} ${method} failed:`, err.message);
+        return null;
+      } finally {
+        sub?.dispose();
+      }
+    }
+
+    // ---------- document sync ----------
+    // pathLower -> {path, uri, model, opened (gen), timer, pending, changes, sub}. changes: the edits since the last
+    // sync, in order, or null when the whole text has to be sent.
+    const docs = new Map();
+    // More edits than this in one sync (a Replace All) are sent as the whole text.
+    const MAX_CHANGES = 1000;
+
+    function sendOpen(doc) {
+      if (status === 'off' || !gen || doc.model.isDisposed()) return;
+      clearTimeout(doc.timer);
+      doc.pending = false;
+      doc.changes = [];
+      doc.opened = gen;
+      notify('textDocument/didOpen', { textDocument: { uri: doc.uri, languageId: spec.language, version: doc.model.getVersionId(), text: doc.model.getValue() } });
+    }
+
+    function flush(doc) {
+      clearTimeout(doc.timer);
+      if (!doc.pending || doc.opened !== gen || doc.model.isDisposed()) return;
+      const changes = doc.changes || [{ text: doc.model.getValue() }];
+      doc.pending = false;
+      doc.changes = [];
+      notify('textDocument/didChange', { textDocument: { uri: doc.uri, version: doc.model.getVersionId() }, contentChanges: changes });
+    }
+    const flushAll = () => docs.forEach(flush);
+
+    // Monaco lists an event's edits from the end of the document to the start, so applied in order they give the new
+    // text; its columns count UTF-16 code units, as LSP positions do.
+    function recordChanges(doc, e) {
+      if (!doc.changes) return;
+      if (!incremental || e.isFlush || e.isEolChange) { doc.changes = null; return; }
+      for (const c of e.changes) {
+        doc.changes.push({
+          range: { start: { line: c.range.startLineNumber - 1, character: c.range.startColumn - 1 }, end: { line: c.range.endLineNumber - 1, character: c.range.endColumn - 1 } },
+          text: c.text,
+        });
+      }
+      if (doc.changes.length > MAX_CHANGES) doc.changes = null;
+    }
+
+    function trackTab(tab) {
+      if (tab?.kind !== 'file' || !spec.match.test(tab.path) || docs.has(tab.path.toLowerCase())) return;
+      const doc = { path: tab.path, uri: tab.model.uri.toString(), model: tab.model, opened: 0, pending: false, changes: [], timer: null, editedAt: 0, symbols: null };
+      doc.sub = tab.model.onDidChangeContent((e) => {
+        doc.editedAt = Date.now();
+        if (doc.opened !== gen) return;
+        recordChanges(doc, e);
+        doc.pending = true;
+        clearTimeout(doc.timer);
+        doc.timer = setTimeout(() => flush(doc), CHANGE_DEBOUNCE);
+      });
+      docs.set(tab.path.toLowerCase(), doc);
+      if (status === 'ready') sendOpen(doc);
+      else if (spec.startOnOpen && status !== 'starting') ensureServer();
+    }
+
+    ide.on('fileOpened', trackTab);
+    ide.on('fileSaved', (tab) => {
+      const doc = docs.get(tab.path.toLowerCase());
+      if (!doc || doc.opened !== gen) return;
+      flush(doc);
+      notify('textDocument/didSave', { textDocument: { uri: doc.uri } });
+    });
+    ide.on('fileClosed', (path) => {
+      const doc = docs.get(path.toLowerCase());
+      if (!doc) return;
+      docs.delete(path.toLowerCase());
+      clearTimeout(doc.timer);
+      doc.sub.dispose();
+      dropSymbols(doc);
+      trackRanges(path.toLowerCase(), null, []);
+      publishedVersion.delete(path.toLowerCase());
+      if (doc.opened === gen && status === 'ready') notify('textDocument/didClose', { textDocument: { uri: doc.uri } });
+    });
+    for (const event of spec.restartOn) ide.on(event, () => ensureServer());
+    // A server holds the closed project's analysis (hundreds of MB on a large one); the welcome screen needs none.
+    ide.on('projectClosed', () => {
+      stopServer();
+      setStatus('off');
+    });
+
+    const docFor = (model) => {
+      const p = modelPath(model);
+      const doc = p && docs.get(p.toLowerCase());
+      return doc && doc.opened === gen && status === 'ready' ? doc : null;
+    };
+
+    // ---------- diagnostics ----------
+    const rawDiagnostics = new Map(); // pathLower -> LSP diagnostics
+    // pathLower -> {model, ids}: one decoration per diagnostic of an open file, so its range moves with the edits made
+    // after the server published it (an auto-import above, a pasted line); the quick fixes and diagnostics() read it there.
+    const diagRanges = new Map();
+    // pathLower -> the document version the server's last diagnostics are for, and checks run on every publish.
+    const publishedVersion = new Map();
+    const publishWaiters = new Set();
+
+    function clearDiagnostics() {
+      rawDiagnostics.clear();
+      publishedVersion.clear();
+      for (const { model, ids } of diagRanges.values()) if (!model.isDisposed()) model.deltaDecorations(ids, []);
+      diagRanges.clear();
+    }
+
+    function trackRanges(key, model, diagnostics) {
+      const old = diagRanges.get(key);
+      const keep = old && old.model === model && !model.isDisposed();
+      if (old && !keep && !old.model.isDisposed()) old.model.deltaDecorations(old.ids, []);
+      if (!model || model.isDisposed()) return diagRanges.delete(key);
+      const ids = model.deltaDecorations(keep ? old.ids : [], diagnostics.map((d) => ({
+        range: toRange(d.range), options: { description: `${spec.source}-diagnostic`, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges },
+      })));
+      diagRanges.set(key, { model, ids });
+    }
+
+    ide.api.on(`${channel}:diagnostics`, (p) => {
+      if (p.gen !== gen || status === 'off' || !isFileUri(p.uri)) return;
+      const path = toPath(p.uri);
+      if (basename(path) === PROBE_NAME) return;
+      rawDiagnostics.set(path.toLowerCase(), p.diagnostics);
+      if (typeof p.version === 'number') publishedVersion.set(path.toLowerCase(), p.version);
+      const open = ide.findTab(path)?.model;
+      trackRanges(path.toLowerCase(), open, p.diagnostics);
+      for (const check of [...publishWaiters]) check();
+      // Hints (unused names, deprecated) are greyed out in the editor like PyCharm, not listed as problems.
+      const isHint = (d) => !d.severity || d.severity === 4;
+      ide.problems.set(spec.source, path, p.diagnostics.filter((d) => !isHint(d)).map((d) => ({
+        line: d.range.start.line + 1, col: d.range.start.character + 1,
+        endLine: d.range.end.line + 1, endCol: d.range.end.character + 1,
+        msg: d.message, severity: SEVERITY[d.severity] || 'info',
+      })));
+      const tab = ide.findTab(path);
+      if (tab?.model && !tab.model.isDisposed()) {
+        monaco.editor.setModelMarkers(tab.model, `${spec.source}.hints`, p.diagnostics.filter(isHint).map((d) => ({
+          startLineNumber: d.range.start.line + 1, startColumn: d.range.start.character + 1,
+          endLineNumber: d.range.end.line + 1, endColumn: d.range.end.character + 1,
+          message: d.message, severity: monaco.MarkerSeverity.Hint, source: spec.source,
+          tags: (d.tags || []).filter((t) => t === 1 || t === 2),
+        })));
+      }
+    });
+
+    // The server's diagnostics where they are now (see diagRanges).
+    function currentDiagnostics(model, path) {
+      const raw = rawDiagnostics.get(path.toLowerCase()) || [];
+      const tracked = diagRanges.get(path.toLowerCase());
+      if (!tracked || tracked.model !== model || model.isDisposed()) return raw;
+      return raw.map((d, i) => {
+        const r = model.getDecorationRange(tracked.ids[i]);
+        return r ? { ...d, range: { start: { line: r.startLineNumber - 1, character: r.startColumn - 1 }, end: { line: r.endLineNumber - 1, character: r.endColumn - 1 } } } : d;
+      });
+    }
+
+    // Alt+Enter right after typing waits briefly for the server's diagnostics of the text as it is now. Its diagnostics
+    // of the text before the last edits sit on the old lines, so the import fix for the name under the caret was
+    // missing. The wait comes before Monaco's request: Monaco drops an explicit request that is still running 750 ms
+    // after a marker change (its automatic lightbulb request replaces it), which a wait inside the provider would run into.
+    function diagnosticsSettled(doc, ms = 2500) {
+      flush(doc);
+      const key = doc.path.toLowerCase();
+      const want = doc.model.getVersionId();
+      const settled = () => !publishedVersion.has(key) || publishedVersion.get(key) >= want || doc.model.isDisposed() || docs.get(key) !== doc;
+      if (settled()) return Promise.resolve();
+      return new Promise((resolve) => {
+        const finish = () => { clearTimeout(timer); publishWaiters.delete(check); resolve(); };
+        const check = () => { if (settled()) finish(); };
+        const timer = setTimeout(finish, ms);
+        publishWaiters.add(check);
+      });
+    }
+
+    // diagnostics(path): the server's last raw LSP diagnostics for a file (with `code`, e.g. reportMissingImports), at
+    // their current place in an open file.
+    const diagnostics = (path) => {
+      if (!path || status !== 'ready') return [];
+      const model = ide.findTab(path)?.model;
+      return model && !model.isDisposed() ? currentDiagnostics(model, path) : rawDiagnostics.get(path.toLowerCase()) || [];
+    };
+
+    ide.api.on(`${channel}:applyEdit`, (p) => { if (p.gen === gen) applyOrExplain(p.edit).catch((err) => console.warn('workspace edit failed', err)); });
+
+    // ---------- document symbols ----------
+    // The breadcrumbs, sticky lines, the outline and editor-assists each asked the server for the symbols of the file
+    // being typed in, after every key (19 requests per typed line in a 20,000-line file); Pyright answers one request
+    // at a time, so they came back 2-20 s later and completion waited behind them. They now share one request per
+    // open file. It goes once the text has not changed for SYMBOLS_PAUSE ms (LARGE_PAUSE in a large file, where it is
+    // expensive), for the text as it is then; an edit made while it runs cancels it, and its callers get the next
+    // answer instead.
+    const SYMBOLS_PAUSE = 150;
+    const LARGE_LINES = 5000;
+    const LARGE_PAUSE = 1000;
+
+    // -> LSP DocumentSymbol[] for the document's current text (or a later one), or null without an answer.
+    function sharedSymbols(doc) {
+      const last = doc.symbols;
+      if (last && (last.state === 'waiting' || last.version === doc.model.getVersionId())) return last.promise;
+      const entry = { state: 'waiting', version: null, cts: null, timer: 0 };
+      entry.promise = new Promise((resolve) => { entry.resolve = resolve; });
+      if (last?.state === 'sent') {
+        last.state = 'superseded';
+        last.cts.cancel();
+        last.resolve(entry.promise);
+      }
+      doc.symbols = entry;
+      const send = () => {
+        if (doc.symbols !== entry) return;
+        const wait = (doc.model.getLineCount() > LARGE_LINES ? LARGE_PAUSE : SYMBOLS_PAUSE) - (Date.now() - doc.editedAt);
+        if (wait > 0) { entry.timer = setTimeout(send, wait); return; }
+        entry.state = 'sent';
+        entry.version = doc.model.getVersionId();
+        entry.cts = new monaco.CancellationTokenSource();
+        request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } }, entry.cts.token).then((r) => {
+          if (entry.state !== 'sent') return;
+          entry.state = 'done';
+          // No answer (the server starting or restarted): the next caller asks again.
+          if (!r && doc.symbols === entry) doc.symbols = null;
+          entry.resolve(r);
+        });
+      };
+      send();
+      return entry.promise;
+    }
+
+    function dropSymbols(doc) {
+      const entry = doc.symbols;
+      doc.symbols = null;
+      if (!entry || entry.state === 'done') return;
+      clearTimeout(entry.timer);
+      entry.cts?.cancel();
+      entry.state = 'done';
+      entry.resolve(null);
+    }
+
+    // Hierarchical DocumentSymbols (LSP shape) plus kindName and 1-based line/col of the name, for other features. The
+    // breadcrumbs, sticky lines and type hierarchy each ask for every new answer, and the tree of a 20,000-line file
+    // has thousands of symbols (100 ms to copy), so it is decorated once per answer and shared: callers only read it.
+    const decorated = new WeakMap(); // shared answer -> its decorated tree
+    async function documentSymbols(path) {
+      const doc = docs.get(path.toLowerCase());
+      const r = doc ? await sharedSymbols(doc) : await request('textDocument/documentSymbol', { textDocument: { uri: toUri(path) } });
+      if (!Array.isArray(r)) return [];
+      if (!decorated.has(r)) decorated.set(r, r.map(decorate));
+      return decorated.get(r);
+    }
+
+    // The text of `tab` after the server's own edit: kind 'organizeImports' (the source.organizeImports action) or
+    // 'format'. -> {text} (the same text when nothing changes) | {error}.
+    async function editedText(tab, kind) {
+      const model = tab.model;
+      const doc = docFor(model);
+      if (!doc) return { error: tr('{server} is not ready', { server: text.server() }) };
+      const version = model.getVersionId();
+      let edits = null;
+      if (kind === 'format') {
+        const opts = model.getOptions();
+        edits = await request('textDocument/formatting', { textDocument: { uri: doc.uri }, options: { tabSize: opts.tabSize, insertSpaces: opts.insertSpaces } });
+      } else {
+        const end = model.getFullModelRange().getEndPosition();
+        const actions = await request('textDocument/codeAction', {
+          textDocument: { uri: doc.uri }, range: { start: { line: 0, character: 0 }, end: lspPos(end) },
+          context: { diagnostics: [], only: ['source.organizeImports'], triggerKind: 1 },
+        });
+        const action = (actions || []).find((a) => a.kind === 'source.organizeImports' || a.command?.command === 'java.apply.workspaceEdit');
+        const we = action?.edit || action?.command?.arguments?.[0] || action?.arguments?.[0];
+        edits = we ? editsByUri(we).get(doc.uri) || [...editsByUri(we).entries()].find(([u]) => samePath(toPath(u), doc.path))?.[1] || [] : [];
+      }
+      if (model.isDisposed() || model.getVersionId() !== version) return { error: tr('{server} is not ready', { server: text.server() }) };
+      return { text: applyTextEdits(model.getValue(), edits || []) };
+    }
+
+    Object.assign(client, {
+      stop: () => { stopServer(); setStatus('off'); },
+      request, notify, ready, docFor, restart, ensureServer, documentSymbols, sharedSymbols, diagnostics, currentDiagnostics,
+      diagnosticsSettled, editedText, flush, status: () => status, docsList: () => [...docs.values()],
+    });
+    clients.push(client);
+    registerProviders(client);
+    return client;
+  }
 
   // ---------- workspace edits ----------
-  function applyTextEdits(text, edits) {
+  function applyTextEdits(textIn, edits) {
+    let text = textIn;
     const starts = [0];
     for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
     const off = (p) => Math.min((starts[p.line] ?? text.length) + p.character, text.length);
@@ -317,15 +524,24 @@
     return text;
   }
 
+  // Text edits by uri, in order, with the edits for a file a rename in the same edit moves (it, or a folder above it)
+  // listed under its old uri: they are applied before the rename, at the file's old place.
   function editsByUri(we) {
     const out = new Map();
-    const add = (uri, edits) => out.set(uri, [...(out.get(uri) || []), ...edits]);
+    const moves = (we?.documentChanges || []).filter((dc) => dc.kind === 'rename');
+    const before = (uri) => {
+      const m = moves.find((dc) => uri === dc.newUri || uri.startsWith(`${dc.newUri.replace(/\/$/, '')}/`));
+      return m ? m.oldUri.replace(/\/$/, '') + uri.slice(m.newUri.replace(/\/$/, '').length) : uri;
+    };
+    const add = (uri, edits) => { const at = before(uri); out.set(at, [...(out.get(at) || []), ...edits]); };
     for (const [uri, edits] of Object.entries(we?.changes || {})) add(uri, edits);
     for (const dc of we?.documentChanges || []) if (dc.textDocument && dc.edits) add(dc.textDocument.uri, dc.edits);
     return out;
   }
+  const resourceOps = (we) => (we?.documentChanges || []).filter((dc) => ['create', 'rename', 'delete'].includes(dc.kind)
+    && [dc.uri, dc.oldUri, dc.newUri].filter(Boolean).every(isFileUri));
 
-  // Pyright reads a closed file from disk as UTF-8, so its positions are in that text. A CP949 file is rewritten in
+  // A server reads a closed file from disk as UTF-8, so its positions are in that text. A CP949 file is rewritten in
   // CP949 (writing it as UTF-8 broke it), which is only safe where the text before each edit on its line is ASCII:
   // there both readings agree. Otherwise, and for UTF-16, the edit is refused rather than applied at wrong columns.
   const ASCII = /^[\x00-\x7f]*$/;
@@ -339,68 +555,368 @@
     return edits.every((e) => asciiBefore(e.range.start) && asciiBefore(e.range.end)) ? applyTextEdits(file.text, edits) : null;
   }
 
-  // Applies edits to open models (undoable) and rewrites closed files on disk, in their own encoding. With
-  // keepOpenEdits the edits for open models are returned as Monaco workspace edits instead (rename applies them
-  // itself). Nothing is applied when a closed file cannot take its edits: {refused} says why.
+  const exists = (path) => ide.api.exists(path).catch(() => false);
+  async function ensureFolder(dir) {
+    if (!(await exists(dir))) await ide.api.create(dir, true);
+  }
+
+  // Applies edits to open models (undoable) and rewrites closed files on disk, in their own encoding. A file the edit
+  // creates is written with its text; renames and deletes (a Java class renamed with its file, a package moved) come
+  // after the text edits, into folders made as needed. With keepOpenEdits the edits for open models are returned as
+  // Monaco workspace edits instead (rename applies them itself); an edit that moves files applies everything here.
+  // Nothing is applied when a closed file cannot be read or take its edits: {refused} says why. Files that could not
+  // be written, moved or deleted afterwards are named in one message.
   async function applyWorkspaceEdit(we, { keepOpenEdits = false } = {}) {
+    const ops = resourceOps(we);
+    const keep = keepOpenEdits && !ops.length;
+    const byUri = editsByUri(we);
+    const creating = new Set();
+    for (const op of ops) {
+      if (op.kind === 'create' && !(await exists(toPath(op.uri)))) creating.add(op.uri);
+    }
+    for (const uri of creating) if (!byUri.has(uri)) byUri.set(uri, []);
+    const refuse = (path, reason) => ({ edits: [], written: [], refused: reason || tr('{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.', { name: basename(path) }) });
     const closed = [];
-    for (const [uri, edits] of editsByUri(we)) {
+    for (const [uri, edits] of byUri) {
       const path = toPath(uri);
       if (ide.findTab(path)?.model) continue;
-      let file;
+      let file = creating.has(uri) ? { text: '', encoding: 'utf-8' } : null;
       try {
-        file = await ide.api.invoke('fs:readText', path);
+        file ||= await ide.api.invoke('fs:readText', path);
       } catch (err) {
         console.warn(`could not apply edit to ${path}`, err);
-        continue;
       }
-      if (file.text === undefined) {
-        console.warn(`could not apply edit to ${path}: binary or too large`);
-        continue;
-      }
+      if (typeof file?.text !== 'string') return refuse(path, tr('{name} cannot be read, so the change was not applied.', { name: basename(path) }));
       const text = closedFileEdit(file, edits);
-      if (text === null) {
-        return { edits: [], written: [], refused: tr('{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.', { name: basename(path) }) };
-      }
-      closed.push({ path, text, encoding: file.encoding });
+      if (text === null) return refuse(path);
+      closed.push({ path, text, encoding: file.encoding, created: creating.has(uri) });
     }
-    await ide.localHistory?.checkpoint('Before Refactoring', { paths: [...editsByUri(we).keys()].map(toPath) });
+    const touched = [...byUri.keys(), ...ops.flatMap((op) => [op.uri, op.oldUri, op.newUri].filter(Boolean))].map(toPath);
+    await ide.localHistory?.checkpoint('Before Refactoring', { paths: [...new Set(touched)] });
     const monacoEdits = [];
     const written = [];
-    for (const [uri, edits] of editsByUri(we)) {
+    const failed = [];
+    for (const [uri, edits] of byUri) {
       const tab = ide.findTab(toPath(uri));
       if (!tab?.model) continue;
-      const ops = edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
-      if (keepOpenEdits) for (const op of ops) monacoEdits.push({ resource: tab.model.uri, textEdit: op, versionId: undefined });
-      else tab.model.pushEditOperations([], ops, () => null);
+      const editOps = edits.map((e) => ({ range: toRange(e.range), text: e.newText }));
+      if (keep) for (const op of editOps) monacoEdits.push({ resource: tab.model.uri, textEdit: op, versionId: undefined });
+      else tab.model.pushEditOperations([], editOps, () => null);
     }
-    for (const { path, text, encoding } of closed) {
+    for (const { path, text, encoding, created } of closed) {
       try {
+        if (created) await ensureFolder(dirname(path));
         await ide.api.invoke('fs:writeText', path, text, encoding);
         written.push(path);
       } catch (err) {
         console.warn(`could not apply edit to ${path}`, err);
+        failed.push(basename(path));
       }
     }
+    const created = closed.filter((c) => c.created && written.includes(c.path)).map((c) => c.path);
+    if (created.length) ide.emit('filesChanged', { created });
     if (written.length) await ide.reloadFromDisk(written);
-    if (!keepOpenEdits) ide.renderTabs();
+    for (const op of ops) {
+      try {
+        if (op.kind === 'rename') {
+          const from = toPath(op.oldUri);
+          const to = toPath(op.newUri);
+          await ensureFolder(dirname(to));
+          // An open document follows with its unsaved text, the edits just made included.
+          await ide.api.rename(from, to);
+          await ide.documentsMoved(from, to);
+          ide.emit('filesChanged', { renamed: [[from, to]] });
+        } else if (op.kind === 'delete') {
+          const path = toPath(op.uri);
+          await ide.api.trash(path);
+          await ide.documentsMoved(path, null);
+          ide.emit('filesChanged', { deleted: [path] });
+        }
+      } catch (err) {
+        console.warn(`could not ${op.kind} ${op.oldUri || op.uri}`, err);
+        failed.push(basename(toPath(op.oldUri || op.uri)));
+      }
+    }
+    if (ops.length) ide.refreshTree?.();
+    if (!keep) ide.renderTabs();
+    if (failed.length) ide.ui.alert(tr('These files could not be changed: {names}', { names: failed.join(', ') }));
     return { edits: monacoEdits, written };
   }
-  const applyOrExplain = async (we) => {
+  async function applyOrExplain(we) {
     const { refused } = await applyWorkspaceEdit(we);
     if (refused) ide.ui.alert(refused);
-  };
-  ide.api.on('lsp:applyEdit', (p) => { if (p.gen === gen) applyOrExplain(p.edit).catch((err) => console.warn('workspace edit failed', err)); });
+  }
 
   // ---------- Monaco providers ----------
   const K = monaco.languages.CompletionItemKind;
   const LSP_KIND = [null, K.Text, K.Method, K.Function, K.Constructor, K.Field, K.Variable, K.Class, K.Interface, K.Module,
     K.Property, K.Unit, K.Value, K.Enum, K.Keyword, K.Snippet, K.Color, K.File, K.Reference, K.Folder, K.EnumMember,
     K.Constant, K.Struct, K.Event, K.Operator, K.TypeParameter];
-  // The core already contributes keyword completions; skip Pyright's copies so they do not show twice.
-  const coreKeywords = new Set(typeof PY_KEYWORDS !== 'undefined' ? PY_KEYWORDS : []);
   const monacoEdit = (e) => ({ range: toRange(e.range), text: e.newText });
 
+  const SYMBOL_KINDS = ['', 'File', 'Module', 'Namespace', 'Package', 'Class', 'Method', 'Property', 'Field', 'Constructor', 'Enum',
+    'Interface', 'Function', 'Variable', 'Constant', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Key', 'Null',
+    'EnumMember', 'Struct', 'Event', 'Operator', 'TypeParameter'];
+  const toMonacoSymbol = (s) => ({
+    name: s.name, detail: s.detail || '', kind: s.kind - 1, tags: [],
+    range: toRange(s.range), selectionRange: toRange(s.selectionRange || s.range),
+    children: (s.children || []).map(toMonacoSymbol),
+  });
+  const decorate = (s) => {
+    const sel = s.selectionRange || s.range || s.location?.range;
+    return { ...s, kindName: SYMBOL_KINDS[s.kind] || 'Symbol', line: sel.start.line + 1, col: sel.start.character + 1, children: (s.children || []).map(decorate) };
+  };
+
+  // A cancelled token answers null at once; the shared request goes on for the other callers.
+  const unlessCancelled = (promise, token) => new Promise((resolve) => {
+    const sub = token.onCancellationRequested(() => resolve(null));
+    promise.then((v) => { sub.dispose(); resolve(v); });
+  });
+
+  const toLocations = (res) => (res ? (Array.isArray(res) ? res : [res]) : []).map((l) => ({
+    uri: l.targetUri || l.uri,
+    range: l.targetSelectionRange || l.range,
+    fullRange: l.targetRange || l.range,
+    origin: l.originSelectionRange,
+  }));
+  // Uris spelled as the tabs spell them (Uri.file of the path), so a target matches its open model.
+  const monacoUri = (uri) => (isFileUri(uri) ? monaco.Uri.file(toPath(uri)) : monaco.Uri.parse(uri));
+  // Monaco previews (Ctrl+hover, peek) need a model for every target file; ide.previewModel loads the closed ones, and
+  // a client's loadModel the ones outside files (a JDK class).
+  const PREVIEW_FILES = 100;
+  async function withModels(client, items) {
+    const paths = [...new Set(items.filter((i) => i.uri.scheme === 'file').map((i) => i.uri.fsPath))];
+    if (ide.previewModel && paths.length <= PREVIEW_FILES) await Promise.all(paths.map((p) => ide.previewModel(p)));
+    const others = [...new Set(items.filter((i) => i.uri.scheme !== 'file').map((i) => i.uri.toString()))];
+    if (client.spec.loadModel) await Promise.all(others.map((u) => client.spec.loadModel(client, u)));
+    return items;
+  }
+  const toMonacoLinks = (locs) => locs.map((l) => ({
+    uri: monacoUri(l.uri), range: toRange(l.fullRange), targetSelectionRange: toRange(l.range),
+    originSelectionRange: l.origin ? toRange(l.origin) : undefined,
+  }));
+
+  function registerProviders(client) {
+    const { spec, docFor, request } = client;
+    const lang = spec.language;
+    const completion = spec.completion || {};
+
+    monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: completion.triggerCharacters || ['.'],
+      async provideCompletionItems(model, position, context, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const res = await request('textDocument/completion', {
+          textDocument: { uri: doc.uri }, position: lspPos(position),
+          context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
+        }, token);
+        if (!res || token.isCancellationRequested || model.isDisposed()) return undefined;
+        const items = Array.isArray(res) ? res : res.items || [];
+        const word = model.getWordUntilPosition(position);
+        const wordRange = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column);
+        const commandFor = completion.command?.(model, position, word) || (() => undefined);
+        const adapt = completion.adapt || ((s) => s);
+        const suggestions = items.filter((it) => !completion.skip?.(it)).map((it) => {
+          let range = wordRange;
+          let insertText = it.insertText ?? it.label;
+          if (it.textEdit) {
+            insertText = it.textEdit.newText;
+            range = it.textEdit.range ? toRange(it.textEdit.range) : { insert: toRange(it.textEdit.insert), replace: toRange(it.textEdit.replace) };
+          }
+          return adapt({
+            label: it.labelDetails ? { label: it.label, detail: it.labelDetails.detail, description: it.labelDetails.description } : it.label,
+            kind: LSP_KIND[it.kind] ?? K.Text,
+            detail: it.detail,
+            documentation: docOf(it.documentation),
+            sortText: it.sortText,
+            filterText: it.filterText,
+            insertText,
+            insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+            range,
+            additionalTextEdits: it.additionalTextEdits?.map(monacoEdit),
+            tags: it.deprecated || it.tags?.includes(1) ? [monaco.languages.CompletionItemTag.Deprecated] : undefined,
+            commitCharacters: it.commitCharacters,
+            command: commandFor(it, insertText),
+            lsp: it,
+          }, it, { position, wordRange });
+        });
+        return { suggestions, incomplete: !!res.isIncomplete };
+      },
+      async resolveCompletionItem(item, token) {
+        if (!item.lsp || item.lsp.documentation) return item;
+        const r = await request('completionItem/resolve', item.lsp, token);
+        if (!r || token.isCancellationRequested) return item;
+        if (r.documentation) item.documentation = docOf(r.documentation);
+        if (r.detail) item.detail = r.detail;
+        if (r.additionalTextEdits) item.additionalTextEdits = [...r.additionalTextEdits.map(monacoEdit), ...(item.ownEdits || [])];
+        return item;
+      },
+    });
+
+    monaco.languages.registerHoverProvider(lang, {
+      async provideHover(model, position, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const r = await request('textDocument/hover', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
+        if (!r?.contents || token.isCancellationRequested) return undefined;
+        const value = toMarkdown(r.contents);
+        return value ? { contents: [{ value }], range: r.range ? toRange(r.range) : undefined } : undefined;
+      },
+    });
+
+    monaco.languages.registerSignatureHelpProvider(lang, {
+      signatureHelpTriggerCharacters: ['(', ','],
+      signatureHelpRetriggerCharacters: [')'],
+      async provideSignatureHelp(model, position, token, context) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const r = await request('textDocument/signatureHelp', {
+          textDocument: { uri: doc.uri }, position: lspPos(position),
+          context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter, isRetrigger: context.isRetrigger },
+        }, token);
+        if (!r?.signatures?.length || token.isCancellationRequested) return undefined;
+        return {
+          value: {
+            activeSignature: r.activeSignature ?? 0,
+            activeParameter: r.signatures[r.activeSignature ?? 0]?.activeParameter ?? r.activeParameter ?? 0,
+            signatures: r.signatures.map((s) => ({
+              label: s.label,
+              documentation: docOf(s.documentation),
+              activeParameter: s.activeParameter,
+              parameters: (s.parameters || []).map((p) => ({ label: p.label, documentation: docOf(p.documentation) })),
+            })),
+          },
+          dispose() {},
+        };
+      },
+    });
+
+    const locationProvider = (method) => async (model, position, token) => {
+      const doc = docFor(model);
+      if (!doc) return undefined;
+      const r = await request(method, { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
+      return token.isCancellationRequested ? undefined : withModels(client, toMonacoLinks(toLocations(r)));
+    };
+    monaco.languages.registerDefinitionProvider(lang, { provideDefinition: locationProvider('textDocument/definition') });
+    monaco.languages.registerTypeDefinitionProvider(lang, { provideTypeDefinition: locationProvider('textDocument/typeDefinition') });
+
+    monaco.languages.registerReferenceProvider(lang, {
+      async provideReferences(model, position, context, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const r = await request('textDocument/references', { textDocument: { uri: doc.uri }, position: lspPos(position), context: { includeDeclaration: context.includeDeclaration } });
+        return token.isCancellationRequested ? undefined : withModels(client, (r || []).map((l) => ({ uri: monacoUri(l.uri), range: toRange(l.range) })));
+      },
+    });
+
+    monaco.languages.registerDocumentHighlightProvider(lang, {
+      async provideDocumentHighlights(model, position, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const r = await request('textDocument/documentHighlight', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
+        if (!r || token.isCancellationRequested) return undefined;
+        return r.map((h) => ({ range: toRange(h.range), kind: (h.kind || 1) - 1 }));
+      },
+    });
+
+    monaco.languages.registerDocumentSymbolProvider(lang, {
+      displayName: spec.serverName,
+      async provideDocumentSymbols(model, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const r = await unlessCancelled(client.sharedSymbols(doc), token);
+        return !r || token.isCancellationRequested ? undefined : r.filter((s) => s.range).map(toMonacoSymbol);
+      },
+    });
+
+    if (spec.formatting) {
+      monaco.languages.registerDocumentFormattingEditProvider(lang, {
+        async provideDocumentFormattingEdits(model, options, token) {
+          const doc = docFor(model);
+          if (!doc) return undefined;
+          const r = await request('textDocument/formatting', { textDocument: { uri: doc.uri }, options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces } }, token);
+          return r && !token.isCancellationRequested ? r.map(monacoEdit) : undefined;
+        },
+      });
+    }
+
+    monaco.languages.registerRenameProvider(lang, {
+      async resolveRenameLocation(model, position) {
+        const doc = docFor(model);
+        const r = doc && await request('textDocument/prepareRename', { textDocument: { uri: doc.uri }, position: lspPos(position) });
+        const word = model.getWordAtPosition(position);
+        const fallback = new monaco.Range(position.lineNumber, word?.startColumn || position.column, position.lineNumber, word?.endColumn || position.column);
+        if (!r) return { range: fallback, text: word?.word || '', rejectReason: tr('This element cannot be renamed') };
+        const range = toRange(r.range || r);
+        return { range, text: r.placeholder || model.getValueInRange(range) };
+      },
+      async provideRenameEdits(model, position, newName) {
+        const doc = docFor(model);
+        if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: tr("'{name}' is not a valid identifier", { name: newName }) };
+        const we = doc && await request('textDocument/rename', { textDocument: { uri: doc.uri }, position: lspPos(position), newName });
+        if (!we) return { edits: [], rejectReason: tr('Rename failed') };
+        const { edits, refused } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
+        return refused ? { edits: [], rejectReason: refused } : { edits };
+      },
+    });
+
+    monaco.languages.registerCodeActionProvider(lang, {
+      async provideCodeActions(model, range, context, token) {
+        const doc = docFor(model);
+        if (!doc) return undefined;
+        const invoked = context.trigger === monaco.languages.CodeActionTriggerType.Invoke;
+        const diags = client.currentDiagnostics(model, doc.path)
+          .filter((d) => d.range.start.line + 1 <= range.endLineNumber && d.range.end.line + 1 >= range.startLineNumber);
+        const actions = [];
+        // The lightbulb asks on every caret move; answer it synchronously from the cached diagnostics and leave
+        // the server round trips (server actions, import lookup) to an explicit Alt+Enter.
+        const lspActions = invoked && await request('textDocument/codeAction', {
+          textDocument: { uri: doc.uri },
+          range: { start: lspPos(range.getStartPosition()), end: lspPos(range.getEndPosition()) },
+          context: { diagnostics: diags, triggerKind: context.trigger === 1 ? 1 : 2 },
+        });
+        for (const a of lspActions || []) {
+          actions.push({ title: a.title, kind: a.kind || 'quickfix', isPreferred: a.isPreferred, command: { id: APPLY_ACTION, title: a.title, arguments: [a, spec.id] } });
+        }
+        if (spec.codeActions) actions.push(...await spec.codeActions(client, { model, doc, diags, context, invoked, actions }));
+        if (token.isCancellationRequested) return undefined;
+        return { actions, dispose() {} };
+      },
+    }, { providedCodeActionKinds: ['quickfix'] });
+  }
+
+  // ---------- quick fixes (Alt+Enter) ----------
+  // A code action's edit, then its command: the server runs it (workspace/executeCommand), except the commands a
+  // server leaves to its client (JDT LS's java.apply.workspaceEdit).
+  const APPLY_ACTION = 'pyide.lsp.applyCodeAction';
+  const CLIENT_COMMANDS = { 'java.apply.workspaceEdit': (args) => applyOrExplain(args[0]) };
+  monaco.editor.registerCommand(APPLY_ACTION, async (_accessor, action, clientId = 'python') => {
+    const client = clients.find((c) => c.spec.id === clientId);
+    if (action.edit) await applyOrExplain(action.edit);
+    const cmd = typeof action.command === 'string' ? action : action.command;
+    if (!cmd?.command) return;
+    if (CLIENT_COMMANDS[cmd.command]) await CLIENT_COMMANDS[cmd.command](cmd.arguments || []);
+    else await client?.request('workspace/executeCommand', { command: cmd.command, arguments: cmd.arguments });
+  });
+
+  // Cross-file navigation from Monaco itself (Ctrl+Click, peek) goes through the IDE's tabs; a location outside files
+  // (a JDK class) through the client that gave it.
+  monaco.editor.registerEditorOpener({
+    openCodeEditor(source, resource, sel) {
+      const line = sel ? sel.startLineNumber ?? sel.lineNumber : undefined;
+      const col = sel ? sel.startColumn ?? sel.column : undefined;
+      if (resource.scheme === 'file') {
+        ide.openFile(toPath(resource.toString()), { line, col });
+        return true;
+      }
+      const client = clientForModel(source?.getModel?.()) || clients.find((c) => c.spec.openUri);
+      if (!client?.spec.openUri) return false;
+      client.spec.openUri(client, resource.toString(), line ? { start: { line: line - 1, character: (col || 1) - 1 } } : null);
+      return true;
+    },
+  });
+
+  // ---------- Python (Pyright) ----------
   // Completing a function or method adds its parentheses, as PyCharm does: `()` after the name with the caret inside
   // and the parameter info shown, or the caret after it for a callable that takes no arguments. Not after `@` (a
   // decorator is often used without a call), in an import, in a def/class header, or where a `(` or the rest of a
@@ -569,267 +1085,13 @@
     addPair(editor, pos.lineNumber, pos.column);
     editor.trigger('keyboard', 'editor.action.triggerParameterHints', {});
     const version = model.getVersionId();
-    const doc = docFor(model);
-    const help = doc && await request('textDocument/signatureHelp', { textDocument: { uri: doc.uri }, position: lspPos(inside.getPosition()), context: { triggerKind: 1, isRetrigger: false } });
+    const doc = python.docFor(model);
+    const help = doc && await python.request('textDocument/signatureHelp', { textDocument: { uri: doc.uri }, position: lspPos(inside.getPosition()), context: { triggerKind: 1, isRetrigger: false } });
     if (!help?.signatures?.length || help.signatures.some((s) => s.parameters?.length)) return;
     // Typed on meanwhile, or moved: the user has taken over.
     if (model.getVersionId() !== version || !editor.getPosition().equals(inside.getPosition())) return;
     editor.setPosition({ lineNumber: pos.lineNumber, column: pos.column + 2 });
     editor.trigger('keyboard', 'closeParameterHints', {});
-  });
-
-  monaco.languages.registerCompletionItemProvider('python', {
-    triggerCharacters: ['.'],
-    async provideCompletionItems(model, position, context, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const res = await request('textDocument/completion', {
-        textDocument: { uri: doc.uri }, position: lspPos(position),
-        context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
-      }, token);
-      if (!res || token.isCancellationRequested || model.isDisposed()) return undefined;
-      const items = Array.isArray(res) ? res : res.items || [];
-      const word = model.getWordUntilPosition(position);
-      const wordRange = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column);
-      const parens = parensFit(model, position, word.startColumn) ? { id: CALL_PARENS, title: '', arguments: [model.uri.toString()] } : undefined;
-      const suggestions = items.filter((it) => !(it.kind === 14 && coreKeywords.has(it.label))).map((it) => {
-        let range = wordRange;
-        let insertText = it.insertText ?? it.label;
-        if (it.textEdit) {
-          insertText = it.textEdit.newText;
-          range = it.textEdit.range ? toRange(it.textEdit.range) : { insert: toRange(it.textEdit.insert), replace: toRange(it.textEdit.replace) };
-        }
-        return {
-          label: it.labelDetails ? { label: it.label, detail: it.labelDetails.detail, description: it.labelDetails.description } : it.label,
-          kind: LSP_KIND[it.kind] ?? K.Text,
-          detail: it.detail,
-          documentation: docOf(it.documentation),
-          sortText: it.sortText,
-          filterText: it.filterText,
-          insertText,
-          insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-          range,
-          additionalTextEdits: it.additionalTextEdits?.map(monacoEdit),
-          tags: it.deprecated || it.tags?.includes(1) ? [monaco.languages.CompletionItemTag.Deprecated] : undefined,
-          commitCharacters: it.commitCharacters,
-          command: CALLABLE.has(it.kind) && !insertText.includes('(') ? parens : undefined,
-          lsp: it,
-        };
-      });
-      return { suggestions, incomplete: !!res.isIncomplete };
-    },
-    async resolveCompletionItem(item, token) {
-      if (!item.lsp || item.lsp.documentation) return item;
-      const r = await request('completionItem/resolve', item.lsp, token);
-      if (!r || token.isCancellationRequested) return item;
-      if (r.documentation) item.documentation = docOf(r.documentation);
-      if (r.detail) item.detail = r.detail;
-      if (r.additionalTextEdits) item.additionalTextEdits = r.additionalTextEdits.map(monacoEdit);
-      return item;
-    },
-  });
-
-  monaco.languages.registerHoverProvider('python', {
-    async provideHover(model, position, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const r = await request('textDocument/hover', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
-      if (!r?.contents || token.isCancellationRequested) return undefined;
-      const value = toMarkdown(r.contents);
-      return value ? { contents: [{ value }], range: r.range ? toRange(r.range) : undefined } : undefined;
-    },
-  });
-
-  monaco.languages.registerSignatureHelpProvider('python', {
-    signatureHelpTriggerCharacters: ['(', ','],
-    signatureHelpRetriggerCharacters: [')'],
-    async provideSignatureHelp(model, position, token, context) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const r = await request('textDocument/signatureHelp', {
-        textDocument: { uri: doc.uri }, position: lspPos(position),
-        context: { triggerKind: context.triggerKind, triggerCharacter: context.triggerCharacter, isRetrigger: context.isRetrigger },
-      }, token);
-      if (!r?.signatures?.length || token.isCancellationRequested) return undefined;
-      return {
-        value: {
-          activeSignature: r.activeSignature ?? 0,
-          activeParameter: r.signatures[r.activeSignature ?? 0]?.activeParameter ?? r.activeParameter ?? 0,
-          signatures: r.signatures.map((s) => ({
-            label: s.label,
-            documentation: docOf(s.documentation),
-            activeParameter: s.activeParameter,
-            parameters: (s.parameters || []).map((p) => ({ label: p.label, documentation: docOf(p.documentation) })),
-          })),
-        },
-        dispose() {},
-      };
-    },
-  });
-
-  const toLocations = (res) => (res ? (Array.isArray(res) ? res : [res]) : []).map((l) => ({
-    uri: l.targetUri || l.uri,
-    range: l.targetSelectionRange || l.range,
-    fullRange: l.targetRange || l.range,
-    origin: l.originSelectionRange,
-  }));
-  // Uris spelled as the tabs spell them (Uri.file of the path), so a target matches its open model.
-  const fileUri = (uri) => monaco.Uri.file(toPath(uri));
-  // Monaco previews (Ctrl+hover, peek) need a model for every target file; ide.previewModel loads the closed ones.
-  const PREVIEW_FILES = 100;
-  async function withModels(items) {
-    const paths = [...new Set(items.filter((i) => i.uri.scheme === 'file').map((i) => i.uri.fsPath))];
-    if (ide.previewModel && paths.length <= PREVIEW_FILES) await Promise.all(paths.map((p) => ide.previewModel(p)));
-    return items;
-  }
-  const toMonacoLinks = (locs) => locs.map((l) => ({
-    uri: fileUri(l.uri), range: toRange(l.fullRange), targetSelectionRange: toRange(l.range),
-    originSelectionRange: l.origin ? toRange(l.origin) : undefined,
-  }));
-  const locationProvider = (method) => async (model, position, token) => {
-    const doc = docFor(model);
-    if (!doc) return undefined;
-    const r = await request(method, { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
-    return token.isCancellationRequested ? undefined : withModels(toMonacoLinks(toLocations(r)));
-  };
-  monaco.languages.registerDefinitionProvider('python', { provideDefinition: locationProvider('textDocument/definition') });
-  monaco.languages.registerTypeDefinitionProvider('python', { provideTypeDefinition: locationProvider('textDocument/typeDefinition') });
-
-  monaco.languages.registerReferenceProvider('python', {
-    async provideReferences(model, position, context, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const r = await request('textDocument/references', { textDocument: { uri: doc.uri }, position: lspPos(position), context: { includeDeclaration: context.includeDeclaration } });
-      return token.isCancellationRequested ? undefined : withModels((r || []).map((l) => ({ uri: fileUri(l.uri), range: toRange(l.range) })));
-    },
-  });
-
-  monaco.languages.registerDocumentHighlightProvider('python', {
-    async provideDocumentHighlights(model, position, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const r = await request('textDocument/documentHighlight', { textDocument: { uri: doc.uri }, position: lspPos(position) }, token);
-      if (!r || token.isCancellationRequested) return undefined;
-      return r.map((h) => ({ range: toRange(h.range), kind: (h.kind || 1) - 1 }));
-    },
-  });
-
-  const SYMBOL_KINDS = ['', 'File', 'Module', 'Namespace', 'Package', 'Class', 'Method', 'Property', 'Field', 'Constructor', 'Enum',
-    'Interface', 'Function', 'Variable', 'Constant', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Key', 'Null',
-    'EnumMember', 'Struct', 'Event', 'Operator', 'TypeParameter'];
-  const toMonacoSymbol = (s) => ({
-    name: s.name, detail: s.detail || '', kind: s.kind - 1, tags: [],
-    range: toRange(s.range), selectionRange: toRange(s.selectionRange || s.range),
-    children: (s.children || []).map(toMonacoSymbol),
-  });
-  // The breadcrumbs, sticky lines, the outline and editor-assists each asked Pyright for the symbols of the file being
-  // typed in, after every key (19 requests per typed line in a 20,000-line file); Pyright answers one request at a
-  // time, so they came back 2-20 s later and completion waited behind them. They now share one request per open file. It goes once the text has not changed for
-  // SYMBOLS_PAUSE ms (LARGE_PAUSE in a large file, where it is expensive), for the text as it is then; an edit made
-  // while it runs cancels it, and its callers get the next answer instead.
-  const SYMBOLS_PAUSE = 150;
-  const LARGE_LINES = 5000;
-  const LARGE_PAUSE = 1000;
-
-  // -> LSP DocumentSymbol[] for the document's current text (or a later one), or null without an answer.
-  function sharedSymbols(doc) {
-    const last = doc.symbols;
-    if (last && (last.state === 'waiting' || last.version === doc.model.getVersionId())) return last.promise;
-    const entry = { state: 'waiting', version: null, cts: null, timer: 0 };
-    entry.promise = new Promise((resolve) => { entry.resolve = resolve; });
-    if (last?.state === 'sent') {
-      last.state = 'superseded';
-      last.cts.cancel();
-      last.resolve(entry.promise);
-    }
-    doc.symbols = entry;
-    const send = () => {
-      if (doc.symbols !== entry) return;
-      const wait = (doc.model.getLineCount() > LARGE_LINES ? LARGE_PAUSE : SYMBOLS_PAUSE) - (Date.now() - doc.editedAt);
-      if (wait > 0) { entry.timer = setTimeout(send, wait); return; }
-      entry.state = 'sent';
-      entry.version = doc.model.getVersionId();
-      entry.cts = new monaco.CancellationTokenSource();
-      request('textDocument/documentSymbol', { textDocument: { uri: doc.uri } }, entry.cts.token).then((r) => {
-        if (entry.state !== 'sent') return;
-        entry.state = 'done';
-        // No answer (Pyright starting or restarted): the next caller asks again.
-        if (!r && doc.symbols === entry) doc.symbols = null;
-        entry.resolve(r);
-      });
-    };
-    send();
-    return entry.promise;
-  }
-
-  function dropSymbols(doc) {
-    const entry = doc.symbols;
-    doc.symbols = null;
-    if (!entry || entry.state === 'done') return;
-    clearTimeout(entry.timer);
-    entry.cts?.cancel();
-    entry.state = 'done';
-    entry.resolve(null);
-  }
-
-  // A cancelled token answers null at once; the shared request goes on for the other callers.
-  const unlessCancelled = (promise, token) => new Promise((resolve) => {
-    const sub = token.onCancellationRequested(() => resolve(null));
-    promise.then((v) => { sub.dispose(); resolve(v); });
-  });
-
-  monaco.languages.registerDocumentSymbolProvider('python', {
-    displayName: 'Pyright',
-    async provideDocumentSymbols(model, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const r = await unlessCancelled(sharedSymbols(doc), token);
-      return !r || token.isCancellationRequested ? undefined : r.filter((s) => s.range).map(toMonacoSymbol);
-    },
-  });
-
-  // Hierarchical DocumentSymbols (LSP shape) plus kindName and 1-based line/col of the name, for other features. The
-  // breadcrumbs, sticky lines and type hierarchy each ask for every new answer, and the tree of a 20,000-line file has
-  // thousands of symbols (100 ms to copy), so it is decorated once per answer and shared: callers only read it.
-  const decorate = (s) => {
-    const sel = s.selectionRange || s.range || s.location?.range;
-    return { ...s, kindName: SYMBOL_KINDS[s.kind] || 'Symbol', line: sel.start.line + 1, col: sel.start.character + 1, children: (s.children || []).map(decorate) };
-  };
-  const decorated = new WeakMap(); // shared answer -> its decorated tree
-  async function documentSymbols(path) {
-    const doc = docs.get(path.toLowerCase());
-    const r = doc ? await sharedSymbols(doc) : await request('textDocument/documentSymbol', { textDocument: { uri: toUri(path) } });
-    if (!Array.isArray(r)) return [];
-    if (!decorated.has(r)) decorated.set(r, r.map(decorate));
-    return decorated.get(r);
-  }
-
-  monaco.languages.registerRenameProvider('python', {
-    async resolveRenameLocation(model, position) {
-      const doc = docFor(model);
-      const r = doc && await request('textDocument/prepareRename', { textDocument: { uri: doc.uri }, position: lspPos(position) });
-      const word = model.getWordAtPosition(position);
-      const fallback = new monaco.Range(position.lineNumber, word?.startColumn || position.column, position.lineNumber, word?.endColumn || position.column);
-      if (!r) return { range: fallback, text: word?.word || '', rejectReason: tr('This element cannot be renamed') };
-      const range = toRange(r.range || r);
-      return { range, text: r.placeholder || model.getValueInRange(range) };
-    },
-    async provideRenameEdits(model, position, newName) {
-      const doc = docFor(model);
-      if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: tr("'{name}' is not a valid identifier", { name: newName }) };
-      const we = doc && await request('textDocument/rename', { textDocument: { uri: doc.uri }, position: lspPos(position), newName });
-      if (!we) return { edits: [], rejectReason: tr('Rename failed') };
-      const { edits, refused } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
-      return refused ? { edits: [], rejectReason: refused } : { edits };
-    },
-  });
-
-  // ---------- quick fixes (Alt+Enter) ----------
-  const APPLY_ACTION = 'pyide.lsp.applyCodeAction';
-  monaco.editor.registerCommand(APPLY_ACTION, async (_accessor, action) => {
-    if (action.edit) await applyOrExplain(action.edit);
-    const cmd = typeof action.command === 'string' ? action : action.command;
-    if (cmd?.command) await request('workspace/executeCommand', { command: cmd.command, arguments: cmd.arguments });
   });
 
   // Module names are checked once per server by hovering an import in a scratch document Pyright never sees on disk.
@@ -839,9 +1101,9 @@
     if (probeCache.has(name)) return probeCache.get(name);
     const p = (probeChain = probeChain.then(async () => {
       const uri = toUri(joinPath(ide.root, PROBE_NAME));
-      await notify('textDocument/didOpen', { textDocument: { uri, languageId: 'python', version: 1, text: `import ${name}\n` } });
-      const r = await request('textDocument/hover', { textDocument: { uri }, position: { line: 0, character: 7 } });
-      await notify('textDocument/didClose', { textDocument: { uri } });
+      await python.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'python', version: 1, text: `import ${name}\n` } });
+      const r = await python.request('textDocument/hover', { textDocument: { uri }, position: { line: 0, character: 7 } });
+      await python.notify('textDocument/didClose', { textDocument: { uri } });
       return /\(module\)/.test(toMarkdown(r?.contents));
     }).catch(() => false));
     probeCache.set(name, p);
@@ -852,7 +1114,7 @@
 
   async function importCandidates(name, path) {
     const out = [];
-    const symbols = (await request('workspace/symbol', { query: name })) || [];
+    const symbols = (await python.request('workspace/symbol', { query: name })) || [];
     for (const s of symbols) {
       const file = toPath(s.location.uri);
       if (s.name !== name || s.containerName || samePath(file, path) || ![5, 12, 13, 14].includes(s.kind)) continue;
@@ -904,35 +1166,6 @@
     return null;
   }
 
-  // Pyright's diagnostics where they are now (see diagRanges).
-  function currentDiagnostics(model, path) {
-    const raw = rawDiagnostics.get(path.toLowerCase()) || [];
-    const tracked = diagRanges.get(path.toLowerCase());
-    if (!tracked || tracked.model !== model || model.isDisposed()) return raw;
-    return raw.map((d, i) => {
-      const r = model.getDecorationRange(tracked.ids[i]);
-      return r ? { ...d, range: { start: { line: r.startLineNumber - 1, character: r.startColumn - 1 }, end: { line: r.endLineNumber - 1, character: r.endColumn - 1 } } } : d;
-    });
-  }
-
-  // Alt+Enter right after typing waits briefly for Pyright's diagnostics of the text as it is now. Its diagnostics of
-  // the text before the last edits sit on the old lines, so the import fix for the name under the caret was missing.
-  // The wait comes before Monaco's request: Monaco drops an explicit request that is still running 750 ms after a
-  // marker change (its automatic lightbulb request replaces it), which a wait inside the provider would run into.
-  function diagnosticsSettled(doc, ms = 2500) {
-    flush(doc);
-    const key = doc.path.toLowerCase();
-    const want = doc.model.getVersionId();
-    const settled = () => !publishedVersion.has(key) || publishedVersion.get(key) >= want || doc.model.isDisposed() || docs.get(key) !== doc;
-    if (settled()) return Promise.resolve();
-    return new Promise((resolve) => {
-      const finish = () => { clearTimeout(timer); publishWaiters.delete(check); resolve(); };
-      const check = () => { if (settled()) finish(); };
-      const timer = setTimeout(finish, ms);
-      publishWaiters.add(check);
-    });
-  }
-
   // The name a reportUndefinedVariable diagnostic covers. Pyright writes its messages in the UI language, so the quoted
   // name in the message is only the fallback.
   const IDENTIFIER = /^[\p{ID_Start}_][\p{ID_Continue}]*$/u;
@@ -943,82 +1176,94 @@
     return quoted && IDENTIFIER.test(quoted) ? quoted : null;
   }
 
-  monaco.languages.registerCodeActionProvider('python', {
-    async provideCodeActions(model, range, context, token) {
-      const doc = docFor(model);
-      if (!doc) return undefined;
-      const invoked = context.trigger === monaco.languages.CodeActionTriggerType.Invoke;
-      const diags = currentDiagnostics(model, doc.path)
-        .filter((d) => d.range.start.line + 1 <= range.endLineNumber && d.range.end.line + 1 >= range.startLineNumber);
-      const actions = [];
-      // A name used twice on the line, or one diagnostic code twice, gives one action, not one per diagnostic.
-      const offered = new Set();
-      // The lightbulb asks on every caret move; answer it synchronously from the cached diagnostics and leave
-      // the server round trips (Pyright actions, import lookup) to an explicit Alt+Enter.
-      const lspActions = invoked && await request('textDocument/codeAction', {
-        textDocument: { uri: doc.uri },
-        range: { start: lspPos(range.getStartPosition()), end: lspPos(range.getEndPosition()) },
-        context: { diagnostics: diags, triggerKind: context.trigger === 1 ? 1 : 2 },
-      });
-      for (const a of lspActions || []) {
-        actions.push({ title: a.title, kind: a.kind || 'quickfix', isPreferred: a.isPreferred, command: { id: APPLY_ACTION, title: a.title, arguments: [a] } });
-      }
-      for (const d of diags) {
-        const undefinedName = d.code === 'reportUndefinedVariable' && undefinedNameOf(model, d);
-        if (undefinedName && invoked && !offered.has(`import:${undefinedName}`)) {
-          offered.add(`import:${undefinedName}`);
-          const at = importInsertLine(model);
-          const last = model.getLineCount();
-          for (const c of await importCandidates(undefinedName, doc.path)) {
-            const textEdit = fromImportEdit(model, c.line) || (at > last
-              ? { range: new monaco.Range(last, model.getLineMaxColumn(last), last, model.getLineMaxColumn(last)), text: `\n${c.line}` }
-              : { range: new monaco.Range(at, 1, at, 1), text: `${c.line}\n` });
-            // Monaco lists the actions tied to a marker first (ruff's "# noqa" for its F821 is one), so the import
-            // names Pyright's marker too; being preferred, it then leads the list and Alt+Enter, Enter imports.
-            actions.push({
-              title: c.title, kind: 'quickfix', isPreferred: !actions.some((a) => a.isPreferred),
-              diagnostics: context.markers.filter((m) => m.source === SOURCE && m.message === d.message),
-              edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit }] },
-            });
-          }
-        }
-        if (d.code && d.source !== 'Pylance') {
-          const line = d.range.start.line + 1;
-          if (line > model.getLineCount() || offered.has(`suppress:${line}:${d.code}`)) continue;
-          offered.add(`suppress:${line}:${d.code}`);
-          const end = model.getLineMaxColumn(line);
-          const text = model.getLineContent(line);
-          const existing = /# pyright: ignore\[([^\]]*)\]/.exec(text);
-          if (existing?.[1].split(',').map((s) => s.trim()).includes(d.code)) continue;
-          // Extend an existing ignore comment (before its closing bracket) rather than adding a second one.
-          const at = existing ? existing.index + existing[0].length : end;
-          const edit = { range: new monaco.Range(line, at, line, at), text: existing ? `, ${d.code}` : `  # pyright: ignore[${d.code}]` };
-          actions.push({ title: tr("Suppress '{code}' for statement", { code: d.code }), kind: 'quickfix', edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit: edit }] } });
+  // Import fixes for an undefined name and "# pyright: ignore[code]" suppressions.
+  async function pythonCodeActions(_client, { model, doc, diags, context, invoked, actions }) {
+    const out = [];
+    const preferred = () => actions.some((a) => a.isPreferred) || out.some((a) => a.isPreferred);
+    // A name used twice on the line, or one diagnostic code twice, gives one action, not one per diagnostic.
+    const offered = new Set();
+    for (const d of diags) {
+      const undefinedName = d.code === 'reportUndefinedVariable' && undefinedNameOf(model, d);
+      if (undefinedName && invoked && !offered.has(`import:${undefinedName}`)) {
+        offered.add(`import:${undefinedName}`);
+        const at = importInsertLine(model);
+        const last = model.getLineCount();
+        for (const c of await importCandidates(undefinedName, doc.path)) {
+          const textEdit = fromImportEdit(model, c.line) || (at > last
+            ? { range: new monaco.Range(last, model.getLineMaxColumn(last), last, model.getLineMaxColumn(last)), text: `\n${c.line}` }
+            : { range: new monaco.Range(at, 1, at, 1), text: `${c.line}\n` });
+          // Monaco lists the actions tied to a marker first (ruff's "# noqa" for its F821 is one), so the import
+          // names Pyright's marker too; being preferred, it then leads the list and Alt+Enter, Enter imports.
+          out.push({
+            title: c.title, kind: 'quickfix', isPreferred: !preferred(),
+            diagnostics: context.markers.filter((m) => m.source === 'pyright' && m.message === d.message),
+            edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit }] },
+          });
         }
       }
-      if (token.isCancellationRequested) return undefined;
-      return { actions, dispose() {} };
-    },
-  }, { providedCodeActionKinds: ['quickfix'] });
+      if (d.code && d.source !== 'Pylance') {
+        const line = d.range.start.line + 1;
+        if (line > model.getLineCount() || offered.has(`suppress:${line}:${d.code}`)) continue;
+        offered.add(`suppress:${line}:${d.code}`);
+        const end = model.getLineMaxColumn(line);
+        const text = model.getLineContent(line);
+        const existing = /# pyright: ignore\[([^\]]*)\]/.exec(text);
+        if (existing?.[1].split(',').map((s) => s.trim()).includes(d.code)) continue;
+        // Extend an existing ignore comment (before its closing bracket) rather than adding a second one.
+        const at = existing ? existing.index + existing[0].length : end;
+        const edit = { range: new monaco.Range(line, at, line, at), text: existing ? `, ${d.code}` : `  # pyright: ignore[${d.code}]` };
+        out.push({ title: tr("Suppress '{code}' for statement", { code: d.code }), kind: 'quickfix', edit: { edits: [{ resource: model.uri, versionId: undefined, textEdit: edit }] } });
+      }
+    }
+    return out;
+  }
 
-  // Cross-file navigation from Monaco itself (Ctrl+Click, peek) goes through the IDE's tabs.
-  monaco.editor.registerEditorOpener({
-    openCodeEditor(_source, resource, sel) {
-      if (resource.scheme !== 'file') return false;
-      const line = sel ? sel.startLineNumber ?? sel.lineNumber : undefined;
-      const col = sel ? sel.startColumn ?? sel.column : undefined;
-      ide.openFile(toPath(resource.toString()), { line, col });
-      return true;
+  // The core already contributes keyword completions; skip Pyright's copies so they do not show twice.
+  const coreKeywords = new Set(typeof PY_KEYWORDS !== 'undefined' ? PY_KEYWORDS : []);
+
+  // Each status text is a complete entry in the locale files.
+  const python = createClient({
+    id: 'python', language: 'python', match: /\.pyi?$/i, channel: 'lsp', source: 'pyright', serverName: 'Pyright',
+    statusId: 'lspStatus', statusOrder: 20,
+    text: {
+      status: { off: () => tr('Pyright: off'), starting: () => tr('Pyright: starting'), ready: () => tr('Pyright: ready'), error: () => tr('Pyright: error') },
+      server: () => tr('Pyright language server'),
+      starting: (name) => tr('Starting Pyright for {name}', { name }),
+      failed: () => tr('Pyright failed to start'),
+      ready: (python) => (python ? tr('Pyright ready ({python})', { python }) : tr('Pyright ready')),
+      exited: (code) => tr('Pyright exited with code {code}', { code }),
+      stopped: () => tr('Pyright stopped'),
+      error: (message) => tr('Pyright error: {message}', { message }),
+      stoppedTitle: () => tr('Pyright stopped'),
+      crashed: (count, minutes) => tr('The Pyright language server crashed {count} times in the last {minutes} minutes and is not restarted automatically.', { count, minutes }),
+      notReady: () => tr('Cannot search for usages: Pyright is not ready'),
     },
+    start() {
+      const python = ide.currentInterp()?.executable || null;
+      return { key: String(python), args: [python, window.i18n?.locale || 'en'], detail: python };
+    },
+    restartOn: ['projectOpened', 'interpreterChanged'],
+    reset: () => probeCache.clear(),
+    completion: {
+      triggerCharacters: ['.'],
+      skip: (it) => it.kind === 14 && coreKeywords.has(it.label),
+      command(model, position, word) {
+        const parens = parensFit(model, position, word.startColumn) ? { id: CALL_PARENS, title: '', arguments: [model.uri.toString()] } : undefined;
+        return (it, insertText) => (CALLABLE.has(it.kind) && !insertText.includes('(') ? parens : undefined);
+      },
+    },
+    codeActions: pythonCodeActions,
   });
 
   // ---------- actions ----------
-  const editorPython = () => !!ide.editor?.hasTextFocus() && isPy(modelPath(ide.editor.getModel()));
+  // The client of the file in the editor that has the keyboard.
+  const editorClient = () => (ide.editor?.hasTextFocus() ? clientForModel(ide.editor.getModel()) : null);
   const editorTrigger = (id) => () => ide.editor.trigger('keyboard', id, null);
   async function showContextActions() {
     const editor = ide.editor;
-    const doc = docFor(editor.getModel());
-    if (doc) await diagnosticsSettled(doc);
+    const client = clientForModel(editor.getModel());
+    const doc = client?.docFor(editor.getModel());
+    if (doc) await client.diagnosticsSettled(doc);
     if (editor.getModel() === doc?.model || !doc) editor.trigger('keyboard', 'editor.action.quickFix', null);
   }
   const hint = (text) => {
@@ -1028,40 +1273,44 @@
 
   function cursorContext() {
     const model = ide.editor?.getModel();
-    const doc = model && docFor(model);
+    const client = model && clientForModel(model);
+    const doc = client?.docFor(model);
     const position = ide.editor.getPosition();
-    return doc && position ? { doc, model, position, params: { textDocument: { uri: doc.uri }, position: lspPos(position) } } : null;
+    return doc && position ? { client, doc, model, position, params: { textDocument: { uri: doc.uri }, position: lspPos(position) } } : null;
   }
 
-  const navigate = (loc) => ide.openFile(toPath(loc.uri), { line: loc.range.start.line + 1, col: loc.range.start.character + 1 });
+  const navigate = (client, loc) => (isFileUri(loc.uri)
+    ? ide.openFile(toPath(loc.uri), { line: loc.range.start.line + 1, col: loc.range.start.character + 1 })
+    : client.spec.openUri?.(client, loc.uri, loc.range));
 
-  async function chooseAndNavigate(locs, title) {
-    if (locs.length === 1) return navigate(locs[0]);
+  async function chooseAndNavigate(client, locs, title) {
+    if (locs.length === 1) return navigate(client, locs[0]);
     fileCache.clear();
-    const lines = await Promise.all(locs.map((l) => lineText(toPath(l.uri), l.range.start.line + 1)));
+    const label = (l) => (isFileUri(l.uri) ? basename(toPath(l.uri)) : decodeURIComponent(l.uri.split('?')[0].split('/').pop()));
+    const lines = await Promise.all(locs.map((l) => (isFileUri(l.uri) ? lineText(toPath(l.uri), l.range.start.line + 1) : '')));
     const picked = await ide.ui.pick({
       placeholder: title,
-      items: locs.map((l, i) => ({ label: lines[i].trim() || basename(toPath(l.uri)), detail: `${ide.util.rel(toPath(l.uri))}:${l.range.start.line + 1}`, icon: ide.fileIcon(toPath(l.uri)), value: l })),
+      items: locs.map((l, i) => ({ label: lines[i].trim() || label(l), detail: `${isFileUri(l.uri) ? ide.util.rel(toPath(l.uri)) : label(l)}:${l.range.start.line + 1}`, icon: ide.fileIcon(label(l)), value: l })),
     });
-    if (picked) navigate(picked);
+    if (picked) navigate(client, picked);
   }
 
   async function gotoDeclaration() {
     const ctx = cursorContext();
     if (!ctx) return;
-    const locs = toLocations(await request('textDocument/definition', ctx.params));
+    const locs = toLocations(await ctx.client.request('textDocument/definition', ctx.params));
     if (!locs.length) return hint(tr('Cannot find declaration to go to'));
     // On the declaration itself Ctrl+B shows its usages, as in PyCharm.
-    if (locs.length === 1 && samePath(toPath(locs[0].uri), ctx.doc.path) && inRange(locs[0].range, ctx.position)) return findUsages();
-    return chooseAndNavigate(locs, tr('Choose Declaration'));
+    if (locs.length === 1 && isFileUri(locs[0].uri) && samePath(toPath(locs[0].uri), ctx.doc.path) && inRange(locs[0].range, ctx.position)) return findUsages();
+    return chooseAndNavigate(ctx.client, locs, tr('Choose Declaration'));
   }
 
   async function gotoTypeDeclaration() {
     const ctx = cursorContext();
     if (!ctx) return;
-    const locs = toLocations(await request('textDocument/typeDefinition', ctx.params));
+    const locs = toLocations(await ctx.client.request('textDocument/typeDefinition', ctx.params));
     if (!locs.length) return hint(tr('Cannot find type declaration to go to'));
-    return chooseAndNavigate(locs, tr('Choose Type Declaration'));
+    return chooseAndNavigate(ctx.client, locs, tr('Choose Type Declaration'));
   }
 
   // Next/previous highlighted problem in the current file (F2 / Shift+F2), with its description shown.
@@ -1115,8 +1364,9 @@
     const ctx = cursorContext();
     if (!ctx) return;
     const word = ctx.model.getWordAtPosition(ctx.position)?.word || '';
-    const refs = await request('textDocument/references', { ...ctx.params, context: { includeDeclaration: false } });
-    if (!refs) return hint(tr('Cannot search for usages: Pyright is not ready'));
+    const found = await ctx.client.request('textDocument/references', { ...ctx.params, context: { includeDeclaration: false } });
+    if (!found) return hint(ctx.client.spec.text.notReady());
+    const refs = found.filter((r) => isFileUri(r.uri));
     if (!refs.length) return hint(tr("No usages of '{name}' found in Project Files", { name: word }));
     fileCache.clear();
     const groups = new Map();
@@ -1158,7 +1408,7 @@
         row.onclick = () => {
           findList.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
           row.classList.add('selected');
-          navigate(r);
+          navigate(ctx.client, r);
         };
         rows.appendChild(row);
       }
@@ -1169,30 +1419,35 @@
     findTw.setBadge(String(refs.length));
   }
 
+  const inLspEditor = () => !!editorClient();
   [
-    { id: 'GotoDeclaration', title: tr('Go to Declaration or Usages'), keys: 'Ctrl+B', when: editorPython, run: gotoDeclaration },
-    { id: 'GotoTypeDeclaration', title: tr('Go to Type Declaration'), keys: 'Ctrl+Shift+B', when: editorPython, run: gotoTypeDeclaration },
-    { id: 'FindUsages', title: tr('Find Usages'), keys: 'Alt+F7', when: editorPython, run: findUsages },
-    { id: 'RenameElement', title: tr('Rename…'), keys: 'Shift+F6', when: editorPython, run: editorTrigger('editor.action.rename') },
-    { id: 'QuickJavaDoc', title: tr('Quick Documentation'), keys: 'Ctrl+Q', when: editorPython, run: editorTrigger('editor.action.showHover') },
-    { id: 'ParameterInfo', title: tr('Parameter Info'), keys: 'Ctrl+P', when: editorPython, run: editorTrigger('editor.action.triggerParameterHints') },
-    { id: 'ShowIntentionActions', title: tr('Show Context Actions'), keys: 'Alt+Enter', when: editorPython, run: showContextActions },
-    { id: 'GotoNextError', title: tr('Next Highlighted Error'), keys: 'F2', when: editorPython, run: () => gotoProblem(1) },
-    { id: 'GotoPreviousError', title: tr('Previous Highlighted Error'), keys: 'Shift+F2', when: editorPython, run: () => gotoProblem(-1) },
-    { id: 'Pyright.Restart', title: tr('Restart Pyright Language Server'), run: restart },
+    { id: 'GotoDeclaration', title: tr('Go to Declaration or Usages'), keys: 'Ctrl+B', when: inLspEditor, run: gotoDeclaration },
+    { id: 'GotoTypeDeclaration', title: tr('Go to Type Declaration'), keys: 'Ctrl+Shift+B', when: inLspEditor, run: gotoTypeDeclaration },
+    { id: 'FindUsages', title: tr('Find Usages'), keys: 'Alt+F7', when: inLspEditor, run: findUsages },
+    { id: 'RenameElement', title: tr('Rename…'), keys: 'Shift+F6', when: inLspEditor, run: editorTrigger('editor.action.rename') },
+    { id: 'QuickJavaDoc', title: tr('Quick Documentation'), keys: 'Ctrl+Q', when: inLspEditor, run: editorTrigger('editor.action.showHover') },
+    { id: 'ParameterInfo', title: tr('Parameter Info'), keys: 'Ctrl+P', when: inLspEditor, run: editorTrigger('editor.action.triggerParameterHints') },
+    { id: 'ShowIntentionActions', title: tr('Show Context Actions'), keys: 'Alt+Enter', when: inLspEditor, run: showContextActions },
+    { id: 'GotoNextError', title: tr('Next Highlighted Error'), keys: 'F2', when: inLspEditor, run: () => gotoProblem(1) },
+    { id: 'GotoPreviousError', title: tr('Previous Highlighted Error'), keys: 'Shift+F2', when: inLspEditor, run: () => gotoProblem(-1) },
+    { id: 'Pyright.Restart', title: tr('Restart Pyright Language Server'), run: python.restart },
   ].forEach(ide.registerAction);
 
   // Packages installed into or removed from the interpreter: Pyright keeps its import resolution until its settings
   // change, so ask it to read them again (it re-resolves imports and re-checks the open files).
-  const refreshImports = () => { if (status === 'ready') notify('workspace/didChangeConfiguration', { settings: {} }); };
+  const refreshImports = () => { if (python.status() === 'ready') python.notify('workspace/didChangeConfiguration', { settings: {} }); };
   ide.on('packagesChanged', refreshImports);
 
-  // diagnostics(path): Pyright's last raw LSP diagnostics for a file (with `code`, e.g. reportMissingImports), at
-  // their current place in an open file.
-  const diagnostics = (path) => {
-    if (!path || status !== 'ready') return [];
-    const model = ide.findTab(path)?.model;
-    return model && !model.isDisposed() ? currentDiagnostics(model, path) : rawDiagnostics.get(path.toLowerCase()) || [];
+  // The Python client is ide.lsp itself; createClient adds another language's server, clientFor(path) finds the one
+  // for a file, and editedText(tab, 'organizeImports' | 'format') gives a file's text after its server's own Optimize
+  // Imports or Reformat Code (null: no server for that file).
+  ide.lsp = {
+    request: python.request, documentSymbols: python.documentSymbols, ready: python.ready, status: python.status,
+    restart: python.restart, diagnostics: python.diagnostics, refreshImports,
+    createClient, clientFor: clientForPath,
+    editedText: (tab, kind) => {
+      const client = tab?.kind === 'file' ? clientForPath(tab.path) : null;
+      return client && client !== python ? client.editedText(tab, kind) : Promise.resolve(null);
+    },
   };
-  ide.lsp = { request, documentSymbols, ready, status: () => status, restart, diagnostics, refreshImports };
 })();

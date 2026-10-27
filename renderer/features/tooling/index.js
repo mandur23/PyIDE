@@ -47,8 +47,23 @@
     ? (count === 1 ? 'Reformatted selected text: {count} line changed' : 'Reformatted selected text: {count} lines changed')
     : (count === 1 ? 'Reformatted code: {count} line changed' : 'Reformatted code: {count} lines changed'), { count });
 
+  // Another language's file: its language server's own Reformat Code or Optimize Imports (Java: JDT LS through
+  // ide.lsp). -> false when no server handles the file.
+  async function serverEdit(tab, kind) {
+    const r = tab?.kind === 'file' && !tab.model.isDisposed() ? await ide.lsp?.editedText?.(tab, kind) : null;
+    if (!r) return false;
+    if (r.error) {
+      showHint(r.error, true);
+      return true;
+    }
+    const lines = applyText(tab.model, r.text);
+    if (kind === 'format') showHint(lines ? reformattedText(false, lines) : tr('No lines changed: content is already properly formatted'));
+    else showHint(lines ? tr('Imports optimized') : tr('Unused imports not found'));
+    return true;
+  }
+
   async function reformat(tab = ide.activeTab()) {
-    if (!isPy(tab)) return showHint(tr('Reformat Code works on Python files'));
+    if (!isPy(tab)) return (await serverEdit(tab, 'format')) || showHint(tr('Reformat Code works on Python files'));
     const model = tab.model;
     const version = model.getVersionId();
     const sel = ide.editor.getModel() === model ? ide.editor.getSelection() : null;
@@ -61,7 +76,7 @@
   }
 
   async function optimizeImports(tab = ide.activeTab()) {
-    if (!isPy(tab)) return showHint(tr('Optimize Imports works on Python files'));
+    if (!isPy(tab)) return (await serverEdit(tab, 'organizeImports')) || showHint(tr('Optimize Imports works on Python files'));
     const model = tab.model;
     const version = model.getVersionId();
     const r = await ide.api.invoke('tooling:optimizeImports', model.getValue(), tab.path, opts());
