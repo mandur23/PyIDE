@@ -4,7 +4,7 @@
 // checks a Korean natural-language query).
 import { execSync } from 'child_process';
 import { createHash } from 'crypto';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, truncateSync, writeFileSync } from 'fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -173,6 +173,43 @@ const appendToStrings = (t, code) => t.js(`(() => { const m = ide.editor.getMode
   const w2 = t.walk(repo, { ignored, dataFiles: 5000, excluded: ['src'] });
   check(relsOf(w2).includes('datasets/rec7.json') && !relsOf(w2).includes('src/app.py') && reasonsOf(w2).src === 'excluded',
     'the data folder limit is a setting, and excluded folders are left out');
+
+  // A save or an outside change looks only at its paths, deciding as the last full walk did.
+  const known = [];
+  t.collect(repo, [], null);
+  for (const w of t.take(repo, 1e9, false)) known.push(w.f.rel, w.f.mtime, w.f.size, w.chunks.length, w.f.hash);
+  put('src/fresh.py');
+  put('data/train2.py');
+  put('datasets/rec9999.json');
+  put('tools/nested/.venv-rvc/more.py');
+  put('src/b.log.txt', 'x\n');
+  rmSync(path.join(repo, 'pkg', 'core.py'));
+  const quick = t.collect(repo, known, ['src/fresh.py', 'data/train2.py', 'datasets/rec9999.json', 'tools/nested/.venv-rvc/more.py', 'src/b.log.txt', 'pkg/core.py'].map((r) => path.join(repo, r)));
+  const qWork = t.take(repo, 1e9, false).map((w) => w.f.rel.replace(/\\/g, '/'));
+  check(!quick.seen && quick.gone.map((r) => r.replace(/\\/g, '/')).join() === 'pkg/core.py' && qWork.join() === 'src/fresh.py',
+    `a save looks only at its paths: a new file is indexed, a deleted one dropped, and ignored, data, venv and Git-ignored paths left out (${qWork.join()}; gone ${quick.gone.join()})`);
+  check(t.collect(repo, known, [path.join(repo, 'src')]).seen, 'a folder among the paths takes the full walk');
+  t.take(repo, 1e9, false);
+
+  // The data folder rule stays exact on the quick path: a folder filling up becomes data, one emptied stops being it.
+  put('assets/loader.py');
+  t.collect(repo, known, null);
+  t.take(repo, 1e9, false);
+  const images = [];
+  for (let i = 0; i < 1100; i++) { put(`assets/img${i}.png`, 'png'); images.push(path.join(repo, 'assets', `img${i}.png`)); }
+  const grown = t.collect(repo, known, images);
+  t.take(repo, 1e9, false);
+  check(grown.seen && !grown.seen.includes('assets\\loader.py') && grown.skipped.some((x) => x.rel === 'assets' && x.reason === 'data'),
+    'files appearing outside the IDE that turn a folder into data take the full walk, which leaves the folder out');
+  const few = [];
+  for (let i = 0; i < 400; i++) { rmSync(path.join(repo, 'datasets', `rec${i}.json`)); few.push(path.join(repo, 'datasets', `rec${i}.json`)); }
+  const shrunk = t.collect(repo, known, few);
+  t.take(repo, 1e9, false);
+  check(shrunk.seen?.includes('datasets\\rec500.json'), 'a data folder emptied below the limit outside the IDE is indexed again');
+  const trainLog = path.join(repo, 'src', 'train.log');
+  writeFileSync(trainLog, 'step 1\n');
+  const quiet = t.collect(repo, known, [trainLog]);
+  check(!quiet.seen && !quiet.files && !quiet.gone.length && !quiet.touched.length, 'a log written into the project is looked at alone and changes nothing');
 }
 
 let a;
@@ -225,6 +262,41 @@ try {
   const added = logAfter.slice(logBefore.length).split('\n').filter(Boolean);
   check(logAfter.startsWith(logBefore) && added.length === 1 && added[0].includes('compute_crc32_checksum') && JSON.parse(added[0])[0].endsWith('strings.py'),
     `a save appends one record for the file to the index log instead of rewriting it (${added.length} record added)`);
+  check(logAfter.split('\n').filter(Boolean).slice(1).every((l) => typeof JSON.parse(l)[1]?.hash === 'string'), 'each record keeps a hash of its file\'s text');
+
+  // A new time on the same text (a branch switch, a sync tool) restamps the record without embedding it again.
+  const tts = path.join(a.project, 'audio', 'tts.py');
+  const vectorsOf = (log) => path.join(path.dirname(indexLog(a)), JSON.parse(log.split('\n')[0]).vectors);
+  const vectorBytes = statSync(vectorsOf(logAfter)).size;
+  const later = new Date(Date.now() + 60000);
+  utimesSync(tts, later, later);
+  await a.js(`(window.__runs = [], ide.api.on('semantic:progress', (m) => window.__runs.push(m.total)), ide.api.invoke('semantic:index', ide.root), true)`);
+  await a.until(`window.__runs.length && ide.semantic.progress()?.phase === 'ready'`, 'touched run done', 30000);
+  // The project watcher starts a run for the touched file too; the restamp reaches the log one save later.
+  for (let i = 0; i < 30 && readFileSync(indexLog(a), 'utf8').length === logAfter.length; i++) await sleep(500);
+  await sleep(3000);
+  const logTouched = readFileSync(indexLog(a), 'utf8');
+  const restamped = logTouched.slice(logAfter.length).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const oldTts = logAfter.split('\n').filter(Boolean).slice(1).map((l) => JSON.parse(l)).filter(([rel]) => rel.endsWith('tts.py')).pop()[1];
+  check(Math.max(...(await a.js('window.__runs'))) === 0 && restamped.length === 1 && restamped[0][0].endsWith('tts.py')
+    && restamped[0][1].mtime === statSync(tts).mtimeMs && restamped[0][1].hash === oldTts.hash
+    && JSON.stringify(restamped[0][1].chunks.map((c) => c.text)) === JSON.stringify(oldTts.chunks.map((c) => c.text)),
+  `a file touched without a change is not embedded again, only restamped (${restamped.length} record, chunks to embed ${JSON.stringify(await a.js('window.__runs'))})`);
+  check(statSync(vectorsOf(logTouched)).size === vectorBytes && JSON.stringify(restamped[0][1].chunks.map((c) => c.v)) === JSON.stringify(oldTts.chunks.map((c) => c.v)),
+    'the restamp adds a log line and no vectors: its chunks keep their rows in the vector file');
+  check(await a.js(`ide.semantic.query('text to speech').then((r) => r.some((x) => x.rel.endsWith('tts.py')))`), 'the restamped file is still found');
+
+  // Changes made outside the IDE (git pull, another editor) reach the index without reopening the project.
+  writeFileSync(path.join(a.project, 'pulled.py'), 'def pulled_from_remote_marker():\n    return 42\n');
+  await a.until(`ide.semantic.query('pulled from remote marker').then((r) => r[0]?.symbol === 'def pulled_from_remote_marker')`, 'outside file indexed', 30000);
+  check(true, 'a file written outside the IDE is indexed and searchable');
+  await a.js(`(window.__phases = [], ide.api.on('semantic:progress', (m) => window.__phases.push(m.phase)), true)`);
+  writeFileSync(path.join(a.project, 'run.log'), 'noise\n');
+  await sleep(4000);
+  check(!(await a.js('window.__phases')).includes('indexing'), `a log written into the project starts no indexing (${JSON.stringify(await a.js('window.__phases'))})`);
+  rmSync(path.join(a.project, 'pulled.py'));
+  await a.until(`ide.api.invoke('semantic:indexInfo', ide.root).then((i) => i.files === 5)`, 'outside delete indexed', 30000);
+  check(!(await a.js(`ide.semantic.query('pulled from remote marker').then((r) => r.some((x) => x.rel === 'pulled.py'))`)), 'a file deleted outside the IDE leaves the index');
 
   // ---------- find similar ----------
   await a.js(`(ide.editor.setSelection(new ide.monaco.Selection(1, 1, 2, 60)), true)`);

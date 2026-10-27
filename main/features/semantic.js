@@ -1,7 +1,7 @@
 // Semantic code search with Google's EmbeddingGemma 2 (Apache 2.0, google/embeddinggemma-2).
 // The model runs in a Python sidecar (main/semantic/embed_server.py) inside the shared AI runtime (main/ai/runtime.js),
 // a private venv that reuses the system torch. Project files are split into code-aware chunks (functions, classes,
-// methods, doc sections), embedded once, and stored per project; only files that changed are embedded again. Queries mix cosine similarity with a small
+// methods, doc sections), embedded once, and stored per project; only files whose text changed are embedded again. Queries mix cosine similarity with a small
 // keyword score so exact identifiers still rank well.
 const { execFileSync } = require('child_process');
 const crypto = require('crypto');
@@ -150,8 +150,10 @@ const isVenv = (p, name) => /^\.?venv/i.test(name) || ['pyvenv.cfg', 'conda-meta
 
 // The files to index under root. Left out: SKIP_DIRS, virtual environments at any depth, what Git ignores, the
 // user's excluded folders, and data folders: more than `dataFiles` files or `dataMB` of indexable text, of which
-// less than a fifth is source. `skipped` lists the folders left out and why.
-function walk(root, { ignored = new Set(), excluded = [], dataFiles = 1000, dataMB = 50 } = {}) {
+// less than a fifth is source. `skipped` lists the folders left out and why. `census` (the quick path's, see
+// quickFiles) gets every file the walk counted and every folder's counts as the data rule judged them.
+const isDataFolder = (sum, { dataFiles = 1000, dataMB = 50 } = {}) => (sum.all > dataFiles || sum.bytes > dataMB * 2 ** 20) && sum.source * 5 < sum.all;
+function walk(root, { ignored = new Set(), excluded = [], dataFiles = 1000, dataMB = 50 } = {}, census = null) {
   const out = [];
   const skipped = [];
   const excludedKeys = new Set(excluded.map((r) => r.replace(/\\/g, '/').toLowerCase()));
@@ -181,16 +183,20 @@ function walk(root, { ignored = new Set(), excluded = [], dataFiles = 1000, data
         continue;
       }
       sum.all++;
+      census?.files.set(key, 0);
       const ext = d.name.split('.').pop().toLowerCase();
       if (!TEXT_EXT.has(ext) || ignored.has(key)) continue;
       let st;
       try { st = fs.statSync(p); } catch { continue; }
       if (!(st.size > 0 && st.size <= MAX_FILE_BYTES)) continue;
       out.push({ abs: p, rel: path.relative(root, p), mtime: st.mtimeMs, size: st.size });
+      census?.files.set(key, st.size);
       sum.bytes += st.size;
       if (!DATA_EXT.has(ext)) sum.source++;
     }
-    if (dir !== root && (sum.all > dataFiles || sum.bytes > dataMB * 2 ** 20) && sum.source * 5 < sum.all) {
+    census?.dirs.set(keyOf(dir), { ...sum });
+    if (dir !== root && isDataFolder(sum, { dataFiles, dataMB })) {
+      census?.data.add(keyOf(dir));
       out.length = first;
       skipped.length = firstSkipped; // the data folders inside it go with it
       skip(dir, 'data', sum.all);
@@ -220,35 +226,152 @@ function heaviest(entries, n = 12) {
 
 // The disk half of an index update, run on a worker thread so a large project never stalls the main process:
 // which files are gone or changed, and the changed ones read and chunked. `known` is what the index holds, as one
-// flat array [rel, mtime, size, chunks, rel, ...] (chunks = how many it holds for the file): one array crosses the
-// thread boundary in a few ms where 20k small objects take tens. The changed files wait here, under their root, and
-// main takes them a page at a time (take), so a 20k-file project never crosses to main in one message either and
-// two projects indexing at once never take each other's files.
+// flat array [rel, mtime, size, chunks, hash, rel, ...] (chunks = how many it holds for the file, hash = its text's,
+// '' for a record from before hashes): one array crosses the thread boundary in a few ms where 20k small objects take
+// tens. A file whose time or size moved but whose text did not (a branch switch, a sync tool touching it) is not
+// chunked or embedded again: it comes back in `touched` as [rel, mtime, size, ...] for main to restamp. The changed
+// files wait here, under their root, and main takes them a page at a time (take), so a 20k-file project never crosses
+// to main in one message either and two projects indexing at once never take each other's files.
 // `opts` are the walk's limits and exclusions (see walk); Git is asked for its ignored paths here, off the main thread.
+// With `onlyPaths` (a save, files changed outside the IDE) and a full walk of the root done before, only those paths
+// are looked at (quickFiles): a walk of a 20,000-file project takes about 650 ms, which every save used to cost. The
+// result then has `gone` (the paths to drop) instead of `seen` (every file there is).
 const queued = new Map(); // root -> changed files not yet taken
+const lastWalk = new Map(); // root -> {left: lower-case keys the last full walk left out, skipped, census} (see quickFiles)
+const textHash = (text) => crypto.createHash('sha256').update(text).digest('base64').slice(0, 22);
+
+// Which of these root-relative paths Git ignores (git check-ignore exits 1 when it ignores none of them).
+function gitChecksIgnored(root, rels) {
+  if (!rels.length) return new Set();
+  let out;
+  try {
+    out = execFileSync('git', ['-c', 'core.quotepath=false', 'check-ignore', '--stdin', '-z'],
+      { cwd: root, input: rels.map((r) => r.replace(/\\/g, '/')).join('\0'), encoding: 'utf8', timeout: 30000, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  } catch (err) { out = err.status === 1 ? '' : err.stdout || ''; }
+  return new Set(out.split('\0').filter(Boolean).map((r) => r.toLowerCase()));
+}
+
+// The given paths as a full walk would take them: under the root, an indexable extension and size, not in a folder
+// the last full walk left out (Git-ignored, a virtual environment, excluded) and not newly ignored. The data folder
+// rule stays exact: the last walk's census (every file it counted, every folder's counts) follows each path that
+// appears, disappears or changes size, and when a folder would now start or stop being a data folder the full walk
+// decides instead. -> {files, gone}, or null for the full walk (that, a folder, a project not walked yet). Paths of any
+// kind count (a generator writing images can turn a folder into data), and a path that changes nothing costs a stat.
+const relKey = (rel) => rel.replace(/\\/g, '/').toLowerCase();
+function quickFiles(root, paths, opts) {
+  const prior = lastWalk.get(root);
+  if (!prior) return null;
+  const excluded = (opts.excluded || []).map(relKey);
+  const hardLeft = (key) => {
+    const parts = key.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const k = parts.slice(0, i).join('/');
+      if (prior.left.has(k) || excluded.includes(k)) return true;
+      if (i < parts.length && (SKIP_DIRS.has(parts[i - 1]) || /^\.?venv/i.test(parts[i - 1]))) return true;
+    }
+    return false;
+  };
+  const { census } = prior;
+  const files = [];
+  const gone = [];
+  const changes = []; // [key, size before (undefined: not there), size now (undefined: gone)]
+  for (const abs of new Set(paths.map((p) => path.resolve(p)))) {
+    const rel = path.relative(root, abs);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    const key = relKey(rel);
+    if (hardLeft(key)) continue;
+    let st = null;
+    try { st = fs.statSync(abs); } catch {}
+    if (st?.isDirectory() || (!st && !census.files.has(key) && !path.basename(rel).includes('.'))) return null;
+    const ext = path.basename(rel).split('.').pop().toLowerCase();
+    const indexable = !!st && TEXT_EXT.has(ext) && st.size > 0 && st.size <= MAX_FILE_BYTES;
+    changes.push([key, census.files.get(key), st ? (indexable ? st.size : 0) : undefined, ext]);
+    if (!TEXT_EXT.has(ext)) continue;
+    if (!indexable) { gone.push(rel); continue; }
+    files.push({ abs, rel, mtime: st.mtimeMs, size: st.size });
+  }
+  // The census as it would be after these changes; a folder crossing the data rule either way needs the full walk.
+  const dirs = new Map();
+  const dirOf = (k) => dirs.get(k) || dirs.set(k, { ...(census.dirs.get(k) || { all: 0, source: 0, bytes: 0 }) }).get(k);
+  for (const [key, before, now, ext] of changes) {
+    if (before === now) continue;
+    const source = TEXT_EXT.has(ext) && !DATA_EXT.has(ext);
+    const parts = key.split('/');
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const dir = parts.slice(0, i).join('/');
+      const d = dirOf(dir);
+      d.all += (now !== undefined) - (before !== undefined);
+      d.bytes += (now || 0) - (before || 0);
+      d.source += source ? (!!now) - (!!before) : 0;
+      // A data folder's counts are its own: the folders above it never saw them.
+      if (census.data.has(dir)) break;
+    }
+  }
+  for (const [dir, d] of dirs) if (isDataFolder(d, opts) !== census.data.has(dir)) return null;
+  const ignored = gitChecksIgnored(root, files.map((f) => f.rel));
+  const kept = files.filter((x) => !ignored.has(relKey(x.rel)));
+  for (const f of files) if (ignored.has(relKey(f.rel))) gone.push(f.rel);
+  // Files under a data folder stay out of the index, as the walk leaves them.
+  const inData = (rel) => { const parts = relKey(rel).split('/'); for (let i = 1; i < parts.length; i++) if (census.data.has(parts.slice(0, i).join('/'))) return true; return false; };
+  for (const [key, , now] of changes) {
+    if (now === undefined) census.files.delete(key); else census.files.set(key, now);
+  }
+  for (const [dir, d] of dirs) census.dirs.set(dir, d);
+  return { files: kept.filter((f) => !inData(f.rel)), gone: [...gone, ...kept.filter((f) => inData(f.rel)).map((f) => f.rel)] };
+}
+
 function collect(root, knownFlat, onlyPaths, opts = {}) {
   const known = new Map();
-  for (let i = 0; i < knownFlat.length; i += 4) known.set(knownFlat[i], { mtime: knownFlat[i + 1], size: knownFlat[i + 2], chunks: knownFlat[i + 3] });
-  const { files: disk, skipped } = walk(root, { ...opts, ignored: gitIgnored(root) });
-  const seen = new Set(disk.map((f) => f.rel.toLowerCase()));
+  const knownKey = new Map(); // lower-case rel -> the rel the index has, so a path reported in another case is the same file
+  for (let i = 0; i < knownFlat.length; i += 5) {
+    known.set(knownFlat[i], { mtime: knownFlat[i + 1], size: knownFlat[i + 2], chunks: knownFlat[i + 3], hash: knownFlat[i + 4] });
+    knownKey.set(knownFlat[i].toLowerCase(), knownFlat[i]);
+  }
+  const quick = onlyPaths?.length ? quickFiles(root, onlyPaths, opts) : null;
+  let disk;
+  let skipped;
+  let gone = null;
+  if (quick) {
+    disk = quick.files.map((f) => ({ ...f, rel: knownKey.get(f.rel.toLowerCase()) || f.rel }));
+    gone = quick.gone.map((rel) => knownKey.get(rel.toLowerCase())).filter(Boolean);
+    skipped = lastWalk.get(root).skipped;
+  } else {
+    const ignored = gitIgnored(root);
+    const census = { files: new Map(), dirs: new Map(), data: new Set() };
+    ({ files: disk, skipped } = walk(root, { ...opts, ignored }, census));
+    // Data folders are not left out for good: the quick path keeps judging them (quickFiles).
+    const left = new Set([...ignored, ...skipped.filter((x) => x.reason !== 'data').map((x) => relKey(x.rel))]);
+    // A project too large to keep a census of every file goes through the full walk each time.
+    lastWalk.set(root, census.files.size <= 300000 ? { left, skipped, census } : null);
+  }
+  const seen = quick ? null : new Set(disk.map((f) => f.rel.toLowerCase()));
+  const goneSet = new Set(gone || []);
   let stale = disk.filter((f) => { const old = known.get(f.rel); return !old || old.mtime !== f.mtime || old.size !== f.size; });
-  if (onlyPaths) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known.has(f.rel));
+  if (onlyPaths && !quick) stale = stale.filter((f) => onlyPaths.some((p) => p.toLowerCase() === f.abs.toLowerCase()) || !known.has(f.rel));
   const staleRels = new Set(stale.map((f) => f.rel));
   let budget = MAX_CHUNKS;
-  for (const [rel, k] of known) if (seen.has(rel.toLowerCase()) && !staleRels.has(rel)) budget -= k.chunks;
+  for (const [rel, k] of known) if ((quick ? !goneSet.has(rel) : seen.has(rel.toLowerCase())) && !staleRels.has(rel)) budget -= k.chunks;
   const work = [];
+  const touched = [];
   let capped = false;
   for (const f of stale) {
     let text;
     try { text = fs.readFileSync(f.abs, 'utf8'); } catch { continue; }
     if (text.includes('\u0000')) continue;
+    const hash = textHash(text);
+    const old = known.get(f.rel);
+    if (old?.hash === hash) {
+      touched.push(f.rel, f.mtime, f.size);
+      budget -= old.chunks;
+      continue;
+    }
     const chunks = chunkFile(f.rel, text).map((c) => ({ ...c, title: f.rel.replace(/\\/g, '/') }));
     if (chunks.length > budget) { capped = true; break; }
     budget -= chunks.length;
-    work.push({ f, chunks });
+    work.push({ f: { ...f, hash }, chunks });
   }
   queued.set(root, work);
-  return { seen: [...seen], files: work.length, chunks: work.reduce((n, w) => n + w.chunks.length, 0), capped,
+  return { ...(quick ? { gone } : { seen: [...seen] }), touched, files: work.length, chunks: work.reduce((n, w) => n + w.chunks.length, 0), capped,
     skipped: skipped.slice(0, 500), heavy: heaviest(work.map((w) => [w.f.rel, w.chunks.length])) };
 }
 const drop = (root) => { queued.delete(root); };
@@ -347,6 +470,7 @@ async function readIndex(idx) {
       for (const c of f.chunks) {
         c.title = title;
         c.vector = all.subarray(c.v * DIM, (c.v + 1) * DIM);
+        c.row = c.v; // where its vector is in this vector file, for a restamp that keeps it (see encode)
         delete c.v;
       }
       remember(idx, rel, f, true);
@@ -380,12 +504,21 @@ const forget = (idx, rel, loading) => {
   if (!loading) idx.pending.set(rel, null);
 };
 
-// Log lines and vectors for [rel, record | null] entries, with `row` the next free row of the vector file.
-function encode(entries, row) {
+// Log lines and vectors for [rel, record | null] entries, with `row` the next free row of the vector file. Each chunk
+// remembers its row (`c.row`). Appending (`reuse`), a chunk that already has a row in this vector file keeps it, so a
+// restamped file (same text, new time) adds a log line and no vectors; a rewrite into a new vector file numbers every
+// chunk again.
+function encode(entries, row, reuse = false) {
   const lines = [];
   const vecs = [];
+  const place = (c) => {
+    if (reuse && Number.isInteger(c.row)) return c.row;
+    vecs.push(c.vector);
+    c.row = row;
+    return row++;
+  };
   for (const [rel, f] of entries) {
-    const rec = f && { mtime: f.mtime, size: f.size, chunks: f.chunks.map((c) => { vecs.push(c.vector); return { start: c.start, end: c.end, symbol: c.symbol, text: c.text, v: row++ }; }) };
+    const rec = f && { mtime: f.mtime, size: f.size, hash: f.hash, chunks: f.chunks.map((c) => ({ start: c.start, end: c.end, symbol: c.symbol, text: c.text, v: place(c) })) };
     lines.push(`${JSON.stringify([rel, rec])}\n`);
   }
   const all = new Float32Array(vecs.length * DIM);
@@ -393,13 +526,13 @@ function encode(entries, row) {
   return { text: Buffer.from(lines.join('')), vectors: Buffer.from(all.buffer), row };
 }
 // The same in slices of SLICE_CHUNKS chunks, each followed by a turn of the event loop.
-async function encodeSliced(entries, row) {
+async function encodeSliced(entries, row, reuse = false) {
   const text = [];
   const vectors = [];
   for (let i = 0; i < entries.length;) {
     let j = i;
     for (let n = 0; j < entries.length && n < SLICE_CHUNKS; j++) n += entries[j][1]?.chunks.length || 1;
-    const e = encode(entries.slice(i, j), row);
+    const e = encode(entries.slice(i, j), row, reuse);
     text.push(e.text);
     vectors.push(e.vectors);
     row = e.row;
@@ -444,7 +577,7 @@ async function appendLog(idx, batch) {
   try {
     const rows = await alignedRows(fh);
     let vectors;
-    ({ text, vectors } = await encodeSliced(batch, rows));
+    ({ text, vectors } = await encodeSliced(batch, rows, true));
     vectors = vectors.filter((b) => b.length);
     if (vectors.length) await fh.writev(vectors, rows * ROW_BYTES);
   } finally {
@@ -501,7 +634,7 @@ function flushSync(idx) {
         const rows = Math.floor(size / ROW_BYTES);
         if (size !== rows * ROW_BYTES) fs.ftruncateSync(fd, rows * ROW_BYTES);
         let vectors;
-        ({ text, vectors } = encode(batch, rows));
+        ({ text, vectors } = encode(batch, rows, true));
         if (vectors.length) fs.writeSync(fd, vectors, 0, vectors.length, rows * ROW_BYTES);
       } finally {
         fs.closeSync(fd);
@@ -691,12 +824,29 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
           // Power Save Mode: not even the walk runs until it ends.
           while (powerSave && !away()) await sleep(200);
           const known = [];
-          for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length);
+          for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length, idx.files[rel].hash || '');
           const { dataFiles, dataMB } = limits;
           // The folders excluded from the semantic index and those marked Excluded (Mark Directory As).
           const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, excluded: [...excludedOf(root), ...projectRoots.rootsOf(root).excluded] });
-          const seenSet = new Set(plan.seen);
-          for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) forget(idx, rel);
+          // A quick look that found nothing for the index (a log, an image, a file it does not hold) ends quietly.
+          if (plan.gone && !plan.files && !plan.touched.length && !plan.gone.some((rel) => idx.files[rel])) {
+            await inWorker('drop', root);
+            onlyPaths = null;
+            continue;
+          }
+          if (plan.gone) for (const rel of plan.gone) forget(idx, rel);
+          else {
+            const seenSet = new Set(plan.seen);
+            for (const rel of Object.keys(idx.files)) if (!seenSet.has(rel.toLowerCase())) forget(idx, rel);
+          }
+          // Same text under a new time or size: the record keeps its chunks and vectors and takes the new stamp.
+          for (let i = 0; i < plan.touched.length; i += 3) {
+            const [rel, mtime, size] = plan.touched.slice(i, i + 3);
+            const old = idx.files[rel];
+            if (!old) continue;
+            forget(idx, rel);
+            remember(idx, rel, { ...old, mtime, size });
+          }
           Object.assign(idx, { capped: plan.capped, skipped: plan.skipped, total: plan.chunks, done: 0, msPerChunk: 0 });
           if (!idx.confirmed && !Object.keys(idx.files).length && plan.chunks > limits.confirmChunks) {
             idx.asking = { files: plan.files, chunks: plan.chunks, heavy: plan.heavy, skipped: plan.skipped.length };
@@ -736,7 +886,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
             const left = new Map(page.map((w) => [w, w.chunks.filter((c) => !c.vector).length]));
             const finish = (w) => {
               forget(idx, w.f.rel);
-              remember(idx, w.f.rel, { mtime: w.f.mtime, size: w.f.size, chunks: w.chunks });
+              remember(idx, w.f.rel, { mtime: w.f.mtime, size: w.f.size, hash: w.f.hash, chunks: w.chunks });
             };
             const ready = page.filter((w) => !left.get(w));
             for (const w of ready) { finish(w); idx.done += w.chunks.length; }

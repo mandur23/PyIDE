@@ -239,6 +239,27 @@
     saveTimer = setTimeout(() => { index([...pendingPaths]); pendingPaths.clear(); }, 1500);
   });
   ide.on('filesChanged', () => index());
+  // Changes made outside the IDE (git pull or a branch switch in a terminal, another editor, a generator) reach the
+  // index too, a moment after the project watcher reports them. Every path goes to main, whose quick look keeps the
+  // data folder rule exact (a folder filling with images can become data) and ends quietly when nothing the index
+  // holds changed, so a program writing logs into the project costs a stat per path. An overflowing batch (a large
+  // checkout) checks the whole project.
+  let outsideTimer = null;
+  let outsideAll = false;
+  const outsidePaths = new Set();
+  ide.api.on('watch:changed', ({ root, paths = [], overflow }) => {
+    if (!ide.root || !samePath(root, ide.root)) return;
+    if (!overflow && !paths.length) return;
+    if (overflow) outsideAll = true;
+    for (const p of paths) outsidePaths.add(p);
+    clearTimeout(outsideTimer);
+    outsideTimer = setTimeout(() => {
+      const only = outsideAll ? undefined : [...outsidePaths];
+      outsideAll = false;
+      outsidePaths.clear();
+      index(only);
+    }, 1500);
+  });
 
   // ---------- searching ----------
   async function query(text, opts = {}) {
