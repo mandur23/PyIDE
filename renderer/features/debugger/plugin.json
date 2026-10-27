@@ -1,11 +1,13 @@
 {
   "id": "debugger",
-  "name": "Python Debugger",
+  "name": "Debugger",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "Breakpoints, stepping, frames, variables, watches and inline values via debugpy, and Attach to Process.",
+  "description": "Breakpoints, stepping, frames, variables, watches and inline values for Python (debugpy) and Java (JDWP), and Attach to Process.",
   "main": [
     "debug.js",
-    "debug-attach.js"
+    "debug-attach.js",
+    "debug-jvm.js",
+    "debug-jvm-eval.js"
   ]
 }

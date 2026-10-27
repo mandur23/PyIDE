@@ -11,6 +11,7 @@ const attachTo = require('./debug-attach');
 const { withEnvFiles } = require('../dotenv');
 const { workingDir } = require('./run');
 const projectRoots = require('../project-roots');
+const { JvmSession } = require('./debug-jvm');
 const log = require('../diagnostics').logger('#debugger');
 
 const { stoppedError } = attachTo;
@@ -471,6 +472,61 @@ exports.register = (ctx) => {
     await dap.request('configurationDone');
     await attached;
   }
+
+  // ---------- Java (a JVM's JDWP agent, main/features/debug-jvm.js) ----------
+  ipcMain.handle('debug:freePort', () => freePort());
+
+  // target: {port, procId?}: a JVM whose JDWP agent listens on 127.0.0.1:port (-agentlib:jdwp=transport=dt_socket,
+  // server=y,address=127.0.0.1:<port>). procId names the IDE process that runs it (java itself, or a build tool that
+  // starts it): the session takes that id, connecting is tried while it runs, and Stop ends it. Without procId the JVM
+  // is attached to: the session is `jvm-<n>` and Stop detaches. Resolves {id} once the program runs with breakpoints.
+  // opts: {startKey?, sourceRoots?: folders to find frames' .java files in, suspended?: the JVM waits for the debugger
+  // (suspend=y), timeoutMs?: how long to keep trying to connect (default 20 s; a build tool may need longer)}.
+  let jvmSeq = 0;
+  ipcMain.handle('debug:jvm', async (_e, target = {}, breakpoints = [], opts = {}) => {
+    const port = Number(target.port);
+    if (!attachTo.validPort(port)) throw new Error('No debug port');
+    const procId = target.procId ?? null;
+    let stopped = false;
+    let fail;
+    const failed = new Promise((_r, reject) => { fail = reject; });
+    failed.catch(() => {});
+    const key = opts.startKey;
+    if (key != null) starting.set(key, () => { stopped = true; fail(stoppedError()); });
+    const id = procId ?? `jvm-${++jvmSeq}`;
+    const address = `127.0.0.1:${port}`;
+    try {
+      const alive = () => !stopped && (procId == null || procs.has(procId));
+      const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 20000, 1000), 30 * 60000);
+      const connecting = connectWithRetry(port, alive, timeoutMs, (err) => (stopped ? stoppedError()
+        : procId != null && !procs.has(procId) ? Object.assign(new Error('The program exited before the debugger could connect'), { expected: true })
+          : new Error(`Unable to open debugger port (${address}): ${err.message}`)));
+      connecting.then((sock) => { if (stopped) sock.destroy(); }, () => {});
+      const socket = await Promise.race([connecting, failed]);
+      socket.setNoDelay(true);
+      const group = newGroup(id, port, { subProcess: false, breakpoints });
+      const jvm = new JvmSession(socket, {
+        sourceRoots: (opts.sourceRoots || []).filter((r) => typeof r === 'string' && path.isAbsolute(r)), log,
+        onEvent: (event, body) => send('debug:event', { id, event, body }),
+      });
+      sessions.set(id, { dap: jvm, socket, group, attach: procId == null ? address : undefined, jvm: true });
+      socket.on('close', () => {
+        const open = sessions.has(id);
+        closeSession(id);
+        if (open) send('debug:event', { id, event: 'closed', body: {} });
+      });
+      socket.on('error', (err) => log.warn(`JDWP ${address}: ${err.message}`));
+      await Promise.race([jvm.start([...group.bps.values()], { suspended: !!opts.suspended }), failed]);
+      log.info(`connected to the JVM at ${address} (#${id})`);
+      return { id };
+    } catch (err) {
+      closeSession(id);
+      if (procId != null && procs.has(procId)) killProcess(procId);
+      throw err;
+    } finally {
+      if (key != null) starting.delete(key);
+    }
+  });
 
   ipcMain.handle('debug:longPaths', (_e, paths) => paths.map((p) => longPath(String(p))));
 

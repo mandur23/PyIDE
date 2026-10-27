@@ -653,9 +653,19 @@ int main() {
     for (const [p, list] of byFile) ide.problems.set(source, p, list);
   }
 
-  // Runs a compiler into the Run tab's console before the program starts. Stop during the build ends it (the session
-  // is still starting, so Stop only marks cancelStart). -> true when it succeeded.
-  async function compile(s, con, tc, { cmd, args, files, cwd, source, parse, makeDirs }) {
+  // How a build in a Run tab learns it was stopped (the session is still starting, so Stop only marks cancelStart) and
+  // marks the tab failed.
+  const runControl = (s) => ({
+    cancelled: () => s.cancelStart || s.closed,
+    acknowledge: () => { s.cancelStart = false; },
+    failed: () => s.setIcon('▶', 'failed'),
+  });
+  // A build in the Debug tool window: cancelled() says the debug session it belongs to was stopped or replaced.
+  const debugControl = (cancelled) => ({ cancelled, acknowledge() {}, failed() {} });
+
+  // Runs a compiler into the console before the program starts; Stop during the build ends it.
+  // ctl: runControl or debugControl. -> true when it succeeded.
+  async function compile(ctl, con, tc, { cmd, args, files, cwd, source, parse, makeDirs }) {
     con.append(`${[joinPath(tc.bin, `${cmd}.exe`), ...args].map(quote).join(' ')} ${tr('({count} source files)', { count: files.length })}\n`, 'sys');
     let id;
     try {
@@ -666,7 +676,7 @@ int main() {
     }
     let out = '';
     const code = await new Promise((resolve) => {
-      const timer = setInterval(() => { if (s.cancelStart || s.closed) ide.proc.kill(id); }, 200);
+      const timer = setInterval(() => { if (ctl.cancelled()) ide.proc.kill(id); }, 200);
       ide.proc.attach(id, {
         data: (text, stream) => { out += text; con.append(text, stream === 'err' ? 'err' : null); },
         exit: (c) => { clearInterval(timer); resolve(c); },
@@ -674,16 +684,16 @@ int main() {
     });
     const items = parse(out);
     publish(source, items);
-    if (s.cancelStart || s.closed) {
-      s.cancelStart = false;
+    if (ctl.cancelled()) {
+      ctl.acknowledge();
       con.append(`${tr('Build cancelled.')}\n`, 'sys');
-      s.setIcon('▶', 'failed');
+      ctl.failed();
       return false;
     }
     if (code !== 0) {
       const errors = items.filter((it) => it.severity === 'error').length;
       con.append(`\n${errors ? tr('Build failed with {count} errors. They are listed in the Problems tool window.', { count: errors }) : tr('Build failed (exit code {code})', { code })}\n`, 'err');
-      s.setIcon('▶', 'failed');
+      ctl.failed();
       if (errors) ide.toolWindows?.get('Problems')?.show();
       return false;
     }
@@ -747,31 +757,28 @@ int main() {
       const con = s.console({ input: true, placeholder: tr('stdin: type input and press Enter') });
       const jdk = await resolve('jdk', cfg.jdk);
       if (!jdk) return missing(s, con, 'jdk');
-      const r = run();
-      const params = r.parseArgs(cfg.params);
-      const env = r.parseEnv(cfg.env);
-      // Java writes piped output in the system code page (CP949 on Korean Windows) unless told otherwise.
-      const vm = ['-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', ...r.parseArgs(cfg.vmOptions)];
-      const java = joinPath(jdk.bin, 'java.exe');
-      if (isFileMode(cfg)) {
-        const file = r.resolvePath(cfg.file);
-        if (!file) return con.append(`${tr('Source file is not specified. Edit the configuration first.')}\n`, 'err');
-        const cwd = r.resolvePath(cfg.cwd) || ide.root || dirname(file);
-        return launch(s, con, jdk, java, [...vm, file, ...params], cwd, env);
-      }
-      if (!(cfg.mainClass || '').trim()) return con.append(`${tr('Main class is not specified. Edit the configuration first.')}\n`, 'err');
-      if (!ide.root) return con.append(`${tr('Open a project first.')}\n`, 'err');
-      const srcRoot = r.resolvePath(cfg.sourceRoot || 'src');
-      const sources = await sourcesUnder(srcRoot, /\.java$/i);
-      if (!sources.length) return con.append(`${tr('No .java files were found in {path}.', { path: srcRoot })}\n`, 'err');
-      const out = joinPath(ide.root, `out\\production\\${basename(ide.root)}`);
-      const cp = (cfg.classpath || '').split(';').map((p) => p.trim()).filter(Boolean).map((p) => r.resolvePath(p));
-      const ok = await compile(s, con, jdk, {
-        cmd: 'javac', source: 'javac', parse: parseJavac, files: sources, cwd: ide.root,
-        args: ['-J-Dstdout.encoding=UTF-8', '-J-Dstderr.encoding=UTF-8', '-encoding', 'UTF-8', '-g', '-d', out, ...(cp.length ? ['-cp', cp.join(';')] : [])],
+      const cmd = await javaCommand(cfg, con, jdk, runControl(s), []);
+      if (cmd) await launch(s, con, jdk, cmd.java, cmd.args, cmd.cwd, cmd.env);
+    },
+    // Debug (Shift+F9): the same build, then java with the JDWP agent listening for the debugger, suspended until it
+    // has set the breakpoints.
+    debug(cfg) {
+      return ide.debugger.debugJvm({
+        rerun: () => run().debugConfig(cfg),
+        async launch({ con, port, cancelled }) {
+          const jdk = await resolve('jdk', cfg.jdk);
+          if (!jdk) {
+            con.append(`${KINDS.jdk.none()} ${tr('Download one in the Install Manager, or install one and choose it in the configuration.')}\n`, 'err');
+            return null;
+          }
+          const agent = `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${port}`;
+          const cmd = await javaCommand(cfg, con, jdk, debugControl(cancelled), [agent]);
+          if (!cmd || cancelled()) return null;
+          con.append(`${[cmd.java, ...cmd.args].map(quote).join(' ')}\n`, 'sys');
+          const procId = await ide.api.invoke('toolchains:start', { toolchain: jdk, cmd: cmd.java, args: cmd.args, cwd: cmd.cwd, env: cmd.env });
+          return { procId, sourceRoots: cmd.sourceRoots };
+        },
       });
-      if (!ok) return;
-      await launch(s, con, jdk, java, [...vm, '-cp', [out, ...cp].join(';'), cfg.mainClass.trim(), ...params], r.resolvePath(cfg.cwd) || ide.root, env);
     },
   };
 
@@ -941,6 +948,36 @@ int main() {
     });
   }
 
+  // What a Java Application configuration runs, after building it (Main class mode): {java, args, cwd, env,
+  // sourceRoots}, or null when it cannot run (the reason is in con). agent: JVM options that go first (the debugger's).
+  async function javaCommand(cfg, con, jdk, ctl, agent) {
+    const r = run();
+    const params = r.parseArgs(cfg.params);
+    const env = r.parseEnv(cfg.env);
+    // Java writes piped output in the system code page (CP949 on Korean Windows) unless told otherwise.
+    const vm = [...agent, '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', ...r.parseArgs(cfg.vmOptions)];
+    const java = joinPath(jdk.bin, 'java.exe');
+    if (isFileMode(cfg)) {
+      const file = r.resolvePath(cfg.file);
+      if (!file) { con.append(`${tr('Source file is not specified. Edit the configuration first.')}\n`, 'err'); return null; }
+      const cwd = r.resolvePath(cfg.cwd) || ide.root || dirname(file);
+      return { java, args: [...vm, file, ...params], cwd, env, sourceRoots: [dirname(file)] };
+    }
+    if (!(cfg.mainClass || '').trim()) { con.append(`${tr('Main class is not specified. Edit the configuration first.')}\n`, 'err'); return null; }
+    if (!ide.root) { con.append(`${tr('Open a project first.')}\n`, 'err'); return null; }
+    const srcRoot = r.resolvePath(cfg.sourceRoot || 'src');
+    const sources = await sourcesUnder(srcRoot, /\.java$/i);
+    if (!sources.length) { con.append(`${tr('No .java files were found in {path}.', { path: srcRoot })}\n`, 'err'); return null; }
+    const out = joinPath(ide.root, `out\\production\\${basename(ide.root)}`);
+    const cp = (cfg.classpath || '').split(';').map((p) => p.trim()).filter(Boolean).map((p) => r.resolvePath(p));
+    const ok = await compile(ctl, con, jdk, {
+      cmd: 'javac', source: 'javac', parse: parseJavac, files: sources, cwd: ide.root,
+      args: ['-J-Dstdout.encoding=UTF-8', '-J-Dstderr.encoding=UTF-8', '-encoding', 'UTF-8', '-g', '-d', out, ...(cp.length ? ['-cp', cp.join(';')] : [])],
+    });
+    if (!ok) return null;
+    return { java, args: [...vm, '-cp', [out, ...cp].join(';'), cfg.mainClass.trim(), ...params], cwd: r.resolvePath(cfg.cwd) || ide.root, env, sourceRoots: [srcRoot] };
+  }
+
   // ---------- run configuration: C/C++ Application ----------
   const C_SOURCE = /\.(c|cc|cpp|cxx|c\+\+)$/i;
   const cppType = {
@@ -977,7 +1014,7 @@ int main() {
       if (cpp && !tc.cxx) return con.append(`${tr('{compiler} in {path} has no C++ compiler.', { compiler: tc.compiler, path: tc.bin })}\n`, 'err');
       const name = ide.root ? basename(ide.root) : basename(sources[0]).replace(C_SOURCE, '');
       const output = r.resolvePath(cfg.output || `build\\${name}.exe`);
-      const ok = await compile(s, con, tc, {
+      const ok = await compile(runControl(s), con, tc, {
         cmd: basename(cpp ? tc.cxx : tc.cc).replace(/\.exe$/i, ''), source: 'gcc', parse: parseGcc, files: sources,
         cwd: ide.root || dirname(sources[0]), makeDirs: [dirname(output)],
         args: [...r.parseArgs(cfg.flags), '-fdiagnostics-color=never', '-o', output],
@@ -1009,6 +1046,11 @@ int main() {
       keyAction: 'RunClass',
       when: (e) => !e.dir && (/\.java$/i.test(e.name) || C_SOURCE.test(e.name)),
       run: (e) => run().runContext((/\.java$/i.test(e.name) ? javaType : cppType).forFile(e.path)),
+    });
+    ide.registerTreeAction({
+      title: tr("Debug '…'"),
+      when: (e) => !e.dir && /\.java$/i.test(e.name) && !!ide.debugger?.debugJvm,
+      run: (e) => run().debugConfig(run().addTemporary(javaType.forFile(e.path))),
     });
   }
   ide.on('projectOpened', () => refresh());
