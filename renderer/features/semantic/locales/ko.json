@@ -60,5 +60,8 @@
   "A folder counts as data when less than a fifth of its files are source code. Folders Git ignores and virtual environments are never indexed; exclude other folders from the project tree's context menu.": "파일 중 소스 코드가 5분의 1 미만인 폴더는 데이터 폴더로 봅니다. Git이 무시하는 폴더와 가상 환경은 색인하지 않으며, 다른 폴더는 프로젝트 트리의 컨텍스트 메뉴에서 제외할 수 있습니다.",
   "Updating semantic index": "의미 색인 업데이트 중",
   "{eta} left": "{eta} 남음",
-  "Semantic index paused at {pct}% (Power Save Mode)": "의미 색인 {pct}%에서 일시 중지됨 (절전 모드)"
+  "Semantic index paused at {pct}% (Power Save Mode)": "의미 색인 {pct}%에서 일시 중지됨 (절전 모드)",
+  "The AI environment is in use by another PyIDE window. Close it and try again.": "다른 PyIDE 창이 AI 환경을 사용 중입니다. 그 창을 닫고 다시 시도하세요.",
+  "No Python interpreter found": "Python 인터프리터를 찾을 수 없습니다",
+  "PyTorch has no build for {python}. Install Python 3.13 from the Install Manager (or another 64-bit Python that PyTorch supports) and set up again.": "{python}용 PyTorch 빌드가 없습니다. 설치 관리자에서 Python 3.13(또는 PyTorch가 지원하는 다른 64비트 Python)을 설치한 뒤 다시 설정하세요."
 }

@@ -2,6 +2,12 @@
 
 `npm run release -- <버전>`은 이 파일의 `## <버전>` 절을 GitHub 릴리스 노트로 씁니다. 릴리스 전에 새 버전의 절을 맨 위에 추가하세요.
 
+## 0.2.18
+
+- 의미 검색 설정: PyTorch가 아직 지원하지 않는 Python(새로 나온 버전, 32비트, free-threaded)으로 AI 환경을 만들면 "No matching distribution found for torch"로 매번 실패하던 문제 수정. torch가 이미 있거나 torch 빌드가 있는 Python으로 환경을 만들고, 이미 만든 환경이 그런 Python이면 지원되는 Python으로 다시 만듦. 지원되는 Python이 없으면 설치 관리자의 Python 3.13을 설치하라고 알려 줌. 설치 관리자로 설치한 PyIDE의 Python도 후보로 찾음
+- 의미 검색 설정: 시스템에 설치된 torch가 2.6보다 오래되었으면 재사용하지 않고 새 torch를 설치. 전에는 설정이 성공한 것처럼 보였지만 transformers가 오래된 torch를 꺼서 모델을 불러오지 못했음. 그렇게 설정된 환경은 "설정 필요"로 다시 표시됨
+- 의미 검색 설정: Python 3.14.1에서 torchvision을 찾지 못해 실패하던 문제 수정(torchvision 0.26 이후 모든 버전이 3.14.1을 제외). 짝이 맞는 torchvision이 없으면 pip가 torch와 torchvision을 함께 골라 설치
+
 ## 0.2.17
 
 - 여러 창 편집: 두 창에서 같은 위치를 동시에 바꾸거나, 한 창이 다른 창이 바꾸는 범위 안에 입력하면 두 창의 내용이 서로 달라지던 문제 수정

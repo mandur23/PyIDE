@@ -3,7 +3,7 @@
 // The venv is shared by every PyIDE profile (like the Hugging Face model cache) and keeps the folder name of its
 // first user, semantic search, so existing installs keep working. It lives under the home folder: packaged launchers
 // virtualize %LOCALAPPDATA%, which would hide it from other launches.
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -69,44 +69,110 @@ function exclusive(fn) {
   return next;
 }
 
-function findTorchPython(preferred) {
-  const candidates = [...(preferred ? [[preferred, []]] : []), ['py', ['-3']], ['python', []]];
-  for (const [cmd, args] of candidates) {
-    try {
-      execFileSync(cmd, [...args, '-c', 'import torch'], { timeout: 60000, windowsHide: true });
-      return { cmd, args, torch: true };
-    } catch {}
+const exec = (cmd, args, timeout) => new Promise((resolve, reject) => {
+  execFile(cmd, args, { timeout, windowsHide: true, encoding: 'utf8' }, (err, stdout, stderr) => (err ? reject(Object.assign(err, { stdout, stderr })) : resolve(stdout)));
+});
+
+// transformers 5 turns PyTorch off below 2.6 ("Disabling PyTorch because PyTorch >= 2.6 is required"), while
+// sentence-transformers accepts 2.2, so pip alone would keep an older torch the model then cannot load with.
+const TORCH = 'torch>=2.6';
+const torchVersion = (cmd) => exec(cmd, ['-c', 'import torch; print(torch.__version__)'], 60000).then((out) => out.trim(), () => null);
+const usable = (version) => {
+  const [, major, minor] = /^(\d+)\.(\d+)/.exec(version || '') || [];
+  return +major > 2 || (+major === 2 && +minor >= 6);
+};
+const torchUsable = async () => usable(await torchVersion(python));
+// For status checks, which cannot wait for an import: true only when torch's dist-info shows a version below the
+// floor. The environment's own torch wins over the one reused from the interpreter it was made from; a torch found
+// nowhere (a user-site or conda install) is not held against the environment.
+function torchTooOld() {
+  const dirs = [sitePackages];
+  try {
+    const cfg = fs.readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8');
+    const home = /^home\s*=\s*(.+)$/m.exec(cfg)?.[1].trim();
+    if (home && /^include-system-site-packages\s*=\s*true/im.test(cfg)) dirs.push(path.join(home, 'Lib', 'site-packages'));
+  } catch {}
+  for (const d of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(d); } catch {}
+    const version = names.map((n) => /^torch-(\d[^-]*)\.dist-info$/i.exec(n)?.[1]).find(Boolean);
+    if (version) return !usable(version);
   }
-  for (const [cmd, args] of candidates) {
-    try { execFileSync(cmd, [...args, '--version'], { timeout: 15000, windowsHide: true }); return { cmd, args, torch: false }; } catch {}
-  }
-  return null;
+  return false;
 }
 
-const canImport = (module) => {
-  try { execFileSync(python, ['-c', `import ${module}`], { timeout: 60000, windowsHide: true }); return true; } catch { return false; }
-};
+// pip decides whether a torch build fits the interpreter (its version, 32/64-bit, ARM64, free-threaded) and honours
+// the user's index settings. pip answers "no matching distribution" offline too, so the answer counts only when the
+// same index lists pip itself; an unreachable index or a pip-less interpreter proves nothing.
+const listed = (cmd, pkg) => exec(cmd, ['-m', 'pip', 'index', 'versions', pkg, '--disable-pip-version-check', '--retries', '1'], 60000)
+  .then(() => true, () => false);
+const torchHasBuild = async (cmd) => await listed(cmd, 'torch') || !await listed(cmd, 'pip');
 
-async function ensureVenv(job, interpreter) {
+const DESCRIBE = 'import json,platform,struct,sysconfig;print(json.dumps([platform.python_version(),struct.calcsize("P")*8,platform.machine(),bool(sysconfig.get_config_var("Py_GIL_DISABLED"))]))';
+async function describe(cmd) {
+  try {
+    const [version, bits, machine, freeThreaded] = JSON.parse(await exec(cmd, ['-c', DESCRIBE], 15000));
+    return { cmd, label: `Python ${version}${freeThreaded ? ' free-threaded' : ''} (${/arm/i.test(machine) ? machine : `${bits}-bit`})` };
+  } catch { return null; }
+}
+
+// The project interpreter first, then the others the IDE lists (PyIDE's own Python among them), every interpreter the
+// Python launcher lists (newest first), and PATH's python.
+async function pythons(preferred, known) {
+  const launcher = await exec('py', ['-0p'], 15000).then((out) => out.split(/\r?\n/).map((l) => l.match(/[A-Za-z]:\.*\.exe/i)?.[0]), () => []);
+  const seen = new Set();
+  const cmds = [preferred, ...known, ...launcher, 'python'].filter((c) => c && !seen.has(c.toLowerCase()) && seen.add(c.toLowerCase()));
+  return (await Promise.all(cmds.map(describe))).filter(Boolean);
+}
+
+// Prefers an interpreter that already has a usable torch (its packages are reused, saving a multi-hundred-MB
+// download), then one torch has a build for. `torch` callers need one of those; the others take any interpreter.
+async function pickPython(preferred, known, torch) {
+  const found = await pythons(preferred, known);
+  if (!found.length) throw new Error('No Python interpreter found');
+  for (const py of found) if (usable(await torchVersion(py.cmd))) return { ...py, torch: true };
+  for (const py of found) if (await torchHasBuild(py.cmd)) return py;
+  if (torch) throw new Error(`PyTorch has no build for ${[...new Set(found.map((p) => p.label))].join(', ')}`);
+  return found[0];
+}
+
+// `torch: true` also makes sure torch can be installed: an environment made from an interpreter torch has no build
+// for (a Python newer than torch supports, 32-bit, free-threaded) is rebuilt from one it has. `interpreters` are the
+// other interpreters the IDE knows.
+async function ensureVenv(job, interpreter, { torch = false, interpreters = [] } = {}) {
   fs.mkdirSync(dir, { recursive: true });
-  if (pythonReady()) return;
-  const py = findTorchPython(interpreter);
-  if (!py) throw new Error('No Python interpreter found');
-  // Reusing an installed torch avoids a second multi-hundred-MB download.
-  await job.run(py.cmd, [...py.args, '-m', 'venv', ...(py.torch ? ['--system-site-packages'] : []), venv]);
+  if (pythonReady() && (!torch || await torchVersion(python) || await torchHasBuild(python))) return;
+  const py = await pickPython(interpreter, Array.isArray(interpreters) ? interpreters.filter((c) => typeof c === 'string') : [], torch);
+  if (pythonReady()) {
+    job.log(`${(await describe(python))?.label || 'This Python'} has no PyTorch build; recreating the AI environment with ${py.label}.\n`);
+    await Promise.all([...sidecars].map((s) => s.kill()));
+    try { fs.rmSync(venv, { recursive: true, force: true }); } catch {
+      throw new Error('The AI environment is in use by another PyIDE window. Close it and try again.');
+    }
+  }
+  await job.run(py.cmd, ['-m', 'venv', ...(py.torch ? ['--system-site-packages'] : []), venv]);
 }
 
 const pipInstall = (job, args) => job.run(python, [...PIP, ...args]);
 
-// torchvision must be the build paired with the installed torch (2.X.Y pairs with 0.(X+15).Y) from PyTorch's index
-// for the same variant (cpu, cu128, ...); --no-deps stops pip from replacing the reused torch.
+// torchvision is first the build paired with the installed torch (2.X.Y pairs with 0.(X+15).Y) from PyTorch's index
+// for the same variant (cpu, cu128, ...); --no-deps stops pip from replacing a reused torch. That build can be
+// missing for this Python (every torchvision since 0.26 excludes Python 3.14.1), so pip then resolves torch and
+// torchvision together, which puts a matching pair in this environment even if its torch differs from the reused one.
+const TORCH_INDEX = process.env.PYIDE_TORCH_INDEX || 'https://download.pytorch.org/whl';
 async function installTorchvision(job) {
-  const torchVersion = execFileSync(python, ['-c', 'import torch; print(torch.__version__)'], { timeout: 60000, windowsHide: true, encoding: 'utf8' }).trim();
-  const [, minor, patch, variant] = torchVersion.match(/^2\.(\d+)\.(\d+)(?:\+(\w+))?/) || [];
+  const [, minor, patch, variant] = (await torchVersion(python))?.match(/^2\.(\d+)\.(\d+)(?:\+(\w+))?/) || [];
   if (minor) {
-    await pipInstall(job, ['--no-deps', 'pillow', `torchvision==0.${+minor + 15}.${patch}${variant ? `+${variant}` : ''}`,
-      '--extra-index-url', `https://download.pytorch.org/whl/${variant || 'cpu'}`]);
-  } else await pipInstall(job, ['torchvision']);
+    try {
+      await pipInstall(job, ['--no-deps', 'pillow', `torchvision==0.${+minor + 15}.${patch}${variant ? `+${variant}` : ''}`,
+        '--extra-index-url', `${TORCH_INDEX}/${variant || 'cpu'}`]);
+      return;
+    } catch (err) {
+      if (/Cancelled/.test(err.message)) throw err;
+      job.log('The torchvision build paired with this torch is not available for this Python; installing a matching torch and torchvision.\n');
+    }
+  }
+  await pipInstall(job, [TORCH, 'torchvision']);
 }
 
 // Downloads a Hugging Face repo (or only `files` of it) into the standard cache.
@@ -129,6 +195,7 @@ const idleMsOf = (minutes) => Math.round((Number.isFinite(Number(minutes)) ? Num
 // closed and it exits on its own (both servers end on end-of-input, so the exit is clean and not a crash). From then
 // on alive() is false and the caller starts a fresh server on the next request, so a request never waits on a
 // server that is shutting down.
+const sidecars = new Set();
 function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExit = () => {}, idleMs = () => 0 }) {
   const proc = spawn(python, ['-u', script], {
     cwd: dir,
@@ -182,6 +249,7 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
     clearTimeout(idleTimer);
     for (const resolve of pending.values()) resolve({ error: `server exited (${code})` });
     pending.clear();
+    sidecars.delete(handle);
     onExit(code);
     exited(code);
   };
@@ -189,7 +257,7 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
   // A process that never started (python.exe missing or blocked) emits 'error' and no 'exit'.
   proc.on('error', (err) => { onLog(`${err.message}\n`); if (proc.pid === undefined) exit(-1); });
   const write = (msg) => { if (alive && !stopping) proc.stdin.write(`${JSON.stringify(msg)}\n`); };
-  return {
+  const handle = {
     // -> {id, reply: Promise<message>}
     send(msg) {
       const id = nextId++;
@@ -208,9 +276,11 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
     // Resolves once the process has exited and released its files.
     kill() { try { proc.kill(); } catch {} return closed; },
   };
+  sidecars.add(handle);
+  return handle;
 }
 
 module.exports = {
-  dir, venv, python, sitePackages, hasPackage, pythonReady, canImport, hfCacheDir, hfRepoDir, hfCachedFile,
+  dir, venv, python, sitePackages, hasPackage, pythonReady, TORCH, torchUsable, torchTooOld, hfCacheDir, hfRepoDir, hfCachedFile,
   createJob, exclusive, ensureVenv, pipInstall, installTorchvision, hfDownload, startSidecar, idleMsOf,
 };

@@ -23,6 +23,13 @@
   const duration = (s) => (s < 60 ? tr('{n} s', { n: Math.max(1, s) }) : s < 3600 ? tr('{n} min', { n: Math.round(s / 60) })
     : tr('{h} h {m} min', { h: Math.floor(s / 3600), m: Math.round((s % 3600) / 60) }));
   const SKIP_REASONS = { ignored: () => tr('ignored by Git'), venv: () => tr('virtual environment'), data: () => tr('mostly data'), excluded: () => tr('excluded') };
+  // Setup errors from main/ai/runtime.js; other errors (pip, network) pass through as they are.
+  const SETUP_ERRORS = [
+    [/^PyTorch has no build for (.+)$/, (m) => tr('PyTorch has no build for {python}. Install Python 3.13 from the Install Manager (or another 64-bit Python that PyTorch supports) and set up again.', { python: m[1] })],
+    [/^The AI environment is in use by another PyIDE window\. Close it and try again\.$/, () => tr('The AI environment is in use by another PyIDE window. Close it and try again.')],
+    [/^No Python interpreter found$/, () => tr('No Python interpreter found')],
+  ];
+  const setupError = (error) => { for (const [re, f] of SETUP_ERRORS) { const m = re.exec(error); if (m) return f(m); } return error; };
   const slashes = (rel) => rel.replace(/\\/g, '/');
   const languageOf = (p) => ({ py: 'python', md: 'markdown', js: 'javascript', ts: 'typescript', json: 'json', html: 'html',
     css: 'css', java: 'java', lua: 'lua', luau: 'lua', toml: 'ini', yaml: 'yaml', yml: 'yaml', sql: 'sql' })[p.split('.').pop().toLowerCase()] || 'plaintext';
@@ -371,12 +378,12 @@
         go.disabled = true;
         cancel.classList.remove('hidden');
         log.textContent = '';
-        const r = await ide.api.invoke('semantic:setup', { interpreter: ide.currentInterp()?.executable });
+        const r = await ide.api.invoke('semantic:setup', { interpreter: ide.currentInterp()?.executable, interpreters: ide.localInterpPaths() });
         go.disabled = false;
         cancel.classList.add('hidden');
         await refreshStatus();
         if (r.ok) index();
-        else log.textContent += `\n${tr('Setup failed: {error}', { error: r.error })}\n`;
+        else log.textContent += `\n${tr('Setup failed: {error}', { error: setupError(r.error) })}\n`;
       };
       cancel.onclick = () => ide.api.invoke('semantic:cancelSetup');
       buttons.append(go, cancel);
@@ -460,8 +467,8 @@
       signal?.addEventListener('abort', abort);
       logSink = log;
       try {
-        const r = await ide.api.invoke('semantic:setup', { interpreter: ide.currentInterp()?.executable });
-        if (!r.ok) throw new Error(r.error);
+        const r = await ide.api.invoke('semantic:setup', { interpreter: ide.currentInterp()?.executable, interpreters: ide.localInterpPaths() });
+        if (!r.ok) throw new Error(setupError(r.error));
       } finally {
         logSink = null;
         signal?.removeEventListener('abort', abort);

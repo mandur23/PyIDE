@@ -355,7 +355,7 @@
           signal?.addEventListener('abort', abort);
           logSinks.set(m.id, log);
           try {
-            const r = await ide.api.invoke('ai-complete:setup', { model: m.id, interpreter: ide.currentInterp()?.executable });
+            const r = await ide.api.invoke('ai-complete:setup', { model: m.id, interpreter: ide.currentInterp()?.executable, interpreters: ide.localInterpPaths() });
             if (!r.ok) throw new Error(r.error);
           } finally {
             logSinks.delete(m.id);

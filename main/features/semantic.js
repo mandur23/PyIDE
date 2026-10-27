@@ -659,8 +659,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const modelDownloaded = () => !!runtime.hfCachedFile(MODEL_ID, 'model.safetensors');
 
   // ---------- runtime state ----------
-  // Setup only installs torchvision after torch is importable, so its presence stands for the whole runtime.
-  const runtimeInstalled = () => ['sentence_transformers', 'transformers', 'torchvision'].every(runtime.hasPackage);
+  // Setup only installs torchvision after torch is importable, so its presence stands for the whole runtime, unless
+  // the torch it was set up with is too old for transformers.
+  const runtimeInstalled = () => ['sentence_transformers', 'transformers', 'torchvision'].every(runtime.hasPackage) && !runtime.torchTooOld();
   let model = { state: 'idle', device: null, error: null };
   const status = () => (fake
     ? { backend: 'fake', runtime: true, downloaded: true, model: { state: 'ready', device: 'cpu' }, modelId: 'hashing (test)', dim: DIM }
@@ -978,18 +979,19 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
 
   // ---------- setup: shared runtime, packages, model download ----------
   let setupJob = null;
-  ipcMain.handle('semantic:setup', async (_e, { interpreter } = {}) => {
+  ipcMain.handle('semantic:setup', async (_e, { interpreter, interpreters } = {}) => {
     if (fake) return { ok: true };
     const job = setupJob = runtime.createJob((text) => send('semantic:log', text));
     try {
       await runtime.exclusive(async () => {
-        await runtime.ensureVenv(job, interpreter);
-        if (runtimeInstalled()) return;
-        const hasTorch = runtime.canImport('torch');
-        // Upgrading only the small packages keeps the reused system torch instead of downloading a new one.
-        await runtime.pipInstall(job, ['--upgrade', 'sentence-transformers>=6.1', 'transformers', 'huggingface_hub', ...(hasTorch ? [] : ['torch'])]);
+        await runtime.ensureVenv(job, interpreter, { torch: true, interpreters });
+        const reuse = await runtime.torchUsable();
+        if (runtimeInstalled() && reuse) return;
+        // Upgrading only the small packages keeps a reused torch instead of downloading a new one. A new torch is
+        // resolved together with torchvision, so pip picks a pair that has a build for this Python.
+        await runtime.pipInstall(job, ['--upgrade', 'sentence-transformers>=6.1', 'transformers', 'huggingface_hub', ...(reuse ? [] : [runtime.TORCH, 'torchvision'])]);
         // EmbeddingGemma 2's processor loads its video processor even for text, and that needs torchvision.
-        await runtime.installTorchvision(job);
+        if (!runtime.hasPackage('torchvision')) await runtime.installTorchvision(job);
       });
       pushStatus();
       if (!modelDownloaded()) await runtime.hfDownload(job, MODEL_ID);

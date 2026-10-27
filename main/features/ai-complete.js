@@ -137,14 +137,14 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
 
   // ---------- setup: shared runtime, llama.cpp, model download ----------
   const jobs = new Map(); // model id -> setup job
-  ipcMain.handle('ai-complete:setup', async (_e, { model: modelId, interpreter } = {}) => {
+  ipcMain.handle('ai-complete:setup', async (_e, { model: modelId, interpreter, interpreters } = {}) => {
     if (fake) return { ok: true };
     const m = modelOf(modelId);
     const job = runtime.createJob((text) => send('ai-complete:log', { model: m.id, text }));
     jobs.set(m.id, job);
     try {
       await runtime.exclusive(async () => {
-        await runtime.ensureVenv(job, interpreter);
+        await runtime.ensureVenv(job, interpreter, { interpreters });
         if (!runtime.hasPackage('llama_cpp')) await runtime.pipInstall(job, LLAMA_CPP);
         if (!runtime.hasPackage('huggingface_hub')) await runtime.pipInstall(job, ['huggingface_hub']);
       });

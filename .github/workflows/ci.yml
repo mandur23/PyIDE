@@ -84,6 +84,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/doc-sync-fuzz.mjs
+      - name: ai-runtime-python
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/ai-runtime-python.mjs
       - name: case-sensitive
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

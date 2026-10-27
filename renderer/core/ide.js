@@ -1978,6 +1978,8 @@ ide.currentInterp = () => {
   const it = ide.interps[$('interpSelect').selectedIndex];
   return it && !it.invalid ? it : null;
 };
+// python.exe paths of every working interpreter on this computer (not the remote ones plugins add).
+ide.localInterpPaths = () => (ide.interps || []).filter((it) => !it.invalid && !it.unsupported && /^[A-Za-z]:\\/.test(it.executable || '')).map((it) => it.executable);
 function showInterp(it) {
   $('statusInterpLabel').textContent = it?.invalid ? tr('Invalid interpreter: {name}', { name: it.name }) : it?.label || tr('No interpreter');
   $('statusInterp').classList.toggle('invalid', !!it?.invalid);
