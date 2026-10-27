@@ -2,6 +2,13 @@
 
 `npm run release -- <버전>`은 이 파일의 `## <버전>` 절을 GitHub 릴리스 노트로 씁니다. 릴리스 전에 새 버전의 절을 맨 위에 추가하세요.
 
+## 0.2.13
+
+- Java 코드 인사이트: Eclipse JDT Language Server로 Java 파일에 IntelliJ IDEA처럼 코드 완성(Maven/Gradle 의존성이 받아지면 Spring 등 라이브러리 클래스 포함), 입력 중 오류·경고 표시(편집기와 문제 창, 빌드 없이), 빠른 문서(Ctrl+Q, Javadoc), 선언으로 이동(Ctrl+B, JDK·라이브러리 클래스는 읽기 전용 탭으로), 사용 위치 찾기(Alt+F7), 이름 변경(Shift+F6, 클래스는 파일 이름도 함께), 빠른 수정(Alt+Enter), import 최적화(Ctrl+Alt+O), 코드 서식 다시 지정(Ctrl+Alt+L) 제공
+- Maven·Gradle 프로젝트는 JDT LS가 직접 가져오며, 처음 열 때 걸리는 가져오기 진행률을 상태 표시줄에 "Java: 시작 중 27%"처럼 표시. 빌드 파일이 없는 일반 Java 프로젝트는 `src`(또는 소스 루트로 표시한 폴더)를 소스로 사용. `.project`, `.classpath` 같은 Eclipse 파일은 프로젝트에 만들지 않고, 작업 공간은 프로젝트마다 사용자 데이터 폴더에 보관
+- 설치 관리자 "툴체인" 범주에 Eclipse JDT Language Server 1.63.0 추가(고정된 sha256 확인, 관리자 권한 불필요). 설치되지 않은 상태에서 Java 프로젝트를 열면 알림에서 바로 다운로드. JDK 21 이상이 필요하며, 프로젝트 JDK가 21 미만이면 내장 Temurin 25 등 다른 JDK 21+로 실행하고 코드는 프로젝트 JDK 기준으로 검사
+- 신뢰하지 않은 프로젝트(안전 모드)에서는 Java 언어 서버를 시작하지 않음(Maven/Gradle 가져오기는 프로젝트의 빌드 스크립트를 실행하므로). 프로젝트를 닫으면 서버도 종료
+
 ## 0.2.12
 
 - Java 및 C/C++ 프로젝트: 새 프로젝트에 Java(빌드 시스템 IntelliJ, Maven, Gradle)와 C/C++(C++ 또는 C, 언어 표준 선택) 유형 추가. JDK와 툴체인은 이 컴퓨터에 설치된 것(JAVA_HOME, PATH, Program Files, IntelliJ의 `~\.jdks`, MSYS2, w64devkit)에서 고르고, 없으면 마법사에서 바로 내장 버전을 다운로드

@@ -43,5 +43,8 @@
   "Next Highlighted Error": "다음 강조 표시된 오류",
   "Previous Highlighted Error": "이전 강조 표시된 오류",
   "Restart Pyright Language Server": "Pyright 언어 서버 다시 시작",
-  "{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.": "{name}을(를) 바꿀 수 없습니다: UTF-8 파일이 아니고 변경 위치가 ASCII가 아닌 문자가 있는 줄에 있습니다."
+  "{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.": "{name}을(를) 바꿀 수 없습니다: UTF-8 파일이 아니고 변경 위치가 ASCII가 아닌 문자가 있는 줄에 있습니다.",
+  "{server} is not ready": "{server}이(가) 준비되지 않았습니다",
+  "{name} cannot be read, so the change was not applied.": "{name}을(를) 읽을 수 없어 변경을 적용하지 않았습니다.",
+  "These files could not be changed: {names}": "다음 파일을 변경하지 못했습니다: {names}"
 }
