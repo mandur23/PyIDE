@@ -1,0 +1,7 @@
+.reqsync { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow: auto; }
+.reqsync-title { font-weight: 600; margin-top: 6px; }
+.reqsync-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.reqsync-name { font-family: var(--mono, monospace); }
+.reqsync-detail { margin-left: auto; font-size: 12px; }
+.reqsync-form { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.reqsync-note { font-size: 12px; margin-top: 4px; }

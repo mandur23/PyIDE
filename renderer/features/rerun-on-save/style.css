@@ -1,0 +1,4 @@
+/* Rerun on Save is on in this Run tab, marked like a test tab's Auto-test. */
+.run-tab-rerun-on-save { font-size: 10px; line-height: 14px; padding: 0 4px; border-radius: 3px; color: var(--blue6);
+  border: 1px solid currentColor; white-space: nowrap; }
+.run-tab-rerun-on-save.hidden { display: none; }

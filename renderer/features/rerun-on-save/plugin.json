@@ -1,0 +1,10 @@
+{
+  "id": "rerun-on-save",
+  "name": "Rerun on Save",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "A Rerun on Save toggle for each Run tab: saving a file of the project stops that run and starts it again, for scripts you edit while watching their output.",
+  "depends": [
+    "run"
+  ]
+}

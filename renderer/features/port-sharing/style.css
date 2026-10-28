@@ -17,3 +17,12 @@
 .ports-actions { text-align: right; }
 .ports-warning p { margin: 0 0 10px; line-height: 1.5; }
 .ports-dont-ask { display: flex; align-items: center; gap: 6px; }
+.ports-proto { margin-left: 6px; font-size: 10px; padding: 0 4px; border-radius: 3px; border: 1px solid var(--gray6); color: var(--gray9); }
+.ports-local-cell { display: flex; flex-direction: column; min-width: 0; }
+.ports-lan { display: flex; gap: 6px; font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ports-address { color: var(--blue7, #4a90e2); cursor: copy; }
+.ports-address:hover { text-decoration: underline; }
+.ports-remove { border: 0; background: none; color: var(--gray9); cursor: pointer; padding: 0 4px; margin-left: 4px; font-size: 14px; }
+.ports-remove:hover { color: var(--gray12); }
+.ports-bar .ports-add-btn { margin-left: auto; }
+.ports-bar .ports-add-btn + .secondary { margin-left: 0; }

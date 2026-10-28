@@ -11,7 +11,7 @@ const PKGS = 100;
 const PER_PKG = 100;
 const WIDE = 10000;
 const RUNS = Number(process.env.PERF_RUNS || 3);
-const BUDGET = { readyMs: 1500, treeMs: 1500, expandMs: 100, ipcBlockMs: 100 };
+const BUDGET = { readyMs: 1500, treeMs: 1500, expandMs: 100, ipcBlockMs: 100, todosMs: 2000 };
 
 function generateProject() {
   const dir = path.join(tmpdir(), 'pyide-perf-20k');
@@ -221,6 +221,10 @@ for (const [label, call] of [
 }
 check(results['walk (Go to File)'].maxPing < BUDGET.ipcBlockMs, `Go to File's project walk blocks IPC for at most ${round(results['walk (Go to File)'].maxPing)} ms`);
 check(results.interpreters.maxPing < BUDGET.ipcBlockMs, `interpreter discovery blocks IPC for at most ${round(results.interpreters.maxPing)} ms`);
+// One synchronous stat and read per file took 3.3-3.9 s here and stalled IPC for 158-174 ms; read ahead like Find in
+// Files, ~0.7 s and under 10 ms.
+check(results.todos.maxPing < BUDGET.ipcBlockMs && results.todos.ms < BUDGET.todosMs,
+  `the TODO scan takes ${round(results.todos.ms)} ms (< ${BUDGET.todosMs}) and blocks IPC for at most ${round(results.todos.maxPing)} ms`);
 check(results['list (10,000-entry folder)'].result === WIDE && results['list (10,000-entry folder)'].maxPing < BUDGET.ipcBlockMs,
   `listing a 10,000-entry folder blocks IPC for at most ${round(results['list (10,000-entry folder)'].maxPing)} ms`);
 check(results['claude status'].maxPing < BUDGET.ipcBlockMs, `Claude Code detection blocks IPC for at most ${round(results['claude status'].maxPing)} ms`);

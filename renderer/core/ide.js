@@ -1910,6 +1910,7 @@ function wireTree(tree) {
     const dir = !entry ? ide.root : entry.dir ? entry.path : dirname(entry.path);
     return dir && ide.root && isUnder(dir, ide.root) && !treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path)) ? dir : null;
   };
+  let nativeDrags = 0;
   tree.addEventListener('dragstart', (e) => {
     dragged = entryAt(e);
     if (!dragged) return;
@@ -1920,7 +1921,7 @@ function wireTree(tree) {
     if (e.isTrusted) {
       e.preventDefault();
       const paths = (inSelection(dragged) ? [selected, ...alsoSelected] : [dragged]).map((x) => x.path);
-      ide.treeDrag = { paths, entry: dragged };
+      ide.treeDrag = { paths, entry: dragged, seq: ++nativeDrags };
       ide.api.send('tree:startDrag', paths);
       return;
     }
@@ -1930,10 +1931,17 @@ function wireTree(tree) {
   });
   // On the document: the row the drag started from may have been redrawn (auto-scroll, a refresh) and detached.
   document.addEventListener('dragend', () => { dragged = null; clearDropMark(); });
-  // The drop inside this window may still be on its way when main says the system drag ended.
+  // The drop inside this window may still be on its way when main says the system drag ended. The row dragged is
+  // forgotten even when a drop on an editor already took ide.treeDrag: a row left set would make the next files from
+  // Explorer move that row instead of being copied. A drag started meanwhile keeps its own.
   window.api.on('tree:dragEnded', () => {
-    const drag = ide.treeDrag;
-    setTimeout(() => { if (ide.treeDrag === drag) { ide.treeDrag = null; dragged = null; clearDropMark(); } }, 1500);
+    const seq = nativeDrags;
+    setTimeout(() => {
+      if (seq !== nativeDrags) return;
+      if (ide.treeDrag?.seq === seq) ide.treeDrag = null;
+      dragged = null;
+      clearDropMark();
+    }, 1500);
   });
   tree.addEventListener('dragover', (e) => {
     if (fromOutside(e)) {
@@ -2167,6 +2175,14 @@ async function projectChangeAllowed(next, opts = {}) {
 // project with one projectOpened, and every plugin follows that one.
 let openSeq = 0;
 ide.openProject = async (dir) => {
+  // A file (a last project or recent entry that became one, a path typed or passed by a plugin) opens its folder as
+  // the project and then the file, as a file passed on the command line does; listed as a folder it failed with ENOTDIR.
+  const st = await ide.api.stat(dir).catch(() => null);
+  if (st && !st.isDirectory) {
+    const opened = await ide.openProject(dirname(dir));
+    if (opened) await ide.openFile(dir);
+    return opened;
+  }
   const my = ++openSeq;
   const latest = () => my === openSeq;
   const trust = await askTrust(dir);

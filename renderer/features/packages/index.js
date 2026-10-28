@@ -287,8 +287,7 @@
   // Installs a file's requirements with the project's manager (pip -r, uv sync / uv pip install, poetry install).
   // specs: only these requirement strings (a quick fix); pip: use pip even in a uv or Poetry project.
   // Resolves with the exit code, or null when nothing was started.
-  async function installDeps(f, { specs, pip = false } = {}) {
-    const interp = ide.currentInterp();
+  async function installDeps(f, { specs, pip = false, interp = ide.currentInterp() } = {}) {
     if (!f || !interp || busy) return null;
     const names = specs ? specs.join(' ') : ide.util.basename(f.path);
     tw.show();
@@ -429,8 +428,9 @@
   });
   if (ide.root) checkDeps();
 
-  // installSpecs(specs): installs requirement strings with the project's tool (uv pip install in a uv project, pip
-  // otherwise, as the requirement quick fix does), in the Packages console; resolves with the exit code or null.
+  // installSpecs(specs, {interp}?): installs requirement strings with the project's tool (uv pip install in a uv project,
+  // pip otherwise, as the requirement quick fix does) into the project interpreter or `interp`, in the Packages console;
+  // resolves with the exit code, or null when another job is running.
   // requirementsFile(): the existing file "Add to requirements" writes to (requirements.txt, else a pyproject.toml
   // with [project]), or null. addRequirement({name, version?}): adds name~=version (or the bare name) to it.
   const existingTarget = () => deps.files.find((f) => f.kind === 'requirements') || deps.files.find((f) => f.kind === 'pyproject' && f.editable) || null;
@@ -438,8 +438,8 @@
     check: checkDeps,
     state: () => deps,
     install: (path, opts) => installDeps(depFile(path), opts),
-    installSpecs: (specs) => installDeps(deps.files[0] || { path: ide.util.joinPath(ide.root, 'requirements.txt'), kind: 'requirements', reqs: [] },
-      { specs, pip: deps.manager === 'poetry' }),
+    installSpecs: (specs, { interp } = {}) => installDeps(deps.files[0] || { path: ide.util.joinPath(ide.root, 'requirements.txt'), kind: 'requirements', reqs: [] },
+      { specs, pip: deps.manager === 'poetry', ...(interp ? { interp } : {}) }),
     requirementsFile: () => existingTarget()?.path || null,
     addRequirement: async (p) => {
       const target = existingTarget() || requirementsTarget();

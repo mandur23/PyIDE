@@ -1,13 +1,18 @@
 // Ports tool window and port sharing (renderer/features/port-sharing, main/features/port-sharing.js) with a stand-in
 // for cloudflared that prints a quick tunnel's banner: a server started from the IDE is listed and announced and one
 // started elsewhere is not; Share warns first (Don't ask again sticks), shows the public address and copies it; Stop
-// Sharing and the server stopping end the tunnel; automatic sharing asks before it turns on and then shares a new
-// server by itself; without cloudflared, Share offers the Install Manager download; the window in Korean.
-// Ports 9782-9783 for the IDE; the servers listen on 18631-18634.
+// Sharing and the server stopping end the tunnel; a server that is not a web server (TCP) is shared through a stand-in
+// for bore with a host:port address, an https server through cloudflared without a certificate check, and a server
+// started elsewhere is listed once its port is added; a server on every interface shows its LAN address; automatic
+// sharing asks before it turns on and then shares a new server by itself; without cloudflared, Share offers the
+// Install Manager download; the window in Korean.
+// Ports 9782-9783 for the IDE; the servers listen on 18631-18639.
 import { spawn } from 'child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { networkInterfaces } from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { launch, processSnapshot } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
@@ -27,9 +32,26 @@ setTimeout(() => process.stderr.write('INF precheck: DNS, UDP and TCP connectivi
 setTimeout(() => process.stderr.write('INF Registered tunnel connection connIndex=0 location=icn01 protocol=quic\\n'), 600);
 setInterval(() => {}, 1000);
 `);
-const env = { PYIDE_CLOUDFLARED: q([process.execPath, fake]), PYIDE_INSTALL_ROOT: path.join(work, 'root') };
+const fakeBore = path.join(work, 'fake-bore.cjs');
+const boreLog = path.join(work, 'bore-args.txt');
+// bore colours its log; the address line is what matters.
+writeFileSync(fakeBore, `const fs = require('fs');
+fs.appendFileSync(${q(boreLog)}, process.argv.slice(2).join(' ') + '\\n');
+setTimeout(() => process.stdout.write('\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::client\\x1b[0m: connected to server \\x1b[3mremote_port\\x1b[0m=40123\\n'
+  + '\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::client\\x1b[0m: listening at bore.pub:40123\\n'), 300);
+setInterval(() => {}, 1000);
+`);
+const env = { PYIDE_CLOUDFLARED: q([process.execPath, fake]), PYIDE_BORE: q([process.execPath, fakeBore]), PYIDE_INSTALL_ROOT: path.join(work, 'root') };
+const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'port-sharing');
+// A game-server-like TCP server: it reads a request and closes, never answering HTTP.
+const tcpCode = (port, host = '127.0.0.1') => `require('net').createServer((s) => { s.on('data', () => s.destroy()); s.on('error', () => {}); }).listen(${port}, '${host}')`;
+// A development https server with a self-signed certificate.
+const httpsCode = (port) => `require('https').createServer({ key: require('fs').readFileSync(${q(path.join(fixtures, 'localhost-key.pem'))}),
+  cert: require('fs').readFileSync(${q(path.join(fixtures, 'localhost-cert.pem'))}) }, (q, r) => r.end('secure')).listen(${port}, '127.0.0.1')`;
+const lanIps = Object.values(networkInterfaces()).flat()
+  .filter((i) => i && i.family === 'IPv4' && !i.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address)).map((i) => i.address);
 const serverCode = (port) => `require('http').createServer((q, r) => r.end('hello ${port}')).listen(${port}, '127.0.0.1')`;
-const fakeTunnels = () => processSnapshot().filter((p) => (p.cmd || '').includes('fake-cloudflared.cjs'));
+const fakeTunnels = () => processSnapshot().filter((p) => /fake-(cloudflared|bore)\.cjs/.test(p.cmd || ''));
 
 const a = await launch({ fixture: 'core', port: 9782, name: 'port-sharing', env });
 const { js, until, check, click } = a;
@@ -43,8 +65,19 @@ try {
     `a server started from the IDE is listed, one started elsewhere is not (${q(st.ports.map((p) => p.port))})`);
   await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('Port 18631 is available'))`, 'announced', 10000)
     .then(() => check(true, 'a new server is announced with Open in Browser and Share'), () => check(false, 'a new server is announced'));
+  // A server that accepts one client must not lose it to a probe nobody asked for.
+  const connections = path.join(work, 'connections.txt');
+  writeFileSync(connections, '');
+  const counted = await js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(`require('net').createServer((s) => { require('fs').appendFileSync(${q(connections)}, 'c'); s.on('error', () => {}); s.on('data', () => s.destroy()); }).listen(18639, '127.0.0.1')`)}], ide.root)`);
+  await until(`ide.ports.state().ports.some((p) => p.port === 18639)`, 'counted server listed', 30000);
+  await new Promise((r) => setTimeout(r, 4000));
+  check(readFileSync(connections, 'utf8') === '' && await js(`ide.ports.state().ports.every((p) => p.proto === null)`),
+    'while the Ports window is closed, no server is probed (no connection reaches it)');
 
   await js(`(ide.toolWindows.get('Ports').show(), true)`);
+  await until(`ide.ports.state().ports.find((p) => p.port === 18631)?.proto === 'http'`, 'probed once shown', 15000)
+    .then(() => check(true, 'with the Ports window shown, servers are probed'), () => check(false, 'with the Ports window shown, servers are probed'));
+  await js(`ide.proc.kill(${counted})`);
   await until(`!!document.querySelector('#portsList .ports-row[data-port="18631"]')`, 'row');
   check(await js(`document.querySelector('#portsList .ports-row[data-port="18631"] .ports-local').dataset.url`) === 'http://localhost:18631/', 'the row has the local address');
   await a.shot('ports.png');
@@ -77,6 +110,62 @@ try {
   await until(`!ide.ports.state().ports.some((p) => p.port === 18631) && !ide.ports.state().tunnels.length`, 'server gone', 20000);
   await new Promise((r) => setTimeout(r, 1500));
   check(!fakeTunnels().length, 'when the server stops, its row and its tunnel go too');
+
+  const startCode = (code) => js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(code)}], ide.root)`);
+  const tcp = await startCode(tcpCode(18635, '0.0.0.0'));
+  await until(`ide.ports.state().ports.some((p) => p.port === 18635 && p.proto)`, 'tcp server probed', 30000);
+  const tcpRow = await js(`ide.ports.state().ports.find((p) => p.port === 18635)`);
+  check(tcpRow.proto === 'tcp', `a server that does not answer HTTP is told apart as TCP (${tcpRow.proto})`);
+  await until(`document.querySelector('#portsList .ports-row[data-port="18635"] .ports-local')?.dataset.url === 'localhost:18635'`, 'tcp local address', 10000)
+    .then(() => check(true, 'its local address is host:port, not an http link'), () => check(false, 'its local address is host:port'));
+  const lanShown = await js(`[...document.querySelectorAll('#portsList .ports-row[data-port="18635"] .ports-lan-url')].map((n) => n.dataset.url)`);
+  check(q(lanShown) === q(lanIps.map((ip) => `${ip}:18635`)), `a server on every interface shows its LAN address (${q(lanShown)})`);
+  await js(`(document.querySelector('#portsList .ports-row[data-port="18635"] .ports-share').click(), true)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18635 && t.state === 'shared')`, 'tcp shared', 20000);
+  const tcpTunnel = await js(`ide.ports.state().tunnels.find((t) => t.port === 18635)`);
+  check(tcpTunnel.kind === 'bore' && tcpTunnel.url === 'bore.pub:40123' && readFileSync(boreLog, 'utf8').includes('local 18635 --local-host 127.0.0.1 --to bore.pub'),
+    `a TCP server is shared through bore and gets a host:port address (${q(tcpTunnel)})`);
+  check(!readFileSync(argsLog, 'utf8').includes('18635'), 'cloudflared is not used for a TCP server');
+  await until(`document.querySelector('#portsList .ports-row[data-port="18635"] .ports-url')?.textContent === 'bore.pub:40123'`, 'bore address in the row', 10000);
+  check(await js(`document.querySelector('#portsList .ports-row[data-port="18635"] .ports-url').tagName`) === 'SPAN', 'the TCP address is copied on click, not opened in the browser');
+  await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('Port 18635 is shared') && !n.textContent.includes('Open in Browser'))`, 'tcp shared note', 10000)
+    .then(() => check(true, 'its address is announced without Open in Browser'), () => check(false, 'the TCP address is announced without Open in Browser'));
+  await a.shot('ports-tcp.png');
+  await js(`ide.proc.kill(${tcp})`);
+  await until(`!ide.ports.state().tunnels.length`, 'tcp gone', 20000);
+
+  const secure = await startCode(httpsCode(18636));
+  await until(`ide.ports.state().ports.some((p) => p.port === 18636 && p.proto)`, 'https server probed', 30000);
+  check(await js(`ide.ports.state().ports.find((p) => p.port === 18636).proto`) === 'https', 'an https server is told apart');
+  check(await js(`document.querySelector('#portsList .ports-row[data-port="18636"] .ports-local')?.dataset.url`) === 'https://localhost:18636/', 'its local address is https');
+  await js(`(document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share').click(), true)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18636 && t.state === 'shared')`, 'https shared', 20000);
+  check(readFileSync(argsLog, 'utf8').includes('--url https://localhost:18636 --no-tls-verify'), 'cloudflared reaches it over https without checking its self-signed certificate');
+  await js(`ide.proc.kill(${secure})`);
+  await until(`!ide.ports.state().tunnels.length && !ide.ports.state().ports.some((p) => p.port === 18636)`, 'https gone', 20000);
+
+  // A dev server on [::1] alone (Vite, Node 17+ on Windows) refuses 127.0.0.1.
+  const v6 = await startCode(`require('http').createServer((q, r) => r.end('v6')).listen(18638, '::1')`);
+  await until(`ide.ports.state().ports.some((p) => p.port === 18638 && p.proto)`, 'v6 server probed', 30000);
+  check(await js(`ide.ports.state().ports.find((p) => p.port === 18638).proto`) === 'http'
+    && await js(`document.querySelector('#portsList .ports-row[data-port="18638"] .ports-local')?.dataset.url`) === 'http://[::1]:18638/',
+  'a server on [::1] only is probed on ::1, found to be HTTP, and its address is http://[::1]');
+  await js(`(document.querySelector('#portsList .ports-row[data-port="18638"] .ports-share').click(), true)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18638 && t.state === 'shared')`, 'v6 shared', 20000);
+  check(readFileSync(argsLog, 'utf8').includes('--url http://[::1]:18638'), 'cloudflared is pointed at [::1]');
+  await js(`ide.proc.kill(${v6})`);
+  await until(`!ide.ports.state().tunnels.length && !ide.ports.state().ports.some((p) => p.port === 18638)`, 'v6 gone', 20000);
+
+  await js(`ide.ports.addPort(18632)`);
+  await until(`ide.ports.state().ports.some((p) => p.port === 18632 && p.added)`, 'added port listed', 20000);
+  check(true, 'a server started elsewhere is listed once its port is added');
+  check(await js(`!!document.querySelector('#portsList .ports-row[data-port="18632"] .ports-remove')`) && await js(`ide.settings.get('ports.added').includes(18632)`), 'an added port is kept and can be removed');
+  await js(`ide.ports.addPort(18637)`);
+  await until(`!!document.querySelector('#portsList .ports-row.ports-waiting[data-port="18637"]')`, 'waiting row', 10000);
+  check(true, 'an added port nothing listens on yet waits in the list');
+  await js(`ide.ports.removePort(18637).then(() => ide.ports.removePort(18632))`);
+  await until(`!ide.ports.state().ports.some((p) => p.port === 18632) && !document.querySelector('#portsList .ports-row[data-port="18637"]')`, 'removed', 20000);
+  check(true, 'removing an added port takes it off the list');
 
   await js(`(document.querySelector('#portsAuto').click(), true)`);
   await until(`[...document.querySelectorAll('.dialog')].some((d) => d.textContent.includes('Share New Ports Automatically'))`, 'auto warning');
@@ -112,7 +201,7 @@ try {
   await k.until(`[...document.querySelectorAll('.dialog')].some((d) => /cloudflared 2026\\.10\\.0\\(\\d+MB\\)/.test(d.textContent))`, 'download offer', 10000);
   k.check(true, 'without cloudflared, Share offers the Install Manager download (with its version and size)');
   await k.shot('ports-ko.png');
-  k.check(await k.js(`!!(ide.installables || []).find((i) => i.id === 'tool:cloudflared')`), 'cloudflared is an Install Manager item');
+  k.check(await k.js(`!!(ide.installables || []).find((i) => i.id === 'tool:cloudflared') && !!(ide.installables || []).find((i) => i.id === 'tool:bore')`), 'cloudflared and bore are Install Manager items');
 } catch (err) {
   k.check(false, err.message);
 }

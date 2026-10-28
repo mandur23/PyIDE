@@ -164,8 +164,8 @@
     { label: tr('Run'), submenu: () => tidy([
       act('RunAnything'), act('Run'), act('Debug'), act('RunCoverage'), act('Profile'), act('RunClass'), act('ChooseRunConfiguration'),
       act('ChooseDebugConfiguration'),
-      act('editRunConfigurations'), act('AttachToProcess'), { separator: true },
-      act('Stop'), act('StopDebug'), act('Rerun'), act('RerunFailedTests'), act('HideCoverage'), act('ShowCoverage'),
+      act('editRunConfigurations'), act('AttachToProcess'), act('BuildExecutable'), { separator: true },
+      act('Stop'), act('StopDebug'), act('Rerun'), act('ToggleRerunOnSave'), act('RerunFailedTests'), act('HideCoverage'), act('ShowCoverage'),
       { separator: true },
       act('StepOver'), act('StepInto'), act('StepOut'), act('RunToCursor'), act('Resume'), act('Pause'),
       act('EvaluateExpression'), act('ToggleLineBreakpoint'), act('ViewBreakpoints'),
@@ -175,7 +175,7 @@
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
       act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
       ...(ide.frameworks?.kinds().length ? [act('Frameworks.RunServer'), act('Frameworks.DebugServer'), ...(ide.frameworks.info().django ? [act('Django.RunManageTask'), act('Django.MakeMigrations'), act('Django.Migrate')] : []), { separator: true }] : []),
-      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'), act('CreateVirtualEnvironment'),
+      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'), act('CreateVirtualEnvironment'), act('SyncPythonRequirements'),
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },

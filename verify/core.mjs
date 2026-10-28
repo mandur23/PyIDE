@@ -1,4 +1,4 @@
-import { writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
@@ -98,6 +98,20 @@ try {
     return new Promise((resolve) => { let out = ''; ide.proc.attach(id, { data: (t) => { out += t; }, exit: (code) => resolve({ out, code }) }); });
   })()`);
   check(refused.code === -1 && /^Cannot start .*tool\.cmd: EINVAL/.test(refused.out), `a program spawn refuses ends with its error and exit code -1 (${JSON.stringify(refused)})`);
+
+  // A file given as the project (a stale last project or recent entry) opens its folder and then the file.
+  mkdirSync(path.join(t.project, 'received'), { recursive: true });
+  writeFileSync(path.join(t.project, 'received', 'ex1.py'), 'print(1)\n');
+  const root = await js('ide.root');
+  // The terminal opened above would make the switch ask whether to end it.
+  await js(`(ide.terminal?.sessions().forEach((s) => ide.terminal.close(s.id)), true)`);
+  await until(`!ide.terminal?.sessions().some((s) => !s.exited)`, 'terminals closed');
+  await js(`ide.openProject(${JSON.stringify(path.join(t.project, 'received', 'ex1.py'))})`);
+  await until(`ide.activeTab()?.title === 'ex1.py'`, 'ex1.py opened');
+  const after = await js(`ide.api.invoke('diagnostics:errors').then(list => list.map(e => e.message))`);
+  check(await js('ide.root') === path.join(t.project, 'received') && !after.some((m) => /ENOTDIR/.test(m)),
+    `a file given as the project opens its folder and the file, without an ENOTDIR error (${JSON.stringify(after.filter((m) => /ENOTDIR/.test(m)))})`);
+  await js(`ide.openProject(${JSON.stringify(root)})`);
   await shot('final.png');
 } catch (err) {
   t.check(false, err.message);

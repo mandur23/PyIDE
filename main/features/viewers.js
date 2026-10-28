@@ -242,6 +242,10 @@ const PREVIEW_HELPER = `<script>(() => {
 const sites = new Map(); // id -> root folder
 const overrides = new Map(); // site id -> Map(lowercase absolute path -> unsaved text)
 const hiddenShown = new Map(); // site id -> Set(lowercase hidden names on the paths of previewed pages)
+// site id -> Set(folders of previewed pages). A built app's page (build/index.html, dist/index.html) asks for its
+// files from the root of the server it is meant for (/static/js/main.js); what the project root does not have is
+// looked up from the folders of the pages previewed in that site.
+const pageDirs = new Map();
 const isInside = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
 const injectHelper = (html) => (/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + PREVIEW_HELPER) : PREVIEW_HELPER + html);
 
@@ -271,6 +275,19 @@ async function servePreview(req) {
   if (real && !isInside(real, realRoot)) return new Response('Outside the preview folder', { status: 403 });
   const over = overrides.get(u.hostname)?.get(file.toLowerCase());
   let body = over !== undefined ? Buffer.from(over, 'utf8') : await fs.promises.readFile(file).catch(() => null);
+  if (!body) {
+    for (const dir of pageDirs.get(u.hostname) || []) {
+      if (dir.toLowerCase() === root.toLowerCase()) continue;
+      let alt = path.resolve(dir, `.${rel}`);
+      if (!isInside(alt, dir)) continue;
+      try { if (fs.statSync(alt).isDirectory()) alt = path.join(alt, 'index.html'); } catch {}
+      const altOver = overrides.get(u.hostname)?.get(alt.toLowerCase());
+      const realAlt = await fs.promises.realpath(alt).catch(() => null);
+      if (!realAlt || !isInside(realAlt, realRoot)) continue;
+      body = altOver !== undefined ? Buffer.from(altOver, 'utf8') : await fs.promises.readFile(alt).catch(() => null);
+      if (body) { file = alt; break; }
+    }
+  }
   if (!body) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   const type = MIME[path.extname(file).slice(1).toLowerCase()] || 'application/octet-stream';
   if (type.startsWith('text/html')) body = Buffer.from(injectHelper(body.toString('utf8')), 'utf8');
@@ -284,7 +301,25 @@ exports.register = ({ ipcMain }) => {
     const segs = path.relative(root, file).split(path.sep);
     const site = siteFor(root);
     for (const seg of segs) if (seg.startsWith('.')) hiddenShown.set(site, (hiddenShown.get(site) || new Set()).add(seg.toLowerCase()));
+    pageDirs.set(site, (pageDirs.get(site) || new Set()).add(path.dirname(file)));
     return { url: `pyide-preview://${site}/${segs.map(encodeURIComponent).join('/')}`, root };
+  });
+  // The JavaScript app an HTML file belongs to: the nearest package.json at or above the file (not above the project),
+  // with its scripts, the tool its dev server runs (react-scripts, vite, ...), the built page if there is one, and
+  // whether its packages are installed (node_modules). -> {dir, scripts, tool, built, installed} or null.
+  ipcMain.handle('viewers:appInfo', (_e, file, projectRoot) => {
+    const top = projectRoot && isInside(file, projectRoot) ? projectRoot : path.dirname(file);
+    for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+      let pkg = null;
+      try { pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')); } catch {}
+      if (pkg) {
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        const tool = ['react-scripts', 'vite', 'next', '@vue/cli-service', '@angular/cli', 'parcel', 'webpack-dev-server'].find((d) => deps[d]) || null;
+        const built = ['build', 'dist', 'out'].map((d) => path.join(dir, d, 'index.html')).find((p) => fs.existsSync(p) && p.toLowerCase() !== file.toLowerCase()) || null;
+        return { dir, scripts: pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {}, tool, built, installed: fs.existsSync(path.join(dir, 'node_modules')) };
+      }
+      if (dir.toLowerCase() === top.toLowerCase() || path.dirname(dir) === dir) return null;
+    }
   });
   // The unsaved text of open documents in a site (the host of its preview URL): {absolutePath: text}; replaces that
   // site's previous set. Each site has its own, so previews of two sites do not take each other's away.

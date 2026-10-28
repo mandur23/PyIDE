@@ -67,7 +67,7 @@ const wheel = (name, version, requires = '') => {
 
 // Package name -> file names the index lists. Names under /f/ that exist in `wheels` are served.
 let listing = {};
-const offer = (tags) => { listing = { torch: tags.map((t) => `torch-2.14.1-${t}-${t}-win_amd64.whl`) }; };
+const offer = (tags, version = '2.14.1') => { listing = { torch: tags.map((t) => `torch-${version}-${t}-${t}-win_amd64.whl`) }; };
 let sidecar = null;
 const server = http.createServer((req, res) => {
   const file = /^\/f\/([^/]+)$/.exec(req.url)?.[1];
@@ -82,6 +82,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
 // The runtime reads the home folder and PATH when it runs; PATH holds only A's venv, so `python` is A and `py` is gone.
+const realEnv = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
 Object.assign(process.env, {
   USERPROFILE: home, HOME: home, PIP_CONFIG_FILE: os.devnull, PIP_NO_CACHE_DIR: '1', PIP_INDEX_URL: `${base}/simple`,
   PYIDE_TORCH_INDEX: `${base}/whl`, PATH: [path.dirname(A), path.join(process.env.SystemRoot, 'System32')].join(path.delimiter),
@@ -113,6 +114,24 @@ try {
   r = await attempt(A, { torch: true });
   check(!r.error && !/recreating/.test(r.log), `an unreachable index does not count as "no build": ${r.error || 'kept'}`);
   process.env.PIP_INDEX_URL = `${base}/simple`;
+
+  // Only torch builds older than transformers' floor (Python 3.8's newest is 2.4.1): that is no build.
+  offer([tagA], '2.4.1');
+  await fresh();
+  r = await attempt(A, { torch: true });
+  check(/^PyTorch has no build for Python \d/.test(r.error || ''), `a torch older than 2.6 does not count as a build (${r.error || 'accepted'})`);
+
+  // Every interpreter the Python launcher lists is a candidate (its paths were read with a wrong pattern, so none was).
+  // The launcher reads the user's own profile.
+  const testEnv = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+  Object.assign(process.env, realEnv);
+  const listedByLauncher = execFileSync('py', ['-0p'], { encoding: 'utf8' }).split(/\r?\n/).map((l) => l.match(/[A-Za-z]:\\.*\.exe/i)?.[0]).filter(Boolean);
+  const candidates = (await runtime.pythons(null, [])).map((p) => p.cmd.toLowerCase());
+  Object.assign(process.env, testEnv);
+  check(listedByLauncher.length && listedByLauncher.every((p) => candidates.includes(p.toLowerCase())), `every interpreter py -0p lists is a candidate (${listedByLauncher.length} listed, ${candidates.length} candidates)`);
+  offer([tagA]);
+  await fresh();
+  r = await attempt(A);
 
   standInTorch('2.4.1');
   await fresh();

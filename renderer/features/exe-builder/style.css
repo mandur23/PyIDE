@@ -1,0 +1,11 @@
+.exe-dialog { display: flex; flex-direction: column; gap: 8px; }
+.exe-dialog-row { display: flex; align-items: center; gap: 8px; }
+.exe-dialog-label { width: 80px; flex-shrink: 0; }
+.exe-dialog-row > .input, .exe-dialog-icon { flex: 1; min-width: 0; }
+.exe-dialog-icon { display: flex; gap: 6px; }
+.exe-dialog-icon > .input { flex: 1; min-width: 0; }
+.exe-dialog-script { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gray10); }
+.exe-dialog-check { display: flex; align-items: center; gap: 4px; padding-left: 88px; }
+.exe-dialog-note { font-size: 12px; }
+.exe-dialog-error { color: var(--red); }
+.exe-dialog-error:empty { display: none; }

@@ -339,6 +339,22 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/tree-drag-out.mjs
+      - name: html-preview-app
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/html-preview-app.mjs
+      - name: rerun-on-save
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/rerun-on-save.mjs
+      - name: exe-builder
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/exe-builder.mjs
+      - name: requirements-sync
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/requirements-sync.mjs
       - name: venv-prompt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15

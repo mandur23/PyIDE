@@ -81,9 +81,26 @@ try {
   check(true, 'a file dragged from the tree onto the editor opens there');
 
   // Main's real handler, with no mouse button held: Windows ends the drag at once, and the renderer hears it ended.
-  await js(`(ide.treeDrag = { paths: [${S(path.join(project, 'todo.txt'))}] }, window.api.send('tree:startDrag', [${S(path.join(project, 'todo.txt'))}]), true)`);
+  await mouseDrag('todo.txt');
+  await until(`window.__drags.length === 6 && !!ide.treeDrag`, 'drag for main');
+  await js(`(window.api.send('tree:startDrag', window.__drags[5]), true)`);
   await until(`ide.treeDrag === null`, 'the drag ends', 15000);
   check(true, "main starts the system drag (file icon, startDrag) and reports its end, which clears the renderer's drag");
+
+  // Main reports the end before the drop on an editor arrives; then files from Explorer onto a folder are copied, and
+  // the row dragged before stays where it is. Main reports the end even when it starts no drag (no files here).
+  await mouseDrag('todo.txt');
+  await until(`window.__drags.length === 7 && !!ide.treeDrag`, 'drag to the editor again');
+  await js(`(window.api.send('tree:startDrag', []), true)`);
+  await sleep(200);
+  await systemDrop(`document.querySelector('.editor-group .group-body')`, [path.join(project, 'todo.txt')]);
+  await sleep(2500);
+  const outside = path.join(path.dirname(project), 'from-explorer.txt');
+  writeFileSync(outside, 'from explorer\n');
+  await systemDrop(row('docs'), [outside]);
+  for (let i = 0; i < 40 && !existsSync(path.join(project, 'docs', 'from-explorer.txt')); i++) await sleep(250);
+  check(existsSync(path.join(project, 'docs', 'from-explorer.txt')) && existsSync(outside) && existsSync(path.join(project, 'todo.txt')) && !existsSync(path.join(project, 'docs', 'todo.txt')),
+    'after a drag ends on an editor, files from Explorer are copied into the folder and the earlier row is not moved');
 } catch (err) {
   check(false, err.message);
   await t.shot('failure.png').catch(() => {});

@@ -22,7 +22,30 @@
   // Lines that continue a compound statement: nothing can be put before them.
   const CONTINUATION = /^\s*(elif|else|except|finally|case)\b/;
   const NOT_EXPRESSION = /^\s*(return|yield|raise|del|pass|import|from|global|nonlocal|assert|break|continue|def|class|if|for|while|with|try|elif|else|except|finally|match|case|async|@)\b/;
-  const ASSIGNMENT = /^[^=()[\]{}'"#]*[^=!<>]=(?!=)|^[^()[\]{}'"#]*(\+|-|\*|\/|\/\/|%|\*\*|&|\||\^|>>|<<|@)=/;
+
+  // Whether a one-line statement assigns: an = outside brackets and strings that is not part of ==, !=, <= or >=
+  // (x = …, x: list[str] = …, d["k"] = …, x += …). Keyword arguments and := sit inside brackets.
+  function isAssignment(line) {
+    let depth = 0;
+    let quote = null;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (line.startsWith(quote, i)) { i += quote.length - 1; quote = null; }
+        continue;
+      }
+      if (c === '#') return false;
+      if (c === '"' || c === "'") { quote = line.startsWith(c.repeat(3), i) ? c.repeat(3) : c; i += quote.length - 1; }
+      else if ('([{'.includes(c)) depth++;
+      else if (')]}'.includes(c)) depth = Math.max(0, depth - 1);
+      else if (c === '=' && depth === 0) {
+        if (line[i + 1] === '=') { i++; continue; }
+        if (!'=!<>'.includes(line[i - 1] || '')) return true;
+      }
+    }
+    return false;
+  }
 
   const tabOf = (model) => ide.tabs.find((t) => t.kind === 'file' && t.model === model);
   const rangeOf = (d) => new monaco.Range(d.range.start.line + 1, d.range.start.character + 1, d.range.end.line + 1, d.range.end.character + 1);
@@ -58,15 +81,19 @@
     return i < end ? { start: i, end, text: text.slice(i, end) } : null;
   }
 
-  // Lines (1-based) that start a statement, from the top of the file to `upto`: not inside brackets, a string or a
-  // backslash continuation.
+  // The line (1-based) where the statement holding line `upto` starts, scanning from the top of the file: a line
+  // starts one when it is not inside brackets or a string and the line before does not end in a backslash outside a
+  // comment. Past the last line it is `upto` itself (a statement could start there).
   function statementStart(model, upto) {
+    const last = Math.min(upto, model.getLineCount());
     let depth = 0;
     let quote = null; // ', ", ''' or """
+    let continued = false;
     let start = 1;
-    for (let l = 1; l <= upto; l++) {
+    for (let l = 1; l <= last; l++) {
       const text = model.getLineContent(l);
-      if (depth === 0 && !quote && !(l > 1 && /\\$/.test(model.getLineContent(l - 1)))) start = l;
+      if (depth === 0 && !quote && !continued) start = l;
+      let comment = false;
       for (let i = 0; i < text.length; i++) {
         const c = text[i];
         if (quote) {
@@ -74,14 +101,16 @@
           else if (text.startsWith(quote, i)) { i += quote.length - 1; quote = null; }
           continue;
         }
-        if (c === '#') break;
+        if (c === '#') { comment = true; break; }
         if (c === '"' || c === "'") quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
         else if ('([{'.includes(c)) depth++;
         else if (')]}'.includes(c)) depth = Math.max(0, depth - 1);
         if (quote) i += quote.length - 1;
       }
-      if (quote && quote.length === 1) quote = null;
+      continued = !comment && /\\$/.test(text);
+      if (quote && quote.length === 1 && !continued) quote = null;
     }
+    if (upto > last) return depth === 0 && !quote && !continued ? upto : start;
     return start;
   }
 
@@ -112,7 +141,7 @@
     }];
     const body = st.text.trim();
     const oneLine = st.single && !/[:\\]\s*(#.*)?$/.test(body) && statementStart(model, st.line + 1) === st.line + 1;
-    if (oneLine && !NOT_EXPRESSION.test(body) && !ASSIGNMENT.test(body)) {
+    if (oneLine && !NOT_EXPRESSION.test(body) && !isAssignment(body)) {
       out.push({
         title: tr("Wrap in 'if {name} is not None:'", { name: value }), kind: 'quickfix', diagnostics: markers,
         edit: { edits: [edit(model, new monaco.Range(st.line, 1, st.line, st.text.length + 1), `${indent}if ${value} is not None:\n${indent}${unitOf(model)}${body}`)] },
@@ -143,8 +172,9 @@
     return (m ? m[1] : v).trim();
   };
   // A type the code can name in isinstance(): a builtin, or a class the file imports or defines.
+  // An import under another name (`import Tag as BsTag`) does not make `Tag` a name in the file; `... as Tag` does.
   const nameable = (model, type) => BUILTIN_TYPES.has(type)
-    || (/^[A-Za-z_]\w*$/.test(type) && new RegExp(`^\\s*(class\\s+${type}\\b|(from\\s+\\S+\\s+)?import\\b.*\\b${type}\\b)`, 'm').test(model.getValue()));
+    || (/^[A-Za-z_]\w*$/.test(type) && new RegExp(`^\\s*(class\\s+${type}\\b|(from\\s+\\S+\\s+)?import\\b.*\\b${type}\\b(?!\\s+as\\b))`, 'm').test(model.getValue()));
 
   async function unionFixes(model, d, obj, attr, failing, noneToo, markers, token) {
     const out = [];

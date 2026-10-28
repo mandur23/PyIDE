@@ -8,6 +8,8 @@
   const gutterProviders = [];
   // Executors run a configuration another way (Run with Coverage, Profile) by wrapping its interpreter.
   const executors = new Map();
+  // fn(session) -> a toolbar action for every run of that tab, or null (rerun-on-save's toggle).
+  const sessionActions = [];
 
   // ---------- helpers ----------
   const isAbs = (p) => /^[a-zA-Z]:[\\/]|^[\\/]{2}/.test(p);
@@ -149,6 +151,7 @@
       { id: 'rerun', icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
       ...(busy(s) ? [{ id: 'stop', icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
+      ...sessionActions.map((fn) => fn(s)).filter(Boolean),
       ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
     ]);
   }
@@ -244,7 +247,9 @@
           },
         });
       },
+      // stopRequested: the user stopped the current run, so its exit code is no failure of the program.
       stop() {
+        s.stopRequested = true;
         if (s.running) s.kill(s.procId);
         else if (s.starting) s.cancelStart = true;
       },
@@ -303,6 +308,9 @@
     } else s = createSession(cfg);
     s.executor = executor?.id || null;
     s.cancelStart = false;
+    s.stopRequested = false;
+    // After the Save All before the run: a plugin that reruns on save (rerun-on-save) drops a rerun those saves armed.
+    ide.emit('runSessionStarting', s);
     s.rerun = null;
     armFinished(s);
     let done;
@@ -473,6 +481,7 @@
   let lastRun = null;
   // opts are passed through to the type (e.g. {targets} for rerunning failed tests); opts.executor names an executor;
   // opts.confirm: false stops a run of the configuration that is still going without asking (auto-test, before launch).
+  // opts.remember: false keeps it from becoming what Run repeats with nothing selected (a build, not the program).
   async function runConfig(cfg, opts = {}) {
     const type = types.get(cfg?.type);
     if (!type) return;
@@ -481,7 +490,7 @@
     tw.show();
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
     if (!(await runBeforeLaunch(cfg))) return;
-    lastRun = cfg;
+    if (opts.remember !== false) lastRun = cfg;
     const s = await prepareSession(cfg, executor);
     try {
       // A type that starts no Python (Java, C/C++: needsInterp false) gets no interpreter and no executor.
@@ -1311,6 +1320,8 @@
     activeSession: () => activeSession,
     // fn(model, path) -> [{line, title, state?: 'passed'|'failed', config() -> cfg}]
     registerGutterProvider: (fn) => { gutterProviders.push(fn); scheduleGutter(); },
+    registerSessionAction: (fn) => { sessionActions.push(fn); renderActions(); },
+    renderActions: () => renderActions(),
     refreshGutter,
     interpFor,
     // A Python configuration resolved to what a launcher needs (e.g. for a debugger).

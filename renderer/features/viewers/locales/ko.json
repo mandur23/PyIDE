@@ -127,5 +127,11 @@
   "HTML preview": "HTML 미리보기",
   "{n} script error": "스크립트 오류 {n}개",
   "{n} script errors": "스크립트 오류 {n}개",
-  "Read-only: the file is too large for the editor. The table shows its first {size} of {total}.": "읽기 전용: 파일이 너무 커서 에디터에서 열 수 없습니다. 표에는 전체 {total} 중 처음 {size}만 표시됩니다."
+  "Read-only: the file is too large for the editor. The table shows its first {size} of {total}.": "읽기 전용: 파일이 너무 커서 에디터에서 열 수 없습니다. 표에는 전체 {total} 중 처음 {size}만 표시됩니다.",
+  "This page is the template of a {tool} app: the app's dev server fills it in, so the preview stays empty here.": "이 페이지는 {tool} 앱의 템플릿입니다. 앱의 개발 서버가 내용을 채우므로 여기 미리보기에서는 비어 보입니다.",
+  "This page is the template of a JavaScript app: the app's dev server fills it in, so the preview stays empty here.": "이 페이지는 JavaScript 앱의 템플릿입니다. 앱의 개발 서버가 내용을 채우므로 여기 미리보기에서는 비어 보입니다.",
+  "Run {command}": "{command} 실행",
+  "Start the dev server in a terminal and show the app in the browser": "터미널에서 개발 서버를 시작하고 앱을 브라우저에 보여 줍니다",
+  "Open {file}": "{file} 열기",
+  "Preview the app's built page": "앱의 빌드된 페이지를 미리 봅니다"
 }

@@ -223,9 +223,14 @@ async function dragIcon(p) {
 }
 ipcMain.on('tree:startDrag', async (e, paths) => {
   const files = (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p));
-  if (!files.length) return;
-  e.sender.startDrag({ file: files[0], files, icon: await dragIcon(files[0]) });
-  if (!e.sender.isDestroyed()) e.sender.send('tree:dragEnded');
+  try {
+    if (files.length) e.sender.startDrag({ file: files[0], files, icon: await dragIcon(files[0]) });
+  } catch (err) {
+    diagnostics.logger('#tree').warn(`drag: ${err.message}`);
+  } finally {
+    // Also when no drag started: the renderer is waiting for this to forget the row it set out to drag.
+    if (!e.sender.isDestroyed()) e.sender.send('tree:dragEnded');
+  }
 });
 // What a path is (null when it cannot be read): a dropped path's kind, without the error fs:list records for a file.
 ipcMain.handle('fs:stat', async (_e, p) => {

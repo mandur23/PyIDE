@@ -1,0 +1,6 @@
+{
+  "Rerun on Save": "저장 시 다시 실행",
+  "A Rerun on Save toggle for each Run tab: saving a file of the project stops that run and starts it again, for scripts you edit while watching their output.": "실행 탭마다 \"저장 시 다시 실행\" 토글을 둡니다. 켜 두면 프로젝트 파일을 저장할 때 그 실행을 멈추고 다시 시작하므로, 출력을 보면서 스크립트를 고칠 때 편합니다.",
+  "On save": "저장 시",
+  "Run a configuration first; Rerun on Save then applies to its tab in the Run tool window.": "먼저 실행 구성을 실행하세요. 저장 시 다시 실행은 실행 도구 창의 그 탭에 적용됩니다."
+}

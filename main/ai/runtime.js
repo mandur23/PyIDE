@@ -104,9 +104,13 @@ function torchTooOld() {
 // pip decides whether a torch build fits the interpreter (its version, 32/64-bit, ARM64, free-threaded) and honours
 // the user's index settings. pip answers "no matching distribution" offline too, so the answer counts only when the
 // same index lists pip itself; an unreachable index or a pip-less interpreter proves nothing.
+// A build counts only from the torch floor up: Python 3.8's newest torch is 2.4.1, which transformers would turn off.
 const listed = (cmd, pkg) => exec(cmd, ['-m', 'pip', 'index', 'versions', pkg, '--disable-pip-version-check', '--retries', '1'], 60000)
-  .then(() => true, () => false);
-const torchHasBuild = async (cmd) => await listed(cmd, 'torch') || !await listed(cmd, 'pip');
+  .then((out) => /\(([^)]+)\)/.exec(out)?.[1] || '', () => null);
+const torchHasBuild = async (cmd) => {
+  const latest = await listed(cmd, 'torch');
+  return latest !== null ? usable(latest) : await listed(cmd, 'pip') === null;
+};
 
 const DESCRIBE = 'import json,platform,struct,sysconfig;print(json.dumps([platform.python_version(),struct.calcsize("P")*8,platform.machine(),bool(sysconfig.get_config_var("Py_GIL_DISABLED"))]))';
 async function describe(cmd) {
@@ -119,7 +123,7 @@ async function describe(cmd) {
 // The project interpreter first, then the others the IDE lists (PyIDE's own Python among them), every interpreter the
 // Python launcher lists (newest first), and PATH's python.
 async function pythons(preferred, known) {
-  const launcher = await exec('py', ['-0p'], 15000).then((out) => out.split(/\r?\n/).map((l) => l.match(/[A-Za-z]:\.*\.exe/i)?.[0]), () => []);
+  const launcher = await exec('py', ['-0p'], 15000).then((out) => out.split(/\r?\n/).map((l) => l.match(/[A-Za-z]:\\.*\.exe/i)?.[0]), () => []);
   const seen = new Set();
   const cmds = [preferred, ...known, ...launcher, 'python'].filter((c) => c && !seen.has(c.toLowerCase()) && seen.add(c.toLowerCase()));
   return (await Promise.all(cmds.map(describe))).filter(Boolean);
@@ -141,14 +145,22 @@ async function pickPython(preferred, known, torch) {
 // other interpreters the IDE knows.
 async function ensureVenv(job, interpreter, { torch = false, interpreters = [] } = {}) {
   fs.mkdirSync(dir, { recursive: true });
-  if (pythonReady() && (!torch || await torchVersion(python) || await torchHasBuild(python))) return;
+  // Earlier environments set aside below, once nothing holds their files any more.
+  for (const name of fs.readdirSync(dir)) if (/^venv\.old-\d+$/.test(name)) fs.rm(path.join(dir, name), { recursive: true, force: true }, () => {});
+  if (pythonReady() && (!torch || usable(await torchVersion(python)) || await torchHasBuild(python))) return;
   const py = await pickPython(interpreter, Array.isArray(interpreters) ? interpreters.filter((c) => typeof c === 'string') : [], torch);
   if (pythonReady()) {
-    job.log(`${(await describe(python))?.label || 'This Python'} has no PyTorch build; recreating the AI environment with ${py.label}.\n`);
+    job.log(`${(await describe(python))?.label || 'This Python'} has no PyTorch build; recreating the AI environment with ${py.label}. AI code completion sets up its packages again the next time it is used.\n`);
     await Promise.all([...sidecars].map((s) => s.kill()));
-    try { fs.rmSync(venv, { recursive: true, force: true }); } catch {
-      throw new Error('The AI environment is in use by another PyIDE window. Close it and try again.');
+    // Renamed first: a file another PyIDE process holds makes the rename fail with the environment whole, where a
+    // delete would stop halfway and leave that process a broken environment.
+    const old = `${venv}.old-${Date.now()}`;
+    try { fs.renameSync(venv, old); } catch (err) {
+      throw new Error(['EBUSY', 'EPERM', 'EACCES'].includes(err.code)
+        ? 'The AI environment is in use by another PyIDE window. Close it and try again.'
+        : `The AI environment could not be replaced: ${err.message}`);
     }
+    fs.rm(old, { recursive: true, force: true }, () => {});
   }
   await job.run(py.cmd, ['-m', 'venv', ...(py.torch ? ['--system-site-packages'] : []), venv]);
 }
@@ -283,4 +295,6 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
 module.exports = {
   dir, venv, python, sitePackages, hasPackage, pythonReady, TORCH, torchUsable, torchTooOld, hfCacheDir, hfRepoDir, hfCachedFile,
   createJob, exclusive, ensureVenv, pipInstall, installTorchvision, hfDownload, startSidecar, idleMsOf,
+  // For verify/ai-runtime-python.mjs.
+  pythons,
 };

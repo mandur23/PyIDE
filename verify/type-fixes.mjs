@@ -42,7 +42,11 @@ const MAIN_LINES = [
   '    pass',
   'other = find("d")',
   'print(other.get("k").strip()) if other else None',
-  '',
+  'typed = find("e")',
+  'box = {}',
+  'box["k"] = typed.get("k")',
+  'last = find("z")',
+  'last.get("k")',
 ];
 writeFileSync(path.join(project, 'main.py'), MAIN_LINES.join('\n'));
 
@@ -119,6 +123,18 @@ try {
   line = await lineOf('print(other.get("k").strip()) if other else None');
   titles = await fixesAt(line, 22);
   check(!titles.some((s) => s.includes('with str()')), `no str() for a value that may also be None: ${S(titles)}`);
+  await noMenu();
+
+  line = await lineOf('box["k"] = typed.get("k")');
+  titles = await fixesAt(line, 19);
+  check(titles.some((s) => s.includes("Add 'assert typed is not None'")) && !titles.some((s) => s.includes('Wrap in')),
+    `an assignment to a subscript gets the assert but no wrap, which would leave the item unset: ${S(titles)}`);
+  await noMenu();
+
+  line = await lineOf('last.get("k")');
+  titles = await fixesAt(line, 6);
+  check(titles.some((s) => s.includes("Add 'assert last is not None'")) && titles.some((s) => s.includes("Wrap in 'if last is not None:'")),
+    `the last line of a file without a final newline gets its fixes: ${S(titles)}`);
   await noMenu();
 } catch (err) {
   check(false, err.message);

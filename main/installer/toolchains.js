@@ -61,6 +61,20 @@ const TOOLCHAINS = {
     probe: 'cloudflared.exe',
     single: 'cloudflared.exe',
   },
+  // Port sharing's tunnel for servers that are not web servers (a game server, a socket server): raw TCP through
+  // bore.pub. The archive holds bore.exe alone.
+  bore: {
+    kind: 'bore',
+    title: 'bore',
+    version: '0.6.0',
+    url: 'https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip',
+    size: 673531,
+    // The digest GitHub lists for the release asset.
+    sha256: '01709c64fe2787cdc9a21d7030b0f08ad72dff0c36b7ecb72f4f667a55a34b4f',
+    folder: 'bore',
+    top: '',
+    probe: 'bore.exe',
+  },
 };
 
 const installRoot = () => process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide');

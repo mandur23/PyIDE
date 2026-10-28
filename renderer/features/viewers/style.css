@@ -159,4 +159,7 @@
 .vw-html-frame { border: 0; height: 100%; width: 100%; background: #fff; flex-shrink: 0; }
 .vw-html-stage.fixed .vw-html-frame { box-shadow: 0 0 0 1px var(--gray4), 0 6px 20px #0005; }
 .vw-html-width { background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; padding: 2px 6px; }
-.vw-html-errors { color: var(--red); }
+.vw-html-errors { color: var(--red); }/* What an app template's preview shows instead of a blank page. */
+.vw-html-notice { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1; padding: 12px 14px; border-radius: 6px; background: var(--gray2); color: var(--text); border: 1px solid var(--gray4); box-shadow: 0 4px 16px #0004; font-size: 13px; line-height: 1.5; }
+.vw-html-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.vw-html-notice[data-state="starting"] .vw-html-notice-actions .primary { opacity: 0.6; pointer-events: none; }

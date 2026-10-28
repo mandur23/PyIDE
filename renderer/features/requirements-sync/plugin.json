@@ -1,0 +1,14 @@
+{
+  "id": "requirements-sync",
+  "name": "Sync Python Requirements",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Tools › Sync Python Requirements… compares the project's imports with requirements.txt: it adds the packages the code imports that are missing, with their installed version, and offers to remove the ones nothing imports.",
+  "depends": [
+    "packages",
+    "import-install"
+  ],
+  "main": [
+    "requirements-sync.js"
+  ]
+}

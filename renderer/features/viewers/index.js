@@ -1278,7 +1278,8 @@
     // No allow-same-origin: the page runs in its own opaque origin and cannot reach the IDE.
     frame.sandbox = 'allow-scripts allow-forms allow-modals allow-popups';
     frame.title = tr('HTML preview');
-    stage.appendChild(frame);
+    const notice = el('div', 'vw-html-notice hidden');
+    stage.append(notice, frame);
     split.append(edHost, divider, stage);
     host.append(bar, split);
 
@@ -1313,9 +1314,57 @@
       if (v !== 'preview') editor.layout();
     }
 
+    // A page an app's dev server fills in shows nothing here: Create React App's public/index.html (%PUBLIC_URL%, an
+    // empty #root) or Vite's index.html, whose script is the app's source (/src/main.tsx), which only the dev server
+    // compiles. The notice says so and offers the dev server (in a terminal tab, then the IDE's browser at the address
+    // it prints) or the app's built page.
+    let app;
+    let devTerminal = null;
+    const isAppTemplate = (html) => /%PUBLIC_URL%/.test(html) || /<script[^>]*\btype=["']module["'][^>]*\bsrc=["']\/src\//i.test(html);
+    async function updateNotice() {
+      if (!isAppTemplate(doc.model.getValue())) { notice.classList.add('hidden'); return; }
+      if (app === undefined) app = await invoke('viewers:appInfo', path, ide.root).catch(() => null);
+      if (disposed) return;
+      const script = app && (['start', 'dev', 'serve'].find((s) => app.scripts[s]) || null);
+      const cmd = script === 'start' ? 'npm start' : script && `npm run ${script}`;
+      notice.replaceChildren(el('div', 'vw-html-notice-text', app?.tool
+        ? tr("This page is the template of a {tool} app: the app's dev server fills it in, so the preview stays empty here.", { tool: app.tool })
+        : tr("This page is the template of a JavaScript app: the app's dev server fills it in, so the preview stays empty here.")));
+      const actions = el('div', 'vw-html-notice-actions');
+      if (cmd) actions.append(button(tr('Run {command}', { command: cmd }), tr('Start the dev server in a terminal and show the app in the browser'), () => runDevServer(script, cmd), 'vw-btn primary'));
+      if (app?.built) actions.append(button(tr('Open {file}', { file: ide.util.rel(app.built) }), tr("Preview the app's built page"), () => ide.openFile(app.built)));
+      if (actions.children.length) notice.append(actions);
+      notice.classList.remove('hidden');
+    }
+    async function runDevServer(script, cmd) {
+      if (!ide.terminal) return;
+      if (devTerminal && ide.terminal.sessions().some((s) => s.id === devTerminal.id && !s.exited)) { ide.terminal.focus(devTerminal.id); return; }
+      // npm.cmd, not npm: PowerShell would run npm.ps1, which a Restricted execution policy refuses. BROWSER=none keeps
+      // Create React App from opening the system browser too.
+      const npmCmd = script === 'start' ? 'npm.cmd start' : `npm.cmd run ${script}`;
+      const install = app.installed ? '' : 'npm.cmd install; if ($?) { ';
+      devTerminal = await ide.terminal.open({ name: cmd, command: `$env:BROWSER='none'; ${install}${npmCmd}${install ? ' }' : ''}`, cwd: app.dir, shell: 'powershell' });
+      notice.dataset.state = 'starting';
+      const started = Date.now();
+      const id = devTerminal?.id;
+      const look = setInterval(() => {
+        const s = ide.terminal.sessions().find((x) => x.id === id);
+        const found = id && /(https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d+)/.exec(ide.terminal.text(id) || '');
+        if (found || !s || s.exited || disposed || Date.now() - started > 300000) {
+          clearInterval(look);
+          delete notice.dataset.state;
+          if (!found) return;
+          notice.dataset.devUrl = found[1];
+          if (ide.frameworks?.openUrl) ide.frameworks.openUrl(found[1]);
+          else invoke('viewers:openExternal', found[1]);
+        }
+      }, 500);
+    }
+
     const openDocs = () => ide.groups().flatMap((g) => g.tabs).filter((t) => t.doc && t.path);
     async function reload() {
       if (disposed || mode === 'editor') return;
+      updateNotice();
       if (!url) ({ url, root } = await invoke('viewers:previewUrl', path, ide.root));
       const unsaved = {};
       for (const t of openDocs()) if (ide.isDirty(t) && ide.util.isUnder(t.path, root)) unsaved[t.path] = t.doc.model.getValue();

@@ -71,15 +71,6 @@ function decodeText(buf) {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-// Returns null for files that are too large or look binary.
-function readText(p) {
-  let buf;
-  try {
-    if (fs.statSync(p).size > MAX_SIZE) return null;
-    buf = fs.readFileSync(p);
-  } catch { return null; }
-  return decodeText(buf);
-}
 
 // path -> {mtime, size, text}: what Find in Files read, so the next search (the dialog searches again at every pause
 // in typing) reads only the files whose mtime or size changed. Each search stats every file instead of trusting the
@@ -399,30 +390,40 @@ function todoItems(text, marker) {
 // only files whose mtime or size moved; unsaved buffers (overrides) always count fresh.
 const todoCache = new Map();
 
-function todos(root, overrides, excluded) {
+// One stat per file, and a read only when it changed. Files are read READ_AHEAD at a time as Find in Files does: one
+// synchronous stat and read after another took 2.2 s on a 20,000-file project (verify/perf.mjs).
+async function todoItemsOf(p, marker, unsaved) {
+  const text = unsaved(p);
+  if (text !== undefined) return todoItems(text, marker);
+  const st = await statOf(p);
+  if (!st) { todoCache.delete(p); return []; }
+  const hit = todoCache.get(p);
+  if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit.items;
+  let read = null;
+  if (st.size <= MAX_SIZE) { try { read = decodeText(await readOf(p, st.size)); } catch {} }
+  const items = todoItems(read, marker);
+  todoCache.set(p, { mtime: st.mtimeMs, size: st.size, items });
+  return items;
+}
+
+async function todos(root, overrides, excluded) {
   const unsaved = overrideOf(overrides);
-  const files = [];
-  let count = 0;
+  const paths = [];
   walk(root, (p) => {
     const ext = path.extname(p).slice(1).toLowerCase();
     const marker = COMMENT[ext] || (HASH_EXT.has(ext) ? '#' : null);
-    if (!marker) return;
-    const text = unsaved(p);
-    let items;
-    if (text !== undefined) items = todoItems(text, marker);
-    else {
-      let st;
-      try { st = fs.statSync(p); } catch { return; }
-      const hit = todoCache.get(p);
-      if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) items = hit.items;
-      else {
-        items = todoItems(readText(p), marker);
-        todoCache.set(p, { mtime: st.mtimeMs, size: st.size, items });
-      }
-    }
-    if (items.length) { files.push({ path: p, items }); count += items.length; }
-    if (count >= 5000) return false;
+    if (marker) paths.push([p, marker]);
   }, excluded);
+  const pending = new Array(paths.length);
+  let ahead = 0;
+  const files = [];
+  let count = 0;
+  for (let i = 0; i < paths.length && count < 5000; i++) {
+    for (; ahead < paths.length && ahead < i + READ_AHEAD; ahead++) pending[ahead] = todoItemsOf(paths[ahead][0], paths[ahead][1], unsaved);
+    const items = await pending[i];
+    pending[i] = undefined;
+    if (items.length) { files.push({ path: paths[i][0], items }); count += items.length; }
+  }
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, count };
 }
