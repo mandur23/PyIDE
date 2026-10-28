@@ -1913,12 +1913,28 @@ function wireTree(tree) {
   tree.addEventListener('dragstart', (e) => {
     dragged = entryAt(e);
     if (!dragged) return;
+    // A drag the user starts is a system one (main's tree:startDrag), so the selected files can also be dropped on
+    // Explorer, the desktop or another app. Back over this window it arrives as files, a copy (Windows allows no
+    // move), which the tree and the editors know as this drag by its paths (ide.treeDrag). Synthetic drags (tests)
+    // stay in the page.
+    if (e.isTrusted) {
+      e.preventDefault();
+      const paths = (inSelection(dragged) ? [selected, ...alsoSelected] : [dragged]).map((x) => x.path);
+      ide.treeDrag = { paths, entry: dragged };
+      ide.api.send('tree:startDrag', paths);
+      return;
+    }
     // No text/plain: Monaco would type the path into the editor it is dropped on.
     e.dataTransfer.setData(ide.TREE_PATH_TYPE, dragged.path);
     e.dataTransfer.effectAllowed = 'copyMove';
   });
   // On the document: the row the drag started from may have been redrawn (auto-scroll, a refresh) and detached.
   document.addEventListener('dragend', () => { dragged = null; clearDropMark(); });
+  // The drop inside this window may still be on its way when main says the system drag ended.
+  window.api.on('tree:dragEnded', () => {
+    const drag = ide.treeDrag;
+    setTimeout(() => { if (ide.treeDrag === drag) { ide.treeDrag = null; dragged = null; clearDropMark(); } }, 1500);
+  });
   tree.addEventListener('dragover', (e) => {
     if (fromOutside(e)) {
       const dir = outsideDir(e);
@@ -1934,7 +1950,7 @@ function wireTree(tree) {
     clearDropMark();
     if (!dir || samePath(dirname(dragged.path), dir) || isUnder(dir, dragged.path)) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    e.dataTransfer.dropEffect = ide.treeDrag ? 'copy' : 'move';
     markDrop(dir);
   });
   tree.addEventListener('dragleave', (e) => { if (!tree.contains(e.relatedTarget)) clearDropMark(); });
@@ -1954,6 +1970,7 @@ function wireTree(tree) {
     if (!dir) return;
     e.preventDefault();
     e.stopPropagation();
+    if (ide.treeDrag) { ide.treeDrag = null; dragged = null; }
     moveEntry(entry, dir);
   });
 }

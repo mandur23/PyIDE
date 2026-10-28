@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol, nativeImage } = require('electron');
 // The HTML preview serves project files over pyide-preview:// (main/features/viewers.js). A scheme gets standard URL
 // resolution (relative stylesheets, scripts, images) only when it is declared before the app is ready.
 protocol.registerSchemesAsPrivileged([{ scheme: 'pyide-preview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
@@ -211,6 +211,21 @@ ipcMain.handle('fs:copyInto', async (_e, sources, dir, overwrite = false) => {
     } catch (e) { failed.push({ name, code: e.code, error: e.message }); }
   }
   return { copied, failed };
+});
+// Files and folders dragged out of the project tree: a system drag, so Explorer, the desktop and other apps (mail,
+// chat) take them as files. Windows lets such a drag copy or link, never move, so nothing leaves the project. The call
+// returns when the drag ends (Windows runs it in a nested loop); the renderer is told, so it forgets the drag.
+const dragIcons = new Map();
+async function dragIcon(p) {
+  const key = fs.statSync(p).isDirectory() ? '<dir>' : path.extname(p).toLowerCase();
+  if (!dragIcons.has(key)) dragIcons.set(key, await app.getFileIcon(p, { size: 'normal' }).catch(() => nativeImage.createEmpty()));
+  return dragIcons.get(key);
+}
+ipcMain.on('tree:startDrag', async (e, paths) => {
+  const files = (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p));
+  if (!files.length) return;
+  e.sender.startDrag({ file: files[0], files, icon: await dragIcon(files[0]) });
+  if (!e.sender.isDestroyed()) e.sender.send('tree:dragEnded');
 });
 // What a path is (null when it cannot be read): a dropped path's kind, without the error fs:list records for a file.
 ipcMain.handle('fs:stat', async (_e, p) => {

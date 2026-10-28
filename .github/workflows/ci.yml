@@ -335,6 +335,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/error-help.mjs
+      - name: tree-drag-out
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/tree-drag-out.mjs
       - name: venv-prompt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15

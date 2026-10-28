@@ -905,11 +905,15 @@
     });
   }
 
-  // Files and folders dragged in from Explorer: a folder opens as the project, files open in the target group.
+  // Files and folders dragged in from Explorer: a folder opens as the project, files open in the target group. Rows
+  // dragged from the project tree arrive the same way (a system drag); their folders are not a project to open.
   async function openDroppedFiles(e, group) {
     const paths = [...e.dataTransfer.files].map((f) => ide.api.pathForFile(f)).filter(Boolean);
+    const fromTree = !!ide.treeDrag && paths.every((p) => ide.treeDrag.paths.some((q) => ide.util.samePath(p, q)));
+    if (fromTree) ide.treeDrag = null;
     for (const p of paths) {
       const st = await ide.api.stat(p);
+      if (st?.isDirectory && fromTree) continue;
       if (st?.isDirectory && !ide.detached) { await ide.openProject(p); return; }
       if (st && !st.isDirectory) await ide.openFile(p, { group });
     }
