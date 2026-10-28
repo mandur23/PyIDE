@@ -45,5 +45,6 @@
   "Terminate": "종료",
   "The terminal could not start: {shell} was not found ({file}).": "터미널을 시작할 수 없습니다: {shell}을(를) 찾을 수 없습니다({file}).",
   "Start another shell with New Session with… (▾), or choose the default shell in Settings › Terminal.": "'다른 셸로 새 세션…'(▾)으로 다른 셸을 시작하거나, 설정 › 터미널에서 기본 셸을 선택하세요.",
-  "Default shell:": "기본 셸:"
+  "Default shell:": "기본 셸:",
+  "Sign in to Claude Code": "Claude Code에 로그인"
 }

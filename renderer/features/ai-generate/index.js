@@ -42,7 +42,7 @@
 
   const MESSAGES = {
     'not-installed': () => tr('Claude Code is not installed.'),
-    auth: () => tr('Claude Code is not signed in. Open Claude Code and sign in with /login.'),
+    auth: () => tr('Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.'),
     timeout: () => tr('Claude Code did not answer in time.'),
     untrusted: SAFE_NOTE,
     'no-target': () => tr('Put the caret on a function, method or class.'),
@@ -63,7 +63,7 @@
   function failNote(title, res) {
     const actions = [];
     if (res.code === 'not-installed') actions.push({ label: tr('Open Install Manager'), run: openInstaller });
-    if (res.code === 'auth') actions.push({ label: tr('Open Claude Code'), run: () => ide.runAction('ClaudeCode') });
+    if (res.code === 'auth') actions.push({ label: tr('Sign in to Claude Code'), run: () => ide.runAction('ClaudeCodeLogin') });
     if (OPEN_FILE_CODES.has(res.code) && res.testPath) actions.push({ label: tr('Open {file}', { file: basename(res.testPath) }), run: (note) => { note.expire(); ide.openFile(res.testPath); } });
     const text = MESSAGES[res.code]?.(res) ?? tr('Claude Code failed: {message}', { message: res.message || res.code });
     const kind = ['no-target', 'one-line', 'is-test', 'outside', 'too-large', 'encoding', 'unencodable'].includes(res.code) ? 'warn' : 'error';

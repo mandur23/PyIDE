@@ -319,6 +319,22 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/import-install.mjs
+      - name: import-install-run
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/import-install-run.mjs
+      - name: lsp-type-severity
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/lsp-type-severity.mjs
+      - name: type-fixes
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/type-fixes.mjs
+      - name: error-help
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/error-help.mjs
       - name: venv-prompt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15

@@ -482,6 +482,15 @@
     return createSession({ name: 'Claude Code', kind: 'claude', command: `& ${q(claude.path)}`, shell: 'powershell' });
   }
 
+  // `claude auth login` in its own tab: the CLI's sign-in, which the AI features use, is separate from the Claude app's,
+  // and a refresh token the CLI can no longer use ("OAuth session expired and could not be refreshed") needs a new one.
+  async function openClaudeLogin() {
+    tw.show();
+    if (!(await refreshClaude()).installed) { showInstallPrompt(); return null; }
+    const q = (p) => `'${p.replace(/'/g, "''")}'`;
+    return createSession({ name: tr('Sign in to Claude Code'), kind: 'claude-login', command: `& ${q(claude.path)} auth login`, shell: 'powershell', projectless: true });
+  }
+
   // The official installer runs visibly in a terminal tab, so the user sees exactly what is executed.
   function showInstallPrompt() {
     const body = el('div', 'claude-install');
@@ -611,6 +620,7 @@
   ide.registerToolbarItem({ side: 'right', order: 150, el: claudeBtn });
 
   ide.registerAction({ id: 'ClaudeCode', title: tr('Claude Code'), keys: 'Ctrl+Escape', run: openClaude, terminal: true });
+  ide.registerAction({ id: 'ClaudeCodeLogin', title: tr('Sign in to Claude Code'), run: openClaudeLogin, terminal: true });
   ide.registerAction({ id: 'ClaudeCodeSendReference', title: tr('Send File Reference to Claude Code'), keys: 'Ctrl+Alt+K', run: sendReference });
   ide.registerAction({ id: 'TerminalNewSession', title: tr('New Terminal Session'), keys: 'Ctrl+Shift+T', when: () => !!document.activeElement?.closest('[data-terminal]'), run: () => createSession(), terminal: true });
   // Split terminals (PyCharm's Split Right / Split Down / Next and Previous Splitter): unbound, as in PyCharm.
@@ -681,6 +691,7 @@
     : { dir: n.dir, ratio: n.ratio, a: layoutOf(n.a), b: layoutOf(n.b) });
   ide.terminal = {
     open: (opts) => { tw.show(); return createSession(opts); },
+    claudeLogin: openClaudeLogin,
     sessions: () => sessions.map((s) => ({ id: s.id, name: s.name, kind: s.kind, exited: s.exited, pid: s.pid, cwd: s.cwd, tab: tabs.indexOf(s.t), projectless: s.projectless })),
     // Tabs with their split tree: a pane is {id, cols, rows}, a split {dir: 'row'|'column', ratio, a, b}.
     tabs: () => tabs.map((t) => ({ name: t.active?.name, active: t.active?.id, panes: leaves(t.root).map((s) => s.id), layout: layoutOf(t.root) })),

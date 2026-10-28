@@ -52,8 +52,27 @@ function removeStaleCancellationDirs() {
   });
 }
 
+// Pyright's standard mode reports its type checker's findings as errors, also where a library's types are wider than
+// the values it returns: BeautifulSoup types a["href"] as str | AttributeValueList, so a["href"].strip() in a program
+// that runs fine was a red "Cannot access attribute "strip" for class "AttributeValueList"". PyCharm shows type
+// findings as warnings; so does PyIDE. Errors stay for what fails whatever the types are: a name that does not exist
+// or is never bound, a module that is not installed, and syntax errors (which have no rule). A project's own
+// pyrightconfig.json or [tool.pyright] still decides, as Pyright lets it override these settings.
+const TYPE_RULES_AS_WARNINGS = Object.fromEntries([
+  'reportAttributeAccessIssue', 'reportOptionalMemberAccess', 'reportOptionalSubscript', 'reportOptionalCall',
+  'reportOptionalIterable', 'reportOptionalContextManager', 'reportOptionalOperand', 'reportArgumentType',
+  'reportAssignmentType', 'reportCallIssue', 'reportIndexIssue', 'reportOperatorIssue', 'reportReturnType',
+  'reportGeneralTypeIssues', 'reportTypedDictNotRequiredAccess', 'reportPrivateImportUsage', 'reportFunctionMemberAccess',
+  'reportAbstractUsage', 'reportUnhashable', 'reportIncompatibleMethodOverride', 'reportIncompatibleVariableOverride',
+  'reportOverlappingOverload', 'reportInconsistentOverload', 'reportNoOverloadImplementation', 'reportInvalidTypeArguments',
+  'reportInvalidTypeForm', 'reportAssertTypeFailure', 'reportRedeclaration', 'reportUnusedCoroutine', 'reportUnusedExcept',
+].map((rule) => [rule, 'warning']));
+
 function pyrightSpec(unpackedDir, root, pythonPath, locale) {
-  const analysis = () => ({ useLibraryCodeForTypes: true, diagnosticMode: 'openFilesOnly', typeCheckingMode: 'standard', ...rootSettings(root) });
+  const analysis = () => ({
+    useLibraryCodeForTypes: true, diagnosticMode: 'openFilesOnly', typeCheckingMode: 'standard',
+    diagnosticSeverityOverrides: TYPE_RULES_AS_WARNINGS, ...rootSettings(root),
+  });
   const settingsFor = (section) => {
     if (section === 'python') return { pythonPath, analysis: analysis() };
     if (section === 'python.analysis') return analysis();

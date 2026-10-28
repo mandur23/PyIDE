@@ -1,0 +1,19 @@
+/* The install button after "No module named '…'" in program output. It is drawn by CSS, so copied output and the
+   console's text keep only what the program printed. */
+.console a.console-install::after {
+  content: attr(data-install);
+  display: inline-block;
+  margin-left: 10px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--blue6);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.console a.console-install[data-state="busy"] { cursor: progress; }
+.console a.console-install[data-state="busy"]::after { opacity: 0.7; }
+.console a.console-install[data-state="done"] { cursor: default; }
+.console a.console-install[data-state="done"]::after { background: var(--green6); }

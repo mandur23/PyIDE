@@ -260,7 +260,7 @@
 
   function errorText(res) {
     if (res.code === 'not-installed') return tr('Claude Code is not installed.');
-    if (res.code === 'auth') return tr('Claude Code is not signed in. Open Claude Code and sign in with /login.');
+    if (res.code === 'auth') return tr('Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.');
     if (res.code === 'timeout') return tr('Claude Code did not answer in time.');
     return tr('Claude Code failed: {message}', { message: res.message });
   }
@@ -349,7 +349,10 @@
     delete reply.pending;
     if (res.ok) reply.text = res.text;
     else if (res.code === 'cancelled') reply.stopped = true;
-    else reply.error = errorText(res);
+    else {
+      reply.error = errorText(res);
+      if (res.code === 'auth') reply.errorCode = 'auth';
+    }
     if (pending?.reqId === reqId) pending = null;
     chat.updated = Date.now();
     // Another project was opened meanwhile: the reply belongs to the chat history of the one it was asked in.
@@ -474,7 +477,14 @@
       if (m.text) renderMarkdown(body, m.text, m);
       if (m.pending && !m.text) node.appendChild(el('div', 'aic-typing', tr('Thinking…')));
       if (m.stopped) node.appendChild(el('div', 'aic-note', tr('Stopped.')));
-      if (m.error) node.appendChild(el('div', 'aic-note error', m.error));
+      if (m.error) {
+        const note = node.appendChild(el('div', 'aic-note error', m.error));
+        if (m.errorCode === 'auth') {
+          const login = el('button', 'secondary aic-login', tr('Sign in to Claude Code'));
+          login.onclick = () => ide.runAction('ClaudeCodeLogin');
+          note.append(' ', login);
+        }
+      }
     }
     if (stick) list.scrollTop = list.scrollHeight;
   }

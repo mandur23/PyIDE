@@ -2,6 +2,14 @@
 
 `npm run release -- <버전>`은 이 파일의 `## <버전>` 절을 GitHub 릴리스 노트로 씁니다. 릴리스 전에 새 버전의 절을 맨 위에 추가하세요.
 
+## 0.2.19
+
+- 없는 패키지를 import하면 오류만 보여 주지 않고 바로 설치할 수 있게 함. 실행 결과에 `ModuleNotFoundError: No module named 'yaml'`이 나오면 그 옆에 "'PyYAML' 패키지 설치" 버튼이 생기고, 누르면 프로젝트 인터프리터에 설치한 뒤 "설치됨. 다시 실행하세요."로 바뀜. 편집기에서 빨간 밑줄에 마우스를 올리면 "패키지 설치"와 "설치 후 requirements.txt에 추가" 링크가 바로 보임(전에는 빠른 수정 메뉴를 거쳐야 했음). 표준 라이브러리와 프로젝트 안의 모듈에는 버튼을 보여 주지 않음
+- 잘 실행되는 코드에 빨간 오류(✖)가 나오던 문제 수정. Pyright의 형식 검사 결과(예: BeautifulSoup의 `a["href"].strip()`에 나오던 "AttributeValueList 클래스의 strip 특성에 액세스할 수 없음", None일 수 있는 값 사용)를 PyCharm처럼 경고(⚠)로 보여 줌. 정의되지 않은 이름, 설치되지 않은 모듈 import, 문법 오류는 그대로 오류. 프로젝트에 pyrightconfig.json이나 [tool.pyright] 설정이 있으면 그 설정을 따름
+- 새 플러그인 "오류 설명": 실행 결과의 오류 줄(TypeError, KeyError 등) 앞에 "설명" 버튼이 생김. 누르면 오류의 뜻, 흔한 원인과 해결 방법(메시지에 맞춘 힌트 포함, 예: 값이 None일 때), 오류가 난 파일과 줄을 한국어로 보여 주고, "AI에게 묻기"로 그 파일을 연 채 트레이스백을 AI 채팅에 보냄
+- 새 플러그인 "형식 경고 빠른 수정": Alt+Enter로 형식 경고를 고침. None일 수 있는 값에는 'assert x is not None' 추가나 'if x is not None:'으로 감싸기, 여러 형식일 수 있는 값에는 'assert isinstance(x, str)' 추가, 문자열 메서드를 쓰는 값에는 str()로 변환(BeautifulSoup의 a["href"].strip() 같은 경우)
+- AI 채팅·AI 편집·AI 작업: Claude 앱에는 로그인되어 있는데 "OAuth session expired and could not be refreshed"로 실패할 때, Claude Code(명령줄)는 Claude 앱과 따로 로그인한다는 설명과 함께 "Claude Code에 로그인" 버튼을 보여 줌. 누르면 터미널 탭에서 `claude auth login`을 실행하고 브라우저에서 로그인을 마치면 됨
+
 ## 0.2.18
 
 - 의미 검색 설정: PyTorch가 아직 지원하지 않는 Python(새로 나온 버전, 32비트, free-threaded)으로 AI 환경을 만들면 "No matching distribution found for torch"로 매번 실패하던 문제 수정. torch가 이미 있거나 torch 빌드가 있는 Python으로 환경을 만들고, 이미 만든 환경이 그런 Python이면 지원되는 Python으로 다시 만듦. 지원되는 Python이 없으면 설치 관리자의 Python 3.13을 설치하라고 알려 줌. 설치 관리자로 설치한 PyIDE의 Python도 후보로 찾음

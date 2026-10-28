@@ -291,7 +291,7 @@
       return { kind: 'error', text: tr('Claude Code is not installed.'), action: { label: tr('Open Install Manager'), run: openInstaller } };
     }
     if (res.code === 'auth') {
-      return { kind: 'error', text: tr('Claude Code is not signed in. Open Claude Code and sign in with /login.'), action: { label: tr('Open Claude Code'), run: () => ide.runAction('ClaudeCode') } };
+      return { kind: 'error', text: tr('Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.'), action: { label: tr('Sign in to Claude Code'), run: () => ide.runAction('ClaudeCodeLogin') } };
     }
     if (res.code === 'timeout') return { kind: 'error', text: tr('Claude Code did not answer in time.') };
     return { kind: 'error', text: tr('Claude Code failed: {message}', { message: res.message }) };

@@ -1,0 +1,23 @@
+/* The Explain button before an exception name in program output, so the name and its message still read as one line.
+   Drawn by CSS, so the console's text and copies keep only what the program printed. */
+.console a.error-help-link { text-decoration: none; color: inherit; cursor: pointer; }
+.console a.error-help-link::before {
+  content: attr(data-explain);
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--blue6);
+  color: var(--blue8);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.console a.error-help-link:hover::before { background: var(--blue6); color: #fff; }
+
+.error-help h4 { margin: 14px 0 4px; font-size: 13px; }
+.error-help p { margin: 0; line-height: 1.5; }
+.error-help ul { margin: 0; padding-left: 20px; line-height: 1.6; }
+.error-help-message { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--gray2); font: 12.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
+.error-help-place { margin-top: 14px !important; }
+.error-help-place a { cursor: pointer; color: var(--blue8); text-decoration: underline; }

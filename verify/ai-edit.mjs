@@ -331,8 +331,8 @@ try {
   await h.edit('anything', 'prompting');
   await until(`!!document.querySelector('.ai-edit-status.error')`, 'error shown');
   check((await js(`document.querySelector('.ai-edit-status.error').textContent`)).includes('not signed in')
-    && (await js(`[...document.querySelectorAll('.ai-edit-actions button')].some((b) => b.textContent === 'Open Claude Code')`)),
-  'a signed-out CLI shows a readable message with a button to open Claude Code');
+    && (await js(`[...document.querySelectorAll('.ai-edit-actions button')].some((b) => b.textContent === 'Sign in to Claude Code')`)),
+  'a signed-out CLI shows a readable message with a button to sign in to Claude Code');
   scenario({ edit: { crash: 'boom: network unreachable' } });
   await js(`document.querySelector('.ai-edit-input').focus()`);
   await press('Enter');

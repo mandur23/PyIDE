@@ -3,5 +3,7 @@
   "Install package '{name}' and add to {file}": "'{name}' 패키지 설치 후 {file}에 추가",
   "No Python interpreter found.": "Python 인터프리터를 찾을 수 없습니다.",
   "Install Missing Packages": "누락된 패키지 설치",
-  "Quick fix that installs the package of an unresolved import (Pyright's reportMissingImports) with the project's tool, optionally adding it to the requirements.": "해결되지 않은 import(Pyright의 reportMissingImports)의 패키지를 프로젝트의 도구로 설치하고, 원하면 요구 사항에도 추가하는 빠른 수정입니다."
+  "Quick fix that installs the package of an unresolved import (Pyright's reportMissingImports) with the project's tool, optionally adding it to the requirements.": "해결되지 않은 import(Pyright의 reportMissingImports)의 패키지를 프로젝트의 도구로 설치하고, 원하면 요구 사항에도 추가하는 빠른 수정입니다.",
+  "Installing '{name}'…": "'{name}' 설치 중…",
+  "'{name}' installed. Run again.": "'{name}' 설치됨. 다시 실행하세요."
 }

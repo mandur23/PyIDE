@@ -58,3 +58,4 @@
 .aic-commit-gen:hover { background: var(--gray3); }
 .aic-commit-gen.busy { animation: aic-pulse 1s ease-in-out infinite; }
 @keyframes aic-pulse { 50% { opacity: 0.35; } }
+.aic-login { margin-left: 6px; padding: 1px 8px; font-size: 12px; vertical-align: baseline; }

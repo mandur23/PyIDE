@@ -10,7 +10,6 @@
   "Claude Code did not answer in time.": "Claude Code가 제시간에 응답하지 않았습니다.",
   "Claude Code failed: {message}": "Claude Code 실패: {message}",
   "Claude Code is not installed.": "Claude Code가 설치되어 있지 않습니다.",
-  "Claude Code is not signed in. Open Claude Code and sign in with /login.": "Claude Code에 로그인되어 있지 않습니다. Claude Code를 열고 /login으로 로그인하세요.",
   "Commit Messages": "커밋 메시지",
   "Copied": "복사됨",
   "Copy": "복사",
@@ -40,5 +39,7 @@
   "Thinking…": "생각 중…",
   "current file": "현재 파일",
   "{n} messages": "메시지 {n}개",
-  "Show Context Actions": "컨텍스트 액션 표시"
+  "Show Context Actions": "컨텍스트 액션 표시",
+  "Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.": "Claude Code에 로그인되어 있지 않거나 로그인이 만료되었습니다. Claude Code는 Claude 앱과 따로 로그인합니다.",
+  "Sign in to Claude Code": "Claude Code에 로그인"
 }

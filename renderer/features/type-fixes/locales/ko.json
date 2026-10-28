@@ -1,0 +1,8 @@
+{
+  "Type Warning Fixes": "형식 경고 빠른 수정",
+  "Quick fixes for Pyright's type warnings: a check that a value that may be None is not None, an isinstance check for a value of several types, and str() around a value used as text.": "Pyright 형식 경고에 대한 빠른 수정입니다. None일 수 있는 값이 None이 아닌지 확인하는 코드, 여러 형식일 수 있는 값을 isinstance로 확인하는 코드, 문자열로 쓰는 값을 str()로 감싸는 수정을 제공합니다.",
+  "Add 'assert {name} is not None'": "'assert {name} is not None' 추가",
+  "Wrap in 'if {name} is not None:'": "'if {name} is not None:'으로 감싸기",
+  "Add 'assert isinstance({name}, {types})'": "'assert isinstance({name}, {types})' 추가",
+  "Convert '{value}' with str()": "'{value}'을(를) str()로 변환"
+}

@@ -344,7 +344,7 @@ let failedApp = false;
     await h.caret('    def __init__', 10);
     await js(`(ide.aiGenerate.writeDocumentation(), true)`);
     await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('Write Documentation failed'))`, 'error balloon', 20000);
-    check(await h.balloon('Claude Code is not signed in') && await h.balloon('Open Claude Code'), 'a failed request is an error notification with Open Claude Code');
+    check(await h.balloon('Claude Code is not signed in') && await h.balloon('Sign in to Claude Code'), 'a failed request is an error notification with Sign in to Claude Code');
     scenario({});
 
     // ---------- Generate Unit Tests: append to tests/test_shapes.py ----------

@@ -30,6 +30,7 @@ fs.appendFileSync(path.join(dir, 'log.jsonl'), JSON.stringify({ pid: process.pid
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 out({ type: 'system', subtype: 'init', model: 'fake', tools: [] });
+if (sc.error) { out({ type: 'result', subtype: 'success', is_error: true, result: sc.error }); process.exit(1); }
 await sleep(sc.delayMs || 0);
 for (const piece of sc.reply.match(/[\\s\\S]{1,10}/g) || []) {
   out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } } });
@@ -312,6 +313,16 @@ try {
   const head = await readGit(t.project, ['diff', '--cached'], { maxBytes: 4096 });
   check(head.capped && head.out.startsWith('diff --git') && head.out.length < 4096 + 65536, `reading a diff stops at the size limit (${head.out.length} characters read)`);
   await shot('commit.png');
+
+  // ---------- an expired sign-in offers to sign in again ----------
+  await js(`(ide.aiChat.newChat(), true)`);
+  scenario({ chat: { error: 'Failed to authenticate: OAuth session expired and could not be refreshed' } });
+  await js(`ide.aiChat.send('hello')`);
+  await until(`!!document.querySelector('.aic-note.error .aic-login')`, 'sign-in button in the chat', 15000);
+  check((await js(`document.querySelector('.aic-note.error').textContent`)).includes('its sign-in has expired'), 'an expired CLI sign-in is explained, not just "not signed in"');
+  await js(`document.querySelector('.aic-note.error .aic-login').click()`);
+  await until(`ide.terminal.sessions().some(s => s.kind === 'claude-login')`, 'sign-in terminal', 15000);
+  check(await js(`ide.terminal.sessions().find(s => s.kind === 'claude-login').name === 'Sign in to Claude Code'`), 'Sign in to Claude Code opens a terminal tab running claude auth login');
 } catch (err) {
   check(false, err.message);
   await shot('failure.png').catch(() => {});

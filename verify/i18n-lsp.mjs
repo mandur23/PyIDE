@@ -63,7 +63,7 @@ try {
   await caret(1, 1);
   await press('F2');
   await until(visible('.monaco-hover'), 'hover after F2');
-  check((await js(`ide.editor.getPosition().lineNumber`)) === 11, 'F2 jumps to the first error');
+  check((await js(`ide.editor.getPosition().lineNumber`)) === 12, 'F2 jumps to the first error (line 11 holds a warning)');
   await noLeaks('.monaco-hover .hover-row.status-bar', 'problem hover actions');
   await press('Escape');
 

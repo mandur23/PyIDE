@@ -182,6 +182,18 @@ const TRACEBACK = /File "([^"<][^"]*)", line (\d+)/g;
 
 ide.ui = {};
 
+// Links in program output: `pattern` (a global regex) finds them and `link(match)` returns the element shown in place
+// of the match, or null to leave that text as it is. Plugins add theirs with ide.ui.addConsoleLink.
+const consoleLinks = [{
+  pattern: TRACEBACK,
+  link(m) {
+    const a = el('a', null, m[0]);
+    a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
+    return a;
+  },
+}];
+ide.ui.addConsoleLink = (pattern, link) => { consoleLinks.push({ pattern, link }); };
+
 // ---------- ANSI text ----------
 // SGR sequences (`ESC[...m`) set colors and weight, `ESC[K` erases to the end of the line; other CSI sequences and
 // OSC ones (window titles, hyperlinks) are dropped. Colors 0-15 are classes (core/ansi.css follows the theme), the
@@ -240,16 +252,19 @@ const appendText = (host, s) => {
   const t = host.lastChild;
   if (t?.nodeType === Node.TEXT_NODE) t.appendData(s); else host.append(s);
 };
-// Writes `text` in style `st` at the end of `host`; with `links`, traceback frames become links to the file and line.
+// Writes `text` in style `st` at the end of `host`; with `links`, the console links (traceback frames to their file and
+// line, and the plugins' ones) become elements.
 function writeStyled(host, text, st, links) {
   if (st !== PLAIN) host = host.appendChild(styleSpan(st));
   let last = 0;
   if (links) {
-    for (const m of text.matchAll(TRACEBACK)) {
+    const found = consoleLinks.flatMap(({ pattern, link }) => [...text.matchAll(pattern)].map((m) => ({ m, link })));
+    for (const { m, link } of found.sort((a, b) => a.m.index - b.m.index)) {
+      if (m.index < last) continue;
+      const node = link(m);
+      if (!node) continue;
       appendText(host, text.slice(last, m.index));
-      const a = el('a', null, m[0]);
-      a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
-      host.append(a);
+      host.append(node);
       last = m.index + m[0].length;
     }
   }

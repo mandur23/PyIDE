@@ -8,7 +8,6 @@
   "Not available in Safe Mode. Trust the project to use AI actions.": "안전 모드에서는 사용할 수 없습니다. AI 작업을 사용하려면 프로젝트를 신뢰하세요.",
   "Trust Project…": "프로젝트 신뢰…",
   "Claude Code is not installed.": "Claude Code가 설치되어 있지 않습니다.",
-  "Claude Code is not signed in. Open Claude Code and sign in with /login.": "Claude Code에 로그인되어 있지 않습니다. Claude Code를 열고 /login으로 로그인하세요.",
   "Claude Code did not answer in time.": "Claude Code가 제한 시간 안에 응답하지 않았습니다.",
   "Claude Code failed: {message}": "Claude Code 실행 실패: {message}",
   "Open Install Manager": "설치 관리자 열기",
@@ -54,5 +53,7 @@
   "{file} cannot be read as text.": "{file}을(를) 텍스트로 읽을 수 없습니다.",
   "{file} would not keep its exact bytes if it were written back in its encoding ({encoding}). Open it in the editor and generate the tests again.": "{file}을(를) 해당 인코딩({encoding})으로 다시 쓰면 원래 바이트가 그대로 유지되지 않습니다. 편집기에서 파일을 열고 테스트를 다시 생성하세요.",
   "The generated tests contain characters that {file}'s encoding ({encoding}) cannot hold. Open the file, convert it to UTF-8, and generate the tests again.": "생성된 테스트에 {file}의 인코딩({encoding})으로 저장할 수 없는 문자가 있습니다. 파일을 열어 UTF-8로 변환한 다음 테스트를 다시 생성하세요.",
-  "Open {file}": "{file} 열기"
+  "Open {file}": "{file} 열기",
+  "Claude Code is not signed in, or its sign-in has expired. Claude Code signs in separately from the Claude app.": "Claude Code에 로그인되어 있지 않거나 로그인이 만료되었습니다. Claude Code는 Claude 앱과 따로 로그인합니다.",
+  "Sign in to Claude Code": "Claude Code에 로그인"
 }

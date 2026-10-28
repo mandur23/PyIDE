@@ -37,9 +37,9 @@ try {
   await until(`ide.activeTab()?.title === 'errors.py'`, 'errors.py tab');
   await until(`ide.problems.all().filter(p => p.source === 'pyright' && p.path.endsWith('errors.py')).length >= 3`, 'pyright diagnostics for errors.py', 30000);
   const diags = await problems('errors.py');
-  check(diags.some((p) => p.line === 11 && p.severity === 'error' && /not assignable/.test(p.msg)), 'type error reported on line 11');
-  check(diags.some((p) => p.line === 12 && /"undefined_name" is not defined/.test(p.msg)), 'undefined name reported on line 12');
-  check(diags.some((p) => p.line === 13 && /"os" is not defined/.test(p.msg)), 'missing import reported on line 13');
+  check(diags.some((p) => p.line === 11 && p.severity === 'warning' && /not assignable/.test(p.msg)), 'type mismatch reported on line 11, as a warning like PyCharm');
+  check(diags.some((p) => p.line === 12 && p.severity === 'error' && /"undefined_name" is not defined/.test(p.msg)), 'undefined name reported on line 12 as an error');
+  check(diags.some((p) => p.line === 13 && p.severity === 'error' && /"os" is not defined/.test(p.msg)), 'missing import reported on line 13 as an error');
   check(await js(`monaco.editor.getModelMarkers({ owner: 'pyright' }).length >= 3`), 'diagnostics become editor markers');
   check(await js(`monaco.editor.getModelMarkers({ owner: 'pyright.hints' }).some(m => /sys/.test(m.message) && m.tags?.includes(1))`), 'unused import is greyed out as an unnecessary-code hint');
   check(!diags.some((p) => /"sys" is not accessed/.test(p.msg)), 'hints are kept out of the Problems list');
@@ -49,17 +49,18 @@ try {
   check(/BG: Background analysis\(\d+\) started/.test(pyrightLog), 'Pyright runs its background-analysis thread');
 
   // ---- F2 / Shift+F2 ----
+  // Errors first: the type mismatch on line 11 is a warning, so F2 skips it while lines 12 and 13 have errors.
   await caret(1, 1);
   await press('F2');
   let p = await where();
-  check(p.line === 11, `F2 jumps to the first error (line ${p.line})`);
+  check(p.line === 12, `F2 jumps to the first error, past the warning on line 11 (line ${p.line})`);
   await until(visible('.monaco-hover'), 'hover with the problem after F2');
-  check(/not assignable/.test(await textOf('.monaco-hover')), 'F2 shows the error description');
+  check(/"undefined_name" is not defined/.test(await textOf('.monaco-hover')), 'F2 shows the error description');
   await press('Escape');
   await press('F2');
-  check((await where()).line === 12, 'F2 again goes to the next error');
+  check((await where()).line === 13, 'F2 again goes to the next error');
   await press('Shift+F2');
-  check((await where()).line === 11, 'Shift+F2 goes back to the previous error');
+  check((await where()).line === 12, 'Shift+F2 goes back to the previous error');
   await press('Escape');
 
   // ---- Alt+Enter: auto-import and suppression ----

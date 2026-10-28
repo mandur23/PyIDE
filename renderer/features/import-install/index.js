@@ -83,14 +83,18 @@
   const INSTALL = 'pyide.importInstall.install';
   monaco.editor.registerCommand(INSTALL, (_accessor, dist, addToRequirements) => install(dist, addToRequirements));
 
+  // Resolves true once the package is installed.
   async function install(dist, addToRequirements) {
-    if (ide.trusted === false || !ide.dependencies) return;
+    if (ide.trusted === false || !ide.dependencies) return false;
     const interp = ide.currentInterp();
-    if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return; }
+    if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return false; }
     const code = await ide.dependencies.installSpecs([dist]);
-    if (code !== 0 || !addToRequirements) return;
-    const version = await ide.api.invoke('import-install:version', ide.root, interp, dist).catch(() => null);
-    await ide.dependencies.addRequirement({ name: dist, version });
+    if (code !== 0) return false;
+    if (addToRequirements) {
+      const version = await ide.api.invoke('import-install:version', ide.root, interp, dist).catch(() => null);
+      await ide.dependencies.addRequirement({ name: dist, version });
+    }
+    return true;
   }
 
   // The actions for one missing import; untrusted projects, the standard library and local modules get none.
@@ -128,6 +132,45 @@
       return { actions, dispose() {} };
     },
   }, { providedCodeActionKinds: ['quickfix'] });
+
+  // The hover on the squiggle offers the same installs as links, one click instead of Quick Fix and a menu.
+  const md = (s) => s.replace(/[\\[\]*_`]/g, '\\$&');
+  monaco.languages.registerHoverProvider('python', {
+    async provideHover(model, position) {
+      if (!ide.root || ide.trusted === false || !ide.lsp?.diagnostics || !ide.dependencies) return null;
+      const d = ide.lsp.diagnostics(tabOf(model)?.path).find((x) => CODES.has(x.code)
+        && new monaco.Range(x.range.start.line + 1, x.range.start.character + 1, x.range.end.line + 1, x.range.end.character + 1).containsPosition(position));
+      const actions = d ? await actionsFor(model, d, []) : [];
+      if (!actions.length) return null;
+      const links = actions.map((a) => `[$(cloud-download) ${md(a.title)}](command:${INSTALL}?${encodeURIComponent(JSON.stringify(a.command.arguments))})`);
+      return {
+        range: new monaco.Range(d.range.start.line + 1, d.range.start.character + 1, d.range.end.line + 1, d.range.end.character + 1),
+        contents: [{ value: links.join('&nbsp;&nbsp;&nbsp;'), isTrusted: true, supportThemeIcons: true, supportHtml: true }],
+      };
+    },
+  });
+
+  // Run, Debug and console output: "ModuleNotFoundError: No module named 'yaml'" gets an install button after the
+  // message. The button installs into the project interpreter, as the quick fix does. A module of the project (run
+  // from the wrong folder) is not a package: its button goes as soon as that is known.
+  ide.ui.addConsoleLink(/No module named '([A-Za-z_][\w.]*)'/g, (m) => {
+    const dist = ide.trusted === false ? null : distFor(m[1]);
+    if (!dist) return null;
+    const a = document.createElement('a');
+    a.className = 'console-install';
+    a.textContent = m[0];
+    a.title = a.dataset.install = tr("Install package '{name}'", { name: dist });
+    if (ide.root) isLocal(m[1].split('.')[0]).then((local) => { if (local) a.replaceWith(m[0]); });
+    a.onclick = async () => {
+      if (a.dataset.state === 'busy' || a.dataset.state === 'done') return;
+      a.dataset.state = 'busy';
+      a.dataset.install = tr("Installing '{name}'…", { name: dist });
+      const ok = await install(dist, false);
+      a.dataset.state = ok ? 'done' : '';
+      a.title = a.dataset.install = ok ? tr("'{name}' installed. Run again.", { name: dist }) : tr("Install package '{name}'", { name: dist });
+    };
+    return a;
+  });
 
   ide.importInstall = { distFor, install };
 })();
