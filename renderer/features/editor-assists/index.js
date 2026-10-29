@@ -644,9 +644,15 @@
     });
   });
 
+  // Other plugins add sections to the page by pushing {defaults?, keywords?, mount(host, ctx)} to ide.smartKeysSections.
+  const sections = () => ide.smartKeysSections || [];
   (ide.settingsPages ||= []).push({
-    id: 'smart-keys', group: 'editor', title: () => tr('Smart Keys'), defaults: DEFAULTS,
-    keywords: 'smart keys python f-string format string convert automatically brace docstring stub documentation comment 스마트 키 f-문자열 자동 변환 중괄호 독스트링 문서 주석 스텁',
+    id: 'smart-keys', group: 'editor', title: () => tr('Smart Keys'),
+    get defaults() { return Object.assign({}, DEFAULTS, ...sections().map((s) => s.defaults)); },
+    get keywords() {
+      return ['smart keys python f-string format string convert automatically brace docstring stub documentation comment 스마트 키 f-문자열 자동 변환 중괄호 독스트링 문서 주석 스텁',
+        ...sections().map((s) => s.keywords || '')].join(' ');
+    },
     mount(host, ctx) {
       const s = ctx.ui.section(host, 'Python');
       s.appendChild(ctx.ui.checkbox(FSTRING, tr('Convert to f-string automatically')));
@@ -655,6 +661,7 @@
       s.appendChild(ctx.ui.checkbox(DOC_STUB, tr('Insert documentation comment stub')));
       s.appendChild(ide.util.el('div', 'muted settings-note',
         tr('Enter after the opening triple quotes of a docstring adds the parameters and return value of the function, in the format set under Python Integrated Tools › Docstrings.')));
+      for (const section of sections()) section.mount(host, ctx);
     },
   });
 

@@ -355,6 +355,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/requirements-sync.mjs
+      - name: minecraft
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/minecraft.mjs
+      - name: terminal-venv
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/terminal-venv.mjs
       - name: venv-prompt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15
@@ -415,6 +423,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/editor-keys.mjs
+      - name: html-autoclose
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/html-autoclose.mjs
       - name: context-menu
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 6

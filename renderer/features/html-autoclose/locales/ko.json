@@ -1,0 +1,6 @@
+{
+  "HTML Tag Closing": "HTML 태그 닫기",
+  "Typing the > of an HTML start tag adds its end tag after the caret, and typing </ completes the end tag of the innermost open element, as in PyCharm and VS Code.": "PyCharm과 VS Code처럼 HTML 시작 태그의 >를 입력하면 캐럿 뒤에 닫는 태그를 추가하고, </를 입력하면 가장 안쪽의 열린 요소의 닫는 태그를 완성합니다.",
+  "Insert closing tag on typing >": ">를 입력하면 닫는 태그 삽입",
+  "Complete the end tag on typing </": "</를 입력하면 닫는 태그 완성"
+}

@@ -7,7 +7,7 @@
   const { $, el, basename, dirname, samePath, isUnder, pathKey: key } = ide.util;
 
   const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
-    ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', css: 'css', yml: 'yaml',
+    ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', xhtml: 'html', css: 'css', yml: 'yaml',
     yaml: 'yaml', toml: 'ini', cfg: 'ini', ini: 'ini', xml: 'xml', sh: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell',
     sql: 'sql', txt: 'plaintext', log: 'plaintext', java: 'java', kt: 'kotlin', lua: 'lua', luau: 'lua', cs: 'csharp',
     c: 'c', cpp: 'cpp', h: 'cpp', go: 'go', rs: 'rust', jsp: 'html', fxml: 'xml', dockerfile: 'dockerfile' };

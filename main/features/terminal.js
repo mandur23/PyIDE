@@ -51,12 +51,30 @@ async function findClaude() {
   return { installed: true, path: found, version: claudeVersion.version };
 }
 
-// Like PyCharm, a terminal opened while a venv interpreter is selected starts with that venv active.
-function venvEnv(interpExe) {
-  if (!interpExe) return {};
+// Like PyCharm, a terminal opened while a venv interpreter is selected starts with that venv active: its Scripts
+// first on PATH and VIRTUAL_ENV set for every shell, and in PowerShell and Command Prompt the venv's own activate
+// script run as the shell starts (venvActivation), which marks the prompt with the venv's name and defines deactivate.
+const venvOf = (interpExe) => {
+  if (!interpExe) return null;
   const venv = path.dirname(path.dirname(interpExe));
-  if (!fs.existsSync(path.join(venv, 'pyvenv.cfg'))) return {};
-  return { VIRTUAL_ENV: venv, PATH: `${path.join(venv, 'Scripts')};${process.env.PATH}` };
+  return fs.existsSync(path.join(venv, 'pyvenv.cfg')) ? venv : null;
+};
+function venvEnv(interpExe) {
+  const venv = venvOf(interpExe);
+  return venv ? { VIRTUAL_ENV: venv, PATH: `${path.join(venv, 'Scripts')};${process.env.PATH}` } : {};
+}
+// The shell arguments that run the venv's activate script after the user's profile. PowerShell reads Activate.ps1 as
+// a script block: the execution policy (Restricted on many computers) applies to script files, so running the file
+// would be refused, and changing the policy would be a system change. -VenvDir tells it where it is, which it
+// otherwise works out from its own file path.
+function venvActivation(shellId, venv) {
+  const scripts = path.join(venv, 'Scripts');
+  if ((shellId === 'powershell' || shellId === 'pwsh') && fs.existsSync(path.join(scripts, 'Activate.ps1'))) {
+    const q = (s) => `'${s.replace(/'/g, "''")}'`;
+    return ['-NoExit', '-Command', `. ([scriptblock]::Create((Get-Content -Raw -LiteralPath ${q(path.join(scripts, 'Activate.ps1'))}))) -VenvDir ${q(venv)}`];
+  }
+  if (shellId === 'cmd' && fs.existsSync(path.join(scripts, 'activate.bat'))) return ['/k', 'call', path.join(scripts, 'activate.bat')];
+  return [];
 }
 
 // A session's folder must be a local absolute path (C:\...). A UNC path (\\host\share) is refused before any fs call:
@@ -123,6 +141,8 @@ exports.register = ({ ipcMain, app }) => {
       if (shell.id === 'cmd') args = ['/k', opts.command];
       else if (shell.id === 'gitbash' || shell.id === 'wsl') args = [...args.filter((a) => a !== '-i'), '-c', `${opts.command}; exec bash -i`];
       else args = [...args, '-NoExit', '-Command', opts.command];
+    } else if (venvOf(opts.interpreter)) {
+      args = [...args, ...venvActivation(shell.id, venvOf(opts.interpreter))];
     }
     const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
     // claudeIde.ideEnv(): CLAUDE_CODE_SSE_PORT, so claude started in any PyIDE terminal connects to this window.

@@ -19,7 +19,10 @@
   let st = { ports: [], added: [], tunnels: [], cloudflared: false, bore: false };
   const announced = new Set(); // ports told about this session
   const tunnelOf = (port) => st.tunnels.find((t) => t.port === port) || null;
-  const web = (p) => p.proto !== 'tcp';
+  // A plugin that knows what a port speaks before any probe (minecraft: a game server's port is TCP) says so.
+  const hints = new Map(); // port -> 'http' | 'https' | 'tcp'
+  const protoOf = (p) => p.proto || hints.get(p.port) || null;
+  const web = (p) => protoOf(p) !== 'tcp';
   const toolFor = (p) => (web(p) ? 'cloudflared' : 'bore');
   const hostPort = (host, port) => `${host}:${port}`;
   // A web server's address opens in the browser; another server's is host:port, for its own client to connect to.
@@ -92,7 +95,7 @@
     for (let attempt = 0; attempt < 2; attempt++) {
       const p = st.ports.find((x) => x.port === port);
       // Before the probe answers, main picks the tool; a missing one comes back as "<tool> is not installed".
-      if (p?.proto && !(await ensureTool(toolFor(p)))) return;
+      if (p && protoOf(p) && !(await ensureTool(toolFor(p)))) return;
       try {
         st = await ide.api.invoke('ports:share', port);
         render();
@@ -205,9 +208,9 @@
       const t = tunnelOf(p.port);
       const row = el('div', 'ports-row');
       row.dataset.port = p.port;
-      row.dataset.proto = p.proto || '';
+      row.dataset.proto = protoOf(p) || '';
       const portCell = el('span', 'ports-port', String(p.port));
-      if (p.proto) portCell.append(el('span', 'ports-proto', PROTO[p.proto]));
+      if (protoOf(p)) portCell.append(el('span', 'ports-proto', PROTO[protoOf(p)]));
       const proc = el('span', 'ports-proc', p.name ? `${p.name} (${p.pid})` : String(p.pid));
       proc.title = p.cmd;
       proc.dataset.userText = '';
@@ -307,5 +310,5 @@
   const start = addedPorts().length ? ide.api.invoke('ports:setAdded', addedPorts()) : ide.api.invoke('ports:state');
   start.then((s) => { const before = st; st = s; announce(before); render(); }, () => {});
 
-  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort };
+  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint: (port, proto) => { hints.set(port, proto); render(); } };
 })();
