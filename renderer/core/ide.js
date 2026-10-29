@@ -2341,6 +2341,7 @@ const editorAction = (id) => Object.assign(() => ide.editor?.trigger('keymap', i
   { id: 'EditorDuplicate', title: tr('Duplicate Line'), keys: 'Ctrl+D', when: inEditor, run: editorAction('editor.action.copyLinesDownAction') },
   { id: 'EditorDeleteLine', title: tr('Delete Line'), keys: 'Ctrl+Y', when: inEditor, run: editorAction('editor.action.deleteLines') },
   { id: 'CommentByLineComment', title: tr('Comment with Line Comment'), keys: 'Ctrl+/', when: inEditor, run: editorAction('editor.action.commentLine') },
+  { id: 'CommentByBlockComment', title: tr('Comment with Block Comment'), keys: 'Ctrl+Shift+/', when: inEditor, run: editorAction('editor.action.blockComment') },
   { id: 'GotoLine', title: tr('Go to Line…'), keys: 'Ctrl+G', when: inEditor, run: editorAction('editor.action.gotoLine') },
   { id: 'Find', title: tr('Find'), keys: 'Ctrl+F', when: inEditor, run: editorAction('actions.find') },
   { id: 'Replace', title: tr('Replace'), keys: 'Ctrl+R', when: inEditor, run: editorAction('editor.action.startFindReplaceAction') },

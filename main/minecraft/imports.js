@@ -5,12 +5,17 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { openZip, readEntry } = require('./zipfile');
-const { KINDS, neoforgeMc, HEADERS } = require('./sources');
+const { openZip, readEntry, unpackZip } = require('./zipfile');
+const { KINDS, neoforgeMc, HEADERS, modrinthApi } = require('./sources');
 
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const fail = (message, code) => Object.assign(new Error(message), { expected: true, code });
+// A .mrpack fromModrinth downloaded (into the temporary folder, under a pyide-<hex>- name) is removed once the server
+// has its copy or the dialog is cancelled; any other file, the user's own, is left alone.
+function discardDownload(file) {
+  if (file && path.dirname(path.resolve(file)) === path.resolve(os.tmpdir()) && /^pyide-[0-9a-f]{8}-.*\.mrpack$/.test(path.basename(file))) fs.rmSync(file, { force: true });
+}
 const inside = (root, rel) => { const p = path.resolve(root, rel); return p.startsWith(path.resolve(root) + path.sep) ? p : null; };
 // A free folder name under parent, from a name made safe for a server name.
 function freeName(parent, raw) {
@@ -153,17 +158,8 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
           const s = target((x) => !x.proxy);
           if (!s) { skipped.push({ name: it.name, why: 'target' }); continue; }
           const dest = path.join(s.dir, 'resourcepack');
-          if (it.zip) {
-            const zip = openZip(it.path);
-            try {
-              for (const n of zip.names.filter((x) => !x.endsWith('/'))) {
-                const out = inside(dest, n);
-                if (!out) continue;
-                fs.mkdirSync(path.dirname(out), { recursive: true });
-                fs.writeFileSync(out, zip.read(n));
-              }
-            } finally { zip.close(); }
-          } else await fs.promises.cp(it.path, dest, { recursive: true, force: true });
+          if (it.zip) unpackZip(it.path, dest);
+          else await fs.promises.cp(it.path, dest, { recursive: true, force: true });
           done.push({ name: it.name, what: 'resourcepack', to: dest, server: s.name });
         } else if (it.kind === 'world') {
           const s = target((x) => !x.proxy);
@@ -192,14 +188,13 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
   async function fromModrinth(ref, log) {
     const slug = /modrinth\.com\/modpack\/([\w.-]+)/.exec(ref)?.[1] || (/^[\w.-]+$/.test(ref) ? ref : null);
     if (!slug) throw fail('Give a Modrinth modpack address (https://modrinth.com/modpack/…) or its name');
-    const api = (() => { try { return JSON.parse(process.env.PYIDE_MC_SOURCES || '{}').modrinth; } catch { return null; } })() || 'https://api.modrinth.com/v2';
-    const res = await fetch(`${api}/project/${slug}/version`, { headers: HEADERS });
+    const res = await fetch(`${modrinthApi()}/project/${slug}/version`, { headers: HEADERS });
     if (!res.ok) throw fail(`Modrinth has no modpack ${slug} (HTTP ${res.status})`);
     const versions = await res.json();
     const file = versions.flatMap((v) => v.files.filter((f) => /\.mrpack$/.test(f.filename)).map((f) => ({ ...f, version: v }))).find((f) => f.primary) || versions[0]?.files?.[0];
     if (!file) throw fail(`${slug} has no .mrpack to download`);
     const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${file.filename}`);
-    await fetchFile(file.url, dest, {}, log);
+    await fetchFile(file.url, dest, { size: file.size }, log);
     if (file.hashes?.sha1 && crypto.createHash('sha1').update(fs.readFileSync(dest)).digest('hex') !== file.hashes.sha1) throw fail(`Checksum mismatch for ${file.filename}`);
     return dest;
   }
@@ -248,6 +243,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
       const clientPack = path.join(srv.dir, 'client-pack', path.basename(pack.file).replace(/^pyide-[0-9a-f]{8}-/, ''));
       fs.mkdirSync(path.dirname(clientPack), { recursive: true });
       fs.copyFileSync(pack.file, clientPack);
+      discardDownload(pack.file);
       const desc = { ...readServer(srv.dir), modpack: { name: pack.name, version: pack.version, clientPack: path.relative(srv.dir, clientPack).replace(/\\/g, '/') } };
       writeServer(srv.dir, desc);
       log(`${pack.name} is installed in ${path.relative(root, srv.dir)}\n`);
@@ -261,4 +257,4 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
   return { importServer, drop, modpackInfo, fromModrinth, createFromModpack };
 }
 
-module.exports = { createImports, classify, detectServer };
+module.exports = { createImports, classify, detectServer, discardDownload };

@@ -10,7 +10,7 @@
   const { el } = ide.util;
   const TAB_ID = 'installer:manager';
   const CATEGORIES = {
-    interpreters: tr('Python Interpreters'), python: tr('Python Tools'), toolchains: tr('Toolchains'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
+    interpreters: tr('Python Interpreters'), python: tr('Python Tools'), toolchains: tr('Toolchains'), languages: tr('Language Servers'), databases: tr('Databases'), drivers: tr('Database Drivers'), ai: tr('AI Models'), system: tr('System Tools'),
   };
   const BUSY = { install: 'installing', update: 'updating', uninstall: 'removing', start: 'starting', stop: 'stopping' };
   const BUSY_PHASES = new Set(Object.values(BUSY));

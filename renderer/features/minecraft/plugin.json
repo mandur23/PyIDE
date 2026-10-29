@@ -3,7 +3,7 @@
   "name": "Minecraft Servers",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "A Minecraft tool window: create Paper, Purpur, Vanilla, Fabric, Forge or NeoForge servers of any version, or a Velocity proxy (with the Java they need), run and debug them with a server console, share them with friends, write Paper and Velocity plugins (with code completion and other plugins' APIs) and Fabric, Forge or NeoForge mods that build and deploy to the server, send players a resource pack when they join, and give players a client pack of a modded server's mods.",
+  "description": "A Minecraft tool window: create Paper, Purpur, Vanilla, Fabric, Forge or NeoForge servers of any version, or a Velocity proxy (with the Java they need), run and debug them with a server console, share them with friends, write Paper and Velocity plugins (with code completion and other plugins' APIs) and Fabric, Forge or NeoForge mods that build and deploy to the server, send players a resource pack when they join, give players a client pack of a modded server's mods, and install modpacks, mods, plugins and resource packs from Modrinth through the Market.",
   "depends": [
     "run"
   ],

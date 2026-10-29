@@ -112,8 +112,45 @@ const mdk = out('mdk');
 write(path.join(mdk, 'gradle.properties'), 'mod_id=examplemod\nmod_name=Example Mod\nmod_group_id=com.example.examplemod\n');
 write(path.join(mdk, 'src', 'main', 'java', 'com', 'example', 'examplemod', 'ExampleMod.java'), 'package com.example.examplemod;\n\npublic class ExampleMod {\n    public static final String MODID = "examplemod";\n}\n');
 write(path.join(mdk, 'src', 'main', 'resources', 'assets', 'examplemod', 'lang', 'en_us.json'), '{ "itemGroup.examplemod": "Example Mod" }\n');
-// gradlew.bat gets --console=plain then the task; cmd splits an argument at "=", so the task is taken as the last one.
-write(path.join(mdk, 'gradlew.bat'), '@echo off\r\nsetlocal\r\nfor %%a in (%*) do set task=%%a\r\necho JAVA_HOME=%JAVA_HOME%\r\necho task %task%\r\nif "%task%"=="build" (\r\n  if not exist build\\libs mkdir build\\libs\r\n  copy /y gradle.properties build\\libs\\mymod-1.0.jar >nul\r\n  copy /y gradle.properties build\\libs\\mymod-1.0-sources.jar >nul\r\n  echo BUILD SUCCESSFUL\r\n)\r\n');
+// Gradle as a Node script: build makes the jars; with the init script's properties, pyideClasspath writes the source
+// set and runClient compiles the mod and starts a stand-in game under the JDWP agent, which prints the mod's
+// greeting() every 300 ms (so a HotSwap shows in its output) and quits by itself after two minutes.
+write(path.join(src, 'game', 'FakeGame.java'), `public class FakeGame {
+  public static void main(String[] a) throws Exception {
+    java.lang.reflect.Method m = Class.forName(a[0]).getMethod("greeting");
+    System.out.println("Fake Minecraft window open");
+    for (int i = 0; i < 400; i++) { System.out.println("game: " + m.invoke(null)); Thread.sleep(300); }
+  }
+}`);
+const fakeGradle = path.join(work, 'fake-gradle.cjs');
+const gameDir = path.join(work, 'out', 'game');
+writeFileSync(fakeGradle, `const fs = require('fs'); const path = require('path'); const { execFileSync, spawn } = require('child_process');
+const args = process.argv.slice(2);
+const prop = (k) => (args.find((a) => a.startsWith('-P' + k + '=')) || '').slice(k.length + 3) || null;
+const task = args[args.length - 1];
+const home = process.env.JAVA_HOME;
+console.log('JAVA_HOME=' + home);
+console.log('task ' + task);
+const out = path.join(process.cwd(), 'build', 'classes', 'java', 'main');
+const srcDir = path.join(process.cwd(), 'src', 'main', 'java');
+if (args.includes('pyideClasspath')) fs.writeFileSync(prop('pyide.classpathFile'), JSON.stringify([{ name: 'main', sources: [srcDir], classpath: [], output: out }]));
+if (task === 'build') {
+  fs.mkdirSync('build/libs', { recursive: true });
+  for (const n of ['mymod-1.0.jar', 'mymod-1.0-sources.jar']) fs.copyFileSync('gradle.properties', path.join('build/libs', n));
+  console.log('BUILD SUCCESSFUL');
+}
+if (task === 'runClient') {
+  const files = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith('.java')) files.push(p); } };
+  walk(srcDir);
+  execFileSync(path.join(home, 'bin', 'javac.exe'), ['-g', '-d', out, ...files], { stdio: 'inherit' });
+  const port = prop('pyide.debugPort');
+  const jvm = port ? ['-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:' + port] : [];
+  const game = spawn(path.join(home, 'bin', 'java.exe'), [...jvm, '-cp', out + path.delimiter + ${S(gameDir)}, 'FakeGame', 'com.example.mymod.Mymod'], { stdio: 'inherit' });
+  game.on('exit', (c) => process.exit(c ?? 0));
+}
+`);
+write(path.join(mdk, 'gradlew.bat'), `@"${process.execPath}" "${fakeGradle}" %*\r\n`);
+javac(gameDir, [path.join(src, 'game', 'FakeGame.java')]);
 const mdkZip = path.join(work, 'out', 'jars', 'mdk.zip');
 execFileSync(bin('jar'), ['--create', '--no-manifest', '--file', mdkZip, '-C', mdk, '.']);
 // A stand-in cloudflared: the quick tunnel's banner and registration.
@@ -126,8 +163,11 @@ setInterval(() => {}, 1000);
 // ---------- stand-in services ----------
 const sha = (algo, b) => crypto.createHash(algo).update(b).digest('hex');
 const routes = new Map();
+const requests = [];
 const server = http.createServer((q, r) => {
-  const body = routes.get(q.url.split('?')[0]);
+  requests.push(decodeURIComponent(q.url));
+  const route = routes.get(q.url.split('?')[0]);
+  const body = typeof route === 'function' ? route(decodeURIComponent(q.url)) : route;
   if (body === undefined) { r.writeHead(404); return r.end(); }
   r.writeHead(200);
   r.end(Buffer.isBuffer(body) ? body : typeof body === 'string' ? body : JSON.stringify(body));
@@ -193,6 +233,22 @@ z.close()`, mrpack, S({ formatVersion: 1, game: 'minecraft', versionId: '1.0', n
   { path: 'mods/server-mod.jar', hashes: { sha1: sha('sha1', serverMod), sha512: sha('sha512', serverMod) }, env: { client: 'required', server: 'required' }, downloads: [`${base}/files/server-mod.jar`], fileSize: serverMod.length },
   { path: 'mods/client-mod.jar', hashes: { sha1: sha('sha1', clientMod) }, env: { client: 'required', server: 'unsupported' }, downloads: [`${base}/files/client-mod.jar`], fileSize: clientMod.length },
 ] })]);
+// Modrinth for the Market: a modpack, a Forge mod requiring a library and a client-only mod, and a plugin whose file
+// fails its checksum.
+const hit = (id, slug, title, type) => ({ project_id: id, slug, project_type: type, title, author: 'tester', description: `${title} description`, icon_url: null, downloads: 12345, follows: 67, display_categories: ['utility'], date_modified: '2026-10-01' });
+routes.set('/modrinth/search', (url) => ({ total_hits: 1, hits: [/project_type:modpack/.test(url) ? hit('PACK', 'test-pack', 'Test Pack', 'modpack')
+  : /project_type:plugin/.test(url) ? hit('BADP', 'bad-plugin', 'Bad Plugin', 'mod') : hit('MODA', 'mod-a', 'Mod A', 'mod')] }));
+const modFile = (name, data, hashes) => { routes.set(`/files/${name}`, data); return { filename: name, url: `${base}/files/${name}`, primary: true, size: data.length, hashes: hashes || { sha512: sha('sha512', data), sha1: sha('sha1', data) } }; };
+routes.set('/modrinth/project/test-pack/version', [{ id: 'pv1', version_number: '1.0', version_type: 'release', files: [modFile('test-pack.mrpack', readFileSync(mrpack))], dependencies: [] }]);
+routes.set('/modrinth/project/MODA', { id: 'MODA', title: 'Mod A', server_side: 'required' });
+routes.set('/modrinth/project/LIBB', { id: 'LIBB', title: 'Lib B', server_side: 'optional' });
+routes.set('/modrinth/project/CLIENTC', { id: 'CLIENTC', title: 'Client C', server_side: 'unsupported' });
+routes.set('/modrinth/project/BADP', { id: 'BADP', title: 'Bad Plugin', server_side: 'required' });
+const modVersion = (v) => [{ id: `va${v}`, version_number: v, version_type: 'release', files: [modFile(`mod-a-${v}.jar`, Buffer.from(`mod a ${v}`))],
+  dependencies: [{ project_id: 'LIBB', dependency_type: 'required' }, { project_id: 'CLIENTC', dependency_type: 'required' }, { project_id: 'OPTD', dependency_type: 'optional' }] }];
+routes.set('/modrinth/project/MODA/version', modVersion('1.0'));
+routes.set('/modrinth/project/LIBB/version', [{ id: 'vb', version_number: '2.1', version_type: 'release', files: [modFile('lib-b-2.1.jar', Buffer.from('lib b'))], dependencies: [] }]);
+routes.set('/modrinth/project/BADP/version', [{ id: 'vp', version_number: '3.0', version_type: 'release', files: [modFile('bad-plugin.jar', Buffer.from('plugin'), { sha1: '0'.repeat(40) })], dependencies: [] }]);
 
 const project = path.join(work, 'project');
 mkdirSync(project);
@@ -200,7 +256,7 @@ const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, env
   PYIDE_MC_JAVA: javaHome,
   PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]),
   PYIDE_MC_SOURCES: S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/paper`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, forge: `${base}/forge`,
-    forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium` }),
+    forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` }),
 } });
 const { js, until, check, sleep, shot, cdp } = t;
 // A real drag of files from outside (CDP, with their paths) onto an element of the window.
@@ -382,6 +438,35 @@ try {
   check(modLog.includes(`JAVA_HOME=${javaHome}`) && modLog.includes('task build'), 'the mod builds with gradlew and the server\'s Java (JAVA_HOME)');
   check(S(readdirSync(path.join(serverDir('modded'), 'mods'))) === S(['mymod-1.0.jar']), 'the built jar (not -sources) goes to the server\'s mods');
 
+  // ---------- the test client under Debug, HotSwap ----------
+  const dbgOut = () => js(`document.querySelector('#dbgOut')?.textContent || ''`);
+  const editAndSave = (file, text) => js(`(async () => { await ide.openFile(${S(file)}); const t = ide.findTab(${S(file)}); t.doc.model.setValue(${S(text)}); await ide.saveTab(t); return true; })()`);
+  const modSource = (body) => `package com.example.mymod;\n\npublic class Mymod {\n    public static final String MODID = "mymod";\n\n${body}}\n`;
+  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v1";\n    }\n'));
+  await js(`(${card('modded')}.querySelector('.mc-build[data-project="mymod"] .mc-client').click(), true)`);
+  await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('game: hello v1')`, 'test client running', 60000)
+    .catch(async (e) => { console.log(await dbgOut()); throw e; });
+  const clientLog = await dbgOut();
+  check(/gradlew runClient \(debug port \d+\)/.test(clientLog) && /Connected to the target VM/.test(clientLog) && /Fake Minecraft window open/.test(clientLog),
+    'Test Client runs runClient through Gradle with the debug port, and the game starts under the debugger');
+  const initScript = readFileSync(path.join(modDir, 'build', 'pyide', 'init.gradle'), 'utf8');
+  check(/tasks\.withType\(JavaExec\)\.matching \{ it\.name == 'runClient' \}/.test(initScript) && /suspend=y,address=127\.0\.0\.1:\$\{port\}/.test(initScript),
+    'the init script gives runClient\'s JVM the JDWP agent');
+  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v2";\n    }\n'));
+  await until(`/HotSwap: 1 classes reloaded/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'hotswap', 30000)
+    .catch(async (e) => { console.log(await dbgOut()); throw e; });
+  await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('game: hello v2')`, 'new code running', 10000)
+    .then(() => check(true, 'saving the mod\'s code swaps it into the running game: its output changes without a restart'), async () => check(false, `HotSwap output: ${(await dbgOut()).slice(-800)}`));
+  check(readFileSync(path.join(modDir, 'build', 'classes', 'java', 'main', 'com', 'example', 'mymod', 'Mymod.class')).includes(Buffer.from('hello v2')),
+    'the new class is also written over the build output');
+  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v2";\n    }\n\n    public static int added() {\n        return 1;\n    }\n'));
+  await until(`/cannot take this change without a restart \\(a method was added\\)/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'hotswap refused', 30000)
+    .then(() => check(true, 'a change the JVM cannot swap (a new method) says the game needs a restart'), async () => check(false, `refused HotSwap: ${(await dbgOut()).slice(-800)}`));
+  await until(`(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; return t.slice(t.lastIndexOf('without a restart')).includes('game: hello v2'); })()`, 'game after a refused swap', 5000)
+    .then(() => check(true, 'the game keeps running the last code that swapped'), async () => check(false, `after the refused swap: ${(await dbgOut()).slice(-400)}`));
+  await js(`(ide.runAction('StopDebug'), true)`);
+  await until(`!window.__debugger.state()`, 'client debug ended', 20000);
+
   await js(`(${card('modded')}.querySelector('.mc-pack').click(), true)`);
   const pack = path.join(serverDir('modded'), 'client-pack', 'modded-1.20.1.mrpack');
   await until(`ide.api.exists(${S(pack)})`, 'client pack', 20000);
@@ -426,6 +511,100 @@ try {
   await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('The modpack Test Pack'))`, 'modpack client pack', 10000)
     .then(() => check(true, 'its client pack is the modpack itself (with the client mods)'), () => check(false, 'its client pack is the modpack itself'));
   check(existsSync(path.join(packDir2, 'client-pack', 'Test Pack.mrpack')), 'the .mrpack is kept as the server\'s client pack');
+
+  // ---------- Market ----------
+  const marketCard = (id) => `document.querySelector('.mcm-card[data-id="${id}"]')`;
+  const moddedMods = () => readdirSync(path.join(serverDir('modded'), 'mods')).sort();
+  await js(`(${card('modded')}.querySelector('.mc-server-market').click(), true)`);
+  await until(`!!${marketCard('MODA')}`, 'market results', 20000);
+  check(await js(`ide.activeTab()?.path === 'minecraft:home' && ide.minecraft.screen.page() === 'market' && document.querySelectorAll('.mcm-tab').length === 4 && document.querySelector('.mcm-tab.active').dataset.type === 'mod'`)
+    && await js(`document.querySelector('#mcmServer').selectedOptions[0].textContent`) === 'modded (Forge 1.20.1)',
+  'Market on a server\'s card opens the Minecraft screen\'s Market on Mods for that server');
+  const modSearch = requests.filter((u) => u.startsWith('/modrinth/search')).pop();
+  check(/"project_type:mod"/.test(modSearch) && /"versions:1\.20\.1"/.test(modSearch) && /"categories:forge"/.test(modSearch) && /"server_side:required","server_side:optional"/.test(modSearch),
+    `mods are searched for the server's Minecraft version and loader, server-side only (${modSearch})`);
+  const cardText = await js(`${marketCard('MODA')}.textContent`);
+  check(/Mod A/.test(cardText) && /tester/.test(cardText) && /12\.3K/.test(cardText), `a result card shows the project, its author and downloads (${cardText})`);
+  await js(`(${marketCard('MODA')}.querySelector('.mcm-install').click(), true)`);
+  await until(`!!${marketCard('MODA')}?.querySelector('.mcm-installed')`, 'mod installed', 20000).catch(async (e) => { console.log(await tabText('Minecraft: Market')); throw e; });
+  const marketLog = await tabText('Minecraft: Market');
+  check(S(moddedMods()) === S(['lib-b-2.1.jar', 'mod-a-1.0.jar', 'mymod-1.0.jar']) && /Client C is client-only/.test(marketLog),
+    `Install puts the mod and its required server-side library in mods/, leaving out the client-only one and the optional one (${S(moddedMods())})`);
+  check(/Installed 1\.0/.test(await js(`${marketCard('MODA')}.textContent`)), 'the card then shows the installed version');
+  routes.set('/modrinth/project/MODA/version', modVersion('2.0'));
+  await js(`(${marketCard('MODA')}.querySelector('.mcm-update').click(), true)`);
+  await until(`/Installed 2\\.0/.test(${marketCard('MODA')}?.textContent || '')`, 'mod updated', 20000);
+  check(S(moddedMods()) === S(['lib-b-2.1.jar', 'mod-a-2.0.jar', 'mymod-1.0.jar']), `Update replaces the old version's file (${S(moddedMods())})`);
+  await js(`(${marketCard('MODA')}.querySelector('.mcm-remove').click(), true)`);
+  await until(`!!${dialogButton('Remove')}`, 'remove confirm');
+  await js(`(${dialogButton('Remove')}).click()`);
+  await until(`!!${marketCard('MODA')}?.querySelector('.mcm-install')`, 'mod removed', 10000);
+  check(S(moddedMods()) === S(['mymod-1.0.jar']) && !JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8')).market?.LIBB,
+    'Remove takes out the mod and the library nothing else needs, not the user\'s own mod');
+
+  await js(`(ide.minecraft.market.open({ type: 'plugin', server: ide.minecraft.servers().find((s) => s.name === 'survival') }), true)`);
+  await until(`!!${marketCard('BADP')}`, 'plugin results', 20000);
+  const pluginSearch = requests.filter((u) => u.startsWith('/modrinth/search')).pop();
+  check(/"project_type:plugin"/.test(pluginSearch) && /"categories:paper","categories:spigot","categories:bukkit"/.test(pluginSearch), `plugins are searched for Paper, Spigot and Bukkit (${pluginSearch})`);
+  await js(`(${marketCard('BADP')}.querySelector('.mcm-install').click(), true)`);
+  await until(`/Checksum mismatch/.test((${runTab('Minecraft: Market')})?.host.textContent || '')`, 'plugin install ended', 20000).catch(() => {});
+  check(/Checksum mismatch for bad-plugin\.jar/.test(await tabText('Minecraft: Market')) && !existsSync(path.join(serverDir('survival'), 'plugins', 'bad-plugin.jar')),
+    'a download that fails its checksum is reported and leaves nothing in plugins/');
+
+  await js(`(document.querySelector('.mcm-tab[data-type="modpack"]').click(), true)`);
+  await until(`!!${marketCard('PACK')}`, 'modpack results', 20000);
+  check(await js(`document.querySelector('#mcmServer').classList.contains('hidden') && !document.querySelector('#mcmLoader').classList.contains('hidden')`), 'the Modpacks tab filters by loader and version instead of a server');
+  await js(`(${marketCard('PACK')}.querySelector('.mcm-create').click(), true)`);
+  await until(`/Test Pack 1\\.0: Minecraft 1\\.20\\.1, Forge 47\\.9\\.9/.test(document.querySelector('#mcPackInfo')?.textContent || '')`, 'market modpack dialog', 20000)
+    .then(() => check(true, 'Create Server on a modpack downloads it from Modrinth into New Server from Modpack'), async () => check(false, `market modpack: ${await js("document.querySelector('#mcPackInfo')?.textContent")} ${await js("document.querySelector('.mc-dialog-error')?.textContent")}`));
+  await js(`(${dialogButton('Cancel')}).click()`);
+  const leftover = () => readdirSync(tmpdir()).filter((n) => /^pyide-[0-9a-f]{8}-test-pack\.mrpack$/.test(n));
+  await sleep(500);
+  check(!leftover().length, `a modpack downloaded for a cancelled dialog is deleted (${S(leftover())})`);
+
+  // ---------- the Minecraft screen, New Project ----------
+  await js(`(document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);
+  await until(`!!document.querySelector('#minecraftScreen .mc-server[data-name="survival"]') && !!document.querySelector('#minecraftScreen').offsetParent`, 'screen servers', 10000);
+  check(await js(`document.querySelectorAll('#minecraftScreen .mc-server').length === document.querySelectorAll('#minecraftTool .mc-server').length && !!document.querySelector('#minecraftScreen .mc-server[data-name="modded"] .mc-start')`),
+    'the Minecraft screen\'s Servers page lists the same servers, with their actions, as the tool window');
+  await shot('screen.png');
+  await js(`(document.querySelector('.mcs-action.mcs-new-server').click(), true)`);
+  await until(`document.querySelectorAll('#mcKind option').length === 7`, 'new server from the screen');
+  check(true, 'New Server… on the screen opens the New Server dialog');
+  await js(`(${dialogButton('Cancel')}).click()`);
+
+  const where = path.join(work, 'newprojects');
+  mkdirSync(where, { recursive: true });
+  const setValue = (sel, value) => js(`(() => { const i = document.querySelector(${S(sel)}); i.value = ${S(value)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await js(`ide.runAction('NewProject')`);
+  await until(`!!document.querySelector('.np-dialog #npName')`, 'wizard');
+  check(S(await js(`[...document.querySelectorAll('.np-type')].map((n) => n.dataset.type).filter((x) => x.startsWith('minecraft'))`)) === S(['minecraft-mod', 'minecraft-plugin', 'minecraft-server']),
+    'New Project lists Minecraft Mod, Minecraft Plugin and Minecraft Server');
+  await js(`(document.querySelector('.np-type[data-type="minecraft-plugin"]').click(), true)`);
+  await setValue('#npName', 'CoolPlugin');
+  await setValue('#npLocation', where);
+  await until(`[...document.querySelectorAll('#npMc-plugin-version option')].some((o) => o.value === '1.20.1')`, 'plugin versions');
+  check(await js(`document.querySelector('#npMc-plugin-id').value === 'CoolPlugin' && document.querySelector('#npMc-plugin-pkg').value === 'com.example.coolplugin'
+    && [...document.querySelectorAll('#npMc-plugin-kind option')].map((o) => o.value).join() === 'paper,purpur,velocity'`),
+  'the plugin form offers Paper, Purpur and Velocity and names the plugin and package after the project');
+  await shot('new-project.png');
+  await js(`(document.querySelector('#npMc-plugin-version').value = '1.20.1', true)`);
+  await js(`(document.querySelector('#npCreate').click(), true)`);
+  await until(`/accept the Minecraft EULA/.test(document.querySelector('.np-error')?.textContent || '')`, 'EULA asked', 5000)
+    .then(() => check(true, 'a Minecraft project waits for the EULA'), () => check(false, 'a Minecraft project waits for the EULA'));
+  await js(`(document.querySelector('#npMc-plugin-eula').checked = true, true)`);
+  await js(`(document.querySelector('#npCreate').click(), true)`);
+  const newDir = path.join(where, 'CoolPlugin');
+  await until(`ide.root && ide.root.toLowerCase() === ${S(newDir.toLowerCase())}`, 'new project opened', 30000);
+  await until(`!!document.querySelector('#minecraftScreen .mc-build[data-project="CoolPlugin"]')`, 'plugin project made', 60000)
+    .catch(async (e) => { console.log(await tabText('Minecraft: New Server')); throw e; });
+  const made = JSON.parse(readFileSync(path.join(newDir, 'servers', 'server', 'pyide-server.json'), 'utf8'));
+  check(made.kind === 'paper' && made.mc === '1.20.1' && existsSync(path.join(newDir, 'plugins', 'CoolPlugin', 'pyide-plugin.json'))
+    && existsSync(path.join(newDir, 'plugins', 'CoolPlugin', 'src', 'main', 'java', 'com', 'example', 'coolplugin', 'CoolPlugin.java'))
+    && /servers\/\*\/libraries\//.test(readFileSync(path.join(newDir, '.gitignore'), 'utf8')),
+  `New Project › Minecraft Plugin makes the project with a Paper server and the plugin in it (${S(made)})`);
+  check(await js(`!!ide.findTab('minecraft:home') && ide.minecraft.screen.page() === 'servers' && /CoolPlugin\.java$/.test(ide.activeTab()?.path || '')`),
+    'the new project opens on the Minecraft screen, then the plugin\'s class in front of it');
   await shot('window.png');
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);
 } catch (err) {

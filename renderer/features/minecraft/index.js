@@ -17,6 +17,9 @@
 //   mods: Client Pack makes a .mrpack that Prism Launcher or the Modrinth App imports in one step.
 // - Resource Pack: a resourcepack/ folder for textures and sounds; Send to Players zips it, serves it with a public link
 //   and names it in server.properties, so every player's game downloads it when they join.
+// - Market (market.js): Modrinth's modpacks, mods, plugins and resource packs, installed into a server in one click.
+// - The Minecraft screen (screen.js) shows the servers and the Market in an editor tab; project-types.js adds Minecraft
+//   Mod, Plugin and Server to New Project.
 (() => {
   const { el, basename, dirname } = ide.util;
   const run = ide.run;
@@ -25,7 +28,7 @@
   const REPOS = () => [['papermc', 'PaperMC'], ['central', 'Maven Central'], ['jitpack', 'JitPack'], ['codemc', 'CodeMC']];
   let kinds = [];
   let list = [];
-  let host = null;
+  const hosts = new Set(); // where the server list is shown: the tool window and the Minecraft screen
 
   // ---------- jobs: main's log lines go to the console of the job that asked ----------
   const jobs = new Map(); // job id -> console
@@ -148,6 +151,29 @@
     defaults: () => ({ dir: '', task: 'deploy' }),
     identity: (c) => `${run.resolvePath(c.dir).toLowerCase()}|${c.task}`,
     file: () => null,
+    // Debug of the test client: the game waits for PyIDE's Java debugger, breakpoints in the mod stop it, and a saved
+    // .java file of the mod is compiled and swapped into the running game (HotSwap). Other tasks just run.
+    debug(cfg) {
+      if (cfg.task !== 'runClient') return run.runConfig(cfg);
+      const dir = run.resolvePath(cfg.dir);
+      return ide.debugger.debugJvm({
+        rerun: () => run.debugConfig(cfg),
+        async launch({ con, port }) {
+          const j = job(con);
+          try {
+            const spec = await ide.api.invoke('minecraft:modTask', ide.root, dir, 'runClient', j.id, { debugPort: port });
+            con.append(`gradlew runClient (${tr('debug port {port}', { port })})\n`, 'sys');
+            const procId = await ide.api.invoke('minecraft:start', ide.root, spec);
+            hotswap = { dir, con };
+            // Gradle prepares Minecraft before the game starts: the first time, many minutes.
+            return { procId, sourceRoots: ['src\\main\\java', 'src\\client\\java'].map((r) => `${dir}\\${r}`), timeoutMs: 30 * 60000 };
+          } catch (err) {
+            con.append(`${errorText(err)}\n`, 'err');
+            return null;
+          } finally { j.done(); }
+        },
+      }).then((handle) => { handle?.ended?.then(() => { if (hotswap?.dir === dir) hotswap = null; }); return handle; });
+    },
     async start(cfg, s) {
       const con = s.console({ input: true });
       const j = job(con);
@@ -172,6 +198,44 @@
       } finally { j.done(); }
     },
   });
+
+  // ---------- HotSwap ----------
+  // While the test client runs under Debug, saving a .java file of its mod compiles it and redefines its classes in
+  // the game. The JVM swaps method bodies only: a new method or field, or a changed signature, needs a restart.
+  let hotswap = null; // {dir, con} of the mod whose client is being debugged
+  let pending = new Set();
+  let swapping = null;
+  let timer = 0;
+  ide.on('fileSaved', (tab) => {
+    const p = tab?.path;
+    if (!hotswap || !p || !/\.java$/i.test(p) || !p.toLowerCase().startsWith(`${hotswap.dir.toLowerCase()}\\`)) return;
+    pending.add(p);
+    clearTimeout(timer);
+    timer = setTimeout(swap, 300);
+  });
+  async function swap() {
+    if (swapping) { await swapping; return swap(); }
+    const files = [...pending];
+    pending = new Set();
+    if (!files.length || !hotswap) return;
+    const { dir, con } = hotswap;
+    swapping = (async () => {
+      const j = job(con);
+      const started = Date.now();
+      try {
+        con.append(`${tr('HotSwap: compiling {files}…', { files: files.map((f) => basename(f)).join(', ') })}\n`, 'sys');
+        const classes = await ide.api.invoke('minecraft:hotswapCompile', ide.root, dir, files, j.id);
+        const r = await ide.debugger.jvmRequest('redefineClasses', { classes });
+        con.append(`${tr('HotSwap: {count} classes reloaded in the game ({ms} ms)', { count: r.redefined.length, ms: Date.now() - started })}${r.redefined.length ? `: ${r.redefined.join(', ')}` : ''}\n`, 'ok');
+      } catch (err) {
+        const text = errorText(err);
+        con.append(`${/JDWP error (6\d|7\d)/.test(text) ? tr('HotSwap: the game cannot take this change without a restart ({reason}). Stop and debug the test client again.', { reason: text.replace(/^.*\(([^)]*)\)\s*$/, '$1') })
+          : tr('HotSwap failed: {error}', { error: text })}\n`, 'err');
+      } finally { j.done(); }
+    })();
+    await swapping;
+    swapping = null;
+  }
 
   // The old process saves its world and frees the port before the new one starts (a Minecraft server takes some
   // seconds to stop).
@@ -202,6 +266,7 @@
   const buildConfig = (p) => (p.type === 'plugin'
     ? config('minecraft-plugin', tr('Build {name}', { name: p.name }), { dir: rel(p.dir) })
     : config('minecraft-mod', tr('Deploy {name}', { name: p.name }), { dir: rel(p.dir), task: 'deploy' }));
+  const clientConfig = (p) => config('minecraft-mod', tr('Test client {name}', { name: p.name }), { dir: rel(p.dir), task: 'runClient' });
 
   // ---------- dialogs ----------
   function form(rows) {
@@ -326,17 +391,22 @@
       buttons: [
         { label: tr('Create'), primary: true, run: async () => {
           try {
-            const r = await ide.api.invoke('minecraft:newPlugin', { root: ide.root, name: name.value.trim(), pkg: pkg.value.trim(), server: srv.value });
-            config('minecraft-plugin', tr('Build {name}', { name: name.value.trim() }), { dir: rel(r.dir) });
-            ide.refreshTree?.();
-            await ide.openFile(r.main);
-            await refresh();
+            await createPlugin({ name: name.value.trim(), pkg: pkg.value.trim(), server: srv.value });
             return true;
           } catch (err) { f.error.textContent = errorText(err); return false; }
         } },
         { label: tr('Cancel') },
       ],
     });
+  }
+
+  async function createPlugin(opts) {
+    const r = await ide.api.invoke('minecraft:newPlugin', { root: ide.root, ...opts });
+    config('minecraft-plugin', tr('Build {name}', { name: opts.name }), { dir: rel(r.dir) });
+    ide.refreshTree?.();
+    await ide.openFile(r.main);
+    await refresh();
+    return r;
   }
 
   // Another plugin's API (LuckPerms, Vault…) from a Maven repository, for the plugin to compile against.
@@ -537,6 +607,7 @@
     let info = null;
     async function load() {
       const value = source.value.trim();
+      if (info) ide.api.invoke('minecraft:discardModpack', info.file).catch(() => {});
       info = null;
       f.error.textContent = '';
       if (!value) return;
@@ -555,12 +626,16 @@
       } finally { j?.done(); }
     }
     source.onchange = load;
+    // A modpack downloaded for this dialog is not kept when no server is made from it.
+    let created = false;
     ide.ui.dialog({
       title: tr('New Server from Modpack'), body: f.body, width: 560,
+      onClose: () => { if (!created && info) ide.api.invoke('minecraft:discardModpack', info.file).catch(() => {}); },
       buttons: [
         { label: tr('Create'), primary: true, run: () => {
           if (!info) { f.error.textContent = tr('Choose a modpack first.'); return false; }
           if (!eula.checked) { f.error.textContent = tr('A Minecraft server runs only after you accept the Minecraft EULA.'); return false; }
+          created = true;
           createFromModpack({ file: info.file, name: name.value.trim(), memory: memory.value, port: Number(port.value) || 25565 });
           return true;
         } },
@@ -659,12 +734,16 @@
   }
 
   function render() {
-    if (!host) return;
+    for (const host of hosts) renderInto(host);
+  }
+  function renderInto(host) {
     host.replaceChildren();
     const bar = el('div', 'mc-bar');
     bar.append(button(tr('New Server…'), 'mc-new', newServer), button(tr('From Modpack…'), 'mc-new-pack', () => newFromModpack(), tr('A server from a Modrinth modpack (.mrpack)')),
+      button(tr('Market'), 'mc-market', () => ide.minecraft.market.open(), tr('Modpacks, mods, plugins and resource packs from Modrinth')),
       button(tr('New Plugin…'), 'mc-new-plugin', () => newPlugin()),
       button(tr('New Mod…'), 'mc-new-mod', () => newMod()), button(tr('Refresh'), 'mc-refresh', refresh));
+    if (host.id === 'minecraftTool') bar.append(button(tr('Open Screen'), 'mc-open-screen', () => ide.minecraft.screen.show('servers'), tr('The servers and the Market in an editor tab')));
     host.append(bar);
     if (!ide.root) return host.append(el('div', 'mc-empty muted', tr('Open a project to keep Minecraft servers in it.')));
     if (!list.length) return host.append(el('div', 'mc-empty muted', tr('No servers yet. New Server creates a Paper, Purpur, Vanilla, Fabric, Forge or NeoForge server, or a Velocity proxy, in servers/.')));
@@ -687,6 +766,7 @@
       if (running && ide.ports) actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
       if (srv.plugins) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
       if (srv.mods && srv.mdk) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
+      if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
       if (srv.mods) actions.append(button(tr('Client Pack'), 'mc-pack', () => clientPack(srv), tr('The mods players need, as a .mrpack to import once')));
       if (!srv.proxy) {
         actions.append(button(tr('Resource Pack'), 'mc-rp', () => resourcePack(srv), tr('A folder for the textures, sounds and models players get')));
@@ -704,6 +784,7 @@
         n.dataset.userText = '';
         row.append(n, button(tr('Build and Deploy'), 'mc-build-run', () => run.runConfig(buildConfig(p))));
         if (p.type === 'plugin') row.append(button(tr('Add Library…'), 'mc-add-lib', () => addLibrary(p)));
+        else row.append(button(tr('Test Client'), 'mc-client', () => run.debugConfig(clientConfig(p)), tr('Starts Minecraft with the mod under the debugger: saving a change to its code reloads it in the running game')));
         builds.append(row);
       }
       card.append(head, actions, el('div', 'mc-server-note muted', info), builds);
@@ -723,7 +804,7 @@
       container.id = 'minecraftTool';
       container.classList.add('mc-tool');
       acceptDrops(container);
-      host = container;
+      hosts.add(container);
       refresh();
     },
   });
@@ -736,5 +817,16 @@
   ide.registerAction({ id: 'Minecraft.NewPlugin', title: tr('New Minecraft Plugin…'), needsProject: true, run: () => newPlugin() });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.registerAction({ id: 'Minecraft.NewMod', title: tr('New Minecraft Mod…'), needsProject: true, run: () => newMod() });
-  ide.minecraft = { refresh, servers: () => list, newServer, createServer, createMod, newFromModpack, createFromModpack, dropped, clientPack, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw };
+  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
+    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning,
+    // Shows the server list (with drops) in another container too: the Minecraft screen's Servers page.
+    addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };
+
+  const here = document.currentScript.src.replace(/[^/]*$/, '');
+  for (const file of ['market.js', 'screen.js', 'project-types.js']) {
+    const script = el('script');
+    script.src = `${here}${file}`;
+    script.async = false;
+    document.body.appendChild(script);
+  }
 })();

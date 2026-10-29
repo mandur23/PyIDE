@@ -1,0 +1,7 @@
+{
+  "Emmet": "Emmet",
+  "Emmet abbreviations, as in PyCharm and VS Code: type ul>li*3, div#main.box or table>tr*2>td*2 in HTML (or markup in .jsx and .tsx files), or m10, d:f or c#f in CSS, SCSS and Less, and press Tab or pick the abbreviation from the completion list.": "PyCharm과 VS Code처럼 Emmet 약어를 지원합니다. HTML(또는 .jsx와 .tsx 파일의 마크업)에서 ul>li*3, div#main.box, table>tr*2>td*2를, CSS, SCSS, Less에서 m10, d:f, c#f를 입력한 뒤 Tab을 누르거나 완성 목록에서 약어를 고르세요.",
+  "Emmet abbreviation": "Emmet 약어",
+  "Expand Emmet abbreviations with Tab": "Tab으로 Emmet 약어 펼치기",
+  "In HTML, CSS, SCSS and Less files, and for markup in .jsx and .tsx files: ul>li*3 followed by Tab writes a list with three items, m10 writes margin: 10px;.": "HTML, CSS, SCSS, Less 파일과 .jsx, .tsx 파일의 마크업에서 사용합니다. ul>li*3 뒤에 Tab을 누르면 항목이 세 개인 목록을, m10은 margin: 10px;을 씁니다."
+}

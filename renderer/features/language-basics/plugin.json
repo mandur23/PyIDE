@@ -1,0 +1,8 @@
+{
+  "id": "language-basics",
+  "name": "Language Basics",
+  "version": "1.0.0",
+  "vendor": "PyIDE",
+  "description": "Keyword and word completion for languages without a language server (C, C++, Go, Rust, Kotlin, C#, SQL, shell and more, and Java until its server runs), Markdown folding by headings and list continuation on Enter, Enter indentation for Lua and shell scripts, and JSX in .jsx and .tsx files.",
+  "detached": true
+}

@@ -36,6 +36,8 @@ const S = JSON.stringify;
 const text = () => js('ide.editor.getModel().getValue()');
 const line = (n) => js(`ide.editor.getModel().getLineContent(${n})`);
 const disk = (rel) => readFileSync(path.join(t.project, rel), 'utf8');
+// The tab size a file gets after the tab size is set to 2: its own 4-space indentation, else the setting.
+const indentOf = (text) => (/^ {4}\S/m.test(text) ? 4 : 2);
 
 // The Settings category list scrolls in a small window (more plugin pages since 0.2.4: Code Vision, Color Scheme,
 // Smart Keys, …), so a row is brought into view before it is clicked, as verify/settings.mjs does.
@@ -179,7 +181,11 @@ try {
   check(await js(`ide.editor.getOption(${E}.fontSize) === 18 && ide.editor.getOption(${E}.lineHeight) === 29`), 'Apply sets font size 18 and line height live');
   check(await js(`ide.editor.getOption(${E}.renderWhitespace) === 'all' && ide.editor.getOption(${E}.wordWrap) === 'on'`), 'show whitespace and soft wrap applied');
   check(await js(`JSON.stringify(ide.editor.getOption(${E}.rulers).map(r => r.column)) === '[100]'`), 'ruler column applied');
-  check(await js(`ide.tabs.filter(t => t.kind === 'file').every(t => t.model.getOptions().tabSize === 2)`), 'tab size applied to open files');
+  // Detect and use existing file indents (on by default): a file without indented lines takes the tab size, an indented
+  // one keeps its width.
+  const tabSizes = await js(`JSON.stringify(Object.fromEntries(ide.tabs.filter(t => t.kind === 'file').map(t => [ide.util.basename(t.path), t.model.getOptions().tabSize])))`);
+  const sizes = JSON.parse(tabSizes);
+  check(Object.entries(sizes).every(([f, n]) => n === indentOf(disk(f))) && Object.values(sizes).includes(2), `tab size applied to open files without indented lines, detected in the others (${tabSizes})`);
   check(await settingsOpen(), 'Apply keeps the dialog open');
 
   // ---------- Settings: Tools ----------
@@ -221,7 +227,7 @@ try {
   await sleep(1500);
   await until('window.__ideReady === true', 'IDE ready after reload', 30000);
   await openFile(t, 'messy.py');
-  check(await js(`document.documentElement.dataset.theme === 'light' && ide.editor.getOption(${E}.fontSize) === 18 && ide.editor.getModel().getOptions().tabSize === 2 && ide.editor.getOption(${E}.wordWrap) === 'on'`), 'settings re-applied at startup after restart');
+  check(await js(`document.documentElement.dataset.theme === 'light' && ide.editor.getOption(${E}.fontSize) === 18 && ide.editor.getModel().getOptions().tabSize === ${indentOf(disk('messy.py'))} && ide.editor.getOption(${E}.wordWrap) === 'on'`), 'settings re-applied at startup after restart');
 
   // ---------- Python Interpreter: create venv ----------
   await press('Ctrl+Alt+Shift+S');

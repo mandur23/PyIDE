@@ -1,0 +1,4 @@
+{
+  "Language Basics": "언어 기본 기능",
+  "Keyword and word completion for languages without a language server (C, C++, Go, Rust, Kotlin, C#, SQL, shell and more, and Java until its server runs), Markdown folding by headings and list continuation on Enter, Enter indentation for Lua and shell scripts, and JSX in .jsx and .tsx files.": "언어 서버가 없는 언어(C, C++, Go, Rust, Kotlin, C#, SQL, 셸 등, 그리고 서버가 실행되기 전의 Java)의 키워드·단어 자동 완성, 제목 단위 Markdown 접기와 Enter로 목록 이어 쓰기, Lua와 셸 스크립트의 Enter 들여쓰기, .jsx와 .tsx 파일의 JSX 지원을 제공합니다."
+}

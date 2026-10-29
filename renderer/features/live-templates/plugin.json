@@ -3,5 +3,5 @@
   "name": "Live Templates",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "PyCharm-style live templates and postfix completion for Python: abbreviations that expand with Tab, Surround With (Ctrl+Alt+J), and templates such as .if, .for and .print after an expression."
+  "description": "PyCharm-style live templates and postfix completion for Python, Java, JavaScript/TypeScript and C/C++: abbreviations that expand with Tab (main, sout, fori, log…), Surround With (Ctrl+Alt+J), and templates such as .if, .for and .print after an expression."
 }

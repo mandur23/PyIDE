@@ -1,6 +1,6 @@
 // Query console completions: schema-aware SQL with signature help, the MongoDB shell, and Redis commands and keys.
-// Providers register per Monaco language but answer only for console models (completionHost.consoleFor), never for
-// project files. Schema data is the tree the Database tool window loads (one cache, refreshed after DDL); a kind adds
+// Providers register per Monaco language but answer only for console models and project SQL files with an attached
+// data source (completionHost.consoleFor; sql-files.js), never for other project files. Schema data is the tree the Database tool window loads (one cache, refreshed after DDL); a kind adds
 // its own keywords, functions and data types through ui.completion, merged over the ANSI defaults below.
 (() => {
   const monaco = ide.monaco;
@@ -123,7 +123,8 @@
     const rest = clean.text.slice(0, clean.text.length - word.length);
     const range = rangeFor(position, word);
     const quote = c.driver.quote || '"';
-    const implicit = c.driver.implicitSchemas || [];
+    // A SQL file's attached schema counts as the default one: its tables go in unqualified and resolve first.
+    const implicit = [...(c.schema ? [c.schema] : []), ...(c.driver.implicitSchemas || [])];
     const ident = (n) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !RESERVED.has(n.toUpperCase()) ? n : `${quote}${n.split(quote).join(quote + quote)}${quote}`);
     const tree = await host.tree(c.id);
     // The word being typed right after a table name is not its alias yet (FROM users WH|).

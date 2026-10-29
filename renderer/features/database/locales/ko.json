@@ -258,5 +258,18 @@
   "Run the statement again to export all rows?": "모든 행을 내보내려면 문을 다시 실행할까요?",
   "The statement may change data, so it is not run again without asking. Export Shown Rows writes the {n} rows the result shows.": "이 문은 데이터를 변경할 수 있어 묻지 않고 다시 실행하지 않습니다. 표시된 행 내보내기는 결과에 표시된 {n}개 행을 기록합니다.",
   "Export Shown Rows": "표시된 행 내보내기",
-  "Run and Export": "실행 후 내보내기"
+  "Run and Export": "실행 후 내보내기",
+  "Choose a schema of {name}": "{name}의 스키마 선택",
+  "Default schema": "기본 스키마",
+  "Open a SQL file of the project to attach a data source to it.": "데이터 소스를 연결할 프로젝트의 SQL 파일을 여세요.",
+  "Data source for {name}": "{name}의 데이터 소스",
+  "<No data source>": "<데이터 소스 없음>",
+  "New Data Source…": "새 데이터 소스…",
+  "Data source of this SQL file": "이 SQL 파일의 데이터 소스",
+  "Statements run from SQL files show their results here. {action} runs the statement at the caret, or the selection.": "SQL 파일에서 실행한 문의 결과가 여기에 표시됩니다. {action}: 캐럿 위치의 문 또는 선택 영역을 실행합니다.",
+  "Query Results": "쿼리 결과",
+  "This project is open in Safe Mode. Run the statements below from {file} on {source}?": "이 프로젝트는 안전 모드로 열려 있습니다. {file}의 아래 문을 {source}에서 실행할까요?",
+  "Run Statements from an Untrusted Project?": "신뢰하지 않는 프로젝트의 문을 실행할까요?",
+  "Attach Data Source…": "데이터 소스 연결…",
+  "Database: Attach Data Source…": "데이터베이스: 데이터 소스 연결…"
 }

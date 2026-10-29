@@ -127,7 +127,7 @@ try {
   const boxes = await js(`['editor.htmlCloseTag', 'editor.htmlCloseOnSlash', 'editor.autoFString'].map(k => document.querySelector('.settings-page input[data-key="' + k + '"]')?.checked)`);
   check(J(boxes) === J([true, true, true]), `HTML options on by default, next to the f-string option (${J(boxes)})`);
   const legend = await js(`[...document.querySelectorAll('.settings-page legend')].map(n => n.textContent)`);
-  check(legend.includes('HTML'), `an HTML section (${J(legend)})`);
+  check(legend.includes('HTML and XML'), `an HTML and XML section (${J(legend)})`);
   await press('Escape');
 
   // ---------- other files ----------

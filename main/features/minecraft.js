@@ -15,7 +15,8 @@ const { createToolchains, installRoot } = require('../installer/toolchains');
 const { KINDS, javaFor, temurin, HEADERS } = require('../minecraft/sources');
 const { writeZip, readEntry } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
-const { createImports } = require('../minecraft/imports');
+const { createImports, discardDownload } = require('../minecraft/imports');
+const market = require('../minecraft/market');
 
 const SERVER = 'pyide-server.json';
 const PLUGIN = 'pyide-plugin.json';
@@ -385,14 +386,93 @@ async function newMod({ root, id, display, pkg, server }, log) {
 }
 
 // gradlew with the JDK of the server's Java version (Forge's Gradle plugin refuses another).
-async function modTask(dir, task, log) {
+// Debug of the test client: an init script makes runClient's JVM wait for the debugger on the port given (Fabric's
+// Loom, ForgeGradle and NeoForge's ModDevGradle all run the game as a JavaExec task of that name), and pyideClasspath
+// writes each source set's sources, class path and output, which HotSwap compiles a saved file against.
+const HOTSWAP_DIR = 'build/pyide';
+const INIT_SCRIPT = `// Written by PyIDE for Debug of the test client.
+allprojects {
+  def port = findProperty('pyide.debugPort')
+  if (port) {
+    tasks.withType(JavaExec).matching { it.name == 'runClient' }.configureEach {
+      jvmArgs "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:\${port}"
+    }
+  }
+  def out = findProperty('pyide.classpathFile')
+  if (out) {
+    tasks.register('pyideClasspath') {
+      doLast {
+        def sets = project.extensions.findByName('sourceSets')
+        def data = (sets == null ? [] : sets.findAll { it.name != 'test' }).collect { s ->
+          [name: s.name, sources: s.java.srcDirs*.absolutePath, classpath: s.compileClasspath.files*.absolutePath,
+           output: s.java.destinationDirectory.get().asFile.absolutePath]
+        }
+        new File(project.rootDir, out).text = groovy.json.JsonOutput.toJson(data)
+      }
+    }
+  }
+}
+`;
+
+function modContext(dir) {
   const meta = readJson(path.join(dir, MOD));
   if (!meta) throw fail(`No ${MOD} in ${dir}`);
   const desc = readJson(path.join(path.resolve(dir, meta.server), SERVER));
   if (!desc) throw fail('The mod\'s server is gone');
+  return { meta, desc };
+}
+
+// opts.debugPort: runClient waits for the debugger there.
+async function modTask(dir, task, log, opts = {}) {
+  const { desc } = modContext(dir);
   const home = await ensureJava(desc.java, { jdk: true, log });
+  const debug = [];
+  if (opts.debugPort) {
+    fs.mkdirSync(path.join(dir, HOTSWAP_DIR), { recursive: true });
+    fs.writeFileSync(path.join(dir, HOTSWAP_DIR, 'init.gradle'), INIT_SCRIPT);
+    fs.rmSync(path.join(dir, HOTSWAP_DIR, 'classpath.json'), { force: true });
+    debug.push('--no-configuration-cache', '-I', `${HOTSWAP_DIR}/init.gradle`, `-Ppyide.debugPort=${Number(opts.debugPort)}`,
+      `-Ppyide.classpathFile=${HOTSWAP_DIR}/classpath.json`, 'pyideClasspath');
+  }
   // .\ because cmd finds a program in the current folder only that way when NoDefaultCurrentDirectoryInExePath is set.
-  return { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/c', '.\\gradlew.bat', '--console=plain', task], cwd: dir, env: { JAVA_HOME: home } };
+  return { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/c', '.\\gradlew.bat', '--console=plain', ...debug, task], cwd: dir, env: { JAVA_HOME: home } };
+}
+
+// HotSwap: the saved .java files compiled with javac against their source set's class path (written when Debug
+// started), the classes written over the source set's output (so a class the game has not loaded yet, or a restart,
+// has them too) -> [{name, file}] for the debugger to redefine.
+async function hotswapCompile(dir, files, log) {
+  const { desc } = modContext(dir);
+  const sets = readJson(path.join(dir, HOTSWAP_DIR, 'classpath.json'));
+  if (!sets) throw fail('The test client was not started with Debug, or Gradle has not written its class path yet');
+  const under = (file, d) => path.resolve(file).toLowerCase().startsWith(path.resolve(d).toLowerCase() + path.sep);
+  const groups = new Map(); // source set -> files
+  for (const f of files) {
+    const set = sets.find((s) => s.sources.some((d) => under(f, d)));
+    if (set) groups.set(set, [...(groups.get(set) || []), f]);
+  }
+  if (!groups.size) return [];
+  const home = await ensureJavac(desc.java, log);
+  const classes = [];
+  for (const [set, list] of groups) {
+    const tmp = fs.mkdtempSync(path.join(dir, HOTSWAP_DIR, 'javac-'));
+    try {
+      const outputs = sets.map((s) => s.output);
+      const q = (s) => `"${s.replace(/\\/g, '/')}"`;
+      const argfile = path.join(tmp, 'args.txt');
+      fs.writeFileSync(argfile, [`--release ${desc.java}`, '-encoding UTF-8', '-proc:none', '-g', '-implicit:none', `-d ${q(path.join(tmp, 'out'))}`,
+        `-cp ${q([...outputs, ...set.classpath].join(path.delimiter))}`, ...list.map(q)].join('\n'));
+      await run(path.join(home, 'bin', 'javac.exe'), [`@${argfile}`], { cwd: dir }, log);
+      for (const f of filesUnder(path.join(tmp, 'out'), (n) => n.endsWith('.class'))) {
+        const rel = path.relative(path.join(tmp, 'out'), f);
+        const dest = path.join(set.output, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(f, dest);
+        classes.push({ name: rel.replace(/\.class$/, '').split(path.sep).join('.'), file: dest });
+      }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  return classes;
 }
 
 // The built jar (not -sources, -dev, -slim or -javadoc) into the server's mods folder.
@@ -476,6 +556,8 @@ function applyResourcePack(dir, url, sha1) {
   return { props };
 }
 
+const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile });
+
 const imports = (root) => createImports({ root, servers: () => servers(root), create, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
@@ -503,7 +585,8 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:buildPlugin', (_e, root, dir, job) => { guard(root); return buildPlugin(dir, logTo(job)); });
   ipcMain.handle('minecraft:addDependency', (_e, root, opts, job) => { guard(root); return addDependency(opts, logTo(job)); });
   ipcMain.handle('minecraft:newMod', (_e, opts, job) => { guard(opts?.root); return newMod(opts, logTo(job)); });
-  ipcMain.handle('minecraft:modTask', (_e, root, dir, task, job) => { guard(root); return modTask(dir, task, logTo(job)); });
+  ipcMain.handle('minecraft:modTask', (_e, root, dir, task, job, opts) => { guard(root); return modTask(dir, task, logTo(job), opts); });
+  ipcMain.handle('minecraft:hotswapCompile', (_e, root, dir, files, job) => { guard(root); return hotswapCompile(dir, files, logTo(job)); });
   ipcMain.handle('minecraft:deployMod', (_e, root, dir) => { guard(root); return deployMod(dir); });
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
   ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { guard(root); return newResourcePack(dir); });
@@ -518,6 +601,12 @@ exports.register = ({ ipcMain, send, startProcess }) => {
     delete info.index;
     return info;
   });
+  ipcMain.handle('minecraft:discardModpack', (_e, file) => { discardDownload(file); return true; });
   ipcMain.handle('minecraft:createFromModpack', (_e, opts, job) => { guard(opts?.root); return imports(opts.root).createFromModpack(opts, logTo(job)); });
+  // The Market (Modrinth): a search for a type of project ({type, query, sort, offset, serverDir | loader, mc}), and a
+  // project installed on, or removed from, a server.
+  ipcMain.handle('minecraft:marketSearch', (_e, opts) => market.search({ ...opts, server: opts.serverDir ? serverOf(opts.serverDir) : null }));
+  ipcMain.handle('minecraft:marketInstall', (_e, root, dir, project, job) => { guard(root); return shop.install(dir, project, logTo(job)); });
+  ipcMain.handle('minecraft:marketRemove', (_e, root, dir, id) => { guard(root); return shop.remove(dir, id); });
   ipcMain.handle('minecraft:applyResourcePack', (_e, root, dir, url, sha1) => { guard(root); return applyResourcePack(dir, url, sha1); });
 };

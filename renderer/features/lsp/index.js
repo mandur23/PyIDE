@@ -246,7 +246,7 @@
       doc.pending = false;
       doc.changes = [];
       doc.opened = gen;
-      notify('textDocument/didOpen', { textDocument: { uri: doc.uri, languageId: spec.language, version: doc.model.getVersionId(), text: doc.model.getValue() } });
+      notify('textDocument/didOpen', { textDocument: { uri: doc.uri, languageId: Array.isArray(spec.language) ? doc.model.getLanguageId() : spec.language, version: doc.model.getVersionId(), text: doc.model.getValue() } });
     }
 
     function flush(doc) {

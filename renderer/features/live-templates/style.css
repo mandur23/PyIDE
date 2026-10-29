@@ -2,6 +2,7 @@
 .lt-page { display: flex; flex-direction: column; gap: 6px; }
 .lt-toolbar { display: flex; gap: 4px; }
 .lt-toolbar button { min-width: 28px; padding: 2px 8px; }
+.lt-toolbar .lt-lang { margin-right: 8px; min-width: 180px; }
 .lt-list { border: 1px solid var(--gray3); border-radius: 4px; max-height: 210px; overflow-y: auto; background: var(--gray1); }
 .lt-row { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; cursor: default; white-space: nowrap; }
 .lt-row:hover { background: var(--gray2); }

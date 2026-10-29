@@ -135,16 +135,16 @@ try {
   await until(`!document.getElementById('keymapCaptureDialog')`, 'capture dialog closed (two strokes)');
   check(await h.rowKeys('EditorDuplicate') === 'Ctrl+Alt+Shift+Y, D', 'the row shows the two-stroke shortcut as "Ctrl+Alt+Shift+Y, D"');
 
-  // ---------- editor action: Comment with Line Comment (Ctrl+/ -> Ctrl+Shift+/) ----------
+  // ---------- editor action: Comment with Line Comment (Ctrl+/ -> Ctrl+Alt+Shift+/; Ctrl+Shift+/ is Block Comment) ----------
   await h.select('CommentByLineComment');
   await h.clickJs('#keymapRemove');
-  await h.capture('Ctrl+Shift+/');
+  await h.capture('Ctrl+Alt+Shift+/');
   await h.captureOk();
   await until(`!document.getElementById('keymapCaptureDialog')`, 'capture dialog closed (comment)');
-  check(await h.rowKeys('CommentByLineComment') === 'Ctrl+Shift+/', 'Comment with Line Comment is now Ctrl+Shift+/');
+  check(await h.rowKeys('CommentByLineComment') === 'Ctrl+Alt+Shift+/', 'Comment with Line Comment is now Ctrl+Alt+Shift+/');
   await h.closeSettings();
   check(S(await js(`ide.settings.get('keymap.overrides')`)) === S({
-    ActivateProjectToolWindow: ['Ctrl+Alt+Shift+1'], EditorDeleteLine: ['Ctrl+D'], EditorDuplicate: ['Ctrl+Alt+Shift+Y D'], CommentByLineComment: ['Ctrl+Shift+/'],
+    ActivateProjectToolWindow: ['Ctrl+Alt+Shift+1'], EditorDeleteLine: ['Ctrl+D'], EditorDuplicate: ['Ctrl+Alt+Shift+Y D'], CommentByLineComment: ['Ctrl+Alt+Shift+/'],
   }), `OK stores the overrides (${S(await js(`ide.settings.get('keymap.overrides')`))})`);
 
   // ---------- the new keys run the actions, the old ones do not ----------
@@ -220,17 +220,17 @@ try {
   const line1 = (await h.lines())[0];
   await press('Ctrl+/');
   check((await h.lines())[0] === line1, 'Ctrl+/ no longer comments in the editor');
-  await press('Ctrl+Shift+/');
-  check((await h.lines())[0] !== line1 && (await h.lines())[0].replace(/^#\s?/, '') === line1.replace(/^#\s?/, ''), 'Ctrl+Shift+/ toggles the line comment');
-  await press('Ctrl+Shift+/');
+  await press('Ctrl+Alt+Shift+/');
+  check((await h.lines())[0] !== line1 && (await h.lines())[0].replace(/^#\s?/, '') === line1.replace(/^#\s?/, ''), 'Ctrl+Alt+Shift+/ toggles the line comment');
+  await press('Ctrl+Alt+Shift+/');
   check((await h.lines())[0] === line1, 'and toggles it back');
 
   // Monaco itself: an embedded editor follows the keymap through Monaco keybindings.
   await h.embedded();
   await press('Ctrl+/');
   check(await h.embeddedLine() === 'a = 1', "Monaco's own Ctrl+/ is gone in an embedded editor");
-  await press('Ctrl+Shift+/');
-  check(/^#\s?a = 1$/.test(await h.embeddedLine()), 'Ctrl+Shift+/ comments in an embedded editor (Monaco keybinding)');
+  await press('Ctrl+Alt+Shift+/');
+  check(/^#\s?a = 1$/.test(await h.embeddedLine()), 'Ctrl+Alt+Shift+/ comments in an embedded editor (Monaco keybinding)');
   await h.disposeEmbedded();
 
   // ---------- tooltips, Find Action, main menu ----------
@@ -276,8 +276,8 @@ try {
   await hb.embedded();
   await b.press('Ctrl+/');
   check(await hb.embeddedLine() === 'a = 1', "after a restart Monaco's Ctrl+/ stays removed");
-  await b.press('Ctrl+Shift+/');
-  check(/^#\s?a = 1$/.test(await hb.embeddedLine()), 'after a restart Ctrl+Shift+/ comments through Monaco');
+  await b.press('Ctrl+Alt+Shift+/');
+  check(/^#\s?a = 1$/.test(await hb.embeddedLine()), 'after a restart Ctrl+Alt+Shift+/ comments through Monaco');
   await hb.disposeEmbedded();
 
   // ---------- malformed values and late registrations ----------

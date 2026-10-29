@@ -2,6 +2,7 @@
 // do: writing a zip (a client pack, a resource pack) and reading one entry of a large jar (version.json from a
 // Minecraft server jar) without unpacking it.
 const fs = require('fs');
+const path = require('path');
 const zlib = require('zlib');
 
 const CRC = new Int32Array(256).map((_v, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
@@ -85,4 +86,18 @@ function readEntry(file, name) {
   }
 }
 
-module.exports = { writeZip, readEntry, openZip };
+// Every file of a zip written under dest (a resource pack); an entry naming a path outside dest is skipped.
+function unpackZip(file, dest) {
+  const zip = openZip(file);
+  const top = path.resolve(dest);
+  try {
+    for (const n of zip.names.filter((x) => !x.endsWith('/'))) {
+      const out = path.resolve(top, n);
+      if (!out.startsWith(top + path.sep)) continue;
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, zip.read(n));
+    }
+  } finally { zip.close(); }
+}
+
+module.exports = { writeZip, readEntry, openZip, unpackZip };

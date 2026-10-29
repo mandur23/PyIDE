@@ -538,7 +538,12 @@ exports.register = (ctx) => {
     const { group } = s;
     if (command === 'setBreakpoints' && args?.source?.path) group.bps.set(args.source.path.toLowerCase(), args);
     else if (command === 'setExceptionBreakpoints') group.exceptions = args;
-    else return s.dap.request(command, args);
+    else if (command === 'redefineClasses') {
+      return s.dap.request(command, args).then(async (r) => {
+        for (const bp of group.bps.values()) await s.dap.request('setBreakpoints', bp).catch(() => {});
+        return r;
+      });
+    } else return s.dap.request(command, args);
     for (const m of group.members) if (m !== id) sessions.get(m)?.dap.request(command, args).catch(() => {});
     return s.dap.request(command, args);
   });

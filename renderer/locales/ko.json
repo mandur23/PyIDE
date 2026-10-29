@@ -48,6 +48,7 @@
   "Duplicate Line": "줄 복제",
   "Delete Line": "줄 삭제",
   "Comment with Line Comment": "줄 주석으로 주석 처리",
+  "Comment with Block Comment": "블록 주석으로 주석 처리",
   "Go to Line…": "줄로 이동…",
   "Find": "찾기",
   "Replace": "바꾸기",

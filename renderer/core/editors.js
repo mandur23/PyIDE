@@ -11,7 +11,17 @@
     yaml: 'yaml', toml: 'ini', cfg: 'ini', ini: 'ini', xml: 'xml', sh: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell',
     sql: 'sql', txt: 'plaintext', log: 'plaintext', java: 'java', kt: 'kotlin', lua: 'lua', luau: 'lua', cs: 'csharp',
     c: 'c', cpp: 'cpp', h: 'cpp', go: 'go', rs: 'rust', jsp: 'html', fxml: 'xml', dockerfile: 'dockerfile' };
-  const languageFor = (p) => LANG_BY_EXT[p.split('.').pop().toLowerCase()] || 'plaintext';
+  // A file the table does not name takes the language Monaco registers for its file name or extension (.tsx, .jsx,
+  // .hpp, .cc, .scss, .less, .rb, .php, .svg…).
+  function languageFor(p) {
+    const name = basename(p).toLowerCase();
+    const ext = name.split('.').pop();
+    if (LANG_BY_EXT[ext]) return LANG_BY_EXT[ext];
+    const langs = ide.monaco?.languages.getLanguages() || [];
+    const hit = langs.find((l) => l.filenames?.some((f) => f.toLowerCase() === name))
+      || (name.includes('.') && langs.find((l) => l.extensions?.some((e) => e.toLowerCase() === `.${ext}`)));
+    return hit?.id || 'plaintext';
+  }
 
   const docs = new Map(); // path key -> {path, model, savedVersion, encoding}
   const groups = [];

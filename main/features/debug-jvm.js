@@ -17,7 +17,7 @@ const HANDSHAKE = Buffer.from('JDWP-Handshake', 'ascii');
 const REPLY = 0x80;
 const CMD = {
   VM: 1, VM_CLASSES_BY_SIGNATURE: 2, VM_ALL_CLASSES: 3, VM_ALL_THREADS: 4, VM_DISPOSE: 6, VM_ID_SIZES: 7, VM_SUSPEND: 8,
-  VM_RESUME: 9, VM_EXIT: 10, VM_CREATE_STRING: 11,
+  VM_RESUME: 9, VM_EXIT: 10, VM_CREATE_STRING: 11, VM_REDEFINE_CLASSES: 18,
 };
 const SET = { VM: 1, REF: 2, CLASS: 3, IFACE: 5, METHOD: 6, OBJECT: 9, STRING: 10, THREAD: 11, ARRAY: 13, EVENT_REQUEST: 15, FRAME: 16, EVENT: 64 };
 const EVENT = { SINGLE_STEP: 1, BREAKPOINT: 2, EXCEPTION: 4, THREAD_START: 6, THREAD_DEATH: 7, CLASS_PREPARE: 8, CLASS_UNLOAD: 9,
@@ -29,7 +29,11 @@ const INVOKE_SINGLE_THREADED = 1;
 const ACC_STATIC = 0x0008;
 const ERRORS = { 10: 'invalid thread', 13: 'thread not suspended', 20: 'object was collected', 21: 'invalid class', 23: 'invalid method',
   30: 'invalid frame', 32: 'opaque frame', 34: 'type mismatch', 35: 'invalid slot', 99: 'not implemented', 101: 'absent information',
-  112: 'the VM is dead' };
+  112: 'the VM is dead',
+  // RedefineClasses: the JVM replaces method bodies only; anything else needs a restart.
+  60: 'invalid class file', 62: 'the new class fails verification', 63: 'a method was added', 64: 'a field was added or removed',
+  66: 'the class hierarchy changed', 67: 'a method was removed', 68: 'the class file version is not supported', 69: 'the class name does not match',
+  70: 'the class modifiers changed', 71: 'method modifiers changed', 72: 'class attributes changed' };
 const STEP_FILTERS = ['java.*', 'javax.*', 'jdk.*', 'sun.*', 'com.sun.*'];
 const SIZE = { B: 1, Z: 1, C: 2, S: 2, I: 4, F: 4, J: 8, D: 8, V: 0 };
 
@@ -391,6 +395,30 @@ class JvmSession {
 
   dap_setBreakpoints(args) { return this.setBreakpoints(args); }
   dap_setExceptionBreakpoints() { return {}; }
+
+  // HotSwap: classes: [{name: 'pkg.Outer$Inner', file: the new .class}]. The loaded ones are redefined together (a
+  // class not loaded yet is read from its class path when the program first uses it) -> {redefined, notLoaded}.
+  // Redefinition drops the classes' breakpoints, so the caller sets them again; the line tables are read anew.
+  async dap_redefineClasses({ classes = [] }) {
+    const loaded = [];
+    const notLoaded = [];
+    for (const c of classes) {
+      const sig = `L${c.name.replace(/\./g, '/')};`;
+      const r = await this.cmd(SET.VM, CMD.VM_CLASSES_BY_SIGNATURE, (w) => w.str(sig));
+      const n = r.int();
+      if (!n) { notLoaded.push(c.name); continue; }
+      const tag = r.byte();
+      loaded.push({ ...c, id: r.ref(), tag, sig, bytes: fs.readFileSync(c.file) });
+    }
+    if (loaded.length) {
+      await this.cmd(SET.VM, CMD.VM_REDEFINE_CLASSES, (w) => {
+        w.int(loaded.length);
+        for (const c of loaded) w.ref(c.id).int(c.bytes.length).raw(c.bytes);
+      });
+      for (const c of loaded) this.types.set(c.id, { id: c.id, tag: c.tag, sig: c.sig });
+    }
+    return { redefined: loaded.map((c) => c.name), notLoaded };
+  }
 
   // Stop ends a launched program; a JVM debugged by attaching keeps running (IntelliJ's Detach).
   async dap_disconnect({ terminateDebuggee }) {

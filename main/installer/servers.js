@@ -153,7 +153,7 @@ async function download(url, dest, { sha256, size, signal, progress, log }) {
       if (!out.write(chunk)) await once(out, 'drain');
       progress(got / total);
       const pct = Math.floor((got / total) * 10);
-      if (pct !== shown) { shown = pct; log(`  ${Math.round(got / 1048576)} / ${Math.round(total / 1048576)} MB\n`); }
+      if (pct !== shown) { shown = pct; log(`  ${Math.round(got / 1048576)}${total ? ` / ${Math.round(total / 1048576)}` : ''} MB\n`); }
     }
     await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
   } catch (err) {

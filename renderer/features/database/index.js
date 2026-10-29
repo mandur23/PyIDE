@@ -34,6 +34,7 @@
     sources = await invoke('db:list');
     for (const id of [...schemas.keys()]) if (!sourceOf(id)) { schemas.delete(id); forgetLazy(id); }
     renderTree();
+    ide.emit('dataSourcesChanged');
   }
 
   ide.api.on('db:state', ({ id, state, message }) => {
@@ -649,6 +650,7 @@
           if (c) ide.closeTabObject(c.tab, true);
           await invoke('db:remove', s.id);
           forgetConsole(s.id);
+          ide.database.sqlFiles?.sourceRemoved(s.id);
           if (selectedKey && JSON.parse(selectedKey)[0] === s.id) selectedKey = null;
           await reloadSources();
         } },
@@ -827,20 +829,28 @@
     queueMicrotask(() => { if (ide.root === root) forgetConsole(id); });
   }
 
-  function mountConsole(host, tab, id, text) {
-    const monaco = ide.monaco;
-    const mode = () => uiOf(sourceOf(id)?.kind).statementSeparator;
-    host.classList.add('db-console');
-    host.dataset.source = id;
-    const bar = el('div', 'db-console-bar');
-    const runBtn = el('button', 'db-run');
-    runBtn.append(ide.icon('runRun', '▶'));
-    ide.keymap.tooltip(runBtn, tr('Execute'), 'Database.RunStatement');
-    const sourceLabel = userEl('span', 'db-console-source');
-    const stateEl = el('span', 'db-console-state');
-    bar.append(runBtn, sourceLabel, stateEl);
-    const editorHost = el('div', 'db-console-editor');
-    const splitter = el('div', 'db-console-split');
+  // The part of an editor's text Execute runs: the selection, else the statement at the caret ({from, to, text} or null).
+  function partToRun(editor, mode) {
+    const model = editor.getModel();
+    const sel = editor.getSelection();
+    if (sel && !sel.isEmpty()) {
+      const base = model.getOffsetAt(sel.getStartPosition());
+      return { from: base, to: model.getOffsetAt(sel.getEndPosition()), text: model.getValueInRange(sel) };
+    }
+    return statementAt(model.getValue(), model.getOffsetAt(editor.getPosition()), mode);
+  }
+  // Briefly marks the text that runs.
+  function flashRange(editor, from, to) {
+    const model = editor.getModel();
+    const marks = editor.createDecorationsCollection([{ range: ide.monaco.Range.fromPositions(model.getPositionAt(from), model.getPositionAt(to)), options: { className: 'db-executed' } }]);
+    setTimeout(() => marks.clear(), 700);
+  }
+
+  // ---------- result view ----------
+  // The result bar (status, Grid/JSON switch, Copy as CSV/TSV, Export Data…) over the grid, JSON tree or message of the
+  // last run, and the run itself. A query console has one; so has each project SQL file with an attached data source
+  // (sql-files.js). sourceId() is the source the statements run on; onBusy(running) follows a run.
+  function resultView(sourceId, { onBusy = () => {} } = {}) {
     const results = el('div', 'db-results');
     const resultBar = el('div', 'db-result-bar');
     const status = el('div', 'db-result-status');
@@ -862,55 +872,21 @@
     output.append(ide.keymap.text(el('div', 'db-placeholder muted'),
       () => tr('Use {action} to run the statement at the caret, or the selection.', { action: ide.keymap.withKeys(tr('Execute'), 'Database.RunStatement') })));
     results.append(resultBar, output);
-    host.append(bar, editorHost, splitter, results);
-
-    const model = monaco.editor.createModel(text, consoleLanguage(sourceOf(id)?.kind));
-    model.setEOL(monaco.editor.EndOfLineSequence.LF);
-    const editor = ide.createEditor(editorHost, { model, glyphMargin: false, rulers: [], folding: false, lineNumbersMinChars: 3, renderLineHighlight: 'line' });
-    const executed = editor.createDecorationsCollection();
-    const flashRange = (from, to) => {
-      executed.set([{ range: monaco.Range.fromPositions(model.getPositionAt(from), model.getPositionAt(to)), options: { className: 'db-executed' } }]);
-      setTimeout(() => executed.clear(), 700);
-    };
-
-    let saveTimer = null;
-    const flush = () => { clearTimeout(saveTimer); saveTimer = null; invoke('db:consoleSave', id, model.getValue()); };
-    model.onDidChangeContent(() => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); });
-
-    splitter.onmousedown = (down) => {
-      down.preventDefault();
-      const startY = down.clientY;
-      const startH = editorHost.offsetHeight;
-      const total = host.clientHeight - bar.offsetHeight - splitter.offsetHeight;
-      const move = (e) => { editorHost.style.flex = `0 0 ${Math.max(60, Math.min(total - 60, startH + e.clientY - startY))}px`; };
-      const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
-      addEventListener('mousemove', move);
-      addEventListener('mouseup', up);
-    };
 
     let last = null;
     let lastDone = 0;
     let lastTotal = 0;
     const c = {
-      id, tab, editor, model, host, flush,
+      el: results,
       runs: 0, // completed runs, so callers can wait for the next result
-      dispose() { editor.dispose(); model.dispose(); },
-      renderState() {
-        const src = sourceOf(id);
-        sourceLabel.textContent = src ? `${src.name} · ${driverOf(src.kind)?.label || src.kind}` : '';
-        stateEl.className = `db-console-state db-state-${src?.state || 'disconnected'}`;
-        stateEl.textContent = stateLabel(src?.state || 'disconnected');
-        stateEl.title = src?.state === 'error' ? src.message : '';
-        const language = src && consoleLanguage(src.kind);
-        if (language && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language);
-      },
       // Runs each statement in order and shows the last result; an error stops the run. One run at a time: Ctrl+Enter
       // during a run would otherwise interleave two runs' statements and results.
       running: false,
       async execute(statements) {
-        if (!statements.length || c.running) return;
+        const id = sourceId();
+        if (!statements.length || c.running || !id) return;
         c.running = true;
-        runBtn.disabled = true;
+        onBusy(true);
         status.textContent = tr('Running…');
         let r = null;
         let done = 0;
@@ -918,59 +894,29 @@
           for (const stmt of statements) {
             r = await ide.database.query(id, stmt, { maxRows: MAX_ROWS });
             c.lastStatement = stmt;
+            c.lastSource = id;
             if (!r.ok) break;
             done++;
             if (r.schemaChanged || /^(CREATE|DROP|ALTER|RENAME)$/.test(r.command)) refreshSchema(id);
           }
         } finally {
           c.running = false;
-          runBtn.disabled = false;
+          onBusy(false);
         }
         showResult(r, done, statements.length);
         c.runs++;
         return r;
       },
-      runAtCaret() {
-        const sel = editor.getSelection();
-        let part;
-        if (sel && !sel.isEmpty()) {
-          const base = model.getOffsetAt(sel.getStartPosition());
-          part = { from: base, to: model.getOffsetAt(sel.getEndPosition()), text: model.getValueInRange(sel) };
-        } else part = statementAt(model.getValue(), model.getOffsetAt(editor.getPosition()), mode());
-        if (!part) return null;
-        flashRange(part.from, part.to);
-        return c.execute(runnable(part.text, mode()).map((s) => s.text));
-      },
-      // Appends command text on its own line(s) and runs every statement in it (Open Data).
-      appendAndRun(text) {
-        const lines = model.getLineCount();
-        const lastLine = model.getLineContent(lines);
-        const prefix = lastLine.trim() ? '\n' : '';
-        const at = { lineNumber: lines, column: lastLine.length + 1 };
-        const from = model.getOffsetAt(at) + prefix.length;
-        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${prefix}${text}` }]);
-        const end = model.getLineCount();
-        editor.setPosition({ lineNumber: end, column: 1 });
-        editor.revealLine(end);
-        flashRange(from, from + text.length);
-        return c.execute(runnable(text, mode()).map((s) => s.text));
-      },
-      insert(text) {
-        const lines = model.getLineCount();
-        const lastLine = model.getLineContent(lines);
-        const at = { lineNumber: lines, column: lastLine.length + 1 };
-        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${lastLine.trim() ? '\n' : ''}${text}` }]);
-        editor.setPosition({ lineNumber: model.getLineCount(), column: 1 });
-        editor.focus();
-      },
       // 'grid' or 'json': how the current result shows (JSON only for document results).
       view: () => (last?.documents ? ide.settings.get(VIEW_KEY, 'grid') : 'grid'),
       lastStatement: null,
+      lastSource: null,
       result: () => last,
       // Export Data… for the shown result: a read-only SQL statement runs again and streams every row to the file; for
       // anything else the user chooses between the rows shown and running it again (export.js exportResult).
       exportResult() {
         if (!(last?.ok && last.columns.length)) return null;
+        const id = c.lastSource || sourceId();
         const src = sourceOf(id);
         return ide.database.exportResult({ sourceId: id, sql: c.lastStatement || '', language: uiOf(src?.kind).language, result: last, name: src?.name || 'result' });
       },
@@ -1036,6 +982,93 @@
         { label: tr('Copy as TSV'), run: () => invoke('clipboard:writeText', delimited('\t')) },
       ]);
     });
+    return c;
+  }
+
+  function mountConsole(host, tab, id, text) {
+    const monaco = ide.monaco;
+    const mode = () => uiOf(sourceOf(id)?.kind).statementSeparator;
+    host.classList.add('db-console');
+    host.dataset.source = id;
+    const bar = el('div', 'db-console-bar');
+    const runBtn = el('button', 'db-run');
+    runBtn.append(ide.icon('runRun', '▶'));
+    ide.keymap.tooltip(runBtn, tr('Execute'), 'Database.RunStatement');
+    const sourceLabel = userEl('span', 'db-console-source');
+    const stateEl = el('span', 'db-console-state');
+    bar.append(runBtn, sourceLabel, stateEl);
+    const editorHost = el('div', 'db-console-editor');
+    const splitter = el('div', 'db-console-split');
+    const results = resultView(() => id, { onBusy: (busy) => { runBtn.disabled = busy; } });
+    host.append(bar, editorHost, splitter, results.el);
+
+    const model = monaco.editor.createModel(text, consoleLanguage(sourceOf(id)?.kind));
+    model.setEOL(monaco.editor.EndOfLineSequence.LF);
+    const editor = ide.createEditor(editorHost, { model, glyphMargin: false, rulers: [], folding: false, lineNumbersMinChars: 3, renderLineHighlight: 'line' });
+
+    let saveTimer = null;
+    const flush = () => { clearTimeout(saveTimer); saveTimer = null; invoke('db:consoleSave', id, model.getValue()); };
+    model.onDidChangeContent(() => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); });
+
+    splitter.onmousedown = (down) => {
+      down.preventDefault();
+      const startY = down.clientY;
+      const startH = editorHost.offsetHeight;
+      const total = host.clientHeight - bar.offsetHeight - splitter.offsetHeight;
+      const move = (e) => { editorHost.style.flex = `0 0 ${Math.max(60, Math.min(total - 60, startH + e.clientY - startY))}px`; };
+      const up = () => { removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+      addEventListener('mousemove', move);
+      addEventListener('mouseup', up);
+    };
+
+    const c = {
+      id, tab, editor, model, host, flush, results,
+      get runs() { return results.runs; }, // completed runs, so callers can wait for the next result
+      get running() { return results.running; },
+      get lastStatement() { return results.lastStatement; },
+      dispose() { editor.dispose(); model.dispose(); },
+      renderState() {
+        const src = sourceOf(id);
+        sourceLabel.textContent = src ? `${src.name} · ${driverOf(src.kind)?.label || src.kind}` : '';
+        stateEl.className = `db-console-state db-state-${src?.state || 'disconnected'}`;
+        stateEl.textContent = stateLabel(src?.state || 'disconnected');
+        stateEl.title = src?.state === 'error' ? src.message : '';
+        const language = src && consoleLanguage(src.kind);
+        if (language && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language);
+      },
+      execute: (statements) => results.execute(statements),
+      runAtCaret() {
+        const part = partToRun(editor, mode());
+        if (!part) return null;
+        flashRange(editor, part.from, part.to);
+        return c.execute(runnable(part.text, mode()).map((s) => s.text));
+      },
+      // Appends command text on its own line(s) and runs every statement in it (Open Data).
+      appendAndRun(text) {
+        const lines = model.getLineCount();
+        const lastLine = model.getLineContent(lines);
+        const prefix = lastLine.trim() ? '\n' : '';
+        const at = { lineNumber: lines, column: lastLine.length + 1 };
+        const from = model.getOffsetAt(at) + prefix.length;
+        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${prefix}${text}` }]);
+        const end = model.getLineCount();
+        editor.setPosition({ lineNumber: end, column: 1 });
+        editor.revealLine(end);
+        flashRange(editor, from, from + text.length);
+        return c.execute(runnable(text, mode()).map((s) => s.text));
+      },
+      insert(text) {
+        const lines = model.getLineCount();
+        const lastLine = model.getLineContent(lines);
+        const at = { lineNumber: lines, column: lastLine.length + 1 };
+        editor.executeEdits('database', [{ range: monaco.Range.fromPositions(at, at), text: `${lastLine.trim() ? '\n' : ''}${text}` }]);
+        editor.setPosition({ lineNumber: model.getLineCount(), column: 1 });
+        editor.focus();
+      },
+      view: () => results.view(),
+      result: () => results.result(),
+      exportResult: () => results.exportResult(),
+    };
     runBtn.onclick = () => c.runAtCaret();
     c.renderState();
     return c;
@@ -1162,8 +1195,13 @@
   });
   ide.registerAction({
     id: 'Database.RunStatement', title: tr('Database: Execute Statement'), keys: 'Ctrl+Enter',
-    when: () => !!focusedConsole(),
-    run: () => (focusedConsole() || activeConsole())?.runAtCaret(),
+    // In a query console, or in a project SQL file (sql-files.js: its attached data source, chosen first if it has none).
+    when: () => !!focusedConsole() || !!ide.database.sqlFiles?.focusedEditor(),
+    run: () => {
+      const c = focusedConsole();
+      const ed = !c && ide.database.sqlFiles?.focusedEditor();
+      return ed ? ide.database.sqlFiles.runAtCaret(ed) : (c || activeConsole())?.runAtCaret();
+    },
   });
 
   // Consoles open when the IDE closed come back with the project.
@@ -1218,13 +1256,16 @@
     cellText,
     isNumber,
     exportTable,
+    // For sql-files.js: the console's run and result view, the statement splitter and the source list.
+    fileHost: { loaded, sourceOf, driverOf, uiOf, stateLabel, resultView, partToRun, flashRange, runnable, newDataSource: () => ide.runAction('Database.NewDataSource') },
     // exportData(spec) comes from export.js: {sourceId, table: {schema, name}} | {sourceId, sql} | {columns, rows}, plus name.
     // For completion.js: console lookup and the trees the tool window loads (shared cache, refreshed after DDL).
     completionHost: {
+      // A console's model, or a project SQL file's with an attached data source ({..., schema}: the file's schema).
       consoleFor(model) {
         const c = [...consoles.values()].find((x) => x.model === model);
         const source = c && sourceOf(c.id);
-        if (!source) return null;
+        if (!source) return ide.database.sqlFiles?.contextFor(model) || null;
         const driver = driverOf(source.kind);
         return { id: c.id, source, driver, ui: uiOf(source.kind), completion: driver?.ui?.completion || null };
       },
@@ -1257,6 +1298,10 @@
   script.src = `${here}completion.js`;
   script.async = false;
   document.body.appendChild(script);
+  const sqlFilesScript = el('script');
+  sqlFilesScript.src = `${here}sql-files.js`;
+  sqlFilesScript.async = false;
+  document.body.appendChild(sqlFilesScript);
   const exportScript = el('script');
   exportScript.src = `${here}export.js`;
   exportScript.async = false;

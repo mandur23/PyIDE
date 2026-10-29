@@ -93,6 +93,7 @@
   "Soft-wrap files": "파일 소프트 랩",
   "System default": "시스템 기본값",
   "Tab size / Indent:": "탭 크기 / 들여쓰기:",
+  "Detect and use existing file indents for editing": "편집할 때 파일의 기존 들여쓰기를 감지해서 사용",
   "The Python Packages plugin is disabled.": "Python 패키지 플러그인이 비활성화되어 있습니다.",
   "The Ruff plugin is disabled.": "Ruff 플러그인이 비활성화되어 있습니다.",
   "The Ruff plugin, which creates environments, is disabled.": "환경을 생성하는 Ruff 플러그인이 비활성화되어 있습니다.",

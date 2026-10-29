@@ -163,5 +163,6 @@
   "Unexpected '{text}'": "예기치 않은 '{text}'",
   "'{text}' is not supported in evaluation": "평가에서는 '{text}'을(를) 지원하지 않습니다",
   "Breakpoint condition '{condition}' could not be evaluated: {error}": "중단점 조건 '{condition}'을(를) 평가할 수 없습니다: {error}",
-  "Java expression, e.g. i == 3": "Java 표현식 (예: i == 3)"
+  "Java expression, e.g. i == 3": "Java 표현식 (예: i == 3)",
+  "No Java debug session": "Java 디버그 세션이 없습니다"
 }

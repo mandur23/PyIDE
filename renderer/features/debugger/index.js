@@ -1987,6 +1987,8 @@
     registerGeneratedSource: (source) => generatedSources.push(source),
     // Sends a file's breakpoints to the running session again (a generated source's changed).
     sendBreakpoints: sendBps,
+    // A request of the JVM session being debugged (redefineClasses for HotSwap); rejects when none runs.
+    jvmRequest: (command, args) => (sess?.jvm && sess.id != null ? ide.api.invoke('debug:request', sess.id, command, args) : Promise.reject(new Error(tr('No Java debug session')))),
   };
   window.__debugger = { state: () => sess && { id: sess.id, attach: sess.attach || null, state: sess.state, frameIdx: sess.frameIdx, frames: sess.frames.map((f) => ({ name: f.name, line: f.line, path: f.source?.path })),
     cur: sess.cur, procs: [...sess.procs.values()].map((p) => ({ id: p.id, pid: p.pid, child: p.child, stopped: !!p.stop })) }, breakpoints: () => allBps().map(({ path, bp }) => ({ path, ...bp })) };

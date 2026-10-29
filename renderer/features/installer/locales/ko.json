@@ -3,6 +3,7 @@
   "One place to install, check, update and remove Python tools for the project interpreter, portable local database servers, system tools through winget, and anything other plugins register.": "프로젝트 인터프리터용 Python 도구, 포터블 로컬 데이터베이스 서버, winget 시스템 도구, 그리고 다른 플러그인이 등록한 항목을 한곳에서 설치, 확인, 업데이트, 제거합니다.",
   "Python Tools": "Python 도구",
   "Toolchains": "툴체인",
+  "Language Servers": "언어 서버",
   "Databases": "데이터베이스",
   "Database Drivers": "데이터베이스 드라이버",
   "AI Models": "AI 모델",

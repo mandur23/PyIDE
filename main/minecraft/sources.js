@@ -14,6 +14,7 @@ const BASE = {
   purpur: 'https://api.purpurmc.org/v2/purpur',
   velocity: 'https://fill.papermc.io/v3/projects/velocity',
   adoptium: 'https://api.adoptium.net/v3',
+  modrinth: 'https://api.modrinth.com/v2',
 };
 const base = () => {
   try { return { ...BASE, ...JSON.parse(process.env.PYIDE_MC_SOURCES || '{}') }; } catch { return BASE; }
@@ -189,4 +190,6 @@ async function temurin(major, jdk) {
   return { url: pkg.link, sha256: pkg.checksum, size: pkg.size, name: pkg.name };
 }
 
-module.exports = { KINDS, javaFor, temurin, neoforgeMc, byVersion, HEADERS };
+const modrinthApi = () => base().modrinth;
+
+module.exports = { KINDS, javaFor, temurin, neoforgeMc, byVersion, HEADERS, getJson, modrinthApi };

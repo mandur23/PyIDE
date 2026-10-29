@@ -8,7 +8,10 @@
 // Server (the pinned archive, cached in verify/out/downloads-cache like verify/java-lsp.mjs) and checks the editor
 // knows the Paper API. MC_LIVE_GRADLE=1 builds a renamed mod from the real Forge MDK and from Fabric's example mod with
 // Gradle and deploys them (Minecraft and Gradle download, ~15 minutes). MC_LIVE_MODPACK=<Modrinth slug> makes a server
-// from that modpack and starts it as far as the EULA check. Port 9792.
+// from that modpack and starts it as far as the EULA check. MC_LIVE_CLIENT=1 (with MC_LIVE_GRADLE) starts the Fabric
+// mod's real test client under Debug: its client initializer prints a message every 40 ticks, the message is changed
+// and saved, and the game's output shows the HotSwap; the game stays open until mclive-client-go.txt appears in the
+// temporary folder (for a screenshot of it), mclive-client-up.txt there saying when it is. Port 9792.
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
@@ -169,6 +172,57 @@ try {
       const mods = existsSync(path.join(serverDir(server), 'mods')) ? readdirSync(path.join(serverDir(server), 'mods')) : [];
       check(/Mod copied to/.test(out) && mods.some((m) => m.includes(id.replace(/_/g, '')) || m.includes(id) || m.endsWith('.jar')),
         `the renamed ${server} mod builds with Gradle and is deployed in ${elapsed(t2)} (${S(mods)})${/Mod copied/.test(out) ? '' : `: ${out.slice(-3000)}`}`);
+    }
+    if (process.env.MC_LIVE_CLIENT === '1' && has('fabric')) {
+      const t3 = Date.now();
+      const modDir = path.join(project, 'mods', 'fabric_tools');
+      const files = [];
+      const walk = (d) => { for (const e of existsSync(d) ? readdirSync(d, { withFileTypes: true }) : []) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/Client\.java$/.test(e.name)) files.push(p); } };
+      walk(path.join(modDir, 'src', 'client', 'java'));
+      const clientFile = files[0];
+      const pkg = /^package ([\w.]+);/m.exec(readFileSync(clientFile, 'utf8'))[1];
+      const cls = path.basename(clientFile, '.java');
+      const source = (message) => `package ${pkg};
+
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+
+public class ${cls} implements ClientModInitializer {
+    private static int ticks;
+
+    @Override
+    public void onInitializeClient() {
+        ClientTickEvents.END_CLIENT_TICK.register(client -> tick());
+    }
+
+    private static void tick() {
+        if (++ticks % 40 == 0) System.out.println("pyide-hotswap: " + message());
+    }
+
+    private static String message() {
+        return "${message}";
+    }
+}
+`;
+      const editAndSave = (file, text) => js(`(async () => { await ide.openFile(${S(file)}); const t = ide.findTab(${S(file)}); t.doc.model.setValue(${S(text)}); await ide.saveTab(t); return true; })()`);
+      const dbgOut = () => js(`document.querySelector('#dbgOut')?.textContent || ''`);
+      await editAndSave(clientFile, source('version one'));
+      await js(`ide.run.debugConfig(ide.run.configs().find((c) => c.type === 'minecraft-mod' && c.task === 'runClient' && c.dir === 'mods/fabric_tools'))`);
+      const up = await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('pyide-hotswap: version one')`, 'client up', 2400000).then(() => true, () => false);
+      check(up, `the real test client starts under Debug in ${elapsed(t3)}${up ? '' : `: ${(await dbgOut()).slice(-3000)}`}`);
+      if (up) {
+        writeFileSync(path.join(tmpdir(), 'mclive-client-up.txt'), 'up');
+        await sleep(20000);
+        await editAndSave(clientFile, source('version two'));
+        const swapped = await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('pyide-hotswap: version two')`, 'hotswap', 120000).then(() => true, () => false);
+        const log = await dbgOut();
+        check(swapped && /HotSwap: \d+ classes reloaded/.test(log), `saving the client initializer swaps it into the running game (${(log.match(/HotSwap[^\n]*/g) || []).join(' | ')})`);
+        writeFileSync(path.join(tmpdir(), 'mclive-client-up.txt'), 'swapped');
+        const go = path.join(tmpdir(), 'mclive-client-go.txt');
+        for (let i = 0; i < 120 && !existsSync(go); i++) await sleep(5000);
+      }
+      await js(`(ide.runAction('StopDebug'), true)`);
+      await until('!window.__debugger.state()', 'client stopped', 60000).catch(() => {});
     }
     // A Gradle daemon outlives the build and inherits the window's debugging port, so the next run could not start.
     for (const id of ['forge_tools', 'fabric_tools']) {

@@ -53,7 +53,7 @@ const OWN_CATEGORY = {
   'liveTemplates.postfixDisabled': 'liveTemplates',
   recentProjects: 'recentProjects',
 };
-const CODE_STYLE = new Set(['editor.tabSize', 'editor.ruler', 'tools.ruffLineLength', 'editor.lineSeparator']);
+const CODE_STYLE = new Set(['editor.tabSize', 'editor.detectIndent', 'editor.ruler', 'tools.ruffLineLength', 'editor.lineSeparator']);
 // Keys of exported groups that stay on this computer, with the reason.
 const EXCLUDED = new Map([
   ['interpreters.extra', 'machine'], // python.exe paths on this computer

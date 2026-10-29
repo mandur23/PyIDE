@@ -55,6 +55,7 @@
     'editor.wheelZoom': true,
     'editor.lineHeight': 1.6,
     'editor.tabSize': 4,
+    'editor.detectIndent': true,
     'editor.showWhitespace': false,
     'editor.softWrap': false,
     'editor.ruler': 120,
@@ -108,9 +109,14 @@
   ide.theme = { current: effectiveTheme, preference: () => get('appearance.theme'), systemDark: () => systemDark,
     menuItems: () => THEMES().map(([value, label]) => ({ label, checked: get('appearance.theme') === value, run: () => ide.settings.set('appearance.theme', value) })) };
 
+  // As PyCharm's "Detect and use existing file indents for editing": a file indented with tabs or another width keeps
+  // its indentation; one without indented lines gets the tab size setting (YAML files 2, the width YAML is written in).
+  const DEFAULT_INDENT = { yaml: 2 };
   function applyModel(model) {
+    if (model.isDisposed()) return;
     const n = Math.max(1, Number(get('editor.tabSize')) || 4);
-    if (!model.isDisposed()) model.updateOptions({ tabSize: n, indentSize: n, insertSpaces: true });
+    if (get('editor.detectIndent') === false) model.updateOptions({ tabSize: n, indentSize: n, insertSpaces: true });
+    else model.detectIndentation(true, DEFAULT_INDENT[model.getLanguageId()] || n);
   }
 
   function applyEditor() {
@@ -268,7 +274,7 @@
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap, index: false },
     { group: 'editor-group', title: () => tr('Editor'), children: [
       { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines console cycle buffer 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄 콘솔 순환 버퍼', mount: mountEditor },
-      { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent ruler hard wrap line separator crlf lf 탭 들여쓰기 눈금자 줄 구분자', mount: mountCodeStyle },
+      { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent detect ruler hard wrap line separator crlf lf 탭 들여쓰기 감지 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false },
     { group: 'project', title: projectGroup, children: [
@@ -981,6 +987,7 @@
     // Used by new files and file templates; an existing file keeps its own separator (core editors.js).
     general.appendChild(fieldRow(tr('Line separator for new files:'), selectInput(ctx, 'editor.lineSeparator',
       [['system', tr('System-Dependent')], ['lf', tr('Unix and macOS (\\n)')], ['crlf', tr('Windows (\\r\\n)')]], 'system')));
+    general.appendChild(checkbox(ctx, 'editor.detectIndent', tr('Detect and use existing file indents for editing')));
     const style = section(host, tr('Python'));
     style.appendChild(fieldRow(tr('Tab size / Indent:'), numberInput(ctx, 'editor.tabSize')));
     style.appendChild(fieldRow(tr('Hard wrap at (ruler):'), numberInput(ctx, 'editor.ruler'), tr('0 hides the ruler')));

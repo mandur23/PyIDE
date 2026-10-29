@@ -427,6 +427,30 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/html-autoclose.mjs
+      - name: language-support
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/language-support.mjs
+      - name: language-servers
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/language-servers.mjs
+      - name: emmet
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/emmet.mjs
+      - name: js-tools
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/js-tools.mjs
+      - name: data-formats
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/data-formats.mjs
+      - name: database-sql-files
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/database-sql-files.mjs
       - name: context-menu
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 6

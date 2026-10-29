@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- settings -->
+<config version="2"><name>demo</name><items><item id="1"/><item  id="2" kind='b'>two</item></items>
+<!-- the script -->
+<script><![CDATA[ if (a < b) { go(); } ]]></script>
+<note>Hello <b>bold</b> text</note><raw xml:space="preserve">  keep   <x/>  </raw><empty>
+</empty></config>

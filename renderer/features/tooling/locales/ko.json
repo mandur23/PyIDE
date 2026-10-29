@@ -2,7 +2,7 @@
   "Reformat Code": "코드 서식 다시 지정",
   "Optimize Imports": "import 최적화",
   "Fix All Ruff Problems in File": "파일의 모든 Ruff 문제 수정",
-  "Reformat Code works on Python files": "코드 서식 다시 지정은 Python 파일에서만 사용할 수 있습니다",
+  "Reformat Code has no formatter for this file type": "이 파일 형식에는 코드 서식 다시 지정 도구가 없습니다",
   "Optimize Imports works on Python files": "import 최적화는 Python 파일에서만 사용할 수 있습니다",
   "Cannot reformat: {error}": "코드 서식을 다시 지정할 수 없습니다: {error}",
   "Cannot optimize imports: {error}": "import를 최적화할 수 없습니다: {error}",

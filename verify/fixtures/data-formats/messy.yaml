@@ -1,0 +1,26 @@
+# Build settings
+name:    demo  
+version : 2
+services:
+    web:
+        image:   nginx   # the web server
+        restart:always
+        ports:
+        - "80:80"
+        -   "443:443"
+        command: |
+            echo "start"   
+              indented line
+            done
+    # the database
+    db:
+      image: postgres
+      environment:
+         POSTGRES_PASSWORD: example    
+flow: {a: 1,   b: [x, y]}
+quoted: 'it''s:  here'
+folded: >-
+   one
+   two
+
+

@@ -62,8 +62,53 @@
     return true;
   }
 
+  // A file Monaco formats itself (JavaScript, TypeScript, JSON, HTML, CSS, SCSS, Less): its Format Selection when text is
+  // selected and the formatter does ranges, else Format Document, in the editor showing the file. -> false when there
+  // is no such editor or formatter.
+  async function monacoFormat(tab) {
+    const model = tab?.model || tab?.doc?.model;
+    if (!model || model.isDisposed()) return false;
+    const ed = monaco.editor.getEditors().find((e) => e.getModel() === model && e.getDomNode()?.isConnected);
+    const sel = ed?.getSelection();
+    const ranged = sel && !sel.isEmpty() ? ed.getAction('editor.action.formatSelection') : null;
+    const action = ranged?.isSupported() ? ranged : ed?.getAction('editor.action.formatDocument');
+    if (!action?.isSupported()) return false;
+    const old = model.getValue().split(/\r?\n/);
+    await action.run();
+    if (model.isDisposed()) return true;
+    const now = model.getValue().split(/\r?\n/);
+    let s = 0;
+    while (s < old.length && s < now.length && old[s] === now[s]) s++;
+    let e = 0;
+    while (e < old.length - s && e < now.length - s && old[old.length - 1 - e] === now[now.length - 1 - e]) e++;
+    const lines = Math.max(old.length, now.length) - s - e;
+    showHint(lines ? reformattedText(action === ranged, lines) : tr('No lines changed: content is already properly formatted'));
+    return true;
+  }
+
+  // Formatters other plugins add (the project's Prettier), asked for a file that is not Python before its language
+  // server and Monaco: fn(tab) -> {text} (the formatted text), {error} or null (not for this file).
+  const formatters = [];
+  async function pluginFormat(tab) {
+    if (tab?.kind !== 'file' || tab.model.isDisposed()) return false;
+    for (const fn of formatters) {
+      const version = tab.model.getVersionId();
+      const r = await fn(tab);
+      if (!r) continue;
+      if (r.error) { showHint(r.error, true); return true; }
+      if (tab.model.isDisposed() || tab.model.getVersionId() !== version) return true;
+      const lines = applyText(tab.model, r.text);
+      showHint(lines ? reformattedText(false, lines) : tr('No lines changed: content is already properly formatted'));
+      return true;
+    }
+    return false;
+  }
+
   async function reformat(tab = ide.activeTab()) {
-    if (!isPy(tab)) return (await serverEdit(tab, 'format')) || showHint(tr('Reformat Code works on Python files'));
+    if (!isPy(tab)) {
+      return (await pluginFormat(tab)) || (await serverEdit(tab, 'format')) || (await monacoFormat(tab))
+        || showHint(tr('Reformat Code has no formatter for this file type'));
+    }
     const model = tab.model;
     const version = model.getVersionId();
     const sel = ide.editor.getModel() === model ? ide.editor.getSelection() : null;
@@ -266,5 +311,5 @@
   ide.registerTreeAction({ title: tr('Reformat Code'), keyAction: 'ReformatCode', when: pyFile, run: (e) => (ide.findTab(e.path) ? reformat(ide.findTab(e.path)) : onDisk(e.path, 'tooling:format')) });
   ide.registerTreeAction({ title: tr('Optimize Imports'), keyAction: 'OptimizeImports', when: pyFile, run: (e) => (ide.findTab(e.path) ? optimizeImports(ide.findTab(e.path)) : onDisk(e.path, 'tooling:optimizeImports')) });
 
-  ide.tooling = { reformat, optimizeImports, fixAll, lint };
+  ide.tooling = { reformat, optimizeImports, fixAll, lint, addFormatter: (fn) => formatters.push(fn) };
 })();

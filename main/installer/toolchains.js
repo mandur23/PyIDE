@@ -75,7 +75,91 @@ const TOOLCHAINS = {
     top: '',
     probe: 'bore.exe',
   },
+  // Language servers (main/features/language-servers.js runs them). Pinned builds some weeks old; the digests are the
+  // publishers' (GitHub's for release assets, PyPI's for wheels, JetBrains' <url>.sha256).
+  clangd: {
+    kind: 'clangd',
+    title: 'clangd',
+    version: '23.1.0',
+    url: 'https://github.com/clangd/clangd/releases/download/23.1.0/clangd-windows-23.1.0.zip',
+    size: 29690805,
+    sha256: '23412a240756a162e7b98a282f36aa2a23a88db5ce16a0cbc4fef7253768c810',
+    folder: 'clangd',
+    top: 'clangd_23.1.0',
+    probe: 'bin/clangd.exe',
+  },
+  // LLVM's clang-format as PyPI ships it (a wheel is a zip; the program is inside the package's data folder).
+  clangformat: {
+    kind: 'clangformat',
+    title: 'clang-format',
+    version: '23.1.3',
+    url: 'https://files.pythonhosted.org/packages/23/a6/90148f91544e3c056e78c514f0e764c1b44d50a33344c83fd03011ea97c8/clang_format-23.1.3-py2.py3-none-win_amd64.whl',
+    size: 1537541,
+    sha256: '6c2b74c3a3e942ec172d768e7b945f8e136db05a7b735d49ecfc69bda97643ad',
+    folder: 'clang-format',
+    top: '',
+    probe: 'clang_format/data/bin/clang-format.exe',
+  },
+  rustanalyzer: {
+    kind: 'rustanalyzer',
+    title: 'rust-analyzer',
+    version: '2026-10-12',
+    url: 'https://github.com/rust-lang/rust-analyzer/releases/download/2026-10-12/rust-analyzer-x86_64-pc-windows-msvc.zip',
+    size: 17622779,
+    sha256: '77f7a907f0e6f179281bac38e2d08435c974db9a5b99de52c5c963aff52883ec',
+    folder: 'rust-analyzer',
+    top: '',
+    probe: 'rust-analyzer.exe',
+  },
+  // JetBrains' Kotlin language server, with its own Java runtime.
+  kotlin: {
+    kind: 'kotlin',
+    title: 'Kotlin Language Server',
+    version: '263.6379.0',
+    url: 'https://download.jetbrains.com/language-server/kotlin-server/263.6379.0/kotlin-server-263.6379.0.win.zip',
+    size: 363404886,
+    sha256: '72148fa0832c2a45a4b26c55f56197d8d8886bcdb732b910607efc5e2693b9df',
+    folder: 'kotlin-server',
+    top: '',
+    probe: 'kotlin-lsp.cmd',
+  },
+  // Servers that are packages of their language's own package manager, installed with it at a pinned version into
+  // the install folder (`via`): the package manager checks what it downloads (Go's checksum database, RubyGems'
+  // and NuGet's package hashes, npm's integrity). Only offered when that package manager is on PATH.
+  gopls: {
+    kind: 'gopls', title: 'gopls', version: '0.23.0', folder: 'gopls', top: '', probe: 'gopls.exe',
+    via: { tool: 'go', args: () => ['install', 'golang.org/x/tools/gopls@v0.23.0'], env: (dir) => ({ GOBIN: dir, GOFLAGS: '-mod=mod', GOTOOLCHAIN: 'local' }) },
+  },
+  rubylsp: {
+    kind: 'rubylsp', title: 'Ruby LSP', version: '0.26.10', folder: 'ruby-lsp', top: '', probe: 'bin/ruby-lsp',
+    via: { tool: 'gem', args: (dir) => ['install', 'ruby-lsp', '--version', '0.26.10', '--install-dir', dir, '--no-document'] },
+  },
+  csharpls: {
+    kind: 'csharpls', title: 'csharp-ls', version: '0.27.0', folder: 'csharp-ls', top: '', probe: 'csharp-ls.exe',
+    via: { tool: 'dotnet', args: (dir) => ['tool', 'install', 'csharp-ls', '--version', '0.27.0', '--tool-path', dir] },
+  },
+  intelephense: {
+    kind: 'intelephense', title: 'Intelephense', version: '1.18.5', folder: 'intelephense', top: '', probe: 'node_modules/intelephense/lib/intelephense.js',
+    via: { tool: 'npm', args: (dir) => ['install', '--prefix', dir, '--no-save', '--no-audit', '--no-fund', '--ignore-scripts', 'intelephense@1.18.5'] },
+  },
 };
+
+// The package managers `via` installs run: {cmd, pre} (pre: arguments before the install's own), found on PATH
+// (`gem` and `npm` through their runtimes, as their .cmd launchers need a shell). Tests name a stand-in script for a
+// tool in PYIDE_TOOLCHAINS {tools: {go: 'fake-go.js'}}, run with the IDE as Node.
+function findTool(tool, env = process.env) {
+  const fake = overrides().tools?.[tool];
+  if (fake) return isFile(fake) ? { cmd: process.execPath, pre: [fake], env: { ELECTRON_RUN_AS_NODE: '1' } } : null;
+  const onPath = (file) => pathDirs(env).map((d) => path.join(d, file)).find(isFile);
+  if (tool === 'go' || tool === 'dotnet') { const cmd = onPath(`${tool}.exe`); return cmd ? { cmd, pre: [] } : null; }
+  if (tool === 'gem') { const ruby = onPath('ruby.exe'); return ruby ? { cmd: ruby, pre: ['-S', 'gem'] } : null; }
+  if (tool === 'npm') {
+    const node = onPath('node.exe');
+    const cli = node && path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    return cli && isFile(cli) ? { cmd: node, pre: [cli] } : null;
+  }
+  return null;
+}
 
 const installRoot = () => process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide');
 
@@ -139,9 +223,36 @@ function createToolchains({ root = installRoot(), run } = {}) {
   const homeOf = (name) => path.join(dirOf(name), spec(name).top);
   const installed = (name) => isFile(path.join(homeOf(name), spec(name).probe));
 
+  // needs: the package manager a `via` install runs, and whether it was found (toolFound).
   function status(name) {
     const s = spec(name);
-    return { name, kind: s.kind, title: s.title, version: s.version, size: s.size, dir: dirOf(name), home: homeOf(name), installed: installed(name) };
+    return { name, kind: s.kind, title: s.title, version: s.version, size: s.size ?? null, dir: dirOf(name), home: homeOf(name), installed: installed(name),
+      ...(s.via ? { needs: s.via.tool, toolFound: !!findTool(s.via.tool) } : {}) };
+  }
+
+  // A `via` install: the package manager installs into a staging folder, swapped in once the probe file is there.
+  async function installVia(name, { log, progress, exec }) {
+    const s = spec(name);
+    const dir = dirOf(name);
+    const tool = findTool(s.via.tool);
+    if (!tool) throw new Error(`${s.title} is installed with ${s.via.tool}, which is not on PATH`);
+    const staging = `${dir}.extract`;
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    log(`Installing ${s.title} ${s.version} with ${s.via.tool}\n`);
+    try {
+      await exec(tool.cmd, [...tool.pre, ...s.via.args(staging)], { cwd: staging, env: { ...tool.env, ...s.via.env?.(staging) } });
+    } catch (err) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw err;
+    }
+    if (!isFile(path.join(staging, s.top, s.probe))) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw new Error(`${s.via.tool} did not install ${s.probe}`);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.renameSync(staging, dir);
+    progress(1);
   }
 
   // Same steps as a portable database server: download (resumed from nothing, checked against the pinned sha256),
@@ -150,6 +261,7 @@ function createToolchains({ root = installRoot(), run } = {}) {
     const s = spec(name);
     const dir = dirOf(name);
     if (installed(name)) { progress(1); return; }
+    if (s.via) return installVia(name, { log, progress, exec });
     const parent = path.dirname(dir);
     fs.mkdirSync(parent, { recursive: true });
     const archive = path.join(parent, path.basename(new URL(s.url).pathname));
@@ -225,4 +337,4 @@ function createToolchains({ root = installRoot(), run } = {}) {
   return { status, install, uninstall, detect, names: () => Object.keys(TOOLCHAINS) };
 }
 
-module.exports = { TOOLCHAINS, createToolchains, installRoot };
+module.exports = { TOOLCHAINS, createToolchains, installRoot, findTool };

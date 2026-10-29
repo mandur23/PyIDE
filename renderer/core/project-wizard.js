@@ -1,7 +1,7 @@
 // New Project (PyCharm's File > New Project): a project type, name and location, a Git repository, and an
 // interpreter (a new .venv, a base interpreter, or an existing one); framework types install their packages.
 // Plugins add project types of their own, whatever the load order, with their own options in place of the interpreter:
-//   (ide.projectTypes ||= []).push({ id, name: () => label, icon: () => element, main: 'the file to open, relative',
+//   (ide.projectTypes ||= []).push({ id, name: () => label, icon: () => element, main?: 'the file to open, relative',
 //     defaultName?: 'the suggested project name (pythonProject otherwise)',
 //     form: ({ name, dir, step, log }) => ({ el, files() -> {path: text | null}, gitignore?: text,
 //       validate?: async () => {},   // throw to keep the wizard open with the message
@@ -440,8 +440,8 @@ if __name__ == '__main__':
       done(d, failed);
       if (!(await ide.openProject(dir))) return;
       await f.opened?.(dir);
-      const main = joinPath(dir, f.main?.() || type.main);
-      if (await ide.api.exists(main)) await ide.openFile(main);
+      const rel = f.main?.() || type.main;
+      if (rel && await ide.api.exists(joinPath(dir, rel))) await ide.openFile(joinPath(dir, rel));
     }
   }
 
