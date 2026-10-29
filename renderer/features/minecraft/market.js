@@ -11,6 +11,8 @@
   const fits = { mod: (s) => !!s.mods, plugin: (s) => !!s.plugins, resourcepack: (s) => !s.proxy };
   const state = { type: 'modpack', query: '', sort: 'relevance', server: null, loader: '', version: '', hits: [], total: 0, seq: 0, error: '' };
   let view = null;
+  // Projects being installed or removed: a card drawn again meanwhile keeps its buttons off.
+  const working = new Set();
   const compact = (n) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n || 0);
   const serverOf = () => mc.servers().find((s) => s.dir === state.server) || null;
   const hosts = () => (state.type === 'modpack' ? [] : mc.servers().filter(fits[state.type]));
@@ -154,6 +156,7 @@
       actions.append(el('span', 'mcm-installed', tr('Installed {version}', { version: installed.version })),
         button(tr('Update'), 'secondary mcm-update', (b) => install(h, b)), button(tr('Remove'), 'secondary mcm-remove', () => remove(h, installed)));
     } else actions.append(button(tr('Install'), 'primary mcm-install', (b) => install(h, b)));
+    if (working.has(h.id)) for (const b of actions.querySelectorAll('button')) { b.disabled = true; if (b.classList.contains('mcm-install')) b.textContent = tr('Installing…'); }
     actions.append(button(tr('Modrinth Page'), 'secondary mcm-page', () => ide.api.invoke('shell:openExternal', h.page)));
     body.append(title, desc, meta, actions);
     c.append(icon, body);
@@ -162,7 +165,8 @@
 
   async function install(h, b) {
     const srv = serverOf();
-    if (!srv || ide.trusted === false) return;
+    if (!srv || ide.trusted === false || working.has(h.id)) return;
+    working.add(h.id);
     b.disabled = true;
     b.textContent = tr('Installing…');
     const con = mc.jobSession(tr('Market'));
@@ -183,7 +187,7 @@
       });
     } catch (err) {
       con.append(`${mc.errorText(err)}\n`, /installed already/.test(err.message || '') ? 'ok' : 'err');
-    } finally { j.done(); }
+    } finally { j.done(); working.delete(h.id); }
     ide.refreshTree?.();
     await mc.refresh();
     render();
@@ -192,10 +196,11 @@
   async function remove(h, installed) {
     const srv = serverOf();
     if (!srv || ide.trusted === false) return;
-    if (!(await ide.ui.confirm(tr('Remove {title} {version} from {server}?', { title: h.title, version: installed.version, server: srv.name }), { ok: tr('Remove') }))) return;
+    if (working.has(h.id) || !(await ide.ui.confirm(tr('Remove {title} {version} from {server}?', { title: h.title, version: installed.version, server: srv.name }), { ok: tr('Remove') }))) return;
+    working.add(h.id);
     try {
       await ide.api.invoke('minecraft:marketRemove', ide.root, srv.dir, h.id);
-    } catch (err) { ide.ui.alert(mc.errorText(err)); }
+    } catch (err) { ide.ui.alert(mc.errorText(err)); } finally { working.delete(h.id); }
     ide.refreshTree?.();
     await mc.refresh();
     render();

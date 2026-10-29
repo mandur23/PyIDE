@@ -113,7 +113,10 @@
     if (!block.open.test(prevText)) want = want.endsWith(unit) ? want.slice(0, -unit.length) : want.replace(/[ \t]$/, '');
     const has = indentOf(text);
     if (has.length <= want.length) return;
+    // Its own undo step: Ctrl+Z puts the word back where it was typed.
+    ed.pushUndoStop();
     ed.executeEdits('outdent', [{ range: new monaco.Range(line, 1, line, has.length + 1), text: want }]);
+    ed.pushUndoStop();
   }
   ide.onEditor((ed) => ed.onDidType(() => outdentClosingLine(ed)));
 

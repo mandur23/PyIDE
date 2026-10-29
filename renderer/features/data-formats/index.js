@@ -75,6 +75,22 @@
     const o = model.getOptions();
     return Math.max(1, Number(o.indentSize) || o.tabSize || 2);
   };
+  // Monaco's JSON formatter recurses per level of nesting: about a thousand levels overflow its stack, and it then
+  // changes nothing, which Reformat Code would report as "already properly formatted".
+  const JSON_MAX_DEPTH = 500;
+  refusals.set('json', (model) => {
+    const text = model.getValue();
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '"') { i++; while (i < text.length && text[i] !== '"' && text[i] !== '\n') i += text[i] === '\\' ? 2 : 1; }
+      else if (c === ']' || c === '}') depth--;
+      else if ((c === '[' || c === '{') && ++depth > JSON_MAX_DEPTH) {
+        return tr('Cannot reformat: the JSON is nested too deeply (line {line})', { line: model.getPositionAt(i).lineNumber });
+      }
+    }
+    return null;
+  });
   // A whole-document edit, or none when the text is the same.
   function wholeEdit(model, text) {
     const old = model.getValue(monaco.editor.EndOfLinePreference.LF);

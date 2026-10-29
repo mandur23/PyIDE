@@ -21,18 +21,23 @@
   // 'comment', 'markup' (`<!DOCTYPE`, `<![CDATA[`, `<?…`) or 'raw' (content of a RAW element). open: the names of the
   // elements open at `end`, outermost first, as written; an end tag closes the innermost element of its name.
   // xml: an XML text, where no element is void or raw text.
-  function scan(text, end, xml = false) {
+  // resume ({i, open}, for offsets in increasing order in the same text): where to start, moved on to the last point
+  // before `end` that a later offset can start from, so 50 carets in a 5 MB file scan it once rather than 50 times.
+  function scan(text, end, xml = false, resume = null) {
     const VOIDS = xml ? NONE : VOID;
     const RAWS = xml ? NONE : RAW;
-    const open = [];
-    let i = 0;
+    const from = resume && resume.i <= end ? resume : null;
+    const open = from ? [...from.open] : [];
+    let i = from ? from.i : 0;
+    let lt = i;
+    const stop = (r, at) => { if (resume) Object.assign(resume, { i: at, open: [...open] }); return r; };
     while (i < end) {
-      const lt = text.indexOf('<', i);
+      lt = text.indexOf('<', i);
       if (lt < 0 || lt >= end) break;
       i = lt + 1;
       if (text.startsWith('!--', i)) {
         const close = text.indexOf('-->', i + 3);
-        if (close < 0 || close + 3 > end) return { state: 'comment', open };
+        if (close < 0 || close + 3 > end) return stop({ state: 'comment', open }, lt);
         i = close + 3;
         continue;
       }
@@ -40,7 +45,7 @@
         const cdata = text.startsWith('![CDATA[', i);
         const close = cdata ? text.indexOf(']]>', i) : text.indexOf('>', i);
         const after = close < 0 ? -1 : close + (cdata ? 3 : 1);
-        if (after < 0 || after > end) return { state: 'markup', open };
+        if (after < 0 || after > end) return stop({ state: 'markup', open }, lt);
         i = after;
         continue;
       }
@@ -56,7 +61,7 @@
         if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c;
         else if (c === '>') { gt = i; break; }
       }
-      if (gt < 0) return { state: quote ? 'value' : 'tag', open, tag: { name, closing } };
+      if (gt < 0) return stop({ state: quote ? 'value' : 'tag', open, tag: { name, closing } }, lt);
       i = gt + 1;
       const lower = name.toLowerCase();
       if (closing) {
@@ -67,19 +72,19 @@
           const endTag = new RegExp(`</${lower}(?=[\\s/>])`, 'gi');
           endTag.lastIndex = i;
           const e = endTag.exec(text);
-          if (!e || e.index >= end) return { state: 'raw', open: [...open, name] };
+          if (!e || e.index >= end) return stop({ state: 'raw', open: [...open, name] }, lt);
           i = e.index;
           continue;
         }
         open.push(name);
       }
     }
-    return { state: 'text', open };
+    return stop({ state: 'text', open }, i);
   }
 
   // The end tag to put after a `>` just typed at offset `gt`, or null.
-  function endTagFor(text, gt, xml = false) {
-    const at = scan(text, gt, xml);
+  function endTagFor(text, gt, xml = false, resume = null) {
+    const at = scan(text, gt, xml, resume);
     if (at.state !== 'tag' || at.tag.closing || text[gt - 1] === '/' || (!xml && VOID.has(at.tag.name.toLowerCase()))) return null;
     const close = `</${at.tag.name}`;
     const next = text.slice(gt + 1, gt + 1 + close.length + 1);
@@ -90,10 +95,10 @@
   // The rest of the end tag after a `</` just typed (the `/` at offset `slash`), or null. Monaco's XML editing pairs
   // `<` with `>`, so there `</` is followed by that `>`: only the name goes before it ({text, skip: 1} moves the caret
   // past it).
-  function endTagNameFor(text, slash, xml = false) {
+  function endTagNameFor(text, slash, xml = false, resume = null) {
     const paired = xml && text[slash + 1] === '>';
     if (text[slash - 1] !== '<' || (!paired && /^[\w:.-]|^>/.test(text.slice(slash + 1, slash + 2)))) return null;
-    const at = scan(text, slash - 1, xml);
+    const at = scan(text, slash - 1, xml, resume);
     if (at.state !== 'text' && at.state !== 'raw') return null;
     const name = at.open.at(-1);
     if (!name) return null;
@@ -103,9 +108,10 @@
   const MARKUP = new Set(['html', 'xml']);
   const isMarkup = (model) => !!model && !model.isDisposed() && MARKUP.has(model.getLanguageId());
 
-  // At every empty selection right after `typed`, inserts what `insertFor(text, offset of typed, xml)` gives (a string,
-  // or {text, skip}). The caret stays before an inserted end tag (`stay`) or moves past a completed name, and `skip`
-  // characters more; one undo step takes all insertions away.
+  // At every empty selection right after `typed`, inserts what `insertFor(text, offset of typed, xml, resume)` gives (a
+  // string, or {text, skip}; the carets go in text order, sharing scan's resume point). The caret stays before an
+  // inserted end tag (`stay`) or moves past a completed name, and `skip` characters more; one undo step takes all
+  // insertions away.
   function insertAtCarets(ed, typed, insertFor, stay) {
     const model = ed.getModel();
     if (!isMarkup(model) || ed.getOption(monaco.editor.EditorOption.readOnly)) return false;
@@ -113,11 +119,11 @@
     const sels = ed.getSelections() || [];
     const text = model.getValue();
     const edits = [];
-    for (const s of sels) {
-      if (!s.isEmpty()) continue;
-      const offset = model.getOffsetAt(s.getPosition()) - 1;
+    const resume = { i: 0, open: [] };
+    const empty = sels.filter((s) => s.isEmpty()).map((s) => ({ s, offset: model.getOffsetAt(s.getPosition()) - 1 })).sort((a, b) => a.offset - b.offset);
+    for (const { s, offset } of empty) {
       if (text[offset] !== typed) continue;
-      const insert = insertFor(text, offset, xml);
+      const insert = insertFor(text, offset, xml, resume);
       if (insert) edits.push({ line: s.positionLineNumber, column: s.positionColumn, skip: 0, ...(typeof insert === 'string' ? { text: insert } : insert) });
     }
     if (!edits.length) return false;

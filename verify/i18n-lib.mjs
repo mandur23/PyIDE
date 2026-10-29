@@ -5,7 +5,7 @@ export const KEEP_ENGLISH = [
   'virtualenv', 'debugpy', 'PowerShell', 'UTF-8', 'TODO', 'FIXME', 'HEAD', 'JSON', 'PyPI', 'PATH', 'PYTHONPATH',
   'Ctrl', 'Alt', 'Shift', 'Esc', 'Enter', 'Tab', 'Insert', 'Delete', 'Space', 'Backspace', 'noqa', 'Pyright',
   'OK', 'stdin', 'stdout', 'stderr', 'py', 'launcher', 'English', 'Windows', 'Monaco', 'LSP', 'DAP', 'regex', 'Regex',
-  'Claude', 'Code', 'Anthropic', 'LF', 'CRLF', 'CR',
+  'Claude', 'Code', 'Anthropic', 'LF', 'CRLF', 'CR', 'Emmet',
 ];
 
 // Elements whose text is user data, not UI chrome.

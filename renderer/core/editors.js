@@ -12,10 +12,11 @@
     sql: 'sql', txt: 'plaintext', log: 'plaintext', java: 'java', kt: 'kotlin', lua: 'lua', luau: 'lua', cs: 'csharp',
     c: 'c', cpp: 'cpp', h: 'cpp', go: 'go', rs: 'rust', jsp: 'html', fxml: 'xml', dockerfile: 'dockerfile' };
   // A file the table does not name takes the language Monaco registers for its file name or extension (.tsx, .jsx,
-  // .hpp, .cc, .scss, .less, .rb, .php, .svg…).
+  // .hpp, .cc, .scss, .less, .rb, .php, .svg…). A name without a dot has no extension: a file called `json` or `c` is
+  // plain text, Dockerfile and Makefile go by Monaco's file names.
   function languageFor(p) {
     const name = basename(p).toLowerCase();
-    const ext = name.split('.').pop();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
     if (LANG_BY_EXT[ext]) return LANG_BY_EXT[ext];
     const langs = ide.monaco?.languages.getLanguages() || [];
     const hit = langs.find((l) => l.filenames?.some((f) => f.toLowerCase() === name))

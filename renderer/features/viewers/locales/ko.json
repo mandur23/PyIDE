@@ -133,5 +133,8 @@
   "Run {command}": "{command} 실행",
   "Start the dev server in a terminal and show the app in the browser": "터미널에서 개발 서버를 시작하고 앱을 브라우저에 보여 줍니다",
   "Open {file}": "{file} 열기",
-  "Preview the app's built page": "앱의 빌드된 페이지를 미리 봅니다"
+  "Preview the app's built page": "앱의 빌드된 페이지를 미리 봅니다",
+  "Refresh Preview": "미리보기 새로 고침",
+  "Large file: the preview is not updated while you type. Refresh Preview renders it.": "큰 파일이라 입력하는 동안 미리보기를 갱신하지 않습니다. \"미리보기 새로 고침\"을 누르면 그립니다.",
+  "This file is large; Refresh Preview renders it.": "큰 파일입니다. \"미리보기 새로 고침\"을 누르면 미리보기를 그립니다."
 }

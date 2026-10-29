@@ -10,7 +10,7 @@
   const KINDS = { server: null, mod: ['fabric', 'forge', 'neoforge'], plugin: ['paper', 'purpur', 'velocity'] };
   const DEFAULT_KIND = { server: 'paper', mod: 'fabric', plugin: 'paper' };
   const words = (n) => n.split(/[^A-Za-z0-9]+/).filter(Boolean);
-  const serverName = (n) => (n.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || 'server');
+  const serverName = (n) => { const s = n.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || 'server'; return mc.reserved(s) ? `${s}-server` : s; };
   const modId = (n) => words(n).join('_').toLowerCase().replace(/^[^a-z]+/, '').slice(0, 64) || 'mymod';
   const className = (n) => words(n).map((w) => w[0].toUpperCase() + w.slice(1)).join('').replace(/^[^A-Z]+/, '').slice(0, 40) || 'MyPlugin';
 
@@ -101,7 +101,10 @@
           if (!proxy() && !eula.checked) throw new Error(tr('A Minecraft server runs only after you accept the Minecraft EULA.'));
           if (what === 'mod' && !/^[a-z][a-z0-9_]{1,63}$/.test(id.value.trim())) throw new Error(tr('Use a mod id of lower-case letters, digits and _, starting with a letter.'));
           if (what === 'plugin' && !/^[A-Z][A-Za-z0-9]{0,39}$/.test(id.value.trim())) throw new Error(tr('Use a class-style plugin name: a capital letter, then letters and digits.'));
+          if (what !== 'server' && mc.reserved(id.value.trim())) throw new Error(tr('{name} is a name Windows keeps for a device: choose another.', { name: id.value.trim() }));
           if (what !== 'server' && !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/.test(pkg.value.trim())) throw new Error(tr('Use a Java package such as com.example.mymod.'));
+          const p = Number(port.value.trim() || 25565);
+          if (what === 'server' && (!Number.isInteger(p) || p < 1 || p > 65535)) throw new Error(tr('Use a port from 1 to 65535.'));
         },
         async opened() {
           mc.screen.show('servers');

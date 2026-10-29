@@ -6,14 +6,15 @@ const os = require('os');
 const remote = require('../remote');
 const trust = require('../trust');
 
-// argv: root, JSON list of declared distribution names. Prints
+// argv: root; stdin: JSON list of declared distribution names (a requirements file of thousands would not fit in a
+// command line). Prints
 // {imports: {top: {where: [[file, line]], modules: [imported names], dists: [[name, version]]}}, provides: {declared
 // name: [tops]}}.
 // Folders of tools and environments are skipped; a module of the project (any .py file or package folder in it) and the
 // standard library are not third-party. try/except fallbacks count too: they are imports the program may make.
 const SCAN = String.raw`
 import ast, json, os, sys
-root, declared = sys.argv[1], json.loads(sys.argv[2])
+root, declared = sys.argv[1], json.loads(sys.stdin.read() or '[]')
 cwd = os.getcwd()
 sys.path[:] = [p for p in sys.path if p not in ('', '.', cwd, root)]
 SKIP = {'node_modules', '__pycache__', 'site-packages', 'build', 'dist', 'venv', 'env'}
@@ -92,10 +93,14 @@ exports.register = ({ ipcMain }) => {
   ipcMain.handle('requirements-sync:scan', (_e, root, interp, declared = []) => {
     if (!interp || remote.isRemote(interp)) return { error: 'remote' };
     if (!root || !trust.isTrusted(root)) return { error: 'untrusted' };
-    return new Promise((resolve) => execFile(interp.cmd, [...interp.args, '-c', SCAN, root, JSON.stringify(declared)],
-      { encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024, cwd: os.tmpdir(), windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-      (err, stdout, stderr) => {
-        try { resolve(JSON.parse((stdout || '').trim().split(/\r?\n/).pop())); } catch { resolve({ error: (stderr || err?.message || 'scan failed').trim().slice(-2000) }); }
-      }));
+    return new Promise((resolve) => {
+      const child = execFile(interp.cmd, [...interp.args, '-c', SCAN, root],
+        { encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024, cwd: os.tmpdir(), windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
+        (err, stdout, stderr) => {
+          try { resolve(JSON.parse((stdout || '').trim().split(/\r?\n/).pop())); } catch { resolve({ error: (stderr || err?.message || 'scan failed').trim().slice(-2000) }); }
+        });
+      child.stdin.on('error', () => {});
+      child.stdin.end(JSON.stringify(Array.isArray(declared) ? declared.filter((d) => typeof d === 'string') : []));
+    });
   });
 };

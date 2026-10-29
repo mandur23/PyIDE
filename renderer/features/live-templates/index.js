@@ -212,7 +212,14 @@
     return i < dot ? i : -1;
   }
 
-  const lastName = (expr) => /([\p{L}_][\p{L}\p{N}_]*)\s*$/u.exec(expr)?.[1] || '';
+  // The name the expression ends with, scanned back like wordAt's word.
+  const lastName = (expr) => {
+    const end = expr.trimEnd().length;
+    let i = end;
+    while (i > 0 && IDENT.test(expr[i - 1])) i--;
+    while (i < end && /\p{N}/u.test(expr[i])) i++;
+    return expr.slice(i, end);
+  };
   function itemName(expr) {
     if (/^range\(/.test(expr)) return 'i';
     const name = lastName(expr);
@@ -291,9 +298,11 @@
   function wordAt(model, pos) {
     const line = model.getLineContent(pos.lineNumber);
     const before = line.slice(0, pos.column - 1);
-    const m = /[\p{L}\p{N}_]*$/u.exec(before);
-    const word = m[0];
-    const start = before.length - word.length;
+    // Scanned back by hand: a regex anchored at the end retries from every position of a long word (a 100k-character
+    // line took seconds per keystroke).
+    let start = before.length;
+    while (start > 0 && IDENT.test(before[start - 1])) start--;
+    const word = before.slice(start);
     if (IDENT.test(line[pos.column - 1] || '')) return null; // mid-word
     if (before[start - 1] === '.') {
       const dot = start - 1;

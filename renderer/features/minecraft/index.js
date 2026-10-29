@@ -47,6 +47,12 @@
   const runningAt = (dir) => !!sessionOf(dir)?.running;
   const serverAt = (dir) => list.find((s) => s.dir.toLowerCase() === dir.toLowerCase()) || null;
 
+  // Windows keeps these names for devices: no folder can have one.
+  const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+  // Processes of servers asked to stop that have not ended yet (process id -> server folder, lower case): they still
+  // hold their ports and worlds.
+  const stopping = new Map();
+
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
   // starts, the Ports window learns its port is the game's (TCP).
   async function beforeStart(dir, con) {
@@ -56,19 +62,26 @@
       con.append(`${backends.length ? tr('Players are sent on to: {servers}', { servers: backends.map((b) => `${b.name} (${b.port})`).join(', ') })
         : tr('No Paper or Purpur server in the project yet: the proxy has nowhere to send players.')}\n`, backends.length ? 'sys' : 'err');
     }
-    ide.ports?.hint(srv?.port || 25565, 'tcp');
-    // A server still stopping (Rerun of a running one) holds the port for some seconds; starting on it would fail.
-    if (srv && !(await ide.api.invoke('minecraft:portFree', srv.port))) {
-      con.append(`${tr('Waiting for port {port} to be free…', { port: srv.port })}\n`, 'sys');
-      for (let i = 0; i < 60 && !(await ide.api.invoke('minecraft:portFree', srv.port)); i++) await new Promise((r) => setTimeout(r, 500));
+    const port = srv?.port || 25565;
+    ide.ports?.hint(port, 'tcp');
+    // A server still stopping (Rerun of a running one) holds its world and port until it has saved, 30 s at most; a
+    // port that another program holds does not come free, so the start ends here instead of failing to bind it.
+    const free = () => ide.api.invoke('minecraft:portFree', port);
+    const saving = () => [...stopping.values()].includes(dir.toLowerCase());
+    if (srv && (saving() || !(await free()))) {
+      con.append(`${tr('Waiting for port {port} to be free…', { port })}\n`, 'sys');
+      for (let i = 0; i < 80 && (stopping.size || i < 6) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
+      if (!(await free())) throw new Error(tr('Port {port} is in use by another program: stop it, or change server-port in server.properties.', { port }));
     }
   }
   // Stop asks the server to save and quit ("end" for a Velocity proxy); the process is killed only if it is still
-  // there 30 s later.
+  // there 30 s later. By its id: a Rerun has moved the session on to the next process by then.
   function gracefulStop(s, dir) {
     s.kill = (pid) => {
+      if (stopping.has(pid)) return;
+      stopping.set(pid, dir.toLowerCase());
       ide.proc.input(pid, serverAt(dir)?.proxy ? 'end\n' : 'stop\n');
-      setTimeout(() => { if (s.procId === pid && s.running) ide.proc.kill(pid); }, 30000);
+      setTimeout(() => { if (stopping.has(pid)) ide.proc.kill(pid); }, 30000);
     };
   }
   // A server's exit (its first start unpacks the API its plugins compile against) brings the plugins' classpath and
@@ -86,12 +99,12 @@
       const con = s.console({ input: true, placeholder: tr('Server command (op <player>, whitelist add <player>, stop…)') });
       const j = job(con);
       try {
-        await beforeStart(dir, con);
         const spec = await ide.api.invoke('minecraft:launch', ide.root, dir, j.id);
+        await beforeStart(dir, con);
         con.append(`${[spec.cmd, ...spec.args].map(quote).join(' ')}\n`, 'sys');
         const id = await ide.api.invoke('minecraft:start', ide.root, spec);
         gracefulStop(s, dir);
-        s.attach(id, { onExit: () => afterExit(dir) });
+        s.attach(id, { onExit: () => { stopping.delete(id); afterExit(dir); } });
         render();
         ide.api.invoke('ports:refresh').catch(() => {});
       } catch (err) {
@@ -107,8 +120,8 @@
         async launch({ con, port }) {
           const j = job(con);
           try {
-            await beforeStart(dir, con);
             const spec = await ide.api.invoke('minecraft:launch', ide.root, dir, j.id, { debugPort: port });
+            await beforeStart(dir, con);
             con.append(`${[spec.cmd, ...spec.args].map(quote).join(' ')}\n`, 'sys');
             const procId = await ide.api.invoke('minecraft:start', ide.root, spec);
             return { procId, sourceRoots: await ide.api.invoke('minecraft:sourceRoots', ide.root, dir) };
@@ -156,6 +169,7 @@
     debug(cfg) {
       if (cfg.task !== 'runClient') return run.runConfig(cfg);
       const dir = run.resolvePath(cfg.dir);
+      let mine = null; // this session's HotSwap target: a second session of the same mod has its own
       return ide.debugger.debugJvm({
         rerun: () => run.debugConfig(cfg),
         async launch({ con, port }) {
@@ -164,7 +178,7 @@
             const spec = await ide.api.invoke('minecraft:modTask', ide.root, dir, 'runClient', j.id, { debugPort: port });
             con.append(`gradlew runClient (${tr('debug port {port}', { port })})\n`, 'sys');
             const procId = await ide.api.invoke('minecraft:start', ide.root, spec);
-            hotswap = { dir, con };
+            hotswap = mine = { dir, con };
             // Gradle prepares Minecraft before the game starts: the first time, many minutes.
             return { procId, sourceRoots: ['src\\main\\java', 'src\\client\\java'].map((r) => `${dir}\\${r}`), timeoutMs: 30 * 60000 };
           } catch (err) {
@@ -172,7 +186,7 @@
             return null;
           } finally { j.done(); }
         },
-      }).then((handle) => { handle?.ended?.then(() => { if (hotswap?.dir === dir) hotswap = null; }); return handle; });
+      }).then((handle) => { handle?.ended?.then(() => { if (hotswap === mine) hotswap = null; }); return handle; });
     },
     async start(cfg, s) {
       const con = s.console({ input: true });
@@ -350,7 +364,15 @@
         { label: tr('Create'), primary: true, run: () => {
           if (!version.value) { f.error.textContent = tr('Choose a version.'); return false; }
           if (!proxy() && !eula.checked) { f.error.textContent = tr('A Minecraft server runs only after you accept the Minecraft EULA.'); return false; }
-          createServer({ name: name.value.trim(), kind: kind.value, mc: version.value, memory: memory.value, port: Number(port.value) || 25565 });
+          // What main refuses, said while the dialog still holds what was typed.
+          const n = name.value.trim();
+          const p = Number(port.value.trim() || 25565);
+          const why = !/^[A-Za-z][\w-]{0,39}$/.test(n) ? tr('Use letters, digits, - and _ for the name, starting with a letter (40 at most).')
+            : RESERVED.test(n) ? tr('{name} is a name Windows keeps for a device: choose another.', { name: n })
+              : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
+                : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
+          if (why) { f.error.textContent = why; return false; }
+          createServer({ name: n, kind: kind.value, mc: version.value, memory: memory.value, port: p });
           return true;
         } },
         { label: tr('Cancel') },
@@ -455,6 +477,8 @@
       buttons: [
         { label: tr('Create'), primary: true, run: () => {
           if (!/^[a-z][a-z0-9_]{1,63}$/.test(id.value.trim())) { f.error.textContent = tr('Use a mod id of lower-case letters, digits and _, starting with a letter.'); return false; }
+          if (RESERVED.test(id.value.trim())) { f.error.textContent = tr('{name} is a name Windows keeps for a device: choose another.', { name: id.value.trim() }); return false; }
+          if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/.test(pkg.value.trim())) { f.error.textContent = tr('Use a Java package such as com.example.mymod.'); return false; }
           createMod({ id: id.value.trim(), display: display.value.trim(), pkg: pkg.value.trim(), server: srv.value });
           return true;
         } },
@@ -736,6 +760,14 @@
   function render() {
     for (const host of hosts) renderInto(host);
   }
+  // Start or Debug clicked again before the server runs (its card shows Stop only then) starts it once.
+  const launching = new Set(); // server folders (lower case)
+  function launchOnce(srv, how) {
+    const key = srv.dir.toLowerCase();
+    if (launching.has(key) || runningAt(srv.dir)) return;
+    launching.add(key);
+    Promise.resolve(how(serverConfig(srv))).catch(() => {}).finally(() => { launching.delete(key); render(); });
+  }
   function renderInto(host) {
     host.replaceChildren();
     const bar = el('div', 'mc-bar');
@@ -760,8 +792,8 @@
       const actions = el('div', 'mc-server-actions');
       if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
       else {
-        actions.append(button(tr('Start'), 'mc-start', () => run.runConfig(serverConfig(srv))));
-        if (ide.debugger?.debugJvm) actions.append(button(tr('Debug'), 'mc-debug', () => run.debugConfig(serverConfig(srv)), tr('Start with the Java debugger attached: breakpoints in its plugins and mods stop the server')));
+        actions.append(button(tr('Start'), 'mc-start', () => launchOnce(srv, run.runConfig)));
+        if (ide.debugger?.debugJvm) actions.append(button(tr('Debug'), 'mc-debug', () => launchOnce(srv, run.debugConfig), tr('Start with the Java debugger attached: breakpoints in its plugins and mods stop the server')));
       }
       if (running && ide.ports) actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
       if (srv.plugins) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
@@ -818,7 +850,7 @@
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.registerAction({ id: 'Minecraft.NewMod', title: tr('New Minecraft Mod…'), needsProject: true, run: () => newMod() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
-    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning,
+    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, reserved: (name) => RESERVED.test(name),
     // Shows the server list (with drops) in another container too: the Minecraft screen's Servers page.
     addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };
 

@@ -133,8 +133,23 @@ async function freePort(from) {
   throw new Error(`No free port near ${from}`);
 }
 
+// A connection that stops sending is given up after this long without data (undici alone waits 300 s).
+const STALL_MS = 60000;
+
 async function download(url, dest, { sha256, size, signal, progress, log }) {
   log(`Downloading ${url}\n`);
+  const stall = new AbortController();
+  let timer;
+  const alive = () => { clearTimeout(timer); timer = setTimeout(() => stall.abort(new Error(`Download stalled: no data for ${STALL_MS / 1000} s from ${url}`)), STALL_MS); };
+  alive();
+  try {
+    return await downloadTo(url, dest, { sha256, size, signal: signal ? AbortSignal.any([signal, stall.signal]) : stall.signal, progress, log, alive });
+  } catch (err) {
+    throw stall.signal.aborted ? stall.signal.reason : err;
+  } finally { clearTimeout(timer); }
+}
+
+async function downloadTo(url, dest, { sha256, size, signal, progress, log, alive }) {
   const res = await fetch(url, { signal, redirect: 'follow' });
   if (!res.ok) throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
   const total = Number(res.headers.get('content-length')) || size;
@@ -147,6 +162,7 @@ async function download(url, dest, { sha256, size, signal, progress, log }) {
   let shown = -1;
   try {
     for await (const chunk of res.body) {
+      alive();
       hash.update(chunk);
       got += chunk.length;
       if (out.errored) throw out.errored;

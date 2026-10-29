@@ -16,21 +16,32 @@ const BASE = {
   adoptium: 'https://api.adoptium.net/v3',
   modrinth: 'https://api.modrinth.com/v2',
 };
+// Only text values replace a base URL, without a trailing slash (the paths below add their own).
 const base = () => {
-  try { return { ...BASE, ...JSON.parse(process.env.PYIDE_MC_SOURCES || '{}') }; } catch { return BASE; }
+  let own = {};
+  try { own = JSON.parse(process.env.PYIDE_MC_SOURCES || '{}') || {}; } catch {}
+  return { ...BASE, ...Object.fromEntries(Object.entries(own).filter(([, v]) => typeof v === 'string').map(([k, v]) => [k, v.replace(/\/+$/, '')])) };
 };
 // PaperMC refuses requests without a User-Agent that names the program.
 const HEADERS = { 'User-Agent': `PyIDE/${require('../../package.json').version} (https://github.com/mandur23/PyIDE)` };
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  return res.json();
-}
+// A service that does not answer within TIMEOUT is given up on. What goes wrong is the service's or the network's, the
+// user's to see and not an IDE error: the errors are marked expected, and an HTTP error carries its status.
+const TIMEOUT = 30000;
+const fail = (message, more) => Object.assign(new Error(message), { expected: true, ...more });
 async function getText(url) {
-  const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  return res.text();
+  try {
+    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(TIMEOUT) });
+    if (!res.ok) throw fail(`${url}: HTTP ${res.status}`, { status: res.status });
+    return await res.text();
+  } catch (err) {
+    if (err.expected) throw err;
+    throw fail(err.name === 'TimeoutError' ? `${url}: no answer within ${TIMEOUT / 1000} seconds` : `${url}: ${err.cause?.message || err.message}`);
+  }
+}
+async function getJson(url) {
+  const text = await getText(url);
+  try { return JSON.parse(text); } catch { throw fail(`${url}: the answer is not JSON`); }
 }
 
 // Newest first by numeric parts: 26.3 > 26.1.2 > 1.21.11 > 1.21.2.

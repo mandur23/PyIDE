@@ -41,5 +41,7 @@
   "Build cancelled: another package job is running in Python Packages. Build again when it is done.": "만들기를 취소했습니다. Python 패키지 창에서 다른 작업이 실행 중입니다. 끝난 뒤 다시 만드세요.",
   "Build cancelled: PyInstaller could not be installed (see Python Packages).": "만들기를 취소했습니다. PyInstaller를 설치하지 못했습니다(Python 패키지 창 참고).",
   "folder {size} MB": "폴더 {size}MB",
-  "{size} MB": "{size}MB"
+  "{size} MB": "{size}MB",
+  "Not a file name for the executable: {name}": "실행 파일 이름으로 쓸 수 없습니다: {name}",
+  "Enter a name for the executable.": "실행 파일 이름을 입력하세요."
 }

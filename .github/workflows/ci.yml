@@ -359,6 +359,26 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/minecraft.mjs
+      - name: stress-minecraft-content
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/stress-minecraft-content.mjs
+      - name: stress-minecraft-runtime
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/stress-minecraft-runtime.mjs
+      - name: stress-editor-languages
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/stress-editor-languages.mjs
+      - name: stress-terminal-ports-run
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/stress-terminal-ports-run.mjs
+      - name: markdown-large
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/markdown-large.mjs
       - name: terminal-venv
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

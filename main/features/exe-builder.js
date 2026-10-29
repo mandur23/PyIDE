@@ -18,11 +18,14 @@ function pyinstallerVersion(interp) {
 const inRoot = (root, p) => (path.isAbsolute(p) ? p : path.join(root, p));
 
 // opts: {script, name, mode: 'onefile'|'onedir', windowed, icon, data: project paths, extra: argv}
-// -> {args, output, dist} | {error: 'script'|'icon'|'data', path?}
+// -> {args, output, dist} | {error: 'script'|'icon'|'data'|'name', path?}
 function plan(root, opts) {
   const script = inRoot(root, opts.script);
   if (!fs.existsSync(script)) return { error: 'script', path: script };
   const name = (opts.name || '').replace(/\.exe$/i, '') || path.basename(script).replace(/\.pyw?$/i, '');
+  // A file name in dist and a folder in build: "..\x", "a/b" or ".." would put the program and the work files (which
+  // --clean empties) elsewhere.
+  if (/[\\/:*?"<>|\x00-\x1f]/.test(name) || /^[.\s]*$/.test(name)) return { error: 'name', path: name };
   const dist = path.join(root, 'dist');
   const work = path.join(root, 'build', name);
   const args = ['PyInstaller', '--noconfirm', '--clean', opts.mode === 'onedir' ? '--onedir' : '--onefile', '--name', name,

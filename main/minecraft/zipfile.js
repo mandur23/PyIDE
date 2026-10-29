@@ -5,6 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
+const fail = (message) => Object.assign(new Error(message), { expected: true });
+// What reading an archive stops at. A zip bomb (a small file whose entries inflate to gigabytes, or a directory whose
+// entries all point at the same data) is refused before anything is written; resource packs and modpack overrides
+// are tens of MB.
+const LIMITS = { entry: 512 * 1024 * 1024, total: 2 * 1024 * 1024 * 1024 };
+const mb = (n) => Math.ceil(n / 1048576);
+
 const CRC = new Int32Array(256).map((_v, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
 const crc32 = (buf) => { let c = -1; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; };
 
@@ -34,7 +41,8 @@ function writeZip(entries) {
 }
 
 // A zip on disk opened for reading entries: {names, read(name) -> Buffer | null, close()}. Only the central directory
-// is read up front; an entry is read when asked for. Stored and deflated entries (what jars and packs use).
+// is read up front; an entry is read when asked for. Stored and deflated entries (what jars and packs use); size(name)
+// is the size the directory declares, which read() inflates no further than.
 function openZip(file) {
   const fd = fs.openSync(file, 'r');
   try {
@@ -42,28 +50,39 @@ function openZip(file) {
     const tail = Buffer.alloc(Math.min(size, 65557));
     fs.readSync(fd, tail, 0, tail.length, size - tail.length);
     const eocd = tail.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-    if (eocd < 0) throw new Error('not a zip file');
+    if (eocd < 0 || eocd + 22 > tail.length) throw fail(`${path.basename(file)} is not a zip file`);
     const count = tail.readUInt16LE(eocd + 10);
     const dirSize = tail.readUInt32LE(eocd + 12);
     const dirAt = tail.readUInt32LE(eocd + 16);
+    // A truncated archive names a directory past its end.
+    if (dirAt + dirSize > size) throw fail(`${path.basename(file)} is damaged (cut short?)`);
     const dir = Buffer.alloc(dirSize);
     fs.readSync(fd, dir, 0, dirSize, dirAt);
-    const entries = new Map(); // name -> {method, packed, at}
-    for (let p = 0, i = 0; i < count && p + 46 <= dir.length; i++) {
+    const entries = new Map(); // name -> {flags, method, packed, size, at}
+    for (let p = 0, i = 0; i < count && p + 46 <= dir.length && dir.readUInt32LE(p) === 0x02014b50; i++) {
       const nameLen = dir.readUInt16LE(p + 28);
-      entries.set(dir.toString('utf8', p + 46, p + 46 + nameLen), { method: dir.readUInt16LE(p + 10), packed: dir.readUInt32LE(p + 20), at: dir.readUInt32LE(p + 42) });
+      entries.set(dir.toString('utf8', p + 46, p + 46 + nameLen), { flags: dir.readUInt16LE(p + 8), method: dir.readUInt16LE(p + 10),
+        packed: dir.readUInt32LE(p + 20), size: dir.readUInt32LE(p + 24), at: dir.readUInt32LE(p + 42) });
       p += 46 + nameLen + dir.readUInt16LE(p + 30) + dir.readUInt16LE(p + 32);
     }
     return {
       names: [...entries.keys()],
+      size: (name) => entries.get(name)?.size ?? 0,
       read(name) {
         const e = entries.get(name);
         if (!e) return null;
+        if (e.flags & 1) throw fail(`${name} is encrypted`);
+        if (e.method !== 0 && e.method !== 8) throw fail(`${name} uses a compression PyIDE does not read (method ${e.method})`);
+        if (e.size > LIMITS.entry) throw fail(`${name} is too large (${mb(e.size)} MB)`);
         const head = Buffer.alloc(30);
         fs.readSync(fd, head, 0, 30, e.at);
+        const at = e.at + 30 + head.readUInt16LE(26) + head.readUInt16LE(28);
+        if (head.readUInt32LE(0) !== 0x04034b50 || at + e.packed > size) throw fail(`${name} is damaged`);
         const data = Buffer.alloc(e.packed);
-        fs.readSync(fd, data, 0, e.packed, e.at + 30 + head.readUInt16LE(26) + head.readUInt16LE(28));
-        return e.method === 0 ? data : e.method === 8 ? zlib.inflateRawSync(data) : null;
+        fs.readSync(fd, data, 0, e.packed, at);
+        if (e.method === 0) return data;
+        // An entry that inflates to more than it declares is a bomb, not a file.
+        try { return zlib.inflateRawSync(data, { maxOutputLength: Math.max(e.size, 1) }); } catch { throw fail(`${name} is damaged`); }
       },
       close: () => fs.closeSync(fd),
     };
@@ -86,14 +105,19 @@ function readEntry(file, name) {
   }
 }
 
-// Every file of a zip written under dest (a resource pack); an entry naming a path outside dest is skipped.
-function unpackZip(file, dest) {
+// Every file of a zip (or of its folder prefix, left out of the names) written under dest: a resource pack, a
+// modpack's overrides. An entry naming a path outside dest, or an alternate data stream (a colon), is skipped; an
+// archive that unpacks to more than LIMITS.total writes nothing.
+function unpackZip(file, dest, prefix = '') {
   const zip = openZip(file);
   const top = path.resolve(dest);
   try {
-    for (const n of zip.names.filter((x) => !x.endsWith('/'))) {
-      const out = path.resolve(top, n);
-      if (!out.startsWith(top + path.sep)) continue;
+    const names = zip.names.filter((x) => x.startsWith(prefix) && !x.endsWith('/'));
+    const total = names.reduce((s, n) => s + zip.size(n), 0);
+    if (total > LIMITS.total) throw fail(`${path.basename(file)} unpacks to ${mb(total)} MB, more than the ${mb(LIMITS.total)} MB PyIDE unpacks`);
+    for (const n of names) {
+      const out = path.resolve(top, n.slice(prefix.length));
+      if (!out.startsWith(top + path.sep) || out.slice(top.length).includes(':')) continue;
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, zip.read(n));
     }

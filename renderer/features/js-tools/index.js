@@ -43,14 +43,20 @@
 
   // ---------- Prettier ----------
   const prettier = (text, path) => ide.api.invoke('js-tools:prettier', text, path, ide.root);
+  // Output that cannot be the file formatted, from a broken Prettier that exits 0: nothing for a file with text, or
+  // characters Prettier never adds (NUL, and U+FFFD for bytes that were not UTF-8). The file would be replaced by it.
+  const strange = (s) => (s.match(/[\u0000�]/g) || []).length;
+  const unusable = (out, text) => (!out.trim() && !!text.trim()) || strange(out) > strange(text);
 
   // Reformat Code asks this before the language server and Monaco (renderer/features/tooling): null leaves the file to
   // them (not a Prettier file, no Prettier in the project, Safe Mode, turned off).
   async function prettierFormat(tab) {
     if (!isFileTab(tab) || !PRETTIER_FILE.test(tab.path) || !usable() || !get(KEYS.reformat)) return null;
-    const r = await prettier(tab.model.getValue(), tab.path).catch((err) => ({ error: ide.util.errorText(err) }));
+    const text = tab.model.getValue();
+    const r = await prettier(text, tab.path).catch((err) => ({ error: ide.util.errorText(err) }));
     if (!r || r.skipped) return null;
     if (r.error) return { error: tr('Prettier cannot format the file: {error}', { error: r.error }) };
+    if (unusable(r.text, text)) return { error: tr('Prettier cannot format the file: {error}', { error: tr('its output is not the formatted file') }) };
     // Prettier writes LF (its endOfLine default); the file keeps its own line separators.
     return { text: withEol(tab.model, r.text) };
   }
@@ -69,7 +75,7 @@
     async run(text, ctx) {
       if (!get(KEYS.onSave) || !PRETTIER_FILE.test(ctx.path) || !usable()) return undefined;
       const r = await prettier(text, ctx.path).catch(() => null);
-      return r && typeof r.text === 'string' ? r.text.replace(/\r?\n/g, ctx.eol || '\n') : undefined;
+      return r && typeof r.text === 'string' && !unusable(r.text, text) ? r.text.replace(/\r?\n/g, ctx.eol || '\n') : undefined;
     },
   });
 
@@ -116,12 +122,19 @@
   }
 
   const timers = new Map();
+  const running = new Map(); // path -> the lint lintSoon started, until it settles
   // A file larger than this (in characters) is linted when it opens and when it is saved, not after every pause.
   const LINT_WHILE_TYPING_MAX = 1024 * 1024;
   function lintSoon(tab, ms = 800) {
     clearTimeout(timers.get(tab.path));
     if (tab.model.getValueLength() > LINT_WHILE_TYPING_MAX) return;
-    timers.set(tab.path, setTimeout(() => lint(tab), ms));
+    timers.set(tab.path, setTimeout(() => {
+      // One ESLint per file at a time: one that hangs (until its 30 s timeout) is not joined by another per pause.
+      const busy = running.get(tab.path);
+      if (busy) { busy.then(() => isFileTab(tab) && ide.findTab(tab.path) && lintSoon(tab, 0)); return; }
+      const p = lint(tab).catch(() => null).finally(() => running.delete(tab.path));
+      running.set(tab.path, p);
+    }, ms));
   }
 
   async function fixAll(tab = ide.activeTab()) {

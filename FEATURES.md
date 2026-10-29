@@ -1417,3 +1417,14 @@ Editors take keyboard and IME input through the browser's EditContext API (`edit
 The installer leaves out Monaco's `dev`, `esm` and its nested `node_modules`, the AMD worker copies in `min/vs/language/*/*.worker.js` (the `assets` copies are used), the message bundles other than Korean, and `dompurify` (bundled into the min build).
 
 Test: `verify/ime-korean.mjs` (port 9170; in CI) on `verify/fixtures/ime-korean`. It drives IME compositions with CDP (`Input.imeSetComposition` per jamo, `Input.insertText` to commit) in the middle of a colored Python line. While a syllable is being composed, each token keeps its color, nothing is drawn over it and the syllable shows in the line. It also checks the committed text and caret, several syllables, Backspace inside a composition (a 229 "Process" key and a shorter composition), a cancelled composition, undo, a composition replacing a selection, and Korean in the find widget, a notebook cell and the Python Console input. Clips of the line before and while a syllable is being composed are saved to `verify/out/ime-korean/before.png` and `composing.png`.
+
+## Stress tests
+
+Five suites (in CI) attack the features of the last releases with hostile and extreme input, offline against stand-ins:
+- `verify/stress-minecraft-content.mjs` (ports 8610-8619): malformed, truncated, zip-slip and zip-bomb archives, hostile modpack indexes, a failing or hanging stand-in Modrinth, dependency cycles, concurrent Market installs.
+- `verify/stress-minecraft-runtime.mjs` (ports 8620-8629): reserved and invalid names, ports out of range or taken, Start, Stop and Rerun clicked 20 times, damaged server descriptions, HotSwap with compile errors and 30 saves a second, 50 servers.
+- `verify/stress-editor-languages.mjs` (ports 8630-8639): 5 MB files, 100k-character lines, 10k-deep JSON, XML and HTML, exploding Emmet abbreviations, 50 carets, crashing, hanging or garbage-printing Prettier and ESLint, unreachable SQL sources. Freezes are measured.
+- `verify/stress-terminal-ports-run.mjs` (port 8640): venv paths with `& ^ % ! ( ) ; $ ’` and 200+ characters (no command injection), broken activate scripts, 20 terminals at once, bad port numbers and misbehaving tunnel tools, 50 saves for Rerun on Save, hostile requirements files, exe names that climb out of dist.
+- `verify/markdown-large.mjs` (port 8650): a Markdown file over 1 MB (`MD_LIVE_LIMIT` in the viewers plugin) is not re-rendered while typing; Refresh Preview renders it, and a small file previews live.
+
+Downloads (`main/installer/servers.js`) end with an error after 60 s without data instead of undici's 300 s.

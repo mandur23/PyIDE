@@ -24,11 +24,24 @@ const MOD = 'pyide-mod.json';
 const NAME = /^[A-Za-z][\w-]{0,39}$/;
 const MOD_ID = /^[a-z][a-z0-9_]{1,63}$/;
 const PACKAGE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
+// Windows keeps these names for devices: no folder can have one, whatever its case.
+const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+const KEYWORDS = new Set(('abstract assert boolean break byte case catch char class const continue default do double else enum extends final '
+  + 'finally float for goto if implements import instanceof int interface long native new package private protected public return short '
+  + 'static strictfp super switch synchronized this throw throws transient try void volatile while true false null').split(' '));
+const javaPackage = (pkg) => PACKAGE.test(pkg || '') && !pkg.split('.').some((w) => KEYWORDS.has(w));
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 const writeJson = (p, v) => fs.writeFileSync(p, `${JSON.stringify(v, null, 2)}\n`);
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const fail = (message, code) => Object.assign(new Error(message), { expected: true, code });
+const notReserved = (name) => { if (RESERVED.test(name)) throw fail(`${name} is a name Windows keeps for a device: choose another`); };
+// A game port: 1-65535 (25565 when none is given).
+const gamePort = (port) => {
+  const n = port == null || port === '' ? 25565 : Number(port);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) throw fail('Use a port from 1 to 65535');
+  return n;
+};
 const run = (cmd, args, opts, log) => new Promise((resolve, reject) => {
   const child = execFile(cmd, args, { windowsHide: true, maxBuffer: 64 << 20, ...opts }, (err) => (err ? reject(fail(`${path.basename(cmd)} failed (exit ${err.code ?? err.signal})`)) : resolve()));
   child.stdout?.on('data', (d) => log(d.toString()));
@@ -76,7 +89,7 @@ async function ensureJava(major, { jdk = false, log }) {
   const found = await findJava(major, jdk);
   if (found) return found;
   const kind = jdk ? 'jdk' : 'jre';
-  const t = await temurin(major, jdk);
+  const t = await temurin(major, jdk).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
   log(`Java ${major} is not installed; downloading Temurin ${kind.toUpperCase()} ${major} from Adoptium.\n`);
   fs.mkdirSync(javaRoot(), { recursive: true });
   const archive = path.join(javaRoot(), t.name);
@@ -104,7 +117,7 @@ const described = (parent, file) => (fs.existsSync(parent) ? fs.readdirSync(pare
   .filter((d) => d.isDirectory()).map((d) => {
     const dir = path.join(parent, d.name);
     const meta = readJson(path.join(dir, file));
-    return meta && { ...meta, name: d.name, dir };
+    return meta && typeof meta === 'object' && !Array.isArray(meta) && { ...meta, name: d.name, dir };
   }).filter(Boolean);
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 
@@ -112,15 +125,16 @@ const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLo
 function servers(root) {
   const projects = [...described(path.join(root, 'plugins'), PLUGIN).map((p) => ({ ...p, type: 'plugin' })),
     ...described(path.join(root, 'mods'), MOD).map((p) => ({ ...p, type: 'mod' }))];
-  return described(path.join(root, 'servers'), SERVER).map((s) => ({
+  return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind]).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')),
     projects: projects.filter((p) => sameDir(path.resolve(p.dir, p.server), s.dir)).map(({ type, name, dir }) => ({ type, name, dir })),
   }));
 }
 const serverOf = (dir) => {
+  if (!fs.existsSync(path.join(dir, SERVER))) throw fail(`${dir} is not a PyIDE Minecraft server (no ${SERVER})`);
   const desc = readJson(path.join(dir, SERVER));
-  if (!desc) throw fail(`${dir} is not a PyIDE Minecraft server (no ${SERVER})`);
+  if (!desc || typeof desc !== 'object' || Array.isArray(desc)) throw fail(`${path.join(dir, SERVER)} cannot be read: fix it or create the server again`);
   return desc;
 };
 
@@ -154,6 +168,8 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
   // A proxy runs no Minecraft server, so Mojang's EULA is not its to accept.
   if (!eula && !source.proxy) throw fail('The Minecraft EULA must be accepted to run a server');
   if (!NAME.test(name || '')) throw fail('Use letters, digits, - and _ for the name, starting with a letter');
+  notReserved(name);
+  port = gamePort(port);
   const dir = path.join(root, 'servers', name);
   if (fs.existsSync(dir)) throw fail(`${path.relative(root, dir)} already exists`);
   fs.mkdirSync(dir, { recursive: true });
@@ -177,12 +193,12 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
     if (source.proxy) {
       // The forwarding secret proves to the Paper servers behind the proxy that a player came through it.
       fs.writeFileSync(path.join(dir, 'forwarding.secret'), crypto.randomBytes(18).toString('base64url'));
-      fs.writeFileSync(path.join(dir, 'velocity.toml'), T.velocityToml(Number(port) || 25565, []));
-      fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${Number(port) || 25565}\n`);
+      fs.writeFileSync(path.join(dir, 'velocity.toml'), T.velocityToml(port, []));
+      fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${port}\n`);
     } else {
       // The user agreed in the New Server dialog, which links the EULA; the date says when.
       fs.writeFileSync(path.join(dir, 'eula.txt'), `# Accepted in PyIDE on ${new Date().toISOString()}: https://aka.ms/MinecraftEULA\neula=true\n`);
-      if (!fs.existsSync(path.join(dir, 'server.properties'))) fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${Number(port) || 25565}\nmotd=${name}\n`);
+      if (!fs.existsSync(path.join(dir, 'server.properties'))) fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${port}\nmotd=${name}\n`);
     }
     for (const sub of source.plugins ? ['plugins'] : source.mods ? ['mods'] : []) fs.mkdirSync(path.join(dir, sub), { recursive: true });
     const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, mdk: r.mdk || null };
@@ -199,7 +215,14 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
 // (a plugin's onEnable runs within moments of the start).
 async function launch(dir, log, { debugPort } = {}) {
   const desc = serverOf(dir);
+  // A description edited by hand: what a start needs, said before any Java is looked for.
+  if (!KINDS[desc.kind]) throw fail(`${SERVER} names no server type PyIDE knows (kind: ${JSON.stringify(desc.kind ?? null)})`);
+  if (!Number.isInteger(desc.java) || desc.java < 8) throw fail(`${SERVER} names no Java version (java: ${JSON.stringify(desc.java ?? null)})`);
+  if (!desc.launch?.jar && !desc.launch?.argsFile) throw fail(`${SERVER} does not say how to start the server (launch)`);
+  const port = portOf(dir);
+  if (port > 65535) throw fail(`server.properties sets server-port=${port}: use a port from 1 to 65535`);
   const home = await ensureJava(desc.java, { log });
+  if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
   const mem = /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G';
   const args = [`-Xmx${mem}`];
   if (debugPort) args.push(`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`);
@@ -261,7 +284,8 @@ function syncPlugins(root, serverDir) {
 
 function newPlugin({ root, name, pkg, server }) {
   if (!/^[A-Z][A-Za-z0-9]{0,39}$/.test(name || '')) throw fail('Use a class-style name: a capital letter, then letters and digits');
-  if (!PACKAGE.test(pkg || '')) throw fail('Use a Java package such as com.example.myplugin');
+  notReserved(name);
+  if (!javaPackage(pkg)) throw fail('Use a Java package such as com.example.myplugin');
   const srv = servers(root).find((s) => s.name === server && s.plugins);
   if (!srv) throw fail('Choose a Paper, Purpur or Velocity server for the plugin');
   const dir = path.join(root, 'plugins', name);
@@ -280,6 +304,7 @@ async function buildPlugin(dir, log) {
   if (!cp.server.length) throw fail('Start the server once first: Paper unpacks the libraries a plugin compiles against at its first start', 'notStarted');
   syncPlugin(dir);
   const sources = filesUnder(path.join(dir, 'src', 'main', 'java'), (n) => n.endsWith('.java'));
+  if (!sources.length) throw fail('The plugin has no .java files in src/main/java');
   const home = await ensureJavac(desc.java, log);
   const build = path.join(dir, 'build');
   const classes = path.join(build, 'classes');
@@ -310,8 +335,11 @@ const REPOS = {
   codemc: 'https://repo.codemc.io/repository/maven-public',
 };
 async function addDependency({ dir, coords, repo, depend }, log) {
-  const [group, artifact, version] = (coords || '').trim().split(':');
-  if (!group || !artifact || !version) throw fail('Write the library as group:artifact:version, e.g. net.luckperms:api:5.4');
+  const parts = (coords || '').trim().split(':');
+  const [group, artifact, version] = parts;
+  // Each part becomes a folder or file name of the download: no separators, no leading dot.
+  if (parts.length !== 3 || parts.some((p) => !/^\w[\w.-]*$/.test(p))) throw fail('Write the library as group:artifact:version, e.g. net.luckperms:api:5.4');
+  if (depend && !/^[\w .-]{1,64}$/.test(depend)) throw fail('The required plugin name may hold letters, digits, spaces, _, . and - only');
   const base = (REPOS[repo] || repo || '').replace(/\/$/, '');
   if (!/^https:\/\//.test(base)) throw fail('Choose a repository, or give its https address');
   const url = `${base}/${group.replace(/\./g, '/')}/${artifact}/${version}/${artifact}-${version}.jar`;
@@ -346,7 +374,8 @@ async function fetchMdk(urls, zip, log) {
 
 async function newMod({ root, id, display, pkg, server }, log) {
   if (!MOD_ID.test(id || '')) throw fail('Use a mod id of lower-case letters, digits and _, starting with a letter (2-64 characters)');
-  if (!PACKAGE.test(pkg || '')) throw fail('Use a Java package such as com.example.mymod');
+  notReserved(id);
+  if (!javaPackage(pkg)) throw fail('Use a Java package such as com.example.mymod');
   const srv = servers(root).find((s) => s.name === server && s.mods);
   if (!srv?.mdk) throw fail('Choose a Fabric, Forge or NeoForge server for the mod');
   const dir = path.join(root, 'mods', id);
@@ -549,6 +578,8 @@ function packResourcePack(dir) {
 }
 // Players are sent the pack when they join: server.properties names its address and SHA-1, and requires it.
 function applyResourcePack(dir, url, sha1) {
+  // Both go into server.properties lines as they are.
+  if (!/^https?:\/\/\S+$/.test(url || '') || !/^[0-9a-f]{40}$/.test(sha1 || '')) throw fail('The resource pack needs an http(s) address and a SHA-1');
   const props = path.join(dir, 'server.properties');
   T.setProperty(props, 'resource-pack', url.replace(/[:=]/g, (c) => `\\${c}`));
   T.setProperty(props, 'resource-pack-sha1', sha1);
@@ -573,11 +604,13 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   // Starts a launch spec ({cmd, args, cwd, env}) as an IDE process the Run window shows; -> process id.
   ipcMain.handle('minecraft:start', (_e, root, spec) => { guard(root); return startProcess(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true }); });
   // Whether nothing listens on a port (a server about to start there would fail to bind it).
-  ipcMain.handle('minecraft:portFree', (_e, port) => new Promise((resolve) => {
+  // A server may hold it on loopback only, which a listen on every address does not notice.
+  const listenable = (port, host) => new Promise((resolve) => {
     const probe = require('net').createServer();
     probe.once('error', () => resolve(false));
-    probe.listen(port, () => probe.close(() => resolve(true)));
-  }));
+    try { probe.listen(port, ...(host ? [host] : []), () => probe.close(() => resolve(true))); } catch { resolve(false); }
+  });
+  ipcMain.handle('minecraft:portFree', async (_e, port) => (await listenable(port, '127.0.0.1')) && listenable(port));
   ipcMain.handle('minecraft:sourceRoots', (_e, root, dir) => sourceRoots(root, dir));
   ipcMain.handle('minecraft:wireProxy', (_e, root, dir) => { guard(root); return wireProxy(root, dir); });
   ipcMain.handle('minecraft:newPlugin', (_e, opts) => { guard(opts?.root); return newPlugin(opts); });

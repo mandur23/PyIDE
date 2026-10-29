@@ -100,7 +100,7 @@ function addToYamlList(file, key, name) {
   const block = new RegExp(`^${key}:\\s*\\n((?:\\s+-\\s*.*\\n?)*)`, 'm');
   if (inline.test(text)) {
     const items = inline.exec(text)[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-    if (!items.includes(name)) text = text.replace(inline, `${key}: [${[...items, name].join(', ')}]`);
+    if (!items.includes(name)) text = text.replace(inline, () => `${key}: [${[...items, name].join(', ')}]`);
   } else if (block.test(text)) {
     const items = [...block.exec(text)[1].matchAll(/-\s*['"]?([^'"\n]+)/g)].map((m) => m[1].trim());
     if (!items.includes(name)) text = text.replace(block, (m) => `${m.replace(/\n?$/, '\n')}  - ${name}\n`);
@@ -202,7 +202,8 @@ function renameMod(dir, kind, { id, display, pkg, cls }) {
 function setProperty(file, key, value) {
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const re = new RegExp(`^${key.replace(/[.]/g, '\\.')}\\s*=.*$`, 'm');
-  fs.writeFileSync(file, re.test(text) ? text.replace(re, `${key}=${value}`) : `${text.replace(/\n?$/, '\n')}${key}=${value}\n`);
+  // A function replacement: a value's $& or $1 is text, not a pattern.
+  fs.writeFileSync(file, re.test(text) ? text.replace(re, () => `${key}=${value}`) :`${text.replace(/\n?$/, '\n')}${key}=${value}\n`);
 }
 
 // ---------- resource pack ----------
@@ -239,7 +240,7 @@ try = [${backends.map((b) => JSON.stringify(b.name)).join(', ')}]
 // The [servers] table of an existing velocity.toml replaced by the project's backends.
 function setVelocityServers(text, backends) {
   const table = `[servers]\n${backends.map((b) => `${JSON.stringify(b.name)} = "127.0.0.1:${b.port}"`).join('\n')}\ntry = [${backends.map((b) => JSON.stringify(b.name)).join(', ')}]\n\n`;
-  return /^\[servers\][\s\S]*?(?=^\[)/m.test(text) ? text.replace(/^\[servers\][\s\S]*?(?=^\[)/m, table) : `${text.replace(/\n?$/, '\n\n')}${table}`;
+  return /^\[servers\][\s\S]*?(?=^\[)/m.test(text) ? text.replace(/^\[servers\][\s\S]*?(?=^\[)/m, () => table) : `${text.replace(/\n?$/, '\n\n')}${table}`;
 }
 // A Paper backend behind Velocity: modern forwarding with the proxy's secret in config/paper-global.yml (the
 // proxies.velocity block), and online-mode off in server.properties since the proxy checks the players' accounts.
@@ -247,8 +248,8 @@ function setPaperVelocity(serverDir, secret) {
   const file = path.join(serverDir, 'config', 'paper-global.yml');
   const block = `  velocity:\n    enabled: true\n    online-mode: true\n    secret: '${secret}'\n`;
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (/^ {2}velocity:\n(?: {4}.*\n)*/m.test(text)) text = text.replace(/^ {2}velocity:\n(?: {4}.*\n)*/m, block);
-  else if (/^proxies:\n/m.test(text)) text = text.replace(/^proxies:\n/m, `proxies:\n${block}`);
+  if (/^ {2}velocity:\n(?: {4}.*\n)*/m.test(text)) text = text.replace(/^ {2}velocity:\n(?: {4}.*\n)*/m, () => block);
+  else if (/^proxies:\n/m.test(text)) text = text.replace(/^proxies:\n/m, () => `proxies:\n${block}`);
   else text = `${text.replace(/\n?$/, text ? '\n' : '')}proxies:\n${block}`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

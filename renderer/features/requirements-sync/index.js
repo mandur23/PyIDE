@@ -64,12 +64,15 @@
   }
 
   // requirements.txt without the given requirements: their lines, with a line continued by a backslash. A line that
-  // moved since the dependency check (the file edited while the scan ran) is found again by its text.
+  // moved since the dependency check (the file edited while the scan ran) is found again by its text. A requirement
+  // continued over lines is the line it starts on: its text begins with that line's.
   function withoutLines(text, reqs) {
     const lines = text.split(/\r?\n/);
     const drop = new Set();
+    const head = (l) => l.replace(/\\\s*$/, '').trim();
     for (const r of reqs) {
-      let i = lines[r.line - 1]?.includes(r.raw) ? r.line - 1 : lines.findIndex((l) => l.includes(r.raw));
+      const starts = (l = '') => l.includes(r.raw) || (/\\\s*$/.test(l) && !!head(l) && r.raw.startsWith(head(l)));
+      let i = starts(lines[r.line - 1]) ? r.line - 1 : lines.findIndex((l) => starts(l));
       if (i < 0) continue;
       drop.add(i);
       while (/\\\s*$/.test(lines[i] || '') && i + 1 < lines.length) drop.add(++i);

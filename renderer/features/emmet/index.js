@@ -445,6 +445,16 @@
     return { state: 'text', open };
   }
 
+  // scanHtml of a model up to `offset`, kept for the model's version: Tab's context key and the completion list ask
+  // for the same position after each keystroke.
+  const scans = new WeakMap(); // model -> {version, offset, at}
+  function scanAt(model, offset) {
+    const version = model.getVersionId();
+    let s = scans.get(model);
+    if (s?.version !== version || s.offset !== offset) scans.set(model, (s = { version, offset, at: scanHtml(model.getValue(), offset) }));
+    return s.at;
+  }
+
   // True when a declaration may start at the end of `text` (CSS from the start of the file or <style>): inside a rule
   // block (not at the top level or directly in @media and the like), after `{`, `;` or `}`, outside strings and
   // comments. lineComments: SCSS and Less `//` comments.
@@ -498,9 +508,12 @@
     }
     if (brace || bracket) return null;
     // A `(` before the abbreviation that it does not close (`return (ul>li`) is not part of it.
+    // Counted once and updated per `(` dropped (counting again each time took seconds on a line of 50k parentheses).
     let start = i;
-    const count = (s, ch) => s.split(ch).length - 1;
-    while (line[start] === '(' && count(line.slice(start, col), '(') > count(line.slice(start, col), ')')) start++;
+    let opens = 0;
+    let closes = 0;
+    for (let k = i; k < col; k++) { if (line[k] === '(') opens++; else if (line[k] === ')') closes++; }
+    while (line[start] === '(' && opens > closes) { start++; opens--; }
     const abbr = line.slice(start, col);
     return abbr ? { abbr, start } : null;
   }
@@ -574,21 +587,22 @@
       return css(model.getValue().slice(0, lineStart).replace(/\r\n/g, '\n'), model.getLanguageId() !== 'css');
     }
     if (syntax === 'html') {
-      const text = model.getValue();
-      const offset = model.getOffsetAt(pos);
-      const at = scanHtml(text, offset);
-      if (at.state === 'raw' && at.raw === 'style') {
-        const lineStart = model.getOffsetAt({ lineNumber: pos.lineNumber, column: 1 });
-        return css(text.slice(at.rawStart, Math.max(at.rawStart, lineStart)), false);
-      }
-      if (at.state !== 'text') return null;
       // The abbreviation starts after the last tag or comment end on the line.
       let bound = 0;
       for (const m of line.slice(0, col).matchAll(/<[^<>]*>|-->/g)) bound = m.index + m[0].length;
       const x = extractMarkup(line, col, bound);
-      if (!x) return null;
-      const tree = x.abbr === '!' || x.abbr === 'html:5' ? [] : parse(x.abbr);
-      if (!tree || !htmlAccepts(x.abbr, tree)) return null;
+      const tree = x && (x.abbr === '!' || x.abbr === 'html:5' ? [] : parse(x.abbr));
+      const markup = !!tree && htmlAccepts(x.abbr, tree);
+      // The line alone rules most words out; only then the scan from the start of the file (tenths of a second per
+      // keystroke in a 5 MB file) says whether the caret is in text or in <style>.
+      const cx = extractCss(line, col);
+      if (!markup && !(cx && expandCss(cx.abbr))) return null;
+      const at = scanAt(model, model.getOffsetAt(pos));
+      if (at.state === 'raw' && at.raw === 'style') {
+        const lineStart = model.getOffsetAt({ lineNumber: pos.lineNumber, column: 1 });
+        return css(model.getValue().slice(at.rawStart, Math.max(at.rawStart, lineStart)), false);
+      }
+      if (at.state !== 'text' || !markup) return null;
       return result(x, expandMarkup(x.abbr, { parent: at.open.at(-1) || '' }), 'html');
     }
     // JSX in .jsx / .tsx.

@@ -1056,6 +1056,8 @@
     json: 'json', jsonc: 'json', sh: 'shell', bash: 'shell', shell: 'shell', ps1: 'powershell', powershell: 'powershell', toml: 'ini',
     ini: 'ini', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css', sql: 'sql', xml: 'xml', cpp: 'cpp', c: 'c', rust: 'rust', go: 'go', java: 'java' };
 
+  const MD_LIVE_LIMIT = 1000000; // characters
+
   // Renders Markdown into `target`; every top-level block carries data-line (0-based source line) for scroll sync.
   function renderMarkdown(target, text, baseDir) {
     const marked = window.marked;
@@ -1106,8 +1108,12 @@
     }, 'vw-btn vw-toggle');
     let syncScroll = ide.settings.get('viewers.markdownSyncScroll', true);
     syncBtn.classList.toggle('active', syncScroll);
+    // A large file's preview is rendered when asked: rendering megabytes again after every edit stops typing for seconds.
+    const large = () => doc.model.getValueLength() > MD_LIVE_LIMIT;
+    const refreshBtn = button('⟳', tr('Refresh Preview'), () => update(true), 'vw-btn vw-md-refresh');
+    refreshBtn.classList.toggle('hidden', !large());
     const status = el('span', 'vw-status');
-    bar.append(seg.el, syncBtn, status);
+    bar.append(seg.el, syncBtn, refreshBtn, status);
     const split = el('div', 'vw-md-split');
     const edHost = el('div', 'vw-md-editor');
     const divider = el('div', 'vw-md-divider');
@@ -1137,8 +1143,15 @@
       if (v !== 'preview') editor.layout();
     }
 
-    const update = async () => {
+    const update = async (asked = false) => {
       if (disposed || mode === 'editor') return;
+      refreshBtn.classList.toggle('hidden', !large());
+      if (large() && !asked) {
+        status.textContent = tr('Large file: the preview is not updated while you type. Refresh Preview renders it.');
+        if (!preview.childElementCount) preview.replaceChildren(el('p', 'vw-md-note muted', tr('This file is large; Refresh Preview renders it.')));
+        return;
+      }
+      status.textContent = '';
       try { await loadMarked(); } catch (e) { status.textContent = cleanError(e); return; }
       if (disposed) return;
       const keep = preview.scrollTop;

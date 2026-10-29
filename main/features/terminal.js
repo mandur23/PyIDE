@@ -55,26 +55,36 @@ async function findClaude() {
 // first on PATH and VIRTUAL_ENV set for every shell, and in PowerShell and Command Prompt the venv's own activate
 // script run as the shell starts (venvActivation), which marks the prompt with the venv's name and defines deactivate.
 const venvOf = (interpExe) => {
-  if (!interpExe) return null;
+  if (typeof interpExe !== 'string' || !path.isAbsolute(interpExe)) return null;
   const venv = path.dirname(path.dirname(interpExe));
   return fs.existsSync(path.join(venv, 'pyvenv.cfg')) ? venv : null;
 };
-function venvEnv(interpExe) {
+// Windows names the variable Path, and so does process.env started from Explorer: a second key spelled PATH would be a
+// second variable in the shell's environment, which finds the first one.
+const PATH_KEY = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+function venvEnv(interpExe, withPath = true) {
   const venv = venvOf(interpExe);
-  return venv ? { VIRTUAL_ENV: venv, PATH: `${path.join(venv, 'Scripts')};${process.env.PATH}` } : {};
+  if (!venv) return {};
+  return withPath ? { VIRTUAL_ENV: venv, [PATH_KEY]: `${path.join(venv, 'Scripts')};${process.env.PATH}` } : { VIRTUAL_ENV: venv };
 }
-// The shell arguments that run the venv's activate script after the user's profile. PowerShell reads Activate.ps1 as
-// a script block: the execution policy (Restricted on many computers) applies to script files, so running the file
-// would be refused, and changing the policy would be a system change. -VenvDir tells it where it is, which it
-// otherwise works out from its own file path.
+// The shell arguments (and variables) that run the venv's activate script after the user's profile, as
+// {args, env, setsPath}. PowerShell reads Activate.ps1 as a script block: the execution policy (Restricted on many
+// computers) applies to script files, so running the file would be refused, and changing the policy would be a system
+// change. -VenvDir tells it where it is, which it otherwise works out from its own file path. PowerShell takes ‘ ’ ‚ ‛
+// as single quotes too, so each is doubled like '. Command Prompt gets the script's quoted path in a variable: cmd
+// expands it once and reads one quoted name, where on the command line & ^ % ( ) in a folder name would be operators
+// (a venv in "a&calc" would run calc). activate.bat puts Scripts on PATH itself; with the venv's path there already,
+// its unquoted `set _OLD_VIRTUAL_PATH=%PATH%` would run what follows an & in it.
 function venvActivation(shellId, venv) {
   const scripts = path.join(venv, 'Scripts');
   if ((shellId === 'powershell' || shellId === 'pwsh') && fs.existsSync(path.join(scripts, 'Activate.ps1'))) {
-    const q = (s) => `'${s.replace(/'/g, "''")}'`;
-    return ['-NoExit', '-Command', `. ([scriptblock]::Create((Get-Content -Raw -LiteralPath ${q(path.join(scripts, 'Activate.ps1'))}))) -VenvDir ${q(venv)}`];
+    const q = (s) => `'${s.replace(/['‘’‚‛]/g, '$&$&')}'`;
+    return { args: ['-NoExit', '-Command', `. ([scriptblock]::Create((Get-Content -Raw -LiteralPath ${q(path.join(scripts, 'Activate.ps1'))}))) -VenvDir ${q(venv)}`], env: {} };
   }
-  if (shellId === 'cmd' && fs.existsSync(path.join(scripts, 'activate.bat'))) return ['/k', 'call', path.join(scripts, 'activate.bat')];
-  return [];
+  if (shellId === 'cmd' && fs.existsSync(path.join(scripts, 'activate.bat'))) {
+    return { args: ['/k', '%PYIDE_VENV_ACTIVATE%'], env: { PYIDE_VENV_ACTIVATE: `"${path.join(scripts, 'activate.bat')}"` }, setsPath: true };
+  }
+  return { args: [], env: {} };
 }
 
 // A session's folder must be a local absolute path (C:\...). A UNC path (\\host\share) is refused before any fs call:
@@ -122,6 +132,7 @@ exports.register = ({ ipcMain, app }) => {
     const known = await (shells ??= detectShells());
     let shell = known.find((s) => s.id === opts.shell) || known.find((s) => s.id === 'powershell');
     let args = [...shell.args];
+    let activation = null;
     let release;
     let targetEnv = {}; // ssh's askpass runs the IDE as Node, so this goes on after ELECTRON_RUN_AS_NODE is cleared
     if (opts.target) {
@@ -142,16 +153,18 @@ exports.register = ({ ipcMain, app }) => {
       else if (shell.id === 'gitbash' || shell.id === 'wsl') args = [...args.filter((a) => a !== '-i'), '-c', `${opts.command}; exec bash -i`];
       else args = [...args, '-NoExit', '-Command', opts.command];
     } else if (venvOf(opts.interpreter)) {
-      args = [...args, ...venvActivation(shell.id, venvOf(opts.interpreter))];
+      activation = venvActivation(shell.id, venvOf(opts.interpreter));
+      args = [...args, ...activation.args];
     }
     const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir();
     // claudeIde.ideEnv(): CLAUDE_CODE_SSE_PORT, so claude started in any PyIDE terminal connects to this window.
     // opts.envFiles: the project's .env files (Settings › Terminal); a remote session's shell does not get them.
     const fileEnv = opts.envFiles?.length && !opts.target ? loadFiles(opts.envFiles) : {};
-    const env = { ...process.env, ...venvEnv(opts.interpreter), ...claudeIde.ideEnv(), ...fileEnv, ...opts.env, TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
+    const env = { ...process.env, ...venvEnv(opts.interpreter, !activation?.setsPath), ...claudeIde.ideEnv(), ...fileEnv, ...opts.env, ...activation?.env,
+      TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
     // The official Claude Code installer puts claude.exe in ~/.local/bin without adding it to PATH; make `claude` work here.
     const localBin = path.join(os.homedir(), '.local', 'bin');
-    if (fs.existsSync(localBin) && !(env.PATH || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env.PATH = `${localBin};${env.PATH}`;
+    if (fs.existsSync(localBin) && !(env[PATH_KEY] || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env[PATH_KEY] = `${localBin};${env[PATH_KEY]}`;
     delete env.ELECTRON_RUN_AS_NODE;
     Object.assign(env, targetEnv);
     let proc;

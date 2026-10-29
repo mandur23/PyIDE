@@ -121,9 +121,20 @@
 
   // ---------- sessions ----------
   // A new tab with one pane.
+  // Sessions on their way (waiting for the terminal to be ready); the window's own first session waits for them too.
+  let creating = 0;
   async function createSession(opts = {}) {
-    await ready;
-    return startPane(makeTab(), opts);
+    creating++;
+    try {
+      await ready;
+      return await startPane(makeTab(), opts);
+    } finally { creating--; }
+  }
+  // Shows the window for a session about to be made, so showing it does not also start the default one.
+  let opening = false;
+  function showFor() {
+    opening = true;
+    try { tw.show(); } finally { opening = false; }
   }
 
   // Splits pane `from` (default: the active one); the new pane starts in that pane's folder with the same shell.
@@ -471,7 +482,7 @@
   }
 
   async function openClaude() {
-    tw.show();
+    showFor();
     // Claude Code's interface needs room; a short bottom panel grows to just under half the window.
     const bottom = document.getElementById('bottom');
     if (bottom.offsetHeight < innerHeight * 0.4) bottom.style.height = `${Math.round(innerHeight * 0.45)}px`;
@@ -485,7 +496,7 @@
   // `claude auth login` in its own tab: the CLI's sign-in, which the AI features use, is separate from the Claude app's,
   // and a refresh token the CLI can no longer use ("OAuth session expired and could not be refreshed") needs a new one.
   async function openClaudeLogin() {
-    tw.show();
+    showFor();
     if (!(await refreshClaude()).installed) { showInstallPrompt(); return null; }
     const q = (p) => `'${p.replace(/'/g, "''")}'`;
     return createSession({ name: tr('Sign in to Claude Code'), kind: 'claude-login', command: `& ${q(claude.path)} auth login`, shell: 'powershell', projectless: true });
@@ -582,7 +593,7 @@
   // Opening the Terminal window with no sessions starts one, as in PyCharm.
   ide.on('toolWindowShown', (id) => {
     if (id !== 'Terminal') return;
-    if (!sessions.length) createSession();
+    if (!sessions.length && !creating && !opening) createSession();
     else if (active) requestAnimationFrame(() => { fitTab(active.t); active.term.focus(); });
   });
 
@@ -641,7 +652,7 @@
       return { installed: !!c?.installed, version: c?.version?.split(' ')[0] || undefined };
     },
     install: async (log, _progress, signal) => {
-      tw.show();
+      showFor();
       await createSession({ name: tr('Install Claude Code'), shell: 'powershell', command: 'irm https://claude.ai/install.ps1 | iex', projectless: true });
       log(`${tr('Running the official installer in the Terminal…')}\n`);
       const end = Date.now() + 15 * 60000;
@@ -660,7 +671,7 @@
   ide.registerTreeAction({
     title: tr('Open in Terminal'),
     when: (entry) => entry.dir,
-    run: (entry) => { tw.show(); createSession({ cwd: entry.path }); },
+    run: (entry) => { showFor(); createSession({ cwd: entry.path }); },
   });
 
   // Commands run in the project root; a new project means new sessions start there.
@@ -690,7 +701,7 @@
   const layoutOf = (n) => (!n ? null : n.kind === 'leaf' ? { id: n.s.id, cols: n.s.term.cols, rows: n.s.term.rows }
     : { dir: n.dir, ratio: n.ratio, a: layoutOf(n.a), b: layoutOf(n.b) });
   ide.terminal = {
-    open: (opts) => { tw.show(); return createSession(opts); },
+    open: (opts) => { showFor(); return createSession(opts); },
     claudeLogin: openClaudeLogin,
     sessions: () => sessions.map((s) => ({ id: s.id, name: s.name, kind: s.kind, exited: s.exited, pid: s.pid, cwd: s.cwd, tab: tabs.indexOf(s.t), projectless: s.projectless })),
     // Tabs with their split tree: a pane is {id, cols, rows}, a split {dir: 'row'|'column', ratio, a, b}.

@@ -5,8 +5,11 @@
 (() => {
   const monaco = ide.monaco;
   const df = ide.dataFormats;
+  // Deeper elements are not reformatted: the printer recurses per level, and each level indents every line below it
+  // (10,000 levels would print hundreds of MB of indentation).
+  const MAX_DEPTH = 1000;
 
-  // -> {nodes} (a tree: {type: element|text|comment|cdata|pi|doctype, raw…}) or {error: {line}}.
+  // -> {nodes} (a tree: {type: element|text|comment|cdata|pi|doctype, raw…}) or {error: {line, why?}}.
   function parse(src) {
     const root = { children: [] };
     const stack = [root];
@@ -73,6 +76,7 @@
       const el = { type: 'element', name, open: raw, selfClosing, children: [], start: k + 1,
         preserve: /\sxml:space\s*=\s*(["'])preserve\1/.test(raw) };
       add(el);
+      if (!selfClosing && stack.length > MAX_DEPTH) return { error: { line: lineAt(i), why: 'depth' } };
       if (!selfClosing) stack.push(el);
       i = k + 1;
     }
@@ -128,7 +132,9 @@
   });
   df.refusals.set('xml', (model) => {
     const r = formatXml(model.getValue(), unitOf(model));
-    return r.error ? tr('Cannot reformat: the XML is not well-formed (line {line})', { line: r.error.line }) : null;
+    if (!r.error) return null;
+    return r.error.why === 'depth' ? tr('Cannot reformat: the XML is nested too deeply (line {line})', { line: r.error.line })
+      : tr('Cannot reformat: the XML is not well-formed (line {line})', { line: r.error.line });
   });
   df.xml = { formatXml };
 })();

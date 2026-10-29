@@ -172,5 +172,10 @@
   "HotSwap: {count} classes reloaded in the game ({ms} ms)": "HotSwap: 게임에 클래스 {count}개를 다시 불러옴({ms}ms)",
   "Starts Minecraft with the mod under the debugger: saving a change to its code reloads it in the running game": "모드를 넣은 마인크래프트를 디버거로 실행합니다. 코드를 고쳐 저장하면 실행 중인 게임에 바로 반영됩니다",
   "Test Client": "테스트 클라이언트",
-  "debug port {port}": "디버그 포트 {port}"
+  "debug port {port}": "디버그 포트 {port}",
+  "Use letters, digits, - and _ for the name, starting with a letter (40 at most).": "이름은 영문자로 시작하고 영문자, 숫자, -, _만 쓰세요(최대 40자).",
+  "{name} is a name Windows keeps for a device: choose another.": "{name}은(는) Windows가 장치용으로 예약한 이름입니다. 다른 이름을 고르세요.",
+  "A server named {name} already exists.": "{name} 서버가 이미 있습니다.",
+  "Use a port from 1 to 65535.": "1에서 65535 사이의 포트를 쓰세요.",
+  "Port {port} is in use by another program: stop it, or change server-port in server.properties.": "{port} 포트를 다른 프로그램이 쓰고 있습니다. 그 프로그램을 끄거나 server.properties의 server-port를 바꾸세요."
 }

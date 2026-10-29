@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { openZip, readEntry, unpackZip } = require('./zipfile');
-const { KINDS, neoforgeMc, HEADERS, modrinthApi } = require('./sources');
+const { KINDS, neoforgeMc, getJson, modrinthApi } = require('./sources');
 
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -16,10 +16,15 @@ const fail = (message, code) => Object.assign(new Error(message), { expected: tr
 function discardDownload(file) {
   if (file && path.dirname(path.resolve(file)) === path.resolve(os.tmpdir()) && /^pyide-[0-9a-f]{8}-.*\.mrpack$/.test(path.basename(file))) fs.rmSync(file, { force: true });
 }
-const inside = (root, rel) => { const p = path.resolve(root, rel); return p.startsWith(path.resolve(root) + path.sep) ? p : null; };
-// A free folder name under parent, from a name made safe for a server name.
-function freeName(parent, raw) {
-  const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || 'server').replace(/-+$/, '') || 'server';
+// rel under root, or null when it names a path outside it or an alternate data stream (a colon).
+const inside = (root, rel) => {
+  if (typeof rel !== 'string') return null;
+  const p = path.resolve(root, rel);
+  return p.startsWith(path.resolve(root) + path.sep) && !p.slice(path.resolve(root).length).includes(':') ? p : null;
+};
+// A free folder name under parent, from a name made safe for a server name (fallback when nothing of it is).
+function freeName(parent, raw, fallback = 'server') {
+  const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || fallback).replace(/-+$/, '') || fallback;
   let name = base;
   for (let i = 2; fs.existsSync(path.join(parent, name)); i++) name = `${base}-${i}`;
   return name;
@@ -109,6 +114,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
     if (!found) throw fail(`${path.basename(src)} does not look like a Minecraft server PyIDE knows (Paper, Purpur, Velocity, Vanilla, Fabric, Forge or NeoForge)`);
     const parent = path.join(root, 'servers');
     const already = path.resolve(path.dirname(src)).toLowerCase() === path.resolve(parent).toLowerCase();
+    if (already && readServer(src)) throw fail(`${path.basename(src)} is one of the project's servers already`);
     const dir = already ? src : path.join(parent, freeName(parent, path.basename(src)));
     if (!already) {
       log(`Copying ${src} to ${dir}…\n`);
@@ -128,7 +134,6 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
 
   // Files and folders dropped on the window (serverDir null) or on one server's card.
   async function drop(serverDir, paths, log) {
-    const items = paths.map(classify);
     const done = [];
     const skipped = [];
     const modpacks = [];
@@ -138,8 +143,10 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
       const fitting = all.filter(fits);
       return fitting.length === 1 ? fitting[0] : null;
     };
-    for (const it of items) {
+    for (const p of paths) {
+      const it = { name: path.basename(p) };
       try {
+        Object.assign(it, classify(p));
         if (it.kind === 'server') {
           const s = await importServer(it.path, log);
           done.push({ name: it.name, what: 'server', to: s.dir });
@@ -164,7 +171,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
         } else if (it.kind === 'world') {
           const s = target((x) => !x.proxy);
           if (!s) { skipped.push({ name: it.name, why: 'target' }); continue; }
-          const name = freeName(s.dir, it.name);
+          const name = freeName(s.dir, it.name, 'world');
           await fs.promises.cp(it.path, path.join(s.dir, name), { recursive: true, errorOnExist: true });
           setLevelName(s.dir, name);
           done.push({ name: it.name, what: 'world', to: path.join(s.dir, name), server: s.name });
@@ -184,72 +191,92 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
 
   // ---------- modpacks ----------
   const LOADERS = { 'fabric-loader': 'fabric', forge: 'forge', neoforge: 'neoforge' };
-  // A Modrinth project (its address or slug) -> the newest version's .mrpack, downloaded with its SHA-1 checked.
+  const VERSION = (v) => typeof v === 'string' && /^[\w.+-]+$/.test(v) && !/^\.+$/.test(v);
+  // A Modrinth project (its address or slug) -> the newest version's .mrpack, downloaded with its SHA-512 or SHA-1 checked.
   async function fromModrinth(ref, log) {
     const slug = /modrinth\.com\/modpack\/([\w.-]+)/.exec(ref)?.[1] || (/^[\w.-]+$/.test(ref) ? ref : null);
-    if (!slug) throw fail('Give a Modrinth modpack address (https://modrinth.com/modpack/…) or its name');
-    const res = await fetch(`${modrinthApi()}/project/${slug}/version`, { headers: HEADERS });
-    if (!res.ok) throw fail(`Modrinth has no modpack ${slug} (HTTP ${res.status})`);
-    const versions = await res.json();
-    const file = versions.flatMap((v) => v.files.filter((f) => /\.mrpack$/.test(f.filename)).map((f) => ({ ...f, version: v }))).find((f) => f.primary) || versions[0]?.files?.[0];
+    if (!slug || /^\.+$/.test(slug)) throw fail('Give a Modrinth modpack address (https://modrinth.com/modpack/…) or its name');
+    const versions = await getJson(`${modrinthApi()}/project/${slug}/version`).catch((err) => { throw err.status ? fail(`Modrinth has no modpack ${slug} (HTTP ${err.status})`) : err; });
+    const packs = (Array.isArray(versions) ? versions : []).flatMap((v) => (Array.isArray(v?.files) ? v.files : []).filter((f) => /\.mrpack$/i.test(f?.filename || '') && f.url));
+    const file = packs.find((f) => f.primary) || packs[0];
     if (!file) throw fail(`${slug} has no .mrpack to download`);
-    const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${file.filename}`);
+    const sum = file.hashes?.sha512 ? ['sha512', file.hashes.sha512] : file.hashes?.sha1 ? ['sha1', file.hashes.sha1] : null;
+    if (!sum) throw fail(`Modrinth publishes no checksum for ${file.filename}`);
+    // Modrinth's name for the file is only a name in the temporary folder: no folders, nothing Windows refuses.
+    const name = path.basename(file.filename.replace(/\\/g, '/')).replace(/[<>:"|?*\x00-\x1f]/g, '-');
+    const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${name}`);
     await fetchFile(file.url, dest, { size: file.size }, log);
-    if (file.hashes?.sha1 && crypto.createHash('sha1').update(fs.readFileSync(dest)).digest('hex') !== file.hashes.sha1) throw fail(`Checksum mismatch for ${file.filename}`);
+    if (crypto.createHash(sum[0]).update(fs.readFileSync(dest)).digest('hex') !== sum[1]) {
+      fs.rmSync(dest, { force: true });
+      throw fail(`Checksum mismatch for ${file.filename}`);
+    }
     return dest;
   }
-  // What a .mrpack holds: {name, version, mc, kind, loader, serverFiles, clientOnly}.
+  // What a .mrpack holds: {name, version, mc, kind, loader, serverFiles, clientOnly}. A downloaded one that is not a
+  // modpack PyIDE runs is not kept.
   function modpackInfo(file) {
-    const raw = readEntry(file, 'modrinth.index.json');
-    if (!raw) throw fail(`${path.basename(file)} is not a Modrinth modpack (no modrinth.index.json)`);
-    const index = JSON.parse(raw.toString('utf8'));
-    const deps = index.dependencies || {};
-    const loaderKey = Object.keys(LOADERS).find((k) => deps[k]);
-    if (!loaderKey) throw fail(deps['quilt-loader'] ? 'Quilt modpacks are not supported yet' : 'The modpack names no mod loader PyIDE runs (Fabric, Forge, NeoForge)');
-    const files = index.files || [];
-    return { file, name: index.name || path.basename(file, '.mrpack'), version: index.versionId || '', mc: deps.minecraft, kind: LOADERS[loaderKey], loader: deps[loaderKey],
-      serverFiles: files.filter((f) => f.env?.server !== 'unsupported').length, clientOnly: files.filter((f) => f.env?.server === 'unsupported').length, index };
+    try {
+      const raw = readEntry(file, 'modrinth.index.json');
+      if (!raw) throw fail(`${path.basename(file)} is not a Modrinth modpack (no modrinth.index.json)`);
+      let index = null;
+      try { index = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')); } catch {}
+      if (!index || typeof index !== 'object') throw fail(`${path.basename(file)} has a damaged modrinth.index.json`);
+      const deps = index.dependencies || {};
+      const loaderKey = Object.keys(LOADERS).find((k) => deps[k]);
+      if (!loaderKey) throw fail(deps['quilt-loader'] ? 'Quilt modpacks are not supported yet' : 'The modpack names no mod loader PyIDE runs (Fabric, Forge, NeoForge)');
+      // Both go into download addresses.
+      if (!VERSION(deps.minecraft)) throw fail('The modpack names no Minecraft version');
+      if (!VERSION(deps[loaderKey])) throw fail(`The modpack names no ${KINDS[LOADERS[loaderKey]].title} version`);
+      const files = Array.isArray(index.files) ? index.files.filter((f) => f && typeof f === 'object') : [];
+      index.files = files;
+      const name = typeof index.name === 'string' && index.name.trim() ? index.name : path.basename(file, path.extname(file));
+      return { file, name, version: String(index.versionId ?? ''), mc: deps.minecraft, kind: LOADERS[loaderKey], loader: deps[loaderKey],
+        serverFiles: files.filter((f) => f.env?.server !== 'unsupported').length, clientOnly: files.filter((f) => f.env?.server === 'unsupported').length, index };
+    } catch (err) {
+      discardDownload(file);
+      throw err;
+    }
   }
   // A server for the modpack: its Minecraft and exact loader version, the files the pack lists for servers (each
-  // checked against its SHA-1 or SHA-512), its overrides and server-overrides; the .mrpack itself becomes the server's
-  // client pack, since players need its client mods too.
+  // checked against its SHA-512 or SHA-1), its overrides and server-overrides; the .mrpack itself becomes the server's
+  // client pack, since players need its client mods too. A downloaded .mrpack is not kept when this fails.
   async function createFromModpack({ file, url, name, memory, port, eula }, log) {
     const pack = modpackInfo(file || await fromModrinth(url, log));
-    log(`${pack.name} ${pack.version}: Minecraft ${pack.mc}, ${KINDS[pack.kind].title} ${pack.loader}, ${pack.serverFiles} files for the server\n`);
-    const srv = await create({ root, name: name || freeName(path.join(root, 'servers'), pack.name), kind: pack.kind, mc: pack.mc, loader: pack.loader, memory, port, eula }, log);
+    let srv = null;
     try {
+      // Every file has an address and a checksum before anything is made.
+      const files = pack.index.files.filter((f) => f.env?.server !== 'unsupported').map((f) => {
+        const from = (Array.isArray(f.downloads) ? f.downloads : []).find((u) => /^https?:\/\//i.test(u));
+        const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
+        if (!from) throw fail(`The modpack gives no download address for ${f.path}`);
+        if (!sum) throw fail(`The modpack gives no checksum for ${f.path}`);
+        return { path: f.path, from, sum, size: f.fileSize };
+      });
+      log(`${pack.name} ${pack.version}: Minecraft ${pack.mc}, ${KINDS[pack.kind].title} ${pack.loader}, ${pack.serverFiles} files for the server\n`);
+      srv = await create({ root, name: name || freeName(path.join(root, 'servers'), pack.name), kind: pack.kind, mc: pack.mc, loader: pack.loader, memory, port, eula }, log);
+      // What create described: a file of the pack named pyide-server.json does not replace it.
+      const created = readServer(srv.dir);
       let n = 0;
-      for (const f of pack.index.files || []) {
-        if (f.env?.server === 'unsupported') continue;
+      for (const f of files) {
         const dest = inside(srv.dir, f.path);
         if (!dest) { log(`Skipped ${f.path}: outside the server folder\n`); continue; }
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         log(`(${++n}/${pack.serverFiles}) ${f.path}\n`);
-        await fetchFile(f.downloads[0], dest, { size: f.fileSize }, () => {});
-        const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
-        if (sum && crypto.createHash(sum[0]).update(fs.readFileSync(dest)).digest('hex') !== sum[1]) throw fail(`Checksum mismatch for ${f.path}`);
+        await fetchFile(f.from, dest, { size: f.size }, () => {});
+        if (crypto.createHash(f.sum[0]).update(fs.readFileSync(dest)).digest('hex') !== f.sum[1]) throw fail(`Checksum mismatch for ${f.path}`);
       }
-      const zip = openZip(pack.file);
-      try {
-        for (const prefix of ['overrides/', 'server-overrides/']) {
-          for (const entry of zip.names.filter((x) => x.startsWith(prefix) && !x.endsWith('/'))) {
-            const dest = inside(srv.dir, entry.slice(prefix.length));
-            if (!dest) continue;
-            fs.mkdirSync(path.dirname(dest), { recursive: true });
-            fs.writeFileSync(dest, zip.read(entry));
-          }
-        }
-      } finally { zip.close(); }
+      for (const prefix of ['overrides/', 'server-overrides/']) unpackZip(pack.file, srv.dir, prefix);
       const clientPack = path.join(srv.dir, 'client-pack', path.basename(pack.file).replace(/^pyide-[0-9a-f]{8}-/, ''));
       fs.mkdirSync(path.dirname(clientPack), { recursive: true });
       fs.copyFileSync(pack.file, clientPack);
       discardDownload(pack.file);
-      const desc = { ...readServer(srv.dir), modpack: { name: pack.name, version: pack.version, clientPack: path.relative(srv.dir, clientPack).replace(/\\/g, '/') } };
+      const desc = { ...created, modpack: { name: pack.name, version: pack.version, clientPack: path.relative(srv.dir, clientPack).replace(/\\/g, '/') } };
       writeServer(srv.dir, desc);
       log(`${pack.name} is installed in ${path.relative(root, srv.dir)}\n`);
       return { ...srv, ...desc };
     } catch (err) {
-      fs.rmSync(srv.dir, { recursive: true, force: true });
+      if (srv) fs.rmSync(srv.dir, { recursive: true, force: true });
+      discardDownload(pack.file);
       throw err;
     }
   }

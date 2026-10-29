@@ -199,8 +199,8 @@
           return { kind: 'block', ownerOld, delta: shift, chomp: v.chomp, contentIndent: first };
         }
         case 'plain': return { kind: 'plain', ownerOld, delta };
-        case 'quote-open': return { kind: 'quote', quote: v.quote, delta };
-        case 'flow-open': return { kind: 'flow', st: v.st, delta };
+        case 'quote-open': return { kind: 'quote', quote: v.quote, delta, line: n };
+        case 'flow-open': return { kind: 'flow', st: v.st, delta, line: n };
         default: return null;
       }
     };
@@ -387,6 +387,8 @@
     const lines = (endsNL ? src.slice(0, -1) : src).split('\n');
     const w = walk(lines, { unit });
     if (w.error) return { error: w.error };
+    // A quoted scalar or flow collection still open at the end: the file is broken there, not formatted already.
+    if (w.cont?.kind === 'quote' || w.cont?.kind === 'flow') return { error: { line: w.cont.line + 1, why: 'unclosed' } };
     const res = [];
     for (let n = 0; n < lines.length; n++) {
       const o = w.out[n];

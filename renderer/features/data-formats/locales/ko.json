@@ -4,6 +4,8 @@
   "Cannot reformat: line {line} is indented with a tab": "서식을 다시 지정할 수 없음: {line}번째 줄이 탭으로 들여쓰기되어 있습니다",
   "Cannot reformat: the YAML on line {line} cannot be reformatted safely": "서식을 다시 지정할 수 없음: {line}번째 줄의 YAML은 안전하게 서식을 다시 지정할 수 없습니다",
   "Cannot reformat: the XML is not well-formed (line {line})": "서식을 다시 지정할 수 없음: XML 형식이 올바르지 않습니다({line}번째 줄)",
+  "Cannot reformat: the XML is nested too deeply (line {line})": "서식을 다시 지정할 수 없음: XML 요소가 너무 깊게 중첩되어 있습니다({line}번째 줄)",
+  "Cannot reformat: the JSON is nested too deeply (line {line})": "서식을 다시 지정할 수 없음: JSON이 너무 깊게 중첩되어 있습니다({line}번째 줄)",
   "Allowed values: {values}": "허용되는 값: {values}",
   "Default: {value}": "기본값: {value}",
   "Value \"{value}\" is not allowed here. Allowed values: {values}": "여기에는 \"{value}\" 값을 쓸 수 없습니다. 허용되는 값: {values}",

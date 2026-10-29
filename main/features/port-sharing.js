@@ -224,13 +224,20 @@ exports.register = ({ ipcMain, app, send }) => {
     const row = ports.find((p) => p.port === port);
     if (!row) throw Object.assign(new Error(`Nothing the IDE started listens on port ${port}`), { expected: true });
     if (tunnels.has(port)) return state();
+    // Listed before the probe (seconds for a server that does not answer), so Stop Sharing meanwhile cancels it.
+    const t = { kind: null, state: 'starting', url: null, error: null, log: '' };
+    tunnels.set(port, t);
+    changed();
     const proto = row.proto || await probeRow(row);
+    if (tunnels.get(port) !== t) return state();
     const kind = proto === 'tcp' ? 'bore' : 'cloudflared';
     const argv = kind === 'bore' ? bore() : cloudflared();
-    if (!argv) throw Object.assign(new Error(`${kind} is not installed`), { expected: true, code: 'missing', tool: kind });
-    if (tunnels.has(port)) return state();
-    const t = { kind, state: 'starting', url: null, error: null, log: '' };
-    tunnels.set(port, t);
+    if (!argv) {
+      tunnels.delete(port);
+      changed();
+      throw Object.assign(new Error(`${kind} is not installed`), { expected: true, code: 'missing', tool: kind });
+    }
+    t.kind = kind;
     // cloudflared checks no certificate of the local server: a development https server's is self-signed.
     const args = kind === 'bore'
       ? ['local', String(port), '--local-host', row.dial, '--to', BORE_SERVER]

@@ -399,7 +399,8 @@ class JvmSession {
   // HotSwap: classes: [{name: 'pkg.Outer$Inner', file: the new .class}]. The loaded ones are redefined together (a
   // class not loaded yet is read from its class path when the program first uses it) -> {redefined, notLoaded}.
   // Redefinition drops the classes' breakpoints, so the caller sets them again; the line tables are read anew.
-  async dap_redefineClasses({ classes = [] }) {
+  async dap_redefineClasses({ classes = [] } = {}) {
+    if (!Array.isArray(classes) || !classes.every((c) => typeof c?.name === 'string' && typeof c.file === 'string')) throw new Error('redefineClasses takes [{name, file}]');
     const loaded = [];
     const notLoaded = [];
     for (const c of classes) {

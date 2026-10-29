@@ -21,6 +21,7 @@
     script: (p) => tr('Script not found: {path}', { path: p }),
     icon: (p) => tr('Icon not found: {path}', { path: p }),
     data: (p) => tr('Data file or folder not found: {path}', { path: p }),
+    name: (p) => tr('Not a file name for the executable: {name}', { name: p }),
   };
 
   function askInstall(interp) {
@@ -194,7 +195,8 @@
       buttons: [
         { label: tr('Build'), primary: true, run: () => {
           const exeName = exeNameOf(name.value);
-          if (!exeName || /[\\/:*?"<>|]/.test(exeName)) { error.textContent = tr('A file name cannot contain {chars}', { chars: '\\ / : * ? " < > |' }); return false; }
+          if (/^\.*$/.test(exeName)) { error.textContent = tr('Enter a name for the executable.'); return false; }
+          if (/[\\/:*?"<>|]/.test(exeName)) { error.textContent = tr('A file name cannot contain {chars}', { chars: '\\ / : * ? " < > |' }); return false; }
           build(script, { exeName, mode: mode.value, windowed: windowed.box.checked, icon: icon.value.trim() });
           return true;
         } },
