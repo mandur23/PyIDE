@@ -115,12 +115,36 @@ write(path.join(mdk, 'src', 'main', 'resources', 'assets', 'examplemod', 'lang',
 // Gradle as a Node script: build makes the jars; with the init script's properties, pyideClasspath writes the source
 // set and runClient compiles the mod and starts a stand-in game under the JDWP agent, which prints the mod's
 // greeting() every 300 ms (so a HotSwap shows in its output) and quits by itself after two minutes.
-write(path.join(src, 'game', 'FakeGame.java'), `public class FakeGame {
+// Its window (titled like Minecraft's) prints its bounds when placed and "F3+T" when those keys reach it.
+write(path.join(src, 'game', 'FakeGame.java'), `import java.awt.*;
+import java.awt.event.*;
+
+public class FakeGame {
+  static boolean f3;
   public static void main(String[] a) throws Exception {
     java.lang.reflect.Method m = Class.forName(a[0]).getMethod("greeting");
+    Frame f = new Frame("Minecraft* Fake 1.20.1");
+    f.setBackground(new Color(40, 160, 70));
+    f.setBounds(100, 100, 640, 400);
+    KeyAdapter keys = new KeyAdapter() {
+      public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_F3) f3 = true;
+        else if (e.getKeyCode() == KeyEvent.VK_T && f3) System.out.println("game: F3+T");
+      }
+      public void keyReleased(KeyEvent e) { if (e.getKeyCode() == KeyEvent.VK_F3) f3 = false; }
+    };
+    f.addKeyListener(keys);
+    f.addComponentListener(new ComponentAdapter() {
+      public void componentMoved(ComponentEvent e) { bounds(f); }
+      public void componentResized(ComponentEvent e) { bounds(f); }
+    });
+    f.addWindowListener(new WindowAdapter() { public void windowClosing(WindowEvent e) { System.exit(0); } });
+    f.setVisible(true);
     System.out.println("Fake Minecraft window open");
     for (int i = 0; i < 400; i++) { System.out.println("game: " + m.invoke(null)); Thread.sleep(300); }
+    System.exit(0);
   }
+  static void bounds(Frame f) { Rectangle r = f.getBounds(); System.out.println("game: bounds " + r.x + "," + r.y + "," + r.width + "," + r.height); }
 }`);
 const fakeGradle = path.join(work, 'fake-gradle.cjs');
 const gameDir = path.join(work, 'out', 'game');
@@ -133,7 +157,8 @@ console.log('JAVA_HOME=' + home);
 console.log('task ' + task);
 const out = path.join(process.cwd(), 'build', 'classes', 'java', 'main');
 const srcDir = path.join(process.cwd(), 'src', 'main', 'java');
-if (args.includes('pyideClasspath')) fs.writeFileSync(prop('pyide.classpathFile'), JSON.stringify([{ name: 'main', sources: [srcDir], classpath: [], output: out }]));
+if (args.includes('pyideClasspath')) fs.writeFileSync(prop('pyide.classpathFile'), JSON.stringify([{ name: 'main', sources: [srcDir], classpath: [], output: out,
+  resources: [path.join(process.cwd(), 'src', 'main', 'resources')], resourcesOutput: path.join(process.cwd(), 'build', 'resources', 'main') }]));
 if (task === 'build') {
   fs.mkdirSync('build/libs', { recursive: true });
   for (const n of ['mymod-1.0.jar', 'mymod-1.0-sources.jar']) fs.copyFileSync('gradle.properties', path.join('build/libs', n));
@@ -464,6 +489,37 @@ try {
     .then(() => check(true, 'a change the JVM cannot swap (a new method) says the game needs a restart'), async () => check(false, `refused HotSwap: ${(await dbgOut()).slice(-800)}`));
   await until(`(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; return t.slice(t.lastIndexOf('without a restart')).includes('game: hello v2'); })()`, 'game after a refused swap', 5000)
     .then(() => check(true, 'the game keeps running the last code that swapped'), async () => check(false, `after the refused swap: ${(await dbgOut()).slice(-400)}`));
+
+  // ---------- Game View ----------
+  const gameState = () => js(`ide.minecraft.game.state()`);
+  check(await js(`ide.minecraft.game.state().note.includes('without a restart') && document.querySelector('#minecraftGame .mcg-restart').classList.contains('primary')`),
+    'the Game View says the change needs a restart and points at Restart');
+  check(readFileSync(path.join(modDir, 'run', 'options.txt'), 'utf8').includes('pauseOnLostFocus:false'), 'the test client keeps playing while the IDE has the focus (options.txt)');
+  await until(`!!ide.minecraft.game.state().game?.hwnd`, 'game window found', 20000).catch(async () => check(false, `game window: ${S(await gameState())}`));
+  const besideNow = `(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; const m = [...t.matchAll(/game: bounds (-?\\d+),(-?\\d+),(\\d+),(\\d+)/g)].pop();
+    const b = m && m.slice(1).map(Number); return { b, ide: [screenX, screenY, outerWidth, outerHeight], avail: [screen.availLeft, screen.availTop, screen.availWidth, screen.availHeight],
+    ok: !!b && Math.abs(b[0] - (screen.availLeft + outerWidth)) <= 16 && Math.abs(b[2] - Math.round(screen.availWidth * 0.4)) <= 16 && Math.abs(b[3] - screen.availHeight) <= 16 && outerWidth < screen.availWidth * 0.7 }; })()`;
+  await until(`${besideNow}.ok`, 'game beside the IDE', 15000).catch(() => {});
+  const beside = await js(besideNow);
+  check(beside.ok, `Beside the IDE gives the game the right part of the screen and the IDE the rest (${S(beside)})`);
+  const lang = path.join(modDir, 'src', 'main', 'resources', 'assets', 'mymod', 'lang', 'en_us.json');
+  await editAndSave(lang, '{ "itemGroup.mymod": "My Mod v2" }\n');
+  await until(`/game: F3\\+T/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'F3+T', 20000)
+    .then(() => check(true, 'saving a language file of the mod makes the game reload its resources (F3+T)'), async () => check(false, `resource reload: ${(await dbgOut()).slice(-800)}`));
+  check(readFileSync(path.join(modDir, 'build', 'resources', 'main', 'assets', 'mymod', 'lang', 'en_us.json'), 'utf8').includes('My Mod v2'),
+    'the saved language file is written over the resources the game reads');
+  await js(`(ide.minecraft.game.show(), (() => { const s = document.querySelector('#minecraftGame .mcg-mode'); s.value = 'inside'; s.dispatchEvent(new Event('change')); })(), true)`);
+  await until(`ide.minecraft.game.state().streaming && document.querySelector('#minecraftGame video').videoWidth > 0`, 'game picture', 20000)
+    .then(() => check(true, 'Inside the IDE shows the game window\'s picture in the Game View'), async () => check(false, `game picture: ${S(await gameState())}`));
+  await sleep(500);
+  const centre = await js(`(() => { const v = document.querySelector('#minecraftGame video'); const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+    const g = c.getContext('2d'); g.drawImage(v, 0, 0); return [...g.getImageData(c.width >> 1, c.height >> 1, 1, 1).data.slice(0, 3)]; })()`);
+  check(centre[1] > 120 && centre[0] < 100 && centre[2] < 120, `the picture is the game window's (green at its centre: ${S(centre)})`);
+  await shot('game-view.png');
+  const firstWindow = (await gameState()).game.hwnd;
+  await js(`(document.querySelector('#minecraftGame .mcg-restart').click(), true)`);
+  await until(`(() => { const s = ide.minecraft.game.state(); return s.streaming && s.game?.hwnd && s.game.hwnd !== ${firstWindow}; })()`, 'restarted game', 60000)
+    .then(() => check(true, 'Restart debugs the test client again, and the Game View shows the new game'), async () => check(false, `restart: ${S(await gameState())} ${(await dbgOut()).slice(-600)}`));
   await js(`(ide.runAction('StopDebug'), true)`);
   await until(`!window.__debugger.state()`, 'client debug ended', 20000);
 

@@ -20,6 +20,8 @@
 // - Market (market.js): Modrinth's modpacks, mods, plugins and resource packs, installed into a server in one click.
 // - The Minecraft screen (screen.js) shows the servers and the Market in an editor tab; project-types.js adds Minecraft
 //   Mod, Plugin and Server to New Project.
+// - Game View (game-view.js): the test client's window placed beside the IDE or shown inside it, with Reload
+//   Resources and Restart.
 (() => {
   const { el, basename, dirname } = ide.util;
   const run = ide.run;
@@ -178,7 +180,8 @@
             const spec = await ide.api.invoke('minecraft:modTask', ide.root, dir, 'runClient', j.id, { debugPort: port });
             con.append(`gradlew runClient (${tr('debug port {port}', { port })})\n`, 'sys');
             const procId = await ide.api.invoke('minecraft:start', ide.root, spec);
-            hotswap = mine = { dir, con };
+            hotswap = mine = { dir, con, cfg, port };
+            ide.emit('minecraftClient', mine);
             // Gradle prepares Minecraft before the game starts: the first time, many minutes.
             return { procId, sourceRoots: ['src\\main\\java', 'src\\client\\java'].map((r) => `${dir}\\${r}`), timeoutMs: 30 * 60000 };
           } catch (err) {
@@ -186,7 +189,13 @@
             return null;
           } finally { j.done(); }
         },
-      }).then((handle) => { handle?.ended?.then(() => { if (hotswap === mine) hotswap = null; }); return handle; });
+      }).then((handle) => {
+        handle?.ended?.then(() => {
+          if (hotswap === mine) hotswap = null;
+          if (mine) ide.emit('minecraftClientEnded', mine);
+        });
+        return handle;
+      });
     },
     async start(cfg, s) {
       const con = s.console({ input: true });
@@ -216,17 +225,51 @@
   // ---------- HotSwap ----------
   // While the test client runs under Debug, saving a .java file of its mod compiles it and redefines its classes in
   // the game. The JVM swaps method bodies only: a new method or field, or a changed signature, needs a restart.
-  let hotswap = null; // {dir, con} of the mod whose client is being debugged
+  // A saved file under the mod's assets/ is copied to the game's resources and the game reloads them (F3+T, through
+  // the Game View, game-view.js); data/ waits for /reload in the game. Results go out as minecraftHotSwap events.
+  let hotswap = null; // {dir, con, cfg, port} of the mod whose client is being debugged
   let pending = new Set();
+  let pendingResources = new Set();
   let swapping = null;
   let timer = 0;
+  let resourceTimer = 0;
   ide.on('fileSaved', (tab) => {
     const p = tab?.path;
-    if (!hotswap || !p || !/\.java$/i.test(p) || !p.toLowerCase().startsWith(`${hotswap.dir.toLowerCase()}\\`)) return;
-    pending.add(p);
-    clearTimeout(timer);
-    timer = setTimeout(swap, 300);
+    if (!hotswap || !p || !p.toLowerCase().startsWith(`${hotswap.dir.toLowerCase()}\\`)) return;
+    if (/\.java$/i.test(p)) {
+      pending.add(p);
+      clearTimeout(timer);
+      timer = setTimeout(swap, 300);
+    } else if (/^\\src\\[^\\]+\\resources\\(assets|data)\\/i.test(p.slice(hotswap.dir.length))) {
+      pendingResources.add(p);
+      clearTimeout(resourceTimer);
+      resourceTimer = setTimeout(swapResources, 300);
+    }
   });
+  async function swapResources() {
+    const files = [...pendingResources];
+    pendingResources = new Set();
+    if (!files.length || !hotswap) return;
+    const { dir, con } = hotswap;
+    try {
+      const r = await ide.api.invoke('minecraft:hotswapResources', ide.root, dir, files);
+      if (!r.copied.length) return;
+      con.append(`${tr('Resources copied to the game: {files}', { files: r.copied.join(', ') })}\n`, 'sys');
+      if (r.assets) {
+        const reloaded = await ide.minecraft.game?.reloadResources();
+        const text = reloaded ? tr('The game reloads its resources (F3+T).') : tr('Press F3+T in the game to see the new resources.');
+        con.append(`${text}\n`, reloaded ? 'ok' : 'sys');
+        ide.emit('minecraftHotSwap', { ok: !!reloaded, text });
+      }
+      if (r.data) {
+        const text = tr('Type /reload in the game to apply the changed data (recipes, loot tables, tags).');
+        con.append(`${text}\n`, 'sys');
+        ide.emit('minecraftHotSwap', { ok: true, text });
+      }
+    } catch (err) {
+      con.append(`${tr('HotSwap failed: {error}', { error: errorText(err) })}\n`, 'err');
+    }
+  }
   async function swap() {
     if (swapping) { await swapping; return swap(); }
     const files = [...pending];
@@ -240,11 +283,16 @@
         con.append(`${tr('HotSwap: compiling {files}…', { files: files.map((f) => basename(f)).join(', ') })}\n`, 'sys');
         const classes = await ide.api.invoke('minecraft:hotswapCompile', ide.root, dir, files, j.id);
         const r = await ide.debugger.jvmRequest('redefineClasses', { classes });
-        con.append(`${tr('HotSwap: {count} classes reloaded in the game ({ms} ms)', { count: r.redefined.length, ms: Date.now() - started })}${r.redefined.length ? `: ${r.redefined.join(', ')}` : ''}\n`, 'ok');
+        const done = tr('HotSwap: {count} classes reloaded in the game ({ms} ms)', { count: r.redefined.length, ms: Date.now() - started });
+        con.append(`${done}${r.redefined.length ? `: ${r.redefined.join(', ')}` : ''}\n`, 'ok');
+        ide.emit('minecraftHotSwap', { ok: true, text: done });
       } catch (err) {
         const text = errorText(err);
-        con.append(`${/JDWP error (6\d|7\d)/.test(text) ? tr('HotSwap: the game cannot take this change without a restart ({reason}). Stop and debug the test client again.', { reason: text.replace(/^.*\(([^)]*)\)\s*$/, '$1') })
-          : tr('HotSwap failed: {error}', { error: text })}\n`, 'err');
+        const restart = /JDWP error (6\d|7\d)/.test(text);
+        const line = restart ? tr('HotSwap: the game cannot take this change without a restart ({reason}). Stop and debug the test client again.', { reason: text.replace(/^.*\(([^)]*)\)\s*$/, '$1') })
+          : tr('HotSwap failed: {error}', { error: text });
+        con.append(`${line}\n`, 'err');
+        ide.emit('minecraftHotSwap', { restart, error: true, text: line });
       } finally { j.done(); }
     })();
     await swapping;
@@ -855,7 +903,7 @@
     addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'screen.js', 'project-types.js']) {
+  for (const file of ['market.js', 'screen.js', 'project-types.js', 'game-view.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

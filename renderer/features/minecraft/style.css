@@ -63,3 +63,13 @@
 .mcs-servers > .mc-empty { grid-column: 1 / -1; padding: 0; }
 .mcs-servers > .mc-server { border: 1px solid var(--gray3); border-radius: 8px; padding: 12px; }
 .np-mc-icon { width: 16px; text-align: center; }
+/* Game View */
+.mcg { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.mcg-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); }
+.mcg-top { display: flex; align-items: center; gap: 4px; }
+.mcg-status { padding: 6px 10px; color: var(--gray9); }
+.mcg-screen { flex: 1; min-height: 0; background: #000; cursor: pointer; display: flex; }
+.mcg-screen video { width: 100%; height: 100%; object-fit: contain; }
+.mcg-note { padding: 6px 10px; border-top: 1px solid var(--gray3); min-height: 1.4em; }
+.mcg-note.ok { color: var(--green6); }
+.mcg-note.err { color: var(--red); }

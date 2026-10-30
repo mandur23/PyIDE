@@ -17,6 +17,9 @@ const { writeZip, readEntry } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
 const { createImports, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
+const gameWindow = require('../minecraft/game-window');
+const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
+const { allowWindowCapture } = require('../security');
 
 const SERVER = 'pyide-server.json';
 const PLUGIN = 'pyide-plugin.json';
@@ -434,7 +437,8 @@ allprojects {
         def sets = project.extensions.findByName('sourceSets')
         def data = (sets == null ? [] : sets.findAll { it.name != 'test' }).collect { s ->
           [name: s.name, sources: s.java.srcDirs*.absolutePath, classpath: s.compileClasspath.files*.absolutePath,
-           output: s.java.destinationDirectory.get().asFile.absolutePath]
+           output: s.java.destinationDirectory.get().asFile.absolutePath,
+           resources: s.resources.srcDirs*.absolutePath, resourcesOutput: s.output.resourcesDir?.absolutePath]
         }
         new File(project.rootDir, out).text = groovy.json.JsonOutput.toJson(data)
       }
@@ -460,11 +464,25 @@ async function modTask(dir, task, log, opts = {}) {
     fs.mkdirSync(path.join(dir, HOTSWAP_DIR), { recursive: true });
     fs.writeFileSync(path.join(dir, HOTSWAP_DIR, 'init.gradle'), INIT_SCRIPT);
     fs.rmSync(path.join(dir, HOTSWAP_DIR, 'classpath.json'), { force: true });
+    keepPlayingUnfocused(dir);
     debug.push('--no-configuration-cache', '-I', `${HOTSWAP_DIR}/init.gradle`, `-Ppyide.debugPort=${Number(opts.debugPort)}`,
       `-Ppyide.classpathFile=${HOTSWAP_DIR}/classpath.json`, 'pyideClasspath');
   }
   // .\ because cmd finds a program in the current folder only that way when NoDefaultCurrentDirectoryInExePath is set.
   return { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/c', '.\\gradlew.bat', '--console=plain', ...debug, task], cwd: dir, env: { JAVA_HOME: home } };
+}
+
+// The game shown beside the IDE (or in its Game View) keeps running while the user types in the editor: Minecraft
+// opens its pause menu when its window loses focus unless options.txt in the run folder says otherwise.
+function keepPlayingUnfocused(dir) {
+  const file = path.join(dir, 'run', 'options.txt');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (/^pauseOnLostFocus:false\s*$/m.test(text)) return;
+    fs.writeFileSync(file, /^pauseOnLostFocus:/m.test(text) ? text.replace(/^pauseOnLostFocus:.*$/m, () => 'pauseOnLostFocus:false')
+      : `${text}${text && !text.endsWith('\n') ? '\n' : ''}pauseOnLostFocus:false\n`);
+  } catch { /* the game pauses as it would anyway */ }
 }
 
 // HotSwap: the saved .java files compiled with javac against their source set's class path (written when Debug
@@ -502,6 +520,32 @@ async function hotswapCompile(dir, files, log) {
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
   return classes;
+}
+
+// A saved texture, model, language file or other file under assets/ or data/ of a source set's resources, copied
+// over its output, which the test client reads (F3+T reloads assets/, /reload data/). Other resources (fabric.mod.json,
+// mods.toml) are filled in by Gradle's processResources, so they wait for the next start.
+function hotswapResources(dir, files) {
+  const sets = readJson(path.join(dir, HOTSWAP_DIR, 'classpath.json'));
+  if (!sets) throw fail('The test client was not started with Debug, or Gradle has not written its class path yet');
+  const out = { copied: [], assets: false, data: false };
+  for (const f of files) {
+    const file = path.resolve(f);
+    for (const set of sets) {
+      const root = (set.resources || []).find((d) => file.toLowerCase().startsWith(path.resolve(d).toLowerCase() + path.sep));
+      if (!root || !set.resourcesOutput) continue;
+      const rel = path.relative(root, file);
+      const top = rel.split(path.sep)[0].toLowerCase();
+      if ((top !== 'assets' && top !== 'data') || rel.split(path.sep).includes('..')) break;
+      const dest = path.join(set.resourcesOutput, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(file, dest);
+      out.copied.push(rel.split(path.sep).join('/'));
+      out[top] = true;
+      break;
+    }
+  }
+  return out;
 }
 
 // The built jar (not -sources, -dev, -slim or -javadoc) into the server's mods folder.
@@ -620,6 +664,22 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:newMod', (_e, opts, job) => { guard(opts?.root); return newMod(opts, logTo(job)); });
   ipcMain.handle('minecraft:modTask', (_e, root, dir, task, job, opts) => { guard(root); return modTask(dir, task, logTo(job), opts); });
   ipcMain.handle('minecraft:hotswapCompile', (_e, root, dir, files, job) => { guard(root); return hotswapCompile(dir, files, logTo(job)); });
+  ipcMain.handle('minecraft:hotswapResources', (_e, root, dir, files) => { guard(root); return hotswapResources(dir, files); });
+  // The test client's window: found by its debug port (then its process), placed beside the window that asks, kept
+  // on top, brought to the front, sent F3+T; gameSource names it for the Game View's video.
+  ipcMain.handle('minecraft:gameFind', (_e, q) => gameWindow.find(q || {}));
+  ipcMain.handle('minecraft:gamePlace', (e, hwnd, top) => gameWindow.placeBeside(BrowserWindow.fromWebContents(e.sender), screen, hwnd, top));
+  ipcMain.handle('minecraft:gameTop', (_e, hwnd, top) => gameWindow.setTop(hwnd, top));
+  ipcMain.handle('minecraft:gameFront', (_e, hwnd) => gameWindow.front(hwnd));
+  ipcMain.handle('minecraft:gameReload', (_e, hwnd) => gameWindow.reload(hwnd));
+  ipcMain.handle('minecraft:gameSource', async (_e, hwnd) => {
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
+    const source = sources.find((s) => s.id.startsWith(`window:${Number(hwnd)}:`));
+    if (!source) return null;
+    allowWindowCapture();
+    return source.id;
+  });
+  app.on('will-quit', gameWindow.stop);
   ipcMain.handle('minecraft:deployMod', (_e, root, dir) => { guard(root); return deployMod(dir); });
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
   ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { guard(root); return newResourcePack(dir); });

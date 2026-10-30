@@ -57,7 +57,7 @@ if (process.env.MC_LIVE_LSP === '1') {
 }
 
 const t = await launch({ name: 'minecraft-live', port: 9792, projectDir: project, env });
-const { js, until, check, sleep } = t;
+const { js, until, check, sleep, shot } = t;
 const tab = (title) => `ide.run.sessions().find((s) => s.title === ${S(title)})`;
 const tabText = (title) => js(`${tab(title)}?.host.textContent || ''`);
 const elapsed = (t0) => `${Math.round((Date.now() - t0) / 1000)} s`;
@@ -217,6 +217,21 @@ public class ${cls} implements ClientModInitializer {
         const swapped = await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('pyide-hotswap: version two')`, 'hotswap', 120000).then(() => true, () => false);
         const log = await dbgOut();
         check(swapped && /HotSwap: \d+ classes reloaded/.test(log), `saving the client initializer swaps it into the running game (${(log.match(/HotSwap[^\n]*/g) || []).join(' | ')})`);
+        const found = await until(`(() => { const s = ide.minecraft.game.state(); return !!s.game?.hwnd && /Minecraft/.test(s.game.title); })()`, 'game window', 120000).then(() => true, () => false);
+        check(found, `the Game View finds the real game window beside the IDE (${S(await js('ide.minecraft.game.state()'))})`);
+        const lang = path.join(modDir, 'src', 'main', 'resources', 'assets', 'fabric_tools', 'lang', 'en_us.json');
+        mkdirSync(path.dirname(lang), { recursive: true });
+        writeFileSync(lang, '{}\n');
+        const reloads = () => dbgOut().then((t) => (t.match(/Reloading ResourceManager/g) || []).length);
+        const before = await reloads();
+        await editAndSave(lang, '{ "key.fabric_tools.test": "PyIDE live" }\n');
+        const reloaded = await until(`((document.querySelector('#dbgOut')?.textContent || '').match(/Reloading ResourceManager/g) || []).length > ${before}`, 'F3+T', 60000).then(() => true, () => false);
+        check(reloaded, `saving a language file reloads the real game's resources (F3+T)${reloaded ? '' : `: ${(await dbgOut()).slice(-1500)}`}`);
+        await js(`(ide.minecraft.game.show(), (() => { const s = document.querySelector('#minecraftGame .mcg-mode'); s.value = 'inside'; s.dispatchEvent(new Event('change')); })(), true)`);
+        const shown = await until(`ide.minecraft.game.state().streaming && document.querySelector('#minecraftGame video').videoWidth > 0`, 'game picture', 30000).then(() => true, () => false);
+        check(shown, `Inside the IDE shows the real game's picture in the Game View (${S(await js('ide.minecraft.game.state()'))})`);
+        await sleep(3000);
+        await shot('game-view-live.png');
         writeFileSync(path.join(tmpdir(), 'mclive-client-up.txt'), 'swapped');
         const go = path.join(tmpdir(), 'mclive-client-go.txt');
         for (let i = 0; i < 120 && !existsSync(go); i++) await sleep(5000);

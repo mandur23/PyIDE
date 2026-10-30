@@ -19,6 +19,8 @@ const shareOf = (p) => {
   return m ? `${domainToASCII(m[1]) || m[1]}\\${m[2]}`.toLowerCase() : null; // URLs carry the host in punycode
 };
 const allowShare = (p) => { const s = shareOf(p); if (s) shares.add(s); };
+let captureUntil = 0;
+const allowWindowCapture = () => { captureUntil = Date.now() + 10000; };
 function blockedFileUrl(url) {
   let u;
   try { u = new URL(url); } catch { return false; }
@@ -52,14 +54,18 @@ function install({ appDir }) {
 
   // Camera, microphone, location, notifications, devices and external protocol handlers are never granted. The IDE page
   // itself may read the clipboard (Monaco's Paste); framed content may only write it.
+  // A window's picture (the Minecraft test client's) is allowed to the IDE page for a few seconds after the IDE asks
+  // for it (allowWindowCapture): a desktop capture asks for media with no camera or microphone in it.
   const ALWAYS = new Set(['clipboard-sanitized-write', 'fullscreen']);
   const allowed = (permission, url) => ALWAYS.has(permission) || (permission === 'clipboard-read' && isIdePage(url));
+  const capturing = (permission, details) => permission === 'media' && captureUntil > Date.now() && isIdePage(details?.requestingUrl)
+    && Array.isArray(details.mediaTypes) && !details.mediaTypes.length;
   app.whenReady().then(() => {
     const s = session.defaultSession;
-    s.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed(permission, details?.requestingUrl)));
+    s.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed(permission, details?.requestingUrl) || capturing(permission, details)));
     s.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => allowed(permission, details?.requestingUrl || requestingOrigin));
     s.webRequest.onBeforeRequest({ urls: ['file://*/*'] }, (details, callback) => callback({ cancel: blockedFileUrl(details.url) }));
   });
 }
 
-module.exports = { install, isWeb, allowShare };
+module.exports = { install, isWeb, allowShare, allowWindowCapture };
