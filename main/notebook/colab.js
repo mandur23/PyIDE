@@ -99,23 +99,26 @@ async function accessToken() {
   return { token: cached.token, adc };
 }
 
-async function call(method, rel, body) {
+// A Google API request with the signed-in user's token, billed to the ADC file's quota project when it names one.
+async function google(method, url, body, label) {
   const { token, adc } = await accessToken();
   const headers = { Authorization: `Bearer ${token}` };
   if (adc.creds.quota_project_id) headers['x-goog-user-project'] = adc.creds.quota_project_id;
   if (body) headers['Content-Type'] = 'application/json';
-  const res = await request(`${API()}/${rel}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(60000) });
+  const res = await request(url, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(60000) });
   const text = await res.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: { message: text.slice(0, 300) } }; }
   if (!res.ok) {
     const message = data.error?.message || res.statusText;
-    // gcloud's sign-in bills API requests to a Google Cloud project only once one is set (a quota project).
+    // The Colab API takes a gcloud sign-in's requests only with a quota project: a Google Cloud project of the user's
+    // with the Colab API turned on, which they are counted against (setUpProject below).
     const code = /quota project/i.test(message) ? 'quotaProject' : data.error?.status || `http${res.status}`;
-    throw fail(`Colab: ${message} (${res.status})`, code);
+    throw fail(`${label}: ${message} (${res.status})`, code);
   }
   return data;
 }
+const call = (method, rel, body) => google(method, `${API()}/${rel}`, body, 'Colab');
 
 // Signed in (as whom, on which plan), or what is in the way: errorCode, with needsSignIn when signing in again is the
 // fix (no login, an expired one, one without the Colab scope) rather than the network or Google refusing the account.
@@ -142,14 +145,19 @@ function killTree(child) {
   if (win) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }).on('error', () => {});
   else child.kill();
 }
-function signIn({ onUrl = () => {} } = {}) {
+// args are gcloud's own words (no spaces or quotes in them). A .cmd runs through cmd.exe; /s keeps the quoted path and
+// the scopes (commas included) as they are.
+function startGcloud(args) {
   const gcloud = findGcloud();
-  if (!gcloud) return Promise.reject(fail(`The Google Cloud CLI (gcloud) is not installed: ${INSTALL_PAGE}`, 'noGcloud'));
+  if (!gcloud) throw fail(`The Google Cloud CLI (gcloud) is not installed: ${INSTALL_PAGE}`, 'noGcloud');
+  return win
+    ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${gcloud}" ${args.join(' ')}"`], { windowsHide: true, windowsVerbatimArguments: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn(gcloud, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+function signIn({ onUrl = () => {} } = {}) {
+  let child;
+  try { child = startGcloud(LOGIN_ARGS); } catch (err) { return Promise.reject(err); }
   cancelSignIn();
-  // A .cmd runs through cmd.exe; /s keeps the quoted path and the scopes (commas included) as they are.
-  const child = win
-    ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${gcloud}" ${LOGIN_ARGS.join(' ')}"`], { windowsHide: true, windowsVerbatimArguments: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn(gcloud, LOGIN_ARGS, { stdio: ['ignore', 'pipe', 'pipe'] });
   const me = { child, cancelled: false };
   signing = me;
   let output = '';
@@ -181,6 +189,65 @@ function cancelSignIn() {
   signing = null;
 }
 
+// ---------- the quota project ----------
+// The Google Cloud projects the user can choose from, and setting one up: created if asked (a project needs the
+// account to have accepted Google Cloud's terms once), the Colab API turned on in it, and then made the ADC file's
+// quota project with gcloud's own command, which checks the user may use it.
+const CRM = () => process.env.PYIDE_COLAB_CRM || 'https://cloudresourcemanager.googleapis.com';
+const SERVICE_USAGE = () => process.env.PYIDE_COLAB_SERVICE_USAGE || 'https://serviceusage.googleapis.com';
+const CONSOLE = 'https://console.cloud.google.com/';
+const projectId = (id) => { if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(String(id))) throw fail('Not a Google Cloud project ID'); return id; };
+
+async function projects() {
+  const data = await google('GET', `${CRM()}/v1/projects?filter=lifecycleState%3AACTIVE&pageSize=200`, null, 'Google Cloud');
+  return (data.projects || []).map((p) => ({ projectId: p.projectId, name: p.name || p.projectId }));
+}
+
+// A long-running operation, polled until done (Resource Manager's and Service Usage's have no :wait).
+async function waitOperation(base, op, label, what) {
+  const started = Date.now();
+  while (!op.done) {
+    if (Date.now() - started > 3 * 60000) throw fail(`${label}: ${what} did not finish within 3 minutes`);
+    await new Promise((r) => setTimeout(r, Number(process.env.PYIDE_COLAB_POLL_MS) || 2000));
+    op = await google('GET', `${base}/v1/${op.name}`, null, label);
+  }
+  if (op.error) throw fail(`${label}: ${op.error.message || `${what} failed`}`, op.error.status || 'operation');
+  return op.response || {};
+}
+
+function setQuotaProject(id) {
+  const child = startGcloud(['auth', 'application-default', 'set-quota-project', projectId(id)]);
+  let output = '';
+  child.stdout.on('data', (d) => { output = (output + d).slice(-8000); });
+  child.stderr.on('data', (d) => { output = (output + d).slice(-8000); });
+  return new Promise((resolve, reject) => {
+    child.on('error', (err) => reject(fail(`Could not start gcloud: ${err.message}`, 'quotaProject')));
+    child.on('close', (code) => {
+      cached = null;
+      if (code === 0) return resolve();
+      const tail = output.trim().split(/\r?\n/).slice(-6).join('\n');
+      return reject(fail(`gcloud could not make ${id} the quota project (exit code ${code})${tail ? `:\n${tail}` : ''}`, 'setQuotaProject'));
+    });
+  });
+}
+
+// id: an existing project, or null for a new "PyIDE Colab" one. onStep names what is happening.
+async function setUpProject(id, { onStep = () => {} } = {}) {
+  if (!id) {
+    id = `pyide-colab-${crypto.randomBytes(3).toString('hex')}`;
+    onStep('create', id);
+    const op = await google('POST', `${CRM()}/v1/projects`, { projectId: id, name: 'PyIDE Colab' }, 'Google Cloud');
+    await waitOperation(CRM(), op, 'Google Cloud', `Creating ${id}`);
+  }
+  projectId(id);
+  onStep('enable', id);
+  const op = await google('POST', `${SERVICE_USAGE()}/v1/projects/${id}/services/colaboratory.googleapis.com:enable`, {}, 'Google Cloud');
+  await waitOperation(SERVICE_USAGE(), op, 'Google Cloud', 'Turning on the Colab API');
+  onStep('quota', id);
+  await setQuotaProject(id);
+  return id;
+}
+
 const specs = async () => (await call('GET', 'v1beta/runtimespecs')).runtimeSpecs || [];
 const runtimes = async () => (await call('GET', 'v1beta/runtimes')).runtimes || [];
 const runtimeName = (name) => { if (!/^runtimes\/[a-z0-9-]{1,63}$/.test(String(name))) throw fail('Not a Colab runtime name'); return name; };
@@ -205,4 +272,4 @@ async function create(key, { onProgress = () => {} } = {}) {
   return op.response?.connectionInfo ? op.response : get(`runtimes/${runtimeId}`);
 }
 
-module.exports = { status, findGcloud, signIn, cancelSignIn, specs, runtimes, create, get, release, LOGIN };
+module.exports = { status, findGcloud, signIn, cancelSignIn, projects, setUpProject, specs, runtimes, create, get, release, LOGIN, CONSOLE };

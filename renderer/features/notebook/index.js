@@ -415,7 +415,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     scope: 'The Google sign-in on this computer has no Colab permission. Sign in again to add it.',
     adcType: 'The Google credentials on this computer are not a personal sign-in (a service account, for example). Sign in with Google to use Colab.',
     network: 'Could not reach Google. Check the internet connection, then try again.',
-    quotaProject: 'Google wants a Google Cloud project for this sign-in\'s Colab requests (a quota project). Set one with: gcloud auth application-default set-quota-project PROJECT_ID',
+    quotaProject: 'Colab counts this sign-in\'s requests against a Google Cloud project of yours (a quota project), and none is set yet. PyIDE can set one up: it turns on the Colab API in a project you choose or in a new one.',
     PERMISSION_DENIED: 'Google refused Colab access for this account.',
     http403: 'Google refused Colab access for this account.',
     RESOURCE_EXHAUSTED: 'Colab cannot give this account that runtime right now (usage limits, or no machine free). Try another runtime, or try later.',
@@ -429,6 +429,9 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
   // The Google sign-in page's address, from the one gcloud sign-in running, for the notebook that started it.
   let onSignInUrl = null;
   ide.api.on('colab:signInUrl', (url) => onSignInUrl?.(url));
+  // Likewise what the quota project's setup is doing.
+  let onSetupStep = null;
+  ide.api.on('colab:setupStep', (s) => onSetupStep?.(s));
 
   function mountNotebook(host, { path, doc, tab }) {
     host.classList.add('nb-host');
@@ -831,7 +834,8 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     }
     function installGcloud(status) {
       if (status.install?.command) {
-        ide.terminal?.open({ name: tr('Install Google Cloud CLI'), shell: 'powershell', command: status.install.command, projectless: true });
+        // Command Prompt: Windows PowerShell would first run the user's profile, which a Restricted policy refuses loudly.
+        ide.terminal?.open({ name: tr('Install Google Cloud CLI'), shell: 'cmd', command: status.install.command, projectless: true });
       } else ide.api.invoke('shell:openExternal', status.install?.page);
       signInBanner(status, { installing: true });
     }
@@ -851,6 +855,40 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       if (seq === signInSeq) connectColab();
     }
 
+    // The quota project (main/notebook/colab.js setUpProject): one of the user's Google Cloud projects, or a new one,
+    // gets the Colab API turned on and becomes the sign-in's quota project; then the notebook carries on to the list.
+    async function setUpProject() {
+      const seq = ++signInSeq;
+      showBanner('info', tr('Looking up your Google Cloud projects…'));
+      let list = [];
+      try { list = await ide.api.invoke('colab:projects'); } catch (e) {
+        if (seq === signInSeq) projectFailed(colabError(e));
+        return;
+      }
+      if (seq !== signInSeq) return;
+      hideBanner();
+      const choice = await ide.ui.pick({ placeholder: tr('Google Cloud project for Colab'), items: [
+        { label: tr('New project: PyIDE Colab'), detail: tr('created in your Google account'), value: { id: null } },
+        ...list.map((p) => ({ label: p.name, detail: p.projectId, value: { id: p.projectId } })),
+      ] });
+      if (!choice || seq !== signInSeq) return;
+      const steps = { create: 'Creating the Google Cloud project {project}…', enable: 'Turning on the Colab API in {project}…', quota: 'Making {project} the quota project…' };
+      onSetupStep = ({ step, project }) => { if (seq === signInSeq && steps[step]) showBanner('info', tr(steps[step], { project })); };
+      showBanner('info', tr('Setting up the Google Cloud project…'));
+      try { await ide.api.invoke('colab:setUpProject', choice.id); } catch (e) {
+        if (seq === signInSeq) projectFailed(colabError(e));
+        return;
+      } finally { onSetupStep = null; }
+      if (seq === signInSeq) connectColab();
+    }
+    // Creating a project needs Google Cloud's terms accepted once, in the console.
+    function projectFailed(err) {
+      showBanner('error', tr('Could not set up the Google Cloud project: {error}', { error: err.text }), [
+        { label: tr('Choose Another Project…'), primary: true, run: () => setUpProject() },
+        { label: tr('Open Google Cloud Console'), run: () => ide.api.invoke('shell:openExternal', 'https://console.cloud.google.com/') },
+      ], err.text === err.message ? '' : err.message);
+    }
+
     async function connectColab() {
       const seq = ++signInSeq;
       showBanner('info', tr('Checking the Google sign-in…'));
@@ -861,6 +899,13 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       // Signed in, but the network or Google is in the way: signing in again would not help.
       const failed = (e) => {
         const err = colabError(e, status.errorCode, e ? cleanError(e) : status.error || '');
+        if (err.code === 'quotaProject') {
+          showBanner('warn', err.text, [
+            { label: tr('Set Up a Project…'), primary: true, run: () => setUpProject() },
+            { label: tr('Try Again'), run: () => connectColab() },
+          ], err.message);
+          return;
+        }
         showBanner('error', tr('Colab: {error}', { error: err.text }), [{ label: tr('Try Again'), primary: true, run: () => connectColab() }], err.text === err.message ? '' : err.message);
       };
       if (!status.signedIn) { failed(null); return; }

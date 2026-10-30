@@ -87,6 +87,8 @@ exports.register = ({ ipcMain, startProcess, appDir, unpackedDir = appDir }) => 
   handle('colab:gcloud', () => !!colab.findGcloud());
   handle('colab:signIn', (e) => colab.signIn({ onUrl: (url) => { if (!e.sender.isDestroyed()) e.sender.send('colab:signInUrl', url); } }));
   handle('colab:cancelSignIn', () => colab.cancelSignIn());
+  handle('colab:projects', () => colab.projects());
+  handle('colab:setUpProject', (e, id) => colab.setUpProject(id || null, { onStep: (step, project) => { if (!e.sender.isDestroyed()) e.sender.send('colab:setupStep', { step, project }); } }));
   handle('colab:specs', () => colab.specs());
   handle('colab:runtimes', () => colab.runtimes());
   handle('colab:create', async (_e, key) => { const rt = await colab.create(key); owned.add(rt.name); return rt; });

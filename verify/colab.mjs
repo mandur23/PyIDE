@@ -19,15 +19,21 @@ const at = (name) => path.join(sdk, name);
 mkdirSync(sdk);
 writeFileSync(at('adc.json'), S({ type: 'authorized_user', client_id: 'test-client.apps.googleusercontent.com', client_secret: 'test-secret', refresh_token: 'test-refresh-token' }));
 // Prints the sign-in page as gcloud does, then waits (touching "alive") until the test writes "go", as the browser would.
-const fakeGcloud = ['@echo off', 'echo %*> "%~dp0args.txt"', 'echo Your browser has been opened to visit: 1>&2',
+// set-quota-project writes the project into the ADC file, as gcloud does.
+const fakeGcloud = ['@echo off', 'if "%3"=="set-quota-project" (', 'echo %*> "%~dp0args-quota.txt"',
+  'echo {"type":"authorized_user","client_id":"test-client.apps.googleusercontent.com","client_secret":"test-secret","refresh_token":"test-refresh-token","quota_project_id":"%4"}> "%GOOGLE_APPLICATION_CREDENTIALS%"',
+  'exit /b 0', ')', 'echo %*> "%~dp0args.txt"', 'echo Your browser has been opened to visit: 1>&2',
   'echo     https://accounts.google.com/o/oauth2/auth?response_type=code^&client_id=test-client 1>&2',
   ':wait', 'echo.> "%~dp0alive"', 'if exist "%~dp0go" goto done', 'ping -n 2 127.0.0.1 >nul', 'goto wait',
   ':done', 'copy /y "%~dp0adc.json" "%GOOGLE_APPLICATION_CREDENTIALS%" >nul', 'echo Credentials saved to file: [%GOOGLE_APPLICATION_CREDENTIALS%] 1>&2', ''].join('\r\n');
 const idToken = ['{}', S({ email: 'ada@example.com' }), ''].map((p) => Buffer.from(p).toString('base64url')).join('.');
 const seen = { tokens: [], released: [], restarts: 0, interrupts: 0, gets: 0, wsTokens: [], colabReplies: [], files: {}, uploadChunks: 0, kernelStarts: 0, kernelDeletes: 0 };
 const runtimes = new Map(); // id -> {spec, tokens: [current], sockets, kernel: {count, vars, colabIds} while one runs}
-// One-shot errors the stand-in answers with next: fault.subscription, fault.create = [status, {error}].
+// One-shot errors the stand-in answers with next: fault.subscription, fault.create, fault.newProject = [status, {error}].
 const fault = {};
+// Google Cloud: the user's projects, those with the Colab API on, and whether the Colab API wants a quota project
+// (one with the API on, in x-goog-user-project) as it does for a gcloud sign-in.
+const cloud = { projects: [{ projectId: 'my-first-project-123', name: 'My First Project' }], enabled: new Set(), needQuota: false, quotaHeaders: [] };
 
 // A WebSocket server is a few lines: the handshake, and unfragmented text frames (masked from the client).
 function wsAccept(req, socket) {
@@ -155,6 +161,28 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.headers.authorization !== 'Bearer test-access-token') return json(401, { error: { message: 'no access token', status: 'UNAUTHENTICATED' } });
   const faulty = (name) => { const f = fault[name]; delete fault[name]; if (f) json(...f); return !!f; };
+  if (url.pathname === '/crm/v1/projects' && req.method === 'GET') return json(200, { projects: cloud.projects.map((p) => ({ ...p, lifecycleState: 'ACTIVE' })) });
+  if (url.pathname === '/crm/v1/projects' && req.method === 'POST') {
+    if (faulty('newProject')) return undefined;
+    const p = JSON.parse(body);
+    cloud.projects.push({ projectId: p.projectId, name: p.name });
+    return json(200, { name: `operations/cp.${p.projectId}`, done: false });
+  }
+  if (url.pathname.startsWith('/crm/v1/operations/')) return json(200, { name: url.pathname.slice(8), done: true, response: {} });
+  const enable = /^\/su\/v1\/projects\/([a-z0-9-]+)\/services\/colaboratory\.googleapis\.com:enable$/.exec(url.pathname);
+  if (enable && req.method === 'POST') {
+    if (!cloud.projects.some((p) => p.projectId === enable[1])) return json(403, { error: { message: `Permission denied on project ${enable[1]}`, status: 'PERMISSION_DENIED' } });
+    cloud.enabled.add(enable[1]);
+    return json(200, { name: `operations/acf.${enable[1]}`, done: false });
+  }
+  if (url.pathname.startsWith('/su/v1/operations/')) return json(200, { name: url.pathname.slice(7), done: true, response: {} });
+  if (url.pathname.startsWith('/v1')) {
+    const quota = req.headers['x-goog-user-project'];
+    cloud.quotaHeaders.push(quota || null);
+    if (cloud.needQuota && !cloud.enabled.has(quota)) {
+      return json(403, { error: { code: 403, status: 'PERMISSION_DENIED', message: 'Your application is authenticating by using local Application Default Credentials. The colaboratory.googleapis.com API requires a quota project, which is not set by default. To learn how to set your quota project, see https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds .' } });
+    }
+  }
   if (url.pathname === '/v1beta/subscription') return faulty('subscription') || json(200, { name: 'subscription', tier: 'SUBSCRIPTION_TIER_FREE' });
   if (url.pathname === '/v1beta/runtimespecs') {
     return json(200, { runtimeSpecs: [
@@ -198,7 +226,8 @@ server.on('upgrade', (req, socket) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const env = { GOOGLE_APPLICATION_CREDENTIALS: adc, PYIDE_COLAB_API: base, PYIDE_COLAB_TOKEN_URL: `${base}/token`, PYIDE_GCLOUD: gcloud };
+const env = { GOOGLE_APPLICATION_CREDENTIALS: adc, PYIDE_COLAB_API: base, PYIDE_COLAB_TOKEN_URL: `${base}/token`, PYIDE_GCLOUD: gcloud,
+  PYIDE_COLAB_CRM: `${base}/crm`, PYIDE_COLAB_SERVICE_USAGE: `${base}/su`, PYIDE_COLAB_POLL_MS: '200' };
 const t = await launch({ fixture: 'notebook', port: 9675, name: 'colab', env });
 // Rebound to the second IDE after the restart; the helpers below follow.
 let { js, until, check, shot, sleep } = t;
@@ -254,9 +283,33 @@ try {
 
   await press('Sign In with Google');
   await until(hasButton('Open the Sign-in Page'), 'waiting again', 15000);
+  // A gcloud sign-in has no quota project, which the Colab API wants.
+  cloud.needQuota = true;
   writeFileSync(at('go'), '');
-  await until(`document.querySelector('#popupList')?.offsetParent && document.querySelectorAll('#popupList .popup-item').length >= 2`, 'runtime list', 20000);
-  const rows = await js(`[...document.querySelectorAll('#popupList .popup-item')].map((r) => r.textContent)`);
+  await until(hasButton('Set Up a Project…'), 'quota project banner', 20000)
+    .then(() => check(true, 'when Colab wants a quota project the banner explains it and offers Set Up a Project…'), async () => check(false, `quota banner: ${await banner()}`));
+  check((await banner()).includes('requires a quota project'), 'Google\'s own message is shown below');
+  const pickList = () => js(`[...document.querySelectorAll('#popupList .popup-item')].map((r) => r.textContent)`);
+  const listUp = `document.querySelector('#popupList')?.offsetParent && document.querySelectorAll('#popupList .popup-item').length >= 2`;
+  await press('Set Up a Project…');
+  await until(listUp, 'project list', 10000);
+  const projectRows = await pickList();
+  check(projectRows[0].includes('New project: PyIDE Colab') && projectRows.some((r) => r.includes('My First Project') && r.includes('my-first-project-123')),
+    `the list offers a new project and the account's own (${S(projectRows)})`);
+  fault.newProject = [400, { error: { code: 400, status: 'FAILED_PRECONDITION', message: 'Callers must accept Terms of Service' } }];
+  await pickRow('New project: PyIDE Colab');
+  await until(hasButton('Open Google Cloud Console'), 'terms banner', 10000);
+  check((await banner()).includes('Terms of Service') && (await buttons()).includes('Choose Another Project…'), 'a project Google will not create yet (terms not accepted) is explained, with the console a click away');
+  await press('Choose Another Project…');
+  await until(listUp, 'project list again', 10000);
+  await pickRow('New project: PyIDE Colab');
+  await until(listUp, 'runtime list after the project', 20000);
+  const made = cloud.projects.find((p) => /^pyide-colab-[0-9a-f]{6}$/.test(p.projectId))?.projectId;
+  const quotaArgs = existsSync(at('args-quota.txt')) ? readFileSync(at('args-quota.txt'), 'utf8').trim() : '';
+  check(made && cloud.enabled.has(made) && quotaArgs === `auth application-default set-quota-project ${made}` && cloud.quotaHeaders[cloud.quotaHeaders.length - 1] === made,
+    `the new project gets the Colab API turned on and becomes the quota project, and Colab requests carry it (${made}; ${quotaArgs})`);
+  cloud.needQuota = false;
+  const rows = await pickList();
   check(rows.some((r) => r.includes('GPU T4')) && rows.some((r) => r.includes('CPU')) && !rows.some((r) => r.includes('A100')) && rows.some((r) => r.includes('Colab free')),
     `once the browser sign-in is done the runtime list opens by itself with what the plan allows (${S(rows)})`);
   const placeholder = await js(`document.querySelector('#popupIn').placeholder`);

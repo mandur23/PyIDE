@@ -940,7 +940,7 @@
   }
 
   const plotsTw = ide.registerToolWindow({
-    id: 'Plots', title: tr('Plots'), icon: '📈', iconName: 'plots', side: 'left', order: 40,
+    id: 'Plots', title: tr('Plots'), icon: '📈', iconName: 'plots', side: 'right', order: 40,
     mount(container) {
       container.classList.add('sv-plots');
       const toolbar = el('div', 'sv-plot-bar');
