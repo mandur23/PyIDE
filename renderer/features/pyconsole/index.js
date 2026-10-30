@@ -227,11 +227,11 @@
 
   function renderActions() {
     tw.setActions([
-      { icon: '⟳', title: tr('Rerun Python Console'), run: restart },
-      ...(procId ? [{ id: 'pyconsoleInterrupt', icon: '⊘', title: `${tr('Interrupt')} (Ctrl+C)`, run: interrupt },
-        { icon: '■', title: tr('Stop Console'), run: stop }] : []),
-      { icon: '⌫', title: tr('Clear All'), run: () => con.clear() },
-      ...(ide.dataView?.consoleVariables ? [{ icon: '𝑥', title: varsPane ? tr('Hide Variables') : tr('Show Variables'), run: toggleVariables }] : []),
+      { icon: 'rerun', title: tr('Rerun Python Console'), run: restart },
+      ...(procId ? [{ id: 'pyconsoleInterrupt', icon: 'abort', title: `${tr('Interrupt')} (Ctrl+C)`, run: interrupt },
+        { icon: 'runStop', title: tr('Stop Console'), run: stop }] : []),
+      { icon: 'clear', title: tr('Clear All'), run: () => con.clear() },
+      ...(ide.dataView?.consoleVariables ? [{ icon: 'jupyterVariables', title: varsPane ? tr('Hide Variables') : tr('Show Variables'), run: toggleVariables }] : []),
     ]);
   }
 

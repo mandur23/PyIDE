@@ -224,7 +224,7 @@
     if (!marks.length) return;
     const m = await ide.ui.pick({
       placeholder: tr('Bookmarks'),
-      items: sorted().map((x) => ({ label: markLabel(x), detail: x.description || x.text, icon: '🔖', value: x })),
+      items: sorted().map((x) => ({ label: markLabel(x), detail: x.description || x.text, icon: 'bookmarks', value: x })),
     });
     goTo(m);
   }
@@ -291,8 +291,8 @@
       };
       container.appendChild(listEl);
       tw.setActions([
-        { icon: '✎', title: tr('Edit Description…'), run: () => editDescription(selected) },
-        { icon: '✕', title: tr('Delete'), run: () => selected && remove([selected]) },
+        { icon: 'edit', title: tr('Edit Description…'), run: () => editDescription(selected) },
+        { icon: 'remove', title: tr('Delete'), run: () => selected && remove([selected]) },
       ]);
       render();
     },

@@ -325,12 +325,12 @@
   async function showBranches() {
     if (!repo) return;
     const { local, remote } = await invoke('branches', ide.root);
-    const items = [{ label: tr('New Branch…'), icon: '＋', value: { create: true } }];
+    const items = [{ label: tr('New Branch…'), icon: 'add', value: { create: true } }];
     const extra = branchActions.flatMap((fn) => fn(repo, { local, remote }));
     // While an operation is stopped its Continue / Abort come first, as in PyCharm.
     if (repo.op) items.unshift(...extra); else items.push(...extra);
     for (const b of local) items.push({ label: b, icon: b === repo.branch ? '★' : '⑂', hint: b === repo.branch ? tr('current') : tr('Local'), value: { name: b } });
-    for (const b of remote) items.push({ label: b, icon: '☁', hint: tr('Remote'), value: { name: b, remote: true } });
+    for (const b of remote) items.push({ label: b, icon: 'web', hint: tr('Remote'), value: { name: b, remote: true } });
     const watch = watchBranchPopup(local);
     const choice = await ide.ui.pick({ placeholder: tr('Git Branches — {branch}', { branch: repo.branch || repo.detached }), items });
     watch.dispose();
@@ -523,10 +523,10 @@
       shelfPane = buildShelfPane();
       container.append(commitTabs, changesPane, shelfPane);
       tw.setActions([
-        { icon: '⟳', title: tr('Refresh'), run: () => (shelfShown() ? loadShelves() : refresh()) },
-        { icon: '↶', title: tr('Rollback…'), keyAction: 'ChangesView.Revert', run: () => rollbackFiles(selectedFiles()) },
-        { icon: '⇆', title: tr('Show Diff'), run: () => selectedFiles()[0] && openChange(selectedFiles()[0].path) },
-        { icon: '⊟', title: tr('Shelve Changes…'), id: 'vcsShelveAction', keyAction: 'ChangesView.Shelve', run: () => openShelveDialog() },
+        { icon: 'refresh', title: tr('Refresh'), run: () => (shelfShown() ? loadShelves() : refresh()) },
+        { icon: 'revert', title: tr('Rollback…'), keyAction: 'ChangesView.Revert', run: () => rollbackFiles(selectedFiles()) },
+        { icon: 'diff', title: tr('Show Diff'), run: () => selectedFiles()[0] && openChange(selectedFiles()[0].path) },
+        { icon: 'shelve', title: tr('Shelve Changes…'), id: 'vcsShelveAction', keyAction: 'ChangesView.Shelve', run: () => openShelveDialog() },
       ]);
       prefillMergeMessage();
     },
@@ -863,7 +863,7 @@
     let dispose;
     let unsub;
     ide.openCustomTab({
-      id, title: tr('Diff: {name}', { name: basename(path) }), icon: '⇆',
+      id, title: tr('Diff: {name}', { name: basename(path) }), icon: 'diff',
       mount(host) {
         dispose = mountDiff(host, {
           name: basename(path), left, right, rightModel: tab?.model, leftTitle,
@@ -901,7 +901,7 @@
     if (ide.findTab(id)) return ide.openCustomTab({ id });
     let dispose;
     ide.openCustomTab({
-      id, title, icon: '⇆',
+      id, title, icon: 'diff',
       mount(host) { dispose = mountDiff(host, { name, left, right, leftTitle, rightTitle }); },
       onClose() { dispose?.(); },
     });
@@ -1320,9 +1320,9 @@
       subTabs.switchTo = switchTo;
       container.append(subTabs, logPane, activityPane, consolePane);
       tw.setActions([
-        { icon: '⟳', title: tr('Refresh'), run: loadLog },
-        { icon: '↓', title: tr('Update Project…'), keyAction: 'Vcs.UpdateProject', run: updateProject },
-        { icon: '↑', title: tr('Push…'), keyAction: 'Vcs.Push', run: openPushDialog },
+        { icon: 'refresh', title: tr('Refresh'), run: loadLog },
+        { icon: 'update', title: tr('Update Project…'), keyAction: 'Vcs.UpdateProject', run: updateProject },
+        { icon: 'push', title: tr('Push…'), keyAction: 'Vcs.Push', run: openPushDialog },
       ]);
     },
   });

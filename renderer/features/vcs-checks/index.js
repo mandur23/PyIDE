@@ -388,7 +388,7 @@
     const id = `${title} [${tr('Commit Checks')}]`;
     if (ide.findTab(id)) ide.closeTab(id, true);
     ide.openCustomTab({
-      id, title, icon: '✓',
+      id, title, icon: 'check',
       mount(host) {
         const box = el('div', 'vcs-checks-results');
         box.id = 'vcsChecksResults';

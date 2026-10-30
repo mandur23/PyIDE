@@ -71,7 +71,7 @@
       const prev = diffs.get(name);
       if (prev) { prev.finish(textResult('DIFF_REJECTED')); prev.close(); }
       ide.openCustomTab({
-        id, title: `${basename(newPath)} ⟷ Claude`, icon: '✳',
+        id, title: `${basename(newPath)} ⟷ Claude`, icon: 'claude',
         onClose: () => finish([...textResult('DIFF_REJECTED'), ...textResult(name)]),
         mount(host, tab) {
           host.classList.add('cide-diff');

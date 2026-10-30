@@ -7,12 +7,6 @@
   const run = ide.run;
   if (!run?.registerExecutor) return;
 
-  // PyCharm New UI icons (IntelliJ Platform, Apache License 2.0), with Gray7 as currentColor like renderer/core/icons.js.
-  Object.assign(window.PYIDE_ICONS ||= {}, {
-    profile: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"> <path fill-rule="evenodd" clip-rule="evenodd" d="M9 9.50215C9 8.32441 10.2951 7.60608 11.2942 8.22967L15.2962 10.7275C16.2372 11.3149 16.2372 12.6851 15.2962 13.2725L11.2942 15.7703C10.2951 16.3939 9 15.6756 9 14.4978V9.50215ZM10.7647 9.07799C10.4317 8.87013 10 9.10957 10 9.50215V14.4978C10 14.8904 10.4317 15.1298 10.7647 14.922L14.7667 12.4241C15.0804 12.2284 15.0804 11.7716 14.7667 11.5758L10.7647 9.07799Z" fill="#208A3C"/> <path d="M10 9.50217C10 9.10959 10.4317 8.87015 10.7647 9.07801L14.7667 11.5758C15.0804 11.7716 15.0804 12.2284 14.7667 12.4242L10.7647 14.922C10.4317 15.1299 10 14.8904 10 14.4978V9.50217Z" fill="#F2FCF3"/> <path d="M1.5 9C1.5 5.41015 4.41015 2.5 8 2.5C11.5899 2.5 14.5 5.41015 14.5 9C14.5 9.01716 14.4999 9.03444 14.4997 9.05183L15.4651 9.65439C15.4879 9.42788 15.5 9.20815 15.5 9C15.5 4.85786 12.1421 1.5 8 1.5C3.85786 1.5 0.5 4.85786 0.5 9C0.5 10.1604 0.877241 11.6805 1.36637 12.7304C1.44463 12.8984 1.61594 13 1.80126 13H8V12H2.13917C1.76974 11.0874 1.5 9.89088 1.5 9Z" fill="currentColor"/> <path d="M8 10.6V9.6C7.55826 9.59989 7.2002 9.24176 7.2002 8.8C7.2002 8.35817 7.55837 8 8.0002 8C8.15213 8 8.29417 8.04235 8.41515 8.11589C8.60651 7.82993 8.85445 7.58935 9.13847 7.40554C8.97934 7.27549 8.79754 7.17214 8.5999 7.10232V3.99999C8.5999 3.66862 8.33127 3.39999 7.9999 3.39999C7.66853 3.39999 7.3999 3.66862 7.3999 3.99999V7.10253C6.70094 7.34971 6.2002 8.01638 6.2002 8.8C6.2002 9.79405 7.00598 10.5999 8 10.6Z" fill="currentColor"/> </svg>',
-    profiler: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"> <path fill-rule="evenodd" clip-rule="evenodd" d="M12.157 7.20214C12.4154 6.99461 12.4566 6.61695 12.249 6.35861C12.0415 6.10028 11.6638 6.0591 11.4055 6.26663L8.92772 8.25717C8.6568 8.09391 8.33937 8 8.00001 8C7.0059 8 6.20001 8.80589 6.20001 9.8C6.20001 10.7941 7.0059 11.6 8.00001 11.6C8.99412 11.6 9.80001 10.7941 9.80001 9.8C9.80001 9.58321 9.76169 9.37538 9.69144 9.18289L12.157 7.20214ZM8.80001 9.8C8.80001 10.2418 8.44184 10.6 8.00001 10.6C7.55818 10.6 7.20001 10.2418 7.20001 9.8C7.20001 9.35817 7.55818 9 8.00001 9C8.44184 9 8.80001 9.35817 8.80001 9.8Z" fill="currentColor"/> <path fill-rule="evenodd" clip-rule="evenodd" d="M8 3.5C4.41015 3.5 1.5 6.41015 1.5 10C1.5 10.8909 1.76974 12.0874 2.13917 13H13.8608C14.2303 12.0874 14.5 10.8909 14.5 10C14.5 6.41015 11.5899 3.5 8 3.5ZM0.5 10C0.5 5.85786 3.85786 2.5 8 2.5C12.1421 2.5 15.5 5.85786 15.5 10C15.5 11.1604 15.1228 12.6805 14.6336 13.7304C14.5554 13.8984 14.3841 14 14.1987 14H1.80126C1.61594 14 1.44463 13.8984 1.36637 13.7304C0.877241 12.6805 0.5 11.1604 0.5 10Z" fill="currentColor"/> </svg>',
-  });
-
   let snapshot = null; // {name, cfg, time, fns, all (synthetic root node), total}
 
   // ---------- the executor ----------
@@ -149,7 +143,7 @@
 
   function render() {
     if (!header) return;
-    tw.setActions(snapshot ? [{ icon: '⟳', title: tr("Rerun '{name}' with Profiler", { name: snapshot.name }), run: () => run.runConfig(snapshot.cfg, { executor: 'Profile' }) }] : []);
+    tw.setActions(snapshot ? [{ icon: 'rerun', title: tr("Rerun '{name}' with Profiler", { name: snapshot.name }), run: () => run.runConfig(snapshot.cfg, { executor: 'Profile' }) }] : []);
     for (const b of tabsEl.children) b.classList.toggle('active', b.dataset.tab === activeTab);
     for (const [id, pane] of Object.entries(panes)) pane.root.classList.toggle('hidden', id !== activeTab);
     tabsEl.classList.toggle('hidden', !snapshot);

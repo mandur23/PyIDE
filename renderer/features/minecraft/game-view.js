@@ -19,7 +19,7 @@
   let view = null;
 
   const tw = ide.registerToolWindow({
-    id: 'MinecraftGame', title: tr('Game View'), icon: '🎮', side: 'right', order: 81,
+    id: 'MinecraftGame', title: tr('Game View'), icon: '🎮', iconName: 'gamepad', side: 'right', order: 81,
     mount(container) { view = build(container); render(); },
   });
 

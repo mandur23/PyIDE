@@ -232,6 +232,14 @@ function register({ ipcMain, app, send }) {
 
   // Children of a node the kind marked lazy (a collection's sampled fields, a Redis database's keys); path is the
   // node names from the top of the tree.
+  // A kind without foreign keys (ClickHouse, the document stores) has none to give.
+  ipcMain.handle('db:foreignKeys', async (_e, id) => {
+    try {
+      const adapter = await connect(id);
+      return { ok: true, keys: adapter.foreignKeys ? await adapter.foreignKeys() : [] };
+    } catch (err) { return failure(err); }
+  });
+
   ipcMain.handle('db:children', async (_e, id, nodePath) => {
     try {
       const adapter = await connect(id);

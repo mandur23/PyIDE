@@ -323,7 +323,7 @@
         const url = `http://localhost:${m[1] || m[2]}/`;
         append(`${tr('The application is running at {url}', { url })}\n`, 'sys');
         if (s) {
-          s.setActions([{ icon: '🌐', title: tr('Open in Browser'), run: () => ide.api.invoke('shell:openExternal', url) }]);
+          s.setActions([{ icon: 'web', title: tr('Open in Browser'), run: () => ide.api.invoke('shell:openExternal', url) }]);
           s.serverUrl = url;
         }
         return;

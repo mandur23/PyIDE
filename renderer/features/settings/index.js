@@ -346,7 +346,7 @@
     const search = el('input', 'settings-search');
     search.placeholder = tr('Search settings');
     search.dataset.enter = 'ignore';
-    searchWrap.append(el('span', 'settings-search-icon', '⌕'), search);
+    searchWrap.append(Object.assign(ide.icon('search'), { className: 'ide-icon settings-search-icon' }), search);
     const nav = el('div', 'settings-pages');
     left.append(searchWrap, nav);
     const right = el('div', 'settings-main');
@@ -1028,7 +1028,8 @@
     const filter = el('input', 'input plugins-filter');
     filter.placeholder = tr('Search plugins');
     filter.dataset.enter = 'ignore';
-    const gear = el('button', 'secondary plugins-gear', '⚙');
+    const gear = el('button', 'secondary plugins-gear');
+    gear.appendChild(ide.icon('settings'));
     gear.id = 'pluginsGear';
     gear.title = tr('Manage plugins');
     bar.append(tabs, filter, gear);

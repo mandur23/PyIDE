@@ -444,7 +444,9 @@
     };
   }
 
-  const tabIcon = (t) => (t.kind === 'custom' ? el('span', 'tab-icon', t.icon) : Object.assign(ide.fileIcon(t.path), { className: 'file-icon tab-icon' }));
+  // A file shown by a viewer (an image, a notebook) has its file's icon, as in a text editor.
+  const tabIcon = (t) => (t.kind === 'custom' && !t.viewer ? Object.assign(ide.icon(t.icon), { className: 'ide-icon tab-icon' })
+    : Object.assign(ide.fileIcon(t.path), { className: 'file-icon tab-icon' }));
 
   function addTab(g, tab, index) {
     tab.group = g;
@@ -522,7 +524,7 @@
       const dirty = ide.isDirty(t);
       if (t.doc) t.doc.shownDirty = dirty;
       if (dirty) node.appendChild(el('span', 'dirty', '●'));
-      if (t.pinned) node.appendChild(el('span', 'pin', '📌'));
+      if (t.pinned) node.appendChild(Object.assign(ide.icon('pin'), { className: 'ide-icon pin' }));
       const close = el('button', 'close', '×');
       close.title = tr('Close');
       node.appendChild(close);
@@ -612,10 +614,12 @@
     // A tab bar that gets narrower (a tool window opened beside it, a smaller window) keeps the active tab in view.
     g.tabListSize = ide.util.observeSize(g.tabList, () => g.tabList.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     const actions = el('div', 'group-actions');
-    const splitBtn = el('button', null, '◫');
+    const splitBtn = el('button');
+    splitBtn.appendChild(ide.icon('splitRight'));
     ide.keymap.tooltip(splitBtn, tr('Split Right'), 'SplitVertically');
     splitBtn.onclick = () => splitGroup(g, 'right', g.active, { clone: true });
-    const more = el('button', null, '⋮');
+    const more = el('button');
+    more.appendChild(ide.icon('moreVertical'));
     more.title = tr('More');
     more.onclick = (e) => { const r = more.getBoundingClientRect(); showGroupMenu(g, r.left, r.bottom); e.stopPropagation(); };
     actions.append(splitBtn, more);
@@ -1010,7 +1014,7 @@
   }
 
   // File viewers take over files a text editor cannot show (images, media, arrays) or add a richer view.
-  // {id, title, icon, match(path) -> bool, binaryOnly?: true, text?: true, mount(host, {path, doc, tab}) -> {dispose?}}
+  // {id, title, match(path) -> bool, binaryOnly?: true, text?: true, mount(host, {path, doc, tab}) -> {dispose?}}
   ide.registerFileViewer = (viewer) => { viewers.push(viewer); };
   const viewerFor = (path, { binary = false } = {}) => viewers.find((v) => v.match(path) && (!v.binaryOnly || binary)) || null;
 
@@ -1061,7 +1065,7 @@
     const host = el('div', 'custom-tab hidden');
     host.tabIndex = -1;
     g.customHost.appendChild(host);
-    const tab = { kind: 'custom', group: g, path, title: basename(path), icon: viewer.icon || '◆', host, viewer, doc, model: doc?.model, pinned: false, unsupported };
+    const tab = { kind: 'custom', group: g, path, title: basename(path), host, viewer, doc, model: doc?.model, pinned: false, unsupported };
     addTab(g, tab);
     const r = safeMount(() => viewer.mount(host, { path, doc, tab }));
     tab.dispose = () => r?.dispose?.();
@@ -1070,7 +1074,7 @@
   const safeMount = (fn) => { try { return fn(); } catch (err) { console.error(err); return null; } };
 
   const binaryViewer = {
-    id: 'binary', icon: '📦', match: () => false,
+    id: 'binary', match: () => false,
     mount(host, { path, tab }) {
       host.classList.add('binary-viewer');
       host.appendChild(el('div', 'binary-title', basename(path)));
@@ -1093,7 +1097,7 @@
   // {id, title, icon?, mount(host, tab), onClose?(), doc?} -> tab; reopening an existing id just activates it.
   // doc (from ide.loadDocument) makes the tab hold that file's document like a viewer tab: it stays loaded while the tab
   // is open, Save All writes it, closing the tab asks about unsaved changes, and the status bar shows its encoding.
-  ide.openCustomTab = ({ id, title, icon = '◆', mount, onClose, group, doc }) => {
+  ide.openCustomTab = ({ id, title, icon = 'text', mount, onClose, group, doc }) => {
     let tab = ide.findTab(id);
     if (!tab) {
       const g = resolveGroup(group);

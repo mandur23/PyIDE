@@ -54,6 +54,19 @@ function groupSchema(rows) {
   return [...schemas].map(([name, tables]) => ({ name, kind: 'schema', children: [...tables.values()] }));
 }
 
+// Foreign key rows, one per column in key order: {schema, table, name, column, refSchema, refTable, refColumn} ->
+// one entry per constraint: {schema, table, name, columns, refSchema, refTable, refColumns}.
+function groupForeignKeys(rows) {
+  const keys = new Map();
+  for (const r of rows) {
+    const k = `${r.schema}\0${r.table}\0${r.name}`;
+    if (!keys.has(k)) keys.set(k, { schema: r.schema, table: r.table, name: r.name, columns: [], refSchema: r.refSchema, refTable: r.refTable, refColumns: [] });
+    keys.get(k).columns.push(r.column);
+    keys.get(k).refColumns.push(r.refColumn ?? '');
+  }
+  return [...keys.values()];
+}
+
 // ---------- kinds ----------
 // Every file in main/db/kinds/ is a kind module: module.exports = (lib) => ({ kinds: {key: kind}, packages?: {name: spec} }),
 // where lib is the shared helpers below and packages are the npm specs its kinds load with lib.loadPackage(name).
@@ -65,7 +78,8 @@ function groupSchema(rows) {
 //   { key, label (English, translated in the renderer), type: 'text' | 'number' | 'password' | 'checkbox' | 'select' | 'file',
 //     options?: [[value, label]], placeholder?, default?, extensions? (for 'file') }.
 // The adapter: { query(text, {maxRows}) -> {columns: [{name, type}], rows: [[...]], rowCount, truncated, command, ms},
-//   schema() -> [{name, kind, children: [{name, kind, columns: [{name, type, pk, nullable}]}]}], version(), close() },
+//   schema() -> [{name, kind, children: [{name, kind, columns: [{name, type, pk, nullable}]}]}], version(), close(),
+//   and a SQL kind with foreign keys foreignKeys() -> [{schema, table, name, columns, refSchema, refTable, refColumns}] },
 // every value JSON-safe (lib.jsonSafe; a number whose JS text differs from the database's may be {$number: text}).
 // A SQL kind also has cursor(sql, {readOnly}) -> {columns, next(n) -> rows | null, close(), capped?} for Export Data
 // (main/db/export.js): the driver's own streaming (a server-side cursor, a row stream with pause/resume, a result set),
@@ -76,7 +90,7 @@ function groupSchema(rows) {
 // Export Data refuses (EXPORT_UNSUPPORTED). lib.pushCursor / lib.resultCursor / lib.exportError (main/db/cursors.js)
 // are the shared pieces. Adding a database is adding one file here.
 const { exportError, pushCursor, resultCursor, EXPORT_ROW_CAP } = require('./cursors');
-const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, exportError, pushCursor, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'] };
+const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, pushCursor, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'] };
 const DRIVERS = {};
 const PACKAGES = {};
 for (const file of fs.readdirSync(path.join(__dirname, 'kinds')).filter((f) => f.endsWith('.js')).sort()) {

@@ -62,6 +62,16 @@ function sqliteWorker() {
         })),
       }];
     },
+    // A key that names no columns of the parent (REFERENCES t) points at its primary key: refColumn ''.
+    foreignKeys() {
+      const rows = [];
+      for (const { name } of db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()) {
+        for (const k of db.prepare(`PRAGMA foreign_key_list("${name.replace(/"/g, '""')}")`).all()) {
+          rows.push({ schema: 'main', table: name, name: `fk${k.id}`, column: k.from, refSchema: 'main', refTable: k.table, refColumn: k.to ?? '' });
+        }
+      }
+      return rows;
+    },
     version() { return db.prepare('SELECT sqlite_version() AS v').get().v; },
     // Export Data pages a statement through an open iterator, a batch per call, so a large table never sits whole in
     // either thread. Other statements may run between batches.
@@ -115,7 +125,7 @@ function fidelity(v) {
   return v;
 }
 
-module.exports = ({ jsonSafe, commandOf, DML, timed, exportError }) => {
+module.exports = ({ jsonSafe, commandOf, DML, timed, groupForeignKeys, exportError }) => {
   const gridValue = (v) => { const f = fidelity(v); return f !== null && typeof f === 'object' && '$number' in f ? f : jsonSafe(f); };
   async function openSqlite(cfg, { onLost = () => {} } = {}) {
     if (!cfg.file) throw new Error('No database file is set');
@@ -177,6 +187,7 @@ module.exports = ({ jsonSafe, commandOf, DML, timed, exportError }) => {
         };
       },
       schema: () => call('schema'),
+      foreignKeys: async () => groupForeignKeys(await call('foreignKeys')),
       async version() { return `SQLite ${await call('version')}`; },
       // A statement still running is abandoned: its caller gets an error now, and the thread ends when SQLite returns.
       async close() {

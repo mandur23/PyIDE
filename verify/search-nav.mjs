@@ -150,7 +150,7 @@ try {
   await press('Ctrl+Alt+Shift+N');
   await until(popupOpen, 'goto symbol popup');
   await type('greet');
-  await until(`${activeRow}.startsWith('ⓜgreet')`, 'method greet ranked first');
+  await until(`document.querySelector('#popupList .popup-item.active .sn-icon.k-method') && ${activeRow}.startsWith('mgreet')`, 'method greet ranked first');
   check((await js(activeRow)).includes('Greeter · main.py'), 'symbol shows its class and file');
   await press('Enter');
   await at('main.py', 19, 'Ctrl+Alt+Shift+N "greet" opens the method');

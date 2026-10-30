@@ -15,7 +15,7 @@
   const rowDecorators = [];
   const detailSections = [];
   const extraActions = [];
-  const baseActions = [{ icon: '⟳', title: tr('Refresh'), run: () => { refresh(); checkDeps({ fresh: true }); } }];
+  const baseActions = [{ icon: 'refresh', title: tr('Refresh'), run: () => { refresh(); checkDeps({ fresh: true }); } }];
 
   const tw = ide.registerToolWindow({
     id: 'PythonPackages', title: tr('Python Packages'), icon: '📦', side: 'bottom', order: 60,
@@ -361,7 +361,7 @@
         if (deps.tool.name === 'uv' && ide.installer) button(tr('Install uv…'), 'install-tool', () => ide.installer.open('python'));
         button(tr('Install with pip'), 'install-pip', () => installDeps(f, { pip: true }));
       } else button(tr('Install'), 'install', () => installDeps(f));
-      bar.replaceChildren(el('span', 'deps-banner-icon', '⚠'), text, list, actions);
+      bar.replaceChildren(Object.assign(ide.icon('warning'), { className: 'ide-icon deps-banner-icon' }), text, list, actions);
       setTop(bar.offsetHeight);
     };
     banners.set(editor, { render });

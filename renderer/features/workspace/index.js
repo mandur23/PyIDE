@@ -15,16 +15,16 @@
   const MAX_RECENT = 10;
 
   const KINDS = [
-    { kind: 'launch', icon: '🚀', title: tr('Launch Configurations') },
-    { kind: 'pycharm', icon: '◆', title: tr('PyCharm Run Configurations') },
-    { kind: 'module', icon: '📦', title: tr('Python Modules') },
-    { kind: 'script', icon: '🐍', title: tr('Python Scripts') },
-    { kind: 'bat', icon: '▤', title: tr('Batch Scripts') },
-    { kind: 'ps1', icon: '⚡', title: tr('PowerShell Scripts') },
-    { kind: 'maven', icon: '☕', title: tr('Maven Goals') },
-    { kind: 'gradle', icon: '🐘', title: tr('Gradle Tasks') },
+    { kind: 'launch', icon: 'runDebug', title: tr('Launch Configurations') },
+    { kind: 'pycharm', icon: 'runConfig', title: tr('PyCharm Run Configurations') },
+    { kind: 'module', icon: 'package', title: tr('Python Modules') },
+    { kind: 'script', icon: 'python', title: tr('Python Scripts') },
+    { kind: 'bat', icon: 'windows', title: tr('Batch Scripts') },
+    { kind: 'ps1', icon: 'shell', title: tr('PowerShell Scripts') },
+    { kind: 'maven', icon: 'maven', title: tr('Maven Goals') },
+    { kind: 'gradle', icon: 'gradle', title: tr('Gradle Tasks') },
   ];
-  const kindOf = (k) => KINDS.find((x) => x.kind === k) || { icon: '▶', title: k };
+  const kindOf = (k) => KINDS.find((x) => x.kind === k) || { icon: 'runRun', title: k };
 
   // ---------- state ----------
   let scanned = { entries: [], venvs: [] };
@@ -312,8 +312,8 @@
     },
   });
   tw.setActions([
-    { icon: '⟳', title: tr('Refresh Launchers'), run: () => refresh() },
-    { icon: '⌂', title: tr('Workspace Home'), run: () => openHome() },
+    { icon: 'refresh', title: tr('Refresh Launchers'), run: () => refresh() },
+    { icon: 'home', title: tr('Workspace Home'), run: () => openHome() },
   ]);
 
   function statusIcon(r) {
@@ -327,7 +327,7 @@
     const row = el('div', `${cls}${e.id === selectedId ? ' selected' : ''}${busy(r) ? ' running' : ''}`);
     row.dataset.id = e.id;
     row.dataset.kind = e.kind;
-    const icon = el('span', 'ws-icon', kindOf(e.kind).icon);
+    const icon = Object.assign(ide.icon(kindOf(e.kind).icon), { className: 'ide-icon ws-icon' });
     icon.title = kindOf(e.kind).title;
     const text = el('div', 'ws-text');
     text.append(userText('span', 'ws-name', e.name), userText('span', 'ws-sub', subtitle(e)));
@@ -364,7 +364,7 @@
       const closed = collapsed.has(k.kind);
       const head = el('div', `ws-group${closed ? ' closed' : ''}`);
       head.dataset.kind = k.kind;
-      head.append(el('span', 'ws-arrow', closed ? '▸' : '▾'), el('span', 'ws-icon', k.icon), el('span', 'ws-group-title', k.title), el('span', 'ws-count', String(group.length)));
+      head.append(el('span', 'ws-arrow', closed ? '▸' : '▾'), Object.assign(ide.icon(k.icon), { className: 'ide-icon ws-icon' }), el('span', 'ws-group-title', k.title), el('span', 'ws-count', String(group.length)));
       head.onclick = () => {
         closed ? collapsed.delete(k.kind) : collapsed.add(k.kind);
         ide.settings.set('workspace.collapsed', [...collapsed]);
@@ -411,7 +411,7 @@
     const r = ensureRun(e);
     r.host.classList.remove('hidden');
     const head = el('div', 'ws-detail-head');
-    head.append(statusIcon(r), el('span', 'ws-icon', kindOf(e.kind).icon), userText('span', 'ws-detail-name', e.name), el('span', 'spacer'));
+    head.append(statusIcon(r), Object.assign(ide.icon(kindOf(e.kind).icon), { className: 'ide-icon ws-icon' }), userText('span', 'ws-detail-name', e.name), el('span', 'spacer'));
     // Local URLs the process printed, each with "Open in Browser".
     const urls = el('div', 'ws-urls');
     for (const url of r.urls) {
@@ -420,7 +420,7 @@
       link.href = '#';
       link.dataset.url = url;
       link.onclick = (ev) => { ev.preventDefault(); openUrl(url); };
-      row.append(el('span', 'ws-icon', '🌐'), link, userText('span', 'ws-url', url));
+      row.append(Object.assign(ide.icon('web'), { className: 'ide-icon ws-icon' }), link, userText('span', 'ws-url', url));
       urls.appendChild(row);
     }
     head.append(
@@ -607,7 +607,7 @@
         if (!n) continue;
         const pill = el('span', 'ws-pill');
         pill.dataset.kind = k.kind;
-        pill.append(el('span', null, k.icon), el('span', null, k.title), el('b', null, String(n)));
+        pill.append(ide.icon(k.icon), el('span', null, k.title), el('b', null, String(n)));
         pills.appendChild(pill);
       }
       body.appendChild(pills);
@@ -646,12 +646,12 @@
     const chips = el('div', 'ws-chips');
     const branch = el('span', `ws-chip-info ws-branch${info.branch ? '' : ' none'}`);
     branch.title = tr('Git branch');
-    branch.append(el('span', null, '⑂'), info.branch ? userText('span', 'ws-branch-name', info.branch) : el('span', null, tr('No Git repository')));
+    branch.append(ide.icon('branch'), info.branch ? userText('span', 'ws-branch-name', info.branch) : el('span', null, tr('No Git repository')));
     chips.appendChild(branch);
     const interp = ide.currentInterp();
     const ic = el('span', 'ws-chip-info ws-interp');
     ic.title = tr('Python interpreter');
-    ic.append(el('span', null, '🐍'), interp ? userText('span', null, interp.label) : el('span', null, tr('No interpreter')));
+    ic.append(ide.icon('python'), interp ? userText('span', null, interp.label) : el('span', null, tr('No interpreter')));
     chips.appendChild(ic);
     title.appendChild(chips);
     hero.append(avatar(name, 'ws-avatar lg'), title, el('span', 'spacer'),
@@ -674,7 +674,7 @@
       row.dataset.path = v.path;
       const text = el('div', 'ws-text');
       text.append(userText('span', 'ws-name', v.rel), el('span', 'ws-sub', v.version ? `Python ${v.version}` : tr('Unknown Python version')));
-      row.append(el('span', 'ws-icon', '🐍'), text);
+      row.append(Object.assign(ide.icon('python'), { className: 'ide-icon ws-icon' }), text);
       const isCurrent = v.python && samePath(ide.currentInterp()?.executable, v.python);
       if (isCurrent) row.appendChild(el('span', 'ws-badge', tr('Current')));
       else if (v.python && !ide.interps.some((i) => samePath(i.executable, v.python)) && !extra.some((p) => samePath(p, v.python))) {
@@ -708,7 +708,7 @@
     ide.openCustomTab({
       id: HOME_ID,
       title: tr('Workspace'),
-      icon: '⌂',
+      icon: 'home',
       mount(host) {
         homeHost = host;
         host.classList.add('ws-home-tab');
@@ -718,7 +718,8 @@
     });
   }
 
-  const homeBtn = el('button', 'tb-icon ws-home-btn', '⌂');
+  const homeBtn = el('button', 'tb-icon ws-home-btn');
+  homeBtn.appendChild(ide.icon('home'));
   homeBtn.title = tr('Workspace Home');
   homeBtn.onclick = openHome;
   ide.registerToolbarItem({ side: 'left', order: 20, el: homeBtn });

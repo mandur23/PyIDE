@@ -559,10 +559,12 @@
     mount(container) {
       container.classList.add('term-tool');
       tabBar = el('div', 'term-tabs');
-      const add = el('button', 'term-new', '＋');
+      const add = el('button', 'term-new');
+      add.appendChild(ide.icon('add'));
       add.title = tr('New Session');
       add.onclick = () => createSession();
-      const pick = el('button', 'term-new term-pick', '▾');
+      const pick = el('button', 'term-new term-pick');
+      pick.appendChild(ide.icon('chevronDown'));
       pick.title = tr('New Session with…');
       pick.onclick = async (e) => {
         shells = shells.length ? shells : await ide.api.invoke('pty:shells');
@@ -586,10 +588,10 @@
     },
   });
   tw.setActions([
-    { icon: '✳', title: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
-    { icon: '◫', title: tr('Split Right'), keyAction: 'Terminal.SplitRight', id: 'terminal-split-right', run: () => splitPane(active, 'right') },
-    { icon: '⊟', title: tr('Split Down'), keyAction: 'Terminal.SplitDown', id: 'terminal-split-down', run: () => splitPane(active, 'down') },
-    { icon: '⌫', title: tr('Clear Buffer'), run: () => active?.term.clear() },
+    { icon: 'claude', title: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
+    { icon: 'splitRight', title: tr('Split Right'), keyAction: 'Terminal.SplitRight', id: 'terminal-split-right', run: () => splitPane(active, 'right') },
+    { icon: 'splitDown', title: tr('Split Down'), keyAction: 'Terminal.SplitDown', id: 'terminal-split-down', run: () => splitPane(active, 'down') },
+    { icon: 'clear', title: tr('Clear Buffer'), run: () => active?.term.clear() },
   ]);
 
   // Opening the Terminal window with no sessions starts one, as in PyCharm.
@@ -627,7 +629,8 @@
   });
 
   // Toolbar button and stripe icon for Claude Code.
-  const claudeBtn = el('button', 'tb-icon claude-btn', '✳');
+  const claudeBtn = el('button', 'tb-icon claude-btn');
+  claudeBtn.appendChild(ide.icon('claude'));
   ide.keymap.tooltip(claudeBtn, tr('Claude Code'), 'ClaudeCode');
   claudeBtn.onclick = openClaude;
   ide.registerToolbarItem({ side: 'right', order: 150, el: claudeBtn });

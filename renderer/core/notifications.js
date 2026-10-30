@@ -131,7 +131,8 @@
     }
     const tools = el('div', 'ide-balloon-tools');
     if (entry.group) {
-      const more = el('button', 'ide-balloon-more', '⋮');
+      const more = el('button', 'ide-balloon-more');
+      more.appendChild(ide.icon('moreVertical'));
       more.title = tr('More');
       more.onclick = (e) => {
         e.stopPropagation();
@@ -142,7 +143,8 @@
       };
       tools.appendChild(more);
     }
-    const close = el('button', 'ide-balloon-close', '×');
+    const close = el('button', 'ide-balloon-close');
+    close.appendChild(ide.icon('closeSmall'));
     close.title = tr('Close');
     close.onclick = (e) => { e.stopPropagation(); b.remove(); };
     tools.appendChild(close);
@@ -225,7 +227,8 @@
       if (t.text) main.appendChild(el('div', 'bg-popup-text', t.text));
       row.appendChild(main);
       if (t.cancellable) {
-        const cancel = el('button', 'bg-popup-cancel', '×');
+        const cancel = el('button', 'bg-popup-cancel');
+        cancel.appendChild(ide.icon('closeSmall'));
         cancel.title = tr('Cancel');
         cancel.onclick = (e) => { e.stopPropagation(); cancelTask(t.id); };
         row.appendChild(cancel);

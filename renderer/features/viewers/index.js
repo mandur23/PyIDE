@@ -877,7 +877,7 @@
     const scroll = el('div', 'vw-scroll');
     const card = el('div', 'vw-card');
     const top = el('div', 'vw-card-head');
-    top.append(el('span', 'vw-card-icon', '🧠'), userEl('span', 'vw-card-title', basename(path)), el('span', 'vw-badge', tr(MODEL_KIND[e] || 'Model file')));
+    top.append(Object.assign(ide.fileIcon(path), { className: 'file-icon vw-card-icon' }), userEl('span', 'vw-card-title', basename(path)), el('span', 'vw-badge', tr(MODEL_KIND[e] || 'Model file')));
     const kv = el('div', 'vw-kv');
     const row = (k, v) => { kv.append(el('span', 'vw-k', k), userEl('span', 'vw-v', v)); };
     const actions = el('div', 'vw-actions');
@@ -1820,20 +1820,20 @@
   }
 
   // ---------- registration ----------
-  ide.registerFileViewer({ id: 'image', icon: '🖼', match: byExt(...IMAGE_EXT), mount: mountImage });
-  ide.registerFileViewer({ id: 'video', icon: '🎬', match: byExt(...VIDEO_EXT), mount: mountVideo });
-  ide.registerFileViewer({ id: 'audio', icon: '🎵', match: byExt(...AUDIO_EXT), mount: mountAudio });
-  ide.registerFileViewer({ id: 'numpy', icon: '🔢', match: byExt('npy', 'npz'), mount: mountNumpy });
+  ide.registerFileViewer({ id: 'image', match: byExt(...IMAGE_EXT), mount: mountImage });
+  ide.registerFileViewer({ id: 'video', match: byExt(...VIDEO_EXT), mount: mountVideo });
+  ide.registerFileViewer({ id: 'audio', match: byExt(...AUDIO_EXT), mount: mountAudio });
+  ide.registerFileViewer({ id: 'numpy', match: byExt('npy', 'npz'), mount: mountNumpy });
   // .bin is ambiguous (PyTorch weights, firmware, raw data); only binary .bin files get the model viewer.
-  ide.registerFileViewer({ id: 'model', icon: '🧠', match: byExt(...MODEL_EXT.filter((e) => e !== 'bin')), mount: mountModel });
-  ide.registerFileViewer({ id: 'model-bin', icon: '🧠', binaryOnly: true, match: (p) => ext(p) === 'bin' && /pytorch_model|model|weights/i.test(basename(p)), mount: mountModel });
-  ide.registerFileViewer({ id: 'markdown', icon: '📝', text: true, match: byExt('md', 'markdown'), mount: mountMarkdown });
+  ide.registerFileViewer({ id: 'model', match: byExt(...MODEL_EXT.filter((e) => e !== 'bin')), mount: mountModel });
+  ide.registerFileViewer({ id: 'model-bin', binaryOnly: true, match: (p) => ext(p) === 'bin' && /pytorch_model|model|weights/i.test(basename(p)), mount: mountModel });
+  ide.registerFileViewer({ id: 'markdown', text: true, match: byExt('md', 'markdown'), mount: mountMarkdown });
   // Django and Jinja2 templates stay in the editor with their template language: {% %} and {{ }} do not preview.
   const isPage = byExt('html', 'htm', 'xhtml');
-  ide.registerFileViewer({ id: 'html', icon: '🌐', text: true, match: (p) => isPage(p) && !ide.frameworks?.templateLanguage?.(p), mount: mountHtml });
-  ide.registerFileViewer({ id: 'csv', icon: '▦', text: true, match: byExt('csv', 'tsv'),
+  ide.registerFileViewer({ id: 'html', text: true, match: (p) => isPage(p) && !ide.frameworks?.templateLanguage?.(p), mount: mountHtml });
+  ide.registerFileViewer({ id: 'csv', text: true, match: byExt('csv', 'tsv'),
     mount: (host, ctx) => mountTableViewer(host, ctx, { kind: 'csv', build: (text) => tableFromCsv(text, ctx.path) }) });
-  ide.registerFileViewer({ id: 'jsonl', icon: '▤', text: true, match: byExt('jsonl', 'ndjson'),
+  ide.registerFileViewer({ id: 'jsonl', text: true, match: byExt('jsonl', 'ndjson'),
     mount: (host, ctx) => mountTableViewer(host, ctx, { kind: 'jsonl', build: tableFromJsonl }) });
 
   // For tests and other plugins.

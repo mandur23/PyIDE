@@ -50,7 +50,7 @@
       placeholder: tr('Choose a schema of {name}', { name: source.name }),
       items: [
         { label: tr('Default schema'), hint: current?.source === source.id && !current.schema ? '✓' : '', value: { schema: null } },
-        ...names.map((n) => ({ label: n, icon: '▤', hint: current?.source === source.id && current.schema === n ? '✓' : '', value: { schema: n } })),
+        ...names.map((n) => ({ label: n, icon: 'dataSchema', hint: current?.source === source.id && current.schema === n ? '✓' : '', value: { schema: n } })),
       ],
     });
     return pick ? pick.schema : undefined;
@@ -68,9 +68,9 @@
     const pick = await ide.ui.pick({
       placeholder: tr('Data source for {name}', { name: basename(path) }),
       items: [
-        ...sources.map((s) => ({ label: s.name, detail: host.driverOf(s.kind)?.label || s.kind, icon: '⛁', hint: current?.source === s.id ? '✓' : '', value: { source: s } })),
+        ...sources.map((s) => ({ label: s.name, detail: host.driverOf(s.kind)?.label || s.kind, icon: 'database', hint: current?.source === s.id ? '✓' : '', value: { source: s } })),
         { label: tr('<No data source>'), hint: current ? '' : '✓', value: { detach: true } },
-        { label: tr('New Data Source…'), icon: '+', value: { add: true } },
+        { label: tr('New Data Source…'), icon: 'add', value: { add: true } },
       ],
     });
     if (!pick) return null;
@@ -98,7 +98,7 @@
     const a = attachmentOf(path);
     const s = a && host.sourceOf(a.source);
     item.classList.toggle('attached', !!s);
-    item.replaceChildren(el('span', 'db-sql-status-icon', '⛁'),
+    item.replaceChildren(Object.assign(ide.icon('database'), { className: 'ide-icon db-sql-status-icon' }),
       s ? userEl('span', 'db-sql-status-name', a.schema ? `${s.name} · ${a.schema}` : s.name) : el('span', 'db-sql-status-none', tr('<No data source>')),
       el('span', 'db-sql-status-arrow', '▾'));
   }
@@ -134,7 +134,7 @@
     const bar = el('div', 'db-console-bar');
     entry.file = userEl('span', 'db-file-result-name');
     entry.source = userEl('span', 'db-console-source');
-    bar.append(el('span', 'db-icon', '⛁'), entry.file, entry.source);
+    bar.append(Object.assign(ide.icon('database'), { className: 'ide-icon db-icon' }), entry.file, entry.source);
     entry.el.append(bar, entry.view.el);
     views.set(k, entry);
     return entry;

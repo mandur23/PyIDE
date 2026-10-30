@@ -6,12 +6,6 @@
   const run = ide.run;
   if (!run?.registerExecutor) return;
 
-  // PyCharm New UI icons (IntelliJ Platform, Apache License 2.0), with Gray7 as currentColor like renderer/core/icons.js.
-  Object.assign(window.PYIDE_ICONS ||= {}, {
-    runWithCoverage: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"> <g clip-path="url(#clip0_2414_33992)"> <path fill-rule="evenodd" clip-rule="evenodd" d="M9 9.50215C9 8.32441 10.2951 7.60608 11.2942 8.22967L15.2962 10.7275C16.2372 11.3149 16.2372 12.6851 15.2962 13.2725L11.2942 15.7703C10.2951 16.3939 9 15.6756 9 14.4978V9.50215ZM10.7647 9.07799C10.4317 8.87013 10 9.10957 10 9.50215V14.4978C10 14.8904 10.4317 15.1298 10.7647 14.922L14.7667 12.4241C15.0804 12.2284 15.0804 11.7716 14.7667 11.5758L10.7647 9.07799Z" fill="#208A3C"/> <path d="M10 9.50214C10 9.10956 10.4317 8.87012 10.7647 9.07798L14.7667 11.5758C15.0804 11.7716 15.0804 12.2284 14.7667 12.4241L10.7647 14.922C10.4317 15.1298 10 14.8904 10 14.4978V9.50214Z" fill="#F2FCF3"/> <path d="M14 3.00249L8 0.457031L2 3.00249V8.77794C2 10.5438 2.89245 11.8352 4.03238 12.8568C4.87083 13.6082 5.8918 14.2526 6.82862 14.8439C7.1398 15.0402 7.44176 15.2308 7.7246 15.4175L8 15.5992L8 14.4032C7.76892 14.2539 7.53551 14.1065 7.30253 13.9594C6.38473 13.3799 5.46989 12.8023 4.69977 12.1121C3.67898 11.1973 3 10.1554 3 8.77794V3.66451L8 1.5433L13 3.66451V8.11737L14 8.74152V3.00249Z" fill="currentColor"/> </g> <defs> <clipPath id="clip0_2414_33992"> <rect width="16" height="16" fill="white"/> </clipPath> </defs> </svg>',
-    coverage: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M2.5 3.83333L8 1.54167L13.5 3.83333L13.5 9.17871C13.5 10.7502 12.7145 11.9168 11.6339 12.8852C10.8323 13.6036 9.84849 14.226 8.90452 14.8218L8.9021 14.8233C8.59264 15.0186 8.28712 15.2115 8 15.4009C7.71296 15.2115 7.40754 15.0187 7.09817 14.8235L7.09548 14.8218C6.15151 14.226 5.16769 13.6036 4.36607 12.8852C3.28548 11.9168 2.5 10.7502 2.5 9.17871V3.83333Z" stroke="currentColor"/> <path d="M5.5 8.5L7 10L10.5 6.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> </svg>',
-  });
-
   const SHOW_KEY = 'coverage.showInEditor';
   const key = (p) => p.toLowerCase();
   let suite = null; // {name, cfg, time, files: Map(key -> file), root: node, nodes: Map(key -> node)}
@@ -335,7 +329,7 @@
 
   function renderActions() {
     tw.setActions([
-      ...(suite ? [{ icon: '⟳', title: tr("Rerun '{name}' with Coverage", { name: suite.name }), run: () => run.runConfig(suite.cfg, { executor: 'Coverage' }) }] : []),
+      ...(suite ? [{ icon: 'rerun', title: tr("Rerun '{name}' with Coverage", { name: suite.name }), run: () => run.runConfig(suite.cfg, { executor: 'Coverage' }) }] : []),
       { icon: shown ? '◉' : '○', title: shown ? tr('Hide Coverage') : tr('Show Coverage in Editors'), run: () => setShown(!shown) },
     ]);
   }

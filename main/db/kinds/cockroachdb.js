@@ -79,6 +79,19 @@ module.exports = (lib) => {
           ORDER BY c.table_schema, c.table_name, c.ordinal_position`, ALL);
         return lib.groupSchema(rows.map(([schema, table, type, column, dataType, nullable, pk]) => ({ schema, table, view: type === 'VIEW', column, type: dataType, nullable: nullable === 'YES', pk })));
       },
+      async foreignKeys() {
+        const { rows } = await pg.query(`
+          SELECT ns.nspname AS s, cl.relname AS t, con.conname AS n, a.attname AS col, rns.nspname AS rs, rcl.relname AS rt, ra.attname AS rcol
+          FROM pg_constraint con
+          JOIN pg_class cl ON cl.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+          JOIN pg_class rcl ON rcl.oid = con.confrelid JOIN pg_namespace rns ON rns.oid = rcl.relnamespace
+          CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, rcol, ord)
+          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
+          JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.rcol
+          WHERE con.contype = 'f' AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY ns.nspname, cl.relname, con.conname, k.ord`, ALL);
+        return lib.groupForeignKeys(rows.map(([schema, table, name, column, refSchema, refTable, refColumn]) => ({ schema, table, name, column, refSchema, refTable, refColumn })));
+      },
       async version() {
         const v = (await pg.query('SELECT version()', ALL)).rows[0][0];
         return v.match(/^CockroachDB \S+ v[\w.-]+/)?.[0] || v;

@@ -27,7 +27,7 @@ const COMPLETION = {
   dataTypes: list('TINYINT, SMALLINT, MEDIUMINT, INT, BIGINT, DECIMAL, FLOAT, DOUBLE, BIT, BOOLEAN, CHAR, VARCHAR, BINARY, VARBINARY, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT, BLOB, MEDIUMBLOB, LONGBLOB, ENUM, SET, DATE, TIME, DATETIME, TIMESTAMP, YEAR, JSON, GEOMETRY, POINT'),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, pushCursor, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, pushCursor, NETWORK_FIELDS }) => {
   // Export Data's values: numbers as the server's text ({$number}), binary (BLOB, BINARY, BIT) as a Buffer, the rest as
   // the driver gives it (dates as text: dateStrings).
   const NUMERIC = new Set(['DECIMAL', 'NEWDECIMAL', 'TINY', 'SHORT', 'LONG', 'INT24', 'LONGLONG', 'FLOAT', 'DOUBLE', 'YEAR']);
@@ -89,6 +89,14 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, p
           WHERE c.TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
           ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`);
         return groupSchema(rows.map((r) => ({ schema: r.s, table: r.t, view: r.tt === 'VIEW', column: r.col, type: r.ty, nullable: r.n === 'YES', pk: r.k === 'PRI' })));
+      },
+      async foreignKeys() {
+        const [rows] = await conn.query(`
+          SELECT TABLE_SCHEMA s, TABLE_NAME t, CONSTRAINT_NAME n, COLUMN_NAME col, REFERENCED_TABLE_SCHEMA rs, REFERENCED_TABLE_NAME rt, REFERENCED_COLUMN_NAME rcol
+          FROM information_schema.KEY_COLUMN_USAGE
+          WHERE REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+          ORDER BY TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION`);
+        return groupForeignKeys(rows.map((r) => ({ schema: r.s, table: r.t, name: r.n, column: r.col, refSchema: r.rs, refTable: r.rt, refColumn: r.rcol })));
       },
       async version() { const [rows] = await conn.query('SELECT VERSION() AS v'); return rows[0].v; },
       // Export Data: the statement's rows streamed on a connection of its own (the console stays usable), with the

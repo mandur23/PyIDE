@@ -113,7 +113,7 @@ const COMPLETION = {
     GEOGRAPHY, GEOMETRY, TABLE, CURSOR`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, pushCursor, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, pushCursor, NETWORK_FIELDS }) => {
   // tedious gives BIGINT as a string, DATE/TIME as a Date, and binary as a Buffer.
   const dateText = (value, type) => {
     if (!(value instanceof Date) || Number.isNaN(value.getTime())) return value;
@@ -243,6 +243,18 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, p
             ON k.TABLE_SCHEMA = c.TABLE_SCHEMA AND k.TABLE_NAME = c.TABLE_NAME AND k.COLUMN_NAME = c.COLUMN_NAME
           ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`);
         return groupSchema(recordset.map((r) => ({ schema: r.s, table: r.t, view: r.tt === 'VIEW', column: r.col, type: typeName(r), nullable: r.n === 'YES', pk: !!r.pk })));
+      },
+      async foreignKeys() {
+        const { recordset } = await pool.request().query(`
+          SELECT SCHEMA_NAME(pt.schema_id) s, pt.name tb, fk.name n, pc.name col, SCHEMA_NAME(rt.schema_id) rs, rt.name rtb, rc.name rcol
+          FROM sys.foreign_key_columns fkc
+          JOIN sys.foreign_keys fk ON fk.object_id = fkc.constraint_object_id
+          JOIN sys.tables pt ON pt.object_id = fkc.parent_object_id
+          JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+          JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id
+          JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+          ORDER BY SCHEMA_NAME(pt.schema_id), pt.name, fk.name, fkc.constraint_column_id`);
+        return groupForeignKeys(recordset.map((r) => ({ schema: r.s, table: r.tb, name: r.n, column: r.col, refSchema: r.rs, refTable: r.rtb, refColumn: r.rcol })));
       },
       async version() {
         const { recordset } = await pool.request().query('SELECT @@VERSION AS v');

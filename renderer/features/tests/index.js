@@ -57,7 +57,7 @@
 
   // ---------- run configuration type ----------
   run.registerType({
-    type: 'pytest', title: 'pytest', icon: '🧪',
+    type: 'pytest', title: 'pytest', icon: 'test',
     fields: [
       { key: 'target', label: tr('Target'), placeholder: tr('Script, folder, or node id (test_x.py::TestY::test_z)') },
       { key: 'args', label: tr('Additional arguments'), placeholder: tr('e.g. -x -k "fast"') },
@@ -78,7 +78,10 @@
   });
 
   // ---------- Test Results view ----------
+  // The glyphs mark results in the console's text; the tree and the status line draw the icons.
   const ICONS = { passed: '✓', failed: '✗', error: '✗', skipped: '⊘', running: '◷', pending: '○' };
+  const ICON_NAMES = { passed: 'testPassed', failed: 'testFailed', error: 'testError', skipped: 'testIgnored', stopped: 'testTerminated', running: 'runRun', pending: 'testNotRun' };
+  const statusIcon = (st, cls = st) => Object.assign(ide.icon(ICON_NAMES[st]), { className: `ide-icon tr-icon ${cls}` });
   const fmtMs = (sec) => {
     const ms = Math.round((sec || 0) * 1000);
     return ms >= 1000 ? tr('{n} sec', { n: (ms / 1000).toFixed(ms >= 10000 ? 0 : 1) }) : tr('{n} ms', { n: ms });
@@ -178,7 +181,7 @@
         text = tr('Stopped. {status}', { status: text });
         if (!c.failed) cls = 'stopped';
       }
-      status.replaceChildren(el('span', `tr-icon ${cls}`, finished ? ICONS[cls === 'passed' ? 'passed' : cls === 'failed' ? 'failed' : 'skipped'] : ICONS.running), el('span', null, text));
+      status.replaceChildren(statusIcon(finished ? (cls === 'passed' || cls === 'failed' ? cls : 'stopped') : 'running', cls), el('span', null, text));
       status.dataset.state = cls;
     }
 
@@ -198,7 +201,7 @@
         // Test, class and file names are user data; the root and "collection error" rows are UI text.
         if (n.kind !== 'root' && !n.uiName) name.dataset.userText = '';
         row.title = STATUS_TEXT[st] || '';
-        row.append(arrow, el('span', `tr-icon ${st}`, ICONS[st]), name);
+        row.append(arrow, statusIcon(st), name);
         if (n.kind === 'test' ? n.duration != null : st !== 'pending') row.appendChild(el('span', 'tr-time', fmtMs(n.kind === 'root' && finished ? elapsed / 1000 : durationOf(n))));
         row.onclick = () => selectNode(n, false);
         row.ondblclick = () => selectNode(n, true);
@@ -447,7 +450,7 @@
     clearTimeout(s.autoTestTimer); // this run already includes the saves that armed the timer
     const view = createView(s);
     s.setActions([
-      { id: 'rerunFailed', icon: '⟲', title: tr('Rerun Failed Tests'), run: () => {
+      { id: 'rerunFailed', icon: 'rerunFailed', title: tr('Rerun Failed Tests'), run: () => {
         const failed = view.failedIds();
         if (failed.length) run.runConfig(s.cfg, { targets: failed });
       } },
@@ -458,7 +461,7 @@
     const report = follow(view, id);
     s.dispose = report.stop;
     s.started(id);
-    s.setIcon('◷', 'running');
+    s.setIcon('runRun', 'running');
     ide.proc.attach(id, {
       data: (text, stream) => view.log(text, stream === 'err' ? 'err' : null),
       async exit(code) {
@@ -466,7 +469,7 @@
         // No exit status in the report: the runner did not get to its end (Stop), as for a debug run.
         const stopped = view.exitStatus() == null;
         const c = finishRun(view, code, stopped);
-        if (s.procId === id) s.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
+        if (s.procId === id) s.setIcon(c.failed ? 'testFailed' : stopped ? 'testTerminated' : 'testPassed', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
         s.exited(id, code);
       },
     });
@@ -483,7 +486,8 @@
     const body = el('div', 'tr-debug-body');
     host.append(bar, body);
     const view = createView({ host: body, console: ({ parent }) => ide.ui.console(parent, {}) });
-    const rerunFailed = el('button', 'tr-debug-btn', '⟲');
+    const rerunFailed = el('button', 'tr-debug-btn');
+    rerunFailed.appendChild(ide.icon('rerunFailed'));
     rerunFailed.dataset.action = 'rerunFailed';
     rerunFailed.title = tr('Rerun Failed Tests');
     rerunFailed.disabled = true;
@@ -512,14 +516,14 @@
       const code = view.exitStatus();
       const stopped = code == null;
       const c = finishRun(view, code, stopped);
-      tab?.setIcon(c.failed ? '✗' : stopped ? '⊘' : '✓', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
+      tab?.setIcon(c.failed ? 'testFailed' : stopped ? 'testTerminated' : 'testPassed', c.failed ? 'failed' : stopped ? 'stopped' : 'passed');
       rerunFailed.disabled = !view.failedIds().length;
       // A replaced session's sub-tab is gone with it; the Debug window stays on the new session.
       if (!replaced) tab?.show();
     };
     const tabs = [{ id: 'testResults', title: tr('Test Results'), select: true, mount(pane, handle) {
       tab = handle;
-      if (!ended) handle.setIcon('◷', 'running');
+      if (!ended) handle.setIcon('runRun', 'running');
       pane.appendChild(host);
     } }];
     // run.debugConfig starts the session with these sub-tabs; debugFile's promise settles once its session runs, failed
@@ -632,7 +636,7 @@
 
   function autoTestAction(s) {
     return {
-      id: 'autoTest', icon: '↻',
+      id: 'autoTest', icon: 'rerunAuto',
       get title() { return tr('Toggle Auto-test'); },
       get toggled() { return !!s.autoTest; },
       run: () => setAutoTest(s, !s.autoTest),

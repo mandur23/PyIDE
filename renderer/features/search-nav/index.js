@@ -4,7 +4,6 @@
   const isPy = (p) => /\.py[iw]?$/i.test(p);
   const fileIcon = (p) => ide.fileIcon(p);
   const LETTER = { class: 'C', method: 'm', function: 'f', field: 'f', variable: 'v', property: 'p' };
-  const GLYPH = { class: 'Ⓒ', method: 'ⓜ', function: 'ⓕ', field: 'ⓕ', variable: 'ⓥ', property: 'ⓟ' };
   const kindIcon = (kind) => el('span', `sn-icon k-${kind}`, LETTER[kind] || '?');
   // Plural forms are separate whole messages (ngettext style) so a translation can reorder them.
   const nt = (n, one, many) => tr(n === 1 ? one : many, { n });
@@ -138,9 +137,9 @@
       findHead.append(ide.keymap.text(el('span'), () => tr('Use {action} to search the project', { action: ide.keymap.withKeys(tr('Find in Files'), 'FindInPath') })));
       container.append(findHead, findList);
       tw.setActions([
-        { icon: '⟳', title: tr('Rerun Search'), run: () => findState && showFindResults(findState.opts, findState.replace) },
-        { icon: '⊞', title: tr('Expand All'), run: () => setAllCollapsed(findList, findCollapsed, false) },
-        { icon: '⊟', title: tr('Collapse All'), run: () => setAllCollapsed(findList, findCollapsed, true) },
+        { icon: 'rerun', title: tr('Rerun Search'), run: () => findState && showFindResults(findState.opts, findState.replace) },
+        { icon: 'expandAll', title: tr('Expand All'), run: () => setAllCollapsed(findList, findCollapsed, false) },
+        { icon: 'collapseAll', title: tr('Collapse All'), run: () => setAllCollapsed(findList, findCollapsed, true) },
       ]);
     },
   });
@@ -534,9 +533,9 @@
       });
       container.append(structList);
       tw.setActions([
-        { icon: '⇅', title: tr('Sort Alphabetically'), run: () => { sortAlpha = !sortAlpha; ide.settings.set('searchNav.structureSort', sortAlpha); refreshStructure(); } },
-        { icon: '⊞', title: tr('Expand All'), run: () => { structCollapsed.clear(); refreshStructure(); } },
-        { icon: '⊟', title: tr('Collapse All'), run: () => { structList.querySelectorAll('.sn-node[data-key]').forEach((n) => n.dataset.parent === '1' && structCollapsed.add(n.dataset.key)); refreshStructure(); } },
+        { icon: 'sortAlpha', title: tr('Sort Alphabetically'), run: () => { sortAlpha = !sortAlpha; ide.settings.set('searchNav.structureSort', sortAlpha); refreshStructure(); } },
+        { icon: 'expandAll', title: tr('Expand All'), run: () => { structCollapsed.clear(); refreshStructure(); } },
+        { icon: 'collapseAll', title: tr('Collapse All'), run: () => { structList.querySelectorAll('.sn-node[data-key]').forEach((n) => n.dataset.parent === '1' && structCollapsed.add(n.dataset.key)); refreshStructure(); } },
       ]);
     },
   });
@@ -762,7 +761,7 @@
     }
     scored.sort((a, b) => b[1] - a[1] || a[0].name.length - b[0].name.length || a[0].name.localeCompare(b[0].name));
     return scored.slice(0, limit).map(([s]) => ({
-      label: s.name, detail: `${s.container ? `${s.container} · ` : ''}${rel(s.path)}`, hint: KIND[s.kind] || s.kind, icon: GLYPH[s.kind] || '•', value: s,
+      label: s.name, detail: `${s.container ? `${s.container} · ` : ''}${rel(s.path)}`, hint: KIND[s.kind] || s.kind, icon: kindIcon(s.kind), value: s,
     }));
   }
 
@@ -826,9 +825,9 @@
       groupKeys(todoList);
       container.append(todoHead, todoList);
       tw.setActions([
-        { icon: '⟳', title: tr('Refresh'), run: () => refreshTodosNow() },
-        { icon: '⊞', title: tr('Expand All'), run: () => setAllCollapsed(todoList, todoCollapsed, false) },
-        { icon: '⊟', title: tr('Collapse All'), run: () => setAllCollapsed(todoList, todoCollapsed, true) },
+        { icon: 'refresh', title: tr('Refresh'), run: () => refreshTodosNow() },
+        { icon: 'expandAll', title: tr('Expand All'), run: () => setAllCollapsed(todoList, todoCollapsed, false) },
+        { icon: 'collapseAll', title: tr('Collapse All'), run: () => setAllCollapsed(todoList, todoCollapsed, true) },
       ]);
     },
   });

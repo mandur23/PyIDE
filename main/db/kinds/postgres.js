@@ -31,7 +31,7 @@ const COMPLETION = {
   dataTypes: list('integer, bigint, smallint, serial, bigserial, numeric, decimal, real, double precision, money, text, varchar, char, boolean, date, time, timestamp, timestamptz, interval, uuid, json, jsonb, bytea, inet, cidr, macaddr, xml, tsvector, tsquery, int4range, tstzrange, point'),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, exportError, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS }) => {
   const PG_TYPES = { 16: 'bool', 17: 'bytea', 20: 'int8', 21: 'int2', 23: 'int4', 25: 'text', 114: 'json', 700: 'float4', 701: 'float8',
     1042: 'bpchar', 1043: 'varchar', 1082: 'date', 1114: 'timestamp', 1184: 'timestamptz', 1700: 'numeric', 2950: 'uuid', 3802: 'jsonb' };
 
@@ -84,6 +84,19 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, e
           WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema') AND c.table_schema NOT LIKE 'pg_toast%'
           ORDER BY c.table_schema, c.table_name, c.ordinal_position`);
         return groupSchema(rows.map((r) => ({ schema: r.table_schema, table: r.table_name, view: r.table_type === 'VIEW', column: r.column_name, type: r.data_type, nullable: r.is_nullable === 'YES', pk: r.pk })));
+      },
+      async foreignKeys() {
+        const { rows } = await client.query(`
+          SELECT ns.nspname AS s, cl.relname AS t, con.conname AS n, a.attname AS col, rns.nspname AS rs, rcl.relname AS rt, ra.attname AS rcol
+          FROM pg_constraint con
+          JOIN pg_class cl ON cl.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+          JOIN pg_class rcl ON rcl.oid = con.confrelid JOIN pg_namespace rns ON rns.oid = rcl.relnamespace
+          CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, rcol, ord)
+          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
+          JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.rcol
+          WHERE con.contype = 'f' AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY ns.nspname, cl.relname, con.conname, k.ord`);
+        return groupForeignKeys(rows.map((r) => ({ schema: r.s, table: r.t, name: r.n, column: r.col, refSchema: r.rs, refTable: r.rt, refColumn: r.rcol })));
       },
       async version() { return (await client.query('SELECT version() AS v')).rows[0].v.split(',')[0]; },
       // Export Data: the statement as a server-side cursor (DECLARE … NO SCROLL CURSOR, FETCH n) in a transaction on a

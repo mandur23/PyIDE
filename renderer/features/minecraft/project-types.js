@@ -117,10 +117,9 @@
     };
   }
 
-  const icon = (glyph) => () => el('span', 'np-mc-icon', glyph);
   (ide.projectTypes ||= []).push(
-    { id: 'minecraft-mod', name: () => tr('Minecraft Mod'), icon: icon('⚙'), defaultName: 'mymod', form: minecraftForm('mod') },
-    { id: 'minecraft-plugin', name: () => tr('Minecraft Plugin'), icon: icon('🧩'), defaultName: 'MyPlugin', form: minecraftForm('plugin') },
-    { id: 'minecraft-server', name: () => tr('Minecraft Server'), icon: icon('⛏'), defaultName: 'minecraft-server', form: minecraftForm('server') },
+    { id: 'minecraft-mod', name: () => tr('Minecraft Mod'), icon: 'settings', defaultName: 'mymod', form: minecraftForm('mod') },
+    { id: 'minecraft-plugin', name: () => tr('Minecraft Plugin'), icon: 'plugin', defaultName: 'MyPlugin', form: minecraftForm('plugin') },
+    { id: 'minecraft-server', name: () => tr('Minecraft Server'), icon: 'minecraft', defaultName: 'minecraft-server', form: minecraftForm('server') },
   );
 })();

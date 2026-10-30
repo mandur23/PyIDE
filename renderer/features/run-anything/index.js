@@ -31,7 +31,7 @@
 
   // `python -m module …` / `python -c …`: a configuration type of its own, since the Python script type takes a file.
   run.registerType({
-    type: 'pythonCommand', title: tr('Python Command'), icon: '🐍',
+    type: 'pythonCommand', title: tr('Python Command'), icon: 'python',
     fields: [
       { key: 'args', label: tr('Python arguments'), placeholder: '-m http.server 8000' },
       { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project root') },
@@ -225,7 +225,7 @@
           row.dataset.key = it.key;
           const label = el('span', 'ra-label', it.label);
           if (it.user) label.dataset.userText = '';
-          row.append(el('span', 'ra-icon', it.icon || ''), label);
+          row.append(Object.assign(ide.icon(it.icon || ''), { className: 'ide-icon ra-icon' }), label);
           if (it.detail) row.append(el('span', 'ra-detail', it.detail));
           row.onmousedown = (e) => { e.preventDefault(); choose(row, e.shiftKey); };
           row.onmousemove = () => !row.classList.contains('active') && setActive(row);

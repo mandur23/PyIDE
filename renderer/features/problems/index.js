@@ -1,6 +1,6 @@
 (() => {
   const { el } = ide.util;
-  const ICON = { error: '✖', warning: '▲', info: 'ℹ' };
+  const ICON = { error: 'error', warning: 'warning', info: 'info' };
   const SEVERITY_TITLE = { error: () => tr('Error'), warning: () => tr('Warning'), info: () => tr('Information') };
   let list;
 
@@ -19,7 +19,7 @@
     list.innerHTML = '';
     for (const p of all) {
       const row = el('div', 'list-row problem');
-      const sev = el('span', `sev ${p.severity || 'error'}`, ICON[p.severity || 'error']);
+      const sev = Object.assign(ide.icon(ICON[p.severity || 'error']), { className: `ide-icon sev ${p.severity || 'error'}` });
       sev.title = SEVERITY_TITLE[p.severity || 'error']();
       row.appendChild(sev);
       // Location, the inspection's own message and its tool name are data, not UI text.

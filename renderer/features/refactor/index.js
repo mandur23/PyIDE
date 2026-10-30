@@ -696,8 +696,9 @@
     const rowsHost = el('div', 'rf-param-rows');
     table.append(headRow, rowsHost);
     const tools = el('div', 'rf-param-tools');
-    const tool = (glyph, title, cls, run) => {
-      const b = el('button', `secondary ${cls}`, glyph);
+    const tool = (icon, title, cls, run) => {
+      const b = el('button', `secondary ${cls}`);
+      b.appendChild(ide.icon(icon));
       b.title = title;
       b.onclick = (e) => { e.preventDefault(); run(); };
       tools.appendChild(b);
@@ -740,8 +741,8 @@
       return r;
     };
     info.params.forEach((p, i) => addRow(p, i));
-    tool('+', tr('Add parameter'), 'rf-add', () => { selected = addRow({ name: '', default: '' }, null); render(); selected.name.focus(); });
-    tool('−', tr('Remove parameter'), 'rf-remove', () => {
+    tool('add', tr('Add parameter'), 'rf-add', () => { selected = addRow({ name: '', default: '' }, null); render(); selected.name.focus(); });
+    tool('remove', tr('Remove parameter'), 'rf-remove', () => {
       if (!selected) return;
       rows.splice(rows.indexOf(selected), 1);
       selected = null;
@@ -755,8 +756,8 @@
       [rows[i], rows[j]] = [rows[j], rows[i]];
       render();
     };
-    tool('↑', tr('Move up'), 'rf-up', () => move(-1));
-    tool('↓', tr('Move down'), 'rf-down', () => move(1));
+    tool('moveUp', tr('Move up'), 'rf-up', () => move(-1));
+    tool('moveDown', tr('Move down'), 'rf-down', () => move(1));
     name.addEventListener('input', render);
     body.append(el('div', 'rf-label', tr('Parameters:')), table, tools, el('div', 'rf-label', tr('Signature preview:')), signature);
     if (info.kwonly.length) body.appendChild(el('div', 'muted rf-note', tr('Keyword-only parameters are kept as they are.')));

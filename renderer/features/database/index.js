@@ -305,7 +305,7 @@
 
   const forgetLazy = (id) => { for (const k of [...lazy.keys()]) if (JSON.parse(k)[0] === id) lazy.delete(k); };
 
-  const ICONS = { source: '⛁', schema: '▤', database: '▤', table: '▦', collection: '▦', view: '◫', column: '▫', field: '▫', group: '▣', key: '⚿', info: '', error: '' };
+  const ICONS = { source: 'database', schema: 'dataSchema', database: 'dataSchema', table: 'dataTable', collection: 'dataTable', view: 'dataView', column: 'dataColumn', field: 'dataColumn', group: 'folder', key: 'key', info: '', error: '' };
 
   // The command Open Data appends to the console for a tree row, or null when the row has no data to open.
   function openCommand(r) {
@@ -325,7 +325,7 @@
     if (r.key) row.dataset.key = r.key;
     row.dataset.kind = r.kind;
     row.append(el('span', 'db-arrow', r.leaf === false ? (r.open ? '▾' : '▸') : ''));
-    const icon = el('span', 'db-icon', r.node?.pk ? '🔑' : ICONS[r.kind] ?? '▫');
+    const icon = Object.assign(ide.icon(r.node?.pk ? 'key' : ICONS[r.kind] ?? 'dataColumn'), { className: 'ide-icon db-icon' });
     row.append(icon);
     if (r.kind === 'source') {
       const dot = el('span', `db-dot db-state-${r.source.state}`);
@@ -366,12 +366,14 @@
         ...(cmd ? [{ label: tr('Open Data'), run: () => openData(s.id, cmd) }] : []),
         ...(r.node.columns && uiOf(s.kind).language === 'sql' ? [{ label: tr('Generate SELECT'), run: () => generateSelect(s.id, r.path, r.node) }] : []),
         ...(exportableNode(r) ? [{ label: tr('Export Data…'), run: () => exportTable(s.id, r.path, r.node) }] : []),
+        ...(r.node.kind === 'schema' ? erdItem(s, r.node.name) : []),
         { label: tr('Copy Name'), run: () => invoke('clipboard:writeText', r.node.name) },
         ...(r.leaf ? [] : common),
       ];
     }
     return [
       { label: tr('New Query Console'), run: () => openConsole(s.id) },
+      ...erdItem(s, null),
       ...common,
       { separator: true },
       { label: tr('Edit Data Source…'), run: () => editDataSource(s) },
@@ -407,7 +409,7 @@
   function toolButton(id, icon, title, run) {
     const b = el('button', 'db-tool-btn');
     b.id = id;
-    b.append(typeof icon === 'string' ? el('span', 'db-glyph', icon) : icon);
+    b.append(typeof icon === 'string' ? ide.icon(icon) : icon);
     b.title = title;
     b.onclick = (e) => run(e.currentTarget);
     return b;
@@ -427,16 +429,16 @@
       container.classList.add('db-tool');
       const bar = el('div', 'db-toolbar');
       bar.append(
-        toolButton('dbAdd', ide.icon('add', '+'), tr('New Data Source'), showAddMenu),
-        toolButton('dbRefresh', '⟳', tr('Refresh'), () => {
+        toolButton('dbAdd', 'add', tr('New Data Source'), showAddMenu),
+        toolButton('dbRefresh', 'refresh', tr('Refresh'), () => {
           const s = selectedSource();
           if (s) refreshSchema(s.id);
           else { schemas.clear(); reloadSources(); }
         }),
-        toolButton('dbEdit', '✎', tr('Edit Data Source…'), () => { const s = selectedSource(); if (s) editDataSource(s); }),
-        toolButton('dbRemove', '−', tr('Remove Data Source'), () => { const s = selectedSource(); if (s) removeDataSource(s); }),
+        toolButton('dbEdit', 'edit', tr('Edit Data Source…'), () => { const s = selectedSource(); if (s) editDataSource(s); }),
+        toolButton('dbRemove', 'remove', tr('Remove Data Source'), () => { const s = selectedSource(); if (s) removeDataSource(s); }),
         el('span', 'db-sep'),
-        toolButton('dbConsole', '▶', tr('New Query Console'), () => openQueryConsole()),
+        toolButton('dbConsole', 'terminal', tr('New Query Console'), () => openQueryConsole()),
       );
       treeEl = el('div', 'db-tree');
       treeEl.id = 'dbTree';
@@ -807,7 +809,7 @@
     const text = (await invoke('db:consoleLoad', id)) ?? '';
     if (consoles.has(id)) return openConsole(id);
     ide.openCustomTab({
-      id: consoleTabId(id), title: src.name, icon: '⛁',
+      id: consoleTabId(id), title: src.name, icon: 'database',
       mount: (host, tab) => consoles.set(id, mountConsole(host, tab, id, text)),
       onClose: () => closeConsole(id),
     });
@@ -1097,10 +1099,33 @@
     c?.insert(`SELECT ${cols || '*'}\nFROM ${qualifiedName(src, path.length > 1 ? path[path.length - 2] : null, table.name)};`);
   }
 
+  // An ERD of the source (or one schema) in a diagram tab: tables with their columns, foreign keys as associations.
+  // Refresh in the tab reads both again. A source whose keys cannot be read still shows its tables.
+  async function erdModel(id, only) {
+    const [tree, keys] = await Promise.all([invoke('db:schema', id), invoke('db:foreignKeys', id)]);
+    if (!tree.ok) throw new Error(tree.error);
+    if (!keys.ok) ide.notifications.notify({ title: tr('Foreign keys could not be read'), text: keys.error, kind: 'warn', raw: true });
+    const idOf = (schema, table) => `${schema}.${table}`;
+    const classes = tree.schemas.filter((sc) => !only || sc.name === only).flatMap((sc) => (sc.children || []).filter((t) => t.columns).map((t) => ({
+      id: idOf(sc.name, t.name), name: t.name, qualname: idOf(sc.name, t.name), module: sc.name, stereotype: t.kind === 'view' ? 'view' : '',
+      inScope: true, externalBases: [], methods: [], fields: t.columns.map((c) => ({ name: c.name, type: c.type, kind: c.pk ? 'key' : 'field' })),
+    })));
+    const edges = (keys.ok ? keys.keys : []).map((k) => ({ from: idOf(k.schema, k.table), to: idOf(k.refSchema, k.refTable), kind: 'assoc', label: k.columns.join(', '), many: true }));
+    return { classes, edges, stats: {} };
+  }
+  async function generateErd(s, schema = null) {
+    try {
+      await ide.diagrams.showModel({ key: `erd:${s.id}:${schema ?? ''}`, title: schema ? `${s.name}: ${schema}` : s.name, load: () => erdModel(s.id, schema) });
+    } catch (err) {
+      ide.notifications.notify({ title: tr('The ERD could not be generated'), text: err.message, kind: 'error', raw: true });
+    }
+  }
+  const erdItem = (s, schema) => (ide.diagrams?.showModel && uiOf(s.kind).language === 'sql' ? [{ label: tr('Generate ERD'), icon: 'diagram', run: () => generateErd(s, schema) }] : []);
+
   async function pickSource(placeholder) {
     await loaded;
     if (sources.length <= 1) return sources[0] || null;
-    return ide.ui.pick({ placeholder, items: sources.map((s) => ({ label: s.name, detail: driverOf(s.kind)?.label, icon: '⛁', value: s })) });
+    return ide.ui.pick({ placeholder, items: sources.map((s) => ({ label: s.name, detail: driverOf(s.kind)?.label, icon: 'database', value: s })) });
   }
 
   async function openQueryConsole() {
@@ -1121,7 +1146,7 @@
   }
 
   ide.registerFileViewer({
-    id: 'database', icon: '⛁', match: (p) => SQLITE_FILE.test(p),
+    id: 'database', icon: 'database', match: (p) => SQLITE_FILE.test(p),
     mount(host, { path }) {
       host.classList.add('db-file-view');
       host.append(userEl('div', 'db-file-title', basename(path)), userEl('div', 'db-file-path muted', path));

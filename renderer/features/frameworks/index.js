@@ -116,7 +116,7 @@
   // Debugging drops the reloader, whose worker process the debugger would not be attached to.
   const SERVERS = {
     django: {
-      type: 'django-server', title: tr('Django Server'), icon: '🌐',
+      type: 'django-server', title: tr('Django Server'), icon: 'web',
       fields: serverFields([{ key: 'settings', label: tr('Settings module'), placeholder: tr('e.g. mysite.settings') }]),
       defaults: () => ({ host: '127.0.0.1', port: '8000', settings: '', params: '', reload: true, env: '', interp: '' }),
       launch(cfg, debug) {
@@ -131,7 +131,7 @@
       },
     },
     flask: {
-      type: 'flask-server', title: tr('Flask Server'), icon: '🍶',
+      type: 'flask-server', title: tr('Flask Server'), icon: 'flask',
       fields: serverFields([
         { key: 'target', label: tr('Target (FLASK_APP)'), placeholder: tr('e.g. app or app:create_app()') },
         { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project folder') },
@@ -147,7 +147,7 @@
       },
     },
     fastapi: {
-      type: 'fastapi-server', title: tr('FastAPI (uvicorn)'), icon: '⚡',
+      type: 'fastapi-server', title: tr('FastAPI (uvicorn)'), icon: 'fastapi',
       fields: serverFields([
         { key: 'target', label: tr('Application (module:app)'), placeholder: tr('e.g. main:app') },
         { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project folder') },
@@ -190,7 +190,7 @@
         con.append(commandLine(interp, ['-u', l.script, ...l.args]), 'sys');
         const id = await ide.api.invoke('run:start', interp, l.script, l.cwd, l.args, env, ide.root ? [ide.root] : []);
         session.attach(id);
-        session.setActions([{ icon: '🌐', title: tr('Open in Browser'), run: () => openUrl(serverBase(fw) + '/') }]);
+        session.setActions([{ icon: 'web', title: tr('Open in Browser'), run: () => openUrl(serverBase(fw) + '/') }]);
       },
       debugTarget(cfg) {
         const l = s.launch(cfg, true);
@@ -202,7 +202,7 @@
   // manage.py tasks run in one Run tab ("manage.py"); saved manage.py configurations are possible too.
   function registerManageType() {
     run().registerType({
-      type: 'django-manage', title: tr('Django manage.py Task'), icon: '⚙',
+      type: 'django-manage', title: tr('Django manage.py Task'), icon: 'runAnything',
       fields: [
         { key: 'task', label: tr('Task'), placeholder: tr('e.g. migrate') },
         { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
@@ -281,13 +281,13 @@
       items: async (query) => {
         const r = await manageCommands();
         const q = query.trim();
-        if (!r.ok) return [{ label: tr('Could not list the manage.py commands'), detail: r.error, icon: '⚠', value: { task: q } }];
+        if (!r.ok) return [{ label: tr('Could not list the manage.py commands'), detail: r.error, icon: 'warning', value: { task: q } }];
         const [word = '', ...rest] = q.split(/\s+/);
         const args = rest.length ? ` ${rest.join(' ')}` : '';
         const starts = r.commands.filter((c) => c.startsWith(word));
         const contains = r.commands.filter((c) => !c.startsWith(word) && c.includes(word));
-        const items = [...starts, ...contains].slice(0, 60).map((c) => ({ label: `${c}${args}`, icon: '⚙', value: { task: `${c}${args}` } }));
-        if (q && !r.commands.includes(word)) items.push({ label: q, detail: tr('Run as typed'), icon: '▶', value: { task: q } });
+        const items = [...starts, ...contains].slice(0, 60).map((c) => ({ label: `${c}${args}`, icon: 'settings', value: { task: `${c}${args}` } }));
+        if (q && !r.commands.includes(word)) items.push({ label: q, detail: tr('Run as typed'), icon: 'runRun', value: { task: q } });
         return items;
       },
     });
@@ -299,15 +299,17 @@
   function openUrl(url, { external = false } = {}) {
     if (external) return ide.api.invoke('shell:openExternal', url);
     const tab = ide.openCustomTab({
-      id: 'frameworks:browser', title: tr('Browser'), icon: '🌐',
+      id: 'frameworks:browser', title: tr('Browser'), icon: 'web',
       mount(host) {
         host.classList.add('fw-browser');
         const bar = el('div', 'fw-browser-bar');
-        const reload = el('button', 'fw-browser-btn', '⟳');
+        const reload = el('button', 'fw-browser-btn');
+        reload.appendChild(ide.icon('refresh'));
         reload.title = tr('Reload');
         const address = el('input', 'fw-browser-url');
         address.spellcheck = false;
-        const ext = el('button', 'fw-browser-btn', '↗');
+        const ext = el('button', 'fw-browser-btn');
+        ext.appendChild(ide.icon('externalLink'));
         ext.title = tr('Open in External Browser');
         const frame = el('iframe', 'fw-browser-frame');
         frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-popups allow-modals');

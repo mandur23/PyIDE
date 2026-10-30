@@ -110,8 +110,8 @@ try {
   check(await a.js(`document.querySelector('#dbTree .db-node.db-source .db-dot').classList.contains('db-state-connected')`), 'the source shows a connected state dot');
   await clickText(a, '#dbTree .db-node.db-table', 'users');
   await a.until(`document.querySelectorAll('#dbTree .db-node.db-column').length === 3`, 'columns');
-  const cols = await a.js(`[...document.querySelectorAll('#dbTree .db-node.db-column')].map(n => n.querySelector('.db-label').textContent + ':' + n.querySelector('.db-detail').textContent + ':' + n.querySelector('.db-icon').textContent)`);
-  check(q(cols) === q(['id:INTEGER:🔑', 'name:TEXT NOT NULL:▫', 'email:TEXT:▫']), `the tree shows the table's columns with types and the primary key (${q(cols)})`);
+  const cols = await a.js(`[...document.querySelectorAll('#dbTree .db-node.db-column')].map(n => n.querySelector('.db-label').textContent + ':' + n.querySelector('.db-detail').textContent + ':' + n.querySelector('.db-icon').dataset.iconName)`);
+  check(q(cols) === q(['id:INTEGER:key', 'name:TEXT NOT NULL:dataColumn', 'email:TEXT:dataColumn']), `the tree shows the table's columns with types and the primary key (${q(cols)})`);
   await a.shot('tree.png');
 
   // ---------- Open Data from the table's context menu ----------

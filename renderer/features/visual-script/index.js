@@ -228,7 +228,7 @@
   const configFor = (path) => ({ type: 'visual-script', name: nameOf(path), file: path });
   if (ide.run) {
     ide.run.registerType({
-      type: 'visual-script', title: tr('Visual Script'), icon: '🧩',
+      type: 'visual-script', title: tr('Visual Script'), icon: 'plugin',
       fields: [
         { key: 'file', label: tr('Visual script'), placeholder: tr('path\\to\\script.pyflow') },
         { key: 'params', label: tr('Script parameters') },
@@ -245,7 +245,7 @@
     });
     // A Java visual script needs no Python interpreter; it is not debugged yet.
     ide.run.registerType({
-      type: 'java-visual-script', title: tr('Java Visual Script'), icon: '🧩',
+      type: 'java-visual-script', title: tr('Java Visual Script'), icon: 'plugin',
       fields: [
         { key: 'file', label: tr('Visual script'), placeholder: tr('path\\to\\script.jflow') },
         { key: 'params', label: tr('Program arguments') },
@@ -569,7 +569,7 @@
     };
   }
 
-  ide.registerFileViewer({ id: 'visual-script', icon: '🧩', text: true, match: isScript, mount });
+  ide.registerFileViewer({ id: 'visual-script', text: true, match: isScript, mount });
 
   // ---------- a .py file as a visual script: the preview and Convert to Visual Script ----------
   // python/py2flow.py reads the file (the open document's text) with `ast` in the project interpreter and lays it out
@@ -702,7 +702,7 @@
     if (ide.findTab(id)) return ide.openCustomTab({ id });
     await loaded;
     return ide.openCustomTab({
-      id, title: tr('{name} (Visual Script)', { name: basename(path) }), icon: '🧩', group: 'right',
+      id, title: tr('{name} (Visual Script)', { name: basename(path) }), icon: 'plugin', group: 'right',
       mount: (host, tab) => mountPreview(host, tab, path),
     });
   }

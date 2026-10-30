@@ -563,7 +563,7 @@
       const line = r.range.start.line + 1;
       return { label: (await lineText(path, line)).trim() || basename(path), detail: `${ide.util.rel(path)}:${line}`, icon: ide.fileIcon(path), value: { ref: r } };
     }));
-    items.push({ label: tr('Open in Find Tool Window'), icon: '⌕', value: { find: true } });
+    items.push({ label: tr('Open in Find Tool Window'), icon: 'find', value: { find: true } });
     const picked = await ide.ui.pick({ placeholder: tr('Usages of {name}', { name: sym.name }), items: ordered(items) });
     if (picked?.ref) go(picked.ref);
     else if (picked?.find) {

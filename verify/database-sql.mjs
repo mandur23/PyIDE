@@ -195,8 +195,8 @@ try {
   check(true, 'the schema tree lists the customers table and the orders table loaded from the CSV');
   await clickText(a, '#dbTree .db-node.db-table', 'customers');
   await a.until(`document.querySelectorAll('#dbTree .db-node.db-column').length === 3`, 'columns');
-  const cols = await a.js(`[...document.querySelectorAll('#dbTree .db-node.db-column')].map(n => n.querySelector('.db-label').textContent + ':' + n.querySelector('.db-detail').textContent + ':' + n.querySelector('.db-icon').textContent)`);
-  check(cols[0].startsWith('id:INTEGER') && cols[0].endsWith('🔑') && cols[1].startsWith('name:VARCHAR NOT NULL') && cols[2].startsWith('joined:DATE'), `columns show their types and the primary key (${q(cols)})`);
+  const cols = await a.js(`[...document.querySelectorAll('#dbTree .db-node.db-column')].map(n => n.querySelector('.db-label').textContent + ':' + n.querySelector('.db-detail').textContent + ':' + n.querySelector('.db-icon').dataset.iconName)`);
+  check(cols[0].startsWith('id:INTEGER') && cols[0].endsWith(':key') && cols[1].startsWith('name:VARCHAR NOT NULL') && cols[2].startsWith('joined:DATE'), `columns show their types and the primary key (${q(cols)})`);
   await rightClickText(a, '#dbTree .db-node.db-table', 'orders');
   await clickText(a, '.context-menu .menu-item', 'Open Data');
   await a.until(`ide.database.activeConsole()?.model.getValue().includes('SELECT * FROM "orders" LIMIT 200;') && ${activeConsole}.querySelectorAll('.db-grid tbody tr').length === 3`, 'open data');

@@ -62,7 +62,6 @@
 .mcs-servers > .mc-bar { display: none; }
 .mcs-servers > .mc-empty { grid-column: 1 / -1; padding: 0; }
 .mcs-servers > .mc-server { border: 1px solid var(--gray3); border-radius: 8px; padding: 12px; }
-.np-mc-icon { width: 16px; text-align: center; }
 /* Game View */
 .mcg { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mcg-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); }

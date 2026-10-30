@@ -404,8 +404,8 @@
   tw.keyAction = 'AiChat.Toggle';
   ide.keymap.tooltip(tw.button, tr('AI Chat'), 'AiChat.Toggle');
   tw.setActions([
-    { icon: '＋', title: tr('New Chat'), run: newChat },
-    { icon: '🕘', title: tr('Chat History'), run: showHistory },
+    { icon: 'add', title: tr('New Chat'), run: newChat },
+    { icon: 'history', title: tr('Chat History'), run: showHistory },
   ]);
 
   function focusInput() {
@@ -690,7 +690,8 @@
 
   ide.on('ready', () => {
     if (!ide.vcs?.addMessageAction) return;
-    commitBtn = el('button', 'aic-commit-gen', '✨');
+    commitBtn = el('button', 'aic-commit-gen');
+    commitBtn.appendChild(ide.icon('sparkle'));
     commitBtn.onclick = () => (commitReq ? ide.api.invoke('ai-chat:cancel', commitReq.reqId) : generateCommitMessage());
     renderCommitBtn();
     ide.vcs.addMessageAction(commitBtn);

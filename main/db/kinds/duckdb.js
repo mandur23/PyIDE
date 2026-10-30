@@ -61,7 +61,7 @@ const COMPLETION = {
     UUID, JSON, ENUM, LIST, ARRAY, STRUCT, MAP, UNION, VARIANT, GEOMETRY`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema, exportError }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema, groupForeignKeys, exportError }) => {
   // DuckDB locks a database file per process, so connections to one file share an instance; the last close
   // releases the file for other programs (a Python script using duckdb, say).
   const shared = new Map(); // key -> {instance: Promise, refs}
@@ -164,6 +164,16 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, timed, groupSchema, export
           schema: r.table_schema, table: r.table_name, view: r.table_type === 'VIEW', column: r.column_name, type: r.data_type,
           nullable: r.is_nullable === 'YES', pk: pk.has(`${r.table_schema}\0${r.table_name}\0${r.column_name}`),
         })));
+      },
+      // DuckDB names the parent table only, in the child's schema.
+      async foreignKeys() {
+        const keys = await all(`SELECT schema_name, table_name, constraint_index, constraint_column_names, referenced_table, referenced_column_names
+                                FROM duckdb_constraints() WHERE constraint_type = 'FOREIGN KEY' AND database_name = current_database()
+                                ORDER BY schema_name, table_name, constraint_index`);
+        return groupForeignKeys(keys.flatMap((k) => k.constraint_column_names.map((column, i) => ({
+          schema: k.schema_name, table: k.table_name, name: `fk${k.constraint_index}`, column,
+          refSchema: k.schema_name, refTable: k.referenced_table, refColumn: k.referenced_column_names?.[i] ?? '',
+        }))));
       },
       async version() { return `DuckDB ${(await all('SELECT version() AS v'))[0].v}`; },
       // Export Data: the statement's streaming result read a chunk at a time on the source's connection (an in-memory

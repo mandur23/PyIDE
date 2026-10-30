@@ -167,7 +167,7 @@
     state.preview = { id, testPath: res.testPath, testRel: res.testRel, before: res.before, after: res.after, added: res.added, renamed: res.renamed,
       framework: res.framework, importLine: res.importLine, notes: res.notes, exists: res.exists };
     ide.openCustomTab({
-      id, title: tr('Preview: {name}', { name: basename(res.testPath) }), icon: '🧪',
+      id, title: tr('Preview: {name}', { name: basename(res.testPath) }), icon: 'test',
       mount(host) {
         host.classList.add('aig-preview');
         const bar = el('div', 'aig-bar');

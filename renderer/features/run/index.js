@@ -5,6 +5,7 @@
   const CURRENT = '__current';
   const MAX_TEMPORARY = 5;
   const types = new Map();
+  const typeIcon = (type) => types.get(type)?.icon || 'runRun';
   const gutterProviders = [];
   // Executors run a configuration another way (Run with Coverage, Profile) by wrapping its interpreter.
   const executors = new Map();
@@ -148,11 +149,11 @@
     const s = activeSession;
     if (!s) return tw.setActions([]);
     tw.setActions([
-      { id: 'rerun', icon: '⟳', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
-      ...(busy(s) ? [{ id: 'stop', icon: '■', title: tr('Stop'), run: () => s.stop() }] : []),
+      { id: 'rerun', icon: 'rerun', title: tr("Rerun '{name}'", { name: s.title }), run: () => (s.rerun ? s.rerun() : runConfig(s.cfg, { executor: s.executor })) },
+      ...(busy(s) ? [{ id: 'stop', icon: 'runStop', title: tr('Stop'), run: () => s.stop() }] : []),
       ...s.extraActions,
       ...sessionActions.map((fn) => fn(s)).filter(Boolean),
-      ...(s.con ? [{ icon: '⌫', title: tr('Clear All'), run: () => s.con.clear() }] : []),
+      ...(s.con ? [{ icon: 'clear', title: tr('Clear All'), run: () => s.con.clear() }] : []),
     ]);
   }
 
@@ -216,7 +217,7 @@
         s.launched = true;
         // Stop (or closing the tab) was asked for before the process id arrived.
         if (s.cancelStart || s.closed) { s.cancelStart = false; s.kill(id); }
-        s.setIcon('▶', 'running');
+        s.setIcon('runRun', 'running');
         if (s.con?.input) { s.con.input.disabled = false; s.con.input.focus(); }
         updateToolbar();
         if (activeSession === s) renderActions();
@@ -240,7 +241,7 @@
           exit(code) {
             if (s.procId === id) {
               s.con?.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
-              s.setIcon('▶', code === 0 ? 'done' : 'failed');
+              s.setIcon(code === 0 ? 'run' : 'error', code === 0 ? 'done' : 'failed');
             }
             onExit?.(code);
             s.exited(id, code);
@@ -255,7 +256,7 @@
       },
       setIcon(icon, cls) {
         const i = s.tab.querySelector('.run-tab-icon');
-        i.textContent = icon;
+        i.replaceChildren(ide.icon(icon));
         i.className = `run-tab-icon ${cls || ''}`;
       },
       setActions(list) { s.extraActions = list; if (activeSession === s) renderActions(); },
@@ -263,7 +264,9 @@
     };
     const tabTitle = el('span', 'run-tab-title', cfg.name);
     tabTitle.dataset.userText = '';
-    s.tab.append(el('span', 'run-tab-icon', types.get(cfg.type)?.icon || '▶'), tabTitle);
+    const tabIcon = el('span', 'run-tab-icon');
+    tabIcon.appendChild(ide.icon(typeIcon(cfg.type)));
+    s.tab.append(tabIcon, tabTitle);
     const close = el('button', 'run-tab-close', '×');
     close.title = tr('Close');
     close.onclick = (e) => { e.stopPropagation(); closeSession(s); };
@@ -303,7 +306,7 @@
       s.cfg = cfg;
       s.title = cfg.name;
       s.tab.querySelector('.run-tab-title').textContent = cfg.name;
-      s.setIcon(types.get(cfg.type)?.icon || '▶');
+      s.setIcon(typeIcon(cfg.type));
       s.host.replaceChildren();
     } else s = createSession(cfg);
     s.executor = executor?.id || null;
@@ -622,7 +625,7 @@
       terminalRuns.delete(id);
       if (s.procId === id) {
         line(`\n${tr('Process finished with exit code {code}', { code: m.code ?? 1 })}\n`);
-        s.setIcon('▶', m.code === 0 ? 'done' : 'failed');
+        s.setIcon(m.code === 0 ? 'run' : 'error', m.code === 0 ? 'done' : 'failed');
       }
       s.exited(id, m.code);
     });
@@ -647,7 +650,7 @@
     return { ...base, missing: !script, script, params, cwd: base.cwd || (script && dirname(script)) };
   }
   types.set('python', {
-    type: 'python', title: 'Python', icon: '🐍',
+    type: 'python', title: 'Python', icon: 'python',
     fields: [
       { key: 'runMode', label: tr('Run'), kind: 'select', options: () => [['script', tr('Script path')], ['module', tr('Module name')]] },
       { key: 'script', label: tr('Script path'), placeholder: tr('path\\to\\script.py'), browse: true, shown: (c) => !isModule(c) },
@@ -712,7 +715,7 @@
     const name = el('span', 'run-target-name', cfg ? cfg.name : tr('Current File'));
     if (cfg) name.dataset.userText = '';
     target.replaceChildren(
-      el('span', 'run-target-icon' + (cfg?.temporary ? ' temporary' : ''), cfg ? types.get(cfg.type)?.icon || '▶' : '📄'),
+      Object.assign(ide.icon(cfg ? typeIcon(cfg.type) : 'text'), { className: 'ide-icon run-target-icon' + (cfg?.temporary ? ' temporary' : '') }),
       name,
       (() => { const a = el('span', 'run-target-arrow'); a.appendChild(ide.icon('chevronDown', '▾')); return a; })(),
     );
@@ -730,10 +733,10 @@
     const sorted = [...state.configs.filter((c) => !c.temporary), ...state.configs.filter((c) => c.temporary)];
     ide.ui.contextMenu(r.left, r.bottom + 2, [
       ...sorted.map((c) => ({
-        label: `${types.get(c.type)?.icon || '▶'}  ${c.name}`, hint: c.id === state.selected ? '✓' : '', run: () => select(c.id),
+        label: c.name, icon: typeIcon(c.type), hint: c.id === state.selected ? '✓' : '', run: () => select(c.id),
       })),
       ...(sorted.length ? [{ separator: true }] : []),
-      { label: `📄  ${tr('Current File')}`, hint: state.selected === CURRENT ? '✓' : '', run: () => select(CURRENT) },
+      { label: tr('Current File'), icon: 'text', hint: state.selected === CURRENT ? '✓' : '', run: () => select(CURRENT) },
       { separator: true },
       ...(cfg?.temporary ? [{ label: tr("Save '{name}' Configuration", { name: cfg.name }), run: () => { cfg.temporary = false; persist(); } }] : []),
       { label: tr('Edit Configurations…'), run: () => editConfigurations() },
@@ -829,8 +832,8 @@
   async function chooseConfiguration(debug) {
     const items = [
       ...state.configs.map((c) => ({ label: c.name, detail: types.get(c.type)?.title, icon: types.get(c.type)?.icon, value: { cfg: c } })),
-      { label: tr('Current File'), icon: '📄', value: { current: true } },
-      { label: tr('Edit Configurations…'), icon: '⚙', value: { edit: true } },
+      { label: tr('Current File'), icon: 'text', value: { current: true } },
+      { label: tr('Edit Configurations…'), icon: 'settings', value: { edit: true } },
     ];
     const choice = await ide.ui.pick({ placeholder: debug ? tr('Debug') : tr('Run'), items });
     if (!choice) return;
@@ -852,7 +855,7 @@
     if (!running.length && debugActive) return ide.runAction('StopDebug');
     if (running.length === 1) return running[0].stop();
     if (running.length > 1) {
-      ide.ui.pick({ placeholder: tr('Stop process'), items: running.map((s) => ({ label: s.title, icon: '■', value: s })) })
+      ide.ui.pick({ placeholder: tr('Stop process'), items: running.map((s) => ({ label: s.title, icon: 'runStop', value: s })) })
         .then((s) => s?.stop());
     }
   }
@@ -889,17 +892,18 @@
     body.append(left, form);
 
     const tool = (id, icon, title, run) => {
-      const b = el('button', 'rc-tool', icon);
+      const b = el('button', 'rc-tool');
+      b.appendChild(ide.icon(icon));
       b.dataset.tool = id;
       b.title = title;
       b.onclick = run;
       bar.appendChild(b);
       return b;
     };
-    tool('add', '＋', tr('Add New Configuration'), (e) => {
+    tool('add', 'add', tr('Add New Configuration'), (e) => {
       const r = e.currentTarget.getBoundingClientRect();
       ide.ui.contextMenu(r.left, r.bottom + 2, [...types.values()].map((t) => ({
-        label: `${t.icon}  ${t.title}`,
+        label: t.title, icon: t.icon,
         run() {
           const cfg = { ...t.defaults(), id: newId(), type: t.type, name: tr('Unnamed') };
           const file = currentPyFile();
@@ -914,14 +918,14 @@
       const menu = document.querySelector('#menuHost .context-menu');
       if (menu) menu.style.zIndex = 80;
     });
-    tool('remove', '−', tr('Remove Configuration'), () => {
+    tool('remove', 'remove', tr('Remove Configuration'), () => {
       if (!current) return;
       const i = draft.indexOf(current);
       draft.splice(i, 1);
       current = draft[Math.min(i, draft.length - 1)] || null;
       render();
     });
-    tool('copy', '⧉', tr('Copy Configuration'), () => {
+    tool('copy', 'copy', tr('Copy Configuration'), () => {
       if (!current) return;
       const copy = { ...JSON.parse(JSON.stringify(current)), id: newId(), name: `${current.name} (1)`, temporary: false };
       draft.splice(draft.indexOf(current) + 1, 0, copy);
@@ -934,7 +938,9 @@
       for (const t of types.values()) {
         const group = draft.filter((c) => c.type === t.type);
         if (!group.length) continue;
-        list.appendChild(el('div', 'rc-group', `${t.icon}  ${t.title}`));
+        const head = el('div', 'rc-group');
+        head.append(ide.icon(t.icon), el('span', null, t.title));
+        list.appendChild(head);
         for (const c of group) {
           const row = el('div', 'rc-item' + (c === current ? ' selected' : '') + (c.temporary ? ' temporary' : ''), c.name || tr('Unnamed'));
           row.dataset.userText = '';
@@ -970,7 +976,9 @@
         keep.append(cb, el('span', null, ` ${tr('Save configuration (it is temporary now)')}`));
         form.appendChild(keep);
       }
-      form.appendChild(el('div', 'rc-type muted', `${t.icon} ${t.title}`));
+      const type = el('div', 'rc-type muted');
+      type.append(ide.icon(t.icon), el('span', null, t.title));
+      form.appendChild(type);
       for (const fd of t.fields) {
         if (fd.shown && !fd.shown(current)) continue;
         let input;
@@ -1033,7 +1041,8 @@
       sec.appendChild(el('div', 'rc-bl-title', tr('Before launch')));
       const blBar = el('div', 'rc-bl-bar');
       const blButton = (id, icon, title, run, disabled) => {
-        const b = el('button', 'rc-bl-btn', icon);
+        const b = el('button', 'rc-bl-btn');
+        b.appendChild(ide.icon(icon));
         b.dataset.bl = id;
         b.title = title;
         b.disabled = !!disabled;
@@ -1046,12 +1055,12 @@
         blSelected += d;
         renderForm();
       };
-      blButton('add', '＋', tr('Add Task'), (e) => {
+      blButton('add', 'add', tr('Add Task'), (e) => {
         const r = e.currentTarget.getBoundingClientRect();
         const others = draft.filter((c) => c !== current);
         ide.ui.contextMenu(r.left, r.bottom + 2, [
           { header: tr('Run Another Configuration') },
-          ...others.map((c) => ({ label: `${types.get(c.type)?.icon || '▶'}  ${c.name || tr('Unnamed')}`, run: () => {
+          ...others.map((c) => ({ label: c.name || tr('Unnamed'), icon: typeIcon(c.type), run: () => {
             tasks.push({ kind: 'config', id: c.id });
             const cycle = findCycle(current.id, draft);
             if (cycle) {
@@ -1076,9 +1085,9 @@
         // Core menus sit below dialogs; this one opens from a dialog.
         for (const m of document.querySelectorAll('#menuHost .context-menu')) m.style.zIndex = 80;
       });
-      blButton('remove', '−', tr('Remove Task'), () => { tasks.splice(blSelected, 1); blError = ''; renderForm(); }, !tasks.length);
-      blButton('up', '▲', tr('Move Up'), () => move(-1), blSelected <= 0);
-      blButton('down', '▼', tr('Move Down'), () => move(1), blSelected >= tasks.length - 1);
+      blButton('remove', 'remove', tr('Remove Task'), () => { tasks.splice(blSelected, 1); blError = ''; renderForm(); }, !tasks.length);
+      blButton('up', 'moveUp', tr('Move Up'), () => move(-1), blSelected <= 0);
+      blButton('down', 'moveDown', tr('Move Down'), () => move(1), blSelected >= tasks.length - 1);
       const blList = el('div', 'rc-bl-list');
       tasks.forEach((t, i) => {
         const row = el('div', `rc-bl-item${i === blSelected ? ' selected' : ''}`, describeTask(t, draft));

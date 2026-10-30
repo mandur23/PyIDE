@@ -91,10 +91,10 @@
     if (key === actionsKey) return;
     actionsKey = key;
     tw.setActions([
-      ...(paused ? [{ icon: '▶', title: tr('Resume Indexing'), run: () => setPaused(false) }]
-        : indexing() ? [{ icon: '⏸', title: tr('Pause Indexing'), run: () => setPaused(true) }] : []),
-      { icon: '⊘', title: tr('Exclude Folder from Semantic Index…'), run: pickExcluded },
-      { icon: '⟳', title: tr('Rebuild Index'), run: () => ide.root && ready() && ide.api.invoke('semantic:rebuild', ide.root) },
+      ...(paused ? [{ icon: 'resume', title: tr('Resume Indexing'), run: () => setPaused(false) }]
+        : indexing() ? [{ icon: 'pause', title: tr('Pause Indexing'), run: () => setPaused(true) }] : []),
+      { icon: 'exclude', title: tr('Exclude Folder from Semantic Index…'), run: pickExcluded },
+      { icon: 'refresh', title: tr('Rebuild Index'), run: () => ide.root && ready() && ide.api.invoke('semantic:rebuild', ide.root) },
     ]);
   }
 

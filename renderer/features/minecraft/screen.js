@@ -4,14 +4,14 @@
 (() => {
   const { el } = ide.util;
   const mc = ide.minecraft;
-  const PAGES = () => [['servers', '🖥', tr('Servers')], ['market', '🛒', tr('Market')]];
+  const PAGES = () => [['servers', 'desktop', tr('Servers')], ['market', 'cart', tr('Market')]];
   let view = null;
   let page = 'servers';
 
   function show(name = page) {
     page = name;
     ide.openCustomTab({
-      id: 'minecraft:home', title: tr('Minecraft'), icon: '⛏',
+      id: 'minecraft:home', title: tr('Minecraft'), icon: 'minecraft',
       mount: (host) => { view = build(host); },
       onClose: () => { mc.removeHost(view.servers); view = null; },
     });
@@ -24,7 +24,7 @@
   function item(cls, icon, label, onClick) {
     const b = el('div', cls);
     b.setAttribute('role', 'option');
-    b.append(el('span', 'mcs-icon', icon), el('span', null, label));
+    b.append(Object.assign(ide.icon(icon), { className: 'ide-icon mcs-icon' }), el('span', null, label));
     b.onclick = onClick;
     return b;
   }
@@ -33,17 +33,19 @@
     host.classList.add('mcs');
     const nav = el('div', 'mcs-nav');
     nav.setAttribute('role', 'listbox');
-    nav.append(el('div', 'mcs-title', `⛏ ${tr('Minecraft')}`));
+    const title = el('div', 'mcs-title');
+    title.append(ide.icon('minecraft'), el('span', null, tr('Minecraft')));
+    nav.append(title);
     for (const [id, icon, label] of PAGES()) {
       const b = item('mcs-page', icon, label, () => show(id));
       b.dataset.page = id;
       nav.append(b);
     }
     nav.append(el('div', 'mcs-group muted', tr('Create')),
-      item('mcs-action mcs-new-server', '＋', tr('New Server…'), () => mc.newServer()),
-      item('mcs-action mcs-new-pack', '📦', tr('From Modpack…'), () => mc.newFromModpack()),
-      item('mcs-action mcs-new-plugin', '🧩', tr('New Plugin…'), () => mc.newPlugin()),
-      item('mcs-action mcs-new-mod', '⚙', tr('New Mod…'), () => mc.newMod()));
+      item('mcs-action mcs-new-server', 'add', tr('New Server…'), () => mc.newServer()),
+      item('mcs-action mcs-new-pack', 'package', tr('From Modpack…'), () => mc.newFromModpack()),
+      item('mcs-action mcs-new-plugin', 'plugin', tr('New Plugin…'), () => mc.newPlugin()),
+      item('mcs-action mcs-new-mod', 'settings', tr('New Mod…'), () => mc.newMod()));
     ide.ui.listKeys(nav, { rows: '.mcs-page, .mcs-action', select: (row) => row.click() });
     const servers = el('div', 'mcs-servers mc-tool');
     servers.id = 'minecraftScreen';

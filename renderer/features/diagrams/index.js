@@ -3,6 +3,8 @@
 // associations; this file chooses the classes to show, lays them out (a small Sugiyama-style layered layout: longest-path
 // layering, barycenter ordering, then coordinates) and draws them as SVG in an editor tab with pan, zoom, selection,
 // navigation, Add Class…, Delete and export to SVG or PNG.
+// Another plugin can show a model it builds the same way (ide.diagrams.showModel): the database's ERD draws tables as
+// boxes, primary key columns with a k, and foreign keys as associations labelled with their columns.
 (() => {
   const { el, basename, samePath, isUnder } = ide.util;
   const tr = (s, p) => (window.tr ? window.tr(s, p) : s);
@@ -39,6 +41,7 @@
 .dg-ic-t { fill: #fff; font: 600 9px ${font}; }
 .dg-ic-f { fill: var(--dg-field); }
 .dg-ic-e { fill: var(--dg-enum); }
+.dg-ic-k { fill: var(--dg-enum); }
 .dg-ic-m { fill: var(--dg-method); }
 .dg-ic-p { fill: var(--dg-property); }
 .dg-ic-c { fill: var(--dg-method); }
@@ -74,7 +77,7 @@
       for (const f of cls.fields) {
         if (!keep(f.name)) continue;
         const enumMember = f.kind === 'enum';
-        rows.fields.push({ icon: enumMember ? 'e' : 'f', vis: visibility(f.name), kind: f.kind, name: f.name,
+        rows.fields.push({ icon: enumMember ? 'e' : f.kind === 'key' ? 'k' : 'f', vis: visibility(f.name), kind: f.kind, name: f.name,
           text: clip(enumMember || !f.type ? f.name : `${f.name}: ${f.type}`), line: f.line, static: f.kind === 'classvar' });
       }
     }
@@ -582,8 +585,9 @@
 
   const tabTitle = (d) => (d.focusName || basename(d.scope[0]) || tr('Diagram'));
 
-  async function openDiagram({ scope, file, focusPath, focusLine, key }) {
-    if (!ide.root && !scope.length) return null;
+  // source: {title, load() -> model} for a model another plugin builds; its tab is keyed by key.
+  async function openDiagram({ scope = [], file, focusPath, focusLine, key, source }) {
+    if (!source && !ide.root && !scope.length) return null;
     let tabId = key ? `pyide-diagram:${key}` : null;
     // The same scope or class opens its existing tab again (refreshed).
     const reuse = (id) => {
@@ -593,10 +597,10 @@
       return old;
     };
     if (tabId && reuse(tabId)) { await refresh(diagrams.get(tabId)); return tabId; }
-    const r = await requestModel(scope, ide.util.rel?.(scope[0]) || scope[0]);
+    const r = source ? await source.load() : await requestModel(scope, ide.util.rel?.(scope[0]) || scope[0]);
     if (!r || r.cancelled || r.error) return null;
     const d = {
-      scope, file, model: indexModel(r), shown: new Set(), added: new Set(), removed: new Set(), selected: null,
+      scope, file, source, focusName: source?.title, projectLoaded: !!source, model: indexModel(r), shown: new Set(), added: new Set(), removed: new Set(), selected: null,
       opts: { fields: ide.settings.get(SETTINGS.fields, true), methods: ide.settings.get(SETTINGS.methods, true), private: ide.settings.get(SETTINGS.private, true) },
       view: { s: 1, tx: 20, ty: 20 }, fitted: false, stats: r.stats,
     };
@@ -618,7 +622,7 @@
     d.shown = initialSet(d);
     diagrams.set(tabId, d);
     ide.openCustomTab({
-      id: tabId, title: tabTitle(d), icon: '◇',
+      id: tabId, title: tabTitle(d), icon: 'diagram',
       mount: (host, tab) => mountDiagram(host, d, tab),
       onClose: () => { diagrams.delete(tabId); d.dispose?.(); },
     });
@@ -626,7 +630,7 @@
   }
 
   async function refresh(d) {
-    const r = await requestModel(d.projectLoaded ? [ide.root] : d.scope, tabTitle(d));
+    const r = d.source ? await d.source.load() : await requestModel(d.projectLoaded ? [ide.root] : d.scope, tabTitle(d));
     if (!r || r.cancelled || r.error || !diagrams.has(d.tabId)) return false;
     d.model = indexModel(r);
     d.stats = r.stats;
@@ -654,8 +658,10 @@
     canvas.appendChild(layer);
     host.append(bar, canvas);
 
+    // label: text, or {icon} for an icon button.
     const button = (cls, label, title, run, toggled) => {
-      const b = el('button', `dg-btn ${cls}`, label);
+      const b = el('button', `dg-btn ${cls}`, label.icon ? undefined : label);
+      if (label.icon) b.appendChild(ide.icon(label.icon));
       b.type = 'button';
       b.title = title;
       if (toggled !== undefined) { b.setAttribute('aria-pressed', String(!!toggled)); b.classList.add('dg-toggle'); }
@@ -671,20 +677,23 @@
       relayout();
     };
     button('dg-fields', tr('Fields'), tr('Show Fields'), toggle('fields'), d.opts.fields);
-    button('dg-methods', tr('Methods'), tr('Show Methods'), toggle('methods'), d.opts.methods);
-    button('dg-private', tr('Private'), tr('Show Private Members'), toggle('private'), d.opts.private);
+    if (!d.source) {
+      button('dg-methods', tr('Methods'), tr('Show Methods'), toggle('methods'), d.opts.methods);
+      button('dg-private', tr('Private'), tr('Show Private Members'), toggle('private'), d.opts.private);
+    }
     sep();
-    button('dg-zoom-in', '+', tr('Zoom In'), () => zoomBy(1.25));
-    button('dg-zoom-out', '−', tr('Zoom Out'), () => zoomBy(0.8));
+    button('dg-zoom-in', { icon: 'zoomIn' }, tr('Zoom In'), () => zoomBy(1.25));
+    button('dg-zoom-out', { icon: 'zoomOut' }, tr('Zoom Out'), () => zoomBy(0.8));
     button('dg-actual', '1:1', tr('Actual Size'), () => setScale(1));
     button('dg-fit', tr('Fit'), tr('Fit Content'), () => fit());
     sep();
-    button('dg-add', tr('Add Class…'), tr('Add a class to the diagram'), () => addClass());
+    if (d.source) button('dg-add', tr('Add Table…'), tr('Add a table to the diagram'), () => addClass());
+    else button('dg-add', tr('Add Class…'), tr('Add a class to the diagram'), () => addClass());
     button('dg-export-svg', 'SVG', tr('Export as SVG…'), () => exportSvg());
     button('dg-export-png', 'PNG', tr('Export as PNG…'), () => exportPng());
-    button('dg-refresh', '⟳', tr('Refresh'), () => refresh(d));
+    button('dg-refresh', { icon: 'refresh' }, tr('Refresh'), () => refresh(d));
     // Parse errors name files and Python's messages (user data), in the tooltip of a separate mark.
-    const errMark = el('span', 'dg-errmark hidden', '⚠');
+    const errMark = Object.assign(ide.icon('warning'), { className: 'ide-icon dg-errmark hidden' });
     errMark.setAttribute('data-user-text', '');
     bar.append(status, errMark);
 
@@ -725,7 +734,7 @@
       applyView();
       const errs = d.stats?.errors?.length || 0;
       status.textContent = [
-        tr('{n} classes', { n: shown.length }),
+        d.source ? tr('{n} tables', { n: shown.length }) : tr('{n} classes', { n: shown.length }),
         errs === 1 ? tr('1 file could not be parsed') : errs ? tr('{n} files could not be parsed', { n: errs }) : '',
         d.stats?.truncated ? tr('Only the first {n} files were read', { n: d.stats.files }) : '',
       ].filter(Boolean).join(' · ');
@@ -772,7 +781,7 @@
 
     function openClass(id) {
       const c = d.model.classes.get(id);
-      if (c) ide.openFile(c.path, { line: c.line, col: c.col, focus: true });
+      if (c?.path) ide.openFile(c.path, { line: c.line, col: c.col, focus: true });
     }
     function removeClass(id) {
       if (!id || !d.shown.has(id)) return;
@@ -797,7 +806,7 @@
         const items = [...d.model.classes.values()].filter((c) => !d.shown.has(c.id))
           .sort((a, b) => a.name.localeCompare(b.name) || a.module.localeCompare(b.module))
           .map((c) => ({ label: c.name, detail: c.module, value: c.id }));
-        id = await ide.ui.pick({ placeholder: tr('Class name to add to the diagram'), items });
+        id = await ide.ui.pick({ placeholder: d.source ? tr('Table name to add to the diagram') : tr('Class name to add to the diagram'), items });
       }
       if (typeof id !== 'string' || !d.model.classes.has(id)) return null;
       d.shown.add(id);
@@ -1029,6 +1038,7 @@
       const list = [...touched];
       touched.clear();
       for (const d of diagrams.values()) {
+        if (d.source) continue;
         const scope = d.projectLoaded ? [ide.root] : d.scope;
         if (list.some((p) => scope.some((s) => isUnder(p, s)))) refresh(d);
       }
@@ -1042,6 +1052,10 @@
   const api = {
     slowMs: 0,
     showPaths, showAt, show: showDiagram, layout: layoutGraph, measure: boxOf,
+    // {key, title, load() -> {classes, edges, stats?}}: classes as main/features/diagrams.js gives them (fields with
+    // kind 'key' get a k; no path: double-click opens nothing), edges {from, to, kind: 'assoc' | 'extends', label?, many?}.
+    // The same key shows its tab again, reloaded.
+    showModel: ({ key, title, load }) => openDiagram({ key, source: { title, load } }),
     get: current,
     state(tabId) {
       const d = current(tabId);

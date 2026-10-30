@@ -82,8 +82,8 @@
     const repo = vcs.repo();
     const { local, remote } = await invoke('branches', ide.root);
     const items = [
-      ...local.filter((b) => b !== repo.branch).map((b) => ({ label: b, icon: '⑂', hint: tr('Local'), value: b })),
-      ...remote.map((b) => ({ label: b, icon: '☁', hint: tr('Remote'), value: b })),
+      ...local.filter((b) => b !== repo.branch).map((b) => ({ label: b, icon: 'branch', hint: tr('Local'), value: b })),
+      ...remote.map((b) => ({ label: b, icon: 'web', hint: tr('Remote'), value: b })),
     ];
     if (!items.length) { notify(tr('No other branches'), tr('Create a branch first.'), 'warn'); return null; }
     return ide.ui.pick({ placeholder, items });
@@ -126,17 +126,17 @@
   vcs.addBranchActions((repo) => {
     if (repo.op) {
       const items = [];
-      if (conflictedFiles().length) items.push({ label: tr('Resolve Conflicts…'), icon: '⚠', value: { run: openConflicts } });
-      items.push({ label: CONTINUE[repo.op], icon: '▶', value: { run: () => control('continue') } });
-      if (SKIPPABLE.has(repo.op)) items.push({ label: tr('Skip Commit'), icon: '⤼', value: { run: () => control('skip') } });
-      items.push({ label: ABORT[repo.op], icon: '■', value: { run: () => control('abort') } });
+      if (conflictedFiles().length) items.push({ label: tr('Resolve Conflicts…'), icon: 'warning', value: { run: openConflicts } });
+      items.push({ label: CONTINUE[repo.op], icon: 'resume', value: { run: () => control('continue') } });
+      if (SKIPPABLE.has(repo.op)) items.push({ label: tr('Skip Commit'), icon: 'forward', value: { run: () => control('skip') } });
+      items.push({ label: ABORT[repo.op], icon: 'abort', value: { run: () => control('abort') } });
       return items;
     }
     return [
-      { label: tr('Merge into Current…'), icon: '⤵', value: { run: mergeInto } },
-      { label: tr('Rebase Current onto…'), icon: '⤴', value: { run: rebaseOnto } },
-      { label: tr('Stash Changes…'), icon: '⇩', value: { run: openStash } },
-      { label: tr('Unstash Changes…'), icon: '⇧', value: { run: openUnstash } },
+      { label: tr('Merge into Current…'), icon: 'merge', value: { run: mergeInto } },
+      { label: tr('Rebase Current onto…'), icon: 'branch', value: { run: rebaseOnto } },
+      { label: tr('Stash Changes…'), icon: 'shelve', value: { run: openStash } },
+      { label: tr('Unstash Changes…'), icon: 'unshelve', value: { run: openUnstash } },
     ];
   });
 
@@ -289,7 +289,7 @@
     }
     let tool;
     ide.openCustomTab({
-      id, title: tr('Merge: {name}', { name: basename(path) }), icon: '⇄',
+      id, title: tr('Merge: {name}', { name: basename(path) }), icon: 'merge',
       mount(host) { tool = mountMergeTool(host, { path, v, sides, close: () => ide.closeTab(id) }); },
       onClose() { tool?.dispose(); },
     });

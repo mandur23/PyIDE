@@ -36,10 +36,10 @@
     },
   });
   djangoTw.setActions([
-    { icon: '⟳', title: tr('Refresh'), run: () => fw.refresh() },
-    { icon: '⚙', title: tr('Run manage.py Task…'), run: () => fw.manageTaskPopup() },
-    { icon: '▶', title: tr('Run Development Server'), run: () => fw.runServer('django') },
-    { icon: '🐞', title: tr('Debug Development Server'), run: () => fw.runServer('django', { debug: true }) },
+    { icon: 'refresh', title: tr('Refresh'), run: () => fw.refresh() },
+    { icon: 'runAnything', title: tr('Run manage.py Task…'), run: () => fw.manageTaskPopup() },
+    { icon: 'runRun', title: tr('Run Development Server'), run: () => fw.runServer('django') },
+    { icon: 'runDebug', title: tr('Debug Development Server'), run: () => fw.runServer('django', { debug: true }) },
   ]);
 
   function node(parent, { key, label, detail, icon, open, depth, kind }) {
@@ -47,7 +47,7 @@
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const hasChildren = typeof key === 'string';
     const arrow = el('span', 'fw-arrow', hasChildren ? (collapsed.has(key) ? '▸' : '▾') : '');
-    row.append(arrow, el('span', 'fw-icon', icon || ''));
+    row.append(arrow, Object.assign(ide.icon(icon || ''), { className: 'ide-icon fw-icon' }));
     const name = el('span', 'fwk-name');
     if (label instanceof Node) name.appendChild(label); else name.textContent = label;
     row.appendChild(name);
@@ -76,28 +76,28 @@
       djangoBody.appendChild(el('div', 'fw-empty muted', info ? tr('This project does not use Django.') : tr('Inspecting the project…')));
       return;
     }
-    const apps = node(djangoBody, { key: 'apps', label: tr('Apps'), icon: '📦', depth: 0, kind: 'section' });
+    const apps = node(djangoBody, { key: 'apps', label: tr('Apps'), icon: 'package', depth: 0, kind: 'section' });
     for (const app of dj.apps) {
-      const a = node(apps, { key: `app:${app.name}`, label: userLabel(app.name), icon: '📦', depth: 1, open: () => jump(app.file, 1), kind: 'app' });
+      const a = node(apps, { key: `app:${app.name}`, label: userLabel(app.name), icon: 'package', depth: 1, open: () => jump(app.file, 1), kind: 'app' });
       if (app.models.length) {
-        const ms = node(a, { key: `models:${app.name}`, label: tr('Models'), icon: '◧', depth: 2 });
+        const ms = node(a, { key: `models:${app.name}`, label: tr('Models'), icon: 'modelClass', depth: 2 });
         for (const m of app.models) {
-          const f = node(ms, { key: `model:${app.name}.${m.name}`, label: userLabel(m.name), detail: m.abstract ? tr('abstract') : '', icon: '◧', depth: 3, open: () => jump(m.file, m.line), kind: 'model' });
-          for (const field of m.fields) node(f, { label: userLabel(field.name), detail: field.type, icon: '·', depth: 4, open: () => jump(m.file, field.line), kind: 'field' });
+          const f = node(ms, { key: `model:${app.name}.${m.name}`, label: userLabel(m.name), detail: m.abstract ? tr('abstract') : '', icon: 'modelClass', depth: 3, open: () => jump(m.file, m.line), kind: 'model' });
+          for (const field of m.fields) node(f, { label: userLabel(field.name), detail: field.type, icon: 'field', depth: 4, open: () => jump(m.file, field.line), kind: 'field' });
         }
       }
       if (app.admin.length) {
-        const ad = node(a, { key: `admin:${app.name}`, label: tr('Admin'), icon: '🛡', depth: 2 });
-        for (const r of app.admin) node(ad, { label: userLabel(r.model), detail: r.admin || '', icon: '·', depth: 3, open: () => jump(r.file, r.line), kind: 'admin' });
+        const ad = node(a, { key: `admin:${app.name}`, label: tr('Admin'), icon: 'securityRole', depth: 2 });
+        for (const r of app.admin) node(ad, { label: userLabel(r.model), detail: r.admin || '', icon: 'class', depth: 3, open: () => jump(r.file, r.line), kind: 'admin' });
       }
     }
-    const urls = node(djangoBody, { key: 'urls', label: tr('URLs'), icon: '🔗', depth: 0, kind: 'section' });
+    const urls = node(djangoBody, { key: 'urls', label: tr('URLs'), icon: 'endpoints', depth: 0, kind: 'section' });
     for (const r of info.routes.filter((x) => x.framework === 'django')) {
-      const row = node(urls, { label: userLabel(r.path), detail: [r.name, r.view].filter(Boolean).join('  '), icon: '·', depth: 1, open: () => jump(r.viewFile || r.file, r.viewFile ? r.viewLine : r.line), kind: 'url' });
+      const row = node(urls, { label: userLabel(r.path), detail: [r.name, r.view].filter(Boolean).join('  '), icon: 'function', depth: 1, open: () => jump(r.viewFile || r.file, r.viewFile ? r.viewLine : r.line), kind: 'url' });
       row.previousSibling.oncontextmenu = (e) => { e.preventDefault(); ide.ui.contextMenu(e.clientX, e.clientY, routeMenu(r)); };
     }
     if (dj.settingsFile) {
-      node(djangoBody, { label: tr('Settings'), detail: dj.settingsModule, icon: '⚙', depth: 0, open: () => jump(dj.settingsFile, 1), kind: 'section' });
+      node(djangoBody, { label: tr('Settings'), detail: dj.settingsModule, icon: 'settings', depth: 0, open: () => jump(dj.settingsFile, 1), kind: 'section' });
     }
   }
 
@@ -120,7 +120,7 @@
       container.append(bar, head, endpointsList);
     },
   });
-  endpointsTw.setActions([{ icon: '⟳', title: tr('Refresh'), run: () => fw.refresh() }]);
+  endpointsTw.setActions([{ icon: 'refresh', title: tr('Refresh'), run: () => fw.refresh() }]);
 
   function renderEndpoints(info) {
     if (!endpointsList) return;

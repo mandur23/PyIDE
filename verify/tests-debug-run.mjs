@@ -45,7 +45,7 @@ function helpers(t) {
   // The Test Results sub-tab of the debug session in the Debug window.
   const debugTab = () => js(`(() => { const b = document.querySelector('.dbg-bar .dbg-plugin-tab[data-tab="testResults"]'); const p = document.querySelector('.dbg-plugin-pane[data-tab="testResults"]');
     if (!b || !p) return null; const st = p.querySelector('.tr-status');
-    return { label: b.textContent, icon: b.querySelector('.dbg-subtab-icon').textContent, active: b.classList.contains('active'), shown: !!p.offsetParent,
+    return { label: b.textContent, icon: b.querySelector('.dbg-subtab-icon .ide-icon')?.dataset.iconName, active: b.classList.contains('active'), shown: !!p.offsetParent,
       state: st?.dataset.state || null, status: st?.textContent || '', files: [...p.querySelectorAll('.tr-row[data-kind="file"] .tr-name')].map((r) => r.textContent) }; })()`);
   const resultsDone = (label, ms = 30000) => until(`(() => { const st = document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-status');
     return st && st.dataset.state !== 'running' && !window.__debugger.state(); })()`, `debug results of ${label}`, ms);
@@ -78,7 +78,7 @@ try {
   await h.stoppedAt('test_calc.py', 5);
   check(true, 'Debug from the gutter pauses on the breakpoint inside the test');
   const running = await h.debugTab();
-  check(running?.state === 'running' && running.label.includes('Test Results') && running.icon === '◷',
+  check(running?.state === 'running' && running.label.includes('Test Results') && running.icon === 'runRun',
     `the debug session has a Test Results sub-tab in the Debug window while the test runs (${S(running)})`);
   check(await h.noRunTab(), 'a debug test run opens no tab in the Run window');
   check(await js(`!!document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-debug-btn[data-action="rerunFailed"]')?.disabled`), 'Rerun Failed Tests is off while nothing has failed');
@@ -88,7 +88,7 @@ try {
   await press('F9');
   await h.resultsDone('pytest for test_calc.test_add');
   const one = await h.debugTab();
-  check(one.status.includes('Tests passed: 1 of 1 test') && one.icon === '✓', `Resume finishes with the result in the Test Results sub-tab (${S(one)})`);
+  check(one.status.includes('Tests passed: 1 of 1 test') && one.icon === 'testPassed', `Resume finishes with the result in the Test Results sub-tab (${S(one)})`);
   check(one.active && await js(`!!document.querySelector('.dbg-plugin-pane[data-tab="testResults"] .tr-row[data-kind="test"][data-status="passed"]')?.offsetParent && ide.toolWindows.get('Debug').isVisible()`),
     'when the session ends the Debug window shows the Test Results with the passed test');
   check(await js(`ide.run.configs().some((c) => c.name === 'pytest for test_calc.test_add' && c.temporary)`), 'the gutter Debug creates the temporary configuration');
@@ -109,7 +109,7 @@ try {
   await press('F9');
   await h.resultsDone('pytest in test_calc.py');
   const file = await h.debugTab();
-  check(file.status.includes('Tests failed: 1, passed: 1 of 2 tests') && file.files.join() === 'test_calc.py' && file.icon === '✗',
+  check(file.status.includes('Tests failed: 1, passed: 1 of 2 tests') && file.files.join() === 'test_calc.py' && file.icon === 'testFailed',
     `Shift+F9 on a test file debugs pytest on the file: both tests ran under the debugger (${S(file)})`);
   await openFile(t, 'test_calc.py');
   await until(`ide.editor.getModel().getAllDecorations().some((d) => /run-gutter-icon failed/.test(d.options.glyphMarginClassName || ''))`, 'failed gutter icon', 5000).catch(() => {});
@@ -125,7 +125,7 @@ try {
   await until(`!window.__debugger.state()`, 'debug session stopped');
   await h.resultsDone('pytest in test_calc.py');
   const stoppedTab = await h.debugTab();
-  check(stoppedTab.state === 'stopped' && stoppedTab.status.includes('Stopped.') && stoppedTab.icon === '⊘',
+  check(stoppedTab.state === 'stopped' && stoppedTab.status.includes('Stopped.') && stoppedTab.icon === 'testTerminated',
     `Stop ends the Test Results run too, shown as stopped, not passed (${S(stoppedTab)})`);
 
   // ---------- another debug session replaces a debug test run ----------

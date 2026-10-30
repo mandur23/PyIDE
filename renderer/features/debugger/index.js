@@ -1554,7 +1554,8 @@
     const addBtn = el('button', 'dbg-mini', '+');
     addBtn.id = 'dbgExcAdd';
     addBtn.title = tr('Add Python Exception Breakpoint');
-    const rmBtn = el('button', 'dbg-mini', '−');
+    const rmBtn = el('button', 'dbg-mini');
+    rmBtn.appendChild(ide.icon('remove'));
     rmBtn.id = 'dbgBpListRemove';
     rmBtn.title = `${tr('Remove')} (Delete)`;
     tools.append(addBtn, rmBtn);
@@ -1728,7 +1729,7 @@
       const t = { id: def.id, key, button, pane, closed: false, select: !!def.select };
       const handle = {
         show() { if (t.closed) return false; tw.show(); showSub(key); return true; },
-        setIcon(glyph, cls = '') { icon.textContent = glyph || ''; icon.className = `dbg-subtab-icon ${cls}${glyph ? '' : ' hidden'}`; },
+        setIcon(name, cls = '') { icon.replaceChildren(...(name ? [ide.icon(name)] : [])); icon.className = `dbg-subtab-icon ${cls}${name ? '' : ' hidden'}`; },
       };
       button.onclick = () => showSub(key);
       subSep.before(button);
@@ -1748,7 +1749,8 @@
     head.appendChild(label);
     head.appendChild(el('span', 'spacer'));
     for (const a of actions) {
-      const b = el('button', 'dbg-mini', a.icon);
+      const b = el('button', 'dbg-mini');
+      b.appendChild(ide.icon(a.icon));
       b.title = a.title;
       b.onclick = a.run;
       if (a.id) b.id = a.id;
@@ -1773,7 +1775,8 @@
       bar.append(subTabs.debugger, subTabs.console, subSep);
       // action: the action whose current shortcut the tooltip shows.
       const mk = (id, icon, title, run, cls = '', action = null) => {
-        const b = el('button', `dbg-btn ${cls}`, icon);
+        const b = el('button', `dbg-btn ${cls}`);
+        b.appendChild(ide.icon(icon));
         b.id = `dbg${id}`;
         if (action) ide.keymap.tooltip(b, title, action);
         else b.title = title;
@@ -1781,18 +1784,18 @@
         bar.appendChild(b);
         btns[id] = b;
       };
-      mk('Rerun', '↻', tr('Rerun'), () => lastRun?.(), 'green');
-      mk('Resume', '▶', tr('Resume Program'), () => step('continue'), 'green', 'Resume');
-      mk('Pause', '⏸', tr('Pause Program'), pause);
-      mk('Stop', '■', tr('Stop'), stopDebug, 'red', 'StopDebug');
+      mk('Rerun', 'rerun', tr('Rerun'), () => lastRun?.(), 'green');
+      mk('Resume', 'resume', tr('Resume Program'), () => step('continue'), 'green', 'Resume');
+      mk('Pause', 'pause', tr('Pause Program'), pause);
+      mk('Stop', 'runStop', tr('Stop'), stopDebug, 'red', 'StopDebug');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('StepOver', '↷', tr('Step Over'), () => step('next'), 'blue', 'StepOver');
-      mk('StepInto', '↘', tr('Step Into'), () => step('stepIn'), 'blue', 'StepInto');
-      mk('StepOut', '↖', tr('Step Out'), () => step('stepOut'), 'blue', 'StepOut');
-      mk('RunToCursor', '⇥', tr('Run to Cursor'), runToCursor, 'blue', 'RunToCursor');
+      mk('StepOver', 'stepOver', tr('Step Over'), () => step('next'), 'blue', 'StepOver');
+      mk('StepInto', 'stepInto', tr('Step Into'), () => step('stepIn'), 'blue', 'StepInto');
+      mk('StepOut', 'stepOut', tr('Step Out'), () => step('stepOut'), 'blue', 'StepOut');
+      mk('RunToCursor', 'runToCursor', tr('Run to Cursor'), runToCursor, 'blue', 'RunToCursor');
       bar.appendChild(el('span', 'dbg-sep'));
-      mk('Evaluate', '⌨', tr('Evaluate Expression'), evaluateDialog, '', 'EvaluateExpression');
-      mk('Breakpoints', '●', tr('View Breakpoints'), () => breakpointsDialog(), 'red', 'ViewBreakpoints');
+      mk('Evaluate', 'evaluate', tr('Evaluate Expression'), evaluateDialog, '', 'EvaluateExpression');
+      mk('Breakpoints', 'breakpoints', tr('View Breakpoints'), () => breakpointsDialog(), 'red', 'ViewBreakpoints');
 
       const vars = el('div', 'dbg-panes');
       const frames = pane(tr('Frames'));
@@ -1819,8 +1822,8 @@
         parent: (row) => (row.parentElement.parentElement.classList.contains('dbg-kids') ? row.parentElement.parentElement.previousElementSibling : null),
       });
       const watchPane = pane(tr('Watches'), [
-        { id: 'dbgWatchAdd', icon: '+', title: tr('New Watch'), run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
-        { id: 'dbgWatchRemove', icon: '−', title: `${tr('Remove Watch')} (Delete)`, run: () => removeWatch() },
+        { id: 'dbgWatchAdd', icon: 'add', title: tr('New Watch'), run: () => { watchInput.classList.remove('hidden'); watchInput.focus(); } },
+        { id: 'dbgWatchRemove', icon: 'remove', title: `${tr('Remove Watch')} (Delete)`, run: () => removeWatch() },
       ]);
       watchesList = watchPane.list;
       watchesList.id = 'dbgWatches';

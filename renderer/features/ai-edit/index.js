@@ -369,7 +369,7 @@
     const { editor } = ctx;
     const node = el('div', 'ai-edit-widget');
     const row = el('div', 'ai-edit-row');
-    const icon = el('span', 'ai-edit-icon', '✳');
+    const icon = Object.assign(ide.icon('claude'), { className: 'ide-icon ai-edit-icon' });
     const input = el('input', 'ai-edit-input');
     input.spellcheck = false;
     const spinner = el('span', 'ai-edit-spinner');
@@ -767,7 +767,7 @@
 
   // ---------- status bar ----------
   let nesProblem = null;
-  const statusEl = el('span', 'ai-edit-statusbar', '✳');
+  const statusEl = Object.assign(ide.icon('claude'), { className: 'ide-icon ai-edit-statusbar' });
   function renderStatus() {
     statusEl.classList.toggle('busy', inflight > 0);
     statusEl.classList.toggle('nes-on', nesActive());

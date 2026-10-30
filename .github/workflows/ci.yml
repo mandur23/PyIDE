@@ -72,6 +72,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/editors.mjs
+      - name: ui-icons
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/ui-icons.mjs
+      - name: database-erd
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/database-erd.mjs
       - name: encodings
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

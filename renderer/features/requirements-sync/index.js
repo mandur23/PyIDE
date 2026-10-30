@@ -179,6 +179,6 @@
   }
 
   ide.registerAction({ id: 'SyncPythonRequirements', title: tr('Sync Python Requirements…'), needsProject: true, run: open });
-  ide.packages?.addAction({ id: 'syncRequirements', icon: '⇅', title: tr('Sync Python Requirements…'), run: open });
+  ide.packages?.addAction({ id: 'syncRequirements', icon: 'refresh', title: tr('Sync Python Requirements…'), run: open });
   ide.requirementsSync = { compare, open };
 })();

@@ -368,7 +368,7 @@ int main() {
   const runControl = (s) => ({
     cancelled: () => s.cancelStart || s.closed,
     acknowledge: () => { s.cancelStart = false; },
-    failed: () => s.setIcon('▶', 'failed'),
+    failed: () => s.setIcon('error', 'failed'),
   });
   // A build in the Debug tool window: cancelled() says the debug session it belongs to was stopped or replaced.
   const debugControl = (cancelled) => ({ cancelled, acknowledge() {}, failed() {} });
@@ -419,7 +419,7 @@ int main() {
   // The Run tab says what is missing and offers the built-in toolchain.
   function missing(s, con, kind) {
     con.append(`${KINDS[kind].none()} ${tr('Download one in the Install Manager, or install one and choose it in the configuration.')}\n`, 'err');
-    s.setActions([{ icon: '⤓', title: kind === 'jdk' ? tr('Download JDK') : tr('Download C/C++ Toolchain'), run: () => {
+    s.setActions([{ icon: 'download', title: kind === 'jdk' ? tr('Download JDK') : tr('Download C/C++ Toolchain'), run: () => {
       ide.installer?.open('toolchains');
       installBuiltin(kind).catch(() => {});
     } }]);
@@ -441,7 +441,7 @@ int main() {
   // ---------- run configuration: Java Application ----------
   const isFileMode = (c) => c.runMode === 'file';
   const javaType = {
-    type: 'java', title: tr('Java Application'), icon: '☕', needsInterp: false,
+    type: 'java', title: tr('Java Application'), icon: 'java', needsInterp: false,
     fields: [
       { key: 'runMode', label: tr('Run'), kind: 'select', options: () => [['class', tr('Main class')], ['file', tr('Single source file')]] },
       { key: 'mainClass', label: tr('Main class'), placeholder: 'org.example.Main', shown: (c) => !isFileMode(c) },
@@ -504,7 +504,7 @@ int main() {
   // Goals or tasks run through the project's wrapper (mvnw.cmd, gradlew.bat) or mvn / gradle on PATH, with the
   // project's JDK as JAVA_HOME. A Spring Boot project runs this way: its classpath comes from the build tool.
   const buildType = {
-    type: 'build', title: tr('Maven / Gradle'), icon: '🧱', needsInterp: false,
+    type: 'build', title: tr('Maven / Gradle'), icon: 'maven', needsInterp: false,
     fields: [
       { key: 'tool', label: tr('Build tool'), kind: 'select', options: () => [['maven', 'Maven'], ['gradle', 'Gradle']] },
       { key: 'goals', label: tr('Goals or tasks'), placeholder: 'spring-boot:run' },
@@ -528,7 +528,7 @@ int main() {
       if (!(await afterSync(cwd, (text) => con.append(text, 'sys'), () => s.cancelStart || s.closed))) {
         s.cancelStart = false;
         con.append(`${tr('Run cancelled.')}\n`, 'sys');
-        s.setIcon('▶', 'failed');
+        s.setIcon('error', 'failed');
         return;
       }
       const { id, command, firstRun } = await ide.api.invoke('toolchains:build', { tool: cfg.tool, goals: cfg.goals, cwd, env: r.parseEnv(cfg.env), jdk: jdk && { home: jdk.home } });
@@ -630,7 +630,7 @@ int main() {
       onExit(code) {
         if (stopped) {
           con.append(`${tr('Dependency download cancelled.')}\n`, 'sys');
-          s.setIcon('▶', 'failed');
+          s.setIcon('error', 'failed');
           return end(false);
         }
         if (code === 0) {
@@ -688,7 +688,7 @@ int main() {
   // ---------- run configuration: C/C++ Application ----------
   const C_SOURCE = /\.(c|cc|cpp|cxx|c\+\+)$/i;
   const cppType = {
-    type: 'cpp', title: tr('C/C++ Application'), icon: '⚙', needsInterp: false,
+    type: 'cpp', title: tr('C/C++ Application'), icon: 'cpp', needsInterp: false,
     fields: [
       { key: 'sources', label: tr('Source files'), placeholder: tr('Defaults to every .c and .cpp file in the project') },
       { key: 'output', label: tr('Executable'), placeholder: 'build\\app.exe' },

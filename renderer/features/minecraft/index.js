@@ -91,7 +91,7 @@
   const afterExit = (dir) => { ide.api.invoke('minecraft:syncPlugins', ide.root, dir).catch(() => {}); refresh(); };
 
   run.registerType({
-    type: 'minecraft-server', title: tr('Minecraft Server'), icon: '⛏', needsInterp: false,
+    type: 'minecraft-server', title: tr('Minecraft Server'), icon: 'minecraft', needsInterp: false,
     fields: [{ key: 'dir', label: tr('Server folder'), placeholder: 'servers/survival' }],
     defaults: () => ({ dir: '' }),
     identity: (c) => run.resolvePath(c.dir).toLowerCase(),
@@ -137,7 +137,7 @@
   });
 
   run.registerType({
-    type: 'minecraft-plugin', title: tr('Minecraft Plugin'), icon: '🧩', needsInterp: false,
+    type: 'minecraft-plugin', title: tr('Minecraft Plugin'), icon: 'plugin', needsInterp: false,
     fields: [{ key: 'dir', label: tr('Plugin folder'), placeholder: 'plugins/MyPlugin' }],
     defaults: () => ({ dir: '' }),
     identity: (c) => run.resolvePath(c.dir).toLowerCase(),
@@ -152,13 +152,13 @@
       } catch (err) {
         con.append(`${errorText(err)}\n`, 'err');
       } finally { j.done(); }
-      s.setIcon('🧩', 'done');
+      s.setIcon('plugin', 'done');
     },
   });
 
   const MOD_TASKS = () => [['deploy', tr('Build and deploy to the server')], ['runClient', tr('Run a test client (runClient)')], ['build', tr('Build only')]];
   run.registerType({
-    type: 'minecraft-mod', title: tr('Minecraft Mod'), icon: '⚙', needsInterp: false,
+    type: 'minecraft-mod', title: tr('Minecraft Mod'), icon: 'settings', needsInterp: false,
     fields: [
       { key: 'dir', label: tr('Mod folder'), placeholder: 'mods/mymod' },
       { key: 'task', label: tr('Task'), kind: 'select', options: MOD_TASKS },
@@ -879,7 +879,7 @@
   }
 
   const tw = ide.registerToolWindow({
-    id: 'Minecraft', title: tr('Minecraft'), icon: '⛏', side: 'right', order: 80,
+    id: 'Minecraft', title: tr('Minecraft'), icon: '⛏', iconName: 'minecraft', side: 'right', order: 80,
     mount(container) {
       container.id = 'minecraftTool';
       container.classList.add('mc-tool');

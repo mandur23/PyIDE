@@ -29,5 +29,9 @@
   "Project": "프로젝트",
   "Class name to add to the diagram": "다이어그램에 추가할 클래스 이름",
   "Jump to Source": "소스로 이동",
-  "Remove from Diagram": "다이어그램에서 제거"
+  "Remove from Diagram": "다이어그램에서 제거",
+  "Add Table…": "테이블 추가…",
+  "Add a table to the diagram": "다이어그램에 테이블 추가",
+  "Table name to add to the diagram": "다이어그램에 추가할 테이블 이름",
+  "{n} tables": "테이블 {n}개"
 }

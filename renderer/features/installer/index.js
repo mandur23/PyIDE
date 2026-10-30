@@ -479,7 +479,8 @@
     const badge = el('span', 'inst-badge');
     const links = el('span', 'inst-links');
     if (item.homepage) {
-      const home = el('button', 'inst-icon-btn', '↗');
+      const home = el('button', 'inst-icon-btn');
+      home.appendChild(ide.icon('externalLink'));
       home.title = tr('Open Homepage');
       home.onclick = () => ide.api.invoke('shell:openExternal', item.homepage);
       links.appendChild(home);
@@ -594,7 +595,8 @@
     searchEl.id = 'installSearch';
     searchEl.placeholder = tr('Search installables');
     searchEl.oninput = () => { view.query = searchEl.value.trim().toLowerCase(); renderCards(); };
-    const refreshBtn = el('button', 'inst-icon-btn inst-refresh', '⟳');
+    const refreshBtn = el('button', 'inst-icon-btn inst-refresh');
+    refreshBtn.appendChild(ide.icon('refresh'));
     refreshBtn.title = tr('Refresh');
     refreshBtn.onclick = () => refresh();
     top.append(searchEl, refreshBtn);
@@ -614,7 +616,7 @@
     ide.openCustomTab({
       id: TAB_ID,
       title: tr('Install Manager'),
-      icon: '⤓',
+      icon: 'download',
       mount,
       onClose() { host = sideEl = cardsEl = targetEl = searchEl = null; cards.clear(); },
     });

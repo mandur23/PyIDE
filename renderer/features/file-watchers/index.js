@@ -132,13 +132,13 @@
       return;
     }
     con.append(`${r.command}\n`, 'sys');
-    s.setIcon('▶', 'running');
+    s.setIcon('runRun', 'running');
     const code = await new Promise((resolve) => ide.proc.attach(r.id, {
       data: (text, stream) => con.append(text, stream === 'err' ? 'err' : null),
       exit: resolve,
     }));
     con.append(`${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n\n`, 'sys');
-    s.setIcon('▶', code === 0 ? 'done' : 'failed');
+    s.setIcon(code === 0 ? 'run' : 'error', code === 0 ? 'done' : 'failed');
     history.push({ watcher: w.name, file: path, code: code ?? 1 });
     ownWrites.set(path.toLowerCase(), Date.now());
     // A watcher that rewrote the file it watches (Black): the open editor follows.
@@ -223,14 +223,15 @@
       s.append(bar, table, form);
 
       const tool = (id, icon, title, run) => {
-        const b = el('button', 'fw-tool', icon);
+        const b = el('button', 'fw-tool');
+        b.appendChild(ide.icon(icon));
         b.dataset.fw = id;
         b.title = title;
         b.onclick = (e) => { e.preventDefault(); run(e); };
         bar.appendChild(b);
         return b;
       };
-      tool('add', '＋', tr('Add Watcher'), (e) => {
+      tool('add', 'add', tr('Add Watcher'), (e) => {
         const r = e.currentTarget.getBoundingClientRect();
         ide.ui.contextMenu(r.left, r.bottom + 2, TEMPLATES.map((tpl) => ({ label: tpl.label(), run: () => {
           const w = { ...DEFAULTS, ...tpl.w, id: newId() };
@@ -243,7 +244,7 @@
         // Core menus sit below dialogs; this one opens from the Settings dialog.
         for (const m of document.querySelectorAll('#menuHost .context-menu')) m.style.zIndex = 80;
       });
-      tool('remove', '−', tr('Remove Watcher'), () => {
+      tool('remove', 'remove', tr('Remove Watcher'), () => {
         const i = list.findIndex((w) => w.id === selected);
         if (i < 0) return;
         list.splice(i, 1);
@@ -251,7 +252,7 @@
         commit();
         render();
       });
-      tool('copy', '⧉', tr('Copy Watcher'), () => {
+      tool('copy', 'copy', tr('Copy Watcher'), () => {
         const w = list.find((x) => x.id === selected);
         if (!w) return;
         const copy = { ...w, id: newId(), name: `${w.name} (1)` };

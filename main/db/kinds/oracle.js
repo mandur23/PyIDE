@@ -122,7 +122,7 @@ const COMPLETION = {
     NCLOB, BLOB, BFILE, RAW(n), LONG, ROWID, UROWID, XMLTYPE, JSON, BOOLEAN, VECTOR, PLS_INTEGER, BINARY_INTEGER, SYS_REFCURSOR`),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, exportError }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError }) => {
   // NUMBER comes as text so big or precise values survive; it becomes a JS number only when that is exact.
   const numberOf = (s) => {
     if (s === null || s === undefined) return null;
@@ -211,6 +211,18 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, e
           WHERE ${owners} AND c.TABLE_NAME NOT LIKE 'BIN$%'
           ORDER BY c.OWNER, c.TABLE_NAME, c.COLUMN_ID`, [], { outFormat: oracledb.OUT_FORMAT_OBJECT, fetchTypeHandler });
         return groupSchema(r.rows.map((x) => ({ schema: x.OWNER, table: x.TABLE_NAME, view: !!x.IS_VIEW, column: x.COLUMN_NAME, type: typeName(x), nullable: x.NULLABLE === 'Y', pk: !!x.IS_PK })));
+      },
+      async foreignKeys() {
+        const owners = cfg.allSchemas ? "a.OWNER IN (SELECT USERNAME FROM ALL_USERS WHERE ORACLE_MAINTAINED = 'N')" : 'a.OWNER = USER';
+        const r = await conn.execute(`
+          SELECT a.OWNER, a.TABLE_NAME, a.CONSTRAINT_NAME, ac.COLUMN_NAME, p.OWNER R_OWNER, p.TABLE_NAME R_TABLE, pc.COLUMN_NAME R_COLUMN
+          FROM ALL_CONSTRAINTS a
+          JOIN ALL_CONS_COLUMNS ac ON ac.OWNER = a.OWNER AND ac.CONSTRAINT_NAME = a.CONSTRAINT_NAME
+          JOIN ALL_CONSTRAINTS p ON p.OWNER = a.R_OWNER AND p.CONSTRAINT_NAME = a.R_CONSTRAINT_NAME
+          JOIN ALL_CONS_COLUMNS pc ON pc.OWNER = p.OWNER AND pc.CONSTRAINT_NAME = p.CONSTRAINT_NAME AND pc.POSITION = ac.POSITION
+          WHERE a.CONSTRAINT_TYPE = 'R' AND ${owners}
+          ORDER BY a.OWNER, a.TABLE_NAME, a.CONSTRAINT_NAME, ac.POSITION`, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        return groupForeignKeys(r.rows.map((x) => ({ schema: x.OWNER, table: x.TABLE_NAME, name: x.CONSTRAINT_NAME, column: x.COLUMN_NAME, refSchema: x.R_OWNER, refTable: x.R_TABLE, refColumn: x.R_COLUMN })));
       },
       async version() { return `Oracle Database ${conn.oracleServerVersionString}`; },
       // Export Data: a result set (getRows(n)) on a connection of its own, so the console stays usable. NUMBER keeps

@@ -146,7 +146,7 @@
     if (!isDir && !ide.getDocument(path) && await ide.api.exists(path)) await ide.openFile(path, { focus: false });
     let view;
     ide.openCustomTab({
-      id, title: tr('Local History: {name}', { name: basename(path) || path }), icon: '🕘',
+      id, title: tr('Local History: {name}', { name: basename(path) || path }), icon: 'history',
       mount(host) { view = mountHistory(host, path, isDir); },
       onClose() { view?.dispose(); },
     });

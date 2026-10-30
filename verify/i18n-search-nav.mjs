@@ -183,7 +183,7 @@ try {
   await until(popupOpen, 'goto symbol');
   check((await placeholder('#popupIn')) === '심볼 이름 입력', 'Go to Symbol placeholder');
   await type('greet');
-  await until(`${activeRow}.startsWith('ⓜgreet')`, 'greet');
+  await until(`document.querySelector('#popupList .popup-item.active .sn-icon.k-method') && ${activeRow}.startsWith('mgreet')`, 'greet');
   const kinds = await js(`[...new Set([...document.querySelectorAll('#popupList .hint-right')].map((n) => n.textContent))]`);
   check(kinds.includes('메서드') && kinds.every(hangul), `symbol kinds in Korean (${J(kinds)})`);
   await noLeaks('#popupList .hint-right', 'Go to Symbol kinds');

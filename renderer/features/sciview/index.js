@@ -137,7 +137,7 @@
     const tab = ide.openCustomTab({
       id,
       title: title || expr,
-      icon: '▦',
+      icon: 'dataView',
       mount(host, t) {
         const ctl = mountDataView(host, t, { source, expr });
         dataViews.set(id, ctl);
@@ -171,7 +171,8 @@
     filterIn.title = tr('Python filter expression; Enter applies it, an empty filter shows every row');
     const coloredBtn = el('button', 'dv-btn dv-colored', tr('Colored'));
     coloredBtn.title = tr('Color numeric cells by value');
-    const refreshBtn = el('button', 'dv-btn dv-refresh', '⟳');
+    const refreshBtn = el('button', 'dv-btn dv-refresh');
+    refreshBtn.appendChild(ide.icon('refresh'));
     refreshBtn.title = tr('Refresh');
     const exportBtn = el('button', 'dv-btn dv-export', tr('Export…'));
     exportBtn.title = tr('Export to CSV…');
@@ -814,7 +815,7 @@
         jvHost = container;
       },
     });
-    jvTw.setActions([{ icon: '⟳', title: tr('Refresh'), run: () => jvList?.refresh() }]);
+    jvTw.setActions([{ icon: 'refresh', title: tr('Refresh'), run: () => jvList?.refresh() }]);
     ide.on('toolWindowShown', (id) => { if (id === 'JupyterVariables') renderJupyterVariables(); });
     ide.on('activeTabChanged', (tab) => { if (tab?.notebook && jvTw.isVisible()) renderJupyterVariables(); });
     ide.on('fileClosed', () => { if (jvTw.isVisible()) setTimeout(renderJupyterVariables); });
@@ -944,26 +945,28 @@
     mount(container) {
       container.classList.add('sv-plots');
       const toolbar = el('div', 'sv-plot-bar');
-      const btn = (glyph, title, run, cls = '') => {
-        const b = el('button', `sv-pbtn ${cls}`, glyph);
+      // icon: an icon name, or a text label (PNG, SVG).
+      const btn = (icon, title, run, cls = '') => {
+        const b = el('button', `sv-pbtn ${cls}`);
+        if (/^[a-z]/.test(icon)) b.appendChild(ide.icon(icon)); else b.textContent = icon;
         b.title = title;
         b.onclick = run;
         toolbar.appendChild(b);
         return b;
       };
       const needPlot = [
-        btn('−', tr('Zoom Out'), () => zoomBy(-1), 'sv-zoom-out'),
-        btn('+', tr('Zoom In'), () => zoomBy(1), 'sv-zoom-in'),
-        btn('1:1', tr('Actual Size'), () => setZoom(1), 'sv-zoom-actual'),
-        btn('⤢', tr('Fit to Window'), () => setZoom('fit'), 'sv-zoom-fit'),
+        btn('zoomOut', tr('Zoom Out'), () => zoomBy(-1), 'sv-zoom-out'),
+        btn('zoomIn', tr('Zoom In'), () => zoomBy(1), 'sv-zoom-in'),
+        btn('actualZoom', tr('Actual Size'), () => setZoom(1), 'sv-zoom-actual'),
+        btn('fit', tr('Fit to Window'), () => setZoom('fit'), 'sv-zoom-fit'),
       ];
       toolbar.appendChild(el('span', 'sv-sep'));
       needPlot.push(btn('PNG', tr('Save as PNG…'), () => savePlot(current, 'png'), 'sv-save-png'));
       const svgBtn = btn('SVG', tr('Save as SVG…'), () => savePlot(current, 'svg'), 'sv-save-svg');
-      needPlot.push(btn('⧉', tr('Copy Image'), () => copyPlot(), 'sv-copy'));
+      needPlot.push(btn('copy', tr('Copy Image'), () => copyPlot(), 'sv-copy'));
       toolbar.appendChild(el('span', 'sv-sep'));
-      needPlot.push(btn('🗑', tr('Delete Plot'), () => deletePlot(), 'sv-delete'));
-      needPlot.push(btn('⌫', tr('Delete All Plots'), clearPlots, 'sv-clear'));
+      needPlot.push(btn('remove', tr('Delete Plot'), () => deletePlot(), 'sv-delete'));
+      needPlot.push(btn('clear', tr('Delete All Plots'), clearPlots, 'sv-clear'));
       const info = userText(el('div', 'sv-plot-info'));
       const view = el('div', 'sv-plot-view hidden fit');
       const img = el('img', 'sv-plot-img');

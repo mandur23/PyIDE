@@ -69,11 +69,11 @@
 
   function renderActions() {
     const actions = [
-      { id: 'markRead', icon: '✓', title: tr('Mark All as Read'), run: () => notes.markAllRead() },
-      { id: 'clearAll', icon: '⌫', title: tr('Clear All'), run: clearAll },
+      { id: 'markRead', icon: 'check', title: tr('Mark All as Read'), run: () => notes.markAllRead() },
+      { id: 'clearAll', icon: 'clear', title: tr('Clear All'), run: clearAll },
     ];
     if (notes.hiddenGroups().length) {
-      actions.push({ id: 'restoreGroups', icon: '↺', title: tr('Show Balloons Again ({groups})', { groups: notes.hiddenGroups().map((g) => tr(g)).join(', ') }),
+      actions.push({ id: 'restoreGroups', icon: 'reset', title: tr('Show Balloons Again ({groups})', { groups: notes.hiddenGroups().map((g) => tr(g)).join(', ') }),
         run: () => { for (const g of notes.hiddenGroups()) notes.setGroupHidden(g, false); } });
     }
     tw.setActions(actions);

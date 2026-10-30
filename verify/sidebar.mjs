@@ -37,6 +37,11 @@ try {
   await a.click('#moreToolWindows .more-row[data-tool="PythonConsole"] .more-pin');
   await a.until(`ide.sidebar.isPinned('PythonConsole')`, 'pinned');
   check((await visibleButtons(a)).includes('PythonConsole') && await a.js(`!!document.querySelector('#moreToolWindows')`), 'the pin in More adds the window to the sidebar and keeps the list open');
+  // Python Console's order (25) is before Terminal's (30), but a new pin goes to the end of its group, as in PyCharm.
+  const bottomGroup = await a.js(`[...document.querySelectorAll('#stripeBottom .stripe-btn')].filter(b => !b.classList.contains('hidden')).map(b => b.dataset.tool)`);
+  const bottomTabs = await a.js(`[...document.querySelectorAll('#bottomTabs .bottom-tab')].filter(t => !t.classList.contains('hidden')).map(t => t.textContent)`);
+  check(bottomGroup.at(-1) === 'PythonConsole' && bottomGroup.slice(0, 4).join() === 'Run,Debug,Terminal,Problems' && bottomTabs.at(-1) === 'Python Console',
+    `a newly pinned window goes to the end of its sidebar group and of the bottom tabs (${bottomGroup.join(', ')} | ${bottomTabs.join(', ')})`);
   await a.press('Escape');
   check(!(await a.js(`!!document.querySelector('#moreToolWindows')`)), 'Esc closes More');
   await a.js(`document.querySelector('#stripe .stripe-btn[data-tool="Structure"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 30, clientY: 120 }))`);

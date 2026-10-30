@@ -91,7 +91,8 @@
   }
 
   function toolButton(cls, icon, title, actionId, run) {
-    const b = el('button', `cmp-tool ${cls}`, icon);
+    const b = el('button', `cmp-tool ${cls}`);
+    b.appendChild(ide.icon(icon));
     ide.keymap.tooltip(b, title, actionId);
     b.onclick = run;
     return b;
@@ -120,8 +121,8 @@
     const box = el('div', 'cmp-body');
     let diff = null;
     bar.append(
-      toolButton('cmp-prev', '↑', tr('Previous Difference'), 'PreviousDiff', () => diff && go(diff, -1)),
-      toolButton('cmp-next', '↓', tr('Next Difference'), 'NextDiff', () => diff && go(diff, 1)),
+      toolButton('cmp-prev', 'up', tr('Previous Difference'), 'PreviousDiff', () => diff && go(diff, -1)),
+      toolButton('cmp-next', 'down', tr('Next Difference'), 'NextDiff', () => diff && go(diff, 1)),
       count, el('span', 'cmp-spacer'), mode,
     );
     host.append(bar, head, box);
@@ -193,7 +194,7 @@
       return ide.openCustomTab({ id });
     }
     return ide.openCustomTab({
-      id, title, icon: '⇆', doc: right.doc,
+      id, title, icon: 'diff', doc: right.doc,
       mount(host, tab) {
         host.classList.add('cmp-tab');
         const view = mountView(host, { left, right, language, separators });
@@ -221,7 +222,7 @@
     if (bytes) { try { verdict = await ide.api.invoke('compare:sameBytes', bytes[0], bytes[1]); } catch {} }
     if (ide.findTab(id)) ide.closeTab(id, true);
     return ide.openCustomTab({
-      id, title, icon: '⇆',
+      id, title, icon: 'diff',
       mount(host) {
         host.classList.add('cmp-tab', 'cmp-message');
         const box = el('div', 'cmp-message-box');

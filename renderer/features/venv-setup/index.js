@@ -107,7 +107,7 @@
       link(tr('Choose Interpreter…'), 'choose', () => ide.openSettings?.('interpreter')),
       link(tr("Don't Ask Again"), 'ignore', () => { ide.settings.set(IGNORE(root), true); hide(); }),
     );
-    bar.replaceChildren(el('span', 'venv-bar-icon', '⚠'), text, actions, closeButton(() => { closed.add(root.toLowerCase()); hide(); }));
+    bar.replaceChildren(Object.assign(ide.icon('warning'), { className: 'ide-icon venv-bar-icon' }), text, actions, closeButton(() => { closed.add(root.toLowerCase()); hide(); }));
     bar.dataset.state = 'prompt';
     bar.classList.remove('hidden');
   }

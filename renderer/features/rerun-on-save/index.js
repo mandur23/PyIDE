@@ -30,7 +30,7 @@
   }
 
   run.registerSessionAction((s) => (eligible(s) ? {
-    id: 'rerunOnSave', icon: '↻',
+    id: 'rerunOnSave', icon: 'rerunAuto',
     title: tr('Rerun on Save'),
     toggled: !!s.rerunOnSave,
     run: () => set(s, !s.rerunOnSave),

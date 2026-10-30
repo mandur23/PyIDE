@@ -67,7 +67,7 @@
     const size = bytes == null ? '' : ` (${oneFolder ? tr('folder {size} MB', { size: mb(bytes) }) : tr('{size} MB', { size: mb(bytes) })})`;
     s.con?.append(`\n${tr('Executable built: {path}', { path: output })}${size}\n`, 'ok');
     const reveal = () => ide.api.invoke('shell:showInFolder', output);
-    s.setActions([{ id: 'showExe', icon: '📂', title: tr('Show in Explorer'), run: reveal }]);
+    s.setActions([{ id: 'showExe', icon: 'folder', title: tr('Show in Explorer'), run: reveal }]);
     const root = ide.root;
     const ignores = await missingIgnores(root).catch(() => []);
     ide.notifications?.notify({
@@ -81,7 +81,7 @@
   }
 
   run.registerType({
-    type: TYPE, title: tr('PyInstaller'), icon: '📦',
+    type: TYPE, title: tr('PyInstaller'), icon: 'package',
     fields: [
       { key: 'script', label: tr('Script path'), placeholder: 'main.py' },
       { key: 'exeName', label: tr('Executable name'), placeholder: tr('Defaults to the script name') },

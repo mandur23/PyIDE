@@ -176,9 +176,6 @@
   let loadSeq = 0;
   let viewSeq = 0;
 
-  // PyCharm's pull request icon, drawn like the bundled New UI icons (16 px, currentColor).
-  (window.PYIDE_ICONS ||= {}).pullRequests ||= '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="4" cy="3.5" r="1.5" stroke="currentColor"/><circle cx="4" cy="12.5" r="1.5" stroke="currentColor"/><circle cx="12" cy="12.5" r="1.5" stroke="currentColor"/><path d="M4 5v6M12 11V6.5A1.5 1.5 0 0 0 10.5 5H8" stroke="currentColor"/><path d="M9.5 3.3 7.8 5l1.7 1.7" stroke="currentColor"/></svg>';
-
   const tw = ide.registerToolWindow({
     id: 'PullRequests', title: tr('Pull Requests'), icon: '⇅', iconName: 'pullRequests', side: 'left', order: 40,
     mount(container, w) {
@@ -195,7 +192,7 @@
       ide.ui.listKeys(listEl, { rows: '.gh-pr', select: (row) => selectPr(Number(row.dataset.number)), open: (row) => selectPr(Number(row.dataset.number)), id: (row) => row.dataset.number });
       detailsEl = el('div', 'gh-details hidden');
       container.append(stateEl, barEl, listEl, detailsEl);
-      w.setActions([{ icon: '⟳', title: tr('Refresh'), id: 'gh-refresh', run: () => load() }]);
+      w.setActions([{ icon: 'refresh', title: tr('Refresh'), id: 'gh-refresh', run: () => load() }]);
     },
   });
 

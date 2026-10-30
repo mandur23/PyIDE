@@ -608,7 +608,11 @@ function renderPopup() {
       .filter(([, sc]) => sc > 0).sort((a, b) => b[1] - a[1]).map(([it]) => it);
   items.slice(0, 200).forEach((it, i) => {
     const row = el('div', 'popup-item' + (i === 0 ? ' active' : ''));
-    if (it.icon) row.appendChild(typeof it.icon === 'string' ? el('span', 'icon', it.icon) : Object.assign(it.icon.cloneNode(true), { className: `${it.icon.className} icon` }));
+    if (it.icon) {
+      const icon = typeof it.icon === 'string' ? ide.icon(it.icon) : it.icon.cloneNode(true);
+      icon.classList.add('icon');
+      row.appendChild(icon);
+    }
     row.appendChild(el('span', 'label', it.label));
     if (it.detail) row.appendChild(el('span', 'detail', it.detail));
     if (it.hint) row.appendChild(el('span', 'hint-right', it.hint));
@@ -1138,10 +1142,16 @@ const areas = {
 const TOOL_ICONS = { Project: 'project', Commit: 'commit', Structure: 'structure', Launchers: 'services', Run: 'run',
   Debug: 'debug', FindUsages: 'find', FindInFiles: 'find', PythonConsole: 'pythonConsole', Terminal: 'terminal',
   Problems: 'problems', Git: 'vcs', TODO: 'todo', PythonPackages: 'pythonPackages', AIChat: 'aiChat', CallHierarchy: 'hierarchy' };
+// An icon is a name in window.PYIDE_ICONS (icons.js, icons-ui.js, icons-extra.js); a plugin may pass a text glyph
+// instead, which shows as text. An icon with colors of its own has a dark drawing as well, shown in the dark themes.
 ide.icon = (name, fallback = '') => {
   const svg = window.PYIDE_ICONS?.[name];
   const span = el('span', 'ide-icon');
-  if (svg) span.innerHTML = svg; else span.textContent = fallback;
+  if (svg) {
+    span.dataset.iconName = name;
+    const dark = window.PYIDE_ICONS_DARK?.[name];
+    span.innerHTML = dark ? `<span class="fi-light">${svg}</span><span class="fi-dark">${dark}</span>` : svg;
+  } else span.textContent = fallback || (/^[a-z]\w*$/i.test(name || '') ? '' : name || '');
   return span;
 };
 
@@ -1156,7 +1166,21 @@ function setPinned(id, pinned) {
   ide.settings.set('sidebar.pinned', list);
   refreshStripe();
 }
+// Pinned tool windows keep the order they were pinned in, so one pinned from More goes to the end of its group, as in
+// PyCharm; the others (shown while open) follow by their order.
+function orderStripe() {
+  const pins = pinnedIds();
+  const rank = (tw) => (pins.includes(tw.id) ? pins.indexOf(tw.id) : pins.length + tw.order);
+  for (const area of Object.values(areas)) {
+    const list = [...ide.toolWindows.values()].filter((tw) => tw.area === area).sort((a, b) => rank(a) - rank(b));
+    for (const [host, nodes] of [[area.stripe, list.map((tw) => tw.button)], [$('bottomTabs'), list.map((tw) => tw.tab).filter(Boolean)]]) {
+      const now = [...host.children].filter((n) => nodes.includes(n));
+      if (nodes.some((n, i) => now[i] !== n)) host.append(...nodes);
+    }
+  }
+}
 function refreshStripe() {
+  orderStripe();
   for (const tw of ide.toolWindows.values()) {
     const shown = isPinned(tw.id) || tw.isVisible();
     tw.button.classList.toggle('hidden', !shown);
@@ -1169,7 +1193,8 @@ ide.sidebar = { isPinned, setPinned, pinned: pinnedIds, defaultPinned: () => [..
 function renderAreaActions(area) {
   area.actions.innerHTML = '';
   for (const a of area.active?.actionList || []) {
-    const b = el('button', null, a.icon);
+    const b = el('button');
+    b.appendChild(ide.icon(a.icon));
     // keyAction: the action whose current shortcut the tooltip shows.
     if (a.keyAction) ide.keymap.tooltip(b, a.title, a.keyAction);
     else b.title = a.title;
@@ -1994,9 +2019,9 @@ ide.registerToolWindow({
     container.appendChild(tree);
     wireTree(tree);
     tw.setActions([
-      { icon: '＋', title: tr('New Python File'), run: () => createEntry(false) },
-      { icon: '▣', title: tr('New Directory'), run: () => createEntry(true) },
-      { icon: '⟳', title: tr('Refresh'), run: renderTree },
+      { icon: 'add', title: tr('New Python File'), run: () => createEntry(false) },
+      { icon: 'newFolder', title: tr('New Directory'), run: () => createEntry(true) },
+      { icon: 'refresh', title: tr('Refresh'), run: renderTree },
     ]);
   },
 });

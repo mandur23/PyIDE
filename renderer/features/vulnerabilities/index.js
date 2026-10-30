@@ -124,7 +124,7 @@
     if (!hit) return;
     row.classList.add('pkg-vulnerable');
     row.dataset.vulnerable = String(hit.vulns.length);
-    const icon = el('span', 'pkg-vuln-icon', '⚠');
+    const icon = Object.assign(ide.icon('warning'), { className: 'ide-icon pkg-vuln-icon' });
     icon.title = countText(hit.vulns.length);
     row.insertBefore(icon, row.firstChild);
   });
@@ -135,7 +135,7 @@
     const box = el('div', 'pkg-vulns');
     box.id = 'pkgVulns';
     const head = el('div', 'pkg-vulns-head');
-    head.append(el('span', 'pkg-vuln-icon', '⚠'), el('span', null, countText(hit.vulns.length)));
+    head.append(Object.assign(ide.icon('warning'), { className: 'ide-icon pkg-vuln-icon' }), el('span', null, countText(hit.vulns.length)));
     if (hit.fixed) {
       const up = el('button', 'secondary', tr('Upgrade to {version}', { version: hit.fixed }));
       up.id = 'pkgVulnUpgrade';
@@ -164,7 +164,7 @@
   });
 
   const run = () => { ide.packages.toolWindow.show(); return check({ manual: true }); };
-  ide.packages.addAction({ icon: '🛡', id: 'checkVulnerabilities', title: tr('Check for Vulnerabilities'), run });
+  ide.packages.addAction({ icon: 'securityRole', id: 'checkVulnerabilities', title: tr('Check for Vulnerabilities'), run });
   ide.registerAction({ id: 'CheckForVulnerabilities', title: tr('Check for Vulnerabilities'), run });
 
   // ---------- quick fix: Upgrade to <version> ----------

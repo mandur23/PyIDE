@@ -982,15 +982,16 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       c.outputs = el('div', 'nb-outputs');
       body.append(c.input, c.md, c.status, c.outputs);
       const tools = el('div', 'nb-cell-tools');
-      const tool = (glyph, title, fn) => {
-        const b = el('button', 'nb-cell-tool', glyph);
+      const tool = (icon, title, fn) => {
+        const b = el('button', 'nb-cell-tool');
+        b.appendChild(ide.icon(icon));
         b.title = title;
         b.onmousedown = (e) => e.preventDefault();
         b.onclick = (e) => { e.stopPropagation(); fn(cells.indexOf(c)); };
         return b;
       };
-      tools.append(tool('↑', tr('Move Cell Up'), (i) => moveCell(i, -1)), tool('↓', tr('Move Cell Down'), (i) => moveCell(i, 1)),
-        tool('⌫', tr('Clear Outputs'), (i) => setOutputs(cells[i], [])), tool('🗑', tr('Delete Cell'), (i) => deleteCells(i)));
+      tools.append(tool('moveUp', tr('Move Cell Up'), (i) => moveCell(i, -1)), tool('moveDown', tr('Move Cell Down'), (i) => moveCell(i, 1)),
+        tool('clearOutputs', tr('Clear Outputs'), (i) => setOutputs(cells[i], [])), tool('clear', tr('Delete Cell'), (i) => deleteCells(i)));
       c.el.append(gutter, body, tools);
       c.model = monaco.editor.createModel(data.source, langOf(data.type),
         monaco.Uri.from({ scheme: SCHEME, authority, path: `/cell${++modelSeq}.${data.type === 'code' ? 'py' : data.type === 'markdown' ? 'md' : 'txt'}` }));
@@ -1614,7 +1615,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
   });
 
   // ---------- registration ----------
-  ide.registerFileViewer({ id: 'notebook', icon: '📓', text: true, match: (p) => /\.ipynb$/i.test(p), mount: mountNotebook });
+  ide.registerFileViewer({ id: 'notebook', text: true, match: (p) => /\.ipynb$/i.test(p), mount: mountNotebook });
 
   const activeView = () => ide.activeTab()?.notebook || null;
   const onNotebook = () => !!activeView();

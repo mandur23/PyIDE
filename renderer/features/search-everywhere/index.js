@@ -207,7 +207,7 @@
       if (it.more) row.append(el('span', 'se-label', tr('more')));
       else {
         const icon = el('span', 'se-icon');
-        if (it.icon) icon.append(it.icon);
+        if (it.icon) icon.append(typeof it.icon === 'string' ? ide.icon(it.icon) : it.icon);
         const label = el('span', 'se-label');
         label.append(highlight(it.label, it.ranges || []));
         row.append(icon, it.user ? userText(label) : label);
