@@ -196,5 +196,16 @@
   "Resources copied to the game: {files}": "게임에 리소스 복사: {files}",
   "The game reloads its resources (F3+T).": "게임이 리소스를 다시 불러옵니다(F3+T).",
   "Press F3+T in the game to see the new resources.": "바뀐 리소스를 보려면 게임에서 F3+T를 누르세요.",
-  "Type /reload in the game to apply the changed data (recipes, loot tables, tags).": "바뀐 데이터(레시피, 전리품 테이블, 태그)를 적용하려면 게임에서 /reload를 입력하세요."
+  "Type /reload in the game to apply the changed data (recipes, loot tables, tags).": "바뀐 데이터(레시피, 전리품 테이블, 태그)를 적용하려면 게임에서 /reload를 입력하세요.",
+  "Public address:": "공개 주소:",
+  "Copy Address": "주소 복사",
+  "Stop Sharing": "공유 중지",
+  "Making a public address…": "공개 주소를 만드는 중…",
+  "The public address failed: {error}": "공개 주소를 만들지 못했습니다: {error}",
+  "Share Minecraft Server": "마인크래프트 서버 공유",
+  "Share the Proxy": "프록시 공유",
+  "Share Anyway": "그래도 공유",
+  "Start the proxy {proxy} first, then share it.": "프록시 {proxy}를 먼저 시작한 뒤 공유하세요.",
+  "{name} has account checks off because the proxy {proxy} checks them: joined directly, anyone could play under any name. Share the proxy instead?": "{name}은(는) 프록시 {proxy}가 계정을 확인하기 때문에 계정 확인이 꺼져 있습니다. 직접 접속하면 누구나 아무 이름으로나 플레이할 수 있습니다. 대신 프록시를 공유할까요?",
+  "{name} has account checks off (online-mode=false): anyone with the address could play under any name, an operator's too. Share it anyway?": "{name}은(는) 계정 확인이 꺼져 있습니다(online-mode=false). 주소를 아는 사람은 누구나 아무 이름으로나, 관리자 이름으로도 플레이할 수 있습니다. 그래도 공유할까요?"
 }

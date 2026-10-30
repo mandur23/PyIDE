@@ -1,3 +1,13 @@
+// libuv's thread pool (4 threads by default) does every asynchronous file operation, and Find in Files and the TODO
+// scan open thousands of files, each waiting on the disk and the virus scanner: 16 threads read a 20,000-file project
+// about twice as fast. The pool reads the variable once, when the first work is queued (the stat below), and programs
+// the IDE starts must not inherit it.
+{
+  const own = process.env.UV_THREADPOOL_SIZE;
+  if (!own) process.env.UV_THREADPOOL_SIZE = String(Math.min(16, Math.max(4, require('os').availableParallelism())));
+  require('fs').stat(__filename, () => {});
+  if (!own) delete process.env.UV_THREADPOOL_SIZE;
+}
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol, nativeImage } = require('electron');
 // The HTML preview serves project files over pyide-preview:// (main/features/viewers.js). A scheme gets standard URL
 // resolution (relative stylesheets, scripts, images) only when it is declared before the app is ready.

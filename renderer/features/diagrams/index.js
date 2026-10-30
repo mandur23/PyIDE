@@ -700,19 +700,31 @@
     let layout = null;
     let boxes = new Map();
     let raf = 0;
+    let sharpen = 0;
+    // A zoom first stretches the SVG as drawn (a compositor transform, one frame), then draws it again at the new size
+    // once zooming pauses: drawing a large diagram at a new size takes a few hundred milliseconds.
+    const rasterize = () => {
+      sharpen = 0;
+      if (!layout) return;
+      const { s } = d.view;
+      const W = layout.width + 2 * MARGIN;
+      const H = layout.height + 2 * MARGIN;
+      if (svg._s !== s || svg._W !== W || svg._H !== H) {
+        svg.setAttribute('width', String(Math.max(1, Math.round(W * s))));
+        svg.setAttribute('height', String(Math.max(1, Math.round(H * s))));
+        svg._s = s; svg._W = W; svg._H = H;
+      }
+      applyView();
+    };
     const applyView = () => {
       raf = 0;
       const { s, tx, ty } = d.view;
-      if (layout) {
-        const W = layout.width + 2 * MARGIN;
-        const H = layout.height + 2 * MARGIN;
-        if (svg._s !== s || svg._W !== W || svg._H !== H) {
-          svg.setAttribute('width', String(Math.max(1, Math.round(W * s))));
-          svg.setAttribute('height', String(Math.max(1, Math.round(H * s))));
-          svg._s = s; svg._W = W; svg._H = H;
-        }
-      }
-      layer.style.transform = `translate(${tx}px, ${ty}px)`;
+      const W = layout ? layout.width + 2 * MARGIN : 0;
+      if (layout && (svg._s === undefined || svg._W !== W || svg._H !== layout.height + 2 * MARGIN)) return rasterize();
+      const stretch = svg._s ? s / svg._s : 1;
+      layer.style.transform = stretch === 1 ? `translate(${tx}px, ${ty}px)` : `translate(${tx}px, ${ty}px) scale(${stretch})`;
+      clearTimeout(sharpen);
+      if (stretch !== 1) sharpen = setTimeout(rasterize, 150);
       const scale = s.toFixed(3);
       if (host.dataset.scale !== scale) host.dataset.scale = scale;
     };
@@ -983,6 +995,7 @@
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       if (raf) cancelAnimationFrame(raf);
+      clearTimeout(sharpen);
     };
     relayout();
   }

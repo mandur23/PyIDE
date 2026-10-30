@@ -557,11 +557,16 @@
   // which the Ports plugin gives a public https address; one server per folder, reused while it runs.
   const serving = new Map(); // folder (lower case) -> Promise<base url | null>
   const tunnelWaits = new Map(); // port -> resolve(url | null)
+  let tunnels = []; // the Ports plugin's tunnels, from its last ports:changed
   ide.api.on('ports:changed', (st) => {
     for (const [port, resolve] of tunnelWaits) {
       const t = st.tunnels.find((x) => x.port === port);
       if (t?.state === 'shared' || t?.state === 'failed') { tunnelWaits.delete(port); resolve(t.state === 'shared' ? t.url : null); }
     }
+    // A server's card shows its public address (or that it is being made): from this event, which the Ports plugin
+    // may not have taken in yet.
+    tunnels = st.tunnels || [];
+    if (list.some((s) => runningAt(s.dir))) render();
   });
   function serveFolder(folder) {
     const key = folder.toLowerCase();
@@ -843,7 +848,8 @@
         actions.append(button(tr('Start'), 'mc-start', () => launchOnce(srv, run.runConfig)));
         if (ide.debugger?.debugJvm) actions.append(button(tr('Debug'), 'mc-debug', () => launchOnce(srv, run.debugConfig), tr('Start with the Java debugger attached: breakpoints in its plugins and mods stop the server')));
       }
-      if (running && ide.ports) actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
+      const tunnel = running && ide.ports ? tunnels.find((t) => t.port === srv.port) : null;
+      if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
       if (srv.plugins) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
       if (srv.mods && srv.mdk) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
       if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
@@ -860,22 +866,54 @@
       for (const p of srv.projects || []) {
         const row = el('div', 'mc-build');
         row.dataset.project = p.name;
-        const n = el('span', null, `${p.type === 'plugin' ? '🧩' : '⚙'} ${p.name}`);
+        const n = el('span', null, p.name);
         n.dataset.userText = '';
-        row.append(n, button(tr('Build and Deploy'), 'mc-build-run', () => run.runConfig(buildConfig(p))));
+        row.append(ide.icon(p.type === 'plugin' ? 'plugin' : 'settings'), n, button(tr('Build and Deploy'), 'mc-build-run', () => run.runConfig(buildConfig(p))));
         if (p.type === 'plugin') row.append(button(tr('Add Library…'), 'mc-add-lib', () => addLibrary(p)));
         else row.append(button(tr('Test Client'), 'mc-client', () => run.debugConfig(clientConfig(p)), tr('Starts Minecraft with the mod under the debugger: saving a change to its code reloads it in the running game')));
         builds.append(row);
       }
-      card.append(head, actions, el('div', 'mc-server-note muted', info), builds);
+      card.append(head, actions);
+      if (tunnel) card.append(publicRow(srv, tunnel));
+      card.append(el('div', 'mc-server-note muted', info), builds);
       host.append(card);
     }
   }
 
-  async function shareServer(srv) {
+  // The address players join with, on the card while the server is shared.
+  function publicRow(srv, tunnel) {
+    const row = el('div', 'mc-public');
+    if (tunnel.state === 'shared') {
+      const addr = el('span', 'mc-public-addr', tunnel.url);
+      addr.dataset.userText = '';
+      row.append(el('span', 'muted', tr('Public address:')), addr,
+        button(tr('Copy Address'), 'mc-public-copy', () => ide.api.invoke('clipboard:writeText', tunnel.url)),
+        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)));
+    } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Making a public address…')));
+    else row.append(el('span', 'mc-public-error', tr('The public address failed: {error}', { error: tunnel.error || '' })));
+    return row;
+  }
+
+  // A server with account checks off (behind a proxy) is not shared directly: anyone could join with any name. The
+  // project's proxy is shared instead, which checks the accounts and sends players on.
+  async function shareServer(card) {
+    // As the server is now: a proxy started since the card was drawn has turned its account checks off.
+    await refresh();
+    const srv = list.find((s) => s.dir.toLowerCase() === card.dir.toLowerCase()) || card;
+    let target = srv;
+    if (srv.offline) {
+      const proxy = list.find((s) => s.proxy);
+      if (proxy) {
+        if (!(await ide.ui.confirm(tr('{name} has account checks off because the proxy {proxy} checks them: joined directly, anyone could play under any name. Share the proxy instead?', { name: srv.name, proxy: proxy.name }),
+          { title: tr('Share Minecraft Server'), ok: tr('Share the Proxy') }))) return;
+        if (!runningAt(proxy.dir)) return ide.ui.alert(tr('Start the proxy {proxy} first, then share it.', { proxy: proxy.name }));
+        target = proxy;
+      } else if (!(await ide.ui.confirm(tr('{name} has account checks off (online-mode=false): anyone with the address could play under any name, an operator\'s too. Share it anyway?', { name: srv.name }),
+        { title: tr('Share Minecraft Server'), ok: tr('Share Anyway') }))) return;
+    }
     await ide.api.invoke('ports:refresh');
-    ide.toolWindows.get('Ports')?.show();
-    ide.ports.share(srv.port);
+    await ide.ports.share(target.port);
+    render();
   }
 
   const tw = ide.registerToolWindow({

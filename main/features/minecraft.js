@@ -131,6 +131,8 @@ function servers(root) {
   return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind]).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')),
+    // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
+    offline: /^online-mode=false\s*$/m.test(fs.existsSync(path.join(s.dir, 'server.properties')) ? fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8') : ''),
     projects: projects.filter((p) => sameDir(path.resolve(p.dir, p.server), s.dir)).map(({ type, name, dir }) => ({ type, name, dir })),
   }));
 }
@@ -214,6 +216,19 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
   }
 }
 
+// Garbage collector options a server starts with unless pyide-server.json gives its own jvmArgs ([] for none). A
+// Minecraft server gets Aikar's flags, which PaperMC's documentation recommends (G1 sized for a game loop's short-lived
+// objects: fewer and shorter pauses, the lag spikes players notice); a Velocity proxy gets Velocity's. Both leave out
+// -XX:+AlwaysPreTouch and -Xms equal to -Xmx: on a development machine beside the IDE the heap grows as the server
+// needs it, instead of taking all of -Xmx and touching every page of it before the server starts.
+const SERVER_JVM_ARGS = ['-XX:+UseG1GC', '-XX:+ParallelRefProcEnabled', '-XX:MaxGCPauseMillis=200', '-XX:+UnlockExperimentalVMOptions',
+  '-XX:+DisableExplicitGC', '-XX:G1NewSizePercent=30', '-XX:G1MaxNewSizePercent=40', '-XX:G1HeapRegionSize=8M', '-XX:G1ReservePercent=20',
+  '-XX:G1HeapWastePercent=5', '-XX:G1MixedGCCountTarget=4', '-XX:InitiatingHeapOccupancyPercent=15', '-XX:G1MixedGCLiveThresholdPercent=90',
+  '-XX:G1RSetUpdatingPauseTimePercent=5', '-XX:SurvivorRatio=32', '-XX:+PerfDisableSharedMem', '-XX:MaxTenuringThreshold=1',
+  '-Dusing.aikars.flags=https://mcflags.emc.gs', '-Daikars.new.flags=true'];
+const PROXY_JVM_ARGS = ['-XX:+UseG1GC', '-XX:G1HeapRegionSize=4M', '-XX:+UnlockExperimentalVMOptions', '-XX:+ParallelRefProcEnabled', '-XX:MaxInlineLevel=15'];
+const jvmArgsOf = (desc) => (Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : KINDS[desc.kind]?.proxy ? PROXY_JVM_ARGS : SERVER_JVM_ARGS);
+
 // opts.debugPort: the JVM also listens for the debugger there, suspended until the debugger has set its breakpoints
 // (a plugin's onEnable runs within moments of the start).
 async function launch(dir, log, { debugPort } = {}) {
@@ -227,7 +242,7 @@ async function launch(dir, log, { debugPort } = {}) {
   const home = await ensureJava(desc.java, { log });
   if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
   const mem = /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G';
-  const args = [`-Xmx${mem}`];
+  const args = [`-Xmx${mem}`, ...jvmArgsOf(desc)];
   if (debugPort) args.push(`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`);
   if (desc.launch.argsFile) {
     if (isFile(path.join(dir, 'user_jvm_args.txt'))) args.push('@user_jvm_args.txt');

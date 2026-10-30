@@ -184,6 +184,12 @@ writeFileSync(fakeTunnel, `const port = (process.argv.join(' ').match(/:(\\d+)/)
 setTimeout(() => process.stderr.write('INF |  https://fake-port-' + port + '.trycloudflare.com  |\\nINF Registered tunnel connection\\n'), 200);
 setInterval(() => {}, 1000);
 `);
+// A stand-in bore (bore local <port> --local-host <host> --to bore.pub): the address line the real one prints.
+const fakeBore = path.join(work, 'fake-bore.cjs');
+writeFileSync(fakeBore, `const port = Number(process.argv[process.argv.indexOf('local') + 1]);
+setTimeout(() => console.log('INFO bore_cli::client: listening at bore.pub:' + (40000 + port % 1000)), 200);
+setInterval(() => {}, 1000);
+`);
 
 // ---------- stand-in services ----------
 const sha = (algo, b) => crypto.createHash(algo).update(b).digest('hex');
@@ -280,6 +286,7 @@ mkdirSync(project);
 const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, env: {
   PYIDE_MC_JAVA: javaHome,
   PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]),
+  PYIDE_BORE: S([process.execPath, fakeBore]),
   PYIDE_MC_SOURCES: S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/paper`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, forge: `${base}/forge`,
     forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` }),
 } });
@@ -386,6 +393,17 @@ try {
   check(/plugin\.yml/.test(listing) && /com\/example\/hello\/HelloPlugin\.class/.test(listing), 'the plugin compiles against the server\'s libraries and its jar goes to plugins/');
   await until(`(${runTab('survival')}).host.textContent.includes('Enabled HelloPlugin.jar')`, 'plugin enabled', 60000).catch(() => {});
   check(starts(serverDir('survival')) === before + 1 && (await tabText('survival')).includes('Enabled HelloPlugin.jar'), 'the running server restarts and the plugin\'s onEnable runs');
+
+  // ---------- sharing ----------
+  await js(`(ide.settings.set('ports.confirmShare', false), true)`);
+  await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
+  await until(`${card('survival')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40611'`, 'public address on the card', 30000)
+    .then(() => check(true, 'Share puts the public address players join with on the server card'), async () => check(false, `the card shows the public address: ${S(await js(`${card('survival')}?.textContent`))}`));
+  check(await js(`!${card('survival')}.querySelector('.mc-share') && !!${card('survival')}.querySelector('.mc-public-copy')`), 'a shared server offers Copy Address and Stop Sharing instead of Share');
+  await shot('shared-server.png');
+  await js(`(${card('survival')}.querySelector('.mc-public-stop').click(), true)`);
+  await until(`!${card('survival')}?.querySelector('.mc-public') && !!${card('survival')}?.querySelector('.mc-share')`, 'sharing stopped', 15000)
+    .then(() => check(true, 'Stop Sharing takes the address off the card'), () => check(false, 'Stop Sharing takes the address off the card'));
   await stopServer('survival');
 
   // ---------- debugging ----------
@@ -429,6 +447,18 @@ try {
     && /^online-mode=false$/m.test(readFileSync(path.join(serverDir('survival'), 'server.properties'), 'utf8')),
   'each Paper server takes the proxy\'s forwarding secret, and leaves the account check to the proxy');
   check((await tabText('proxy')).includes('Players are sent on to:'), 'the proxy\'s console says where players go');
+  const proxyCmd = await tabText('proxy');
+  check(/-XX:G1HeapRegionSize=4M .*-XX:MaxInlineLevel=15/.test(proxyCmd) && !/G1NewSizePercent|AlwaysPreTouch/.test(proxyCmd), 'the proxy starts with Velocity\'s recommended GC options');
+  // A server behind the proxy has account checks off: Share offers the proxy instead.
+  await startServer('survival');
+  await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
+  await until(`!!${dialogButton('Share the Proxy')}`, 'share-the-proxy question', 10000)
+    .then(() => check(true, 'sharing a server behind the proxy warns that its account checks are off and offers the proxy'), () => check(false, 'sharing a server behind the proxy warns and offers the proxy'));
+  await js(`(${dialogButton('Share the Proxy')}?.click(), true)`);
+  await until(`${card('proxy')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40613' && !${card('survival')}.querySelector('.mc-public')`, 'proxy shared', 30000)
+    .then(() => check(true, 'the proxy is shared, not the server behind it'), async () => check(false, `the proxy is shared: ${S(await js(`ide.ports.state().tunnels`))}`));
+  await js(`(${card('proxy')}.querySelector('.mc-public-stop')?.click(), true)`);
+  await stopServer('survival');
   await stopServer('proxy');
   check((await tabText('proxy')).includes('Stopping the server'), 'Stop ends the proxy with its own command ("end")');
 
@@ -439,7 +469,15 @@ try {
     `Forge's installer ran and the server starts from its argument files (${S(forge.launch)})`);
   await until(`!!${card('modded')}`, 'forge card');
   await startServer('modded');
-  check(/@user_jvm_args\.txt @libraries\/net\/minecraftforge\/forge\/1\.20\.1-47\.9\.9\/win_args\.txt nogui/.test(await tabText('modded')), 'the Forge server runs with -Xmx and its @argument files');
+  const forgeCmd = await tabText('modded');
+  check(/@user_jvm_args\.txt @libraries\/net\/minecraftforge\/forge\/1\.20\.1-47\.9\.9\/win_args\.txt nogui/.test(forgeCmd), 'the Forge server runs with -Xmx and its @argument files');
+  check(/-Xmx2G -XX:\+UseG1GC .*-XX:G1NewSizePercent=30 .*-XX:MaxTenuringThreshold=1 /.test(forgeCmd) && !/AlwaysPreTouch|-Xms/.test(forgeCmd),
+    'a Minecraft server starts with Aikar\'s GC options (PaperMC\'s recommendation), without pre-touching the heap');
+  await stopServer('modded');
+  // pyide-server.json's jvmArgs replace them ([] for none).
+  writeFileSync(path.join(serverDir('modded'), 'pyide-server.json'), JSON.stringify({ ...forge, jvmArgs: ['-XX:+UseSerialGC'] }, null, 2));
+  await startServer('modded');
+  check(/-Xmx2G -XX:\+UseSerialGC @user_jvm_args\.txt/.test(await tabText('modded')), 'jvmArgs in pyide-server.json replace the GC options');
   await stopServer('modded');
 
   await js(`(${card('modded')}.querySelector('.mc-mod').click(), true)`);

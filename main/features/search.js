@@ -123,8 +123,9 @@ async function cachedText(p) {
 }
 
 // Files are read this many ahead of the one being searched: one synchronous read at a time spent most of a search
-// opening files (about 70 µs each on NTFS), and parallel reads overlap that.
-const READ_AHEAD = 16;
+// opening files (about 70 µs each on NTFS, 250 µs with a busy virus scanner), and parallel reads overlap that; 64
+// keep main.js's thread pool of up to 16 threads full.
+const READ_AHEAD = 64;
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -732,8 +733,10 @@ let indexVersion = 0;
 let fullSince = 0; // a window holding an older version than this is sent the whole index
 let indexQueue = Promise.resolve();
 const BATCH = 400;
-// Python parses the batches side by side: 3,000 modules take 1.2 s instead of 3.2 s one batch after another.
-const PARALLEL = Math.max(1, Math.min(4, os.cpus().length - 1));
+// Python parses the batches side by side: 3,000 modules take 1.2 s instead of 3.2 s one batch after another. Up to 8
+// at once (a 16-thread machine, verify/perf-index.mjs, 3 interleaved runs each): Go to Class lists them 2.75 s after
+// the project opens instead of 3.0 s with 4, and the index is built again in 0.97 s instead of 1.27 s.
+const PARALLEL = Math.max(1, Math.min(8, os.cpus().length - 1));
 // interpreter -> its tag, asked once per session. The renderer's version is in the key, so a venv made again with
 // another Python at the same path is asked again. A Python that does not answer has no tag (null, asked again at the
 // next build), and then the entries are checked by mtime alone.
