@@ -171,7 +171,7 @@ try {
   await until(`ide.toolWindows.get('Terminal').isVisible()`, 'terminal');
   check(await js(`ide.toolWindows.get('Terminal').tab.textContent.startsWith('터미널')`), 'Terminal tool window tab is "터미널"');
   check(await js(`[...document.querySelectorAll('#bottomActions [title]')].map(b => b.title).includes('버퍼 지우기')`), 'terminal Clear Buffer tooltip is "버퍼 지우기"');
-  await until(`/PS .*>/.test(ide.terminal.text())`, 'PowerShell prompt', 20000);
+  await until(`/^[A-Z]:\\\\.*>/m.test(ide.terminal.text())`, 'Command Prompt', 20000);
   await type('echo 안녕');
   await press('Enter');
   await until(`ide.terminal.text().includes('안녕\\n')`, 'Korean echoed by the real terminal');

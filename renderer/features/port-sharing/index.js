@@ -145,7 +145,7 @@
   let list = null;
   let autoBox = null;
   const tw = ide.registerToolWindow({
-    id: 'Ports', title: tr('Ports'), icon: '⇄', side: 'bottom', order: 66,
+    id: 'Ports', title: tr('Ports'), icon: '⇄', iconName: 'endpoints', side: 'bottom', order: 66,
     mount(container) {
       container.id = 'portsTool';
       container.classList.add('ports-tool');

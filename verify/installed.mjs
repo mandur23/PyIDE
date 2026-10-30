@@ -96,8 +96,8 @@ async function smoke(exe, port, name) {
     // ---------- ConPTY terminal (node-pty) ----------
     await press('Alt+F12');
     await until(`ide.terminal.sessions().length === 1`, 'terminal session');
-    await until(`/PS .*project>/.test(ide.terminal.text())`, 'PowerShell prompt', 30000);
-    check(true, 'the terminal opens a PowerShell session in the project');
+    await until(`/^[A-Z]:\\\\.*project>/m.test(ide.terminal.text())`, 'Command Prompt', 30000);
+    check(true, 'the terminal opens a Command Prompt session in the project');
 
     // ---------- ruff from vendor/bin ----------
     copyFileSync(path.join(APP_DIR, 'verify', 'fixtures', 'tooling', 'messy.py'), path.join(t.project, 'messy.py'));

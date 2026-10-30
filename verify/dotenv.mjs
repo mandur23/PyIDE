@@ -152,17 +152,17 @@ try {
   await js(`[...document.querySelectorAll('.dialog button')].find(b => b.textContent === 'Cancel')?.click()`);
   await js(`(ide.terminal.open(), true)`);
   await until(`ide.terminal.sessions().length >= 1`, 'terminal session');
-  await until(`/PS .*project>/.test(ide.terminal.text())`, 'PowerShell prompt', 20000);
-  await js(`ide.terminal.send('Write-Output "term:[$env:FOO]"\\r')`);
+  await until(`/^[A-Z]:\\\\.*project>/m.test(ide.terminal.text())`, 'Command Prompt', 20000);
+  await js(`ide.terminal.send('echo term:[%FOO%]\\r')`);
   await until(`ide.terminal.text().includes('term:[foo-from-dotenv-7f3a]')`, 'terminal sees FOO', 15000);
   check(true, 'a new terminal sees the .env value while the setting is on');
   await js(`(ide.settings.set('terminal.loadEnvFile', false), true)`);
   const before = await js(`ide.terminal.sessions().length`);
   await js(`(ide.terminal.open(), true)`);
   await until(`ide.terminal.sessions().length > ${before}`, 'second terminal session');
-  await until(`/PS .*project>/.test(ide.terminal.text())`, 'second PowerShell prompt', 20000);
-  await js(`ide.terminal.send('Write-Output "term2:[$env:FOO]"\\r')`);
-  await until(`/term2:\\[\\]/.test(ide.terminal.text())`, 'second terminal output', 15000);
+  await until(`/^[A-Z]:\\\\.*project>/m.test(ide.terminal.text())`, 'second Command Prompt', 20000);
+  await js(`ide.terminal.send('echo term2:[%FOO%]\\r')`);
+  await until(`/term2:\\[%FOO%\\]/.test(ide.terminal.text())`, 'second terminal output', 15000);
   check(true, 'with the setting off, a new terminal does not get it');
 
   // ---------- highlighting ----------

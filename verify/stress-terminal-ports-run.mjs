@@ -233,7 +233,7 @@ await section('venv-paths', async () => {
 // ---------- terminals: odd options, a shell that does not exist ----------
 await section('pty-options', async () => {
   const odd = await js(`ide.api.invoke('pty:create', { shell: 'no-such-shell', cwd: ${S(termCwd)}, cols: 80, rows: 24 }).then((r) => r, (e) => ({ thrown: String(e) }))`);
-  check(odd.id && odd.shell === 'powershell', `an unknown shell falls back to PowerShell (${S(odd)})`);
+  check(odd.id && odd.shell === 'cmd', `an unknown shell falls back to Command Prompt (${S(odd)})`);
   if (odd.id) await js(`ide.api.invoke('pty:kill', ${odd.id})`);
   const hostile = await js(`ide.api.invoke('pty:create', { shell: 'cmd', cwd: '\\\\\\\\127.0.0.1\\\\nope', cols: -5, rows: 99999, interpreter: { executable: 1 } })
     .then((r) => r, (e) => ({ thrown: String(e) }))`);

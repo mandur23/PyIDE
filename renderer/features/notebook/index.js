@@ -329,12 +329,15 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     let seq = 0;
     let buf = '';
     k.running = () => !!k.procId;
-    k.start = async (interp, cwd, paths) => {
+    // remote: {url, token, kernelId} of a Colab runtime's Jupyter server, where the kernel runs instead of the
+    // interpreter; kernelId, a kept kernel to reattach to.
+    k.start = async (interp, cwd, paths, remote = null) => {
       if (k.procId) return true;
       k.interp = interp;
       k.log = '';
       buf = '';
-      const id = await ide.api.invoke('notebook:start', interp, cwd, paths);
+      const id = remote ? await ide.api.invoke('notebook:startColab', cwd) : await ide.api.invoke('notebook:start', interp, cwd, paths);
+      if (remote) ide.proc.input(id, `${JSON.stringify({ op: 'connect', url: remote.url, token: remote.token, kernelId: remote.kernelId || null })}\n`);
       k.procId = id;
       ide.proc.attach(id, {
         data(text, stream) {
@@ -368,10 +371,11 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       k.send({ op, id, ...args });
       setTimeout(() => { if (pending.delete(id)) resolve(null); }, timeout);
     });
-    k.stop = () => {
+    // detach: a Colab kernel the notebook keeps goes on running on the runtime.
+    k.stop = ({ detach = false } = {}) => {
       const id = k.procId;
       if (!id) return;
-      k.send({ op: 'shutdown' });
+      k.send({ op: detach ? 'detach' : 'shutdown' });
       k.procId = null;
       for (const resolve of pending.values()) resolve(null);
       pending.clear();
@@ -395,6 +399,36 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     restarting: tr('Restarting kernel…'), dead: tr('Kernel died'), missing: tr('No kernel'), error: tr('Kernel error'), stopped: tr('Kernel stopped'),
   });
   let clipboard = null; // copied cells, shared by every notebook
+  // A Colab runtime spec key {variant, accelerator, shape} as "GPU T4" or "CPU (high RAM)".
+  const specLabel = (key = {}) => {
+    const variant = String(key.variant || '').replace(/^VARIANT_/, '') || 'CPU';
+    const accel = key.accelerator && key.accelerator !== 'NONE' ? ` ${key.accelerator}` : '';
+    return `${variant}${accel}${key.shape === 'SHAPE_HIGHMEM' ? ` (${tr('high RAM')})` : ''}`;
+  };
+  const tierLabel = (tier) => ({ SUBSCRIPTION_TIER_FREE: tr('Colab free'), SUBSCRIPTION_TIER_PRO: 'Colab Pro', SUBSCRIPTION_TIER_PRO_PLUS: 'Colab Pro+' }[tier] || '');
+  // Colab errors from main come as "{code} message" (main/features/notebook.js); the known codes get the notebook's
+  // own words, the rest Google's message.
+  const COLAB_ERRORS = {
+    login: 'The Google sign-in on this computer has expired or was revoked. Sign in again.',
+    UNAUTHENTICATED: 'The Google sign-in on this computer has expired or was revoked. Sign in again.',
+    http401: 'The Google sign-in on this computer has expired or was revoked. Sign in again.',
+    scope: 'The Google sign-in on this computer has no Colab permission. Sign in again to add it.',
+    adcType: 'The Google credentials on this computer are not a personal sign-in (a service account, for example). Sign in with Google to use Colab.',
+    network: 'Could not reach Google. Check the internet connection, then try again.',
+    quotaProject: 'Google wants a Google Cloud project for this sign-in\'s Colab requests (a quota project). Set one with: gcloud auth application-default set-quota-project PROJECT_ID',
+    PERMISSION_DENIED: 'Google refused Colab access for this account.',
+    http403: 'Google refused Colab access for this account.',
+    RESOURCE_EXHAUSTED: 'Colab cannot give this account that runtime right now (usage limits, or no machine free). Try another runtime, or try later.',
+    http429: 'Colab cannot give this account that runtime right now (usage limits, or no machine free). Try another runtime, or try later.',
+  };
+  const colabError = (e, code = '', message = cleanError(e)) => {
+    const m = /\{(\w+)\} ([\s\S]*)/.exec(message);
+    if (m) [code, message] = [m[1], m[2]];
+    return { code, message, text: COLAB_ERRORS[code] ? tr(COLAB_ERRORS[code]) : message };
+  };
+  // The Google sign-in page's address, from the one gcloud sign-in running, for the notebook that started it.
+  let onSignInUrl = null;
+  ide.api.on('colab:signInUrl', (url) => onSignInUrl?.(url));
 
   function mountNotebook(host, { path, doc, tab }) {
     host.classList.add('nb-host');
@@ -465,14 +499,18 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     tail.append(addTail('code', `+ ${tr('Code')}`), addTail('markdown', `+ ${tr('Markdown')}`));
 
     // ---------- kernel state ----------
+    // {name, key, expireTime, owned, keep, kernelId}: the Colab runtime the kernel runs on, null for the interpreter.
+    // keep: the runtime and its kernel stay when the notebook closes (Keep the Runtime), for it to reopen with.
+    let colab = null;
     const kernel = createKernel(onKernelEvent, onKernelExit);
     function setKernelState(state) {
       kernel.state = state;
       host.dataset.kernel = state;
       kernelDot.className = `nb-kernel-dot ${state}`;
       const label = STATE_LABELS()[state] || state;
-      kernelText.textContent = kernel.info && ['idle', 'busy'].includes(state) ? `Python ${kernel.info.version}: ${label}` : label;
-      kernelEl.title = kernel.info ? kernel.info.python : '';
+      const where = colab ? `Colab ${specLabel(colab.key)} · ` : '';
+      kernelText.textContent = kernel.info && ['idle', 'busy'].includes(state) ? `${where}Python ${kernel.info.version}: ${label}` : `${where}${label}`;
+      kernelEl.title = `${kernel.info ? `${kernel.info.python}\n` : ''}${tr('Click to choose where the kernel runs')}`;
       interruptBtn.disabled = state !== 'busy';
       // Starting or restarting shows as a background task in the status bar; Cancel stops the kernel.
       const starting = state === 'starting' || state === 'restarting';
@@ -483,6 +521,19 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     }
     let kernelTask = null;
     setKernelState('none');
+    const saveKeep = () => path && ide.api.invoke('colab:keep', path, colab?.keep ? { name: colab.name, key: colab.key, kernelId: colab.kernelId, owned: colab.owned } : null).catch(() => {});
+    // The runtime this notebook kept when it last closed comes back with it, its kernel and variables included, unless
+    // Colab has taken it back since.
+    if (path) {
+      ide.api.invoke('colab:kept', path).then(async (b) => {
+        if (!b || disposed || colab) return;
+        const gone = await ide.api.invoke('colab:get', b.name).then(() => false, (e) => ['NOT_FOUND', 'http404'].includes(colabError(e).code));
+        if (disposed || colab) return;
+        if (gone) { ide.api.invoke('colab:keep', path, null).catch(() => {}); return; }
+        colab = { name: b.name, key: b.key, owned: !!b.owned, keep: true, kernelId: b.kernelId };
+        setKernelState('none');
+      }).catch(() => {});
+    }
 
     function showBanner(kind, text, buttons = [], detail = '') {
       banner.className = `nb-banner ${kind}`;
@@ -505,6 +556,25 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
 
     async function ensureKernel() {
       if (kernel.running()) return true;
+      if (colab) {
+        hideBanner();
+        setKernelState('starting');
+        try {
+          const rt = await ide.api.invoke('colab:get', colab.name);
+          colab.expireTime = rt.connectionInfo?.expireTime;
+          await kernel.start(null, baseDir, [], { url: rt.connectionInfo?.url, token: rt.connectionInfo?.token, kernelId: colab.kernelId });
+        } catch (e) {
+          const err = colabError(e);
+          if (['NOT_FOUND', 'http404'].includes(err.code)) { runtimeGone(); return false; }
+          setKernelState('error');
+          showBanner('error', tr('Could not connect to the Colab runtime: {error}', { error: err.text }), [
+            { label: tr('Try Again'), primary: true, run: () => restartKernel() },
+            { label: tr('Use Local Python'), run: () => useLocal() },
+          ], err.text === err.message ? '' : err.message);
+          return false;
+        }
+        return true;
+      }
       const interp = ide.currentInterp();
       if (!interp) {
         showBanner('error', tr('No Python interpreter found. Choose one in Settings › Python Interpreter.'));
@@ -522,13 +592,34 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       return true;
     }
 
+    // Colab takes a runtime back when it sits idle or its time runs out; the notebook then has nowhere to run.
+    function runtimeGone() {
+      if (colab?.keep && path) ide.api.invoke('colab:keep', path, null).catch(() => {});
+      colab = null;
+      kernel.stop();
+      setKernelState('none');
+      showBanner('warn', tr('Colab took the runtime back (it was idle for too long, or its time ran out). Its variables are gone.'), [
+        { label: tr('New Colab Runtime…'), primary: true, run: () => connectColab() },
+        { label: tr('Use Local Python'), run: () => hideBanner() },
+      ]);
+    }
+
     function onKernelEvent(msg) {
       if (disposed) return;
       switch (msg.ev) {
         case 'ready':
           kernel.info = { python: msg.python, version: msg.version };
           setKernelState('idle');
+          // A kept runtime remembers its kernel, which a reopened notebook reattaches to.
+          if (colab && msg.kernelId) {
+            const reattached = colab.kernelId === msg.kernelId;
+            colab.kernelId = msg.kernelId;
+            if (colab.keep) saveKeep();
+            if (reattached) showBanner('info', tr('Reconnected to the kept Colab kernel: its variables are still there.'));
+          }
           break;
+        case 'colab': answerColab(msg); break;
+        case 'upload': showBanner('info', tr('Uploading {name} to the runtime… {percent}%', { name: msg.name, percent: msg.size ? Math.floor((msg.done / msg.size) * 100) : 100 })); break;
         case 'restarted':
           setKernelState('idle');
           break;
@@ -553,6 +644,13 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         case 'dead':
           setKernelState('dead');
           showBanner('error', tr('The kernel died. Restart it to run cells again.'), [{ label: tr('Restart Kernel'), primary: true, run: () => restartKernel() }]);
+          // On Colab the runtime itself may be gone, which a restart cannot fix.
+          if (colab) {
+            const name = colab.name;
+            ide.api.invoke('colab:get', name).catch((e) => {
+              if (colab?.name === name && ['NOT_FOUND', 'http404'].includes(colabError(e).code)) runtimeGone();
+            });
+          }
           break;
         case 'fatal':
           if (msg.kind === 'missing') offerInstall(msg.module, msg.python);
@@ -625,6 +723,198 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     function interrupt() {
       if (kernel.running()) kernel.send({ op: 'interrupt' });
     }
+
+    // ---------- where the kernel runs: the interpreter or a Colab runtime ----------
+    kernelEl.onclick = () => {
+      const r = kernelEl.getBoundingClientRect();
+      ide.ui.contextMenu(r.left, r.bottom + 2, [
+        { header: tr('Run the kernel on') },
+        { label: tr('Local Python ({name})', { name: ide.currentInterp()?.name || tr('none') }), checked: !colab, run: () => useLocal() },
+        { label: tr('Colab Runtime…'), checked: !!colab, run: () => connectColab() },
+        ...(colab ? [
+          { separator: true },
+          { label: tr('Upload Files to the Runtime…'), run: () => uploadFiles() },
+          { label: tr('Keep the Runtime When the Notebook Closes'), checked: !!colab.keep, disabled: !path, run: () => { colab.keep = !colab.keep; saveKeep(); } },
+          { label: tr('Release the Colab Runtime'), run: () => useLocal({ release: true }) },
+        ] : []),
+      ]);
+    };
+
+    async function useLocal({ release = false } = {}) {
+      const old = colab;
+      if (!old) return;
+      if (old.keep) { old.keep = false; await saveKeep(); }
+      colab = null;
+      kernel.stop();
+      setKernelState('none');
+      hideBanner();
+      if (release || old.owned) await ide.api.invoke('colab:release', old.name).catch(() => {});
+    }
+
+    // Local files into the runtime's working directory (/content), where the notebook's code finds them by name.
+    async function uploadFiles(files) {
+      files ||= await ide.api.invoke('colab:pickFiles', baseDir || ide.root || undefined).catch(() => []);
+      if (!files?.length || !colab) return;
+      if (!(await ensureKernel())) return;
+      const done = [];
+      for (const file of files) {
+        const r = await kernel.request('upload', { path: file }, 30 * 60000);
+        if (!r?.ok) {
+          showBanner('error', tr('Could not upload {name} to the runtime: {error}', { name: basename(file), error: r?.error || tr('no answer from the runtime') }));
+          return;
+        }
+        done.push(r.name);
+      }
+      showBanner('info', tr('Uploaded to the runtime: {names}', { names: done.join(', ') }));
+    }
+
+    // google.colab asks Colab's web page for things (colab_request) and waits for its answer. Secrets
+    // (userdata.get) come from the project's .env once the user allows each one for this notebook; Drive and Google
+    // sign-in need Colab's own page, so the code gets an error that says so instead of waiting for nothing.
+    async function answerColab(msg) {
+      const reply = (r) => kernel.send({ op: 'colabReply', msgId: msg.msgId, ...r });
+      if (msg.type === 'GetSecret') {
+        const key = String(msg.request?.key || '');
+        const cell = runs.get(msg.id);
+        const r = await ide.api.invoke('colab:secret', path || '', ide.root || '', key).catch(() => ({ exists: false }));
+        reply({ data: r });
+        if (r.exists && !r.access) {
+          showBanner('warn', tr('The notebook asks for the secret {key} (google.colab.userdata). Let it read the value of {key} from the project\'s .env?', { key }), [
+            { label: tr('Allow and Run Again'), primary: true, run: async () => {
+              await ide.api.invoke('colab:grantSecret', path || '', key);
+              hideBanner();
+              if (cell && cells.includes(cell)) runCell(cell, 'stay');
+            } },
+            { label: tr('Don\'t Allow'), run: () => hideBanner() },
+          ]);
+        } else if (!r.exists) {
+          showBanner('warn', tr('The notebook asks for the secret {key} (google.colab.userdata). Add {key}=... to the project\'s .env to give it one.', { key }));
+        }
+        return;
+      }
+      if (msg.type === 'request_auth') {
+        reply({ error: tr('PyIDE cannot do this: drive.mount() and auth.authenticate_user() get their Google credentials from Colab\'s own web page, which other apps cannot use. Use Upload Files to the Runtime (the notebook\'s kernel menu) for local files, or run this part on colab.research.google.com.') });
+        return;
+      }
+      reply({ error: tr('PyIDE does not support the Colab request "{type}".', { type: msg.type }) });
+    }
+
+    // Signing in to Google takes gcloud (main/notebook/colab.js): the banner installs it, then runs its sign-in, and the
+    // notebook carries on to the runtime list by itself. A newer banner, or closing the notebook, ends the older one's wait.
+    let signInSeq = 0;
+    function signInBanner(status, { installing = false } = {}) {
+      const seq = ++signInSeq;
+      if (status.gcloud) {
+        const reason = COLAB_ERRORS[status.errorCode];
+        showBanner('warn', reason ? tr(reason) : tr('Sign in with your Google account to use Colab runtimes.'), [
+          { label: tr('Sign In with Google'), primary: true, run: () => signIn() },
+          { label: tr('Copy Command'), run: () => navigator.clipboard.writeText(status.login || '').catch(() => {}) },
+        ], status.error || '');
+        return;
+      }
+      showBanner('warn', installing
+        ? tr('Installing the Google Cloud CLI. When it is done, the Google sign-in opens by itself.')
+        : tr('Colab runtimes need a Google sign-in, which goes through the Google Cloud CLI (gcloud). It is not installed yet.'), [
+        ...(installing ? [] : [{ label: tr('Install Google Cloud CLI'), primary: true, run: () => installGcloud(status) }]),
+        { label: tr('Download Page'), run: () => ide.api.invoke('shell:openExternal', status.install?.page) },
+      ]);
+      // However it gets installed, it is found once it is in place.
+      (async () => {
+        while (seq === signInSeq) {
+          await new Promise((r) => setTimeout(r, 3000));
+          if (seq !== signInSeq || !(await ide.api.invoke('colab:gcloud').catch(() => false)) || seq !== signInSeq) continue;
+          if (installing) signIn();
+          else signInBanner({ ...status, gcloud: true, error: '' });
+          return;
+        }
+      })();
+    }
+    function installGcloud(status) {
+      if (status.install?.command) {
+        ide.terminal?.open({ name: tr('Install Google Cloud CLI'), shell: 'powershell', command: status.install.command, projectless: true });
+      } else ide.api.invoke('shell:openExternal', status.install?.page);
+      signInBanner(status, { installing: true });
+    }
+    async function signIn() {
+      const seq = ++signInSeq;
+      const waiting = (url) => showBanner('info', tr('Finish signing in in your browser. The notebook carries on by itself.'), [
+        ...(url ? [{ label: tr('Open the Sign-in Page'), run: () => ide.api.invoke('shell:openExternal', url) }] : []),
+        { label: tr('Cancel'), run: () => ide.api.invoke('colab:cancelSignIn') },
+      ]);
+      waiting(null);
+      onSignInUrl = (url) => { if (seq === signInSeq) waiting(url); };
+      try { await ide.api.invoke('colab:signIn'); } catch (e) {
+        if (seq === signInSeq) showBanner('error', tr('The Google sign-in did not finish.'), [{ label: tr('Try Again'), primary: true, run: () => signIn() }], colabError(e).message);
+        return;
+      }
+      // Signed in, or cancelled: either way the status says what comes next.
+      if (seq === signInSeq) connectColab();
+    }
+
+    async function connectColab() {
+      const seq = ++signInSeq;
+      showBanner('info', tr('Checking the Google sign-in…'));
+      let status;
+      try { status = await ide.api.invoke('colab:status'); } catch (e) { status = { signedIn: false, gcloud: true, error: cleanError(e) }; }
+      if (seq !== signInSeq) return;
+      if (!status.signedIn && status.needsSignIn) { signInBanner(status); return; }
+      // Signed in, but the network or Google is in the way: signing in again would not help.
+      const failed = (e) => {
+        const err = colabError(e, status.errorCode, e ? cleanError(e) : status.error || '');
+        showBanner('error', tr('Colab: {error}', { error: err.text }), [{ label: tr('Try Again'), primary: true, run: () => connectColab() }], err.text === err.message ? '' : err.message);
+      };
+      if (!status.signedIn) { failed(null); return; }
+      let specs = [];
+      let existing = [];
+      try {
+        [specs, existing] = await Promise.all([ide.api.invoke('colab:specs'), ide.api.invoke('colab:runtimes')]);
+      } catch (e) {
+        failed(e);
+        return;
+      }
+      if (seq !== signInSeq) return;
+      hideBanner();
+      const items = [
+        ...existing.map((rt) => ({ label: tr('Use {name}', { name: rt.name.replace(/^runtimes\//, '') }), detail: specLabel(rt.runtimeSpec), value: { name: rt.name, key: rt.runtimeSpec } })),
+        ...specs.filter((s) => s.eligible !== false).map((s) => ({ label: tr('New runtime: {spec}', { spec: specLabel(s.key) }), detail: tierLabel(status.tier), value: { key: s.key } })),
+      ];
+      if (!items.length) { showBanner('warn', tr('Colab offers no runtime to this account right now.')); return; }
+      const placeholder = status.email ? tr('Colab runtime for this notebook ({email})', { email: status.email }) : tr('Colab runtime for this notebook');
+      const choice = await ide.ui.pick({ placeholder, items });
+      if (!choice) return;
+      let picked = choice;
+      if (!picked.name) {
+        showBanner('info', tr('Colab is assigning a runtime ({spec})…', { spec: specLabel(picked.key) }));
+        const task = ide.tasks?.start({ title: tr('Colab is assigning a runtime ({spec})…', { spec: specLabel(picked.key) }) });
+        try {
+          const rt = await ide.api.invoke('colab:create', picked.key);
+          picked = { name: rt.name, key: rt.runtimeSpec || picked.key, owned: true };
+        } catch (e) {
+          const err = colabError(e);
+          showBanner('error', tr('Colab: {error}', { error: err.text }), [{ label: tr('Choose Another Runtime'), primary: true, run: () => connectColab() }], err.text === err.message ? '' : err.message);
+          return;
+        } finally { task?.done(); }
+        // Closed while Colab was assigning it (that can take minutes): nobody would use it.
+        if (disposed) { ide.api.invoke('colab:release', picked.name).catch(() => {}); return; }
+      }
+      const old = colab;
+      colab = { name: picked.name, key: picked.key, owned: !!picked.owned };
+      kernel.stop();
+      setKernelState('none');
+      if (old?.keep) await saveKeep();
+      if (old?.owned && old.name !== colab.name) ide.api.invoke('colab:release', old.name).catch(() => {});
+      await ensureKernel();
+    }
+
+    // The runtime's proxy token lives for a short while: a new one is fetched before it runs out.
+    const tokenTimer = setInterval(async () => {
+      if (!colab || !kernel.running() || !colab.expireTime || Date.parse(colab.expireTime) - Date.now() > 5 * 60000) return;
+      try {
+        const rt = await ide.api.invoke('colab:get', colab.name);
+        colab.expireTime = rt.connectionInfo?.expireTime;
+        kernel.send({ op: 'token', token: rt.connectionInfo?.token });
+      } catch { /* the next tick tries again; the kernel reports when it is gone */ }
+    }, 60000);
 
     // ---------- cells ----------
     let modelSeq = 0;
@@ -1222,7 +1512,12 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         clearTimeout(reloadTimer);
         views.delete(authority);
         kernelTask?.done();
-        kernel.stop();
+        // A kept runtime stays, its kernel running, for the notebook to reopen with.
+        kernel.stop({ detach: !!colab?.keep });
+        clearInterval(tokenTimer);
+        signInSeq++;
+        // A runtime this notebook asked for uses the account's Colab compute while assigned: it goes with the notebook.
+        if (colab?.owned && !colab.keep) ide.api.invoke('colab:release', colab.name).catch(() => {});
         observer.disconnect();
         for (const c of cells) disposeCell(c);
         for (const d of disposers) (typeof d === 'function' ? d() : d.dispose());

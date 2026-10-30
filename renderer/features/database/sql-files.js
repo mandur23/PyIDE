@@ -110,7 +110,7 @@
   const placeholder = ide.keymap.text(el('div', 'db-placeholder muted'),
     () => tr('Statements run from SQL files show their results here. {action} runs the statement at the caret, or the selection.', { action: ide.keymap.withKeys(tr('Execute'), 'Database.RunStatement') }));
   const tw = ide.registerToolWindow({
-    id: 'DatabaseResults', title: tr('Query Results'), icon: '▦', side: 'bottom', order: 56,
+    id: 'DatabaseResults', title: tr('Query Results'), icon: '▦', iconName: 'database', side: 'bottom', order: 56,
     mount(container) { container.classList.add('db-file-results'); body = container; renderResults(); },
   });
   function renderEntry(entry) {

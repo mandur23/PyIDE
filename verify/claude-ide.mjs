@@ -84,7 +84,7 @@ try {
   check(denied.status === 401, 'a connection without the token is refused');
 
   // ---------- terminals carry the port ----------
-  await js(`ide.terminal.open({ name: 'env check' })`);
+  await js(`ide.terminal.open({ name: 'env check', shell: 'powershell' })`);
   await until(`ide.terminal.text().includes('PS ')`, 'prompt', 30000);
   await js(`ide.api.send('pty:write', { id: ide.terminal.active().id, data: 'echo "PORT=$env:CLAUDE_CODE_SSE_PORT"\\r' })`);
   await until(`ide.terminal.text().includes('PORT=${port}')`, 'env echo', 20000);

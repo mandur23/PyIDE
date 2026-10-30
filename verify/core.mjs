@@ -42,11 +42,11 @@ try {
 
   await press('Alt+F12');
   await until(`ide.toolWindows.get('Terminal').isVisible()`, 'terminal visible');
-  await until(`/PS .*project>/.test(ide.terminal.text())`, 'PowerShell prompt in the project folder', 20000);
-  await type('Get-ChildItem -Name');
+  await until(`/^[A-Z]:\\\\.*project>/m.test(ide.terminal.text())`, 'Command Prompt in the project folder', 20000);
+  await type('dir /b');
   await press('Enter');
   await until(`ide.terminal.text().includes('hello.py')`, 'terminal output');
-  check(true, 'terminal runs PowerShell in project folder');
+  check(true, 'terminal runs Command Prompt in the project folder');
 
   await js(`ide.editor.focus()`);
   await press('Ctrl+Shift+N');

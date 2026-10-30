@@ -359,6 +359,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/minecraft.mjs
+      - name: colab
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/colab.mjs
       - name: stress-minecraft-content
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

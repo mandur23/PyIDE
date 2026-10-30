@@ -4,6 +4,8 @@
   const XTERM = '../node_modules/@xterm';
   const LOAD_ENV_FILE = 'terminal.loadEnvFile';
   const SHELL = 'terminal.shell';
+  // Command Prompt has a name in each Windows language; the other shells' names are product names.
+  const shellLabel = (name) => (name === 'Command Prompt' ? tr('Command Prompt') : name);
 
   // xterm ships UMD bundles; with Monaco's AMD loader present they would register as AMD modules instead of globals.
   function loadScript(src) {
@@ -198,7 +200,7 @@
     let r;
     try {
       r = await ide.api.invoke('pty:create', {
-        shell: shell || ide.settings.get(SHELL, 'powershell'),
+        shell: shell || ide.settings.get(SHELL, 'cmd'),
         cwd: cwd || ide.root || undefined,
         ...size,
         command,
@@ -213,10 +215,10 @@
     // The shell could not start (not installed, unreachable target): say why instead of a tab stuck at "…".
     if (r.error) {
       s.exited = true;
-      s.name ??= r.shellName || shell || ide.settings.get(SHELL, 'powershell');
+      s.name ??= shellLabel(r.shellName) || shell || ide.settings.get(SHELL, 'cmd');
       if (s.closed) return s;
       const lines = r.error === 'shellNotFound'
-        ? [tr('The terminal could not start: {shell} was not found ({file}).', { shell: r.shellName, file: r.file }),
+        ? [tr('The terminal could not start: {shell} was not found ({file}).', { shell: shellLabel(r.shellName), file: r.file }),
           tr('Start another shell with New Session with… (▾), or choose the default shell in Settings › Terminal.')]
         : [tr('The terminal could not start: {message}', { message: r.error })];
       s.term.write(`\x1b[31m${lines[0]}\x1b[0m\r\n${lines.slice(1).map((l) => `${l}\r\n`).join('')}\x1b[90m${tr('Press Enter to close this tab.')}\x1b[0m\r\n`);
@@ -231,8 +233,8 @@
     s.pid = r.pid;
     if (r.host) localHost = String(r.host).toLowerCase();
     s.pane.dataset.session = r.id;
-    s.shellName = r.shellName;
-    s.name ??= r.shellName;
+    s.shellName = shellLabel(r.shellName);
+    s.name ??= s.shellName;
     renderTab(s.t);
     for (const d of pending) s.term.write(d);
     s.term.onData((data) => !s.exited && ide.api.send('pty:write', { id: s.id, data }));
@@ -566,7 +568,7 @@
         shells = shells.length ? shells : await ide.api.invoke('pty:shells');
         const r = pick.getBoundingClientRect();
         ide.ui.contextMenu(r.left, r.bottom, [
-          ...shells.map((sh) => ({ label: sh.name, hint: sh.id === ide.settings.get(SHELL, 'powershell') ? '✓' : '', run: () => createSession({ shell: sh.id }) })),
+          ...shells.map((sh) => ({ label: shellLabel(sh.name), hint: sh.id === ide.settings.get(SHELL, 'cmd') ? '✓' : '', run: () => createSession({ shell: sh.id }) })),
           { separator: true },
           { label: tr('Claude Code'), keyAction: 'ClaudeCode', run: openClaude },
         ]);
@@ -603,13 +605,13 @@
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Terminal'));
       // The shells found on this computer; the setting may name one that is gone, which is kept until changed.
-      const pick = ctx.ui.selectInput(SHELL, [], 'powershell');
+      const pick = ctx.ui.selectInput(SHELL, [], 'cmd');
       pick.id = 'terminalShell';
       s.appendChild(ctx.ui.fieldRow(tr('Default shell:'), pick));
       ide.api.invoke('pty:shells').then((list) => {
         shells = list;
-        const current = ctx.value(SHELL) ?? 'powershell';
-        for (const sh of list) pick.add(new Option(sh.name, sh.id));
+        const current = ctx.value(SHELL) ?? 'cmd';
+        for (const sh of list) pick.add(new Option(shellLabel(sh.name), sh.id));
         if (!list.some((sh) => sh.id === current)) pick.add(new Option(current, current));
         pick.value = current;
       }).catch(() => {});

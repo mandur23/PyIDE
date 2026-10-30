@@ -45,6 +45,13 @@ try {
   await until(`ide.terminal.text().toLowerCase().includes(${S(venvPython.toLowerCase())})`, 'cmd python', 15000)
     .then(() => check(true, 'python in Command Prompt is the venv\'s first'), async () => check(false, `where python: ${(await text()).slice(-400)}`));
 
+  const before = await js('ide.terminal.sessions().length');
+  await js(`(ide.terminal.open({}), true)`);
+  await until(`ide.terminal.sessions().length > ${before}`, 'default terminal');
+  await until(`/\\(\\.venv\\) [A-Z]:\\\\.*>/.test(ide.terminal.text())`, 'default terminal with (.venv)', 30000)
+    .then(() => check(true, 'a new terminal (Command Prompt by default) opens with the venv active'), async () => check(false, `default terminal: ${(await text()).slice(-600)}`));
+  check(await js('ide.terminal.active().name') === 'Command Prompt', `the default terminal is Command Prompt (${await js('ide.terminal.active().name')})`);
+
   await js(`(ide.settings.set('terminal.activateVenv', false), ide.terminal.open({ shell: 'powershell' }), true)`);
   await until(`/PS [A-Z]:.*>\\s*$/.test(ide.terminal.text())`, 'plain prompt', 30000);
   check(!/\(\.venv\)/.test(await text()), 'with "Activate virtualenv" off the terminal starts without the venv');

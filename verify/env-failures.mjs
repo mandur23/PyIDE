@@ -87,9 +87,9 @@ try {
   check(!updaterErrors.length, `failed update checks are not IDE internal errors (${S(updaterErrors)})`);
 
   // ---------- terminal: PATH without PowerShell's folder; a shell removed after it was detected ----------
-  await js(`ide.terminal.open({}).then(() => true)`);
+  await js(`ide.terminal.open({ shell: 'powershell' }).then(() => true)`);
   const psStarted = await until(`/PS [A-Za-z]:\\\\/.test(ide.terminal.text())`, 'PowerShell prompt', 25000).then(() => true, () => false);
-  check(psStarted, `the default PowerShell starts although PATH lacks its folder (${S((await js('ide.terminal.text()')).slice(-160))})`);
+  check(psStarted, `Windows PowerShell starts although PATH lacks its folder (${S((await js('ide.terminal.text()')).slice(-160))})`);
   const shells = await js(`ide.api.invoke('pty:shells').then((l) => l.map((s) => s.id + '=' + s.file))`);
   // where.exe names the file in long form, while TEMP may be an 8.3 short path (RUNNER~1 on GitHub runners).
   const pwshFile = shells.find((s) => s.startsWith('pwsh='))?.slice(5) || '';

@@ -3,6 +3,6 @@
   "name": "Jupyter Notebooks",
   "version": "1.0.0",
   "vendor": "PyIDE",
-  "description": "Opens .ipynb files as notebooks: code and Markdown cells, a Jupyter kernel in the project interpreter, rich outputs, and saving back to nbformat 4.",
+  "description": "Opens .ipynb files as notebooks: code and Markdown cells, a Jupyter kernel in the project interpreter or on a Colab runtime (GPU), rich outputs, and saving back to nbformat 4.",
   "main": ["notebook.js"]
 }

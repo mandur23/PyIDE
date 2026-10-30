@@ -549,7 +549,7 @@ await phase('github', async () => {
 let shellPids = [];
 await phase('terminal', async () => {
   const term = (id) => js(`ide.terminal.text(${id})`);
-  const prompt = (id) => until(`/PS .*>\\s*$/.test(ide.terminal.text(${id}).trimEnd())`, `prompt in pane ${id}`, 40000);
+  const prompt = (id) => until(`/(^|PS )[A-Z]:\\\\[^\\n]*>\\s*$/m.test(ide.terminal.text(${id}).trimEnd())`, `prompt in pane ${id}`, 40000);
   await press('Alt+F12');
   await until(`ide.terminal.sessions().length >= 1 && !!ide.terminal.sessions()[0].pid`, 'terminal session', 30000);
   const A = await js(`ide.terminal.sessions()[0].id`);

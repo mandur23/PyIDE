@@ -27,6 +27,8 @@ const names = (procs) => procs.map((p) => `${p.name}:${p.pid}`).join(', ');
 const procsAlive = (procs) => procs.length > 0 && procs.filter((p) => /powershell|pwsh|ping/i.test(p.name)).every((p) => alive(p.pid));
 
 const t = await launch({ fixture: 'core', port: 9210, name: 'terminal-split' });
+// The suite types PowerShell; Command Prompt is the default shell.
+await t.js("(ide.settings.set('terminal.shell', 'powershell'), true)");
 const { js, until, press, type, check, shot, cdp } = t;
 const send = (id, text) => js(`ide.terminal.send(${JSON.stringify(text)}, ${id})`);
 const text = (id) => js(`ide.terminal.text(${id})`);

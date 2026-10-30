@@ -28,6 +28,17 @@ const focused = () => js(`!!document.activeElement?.closest('[data-terminal]')`)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
+  // ---------- the default shell ----------
+  await press('Alt+F12');
+  await until(`ide.terminal.sessions().length === 1`, 'default session started');
+  await until(`/^[A-Z]:\\\\.*project>/m.test(ide.terminal.text())`, 'Command Prompt prompt in the project', 20000);
+  check(await js(`ide.terminal.sessions()[0].name`) === 'Command Prompt' && !/^PS /m.test(await text()), 'a new terminal opens Command Prompt by default');
+  // The rest of the suite types PowerShell.
+  await js(`(ide.settings.set('terminal.shell', 'powershell'), ide.terminal.close(), true)`);
+  await until(`!ide.terminal.sessions().some((s) => s.name === 'Command Prompt')`, 'default session closed');
+  await js(`(ide.toolWindows.get('Terminal').hide(), true)`);
+  await until(`ide.terminal.sessions().length === 0 || !ide.toolWindows.get('Terminal').isVisible()`, 'terminal hidden');
+
   // ---------- a real shell ----------
   await press('Alt+F12');
   await until(`ide.terminal.sessions().length === 1`, 'session started');

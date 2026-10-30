@@ -130,7 +130,7 @@ exports.register = ({ ipcMain, app }) => {
   ipcMain.handle('pty:create', async (e, opts = {}) => {
     opts = { ...opts, cwd: localDir(opts.cwd) ? opts.cwd : undefined };
     const known = await (shells ??= detectShells());
-    let shell = known.find((s) => s.id === opts.shell) || known.find((s) => s.id === 'powershell');
+    let shell = known.find((s) => s.id === opts.shell) || known.find((s) => s.id === 'cmd');
     let args = [...shell.args];
     let activation = null;
     let release;

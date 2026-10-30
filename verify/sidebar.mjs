@@ -13,7 +13,8 @@ try {
   const shown = await visibleButtons(a);
   check(all.length >= 12 && shown.length <= 8, `sidebar shows ${shown.length} of ${all.length} tool windows (${shown.join(', ')})`);
   check(['Project', 'Commit', 'Structure', 'Run', 'Debug', 'Terminal', 'Problems'].every((id) => shown.includes(id)), 'default pinned set: Project, Commit, Structure, Run, Debug, Terminal, Problems');
-  check(await a.js(`[...document.querySelectorAll('#stripe .stripe-btn')].every(b => !!b.querySelector('svg'))`), 'every sidebar button uses an SVG icon');
+  const noSvg = await a.js(`[...document.querySelectorAll('#stripe .stripe-btn')].filter(b => !b.querySelector('svg')).map(b => b.dataset.tool || b.id)`);
+  check(!noSvg.length, `every sidebar button uses an SVG icon${noSvg.length ? ` (not: ${noSvg.join(', ')})` : ''}`);
   check(await a.js(`(() => { const s = getComputedStyle(document.querySelector('#stripe .stripe-btn[data-tool="Run"] svg')); return s.width === '20px'; })()`), 'icons are 20px like PyCharm New UI');
   check(await a.js(`[...document.querySelectorAll('.bottom-tab')].filter(t => !t.classList.contains('hidden')).length`) <= 5, 'bottom panel tabs follow the sidebar instead of listing every window');
 
