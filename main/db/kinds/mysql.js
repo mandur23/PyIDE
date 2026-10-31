@@ -27,7 +27,8 @@ const COMPLETION = {
   dataTypes: list('TINYINT, SMALLINT, MEDIUMINT, INT, BIGINT, DECIMAL, FLOAT, DOUBLE, BIT, BOOLEAN, CHAR, VARCHAR, BINARY, VARBINARY, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT, BLOB, MEDIUMBLOB, LONGBLOB, ENUM, SET, DATE, TIME, DATETIME, TIMESTAMP, YEAR, JSON, GEOMETRY, POINT'),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, pushCursor, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, pushCursor, NETWORK_FIELDS, SSL_FIELD, tlsOptions, sslFailure }) => {
+  const FIELDS = [...NETWORK_FIELDS, SSL_FIELD];
   // Export Data's values: numbers as the server's text ({$number}), binary (BLOB, BINARY, BIT) as a Buffer, the rest as
   // the driver gives it (dates as text: dateStrings).
   const NUMERIC = new Set(['DECIMAL', 'NEWDECIMAL', 'TINY', 'SHORT', 'LONG', 'INT24', 'LONGLONG', 'FLOAT', 'DOUBLE', 'YEAR']);
@@ -40,8 +41,8 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
   async function openMysql(cfg, { onLost = () => {} } = {}) {
     const mysql = loadPackage('mysql2', 'mysql2/promise');
     const options = { host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database || undefined,
-      connectTimeout: 10000, supportBigNumbers: true, bigNumberStrings: true, dateStrings: true };
-    const conn = await mysql.createConnection(options);
+      connectTimeout: 10000, supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, ssl: tlsOptions(cfg, { namesOnly: true }) };
+    const conn = await mysql.createConnection(options).catch((err) => { throw sslFailure(err, cfg); });
     conn.on('error', onLost);
     conn.on('end', () => onLost(new Error('Connection closed')));
     return {
@@ -138,8 +139,8 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
   return {
     packages: { mysql2: 'mysql2@3' },
     kinds: {
-      mysql: { label: 'MySQL', order: 30, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
-      mariadb: { label: 'MariaDB', order: 31, package: 'mysql2', defaultPort: 3306, fields: NETWORK_FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
+      mysql: { label: 'MySQL', order: 30, package: 'mysql2', defaultPort: 3306, fields: FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
+      mariadb: { label: 'MariaDB', order: 31, package: 'mysql2', defaultPort: 3306, fields: FIELDS, quote: '`', sqlDialect: 'mysql', implicitSchemas: [], open: openMysql, ui: { completion: COMPLETION } },
     },
   };
 };

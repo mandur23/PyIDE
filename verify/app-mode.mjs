@@ -69,12 +69,18 @@ async function page(port, match, ms = 30000) {
 async function pages(port) {
   try { return (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).filter((x) => x.type === 'page').map((x) => x.url); } catch { return []; }
 }
+const cspViolations = [];
 async function connect(target) {
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.addEventListener('open', r); ws.addEventListener('error', j); });
   let seq = 0;
   const pending = new Map();
-  ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data); pending.get(msg.id)?.(msg); pending.delete(msg.id); });
+  ws.addEventListener('message', (m) => {
+    const msg = JSON.parse(m.data);
+    pending.get(msg.id)?.(msg);
+    pending.delete(msg.id);
+    if (msg.method === 'Log.entryAdded' && /Content Security Policy/i.test(msg.params.entry.text)) cspViolations.push(msg.params.entry.text);
+  });
   ws.addEventListener('close', () => { for (const r of pending.values()) r({}); pending.clear(); });
   const cdp = (method, params = {}) => new Promise((r) => {
     if (ws.readyState !== WebSocket.OPEN) return r({});
@@ -82,6 +88,7 @@ async function connect(target) {
     pending.set(id, r);
     ws.send(S({ id, method, params }));
   });
+  await cdp('Log.enable');
   const js = async (expr) => (await cdp('Runtime.evaluate', { expression: `(async () => (${expr}))()`, awaitPromise: true, returnByValue: true })).result?.result?.value;
   const until = async (expr, label, ms = 30000) => {
     const end = Date.now() + ms;
@@ -252,6 +259,7 @@ try {
   console.log(`FAIL ${err.stack || err}`);
   results.push(false);
 }
+check(!cspViolations.length, `no Content-Security-Policy violations on the chooser and in the windows it opens${cspViolations.length ? `: ${cspViolations.join(' | ')}` : ''}`);
 // Before verify/lib.mjs removes the temporary folders these instances use.
 for (const pid of procs) try { execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); } catch {}
 procs.clear();

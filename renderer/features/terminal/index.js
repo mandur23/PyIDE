@@ -423,6 +423,7 @@
           const end = at(m.index + m[0].length - 1);
           if (y < start.y || y > end.y) continue;
           const raw = m[1] || m[3];
+          if (!ide.mayFollowPath(raw)) continue;
           const lineNo = Number(m[2] || m[4]);
           const col = Number(m[5]) || 1;
           links.push({

@@ -5,7 +5,7 @@
 // caches) and Nano Studio\ is the new user data. The first start copies what the design lists and the trusted
 // projects, leaves logs and caches, says
 // "PyIDE 설정을 가져왔어요" once, and changes nothing in PyIDE\; the second start imports and says nothing.
-// The real %APPDATA%\PyIDE is never read. Usage: node verify/rename-migration.mjs (CDP ports 9905-9906).
+// The real %APPDATA%\PyIDE is never read. Usage: node verify/rename-migration.mjs (CDP ports 9905-9907).
 import { createHash } from 'crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
@@ -96,6 +96,7 @@ function snapshot(dir) {
   check(J(b1?.failed) === J(['plugins']) && b1.copied.includes('settings.json') && J(readJson(path.join(blocked, MARKER)).failed) === J(['plugins']),
     `an item that cannot be copied is recorded as failed in the marker (${J(b1)})`);
   const shown = takeNotice(blocked);
+  check(J(shown?.failed) === J(['plugins']), `the notice names what could not be copied (${J(shown)})`);
   write(path.join(blocked, 'settings.json'), J({ 'editor.fontSize': 30 }));
   rmSync(path.join(blocked, 'plugins'));
   const b2 = migrate(blocked, { log: quiet });
@@ -105,6 +106,17 @@ function snapshot(dir) {
   `the next start copies what failed, and only that: settings changed since stay (${J(b2)}, ${J(m2)})`);
   check(shown && m2.noticeShown === true && takeNotice(blocked) === null && migrate(blocked, { log: quiet }) === null,
     'the retry does not show the notice again, and once everything is copied later starts import nothing');
+
+  const partly = path.join(base, 'partly', 'Nano Studio');
+  const partlyFrom = path.join(base, 'partly', 'PyIDE');
+  write(path.join(partlyFrom, 'settings.json'), J({ 'editor.fontSize': 15 }));
+  write(path.join(partlyFrom, 'plugins', 'p', 'kept.txt'), 'from PyIDE');
+  write(path.join(partlyFrom, 'plugins', 'p', '자료', '설명.txt'), 'nested');
+  write(path.join(partly, 'plugins', 'p', 'kept.txt'), 'already here');
+  const merged = migrate(partly, { log: quiet });
+  check(merged?.failed.length === 0 && readFileSync(path.join(partly, 'plugins', 'p', 'kept.txt'), 'utf8') === 'already here'
+    && readFileSync(path.join(partly, 'plugins', 'p', '자료', '설명.txt'), 'utf8') === 'nested',
+  `a plugin folder that is partly there keeps its files and gets the rest (${J(merged)})`);
 }
 
 // ---------- the real app ----------
@@ -179,6 +191,22 @@ if (!failedEarly) {
   t2.close();
 }
 check(J(snapshot(legacy)) === J(before), 'after both starts the PyIDE folder is as it was');
+
+// A Korean Windows user name: fs.cpSync ended the whole process on such a path under Electron 38, at every first start.
+const koRoaming = path.join(tempDir('rename-ko'), '김민수', 'AppData', 'Roaming');
+const koUserData = path.join(koRoaming, 'Nano Studio');
+const koPlugin = path.join(koRoaming, 'PyIDE', 'plugins', 'ko-probe');
+write(path.join(koRoaming, 'PyIDE', 'settings.json'), J({ 'editor.fontSize': 19 }));
+write(path.join(koPlugin, 'plugin.json'), J({ id: 'ko-probe', name: 'Korean Probe', version: '1.0.0', vendor: 'Nano Studio tests', description: 'Comes over from a Korean path.', renderer: 'index.js' }));
+write(path.join(koPlugin, 'index.js'), 'window.__koProbe = true;\n');
+write(path.join(koPlugin, '자료', '설명.txt'), '한글 파일\n');
+try {
+  const k = await launch({ fixture: 'core', port: 9907, name: 'rename-migration-ko', userData: koUserData });
+  check(await k.js(`ide.settings.get('editor.fontSize')`) === 19, 'Electron starts on a user data path with Korean characters and imports the settings');
+  check(await k.js(`window.__koProbe === true`), 'the plugin folder came over on that path and loads');
+  check(readFileSync(path.join(koUserData, 'plugins', 'ko-probe', '자료', '설명.txt'), 'utf8') === '한글 파일\n', 'with its Korean folder and file names');
+  k.close();
+} catch (err) { check(false, `Korean path: ${err.message.split('\n')[0]}`); }
 
 const consoleErrors = t.consoleErrors;
 if (consoleErrors.length) console.log(`renderer exceptions:\n  ${consoleErrors.join('\n  ')}`);

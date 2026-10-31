@@ -1,7 +1,9 @@
 // The online plugin Marketplace: an index.json (format 1) that lists plugin .zip files with their sha256 and size.
 // It is read from an https URL, from http on this computer (127.0.0.1, localhost), or from a local folder or file
 // (a path or file: URL). Everything in it is checked here, at the boundary; the rest of the IDE trusts parseIndex's
-// result. scripts/marketplace.mjs writes the index and the zips.
+// result. scripts/marketplace.mjs writes the index, its detached signature index.json.sig and the zips. Plugins run with
+// the app's access and the zips' hashes live in the index, so the default index must match its signature
+// (main/release-key.js). A user's own index may be unsigned: its entries then carry signed: false.
 //
 // {
 //   "format": 1,
@@ -18,10 +20,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { fileURLToPath, pathToFileURL } = require('url');
+const release = require('./release-key');
 
 const FORMAT = 1;
 const DEFAULT_URL = 'https://raw.githubusercontent.com/mandur23/PyIDE/master/marketplace/index.json';
 const MAX_INDEX = 1024 * 1024;
+const MAX_SIGNATURE = 1024;
 const MAX_PLUGIN = 20 * 1024 * 1024;
 const MAX_PLUGINS = 500;
 const TIMEOUT = 15000;
@@ -185,8 +189,23 @@ async function readUrl(href, max) {
   return Buffer.concat(chunks);
 }
 
+async function readSignature(source) {
+  const u = new URL(source.href);
+  u.pathname += '.sig';
+  return (await readUrl(u.href, MAX_SIGNATURE)).toString('utf8');
+}
+
+// parseIndex's entries, each with signed: whether the index matches its signature. Only the default URL requires it.
 async function fetchIndex(source) {
-  return parseIndex((await readUrl(source.href, MAX_INDEX)).toString('utf8'), source.href);
+  const raw = await readUrl(source.href, MAX_INDEX);
+  const required = source.href === DEFAULT_URL;
+  const signature = await readSignature(source).catch((err) => {
+    if (required) throw new Error(`The Marketplace index has no signature (${err.message})`);
+    return null;
+  });
+  const signed = signature !== null && await release.verify(raw, signature);
+  if (required && !signed) throw new Error('The Marketplace index does not match its signature');
+  return parseIndex(raw.toString('utf8'), source.href).map((entry) => ({ ...entry, signed }));
 }
 
 // A listed plugin's .zip, checked against the index's size and sha256 before anything is unpacked.
@@ -198,4 +217,4 @@ async function download(entry) {
   return body;
 }
 
-module.exports = { FORMAT, compareVersions, resolveSource, defaultSource, parseIndex, fetchIndex, download };
+module.exports = { FORMAT, DEFAULT_URL, compareVersions, loopback, resolveSource, defaultSource, parseIndex, fetchIndex, download };

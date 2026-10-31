@@ -2,17 +2,18 @@
 //   npm run release -- <version> [--dry-run [--no-build]] [--skip-tests] [--notes <file>] [--replace-local-install]
 //   npm run release -- <version> --publish-only [--dry-run] [--notes <file>]
 // 1. checks: clean tree on master, local master contains origin's, a semver version above package.json's, no tag v<v>
-//    here or on origin, release notes, gh signed in
+//    here or on origin, release notes, the release key (NANO_RELEASE_KEY, by default
+//    %USERPROFILE%\.nano-studio\release-key.pem) matching main/release-key.js, a signed Marketplace index, gh signed in
 // 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml (beta.yml)
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
-// 7. publishes to the `nano-studio` release of mandur23/Portfolio-Nano- (never marked Latest): the installers and the exe's
-//    blockmap, title and notes, then latest.yml and beta.yml (the update feed switches here), then deletes older
-//    versions' files except the previous versions' blockmaps, which installed copies of those versions need for a
-//    differential update
+// 7. publishes to the `nano-studio` release of mandur23/Portfolio-Nano- (never marked Latest): the installers, their
+//    <installer>.sig and the exe's blockmap, title and notes, then latest.yml and beta.yml (the update feed switches
+//    here), then deletes older versions' files except the previous versions' blockmaps, which installed copies of those
+//    versions need for a differential update
 // 8. reads the feed back
 // A beta (x.y.z-beta.N, which electron-builder builds with dist/beta.yml instead of latest.yml) goes only to beta
-// installs: step 7 uploads its installers and blockmap and then beta.yml, and leaves latest.yml, NanoStudio-Setup.exe, the
+// installs: step 7 uploads its installers, signatures and blockmap and then beta.yml, and leaves latest.yml, NanoStudio-Setup.exe, the
 // title, the notes and every stable version's files alone. A stable release writes beta.yml too (a copy of latest.yml),
 // so beta installs get it, unless the release holds a newer beta.
 // Nothing is uploaded before the push and the feed switches last, so a stop leaves one clear way on; the error says which.
@@ -27,10 +28,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { gunzipSync } from 'zlib';
+import { loadSigner } from './signing.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
 // The app's own version order (semver: 0.2.5-beta.1 < 0.2.5), so the release and installed copies agree.
-const { compareVersions: compare } = createRequire(import.meta.url)('../main/features/updater.js');
+const { compareVersions: compare } = require('../main/features/updater.js');
+const release = require('../main/release-key.js');
 const REPO = 'mandur23/Portfolio-Nano-';
 const TAG = 'nano-studio';
 const FEED = `https://github.com/${REPO}/releases/download/${TAG}/`;
@@ -238,8 +242,8 @@ function releaseAssets() {
   const r = sh('gh', ['release', 'view', TAG, '-R', REPO, '--json', 'assets', '--jq', '.assets[].name'], { capture: true, allowFail: true });
   return r.status === 0 ? r.out.split(/\r?\n/).filter(Boolean) : null;
 }
-// The version of an installer or blockmap asset, or null (NanoStudio-Setup.exe, latest.yml and beta.yml are replaced, not deleted).
-const assetVersion = (name) => (/^NanoStudio-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^NanoStudio-(.+)\.msi(\.blockmap)?$/.exec(name))?.[1] ?? null;
+// The version of an installer, its signature or blockmap, or null (NanoStudio-Setup.exe, its signature, latest.yml and beta.yml are replaced, not deleted).
+const assetVersion = (name) => (/^NanoStudio-Setup-(.+)\.exe(\.blockmap|\.sig)?$/.exec(name) || /^NanoStudio-(.+)\.msi(\.blockmap|\.sig)?$/.exec(name))?.[1] ?? null;
 const versionsOn = (assets) => [...new Set(assets.map(assetVersion).filter((x) => x && VERSION.test(x)))].sort(compare);
 // The version installed copies run until this release: the newest stable one (with beta, the newest beta) below v.
 export function previousVersion(assets, v, beta = false) {
@@ -289,6 +293,26 @@ function distProblem({ exe, blockmap, msi, yml: ymlFile }, v) {
   try { length = blockmapLength(blockmap); } catch {}
   if (length !== exeBytes.length) return `dist/${path.basename(blockmap)} does not describe dist/${path.basename(exe)} (${length ?? 'unreadable'} vs ${exeBytes.length} bytes)`;
   return null;
+}
+
+// ---------- signing ----------
+// Set by checkSigningKey in step 1, used in step 7.
+let sign = null;
+function checkSigningKey() {
+  try {
+    sign = loadSigner(io);
+    log('  the release key matches main/release-key.js');
+  } catch (err) {
+    blocker(err.message);
+  }
+}
+// The copies this release ships refuse the default Marketplace index unless it is signed, and step 6 pushes it to the
+// master branch they read before step 7 offers them.
+async function checkMarketplaceSignature() {
+  const index = path.join(ROOT, 'marketplace', 'index.json');
+  const signature = `${index}.sig`;
+  if (io.existsSync(signature) && await release.verify(Buffer.from(io.readFileSync(index)), io.readFileSync(signature, 'utf8'))) log('  marketplace/index.json matches its signature');
+  else blocker('marketplace/index.json.sig is missing or does not match the index: run npm run marketplace:sign and commit it, or installed copies refuse the Marketplace');
 }
 
 // ---------- local install ----------
@@ -436,6 +460,8 @@ async function main() {
   const notes = releaseNotes(V);
   if (notes) log(`  release notes: ${notes.source}`);
   else blocker(noNotes());
+  checkSigningKey();
+  await checkMarketplaceSignature();
   checkGh();
   if (!opts.skipTests && io.existsSync(LOCAL_UNINSTALLER) && !opts.replace) {
     fail(`Nano Studio is installed per-user in ${INSTALL_DIR}, where the installer tests install and then remove the MSI build.\n`
@@ -523,6 +549,7 @@ async function publishOnly() {
   const notes = releaseNotes(V);
   if (notes) log(`  release notes: ${notes.source}`);
   else blocker(noNotes());
+  checkSigningKey();
   checkGh();
   state.pushed = !dryRun;
   await publish(files, notes);
@@ -546,6 +573,12 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
   // The channel files, uploaded last. A stable release points beta.yml at itself too (beta installs get every stable
   // release), unless the release holds a newer beta for them.
   const feedFiles = [yml];
+  // A signature of the file's exact bytes. It goes up with its installer, before the channel files can name it.
+  const signature = (file) => {
+    const out = path.join(stage, `${path.basename(file)}.sig`);
+    if (!dryRun) io.writeFileSync(out, sign(io.readFileSync(file)));
+    return out;
+  };
   try {
     if (!beta) {
       const ahead = liveBeta(assets);
@@ -557,7 +590,7 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
     }
     // The blockmap goes up with the exe, before the channel files: an update to this version reads it first.
     if (beta) {
-      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), '-R', REPO, '--clobber']);
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
       log('  NanoStudio-Setup.exe, the title and the notes stay as they are (they belong to the stable version)');
     } else {
@@ -565,7 +598,7 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
       const notesFile = path.join(stage, 'notes.md');
       if (!dryRun) io.copyFileSync(exe, stable);
       io.writeFileSync(notesFile, notes?.text || '');
-      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), stable, '-R', REPO, '--clobber']);
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), signature(stable), stable, '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
       act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `Nano Studio ${V}`, '--notes-file', notesFile, '--latest=false']);
       if (dryRun) log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);

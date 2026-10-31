@@ -63,8 +63,13 @@
     message(tr('Update Available'), text, buttons, () => { if (announced === entry) announced = null; });
   }
   // What main threw, without Electron's "Error invoking remote method '…': Error: " prefix.
-  const reasonOf = (err) => (/ETIMEDOUT: the update server/.test(String(err?.message || err))
-    ? tr('The update server did not answer. Check your internet connection or proxy settings.') : ide.util.errorText(err));
+  const reasonOf = (err) => {
+    const text = String(err?.message || err);
+    if (/ETIMEDOUT: the update server/.test(text)) return tr('The update server did not answer. Check your internet connection or proxy settings.');
+    if (text.includes('UPDATE_SIGNATURE:')) return tr('The update was refused because its signature could not be verified. Nano Studio stays on the current version.');
+    if (text.includes('INSECURE_FEED:')) return tr('An update feed on another computer must use https. Plain http works only on this computer.');
+    return ide.util.errorText(err);
+  };
   const skip = (version) => ({ label: tr('Skip This Version'), run: () => ide.settings.set(SKIPPED, version) });
   const later = { label: tr('Later') };
 
@@ -123,7 +128,9 @@
   function offerRestart() {
     if (restartDialog) return;
     const version = state.available;
-    restartDialog = message(tr('Update Ready'), tr('Nano Studio {version} has been downloaded. Restart Nano Studio to install it.', { version }), [
+    const lines = [tr('Nano Studio {version} has been downloaded. Restart Nano Studio to install it.', { version })];
+    if (state.signature === 'unchecked') lines.push(tr('This update comes from a local feed, so its signature was not checked.'));
+    restartDialog = message(tr('Update Ready'), lines, [
       { label: tr('Restart to Update'), primary: true, run: restart }, skip(version), later]);
     const close = restartDialog.close;
     restartDialog.close = () => { restartDialog = null; close(); };
@@ -251,7 +258,7 @@
   // ---------- Settings > Updates ----------
   (ide.settingsPages ||= []).push({
     id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS, craft: true,
-    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta channel beta stable 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주 채널 베타 안정',
+    keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta channel beta stable signature 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주 채널 베타 안정 서명',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Updates'));
       const auto = el('div', 'upd-auto');
@@ -270,7 +277,7 @@
       };
       const feedRow = el('div', 'upd-feed-row');
       feedRow.append(input, browse);
-      s.appendChild(ctx.ui.fieldRow(tr('Update feed:'), feedRow, tr('An http(s) URL or a local folder with latest.yml. Leave it empty to turn updates off.')));
+      s.appendChild(ctx.ui.fieldRow(tr('Update feed:'), feedRow, tr('An https URL, or a local folder with latest.yml. Leave it empty to turn updates off. An https feed must carry Nano Studio signatures; a folder on this computer is not checked.')));
       s.appendChild(ctx.ui.fieldRow(tr('Update channel:'), ctx.ui.selectInput(CHANNEL, [['stable', tr('Stable')], ['beta', tr('Beta')]], 'stable'),
         tr('Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.')));
       s.appendChild(ctx.ui.checkbox(DIFFERENTIAL, tr('Download only the changed parts of an update when possible')));

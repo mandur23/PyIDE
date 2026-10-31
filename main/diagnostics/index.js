@@ -183,9 +183,9 @@ function markRead() { for (const e of errors) e.read = true; broadcast(); }
 
 // ---------- sidecar processes ----------
 // Logs a helper process's stderr and reports it as an internal error when it exits unexpectedly: not killed by the
-// IDE, not while quitting, and with a non-zero exit code. The owning plugin comes from the caller's stack.
-function watchProcess(proc, { name, plugin } = {}) {
-  const owner = plugin || ownerOfStack(new Error().stack);
+// IDE, not while quitting, and with a non-zero exit code. The owning plugin comes from `stack`, by default the caller's.
+function watchProcess(proc, { name, plugin, stack = new Error().stack } = {}) {
+  const owner = plugin || ownerOfStack(stack);
   const label = name || path.basename(proc.spawnfile || 'process');
   const log = logger(`#sidecar.${label}`);
   const tail = [];

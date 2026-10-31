@@ -104,8 +104,7 @@ await until(`!${typos}.includes('coment')`, 'coment marker removed');
 check((await js(`ide.settings.get('spellcheck.userWords')`)).includes('coment'), 'Save to user dictionary removes the marker and stores the word in the settings');
 
 await js('ide.settings.flush()');
-await ctx.cdp('Page.reload');
-await until('window.__ideReady === true', 'IDE ready after reload', 30000);
+await ctx.reload();
 await openFile(ctx, 'typo.py');
 await settle('typo.py after reload', `${typos}.includes('mispeled')`);
 found = await js(typos);

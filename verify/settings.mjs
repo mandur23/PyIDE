@@ -1,10 +1,14 @@
 // Settings dialog layout, validation, language switching and plugin management, including what survives a restart.
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { launch, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
+const { createPluginManager } = createRequire(import.meta.url)('../main/plugin-manager.js');
+const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const navRows = (t) => t.js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|')`);
@@ -123,6 +127,38 @@ try {
   await a.click('#pluginUninstallBtn');
   await a.until(`!document.querySelector('#pluginsList .plugin-row[data-id="key-promoter"]')`, 'uninstalled');
   check(true, 'uninstall removes a downloaded plugin');
+
+  // Install Plugin from Disk asks as a download does (the file chooser is a native dialog, so its answer is set here),
+  // and an installed plugin cannot make itself required.
+  const localRoot = mkdtempSync(path.join(tmpdir(), 'pyide-settings-plugin-'));
+  const local = path.join(localRoot, 'plugins', 'local-tool');
+  mkdirSync(local, { recursive: true });
+  writeFileSync(path.join(local, 'plugin.json'), JSON.stringify({ id: 'local-tool', name: 'Local Tool', version: '1.0.0', vendor: 'Nobody', description: 'Says it is required.', required: true }));
+  writeFileSync(path.join(local, 'index.js'), '');
+  await a.js(`(() => { const real = ide.api.invoke; ide.api.invoke = (c, ...r) => (c === 'dialog:openPlugin' ? Promise.resolve(${JSON.stringify(local)}) : real(c, ...r)); return true; })()`);
+  const fromDisk = async () => {
+    await a.click('#pluginsGear');
+    await a.until(`!!document.querySelector('#pluginsGearMenu .menu-item')`, 'gear menu');
+    await a.js(`[...document.querySelectorAll('#pluginsGearMenu .menu-item')].find(n => n.textContent === 'Install Plugin from Disk…').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+    await a.until(`!!document.querySelector('#pluginTrustDialog')`, 'trust dialog for a local plugin');
+  };
+  await fromDisk();
+  const asked = await a.js(`document.querySelector('#pluginTrustDialog').textContent`);
+  check(asked.includes('Install Third-Party Plugin') && asked.includes(local) && asked.includes('same access as Nano Studio'), 'Install Plugin from Disk names the source and warns that plugins are code');
+  await a.shot('plugin-from-disk.png');
+  await a.js(`[...document.querySelectorAll('#pluginTrustDialog .dialog-buttons button')].find(b => b.textContent === 'Cancel').click()`);
+  await a.until(`!document.querySelector('#pluginTrustDialog')`, 'trust dialog closed');
+  check(!(await a.js(`ide.api.invoke('plugins:list')`)).some((p) => p.id === 'local-tool'), 'Cancel installs nothing');
+  await fromDisk();
+  await a.click('#pluginTrustDialog .dialog-buttons .primary');
+  await a.until(`!!document.querySelector('#pluginsList .plugin-row[data-id="local-tool"]')`, 'local plugin installed');
+  check(await a.js(`!document.querySelector('#pluginsList .plugin-row[data-id="local-tool"] .plugin-toggle').disabled`), 'an installed plugin marked required can be turned off on the page');
+  const manager = (mode) => createPluginManager({ appDir: APP_DIR, userDataDir: localRoot, mode });
+  check(manager('code').list().find((p) => p.id === 'local-tool')?.required === false, 'required in an installed plugin.json is ignored');
+  check(manager('code').setEnabled('local-tool', false).find((p) => p.id === 'local-tool').enabled === false, 'turning it off holds');
+  check(!manager('craft').list().some((p) => p.id === 'local-tool'), 'it loads only in its own modes');
+  check(manager('code').list().find((p) => p.id === 'run')?.required === true, 'bundled required plugins stay required');
+  await a.js(`ide.api.invoke('plugins:uninstall', 'local-tool')`);
   check(await a.js(`!document.querySelector('.settings-restart-note').classList.contains('hidden')`), 'footer says a restart is required');
   await a.shot('plugins.png');
 

@@ -184,9 +184,7 @@ try {
   // ---------- history survives a reload ----------
   await js('ide.saveAll()');
   await js('ide.aiChat.saved()');
-  await cdp('Page.reload');
-  await sleep(1500);
-  await until('window.__ideReady === true', 'IDE ready after reload', 40000);
+  await t.reload();
   await until(`ide.aiChat.state().messages.length === 2`, 'history loaded', 10000);
   const st4 = await state();
   check(st4.messages[0].text === `@utils/helpers.py ${question}` && st4.messages[1].text === REPLY && st4.messages[0].context.some((c) => c.kind === 'selection' && c.startLine === 1),

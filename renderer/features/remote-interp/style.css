@@ -14,3 +14,4 @@
 .remote-list { display: grid; gap: 6px; }
 .remote-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
 .remote-row-name, .remote-row-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-hostkey-print { font-family: var(--mono, monospace); user-select: text; overflow-wrap: anywhere; }

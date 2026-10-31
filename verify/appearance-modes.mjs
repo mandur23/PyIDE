@@ -235,9 +235,7 @@ try {
   await until(`ide.appearanceModes.mode() === 'zen'`, 'zen before reload');
   await until(`ide.api.invoke('appearance-modes:isFullScreen')`, 'zen full screen before reload', 8000).catch(() => {});
   check(await isFull(t), 'zen is full screen before the reload');
-  await t.cdp('Page.reload');
-  await sleep(500);
-  await until('window.__ideReady === true', 'IDE ready after reload', 30000);
+  await t.reload();
   await until(`ide.api.invoke('appearance-modes:isFullScreen').then(v => !v)`, 'full screen left after reload', 8000).catch(() => {});
   check(!(await isFull(t)) && (await mode(t)) === null, 'after a reload in Zen Mode the window is out of full screen and no mode is on');
 } catch (err) {

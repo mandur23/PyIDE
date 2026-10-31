@@ -1,15 +1,25 @@
 // Updates from source: Help > Check for Updates… with no feed, a local folder feed with a newer version, the same
 // version, and a feed that cannot be read; the Settings > Updates page; a skipped version; the status bar text of a
 // differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); the Stable and Beta channels
-// (port 9070) and the version order and What's New sections of betas (pure Node); and the Korean strings.
+// (port 9070) and the version order and What's New sections of betas (pure Node); installer signatures and which feeds
+// are accepted (a windowless Electron with the real electron-updater and a small file as the installer, port 9806 for
+// the refusal in Korean); and the Korean strings.
 // The differential download itself is verify/update-delta.mjs.
 // The real download and restart of an installed build is verify/update-e2e.mjs.
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { spawn } from 'child_process';
+import { createHash, generateKeyPairSync, sign } from 'crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { launch, tempDir } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
+const U = require('../main/features/updater.js');
+const release = require('../main/release-key.js');
 
 const channelFile = (version) => {
   const sha = 'A'.repeat(86) + '==';
@@ -30,7 +40,6 @@ const S = JSON.stringify;
 const pure = [];
 const pureCheck = (ok, label) => { pure.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 {
-  const U = createRequire(import.meta.url)('../main/features/updater.js');
   const order = ['0.2.5', '0.2.5-beta.10', '0.2.4', '0.2.5-beta.2', '0.2.6', '0.2.5-beta.1', '0.10.0'].sort(U.compareVersions);
   pureCheck(S(order) === S(['0.2.4', '0.2.5-beta.1', '0.2.5-beta.2', '0.2.5-beta.10', '0.2.5', '0.2.6', '0.10.0']), `versions order as semver: ${order.join(' < ')}`);
   const file = path.join(tempDir('changelog-beta'), 'CHANGELOG.md');
@@ -49,7 +58,108 @@ const pureCheck = (ok, label) => { pure.push({ ok: !!ok, label }); console.log(`
   pureCheck(vs(U.notesAfterUpdate(all, '0.2.5-beta.1', null)) === '0.2.5 0.2.5-beta.1', 'after an update to a beta from a version that recorded none: this beta and its release');
   pureCheck(!U.notesAfterUpdate(all, '0.2.4', '0.2.5-beta.1').length && !U.notesAfterUpdate(all, '0.2.5-beta.1', '0.2.5-beta.1').length, 'an older or the same version than the one that ran: nothing');
 }
-const dialogText = (t) => t.js(`[...document.querySelectorAll('.dialog')].pop()?.textContent || ''`);
+
+// ---------- which feeds are accepted, and which need a signature (pure Node) ----------
+{
+  const refused = (feed) => { try { U.resolveFeed(feed); return ''; } catch (e) { return e.message; } };
+  const lan = ['http://192.168.1.5/feed', 'http://example.com/', 'HTTP://10.0.0.1:8080/feed/', 'http://localhost.example.com/', 'http://127.0.0.1@example.com/', 'http://[fe80::1]/'];
+  pureCheck(lan.every((f) => /^INSECURE_FEED: /.test(refused(f))), `plain http off this computer is refused (${lan.join(', ')})`);
+  const local = ['http://127.0.0.1:1234/feed', 'http://localhost/', 'http://[::1]:8000/'];
+  pureCheck(local.every((f) => U.resolveFeed(f).signed === false), `http on this computer stays a feed, unsigned (${local.join(', ')})`);
+  pureCheck(U.resolveFeed('https://updates.example.com/x').signed === true && U.resolveFeed('https://updates.example.com/x').url === 'https://updates.example.com/x/', 'any https feed needs a signature');
+  const folder = feedFolder('9.9.9');
+  pureCheck(U.resolveFeed(folder).signed === false && U.resolveFeed(pathToFileURL(folder).href).signed === false, 'a folder on this computer stays a feed, unsigned (a path or a file: URL)');
+  pureCheck(U.resolveFeed(`\\\\?\\${folder}`).signed === true, 'a path that starts with two backslashes (a network share) needs a signature');
+  pureCheck(/^Not a valid URL/.test(refused('http://')), 'an unreadable URL is refused');
+}
+
+// ---------- installer signatures: real electron-updater, a small file as the installer ----------
+const keys = generateKeyPairSync('ed25519');
+const otherKeys = generateKeyPairSync('ed25519');
+const publicKey = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+const sigOf = (bytes, key = keys.privateKey) => `${sign(null, bytes, key).toString('base64')}\n`;
+const EXE = 'NanoStudio-Setup-9.9.9.exe';
+// A feed folder as a release leaves it. The channel file always hashes the installer it sits beside, as someone who can
+// write to the release would make it.
+function installerFeed(bytes, signature, extra = '') {
+  const dir = tempDir('signed-feed');
+  const sha = createHash('sha512').update(bytes).digest('base64');
+  writeFileSync(path.join(dir, EXE), bytes);
+  writeFileSync(path.join(dir, 'latest.yml'), `version: 9.9.9\nfiles:\n  - url: ${EXE}\n    sha512: ${sha}\n    size: ${bytes.length}\npath: ${EXE}\nsha512: ${sha}\n${extra}releaseDate: '2026-10-20T00:00:00.000Z'\n`);
+  if (signature != null) writeFileSync(path.join(dir, `${EXE}.sig`), signature);
+  return dir;
+}
+// One check and download in a fresh Electron process, as an NSIS install would. By default the feed is the installation's
+// default feed (served on 127.0.0.1); custom: it is a folder set by the user. local: the LOCALAPPDATA holding the updater's cache.
+async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-local') } = {}) {
+  const dir = tempDir('signed-run');
+  const appDir = path.join(dir, 'app');
+  mkdirSync(appDir);
+  writeFileSync(path.join(appDir, 'package.json'), S({ name: 'nano-studio', productName: 'Nano Studio', version: '1.0.0', main: 'main.cjs' }));
+  writeFileSync(path.join(appDir, 'main.cjs'), `require(${S(path.join(ROOT, 'verify', 'update-delta-main.cjs'))});\n`);
+  writeFileSync(path.join(appDir, 'dev-app-update.yml'), 'provider: generic\nurl: http://127.0.0.1:9/\nupdaterCacheDirName: nano-studio-updater\n');
+  const { server, url } = await U.serveFolder(feedDir);
+  const read = [];
+  server.prependListener('request', (req) => read.push(path.basename(new URL(req.url, 'http://x').pathname)));
+  const out = path.join(dir, 'result.json');
+  const env = { ...process.env, PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', LOCALAPPDATA: local, PYIDE_UPDATE_FEED: custom ? 'off' : url, PYIDE_RELEASE_PUBLIC_KEY: publicKey,
+    PYIDE_DELTA_CASE: S({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir: custom ? feedDir : url, http: false, differential: false, channel: 'stable', userData: path.join(dir, 'userData'), out }) };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const child = spawn(require('electron'), [appDir], { env, stdio: 'ignore', windowsHide: true });
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill(); resolve(); }, 60000);
+    child.on('exit', () => { clearTimeout(timer); resolve(); });
+  });
+  server.close();
+  server.closeAllConnections();
+  const result = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : { error: 'the Electron run wrote no result', logs: [] };
+  const pending = path.join(local, 'nano-studio-updater', 'pending');
+  return { ...result, read, local, cached: existsSync(pending) ? readdirSync(pending).filter((f) => f.endsWith('.exe')) : [] };
+}
+const isRefused = (r) => /UPDATE_SIGNATURE: /.test(r.error || '') && r.phase === 'error' && !r.cached.length && r.logs.some((l) => l.includes('update refused'));
+{
+  const good = Buffer.from('the installer as it was released\n'.repeat(4000));
+  const tampered = Buffer.from(good);
+  tampered[100] ^= 1;
+  const signature = sigOf(good);
+
+  let r = await downloadFrom(installerFeed(good, signature));
+  pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'verified' && r.cached.join() === EXE && r.logs.some((l) => l.includes('matches its signature')), `a signed installer passes: downloaded and ready (${r.error || r.phase})`);
+
+  r = await downloadFrom(installerFeed(tampered, signature));
+  pureCheck(r.read.includes(EXE) && isRefused(r), `a tampered installer whose latest.yml has the matching sha512 is refused and removed (${r.error?.split('\n')[0]})`);
+
+  r = await downloadFrom(installerFeed(good, null));
+  pureCheck(!r.read.includes(EXE) && isRefused(r), `a missing .sig is refused before the installer is downloaded (${r.error?.split('\n')[0]})`);
+
+  r = await downloadFrom(installerFeed(good, sigOf(good, otherKeys.privateKey)));
+  pureCheck(isRefused(r), 'a signature by another key is refused');
+
+  r = await downloadFrom(installerFeed(good, 'not a signature'));
+  pureCheck(isRefused(r), 'a .sig that is no signature is refused');
+
+  const feed = installerFeed(good, signature);
+  const first = await downloadFrom(feed);
+  writeFileSync(path.join(feed, `${EXE}.sig`), sigOf(good, otherKeys.privateKey));
+  r = await downloadFrom(feed, { local: first.local });
+  pureCheck(first.cached.join() === EXE && !r.read.includes(EXE) && isRefused(r), 'an installer electron-updater finds in its cache from an earlier run is checked too, and leaves the cache when refused');
+  writeFileSync(path.join(feed, `${EXE}.sig`), signature);
+  r = await downloadFrom(feed, { local: first.local });
+  pureCheck(!r.error && r.phase === 'downloaded' && r.read.includes(EXE), 'after a refusal a good signature downloads the installer again');
+
+  const packaged = Buffer.from('package').toString('base64');
+  r = await downloadFrom(installerFeed(good, signature, `packages:\n  x64:\n    path: extra.7z\n    sha512: ${packaged}\n    size: 7\n`));
+  pureCheck(/Web Installers are disabled/.test(r.error || '') && r.phase === 'error', 'a channel file that adds a web package is refused (a signature covers only the installer)');
+
+  r = await downloadFrom(installerFeed(good, null), { custom: true });
+  pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'unchecked' && r.logs.some((l) => l.includes('was not checked')), `a folder feed set by the user needs no signature, and state and log say it was not checked (${r.error || r.signature})`);
+
+  const key = process.env.PYIDE_RELEASE_PUBLIC_KEY;
+  delete process.env.PYIDE_RELEASE_PUBLIC_KEY;
+  pureCheck(!release.isPlaceholder() && await release.verify(good, signature) === false, 'the key in main/release-key.js parses, is the real one and accepts no test signature');
+  if (key) process.env.PYIDE_RELEASE_PUBLIC_KEY = key;
+}
+const dialogText =(t) => t.js(`[...document.querySelectorAll('.dialog')].pop()?.textContent || ''`);
 const dialogButtons = (t) => t.js(`[...[...document.querySelectorAll('.dialog')].pop()?.querySelectorAll('.dialog-buttons button') || []].map(b => b.textContent)`);
 const pressButton = (t, label) => t.js(`([...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].find(b => b.textContent === ${S(label)}).click(), true)`);
 const waitDialog = (t, what) => t.until(`!!document.querySelector('.dialog')`, what);
@@ -94,6 +204,8 @@ async function checkNowInline(t, text, label) {
     await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${S(path.join(tmpdir(), 'pyide-no-such-feed'))}; i.dispatchEvent(new Event('input')); return true; })()`);
     await checkNowInline(t, 'Could not check for updates.', 'Check Now on the page shows a failed check on the page');
     check(await js(`document.getElementById('updatesCheckResult').classList.contains('err')`), 'a failed check is drawn as an error');
+    await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = 'http://192.168.1.5/feed'; i.dispatchEvent(new Event('input')); return true; })()`);
+    await checkNowInline(t, 'An update feed on another computer must use https.', 'Check Now refuses a plain http feed on another computer and says why');
     await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${S(newer)}; i.dispatchEvent(new Event('input')); return true; })()`);
     await js(`(document.getElementById('settingsOk').click(), true)`);
     check(await js(`ide.settings.get('updates.feedUrl')`) === newer, 'the feed setting is saved with OK');
@@ -127,6 +239,19 @@ async function checkNowInline(t, text, label) {
     check(true, 'after a fallback to the full installer the status bar shows the plain text');
     await js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, percent: 0, download: null })`);
     await until(`document.getElementById('updateStatus').classList.contains('hidden')`, 'status hidden');
+
+    // ---------- Update Ready says when the update's signature was not checked ----------
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'downloaded', available: '9.9.9', signature: 'unchecked' })`);
+    await until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('has been downloaded')`, 'Update Ready, unchecked');
+    check((await dialogText(t)).includes('This update comes from a local feed, so its signature was not checked.'), 'Update Ready says a local feed\'s update was not checked');
+    await pressButton(t, 'Later');
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, signature: null })`);
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'downloaded', available: '9.9.9', signature: 'verified' })`);
+    await until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('has been downloaded')`, 'Update Ready, verified');
+    check(!(await dialogText(t)).includes('signature'), 'Update Ready adds nothing for a verified update');
+    await pressButton(t, 'Later');
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, signature: null })`);
+    await until(`document.getElementById('updateStatus').classList.contains('hidden')`, 'status hidden again');
 
     // ---------- a skipped version shows in Settings and can be cleared ----------
     await js(`(ide.settings.set('updates.skippedVersion', '9.9.9'), ide.openSettings('updates'), true)`);
@@ -250,6 +375,36 @@ const settle = (t) => t.until(`!!ide.updater`, 'updater plugin').then(() => t.sl
   var errorsNew = [t, again, old, fresh].flatMap((x) => x.consoleErrors);
 }
 
+// ---------- a refused update, in Korean: an installed copy's automatic check of its default feed, no .sig there ----------
+{
+  const { server, url } = await U.serveFolder(installerFeed(Buffer.from('installer'), null));
+  const t = await launch({ fixture: 'core', port: 9806, name: 'updater-refused-ko', lang: 'ko-KR',
+    env: { PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', PYIDE_UPDATE_FEED: url, PYIDE_RELEASE_PUBLIC_KEY: publicKey, LOCALAPPDATA: tempDir('refused-local') } });
+  try {
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('서명')`, 'Korean refusal dialog', 20000);
+    t.check((await dialogText(t)).includes('서명을 확인할 수 없어 업데이트를 거부했습니다.'), `a refused update is explained in Korean (${await dialogText(t)})`);
+    t.check(await t.js(`ide.api.invoke('updater:state').then((s) => s.phase)`) === 'error', 'nothing is offered for install after a refusal');
+    const leaks = await englishLeaks(t, '.dialog');
+    t.check(!leaks.length, `no English in the refusal dialog${leaks.length ? `: ${S(leaks)}` : ''}`);
+    await pressButton(t, '닫기');
+    await t.js(`ide.api.invoke('updater:testPhase', { phase: 'downloaded', available: '9.9.9', signature: 'unchecked' })`);
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('서명을 확인하지 않았습니다')`, 'Korean unchecked line');
+    t.check(true, 'Update Ready says in Korean that a local feed\'s update was not checked');
+    await pressButton(t, '나중에');
+    await t.js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, signature: null })`);
+    await t.js(`(ide.updater.check({ manual: true, feedUrl: 'http://192.168.1.5/feed' }), true)`);
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('https를 사용해야 합니다')`, 'Korean insecure feed');
+    t.check(true, 'a plain http feed on another computer is refused in Korean');
+  } catch (err) {
+    t.check(false, err.message);
+  }
+  t.close();
+  server.close();
+  server.closeAllConnections();
+  var resultsRefused = t.results;
+  var errorsRefused = t.consoleErrors;
+}
+
 // ---------- Korean ----------
 const k = await launch({ fixture: 'core', port: 9801, name: 'updater-ko', lang: 'ko-KR', env: { PYIDE_UPDATE_TEST: '1' } });
 try {
@@ -291,6 +446,6 @@ try {
 } catch (err) {
   k.check(false, err.message);
 }
-k.results.unshift(...pure, ...resultsEn, ...resultsChannel, ...resultsNew);
-k.consoleErrors.unshift(...errorsEn, ...errorsChannel, ...errorsNew);
+k.results.unshift(...pure, ...resultsEn, ...resultsChannel, ...resultsNew, ...resultsRefused);
+k.consoleErrors.unshift(...errorsEn, ...errorsChannel, ...errorsNew, ...errorsRefused);
 k.finish();

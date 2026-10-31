@@ -22,6 +22,7 @@ if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWo
   send: (channel, payload) => ipcRenderer.send(channel, payload),
   // Files dropped from Explorer carry no path in the renderer since Electron 32; webUtils resolves it.
   pathForFile: (file) => webUtils.getPathForFile(file),
+  shareAllowedSync: (p) => ipcRenderer.sendSync('security:shareAllowedSync', p),
   localeSync: (lang) => ipcRenderer.sendSync('core:localeSync', lang),
   loadSettingsSync: () => ipcRenderer.sendSync('settings:loadSync'),
   saveSettingsSync: (settings, changed) => ipcRenderer.sendSync('settings:saveSync', settings, changed),

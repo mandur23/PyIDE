@@ -45,10 +45,15 @@ function trust(dir) {
   save();
 }
 
+// What starts when Windows opens it (for a shortcut, what it points to), for Open with Default App. Windows drops
+// trailing dots and spaces, so `tool.exe.` opens tool.exe.
+const RUNS_WHEN_OPENED = /\.(exe|com|scr|pif|cpl|msc|msi|msp|appx|msix|appref-ms|application|bat|cmd|ps1|psm1|vbs|vbe|js|jse|ws|wsf|wsh|hta|lnk|url|scf|reg|inf|jar|py|pyw|pyz|settingcontent-ms|library-ms|diagcab)$/i;
+const runsWhenOpened = (p) => RUNS_WHEN_OPENED.test(String(p).replace(/[. ]+$/, ''));
+
 function register({ ipcMain, app }) {
   load(app.getPath('userData'));
   ipcMain.handle('trust:isTrusted', (_e, dir) => isTrusted(dir));
   ipcMain.handle('trust:add', (_e, dir) => { trust(dir); return true; });
 }
 
-module.exports = { register, isTrusted, trust };
+module.exports = { register, isTrusted, trust, runsWhenOpened };

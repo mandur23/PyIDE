@@ -90,6 +90,7 @@ check0(JSON.stringify(attach.splitArgs('"C:\\Program Files\\Python\\python.exe" 
 // ---- pure Node: debug:attach in main with a fake IPC (no Electron, ephemeral ports only) ----
 {
   const { EventEmitter } = await import('events');
+  const { PassThrough } = await import('stream');
   const net = await import('net');
   const debug = require('../main/features/debug.js');
   const handlers = new Map();
@@ -99,12 +100,29 @@ check0(JSON.stringify(attach.splitArgs('"C:\\Program Files\\Python\\python.exe" 
     killProcess: () => {}, procs: new Map(), vendorDir: 'C:\\fake-vendor', appDir: 'C:\\fake-app', unpackedDir: 'C:\\fake-app' });
   const invoke = (ch, ...args) => handlers.get(ch)({}, ...args);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const real = { listProcesses: attach.listProcesses, inject: attach.inject };
+  const real = { listProcesses: attach.listProcesses, inject: attach.inject, supportedVersion: attach.supportedVersion, startAdapter: attach.startAdapter };
   // A live pid that is not this process: a sleeping node child.
   const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
   const listed = (over = {}) => [{ pid: dummy.pid, ppid: 1, name: 'python.exe', exe: 'C:\\listed\\python.exe', interpreter: 'C:\\listed\\python.exe',
     cmd: 'python prog.py', args: ['prog.py'], cwd: null, created: 'T1', debugPort: null, version: '3.12.1', ...over }];
   const outcome = (p) => p.then(() => 'ok', (err) => err.message);
+  // The adapter process over its pipes: it answers the attach request by saying where it waits for the debug server.
+  const adapters = [];
+  const SERVER_PORT = 4321;
+  const fakeAdapter = () => {
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), killed: false,
+      kill() { child.killed = true; child.stdout.end(); child.stdin.end(); } });
+    const message = (m) => { const json = JSON.stringify(m); child.stdout.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`); };
+    child.stdin.on('data', (d) => {
+      const [, seq, command] = /^\{"seq":(\d+),"type":"request","command":"(\w+)"/.exec(d.toString()) || [];
+      if (command === 'initialize') message({ type: 'response', request_seq: Number(seq), command, success: true, body: {} });
+      if (command === 'attach') message({ type: 'event', event: 'debugpyWaitingForServer', body: { host: '127.0.0.1', port: SERVER_PORT } });
+    });
+    adapters.push(child);
+    return child;
+  };
+  attach.startAdapter = fakeAdapter;
+  attach.supportedVersion = async () => '3.12.1';
   try {
     // Stop while main is still looking the process up: no injection follows.
     let injected = 0;
@@ -119,7 +137,7 @@ check0(JSON.stringify(attach.splitArgs('"C:\\Program Files\\Python\\python.exe" 
     await sleep(400);
     check0(injected === 0, 'and nothing is injected after the lookup finishes');
 
-    // Stop while injecting, the injection completes anyway: its port is remembered, so the next attach connects to it.
+    // Stop while injecting: the adapter the target would have connected to goes with the attach.
     let injectPort = 0;
     let injectExe = '';
     attach.listProcesses = async () => listed();
@@ -129,23 +147,28 @@ check0(JSON.stringify(attach.splitArgs('"C:\\Program Files\\Python\\python.exe" 
     await invoke('debug:stop', null, 'k2');
     check0((await a2) === 'Debugging stopped', 'Stop during injection ends the attach');
     check0(injectExe === 'C:\\listed\\python.exe', `the interpreter comes from main's listing, not from the renderer (${injectExe})`);
-    await sleep(400);
+    check0(injectPort === SERVER_PORT, `the target is pointed at the port the adapter says it listens on (${injectPort})`);
+    check0(adapters.length === 1 && adapters[0].killed, 'and that adapter does not outlive the Stop');
+
+    // A failed injection leaves no adapter either, and the next attach injects again.
+    attach.inject = async () => { injected++; throw new Error('sentinel inject'); };
+    injected = 0;
+    const failedInject = await outcome(invoke('debug:attach', { pid: dummy.pid }, [], {}));
+    check0(failedInject === 'sentinel inject' && injected === 1 && adapters.at(-1).killed, `a failed injection reports its error and ends its adapter (${failedInject})`);
+
+    // A program that called debugpy.listen() itself is connected to directly, with no adapter of ours.
     let connections = 0;
     const server = net.createServer((s) => { connections++; s.on('error', () => {}); });
-    await new Promise((r, j) => { server.once('error', j); server.listen(injectPort, '127.0.0.1', r); });
+    await new Promise((r, j) => { server.once('error', j); server.listen(0, '127.0.0.1', r); });
     try {
+      attach.listProcesses = async () => listed({ debugPort: server.address().port });
+      const before = adapters.length;
       injected = 0;
-      attach.inject = async () => { injected++; throw new Error('sentinel inject'); };
       const a3 = outcome(invoke('debug:attach', { pid: dummy.pid }, [], { startKey: 'k3' }));
       for (let i = 0; i < 40 && !connections; i++) await sleep(50);
-      check0(connections === 1 && injected === 0, 'an injection that completed after a Stop is reused: the next attach connects without injecting');
+      check0(connections === 1 && injected === 0 && adapters.length === before, 'a process with its own debugpy.listen() is connected to without injecting');
       await invoke('debug:stop', null, 'k3');
       check0((await a3) === 'Debugging stopped', 'Stop during the DAP handshake ends that attach');
-
-      // The same pid with another start time is another process: its remembered port is not used.
-      attach.listProcesses = async () => listed({ created: 'T2' });
-      const a5 = await outcome(invoke('debug:attach', { pid: dummy.pid }, [], { startKey: 'k5' }));
-      check0(a5 === 'sentinel inject' && connections === 1, `a reused pid (another start time) is injected afresh, not connected to the old port (${a5}, ${connections} connections)`);
     } finally { server.close(); }
 
     // The renderer's start time must match the process main finds under that pid.
@@ -183,6 +206,10 @@ const stoppedAt = (file, line, ms) => until(`(() => { const s = window.__debugge
 const cursorTo = (line) => js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${line}, column: 5 }))`);
 const bpLines = () => js(`window.__debugger.breakpoints().map(b => b.line).join()`);
 const rowsText = () => js(`[...document.querySelectorAll('#dbgAttachList .dbg-attach-row')].map(r => r.dataset.pid + ' ' + r.title)`);
+// debugpy adapters this IDE or the target itself started; other suites may be running their own.
+const adapterCount = (pid) => Number(execFileSync('powershell', ['-NoProfile', '-Command',
+  `@(Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { ($_.ParentProcessId -eq ${t.pid} -or $_.ParentProcessId -eq ${pid}) -and $_.CommandLine -match 'adapter' }).Count`],
+{ encoding: 'utf8' }).trim());
 
 // Starts a fixture script outside the IDE with the project interpreter.
 function startOutside(exe, script) {
@@ -272,18 +299,24 @@ try {
   await until(`window.__debugger.state()?.state === 'running'`, 'running');
   await until(`/tick \\d+/.test(document.querySelector('#dbgOut').textContent)`, 'program output in the console', 10000);
   check(true, "the program's output shows in the Debug console");
+  const adaptersAttached = adapterCount(pid);
+  check(adaptersAttached === 1, `one adapter runs for the session (${adaptersAttached})`);
   await press('Ctrl+F2');
   await until(`!window.__debugger.state()`, 'session ended');
   check((await consoleText()).includes(`Detached from process ${pid}`), 'Ctrl+F2 detaches');
   await t.sleep(1500);
   check(alive(pid) && target.exitCode === null, 'the target process is still alive after Detach');
 
-  // ---- attach again (its debugpy is already listening) and detach with the toolbar button ----
+  // ---- nothing keeps listening after Detach, for anyone else on this computer to connect to ----
+  const debugPort = await js(`ide.api.invoke('debug:processes').then((list) => list.find((p) => p.pid === ${pid})?.debugPort ?? null)`);
+  const adaptersLeft = adapterCount(pid);
+  check(debugPort === null && adaptersLeft === 0, `the adapter ended with the Detach (debug port ${debugPort}, ${adaptersLeft} adapters left)`);
+
+  // ---- attach again and detach with the toolbar button ----
   await cursorTo(5);
   await press('Ctrl+F8');
   const pid2 = await openDialogFor('counter.py');
   check(pid2 === pid, 'the same process is listed again');
-  check(await js(`!!document.querySelector('#dbgAttachList .dbg-attach-row.selected .dbg-attach-tag')`), 'it is marked as having debugpy listening');
   const t1 = Date.now();
   await click('#dbgAttachDialog .dialog-buttons .primary');
   await stoppedAt('counter.py', 5, 20000);

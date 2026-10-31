@@ -38,12 +38,14 @@ function trStrings(file) {
 const mine = new Set();
 let staticOk = true;
 const staticMissing = [];
+// As in verify/i18n-static.mjs: a generic string lives in the core dictionary, which is always loaded under a plugin's.
+const core = JSON.parse(readFileSync(path.join(APP_DIR, 'renderer', 'locales', 'ko.json'), 'utf8'));
 for (const plugin of ['tooling', 'packages']) {
   const dir = path.join(APP_DIR, 'renderer', 'features', plugin);
   const ko = JSON.parse(readFileSync(path.join(dir, 'locales', 'ko.json'), 'utf8'));
   for (const s of trStrings(path.join(dir, 'index.js'))) {
     mine.add(s);
-    if (!(s in ko)) { staticOk = false; staticMissing.push(`${plugin}: ${s}`); }
+    if (!(s in ko) && !(s in core)) { staticOk = false; staticMissing.push(`${plugin}: ${s}`); }
   }
 }
 

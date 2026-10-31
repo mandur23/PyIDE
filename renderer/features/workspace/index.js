@@ -201,8 +201,23 @@
     return jdk?.home ? { ...entry, env: { ...entry.env, JAVA_HOME: jdk.home } } : entry;
   }
 
+  // Safe Mode runs nothing from the project: a launcher is its own command line, so ask to trust it first. Trusting
+  // reopens the page; the launcher is then started with another click.
+  function askTrust() {
+    ide.ui.dialog({
+      title: tr('Trust Project?'),
+      body: el('div', 'dialog-message', tr('{name} is open in Safe Mode, where Nano Studio runs nothing from it. A launcher starts the project\'s own command, so trust the project first.', { name: basename(ide.root) })),
+      width: 520,
+      buttons: [
+        { label: tr('Trust Project'), primary: true, run: () => { ide.trustProject?.(); } },
+        { label: tr('Cancel') },
+      ],
+    });
+  }
+
   async function runEntry(entry, { show = true } = {}) {
     if (!ide.root) return;
+    if (ide.trusted === false) return askTrust();
     const r = ensureRun(entry);
     select(entry);
     if (show) tw.show();
@@ -232,7 +247,7 @@
       await ide.saveAll();
       // New Project's dependency download goes first, so two wrappers do not fill the same cache at once.
       if (['maven', 'gradle'].includes(entry.kind)) await ide.toolchains?.afterSync(entry.cwd, (text) => r.con.append(text, 'sys'));
-      const { id, command } = await invoke('start', ide.root, await withJdk(entry), args, interp && { cmd: interp.cmd, args: interp.args });
+      const { id, command } = await invoke('start', ide.root, await withJdk(entry), args, interp && { cmd: interp.cmd, args: interp.args, executable: interp.executable });
       r.con.append(`${command}\n`, 'sys');
       attach(r, id);
     } catch (err) {

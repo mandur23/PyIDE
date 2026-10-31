@@ -21,6 +21,7 @@ const gameWindow = require('../minecraft/game-window');
 const translation = require('../minecraft/translate');
 const serverSettings = require('../minecraft/server-settings');
 const { createLauncher } = require('../minecraft/launcher');
+const fileServer = require('../minecraft/file-server');
 const { complete } = require('../ai/claude');
 const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 const { allowWindowCapture } = require('../security');
@@ -50,7 +51,10 @@ const gamePort = (port) => {
   return n;
 };
 const run = (cmd, args, opts, log) => new Promise((resolve, reject) => {
-  const child = execFile(cmd, args, { windowsHide: true, maxBuffer: 64 << 20, ...opts }, (err) => (err ? reject(fail(`${path.basename(cmd)} failed (exit ${err.code ?? err.signal})`)) : resolve()));
+  const child = execFile(cmd, args, { windowsHide: true, maxBuffer: 64 << 20, signal: log.signal, ...opts }, (err) => {
+    if (!err) resolve();
+    else reject(err.name === 'AbortError' ? err : fail(`${path.basename(cmd)} failed (exit ${err.code ?? err.signal})`));
+  });
   child.stdout?.on('data', (d) => log(d.toString()));
   child.stderr?.on('data', (d) => log(d.toString()));
 });
@@ -65,17 +69,21 @@ const hashOf = (algo, file) => crypto.createHash(algo).update(fs.readFileSync(fi
 const portOf = (dir) => Number(/^server-port=(\d+)/m.exec(fs.existsSync(path.join(dir, 'server.properties')) ? fs.readFileSync(path.join(dir, 'server.properties'), 'utf8') : '')?.[1]) || 25565;
 
 // Mojang's and the Maven hosts' downloads break off now and then (a reset connection mid-file): a step that fetches
-// over the network is tried three times, a few seconds apart. A checksum mismatch is not retried.
+// over the network is tried three times, a few seconds apart. What trying again cannot change is not retried: a
+// checksum mismatch, a refusal (a 4xx other than 408 and 429), a full disk, a file over its limit, a redirect that is
+// not allowed, a cancelled job.
+const hopeless = (err) => err.name === 'AbortError' || ['ENOSPC', 'TOO_LARGE', 'REDIRECT'].includes(err.code) || /Checksum mismatch|HTTP 4(?!08|29)\d\d/.test(err.message);
 async function retried(what, step, log) {
   for (let attempt = 1; ; attempt++) {
     try { return await step(); } catch (err) {
-      if (attempt === 3 || /Checksum mismatch|HTTP 404/.test(err.message)) throw err;
+      if (attempt === 3 || hopeless(err)) throw err;
       log(`${what} failed (${err.message}); trying again (${attempt + 1} of 3)…\n`);
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
 }
-const fetchFile = (url, dest, opts, log) => retried('The download', () => download(url, dest, { progress: () => {}, log, ...opts }), log);
+// log.signal cancels a job's downloads and installers: every step of a job already takes its log.
+const fetchFile = (url, dest, opts, log) => retried('The download', () => download(url, dest, { progress: () => {}, log, signal: log.signal, ...opts }), log);
 const majorOf = (v) => { const m = /^1\.(\d+)|^(\d+)/.exec(v || ''); return m ? Number(m[1] || m[2]) : 0; };
 
 // ---------- Java ----------
@@ -771,8 +779,17 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   });
   ipcMain.handle('minecraft:player', (_e, name, online) => serverSettings.player(name, online, mojangProfile));
   ipcMain.handle('minecraft:langStatus', (_e, root, dir) => langStatus(dir));
-  // A translation runs until it ends or minecraft:cancel names its job.
+  // A translation or a launcher job runs until it ends or minecraft:cancel names its job.
   const running = new Map(); // job -> AbortController
+  const cancellable = async (job, step) => {
+    const ctl = new AbortController();
+    running.set(job, ctl);
+    try {
+      return await step(Object.assign(logTo(job), { signal: ctl.signal }));
+    } catch (err) {
+      throw ctl.signal.aborted ? fail('Cancelled', 'cancelled') : err;
+    } finally { running.delete(job); }
+  };
   ipcMain.handle('minecraft:translateMods', async (_e, root, dir, job) => {
     guard(root);
     const ctl = new AbortController();
@@ -800,19 +817,21 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:marketInstall', (_e, root, dir, project, job) => { guard(root); return shop.install(dir, project, logTo(job)); });
   ipcMain.handle('minecraft:marketRemove', (_e, root, dir, id) => { guard(root); return shop.remove(dir, id); });
   ipcMain.handle('minecraft:applyResourcePack', (_e, root, dir, url, sha1) => { guard(root); return applyResourcePack(dir, url, sha1); });
+  ipcMain.handle('minecraft:serveFolder', (_e, root, folder) => { guard(root); return fileServer.serve(folder); });
 
   // Instances played through the official Minecraft Launcher (main/minecraft/launcher.js).
   ipcMain.handle('launcher:status', (_e, root) => craft.status(root));
   ipcMain.handle('launcher:instances', (_e, root) => (root ? craft.instances(root) : []));
   ipcMain.handle('launcher:versions', (_e, kind) => craft.versions(kind));
   ipcMain.handle('launcher:loaderVersions', (_e, kind, mc) => craft.loaderVersions(kind, mc));
-  ipcMain.handle('launcher:create', (_e, root, opts, job) => { guard(root); return craft.create(root, opts, logTo(job)); });
-  ipcMain.handle('launcher:fromPack', (_e, root, opts, job) => { guard(root); return craft.fromPack(root, opts, logTo(job)); });
+  ipcMain.handle('launcher:create', (_e, root, opts, job) => { guard(root); return cancellable(job, (log) => craft.create(root, opts, log)); });
+  ipcMain.handle('launcher:fromPack', (_e, root, opts, job) => { guard(root); return cancellable(job, (log) => craft.fromPack(root, opts, log)); });
   ipcMain.handle('launcher:remove', (_e, root, name) => { guard(root); return craft.remove(root, name); });
   ipcMain.handle('launcher:servers', (_e, root) => (root ? craft.servers(root) : []));
   ipcMain.handle('launcher:saveServers', (_e, root, list) => { guard(root); return craft.saveServers(root, list); });
-  ipcMain.handle('launcher:join', (_e, root, req, job) => { guard(root); return craft.join(root, req, logTo(job)); });
-  ipcMain.handle('launcher:play', (_e, root, name, opts, job) => { guard(root); return craft.play(root, name, opts, logTo(job)); });
+  ipcMain.handle('launcher:join', (_e, root, req, job) => { guard(root); return cancellable(job, (log) => craft.join(root, req, log)); });
+  ipcMain.handle('launcher:play', (_e, root, name, opts, job) => { guard(root); return cancellable(job, (log) => craft.play(root, name, opts, log)); });
+  ipcMain.handle('launcher:ping', (_e, address) => craft.ping(address));
   ipcMain.handle('launcher:mods', (_e, root, name) => craft.mods(root, name));
   ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
   ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));

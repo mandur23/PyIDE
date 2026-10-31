@@ -17,8 +17,6 @@ input, select, textarea { font: inherit; }
 #toolbar { height: 40px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 8px; background: var(--gray2); border-bottom: 1px solid var(--gray1); }
 .tb-group { display: flex; align-items: center; gap: 6px; }
-.logo { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; font-weight: 700;
-  font-size: 11px; color: #000; background: linear-gradient(135deg, #21d789, #fcf84a); }
 .tb-btn { padding: 4px 8px; border-radius: 5px; font-weight: 600; }
 .tb-btn:hover, .tb-icon:hover:not(:disabled) { background: var(--gray3); }
 .tb-select { background: transparent; color: var(--gray11); border: 0; border-radius: 5px; padding: 4px; max-width: 260px; }
@@ -314,8 +312,7 @@ body.app-craft #statusItems > :not(#bgTasks, #ideErrors, #updateStatus, #install
 #welcome { justify-content: flex-start; padding-top: 10vh; }
 .welcome-card { width: min(560px, calc(100% - 48px)); display: flex; flex-direction: column; gap: 16px; }
 .welcome-head { display: flex; align-items: center; gap: 14px; }
-.welcome-logo { width: 48px; height: 48px; border-radius: 11px; display: grid; place-items: center; font-weight: 800; font-size: 18px;
-  color: #000; background: linear-gradient(135deg, #21d789, #fcf84a); }
+.welcome-logo { width: 48px; height: 48px; }
 #welcome .welcome-head h1 { margin: 0; font-size: 22px; }
 #welcome .welcome-head p { margin: 2px 0 0; }
 .welcome-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -362,8 +359,7 @@ body.app-craft #statusItems > :not(#bgTasks, #ideErrors, #updateStatus, #install
   background: var(--gray1); border: 1px solid var(--gray3); font: 12px/1.4 var(--mono); color: var(--gray9); white-space: pre-wrap; }
 .clone-log:empty { display: none; }
 .about { display: flex; gap: 16px; align-items: flex-start; }
-.about-logo { width: 56px; height: 56px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 20px;
-  color: #000; background: linear-gradient(135deg, #21d789, #fcf84a); }
+.about-logo { width: 56px; height: 56px; flex-shrink: 0; }
 .about h2 { margin: 0 0 2px; color: var(--gray12); }
 .about-credit { font-size: 12px; }
 /* File type icons (renderer/core/file-icons.js): both drawings are present, the theme picks one. */

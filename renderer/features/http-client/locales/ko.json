@@ -4,6 +4,7 @@
   "Binary content, {size}.": "바이너리 콘텐츠, {size}.",
   "Body": "본문",
   "Cannot read the body file: {detail}": "본문 파일을 읽을 수 없습니다: {detail}",
+  "Not sent: {detail} is outside this project, and Safe Mode sends no file from elsewhere on this computer.": "보내지 않았습니다: {detail}은(는) 이 프로젝트 밖에 있으며, 안전 모드에서는 컴퓨터의 다른 위치에 있는 파일을 보내지 않습니다.",
   "Clear History": "기록 지우기",
   "Connection refused: nothing is listening at {target}.": "연결이 거부되었습니다: {target}에서 수신 대기 중인 서버가 없습니다.",
   "Env: {name}": "환경: {name}",

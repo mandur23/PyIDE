@@ -344,7 +344,7 @@ const stopServer = async (name) => {
 };
 
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.toolWindows.get('Minecraft').show(), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
   await until(`!!document.querySelector('#minecraftTool .mc-empty')`, 'empty Minecraft window');
   check(true, 'the Minecraft tool window opens on a project without servers');
 
@@ -426,8 +426,11 @@ try {
   check(starts(serverDir('survival')) === before + 1 && (await tabText('survival')).includes('Enabled HelloPlugin.jar'), 'the running server restarts and the plugin\'s onEnable runs');
 
   // ---------- sharing ----------
-  await js(`(ide.settings.set('ports.confirmShare', false), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), true)`);
   await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
+  await until(`!!${dialogButton('Share Without It')}`, 'whitelist offer', 10000);
+  check(await js(`/whitelist/.test(document.querySelector('.dialog').textContent) && !!${dialogButton('Turn On and Share')}`), 'sharing a server without a whitelist offers to turn it on');
+  await js(`(${dialogButton('Share Without It')}.click(), true)`);
   await until(`${card('survival')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40611'`, 'public address on the card', 30000)
     .then(() => check(true, 'Share puts the public address players join with on the server card'), async () => check(false, `the card shows the public address: ${S(await js(`${card('survival')}?.textContent`))} ${S(await js(`({ ports: ide.ports.state(), balloons: [...document.querySelectorAll('.ide-balloon')].map((b) => b.textContent) })`))}`));
   check(await js(`!${card('survival')}.querySelector('.mc-share') && !!${card('survival')}.querySelector('.mc-public-copy')`), 'a shared server offers Copy Address and Stop Sharing instead of Share');

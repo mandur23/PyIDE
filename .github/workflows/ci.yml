@@ -68,6 +68,30 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/core-lifecycle.mjs
+      - name: app-mode
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/app-mode.mjs
+      - name: safe-mode
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/safe-mode.mjs
+      - name: csp
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/csp.mjs
+      - name: rename-migration
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/rename-migration.mjs
+      - name: minecraft-launcher-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/minecraft-launcher-core.mjs
+      - name: minecraft-launcher
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/minecraft-launcher.mjs
       - name: editors
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

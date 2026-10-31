@@ -413,7 +413,8 @@ try {
     'Show Variables', 'Hide Variables', 'The Python Console is not running.',
   ]);
   const ko = JSON.parse(readFileSync(new URL('../renderer/features/sciview/locales/ko.json', import.meta.url), 'utf8'));
-  const untranslated = [...mine].filter((s) => !(s in ko) && !['Show Variables', 'Hide Variables', 'The Python Console is not running.'].includes(s));
+  const core = JSON.parse(readFileSync(new URL('../renderer/locales/ko.json', import.meta.url), 'utf8'));
+  const untranslated = [...mine].filter((s) => !(s in ko) && !(s in core) && !['Show Variables', 'Hide Variables', 'The Python Console is not running.'].includes(s));
   k.check(!untranslated.length, `every Data View and Plots string has a Korean entry${untranslated.length ? `: ${untranslated.join(' | ')}` : ''}`);
   const missing = (await missingTranslations(k)).filter((s) => mine.has(s));
   k.check(!missing.length, `no missing translations at runtime${missing.length ? `: ${missing.join(' | ')}` : ''}`);

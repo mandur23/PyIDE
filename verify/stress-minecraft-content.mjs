@@ -215,7 +215,7 @@ try {
   // zip bombs: overlapping entries declaring 6.4 GB; an entry inflating far past what it declares; a huge one
   const bomb = write(path.join(outside, 'bomb.zip'), zipOf([mcmeta, bombEntry('bomb/x.bin', 64)], { overlap: 99 }));
   let tm = await timed(() => drop(serverDir('fab'), [bomb]));
-  check(statSync(bomb).size < 200000 && /unpacks to 6401 MB, more than the 2048 MB/.test(skippedOf(tm.r, 'bomb.zip')?.message) && sizeOf(path.join(serverDir('fab'), 'resourcepack')) === 0 && tm.ms < 15000,
+  check(statSync(bomb).size < 200000 && skippedOf(tm.r, 'bomb.zip')?.why === 'bomb' && sizeOf(path.join(serverDir('fab'), 'resourcepack')) === 0 && tm.ms < 15000,
     `a ${Math.round(statSync(bomb).size / 1024)} KB overlapping-entries bomb is refused before anything is written (${tm.ms} ms, ${S(tm.r.ok?.skipped)})`);
   const lying = write(path.join(outside, 'lying.zip'), zipOf([mcmeta, bombEntry('assets/big.bin', 256, 1000)]));
   tm = await timed(() => drop(serverDir('fab'), [lying]));
@@ -352,8 +352,9 @@ try {
   const before = (n) => !existsSync(serverDir(n));
   const failing = [
     ['a file without checksums', { ...good, hashes: {} }, /The modpack gives no checksum for mods\/ok\.jar/],
-    ['a file without a download address', { ...good, downloads: undefined }, /gives no download address for mods\/ok\.jar/],
-    ['a file:// download address', { ...good, downloads: [`file:///${sentinel.replace(/\\/g, '/')}`] }, /gives no download address/],
+    ['a file without a download address', { ...good, downloads: undefined }, /gives no https download address on .+ for mods\/ok\.jar/],
+    ['a file:// download address', { ...good, downloads: [`file:///${sentinel.replace(/\\/g, '/')}`] }, /gives no https download address/],
+    ['an address on another host', { ...good, downloads: ['https://evil.example/ok.jar'] }, /gives no https download address/],
     ['a wrong checksum', { ...good, hashes: { sha1: '0'.repeat(40) } }, /Checksum mismatch for mods\/ok\.jar/],
   ];
   for (const [what, f, want] of failing) {
@@ -366,7 +367,7 @@ try {
   check(/a\.toml uses a compression Nano Studio does not read/.test(r.err || '') && before('bzpack'), `overrides in a compression Nano Studio does not read: ${r.err}`);
   const bombPack = write(path.join(outside, 'bomb.mrpack'), zipOf([{ name: 'modrinth.index.json', data: Buffer.from(S({ name: 'bomb', dependencies: deps, files: [] })) }, bombEntry('overrides/bomb/x.bin', 64)], { overlap: 99 }));
   tm = await timed(() => fromPack({ file: bombPack, name: 'bombpack' }));
-  check(/unpacks to \d+ MB, more than the 2048 MB/.test(tm.r.err || '') && before('bombpack') && tm.ms < 20000, `a modpack whose overrides are a zip bomb is refused (${tm.ms} ms: ${tm.r.err})`);
+  check(/bomb\.mrpack is refused: its entries overlap/.test(tm.r.err || '') && before('bombpack') && tm.ms < 20000, `a modpack whose overrides are a zip bomb is refused, and says why (${tm.ms} ms: ${tm.r.err})`);
 
   // modpacks from Modrinth: hostile names, broken checksums, broken answers, no answer
   const realPack = mrpackOf({ name: 'Remote', versionId: '2', dependencies: deps, files: [good] });

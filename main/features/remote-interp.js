@@ -8,6 +8,22 @@ const { runRaw } = require('../remote/session');
 
 exports.register = ({ ipcMain, app, send }) => {
   remote.setNotifier(send);
+  // Several ssh processes reaching a new host together (a run and a library sync) share one question.
+  const hostKeys = new Map(); // id -> {promise, resolve}
+  askpass.onHostKey((key) => {
+    const id = `${key.host} ${key.fingerprint}`;
+    if (!hostKeys.has(id)) {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      hostKeys.set(id, { promise, resolve });
+      send('remote-interp:hostKey', { id, ...key });
+    }
+    return hostKeys.get(id).promise;
+  });
+  ipcMain.handle('remote-interp:hostKeyAnswer', (_e, id, trusted) => {
+    hostKeys.get(id)?.resolve(trusted === true);
+    hostKeys.delete(id);
+  });
   ipcMain.handle('remote-interp:messages', (_e, dict) => remote.setMessages(dict));
   ipcMain.handle('remote-interp:detect', () => remote.detect());
 

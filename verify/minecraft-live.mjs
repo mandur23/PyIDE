@@ -70,7 +70,7 @@ const buildRun = async (title, cfg, done, ms) => {
   return tabText(title);
 };
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.toolWindows.get('Minecraft').show(), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
   for (const s of SERVERS) {
     const t0 = Date.now();
     await js(`(window.__mcDone = null, ide.minecraft.createServer({ name: ${S(s.name)}, kind: ${S(s.kind)}, mc: ${S(s.mc)}, memory: '2G', port: ${25700 + SERVERS.indexOf(s)} }).then((r) => { window.__mcDone = r ? 'ok' : 'failed'; }), true)`);

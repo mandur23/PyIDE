@@ -1,7 +1,8 @@
 // SSH passwords and key passphrases for remote interpreters. Secrets are encrypted with safeStorage in
 // <userData>/remote-interp/secrets.json and never reach the renderer or the settings file. ssh.exe asks for them
 // through SSH_ASKPASS: the IDE's own executable run as Node with a --require'd script that reads the answer from a
-// named pipe this process serves, keyed by a one-time token per ssh invocation.
+// named pipe this process serves, keyed by a one-time token per ssh invocation. ssh asks about a host key it has not
+// seen the same way, before any secret is used: that question goes to the user, and ssh itself records the key.
 const crypto = require('crypto');
 const fs = require('fs');
 const net = require('net');
@@ -50,10 +51,14 @@ const hasSecrets = (id) => {
 const forget = (id) => { const all = load(); delete all[id]; save(all); };
 
 const ASKPASS_JS = `// Written by Nano Studio: answers one ssh prompt from the IDE's named pipe, then exits before Node runs argv[1].
+// Node has already rewritten process.argv[1] as a file path, which would change a fingerprint's slashes: the diagnostic
+// report keeps the command line as it came.
 const fs = require('fs');
 try {
+  process.report.excludeNetwork = true;
+  const prompt = process.report.getReport().header.commandLine.pop() || '';
   const fd = fs.openSync(process.env.PYIDE_ASKPASS_PIPE, 'r+');
-  fs.writeSync(fd, process.env.PYIDE_ASKPASS_TOKEN + '\\n' + (process.argv[process.argv.length - 1] || '') + '\\n');
+  fs.writeSync(fd, process.env.PYIDE_ASKPASS_TOKEN + '\\n' + JSON.stringify(prompt) + '\\n');
   const chunks = [];
   const buf = Buffer.alloc(4096);
   for (let n; (n = fs.readSync(fd, buf, 0, buf.length, null)) > 0;) chunks.push(Buffer.from(buf.subarray(0, n)));
@@ -71,17 +76,33 @@ let server = null;
 let pipe = null;
 const tokens = new Map(); // token -> {password, passphrase}
 
+// fn({host, keyType, fingerprint}) -> Promise<boolean>: whether the user trusts a host key ssh has not seen.
+let trustHostKey = async () => false;
+const onHostKey = (fn) => { trustHostKey = fn; };
+
+// ssh's question, as OpenSSH words it. A yes/no question this cannot read is refused: a stored password must never be
+// the answer to one.
+async function answerHostKey(prompt) {
+  const host = /^The authenticity of host '([^']*)'/m.exec(prompt)?.[1];
+  const key = /^(\S+) key fingerprint is (\S+?)\.?\s*$/m.exec(prompt);
+  return host && key && await trustHostKey({ host, keyType: key[1], fingerprint: key[2] }) ? 'yes' : 'no';
+}
+
 function ensureServer() {
   if (server) return;
   pipe = `\\\\.\\pipe\\pyide-askpass-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   server = net.createServer((sock) => {
     let buf = '';
-    sock.on('data', (d) => {
+    let asked = false;
+    sock.on('data', async (d) => {
       buf += d.toString('utf8');
       const lines = buf.split('\n');
-      if (lines.length < 3) return;
+      if (lines.length < 3 || asked) return;
+      asked = true;
       const s = tokens.get(lines[0].trim());
-      const answer = !s ? '' : /passphrase/i.test(lines[1]) ? s.passphrase || '' : s.password || '';
+      const prompt = s ? JSON.parse(lines[1]) : '';
+      const answer = !s ? '' : /\byes\b[^\n]*\bno\b[^\n]*$/i.test(prompt) ? await answerHostKey(prompt)
+        : /passphrase/i.test(prompt) ? s.passphrase || '' : s.password || '';
       sock.end(answer);
     });
     sock.on('error', () => {});
@@ -91,11 +112,10 @@ function ensureServer() {
   server.unref();
 }
 
-// Environment that lets one ssh invocation ask for the target's secrets (override: unsaved ones from a form), or
-// null when there are none, so the caller can use BatchMode instead. release() forgets the token.
+// Environment that lets one ssh invocation ask about a host key and for the target's secrets (override: unsaved ones
+// from a form). hasSecrets says whether there are any to ask for. release() forgets the token.
 function sshEnv(id, override) {
   const s = override || secretsOf(id);
-  if (!s.password && !s.passphrase) return null;
   ensureServer();
   fs.mkdirSync(dir(), { recursive: true });
   const script = path.join(dir(), 'askpass.js');
@@ -103,6 +123,7 @@ function sshEnv(id, override) {
   const token = crypto.randomBytes(16).toString('hex');
   tokens.set(token, s);
   return {
+    hasSecrets: !!(s.password || s.passphrase),
     env: {
       SSH_ASKPASS: process.execPath,
       SSH_ASKPASS_REQUIRE: 'force',
@@ -116,4 +137,4 @@ function sshEnv(id, override) {
   };
 }
 
-module.exports = { setSecret, hasSecrets, forget, sshEnv };
+module.exports = { setSecret, hasSecrets, forget, sshEnv, onHostKey };

@@ -326,9 +326,7 @@ try {
   check(!(await js(`ide.toolWindows.get('PythonConsole').isVisible()`)), 'Alt+8 hides the Python Console');
 
   // ---------- persistence ----------
-  await js(`location.reload()`);
-  await sleep(500);
-  await until(`window.__ideReady === true && !!ide.root`, 'reloaded', 30000);
+  await t.reload({ until: 'window.__ideReady === true && !!ide.root' });
   await until(`document.querySelector('.run-target-name')?.textContent === 'units'`, 'restored selection');
   check(await js(`ide.run.configs().map(c => c.name).join('|') === 'App with args|scratch|pytest for test_calc.TestDiv.test_div|pytest in test_calc.py|calc|units|pytest in project'`), `configurations survive a restart (${await js(`ide.run.configs().map(c => c.name).join('|')`)})`);
 

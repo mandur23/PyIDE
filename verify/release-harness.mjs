@@ -1,16 +1,23 @@
 // Pure-Node checks of scripts/release.mjs (in CI): io (spawnSync, fs, fetch, sleep, exit) is stubbed with a fake world,
 // so no git, gh, installer, network or file outside it is touched; it only reads package.json, package-lock.json and
 // CHANGELOG.md. Covers failure advice by phase, the order of a release, local-install handling, signals, the
-// blockmap rules of differential updates, and the beta channel (a beta publishes only beta.yml and leaves latest.yml
-// alone; a stable release writes both). Usage: node verify/release-harness.mjs
-import { createHash } from 'crypto';
+// blockmap rules of differential updates, the beta channel (a beta publishes only beta.yml and leaves latest.yml
+// alone; a stable release writes both), and signing (the key's checks, each installer's .sig before the feed switches).
+// The release key is a throwaway one that lives in the fake world. Usage: node verify/release-harness.mjs
+import { createHash, generateKeyPairSync, sign, verify } from 'crypto';
 import { readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { gzipSync } from 'zlib';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 delete process.env.PYIDE_DIST_DIR; // the fake world's installers are in dist/
+const keys = generateKeyPairSync('ed25519');
+const pemOf = (k) => k.privateKey.export({ type: 'pkcs8', format: 'pem' });
+const KEY_FILE = path.join(ROOT, 'fake-world', 'release-key.pem');
+process.env.NANO_RELEASE_KEY = KEY_FILE;
+process.env.PYIDE_RELEASE_PUBLIC_KEY = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const R = await import(pathToFileURL(path.join(ROOT, 'scripts', 'release.mjs')).href);
 const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets, liveBeta } = R;
 const REPO_ARG = 'mandur23/Portfolio-Nano-';
@@ -21,6 +28,11 @@ const LOCK = path.join(ROOT, 'package-lock.json');
 const DIST = path.join(ROOT, 'dist');
 const EXE = path.join(DIST, `NanoStudio-Setup-${V}.exe`);
 const BLOCKMAP = `${EXE}.blockmap`;
+const INDEX = path.join(ROOT, 'marketplace', 'index.json');
+const INDEX_BODY = '{"format":1,"plugins":[]}\n';
+const sigText = (body) => `${sign(null, Buffer.from(body), keys.privateKey).toString('base64')}\n`;
+const STAGE = `${path.join(tmpdir(), 'pyide-release-')}STAGE`;
+const staged = (name) => path.join(STAGE, name);
 const PREV = path.join(DIST, 'NanoStudio-Setup-0.2.0.exe');
 const UNINST = path.join(INSTALL_DIR, 'Uninstall Nano Studio.exe');
 const INSTALLED = path.join(INSTALL_DIR, 'Nano Studio.exe');
@@ -50,6 +62,7 @@ function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin =
   const exe = path.join(DIST, `NanoStudio-Setup-${version}.exe`);
   const files = new Map([
     [PKG, pkgText], [LOCK, lockText], [path.join(ROOT, 'CHANGELOG.md'), changelog],
+    [KEY_FILE, pemOf(keys)], [INDEX, INDEX_BODY], [`${INDEX}.sig`, sigText(INDEX_BODY)],
     [exe, exeBody], [`${exe}.blockmap`, blockmapOf(exeBody.length)], [path.join(DIST, `NanoStudio-${version}.msi`), 'msi'], [PREV, 'prev exe'],
     [path.join(DIST, version.includes('-') ? 'beta.yml' : 'latest.yml'), ymlText(ymlVersion, path.basename(exe), sha)],
   ]);
@@ -323,7 +336,7 @@ code = await run([B1, '--skip-tests']);
 ok(code === 0 && pkgVersion() === B1 && has(`commit -m Release ${B1}`) && has(`tag -a v${B1}`) && has(`push --atomic origin master refs/tags/v${B1}`), `beta ${B1}: version set, committed, tagged and pushed like a release`);
 ok(/release notes: CHANGELOG\.md, ## 0\.2\.1 \(a beta/.test(text()), 'beta without its own CHANGELOG section: the section of the release it previews (## 0.2.1)');
 let ups = uploads();
-ok(ups.length === 2 && ups[0] === `gh release upload nano-studio dist${sep}NanoStudio-Setup-${B1}.exe dist${sep}NanoStudio-Setup-${B1}.exe.blockmap dist${sep}NanoStudio-${B1}.msi -R ${REPO_ARG} --clobber`, `beta: installers and blockmap first, without NanoStudio-Setup.exe (${ups[0]})`);
+ok(ups.length === 2 && ups[0] === `gh release upload nano-studio dist${sep}NanoStudio-Setup-${B1}.exe dist${sep}NanoStudio-Setup-${B1}.exe.blockmap dist${sep}NanoStudio-${B1}.msi ${staged(`NanoStudio-Setup-${B1}.exe.sig`)} ${staged(`NanoStudio-${B1}.msi.sig`)} -R ${REPO_ARG} --clobber`, `beta: installers, signatures and blockmap first, without NanoStudio-Setup.exe (${ups[0]})`);
 ok(ups[1].includes(betaYmlUp) && idx(betaYmlUp) > idx(`NanoStudio-Setup-${B1}.exe.blockmap`), 'beta: beta.yml uploaded last, after the blockmap');
 ok(!W.calls.some((c) => /latest\.yml/.test(c)), 'beta: latest.yml is neither uploaded nor touched (dist holds a stale one of 0.2.0)');
 ok(!has('release edit nano-studio') && !has('--latest'), 'beta: the release title, notes and Latest flag are not edited');
@@ -396,6 +409,92 @@ ok(/dist\/beta\.yml put back/.test(dryBeta) && W.files.get(path.join(DIST, 'beta
 ok(previousVersion(['NanoStudio-Setup-0.2.5-beta.9.exe.blockmap', 'NanoStudio-Setup-0.2.5-beta.10.exe', 'NanoStudio-Setup-0.2.4.exe'], '0.2.5', true) === '0.2.5-beta.10', 'previous beta: numeric prerelease order (beta.10 > beta.9)');
 ok(previousVersion(['NanoStudio-Setup-0.2.5-beta.1.exe', 'NanoStudio-Setup-0.2.4.exe'], '0.2.5') === '0.2.4', 'previous stable: betas are not stable versions');
 ok(liveBeta(['NanoStudio-Setup-0.3.0-beta.1.exe.blockmap', 'NanoStudio-Setup-0.2.9-beta.2.exe']) === '0.2.9-beta.2', 'the beta beta.yml offers: the newest beta with its installer on the release');
+
+// ---------- G. signatures ----------
+console.log('-- G. signatures');
+const signedBy = (file, body) => verify(null, Buffer.from(body), keys.publicKey, Buffer.from(W.files.get(file) || '', 'base64'));
+const exeBytes = () => W.files.get(EXE);
+world();
+code = await run([V, '--skip-tests']);
+const firstUpload = uploads()[0];
+const stableSig = staged('NanoStudio-Setup.exe.sig');
+ok(code === 0 && ['NanoStudio-Setup-0.2.1.exe.sig', 'NanoStudio-0.2.1.msi.sig', 'NanoStudio-Setup.exe.sig'].every((n) => firstUpload.includes(staged(n))), `each installer's signature goes up with it (${firstUpload})`);
+ok(signedBy(staged(`NanoStudio-Setup-${V}.exe.sig`), exeBytes()) && signedBy(staged(`NanoStudio-${V}.msi.sig`), 'msi') && signedBy(stableSig, exeBytes()), 'the signatures verify against the exact bytes of each installer');
+ok(!signedBy(staged(`NanoStudio-${V}.msi.sig`), `${exeBytes()}x`), 'a signature does not verify other bytes');
+ok(idx(`NanoStudio-Setup-${V}.exe.sig`) < idx(FEED_UP) && idx(`NanoStudio-${V}.msi.sig`) < idx(FEED_UP) && idx('NanoStudio-Setup.exe.sig') < idx(FEED_UP), 'every signature is up before latest.yml');
+
+world({ version: B1, assets: BETA_ASSETS });
+code = await run([B1, '--skip-tests']);
+ok(code === 0 && !uploads()[0].includes('NanoStudio-Setup.exe.sig') && idx(`NanoStudio-${B1}.msi.sig`) < idx(betaYmlUp), 'a beta signs its own installers, before beta.yml, and leaves the stable alias alone');
+
+world({ tagOnOrigin: true });
+code = await run([V, '--publish-only']);
+ok(code === 0 && signedBy(staged(`NanoStudio-Setup-${V}.exe.sig`), exeBytes()) && idx(`NanoStudio-Setup-${V}.exe.sig`) < idx(FEED_UP), 'publish-only signs what dist holds, before the feed switch');
+
+world();
+W.files.delete(KEY_FILE);
+code = await run([V, '--skip-tests']);
+ok(code === 1 && text().includes(`no release signing key at ${KEY_FILE}`) && /NANO_RELEASE_KEY/.test(text()) && !has('npm run dist') && !has(' commit ') && !has('gh release upload') && pkgVersion() === '0.2.0', 'no key: stops in step 1 with a clear message, nothing built or changed');
+
+const defaultKey = path.join(process.env.USERPROFILE || '', '.nano-studio', 'release-key.pem');
+delete process.env.NANO_RELEASE_KEY;
+world();
+W.files.delete(KEY_FILE);
+W.files.set(defaultKey, pemOf(keys));
+code = await run([V, '--skip-tests']);
+ok(code === 0 && signedBy(staged(`NanoStudio-Setup-${V}.exe.sig`), exeBytes()), 'without NANO_RELEASE_KEY the key is %USERPROFILE%\\.nano-studio\\release-key.pem (read from the fake world)');
+process.env.NANO_RELEASE_KEY = KEY_FILE;
+
+world();
+W.files.set(KEY_FILE, pemOf(generateKeyPairSync('ed25519')));
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /does not match the public key in main\/release-key\.js/.test(text()) && !has('npm run dist'), 'a key that is not the embedded one: stops in step 1');
+
+world();
+W.files.set(KEY_FILE, 'not a key');
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /is not a readable private key/.test(text()) && !has('npm run dist'), 'an unreadable key: stops in step 1');
+
+world();
+W.files.set(KEY_FILE, generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }));
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /is a rsa key; release signing uses Ed25519/.test(text()) && !has('npm run dist'), 'a key of another type: stops in step 1');
+
+const testKey = process.env.PYIDE_RELEASE_PUBLIC_KEY;
+process.env.PYIDE_RELEASE_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdS1cEtTg4zI8dI3MK3w0JuAaCD2v2GSFqmgDdNuWzoE=';
+world();
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /which is still the placeholder/.test(text()) && !has('npm run dist'), 'main/release-key.js still holding the placeholder: stops in step 1');
+process.env.PYIDE_RELEASE_PUBLIC_KEY = testKey;
+
+world({ tagOnOrigin: true });
+W.files.delete(KEY_FILE);
+code = await run([V, '--publish-only']);
+ok(code === 1 && /no release signing key/.test(text()) && !has('gh release upload'), 'publish-only without the key: stops before uploading');
+
+world();
+W.files.delete(KEY_FILE);
+code = await run([V, '--dry-run', '--skip-tests']);
+ok(code === 0 && /a real release would stop here\): no release signing key/.test(text()) && text().includes(`[dry-run] gh release upload nano-studio dist${sep}NanoStudio-Setup-${V}.exe`) && !W.files.has(stableSig), 'dry run without the key: warns, shows the upload, signs nothing');
+
+world();
+W.files.delete(`${INDEX}.sig`);
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /marketplace\/index\.json\.sig is missing or does not match/.test(text()) && /npm run marketplace:sign/.test(text()) && !has('npm run dist'), 'no signature for the Marketplace index: stops in step 1');
+world();
+W.files.set(INDEX, `${INDEX_BODY} `);
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /does not match the index/.test(text()) && !has('npm run dist'), 'an index changed after signing: stops in step 1');
+
+const withSigs = [...ASSETS, 'NanoStudio-Setup-0.2.0.exe.sig', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup.exe.sig'];
+world({ assets: withSigs });
+code = await run([V, '--skip-tests']);
+ok(code === 0 && deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.0.exe.sig'].join(), `an older version's .sig goes with its installer; its blockmap stays (${deletes().join(', ')})`);
+ok(!deletes().includes('NanoStudio-Setup.exe.sig') && idx('delete-asset') > idx(FEED_UP), 'the stable alias\'s signature is replaced, not deleted, and deletes come after the feed switch');
+world({ version: B2, assets: [...BETA_ASSETS, `NanoStudio-Setup-${B1}.exe.sig`, `NanoStudio-${B1}.msi.sig`, 'NanoStudio-Setup-0.2.0.exe.sig'] });
+code = await run([B2, '--skip-tests']);
+ok(code === 0 && deletes().includes(`NanoStudio-Setup-${B1}.exe.sig`) && deletes().includes(`NanoStudio-${B1}.msi.sig`) && !deletes().includes('NanoStudio-Setup-0.2.0.exe.sig'), 'a beta deletes older betas\' signatures, not a stable version\'s');
+ok(previousVersion(['NanoStudio-Setup-0.2.4.exe.sig'], '0.2.5') === '0.2.4' && oldAssets(['NanoStudio-Setup-0.2.4.exe.sig', 'NanoStudio-Setup.exe.sig'], '0.2.5').join() === 'NanoStudio-Setup-0.2.4.exe.sig', 'asset names: <installer>.sig belongs to that installer\'s version');
 
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

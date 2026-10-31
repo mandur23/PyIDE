@@ -313,9 +313,7 @@ try {
   await until(`window.__debugger.state() === null`, 'waiter debug session stopped');
 
   // ---- persistence across reload ----
-  await js(`location.reload(), true`);
-  await t.sleep(500);
-  await until('window.__ideReady === true', 'IDE reloaded', 30000);
+  await t.reload();
   await openFile(t, 'main.py');
   await until(`(ide.editor.render(true), document).querySelectorAll('#editor .dbg-bp.cond').length === 1`, 'breakpoint restored');
   check(true, 'breakpoints restored after reload');

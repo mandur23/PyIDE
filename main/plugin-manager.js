@@ -3,7 +3,7 @@
 // lists main-process modules. Bundled plugins are renderer/features/*; user plugins live in <userData>/plugins.
 // Enabling, disabling, installing and uninstalling take effect after a restart, as in PyCharm.
 // `modes` lists the app modes a plugin runs in ('code', 'craft'; ['code'] when absent). A process has one mode
-// (main.js), and only the plugins of that mode load; required plugins load in every mode.
+// (main.js), and only the plugins of that mode load; required plugins, which only bundled ones can be, load in every mode.
 const fs = require('fs');
 const path = require('path');
 const { extractZip } = require('./zip');
@@ -16,8 +16,8 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return fallback; }
 }
 
-// Copies a folder tree with the fs calls Electron supports inside app.asar (fs.cpSync is not one of them, so the
-// Marketplace's plugins-catalog, packed in the installed app's asar, could not be installed). Symbolic links are skipped.
+// Copies a folder tree out of app.asar, where the Marketplace's plugins-catalog is packed in the installed app, with
+// the fs calls Electron has supported there longest. Symbolic links are skipped.
 function copyTree(from, to) {
   fs.mkdirSync(to, { recursive: true });
   for (const name of fs.readdirSync(from)) {
@@ -74,7 +74,8 @@ function createPluginManager({ appDir, userDataDir, mode: initialMode = 'code' }
       description: meta?.description || '',
       i18n: meta?.i18n || {},
       depends: strings(meta?.depends),
-      required: !!meta?.required,
+      // Only the IDE's own plugins: from an installed one this would make it impossible to turn off, in every mode.
+      required: bundled && !!meta?.required,
       detached: !!meta?.detached,
       modes: modes.length ? modes : ['code'],
       bundled,

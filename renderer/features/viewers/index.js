@@ -1001,53 +1001,52 @@
   }
 
   // ---------- Markdown ----------
-  let markedLoad = null;
-  // marked's UMD wrapper registers with Monaco's AMD loader when it sees define.amd, so only that flag is hidden while
-  // the script loads (Monaco keeps calling define() for languages it loads lazily in the meantime).
-  function loadMarked() {
-    if (window.marked) return Promise.resolve(window.marked);
-    markedLoad ||= new Promise((resolve, reject) => {
-      const amd = window.define?.amd;
-      if (window.define) window.define.amd = undefined;
-      const restore = () => { if (window.define && amd) window.define.amd = amd; };
-      const s = document.createElement('script');
-      s.src = '../node_modules/marked/marked.min.js';
-      s.onload = () => { restore(); resolve(window.marked); };
-      s.onerror = () => { restore(); markedLoad = null; reject(new Error('marked.min.js failed to load')); };
-      document.head.appendChild(s);
-    });
-    return markedLoad;
-  }
 
-  // SVG animations can set an attribute (a link's href) after the sanitizer looked at it.
-  const BLOCKED = 'script,style,iframe,frame,frameset,object,embed,applet,link,meta,base,form,input,button,textarea,select,option,noscript,template,portal,animate,set,animateMotion,animateTransform';
+  // Allowlist sanitizer, the notebook's (renderer/features/notebook) plus media and fenced-code classes: unknown elements
+  // are unwrapped, the dropped ones go with their content, attributes outside the list go.
+  const MD_TAGS = new Set(['a', 'abbr', 'b', 'blockquote', 'br', 'code', 'dd', 'del', 'details', 'div', 'dl', 'dt', 'em', 'h1', 'h2',
+    'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'kbd', 'li', 'ol', 'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strong',
+    'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'mark', 'center', 'font', 'figure', 'figcaption',
+    'video', 'audio', 'source']);
+  const MD_DROP = new Set(['script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'link', 'meta', 'base',
+    'form', 'button', 'textarea', 'select', 'option', 'noscript', 'template', 'svg', 'math', 'title', 'head']);
+  const MD_ATTRS = new Set(['href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'align', 'width', 'height', 'id', 'checked', 'open', 'start', 'controls', 'loop', 'muted']);
+  // Browsers ignore ASCII controls and spaces when they read a URL, so java\nscript: is still javascript:.
+  const plainUrl = (u) => u.replace(/[\u0000- ]/g, '');
   const hasScheme = (u) => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) && !/^[a-zA-Z]:[\\/]/.test(u);
   const safeHref = (u) => /^https?:\/\//i.test(u) || u.startsWith('#') || !hasScheme(u);
+  const safeSrc = (u, baseDir) => {
+    const plain = plainUrl(u);
+    if (/^https?:\/\//i.test(plain) || /^data:image\//i.test(plain)) return plain;
+    if (hasScheme(plain)) return null;
+    const p = resolveRel(baseDir, u.trim());
+    return p && fileUrl(p);
+  };
 
-  // Strips scripts, event handlers and non-http(s) links; resolves relative images against the document's folder.
+  // Links keep http(s), anchors and relative files; relative images resolve against the document's folder.
   function sanitizeInto(html, baseDir) {
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
-    for (const n of tpl.content.querySelectorAll(BLOCKED)) n.remove();
-    for (const n of tpl.content.querySelectorAll('*')) {
-      for (const a of [...n.attributes]) {
-        const name = a.name.toLowerCase();
-        if (name.startsWith('on') || ['srcdoc', 'formaction', 'srcset', 'action', 'style', 'xlink:href'].includes(name)) n.removeAttribute(a.name);
-      }
-      if (n.hasAttribute('href')) {
-        const h = n.getAttribute('href').trim();
-        if (!safeHref(h)) { n.removeAttribute('href'); n.classList.add('vw-md-dead-link'); }
-      }
-      if (n.hasAttribute('src')) {
-        const s = n.getAttribute('src').trim();
-        if (n.tagName !== 'IMG' && n.tagName !== 'VIDEO' && n.tagName !== 'AUDIO' && n.tagName !== 'SOURCE') n.removeAttribute('src');
-        else if (/^https?:\/\//i.test(s) || /^data:image\//i.test(s)) { /* allowed as is */ } else if (hasScheme(s)) n.removeAttribute('src');
-        else {
-          const p = resolveRel(baseDir, s);
-          if (p) n.setAttribute('src', fileUrl(p)); else n.removeAttribute('src');
+    const walk = (node) => {
+      for (const n of [...node.children]) {
+        const tag = n.tagName.toLowerCase();
+        if (MD_DROP.has(tag)) { n.remove(); continue; }
+        walk(n);
+        if (!MD_TAGS.has(tag)) { n.replaceWith(...n.childNodes); continue; }
+        // A task list's box is shown, not used.
+        if (tag === 'input' && (n.getAttribute('type') || '').toLowerCase() !== 'checkbox') { n.remove(); continue; }
+        const language = tag === 'code' && /^language-[\w+-]+$/.exec(n.getAttribute('class') || '')?.[0];
+        for (const a of [...n.attributes]) if (!MD_ATTRS.has(a.name.toLowerCase())) n.removeAttribute(a.name);
+        if (language) n.className = language;
+        if (tag === 'input') { n.setAttribute('type', 'checkbox'); n.setAttribute('disabled', ''); }
+        if (n.hasAttribute('href') && !safeHref(plainUrl(n.getAttribute('href')))) { n.removeAttribute('href'); n.classList.add('vw-md-dead-link'); }
+        if (n.hasAttribute('src')) {
+          const src = ['img', 'video', 'audio', 'source'].includes(tag) ? safeSrc(n.getAttribute('src'), baseDir) : null;
+          if (src) n.setAttribute('src', src); else n.removeAttribute('src');
         }
       }
-    }
+    };
+    walk(tpl.content);
     return tpl.content;
   }
 
@@ -1152,8 +1151,6 @@
         return;
       }
       status.textContent = '';
-      try { await loadMarked(); } catch (e) { status.textContent = cleanError(e); return; }
-      if (disposed) return;
       const keep = preview.scrollTop;
       renderMarkdown(preview, doc.model.getValue(), baseDir);
       rendered = true;
@@ -1210,9 +1207,8 @@
     preview.addEventListener('scroll', previewToEditor);
 
     // Links: http(s) open in the browser, anchors scroll, relative files open in the IDE.
-    // An image map's <area> is a link too; left to itself it would navigate the IDE window.
     preview.addEventListener('click', async (e) => {
-      const a = e.target.closest('a, area');
+      const a = e.target.closest('a');
       if (!a) return;
       e.preventDefault();
       const href = a.getAttribute('href');
@@ -1282,14 +1278,16 @@
     width.onchange = () => { ide.settings.set('viewers.htmlWidth', width.value); applyWidth(); };
     const browserBtn = button(tr('Open in Browser'), tr('Open the saved file in the system browser'), () => invoke('viewers:openInBrowser', path));
     const status = el('span', 'vw-status vw-html-errors');
-    bar.append(seg.el, reloadBtn, width, browserBtn, status);
+    const scriptsOff = el('span', 'vw-status vw-html-scripts-off');
+    bar.append(seg.el, reloadBtn, width, browserBtn, status, scriptsOff);
     const split = el('div', 'vw-md-split');
     const edHost = el('div', 'vw-md-editor');
     const divider = el('div', 'vw-md-divider');
     const stage = el('div', 'vw-html-stage');
     const frame = el('iframe', 'vw-html-frame');
-    // No allow-same-origin: the page runs in its own opaque origin and cannot reach the IDE.
-    frame.sandbox = 'allow-scripts allow-forms allow-modals allow-popups';
+    // Fully sandboxed until main says the site may run scripts (reload). Never allow-same-origin: the page keeps its
+    // own opaque origin and cannot reach the IDE.
+    frame.sandbox = '';
     frame.title = tr('HTML preview');
     const notice = el('div', 'vw-html-notice hidden');
     stage.append(notice, frame);
@@ -1378,7 +1376,12 @@
     async function reload() {
       if (disposed || mode === 'editor') return;
       updateNotice();
-      if (!url) ({ url, root } = await invoke('viewers:previewUrl', path, ide.root));
+      if (!url) {
+        const site = await invoke('viewers:previewUrl', path, ide.root);
+        ({ url, root } = site);
+        if (site.scripts) frame.sandbox = 'allow-scripts allow-forms allow-modals allow-popups';
+        else scriptsOff.textContent = tr('Scripts are off: this folder is not trusted');
+      }
       const unsaved = {};
       for (const t of openDocs()) if (ide.isDirty(t) && ide.util.isUnder(t.path, root)) unsaved[t.path] = t.doc.model.getValue();
       await invoke('viewers:previewOverrides', new URL(url).hostname, unsaved);

@@ -344,12 +344,9 @@
       if (st.disposed || !st.info) return;
       const v = vertical();
       const h = horizontal();
-      const viewW = scroller.clientWidth;
       sizer.style.width = `${st.indexW + totalW()}px`;
       sizer.style.height = `${v.virtH}px`;
       layer.style.transform = `translate(${scroller.scrollLeft}px, ${scroller.scrollTop}px)`;
-      layer.style.width = `${viewW}px`;
-      layer.style.height = `${v.viewH}px`;
       const sel = selRect();
       const parts = [];
       for (let r = v.first; r <= v.last && v.rows; r++) {

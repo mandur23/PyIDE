@@ -2,7 +2,7 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { launch, openFile, SANITIZED_HANDLER } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,6 +105,7 @@ try {
   await until(`${H}.dataset.loaded === 'true'`, 'npz light', 60000);
   await sleep(200);
   await shot('light-ko-npz.png');
+  check(t.takeCsp(SANITIZED_HANDLER) > 0, 'the page policy reports the on* attribute of the Markdown fixture where the sanitizer read it');
 } catch (err) {
   check(false, err.message);
   await shot('failure.png');

@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { isMainThread, parentPort, workerData } = require('worker_threads');
 const projectRoots = isMainThread ? require('../project-roots') : null;
+const trust = isMainThread ? require('../trust') : null;
 // This file is also the worker that reads and chunks project files (see collect()), where relative requires do not
 // resolve, and verify/semantic.mjs loads it in plain Node for the index log checks, so the Electron-bound runtime is
 // required by register() alone.
@@ -308,7 +309,7 @@ function quickFiles(root, paths, opts) {
     }
   }
   for (const [dir, d] of dirs) if (isDataFolder(d, opts) !== census.data.has(dir)) return null;
-  const ignored = gitChecksIgnored(root, files.map((f) => f.rel));
+  const ignored = opts.noGit ? new Set() : gitChecksIgnored(root, files.map((f) => f.rel));
   const kept = files.filter((x) => !ignored.has(relKey(x.rel)));
   for (const f of files) if (ignored.has(relKey(f.rel))) gone.push(f.rel);
   // Files under a data folder stay out of the index, as the walk leaves them.
@@ -336,7 +337,7 @@ function collect(root, knownFlat, onlyPaths, opts = {}) {
     gone = quick.gone.map((rel) => knownKey.get(rel.toLowerCase())).filter(Boolean);
     skipped = lastWalk.get(root).skipped;
   } else {
-    const ignored = gitIgnored(root);
+    const ignored = opts.noGit ? new Set() : gitIgnored(root);
     const census = { files: new Map(), dirs: new Map(), data: new Set() };
     ({ files: disk, skipped } = walk(root, { ...opts, ignored }, census));
     // Data folders are not left out for good: the quick path keeps judging them (quickFiles).
@@ -827,8 +828,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
           const known = [];
           for (const rel in idx.files) known.push(rel, idx.files[rel].mtime, idx.files[rel].size, idx.files[rel].chunks.length, idx.files[rel].hash || '');
           const { dataFiles, dataMB } = limits;
-          // The folders excluded from the semantic index and those marked Excluded (Mark Directory As).
-          const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, excluded: [...excludedOf(root), ...projectRoots.rootsOf(root).excluded] });
+          // The folders excluded from the semantic index and those marked Excluded (Mark Directory As). noGit: an
+          // untrusted project's .git/config (core.fsmonitor) would run a program through git; the worker has no trust list.
+          const plan = await inWorker('collect', root, known, onlyPaths, { dataFiles, dataMB, noGit: !trust.isTrusted(root), excluded: [...excludedOf(root), ...projectRoots.rootsOf(root).excluded] });
           // A quick look that found nothing for the index (a log, an image, a file it does not hold) ends quietly.
           if (plan.gone && !plan.files && !plan.touched.length && !plan.gone.some((rel) => idx.files[rel])) {
             await inWorker('drop', root);

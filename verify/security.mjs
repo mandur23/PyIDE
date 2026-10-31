@@ -1,4 +1,4 @@
-// Untrusted content cannot take over the IDE window: the window never leaves the IDE page (links, image maps,
+// Untrusted content cannot take over the IDE window: the window never leaves the IDE page (links,
 // popups, location changes), only the IDE page gets the IPC API, a README cannot smuggle a link past the Markdown
 // sanitizer, dialog text is never markup, the HTML preview server keeps to its folder (encoded "..", hidden files,
 // a junction out of the project), and pages get no camera, location or notification permission.
@@ -42,12 +42,11 @@ fetch('/' + decodeURIComponent(location.hash.slice(1))).then((r) => r.status, ()
 
   // ---------- Markdown preview ----------
   await openFile(t, 'README.md');
-  await until(`${H}.querySelector('.vw-md-preview img[usemap]')?.naturalWidth === 1`, 'markdown preview with the image map', 15000);
-  check(await js(`!${H}.querySelector('.vw-md-preview animate, .vw-md-preview set') && !!${H}.querySelector('.vw-md-preview svg text')`), 'SVG animations that could rewrite a link are removed from the Markdown preview');
-  await t.click('.vw-md-preview img[usemap]');
-  await until(`ide.activeTab()?.path?.toLowerCase().endsWith('other.md')`, 'image map link opens in the IDE', 5000)
-    .then(() => check(true, "a click on an image map's <area> opens the linked file in the IDE"), () => check(false, "a click on an image map's <area> opens the linked file in the IDE"));
-  check(await ideAlive(), 'the image map link did not navigate the IDE window');
+  await until(`${H}.querySelector('.vw-md-preview img[alt="map"]')?.naturalWidth === 1`, 'markdown preview with the image', 15000);
+  check(await js(`!${H}.querySelector('.vw-md-preview svg, .vw-md-preview animate, .vw-md-preview map, .vw-md-preview area, .vw-md-preview [usemap]')`), 'SVG and image maps, which can carry links past the sanitizer, do not reach the Markdown preview');
+  await t.click('.vw-md-preview img[alt="map"]');
+  await sleep(300);
+  check(await ideAlive(), 'a click on the image does not navigate the IDE window');
 
   // Middle-click on a link would open a new window (with the IDE's preload) unless window opening is refused.
   await openFile(t, 'README.md');

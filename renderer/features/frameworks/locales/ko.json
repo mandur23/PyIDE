@@ -1,4 +1,5 @@
 {
+  "Task": "작업",
   "Django, Flask and FastAPI": "Django, Flask 및 FastAPI",
   "Framework detection, dev server run configurations, manage.py tasks, Django Structure, Endpoints, a browser pane and Django/Jinja2 templates.": "프레임워크 감지, 개발 서버 실행 구성, manage.py 작업, Django 구조, 엔드포인트, 브라우저 창, Django/Jinja2 템플릿을 지원합니다.",
   "Host": "호스트",

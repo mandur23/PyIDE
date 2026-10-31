@@ -1,7 +1,7 @@
 {
   "Updates": "업데이트",
   "Checks an update feed on startup, daily or weekly and from Help, downloads new versions in the background and installs them on restart.": "시작할 때, 매일 또는 매주, 그리고 도움말 메뉴에서 업데이트 피드를 확인하고, 새 버전을 백그라운드에서 다운로드한 뒤 다시 시작할 때 설치합니다.",
-  "An http(s) URL or a local folder with latest.yml. Leave it empty to turn updates off.": "http(s) URL 또는 latest.yml이 있는 로컬 폴더입니다. 비워 두면 업데이트를 사용하지 않습니다.",
+  "An https URL, or a local folder with latest.yml. Leave it empty to turn updates off. An https feed must carry Nano Studio signatures; a folder on this computer is not checked.": "https URL 또는 latest.yml이 있는 로컬 폴더입니다. 비워 두면 업데이트를 사용하지 않습니다. https 피드에는 Nano Studio 서명이 있어야 하며, 이 컴퓨터의 폴더는 서명을 확인하지 않습니다.",
   "Browse…": "찾아보기…",
   "Cancel": "취소",
   "Check Now": "지금 확인",
@@ -55,5 +55,8 @@
   "Beta gets test versions before everyone else, and every stable release too. Switching back to Stable does not reinstall an older version: you keep the version you have until a newer stable release comes out.": "베타 릴리스는 테스트 버전을 먼저 받고, 모든 안정 릴리스도 받습니다. 안정 릴리스로 다시 바꿔도 이전 버전을 다시 설치하지 않으며, 더 새로운 안정 릴리스가 나올 때까지 지금 버전을 그대로 씁니다.",
   "Checking for updates…": "업데이트 확인 중…",
   "It is downloading in the background; the status bar shows its progress.": "백그라운드에서 다운로드하고 있으며 진행률은 상태 표시줄에 표시됩니다.",
-  "The update server did not answer. Check your internet connection or proxy settings.": "업데이트 서버가 응답하지 않습니다. 인터넷 연결이나 프록시 설정을 확인하세요."
+  "The update server did not answer. Check your internet connection or proxy settings.": "업데이트 서버가 응답하지 않습니다. 인터넷 연결이나 프록시 설정을 확인하세요.",
+  "The update was refused because its signature could not be verified. Nano Studio stays on the current version.": "서명을 확인할 수 없어 업데이트를 거부했습니다. Nano Studio는 현재 버전을 그대로 유지합니다.",
+  "An update feed on another computer must use https. Plain http works only on this computer.": "다른 컴퓨터의 업데이트 피드는 https를 사용해야 합니다. http는 이 컴퓨터에서만 사용할 수 있습니다.",
+  "This update comes from a local feed, so its signature was not checked.": "이 업데이트는 로컬 피드에서 받았으므로 서명을 확인하지 않았습니다."
 }

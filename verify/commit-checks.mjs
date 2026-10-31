@@ -724,8 +724,7 @@ try {
       return withDescendants([t.pid], PYRIGHT);
     };
     let tree = await startAnalysis('reload');
-    await cdp('Page.reload');
-    await until('window.__ideReady === true', 'IDE ready after the reload', 40000);
+    await t.reload();
     check(await gone(tree), `reloading the window ends Pyright and its child (${procNames(tree)})`);
     await repoShown('repository detected after the reload');
     tree = await startAnalysis('quit');

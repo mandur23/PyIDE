@@ -90,7 +90,8 @@ function groupForeignKeys(rows) {
 // Export Data refuses (EXPORT_UNSUPPORTED). lib.pushCursor / lib.resultCursor / lib.exportError (main/db/cursors.js)
 // are the shared pieces. Adding a database is adding one file here.
 const { exportError, pushCursor, resultCursor, EXPORT_ROW_CAP } = require('./cursors');
-const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, pushCursor, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'] };
+const { SSL_FIELD, tlsOptions, sslFailure } = require('./ssl');
+const lib = { loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, pushCursor, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS: ['host', 'port', 'user', 'password', 'database'], SSL_FIELD, tlsOptions, sslFailure };
 const DRIVERS = {};
 const PACKAGES = {};
 for (const file of fs.readdirSync(path.join(__dirname, 'kinds')).filter((f) => f.endsWith('.js')).sort()) {

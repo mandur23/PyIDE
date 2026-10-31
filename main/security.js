@@ -19,6 +19,7 @@ const shareOf = (p) => {
   return m ? `${domainToASCII(m[1]) || m[1]}\\${m[2]}`.toLowerCase() : null; // URLs carry the host in punycode
 };
 const allowShare = (p) => { const s = shareOf(p); if (s) shares.add(s); };
+const shareAllowed = (p) => shares.has(shareOf(p));
 let captureUntil = 0;
 const allowWindowCapture = () => { captureUntil = Date.now() + 10000; };
 function blockedFileUrl(url) {
@@ -55,11 +56,11 @@ function install({ appDir }) {
   // Camera, microphone, location, notifications, devices and external protocol handlers are never granted. The IDE page
   // itself may read the clipboard (Monaco's Paste); framed content may only write it.
   // A window's picture (the Minecraft test client's) is allowed to the IDE page for a few seconds after the IDE asks
-  // for it (allowWindowCapture): a desktop capture asks for media with no camera or microphone in it.
+  // for it (allowWindowCapture): a desktop capture asks for display-capture, video only, from the page itself.
   const ALWAYS = new Set(['clipboard-sanitized-write', 'fullscreen']);
   const allowed = (permission, url) => ALWAYS.has(permission) || (permission === 'clipboard-read' && isIdePage(url));
-  const capturing = (permission, details) => permission === 'media' && captureUntil > Date.now() && isIdePage(details?.requestingUrl)
-    && Array.isArray(details.mediaTypes) && !details.mediaTypes.length;
+  const capturing = (permission, details) => permission === 'display-capture' && captureUntil > Date.now() && isIdePage(details?.requestingUrl)
+    && details.isMainFrame === true && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 1 && details.mediaTypes[0] === 'video';
   app.whenReady().then(() => {
     const s = session.defaultSession;
     s.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed(permission, details?.requestingUrl) || capturing(permission, details)));
@@ -68,4 +69,4 @@ function install({ appDir }) {
   });
 }
 
-module.exports = { install, isWeb, allowShare, allowWindowCapture };
+module.exports = { install, isWeb, allowShare, shareAllowed, allowWindowCapture };

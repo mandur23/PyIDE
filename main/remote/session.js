@@ -86,6 +86,15 @@ function getHelpersVersion() {
 const sessions = new Map(); // `${id}|${root}` -> Session
 const initListeners = []; // fn(session) once a session knows its PathMap
 
+// ssh's own text for a refused host key says it over a screenful; this is the one sentence the user acts on.
+function hostKeyProblem(stderr, t) {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/.test(stderr)) {
+    const known = t.port && Number(t.port) !== 22 ? `[${t.host}]:${t.port}` : t.host;
+    return M('The SSH host key of {host} has changed since it was trusted, so nothing was sent to it. Someone may be intercepting the connection, or the server may have been reinstalled. If its administrator confirms the new key, remove the old one with: ssh-keygen -R {known}', { host: t.host, known });
+  }
+  return /Host key verification failed/.test(stderr) ? M('The SSH host key of {host} was not trusted, so nothing was sent to it.', { host: t.host }) : null;
+}
+
 class Session {
   constructor(t) {
     this.t = t;
@@ -106,23 +115,27 @@ class Session {
     return { cmd: tool('docker'), args: ['exec', '-i', ...(tty ? ['-t'] : []), this.container, 'sh', '-c', script], env: {} };
   }
 
+  // StrictHostKeyChecking=ask: ssh puts a host key it has not seen to askpass, which shows its fingerprint, and records
+  // it in the user's known_hosts once trusted; a key that differs from the recorded one is refused outright. Where
+  // BatchMode would refuse every question, 0 prompts only rules out passwords and passphrases.
   sshArgs({ tty = false, forwards = [], secrets } = {}) {
     const t = this.t;
-    const args = ['-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=accept-new'];
+    const args = ['-o', 'ServerAliveInterval=15', '-o', 'ConnectTimeout=20', '-o', 'StrictHostKeyChecking=ask'];
     if (t.port && Number(t.port) !== 22) args.push('-p', String(t.port));
     if (t.user) args.push('-l', t.user);
     if (t.keyFile) args.push('-i', t.keyFile, '-o', 'IdentitiesOnly=yes');
     for (const f of forwards) args.push('-o', 'ExitOnForwardFailure=yes', '-L', `127.0.0.1:${f.local}:127.0.0.1:${f.remote}`);
     const ask = askpass.sshEnv(t.id, secrets);
-    args.push('-o', ask ? 'NumberOfPasswordPrompts=1' : 'BatchMode=yes');
+    args.push('-o', `NumberOfPasswordPrompts=${ask.hasSecrets ? 1 : 0}`);
     args.push(tty ? '-tt' : '-T', t.host);
-    return { args, env: ask?.env || {}, release: ask?.release };
+    return { args, env: ask.env, release: ask.release };
   }
 
   async run(script, opts = {}) {
     const c = this.client(script, opts);
     try {
-      return await runRaw(c.cmd, c.args, { ...opts, env: c.env });
+      const r = await runRaw(c.cmd, c.args, { ...opts, env: c.env });
+      return this.t.kind === 'ssh' ? { ...r, stderr: hostKeyProblem(r.stderr, this.t) || r.stderr } : r;
     } finally {
       c.release?.();
     }

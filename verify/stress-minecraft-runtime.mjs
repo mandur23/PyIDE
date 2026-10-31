@@ -192,7 +192,7 @@ const section = async (label, fn) => {
 };
 
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.toolWindows.get('Minecraft').show(), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
   await until(`!!document.querySelector('#minecraftTool .mc-empty')`, 'empty Minecraft window');
 
   // ---------- names ----------

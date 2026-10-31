@@ -358,9 +358,7 @@ try {
     `Korean terminate prompt (${JSON.stringify(koAsked)})`);
   // A page reload (Trust Project reopens the page) ends the window's sessions in main instead of leaving them unseen.
   const reloadProcs = withDescendants(await k.js(`ide.terminal.sessions().map(s => s.pid)`));
-  await k.cdp('Page.reload');
-  await sleep(500);
-  await k.until('window.__ideReady === true', 'ko IDE ready after reload', 30000);
+  await k.reload();
   check(reloadProcs.length >= 2 && await gone(reloadProcs), `a page reload ends the sessions of the page it replaced (${names(reloadProcs)})`);
 } catch (err) {
   check(false, `Korean: ${err.message}`);

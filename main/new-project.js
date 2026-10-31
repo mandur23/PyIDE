@@ -40,7 +40,7 @@ function register({ ipcMain, app, startProcess }) {
   ipcMain.handle('project:clone', (_e, url, dir) => {
     if (fs.existsSync(dir)) throw new Error(`${dir} already exists`);
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    return startProcess('git', ['clone', '--progress', url, dir], { cwd: path.dirname(dir), windowsHide: true });
+    return startProcess('git', ['clone', '--progress', '--', url, dir], { cwd: path.dirname(dir), windowsHide: true });
   });
 
   ipcMain.handle('project:suggestName', (_e, parent, base) => {

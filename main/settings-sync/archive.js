@@ -69,6 +69,7 @@ const EXCLUDED = new Map([
   ['database.openConsoles', 'state'],
   ['spellcheck.projectWordsEdit', 'state'],
   ['newProject.location', 'path'],
+  ['newProject.spring', 'machine'], // holds the Initializr server: an imported archive must not choose what New Project downloads from
   ['workspace.recent', 'path'],
   ['projectTree.expanded', 'project'],
   ['projectTree.rootsExpanded', 'machine'],

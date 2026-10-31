@@ -19,6 +19,7 @@
   let status = null; // launcher:status
   let loaded = false;
   const busy = new Set(); // instances being made, synced or played
+  const joining = new Set(); // addresses of the servers Join is working on, also before they have an instance
   let adding = false;
   let launcherNote = null; // the last "launcher is open" balloon: the launcher is one window, so one balloon
   // A job's log lines also go to its progress balloon and status bar task, as the phase they belong to.
@@ -31,6 +32,7 @@
   const PHASES = [
     [/^Checking the server's pack/, () => tr('Checking the pack…')],
     [/^The pack has not changed/, () => tr('The pack is up to date.')],
+    [/^The pack could not be checked/, () => tr('The pack could not be checked: using the last synced mods.')],
     [/^\((\d+)\/(\d+)\) /, (m) => tr('Downloading mods ({n}/{total})…', { n: m[1], total: m[2] })],
     [/^Removed /, () => tr('Removing files the pack no longer has…')],
     [/the instance follows it\.$/, () => tr('Switching to the pack\'s Minecraft version…')],
@@ -53,18 +55,44 @@
     return null;
   };
 
-  // main's messages for what a user runs into here, in the UI's language; anything else as main said it.
+  // main's messages for what a user runs into here -> the UI's language.
+  const ERRORS = [
+    [/^Cancelled/, () => tr('Cancelled.')],
+    [/^(.+) is busy with another download or Play/, (m) => tr('{name} is busy: wait for its download or Play to finish.', { name: m[1] })],
+    [/^instances\/(.+) already exists/, (m) => tr('An instance named {name} already exists.', { name: m[1] })],
+    [/^There is no instance/, () => tr('This instance is damaged or gone. Delete it and make it again.')],
+    [/is not a server address/, () => tr('That is not a server address (host or host:port).')],
+    [/not a Nano Studio join code/, () => tr('That is not a Nano Studio join code (nanostudio:join?…).')],
+    [/^The pack is not an https address/, () => tr('A server\'s pack must have an https address.')],
+    [/^The pack points at a private address/, () => tr('The pack points at a private address, so it was refused.')],
+    [/^Checksum mismatch for ([^:]+)/, (m) => tr('A file of the pack is damaged ({file}), so nothing was changed. Try again later.', { file: m[1] })],
+    [/^The pack (is not a Modrinth|has a damaged|names|gives no)/, () => tr('The pack cannot be used: it is damaged or not a Modrinth modpack. Ask for a new join code.')],
+    [/is larger than the \d+ MB allowed/, () => tr('A file of the pack is larger than it says, so it was not downloaded.')],
+    [/plays release versions only/, () => tr('Nano Studio Craft plays release versions only.')],
+    [/^Download refused: /, () => tr('The pack\'s address leads somewhere it may not, so it was not downloaded.')],
+    [/is refused: its entries overlap/, () => tr('This archive was refused: its contents overlap, as in a zip bomb.')],
+    [/^(.+) is in use: close Minecraft/, (m) => tr('{file} is in use. Close Minecraft and try again.', { file: m[1] })],
+    [/\bEBUSY\b/, () => tr('A file is in use. Close Minecraft and try again.')],
+    [/^Not enough disk space: (\d+) MB needed, (\d+) MB free/, (m) => tr('There is not enough disk space: {need} MB needed, {free} MB free.', { need: m[1], free: m[2] })],
+    [/\bENOSPC\b/, () => tr('The disk is full. Free some space and try again.')],
+    [/^The (\w+) .+ has no client install without its window/, (m) => tr('This {loader} version cannot be installed without its own window. Choose a newer version.', { loader: m[1] })],
+    [/^(\w+) has no loader for Minecraft (.+)$/, (m) => tr('{loader} has no version for Minecraft {mc}.', { loader: m[1], mc: m[2] })],
+    [/^The Minecraft Launcher could not be started: (.+)$/, (m) => tr('The Minecraft Launcher could not be started: {error}', { error: m[1] })],
+  ];
   function errorText(err) {
     const text = mc.errorText(err);
-    let m;
-    if ((m = /^(.+) is busy with another download or Play/.exec(text))) return tr('{name} is busy: wait for its download or Play to finish.', { name: m[1] });
-    if ((m = /^instances\/(.+) already exists/.exec(text))) return tr('An instance named {name} already exists.', { name: m[1] });
-    if (/is not a server address/.test(text)) return tr('That is not a server address (host or host:port).');
-    if (/not a Nano Studio join code/.test(text)) return tr('That is not a Nano Studio join code (nanostudio:join?…).');
-    if ((m = /^Checksum mismatch for ([^:]+)/.exec(text))) return tr('A file of the pack is damaged ({file}), so nothing was changed. Try again later.', { file: m[1] });
-    if ((m = /^The (\w+) .+ has no client install without its window/.exec(text))) return tr('This {loader} version cannot be installed without its own window. Choose a newer version.', { loader: m[1] });
-    if ((m = /^(\w+) has no loader for Minecraft (.+)$/.exec(text))) return tr('{loader} has no version for Minecraft {mc}.', { loader: m[1], mc: m[2] });
+    for (const [re, say] of ERRORS) {
+      const m = re.exec(text);
+      if (m) return say(m);
+    }
     return networkText(text) || text;
+  }
+  const cancelled = (err) => /^Cancelled/.test(mc.errorText(err));
+  // A failed job's message in its Run tab, and in a balloon unless the user cancelled it.
+  function jobFailed(job, title, err) {
+    const text = errorText(err);
+    job.con.append(`${text}\n`, cancelled(err) ? undefined : 'err');
+    if (!cancelled(err)) ide.notifications?.notify({ title, text, kind: 'error', group: 'Minecraft', raw: true });
   }
   // A download or a version list that could not be fetched: main says "<url>: <cause>" (sources.js) or the download's
   // own message (installer/servers.js).
@@ -88,14 +116,15 @@
     loaded = true;
     render();
   }
-  const instanceOf = (name) => instances.find((i) => i.name === name) || null;
+  const playableInstance = (srv) => instances.find((i) => i.name === srv.instance && !i.damaged) || null;
 
   // A job: its log in a Run tab, its phase in a balloon and the status bar while it runs.
   function startJob(runTitle, title) {
     const con = mc.jobSession(runTitle);
     const j = mc.job(con);
     const task = ide.tasks?.start({ title });
-    const note = ide.notifications?.notify({ title, text: tr('Starting…'), group: 'Minecraft', timeout: 0, raw: true });
+    const note = ide.notifications?.notify({ title, text: tr('Starting…'), group: 'Minecraft', timeout: 0, raw: true,
+      actions: [{ label: tr('Cancel'), run: () => ide.api.invoke('minecraft:cancel', j.id) }] });
     progress.set(j.id, (text) => {
       const phase = String(text).split('\n').map((l) => phaseOf(l.trim())).filter(Boolean).pop();
       if (!phase) return;
@@ -110,39 +139,73 @@
   }
 
   // ---------- Play ----------
-  // server: {address, name?, pack?} to join, or null for the main menu.
-  async function play(name, server = null) {
+  // server: {address, name?, pack?} to join, or null for the main menu. approve: the SHA-1 of a pack the user agreed to.
+  async function play(name, server = null, approve = null) {
     if (!trusted() || busy.has(name)) return null;
-    const inst = instanceOf(name);
-    const title = inst?.title || name;
+    let approval = null;
+    const title = instances.find((i) => i.name === name)?.title || name;
     busy.add(name);
     render();
     const job = startJob(tr('Play {name}', { name: title }), server ? tr('Getting {name} ready to join {server}…', { name: title, server: server.name || server.address })
       : tr('Getting {name} ready to play…', { name: title }));
     try {
-      const r = await ide.api.invoke('launcher:play', ide.root, name, server ? { server } : {}, job.id);
+      const r = await ide.api.invoke('launcher:play', ide.root, name, server ? { server, approve } : {}, job.id);
+      if (r.needsApproval) { approval = r.needsApproval; return r; }
       if (r.launched === false && r.code === 'noLauncher') {
         status = { ...(status || {}), launcher: null, download: r.download };
         job.con.append(`${tr('The official Minecraft Launcher is not installed.')}\n`, 'err');
         noLauncher(r.download);
         return r;
       }
-      job.con.append(`${tr('Sign in to the launcher and press Play.')}\n`, 'ok');
+      const hint = r.alreadyOpen ? tr('The launcher was already open. If the profile does not show, close the launcher and press Launch again.') : tr('Sign in to the launcher and press Play.');
+      job.con.append(`${hint}\n`, 'ok');
       launcherNote?.remove();
-      launcherNote = ide.notifications?.notify({
-        title: tr('The Minecraft Launcher is open'), text: tr('Sign in to the launcher and press Play.'), kind: 'ok', group: 'Minecraft',
-      });
+      launcherNote = ide.notifications?.notify({ title: tr('The Minecraft Launcher is open'), text: hint, kind: 'ok', group: 'Minecraft' });
+      if (r.packStale) {
+        ide.notifications?.notify({ title: tr('The server\'s pack could not be checked'), text: tr('Playing with the mods of the last sync. If the server refuses them, ask its owner for a new join code.'), kind: 'warn', group: 'Minecraft' });
+      }
       return r;
     } catch (err) {
-      const text = errorText(err);
-      job.con.append(`${text}\n`, 'err');
-      ide.notifications?.notify({ title: tr('{name} could not be started', { name: title }), text, kind: 'error', group: 'Minecraft', raw: true });
+      jobFailed(job, tr('{name} could not be started', { name: title }), err);
       return null;
     } finally {
       job.end();
       busy.delete(name);
       await refresh();
+      if (approval && await confirmPack(server.name || server.address, approval)) await play(name, server, approval.sha1);
     }
+  }
+  // What a server's pack installs and from where, and the user's yes or no: main applies nothing before it. Cancel is
+  // the default, so the Enter that added a join code cannot answer this too.
+  function confirmPack(server, a) {
+    return new Promise((resolve) => {
+      let yes = false;
+      const list = el('div', 'mcc-mods');
+      for (const m of a.mods) {
+        const row = el('div', 'mcc-mod');
+        const name = el('span', 'mcc-mod-name', m.file.replace(/^mods\//, ''));
+        name.dataset.userText = '';
+        row.append(name);
+        if (a.update && m.added) row.append(el('span', 'mcc-chip sync', tr('New mod')));
+        if (m.inPack) row.append(el('span', 'mcc-chip bad', tr('Inside the pack')));
+        list.append(row);
+      }
+      if (!a.mods.length) list.append(el('div', 'mcc-mods-empty muted', tr('This pack has no mods.')));
+      const facts = [a.update ? tr('{server} changed what it installs. The new pack comes from {host}.', { server, host: a.host }) : tr('{server} installs what is listed here from {host}.', { server, host: a.host }),
+        tr('Mods run as programs on this computer, with your account\'s rights: install them only if you trust this server\'s owner.')];
+      if (a.mods.some((m) => m.inPack)) facts.push(tr('Files marked Inside the pack are not checked against Modrinth or any other source.'));
+      if (a.autoModpack) facts.push(tr('This pack has AutoModpack: the server can send more mods when you join, without asking here.'));
+      if (a.others) facts.push(tr('It also changes {count} other files, such as settings.', { count: a.others }));
+      const body = el('div', 'mc-dialog mcc-review');
+      body.append(...facts.map((text) => el('div', 'mc-dialog-note', text)), list);
+      ide.ui.dialog({
+        title: tr('Install This Server\'s Mods?'), body, width: 600, onClose: () => resolve(yes),
+        buttons: [
+          { label: tr('Install'), run: () => { yes = true; return true; } },
+          { label: tr('Cancel'), primary: true },
+        ],
+      });
+    });
   }
   function noLauncher(download) {
     render();
@@ -185,6 +248,8 @@
     const loaderRow = el('label', 'mc-dialog-row');
     loaderRow.append(el('span', 'mc-dialog-label', tr('Loader version:')), loaderVersion);
     let seq = 0;
+    let wanted = null; // the Minecraft version prefill asks for, once its list is here
+    let touched = false;
     const loadLoaderVersions = async () => {
       const mine = ++seq;
       loaderRow.classList.toggle('hidden', loader.value === 'vanilla');
@@ -211,6 +276,7 @@
         const vs = await ide.api.invoke('launcher:versions', loader.value);
         if (mine !== seq) return;
         version.replaceChildren(...vs.map((v) => new Option(v, v)));
+        if (vs.includes(wanted)) version.value = wanted;
       } catch (err) {
         if (mine !== seq) return;
         version.replaceChildren(new Option(tr('Could not load the versions'), ''));
@@ -219,11 +285,18 @@
       version.disabled = false;
       loadLoaderVersions();
     };
-    loader.onchange = loadVersions;
-    version.onchange = loadLoaderVersions;
+    loader.onchange = () => { touched = true; loadVersions(); };
+    version.onchange = () => { touched = true; loadLoaderVersions(); };
     loadVersions();
     return {
       rows: [[tr('Loader:'), loader], [tr('Minecraft:'), version], [null, loaderRow]],
+      // What a server said it runs; a choice the user already made stays.
+      prefill: (ping) => {
+        if (touched) return;
+        wanted = ping.mc;
+        loader.value = ping.loader;
+        loadVersions();
+      },
       value: () => ({ loader: loader.value, mc: version.value, loaderVersion: loader.value === 'vanilla' ? null : loaderVersion.value || null }),
       ready: () => (!version.value ? tr('Choose a Minecraft version.') : loader.value !== 'vanilla' && !loaderVersion.value ? tr('Choose a {loader} version.', { loader: loaderTitle(loader.value) }) : ''),
     };
@@ -261,9 +334,7 @@
       ready(inst);
       return inst;
     } catch (err) {
-      const text = errorText(err);
-      job.con.append(`${text}\n`, 'err');
-      ide.notifications?.notify({ title: tr('The instance could not be made'), text, kind: 'error', group: 'Minecraft', raw: true });
+      jobFailed(job, tr('The instance could not be made'), err);
       return null;
     } finally {
       job.end();
@@ -291,9 +362,7 @@
       ready(inst);
       return inst;
     } catch (err) {
-      const text = errorText(err);
-      job.con.append(`${text}\n`, 'err');
-      ide.notifications?.notify({ title: tr('The modpack could not be installed'), text, kind: 'error', group: 'Minecraft', raw: true });
+      jobFailed(job, tr('The modpack could not be installed'), err);
       return null;
     } finally {
       job.end();
@@ -306,13 +375,16 @@
     if (picked) installPack({ file: picked });
   }
 
+  // While a server is being added or joined any instance may be its: main says which only after the folder has gone.
+  const deletable = (inst) => !busy.has(inst.name) && !adding && !joining.size;
   async function deleteInstance(inst) {
-    if (busy.has(inst.name)) return;
+    if (!deletable(inst)) return;
     if (!(await ide.ui.confirm(tr('Move the instance {name} (its worlds, mods and settings) to the Recycle Bin?', { name: inst.title || inst.name }),
       { title: tr('Delete Instance'), ok: tr('Delete') }))) return;
     try {
-      await ide.api.invoke('launcher:remove', ide.root, inst.name);
+      // The folder first: a game still running refuses it, and the instance then stays as it was.
       await ide.api.trash(inst.dir);
+      await ide.api.invoke('launcher:remove', ide.root, inst.name);
     } catch (err) {
       ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: inst.title || inst.name, error: errorText(err) }));
     }
@@ -379,6 +451,7 @@
       job.con.append(`${errorText(err)}\n`, 'err');
       throw err;
     } finally { job.end(); }
+    if (r.needsApproval) return (await confirmPack(label, r.needsApproval)) ? connect({ ...req, approve: r.needsApproval.sha1 }, label) : null;
     if (!r.needsVersion) return r;
     const more = await askVersion(r.server);
     return more ? connect({ address: r.server.address, name: r.server.name, ...more }, label) : null;
@@ -388,8 +461,17 @@
       let answer = null;
       const error = el('div', 'mc-dialog-error');
       const versions = versionFields('mccJoin', error);
+      const said = el('div', 'mc-dialog-note muted mcc-ping', tr('Asking the server what it runs…'));
       const f = form([[null, el('div', 'mc-dialog-note', tr('{server} gave no pack: choose the Minecraft version and loader the server runs. Ask its owner for a join code to have the mods synced too.', { server: server.name || server.address }))],
-        ...versions.rows], error);
+        [null, said], ...versions.rows], error);
+      ide.api.invoke('launcher:ping', server.address).catch(() => ({ online: false })).then((r) => {
+        if (!r.online) said.textContent = tr('The server did not answer, so choose them yourself.');
+        else if (!r.mc) said.textContent = tr('The server answered without its version, so choose them yourself.');
+        else {
+          said.textContent = tr('The server says Minecraft {mc}, {loader}. Fabric and Quilt servers do not say, so change it if you know better.', { mc: r.mc, loader: loaderTitle(r.loader) });
+          versions.prefill(r);
+        }
+      });
       ide.ui.dialog({
         title: tr('Server Version'), body: f.body, width: 520, onClose: () => resolve(answer),
         buttons: [
@@ -422,13 +504,14 @@
     try {
       const r = await connect(req, label);
       if (!r) return false;
+      const synced = r.stale ? tr('Its pack could not be checked, so the mods of the last sync stay.') : tr('Its mods were synced into the instance {name}.', { name: r.instance.title || r.instance.name });
       ide.notifications?.notify({
-        title: tr('{server} added', { server: r.server.name }), text: r.server.pack ? tr('Its mods were synced into the instance {name}.', { name: r.instance.title || r.instance.name }) : r.server.address,
+        title: tr('{server} added', { server: r.server.name }), text: r.server.pack ? synced : r.server.address,
         kind: 'ok', group: 'Minecraft', raw: true, actions: [{ label: tr('Join'), run: (n) => { n.expire(); joinServer(r.server); } }],
       });
       return true;
     } catch (err) {
-      error.textContent = errorText(err);
+      if (!cancelled(err)) error.textContent = errorText(err);
       return false;
     } finally {
       adding = false;
@@ -437,20 +520,27 @@
   }
   // Join: the server's instance (made first when it has none, or it was deleted), played with the server to join.
   async function joinServer(srv) {
-    if (!trusted()) return;
-    let name = srv.instance && instanceOf(srv.instance) ? srv.instance : null;
-    if (!name) {
-      try {
-        const r = await connect({ address: srv.address, pack: srv.pack || undefined, name: srv.name }, srv.name);
-        if (!r) return;
-        name = r.instance.name;
-        await refresh();
-      } catch (err) {
-        ide.notifications?.notify({ title: tr('{server} could not be joined', { server: srv.name }), text: errorText(err), kind: 'error', group: 'Minecraft', raw: true });
-        return;
+    if (!trusted() || joining.has(srv.address)) return;
+    joining.add(srv.address);
+    render();
+    try {
+      let name = playableInstance(srv)?.name || null;
+      if (!name) {
+        try {
+          const r = await connect({ address: srv.address, pack: srv.pack || undefined, name: srv.name }, srv.name);
+          if (!r) return;
+          name = r.instance.name;
+          await refresh();
+        } catch (err) {
+          if (!cancelled(err)) ide.notifications?.notify({ title: tr('{server} could not be joined', { server: srv.name }), text: errorText(err), kind: 'error', group: 'Minecraft', raw: true });
+          return;
+        }
       }
+      await play(name, { address: srv.address, name: srv.name, ...(srv.pack ? { pack: srv.pack } : {}) });
+    } finally {
+      joining.delete(srv.address);
+      render();
     }
-    await play(name, { address: srv.address, name: srv.name, ...(srv.pack ? { pack: srv.pack } : {}) });
   }
   async function removeServer(srv) {
     if (!(await ide.ui.confirm(tr('Remove {server} from the servers to join? Its instance stays on the Play page.', { server: srv.name }), { title: tr('Remove Server'), ok: tr('Remove') }))) return;
@@ -524,7 +614,35 @@
     for (const inst of instances) grid.append(instanceCard(inst));
     host.append(grid);
   }
+  // An icon, so the card's actions fit on one row in a two-column grid at 900 px.
+  function deleteButton(inst) {
+    const del = el('button', 'secondary mcc-delete');
+    del.append(ide.icon('clear'));
+    del.title = tr('Delete…');
+    del.setAttribute('aria-label', tr('Delete…'));
+    del.onclick = (e) => { e.preventDefault(); deleteInstance(inst); };
+    del.disabled = !deletable(inst);
+    return del;
+  }
+  // A folder of instances/ main cannot play: what can be done is rescuing its worlds and deleting it.
+  function damagedCard(inst) {
+    const c = el('div', 'mcc-card mcc-damaged');
+    c.dataset.name = inst.name;
+    const art = el('div', 'mcc-art');
+    art.append(ide.icon('warning'));
+    const body = el('div', 'mcc-card-body');
+    const name = el('div', 'mcc-name', inst.title);
+    name.dataset.userText = '';
+    const meta = el('div', 'mcc-meta');
+    meta.append(el('span', 'mcc-chip bad', tr('Damaged')));
+    body.append(name, meta, el('div', 'mcc-facts muted', tr('Its settings cannot be read. Open the folder to rescue its worlds, then delete it.')));
+    const actions = el('div', 'mcc-actions');
+    actions.append(button(tr('Open Folder'), 'secondary mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
+    c.append(art, body, actions);
+    return c;
+  }
   function instanceCard(inst) {
+    if (inst.damaged) return damagedCard(inst);
     const c = el('div', 'mcc-card');
     c.dataset.name = inst.name;
     const art = el('div', `mcc-art ${inst.loader}`);
@@ -546,16 +664,9 @@
     const working = busy.has(inst.name);
     const playBtn = button(working ? tr('Getting Ready…') : tr('Launch'), 'primary mcc-play', () => play(inst.name), 'runRun');
     playBtn.disabled = working;
-    // An icon, so the card's actions fit on one row in a two-column grid at 900 px.
-    const del = el('button', 'secondary mcc-delete');
-    del.append(ide.icon('clear'));
-    del.title = tr('Delete…');
-    del.setAttribute('aria-label', tr('Delete…'));
-    del.onclick = (e) => { e.preventDefault(); deleteInstance(inst); };
-    del.disabled = working;
     actions.append(playBtn,
       button(tr('Mods'), 'secondary mcc-mods-btn', () => modsDialog(inst)),
-      button(tr('Open Folder'), 'secondary mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), del);
+      button(tr('Open Folder'), 'secondary mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
     c.append(art, body, actions);
     return c;
   }
@@ -608,13 +719,13 @@
     addr.dataset.userText = '';
     const meta = el('div', 'mcc-meta');
     if (srv.pack) meta.append(el('span', 'mcc-chip sync', tr('Mods synced automatically')));
-    const inst = srv.instance ? instanceOf(srv.instance) : null;
+    const inst = playableInstance(srv);
     if (inst) meta.append(el('span', 'mcc-chip', `Minecraft ${inst.mc}`), el('span', `mcc-chip loader ${inst.loader}`, loaderTitle(inst.loader)));
     const facts = el('div', 'mcc-facts muted');
     facts.append(el('span', null, inst ? tr('Played with {name}', { name: inst.title || inst.name }) : tr('Its instance is made at the first Join')));
     body.append(name, addr, meta, facts);
     const actions = el('div', 'mcc-actions');
-    const working = !!inst && busy.has(inst.name);
+    const working = joining.has(srv.address) || (!!inst && busy.has(inst.name));
     const joinBtn = button(working ? tr('Getting Ready…') : tr('Join'), 'primary mcc-join', () => joinServer(srv), 'runRun');
     joinBtn.disabled = working || adding;
     actions.append(joinBtn, button(tr('Copy Join Code'), 'secondary mcc-copy-code', () => copyCode(srv), 'copy'),

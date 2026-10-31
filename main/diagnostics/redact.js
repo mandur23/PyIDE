@@ -3,7 +3,7 @@
 // scrubbed of well-known token shapes and of `password=...`-style assignments.
 const MASK = '<redacted>';
 
-const SECRET_KEY = /pass(?:word|wd|phrase)?|secret|token|api[-_. ]?key|apikey|authorization|\bauth\b|auth[-_.]?(?:token|key)|credential|private[-_. ]?key|cookie|session[-_. ]?id|bearer|encrypted|safe[-_. ]?storage|cipher/i;
+const SECRET_KEY = /pass(?:word|wd|phrase)?|pwd|secret|token|api[-_. ]?key|apikey|authorization|\bauth\b|auth[-_.]?(?:token|key)|credential|private[-_. ]?key|cookie|session[-_. ]?id|bearer|encrypted|safe[-_. ]?storage|cipher/i;
 
 const TEXT_PATTERNS = [
   // Anthropic, OpenAI, GitHub, GitLab, Slack, AWS, Google, Hugging Face, Stripe, npm.
@@ -21,8 +21,22 @@ const TEXT_PATTERNS = [
 ];
 // Bearer/Basic auth headers, key=value or "key": "value" assignments, and URL credentials (scheme://user:pass@host).
 const AUTH_HEADER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+// The whole value of a header, whatever its scheme (token abc) or parts (a=1; b=2).
+const SECRET_HEADER = /((?:authorization|cookie)["']?\s*[:=]\s*["']?)[^\r\n"']+/gi;
 const ASSIGNMENT = new RegExp(`(["']?[\\w.-]*(?:${SECRET_KEY.source})[\\w.-]*["']?\\s*[:=]\\s*)("[^"]*"|'[^']*'|[^\\s,;&}]+)`, 'gi');
-const URL_CREDENTIALS = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi;
+// A password can hold spaces where nothing quotes it (a connection string), so it runs to the next delimiter, flag or
+// key=value.
+const PASSWORD_ASSIGNMENT = /(["']?[\w.-]*(?:pass(?:word|wd|phrase)?|pwd|secret)(?:[-_.][\w.-]*)?["']?\s*[:=]\s*)(?!["'])([^\s,;&}]+(?:[ \t]+(?!-|[\w.-]+=)[^\s,;&}]+)*)/gi;
+const URL_CREDENTIALS = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s/]+@/gi;
+// In a logged command line: --password hunter2, -Password "two words", --api-key abc. The flag's last word has to be
+// the name, so --max-tokens 100 or --tokenizer gpt2 stay readable.
+const SECRET_FLAG = /((?<![\w-])--?(?:[a-z0-9]+[-_.])*(?:pass(?:word|wd|phrase)?|pwd|secret|token|api[-_.]?key|apikey|access[-_.]?key|private[-_.]?key|credentials?|auth|cookie)[ \t]+)("[^"]*"|'[^']*'|[^\s-]\S*)/gi;
+// curl -u bob:pw, --user bob:pw, --proxy-user=bob:pw. Numeric ids (docker -u 1000:1000) and C:\... after python -u are not.
+const USER_FLAG = /((?<![\w-])(?:-u[ \t]*|--(?:proxy-)?user[ \t=]+)(?!\d+:\d+(?:\s|$))[^\s:/\\]{2,}:)(?![\\/])\S+/g;
+// mysql -phunter2: the value hangs on the flag, which means something else to other programs (gcc -pthread,
+// pytest -pno:cacheprovider, docker -p8080:80), so elsewhere it has to look like a password: letters and digits.
+const MYSQL_PASSWORD = /(\b(?:mysql\w*|mariadb\w*|sshpass)(?:\.exe)?["']?\s(?:[^\r\n]*?\s)?-p[ \t]*)("[^"]*"|'[^']*'|[^\s-]\S*)/gi;
+const ATTACHED_PASSWORD = /((?<![\w-])-p)(?=[^\s:=/\\]*[a-z])(?=[^\s:=/\\]*\d)[^\s:=/\\-]\S*/gi;
 
 // Values known to be secret whatever their shape, such as the values loaded from .env files (main/dotenv.js).
 // Booleans and short numbers are left alone: masking every "true" in the log would hide nothing worth hiding.
@@ -32,25 +46,36 @@ function addSecretValues(values) {
   if (fresh.length) knownSecrets = [...knownSecrets, ...fresh].sort((a, b) => b.length - a.length);
 }
 
+const assigned = (m, head, value) => (/^["']?(<redacted>|\d*)["']?$/.test(value) ? m : `${head}${MASK}`);
+
 function scrubText(text) {
   let s = String(text);
   for (const v of knownSecrets) if (s.includes(v)) s = s.split(v).join(MASK);
   for (const re of TEXT_PATTERNS) s = s.replace(re, MASK);
   return s
+    .replace(SECRET_HEADER, `$1${MASK}`)
     .replace(AUTH_HEADER, (_m, kind) => `${kind} ${MASK}`)
     .replace(URL_CREDENTIALS, `$1${MASK}@`)
-    .replace(ASSIGNMENT, (m, head, value) => (/^["']?(<redacted>|\d*)["']?$/.test(value) ? m : `${head}${MASK}`));
+    .replace(SECRET_FLAG, `$1${MASK}`)
+    .replace(USER_FLAG, `$1${MASK}`)
+    .replace(MYSQL_PASSWORD, `$1${MASK}`)
+    .replace(ATTACHED_PASSWORD, `$1${MASK}`)
+    .replace(PASSWORD_ASSIGNMENT, assigned)
+    .replace(ASSIGNMENT, assigned);
 }
+
+// Text the user typed to run something, which can hold anything; a report only needs to know that it exists.
+const TYPED_KEY = /^pyconsole\.history$|(?:^|[.:_-])(?:params|parameters|args|arguments|argv|env|environ|environment|env[-_]?vars?|interp[-_]?options|vm[-_]?options|jvm[-_]?args|command|commandline|cmd)$/i;
 
 // A long unbroken run of base64/hex characters mixing letters and digits: an encrypted blob or a key.
 const looksLikeBlob = (s) => s.length >= 32 && /^[A-Za-z0-9+/=_-]+$/.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s);
 
-// A deep copy of a settings-like object with every secret replaced by "<redacted>".
+// A deep copy of a settings-like object with every secret replaced by "<redacted>" and what the user typed left out.
 function redactObject(value, key = '') {
   if (key && SECRET_KEY.test(key)) return value === '' || value == null ? value : MASK;
   if (Array.isArray(value)) return value.map((v) => redactObject(v));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactObject(v, k)]));
+    return Object.fromEntries(Object.entries(value).filter(([k]) => !TYPED_KEY.test(k)).map(([k, v]) => [k, redactObject(v, k)]));
   }
   if (typeof value === 'string') return looksLikeBlob(value) ? MASK : scrubText(value);
   return value;

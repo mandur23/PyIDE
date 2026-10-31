@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { openZip, readEntry, unpackZip } = require('./zipfile');
-const { KINDS, neoforgeMc, getJson, modrinthApi } = require('./sources');
+const { KINDS, PACK_HOSTS, neoforgeMc, getJson, modrinthApi, packFile } = require('./sources');
 
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -64,7 +64,10 @@ function classify(p) {
       zip = openZip(p);
       const hit = JAR_DESCRIPTORS.find(([entry]) => zip.names.includes(entry));
       return hit ? { path: p, name, ...hit[1] } : { path: p, name, kind: 'unknown' };
-    } catch { return { path: p, name, kind: 'unknown' }; } finally { zip?.close(); }
+    } catch (err) {
+      if (err.bomb) throw err;
+      return { path: p, name, kind: 'unknown' };
+    } finally { zip?.close(); }
   }
   return { path: p, name, kind: 'unknown' };
 }
@@ -177,7 +180,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
           done.push({ name: it.name, what: 'world', to: path.join(s.dir, name), server: s.name });
         } else skipped.push({ name: it.name, why: 'unknown' });
       } catch (err) {
-        skipped.push({ name: it.name, why: 'error', message: err.message });
+        skipped.push(err.bomb ? { name: it.name, why: 'bomb' } : { name: it.name, why: 'error', message: err.message });
       }
     }
     return { done, skipped, modpacks };
@@ -246,9 +249,9 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
     try {
       // Every file has an address and a checksum before anything is made.
       const files = pack.index.files.filter((f) => f.env?.server !== 'unsupported').map((f) => {
-        const from = (Array.isArray(f.downloads) ? f.downloads : []).find((u) => /^https?:\/\//i.test(u));
+        const from = (Array.isArray(f.downloads) ? f.downloads : []).find(packFile);
         const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
-        if (!from) throw fail(`The modpack gives no download address for ${f.path}`);
+        if (!from) throw fail(`The modpack gives no https download address on ${PACK_HOSTS.join(', ')} for ${f.path}`);
         if (!sum) throw fail(`The modpack gives no checksum for ${f.path}`);
         return { path: f.path, from, sum, size: f.fileSize };
       });

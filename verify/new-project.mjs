@@ -160,6 +160,24 @@ try {
   await a.until(`(ide.settings.get('recentProjects')[0]?.path || '').toLowerCase().endsWith('\\\\cloned')`, 'cloned project recorded', 30000).catch(() => {});
   const recent = (await a.js(`ide.settings.get('recentProjects').map(p => p.path.split('\\\\').pop())`)).slice(0, 4).join('|');
   check(recent === 'cloned|escaped|stopped|broken', `recent projects keep the newest first (${recent})`);
+
+  // A URL from a web page, pasted into Get from VCS, reaches git as text: as an option it would run a command.
+  const pwned = path.join(where, 'upload-pack-ran.txt');
+  const hostile = `--upload-pack=echo ran > ${pwned.replace(/\\/g, '/')};`;
+  const cloneExit = await a.js(`(async () => {
+    const id = await ide.api.invoke('project:clone', ${q(hostile)}, ${q(path.join(where, 'hostile'))});
+    return new Promise((resolve) => { ide.proc.attach(id, { exit: resolve }); });
+  })()`);
+  check(cloneExit !== 0 && !existsSync(pwned), `a clone URL that starts with -- is not an option of git (exit ${cloneExit})`);
+  const refused = await a.js(`Promise.all([
+    ide.api.invoke('git:addRemote', ide.root, 'evil', '--upload-pack=x'),
+    ide.api.invoke('git:addRemote', ide.root, '-f', 'https://example.com/r.git'),
+    ide.api.invoke('git:renameBranch', ide.root, 'master', '--delete'),
+    ide.api.invoke('git:checkout', ide.root, '--orphan=x'),
+    ide.api.invoke('git:merge', ide.root, '--no-ff'),
+    ide.api.invoke('git:rebase', ide.root, '--exec=calc'),
+  ]).then((all) => all.map((r) => r.ok))`);
+  check(refused.every((ok) => ok === false) && await a.js(`ide.api.invoke('git:branches', ide.root).then((b) => !!b)`), `names and URLs that start with a dash are refused (${q(refused)})`);
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${JSON.stringify(a.consoleErrors)}` : ''}`);
   a.close();
 

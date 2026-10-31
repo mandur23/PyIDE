@@ -14,7 +14,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
+import { descendants, endingSystemDrags, launch, openFile, processSnapshot } from './lib.mjs';
 
 const S = JSON.stringify;
 const L = (...p) => path.join(...p);
@@ -362,7 +362,7 @@ await section('ports', async () => {
 
   // Stop Sharing in the Ports window while the tunnel starts.
   mode('hang');
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.toolWindows.get('Ports').show(), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Ports').show(), true)`);
   await until(`!!document.querySelector('#portsList .ports-row[data-port="28641"] .ports-share')`, 'row with Share', 15000);
   await js(`(document.querySelector('#portsList .ports-row[data-port="28641"] .ports-share').click(), true)`);
   await until(`!!document.querySelector('#portsList .ports-row[data-port="28641"] .ports-stop')`, 'Starting… with Stop Sharing', 15000);
@@ -496,10 +496,10 @@ check(!internal.length, `no IDE internal errors${internal.length ? ` ${S(interna
 await js(`ide.terminal.sessions().forEach((s) => ide.terminal.close(s.id))`).catch(() => {});
 await js(`ide.run.sessions().forEach((s) => s.stop())`).catch(() => {});
 // ---------- tree drag-out ----------
-// Last: Windows runs a system drag in a loop of main's that ends at once only while no mouse button is held, and the
-// window answers nothing until it ends. On a desktop where something holds the button, the section gives up.
+// Last: Windows runs a system drag in a loop of main's that the window answers nothing from, until a mouse message
+// finds no button held. On a desktop where something holds the button, the section gives up.
 let dragDone = false;
-await Promise.race([section('tree-drag', async () => {
+await Promise.race([section('tree-drag', () => endingSystemDrags(t, async () => {
   const many = Array.from({ length: 300 }, (_, i) => L(project, 'many', `f${String(i).padStart(3, '0')}.txt`));
   for (const p of many.slice(0, 40)) rmSync(p);
   const before = await js('__pty.dragEnded');
@@ -511,7 +511,7 @@ await Promise.race([section('tree-drag', async () => {
   await until(`__pty.dragEnded >= ${b2 + 2}`, 'odd drags end', 20000)
     .then(() => check(true, 'drags of entries that are not files end too'), () => check(false, 'drags of entries that are not files end'));
   check(await js(`ide.api.exists(ide.root)`), 'the IDE still answers');
-}).then(() => { dragDone = true; }), sleepMs(90000).then(() => dragDone || check(false, 'tree-drag: main stayed in the system drag for 90 s (a mouse button held on this desktop?)'))]);
+})).then(() => { dragDone = true; }), sleepMs(90000).then(() => dragDone || check(false, 'tree-drag: main stayed in the system drag for 90 s (a mouse button held on this desktop?)'))]);
 
 t.close();
 await sleepMs(1500);

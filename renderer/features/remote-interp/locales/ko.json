@@ -90,5 +90,11 @@
   "Listing library files": "라이브러리 파일 목록 가져오기",
   "Downloading library files": "라이브러리 파일 다운로드",
   "No Python interpreter was found in the target.": "대상에서 Python 인터프리터를 찾을 수 없습니다.",
-  "Python did not start.": "Python이 시작되지 않았습니다."
+  "Python did not start.": "Python이 시작되지 않았습니다.",
+  "The SSH host key of {host} has changed since it was trusted, so nothing was sent to it. Someone may be intercepting the connection, or the server may have been reinstalled. If its administrator confirms the new key, remove the old one with: ssh-keygen -R {known}": "{host}의 SSH 호스트 키가 신뢰했을 때와 달라져서 아무것도 보내지 않았습니다. 누군가 연결을 가로채고 있거나 서버를 다시 설치했을 수 있습니다. 서버 관리자가 새 키를 확인해 주면 다음 명령으로 이전 키를 지우세요: ssh-keygen -R {known}",
+  "The SSH host key of {host} was not trusted, so nothing was sent to it.": "{host}의 SSH 호스트 키를 신뢰하지 않아서 아무것도 보내지 않았습니다.",
+  "This computer has not connected to {host} before. Compare this host key fingerprint with the one from the server or its administrator. If they differ, someone may be intercepting the connection.": "이 컴퓨터는 {host}에 연결한 적이 없습니다. 이 호스트 키 지문을 서버나 서버 관리자가 알려 준 지문과 비교하세요. 서로 다르면 누군가 연결을 가로채고 있을 수 있습니다.",
+  "Nothing is sent to the server, not even a saved password, until you trust this key. It is then recorded, and a later change of key is refused.": "이 키를 신뢰하기 전에는 저장된 비밀번호를 포함해 아무것도 서버로 보내지 않습니다. 신뢰하면 키가 기록되고, 나중에 키가 바뀌면 연결을 거부합니다.",
+  "Trust This SSH Host?": "이 SSH 호스트를 신뢰할까요?",
+  "Trust and Connect": "신뢰하고 연결"
 }

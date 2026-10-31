@@ -4,13 +4,15 @@ const http = require('http');
 const path = require('path');
 const { execFile } = require('child_process');
 const { session } = require('electron');
-const { withPath } = require('./run.js');
+const { withPath, interpCommand } = require('./run.js');
+const trust = require('../trust');
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '0.0.0.0']);
 
 function runPython(interp, args, { cwd, env, timeout = 60000 } = {}) {
+  const python = interpCommand(interp);
   return new Promise((resolve) => {
-    execFile(interp.cmd, [...interp.args, ...args], {
+    execFile(python.cmd, [...python.args, ...args], {
       cwd, env: { ...process.env, ...env, PYTHONIOENCODING: 'utf-8' }, timeout, windowsHide: true, maxBuffer: 64 * 1024 * 1024,
     }, (err, stdout, stderr) => resolve({ ok: !err, code: err?.code ?? 0, stdout: String(stdout), stderr: String(stderr), error: err?.message }));
   });
@@ -32,7 +34,9 @@ function probe(url, timeoutMs) {
 exports.register = ({ ipcMain, app, unpackedDir }) => {
   const script = path.join(unpackedDir, 'renderer', 'features', 'frameworks', 'pyide_frameworks.py');
 
+  // Opening a project and opening the task picker ask these by themselves, so in Safe Mode they answer with nothing.
   ipcMain.handle('frameworks:inspect', async (_e, interp, root) => {
+    if (!trust.isTrusted(root)) return { ok: true, info: null };
     const r = await runPython(interp, ['-I', script, root], { cwd: root });
     if (!r.ok) return { ok: false, error: (r.stderr.trim().split('\n').pop() || r.error || '').trim() };
     try { return { ok: true, info: JSON.parse(r.stdout) }; } catch (err) { return { ok: false, error: err.message }; }
@@ -40,6 +44,7 @@ exports.register = ({ ipcMain, app, unpackedDir }) => {
 
   // Command names, one per line, as `manage.py help --commands` prints them; the error text when Django fails to load.
   ipcMain.handle('frameworks:manageCommands', async (_e, interp, manage, env = {}, roots = []) => {
+    if (!trust.isTrusted(manage)) return { ok: true, commands: [] };
     const r = await runPython(interp, [manage, 'help', '--commands'], { cwd: path.dirname(manage), env: withPath(env, roots) });
     if (!r.ok) return { ok: false, error: r.stderr.trim().split('\n').slice(-3).join('\n') || r.error };
     return { ok: true, commands: r.stdout.split(/\r?\n/).map((s) => s.trim()).filter((s) => /^[\w-]+$/.test(s)) };

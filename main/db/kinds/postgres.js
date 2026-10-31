@@ -31,7 +31,7 @@ const COMPLETION = {
   dataTypes: list('integer, bigint, smallint, serial, bigserial, numeric, decimal, real, double precision, money, text, varchar, char, boolean, date, time, timestamp, timestamptz, interval, uuid, json, jsonb, bytea, inet, cidr, macaddr, xml, tsvector, tsquery, int4range, tstzrange, point'),
 };
 
-module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS }) => {
+module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, groupForeignKeys, exportError, resultCursor, EXPORT_ROW_CAP, NETWORK_FIELDS, SSL_FIELD, tlsOptions, sslFailure }) => {
   const PG_TYPES = { 16: 'bool', 17: 'bytea', 20: 'int8', 21: 'int2', 23: 'int4', 25: 'text', 114: 'json', 700: 'float4', 701: 'float8',
     1042: 'bpchar', 1043: 'varchar', 1082: 'date', 1114: 'timestamp', 1184: 'timestamptz', 1700: 'numeric', 2950: 'uuid', 3802: 'jsonb' };
 
@@ -54,11 +54,11 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
   async function openPostgres(cfg, { onLost = () => {} } = {}) {
     const pg = loadPackage('pg');
     const { Client } = pg;
-    const config = { host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database, connectionTimeoutMillis: 10000 };
+    const config = { host: cfg.host, port: cfg.port, user: cfg.user, password: cfg.password, database: cfg.database, connectionTimeoutMillis: 10000, ssl: tlsOptions(cfg) };
     const client = new Client(config);
     client.on('error', onLost);
     client.on('end', () => onLost(new Error('Connection closed')));
-    await client.connect();
+    await client.connect().catch((err) => { throw sslFailure(err, cfg); });
     return {
       query: (sql, { maxRows }) => timed(async () => {
         const r = await client.query({ text: sql, rowMode: 'array' });
@@ -163,7 +163,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
   return {
     packages: { pg: 'pg@8' },
     kinds: {
-      postgres: { label: 'PostgreSQL', order: 20, package: 'pg', defaultPort: 5432, fields: NETWORK_FIELDS, quote: '"', sqlDialect: 'postgres', implicitSchemas: ['public'], open: openPostgres, ui: { completion: COMPLETION } },
+      postgres: { label: 'PostgreSQL', order: 20, package: 'pg', defaultPort: 5432, fields: [...NETWORK_FIELDS, SSL_FIELD], quote: '"', sqlDialect: 'postgres', implicitSchemas: ['public'], open: openPostgres, ui: { completion: COMPLETION } },
     },
   };
 };

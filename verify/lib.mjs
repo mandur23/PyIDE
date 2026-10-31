@@ -170,7 +170,7 @@ export function descendants(rows, rootPid, { includeRoot = false, since = SUITE_
 // exe: an installed "Nano Studio.exe" to run instead of the source tree; open: a project file to pass instead of the folder.
 // projectDir: an existing project folder to open in place, instead of a copy of a fixture; args: extra command-line flags.
 // mode: the app mode passed as --mode ('code' by default, so suites skip the start chooser; 'craft'; null for none).
-export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [], mode = 'code' }) {
+export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [], mode = 'code', cwd, ready = 'window.__ideReady === true' }) {
   saveClipboard();
   const work = tempDir(name);
   const project = projectDir || path.join(work, 'project');
@@ -181,6 +181,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...(mode ? [`--mode=${mode}`] : []), ...extraArgs];
   const spawnedAt = Date.now();
   const child = spawn(exe || ELECTRON, exe ? args : [APP_DIR, ...args], {
+    cwd,
     // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their
     // models in every test instance. verify/semantic.mjs and verify/ai-complete.mjs opt in to the real ones.
     // Test instances keep their Claude Code IDE lock files to themselves (a killed instance cannot remove its own).
@@ -202,22 +203,39 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   let seq = 0;
   const pending = new Map();
   const consoleErrors = [];
+  const cspViolations = [];
+  let closing = false;
   ws.addEventListener('message', (m) => {
     const msg = JSON.parse(m.data);
     if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
     if (msg.method === 'Runtime.bindingCalled' && msg.params.name === '__pyideClipboardTouched') markClipboardTouched();
     if (msg.method === 'Runtime.exceptionThrown') consoleErrors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
+    if (msg.method === 'Log.entryAdded' && /Content Security Policy/i.test(msg.params.entry.text)) {
+      const { text, url, lineNumber, stackTrace } = msg.params.entry;
+      const top = stackTrace?.callFrames?.[0];
+      cspViolations.push(`${text} (at ${top?.url || url}:${(top?.lineNumber ?? lineNumber ?? -1) + 1})`);
+    }
+    // A dead renderer leaves the socket open and its calls unanswered.
+    if (msg.method === 'Inspector.detached' && !closing) {
+      if (msg.params.reason !== 'target_closed') consoleErrors.push(`the page's process ended: ${msg.params.reason}`);
+      ws.close();
+    }
   });
   // Once the window is gone, calls fail instead of waiting forever, so until() times out with its label.
   const GONE = { result: { exceptionDetails: { text: 'the CDP connection closed' } } };
   ws.addEventListener('close', () => { for (const r of pending.values()) r(GONE); pending.clear(); });
+  // A screenshot asked for while the page navigates may never be answered (Chromium 156), and suites take one before
+  // every poll to make the unseen window paint.
+  const SCREENSHOT_MS = 5000;
   const cdp = (method, params = {}) => new Promise((r) => {
     if (ws.readyState !== WebSocket.OPEN) return r(GONE);
     const id = ++seq;
     pending.set(id, r);
+    if (method === 'Page.captureScreenshot') setTimeout(() => { if (pending.delete(id)) r({ error: { message: 'no screenshot came' } }); }, SCREENSHOT_MS);
     ws.send(JSON.stringify({ id, method, params }));
   });
   await cdp('Runtime.enable');
+  await cdp('Log.enable');
   await cdp('Runtime.addBinding', { name: '__pyideClipboardTouched' });
   // Test windows run beside other windows; without this, losing OS focus closes Monaco hovers and hints mid-check.
   await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -234,6 +252,22 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
       await sleep(150);
     }
     throw new Error(`timeout waiting for: ${label}`);
+  };
+  // A suite that feeds the page hostile content takes out the refusals that content causes -> how many. Any other
+  // violation still fails the suite at finish().
+  const takeCsp = (pattern) => {
+    const kept = cspViolations.filter((v) => !pattern.test(v));
+    const taken = cspViolations.length - kept.length;
+    cspViolations.splice(0, Infinity, ...kept);
+    return taken;
+  };
+  // Reloads the page and waits for the new one's readiness. Page.reload answers while the old document still runs and
+  // its own window.__ideReady is still true, so the wait must not accept the old page: the mark is on that window only.
+  const reload = async ({ until: expr = ready, ms = 40000 } = {}) => {
+    await js(`(window.__pyideReplaced = true)`);
+    await cdp('Page.reload');
+    await until(`!window.__pyideReplaced && (${expr})`, 'the reloaded page ready', ms);
+    await js(CLIPBOARD_HOOK).catch(() => {});
   };
   // Real key events through the browser input pipeline (reaches Monaco and the global keymap like a user would).
   const KEYCODES = { F1: 112, F2: 113, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120, F10: 121, F12: 123, Enter: 13,
@@ -267,6 +301,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const results = [];
   const check = (ok, label) => { results.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
   const close = () => {
+    closing = true;
     ws.close();
     try { execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' }); } catch {}
     runningPids.delete(child.pid);
@@ -275,13 +310,14 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const finish = () => {
     close();
     if (consoleErrors.length) console.log(`renderer exceptions:\n  ${consoleErrors.join('\n  ')}`);
+    if (cspViolations.length) console.log(`Content-Security-Policy violations:\n  ${cspViolations.join('\n  ')}`);
     const failed = results.filter((r) => !r.ok).length;
     console.log(`${results.length - failed}/${results.length} passed`);
-    process.exit(failed || consoleErrors.length ? 1 : 0);
+    process.exit(failed || consoleErrors.length || cspViolations.length ? 1 : 0);
   };
 
   try {
-    await until('window.__ideReady === true', 'IDE ready', 30000);
+    await until(ready, 'IDE ready', 30000);
   } catch (err) {
     await cdp('Page.reload');
     await sleep(4000);
@@ -289,7 +325,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     throw new Error(`IDE never became ready; renderer exceptions after reload:\n  ${consoleErrors.join('\n  ') || '(none)'}`);
   }
   await js(CLIPBOARD_HOOK).catch(() => {});
-  return { project, outDir, userData: userData || path.join(work, 'userdata'), pid: child.pid, spawnedAt, cdp, js, until, press, type, click, shot, check, results, consoleErrors, close, finish, sleep };
+  return { project, outDir, userData: userData || path.join(work, 'userdata'), pid: child.pid, spawnedAt, cdp, js, until, reload, press, type, click, shot, check, results, consoleErrors, cspViolations, takeCsp, close, finish, sleep };
 }
 
 // A page expression, true once every code lens of the file shown in `editor` has its view zone above its line. Code
@@ -302,6 +338,20 @@ export const lensesShown = (editor = 'ide.editor') => `(() => { const e = ${edit
   const lh = e.getOption(ide.monaco.editor.EditorOption.lineHeight);
   return [...new Set(ide.codeVision.lenses(m).map((l) => l.line))]
     .every((L) => e.getTopForLineNumber(L) - (L > 1 ? e.getTopForLineNumber(L - 1) : -lh) > lh); })()`;
+
+// Runs `fn`, which starts real system drags (webContents.startDrag). Main stays in Windows' drag loop until a mouse
+// message makes the loop look at the buttons, and answers no CDP call meanwhile. A hidden desktop has no mouse, and
+// with Electron 45 nothing else wakes the loop, so a message posted to the instance's own windows does.
+export async function endingSystemDrags(ctx, fn) {
+  const poster = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(APP_DIR, 'verify', 'post-mouse-move.ps1'), String(ctx.pid), '-Seconds', '120'],
+    { stdio: 'ignore', windowsHide: true });
+  try { return await fn(); } finally { poster.kill(); }
+}
+
+// What ctx.takeCsp takes in a suite that opens a Markdown document with on* attributes. Chromium reports a handler when
+// the parser meets it, even in a <template>, so the viewers' sanitizer sets it off by reading the document, before it
+// removes the attribute. Only that line of that file: an inline handler anywhere else still fails the suite.
+export const SANITIZED_HANDLER = /inline event handler[^]*renderer\/features\/viewers\/index\.js:\d+\)$/;
 
 // Opens a project file in the editor and waits for its tab.
 export async function openFile(ctx, relPath) {

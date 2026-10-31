@@ -164,8 +164,7 @@ try {
   check(await a.js(`${view('sub/report.sql')} === null`) && !(await a.js(`ide.database.sqlFiles.attachmentOf(ide.activeTab().path)`)), 'cancelling it runs nothing and attaches nothing');
 
   // ---------- reload ----------
-  await a.cdp('Page.reload');
-  await a.until('window.__ideReady === true && !!ide.root', 'IDE ready after reload', 30000);
+  await a.reload({ until: 'window.__ideReady === true && !!ide.root' });
   await openFile(a, 'renamed.sql');
   await a.until(`${statusText}?.includes('shop')`, 'status after reload', 15000);
   rows = await suggest(a, 'SELECT * FROM |');

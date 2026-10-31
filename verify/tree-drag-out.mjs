@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { endingSystemDrags, launch } from './lib.mjs';
 
 const project = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-tree-drag-out-')), 'project');
 mkdirSync(path.join(project, 'docs'), { recursive: true });
@@ -80,11 +80,13 @@ try {
   await until(`ide.activeTab()?.title === 'todo.txt'`, 'todo.txt opened', 10000);
   check(true, 'a file dragged from the tree onto the editor opens there');
 
-  // Main's real handler, with no mouse button held: Windows ends the drag at once, and the renderer hears it ended.
+  // Main's real handler, with no mouse button held: the next mouse message ends the drag, and the renderer hears it.
   await mouseDrag('todo.txt');
   await until(`window.__drags.length === 6 && !!ide.treeDrag`, 'drag for main');
-  await js(`(window.api.send('tree:startDrag', window.__drags[5]), true)`);
-  await until(`ide.treeDrag === null`, 'the drag ends', 15000);
+  await endingSystemDrags(t, async () => {
+    await js(`(window.api.send('tree:startDrag', window.__drags[5]), true)`);
+    await until(`ide.treeDrag === null`, 'the drag ends', 15000);
+  });
   check(true, "main starts the system drag (file icon, startDrag) and reports its end, which clears the renderer's drag");
 
   // Main reports the end before the drop on an editor arrives; then files from Explorer onto a folder are copied, and

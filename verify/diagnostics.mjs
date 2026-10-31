@@ -22,6 +22,10 @@ const SECRETS = {
   apiKey: 'sk-ant-api03-DIAGSECRETKEY0123456789abcdef',
   token: 'ghp_DIAGtoken0123456789abcdefABCDEF',
   blob: 'djEwDIAGsafeStorageBlob0123456789ABCDEFabcdef==',
+  consoleHistory: 'typed-in-console-diag',
+  runParam: 'run-parameter-diag',
+  envValue: 'plain-env-value-diag',
+  commandLine: 'hunter2CommandLine-diag',
 };
 
 // A user-data folder with both test plugins installed, secrets in the settings and a safeStorage-style data source.
@@ -39,6 +43,8 @@ function prepareUserData(lang) {
     'vcs.github': { user: 'octo', token: SECRETS.token },
     'proxy.url': `http://octo:${SECRETS.password}@proxy.local:8080`,
     'notes.blob': SECRETS.blob,
+    'pyconsole.history': [`print("${SECRETS.consoleHistory}")`],
+    'runConfigs:C:\\elsewhere': { selected: 'a', configs: [{ id: 'a', type: 'python', name: 'main', params: `--db ${SECRETS.runParam}`, env: `STAGE=${SECRETS.envValue}` }] },
   }, null, 2));
   mkdirSync(path.join(userData, 'database'), { recursive: true });
   writeFileSync(path.join(userData, 'database', 'sources.json'), JSON.stringify([{ id: 'pg', password: SECRETS.blob }]));
@@ -237,6 +243,8 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     await t.press('Escape');
 
     // ---- Collect Logs and Diagnostic Data ----
+    await js(`(ide.logger('#process').info('#7 started (pid 1): tool.exe --password ${SECRETS.commandLine} --verbose'), true)`);
+    await until(`ide.api.invoke('fs:read', ${JSON.stringify(path.join(logDir, 'pyide.log'))}).then((s) => s.includes('tool.exe --password <redacted> --verbose'))`, 'command line in the log, masked');
     await js(`ide.runAction('CollectZippedLogs')`);
     await until(`document.querySelector('.diag-saved-dialog')`, 'saved dialog', 30000);
     check(await js(`document.querySelector('.diag-saved-path').textContent === ${JSON.stringify(zipPath)}`), 'the dialog names the saved archive');
@@ -258,6 +266,8 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     check(plugins.some((p) => p.id === 'diagnostics' && p.enabled) && plugins.some((p) => p.id === 'diag-flaky' && p.enabled === false), 'plugins.json lists plugins and their state');
     const settings = JSON.parse(read('settings.json'));
     check(settings['editor.fontSize'] === 14 && settings['database.password'] === '<redacted>' && settings['ai.apiKey'] === '<redacted>' && settings['vcs.github'].token === '<redacted>' && settings['vcs.github'].user === 'octo', 'settings.json keeps settings and redacts secrets');
+    check(!('pyconsole.history' in settings) && settings['runConfigs:C:\\elsewhere']?.configs[0].name === 'main' && !('params' in settings['runConfigs:C:\\elsewhere'].configs[0]) && !('env' in settings['runConfigs:C:\\elsewhere'].configs[0]),
+      'settings.json leaves out console history, run parameters and environment values');
     check(read('internal-errors.txt').includes('Plugin: Diag Flaky (diag-flaky)'), 'internal-errors.txt lists the errors with their plugins');
     const everything = files.map(read).join('\n');
     const leaked = Object.entries(SECRETS).filter(([, v]) => everything.includes(v)).map(([k]) => k);

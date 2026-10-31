@@ -136,23 +136,37 @@ async function freePort(from) {
 // A connection that stops sending is given up after this long without data (undici alone waits 300 s).
 const STALL_MS = 60000;
 
-async function download(url, dest, { sha256, size, signal, progress, log }) {
+async function download(url, dest, { sha256, size, limit, allow, signal, progress, log }) {
   log(`Downloading ${url}\n`);
   const stall = new AbortController();
   let timer;
   const alive = () => { clearTimeout(timer); timer = setTimeout(() => stall.abort(new Error(`Download stalled: no data for ${STALL_MS / 1000} s from ${url}`)), STALL_MS); };
   alive();
   try {
-    return await downloadTo(url, dest, { sha256, size, signal: signal ? AbortSignal.any([signal, stall.signal]) : stall.signal, progress, log, alive });
+    return await downloadTo(url, dest, { sha256, size, limit, allow, signal: signal ? AbortSignal.any([signal, stall.signal]) : stall.signal, progress, log, alive });
   } catch (err) {
     throw stall.signal.aborted ? stall.signal.reason : err;
   } finally { clearTimeout(timer); }
 }
 
-async function downloadTo(url, dest, { sha256, size, signal, progress, log, alive }) {
-  const res = await fetch(url, { signal, redirect: 'follow' });
+// allow(url): where a redirect may lead, for a download whose address came from outside.
+async function fetchAllowed(url, signal, allow) {
+  if (!allow) return fetch(url, { signal, redirect: 'follow' });
+  for (let target = url, hops = 0; hops < 8; hops++) {
+    const res = await fetch(target, { signal, redirect: 'manual' });
+    const next = res.headers.get('location');
+    if (res.status < 300 || res.status >= 400 || !next) return res;
+    target = new URL(next, target).href;
+    if (!allow(target)) throw Object.assign(new Error(`Download refused: it redirects to ${new URL(target).host}`), { code: 'REDIRECT', expected: true });
+  }
+  throw Object.assign(new Error('Download refused: too many redirects'), { code: 'REDIRECT', expected: true });
+}
+async function downloadTo(url, dest, { sha256, size, limit, allow, signal, progress, log, alive }) {
+  const res = await fetchAllowed(url, signal, allow);
   if (!res.ok) throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
   const total = Number(res.headers.get('content-length')) || size;
+  const tooLarge = () => Object.assign(new Error(`${path.basename(dest)} is larger than the ${Math.ceil(limit / 1048576)} MB allowed`), { code: 'TOO_LARGE', expected: true });
+  if (limit && total > limit) throw tooLarge();
   const part = `${dest}.part`;
   const out = fs.createWriteStream(part);
   // A write error (disk full) is raised from the loop below: waiting for 'drain' after it would wait forever.
@@ -165,6 +179,7 @@ async function downloadTo(url, dest, { sha256, size, signal, progress, log, aliv
       alive();
       hash.update(chunk);
       got += chunk.length;
+      if (limit && got > limit) throw tooLarge();
       if (out.errored) throw out.errored;
       if (!out.write(chunk)) await once(out, 'drain');
       progress(got / total);

@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+  addEventListener('message', (e) => {
+    if (e.source !== parent || typeof e.data?.nbHtml !== 'string') return;
+    document.open();
+    document.write(e.data.nbHtml);
+    document.close();
+  });
+  parent.postMessage({ nbFrameReady: true }, '*');
+</script>

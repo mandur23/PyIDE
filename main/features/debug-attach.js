@@ -1,7 +1,9 @@
 // Run › Attach to Process: lists the local Python processes and injects the bundled debugpy into one with
-// `python -m debugpy --listen 127.0.0.1:<port> --pid <pid>`. main/features/debug.js then talks DAP to it like to a
-// launched program (debug:attach). Messages thrown here are English; renderer/features/debugger/index.js translates them.
-const { execFile } = require('child_process');
+// `python -m debugpy --connect 127.0.0.1:<port> --pid <pid>`, which connects it to a debugpy adapter main/features/debug.js
+// runs for that session alone (debug:attach), so nothing keeps listening once the session ends. Injecting again later
+// replaces what is left of the earlier debugpy in the target. Messages thrown here are English;
+// renderer/features/debugger/index.js translates them.
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const log = require('../diagnostics').logger('#debugger');
@@ -113,8 +115,8 @@ const versionTooOld = (v) => {
 };
 
 // The processes the Attach to Process list shows: PyIDE's own Python sidecars (anything run from the app folder, the
-// bundled debugpy, adapters), debugpy adapters and venv launcher stubs are left out. A process whose debugpy is already
-// listening (attached before, or a program that calls debugpy.listen()) carries that port as debugPort.
+// bundled debugpy, adapters), debugpy adapters and venv launcher stubs are left out. A program that called
+// debugpy.listen() itself carries that port as debugPort.
 async function listProcesses({ ownDirs = [] } = {}) {
   const out = filterProcesses(await rawPythonProcesses(), { ownDirs });
   await Promise.all(out.map(async (p) => { p.version = p.exe ? await pythonVersion(p.exe) : null; }));
@@ -196,20 +198,29 @@ function injectError(pid, output, state = pidState(pid)) {
   return new Error(`Could not inject the debugger into process ${pid}: ${last}`);
 }
 
-// Runs `python -m debugpy --listen 127.0.0.1:<port> --pid <pid>` with the target's own interpreter (sys.remote_exec
-// needs the same Python version) and the bundled debugpy. Resolves once the code is in the target; the target starts
-// listening when its interpreter next runs Python code. onChild(child) lets the caller kill it (killTree) on Stop;
-// isStopped() is checked before the injector starts, so a Stop during the version probe never injects.
-async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => false }) {
-  if (!validPort(port)) throw new Error(`Invalid debugger port: ${port}`);
+// The interpreter's version, or an error for one the bundled debugpy cannot run on.
+async function supportedVersion({ exe, pid, isStopped = () => false }) {
   const version = await pythonVersion(exe);
   if (isStopped()) throw stoppedError();
   if (!version) throw new Error(`Cannot run the interpreter of process ${pid}: ${exe}`);
   if (versionTooOld(version)) {
     throw new Error(`Python ${version} is not supported by the bundled debugpy (Python ${MIN_PYTHON.join('.')} or later is required)`);
   }
+  return version;
+}
+
+// A debugpy adapter for one session, spoken to over its pipes. debug.js ends it with the session.
+const startAdapter = ({ exe, vendorDir }) => spawn(exe, [path.join(vendorDir, 'debugpy', 'adapter')], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+
+// Runs `python -m debugpy --connect 127.0.0.1:<port> --pid <pid>` with the target's own interpreter (sys.remote_exec
+// needs the same Python version) and the bundled debugpy. Resolves once the code is in the target; the target connects
+// to the adapter on port when its interpreter next runs Python code. onChild(child) lets the caller kill it (killTree)
+// on Stop; isStopped() is checked before the injector starts, so a Stop during the version probe never injects.
+async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => false }) {
+  if (!validPort(port)) throw new Error(`Invalid debugger port: ${port}`);
+  const version = await supportedVersion({ exe, pid, isStopped });
   const env = { ...process.env, PYTHONPATH: [vendorDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter), PYTHONIOENCODING: 'utf-8' };
-  const args = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--listen', `127.0.0.1:${port}`, '--pid', String(pid)];
+  const args = ['-X', 'frozen_modules=off', '-m', 'debugpy', '--connect', `127.0.0.1:${port}`, '--pid', String(pid)];
   log.info(`injecting debugpy into pid ${pid}: ${exe} ${args.join(' ')}`);
   const r = await new Promise((resolve) => {
     let timedOut = false;
@@ -235,8 +246,8 @@ async function inject({ exe, pid, port, vendorDir, onChild, isStopped = () => fa
 }
 
 module.exports = {
-  listProcesses, filterProcesses, ownDirsFor, inject, injectError, pidState, splitArgs, pythonVersion, validPort,
-  killTree, killInjectors, injectorCount: () => injectors.size, MIN_PYTHON, stoppedError,
+  listProcesses, filterProcesses, ownDirsFor, inject, injectError, pidState, splitArgs, pythonVersion, supportedVersion, startAdapter,
+  validPort, killTree, killInjectors, injectorCount: () => injectors.size, MIN_PYTHON, stoppedError,
 };
 
 // Loaded as a main module of the debugger plugin (plugin.json "main"); the IPC lives in debug.js.

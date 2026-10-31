@@ -220,7 +220,7 @@ try {
     { label: 'Microsoft SQL Server', pkg: 'mssql', port: '1433', fields: ['host:', 'port:1433', 'instance:', 'user:', 'password:', 'database:', 'encrypt:true', 'trustServerCertificate:false'], refused: /nothing accepted the connection/ },
     { label: 'Oracle', pkg: 'oracledb', port: '1521', fields: ['host:', 'port:1521', 'user:', 'password:', 'connectBy:service', 'service:', 'allSchemas:false'], refused: /NJS-503[\s\S]*ECONNREFUSED/ },
     { label: 'ClickHouse', pkg: '@clickhouse/client', port: '8123', fields: ['url:', 'host:', 'port:8123', 'https:false', 'user:', 'password:', 'database:'], refused: /Cannot reach ClickHouse[\s\S]*ECONNREFUSED/ },
-    { label: 'CockroachDB', pkg: 'pg', port: '26257', fields: ['host:', 'port:26257', 'user:', 'password:', 'database:'], refused: /ECONNREFUSED/ },
+    { label: 'CockroachDB', pkg: 'pg', port: '26257', fields: ['host:', 'port:26257', 'user:', 'password:', 'database:', 'ssl:'], refused: /ECONNREFUSED/ },
   ];
   for (const s of servers) {
     await openNewDialog(a, s.label);

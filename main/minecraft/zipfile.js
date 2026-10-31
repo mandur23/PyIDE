@@ -9,7 +9,7 @@ const fail = (message) => Object.assign(new Error(message), { expected: true });
 // What reading an archive stops at. A zip bomb (a small file whose entries inflate to gigabytes, or a directory whose
 // entries all point at the same data) is refused before anything is written; resource packs and modpack overrides
 // are tens of MB.
-const LIMITS = { entry: 512 * 1024 * 1024, total: 2 * 1024 * 1024 * 1024 };
+const LIMITS = { entry: 512 * 1024 * 1024, total: 2 * 1024 * 1024 * 1024, files: 50000 };
 const mb = (n) => Math.ceil(n / 1048576);
 
 const CRC = new Int32Array(256).map((_v, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
@@ -59,11 +59,18 @@ function openZip(file) {
     const dir = Buffer.alloc(dirSize);
     fs.readSync(fd, dir, 0, dirSize, dirAt);
     const entries = new Map(); // name -> {flags, method, packed, size, at}
+    const spans = [];
     for (let p = 0, i = 0; i < count && p + 46 <= dir.length && dir.readUInt32LE(p) === 0x02014b50; i++) {
       const nameLen = dir.readUInt16LE(p + 28);
-      entries.set(dir.toString('utf8', p + 46, p + 46 + nameLen), { flags: dir.readUInt16LE(p + 8), method: dir.readUInt16LE(p + 10),
-        packed: dir.readUInt32LE(p + 20), size: dir.readUInt32LE(p + 24), at: dir.readUInt32LE(p + 42) });
+      const entry = { flags: dir.readUInt16LE(p + 8), method: dir.readUInt16LE(p + 10), packed: dir.readUInt32LE(p + 20), size: dir.readUInt32LE(p + 24), at: dir.readUInt32LE(p + 42) };
+      entries.set(dir.toString('utf8', p + 46, p + 46 + nameLen), entry);
+      spans.push(entry);
       p += 46 + nameLen + dir.readUInt16LE(p + 30) + dir.readUInt16LE(p + 32);
+    }
+    // Entries that share their data are a bomb: a real archive holds each file once.
+    spans.sort((a, b) => a.at - b.at);
+    for (let i = 1; i < spans.length; i++) {
+      if (spans[i].at < spans[i - 1].at + 30 + spans[i - 1].packed) throw Object.assign(fail(`${path.basename(file)} is refused: its entries overlap, as in a zip bomb`), { bomb: true });
     }
     return {
       names: [...entries.keys()],
@@ -80,9 +87,11 @@ function openZip(file) {
         if (head.readUInt32LE(0) !== 0x04034b50 || at + e.packed > size) throw fail(`${name} is damaged`);
         const data = Buffer.alloc(e.packed);
         fs.readSync(fd, data, 0, e.packed, at);
-        if (e.method === 0) return data;
-        // An entry that inflates to more than it declares is a bomb, not a file.
-        try { return zlib.inflateRawSync(data, { maxOutputLength: Math.max(e.size, 1) }); } catch { throw fail(`${name} is damaged`); }
+        // Limits count what an entry declares, so one that gives more than it declares is a bomb, not a file.
+        let out;
+        try { out = e.method === 0 ? data : zlib.inflateRawSync(data, { maxOutputLength: Math.max(e.size, 1) }); } catch { throw fail(`${name} is damaged`); }
+        if (out.length !== e.size) throw fail(`${name} is damaged`);
+        return out;
       },
       close: () => fs.closeSync(fd),
     };
@@ -92,13 +101,14 @@ function openZip(file) {
   }
 }
 
-// The bytes of one entry of a zip on disk, or null.
+// The bytes of one entry of a zip on disk, or null. A bomb is not "no such entry": the caller's user hears why.
 function readEntry(file, name) {
   let zip;
   try {
     zip = openZip(file);
     return zip.read(name);
-  } catch {
+  } catch (err) {
+    if (err.bomb) throw err;
     return null;
   } finally {
     zip?.close();
@@ -115,6 +125,7 @@ function unpackZip(file, dest, prefix = '') {
     const names = zip.names.filter((x) => x.startsWith(prefix) && !x.endsWith('/'));
     const total = names.reduce((s, n) => s + zip.size(n), 0);
     if (total > LIMITS.total) throw fail(`${path.basename(file)} unpacks to ${mb(total)} MB, more than the ${mb(LIMITS.total)} MB Nano Studio unpacks`);
+    if (names.length > LIMITS.files) throw fail(`${path.basename(file)} holds ${names.length} files, more than the ${LIMITS.files} Nano Studio unpacks`);
     for (const n of names) {
       const out = path.resolve(top, n.slice(prefix.length));
       if (!out.startsWith(top + path.sep) || out.slice(top.length).includes(':')) continue;

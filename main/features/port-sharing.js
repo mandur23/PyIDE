@@ -11,7 +11,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const tls = require('tls');
-const { createToolchains } = require('../installer/toolchains');
+const { createToolchains, installRoot } = require('../installer/toolchains');
 
 const POLL_MS = 3000;
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
@@ -151,8 +151,12 @@ exports.register = ({ ipcMain, app, send }) => {
     }
     return false;
   }
+  // A notebook kernel's ZMQ ports run code for whoever reaches them, and a database from the Install Manager has real
+  // data behind a generated password: neither is a server to offer the internet.
+  const serversDir = `${path.resolve(installRoot(), 'servers')}${path.sep}`.toLowerCase();
   const isTool = (p) => !p || (p.exe && path.resolve(p.exe) === path.resolve(process.execPath)) || /^cloudflared(\.exe)?$/i.test(p.name)
-    || /debugpy|pydevd|jdtls|pyright|langserver/i.test(p.cmd);
+    || (p.exe && path.resolve(p.exe).toLowerCase().startsWith(serversDir))
+    || /debugpy|pydevd|jdtls|pyright|langserver|ipykernel|kernel_launcher/i.test(p.cmd);
   // A JVM started for the debugger listens on its JDWP port too; that port is the debugger's, not a server.
   const debuggerPorts = (p) => [...p.cmd.matchAll(/jdwp=[^\s"]*address=(?:[\w.]+:)?(\d+)/g)].map((m) => Number(m[1]));
 
@@ -209,6 +213,11 @@ exports.register = ({ ipcMain, app, send }) => {
   // Tells what every listed server speaks (the renderer asks while the Ports window is shown); answers arrive with
   // ports:changed.
   ipcMain.handle('ports:probe', () => { for (const row of ports) if (!row.proto) probeRow(row); return true; });
+  // What one server speaks, for the Share warning: a bore address exposes more than a quick tunnel's.
+  ipcMain.handle('ports:proto', (_e, port) => {
+    const row = ports.find((p) => p.port === port);
+    return row ? row.proto || probeRow(row) : null;
+  });
 
   // The ports the user added (the renderer keeps them); the list is read again at once.
   ipcMain.handle('ports:setAdded', async (_e, list) => {

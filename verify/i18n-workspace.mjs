@@ -33,9 +33,11 @@ function trStrings(file) {
   return out;
 }
 const ko = JSON.parse(readFileSync(path.join(PLUGIN, 'locales', 'ko.json'), 'utf8'));
+// As in verify/i18n-static.mjs: a generic string lives in the core dictionary, which is always loaded under a plugin's.
+const core = JSON.parse(readFileSync(path.join(PLUGIN, '..', '..', 'locales', 'ko.json'), 'utf8'));
 const meta = JSON.parse(readFileSync(path.join(PLUGIN, 'plugin.json'), 'utf8'));
 const mine = trStrings(path.join(PLUGIN, 'index.js'));
-const staticMissing = [...mine, meta.name, meta.description].filter((s) => !(s in ko));
+const staticMissing = [...mine, meta.name, meta.description].filter((s) => !(s in ko) && !(s in core));
 
 const t = await launch({ fixture: 'workspace', port: 9462, name: 'i18n-workspace', lang: 'ko-KR' });
 const { js, until, press, type, click, shot, check, sleep } = t;

@@ -10,6 +10,7 @@ const { DRIVERS, PACKAGES, driverDir, packageVersion } = require('../db/drivers'
 const { sameConnection } = require('../settings-sync/same-connection');
 const dataExport = require('../db/export');
 const { exportError } = require('../db/cursors');
+const ssl = require('../db/ssl');
 
 function register({ ipcMain, app, send }) {
   const { safeStorage, dialog, BrowserWindow } = require('electron');
@@ -178,6 +179,7 @@ function register({ ipcMain, app, send }) {
   }
 
   // ---------- IPC ----------
+  ipcMain.handle('db:messages', (_e, dict) => ssl.setMessages(dict));
   ipcMain.handle('db:drivers', () => driverList());
   ipcMain.handle('db:installDriver', (_e, pkg) => installDriver(pkg));
   ipcMain.handle('db:list', () => sources.map(toPublic));

@@ -28,7 +28,9 @@
   border-bottom: 1px solid var(--gray4); z-index: 2; }
 .dv-scroll { position: absolute; left: 0; right: 0; top: 40px; bottom: 0; overflow: auto; }
 .dv-sizer { position: absolute; left: 0; top: 0; pointer-events: none; }
-.dv-layer { position: absolute; left: 0; top: 0; overflow: hidden; will-change: transform; }
+/* Percentages, not clientWidth/Height: those round, and on a fractional size a layer rounded up made the scrollbars come
+   and go every frame (each redraw restarted the load timer, so the cells never loaded). */
+.dv-layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; will-change: transform; }
 .dv-corner { position: absolute; left: 0; top: 0; height: 40px; padding: 4px 6px; z-index: 1; background: var(--gray2);
   border-right: 1px solid var(--gray4); color: var(--gray9); box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }

@@ -12,6 +12,14 @@
   const isNumber = (v) => typeof v === 'number' || typeof v?.$number === 'string';
   const cellText = (v) => (v === null ? 'NULL' : typeof v?.$number === 'string' ? v.$number : String(v));
 
+  // Messages the main process words itself (main/db/ssl.js), which reach every view that shows a connection error.
+  const MAIN_MESSAGES = [
+    'Verify certificate needs the server\'s host name, not an IP address, for this database. Enter the host name, or set SSL mode to Require in the data source settings.',
+    'The server does not support SSL, so the connection was not made and no password was sent. To connect without encryption, set SSL mode to Off in the data source settings.',
+    'The server\'s SSL certificate could not be verified ({detail}), so the connection was not made and no password was sent. To encrypt without checking the certificate, set SSL mode to Require in the data source settings.',
+  ];
+  invoke('db:messages', Object.fromEntries(MAIN_MESSAGES.map((m) => [m, tr(m)]))).catch(() => {});
+
   // ---------- state ----------
   let drivers = [];
   let sources = [];

@@ -30,8 +30,27 @@
     'Downloading library files',
     'No Python interpreter was found in the target.',
     'Python did not start.',
+    'The SSH host key of {host} has changed since it was trusted, so nothing was sent to it. Someone may be intercepting the connection, or the server may have been reinstalled. If its administrator confirms the new key, remove the old one with: ssh-keygen -R {known}',
+    'The SSH host key of {host} was not trusted, so nothing was sent to it.',
   ];
   invoke('messages', Object.fromEntries(MAIN_MESSAGES.map((m) => [m, tr(m)]))).catch(() => {});
+
+  // ---------- SSH host keys ----------
+  // ssh asks before it sends anything, the saved password included (main/remote/askpass.js). Any connection can ask,
+  // not only the Add Interpreter form: a target copied from another computer meets its host here for the first time.
+  ide.api.on('remote-interp:hostKey', ({ id, host, keyType, fingerprint }) => {
+    const answer = (trusted) => invoke('hostKeyAnswer', id, trusted);
+    const print = el('p', 'remote-hostkey-print', `${keyType} ${fingerprint}`);
+    print.dataset.userText = '';
+    const body = el('div', 'remote-hostkey');
+    body.append(el('p', null, tr('This computer has not connected to {host} before. Compare this host key fingerprint with the one from the server or its administrator. If they differ, someone may be intercepting the connection.', { host })),
+      print, el('p', null, tr('Nothing is sent to the server, not even a saved password, until you trust this key. It is then recorded, and a later change of key is refused.')));
+    ide.ui.dialog({
+      title: tr('Trust This SSH Host?'), body, width: 560,
+      buttons: [{ label: tr('Trust and Connect'), primary: true, run: () => answer(true) }, { label: tr('Cancel'), run: () => answer(false) }],
+      onClose: () => answer(false),
+    });
+  });
 
   const KINDS = {
     wsl: { menu: () => tr('On WSL…'), title: () => tr('New Interpreter on WSL'), name: () => tr('WSL') },

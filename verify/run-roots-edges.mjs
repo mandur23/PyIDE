@@ -107,9 +107,7 @@ try {
   const pids = (/PIDS (\d+) (\d+)/.exec(await js(termText)) || []).slice(1).map(Number);
   leftovers.push(...pids);
   check(pids.length === 2 && pids.every(alive), `the program and its child run (${pids})`);
-  await js(`(setTimeout(() => location.reload(), 50), true)`);
-  await sleep(1500);
-  await until(`!!window.ide?.root && !!ide.run`, 'the page is back', 30000);
+  await t.reload({ until: '!!window.ide?.root && !!ide.run' });
   for (let i = 0; i < 30 && pids.some(alive); i++) await sleep(300);
   check(!pids.some(alive), `reloading the page ends the terminal run and its child (${pids.map((p) => `${p} ${alive(p) ? 'alive' : 'gone'}`)})`);
 

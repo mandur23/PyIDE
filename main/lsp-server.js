@@ -84,8 +84,8 @@ const CLIENT_CAPABILITIES = {
 };
 
 class Server {
-  constructor({ spec, root, gen, send, channel }) {
-    Object.assign(this, { spec, root, gen, send, channel });
+  constructor({ spec, root, gen, send, channel, ownerStack }) {
+    Object.assign(this, { spec, root, gen, send, channel, ownerStack });
     this.nextId = 1;
     this.pending = new Map();
     this.queue = [];
@@ -116,7 +116,7 @@ class Server {
       });
     });
     this.proc.stdin.on('error', () => {}); // writes until 'exit' marks the server gone would otherwise throw EPIPE
-    diagnostics.watchProcess(this.proc, { name: spec.processName });
+    diagnostics.watchProcess(this.proc, { name: spec.processName, stack: this.ownerStack });
     this.ready = this.initialize().then(() => spec.whenReady?.(this));
     this.ready.catch(() => {});
     this.watch();
@@ -396,6 +396,8 @@ class Server {
 function serve({ ipcMain, app, send }, channel, makeSpec) {
   let server = null;
   let gen = 0;
+  // A server starts from an IPC call, with no plugin file on the stack; the plugin that serves it is on this one.
+  const ownerStack = new Error().stack;
 
   const start = async (root, args) => {
     const old = server;
@@ -413,7 +415,7 @@ function serve({ ipcMain, app, send }, channel, makeSpec) {
       return gen === my ? { error: err.message, code: err.code } : null;
     }
     if (gen !== my) return null;
-    const s = (server = new Server({ spec, root, gen: my, send, channel }));
+    const s = (server = new Server({ spec, root, gen: my, send, channel, ownerStack }));
     send(`${channel}:status`, { gen: my, state: 'starting' });
     try {
       await s.ready;

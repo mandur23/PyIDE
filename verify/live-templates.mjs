@@ -145,9 +145,7 @@ try {
   await js(`ide.settings.flush()`);
   await sleep(300);
 
-  await cdp('Page.reload');
-  await sleep(1500);
-  await until('window.__ideReady === true', 'IDE ready after reload', 40000);
+  await t.reload();
   await js(`(ide.settings.set('aiComplete.enabled', false), true)`);
   await openFile(t, 'scratch.py');
   s = await tabAfter('hello');

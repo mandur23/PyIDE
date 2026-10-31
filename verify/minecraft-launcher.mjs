@@ -20,6 +20,7 @@ import crypto from 'crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import { createRequire } from 'module';
+import net from 'net';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch } from './lib.mjs';
@@ -73,19 +74,57 @@ ${body}
   execFileSync(bin('jar'), ['--create', '--file', jar, '--main-class', 'net.minecraftforge.installer.SimpleInstaller', '-C', path.join(dir, 'classes'), '.', '-C', path.join(dir, 'res'), '.']);
   return readFileSync(jar);
 };
-const FORGE_ID = '1.20.1-forge-47.9.9';
-const forgeJar = installer(path.join(work, 'forge'), FORGE_ID, `
+const headlessInstall = (id, mc) => `
     if (a.length < 2 || !a[0].equals("--installClient")) { System.out.println("usage: --installClient <dir>"); System.exit(2); }
     Path target = Paths.get(a[1]);
     if (!Files.exists(target.resolve("launcher_profiles.json"))) { System.out.println("There is no minecraft launcher profile"); System.exit(1); }
-    Path v = target.resolve("versions").resolve("${FORGE_ID}");
+    Path v = target.resolve("versions").resolve("${id}");
     Files.createDirectories(v);
-    Files.write(v.resolve("${FORGE_ID}.json"), "{\\"id\\": \\"${FORGE_ID}\\", \\"inheritsFrom\\": \\"1.20.1\\", \\"mainClass\\": \\"cpw.mods.bootstraplauncher.BootstrapLauncher\\"}".getBytes());
+    Files.write(v.resolve("${id}.json"), "{\\"id\\": \\"${id}\\", \\"inheritsFrom\\": \\"${mc}\\", \\"mainClass\\": \\"cpw.mods.bootstraplauncher.BootstrapLauncher\\"}".getBytes());
     Files.write(Paths.get("installer.log"), "ok".getBytes());
-    System.out.println("Successfully installed client profile forge");`);
+    System.out.println("Successfully installed client profile forge");`;
+const FORGE_ID = '1.20.1-forge-47.9.9';
+const forgeJar = installer(path.join(work, 'forge'), FORGE_ID, headlessInstall(FORGE_ID, '1.20.1'));
+const NEO_ID = 'neoforge-20.4.237';
+const neoJar = installer(path.join(work, 'neoforge'), NEO_ID, headlessInstall(NEO_ID, '1.20.4'));
 const oldForgeJar = installer(path.join(work, 'forge-old'), '1.12.2-forge-14.23.5.2860', `
     System.out.println("This installer only has a window");
     System.exit(3);`);
+
+// A stand-in Minecraft server for My Servers: it listens on server.properties' port and quits at "stop", or after two
+// minutes when a failed run leaves it behind.
+const gameServerDir = path.join(work, 'game-server');
+write(path.join(gameServerDir, 'StandInServer.java'), `import java.io.*;
+import java.net.*;
+import java.nio.file.*;
+import java.util.*;
+public class StandInServer {
+  public static void main(String[] a) throws Exception {
+    Properties p = new Properties();
+    try (InputStream in = Files.newInputStream(Paths.get("server.properties"))) { p.load(in); }
+    ServerSocket s = new ServerSocket(Integer.parseInt(p.getProperty("server-port")));
+    System.out.println("Done (0.1s)!");
+    Thread limit = new Thread(() -> { try { Thread.sleep(120000); } catch (Exception e) {} System.exit(0); });
+    limit.setDaemon(true);
+    limit.start();
+    BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+    for (String l; (l = in.readLine()) != null; ) if (l.trim().equals("stop")) break;
+    System.exit(0);
+  }
+}`);
+execFileSync(bin('javac'), ['--release', '8', '-nowarn', '-d', path.join(gameServerDir, 'classes'), path.join(gameServerDir, 'StandInServer.java')]);
+const gameServerJar = path.join(gameServerDir, 'server.jar');
+execFileSync(bin('jar'), ['--create', '--file', gameServerJar, '--main-class', 'StandInServer', '-C', path.join(gameServerDir, 'classes'), '.']);
+const fakeTunnel = path.join(work, 'fake-cloudflared.cjs');
+writeFileSync(fakeTunnel, `const port = (process.argv.join(' ').match(/:(\\d+)/) || [])[1];
+setTimeout(() => process.stderr.write('INF |  https://fake-port-' + port + '.trycloudflare.com  |\\nINF Registered tunnel connection\\n'), 200);
+setInterval(() => {}, 1000);
+`);
+const fakeBore = path.join(work, 'fake-bore.cjs');
+writeFileSync(fakeBore, `const port = Number(process.argv[process.argv.indexOf('local') + 1]);
+setTimeout(() => console.log('INFO bore_cli::client: listening at bore.pub:' + (40000 + port % 1000)), 200);
+setInterval(() => {}, 1000);
+`);
 
 // ---------- client packs (.mrpack, written by Python's zipfile) ----------
 const mrpack = (index, entries = {}) => {
@@ -103,11 +142,13 @@ z.close()`, file, S(index), S(Object.fromEntries(Object.entries(entries).map(([k
 // ---------- stand-in services ----------
 const routes = new Map();
 const requests = [];
+const HANG = Symbol('a download that starts and then says nothing');
 const server = http.createServer((q, r) => {
   requests.push(q.url);
   const route = routes.get(q.url.split('?')[0]);
   const body = typeof route === 'function' ? route(q.url) : route;
   if (body === undefined) { r.writeHead(404); return r.end(); }
+  if (body === HANG) { r.writeHead(200, { 'Content-Length': 100000 }); return r.write('x'); }
   r.writeHead(200);
   r.end(Buffer.isBuffer(body) ? body : typeof body === 'string' ? body : S(body));
 });
@@ -134,6 +175,9 @@ routes.set('/forge/maven-metadata.xml', '<metadata><versioning><versions><versio
 routes.set('/forge/1.20.1-47.9.9/forge-1.20.1-47.9.9-installer.jar', forgeJar);
 routes.set('/forge/1.20.1-47.9.9/forge-1.20.1-47.9.9-installer.jar.sha256', sha('sha256', forgeJar));
 routes.set('/forge/1.12.2-14.23.5.2860/forge-1.12.2-14.23.5.2860-installer.jar', oldForgeJar);
+routes.set('/neoforge/maven-metadata.xml', '<metadata><versioning><versions><version>20.4.200-beta</version><version>20.4.237</version></versions></versioning></metadata>');
+routes.set('/neoforge/20.4.237/neoforge-20.4.237-installer.jar', neoJar);
+routes.set('/neoforge/20.4.237/neoforge-20.4.237-installer.jar.sha256', sha('sha256', neoJar));
 
 // The server's pack: v1, then v2 (Minecraft 1.20.4; mod-a updated, mod-b gone, mod-c new, the client overrides gone),
 // then v3 (a file whose hash does not match).
@@ -258,7 +302,10 @@ try {
     `a join code is made and read back from pasted text (${code})`);
   const bad = await call('launcher:parseJoinCode', 'nanostudio:join?addr=exa_mple:1');
   check(/not a server address/.test(bad.err || ''), `a join code with a bad address is refused (${bad.err})`);
-  const joined = await ok('launcher:join', project, { code }, 'job-join');
+  const asked = await ok('launcher:join', project, { code }, 'job-join');
+  check(asked.needsApproval?.sha1 === sha('sha1', PACKS.v1) && asked.needsApproval.mods.some((m) => m.file === 'mods/mod-a.jar') && !asked.needsApproval.mods.some((m) => /server-only/.test(m.file)) && !has(path.join(project, 'servers-list.json')),
+    `a join code's pack waits for the user's yes, and nothing is saved before it (${S(asked.needsApproval?.mods)})`);
+  const joined = await ok('launcher:join', project, { code, approve: asked.needsApproval.sha1 }, 'job-join');
   const tdir = joined.instance.dir;
   const tdesc = readJson(path.join(tdir, 'nano-instance.json'));
   check(joined.server.address === 'mc.example.test:25580' && joined.server.pack === packUrl && joined.instance.title === 'Test Server'
@@ -280,7 +327,9 @@ try {
   check(off.find((m) => m.name === 'mod-a.jar')?.enabled === false && off.find((m) => m.name === 'mod-a.jar').fromPack && off.find((m) => m.name === 'user-mod.jar')?.fromPack === false
     && has(path.join(tdir, 'mods', 'mod-a.jar.disabled')), 'launcher:setMod turns a mod off with .disabled; launcher:mods says which mods are the pack\'s');
   served = 'v2';
-  await ok('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580' }, 'job-sync');
+  const changed = await ok('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580' }, 'x');
+  check(changed.launched === false && changed.needsApproval?.update === true && text(path.join(tdir, 'config', 'a.toml')) === 'v = 1', 'a changed pack waits for the user\'s yes too, with nothing touched and the launcher not started');
+  await ok('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580', approve: changed.needsApproval.sha1 }, 'job-sync');
   const t2 = readJson(path.join(tdir, 'nano-instance.json'));
   check(text(path.join(tdir, 'mods', 'mod-a.jar.disabled')) === 'mod a 2' && !has(path.join(tdir, 'mods', 'mod-a.jar')) && !has(path.join(tdir, 'mods', 'mod-b.jar'))
     && text(path.join(tdir, 'mods', 'mod-c.jar')) === 'mod c 1' && text(path.join(tdir, 'mods', 'user-mod.jar')) === 'mine' && text(path.join(tdir, 'config', 'a.toml')) === 'v = 2'
@@ -293,7 +342,8 @@ try {
   await ok('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580' }, 'job-same');
   check(packFetches() === fetches + 1 && /has not changed/.test(await logOf('job-same')), 'an unchanged pack (same SHA-1) is checked and left alone');
   served = 'v3';
-  const broken = await call('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580' }, 'x');
+  const v3 = await ok('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580' }, 'x');
+  const broken = await call('launcher:play', project, joined.instance.name, { server: 'mc.example.test:25580', approve: v3.needsApproval?.sha1 }, 'x');
   const t3 = readJson(path.join(tdir, 'nano-instance.json'));
   check(/Checksum mismatch for mods\/mod-d\.jar/.test(broken.err || '') && t3.pack.sha1 === sha('sha1', PACKS.v2) && text(path.join(tdir, 'mods', 'mod-c.jar')) === 'mod c 1'
     && !has(path.join(tdir, 'mods', 'mod-d.jar')) && !readdirSync(tdir).some((n) => n.startsWith('.pack-')), `a pack file with a bad hash fails the sync and changes nothing (${broken.err})`);
@@ -367,6 +417,28 @@ try {
 t.close();
 await craftUi(t);
 
+// The WCAG contrast ratio of an element's text on what is behind it, as an expression for the page.
+function contrastOf(sel) {
+  return `(() => {
+    const parse = (c) => {
+      const srgb = /color\\(srgb ([\\d.]+) ([\\d.]+) ([\\d.]+)(?: \\/ ([\\d.]+))?\\)/.exec(c);
+      if (srgb) return { r: srgb[1] * 255, g: srgb[2] * 255, b: srgb[3] * 255, a: srgb[4] === undefined ? 1 : Number(srgb[4]) };
+      const m = c.match(/[\\d.]+/g).map(Number);
+      return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 };
+    };
+    const over = (top, under) => ({ r: top.r * top.a + under.r * (1 - top.a), g: top.g * top.a + under.g * (1 - top.a), b: top.b * top.a + under.b * (1 - top.a), a: 1 });
+    const lum = ({ r, g, b }) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+    const n = document.querySelector(${S(sel)});
+    if (!n) return null;
+    const stack = [];
+    for (let e = n; e; e = e.parentElement) stack.push(parse(getComputedStyle(e).backgroundColor));
+    const bg = stack.reverse().reduce((under, top) => over(top, under), { r: 255, g: 255, b: 255, a: 1 });
+    const fg = over(parse(getComputedStyle(n).color), bg);
+    const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+    return Math.round(((hi + 0.05) / (lo + 0.05)) * 10) / 10;
+  })()`;
+}
+
 // ---------- Nano Studio Craft's pages in craft mode (--mode=craft) ----------
 // The craft window on its own workspace (PYIDE_CRAFT_HOME) with the same stand-ins and a stand-in launcher of its
 // own: a new instance played, an address main refuses (its error under the field, the text kept through a refresh), a
@@ -394,7 +466,8 @@ async function craftUi(first) {
   const env = { PYIDE_CRAFT_HOME: home, PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES };
   let u;
   try {
-    u = await launch({ name: 'minecraft-launcher', port: 9897, mode: 'craft', lang: 'ko', projectDir: home, env: { ...env, PYIDE_MC_LAUNCHER: S([process.execPath, fakeLauncher, uiLog]) } });
+    u = await launch({ name: 'minecraft-launcher', port: 9897, mode: 'craft', lang: 'ko', projectDir: home, env: { ...env, PYIDE_MC_LAUNCHER: S([process.execPath, fakeLauncher, uiLog]),
+      PYIDE_BORE: S([process.execPath, fakeBore]), PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]) } });
   } catch (err) {
     first.check(false, `the craft window: ${err.message}`);
     return first.finish();
@@ -458,6 +531,18 @@ async function craftUi(first) {
     const kept = await js(`({ same: document.querySelector('#mccAddServer') === window.__field, value: window.__field.value, error: document.querySelector('.mcc-add-error').textContent })`);
     check(kept.same && kept.value === 'typed.example.test' && /서버 주소가 아니에요/.test(kept.error), `a refresh (as after Play or Join) keeps the field, what is typed in it and the error (${S(kept)})`);
     await js(`(document.querySelector('#mccAddServer').value = ${S(`친구가 보낸 코드: ${code}`)}, document.querySelector('.mcc-add').requestSubmit(), true)`);
+    const install = dialogButton('설치');
+    await until(`!!${install}`, 'join code question', 10000);
+    const asked = await js(`document.querySelector('.dialog').textContent`);
+    const packDefault = await js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.classList.contains('primary'))?.textContent`);
+    await shot('craft-pack-review.png');
+    await js(`(${dialogButton('취소')}).click()`);
+    await until(`!document.querySelector('.dialog') && !document.querySelector('.mcc-add-btn').disabled`, 'join code declined', 10000);
+    check(asked.includes(new URL(base).host) && /craft-a\.jar/.test(asked) && /내 계정 권한/.test(asked) && packDefault === '취소' && !has(path.join(home, 'servers-list.json')) && await js(`document.querySelector('#mccAddServer').value.includes('nanostudio:join')`),
+      `a join code's pack shows its host and its mods, says they run with the user's rights, defaults to Cancel, and declining adds nothing (${asked.slice(0, 120)})`);
+    await js(`(document.querySelector('.mcc-add').requestSubmit(), true)`);
+    await until(`!!${install}`, 'join code question again', 10000);
+    await js(`(${install}).click()`);
     await until(`!!document.querySelector('.mcc-joined[data-address="craft.example.test:25590"]')`, 'joined server card', 20000);
     const listed = readJson(path.join(home, 'servers-list.json'));
     const joinedInst = listed[0]?.instance;
@@ -476,6 +561,11 @@ async function craftUi(first) {
     await js(`(window.__progress = [], new MutationObserver(() => { for (const n of document.querySelectorAll('.ide-balloon')) if (/참여하도록/.test(n.textContent)) window.__progress.push(n.querySelector('.ide-balloon-text').textContent); })
       .observe(document.getElementById('balloons'), { subtree: true, childList: true, characterData: true }), true)`);
     await js(`(document.querySelector('.mcc-joined .mcc-join').click(), true)`);
+    await until(`!!${install}`, 'changed pack question', 10000);
+    const changedAsked = await js(`document.querySelector('.dialog').textContent`);
+    check(uiStarts().length === 2 && /craft-c\.jar/.test(changedAsked) && /새 모드/.test(changedAsked) && text(path.join(homeInst(joinedInst), 'mods', 'craft-a.jar')) === 'craft a 1',
+      `when the pack changes Join asks again, marks what is new, and has changed nothing yet (${changedAsked.slice(0, 120)})`);
+    await js(`(${install}).click()`);
     await uiStartsReach(3);
     await until(`ide.notifications.list().some((e) => /참여하도록/.test(e.title) && e.expired)`, 'progress balloon gone', 10000);
     const progressed = [...new Set(await js('window.__progress'))];
@@ -573,12 +663,195 @@ async function craftUi(first) {
     await u.cdp('Emulation.clearDeviceMetricsOverride');
     check([...playRows, ...joinRows].every((r) => r.row && r.fits && r.whole && r.cols === 2),
       `at 900 px the cards are two columns, and each card's actions are one row inside it with no label cut short (${S({ playRows, joinRows })})`);
+
+    // ---------- Forge and NeoForge through New Instance ----------
+    const showPage = (id) => js(`(document.querySelector('.mcs-page[data-page="${id}"]').click(), true)`);
+    const throughDialog = async (loader, mc, version, name) => {
+      await showPage('play');
+      await js(`(document.querySelector('.mcc-new').click(), true)`);
+      await until(`document.querySelectorAll('#mccVersion option').length > 0 && !document.querySelector('#mccVersion').disabled`, `${loader}: dialog`, 10000);
+      await setValue('#mccLoader', loader);
+      await until(`[...document.querySelectorAll('#mccVersion option')].some((o) => o.value === ${S(mc)}) && !document.querySelector('#mccVersion').disabled`, `${loader}: versions`, 10000);
+      await setValue('#mccVersion', mc);
+      await until(`document.querySelector('#mccLoaderVersion')?.value === ${S(version)} && /권장/.test(document.querySelector('#mccLoaderVersion').selectedOptions[0].textContent)`, `${loader}: loader version`, 10000);
+      await setValue('#mccName', name);
+      await js(`(${dialogButton('생성')}).click()`);
+      await until(`!!document.querySelector('.mcc-card[data-name="${name}"]')`, `${loader}: card`, 30000);
+      return readJson(path.join(homeInst(name), 'nano-instance.json'));
+    };
+    const forgeInst = await throughDialog('forge', '1.20.1', '47.9.9', 'forge-world');
+    check(forgeInst.loaderId === FORGE_ID && has(path.join(home, '.launcher', 'versions', FORGE_ID, `${FORGE_ID}.json`)), `Forge through New Instance runs its installer into the launcher's folder (${S(forgeInst)})`);
+    const neoInst = await throughDialog('neoforge', '1.20.4', '20.4.237', 'neo-world');
+    check(neoInst.loaderId === NEO_ID && has(path.join(home, '.launcher', 'versions', NEO_ID, `${NEO_ID}.json`)), `NeoForge through New Instance too, its stable version recommended over its beta (${S(neoInst)})`);
+    await js(`(document.querySelector('.mcc-card[data-name="neo-world"] .mcc-play').click(), true)`);
+    const neoStarts = await uiStartsReach(4);
+    const neoVersion = readJson(path.join(home, '.launcher', 'versions', 'nano-neo-world', 'nano-neo-world.json'));
+    check(neoStarts.length === 4 && neoVersion.inheritsFrom === NEO_ID, `Play of a NeoForge instance starts the launcher on a version inheriting from it (${S(neoVersion.inheritsFrom)})`);
+    await until(`!document.querySelector('.mcc-card[data-name="neo-world"] .mcc-play').disabled`, 'NeoForge Play done', 10000);
+
+    // ---------- the server list ping fills in the version ----------
+    const pinged = net.createServer((c) => {
+      c.on('error', () => {});
+      c.once('data', () => {
+        const text = Buffer.from(S({ version: { name: '1.20.1', protocol: 763 }, forgeData: { fmlNetworkVersion: 3, mods: [], channels: [] }, players: { online: 2, max: 8 } }));
+        const body = Buffer.concat([Buffer.from([0]), Buffer.from([(text.length & 0x7f) | 0x80, text.length >> 7]), text]);
+        c.end(Buffer.concat([Buffer.from([(body.length & 0x7f) | 0x80, body.length >> 7]), body]));
+      });
+    });
+    await new Promise((resolve) => { pinged.listen(0, '127.0.0.1', resolve); });
+    await showPage('join');
+    await js(`(document.querySelector('#mccAddServer').value = '127.0.0.1:${pinged.address().port}', document.querySelector('.mcc-add').requestSubmit(), true)`);
+    await until(`document.querySelector('#mccJoinLoader')?.value === 'forge' && document.querySelector('#mccJoinVersion')?.value === '1.20.1' && document.querySelector('#mccJoinLoaderVersion')?.value === '47.9.9'`, 'ping preselects Forge 1.20.1', 15000);
+    const pingNote = await js(`document.querySelector('.mcc-ping').textContent`);
+    check(/Minecraft 1\.20\.1, Forge/.test(pingNote), `a server added by its address alone preselects what its ping says (${pingNote})`);
+    await js(`(${dialogButton('취소')}).click()`);
+    await until(`!document.querySelector('.dialog') && !document.querySelector('.mcc-add-btn').disabled`, 'server version dialog closed', 10000);
+    pinged.close();
+
+    // ---------- a job cancelled ----------
+    routes.set('/packs/hang.mrpack', HANG);
+    const hangCode = await js(`ide.api.invoke('launcher:joinCode', { address: 'hang.example.test:25591', pack: ${S(`${base}/packs/hang.mrpack`)}, name: '멈춘 서버' })`);
+    await js(`(document.querySelector('#mccAddServer').value = ${S(hangCode)}, document.querySelector('.mcc-add').requestSubmit(), true)`);
+    const hangBalloon = `[...document.querySelectorAll('.ide-balloon')].find((n) => /멈춘 서버/.test(n.textContent))`;
+    await until(`!!${hangBalloon}?.querySelector('.ide-balloon-action')`, 'progress balloon with Cancel', 10000);
+    await js(`(${hangBalloon}.querySelector('.ide-balloon-action').click(), true)`);
+    await until(`!document.querySelector('.mcc-add-btn').disabled && !${hangBalloon}`, 'cancelled job gone', 15000);
+    const afterCancel = await js(`({ error: document.querySelector('.mcc-add-error').textContent, errors: ide.notifications.list().filter((n) => n.kind === 'error').length, value: document.querySelector('#mccAddServer').value.length > 0 })`);
+    check(afterCancel.errors === 0 && afterCancel.error === '' && afterCancel.value && !readJson(path.join(home, 'servers-list.json')).some((x) => /hang/.test(x.address)) && !readdirSync(path.join(home, 'instances')).some((n) => /멈춘|hang/.test(n)),
+      `Cancel in the balloon stops a download that hangs: no error, no server, no half-made instance (${S(afterCancel)})`);
+    await js(`(document.querySelector('#mccAddServer').value = '', true)`);
+
+    // ---------- the pack's tunnel is down ----------
+    routes.delete('/packs/craft.mrpack');
+    const startsBefore = uiStarts().length;
+    await js(`(document.querySelector('.mcc-joined[data-address="craft.example.test:25590"] .mcc-join').click(), true)`);
+    await uiStartsReach(startsBefore + 1);
+    await until(balloon(/서버 팩을 확인하지 못했어요/), 'stale pack warning', 10000);
+    check(uiStarts().length === startsBefore + 1, 'a server whose pack cannot be fetched still plays with the last synced mods, with a warning');
+    routes.set('/packs/craft.mrpack', () => CRAFT[craftServed]);
+    await until(`!document.querySelector('.mcc-joined[data-address="craft.example.test:25590"] .mcc-join').disabled`, 'join button after stale', 10000);
+
+    // ---------- a launcher already open ----------
+    await js(`(window.__realInvoke = ide.api.invoke, ide.api.invoke = (ch, ...a) => window.__realInvoke(ch, ...a).then((r) => (ch === 'launcher:play' ? { ...r, alreadyOpen: true } : r)), true)`);
+    const startsOpen = uiStarts().length;
+    await js(`(document.querySelector('.mcc-joined[data-address="craft.example.test:25590"] .mcc-join').click(), true)`);
+    await uiStartsReach(startsOpen + 1);
+    await until(balloon(/런처가 이미 열려 있어요/), 'launcher already open hint', 10000);
+    await js(`(ide.api.invoke = window.__realInvoke, true)`);
+    check(true, 'a launcher that was already open gets its own hint');
+    await until(`!document.querySelector('.mcc-joined[data-address="craft.example.test:25590"] .mcc-join').disabled`, 'join button back again', 10000);
+
+    // ---------- Join pressed twice before the instance exists ----------
+    const twiceAddress = 'twice.example.test:25592';
+    await js(`ide.api.invoke('launcher:saveServers', ide.root, [...ide.minecraft.craft.state().servers, { name: 'twice', address: ${S(twiceAddress)}, pack: ${S(`${base}/packs/craft.mrpack`)} }]).then(() => ide.minecraft.craft.refresh()).then(() => true)`);
+    const instancesBefore = readdirSync(path.join(home, 'instances')).length;
+    const startsTwice = uiStarts().length;
+    await js(`(() => { const b = document.querySelector('.mcc-joined[data-address="${twiceAddress}"] .mcc-join'); b.click(); b.click(); return true; })()`);
+    await until(`!!${install}`, 'twice: pack question', 10000);
+    await js(`(${install}).click()`);
+    await uiStartsReach(startsTwice + 1);
+    await until(`!document.querySelector('.mcc-joined[data-address="${twiceAddress}"] .mcc-join').disabled`, 'double Join done', 15000);
+    check(readdirSync(path.join(home, 'instances')).length === instancesBefore + 1 && uiStarts().length === startsTwice + 1, 'Join pressed twice makes one instance and starts the launcher once');
+
+    // ---------- a damaged instance ----------
+    write(path.join(homeInst('hurt'), 'nano-instance.json'), '{ "mc": ');
+    write(path.join(homeInst('hurt'), 'saves', 'world', 'level.dat'), 'a world');
+    await showPage('play');
+    await js(`ide.minecraft.craft.refresh().then(() => true)`);
+    await until(`!!document.querySelector('.mcc-damaged[data-name="hurt"]')`, 'damaged card', 10000);
+    const hurt = await js(`({ text: document.querySelector('.mcc-damaged').textContent, play: !!document.querySelector('.mcc-damaged .mcc-play'), folder: !!document.querySelector('.mcc-damaged .mcc-folder') })`);
+    check(/손상됨/.test(hurt.text) && !hurt.play && hurt.folder, `a damaged instance has its own card, with Open Folder and Delete and no Play (${hurt.text})`);
+    await shot('craft-damaged.png');
+    await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(path.join(work, 'trashed-hurt'))}), document.querySelector('.mcc-damaged .mcc-delete').click(), true)`);
+    await until(`!!${dialogButton('삭제')}`, 'delete question', 10000);
+    await js(`(${dialogButton('삭제')}).click()`);
+    await until(`!document.querySelector('.mcc-damaged')`, 'damaged card gone', 10000);
+    check(has(path.join(work, 'trashed-hurt', 'saves', 'world', 'level.dat')) && !has(homeInst('hurt')), 'Delete moves it aside with its worlds');
+
+    // ---------- My Servers: Copy Join Code on a shared server, without Python ----------
+    const friends = path.join(home, 'servers', 'friends');
+    write(path.join(friends, 'pyide-server.json'), S({ kind: 'fabric', mc: '1.20.1', loader: '0.15.11', java: 21, memory: '256M', launch: { jar: 'server.jar' } }));
+    write(path.join(friends, 'server.jar'), readFileSync(gameServerJar));
+    write(path.join(friends, 'server.properties'), 'server-port=25611\n');
+    write(path.join(friends, 'mods', 'friend-mod.jar'), 'a mod');
+    await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.currentInterp = () => null, true)`);
+    await showPage('servers');
+    await js(`ide.minecraft.refresh().then(() => true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-server[data-name="friends"] .mc-start')`, 'server card', 10000);
+    await js(`(document.querySelector('#minecraftScreen .mc-start').click(), true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-server .mc-share')`, 'server running', 20000);
+    await js(`(document.querySelector('#minecraftScreen .mc-share').click(), true)`);
+    await until(`!!${dialogButton('켜고 공유')}`, 'whitelist offer', 10000);
+    const offered = await js(`document.querySelector('.dialog').textContent`);
+    await js(`(${dialogButton('켜고 공유')}).click()`);
+    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611' && !!document.querySelector('#minecraftScreen .mc-join-code')`, 'shared server', 30000);
+    const props = text(path.join(friends, 'server.properties'));
+    const typed = await js(`ide.run.sessions().find((s) => s.cfg?.type === 'minecraft-server')?.host.textContent || ''`);
+    check(/화이트리스트/.test(offered) && /^white-list=true$/m.test(props) && /^enforce-whitelist=true$/m.test(props) && /> whitelist on/.test(typed) && await js(`[...document.querySelectorAll('.ide-balloon')].some((n) => /화이트리스트를 켰어요/.test(n.textContent))`),
+      `sharing a game server offers the whitelist, and Turn On writes it, tells the running server and says to add players (${props.replace(/\n/g, ' ')})`);
+    const clipsBefore = (await js('window.__clip')).length;
+    await js(`(document.querySelector('#minecraftScreen .mc-join-code').click(), true)`);
+    await until(`window.__clip.length === ${clipsBefore + 1}`, 'server join code copied', 30000);
+    const friendCode = await js(`ide.api.invoke('launcher:parseJoinCode', window.__clip.at(-1))`);
+    const packPort = /fake-port-(\d+)\./.exec(friendCode.pack)?.[1];
+    const servedPack = await fetch(`http://127.0.0.1:${packPort}/friends-1.20.1.mrpack`);
+    const servedBytes = Buffer.from(await servedPack.arrayBuffer());
+    check(friendCode.address === 'bore.pub:40611' && friendCode.name === 'friends' && /^https:\/\/fake-port-\d+\.trycloudflare\.com\/friends-1\.20\.1\.mrpack$/.test(friendCode.pack)
+      && servedPack.status === 200 && servedBytes.includes('modrinth.index.json'),
+    `Copy Join Code on a shared modded server gives its public address and its pack's link, served by the app with no Python interpreter (${S(friendCode)})`);
+    const addedKept = await js(`ide.settings.get('ports.added', [])`);
+    check(!addedKept.includes(Number(packPort)), `the pack server's port is not saved among the user's added ports (${S(addedKept)})`);
+    await js(`(document.querySelector('#minecraftScreen .mc-public-stop').click(), true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-share')`, 'sharing stopped', 15000);
+    await js(`(document.querySelector('#minecraftScreen .mc-share').click(), true)`);
+    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611'`, 'shared again', 30000);
+    check(!(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'with the whitelist on, sharing again asks nothing');
+    await js(`(document.querySelector('#minecraftScreen .mc-stop').click(), true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-server .mc-start')`, 'server stopped', 40000);
+
+    // ---------- light theme, narrow windows ----------
+    await js(`(document.querySelectorAll('.ide-balloon').forEach((b) => b.remove()), ide.settings.set('appearance.theme', 'light'), true)`);
+    await until(`ide.theme.current() === 'light'`, 'light theme', 10000);
+    const contrast = (sel) => js(contrastOf(sel));
+    await showPage('play');
+    await until(`!!document.querySelector('.mcs-play .mcc-card .mcc-name')`, 'Play in light', 10000);
+    const lightPlay = {};
+    for (const sel of ['.mcs-play .mcc-title', '.mcs-play .mcc-sub', '.mcs-play .mcc-name', '.mcs-play .mcc-chip', '.mcs-play .mcc-facts', '.mcs-nav .mcs-page:not(.selected)', '.mcs-nav .mcs-title']) lightPlay[sel] = await contrast(sel);
+    await shot('craft-light-play.png');
+    await showPage('join');
+    await until(`!!document.querySelector('.mcs-join .mcc-chip.sync')`, 'Servers to Join in light', 10000);
+    const lightJoin = {};
+    for (const sel of ['.mcs-join .mcc-address', '.mcs-join .mcc-chip.sync', '.mcs-join .mcc-facts']) lightJoin[sel] = await contrast(sel);
+    await shot('craft-light-join.png');
+    check(Object.values({ ...lightPlay, ...lightJoin }).every((r) => r >= 4.5), `in the light theme Craft's text reads at WCAG AA, 4.5:1 or more (${S({ ...lightPlay, ...lightJoin })})`);
+    await js(`(ide.settings.set('appearance.theme', 'dark'), true)`);
+    await until(`ide.theme.current() === 'dark'`, 'dark theme', 10000);
+    const narrow = {};
+    for (const width of [760, 560, 420]) {
+      await u.cdp('Emulation.setDeviceMetricsOverride', { width, height: 700, deviceScaleFactor: 1, mobile: false });
+      await until(`innerWidth === ${width}`, `width ${width}`, 10000);
+      for (const id of ['play', 'join', 'servers', 'market']) {
+        await js(`(document.querySelector('.mcs-page[data-page="${id}"]').click(), true)`);
+        narrow[`${id}@${width}`] = await js(`(() => {
+          const page = [...document.querySelectorAll('#craftHost .mcs-body > *')].find((n) => n.offsetParent);
+          const nav = document.querySelector('#craftHost .mcs-nav').getBoundingClientRect();
+          const box = page.getBoundingClientRect();
+          const clipped = [...page.querySelectorAll('button, input, .mcc-title')].filter((n) => n.offsetParent && n.getBoundingClientRect().right > innerWidth + 1).length;
+          return { room: Math.round(box.width), side: Math.round(page.scrollWidth - page.clientWidth), doc: document.documentElement.scrollWidth - innerWidth, clipped, nav: Math.round(nav.width) };
+        })()`);
+      }
+      await js(`(document.querySelector('.mcs-page[data-page="play"]').click(), true)`);
+      await shot(`craft-narrow-${width}.png`);
+    }
+    await u.cdp('Emulation.clearDeviceMetricsOverride');
+    check(Object.values(narrow).every((r) => r.side <= 0 && r.doc <= 0 && r.clipped === 0 && r.room >= 200), `at 760, 560 and 420 px nothing runs off the window (${S(narrow)})`);
     check(u.consoleErrors.length === 0, `no renderer exceptions in craft${u.consoleErrors.length ? ` ${S(u.consoleErrors)}` : ''}`);
   } catch (err) {
     check(false, err.message);
     await shot('craft-failure.png').catch(() => {});
   }
   u.close();
+  const startsWithLauncher = uiStarts().length;
 
   // ---------- no launcher ----------
   let w;
@@ -593,7 +866,7 @@ async function craftUi(first) {
   w.results.unshift(...u.results);
   try {
     await w.js(stubShell);
-    await w.until(`!!document.querySelector('.mcs-play .mcc-banner') && document.querySelectorAll('.mcs-play .mcc-card').length === 4`, 'launcher banner', 15000);
+    await w.until(`!!document.querySelector('.mcs-play .mcc-banner') && document.querySelectorAll('.mcs-play .mcc-card').length === ${readdirSync(path.join(home, 'instances')).length}`, 'launcher banner', 15000);
     w.check(/공식 Minecraft Launcher가 필요해요/.test(await w.js(`document.querySelector('.mcc-banner').textContent`)), 'without the official launcher, Play shows the banner "공식 Minecraft Launcher가 필요해요"');
     await w.shot('craft-no-launcher.png');
     await w.js(`(document.querySelector('.mcc-banner .mcc-download').click(), true)`);
@@ -601,7 +874,7 @@ async function craftUi(first) {
     await w.until(`!!${dialogButton('다운로드 페이지 열기')}`, 'no launcher dialog', 10000);
     await w.js(`(${dialogButton('다운로드 페이지 열기')}).click()`);
     const opened = await w.js('window.__shell');
-    w.check(opened.length === 2 && opened.every(([ch, url]) => ch === 'shell:openExternal' && url === 'https://www.minecraft.net/download') && uiStarts().length === 3,
+    w.check(opened.length === 2 && opened.every(([ch, url]) => ch === 'shell:openExternal' && url === 'https://www.minecraft.net/download') && uiStarts().length === startsWithLauncher,
       `the banner and Play's dialog open Mojang's download page (stubbed), and nothing is started (${S(opened)})`);
     await w.js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '닫기')?.click(), document.querySelector('.mcc-new').click(), true)`);
     await w.until(`/연결할 수 없어요/.test(document.querySelector('.dialog .mc-dialog-error')?.textContent || '')`, 'New Instance without the version service', 15000);
@@ -610,6 +883,11 @@ async function craftUi(first) {
       `a version service that cannot be reached is a Korean cannot-connect message in New Instance, not fetch's own (${S(unreachableText)})`);
     await w.shot('craft-unreachable.png');
     await w.js(`(${dialogButton('취소')}).click()`);
+    await w.js(`(ide.settings.set('appearance.theme', 'light'), true)`);
+    await w.until(`ide.theme.current() === 'light'`, 'light theme without the launcher', 10000);
+    const bannerLight = [await w.js(contrastOf('.mcc-banner-title')), await w.js(contrastOf('.mcc-banner-sub'))];
+    await w.shot('craft-no-launcher-light.png');
+    w.check(bannerLight.every((r) => r >= 4.5), `the launcher banner reads in the light theme too (${S(bannerLight)})`);
     w.check(w.consoleErrors.length === 0, `no renderer exceptions without the launcher${w.consoleErrors.length ? ` ${S(w.consoleErrors)}` : ''}`);
   } catch (err) {
     w.check(false, err.message);

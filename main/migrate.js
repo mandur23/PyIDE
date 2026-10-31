@@ -27,6 +27,22 @@ function copySettings(from, to) {
   fs.writeFileSync(to, JSON.stringify(settings, null, 2), { flag: 'wx' });
 }
 
+// A folder, keeping what the target already has (an earlier migration that stopped half-way). Not fs.cpSync: under
+// Electron 38 it ends the whole process on a path with non-ASCII characters, so a Korean user name crashed every start.
+function copyMissing(from, to) {
+  // mkdirSync would say EEXIST, which migrate() takes for an item already there.
+  if (fs.statSync(to, { throwIfNoEntry: false })?.isFile()) throw Object.assign(new Error(`${to} is a file`), { code: 'ENOTDIR' });
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name);
+    const dest = path.join(to, entry.name);
+    if (entry.isDirectory()) copyMissing(src, dest);
+    else if (entry.isFile()) {
+      try { fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+    }
+  }
+}
+
 // Returns {from, copied, failed} after a migration, else null. Never throws: the app starts either way.
 function migrate(userData, { log = console } = {}) {
   const from = legacyDir(userData);
@@ -50,7 +66,7 @@ function migrate(userData, { log = console } = {}) {
       const stat = fs.statSync(src, { throwIfNoEntry: false });
       if (!stat) continue;
       if (name === 'settings.json') copySettings(src, dest);
-      else if (stat.isDirectory()) fs.cpSync(src, dest, { recursive: true, force: false, errorOnExist: false });
+      else if (stat.isDirectory()) copyMissing(src, dest);
       else fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
       copied.push(name);
     } catch (err) {
@@ -78,7 +94,7 @@ function takeNotice(userData) {
     const m = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!m || m.noticeShown) return null;
     fs.writeFileSync(file, JSON.stringify({ ...m, noticeShown: true }, null, 2));
-    return { from: String(m.from || ''), copied: Array.isArray(m.copied) ? m.copied : [] };
+    return { from: String(m.from || ''), copied: Array.isArray(m.copied) ? m.copied : [], failed: Array.isArray(m.failed) ? m.failed : [] };
   } catch { return null; }
 }
 

@@ -1,4 +1,4 @@
-// Electron main process for verify/update-delta.mjs: registers main/features/updater.js with a fake ipcMain, checks the
+// Electron main process for verify/update-delta.mjs and the signature cases of verify/updater.mjs: registers main/features/updater.js with a fake ipcMain, checks the
 // feed and downloads the update exactly as an NSIS install would (PYIDE_UPDATE_TEST_KIND=nsis), with the real
 // electron-updater and Electron's net module, then writes what happened to a JSON file and quits. Nothing is installed.
 // PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, channel, userData, out}. LOCALAPPDATA points at a temp folder,
@@ -61,11 +61,13 @@ app.whenReady().then(async () => {
     const final = await handlers['updater:state']();
     result.download = final.download;
     result.phase = final.phase;
+    result.signature = final.signature;
     const pending = path.join(process.env.LOCALAPPDATA, 'nano-studio-updater', 'pending');
     const exe = fs.readdirSync(pending).find((n) => /^NanoStudio-Setup-.*\.exe$/.test(n));
     result.file = exe ? path.join(pending, exe) : null;
   } catch (err) {
     result.error = err.stack || String(err);
+    result.phase = (await handlers['updater:state']()).phase;
   }
   server?.close();
   server?.closeAllConnections();

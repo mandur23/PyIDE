@@ -342,7 +342,8 @@ if (!isMainThread && workerData?.role === 'pyide-workspace') {
 const scanInWorker = isMainThread ? require('../worker-host').fileWorker(__filename, 'pyide-workspace') : null;
 
 exports.register = ({ ipcMain, app, startProcess }) => {
-  const { toolCommand, resolveProgram } = require('./run');
+  const { toolCommand, resolveProgram, interpCommand } = require('./run');
+  const trust = require('../trust');
   const fakeOpen = process.env.PYIDE_FAKE_OPEN_EXTERNAL === '1';
   const opened = [];
   // Windows PowerShell writes to a pipe in the OEM code page; this wrapper switches it to UTF-8 and forwards
@@ -355,7 +356,8 @@ exports.register = ({ ipcMain, app, startProcess }) => {
   };
 
   ipcMain.handle('workspace:scan', (_e, root) => scanInWorker('scan', root));
-  ipcMain.handle('workspace:info', async (_e, root) => ({ branch: await gitBranch(root), readme: readme(root) }));
+  // git would obey the project's .git/config (core.fsmonitor runs a program).
+  ipcMain.handle('workspace:info', async (_e, root) => ({ branch: trust.isTrusted(root) ? await gitBranch(root) : null, readme: readme(root) }));
 
   ipcMain.handle('workspace:checkPort', async (_e, root, entry, args) => {
     const port = resolvePort(root, entry, args);
@@ -382,8 +384,11 @@ exports.register = ({ ipcMain, app, startProcess }) => {
   });
   ipcMain.handle('workspace:openedUrls', () => opened);
 
-  // entry: an item from workspace:scan; args: the user's extra arguments; interp: {cmd, args} for Python kinds.
+  // entry: an item from workspace:scan; args: the user's extra arguments; interp: {cmd, args, executable} for Python
+  // kinds. A launcher is the project's own command line (launch.json, a .bat, a .ps1 with its execution policy
+  // bypassed), so nothing starts in Safe Mode; the renderer offers to trust the project first.
   ipcMain.handle('workspace:start', (_e, root, entry, args, interp) => {
+    if (!trust.isTrusted(root)) throw Object.assign(new Error('The project is not trusted (Safe Mode)'), { expected: true });
     const extra = parseArgs(args);
     let cmd;
     let argv;
@@ -392,8 +397,9 @@ exports.register = ({ ipcMain, app, startProcess }) => {
     let shown = null;
     const py = (rest) => {
       if (!interp?.cmd) throw new Error('no-interpreter');
-      cmd = interp.cmd;
-      argv = [...(interp.args || []), '-u', ...rest];
+      const python = interpCommand(interp);
+      cmd = python.cmd;
+      argv = [...python.args, '-u', ...rest];
       env = withPath(env, [root]);
     };
     // A .cmd/.bat goes through cmd.exe with External Tools' escaping (main/features/run.js), so a project path holding

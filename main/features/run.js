@@ -6,6 +6,7 @@ const path = require('path');
 const remote = require('../remote');
 const { withEnvFiles } = require('../dotenv');
 const { isTrusted } = require('../trust');
+const programEnv = require('../program-env');
 const projectRoots = require('../project-roots');
 
 // PyCharm adds the content root and its source roots (Mark Directory As) to PYTHONPATH for every Python run
@@ -160,7 +161,7 @@ async function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
   const values = macroValues(macros);
   const prog = expandMacros(program, values).trim();
   if (!prog) return { error: 'noProgram' };
-  const dir = expandMacros(cwd, values).trim() || defaultCwd || values.ProjectDir || process.cwd();
+  const dir = expandMacros(cwd, values).trim() || defaultCwd || values.ProjectDir || os.homedir();
   if (!isDir(dir)) return { error: 'noCwd', cwd: dir };
   const argv = splitArgs(args).map((a) => expandMacros(a, values));
   const file = resolveProgram(prog, dir);
@@ -171,7 +172,11 @@ async function startTool(ctx, { program, args, cwd, defaultCwd, macros } = {}) {
   return { id, command: [file, ...argv].map(show).join(' '), cwd: run };
 }
 
-Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir });
+// The interpreter as a program to start: a bare py or python becomes the python.exe it resolved to. A remote
+// interpreter's executable is not a local path, and its command stays as listed.
+const interpCommand = (interp) => (!path.isAbsolute(interp.cmd) && path.isAbsolute(interp.executable || '') ? { cmd: interp.executable, args: [] } : { cmd: interp.cmd, args: interp.args || [] });
+
+Object.assign(exports, { splitArgs, macroValues, expandMacros, resolveProgram, isNpmShim, toolCommand, startTool, workingDir, interpCommand });
 
 // The program's standard input from a file (Redirect input from): the file is streamed in and then closed, so the
 // program reads it to the end and gets EOF, as with `python script.py < file`. A program that exits before reading it
@@ -221,7 +226,7 @@ function killTerminal(id) {
 
 async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles, { interpOptions = [], cols = 80, rows = 24 } = {}) {
   const pty = require('@lydell/node-pty');
-  const runEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
+  const runEnv = { ...programEnv(), PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
   delete runEnv.ELECTRON_RUN_AS_NODE;
   const dir = (await workingDir(cwd, roots)).cwd;
   const proc = pty.spawn(resolveProgram(interp.cmd, dir), [...interp.args, ...interpOptions, '-u', file, ...params], {

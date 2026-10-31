@@ -198,5 +198,6 @@
   "Console": "콘솔",
   "Override console cycle buffer size (KB):": "콘솔 순환 버퍼 크기 재정의(KB):",
   "Show sticky lines": "고정 줄 표시",
-  "Maximum number of sticky lines:": "최대 고정 줄 수:"
+  "Maximum number of sticky lines:": "최대 고정 줄 수:",
+  "This plugin comes from a Marketplace index that is not signed by Nano Studio.": "이 플러그인은 Nano Studio가 서명하지 않은 마켓플레이스 인덱스에서 제공돼요."
 }

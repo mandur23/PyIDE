@@ -276,7 +276,8 @@ async function probe(target, secrets) {
       run = (script) => runRaw(docker, [...base, '-c', script], { timeout: 600000 });
     } else {
       const s = session({ ...t, id: t.id || 'probe' });
-      run = (script) => s.run(script, { secrets, timeout: 90000 });
+      // Long enough to compare a first connection's host key fingerprint; ConnectTimeout still bounds a dead host.
+      run = (script) => s.run(script, { secrets, timeout: 300000 });
     }
     const where = await run(find);
     const py = where.stdout.trim().split('\n').pop();

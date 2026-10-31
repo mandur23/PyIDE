@@ -2,6 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; font-src 'self' data:; media-src 'self' http: https:; connect-src data:; worker-src blob:; frame-src 'self' pyide-preview: http: https:; base-uri 'none'; form-action 'none'">
   <title>Nano Studio</title>
   <link rel="stylesheet" href="core/styles.css">
   <link rel="stylesheet" href="core/notifications.css">
@@ -41,7 +42,7 @@
         <div id="welcome">
           <div class="welcome-card">
             <div class="welcome-head">
-              <span class="welcome-logo">Py</span>
+              <img class="welcome-logo" src="core/logo.svg" alt="">
               <div>
                 <h1>Nano Studio</h1>
                 <p data-i18n="A PyCharm-style Python IDE">A PyCharm-style Python IDE</p>
@@ -107,6 +108,8 @@
   <script src="core/icons-extra.js"></script>
   <script src="core/theme.js"></script>
   <script src="core/python.js"></script>
+  <!-- Before Monaco's loader: marked is a UMD script, and with a define() around it sets no window.marked. -->
+  <script src="../node_modules/marked/marked.min.js"></script>
   <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script src="core/ide.js"></script>
   <script src="core/notifications.js"></script>

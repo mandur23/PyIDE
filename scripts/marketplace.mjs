@@ -4,18 +4,24 @@
 // https://raw.githubusercontent.com/mandur23/PyIDE/master/marketplace/index.json, PyIDE's default index.
 //
 //   node scripts/marketplace.mjs [plugins folder] [--out folder]     (defaults: plugins-catalog, marketplace)
+//   node scripts/marketplace.mjs --sign [--out folder]               (npm run marketplace:sign)
 //
 // A plugin folder holds plugin.json ({id, name, version, vendor, description, i18n?, minIdeVersion?, homepage?}).
 // The output folder belongs to this script: zips the new index does not list are removed. Zips are built the same
 // way every time (sorted entries, fixed timestamps), so an unchanged plugin keeps its file and sha256.
+// --sign writes index.json.sig with the release key (scripts/signing.mjs). Installed copies refuse the default index
+// without a matching signature, so commit the two files together. A build that changes index.json removes the old
+// signature, which no longer matches.
 import { createHash } from 'crypto';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import zlib from 'zlib';
+import { loadSigner } from './signing.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const OUT = path.join(ROOT, 'marketplace');
 const require = createRequire(import.meta.url);
 const market = require('../main/marketplace.js');
 
@@ -76,7 +82,7 @@ export function zipFiles(files) {
 
 export const zipFolder = (dir) => zipFiles(filesUnder(dir).map((name) => ({ name, data: readFileSync(path.join(dir, name)) })));
 
-export function buildMarketplace({ source = path.join(ROOT, 'plugins-catalog'), out = path.join(ROOT, 'marketplace') } = {}) {
+export function buildMarketplace({ source = path.join(ROOT, 'plugins-catalog'), out = OUT } = {}) {
   const plugins = [];
   for (const d of readdirSync(source, { withFileTypes: true }).filter((x) => x.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
     const dir = path.join(source, d.name);
@@ -105,11 +111,21 @@ export function buildMarketplace({ source = path.join(ROOT, 'plugins-catalog'), 
   market.parseIndex(text, pathToFileURL(path.join(out, 'index.json')).href);
   mkdirSync(out, { recursive: true });
   for (const p of plugins) writeFileSync(path.join(out, p.url), p.zip);
-  writeFileSync(path.join(out, 'index.json'), text);
+  const indexFile = path.join(out, 'index.json');
+  if (existsSync(indexFile) && readFileSync(indexFile, 'utf8') !== text) rmSync(`${indexFile}.sig`, { force: true });
+  writeFileSync(indexFile, text);
   const keep = new Set(plugins.map((p) => p.url));
   const removed = readdirSync(out).filter((f) => /\.zip$/i.test(f) && !keep.has(f));
   for (const f of removed) rmSync(path.join(out, f));
   return { index, out, removed };
+}
+
+// Signs the exact bytes of out/index.json, which raw.githubusercontent.com serves unchanged once committed.
+export function signIndex(out = OUT) {
+  const sign = loadSigner({ existsSync, readFileSync });
+  const file = path.join(out, 'index.json');
+  writeFileSync(`${file}.sig`, sign(readFileSync(file)));
+  return `${file}.sig`;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -117,10 +133,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const at = args.indexOf('--out');
   const out = at >= 0 ? path.resolve(args.splice(at, 2)[1]) : undefined;
   try {
+    if (args.includes('--sign')) {
+      console.log(`signed -> ${signIndex(out)}`);
+      process.exit(0);
+    }
     const r = buildMarketplace({ source: args[0] ? path.resolve(args[0]) : undefined, out });
     for (const p of r.index.plugins) console.log(`${p.url}  ${p.size} bytes  sha256 ${p.sha256}`);
     for (const f of r.removed) console.log(`removed ${f}`);
     console.log(`${r.index.plugins.length} plugins -> ${path.join(r.out, 'index.json')} (${statSync(path.join(r.out, 'index.json')).size} bytes)`);
+    if (!existsSync(path.join(r.out, 'index.json.sig'))) console.log('index.json has no signature yet: run npm run marketplace:sign before committing');
   } catch (err) {
     console.error(err.message);
     process.exit(1);

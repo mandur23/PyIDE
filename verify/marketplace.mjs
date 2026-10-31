@@ -1,12 +1,12 @@
 // The online plugin Marketplace (ports 9080-9081). Pure Node first (`--pure` stops there): scripts/marketplace.mjs, the
-// committed marketplace/ folder, the index validator, the zip extractor's guards and the plugin manager's install from
-// an index. Then the Settings › Plugins page against a local HTTP server and a folder index: listing, search, the
+// committed marketplace/ folder, the index validator, the zip extractor's guards, the plugin manager's install from an
+// index and the index signature (--sign, the default URL refusing a bad one). Then the Settings › Plugins page against a local HTTP server and a folder index: listing, search, the
 // trust dialog, a tampered download, install, update of an older installed version, a bad index, offline and Retry,
 // plugins that need a newer PyIDE, and after a restart the installed plugins running and the page in Korean.
-import { spawn } from 'child_process';
-import { createHash } from 'crypto';
+import { spawn, spawnSync } from 'child_process';
+import { createHash, generateKeyPairSync, sign } from 'crypto';
 import { createServer } from 'http';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -18,6 +18,7 @@ process.env.PYIDE_MARKETPLACE_URL ??= 'off';
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const market = require('../main/marketplace.js');
+const release = require('../main/release-key.js');
 const iconv = require('iconv-lite');
 const { extractZip } = require('../main/zip.js');
 const { createPluginManager } = require('../main/plugin-manager.js');
@@ -85,6 +86,105 @@ function serve(dir, port = 0) {
 
 // A port on 127.0.0.1 that nothing listens on.
 const closedPort = async () => { const { server, port } = await serve(tempDir('market-none')); await new Promise((r) => server.close(r)); return port; };
+
+// The index signature: scripts/marketplace.mjs --sign, then fetchIndex and the plugin manager at the default URL, with
+// global fetch answering from memory. The key is a throwaway one in a pyide-* folder.
+async function signatures() {
+  const keys = generateKeyPairSync('ed25519');
+  const other = generateKeyPairSync('ed25519');
+  const keyDir = tempDir('market-key');
+  const keyFile = path.join(keyDir, 'release-key.pem');
+  const pem = (k) => k.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  writeFileSync(keyFile, pem(keys));
+  const publicKey = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+  const script = path.join(APP_DIR, 'scripts', 'marketplace.mjs');
+  const runSign = (out, key) => spawnSync(process.execPath, [script, '--sign', '--out', out], { encoding: 'utf8', env: { ...process.env, NANO_RELEASE_KEY: key, PYIDE_RELEASE_PUBLIC_KEY: publicKey } });
+  check(readJson(path.join(APP_DIR, 'package.json')).scripts['marketplace:sign'] === 'node scripts/marketplace.mjs --sign', 'npm run marketplace:sign runs the script');
+
+  const out = tempDir('market-signed');
+  buildMarketplace({ out });
+  const sigFile = path.join(out, 'index.json.sig');
+  const missing = runSign(out, path.join(keyDir, 'none.pem'));
+  check(missing.status === 1 && /no release signing key at/.test(missing.stderr) && !existsSync(sigFile), `signing without the key stops with a clear message (${missing.stderr.trim()})`);
+  const wrongKey = path.join(keyDir, 'other.pem');
+  writeFileSync(wrongKey, pem(other));
+  const wrong = runSign(out, wrongKey);
+  check(wrong.status === 1 && /does not match the public key/.test(wrong.stderr) && !existsSync(sigFile), 'signing with a key that is not the embedded one stops');
+  const signedRun = runSign(out, keyFile);
+  check(signedRun.status === 0 && existsSync(sigFile), `--sign writes index.json.sig (${signedRun.stdout.trim() || signedRun.stderr.trim()})`);
+
+  const saved = process.env.PYIDE_RELEASE_PUBLIC_KEY;
+  const committedIndex = path.join(APP_DIR, 'marketplace', 'index.json');
+  delete process.env.PYIDE_RELEASE_PUBLIC_KEY;
+  check(existsSync(`${committedIndex}.sig`) ? await release.verify(readFileSync(committedIndex), readFileSync(`${committedIndex}.sig`, 'utf8')) : release.isPlaceholder(),
+    'the committed marketplace/index.json matches its index.json.sig (required once main/release-key.js holds the real key)');
+  process.env.PYIDE_RELEASE_PUBLIC_KEY = publicKey;
+
+  const body = readFileSync(path.join(out, 'index.json'));
+  const signature = readFileSync(sigFile);
+  const served = new Map();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => (served.has(String(url)) ? new Response(served.get(String(url))) : new Response('no', { status: 404, statusText: 'Not Found' }));
+  const serve = (url, index, sig) => {
+    served.clear();
+    served.set(url, index);
+    if (sig != null) served.set(`${url}.sig`, sig);
+  };
+  const DEFAULT = market.DEFAULT_URL;
+  const custom = 'https://plugins.example.com/index.json';
+  const tampered = Buffer.from(body.toString('utf8').replace('"size": ', '"size":  '));
+  const otherSig = `${sign(null, body, other.privateKey).toString('base64')}\n`;
+  const fetched = (url) => market.fetchIndex(new URL(url));
+  try {
+    serve(DEFAULT, body, signature);
+    check((await fetched(DEFAULT)).every((e) => e.signed === true), 'the default index with a good signature passes');
+    serve(DEFAULT, tampered, signature);
+    check(!tampered.equals(body) && /does not match its signature/.test(await rejects(fetched(DEFAULT))), 'a tampered default index is refused');
+    serve(DEFAULT, body, null);
+    check(/has no signature \(raw\.githubusercontent\.com answered 404/.test(await rejects(fetched(DEFAULT))), 'a default index without index.json.sig is refused');
+    serve(DEFAULT, body, otherSig);
+    check(/does not match its signature/.test(await rejects(fetched(DEFAULT))), 'a default index signed by another key is refused');
+    serve(DEFAULT, body, 'x'.repeat(2000));
+    check(/has no signature \(The download is larger/.test(await rejects(fetched(DEFAULT))), 'an oversized signature file is refused');
+
+    serve(custom, body, null);
+    check((await fetched(custom)).every((e) => e.signed === false), 'a custom index without a signature still works, its entries marked unsigned');
+    serve(custom, tampered, signature);
+    check((await fetched(custom)).every((e) => e.signed === false), 'a custom index whose signature does not match is marked unsigned');
+    serve(custom, body, signature);
+    check((await fetched(custom)).every((e) => e.signed === true), 'a custom index signed with the release key is marked signed');
+    const claim = JSON.stringify({ ...JSON.parse(body), plugins: JSON.parse(body).plugins.map((p) => ({ ...p, signed: true })) });
+    serve(custom, claim, null);
+    check((await fetched(custom)).every((e) => e.signed === false), 'an index cannot call itself signed');
+    check((await market.fetchIndex(new URL(pathToFileURL(path.join(out, 'index.json'))))).every((e) => e.signed === true), 'a local folder with index.json.sig is read and verified');
+
+    const pm = createPluginManager({ appDir: APP_DIR, userDataDir: tempDir('market-signed-pm') });
+    const plugin = { id: 'signed-online', name: 'Signed Online', version: '1.0.0', vendor: 'V', description: 'D', url: 'signed-online-1.0.0.zip', sha256: 'a'.repeat(64), size: 10 };
+    const listing = `${JSON.stringify({ format: 1, plugins: [plugin] })}\n`;
+    const listingSig = `${sign(null, Buffer.from(listing), keys.privateKey).toString('base64')}\n`;
+    serve(DEFAULT, `${listing} `, listingSig);
+    const bad = await pm.marketplace(DEFAULT, { refresh: true });
+    check(bad.online.state === 'error' && /does not match its signature/.test(bad.online.error) && !bad.plugins.some((p) => p.id === 'signed-online') && bad.plugins.length === 3,
+      `the plugin manager lists nothing from a tampered default index, only the bundled samples (${bad.online.error})`);
+    check(/is not in the Marketplace/.test(await rejects(pm.installListed('signed-online'))), 'a plugin of a refused index cannot be installed');
+    serve(DEFAULT, listing, listingSig);
+    const good = await pm.marketplace(DEFAULT, { refresh: true });
+    check(good.online.state === 'ok' && good.plugins.find((p) => p.id === 'signed-online')?.signed === true, 'the plugin manager lists a signed default index and passes signed on');
+    serve(custom, listing, null);
+    const unsigned = await pm.marketplace(custom, { refresh: true });
+    check(unsigned.online.state === 'ok' && unsigned.plugins.find((p) => p.id === 'signed-online')?.signed === false, 'a custom unsigned index is listed, with signed: false for the trust dialog');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.PYIDE_RELEASE_PUBLIC_KEY; else process.env.PYIDE_RELEASE_PUBLIC_KEY = saved;
+  }
+
+  buildMarketplace({ out });
+  check(existsSync(sigFile), 'a rebuild that leaves index.json as it was keeps the signature');
+  rmSync(path.join(out, 'index.json'));
+  writeFileSync(path.join(out, 'index.json'), '{"format":1,"plugins":[]}\n');
+  buildMarketplace({ out });
+  check(!existsSync(sigFile), 'a rebuild that changes index.json removes the signature that no longer matches');
+}
 
 // ---------- pure Node ----------
 async function pure() {
@@ -228,6 +328,7 @@ async function pure() {
   } finally {
     server.close();
   }
+  await signatures();
   await reinstallHeld();
 }
 
@@ -296,6 +397,7 @@ async function ui() {
       `bundled samples and online plugins are listed together, with Install and Update (${listed})`);
     check(await a.js(`document.querySelector('#pluginsList .plugin-row[data-id="word-count"] .plugin-sub').textContent.includes('0.9.2')`), 'the online word-count 0.9.2 replaces the bundled 0.9.1');
     await a.shot('marketplace-list.png');
+    check(await a.js(`ide.api.invoke('plugins:marketplace', null, {}).then((r) => r.plugins.find((p) => p.id === 'hello-online').signed)`) === false, 'the renderer receives signed: false for an entry of an unsigned index');
     check(await a.js(`document.querySelector('#pluginsOnline')?.textContent === 'Not shown because they need a newer Nano Studio: 1' && !document.querySelector('#pluginsList .plugin-row[data-id="future-plugin"]')`),
       'a plugin that needs a newer Nano Studio is not listed, and the list says so');
     await a.click('.plugins-filter');

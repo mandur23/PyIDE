@@ -4,11 +4,12 @@
 // Sharing and the server stopping end the tunnel; a server that is not a web server (TCP) is shared through a stand-in
 // for bore with a host:port address, an https server through cloudflared without a certificate check, and a server
 // started elsewhere is listed once its port is added; a server on every interface shows its LAN address; automatic
-// sharing asks before it turns on and then shares a new server by itself; without cloudflared, Share offers the
-// Install Manager download; the window in Korean.
-// Ports 9782-9783 for the IDE; the servers listen on 18631-18639.
+// sharing asks before it turns on and then shares a new server by itself, but not a kernel or an Install Manager
+// database; a TCP server's warning says what bore exposes; without cloudflared, Share offers the Install Manager
+// download; the window in Korean.
+// Ports 9782-9783 for the IDE; the servers listen on 18631-18642.
 import { spawn } from 'child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { networkInterfaces } from 'os';
 import path from 'path';
@@ -121,6 +122,12 @@ try {
   const lanShown = await js(`[...document.querySelectorAll('#portsList .ports-row[data-port="18635"] .ports-lan-url')].map((n) => n.dataset.url)`);
   check(q(lanShown) === q(lanIps.map((ip) => `${ip}:18635`)), `a server on every interface shows its LAN address (${q(lanShown)})`);
   await js(`(document.querySelector('#portsList .ports-row[data-port="18635"] .ports-share').click(), true)`);
+  await until(`document.querySelector('.ports-warning')?.textContent.includes('bore.pub')`, 'bore warning, whatever a web share said about asking');
+  const boreWarning = await js(`document.querySelector('.ports-warning').textContent`);
+  check(/bore\.pub and a port number/.test(boreWarning) && /not a secret/.test(boreWarning) && /adds no encryption/.test(boreWarning) && /third party/.test(boreWarning),
+    'the warning for a TCP server says the address is a numeric port on a shared host and that a third party carries the traffic unencrypted');
+  check(!/Anyone with the public address/.test(boreWarning), 'it does not call that address something only some people have');
+  await js(`(document.querySelector('#portsDontAsk').click(), [...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Share').click(), true)`);
   await until(`ide.ports.state().tunnels.some((t) => t.port === 18635 && t.state === 'shared')`, 'tcp shared', 20000);
   const tcpTunnel = await js(`ide.ports.state().tunnels.find((t) => t.port === 18635)`);
   check(tcpTunnel.kind === 'bore' && tcpTunnel.url === 'bore.pub:40123' && readFileSync(boreLog, 'utf8').includes('local 18635 --local-host 127.0.0.1 --to bore.pub'),
@@ -176,6 +183,21 @@ try {
   check(true, 'with automatic sharing a new server gets a public address by itself');
   await until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('Port 18633 is shared'))`, 'shared note', 10000)
     .then(() => check(true, 'the public address is announced with Copy Address'), () => check(false, 'the public address is announced'));
+
+  // With automatic sharing on, a notebook kernel's ZMQ ports and an Install Manager database must stay private.
+  const database = path.join(work, 'root', 'servers', 'fakedb-1', 'bin', 'postgres.exe');
+  mkdirSync(path.dirname(database), { recursive: true });
+  try { linkSync(process.execPath, database); } catch { copyFileSync(process.execPath, database); }
+  const kernel = await js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(tcpCode(18640))}, 'kernel_launcher.py', '-f', 'kernel-1.json'], ide.root)`);
+  const db = await js(`ide.api.invoke('project:exec', ${q(database)}, ['-e', ${q(tcpCode(18641))}], ide.root)`);
+  await startServer(18642);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18642 && t.state === 'shared')`, 'control server shared', 30000);
+  const listed = await js(`ide.ports.state()`);
+  check(!listed.ports.some((p) => p.port === 18640 || p.port === 18641) && !listed.tunnels.some((t) => t.port === 18640 || t.port === 18641),
+    `a kernel's port and an Install Manager database are neither listed nor shared, while a server started after them is (${q(listed.ports.map((p) => p.port))})`);
+  await js(`ide.proc.kill(${kernel})`);
+  await js(`ide.proc.kill(${db})`);
+
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${q(a.consoleErrors)}` : ''}`);
   const internal = await js(`ide.api.invoke('diagnostics:errors')`);
   check(!internal.length, `no IDE internal errors${internal.length ? ` ${q(internal).slice(0, 800)}` : ''}`);
@@ -211,6 +233,10 @@ try {
   await k.until(`!!document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share')`, 'ko tcp row');
   await k.js(`(document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share').click(), true)`);
   await k.until(`!!document.querySelector('#portsDontAsk')`, 'ko tcp warning');
+  const koWarning = await k.js(`document.querySelector('.ports-warning').textContent`);
+  k.check(/bore\.pub과 포트 번호/.test(koWarning) && /비밀이 아니/.test(koWarning) && /암호화를 추가하지 않습니다/.test(koWarning) && /제3자/.test(koWarning), `the bore warning is Korean and says both facts (${koWarning.slice(0, 120)})`);
+  const koLeaks = await englishLeaks(k, '.ports-warning', ['bore', 'pub']);
+  k.check(!koLeaks.length, `no English in that warning${koLeaks.length ? ` ${q(koLeaks)}` : ''}`);
   await k.js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '공유').click()`);
   await k.until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('Windows가 bore.exe를 실행하지 않았습니다') && b.textContent.includes('다시 설치'))`, 'blocked bore', 20000)
     .then(() => k.check(true, 'a bore.exe Windows will not start (spawn UNKNOWN) is explained, with Install Again'),

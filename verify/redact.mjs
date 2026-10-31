@@ -3,7 +3,7 @@
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { redactPaths, remoteRepoNames } = require('../main/diagnostics/redact.js');
+const { MASK, redactObject, redactPaths, remoteRepoNames, scrubText } = require('../main/diagnostics/redact.js');
 
 const opts = {
   home: 'C:\\Users\\John Smith',
@@ -84,5 +84,68 @@ check(JSON.stringify(remotes) === JSON.stringify(['angle-repo', 'billing-core', 
   `remote repository names come from git URLs only (${JSON.stringify(remotes)})`);
 check(redactPaths('cloning billing-core into x', { names: remotes }) === 'cloning <project> into x', 'a remote name standing alone becomes <project>');
 
-console.log(`${CASES.length + 6 - failed}/${CASES.length + 6} passed`);
+// Secrets in command lines (main.js logs every program it starts) and free text, as scrubText writes them to the log.
+const SCRUB = [
+  ['#3 started (pid 9): mysql.exe --password hunter2 db', `#3 started (pid 9): mysql.exe --password ${MASK} db`],
+  ['tool -Password "two words" --verbose', `tool -Password ${MASK} --verbose`],
+  ['tool --api-key abc123 --token=abc123 --db-pass x', `tool --api-key ${MASK} --token=${MASK} --db-pass ${MASK}`],
+  ['mysql -u root -phunter2 db', `mysql -u root -p${MASK} db`],
+  ['C:\\xampp\\bin\\mysql.exe -h db -psecret db', `C:\\xampp\\bin\\mysql.exe -h db -p${MASK} db`],
+  ['sshpass -p hunter2 ssh host', `sshpass -p ${MASK} ssh host`],
+  ['-phunter2', `-p${MASK}`],
+  ['Server=db;Uid=bob;Pwd=hunter2;Database=x', `Server=db;Uid=bob;Pwd=${MASK};Database=x`],
+  ['curl -u bob:hunter2 https://example.com', `curl -u bob:${MASK} https://example.com`],
+  ['curl --user=bob:hunter2 -x host', `curl --user=bob:${MASK} -x host`],
+  ['redis://:hunter2@host:6379/0', `redis://:${MASK}@host:6379/0`],
+  ['https://bob:p@ss@host/x', `https://bob:${MASK}@host/x`],
+  ['Authorization: token abcdef0123456789', `Authorization: ${MASK}`],
+  ['-H "Authorization: Digest a=1, b=2" url', `-H "Authorization: ${MASK}" url`],
+  ['Cookie: sid=abc; theme=dark', `Cookie: ${MASK}`],
+  ['password=two words', `password=${MASK}`],
+  ['Server=db;Password=two words;Database=x', `Server=db;Password=${MASK};Database=x`],
+  ['"password": "two words", "user": "bob"', `"password": ${MASK}, "user": "bob"`],
+  ['secret_key = two words', `secret_key = ${MASK}`],
+  // unchanged: what only looks like one
+  ['python -u C:\\proj\\main.py', null],
+  ['python -u C:/proj/main.py --max-tokens 100 --tokenizer gpt2', null],
+  ['docker run -u 1000:1000 -p8080:80 img', null],
+  ['pip install --user requests', null],
+  ['gcc -pthread -pipe -pedantic x.c', null],
+  ['pytest -pno:cacheprovider -p xdist', null],
+  ['mkdir -p build/out', null],
+  ['tests passed: 5 failed: 0', null],
+  ['http://host:8080/a@b.png', null],
+  ['Unexpected token: foo bar', 'Unexpected token: <redacted> bar'],
+];
+for (const [input, expected] of SCRUB) {
+  const out = scrubText(input);
+  const want = expected ?? input;
+  check(out === want, `${JSON.stringify(input)} -> ${JSON.stringify(out)}${out === want ? '' : ` (expected ${JSON.stringify(want)})`}`);
+}
+check(SCRUB.every(([i]) => scrubText(scrubText(i)) === scrubText(i)), 'a second scrub changes nothing');
+
+// A diagnostic report keeps settings but nothing the user typed to run something.
+const report = redactObject({
+  'editor.fontSize': 14,
+  'pyconsole.history': ['connect(password="hunter2")'],
+  'runConfigs:C:\\p': { selected: 'a', configs: [{ id: 'a', type: 'python', name: 'main', script: 'main.py', params: '--db bob secret', env: 'API=abc;MODE=x', interpOptions: '-X dev', vmOptions: '-Dpw=x' }] },
+  'tools.external': [{ name: 'lint', program: 'ruff', args: '--config secret.toml' }],
+  'terminal.env': { STAGE: 'prod' },
+  environment: { HOME: '/home/bob' },
+  envFiles: '.env',
+});
+const reported = JSON.stringify(report);
+check(!/hunter2|bob secret|API=abc|-X dev|-Dpw|secret\.toml|prod|home\/bob/.test(reported), `a report drops console history, run parameters and environment values (${reported})`);
+check(report['editor.fontSize'] === 14 && report['runConfigs:C:\\p'].configs[0].name === 'main' && report['runConfigs:C:\\p'].configs[0].type === 'python' && report.envFiles === '.env',
+  'a report keeps ordinary settings and the shape of run configurations');
+
+// Every log line and the whole log in a diagnostic archive pass through scrubText.
+const started = performance.now();
+const log = Array.from({ length: 120000 }, (_, i) => `2026-10-22 10:00:01,123 [ ${i}]   INFO - #process - #${i} started (pid 1): python -u C:\\proj\\main.py --max-tokens 100 in C:\\proj\\sub-folder`).join('\n');
+scrubText(log);
+const ms = Math.round(performance.now() - started);
+check(ms < 5000, `scrubbing a ${Math.round(log.length / 2 ** 20)} MB log takes ${ms} ms`);
+
+const total = CASES.length + SCRUB.length + 10;
+console.log(`${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

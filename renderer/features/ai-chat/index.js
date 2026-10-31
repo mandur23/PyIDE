@@ -17,22 +17,6 @@
   const absPath = (r) => (/^[a-zA-Z]:[\\/]/.test(r) ? r : joinPath(ide.root, r.replace(/\//g, '\\')));
 
   // ---------- Markdown ----------
-  // marked's UMD wrapper registers with Monaco's AMD loader when it sees define.amd, so that flag is hidden while it loads.
-  let markedLoad = null;
-  function loadMarked() {
-    if (window.marked) return Promise.resolve(window.marked);
-    markedLoad ||= new Promise((resolve, reject) => {
-      const amd = window.define?.amd;
-      if (window.define) window.define.amd = undefined;
-      const restore = () => { if (window.define && amd) window.define.amd = amd; };
-      const s = document.createElement('script');
-      s.src = '../node_modules/marked/marked.min.js';
-      s.onload = () => { restore(); resolve(window.marked); };
-      s.onerror = () => { restore(); markedLoad = null; reject(new Error('marked.min.js failed to load')); };
-      document.head.appendChild(s);
-    });
-    return markedLoad;
-  }
 
   // Allowlist sanitizer for the model's Markdown: unknown elements are unwrapped, active content dropped, links kept
   // only for http(s) (opened in the browser), no images.
@@ -78,12 +62,7 @@
   }
 
   function renderMarkdown(host, text, msg) {
-    const marked = window.marked;
-    if (!marked) {
-      host.appendChild(el('div', 'aic-plain', text));
-      loadMarked().then(() => renderMessage(msg)).catch(() => {});
-      return;
-    }
+    const { marked } = window;
     const tokens = marked.lexer(text);
     let group = [];
     const flush = () => {

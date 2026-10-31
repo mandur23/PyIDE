@@ -35,7 +35,7 @@ try {
   await js(`(ide.toolWindows.get('Ports').show(), true)`);
   await until(`ide.ports.state().ports.find((p) => p.port === ${PORT})?.proto`, 'probed', 20000);
   check(await js(`ide.ports.state().ports.find((p) => p.port === ${PORT}).proto`) === 'tcp', 'the Minecraft server is told apart as TCP');
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.ports.share(${PORT}), true)`);
+  await js(`(ide.settings.set('ports.confirmShareTcp', false), ide.ports.share(${PORT}), true)`);
   await until(`ide.ports.state().tunnels.some((t) => t.port === ${PORT} && t.state !== 'starting')`, 'tunnel up', 60000)
     .catch(async (err) => { console.log(`state: ${q(await js('ide.ports.state()')).slice(0, 2500)}`); throw err; });
   const t = await js(`ide.ports.state().tunnels.find((t) => t.port === ${PORT})`);

@@ -120,6 +120,8 @@ const clickWhere = async (sel, pred) => {
 };
 const setField = (id, value) => js(`(() => { const n = document.getElementById(${JSON.stringify(id)}); n.value = ${JSON.stringify(value)}; n.dispatchEvent(new Event('change')); return true; })()`);
 
+const answerHostKey = (button, ctx = { js }) => ctx.js(`[...[...document.querySelectorAll('.dialog-backdrop')].pop().querySelectorAll('.dialog-buttons button')].find(b => b.textContent === ${JSON.stringify(button)}).click()`);
+
 async function openAddForm(k) {
   await js(`ide.openSettings('interpreter')`);
   await until(`!!document.querySelector('#addInterpBtn')`, 'interpreter settings page');
@@ -133,14 +135,32 @@ async function addInterpreter(k) {
   await openAddForm(k);
   check(await js(`!document.querySelector('#remoteAdd').disabled`), `${k.id || k.kind}: ${k.menu} shows a form (${await text('#remoteAvailability')})`);
   for (const [id, v] of Object.entries(k.fill)) await setField(id, v);
+  // The stand-in ssh asks about each host's key once, as OpenSSH does with StrictHostKeyChecking=ask.
+  let keyPending = !!fake && k.kind === 'ssh';
+  if (keyPending) {
+    await click('#remoteAdd');
+    await until(`!!document.querySelector('.remote-hostkey')`, 'host key question', 60000);
+    const host = k.fill.remoteHost.split('@').pop();
+    const question = await text('.remote-hostkey');
+    check(question.includes(`ED25519 SHA256:fake-key-of-${host}`) && question.includes(host), `${k.id || k.kind}: the first connection shows the host key fingerprint (${question.slice(0, 200)})`);
+    await answerHostKey('Cancel');
+    await until(`document.querySelector('#remoteLog').textContent.includes('Could not add')`, 'host key refused', 60000);
+    check((await text('#remoteLog')).includes('was not trusted') && !fake.calls().includes('password:'), `${k.id || k.kind}: refusing it says so and nothing is logged in (${await text('#remoteLog')})`);
+  }
+  const trustIfAsked = async () => {
+    if (keyPending) { await until(`!!document.querySelector('.remote-hostkey')`, 'host key question again', 60000); await answerHostKey('Trust and Connect'); }
+    keyPending = false;
+  };
   if (k.wrongPassword) {
     await setField('remotePassword', k.wrongPassword);
     await click('#remoteAdd');
-    await until(`document.querySelector('#remoteLog').textContent.includes('Could not add')`, 'wrong password rejected', 60000);
+    await trustIfAsked();
+    await until(`document.querySelector('#remoteLog').textContent.includes('Permission denied')`, 'wrong password rejected', 60000);
     check((await text('#remoteLog')).includes('Permission denied'), `${k.id}: a wrong password is reported by ssh (${await text('#remoteLog')})`);
     await setField('remotePassword', k.fill.remotePassword);
   }
   await click('#remoteAdd');
+  await trustIfAsked();
   await until(`document.querySelector('#interpStatus').textContent.startsWith('Added') || document.querySelector('#remoteLog').textContent.includes('Could not add')`, `${k.kind} added`, 180000);
   const status = await text('#interpStatus');
   check(status.startsWith(`Added ${k.name} (Python `), `${k.id || k.kind}: adding checks the target and its Python (${status || await text('#remoteLog')})`);
@@ -313,6 +333,22 @@ try {
       check(fake.calls().split('\n').some((l) => l.includes('pwbox') && l.includes('NumberOfPasswordPrompts=1')), 'ssh gets the password from the IDE\'s askpass, not from a prompt');
     }
 
+    // ---- a host key that changed ----
+    if (kinds.some((k) => k.kind === 'ssh')) {
+      const sshCfg = path.join(fake.root, 'ssh.json');
+      const hosts = JSON.parse(readFileSync(sshCfg, 'utf8'));
+      writeFileSync(sshCfg, JSON.stringify({ hosts: { ...hosts.hosts, devbox: { ...hosts.hosts.devbox, key: 'SHA256:another-key' } } }));
+      await openAddForm({ menu: 'On SSH…' });
+      await setField('remoteHost', 'devbox');
+      await click('#remoteAdd');
+      await until(`document.querySelector('#remoteLog').textContent.includes('Could not add')`, 'changed host key', 60000);
+      const log = await text('#remoteLog');
+      check(/host key of devbox has changed/.test(log) && log.includes('ssh-keygen -R devbox') && !(await js(`!!document.querySelector('.remote-hostkey')`)), `a changed host key is refused without a question, in one clear sentence (${log})`);
+      await click('#settingsCancel');
+      await until(`!document.querySelector('.settings-dialog')`, 'settings closed');
+      writeFileSync(sshCfg, JSON.stringify(hosts));
+    }
+
     // ---- availability with reasons ----
     await js(`ide.openSettings('remote-interpreters')`);
     await until(`document.querySelectorAll('#remoteKinds .remote-kind').length === 4`, 'targets on this computer', 60000);
@@ -375,6 +411,17 @@ try {
   await ko.js(`(() => { const a = document.querySelector('#remoteAuth'); a.value = 'password'; a.dispatchEvent(new Event('change')); })()`);
   const leaks = await englishLeaks(ko, '#remoteInterpForm', ['WSL', 'SSH', 'Docker', 'Compose']);
   ko.check(!leaks.length, `the SSH form is Korean (${JSON.stringify(leaks)})`);
+  if (fake) {
+    writeFileSync(path.join(fake.root, 'known_hosts.json'), '{}');
+    await ko.js(`(() => { const h = document.querySelector('#remoteHost'); h.value = 'devbox'; })()`);
+    await ko.click('#remoteAdd');
+    await ko.until(`!!document.querySelector('.remote-hostkey')`, 'Korean host key question', 60000);
+    const keyLeaks = await englishLeaks(ko, '.remote-hostkey, .dialog-buttons', ['SSH']);
+    ko.check(!keyLeaks.length && (await ko.js(`document.querySelector('.remote-hostkey').textContent`)).includes('호스트 키 지문'), `the host key question is Korean (${JSON.stringify(keyLeaks)})`);
+    await answerHostKey('취소', ko);
+    await ko.until(`document.querySelector('#remoteLog').textContent.includes('신뢰하지 않아서')`, 'Korean refusal', 60000).catch(() => {});
+    ko.check((await ko.js(`document.querySelector('#remoteLog').textContent`)).includes('신뢰하지 않아서'), `refusing it is reported in Korean (${await ko.js(`document.querySelector('#remoteLog').textContent`)})`);
+  }
   await ko.js(`(() => { const h = document.querySelector('#remoteHost'); h.value = 'nosuchhost'; })()`);
   await ko.click('#remoteAdd');
   await ko.until(`document.querySelector('#remoteLog').textContent.includes('인터프리터를 추가할 수 없습니다')`, 'Korean error', 60000).catch(() => {});

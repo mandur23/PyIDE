@@ -147,9 +147,8 @@ const exercise = async (t) => {
       // As the last project: the main process keeps answering while the check runs, and the welcome screen is ready
       // within a few seconds.
       await t.js(`localStorage.setItem('lastProject', ${JSON.stringify(DEAD_SHARE)})`);
-      await t.cdp('Page.reload');
       const reloaded = Date.now();
-      await t.until(`window.api && document.readyState === 'complete'`, 'reloaded page', 10000);
+      await t.reload({ until: `window.api && document.readyState === 'complete'`, ms: 10000 });
       const ping = await t.js(`(async () => { const t0 = performance.now(); await api.invoke('fs:exists', 'C:\\\\'); return performance.now() - t0; })()`);
       check(ping < 1000, `the main process answers while the last project is checked (${Math.round(ping)} ms)`);
       await t.until('window.__ideReady === true', 'IDE ready after reload', 15000);

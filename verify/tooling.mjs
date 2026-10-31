@@ -223,9 +223,7 @@ try {
   check(disk('savefmt.py') === 'def greet(name):\n    return "hi " + name\n\n\nx = greet("a")\n', 'format on save writes the formatted file');
 
   // ---------- Persistence across restart ----------
-  await js(`(location.reload(), true)`).catch(() => {});
-  await sleep(1500);
-  await until('window.__ideReady === true', 'IDE ready after reload', 30000);
+  await t.reload();
   await openFile(t, 'messy.py');
   check(await js(`document.documentElement.dataset.theme === 'light' && ide.editor.getOption(${E}.fontSize) === 18 && ide.editor.getModel().getOptions().tabSize === ${indentOf(disk('messy.py'))} && ide.editor.getOption(${E}.wordWrap) === 'on'`), 'settings re-applied at startup after restart');
 

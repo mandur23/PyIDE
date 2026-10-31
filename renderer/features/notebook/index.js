@@ -143,22 +143,6 @@
   const { strip: stripAnsi, fragment: ansiFragment } = ide.ui.ansi;
 
   // ---------- Markdown ----------
-  let markedLoad = null;
-  // marked's UMD wrapper registers with Monaco's AMD loader when it sees define.amd, so that flag is hidden while it loads.
-  function loadMarked() {
-    if (window.marked) return Promise.resolve(window.marked);
-    markedLoad ||= new Promise((resolve, reject) => {
-      const amd = window.define?.amd;
-      if (window.define) window.define.amd = undefined;
-      const restore = () => { if (window.define && amd) window.define.amd = amd; };
-      const s = document.createElement('script');
-      s.src = '../node_modules/marked/marked.min.js';
-      s.onload = () => { restore(); resolve(window.marked); };
-      s.onerror = () => { restore(); markedLoad = null; reject(new Error('marked.min.js failed to load')); };
-      document.head.appendChild(s);
-    });
-    return markedLoad;
-  }
 
   function fileUrl(p) {
     const parts = p.replace(/\\/g, '/').split('/');
@@ -242,30 +226,42 @@
   }
 
   // HTML outputs run in a sandboxed iframe: an opaque origin with scripts but no access to the IDE, its storage,
-  // Node or the parent DOM. A tiny script reports the content height so the frame fits it.
-  const frames = new Set();
+  // Node or the parent DOM. A tiny script reports the content height so the frame fits it. A srcdoc document would
+  // inherit the IDE page's Content-Security-Policy and lose its scripts, so output-frame.html, a document of its own,
+  // asks for the HTML and writes it into itself. Safe Mode runs nothing from the notebook: its outputs are srcdoc
+  // documents without scripts, measured from here (same origin is harmless with no script to use it).
+  const frameHtml = new WeakMap();
+  const fitFrame = (f, height) => { f.style.height = `${Math.min(4000, Math.max(16, Math.ceil(height)))}px`; };
   addEventListener('message', (e) => {
-    if (typeof e.data?.nbFrameHeight !== 'number') return;
-    for (const f of frames) {
-      if (!f.isConnected) { frames.delete(f); continue; }
-      if (f.contentWindow === e.source) f.style.height = `${Math.min(4000, Math.max(16, Math.ceil(e.data.nbFrameHeight)))}px`;
-    }
+    const ready = e.data?.nbFrameReady === true;
+    if (!ready && typeof e.data?.nbFrameHeight !== 'number') return;
+    const f = [...document.querySelectorAll('iframe.nb-html')].find((x) => x.contentWindow === e.source);
+    if (!f) return;
+    if (ready) e.source.postMessage({ nbHtml: frameHtml.get(f) }, '*');
+    else fitFrame(f, e.data.nbFrameHeight);
   });
   function htmlFrame(html) {
     const css = getComputedStyle(document.documentElement);
     const v = (n) => css.getPropertyValue(n).trim();
     const f = document.createElement('iframe');
     f.className = 'nb-html';
-    f.setAttribute('sandbox', 'allow-scripts');
     f.style.height = '24px';
-    f.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>
+    const page = (tail) => `<!doctype html><html><head><meta charset="utf-8"><style>
 html{color-scheme:${document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'}}
 body{margin:0;display:flow-root;font:13px system-ui,'Segoe UI','Malgun Gothic',sans-serif;color:${v('--text')};background:transparent;overflow-x:auto}
 table{border-collapse:collapse;font-size:12px}th,td{border:1px solid ${v('--gray4')};padding:3px 8px;text-align:right}
 thead th,tbody th{background:${v('--gray2')};font-weight:600}tbody tr:nth-child(odd){background:${v('--gray2')}55}a{color:${v('--blue8')}}
-pre,code{font-family:${v('--mono')}}</style></head><body>${html}<script>(()=>{const post=()=>parent.postMessage({nbFrameHeight:document.body.getBoundingClientRect().height},'*');
-new ResizeObserver(post).observe(document.body);addEventListener('load',post);post();})()<\/script></body></html>`;
-    frames.add(f);
+pre,code{font-family:${v('--mono')}}</style></head><body>${html}${tail}</body></html>`;
+    if (ide.trusted === false) {
+      f.setAttribute('sandbox', 'allow-same-origin');
+      f.addEventListener('load', () => { const b = f.contentDocument?.body; if (b) fitFrame(f, b.getBoundingClientRect().height); });
+      f.srcdoc = page('');
+      return f;
+    }
+    f.setAttribute('sandbox', 'allow-scripts');
+    frameHtml.set(f, page(`<script>(()=>{const post=()=>parent.postMessage({nbFrameHeight:document.body.getBoundingClientRect().height},'*');
+new ResizeObserver(post).observe(document.body);addEventListener('load',post);post();})()<\/script>`));
+    f.src = 'features/notebook/output-frame.html';
     return f;
   }
 
@@ -276,7 +272,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     if (mime === 'text/html') return htmlFrame(joinText(value));
     if (mime === 'text/markdown') {
       const box = userEl('div', 'nb-out-md nb-markdown');
-      loadMarked().then(() => renderMarkdownInto(box, joinText(value), ctx)).catch(() => { box.textContent = joinText(value); });
+      try { renderMarkdownInto(box, joinText(value), ctx); } catch { box.textContent = joinText(value); }
       return box;
     }
     if (mime === 'image/svg+xml' || IMAGE_MIMES.includes(mime)) {
@@ -1107,10 +1103,8 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         c.md.replaceChildren(el('div', 'nb-md-empty', tr('Empty Markdown cell. Double-click to edit.')));
         return;
       }
-      loadMarked().then(() => {
-        if (!disposed) renderMarkdownInto(c.md, text, { baseDir, attachments: c.data.raw.attachments });
-        c.md.dataset.rendered = String(Number(c.md.dataset.rendered || 0) + 1);
-      }).catch((e) => { c.md.textContent = text; console.warn(e); });
+      try { renderMarkdownInto(c.md, text, { baseDir, attachments: c.data.raw.attachments }); } catch (e) { c.md.textContent = text; console.warn(e); }
+      c.md.dataset.rendered = String(Number(c.md.dataset.rendered || 0) + 1);
     }
 
     function renderStatus(c) {

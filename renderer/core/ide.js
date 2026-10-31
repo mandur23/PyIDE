@@ -194,9 +194,14 @@ ide.ui = {};
 
 // Links in program output: `pattern` (a global regex) finds them and `link(match)` returns the element shown in place
 // of the match, or null to leave that text as it is. Plugins add theirs with ide.ui.addConsoleLink.
+// Whether a path that program output named may be followed: opening \\host\share makes Windows sign in to that host
+// (NTLM), so what a program prints reaches only the shares the user already opened something on (main/security.js).
+ide.mayFollowPath = (p) => !/^[\\/]{2}/.test(p) || ide.api.shareAllowedSync(p);
+
 const consoleLinks = [{
   pattern: TRACEBACK,
   link(m) {
+    if (!ide.mayFollowPath(m[1])) return null;
     const a = el('a', null, m[0]);
     a.onclick = () => ide.openFile(ide.toLocalPath(m[1]), { line: Number(m[2]) });
     return a;
@@ -897,6 +902,8 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
 ide.ui.alert = (text) => {
   ide.ui.dialog({ title: '', body: el('div', 'dialog-message', text) });
 };
+// Every Open with Default App comes through shell:openPath, which refuses a program of an untrusted project.
+api.on('shell:openRefused', (p) => ide.ui.alert(tr('{name} is a program or script, so opening it would run it. Safe Mode runs nothing from a project you have not trusted: trust the project first.', { name: p.split(/[\\/]/).pop() })));
 // A yes/no question in the IDE's own dialog; resolves true for `ok`. window.confirm() would block the renderer.
 ide.ui.confirm = (text, { title = '', ok = tr('OK') } = {}) => new Promise((resolve) => {
   let yes = false;
@@ -2440,6 +2447,9 @@ const monacoNls = new Promise((resolve) => {
   document.head.appendChild(s);
 });
 monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
+  // A cached Monaco can be ready while main is too busy to answer for the scripts after this one (each file: load asks
+  // it, main/security.js), and core/editors.js holds ide.initEditors.
+  if (document.readyState === 'loading') await new Promise((resolve) => { document.addEventListener('DOMContentLoaded', resolve, { once: true }); });
   const monaco = (ide.monaco = window.monaco);
   // Diff editors leave their hunk gutter menu subscribed after dispose, and it throws "AbstractContextKeyService has
   // been disposed" whenever an editor action is registered later. PyIDE puts nothing in that menu.
@@ -2565,8 +2575,10 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
   if (craftHome && ide.root) ide.emit('craftReady', { host: $('craftHost') });
   ide.api.invoke('core:migrationNotice').then((m) => m && ide.notifications?.notify({
-    title: tr('PyIDE settings imported'), kind: 'info', group: 'Settings', raw: true,
-    text: tr('Settings, plugins and interpreters were copied from {folder}. PyIDE and its folder stay as they were.', { folder: m.from }),
+    title: tr('PyIDE settings imported'), kind: m.failed.length ? 'warn' : 'info', group: 'Settings', raw: true,
+    text: m.failed.length
+      ? tr('Most settings were copied from {folder}, but not {items}, which are tried again at the next start. PyIDE and its folder stay as they were.', { folder: m.from, items: m.failed.join(', ') })
+      : tr('Settings, plugins and interpreters were copied from {folder}. PyIDE and its folder stay as they were.', { folder: m.from }),
   }), () => {});
   performance.mark('pyide:ready');
   window.__ideReady = true;

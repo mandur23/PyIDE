@@ -1,6 +1,6 @@
 // Updates, main side: electron-updater with a generic feed. The feed is the renderer's `updates.feedUrl` setting: an
-// http(s) URL, or a local folder (or file: URL) holding latest.yml and the installers, which is served on 127.0.0.1
-// while Nano Studio runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
+// https URL, http on this computer, or a local folder (or file: URL) holding latest.yml and the installers, which is
+// served on 127.0.0.1 while Nano Studio runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
 // is pointed at the new .msi instead, since MSI installs are upgraded by Windows Installer. Source runs only check.
 // NSIS downloads are differential when they can be: electron-updater rebuilds the new installer from the one this version
 // was installed with, which the NSIS installer copies to %LOCALAPPDATA%\nano-studio-updater\installer.exe, and the blocks that
@@ -9,13 +9,20 @@
 // requests. Anything that goes wrong (no cached installer, no old blockmap, no Range support, a hash mismatch of the
 // rebuilt file) falls back to the full installer. The setting updates.differential and PYIDE_UPDATE_DIFFERENTIAL=0 turn
 // it off.
-const { shell } = require('electron');
+// Installers are not Authenticode-signed, so electron-updater only checks the sha512 in latest.yml, which comes from the
+// same release as the installer. The update is therefore checked here against <installer>.sig and main/release-key.js
+// before the phase can become 'downloaded', the only way to updater:install. A missing or bad signature refuses the
+// update. The default feed, https feeds and network shares need one; a folder on this computer or http on this computer
+// (test builds, nobody signs them) does not, and the Update Ready dialog says that this update was not checked.
+const { net, shell } = require('electron');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { pipeline } = require('stream');
 const { fileURLToPath } = require('url');
 const zlib = require('zlib');
+const { loopback } = require('../marketplace');
+const release = require('../release-key');
 
 function installKind(app) {
   // verify/update-delta.mjs downloads from a source run as an NSIS install would (it never installs).
@@ -73,15 +80,26 @@ function defaultFeed(app) {
   try { return String(require(path.join(app.getAppPath(), 'package.json')).updateFeed || ''); } catch { return ''; }
 }
 
-// {url, dir}: dir is set for a local folder feed.
+// {url, signed} or {dir, signed}: dir is set for a local folder feed; signed means its installers need a signature. A
+// network share can be replaced by anyone on the network, as plain http can.
 function resolveFeed(feed) {
   const value = String(feed || '').trim();
   if (!value) throw new Error('No update feed is set');
-  if (/^https?:\/\//i.test(value)) return { url: value.endsWith('/') ? value : `${value}/` };
+  if (/^https?:\/\//i.test(value)) {
+    let u;
+    try { u = new URL(value); } catch { throw new Error(`Not a valid URL: ${value}`); }
+    if (u.protocol === 'http:' && !loopback(u)) throw Object.assign(new Error(`INSECURE_FEED: ${value} must use https (http works only on this computer)`), { code: 'ERR_UPDATER_INSECURE_FEED' });
+    return { url: value.endsWith('/') ? value : `${value}/`, signed: u.protocol === 'https:' };
+  }
   const dir = /^file:/i.test(value) ? fileURLToPath(value) : value;
   if (!path.isAbsolute(dir) || !fs.existsSync(path.join(dir, 'latest.yml'))) throw new Error(`No latest.yml in ${dir}`);
-  return { dir: path.resolve(dir) };
+  const resolved = path.resolve(dir);
+  return { dir: resolved, signed: resolved.startsWith('\\\\') };
 }
+
+// The installer's file name in an update's channel file, which electron-updater downloads as <feed>/<name>. A channel
+// file that names something else fails closed: no .sig there, or one that does not match the bytes downloaded.
+const installerName = (info) => path.basename(new URL(info?.files?.find((f) => /\.exe$/i.test(f.url))?.url || info?.path, 'http://feed/').pathname);
 
 // When checks ran, kept across restarts so the periodic check (renderer) can skip one that ran recently and back off
 // after failures: {lastCheck, lastAttempt, failures, lastError}. lastCheck is the last check that read the feed.
@@ -182,6 +200,7 @@ const mb = (n) => (n == null ? '?' : n < 100 * 1024 ? `${(n / 1024).toFixed(1)} 
 
 exports.installKind = installKind;
 exports.serveFolder = serveFolder;
+exports.resolveFeed = resolveFeed;
 exports.byteRange = byteRange;
 exports.readChangelog = readChangelog;
 exports.compareVersions = compareVersions;
@@ -192,14 +211,16 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   const log = diagnostics?.logger('#updater') || console;
   const kind = installKind(app);
   let updater = null;
-  let feed = null; // {key, url, dir, server}
+  let feed = null; // {key, url, dir, server, signed}
+  let offered = null; // what the last check found: {info, url (of the feed), signed}
   const historyFile = path.join(app.getPath('userData'), 'updater.json');
   // PYIDE_UPDATE_INTERVAL_MS replaces the length of a day for the periodic check (verify/report-update.mjs).
   const intervalMs = Number(process.env.PYIDE_UPDATE_INTERVAL_MS) > 0 ? Number(process.env.PYIDE_UPDATE_INTERVAL_MS) : null;
   // phase: idle | checking | available | downloading | downloaded | error. checks: checks run this session.
   // download: how the current or last download goes, {mode: 'delta' | 'full', size (of the installer), bytes (to
   // download; for a delta, the changed blocks), reason (why full: 'off' or 'fallback')}.
-  let state = { kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle', intervalMs, checks: 0, download: null, ...readHistory(historyFile) };
+  // signature: of the downloaded update, 'verified', or 'unchecked' from a feed that needs none.
+  let state ={ kind, version: app.getVersion(), defaultFeed: defaultFeed(app), phase: 'idle', intervalMs, checks: 0, download: null, ...readHistory(historyFile) };
   // PYIDE_CHANGELOG replaces the shipped CHANGELOG.md (verify/updater.mjs).
   const changelog = readChangelog(process.env.PYIDE_CHANGELOG || path.join(app.getAppPath(), 'CHANGELOG.md'));
   let afterUpdate = notesAfterUpdate(changelog, state.version, state.seenVersion);
@@ -215,12 +236,13 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     updater.logger = log;
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
+    // A web installer runs a second, unsigned package named by the channel file.
+    updater.disableWebInstaller = true;
     updater.on('download-progress', (p) => {
       // During a differential download the total is the size of the changed blocks.
       const download = state.download && (state.download.mode === 'delta' || state.download.bytes == null) ? { ...state.download, bytes: p.total } : state.download;
       setState({ phase: 'downloading', percent: Math.floor(p.percent), transferred: p.transferred, total: p.total, download });
     });
-    updater.on('update-downloaded', (info) => setState({ phase: 'downloaded', available: info.version, percent: 100 }));
     updater.on('error', (err) => log.warn(`update error: ${err?.message || err}`));
     // electron-updater's NSIS download calls this unless disableDifferentialDownload is set, and downloads the full
     // installer when it returns true, which it does after logging any error. Wrapped to say which happened.
@@ -248,10 +270,11 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     feed?.server?.close();
     feed = null;
     const resolved = resolveFeed(key);
+    const signed = resolved.signed || key === state.defaultFeed.trim();
     if (resolved.dir) {
       const { server, url } = await serveFolder(resolved.dir);
-      feed = { key, url, dir: resolved.dir, server };
-    } else feed = { key, ...resolved };
+      feed = { key, url, dir: resolved.dir, server, signed };
+    } else feed = { key, url: resolved.url, signed };
     // One Range request per changed run of blocks: the local server and GitHub's release downloads answer single ranges,
     // not multipart ones.
     getUpdater().setFeedURL({ provider: 'generic', url: feed.url, useMultipleRangeRequest: false });
@@ -305,14 +328,16 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   ipcMain.handle('updater:check', async (_e, feedValue, options) => {
     if (state.phase === 'downloading' || state.phase === 'downloaded') return { available: state.available };
     setState({ phase: 'checking', error: null, checks: state.checks + 1, lastAttempt: Date.now() });
+    offered = null;
     try {
-      await useFeed(feedValue);
+      const { url, signed } = await useFeed(feedValue);
       const u = getUpdater();
       // electron-updater only checks packaged apps; a source run still reports what the feed offers.
       if (!app.isPackaged) u.forceDevUpdateConfig = true;
       const result = await withDeadline(u, checkChannel(u, options?.channel === 'beta' ? 'beta' : 'latest'));
       const latest = result?.updateInfo?.version;
       const available = result?.isUpdateAvailable && latest ? latest : null;
+      if (available) offered = { info: result.updateInfo, url, signed };
       setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null, lastCheck: Date.now(), failures: 0, lastError: null });
       saveHistory();
       return { available };
@@ -329,6 +354,37 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   // phase (or, given an object, any state fields) itself.
   if (process.env.PYIDE_UPDATE_TEST === '1') ipcMain.handle('updater:testPhase', (_e, phase) => { setState(phase && typeof phase === 'object' ? phase : { phase }); return state; });
 
+  // The renderer shows its own text for this prefix; the reason goes to the log.
+  function refused(why) {
+    log.warn(`update refused: ${why}`);
+    return Object.assign(new Error(`UPDATE_SIGNATURE: ${why}`), { code: 'ERR_UPDATER_INVALID_SIGNATURE' });
+  }
+
+  // Read before the download: a release without a signature costs no installer download. Electron's net, as the
+  // download uses, so a proxy that lets the installer through also lets this through.
+  async function readSignature() {
+    if (!offered) throw refused('no checked update to download');
+    const url = new URL(`${installerName(offered.info)}.sig`, offered.url).href;
+    try {
+      const res = await net.fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+      if (res.ok) return await res.text();
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      throw refused(`${url} could not be read (${err.message})`);
+    }
+  }
+
+  // After the download, not in electron-updater's verifySignature hook: that hook runs only when package.json names a
+  // publisherName, and never for an installer already in its cache from an earlier run. installerPath is the final file
+  // on both paths. A refused file leaves the cache, so nothing stays that a later run would find.
+  async function checkInstaller(u, signature) {
+    let ok = false;
+    try { ok = await release.verify(await fs.promises.readFile(u.installerPath), signature); } catch (err) { log.warn(`could not read the installer: ${err.message}`); }
+    if (ok) { log.info(`${path.basename(u.installerPath)} matches its signature`); return; }
+    await u.downloadedUpdateHelper?.clear();
+    throw refused(`the installer does not match ${installerName(offered.info)}.sig`);
+  }
+
   // options: {differential} (the setting updates.differential; PYIDE_UPDATE_DIFFERENTIAL=0 overrides it).
   ipcMain.handle('updater:download', async (_e, options) => {
     if (kind !== 'nsis') throw new Error('Only the Nano Studio installer (.exe) updates itself');
@@ -337,12 +393,18 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     const off = process.env.PYIDE_UPDATE_DIFFERENTIAL === '0' ? 'PYIDE_UPDATE_DIFFERENTIAL=0' : options?.differential === false ? 'updates.differential' : null;
     u.disableDifferentialDownload = !!off;
     if (off) log.info(`differential download is off (${off}); downloading the full installer`);
-    setState({ phase: 'downloading', percent: 0, download: off ? { mode: 'full', size: null, bytes: null, reason: 'off' } : null });
+    setState({ phase: 'downloading', percent: 0, signature: null, download: off ? { mode: 'full', size: null, bytes: null, reason: 'off' } : null });
     try {
+      const unchecked = offered?.signed === false;
+      const signature = unchecked ? null : await readSignature();
       await u.downloadUpdate();
+      if (unchecked) log.warn(`the installer from ${offered.url} was not checked: this feed needs no signature`);
+      else await checkInstaller(u, signature);
+      setState({ phase: 'downloaded', percent: 100, signature: unchecked ? 'unchecked' : 'verified' });
       return true;
     } catch (err) {
       setState({ phase: 'error', error: err.message });
+      if (/^ERR_UPDATER_/.test(err?.code)) diagnostics?.markExpected?.(err);
       throw err;
     }
   });

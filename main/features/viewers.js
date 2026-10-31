@@ -8,6 +8,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const trust = require('../trust');
 
 const MAX_READ = 512 * 1024 * 1024;
 
@@ -215,7 +216,8 @@ function framePath(video, frame) {
 // pyide-preview://<site>/<path>: a site is a folder (the project, or the HTML file's own folder outside a project), so
 // relative and root-relative URLs (css/site.css, /img/logo.png) resolve as on a web server. Unsaved editor text
 // overrides the file on disk. HTML pages get a small helper that keeps the scroll position across reloads, reports
-// script errors to the IDE, and hands links that leave the site to the IDE.
+// script errors to the IDE, and hands links that leave the site to the IDE. A site whose folder the user has not
+// trusted is shown without scripts (siteScripts): main decides, so a page cannot run because a frame forgot to forbid it.
 const MIME = {
   html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', xhtml: 'application/xhtml+xml', css: 'text/css; charset=utf-8',
   js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8', json: 'application/json; charset=utf-8',
@@ -248,6 +250,16 @@ const hiddenShown = new Map(); // site id -> Set(lowercase hidden names on the p
 const pageDirs = new Map();
 const isInside = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
 const injectHelper = (html) => (/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + PREVIEW_HELPER) : PREVIEW_HELPER + html);
+const hiddenIn = (rel, shown) => rel.split(path.sep).some((seg) => seg.startsWith('.') && !shown?.has(seg.toLowerCase()));
+const siteScripts = (root) => trust.isTrusted(root);
+
+// A page reads its site's files, so it must not be able to send them anywhere. A trusted site's page keeps what real
+// pages need (CDN scripts, styles, images) and is only kept from calling out; an untrusted site's page gets its own
+// files and nothing else.
+function previewPolicy(site, scripts) {
+  if (scripts) return `connect-src ${site} data: blob:; form-action ${site}`;
+  return `default-src 'none'; style-src ${site} 'unsafe-inline'; img-src ${site} data: blob:; media-src ${site} data: blob:; font-src ${site} data:; frame-src ${site}; form-action 'none'; base-uri 'none'`;
+}
 
 function siteFor(root) {
   for (const [id, r] of sites) if (r.toLowerCase() === root.toLowerCase()) return id;
@@ -262,19 +274,23 @@ async function servePreview(req) {
   if (!root) return new Response('Unknown preview site', { status: 404 });
   let rel;
   try { rel = decodeURIComponent(u.pathname); } catch { return new Response('Bad path', { status: 400 }); }
+  // A colon in a Windows path names an NTFS stream (.env::$DATA), never a file of the site.
+  if (rel.includes(':')) return new Response('Not found', { status: 404 });
   let file = path.resolve(root, `.${rel}`);
   if (!isInside(file, root) && file.toLowerCase() !== root.toLowerCase()) return new Response('Outside the preview folder', { status: 403 });
   // Hidden files and folders (.env, .git, .ssh when the site is a home folder) are not part of a site, unless a
   // previewed page itself lies in one.
   const shown = hiddenShown.get(u.hostname);
-  if (path.relative(root, file).split(path.sep).some((seg) => seg.startsWith('.') && !shown?.has(seg.toLowerCase()))) return new Response('Not found', { status: 404 });
+  if (hiddenIn(path.relative(root, file), shown)) return new Response('Not found', { status: 404 });
   try { if (fs.statSync(file).isDirectory()) file = path.join(file, 'index.html'); } catch {}
-  // A symlink or junction inside the site must not lead out of it.
+  // A symlink or junction inside the site must not lead out of it. The real path also shows what the requested name
+  // hides: ENV~1, the 8.3 short name of .env, and links to hidden files. Only that real file is read.
   const real = await fs.promises.realpath(file).catch(() => null);
   const realRoot = await fs.promises.realpath(root).catch(() => root);
   if (real && !isInside(real, realRoot)) return new Response('Outside the preview folder', { status: 403 });
+  if (real && hiddenIn(path.relative(realRoot, real), shown)) return new Response('Not found', { status: 404 });
   const over = overrides.get(u.hostname)?.get(file.toLowerCase());
-  let body = over !== undefined ? Buffer.from(over, 'utf8') : await fs.promises.readFile(file).catch(() => null);
+  let body = over !== undefined ? Buffer.from(over, 'utf8') : real && await fs.promises.readFile(real).catch(() => null);
   if (!body) {
     for (const dir of pageDirs.get(u.hostname) || []) {
       if (dir.toLowerCase() === root.toLowerCase()) continue;
@@ -283,26 +299,30 @@ async function servePreview(req) {
       try { if (fs.statSync(alt).isDirectory()) alt = path.join(alt, 'index.html'); } catch {}
       const altOver = overrides.get(u.hostname)?.get(alt.toLowerCase());
       const realAlt = await fs.promises.realpath(alt).catch(() => null);
-      if (!realAlt || !isInside(realAlt, realRoot)) continue;
-      body = altOver !== undefined ? Buffer.from(altOver, 'utf8') : await fs.promises.readFile(alt).catch(() => null);
+      if (!realAlt || !isInside(realAlt, realRoot) || hiddenIn(path.relative(realRoot, realAlt), shown)) continue;
+      body = altOver !== undefined ? Buffer.from(altOver, 'utf8') : await fs.promises.readFile(realAlt).catch(() => null);
       if (body) { file = alt; break; }
     }
   }
   if (!body) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   const type = MIME[path.extname(file).slice(1).toLowerCase()] || 'application/octet-stream';
-  if (type.startsWith('text/html')) body = Buffer.from(injectHelper(body.toString('utf8')), 'utf8');
-  return new Response(body, { headers: { 'content-type': type, 'cache-control': 'no-store', 'access-control-allow-origin': '*' } });
+  const scripts = siteScripts(root);
+  if (scripts && type.startsWith('text/html')) body = Buffer.from(injectHelper(body.toString('utf8')), 'utf8');
+  // A sandboxed page's origin is opaque and serializes as "null": without this header it could not read its own site.
+  return new Response(body, { headers: { 'content-type': type, 'cache-control': 'no-store', 'access-control-allow-origin': 'null',
+    'content-security-policy': previewPolicy(`${u.protocol}//${u.host}`, scripts) } });
 }
 exports.register = ({ ipcMain }) => {
   protocol.handle('pyide-preview', servePreview);
-  // -> {url} for an HTML file, served from the project (or from the file's folder when it is outside the project).
+  // -> {url, root, scripts} for an HTML file, served from the project (or from the file's folder when it is outside the
+  // project). scripts: whether the site's pages may run scripts.
   ipcMain.handle('viewers:previewUrl', (_e, file, projectRoot) => {
     const root = projectRoot && isInside(file, projectRoot) ? projectRoot : path.dirname(file);
     const segs = path.relative(root, file).split(path.sep);
     const site = siteFor(root);
     for (const seg of segs) if (seg.startsWith('.')) hiddenShown.set(site, (hiddenShown.get(site) || new Set()).add(seg.toLowerCase()));
     pageDirs.set(site, (pageDirs.get(site) || new Set()).add(path.dirname(file)));
-    return { url: `pyide-preview://${site}/${segs.map(encodeURIComponent).join('/')}`, root };
+    return { url: `pyide-preview://${site}/${segs.map(encodeURIComponent).join('/')}`, root, scripts: siteScripts(root) };
   });
   // The JavaScript app an HTML file belongs to: the nearest package.json at or above the file (not above the project),
   // with its scripts, the tool its dev server runs (react-scripts, vite, ...), the built page if there is one, and

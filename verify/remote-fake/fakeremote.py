@@ -581,9 +581,27 @@ def ssh(argv):
     if host.get("port", 22) != port:
         err("ssh: connect to host %s port %d: Connection refused" % (dest, port))
         return 255
+    ask = os.environ.get("SSH_ASKPASS") if os.environ.get("SSH_ASKPASS_REQUIRE") == "force" else None
+    # As OpenSSH: the host key comes before any password, and only "ask" with an answer from askpass records a new one.
+    key = host.get("key", "SHA256:fake-key-of-" + dest)
+    known = load("known_hosts.json", {})
+    if dest in known and known[dest] != key:
+        err("@@@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@@@\nHost key for %s has changed and you have requested strict checking.\nHost key verification failed." % dest)
+        return 255
+    if dest not in known:
+        if opts.get("stricthostkeychecking") != "ask" or not ask or opts.get("batchmode") == "yes":
+            err("No ED25519 host key is known for %s and you have requested strict checking.\nHost key verification failed." % dest)
+            return 255
+        prompt = ("The authenticity of host '%s (10.0.0.7)' can't be established.\nED25519 key fingerprint is %s.\n"
+                  "This key is not known by any other names.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? " % (dest, key))
+        r = subprocess.run([ask, prompt], capture_output=True, text=True)
+        if r.stdout.strip() != "yes":
+            err("Host key verification failed.")
+            return 255
+        known[dest] = key
+        save("known_hosts.json", known)
     if host.get("password"):
-        ask = os.environ.get("SSH_ASKPASS")
-        if opts.get("batchmode") == "yes" or not ask or os.environ.get("SSH_ASKPASS_REQUIRE") != "force":
+        if opts.get("numberofpasswordprompts") == "0" or not ask:
             err("%s@%s: Permission denied (publickey,password)." % (user, dest))
             return 255
         r = subprocess.run([ask, "%s@%s's password: " % (user, dest)], capture_output=True, text=True)

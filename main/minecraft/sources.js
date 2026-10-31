@@ -31,6 +31,14 @@ const standIn = (url) => {
   const o = originOf(url);
   return !!o && Object.entries(base()).some(([k, v]) => v !== BASE[k] && originOf(v) === o);
 };
+// Modrinth's .mrpack format lets a pack download its files over https from these hosts only. A pack's download address
+// is a stranger's text, whether the pack becomes an instance or a server.
+const PACK_HOSTS = ['cdn.modrinth.com', 'github.com', 'raw.githubusercontent.com', 'gitlab.com'];
+const packFile = (u) => {
+  let url = null;
+  try { url = new URL(u); } catch { return false; }
+  return (url.protocol === 'https:' && PACK_HOSTS.includes(url.hostname)) || standIn(url.href);
+};
 // PaperMC refuses requests without a User-Agent that names the program.
 const HEADERS = { 'User-Agent': `NanoStudio/${require('../../package.json').version} (https://github.com/mandur23/PyIDE)` };
 
@@ -38,14 +46,29 @@ const HEADERS = { 'User-Agent': `NanoStudio/${require('../../package.json').vers
 // user's to see and not an IDE error: the errors are marked expected, and an HTTP error carries its status.
 const TIMEOUT = 30000;
 const fail = (message, more) => Object.assign(new Error(message), { expected: true, ...more });
-async function getText(url) {
+async function getOnce(url) {
   try {
     const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(TIMEOUT) });
-    if (!res.ok) throw fail(`${url}: HTTP ${res.status}`, { status: res.status });
+    if (!res.ok) {
+      const wait = Math.min(Number(res.headers.get('retry-after')) * 1000 || 0, 10000);
+      throw fail(`${url}: HTTP ${res.status}`, { status: res.status, transient: res.status === 429 || res.status >= 500, wait });
+    }
     return await res.text();
   } catch (err) {
     if (err.expected) throw err;
-    throw fail(err.name === 'TimeoutError' ? `${url}: no answer within ${TIMEOUT / 1000} seconds` : `${url}: ${err.cause?.message || err.message}`);
+    if (err.name === 'TimeoutError') throw fail(`${url}: no answer within ${TIMEOUT / 1000} seconds`);
+    const cause = err.cause?.message || err.message;
+    throw fail(`${url}: ${cause}`, { transient: !/bad port/.test(cause) });
+  }
+}
+// A dropped connection, a 5xx or a 429 passes in a moment, so it is asked again before the user hears of it. A 4xx or
+// a service that sat silent for the whole timeout is an answer.
+async function getText(url) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await getOnce(url); } catch (err) {
+      if (attempt === 3 || !err.transient) throw err;
+      await new Promise((r) => setTimeout(r, err.wait || 500 * attempt));
+    }
   }
 }
 async function getJson(url) {
@@ -225,4 +248,4 @@ async function temurin(major, jdk) {
 
 const modrinthApi = () => base().modrinth;
 
-module.exports = { KINDS, RELEASE, base, standIn, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile };
+module.exports = { KINDS, RELEASE, base, standIn, packFile, PACK_HOSTS, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile };

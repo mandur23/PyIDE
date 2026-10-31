@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { addSecretValues } = require('../diagnostics/redact');
+const trust = require('../trust');
 
 const ENV_FILE = 'http-client.env.json';
 const PRIVATE_ENV_FILE = 'http-client.private.env.json';
@@ -99,14 +100,24 @@ function makeResolver({ fileVars, env, root }) {
   return { substitute, unresolved };
 }
 
+// An untrusted .http file must not send what lies outside its project (`< ../../.ssh/id_rsa`). The path is judged as
+// written first, so a share is not touched, then for real, so a link in the project leads nowhere else.
+function checkInclude(requestFile, root, file) {
+  if (trust.isTrusted(requestFile)) return;
+  const base = root || path.dirname(requestFile);
+  if (isUnder(file, base) && isUnder(fs.realpathSync(file), fs.realpathSync(base))) return;
+  throw Object.assign(new Error('outside the project'), { code: 'EOUTSIDE', path: file });
+}
+
 // A body is text, or a single `< ./file` line (sent as the file's bytes), or text with `< file` lines spliced in.
-// `<@ file` also substitutes variables inside the file.
-function buildBody(body, baseDir, substitute) {
+// `<@ file` also substitutes variables inside the file. check(file) throws for a file that may not be read.
+function buildBody(body, baseDir, substitute, check) {
   if (body == null || body === '') return { data: undefined };
   const include = (line) => {
     const m = /^<(@?)\s+(.+?)\s*$/.exec(line);
     if (!m) return null;
     const file = path.resolve(baseDir, substitute(m[2]));
+    check(file);
     const buf = fs.readFileSync(file);
     return m[1] ? Buffer.from(substitute(buf.toString('utf8'))) : buf;
   };
@@ -171,9 +182,9 @@ async function send({ file, root, env: envName, request, fileVars = [], timeoutM
   const shown = { method, url, headers, name: request.name || null };
   let body;
   try {
-    body = ['GET', 'HEAD'].includes(method) ? { data: undefined } : buildBody(request.body, path.dirname(file), substitute);
+    body = ['GET', 'HEAD'].includes(method) ? { data: undefined } : buildBody(request.body, path.dirname(file), substitute, (f) => checkInclude(file, root, f));
   } catch (err) {
-    return { ok: false, request: shown, error: { kind: 'file', detail: err.path || err.message } };
+    return { ok: false, request: shown, error: { kind: err.code === 'EOUTSIDE' ? 'outside' : 'file', detail: err.path || err.message } };
   }
   if (typeof body.data === 'string') shown.body = body.data;
   else if (body.data) shown.body = `<${body.data.length} bytes>`;

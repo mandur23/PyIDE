@@ -1260,8 +1260,9 @@
       }
     }
 
-    // Plugins are code with the IDE's full access, so a download names its vendor and source and asks first.
-    function trustOnline(m) {
+    // Plugins are code with the IDE's full access, so installing one from outside the IDE names what is known about it
+    // (a local file only has its path) and asks first.
+    function confirmThirdParty({ plugin, vendor, source, update = false, unsigned = false }) {
       const field = (label, value) => {
         const r = el('div', 'plugin-trust-row');
         const v = el('span', 'plugin-trust-value', value);
@@ -1270,27 +1271,28 @@
         return r;
       };
       const box = el('div', 'plugin-trust');
+      if (plugin) box.append(field(tr('Plugin:'), plugin));
+      if (vendor) box.append(field(tr('Vendor:'), vendor));
       box.append(
-        field(tr('Plugin:'), `${localized(m).name} ${m.version}`),
-        field(tr('Vendor:'), m.vendor),
-        field(tr('Source:'), m.url),
+        field(tr('Source:'), source),
+        ...(unsigned ? [el('p', 'plugin-trust-warning', tr('This plugin comes from a Marketplace index that is not signed by Nano Studio.'))] : []),
         el('p', 'plugin-trust-warning', tr('Plugins run with the same access as Nano Studio: they can read and change your files, start programs and use the network. Install plugins only from vendors you trust.')),
       );
       return new Promise((resolve) => {
         let yes = false;
         ide.ui.dialog({
-          title: m.update ? tr('Update Third-Party Plugin') : tr('Install Third-Party Plugin'),
+          title: update ? tr('Update Third-Party Plugin') : tr('Install Third-Party Plugin'),
           body: box,
           width: 560,
           onClose: () => resolve(yes),
-          buttons: [{ label: m.update ? tr('Update') : tr('Install'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+          buttons: [{ label: update ? tr('Update') : tr('Install'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
         }).el.id = 'pluginTrustDialog';
       });
     }
 
     async function installListed(m) {
       if (m.origin === 'online') {
-        if (!(await trustOnline(m))) return;
+        if (!(await confirmThirdParty({ plugin: `${localized(m).name} ${m.version}`, vendor: m.vendor, source: m.url, update: m.update, unsigned: m.signed === false }))) return;
         status.textContent = tr('Downloading {name}…', { name: localized(m).name });
       }
       await install(() => ide.api.invoke('plugins:installListed', m.id), localized(m).name);
@@ -1340,7 +1342,7 @@
     gear.onclick = () => dialogMenu(gear, [
       [tr('Install Plugin from Disk…'), async () => {
         const source = await ide.api.invoke('dialog:openPlugin');
-        if (source) install(() => ide.api.invoke('plugins:install', source));
+        if (source && await confirmThirdParty({ source })) install(() => ide.api.invoke('plugins:install', source));
       }],
       [tr('Manage Plugin Repositories…'), editRepository],
       [tr('Disable All Downloaded Plugins'), () => { for (const p of installed.filter((x) => !x.bundled && x.enabled)) toggle(p, false); }],

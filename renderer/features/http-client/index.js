@@ -330,6 +330,7 @@
       case 'timeout': return tr('The request to {target} timed out after {seconds} s.', p);
       case 'url': return tr('Invalid URL: {detail}', p);
       case 'file': return tr('Cannot read the body file: {detail}', p);
+      case 'outside': return tr('Not sent: {detail} is outside this project, and Safe Mode sends no file from elsewhere on this computer.', p);
       default: return tr('The request failed: {detail}', p);
     }
   }

@@ -228,7 +228,10 @@ try {
     for (let k = 0; k < 6; k++) await undo();
     check(await text() === before, `${file}: undo restores the line`);
   }
+  const cssValidates = `ide.monaco.css.cssDefaults.options.validate`;
+  check(await js(cssValidates) === false, 'long.css: 9,000 declarations in a rule turn CSS validation off (its lint is quadratic)');
   await closeAll();
+  check(await js(cssValidates) === true, 'CSS validation is back once that file is closed');
 
   // ---------- deep nesting and broken files: Reformat Code ----------
   // The project's Prettier stand-in formats JSON and YAML first when it is on: off here, but for broken.js.

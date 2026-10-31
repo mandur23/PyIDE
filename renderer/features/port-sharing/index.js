@@ -9,6 +9,7 @@
   const { el } = ide.util;
   const AUTO = 'ports.autoShare';
   const CONFIRM = 'ports.confirmShare'; // false after "Don't ask again"
+  const CONFIRM_TCP = 'ports.confirmShareTcp'; // the same for the bore warning
   const ADDED = 'ports.added'; // ports the user added, for every project
   const TOOLS = {
     cloudflared: { item: 'tool:cloudflared', homepage: 'https://github.com/cloudflare/cloudflared',
@@ -67,9 +68,14 @@
   }
 
   // ---------- sharing ----------
-  // Anyone with the address reaches the server, so the first share asks (until "Don't ask again").
-  function confirmShare(port) {
-    if (ide.settings.get(CONFIRM, true) === false) return Promise.resolve(true);
+  // Anyone with the address reaches the server, so the first share asks (until "Don't ask again"). A TCP server goes
+  // through bore, whose address is no secret and whose traffic a third party carries: that warning says so and has its
+  // own "Don't ask again", which one given for a web server does not cover.
+  async function confirmShare(port) {
+    const p = st.ports.find((x) => x.port === port);
+    const tcp = !!p && (protoOf(p) || await ide.api.invoke('ports:proto', port)) === 'tcp';
+    const key = tcp ? CONFIRM_TCP : CONFIRM;
+    if (ide.settings.get(key, true) === false) return true;
     return new Promise((resolve) => {
       const again = el('input');
       again.type = 'checkbox';
@@ -77,12 +83,15 @@
       const row = el('label', 'ports-dont-ask');
       row.append(again, el('span', null, tr("Don't ask again")));
       const body = el('div', 'ports-warning');
-      body.append(el('p', null, tr('Anyone with the public address can open the server on port {port} from the internet while it is shared, without signing in.', { port })),
-        el('p', null, tr('Development servers often run in debug mode with no sign-in. Share only what you would show others, and stop sharing when you are done.')), row);
+      if (tcp) {
+        body.append(el('p', null, tr('The public address will be bore.pub and a port number. That is a shared host and a short number, not a secret: anyone who tries that number reaches the server on port {port} from the internet, without signing in, while it is shared.', { port })),
+          el('p', null, tr('bore adds no encryption. All traffic passes through bore.pub, a server run by a third party, which can read whatever the program does not encrypt itself.')));
+      } else body.append(el('p', null, tr('Anyone with the public address can open the server on port {port} from the internet while it is shared, without signing in.', { port })));
+      body.append(el('p', null, tr('Development servers often run in debug mode with no sign-in. Share only what you would show others, and stop sharing when you are done.')), row);
       ide.ui.dialog({
         title: tr('Share Port {port}', { port }), body, width: 520,
         buttons: [
-          { label: tr('Share'), primary: true, run: () => { if (again.checked) ide.settings.set(CONFIRM, false); resolve(true); } },
+          { label: tr('Share'), primary: true, run: () => { if (again.checked) ide.settings.set(key, false); resolve(true); } },
           { label: tr('Cancel'), run: () => resolve(false) },
         ],
         onClose: () => resolve(false),
@@ -136,7 +145,7 @@
   }
 
   async function setAuto(on) {
-    if (on && !(await ide.ui.confirm(tr('Every server a program started from Nano Studio opens will get a public address that anyone with it can open, without signing in. Turn on?'),
+    if (on && !(await ide.ui.confirm(tr('Every server a program started from Nano Studio opens will get a public address that anyone with it can open, without signing in. A server that is not a web server gets a bore.pub address: a shared host and a port number anyone can try, and bore adds no encryption to traffic that passes through that third party. Turn on?'),
       { title: tr('Share New Ports Automatically'), ok: tr('Turn On') }))) return false;
     ide.settings.set(AUTO, !!on);
     return true;

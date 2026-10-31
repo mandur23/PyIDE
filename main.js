@@ -1,3 +1,9 @@
+// Before anything starts a program. Windows looks for a bare name (git, python) in the child's working folder before
+// PATH unless this is set, so with a project as working folder its own git.exe would run, in Safe Mode too. Features
+// and worker threads inherit it; programs the user runs do not (main/program-env.js).
+process.env.NoDefaultCurrentDirectoryInExePath = '1';
+// Relative paths on the command line (`nano .`) mean this folder; the process moves to its user data folder below.
+const launchDir = process.cwd();
 // libuv's thread pool (4 threads by default) does every asynchronous file operation, and Find in Files and the TODO
 // scan open thousands of files, each waiting on the disk and the virus scanner: 16 threads read a 20,000-file project
 // about twice as fast. The pool reads the variable once, when the first work is queued (the stat below), and programs
@@ -18,6 +24,12 @@ if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_
 app.setMaxListeners(50);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();
+// Started as `nano .` the process would work in the project, and every child started without a working folder (the
+// interpreter probes, where.exe) would run there, with the project's modules and programs in reach.
+try {
+  require('fs').mkdirSync(app.getPath('userData'), { recursive: true });
+  process.chdir(app.getPath('userData'));
+} catch (err) { diagnostics.logger('#app').warn(`cannot work in the user data folder: ${err.message}`); }
 // Before anything reads the user data: the first start after PyIDE copies its settings over (main/migrate.js).
 const migration = require('./main/migrate');
 migration.migrate(app.getPath('userData'), { log: diagnostics.logger('#migrate') });
@@ -27,6 +39,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile, spawn, spawnSync } = require('child_process');
 const { createPluginManager } = require('./main/plugin-manager');
+const programEnv = require('./main/program-env');
 const textCodec = require('./main/text-codec');
 const trust = require('./main/trust');
 const iconv = require('iconv-lite');
@@ -51,7 +64,7 @@ function startProcess(cmd, args, opts = {}) {
   try {
     proc = spawn(cmd, args, {
       ...spawnOpts,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
+      env: { ...programEnv(), PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...opts.env },
     });
   } catch (err) {
     // spawn throws for what it refuses outright (EINVAL for a .cmd/.bat without a shell, bad arguments). The caller
@@ -260,7 +273,14 @@ ipcMain.handle('fs:readText', (_e, p) => textCodec.read(p));
 ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.write(p, text, encoding));
 ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.read(p, encoding));
 ipcMain.handle('shell:showInFolder', (_e, p) => shell.showItemInFolder(p));
-ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
+// Open with Default App starts a program, so a program of an untrusted project stays closed (Safe Mode runs nothing).
+ipcMain.handle('shell:openPath', (e, p) => {
+  if (!trust.runsWhenOpened(p) || trust.isTrusted(p)) return shell.openPath(p);
+  e.sender.send('shell:openRefused', p);
+  return 'untrusted';
+});
+// Sync: the output line that may hold such a link is being laid out (renderer/core/ide.js).
+ipcMain.on('security:shareAllowedSync', (e, p) => { e.returnValue = require('./main/security').shareAllowed(p); });
 ipcMain.handle('clipboard:writeText', (_e, text) => clipboard.writeText(text));
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
 // Only web pages leave the app; anything else (file:, custom schemes) is refused.
@@ -429,7 +449,8 @@ ipcMain.handle('core:migrationNotice', () => migration.takeNotice(app.getPath('u
 // (index and history flushes, terminals, servers, lock files) run before the new instance starts.
 // The new instance starts in this one's mode, without the chooser.
 ipcMain.handle('core:relaunch', () => {
-  app.relaunch({ args: [...process.argv.slice(1).filter((a) => !a.startsWith('--mode=')), `--mode=${appMode}`] });
+  const args = process.argv.slice(1).filter((a) => !a.startsWith('--mode=')).map((a) => (a.startsWith('-') ? a : path.resolve(launchDir, a)));
+  app.relaunch({ args: [...args, `--mode=${appMode}`] });
   app.quit();
 });
 ipcMain.handle('plugins:list', () => plugins.list());
@@ -513,8 +534,9 @@ async function createWindow() {
   let target = null;
   let stat = null;
   for (const a of process.argv.slice(app.isPackaged ? 1 : 2).filter((x) => !x.startsWith('-'))) {
-    stat = await Promise.race([fs.promises.stat(a).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
-    if (stat) { target = path.resolve(a); break; }
+    const full = path.resolve(launchDir, a);
+    stat = await Promise.race([fs.promises.stat(full).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
+    if (stat) { target = full; break; }
   }
   const mode = modeArg || (target ? 'code' : await windows.choose());
   if (!mode) return false;

@@ -106,7 +106,7 @@
   }
   // The frame to show: the last one in the project, else the last one.
   function placeOf(text) {
-    const frames = [...text.matchAll(FRAME)].map((m) => ({ path: ide.toLocalPath(m[1]), line: Number(m[2]) }));
+    const frames = [...text.matchAll(FRAME)].filter((m) => ide.mayFollowPath(m[1])).map((m) => ({ path: ide.toLocalPath(m[1]), line: Number(m[2]) }));
     return [...frames].reverse().find((f) => ide.root && isUnder(f.path, ide.root)) || frames[frames.length - 1] || null;
   }
 

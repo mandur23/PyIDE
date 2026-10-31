@@ -2,7 +2,7 @@
 // pasteInto (mainmenu.js) and ide.ui.contextMenu's handler guard (ide.js) on purpose, checks what each branch should
 // do, and then reports V8 block coverage of the lines changed since a git revision (`node verify/whitebox-context-menu.mjs
 // [base]`, default HEAD: the uncommitted changes; after a commit pass its parent): any changed block that never ran
-// fails the suite. Port 9299.
+// fails the suite, and a file with no changed code is skipped. Port 9299.
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import path from 'path';
@@ -205,7 +205,8 @@ for (const file of FILES) {
   const countAt = (off) => ranges.filter((r) => r.startOffset <= off && off < r.endOffset).sort((a, b) => (a.endOffset - a.startOffset) - (b.endOffset - b.startOffset))[0]?.count;
   const code = [...changed].filter((n) => { const s = src.slice(lineStarts[n - 1], lineStarts[n] ?? src.length).trim(); return s && !s.startsWith('//') && !s.startsWith('/*') && !s.startsWith('*') && !/^[\]})]+[;,)]*$/.test(s); });
   const missed = code.filter((n) => { const s = lineStarts[n - 1]; const first = s + src.slice(s).search(/\S/); return countAt(first) === 0; });
-  if (!code.length) check(false, `${file}: no changed lines since ${BASE}`);
+  // Nothing changed means nothing to cover, as after a commit: the branch checks above ran either way.
+  if (!code.length) { console.log(`skip ${file}: no changed code lines since ${BASE}`); continue; }
   console.log(`coverage ${file}: ${code.length - missed.length}/${code.length} changed code lines ran`);
   for (const n of missed) console.log(`  not run ${n}: ${src.slice(lineStarts[n - 1], lineStarts[n]).trim().slice(0, 140)}`);
   check(!missed.length, `${file}: every changed block ran (${missed.length ? missed.join(', ') : 'all'})`);

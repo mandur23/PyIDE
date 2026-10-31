@@ -228,7 +228,10 @@
     const v = await invoke('diagnostics:versions', interpreterInfo());
     const cur = v.interpreters.find((i) => i.current);
     const body = el('div', 'about diag-about');
-    body.append(el('div', 'about-logo', 'Py'));
+    const logo = el('img', 'about-logo');
+    logo.src = 'core/logo.svg';
+    logo.alt = '';
+    body.append(logo);
     const text = el('div', 'diag-about-text');
     text.append(el('h2', null, ide.appTitle), el('div', 'muted', ide.appMode === 'craft' ? tr('Play Minecraft and run servers') : tr('A PyCharm-style Python IDE')));
     const facts = el('table', 'diag-facts');

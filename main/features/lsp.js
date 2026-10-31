@@ -94,6 +94,9 @@ function pyrightSpec(unpackedDir, root, pythonPath, locale) {
         // Pyright writes its diagnostics and hovers in the locale VSCODE_NLS_CONFIG names (the IDE's language);
         // without it it falls back to LC_ALL/LANG, which Windows does not set.
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', VSCODE_NLS_CONFIG: JSON.stringify({ locale }) },
+        // Not the project: without a pythonPath Pyright runs `python -c`, which puts its working folder on sys.path, so
+        // a project's json.py would run.
+        cwd: path.dirname(entry),
         cleanup(immediate) {
           if (immediate) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } else fs.rm(dir, { recursive: true, force: true }, () => {});
         },

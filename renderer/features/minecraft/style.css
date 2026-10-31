@@ -36,7 +36,7 @@
 .mcm-query { flex: 1; min-width: 200px; }
 .mcm-version { width: 130px; }
 .mcm-status.mcm-error { color: var(--red); }
-.mcm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
+.mcm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 10px; }
 .mcm-card { display: flex; gap: 12px; padding: 12px; border: 1px solid var(--gray3); border-radius: 8px; min-width: 0; }
 .mcm-card:hover { border-color: var(--gray5); }
 .mcm-icon { display: block; width: 64px; height: 64px; border-radius: 10px; flex-shrink: 0; object-fit: cover; background: var(--gray2); }
@@ -199,8 +199,10 @@ body.app-craft.mc-craft-tab #craftHost { display: none !important; }
 .mcc-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcc-address { font-family: var(--mono); font-size: 12px; color: var(--gray9); user-select: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcc-meta { display: flex; flex-wrap: wrap; gap: 6px; }
-.mcc-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray9); white-space: nowrap; }
-.mcc-chip.sync { background: color-mix(in srgb, var(--green6) 22%, transparent); color: var(--green6); }
+/* Small text: --gray10 flips with the theme, so a chip's own colour mixed with it reads on either background. */
+.mcc-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray10); white-space: nowrap; }
+.mcc-chip.sync { background: color-mix(in srgb, var(--green6) 22%, transparent); color: color-mix(in srgb, var(--green6) 45%, var(--gray10)); }
+.mcc-chip.bad { background: color-mix(in srgb, var(--red) 18%, transparent); color: color-mix(in srgb, var(--red) 45%, var(--gray10)); }
 .mcc-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; min-width: 0; }
 .mcc-server-of { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One row: in a narrower card than the 900 px two-column grid, the secondary labels shorten before anything wraps. */
@@ -231,3 +233,13 @@ body.app-craft.mc-craft-tab #craftHost { display: none !important; }
 .mcc-mod-size { font-size: 11px; white-space: nowrap; }
 .mcc-mod-remove { padding: 2px 8px; }
 .mcc-mods-empty { padding: 12px; font-size: 12px; }
+/* A narrow window: the list keeps only its icons, which name themselves on hover. */
+@media (max-width: 640px) {
+  body.app-craft .mcs-nav { width: 48px; padding: 12px 6px; }
+  body.app-craft .mcs-title { padding: 2px 8px 12px; }
+  body.app-craft :is(.mcs-page, .mcs-action, .mcs-title) > span:last-child, body.app-craft .mcs-group { display: none; }
+  body.app-craft :is(.mcs-page, .mcs-action) { padding: 7px 8px; }
+  .mcc-page { padding: 14px; }
+  .mcc-head-text { min-width: 0; flex-basis: 100%; }
+  .mcs-servers { padding: 14px; }
+}

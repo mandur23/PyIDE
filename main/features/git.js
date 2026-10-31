@@ -520,6 +520,9 @@ async function shelfDiff(root, id, rel) {
 
 // ---------- rewriting commits from the Log ----------
 const isHash = (s) => typeof s === 'string' && /^[0-9a-f]{7,64}$/.test(s);
+// git reads a name or URL that starts with a dash as an option: `rebase --exec=<command>` runs a command.
+const isOption = (s) => String(s).startsWith('-');
+const notARef = (s) => ({ ok: false, err: `'${s}' is not a valid name.` });
 const RESET_MODES = new Set(['soft', 'mixed', 'hard', 'keep']);
 
 // Why the commit must not be rewritten (null when it may): pushed commits are other people's history, and a stopped
@@ -754,6 +757,7 @@ exports.register = ({ ipcMain, app }) => {
   });
 
   h('checkout', async (root, branch, track) => {
+    if (isOption(branch)) return notARef(branch);
     const args = track ? ['checkout', '--track', branch] : ['checkout', branch];
     const r = await git(root, args);
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
@@ -818,6 +822,7 @@ exports.register = ({ ipcMain, app }) => {
 
   // A change of case only needs -M on Windows, where refs/heads/<to> is the file of the branch being renamed.
   h('renameBranch', async (root, from, to) => {
+    if (isOption(from) || isOption(to)) return notARef(isOption(to) ? to : from);
     const args = ['branch', from !== to && from.toLowerCase() === to.toLowerCase() ? '-M' : '-m', from, to];
     const r = await git(root, args);
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
@@ -968,6 +973,7 @@ exports.register = ({ ipcMain, app }) => {
   });
 
   h('addRemote', async (root, name, url) => {
+    if (isOption(name) || isOption(url)) return notARef(isOption(url) ? url : name);
     const args = ['remote', 'add', name, url];
     const r = await git(root, args);
     return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
@@ -1029,8 +1035,8 @@ exports.register = ({ ipcMain, app }) => {
   });
 
   // ---------- merge, rebase, cherry-pick, revert and the conflicts they leave ----------
-  h('merge', (root, branch) => runStoppable(root, ['merge', '--no-edit', branch]));
-  h('rebase', (root, onto) => runStoppable(root, ['rebase', onto]));
+  h('merge', async (root, branch) => (isOption(branch) ? notARef(branch) : runStoppable(root, ['merge', '--no-edit', branch])));
+  h('rebase', async (root, onto) => (isOption(onto) ? notARef(onto) : runStoppable(root, ['rebase', onto])));
   // A merge commit is picked or reverted against its first parent, as PyCharm does.
   h('cherryPick', (root, hash, isMerge) => runStoppable(root, ['cherry-pick', ...(isMerge ? ['-m', '1'] : []), hash]));
   h('revert', (root, hash, isMerge) => runStoppable(root, ['revert', '--no-edit', ...(isMerge ? ['-m', '1'] : []), hash]));

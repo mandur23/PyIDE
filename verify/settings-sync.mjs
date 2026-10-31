@@ -107,7 +107,7 @@ try {
   check(cls('editor.fontSize', 14) === 'appearance' && cls('appearance.theme', 'dark') === 'appearance' && cls('autosave.onIdle', true) === 'appearance', 'editor, appearance and auto save keys are appearance settings');
   check(cls('editor.tabSize', 4) === 'codeStyle' && cls('editor.ruler', 120) === 'codeStyle' && cls('tools.ruffLineLength', 88) === 'codeStyle', 'tab size, ruler and ruff line length are code style');
   check(cls('keymap.overrides', {}) === 'keymap' && cls('liveTemplates.custom', {}) === 'liveTemplates' && cls('recentProjects', []) === 'recentProjects', 'keymap, live templates and recent projects have their own categories');
-  const never = ['interpreters.extra', 'interpreters.remote', 'terminal.shell', 'updates.feedUrl', 'updates.skippedVersion', 'aiComplete.snoozeUntil', 'pyconsole.history', 'projectTree.expanded', 'interpreter.C:\\proj', 'runConfigs:C:\\proj', 'bookmarks.C:\\proj', 'httpClient.env.c:\\proj', 'ai.apiKey', 'aiChat.token', 'someNewFeature.flag'];
+  const never = ['newProject.spring', 'interpreters.extra', 'interpreters.remote', 'terminal.shell', 'updates.feedUrl', 'updates.skippedVersion', 'aiComplete.snoozeUntil', 'pyconsole.history', 'projectTree.expanded', 'interpreter.C:\\proj', 'runConfigs:C:\\proj', 'bookmarks.C:\\proj', 'httpClient.env.c:\\proj', 'ai.apiKey', 'aiChat.token', 'someNewFeature.flag'];
   check(never.every((k) => cls(k, 'x') === null), `machine-specific, per-project, secret and unclassified keys are never exported (${never.filter((k) => cls(k, 'x') !== null)})`);
   check(cls('viewers.htmlMode', 'C:\\Users\\me\\x.html') === null, 'a preference whose value is an absolute path stays on this computer');
   const unsafe = ['../evil.txt', 'scratches/../../evil.txt', '/abs.txt', 'C:/evil.txt', 'scratches\\..\\evil.txt', 'scratches/a:stream', 'scratches/CON', 'scratches/./x'];
@@ -200,7 +200,7 @@ const errorsA = t.consoleErrors;
   const file = path.join(work, 'hostile.zip');
   writeFileSync(file, zip([
     { name: 'pyide-settings.json', data: S({ format: 1, product: 'PyIDE', version: '0.2.2', categories: { appearance: { count: 3 }, dataSources: { count: 1 } } }) },
-    { name: 'settings/appearance.json', data: S({ 'editor.fontSize': 15, 'interpreters.extra': ['C:\\evil\\python.exe'], 'updates.feedUrl': 'https://evil.example/', '__proto__': { polluted: true } }) },
+    { name: 'settings/appearance.json', data: S({ 'editor.fontSize': 15, 'interpreters.extra': ['C:\\evil\\python.exe'], 'updates.feedUrl': 'https://evil.example/', 'newProject.spring': { server: 'https://evil.example/' }, '__proto__': { polluted: true } }) },
     { name: 'database/sources.json', data: S({ sources: [{ id: 'x1', kind: 'postgres', name: 'H', host: 'h', secret: { enc: 'plain', data: 'cHc=' }, password: 'pw' }] }) },
   ]));
   const r = await archive.apply(ud, file, ['appearance', 'dataSources'], {});

@@ -29,6 +29,7 @@
   function item(cls, icon, label, onClick) {
     const b = el('div', cls);
     b.setAttribute('role', 'option');
+    b.title = label; // the only name a narrow window's list shows
     b.append(Object.assign(ide.icon(icon), { className: 'ide-icon mcs-icon' }), el('span', null, label));
     b.onclick = onClick;
     return b;

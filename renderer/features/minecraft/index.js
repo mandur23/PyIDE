@@ -43,7 +43,10 @@
     jobs.set(id, con);
     return { id, done: () => jobs.delete(id) };
   }
-  const errorText = (err) => ide.util.errorText(err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+  const errorText = (err) => {
+    const text = ide.util.errorText(err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    return /is refused: its entries overlap/.test(text) ? tr('This archive was refused: its contents overlap, as in a zip bomb.') : text;
+  };
   const quote = (a) => (/\s/.test(a) ? `"${a}"` : a);
 
   // ---------- run configuration types ----------
@@ -671,48 +674,42 @@
   }
 
   // ---------- sharing files (client pack, resource pack) ----------
-  // A server's client-pack/ folder is served with the project's Python (http.server on loopback) and that port shared,
-  // which the Ports plugin gives a public https address; one server per folder, reused while it runs.
-  const serving = new Map(); // folder (lower case) -> Promise<base url | null>
+  // A server's client-pack/ folder is served by the app (main/minecraft/file-server.js, on loopback) and that port
+  // shared, which the Ports plugin gives a public https address. A tunnel that went away is made again.
+  const sharing = new Map(); // port -> Promise<base url | null>, while its tunnel is being made
   const tunnelWaits = new Map(); // port -> resolve(url | null)
+  const TUNNEL_WAIT = 90000;
   let tunnels = []; // the Ports plugin's tunnels, from its last ports:changed
   ide.api.on('ports:changed', (st) => {
     for (const [port, resolve] of tunnelWaits) {
       const t = st.tunnels.find((x) => x.port === port);
-      if (t?.state === 'shared' || t?.state === 'failed') { tunnelWaits.delete(port); resolve(t.state === 'shared' ? t.url : null); }
+      if (t?.state === 'shared' || t?.state === 'failed') resolve(t.state === 'shared' ? t.url : null);
     }
     // A server's card shows its public address (or that it is being made): from this event, which the Ports plugin
     // may not have taken in yet.
     tunnels = st.tunnels || [];
     if (list.some((s) => runningAt(s.dir))) render();
   });
-  function serveFolder(folder) {
-    const key = folder.toLowerCase();
-    const known = serving.get(key);
-    if (known) return known;
-    const job = (async () => {
-      const interp = ide.currentInterp();
-      if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return null; }
-      const port = 18700 + Math.floor(Math.random() * 200);
-      const s = run.outputSession(`minecraft:serve:${key}`, tr('Files for players'));
-      s.host.replaceChildren();
-      s.console();
-      const id = await ide.api.invoke('minecraft:start', ide.root, { cmd: interp.cmd, args: [...interp.args, '-m', 'http.server', String(port), '--bind', '127.0.0.1'], cwd: folder });
-      s.attach(id, { onExit: () => serving.delete(key) });
-      return new Promise((resolve) => {
-        tunnelWaits.set(port, resolve);
-        const tryShare = async (left) => {
-          await ide.api.invoke('ports:refresh');
-          if (ide.ports.state().ports.some((p) => p.port === port)) ide.ports.share(port);
-          else if (left) setTimeout(() => tryShare(left - 1), 500);
-          else { tunnelWaits.delete(port); resolve(null); }
-        };
-        tryShare(20);
-      });
-    })();
-    serving.set(key, job);
-    job.then((url) => { if (!url) serving.delete(key); });
-    return job;
+  async function shareFiles(port) {
+    // The Ports plugin lists what the IDE's own programs listen on; this server is the app itself.
+    await ide.api.invoke('ports:setAdded', [...new Set([...ide.ports.state().added, port])]);
+    ide.ports.hint(port, 'http');
+    return new Promise((resolve) => {
+      const finish = (url) => { clearTimeout(giveUp); tunnelWaits.delete(port); resolve(url); };
+      const giveUp = setTimeout(finish, TUNNEL_WAIT, null);
+      tunnelWaits.set(port, finish);
+      // Declined, or its tool could not be had: no tunnel will come.
+      ide.ports.share(port).then(() => { if (!['starting', 'shared'].includes(ide.ports.state().tunnels.find((t) => t.port === port)?.state)) finish(null); }, () => finish(null));
+    });
+  }
+  async function serveFolder(folder) {
+    const port = await ide.api.invoke('minecraft:serveFolder', ide.root, folder);
+    const tunnel = ide.ports.state().tunnels.find((t) => t.port === port);
+    if (tunnel?.state === 'shared') return tunnel.url;
+    // A failed tunnel stays listed, and sharing a listed port does nothing.
+    if (tunnel?.state === 'failed') await ide.ports.unshare(port);
+    if (!sharing.has(port)) sharing.set(port, shareFiles(port).finally(() => sharing.delete(port)));
+    return sharing.get(port);
   }
 
   async function clientPack(srv) {
@@ -872,6 +869,7 @@
     target: () => tr('drop it on the server it is for'),
     curseforge: () => tr('a CurseForge modpack, whose mods only CurseForge\'s own service hands out: download its Server Pack from CurseForge and drop that folder here'),
     unknown: () => tr('not a server, world, resource pack, plugin, mod or modpack'),
+    bomb: () => tr('Refused: its contents overlap, as in a zip bomb. Nothing was written.'),
   };
   const WHAT = { server: () => tr('server imported'), plugin: () => tr('plugin added'), mod: () => tr('mod added'), resourcepack: () => tr('resource pack added'), world: () => tr('world added (level-name)') };
   async function dropped(paths, serverDir) {
@@ -1060,9 +1058,37 @@
       } else if (!(await ide.ui.confirm(tr('{name} has account checks off (online-mode=false): anyone with the address could play under any name, an operator\'s too. Share it anyway?', { name: srv.name }),
         { title: tr('Share Minecraft Server'), ok: tr('Share Anyway') }))) return;
     }
+    if (!(await offerWhitelist(target))) return;
     await ide.api.invoke('ports:refresh');
     await ide.ports.share(target.port);
     render();
+  }
+  // A public address reaches anyone who finds it, and a server without a whitelist lets them in. false: not shared.
+  async function offerWhitelist(srv) {
+    const s = await ide.api.invoke('minecraft:settings', ide.root, srv.dir);
+    if (s.proxy || s.props['white-list'] === 'true') return true;
+    const answer = await new Promise((resolve) => {
+      let picked = null;
+      ide.ui.dialog({
+        title: tr('Share {name}', { name: srv.name }), width: 480, onClose: () => resolve(picked),
+        body: el('div', 'dialog-message', tr('A public address lets anyone who finds it join {name}. Turn on the whitelist, so only players you add can join?', { name: srv.name })),
+        buttons: [
+          { label: tr('Turn On and Share'), primary: true, run: () => { picked = 'on'; return true; } },
+          { label: tr('Share Without It'), run: () => { picked = 'off'; return true; } },
+          { label: tr('Cancel') },
+        ],
+      });
+    });
+    if (answer !== 'on') return answer === 'off';
+    try {
+      await ide.api.invoke('minecraft:saveSettings', ide.root, srv.dir, { props: { 'white-list': 'true', 'enforce-whitelist': 'true' } });
+    } catch (err) { ide.ui.alert(errorText(err)); return false; }
+    sendCommand(srv.dir, 'whitelist on');
+    ide.notifications?.notify({
+      title: tr('Whitelist on'), text: tr('Add your friends, and yourself, in the server\'s settings under Players.'), kind: 'ok', group: 'Minecraft',
+      actions: [{ label: tr('Settings…'), run: (n) => { n.expire(); serverSettings(srv); } }],
+    });
+    return true;
   }
 
   const tw = ide.registerToolWindow({

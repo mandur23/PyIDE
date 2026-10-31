@@ -229,5 +229,45 @@
     if (d && ts.JsxEmit) d.setCompilerOptions({ ...d.getCompilerOptions(), jsx: ts.JsxEmit.Preserve });
   }
 
+  // ---------- CSS ----------
+  // Monaco's CSS lint makes a marker for each pair of same-named declarations in a rule, also at level ignore, and no
+  // option leaves that check out: 9,000 in one rule are 80 million markers, 3 GB in the worker, and the renderer dies
+  // at its 4 GB limit. So a language's validation is off while one of its models has a rule that long.
+  const HUGE_RULE = 2000; // declarations
+  const cssService = monaco.css || monaco.languages.css;
+  const cssDefaults = { css: cssService?.cssDefaults, scss: cssService?.scssDefaults, less: cssService?.lessDefaults };
+  const hasHugeRule = (text) => {
+    let declarations = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c === 123 || c === 125) declarations = 0; // { }
+      else if (c === 59 && ++declarations > HUGE_RULE) return true; // ;
+    }
+    return false;
+  };
+  const hugeModels = new Set();
+  const applyCssValidation = () => {
+    for (const [language, d] of Object.entries(cssDefaults)) {
+      const validate = ![...hugeModels].some((m) => m.getLanguageId() === language);
+      if (d && d.options.validate !== validate) d.setOptions({ ...d.options, validate });
+    }
+  };
+  const watchCssModel = (model) => {
+    const scan = () => {
+      if (model.isDisposed()) return;
+      const huge = model.getLanguageId() in cssDefaults && hasHugeRule(model.getValue());
+      if (huge === hugeModels.has(model)) return;
+      if (huge) hugeModels.add(model); else hugeModels.delete(model);
+      applyCssValidation();
+    };
+    let timer;
+    scan();
+    model.onDidChangeLanguage(scan);
+    model.onDidChangeContent(() => { clearTimeout(timer); timer = setTimeout(scan, 500); });
+    model.onWillDispose(() => { clearTimeout(timer); if (hugeModels.delete(model)) applyCssValidation(); });
+  };
+  monaco.editor.getModels().forEach(watchCssModel);
+  monaco.editor.onDidCreateModel(watchCssModel);
+
   ide.languageBasics = { keywords, markdownFolds, continueList, registerKeywords };
 })();

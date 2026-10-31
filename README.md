@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml/badge.svg)](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml)
 
-Windows용 앱 하나에 두 가지 앱이 들어 있습니다. 시작할 때마다 고릅니다. Electron 38과 Monaco 에디터로 만들었습니다.
+Windows용 앱 하나에 두 가지 앱이 들어 있습니다. 시작할 때마다 고릅니다. Electron 45와 Monaco 에디터로 만들었습니다.
 
 - **Nano Studio Code**: PyCharm 스타일의 Python IDE (이전 이름 PyIDE)
 - **Nano Studio Craft**: 마인크래프트 앱. 공식 Minecraft Launcher로 모드를 넣어 플레이하고, 서버에 참여하면 서버의 모드가 자동으로 맞춰지며, 서버를 직접 열 수도 있습니다.
@@ -63,6 +63,8 @@ npm run release -- 0.3.1 --publish-only   # 푸시 뒤에 멈춘 릴리스 이�
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out verify/out/core.txt node verify/core.mjs
 ```
+
+코드를 고치거나 테스트하기 전에 [docs/pitfalls.md](docs/pitfalls.md)를 보세요. 지금까지 겪은 문제와 지켜야 할 규칙을 모았습니다.
 
 ## 구조
 
