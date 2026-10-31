@@ -18,6 +18,8 @@ const T = require('../minecraft/templates');
 const { createImports, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
 const gameWindow = require('../minecraft/game-window');
+const translation = require('../minecraft/translate');
+const { complete } = require('../ai/claude');
 const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 const { allowWindowCapture } = require('../security');
 
@@ -123,6 +125,8 @@ const described = (parent, file) => (fs.existsSync(parent) ? fs.readdirSync(pare
     return meta && typeof meta === 'object' && !Array.isArray(meta) && { ...meta, name: d.name, dir };
   }).filter(Boolean);
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+// AutoModpack's jar in the server's mods: players who have it get the server's mods when they join.
+const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).find((n) => /^automodpack.*\.jar$/i.test(n)) : null) || null;
 
 // The project's servers, each with what its kind runs and the plugin and mod projects that deploy to it.
 function servers(root) {
@@ -130,7 +134,7 @@ function servers(root) {
     ...described(path.join(root, 'mods'), MOD).map((p) => ({ ...p, type: 'mod' }))];
   return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind]).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
-    resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')),
+    resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
     // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
     offline: /^online-mode=false\s*$/m.test(fs.existsSync(path.join(s.dir, 'server.properties')) ? fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8') : ''),
     projects: projects.filter((p) => sameDir(path.resolve(p.dir, p.server), s.dir)).map(({ type, name, dir }) => ({ type, name, dir })),
@@ -270,6 +274,12 @@ function wireProxy(root, dir) {
   const secret = fs.readFileSync(path.join(dir, 'forwarding.secret'), 'utf8').trim();
   for (const b of backends) T.setPaperVelocity(b.dir, secret);
   return { backends: backends.map(({ name, port }) => ({ name, port })) };
+}
+// After a server is deleted, each proxy sends players on to the servers left.
+function rewireProxies(root) {
+  const proxies = servers(root).filter((s) => s.proxy && fs.existsSync(path.join(s.dir, 'forwarding.secret')));
+  for (const p of proxies) wireProxy(root, p.dir);
+  return proxies.map((p) => p.name);
 }
 
 // ---------- plugins ----------
@@ -589,7 +599,10 @@ function clientPack(dir) {
   const pack = desc.modpack?.clientPack && path.join(dir, desc.modpack.clientPack);
   if (pack && isFile(pack)) return { file: pack, mods: [], modpack: desc.modpack.name, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
   const name = path.basename(dir);
-  const mods = fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).filter((n) => n.endsWith('.jar')) : [];
+  // With AutoModpack the pack holds it alone: it fetches the server's mods into its own folder at the first join, and
+  // the same mods in mods/ as well would load twice.
+  const sync = autoModpackOf(dir);
+  const mods = sync ? [sync] : fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).filter((n) => n.endsWith('.jar')) : [];
   const index = { formatVersion: 1, game: 'minecraft', versionId: new Date().toISOString().slice(0, 10), name, summary: `Mods of the ${name} server`,
     files: [], dependencies: { minecraft: desc.mc, [loaderKey]: desc.loader } };
   const outDir = path.join(dir, 'client-pack');
@@ -597,7 +610,7 @@ function clientPack(dir) {
   const file = path.join(outDir, `${name}-${desc.mc}.mrpack`);
   fs.writeFileSync(file, writeZip([{ name: 'modrinth.index.json', data: Buffer.from(JSON.stringify(index, null, 2)) },
     ...mods.map((m) => ({ name: `overrides/mods/${m}`, data: fs.readFileSync(path.join(dir, 'mods', m)) }))]));
-  return { file, mods, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
+  return { file, mods, autoSync: !!sync, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
 }
 
 // ---------- resource pack ----------
@@ -644,6 +657,50 @@ function applyResourcePack(dir, url, sha1) {
   T.setProperty(props, 'resource-pack-sha1', sha1);
   T.setProperty(props, 'require-resource-pack', 'true');
   return { props };
+}
+
+// ---------- settings ----------
+// What Server Settings shows and changes: server.properties lines players notice, and the memory the JVM gets. A
+// proxy keeps its port in velocity.toml and has only its memory here.
+const PROPS = ['motd', 'max-players', 'difficulty', 'gamemode', 'pvp', 'white-list', 'server-port'];
+const CHOICES = { difficulty: ['peaceful', 'easy', 'normal', 'hard'], gamemode: ['survival', 'creative', 'adventure', 'spectator'], pvp: ['true', 'false'], 'white-list': ['true', 'false'] };
+function settings(dir) {
+  const desc = serverOf(dir);
+  const file = path.join(dir, 'server.properties');
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const props = {};
+  if (!KINDS[desc.kind]?.proxy) for (const k of PROPS) props[k] = new RegExp(`^${k}\\s*=(.*)$`, 'm').exec(text)?.[1].trim() ?? '';
+  return { memory: desc.memory || '2G', props, proxy: !!KINDS[desc.kind]?.proxy };
+}
+function saveSettings(dir, { memory, props = {} }) {
+  const desc = serverOf(dir);
+  if (!/^\d+[MG]$/i.test(memory || '')) throw fail('Memory is a number of M or G, such as 2G');
+  const file = path.join(dir, 'server.properties');
+  for (const [k, v] of Object.entries(props)) {
+    if (!PROPS.includes(k) || KINDS[desc.kind]?.proxy) continue;
+    const value = k === 'server-port' ? String(gamePort(v)) : k === 'max-players' ? String(Math.max(1, Math.min(1000, Number(v) || 20))) : String(v ?? '');
+    if (CHOICES[k] && !CHOICES[k].includes(value)) throw fail(`${k} is one of ${CHOICES[k].join(', ')}`);
+    // One line each: a line break would start another property.
+    T.setProperty(file, k, value.replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\'));
+  }
+  writeJson(path.join(dir, SERVER), { ...desc, memory: memory.toUpperCase() });
+  return settings(dir);
+}
+
+// ---------- Korean translation ----------
+function langStatus(dir) {
+  const { mods, skipped } = translation.scan(dir);
+  const count = (m) => Object.keys(m.missing).length;
+  return { mods: mods.map((m) => ({ jar: m.jar, ns: m.ns, total: m.total, missing: count(m) })), skipped,
+    missing: mods.reduce((s, m) => s + count(m), 0), pack: fs.existsSync(path.join(dir, 'resourcepack', 'pack.mcmeta')) };
+}
+async function translateMods(dir, log, signal) {
+  if (!KINDS[serverOf(dir).kind]?.mods) throw fail('Only a Fabric, Forge or NeoForge server has mods to translate');
+  newResourcePack(dir);
+  const { mods } = translation.scan(dir);
+  if (!mods.some((m) => Object.keys(m.missing).length)) return { translated: 0, rejected: 0, failed: 0, files: [] };
+  const ask = async (system, prompt, sig) => (await complete({ system, prompt, model: 'sonnet', signal: sig })).text;
+  return translation.translateMods(dir, { mods, translate: ask, log, signal });
 }
 
 const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile });
@@ -697,6 +754,19 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   app.on('will-quit', gameWindow.stop);
   ipcMain.handle('minecraft:deployMod', (_e, root, dir) => { guard(root); return deployMod(dir); });
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
+  ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
+  ipcMain.handle('minecraft:settings', (_e, root, dir) => settings(dir));
+  ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => { guard(root); return saveSettings(dir, values); });
+  ipcMain.handle('minecraft:langStatus', (_e, root, dir) => langStatus(dir));
+  // A translation runs until it ends or minecraft:cancel names its job.
+  const running = new Map(); // job -> AbortController
+  ipcMain.handle('minecraft:translateMods', async (_e, root, dir, job) => {
+    guard(root);
+    const ctl = new AbortController();
+    running.set(job, ctl);
+    try { return await translateMods(dir, logTo(job), ctl.signal); } finally { running.delete(job); }
+  });
+  ipcMain.handle('minecraft:cancel', (_e, job) => { running.get(job)?.abort(); return true; });
   ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { guard(root); return newResourcePack(dir); });
   ipcMain.handle('minecraft:packResourcePack', (_e, root, dir) => { guard(root); return packResourcePack(dir); });
   // Files and folders dropped on the window or on a server's card -> {done, skipped, modpacks}.

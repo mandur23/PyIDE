@@ -1288,6 +1288,12 @@
     selected: selectedConfig,
     select,
     addTemporary,
+    // Removes the configurations a plugin's deleted target leaves behind (a deleted server's).
+    removeConfigs(test) {
+      state.configs = state.configs.filter((c) => !test(c));
+      if (!findConfig(state.selected)) state.selected = CURRENT;
+      persist();
+    },
     runConfig,
     runContext,
     runCurrentFile,

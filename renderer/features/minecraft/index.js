@@ -379,15 +379,23 @@
     link.href = '#';
     link.onclick = (e) => { e.preventDefault(); ide.api.invoke('shell:openExternal', EULA); };
     eulaRow.append(eula, document.createTextNode(` ${tr('I agree to the')} `), link);
+    const sync = el('input');
+    sync.type = 'checkbox';
+    sync.id = 'mcAutoSync';
+    sync.checked = true;
+    const syncRow = el('label', 'mc-dialog-check');
+    syncRow.append(sync, document.createTextNode(` ${tr('Players get the server\'s mods when they join (AutoModpack)')}`));
     const hint = note('');
     const proxy = () => !!kinds.find((x) => x.id === kind.value)?.proxy;
     const describe = () => {
       const k = kinds.find((x) => x.id === kind.value);
       hint.textContent = k?.proxy ? tr('A proxy: players join it and it sends them on to the project\'s Paper and Purpur servers. The versions are Velocity\'s own.')
         : k?.plugins ? tr('Runs plugins. Players join with plain Minecraft and need nothing else.')
-          : k?.mods ? tr('Players need the same mods: Client Pack makes a pack they import once into Prism Launcher or the Modrinth App.')
+          : k?.mods ? (sync.checked ? tr('Players import the Client Pack once (AutoModpack alone); after that AutoModpack gives them the server\'s mods, and every change to them, when they join.')
+            : tr('Players need the same mods: Client Pack makes a pack they import once into Prism Launcher or the Modrinth App.'))
             : tr('Vanilla runs no plugins or mods.');
       eulaRow.classList.toggle('hidden', !!k?.proxy);
+      syncRow.classList.toggle('hidden', !k?.mods);
       if (k?.proxy && name.value === 'survival') { name.value = 'proxy'; port.value = '25577'; }
     };
     const loadVersions = async () => {
@@ -403,7 +411,8 @@
       version.disabled = false;
     };
     kind.onchange = () => { describe(); loadVersions(); };
-    const f = form([[tr('Type:'), kind], [tr('Version:'), version], [tr('Name:'), name], [tr('Memory:'), memory], [tr('Port:'), port], [null, hint], [null, eulaRow]]);
+    sync.onchange = describe;
+    const f = form([[tr('Type:'), kind], [tr('Version:'), version], [tr('Name:'), name], [tr('Memory:'), memory], [tr('Port:'), port], [null, syncRow], [null, hint], [null, eulaRow]]);
     describe();
     loadVersions();
     ide.ui.dialog({
@@ -420,7 +429,8 @@
               : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
                 : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
           if (why) { f.error.textContent = why; return false; }
-          createServer({ name: n, kind: kind.value, mc: version.value, memory: memory.value, port: p });
+          const k = kinds.find((x) => x.id === kind.value);
+          createServer({ name: n, kind: kind.value, mc: version.value, memory: memory.value, port: p, autoSync: !!k?.mods && sync.checked });
           return true;
         } },
         { label: tr('Cancel') },
@@ -428,11 +438,14 @@
     });
   }
 
-  async function createServer(opts) {
+  async function createServer({ autoSync, ...opts }) {
     const con = jobSession(tr('New Server'));
     const j = job(con);
     try {
       const srv = await ide.api.invoke('minecraft:create', { ...opts, root: ide.root, eula: true }, j.id);
+      // Without AutoModpack (none for this Minecraft yet, Modrinth unreachable) the server still stands; Auto Sync on
+      // its card tries again.
+      if (autoSync) await installAutoSync(srv, con);
       con.append(`${tr('Server {name} is ready.', { name: srv.name })}\n`, 'ok');
       const cfg = serverConfig(srv);
       ide.refreshTree?.();
@@ -446,6 +459,154 @@
       con.append(`${errorText(err)}\n`, 'err');
       return null;
     } finally { j.done(); }
+  }
+
+  // ---------- AutoModpack ----------
+  // AutoModpack (Modrinth's automodpack, LGPL) in the server's mods and in its client pack: a player's game that has it
+  // downloads the server's mods at the first join, and their changes at later ones, over the game's own port.
+  const AUTO_MODPACK = 'automodpack';
+  async function installAutoSync(srv, con) {
+    const j = job(con);
+    try {
+      await ide.api.invoke('minecraft:marketInstall', ide.root, srv.dir, { id: AUTO_MODPACK, type: 'mod' }, j.id);
+      con.append(`${tr('AutoModpack is on: players with the Client Pack get the server\'s mods when they join.')}\n`, 'ok');
+      return true;
+    } catch (err) {
+      con.append(`${tr('AutoModpack could not be installed: {error}', { error: errorText(err) })}\n`, 'err');
+      return false;
+    } finally { j.done(); }
+  }
+  async function autoSync(srv) {
+    if (!trusted()) return;
+    if (!(await ide.ui.confirm(tr('AutoModpack goes into {name}\'s mods and its Client Pack. Players import the new Client Pack once; after that their game downloads the server\'s mods when they join, after they confirm the server\'s certificate. Players who imported the old pack replace it.', { name: srv.name }),
+      { title: tr('Auto Sync Mods'), ok: tr('Install AutoModpack') }))) return;
+    const con = jobSession(tr('Auto Sync'));
+    if (await installAutoSync(srv, con)) await restartIfRunning(srv.dir, con);
+    await refresh();
+  }
+
+  // ---------- delete ----------
+  async function deleteServer(srv) {
+    if (runningAt(srv.dir)) return ide.ui.alert(tr('Stop {name} first, so its world is saved.', { name: srv.name }));
+    const projects = srv.projects?.length ? ` ${tr('Its plugin and mod projects stay: {names}.', { names: srv.projects.map((p) => p.name).join(', ') })}` : '';
+    if (!(await ide.ui.confirm(`${tr('Move the server {name} (its folder, worlds and settings) to the Recycle Bin?', { name: srv.name })}${projects}`,
+      { title: tr('Delete Minecraft Server'), ok: tr('Delete') }))) return;
+    try {
+      if (tunnels.some((t) => t.port === srv.port)) await ide.ports?.unshare(srv.port);
+      await ide.api.trash(srv.dir);
+    } catch (err) {
+      return ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: srv.name, error: errorText(err) }));
+    }
+    // A proxy that sent players to it sends them on to the servers left.
+    if (ide.trusted !== false) await ide.api.invoke('minecraft:rewireProxies', ide.root).catch(() => {});
+    run.removeConfigs((c) => c.type === 'minecraft-server' && run.resolvePath(c.dir).toLowerCase() === srv.dir.toLowerCase());
+    await ide.documentsMoved?.(srv.dir, null);
+    ide.refreshTree?.();
+    await refresh();
+  }
+
+  // ---------- settings ----------
+  // Server Settings: the server.properties lines players notice and the memory, and for a modded server the Korean
+  // translation of its mods.
+  async function serverSettings(srv) {
+    if (!trusted()) return;
+    let cur;
+    try { cur = await ide.api.invoke('minecraft:settings', ide.root, srv.dir); } catch (err) { return ide.ui.alert(errorText(err)); }
+    const p = cur.props;
+    const yesNo = [['true', tr('On')], ['false', tr('Off')]];
+    const fields = {
+      motd: input('mcSetMotd', p.motd),
+      'max-players': input('mcSetPlayers', p['max-players'] || '20'),
+      difficulty: select('mcSetDifficulty', [['peaceful', tr('Peaceful')], ['easy', tr('Easy')], ['normal', tr('Normal')], ['hard', tr('Hard')]], p.difficulty || 'easy'),
+      gamemode: select('mcSetGamemode', [['survival', tr('Survival')], ['creative', tr('Creative')], ['adventure', tr('Adventure')], ['spectator', tr('Spectator')]], p.gamemode || 'survival'),
+      pvp: select('mcSetPvp', yesNo, p.pvp || 'true'),
+      'white-list': select('mcSetWhitelist', yesNo, p['white-list'] || 'false'),
+      'server-port': input('mcSetPort', p['server-port'] || String(srv.port)),
+    };
+    const memory = select('mcSetMemory', [...new Set([...MEMORY, cur.memory])].map((m) => [m, m]), cur.memory);
+    const rows = cur.proxy ? [[tr('Memory:'), memory]] : [[tr('Message of the day:'), fields.motd], [tr('Max players:'), fields['max-players']],
+      [tr('Difficulty:'), fields.difficulty], [tr('Game mode:'), fields.gamemode], [tr('PvP:'), fields.pvp], [tr('Whitelist:'), fields['white-list']],
+      [tr('Port:'), fields['server-port']], [tr('Memory:'), memory]];
+    let dialog;
+    if (srv.mods) {
+      const box = el('div', 'mc-translate');
+      const status = el('div', 'mc-translate-status muted', tr('Looking for text without Korean…'));
+      const go = button(tr('Translate to Korean'), 'mc-translate-run', () => { dialog?.close(); translateKorean(srv); },
+        tr('Claude translates the mods\' text that has no Korean yet into the server\'s resource pack'));
+      go.disabled = true;
+      box.append(el('div', 'mc-translate-title', tr('Korean translation')), status, go);
+      rows.push([null, box]);
+      ide.api.invoke('minecraft:langStatus', ide.root, srv.dir).then((st) => {
+        const todo = st.mods.filter((m) => m.missing);
+        status.textContent = !st.mods.length ? tr('No mod in mods/ has English text to translate.')
+          : !st.missing ? tr('Every line of the {count} mods has Korean.', { count: st.mods.length })
+            : tr('{lines} lines in {mods} of the {count} mods have no Korean yet.', { lines: st.missing, mods: todo.length, count: st.mods.length });
+        status.title = todo.map((m) => `${m.jar}: ${m.missing}/${m.total}`).join('\n');
+        go.disabled = !st.missing;
+      }, (err) => { status.textContent = errorText(err); });
+    }
+    const f = form(rows);
+    f.body.classList.add('mc-settings');
+    dialog = ide.ui.dialog({
+      title: tr('Server Settings: {name}', { name: srv.name }), body: f.body, width: 520,
+      buttons: [
+        { label: tr('Save'), primary: true, run: async () => {
+          const props = cur.proxy ? {} : Object.fromEntries(Object.entries(fields).map(([k, c]) => [k, c.value.trim()]));
+          const port = Number(props['server-port']);
+          if (!cur.proxy && (!Number.isInteger(port) || port < 1 || port > 65535)) { f.error.textContent = tr('Use a port from 1 to 65535.'); return false; }
+          try { await ide.api.invoke('minecraft:saveSettings', ide.root, srv.dir, { memory: memory.value, props }); } catch (err) { f.error.textContent = errorText(err); return false; }
+          await refresh();
+          if (runningAt(srv.dir)) {
+            ide.notifications?.notify({ title: tr('Settings of {name} saved', { name: srv.name }), text: tr('They apply when the server starts again.'), group: 'Minecraft',
+              actions: [{ label: tr('Restart'), run: (n) => { n.expire(); restartIfRunning(srv.dir, jobSession(tr('Server Settings'))); } }] });
+          }
+          return true;
+        } },
+        { label: tr('Cancel') },
+      ],
+    });
+  }
+
+  // The mods' text without Korean, translated by Claude (the AI plugins' Claude Code) into resourcepack/, a run at a
+  // time per server; Send to Players then gives it to every player.
+  const translating = new Set(); // server folders (lower case)
+  async function translateKorean(srv) {
+    const key = srv.dir.toLowerCase();
+    if (translating.has(key)) return;
+    translating.add(key);
+    const con = jobSession(tr('Korean Translation'));
+    const j = job(con);
+    const progress = ide.notifications?.notify({ title: tr('Translating the mods of {name} into Korean…', { name: srv.name }), group: 'Minecraft', timeout: 0,
+      actions: [{ label: tr('Cancel'), run: () => ide.api.invoke('minecraft:cancel', j.id) }] });
+    try {
+      const r = await ide.api.invoke('minecraft:translateMods', ide.root, srv.dir, j.id);
+      const extra = [r.rejected ? tr('{count} answers changed a format code (%s, §7) and were left out.', { count: r.rejected }) : '',
+        r.failed ? tr('{count} lines got no answer.', { count: r.failed }) : ''].filter(Boolean).join(' ');
+      con.append(`${tr('{count} lines translated into the resource pack.', { count: r.translated })}${extra ? ` ${extra}` : ''}\n`, r.translated ? 'ok' : 'sys');
+      ide.refreshTree?.();
+      await refresh();
+      if (r.translated) {
+        ide.notifications?.notify({
+          title: tr('Mods of {name} translated into Korean', { name: srv.name }),
+          text: `${tr('{count} lines, in resourcepack/assets/<mod>/lang/ko_kr.json. Send to Players gives them to everyone who plays in Korean; edit a line there and it is kept.', { count: r.translated })}${extra ? ` ${extra}` : ''}`,
+          kind: 'ok', group: 'Minecraft',
+          actions: [
+            ...(ide.ports ? [{ label: tr('Send to Players'), run: (n) => { n.expire(); sendPack(serverAt(srv.dir) || srv); } }] : []),
+            { label: tr('Open File'), run: () => ide.openFile?.(r.files[0].file) },
+          ],
+        });
+      }
+    } catch (err) {
+      const text = /Cancelled/.test(errorText(err)) ? tr('Cancelled. The lines translated so far are kept.')
+        : /Claude Code is not installed/.test(errorText(err)) ? tr('Translation uses Claude Code, which is not installed. Install Claude Code and sign in to it, then try again.')
+          : errorText(err);
+      con.append(`${text}\n`, 'err');
+      if (!/Cancelled/.test(errorText(err))) ide.notifications?.notify({ title: tr('The mods of {name} could not be translated', { name: srv.name }), text, kind: 'error', group: 'Minecraft', raw: true });
+    } finally {
+      progress?.expire();
+      j.done();
+      translating.delete(key);
+    }
   }
 
   async function newPlugin(server) {
@@ -604,7 +765,8 @@
       ide.refreshTree?.();
       ide.notifications?.notify({
         title: tr('Client pack for {name}', { name: srv.name }),
-        text: r.modpack ? tr('The modpack {name} (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { name: r.modpack, mc: r.mc, loader: r.loader })
+        text: r.autoSync ? tr('AutoModpack alone, Minecraft {mc}, {loader}. Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import); at their first join it downloads the server\'s mods.', { mc: r.mc, loader: r.loader })
+          : r.modpack ? tr('The modpack {name} (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { name: r.modpack, mc: r.mc, loader: r.loader })
           : tr('{count} mods, Minecraft {mc}, {loader}. Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { count: r.mods.length, mc: r.mc, loader: r.loader }),
         kind: 'ok', group: 'Minecraft', raw: true,
         actions: [
@@ -854,14 +1016,19 @@
       if (srv.mods && srv.mdk) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
       if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
       if (srv.mods) actions.append(button(tr('Client Pack'), 'mc-pack', () => clientPack(srv), tr('The mods players need, as a .mrpack to import once')));
+      // A modpack's own client pack has its client-only mods, which AutoModpack would not send.
+      if (srv.mods && !srv.autoSync && !srv.modpack) actions.append(button(tr('Auto Sync'), 'mc-autosync', () => autoSync(srv), tr('Players get the server\'s mods when they join (AutoModpack)')));
       if (!srv.proxy) {
         actions.append(button(tr('Resource Pack'), 'mc-rp', () => resourcePack(srv), tr('A folder for the textures, sounds and models players get')));
         if (srv.resourcePack && ide.ports) actions.append(button(tr('Send to Players'), 'mc-rp-send', () => sendPack(srv), tr('Players download the resource pack when they join')));
       }
+      actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
       actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.revealInTree?.(srv.dir)));
+      if (!running) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
       const info = srv.proxy ? tr('Players join this proxy and are sent on to the project\'s Paper and Purpur servers.')
         : srv.plugins ? tr('Plugins run on the server: players need nothing.')
-          : srv.mods ? tr('Players need the same mods: share the Client Pack.') : '';
+          : srv.autoSync ? tr('AutoModpack is on: players import the Client Pack once, then get the server\'s mods, and every change to them, when they join.')
+            : srv.mods ? tr('Players need the same mods: share the Client Pack.') : '';
       const builds = el('div', 'mc-builds');
       for (const p of srv.projects || []) {
         const row = el('div', 'mc-build');
@@ -935,7 +1102,7 @@
   ide.registerAction({ id: 'Minecraft.NewPlugin', title: tr('New Minecraft Plugin…'), needsProject: true, run: () => newPlugin() });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.registerAction({ id: 'Minecraft.NewMod', title: tr('New Minecraft Mod…'), needsProject: true, run: () => newMod() });
-  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
+  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, translateKorean, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
     job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, reserved: (name) => RESERVED.test(name),
     // Shows the server list (with drops) in another container too: the Minecraft screen's Servers page.
     addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };

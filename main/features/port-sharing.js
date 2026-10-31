@@ -242,7 +242,16 @@ exports.register = ({ ipcMain, app, send }) => {
     const args = kind === 'bore'
       ? ['local', String(port), '--local-host', row.dial, '--to', BORE_SERVER]
       : ['tunnel', '--no-autoupdate', '--url', `${proto}://${row.host}:${port}`, ...(proto === 'https' ? ['--no-tls-verify'] : [])];
-    const child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+    // A program Windows will not start (Smart App Control or an antivirus blocking it, a damaged file) throws here
+    // (spawn UNKNOWN) instead of emitting 'error'.
+    let child;
+    try {
+      child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+    } catch (err) {
+      tunnels.delete(port);
+      changed();
+      throw Object.assign(new Error(`Windows did not start ${path.basename(argv[0])} (${err.code || err.message})`), { expected: true, code: 'blocked', tool: kind, file: argv[0] });
+    }
     t.child = child;
     // The address is printed before Cloudflare serves it. Opened that early, a resolver caches "no such name" and the
     // address fails for minutes, so it counts as shared once cloudflared has registered a connection to Cloudflare.

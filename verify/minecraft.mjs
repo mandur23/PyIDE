@@ -191,6 +191,29 @@ setTimeout(() => console.log('INFO bore_cli::client: listening at bore.pub:' + (
 setInterval(() => {}, 1000);
 `);
 
+// A stand-in Claude Code CLI for Translate to Korean: it answers a JSON object of English lines with its Korean (one
+// answer drops a %s, which the IDE must refuse) in the CLI's stream-json format, and logs what it was asked.
+const fakeClaudeJs = path.join(work, 'fake-claude.mjs');
+const fakeClaude = path.join(work, 'claude.cmd');
+const claudeLog = path.join(work, 'claude-log.jsonl');
+const KOREAN = { 'Ruby': '루비', 'Block of Ruby': '루비 블록', 'Shines with %s light\n§7(Rare)': '%s 빛으로 빛납니다\n§7(희귀)', '%s / %s items': '%s개' };
+writeFileSync(fakeClaudeJs, `import fs from 'fs';
+let stdin = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) stdin += chunk;
+const args = process.argv.slice(2);
+const system = fs.readFileSync(args[args.indexOf('--system-prompt-file') + 1], 'utf8');
+fs.appendFileSync(${S(claudeLog)}, JSON.stringify({ model: args[args.indexOf('--model') + 1], system, stdin }) + '\\n');
+const words = ${S(KOREAN)};
+const asked = JSON.parse(stdin);
+const reply = 'Here it is:\\n' + JSON.stringify(Object.fromEntries(Object.entries(asked).map(([k, v]) => [k, words[v] || '[ko] ' + v])));
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+out({ type: 'system', subtype: 'init', model: 'fake', tools: [] });
+out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } });
+out({ type: 'result', subtype: 'success', is_error: false, result: reply, duration_ms: 5 });
+`);
+writeFileSync(fakeClaude, `@echo off\r\n"${process.execPath}" "${fakeClaudeJs}" %*\r\n`);
+
 // ---------- stand-in services ----------
 const sha = (algo, b) => crypto.createHash(algo).update(b).digest('hex');
 const routes = new Map();
@@ -279,6 +302,8 @@ const modVersion = (v) => [{ id: `va${v}`, version_number: v, version_type: 'rel
   dependencies: [{ project_id: 'LIBB', dependency_type: 'required' }, { project_id: 'CLIENTC', dependency_type: 'required' }, { project_id: 'OPTD', dependency_type: 'optional' }] }];
 routes.set('/modrinth/project/MODA/version', modVersion('1.0'));
 routes.set('/modrinth/project/LIBB/version', [{ id: 'vb', version_number: '2.1', version_type: 'release', files: [modFile('lib-b-2.1.jar', Buffer.from('lib b'))], dependencies: [] }]);
+routes.set('/modrinth/project/automodpack', { id: 'AMP', title: 'AutoModpack', server_side: 'required' });
+routes.set('/modrinth/project/AMP/version', [{ id: 'vamp', version_number: '4.0.7', version_type: 'release', files: [modFile('automodpack-mc1.20.1-forge-4.0.7.jar', Buffer.from('automodpack'))], dependencies: [] }]);
 routes.set('/modrinth/project/BADP/version', [{ id: 'vp', version_number: '3.0', version_type: 'release', files: [modFile('bad-plugin.jar', Buffer.from('plugin'), { sha1: '0'.repeat(40) })], dependencies: [] }]);
 
 const project = path.join(work, 'project');
@@ -287,6 +312,7 @@ const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, env
   PYIDE_MC_JAVA: javaHome,
   PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]),
   PYIDE_BORE: S([process.execPath, fakeBore]),
+  PYIDE_CLAUDE_PATH: fakeClaude,
   PYIDE_MC_SOURCES: S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/paper`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, forge: `${base}/forge`,
     forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` }),
 } });
@@ -333,6 +359,11 @@ try {
   check(/accept the Minecraft EULA/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)) && !existsSync(path.join(project, 'servers')), 'nothing is created before the EULA is accepted');
   await js(`(() => { const k = document.querySelector('#mcKind'); k.value = 'velocity'; k.dispatchEvent(new Event('change')); return true; })()`);
   check(await js(`document.querySelector('#mcEula').closest('.mc-dialog-check').classList.contains('hidden')`), 'a Velocity proxy runs no Minecraft server: no EULA to accept');
+  const syncHidden = () => js(`document.querySelector('#mcAutoSync').closest('.mc-dialog-check').classList.contains('hidden')`);
+  const proxySyncHidden = await syncHidden();
+  await js(`(() => { const k = document.querySelector('#mcKind'); k.value = 'forge'; k.dispatchEvent(new Event('change')); return true; })()`);
+  check(proxySyncHidden && !(await syncHidden()) && await js(`document.querySelector('#mcAutoSync').checked`),
+    'New Server offers AutoModpack, checked, for a mod server only');
   await js(`(${dialogButton('Cancel')}).click()`);
 
   check(await create({ name: 'survival', kind: 'paper', mc: '1.20.1', memory: '2G', port: 25611 }), 'a Paper server is created');
@@ -398,7 +429,7 @@ try {
   await js(`(ide.settings.set('ports.confirmShare', false), true)`);
   await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
   await until(`${card('survival')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40611'`, 'public address on the card', 30000)
-    .then(() => check(true, 'Share puts the public address players join with on the server card'), async () => check(false, `the card shows the public address: ${S(await js(`${card('survival')}?.textContent`))}`));
+    .then(() => check(true, 'Share puts the public address players join with on the server card'), async () => check(false, `the card shows the public address: ${S(await js(`${card('survival')}?.textContent`))} ${S(await js(`({ ports: ide.ports.state(), balloons: [...document.querySelectorAll('.ide-balloon')].map((b) => b.textContent) })`))}`));
   check(await js(`!${card('survival')}.querySelector('.mc-share') && !!${card('survival')}.querySelector('.mc-public-copy')`), 'a shared server offers Copy Address and Stop Sharing instead of Share');
   await shot('shared-server.png');
   await js(`(${card('survival')}.querySelector('.mc-public-stop').click(), true)`);
@@ -636,6 +667,63 @@ try {
   check(S(moddedMods()) === S(['mymod-1.0.jar']) && !JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8')).market?.LIBB,
     'Remove takes out the mod and the library nothing else needs, not the user\'s own mod');
 
+  await js(`(${card('modded')}.querySelector('.mc-autosync').click(), true)`);
+  await until(`!!${dialogButton('Install AutoModpack')}`, 'auto sync confirm');
+  await js(`(${dialogButton('Install AutoModpack')}).click()`);
+  await until(`!!${card('modded')} && !${card('modded')}.querySelector('.mc-autosync')`, 'auto sync on', 20000)
+    .catch(async (e) => { console.log(await tabText('Minecraft: Auto Sync')); throw e; });
+  check(S(moddedMods()) === S(['automodpack-mc1.20.1-forge-4.0.7.jar', 'mymod-1.0.jar']) && /AutoModpack is on/.test(await js(`${card('modded')}.querySelector('.mc-server-note').textContent`)),
+    `Auto Sync puts AutoModpack from Modrinth in the server's mods and says so on the card (${S(moddedMods())})`);
+  await js(`(${card('modded')}.querySelector('.mc-pack').click(), true)`);
+  await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('AutoModpack alone'))`, 'auto sync client pack', 20000);
+  const syncPack = JSON.parse(execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(json.dumps(z.namelist()))', pack], { encoding: 'utf8' }));
+  check(S(syncPack) === S(['modrinth.index.json', 'overrides/mods/automodpack-mc1.20.1-forge-4.0.7.jar']),
+    `with AutoModpack the client pack holds it alone, so the server's mods are not loaded twice (${S(syncPack)})`);
+
+  // ---------- Server Settings, Korean translation ----------
+  const testmod = path.join(serverDir('modded'), 'mods', 'testmod-1.0.jar');
+  execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr("assets/testmod/lang/en_us.json", sys.argv[2]); z.writestr("assets/testmod/lang/ko_kr.json", sys.argv[3]); z.close()',
+    testmod, S({ 'item.testmod.ruby': 'Ruby', 'item.testmod.ruby.tooltip': 'Shines with %s light\n§7(Rare)', 'block.testmod.ruby_block': 'Block of Ruby', 'gui.testmod.count': '%s / %s items', 'itemGroup.testmod': 'Test Mod' }),
+    S({ 'itemGroup.testmod': '테스트 모드' })]);
+  // Where Forge's installer leaves Mojang's server jar, whose version.json gives the resource pack format.
+  const mcJar = path.join(serverDir('modded'), 'libraries', 'net', 'minecraft', 'server', '1.20.1', 'server-1.20.1.jar');
+  mkdirSync(path.dirname(mcJar), { recursive: true });
+  execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr("version.json", \'{"pack_version": {"resource": 15, "data": 15}}\'); z.close()', mcJar]);
+  await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
+  await until(`/lines in \\d+ of the \\d+ mods have no Korean yet/.test(document.querySelector('.mc-translate-status')?.textContent || '')`, 'translation status', 20000)
+    .catch(async (e) => { console.log(await js(`document.querySelector('.mc-translate-status')?.textContent`)); throw e; });
+  check(await js(`document.querySelector('#mcSetMotd').value === 'modded' && document.querySelector('#mcSetPort').value === '25612' && document.querySelector('#mcSetMemory').value === '2G' && !document.querySelector('.mc-translate-run').disabled`),
+    'Server Settings shows the server\'s properties and memory, and counts the mods\' lines without Korean (the jar\'s own Korean and AutoModpack\'s non-jar left out)');
+  await js(`(document.querySelector('#mcSetPlayers').value = '8', document.querySelector('#mcSetDifficulty').value = 'hard', document.querySelector('#mcSetMemory').value = '4G', true)`);
+  await js(`(${dialogButton('Save')}).click()`);
+  await until(`!document.querySelector('#mcSetMotd')`, 'settings saved', 10000);
+  const modProps = readFileSync(path.join(serverDir('modded'), 'server.properties'), 'utf8');
+  check(/^max-players=8$/m.test(modProps) && /^difficulty=hard$/m.test(modProps) && /^server-port=25612$/m.test(modProps)
+    && JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8')).memory === '4G',
+    'Save writes server.properties and the memory');
+  await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
+  await until(`!!document.querySelector('.mc-translate-run') && !document.querySelector('.mc-translate-run').disabled`, 'translate button', 20000);
+  await shot('server-settings.png');
+  await js(`(document.querySelector('.mc-translate-run').click(), true)`);
+  await until(`/lines translated into the resource pack/.test((${runTab('Minecraft: Korean Translation')})?.host.textContent || '')`, 'translated', 30000)
+    .catch(async (e) => { console.log(await tabText('Minecraft: Korean Translation')); throw e; });
+  const koFile = path.join(serverDir('modded'), 'resourcepack', 'assets', 'testmod', 'lang', 'ko_kr.json');
+  const ko = existsSync(koFile) ? JSON.parse(readFileSync(koFile, 'utf8')) : null;
+  check(S(ko) === S({ 'item.testmod.ruby': '루비', 'item.testmod.ruby.tooltip': '%s 빛으로 빛납니다\n§7(희귀)', 'block.testmod.ruby_block': '루비 블록' })
+    && existsSync(path.join(serverDir('modded'), 'resourcepack', 'pack.mcmeta')) && /1 answers changed a format code/.test(await tabText('Minecraft: Korean Translation')),
+    `Translate to Korean puts Claude's Korean into the resource pack, keeping the format codes and refusing the answer that dropped a %s (${S(ko)})`);
+  const calls = () => readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((c) => c.stdin.includes('testmod'));
+  const asked = calls();
+  check(asked.length === 1 && asked[0].model === 'sonnet' && /natural Korean/.test(asked[0].system) && !JSON.parse(asked[0].stdin)['itemGroup.testmod'],
+    'Claude is asked once (sonnet) for the lines without Korean only, not the one the mod already has');
+  await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('translated into Korean'))`, 'translated balloon', 10000);
+  await shot('korean-translation.png');
+  writeFileSync(koFile, JSON.stringify({ ...ko, 'item.testmod.ruby': '붉은 보석' }));
+  await js(`ide.minecraft.translateKorean(ide.minecraft.servers().find((s) => s.name === 'modded'))`);
+  check(JSON.parse(readFileSync(koFile, 'utf8'))['item.testmod.ruby'] === '붉은 보석' && calls().length === 2
+    && S(Object.keys(JSON.parse(calls()[1].stdin))) === S(['gui.testmod.count']),
+    'translating again asks only for the line still missing and keeps the user\'s edit');
+
   await js(`(ide.minecraft.market.open({ type: 'plugin', server: ide.minecraft.servers().find((s) => s.name === 'survival') }), true)`);
   await until(`!!${marketCard('BADP')}`, 'plugin results', 20000);
   const pluginSearch = requests.filter((u) => u.startsWith('/modrinth/search')).pop();
@@ -655,6 +743,19 @@ try {
   const leftover = () => readdirSync(tmpdir()).filter((n) => /^pyide-[0-9a-f]{8}-test-pack\.mrpack$/.test(n));
   await sleep(500);
   check(!leftover().length, `a modpack downloaded for a cancelled dialog is deleted (${S(leftover())})`);
+
+  // ---------- Delete ----------
+  const trashed = path.join(work, 'trashed-purp');
+  await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(trashed)}), true)`);
+  await js(`(${card('purp')}.querySelector('.mc-delete').click(), true)`);
+  await until(`!!${dialogButton('Delete')}`, 'delete confirm');
+  check(/Recycle Bin/.test(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'Delete asks before moving the server to the Recycle Bin');
+  await js(`(${dialogButton('Delete')}).click()`);
+  await until(`!${card('purp')}`, 'purp deleted', 10000);
+  const tomlAfter = readFileSync(path.join(serverDir('proxy'), 'velocity.toml'), 'utf8');
+  check(existsSync(path.join(trashed, 'pyide-server.json')) && !existsSync(serverDir('purp')) && !/"purp"/.test(tomlAfter) && /^"survival" = /m.test(tomlAfter)
+    && await js(`!ide.run.configs().some((c) => c.type === 'minecraft-server' && /purp$/.test(c.dir))`),
+    'Delete moves the server folder to the Recycle Bin, takes it out of the proxy and drops its run configuration');
 
   // ---------- the Minecraft screen, New Project ----------
   await js(`(document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);

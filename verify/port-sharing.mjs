@@ -8,7 +8,7 @@
 // Install Manager download; the window in Korean.
 // Ports 9782-9783 for the IDE; the servers listen on 18631-18639.
 import { spawn } from 'child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { networkInterfaces } from 'os';
 import path from 'path';
@@ -187,6 +187,9 @@ await new Promise((r) => setTimeout(r, 1500));
 check(!fakeTunnels().length, 'quitting the IDE ends every tunnel');
 
 // Without cloudflared, and in Korean.
+// A bore.exe that is no program, as Windows sees one Smart App Control or an antivirus blocks.
+mkdirSync(path.join(work, 'empty', 'bore', 'bore-0.6.0'), { recursive: true });
+writeFileSync(path.join(work, 'empty', 'bore', 'bore-0.6.0', 'bore.exe'), 'not a program');
 const k = await launch({ fixture: 'core', port: 9783, name: 'port-sharing-ko', lang: 'ko-KR', env: { PYIDE_INSTALL_ROOT: path.join(work, 'empty') } });
 try {
   await k.js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(serverCode(18634))}], ide.root)`);
@@ -202,6 +205,18 @@ try {
   k.check(true, 'without cloudflared, Share offers the Install Manager download (with its version and size)');
   await k.shot('ports-ko.png');
   k.check(await k.js(`!!(ide.installables || []).find((i) => i.id === 'tool:cloudflared') && !!(ide.installables || []).find((i) => i.id === 'tool:bore')`), 'cloudflared and bore are Install Manager items');
+  await k.js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '취소').click()`);
+  await k.js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(tcpCode(18636))}], ide.root)`);
+  await k.until(`ide.ports.state().ports.some((p) => p.port === 18636)`, 'ko tcp server listed', 30000);
+  await k.until(`!!document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share')`, 'ko tcp row');
+  await k.js(`(document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share').click(), true)`);
+  await k.until(`!!document.querySelector('#portsDontAsk')`, 'ko tcp warning');
+  await k.js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '공유').click()`);
+  await k.until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('Windows가 bore.exe를 실행하지 않았습니다') && b.textContent.includes('다시 설치'))`, 'blocked bore', 20000)
+    .then(() => k.check(true, 'a bore.exe Windows will not start (spawn UNKNOWN) is explained, with Install Again'),
+      async () => k.check(false, `blocked bore: ${await k.js(`[...document.querySelectorAll('.ide-balloon')].map((b) => b.textContent).join(' | ')`)}`));
+  k.check(await k.js(`!ide.ports.state().tunnels.some((t) => t.port === 18636) && !!document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share')`),
+    'the port is not left "starting": Share is offered again');
 } catch (err) {
   k.check(false, err.message);
 }

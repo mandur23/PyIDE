@@ -75,3 +75,7 @@
 .mcg-note { padding: 6px 10px; border-top: 1px solid var(--gray3); min-height: 1.4em; }
 .mcg-note.ok { color: var(--green6); }
 .mcg-note.err { color: var(--red); }
+.mc-settings .mc-dialog-label { width: 120px; }
+.mc-translate { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--gray3); }
+.mc-translate-title { font-weight: 600; }
+.mc-translate-status { font-size: 12px; }

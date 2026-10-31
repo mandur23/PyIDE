@@ -103,10 +103,32 @@
       } catch (err) {
         const missing = /\b(cloudflared|bore) is not installed/.exec(ide.util.errorText(err))?.[1];
         if (missing && attempt === 0) { if (await ensureTool(missing)) continue; return; }
+        const blocked = /Windows did not start (cloudflared|bore)\.exe/.exec(ide.util.errorText(err))?.[1];
+        if (blocked) return blockedTool(port, blocked);
         ide.notifications?.notify({ title: tr('Port {port} could not be shared', { port }), text: ide.util.errorText(err), kind: 'error', group: 'Ports', raw: true });
         return;
       }
     }
+  }
+  // bore.exe has no publisher's signature, which Smart App Control and some antivirus programs refuse to start; a file
+  // damaged since its download is refused the same way. Install Again replaces the file and shares again.
+  async function blockedTool(port, name) {
+    const s = await builtin(name);
+    ide.notifications?.notify({
+      title: tr('Port {port} could not be shared', { port }),
+      text: tr('Windows did not start {tool}.exe. Smart App Control, Windows Security or another antivirus may be blocking it (check Windows Security › Protection history), or the file is damaged. Install Again downloads it once more.', { tool: name }),
+      kind: 'error', group: 'Ports', raw: true,
+      actions: [
+        { label: tr('Install Again'), run: async (n) => {
+          n.expire();
+          await ide.installer.run(TOOLS[name].item, 'uninstall');
+          await ide.installer.run(TOOLS[name].item);
+          st = await ide.api.invoke('ports:state');
+          if (st[name]) share(port, { asked: true });
+        } },
+        ...(s?.home ? [{ label: tr('Show in Explorer'), run: () => ide.api.invoke('shell:showInFolder', `${s.home}\\${name}.exe`) }] : []),
+      ],
+    });
   }
   async function unshare(port) {
     st = await ide.api.invoke('ports:unshare', port);
