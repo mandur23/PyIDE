@@ -28,16 +28,16 @@
   function render() {
     let text = '';
     const delta = state.download?.mode === 'delta' && state.download.bytes != null ? size(state.download.bytes) : null;
-    if (state.phase === 'downloading' && delta) text = tr('Downloading PyIDE {version} (delta {size})… {percent}%', { version: state.available, size: delta, percent: state.percent || 0 });
-    else if (state.phase === 'downloading') text = tr('Downloading PyIDE {version}… {percent}%', { version: state.available, percent: state.percent || 0 });
+    if (state.phase === 'downloading' && delta) text = tr('Downloading Nano Studio {version} (delta {size})… {percent}%', { version: state.available, size: delta, percent: state.percent || 0 });
+    else if (state.phase === 'downloading') text = tr('Downloading Nano Studio {version}… {percent}%', { version: state.available, percent: state.percent || 0 });
     else if (state.phase === 'downloaded') text = tr('Restart to Update');
     item.textContent = text;
-    item.title = state.phase === 'downloaded' ? tr('PyIDE {version} is ready to install', { version: state.available }) : '';
+    item.title = state.phase === 'downloaded' ? tr('Nano Studio {version} is ready to install', { version: state.available }) : '';
     item.classList.toggle('hidden', !text);
     item.classList.toggle('ready', state.phase === 'downloaded');
     // The download is also a background task (the status bar progress widget and its popup).
     if (state.phase === 'downloading' && ide.tasks) {
-      if (!task?.active) task = ide.tasks.start({ title: tr('Downloading PyIDE {version}', { version: state.available }), cancellable: false });
+      if (!task?.active) task = ide.tasks.start({ title: tr('Downloading Nano Studio {version}', { version: state.available }), cancellable: false });
       task.update({ fraction: (state.percent || 0) / 100, text: `${state.percent || 0}%` });
     } else if (task) { task.done(); task = null; }
   }
@@ -95,26 +95,26 @@
     }
     const version = result.available;
     if (!version) {
-      if (manual) tell(tr('PyIDE {version} is the latest version.', { version: state.version }), [{ label: tr('Close'), primary: true }]);
+      if (manual) tell(tr('Nano Studio {version} is the latest version.', { version: state.version }), [{ label: tr('Close'), primary: true }]);
       return result;
     }
     if (!manual && ide.settings.get(SKIPPED) === version) return result;
-    const available = tr('PyIDE {version} is available. You have {current}.', { version, current: state.version });
+    const available = tr('Nano Studio {version} is available. You have {current}.', { version, current: state.version });
     if (state.kind === 'nsis') {
       report?.([available, tr('It is downloading in the background; the status bar shows its progress.')]);
       if (state.phase === 'downloaded') offerRestart();
       else ide.api.invoke('updater:download', { differential: ide.settings.get(DIFFERENTIAL, true) !== false }).catch((err) => {
         log.warn(`update download failed: ${reasonOf(err)}`);
-        message(tr('Update'), [tr('Could not download PyIDE {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
+        message(tr('Update'), [tr('Could not download Nano Studio {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
       });
     } else if (state.kind === 'msi') {
       report?.([available]);
       announce(version, manual, [available, tr('This copy was installed from an MSI package, so update it with the new MSI installer.')], [
         { label: tr('Download the new installer'), primary: true, run: () => ide.api.invoke('updater:openInstaller') }, skip(version), later]);
     } else if (report) {
-      report([available, tr('PyIDE updates itself only when it was installed with the PyIDE installer.')]);
+      report([available, tr('Nano Studio updates itself only when it was installed with the Nano Studio installer.')]);
     } else {
-      announce(version, manual, [available, tr('PyIDE updates itself only when it was installed with the PyIDE installer.')], [{ label: tr('Close'), primary: true }]);
+      announce(version, manual, [available, tr('Nano Studio updates itself only when it was installed with the Nano Studio installer.')], [{ label: tr('Close'), primary: true }]);
     }
     return result;
   }
@@ -123,7 +123,7 @@
   function offerRestart() {
     if (restartDialog) return;
     const version = state.available;
-    restartDialog = message(tr('Update Ready'), tr('PyIDE {version} has been downloaded. Restart PyIDE to install it.', { version }), [
+    restartDialog = message(tr('Update Ready'), tr('Nano Studio {version} has been downloaded. Restart Nano Studio to install it.', { version }), [
       { label: tr('Restart to Update'), primary: true, run: restart }, skip(version), later]);
     const close = restartDialog.close;
     restartDialog.close = () => { restartDialog = null; close(); };
@@ -150,7 +150,7 @@
   function notesBody(sections) {
     const body = el('div', 'upd-notes');
     for (const { version, text } of sections) {
-      body.appendChild(el('h3', null, `PyIDE ${version}`));
+      body.appendChild(el('h3', null, `Nano Studio ${version}`));
       let list = null;
       for (const line of text.split('\n')) {
         if (!line.trim()) { list = null; continue; }
@@ -165,7 +165,7 @@
   }
   function showNotes(version, sections) {
     const body = sections.length ? notesBody(sections) : el('p', null, tr('No release notes for this version.'));
-    return ide.ui.dialog({ title: tr("What's New in PyIDE {version}", { version }), body, buttons: [{ label: tr('Close'), primary: true }], width: 620 });
+    return ide.ui.dialog({ title: tr("What's New in Nano Studio {version}", { version }), body, buttons: [{ label: tr('Close'), primary: true }], width: 620 });
   }
   ide.registerAction({ id: 'WhatsNew', title: tr("What's New"), run: async () => {
     const notes = await ide.api.invoke('updater:releaseNotes');
@@ -250,7 +250,7 @@
 
   // ---------- Settings > Updates ----------
   (ide.settingsPages ||= []).push({
-    id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS,
+    id: 'updates', title: () => tr('Updates'), defaults: DEFAULTS, craft: true,
     keywords: 'updates update check feed latest.yml version skip restart daily weekly interval differential delta channel beta stable 업데이트 변경분 확인 피드 버전 건너뛰기 매일 매주 채널 베타 안정',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Updates'));
@@ -276,7 +276,7 @@
       s.appendChild(ctx.ui.checkbox(DIFFERENTIAL, tr('Download only the changed parts of an update when possible')));
 
       const info = ctx.ui.section(host, tr('This Installation'));
-      const kinds = { nsis: tr('PyIDE installer (updates itself)'), msi: tr('MSI package (update with the new MSI)'), source: tr('Run from source (no updates)') };
+      const kinds = { nsis: tr('Nano Studio installer (updates itself)'), msi: tr('MSI package (update with the new MSI)'), source: tr('Run from source (no updates)') };
       info.appendChild(ctx.ui.fieldRow(tr('Version:'), el('span', 'upd-version', state.version || '')));
       info.appendChild(ctx.ui.fieldRow(tr('Installed with:'), el('span', null, kinds[state.kind] || '')));
       if (state.lastCheck) info.appendChild(ctx.ui.fieldRow(tr('Last checked:'), el('span', 'upd-last-check', new Date(state.lastCheck).toLocaleString())));

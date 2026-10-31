@@ -2,8 +2,9 @@
   "id": "file-templates",
   "name": "File and Code Templates",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's file templates: New › Python File, Python Package, Python Unit Test, HTML, JSON and your own templates in the project tree, with ${NAME}, ${USER}, ${DATE} and other variables, edited in Settings › Editor › File and Code Templates.",
+  "modes": ["code"],
   "main": [
     "file-templates.js"
   ]

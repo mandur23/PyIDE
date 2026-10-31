@@ -2,7 +2,8 @@
   "id": "refactor",
   "name": "Refactorings",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's Extract Variable, Constant, Method and Parameter, Inline, Change Signature and Move refactorings with a preview, powered by rope in the project interpreter.",
+  "modes": ["code"],
   "main": ["refactor.js"]
 }

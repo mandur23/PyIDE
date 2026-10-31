@@ -131,7 +131,7 @@
     const bad = (message, vars) => new Error(tr(message, vars));
     if (!isObj(data)) throw bad('A visual script file must contain a JSON object.');
     if (typeof data.format !== 'number') throw bad('The file has no "format" number.');
-    if (data.format > VS.FORMAT) throw bad('This file was made by a newer PyIDE (format {format}). Update PyIDE to open it.', { format: data.format });
+    if (data.format > VS.FORMAT) throw bad('This file was made by a newer Nano Studio (format {format}). Update Nano Studio to open it.', { format: data.format });
     if (data.format !== VS.FORMAT) throw bad('Unknown file format {format}.', { format: data.format });
     if (!Array.isArray(data.nodes)) throw bad('"nodes" must be a list.');
     if (data.links !== undefined && !Array.isArray(data.links)) throw bad('"links" must be a list.');

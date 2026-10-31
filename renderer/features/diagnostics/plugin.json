@@ -2,8 +2,9 @@
   "id": "diagnostics",
   "name": "Diagnostics",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "IDE internal errors with the plugin each came from, the IDE log, About, and Collect Logs and Diagnostic Data.",
+  "modes": ["code", "craft"],
   "main": ["diagnostics.js"],
   "required": true
 }

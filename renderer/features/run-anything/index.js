@@ -81,7 +81,7 @@
     return new Promise((resolve) => {
       ide.ui.dialog({
         title: tr('Trust Project?'),
-        body: el('div', 'dialog-message', tr('{name} is open in Safe Mode, where PyIDE runs nothing from it. Run Anything starts programs and commands in the project, so trust it first.', { name: basename(ide.root || '') })),
+        body: el('div', 'dialog-message', tr('{name} is open in Safe Mode, where Nano Studio runs nothing from it. Run Anything starts programs and commands in the project, so trust it first.', { name: basename(ide.root || '') })),
         width: 520,
         onClose: () => resolve(false),
         buttons: [

@@ -147,7 +147,7 @@ try {
     'the selection chip goes into the request with its lines and text');
   check(call.stdin.includes('<file path="utils/helpers.py" language="python">\ndef slugify(text):') && call.stdin.includes('<file path="shapes.py" language="python" current="true">'),
     'the @file and the current file go into the request');
-  check(call.stdin.includes(question) && call.args.includes('--model') && call.args[call.args.indexOf('--tools') + 1] === '' && /AI assistant inside PyIDE/.test(call.system),
+  check(call.stdin.includes(question) && call.args.includes('--model') && call.args[call.args.indexOf('--tools') + 1] === '' && /AI assistant inside Nano Studio/.test(call.system),
     'the question reaches Claude Code headless, without tools, with the chat system prompt');
   const dom = await js(`(() => {
     const msg = [...document.querySelectorAll('.aic-msg.assistant')].at(-1);

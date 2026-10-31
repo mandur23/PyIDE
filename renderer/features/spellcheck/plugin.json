@@ -2,8 +2,9 @@
   "id": "spellcheck",
   "name": "Spell Checker",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Typo inspection for comments, strings, names, Markdown and commit messages, with an offline English dictionary (Hunspell en_US) and project and user dictionaries.",
+  "modes": ["code"],
   "main": [
     "spellcheck.js"
   ]

@@ -1,11 +1,11 @@
 // Updates, main side: electron-updater with a generic feed. The feed is the renderer's `updates.feedUrl` setting: an
 // http(s) URL, or a local folder (or file: URL) holding latest.yml and the installers, which is served on 127.0.0.1
-// while PyIDE runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
+// while Nano Studio runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
 // is pointed at the new .msi instead, since MSI installs are upgraded by Windows Installer. Source runs only check.
 // NSIS downloads are differential when they can be: electron-updater rebuilds the new installer from the one this version
-// was installed with, which the NSIS installer copies to %LOCALAPPDATA%\pyide-updater\installer.exe, and the blocks that
+// was installed with, which the NSIS installer copies to %LOCALAPPDATA%\nano-studio-updater\installer.exe, and the blocks that
 // changed. It reads the new installer's <url>.blockmap and the old one's (the same URL with the old version, unless
-// %LOCALAPPDATA%\pyide-updater\current.blockmap is left from the last download) and fetches the changed blocks with Range
+// %LOCALAPPDATA%\nano-studio-updater\current.blockmap is left from the last download) and fetches the changed blocks with Range
 // requests. Anything that goes wrong (no cached installer, no old blockmap, no Range support, a hash mismatch of the
 // rebuilt file) falls back to the full installer. The setting updates.differential and PYIDE_UPDATE_DIFFERENTIAL=0 turn
 // it off.
@@ -331,7 +331,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
 
   // options: {differential} (the setting updates.differential; PYIDE_UPDATE_DIFFERENTIAL=0 overrides it).
   ipcMain.handle('updater:download', async (_e, options) => {
-    if (kind !== 'nsis') throw new Error('Only the PyIDE installer (.exe) updates itself');
+    if (kind !== 'nsis') throw new Error('Only the Nano Studio installer (.exe) updates itself');
     if (state.phase === 'downloaded') return true;
     const u = getUpdater();
     const off = process.env.PYIDE_UPDATE_DIFFERENTIAL === '0' ? 'PYIDE_UPDATE_DIFFERENTIAL=0' : options?.differential === false ? 'updates.differential' : null;
@@ -347,7 +347,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     }
   });
 
-  // Starts the downloaded installer silently (it restarts PyIDE) and quits. The installer closes PyIDE even if a window
+  // Starts the downloaded installer silently (it restarts Nano Studio) and quits. The installer closes it even if a window
   // refuses to close, so the renderer saves unsaved files first.
   ipcMain.handle('updater:install', () => {
     if (state.phase !== 'downloaded') return false;
@@ -358,7 +358,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   // MSI installs: show the new .msi in the feed folder, or open its download link.
   ipcMain.handle('updater:openInstaller', async () => {
     if (!feed || !state.available) return false;
-    const name = `${app.getName()}-${state.available}.msi`;
+    const name = `NanoStudio-${state.available}.msi`; // package.json build.msi.artifactName
     if (feed.dir) {
       const file = path.join(feed.dir, name);
       if (fs.existsSync(file)) shell.showItemInFolder(file);

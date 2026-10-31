@@ -69,7 +69,7 @@
       MINUTE: pad(now.getMinutes()),
       PROJECT_NAME: ide.root ? basename(ide.root) : '',
       PACKAGE_NAME: relDir && !ide.util.samePath(dir, ide.root) ? relDir.split(/[\\/]/).filter(Boolean).join('.') : '',
-      PRODUCT_NAME: 'PyIDE',
+      PRODUCT_NAME: 'Nano Studio',
       DS: '$',
     };
   }

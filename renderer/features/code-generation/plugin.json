@@ -2,7 +2,8 @@
   "id": "code-generation",
   "name": "Quick Fixes and Code Generation",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's Alt+Enter fixes that write code (Create function, class or local variable, Add method to class, Implement abstract methods, Convert to f-string literal) and Code › Override Methods… and Implement Methods…, built on the refactoring sidecar and Pyright.",
+  "modes": ["code"],
   "depends": ["refactor"]
 }

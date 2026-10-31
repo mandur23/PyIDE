@@ -11,7 +11,7 @@ const S = JSON.stringify;
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const live = [];
-const MINE = /process|task|notification|balloon|Show Log|Don't Show|Mark All|Clear All|Earlier|semantic index|Jupyter kernel|Downloading PyIDE|failed|left$/i;
+const MINE = /process|task|notification|balloon|Show Log|Don't Show|Mark All|Clear All|Earlier|semantic index|Jupyter kernel|Downloading Nano Studio|failed|left$/i;
 
 const widget = (t) => t.js(`(() => { const w = document.querySelector('#bgTasks'); return { shown: !w.classList.contains('hidden') && !!w.getClientRects().length,
   label: w.querySelector('.bg-tasks-label').textContent, title: w.title, width: w.querySelector('.bg-fill').style.width,

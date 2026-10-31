@@ -163,7 +163,7 @@ module.exports = ({ loadPackage, jsonSafe, commandOf, DML, timed, groupSchema, g
       connectionTimeout: 10000,
       requestTimeout: 0,
       pool: { max: 1, min: 0, idleTimeoutMillis: 2 ** 31 - 1 },
-      options: { instanceName: cfg.instance || undefined, encrypt: !!cfg.encrypt, trustServerCertificate: !!cfg.trustServerCertificate, appName: 'PyIDE' },
+      options: { instanceName: cfg.instance || undefined, encrypt: !!cfg.encrypt, trustServerCertificate: !!cfg.trustServerCertificate, appName: 'Nano Studio' },
     };
     const pool = new sql.ConnectionPool(poolConfig);
     pool.on('error', onLost);

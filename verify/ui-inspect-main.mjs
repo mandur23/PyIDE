@@ -132,7 +132,7 @@ async function mainWindowChecks(t, lang) {
 
   // Everything in the status bar at once: Power Save Mode, two background tasks, and three more plugin widgets.
   await js(`(ide.powerSave.set(true), true)`);
-  await js(`(window.__tasks = [ide.tasks.start({ title: ${q(ko ? '프로젝트 파일 인덱싱 중' : 'Indexing project files')}, fraction: 0.4, onCancel() {} }), ide.tasks.start({ title: 'Downloading PyIDE 0.2.4', fraction: 0.6 })], true)`);
+  await js(`(window.__tasks = [ide.tasks.start({ title: ${q(ko ? '프로젝트 파일 인덱싱 중' : 'Indexing project files')}, fraction: 0.4, onCancel() {} }), ide.tasks.start({ title: 'Downloading Nano Studio 0.2.4', fraction: 0.6 })], true)`);
   await js(`(() => { for (const [order, text] of [[25, ${q(ko ? '원격 인터프리터에 연결하는 중' : 'Connecting to the remote interpreter')}], [31, ${q(ko ? 'HTTP 환경: 개발' : 'HTTP environment: development')}], [40, ${q(ko ? '업데이트하려면 다시 시작' : 'Restart to Update')}]]) { const n = ide.util.el('span', 'inspect-status-item', text); n.dataset.inspectOrder = order; ide.registerStatusItem({ order, el: n }); } return true; })()`);
   for (const theme of ['dark', 'light']) {
     await js(`(ide.settings.set('appearance.theme', '${theme}'), true)`);

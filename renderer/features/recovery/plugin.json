@@ -2,8 +2,9 @@
   "id": "recovery",
   "name": "Crash Recovery",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "Backs up unsaved changes a moment after each edit and offers to restore them when PyIDE starts again after it closed unexpectedly.",
+  "vendor": "Nano Studio",
+  "description": "Backs up unsaved changes a moment after each edit and offers to restore them when Nano Studio starts again after it closed unexpectedly.",
+  "modes": ["code"],
   "main": [
     "recovery.js"
   ],

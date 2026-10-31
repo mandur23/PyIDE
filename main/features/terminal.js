@@ -161,7 +161,7 @@ exports.register = ({ ipcMain, app }) => {
     // opts.envFiles: the project's .env files (Settings › Terminal); a remote session's shell does not get them.
     const fileEnv = opts.envFiles?.length && !opts.target ? loadFiles(opts.envFiles) : {};
     const env = { ...process.env, ...venvEnv(opts.interpreter, !activation?.setsPath), ...claudeIde.ideEnv(), ...fileEnv, ...opts.env, ...activation?.env,
-      TERM_PROGRAM: 'PyIDE', COLORTERM: 'truecolor' };
+      TERM_PROGRAM: 'NanoStudio', COLORTERM: 'truecolor' };
     // The official Claude Code installer puts claude.exe in ~/.local/bin without adding it to PATH; make `claude` work here.
     const localBin = path.join(os.homedir(), '.local', 'bin');
     if (fs.existsSync(localBin) && !(env[PATH_KEY] || '').toLowerCase().split(';').includes(localBin.toLowerCase())) env[PATH_KEY] = `${localBin};${env[PATH_KEY]}`;

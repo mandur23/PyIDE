@@ -2,8 +2,9 @@
   "id": "scratches",
   "name": "Scratch Files",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's scratch files: File › New Scratch File (Ctrl+Alt+Shift+Insert) creates a Python, Markdown, JSON or other file outside the project, shared by all projects and listed under Scratches and Consoles in the project tree.",
+  "modes": ["code"],
   "main": [
     "scratches.js"
   ]

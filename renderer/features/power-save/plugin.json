@@ -2,6 +2,7 @@
   "id": "power-save",
   "name": "Power Save Mode",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "File › Power Save Mode, as in PyCharm: pauses semantic indexing, AI completion, next edit suggestions, spell checking and automatic vulnerability checks, with a status bar indicator."
+  "vendor": "Nano Studio",
+  "description": "File › Power Save Mode, as in PyCharm: pauses semantic indexing, AI completion, next edit suggestions, spell checking and automatic vulnerability checks, with a status bar indicator.",
+  "modes": ["code"]
 }

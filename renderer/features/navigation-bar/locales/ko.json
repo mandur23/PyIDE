@@ -12,7 +12,6 @@
   "Use {action} on a function to see its callers and callees": "함수에서 {action}을(를) 사용하면 호출자와 피호출자를 볼 수 있습니다",
   "Callers of {name}": "{name}의 호출자",
   "Callees of {name}": "{name}의 피호출자",
-  "Loading…": "로드 중…",
   "No call hierarchy for the element at the caret": "캐럿 위치의 요소에 대한 호출 계층 구조가 없습니다",
   "Call Hierarchy": "호출 계층 구조",
   "Show Breadcrumbs": "이동 경로 표시"

@@ -2,7 +2,8 @@
   "id": "editor-assists",
   "name": "Editor Assists",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Sticky lines at the top of the editor show the classes and functions around the visible code, a plain Python string becomes an f-string when you type a {name} into it, PyCharm's editing keys (Start New Line, Complete Current Statement, Move Statement, Join Lines, Toggle Case and more) do what they do in PyCharm, and Enter inside new triple quotes under a def writes a docstring stub.",
+  "modes": ["code"],
   "detached": true
 }

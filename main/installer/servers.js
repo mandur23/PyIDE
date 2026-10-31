@@ -318,7 +318,7 @@ function createServers({ root, store, spawnServer, run }) {
     const saved = store.get(name);
     if (!saved) return null;
     const s = SERVERS[name];
-    const c = { kind: s.kind, name: `${s.title} ${s.version} (PyIDE)`, host: '127.0.0.1', port: saved.port, user: saved.user, password: saved.password, database: saved.database, ...s.connection };
+    const c = { kind: s.kind, name: `${s.title} ${s.version} (Nano Studio)`, host: '127.0.0.1', port: saved.port, user: saved.user, password: saved.password, database: saved.database, ...s.connection };
     const enc = encodeURIComponent;
     const scheme = { postgres: 'postgresql', mariadb: 'mysql', mongodb: 'mongodb' }[s.kind];
     c.url = `${scheme}://${enc(c.user)}:${enc(c.password)}@${c.host}:${c.port}/${c.database}${c.authSource ? `?authSource=${c.authSource}` : ''}`;

@@ -417,7 +417,7 @@
     [/^(\w+) failed$/, (m) => tr('{command} failed', { command: m[1] })],
     // Attach to Process (main/features/debug-attach.js and debug.js)
     [/^Process (\d+) is not running$/, (m) => tr('Process {pid} is not running (it may have exited)', { pid: m[1] })],
-    [/^Access denied: cannot attach to process (\d+)$/, (m) => tr('Access denied: process {pid} runs as administrator or as another user. Run PyIDE as administrator to attach to it.', { pid: m[1] })],
+    [/^Access denied: cannot attach to process (\d+)$/, (m) => tr('Access denied: process {pid} runs as administrator or as another user. Run Nano Studio as administrator to attach to it.', { pid: m[1] })],
     [/^Process (\d+) exited before the debugger connected$/, (m) => tr('Process {pid} exited before the debugger connected', { pid: m[1] })],
     [/^Process (\d+) did not start the debugger within (\d+) seconds; it may be blocked in native code or waiting for input$/,
       (m) => tr('Process {pid} did not start the debugger within {seconds} seconds; it may be blocked in native code or waiting for input', { pid: m[1], seconds: m[2] })],

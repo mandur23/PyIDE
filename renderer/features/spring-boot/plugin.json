@@ -2,8 +2,9 @@
   "id": "spring-boot",
   "name": "Spring Boot",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Spring Boot projects from Spring Initializr in New Project (two pages like IntelliJ IDEA: language, type, packaging, Spring Boot version and dependencies), run and debug of the application class through Maven or Gradle, and the server port in the run output as a link.",
+  "modes": ["code"],
   "depends": [
     "run",
     "toolchains"

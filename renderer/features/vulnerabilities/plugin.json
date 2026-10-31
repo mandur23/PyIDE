@@ -2,8 +2,9 @@
   "id": "vulnerabilities",
   "name": "Vulnerable Packages",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Marks installed packages and project dependencies with known vulnerabilities (OSV database) and offers the upgrade that fixes them.",
+  "modes": ["code"],
   "depends": [
     "packages"
   ],

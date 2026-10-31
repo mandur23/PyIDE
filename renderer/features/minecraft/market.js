@@ -1,7 +1,8 @@
 // The Minecraft Market (main/minecraft/market.js): the Minecraft screen's Market page (screen.js), which browses
 // Modrinth's modpacks, mods, plugins and resource packs like a store. Mods, plugins and resource packs are searched for the chosen server (its Minecraft
 // version and loader or plugin API) and installed into it with one click, required dependencies included; a modpack
-// opens New Server from Modpack. Cards show what the server has installed from the Market, with Update and Remove.
+// opens New Server from Modpack, and in craft mode also installs as an instance to play (craft.js). Cards show what
+// the server has installed from the Market, with Update and Remove.
 (() => {
   const { el } = ide.util;
   const mc = ide.minecraft;
@@ -150,13 +151,16 @@
       ...h.categories.slice(0, 4).map((x) => el('span', 'mcm-chip', x)));
     const actions = el('div', 'mcm-actions');
     const installed = srv?.market?.[h.id];
-    if (state.type === 'modpack') {
+    if (state.type === 'modpack' && ide.appMode === 'craft') {
+      actions.append(button(tr('Install as Instance'), 'primary mcm-instance', (b) => installInstance(h, b)),
+        button(tr('Create Server…'), 'secondary mcm-create', () => mc.newFromModpack(h.slug)));
+    } else if (state.type === 'modpack') {
       actions.append(button(tr('Create Server…'), 'primary mcm-create', () => mc.newFromModpack(h.slug)));
     } else if (installed) {
       actions.append(el('span', 'mcm-installed', tr('Installed {version}', { version: installed.version })),
         button(tr('Update'), 'secondary mcm-update', (b) => install(h, b)), button(tr('Remove'), 'secondary mcm-remove', () => remove(h, installed)));
     } else actions.append(button(tr('Install'), 'primary mcm-install', (b) => install(h, b)));
-    if (working.has(h.id)) for (const b of actions.querySelectorAll('button')) { b.disabled = true; if (b.classList.contains('mcm-install')) b.textContent = tr('Installing…'); }
+    if (working.has(h.id)) for (const b of actions.querySelectorAll('button')) { b.disabled = true; if (b.matches('.mcm-install, .mcm-instance')) b.textContent = tr('Installing…'); }
     actions.append(button(tr('Modrinth Page'), 'secondary mcm-page', () => ide.api.invoke('shell:openExternal', h.page)));
     body.append(title, desc, meta, actions);
     c.append(icon, body);
@@ -190,6 +194,16 @@
     } finally { j.done(); working.delete(h.id); }
     ide.refreshTree?.();
     await mc.refresh();
+    render();
+  }
+
+  // Craft: the modpack as an instance to play (craft.js), not a server.
+  async function installInstance(h, b) {
+    if (working.has(h.id)) return;
+    working.add(h.id);
+    b.disabled = true;
+    b.textContent = tr('Installing…');
+    try { await mc.craft.installPack({ url: `https://modrinth.com/modpack/${h.slug}` }, h.title); } finally { working.delete(h.id); }
     render();
   }
 

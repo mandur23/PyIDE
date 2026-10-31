@@ -2,7 +2,8 @@
   "id": "diagrams",
   "name": "Python Class Diagrams",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Show Diagram for a Python file, package or class: classes with their fields and methods, inheritance and associations, laid out automatically, with export to SVG and PNG.",
+  "modes": ["code"],
   "main": ["diagrams.js"]
 }

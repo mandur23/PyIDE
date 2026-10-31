@@ -2,8 +2,9 @@
   "id": "exe-builder",
   "name": "Build Executable",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Run › Build Executable… packs a Python program into an .exe with PyInstaller (installed on first use), as one file or one folder, with or without a console window and with an icon, so it runs on computers without Python.",
+  "modes": ["code"],
   "depends": [
     "run",
     "packages"

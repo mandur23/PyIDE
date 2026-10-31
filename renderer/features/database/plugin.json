@@ -2,7 +2,8 @@
   "id": "database",
   "name": "Database Tools and SQL",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Connect to SQLite, PostgreSQL, MySQL and MariaDB, browse schemas, and run SQL in query consoles.",
+  "modes": ["code"],
   "main": ["database.js"]
 }

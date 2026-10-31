@@ -56,10 +56,10 @@ const waitPhase = (want, ms = 120000) => until(`document.querySelector('${card}'
 try {
   // With no interpreter at all, a notification offers PyIDE Python; its button installs it.
   await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /No Python interpreter found/.test(b.textContent))`, 'no-interpreter notification', 30000)
-    .then(() => check(true, 'with no Python on the computer, a notification offers PyIDE Python'), () => check(false, 'with no Python on the computer, a notification offers PyIDE Python'));
+    .then(() => check(true, 'with no Python on the computer, a notification offers Nano Studio Python'), () => check(false, 'with no Python on the computer, a notification offers Nano Studio Python'));
   check(await js(`!(ide.interps || []).some((i) => !i.invalid)`), 'no interpreter is listed before the install');
   await js(`(() => { const b = [...document.querySelectorAll('.ide-balloon')].find((x) => /No Python interpreter found/.test(x.textContent));
-    [...b.querySelectorAll('.ide-balloon-action')].find((a) => /Install PyIDE Python 3\\.13/.test(a.textContent)).click(); return true; })()`);
+    [...b.querySelectorAll('.ide-balloon-action')].find((a) => /Install Nano Studio Python 3\\.13/.test(a.textContent)).click(); return true; })()`);
   await until(`!!document.querySelector('${card}')`, 'Install Manager shows the card');
   await waitPhase('installed');
   check(existsSync(exe), `the interpreter is extracted to ${exe}`);
@@ -68,7 +68,7 @@ try {
   check(await js(`ide.settings.get('interpreters.extra', []).some((p) => ide.util.samePath(p, ${J(exe)}))`), 'it is added to interpreters.extra');
   await until(`(ide.interps || []).some((i) => ide.util.samePath(i.executable, ${J(exe)}))`, 'listed', 20000);
   const label = await js(`ide.interps.find((i) => ide.util.samePath(i.executable, ${J(exe)})).label`);
-  check(label === `PyIDE Python (Python ${VERSION})`, `the picker lists it as PyIDE Python (${label})`);
+  check(label === `Nano Studio Python (Python ${VERSION})`, `the picker lists it as Nano Studio Python (${label})`);
 
   // Use as Project Interpreter, then a script runs with it.
   await js(`(() => { [...document.querySelectorAll('${card} button')].find((b) => b.textContent === 'Use as Project Interpreter').click(); return true; })()`);
@@ -78,7 +78,7 @@ try {
   await js(`(ide.runAction('RunClass'), true)`);
   await until(`(ide.run.activeSession()?.con?.out?.textContent || '').includes('exit code')`, 'run finished', 60000);
   const out = await js(`ide.run.activeSession().con.out.textContent`);
-  check(out.includes(`RUNNING ${VERSION}`) && out.toLowerCase().includes(path.join(root, 'python', VERSION).toLowerCase()), `main.py runs with PyIDE Python (${J(out.slice(-200))})`);
+  check(out.includes(`RUNNING ${VERSION}`) && out.toLowerCase().includes(path.join(root, 'python', VERSION).toLowerCase()), `main.py runs with Nano Studio Python (${J(out.slice(-200))})`);
 
   // While a program runs with it, Remove keeps it whole and says why.
   const remove = async () => {
@@ -126,7 +126,7 @@ try {
   await k.js(`(ide.installer.open('interpreters'), true)`);
   await k.until(`document.querySelector('${card}')?.dataset.phase === 'notInstalled'`, 'card checked', 30000);
   const title = await k.js(`document.querySelector('${card}').textContent`);
-  k.check(title.includes('PyIDE Python 3.13') && title.includes('관리자 권한이 필요 없고'), 'the card is in Korean');
+  k.check(title.includes('Nano Studio Python 3.13') && title.includes('관리자 권한이 필요 없고'), 'the card is in Korean');
   const leaks = await englishLeaks(k, card, ['PyIDE', 'Python', 'NuGet', 'pip', 'venv', 'tkinter', 'PATH']);
   k.check(!leaks.length, `the card has no English (${J(leaks)})`);
   k.check(await k.js(`[...document.querySelectorAll('.ide-balloon')].some((b) => /Python 인터프리터를 찾을 수 없습니다/.test(b.textContent))`), 'the notification is in Korean');

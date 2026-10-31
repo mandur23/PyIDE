@@ -48,12 +48,12 @@
   status.onclick = () => openErrors();
 
   // ---------- internal errors dialog ----------
-  const pluginName = (p) => (!p ? tr('PyIDE core') : p.i18n?.[i18n.locale]?.name || (p.bundled ? tr(p.name) : p.name));
+  const pluginName = (p) => (!p ? tr('Nano Studio core') : p.i18n?.[i18n.locale]?.name || (p.bundled ? tr(p.name) : p.name));
   const timeOf = (t) => new Date(t).toLocaleTimeString();
   const describe = (e) => [SOURCES[e.source]?.() || e.source, e.window && WINDOWS[e.window]?.(), KINDS[e.kind]?.() || KINDS.error()].filter(Boolean).join(' · ');
   const copyText = (e) => [
     `${e.title ? `${e.title}: ` : ''}${e.message}`,
-    `Plugin: ${e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'PyIDE core'}`,
+    `Plugin: ${e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'Nano Studio core'}`,
     `Source: ${e.source}${e.window ? ` (${e.window} window)` : ''}, ${e.kind}, ${new Date(e.time).toISOString()}${e.count > 1 ? `, ${e.count} times` : ''}`,
     '',
     e.stack,
@@ -230,13 +230,13 @@
     const body = el('div', 'about diag-about');
     body.append(el('div', 'about-logo', 'Py'));
     const text = el('div', 'diag-about-text');
-    text.append(el('h2', null, 'PyIDE'), el('div', 'muted', tr('A PyCharm-style Python IDE')));
+    text.append(el('h2', null, ide.appTitle), el('div', 'muted', ide.appMode === 'craft' ? tr('Play Minecraft and run servers') : tr('A PyCharm-style Python IDE')));
     const facts = el('table', 'diag-facts');
     for (const [label, value] of [
       [tr('Version'), v.app],
       [tr('Runtime'), `Electron ${v.electron} · Chromium ${v.chromium} · Node ${v.node} · V8 ${v.v8}`],
-      [tr('Python tools'), `Pyright ${v.pyright || '—'} · ruff ${v.ruff || '—'}`],
-      [tr('Python interpreter'), cur ? `${cur.version} (${cur.executable})` : tr('None')],
+      ...(ide.appMode === 'craft' ? [] : [[tr('Python tools'), `Pyright ${v.pyright || '—'} · ruff ${v.ruff || '—'}`],
+        [tr('Python interpreter'), cur ? `${cur.version} (${cur.executable})` : tr('None')]]),
       [tr('Operating system'), v.os],
     ]) {
       const row = el('tr');
@@ -246,7 +246,7 @@
     text.append(facts, el('div', 'muted about-credit', tr('Icons and color schemes from PyCharm (IntelliJ Platform, Apache License 2.0).')));
     body.appendChild(text);
     const dlg = ide.ui.dialog({
-      title: tr('About PyIDE'),
+      title: tr('About Nano Studio'),
       body,
       width: 620,
       buttons: [
@@ -298,7 +298,7 @@
     { id: 'ShowLogInExplorer', title: tr('Show Log in Explorer'), run: () => invoke('diagnostics:showLogInExplorer') },
     { id: 'CollectZippedLogs', title: tr('Collect Logs and Diagnostic Data'), run: collect },
     { id: 'LogDebugConfigure', title: tr('Debug Log Settings…'), run: logSettings },
-    { id: 'AboutPyIDE', title: tr('About PyIDE'), run: about },
+    { id: 'AboutPyIDE', title: tr('About Nano Studio'), run: about },
     { id: 'ReportProblem', title: tr('Report a Problem…'), run: () => reportProblem() },
   ].forEach(ide.registerAction);
 

@@ -2,7 +2,8 @@
   "id": "goto-test",
   "name": "Go to Test",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's Navigate › Test: jump between a Python module, class or function and its tests (test_<module>.py or <module>_test.py), and Create New Test… with pytest stubs for the chosen methods.",
+  "modes": ["code"],
   "depends": ["tests"]
 }

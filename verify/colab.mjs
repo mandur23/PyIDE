@@ -294,15 +294,15 @@ try {
   await press('Set Up a Project…');
   await until(listUp, 'project list', 10000);
   const projectRows = await pickList();
-  check(projectRows[0].includes('New project: PyIDE Colab') && projectRows.some((r) => r.includes('My First Project') && r.includes('my-first-project-123')),
+  check(projectRows[0].includes('New project: Nano Studio Colab') && projectRows.some((r) => r.includes('My First Project') && r.includes('my-first-project-123')),
     `the list offers a new project and the account's own (${S(projectRows)})`);
   fault.newProject = [400, { error: { code: 400, status: 'FAILED_PRECONDITION', message: 'Callers must accept Terms of Service' } }];
-  await pickRow('New project: PyIDE Colab');
+  await pickRow('New project: Nano Studio Colab');
   await until(hasButton('Open Google Cloud Console'), 'terms banner', 10000);
   check((await banner()).includes('Terms of Service') && (await buttons()).includes('Choose Another Project…'), 'a project Google will not create yet (terms not accepted) is explained, with the console a click away');
   await press('Choose Another Project…');
   await until(listUp, 'project list again', 10000);
-  await pickRow('New project: PyIDE Colab');
+  await pickRow('New project: Nano Studio Colab');
   await until(listUp, 'runtime list after the project', 20000);
   const made = cloud.projects.find((p) => /^pyide-colab-[0-9a-f]{6}$/.test(p.projectId))?.projectId;
   const quotaArgs = existsSync(at('args-quota.txt')) ? readFileSync(at('args-quota.txt'), 'utf8').trim() : '';
@@ -407,7 +407,7 @@ try {
   await runCell(1, "userdata.get('MISSING_KEY')");
   check((await outputs(1)).includes('SecretNotFoundError') && (await banner()).includes('MISSING_KEY'), 'a key .env does not have is "not found", and the banner says how to add it');
   await runCell(1, "from google.colab import drive\ndrive.mount('/content/drive')");
-  check((await outputs(1)).includes('MessageError') && (await outputs(1)).includes('PyIDE cannot do this'), 'drive.mount() ends at once with an error that explains why, instead of waiting');
+  check((await outputs(1)).includes('MessageError') && (await outputs(1)).includes('Nano Studio cannot do this'), 'drive.mount() ends at once with an error that explains why, instead of waiting');
   check(seen.colabReplies.length === 4 && seen.colabReplies.every((r) => r.type === 'colab_reply'), `every colab_request gets a colab_reply on stdin (${seen.colabReplies.length})`);
 
   const big = crypto.randomBytes(1200 * 1024);

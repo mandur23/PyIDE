@@ -97,7 +97,7 @@ module.exports = ({ loadPackage, commandOf, DML, timed, groupSchema, exportError
     const url = urlOf(cfg);
     const client = createClient({
       url, username: cfg.user || 'default', password: cfg.password || '', database: cfg.database || undefined,
-      application: 'PyIDE', request_timeout: 300000, log: { level: ClickHouseLogLevel.OFF },
+      application: 'Nano Studio', request_timeout: 300000, log: { level: ClickHouseLogLevel.OFF },
     });
     // HTTP has no connection to lose; a request that cannot reach the server marks the source as lost instead.
     const call = async (fn) => {

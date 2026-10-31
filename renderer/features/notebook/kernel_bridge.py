@@ -56,7 +56,7 @@ class Bridge:
         launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernel_launcher.py")
         with open(os.path.join(spec, "kernel.json"), "w", encoding="utf-8") as f:
             json.dump({"argv": [sys.executable, launcher, "-f", "{connection_file}"],
-                       "display_name": "Python 3 (PyIDE)", "language": "python"}, f)
+                       "display_name": "Python 3 (Nano Studio)", "language": "python"}, f)
         ksm = KernelSpecManager(kernel_dirs=[self.spec_dir])
         return KernelManager(kernel_spec_manager=ksm, kernel_name="pyide")
 

@@ -1,4 +1,4 @@
-// Builds, tests and publishes a PyIDE release in one command (see FEATURES.md, Updates):
+// Builds, tests and publishes a Nano Studio release in one command (see FEATURES.md, Updates):
 //   npm run release -- <version> [--dry-run [--no-build]] [--skip-tests] [--notes <file>] [--replace-local-install]
 //   npm run release -- <version> --publish-only [--dry-run] [--notes <file>]
 // 1. checks: clean tree on master, local master contains origin's, a semver version above package.json's, no tag v<v>
@@ -6,13 +6,13 @@
 // 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml (beta.yml)
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
-// 7. publishes to the `pyide` release of mandur23/Portfolio-Nano- (never marked Latest): the installers and the exe's
+// 7. publishes to the `nano-studio` release of mandur23/Portfolio-Nano- (never marked Latest): the installers and the exe's
 //    blockmap, title and notes, then latest.yml and beta.yml (the update feed switches here), then deletes older
 //    versions' files except the previous versions' blockmaps, which installed copies of those versions need for a
 //    differential update
 // 8. reads the feed back
 // A beta (x.y.z-beta.N, which electron-builder builds with dist/beta.yml instead of latest.yml) goes only to beta
-// installs: step 7 uploads its installers and blockmap and then beta.yml, and leaves latest.yml, PyIDE-Setup.exe, the
+// installs: step 7 uploads its installers and blockmap and then beta.yml, and leaves latest.yml, NanoStudio-Setup.exe, the
 // title, the notes and every stable version's files alone. A stable release writes beta.yml too (a copy of latest.yml),
 // so beta installs get it, unless the release holds a newer beta.
 // Nothing is uploaded before the push and the feed switches last, so a stop leaves one clear way on; the error says which.
@@ -32,9 +32,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The app's own version order (semver: 0.2.5-beta.1 < 0.2.5), so the release and installed copies agree.
 const { compareVersions: compare } = createRequire(import.meta.url)('../main/features/updater.js');
 const REPO = 'mandur23/Portfolio-Nano-';
-const TAG = 'pyide';
+const TAG = 'nano-studio';
 const FEED = `https://github.com/${REPO}/releases/download/${TAG}/`;
-const AUTHOR = ['-c', 'user.name=PyIDE', '-c', 'user.email=ms01048913077@gmail.com'];
+const AUTHOR = ['-c', 'user.name=Nano Studio', '-c', 'user.email=ms01048913077@gmail.com'];
 const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
 // PYIDE_DIST_DIR builds somewhere else than dist/, for when another program holds files in dist/win-unpacked open
 // (the Claude desktop app does in its own workspace folders). verify/installed.mjs reads the same variable.
@@ -42,12 +42,13 @@ const DIST = process.env.PYIDE_DIST_DIR ? path.resolve(process.env.PYIDE_DIST_DI
 if (/["%^&|<>!]/.test(DIST)) throw new Error(`PYIDE_DIST_DIR must not contain " % ^ & | < > !: ${DIST}`);
 const PKG = path.join(ROOT, 'package.json');
 const LOCK = path.join(ROOT, 'package-lock.json');
-export const INSTALL_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'PyIDE');
-const LOCAL_UNINSTALLER = path.join(INSTALL_DIR, 'Uninstall PyIDE.exe');
+export const INSTALL_DIR = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Nano Studio');
+const EXE_NAME = 'Nano Studio.exe';
+const LOCAL_UNINSTALLER = path.join(INSTALL_DIR, 'Uninstall Nano Studio.exe');
 const USAGE = 'usage: npm run release -- <version> [--dry-run [--no-build]] [--skip-tests] [--notes <file>] [--replace-local-install]\n'
   + '       npm run release -- <version> --publish-only [--dry-run] [--notes <file>]\n'
   + '       <version> is x.y.z for everyone, or x.y.z-beta.N for beta installs only';
-// x.y.z, or x.y.z-beta.N: the prerelease tag names electron-builder's channel file, and PyIDE reads only beta.yml.
+// x.y.z, or x.y.z-beta.N: the prerelease tag names electron-builder's channel file, and Nano Studio reads only beta.yml.
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-beta\.(0|[1-9]\d*))?$/;
 const isBeta = (v) => v.includes('-');
 const channelFile = (v) => (isBeta(v) ? 'beta.yml' : 'latest.yml');
@@ -197,14 +198,14 @@ function releaseNotes(v) {
   return {
     source: `CHANGELOG.md, ## ${v}`,
     text: [
-      'PyCharm 스타일 Python IDE, PyIDE의 Windows 설치 파일입니다. 이 릴리스는 PyIDE 앱의 자동 업데이트 주소로도 쓰입니다.',
+      'Nano Studio의 Windows 설치 파일입니다. PyCharm 스타일 Python IDE인 Nano Studio Code와 마인크래프트 앱 Nano Studio Craft가 들어 있습니다. 이 릴리스는 Nano Studio 앱의 자동 업데이트 주소로도 쓰입니다.',
       '',
-      `**PyIDE ${v}**`,
+      `**Nano Studio ${v}**`,
       section,
       '',
       '**설치 파일**',
-      `- \`PyIDE-Setup-${v}.exe\` (또는 \`PyIDE-Setup.exe\`): 일반 설치, 앱 안에서 자동 업데이트`,
-      `- \`PyIDE-${v}.msi\`: MSI 패키지`,
+      `- \`NanoStudio-Setup-${v}.exe\` (또는 \`NanoStudio-Setup.exe\`): 일반 설치, 앱 안에서 자동 업데이트`,
+      `- \`NanoStudio-${v}.msi\`: MSI 패키지`,
       '- 코드 서명이 없어 Windows SmartScreen 경고가 뜰 수 있습니다 (추가 정보 → 실행).',
       '',
       '**소스 코드:** https://github.com/mandur23/PyIDE',
@@ -237,19 +238,19 @@ function releaseAssets() {
   const r = sh('gh', ['release', 'view', TAG, '-R', REPO, '--json', 'assets', '--jq', '.assets[].name'], { capture: true, allowFail: true });
   return r.status === 0 ? r.out.split(/\r?\n/).filter(Boolean) : null;
 }
-// The version of an installer or blockmap asset, or null (PyIDE-Setup.exe, latest.yml and beta.yml are replaced, not deleted).
-const assetVersion = (name) => (/^PyIDE-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^PyIDE-(.+)\.msi(\.blockmap)?$/.exec(name))?.[1] ?? null;
+// The version of an installer or blockmap asset, or null (NanoStudio-Setup.exe, latest.yml and beta.yml are replaced, not deleted).
+const assetVersion = (name) => (/^NanoStudio-Setup-(.+)\.exe(\.blockmap)?$/.exec(name) || /^NanoStudio-(.+)\.msi(\.blockmap)?$/.exec(name))?.[1] ?? null;
 const versionsOn = (assets) => [...new Set(assets.map(assetVersion).filter((x) => x && VERSION.test(x)))].sort(compare);
 // The version installed copies run until this release: the newest stable one (with beta, the newest beta) below v.
 export function previousVersion(assets, v, beta = false) {
   return versionsOn(assets).filter((x) => isBeta(x) === beta && compare(x, v) < 0).pop() || null;
 }
 // The beta that beta.yml offers: the newest beta whose installer is on the release (older ones are deleted).
-export const liveBeta = (assets) => versionsOn(assets).filter((x) => isBeta(x) && assets.includes(`PyIDE-Setup-${x}.exe`)).pop() || null;
+export const liveBeta = (assets) => versionsOn(assets).filter((x) => isBeta(x) && assets.includes(`NanoStudio-Setup-${x}.exe`)).pop() || null;
 // What a differential update from a previous version reads from the feed besides the new installer: its old blockmap
-// (electron-updater derives <feed>/PyIDE-Setup-<old>.exe.blockmap from the new installer's URL; the old installer itself
-// comes from the user's %LOCALAPPDATA%\pyide-updater cache).
-export const keptBlockmap = (prev) => (prev ? `PyIDE-Setup-${prev}.exe.blockmap` : null);
+// (electron-updater derives <feed>/NanoStudio-Setup-<old>.exe.blockmap from the new installer's URL; the old installer itself
+// comes from the user's %LOCALAPPDATA%\nano-studio-updater cache).
+export const keptBlockmap = (prev) => (prev ? `NanoStudio-Setup-${prev}.exe.blockmap` : null);
 // The versions whose blockmaps stay: a stable release keeps the previous stable's and the previous beta's (beta installs
 // update to it too); a beta keeps the previous beta's (stable versions' files are not a beta's to delete).
 const keptVersions = (assets, v) => [...(isBeta(v) ? [] : [previousVersion(assets, v)]), previousVersion(assets, v, true)].filter(Boolean);
@@ -267,7 +268,7 @@ async function feedVersion(file) {
 
 // ---------- dist ----------
 // yml: the channel file electron-builder writes for v (latest.yml, or beta.yml for a beta).
-const distFiles = (v) => ({ exe: path.join(DIST, `PyIDE-Setup-${v}.exe`), blockmap: path.join(DIST, `PyIDE-Setup-${v}.exe.blockmap`), msi: path.join(DIST, `PyIDE-${v}.msi`), yml: path.join(DIST, channelFile(v)) });
+const distFiles = (v) => ({ exe: path.join(DIST, `NanoStudio-Setup-${v}.exe`), blockmap: path.join(DIST, `NanoStudio-Setup-${v}.exe.blockmap`), msi: path.join(DIST, `NanoStudio-${v}.msi`), yml: path.join(DIST, channelFile(v)) });
 // The length of the file a blockmap describes (gzipped JSON; electron-builder writes one file entry).
 function blockmapLength(file) {
   const entry = JSON.parse(gunzipSync(io.readFileSync(file)).toString()).files?.[0];
@@ -291,15 +292,15 @@ function distProblem({ exe, blockmap, msi, yml: ymlFile }, v) {
 }
 
 // ---------- local install ----------
-const pyideRunning = () => /PyIDE\.exe/i.test(sh('tasklist', ['/FI', 'IMAGENAME eq PyIDE.exe', '/NH', '/FO', 'CSV'], { capture: true, allowFail: true }).out);
+const appRunning = () => /Nano Studio\.exe/i.test(sh('tasklist', ['/FI', `IMAGENAME eq ${EXE_NAME}`, '/NH', '/FO', 'CSV'], { capture: true, allowFail: true }).out);
 async function uninstallLocal() {
-  if (pyideRunning()) fail('PyIDE.exe is running. Close PyIDE (every window) and run the release again; this script closes nothing.');
-  log(`  $ ${show(LOCAL_UNINSTALLER, ['/S', '/currentuser'])}   (settings in %APPDATA%\\PyIDE are kept)`);
+  if (appRunning()) fail(`${EXE_NAME} is running. Close Nano Studio (every window) and run the release again; this script closes nothing.`);
+  log(`  $ ${show(LOCAL_UNINSTALLER, ['/S', '/currentuser'])}   (settings in %APPDATA%\\Nano Studio are kept)`);
   state.uninstalled = true; // from here on, every way out reinstalls
   sh(LOCAL_UNINSTALLER, ['/S', '/currentuser']);
   // The uninstaller copies itself to %TEMP% and returns at once; wait for the files to go.
-  for (let i = 0; i < 240 && (io.existsSync(path.join(INSTALL_DIR, 'PyIDE.exe')) || io.existsSync(LOCAL_UNINSTALLER)); i++) await io.sleep(500);
-  if (io.existsSync(path.join(INSTALL_DIR, 'PyIDE.exe')) || io.existsSync(LOCAL_UNINSTALLER)) fail(`the uninstall did not remove ${INSTALL_DIR}`);
+  for (let i = 0; i < 240 && (io.existsSync(path.join(INSTALL_DIR, EXE_NAME)) || io.existsSync(LOCAL_UNINSTALLER)); i++) await io.sleep(500);
+  if (io.existsSync(path.join(INSTALL_DIR, EXE_NAME)) || io.existsSync(LOCAL_UNINSTALLER)) fail(`the uninstall did not remove ${INSTALL_DIR}`);
 }
 // The new build if the tests passed, else the version the user had when its installer is still in dist.
 export function reinstallLocal(passed) {
@@ -311,7 +312,7 @@ export function reinstallLocal(passed) {
   // No shell. NSIS wants /D= last and unquoted even with spaces, so the arguments go verbatim and argv[0] is quoted here.
   const r = io.spawnSync(installer, args, { argv0: `"${installer}"`, windowsVerbatimArguments: true, stdio: 'inherit', windowsHide: true });
   state.reinstall.status = r.error ? r.error.message : r.status;
-  state.reinstall.ok = r.status === 0 && io.existsSync(path.join(INSTALL_DIR, 'PyIDE.exe'));
+  state.reinstall.ok = r.status === 0 && io.existsSync(path.join(INSTALL_DIR, EXE_NAME));
   if (state.reinstall.ok) log(`  reinstalled ${path.basename(installer)} into ${INSTALL_DIR}`);
   else io.error(reinstallAlarm());
   return state.reinstall.ok;
@@ -319,7 +320,7 @@ export function reinstallLocal(passed) {
 const reinstallFailed = () => !!state.reinstall && !state.reinstall.ok;
 const reinstallAlarm = () => [
   '',
-  `!!! PyIDE IS NOT INSTALLED ANY MORE: the release uninstalled ${INSTALL_DIR} and reinstalling it failed (${state.reinstall.status}).`,
+  `!!! NANO STUDIO IS NOT INSTALLED ANY MORE: the release uninstalled ${INSTALL_DIR} and reinstalling it failed (${state.reinstall.status}).`,
   `!!! Install it yourself by running: ${state.reinstall.installer}`,
   `!!!   (silent, same folder: "${state.reinstall.installer}" /S /currentuser /D=${INSTALL_DIR})`,
   '',
@@ -361,7 +362,7 @@ export function failureAdvice() {
     return [
       `Commit "Release ${V}" was made but tagging v${V} failed; nothing was pushed or uploaded, and package.json stays at ${V} (it is in that commit).`,
       'Undo the commit with: git reset --hard HEAD~1',
-      `or tag it (git tag -a v${V} -m "PyIDE ${V}"), push both (${push}) and run ${pub}.`,
+      `or tag it (git tag -a v${V} -m "Nano Studio ${V}"), push both (${push}) and run ${pub}.`,
     ];
   }
   return state.fromVersion ? ['Nothing was committed, pushed or uploaded.'] : [];
@@ -405,8 +406,8 @@ export function installSignalHandlers() {
 
 // ---------- the release ----------
 async function main() {
-  log(`PyIDE release ${V}${opts.publishOnly ? ', publish only' : ''}${dryRun ? ' (dry run: nothing is committed, tagged, pushed or uploaded)' : ''}`);
-  if (!VERSION.test(V)) fail(`"${V}" is not x.y.z (a release) or x.y.z-beta.N (a beta); PyIDE reads only latest.yml and beta.yml`);
+  log(`Nano Studio release ${V}${opts.publishOnly ? ', publish only' : ''}${dryRun ? ' (dry run: nothing is committed, tagged, pushed or uploaded)' : ''}`);
+  if (!VERSION.test(V)) fail(`"${V}" is not x.y.z (a release) or x.y.z-beta.N (a beta); Nano Studio reads only latest.yml and beta.yml`);
   if (isBeta(V)) log(`  a beta: only installs on the Beta channel get it (beta.yml); latest.yml stays as it is`);
   if (opts.publishOnly) return publishOnly();
 
@@ -437,12 +438,12 @@ async function main() {
   else blocker(noNotes());
   checkGh();
   if (!opts.skipTests && io.existsSync(LOCAL_UNINSTALLER) && !opts.replace) {
-    fail(`PyIDE is installed per-user in ${INSTALL_DIR}, where the installer tests install and then remove the MSI build.\n`
-      + '  Run again with --replace-local-install (close PyIDE first: it uninstalls that copy silently, keeps your settings in\n'
-      + '  %APPDATA%\\PyIDE, runs the tests and installs the new build there afterwards), or with --skip-tests.');
+    fail(`Nano Studio is installed per-user in ${INSTALL_DIR}, where the installer tests install and then remove the MSI build.\n`
+      + '  Run again with --replace-local-install (close Nano Studio first: it uninstalls that copy silently, keeps your settings in\n'
+      + '  %APPDATA%\\Nano Studio, runs the tests and installs the new build there afterwards), or with --skip-tests.');
   }
-  if (!opts.skipTests && opts.replace && !dryRun && io.existsSync(LOCAL_UNINSTALLER) && pyideRunning()) {
-    fail('PyIDE.exe is running. Close PyIDE (every window) and run the release again; this script closes nothing.');
+  if (!opts.skipTests && opts.replace && !dryRun && io.existsSync(LOCAL_UNINSTALLER) && appRunning()) {
+    fail(`${EXE_NAME} is running. Close Nano Studio (every window) and run the release again; this script closes nothing.`);
   }
 
   step(2, `set version ${V} in package.json and package-lock.json`);
@@ -472,13 +473,13 @@ async function main() {
   else {
     const collision = io.existsSync(LOCAL_UNINSTALLER);
     if (collision && dryRun) {
-      log(`  [dry-run] PyIDE is installed in ${INSTALL_DIR}; a dry run leaves it alone and skips the installer tests. A real run would:`);
+      log(`  [dry-run] Nano Studio is installed in ${INSTALL_DIR}; a dry run leaves it alone and skips the installer tests. A real run would:`);
       log(`  [dry-run] ${show(LOCAL_UNINSTALLER, ['/S', '/currentuser'])}`);
       log('  [dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out verify/out/release-installed.txt -TimeoutMinutes 20 node verify/installed.mjs all');
       log(`  [dry-run] ${show(exe, ['/S', '/currentuser'])} /D=${INSTALL_DIR}`);
-      warnings.push('installer tests skipped: PyIDE is installed locally (a dry run does not uninstall it)');
+      warnings.push('installer tests skipped: Nano Studio is installed locally (a dry run does not uninstall it)');
     } else {
-      if (collision) state.localInstall = { exe, previous: path.join(DIST, `PyIDE-Setup-${pkg.version}.exe`) };
+      if (collision) state.localInstall = { exe, previous: path.join(DIST, `NanoStudio-Setup-${pkg.version}.exe`) };
       let passed = false;
       try {
         if (collision) await uninstallLocal();
@@ -488,7 +489,7 @@ async function main() {
       } finally {
         if (state.uninstalled && !state.reinstall) reinstallLocal(passed);
       }
-      if (reinstallFailed()) fail('reinstalling PyIDE failed (see above), so the release stops before committing anything');
+      if (reinstallFailed()) fail('reinstalling Nano Studio failed (see above), so the release stops before committing anything');
       if (!passed) fail('the installer tests failed (verify/out/release-installed.txt)');
     }
   }
@@ -497,7 +498,7 @@ async function main() {
   act('git', ['add', 'package.json', 'package-lock.json']);
   act('git', [...AUTHOR, 'commit', '-m', `Release ${V}`, '-m', TRAILER]);
   state.committed = !dryRun;
-  act('git', [...AUTHOR, 'tag', '-a', `v${V}`, '-m', `PyIDE ${V}`]);
+  act('git', [...AUTHOR, 'tag', '-a', `v${V}`, '-m', `Nano Studio ${V}`]);
   state.tagged = !dryRun;
 
   step(6, `push master and tag v${V}`);
@@ -537,7 +538,7 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
   else log(`  Latest release now: ${before.tag} (must stay so)`);
   // Read before anything is uploaded: which beta beta.yml offers, and which older files go at the end.
   const listed = releaseAssets();
-  if (!listed) blocker(`could not list the assets of the ${TAG} release`);
+  if (!listed) blocker(`could not list the assets of the ${TAG} release (create it once by hand: gh release create ${TAG} -R ${REPO} --latest=false)`);
   const assets = listed || [];
   if (dryRun) log(`  current assets: ${assets.join(', ') || '(unknown)'}`);
   const rel = (f) => path.relative(ROOT, f); // gh runs in the repo root
@@ -558,18 +559,18 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
     if (beta) {
       act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
-      log('  PyIDE-Setup.exe, the title and the notes stay as they are (they belong to the stable version)');
+      log('  NanoStudio-Setup.exe, the title and the notes stay as they are (they belong to the stable version)');
     } else {
-      const stable = path.join(stage, 'PyIDE-Setup.exe');
+      const stable = path.join(stage, 'NanoStudio-Setup.exe');
       const notesFile = path.join(stage, 'notes.md');
       if (!dryRun) io.copyFileSync(exe, stable);
       io.writeFileSync(notesFile, notes?.text || '');
       act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), stable, '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
-      act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `PyIDE ${V}`, '--notes-file', notesFile, '--latest=false']);
+      act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `Nano Studio ${V}`, '--notes-file', notesFile, '--latest=false']);
       if (dryRun) log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);
     }
-    if (dryRun) log(`  [dry-run] then gh release list -R ${REPO}: Latest must still be ${before.tag || 'a non-pyide release'}`);
+    if (dryRun) log(`  [dry-run] then gh release list -R ${REPO}: Latest must still be ${before.tag || `a release other than ${TAG}`}`);
     else {
       const after = latestRelease();
       if (after.error || !after.tag || after.tag === TAG) {
@@ -631,7 +632,7 @@ export async function run(argv) {
   let code = 0;
   try {
     await main();
-    log(`\n${dryRun ? 'Dry run finished' : `Released PyIDE ${V}`}.${warnings.length ? ` ${warnings.length} warning(s):\n${warnings.map((w) => `  - ${w.split('\n')[0]}`).join('\n')}` : ''}`);
+    log(`\n${dryRun ? 'Dry run finished' : `Released Nano Studio ${V}`}.${warnings.length ? ` ${warnings.length} warning(s):\n${warnings.map((w) => `  - ${w.split('\n')[0]}`).join('\n')}` : ''}`);
   } catch (err) {
     code = 1;
     io.error(`\nrelease ${dryRun ? 'dry run ' : ''}stopped: ${err instanceof Stop ? err.message : err.stack}`);

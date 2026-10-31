@@ -2,10 +2,10 @@
 //   node verify/update-delta.mjs [--old <dir> --new <dir>] [--keep-builds]
 // Without --old/--new it builds two NSIS installers (this version and the next patch, `npx electron-builder --win nsis
 // --x64 -c.extraMetadata.version=…`) into %TEMP%\pyide-delta-*, never into dist/, and deletes them at the end (about
-// 600 MB each). --old/--new name folders that each hold a PyIDE-Setup-<v>.exe, its .blockmap and latest.yml.
+// 600 MB each). --old/--new name folders that each hold a NanoStudio-Setup-<v>.exe, its .blockmap and latest.yml.
 // Each case runs verify/update-delta-main.cjs, a windowless Electron main process that registers main/features/updater.js
 // as an NSIS install (PYIDE_UPDATE_TEST_KIND=nsis) of the old version, with LOCALAPPDATA in a temp folder holding the old
-// installer as pyide-updater\installer.exe (where the NSIS installer puts itself). It checks a feed with the new
+// installer as nano-studio-updater\installer.exe (where the NSIS installer puts itself). It checks a feed with the new
 // installer and downloads it through electron-updater. The test then compares the downloaded file with the new installer
 // byte for byte and looks at what the feed server sent. Cases: delta over http and from a folder feed; a stale cached
 // current.blockmap; fallbacks to the full installer with no old blockmap on the feed, no cached installer and a corrupt
@@ -47,7 +47,7 @@ function build(version, out, extra = []) {
 function readBuild(dir) {
   const yml = fs.readFileSync(path.join(dir, 'latest.yml'), 'utf8');
   const version = /^version:\s*(\S+)/m.exec(yml)[1];
-  const exe = path.join(dir, `PyIDE-Setup-${version}.exe`);
+  const exe = path.join(dir, `NanoStudio-Setup-${version}.exe`);
   return { dir, version, exe, blockmap: `${exe}.blockmap`, latestYml: path.join(dir, 'latest.yml'), size: fs.statSync(exe).size };
 }
 
@@ -101,11 +101,11 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
   const dir = mkTemp('pyide-delta-case-');
   const feedDir = path.join(dir, 'feed');
   const local = path.join(dir, 'local');
-  const cache = path.join(local, 'pyide-updater');
+  const cache = path.join(local, 'nano-studio-updater');
   const appDir = path.join(dir, 'app');
   for (const d of [feedDir, cache, appDir]) fs.mkdirSync(d, { recursive: true });
   const offered = beta ? `${NEW.version}-beta.1` : NEW.version;
-  const exeName = `PyIDE-Setup-${offered}.exe`;
+  const exeName = `NanoStudio-Setup-${offered}.exe`;
   link(NEW.exe, path.join(feedDir, exeName));
   fs.copyFileSync(NEW.blockmap, path.join(feedDir, `${exeName}.blockmap`));
   fs.copyFileSync(beta ? OLD.latestYml : NEW.latestYml, path.join(feedDir, 'latest.yml'));
@@ -125,9 +125,9 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
     fs.closeSync(fd);
   }
   if (cachedBlockmap) fs.copyFileSync(cachedBlockmap, path.join(cache, 'current.blockmap'));
-  fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'pyide', productName: 'PyIDE', version: OLD.version, main: 'main.cjs' }));
+  fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'nano-studio', productName: 'Nano Studio', version: OLD.version, main: 'main.cjs' }));
   fs.writeFileSync(path.join(appDir, 'main.cjs'), `require(${JSON.stringify(path.join(ROOT, 'verify', 'update-delta-main.cjs'))});\n`);
-  fs.writeFileSync(path.join(appDir, 'dev-app-update.yml'), 'provider: generic\nurl: http://127.0.0.1:9/\nupdaterCacheDirName: pyide-updater\n');
+  fs.writeFileSync(path.join(appDir, 'dev-app-update.yml'), 'provider: generic\nurl: http://127.0.0.1:9/\nupdaterCacheDirName: nano-studio-updater\n');
   const out = path.join(dir, 'result.json');
   const childEnv = { ...process.env, PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', LOCALAPPDATA: local, PYIDE_UPDATE_FEED: 'off',
     PYIDE_DELTA_CASE: JSON.stringify({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir, http, differential, channel: beta ? 'beta' : 'stable', userData: path.join(dir, 'userData'), out }), ...env };
@@ -154,12 +154,12 @@ async function runCase(name, { http = true, oldBlockmapOnFeed = true, cachedInst
   console.log(`  download: ${JSON.stringify(r.download)}, ${r.exeRequests.length} request(s) for the exe, ${MB(r.exeBytes)} of it sent, ${r.ms} ms`);
   for (const l of r.logs.filter((x) => /differential|blockmap|full installer|Full:|Cannot download/i.test(x))) console.log(`  log: ${l.split('\n')[0].slice(0, 220)}`);
   check(!r.error && r.kind === 'nsis' && r.check?.available === offered && r.phase === 'downloaded', `${name}: ${OLD.version} finds ${offered} and downloads it`);
-  check(r.same, `${name}: the downloaded file equals PyIDE-Setup-${NEW.version}.exe byte for byte`);
+  check(r.same, `${name}: the downloaded file equals NanoStudio-Setup-${NEW.version}.exe byte for byte`);
   return r;
 }
 
-// The real cache of an installed PyIDE must not change.
-const realCache = path.join(process.env.LOCALAPPDATA || '', 'pyide-updater');
+// The real cache of an installed Nano Studio must not change.
+const realCache = path.join(process.env.LOCALAPPDATA || '', 'nano-studio-updater');
 const snapshot = () => {
   const rows = [];
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else { const s = fs.statSync(p); rows.push(`${p}|${s.size}|${s.mtimeMs}`); } } };
@@ -192,7 +192,7 @@ try {
 
   r = await runCase('delta to a beta on the Beta channel', { beta: true });
   deltaOk(r, 'beta', `${NEW.version}-beta.1`);
-  check(r && r.blockmapRequests.map((q) => q.path).sort().join() === [`/PyIDE-Setup-${NEW.version}-beta.1.exe.blockmap`, `/${path.basename(OLD.blockmap)}`].sort().join(), 'beta: the old blockmap URL is derived from the beta file name');
+  check(r && r.blockmapRequests.map((q) => q.path).sort().join() === [`/NanoStudio-Setup-${NEW.version}-beta.1.exe.blockmap`, `/${path.basename(OLD.blockmap)}`].sort().join(), 'beta: the old blockmap URL is derived from the beta file name');
 
   r = await runCase('stale cached current.blockmap', { cachedBlockmap: NEW.blockmap });
   deltaOk(r, 'stale current.blockmap');

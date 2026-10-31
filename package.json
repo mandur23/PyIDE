@@ -1,9 +1,9 @@
 {
-  "name": "pyide",
-  "productName": "PyIDE",
+  "name": "nano-studio",
+  "productName": "Nano Studio",
   "version": "0.2.29",
-  "description": "PyCharm-style Python IDE",
-  "updateFeed": "https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/",
+  "description": "Nano Studio: Python IDE (Code) and Minecraft app (Craft)",
+  "updateFeed": "https://github.com/mandur23/Portfolio-Nano-/releases/download/nano-studio/",
   "repository": {
     "type": "git",
     "url": "https://github.com/mandur23/PyIDE.git"
@@ -12,7 +12,7 @@
     "url": "https://github.com/mandur23/PyIDE/issues"
   },
   "author": {
-    "name": "PyIDE",
+    "name": "Nano Studio",
     "email": "ms01048913077@gmail.com"
   },
   "main": "main.js",
@@ -43,8 +43,8 @@
     "pyright": "^1.1.406"
   },
   "build": {
-    "appId": "dev.pyide.ide",
-    "productName": "PyIDE",
+    "appId": "dev.nanostudio.app",
+    "productName": "Nano Studio",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -84,7 +84,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/"
+        "url": "https://github.com/mandur23/Portfolio-Nano-/releases/download/nano-studio/"
       }
     ],
     "win": {
@@ -111,18 +111,18 @@
       "allowToChangeInstallationDirectory": true,
       "createStartMenuShortcut": true,
       "createDesktopShortcut": false,
-      "shortcutName": "PyIDE",
-      "uninstallDisplayName": "PyIDE",
-      "artifactName": "PyIDE-Setup-${version}.exe",
+      "shortcutName": "Nano Studio",
+      "uninstallDisplayName": "Nano Studio",
+      "artifactName": "NanoStudio-Setup-${version}.exe",
       "include": "build/installer.nsh"
     },
     "msi": {
       "perMachine": false,
-      "upgradeCode": "C8A5FFE8-0263-4874-B6AC-E39E095BE819",
+      "upgradeCode": "67C1483D-617C-43D7-AFC3-0480F784D332",
       "createStartMenuShortcut": true,
       "createDesktopShortcut": false,
-      "shortcutName": "PyIDE",
-      "artifactName": "PyIDE-${version}.msi"
+      "shortcutName": "Nano Studio",
+      "artifactName": "NanoStudio-${version}.msi"
     }
   }
 }

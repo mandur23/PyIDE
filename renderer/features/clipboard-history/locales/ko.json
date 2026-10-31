@@ -1,6 +1,6 @@
 {
   "Paste from History": "기록에서 붙여넣기",
-  "PyCharm's Paste from History (Ctrl+Shift+V): the last texts copied or cut in PyIDE, filtered as you type, pasted into the editor at every caret.": "PyCharm의 기록에서 붙여넣기(Ctrl+Shift+V): PyIDE에서 최근에 복사하거나 잘라낸 텍스트를 입력으로 필터링하고 편집기의 모든 캐럿에 붙여넣습니다.",
+  "PyCharm's Paste from History (Ctrl+Shift+V): the last texts copied or cut in Nano Studio, filtered as you type, pasted into the editor at every caret.": "PyCharm의 기록에서 붙여넣기(Ctrl+Shift+V): Nano Studio에서 최근에 복사하거나 잘라낸 텍스트를 입력으로 필터링하고 편집기의 모든 캐럿에 붙여넣습니다.",
   "Paste from History…": "기록에서 붙여넣기…",
   "Type to filter": "입력하여 필터링",
   "Enter pastes the selected text, Delete removes it from the history, Esc closes.": "Enter는 선택한 텍스트를 붙여넣고, Delete는 기록에서 제거하며, Esc는 닫습니다.",
@@ -11,8 +11,8 @@
   "Nothing has been copied yet": "아직 복사한 내용이 없습니다",
   "Clipboard": "클립보드",
   "Maximum number of contents to keep in clipboard:": "클립보드에 보관할 최대 콘텐츠 수:",
-  "Also keep text copied in other applications (read when PyIDE gets focus)": "다른 애플리케이션에서 복사한 텍스트도 보관(PyIDE가 포커스를 받을 때 읽음)",
+  "Also keep text copied in other applications (read when Nano Studio gets focus)": "다른 애플리케이션에서 복사한 텍스트도 보관(Nano Studio가 포커스를 받을 때 읽음)",
   "Keep the history after a restart (encrypted on this computer)": "다시 시작한 후에도 기록 유지(이 컴퓨터에 암호화하여 저장)",
-  "Copied text can hold passwords and tokens, so both are off by default: the history then lives only until PyIDE closes.": "복사한 텍스트에는 비밀번호나 토큰이 들어 있을 수 있으므로 둘 다 기본적으로 꺼져 있습니다. 이 경우 기록은 PyIDE를 닫을 때까지만 유지됩니다.",
+  "Copied text can hold passwords and tokens, so both are off by default: the history then lives only until Nano Studio closes.": "복사한 텍스트에는 비밀번호나 토큰이 들어 있을 수 있으므로 둘 다 기본적으로 꺼져 있습니다. 이 경우 기록은 Nano Studio를 닫을 때까지만 유지됩니다.",
   "Clear History": "기록 지우기"
 }

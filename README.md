@@ -1,14 +1,19 @@
-# PyIDE
+# Nano Studio
 
 [![CI](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml/badge.svg)](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml)
 
-PyCharm 스타일의 Windows용 Python IDE입니다. Electron 38과 Monaco 에디터로 만들었습니다.
+Windows용 앱 하나에 두 가지 앱이 들어 있습니다. 시작할 때마다 고릅니다. Electron 38과 Monaco 에디터로 만들었습니다.
 
-**설치 파일 다운로드:** [PyIDE-Setup.exe](https://github.com/mandur23/Portfolio-Nano-/releases/download/pyide/PyIDE-Setup.exe) · [릴리스 페이지 (EXE / MSI)](https://github.com/mandur23/Portfolio-Nano-/releases/tag/pyide)
+- **Nano Studio Code**: PyCharm 스타일의 Python IDE (이전 이름 PyIDE)
+- **Nano Studio Craft**: 마인크래프트 앱. 공식 Minecraft Launcher로 모드를 넣어 플레이하고, 서버에 참여하면 서버의 모드가 자동으로 맞춰지며, 서버를 직접 열 수도 있습니다.
+
+PyIDE를 쓰던 컴퓨터에서 처음 시작하면 PyIDE의 설정, 플러그인, 인터프리터 목록을 복사해 옵니다 (`%APPDATA%\PyIDE`는 그대로 둡니다).
+
+**설치 파일 다운로드:** [NanoStudio-Setup.exe](https://github.com/mandur23/Portfolio-Nano-/releases/download/nano-studio/NanoStudio-Setup.exe) · [릴리스 페이지 (EXE / MSI)](https://github.com/mandur23/Portfolio-Nano-/releases/tag/nano-studio)
 
 설치 파일에는 코드 서명이 없어 Windows SmartScreen 경고가 뜰 수 있습니다 (추가 정보 → 실행). EXE로 설치하면 앱 안에서 자동으로 업데이트됩니다.
 
-## 주요 기능
+## 주요 기능 (Code)
 
 - **편집과 분석**: Pyright 자동 완성·정의 이동·사용 위치 찾기, ruff 검사와 서식, 맞춤법 검사, 라이브 템플릿, 인레이 힌트
 - **리팩터링**: rope 기반 이름 변경·추출·인라인·이동, 프로젝트 트리에서 모듈 이름 변경/이동 시 import 자동 수정
@@ -37,16 +42,16 @@ npm start
 npm run dist
 ```
 
-`dist/`에 `PyIDE-Setup-<버전>.exe` (NSIS)와 `PyIDE-<버전>.msi`가 만들어집니다.
+`dist/`에 `NanoStudio-Setup-<버전>.exe` (NSIS)와 `NanoStudio-<버전>.msi`가 만들어집니다.
 
 ## 릴리스
 
 `CHANGELOG.md`에 `## <버전>` 절을 추가해 커밋한 뒤, `master`에서 실행합니다 (`gh` 로그인 필요).
 
 ```bash
-npm run release -- 0.2.1 --dry-run   # 확인만: 빌드와 테스트 후 실행할 git/gh 명령을 출력
-npm run release -- 0.2.1
-npm run release -- 0.2.1 --publish-only   # 푸시 뒤에 멈춘 릴리스 이어 가기: dist의 파일만 업로드
+npm run release -- 0.3.1 --dry-run   # 확인만: 빌드와 테스트 후 실행할 git/gh 명령을 출력
+npm run release -- 0.3.1
+npm run release -- 0.3.1 --publish-only   # 푸시 뒤에 멈춘 릴리스 이어 가기: dist의 파일만 업로드
 ```
 
 버전 올리기, 빌드, 설치 파일 테스트, 커밋과 `v<버전>` 태그, 푸시, GitHub 릴리스 업로드(`latest.yml`은 마지막)까지 한 번에 합니다. 중간에 멈추면 어디까지 진행됐는지에 따라 되돌리는 방법이나 `--publish-only`로 이어 가는 방법을 알려 줍니다. 옵션은 [FEATURES.md](FEATURES.md)의 Updates 절에 있습니다.

@@ -2,8 +2,9 @@
   "id": "search-everywhere",
   "name": "Search Everywhere",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Double Shift popup that searches classes, files, symbols, actions and settings in one place.",
+  "modes": ["code"],
   "depends": [
     "search-nav"
   ]

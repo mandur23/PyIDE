@@ -17,7 +17,7 @@
 
   // Newest first: {text, time, multicursor?: [one text per caret], wholeLine?: Monaco copied a line without a selection}.
   let items = [];
-  let lastSystem = null; // the system clipboard text last seen or written by PyIDE
+  let lastSystem = null; // the system clipboard text last seen or written by Nano Studio
   let popup = null;
 
   function add(text, meta = {}) {
@@ -228,9 +228,9 @@
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Paste from History'));
       s.appendChild(ctx.ui.fieldRow(tr('Maximum number of contents to keep in clipboard:'), ctx.ui.numberInput(LIMIT, { min: 1, max: 100, fallback: DEFAULT_LIMIT }), '1 – 100'));
-      s.appendChild(ctx.ui.checkbox(SYSTEM, tr('Also keep text copied in other applications (read when PyIDE gets focus)')));
+      s.appendChild(ctx.ui.checkbox(SYSTEM, tr('Also keep text copied in other applications (read when Nano Studio gets focus)')));
       s.appendChild(ctx.ui.checkbox(PERSIST, tr('Keep the history after a restart (encrypted on this computer)')));
-      s.appendChild(el('div', 'muted settings-note', tr('Copied text can hold passwords and tokens, so both are off by default: the history then lives only until PyIDE closes.')));
+      s.appendChild(el('div', 'muted settings-note', tr('Copied text can hold passwords and tokens, so both are off by default: the history then lives only until Nano Studio closes.')));
       const clearBtn = el('button', 'secondary ch-clear', tr('Clear History'));
       clearBtn.onclick = () => { clear(); clearBtn.disabled = true; };
       clearBtn.disabled = !items.length;

@@ -2,8 +2,9 @@
   "id": "port-sharing",
   "name": "Ports",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "A Ports tool window like VS Code's: the ports that servers started from PyIDE listen on, and ports you add, with their LAN address and a public address for any of them: an https address for a web server through a Cloudflare quick tunnel (cloudflared), a host:port address for any other TCP server, such as a game server, through bore (both from the Install Manager), with an optional automatic share.",
+  "vendor": "Nano Studio",
+  "description": "A Ports tool window like VS Code's: the ports that servers started from Nano Studio listen on, and ports you add, with their LAN address and a public address for any of them: an https address for a web server through a Cloudflare quick tunnel (cloudflared), a host:port address for any other TCP server, such as a game server, through bore (both from the Install Manager), with an optional automatic share.",
+  "modes": ["code", "craft"],
   "depends": [
     "installer"
   ],

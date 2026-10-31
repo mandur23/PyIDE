@@ -1,7 +1,6 @@
 {
   "Database Tools and SQL": "데이터베이스 도구 및 SQL",
   "Connect to SQLite, PostgreSQL, MySQL and MariaDB, browse schemas, and run SQL in query consoles.": "SQLite, PostgreSQL, MySQL, MariaDB에 연결하고 스키마를 탐색하며 쿼리 콘솔에서 SQL을 실행합니다.",
-  "Loading…": "로드 중…",
   "Driver files are missing. Download them in the data source settings.": "드라이버 파일이 없습니다. 데이터 소스 설정에서 다운로드하세요.",
   "No tables": "테이블 없음",
   "No data sources yet.": "아직 데이터 소스가 없습니다.",

@@ -237,7 +237,7 @@ try {
   const corrupt = write(path.join(outside, 'corrupt.zip'), zipOf([mcmeta, { name: 'assets/y.png', method: 8, packed: crypto.randomBytes(300), size: 1000 }]));
   const locked = write(path.join(outside, 'encrypted.zip'), zipOf([mcmeta, { name: 'assets/z.png', method: 8, packed: crypto.randomBytes(30), size: 10, flags: 0x801 }]));
   r = await drop(serverDir('fab'), [bz, corrupt, locked]);
-  check(/x\.png uses a compression PyIDE does not read \(method 12\)/.test(skippedOf(r, 'bzip2.zip')?.message) && /y\.png is damaged/.test(skippedOf(r, 'corrupt.zip')?.message)
+  check(/x\.png uses a compression Nano Studio does not read \(method 12\)/.test(skippedOf(r, 'bzip2.zip')?.message) && /y\.png is damaged/.test(skippedOf(r, 'corrupt.zip')?.message)
     && /z\.png is encrypted/.test(skippedOf(r, 'encrypted.zip')?.message), `unsupported, damaged and encrypted entries: a clear message each (${S(r.ok?.skipped)})`);
   rmSync(path.join(serverDir('fab'), 'resourcepack'), { recursive: true, force: true });
 
@@ -309,7 +309,7 @@ try {
   const cases = [
     ['malformed index', packFile('malformed.mrpack', '{"name": "x", '), /malformed\.mrpack has a damaged modrinth\.index\.json/],
     ['an index that is not an object', packFile('array.mrpack', '[1, 2]'), /damaged modrinth\.index\.json|names no mod loader/],
-    ['an unknown loader', packFile('lite.mrpack', { dependencies: { minecraft: '1.20.1', liteloader: '1.0' } }), /names no mod loader PyIDE runs/],
+    ['an unknown loader', packFile('lite.mrpack', { dependencies: { minecraft: '1.20.1', liteloader: '1.0' } }), /names no mod loader Nano Studio runs/],
     ['Quilt', packFile('quilt.mrpack', { dependencies: { minecraft: '1.20.1', 'quilt-loader': '0.20' } }), /Quilt modpacks are not supported/],
     ['no Minecraft version', packFile('nomc.mrpack', { dependencies: { 'fabric-loader': '0.15.0' } }), /names no Minecraft version/],
     ['a loader version with a path in it', packFile('pathy.mrpack', { dependencies: { minecraft: '1.20.1', 'fabric-loader': '../../x' } }), /names no Fabric version/],
@@ -363,7 +363,7 @@ try {
   }
   const bzPack = packFile('bz.mrpack', { name: 'bz', dependencies: deps, files: [] }, [{ name: 'overrides/config/a.toml', method: 12, packed: Buffer.from('BZh9'), size: 4 }]);
   r = await fromPack({ file: bzPack, name: 'bzpack' });
-  check(/a\.toml uses a compression PyIDE does not read/.test(r.err || '') && before('bzpack'), `overrides in a compression PyIDE does not read: ${r.err}`);
+  check(/a\.toml uses a compression Nano Studio does not read/.test(r.err || '') && before('bzpack'), `overrides in a compression Nano Studio does not read: ${r.err}`);
   const bombPack = write(path.join(outside, 'bomb.mrpack'), zipOf([{ name: 'modrinth.index.json', data: Buffer.from(S({ name: 'bomb', dependencies: deps, files: [] })) }, bombEntry('overrides/bomb/x.bin', 64)], { overlap: 99 }));
   tm = await timed(() => fromPack({ file: bombPack, name: 'bombpack' }));
   check(/unpacks to \d+ MB, more than the 2048 MB/.test(tm.r.err || '') && before('bombpack') && tm.ms < 20000, `a modpack whose overrides are a zip bomb is refused (${tm.ms} ms: ${tm.r.err})`);
@@ -443,7 +443,7 @@ try {
     project_(id, id); versions(id, [{ id: `${id}v`, version_number: '1', version_type: 'release', files: [mfile(filename, Buffer.from('x'))] }]);
     const fabDesc = readFileSync(path.join(fab, 'pyide-server.json'), 'utf8');
     r = await install(fab, id);
-    check(/has a name PyIDE does not write/.test(r.err || '') && !escaped().length && !mods().length && readFileSync(path.join(fab, 'pyide-server.json'), 'utf8') === fabDesc,
+    check(/has a name Nano Studio does not write/.test(r.err || '') && !escaped().length && !mods().length && readFileSync(path.join(fab, 'pyide-server.json'), 'utf8') === fabDesc,
       `a Modrinth file named ${S(filename)} is refused: ${r.err || S(r.ok)}`);
   }
 
@@ -467,7 +467,7 @@ try {
   await js('ide.minecraft.refresh().then(() => true)');
   rmSync(serverDir('gone'), { recursive: true, force: true });
   r = await install(serverDir('gone'), 'SLOWB');
-  check(/is not a PyIDE Minecraft server/.test(r.err || '') && !existsSync(serverDir('gone')), `installing into a server whose folder was deleted: ${r.err}; the folder is not made again`);
+  check(/is not a Nano Studio Minecraft server/.test(r.err || '') && !existsSync(serverDir('gone')), `installing into a server whose folder was deleted: ${r.err}; the folder is not made again`);
   const papDesc = desc('pap');
   writeFileSync(path.join(serverDir('pap'), 'pyide-server.json'), S({ ...papDesc, market: { HOST: { title: 'Host', version: '1', files: ['../../../sentinel.txt', 'C:\\'], needs: [], dependency: false } } }));
   r = await remove(serverDir('pap'), 'HOST');

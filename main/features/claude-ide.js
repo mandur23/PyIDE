@@ -37,6 +37,10 @@ const authToken = crypto.randomBytes(16).toString('hex');
 // PYIDE_CLAUDE_IDE_DIR keeps test instances out of the user's real lock folder (verify/lib.mjs sets it).
 const lockDir = () => process.env.PYIDE_CLAUDE_IDE_DIR || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'ide');
 
+// The name Claude Code lists the window under. A lock left by a PyIDE that crashed is cleaned up like our own.
+const IDE_NAME = 'Nano Studio';
+const OWN_NAMES = [IDE_NAME, 'PyIDE'];
+
 // The environment for terminals: empty until the server listens, or when the plugin is disabled.
 exports.ideEnv = () => (port ? { CLAUDE_CODE_SSE_PORT: String(port), ENABLE_IDE_INTEGRATION: 'true' } : {});
 
@@ -95,7 +99,7 @@ exports.register = ({ ipcMain, app, send, getWindow }) => {
     try {
       fs.mkdirSync(lockDir(), { recursive: true });
       fs.writeFileSync(path.join(lockDir(), `${port}.lock`), JSON.stringify({
-        pid: process.pid, workspaceFolders, ideName: 'PyIDE', transport: 'ws', runningInWindows: process.platform === 'win32', authToken,
+        pid: process.pid, workspaceFolders, ideName: IDE_NAME, transport: 'ws', runningInWindows: process.platform === 'win32', authToken,
       }));
     } catch (err) { console.error('claude-ide: cannot write the lock file', err); }
   };
@@ -108,7 +112,7 @@ exports.register = ({ ipcMain, app, send, getWindow }) => {
       const file = path.join(lockDir(), name);
       try {
         const lock = JSON.parse(await fs.promises.readFile(file, 'utf8'));
-        if (lock.ideName === 'PyIDE' && Number.isInteger(lock.pid) && lock.pid !== process.pid && !alive(lock.pid)) await fs.promises.unlink(file);
+        if (OWN_NAMES.includes(lock.ideName) && Number.isInteger(lock.pid) && lock.pid !== process.pid && !alive(lock.pid)) await fs.promises.unlink(file);
       } catch {}
     }
   };
@@ -123,7 +127,7 @@ exports.register = ({ ipcMain, app, send, getWindow }) => {
       pendingCalls.delete(id);
       resolve(name === 'openDiff'
         ? [{ type: 'text', text: 'DIFF_REJECTED' }, { type: 'text', text: String(args.tab_name ?? '') }]
-        : [{ type: 'text', text: 'Error: the PyIDE window was reloaded or closed' }]);
+        : [{ type: 'text', text: 'Error: the Nano Studio window was reloaded or closed' }]);
     }
   };
   const callRenderer = (name, args) => new Promise((resolve) => {
@@ -151,7 +155,7 @@ exports.register = ({ ipcMain, app, send, getWindow }) => {
     const ok = (result) => id !== undefined && reply(JSON.stringify({ jsonrpc: '2.0', id, result }));
     if (method === 'initialize') {
       return ok({ protocolVersion: params.protocolVersion || PROTOCOL, capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'PyIDE', version: app.getVersion() } });
+        serverInfo: { name: IDE_NAME, version: app.getVersion() } });
     }
     if (method === 'tools/list') return ok({ tools: TOOLS });
     if (method === 'tools/call') {

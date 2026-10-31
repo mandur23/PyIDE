@@ -111,7 +111,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
   // there already) and described. Its eula.txt is left as it is: agreeing is the user's.
   async function importServer(src, log) {
     const found = detectServer(src, javaOfJar);
-    if (!found) throw fail(`${path.basename(src)} does not look like a Minecraft server PyIDE knows (Paper, Purpur, Velocity, Vanilla, Fabric, Forge or NeoForge)`);
+    if (!found) throw fail(`${path.basename(src)} does not look like a Minecraft server Nano Studio knows (Paper, Purpur, Velocity, Vanilla, Fabric, Forge or NeoForge)`);
     const parent = path.join(root, 'servers');
     const already = path.resolve(path.dirname(src)).toLowerCase() === path.resolve(parent).toLowerCase();
     if (already && readServer(src)) throw fail(`${path.basename(src)} is one of the project's servers already`);
@@ -223,7 +223,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
       if (!index || typeof index !== 'object') throw fail(`${path.basename(file)} has a damaged modrinth.index.json`);
       const deps = index.dependencies || {};
       const loaderKey = Object.keys(LOADERS).find((k) => deps[k]);
-      if (!loaderKey) throw fail(deps['quilt-loader'] ? 'Quilt modpacks are not supported yet' : 'The modpack names no mod loader PyIDE runs (Fabric, Forge, NeoForge)');
+      if (!loaderKey) throw fail(deps['quilt-loader'] ? 'Quilt modpacks are not supported yet' : 'The modpack names no mod loader Nano Studio runs (Fabric, Forge, NeoForge)');
       // Both go into download addresses.
       if (!VERSION(deps.minecraft)) throw fail('The modpack names no Minecraft version');
       if (!VERSION(deps[loaderKey])) throw fail(`The modpack names no ${KINDS[LOADERS[loaderKey]].title} version`);

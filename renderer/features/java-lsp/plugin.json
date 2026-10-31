@@ -2,8 +2,9 @@
   "id": "java-lsp",
   "name": "Java Language Support (Eclipse JDT LS)",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Completion, errors as you type, quick documentation, navigation, find usages, rename, optimize imports and quick fixes for Java, Maven and Gradle projects, powered by the Eclipse JDT Language Server from the Install Manager.",
+  "modes": ["code"],
   "depends": [
     "lsp",
     "toolchains"

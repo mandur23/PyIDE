@@ -314,7 +314,7 @@ const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, env
   PYIDE_BORE: S([process.execPath, fakeBore]),
   PYIDE_CLAUDE_PATH: fakeClaude,
   PYIDE_MC_SOURCES: S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/paper`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, forge: `${base}/forge`,
-    forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` }),
+    forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth`, mojangApi: `${base}/mojang-api` }),
 } });
 const { js, until, check, sleep, shot, cdp } = t;
 // A real drag of files from outside (CDP, with their paths) onto an element of the window.
@@ -689,18 +689,66 @@ try {
   const mcJar = path.join(serverDir('modded'), 'libraries', 'net', 'minecraft', 'server', '1.20.1', 'server-1.20.1.jar');
   mkdirSync(path.dirname(mcJar), { recursive: true });
   execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr("version.json", \'{"pack_version": {"resource": 15, "data": 15}}\'); z.close()', mcJar]);
+  const inTab = (sel) => `document.querySelector('.mcset ${sel}')`;
+  const field = (key) => inTab(`[data-prop="${key}"]`);
+  const enter = (key, value, type = 'input') => js(`(() => { const c = ${field(key)}; c.value = ${S(value)}; c.dispatchEvent(new Event(${S(type)})); return true; })()`);
+  const flip = (key, on) => js(`(() => { const c = ${field(key)}; c.checked = ${on}; c.dispatchEvent(new Event('change')); return true; })()`);
+  const addPlayer = (list, name) => js(`(() => { const box = document.querySelector('.mcset-players[data-list="${list}"]'); box.querySelector('.mcset-pname').value = ${S(name)}; box.querySelector('.mcset-padd').requestSubmit(); return true; })()`);
+  const playerText = (list) => js(`document.querySelector('.mcset-players[data-list="${list}"]').textContent`);
+  const saveTab = async (done) => {
+    await js(`(${inTab('.mcset-save')}.click(), true)`);
+    await until(`${done}.test(${inTab('.mcset-status')}.textContent)`, 'settings saved', 10000)
+      .catch(async (e) => { console.log(await js(`${inTab('.mcset-status')}.textContent`)); throw e; });
+  };
   await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
-  await until(`/lines in \\d+ of the \\d+ mods have no Korean yet/.test(document.querySelector('.mc-translate-status')?.textContent || '')`, 'translation status', 20000)
-    .catch(async (e) => { console.log(await js(`document.querySelector('.mc-translate-status')?.textContent`)); throw e; });
-  check(await js(`document.querySelector('#mcSetMotd').value === 'modded' && document.querySelector('#mcSetPort').value === '25612' && document.querySelector('#mcSetMemory').value === '2G' && !document.querySelector('.mc-translate-run').disabled`),
-    'Server Settings shows the server\'s properties and memory, and counts the mods\' lines without Korean (the jar\'s own Korean and AutoModpack\'s non-jar left out)');
-  await js(`(document.querySelector('#mcSetPlayers').value = '8', document.querySelector('#mcSetDifficulty').value = 'hard', document.querySelector('#mcSetMemory').value = '4G', true)`);
-  await js(`(${dialogButton('Save')}).click()`);
-  await until(`!document.querySelector('#mcSetMotd')`, 'settings saved', 10000);
+  await until(`/lines in \\d+ of the \\d+ mods have no Korean yet/.test(${inTab('.mc-translate-status')}?.textContent || '')`, 'translation status', 20000)
+    .catch(async (e) => { console.log(await js(`document.querySelector('.mcset')?.textContent`)); throw e; });
+  check(await js(`ide.activeTab()?.path.startsWith('minecraft:settings:') && ${field('motd')}.value === 'modded' && ${field('server-port')}.value === '25612' && ${field('$memory')}.value === '2G'
+    && !${field('$jvmDefault')}.checked && ${field('$jvm')}.value === '-XX:+UseSerialGC' && ${field('view-distance')}.value === '10' && !${inTab('.mc-translate-run')}.disabled
+    && [...document.querySelectorAll('.mcset-page')].map((p) => p.dataset.section).join() === 'general,game,world,players,performance,mods,other' && ${inTab('.mcset-save')}.disabled`),
+    'Settings… opens the server\'s settings tab: its sections, the file\'s values (a missing line shows the server\'s default), the JVM options and the mods\' lines without Korean');
+  await enter('max-players', '8');
+  await enter('difficulty', 'hard', 'change');
+  await enter('$memory', '4G', 'change');
+  await enter('motd', 'Ruby 서버\n§aLine two');
+  await flip('pvp', false);
+  await enter('view-distance', '99');
+  check(await js(`${inTab('.mcset-save')}.disabled && ${field('view-distance')}.classList.contains('invalid')`), 'a value out of range is marked and keeps Save off');
+  await enter('view-distance', '12');
+  await enter('$jvm', '-XX:+UseSerialGC\n-Xss2M');
+  const marked = await js(`({ rows: [...document.querySelectorAll('.mcset-row.modified')].map((r) => r.dataset.key), save: !${inTab('.mcset-save')}.disabled, status: ${inTab('.mcset-status')}.textContent,
+    preview: [...document.querySelectorAll('.mcset-motd-line')].map((l) => [...l.children].map((s) => [s.textContent, s.style.color])) })`);
+  check(S(marked.rows) === S(['motd', 'max-players', '$memory', 'difficulty', 'pvp', 'view-distance', '$jvm']) && marked.save && /7/.test(marked.status)
+    && S(marked.preview) === S([[['Ruby 서버', 'rgb(170, 170, 170)']], [['Line two', 'rgb(85, 255, 85)']]]),
+    `each changed setting is marked, Save comes on, and the message of the day is previewed in its colors (${S(marked)})`);
+  await js(`(() => { const s = document.querySelector('.mcset-search'); s.value = 'whitelist'; s.dispatchEvent(new Event('input')); return true; })()`);
+  const shown = await js(`[...document.querySelectorAll('.mcset-row:not(.hidden)')].map((r) => r.dataset.key)`);
+  check(S(shown) === S(['white-list', 'enforce-whitelist', '$whitelist']), `the search shows only the settings it matches (${S(shown)})`);
+  await js(`(() => { const s = document.querySelector('.mcset-search'); s.value = ''; s.dispatchEvent(new Event('input')); return true; })()`);
+  routes.set('/mojang-api/users/profiles/minecraft/Steve', { id: '0123456789abcdef0123456789abcdef', name: 'Steve' });
+  await addPlayer('whitelist', 'Steve');
+  await until(`/Steve/.test(document.querySelector('.mcset-players[data-list="whitelist"] .mcset-plist').textContent)`, 'whitelisted', 10000);
+  await addPlayer('whitelist', 'Nobody');
+  await until(`/No Minecraft account is named Nobody/.test(document.querySelector('.mcset-players[data-list="whitelist"] .mcset-perror').textContent)`, 'unknown account', 10000);
+  check(/01234567-89ab-cdef-0123-456789abcdef/.test(await playerText('whitelist')), 'a player is whitelisted with the UUID of their Mojang account, and an unknown name is refused');
+  await saveTab(/Saved/);
   const modProps = readFileSync(path.join(serverDir('modded'), 'server.properties'), 'utf8');
-  check(/^max-players=8$/m.test(modProps) && /^difficulty=hard$/m.test(modProps) && /^server-port=25612$/m.test(modProps)
-    && JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8')).memory === '4G',
-    'Save writes server.properties and the memory');
+  const modDesc = JSON.parse(readFileSync(path.join(serverDir('modded'), 'pyide-server.json'), 'utf8'));
+  const allowed = JSON.parse(readFileSync(path.join(serverDir('modded'), 'whitelist.json'), 'utf8'));
+  check(/^max-players=8$/m.test(modProps) && /^difficulty=hard$/m.test(modProps) && /^pvp=false$/m.test(modProps) && /^view-distance=12$/m.test(modProps)
+    && /^server-port=25612$/m.test(modProps) && modProps.includes('motd=Ruby \\uc11c\\ubc84\\n\\u00a7aLine two')
+    && modDesc.memory === '4G' && S(modDesc.jvmArgs) === S(['-XX:+UseSerialGC', '-Xss2M'])
+    && S(allowed) === S([{ uuid: '01234567-89ab-cdef-0123-456789abcdef', name: 'Steve' }]) && await js(`${inTab('.mcset-save')}.disabled && !document.querySelector('.mcset-row.modified')`),
+    `Save writes server.properties (other characters as \\u escapes, as every server version reads them), the memory and JVM options, and whitelist.json (${modProps.split('\n').filter((l) => /^motd/.test(l))})`);
+  await startServer('modded');
+  routes.set('/mojang-api/users/profiles/minecraft/Alex', { id: 'fedcba9876543210fedcba9876543210', name: 'Alex' });
+  await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
+  await addPlayer('ops', 'Alex');
+  await until(`/Alex/.test(document.querySelector('.mcset-players[data-list="ops"] .mcset-plist').textContent)`, 'op added', 10000);
+  await saveTab(/console/);
+  await until(`(${runTab('modded')}).host.textContent.includes('Unknown command: op Alex')`, 'op command', 10000);
+  check(!existsSync(path.join(serverDir('modded'), 'ops.json')), 'on a running server a new operator is an /op typed into its console, which writes its own ops.json');
+  await stopServer('modded');
   await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
   await until(`!!document.querySelector('.mc-translate-run') && !document.querySelector('.mc-translate-run').disabled`, 'translate button', 20000);
   await shot('server-settings.png');
@@ -747,6 +795,8 @@ try {
   // ---------- Delete ----------
   const trashed = path.join(work, 'trashed-purp');
   await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(trashed)}), true)`);
+  await js(`(${card('purp')}.querySelector('.mc-settings').click(), true)`);
+  await until(`!!document.querySelector('.mcset [data-prop="motd"]') && ide.activeTab()?.path.endsWith('purp')`, 'purp settings tab');
   await js(`(${card('purp')}.querySelector('.mc-delete').click(), true)`);
   await until(`!!${dialogButton('Delete')}`, 'delete confirm');
   check(/Recycle Bin/.test(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'Delete asks before moving the server to the Recycle Bin');
@@ -754,8 +804,8 @@ try {
   await until(`!${card('purp')}`, 'purp deleted', 10000);
   const tomlAfter = readFileSync(path.join(serverDir('proxy'), 'velocity.toml'), 'utf8');
   check(existsSync(path.join(trashed, 'pyide-server.json')) && !existsSync(serverDir('purp')) && !/"purp"/.test(tomlAfter) && /^"survival" = /m.test(tomlAfter)
-    && await js(`!ide.run.configs().some((c) => c.type === 'minecraft-server' && /purp$/.test(c.dir))`),
-    'Delete moves the server folder to the Recycle Bin, takes it out of the proxy and drops its run configuration');
+    && await js(`!ide.run.configs().some((c) => c.type === 'minecraft-server' && /purp$/.test(c.dir)) && !ide.findTab(ide.minecraft.settings.tabId(${S(serverDir('purp'))}))`),
+    'Delete moves the server folder to the Recycle Bin, takes it out of the proxy, drops its run configuration and closes its settings tab');
 
   // ---------- the Minecraft screen, New Project ----------
   await js(`(document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);

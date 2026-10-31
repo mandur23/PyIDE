@@ -1,6 +1,6 @@
 {
   "Prettier and ESLint": "Prettier 및 ESLint",
-  "Reformat Code with the project's own Prettier and ESLint problems with quick fixes in JavaScript and TypeScript files, as in WebStorm. Uses the packages installed in the project's node_modules, run by PyIDE itself, so Node.js need not be installed; only in trusted projects.": "WebStorm처럼 JavaScript와 TypeScript 파일에서 프로젝트 자체의 Prettier로 코드 서식을 다시 지정하고 ESLint 문제를 빠른 수정과 함께 보여 줍니다. 프로젝트의 node_modules에 설치된 패키지를 PyIDE가 직접 실행하므로 Node.js를 설치하지 않아도 되며, 신뢰한 프로젝트에서만 실행합니다.",
+  "Reformat Code with the project's own Prettier and ESLint problems with quick fixes in JavaScript and TypeScript files, as in WebStorm. Uses the packages installed in the project's node_modules, run by Nano Studio itself, so Node.js need not be installed; only in trusted projects.": "WebStorm처럼 JavaScript와 TypeScript 파일에서 프로젝트 자체의 Prettier로 코드 서식을 다시 지정하고 ESLint 문제를 빠른 수정과 함께 보여 줍니다. 프로젝트의 node_modules에 설치된 패키지를 Nano Studio가 직접 실행하므로 Node.js를 설치하지 않아도 되며, 신뢰한 프로젝트에서만 실행합니다.",
   "Prettier cannot format the file: {error}": "Prettier가 파일 서식을 지정할 수 없습니다: {error}",
   "its output is not the formatted file": "출력이 서식을 지정한 파일 내용이 아닙니다",
   "ESLint cannot check files": "ESLint가 파일을 검사할 수 없습니다",

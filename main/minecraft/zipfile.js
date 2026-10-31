@@ -72,7 +72,7 @@ function openZip(file) {
         const e = entries.get(name);
         if (!e) return null;
         if (e.flags & 1) throw fail(`${name} is encrypted`);
-        if (e.method !== 0 && e.method !== 8) throw fail(`${name} uses a compression PyIDE does not read (method ${e.method})`);
+        if (e.method !== 0 && e.method !== 8) throw fail(`${name} uses a compression Nano Studio does not read (method ${e.method})`);
         if (e.size > LIMITS.entry) throw fail(`${name} is too large (${mb(e.size)} MB)`);
         const head = Buffer.alloc(30);
         fs.readSync(fd, head, 0, 30, e.at);
@@ -114,7 +114,7 @@ function unpackZip(file, dest, prefix = '') {
   try {
     const names = zip.names.filter((x) => x.startsWith(prefix) && !x.endsWith('/'));
     const total = names.reduce((s, n) => s + zip.size(n), 0);
-    if (total > LIMITS.total) throw fail(`${path.basename(file)} unpacks to ${mb(total)} MB, more than the ${mb(LIMITS.total)} MB PyIDE unpacks`);
+    if (total > LIMITS.total) throw fail(`${path.basename(file)} unpacks to ${mb(total)} MB, more than the ${mb(LIMITS.total)} MB Nano Studio unpacks`);
     for (const n of names) {
       const out = path.resolve(top, n.slice(prefix.length));
       if (!out.startsWith(top + path.sep) || out.slice(top.length).includes(':')) continue;

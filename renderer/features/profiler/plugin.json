@@ -2,8 +2,9 @@
   "id": "profiler",
   "name": "Python Profiler",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Profile any run configuration with cProfile: a statistics table, a call tree and a flame graph that navigate to the source.",
+  "modes": ["code"],
   "depends": ["run"],
   "main": ["profiler.js"]
 }

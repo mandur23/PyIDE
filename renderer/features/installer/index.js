@@ -313,7 +313,7 @@
       },
       confirm: tr('{name} will be installed system-wide with winget:', { name })
         + `\n\n\`winget install --id ${wingetId} -e --accept-source-agreements --accept-package-agreements\`\n\n`
-        + tr('Windows may ask for administrator permission. Restart PyIDE afterwards so the new PATH applies.'),
+        + tr('Windows may ask for administrator permission. Restart Nano Studio afterwards so the new PATH applies.'),
       install: async (log, progress, signal) => {
         try { await mainJob({ kind: 'winget', id: wingetId }, log, progress, signal); } finally { systemState = null; }
       },
@@ -358,7 +358,7 @@
     }
   }
   function pythonItem(key) {
-    const name = tr('PyIDE Python {version}', { version: key });
+    const name = tr('Nano Studio Python {version}', { version: key });
     const job = (kind) => async (log, progress, signal) => {
       const p = (await pythons()).get(key);
       if (kind === 'python-uninstall') await release(p);
@@ -372,7 +372,7 @@
     };
     return {
       id: `python:${key}`, category: 'interpreters', name, homepage: 'https://www.nuget.org/packages/python',
-      description: tr('The official Python {version} from python.org, installed for PyIDE only: no administrator rights and nothing added to PATH. It includes pip and venv; tkinter is not included.', { version: key }),
+      description: tr('The official Python {version} from python.org, installed for Nano Studio only: no administrator rights and nothing added to PATH. It includes pip and venv; tkinter is not included.', { version: key }),
       async status() {
         const p = (await pythons()).get(key);
         return { installed: p.installed, version: p.version, size: mb(p.size), detail: p.installed ? p.exe : tr('Installs into {path}', { path: p.dir }) };

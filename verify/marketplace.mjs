@@ -119,7 +119,7 @@ async function pure() {
   check(!('extra' in market.parseIndex(index([{ ...entry, extra: 1 }]), base)[0]), 'unknown fields are dropped');
   const bad = {
     'not JSON': ['{', /is not JSON/],
-    'format 2': [index([], { format: 2 }), /format 2, which needs a newer PyIDE/],
+    'format 2': [index([], { format: 2 }), /format 2, which needs a newer Nano Studio/],
     'no plugins list': [JSON.stringify({ format: 1 }), /"plugins" must be a list/],
     'uppercase id': [index([{ ...entry, id: 'Demo' }]), /plugins\[0\]\.id must be/],
     'path in id': [index([{ ...entry, id: '../x' }]), /plugins\[0\]\.id must be/],
@@ -200,7 +200,7 @@ async function pure() {
     const pm = createPluginManager({ appDir: APP_DIR, userDataDir: userData });
     const listing = await pm.marketplace(`http://127.0.0.1:${port}/index.json`);
     const byId = Object.fromEntries(listing.plugins.map((p) => [p.id, p]));
-    check(listing.online.state === 'ok' && listing.online.hidden === 1 && !byId['future-plugin'], `the plugin that needs PyIDE 99 is hidden (${JSON.stringify(listing.online)})`);
+    check(listing.online.state === 'ok' && listing.online.hidden === 1 && !byId['future-plugin'], `the plugin that needs Nano Studio 99 is hidden (${JSON.stringify(listing.online)})`);
     check(byId['word-count']?.origin === 'online' && byId['word-count'].version === '0.9.2' && byId['key-promoter']?.origin === 'bundled',
       'an online version newer than the bundled sample replaces it; other samples stay bundled');
     check(/does not match the index's sha256/.test(await rejects(pm.installListed('tampered'))) && !existsSync(path.join(userData, 'plugins', 'tampered')),
@@ -296,8 +296,8 @@ async function ui() {
       `bundled samples and online plugins are listed together, with Install and Update (${listed})`);
     check(await a.js(`document.querySelector('#pluginsList .plugin-row[data-id="word-count"] .plugin-sub').textContent.includes('0.9.2')`), 'the online word-count 0.9.2 replaces the bundled 0.9.1');
     await a.shot('marketplace-list.png');
-    check(await a.js(`document.querySelector('#pluginsOnline')?.textContent === 'Not shown because they need a newer PyIDE: 1' && !document.querySelector('#pluginsList .plugin-row[data-id="future-plugin"]')`),
-      'a plugin that needs a newer PyIDE is not listed, and the list says so');
+    check(await a.js(`document.querySelector('#pluginsOnline')?.textContent === 'Not shown because they need a newer Nano Studio: 1' && !document.querySelector('#pluginsList .plugin-row[data-id="future-plugin"]')`),
+      'a plugin that needs a newer Nano Studio is not listed, and the list says so');
     await a.click('.plugins-filter');
     await a.type('hello');
     check((await rows()) === 'hello-online:Update', 'the search box filters the Marketplace');
@@ -307,7 +307,7 @@ async function ui() {
     await a.until(`!!${trustDialog}`, 'trust dialog');
     const trust = await a.js(`${trustDialog}.textContent`);
     await a.shot('marketplace-trust.png');
-    check(trust.includes('Install Third-Party Plugin') && trust.includes('Mallory Ltd') && trust.includes(`http://127.0.0.1:${http.port}/tampered-1.0.0.zip`) && trust.includes('same access as PyIDE'),
+    check(trust.includes('Install Third-Party Plugin') && trust.includes('Mallory Ltd') && trust.includes(`http://127.0.0.1:${http.port}/tampered-1.0.0.zip`) && trust.includes('same access as Nano Studio'),
       'installing an online plugin first names its vendor and download source and warns that plugins are code');
     await a.click('#pluginTrustDialog .dialog-buttons .primary');
     await a.until(`document.querySelector('#pluginsStatus').textContent.startsWith('Could not install')`, 'tampered refused');

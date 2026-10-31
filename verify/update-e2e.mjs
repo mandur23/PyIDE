@@ -1,8 +1,8 @@
-// Auto-update end to end on a real NSIS install: installs dist/PyIDE-Setup-<version>.exe per-user into a temp folder,
+// Auto-update end to end on a real NSIS install: installs dist/NanoStudio-Setup-<version>.exe per-user into a temp folder,
 // builds the next patch version into a temp feed folder (or takes a feed folder as the first argument), points the
-// installed PyIDE at it, and checks that it finds the update, downloads it with progress in the status bar, restarts
+// installed Nano Studio at it, and checks that it finds the update, downloads it with progress in the status bar, restarts
 // into the new version on "Restart to Update", and keeps its settings. Then it uninstalls.
-// With dist/PyIDE-<version>.msi present it also checks that an MSI install offers the new MSI instead.
+// With dist/NanoStudio-<version>.msi present it also checks that an MSI install offers the new MSI instead.
 // Build first with `npm run dist`.
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
@@ -19,12 +19,12 @@ const S = JSON.stringify;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const version = JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version;
 const next = version.replace(/\d+$/, (n) => String(Number(n) + 1));
-const installer = path.join(APP_DIR, 'dist', `PyIDE-Setup-${version}.exe`);
+const installer = path.join(APP_DIR, 'dist', `NanoStudio-Setup-${version}.exe`);
 if (!existsSync(installer)) throw new Error(`no ${installer}: run npm run dist first`);
-// The NSIS installer removes an existing per-user PyIDE before installing anywhere, so a temp install here would
-// uninstall the real one (settings in %APPDATA%\PyIDE survive, the app does not).
-const localInstall = path.join(process.env.LOCALAPPDATA, 'Programs', 'PyIDE', 'Uninstall PyIDE.exe');
-if (existsSync(localInstall)) throw new Error(`PyIDE is installed in ${path.dirname(localInstall)}; installing a test copy would remove it. Uninstall it first (or use npm run release -- <v> --replace-local-install, which reinstalls it).`);
+// The NSIS installer removes an existing per-user Nano Studio before installing anywhere, so a temp install here would
+// uninstall the real one (settings in %APPDATA%\Nano Studio survive, the app does not).
+const localInstall = path.join(process.env.LOCALAPPDATA, 'Programs', 'Nano Studio', 'Uninstall Nano Studio.exe');
+if (existsSync(localInstall)) throw new Error(`Nano Studio is installed in ${path.dirname(localInstall)}; installing a test copy would remove it. Uninstall it first (or use npm run release -- <v> --replace-local-install, which reinstalls it).`);
 
 const results = [];
 const check = (ok, label) => { results.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
@@ -39,12 +39,12 @@ if (!feed) {
   if (r.status !== 0) throw new Error('electron-builder failed for the feed build');
 }
 const feedVersion = /^version:\s*(\S+)/m.exec(readFileSync(path.join(feed, 'latest.yml'), 'utf8'))?.[1];
-check(feedVersion && feedVersion !== version && existsSync(path.join(feed, `PyIDE-Setup-${feedVersion}.exe`)), `feed folder holds latest.yml for ${feedVersion} and its installer`);
+check(feedVersion && feedVersion !== version && existsSync(path.join(feed, `NanoStudio-Setup-${feedVersion}.exe`)), `feed folder holds latest.yml for ${feedVersion} and its installer`);
 
 // ---------- install the current version ----------
-const installDir = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-update-')), 'PyIDE');
-const exe = path.join(installDir, 'PyIDE.exe');
-const cacheDir = path.join(process.env.LOCALAPPDATA, 'pyide-updater');
+const installDir = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-update-')), 'Nano Studio');
+const exe = path.join(installDir, 'Nano Studio.exe');
+const cacheDir = path.join(process.env.LOCALAPPDATA, 'nano-studio-updater');
 const cacheExisted = existsSync(cacheDir);
 check(spawnSync(installer, ['/S', `/D=${installDir}`], { stdio: 'ignore' }).status === 0 && existsSync(exe), `installed ${version} into ${installDir}`);
 const installedVersion = () => {
@@ -52,10 +52,10 @@ const installedVersion = () => {
   try { return JSON.parse(asar.extractFile(path.join(installDir, 'resources', 'app.asar'), 'package.json').toString()).version; } catch { return null; }
 };
 
-// PyIDE processes started from this install only (never other PyIDE or Electron instances).
+// Nano Studio processes started from this install only (never other Nano Studio or Electron instances).
 const ownProcesses = () => {
   const out = execFileSync('powershell', ['-NoProfile', '-Command',
-    `Get-CimInstance Win32_Process -Filter "Name='PyIDE.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${installDir.replace(/'/g, "''")}', 'OrdinalIgnoreCase') } | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`],
+    `Get-CimInstance Win32_Process -Filter "Name='Nano Studio.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${installDir.replace(/'/g, "''")}', 'OrdinalIgnoreCase') } | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`],
     { encoding: 'utf8' }).trim();
   return out ? out.split(/\r?\n/).map((l) => { const [pid, ...cmd] = l.split('|'); return { pid: Number(pid), cmd: cmd.join('|') }; }) : [];
 };
@@ -81,7 +81,7 @@ try {
   const phases = await t.js('window.__upd.phases');
   const shown = await t.js('[...window.__upd.status]');
   check(phases.includes('checking:') && phases.some((p) => p.startsWith('downloading:')) && phases.at(-1).startsWith('downloaded'), `check, download and ready in order (${phases.filter((p, i, a) => a.indexOf(p) === i).slice(0, 8).join(' ')} …)`);
-  check(shown.some((s) => s.startsWith(`Downloading PyIDE ${feedVersion}…`) && /\d+%$/.test(s)), `the status bar shows download progress (${shown.find((s) => s.startsWith('Downloading')) || 'none'})`);
+  check(shown.some((s) => s.startsWith(`Downloading Nano Studio ${feedVersion}…`) && /\d+%$/.test(s)), `the status bar shows download progress (${shown.find((s) => s.startsWith('Downloading')) || 'none'})`);
   check(await t.js(`document.getElementById('updateStatus').textContent`) === 'Restart to Update', 'the status bar then offers Restart to Update');
   check((await t.js(`[...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].map(b => b.textContent).join('|')`)) === 'Restart to Update|Skip This Version|Later', 'the dialog offers Restart to Update, Skip This Version and Later');
   await t.shot('update-ready.png');
@@ -98,7 +98,7 @@ try {
     if (installedVersion() === feedVersion) relaunched = procs.find((p) => p.cmd.includes('--updated') && !p.cmd.includes('--type='));
   }
   check(installedVersion() === feedVersion, `the install folder now holds ${feedVersion}`);
-  check(relaunched, `PyIDE restarted by itself after the update (--updated)${relaunched ? '' : `; seen: ${S([...seen])}`}`);
+  check(relaunched, `Nano Studio restarted by itself after the update (--updated)${relaunched ? '' : `; seen: ${S([...seen])}`}`);
   // The installer starts it as the signed-in user, outside this test's environment and profile: close it at once.
   killOwn();
   t.close();
@@ -121,17 +121,17 @@ try {
 
 // ---------- uninstall ----------
 await sleep(1500);
-spawnSync(path.join(installDir, 'Uninstall PyIDE.exe'), ['/S'], { stdio: 'ignore' });
+spawnSync(path.join(installDir, 'Uninstall Nano Studio.exe'), ['/S'], { stdio: 'ignore' });
 for (let i = 0; i < 120 && existsSync(exe); i++) await sleep(500);
 check(!existsSync(exe), 'uninstall removes the updated app');
 try { rmSync(path.dirname(installDir), { recursive: true, force: true }); } catch {}
 
 // ---------- an MSI install is pointed at the new MSI instead of updating itself ----------
-const msi = path.join(APP_DIR, 'dist', `PyIDE-${version}.msi`);
-const msiDir = path.join(process.env.LOCALAPPDATA, 'Programs', 'PyIDE');
+const msi = path.join(APP_DIR, 'dist', `NanoStudio-${version}.msi`);
+const msiDir = path.join(process.env.LOCALAPPDATA, 'Programs', 'Nano Studio');
 if (existsSync(msi) && !existsSync(msiDir)) {
   check(spawnSync('msiexec', ['/i', msi, '/qn'], { stdio: 'ignore' }).status === 0, `MSI: installed ${version} per-user`);
-  const m = await launch({ fixture: 'core', port: 9804, name: 'update-e2e-msi', exe: path.join(msiDir, 'PyIDE.exe') });
+  const m = await launch({ fixture: 'core', port: 9804, name: 'update-e2e-msi', exe: path.join(msiDir, 'Nano Studio.exe') });
   try {
     check(await m.js(`ide.api.invoke('updater:state').then(s => s.kind)`) === 'msi', 'MSI: it knows it is an MSI install');
     await m.js(`(ide.settings.set('updates.feedUrl', ${S(feed)}), ide.runAction('CheckForUpdates'), true)`);
@@ -147,7 +147,7 @@ if (existsSync(msi) && !existsSync(msiDir)) {
   }
   m.close();
   await sleep(1500);
-  check(spawnSync('msiexec', ['/x', msi, '/qn'], { stdio: 'ignore' }).status === 0 && !existsSync(path.join(msiDir, 'PyIDE.exe')), 'MSI: uninstalled');
+  check(spawnSync('msiexec', ['/x', msi, '/qn'], { stdio: 'ignore' }).status === 0 && !existsSync(path.join(msiDir, 'Nano Studio.exe')), 'MSI: uninstalled');
 } else console.log(`skipping the MSI part (${existsSync(msi) ? `${msiDir} exists` : 'no MSI in dist'})`);
 if (!cacheExisted) rmSync(cacheDir, { recursive: true, force: true });
 

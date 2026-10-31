@@ -101,7 +101,7 @@ function parseIndex(raw, indexUrl) {
   try { data = JSON.parse(String(raw).replace(/^﻿/, '')); } catch (e) { fail('the file', `is not JSON (${e.message})`); }
   if (!data || typeof data !== 'object' || Array.isArray(data)) fail('the file', 'must be a JSON object');
   if (data.format !== FORMAT) {
-    if (Number.isInteger(data.format) && data.format > FORMAT) throw new Error(`The Marketplace index has format ${data.format}, which needs a newer PyIDE (this one reads format ${FORMAT})`);
+    if (Number.isInteger(data.format) && data.format > FORMAT) throw new Error(`The Marketplace index has format ${data.format}, which needs a newer Nano Studio (this one reads format ${FORMAT})`);
     fail('"format"', `must be ${FORMAT}`);
   }
   if (!Array.isArray(data.plugins)) fail('"plugins"', 'must be a list');

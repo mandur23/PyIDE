@@ -2,7 +2,8 @@
   "id": "emmet",
   "name": "Emmet",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Emmet abbreviations, as in PyCharm and VS Code: type ul>li*3, div#main.box or table>tr*2>td*2 in HTML (or markup in .jsx and .tsx files), or m10, d:f or c#f in CSS, SCSS and Less, and press Tab or pick the abbreviation from the completion list.",
+  "modes": ["code"],
   "detached": true
 }

@@ -415,7 +415,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     scope: 'The Google sign-in on this computer has no Colab permission. Sign in again to add it.',
     adcType: 'The Google credentials on this computer are not a personal sign-in (a service account, for example). Sign in with Google to use Colab.',
     network: 'Could not reach Google. Check the internet connection, then try again.',
-    quotaProject: 'Colab counts this sign-in\'s requests against a Google Cloud project of yours (a quota project), and none is set yet. PyIDE can set one up: it turns on the Colab API in a project you choose or in a new one.',
+    quotaProject: 'Colab counts this sign-in\'s requests against a Google Cloud project of yours (a quota project), and none is set yet. Nano Studio can set one up: it turns on the Colab API in a project you choose or in a new one.',
     PERMISSION_DENIED: 'Google refused Colab access for this account.',
     http403: 'Google refused Colab access for this account.',
     RESOURCE_EXHAUSTED: 'Colab cannot give this account that runtime right now (usage limits, or no machine free). Try another runtime, or try later.',
@@ -796,10 +796,10 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         return;
       }
       if (msg.type === 'request_auth') {
-        reply({ error: tr('PyIDE cannot do this: drive.mount() and auth.authenticate_user() get their Google credentials from Colab\'s own web page, which other apps cannot use. Use Upload Files to the Runtime (the notebook\'s kernel menu) for local files, or run this part on colab.research.google.com.') });
+        reply({ error: tr('Nano Studio cannot do this: drive.mount() and auth.authenticate_user() get their Google credentials from Colab\'s own web page, which other apps cannot use. Use Upload Files to the Runtime (the notebook\'s kernel menu) for local files, or run this part on colab.research.google.com.') });
         return;
       }
-      reply({ error: tr('PyIDE does not support the Colab request "{type}".', { type: msg.type }) });
+      reply({ error: tr('Nano Studio does not support the Colab request "{type}".', { type: msg.type }) });
     }
 
     // Signing in to Google takes gcloud (main/notebook/colab.js): the banner installs it, then runs its sign-in, and the
@@ -868,7 +868,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       if (seq !== signInSeq) return;
       hideBanner();
       const choice = await ide.ui.pick({ placeholder: tr('Google Cloud project for Colab'), items: [
-        { label: tr('New project: PyIDE Colab'), detail: tr('created in your Google account'), value: { id: null } },
+        { label: tr('New project: Nano Studio Colab'), detail: tr('created in your Google account'), value: { id: null } },
         ...list.map((p) => ({ label: p.name, detail: p.projectId, value: { id: p.projectId } })),
       ] });
       if (!choice || seq !== signInSeq) return;

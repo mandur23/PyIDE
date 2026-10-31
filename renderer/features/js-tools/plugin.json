@@ -2,8 +2,9 @@
   "id": "js-tools",
   "name": "Prettier and ESLint",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "Reformat Code with the project's own Prettier and ESLint problems with quick fixes in JavaScript and TypeScript files, as in WebStorm. Uses the packages installed in the project's node_modules, run by PyIDE itself, so Node.js need not be installed; only in trusted projects.",
+  "vendor": "Nano Studio",
+  "description": "Reformat Code with the project's own Prettier and ESLint problems with quick fixes in JavaScript and TypeScript files, as in WebStorm. Uses the packages installed in the project's node_modules, run by Nano Studio itself, so Node.js need not be installed; only in trusted projects.",
+  "modes": ["code"],
   "main": [
     "js-tools.js"
   ]

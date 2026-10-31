@@ -2,7 +2,8 @@
   "id": "type-fixes",
   "name": "Type Warning Fixes",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Quick fixes for Pyright's type warnings: a check that a value that may be None is not None, an isinstance check for a value of several types, and str() around a value used as text.",
+  "modes": ["code"],
   "depends": ["lsp"]
 }

@@ -253,7 +253,7 @@
   function askRestart() {
     ide.ui.dialog({
       title: tr('Restart IDE'),
-      body: el('div', 'settings-restart-msg', tr('Restart PyIDE to apply the changes?')),
+      body: el('div', 'settings-restart-msg', tr('Restart Nano Studio to apply the changes?')),
       width: 420,
       buttons: [
         { label: tr('Restart'), primary: true, run: () => ide.restart() },
@@ -268,31 +268,34 @@
   const projectGroup = () => tr('Project: {name}', { name: ide.root ? basename(ide.root) : tr('<none>') });
   const BASE_TREE = [
     { group: 'appearance-behavior', title: () => tr('Appearance & Behavior'), children: [
-      { id: 'appearance', title: () => tr('Appearance'), keywords: 'theme dark light look feel 테마 다크 라이트', mount: mountAppearance },
-      { id: 'language', title: () => tr('Language and Region'), keywords: 'language korean english locale 언어 한국어 영어', mount: mountLanguage },
+      { id: 'appearance', title: () => tr('Appearance'), keywords: 'theme dark light look feel 테마 다크 라이트', mount: mountAppearance, craft: true },
+      { id: 'language', title: () => tr('Language and Region'), keywords: 'language korean english locale 언어 한국어 영어', mount: mountLanguage, craft: true },
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap, index: false },
     { group: 'editor-group', title: () => tr('Editor'), children: [
       { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines console cycle buffer 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄 콘솔 순환 버퍼', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent detect ruler hard wrap line separator crlf lf 탭 들여쓰기 감지 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
-    { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false },
+    { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false, craft: true },
     { group: 'project', title: projectGroup, children: [
       { id: 'interpreter', title: () => tr('Python Interpreter'), keywords: 'interpreter venv virtualenv environment packages python sdk 인터프리터 가상 환경 패키지', mount: mountInterpreter, index: false },
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, index?, mount(host, ctx)}
-  // to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the dialog opens.
-  // Search mounts every page off screen once per dialog to read its labels; index: false (a page whose mount lists
-  // data or starts slow work) is found by its title and keywords only.
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, index?, craft?,
+  // mount(host, ctx)} to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the
+  // dialog opens. Search mounts every page off screen once per dialog to read its labels; index: false (a page whose
+  // mount lists data or starts slow work) is found by its title and keywords only. craft: true shows the page in craft
+  // mode too, which has no editor, interpreter or run configurations to set up.
   let TREE, PAGES;
   function buildTree() {
     const pluginPages = ide.settingsPages || [];
     const ai = pluginPages.filter((p) => p.group === 'ai');
     const nested = { 'editor-group': 'editor', 'appearance-behavior': 'appearance' };
     const base = BASE_TREE.map((n) => (nested[n.group] ? { ...n, children: [...n.children, ...pluginPages.filter((p) => p.group === nested[n.group])] } : n));
-    return [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
+    const tree = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
+    if (ide.appMode !== 'craft') return tree;
+    return tree.map((n) => (n.children ? { ...n, children: n.children.filter((p) => p.craft) } : n)).filter((n) => (n.children ? n.children.length : n.craft));
   }
   function rebuildTree() {
     TREE = buildTree();
@@ -1077,7 +1080,7 @@
       const n = el('div', 'plugins-online muted');
       n.id = 'pluginsOnline';
       if (!market) n.textContent = tr('Loading the online Marketplace…');
-      else if (o.state === 'ok') n.textContent = tr('Not shown because they need a newer PyIDE: {count}', { count: o.hidden });
+      else if (o.state === 'ok') n.textContent = tr('Not shown because they need a newer Nano Studio: {count}', { count: o.hidden });
       else {
         n.classList.add('error');
         const why = el('div', 'plugins-online-error', o.error);
@@ -1148,7 +1151,7 @@
         c.className = 'plugin-toggle';
         c.checked = effectiveEnabled(p);
         c.disabled = p.required || !!p.broken;
-        c.title = p.required ? tr('Required by PyIDE') : '';
+        c.title = p.required ? tr('Required by Nano Studio') : '';
         c.onclick = (e) => e.stopPropagation();
         c.onchange = () => toggle(p, c.checked);
         r.appendChild(c);
@@ -1271,7 +1274,7 @@
         field(tr('Plugin:'), `${localized(m).name} ${m.version}`),
         field(tr('Vendor:'), m.vendor),
         field(tr('Source:'), m.url),
-        el('p', 'plugin-trust-warning', tr('Plugins run with the same access as PyIDE: they can read and change your files, start programs and use the network. Install plugins only from vendors you trust.')),
+        el('p', 'plugin-trust-warning', tr('Plugins run with the same access as Nano Studio: they can read and change your files, start programs and use the network. Install plugins only from vendors you trust.')),
       );
       return new Promise((resolve) => {
         let yes = false;

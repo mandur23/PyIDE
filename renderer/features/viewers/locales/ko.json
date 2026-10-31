@@ -36,7 +36,6 @@
   "Loading arrays…": "배열 로드 중…",
   "Loading took too long and was stopped.": "로드 시간이 너무 오래 걸려 중지되었습니다.",
   "Loading with torch (weights only)…": "torch로 로드 중(가중치만)…",
-  "Loading…": "로드 중…",
   "Max": "최댓값",
   "Mean": "평균",
   "Memory": "메모리",

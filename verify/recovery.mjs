@@ -182,7 +182,7 @@ try {
   await t.until(`!!document.querySelector('#recoveryDialog')`, 'restore dialog');
   const items = await t.js(`[...document.querySelectorAll('#recoveryDialog li')].map(n => n.textContent)`);
   t.check(items.length === 3 && items.includes('a.py') && items.includes('c.py') && items.includes('u.py (untitled)'), `the dialog lists the backed-up files (${items.join(' | ')})`);
-  t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-body').textContent.includes('PyIDE closed unexpectedly')`), 'the dialog says PyIDE closed unexpectedly');
+  t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-body').textContent.includes('Nano Studio closed unexpectedly')`), 'the dialog says Nano Studio closed unexpectedly');
   t.check(await t.js(`document.querySelector('#recoveryDialog .dialog-buttons .primary').textContent === 'Restore'`), 'Restore is the main button');
   await t.click('#recoveryDialog .dialog-buttons .primary');
   await t.until(`ide.isDirty(${tab('a.py')}) && ide.isDirty(${tab('c.py')})`, 'a.py and c.py restored');

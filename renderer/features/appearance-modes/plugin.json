@@ -2,7 +2,8 @@
   "id": "appearance-modes",
   "name": "Appearance Modes",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Distraction-Free, Zen, Full Screen and Presentation modes from View › Appearance, as in PyCharm.",
+  "modes": ["code"],
   "main": ["appearance-modes.js"]
 }

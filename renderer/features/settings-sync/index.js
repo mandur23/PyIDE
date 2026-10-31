@@ -80,9 +80,9 @@
   function errorText(r) {
     switch (r.code) {
       case 'notZip': return tr('The file is not a ZIP archive, or it is damaged.');
-      case 'noManifest': return tr('The archive is not a PyIDE settings file: it has no pyide-settings.json.');
+      case 'noManifest': return tr('The archive is not a Nano Studio settings file: it has no pyide-settings.json.');
       case 'badManifest': return tr('The pyide-settings.json in the archive is not valid.');
-      case 'newerFormat': return tr('These settings were exported by a newer PyIDE ({version}, format {format}). Update PyIDE to import them.', { version: r.version || '?', format: r.format });
+      case 'newerFormat': return tr('These settings were exported by a newer Nano Studio ({version}, format {format}). Update Nano Studio to import them.', { version: r.version || '?', format: r.format });
       case 'unsafeEntry': return tr('The archive contains an unsafe path, so nothing was imported: {name}', { name: r.detail });
       case 'badEntry': return tr('The archive entry {name} is damaged.', { name: r.detail });
       case 'tooLarge': return r.size && r.limit
@@ -161,12 +161,12 @@
     if (!file) return null;
     const info = await invoke('inspect', file);
     if (!info.ok) return message(title, [tr('Cannot import {name}', { name: basename(file) }), errorText(info)], 'error');
-    if (!info.categories.length) return message(title, tr('The archive holds no settings PyIDE can import.'), 'error');
+    if (!info.categories.length) return message(title, tr('The archive holds no settings Nano Studio can import.'), 'error');
     const date = info.created ? new Date(info.created) : null;
     const ids = await chooseCategories({
       title,
       intro: info.version && date && !Number.isNaN(+date)
-        ? tr('Settings exported from PyIDE {version} on {date}. Select the settings to import:', { version: info.version, date: date.toLocaleString(i18n.locale) })
+        ? tr('Settings exported from {product} {version} on {date}. Select the settings to import:', { product: info.product || 'Nano Studio', version: info.version, date: date.toLocaleString(i18n.locale) })
         : tr('Select the settings to import:'),
       note: tr('Your current settings are backed up first. Imported settings replace the current ones with the same name.'),
       categories: info.categories.map((c) => ({ ...c, checked: true })),
@@ -181,7 +181,7 @@
       tr('Imported: {categories}.', { categories: r.applied.map((id) => LABELS[id]()).join(', ') }),
       ...notes,
       tr('Your previous settings were backed up to {path}', { path: r.backup }),
-      tr('Some settings take effect after a restart. Restart PyIDE now?'),
+      tr('Some settings take effect after a restart. Restart Nano Studio now?'),
     ], 'done', [
       { label: tr('Restart'), primary: true, run: () => ide.restart() },
       { label: tr('Not Now') },

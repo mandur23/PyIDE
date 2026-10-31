@@ -23,7 +23,6 @@
   "Export to CSV…": "CSV로 내보내기…",
   "{rows} rows × {cols} columns": "{rows}행 × {cols}열",
   "{rows} of {total} rows × {cols} columns": "{total}행 중 {rows}행 × {cols}열",
-  "Loading…": "로드 중…",
   "Filter rows, e.g. x[:, 0] > 0.5": "행 필터 (예: x[:, 0] > 0.5)",
   "Filter rows, e.g. x > 0.5": "행 필터 (예: x > 0.5)",
   "Filter rows, e.g. price > 100 and city == 'Seoul'": "행 필터 (예: price > 100 and city == 'Seoul')",

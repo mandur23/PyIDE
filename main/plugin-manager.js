@@ -1,13 +1,16 @@
-// Plugins: a folder with plugin.json ({id, name, version, vendor, description, depends?, required?, main?}).
+// Plugins: a folder with plugin.json ({id, name, version, vendor, description, depends?, required?, main?, modes?}).
 // Renderer code is index.js / style.css next to plugin.json, translations are locales/<lang>.json, and `main`
 // lists main-process modules. Bundled plugins are renderer/features/*; user plugins live in <userData>/plugins.
 // Enabling, disabling, installing and uninstalling take effect after a restart, as in PyCharm.
+// `modes` lists the app modes a plugin runs in ('code', 'craft'; ['code'] when absent). A process has one mode
+// (main.js), and only the plugins of that mode load; required plugins load in every mode.
 const fs = require('fs');
 const path = require('path');
 const { extractZip } = require('./zip');
 const market = require('./marketplace');
 
 const ID = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
+const MODES = ['code', 'craft'];
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return fallback; }
@@ -26,7 +29,8 @@ function copyTree(from, to) {
   }
 }
 
-function createPluginManager({ appDir, userDataDir }) {
+function createPluginManager({ appDir, userDataDir, mode: initialMode = 'code' }) {
+  let mode = initialMode;
   const bundledDir = path.join(appDir, 'renderer', 'features');
   const bundledMainDir = path.join(appDir, 'main', 'features');
   const catalogDir = path.join(appDir, 'plugins-catalog');
@@ -54,13 +58,14 @@ function createPluginManager({ appDir, userDataDir }) {
     const has = filesIn(dir);
     if (!meta && !bundled) {
       const id = path.basename(dir);
-      return { id, name: id, version: '', vendor: '', description: '', i18n: {}, depends: [], required: false, detached: false, bundled,
+      return { id, name: id, version: '', vendor: '', description: '', i18n: {}, depends: [], required: false, detached: false, modes: ['code'], bundled,
         dir, script: null, style: null, mainModules: [], hasLocales: false, broken: has('plugin.json') ? 'invalid' : 'missing' };
     }
     // An installed plugin's plugin.json is read at every start: fields of the wrong kind are left out, not thrown on.
     const strings = (v) => [].concat(v || []).filter((s) => typeof s === 'string');
     const id = (typeof meta?.id === 'string' && meta.id) || path.basename(dir);
     const mains = strings(meta?.main);
+    const modes = strings(meta?.modes).filter((m) => MODES.includes(m));
     return {
       id,
       name: meta?.name || id,
@@ -71,6 +76,7 @@ function createPluginManager({ appDir, userDataDir }) {
       depends: strings(meta?.depends),
       required: !!meta?.required,
       detached: !!meta?.detached,
+      modes: modes.length ? modes : ['code'],
       bundled,
       dir,
       script: has('index.js') ? path.join(dir, 'index.js') : null,
@@ -93,16 +99,23 @@ function createPluginManager({ appDir, userDataDir }) {
   const subdirs = (root) => (fs.existsSync(root)
     ? fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(root, d.name)) : []);
 
-  // The snapshot taken at startup is what is actually running; later changes show as "restart required".
-  function discover() {
-    const disabled = new Set(state().disabled);
+  const inMode = (p) => p.required || p.modes.includes(mode);
+
+  // The snapshot taken at startup is what is actually running; later changes show as "restart required". Plugins of
+  // another mode are left out: they are neither listed nor loaded, and a plugin depending on one cannot load.
+  function discoverAll() {
     const all = [
       ...subdirs(bundledDir).map((d) => describe(d, true)),
       ...subdirs(userDir).map((d) => describe(d, false)),
     ];
     const byId = new Map();
     for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
-    const plugins = [...byId.values()];
+    return byId;
+  }
+  function discover() {
+    const disabled = new Set(state().disabled);
+    const byId = discoverAll();
+    const plugins = [...byId.values()].filter(inMode);
     for (const p of plugins) p.enabled = !p.broken && (p.required || !disabled.has(p.id));
     // A plugin whose dependency is off or missing cannot load.
     let changed = true;
@@ -123,6 +136,13 @@ function createPluginManager({ appDir, userDataDir }) {
   const loadedList = () => (snapshot ??= discover());
   let loadedIdSet = null;
   const loadedIds = () => (loadedIdSet ??= new Set(loadedList().filter((p) => p.enabled).map((p) => p.id)));
+  // The mode is known once the chooser answers, before the feature modules register (main.js).
+  function setMode(m) {
+    if (!MODES.includes(m) || m === mode) return;
+    mode = m;
+    snapshot = null;
+    loadedIdSet = null;
+  }
 
   // broken: plugin.json is 'missing' or 'invalid'. loadError: why a main module of the running plugin failed to load.
   function list() {
@@ -321,9 +341,9 @@ function createPluginManager({ appDir, userDataDir }) {
     return dict;
   }
 
-  // Main modules owned by disabled plugins are skipped; modules no plugin claims always load.
+  // Main modules owned by disabled plugins or plugins of another mode are skipped; modules no plugin claims always load.
   function mainModules() {
-    const claimed = new Set(loadedList().flatMap((p) => p.mainModules.map((m) => m.toLowerCase())));
+    const claimed = new Set([...discoverAll().values()].flatMap((p) => p.mainModules.map((m) => m.toLowerCase())));
     const enabled = loadedList().filter((p) => p.enabled).flatMap((p) => p.mainModules);
     const unclaimed = fs.existsSync(bundledMainDir)
       ? fs.readdirSync(bundledMainDir).filter((f) => f.endsWith('.js')).map((f) => path.join(bundledMainDir, f)).filter((m) => !claimed.has(m.toLowerCase()))
@@ -338,7 +358,8 @@ function createPluginManager({ appDir, userDataDir }) {
     return p ? { id: p.id, name: p.name, i18n: p.i18n, required: p.required, bundled: p.bundled } : null;
   }
 
-  return { list, setEnabled, install, uninstall, catalog, marketplace, installListed, rendererEntries, localeDictionary, mainModules, ownerOf };
+  return { list, setEnabled, install, uninstall, catalog, marketplace, installListed, rendererEntries, localeDictionary, mainModules, ownerOf,
+    setMode, mode: () => mode };
 }
 
 module.exports = { createPluginManager, copyTree };

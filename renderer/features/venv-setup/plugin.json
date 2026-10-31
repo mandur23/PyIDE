@@ -2,8 +2,9 @@
   "id": "venv-setup",
   "name": "Virtual Environment Setup",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Offers to create a .venv (python -m venv or uv venv) for a project with requirements but no interpreter, sets it as the project interpreter and installs the dependencies.",
+  "modes": ["code"],
   "depends": [
     "packages"
   ],

@@ -19,11 +19,11 @@ const V = '0.2.1';
 const PKG = path.join(ROOT, 'package.json');
 const LOCK = path.join(ROOT, 'package-lock.json');
 const DIST = path.join(ROOT, 'dist');
-const EXE = path.join(DIST, `PyIDE-Setup-${V}.exe`);
+const EXE = path.join(DIST, `NanoStudio-Setup-${V}.exe`);
 const BLOCKMAP = `${EXE}.blockmap`;
-const PREV = path.join(DIST, 'PyIDE-Setup-0.2.0.exe');
-const UNINST = path.join(INSTALL_DIR, 'Uninstall PyIDE.exe');
-const INSTALLED = path.join(INSTALL_DIR, 'PyIDE.exe');
+const PREV = path.join(DIST, 'NanoStudio-Setup-0.2.0.exe');
+const UNINST = path.join(INSTALL_DIR, 'Uninstall Nano Studio.exe');
+const INSTALLED = path.join(INSTALL_DIR, 'Nano Studio.exe');
 const pkgText = readFileSync(PKG, 'utf8').replace(/^(  "version": ")[^"]*/m, '$10.2.0');
 const lockText = readFileSync(LOCK, 'utf8');
 const changelog = readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
@@ -38,8 +38,8 @@ const ok = (cond, name) => {
 
 // ---------- fake world ----------
 let W;
-// The pyide release's assets before this release: the previous version's installers and blockmap, an older blockmap.
-const ASSETS = ['latest.yml', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup.exe', `PyIDE-Setup-${V}.exe`];
+// The nano-studio release's assets before this release: the previous version's installers and blockmap, an older blockmap.
+const ASSETS = ['latest.yml', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.0.exe.blockmap', 'NanoStudio-0.2.0.msi', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup.exe', `NanoStudio-Setup-${V}.exe`];
 // A blockmap (gzipped JSON) describing a file of that length.
 const blockmapOf = (length) => gzipSync(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, checksums: ['a', 'b'], sizes: [length - 3, 3] }] }));
 const ymlText = (version, exeName, sha) => `version: ${version}\nfiles:\n  - url: ${exeName}\n    sha512: ${sha}\npath: ${exeName}\nsha512: ${sha}\n`;
@@ -47,13 +47,13 @@ const ymlText = (version, exeName, sha) => `version: ${version}\nfiles:\n  - url
 function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin = false, ahead = true, installed = false, testsPass = true, reinstallOk = true, uninstallFails = false, feed = version, ymlVersion = version, onSleep = null, assets = ASSETS, staleLatest = null } = {}) {
   const exeBody = 'fake exe bytes';
   const sha = createHash('sha512').update(exeBody).digest('base64');
-  const exe = path.join(DIST, `PyIDE-Setup-${version}.exe`);
+  const exe = path.join(DIST, `NanoStudio-Setup-${version}.exe`);
   const files = new Map([
     [PKG, pkgText], [LOCK, lockText], [path.join(ROOT, 'CHANGELOG.md'), changelog],
-    [exe, exeBody], [`${exe}.blockmap`, blockmapOf(exeBody.length)], [path.join(DIST, `PyIDE-${version}.msi`), 'msi'], [PREV, 'prev exe'],
+    [exe, exeBody], [`${exe}.blockmap`, blockmapOf(exeBody.length)], [path.join(DIST, `NanoStudio-${version}.msi`), 'msi'], [PREV, 'prev exe'],
     [path.join(DIST, version.includes('-') ? 'beta.yml' : 'latest.yml'), ymlText(ymlVersion, path.basename(exe), sha)],
   ]);
-  if (staleLatest) files.set(path.join(DIST, 'latest.yml'), ymlText(staleLatest, `PyIDE-Setup-${staleLatest}.exe`, 'old'));
+  if (staleLatest) files.set(path.join(DIST, 'latest.yml'), ymlText(staleLatest, `NanoStudio-Setup-${staleLatest}.exe`, 'old'));
   if (installed) { files.set(UNINST, 'u'); files.set(INSTALLED, 'old'); }
   W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets };
   return W;
@@ -102,7 +102,7 @@ Object.assign(io, {
 });
 const text = () => W.out.join('\n');
 // The feed switch of a stable release: dist/latest.yml (with the staged beta.yml) in one upload.
-const FEED_UP = `upload pyide dist${path.sep}latest.yml`;
+const FEED_UP = `upload nano-studio dist${path.sep}latest.yml`;
 const idx = (s) => W.calls.findIndex((c) => c.includes(s));
 const has = (s) => idx(s) >= 0;
 const pkgVersion = () => /"version": "([^"]+)"/.exec(W.files.get(PKG))[1];
@@ -132,7 +132,7 @@ ok(advice({ committed: true, tagged: true, pushed: true, live: true }, [V, '--dr
 console.log('-- B. runs');
 world();
 let code = await run([V, '--skip-tests']);
-const order = ['git add', ' commit ', ' tag -a', 'git push --atomic origin master refs/tags/v0.2.1', 'release upload pyide dist', 'release edit pyide', 'upload pyide dist' + path.sep + 'latest.yml', 'delete-asset pyide PyIDE-0.2.0.msi'].map(idx);
+const order = ['git add', ' commit ', ' tag -a', 'git push --atomic origin master refs/tags/v0.2.1', 'release upload nano-studio dist', 'release edit nano-studio', 'upload nano-studio dist' + path.sep + 'latest.yml', 'delete-asset nano-studio NanoStudio-0.2.0.msi'].map(idx);
 ok(code === 0 && order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), `success: order commit < tag < push < installers < edit < latest.yml < delete old (${order.join(',')})`);
 ok(idx('git ls-remote origin refs/heads/master refs/tags/v0.2.1') >= 0 && idx('git ls-remote') < idx('git add'), 'step 1 reads origin with ls-remote');
 ok(/master is up to date with origin/.test(text()), 'origin master = HEAD: up to date');
@@ -162,7 +162,7 @@ world({ failAt: 'git push' });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && !has('gh release upload') && /git tag -d v0.2.1/.test(text()) && /ls-remote/.test(text()), 'push fails: nothing uploaded, tag -d/reset offered');
 
-world({ failAt: 'release upload pyide dist' + path.sep + 'PyIDE-Setup' });
+world({ failAt: 'release upload nano-studio dist' + path.sep + 'NanoStudio-Setup' });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && !has(FEED_UP) && /--publish-only/.test(text()) && !/reset --hard|tag -d/.test(text()), 'installer upload fails after push: --publish-only, no reset');
 
@@ -181,7 +181,7 @@ ok(code === 1 && /after 3 minutes/.test(text()) && /IS LIVE/.test(text()), 'feed
 // --publish-only
 world({ tagOnOrigin: true });
 code = await run([V, '--publish-only']);
-ok(code === 0 && !has(' commit ') && !has('git push') && !has('npm run dist') && idx('release upload pyide dist' + path.sep + 'PyIDE') < idx(FEED_UP), 'publish-only: no commit/push/build, installers then latest.yml');
+ok(code === 0 && !has(' commit ') && !has('git push') && !has('npm run dist') && idx('release upload nano-studio dist' + path.sep + 'NanoStudio') < idx(FEED_UP), 'publish-only: no commit/push/build, installers then latest.yml');
 world({ tagOnOrigin: false });
 code = await run([V, '--publish-only']);
 ok(code === 1 && /is not on origin/.test(text()) && !has('gh release upload'), 'publish-only without the tag on origin: stops before uploading');
@@ -211,33 +211,33 @@ ok(code === 0 && re?.cmd === EXE && W.files.get(INSTALLED) === EXE, 'tests pass:
 
 world({ installed: true, uninstallFails: true });
 code = await run([V, '--replace-local-install']);
-ok(code === 1 && W.spawns.some((s) => s.cmd === PREV) && /Uninstall PyIDE.exe" \/S \/currentuser failed/.test(text()) && pkgVersion() === '0.2.0', 'uninstaller fails (inside the try): finally still reinstalls');
+ok(code === 1 && W.spawns.some((s) => s.cmd === PREV) && /Uninstall Nano Studio.exe" \/S \/currentuser failed/.test(text()) && pkgVersion() === '0.2.0', 'uninstaller fails (inside the try): finally still reinstalls');
 
 world({ installed: true, testsPass: true, reinstallOk: false });
 code = await run([V, '--replace-local-install']);
-ok(code === 1 && /!!! PyIDE IS NOT INSTALLED ANY MORE/.test(text()) && text().includes(`by running: ${EXE}`) && !has(' commit ') && pkgVersion() === '0.2.0', 'reinstall fails: exit 1, loud message naming the installer, nothing committed');
+ok(code === 1 && /!!! NANO STUDIO IS NOT INSTALLED ANY MORE/.test(text()) && text().includes(`by running: ${EXE}`) && !has(' commit ') && pkgVersion() === '0.2.0', 'reinstall fails: exit 1, loud message naming the installer, nothing committed');
 
 // ---------- D. blockmaps (differential updates) ----------
 console.log('-- D. blockmaps');
 const deletes = () => W.calls.filter((c) => c.includes('delete-asset')).map((c) => c.split(' ')[4]);
 world();
 code = await run([V, '--skip-tests']);
-const upload = W.calls.find((c) => c.startsWith('gh release upload pyide dist'));
-ok(code === 0 && upload.includes(`PyIDE-Setup-${V}.exe.blockmap`) && upload.includes(`PyIDE-Setup-${V}.exe `), 'the exe\'s blockmap is uploaded together with the installers');
-ok(idx(`PyIDE-Setup-${V}.exe.blockmap`) < idx(FEED_UP), 'the blockmap is up before latest.yml (which still goes last)');
-ok(deletes().sort().join() === ['PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup-0.2.0.exe'].join(), `previous version's installers and older blockmaps deleted (${deletes().join(', ')})`);
-ok(!deletes().some((n) => ['PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-Setup.exe', 'latest.yml'].includes(n) || n.includes(V)), 'kept: the previous version\'s blockmap, PyIDE-Setup.exe, latest.yml and this version\'s files');
-ok(/keeping PyIDE-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates to 0\.2\.1 differentially/.test(text()), 'the run says which blockmap it keeps and why');
+const upload = W.calls.find((c) => c.startsWith('gh release upload nano-studio dist'));
+ok(code === 0 && upload.includes(`NanoStudio-Setup-${V}.exe.blockmap`) && upload.includes(`NanoStudio-Setup-${V}.exe `), 'the exe\'s blockmap is uploaded together with the installers');
+ok(idx(`NanoStudio-Setup-${V}.exe.blockmap`) < idx(FEED_UP), 'the blockmap is up before latest.yml (which still goes last)');
+ok(deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe'].join(), `previous version's installers and older blockmaps deleted (${deletes().join(', ')})`);
+ok(!deletes().some((n) => ['NanoStudio-Setup-0.2.0.exe.blockmap', 'NanoStudio-Setup.exe', 'latest.yml'].includes(n) || n.includes(V)), 'kept: the previous version\'s blockmap, NanoStudio-Setup.exe, latest.yml and this version\'s files');
+ok(/keeping NanoStudio-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates to 0\.2\.1 differentially/.test(text()), 'the run says which blockmap it keeps and why');
 ok(idx('delete-asset') > idx(FEED_UP), 'deletes come after the feed switch');
 
-world({ assets: ['latest.yml', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-0.2.0.msi', 'PyIDE-Setup.exe'] });
+world({ assets: ['latest.yml', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-0.2.0.msi', 'NanoStudio-Setup.exe'] });
 code = await run([V, '--skip-tests']);
-ok(code === 0 && /PyIDE-Setup-0\.2\.0\.exe\.blockmap is not on the release: copies of 0\.2\.0 download the full installer/.test(text()), 'previous version without a blockmap on the release: says those copies download in full');
+ok(code === 0 && /NanoStudio-Setup-0\.2\.0\.exe\.blockmap is not on the release: copies of 0\.2\.0 download the full installer/.test(text()), 'previous version without a blockmap on the release: says those copies download in full');
 
 world();
 W.files.delete(BLOCKMAP);
 code = await run([V, '--skip-tests']);
-ok(code === 1 && /after npm run dist: dist has no .*PyIDE-Setup-0\.2\.1\.exe\.blockmap/.test(text()) && !has(' commit ') && pkgVersion() === '0.2.0', 'build without the blockmap: stops before committing, version restored');
+ok(code === 1 && /after npm run dist: dist has no .*NanoStudio-Setup-0\.2\.1\.exe\.blockmap/.test(text()) && !has(' commit ') && pkgVersion() === '0.2.0', 'build without the blockmap: stops before committing, version restored');
 world({ tagOnOrigin: true });
 W.files.set(BLOCKMAP, blockmapOf(99));
 code = await run([V, '--publish-only']);
@@ -250,13 +250,13 @@ ok(code === 1 && /does not describe .*unreadable/.test(text()), 'an unreadable b
 world();
 code = await run([V, '--dry-run', '--skip-tests']);
 const dry = text();
-ok(code === 0 && dry.includes(`[dry-run] gh release upload pyide dist${path.sep}PyIDE-Setup-${V}.exe dist${path.sep}PyIDE-Setup-${V}.exe.blockmap dist${path.sep}PyIDE-${V}.msi`), 'dry run prints the upload with the blockmap');
-ok(dry.includes('[dry-run] gh release delete-asset pyide PyIDE-Setup-0.1.9.exe.blockmap') && !dry.includes('delete-asset pyide PyIDE-Setup-0.2.0.exe.blockmap') && /keeping PyIDE-Setup-0\.2\.0\.exe\.blockmap/.test(dry), 'dry run prints the deletes and the kept blockmap');
+ok(code === 0 && dry.includes(`[dry-run] gh release upload nano-studio dist${path.sep}NanoStudio-Setup-${V}.exe dist${path.sep}NanoStudio-Setup-${V}.exe.blockmap dist${path.sep}NanoStudio-${V}.msi`), 'dry run prints the upload with the blockmap');
+ok(dry.includes('[dry-run] gh release delete-asset nano-studio NanoStudio-Setup-0.1.9.exe.blockmap') && !dry.includes('delete-asset nano-studio NanoStudio-Setup-0.2.0.exe.blockmap') && /keeping NanoStudio-Setup-0\.2\.0\.exe\.blockmap/.test(dry), 'dry run prints the deletes and the kept blockmap');
 ok(!W.calls.some((c) => /^gh release (upload|edit|delete-asset)|^git (commit|tag|push)/.test(c)), 'dry run runs no upload, edit, delete, commit, tag or push');
 
-ok(previousVersion(['PyIDE-Setup-0.9.0.exe', 'PyIDE-Setup-0.10.0.exe.blockmap', 'PyIDE-0.10.1.msi', 'PyIDE-Setup.exe'], '0.10.1') === '0.10.0', 'previous version: numeric order (0.10.0 > 0.9.0), this version excluded');
-ok(previousVersion(['latest.yml', 'PyIDE-Setup.exe', 'PyIDE-Setup-1.0.0.exe'], '1.0.0') === null, 'previous version: none when only this version is up');
-ok(oldAssets(['PyIDE-Setup-0.9.0.exe', 'PyIDE-Setup-0.9.0.exe.blockmap', 'PyIDE-Setup-0.10.0.exe.blockmap', 'PyIDE-Setup-0.10.1.exe', 'PyIDE-Setup.exe', 'latest.yml'], '0.10.1').join() === 'PyIDE-Setup-0.9.0.exe,PyIDE-Setup-0.9.0.exe.blockmap', 'old assets: everything of older versions except the previous blockmap');
+ok(previousVersion(['NanoStudio-Setup-0.9.0.exe', 'NanoStudio-Setup-0.10.0.exe.blockmap', 'NanoStudio-0.10.1.msi', 'NanoStudio-Setup.exe'], '0.10.1') === '0.10.0', 'previous version: numeric order (0.10.0 > 0.9.0), this version excluded');
+ok(previousVersion(['latest.yml', 'NanoStudio-Setup.exe', 'NanoStudio-Setup-1.0.0.exe'], '1.0.0') === null, 'previous version: none when only this version is up');
+ok(oldAssets(['NanoStudio-Setup-0.9.0.exe', 'NanoStudio-Setup-0.9.0.exe.blockmap', 'NanoStudio-Setup-0.10.0.exe.blockmap', 'NanoStudio-Setup-0.10.1.exe', 'NanoStudio-Setup.exe', 'latest.yml'], '0.10.1').join() === 'NanoStudio-Setup-0.9.0.exe,NanoStudio-Setup-0.9.0.exe.blockmap', 'old assets: everything of older versions except the previous blockmap');
 
 // ---------- E. signals ----------
 console.log('-- E. signals');
@@ -305,7 +305,7 @@ W.files.delete(INSTALLED);
 process.emit('SIGINT');
 process.emit('SIGINT');
 re = W.spawns.filter((s) => s.cmd === PREV || s.cmd === EXE);
-ok(W.exitCode === 130 && re.length === 1 && /!!! PyIDE IS NOT INSTALLED ANY MORE/.test(text()) && text().includes(PREV), 'SIGINT, reinstall fails: loud message, non-zero, second signal ignored');
+ok(W.exitCode === 130 && re.length === 1 && /!!! NANO STUDIO IS NOT INSTALLED ANY MORE/.test(text()) && text().includes(PREV), 'SIGINT, reinstall fails: loud message, non-zero, second signal ignored');
 
 // ---------- F. beta channel ----------
 console.log('-- F. beta channel');
@@ -313,44 +313,44 @@ const B1 = `${V}-beta.1`;
 const B2 = `${V}-beta.2`;
 const sep = path.sep;
 const uploads = () => W.calls.filter((c) => c.startsWith('gh release upload'));
-const betaYmlUp = `upload pyide dist${sep}beta.yml -R`;
+const betaYmlUp = `upload nano-studio dist${sep}beta.yml -R`;
 // A stable 0.2.0 is live; the previous cycle left a beta blockmap; 0.2.1-beta.1 is the beta.yml version.
-const BETA_ASSETS = ['latest.yml', 'beta.yml', 'PyIDE-Setup.exe', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.0.exe.blockmap', 'PyIDE-0.2.0.msi', 'PyIDE-Setup-0.1.9.exe.blockmap',
-  'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', `PyIDE-Setup-${B1}.exe`, `PyIDE-Setup-${B1}.exe.blockmap`, `PyIDE-${B1}.msi`];
+const BETA_ASSETS = ['latest.yml', 'beta.yml', 'NanoStudio-Setup.exe', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.0.exe.blockmap', 'NanoStudio-0.2.0.msi', 'NanoStudio-Setup-0.1.9.exe.blockmap',
+  'NanoStudio-Setup-0.2.0-beta.3.exe.blockmap', `NanoStudio-Setup-${B1}.exe`, `NanoStudio-Setup-${B1}.exe.blockmap`, `NanoStudio-${B1}.msi`];
 
 world({ version: B1, staleLatest: '0.2.0', assets: BETA_ASSETS.filter((n) => !n.includes(B1)) });
 code = await run([B1, '--skip-tests']);
 ok(code === 0 && pkgVersion() === B1 && has(`commit -m Release ${B1}`) && has(`tag -a v${B1}`) && has(`push --atomic origin master refs/tags/v${B1}`), `beta ${B1}: version set, committed, tagged and pushed like a release`);
 ok(/release notes: CHANGELOG\.md, ## 0\.2\.1 \(a beta/.test(text()), 'beta without its own CHANGELOG section: the section of the release it previews (## 0.2.1)');
 let ups = uploads();
-ok(ups.length === 2 && ups[0] === `gh release upload pyide dist${sep}PyIDE-Setup-${B1}.exe dist${sep}PyIDE-Setup-${B1}.exe.blockmap dist${sep}PyIDE-${B1}.msi -R ${REPO_ARG} --clobber`, `beta: installers and blockmap first, without PyIDE-Setup.exe (${ups[0]})`);
-ok(ups[1].includes(betaYmlUp) && idx(betaYmlUp) > idx(`PyIDE-Setup-${B1}.exe.blockmap`), 'beta: beta.yml uploaded last, after the blockmap');
+ok(ups.length === 2 && ups[0] === `gh release upload nano-studio dist${sep}NanoStudio-Setup-${B1}.exe dist${sep}NanoStudio-Setup-${B1}.exe.blockmap dist${sep}NanoStudio-${B1}.msi -R ${REPO_ARG} --clobber`, `beta: installers and blockmap first, without NanoStudio-Setup.exe (${ups[0]})`);
+ok(ups[1].includes(betaYmlUp) && idx(betaYmlUp) > idx(`NanoStudio-Setup-${B1}.exe.blockmap`), 'beta: beta.yml uploaded last, after the blockmap');
 ok(!W.calls.some((c) => /latest\.yml/.test(c)), 'beta: latest.yml is neither uploaded nor touched (dist holds a stale one of 0.2.0)');
-ok(!has('release edit pyide') && !has('--latest'), 'beta: the release title, notes and Latest flag are not edited');
-ok(!deletes().length && /keeping PyIDE-Setup-0\.2\.0-beta\.3\.exe\.blockmap: 0\.2\.0-beta\.3 updates to 0\.2\.1-beta\.1 differentially/.test(text()), `beta: stable versions' files untouched, the previous beta's blockmap kept (deleted: ${deletes().join(', ') || 'none'})`);
+ok(!has('release edit nano-studio') && !has('--latest'), 'beta: the release title, notes and Latest flag are not edited');
+ok(!deletes().length && /keeping NanoStudio-Setup-0\.2\.0-beta\.3\.exe\.blockmap: 0\.2\.0-beta\.3 updates to 0\.2\.1-beta\.1 differentially/.test(text()), `beta: stable versions' files untouched, the previous beta's blockmap kept (deleted: ${deletes().join(', ') || 'none'})`);
 ok(W.fetched.length === 1 && W.fetched[0].endsWith('/beta.yml') && /beta\.yml reports 0\.2\.1-beta\.1/.test(text()), `beta: step 8 reads beta.yml back (${W.fetched.join(', ')})`);
 
 world({ version: B2, assets: BETA_ASSETS });
 code = await run([B2, '--skip-tests']);
-ok(code === 0 && deletes().sort().join() === ['PyIDE-0.2.1-beta.1.msi', 'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', 'PyIDE-Setup-0.2.1-beta.1.exe'].join(), `second beta: the previous beta's installers go, its blockmap stays (${deletes().join(', ')})`);
-ok(/keeping PyIDE-Setup-0\.2\.1-beta\.1\.exe\.blockmap: 0\.2\.1-beta\.1 updates to 0\.2\.1-beta\.2 differentially/.test(text()), 'second beta: says it keeps the previous beta\'s blockmap');
+ok(code === 0 && deletes().sort().join() === ['NanoStudio-0.2.1-beta.1.msi', 'NanoStudio-Setup-0.2.0-beta.3.exe.blockmap', 'NanoStudio-Setup-0.2.1-beta.1.exe'].join(), `second beta: the previous beta's installers go, its blockmap stays (${deletes().join(', ')})`);
+ok(/keeping NanoStudio-Setup-0\.2\.1-beta\.1\.exe\.blockmap: 0\.2\.1-beta\.1 updates to 0\.2\.1-beta\.2 differentially/.test(text()), 'second beta: says it keeps the previous beta\'s blockmap');
 
 // Promotion: the stable release after the betas.
-world({ assets: [...BETA_ASSETS, `PyIDE-Setup-${B2}.exe`, `PyIDE-Setup-${B2}.exe.blockmap`, `PyIDE-${B2}.msi`].filter((n) => !n.includes(B1) || n.endsWith('.blockmap')) });
+world({ assets: [...BETA_ASSETS, `NanoStudio-Setup-${B2}.exe`, `NanoStudio-Setup-${B2}.exe.blockmap`, `NanoStudio-${B2}.msi`].filter((n) => !n.includes(B1) || n.endsWith('.blockmap')) });
 code = await run([V, '--skip-tests']);
 ups = uploads();
 let feedUp = ups.find((c) => c.includes(FEED_UP));
 const stagedBeta = feedUp?.split(' ').find((a) => a.endsWith(`${sep}beta.yml`));
-ok(code === 0 && ups.length === 2 && ups[0].includes(`PyIDE-Setup-${V}.exe `) && ups[0].includes('PyIDE-Setup.exe -R'), 'stable after betas: installers and PyIDE-Setup.exe first');
-ok(feedUp && stagedBeta && idx(FEED_UP) > idx('release edit pyide') && feedUp.indexOf('latest.yml') < feedUp.indexOf('beta.yml'), `stable: latest.yml and beta.yml uploaded together, last (${feedUp})`);
+ok(code === 0 && ups.length === 2 && ups[0].includes(`NanoStudio-Setup-${V}.exe `) && ups[0].includes('NanoStudio-Setup.exe -R'), 'stable after betas: installers and NanoStudio-Setup.exe first');
+ok(feedUp && stagedBeta && idx(FEED_UP) > idx('release edit nano-studio') && feedUp.indexOf('latest.yml') < feedUp.indexOf('beta.yml'), `stable: latest.yml and beta.yml uploaded together, last (${feedUp})`);
 ok(stagedBeta && W.files.get(stagedBeta) === W.files.get(path.join(DIST, 'latest.yml')), 'stable: the uploaded beta.yml is a copy of dist/latest.yml, so beta installs get the release');
-ok(deletes().sort().join() === ['PyIDE-0.2.0.msi', 'PyIDE-0.2.1-beta.2.msi', 'PyIDE-Setup-0.1.9.exe.blockmap', 'PyIDE-Setup-0.2.0-beta.3.exe.blockmap', 'PyIDE-Setup-0.2.0.exe', 'PyIDE-Setup-0.2.1-beta.1.exe.blockmap', 'PyIDE-Setup-0.2.1-beta.2.exe'].join(),
+ok(deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-0.2.1-beta.2.msi', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0-beta.3.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.1-beta.1.exe.blockmap', 'NanoStudio-Setup-0.2.1-beta.2.exe'].join(),
   `stable: older versions and betas deleted except the previous stable's and the previous beta's blockmaps (${deletes().join(', ')})`);
-ok(/keeping PyIDE-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates/.test(text()) && /keeping PyIDE-Setup-0\.2\.1-beta\.2\.exe\.blockmap: 0\.2\.1-beta\.2 updates to 0\.2\.1/.test(text()), 'stable: says which two blockmaps it keeps');
+ok(/keeping NanoStudio-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates/.test(text()) && /keeping NanoStudio-Setup-0\.2\.1-beta\.2\.exe\.blockmap: 0\.2\.1-beta\.2 updates to 0\.2\.1/.test(text()), 'stable: says which two blockmaps it keeps');
 ok(W.fetched.map((u) => u.split('/').pop()).join() === 'latest.yml,beta.yml', `stable: step 8 reads latest.yml and beta.yml back (${W.fetched.join(', ')})`);
 
 // A stable fix while a newer beta is out: beta.yml keeps the beta, whose files stay.
-world({ assets: [...ASSETS, 'beta.yml', 'PyIDE-Setup-0.3.0-beta.1.exe', 'PyIDE-Setup-0.3.0-beta.1.exe.blockmap', 'PyIDE-0.3.0-beta.1.msi'] });
+world({ assets: [...ASSETS, 'beta.yml', 'NanoStudio-Setup-0.3.0-beta.1.exe', 'NanoStudio-Setup-0.3.0-beta.1.exe.blockmap', 'NanoStudio-0.3.0-beta.1.msi'] });
 code = await run([V, '--skip-tests']);
 feedUp = uploads().find((c) => c.includes(FEED_UP));
 ok(code === 0 && feedUp && !feedUp.includes('beta.yml') && /beta\.yml stays at 0\.3\.0-beta\.1, which is newer than 0\.2\.1/.test(text()), 'stable with a newer beta out: only latest.yml uploaded, beta.yml stays');
@@ -390,12 +390,12 @@ const ymlBefore = W.files.get(path.join(DIST, 'beta.yml'));
 const latestBefore = W.files.get(path.join(DIST, 'latest.yml'));
 code = await run([B1, '--dry-run', '--skip-tests']);
 const dryBeta = text();
-ok(code === 0 && dryBeta.includes(`[dry-run] gh release upload pyide dist${sep}beta.yml -R`) && !dryBeta.includes(`dist${sep}latest.yml`) && !W.calls.some((c) => /^gh release (upload|edit|delete-asset)|^git (commit|tag|push)/.test(c)), 'beta dry run: prints the beta.yml upload, runs nothing');
+ok(code === 0 && dryBeta.includes(`[dry-run] gh release upload nano-studio dist${sep}beta.yml -R`) && !dryBeta.includes(`dist${sep}latest.yml`) && !W.calls.some((c) => /^gh release (upload|edit|delete-asset)|^git (commit|tag|push)/.test(c)), 'beta dry run: prints the beta.yml upload, runs nothing');
 ok(/dist\/beta\.yml put back/.test(dryBeta) && W.files.get(path.join(DIST, 'beta.yml')) === ymlBefore && W.files.get(path.join(DIST, 'latest.yml')) === latestBefore && pkgVersion() === '0.2.0', 'beta dry run: dist/beta.yml and the version put back, dist/latest.yml untouched');
 
-ok(previousVersion(['PyIDE-Setup-0.2.5-beta.9.exe.blockmap', 'PyIDE-Setup-0.2.5-beta.10.exe', 'PyIDE-Setup-0.2.4.exe'], '0.2.5', true) === '0.2.5-beta.10', 'previous beta: numeric prerelease order (beta.10 > beta.9)');
-ok(previousVersion(['PyIDE-Setup-0.2.5-beta.1.exe', 'PyIDE-Setup-0.2.4.exe'], '0.2.5') === '0.2.4', 'previous stable: betas are not stable versions');
-ok(liveBeta(['PyIDE-Setup-0.3.0-beta.1.exe.blockmap', 'PyIDE-Setup-0.2.9-beta.2.exe']) === '0.2.9-beta.2', 'the beta beta.yml offers: the newest beta with its installer on the release');
+ok(previousVersion(['NanoStudio-Setup-0.2.5-beta.9.exe.blockmap', 'NanoStudio-Setup-0.2.5-beta.10.exe', 'NanoStudio-Setup-0.2.4.exe'], '0.2.5', true) === '0.2.5-beta.10', 'previous beta: numeric prerelease order (beta.10 > beta.9)');
+ok(previousVersion(['NanoStudio-Setup-0.2.5-beta.1.exe', 'NanoStudio-Setup-0.2.4.exe'], '0.2.5') === '0.2.4', 'previous stable: betas are not stable versions');
+ok(liveBeta(['NanoStudio-Setup-0.3.0-beta.1.exe.blockmap', 'NanoStudio-Setup-0.2.9-beta.2.exe']) === '0.2.9-beta.2', 'the beta beta.yml offers: the newest beta with its installer on the release');
 
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

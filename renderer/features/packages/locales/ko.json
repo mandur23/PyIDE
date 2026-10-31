@@ -4,7 +4,6 @@
   "Refresh": "새로고침",
   "Installed in {interpreter}": "설치 위치: {interpreter}",
   "No interpreter": "인터프리터 없음",
-  "Loading…": "로드 중…",
   "Install '{name}'": "'{name}' 설치",
   "from PyPI": "PyPI에서",
   "No packages": "패키지 없음",

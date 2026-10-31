@@ -14,7 +14,7 @@
 
   const ERRORS = {
     remote: () => tr('Sync Python Requirements reads the project with a local Python interpreter.'),
-    untrusted: () => tr('The project is open in Safe Mode, where PyIDE runs nothing from it.'),
+    untrusted: () => tr('The project is open in Safe Mode, where Nano Studio runs nothing from it.'),
   };
 
   // The requirements file to sync: requirements.txt, else a pyproject.toml with [project], else a new requirements.txt.

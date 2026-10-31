@@ -57,9 +57,9 @@ function connect(port, token) {
 }
 const json = (content) => JSON.parse(content[0].text);
 
-// Lock files a crashed PyIDE left behind (its process is gone); another IDE's lock is not PyIDE's to remove.
+// Lock files a crashed Nano Studio or PyIDE left behind (its process is gone); another IDE's lock is not ours to remove.
 const deadPid = spawnSync(process.execPath, ['-e', '0']).pid;
-const staleLocks = REAL ? [] : [['1.lock', 'PyIDE'], ['2.lock', 'Visual Studio Code']].map(([name, ideName]) => {
+const staleLocks = REAL ? [] : [['1.lock', 'PyIDE'], ['2.lock', 'Visual Studio Code'], ['3.lock', 'Nano Studio']].map(([name, ideName]) => {
   writeFileSync(path.join(lockDir, name), JSON.stringify({ pid: deadPid, workspaceFolders: [], ideName, transport: 'ws', authToken: 'x' }));
   return path.join(lockDir, name);
 });
@@ -70,15 +70,15 @@ let lockPath = null;
 try {
   await until(`ide.api.invoke('claudeIde:status').then(s => !!s.port)`, 'IDE server listening');
   if (staleLocks.length) {
-    for (let i = 0; i < 50 && existsSync(staleLocks[0]); i++) await new Promise((r) => setTimeout(r, 100));
-    check(!existsSync(staleLocks[0]) && existsSync(staleLocks[1]), 'the lock file of a PyIDE that is no longer running is removed at startup, while other IDEs keep theirs');
+    for (let i = 0; i < 50 && (existsSync(staleLocks[0]) || existsSync(staleLocks[2])); i++) await new Promise((r) => setTimeout(r, 100));
+    check(!existsSync(staleLocks[0]) && !existsSync(staleLocks[2]) && existsSync(staleLocks[1]), 'the lock files of a Nano Studio and a PyIDE that are no longer running are removed at startup, while other IDEs keep theirs');
     unlinkSync(staleLocks[1]);
   }
   const { port } = await js(`ide.api.invoke('claudeIde:status')`);
   lockPath = path.join(lockDir, `${port}.lock`);
   const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
-  check(lock.transport === 'ws' && lock.ideName === 'PyIDE' && /^[0-9a-f]{32}$/.test(lock.authToken) && lock.workspaceFolders[0]?.toLowerCase() === t.project.toLowerCase() && lock.runningInWindows === true,
-    'the lock file names PyIDE, the project folder, a WebSocket transport and a 128-bit token');
+  check(lock.transport === 'ws' && lock.ideName === 'Nano Studio' && /^[0-9a-f]{32}$/.test(lock.authToken) && lock.workspaceFolders[0]?.toLowerCase() === t.project.toLowerCase() && lock.runningInWindows === true,
+    'the lock file names Nano Studio, the project folder, a WebSocket transport and a 128-bit token');
 
   const denied = await connect(port, 'wrong-token');
   check(denied.status === 401, 'a connection without the token is refused');
@@ -93,7 +93,7 @@ try {
   // ---------- MCP ----------
   const c = await connect(port, lock.authToken);
   const init = await c.call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'claude-code', version: 'test' } });
-  check(init.result.serverInfo.name === 'PyIDE' && init.result.protocolVersion === '2025-06-18' && init.result.capabilities.tools, 'initialize answers with PyIDE and tool support');
+  check(init.result.serverInfo.name === 'Nano Studio' && init.result.protocolVersion === '2025-06-18' && init.result.capabilities.tools, 'initialize answers with Nano Studio and tool support');
   c.notify('notifications/initialized', {});
   await until(`!document.querySelector('#claudeIdeStatus').classList.contains('hidden')`, 'connected status');
   check(true, 'the status bar shows that Claude Code is connected');
@@ -211,7 +211,7 @@ if (REAL) {
     const { port } = await r.js(`ide.api.invoke('claudeIde:status')`);
     await r.js(`ide.runAction('ClaudeCode')`);
     await r.until(`ide.api.invoke('claudeIde:status').then(s => s.connected > 0)`, 'real Claude Code connects', 90000);
-    r.check(true, `the real Claude Code connects to PyIDE on its own (port ${port})`);
+    r.check(true, `the real Claude Code connects to Nano Studio on its own (port ${port})`);
     await r.shot('real-connected.png');
   } catch (err) {
     r.check(false, err.message);

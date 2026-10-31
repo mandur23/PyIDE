@@ -2,8 +2,9 @@
   "id": "vcs",
   "name": "Git Integration",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Commit tool window, diff viewer, change markers, log, annotate, branches, pull and push.",
+  "modes": ["code"],
   "main": [
     "git.js"
   ]

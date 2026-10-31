@@ -1453,7 +1453,7 @@
     encodingItem.textContent = t?.doc ? ENCODING_LABEL[t.doc.encoding] || t.doc.encoding : '';
     const pos = t?.kind === 'file' ? activeGroup.editor.getPosition() : null;
     $('statusPos').textContent = pos ? `${pos.lineNumber}:${pos.column}` : '';
-    if (ide.detached) ide.api.invoke('window:setTitle', t ? `${t.title} - PyIDE` : 'PyIDE');
+    if (ide.detached) ide.api.invoke('window:setTitle', t ? `${t.title} - ${ide.appTitle}` : ide.appTitle);
   }
   encodingItem.onclick = () => {
     const doc = ide.activeTab()?.doc;
@@ -1496,7 +1496,7 @@
     if (back && back.text !== written) {
       Object.assign(doc, prev);
       await saveDoc(doc, { force: true, overwrite: true });
-      ide.ui.alert(tr('{name} was not converted to {encoding}: PyIDE could not read the file back as text in that encoding when it is opened again.', { name: basename(doc.path), encoding: label }));
+      ide.ui.alert(tr('{name} was not converted to {encoding}: Nano Studio could not read the file back as text in that encoding when it is opened again.', { name: basename(doc.path), encoding: label }));
     }
     renderAllTabs();
     updateStatus();

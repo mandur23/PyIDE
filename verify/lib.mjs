@@ -1,4 +1,4 @@
-// Launches an isolated PyIDE instance (temp user data + temp copy of a fixture project) and drives it over CDP.
+// Launches an isolated Nano Studio instance (temp user data + temp copy of a fixture project) and drives it over CDP.
 import { spawn, execFileSync, execSync } from 'child_process';
 import fs, { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { syncBuiltinESMExports } from 'module';
@@ -167,9 +167,10 @@ export function descendants(rows, rootPid, { includeRoot = false, since = SUITE_
 
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
 // userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
-// exe: an installed PyIDE.exe to run instead of the source tree; open: a project file to pass instead of the folder.
+// exe: an installed "Nano Studio.exe" to run instead of the source tree; open: a project file to pass instead of the folder.
 // projectDir: an existing project folder to open in place, instead of a copy of a fixture; args: extra command-line flags.
-export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [] }) {
+// mode: the app mode passed as --mode ('code' by default, so suites skip the start chooser; 'craft'; null for none).
+export async function launch({ fixture, port, name = fixture, lang = 'en-US', userData, exe, open, projectDir, env = {}, args: extraArgs = [], mode = 'code' }) {
   saveClipboard();
   const work = tempDir(name);
   const project = projectDir || path.join(work, 'project');
@@ -177,7 +178,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const outDir = path.join(APP_DIR, 'verify', 'out', name);
   mkdirSync(outDir, { recursive: true });
 
-  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...extraArgs];
+  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...(mode ? [`--mode=${mode}`] : []), ...extraArgs];
   const spawnedAt = Date.now();
   const child = spawn(exe || ELECTRON, exe ? args : [APP_DIR, ...args], {
     // Suites default to the deterministic semantic and completion backends; real installs would otherwise load their

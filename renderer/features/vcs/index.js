@@ -45,7 +45,7 @@
     notInBranch: tr('The commit is not in the current branch.'),
     emptyMessage: tr('The commit message is empty.'),
     badTagName: tr('This is not a valid tag name.'),
-    gitMissing: tr('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart PyIDE.'),
+    gitMissing: tr('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart Nano Studio.'),
   };
   // The operation git stopped in the middle of, as the branch widget shows it.
   const OP_LABEL = { merge: tr('Merging'), rebase: tr('Rebasing'), 'cherry-pick': tr('Cherry-picking'), revert: tr('Reverting') };

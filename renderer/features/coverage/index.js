@@ -49,7 +49,7 @@
         ide.ui.dialog({ title: tr('Run with Coverage'), body, onClose: () => settle(false) });
         return;
       }
-      body.appendChild(el('p', 'muted', tr('PyIDE will install it with pip into the project interpreter.')));
+      body.appendChild(el('p', 'muted', tr('Nano Studio will install it with pip into the project interpreter.')));
       const log = el('pre', 'cov-install-log hidden');
       log.dataset.userText = '';
       body.appendChild(log);

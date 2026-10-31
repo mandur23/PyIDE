@@ -912,10 +912,10 @@ try {
     await js(`(ide.runAction('Exit'), true)`).catch(() => {});
     let gone = false;
     for (let i = 0; i < 60 && !gone; i++) { try { process.kill(electronPid, 0); await sleep(500); } catch { gone = true; } }
-    check(gone, 'File › Exit quits PyIDE');
+    check(gone, 'File › Exit quits Nano Studio');
     let stay = [];
     for (let i = 0; i < 20; i++) { stay = liveProcesses(tree); if (!stay.length) break; await sleep(500); }
-    check(!stay.length, `no process PyIDE started is left after quitting${stay.length ? ` ${J(stay.map((p) => `${p.name} ${p.cmd.slice(0, 120)}`))}` : ''}`);
+    check(!stay.length, `no process Nano Studio started is left after quitting${stay.length ? ` ${J(stay.map((p) => `${p.name} ${p.cmd.slice(0, 120)}`))}` : ''}`);
   }
 } catch (err) {
   if (/FLOW_STOP/.test(err.message)) console.log(err.message); else check(false, err.message);

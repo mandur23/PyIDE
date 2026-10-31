@@ -12,7 +12,7 @@
   const ADDED = 'ports.added'; // ports the user added, for every project
   const TOOLS = {
     cloudflared: { item: 'tool:cloudflared', homepage: 'https://github.com/cloudflare/cloudflared',
-      description: () => tr('Cloudflare Tunnel client (Apache 2.0) that gives a web server running in PyIDE a public https address, for the Ports tool window.') },
+      description: () => tr('Cloudflare Tunnel client (Apache 2.0) that gives a web server running in Nano Studio a public https address, for the Ports tool window.') },
     bore: { item: 'tool:bore', homepage: 'https://github.com/ekzhang/bore',
       description: () => tr('TCP tunnel client (MIT) that gives a server that is not a web server, such as a game server, a public address through bore.pub, for the Ports tool window.') },
   };
@@ -136,7 +136,7 @@
   }
 
   async function setAuto(on) {
-    if (on && !(await ide.ui.confirm(tr('Every server a program started from PyIDE opens will get a public address that anyone with it can open, without signing in. Turn on?'),
+    if (on && !(await ide.ui.confirm(tr('Every server a program started from Nano Studio opens will get a public address that anyone with it can open, without signing in. Turn on?'),
       { title: tr('Share New Ports Automatically'), ok: tr('Turn On') }))) return false;
     ide.settings.set(AUTO, !!on);
     return true;
@@ -181,7 +181,7 @@
       auto.append(autoBox, el('span', null, tr('Share new ports automatically')));
       const add = el('button', 'secondary ports-add-btn', tr('Add Port…'));
       add.id = 'portsAdd';
-      add.title = tr('List a server that was not started from PyIDE, such as a game server');
+      add.title = tr('List a server that was not started from Nano Studio, such as a game server');
       add.onclick = () => addPort();
       const refresh = el('button', 'secondary', tr('Refresh'));
       refresh.id = 'portsRefresh';
@@ -221,7 +221,7 @@
     if (!list) return;
     const waiting = st.added.filter((port) => !st.ports.some((p) => p.port === port));
     if (!st.ports.length && !waiting.length) {
-      list.replaceChildren(el('div', 'ports-empty muted', tr('Servers that programs started from PyIDE listen on appear here, with a Share button that gives them a public address. Add Port lists a server started elsewhere.')));
+      list.replaceChildren(el('div', 'ports-empty muted', tr('Servers that programs started from Nano Studio listen on appear here, with a Share button that gives them a public address. Add Port lists a server started elsewhere.')));
       return;
     }
     const head = el('div', 'ports-row ports-head');

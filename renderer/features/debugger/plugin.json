@@ -2,8 +2,9 @@
   "id": "debugger",
   "name": "Debugger",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Breakpoints, stepping, frames, variables, watches and inline values for Python (debugpy) and Java (JDWP), and Attach to Process.",
+  "modes": ["code"],
   "main": [
     "debug.js",
     "debug-attach.js",

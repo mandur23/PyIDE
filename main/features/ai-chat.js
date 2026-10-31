@@ -8,7 +8,7 @@ const path = require('path');
 const { complete } = require('../ai/claude');
 const trust = require('../trust');
 
-const CHAT_SYSTEM = `You are the AI assistant inside PyIDE, a Python IDE. The user asks about their project; files and selections they attached are given as context.
+const CHAT_SYSTEM = `You are the AI assistant inside Nano Studio, a Python IDE. The user asks about their project; files and selections they attached are given as context.
 Answer in Markdown and keep answers focused. Put code in fenced code blocks with a language tag.
 When you change code from a file, show the complete changed function, class or file in one block, and write the file's project-relative path after the language in the fence info, like \`\`\`python path=src/app.py
 Answer in the language the user writes in.`;

@@ -13,7 +13,7 @@
   "stdin: type input and press Enter": "stdin: 입력을 작성하고 Enter를 누르세요",
   "No Python arguments given. Edit the configuration first.": "Python 인수가 지정되지 않았습니다. 먼저 구성을 편집하세요.",
   "Trust Project?": "프로젝트를 신뢰하시겠습니까?",
-  "{name} is open in Safe Mode, where PyIDE runs nothing from it. Run Anything starts programs and commands in the project, so trust it first.": "{name}은(는) 안전 모드로 열려 있어 PyIDE가 이 프로젝트에서 아무것도 실행하지 않습니다. 무엇이든 실행은 프로젝트에서 프로그램과 명령을 시작하므로 먼저 프로젝트를 신뢰하세요.",
+  "{name} is open in Safe Mode, where Nano Studio runs nothing from it. Run Anything starts programs and commands in the project, so trust it first.": "{name}은(는) 안전 모드로 열려 있어 Nano Studio가 이 프로젝트에서 아무것도 실행하지 않습니다. 무엇이든 실행은 프로젝트에서 프로그램과 명령을 시작하므로 먼저 프로젝트를 신뢰하세요.",
   "Trust Project": "프로젝트 신뢰",
   "Cancel": "취소",
   "The Terminal plugin is disabled.": "터미널 플러그인이 비활성화되어 있습니다.",

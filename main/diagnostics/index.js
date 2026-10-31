@@ -293,7 +293,7 @@ function install() {
   }
 
   write('INFO', '#main', '------------------- IDE STARTED -------------------');
-  write('INFO', '#main', `PyIDE ${app.getVersion()}, Electron ${process.versions.electron}, Chromium ${process.versions.chrome}, Node ${process.versions.node}`);
+  write('INFO', '#main', `Nano Studio ${app.getVersion()}, Electron ${process.versions.electron}, Chromium ${process.versions.chrome}, Node ${process.versions.node}`);
   write('INFO', '#main', `${process.platform} ${process.arch}, userData ${app.getPath('userData')}`);
   return api;
 }

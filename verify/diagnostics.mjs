@@ -163,7 +163,7 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     const copied = await js(`ide.api.invoke('clipboard:readText')`);
     check(copied.includes('diag-flaky: renderer failure') && copied.includes('Plugin: Diag Flaky (diag-flaky)') && copied.includes('flakyTimer'), 'Copy puts the error with plugin and stack on the clipboard');
     await selectRow('uncaught main-process exception');
-    check(await js(`document.querySelector('.diag-plugin-name').textContent === 'PyIDE core' && document.querySelector('#diagDisable').classList.contains('hidden')`), 'core errors offer no Disable Plugin');
+    check(await js(`document.querySelector('.diag-plugin-name').textContent === 'Nano Studio core' && document.querySelector('#diagDisable').classList.contains('hidden')`), 'core errors offer no Disable Plugin');
     await shot('errors.png');
 
     await selectRow('diag-flaky: renderer failure');
@@ -197,7 +197,7 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     await js(`[...document.querySelectorAll('#mainMenu .menu-item')].find(n => n.textContent.startsWith('Help')).dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`);
     await until(`document.querySelectorAll('.context-menu').length > 1`, 'Help submenu');
     const help = await js(`[...document.querySelectorAll('.context-menu')].pop().textContent`);
-    check(['Show Log', 'Show Log in Explorer', 'Collect Logs and Diagnostic Data', 'About PyIDE'].every((s) => help.includes(s)), 'Help lists Show Log, Show Log in Explorer, Collect Logs and About');
+    check(['Show Log', 'Show Log in Explorer', 'Collect Logs and Diagnostic Data', 'About Nano Studio'].every((s) => help.includes(s)), 'Help lists Show Log, Show Log in Explorer, Collect Logs and About');
     await t.press('Escape');
     await t.press('Escape');
 
@@ -228,10 +228,10 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     await js(`ide.runAction('AboutPyIDE')`);
     await until(`document.querySelector('.diag-about-dialog')`, 'About dialog');
     const about = await js(`document.querySelector('.diag-about-dialog .diag-facts').textContent`);
-    check(['Electron', 'Chromium', 'Node', 'Pyright', 'Python'].every((s) => about.includes(s)), 'About lists PyIDE, Electron, Node, Pyright and Python versions');
+    check(['Electron', 'Chromium', 'Node', 'Pyright', 'Python'].every((s) => about.includes(s)), 'About lists Nano Studio, Electron, Node, Pyright and Python versions');
     await click('#aboutCopy');
     const aboutCopy = await js(`ide.api.invoke('clipboard:readText')`);
-    check(/^PyIDE \S+\nRuntime: Electron [\d.]+, Chromium [\d.]+, Node [\d.]+/.test(aboutCopy) && /Pyright \d/.test(aboutCopy) && /Python: \d/.test(aboutCopy), 'About Copy puts the versions on the clipboard');
+    check(/^Nano Studio \S+\nRuntime: Electron [\d.]+, Chromium [\d.]+, Node [\d.]+/.test(aboutCopy) && /Pyright \d/.test(aboutCopy) && /Python: \d/.test(aboutCopy), 'About Copy puts the versions on the clipboard');
     check(await js(`document.querySelector('#aboutCopy').textContent === 'Copied'`), 'Copy button confirms');
     await shot('about.png');
     await t.press('Escape');
@@ -312,7 +312,7 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     check(await js(`document.querySelector('#diagDisable').textContent === '플러그인 비활성화' && !!document.querySelector('.diag-failing')`), 'Disable Plugin and the keeps-failing note are Korean');
     await leaks('.diag-dialog', 'error list (plugin error)');
     await js(`[...document.querySelectorAll('.diag-row')].find(n => n.textContent.includes('uncaught main-process exception')).click()`);
-    check(await js(`document.querySelector('.diag-plugin-name').textContent === 'PyIDE 코어'`), 'core errors say PyIDE 코어');
+    check(await js(`document.querySelector('.diag-plugin-name').textContent === 'Nano Studio 코어'`), 'core errors say Nano Studio 코어');
     await leaks('.diag-dialog', 'error list (core error)');
     await shot('errors-ko.png');
     await t.press('Escape');
@@ -321,7 +321,7 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
     await js(`[...document.querySelectorAll('#mainMenu .menu-item')].find(n => n.textContent.startsWith('도움말')).dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`);
     await until(`document.querySelectorAll('.context-menu').length > 1`, 'Help submenu');
     const help = await js(`[...document.querySelectorAll('.context-menu')].pop().textContent`);
-    check(['로그 표시', '탐색기에서 로그 표시', '로그 및 진단 데이터 수집', 'PyIDE 정보'].every((s) => help.includes(s)), 'Help items are Korean');
+    check(['로그 표시', '탐색기에서 로그 표시', '로그 및 진단 데이터 수집', 'Nano Studio 정보'].every((s) => help.includes(s)), 'Help items are Korean');
     await leaks('#menuHost', 'Help menu');
     await t.press('Escape');
     await t.press('Escape');

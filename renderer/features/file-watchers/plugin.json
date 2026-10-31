@@ -2,8 +2,9 @@
   "id": "file-watchers",
   "name": "File Watchers",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Runs a program (Black, pyside6-uic, Sass or your own) when a matching project file is saved or changed on disk.",
+  "modes": ["code"],
   "depends": [
     "run"
   ],

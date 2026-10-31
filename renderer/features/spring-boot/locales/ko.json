@@ -25,7 +25,6 @@
   "Spring Boot:": "Spring Boot:",
   "The Spring Initializr options have not loaded yet.": "Spring Initializr 옵션을 아직 불러오지 못했습니다.",
   "The application is running at {url}": "애플리케이션이 {url}에서 실행 중입니다",
-  "Type:": "유형:",
   "Unpacking the project from Spring Initializr": "Spring Initializr 프로젝트 압축을 푸는 중",
   "Spring Boot": "Spring Boot",
   "Spring Boot projects from Spring Initializr in New Project (two pages like IntelliJ IDEA: language, type, packaging, Spring Boot version and dependencies), run and debug of the application class through Maven or Gradle, and the server port in the run output as a link.": "새 프로젝트에서 Spring Initializr로 Spring Boot 프로젝트 생성(IntelliJ IDEA처럼 두 페이지: 언어, 유형, 패키징, Spring Boot 버전, 의존성), Maven 또는 Gradle로 애플리케이션 클래스 실행·디버그, 실행 출력의 서버 포트를 링크로 표시합니다.",

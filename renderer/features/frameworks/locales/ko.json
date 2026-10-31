@@ -24,7 +24,6 @@
   "stdin: type input and press Enter": "stdin: 입력한 후 Enter 키를 누르세요",
   "Open in Browser": "브라우저에서 열기",
   "Django manage.py Task": "Django manage.py 작업",
-  "Task": "작업",
   "manage.py task, e.g. makemigrations polls": "manage.py 작업 (예: makemigrations polls)",
   "Could not list the manage.py commands": "manage.py 명령 목록을 가져올 수 없습니다",
   "Run as typed": "입력한 대로 실행",

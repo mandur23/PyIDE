@@ -166,7 +166,7 @@ module.exports = ({ loadPackage, timed }) => {
 
   async function openMongo(cfg, { onLost = () => {} } = {}) {
     const mongo = loadPackage('mongodb');
-    const client = new mongo.MongoClient(connectionString(cfg), { serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, appName: 'PyIDE' });
+    const client = new mongo.MongoClient(connectionString(cfg), { serverSelectionTimeoutMS: 10000, connectTimeoutMS: 10000, appName: 'Nano Studio' });
     await client.connect();
     let closing = false;
     // The driver reconnects by itself; the IDE still hears when no server of the deployment answers any more.

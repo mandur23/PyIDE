@@ -13,7 +13,7 @@ const KINDS = ['sources', 'tests', 'excluded'];
 const keyOf = (root) => path.resolve(root).toLowerCase();
 const listeners = new Set();
 let store = null; // {root key: {sources: [rel], tests: [rel], excluded: [rel]}}
-let storeStamp = null; // mtime of the file store was read from: another PyIDE on the same user data may write it
+let storeStamp = null; // mtime of the file store was read from: another Nano Studio on the same user data may write it
 
 const storeFile = () => {
   let dir;

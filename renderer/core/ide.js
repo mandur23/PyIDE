@@ -58,13 +58,18 @@ const isUnder = (p, dir) => {
   return a === b || (a.startsWith(b) && '\\/'.includes(a[b.length]));
 };
 
+const pageParams = new URLSearchParams(location.search);
 const ide = (window.ide = {
   t: tr,
   // The IDE log (<userData>/logs/pyide.log): ide.log.info(msg), or ide.logger('#my-plugin').warn(msg).
   log: ideDiagnostics.logger('#renderer'),
   logger: ideDiagnostics.logger,
   // A detached window ("Open in New Window") shows only editors; see editors.js.
-  detached: new URLSearchParams(location.search).has('detached'),
+  detached: pageParams.has('detached'),
+  // The process's app mode (main.js): 'code', the IDE, or 'craft', the Minecraft app, where the IDE chrome is hidden
+  // and the Minecraft plugin fills #craftHost (craftReady).
+  appMode: pageParams.get('mode') === 'craft' ? 'craft' : 'code',
+  productName: pageParams.get('product') || 'Nano Studio',
   root: null,
   monaco: null,
   editor: null,
@@ -77,6 +82,11 @@ const ide = (window.ide = {
 });
 
 if (ide.detached) document.body.classList.add('detached');
+ide.appTitle = `${ide.productName} ${ide.appMode === 'craft' ? 'Craft' : 'Code'}`;
+document.title = ide.appTitle;
+if (ide.appMode === 'craft') document.body.classList.add('app-craft');
+// Craft has one project, its workspace, which main.js creates and trusts and the page opens at start.
+const craftHome = ide.appMode === 'craft' ? pageParams.get('open') : null;
 // Which of `folder` and its parents are case-sensitive; editors ask for each document they open, before keying it.
 ide.learnPathCase = learnPathCase;
 
@@ -120,7 +130,7 @@ const flushSettings = () => {
   if (++failedWrites !== 2) return;
   ide.notifications?.notify({
     title: tr('Settings cannot be saved'), kind: 'warning', group: 'Settings', raw: true,
-    text: tr('PyIDE cannot write settings.json: {error}. Your changes stay in effect and PyIDE keeps retrying.', { error: ipcError(result) }),
+    text: tr('Nano Studio cannot write settings.json: {error}. Your changes stay in effect and Nano Studio keeps retrying.', { error: ipcError(result) }),
   });
 };
 // pagehide comes after every beforeunload listener, so changes those listeners make are written too.
@@ -2079,7 +2089,7 @@ function tellInvalid(it) {
   if (it.venv && isUnder(it.venv, ide.root) && ide.venvSetup?.recreate) actions.push({ label: tr('Recreate {name}', { name: basename(it.venv) }), run: () => ide.venvSetup.recreate(it.venv) });
   ide.notifications?.notify({
     title: tr('Invalid Python interpreter selected for the project'), kind: 'warning', group: 'Python Interpreter', raw: true, actions,
-    text: `${it.reason}\n${tr('PyIDE does not run the project with another Python in its place. Choose an interpreter, or recreate the virtual environment.')}`,
+    text: `${it.reason}\n${tr('Nano Studio does not run the project with another Python in its place. Choose an interpreter, or recreate the virtual environment.')}`,
   });
 }
 const toldOld = new Set();
@@ -2144,7 +2154,7 @@ async function askTrust(dir) {
     let answer = null;
     ide.ui.dialog({
       title: tr('Trust and Open Project?'),
-      body: el('div', 'dialog-message', tr('{name} can run code when PyIDE works with it: its virtual environment\'s Python, its Git configuration and its .env file. Trust it only if you know where it comes from. Safe Mode opens it without running anything from it.', { name: basename(dir) })),
+      body: el('div', 'dialog-message', tr('{name} can run code when Nano Studio works with it: its virtual environment\'s Python, its Git configuration and its .env file. Trust it only if you know where it comes from. Safe Mode opens it without running anything from it.', { name: basename(dir) })),
       width: 560,
       onClose: () => resolve(answer),
       buttons: [
@@ -2160,7 +2170,7 @@ const trustBar = el('div', 'trust-bar hidden');
 trustBar.id = 'trustBar';
 $('center').prepend(trustBar);
 function showTrustBar(dir) {
-  trustBar.replaceChildren(el('span', null, tr('Safe Mode: PyIDE runs nothing from this project (its venv, Git, .env).')));
+  trustBar.replaceChildren(el('span', null, tr('Safe Mode: Nano Studio runs nothing from this project (its venv, Git, .env).')));
   const btn = el('button', 'primary', tr('Trust Project'));
   btn.onclick = async () => {
     await ide.api.invoke('trust:add', dir);
@@ -2200,6 +2210,7 @@ async function projectChangeAllowed(next, opts = {}) {
 // project with one projectOpened, and every plugin follows that one.
 let openSeq = 0;
 ide.openProject = async (dir) => {
+  if (craftHome && !samePath(dir, craftHome)) return false;
   // A file (a last project or recent entry that became one, a path typed or passed by a plugin) opens its folder as
   // the project and then the file, as a file passed on the command line does; listed as a folder it failed with ENOTDIR.
   const st = await ide.api.stat(dir).catch(() => null);
@@ -2227,18 +2238,21 @@ ide.openProject = async (dir) => {
   rows = [];
   drawTree();
   $('tree').scrollTop = 0;
-  document.title = `${basename(dir)} - PyIDE`;
+  if (!craftHome) document.title = `${basename(dir)} - ${ide.appTitle}`;
   $('welcome').classList.add('hidden');
   document.body.classList.remove('no-project');
   await Promise.all([renderTree(), ide.reloadInterpreters()]);
   if (!latest()) return false;
-  try { localStorage.setItem('lastProject', dir); } catch {}
-  // The list as the settings file has it now: another PyIDE instance on the same user data may have opened a project
-  // since this window read it (unless this window's own change to it is not written yet).
-  const onDisk = changedKeys.has('recentProjects') ? null : api.loadSettingsSync()?.recentProjects;
-  const recent = (Array.isArray(onDisk) ? onDisk : ide.settings.get('recentProjects', []))
-    .filter((p) => typeof p?.path === 'string' && p.path && !samePath(p.path, dir));
-  ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
+  // The craft workspace is not one of Code mode's projects: neither its last project nor a recent one.
+  if (!craftHome) {
+    try { localStorage.setItem('lastProject', dir); } catch {}
+    // The list as the settings file has it now: another PyIDE instance on the same user data may have opened a project
+    // since this window read it (unless this window's own change to it is not written yet).
+    const onDisk = changedKeys.has('recentProjects') ? null : api.loadSettingsSync()?.recentProjects;
+    const recent = (Array.isArray(onDisk) ? onDisk : ide.settings.get('recentProjects', []))
+      .filter((p) => typeof p?.path === 'string' && p.path && !samePath(p.path, dir));
+    ide.settings.set('recentProjects', [{ path: dir, opened: Date.now() }, ...recent].slice(0, 15));
+  }
   ide.emit('projectOpened', dir);
   return true;
 };
@@ -2274,7 +2288,7 @@ ide.probeProject = async (dir) => {
 // Back to the welcome screen, like PyCharm's File > Close Project. Returns false if the user kept unsaved files open
 // or a beforeProjectChange hook cancelled.
 ide.closeProject = async () => {
-  if (!ide.root || !(await projectChangeAllowed(null)) || !(await ide.closeAllTabs(false))) return false;
+  if (craftHome || !ide.root || !(await projectChangeAllowed(null)) || !(await ide.closeAllTabs(false))) return false;
   openSeq++;
   ide.root = null;
   cutEntry = null;
@@ -2284,7 +2298,7 @@ ide.closeProject = async () => {
   alsoSelected = [];
   rows = [];
   drawTree();
-  document.title = 'PyIDE';
+  document.title = ide.appTitle;
   $('welcome').classList.remove('hidden');
   document.body.classList.add('no-project');
   try { localStorage.removeItem('lastProject'); } catch {}
@@ -2537,7 +2551,9 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
     return;
   }
 
-  const params = new URLSearchParams(location.search);
+  const params = pageParams;
+  // Craft keeps its console tool windows collapsed until a run shows one.
+  if (craftHome) areas.bottom.active?.hide();
   const last = params.get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();
   // A last project on a network share that does not answer (~20 s to fail) leaves the welcome screen up after 3 s;
   // Recent Projects opens it once the share is back.
@@ -2546,6 +2562,12 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   else await ide.reloadInterpreters();
   if (!ide.root) document.body.classList.add('no-project');
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
+  // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
+  if (craftHome && ide.root) ide.emit('craftReady', { host: $('craftHost') });
+  ide.api.invoke('core:migrationNotice').then((m) => m && ide.notifications?.notify({
+    title: tr('PyIDE settings imported'), kind: 'info', group: 'Settings', raw: true,
+    text: tr('Settings, plugins and interpreters were copied from {folder}. PyIDE and its folder stay as they were.', { folder: m.from }),
+  }), () => {});
   performance.mark('pyide:ready');
   window.__ideReady = true;
 }));

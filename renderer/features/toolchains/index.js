@@ -29,8 +29,8 @@
     return Promise.all(Object.keys(KINDS).map((k) => lists[k])).then(() => ide.emit('toolchainsChanged'));
   }
   const label = (t) => (t.kind === 'jdk'
-    ? `${tr('JDK {version}', { version: t.version || '?' })} · ${t.vendor || basename(t.home)}${t.builtin ? ' (PyIDE)' : ''}`
-    : `${t.compiler} ${t.version || '?'} · ${t.vendor}${t.builtin ? ' (PyIDE)' : ''}`);
+    ? `${tr('JDK {version}', { version: t.version || '?' })} · ${t.vendor || basename(t.home)}${t.builtin ? ' (Nano Studio)' : ''}`
+    : `${t.compiler} ${t.version || '?'} · ${t.vendor}${t.builtin ? ' (Nano Studio)' : ''}`);
   const defaultKey = (kind, root = ide.root) => `toolchains.${kind}:${root}`;
   // The configuration's choice, the project's, the built-in one, then the first found.
   async function resolve(kind, id) {

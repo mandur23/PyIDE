@@ -2,8 +2,9 @@
   "id": "compare",
   "name": "File Compare",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Compare two files, a file with the clipboard or with a Git branch or revision, as in PyCharm: a side-by-side or unified diff with F7 / Shift+F7 navigation where the current file stays editable.",
+  "modes": ["code"],
   "main": [
     "compare.js"
   ]

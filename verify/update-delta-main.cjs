@@ -2,7 +2,7 @@
 // feed and downloads the update exactly as an NSIS install would (PYIDE_UPDATE_TEST_KIND=nsis), with the real
 // electron-updater and Electron's net module, then writes what happened to a JSON file and quits. Nothing is installed.
 // PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, channel, userData, out}. LOCALAPPDATA points at a temp folder,
-// so electron-updater's cache (<LOCALAPPDATA>\pyide-updater) is the test's own.
+// so electron-updater's cache (<LOCALAPPDATA>\nano-studio-updater) is the test's own.
 const { app } = require('electron');
 const fs = require('fs');
 const http = require('http');
@@ -61,8 +61,8 @@ app.whenReady().then(async () => {
     const final = await handlers['updater:state']();
     result.download = final.download;
     result.phase = final.phase;
-    const pending = path.join(process.env.LOCALAPPDATA, 'pyide-updater', 'pending');
-    const exe = fs.readdirSync(pending).find((n) => /^PyIDE-Setup-.*\.exe$/.test(n));
+    const pending = path.join(process.env.LOCALAPPDATA, 'nano-studio-updater', 'pending');
+    const exe = fs.readdirSync(pending).find((n) => /^NanoStudio-Setup-.*\.exe$/.test(n));
     result.file = exe ? path.join(pending, exe) : null;
   } catch (err) {
     result.error = err.stack || String(err);

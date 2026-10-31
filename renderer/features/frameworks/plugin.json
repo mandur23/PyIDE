@@ -2,8 +2,9 @@
   "id": "frameworks",
   "name": "Django, Flask and FastAPI",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Framework detection, dev server run configurations, manage.py tasks, Django Structure, Endpoints, a browser pane and Django/Jinja2 templates.",
+  "modes": ["code"],
   "depends": [
     "run"
   ],

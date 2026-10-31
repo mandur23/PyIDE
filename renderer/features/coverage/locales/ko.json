@@ -5,7 +5,7 @@
   "coverage.py is not installed for {interp}. Run with Coverage needs it.": "{interp}에 coverage.py가 설치되어 있지 않습니다. 커버리지로 실행하려면 필요합니다.",
   "Install it in that interpreter, then run again:": "해당 인터프리터에 설치한 다음 다시 실행하세요.",
   "Run with Coverage": "커버리지로 실행",
-  "PyIDE will install it with pip into the project interpreter.": "PyIDE가 pip로 프로젝트 인터프리터에 설치합니다.",
+  "Nano Studio will install it with pip into the project interpreter.": "Nano Studio가 pip로 프로젝트 인터프리터에 설치합니다.",
   "Cancel": "취소",
   "Install coverage.py": "coverage.py 설치",
   "Could not install coverage.py: {error}": "coverage.py를 설치할 수 없습니다: {error}",

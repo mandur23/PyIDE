@@ -1,16 +1,19 @@
 // The main IDE window plus detached editor windows ("Open in New Window"). Windows edit the same documents: edits,
 // saves, renames and deletes are relayed between them, and closing asks about unsaved changes first (closing the main
-// window asks once about every window's, since it closes them all).
+// window asks once about every window's, since it closes them all). Before the main window, the start chooser may ask
+// which app mode the process runs in (main.js).
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { pathKey, caseSensitiveDirs } = require('./path-case');
 
-function createWindowManager({ appDir }) {
+// product: the app's name (package.json productName), which the window titles carry.
+function createWindowManager({ appDir, product = 'Nano Studio' }) {
   const all = new Set();
   const initialState = new Map(); // webContents id -> payload for a detached window
   const dirty = new Map(); // webContents id -> paths of its modified documents
   let main = null;
+  let mode = 'code'; // the process's app mode, which every window's page is told (?mode=)
   let closingAll = false; // the user answered for every window: close them without asking again
 
   const alive = () => [...all].filter((w) => !w.isDestroyed());
@@ -28,7 +31,7 @@ function createWindowManager({ appDir }) {
       x: bounds.x,
       y: bounds.y,
       backgroundColor: '#1e1f22',
-      title: 'PyIDE',
+      title: `${product} ${mode === 'craft' ? 'Craft' : 'Code'}`,
       autoHideMenuBar: true,
       // The preload hands the IPC API only to the IDE page (--pyide-page); the renderer process runs in Chromium's sandbox.
       webPreferences: {
@@ -58,8 +61,42 @@ function createWindowManager({ appDir }) {
       announcePeers();
     });
     w.webContents.on('did-finish-load', announcePeers);
-    w.loadFile(path.join(appDir, 'renderer', 'index.html'), { query: detached ? { ...query, detached: '1' } : query });
+    const page = { ...query, mode, product };
+    w.loadFile(path.join(appDir, 'renderer', 'index.html'), { query: detached ? { ...page, detached: '1' } : page });
     return w;
+  }
+
+  // The start chooser (renderer/chooser.html): a small frameless window with a card for each mode. Resolves the mode
+  // picked, or null when it was closed (Esc, its close button). It stays open until closeChooser, so the app does not
+  // quit for having no window while the main window is being created.
+  let chooser = null;
+  function choose() {
+    const page = path.join(appDir, 'renderer', 'chooser.html');
+    return new Promise((resolve) => {
+      const w = new BrowserWindow({
+        width: 640, height: 380, frame: false, resizable: false, maximizable: false, fullscreenable: false, show: false,
+        backgroundColor: '#1e1f22', title: product,
+        // The preload gives this page only the chooser's calls (--pyide-chooser).
+        webPreferences: {
+          preload: path.join(appDir, 'preload.js'), contextIsolation: true, sandbox: true,
+          additionalArguments: [`--pyide-chooser=${pathToFileURL(page).href}`],
+        },
+      });
+      chooser = w;
+      const mine = (e) => e.sender === w.webContents;
+      const onPick = (e, picked) => { if (mine(e) && (picked === 'code' || picked === 'craft')) resolve(picked); };
+      const onClose = (e) => { if (mine(e)) w.close(); };
+      ipcMain.on('chooser:pick', onPick);
+      ipcMain.on('chooser:close', onClose);
+      w.once('ready-to-show', () => w.show());
+      w.on('closed', () => {
+        ipcMain.removeListener('chooser:pick', onPick);
+        ipcMain.removeListener('chooser:close', onClose);
+        if (chooser === w) chooser = null;
+        resolve(null);
+      });
+      w.loadFile(page, { query: { product } });
+    });
   }
 
   ipcMain.handle('window:openDetached', (e, payload) => {
@@ -198,8 +235,10 @@ function createWindowManager({ appDir }) {
   function leaveAll(id) { for (const k of [...shared.keys()]) leave(k, id); }
 
   return {
-    createMain(query) { main = create({ query }); return main; },
+    createMain(query, appMode = 'code') { mode = appMode; main = create({ query }); return main; },
     main: () => main,
+    choose,
+    closeChooser() { if (chooser && !chooser.isDestroyed()) chooser.destroy(); },
   };
 }
 

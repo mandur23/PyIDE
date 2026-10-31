@@ -2,8 +2,9 @@
   "id": "search-nav",
   "name": "Search and Navigation",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Find and Replace in Files, Recent Files, Structure, Go to Class/Symbol, navigation history and TODO.",
+  "modes": ["code"],
   "main": [
     "search.js"
   ]

@@ -18,7 +18,7 @@
     badRemote: tr('Enter a remote name such as origin.'),
     badNumber: tr('Not a pull request number.'),
     badInput: tr('This file cannot be compared.'),
-    badOutput: tr('GitHub CLI returned output PyIDE cannot read. Update the GitHub CLI.'),
+    badOutput: tr('GitHub CLI returned output Nano Studio cannot read. Update the GitHub CLI.'),
     headMissing: tr("The pull request's commits are not in the local repository. Use Checkout to get them."),
   };
   const errorText = (r) => (r.reason === 'remoteExists' ? tr('A remote named {name} already exists.', { name: r.remote })
@@ -66,7 +66,7 @@
     const button = (label, cls, run) => { const b = el('button', cls, label); b.onclick = () => { close(); run(); }; btns.appendChild(b); return b; };
     if (!st.installed) {
       host.append(el('div', 'gh-setup-title', REASONS.missing),
-        el('div', 'gh-setup-text', tr('PyIDE uses the GitHub CLI to share projects and list pull requests. Install it, then click Refresh.')));
+        el('div', 'gh-setup-text', tr('Nano Studio uses the GitHub CLI to share projects and list pull requests. Install it, then click Refresh.')));
       if (st.error) host.append(userText('pre', 'gh-setup-out', st.error));
       if (ide.installer) button(tr('Install GitHub CLI…'), 'primary gh-install', () => ide.installer.open('system'));
       button('cli.github.com', 'secondary gh-cli-link', () => invoke('openUrl', CLI_URL));

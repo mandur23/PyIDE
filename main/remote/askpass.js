@@ -49,7 +49,7 @@ const hasSecrets = (id) => {
 };
 const forget = (id) => { const all = load(); delete all[id]; save(all); };
 
-const ASKPASS_JS = `// Written by PyIDE: answers one ssh prompt from the IDE's named pipe, then exits before Node runs argv[1].
+const ASKPASS_JS = `// Written by Nano Studio: answers one ssh prompt from the IDE's named pipe, then exits before Node runs argv[1].
 const fs = require('fs');
 try {
   const fd = fs.openSync(process.env.PYIDE_ASKPASS_PIPE, 'r+');

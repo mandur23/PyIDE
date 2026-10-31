@@ -361,7 +361,7 @@ async function shelve(root, { name, paths, keep }) {
     const binary = parseBinary(nums.out);
     const sections = splitPatch(patch.buf);
     if (!entries.length) return { ok: false, reason: 'noShelfChanges', err: 'No changes to shelve' };
-    if (sections.length !== entries.length) return { ok: false, err: 'git diff returned a patch PyIDE cannot split into files.' };
+    if (sections.length !== entries.length) return { ok: false, err: 'git diff returned a patch Nano Studio cannot split into files.' };
     const byRel = new Map(st.files.map((f) => [f.rel, f]));
     const meta = {
       version: 1, name: String(name || '').trim() || 'Shelved changes', time: Date.now(), branch: st.branch || st.detached || null, head: head || null,

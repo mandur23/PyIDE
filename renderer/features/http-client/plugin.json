@@ -2,8 +2,9 @@
   "id": "http-client",
   "name": "HTTP Client",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Run requests from .http and .rest files, with environments, variables and a response viewer.",
+  "modes": ["code"],
   "main": [
     "http-client.js"
   ]

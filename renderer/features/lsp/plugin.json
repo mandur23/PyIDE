@@ -2,8 +2,9 @@
   "id": "lsp",
   "name": "Python Language Support (Pyright)",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Code completion, navigation, find usages, rename, quick fixes and type checking powered by the bundled Pyright language server.",
+  "modes": ["code"],
   "main": [
     "lsp.js"
   ]

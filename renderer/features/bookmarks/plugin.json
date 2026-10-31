@@ -2,6 +2,7 @@
   "id": "bookmarks",
   "name": "Bookmarks",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "Line bookmarks with mnemonics (F11, Ctrl+F11, Ctrl+digit), gutter icons and a Bookmarks tool window."
+  "vendor": "Nano Studio",
+  "description": "Line bookmarks with mnemonics (F11, Ctrl+F11, Ctrl+digit), gutter icons and a Bookmarks tool window.",
+  "modes": ["code"]
 }

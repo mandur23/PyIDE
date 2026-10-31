@@ -22,7 +22,7 @@ function feedFolder(version) {
   const dir = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-report-update-feed-')), 'feed');
   mkdirSync(dir);
   const sha = 'A'.repeat(86) + '==';
-  writeFileSync(path.join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: PyIDE-Setup-${version}.exe\n    sha512: ${sha}\n    size: 1\npath: PyIDE-Setup-${version}.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`);
+  writeFileSync(path.join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: NanoStudio-Setup-${version}.exe\n    sha512: ${sha}\n    size: 1\npath: NanoStudio-Setup-${version}.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`);
   return dir;
 }
 // A user-data folder with these settings and, optionally, an earlier check history (main/features/updater.js).
@@ -36,7 +36,7 @@ function userData(settings, history) {
 
 const status = (t) => t.js(`ide.updater.status()`);
 const mainState = (t) => t.js(`ide.api.invoke('updater:state')`);
-const updateDialogs = (t, version) => t.js(`[...document.querySelectorAll('.dialog')].filter(d => d.textContent.includes(${S(`PyIDE ${version}`)})).length`);
+const updateDialogs = (t, version) => t.js(`[...document.querySelectorAll('.dialog')].filter(d => d.textContent.includes(${S(`Nano Studio ${version}`)})).length`);
 const closeDialogs = (t) => t.js(`([...document.querySelectorAll('.dialog')].reverse().forEach(d => [...d.querySelectorAll('.dialog-buttons button')].pop().click()), true)`);
 // Waits until the scheduler has decided `count` more times, the last time for `reason`.
 async function untilDecisions(t, count, reason, label) {
@@ -79,7 +79,7 @@ const previewText = (t) => t.js(`(() => { const d = document.querySelector('.dia
 
     // ---------- the startup check, then periodic ones ----------
     await until(`ide.updater.status().history.length >= 1`, 'startup check', 20000);
-    await until(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('PyIDE 9.9.9 is available'))`, 'update dialog');
+    await until(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('Nano Studio 9.9.9 is available'))`, 'update dialog');
     check((await mainState(t)).available === '9.9.9', 'the startup check finds 9.9.9 in the folder feed');
     await until(`ide.updater.status().history.length >= 3`, 'two periodic checks', 30000);
     const h = (await status(t)).history;
@@ -153,7 +153,7 @@ const previewText = (t) => t.js(`(() => { const d = document.querySelector('.dia
     await until(`!!document.querySelector('.diag-report-dialog .diag-report-body')`, 'report preview');
     const preview = await previewText(t);
     const root = await js(`ide.root`);
-    check(preview.includes(`PyIDE ${current} (run from source)`), 'the preview names the version and the install kind');
+    check(preview.includes(`Nano Studio ${current} (run from source)`), 'the preview names the version and the install kind');
     check(/- Windows .*\d+\.\d+\.\d+ x64/.test(preview), 'the preview names the Windows version');
     check(/Electron \d+\.\d+\.\d+, Chromium \d+\./.test(preview) && preview.includes('Non-default plugins enabled: 0'), 'the preview has the Electron and Chromium versions and the plugin count');
     check(preview.includes('Model not found: ~\\.pyide\\models\\gemma') && preview.includes('at loadModel (~\\.pyide\\semantic\\server.js'), 'the error and its stack show the home folder as ~');
@@ -199,7 +199,7 @@ const previewText = (t) => t.js(`(() => { const d = document.querySelector('.dia
     await js(`(ide.runAction('ReportProblem'), true)`);
     await until(`!!document.querySelector('.diag-report-dialog .diag-report-body')`, 'general report preview');
     const general = await previewText(t);
-    check(general.includes('Describe the problem') && !general.includes('### Error') && general.includes(`PyIDE ${current}`), 'Report a Problem… has the environment and the log, without an error');
+    check(general.includes('Describe the problem') && !general.includes('### Error') && general.includes(`Nano Studio ${current}`), 'Report a Problem… has the environment and the log, without an error');
     await closeDialogs(t);
 
     // ---------- also removed: e-mail addresses, URL users, other user folders, project and repository names ----------
@@ -259,7 +259,7 @@ try {
   k.check((await mainState(k)).checks === 0 && !(await k.js(`!!document.querySelector('.dialog')`)), 'with checks turned off nothing is checked');
   await k.js(`(ide.settings.set('updates.checkOnStartup', true), true)`);
   await k.until(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('9.9.9'))`, 'Korean update dialog', 20000);
-  k.check(await k.js(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('PyIDE 9.9.9을(를) 사용할 수 있습니다.'))`), 'turning checks on checks, and the dialog is in Korean');
+  k.check(await k.js(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('Nano Studio 9.9.9을(를) 사용할 수 있습니다.'))`), 'turning checks on checks, and the dialog is in Korean');
   await k.js(`(ide.settings.set('updates.checkOnStartup', false), true)`);
   await closeDialogs(k);
 

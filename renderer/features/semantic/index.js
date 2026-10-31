@@ -26,7 +26,7 @@
   // Setup errors from main/ai/runtime.js; other errors (pip, network) pass through as they are.
   const SETUP_ERRORS = [
     [/^PyTorch has no build for (.+)$/, (m) => tr('PyTorch has no build for {python}. Install Python 3.13 from the Install Manager (or another 64-bit Python that PyTorch supports) and set up again.', { python: m[1] })],
-    [/^The AI environment is in use by another PyIDE window\. Close it and try again\.$/, () => tr('The AI environment is in use by another PyIDE window. Close it and try again.')],
+    [/^The AI environment is in use by another Nano Studio window\. Close it and try again\.$/, () => tr('The AI environment is in use by another Nano Studio window. Close it and try again.')],
     [/^No Python interpreter found$/, () => tr('No Python interpreter found')],
   ];
   const setupError = (error) => { for (const [re, f] of SETUP_ERRORS) { const m = re.exec(error); if (m) return f(m); } return error; };

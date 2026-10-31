@@ -18,7 +18,7 @@ const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8
 // GitHub refuses longer new-issue links (about 8 KB), so the whole URL stays under this.
 const ISSUE_URL_MAX = 8000;
 const LOG_LINES = 30;
-const KIND_NAMES = { nsis: 'PyIDE installer', msi: 'MSI package', source: 'run from source' };
+const KIND_NAMES = { nsis: 'Nano Studio installer', msi: 'MSI package', source: 'run from source' };
 
 // The new-issue page of the repository in package.json (`bugs.url`, else `repository`): https only.
 function newIssueUrl(appDir) {
@@ -95,7 +95,7 @@ exports.register = ({ ipcMain, app, appDir, vendorDir, diagnostics }) => {
     };
     const cur = v.interpreters.find((i) => i.current);
     v.text = [
-      `PyIDE ${v.app}`,
+      `Nano Studio ${v.app}`,
       `Runtime: Electron ${v.electron}, Chromium ${v.chromium}, Node ${v.node}, V8 ${v.v8}`,
       `Pyright ${v.pyright || 'not found'}, ruff ${v.ruff || 'not found'}`,
       `Python: ${cur ? `${cur.version} (${cur.executable})` : 'no interpreter selected'}`,
@@ -108,7 +108,7 @@ exports.register = ({ ipcMain, app, appDir, vendorDir, diagnostics }) => {
 
   const errorsText = (list) => list.map((e) => [
     `#${e.id} ${new Date(e.time).toISOString()} ${e.source}${e.window ? ` (${e.window} window)` : ''} ${e.kind}${e.count > 1 ? ` x${e.count}` : ''}`,
-    `Plugin: ${e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'PyIDE core'}`,
+    `Plugin: ${e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'Nano Studio core'}`,
     e.title ? `${e.title}: ${e.message}` : e.message,
     e.stack,
   ].join('\n')).join('\n\n----------------------------------------\n\n') || 'No internal errors.';
@@ -121,7 +121,7 @@ exports.register = ({ ipcMain, app, appDir, vendorDir, diagnostics }) => {
     if (!target) {
       const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(sender), {
         title,
-        defaultPath: path.join(app.getPath('desktop'), `pyide-logs-${fileStamp()}.zip`),
+        defaultPath: path.join(app.getPath('desktop'), `nano-studio-logs-${fileStamp()}.zip`),
         filters: [{ name: filterName || 'ZIP', extensions: ['zip'] }],
       });
       if (r.canceled || !r.filePath) return null;
@@ -170,14 +170,14 @@ exports.register = ({ ipcMain, app, appDir, vendorDir, diagnostics }) => {
     const extra = plugins.filter((p) => p.enabled && !p.bundled).length;
     const environment = [
       '### Environment',
-      `- PyIDE ${app.getVersion()} (${KIND_NAMES[kind] || kind})`,
+      `- Nano Studio ${app.getVersion()} (${KIND_NAMES[kind] || kind})`,
       `- ${os.version ? `${os.version()} ` : ''}${os.release()} ${process.arch}`,
       `- Electron ${process.versions.electron}, Chromium ${process.versions.chrome}`,
       `- Non-default plugins enabled: ${extra}`,
     ].join('\n');
     const message = e ? clean(`${e.title ? `${e.title}: ` : ''}${e.message}`).split('\n')[0] : '';
     const title = e ? (message.length > 120 ? `${message.slice(0, 119)}…` : message) : '';
-    const plugin = e ? (e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'PyIDE core') : '';
+    const plugin = e ? (e.plugin ? `${e.plugin.name} (${e.plugin.id})` : 'Nano Studio core') : '';
     const stackLines = e ? clean(e.stack && e.stack.includes(e.message) ? e.stack : `${message}\n${e.stack || ''}`).split('\n') : [];
     const logLines = recentLog.slice(-LOG_LINES).map(clean);
 

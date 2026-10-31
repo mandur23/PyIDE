@@ -119,7 +119,7 @@ function writeEclipseProject(dir, { name, java, jars }) {
   writeFileSync(path.join(dir, '.project'), `<?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
   <name>${esc(name)}</name>
-  <comment>Written by PyIDE for the Java language server</comment>
+  <comment>Written by Nano Studio for the Java language server</comment>
   <projects/>
   <buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec>
   <natures><nature>org.eclipse.jdt.core.javanature</nature></natures>
@@ -223,7 +223,7 @@ function packMcmeta(packVersion, description) {
 // Velocity takes its defaults for every key not written here.
 function velocityToml(port, backends) {
   const servers = backends.map((b) => `${JSON.stringify(b.name)} = "127.0.0.1:${b.port}"`).join('\n');
-  return `# Written by PyIDE: the [servers] table lists the project's Paper and Purpur servers each time the proxy starts.
+  return `# Written by Nano Studio: the [servers] table lists the project's Paper and Purpur servers each time the proxy starts.
 config-version = "2.9"
 bind = "0.0.0.0:${port}"
 online-mode = true

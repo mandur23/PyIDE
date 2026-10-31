@@ -2,8 +2,9 @@
   "id": "ai-generate",
   "name": "AI Actions: Documentation and Tests (Claude)",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Write Documentation and Generate Unit Tests for the function, method or class at the caret, with Claude Code signed in to your Claude subscription.",
+  "modes": ["code"],
   "depends": ["ai-edit"],
   "main": ["ai-generate.js"]
 }

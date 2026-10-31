@@ -57,7 +57,7 @@ async function search({ type, query = '', sort = 'relevance', offset = 0, server
   }
   const index = SORTS.includes(sort) ? sort : 'relevance';
   const r = await getJson(`${modrinthApi()}/search?query=${encodeURIComponent(query)}&facets=${q(facets)}&index=${index}&offset=${Number(offset) || 0}&limit=20`);
-  if (!Array.isArray(r?.hits)) throw fail('Modrinth answered the search with something PyIDE does not understand');
+  if (!Array.isArray(r?.hits)) throw fail('Modrinth answered the search with something Nano Studio does not understand');
   // What the window shows is text and numbers, whatever the answer holds; an icon is a web address or none.
   const text = (v) => (typeof v === 'string' ? v : '');
   const hits = r.hits.filter((h) => h && typeof h === 'object' && h.project_id).map((h) => ({
@@ -125,7 +125,7 @@ function createMarket({ readServer, writeServer, fetchFile }) {
       const files = (Array.isArray(version.files) ? version.files : []).filter((f) => f && typeof f.filename === 'string' && f.url);
       const file = files.find((f) => f.primary) || files[0];
       if (!file) throw fail(`${title} ${version.version_number ?? ''} has no file to download`);
-      if (!SAFE.test(file.filename)) throw fail(`${title}'s file has a name PyIDE does not write: ${JSON.stringify(file.filename)}`);
+      if (!SAFE.test(file.filename)) throw fail(`${title}'s file has a name Nano Studio does not write: ${JSON.stringify(file.filename)}`);
       if (dependency && fs.existsSync(path.join(dir, target.folder, file.filename))) return;
       plan.set(id, { project: { ...project, id, title }, version, file, dependency });
       if (type === 'resourcepack') return;

@@ -164,7 +164,7 @@ try {
   // ---------- the archive ----------
   const a = readZip(exported);
   const manifest = a.json('pyide-settings.json');
-  check(manifest.format === 1 && manifest.product === 'PyIDE' && manifest.version === VERSION && !Number.isNaN(Date.parse(manifest.created)), `manifest: format 1, PyIDE ${manifest.version}, date ${manifest.created}`);
+  check(manifest.format === 1 && manifest.product === 'Nano Studio' && manifest.version === VERSION && !Number.isNaN(Date.parse(manifest.created)), `manifest: format 1, Nano Studio ${manifest.version}, date ${manifest.created}`);
   check(S(Object.keys(manifest.categories)) === S(['appearance', 'keymap', 'liveTemplates', 'codeStyle', 'plugins', 'dataSources', 'scratches']), `manifest categories (${Object.keys(manifest.categories)})`);
   check(['settings/appearance.json', 'keymap.json', 'live-templates.json', 'settings/code-style.json', 'plugins.json', 'database/sources.json', 'scratches/scratch.py'].every((n) => a.names.includes(n)) && !a.names.includes('recent-projects.json'),
     `entries (${a.names.join(', ')})`);
@@ -295,7 +295,7 @@ try {
   const im = await rows(t);
   check(S(im.map((r) => r.id)) === S(['appearance', 'keymap', 'liveTemplates', 'codeStyle', 'plugins', 'dataSources', 'scratches']) && im.every((r) => r.checked),
     `the import dialog lists the archive's categories, ticked (${im.map((r) => r.id)})`);
-  check((await dialogText(t)).includes(`Settings exported from PyIDE ${VERSION} on`), 'the import dialog says which PyIDE exported the settings and when');
+  check((await dialogText(t)).includes(`Settings exported from Nano Studio ${VERSION} on`), 'the import dialog says which Nano Studio exported the settings and when');
   await t.shot('import-dialog.png');
   await pressPrimary(t);
   await until(`!!${topDialog}?.querySelector('.settings-sync-message.done')`, 'import finished');
@@ -356,7 +356,21 @@ try {
   await tryImport('truncated.zip', truncated, 'The file is not a ZIP archive, or it is damaged.', 'a truncated zip is refused');
   await tryImport('other.zip', zip([{ name: 'readme.txt', data: 'hello' }]), 'it has no pyide-settings.json', 'a zip without pyide-settings.json is refused');
   await tryImport('newer.zip', zip([{ ...manifestOk, data: S({ format: 99, product: 'PyIDE', version: '9.0.0', categories: { appearance: { count: 1 } } }) }, fontSize30]),
-    'exported by a newer PyIDE (9.0.0, format 99)', 'a newer format is refused with a clear message');
+    'exported by a newer Nano Studio (9.0.0, format 99)', 'a newer format is refused with a clear message');
+  // An archive PyIDE exported before the rename is offered for import, named as PyIDE's; another product's is refused.
+  {
+    const file = path.join(work, 'pyide.zip');
+    writeFileSync(file, zip([manifestOk, fontSize30]));
+    answer({ open: file });
+    await js(`(ide.runAction('ImportSettings'), true)`);
+    await until(`!!${topDialog}?.querySelector('.settings-sync-message.error, .settings-sync-list')`, 'pyide.zip answered');
+    const text = await dialogText(t);
+    check(await js(`!!${topDialog}.querySelector('.settings-sync-list')`) && text.includes('Settings exported from PyIDE 0.2.2 on'),
+      `an archive PyIDE exported is offered for import and says it comes from PyIDE (${text.slice(0, 160)})`);
+    await closeDialogs(t);
+  }
+  await tryImport('other-product.zip', zip([{ ...manifestOk, data: S({ format: 1, product: 'Other IDE', version: '1.0.0', categories: { appearance: { count: 1 } } }) }, fontSize30]),
+    'is not valid', 'an archive another product exported is refused');
   await tryImport('slip.zip', zip([manifestOk, fontSize30, { name: 'scratches/../../evil.txt', data: 'pwned' }]), 'unsafe path, so nothing was imported: scratches/../../evil.txt', 'a zip-slip entry is refused');
   await tryImport('slip2.zip', zip([manifestOk, fontSize30, { name: '..\\evil2.txt', data: 'pwned' }]), 'unsafe path', 'a backslash ..\\ entry is refused');
   await tryImport('slip3.zip', zip([manifestOk, fontSize30, { name: 'C:/evil3.txt', data: 'pwned' }]), 'unsafe path', 'a drive-letter entry is refused');

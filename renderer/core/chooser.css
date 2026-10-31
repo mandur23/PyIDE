@@ -1,0 +1,38 @@
+/* The start chooser (renderer/chooser.html), in the IDE's colors (styles.css, the Light theme of settings/style.css). */
+:root {
+  --gray1: #1e1f22; --gray2: #2b2d30; --gray3: #393b40; --gray4: #43454a; --gray8: #868a91; --gray9: #9da0a8;
+  --gray11: #ced0d6; --gray12: #dfe1e5; --blue6: #3574f0; --green6: #57965c;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --gray1: #ffffff; --gray2: #f7f8fa; --gray3: #ebecf0; --gray4: #d3d5db; --gray8: #737786; --gray9: #6c707e;
+  --gray11: #000000; --gray12: #000000; --blue6: #3574f0; --green6: #208a3c;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--gray2); color: var(--gray11);
+  font: 13px 'Inter', 'Segoe UI', sans-serif; user-select: none; }
+body { display: flex; flex-direction: column; border: 1px solid var(--gray4); }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* The frameless window is moved by its header. */
+.chooser-head { height: 44px; flex-shrink: 0; display: flex; align-items: center; padding: 0 8px 0 20px; -webkit-app-region: drag; }
+.chooser-title { flex: 1; font-weight: 600; color: var(--gray12); }
+.chooser-close { -webkit-app-region: no-drag; width: 30px; height: 30px; border-radius: 6px; display: grid; place-items: center; color: var(--gray9); }
+.chooser-close:hover { background: var(--gray3); color: var(--gray12); }
+.chooser-close svg { width: 16px; height: 16px; }
+
+.chooser-cards { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 8px 24px 28px; }
+.chooser-card { --accent: var(--blue6); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 20px; border-radius: 12px; background: var(--gray1); border: 1px solid var(--gray4); text-align: center;
+  transition: border-color .12s, transform .12s; }
+.chooser-card[data-mode="craft"] { --accent: var(--green6); }
+.chooser-card:hover, .chooser-card:focus-visible { border-color: var(--accent); outline: none; transform: translateY(-1px); }
+.chooser-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.chooser-icon { width: 72px; height: 72px; border-radius: 18px; display: grid; place-items: center; margin-bottom: 6px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.chooser-icon svg { width: 40px; height: 40px; }
+.chooser-name { font-size: 17px; font-weight: 600; color: var(--gray12); }
+.chooser-sub { color: var(--gray8); }
+body.picked .chooser-card:not(.chosen) { opacity: .5; }
+body.picked .chooser-card { cursor: default; }

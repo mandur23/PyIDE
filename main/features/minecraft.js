@@ -12,13 +12,15 @@ const path = require('path');
 const trust = require('../trust');
 const { download, tarExe } = require('../installer/servers');
 const { createToolchains, installRoot } = require('../installer/toolchains');
-const { KINDS, javaFor, temurin, HEADERS } = require('../minecraft/sources');
+const { KINDS, javaFor, temurin, HEADERS, mojangProfile } = require('../minecraft/sources');
 const { writeZip, readEntry } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
 const { createImports, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
 const gameWindow = require('../minecraft/game-window');
 const translation = require('../minecraft/translate');
+const serverSettings = require('../minecraft/server-settings');
+const { createLauncher } = require('../minecraft/launcher');
 const { complete } = require('../ai/claude');
 const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 const { allowWindowCapture } = require('../security');
@@ -141,7 +143,7 @@ function servers(root) {
   }));
 }
 const serverOf = (dir) => {
-  if (!fs.existsSync(path.join(dir, SERVER))) throw fail(`${dir} is not a PyIDE Minecraft server (no ${SERVER})`);
+  if (!fs.existsSync(path.join(dir, SERVER))) throw fail(`${dir} is not a Nano Studio Minecraft server (no ${SERVER})`);
   const desc = readJson(path.join(dir, SERVER));
   if (!desc || typeof desc !== 'object' || Array.isArray(desc)) throw fail(`${path.join(dir, SERVER)} cannot be read: fix it or create the server again`);
   return desc;
@@ -206,7 +208,7 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
       fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${port}\n`);
     } else {
       // The user agreed in the New Server dialog, which links the EULA; the date says when.
-      fs.writeFileSync(path.join(dir, 'eula.txt'), `# Accepted in PyIDE on ${new Date().toISOString()}: https://aka.ms/MinecraftEULA\neula=true\n`);
+      fs.writeFileSync(path.join(dir, 'eula.txt'), `# Accepted in Nano Studio on ${new Date().toISOString()}: https://aka.ms/MinecraftEULA\neula=true\n`);
       if (!fs.existsSync(path.join(dir, 'server.properties'))) fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${port}\nmotd=${name}\n`);
     }
     for (const sub of source.plugins ? ['plugins'] : source.mods ? ['mods'] : []) fs.mkdirSync(path.join(dir, sub), { recursive: true });
@@ -238,7 +240,7 @@ const jvmArgsOf = (desc) => (Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(Stri
 async function launch(dir, log, { debugPort } = {}) {
   const desc = serverOf(dir);
   // A description edited by hand: what a start needs, said before any Java is looked for.
-  if (!KINDS[desc.kind]) throw fail(`${SERVER} names no server type PyIDE knows (kind: ${JSON.stringify(desc.kind ?? null)})`);
+  if (!KINDS[desc.kind]) throw fail(`${SERVER} names no server type Nano Studio knows (kind: ${JSON.stringify(desc.kind ?? null)})`);
   if (!Number.isInteger(desc.java) || desc.java < 8) throw fail(`${SERVER} names no Java version (java: ${JSON.stringify(desc.java ?? null)})`);
   if (!desc.launch?.jar && !desc.launch?.argsFile) throw fail(`${SERVER} does not say how to start the server (launch)`);
   const port = portOf(dir);
@@ -447,7 +449,7 @@ async function newMod({ root, id, display, pkg, server }, log) {
 // Loom, ForgeGradle and NeoForge's ModDevGradle all run the game as a JavaExec task of that name), and pyideClasspath
 // writes each source set's sources, class path and output, which HotSwap compiles a saved file against.
 const HOTSWAP_DIR = 'build/pyide';
-const INIT_SCRIPT = `// Written by PyIDE for Debug of the test client.
+const INIT_SCRIPT = `// Written by Nano Studio for Debug of the test client.
 allprojects {
   def port = findProperty('pyide.debugPort')
   if (port) {
@@ -660,32 +662,34 @@ function applyResourcePack(dir, url, sha1) {
 }
 
 // ---------- settings ----------
-// What Server Settings shows and changes: server.properties lines players notice, and the memory the JVM gets. A
-// proxy keeps its port in velocity.toml and has only its memory here.
-const PROPS = ['motd', 'max-players', 'difficulty', 'gamemode', 'pvp', 'white-list', 'server-port'];
-const CHOICES = { difficulty: ['peaceful', 'easy', 'normal', 'hard'], gamemode: ['survival', 'creative', 'adventure', 'spectator'], pvp: ['true', 'false'], 'white-list': ['true', 'false'] };
+// The Server Settings tab: server.properties and the player lists (main/minecraft/server-settings.js), and from
+// pyide-server.json the memory and the JVM options (null: the defaults above). A proxy keeps the rest in velocity.toml.
 function settings(dir) {
   const desc = serverOf(dir);
-  const file = path.join(dir, 'server.properties');
-  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const props = {};
-  if (!KINDS[desc.kind]?.proxy) for (const k of PROPS) props[k] = new RegExp(`^${k}\\s*=(.*)$`, 'm').exec(text)?.[1].trim() ?? '';
-  return { memory: desc.memory || '2G', props, proxy: !!KINDS[desc.kind]?.proxy };
+  const proxy = !!KINDS[desc.kind]?.proxy;
+  return { proxy, memory: desc.memory || '2G', jvmArgs: Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : null,
+    defaultJvmArgs: proxy ? PROXY_JVM_ARGS : SERVER_JVM_ARGS, schema: proxy ? [] : serverSettings.PROPERTIES,
+    ...(proxy ? { props: {}, whitelist: [], ops: [] } : serverSettings.read(dir)) };
 }
-function saveSettings(dir, { memory, props = {} }) {
+// Only what is given changes; everything is checked before anything is written.
+function saveSettings(dir, { memory, jvmArgs, props, whitelist, ops } = {}) {
   const desc = serverOf(dir);
-  if (!/^\d+[MG]$/i.test(memory || '')) throw fail('Memory is a number of M or G, such as 2G');
-  const file = path.join(dir, 'server.properties');
-  for (const [k, v] of Object.entries(props)) {
-    if (!PROPS.includes(k) || KINDS[desc.kind]?.proxy) continue;
-    const value = k === 'server-port' ? String(gamePort(v)) : k === 'max-players' ? String(Math.max(1, Math.min(1000, Number(v) || 20))) : String(v ?? '');
-    if (CHOICES[k] && !CHOICES[k].includes(value)) throw fail(`${k} is one of ${CHOICES[k].join(', ')}`);
-    // One line each: a line break would start another property.
-    T.setProperty(file, k, value.replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\'));
+  const next = { ...desc };
+  if (memory !== undefined) {
+    if (!/^\d+[MG]$/i.test(memory || '')) throw fail('Memory is a number of M or G, such as 2G');
+    next.memory = memory.toUpperCase();
   }
-  writeJson(path.join(dir, SERVER), { ...desc, memory: memory.toUpperCase() });
+  if (jvmArgs === null) delete next.jvmArgs;
+  else if (jvmArgs !== undefined) {
+    if (!Array.isArray(jvmArgs) || jvmArgs.some((a) => typeof a !== 'string' || !/^-\S/.test(a))) throw fail('Each JVM option starts with - and has no spaces');
+    if (jvmArgs.some((a) => /^-Xmx/i.test(a))) throw fail('Set the memory with Memory, not -Xmx');
+    next.jvmArgs = jvmArgs;
+  }
+  if (!KINDS[desc.kind]?.proxy) serverSettings.write(dir, { props, whitelist, ops });
+  writeJson(path.join(dir, SERVER), next);
   return settings(dir);
 }
+
 
 // ---------- Korean translation ----------
 function langStatus(dir) {
@@ -705,11 +709,13 @@ async function translateMods(dir, log, signal) {
 
 const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile });
 
+const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried });
+
 const imports = (root) => createImports({ root, servers: () => servers(root), create, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
 exports.register = ({ ipcMain, send, startProcess }) => {
-  const guard = (root) => { if (!root || !trust.isTrusted(root)) throw fail('The project is open in Safe Mode, where PyIDE runs nothing from it', 'untrusted'); };
+  const guard = (root) => { if (!root || !trust.isTrusted(root)) throw fail('The project is open in Safe Mode, where Nano Studio runs nothing from it', 'untrusted'); };
   // A job's output goes to the window as minecraft:log {job, text}.
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
   ipcMain.handle('minecraft:kinds', () => Object.entries(KINDS).map(([id, k]) => ({ id, title: k.title, plugins: k.plugins, mods: k.mods, proxy: !!k.proxy })));
@@ -756,7 +762,14 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
   ipcMain.handle('minecraft:settings', (_e, root, dir) => settings(dir));
-  ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => { guard(root); return saveSettings(dir, values); });
+  // A new port is written into the proxies that send players to the server.
+  ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => {
+    guard(root);
+    const r = saveSettings(dir, values);
+    if (values?.props?.['server-port'] !== undefined) rewireProxies(root);
+    return r;
+  });
+  ipcMain.handle('minecraft:player', (_e, name, online) => serverSettings.player(name, online, mojangProfile));
   ipcMain.handle('minecraft:langStatus', (_e, root, dir) => langStatus(dir));
   // A translation runs until it ends or minecraft:cancel names its job.
   const running = new Map(); // job -> AbortController
@@ -787,4 +800,21 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:marketInstall', (_e, root, dir, project, job) => { guard(root); return shop.install(dir, project, logTo(job)); });
   ipcMain.handle('minecraft:marketRemove', (_e, root, dir, id) => { guard(root); return shop.remove(dir, id); });
   ipcMain.handle('minecraft:applyResourcePack', (_e, root, dir, url, sha1) => { guard(root); return applyResourcePack(dir, url, sha1); });
+
+  // Instances played through the official Minecraft Launcher (main/minecraft/launcher.js).
+  ipcMain.handle('launcher:status', (_e, root) => craft.status(root));
+  ipcMain.handle('launcher:instances', (_e, root) => (root ? craft.instances(root) : []));
+  ipcMain.handle('launcher:versions', (_e, kind) => craft.versions(kind));
+  ipcMain.handle('launcher:loaderVersions', (_e, kind, mc) => craft.loaderVersions(kind, mc));
+  ipcMain.handle('launcher:create', (_e, root, opts, job) => { guard(root); return craft.create(root, opts, logTo(job)); });
+  ipcMain.handle('launcher:fromPack', (_e, root, opts, job) => { guard(root); return craft.fromPack(root, opts, logTo(job)); });
+  ipcMain.handle('launcher:remove', (_e, root, name) => { guard(root); return craft.remove(root, name); });
+  ipcMain.handle('launcher:servers', (_e, root) => (root ? craft.servers(root) : []));
+  ipcMain.handle('launcher:saveServers', (_e, root, list) => { guard(root); return craft.saveServers(root, list); });
+  ipcMain.handle('launcher:join', (_e, root, req, job) => { guard(root); return craft.join(root, req, logTo(job)); });
+  ipcMain.handle('launcher:play', (_e, root, name, opts, job) => { guard(root); return craft.play(root, name, opts, logTo(job)); });
+  ipcMain.handle('launcher:mods', (_e, root, name) => craft.mods(root, name));
+  ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
+  ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));
+  ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
 };

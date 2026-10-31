@@ -2,8 +2,9 @@
   "id": "settings-sync",
   "name": "Settings Export and Import",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "File › Manage IDE Settings › Export Settings… and Import Settings…, as in PyCharm: one .zip with your appearance and editor settings, keymap, live templates, code style, plugin state, data sources (without passwords) and scratch files.",
+  "modes": ["code"],
   "main": [
     "settings-sync.js"
   ]

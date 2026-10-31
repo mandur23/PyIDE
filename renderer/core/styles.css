@@ -277,6 +277,13 @@ body.detached #bottomSplitter, body.detached #welcome, body.detached #toolbarRig
 body.detached #statusInterp { display: none !important; }
 /* No project: the welcome screen without tool windows or the run widget, like PyCharm's welcome window. */
 body.no-project :is(#stripe, #stripeRight, #sidePanel, #sideSplitter, #bottom, #bottomSplitter, #rightPanel, #rightSplitter, #runWidget) { display: none !important; }
+/* Craft mode (ide.appMode): the Minecraft app fills #craftHost, with the bottom tool windows (Run consoles) under it and
+   a status bar keeping only background tasks, IDE errors, updates and installs. */
+#craftHost { display: none; }
+body.app-craft #craftHost { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+body.app-craft :is(#toolbar, #stripe, #stripeRight, #sidePanel, #sideSplitter, #editorArea, #trustBar,
+  #statusPath, #statusPos, #statusEncodingSlot, #statusInterp) { display: none !important; }
+body.app-craft #statusItems > :not(#bgTasks, #ideErrors, #updateStatus, #installerStatus) { display: none !important; }
 
 /* Main toolbar (PyCharm New UI): main menu, project widget, run widget, search, settings. */
 #toolbar { padding: 0 6px; }

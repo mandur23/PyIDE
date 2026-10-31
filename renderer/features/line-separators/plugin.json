@@ -2,6 +2,7 @@
   "id": "line-separators",
   "name": "Line Separators",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "The status bar's line separator widget (LF, CRLF, CR), as in PyCharm: shows the current file's separator and converts the file to another one."
+  "vendor": "Nano Studio",
+  "description": "The status bar's line separator widget (LF, CRLF, CR), as in PyCharm: shows the current file's separator and converts the file to another one.",
+  "modes": ["code"]
 }

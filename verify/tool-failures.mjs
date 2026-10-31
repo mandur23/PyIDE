@@ -199,7 +199,7 @@ const commitBox = (js) => js(`(ide.toolWindows.get('Commit').show(), new Promise
     execFileSync('git', ['init', '-q'], { cwd: project });
     await js(`ide.vcs.refresh().then(() => true)`);
     const box = await commitBox(js);
-    check(!box.hidden && box.text.includes('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart PyIDE.') && !box.create,
+    check(!box.hidden && box.text.includes('Git is not installed or not on PATH. Install Git for Windows (git-scm.com) and restart Nano Studio.') && !box.create,
       `with Git missing the Commit window says so instead of "not configured" (${J(box)})`);
     await js(`(ide.runAction('Git.Init'), true)`);
     await until(`ide.notifications.list().some(n => n.title === 'Git init failed')`, 'Git init notification');

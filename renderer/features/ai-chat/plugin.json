@@ -2,7 +2,8 @@
   "id": "ai-chat",
   "name": "AI Chat (Claude)",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "A chat tool window about your code, with file and selection context, and commit messages written from the staged diff, with Claude Code signed in to your Claude subscription.",
+  "modes": ["code"],
   "main": ["ai-chat.js"]
 }

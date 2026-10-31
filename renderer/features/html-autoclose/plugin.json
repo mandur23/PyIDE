@@ -2,7 +2,8 @@
   "id": "html-autoclose",
   "name": "HTML Tag Closing",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Typing the > of an HTML or XML start tag adds its end tag after the caret, and typing </ completes the end tag of the innermost open element, as in PyCharm and VS Code.",
+  "modes": ["code"],
   "detached": true
 }

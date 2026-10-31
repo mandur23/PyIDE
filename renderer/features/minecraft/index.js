@@ -18,13 +18,15 @@
 // - Resource Pack: a resourcepack/ folder for textures and sounds; Send to Players zips it, serves it with a public link
 //   and names it in server.properties, so every player's game downloads it when they join.
 // - Market (market.js): Modrinth's modpacks, mods, plugins and resource packs, installed into a server in one click.
-// - The Minecraft screen (screen.js) shows the servers and the Market in an editor tab; project-types.js adds Minecraft
-//   Mod, Plugin and Server to New Project.
+// - The Minecraft screen (screen.js) shows the instances to play and servers to join (craft.js), the servers and the
+//   Market in an editor tab, or as the whole window in craft mode; project-types.js adds Minecraft Mod, Plugin and
+//   Server to New Project.
 // - Game View (game-view.js): the test client's window placed beside the IDE or shown inside it, with Reload
 //   Resources and Restart.
 (() => {
   const { el, basename, dirname } = ide.util;
   const run = ide.run;
+  const craft = ide.appMode === 'craft';
   const MEMORY = ['1G', '2G', '4G', '6G', '8G'];
   const EULA = 'https://aka.ms/MinecraftEULA';
   const REPOS = () => [['papermc', 'PaperMC'], ['central', 'Maven Central'], ['jitpack', 'JitPack'], ['codemc', 'CodeMC']];
@@ -360,7 +362,7 @@
     run.show(s);
     return con;
   }
-  const trusted = () => (ide.trusted === false ? (ide.ui.alert(tr('The project is open in Safe Mode, where PyIDE runs nothing from it.')), false) : true);
+  const trusted = () => (ide.trusted === false ? (ide.ui.alert(tr('The project is open in Safe Mode, where Nano Studio runs nothing from it.')), false) : true);
   const kindTitle = (k) => kinds.find((x) => x.id === k)?.title || k;
 
   async function newServer() {
@@ -501,70 +503,25 @@
     if (ide.trusted !== false) await ide.api.invoke('minecraft:rewireProxies', ide.root).catch(() => {});
     run.removeConfigs((c) => c.type === 'minecraft-server' && run.resolvePath(c.dir).toLowerCase() === srv.dir.toLowerCase());
     await ide.documentsMoved?.(srv.dir, null);
+    ide.closeTab(ide.minecraft.settings.tabId(srv.dir), true);
     ide.refreshTree?.();
     await refresh();
   }
 
   // ---------- settings ----------
-  // Server Settings: the server.properties lines players notice and the memory, and for a modded server the Korean
-  // translation of its mods.
-  async function serverSettings(srv) {
-    if (!trusted()) return;
-    let cur;
-    try { cur = await ide.api.invoke('minecraft:settings', ide.root, srv.dir); } catch (err) { return ide.ui.alert(errorText(err)); }
-    const p = cur.props;
-    const yesNo = [['true', tr('On')], ['false', tr('Off')]];
-    const fields = {
-      motd: input('mcSetMotd', p.motd),
-      'max-players': input('mcSetPlayers', p['max-players'] || '20'),
-      difficulty: select('mcSetDifficulty', [['peaceful', tr('Peaceful')], ['easy', tr('Easy')], ['normal', tr('Normal')], ['hard', tr('Hard')]], p.difficulty || 'easy'),
-      gamemode: select('mcSetGamemode', [['survival', tr('Survival')], ['creative', tr('Creative')], ['adventure', tr('Adventure')], ['spectator', tr('Spectator')]], p.gamemode || 'survival'),
-      pvp: select('mcSetPvp', yesNo, p.pvp || 'true'),
-      'white-list': select('mcSetWhitelist', yesNo, p['white-list'] || 'false'),
-      'server-port': input('mcSetPort', p['server-port'] || String(srv.port)),
-    };
-    const memory = select('mcSetMemory', [...new Set([...MEMORY, cur.memory])].map((m) => [m, m]), cur.memory);
-    const rows = cur.proxy ? [[tr('Memory:'), memory]] : [[tr('Message of the day:'), fields.motd], [tr('Max players:'), fields['max-players']],
-      [tr('Difficulty:'), fields.difficulty], [tr('Game mode:'), fields.gamemode], [tr('PvP:'), fields.pvp], [tr('Whitelist:'), fields['white-list']],
-      [tr('Port:'), fields['server-port']], [tr('Memory:'), memory]];
-    let dialog;
-    if (srv.mods) {
-      const box = el('div', 'mc-translate');
-      const status = el('div', 'mc-translate-status muted', tr('Looking for text without Korean…'));
-      const go = button(tr('Translate to Korean'), 'mc-translate-run', () => { dialog?.close(); translateKorean(srv); },
-        tr('Claude translates the mods\' text that has no Korean yet into the server\'s resource pack'));
-      go.disabled = true;
-      box.append(el('div', 'mc-translate-title', tr('Korean translation')), status, go);
-      rows.push([null, box]);
-      ide.api.invoke('minecraft:langStatus', ide.root, srv.dir).then((st) => {
-        const todo = st.mods.filter((m) => m.missing);
-        status.textContent = !st.mods.length ? tr('No mod in mods/ has English text to translate.')
-          : !st.missing ? tr('Every line of the {count} mods has Korean.', { count: st.mods.length })
-            : tr('{lines} lines in {mods} of the {count} mods have no Korean yet.', { lines: st.missing, mods: todo.length, count: st.mods.length });
-        status.title = todo.map((m) => `${m.jar}: ${m.missing}/${m.total}`).join('\n');
-        go.disabled = !st.missing;
-      }, (err) => { status.textContent = errorText(err); });
-    }
-    const f = form(rows);
-    f.body.classList.add('mc-settings');
-    dialog = ide.ui.dialog({
-      title: tr('Server Settings: {name}', { name: srv.name }), body: f.body, width: 520,
-      buttons: [
-        { label: tr('Save'), primary: true, run: async () => {
-          const props = cur.proxy ? {} : Object.fromEntries(Object.entries(fields).map(([k, c]) => [k, c.value.trim()]));
-          const port = Number(props['server-port']);
-          if (!cur.proxy && (!Number.isInteger(port) || port < 1 || port > 65535)) { f.error.textContent = tr('Use a port from 1 to 65535.'); return false; }
-          try { await ide.api.invoke('minecraft:saveSettings', ide.root, srv.dir, { memory: memory.value, props }); } catch (err) { f.error.textContent = errorText(err); return false; }
-          await refresh();
-          if (runningAt(srv.dir)) {
-            ide.notifications?.notify({ title: tr('Settings of {name} saved', { name: srv.name }), text: tr('They apply when the server starts again.'), group: 'Minecraft',
-              actions: [{ label: tr('Restart'), run: (n) => { n.expire(); restartIfRunning(srv.dir, jobSession(tr('Server Settings'))); } }] });
-          }
-          return true;
-        } },
-        { label: tr('Cancel') },
-      ],
-    });
+  // Server Settings opens the server's settings tab (server-settings.js).
+  function serverSettings(srv) {
+    if (trusted()) ide.minecraft.settings.open(srv);
+  }
+  // A line typed into a running server's console; false when the server is not running.
+  function sendCommand(dir, line) {
+    const s = sessionOf(dir);
+    if (!s?.running || !s.procId) return false;
+    s.con?.append(`> ${line}
+`, 'sys');
+    ide.proc.input(s.procId, `${line}
+`);
+    return true;
   }
 
   // The mods' text without Korean, translated by Claude (the AI plugins' Claude Code) into resourcepack/, a run at a
@@ -974,6 +931,7 @@
 
   function render() {
     for (const host of hosts) renderInto(host);
+    ide.minecraft?.settings?.paintStates();
   }
   // Start or Debug clicked again before the server runs (its card shows Stop only then) starts it once.
   const launching = new Set(); // server folders (lower case)
@@ -993,6 +951,12 @@
     if (host.id === 'minecraftTool') bar.append(button(tr('Open Screen'), 'mc-open-screen', () => ide.minecraft.screen.show('servers'), tr('The servers and the Market in an editor tab')));
     host.append(bar);
     if (!ide.root) return host.append(el('div', 'mc-empty muted', tr('Open a project to keep Minecraft servers in it.')));
+    if (!list.length && craft) {
+      const empty = el('div', 'mcc-empty');
+      empty.append(el('div', 'mcc-empty-title', tr('No servers yet')),
+        el('div', 'muted', tr('Make a server for your friends with New Server, or start from a modpack with Server from Modpack.')));
+      return host.append(empty);
+    }
     if (!list.length) return host.append(el('div', 'mc-empty muted', tr('No servers yet. New Server creates a Paper, Purpur, Vanilla, Fabric, Forge or NeoForge server, or a Velocity proxy, in servers/.')));
     for (const srv of list) {
       const running = runningAt(srv.dir);
@@ -1012,8 +976,8 @@
       }
       const tunnel = running && ide.ports ? tunnels.find((t) => t.port === srv.port) : null;
       if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
-      if (srv.plugins) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
-      if (srv.mods && srv.mdk) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
+      if (srv.plugins && !craft) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
+      if (srv.mods && srv.mdk && !craft) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
       if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
       if (srv.mods) actions.append(button(tr('Client Pack'), 'mc-pack', () => clientPack(srv), tr('The mods players need, as a .mrpack to import once')));
       // A modpack's own client pack has its client-only mods, which AutoModpack would not send.
@@ -1023,7 +987,7 @@
         if (srv.resourcePack && ide.ports) actions.append(button(tr('Send to Players'), 'mc-rp-send', () => sendPack(srv), tr('Players download the resource pack when they join')));
       }
       actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
-      actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.revealInTree?.(srv.dir)));
+      actions.append(button(tr('Open Folder'), 'mc-folder', () => (craft ? ide.api.invoke('shell:openPath', srv.dir) : ide.revealInTree?.(srv.dir))));
       if (!running) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
       const info = srv.proxy ? tr('Players join this proxy and are sent on to the project\'s Paper and Purpur servers.')
         : srv.plugins ? tr('Plugins run on the server: players need nothing.')
@@ -1055,10 +1019,28 @@
       addr.dataset.userText = '';
       row.append(el('span', 'muted', tr('Public address:')), addr,
         button(tr('Copy Address'), 'mc-public-copy', () => ide.api.invoke('clipboard:writeText', tunnel.url)),
+        ...(craft ? [button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel.url), tr('The code friends paste into Servers to Join: this address and, for a modded server, its client pack'))] : []),
         button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)));
     } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Making a public address…')));
     else row.append(el('span', 'mc-public-error', tr('The public address failed: {error}', { error: tunnel.error || '' })));
     return row;
+  }
+
+  // Craft's join code: the public address and, for a modded server, its client pack's link, which Join in a friend's
+  // Nano Studio Craft syncs the mods from.
+  async function copyJoinCode(srv, address) {
+    try {
+      let pack = null;
+      if (srv.mods) {
+        const r = await ide.api.invoke('minecraft:clientPack', ide.root, srv.dir);
+        const base = await serveFolder(dirname(r.file));
+        if (!base) return ide.ui.alert(tr('The link could not be made; see the Ports window.'));
+        pack = `${base}/${encodeURIComponent(basename(r.file))}`;
+      }
+      const code = await ide.api.invoke('launcher:joinCode', { address, pack, name: srv.name });
+      await ide.api.invoke('clipboard:writeText', code);
+      ide.notifications?.notify({ title: tr('Join code copied'), text: tr('Friends paste it into Servers to Join in Nano Studio Craft.'), kind: 'ok', group: 'Minecraft' });
+    } catch (err) { ide.ui.alert(errorText(err)); }
   }
 
   // A server with account checks off (behind a proxy) is not shared directly: anyone could join with any name. The
@@ -1102,13 +1084,13 @@
   ide.registerAction({ id: 'Minecraft.NewPlugin', title: tr('New Minecraft Plugin…'), needsProject: true, run: () => newPlugin() });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.registerAction({ id: 'Minecraft.NewMod', title: tr('New Minecraft Mod…'), needsProject: true, run: () => newMod() });
-  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, translateKorean, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
+  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
     job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, reserved: (name) => RESERVED.test(name),
     // Shows the server list (with drops) in another container too: the Minecraft screen's Servers page.
     addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'screen.js', 'project-types.js', 'game-view.js']) {
+  for (const file of ['market.js', 'craft.js', 'screen.js', 'project-types.js', 'game-view.js', 'server-settings.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

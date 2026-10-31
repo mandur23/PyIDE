@@ -1,6 +1,6 @@
-// The Windows installers end to end: installs the NSIS build (dist/PyIDE-Setup-*.exe, into a temp folder) and the MSI
-// build (dist/PyIDE-*.msi, with msiexec into its per-user default folder), each without admin rights. For each it opens
-// a .py with the installed PyIDE.exe the way "Open with PyIDE" does and checks the features that depend on unpacked
+// The Windows installers end to end: installs the NSIS build (dist/NanoStudio-Setup-*.exe, into a temp folder) and the MSI
+// build (dist/NanoStudio-*.msi, with msiexec into its per-user default folder), each without admin rights. For each it opens
+// a .py with the installed Nano Studio.exe the way "Open with Nano Studio" does and checks the features that depend on unpacked
 // files (Pyright, the ConPTY terminal, ruff, Git), then uninstalls and checks that the files, the shortcut, the
 // "Open with" registration and the install record are gone.
 // Usage: node verify/installed.mjs [nsis|msi|all] [installer file]. Build first with `npm run dist`.
@@ -29,13 +29,13 @@ const reg = (...args) => {
   try { return execFileSync('reg', ['query', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
 };
 const CLASSES = 'HKCU\\Software\\Classes';
-const SHORTCUT = path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'PyIDE.lnk');
-const hasPyIDE = (key, value) => (reg(key, '/s', '/f', 'PyIDE', '/d') || '').includes(value);
-const OPEN_WITH_KEYS = /^Software\\Classes\\(PyIDE\.py|\.py\\OpenWithProgids|Applications\\PyIDE\.exe)(\\|$)/;
-const registered = (exe) => (reg(`${CLASSES}\\.py\\OpenWithProgids`, '/v', 'PyIDE.py') || '').includes('PyIDE.py')
-  && (reg(`${CLASSES}\\PyIDE.py\\shell\\open\\command`, '/ve') || '').toLowerCase().includes(exe.toLowerCase());
-const unregistered = () => reg(`${CLASSES}\\PyIDE.py`) === null && !(reg(`${CLASSES}\\.py\\OpenWithProgids`) || '').includes('PyIDE.py')
-  && reg(`${CLASSES}\\Applications\\PyIDE.exe`) === null;
+const SHORTCUT = path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Nano Studio.lnk');
+const hasEntry = (key, value) => (reg(key, '/s', '/f', 'Nano Studio', '/d') || '').includes(value);
+const OPEN_WITH_KEYS = /^Software\\Classes\\(NanoStudio\.py|\.py\\OpenWithProgids|Applications\\Nano Studio\.exe)(\\|$)/;
+const registered = (exe) => (reg(`${CLASSES}\\.py\\OpenWithProgids`, '/v', 'NanoStudio.py') || '').includes('NanoStudio.py')
+  && (reg(`${CLASSES}\\NanoStudio.py\\shell\\open\\command`, '/ve') || '').toLowerCase().includes(exe.toLowerCase());
+const unregistered = () => reg(`${CLASSES}\\NanoStudio.py`) === null && !(reg(`${CLASSES}\\.py\\OpenWithProgids`) || '').includes('NanoStudio.py')
+  && reg(`${CLASSES}\\Applications\\Nano Studio.exe`) === null;
 // The "Open with" values msiexec wrote (op 'RegAddValue') or removed ('RegRemoveValue'), from its verbose log.
 function loggedOpenWith(log, op) {
   let text = '';
@@ -53,23 +53,23 @@ const msiLog = (name) => path.join(OUT, `msi-${name}.log`);
 
 const KINDS = {
   nsis: {
-    file: () => fileArg || inDist(/^PyIDE-Setup-.*\.exe$/, `PyIDE-Setup-${VERSION}.exe`),
-    dir: () => path.join(mkdtempSync(path.join(tmpdir(), 'pyide-installed-')), 'PyIDE'),
+    file: () => fileArg || inDist(/^NanoStudio-Setup-.*\.exe$/, `NanoStudio-Setup-${VERSION}.exe`),
+    dir: () => path.join(mkdtempSync(path.join(tmpdir(), 'pyide-installed-')), 'Nano Studio'),
     install: (file, dir) => spawnSync(file, ['/S', `/D=${dir}`], { stdio: 'ignore' }).status,
     // The uninstaller copies itself to %TEMP% and returns at once; the caller waits for the files to go.
-    uninstall: (_file, dir) => spawnSync(path.join(dir, 'Uninstall PyIDE.exe'), ['/S'], { stdio: 'ignore' }).status,
-    record: () => hasPyIDE('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall', 'DisplayName'),
+    uninstall: (_file, dir) => spawnSync(path.join(dir, 'Uninstall Nano Studio.exe'), ['/S'], { stdio: 'ignore' }).status,
+    record: () => hasEntry('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall', 'DisplayName'),
     recordLabel: 'Apps & features entry',
     openWith: (exe) => registered(exe) && 'registry',
     openWithGone: () => unregistered() && 'registry',
   },
   msi: {
-    file: () => fileArg || inDist(/^PyIDE-.*\.msi$/, `PyIDE-${VERSION}.msi`),
-    dir: () => path.join(process.env.LOCALAPPDATA, 'Programs', 'PyIDE'),
+    file: () => fileArg || inDist(/^NanoStudio-.*\.msi$/, `NanoStudio-${VERSION}.msi`),
+    dir: () => path.join(process.env.LOCALAPPDATA, 'Programs', 'Nano Studio'),
     install: (file) => spawnSync('msiexec', ['/i', file, '/qn', '/l*v', msiLog('install')], { stdio: 'ignore' }).status,
     uninstall: (file) => spawnSync('msiexec', ['/x', file, '/qn', '/l*v', msiLog('uninstall')], { stdio: 'ignore' }).status,
     // Per-user MSI products are registered under HKCU (and listed in Apps & features from there).
-    record: () => hasPyIDE('HKCU\\Software\\Microsoft\\Installer\\Products', 'ProductName'),
+    record: () => hasEntry('HKCU\\Software\\Microsoft\\Installer\\Products', 'ProductName'),
     recordLabel: 'per-user Windows Installer product registration',
     openWith: (exe) => (registered(exe) && 'registry') || (loggedOpenWith(msiLog('install'), 'RegAddValue') === 8 && 'msiexec log'),
     openWithGone: () => unregistered() && loggedOpenWith(msiLog('uninstall'), 'RegRemoveValue') === 8 && 'registry and msiexec log',
@@ -82,7 +82,7 @@ const check = (ok, label) => { results.push({ ok: !!ok, label }); console.log(`$
 async function smoke(exe, port, name) {
   let t;
   try {
-    // ---------- "Open with PyIDE" on a .py: its folder becomes the project and the file opens ----------
+    // ---------- "Open with Nano Studio" on a .py: its folder becomes the project and the file opens ----------
     t = await launch({ fixture: 'lsp', port, name, exe, open: 'errors.py' });
     const { js, until, press } = t;
     await until(`ide.activeTab()?.title === 'errors.py'`, 'errors.py tab');
@@ -136,10 +136,10 @@ async function run(kind, port) {
   if (!file || !existsSync(file)) { check(false, `${kind}: no installer in dist (run npm run dist)`); return; }
   console.log(`---------- ${kind}: ${path.basename(file)} ----------`);
   const dir = k.dir();
-  if (existsSync(dir)) { check(false, `${kind}: ${dir} already exists; uninstall PyIDE first`); return; }
+  if (existsSync(dir)) { check(false, `${kind}: ${dir} already exists; uninstall Nano Studio first`); return; }
   const pyKeyBefore = reg(`${CLASSES}\\.py`, '/s');
   const pyDefaultBefore = reg(`${CLASSES}\\.py`, '/ve');
-  const exe = path.join(dir, 'PyIDE.exe');
+  const exe = path.join(dir, 'Nano Studio.exe');
   for (const log of [msiLog('install'), msiLog('uninstall')]) rmSync(log, { force: true });
 
   check(k.install(file, dir) === 0 && existsSync(exe), `silent per-user install into ${dir}`);
@@ -150,7 +150,7 @@ async function run(kind, port) {
   check(existsSync(SHORTCUT), 'Start menu shortcut');
   check(k.record(), k.recordLabel);
   const openWith = k.openWith(exe);
-  check(openWith, `.py lists "Open with PyIDE" (${openWith || 'not found'})`);
+  check(openWith, `.py lists "Open with Nano Studio" (${openWith || 'not found'})`);
   check(pyKeyBefore === null || reg(`${CLASSES}\\.py`, '/ve') === pyDefaultBefore, '.py default program untouched');
 
   if (existsSync(exe)) await smoke(exe, port, `installed-${kind}`);

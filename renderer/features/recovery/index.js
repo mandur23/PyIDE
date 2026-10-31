@@ -113,7 +113,7 @@
       const items = el('ul', 'close-confirm-list');
       for (const rec of list) items.appendChild(el('li', null, label(rec)));
       const body = el('div');
-      body.append(el('div', null, tr('PyIDE closed unexpectedly. Restore the unsaved changes in these files?')), items);
+      body.append(el('div', null, tr('Nano Studio closed unexpectedly. Restore the unsaved changes in these files?')), items);
       const dlg = ide.ui.dialog({
         title: tr('Restore Unsaved Changes'),
         body,
@@ -204,8 +204,8 @@
     keywords: 'crash recovery backup unsaved restore hot exit 비정상 종료 복구 백업 저장되지 않은 복원',
     mount(host, ctx) {
       const s = ctx.ui.section(host, tr('Crash Recovery'));
-      s.appendChild(ctx.ui.checkbox(SETTING, tr('Back up unsaved changes and offer to restore them after PyIDE closes unexpectedly')));
-      s.appendChild(el('div', 'muted settings-note', tr('Backups are kept in the PyIDE user data folder and removed when files are saved, closed without saving, or PyIDE quits normally.')));
+      s.appendChild(ctx.ui.checkbox(SETTING, tr('Back up unsaved changes and offer to restore them after Nano Studio closes unexpectedly')));
+      s.appendChild(el('div', 'muted settings-note', tr('Backups are kept in the Nano Studio user data folder and removed when files are saved, closed without saving, or Nano Studio quits normally.')));
     },
   });
 })();

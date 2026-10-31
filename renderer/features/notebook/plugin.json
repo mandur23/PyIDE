@@ -2,7 +2,8 @@
   "id": "notebook",
   "name": "Jupyter Notebooks",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Opens .ipynb files as notebooks: code and Markdown cells, a Jupyter kernel in the project interpreter or on a Colab runtime (GPU), rich outputs, and saving back to nbformat 4.",
+  "modes": ["code"],
   "main": ["notebook.js"]
 }

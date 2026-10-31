@@ -6,7 +6,6 @@
   "Exact (==)": "정확히(==)",
   "Don't specify": "지정 안 함",
   "Sync Python Requirements reads the project with a local Python interpreter.": "Python 요구 사항 동기화는 이 컴퓨터의 Python 인터프리터로 프로젝트를 읽습니다.",
-  "The project is open in Safe Mode, where PyIDE runs nothing from it.": "프로젝트가 안전 모드로 열려 있어 PyIDE가 아무것도 실행하지 않습니다.",
   "Sync Python Requirements needs the Python Packages plugin.": "Python 요구 사항 동기화에는 Python 패키지 플러그인이 필요합니다.",
   "Could not read the imports of the project: {error}": "프로젝트의 import를 읽지 못했습니다: {error}",
   "{file} already lists every package the code imports.": "{file}에 코드가 가져오는 패키지가 모두 들어 있습니다.",

@@ -2,7 +2,8 @@
   "id": "ai-edit",
   "name": "AI Edits (Claude)",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Ctrl+I inline edits shown as a diff, and next edit suggestions, with Claude Code signed in to your Claude subscription.",
+  "modes": ["code"],
   "main": ["ai-edit.js"]
 }

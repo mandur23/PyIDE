@@ -2,8 +2,9 @@
   "id": "vcs-checks",
   "name": "Commit Checks",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Checks before a commit, as in PyCharm's Commit Checks: reformat code, optimize imports, analyze code, check TODO and run tests.",
+  "modes": ["code"],
   "main": [
     "vcs-checks.js"
   ],

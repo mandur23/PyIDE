@@ -80,7 +80,7 @@ function createPythons({ root, run }) {
     if (!fs.existsSync(dir)) return;
     log(`Removing ${dir}\n`);
     for (let i = 0; inUse(dir); i++) {
-      if (i >= 10) throw new Error(`PyIDE Python ${PYTHONS[key].version} is in use by a running program (a run, the Python Console, a debugger or a terminal). Stop it and try again.`);
+      if (i >= 10) throw new Error(`Nano Studio Python ${PYTHONS[key].version} is in use by a running program (a run, the Python Console, a debugger or a terminal). Stop it and try again.`);
       await new Promise((r) => setTimeout(r, 300));
     }
     const aside = `${dir}.remove-${process.pid}-${Date.now()}`;

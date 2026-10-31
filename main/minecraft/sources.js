@@ -1,11 +1,12 @@
 // Where each kind of Minecraft server comes from: the Minecraft versions it offers and the file to download for one.
 // Every list and file comes from the project's own service: Mojang's version manifest (which also says the Java
-// version each Minecraft version needs), PaperMC's Fill API, Fabric's meta API, and the Forge and NeoForge Maven
-// repositories. PYIDE_MC_SOURCES (tests) is a JSON object whose keys replace the base URLs below.
+// version each Minecraft version needs), PaperMC's Fill API, Fabric's meta API (and Quilt's, for the launcher's
+// clients), and the Forge and NeoForge Maven repositories. PYIDE_MC_SOURCES (tests) is a JSON object whose keys replace the base URLs below.
 const BASE = {
   mojang: 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
   paper: 'https://fill.papermc.io/v3/projects/paper',
   fabric: 'https://meta.fabricmc.net/v2',
+  quilt: 'https://meta.quiltmc.org/v3',
   forge: 'https://maven.minecraftforge.net/net/minecraftforge/forge',
   forgePromos: 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json',
   neoforge: 'https://maven.neoforged.net/releases/net/neoforged/neoforge',
@@ -15,6 +16,7 @@ const BASE = {
   velocity: 'https://fill.papermc.io/v3/projects/velocity',
   adoptium: 'https://api.adoptium.net/v3',
   modrinth: 'https://api.modrinth.com/v2',
+  mojangApi: 'https://api.mojang.com',
 };
 // Only text values replace a base URL, without a trailing slash (the paths below add their own).
 const base = () => {
@@ -22,8 +24,15 @@ const base = () => {
   try { own = JSON.parse(process.env.PYIDE_MC_SOURCES || '{}') || {}; } catch {}
   return { ...BASE, ...Object.fromEntries(Object.entries(own).filter(([, v]) => typeof v === 'string').map(([k, v]) => [k, v.replace(/\/+$/, '')])) };
 };
+// Whether url is on the origin of a base URL PYIDE_MC_SOURCES replaced: a test's local stand-in, which may serve
+// what otherwise only comes from https or from the hosts a modpack may name.
+const originOf = (u) => { try { const o = new URL(u).origin; return o === 'null' ? null : o; } catch { return null; } };
+const standIn = (url) => {
+  const o = originOf(url);
+  return !!o && Object.entries(base()).some(([k, v]) => v !== BASE[k] && originOf(v) === o);
+};
 // PaperMC refuses requests without a User-Agent that names the program.
-const HEADERS = { 'User-Agent': `PyIDE/${require('../../package.json').version} (https://github.com/mandur23/PyIDE)` };
+const HEADERS = { 'User-Agent': `NanoStudio/${require('../../package.json').version} (https://github.com/mandur23/PyIDE)` };
 
 // A service that does not answer within TIMEOUT is given up on. What goes wrong is the service's or the network's, the
 // user's to see and not an IDE error: the errors are marked expected, and an HTTP error carries its status.
@@ -42,6 +51,19 @@ async function getText(url) {
 async function getJson(url) {
   const text = await getText(url);
   try { return JSON.parse(text); } catch { throw fail(`${url}: the answer is not JSON`); }
+}
+
+// A Minecraft account by its name, from Mojang's profile API ({name, id}: the id is the UUID without dashes); null
+// when no account has that name (404, or an empty 204 answer).
+async function mojangProfile(name) {
+  let text;
+  try { text = await getText(`${base().mojangApi}/users/profiles/minecraft/${encodeURIComponent(name)}`); } catch (err) {
+    if (err.status === 404 || err.status === 204) return null;
+    throw err;
+  }
+  let p = null;
+  try { p = text.trim() ? JSON.parse(text) : null; } catch { throw fail('Mojang\'s profile service answered with something other than JSON'); }
+  return p && /^[0-9a-f]{32}$/i.test(p.id || '') ? { name: String(p.name || name), id: p.id.toLowerCase() } : null;
 }
 
 // Newest first by numeric parts: 26.3 > 26.1.2 > 1.21.11 > 1.21.2.
@@ -203,4 +225,4 @@ async function temurin(major, jdk) {
 
 const modrinthApi = () => base().modrinth;
 
-module.exports = { KINDS, javaFor, temurin, neoforgeMc, byVersion, HEADERS, getJson, modrinthApi };
+module.exports = { KINDS, RELEASE, base, standIn, javaFor, mojangVersion, temurin, neoforgeMc, byVersion, HEADERS, getText, getJson, modrinthApi, mojangProfile };

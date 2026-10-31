@@ -16,6 +16,9 @@ const { sameConnection } = require('./same-connection');
 
 const { ZipError } = unzip;
 const FORMAT = 1;
+// Archives exported before the rename say PyIDE; the manifest keeps its file name for them.
+const PRODUCT = 'Nano Studio';
+const PRODUCTS = [PRODUCT, 'PyIDE'];
 const MANIFEST = 'pyide-settings.json';
 const SCRATCH_PREFIX = 'scratches/';
 const MB = 2 ** 20;
@@ -231,7 +234,7 @@ function build(userData, categories, { version, now = new Date() } = {}) {
     }
     included[id] = { count };
   }
-  const manifest = { format: FORMAT, product: 'PyIDE', version: version || null, created: now.toISOString(), categories: included };
+  const manifest = { format: FORMAT, product: PRODUCT, version: version || null, created: now.toISOString(), categories: included };
   entries.unshift({ name: MANIFEST, data: JSON.stringify(manifest, null, 2) });
   return { buffer: zip(entries, now), manifest };
 }
@@ -293,7 +296,7 @@ function load(file) {
     if (err instanceof ZipError && err.code !== 'notZip') throw err;
     throw new ZipError('badManifest', err.message);
   }
-  if (!plain(manifest) || manifest.product !== 'PyIDE' || !Number.isInteger(manifest.format) || manifest.format < 1) throw new ZipError('badManifest');
+  if (!plain(manifest) || !PRODUCTS.includes(manifest.product) || !Number.isInteger(manifest.format) || manifest.format < 1) throw new ZipError('badManifest');
   if (manifest.format > FORMAT) throw Object.assign(new ZipError('newerFormat'), { version: typeof manifest.version === 'string' ? manifest.version : null, format: manifest.format });
   const listed = plain(manifest.categories) ? manifest.categories : {};
   const present = CATEGORIES.filter((id) => listed[id] && (id === 'scratches'
@@ -305,6 +308,7 @@ function load(file) {
 function inspect(file) {
   const { manifest, present } = load(file);
   return {
+    product: manifest.product,
     version: typeof manifest.version === 'string' ? manifest.version : null,
     created: typeof manifest.created === 'string' ? manifest.created : null,
     categories: present.map((id) => ({ id, count: Number(manifest.categories[id]?.count) || 0 })),

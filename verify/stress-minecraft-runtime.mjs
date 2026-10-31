@@ -375,7 +375,7 @@ try {
     await refresh();
     await js(`(ide.run.runConfig(${runTab('zeta')}.cfg, { confirm: false }), true)`);
     await waitFor(async () => /pyide-server\.json/.test(await tabText('zeta')), 15000);
-    check(/no pyide-server\.json/.test(await tabText('zeta')), 'Start with no pyide-server.json says it is not a PyIDE server');
+    check(/no pyide-server\.json/.test(await tabText('zeta')), 'Start with no pyide-server.json says it is not a Nano Studio server');
     check(await js(`!${card('zeta')}`), 'a folder without pyide-server.json is not listed');
     writeFileSync(desc, good);
     await refresh();

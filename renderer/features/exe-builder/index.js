@@ -17,7 +17,7 @@
 
   const ERRORS = {
     remote: () => tr('Building an executable needs a local Python interpreter.'),
-    untrusted: () => tr('The project is open in Safe Mode, where PyIDE runs nothing from it.'),
+    untrusted: () => tr('The project is open in Safe Mode, where Nano Studio runs nothing from it.'),
     script: (p) => tr('Script not found: {path}', { path: p }),
     icon: (p) => tr('Icon not found: {path}', { path: p }),
     data: (p) => tr('Data file or folder not found: {path}', { path: p }),

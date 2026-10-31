@@ -138,7 +138,7 @@ try {
   feed();
   await a.click('#npJdkDownload');
   await a.until(`document.querySelector('#npJdk').options.length === 1 && document.querySelector('#npJdkOffer').classList.contains('hidden')`, 'JDK installed from the wizard', 30000);
-  check((await text(a, '#npJdk')).includes('JDK 99.0.1 · Fake Vendor (PyIDE)'), `the downloaded JDK is chosen in the wizard (${await text(a, '#npJdk')})`);
+  check((await text(a, '#npJdk')).includes('JDK 99.0.1 · Fake Vendor (Nano Studio)'), `the downloaded JDK is chosen in the wizard (${await text(a, '#npJdk')})`);
   check(existsSync(path.join(root, 'jdk', 'temurin-99.0.1', 'jdk-fake', 'bin', 'javac.exe')) && !files(path.join(root, 'jdk')).some((f) => /\.(zip|part)$/.test(f)),
     'it is extracted under <install root>\\jdk\\temurin-<version> and the archive is removed');
   await closeWizard(a);

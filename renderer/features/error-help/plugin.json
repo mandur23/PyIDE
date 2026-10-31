@@ -2,6 +2,7 @@
   "id": "error-help",
   "name": "Error Explanations",
   "version": "1.0.0",
-  "vendor": "PyIDE",
-  "description": "An Explain button next to the error line of a Python traceback in run and console output: what the error means, the usual causes and fixes, where it was raised, and a question to AI Chat about it with the code."
+  "vendor": "Nano Studio",
+  "description": "An Explain button next to the error line of a Python traceback in run and console output: what the error means, the usual causes and fixes, where it was raised, and a question to AI Chat about it with the code.",
+  "modes": ["code"]
 }

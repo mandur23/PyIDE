@@ -459,7 +459,7 @@ exports.register = (ctx) => {
   // breakpoints: setBreakpoints arguments, the path in the form debugpy reports (longPath for a local one).
   async function configure(dap, args, breakpoints, exceptions) {
     await dap.request('initialize', {
-      clientID: 'pyide', clientName: 'PyIDE', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
+      clientID: 'pyide', clientName: 'Nano Studio', adapterID: 'debugpy', locale: 'en', linesStartAt1: true, columnsStartAt1: true,
       pathFormat: 'path', supportsVariableType: true, supportsVariablePaging: false, supportsRunInTerminalRequest: false,
     });
     const initialized = dap.waitEvent('initialized');

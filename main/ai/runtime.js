@@ -157,7 +157,7 @@ async function ensureVenv(job, interpreter, { torch = false, interpreters = [] }
     const old = `${venv}.old-${Date.now()}`;
     try { fs.renameSync(venv, old); } catch (err) {
       throw new Error(['EBUSY', 'EPERM', 'EACCES'].includes(err.code)
-        ? 'The AI environment is in use by another PyIDE window. Close it and try again.'
+        ? 'The AI environment is in use by another Nano Studio window. Close it and try again.'
         : `The AI environment could not be replaced: ${err.message}`);
     }
     fs.rm(old, { recursive: true, force: true }, () => {});

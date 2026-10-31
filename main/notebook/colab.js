@@ -236,7 +236,7 @@ async function setUpProject(id, { onStep = () => {} } = {}) {
   if (!id) {
     id = `pyide-colab-${crypto.randomBytes(3).toString('hex')}`;
     onStep('create', id);
-    const op = await google('POST', `${CRM()}/v1/projects`, { projectId: id, name: 'PyIDE Colab' }, 'Google Cloud');
+    const op = await google('POST', `${CRM()}/v1/projects`, { projectId: id, name: 'Nano Studio Colab' }, 'Google Cloud');
     await waitOperation(CRM(), op, 'Google Cloud', `Creating ${id}`);
   }
   projectId(id);

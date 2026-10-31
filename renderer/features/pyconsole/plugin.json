@@ -2,8 +2,9 @@
   "id": "pyconsole",
   "name": "Python Console",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Interactive Python console tool window (Alt+8).",
+  "modes": ["code"],
   "main": [
     "pyconsole.js"
   ]

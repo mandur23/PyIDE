@@ -2,8 +2,9 @@
   "id": "type-hierarchy",
   "name": "Type Hierarchy",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PyCharm's Type Hierarchy (Ctrl+H), Go to Implementation(s) and Go to Super Method for Python classes and methods, with gutter markers on overriding and overridden methods, using the Pyright language server.",
+  "modes": ["code"],
   "depends": ["lsp", "navigation-bar"],
   "main": ["type-hierarchy.js"]
 }

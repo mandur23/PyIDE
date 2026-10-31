@@ -5,7 +5,17 @@ const invoke = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
 // Only the IDE's own page gets the API. A window that somehow loaded anything else (a link target, a dropped file;
 // main/security.js refuses those navigations) must not be able to read files or start programs.
 const pagePath = (href) => { try { const u = new URL(href); return u.protocol === 'file:' && !u.host ? decodeURIComponent(u.pathname).toLowerCase() : null; } catch { return null; } };
-const idePage = pagePath(process.argv.find((a) => a.startsWith('--pyide-page='))?.slice('--pyide-page='.length));
+const flag = (name) => process.argv.find((a) => a.startsWith(`${name}=`))?.slice(name.length + 1);
+const idePage = pagePath(flag('--pyide-page'));
+// The start chooser (main/windows.js) gets only what it needs: its strings, the theme setting and its answer.
+const chooserPage = pagePath(flag('--pyide-chooser'));
+if (chooserPage && pagePath(location.href) === chooserPage) contextBridge.exposeInMainWorld('api', {
+  localeSync: (lang) => ipcRenderer.sendSync('core:localeSync', lang),
+  loadSettingsSync: () => ipcRenderer.sendSync('settings:loadSync'),
+  saveSettingsSync: (settings, changed) => ipcRenderer.sendSync('settings:saveSync', settings, changed),
+  pick: (mode) => ipcRenderer.send('chooser:pick', mode),
+  close: () => ipcRenderer.send('chooser:close'),
+});
 if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   on: (channel, fn) => ipcRenderer.on(channel, (_e, payload) => fn(payload)),

@@ -2,7 +2,8 @@
   "id": "data-formats",
   "name": "Data Formats",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Schemas for well-known JSON and YAML files (package.json, tsconfig.json, .prettierrc, .eslintrc, GitHub Actions workflows, Docker Compose files) with completion, hover and validation, and Reformat Code for YAML and XML.",
+  "modes": ["code"],
   "detached": true
 }

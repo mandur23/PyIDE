@@ -2,8 +2,9 @@
   "id": "import-install",
   "name": "Install Missing Packages",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Quick fix that installs the package of an unresolved import (Pyright's reportMissingImports) with the project's tool, optionally adding it to the requirements.",
+  "modes": ["code"],
   "depends": [
     "lsp",
     "packages"

@@ -2,8 +2,9 @@
   "id": "terminal",
   "name": "Terminal",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "PowerShell terminal tool window (Alt+F12).",
+  "modes": ["code", "craft"],
   "required": true,
   "main": [
     "terminal.js"

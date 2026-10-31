@@ -75,7 +75,159 @@
 .mcg-note { padding: 6px 10px; border-top: 1px solid var(--gray3); min-height: 1.4em; }
 .mcg-note.ok { color: var(--green6); }
 .mcg-note.err { color: var(--red); }
-.mc-settings .mc-dialog-label { width: 120px; }
-.mc-translate { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--gray3); }
-.mc-translate-title { font-weight: 600; }
-.mc-translate-status { font-size: 12px; }
+.mc-translate { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.mc-translate-status { font-size: 13px; }
+.mcset { overflow: hidden; container-type: inline-size; }
+.mcset-body { flex: 1; min-height: 0; display: flex; }
+.mcset-nav { width: 210px; flex-shrink: 0; border-right: 1px solid var(--gray3); padding: 14px 10px; display: flex; flex-direction: column; gap: 10px; background: var(--gray2); }
+.mcset-search { width: 100%; box-sizing: border-box; }
+.mcset-pages { display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.mcset-page { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.mcset-page:hover { background: var(--gray3); }
+.mcset-page.selected { background: color-mix(in srgb, var(--blue6) 22%, transparent); font-weight: 600; }
+.mcset-page.dim { opacity: 0.45; }
+.mcset-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.mcset-save:disabled { opacity: 0.5; cursor: default; }
+.mcset-head { display: flex; align-items: center; gap: 12px; padding: 14px 28px 12px; border-bottom: 1px solid var(--gray3); }
+.mcset-head-text { flex: 1; min-width: 0; }
+.mcset-title { display: flex; align-items: center; gap: 10px; }
+.mcset-name { font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcset-state { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray9); }
+.mcset-state.on { background: color-mix(in srgb, var(--green6) 22%, transparent); color: var(--green6); }
+.mcset-sub { font-size: 12px; margin-top: 2px; }
+.mcset-tools { display: flex; gap: 6px; flex-shrink: 0; }
+.mcset-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 28px 32px; scroll-padding-top: 8px; }
+.mcset-loading, .mcset-error { padding: 20px 0; }
+.mcset-error { color: var(--red); }
+.mcset-section { max-width: 860px; }
+.mcset-section-title { font-size: 14px; font-weight: 600; margin: 22px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--gray3); }
+.mcset-note { font-size: 12px; color: var(--gray9); background: var(--gray2); border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+.mcset-row { display: grid; grid-template-columns: minmax(0, 1fr) 260px; align-items: center; gap: 6px 24px; padding: 10px 12px; margin: 0 -12px; border-radius: 6px;
+  border-left: 3px solid transparent; }
+.mcset-row:hover { background: var(--gray2); }
+.mcset-row.modified { border-left-color: var(--blue6); }
+.mcset-row.wide { grid-template-columns: minmax(0, 1fr); }
+.mcset-label { font-weight: 500; }
+.mcset-desc { font-size: 12px; margin-top: 2px; line-height: 1.45; }
+.mcset-mono .mcset-label { font-family: var(--mono); font-size: 12px; font-weight: 400; }
+.mcset-input { width: 100%; box-sizing: border-box; }
+.mcset-input.invalid, .mcset-jvm-input.invalid { border-color: var(--red); }
+.mcset-row > .mcset-switch { justify-self: end; }
+.mcset-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; cursor: pointer; }
+.mcset-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.mcset-knob { position: absolute; inset: 0; border-radius: 10px; background: var(--gray5); transition: background 0.15s; }
+.mcset-knob::before { content: ''; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.mcset-switch input:checked + .mcset-knob { background: var(--blue6); }
+.mcset-switch input:checked + .mcset-knob::before { transform: translateX(16px); }
+.mcset-switch input:focus-visible + .mcset-knob { outline: 2px solid var(--blue6); outline-offset: 2px; }
+.mcset-row[data-key="motd"] { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+.mcset-motd { display: flex; flex-direction: column; gap: 6px; }
+.mcset-motd-input { resize: none; font-family: var(--mono); font-size: 12px; }
+.mcset-motd-preview { background: #1d1d1f; border: 1px solid #000; border-radius: 4px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.mcset-motd-name { color: #fff; }
+.mcset-motd-line { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.mcset-jvm { display: flex; flex-direction: column; gap: 8px; }
+.mcset-jvm-head { display: flex; align-items: center; gap: 10px; }
+.mcset-jvm-input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; resize: vertical; }
+.mcset-jvm-input:disabled { opacity: 0.6; }
+.mcset-players { display: flex; flex-direction: column; gap: 8px; }
+.mcset-plist { border: 1px solid var(--gray3); border-radius: 6px; overflow: hidden; }
+.mcset-player { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); }
+.mcset-player:last-child { border-bottom: 0; }
+.mcset-pface { width: 22px; height: 22px; border-radius: 4px; background: var(--blue6); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.mcset-pn { font-weight: 500; }
+.mcset-puuid { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcset-plevel { width: 90px; }
+.mcset-premove { padding: 2px 8px; }
+.mcset-pempty { padding: 10px; font-size: 12px; }
+.mcset-padd { display: flex; gap: 6px; }
+.mcset-pname { width: 220px; }
+.mcset-perror { color: var(--red); font-size: 12px; }
+.mcset-perror:empty { display: none; }
+.mcset-foot { display: flex; align-items: center; gap: 8px; padding: 10px 28px; border-top: 1px solid var(--gray3); background: var(--gray2); }
+.mcset-status { flex: 1; font-size: 12px; }
+.mcset-status.mcset-error { color: var(--red); padding: 0; }
+.mcset .hidden { display: none !important; }
+/* A narrow tab (the project tree and tool windows open beside it): the sections go in a strip over the settings. */
+@container (max-width: 760px) {
+  .mcset-body { flex-direction: column; }
+  .mcset-nav { width: auto; flex-direction: row; align-items: center; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--gray3); }
+  .mcset-search { width: 160px; flex-shrink: 0; }
+  .mcset-pages { flex-direction: row; overflow-x: auto; }
+  .mcset-page { white-space: nowrap; padding: 5px 10px; }
+  .mcset-head { flex-wrap: wrap; padding: 10px 16px; }
+  .mcset-scroll { padding: 0 16px 24px; }
+  .mcset-foot { padding: 8px 16px; }
+  .mcset-row, .mcset-row[data-key="motd"] { grid-template-columns: minmax(0, 1fr); }
+  .mcset-row > .mcset-switch { justify-self: start; }
+}
+/* Craft (craft.js, screen.js): the Minecraft screen as the whole window, Play and Servers to Join as launcher cards. */
+.mcs-craft { display: flex; flex: 1; min-height: 0; }
+.mcs-craft > .mcs { flex: 1; }
+body.app-craft .mcs-nav { width: 220px; background: var(--gray2); padding: 16px 10px; }
+body.app-craft .mcs-title { font-size: 16px; padding: 4px 10px 16px; display: flex; align-items: center; gap: 8px; }
+/* An editor tab opened from craft (a server's settings) covers the app until the last tab is closed. */
+body.app-craft.mc-craft-tab #editorArea { display: flex !important; }
+body.app-craft.mc-craft-tab #craftHost { display: none !important; }
+.mcc-page { display: flex; flex-direction: column; gap: 14px; padding: 22px 28px 32px; overflow: auto; box-sizing: border-box; min-height: 0; }
+.mcc-head { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px 16px; }
+.mcc-head-text { flex: 1; min-width: 260px; }
+.mcc-title { font-size: 22px; font-weight: 600; }
+.mcc-sub { font-size: 12px; margin-top: 4px; max-width: 680px; line-height: 1.45; }
+.mcc-tools, .mcc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mcc-tools button, .mcc-actions button, .mcc-add button, .mcc-banner button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.mcc-tools .primary .ide-icon, .mcc-add .primary .ide-icon { color: #fff; }
+.mcc-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 12px 14px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 50%, transparent); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
+.mcc-banner > .ide-icon { flex-shrink: 0; }
+.mcc-banner-text { flex: 1; min-width: 220px; }
+.mcc-banner-title { font-weight: 600; }
+.mcc-banner-sub { font-size: 12px; color: var(--gray9); margin-top: 2px; }
+.mcc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; align-content: start; }
+.mcc-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--gray3); border-radius: 10px; overflow: hidden; transition: border-color 0.15s; }
+.mcc-card:hover { border-color: var(--gray5); }
+/* Cover art: the loader's colour under a faint block pattern, with the instance's initial. */
+.mcc-art { --a: #4f9a3f; --b: #2f6b2a; height: 76px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; font-weight: 700;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.25); background: repeating-conic-gradient(rgba(255, 255, 255, 0.07) 0 25%, transparent 0 50%) 0 0 / 16px 16px, linear-gradient(135deg, var(--a), var(--b)); }
+.mcc-art.fabric { --a: #c2a36b; --b: #7d6440; }
+.mcc-art.quilt { --a: #9061d6; --b: #553489; }
+.mcc-art.forge { --a: #5b6b80; --b: #2f3946; }
+.mcc-art.neoforge { --a: #e0893a; --b: #9a4f17; }
+.mcc-art.server { --a: #3f7fd9; --b: #23497f; }
+.mcc-art .ide-icon, .mcc-art .ide-icon svg { width: 30px; height: 30px; color: #fff; }
+.mcc-card-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px 14px 2px; }
+.mcc-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcc-address { font-family: var(--mono); font-size: 12px; color: var(--gray9); user-select: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcc-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcc-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray9); white-space: nowrap; }
+.mcc-chip.sync { background: color-mix(in srgb, var(--green6) 22%, transparent); color: var(--green6); }
+.mcc-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; min-width: 0; }
+.mcc-server-of { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One row: in a narrower card than the 900 px two-column grid, the secondary labels shorten before anything wraps. */
+.mcc-actions { padding: 10px 14px 14px; margin-top: auto; flex-wrap: nowrap; }
+.mcc-actions .secondary { min-width: 0; }
+.mcc-actions .secondary > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.mcc-actions .mcc-delete { padding: 4px 7px; flex-shrink: 0; }
+.mcc-actions .mcc-play, .mcc-actions .mcc-join { background: var(--green6); padding: 6px 16px; font-size: 14px; margin-right: auto; flex-shrink: 0; }
+.mcc-actions :is(.mcc-play, .mcc-join) .ide-icon svg * { fill: #fff; stroke: none; }
+.mcc-actions .mcc-play:hover:not(:disabled), .mcc-actions .mcc-join:hover:not(:disabled) { filter: brightness(1.12); }
+.mcc-actions .secondary { padding: 4px 10px; }
+.mcc-card button:disabled, .mcc-add button:disabled { opacity: 0.55; cursor: default; }
+.mcc-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 20px; text-align: center; border: 1px dashed var(--gray4); border-radius: 10px; }
+.mcc-empty-title { font-weight: 600; font-size: 15px; }
+.mcc-slot { display: contents; }
+.mcs-spacer { flex: 1; min-height: 12px; }
+.mcs-servers-page > .mcs-servers { padding: 0; }
+.mcs-servers > .mcc-empty { grid-column: 1 / -1; }
+.mcc-add { display: flex; gap: 8px; max-width: 780px; }
+.mcc-add-input { flex: 1; min-width: 0; }
+.mcc-add-error { color: var(--red); font-size: 12px; margin-top: -6px; }
+.mcc-add-error:empty { display: none; }
+.mcc-mods { display: flex; flex-direction: column; max-height: 380px; overflow: auto; border: 1px solid var(--gray3); border-radius: 6px; }
+.mcc-mod { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--gray3); }
+.mcc-mod:last-child { border-bottom: 0; }
+.mcc-mod-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcc-mod.off .mcc-mod-name { opacity: 0.5; }
+.mcc-mod-size { font-size: 11px; white-space: nowrap; }
+.mcc-mod-remove { padding: 2px 8px; }
+.mcc-mods-empty { padding: 12px; font-size: 12px; }

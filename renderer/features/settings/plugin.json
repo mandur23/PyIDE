@@ -2,8 +2,9 @@
   "id": "settings",
   "name": "Settings",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Settings dialog, themes, editor preferences, languages and plugin management.",
+  "modes": ["code", "craft"],
   "detached": true,
   "required": true
 }

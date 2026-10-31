@@ -18,6 +18,9 @@ if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_
 app.setMaxListeners(50);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();
+// Before anything reads the user data: the first start after PyIDE copies its settings over (main/migrate.js).
+const migration = require('./main/migrate');
+migration.migrate(app.getPath('userData'), { log: diagnostics.logger('#migrate') });
 // No window may leave the IDE page: links and popups go to the system browser, permissions are denied (main/security.js).
 require('./main/security').install({ appDir: __dirname });
 const path = require('path');
@@ -282,7 +285,7 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   const ownPython = path.join(process.env.PYIDE_INSTALL_ROOT || path.join(require('os').homedir(), '.pyide'), 'python').toLowerCase() + path.sep;
   for (const p of extraPaths) {
     if (!(await exists(p))) continue;
-    candidates.push([p, [], path.resolve(p).toLowerCase().startsWith(ownPython) ? 'PyIDE Python' : path.basename(path.dirname(path.dirname(p))) || p]);
+    candidates.push([p, [], path.resolve(p).toLowerCase().startsWith(ownPython) ? 'Nano Studio Python' : path.basename(path.dirname(path.dirname(p))) || p]);
   }
   candidates.push(['py', ['-3'], 'py launcher'], ['python', [], 'python']);
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
@@ -420,10 +423,13 @@ ipcMain.handle('core:features', async (e) => {
   return plugins.rendererEntries({ detached: e.sender.id !== win?.webContents.id });
 });
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
+// The "PyIDE settings imported" notification, shown once by the first window that asks.
+ipcMain.handle('core:migrationNotice', () => migration.takeNotice(app.getPath('userData')));
 // A normal quit, not app.exit(): windows with unsaved files still ask, and the plugins' before-quit/will-quit handlers
 // (index and history flushes, terminals, servers, lock files) run before the new instance starts.
+// The new instance starts in this one's mode, without the chooser.
 ipcMain.handle('core:relaunch', () => {
-  app.relaunch();
+  app.relaunch({ args: [...process.argv.slice(1).filter((a) => !a.startsWith('--mode=')), `--mode=${appMode}`] });
   app.quit();
 });
 ipcMain.handle('plugins:list', () => plugins.list());
@@ -491,11 +497,18 @@ function registerFeatures() {
   return featuresRegistered;
 }
 
-const windows = createWindowManager({ appDir: __dirname });
+const windows = createWindowManager({ appDir: __dirname, product: app.getName() });
+
+// The process runs one app mode, 'code' (the IDE) or 'craft' (the Minecraft app); running both takes two processes.
+// --mode=code|craft picks it, a file or folder argument means code, and otherwise the start chooser asks.
+const modeArg = /^--mode=(code|craft)$/.exec(process.argv.find((a) => a.startsWith('--mode=')) || '')?.[1] || null;
+let appMode = 'code';
+// Craft's project is always this folder (PYIDE_CRAFT_HOME for tests), so every Minecraft feature has its ide.root.
+const craftHome = () => path.resolve(process.env.PYIDE_CRAFT_HOME || path.join(require('os').homedir(), 'Nano Studio Craft'));
 
 // A folder argument opens it as the project; a file ("Open with PyIDE" on a .py) opens its folder and then the file.
 // A path on an unreachable network share takes ~20 s to fail: the window opens without it after 3 s, and the main
-// process is not blocked meanwhile.
+// process is not blocked meanwhile. Returns false when the chooser was closed.
 async function createWindow() {
   let target = null;
   let stat = null;
@@ -503,16 +516,30 @@ async function createWindow() {
     stat = await Promise.race([fs.promises.stat(a).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
     if (stat) { target = path.resolve(a); break; }
   }
-  const query = !target ? {} : stat.isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
-  win = windows.createMain(query);
+  const mode = modeArg || (target ? 'code' : await windows.choose());
+  if (!mode) return false;
+  appMode = mode;
+  plugins.setMode(mode);
+  diagnostics.logger('#app').info(`mode ${mode}${modeArg ? ' (--mode)' : target ? ' (path argument)' : ' (chooser)'}`);
+  let query = !target ? {} : stat.isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
+  if (mode === 'craft') {
+    query = { open: craftHome() };
+    try { await fs.promises.mkdir(query.open, { recursive: true }); } catch (err) {
+      diagnostics.logger('#app').warn(`cannot create the craft workspace ${query.open}: ${err.message}`);
+    }
+  }
+  win = windows.createMain(query, mode);
+  windows.closeChooser();
+  return true;
 }
 
 // The window starts loading before the feature modules are required, so the renderer process starts while they
 // load. Core renderer code only uses channels registered above; see registerFeatures for the feature channels.
 app.whenReady().then(async () => {
-  await createWindow();
+  if (!(await createWindow())) return void app.quit();
   // Before anything else: interpreter discovery and git ask it about the first project right away.
   trust.register(featureContext);
+  if (appMode === 'craft' && !trust.isTrusted(craftHome())) trust.trust(craftHome());
   win.webContents.once('dom-ready', registerFeatures);
   // A page that never gets that far (it crashed, or hangs) still gets them, for its reload.
   setTimeout(registerFeatures, 3000);

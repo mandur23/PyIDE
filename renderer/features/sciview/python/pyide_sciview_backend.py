@@ -71,7 +71,7 @@ def _send(manager):
     except OSError as exc:
         if not _warned:
             _warned = True
-            sys.stderr.write("PyIDE Plots: could not reach the IDE (%s); the figure is not shown.\n" % exc)
+            sys.stderr.write("Nano Studio Plots: could not reach the IDE (%s); the figure is not shown.\n" % exc)
         return False
     figure._pyide_shown = True
     return True

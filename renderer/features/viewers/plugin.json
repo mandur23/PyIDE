@@ -2,8 +2,9 @@
   "id": "viewers",
   "name": "File Viewers",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Viewers for images, video, audio waveforms, NumPy arrays and model files, plus Markdown preview and CSV/JSONL tables.",
+  "modes": ["code"],
   "detached": true,
   "main": [
     "viewers.js"

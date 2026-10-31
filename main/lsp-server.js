@@ -290,7 +290,7 @@ class Server {
     const uri = pathToFileURL(this.root).href;
     const init = await this.request('initialize', {
       processId: process.pid,
-      clientInfo: { name: 'PyIDE' },
+      clientInfo: { name: 'Nano Studio' },
       rootUri: uri,
       rootPath: this.root,
       workspaceFolders: [{ uri, name: path.basename(this.root) }],

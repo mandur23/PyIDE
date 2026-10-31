@@ -2,8 +2,9 @@
   "id": "visual-script",
   "name": "Visual Scripting",
   "version": "1.0.0",
-  "vendor": "PyIDE",
+  "vendor": "Nano Studio",
   "description": "Opens .pyflow files as a node graph editor (Blueprint style) that turns into readable Python.",
+  "modes": ["code"],
   "main": [
     "visual-script.js"
   ],

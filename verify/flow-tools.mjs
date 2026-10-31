@@ -827,7 +827,7 @@ await phase('report', async () => {
   await until(`!!document.querySelector('.diag-report-dialog .diag-report-body')`, 'report preview', 20000);
   const preview = await js(`document.querySelector('.diag-report-dialog .diag-report-body').textContent`);
   const version = JSON.parse(readFileSync(path.join(APP, 'package.json'), 'utf8')).version;
-  check(preview.includes(`PyIDE ${version}`) && preview.includes('Describe the problem'), 'Report a Problem… previews the environment with a place to describe the problem');
+  check(preview.includes(`Nano Studio ${version}`) && preview.includes('Describe the problem'), 'Report a Problem… previews the environment with a place to describe the problem');
   check(!preview.toLowerCase().includes(project.toLowerCase()) && !preview.toLowerCase().includes(tmpdir().toLowerCase()), 'the preview names no local path of the project');
   await snap('report-preview');
   await mouse(`[...document.querySelectorAll('.diag-report-dialog .dialog-buttons button')].find(b => b.textContent === 'Open in Browser')`, { label: 'Open in Browser' });
@@ -839,7 +839,7 @@ const feedDir = path.join(work, 'feed');
 await phase('updates', async () => {
   mkdirSync(feedDir, { recursive: true });
   const sha = 'A'.repeat(86) + '==';
-  writeFileSync(path.join(feedDir, 'latest.yml'), `version: 9.9.9\nfiles:\n  - url: PyIDE-Setup-9.9.9.exe\n    sha512: ${sha}\n    size: 1\npath: PyIDE-Setup-9.9.9.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`);
+  writeFileSync(path.join(feedDir, 'latest.yml'), `version: 9.9.9\nfiles:\n  - url: NanoStudio-Setup-9.9.9.exe\n    sha512: ${sha}\n    size: 1\npath: NanoStudio-Setup-9.9.9.exe\nsha512: ${sha}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`);
   await js(`(ide.openSettings('updates'), true)`);
   await until(`!!document.querySelector('.settings-dialog [data-key="updates.feedUrl"]')`, 'Settings › Updates');
   await js(`(() => { const i = document.querySelector('[data-key="updates.feedUrl"]'); i.value = ${q(feedDir)}; i.dispatchEvent(new Event('input')); return true; })()`);
@@ -847,7 +847,7 @@ await phase('updates', async () => {
   await until(`ide.settings.get('updates.feedUrl') === ${q(feedDir)}`, 'feed saved');
   await js(`(ide.runAction('CheckForUpdates'), true)`);
   await until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('9.9.9')`, 'update dialog', 30000);
-  check((await js(`[...document.querySelectorAll('.dialog')].pop().textContent`)).includes('PyIDE 9.9.9 is available.'), 'Check for Updates… reads the folder feed and reports 9.9.9');
+  check((await js(`[...document.querySelectorAll('.dialog')].pop().textContent`)).includes('Nano Studio 9.9.9 is available.'), 'Check for Updates… reads the folder feed and reports 9.9.9');
   await snap('update-check');
   await mouse(`[...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].pop()`, { label: 'Close' });
 });

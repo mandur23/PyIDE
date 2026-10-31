@@ -107,7 +107,7 @@
   "Detached from process {pid}": "프로세스 {pid}에서 분리됨",
   "Process {pid} finished with exit code {code}": "프로세스 {pid}이(가) 종료 코드 {code}(으)로 완료됨",
   "Process {pid} is not running (it may have exited)": "프로세스 {pid}이(가) 실행 중이 아닙니다(종료되었을 수 있습니다)",
-  "Access denied: process {pid} runs as administrator or as another user. Run PyIDE as administrator to attach to it.": "액세스 거부: 프로세스 {pid}은(는) 관리자 또는 다른 사용자로 실행 중입니다. 연결하려면 PyIDE를 관리자 권한으로 실행하세요.",
+  "Access denied: process {pid} runs as administrator or as another user. Run Nano Studio as administrator to attach to it.": "액세스 거부: 프로세스 {pid}은(는) 관리자 또는 다른 사용자로 실행 중입니다. 연결하려면 Nano Studio를 관리자 권한으로 실행하세요.",
   "Process {pid} exited before the debugger connected": "디버거가 연결되기 전에 프로세스 {pid}이(가) 종료되었습니다",
   "Process {pid} did not start the debugger within {seconds} seconds; it may be blocked in native code or waiting for input": "프로세스 {pid}이(가) {seconds}초 안에 디버거를 시작하지 않았습니다. 네이티브 코드에서 멈춰 있거나 입력을 기다리는 중일 수 있습니다",
   "Python {version} is not supported by the bundled debugpy (Python {min} or later is required)": "번들된 debugpy는 Python {version}을(를) 지원하지 않습니다(Python {min} 이상 필요)",
