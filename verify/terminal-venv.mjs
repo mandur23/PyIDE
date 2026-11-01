@@ -3,7 +3,7 @@
 // venv's, deactivate works), under PowerShell's Restricted execution policy too (the script is read, not run as a
 // file); with "Activate virtualenv" off the shell starts plain. Port 9794.
 import { execFileSync } from 'child_process';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch } from './lib.mjs';
@@ -42,7 +42,12 @@ try {
   await until(`/\\(\\.venv\\) [A-Z]:\\\\.*>/.test(ide.terminal.text())`, 'cmd prompt with (.venv)', 30000)
     .then(() => check(true, 'a Command Prompt terminal opens with the venv active (activate.bat)'), async () => check(false, `cmd prompt: ${(await text()).slice(-600)}`));
   await send('where python');
-  await until(`ide.terminal.text().toLowerCase().includes(${S(venvPython.toLowerCase())})`, 'cmd python', 15000)
+  // The venv's activate.bat spells the path as venv resolved it, and the project's may hold an 8.3 name that venv
+  // expands (the runner's %TEMP%, RUNNER~1). Either way the first python.exe listed is the venv's.
+  const spellings = S([venvPython, realpathSync.native(venvPython)].map((p) => p.toLowerCase()));
+  const firstPython = `(() => { const out = ide.terminal.text().toLowerCase(); const a = out.slice(out.lastIndexOf('where python'));
+    return ${spellings}.some((p) => a.includes(p) && a.indexOf(p) + p.length === a.indexOf('python.exe') + 'python.exe'.length); })()`;
+  await until(firstPython, 'cmd python', 15000)
     .then(() => check(true, 'python in Command Prompt is the venv\'s first'), async () => check(false, `where python: ${(await text()).slice(-400)}`));
 
   const before = await js('ide.terminal.sessions().length');

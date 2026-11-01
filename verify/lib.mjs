@@ -239,6 +239,10 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   await cdp('Runtime.addBinding', { name: '__pyideClipboardTouched' });
   // Test windows run beside other windows; without this, losing OS focus closes Monaco hovers and hints mid-check.
   await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
+  // The CI runner on a fast machine: PYIDE_TEST_VIEWPORT=1024x720 and PYIDE_TEST_CPU=6 (times slower). Set per run, for one suite.
+  const [vw, vh] = (process.env.PYIDE_TEST_VIEWPORT || '').split('x').map(Number);
+  if (vw && vh) await cdp('Emulation.setDeviceMetricsOverride', { width: vw, height: vh, deviceScaleFactor: 0, mobile: false });
+  if (Number(process.env.PYIDE_TEST_CPU) > 1) await cdp('Emulation.setCPUThrottlingRate', { rate: Number(process.env.PYIDE_TEST_CPU) });
 
   const js = async (expr) => {
     const r = await cdp('Runtime.evaluate', { expression: `(async () => (${expr}))()`, awaitPromise: true, returnByValue: true });

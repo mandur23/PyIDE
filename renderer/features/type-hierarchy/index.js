@@ -368,8 +368,10 @@
   const isClassAt = (uri, at, item) => !!uri && !!at && at.line === item.selectionRange.start.line
     && toPath(uri).toLowerCase() === toPath(item.uri).toLowerCase();
 
-  // The direct subclasses of a class for the gutter, as subtypes() finds them but from the candidate files above.
-  async function spelledSubtypes(item, stale) {
+  // The direct subclasses of a class for the gutter, as subtypes() finds them but from the candidate files above. A
+  // closed candidate whose symbols come back empty goes into `unlisted`: Pyright answers [] for a file it has not listed
+  // yet, which it does some seconds after saying it is ready, more on a slow machine.
+  async function spelledSubtypes(item, stale, unlisted) {
     const [onDisk] = await subclassFiles([item.name]);
     const docs = openDocs();
     const open = new Set(docs.map((m) => modelPath(m).toLowerCase()));
@@ -381,7 +383,9 @@
     for (const uri of uris) {
       if (stale()) return out;
       const lines = await linesOf(uri);
-      for (const sym of await classSymbols(uri)) {
+      const classes = await classSymbols(uri);
+      if (!classes.length && !openModel(uri)) unlisted.add(uri);
+      for (const sym of classes) {
         for (const b of basesOf(lines, sym.selectionRange)) {
           if (wordAt(lines, b.head) !== item.name || stale()) continue;
           const defs = await ide.lsp.request('textDocument/definition', { textDocument: { uri }, position: b.head });
@@ -394,11 +398,13 @@
     return out;
   }
 
-  // The markers of a class and its methods: [[line, {up: targets, down: targets, upAbstract, downAbstract, isClass}]],
-  // or null when the file changed meanwhile (stale()).
+  // The markers of a class and its methods: {marks: [[line, {up: targets, down: targets, upAbstract, downAbstract,
+  // isClass}]], partial: a candidate file was not listed yet, so a subclass may be missing}, or null when the file
+  // changed meanwhile (stale()).
   async function classMarks(sym, uri, stale) {
     const cls = itemOf(sym, uri);
-    const [own, tree, subs] = await Promise.all([classInfo(cls), baseTree(cls), allSubtypes(cls, 50, (c) => spelledSubtypes(c, stale))]);
+    const unlisted = new Set();
+    const [own, tree, subs] = await Promise.all([classInfo(cls), baseTree(cls), allSubtypes(cls, 50, (c) => spelledSubtypes(c, stale, unlisted))]);
     const subInfos = [];
     for (const sub of subs) subInfos.push(await classInfo(sub));
     const marks = [];
@@ -409,7 +415,7 @@
       if (!up.length && !down.length) continue;
       marks.push([m.sym.selectionRange.start.line + 1, { up, down, upAbstract: up.length > 0 && up.every((u) => u.abstract), downAbstract: m.abstract }]);
     }
-    return stale() ? null : marks;
+    return stale() ? null : { marks, partial: unlisted.size > 0 };
   }
 
   function hoverOf(mark) {
@@ -423,8 +429,9 @@
   }
   const markClass = (mark) => `th-gutter ${mark.up.length && mark.down.length ? 'th-updown' : mark.up.length ? 'th-up' : 'th-down'}${(mark.up.length ? mark.upAbstract : mark.downAbstract) ? ' th-impl' : ''}`;
 
-  const computed = new Map(); // uri -> {key: `${version}#${epoch}`, classes: Map(class line -> Promise<marks | null>)}
-  const gutters = new Map(); // editor -> {deco, marks, timer}
+  const computed = new Map(); // uri -> {key: `${version}#${epoch}`, classes: Map(class line -> Promise<classMarks result>)}
+  const gutters = new Map(); // editor -> {deco, marks, timer, retries}
+  const MAX_RETRIES = 8; // 1 + 2 + ... + 8 s: Pyright lists the project in that time, or the file stays out of its project
 
   async function refreshGutter(ed) {
     const g = gutters.get(ed);
@@ -445,15 +452,22 @@
     const shown = (await classSymbols(uri)).filter((s) => s.range.end.line + 1 >= from && s.range.start.line + 1 <= to).slice(0, MAX_CLASSES);
     if (stale()) return;
     await subclassFiles(shown.map((s) => s.name));
+    const partial = [];
     for (const sym of shown) {
       const line = sym.selectionRange.start.line;
       if (!classes.has(line)) classes.set(line, classMarks(sym, uri, stale).catch(() => null));
-      if (!(await classes.get(line))) { classes.delete(line); return; }
+      const found = await classes.get(line);
+      if (!found) { classes.delete(line); return; }
+      if (found.partial) partial.push(line);
     }
     if (stale() || ed.getModel() !== model) return;
     const marks = new Map();
-    for (const p of [...classes.values()]) for (const [line, mark] of (await p) || []) marks.set(line, mark);
+    for (const p of [...classes.values()]) for (const [line, mark] of (await p)?.marks || []) marks.set(line, mark);
     if (stale() || ed.getModel() !== model) return;
+    // What is known shows now; what may be missing is not kept, and is asked again.
+    for (const line of partial) classes.delete(line);
+    g.retries = partial.length ? g.retries + 1 : 0;
+    if (partial.length && g.retries <= MAX_RETRIES) schedule(ed, g.retries * 1000);
     g.marks = marks;
     g.deco.set([...marks].map(([line, mark]) => ({
       range: new ide.monaco.Range(line, 1, line, 1),
@@ -480,7 +494,7 @@
 
   const iconAt = (e) => e.button === 0 && e.target.closest?.('.th-gutter');
   ide.onEditor((ed) => {
-    const g = { deco: ed.createDecorationsCollection(), marks: new Map(), timer: null };
+    const g = { deco: ed.createDecorationsCollection(), marks: new Map(), timer: null, retries: 0 };
     gutters.set(ed, g);
     const dom = ed.getContainerDomNode();
     // The capture phase, so the click neither sets a breakpoint nor moves the caret.
@@ -497,7 +511,7 @@
     }
     for (const type of ['pointerup', 'mouseup', 'click']) dom.addEventListener(type, (e) => iconAt(e) && e.stopPropagation(), true);
     // Another file's markers never stay up while this file's are worked out.
-    ed.onDidChangeModel(() => { g.deco.clear(); g.marks = new Map(); schedule(ed, 300); });
+    ed.onDidChangeModel(() => { g.deco.clear(); g.marks = new Map(); g.retries = 0; schedule(ed, 300); });
     ed.onDidChangeModelContent(() => schedule(ed, 1500));
     // Classes scrolled into view; a refresh already waiting (after typing) keeps its time.
     ed.onDidScrollChange((e) => { if (e.scrollTopChanged && !g.timer) schedule(ed, 300); });

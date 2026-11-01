@@ -58,8 +58,13 @@ try {
   check(await js(`${selectedName} === 'project'`), 'Home selects the root');
   await press('End');
   if (extraRoot) await press('ArrowUp');
+  // What a failure here needs to tell (seen once on CI, with nothing else to go on): the keys, the file, or a busy main.
+  const keyboardState = `JSON.stringify({ focus: document.activeElement?.id || document.activeElement?.className, selected: ${selectedName}, rows: ${names}, tabs: ide.tabs.map((x) => x.title), dialog: document.querySelector('.dialog')?.textContent,
+    main: await Promise.race([ide.api.exists(ide.root).then(() => 'answers'), new Promise((r) => { setTimeout(r, 2000, 'silent for 2 s'); })]) })`;
+  const orState = async (err) => { throw new Error(`${err.message} ${await js(keyboardState)}`); };
+  await until(`${selectedName} === 'main.py'`, 'End and Up select main.py').catch(orState);
   await press('Enter');
-  await until(`ide.activeTab()?.title === 'main.py'`, 'Enter opens the file');
+  await until(`ide.activeTab()?.title === 'main.py'`, 'Enter opens the file').catch(orState);
   check(true, 'Enter on a file opens it');
   await js(`ide.activeTab().model.setValue('print("edited")\\n')`);
 

@@ -13,7 +13,12 @@ const S = JSON.stringify;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HELPERS = path.join(HERE, '..', 'renderer', 'features', 'tests');
 const write = (dir, files) => { for (const [rel, text] of Object.entries(files)) { mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); writeFileSync(path.join(dir, rel), text); } };
-const py = (args, opts = {}) => execFileSync('py', ['-3', ...args], { encoding: 'utf8', timeout: 120000, ...opts, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', ...opts.env } });
+// With CI set, pytest formats and ndiffs every failed == in full (running_on_ci): five of them on 1,000,000-element
+// lists take over 120 s on the runner, and 0.2 s without it. Test Results is about what a user's pytest does.
+const py = (args, opts = {}) => {
+  const { CI, BUILD_NUMBER, ...env } = process.env;
+  return execFileSync('py', ['-3', ...args], { encoding: 'utf8', timeout: 120000, ...opts, env: { ...env, PYTHONDONTWRITEBYTECODE: '1', ...opts.env } });
+};
 
 const pure = [];
 const pureCheck = (ok, label) => { pure.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };

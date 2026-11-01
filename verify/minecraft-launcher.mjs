@@ -648,6 +648,9 @@ async function craftUi(first) {
     check(text(path.join(homeInst('Market'), 'mods', 'm.jar')) === 'market mod', 'Install as Instance makes an instance from the Modrinth modpack and shows it on Play');
     await js(`(document.querySelectorAll('.ide-balloon').forEach((b) => b.remove()), true)`);
     await u.cdp('Emulation.setDeviceMetricsOverride', { width: 900, height: 800, deviceScaleFactor: 1, mobile: false });
+    // Hangul falls back to whatever font the machine has: on the CI runner a card's labels are about 8 px wider than in
+    // Malgun Gothic, and that cut them short.
+    await js(`(document.head.appendChild(Object.assign(document.createElement('style'), { id: 'wider-font', textContent: '.mcc-actions button { letter-spacing: 0.8px; }' })), true)`);
     const oneRow = (page) => js(`[...document.querySelectorAll('${page} .mcc-actions')].map((a) => {
       const r = [...a.children].map((b) => b.getBoundingClientRect());
       return { row: r.every((x) => x.top < r[0].bottom && x.bottom > r[0].top), fits: a.scrollWidth <= a.clientWidth,
@@ -660,6 +663,7 @@ async function craftUi(first) {
     await js(`(document.querySelector('.mcs-page[data-page="join"]').click(), true)`);
     await until(`document.querySelectorAll('.mcs-join .mcc-joined').length === 2`, 'Servers to Join at 900 px', 10000);
     const joinRows = await oneRow('.mcs-join');
+    await js(`(document.getElementById('wider-font').remove(), true)`);
     await u.cdp('Emulation.clearDeviceMetricsOverride');
     check([...playRows, ...joinRows].every((r) => r.row && r.fits && r.whole && r.cols === 2),
       `at 900 px the cards are two columns, and each card's actions are one row inside it with no label cut short (${S({ playRows, joinRows })})`);

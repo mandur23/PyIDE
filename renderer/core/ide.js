@@ -2471,6 +2471,19 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
     };
     return diff;
   };
+  // Monaco's CSS, HTML and JSON completion reads the model once its worker answers. On a slow machine a document can
+  // close before that, and the read of the disposed model throws into the IDE's internal errors.
+  const registerCompletion = monaco.languages.registerCompletionItemProvider;
+  monaco.languages.registerCompletionItemProvider = (selector, provider) => {
+    const guarded = Object.create(provider);
+    guarded.provideCompletionItems = async (model, ...rest) => {
+      try { return await provider.provideCompletionItems(model, ...rest); } catch (e) {
+        if (model.isDisposed()) return null;
+        throw e;
+      }
+    };
+    return registerCompletion(selector, guarded);
+  };
   monaco.languages.setMonarchTokensProvider('python', PYTHON_GRAMMAR);
   monaco.languages.setLanguageConfiguration('python', {
     comments: { lineComment: '#' },

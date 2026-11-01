@@ -570,7 +570,7 @@ try {
   await until(`!!ide.minecraft.game.state().game?.hwnd`, 'game window found', 20000).catch(async () => check(false, `game window: ${S(await gameState())}`));
   const besideNow = `(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; const m = [...t.matchAll(/game: bounds (-?\\d+),(-?\\d+),(\\d+),(\\d+)/g)].pop();
     const b = m && m.slice(1).map(Number); return { b, ide: [screenX, screenY, outerWidth, outerHeight], avail: [screen.availLeft, screen.availTop, screen.availWidth, screen.availHeight],
-    ok: !!b && Math.abs(b[0] - (screen.availLeft + outerWidth)) <= 16 && Math.abs(b[2] - Math.round(screen.availWidth * 0.4)) <= 16 && Math.abs(b[3] - screen.availHeight) <= 16 && outerWidth < screen.availWidth * 0.7 }; })()`;
+    ok: !!b && Math.abs(b[0] - (screen.availLeft + outerWidth)) <= 16 && Math.abs(b[2] - Math.max(480, Math.round(screen.availWidth * 0.4))) <= 16 && Math.abs(b[3] - screen.availHeight) <= 16 && outerWidth < screen.availWidth * 0.7 }; })()`;
   await until(`${besideNow}.ok`, 'game beside the IDE', 15000).catch(() => {});
   const beside = await js(besideNow);
   check(beside.ok, `Beside the IDE gives the game the right part of the screen and the IDE the rest (${S(beside)})`);

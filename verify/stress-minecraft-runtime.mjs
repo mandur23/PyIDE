@@ -13,7 +13,7 @@
 // missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
 import { execFileSync } from 'child_process';
 import crypto from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import net from 'net';
 import { tmpdir } from 'os';
@@ -161,7 +161,12 @@ const SOURCES = S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/pape
 // ---------- processes ----------
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const pidFiles = () => readdirSync(pidsDir).map((f) => ({ kind: f.split('-')[0], pid: Number(f.split('-')[1]), info: readFileSync(path.join(pidsDir, f), 'utf8') }));
-const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+// The runner's %TEMP% has an 8.3 name (RUNNER~1) that Java's getCanonicalPath expands, and a stand-in server's folder may
+// be gone by the time it is compared, so `work`'s long form is put in by hand.
+const workLower = path.resolve(work).toLowerCase();
+const workLong = realpathSync.native(work).toLowerCase();
+const longForm = (p) => { const low = path.resolve(p).toLowerCase(); return low === workLower || low.startsWith(`${workLower}\\`) ? workLong + low.slice(workLower.length) : low; };
+const sameDir = (a, b) => longForm(a) === longForm(b);
 const aliveServers = (dir) => pidFiles().filter((p) => p.kind === 'server' && (!dir || sameDir(p.info, dir)) && alive(p.pid));
 const aliveOf = (kind) => pidFiles().filter((p) => p.kind === kind && alive(p.pid));
 const waitFor = async (fn, ms = 15000, step = 150) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(step); } return !!(await fn()); };
@@ -704,6 +709,6 @@ try {
 await sleep(1500);
 const left = pidFiles().filter((p) => alive(p.pid));
 for (const p of left) try { execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
-check(!left.length, `no stand-in process is left running (${S(left.map((p) => `${p.kind} ${p.pid}`))})`);
+check(!left.length, `no stand-in process is left running (${S(left.map((p) => `${p.kind} ${p.pid} ${p.info}`))})`);
 server.close();
 t.finish();

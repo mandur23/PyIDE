@@ -192,7 +192,7 @@ try {
   check(bm[L.describe]?.kind === 'down' && !bm[L.describe].implements && bm[L.describe].hover === 'Is overridden in Square', `describe: overridden in Square (${S(bm[L.describe])})`);
   check(bm[L.sides]?.kind === 'down' && bm[L.shape].hover === 'Is subclassed by Circle, Polygon, Square', `sides is overridden; Shape is subclassed by Circle, Polygon and Square (${S(bm[L.shape])})`);
   await t.until(lensesShown(), 'code lenses', 10000).catch(() => {});
-  check(await js(`ide.editor.getDomNode().querySelectorAll('.th-gutter.th-down.th-impl').length`) === 1, 'the implemented abstract method is drawn as an implementation marker');
+  check(await until(`ide.editor.getDomNode().querySelectorAll('.th-gutter.th-down.th-impl').length === 1`, 'implementation marker drawn', 5000).then(() => true, () => false), 'the implemented abstract method is drawn as an implementation marker');
   let pt = await iconPoint(L.area);
   if (pt) await realClick(pt.x, pt.y);
   await until(`!!document.querySelector('.context-menu')`, 'gutter menu', 5000).catch(() => {});
@@ -355,6 +355,10 @@ t.close();
 // ---------- Korean ----------
 const k = await launch({ fixture: 'nav-tests', port: 9551, name: 'navigation-tests-ko', lang: 'ko-KR' });
 try {
+  // Pyright answers [] for a closed file it has not listed yet (seen on CI and under a junction in %TEMP%): figures.py
+  // does so here for its first answers, and the markers must still end up complete.
+  await k.js(`(() => { const symbols = ide.lsp.documentSymbols; let empty = 2;
+    ide.lsp.documentSymbols = (p) => (/figures\\.py$/i.test(p) && !ide.getDocument(p) && empty-- > 0 ? Promise.resolve([]) : symbols(p)); return true; })()`);
   await openFile(k, 'shapes/base.py');
   await k.until(`ide.lsp.status() === 'ready'`, 'Pyright ready (ko)', 60000);
   await k.until(`ide.typeHierarchy.gutterMarks().length >= 5`, 'markers (ko)', 30000).catch(() => {});
