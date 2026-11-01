@@ -5,6 +5,7 @@
 // Cloudflare quick tunnel, any other TCP server a host:port address through bore.pub. cloudflared comes from the
 // Install Manager. A new server is announced with Open in Browser and Share. Sharing asks first (anyone with the address
 // reaches the server), and "Share new ports automatically" is off unless the user turns it on, after the same warning.
+// A game server is private here: Share gives it a join code, and automatic sharing leaves it alone.
 (() => {
   const { el } = ide.util;
   const AUTO = 'ports.autoShare';
@@ -20,6 +21,7 @@
   const tunnelOf = (port) => st.tunnels.find((t) => t.port === port) || null;
   // A plugin that knows what a port speaks before any probe (minecraft: a game server's port is TCP) says so.
   const hints = new Map(); // port -> 'http' | 'https' | 'tcp'
+  const games = new Set(); // game servers' ports, which the Minecraft plugin names before each server starts
   const protoOf = (p) => p.proto || hints.get(p.port) || null;
   const web = (p) => protoOf(p) !== 'tcp';
   const toolFor = (p) => (web(p) ? 'cloudflared' : 'bore');
@@ -97,14 +99,16 @@
     });
   }
 
-  async function share(port, { asked = false } = {}) {
-    if (!asked && !(await confirmShare(port))) return;
+  // private: reachable only with a join code. Nothing to warn about, and always bore. A game server's port is private
+  // unless the caller says otherwise, so no earlier "Don't ask again" can put one on a public address in one click.
+  async function share(port, { asked = false, private: secure = games.has(port) } = {}) {
+    if (!asked && !secure && !(await confirmShare(port))) return;
     for (let attempt = 0; attempt < 2; attempt++) {
       const p = st.ports.find((x) => x.port === port);
       // Before the probe answers, main picks the tool; a missing one comes back as "<tool> is not installed".
-      if (p && protoOf(p) && !(await ensureTool(toolFor(p)))) return;
+      if (!secure && p && protoOf(p) && !(await ensureTool(toolFor(p)))) return;
       try {
-        st = await ide.api.invoke('ports:share', port);
+        st = await ide.api.invoke('ports:share', port, { private: secure });
         render();
         return;
       } catch (err) {
@@ -112,7 +116,10 @@
         if (missing && attempt === 0) { if (await ensureTool(missing)) continue; return; }
         const blocked = /Windows did not start (cloudflared)\.exe/.exec(ide.util.errorText(err))?.[1];
         if (blocked) return blockedTool(port, blocked);
-        ide.notifications?.notify({ title: tr('Port {port} could not be shared', { port }), text: ide.util.errorText(err), kind: 'error', group: 'Ports', raw: true });
+        const shared = /already shared (privately|publicly)/.exec(ide.util.errorText(err))?.[1];
+        const why = shared === 'privately' ? tr('It is already shared privately. Stop sharing it first.')
+          : shared === 'publicly' ? tr('It is already shared publicly. Stop sharing it first.') : ide.util.errorText(err);
+        ide.notifications?.notify({ title: tr('Port {port} could not be shared', { port }), text: why, kind: 'error', group: 'Ports', raw: true });
         return;
       }
     }
@@ -247,8 +254,14 @@
       const act = el('span', 'ports-actions');
       if (!t) {
         act.append(button(tr('Share'), 'secondary ports-share', () => share(p.port)));
+        if (games.has(p.port)) act.lastChild.title = tr('Only someone with the join code can connect.');
       } else if (t.state === 'starting') {
         pub.append(el('span', 'muted', tr('Starting the tunnel…')));
+        act.append(button(tr('Stop Sharing'), 'secondary ports-stop', () => unshare(p.port)));
+      } else if (t.state === 'shared' && t.private) {
+        const chip = el('span', 'ports-private', tr('Private'));
+        chip.title = tr('Only someone with the join code can connect.');
+        pub.append(chip);
         act.append(button(tr('Stop Sharing'), 'secondary ports-stop', () => unshare(p.port)));
       } else if (t.state === 'shared') {
         pub.append(t.kind === 'bore' ? address(t.url, 'ports-url') : link(t.url, 'ports-url'), button('⧉', 'ports-copy', () => copy(t.url)));
@@ -258,7 +271,7 @@
         const err = el('span', 'ports-error', tr('Sharing failed'));
         err.title = t.error || '';
         pub.append(err);
-        act.append(button(tr('Retry'), 'secondary ports-share', async () => { await ide.api.invoke('ports:unshare', p.port); share(p.port, { asked: true }); }));
+        act.append(button(tr('Retry'), 'secondary ports-share', async () => { await ide.api.invoke('ports:unshare', p.port); share(p.port, { asked: true, private: t.private }); }));
       }
       if (p.added) {
         const remove = button('×', 'ports-remove', () => removePort(p.port));
@@ -295,7 +308,8 @@
     for (const p of st.ports) {
       if (announced.has(p.port)) continue;
       announced.add(p.port);
-      if (ide.settings.get(AUTO, false) && !p.added) {
+      // A game server comes back with its port after every restart, and a private share ended with it.
+      if (ide.settings.get(AUTO, false) && !p.added && !games.has(p.port)) {
         if (st.cloudflared || st.bore) share(p.port, { asked: true });
         continue;
       }
@@ -311,7 +325,9 @@
     }
     for (const t of st.tunnels) {
       const was = before.tunnels.find((x) => x.port === t.port);
-      if (t.state === 'shared' && was?.state !== 'shared') {
+      if (t.state === 'shared' && was?.state !== 'shared' && t.private) {
+        ide.notifications?.notify({ title: tr('Port {port} is shared privately', { port: t.port }), text: tr('Friends join with the join code. Copy it from the server card.'), kind: 'ok', group: 'Ports', raw: true });
+      } else if (t.state === 'shared' && was?.state !== 'shared') {
         ide.notifications?.notify({
           title: tr('Port {port} is shared', { port: t.port }),
           text: t.kind === 'bore' ? `${t.url}\n${tr('Connect to this address from the program\'s own client (for a game server, its server address).')}` : t.url,
@@ -339,5 +355,6 @@
   const start = addedPorts().length ? ide.api.invoke('ports:setAdded', addedPorts()) : ide.api.invoke('ports:state');
   start.then((s) => { const before = st; st = s; announce(before); render(); }, () => {});
 
-  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint: (port, proto) => { hints.set(port, proto); render(); } };
+  const hint = (port, proto) => { hints.set(port, proto); render(); };
+  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint, gamePort: (port) => { games.add(port); hint(port, 'tcp'); } };
 })();

@@ -777,6 +777,257 @@ const cached = await items.catalog({ version: '1.21.11', cacheDir: cache, mods: 
 same(cached.length, 16, 'offline with a cache is the whole catalog');
 same(cached.reason, null, 'with no reason');
 
+// ---------- moveItem: the lines of one move, against the game's rules in minecraft-players-game.cjs ----------
+{
+  const { checkMove, buildMove, moveDiff, sameStacks, changedSlots } = require('../main/minecraft/players/actions.js');
+  const { createGame } = require('./minecraft-players-game.cjs');
+  const { parseSnbt, detailOf, slotIn } = require('../main/minecraft/players/nbt.js');
+  const PRINT_A = 'a'.repeat(40);
+  const NAMES = { 0: 'hotbar.0', 8: 'hotbar.8', 9: 'inventory.0', 35: 'inventory.26', 100: 'armor.feet', 101: 'armor.legs', 102: 'armor.chest', 103: 'armor.head', [-106]: 'weapon.offhand', 200: 'enderchest.0', 226: 'enderchest.26' };
+  for (const [slot, want] of Object.entries(NAMES)) same(line({ type: 'replaceSlot', target: 'Steve', slot: Number(slot), item: 'minecraft:air' }), `item replace entity Steve ${want} with minecraft:air 1`, `slot ${slot}`);
+  refused({ type: 'replaceSlot', target: 'Steve', slot: 227, item: 'minecraft:air' }, 'slot', 'one past the ender chest');
+  refused({ type: 'replaceSlot', target: 'Steve', slot: 36, item: 'minecraft:air' }, 'slot', 'one past the inventory');
+
+  const move = (a, version = '26.3', kind = 'paper') => {
+    try { return checkMove({ type: 'moveItem', target: 'Steve', ...a }, { version, kind }); } catch (err) { return err.expected ? { code: err.code } : { unexpected: err }; }
+  };
+  same(move({ op: 'move', from: 0, to: 1, shown: { from: PRINT_A, to: null } }).from, 0, 'a move is accepted');
+  for (const [what, a, code, version, kind] of [
+    ['an unknown way', { op: 'dupe', from: 0, to: 1 }, 'action'], ['no way at all', {}, 'action'], ['a slot that is no number', { op: 'move', from: 'hotbar.0', to: 1, shown: { from: PRINT_A } }, 'slot'],
+    ['a line break in a slot', { op: 'move', from: 0, to: '1\nop Griefer', shown: { from: PRINT_A } }, 'slot'], ['the same slot', { op: 'move', from: 3, to: 3, shown: { from: PRINT_A, to: PRINT_A } }, 'sameSlot'],
+    ['an empty source', { op: 'move', from: 3, to: 4, shown: { from: null, to: null } }, 'emptySlot'], ['nothing said about a slot', { op: 'clear', from: 3 }, 'emptySlot'],
+    ['a print that is no print', { op: 'clear', from: 3, shown: { from: 'x' } }, 'shown'], ['a bad target', { op: 'clear', target: 'a b', from: 3, shown: { from: PRINT_A } }, 'name'],
+    ['air placed', { op: 'place', to: 1, item: 'minecraft:air', shown: { to: null } }, 'item'], ['a bad item', { op: 'place', to: 1, item: 'x y', shown: { to: null } }, 'item'], ['too many', { op: 'place', to: 1, item: 'minecraft:stone', count: 65, shown: { to: null } }, 'count'],
+    ['a sword as a chestplate', { op: 'place', to: 102, item: 'minecraft:diamond_sword', shown: { to: null } }, 'armorFit'], ['a version before item replace', { op: 'clear', from: 1, shown: { from: PRINT_A } }, 'version', '1.16.5'], ['a proxy', { op: 'clear', from: 1, shown: { from: PRINT_A } }, 'proxy', '3.4.0', 'velocity'],
+  ]) same(move(a, version, kind).code, code, what);
+
+  const plan = (game, name, a) => {
+    const d = detailOf(parseSnbt(game.data()), { source: 'live' });
+    const at = (s) => slotIn(d, s);
+    const shown = { from: a.from === undefined ? undefined : at(a.from)?.print ?? null, to: a.to === undefined ? undefined : at(a.to)?.print ?? null };
+    const p = checkMove({ type: 'moveItem', target: name, ...a, shown }, { version: game.version, kind: 'paper' });
+    return { ...buildMove(p, { version: game.version }, at), at };
+  };
+  const play = (game, name, a) => {
+    const { commands, expects, wanted } = plan(game, name, a);
+    const answers = commands.slice(0, -1).flatMap((c) => game.run(c)).filter((t) => expects.ok.test(t) || expects.refused.test(t));
+    const after = detailOf(parseSnbt(game.data()), { source: 'live' });
+    return { commands, wrong: moveDiff(wanted, (s) => slotIn(after, s)), answers, ok: answers.every((t) => expects.ok.test(t)), refused: answers.some((t) => expects.refused.test(t)) };
+  };
+  const newGame = (version, stacks) => Object.assign(createGame({ version, name: 'Steve', stacks }), { version });
+  const SWORD = { id: 'minecraft:diamond_sword', count: 1, extra: 'components: {"minecraft:damage": 12}' };
+  const PLATE = { id: 'minecraft:iron_chestplate', count: 1 };
+  const DIRT = { id: 'minecraft:dirt', count: 32 };
+
+  let game = newGame('26.3', { 0: SWORD, 9: DIRT });
+  let r = play(game, 'Steve', { op: 'move', from: 0, to: 1 });
+  same(r.commands.length, 6, 'a move is a fresh record, three steps, the record removed and a read');
+  same(r.commands[0], 'data modify storage nano:move ok set value {}', 'the record starts empty');
+  same(r.commands[1], 'execute if data entity Steve Inventory[{Slot:0b,id:"minecraft:diamond_sword",count:1}] unless data entity Steve Inventory[{Slot:1b}] store success storage nano:move ok.copied byte 1 run item replace entity Steve hotbar.1 from entity Steve hotbar.0', 'the copy is guarded and records its success');
+  same(r.commands[2], 'execute if data storage nano:move {ok:{copied:1b}} if data entity Steve Inventory[{Slot:0b,id:"minecraft:diamond_sword",count:1}] store success storage nano:move ok.wiped byte 1 run item replace entity Steve hotbar.0 with minecraft:air', 'the clear starts from the copy\'s success');
+  same(r.commands[4], 'data remove storage nano:move ok', 'the record is removed');
+  same(r.commands[5], 'data get entity Steve', 'and the read comes last');
+  same(JSON.stringify(game.storage), '{}', 'nothing is left in the storage');
+  check(r.wrong.length === 0 && r.ok && game.held.get(1).extra === SWORD.extra && !game.held.has(0), 'the stack moved with its data');
+  same(r.answers[0], 'Replaced 1 slot(s) on Steve with [Diamond Sword]', 'the answer of 26.3');
+
+  game = newGame('1.20.1', { 0: { ...SWORD, extra: 'tag: {Damage: 12}' }, 103: { id: 'minecraft:iron_helmet', count: 1 }, 200: DIRT });
+  r = play(game, 'Steve', { op: 'move', from: 103, to: 5 });
+  check(r.commands[1].includes('Inventory[{Slot:103b,id:"minecraft:iron_helmet",Count:1b}]') && r.wrong.length === 0 && r.ok, 'armor is in Inventory on 1.20.1');
+  same(r.answers[1], 'Replaced a slot on Steve with [Air]', 'the answer of 1.20.1');
+  r = play(game, 'Steve', { op: 'move', from: 200, to: 201 });
+  check(r.commands[1].includes('EnderItems[{Slot:0b,id:"minecraft:dirt",Count:32b}]') && r.commands[1].includes('enderchest.1 from entity Steve enderchest.0') && r.wrong.length === 0, 'within the ender chest');
+
+  game = newGame('26.3', { 102: PLATE, 200: DIRT, [-106]: { id: 'minecraft:torch', count: 12 } });
+  r = play(game, 'Steve', { op: 'move', from: 102, to: 3 });
+  check(r.commands[1].includes('equipment.chest{id:"minecraft:iron_chestplate",count:1}') && r.commands[3].includes('Inventory[{Slot:3b') && r.wrong.length === 0, 'armor is in equipment on 26.3');
+  r = play(game, 'Steve', { op: 'move', from: -106, to: 200 });
+  check(r.commands[1].includes('equipment.offhand{id:"minecraft:torch",count:12}') && r.wrong.length === 0 && game.held.get(-106).id === 'minecraft:dirt', 'the offhand swaps with the ender chest');
+
+  game = newGame('26.3', { 0: SWORD, 1: DIRT });
+  const before = game.all();
+  r = play(game, 'Steve', { op: 'move', from: 0, to: 1 });
+  same(r.commands.length, 9, 'a swap is a fresh record, six steps, the record removed and a read');
+  check(r.commands[1].includes('inventory.26 from entity Steve hotbar.1'), 'through the last slot of the main inventory');
+  check(r.wrong.length === 0 && game.held.get(1).id === SWORD.id && game.held.get(0).id === DIRT.id && !game.held.has(35), 'swapped, and the temporary slot is empty again');
+  same(game.all(), before, 'nothing was lost or doubled');
+
+  const full = Object.fromEntries(Array.from({ length: 36 }, (_, i) => [i, { id: 'minecraft:dirt', count: i + 1 }]));
+  game = newGame('26.3', full);
+  try { play(game, 'Steve', { op: 'move', from: 0, to: 1 }); check(false, 'a full inventory cannot swap'); } catch (err) { same(err.code, 'noRoom', 'a full inventory cannot swap'); }
+
+  game = newGame('26.3', { 0: SWORD, 102: PLATE });
+  try { play(game, 'Steve', { op: 'move', from: 0, to: 102 }); check(false, 'a sword is no chestplate'); } catch (err) { same(err.code, 'armorFit', 'a sword is no chestplate'); }
+  game = newGame('26.3', { 0: { id: 'minecraft:diamond_chestplate', count: 1 }, 102: PLATE });
+  r = play(game, 'Steve', { op: 'move', from: 0, to: 102 });
+  check(r.commands[2].includes('armor.chest from entity Steve hotbar.0') && r.wrong.length === 0, 'a swap writes the armor slot first');
+
+  game = newGame('26.3', { 0: { id: 'somemod:robe_chestplate', count: 1 } });
+  const refusing = createGame({ version: '26.3', name: 'Steve', stacks: { 0: { id: 'somemod:robe_chestplate', count: 1 } } });
+  refusing.refuses = () => true;
+  const said = plan(game, 'Steve', { op: 'move', from: 0, to: 102 }).commands.slice(0, -1).flatMap((l) => refusing.run(l)).filter((l) => !l.startsWith('Modified'));
+  check(said.length === 1 && refusing.held.has(0) && !refusing.held.has(102), 'a copy the game refuses leaves the source alone: the clear does not run');
+  const plain = createGame({ version: '26.3', name: 'Steve', stacks: { 0: { id: 'minecraft:stick', count: 1 } } });
+  plain.run('item replace entity Steve armor.chest from entity Steve hotbar.0');
+  plain.run('item replace entity Steve hotbar.0 with minecraft:air');
+  same(plain.held.size, 0, 'control: without the guard the same refusal deletes the item');
+
+  game = newGame('26.3', { 0: SWORD });
+  r = play(game, 'Steve', { op: 'clear', from: 0 });
+  check(r.commands.length === 2 && game.held.size === 0 && r.wrong.length === 0, 'clear is one guarded line and a read');
+  r = play(game, 'Steve', { op: 'place', to: 4, item: 'minecraft:stone', count: 16 });
+  check(r.commands[0].startsWith('execute unless data entity Steve Inventory[{Slot:4b}] run item replace entity Steve hotbar.4 with minecraft:stone 16') && game.held.get(4).count === 16 && r.wrong.length === 0, 'place on an empty slot');
+  r = play(game, 'Steve', { op: 'place', to: 4, item: 'minecraft:dirt', count: 2 });
+  check(r.commands[0].startsWith('execute if data entity Steve Inventory[{Slot: 4b, id: "minecraft:stone", count: 16}] run ') && game.held.get(4).id === 'minecraft:dirt', 'place on a filled slot tests the whole stack');
+  same(moveDiff([[4, { id: 'minecraft:dirt', count: 3 }]], (s) => (s === 4 ? { id: 'minecraft:dirt', count: 2 } : null)).length, 1, 'a count that differs is a difference');
+
+  // Steps against what can happen between them, one line at a time: `each(n, game, line)` runs just before line n.
+  const lines = (g, a) => plan(g, 'Steve', a).commands.slice(0, -1);
+  const stepped = (g, a, each) => { lines(g, a).forEach((c, n) => { each(n, g, c); g.run(c); }); };
+  const lineWith = (g, a, text) => lines(g, a).findIndex((c) => c.endsWith(text));
+  const SHULKER = { id: 'minecraft:shulker_box', count: 1, extra: 'components: {"minecraft:custom_name": "A"}' };
+  const OTHER = { id: 'minecraft:shulker_box', count: 1, extra: 'components: {"minecraft:custom_name": "B"}' };
+  const COBBLE = { id: 'minecraft:cobblestone', count: 12 };
+
+  for (const version of ['26.3', '1.20.1']) {
+    const sword = version === '26.3' ? SWORD : { ...SWORD, extra: 'tag: {Damage: 12}' };
+    const twin = version === '26.3' ? { ...SWORD, extra: 'components: {"minecraft:damage": 99}' } : { ...SWORD, extra: 'tag: {Damage: 99}' };
+    const swap01 = { op: 'move', from: 0, to: 1 };
+
+    game = newGame(version, { 0: sword });
+    stepped(game, { op: 'move', from: 0, to: 1 }, (n, g) => { if (n === 0) g.held.set(1, twin); });
+    check(game.held.get(0)?.extra === sword.extra && game.held.get(1)?.extra === twin.extra, `${version}: a look-alike that lands in the target after the read refuses the copy, and the source is not wiped`);
+    same(JSON.stringify(game.storage), '{}', `${version}: and the record is gone`);
+
+    game = newGame(version, { 0: SHULKER, 1: OTHER });
+    stepped(game, swap01, (n, g) => { if (n === 0) g.held.set(35, COBBLE); });
+    check(game.held.get(0)?.extra === SHULKER.extra && game.held.get(1)?.extra === OTHER.extra && game.held.get(35)?.id === COBBLE.id && game.held.size === 3, `${version}: a pickup that fills the temporary slot stops a swap of two look-alikes with nothing overwritten or doubled`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    let at = lineWith(game, swap01, 'hotbar.1 from entity Steve hotbar.0');
+    stepped(game, swap01, (n, g) => { if (n === at) g.swap(1, 7); });
+    check(game.held.get(0)?.extra === sword.extra && game.held.get(7)?.id === DIRT.id && !game.held.has(35) && game.stacks().length === 2, `${version}: the target moved after the first copy: it is not written, and the spare copy in temp goes`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    at = lineWith(game, swap01, 'hotbar.0 from entity Steve inventory.26');
+    stepped(game, swap01, (n, g) => { if (n === at) g.swap(1, 7); });
+    check(game.held.get(0)?.id === DIRT.id && game.held.get(7)?.extra === sword.extra && !game.held.has(35) && game.stacks().length === 2, `${version}: the target moved between the second and third writes: the source is still free to take the dirt, and temp is freed`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    stepped(game, swap01, (n, g) => { if (n === at) { g.swap(0, 7); g.swap(1, 8); } });
+    check(game.held.get(35)?.id === DIRT.id, `${version}: both slots moved between the second and third writes: temp holds the only dirt and is not wiped`);
+    same(JSON.stringify(game.storage), '{}', `${version}: and the record is gone`);
+    check(!!slotIn(detailOf(parseSnbt(game.data()), { source: 'live' }), 35), `${version}: and the read shows it there, so it cannot stay unnoticed`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    at = lineWith(game, swap01, 'hotbar.0 from entity Steve inventory.26');
+    stepped(game, swap01, (n, g) => { if (n === at) g.swap(0, 7); });
+    check(game.held.get(1)?.id === DIRT.id && game.held.get(7)?.extra === sword.extra && !game.held.has(0) && !game.held.has(35) && game.stacks().length === 2, `${version}: the source moved between the second and third writes: the dirt goes back, temp is freed, nothing is doubled`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    const plain = game.stacks().join();
+    game.refuses = (slot, stack) => slot === 0 && stack.id === DIRT.id;
+    stepped(game, swap01, () => {});
+    check(game.held.get(0)?.extra === sword.extra && game.held.get(1)?.id === DIRT.id && !game.held.has(35) && game.stacks().join() === plain, `${version}: a third write the game refuses puts everything back and frees temp`);
+
+    game = newGame(version, { 0: sword, 1: DIRT });
+    game.refuses = (slot) => slot === 1;
+    stepped(game, swap01, () => {});
+    check(game.held.get(0)?.extra === sword.extra && game.held.get(1)?.id === DIRT.id && !game.held.has(35), `${version}: a second write the game refuses frees temp`);
+
+    game = newGame(version, { 0: sword });
+    at = lineWith(game, { op: 'move', from: 0, to: 1 }, 'store success storage nano:move ok.wiped byte 1 run item replace entity Steve hotbar.0 with minecraft:air');
+    stepped(game, { op: 'move', from: 0, to: 1 }, (n, g) => { if (n === at) g.swap(0, 7); });
+    check(!game.held.has(1) && game.held.get(7)?.extra === sword.extra && game.stacks().length === 1, `${version}: the source moved after the copy: the copy goes, and the stack is not doubled`);
+
+    game = newGame(version, { 0: sword });
+    stepped(game, { op: 'clear', from: 0 }, (n, g) => { if (n === 0) g.held.set(0, twin); });
+    check(game.held.get(0)?.extra === twin.extra, `${version}: a clear leaves a look-alike that took the slot after the read`);
+    game = newGame(version, { 4: sword });
+    stepped(game, { op: 'place', to: 4, item: 'minecraft:stone', count: 3 }, (n, g) => { if (n === 0) g.held.set(4, twin); });
+    check(game.held.get(4)?.extra === twin.extra, `${version}: a place leaves a look-alike that took the slot after the read`);
+  }
+  game = newGame('26.3', { 102: PLATE });
+  same(plan(game, 'Steve', { op: 'clear', from: 102 }).commands[0], 'execute if data entity Steve equipment.chest{id: "minecraft:iron_chestplate", count: 1} run item replace entity Steve armor.chest with minecraft:air', 'a clear of armor tests the whole stack where armor lies');
+  game = newGame('26.3', { 200: { ...DIRT, extra: 'components: {"minecraft:custom_name": "a b"}' } });
+  r = play(game, 'Steve', { op: 'clear', from: 200 });
+  check(game.held.size === 0 && r.wrong.length === 0, 'a clear in the ender chest, with a space in the stack\'s text');
+  game = newGame('1.20.1', { 0: { ...SWORD, extra: 'tag: {pages: ["one\ntwo"]}' } });
+  const broken = plan(game, 'Steve', { op: 'clear', from: 0 }).commands;
+  same(broken[0], 'execute if data entity Steve Inventory[{Slot:0b,id:"minecraft:diamond_sword",Count:1b}] run item replace entity Steve hotbar.0 with minecraft:air', 'a raw line break cannot go on a console line, so that stack keeps its id and count');
+  check(broken.every((c) => !/[\r\n]/.test(c)), 'and every line is one line');
+
+  game = newGame('26.3', { 0: SWORD, 201: DIRT });
+  const was = detailOf(parseSnbt(game.data()), { source: 'live' });
+  game.held.delete(0);
+  game.held.set(1, { ...DIRT, count: 1 });
+  game.held.set(201, { ...DIRT, count: 31 });
+  const changed = changedSlots(was, detailOf(parseSnbt(game.data()), { source: 'live' }));
+  same(changed.map((c) => c.slot).sort((a, b) => a - b).join(), '0,1,201', 'every slot that differs is listed, the ender chest by its number');
+  same(changed.find((c) => c.slot === 0).before, '{Slot: 0b, id: "minecraft:diamond_sword", count: 1, components: {"minecraft:damage": 12}}', 'a lost stack keeps the game\'s own print, number types included');
+  same(changed.find((c) => c.slot === 0).after, null, 'and the slot reads empty after');
+  same(changed.find((c) => c.slot === 201).name, 'enderchest.1', 'with the name a command uses');
+
+  // A player's click against a move. The ticks between the read and the lines are the real exposure: `before`. Console
+  // lines drain together at one point of a tick, so `between` needs a line to reach the queue after the drain, and it runs
+  // on every move here: a worst case, not a rate. `twins` makes every stack different in its data, so that a guard on id and
+  // count cannot tell two apart. The numbers are printed rather than hidden: anything lost or doubled must at least show
+  // in the read afterwards.
+  const rng = (() => { let x = 88172645; return (n) => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return Math.abs(x) % n; }; })();
+  const POOL = ['minecraft:dirt', 'minecraft:stone', 'minecraft:iron_chestplate', 'minecraft:diamond_sword', 'minecraft:torch'];
+  const SLOTS = [0, 1, 2, 3, 9, 10, 34, 35, 100, 101, 102, 103, -106, 200, 201];
+  const tallyOf = (list) => list.reduce((m, s) => m.set(s, (m.get(s) ?? 0) + 1), new Map());
+  const race = (moment, twins) => {
+    const tally = { runs: 0, kept: 0, lost: 0, doubled: 0, shown: 0, unseen: 0 };
+    let mark = 0;
+    for (let i = 0; i < 20000; i++) {
+      const stacks = {};
+      for (const s of SLOTS) if (rng(2) && s !== 100 && s !== 101 && s !== 102) stacks[s] = { id: POOL[rng(POOL.length)], count: 1 + rng(4), ...(twins && { extra: `components: {n: ${++mark}}` }) };
+      const g = newGame(rng(2) ? '26.3' : '1.20.1', stacks);
+      const filled = [...g.held.keys()];
+      if (!filled.length) continue;
+      const from = filled[rng(filled.length)];
+      const to = SLOTS[rng(SLOTS.length)];
+      if (to === from) continue;
+      let built;
+      const start = detailOf(parseSnbt(g.data()), { source: 'live' });
+      const a = { op: 'move', from, to };
+      try { built = plan(g, 'Steve', a); } catch (err) { if (err.expected) continue; throw err; }
+      const whole = g.stacks();
+      const list = built.commands.slice(0, -1);
+      const steps = list.flatMap((c, n) => (c.startsWith('execute') ? [n] : []));
+      const click = moment === 'before' ? 0 : steps[1 + rng(steps.length - 1)];
+      list.forEach((c, n) => {
+        if (n === click) g.swap(SLOTS[rng(SLOTS.length)], SLOTS[rng(SLOTS.length)]);
+        g.run(c);
+      });
+      tally.runs++;
+      const [then, now] = [tallyOf(whole), tallyOf(g.stacks())];
+      const lost = [...then].some(([s, n]) => (now.get(s) ?? 0) < n);
+      const doubled = [...now].some(([s, n]) => (then.get(s) ?? 0) < n);
+      if (!lost && !doubled) { tally.kept++; continue; }
+      if (lost) tally.lost++;
+      if (doubled) tally.doubled++;
+      const after = detailOf(parseSnbt(g.data()), { source: 'live' });
+      if (moveDiff(built.wanted, (s) => slotIn(after, s)).length || !sameStacks(a, start, after)) tally.shown++;
+      else tally.unseen++;
+    }
+    return tally;
+  };
+  for (const [moment, twins, words] of [['before', false, 'a click before the lines'], ['before', true, 'a click before the lines, every stack different'], ['between', false, 'a click between the lines'], ['between', true, 'a click between the lines, every stack different']]) {
+    const t = race(moment, twins);
+    console.log(`${words}: ${JSON.stringify(t)}`);
+    check(t.runs > 10000, `${words}: that race ran`);
+    same(t.unseen, 0, `${words}: a loss never goes unseen`);
+    if (moment === 'before') same(t.lost + t.doubled, 0, `${words}: nothing is lost or doubled`);
+  }
+  const clicks = (g, a) => { const start = detailOf(parseSnbt(g.data()), { source: 'live' }); const { commands } = plan(g, 'Steve', a); commands.slice(0, -1).forEach((c) => g.run(c)); return sameStacks(a, start, detailOf(parseSnbt(g.data()), { source: 'live' })); };
+  check(clicks(newGame('26.3', { 0: SWORD, 1: DIRT }), { op: 'move', from: 0, to: 1 }), 'a swap keeps the stacks');
+  check(clicks(newGame('26.3', { 0: SWORD }), { op: 'clear', from: 0 }), 'a clear leaves the one stack less it should');
+  check(clicks(newGame('26.3', { 0: SWORD, 4: DIRT }), { op: 'place', to: 4, item: 'minecraft:stone', count: 3 }), 'a place swaps one stack for the new one');
+
+}
+
 const blank = coverage.blank;
 console.log(`stand-in coverage: ${coverage.icons} of ${coverage.items} items have an icon, ${blank} are blank tiles (a head with no model texture, a missing texture, a strip that is not a multiple)`);
 fs.rmSync(work, { recursive: true, force: true });

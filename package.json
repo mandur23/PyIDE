@@ -78,6 +78,7 @@
       "main/**/*.py",
       "main/notebook/colab-bridge.js",
       "main/bore-client.js",
+      "main/bore-gate.js",
       "renderer/features/**/*.py",
       "vendor/**/*",
       "node_modules/pyright/**/*",

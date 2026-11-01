@@ -1,0 +1,6 @@
+name: NanoBridge
+version: 1.0.0
+main: dev.nanostudio.bridge.NanoBridge
+api-version: '1.20'
+author: Nano Studio
+description: Writes players' block, container, item and combat activity to .nano/bridge for Nano Studio's Players tab.

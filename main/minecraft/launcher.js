@@ -7,7 +7,9 @@
 // checked at every Play and synced into the instance once the user has agreed to what it installs.
 // PYIDE_MC_LAUNCHER (tests): a JSON array, the program and its first arguments run in place of the launcher; any
 // other value (off, []) finds none. PYIDE_MC_STORE (tests): {argv, work}, the same for the Store launcher.
-// PYIDE_MC_LAUNCHER_IMAGE (tests): the process name that counts as the launcher being open.
+// PYIDE_MC_LAUNCHER_IMAGE (tests): the process name that counts as the launcher being open. PYIDE_MC_GAME_IMAGE (tests):
+// the same for a game running. A private server (a join code with key=, docs/craft-private-share-design.md) is played
+// through a local join process (private-join.js); its key is kept with the keyring given here, never in servers-list.json.
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -17,6 +19,8 @@ const { KINDS, RELEASE, PACK_HOSTS, base, getJson, getText, mojangVersion, byVer
 const { openZip, readEntry, unpackZip } = require('./zipfile');
 const { createImports, discardDownload } = require('./imports');
 const { ping } = require('./ping');
+const { mergeServers } = require('./serversdat');
+const { createPrivateJoin, freePort } = require('./private-join');
 
 const INSTANCE = 'nano-instance.json';
 const SERVERS = 'servers-list.json';
@@ -103,7 +107,8 @@ const versionId = (name) => `nano-${name}`;
 function parseAddress(text) {
   const s = String(text ?? '').trim();
   const m = /^(?:\[([0-9a-fA-F:.]+)\]|([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?))(?::(\d{1,5}))?$/.exec(s);
-  if (!m) throw fail(`${s ? `"${s}"` : 'An empty address'} is not a server address (host or host:port)`, 'badAddress');
+  // Says nothing of the text: a mistyped join code is what lands here, and it holds a key.
+  if (!m) throw fail('This is not a server address (host or host:port)', 'badAddress');
   const port = m[3] ? Number(m[3]) : null;
   if (port !== null && (port < 1 || port > 65535)) throw fail('Use a port from 1 to 65535', 'badAddress');
   const host = m[1] || m[2];
@@ -125,19 +130,36 @@ const packUrl = (url) => {
 };
 // A redirect is held to the same rule: it is the pack's owner who answers with one.
 const allowedPack = (url) => { try { return !!packUrl(url); } catch { return false; } };
+// Whether an address is this computer or its network. Through URL, which reads the other spellings a resolver accepts
+// (2130706433, 0x7f.1). No name is looked up: one that resolves to a local address passes.
+function isLocalAddress(text) {
+  const { host, address } = parseAddress(text);
+  let name = host;
+  try { name = new URL(`http://${address}`).hostname; } catch {}
+  return PRIVATE_HOST.test(name);
+}
 const pastable = (s) => encodeURIComponent(s).replace(/[!'()*.]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-// nanostudio:join?addr=<host:port>&pack=<url-encoded url>&name=<server name>, found anywhere in the pasted text. A
-// code's values are percent-encoded (pastable), so the code ends at a space, a quote, a parenthesis or <>, and
-// punctuation after it ends the sentence it was pasted in.
+// A key as a code carries it: 32 bytes of base64url. A code that names a key and does not hold one is refused, never
+// taken for a public server.
+const keyIn = (text) => {
+  const key = Buffer.from(text, 'base64url');
+  if (key.length !== 32 || key.toString('base64url') !== text) throw fail('The join code has a damaged key', 'badCode');
+  return text;
+};
+// nanostudio:join?addr=<host:port>&key=<base64url key>&pack=<url-encoded url>&name=<server name>, found anywhere in the
+// pasted text. key means private. A code's values are percent-encoded (pastable), so the code ends at a space, a quote, a
+// parenthesis or <>, and punctuation after it ends the sentence it was pasted in.
+const JOIN_CODE = /nanostudio:(?:\/\/)?join\/?\?([^\s"'`()<>]+)/i;
 function parseJoinCode(text) {
-  const m = /nanostudio:(?:\/\/)?join\/?\?([^\s"'`()<>]+)/i.exec(String(text ?? ''));
+  const m = JOIN_CODE.exec(String(text ?? ''));
   if (!m) throw fail('This is not a Nano Studio join code (nanostudio:join?addr=…)', 'badCode');
   const q = new URLSearchParams(m[1].replace(/[.,;:!?]+$/, ''));
   const { address } = parseAddress(q.get('addr'));
-  return { address, pack: packUrl(q.get('pack')), name: oneLine(q.get('name')) || address };
+  return { address, pack: packUrl(q.get('pack')), name: oneLine(q.get('name')) || address, key: q.has('key') ? keyIn(q.get('key')) : null };
 }
-function joinCode({ address, pack, name } = {}) {
+function joinCode({ address, pack, name, key } = {}) {
   const parts = [`addr=${parseAddress(address).address}`];
+  if (key) parts.push(`key=${keyIn(key)}`);
   if (packUrl(pack)) parts.push(`pack=${pastable(pack.trim())}`);
   if (oneLine(name)) parts.push(`name=${pastable(oneLine(name))}`);
   return `nanostudio:join?${parts.join('&')}`;
@@ -211,15 +233,50 @@ function startLauncher(how, work) {
     child.once('spawn', () => { child.unref(); resolve(); });
   });
 }
-// A launcher already open keeps the profiles it read at its start and may only come to the front: the UI says so.
+// A launcher already open keeps the profiles it read at its start and may only come to the front.
 const LAUNCHER_IMAGES = ['MinecraftLauncher.exe', 'Minecraft.exe'];
+const launcherImages = (env) => (env.PYIDE_MC_LAUNCHER_IMAGE ? [env.PYIDE_MC_LAUNCHER_IMAGE] : LAUNCHER_IMAGES);
+// With every core busy tasklist can take 40 s where it usually takes 0.5 s, and a slow answer is still the answer.
+const SYSTEM_QUERY_MS = 60000;
+// -> true or false, or null when Windows gave no answer, which says nothing about the launcher.
 function launcherOpen(env = process.env) {
-  const images = (env.PYIDE_MC_LAUNCHER_IMAGE ? [env.PYIDE_MC_LAUNCHER_IMAGE] : LAUNCHER_IMAGES).map((n) => n.toLowerCase());
+  const images = launcherImages(env).map((n) => n.toLowerCase());
   return new Promise((resolve) => {
-    execFile(path.join(systemRoot(env), 'System32', 'tasklist.exe'), ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 5000, maxBuffer: 16 << 20 }, (err, out) => {
-      resolve(!err && out.split(/\r?\n/).some((l) => images.includes(/^"([^"]+)"/.exec(l)?.[1].toLowerCase())));
+    execFile(path.join(systemRoot(env), 'System32', 'tasklist.exe'), ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: SYSTEM_QUERY_MS, maxBuffer: 16 << 20 }, (err, out) => {
+      resolve(err ? null : out.split(/\r?\n/).some((l) => images.includes(/^"([^"]+)"/.exec(l)?.[1].toLowerCase())));
     });
   });
+}
+// So that an open launcher reads the new profile, it is asked to close, as its own close button would, and never killed:
+// it may be saving or updating. Not while a game runs, which it may be looking after. A game is told by its command line,
+// which holds the player's access token: the script prints one word and nothing of that line.
+const GAME_IMAGES = ['javaw.exe', 'java.exe'];
+const GAME_ARGS = '--assetsDir|--accessToken|net\\.minecraft\\.client';
+const CLOSE_WAIT_MS = 5000;
+function askToClose(env) {
+  const games = (env.PYIDE_MC_GAME_IMAGE ? [env.PYIDE_MC_GAME_IMAGE] : GAME_IMAGES).map((n) => `Name='${n}'`).join(' OR ');
+  const names = launcherImages(env).map((n) => `'${n.replace(/\.exe$/i, '')}'`).join(',');
+  const script = `$game = Get-CimInstance Win32_Process -Filter "${games}" | Where-Object { $_.CommandLine -match '${GAME_ARGS}' }
+if ($game) { 'game'; exit }
+$asked = $false
+Get-Process -Name ${names} -ErrorAction SilentlyContinue | ForEach-Object { if ($_.CloseMainWindow()) { $asked = $true } }
+if ($asked) { 'asked' } else { 'no window' }`;
+  const powershell = path.join(systemRoot(env), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return new Promise((resolve) => {
+    execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: SYSTEM_QUERY_MS }, (err, out) => resolve(!err && out.trim() === 'asked'));
+  });
+}
+// -> true when the launcher has gone. A test with a stand-in launcher that names no image must not reach the user's real
+// one, which goes by the same names.
+async function closeLauncher(env = process.env) {
+  const standIn = env.PYIDE_MC_LAUNCHER !== undefined || env.PYIDE_MC_STORE !== undefined;
+  if ((standIn && !env.PYIDE_MC_LAUNCHER_IMAGE) || !(await askToClose(env))) return false;
+  const end = Date.now() + CLOSE_WAIT_MS;
+  while (Date.now() < end) {
+    if ((await launcherOpen(env)) === false) return true;
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
+  }
+  return (await launcherOpen(env)) === false;
 }
 
 // launcher_profiles.json as the launcher keeps it; a file that cannot be read, or whose profiles are replaced, is kept
@@ -293,7 +350,11 @@ function headlessClient(jar) {
 // What makes a nano-instance.json one that can be played; anything else on disk is a damaged instance.
 const playable = (inst) => !!inst && typeof inst === 'object' && !Array.isArray(inst) && VERSION(inst.mc) && !!LOADERS[inst.loader];
 
-function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
+// Where a saved private server's key is kept: seal(key) -> what goes in servers-list.json, or null when nothing here can
+// protect it, and open(sealed) -> the key, or null. Without one a key lives in memory and the friend pastes the code again.
+const NO_KEYRING = { seal: () => null, open: () => null };
+
+function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring = NO_KEYRING, joins = createPrivateJoin() }) {
   // Where the launcher in use keeps versions and profiles; .launcher until there is one.
   const gameDir = (root) => (launchMethod()?.work ?? workDir)(root);
 
@@ -667,6 +728,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
       log(`${inst.title}: Minecraft ${mc}, ${LOADERS[loader]}${version ? ` ${version}` : ''}\n`);
       inst.loaderId = await installLoader(root, inst, log);
       writeInstance(root, inst);
+      writeServerList(root, inst, [], log);
       return describe(root, inst);
     });
   }
@@ -684,6 +746,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
         inst = await fromPackFile(root, inst, local, file ? null : String(url).trim(), log);
         inst.loaderId = await installLoader(root, inst, log);
         writeInstance(root, inst);
+        writeServerList(root, inst, [], log);
         return describe(root, inst);
       });
     } finally { if (!file) discardDownload(local); }
@@ -702,41 +765,122 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
       }
       fs.rmSync(path.join(work, 'versions', versionId(name)), { recursive: true, force: true });
     }
-    const list = servers(root);
+    const list = saved(root);
+    for (const s of list) if (s.instance === name && s.private) joins.stop(s.address);
     if (list.some((s) => s.instance === name)) saveServers(root, list.map((s) => (s.instance === name ? { ...s, instance: null } : s)));
     return true;
   }
 
   // ---------- servers to join ----------
   const sameAddress = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  const isSealed = (v) => !!v && typeof v === 'object' && v.enc === 'safeStorage' && typeof v.data === 'string';
+  const isPort = (n) => Number.isInteger(n) && n > 0 && n < 65536;
+  // A server's record: private, its sealed key and its local port are there only for a private server. A private server
+  // without a sealed key is one this computer could not protect the key of.
   function checkServer(s) {
     if (!s || typeof s !== 'object') throw fail('A server is {name, address, pack?, instance?, approved?}', 'badAddress');
     const { address } = parseAddress(s.address);
     const instance = s.instance && NAME.test(s.instance) ? s.instance : null;
-    return { name: oneLine(s.name) || address, address, pack: packUrl(s.pack), instance, approved: /^[0-9a-f]{40}$/.test(s.approved || '') ? s.approved : null };
+    const server = { name: oneLine(s.name) || address, address, pack: packUrl(s.pack), instance, approved: /^[0-9a-f]{40}$/.test(s.approved || '') ? s.approved : null };
+    return s.private ? { ...server, private: true, secret: isSealed(s.secret) ? s.secret : null, localPort: isPort(s.localPort) ? s.localPort : null } : server;
   }
-  function servers(root) {
+  // The list with what main alone may hold.
+  function saved(root) {
     const list = readJson(path.join(root, SERVERS));
     return (Array.isArray(list) ? list : []).map((s) => { try { return checkServer(s); } catch { return null; } }).filter(Boolean);
   }
-  // One entry per address, the last given winning. A file that cannot be read is kept beside the new one.
+  // Keys held this session, by address (lower case): the only place one is without safeStorage.
+  const held = new Map();
+  function keyOf(s) {
+    const id = s.address.toLowerCase();
+    if (!held.has(id) && s.secret) {
+      const key = keyring.open(s.secret);
+      if (key) held.set(id, key);
+    }
+    return held.get(id) ?? null;
+  }
+  // A server as the window sees it: never its sealed key, only whether Join can use one.
+  const shown = ({ secret, ...s }) => (s.private ? { ...s, keyMissing: !keyOf({ ...s, secret }) } : s);
+  const servers = (root) => saved(root).map(shown);
+  // One entry per address, the last given winning. A file that cannot be read is kept beside the new one. The window's
+  // list holds no sealed keys, so a private server it gives back keeps the one on disk. A server that left the list, or is
+  // no longer private, takes its key and its join process with it.
   function saveServers(root, list) {
     if (!Array.isArray(list)) throw fail('The server list is an array');
+    const before = saved(root);
     const out = [];
     for (const s of list.map(checkServer)) {
-      const at = out.findIndex((o) => sameAddress(o.address, s.address));
-      if (at >= 0) out[at] = s; else out.push(s);
+      const was = before.find((o) => sameAddress(o.address, s.address));
+      const entry = s.private && !s.secret && was?.secret ? { ...s, secret: was.secret } : s;
+      const at = out.findIndex((o) => sameAddress(o.address, entry.address));
+      if (at >= 0) out[at] = entry; else out.push(entry);
     }
     const file = path.join(root, SERVERS);
     if (fs.existsSync(file) && !Array.isArray(readJson(file))) keepBroken(file);
     writeJson(file, out);
-    return out;
+    for (const s of before.filter((o) => o.private && !out.some((n) => n.private && sameAddress(n.address, o.address)))) {
+      joins.stop(s.address);
+      held.delete(s.address.toLowerCase());
+    }
+    return out.map(shown);
+  }
+
+  // ---------- the game's Multiplayer list ----------
+  const LOCAL = '127.0.0.1';
+  const listEntry = (s) => ({ ip: s.private ? `${LOCAL}:${s.localPort}` : s.address, name: s.name });
+  // The instance's servers in its servers.dat, in the instance's own folder whichever launcher plays it. extra: entries
+  // not saved with this instance, first, so one that moved takes its old entry's place. Join works without the list.
+  function writeServerList(root, inst, extra, log) {
+    const wanted = [...extra, ...saved(root).filter((s) => s.instance === inst.name && (!s.private || s.localPort)).map(listEntry)];
+    if (!wanted.length) return;
+    try {
+      const { damaged } = mergeServers(dirOf(root, inst.name), wanted, { rename: renameRetried });
+      if (damaged) log('servers.dat is damaged: it stays as it is, with a copy beside it, and the server is not in the game\'s list.\n');
+    } catch (err) { log(`servers.dat could not be written: ${err.message}\n`); }
+  }
+  // The join process of every private server played with this instance, and of target. -> {local, moved}: local maps a
+  // public address to what the game connects to, and moved holds the list entries of servers whose port had been taken.
+  // Only target's failure stops Play: the others are just entries the game shows as offline.
+  async function openPrivate(root, inst, target, log) {
+    const local = new Map();
+    const moved = [];
+    for (const s of saved(root).filter((o) => o.private && (o.instance === inst.name || (target && sameAddress(o.address, target.address))))) {
+      const key = keyOf(s);
+      if (!key) continue;
+      try {
+        log(`Opening the private connection to ${s.address}\n`);
+        const port = await joins.start({ address: s.address, key, port: s.localPort });
+        local.set(s.address.toLowerCase(), `${LOCAL}:${port}`);
+        if (port === s.localPort) continue;
+        saveServers(root, saved(root).map((o) => (sameAddress(o.address, s.address) ? { ...o, localPort: port } : o)));
+        moved.push({ ip: `${LOCAL}:${port}`, name: s.name, ...(s.localPort ? { was: `${LOCAL}:${s.localPort}` } : {}) });
+      } catch (err) {
+        if (target && sameAddress(s.address, target.address)) throw err;
+        log(`The private connection to ${s.address} did not open: ${err.message}\n`);
+      }
+    }
+    return { local, moved };
+  }
+
+  // What a pasted code may not do without a yes: aim at this computer or its network, which a typed address may, put a new
+  // key on a saved private server, or make one public, which would send the next Join in the clear. A saved server that
+  // has no key left asks nothing of a code with a key: pasting it again is how that server comes back.
+  function codeAsks(target, known) {
+    const asks = [];
+    if (!known && isLocalAddress(target.address)) asks.push('localAddress');
+    if (known?.private) {
+      const key = keyOf(known);
+      if (!target.key) asks.push('noKey');
+      else if (key ? key !== target.key : known.secret) asks.push('newKey');
+    }
+    return asks;
   }
 
   // A join code, or an address (with a pack, a name, or the version and loader to play it with when it has no pack) ->
   // {server, instance}: the server's instance made or brought up to date from its pack, and the server saved. Without
   // a pack, an instance or a version -> {needsVersion: true, server}. A pack the user has not approved ->
-  // {needsApproval}: asked again with approve, its SHA-1, it goes through.
+  // {needsApproval}: asked again with approve, its SHA-1, it goes through. A code that needs a yes (codeAsks) ->
+  // {needsConfirm: {kind, address, name}}, with nothing changed: asked again with kind in confirmed, it goes through.
   const asked = (err) => {
     if (err.code === 'needsApproval') return { launched: false, needsApproval: err.approval };
     throw err;
@@ -747,17 +891,28 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
       const { address } = parseAddress(req.address);
       return { address, pack: packUrl(req.pack), name: oneLine(req.name) || address };
     })();
-    const list = servers(root);
+    const list = saved(root);
     const known = list.find((s) => sameAddress(s.address, target.address));
+    const ask = req.code && codeAsks(target, known).find((kind) => !req.confirmed?.includes(kind));
+    if (ask) return { needsConfirm: { kind: ask, address: target.address, name: known?.name || target.name } };
     const pack = target.pack || (!req.code && known?.pack) || null;
+    const isPrivate = req.code ? !!target.key : !!known?.private;
     let inst = null;
     if (known?.instance) { try { inst = readInstance(root, known.instance); } catch {} }
     let stale = false;
     // The list as it is now: a sync takes minutes, in which the user may have removed another server.
-    const save = (instance) => {
+    const save = async (instance) => {
       const server = { name: target.name, address: target.address, pack, instance: instance.name, approved: pack ? instance.pack?.sha1 ?? known?.approved ?? null : null };
-      saveServers(root, [...servers(root), server]);
-      return { server, instance: describe(root, instance), stale };
+      if (isPrivate) {
+        Object.assign(server, { private: true, secret: known?.secret ?? null, localPort: known?.localPort || await freePort() });
+        if (target.key) {
+          held.set(target.address.toLowerCase(), target.key);
+          server.secret = keyring.seal(target.key);
+        }
+      }
+      saveServers(root, [...saved(root).filter((s) => !sameAddress(s.address, target.address)), server]);
+      writeServerList(root, instance, [], log);
+      return { server: shown(server), instance: describe(root, instance), stale };
     };
     const connect = async (instance) => {
       const synced = pack ? await syncPack(root, instance, pack, log, { approve: req.approve, pinned: known?.approved }) : { inst: instance };
@@ -772,15 +927,19 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
       const slot = freeInstance(root, target.name);
       return save(await made(root, slot.name, () => connect({ ...slot, mc: null, loader: 'vanilla', loaderVersion: null, memory: '4G', created: now(), lastPlayed: null })));
     }
-    if (!VERSION(req.mc)) return { needsVersion: true, server: { name: target.name, address: target.address, pack: null, instance: null } };
+    if (!VERSION(req.mc)) return { needsVersion: true, server: { name: target.name, address: target.address, pack: null, instance: null, private: isPrivate } };
     const created = await create(root, { name: req.name || target.name, mc: req.mc, loader: req.loader, loaderVersion: req.loaderVersion, memory: req.memory }, log);
     return save(await exclusive(root, created.name, () => connect(readInstance(root, created.name))));
   }
 
-  // Play: the server's pack synced, the loader installed, the instance's version (with the server to join) and
-  // profile written, and the official launcher started on .launcher, where the user signs in and presses Play.
-  // server: an address, or {address, name?, pack?}; a saved server's pack is used when none is given. Without the
-  // launcher -> {launched: false, code: 'noLauncher', download} before anything is downloaded.
+  // Play: the server's pack synced, the loader installed, the join process of a private server started, the instance's
+  // version (with the server to join), profile and server list written, and the official launcher started on .launcher,
+  // where the user signs in and presses Play. A launcher already open and looking after no game is closed first, so it
+  // reads the new profile. server: an address, or {address, name?, pack?}; a saved server's pack is used when none is
+  // given. Without the launcher -> {launched: false, code: 'noLauncher', download} before anything is downloaded. A
+  // private server whose key this computer could not keep -> {launched: false, code: 'needsCode'}. One with no join
+  // process by the time the game would start, such as a server removed during a long sync -> {launched: false, code:
+  // 'privateGone'}: its public address speaks only the gate, and the game must never be sent there in the clear.
   async function play(root, name, { server, approve } = {}, log) {
     const how = launchMethod();
     if (!how) return { launched: false, code: 'noLauncher', download: DOWNLOAD_PAGE };
@@ -791,25 +950,32 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
       if (server) {
         const given = typeof server === 'string' ? { address: server } : server;
         const { address } = parseAddress(given.address);
-        const saved = servers(root).find((s) => sameAddress(s.address, address));
-        srv = { name: oneLine(given.name) || saved?.name || address, address, pack: packUrl(given.pack) || saved?.pack || null, approved: saved?.approved };
+        const known = saved(root).find((s) => sameAddress(s.address, address));
+        if (known?.private && !keyOf(known)) return { launched: false, code: 'needsCode' };
+        srv = { name: oneLine(given.name) || known?.name || address, address, pack: packUrl(given.pack) || known?.pack || null, approved: known?.approved, private: !!known?.private };
       }
       if (srv?.pack) {
         const synced = await syncPack(root, inst, srv.pack, log, { reuse: true, approve, pinned: srv.approved });
         inst = synced.inst;
         packStale = synced.stale;
-        if (!packStale && inst.pack?.sha1 !== srv.approved) saveServers(root, servers(root).map((s) => (sameAddress(s.address, srv.address) ? { ...s, approved: inst.pack?.sha1 } : s)));
+        if (!packStale && inst.pack?.sha1 !== srv.approved) saveServers(root, saved(root).map((s) => (sameAddress(s.address, srv.address) ? { ...s, approved: inst.pack?.sha1 } : s)));
       }
       inst = { ...inst, loaderId: await installLoader(root, inst, log), lastPlayed: now() };
       if (srv) inst.server = { name: srv.name, address: srv.address };
-      const version = await writeVersion(root, inst, inst.loaderId, srv);
+      const { local, moved } = await openPrivate(root, inst, srv, log);
+      if (srv?.private && !local.has(srv.address.toLowerCase())) return { launched: false, code: 'privateGone' };
+      const joinAt = srv && (local.get(srv.address.toLowerCase()) || srv.address);
+      const version = await writeVersion(root, inst, inst.loaderId, srv && { ...srv, address: joinAt });
       writeProfile(root, inst, how);
       writeInstance(root, inst);
+      writeServerList(root, inst, srv ? [...moved, { ip: joinAt, name: srv.name }] : moved, log);
       log(`Starting the Minecraft Launcher with the profile ${inst.title || inst.name} (Nano Studio)${srv ? `, joining ${srv.address}` : ''}\n`);
-      const alreadyOpen = await launcherOpen();
+      const open = !!(await launcherOpen());
+      log.signal?.throwIfAborted();
+      const reopened = open && await closeLauncher();
       log.signal?.throwIfAborted();
       await startLauncher(how, how.work(root));
-      return { launched: true, launcher: how.argv[0], method: how.id, versionId: version.id, instance: describe(root, inst), packStale, alreadyOpen };
+      return { launched: true, launcher: how.argv[0], method: how.id, versionId: version.id, instance: describe(root, inst), packStale, alreadyOpen: open && !reopened, reopened, private: local.size > 0 };
     }).catch(asked);
   }
 
@@ -839,18 +1005,31 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried }) {
     return mods(root, name);
   }
 
-  // What the server says it runs, for the dialog that asks for the version.
-  const pingServer = (text) => {
-    const { host, port } = parseAddress(text);
-    return ping(host, port);
-  };
+  // What the server says it runs, for the dialog that asks for the version. A private server answers only through a join
+  // process: the public port speaks the gate, and a server not added yet has its key only in the code it came with.
+  async function pingServer(text) {
+    const code = JOIN_CODE.test(text) ? parseJoinCode(text) : null;
+    if (!code?.key) {
+      const { host, port } = parseAddress(code?.address ?? text);
+      return ping(host, port);
+    }
+    try {
+      return await ping(LOCAL, await joins.start({ address: code.address, key: code.key, port: 0 }));
+    } finally { joins.stop(code.address); }
+  }
 
   const status = (root) => {
     const how = launchMethod();
     return { launcher: how ? how.argv[0] : null, method: how?.id ?? null, download: DOWNLOAD_PAGE, workDir: gameDir(root), instancesDir: instancesDir(root) };
   };
 
-  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, joinCode, parseJoinCode, ping: pingServer };
+  // The window learns whether a code is private; the key stays in main.
+  const readCode = (text) => {
+    const { key, ...code } = parseJoinCode(text);
+    return { ...code, private: !!key };
+  };
+
+  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, joinCode, parseJoinCode: readCode, ping: pingServer, stopJoins: joins.stopAll };
 }
 
-module.exports = { createLauncher, findLauncher, findStore, launchMethod, launcherOpen, parseJoinCode, joinCode, parseAddress, serverArgs, headlessClient, readProfiles };
+module.exports = { createLauncher, findLauncher, findStore, launchMethod, launcherOpen, closeLauncher, parseJoinCode, joinCode, parseAddress, serverArgs, headlessClient, readProfiles };

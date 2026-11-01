@@ -3,8 +3,10 @@
 // never wait for the disk, so a timer writes the queue in one batch. All writes go through one promise chain, so a prune
 // at session start finishes before the first append of that session. A crash can leave a torn last line: readers skip
 // any line that does not parse, and the prune repairs the file so the next append does not run into it.
+const { once } = require('events');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { maskAddresses } = require('./logparse');
 
 const UUID =/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -18,6 +20,10 @@ const STAMP_AT = 6; // after {"t":"
 const STAMP_LENGTH = 24;
 const BLOCK = 64 << 10; // how much of a player's file a search reads between turns of the event loop
 const LINE_LIMIT = 1 << 20; // a block run with no line break is damage, not a line
+const POINT = /^\s*(-?\d+)[\s,]+(-?\d+)[\s,]+(-?\d+)\s*$/;
+// Whether an event happened at this block: a record of a burst lists every block it covers.
+const isAt = (e, [x, y, z]) => (Array.isArray(e.at) && e.at.some((p) => Array.isArray(p) && p[0] === x && p[1] === y && p[2] === z))
+  || (Math.floor(e.x) === x && Math.floor(e.y) === y && Math.floor(e.z) === z);
 
 // The one way an entry becomes a line, so that no field of any entry reaches a file with a full address in it.
 const lineOf = (entry) => JSON.stringify(entry, (_key, value) => (typeof value === 'string' ? maskAddresses(value) : value));
@@ -190,11 +196,18 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
     } finally { await handle.close(); }
     // Lines are in time order, so a file whose first line is recent and whose last is whole needs nothing.
     if (oldest >= cutoff && last === 10) return;
-    const lines = (await fs.promises.readFile(file, 'utf8')).split('\n');
-    const kept = lines.filter((line) => line && line.slice(STAMP_AT, STAMP_AT + STAMP_LENGTH) >= cutoff && parsed(line));
-    if (!kept.length) { await fs.promises.rm(file, { force: true }); return; }
+    // Line by line: with a plugin's records a month of one player runs to hundreds of MB, past what one string can hold.
     const tmp = `${file}.tmp`;
-    await fs.promises.writeFile(tmp, `${kept.join('\n')}\n`);
+    const out = fs.createWriteStream(tmp);
+    let kept = 0;
+    for await (const line of readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity })) {
+      if (!line || line.slice(STAMP_AT, STAMP_AT + STAMP_LENGTH) < cutoff || !parsed(line)) continue;
+      kept++;
+      if (!out.write(`${line}\n`)) await once(out, 'drain');
+    }
+    out.end();
+    await once(out, 'close');
+    if (!kept) { await fs.promises.rm(tmp, { force: true }); await fs.promises.rm(file, { force: true }); return; }
     await fs.promises.rename(tmp, file);
   }
 
@@ -256,29 +269,43 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   const uuidOf = (name) => Object.entries(known()).find(([, p]) => p.name === name)?.[0] ?? null;
 
   const clamp = (limit, fallback) => Math.min(Math.max(1, Number(limit) || fallback), READ_MAX);
-  const matcher = ({ types, q } = {}) => {
+  // q: text, or `x y z`, which finds the events at that block. ids: item ids a name in another language stands for.
+  const matcher = ({ types, q, ids } = {}) => {
     const wanted = Array.isArray(types) && types.length ? new Set(types) : null;
-    const needle = typeof q === 'string' && q ? q.toLowerCase() : null;
-    return (e) => (!wanted || wanted.has(e.type)) && (!needle || `${e.name ?? ''} ${e.text ?? ''}`.toLowerCase().includes(needle));
+    const point = typeof q === 'string' ? POINT.exec(q)?.slice(1).map(Number) : null;
+    const needle = typeof q === 'string' && q && !point ? q.toLowerCase() : null;
+    const named = Array.isArray(ids) && ids.length ? new Set(ids) : null;
+    const found = (e) => {
+      if (point) return isAt(e, point);
+      return !needle || named?.has(e.id) || `${e.name ?? ''} ${e.text ?? ''} ${e.id ?? ''} ${e.other ?? ''} ${e.weapon ?? ''}`.toLowerCase().includes(needle);
+    };
+    return (e) => (!wanted || wanted.has(e.type)) && found(e);
   };
 
-  // Newest first. before: the t of the last event of the previous page.
-  async function timeline(uuid, { before, limit, types, q } = {}) {
+  // Newest first. before: the t of the last event of the previous page. From the file's end, so a page costs a page.
+  async function timeline(uuid, { before, limit, types, q, ids } = {}) {
     if (!UUID.test(uuid || '')) return { events: [], more: false };
     await flush();
-    const wants = matcher({ types, q });
+    const wants = matcher({ types, q, ids });
     const max = clamp(limit, 100);
-    const events = linesOf(await readFile(fileOf(`${uuid}.jsonl`))).reverse()
-      .filter((e) => (typeof before !== 'string' || e.t < before) && wants(e));
-    return { events: events.slice(0, max), more: events.length > max };
+    const events = [];
+    for await (const lines of linesFromEnd(fileOf(`${uuid}.jsonl`))) {
+      for (const line of lines) {
+        const e = line ? parsed(line) : null;
+        if (!e || (typeof before === 'string' && e.t >= before) || !wants(e)) continue;
+        if (events.length === max) return { events, more: true };
+        events.push(e);
+      }
+    }
+    return { events, more: false };
   }
   const newestFirst = (a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0);
   // The newest `max` matches across the players' files. A file's lines are in time order, so reading one stops at the
   // first line older than all of the `max` already held. superseded(): a newer search is waiting, so this one's answer
   // no longer matters. -> null then.
-  async function searchFiles({ q, types, limit }, superseded) {
+  async function searchFiles({ q, types, ids, limit }, superseded) {
     await flush();
-    const wants = matcher({ types, q });
+    const wants = matcher({ types, q, ids });
     const max = clamp(limit, 200);
     let names = [];
     try { names = await fs.promises.readdir(folder); } catch { return []; }

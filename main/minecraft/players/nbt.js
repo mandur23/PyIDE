@@ -2,7 +2,9 @@
 // prints. Both give the same plain values: a compound is an object without a prototype (its keys are a player's to
 // choose, through an item's custom data), a list or array an array, a long a number while it is exact and else a decimal
 // string. Both readers are strict and bounded: a damaged or hostile file ends in an error with code 'damaged', not in a
-// hang or a stack overflow. Read-only: the server owns these files and overwrites them.
+// hang or a stack overflow. Player data is read-only here: the server owns those files and overwrites them. writeNbt is
+// for servers.dat, a file of the game's own that Craft adds to (main/minecraft/serversdat.js).
+const crypto = require('crypto');
 const zlib = require('zlib');
 
 // depth: the game's own (NbtAccounter), so whatever a player can carry can be read.
@@ -35,8 +37,9 @@ const long = (v) => { const n = Number(v); return Number.isSafeInteger(n) ? n : 
 // is allocated. An empty list inside a list takes 5, an empty compound 1.
 const MIN_SIZE = [0, 1, 2, 4, 8, 4, 8, 4, 2, 5, 1, 4, 4];
 
-// Uncompressed NBT -> the root compound.
-function parseNbt(buf, { maxDepth = LIMITS.depth, maxNodes = LIMITS.nodes } = {}) {
+// Uncompressed NBT -> the root compound. tagged keeps what writeNbt needs to give the same bytes back, for a file that is
+// edited and not only read: a compound's members are {type, value} and a list has its element type as .item.
+function parseNbt(buf, { maxDepth = LIMITS.depth, maxNodes = LIMITS.nodes, tagged = false } = {}) {
   let p = 0;
   let nodes = 0;
   const need = (n) => { if (p + n > buf.length) throw damaged('it ends too early'); };
@@ -76,6 +79,7 @@ function parseNbt(buf, { maxDepth = LIMITS.depth, maxNodes = LIMITS.nodes } = {}
         counted(n, MIN_SIZE[item]);
         const out = new Array(Math.max(n, 0));
         for (let i = 0; i < n; i++) out[i] = value(item, depth + 1);
+        if (tagged) out.item = item;
         return out;
       }
       case 10: {
@@ -86,7 +90,8 @@ function parseNbt(buf, { maxDepth = LIMITS.depth, maxNodes = LIMITS.nodes } = {}
           if (t === 0) return out;
           const key = str();
           if (++nodes > maxNodes) throw damaged('it holds too many values');
-          out[key] = value(t, depth + 1);
+          const member = value(t, depth + 1);
+          out[key] = tagged ? { type: t, value: member } : member;
         }
       }
       default: throw damaged(`it has an unknown tag ${type}`);
@@ -97,6 +102,75 @@ function parseNbt(buf, { maxDepth = LIMITS.depth, maxNodes = LIMITS.nodes } = {}
   const root = value(10, 0);
   if (p !== buf.length) throw damaged('there is data after its end');
   return root;
+}
+
+// Java's modified UTF-8, one UTF-16 unit at a time: NUL takes two bytes and each half of a surrogate pair three. The game
+// reads a name written as plain UTF-8 wrongly as soon as it holds an emoji.
+function mutf8Bytes(text) {
+  const out = Buffer.allocUnsafe(text.length * 3);
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 1 && c <= 0x7f) out[n++] = c;
+    else if (c <= 0x7ff) {
+      out[n++] = 0xc0 | (c >> 6);
+      out[n++] = 0x80 | (c & 63);
+    } else {
+      out[n++] = 0xe0 | (c >> 12);
+      out[n++] = 0x80 | ((c >> 6) & 63);
+      out[n++] = 0x80 | (c & 63);
+    }
+  }
+  return out.subarray(0, n);
+}
+
+const FIXED = { 1: [1, 'writeInt8'], 2: [2, 'writeInt16BE'], 3: [4, 'writeInt32BE'], 5: [4, 'writeFloatBE'], 6: [8, 'writeDoubleBE'] };
+// A root compound from parseNbt(buf, {tagged: true}) -> uncompressed NBT, with the empty root name the game writes.
+function writeNbt(root) {
+  const parts = [Buffer.from([10, 0, 0])];
+  const fixed = (type, v) => {
+    const [size, write] = FIXED[type];
+    const b = Buffer.allocUnsafe(size);
+    b[write](v);
+    parts.push(b);
+  };
+  const str = (s) => {
+    const bytes = mutf8Bytes(s);
+    if (bytes.length > 0xffff) throw new Error('A text is too long for NBT');
+    const n = Buffer.allocUnsafe(2);
+    n.writeUInt16BE(bytes.length);
+    parts.push(n, bytes);
+  };
+  const put = (type, v) => {
+    if (FIXED[type]) return fixed(type, v);
+    switch (type) {
+      case 4: {
+        const b = Buffer.allocUnsafe(8);
+        b.writeBigInt64BE(BigInt(v));
+        return parts.push(b);
+      }
+      case 7: case 11: case 12:
+        fixed(3, v.length);
+        for (const n of v) put(type === 7 ? 1 : type === 11 ? 3 : 4, n);
+        return undefined;
+      case 8: return str(v);
+      case 9:
+        fixed(1, v.item);
+        fixed(3, v.length);
+        for (const item of v) put(v.item, item);
+        return undefined;
+      case 10:
+        for (const [name, member] of Object.entries(v)) {
+          fixed(1, member.type);
+          str(name);
+          put(member.type, member.value);
+        }
+        return parts.push(Buffer.alloc(1));
+      default: throw new Error(`NBT has no tag ${type}`);
+    }
+  };
+  put(10, root);
+  return Buffer.concat(parts);
 }
 
 // gzip or plain NBT -> the root compound. The output is bounded before it is held: a small file can inflate to gigabytes.
@@ -121,6 +195,15 @@ const NUMBERS = [
   [/^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?[dDfF]?$/, parseFloat],
   [/^[-+]?(?:Infinity|NaN)[dDfF]?$/, parseFloat],
 ];
+
+// Where each item compound of a parse lies in its text. A value here has lost its number types, which a guard on the whole
+// stack needs and the admin log keeps, so those use the game's own print.
+const printed = new WeakMap();
+// A Slot -> the SNBT the game printed for its stack, or null for a stack that came from a file.
+function printOfStack(slot) {
+  const at = printed.get(slot?.raw);
+  return at ? at[0].slice(at[1], at[2]) : null;
+}
 
 // SNBT text -> the value. Strict about the shape the game prints: one value, nothing after it.
 function parseSnbt(text, { maxDepth = LIMITS.depth, maxLength = LIMITS.size, maxNodes = LIMITS.nodes } = {}) {
@@ -160,7 +243,7 @@ function parseSnbt(text, { maxDepth = LIMITS.depth, maxLength = LIMITS.size, max
     return word === 'true' ? 1 : word === 'false' ? 0 : word;
   };
   const compound = (depth) => {
-    p++;
+    const start = p++;
     const out = Object.create(null);
     spaces();
     if (text[p] === '}') { p++; return out; }
@@ -173,7 +256,10 @@ function parseSnbt(text, { maxDepth = LIMITS.depth, maxLength = LIMITS.size, max
       out[key] = value(depth + 1);
       spaces();
       const c = text[p++];
-      if (c === '}') return out;
+      if (c === '}') {
+        if (typeof out.id === 'string') printed.set(out, [text, start, p]);
+        return out;
+      }
       if (c !== ',') throw wrong('a comma or } is expected');
     }
   };
@@ -236,6 +322,11 @@ function snbtEnd() {
 }
 
 // ---------- items and players ----------
+const canon = (v) => (Array.isArray(v) ? `[${v.map(canon).join()}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join()}}`
+  : typeof v === 'bigint' ? String(v) : JSON.stringify(v));
+// What makes two stacks the same stack, wherever each lies: all of its data but its place.
+const printOf = ({ Slot, ...item }) => crypto.createHash('sha1').update(canon(item)).digest('hex');
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const num = (v, fallback = null) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 
@@ -279,6 +370,7 @@ function slotOf(item, slot = null) {
     enchantments: c ? [...enchantMap(c['minecraft:enchantments']), ...enchantMap(c['minecraft:stored_enchantments'])]
       : [...enchantList(tag?.Enchantments), ...enchantList(tag?.ench), ...enchantList(tag?.StoredEnchantments)],
     damage: num(c ? c['minecraft:damage'] : tag?.Damage ?? item.Damage),
+    print: printOf(item),
     raw: item,
   };
 }
@@ -323,4 +415,11 @@ function detailOf(root, { source = 'file' } = {}) {
   };
 }
 
-module.exports = { parseNbt, readNbt, parseSnbt, snbtEnd, slotOf, detailOf, posOf };
+// The stack in a slot of a Detail, or null. n: the game's slot numbers, with 200-226 for the ender chest.
+function slotIn(detail, n) {
+  if (n >= 200) return detail.ender.find((s) => s.slot === n - 200) ?? null;
+  if (n === -106) return detail.offhand;
+  return (n >= 100 ? detail.armor : detail.inventory).find((s) => s.slot === n) ?? null;
+}
+
+module.exports = { parseNbt, readNbt, writeNbt, parseSnbt, snbtEnd, slotOf, detailOf, posOf, slotIn, printOfStack };

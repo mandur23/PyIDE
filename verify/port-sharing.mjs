@@ -5,9 +5,10 @@
 // for bore with a host:port address, an https server through cloudflared without a certificate check, and a server
 // started elsewhere is listed once its port is added; a server on every interface shows its LAN address; automatic
 // sharing asks before it turns on and then shares a new server by itself, but not a kernel or an Install Manager
-// database; a TCP server's warning says what bore exposes; without cloudflared, Share offers the Install Manager
-// download; the window in Korean.
-// Ports 9782-9783 for the IDE; the servers listen on 18631-18642.
+// database; a TCP server's warning says what bore exposes; a game server's port is private from Share and left alone by
+// automatic sharing, after a restart too; a tunnel is never answered for in the wrong mode; without cloudflared, Share
+// offers the Install Manager download; the window in Korean.
+// Ports 9782-9783 for the IDE; the servers listen on 18631-18644.
 import { spawn } from 'child_process';
 import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -37,7 +38,7 @@ const fakeBore = path.join(work, 'fake-bore.cjs');
 const boreLog = path.join(work, 'bore-args.txt');
 // bore colours its log; the address line is what matters.
 writeFileSync(fakeBore, `const fs = require('fs');
-fs.appendFileSync(${q(boreLog)}, process.argv.slice(2).join(' ') + '\\n');
+fs.appendFileSync(${q(boreLog)}, process.argv.slice(2).join(' ') + (process.env.PYIDE_BORE_SECRET ? ' keyed' : ' open') + '\\n');
 setTimeout(() => process.stdout.write('\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::client\\x1b[0m: connected to server \\x1b[3mremote_port\\x1b[0m=40123\\n'
   + '\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::client\\x1b[0m: listening at bore.pub:40123\\n'), 300);
 setInterval(() => {}, 1000);
@@ -197,6 +198,42 @@ try {
     `a kernel's port and an Install Manager database are neither listed nor shared, while a server started after them is (${q(listed.ports.map((p) => p.port))})`);
   await js(`ide.proc.kill(${kernel})`);
   await js(`ide.proc.kill(${db})`);
+
+  // Automatic sharing is on and the TCP warning was silenced with Don't ask again, the worst case for a game server.
+  const boreLines = () => readFileSync(boreLog, 'utf8').split('\n').filter((l) => l.includes('local 18643 '));
+  const tunnelsOf = (port) => js(`ide.ports.state().tunnels.filter((t) => t.port === ${port})`);
+  const startGame = async () => {
+    await js(`ide.ports.gamePort(18643)`);
+    const id = await startCode(tcpCode(18643));
+    await until(`ide.ports.state().ports.some((p) => p.port === 18643)`, 'the game server listed', 30000);
+    await until(`!!document.querySelector('#portsList .ports-row[data-port="18643"] .ports-share')`, 'the game server\'s row', 10000);
+    return id;
+  };
+  const game = await startGame();
+  await startServer(18644);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18644 && t.state === 'shared')`, 'a server started after the game server', 30000);
+  check(!(await tunnelsOf(18643)).length && !boreLines().length, 'with automatic sharing on, a game server\'s port gets no tunnel, while a server started after it does');
+  await js(`(document.querySelector('#portsList .ports-row[data-port="18643"] .ports-share').click(), true)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18643 && t.state === 'shared')`, 'the game server shared from its row', 20000);
+  const fromRow = await tunnelsOf(18643);
+  check(fromRow[0].private && boreLines().at(-1).endsWith(' keyed') && !(await js(`!!document.querySelector('#portsDontAsk')`)), `Share in the Ports window keeps a game server private, even after Don't ask again (${q(fromRow[0])})`);
+  check(await js(`document.querySelector('#portsList .ports-row[data-port="18643"] .ports-private')?.textContent === 'Private'`) && !(await js(`!!document.querySelector('#portsList .ports-row[data-port="18643"] .ports-url')`)), 'its row says Private and shows no address');
+  const wrongWay = await js(`ide.api.invoke('ports:share', 18643, { private: false }).then(() => 'shared', (e) => e.message)`);
+  const otherWay = await js(`ide.api.invoke('ports:share', 18644, { private: true }).then(() => 'shared', (e) => e.message)`);
+  check(/already shared privately/.test(wrongWay) && /already shared publicly/.test(otherWay) && (await tunnelsOf(18643))[0].private && !(await tunnelsOf(18644))[0].private && boreLines().length === 1,
+    `asked for a tunnel in the other mode, main refuses and leaves the running one as it is (${wrongWay}; ${otherWay})`);
+  check(await js(`ide.ports.share(18643, { private: false }).then(() => [...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('already shared privately')))`), 'the window says so too');
+  await js(`ide.proc.kill(${game})`);
+  await until(`!ide.ports.state().ports.some((p) => p.port === 18643) && !ide.ports.state().tunnels.some((t) => t.port === 18643)`, 'the game server stopped', 20000);
+  const announced = `ide.notifications.list().filter((n) => n.title === 'Port 18643 is available').length`;
+  const announcedBefore = await js(announced);
+  const gameAgain = await startGame();
+  await until(`${announced} > ${announcedBefore}`, 'the restart announced', 10000);
+  check(!(await tunnelsOf(18643)).length && boreLines().length === 1, 'after a restart of the game server, automatic sharing still leaves it alone: a private share does not come back public');
+  await js(`[...document.querySelectorAll('.ide-balloon')].find((n) => n.textContent.includes('Port 18643 is available')).querySelectorAll('button').forEach((b) => { if (b.textContent === 'Share') b.click(); })`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18643 && t.state === 'shared')`, 'shared from the balloon', 20000);
+  check((await tunnelsOf(18643))[0].private && boreLines().at(-1).endsWith(' keyed'), 'Share on the announcement is private too');
+  await js(`ide.proc.kill(${gameAgain})`);
 
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${q(a.consoleErrors)}` : ''}`);
   const internal = await js(`ide.api.invoke('diagnostics:errors')`);

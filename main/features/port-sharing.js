@@ -5,8 +5,13 @@
 // (a game server, a socket server) gets a bore.pub tunnel and a host:port address. cloudflared comes from the Install
 // Manager; the bore client is main/bore-client.js, run by the IDE's own Electron as Node. A tunnel lives as long as its
 // server listens, until the user stops sharing, or until the IDE quits.
+// A private share ({private: true}) is a bore tunnel behind a key that only join codes carry: a stranger who finds the
+// port gets nothing. The key is made for the share, lives here in memory, goes to the client through its environment
+// (argv is visible to other processes, and the app logs it) and never into ports:state or ports:changed. Stopping forgets
+// it. Friends get it from privateShare, through minecraft:privateCode.
 // PYIDE_CLOUDFLARED, PYIDE_BORE (tests): a JSON array, the program and its first arguments run in place of the tool.
 const { execFile, spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const net = require('net');
 const os = require('os');
@@ -97,6 +102,11 @@ async function processes() {
   return map;
 }
 
+// port -> {address, key} of a private share that has its address, or null. Main-process callers only: no IPC channel
+// returns this.
+let privateShare = () => null;
+exports.privateShare = (port) => privateShare(port);
+
 exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const toolchains = createToolchains();
   const standIn = (env) => {
@@ -134,14 +144,18 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   }
   let snapshot = ''; // the last netstat answer, so the process list is read again only when listeners change
   let tree = new Map();
-  const tunnels = new Map(); // port -> {child, state: 'starting' | 'shared' | 'failed', url, error, log}
+  const tunnels = new Map(); // port -> {child, state: 'starting' | 'shared' | 'failed', url, error, log, secret: Buffer | null}
+  privateShare = (port) => {
+    const t = tunnels.get(port);
+    return t?.secret && t.state === 'shared' ? { address: t.url, key: t.secret.toString('base64url') } : null;
+  };
   let timer = null;
   let polling = null;
 
   const state = () => ({
     ports,
     added: [...added],
-    tunnels: [...tunnels].map(([port, t]) => ({ port, kind: t.kind, state: t.state, url: t.url || null, error: t.error || null, log: t.state === 'shared' ? '' : t.log.slice(-1500) })),
+    tunnels: [...tunnels].map(([port, t]) => ({ port, kind: t.kind, state: t.state, url: t.url || null, error: t.error || null, log: t.state === 'shared' ? '' : t.log.slice(-1500), private: !!t.secret })),
     cloudflared: !!cloudflared(),
     bore: !!bore(),
   });
@@ -202,6 +216,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     const t = tunnels.get(port);
     if (!t) return false;
     tunnels.delete(port);
+    t.secret?.fill(0);
     try { t.child?.kill(); } catch {}
     changed();
     return true;
@@ -233,15 +248,22 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
 
   // -> the tunnel's state; its address arrives with ports:changed once the tool reports it.
-  ipcMain.handle('ports:share', async (_e, port) => {
+  ipcMain.handle('ports:share', async (_e, port, options) => {
     const row = ports.find((p) => p.port === port);
     if (!row) throw Object.assign(new Error(`Nothing the IDE started listens on port ${port}`), { expected: true });
-    if (tunnels.has(port)) return state();
+    const wanted = options?.private === true;
+    const running = tunnels.get(port);
+    if (running) {
+      // Answering "shared" here would tell a caller who asked for a private share that it has one.
+      if (!!running.secret !== wanted) throw Object.assign(new Error(`Port ${port} is already shared ${running.secret ? 'privately' : 'publicly'}: stop sharing it first`), { expected: true });
+      return state();
+    }
     // Listed before the probe (seconds for a server that does not answer), so Stop Sharing meanwhile cancels it.
-    const t = { kind: null, state: 'starting', url: null, error: null, log: '' };
+    const t = { kind: null, state: 'starting', url: null, error: null, log: '', secret: wanted ? crypto.randomBytes(32) : null };
     tunnels.set(port, t);
     changed();
-    const proto = row.proto || await probeRow(row);
+    // A private share is always bore, so what the server speaks does not matter.
+    const proto = t.secret ? 'tcp' : row.proto || await probeRow(row);
     if (tunnels.get(port) !== t) return state();
     const kind = proto === 'tcp' ? 'bore' : 'cloudflared';
     const argv = kind === 'bore' ? bore() : cloudflared();
@@ -259,7 +281,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     // (spawn UNKNOWN) instead of emitting 'error'.
     let child;
     try {
-      child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true, env: { ...process.env, NO_COLOR: '1', ...(kind === 'bore' ? { ELECTRON_RUN_AS_NODE: '1' } : {}) } });
+      child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true,
+        env: { ...process.env, NO_COLOR: '1', ...(kind === 'bore' ? { ELECTRON_RUN_AS_NODE: '1' } : {}), ...(t.secret ? { PYIDE_BORE_SECRET: t.secret.toString('base64url') } : {}) } });
     } catch (err) {
       tunnels.delete(port);
       changed();

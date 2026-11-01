@@ -45,6 +45,7 @@
     [/^\d+ MB$/, () => tr('Downloading…')],
     [/^sha256 /, () => tr('Checking the download…')],
     [/^Extracting /, () => tr('Unpacking…')],
+    [/^Opening the private connection/, () => tr('Opening the private connection…')],
     [/^Starting the Minecraft Launcher/, () => tr('Opening the launcher…')],
   ];
   const phaseOf = (line) => {
@@ -63,6 +64,8 @@
     [/^There is no instance/, () => tr('This instance is damaged or gone. Delete it and make it again.')],
     [/is not a server address/, () => tr('That is not a server address (host or host:port).')],
     [/not a Nano Studio join code/, () => tr('That is not a Nano Studio join code (nanostudio:join?…).')],
+    [/^The join code has a damaged key/, () => tr('This join code is damaged. Ask your friend for a new one.')],
+    [/^The private connection/, () => tr('The private connection could not be opened. Try again.')],
     [/^The pack is not an https address/, () => tr('A server\'s pack must have an https address.')],
     [/^The pack points at a private address/, () => tr('The pack points at a private address, so it was refused.')],
     [/^Checksum mismatch for ([^:]+)/, (m) => tr('A file of the pack is damaged ({file}), so nothing was changed. Try again later.', { file: m[1] })],
@@ -157,7 +160,20 @@
         noLauncher(r.download);
         return r;
       }
-      const hint = r.alreadyOpen ? tr('The launcher was already open. If the profile does not show, close the launcher and press Launch again.') : tr('Sign in to the launcher and press Play.');
+      if (r.launched === false && r.code === 'needsCode') {
+        const text = tr('This computer could not keep the key of {server}. Paste its join code into Servers to Join again.', { server: server.name || server.address });
+        job.con.append(`${text}\n`, 'err');
+        ide.notifications?.notify({ title: tr('Paste the join code again'), text, kind: 'warn', group: 'Minecraft', raw: true });
+        return r;
+      }
+      if (r.launched === false && r.code === 'privateGone') {
+        const text = tr('{server} is no longer a private server in Servers to Join, so it was not joined. Add it again with its join code.', { server: server.name || server.address });
+        job.con.append(`${text}\n`, 'err');
+        ide.notifications?.notify({ title: tr('{server} could not be joined', { server: server.name || server.address }), text, kind: 'warn', group: 'Minecraft', raw: true });
+        return r;
+      }
+      const opened = r.alreadyOpen ? tr('The launcher was already open. If the profile does not show, close the launcher and press Launch again.') : tr('Sign in to the launcher and press Play.');
+      const hint = r.private ? `${opened} ${tr('Keep Nano Studio Craft open while you play.')}` : opened;
       job.con.append(`${hint}\n`, 'ok');
       launcherNote?.remove();
       launcherNote = ide.notifications?.notify({ title: tr('The Minecraft Launcher is open'), text: hint, kind: 'ok', group: 'Minecraft' });
@@ -441,6 +457,28 @@
   }
 
   // ---------- Servers to Join ----------
+  // What a pasted code would do that needs a yes. Cancel is the default, so the Enter that added the code cannot answer.
+  function confirmCode({ kind, address, name }) {
+    const asks = {
+      localAddress: [tr('Use a Local Address?'), tr('This join code points at {address}, which is this computer or its own network, not a server on the internet. Continue only if you expected that: a code from someone else could be aiming at another program here.', { address }), tr('Use This Address')],
+      newKey: [tr('Replace the Private Key?'), tr('{server} is saved with a different private key. Replace it only if the owner shared the server again and sent you this code.', { server: name }), tr('Replace the Key')],
+      noKey: [tr('Make This Server Public?'), tr('This join code has no key. {server} would stop being private, and Join would connect without encryption. Continue only if the owner told you it is public now.', { server: name }), tr('Make It Public')],
+    };
+    const [title, text, ok] = asks[kind];
+    return new Promise((resolve) => {
+      let yes = false;
+      const body = el('div', 'mc-dialog mcc-code-ask');
+      body.dataset.kind = kind;
+      body.append(el('div', 'mc-dialog-note', text));
+      ide.ui.dialog({
+        title, body, width: 520, onClose: () => resolve(yes),
+        buttons: [
+          { label: ok, run: () => { yes = true; return true; } },
+          { label: tr('Cancel'), primary: true },
+        ],
+      });
+    });
+  }
   // A join code or an address -> {server, instance}; an address without a pack asks for the version and loader first.
   async function connect(req, label) {
     const job = startJob(tr('Join'), tr('Adding {server}…', { server: label }));
@@ -451,12 +489,14 @@
       job.con.append(`${errorText(err)}\n`, 'err');
       throw err;
     } finally { job.end(); }
+    if (r.needsConfirm) return (await confirmCode(r.needsConfirm)) ? connect({ ...req, confirmed: [...(req.confirmed || []), r.needsConfirm.kind] }, label) : null;
     if (r.needsApproval) return (await confirmPack(label, r.needsApproval)) ? connect({ ...req, approve: r.needsApproval.sha1 }, label) : null;
     if (!r.needsVersion) return r;
-    const more = await askVersion(r.server);
-    return more ? connect({ address: r.server.address, name: r.server.name, ...more }, label) : null;
+    const more = await askVersion(r.server, req);
+    return more ? connect({ ...req, name: r.server.name, ...more }, label) : null;
   }
-  function askVersion(server) {
+  // req: what was asked to be added. A private server's public port answers only through its join code.
+  function askVersion(server, req) {
     return new Promise((resolve) => {
       let answer = null;
       const error = el('div', 'mc-dialog-error');
@@ -464,7 +504,7 @@
       const said = el('div', 'mc-dialog-note muted mcc-ping', tr('Asking the server what it runs…'));
       const f = form([[null, el('div', 'mc-dialog-note', tr('{server} gave no pack: choose the Minecraft version and loader the server runs. Ask its owner for a join code to have the mods synced too.', { server: server.name || server.address }))],
         [null, said], ...versions.rows], error);
-      ide.api.invoke('launcher:ping', server.address).catch(() => ({ online: false })).then((r) => {
+      ide.api.invoke('launcher:ping', req.code || server.address).catch(() => ({ online: false })).then((r) => {
         if (!r.online) said.textContent = tr('The server did not answer, so choose them yourself.');
         else if (!r.mc) said.textContent = tr('The server answered without its version, so choose them yourself.');
         else {
@@ -492,7 +532,8 @@
     if (!value || adding || !trusted()) return false;
     let req = { address: value };
     let label = value;
-    if (/nanostudio:join\?/i.test(value)) {
+    // Any spelling of a code goes this way: as an address its text would reach the job's log, key included.
+    if (/nanostudio:/i.test(value)) {
       try {
         const code = await ide.api.invoke('launcher:parseJoinCode', value);
         req = { code: value };
@@ -718,18 +759,22 @@
     const addr = el('div', 'mcc-address', srv.address);
     addr.dataset.userText = '';
     const meta = el('div', 'mcc-meta');
+    if (srv.private) meta.append(el('span', 'mcc-chip private', tr('Private')));
     if (srv.pack) meta.append(el('span', 'mcc-chip sync', tr('Mods synced automatically')));
     const inst = playableInstance(srv);
     if (inst) meta.append(el('span', 'mcc-chip', `Minecraft ${inst.mc}`), el('span', `mcc-chip loader ${inst.loader}`, loaderTitle(inst.loader)));
     const facts = el('div', 'mcc-facts muted');
     facts.append(el('span', null, inst ? tr('Played with {name}', { name: inst.title || inst.name }) : tr('Its instance is made at the first Join')));
+    if (srv.private) facts.append(el('span', 'mcc-private-note', srv.keyMissing ? tr('Paste its join code again to play.') : tr('Keep Nano Studio Craft open while you play.')));
     body.append(name, addr, meta, facts);
     const actions = el('div', 'mcc-actions');
     const working = joining.has(srv.address) || (!!inst && busy.has(inst.name));
     const joinBtn = button(working ? tr('Getting Ready…') : tr('Join'), 'primary mcc-join', () => joinServer(srv), 'runRun');
-    joinBtn.disabled = working || adding;
-    actions.append(joinBtn, button(tr('Copy Join Code'), 'secondary mcc-copy-code', () => copyCode(srv), 'copy'),
-      button(tr('Remove…'), 'secondary mcc-remove', () => removeServer(srv)));
+    joinBtn.disabled = working || adding || !!srv.keyMissing;
+    actions.append(joinBtn);
+    // A private server's code is a key its owner gave this friend, not one to pass on.
+    if (!srv.private) actions.append(button(tr('Copy Join Code'), 'secondary mcc-copy-code', () => copyCode(srv), 'copy'));
+    actions.append(button(tr('Remove…'), 'secondary mcc-remove', () => removeServer(srv)));
     c.append(art, body, actions);
     return c;
   }

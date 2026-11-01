@@ -11,7 +11,8 @@
 // Usage: node verify/minecraft-players-core.mjs
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
-import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import fs, { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import Module, { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -19,12 +20,14 @@ import zlib from 'zlib';
 
 const require = createRequire(import.meta.url);
 const { parseLine, maskIp, maskAddresses } = require('../main/minecraft/players/logparse.js');
-const { parseNbt, readNbt, parseSnbt, snbtEnd, slotOf, detailOf } = require('../main/minecraft/players/nbt.js');
+const { parseNbt, readNbt, parseSnbt, snbtEnd, slotOf, detailOf, slotIn } = require('../main/minecraft/players/nbt.js');
 const { createStore } = require('../main/minecraft/players/store.js');
 const { createSession, matchData, matchList } = require('../main/minecraft/players/session.js');
 const { readFlags, readUsercache, readDetail, worldOf } = require('../main/minecraft/players/files.js');
 const { createPlayers } = require('../main/minecraft/players/index.js');
 const { offlineUuid } = require('../main/minecraft/server-settings.js');
+const { parseLine: parseBridge, createTail, refusal, forNewServer } = require('../main/minecraft/players/bridge.js');
+const { createGame } = require('./minecraft-players-game.cjs');
 
 const results = [];
 const check = (ok, label) => { results.push({ ok: !!ok, label }); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
@@ -1430,6 +1433,594 @@ process.stdin.on('data', (d) => {
   const bad = await run(['-Xmx2G']);
   check(bad.chat?.includes('�'), `control: without them the stand-in damages the chat, so this can fail: ${bad.chat}`);
   check(bad.whisper !== good.whisper, `control: and the whisper: ${bad.whisper}`);
+}
+
+// ---------- moving items, through the session, against the game's rules ----------
+{
+  const SYSTEM = `${VANILLA}System chat: `;
+  const stage = (version, stacks, kind = 'paper') => {
+    const dir = serverDir();
+    const pushes = [];
+    const players = createPlayers({ send: (ch, p) => pushes.push(p), describe: () => ({ version, kind, proxy: false }), sessionOptions: { pingMs: 1, pollMs: 1000000, listMs: 1000000 }, storeOptions: { flushMs: 5 } });
+    const session = players.begin(dir);
+    const proc = new FakeProcess();
+    session.attach(proc);
+    const shown = [];
+    const say = (line) => { shown.push(session.filter(`${line}\n`, 'out')); };
+    say(`${VANILLA}Done (1.0s)! For help, type "help"`);
+    join({ say });
+    const game = createGame({ version, name: 'Steve', stacks });
+    const t = { dir, players, session, proc, say, shown, game, between: null, silent: false };
+    proc.answer = (text) => {
+      for (const line of text.split('\n')) {
+        if (t.silent) continue;
+        if (line === 'data get entity Steve') say(`${SYSTEM}Steve has the following entity data: ${game.data()}`);
+        else for (const said of game.run(line) ?? []) say(`${SYSTEM}${said}`);
+        t.between?.(line);
+      }
+    };
+    return t;
+  };
+  const SWORD = { id: 'minecraft:diamond_sword', count: 1, extra: 'components: {"minecraft:damage": 12}' };
+  const DIRT = { id: 'minecraft:dirt', count: 32 };
+  const printAt = (d, n) => slotIn(d, n)?.print ?? null;
+
+  {
+    const t = stage('26.3', { 0: SWORD, 9: DIRT });
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    check(d.source === 'live' && /^[0-9a-f]{40}$/.test(printAt(d, 0)), 'a live detail holds each stack\'s print');
+    const moved = { type: 'moveItem', target: 'Steve', op: 'move', from: 0, to: 1, shown: { from: printAt(d, 0), to: null } };
+    t.proc.written.length = 0;
+    const r = await t.players.action(t.dir, moved);
+    check(r.ok && !r.code, `a move works: ${J(r)}`);
+    check(t.proc.written.length === 2, `a read before, and all the lines in one write: ${t.proc.written.length} writes`);
+    check(t.proc.written[1].split('\n').filter(Boolean).length === 6, 'the write holds the steps, their record and the read');
+    check(t.game.held.get(1)?.extra === SWORD.extra && !t.game.held.has(0), 'the stack is in its new slot with its data');
+    check(r.commands.length === 6 && r.text.includes('Replaced 1 slot(s) on Steve'), 'the result has the lines and the answers');
+    const console = t.shown.join('');
+    check(console.includes('Replaced 1 slot(s) on Steve') && !console.includes('has the following entity data'), 'the answers stay in the console and the reads do not');
+    const log = await t.players.adminLog(t.dir);
+    check(log.length === 1 && log[0].action.op === 'move' && !('shown' in log[0].action) && log[0].commands.length === 6 && log[0].ok, `one admin line with its commands: ${J(log)}`);
+
+    t.proc.written.length = 0;
+    const stale = await t.players.action(t.dir, moved);
+    check(stale.code === 'changed' && stale.commands.length === 0 && t.proc.written.length === 1, `a slot that is not what the tab shows stops it after the read: ${J(stale)}`);
+    check(t.game.held.has(1), 'and nothing moved');
+
+    const d2 = await t.players.detail(t.dir, STEVE);
+    t.proc.written.length = 0;
+    t.between = (line) => { if (line.includes('from entity')) t.game.swap(1, 2); };
+    const raced = await t.players.action(t.dir, { ...moved, from: 1, to: 3, shown: { from: printAt(d2, 1), to: null } });
+    t.between = null;
+    check(raced.code === 'mismatch' && raced.whole === true && !raced.ok, `a click between the lines is reported as it is: ${J(raced)}`);
+    check(t.proc.written.length === 2, 'and nothing is sent again');
+    check(t.game.held.has(2) && !t.game.held.has(3) && t.game.stacks().length === 2, `the spare copy went, so the stack is not doubled: ${t.game.all()}`);
+
+    const d3 = await t.players.detail(t.dir, STEVE);
+    const [a, b] = await Promise.all([t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'clear', from: 9, shown: { from: printAt(d3, 9) } }), t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'clear', from: 2, shown: { from: printAt(d3, 2) } })]);
+    check([a.code, b.code].includes('busy'), `two moves at once: the second is refused: ${a.code} ${b.code}`);
+
+    const left = await t.players.action(t.dir, { type: 'moveItem', target: 'Alex', op: 'clear', from: 9, shown: { from: printAt(d3, 9) } });
+    check(left.code === 'offline' && !left.commands.length, 'a player who is not on');
+    const bad = await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'move', from: 'x', to: 2 });
+    check(bad.code === 'slot', 'a bad slot is a value');
+  }
+  {
+    const t = stage('26.3', { 0: SWORD, 9: DIRT });
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    t.between = (line) => { if (line.includes('from entity')) t.game.held.delete(1); };
+    const r = await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'move', from: 0, to: 1, shown: { from: printAt(d, 0), to: null } });
+    t.between = null;
+    check(r.code === 'mismatch' && r.whole === false && t.game.stacks().length === 1, `a stack lost in the move is reported: ${J(r)}`);
+    check(!('changed' in r), 'the slots\' data stay out of what goes to the window');
+    const [entry] = await t.players.adminLog(t.dir);
+    const lost = entry.changed?.find((c) => c.slot === 0);
+    check(lost?.before === '{Slot: 0b, id: "minecraft:diamond_sword", count: 1, components: {"minecraft:damage": 12}}' && lost.after === null, `the admin log keeps the lost stack as the game printed it: ${J(entry.changed)}`);
+    const quiet = await t.players.detail(t.dir, STEVE);
+    await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'clear', from: 9, shown: { from: printAt(quiet, 9) } });
+    const [plain] = await t.players.adminLog(t.dir);
+    check(plain.ok && !('changed' in plain), 'a move that went right writes no slots');
+  }
+  {
+    const t = stage('26.3', { 0: { id: 'somemod:robe_chestplate', count: 1 } });
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    t.game.refuses = (slot) => slot === 102;
+    const r = await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'move', from: 0, to: 102, shown: { from: printAt(d, 0), to: null } });
+    check(r.code === 'notMoved' && r.text.includes('No targets accepted') && t.game.held.has(0), `a refused copy leaves the item, and says nothing moved: ${J(r)}`);
+  }
+  {
+    const full = Object.fromEntries(Array.from({ length: 36 }, (_, i) => [i, { id: 'minecraft:dirt', count: i + 1 }]));
+    const t = stage('1.20.1', full);
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    t.proc.written.length = 0;
+    const r = await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'move', from: 0, to: 1, shown: { from: printAt(d, 0), to: printAt(d, 1) } });
+    check(r.code === 'noRoom' && t.proc.written.length === 1, `a swap with no empty slot sends nothing: ${J(r)}`);
+  }
+  {
+    const t = stage('26.3', { 0: SWORD });
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    t.between = (line) => { if (line.startsWith('execute')) { t.say(`${SYSTEM}No entity was found`); t.silent = true; } };
+    const r = await t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'clear', from: 0, shown: { from: printAt(d, 0) } });
+    check(r.code === 'unconfirmed' && r.commands.length === 2, `no read at the end is said plainly: ${J(r)}`);
+    t.silent = false;
+    t.between = null;
+  }
+  {
+    const t = stage('26.3', { 0: SWORD });
+    await sleep(5);
+    const d = await t.players.detail(t.dir, STEVE);
+    t.silent = true;
+    const pending = t.players.action(t.dir, { type: 'moveItem', target: 'Steve', op: 'clear', from: 0, shown: { from: printAt(d, 0) } });
+    await sleep(5);
+    t.proc.emit('close');
+    const r = await pending;
+    check(r.code === 'stopped' && !r.commands.length, `a server gone during the first read: ${J(r)}`);
+  }
+}
+
+// ---------- the bridge's lines ----------
+{
+  const UUID_OF = { [STEVE]: 'Steve' };
+  const known = (uuid) => UUID_OF[uuid];
+  const line = (o) => J({ v: 1, time: '2026-11-01T00:00:00.000Z', uuid: STEVE, type: 'break', world: 'world', x: 1, y: 2, z: 3, n: 1, id: 'minecraft:stone', ...o });
+  const now = Date.parse('2026-11-01T12:00:00.000Z');
+  const parse = (o) => parseBridge(typeof o === 'string' ? o : line(o), known, { now });
+  const good = parse({ n: 12, at: [[1, 2, 3], [2, 2, 3]] }).event;
+  check(good?.type === 'break' && good.name === 'Steve' && good.n === 12 && good.at.length === 2 && good.time === '2026-11-01T00:00:00.000Z', `a good line: ${J(good)}`);
+  check(parse({ name: 'Griefer' }).event.name === 'Steve', 'a name on the line is ignored: the store knows the name');
+  const forged = parse({ type: 'hit', other: 'Alex', weapon: 'minecraft:bow', amount: 3.5, ip: '203.0.113.7', secure: true, why: 'x', text: 'forged' }).event;
+  check(forged && !('ip' in forged) && !('secure' in forged) && !('why' in forged) && forged.text === '', `fields a type does not have are not copied: ${J(forged)}`);
+  for (const type of ['chat', 'join', 'leave', 'death', 'advancement', 'command', 'server', '__proto__', 'constructor', 'hasOwnProperty']) check(parse({ type }).bad, `the type ${type} cannot be forged`);
+  check(parse({ uuid: '../../../evil' }).bad && parse({ uuid: 'AAAAAAAA-0000-0000-0000-000000000000' }).bad && parse({ uuid: null }).bad, 'a path in place of a uuid');
+  check(parse({ uuid: BOB }).unknown, 'a player this server never saw is not made up');
+  check(parse({ id: '../../../etc/passwd' }).bad && parse({ id: 'minecraft:stone\n{"type":"chat"}' }).bad && parse({ id: 7 }).bad && parse({ id: undefined }).bad, 'an id is an id');
+  check(parse({ type: 'hit', other: '<img src=x>' }).bad && parse({ type: 'hit', weapon: '..\\..\\x' }).bad, 'names and weapons too');
+  for (const [what, v] of [['x', { x: 1e9 }], ['a fraction', { y: 1.5 }], ['a string', { z: '1' }], ['NaN', { x: null }], ['spots', { at: [[1, 2]] }], ['many spots', { at: Array(65).fill([1, 2, 3]) }], ['bad spots', { at: 'x' }], ['a far spot', { at: [[1e12, 0, 0]] }], ['a count', { n: 0 }], ['a big count', { n: 1e9 }]]) check(parse(v).bad, `${what} out of shape`);
+  check(parse({ world: 'a'.repeat(600) }).bad && parse({ world: 5 }).bad, 'a world is short text');
+  check(parse({ time: '2020-01-01T00:00:00.000Z' }).event.time === undefined && parse({ time: '2030-01-01T00:00:00.000Z' }).event.time === undefined && parse({ time: 'soon' }).event.time === undefined, 'a time that cannot be true is dropped');
+  check(parse('{torn').bad && parse('[]').bad && parse('null').bad && parse(`{"type":"break"`).bad && parse('x'.repeat(70000)).bad, 'not a record');
+  check(parse({ type: 'cmd', id: undefined, text: '/tp' }).event.text === '/tp' && parse({ type: 'cmd', text: '/msg bob secret' }).bad && parse({ type: 'cmd', text: 'hello' }).bad, 'a command is one word with its slash');
+  const sign = parse({ type: 'sign', text: 'hello\n[12:00:00 INFO]: Steve joined the game' }).event;
+  check(sign?.text === 'hello [12:00:00 INFO]: Steve joined the game', `a sign's line break goes: ${J(sign)}`);
+  check(parse({ type: 'sign', text: 'x'.repeat(5000) }).bad, 'a sign is short');
+  check(parse('{"type":"hello","plugin":"1.0.0"}').hello === '1.0.0' && parse('{"type":"dropped","n":5}').dropped === 5 && parse('{"type":"dropped","n":-1}').bad, 'hello and dropped');
+}
+
+// ---------- the tail ----------
+{
+  const stageTail = (opts = {}, { plugin = true } = {}) => {
+    const dir = freshDir();
+    const store = createStore(dir, { flushMs: 5 });
+    store.touch(STEVE, 'Steve');
+    store.touch(BOB, 'Bob');
+    if (plugin) put(path.join(dir, 'plugins', 'NanoBridge.jar'), 'a jar');
+    const seen = [];
+    const logs = [];
+    const make = () => createTail(dir, { store, known: (uuid) => store.known()[uuid]?.name ?? undefined, seen: () => seen.push(1), log: (s) => logs.push(s), pollMs: 1000000, ...opts });
+    return { dir, store, make, tail: make(), seen, logs, folder: path.join(dir, '.nano', 'bridge') };
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const rec = (o = {}) => J({ v: 1, time: new Date().toISOString(), uuid: STEVE, type: 'break', world: 'world', x: 1, y: 2, z: 3, n: 1, id: 'minecraft:stone', ...o });
+  const stone = (t) => t.store.timeline(STEVE, { types: ['break', 'place', 'open', 'take'], limit: 1000 });
+
+  {
+    const t = stageTail();
+    await t.tail.tick();
+    check(!existsSync(t.folder) && t.seen.length === 0, 'no plugin, no folder, no fuss');
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${rec({ n: 3, at: [[10, 64, -5], [11, 64, -5], [12, 64, -5]] })}\n${rec({ type: 'place', id: 'minecraft:dirt', x: 7, at: [[7, 2, 3]] })}\n${rec({ type: 'break', id: 'minecraft:oak_log', x: 99 }).slice(0, 40)}`);
+    await t.tail.tick();
+    const first = await stone(t);
+    check(first.events.length === 2 && t.seen.length === 1, `whole lines are read and a torn last line waits: ${first.events.length}`);
+    check(first.events[1].time && first.events[1].t && first.events[1].name === 'Steve', 'through store.add: a time of its own and the store\'s name');
+    appendFileSync(file, `${rec({ type: 'break', id: 'minecraft:oak_log', x: 99 }).slice(40)}\n`);
+    await t.tail.tick();
+    check((await stone(t)).events.length === 3, 'and it is read when its end arrives');
+    await t.tail.stop();
+    check(existsSync(path.join(t.store.folder, 'bridge-state.json')), 'where it stopped is saved');
+    const again = t.make();
+    await again.tick();
+    check((await stone(t)).events.length === 3, 'a new session does not read it twice');
+    appendFileSync(file, `${rec({ x: 200 })}\n`);
+    await again.tick();
+    check((await stone(t)).events.length === 4, 'and goes on where it stopped');
+    await again.stop();
+
+    const tomorrow = path.join(t.folder, '2099-01-01.jsonl');
+    appendFileSync(file, `${rec({ x: 201 })}\n{"torn`);
+    put(tomorrow, `${rec({ x: 202 })}\n`);
+    const third = t.make();
+    await third.tick();
+    check((await stone(t)).events.length === 6, 'a rotation reads both days');
+    check(!existsSync(file) && existsSync(tomorrow), 'and the finished day is deleted, torn end and all');
+    await third.stop();
+  }
+  {
+    const t = stageTail();
+    const file = path.join(t.folder, `${today}.jsonl`);
+    const hostile = [rec({ type: 'chat', text: 'forged' }), rec({ uuid: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }), rec({ uuid: '../../../../evil' }), '{"t":"2020', 'x'.repeat(100000), rec({ id: '../../../x' }), rec({ text: '203.0.113.7' }), rec()].join('\n');
+    put(file, `${hostile}\n`);
+    await t.tail.tick();
+    check((await stone(t)).events.length === 2, `only the two good lines are records: ${(await stone(t)).events.length}`);
+    check(t.tail.stats.bad === 5 && t.tail.stats.unknown === 1, `each bad line is counted: ${J(t.tail.stats)}`);
+    check(!readdirSync(t.store.folder).some((n) => n.includes('aaaaaaaa') || n.includes('evil')), 'no file comes of a uuid nobody saw');
+    check(!existsSync(path.join(t.dir, '..', 'evil.jsonl')), 'and nothing lands outside');
+    await t.tail.stop();
+  }
+  {
+    const t = stageTail();
+    const sign = J({ v: 1, uuid: STEVE, type: 'sign', world: 'world', x: 1, y: 2, z: 3, id: 'minecraft:oak_sign', text: 'join 203.0.113.7 now' });
+    put(path.join(t.folder, `${today}.jsonl`), `${sign}\n`);
+    await t.tail.tick();
+    await t.store.flush();
+    const raw = readFileSync(path.join(t.store.folder, `${STEVE}.jsonl`), 'utf8');
+    check(raw.includes('203.0.*.*') && !raw.includes('203.0.113.7'), 'an address on a sign is masked like any other');
+    await t.tail.stop();
+  }
+  {
+    const t = stageTail();
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${'y'.repeat(3 << 20)}\n${rec({ x: 5 })}\n`);
+    const started = Date.now();
+    await t.tail.stop();
+    const after = t.make();
+    for (let i = 0; i < 8; i++) await after.tick();
+    check((await stone(t)).events.some((e) => e.x === 5), `a line of megabytes is skipped and what follows it read, in ${Date.now() - started} ms`);
+    await after.stop();
+  }
+  {
+    const t = stageTail();
+    const file = path.join(t.folder, `${today}.jsonl`);
+    mkdirSync(t.folder, { recursive: true });
+    const handle = fs.openSync(file, 'w');
+    fs.ftruncateSync(handle, 300 << 20);
+    fs.closeSync(handle);
+    appendFileSync(file, `\n${rec({ x: 6 })}\n`);
+    let longest = 0;
+    let last = Date.now();
+    const beat = setInterval(() => { longest = Math.max(longest, Date.now() - last); last = Date.now(); }, 5);
+    for (let i = 0; i < 40; i++) await t.tail.tick();
+    clearInterval(beat);
+    check((await stone(t)).events.some((e) => e.x === 6), `a file of 300 MB of nothing does not stop the tail: ${J(t.tail.stats)}`);
+    check(t.tail.stats.skippedBytes >= 40 << 20, 'it jumps what is too far behind');
+    check(longest < 500, `and never holds the event loop for long: ${longest} ms`);
+    await t.tail.stop();
+    fs.rmSync(file, { force: true });
+  }
+  {
+    const t = stageTail();
+    const outside = freshDir();
+    put(path.join(outside, `${today}.jsonl`), `${rec({ x: 666 })}\n`);
+    mkdirSync(path.join(t.dir, '.nano'), { recursive: true });
+    fs.symlinkSync(outside, t.folder, 'junction');
+    await t.tail.tick();
+    check((await stone(t)).events.length === 0 && t.logs.some((l) => l.includes('leads out')), 'a junction out of the server is not followed');
+    check(existsSync(path.join(outside, `${today}.jsonl`)), 'and nothing is deleted there');
+    await t.tail.stop();
+  }
+  {
+    const t = stageTail();
+    const old = path.join(t.folder, '2001-01-01.jsonl');
+    put(old, `${rec({ x: 1 })}\n`);
+    put(path.join(t.folder, 'notes.txt'), 'keep');
+    put(path.join(t.folder, '..', 'bridge', '2026-13.jsonl'), `${rec()}\n`);
+    put(path.join(t.folder, `${today}.jsonl`), `${rec({ x: 2 })}\n`);
+    await t.tail.tick();
+    check(!existsSync(old) && (await stone(t)).events.length === 1, 'a file past the retention is deleted unread');
+    check(existsSync(path.join(t.folder, 'notes.txt')) && existsSync(path.join(t.folder, '2026-13.jsonl')), 'and what is not one of its files is left alone');
+    await t.tail.stop();
+  }
+}
+
+// ---------- the tail: reads that fail, tails in a row, a plugin that is gone ----------
+{
+  const stageTail = ({ plugin = true } = {}) => {
+    const dir = freshDir();
+    const store = createStore(dir, { flushMs: 5 });
+    store.touch(STEVE, 'Steve');
+    if (plugin) put(path.join(dir, 'plugins', 'NanoBridge.jar'), 'a jar');
+    const logs = [];
+    const make = (opts) => createTail(dir, { store, known: (uuid) => store.known()[uuid]?.name ?? undefined, log: (s) => logs.push(s), pollMs: 1000000, ...opts });
+    return { dir, store, make, logs, folder: path.join(dir, '.nano', 'bridge') };
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const rec = (o = {}) => J({ v: 1, time: new Date().toISOString(), uuid: STEVE, type: 'break', world: 'world', x: 1, y: 2, z: 3, n: 1, id: 'minecraft:stone', ...o });
+  const stored = async (t) => {
+    await t.store.flush();
+    const file = path.join(t.store.folder, `${STEVE}.jsonl`);
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((l) => l.includes('"type":"break"')).length : 0;
+  };
+  const failOnce = (name, match, code = 'EMFILE') => {
+    const real = fs.promises[name];
+    let left = 1;
+    fs.promises[name] = (...args) => {
+      if (left && match(String(args[0]))) { left--; throw Object.assign(new Error(code), { code }); }
+      return real.apply(fs.promises, args);
+    };
+    return () => { fs.promises[name] = real; };
+  };
+
+  {
+    const t = stageTail();
+    const older = path.join(t.folder, `${yesterday}.jsonl`);
+    put(older, `${rec({ x: 1 })}\n${rec({ x: 2 })}\n${rec({ x: 3 })}\n`);
+    put(path.join(t.folder, `${today}.jsonl`), `${rec({ x: 4 })}\n`);
+    const tail = t.make();
+    const restore = failOnce('open', (f) => f.endsWith(`${yesterday}.jsonl`));
+    await tail.tick();
+    restore();
+    check(existsSync(older), 'an older file that could not be read is not deleted');
+    check(t.logs.some((l) => l.includes('EMFILE')), 'and the error is logged');
+    await tail.tick();
+    check(await stored(t) === 4 && !existsSync(older), `and the next pass reads it, then deletes it: ${await stored(t)} of 4`);
+    await tail.stop();
+  }
+  {
+    const t = stageTail();
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${rec({ x: 1 })}\n`);
+    const first = t.make();
+    await first.tick();
+    await first.stop();
+    appendFileSync(file, `${rec({ x: 2 })}\n`);
+    const second = t.make();
+    const restore = failOnce('readFile', (f) => f.endsWith('bridge-state.json'));
+    await second.tick();
+    restore();
+    await second.tick();
+    check(await stored(t) === 2, `a state file that could not be read now does not start the file over: ${await stored(t)} of 2`);
+    await second.stop();
+  }
+  {
+    const t = stageTail();
+    put(path.join(t.folder, `${today}.jsonl`), `${rec()}\n`);
+    const tail = t.make();
+    const [a, b] = [tail.stop(), tail.stop()];
+    check(a === b, 'stopping twice is one stop');
+    await a;
+    check(await stored(t) === 1, 'and its passes ran once');
+  }
+  {
+    const t = stageTail();
+    put(path.join(t.folder, `${today}.jsonl`), Array.from({ length: 3000 }, (_, i) => rec({ x: i })).join('\n') + '\n');
+    const old = t.make();
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    const late = t.make({ after: gate.then(() => old.stop()) });
+    const pending = late.tick();
+    await sleep(30);
+    check(await stored(t) === 0, 'a tail waits for the one before it');
+    open();
+    await pending;
+    await late.stop();
+    check(await stored(t) === 3000, `and takes over from where it stopped: ${await stored(t)} of 3000`);
+  }
+  for (const [what, end] of [['a server that stopped', (s) => s.end()], ['a server that has not ended yet', () => {}]]) {
+    const dir = freshDir();
+    put(path.join(dir, 'plugins', 'NanoBridge.jar'), 'a jar');
+    const players = createPlayers({ send: () => {}, describe: () => ({ version: '26.3', kind: 'paper', proxy: false }), sessionOptions: { pingMs: 1, pollMs: 1000000, listMs: 1000000 }, storeOptions: { flushMs: 5 }, tailOptions: { pollMs: 1 } });
+    const store = createStore(dir, { flushMs: 5 });
+    store.touch(STEVE, 'Steve');
+    await store.flush();
+    put(path.join(dir, '.nano', 'bridge', `${today}.jsonl`), Array.from({ length: 3000 }, (_, i) => rec({ x: i })).join('\n') + '\n');
+    const first = players.begin(dir);
+    first.attach(new FakeProcess());
+    await sleep(1);
+    end(first);
+    const second = players.begin(dir);
+    second.attach(new FakeProcess());
+    await sleep(120);
+    first.end();
+    second.end();
+    await sleep(120);
+    const file = path.join(dir, '.nano', 'players', `${STEVE}.jsonl`);
+    const n = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((l) => l.includes('"type":"break"')).length : 0;
+    check(n === 3000, `a new tail after ${what} counts each line once: ${n} of 3000`);
+  }
+
+  {
+    const t = stageTail({ plugin: false });
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${rec({ x: 1 })}\n${rec({ x: 2 })}\n`);
+    const tail = t.make();
+    await tail.tick();
+    check(await stored(t) === 2 && !existsSync(file), 'without the plugin the last day\'s file is read, then deleted');
+    await tail.stop();
+  }
+  {
+    const t = stageTail({ plugin: true });
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${rec({ x: 1 })}\n`);
+    const tail = t.make();
+    await tail.tick();
+    check(existsSync(file), 'with the plugin it stays, because more will come');
+    await tail.stop();
+  }
+  {
+    const t = stageTail({ plugin: false });
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${J({ type: 'hello', plugin: '1.0.0' })}\n${rec({ x: 1 })}\n`);
+    const tail = t.make();
+    await tail.tick();
+    await tail.tick();
+    check(existsSync(file), 'a plugin that said hello in this session is running, whatever its jar is called');
+    await tail.stop();
+  }
+  {
+    const t = stageTail({ plugin: false });
+    const file = path.join(t.folder, `${today}.jsonl`);
+    put(file, `${rec({ x: 1 })}\n`);
+    const tail = t.make();
+    const restore = failOnce('open', (f) => f.endsWith(`${today}.jsonl`));
+    await tail.tick();
+    restore();
+    check(existsSync(file) && await stored(t) === 0, 'without the plugin a file that could not be read stays too');
+    await tail.tick();
+    check(!existsSync(file) && await stored(t) === 1, 'until it is read');
+    await tail.stop();
+  }
+  {
+    const dir = freshDir();
+    put(path.join(dir, 'plugins', 'NanoBridge.jar'), 'a jar');
+    const store = createStore(dir, { flushMs: 5 });
+    store.touch(STEVE, 'Steve');
+    await store.flush();
+    const file = path.join(dir, '.nano', 'bridge', `${today}.jsonl`);
+    put(file, `${rec({ x: 1 })}\n`);
+    const players = createPlayers({ send: () => {}, describe: () => ({ version: '26.3', kind: 'paper', proxy: false }), storeOptions: { flushMs: 5 } });
+    check(players.bridgeRemove(dir).ok, 'the plugin of a stopped server is removed');
+    await waitFor(() => !existsSync(file));
+    check(!existsSync(file), 'and its last file goes with it, with no server left to tail it');
+    await sleep(30);
+    check(readFileSync(path.join(dir, '.nano', 'players', `${STEVE}.jsonl`), 'utf8').includes('"type":"break"'), 'after it was read into the records');
+  }
+}
+
+// ---------- block and coordinate search ----------
+{
+  const dir = freshDir();
+  const store = createStore(dir, { flushMs: 5 });
+  store.add({ type: 'break', name: 'Steve', uuid: STEVE, text: '', world: 'world', x: 10, y: 64, z: -5, n: 3, id: 'minecraft:diamond_ore', at: [[10, 64, -5], [11, 64, -5], [12, 64, -5]] });
+  store.add({ type: 'break', name: 'Griefer', uuid: '11111111-2222-3333-4444-555555555555', text: '', world: 'world', x: 100, y: 64, z: 5, n: 1, id: 'minecraft:stone', at: [[12, 64, -5]] });
+  store.add({ type: 'chat', name: 'Steve', uuid: STEVE, text: 'minecraft:diamond_ore is nice' });
+  store.add({ type: 'join', name: 'Bob', uuid: BOB, text: '', x: 11.5, y: 64, z: -4.5 });
+  const search = (opts) => store.search({ limit: 50, ...opts });
+  const names = (list) => list.map((e) => e.name).sort().join();
+  check(names(await search({ q: '12 64 -5' })) === 'Griefer,Steve', 'who broke this block, across players, from a record\'s list of blocks');
+  check(names(await search({ q: '12, 64, -5', types: ['break'] })) === 'Griefer,Steve', 'with commas too');
+  check(names(await search({ q: '11 64 -5' })) === 'Bob,Steve', 'a place on an event counts by its block');
+  check((await search({ q: '999 0 0' })).length === 0, 'a place nobody touched');
+  check(names(await search({ q: 'diamond_ore', types: ['break'] })) === 'Steve', 'by block name');
+  check(names(await search({ q: '다이아', ids: ['minecraft:diamond_ore'], types: ['break'] })) === 'Steve', 'by the ids a Korean name stands for');
+  check((await store.timeline(STEVE, { q: '11 64 -5' })).events.length === 1, 'a timeline searches the same way');
+}
+
+// ---------- a long record stays cheap ----------
+{
+  const dir = freshDir();
+  const store = createStore(dir, { flushMs: 5 });
+  const folder = store.folder;
+  mkdirSync(folder, { recursive: true });
+  const old = new Date(Date.now() - 40 * 86400000).toISOString();
+  const recent = new Date(Date.now() - 86400000).toISOString();
+  const lines = [];
+  for (let i = 0; i < 200000; i++) lines.push(J({ t: i < 100000 ? old : recent, type: 'break', name: 'Steve', uuid: STEVE, text: '', x: i, y: 1, z: 1, n: 1, id: 'minecraft:stone' }));
+  writeFileSync(path.join(folder, `${STEVE}.jsonl`), `${lines.join('\n')}\n{"torn`);
+  await store.open();
+  const size = statSync(path.join(folder, `${STEVE}.jsonl`)).size;
+  check(readFileSync(path.join(folder, `${STEVE}.jsonl`), 'utf8').split('\n').filter(Boolean).length === 100000, `the prune keeps the recent half and drops the torn end, ${size >> 20} MB`);
+  const started = Date.now();
+  const page = await store.timeline(STEVE, { limit: 100 });
+  const took = Date.now() - started;
+  check(page.events.length === 100 && page.more && page.events[0].x === 199999, 'a page from the end');
+  check(took < 200, `a page of a 100000 line file costs a page: ${took} ms`);
+  const next = await store.timeline(STEVE, { limit: 100, before: page.events.at(-1).t });
+  check(next.events.length === 0, 'lines of one time stamp page by time, as the store writes none');
+}
+
+// ---------- the plugin in a server ----------
+{
+  const hash = (f) => createHash('sha256').update(readFileSync(f)).digest('hex');
+  const SHIPPED = require.resolve('../main/minecraft/players/NanoBridge.jar');
+  check(statSync(SHIPPED).size > 5000, 'the jar ships with the app');
+  const kinds = { paper: null, purpur: null, vanilla: 'noPlugins', fabric: 'modded', forge: 'modded', neoforge: 'modded', velocity: 'proxy', mystery: 'kind' };
+  for (const [kind, code] of Object.entries(kinds)) check(refusal({ kind, version: '26.3' }) === code, `${kind}: ${code}`);
+  check(refusal({ kind: 'paper', version: '1.19.4' }) === 'oldVersion' && refusal({ kind: 'paper', version: '1.20' }) === null && refusal({ kind: 'purpur', version: 'x' }) === 'oldVersion', 'the version the plugin\'s api-version allows');
+  const dir = freshDir();
+  const jar = path.join(dir, 'plugins', 'NanoBridge.jar');
+  let desc = { version: '1.21.1', kind: 'paper', proxy: false };
+  const players = createPlayers({ send: () => {}, describe: () => desc, sessionOptions: { pingMs: 1, pollMs: 1000000, listMs: 1000000 }, storeOptions: { flushMs: 5 } });
+  check(players.bridgeStatus(dir).installed === 'none' && !players.bridgeStatus(dir).code, 'nothing is installed by itself');
+  let r = players.bridgeInstall(dir);
+  check(r.ok && !r.restart && existsSync(jar) && hash(jar) === hash(SHIPPED), 'install copies the jar');
+  check(!readdirSync(path.dirname(jar)).some((n) => n.endsWith('.part')), 'and leaves no temporary file');
+  check(players.bridgeStatus(dir).installed === 'current', 'and it reads as installed');
+  r = players.bridgeInstall(dir);
+  check(r.ok, 'installing twice is fine');
+  writeFileSync(jar, 'some other plugin');
+  check(players.bridgeStatus(dir).installed === 'other', 'a jar of another content is not called ours');
+  r = players.bridgeRemove(dir);
+  check(r.ok && !existsSync(jar), 'remove deletes it');
+  check(players.bridgeRemove(dir).ok, 'removing twice is fine');
+
+  const session = players.begin(dir);
+  const proc = new FakeProcess();
+  session.attach(proc);
+  session.filter(`${VANILLA}Done (1.0s)! For help, type "help"\n`, 'out');
+  check(players.bridgeStatus(dir).running && !players.bridgeStatus(dir).active, 'running, and nothing has said hello');
+  r = players.bridgeInstall(dir);
+  check(r.ok && r.restart, 'on a running server it asks for a restart');
+  check(players.bridgeRemove(dir).restart, 'and so does removing it');
+  players.bridgeInstall(dir);
+  put(path.join(dir, '.nano', 'bridge', `${new Date().toISOString().slice(0, 10)}.jsonl`), `${J({ v: 1, type: 'hello', plugin: '1.0.0' })}\n`);
+  session.end();
+  await sleep(50);
+  const log = await players.adminLog(dir);
+  check(log.filter((e) => e.action.type === 'bridgeInstall').length === 4 && log.filter((e) => e.action.type === 'bridgeRemove').length === 3, 'each change is in the admin log');
+
+  desc = { version: '1.21.1', kind: 'fabric', proxy: false };
+  const other = freshDir();
+  r = players.bridgeInstall(other);
+  check(!r.ok && r.code === 'modded' && !existsSync(path.join(other, 'plugins')), 'a Fabric server gets its reason and no plugin');
+  check(players.bridgeStatus(other).code === 'modded', 'and the status says the same');
+
+  const lines = [];
+  const logTo = (s) => lines.push(s);
+  const fresh = freshDir();
+  const on = { 'minecraft.detailedLogNewServers': true };
+  check(forNewServer(null, fresh, { kind: 'paper', version: '26.3' }, logTo) === null && forNewServer({}, fresh, { kind: 'paper', version: '26.3' }, logTo) === null, 'the default is off');
+  check(forNewServer({ 'minecraft.detailedLogNewServers': 'true' }, fresh, { kind: 'paper', version: '26.3' }, logTo) === null, 'only a real yes turns it on');
+  check(!existsSync(path.join(fresh, 'plugins')), 'and with it off nothing is written');
+  check(forNewServer(on, fresh, { kind: 'vanilla', version: '26.3' }, logTo) === null && forNewServer(on, fresh, { kind: 'forge', version: '1.20.1' }, logTo) === null, 'other kinds stay as they are');
+  check(forNewServer(on, fresh, { kind: 'purpur', version: '26.3' }, logTo)?.ok && existsSync(path.join(fresh, 'plugins', 'NanoBridge.jar')) && lines.length === 1, 'with it on a new Purpur server has the plugin');
+}
+
+// ---------- the same default, in the real minecraft:create ----------
+{
+  const payload = Buffer.from('a stand-in for Paper');
+  const paperSha = createHash('sha256').update(payload).digest('hex');
+  const http = await import('http');
+  const server = http.createServer((req, res) => {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    if (req.url === '/paper/versions/1.21.1/builds') res.end(J([{ id: 1, channel: 'STABLE', downloads: { 'server:default': { url: `${base}/paper.jar`, size: payload.length, checksums: { sha256: paperSha } } } }]));
+    else if (req.url === '/paper.jar') res.end(payload);
+    else { res.statusCode = 404; res.end(); }
+  });
+  await new Promise((r) => { server.listen(0, '127.0.0.1', r); });
+  const before = process.env.PYIDE_MC_SOURCES;
+  process.env.PYIDE_MC_SOURCES = J({ paper: `http://127.0.0.1:${server.address().port}/paper` });
+  const load = Module._load;
+  const userData = freshDir();
+  const stub = new Proxy({}, { get: (_t, key) => (key === 'app' ? { getPath: () => userData, on() {}, isPackaged: false, getVersion: () => '0.0.0', getName: () => 'test' } : class {}) });
+  Module._load = function loadWithoutElectron(request, parent, isMain) { return request === 'electron' ? stub : load.call(this, request, parent, isMain); };
+  const name = require.resolve('../main/features/minecraft.js');
+  const held = require.cache[name];
+  delete require.cache[name];
+  const feature = require('../main/features/minecraft.js');
+  Module._load = load;
+  require.cache[name] = held;
+  const handlers = new Map();
+  feature.register({ ipcMain: { handle: (h, fn) => handlers.set(h, fn), on() {} }, send() {}, startProcess() {}, procs: new Map(), diagnostics: { logger: () => ({ warn() {}, info() {} }) } });
+  const root = freshDir();
+  const create = (n) => handlers.get('minecraft:create')({}, { root, name: n, kind: 'paper', mc: '1.21.1', memory: '256M', port: 25599, eula: true }, 'job');
+  await create('Plain');
+  check(existsSync(path.join(root, 'servers', 'Plain', 'pyide-server.json')) && !existsSync(path.join(root, 'servers', 'Plain', 'plugins', 'NanoBridge.jar')), 'minecraft:create adds no plugin while the default is off');
+  writeFileSync(path.join(userData, 'settings.json'), J({ 'minecraft.detailedLogNewServers': true }));
+  await create('Logged');
+  check(existsSync(path.join(root, 'servers', 'Logged', 'plugins', 'NanoBridge.jar')), 'and adds it once the owner turned the default on');
+  const all = await handlers.get('players:bridgeServers')({}, root);
+  check(all.length === 2 && all.find((s) => s.name === 'Logged').installed === 'current' && all.find((s) => s.name === 'Plain').installed === 'none', `players:bridgeServers lists the project: ${J(all.map((s) => [s.name, s.installed]))}`);
+  const done = await handlers.get('players:bridgeInstall')({}, root, path.join(root, 'servers', 'Plain'));
+  check(done.ok && existsSync(path.join(root, 'servers', 'Plain', 'plugins', 'NanoBridge.jar')), 'players:bridgeInstall from another server\'s tab');
+  server.close();
+  if (before === undefined) delete process.env.PYIDE_MC_SOURCES;
+  else process.env.PYIDE_MC_SOURCES = before;
 }
 
 const failed = results.filter((r) => !r.ok);

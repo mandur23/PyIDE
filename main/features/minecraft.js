@@ -20,14 +20,19 @@ const market = require('../minecraft/market');
 const gameWindow = require('../minecraft/game-window');
 const translation = require('../minecraft/translate');
 const serverSettings = require('../minecraft/server-settings');
+const xray = require('../minecraft/anti-xray');
 const { createLauncher } = require('../minecraft/launcher');
 const fileServer = require('../minecraft/file-server');
 const { createPlayers } = require('../minecraft/players');
+const { forNewServer } = require('../minecraft/players/bridge');
 const { complete } = require('../ai/claude');
-const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
+const { privateShare } = require('./port-sharing');
+const { app, BrowserWindow, desktopCapturer, safeStorage, screen } = require('electron');
 const { allowWindowCapture } = require('../security');
 
 const SERVER = 'pyide-server.json';
+// The app-wide level new servers start with, in settings.json: the Server Settings tab writes it through ide.settings.
+const XRAY_DEFAULT = 'minecraft.antiXrayDefault';
 const PLUGIN = 'pyide-plugin.json';
 const MOD = 'pyide-mod.json';
 const NAME = /^[A-Za-z][\w-]{0,39}$/;
@@ -221,8 +226,10 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
       if (!fs.existsSync(path.join(dir, 'server.properties'))) fs.writeFileSync(path.join(dir, 'server.properties'), `server-port=${port}\nmotd=${name}\n`);
     }
     for (const sub of source.plugins ? ['plugins'] : source.mods ? ['mods'] : []) fs.mkdirSync(path.join(dir, sub), { recursive: true });
-    const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, mdk: r.mdk || null };
+    const antiXrayPending = xray.newServerLevel({ ...source, mc }, readJson(path.join(app.getPath('userData'), 'settings.json'))?.[XRAY_DEFAULT]);
+    const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, mdk: r.mdk || null, ...(antiXrayPending && { antiXrayPending }) };
     writeJson(path.join(dir, SERVER), desc);
+    forNewServer(readJson(path.join(app.getPath('userData'), 'settings.json')), dir, { kind, version: mc }, log);
     log(`Created ${path.relative(root, dir)}\n`);
     return { name, dir, ...desc };
   } catch (err) {
@@ -679,17 +686,22 @@ function applyResourcePack(dir, url, sha1) {
 // ---------- settings ----------
 // The Server Settings tab: server.properties and the player lists (main/minecraft/server-settings.js), and from
 // pyide-server.json the memory and the JVM options (null: the defaults above). A proxy keeps the rest in velocity.toml.
+const xrayView = (desc) => ({ ...KINDS[desc.kind], mc: desc.mc, pending: desc.antiXrayPending });
 function settings(dir) {
   const desc = serverOf(dir);
   const proxy = !!KINDS[desc.kind]?.proxy;
   return { proxy, memory: desc.memory || '2G', jvmArgs: Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : null,
     defaultJvmArgs: proxy ? PROXY_JVM_ARGS : SERVER_JVM_ARGS, schema: proxy ? [] : serverSettings.PROPERTIES,
-    ...(proxy ? { props: {}, whitelist: [], ops: [] } : serverSettings.read(dir)) };
+    antiXray: xray.status(dir, xrayView(desc)), ...(proxy ? { props: {}, whitelist: [], ops: [] } : serverSettings.read(dir)) };
 }
-// Only what is given changes; everything is checked before anything is written.
-function saveSettings(dir, { memory, jvmArgs, props, whitelist, ops } = {}) {
+// Only what is given changes; everything is checked before anything is written. A refused anti-xray level comes back as
+// a value (antiXrayRefused) with nothing written, because the tab words it from the code and IPC errors lose theirs.
+function saveSettings(dir, { memory, jvmArgs, props, whitelist, ops, antiXray } = {}) {
   const desc = serverOf(dir);
   const next = { ...desc };
+  const plan = antiXray === undefined ? null : xray.planned(dir, xrayView(desc), antiXray);
+  if (plan?.refused) return { ...settings(dir), antiXrayRefused: plan.refused };
+  if (plan) delete next.antiXrayPending;
   if (memory !== undefined) {
     if (!/^\d+[MG]$/i.test(memory || '')) throw fail('Memory is a number of M or G, such as 2G');
     next.memory = memory.toUpperCase();
@@ -700,10 +712,30 @@ function saveSettings(dir, { memory, jvmArgs, props, whitelist, ops } = {}) {
     if (jvmArgs.some((a) => /^-Xmx/i.test(a))) throw fail('Set the memory with Memory, not -Xmx');
     next.jvmArgs = jvmArgs;
   }
-  if (!KINDS[desc.kind]?.proxy) serverSettings.write(dir, { props, whitelist, ops });
+  const writeProps = KINDS[desc.kind]?.proxy ? null : serverSettings.prepare(dir, { props, whitelist, ops });
+  // Anti-xray's files go first: they are the one write that can be refused whole, and a Save it refuses saves nothing.
+  const refused = plan && xray.commit(plan.changes);
+  if (refused) return { ...settings(dir), antiXrayRefused: refused };
+  writeProps?.();
   writeJson(path.join(dir, SERVER), next);
   return settings(dir);
 }
+// The other servers of the project, as "apply to my other servers" lists them.
+const xrayServers = (root, except) => servers(root).filter((s) => !sameDir(s.dir, except))
+  .map((s) => ({ name: s.name, dir: s.dir, kind: s.kind, mc: s.mc, ...xray.status(s.dir, xrayView(s)) }));
+// One result a server: a failure on one does not stop the next.
+const applyXray = (dirs, level) => dirs.map((dir) => {
+  const name = path.basename(dir);
+  try {
+    const desc = serverOf(dir);
+    const r = xray.assign(dir, xrayView(desc), level);
+    if (r.pending !== undefined && r.pending !== (desc.antiXrayPending ?? null)) {
+      if (r.pending) desc.antiXrayPending = r.pending; else delete desc.antiXrayPending;
+      writeJson(path.join(dir, SERVER), desc);
+    }
+    return { name, dir, ...r };
+  } catch (err) { return { name, dir, outcome: 'refused', code: 'unwritable', file: '', detail: err.message }; }
+});
 
 
 // ---------- Korean translation ----------
@@ -724,7 +756,13 @@ async function translateMods(dir, log, signal) {
 
 const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile });
 
-const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried });
+// A saved private server's key, encrypted as a data source's password is, but with no plain fallback: without safeStorage
+// it stays in memory and the friend pastes the code again.
+const keyring = {
+  seal: (key) => (safeStorage.isEncryptionAvailable() ? { enc: 'safeStorage', data: safeStorage.encryptString(key).toString('base64') } : null),
+  open: (sealed) => { try { return safeStorage.decryptString(Buffer.from(sealed.data, 'base64')); } catch { return null; } },
+};
+const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring });
 
 const imports = (root) => createImports({ root, servers: () => servers(root), create, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
@@ -758,6 +796,13 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   playersChannel('names', (dir) => players.names(dir));
   playersChannel('adminLog', (dir, opts) => players.adminLog(dir, opts));
   playersChannel('watch', (dir, on) => players.watch(dir, on));
+  playersChannel('bridge', (dir) => players.bridgeStatus(dir));
+  playersChannel('bridgeInstall', (dir) => players.bridgeInstall(dir));
+  playersChannel('bridgeRemove', (dir) => players.bridgeRemove(dir));
+  ipcMain.handle('players:bridgeServers', (_e, root) => {
+    guard(root);
+    return servers(root).map((s) => ({ name: s.name, dir: s.dir, kind: s.kind, mc: s.mc, ...players.bridgeStatus(s.dir) }));
+  });
   app.on('will-quit', players.closeAll);
   // A job's output goes to the window as minecraft:log {job, text}.
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
@@ -765,7 +810,21 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('minecraft:versions', (_e, kind) => KINDS[kind]?.versions() ?? []);
   ipcMain.handle('minecraft:servers', (_e, root) => (root ? servers(root) : []));
   ipcMain.handle('minecraft:create', (_e, opts, job) => { guard(opts?.root); return create(opts, logTo(job)); });
-  ipcMain.handle('minecraft:launch', (_e, root, dir, job, opts) => { guard(root); return launch(dir, logTo(job), opts); });
+  // A level waiting in pyide-server.json goes in once the server's files exist: before a start, where that start reads
+  // it, and after a run, because a server's first run writes the files and only reads them at its next start (restart).
+  const settleXray = (dir, restart) => {
+    try {
+      const desc = readJson(path.join(dir, SERVER));
+      if (!desc?.antiXrayPending) return;
+      const r = xray.settle(dir, xrayView(desc));
+      if (r.clear) {
+        delete desc.antiXrayPending;
+        writeJson(path.join(dir, SERVER), desc);
+      }
+      if (r.outcome === 'applied' || r.outcome === 'refused') send('minecraft:antiXray', { dir, restart, ...r });
+    } catch (err) { playersLog.warn(`anti-xray: ${err.message}`); }
+  };
+  ipcMain.handle('minecraft:launch', (_e, root, dir, job, opts) => { guard(root); settleXray(dir, false); return launch(dir, logTo(job), opts); });
   // Starts a launch spec ({cmd, args, cwd, env}) as an IDE process the Run window shows; -> process id.
   // A server's process gets a players session; a mod's Gradle task, which also starts here, does not.
   ipcMain.handle('minecraft:start', (_e, root, spec) => {
@@ -773,6 +832,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
     const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, filter: session?.filter });
     session?.attach(procs.get(id));
+    if (session) procs.get(id)?.once('close', () => settleXray(spec.cwd, true));
     return id;
   });
   // Whether nothing listens on a port (a server about to start there would fail to bind it).
@@ -818,6 +878,12 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     const r = saveSettings(dir, values);
     if (values?.props?.['server-port'] !== undefined) rewireProxies(root);
     return r;
+  });
+  ipcMain.handle('minecraft:antiXrayServers', (_e, root, except) => { guard(root); return xrayServers(root, except); });
+  ipcMain.handle('minecraft:antiXrayApply', (_e, root, dirs, level) => {
+    guard(root);
+    if (!Array.isArray(dirs) || !dirs.every((d) => inServers(root, d))) throw fail('Those are not servers of this project');
+    return applyXray(dirs, level);
   });
   ipcMain.handle('minecraft:player', (_e, name, online) => serverSettings.player(name, online, mojangProfile));
   ipcMain.handle('minecraft:langStatus', (_e, root, dir) => langStatus(dir));
@@ -878,4 +944,13 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
   ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));
   ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
+  // The join code of this server's private share, on request: ports:state never carries its key, and the window holds the
+  // code only to copy it.
+  ipcMain.handle('minecraft:privateCode', (_e, root, dir, options) => {
+    guard(root);
+    const share = privateShare(portOf(dir));
+    if (!share) throw fail('This server is not shared privately', 'notShared');
+    return craft.joinCode({ ...share, pack: options?.pack, name: path.basename(dir) });
+  });
+  app.on('will-quit', craft.stopJoins);
 };

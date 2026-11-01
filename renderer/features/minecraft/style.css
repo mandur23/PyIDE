@@ -13,6 +13,9 @@
 .mc-public { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
 .mc-public-addr { font-family: var(--mono); user-select: text; }
 .mc-public-error { color: var(--red); }
+.mc-lan { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.mc-lan-addr { font-family: var(--mono); user-select: text; }
+.mc-private-note { flex-basis: 100%; }
 .mc-server-note:empty { display: none; }
 .mc-builds { display: flex; flex-direction: column; gap: 4px; }
 .mc-build { display: flex; align-items: center; gap: 6px; padding-left: 16px; }
@@ -144,6 +147,24 @@
 .mcset-pname { width: 220px; }
 .mcset-perror { color: var(--red); font-size: 12px; }
 .mcset-perror:empty { display: none; }
+.mcset-xray { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.mcset-xray .mcset-note { margin: 0; }
+.mcset-xray-market { align-self: flex-start; }
+.mcset-xray-levels { display: flex; flex-direction: column; border: 1px solid var(--gray3); border-radius: 6px; overflow: hidden; }
+.mcset-xray-level { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--gray3); cursor: pointer; }
+.mcset-xray-level:last-child { border-bottom: 0; }
+.mcset-xray-level:hover { background: var(--gray2); }
+.mcset-xray-level:has(input:checked) { background: color-mix(in srgb, var(--blue6) 14%, transparent); }
+.mcset-xray-level input { margin: 2px 0 0; flex-shrink: 0; }
+.mcset-xray-text { display: flex; flex-direction: column; min-width: 0; }
+.mcset-xray-name { font-weight: 500; }
+.mcset-xray-new { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.mcset-xray-now { margin: 0; }
+.mcset-row > .mcset-xray-others { justify-self: end; }
+.mcset-xray-list { display: flex; flex-direction: column; max-height: 320px; overflow: auto; border: 1px solid var(--gray3); border-radius: 6px; }
+.mcset-xray-server { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--gray3); }
+.mcset-xray-server:last-child { border-bottom: 0; }
+.mcset-xray-restart { flex-shrink: 0; }
 .mcset-foot { display: flex; align-items: center; gap: 8px; padding: 10px 28px; border-top: 1px solid var(--gray3); background: var(--gray2); }
 .mcset-status { flex: 1; font-size: 12px; }
 .mcset-status.mcset-error { color: var(--red); padding: 0; }
@@ -202,6 +223,7 @@ body.app-craft.mc-craft-tab #craftHost { display: none !important; }
 /* Small text: --gray10 flips with the theme, so a chip's own colour mixed with it reads on either background. */
 .mcc-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray10); white-space: nowrap; }
 .mcc-chip.sync { background: color-mix(in srgb, var(--green6) 22%, transparent); color: color-mix(in srgb, var(--green6) 45%, var(--gray10)); }
+.mcc-chip.private { background: color-mix(in srgb, var(--blue6) 20%, transparent); color: color-mix(in srgb, var(--blue6) 40%, var(--gray10)); }
 .mcc-chip.bad { background: color-mix(in srgb, var(--red) 18%, transparent); color: color-mix(in srgb, var(--red) 45%, var(--gray10)); }
 .mcc-facts { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; min-width: 0; }
 .mcc-server-of { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -296,6 +318,32 @@ body.app-craft.mc-craft-tab #craftHost { display: none !important; }
 .mcpl-inv-note { margin-top: 0; }
 .mcpl-inv-note.bad { color: color-mix(in srgb, var(--red) 55%, var(--gray10)); }
 .mcpl-inv-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.mcpl-inv-tools { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-bottom: 12px; }
+.mcpl-palette { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mcpl-palette-line { display: flex; align-items: flex-end; gap: 8px; }
+.mcpl-palette-find { flex: 1 1 auto; min-width: 0; }
+.mcpl-palette-line .mcpl-field { flex: 0 0 72px; }
+.mcpl-palette-note { font-size: 12px; }
+.mcpl-palette-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
+.mcpl-palette-row { display: flex; align-items: center; gap: 4px; max-width: 180px; padding: 2px 6px; border: 1px solid var(--gray5); border-radius: 4px; cursor: grab; touch-action: none; user-select: none; }
+.mcpl .mcset-tools { flex-wrap: wrap; flex-shrink: 1; min-width: 0; justify-content: flex-end; }
+.mcpl-trash { flex: 0 0 144px; box-sizing: border-box; min-height: 56px; display: flex; align-items: center; justify-content: center; padding: 4px 8px; text-align: center; font-size: 12px; border: 2px dashed var(--gray5); border-radius: 6px; }
+.mcpl-trash.drop { border-color: var(--red); background: color-mix(in srgb, var(--red) 18%, transparent); }
+.mcpl-tile.editable.filled { touch-action: none; }
+.mcpl-tile.dragging, .mcpl-palette-row.dragging { opacity: 0.35; }
+.mcpl-tile.drop { outline: 2px solid #fff; outline-offset: -2px; background: #bcd9a8; }
+.mcpl-ghost { position: fixed; left: 0; top: 0; z-index: 95; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; pointer-events: none; background: #8b8b8b; border: 1px solid #fff; box-shadow: 0 2px 6px rgb(0 0 0 / 40%); }
+.mcpl-ghost .mcpl-durability { display: none; }
+body.mcpl-dragging, body.mcpl-dragging * { cursor: grabbing !important; user-select: none; }
+.mcpl-bridge.on { border-color: var(--green6); }
+.mcpl-bridge-offer p { margin: 0 0 8px; line-height: 1.5; }
+.mcpl-bridge-tell { font-weight: 600; }
+.mcpl-bridge-report { gap: 6px; }
+.mcpl-bridge-line { display: flex; gap: 8px; align-items: baseline; }
+.mcpl-bridge-name { flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.mcpl-bridge-says { flex: 1 1 auto; min-width: 0; }
+.mcpl-bridge-says.bad { color: var(--red); }
+.mcpl-result-wrong { padding: 2px 0; }
 /* The game's inventory screen, with its own colours in either theme. */
 .mcpl-inv { --tile: 40px; width: 100%; max-width: calc(9 * var(--tile) + 8 * 2px + 28px); box-sizing: border-box; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px;
   background: #c6c6c6; color: #3f3f3f; border: 2px solid; border-color: #fff #555 #555 #fff; border-radius: 3px; }

@@ -370,8 +370,12 @@ try {
   const desc = JSON.parse(readFileSync(path.join(serverDir('survival'), 'pyide-server.json'), 'utf8'));
   check(desc.kind === 'paper' && desc.java === 17 && desc.build === 7 && /eula=true/.test(readFileSync(path.join(serverDir('survival'), 'eula.txt'), 'utf8')),
     `the server is described with its Java from Mojang's data, and eula.txt records the agreement (${S(desc)})`);
+  await js(`(ide.settings.set('minecraft.antiXrayDefault', 'strong'), ide.settings.flush(), true)`);
   check(await create({ name: 'purp', kind: 'purpur', mc: '1.20.1', memory: '2G', port: 25614 }), 'a Purpur server is created');
-  check(JSON.parse(readFileSync(path.join(serverDir('purp'), 'pyide-server.json'), 'utf8')).build === 99, "Purpur's build is checked against the MD5 its service lists");
+  await js(`(ide.settings.set('minecraft.antiXrayDefault', 'off'), ide.settings.flush(), true)`);
+  const purpDesc = JSON.parse(readFileSync(path.join(serverDir('purp'), 'pyide-server.json'), 'utf8'));
+  check(purpDesc.build === 99, "Purpur's build is checked against the MD5 its service lists");
+  check(purpDesc.antiXrayPending === 'strong' && !('antiXrayPending' in desc), 'a server made under an anti-xray default keeps that level waiting for its first start, and one made without a default has none');
   check(!(await create({ name: 'broken', kind: 'vanilla', mc: '1.19.4', memory: '2G', port: 25612 })) && !existsSync(serverDir('broken')),
     'a download whose checksum does not match leaves no server behind');
 
@@ -427,13 +431,13 @@ try {
 
   // ---------- sharing ----------
   await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), true)`);
-  await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
+  await js(`(${card('survival')}.querySelector('.mc-share-public').click(), true)`);
   await until(`!!${dialogButton('Share Without It')}`, 'whitelist offer', 10000);
   check(await js(`/whitelist/.test(document.querySelector('.dialog').textContent) && !!${dialogButton('Turn On and Share')}`), 'sharing a server without a whitelist offers to turn it on');
   await js(`(${dialogButton('Share Without It')}.click(), true)`);
   await until(`${card('survival')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40611'`, 'public address on the card', 30000)
     .then(() => check(true, 'Share puts the public address players join with on the server card'), async () => check(false, `the card shows the public address: ${S(await js(`${card('survival')}?.textContent`))} ${S(await js(`({ ports: ide.ports.state(), balloons: [...document.querySelectorAll('.ide-balloon')].map((b) => b.textContent) })`))}`));
-  check(await js(`!${card('survival')}.querySelector('.mc-share') && !!${card('survival')}.querySelector('.mc-public-copy')`), 'a shared server offers Copy Address and Stop Sharing instead of Share');
+  check(await js(`!${card('survival')}.querySelector('.mc-share') && !${card('survival')}.querySelector('.mc-share-public') && !!${card('survival')}.querySelector('.mc-public-copy')`), 'a shared server offers Copy Address and Stop Sharing instead of Share and Share Publicly');
   await shot('shared-server.png');
   await js(`(${card('survival')}.querySelector('.mc-public-stop').click(), true)`);
   await until(`!${card('survival')}?.querySelector('.mc-public') && !!${card('survival')}?.querySelector('.mc-share')`, 'sharing stopped', 15000)
@@ -485,7 +489,7 @@ try {
   check(/-XX:G1HeapRegionSize=4M .*-XX:MaxInlineLevel=15/.test(proxyCmd) && !/G1NewSizePercent|AlwaysPreTouch/.test(proxyCmd), 'the proxy starts with Velocity\'s recommended GC options');
   // A server behind the proxy has account checks off: Share offers the proxy instead.
   await startServer('survival');
-  await js(`(${card('survival')}.querySelector('.mc-share').click(), true)`);
+  await js(`(${card('survival')}.querySelector('.mc-share-public').click(), true)`);
   await until(`!!${dialogButton('Share the Proxy')}`, 'share-the-proxy question', 10000)
     .then(() => check(true, 'sharing a server behind the proxy warns that its account checks are off and offers the proxy'), () => check(false, 'sharing a server behind the proxy warns and offers the proxy'));
   await js(`(${dialogButton('Share the Proxy')}?.click(), true)`);
@@ -708,7 +712,7 @@ try {
     .catch(async (e) => { console.log(await js(`document.querySelector('.mcset')?.textContent`)); throw e; });
   check(await js(`ide.activeTab()?.path.startsWith('minecraft:settings:') && ${field('motd')}.value === 'modded' && ${field('server-port')}.value === '25612' && ${field('$memory')}.value === '2G'
     && !${field('$jvmDefault')}.checked && ${field('$jvm')}.value === '-XX:+UseSerialGC' && ${field('view-distance')}.value === '10' && !${inTab('.mc-translate-run')}.disabled
-    && [...document.querySelectorAll('.mcset-page')].map((p) => p.dataset.section).join() === 'general,game,world,players,performance,mods,other' && ${inTab('.mcset-save')}.disabled`),
+    && [...document.querySelectorAll('.mcset-page')].map((p) => p.dataset.section).join() === 'general,game,world,players,performance,antixray,mods,other' && ${inTab('.mcset-save')}.disabled`),
     'Settings… opens the server\'s settings tab: its sections, the file\'s values (a missing line shows the server\'s default), the JVM options and the mods\' lines without Korean');
   await enter('max-players', '8');
   await enter('difficulty', 'hard', 'change');

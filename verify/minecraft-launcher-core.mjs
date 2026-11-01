@@ -427,7 +427,7 @@ try {
   delete process.env.PYIDE_MC_STORE;
   const running = path.basename(process.execPath);
   check(await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: running }) === true && await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: 'no-such-launcher.exe' }) === false, `a running launcher is told from none by its process name (${running})`);
-  check(await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: running, SystemRoot: path.join(work, 'nowhere') }) === false, 'tasklist runs from the system folder by its full path, so a planted one is never found on the way');
+  check(await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: running, SystemRoot: path.join(work, 'nowhere') }) === null, 'tasklist runs from the system folder by its full path, so a planted one is never found on the way, and no answer is neither open nor closed');
 
   // ---------- the server list ping ----------
   const P = require('../main/minecraft/ping.js');

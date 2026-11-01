@@ -18,6 +18,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import zlib from 'zlib';
 import { launch, processSnapshot } from './lib.mjs';
 
@@ -66,9 +67,18 @@ function standIn() {
     say(`${name} left the game`);
   };
   const needs = (name, then) => (online.has(name) ? then(online.get(name)) : say('No player was found'));
+  const game = cfg.game ? require(cfg.game.path).createGame({ version: cfg.mc, name: 'Steve', stacks: cfg.game.stacks }) : null;
+  let losing = null; // a slot that empties right after the next copy, as a stack can go between two lines
   function command(line) {
     let m;
     if (line === 'stop') { log('Stopping the server'); process.stdout.write('', () => process.exit(0)); return; }
+    if (game && line === 'data get entity Steve' && online.has('Steve')) { say(`Steve has the following entity data: ${game.data()}`); return; }
+    const said = game?.run(line);
+    if (said) {
+      said.forEach(say);
+      if (losing !== null && line.includes(' from entity ')) { game.held.delete(losing); losing = null; }
+      return;
+    }
     if (line === 'list') { const names = [...online.keys()]; say(`There are ${names.length} of a max of 20 players online: ${names.join(', ')}`); return; }
     if ((m = /^data get entity (\S+)(?: (\S+))?$/.exec(line))) {
       const p = online.get(m[1]);
@@ -113,6 +123,9 @@ function standIn() {
   function control(line) {
     const [word, ...rest] = line.split(' ');
     if (word === 'emit') log(rest.join(' '));
+    if (word === 'click') game.swap(Number(rest[0]), Number(rest[1]));
+    if (word === 'lose') losing = Number(rest[0]);
+    if (word === 'stacks') fs.writeFileSync('stacks.json', JSON.stringify(Object.fromEntries(game.held)));
     if (word === 'told') say(rest.join(' '));
     if (word === 'ghost') online.set(rest[0], { x: 1, y: 64, z: 1, dimension: cfg.dimension });
     if (word === 'join') {
@@ -195,6 +208,15 @@ write(path.join(serverDir('modern'), 'standin.json'), S({ kind: 'vanilla', mc: '
 write(path.join(serverDir('modern'), 'usercache.json'), S([{ name: 'Steve', uuid: STEVE }, { name: 'Alex', uuid: ALEX }]));
 write(path.join(serverDir('proxy'), 'pyide-server.json'), desc('velocity', '3.4.0'));
 write(path.join(serverDir('proxy'), 'standin.json'), S({ kind: 'vanilla', mc: '3.4.0', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld' }));
+const GAME = path.join(path.dirname(fileURLToPath(import.meta.url)), 'minecraft-players-game.cjs');
+const DRAG_STACKS = { 0: { id: 'minecraft:diamond_sword', count: 1, extra: 'components: {"minecraft:damage": 12}' }, 1: { id: 'minecraft:dirt', count: 32 }, 2: { id: 'minecraft:diamond', count: 3 }, 9: { id: 'minecraft:stone', count: 64 }, 10: { id: 'minecraft:dirt', count: 7 }, 200: { id: 'minecraft:diamond', count: 5 } };
+write(path.join(serverDir('drag'), 'pyide-server.json'), desc('paper', '1.21.1'));
+write(path.join(serverDir('drag'), 'standin.json'), S({ kind: 'paper', mc: '1.21.1', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld', game: { path: GAME, stacks: DRAG_STACKS } }));
+write(path.join(serverDir('drag'), 'usercache.json'), S([{ name: 'Steve', uuid: STEVE }, { name: 'Alex', uuid: ALEX }]));
+write(path.join(serverDir('drag'), 'world', 'playerdata', `${STEVE}.dat`), savedSteve);
+write(path.join(serverDir('papertwo'), 'pyide-server.json'), desc('purpur', '1.21.1'));
+write(path.join(serverDir('papertwo'), 'standin.json'), S({ kind: 'paper', mc: '1.21.1', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld' }));
+write(path.join(serverDir('paperold'), 'pyide-server.json'), desc('paper', '1.19.4'));
 write(path.join(serverDir('big'), 'pyide-server.json'), desc('vanilla', '1.21.1'));
 const crowd = Array.from({ length: 3000 }, (_, i) => ({ name: `Player${i}`, uuid: `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`, expiresOn: '2030-01-01 00:00:00 +0000' }));
 write(path.join(serverDir('big'), 'usercache.json'), S(crowd));
@@ -288,7 +310,27 @@ function helpers({ js, until, cdp, sleep }) {
     await mouse(`document.querySelector('${host} .mc-server[data-name="${name}"] .mc-players')`);
     await until(`${tabOf} && ide.activeTab()?.path.endsWith(${S(`servers\\${name}`.toLowerCase())})`, `the players tab of ${name}`, 10000);
   };
-  return { q, qa, press, textOf, setValue, row, folded, choose, section, answer, resultOf, openCard, mouse, hover, away, spotOf };
+  // A press, moves with the button held, and a release, all through the input pipeline. `during` runs over the target.
+  const dragTo = async (fromExpr, toExpr, { during, keepHolding } = {}) => {
+    const from = await spotOf(fromExpr);
+    const to = await spotOf(toExpr, true);
+    await moveTo(from.x, from.y);
+    await down(from);
+    await sleep(30);
+    const held = (x, y) => cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+    await held(from.x + 6, from.y + 6);
+    await sleep(30);
+    await held((from.x + to.x) / 2, (from.y + to.y) / 2);
+    await sleep(30);
+    await held(to.x, to.y);
+    await sleep(40);
+    const seen = await during?.(to);
+    if (keepHolding) return seen;
+    await up(to);
+    await sleep(60);
+    return seen;
+  };
+  return { q, qa, press, textOf, setValue, row, folded, choose, section, answer, resultOf, openCard, mouse, hover, away, spotOf, dragTo, up };
 }
 // Real press and release on the button below an open list, and in the dialog, where the list used to open by itself.
 // The list must move nothing, whatever it does on the blur the press causes.
@@ -517,8 +559,8 @@ try {
   await until(`/Live from the server/.test(${q('.mcpl-inv-note')}?.textContent)`, 'live inventory', 10000);
   const live = await js(`({ count: ${qa('.mcpl-tile.filled')}.length, dirt: ${q('.mcpl-tile[data-slot="1"] .mcpl-count')}?.textContent, held: ${q('.mcpl-tile.held')}.dataset.slot, editable: ${qa('.mcpl-tile.editable')}.length,
     enderEditable: ${qa('.mcpl-tile[data-ender].editable')}.length, chest: ${q('.mcpl-tile[data-slot="102"]')}.dataset.id, offhand: ${q('.mcpl-tile[data-slot="-106"]')}.dataset.id })`);
-  check(live.count === 6 && live.dirt === '32' && live.held === '1' && live.editable === 41 && live.enderEditable === 0 && live.chest === 'minecraft:diamond_chestplate' && live.offhand === 'minecraft:shield',
-    `a live inventory in the [components] format: slots can be edited, the ender chest cannot (${S(live)})`);
+  check(live.count === 6 && live.dirt === '32' && live.held === '1' && live.editable === 68 && live.enderEditable === 27 && live.chest === 'minecraft:diamond_chestplate' && live.offhand === 'minecraft:shield',
+    `a live inventory in the [components] format: slots can be edited, the ender chest too (${S(live)})`);
   await until(`!!${q('.mcpl-tile[data-slot="0"] img')}`, 'the icon of a catalog item', 5000);
   const plain = await js(`({ icon: ${q('.mcpl-tile[data-slot="0"] img')}.src.startsWith('data:image/png'), word: ${q('.mcpl-tile[data-slot="102"] .mcpl-tile-id')}?.textContent, id: ${q('.mcpl-tile[data-slot="102"]')}.dataset.id })`);
   check(plain.icon && plain.word === 'DC' && plain.id === 'minecraft:diamond_chestplate', `an item in the catalog shows its icon, one not in it a short word (${S(plain)})`);
@@ -942,7 +984,7 @@ try {
   check(true, '26.3: data get answers reach the overview, and polled positions follow');
   await section('inventory');
   await until(`${q('.mcpl-tile[data-slot="3"]')}?.dataset.id === 'minecraft:bow' && /Live from the server/.test(${q('.mcpl-inv-note')}?.textContent)`, 'the live inventory on 26.3', 10000);
-  check(await js(`${qa('.mcpl-tile.editable')}.length`) === 41, '26.3: the inventory is live and its slots can be edited');
+  check(await js(`${qa('.mcpl-tile.editable')}.length`) === 68, '26.3: the inventory is live and its slots can be edited');
   await tell(t, modern, 'told Steve was slain by Zombie');
   await tell(t, modern, 'told Zombie showed Steve that not just the floor is lava');
   await tell(t, modern, 'told Steve has made the advancement [Stone Age]');
@@ -1257,6 +1299,236 @@ const english = (ctx) => ctx.js(`(() => {
   } catch (err) {
     check(false, `Craft run stopped early: ${err.message}`);
     await c.shot('failure-craft.png').catch(() => {});
+  }
+  t.consoleErrors.push(...c.consoleErrors);
+  t.cspViolations.push(...c.cspViolations);
+  c.close();
+}
+
+// ---------- dragging items, and detailed logging ----------
+{
+  const c = await launch({ name: 'minecraft-players', port: 9935, lang: 'ko', mode: 'craft', projectDir: project, env });
+  c.korean = true;
+  const h = helpers(c);
+  const { js, until, shot, sleep } = c;
+  const { q, qa, dragTo, resultOf, section, choose, press, answer, setValue, mouse, textOf } = h;
+  const tile = (n, ender) => q(`.mcpl-tile[data-key="${ender ? 200 + n : n}"]`);
+  const filled = (n) => js(`${tile(n)}.classList.contains('filled')`);
+  const idAt = (n) => js(`${tile(n)}.dataset.id`);
+  const replaced = () => logOf('drag').filter((l) => l.includes('item replace')).length;
+  const stateClean = () => js(`!document.querySelector('.mcpl-ghost') && !document.body.classList.contains('mcpl-dragging') && !document.querySelector('.mcpl-tile.dragging, .mcpl-tile.drop')`);
+  const game = async (id) => {
+    await tell(c, id, 'stacks');
+    await sleep(120);
+    return JSON.parse(readFileSync(path.join(serverDir('drag'), 'stacks.json'), 'utf8'));
+  };
+  const detailed = (name) => path.join(serverDir(name), 'plugins', 'NanoBridge.jar');
+  const today = new Date().toISOString().slice(0, 10);
+  const bridgeFile = path.join(serverDir('drag'), '.nano', 'bridge', `${today}.jsonl`);
+  try {
+    await c.until(`!!document.querySelector('#craftHost .mcs-nav')`, 'the craft app', 15000);
+    if (!samePath(await c.js('ide.root'), project)) throw new Error('the craft window is not on the test project');
+    await stubRun(c);
+    await mouse(`document.querySelector('.mcs-page[data-page="servers"]')`);
+    await h.openCard('drag');
+    const id = await start(c, 'drag');
+    await until(`${q('.mcset-state')}?.textContent === '실행 중'`, 'the drag server running', 10000);
+    await tell(c, id, 'join Steve');
+    await choose('Steve');
+    await until(`/접속 중/.test(${q('.mcpl-flags')}?.textContent)`, 'Steve online', 10000);
+    await section('inventory');
+    await until(`${tile(0)}?.classList.contains('editable')`, 'a live inventory', 10000);
+    check(await js(`${tile(0, true).replace(/\.querySelector\(.*$/, '')}.querySelector('.mcpl-tile[data-ender].editable') !== null`), 'the ender chest takes part, its form being confirmed');
+    check(await js(`${q('.mcpl-trash')}.offsetParent !== null`), 'the trash shows on a live inventory');
+
+    const before = replaced();
+    const during = await dragTo(tile(0), tile(5), { during: async () => js(`({ ghost: !!document.querySelector('.mcpl-ghost'), source: ${tile(0)}.classList.contains('dragging'), target: ${tile(5)}.classList.contains('drop'), ghostOnTop: getComputedStyle(document.querySelector('.mcpl-ghost')).pointerEvents === 'none' })`) });
+    check(during.ghost && during.source && during.target && during.ghostOnTop, `a real drag shows the ghost, the source and the target: ${S(during)}`);
+    await until(`!${tile(0)}.classList.contains('filled') && ${tile(5)}.dataset.id === 'minecraft:diamond_sword'`, 'the moved slots repainted', 8000);
+    check(await stateClean(), 'nothing of the drag is left');
+    check(!(await js(`!!document.querySelector('.dialog')`)), 'the release does not open a slot dialog');
+    check(replaced() === before + 3, `a move is three steps: ${replaced() - before}`);
+    const sent = logOf('drag');
+    check(sent.at(-2)?.startsWith('execute if data entity Steve') && sent.at(-2).includes('hotbar.0 with minecraft:air') || sent.some((l) => l.includes('hotbar.0 with minecraft:air')), 'the clear is guarded');
+    const stacks = await game(id);
+    check(stacks[5]?.extra?.includes('minecraft:damage') && !stacks[0], `the game moved the stack with its data: ${S(stacks[5])}`);
+    await shot('drag-moved.png');
+
+    const swapped = await resultOf(() => dragTo(tile(1), tile(9)));
+    await until(`${tile(1)}.dataset.id === 'minecraft:stone' && ${tile(9)}.dataset.id === 'minecraft:dirt'`, 'the swapped slots repainted', 8000);
+    check(/맞바꿨어요/.test(swapped), `a filled slot swaps: ${swapped}`);
+    const afterSwap = await game(id);
+    check(afterSwap[1]?.id === 'minecraft:stone' && afterSwap[1].count === 64 && afterSwap[9]?.count === 32 && !afterSwap[35], 'and the temporary slot is empty again');
+
+    const count = replaced();
+    await dragTo(tile(2), tile(6), { keepHolding: true });
+    await js(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), true)`);
+    await sleep(60);
+    await h.up(await h.spotOf(tile(6), true));
+    await sleep(200);
+    check(await stateClean() && replaced() === count && await filled(2), 'Escape ends a drag and sends nothing');
+    check(!(await js(`!!document.querySelector('.dialog')`)), 'and the release after it opens nothing');
+
+    await dragTo(tile(2), q('.mcset-title'));
+    await sleep(200);
+    check(await stateClean() && replaced() === count && await filled(2), 'a drop outside any slot sends nothing');
+
+    const held = await dragTo(tile(2), tile(7), {
+      during: async () => {
+        await tell(c, id, 'click 2 3');
+        await sleep(100);
+        const node = `${tile(2)}`;
+        await js(`(window.__tile = ${node}, ${q('.mcpl-reload')}.click(), true)`);
+        await sleep(400);
+        return js(`({ same: window.__tile === ${node}, dragging: window.__tile.classList.contains('dragging') })`);
+      },
+    });
+    check(held.same && held.dragging, `a refresh during a drag does not pull the tile away: ${S(held)}`);
+    await until(`/바뀌어서 보내지 않았어요/.test(${q('.mcpl-result')}?.textContent)`, 'the change noticed', 8000);
+    check(replaced() === count, 'what changed in the game stops the move before any line is sent');
+    await until(`${tile(3)}.dataset.id === 'minecraft:diamond' && !${tile(2)}.classList.contains('filled')`, 'the held detail shown after the drag', 8000);
+    check(await stateClean(), 'and the tab shows the game again');
+    await tell(c, id, 'click 2 3');
+    await press('.mcpl-reload');
+    await until(`${tile(2)}.dataset.id === 'minecraft:diamond'`, 'back in place', 8000);
+
+    const toEnder = await resultOf(() => dragTo(tile(2), tile(1, true)));
+    await until(`${tile(1, true)}.dataset.id === 'minecraft:diamond'`, 'into the ender chest', 8000);
+    check(/옮겼어요/.test(toEnder) && logOf('drag').some((l) => l.includes('enderchest.1 from entity Steve hotbar.2')), `a stack into the ender chest: ${toEnder}`);
+
+    await dragTo(tile(10), q('.mcpl-trash'), { during: async () => check(await js(`${q('.mcpl-trash')}.classList.contains('drop')`), 'the trash lights up') });
+    await until(`[...document.querySelectorAll('.dialog')].length > 0`, 'the trash asks first', 5000);
+    const tossCount = replaced();
+    await answer('취소');
+    await sleep(150);
+    check(replaced() === tossCount && await filled(10), 'and saying no keeps the stack');
+    await dragTo(tile(10), q('.mcpl-trash'));
+    await answer('버리기');
+    await until(`!${tile(10)}.classList.contains('filled')`, 'thrown away', 8000);
+    check(replaced() === tossCount + 1, 'one line clears it');
+
+    await setValue('.mcpl-palette-find', 'stone');
+    await until(`${qa('.mcpl-palette-row')}.length > 0`, 'the item list', 8000);
+    await setValue('.mcpl-palette-count', '12');
+    const row = q('.mcpl-palette-row[data-id="minecraft:stone"]');
+    const placed = await resultOf(() => dragTo(row, tile(11)));
+    await until(`${tile(11)}.dataset.id === 'minecraft:stone'`, 'placed', 8000);
+    check(logOf('drag').some((l) => l.includes('hotbar') === false && l.endsWith('inventory.2 with minecraft:stone 12')) && /돌 12개/.test(placed), `the list's item lands with the list's count: ${placed}`);
+    const trashFromList = replaced();
+    await dragTo(row, q('.mcpl-trash'));
+    await sleep(150);
+    check(replaced() === trashFromList && !(await js(`!!document.querySelector('.dialog')`)), 'an item from the list has nothing to throw away');
+
+    await press(`.mcpl-tile[data-key="5"]`);
+    await until(`!!document.querySelector('.dialog .mcpl-slot-dest')`, 'a plain press still opens the dialog', 5000);
+    await js(`(() => { const s = document.querySelector('.dialog .mcpl-slot-dest'); s.value = '6'; return true; })()`);
+    await answer('이동');
+    await until(`${tile(6)}.dataset.id === 'minecraft:diamond_sword' && !${tile(5)}.classList.contains('filled')`, 'moved by the dialog', 8000);
+    check(true, 'the dialog is the keyboard\'s way to move a stack');
+
+    await tell(c, id, 'lose 12');
+    await sleep(100);
+    const lost = await resultOf(() => dragTo(tile(9), tile(12)));
+    check(/관리 기록에 남겼어요/.test(lost), `a stack lost in a move says where its data went: ${lost}`);
+    await press('.mcpl-open-log');
+    await until(`!!${q('.mcpl-log-row details')}`, 'the lost stack in the admin log', 8000);
+    await press('.mcpl-log-row details summary');
+    const kept = await js(`({ open: ${q('.mcpl-log-row details')}.open, text: ${q('.mcpl-log-row details')}.textContent })`);
+    check(kept.open && kept.text.includes('{Slot: 9b, id: "minecraft:dirt", count: 32}'), `the admin log shows the stack as the game printed it: ${S(kept)}`);
+    await shot('drag-lost-stack.png');
+    await choose('Steve');
+    await section('inventory');
+    await until(`${tile(6)}?.classList.contains('editable')`, 'the inventory again', 8000);
+
+    const spot = await dragTo(tile(6), tile(8), { keepHolding: true, during: async (to) => { await tell(c, id, 'leave Steve'); await until(`/접속 안 함|오프라인/.test(${q('.mcpl-flags')}?.textContent)`, 'Steve gone', 8000); return to; } });
+    await h.up(spot);
+    await sleep(200);
+    check(await stateClean(), 'a player who leaves ends the drag');
+    await until(`${qa('.mcpl-tile.editable')}.length === 0`, 'read only when offline', 8000);
+    check(/보기만 할 수 있어요/.test(await textOf('.mcpl-inv-note')) && await js(`${q('.mcpl-inv-tools')}.classList.contains('hidden')`), `offline stays read only, and says so: ${await textOf('.mcpl-inv-note')}`);
+    await shot('drag-offline.png');
+    await tell(c, id, 'join Steve');
+
+    check(/꺼짐/.test(await textOf('.mcpl-bridge')), `detailed logging starts off: ${await textOf('.mcpl-bridge')}`);
+    check(!existsSync(detailed('drag')), 'and no plugin is there');
+    await press('.mcpl-bridge');
+    await until(`!!document.querySelector('.dialog .mcpl-bridge-offer')`, 'the offer', 5000);
+    const offer = await js(`document.querySelector('.dialog .mcpl-bridge-offer').textContent`);
+    check(/plugins\//.test(offer) && /채팅은 읽지 않아요/.test(offer) && /다시 시작/.test(offer) && /플레이어에게 알려 주세요/.test(offer), `the offer says what it does: ${offer}`);
+    check(!(await js(`document.querySelector('.dialog .mcpl-bridge-new').checked`)), 'the default for new servers is off');
+    await shot('bridge-offer.png');
+    await answer('취소');
+    await sleep(100);
+    check(!existsSync(detailed('drag')), 'closing the offer installs nothing');
+    await press('.mcpl-bridge');
+    await until(`!!document.querySelector('.dialog .mcpl-bridge-offer')`, 'the offer again', 5000);
+    await mouse(`document.querySelector('.dialog .mcpl-bridge-new')`);
+    await sleep(800);
+    check(await js(`ide.settings.get('minecraft.detailedLogNewServers', false) === true`), 'the checkbox is the app-wide default');
+    await answer('플러그인 설치');
+    await until(`/재시작 필요/.test(${q('.mcpl-bridge')}?.textContent)`, 'a restart needed', 8000);
+    check(existsSync(detailed('drag')), 'install puts the jar in plugins/');
+
+    await press('.mcpl-bridge');
+    await until(`!!document.querySelector('.dialog .mcpl-bridge-offer')`, 'the offer for an installed plugin', 5000);
+    await answer('내 다른 서버에도 적용…');
+    await until(`[...document.querySelectorAll('.dialog')].length > 1`, 'the one confirmation', 5000);
+    const asked = await js(`${lastDialog}.textContent`);
+    check(/papertwo/.test(asked) && /알려 주세요/.test(asked) && !/vanilla/.test(asked.split('?')[0]) && !/paperold/.test(asked.split('?')[0]), `one confirmation names the servers and repeats the sentence: ${asked}`);
+    await answer('모두 설치');
+    await until(`!!document.querySelector('.mcpl-bridge-report')`, 'the report', 8000);
+    const line = (name) => js(`document.querySelector('.mcpl-bridge-line[data-server="${name}"] .mcpl-bridge-says')?.textContent ?? ''`);
+    check(/설치했어요/.test(await line('papertwo')) && existsSync(detailed('papertwo')), `done on the other Paper kind: ${await line('papertwo')}`);
+    check(/Vanilla/.test(await line('vanilla')) && !existsSync(detailed('vanilla')), `Vanilla keeps its reason: ${await line('vanilla')}`);
+    check(/Fabric/.test(await line('fabric')) && !existsSync(detailed('fabric')), `Fabric keeps its reason: ${await line('fabric')}`);
+    check(/1\.20/.test(await line('paperold')) && !existsSync(detailed('paperold')), `an old Paper says why: ${await line('paperold')}`);
+    await shot('bridge-report.png');
+    await answer('닫기');
+    await sleep(100);
+    await answer('취소');
+
+    const uuid = STEVE;
+    const rec = (o) => S({ v: 1, time: new Date().toISOString(), uuid, type: 'break', world: 'world', x: 10, y: 64, z: -5, n: 1, id: 'minecraft:stone', ...o });
+    write(bridgeFile, `${S({ v: 1, type: 'hello', plugin: '1.0.0' })}\n${rec({ n: 12, at: [[10, 64, -5], [11, 64, -5]] })}\n${rec({ type: 'hit', other: 'minecraft:zombie', weapon: 'minecraft:diamond_sword', amount: 11.5, id: undefined, n: 3 })}\n${rec({ type: 'take', id: 'minecraft:diamond', other: 'minecraft:chest', n: 4, x: 1, y: 2, z: 3 })}\n${rec({ type: 'pickup', id: 'minecraft:dirt', n: 5, x: 2 })}\n{"forged":`);
+    await until(`/켜짐/.test(${q('.mcpl-bridge')}?.textContent)`, 'the plugin\'s hello turns it on', 8000);
+    await section('timeline');
+    await until(`${qa('.mcpl-event[data-type="break"]')}.length === 1`, 'the record in the timeline', 8000);
+    await until(`/돌 12개를 캤어요/.test(${q('.mcpl-event[data-type="break"]')}.textContent)`, 'its Korean name from the item catalog', 8000);
+    const chips = await js(`${qa('.mcpl-timeline .mcpl-chip')}.map((c) => c.textContent)`);
+    check(['블록', '상자', '공격', '아이템'].every((w) => chips.includes(w)), `the four chips: ${chips}`);
+    await press('.mcpl-timeline .mcpl-chip[data-type="combat"]');
+    await until(`${qa('.mcpl-event')}.length === 1 && !!${q('.mcpl-event[data-type="hit"]')}`, 'the combat chip', 8000);
+    check(/11\.5/.test(await textOf('.mcpl-event[data-type="hit"]')), 'combat with its amount');
+    await press('.mcpl-timeline .mcpl-chip[data-type="combat"]');
+    await shot('bridge-timeline.png');
+    await press('.mcpl-open-search');
+    await setValue('.mcpl-all-search', '11 64 -5');
+    await until(`${qa('.mcpl-search .mcpl-event')}.length === 1`, 'who broke this block', 8000);
+    check(/Steve/.test(await textOf('.mcpl-search .mcpl-event')), 'a coordinate finds who broke the block');
+    await setValue('.mcpl-all-search', '다이아몬드');
+    await until(`!!${q('.mcpl-search .mcpl-event[data-type="take"]')}`, 'a block by its Korean name', 8000);
+    check(true, 'a Korean name finds the item\'s records');
+
+    await press('.mcpl-bridge');
+    await until(`!!document.querySelector('.dialog .mcpl-bridge-offer')`, 'the offer to remove', 5000);
+    await answer('플러그인 제거');
+    await until(`/꺼짐/.test(${q('.mcpl-bridge')}?.textContent)`, 'removed', 8000);
+    check(!existsSync(detailed('drag')), 'remove takes the jar out');
+    await js(`(ide.proc.input(${id}, 'stop\\n'), true)`);
+    await until(`${q('.mcset-state')}?.textContent === '중지됨'`, 'the drag server stopped', 8000);
+    await js(`(ide.closeTab(ide.activeTab().path, true), true)`);
+    await until(`getComputedStyle(document.getElementById('craftHost')).display !== 'none'`, 'the app back after the drag tab', 10000);
+
+    await h.openCard('fabric');
+    await until(`!!${q('.mcpl-bridge')}`, 'the fabric tab', 5000);
+    await until(`/사용 불가/.test(${q('.mcpl-bridge')}.textContent)`, 'not available on Fabric', 5000);
+    await press('.mcpl-bridge');
+    await until(`!!document.querySelector('.dialog .mcpl-bridge-why')`, 'the reason on Fabric', 5000);
+    check(/Fabric, Forge, NeoForge는 지원하지 않아요/.test(await js(`document.querySelector('.dialog .mcpl-bridge-why').textContent`)) && !(await js(`!!(${dialogButton('플러그인 설치')})`)), 'a Fabric server gets a reason and no install button');
+    await answer('닫기');
+  } catch (err) {
+    check(false, `Drag run stopped early: ${err.message}`);
+    await shot('failure-drag.png').catch(() => {});
   }
   t.consoleErrors.push(...c.consoleErrors);
   t.cspViolations.push(...c.cspViolations);

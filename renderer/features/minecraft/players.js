@@ -15,16 +15,22 @@
   const PAGE = 100;
   const FADE_MS = 8000; // how long a success stays
   const SEARCH_PUSH_MS = 1000;
+  const ITEM_WAIT_MS = 1500; // a first search of a version may wait for its client jar: the search does not
   const later = (fn, ms = 200) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(fn, ms, ...a); }; };
   const userText = (tag, cls, text) => { const n = el(tag, cls, text); n.dataset.userText = ''; return n; };
 
   const SECTIONS = () => [['overview', tr('Overview')], ['inventory', tr('Inventory')], ['timeline', tr('Timeline')], ['actions', tr('Manage')]];
-  const TYPES = () => [['join', tr('Joins')], ['leave', tr('Leaves')], ['chat', tr('Chat')], ['death', tr('Deaths')], ['advancement', tr('Advancements')], ['command', tr('Commands')]];
+  // A chip -> the event types it stands for. The last four are what the NanoBridge plugin records.
+  const TYPES = () => [['join', tr('Joins'), ['join']], ['leave', tr('Leaves'), ['leave']], ['chat', tr('Chat'), ['chat']], ['death', tr('Deaths'), ['death']], ['advancement', tr('Advancements'), ['advancement']],
+    ['command', tr('Commands'), ['command', 'cmd']], ['blocks', tr('Blocks'), ['break', 'place', 'ignite', 'bucket', 'sign']], ['chests', tr('Chests'), ['open', 'take', 'put']],
+    ['combat', tr('Combat'), ['hit', 'hurt', 'kill', 'pvp']], ['things', tr('Items'), ['pickup', 'drop']]];
+  const chipOf = (type) => TYPES().find(([, , types]) => types.includes(type));
   const GAMEMODES = () => [['survival', tr('Survival')], ['creative', tr('Creative')], ['adventure', tr('Adventure')], ['spectator', tr('Spectator')]];
   const DIMENSIONS = () => ({ 'minecraft:overworld': tr('Overworld'), 'minecraft:the_nether': tr('The Nether'), 'minecraft:the_end': tr('The End') });
   const ACTION_TITLES = () => ({
     give: tr('Give Item'), clear: tr('Clear Inventory'), replaceSlot: tr('Replace Slot'), teleport: tr('Teleport'), gamemode: tr('Game mode'), heal: tr('Heal'), feed: tr('Feed'), effect: tr('Effect'),
     whisper: tr('Whisper'), kick: tr('Kick'), ban: tr('Ban'), pardon: tr('Pardon'), op: tr('Make Operator'), deop: tr('Remove Operator'), whitelistAdd: tr('Add to Whitelist'), whitelistRemove: tr('Remove from Whitelist'),
+    moveItem: tr('Move Item'), bridgeInstall: tr('Turn On Detailed Logging'), bridgeRemove: tr('Turn Off Detailed Logging'),
   });
   // A result's code -> what the tab says. main's own text for these is English.
   const RESULTS = () => ({
@@ -36,6 +42,11 @@
     duration: tr('A duration is a whole number of seconds from 1 to 1000000.'), amplifier: tr('An amplifier is a whole number from 0 to 255.'), text: tr('The text is empty or too long (256 characters at most).'),
     version: tr('Nano Studio has no confirmed command for this on this server\'s Minecraft version, so nothing was sent.'), action: tr('That is not a player action.'),
     noItem: tr('Choose an item.'), noEffect: tr('Choose an effect.'),
+    offline: tr('The player is not online, so nothing was sent.'), changed: tr('Those slots changed in the game after this tab read them, so nothing was sent. Look at the inventory again and retry.'),
+    noRoom: tr('A swap goes through an empty inventory slot, and this player has none. Nothing was sent.'), armorFit: tr('That item does not go in that armor slot, so nothing was sent.'),
+    emptySlot: tr('That slot is empty, so nothing was sent.'), sameSlot: tr('The item is in that slot already.'),
+    notMoved: tr('Nothing moved. The slots are as they were, and nothing was sent again.'), mismatch: tr('The slots are not what they should be after this move. Nothing was sent again: check them below.'),
+    unconfirmed: tr('The commands were sent, but the server did not show the result. Check the inventory before doing anything else. Nothing was sent again.'),
   });
   const NOTES = () => ({
     heal: tr('Instant Health restores health at once. It leaves fire, poison and other effects alone, and it does not revive a dead player.'),
@@ -61,6 +72,9 @@
     deop: () => tr('{name} is no longer an operator.', { name }),
     whitelistAdd: () => tr('Added {name} to the whitelist.', { name }),
     whitelistRemove: () => tr('Took {name} off the whitelist.', { name }),
+    moveItem: () => (a.op === 'clear' ? tr('Threw away {item} from {slot} of {name}.', { name, item: w.item, slot: w.slot })
+      : a.op === 'place' ? tr('Put {count} of {item} in {slot} of {name}.', { name, item: w.item, slot: w.slot, count: a.count ?? 1 })
+        : w.swapped ? tr('Swapped {slot} and {other} of {name}.', { name, slot: w.slot, other: w.other }) : tr('Moved {item} to {slot} of {name}.', { name, item: w.item, slot: w.slot })),
   }[a.type]?.() ?? tr('It worked.'));
   const ID = /^[a-z0-9_.-]+:[a-z0-9_./-]+$/; // typed out in full: a bare word is a search that found nothing
 
@@ -109,6 +123,7 @@
       onClose: () => { for (const v of [...views]) if (sameDir(v.srv.dir, srv.dir)) closeView(v); } });
   }
   function closeView(v) {
+    mc.players.drag?.cancel(v);
     views.delete(v);
     clearInterval(v.lease);
     clearTimeout(v.searchTimer);
@@ -128,6 +143,7 @@
     for (const v of views) {
       if (!sameDir(v.srv.dir, dir)) continue;
       refresh(v);
+      if (kind === 'roster' || (kind === 'event' && v.bridgeState?.installed !== 'none' && !v.bridgeState?.active)) mc.players.bridge.paint(v);
       if (kind !== 'event') continue;
       if (v.timeline?.loaded) newEvents(v);
       if (v.page === 'search') searchSoon(v);
@@ -158,7 +174,7 @@
     const tools = el('div', 'mcset-tools');
     const reload = el('button', 'secondary mcpl-reload', tr('Refresh'));
     reload.onclick = () => { refresh(v); loadDetail(v); if (v.timeline?.loaded) loadTimeline(v); if (v.page === 'search') runSearch(v); if (v.page === 'log') loadLog(v); };
-    tools.append(reload);
+    tools.append(mc.players.bridge.button(v), reload);
     head.append(text, tools);
     v.body = el('div', 'mcpl-body');
     host.append(head, v.body);
@@ -220,6 +236,7 @@
     views.add(v);
     v.lease = setInterval(() => lease(v), LEASE_MS);
     refresh(v);
+    mc.players.bridge.paint(v);
   }
 
   // Calls overlap with pushes: one at a time, and one more when something came in meanwhile.
@@ -343,6 +360,7 @@
     showPage(v, 'player');
     v.listOpen = false;
     if (changed) {
+      mc.players.drag.cancel(v);
       v.selected = uuid;
       v.player = v.data?.players.find((p) => p.uuid === uuid) ?? null;
       v.detail = null;
@@ -424,6 +442,7 @@
     paintFacts(v);
     paintGates(v);
     paintTeleport(v);
+    if (v.drag && !canEdit(v)) mc.players.drag.cancel(v);
   }
   // A control that needs the server up: needs is 'running' for that alone, and otherwise the player on it too, with a
   // function for any further reason (v) -> text. While an action waits every control is off, without a reason of its own.
@@ -517,6 +536,11 @@
     let d;
     try { d = await call('detail', v, uuid); } catch { d = { source: 'file', code: 'failed' }; }
     if (!views.has(v) || seq !== v.seq.detail || v.selected !== uuid) return;
+    // Tiles are not swapped under a drag: this waits for its end. What the drag acts on is checked in main anyway.
+    if (v.drag) { v.drag.held = d; return; }
+    showDetail(v, d);
+  }
+  function showDetail(v, d) {
     v.detail = d;
     paintFacts(v);
     paintInventory(v);
@@ -527,7 +551,8 @@
     const box = el('section', 'mcpl-section mcpl-inventory');
     v.invNote = el('div', 'mcset-note mcpl-inv-note', tr('Reading the inventory…'));
     v.invBody = el('div', 'mcpl-inv-body');
-    box.append(v.invNote, v.invBody);
+    v.invTools = mc.players.drag.tools(v);
+    box.append(v.invNote, v.invTools, v.invBody);
     return box;
   }
   const canEdit = (v) => v.detail?.source === 'live' && !why(v, 'online');
@@ -537,7 +562,7 @@
     if (d.code === 'missing') return tr('The server has saved nothing for {name} yet.', { name });
     if (d.code === 'damaged') return tr('The saved file of {name} could not be read.', { name });
     if (d.code) return tr('The inventory could not be read.');
-    if (canEdit(v)) return tr('Live from the server. Click a slot to replace or empty it. The ender chest is read only.');
+    if (canEdit(v)) return tr('Live from the server. Drag an item to move or swap it, or click a slot to do the same by keyboard.');
     if (d.source === 'live') return tr('Live from the server, read only: {why}', { why: why(v, 'online') });
     return v.player.online ? tr('{name} is online but the server gave no live data, so this is the last save, read only.', { name })
       : tr('Saved data, read only: {name} is offline.', { name });
@@ -553,8 +578,9 @@
     hideTip(); // its tile is about to go, and a removed tile never gets the mouse leaving it
     v.invNote.textContent = inventoryNote(v);
     v.invNote.classList.toggle('bad', !!d.code);
-    if (!Array.isArray(d.inventory)) { v.invBody.replaceChildren(); return; }
     const editable = canEdit(v);
+    v.invTools.classList.toggle('hidden', !editable);
+    if (!Array.isArray(d.inventory)) { v.invBody.replaceChildren(); return; }
     const at = new Map(d.inventory.map((s) => [s.slot, s]));
     const armor = new Map(d.armor.map((s) => [s.slot, s]));
     const tile = (slot, n, opts) => newTile(v, slot, n, { editable, ...opts });
@@ -567,23 +593,35 @@
       grid('mcpl-hotbar', span(0, 9).map((n) => tile(at.get(n), n, { held: n === d.selected }))));
     const ender = new Map(d.ender.map((s) => [s.slot, s]));
     const chest = el('div', 'mcpl-inv');
-    chest.append(el('div', 'mcpl-inv-title', tr('Ender Chest')), grid('mcpl-ender', span(0, 27).map((n) => newTile(v, ender.get(n), n, { ender: true }))));
+    chest.append(el('div', 'mcpl-inv-title', tr('Ender Chest')), grid('mcpl-ender', span(0, 27).map((n) => tile(ender.get(n), n, { ender: true }))));
     v.invBody.replaceChildren(panel, chest);
     loadIcons(v);
   }
+  // A slot's number in one line of numbers, the game's own: the ender chest starts at 200.
+  const ENDER = 200;
+  const slotLabel = (key) => (key >= ENDER ? tr('Ender chest {n}', { n: key - ENDER + 1 }) : slotTitle(key));
+  // What this tab shows in a slot, whatever kind of slot it is.
+  function shownIn(v, key) {
+    const d = v.detail;
+    if (key >= ENDER) return d.ender.find((s) => s.slot === key - ENDER) ?? null;
+    if (key === -106) return d.offhand;
+    return (key >= 100 ? d.armor : d.inventory).find((s) => s.slot === key) ?? null;
+  }
   function newTile(v, slot, n, { editable = false, held = false, ender = false }) {
     const tile = el('button', 'mcpl-tile');
+    const key = ender ? ENDER + n : n;
     tile.type = 'button';
     tile.dataset.slot = String(n);
+    tile.dataset.key = String(key);
     if (ender) tile.dataset.ender = '';
     tile.classList.toggle('held', held);
     tile.classList.toggle('editable', editable);
     fillTile(v, tile, slot);
-    const label = ender ? tr('Ender chest {n}', { n: n + 1 }) : slotTitle(n);
+    const label = slotLabel(key);
     const lines = () => tipLines(v, slot, label);
-    tile.onmouseenter = tile.onfocus = () => showTip(tile, lines());
+    tile.onmouseenter = tile.onfocus = () => { if (!v.drag) showTip(tile, lines()); };
     tile.onmouseleave = tile.onblur = hideTip;
-    if (editable) tile.onclick = () => { hideTip(); slotDialog(v, n, slot, label); };
+    if (editable) tile.onclick = () => { hideTip(); slotDialog(v, key, slot, label); };
     return tile;
   }
   function fillTile(v, tile, slot) {
@@ -665,10 +703,24 @@
     const count = numberInput('mcpl-slot-count', 1, 64, '1');
     const ench = enchantEditor(v);
     const body = el('div', 'mc-dialog mcpl-slot-dialog');
+    // The keyboard's way to do what a drag does.
+    const dest = el('select', 'input mcpl-slot-dest');
     body.append(field(tr('Game item'), pick.node), field(tr('Count'), count), field(tr('Enchantments'), ench.node));
+    if (slot) {
+      for (const key of slotKeys().filter((k) => k !== n)) {
+        const there = shownIn(v, key);
+        dest.add(new Option(there ? `${slotLabel(key)} · ${slotItem(v, there)}` : slotLabel(key), String(key)));
+      }
+      body.append(field(tr('Move to'), dest));
+    }
     const error = el('div', 'mc-dialog-error');
     body.append(error);
     const refuse = (text) => { error.textContent = text; return false; };
+    const move = async () => {
+      if (v.acting) return refuse(tr('The last command is still waiting. Try again in a moment.'));
+      const r = await moveSlot(v, n, Number(dest.value));
+      return r ? undefined : false;
+    };
     const empty = async () => {
       if (v.acting) return refuse(tr('The last command is still waiting. Try again in a moment.'));
       const r = await act(v, { type: 'replaceSlot', slot: n, item: 'minecraft:air' }, { ask: (name) => tr('Empty {slot} of {name}? What it holds is gone for good.', { slot: label, name }), ok: tr('Empty Slot'), what: { slot: label } });
@@ -685,12 +737,48 @@
     };
     ide.ui.dialog({
       title: tr('{slot} of {name}', { slot: label, name: nameOf(target) }), body, width: 460,
-      buttons: [{ label: tr('Replace'), primary: true, run: replace }, ...(slot ? [{ label: tr('Empty Slot'), run: empty }] : []), { label: tr('Cancel') }],
+      buttons: [{ label: tr('Replace'), primary: true, run: replace }, ...(slot ? [{ label: tr('Move'), run: move }, { label: tr('Empty Slot'), run: empty }] : []), { label: tr('Cancel') }],
     });
+  }
+  const slotKeys = () => [103, 102, 101, 100, -106, ...Array.from({ length: 36 }, (_, i) => i), ...Array.from({ length: 27 }, (_, i) => ENDER + i)];
+  const slotItem = (v, slot) => { const item = v.icons.get(slot.id); return slot.name ?? (item ? itemTitle(item) : pretty(slot.id)); };
+  // A stack to another slot, by drag or by the dialog. Onto a filled slot, main swaps them.
+  function moveSlot(v, from, to) {
+    const [a, b] = [shownIn(v, from), shownIn(v, to)];
+    return act(v, { type: 'moveItem', op: 'move', from, to, shown: { from: a?.print ?? null, to: b?.print ?? null } },
+      { what: { item: a ? slotItem(v, a) : '', slot: slotLabel(to), other: slotLabel(from), swapped: !!b } });
   }
 
   // ---------- timeline ----------
-  function eventText(e) {
+  // Events of the NanoBridge plugin are data: the sentence is made here, in the UI's language, with the item's own name.
+  const eventIds = (e) => [e.id, e.weapon, e.other].filter((id) => typeof id === 'string' && id.includes(':'));
+  function nameIn(v, id) {
+    if (!id) return '';
+    if (!id.includes(':')) return id;
+    const item = v.icons.get(id);
+    return item ? itemTitle(item) : pretty(id);
+  }
+  const ACTIVITY = {
+    break: (e, n) => tr('Mined {count} of {item}', { count: e.n, item: n(e.id) }), place: (e, n) => tr('Placed {count} of {item}', { count: e.n, item: n(e.id) }),
+    ignite: (e, n) => tr('Lit {item} with flint and steel', { item: n(e.id) }), open: (e, n) => tr('Opened {item}', { item: n(e.id) }),
+    take: (e, n) => tr('Took {count} of {item} from {other}', { count: e.n, item: n(e.id), other: n(e.other) }), put: (e, n) => tr('Put {count} of {item} in {other}', { count: e.n, item: n(e.id), other: n(e.other) }),
+    pickup: (e, n) => tr('Picked up {count} of {item}', { count: e.n, item: n(e.id) }), drop: (e, n) => tr('Dropped {count} of {item}', { count: e.n, item: n(e.id) }),
+    bucket: (e, n) => (e.other === 'fill' ? tr('Filled {item}', { item: n(e.id) }) : tr('Emptied {item}', { item: n(e.id) })),
+    hit: (e, n) => (e.weapon ? tr('Hit {other} {count} times with {item}, {amount} damage', { other: n(e.other), count: e.n, item: n(e.weapon), amount: e.amount ?? 0 }) : tr('Hit {other} {count} times, {amount} damage', { other: n(e.other), count: e.n, amount: e.amount ?? 0 })),
+    hurt: (e, n) => tr('Took {amount} damage from {other}', { other: n(e.other), amount: e.amount ?? 0 }),
+    kill: (e, n) => (e.weapon ? tr('Killed {other} with {item}', { other: n(e.other), item: n(e.weapon) }) : tr('Killed {other}', { other: n(e.other) })),
+    pvp: (e, n) => (e.weapon ? tr('Killed player {other} with {item}', { other: n(e.other), item: n(e.weapon) }) : tr('Killed player {other}', { other: n(e.other) })),
+    cmd: (e) => tr('Ran {command}', { command: e.text }), sign: (e) => tr('Wrote on a sign: {text}', { text: e.text }),
+  };
+  const WORLDS = () => ({ world: '', world_nether: tr('The Nether'), world_the_end: tr('The End') });
+  function activityText(v, e) {
+    const what = ACTIVITY[e.type](e, (id) => nameIn(v, id));
+    const where = `${e.x}, ${e.y}, ${e.z}`;
+    const world = WORLDS()[e.world] ?? e.world ?? '';
+    return `${what} · ${where}${world ? ` · ${world}` : ''}`;
+  }
+  function eventText(v, e) {
+    if (ACTIVITY[e.type]) return activityText(v, e);
     if (e.type === 'join') {
       const base = e.why === 'reconciled' ? tr('Joined (found by the player list)') : tr('Joined');
       return e.x === undefined ? base : tr('{what} at {where}', { what: base, where: coords(e) });
@@ -705,15 +793,16 @@
   function eventRow(v, e, who) {
     const row = el('div', 'mcpl-event');
     row.dataset.type = e.type;
-    row.append(el('span', 'mcpl-event-time muted', stamp(e.t)), el('span', `mcpl-badge ${e.type}`, Object.fromEntries(TYPES())[e.type] ?? e.type));
+    const chip = chipOf(e.type);
+    row.append(el('span', 'mcpl-event-time muted', stamp(e.time ?? e.t)), el('span', `mcpl-badge ${chip?.[0] ?? e.type}`, chip?.[1] ?? e.type));
     if (who) {
       const name = userText('button', 'mcpl-link', e.name || '');
       name.type = 'button';
       name.onclick = () => openPlayer(v, e.uuid);
       row.append(name);
     }
-    const body = el('span', 'mcpl-event-text', eventText(e));
-    if (e.text) body.dataset.userText = '';
+    const body = el('span', 'mcpl-event-text', eventText(v, e));
+    if (e.text || ACTIVITY[e.type]) body.dataset.userText = '';
     row.append(body);
     if (e.secure === false) row.append(el('span', 'mcc-chip', tr('Unsigned')));
     if (e.ip) row.append(userText('span', 'mcpl-ip muted', e.ip));
@@ -733,14 +822,30 @@
       };
       box.append(c);
     }
-    return { node: box, types: () => [...on] };
+    return { node: box, types: () => TYPES().filter(([id]) => on.has(id)).flatMap(([, , types]) => types) };
+  }
+  // Names for the ids of these events, asked once per id. repaint: called when an answer has brought any.
+  async function namesFor(v, events, repaint) {
+    const ids = [...new Set(events.flatMap(eventIds))].filter((id) => !v.icons.has(id)).slice(0, 256);
+    if (!ids.length) return;
+    let found = {};
+    try { found = await call('icons', v, ids); } catch { return; }
+    if (!views.has(v)) return;
+    for (const id of ids) v.icons.set(id, found[id] ?? null);
+    if (Object.keys(found).length) repaint();
+  }
+  // A search in Korean finds items by the name the owner reads: their ids are what the records hold.
+  async function idsNamed(v, q) {
+    if (!/[가-힣]/.test(q)) return [];
+    const list = call('items', v, q).then((r) => r.items.slice(0, 64).map((i) => i.id), () => []);
+    return Promise.race([list, new Promise((resolve) => { setTimeout(resolve, ITEM_WAIT_MS, []); })]);
   }
   function timeline(v) {
     const box = el('section', 'mcpl-section mcpl-timeline');
     const again = later(() => { if (views.has(v)) loadTimeline(v); });
     const filter = typeFilter(() => loadTimeline(v));
     const q = el('input', 'input mcpl-tl-search');
-    q.placeholder = tr('Search this timeline');
+    q.placeholder = tr('Search this timeline, or type x y z');
     q.spellcheck = false;
     q.oninput = again;
     const list = el('div', 'mcpl-events');
@@ -754,7 +859,7 @@
     v.timeline = { events: [], more: false, loaded: false, filter, q, list, status, moreButton: more };
     return box;
   }
-  const timelineQuery = (t) => ({ types: t.filter.types(), q: t.q.value.trim() });
+  const timelineQuery = async (v, t) => ({ types: t.filter.types(), q: t.q.value.trim(), ids: await idsNamed(v, t.q.value.trim()) });
   async function loadTimeline(v, more = false) {
     const t = v.timeline;
     const uuid = v.selected;
@@ -762,7 +867,7 @@
     t.loaded = true;
     const before = more ? t.events.at(-1)?.t : undefined;
     let r;
-    try { r = await call('timeline', v, uuid, { ...timelineQuery(t), limit: PAGE, ...(before && { before }) }); } catch (err) {
+    try { r = await call('timeline', v, uuid, { ...await timelineQuery(v, t), limit: PAGE, ...(before && { before }) }); } catch (err) {
       if (views.has(v) && t === v.timeline) t.status.textContent = mc.errorText(err);
       return;
     }
@@ -776,7 +881,7 @@
     const t = v.timeline;
     const seq = v.seq.timeline;
     let r;
-    try { r = await call('timeline', v, v.selected, { ...timelineQuery(t), limit: PAGE }); } catch { return; }
+    try { r = await call('timeline', v, v.selected, { ...await timelineQuery(v, t), limit: PAGE }); } catch { return; }
     if (!views.has(v) || t !== v.timeline || seq !== v.seq.timeline) return;
     const top = t.events[0]?.t;
     const fresh = top ? r.events.filter((e) => e.t > top) : r.events;
@@ -788,6 +893,7 @@
     t.list.replaceChildren(...t.events.map((e) => eventRow(v, e, false)));
     t.status.textContent = t.events.length ? '' : tr('Nothing recorded here yet.');
     t.moreButton.classList.toggle('hidden', !t.more);
+    namesFor(v, t.events, () => { if (t === v.timeline) paintTimeline(t, v); });
   }
 
   // ---------- actions ----------
@@ -849,6 +955,13 @@
     const says = tint === 'ok' ? DONE(name, action, what) : RESULTS()[r.code] ?? tr('That did not work.');
     const more = [];
     if (r.note) more.push(el('div', 'mcpl-result-note', NOTES()[action.type] ?? ''));
+    for (const w of r.wrong ?? []) {
+      const key = w.slot;
+      const got = w.got ? `${nameIn(v, w.got.id)} ×${w.got.count}` : tr('empty');
+      more.push(userText('div', 'mcpl-result-wrong', tr('{slot} now holds: {what}', { slot: slotLabel(key), what: got })));
+    }
+    if (r.whole === false) more.push(el('div', 'mcpl-result-wrong', tr('The player\'s stacks do not add up either: something else in the inventory changed at the same moment.')));
+    if (r.code === 'mismatch') more.push(el('div', 'mcpl-result-wrong', tr('What each changed slot held before and after is in the Admin Log, so a lost stack can be put back by hand.')));
     if (r.commands.length) {
       const fold = el('details', 'mcpl-result-more');
       fold.append(el('summary', null, tr('Command and server answer')), userText('div', 'mcpl-result-commands', r.commands.map((c) => `> ${c}`).join('\n')));
@@ -1217,7 +1330,7 @@
     const again = later(() => { if (views.has(v)) runSearch(v); });
     const filter = typeFilter(() => runSearch(v));
     const q = el('input', 'input mcpl-all-search');
-    q.placeholder = tr('Search names, chat, commands…');
+    q.placeholder = tr('Search names, chat, blocks, or x y z…');
     q.spellcheck = false;
     q.oninput = again;
     const bar = el('div', 'mcpl-filter');
@@ -1246,10 +1359,13 @@
     const asked = () => JSON.stringify({ q: s.q.value.trim(), types: s.filter.types() });
     const query = asked();
     try {
-      const found = await call('search', v, JSON.parse(query));
+      const opts = JSON.parse(query);
+      const found = await call('search', v, { ...opts, ids: await idsNamed(v, opts.q) });
       if (views.has(v) && query === asked()) {
+        const paint = () => s.list.replaceChildren(...found.map((e) => eventRow(v, e, true)));
         s.status.textContent = found.length ? '' : tr('Nothing found.');
-        s.list.replaceChildren(...found.map((e) => eventRow(v, e, true)));
+        paint();
+        namesFor(v, found, () => { if (query === asked()) paint(); });
       }
     } catch (err) {
       if (views.has(v)) s.status.textContent = mc.errorText(err);
@@ -1290,9 +1406,26 @@
       if (says) r.append(el('div', 'mcpl-log-why', says));
       if (e.commands?.length) r.append(userText('div', 'mcpl-result-commands', e.commands.map((c) => `> ${c}`).join('\n')));
       if (e.commands?.length && e.text) r.append(userText('div', 'mcpl-log-text muted', e.text));
+      if (e.changed?.length) {
+        const fold = el('details', 'mcpl-result-more');
+        const empty = tr('empty');
+        fold.append(el('summary', null, tr('Slots before and after')), userText('div', 'mcpl-result-commands', e.changed.flatMap((c) => [
+          tr('{slot} before: {what}', { slot: slotLabel(c.slot), what: c.before ?? empty }), tr('{slot} after: {what}', { slot: slotLabel(c.slot), what: c.after ?? empty }),
+        ]).join('\n')));
+        r.append(fold);
+      }
       return r;
     }));
   }
 
-  mc.players = { open, tabId, paintStates };
+  // What the two parts of this tab in their own files need from here.
+  const kit = { call, views, act, canEdit, paintResult, refresh, showDetail, hideTip, moveSlot, shownIn, slotLabel, slotItem, choice, choiceIcon, numberInput, field, later, userText };
+  mc.players = { open, tabId, paintStates, kit };
+  const here = document.currentScript.src.replace(/[^/]*$/, '');
+  for (const file of ['players-drag.js', 'players-bridge.js']) {
+    const script = el('script');
+    script.src = `${here}${file}`;
+    script.async = false;
+    document.body.appendChild(script);
+  }
 })();

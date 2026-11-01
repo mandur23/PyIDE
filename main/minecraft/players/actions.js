@@ -7,7 +7,12 @@
 //   Enchantments, lvl     Item format/Before 1.20.5 (1.13 snapshot 18w21a named it Enchantments), NBT format (the s suffix)
 //   enchantments={levels:{...}} and the flat form    Data component format history, Java Edition 1.21.5 (25w04a)
 //   stored_enchantments   Data component format history
-//   item replace entity   Commands/item, Java Edition 21w19a; slot names: Slot
+//   item replace entity   Commands/item, Java Edition 21w19a; slot names: Slot. `from entity` and the slot names hotbar.N,
+//                         inventory.N, enderchest.N, armor.*, weapon.offhand also read from ItemCommands and SlotArgument
+//                         (1.20.1), ItemCommands and SlotRanges (26.3) in real jars
+//   execute if data       Commands/execute; data, entity, if, unless and run in ExecuteCommand of the same jars
+//   execute store success storage ... byte 1, data modify storage, data remove storage, a path that is only {...}
+//                         ExecuteCommand (wrapStores), DataCommands and NbtPathArgument of the same jars, through javap
 //   effect                Commands/effect (infinite: 1.19.4; instant effects count ticks, not seconds)
 //   tp                    Commands/tp (the coordinate limits are 1.16's)
 //   gamemode              Commands/gamemode (full names since 1.3.1, spectator since 1.8)
@@ -35,6 +40,8 @@ const LINE_BREAKS = /[\p{Cc}\u2028\u2029]+/gu;
 const HEAL_AMPLIFIER = 10;
 // One food point per level per tick, and the bar holds 20.
 const FEED_AMPLIFIER = 19;
+
+const { slotIn, printOfStack } = require('./nbt');
 
 const refuse = (code, message) => Object.assign(new Error(message), { expected: true, code });
 
@@ -100,9 +107,11 @@ function stack({ item, enchantments }, version) {
   return `${id}[${book ? 'stored_enchantments' : 'enchantments'}=${atLeast(version, '1.21.5') ? levels : `{levels:${levels}}`}]`;
 }
 const SLOTS = new Map([[100, 'armor.feet'], [101, 'armor.legs'], [102, 'armor.chest'], [103, 'armor.head'], [-106, 'weapon.offhand']]);
+const ENDER = 200;
 function slotName(slot) {
   if (Number.isInteger(slot) && slot >= 0 && slot <= 8) return `hotbar.${slot}`;
   if (Number.isInteger(slot) && slot >= 9 && slot <= 35) return `inventory.${slot - 9}`;
+  if (Number.isInteger(slot) && slot >= ENDER && slot < ENDER + 27) return `enderchest.${slot - ENDER}`;
   if (SLOTS.has(slot)) return SLOTS.get(slot);
   throw refuse('slot', 'That is not an inventory slot');
 }
@@ -173,16 +182,198 @@ const NOTES = {
   feed: 'Saturation fills the food bar in one tick, 20 points and as much saturation as the bar allows. It does nothing for a dead player.',
 };
 
+function checkServer(action, version, kind, known) {
+  if (kind === 'velocity') throw refuse('proxy', 'A proxy has no players of its own to act on');
+  if (!action || typeof action !== 'object' || !known(action.type)) throw refuse('action', 'That is not a player action');
+  if (typeof version !== 'string' || !RELEASE.test(version)) throw refuse('version', 'Nano Studio does not know the commands of this server\'s Minecraft version');
+}
 // action: {type, target, ...fields}. {version, kind}: the server's game version and kind.
 // -> {commands: [line], expects: {ok, refused}, note?}, expects being the shapes of the server's answer.
 function build(action, { version, kind } = {}) {
-  if (kind === 'velocity') throw refuse('proxy', 'A proxy has no players of its own to act on');
-  if (!action || typeof action !== 'object' || !Object.hasOwn(ACTIONS, action.type ?? '')) throw refuse('action', 'That is not a player action');
-  if (typeof version !== 'string' || !RELEASE.test(version)) throw refuse('version', 'Nano Studio does not know the commands of this server\'s Minecraft version');
+  checkServer(action, version, kind, (type) => Object.hasOwn(ACTIONS, type ?? ''));
   const [since, line, answers] = ACTIONS[action.type];
   if (since && !atLeast(version, since)) throw refuse('version', `This action needs Minecraft ${since} or newer, and this server runs ${version}`);
   const built = { commands: [line(action, version)], expects: expected(action, answers) };
   return NOTES[action.type] ? { ...built, note: NOTES[action.type] } : built;
 }
 
-module.exports = { build, NAME, CHECKED_THROUGH };
+// ---------- moving items ----------
+// One action, moveItem: {target, op: 'move'|'clear'|'place', from, to, item, count, shown: {from, to}}. A slot is the game's
+// number, with ENDER + n for the ender chest; shown holds the print of what the tab shows in each slot, or null for empty.
+// A move onto a filled slot swaps them.
+//
+// Slots change one command at a time, and all the lines are already in one write when the first fails, so a failure does
+// not stop the lines after it. A refused copy followed by a plain clear would delete the item it did not copy. What a line
+// leaves in a slot proves nothing: another stack that looks the same can land there by itself. So a step records its own
+// success with `execute store success`, and the next one starts from that record. A test that fails stores nothing, so
+// each step has a key of its own under STORE's `ok`: one shared byte would still say 1 from the step before. A thrown
+// command stores 0 (CommandDispatcher of 1.20.1, ContextChain.runExecutable of 26.3).
+//
+// Only chest, legs and feet refuse an item (createEquipmentSlotAccess in the real jars: head, hands and containers take
+// anything), so needFit turns away what they would refuse, and a swap writes its armor slot first, where a refusal leaves
+// only the temporary copy to remove. A player's own click in the ticks around the lines can still change a slot: the read
+// afterwards shows that, and nothing is sent again.
+const MOVE_FLOOR = '1.17';
+const STORE = 'nano:move';
+const PRINT = /^[0-9a-f]{40}$/;
+const EQUIPPED = { 100: 'feet', 101: 'legs', 102: 'chest', 103: 'head', [-106]: 'offhand' };
+const WORN = { 102: /(?:_chestplate|:elytra)$/, 101: /_leggings$/, 100: /_boots$/ };
+function needFit(slot, id) {
+  if (WORN[slot] && !WORN[slot].test(id)) throw refuse('armorFit', `${id} does not go in ${slotName(slot)}`);
+}
+const shownPrint = (value) => {
+  if (value === null || (typeof value === 'string' && PRINT.test(value))) return value;
+  throw refuse('shown', 'The tab did not say what the slot holds');
+};
+// The action's own fields, checked: nothing here depends on what the server holds.
+function checkMove(action, { version, kind } = {}) {
+  checkServer(action, version, kind, (type) => type === 'moveItem');
+  if (!atLeast(version, MOVE_FLOOR)) throw refuse('version', `This action needs Minecraft ${MOVE_FLOOR} or newer, and this server runs ${version}`);
+  const { op } = action;
+  if (op !== 'move' && op !== 'clear' && op !== 'place') throw refuse('action', 'That is not a way to move an item');
+  const move = { target: name(action.target), op, shown: {} };
+  if (op !== 'place') {
+    slotName(action.from);
+    move.from = action.from;
+    move.shown.from = shownPrint(action.shown?.from ?? null);
+    if (move.shown.from === null) throw refuse('emptySlot', 'That slot is empty');
+  }
+  if (op !== 'clear') {
+    slotName(action.to);
+    move.to = action.to;
+    move.shown.to = shownPrint(action.shown?.to ?? null);
+  }
+  if (op === 'move' && move.from === move.to) throw refuse('sameSlot', 'The item is in that slot already');
+  if (op === 'place') {
+    move.item = resource(action.item, 'item');
+    move.count = whole(action.count ?? 1, 1, MAX_SLOT, 'count');
+    if (move.item === 'minecraft:air') throw refuse('item', 'Air is not an item to place');
+    needFit(move.to, move.item);
+  }
+  return move;
+}
+// The last slot of the main inventory first: a player's pickups take the first free one.
+function freeSlot(at, taken) {
+  for (const slot of [...Array.from({ length: 27 }, (_, i) => 35 - i), ...Array.from({ length: 9 }, (_, i) => 8 - i)]) {
+    if (!taken.includes(slot) && !at(slot)) return slot;
+  }
+  throw refuse('noRoom', 'The player has no empty inventory slot to swap through');
+}
+// plan: from checkMove. at(slot) -> the stack in it now, from the read just made.
+// -> {commands, expects, wanted: [[slot, {print}|{id, count}|null]]}, wanted being what the slots hold when it worked.
+function buildMove(plan, { version }, at) {
+  const who = plan.target;
+  // A slot's place in the player's data, narrowed to a stack by what the read just showed of it. The count too, so that
+  // another stack of the same item landing there does not pass for this one. Only the fields the game printed, in its own
+  // type: a form it does not print would match nothing, and the line would quietly not run.
+  const inData = (slot, fields) => {
+    if (slot >= ENDER) return `EnderItems[{Slot:${slot - ENDER}b${fields ? `,${fields}` : ''}}]`;
+    if (EQUIPPED[slot] && atLeast(version, '1.21.5')) return `equipment.${EQUIPPED[slot]}${fields ? `{${fields}}` : ''}`;
+    return `Inventory[{Slot:${slot}b${fields ? `,${fields}` : ''}}]`;
+  };
+  const fieldsOf = (stack) => {
+    const { count, Count } = stack.raw ?? {};
+    const sized = Number.isInteger(count) ? `,count:${count}` : Number.isInteger(Count) ? `,Count:${Count}b` : '';
+    return `id:"${resource(stack.id, 'item')}"${sized}`;
+  };
+  const has = (slot, fields) => `if data entity ${who} ${inData(slot, fields)}`;
+  const free = (slot) => `unless data entity ${who} ${inData(slot)}`;
+  // A line that overwrites a stack has no step before it to rest on, so it tests all of the stack, as the game printed it.
+  // A text with a raw line break (1.20.1) cannot go on a console line and its parser has no escape for one.
+  const hasWhole = (slot) => {
+    const whole = printOfStack(at(slot));
+    if (!whole || /[\r\n]/.test(whole)) return has(slot, fieldsOf(at(slot)));
+    if (slot >= ENDER) return `if data entity ${who} EnderItems[${whole}]`;
+    if (EQUIPPED[slot] && atLeast(version, '1.21.5')) return `if data entity ${who} equipment.${EQUIPPED[slot]}${whole}`;
+    return `if data entity ${who} Inventory[${whole}]`;
+  };
+  const did = (step) => `if data storage ${STORE} {ok:{${step}:1b}}`;
+  const didNot = (step) => `unless data storage ${STORE} {ok:{${step}:1b}}`;
+  const line = (tests, what, step) => `execute ${tests.join(' ')}${step ? ` store success storage ${STORE} ok.${step} byte 1` : ''} run item replace entity ${who} ${what}`;
+  const copy = (to, from) => `${slotName(to)} from entity ${who} ${slotName(from)}`;
+  const wipe = (slot) => `${slotName(slot)} with minecraft:air`;
+  const stack = (slot) => ({ print: at(slot).print });
+  const OPEN = `data modify storage ${STORE} ok set value {}`;
+  const CLOSE = `data remove storage ${STORE} ok`;
+  let commands;
+  let wanted;
+  if (plan.op === 'clear') {
+    commands = [line([hasWhole(plan.from)], wipe(plan.from))];
+    wanted = [[plan.from, null]];
+  } else if (plan.op === 'place') {
+    commands = [line([at(plan.to) ? hasWhole(plan.to) : free(plan.to)], `${slotName(plan.to)} with ${plan.item} ${plan.count}`)];
+    wanted = [[plan.to, { id: plan.item, count: plan.count }]];
+  } else if (!at(plan.to)) {
+    const { from, to } = plan;
+    const x = fieldsOf(at(from));
+    needFit(to, at(from).id);
+    commands = [
+      OPEN,
+      line([has(from, x), free(to)], copy(to, from), 'copied'),
+      line([did('copied'), has(from, x)], wipe(from), 'wiped'),
+      // The source changed after the copy, so the copy is one stack too many.
+      line([did('copied'), didNot('wiped'), has(to, x)], wipe(to)),
+      CLOSE,
+    ];
+    wanted = [[to, stack(from)], [from, null]];
+  } else {
+    const [from, to] = WORN[plan.from] ? [plan.to, plan.from] : [plan.from, plan.to];
+    const [x, y] = [fieldsOf(at(from)), fieldsOf(at(to))];
+    needFit(to, at(from).id);
+    needFit(from, at(to).id);
+    const temp = freeSlot(at, [from, to]);
+    commands = [
+      OPEN,
+      line([has(from, x), has(to, y), free(temp)], copy(temp, to), 'saved'),
+      line([did('saved'), has(from, x), has(to, y)], copy(to, from), 'moved'),
+      // `to` was not written, so what temp holds is only a copy.
+      line([did('saved'), didNot('moved'), has(temp, y)], wipe(temp)),
+      line([did('moved'), has(from, x), has(temp, y)], copy(from, temp), 'placed'),
+      // `to` was written and `from` was not: temp holds the only y, and x is in `to` as well as where it was.
+      line([did('moved'), didNot('placed'), has(to, x), has(temp, y)], copy(to, temp), 'placed'),
+      line([did('placed'), has(temp, y)], wipe(temp)),
+      CLOSE,
+    ];
+    wanted = [[to, stack(from)], [from, stack(to)], [temp, null]];
+  }
+  const answers = (n) => [`Replaced (?:a slot|\\d+ slot\\(s\\)) on ${n}(?: with .+)?`, 'No targets accepted item|The (?:target|source) does not have |.+ can only stack up to \\d+'];
+  return { commands: [...commands, `data get entity ${who}`], expects: expected({ target: who }, answers), wanted };
+}
+// wanted: from buildMove. at: the stacks as read afterwards. -> [{slot, name, wanted, got}] for each slot not as wanted.
+function moveDiff(wanted, at) {
+  const out = [];
+  for (const [slot, want] of wanted) {
+    const got = at(slot);
+    const same = !want ? !got : want.print ? got?.print === want.print : got?.id === want.id && got?.count === want.count;
+    if (!same) out.push({ slot, name: slotName(slot), wanted: want, got: got ? { id: got.id, count: got.count } : null });
+  }
+  return out;
+}
+
+// Whether the player holds what a move should leave, whatever slot it is in. The slots of a move can all look right after
+// a click that doubled or lost a stack elsewhere. A stack the player picks up in the same moment reads as a change too,
+// which only costs a warning.
+function sameStacks(plan, before, after) {
+  const all = (d) => [...d.inventory, ...d.armor, ...(d.offhand ? [d.offhand] : []), ...d.ender];
+  const then = all(before).map((s) => s.print);
+  const now = all(after);
+  const drop = (list, print) => { const at = list.indexOf(print); if (at !== -1) list.splice(at, 1); };
+  if (plan.op === 'clear') drop(then, slotIn(before, plan.from)?.print);
+  if (plan.op === 'place') {
+    drop(then, slotIn(before, plan.to)?.print);
+    const made = now.findIndex((s) => s.id === plan.item && s.count === plan.count);
+    if (made === -1) return false;
+    now.splice(made, 1);
+  }
+  return then.sort().join() === now.map((s) => s.print).sort().join();
+}
+
+// Every slot that differs between two reads, with what the game printed for it: enough to put a stack back by hand.
+function changedSlots(before, after) {
+  const slots = (d) => new Map([...d.inventory, ...d.armor, ...(d.offhand ? [d.offhand] : []), ...d.ender.map((s) => ({ ...s, slot: s.slot + ENDER }))].map((s) => [s.slot, s]));
+  const [was, now] = [slots(before), slots(after)];
+  return [...new Set([...was.keys(), ...now.keys()])].filter((slot) => was.get(slot)?.print !== now.get(slot)?.print)
+    .map((slot) => ({ slot, name: slotName(slot), before: printOfStack(was.get(slot)), after: printOfStack(now.get(slot)) }));
+}
+
+module.exports = { build, checkMove, buildMove, moveDiff, sameStacks, changedSlots, atLeast, NAME, CHECKED_THROUGH };

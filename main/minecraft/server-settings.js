@@ -132,16 +132,18 @@ async function player(name, online, lookup) {
 function read(dir) {
   return { props: readProperties(path.join(dir, 'server.properties')), ...players(dir) };
 }
-// changes: {props: {key: value}, whitelist?, ops?}. Everything is checked before anything is written.
-function write(dir, { props = {}, whitelist, ops } = {}) {
+// changes: {props: {key: value}, whitelist?, ops?}. Everything is checked here, and throws; the function it returns writes.
+function prepare(dir, { props = {}, whitelist, ops } = {}) {
   const file = path.join(dir, 'server.properties');
   const current = readProperties(file);
   const lines = Object.fromEntries(Object.entries(props).map(([k, v]) => [k, checked(k, v, current[k])]));
   const lists = { whitelist: whitelist && checkedList(whitelist, false), ops: ops && checkedList(ops, true) };
-  if (Object.keys(lines).length) writeProperties(file, lines);
-  for (const [name, list] of Object.entries(lists)) {
-    if (list) fs.writeFileSync(path.join(dir, `${name === 'ops' ? 'ops' : 'whitelist'}.json`), `${JSON.stringify(list, null, 2)}\n`);
-  }
+  return () => {
+    if (Object.keys(lines).length) writeProperties(file, lines);
+    for (const [name, list] of Object.entries(lists)) {
+      if (list) fs.writeFileSync(path.join(dir, `${name === 'ops' ? 'ops' : 'whitelist'}.json`), `${JSON.stringify(list, null, 2)}\n`);
+    }
+  };
 }
 
-module.exports = { PROPERTIES, read, write, player, readProperties, writeProperties, offlineUuid };
+module.exports = { PROPERTIES, read, prepare, player, readProperties, writeProperties, offlineUuid };

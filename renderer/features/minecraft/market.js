@@ -18,10 +18,11 @@
   const serverOf = () => mc.servers().find((s) => s.dir === state.server) || null;
   const hosts = () => (state.type === 'modpack' ? [] : mc.servers().filter(fits[state.type]));
 
-  async function open({ type, server } = {}) {
+  async function open({ type, server, query } = {}) {
     await mc.refresh();
     if (type) state.type = type;
     if (server) state.server = server.dir;
+    if (query !== undefined) state.query = query;
     state.hits = [];
     mc.screen.show('market');
   }

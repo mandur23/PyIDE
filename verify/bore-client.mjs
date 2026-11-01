@@ -4,8 +4,9 @@ import { spawn } from 'child_process';
 import net from 'net';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { frame, standInBore } from './stand-in-bore.mjs';
 
-const client = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main', 'bore-client.js');
+const client =path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main', 'bore-client.js');
 let failed = 0;
 let passed = 0;
 const check = (ok, label) => { if (ok) passed++; else failed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
@@ -15,37 +16,6 @@ const until = async (test, label, ms = 5000) => {
   while (Date.now() < end) { const v = test(); if (v) return v; await new Promise((r) => { setTimeout(r, 20); }); }
   throw new Error(`timeout: ${label}`);
 };
-const frame = (m) => Buffer.from(`${JSON.stringify(m)}\0`);
-
-function standInBore({ hello = { Hello: 41234 } } = {}) {
-  const seen = { first: [], accepted: new Map(), control: null };
-  const server = net.createServer((socket) => {
-    let buffered = Buffer.alloc(0);
-    const onData = (chunk) => {
-      buffered = Buffer.concat([buffered, chunk]);
-      const end = buffered.indexOf(0);
-      if (end < 0) return;
-      const m = JSON.parse(buffered.subarray(0, end).toString());
-      const rest = buffered.subarray(end + 1);
-      seen.first.push(m);
-      socket.off('data', onData);
-      if (m.Accept) {
-        seen.accepted.set(m.Accept, socket);
-        if (rest.length) socket.unshift(rest);
-        return;
-      }
-      seen.control = socket;
-      // In two chunks, cut inside a frame, as TCP may deliver it.
-      const reply = frame(hello);
-      socket.write(reply.subarray(0, 3));
-      setTimeout(() => socket.write(reply.subarray(3)), 30);
-      socket.on('data', () => {});
-    };
-    socket.on('data', onData);
-    socket.on('error', () => {});
-  });
-  return { server, seen };
-}
 
 function start(controlPort, localPort) {
   const child = spawn(process.execPath, [client, 'local', String(localPort), '--local-host', '127.0.0.1', '--to', '127.0.0.1'],

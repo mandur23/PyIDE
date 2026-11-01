@@ -1,7 +1,8 @@
 // Minecraft servers, plugins and mods in a project (main/features/minecraft.js). The Minecraft tool window lists the
-// project's servers (servers/<name>) with Start/Stop, Debug, Share (the Ports plugin's tunnel: bore for the game's TCP
-// port), the plugin and mod projects that deploy to each, the resource pack it sends players, and the client pack of
-// a modded server.
+// project's servers (servers/<name>) with Start/Stop, Debug, Share (the Ports plugin's bore tunnel for the game's TCP
+// port: private by default, reached only with a join code, and Share Publicly as the second choice), the address on the
+// same network, the plugin and mod projects that deploy to each, the resource pack it sends players, and the client pack
+// of a modded server.
 // - New Server: Paper, Purpur, Vanilla, Fabric, Forge or NeoForge, any Minecraft version their service offers, after
 //   the user accepts the Minecraft EULA; or a Velocity proxy, which sends players on to the project's Paper and Purpur
 //   servers. The Java version comes from Mojang's data and is downloaded when missing.
@@ -62,7 +63,7 @@
   const stopping = new Map();
 
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
-  // starts, the Ports window learns its port is the game's (TCP).
+  // starts, the Ports window learns its port is a game server's.
   async function beforeStart(dir, con) {
     const srv = serverAt(dir);
     if (srv?.proxy) {
@@ -71,7 +72,7 @@
         : tr('No Paper or Purpur server in the project yet: the proxy has nowhere to send players.')}\n`, backends.length ? 'sys' : 'err');
     }
     const port = srv?.port || 25565;
-    ide.ports?.hint(port, 'tcp');
+    ide.ports?.gamePort(port);
     // A server still stopping (Rerun of a running one) holds its world and port until it has saved, 30 s at most; a
     // port that another program holds does not come free, so the start ends here instead of failing to bind it.
     const free = () => ide.api.invoke('minecraft:portFree', port);
@@ -686,14 +687,16 @@
   const tunnelWaits = new Map(); // port -> resolve(url | null)
   const TUNNEL_WAIT = 90000;
   let tunnels = []; // the Ports plugin's tunnels, from its last ports:changed
+  let listening = []; // its listening ports, each with its addresses on this network
   ide.api.on('ports:changed', (st) => {
     for (const [port, resolve] of tunnelWaits) {
       const t = st.tunnels.find((x) => x.port === port);
       if (t?.state === 'shared' || t?.state === 'failed') resolve(t.state === 'shared' ? t.url : null);
     }
-    // A server's card shows its public address (or that it is being made): from this event, which the Ports plugin
-    // may not have taken in yet.
+    // A server's card shows its public address (or that it is being made) and its address on the same network: from
+    // this event, which the Ports plugin may not have taken in yet.
     tunnels = st.tunnels || [];
+    listening = st.ports || [];
     if (list.some((s) => runningAt(s.dir))) render();
   });
   async function shareFiles(port) {
@@ -980,7 +983,10 @@
         if (ide.debugger?.debugJvm) actions.append(button(tr('Debug'), 'mc-debug', () => launchOnce(srv, run.debugConfig), tr('Start with the Java debugger attached: breakpoints in its plugins and mods stop the server')));
       }
       const tunnel = running && ide.ports ? tunnels.find((t) => t.port === srv.port) : null;
-      if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A public address friends join with (bore.pub)')));
+      if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') {
+        actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A private join code friends use in Nano Studio Craft')),
+          button(tr('Share Publicly'), 'mc-share-public', () => shareServer(srv, { publicly: true }), tr('A public address anyone can join (bore.pub)')));
+      }
       if (srv.plugins && !craft) actions.append(button(tr('New Plugin…'), 'mc-plugin', () => newPlugin(srv)));
       if (srv.mods && srv.mdk && !craft) actions.append(button(tr('New Mod…'), 'mc-mod', () => newMod(srv)));
       if (srv.mods || srv.plugins) actions.append(button(tr('Market'), 'mc-server-market', () => ide.minecraft.market.open({ type: srv.mods ? 'mod' : 'plugin', server: srv }), tr('Install mods or plugins from Modrinth')));
@@ -1012,20 +1018,48 @@
       }
       card.append(head, actions);
       if (tunnel) card.append(publicRow(srv, tunnel));
+      if (running) card.append(...lanRows(srv));
       card.append(el('div', 'mc-server-note muted', info), builds);
       host.append(card);
     }
   }
 
+  // What other computers on the same network connect to: no sharing, no third party.
+  function lanRows(srv) {
+    const addresses = (listening.find((p) => p.port === srv.port)?.lan || []).map((ip) => `${ip}:${srv.port}`);
+    return addresses.map((address) => {
+      const row = el('div', 'mc-lan');
+      row.title = tr('Address for other computers on the same network');
+      const addr = el('span', 'mc-lan-addr', address);
+      addr.dataset.userText = '';
+      row.append(el('span', 'muted', tr('Same network:')), addr, button(tr('Copy Address'), 'mc-lan-copy', () => ide.api.invoke('clipboard:writeText', address)));
+      return row;
+    });
+  }
+
+  // A private share's row: no address, since it reaches nobody without the code.
+  function privateRow(srv, tunnel) {
+    const row = el('div', 'mc-public mc-private');
+    if (tunnel.state === 'shared') {
+      row.append(el('span', 'mcc-chip private', tr('Private')),
+        button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel), tr('The code friends paste into Servers to Join. It is a key: send it only to friends.')),
+        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)),
+        el('div', 'mc-private-note muted', tr('Friends need Nano Studio Craft and this join code. The join code is a key: send it only to friends.')));
+    } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Starting private sharing…')));
+    else row.append(el('span', 'mc-public-error', tr('Private sharing failed: {error}', { error: tunnel.error || '' })));
+    return row;
+  }
+
   // The address players join with, on the card while the server is shared.
   function publicRow(srv, tunnel) {
+    if (tunnel.private) return privateRow(srv, tunnel);
     const row = el('div', 'mc-public');
     if (tunnel.state === 'shared') {
       const addr = el('span', 'mc-public-addr', tunnel.url);
       addr.dataset.userText = '';
       row.append(el('span', 'muted', tr('Public address:')), addr,
         button(tr('Copy Address'), 'mc-public-copy', () => ide.api.invoke('clipboard:writeText', tunnel.url)),
-        ...(craft ? [button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel.url), tr('The code friends paste into Servers to Join: this address and, for a modded server, its client pack'))] : []),
+        ...(craft ? [button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel), tr('The code friends paste into Servers to Join: this address and, for a modded server, its client pack'))] : []),
         button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)));
     } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Making a public address…')));
     else row.append(el('span', 'mc-public-error', tr('The public address failed: {error}', { error: tunnel.error || '' })));
@@ -1033,8 +1067,8 @@
   }
 
   // Craft's join code: the public address and, for a modded server, its client pack's link, which Join in a friend's
-  // Nano Studio Craft syncs the mods from.
-  async function copyJoinCode(srv, address) {
+  // Nano Studio Craft syncs the mods from. A private share's key stays in main, which writes that code itself.
+  async function copyJoinCode(srv, tunnel) {
     try {
       let pack = null;
       if (srv.mods) {
@@ -1043,15 +1077,18 @@
         if (!base) return ide.ui.alert(tr('The link could not be made; see the Ports window.'));
         pack = `${base}/${encodeURIComponent(basename(r.file))}`;
       }
-      const code = await ide.api.invoke('launcher:joinCode', { address, pack, name: srv.name });
+      const code = await (tunnel.private ? ide.api.invoke('minecraft:privateCode', ide.root, srv.dir, { pack })
+        : ide.api.invoke('launcher:joinCode', { address: tunnel.url, pack, name: srv.name }));
       await ide.api.invoke('clipboard:writeText', code);
       ide.notifications?.notify({ title: tr('Join code copied'), text: tr('Friends paste it into Servers to Join in Nano Studio Craft.'), kind: 'ok', group: 'Minecraft' });
     } catch (err) { ide.ui.alert(errorText(err)); }
   }
 
+  // Share is private: strangers who find the port get nothing, so only the account check below is asked. Share Publicly
+  // also warns and offers the whitelist.
   // A server with account checks off (behind a proxy) is not shared directly: anyone could join with any name. The
   // project's proxy is shared instead, which checks the accounts and sends players on.
-  async function shareServer(card) {
+  async function shareServer(card, { publicly = false } = {}) {
     // As the server is now: a proxy started since the card was drawn has turned its account checks off.
     await refresh();
     const srv = list.find((s) => s.dir.toLowerCase() === card.dir.toLowerCase()) || card;
@@ -1063,12 +1100,15 @@
           { title: tr('Share Minecraft Server'), ok: tr('Share the Proxy') }))) return;
         if (!runningAt(proxy.dir)) return ide.ui.alert(tr('Start the proxy {proxy} first, then share it.', { proxy: proxy.name }));
         target = proxy;
-      } else if (!(await ide.ui.confirm(tr('{name} has account checks off (online-mode=false): anyone with the address could play under any name, an operator\'s too. Share it anyway?', { name: srv.name }),
-        { title: tr('Share Minecraft Server'), ok: tr('Share Anyway') }))) return;
+      } else if (!(await ide.ui.confirm(publicly ? tr('{name} has account checks off (online-mode=false): anyone with the address could play under any name, an operator\'s too. Share it anyway?', { name: srv.name })
+        : tr('{name} has account checks off (online-mode=false): anyone with the join code could play under any name, an operator\'s too. Share it anyway?', { name: srv.name }),
+      { title: tr('Share Minecraft Server'), ok: tr('Share Anyway') }))) return;
     }
-    if (!(await offerWhitelist(target))) return;
+    if (publicly && !(await offerWhitelist(target))) return;
     await ide.api.invoke('ports:refresh');
-    await ide.ports.share(target.port);
+    // A failed tunnel stays listed, and sharing a listed port does nothing.
+    if (tunnels.find((t) => t.port === target.port)?.state === 'failed') await ide.ports.unshare(target.port);
+    await ide.ports.share(target.port, { private: !publicly });
     render();
   }
   // A public address reaches anyone who finds it, and a server without a whitelist lets them in. false: not shared.

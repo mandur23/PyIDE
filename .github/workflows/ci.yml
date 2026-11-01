@@ -80,6 +80,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/bore-client.mjs
+      - name: private-share
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/private-share.mjs
       - name: csp
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -96,6 +100,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15
         run: node verify/minecraft-launcher.mjs
+      - name: minecraft-antixray
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/minecraft-antixray.mjs
+      - name: minecraft-antixray-ui
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/minecraft-antixray-ui.mjs
       - name: minecraft-players-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

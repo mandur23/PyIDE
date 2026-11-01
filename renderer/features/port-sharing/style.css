@@ -14,6 +14,7 @@
 .ports-row a:hover { text-decoration: underline; }
 .ports-copy { border: 0; background: none; color: var(--gray9); cursor: pointer; padding: 0 2px; }
 .ports-error { color: var(--red7, #e5534b); }
+.ports-private { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray10); }
 .ports-actions { text-align: right; }
 .ports-warning p { margin: 0 0 10px; line-height: 1.5; }
 .ports-dont-ask { display: flex; align-items: center; gap: 6px; }

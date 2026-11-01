@@ -19,8 +19,13 @@ const TEXT_PATTERNS = [
   /\bnpm_[A-Za-z0-9]{30,}/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWT
 ];
+// A private server's key, in a Nano Studio join code (whatever it holds) or standing alone with the length of a key:
+// key=<key>, key: <key>, "key":"<key>", or a code percent-encoded once or twice inside a URL (%26key%3D<key>).
+// A plain key= stays readable: sort keys and map keys are no secret, and a word like monkey= is no key.
+const JOIN_KEY = /(nanostudio:(?:\/\/)?join\/?\?(?:[^\s"'`()<>]*&)?key=)[^&\s"'`()<>]+/gi;
+const BARE_KEY = /((?:(?<![\w-])|(?<=%(?:25)*(?:26|3F)))["']?key["']?\s*(?:[:=]|%(?:25)*3D)\s*["']?)[A-Za-z0-9_-]{32,}/gi;
 // Bearer/Basic auth headers, key=value or "key": "value" assignments, and URL credentials (scheme://user:pass@host).
-const AUTH_HEADER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const AUTH_HEADER =/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 // The whole value of a header, whatever its scheme (token abc) or parts (a=1; b=2).
 const SECRET_HEADER = /((?:authorization|cookie)["']?\s*[:=]\s*["']?)[^\r\n"']+/gi;
 const ASSIGNMENT = new RegExp(`(["']?[\\w.-]*(?:${SECRET_KEY.source})[\\w.-]*["']?\\s*[:=]\\s*)("[^"]*"|'[^']*'|[^\\s,;&}]+)`, 'gi');
@@ -53,6 +58,8 @@ function scrubText(text) {
   for (const v of knownSecrets) if (s.includes(v)) s = s.split(v).join(MASK);
   for (const re of TEXT_PATTERNS) s = s.replace(re, MASK);
   return s
+    .replace(JOIN_KEY, `$1${MASK}`)
+    .replace(BARE_KEY, `$1${MASK}`)
     .replace(SECRET_HEADER, `$1${MASK}`)
     .replace(AUTH_HEADER, (_m, kind) => `${kind} ${MASK}`)
     .replace(URL_CREDENTIALS, `$1${MASK}@`)
@@ -77,7 +84,7 @@ function redactObject(value, key = '') {
   if (value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).filter(([k]) => !TYPED_KEY.test(k)).map(([k, v]) => [k, redactObject(v, k)]));
   }
-  if (typeof value === 'string') return looksLikeBlob(value) ? MASK : scrubText(value);
+  if (typeof value === 'string') return looksLikeBlob(value) || (/^key$/i.test(key) && /^[A-Za-z0-9_-]{32,}$/.test(value)) ? MASK : scrubText(value);
   return value;
 }
 

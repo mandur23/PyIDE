@@ -21,9 +21,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import http from 'http';
 import { createRequire } from 'module';
 import net from 'net';
-import { tmpdir } from 'os';
+import { networkInterfaces, tmpdir } from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { launch } from './lib.mjs';
+import { standInBore } from './stand-in-bore.mjs';
 
 const S = JSON.stringify;
 const require = createRequire(import.meta.url);
@@ -103,6 +105,23 @@ public class StandInServer {
     Properties p = new Properties();
     try (InputStream in = Files.newInputStream(Paths.get("server.properties"))) { p.load(in); }
     ServerSocket s = new ServerSocket(Integer.parseInt(p.getProperty("server-port")));
+    Thread echo = new Thread(() -> {
+      try {
+        for (;;) {
+          Socket c = s.accept();
+          Thread one = new Thread(() -> {
+            try (Socket socket = c) {
+              byte[] b = new byte[4096];
+              for (int n; (n = socket.getInputStream().read(b)) > 0; ) socket.getOutputStream().write(b, 0, n);
+            } catch (Exception e) {}
+          });
+          one.setDaemon(true);
+          one.start();
+        }
+      } catch (Exception e) {}
+    });
+    echo.setDaemon(true);
+    echo.start();
     System.out.println("Done (0.1s)!");
     Thread limit = new Thread(() -> { try { Thread.sleep(120000); } catch (Exception e) {} System.exit(0); });
     limit.setDaemon(true);
@@ -124,6 +143,19 @@ const fakeBore = path.join(work, 'fake-bore.cjs');
 writeFileSync(fakeBore, `const port = Number(process.argv[process.argv.indexOf('local') + 1]);
 setTimeout(() => console.log('INFO bore_cli::client: listening at bore.pub:' + (40000 + port % 1000)), 200);
 setInterval(() => {}, 1000);
+`);
+// With a key this is a private share or a join: the real main/bore-client.js, under Electron as in the app, sent to the
+// stand-in bore and never to bore.pub. Without one it is the fake above.
+const borePick = path.join(work, 'bore-pick.cjs');
+const electronExe = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', 'electron', 'dist', 'electron.exe');
+const standIn = standInBore({ relay: true });
+await new Promise((resolve) => { standIn.server.listen(0, '127.0.0.1', resolve); });
+writeFileSync(borePick, `if (!process.env.PYIDE_BORE_SECRET) { require(${S(fakeBore)}); return; }
+const to = process.argv.indexOf('--to');
+if (process.argv[to + 1] === 'bore.pub') process.argv[to + 1] = '127.0.0.1';
+if (process.argv.includes('bore.pub')) process.exit(9);
+process.env.PYIDE_BORE_CONTROL_PORT = ${S(String(standIn.server.address().port))};
+require(${S(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main', 'bore-client.js'))});
 `);
 
 // ---------- client packs (.mrpack, written by Python's zipfile) ----------
@@ -463,11 +495,13 @@ async function craftUi(first) {
   const hit = { project_id: 'MKT', slug: 'market-pack', project_type: 'modpack', title: '모드팩 Market', author: 'tester', description: 'A modpack', icon_url: null,
     downloads: 1200, follows: 30, display_categories: ['adventure'], date_modified: '2026-10-01' };
   routes.set('/modrinth/search', () => ({ total_hits: 1, hits: [hit] }));
-  const env = { PYIDE_CRAFT_HOME: home, PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES };
+  // The image no launcher has: a real launcher open on this PC must not change what these windows say.
+  const env = { PYIDE_CRAFT_HOME: home, PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe' };
+  let privateJoinAddress = null;
   let u;
   try {
     u = await launch({ name: 'minecraft-launcher', port: 9897, mode: 'craft', lang: 'ko', projectDir: home, env: { ...env, PYIDE_MC_LAUNCHER: S([process.execPath, fakeLauncher, uiLog]),
-      PYIDE_BORE: S([process.execPath, fakeBore]), PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]) } });
+      PYIDE_BORE: S([electronExe, borePick]), PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]) } });
   } catch (err) {
     first.check(false, `the craft window: ${err.message}`);
     return first.finish();
@@ -477,10 +511,23 @@ async function craftUi(first) {
   const homeInst = (name) => path.join(home, 'instances', name);
   const dialogButton = (label) => `[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === ${S(label)})`;
   const setValue = (sel, value) => js(`(() => { const i = document.querySelector(${S(sel)}); i.value = ${S(value)}; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  // Real mouse events on the control, brought into view, once the spot they land on is known to be that control.
+  const press = async (sel) => {
+    const found = await js(`(() => { document.querySelectorAll('.ide-balloon').forEach((b) => b.remove()); const n = document.querySelector(${S(sel)}); if (!n) return 'missing'; n.scrollIntoView({ block: 'center' }); const r = n.getBoundingClientRect(); const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!at && (at === n || n.contains(at)) ? 'ok' : at?.className || 'nothing'; })()`);
+    if (found !== 'ok') throw new Error(`${sel} cannot be pressed: ${found}`);
+    await u.click(sel);
+  };
   const balloon = (re) => `[...document.querySelectorAll('.ide-balloon')].some((n) => ${re}.test(n.textContent))`;
   // Open Folder and the download page go to a list instead of Explorer and the browser.
   const stubShell = `(() => { window.__shell = []; window.__clip = []; const real = ide.api.invoke;
     ide.api.invoke = (ch, ...a) => (/^shell:/.test(ch) ? (window.__shell.push([ch, ...a]), Promise.resolve(true)) : ch === 'clipboard:writeText' ? (window.__clip.push(a[0]), Promise.resolve(true)) : real(ch, ...a)); return true; })()`;
+  // Nothing past this point may run on the user's own Craft workspace.
+  const opened = await js('ide.root');
+  if (path.resolve(opened).toLowerCase() !== path.resolve(home).toLowerCase()) {
+    check(false, `the craft window opened ${opened} and not the test workspace: stopped`);
+    u.close();
+    return u.finish();
+  }
   try {
     await js(stubShell);
     await until(`!!document.querySelector('#craftHost .mcs-nav') && document.querySelector('.mcs-page.selected')?.dataset.page === 'play' && !!document.querySelector('.mcs-play .mcc-empty')`, 'craft app', 15000);
@@ -783,8 +830,8 @@ async function craftUi(first) {
     await js(`ide.minecraft.refresh().then(() => true)`);
     await until(`!!document.querySelector('#minecraftScreen .mc-server[data-name="friends"] .mc-start')`, 'server card', 10000);
     await js(`(document.querySelector('#minecraftScreen .mc-start').click(), true)`);
-    await until(`!!document.querySelector('#minecraftScreen .mc-server .mc-share')`, 'server running', 20000);
-    await js(`(document.querySelector('#minecraftScreen .mc-share').click(), true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-server .mc-share-public')`, 'server running', 20000);
+    await press('#minecraftScreen .mc-share-public');
     await until(`!!${dialogButton('켜고 공유')}`, 'whitelist offer', 10000);
     const offered = await js(`document.querySelector('.dialog').textContent`);
     await js(`(${dialogButton('켜고 공유')}).click()`);
@@ -806,12 +853,134 @@ async function craftUi(first) {
     const addedKept = await js(`ide.settings.get('ports.added', [])`);
     check(!addedKept.includes(Number(packPort)), `the pack server's port is not saved among the user's added ports (${S(addedKept)})`);
     await js(`(document.querySelector('#minecraftScreen .mc-public-stop').click(), true)`);
-    await until(`!!document.querySelector('#minecraftScreen .mc-share')`, 'sharing stopped', 15000);
-    await js(`(document.querySelector('#minecraftScreen .mc-share').click(), true)`);
+    await until(`!!document.querySelector('#minecraftScreen .mc-share-public')`, 'sharing stopped', 15000);
+    await press('#minecraftScreen .mc-share-public');
     await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611'`, 'shared again', 30000);
-    check(!(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'with the whitelist on, sharing again asks nothing');
-    await js(`(document.querySelector('#minecraftScreen .mc-stop').click(), true)`);
+    check(!(await js(`document.querySelector('.dialog')?.textContent || ''`)), 'with the whitelist on, Share Publicly again asks nothing');
+    await press('#minecraftScreen .mc-stop');
     await until(`!!document.querySelector('#minecraftScreen .mc-server .mc-start')`, 'server stopped', 40000);
+
+    // ---------- a private share, and a friend joining it through the real client ----------
+    const pals = path.join(home, 'servers', 'pals');
+    const palsCard = '#minecraftScreen .mc-server[data-name="pals"]';
+    write(path.join(pals, 'pyide-server.json'), S({ kind: 'vanilla', mc: '1.20.1', java: 21, memory: '256M', launch: { jar: 'server.jar' } }));
+    write(path.join(pals, 'server.jar'), readFileSync(gameServerJar));
+    write(path.join(pals, 'server.properties'), 'server-port=25612\n');
+    await js(`ide.minecraft.refresh().then(() => true)`);
+    await until(`!!document.querySelector('${palsCard} .mc-start')`, 'the private server\'s card', 10000);
+    await press(`${palsCard} .mc-start`);
+    await until(`!!document.querySelector('${palsCard} .mc-share')`, 'the private server running', 20000);
+    const shareRow = await js(`[...document.querySelectorAll('${palsCard} .mc-server-actions button')].map((b) => b.textContent)`);
+    check(shareRow[1] === '공유' && shareRow[2] === '공개 주소로 공유', `Share comes first and is private, with Share Publicly as the second choice (${S(shareRow)})`);
+    const lan = Object.values(networkInterfaces()).flat().filter((i) => i.family === 'IPv4' && !i.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address)).map((i) => `${i.address}:25612`);
+    await until(`document.querySelectorAll('${palsCard} .mc-lan').length === ${lan.length}`, 'the same-network address', 15000);
+    const lanShown = await js(`[...document.querySelectorAll('${palsCard} .mc-lan-addr')].map((n) => n.textContent)`);
+    check(S([...lanShown].sort()) === S([...lan].sort()), `a running server shows this computer's address on the network with its port, without sharing (${S(lanShown)})`);
+    if (lan.length) {
+      await press(`${palsCard} .mc-lan-copy`);
+      await until(`window.__clip.at(-1) === ${S(lanShown[0])}`, 'the same-network address copied', 5000);
+      check(true, 'its button copies the address');
+    }
+    await press(`${palsCard} .mc-share`);
+    await until(`!!document.querySelector('${palsCard} .mc-private .mc-join-code') || !!document.querySelector('${palsCard} .mc-public-error')`, 'the private share', 30000);
+    const privateRow = await js(`({ text: document.querySelector('${palsCard} .mc-private')?.textContent, address: !!document.querySelector('${palsCard} .mc-public-addr'), copyAddress: !!document.querySelector('${palsCard} .mc-public-copy'), dialog: document.querySelector('.dialog')?.textContent || '', share: !!document.querySelector('${palsCard} .mc-share') })`);
+    await shot('craft-private-share.png');
+    const properties = text(path.join(pals, 'server.properties'));
+    check(/비공개/.test(privateRow.text) && /참여 코드/.test(privateRow.text) && /열쇠/.test(privateRow.text) && !privateRow.address && !privateRow.copyAddress && !privateRow.dialog && !privateRow.share && !/white-list/.test(properties),
+      `Share is private with no warning and no whitelist offer: the card says friends need Craft and that the code is a key, and shows no address (${S(privateRow)})`);
+    const clipped = (await js('window.__clip')).length;
+    await press(`${palsCard} .mc-join-code`);
+    await until(`window.__clip.length === ${clipped + 1}`, 'the private code copied', 15000);
+    const privateCode = await js('window.__clip.at(-1)');
+    const publicAddress = /addr=([^&]+)/.exec(privateCode)?.[1];
+    const key = /[?&]key=([A-Za-z0-9_-]{43})(?:&|$)/.exec(privateCode)?.[1];
+    check(!!key && publicAddress === `127.0.0.1:${standIn.publicPort}` && /name=pals/.test(privateCode), `Copy Join Code holds addr= and key=, through clipboard:writeText (${privateCode.replace(key, '<key>')})`);
+    const hostLine = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" | Where-Object { $_.CommandLine -like '*local 25612*' }).CommandLine"], { encoding: 'utf8' });
+    const portsState = S(await js(`ide.api.invoke('ports:state')`));
+    check(hostLine.includes('25612') && !hostLine.includes(key) && !portsState.includes(key) && /"private":true/.test(portsState), `the key is not on the tunnel's command line (${hostLine.length} characters read) or in ports:state`);
+
+    await press('.mcs-page[data-page="join"]');
+    await js(`(document.querySelector('#mccAddServer').value = ${S(privateCode)}, true)`);
+    await press('.mcc-add-btn');
+    await until(`!!document.querySelector('.mcc-code-ask[data-kind="localAddress"]')`, 'the question about a local address', 20000);
+    const codeAsk = () => js(`({ text: document.querySelector('.dialog .mcc-code-ask').textContent, primary: document.querySelector('.dialog-buttons button.primary').textContent })`);
+    const localAsk = await codeAsk();
+    check(localAsk.text.includes(publicAddress) && /이 컴퓨터/.test(localAsk.text) && localAsk.primary === '취소', `a code aiming at this computer asks first, in Korean, with Cancel as the default (${S(localAsk)})`);
+    await press('.dialog-buttons button.primary');
+    await until(`!document.querySelector('.mcc-code-ask')`, 'the question answered with Cancel', 10000);
+    check(!(readJson(path.join(home, 'servers-list.json')) || []).some((s) => s.address === publicAddress), 'Cancel saves nothing');
+    await press('.mcc-add-btn');
+    await until(`!!document.querySelector('.mcc-code-ask[data-kind="localAddress"]')`, 'the question again', 20000);
+    await press('.dialog-buttons button:not(.primary)');
+    await until(`[...document.querySelectorAll('#mccJoinVersion option')].some((o) => o.value === '1.20.1') && /대답하지 않았|응답/.test(document.querySelector('.mcc-ping')?.textContent || '')`, 'the version question', 20000);
+    await setValue('#mccJoinLoader', 'vanilla');
+    await until(`[...document.querySelectorAll('#mccJoinVersion option')].some((o) => o.value === '1.20.1') && !document.querySelector('#mccJoinVersion').disabled`, 'versions for Vanilla', 10000);
+    await setValue('#mccJoinVersion', '1.20.1');
+    await press('.dialog-buttons button.primary');
+    const friendCard = `.mcc-joined[data-address="${publicAddress}"]`;
+    await until(`!!document.querySelector(${S(friendCard)})`, 'the friend\'s card', 20000);
+    const saved = readJson(path.join(home, 'servers-list.json')).find((s) => s.address === publicAddress);
+    const seenList = S(await js(`ide.api.invoke('launcher:servers', ide.root)`));
+    check(!readFileSync(path.join(home, 'servers-list.json'), 'utf8').includes(key) && saved.secret?.enc === 'safeStorage' && !seenList.includes(key) && !seenList.includes(saved.secret.data), `the friend's key is sealed with the real safeStorage: not in servers-list.json in the clear, and the window gets neither it nor the sealed copy (${Object.keys(saved).join(', ')})`);
+    const friendShown = await js(`({ text: document.querySelector(${S(friendCard)}).textContent, copy: !!document.querySelector(${S(`${friendCard} .mcc-copy-code`)}) })`);
+    check(/비공개/.test(friendShown.text) && /켜 두세요/.test(friendShown.text) && !friendShown.copy, `the friend's card says private and that Craft must stay open, and offers no code to pass on (${friendShown.text})`);
+    await shot('craft-private-friend.png');
+    for (const [kind, pasted, words] of [['newKey', privateCode.replace(key, Buffer.alloc(32, 7).toString('base64url')), /다른 비공개 열쇠/], ['noKey', privateCode.replace(`key=${key}&`, ''), /열쇠가 없어요/]]) {
+      await js(`(document.querySelector('#mccAddServer').value = ${S(pasted)}, true)`);
+      await press('.mcc-add-btn');
+      await until(`!!document.querySelector('.mcc-code-ask[data-kind="${kind}"]')`, `the question for ${kind}`, 20000);
+      const shown = await codeAsk();
+      await press('.dialog-buttons button.primary');
+      await until(`!document.querySelector('.mcc-code-ask')`, `${kind} answered with Cancel`, 10000);
+      const after = readJson(path.join(home, 'servers-list.json')).find((s) => s.address === publicAddress);
+      check(words.test(shown.text) && shown.text.includes('pals') && shown.primary === '취소' && after.private === true && after.secret.data === saved.secret.data,
+        `a pasted code with ${kind === 'newKey' ? 'another key' : 'no key'} asks first, and Cancel leaves the saved key as it was (${shown.text})`);
+    }
+    await js(`(document.querySelector('#mccAddServer').value = '', true)`);
+    const friendInst = path.join(home, 'instances', saved.instance);
+    const dat = () => require('../main/minecraft/players/nbt.js').parseNbt(readFileSync(path.join(friendInst, 'servers.dat'))).servers;
+    check(S(dat()) === S([{ ip: `127.0.0.1:${saved.localPort}`, name: 'pals' }]), `adding the server writes servers.dat in the instance with its local address (${S(dat())})`);
+    const before = uiStarts().length;
+    await press(`${friendCard} .mcc-join`);
+    await uiStartsReach(before + 1);
+    await until(`!document.querySelector(${S(`${friendCard} .mcc-join`)}).disabled`, 'Join done', 15000);
+    const friendVersion = readJson(path.join(home, '.launcher', 'versions', `nano-${saved.instance}`, `nano-${saved.instance}.json`));
+    const local = `127.0.0.1:${readJson(path.join(home, 'servers-list.json')).find((s) => s.address === publicAddress).localPort}`;
+    check(uiStarts().length === before + 1 && S(friendVersion.arguments?.game) === S(['--quickPlayMultiplayer', local]) && dat().length === 1 && dat()[0].ip === local, `Join starts the stand-in launcher with Quick Play on the local address, and servers.dat holds it (${S(friendVersion.arguments)})`);
+    await until(balloon(/켜 두세요/), 'the keep-open hint', 10000);
+    const through = await new Promise((resolve) => {
+      const [host, port] = local.split(':');
+      const c = net.connect({ host, port: Number(port) }, () => c.write('through the tunnel'));
+      let got = '';
+      c.on('data', (d) => { got += d; if (got.length >= 18) { c.destroy(); resolve(got); } });
+      c.on('error', () => resolve(got));
+      setTimeout(() => { c.destroy(); resolve(got); }, 8000);
+    });
+    check(through === 'through the tunnel', `what the game sends to that address crosses the real join process, the stand-in bore and the real gate to the server and back (${S(through)})`);
+    const logs = readdirSync(path.join(u.userData, 'logs')).map((f) => readFileSync(path.join(u.userData, 'logs', f), 'utf8')).join('');
+    const screens = await js(`[...ide.run.sessions().map((s) => s.host.textContent), ...ide.notifications.list().map((n) => n.title + ' ' + n.text)].join(' ')`);
+    check(logs.length > 0 && !logs.includes(key) && !screens.includes(key), `the key is in no log (${logs.length} characters read), Run tab or notification`);
+
+    await press('.mcs-page[data-page="servers"]');
+    await until(`!!document.querySelector('${palsCard} .mc-public-stop')`, 'the host card again', 10000);
+    await press(`${palsCard} .mc-public-stop`);
+    await until(`!!document.querySelector('${palsCard} .mc-share')`, 'private sharing stopped', 15000);
+    const afterStop = await js(`ide.api.invoke('minecraft:privateCode', ide.root, ${S(pals)}).then(() => 'a code', (e) => String(e.message))`);
+    await press(`${palsCard} .mc-share`);
+    await until(`!!document.querySelector('${palsCard} .mc-private .mc-join-code')`, 'the second private share', 30000);
+    const secondCode = await js(`ide.api.invoke('minecraft:privateCode', ide.root, ${S(pals)})`);
+    check(/not shared privately/.test(afterStop) && !secondCode.includes(key), `stopping forgets the key and sharing again makes a new one (${afterStop})`);
+    const tunnelPid = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', "(Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" | Where-Object { $_.CommandLine -like '*local 25612*' }).ProcessId"], { encoding: 'utf8' }).trim();
+    process.kill(Number(tunnelPid));
+    await until(`/비공개 공유에 실패했어요/.test(document.querySelector('${palsCard} .mc-public-error')?.textContent || '') && !!document.querySelector('${palsCard} .mc-share')`, 'the failed tunnel on the card', 15000);
+    await press(`${palsCard} .mc-share`);
+    await until(`!!document.querySelector('${palsCard} .mc-private .mc-join-code')`, 'sharing again after a failure', 30000);
+    check(true, 'a tunnel that dies says so on the card, and Share works again');
+    await press(`${palsCard} .mc-stop`);
+    await until(`!!document.querySelector('${palsCard} .mc-start')`, 'the private server stopped', 40000);
+    await until(`!document.querySelector('${palsCard} .mc-private')`, 'the tunnel gone with its server', 15000);
+    check(true, 'a stopped server takes its private share with it');
+    privateJoinAddress = publicAddress;
 
     // ---------- light theme, narrow windows ----------
     await js(`(document.querySelectorAll('.ide-balloon').forEach((b) => b.remove()), ide.settings.set('appearance.theme', 'light'), true)`);
@@ -855,6 +1024,12 @@ async function craftUi(first) {
     await shot('craft-failure.png').catch(() => {});
   }
   u.close();
+  if (privateJoinAddress) {
+    const left = () => execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $_.CommandLine -like '*--to ${privateJoinAddress}*' }).Count`], { encoding: 'utf8' }).trim();
+    let count = left();
+    for (let i = 0; i < 20 && count !== '0'; i++) { await new Promise((r) => { setTimeout(r, 300); }); count = left(); }
+    check(count === '0', 'the join process stops when Craft quits');
+  }
   const startsWithLauncher = uiStarts().length;
 
   // ---------- no launcher ----------
@@ -898,6 +1073,8 @@ async function craftUi(first) {
     await w.shot('craft-nolauncher-failure.png').catch(() => {});
   }
   server.close();
+  standIn.close();
+  standIn.server.close();
   w.finish();
 }
 

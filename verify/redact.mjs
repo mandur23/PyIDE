@@ -1,6 +1,9 @@
 // Pure Node (no window): main/diagnostics/redact.js redactPaths and remoteRepoNames, the scrubbing behind
 // Help > Report a Problem. A table of inputs and the exact text that may leave the computer.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
+import { tmpdir } from 'os';
+import path from 'path';
 
 const require = createRequire(import.meta.url);
 const { MASK, redactObject, redactPaths, remoteRepoNames, scrubText } = require('../main/diagnostics/redact.js');
@@ -105,7 +108,26 @@ const SCRUB = [
   ['Server=db;Password=two words;Database=x', `Server=db;Password=${MASK};Database=x`],
   ['"password": "two words", "user": "bob"', `"password": ${MASK}, "user": "bob"`],
   ['secret_key = two words', `secret_key = ${MASK}`],
+  ['nanostudio:join?addr=bore.pub:33862&key=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC&name=x', `nanostudio:join?addr=bore.pub:33862&key=${MASK}&name=x`],
+  ['pasted: nanostudio:join?key=short', `pasted: nanostudio:join?key=${MASK}`],
+  ['key=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `key=${MASK}`],
+  ['{"key":"AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC"}', `{"key":"${MASK}"}`],
+  ["{ key: 'AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', port: 1 }", `{ key: '${MASK}', port: 1 }`],
+  ['key: AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `key: ${MASK}`],
+  ['"key" : "AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC"', `"key" : "${MASK}"`],
+  ['nanostudio%3Ajoin%3Faddr%3Dbore.pub%3A33862%26key%3DAbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC%26name%3Dx', `nanostudio%3Ajoin%3Faddr%3Dbore.pub%3A33862%26key%3D${MASK}%26name%3Dx`],
+  ['nanostudio%3Ajoin%3Fkey%3dAbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `nanostudio%3Ajoin%3Fkey%3d${MASK}`],
+  ['nanostudio%253Ajoin%253Faddr%253Da%2526key%253DAbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `nanostudio%253Ajoin%253Faddr%253Da%2526key%253D${MASK}`],
+  ['https://example.test/?code=nanostudio%3Ajoin%3Faddr%3Da%26key%3DAbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `https://example.test/?code=nanostudio%3Ajoin%3Faddr%3Da%26key%3D${MASK}`],
+  ['PYIDE_BORE_SECRET=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `PYIDE_BORE_SECRET=${MASK}`],
   // unchanged: what only looks like one
+  ['nanostudio:join?addr=bore.pub:33862&name=x', null],
+  ['sort key=name then key=size', null],
+  ['monkey=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', null],
+  ['monkey: AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', null],
+  ['{"monkey":"AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC"}', null],
+  ['key: value', null],
+  ['{"key":"Enter","code":"KeyA"}', null],
   ['python -u C:\\proj\\main.py', null],
   ['python -u C:/proj/main.py --max-tokens 100 --tokenizer gpt2', null],
   ['docker run -u 1000:1000 -p8080:80 img', null],
@@ -123,6 +145,19 @@ for (const [input, expected] of SCRUB) {
   check(out === want, `${JSON.stringify(input)} -> ${JSON.stringify(out)}${out === want ? '' : ` (expected ${JSON.stringify(want)})`}`);
 }
 check(SCRUB.every(([i]) => scrubText(scrubText(i)) === scrubText(i)), 'a second scrub changes nothing');
+const lettersOnly = 'AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQ';
+check(redactObject({ server: { key: lettersOnly } }).server.key === MASK, 'a settings-like object hides a key field even with no digit in it');
+
+// Each form the key takes, against a copy of the module without the rule: the case can see the leak it stops.
+const source = readFileSync(new URL('../main/diagnostics/redact.js', import.meta.url), 'utf8');
+const BARE = /const BARE_KEY = .*\n/;
+if (!BARE.test(source)) throw new Error('the patch does not apply to redact.js');
+const weak = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-redact-')), 'redact.cjs');
+writeFileSync(weak, source.replace(BARE, () => 'const BARE_KEY = /((?<![\\w-])key=)[A-Za-z0-9_-]{32,}/gi;\n'));
+const { scrubText: weakScrub } = require(weak);
+const FORMS = SCRUB.filter(([i, want]) => want && /key["']?\s*(?::|%(?:25)*3D)/i.test(i)).map(([i]) => i);
+check(FORMS.length >= 8 && FORMS.every((i) => weakScrub(i).includes('AbCd-_0123')), `without the rule the key stands in the text in all ${FORMS.length} forms, so each case above can fail`);
+rmSync(path.dirname(weak), { recursive: true, force: true });
 
 // A diagnostic report keeps settings but nothing the user typed to run something.
 const report = redactObject({
@@ -146,6 +181,6 @@ scrubText(log);
 const ms = Math.round(performance.now() - started);
 check(ms < 5000, `scrubbing a ${Math.round(log.length / 2 ** 20)} MB log takes ${ms} ms`);
 
-const total = CASES.length + SCRUB.length + 10;
+const total = CASES.length + SCRUB.length + 12;
 console.log(`${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

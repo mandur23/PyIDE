@@ -141,12 +141,15 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
   // the start of a data answer, else the value query() resolves with (null included). Rejects with code timeout, stopped,
   // notRunning, busy, tooLong or badCommand.
   function query(command, match, timeoutMs = 3000, { visible = false } = {}) {
+    return write([command], match, timeoutMs, visible);
+  }
+  function write(lines, match, timeoutMs, visible) {
     return new Promise((resolve, reject) => {
       // A value in a command must not be able to end it and start a second one.
-      if (typeof command !== 'string' || !command || /[\r\n]/.test(command)) { reject(failure('A console command is one line', 'badCommand')); return; }
+      if (!lines.length || lines.some((line) => typeof line !== 'string' || !line || /[\r\n]/.test(line))) { reject(failure('A console command is one line', 'badCommand')); return; }
       if (state !== 'running') { reject(failure('The server is not running', 'notRunning')); return; }
       if (queue.length >= QUEUE_MAX) { reject(failure('Too many commands are waiting', 'busy')); return; }
-      queue.push({ command, match, timeoutMs, visible, resolve, reject, timer: null });
+      queue.push({ command: lines.join('\n'), match, timeoutMs, visible, resolve, reject, timer: null });
       pump();
     });
   }
@@ -156,6 +159,21 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     if (refused.test(msg)) return { text: msg, refused: true };
     return ok.test(msg) ? { text: msg, refused: false } : undefined;
   }, timeoutMs, { visible: true }).catch((err) => { if (err.code === 'timeout') return null; throw err; });
+
+  // Lines of one change, sent as one write so that nothing of this app's can come between them, and ending with
+  // `data get entity <name>`: it is the last thing the server answers, so it also says when the others are over.
+  // -> {answers: [{text, refused}], text: that data answer, or null when the player is gone}.
+  function batch(lines, name, { ok, refused }, timeoutMs = 5000) {
+    const answers = [];
+    const data = matchData(name);
+    return write(lines, (msg) => {
+      const r = data(msg);
+      if (r !== undefined) return r;
+      if (!refused.test(msg) && !ok.test(msg)) return undefined;
+      answers.push({ text: msg, refused: refused.test(msg) });
+      return MORE;
+    }, timeoutMs, true).then((text) => ({ answers, text }));
+  }
 
   // Answer text from start on -> where the answer ended, or the text's end while it goes on.
   function absorb(text, start) {
@@ -189,7 +207,7 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     if (r === undefined || r === false) return false;
     if (r instanceof Snbt) openAnswer(q, r.text, ended);
     else if (r !== MORE) settle(q, 'resolve', r);
-    return !q.visible;
+    return r instanceof Snbt || !q.visible;
   }
 
   // ---------- the output ----------
@@ -343,7 +361,9 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
   }
 
   return {
-    filter, attach, query, command, watch, end,
+    filter, attach, query, command, batch, watch, end,
+    // Something new is on the record, from anywhere but this stream.
+    recorded: () => ping('event'),
     get state() { return state; },
     get proxy() { return proxy; },
     get hasData() { return hasDataCommand(version); },
