@@ -22,6 +22,7 @@ const translation = require('../minecraft/translate');
 const serverSettings = require('../minecraft/server-settings');
 const { createLauncher } = require('../minecraft/launcher');
 const fileServer = require('../minecraft/file-server');
+const { createPlayers } = require('../minecraft/players');
 const { complete } = require('../ai/claude');
 const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 const { allowWindowCapture } = require('../security');
@@ -242,6 +243,12 @@ const SERVER_JVM_ARGS = ['-XX:+UseG1GC', '-XX:+ParallelRefProcEnabled', '-XX:Max
   '-Dusing.aikars.flags=https://mcflags.emc.gs', '-Daikars.new.flags=true'];
 const PROXY_JVM_ARGS = ['-XX:+UseG1GC', '-XX:G1HeapRegionSize=4M', '-XX:+UnlockExperimentalVMOptions', '-XX:+ParallelRefProcEnabled', '-XX:MaxInlineLevel=15'];
 const jvmArgsOf = (desc) => (Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : KINDS[desc.kind]?.proxy ? PROXY_JVM_ARGS : SERVER_JVM_ARGS);
+// Output is decoded as UTF-8 and stdin is written as UTF-8, while a JVM on Korean Windows defaults to MS949 for a pipe,
+// and the Players tab would store that damage for 30 days. Not part of jvmArgs, which a server may replace. System.out
+// reads stdout.encoding from Java 19 and sun.stdout.encoding before it. Vanilla's console reader is fixed to UTF-8;
+// Paper's uses the default charset, which is what file.encoding sets. stdin.encoding is Java 25's, for what asks it.
+const ENCODING_ARGS = ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', '-Dstdin.encoding=UTF-8',
+  '-Dsun.stdout.encoding=UTF-8', '-Dsun.stderr.encoding=UTF-8'];
 
 // opts.debugPort: the JVM also listens for the debugger there, suspended until the debugger has set its breakpoints
 // (a plugin's onEnable runs within moments of the start).
@@ -256,7 +263,7 @@ async function launch(dir, log, { debugPort } = {}) {
   const home = await ensureJava(desc.java, { log });
   if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
   const mem = /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G';
-  const args = [`-Xmx${mem}`, ...jvmArgsOf(desc)];
+  const args = [...ENCODING_ARGS, `-Xmx${mem}`, ...jvmArgsOf(desc)];
   if (debugPort) args.push(`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`);
   if (desc.launch.argsFile) {
     if (isFile(path.join(dir, 'user_jvm_args.txt'))) args.push('@user_jvm_args.txt');
@@ -722,8 +729,36 @@ const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried });
 const imports = (root) => createImports({ root, servers: () => servers(root), create, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
-exports.register = ({ ipcMain, send, startProcess }) => {
+exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   const guard = (root) => { if (!root || !trust.isTrusted(root)) throw fail('The project is open in Safe Mode, where Nano Studio runs nothing from it', 'untrusted'); };
+  // Sessions live here and not in a window, so logging goes on while no window shows the tab. A folder under the
+  // project's servers/ only: the files read for it are named by the renderer.
+  const playersLog = diagnostics.logger('#players');
+  const players = createPlayers({
+    send,
+    log: (text) => playersLog.warn(text),
+    describe: (dir) => {
+      const { mc, kind } = serverOf(dir);
+      return { version: mc, kind, proxy: !!KINDS[kind]?.proxy };
+    },
+  });
+  const inServers = (root, dir) => typeof dir === 'string' && path.resolve(dir).toLowerCase().startsWith(path.resolve(root, 'servers').toLowerCase() + path.sep);
+  const playersAt = (root, dir) => {
+    guard(root);
+    if (!inServers(root, dir)) throw fail(`${dir} is not a server of this project`);
+  };
+  const playersChannel = (name, step) => ipcMain.handle(`players:${name}`, (_e, root, dir, ...args) => { playersAt(root, dir); return step(dir, ...args); });
+  playersChannel('list', (dir) => players.list(dir));
+  playersChannel('timeline', (dir, uuid, opts) => players.timeline(dir, uuid, opts));
+  playersChannel('search', (dir, opts) => players.search(dir, opts));
+  playersChannel('detail', (dir, uuid) => players.detail(dir, uuid));
+  playersChannel('action', (dir, action) => players.action(dir, action));
+  playersChannel('items', (dir, query) => players.items(dir, query));
+  playersChannel('icons', (dir, ids) => players.icons(dir, ids));
+  playersChannel('names', (dir) => players.names(dir));
+  playersChannel('adminLog', (dir, opts) => players.adminLog(dir, opts));
+  playersChannel('watch', (dir, on) => players.watch(dir, on));
+  app.on('will-quit', players.closeAll);
   // A job's output goes to the window as minecraft:log {job, text}.
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
   ipcMain.handle('minecraft:kinds', () => Object.entries(KINDS).map(([id, k]) => ({ id, title: k.title, plugins: k.plugins, mods: k.mods, proxy: !!k.proxy })));
@@ -732,7 +767,14 @@ exports.register = ({ ipcMain, send, startProcess }) => {
   ipcMain.handle('minecraft:create', (_e, opts, job) => { guard(opts?.root); return create(opts, logTo(job)); });
   ipcMain.handle('minecraft:launch', (_e, root, dir, job, opts) => { guard(root); return launch(dir, logTo(job), opts); });
   // Starts a launch spec ({cmd, args, cwd, env}) as an IDE process the Run window shows; -> process id.
-  ipcMain.handle('minecraft:start', (_e, root, spec) => { guard(root); return startProcess(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true }); });
+  // A server's process gets a players session; a mod's Gradle task, which also starts here, does not.
+  ipcMain.handle('minecraft:start', (_e, root, spec) => {
+    guard(root);
+    const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
+    const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, filter: session?.filter });
+    session?.attach(procs.get(id));
+    return id;
+  });
   // Whether nothing listens on a port (a server about to start there would fail to bind it).
   // A server may hold it on loopback only, which a listen on every address does not notice.
   const listenable = (port, host) => new Promise((resolve) => {

@@ -18,6 +18,7 @@
 // - Resource Pack: a resourcepack/ folder for textures and sounds; Send to Players zips it, serves it with a public link
 //   and names it in server.properties, so every player's game downloads it when they join.
 // - Market (market.js): Modrinth's modpacks, mods, plugins and resource packs, installed into a server in one click.
+// - Players (players.js): who is on a server, their inventories, a log of what they did, and actions on them.
 // - The Minecraft screen (screen.js) shows the instances to play and servers to join (craft.js), the servers and the
 //   Market in an editor tab, or as the whole window in craft mode; project-types.js adds Minecraft Mod, Plugin and
 //   Server to New Project.
@@ -507,6 +508,7 @@
     run.removeConfigs((c) => c.type === 'minecraft-server' && run.resolvePath(c.dir).toLowerCase() === srv.dir.toLowerCase());
     await ide.documentsMoved?.(srv.dir, null);
     ide.closeTab(ide.minecraft.settings.tabId(srv.dir), true);
+    ide.closeTab(ide.minecraft.players.tabId(srv.dir), true);
     ide.refreshTree?.();
     await refresh();
   }
@@ -515,6 +517,10 @@
   // Server Settings opens the server's settings tab (server-settings.js).
   function serverSettings(srv) {
     if (trusted()) ide.minecraft.settings.open(srv);
+  }
+  // Players opens the server's players tab (players.js).
+  function serverPlayers(srv) {
+    if (trusted()) ide.minecraft.players.open(srv);
   }
   // A line typed into a running server's console; false when the server is not running.
   function sendCommand(dir, line) {
@@ -930,14 +936,15 @@
   function render() {
     for (const host of hosts) renderInto(host);
     ide.minecraft?.settings?.paintStates();
+    ide.minecraft?.players?.paintStates();
   }
   // Start or Debug clicked again before the server runs (its card shows Stop only then) starts it once.
   const launching = new Set(); // server folders (lower case)
   function launchOnce(srv, how) {
     const key = srv.dir.toLowerCase();
-    if (launching.has(key) || runningAt(srv.dir)) return;
+    if (launching.has(key) || runningAt(srv.dir)) return undefined;
     launching.add(key);
-    Promise.resolve(how(serverConfig(srv))).catch(() => {}).finally(() => { launching.delete(key); render(); });
+    return Promise.resolve(how(serverConfig(srv))).catch(() => {}).finally(() => { launching.delete(key); render(); });
   }
   function renderInto(host) {
     host.replaceChildren();
@@ -984,6 +991,7 @@
         actions.append(button(tr('Resource Pack'), 'mc-rp', () => resourcePack(srv), tr('A folder for the textures, sounds and models players get')));
         if (srv.resourcePack && ide.ports) actions.append(button(tr('Send to Players'), 'mc-rp-send', () => sendPack(srv), tr('Players download the resource pack when they join')));
       }
+      actions.append(button(tr('Players'), 'mc-players', () => serverPlayers(srv), tr('Who is on, their inventories, a log of what they did, and actions on them')));
       actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
       actions.append(button(tr('Open Folder'), 'mc-folder', () => (craft ? ide.api.invoke('shell:openPath', srv.dir) : ide.revealInTree?.(srv.dir))));
       if (!running) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
@@ -1111,12 +1119,12 @@
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.registerAction({ id: 'Minecraft.NewMod', title: tr('New Minecraft Mod…'), needsProject: true, run: () => newMod() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newPlugin, createPlugin, newMod, createMod, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, sharePack, resourcePack, sendPack, addLibrary, toolWindow: tw,
-    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, reserved: (name) => RESERVED.test(name),
+    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig), reserved: (name) => RESERVED.test(name),
     // Shows the server list (with drops) in another container too: the Minecraft screen's Servers page.
     addHost(container) { acceptDrops(container); hosts.add(container); refresh(); }, removeHost: (container) => hosts.delete(container) };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'craft.js', 'screen.js', 'project-types.js', 'game-view.js', 'server-settings.js']) {
+  for (const file of ['market.js', 'craft.js', 'screen.js', 'project-types.js', 'game-view.js', 'server-settings.js', 'players.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

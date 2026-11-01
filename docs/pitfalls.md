@@ -21,6 +21,9 @@
 - **업데이트는 서명 확인 없이 설치하지 않습니다.** `phase: 'downloaded'`가 설치의 유일한 관문입니다. `latest.yml`은 서명되지 않으니 그 안의 값을 믿지 않습니다.
 - **서명 없는 외부 exe는 백신이 지울 수 있습니다.** bore.exe는 공식 릴리스를 해시로 고정해 받았는데도 Defender가 `Trojan:Win32/Kepavll!rfn`으로 격리했습니다. 사용자에게 예외 등록을 시키지 않습니다. 작은 프로토콜은 앱 안에서 처리합니다(`main/bore-client.js`). 탐지 원인은 `Get-MpThreatDetection`과 Defender 이벤트 1116/1117에서 읽습니다.
 - **비밀값은 로그와 진단 보고서에 남지 않게 합니다.** 새 형식의 비밀값을 다루면 `main/diagnostics/redact.js`와 `verify/redact.mjs`에 추가합니다.
+- **`data get`의 답은 여러 줄일 수 있고 그 줄은 플레이어가 씁니다.** 1.20.1은 문자열의 줄바꿈을 그대로 찍고(26.3은 이스케이프합니다) `\`와 여는 따옴표만 이스케이프해서, 책 한 쪽이 서버 로그 줄을 그대로 흉내 냈습니다. 서버 정지, 가짜 채팅, 가짜 `/op`가 기록에 들어갔습니다. 답은 끝날 때까지 줄이 아니라 답입니다(`snbtEnd`). 상한을 넘어도 그 뒤를 줄로 되돌리지 않습니다. 위조가 노리는 곳이 상한 뒤입니다.
+- **서버 답은 "다음 줄"이 아니라 모양으로 고릅니다.** 명령 뒤 첫 줄을 답으로 받았더니 다른 사람의 접속 실패 줄이 답이 되어 IP가 `admin.jsonl`에 남고 성공 여부도 틀렸습니다. 모양은 `actions.js`의 표에 있고 문구는 실제 `en_us.json`에서 확인합니다. 1.20.1과 26.3의 문구가 다릅니다(`commands.op.failed`, `command.unknown.command`).
+- **개인정보 규칙은 저장 경로마다 막지 않고 한 곳에서 지킵니다.** 저장되는 줄은 모두 `store.js`의 `lineOf`를 지나고 거기서 주소를 가립니다. 길이 제한으로 자르기 전에 가립니다. 자른 뒤에는 주소 모양이 아니게 되어 세 자리가 남습니다.
 
 ## 코딩: Electron과 Node
 
@@ -29,6 +32,7 @@
 - **Electron 45의 `clipboard`는 `read`, `write`, `readText`, `writeText`, `has`, `clear`만 있고 `readText`는 비동기입니다.** `ipcMain.handle`은 await하므로 괜찮지만 동기로 쓰면 안 됩니다.
 - **`safeStorage`의 동기 API는 Electron 45에서 deprecated입니다.** 아직 동작합니다. 12곳(`clipboard-history`, `database`, `installer`, `askpass`)이 씁니다.
 - **IPC 오류는 메시지만 넘어오고 `.code`는 사라집니다.** 화면이 분기해야 하는 조건은 throw가 아니라 결과 값으로 돌려줍니다(`{launched: false, code: 'noLauncher'}`).
+- **배열에 덧붙인 속성은 contextBridge를 건너지 못합니다.** `players:items`의 `reason`과 `coverage`가 렌더러에서 사라졌습니다. `v8.serialize`로는 살아남아서 Node 테스트는 통과했습니다. 목록과 함께 보낼 값은 `{items, reason}`처럼 객체에 담고, IPC 값은 실제 창에서 확인합니다.
 - **창 캡처 권한은 Electron 45에서 다시 확인이 필요했습니다.** 업그레이드 후 게임 캡처가 검은 화면이 됐습니다.
 - **스크립트 로드 순서에 기대지 않습니다.** Monaco 콜백이 `editors.js`보다 먼저 끝나 `ide.initEditors is not a function`이 났습니다. 지금은 `DOMContentLoaded`를 기다립니다.
 - **외부 라이브러리는 정적으로 먼저 로드합니다.** `marked`를 지연 로드하다 `window.marked`가 비어 AI Chat 창이 무한 루프로 멈췄습니다. 이미 끝난 Promise를 기다리는 반복문은 창을 멈춥니다.
@@ -38,8 +42,10 @@
 - **CSP가 있습니다(`renderer/index.html`).** 인라인 스크립트와 인라인 이벤트 핸들러, `eval`을 쓸 수 없습니다. 렌더러 코드는 네트워크에 직접 접속할 수 없고 메인 모듈을 거칩니다(`connect-src data:`). `srcdoc` 프레임은 IDE의 CSP를 물려받습니다.
 - **`innerHTML`에 외부 값을 넣지 않습니다.** 서버 이름, 참여 코드, 팩 이름은 `textContent`로 넣습니다. Markdown은 허용 목록 방식 sanitizer를 지납니다.
 - **입력칸이 있는 영역을 통째로 다시 그리지 않습니다.** `replaceChildren()`이 입력한 글자와 오류 표시를 지웠습니다. 폼은 마운트 때 한 번 만들고 목록만 다시 그립니다. 비동기 작업 뒤에 캡처해 둔 노드에 쓰면 화면에 안 보입니다.
+- **접히는 목록을 흐름 안에 두면 누르는 사이 버튼이 움직여 클릭이 사라집니다.** 목록은 흐름 밖에 두고, 테스트는 `Input.dispatchMouseEvent`로 실제로 눌렀다 뗍니다. 합성 클릭은 이 문제를 못 찾습니다.
 - **크기는 반올림 값으로 계산해 되먹이지 않습니다.** Data View가 `clientWidth`/`clientHeight` 때문에 스크롤바가 매 프레임 뒤집혀 로딩이 끝나지 않았습니다. 퍼센트 CSS를 씁니다.
 - **좁은 창에서는 뷰포트가 아니라 컨테이너를 봅니다.** 탭은 `@container`로 배치를 바꿉니다.
+- **넘치지 않는 것과 보이는 것은 다릅니다.** Players 탭을 900 px 창에서 Run 패널과 함께 열면 목록과 머리글이 높이를 다 써서 플레이어가 화면에 없었는데, overflow 검사는 통과했습니다. 낮은 창에서는 고정 영역을 나누지 말고 한 스크롤로 둡니다. 테스트는 `elementFromPoint`로 실제로 보이는지 확인하고 스크린샷을 직접 봅니다.
 - **큰 파일의 언어 기능을 확인합니다.** Monaco CSS lint가 선언 쌍마다 마커를 만들어 큰 파일에서 렌더러가 메모리 초과로 죽었습니다.
 - **글자 폭에 딱 맞는 배치는 다른 PC에서 잘립니다.** 한글은 PC의 글꼴로 대체되고, CI 러너에서는 900 px 카드의 버튼 글자가 합쳐서 약 8 px 넓어 1 px 모자란 버튼이 전부 말줄임이 됐습니다. 고정 폭 줄에는 여유를 둡니다.
 - **비동기 답을 기다리는 동안 문서가 닫힐 수 있습니다.** Monaco의 CSS, HTML, JSON 완성은 워커 답을 받은 뒤 모델을 읽어 `TextModelPart is disposed!`를 던졌습니다. 느린 PC에서만 보입니다. `ide.js`가 완성 제공자를 감쌉니다.
@@ -51,6 +57,9 @@
 - **Craft에는 편집기 영역, 툴바, 스트라이프가 없습니다.** 편집기 탭으로 여는 화면은 `body.mc-craft-tab`으로만 보입니다. 설정 페이지는 `craft: true`인 것만 나옵니다.
 - **Craft에는 `ide.debugger`가 없습니다.** code 전용 플러그인의 API는 `?.`로 부릅니다.
 - **`ide.openProject`, `ide.closeProject`는 Craft에서 거부됩니다.**
+- **서버 JVM의 인코딩은 `launch()`가 정합니다.** 메인은 출력을 UTF-8로 읽고 stdin도 UTF-8로 쓰는데, 한국어 Windows의 JVM은 파이프에 MS949를 씁니다(Java 21, 25에서 확인). 한글 채팅이 깨진 채 30일 저장됐습니다. `desc.jvmArgs`가 기본 옵션을 대체하므로 플래그는 그 밖에 두고, `verify/minecraft.mjs`가 `-Xmx`와 GC 옵션의 순서를 고정해서 맨 앞에 둡니다. stdin은 바닐라가 UTF-8로 고정이고 Paper는 기본 문자셋을 쓰므로 `file.encoding`이 맞춥니다. `stdin.encoding`만으로는 부족합니다.
+- **26.3은 콘솔에 보내는 말을 `System chat: ` 뒤에 찍습니다.** `MinecraftServer.sendSystemMessage`가 로그 형식을 바꿨고, 서버 자신이 콘솔의 `CommandSource`라서 명령의 답과 방송(접속, 사망, 업적)이 전부 이 형식입니다. 1.20.1에는 없고 채팅은 로거가 달라서 없습니다. 위키에도 대역에도 없어서 `javap`로 클래스를 읽고서야 찾았습니다. 줄 형식의 가정은 실제 클래스에서 확인합니다.
+- **언어 파일의 키가 전부 게임의 id는 아닙니다.** 26.3의 `en_us.json`에는 이름이 바뀐 뒤의 `enchantment.minecraft.sweeping`이 `sweeping_edge` 옆에 남아 있어 같은 이름이 두 줄 나왔습니다. 대역 jar로는 안 보이고 실제 jar에서만 보입니다.
 
 ## 코딩: 번역
 
@@ -79,8 +88,12 @@
 - **실제 OS 드래그는 마우스 메시지가 있어야 끝납니다.** `verify/post-mouse-move.ps1`로 테스트 창에만 메시지를 보냅니다. 실제 마우스를 움직이지 않습니다.
 - **테스트는 클립보드를 보존해야 합니다.** Electron 45에서 `clipboard-keeper`가 조용히 고장 나 있었습니다. 로그에 경고가 있는지 봅니다.
 - **`verify/out`은 여럿이 같이 씁니다.** 다른 세션의 정리가 실행 중인 폴더를 지울 수 있습니다. 동시 작업 중에는 `node verify/clean.mjs --age 15`를 쓰고, 끝난 뒤 `--age 0`을 씁니다. `*-venv`와 `downloads-cache`는 남깁니다.
+- **Craft 창을 띄우는 테스트는 `PYIDE_CRAFT_HOME`을 줍니다.** 없으면 `projectDir`와 상관없이 사용자의 `~/Nano Studio Craft`가 열립니다. 테스트 창에 사용자의 실제 서버가 나타났습니다. 시작 뒤 `ide.root`가 테스트 폴더인지 확인합니다.
 - **문구 검사는 Code와 Craft 양쪽을 봅니다.** `verify/i18n-static.mjs`가 모드별로 검사합니다. 예전에는 전부 합쳐 검사해서 Craft 누락을 못 찾았습니다.
+- **로그 형식은 실제 파일로 확인합니다.** 대역은 우리가 쓴 형식만 재현합니다. 26.3의 `System chat: ` 접두사는 Gradle 캐시의 실제 jar를 읽고서야 찾았고, 그 뒤 실제 Paper 26.3에서 확인했습니다.
 - **대역으로 검증한 것과 실제로 검증한 것을 구분해서 보고합니다.** 공식 Minecraft Launcher와 게임은 테스트에서 실행하지 않습니다. EULA에 동의하지 않습니다. 로그인하지 않습니다.
+- **게임 파일은 실행하지 않아도 읽을 수 있습니다.** 이 PC의 Gradle 캐시에 실제 jar가 있습니다(`~/.gradle/caches/fabric-loom/26.3`, `forge_gradle/.../1.20.1`). `en_us.json`을 읽고 `javap`로 클래스를 읽으면 기억이나 위키로 추측하던 것을 확인할 수 있습니다. 문구, 이스케이프 규칙, 콘솔의 문자셋, NBT 깊이가 그렇게 확인됐습니다. 실행은 하지 않습니다.
+- **전체 대조 검사의 기대값에 쓴 문구도 대역이 지어낸 것일 수 있습니다.** 서버 답 모양을 좁히면 `verify/minecraft-players.mjs` 대역의 문구도 실제 문구와 같은지 봅니다.
 - **CI는 느린 1024x720 러너입니다.** 릴리스마다 다른 단계가 실패합니다. 클릭과 타이밍 문제가 많습니다. 로컬에서 통과해도 CI 결과를 확인합니다.
 - **러너와 비슷하게 돌리려면 `PYIDE_TEST_VIEWPORT=1024x720 PYIDE_TEST_CPU=2`를 줍니다.** `verify/lib.mjs`가 창 크기와 렌더러 CPU를 에뮬레이션합니다. 프로세스 CPU를 2개로 묶고 `PYIDE_TEST_CPU=4`를 주면 러너보다 훨씬 느려져 러너에서 안 나는 실패가 나옵니다. 러너의 Prettier 대역은 0.3초, 이 조건에서는 8초가 걸렸습니다. 화면 에뮬레이션은 `screen.avail*`을 실제 작업 영역과 다르게 만드니 `minecraft`는 이 변수 없이 돌립니다. 숨겨진 데스크톱에서는 `minecraft`의 F3+T와 Inside the IDE 검사 3개가 실패합니다. 러너에서는 통과합니다.
 - **러너의 `%TEMP%`는 8.3 이름입니다(`C:\Users\RUNNER~1`).** Java의 `getCanonicalPath`, `where`, venv는 긴 이름을 돌려줘서 경로를 문자열로 비교하면 틀립니다. 서버가 0개 실행 중으로 보이고 "서버 없음"을 확인하는 검사는 거짓으로 통과했습니다. `realpathSync.native`로 맞춥니다. 8.3 이름이 꺼진 드라이브에서는 `%TEMP%` 안의 junction을 `TEMP`, `TMP`로 주고 Java 쪽을 `toRealPath()`로 바꾸면 재현됩니다.

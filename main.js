@@ -105,6 +105,9 @@ function startProcess(cmd, args, opts = {}) {
   proc.on('close', (code) => {
     procLog.info(`#${id} exited with code ${code}`);
     procs.delete(id);
+    // A filter that holds back a half line gives it up here: no more output will end that line.
+    const held = filter?.flush?.();
+    if (held) batch.push(held, 'out');
     batch.flush();
     send('proc:exit', { id, code });
   });

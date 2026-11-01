@@ -96,6 +96,18 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15
         run: node verify/minecraft-launcher.mjs
+      - name: minecraft-players-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/minecraft-players-core.mjs
+      - name: minecraft-players-actions
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/minecraft-players-actions.mjs
+      - name: minecraft-players
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 15
+        run: node verify/minecraft-players.mjs
       - name: editors
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
