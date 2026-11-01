@@ -2,8 +2,9 @@
 // terminal) listen on, plus ports the user added (a server started elsewhere), and a public address for any of them,
 // with no account and no router or firewall change, nothing system-wide. Each port is probed once for what it speaks:
 // a web server (http or https) gets a Cloudflare quick tunnel (cloudflared) and an https address; any other TCP server
-// (a game server, a socket server) gets a bore tunnel (bore.pub) and a host:port address. Both tools come from the
-// Install Manager. A tunnel lives as long as its server listens, until the user stops sharing, or until the IDE quits.
+// (a game server, a socket server) gets a bore.pub tunnel and a host:port address. cloudflared comes from the Install
+// Manager; the bore client is main/bore-client.js, run by the IDE's own Electron as Node. A tunnel lives as long as its
+// server listens, until the user stops sharing, or until the IDE quits.
 // PYIDE_CLOUDFLARED, PYIDE_BORE (tests): a JSON array, the program and its first arguments run in place of the tool.
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
@@ -96,17 +97,20 @@ async function processes() {
   return map;
 }
 
-exports.register = ({ ipcMain, app, send }) => {
+exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   const toolchains = createToolchains();
-  const tool = (name, env) => {
-    if (process.env[env]) {
-      try { const argv = JSON.parse(process.env[env]); if (Array.isArray(argv) && argv.length) return argv; } catch {}
-    }
-    const s = toolchains.status(name);
-    return s.installed ? [path.join(s.home, `${name}.exe`)] : null;
+  const standIn = (env) => {
+    if (!process.env[env]) return null;
+    try { const argv = JSON.parse(process.env[env]); if (Array.isArray(argv) && argv.length) return argv; } catch {}
+    return null;
   };
-  const cloudflared = () => tool('cloudflared', 'PYIDE_CLOUDFLARED');
-  const bore = () => tool('bore', 'PYIDE_BORE');
+  const cloudflared = () => {
+    const argv = standIn('PYIDE_CLOUDFLARED');
+    if (argv) return argv;
+    const s = toolchains.status('cloudflared');
+    return s.installed ? [path.join(s.home, 'cloudflared.exe')] : null;
+  };
+  const bore = () => standIn('PYIDE_BORE') || [process.execPath, path.join(unpackedDir, 'main', 'bore-client.js')];
 
   // [{port, pid, address, host, dial, lan, proto: 'http'|'https'|'tcp'|null, added, name, cmd}]: what IDE-started
   // programs and the ports the user added listen on. proto is null until a probe answers.
@@ -255,7 +259,7 @@ exports.register = ({ ipcMain, app, send }) => {
     // (spawn UNKNOWN) instead of emitting 'error'.
     let child;
     try {
-      child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true, env: { ...process.env, NO_COLOR: '1' } });
+      child = spawn(argv[0], [...argv.slice(1), ...args], { windowsHide: true, env: { ...process.env, NO_COLOR: '1', ...(kind === 'bore' ? { ELECTRON_RUN_AS_NODE: '1' } : {}) } });
     } catch (err) {
       tunnels.delete(port);
       changed();

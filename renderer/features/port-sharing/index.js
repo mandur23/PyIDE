@@ -2,8 +2,8 @@
 // on, and ports the user added with Add Port (a server started elsewhere, such as a game server), each with what it
 // speaks (HTTP, HTTPS or TCP), its local address, its address for other computers on the same network, and a Share
 // button that gives it a public address (main/features/port-sharing.js): a web server an https address through a
-// Cloudflare quick tunnel, any other TCP server a host:port address through bore. Both tools come from the Install
-// Manager. A new server is announced with Open in Browser and Share. Sharing asks first (anyone with the address
+// Cloudflare quick tunnel, any other TCP server a host:port address through bore.pub. cloudflared comes from the
+// Install Manager. A new server is announced with Open in Browser and Share. Sharing asks first (anyone with the address
 // reaches the server), and "Share new ports automatically" is off unless the user turns it on, after the same warning.
 (() => {
   const { el } = ide.util;
@@ -14,8 +14,6 @@
   const TOOLS = {
     cloudflared: { item: 'tool:cloudflared', homepage: 'https://github.com/cloudflare/cloudflared',
       description: () => tr('Cloudflare Tunnel client (Apache 2.0) that gives a web server running in Nano Studio a public https address, for the Ports tool window.') },
-    bore: { item: 'tool:bore', homepage: 'https://github.com/ekzhang/bore',
-      description: () => tr('TCP tunnel client (MIT) that gives a server that is not a web server, such as a game server, a public address through bore.pub, for the Ports tool window.') },
   };
   let st = { ports: [], added: [], tunnels: [], cloudflared: false, bore: false };
   const announced = new Set(); // ports told about this session
@@ -33,7 +31,7 @@
   const copy = (text) => ide.api.invoke('clipboard:writeText', text);
   const PROTO = { http: 'HTTP', https: 'HTTPS', tcp: 'TCP' };
 
-  // ---------- Install Manager: cloudflared and bore ----------
+  // ---------- Install Manager: cloudflared ----------
   const builtin = (name) => ide.api.invoke('installer:toolchains').then((l) => l.find((s) => s.name === name));
   for (const [name, t] of Object.entries(TOOLS)) {
     (ide.installables ||= []).push({
@@ -110,17 +108,17 @@
         render();
         return;
       } catch (err) {
-        const missing = /\b(cloudflared|bore) is not installed/.exec(ide.util.errorText(err))?.[1];
+        const missing = /\b(cloudflared) is not installed/.exec(ide.util.errorText(err))?.[1];
         if (missing && attempt === 0) { if (await ensureTool(missing)) continue; return; }
-        const blocked = /Windows did not start (cloudflared|bore)\.exe/.exec(ide.util.errorText(err))?.[1];
+        const blocked = /Windows did not start (cloudflared)\.exe/.exec(ide.util.errorText(err))?.[1];
         if (blocked) return blockedTool(port, blocked);
         ide.notifications?.notify({ title: tr('Port {port} could not be shared', { port }), text: ide.util.errorText(err), kind: 'error', group: 'Ports', raw: true });
         return;
       }
     }
   }
-  // bore.exe has no publisher's signature, which Smart App Control and some antivirus programs refuse to start; a file
-  // damaged since its download is refused the same way. Install Again replaces the file and shares again.
+  // Smart App Control and antivirus programs may refuse to start a downloaded tool; a file damaged since its download
+  // is refused the same way. Install Again replaces the file and shares again.
   async function blockedTool(port, name) {
     const s = await builtin(name);
     ide.notifications?.notify({

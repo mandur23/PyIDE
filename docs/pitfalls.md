@@ -19,6 +19,7 @@
 - **zip을 믿지 않습니다.** 저장(stored) 항목은 `data.length === e.size`를 확인하고, 항목 수를 제한하고, 겹치는 항목을 거부합니다.
 - **DB에는 평문 폴백을 넣지 않습니다.** TLS가 없는 서버는 SSL 모드를 안내하는 오류로 끝납니다.
 - **업데이트는 서명 확인 없이 설치하지 않습니다.** `phase: 'downloaded'`가 설치의 유일한 관문입니다. `latest.yml`은 서명되지 않으니 그 안의 값을 믿지 않습니다.
+- **서명 없는 외부 exe는 백신이 지울 수 있습니다.** bore.exe는 공식 릴리스를 해시로 고정해 받았는데도 Defender가 `Trojan:Win32/Kepavll!rfn`으로 격리했습니다. 사용자에게 예외 등록을 시키지 않습니다. 작은 프로토콜은 앱 안에서 처리합니다(`main/bore-client.js`). 탐지 원인은 `Get-MpThreatDetection`과 Defender 이벤트 1116/1117에서 읽습니다.
 - **비밀값은 로그와 진단 보고서에 남지 않게 합니다.** 새 형식의 비밀값을 다루면 `main/diagnostics/redact.js`와 `verify/redact.mjs`에 추가합니다.
 
 ## 코딩: Electron과 Node
@@ -107,4 +108,5 @@
 - `shell.openPath`가 없는 파일에서 25초 넘게 돌아오지 않았습니다. 원인을 모릅니다.
 - dompurify: Monaco 0.57.0이 3.4.15를 묶고 있어 npm audit에 critical로 남습니다. Monaco 번들은 해당 모드를 쓰지 않는 것으로 보입니다(코드 확인, 시험은 안 함).
 - 공식 Minecraft Launcher와 실제 게임으로는 한 번도 시험하지 않았습니다.
+- `main/bore-client.js`는 실제 bore.pub에서 주소를 받는 것까지 확인했고, 외부에서 그 주소로 접속하는 것은 `verify/port-sharing-bore-live.mjs`를 사용자가 승인해야 확인할 수 있습니다.
 - 첫 시작 PyIDE 가져오기 알림은 일부가 실패해도 모두 복사했다고 말합니다. 실패한 항목은 다음 시작 때 다시 시도합니다.

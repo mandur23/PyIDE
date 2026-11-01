@@ -76,6 +76,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/safe-mode.mjs
+      - name: bore-client
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/bore-client.mjs
       - name: csp
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

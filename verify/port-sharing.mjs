@@ -209,10 +209,7 @@ await new Promise((r) => setTimeout(r, 1500));
 check(!fakeTunnels().length, 'quitting the IDE ends every tunnel');
 
 // Without cloudflared, and in Korean.
-// A bore.exe that is no program, as Windows sees one Smart App Control or an antivirus blocks.
-mkdirSync(path.join(work, 'empty', 'bore', 'bore-0.6.0'), { recursive: true });
-writeFileSync(path.join(work, 'empty', 'bore', 'bore-0.6.0', 'bore.exe'), 'not a program');
-const k = await launch({ fixture: 'core', port: 9783, name: 'port-sharing-ko', lang: 'ko-KR', env: { PYIDE_INSTALL_ROOT: path.join(work, 'empty') } });
+const k = await launch({ fixture: 'core', port: 9783, name: 'port-sharing-ko', lang: 'ko-KR', env: { PYIDE_INSTALL_ROOT: path.join(work, 'empty'), PYIDE_BORE: q([process.execPath, fakeBore]) } });
 try {
   await k.js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(serverCode(18634))}], ide.root)`);
   await k.until(`ide.ports.state().ports.some((p) => p.port === 18634)`, 'ko server listed', 30000);
@@ -226,7 +223,7 @@ try {
   await k.until(`[...document.querySelectorAll('.dialog')].some((d) => /cloudflared 2026\\.10\\.0\\(\\d+MB\\)/.test(d.textContent))`, 'download offer', 10000);
   k.check(true, 'without cloudflared, Share offers the Install Manager download (with its version and size)');
   await k.shot('ports-ko.png');
-  k.check(await k.js(`!!(ide.installables || []).find((i) => i.id === 'tool:cloudflared') && !!(ide.installables || []).find((i) => i.id === 'tool:bore')`), 'cloudflared and bore are Install Manager items');
+  k.check(await k.js(`!!(ide.installables || []).find((i) => i.id === 'tool:cloudflared') && !(ide.installables || []).find((i) => i.id === 'tool:bore')`), 'cloudflared is an Install Manager item, and nothing downloads bore');
   await k.js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '취소').click()`);
   await k.js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(tcpCode(18636))}], ide.root)`);
   await k.until(`ide.ports.state().ports.some((p) => p.port === 18636)`, 'ko tcp server listed', 30000);
@@ -238,16 +235,35 @@ try {
   const koLeaks = await englishLeaks(k, '.ports-warning', ['bore', 'pub']);
   k.check(!koLeaks.length, `no English in that warning${koLeaks.length ? ` ${q(koLeaks)}` : ''}`);
   await k.js(`[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '공유').click()`);
-  await k.until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('Windows가 bore.exe를 실행하지 않았습니다') && b.textContent.includes('다시 설치'))`, 'blocked bore', 20000)
-    .then(() => k.check(true, 'a bore.exe Windows will not start (spawn UNKNOWN) is explained, with Install Again'),
-      async () => k.check(false, `blocked bore: ${await k.js(`[...document.querySelectorAll('.ide-balloon')].map((b) => b.textContent).join(' | ')`)}`));
-  k.check(await k.js(`!ide.ports.state().tunnels.some((t) => t.port === 18636) && !!document.querySelector('#portsList .ports-row[data-port="18636"] .ports-share')`),
-    'the port is not left "starting": Share is offered again');
+  await k.until(`ide.ports.state().tunnels.some((t) => t.port === 18636 && t.state === 'shared')`, 'a TCP server shares with nothing installed', 15000);
+  k.check(true, 'a TCP server shares without any download');
 } catch (err) {
   k.check(false, err.message);
 }
 for (const r of k.results) a.results.push(r);
 k.close();
+
+// A cloudflared.exe that is no program, as Windows sees one Smart App Control or an antivirus blocks.
+const badExe = path.join(work, 'cloudflared.exe');
+writeFileSync(badExe, 'not a program');
+const b = await launch({ fixture: 'core', port: 9786, name: 'port-sharing-blocked', lang: 'ko-KR', env: { PYIDE_CLOUDFLARED: q([badExe]) } });
+try {
+  await b.js(`(ide.settings.set('ports.confirmShare', false), true)`);
+  await b.js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(serverCode(18637))}], ide.root)`);
+  await b.until(`ide.ports.state().ports.some((p) => p.port === 18637)`, 'blocked: server listed', 30000);
+  await b.js(`(ide.toolWindows.get('Ports').show(), true)`);
+  await b.until(`!!document.querySelector('#portsList .ports-row[data-port="18637"] .ports-share')`, 'blocked: row');
+  await b.js(`(document.querySelector('#portsList .ports-row[data-port="18637"] .ports-share').click(), true)`);
+  await b.until(`[...document.querySelectorAll('.ide-balloon')].some((n) => n.textContent.includes('Windows가 cloudflared.exe를 실행하지 않았습니다') && n.textContent.includes('다시 설치'))`, 'blocked balloon', 20000)
+    .then(() => b.check(true, 'a cloudflared.exe Windows will not start (spawn UNKNOWN) is explained, with Install Again'),
+      async () => b.check(false, `blocked: ${await b.js(`[...document.querySelectorAll('.ide-balloon')].map((n) => n.textContent).join(' | ')`)}`));
+  b.check(await b.js(`!ide.ports.state().tunnels.some((t) => t.port === 18637) && !!document.querySelector('#portsList .ports-row[data-port="18637"] .ports-share')`),
+    'the port is not left "starting": Share is offered again');
+} catch (err) {
+  b.check(false, err.message);
+}
+for (const r of b.results) a.results.push(r);
+b.close();
 outside.kill();
 const failed = a.results.filter((r) => !r.ok).length;
 console.log(`${a.results.length - failed}/${a.results.length} passed`);

@@ -76,6 +76,7 @@
     "asarUnpack": [
       "main/**/*.py",
       "main/notebook/colab-bridge.js",
+      "main/bore-client.js",
       "renderer/features/**/*.py",
       "vendor/**/*",
       "node_modules/pyright/**/*",
