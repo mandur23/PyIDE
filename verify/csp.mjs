@@ -134,9 +134,12 @@ const report = (t, label) => {
     await until(`[...document.querySelectorAll('.dialog-title')].some((n) => n.textContent.includes('Trust and Open Project?'))`, 'trust question');
     await js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Preview in Safe Mode').click(), true)`);
     await until(`ide.root && ide.util.samePath(ide.root, ${S(repo)}) && ide.trusted === false`, 'opened in Safe Mode', 30000);
+    // ide.root is set before the project has finished opening; the recent list is written last, just before projectOpened.
+    await until(`ide.util.samePath(ide.settings.get('recentProjects', [])[0]?.path || '', ${S(repo)})`, 'project finished opening', 30000);
     await js(`ide.openFile(${S(path.join(repo, 'index.html'))})`);
-    await until(`${off} !== ''`, 'preview in Safe Mode');
-    const frame = `ide.activeTab().host.querySelector('.vw-html-frame')`;
+    const page = `ide.tabs.find((tab) => tab.path && ide.util.samePath(tab.path, ${S(path.join(repo, 'index.html'))}))`;
+    await until(`${page}?.host.querySelector('.vw-html-scripts-off')?.textContent`, 'preview in Safe Mode', 30000);
+    const frame = `${page}.host.querySelector('.vw-html-frame')`;
     check(await js(`${frame}.getAttribute('sandbox') === ''`), 'Safe Mode: the preview has no allow-scripts');
     await until(`!!${frame}.src`, 'preview loaded');
     await sleep(1500);
