@@ -3,7 +3,8 @@
 // .http file reaching for a file outside. Nothing of it may run. The planted programs are a small C# program that writes
 // ran.log next to itself and prints PLANTED: whoami.exe, which the review's probes used, leaves no trace when it is
 // given git's or Python's arguments, so a test built on it could not fail. The app is started without
-// NoDefaultCurrentDirectoryInExePath: a shell that has it set (some harnesses do) hides the bug this suite is for.
+// NoDefaultCurrentDirectoryInExePath: a shell that has it set (some harnesses do) hides the bug this suite is for. This
+// process sets it for itself, or its own git calls in the project would run the planted git.exe.
 // To see the suite fail, run a copy of it next to the code before the fix. Usage: node verify/safe-mode.mjs (ports 9925-9926).
 import { execFileSync } from 'child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
@@ -12,6 +13,7 @@ import { createRequire } from 'module';
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 
+process.env.NoDefaultCurrentDirectoryInExePath = '1';
 const { runsWhenOpened } = createRequire(import.meta.url)('../main/trust.js');
 const CSC ='C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
 const q = JSON.stringify;

@@ -25,6 +25,7 @@
 ## 코딩: Electron과 Node
 
 - **`fs.cpSync`는 Electron 38에서 한글 경로면 프로세스가 강제 종료됐습니다.** 복구할 수 없는 네이티브 종료라 try/catch로 못 막습니다. 0.3.0에 배포됐습니다. 지금은 Electron 45라 재현되지 않지만 복사는 기존 헬퍼(`copyMissing`, `copyTree`)를 씁니다.
+- **Electron 45는 `npm install`만으로 실행 파일을 받지 않습니다.** 패키지에 postinstall이 없어서 `electron.exe`가 없는 채로 끝나고, CI 앞쪽 테스트가 `spawn ... electron.exe ENOENT`로 실패했습니다. 우리 `package.json`의 `postinstall`이 `install-electron`을 실행합니다. Electron을 올릴 때 이 동작이 그대로인지 확인합니다.
 - **Electron 45의 `clipboard`는 `read`, `write`, `readText`, `writeText`, `has`, `clear`만 있고 `readText`는 비동기입니다.** `ipcMain.handle`은 await하므로 괜찮지만 동기로 쓰면 안 됩니다.
 - **`safeStorage`의 동기 API는 Electron 45에서 deprecated입니다.** 아직 동작합니다. 12곳(`clipboard-history`, `database`, `installer`, `askpass`)이 씁니다.
 - **IPC 오류는 메시지만 넘어오고 `.code`는 사라집니다.** 화면이 분기해야 하는 조건은 throw가 아니라 결과 값으로 돌려줍니다(`{launched: false, code: 'noLauncher'}`).
