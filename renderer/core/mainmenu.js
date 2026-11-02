@@ -175,8 +175,7 @@
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
       act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
       ...(ide.frameworks?.kinds().length ? [act('Frameworks.RunServer'), act('Frameworks.DebugServer'), ...(ide.frameworks.info().django ? [act('Django.RunManageTask'), act('Django.MakeMigrations'), act('Django.Migrate')] : []), { separator: true }] : []),
-      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'), act('CreateVirtualEnvironment'), act('SyncPythonRequirements'), { separator: true },
-      act('Minecraft.NewServer'), act('Minecraft.NewServerFromModpack'), act('Minecraft.NewPlugin'), act('Minecraft.NewMod'), act('Minecraft.Open'), act('Minecraft.Market'),
+      act('InstallManager'), act('WorkspaceHome'), act('ShowPlugins'), act('ShowProjectStructureSettings'), act('CreateVirtualEnvironment'), act('SyncPythonRequirements'),
     ]) },
     { label: 'Git', submenu: () => tidy([
       act('CheckinProject'), act('Vcs.Push'), act('Vcs.UpdateProject'), act('Git.Branches'), { separator: true },

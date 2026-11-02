@@ -9,8 +9,10 @@
   const monaco = ide.monaco;
 
   const SETTINGS = { model: 'aiChat.model', commitLanguage: 'aiChat.commitLanguage' };
-  const MODELS = [{ id: 'haiku', label: 'Haiku' }, { id: 'sonnet', label: 'Sonnet' }, { id: 'opus', label: 'Opus' }];
+  const MODELS = [{ id: 'haiku', label: 'Haiku' }, { id: 'sonnet', label: 'Sonnet' }, { id: 'opus', label: 'Opus' }, { id: 'fable', label: 'Fable' }];
   const modelId = () => ide.settings.get(SETTINGS.model, 'sonnet');
+  // The setting also takes a full Claude Code model id written by hand.
+  const modelLabel = (id) => MODELS.find((m) => m.id === id)?.label || id;
   const MAX_CHATS = 50;
   const userText = (tag, cls, text) => { const n = el(tag, cls, text); n.dataset.userText = ''; return n; };
   const rel = (p) => ide.util.rel(p).replace(/\\/g, '/');
@@ -274,10 +276,45 @@
   async function fileText(path) {
     const doc = ide.getDocument(path);
     if (doc) return doc.model.getValue();
-    return ide.api.read(path).catch(() => '');
+    return (await ide.api.invoke('ai-chat:readFile', path).catch(() => null))?.text ?? '';
   }
   const languageFor = (path) => ide.getDocument(path)?.model.getLanguageId()
     || languageOf(path.split('.').pop()) || 'plaintext';
+
+  // Paths from the Add Files dialog and from drops, in or outside the project. Each is read once here to turn down what
+  // cannot be sent; its text is read when the message goes, like an @ mention's.
+  async function attachFiles(paths) {
+    const refused = [];
+    for (const p of paths) {
+      const usable = ide.mayFollowPath(p) && (await ide.api.invoke('ai-chat:readFile', p).catch(() => null))?.ok;
+      if (!usable) refused.push(basename(p));
+      else if (!chips.mentions.some((x) => samePath(x, p))) chips.mentions.push(p);
+    }
+    renderChips();
+    setStatus(refused.length ? tr('Not added: {names}. Only text files can be added.', { names: refused.join(', ') }) : '', 'error');
+    if (paths.length) focusInput();
+  }
+
+  // Files from Explorer and rows of the project tree both arrive as files. The document's drop handler would open them
+  // in the editor, so they stop here.
+  function acceptDrops(node) {
+    const hasFiles = (e) => e.dataTransfer.types.includes('Files');
+    node.addEventListener('dragover', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      node.classList.add('dropping');
+    });
+    node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove('dropping'); });
+    node.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      node.classList.remove('dropping');
+      attachFiles([...e.dataTransfer.files].map((f) => ide.api.pathForFile(f)).filter(Boolean));
+    });
+  }
 
   // The chips as sent: [{kind, path (relative), language, text, ...}], and as remembered in the message.
   async function gatherContext(text) {
@@ -345,7 +382,7 @@
   }
 
   // ---------- UI ----------
-  let root, list, chipsEl, input, sendBtn, statusEl, completeEl, tw;
+  let root, list, chipsEl, input, sendBtn, modelBtn, statusEl, completeEl, tw;
   let complete = null; // {items, index, start}
 
   tw = ide.registerToolWindow({
@@ -361,13 +398,21 @@
       input.placeholder = tr('Ask about your code. @ adds a file, Enter sends, Shift+Enter adds a line.');
       completeEl = el('div', 'aic-complete hidden');
       const foot = el('div', 'aic-foot');
+      const attachBtn = el('button', 'aic-tool aic-attach');
+      attachBtn.appendChild(ide.icon('attach'));
+      attachBtn.title = tr('Add Files…');
+      attachBtn.onclick = async () => attachFiles(await ide.api.invoke('ai-chat:pickFiles').catch(() => []));
+      modelBtn = el('button', 'aic-tool aic-model');
+      modelBtn.title = tr('Choose the model');
+      modelBtn.onclick = pickModel;
       statusEl = el('span', 'aic-chat-status');
       sendBtn = el('button', 'primary aic-send');
       sendBtn.onclick = () => (pending ? stop() : send());
-      foot.append(statusEl, sendBtn);
+      foot.append(attachBtn, modelBtn, statusEl, sendBtn);
       composer.append(completeEl, chipsEl, input, foot);
-      root.append(list, composer);
+      root.append(list, composer, el('div', 'aic-drop-hint', tr('Drop files to add them')));
       container.appendChild(root);
+      acceptDrops(root);
       input.addEventListener('keydown', onInputKey);
       input.addEventListener('input', updateComplete);
       input.addEventListener('blur', () => setTimeout(closeComplete, 150));
@@ -481,6 +526,20 @@
     sendBtn.classList.toggle('stop', !!pending);
     sendBtn.title = pending ? tr('Stop generating') : tr('Send (Enter)');
     if (!pending) setStatus('');
+    renderModel();
+  }
+
+  function renderModel() {
+    modelBtn?.replaceChildren(userText('span', 'aic-model-name', modelLabel(modelId())), ide.icon('chevronDown', '▾'));
+  }
+  ide.on('settingsChanged', (key) => { if (key === SETTINGS.model) renderModel(); });
+
+  function pickModel() {
+    const r = modelBtn.getBoundingClientRect();
+    const current = modelId();
+    ide.ui.contextMenu(r.left, r.top, MODELS.map((m) => ({
+      label: m.label, hint: m.id === current ? '✓' : '', run: () => { ide.settings.set(SETTINGS.model, m.id); input.focus(); },
+    })));
   }
 
   function chipNode(label, kind, title, onRemove) {
@@ -705,6 +764,7 @@
       chats: history.chats.filter((c) => c.messages.length).length,
       pending: !!pending,
       commitPending: !!commitReq,
+      model: modelBtn?.querySelector('.aic-model-name').textContent,
       messages: (currentChat()?.messages || []).map((m) => ({ role: m.role, text: m.text, context: m.context || null, stopped: !!m.stopped, error: m.error || null, pending: !!m.pending })),
       chips: [...(chipsEl?.querySelectorAll('.aic-chip') || [])].map((c) => ({ kind: c.dataset.kind, label: c.querySelector('.aic-chip-label').textContent })),
     }),

@@ -10,8 +10,6 @@ const BASE = {
   forge: 'https://maven.minecraftforge.net/net/minecraftforge/forge',
   forgePromos: 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json',
   neoforge: 'https://maven.neoforged.net/releases/net/neoforged/neoforge',
-  neoforgeMdk: 'https://github.com/NeoForgeMDKs',
-  fabricMdk: 'https://github.com/FabricMC/fabric-example-mod',
   purpur: 'https://api.purpurmc.org/v2/purpur',
   velocity: 'https://fill.papermc.io/v3/projects/velocity',
   adoptium: 'https://api.adoptium.net/v3',
@@ -141,10 +139,9 @@ const fillVersions = async (projectUrl) => Object.values((await getJson(projectU
 
 // kind -> {title, plugins: the plugin API that runs on it ('paper' for Paper and its forks, 'velocity'), mods: the
 // mod loader players need, proxy: it fronts other servers, java?: the Java it needs when that is not Minecraft's,
-// versions(), resolve(mc)}. resolve gives {file, url, sha256?, sha1?, md5?, loader?, build?, installer?: true, mdk?}
-// where installer means the file is an installer run with --installServer and mdk the mod template's zip (a list
-// to try in order when it is not certain to exist). A mod loader's resolve takes the loader version wanted (a
-// modpack names the one it was made with); without one it picks the recommended or newest.
+// versions(), resolve(mc)}. resolve gives {file, url, sha256?, sha1?, md5?, loader?, build?, installer?: true} where
+// installer means the file is an installer run with --installServer. A mod loader's resolve takes the loader version
+// wanted (a modpack names the one it was made with); without one it picks the recommended or newest.
 const KINDS = {
   paper: {
     title: 'Paper', plugins: 'paper', mods: null,
@@ -189,9 +186,7 @@ const KINDS = {
       const loader = wanted || (await getJson(`${base().fabric}/versions/loader/${mc}`)).find((l) => l.loader?.stable)?.loader.version;
       const installer = (await getJson(`${base().fabric}/versions/installer`)).find((i) => i.stable)?.version;
       if (!loader || !installer) throw new Error(`Fabric has no loader for ${mc}`);
-      // The official example mod keeps a branch per Minecraft version.
-      return { file: 'server.jar', url: `${base().fabric}/versions/loader/${mc}/${loader}/${installer}/server/jar`, loader,
-        mdk: [`${base().fabricMdk}/archive/refs/heads/${mc}.zip`] };
+      return { file: 'server.jar', url: `${base().fabric}/versions/loader/${mc}/${loader}/${installer}/server/jar`, loader };
     },
   },
   forge: {
@@ -207,7 +202,7 @@ const KINDS = {
       const name = `forge-${mc}-${loader}-installer.jar`;
       const url = `${base().forge}/${mc}-${loader}/${name}`;
       const sha256 = (await getText(`${url}.sha256`).catch(() => '')).trim().split(/\s/)[0] || undefined;
-      return { file: name, url, sha256, loader, installer: true, mdk: [`${base().forge}/${mc}-${loader}/forge-${mc}-${loader}-mdk.zip`] };
+      return { file: name, url, sha256, loader, installer: true };
     },
   },
   neoforge: {
@@ -227,22 +222,16 @@ const KINDS = {
       const name = `neoforge-${loader}-installer.jar`;
       const url = `${base().neoforge}/${loader}/${name}`;
       const sha256 = (await getText(`${url}.sha256`).catch(() => '')).trim().split(/\s/)[0] || undefined;
-      // NeoForge publishes an MDK repository per Minecraft version, some weeks after the version: a newer one without
-      // its own MDK starts from the nearest older one of the same year (26.3 from 26.2, then 26.1), whose
-      // gradle.properties the mod's creation points at this version (newMod).
-      const [major, minor] = mc.split('.').map(Number);
-      const older = major >= 26 ? Array.from({ length: minor - 1 }, (_v, i) => `${major}.${minor - 1 - i}`) : [];
-      return { file: name, url, sha256, loader, installer: true, mdk: [mc, ...older].map((v) => `${base().neoforgeMdk}/MDK-${v}-ModDevGradle/archive/refs/heads/main.zip`) };
+      return { file: name, url, sha256, loader, installer: true };
     },
   },
 };
 
-// Temurin for a Java major version from Adoptium: {url, sha256, size, name}. A JRE runs a server; Gradle builds need
-// the JDK.
-async function temurin(major, jdk) {
-  const list = await getJson(`${base().adoptium}/assets/latest/${major}/hotspot?architecture=x64&image_type=${jdk ? 'jdk' : 'jre'}&os=windows&vendor=eclipse`);
+// The Temurin JRE for a Java major version from Adoptium: {url, sha256, size, name}.
+async function temurin(major) {
+  const list = await getJson(`${base().adoptium}/assets/latest/${major}/hotspot?architecture=x64&image_type=jre&os=windows&vendor=eclipse`);
   const pkg = list.map((a) => a.binary?.package).find((p) => p?.link?.endsWith('.zip'));
-  if (!pkg) throw new Error(`Adoptium has no Java ${major} ${jdk ? 'JDK' : 'JRE'} for Windows`);
+  if (!pkg) throw new Error(`Adoptium has no Java ${major} JRE for Windows`);
   return { url: pkg.link, sha256: pkg.checksum, size: pkg.size, name: pkg.name };
 }
 

@@ -522,14 +522,12 @@
     box.append(el('div', 'mcset-desc muted', tr('The Nether gets its own recommended list, and the End stays off because it has no ores to hide. Other worlds added by a plugin use the overworld\'s settings.')));
     return box;
   }
-  // In Craft a tab covers the whole app, the Market included, so the tab has to go for the Market to be seen.
+  // A tab covers the whole app, the Market included, so the tab has to go for the Market to be seen.
   async function xrayMarket(v) {
-    if (ide.appMode === 'craft') {
-      if (changedKeys(changes(v)).length && !(await ide.ui.confirm(tr('Throw away the changes not saved yet?'), { ok: tr('Search the Market') }))) return;
-      ide.closeTab(tabId(v.srv.dir), true);
-    }
+    if (changedKeys(changes(v)).length && !(await ide.ui.confirm(tr('Throw away the changes not saved yet?'), { ok: tr('Search the Market') }))) return;
+    ide.closeTab(tabId(v.srv.dir), true);
     await mc.market.open({ type: 'mod', server: v.srv, query: 'anti-xray' });
-    if (ide.appMode === 'craft' && ide.tabs.length) ide.notifications?.notify({ title: tr('Close the other tabs to see the Market.'), group: 'Minecraft' });
+    if (ide.tabs.length) ide.notifications?.notify({ title: tr('Close the other tabs to see the Market.'), group: 'Minecraft' });
   }
   function xrayNewControl(v) {
     const box = el('div', 'mcset-xray-new');

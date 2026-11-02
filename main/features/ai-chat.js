@@ -5,7 +5,10 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { dialog } = require('electron');
 const { complete } = require('../ai/claude');
+const { allowShare } = require('../security');
+const textCodec = require('../text-codec');
 const trust = require('../trust');
 
 const CHAT_SYSTEM = `You are the AI assistant inside Nano Studio, a Python IDE. The user asks about their project; files and selections they attached are given as context.
@@ -25,6 +28,28 @@ Reply with only the commit message: no code fences, no quotes, nothing before or
 const MODEL_ID = /^[\w.\-[\]]+$/;
 const MAX_FILE_CHARS = 40000;
 const MAX_HISTORY_CHARS = 60000;
+// The most bytes MAX_FILE_CHARS can take, in the encodings the IDE reads.
+const MAX_FILE_BYTES = MAX_FILE_CHARS * 4;
+
+// The start of a file for the prompt, which keeps only MAX_FILE_CHARS: a dropped log or disk image can be any size.
+// -> {ok: true, text}, or {ok: false} for a folder, a binary file or one that cannot be read.
+function readFileStart(file) {
+  let fd;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return { ok: false };
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(Math.min(stat.size, MAX_FILE_BYTES));
+    const head = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0));
+    const encoding = textCodec.detect(head);
+    if (!encoding.startsWith('utf-16') && textCodec.looksBinary(head)) return { ok: false };
+    return { ok: true, text: textCodec.decode(head, encoding) };
+  } catch {
+    return { ok: false };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
 
 function chatPrompt({ messages, context = [] }) {
   const parts = [];
@@ -177,7 +202,7 @@ function historyFile(app, root) {
   return path.join(app.getPath('userData'), 'ai-chat', `${id}.json`);
 }
 
-exports.register = ({ ipcMain, app }) => {
+exports.register = ({ ipcMain, app, getWindow }) => {
   const running = new Map(); // reqId -> AbortController
 
   async function run(reqId, { system, prompt, model, timeoutMs, onText }) {
@@ -224,6 +249,15 @@ exports.register = ({ ipcMain, app }) => {
 
   ipcMain.handle('ai-chat:cancel', (_e, reqId) => { running.get(reqId)?.abort(); });
 
+  ipcMain.handle('ai-chat:readFile', (_e, file) => readFileStart(file));
+
+  ipcMain.handle('ai-chat:pickFiles', async () => {
+    const r = await dialog.showOpenDialog(getWindow(), { properties: ['openFile', 'multiSelections'] });
+    if (r.canceled) return [];
+    r.filePaths.forEach(allowShare);
+    return r.filePaths;
+  });
+
   ipcMain.handle('ai-chat:loadHistory', (_e, root) => {
     try { return JSON.parse(fs.readFileSync(historyFile(app, root), 'utf8')); } catch { return null; }
   });
@@ -239,6 +273,7 @@ exports.register = ({ ipcMain, app }) => {
 };
 
 exports.chatPrompt = chatPrompt;
+exports.readFileStart = readFileStart;
 exports.truncateDiff = truncateDiff;
 exports.cleanMessage = cleanMessage;
 exports.collectDiff = collectDiff;

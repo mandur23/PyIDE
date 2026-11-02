@@ -4,6 +4,9 @@
   const { el, basename, dirname, joinPath, samePath } = ide.util;
   const CURRENT = '__current';
   const MAX_TEMPORARY = 5;
+  // A saved configuration whose plugin is not loaded (turned off, or another app's) stays saved, so turning the plugin
+  // back on brings it back, and can be removed in Edit Configurations.
+  const unavailable = (cfg) => tr("'{name}' cannot run: the plugin it belongs to is not loaded.", { name: cfg.name });
   const types = new Map();
   const typeIcon = (type) => types.get(type)?.icon || 'runRun';
   const gutterProviders = [];
@@ -487,7 +490,10 @@
   // opts.remember: false keeps it from becoming what Run repeats with nothing selected (a build, not the program).
   async function runConfig(cfg, opts = {}) {
     const type = types.get(cfg?.type);
-    if (!type) return;
+    if (!type) {
+      if (cfg) ide.ui.alert(unavailable(cfg));
+      return;
+    }
     if (opts.confirm !== false && !(await confirmRerun(cfg))) return;
     const executor = executors.get(opts.executor) || null;
     tw.show();
@@ -703,12 +709,12 @@
   target.title = tr('Run/Debug Configurations');
   ide.registerToolbarItem({ order: 60, el: target });
   ide.registerToolbarItem({ order: 70, el: runBtn });
-  ide.registerToolbarItem({ order: 90, el: stopBtn });
+  ide.registerToolbarItem({ order: 85, el: stopBtn });
   // PyCharm's "More Actions" (⋮) in the run widget: the other executors for the selected configuration.
   const moreBtn = el('button', 'tb-icon run-more-btn hidden');
   moreBtn.appendChild(ide.icon('moreVertical', '⋮'));
   moreBtn.title = tr('More Actions');
-  ide.registerToolbarItem({ order: 85, el: moreBtn });
+  ide.registerToolbarItem({ order: 90, el: moreBtn });
 
   function renderTarget() {
     const cfg = selectedConfig();
@@ -933,21 +939,23 @@
       render();
     });
 
+    function renderGroup(icon, title, group) {
+      if (!group.length) return;
+      const head = el('div', 'rc-group');
+      head.append(ide.icon(icon), el('span', null, title));
+      list.appendChild(head);
+      for (const c of group) {
+        const row = el('div', 'rc-item' + (c === current ? ' selected' : '') + (c.temporary ? ' temporary' : ''), c.name || tr('Unnamed'));
+        row.dataset.userText = '';
+        row.onclick = () => { current = c; render(); };
+        list.appendChild(row);
+      }
+    }
+
     function renderList() {
       list.replaceChildren();
-      for (const t of types.values()) {
-        const group = draft.filter((c) => c.type === t.type);
-        if (!group.length) continue;
-        const head = el('div', 'rc-group');
-        head.append(ide.icon(t.icon), el('span', null, t.title));
-        list.appendChild(head);
-        for (const c of group) {
-          const row = el('div', 'rc-item' + (c === current ? ' selected' : '') + (c.temporary ? ' temporary' : ''), c.name || tr('Unnamed'));
-          row.dataset.userText = '';
-          row.onclick = () => { current = c; render(); };
-          list.appendChild(row);
-        }
-      }
+      for (const t of types.values()) renderGroup(t.icon, t.title, draft.filter((c) => c.type === t.type));
+      renderGroup('warning', tr('Unavailable'), draft.filter((c) => !types.has(c.type)));
       if (!draft.length) list.appendChild(el('div', 'rc-none muted', tr('No run configurations added. Click ＋ to add one.')));
     }
 
@@ -961,6 +969,7 @@
       form.replaceChildren();
       if (!current) return form.appendChild(el('div', 'muted', tr('Select a configuration or add a new one.')));
       const t = types.get(current.type);
+      if (!t) return form.appendChild(el('div', 'muted rc-unavailable', unavailable(current)));
       const name = el('input');
       name.dataset.key = 'name';
       name.value = current.name;

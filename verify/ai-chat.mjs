@@ -1,11 +1,11 @@
 // AI Chat tool window and AI commit messages against a stand-in `claude` that answers in the CLI's stream-json format
 // (PYIDE_CLAUDE_PATH, as in verify/ai-edit.mjs). Ports 9940-9941.
-import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { createRequire } from 'module';
-import { launch, openFile } from './lib.mjs';
+import { clickMenuPath, launch, menuRow, openFile } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -312,6 +312,108 @@ try {
   check(head.capped && head.out.startsWith('diff --git') && head.out.length < 4096 + 65536, `reading a diff stops at the size limit (${head.out.length} characters read)`);
   await shot('commit.png');
 
+  // ---------- the model picker ----------
+  await js(`(ide.aiChat.newChat(), ide.toolWindows.get('AIChat').show(), true)`);
+  scenario({ chat: { reply: 'OK' } });
+  check((await state()).model === 'Sonnet', 'the composer shows the chat model');
+  await clickText('.aic-model');
+  await until(`!!${menuRow('Fable')}`, 'model menu');
+  const models = await js(`(() => {
+    const rows = [...document.querySelectorAll('.context-menu[data-level="0"] > .menu-item')];
+    const r = document.querySelector('.context-menu[data-level="0"]').getBoundingClientRect();
+    const opus = ${menuRow('Opus')}.getBoundingClientRect();
+    return { labels: rows.map((n) => n.querySelector('.menu-label').textContent), ticked: rows.filter((n) => n.textContent.includes('✓')).map((n) => n.querySelector('.menu-label').textContent),
+      inside: r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth,
+      seen: !!document.elementFromPoint(opus.x + 10, opus.y + opus.height / 2)?.closest('.context-menu') };
+  })()`);
+  check(models.labels.join() === 'Haiku,Sonnet,Opus,Fable' && models.ticked.join() === 'Sonnet', `the menu lists the models and ticks the current one (${models.labels.join(', ')})`);
+  check(models.inside && models.seen, 'the menu opens fully on screen from the bottom of the window');
+  await shot('model-menu.png');
+  await clickMenuPath(t, ['Opus']);
+  await until(`ide.aiChat.state().model === 'Opus'`, 'model changed');
+  check(await js(`ide.settings.get('aiChat.model') === 'opus' && document.activeElement?.classList.contains('aic-input')`), 'picking a model saves the setting and goes back to the input');
+  const modelOf = (c) => c.args[c.args.indexOf('--model') + 1];
+  await js(`ide.aiChat.send('which model')`);
+  await until(`!ide.aiChat.state().pending && ide.aiChat.state().messages.length === 2`, 'reply from the picked model', 15000);
+  check(modelOf(calls().filter((c) => c.kind === 'chat').at(-1)) === 'opus', 'the next message goes to the picked model');
+  await js(`(ide.settings.set('aiChat.model', 'fable'), true)`);
+  check((await state()).model === 'Fable', 'the picker follows Settings › AI Chat');
+  await js(`(ide.settings.set('aiChat.model', 'claude-opus-5-5'), true)`);
+  check((await state()).model === 'claude-opus-5-5', 'a model id written by hand shows as it is');
+  await js(`ide.aiChat.send('hand-written id')`);
+  await until(`!ide.aiChat.state().pending && ide.aiChat.state().messages.length === 4`, 'reply from the written id', 15000);
+  check(modelOf(calls().filter((c) => c.kind === 'chat').at(-1)) === 'claude-opus-5-5', 'and reaches Claude Code as it is');
+  await js(`(ide.settings.set('aiChat.model', 'sonnet'), true)`);
+
+  // ---------- adding files: the button, Explorer drops, tree drags ----------
+  const away = mkdtempSync(path.join(tmpdir(), 'pyide-ai-chat-files-'));
+  const inAway = (name) => path.join(away, name);
+  writeFileSync(inAway('notes.txt'), '메모: 첨부 내용\n');
+  writeFileSync(inAway('legacy.txt'), Buffer.from([0xc7, 0xd1, 0xb1, 0xdb, 0x0a])); // 한글 in CP949
+  writeFileSync(inAway('photo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]));
+  writeFileSync(inAway('huge.log'), 'line of a very long log\n'.repeat(200000));
+  writeFileSync(inAway('dropped.md'), '# dropped\n');
+  mkdirSync(inAway('folder'));
+  await js(`(ide.aiChat.newChat(), true)`);
+  await js(`(window.__api = ide.api, ide.api = { ...window.__api, invoke: (c, ...a) => (c === 'ai-chat:pickFiles' ? Promise.resolve(${JSON.stringify([inAway('notes.txt'), inAway('legacy.txt'), inAway('huge.log'), inAway('photo.png'), inAway('folder')])}) : window.__api.invoke(c, ...a)) }, true)`);
+  await clickText('.aic-attach');
+  await until(`ide.aiChat.state().chips.some((c) => c.label === 'huge.log')`, 'files from the dialog');
+  const added = await state();
+  const labels = added.chips.filter((c) => c.kind === 'file').map((c) => c.label);
+  check(labels.join() === 'notes.txt,legacy.txt,huge.log', `the button adds the chosen text files as chips (${labels.join(', ')})`);
+  const refusal = await js(`document.querySelector('.aic-chat-status').textContent`);
+  check(/photo\.png/.test(refusal) && /folder/.test(refusal) && !/notes\.txt/.test(refusal), `a binary file and a folder are turned down by name (${refusal})`);
+  await clickText('.aic-attach');
+  await until(`/photo/.test(document.querySelector('.aic-chat-status').textContent)`, 'second pick');
+  check((await state()).chips.filter((c) => c.kind === 'file').length === 3, 'adding the same files again adds nothing');
+  await js(`(ide.api = window.__api, true)`);
+
+  const overList = await js(`(() => { const r = document.querySelector('.aic-list').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  const tabs = await js('ide.tabs.length');
+  const dragData = (files) => ({ items: [], files, dragOperationsMask: 1 });
+  await cdp('Input.dispatchDragEvent', { type: 'dragEnter', ...overList, data: dragData([inAway('dropped.md')]) });
+  await cdp('Input.dispatchDragEvent', { type: 'dragOver', ...overList, data: dragData([inAway('dropped.md')]) });
+  await until(`getComputedStyle(document.querySelector('.aic-drop-hint')).display === 'flex'`, 'drop hint');
+  check((await js(`document.querySelector('.aic-drop-hint').textContent`)) === 'Drop files to add them', 'dragging files over the chat shows where to drop them');
+  await shot('drop-hint.png');
+  await cdp('Input.dispatchDragEvent', { type: 'drop', ...overList, data: dragData([inAway('dropped.md')]) });
+  await until(`ide.aiChat.state().chips.some((c) => c.label === 'dropped.md')`, 'dropped chip');
+  check(await js(`getComputedStyle(document.querySelector('.aic-drop-hint')).display === 'none' && ide.tabs.length === ${tabs}`), 'a file dropped from Explorer becomes a chip, is not opened in the editor, and the hint goes');
+  check(await js(`document.activeElement?.classList.contains('aic-input')`), 'the input has the focus after a drop');
+
+  // A real mouse gesture on a tree row starts the system drag; it comes back over the window as files.
+  await js(`(window.__drags = [], window.__send = ide.api.send, ide.api = { ...ide.api, send: (c, p) => (c === 'tree:startDrag' ? window.__drags.push(p) : window.__send(c, p)) }, true)`);
+  await js(`(ide.toolWindows.get('Project').show(), true)`);
+  const row = `[...document.querySelectorAll('#tree .node')].find((n) => n._entry?.path.endsWith('\\\\README.md'))`;
+  await until(`!!${row}`, 'tree row');
+  const from = await js(`(() => { const r = ${row}.getBoundingClientRect(); return { x: r.x + Math.min(40, r.width / 2), y: r.y + r.height / 2 }; })()`);
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from });
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 });
+  for (let i = 1; i <= 6; i++) await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x + i * 4, y: from.y + i * 3, button: 'left', buttons: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: from.x + 24, y: from.y + 18, button: 'left', clickCount: 1 });
+  await until(`window.__drags.length === 1 && !!ide.treeDrag`, 'system drag from the tree');
+  const treeFile = (await js('window.__drags[0]'));
+  for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, ...overList, data: dragData(treeFile) });
+  await until(`ide.aiChat.state().chips.some((c) => c.label === 'README.md')`, 'tree row chip');
+  check(await js(`ide.tabs.length === ${tabs}`), 'a row dragged from the project tree becomes a chip and stays out of the editor');
+  await js(`(ide.api = window.__api, true)`);
+  check((await js(`document.querySelector('.aic-input').value`)) === '', 'dropping files leaves the input empty');
+
+  scenario({ chat: { reply: 'OK' } });
+  await type('첨부 파일을 봐 줘');
+  await press('Enter');
+  await until(`!ide.aiChat.state().pending && ide.aiChat.state().messages.length === 2`, 'reply with attachments', 20000);
+  const sent = calls().filter((c) => c.kind === 'chat').at(-1);
+  const inPrompt = (name) => sent.stdin.includes(`path="${inAway(name).replace(/\\/g, '/')}"`);
+  check(inPrompt('notes.txt') && sent.stdin.includes('메모: 첨부 내용'), 'a file outside the project goes into the request with its text');
+  check(sent.stdin.includes('한글'), 'a CP949 file is decoded, not sent as mojibake');
+  check(/<file path="[^"]*huge\.log" language="[^"]*" truncated="true">/.test(sent.stdin) && sent.stdin.length < 120000, `a large file is cut before it is sent (${sent.stdin.length} characters for a ${24 * 200000}-byte file)`);
+  check(inPrompt('dropped.md') && sent.stdin.includes('# dropped') && sent.stdin.includes('<file path="README.md"'), 'the dropped file and the tree row go along');
+  const after = await state();
+  check(!after.chips.some((c) => c.kind === 'file') && after.messages[0].context.length === sent.stdin.match(/<file /g).length, 'the chips go with the message, which remembers them');
+  check(await js(`[...document.querySelectorAll('.aic-msg.user .aic-chip-label')].map((n) => n.textContent).includes('dropped.md')`), 'the message shows its files');
+  await shot('attached.png');
+
   // ---------- an expired sign-in offers to sign in again ----------
   await js(`(ide.aiChat.newChat(), true)`);
   scenario({ chat: { error: 'Failed to authenticate: OAuth session expired and could not be refreshed' } });
@@ -334,6 +436,7 @@ try {
   const leaks = await englishLeaks(k, '#rightPanel');
   t.check(!leaks.length, `the chat window is in Korean (${leaks.map((l) => l.text).join(' | ') || 'no English left'})`);
   t.check(await k.js(`document.querySelector('.aic-send').textContent === '보내기' && document.getElementById('rightTitle').textContent === 'AI 채팅'`), 'Send and the title are translated');
+  t.check(await k.js(`document.querySelector('.aic-attach').title === '파일 추가…' && document.querySelector('.aic-model').title === '모델 선택' && document.querySelector('.aic-drop-hint').textContent === '여기에 놓으면 파일이 추가됩니다'`), 'the composer tooltips and the drop hint are translated');
 } catch (err) {
   t.check(false, err.message);
 }

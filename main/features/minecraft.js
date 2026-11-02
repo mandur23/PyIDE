@@ -1,9 +1,9 @@
-// Main side of the minecraft plugin: Minecraft servers in a project (servers/<name>, described by pyide-server.json),
-// plugin projects (plugins/<name>, pyide-plugin.json) and mod projects (mods/<name>, pyide-mod.json), the Java each
-// needs, the client pack (.mrpack) players import to get a modded server's mods, the resource pack a server sends
-// players when they join, and a Velocity proxy's wiring to the project's Paper servers. Downloads are checked against
-// the checksum their source publishes; Java comes from this computer's JDKs or, when the version a server needs is
-// missing, from Adoptium's Temurin into ~/.pyide/java. Nothing runs for a project the user has not trusted.
+// Main side of the minecraft plugin, which loads in craft mode only: Minecraft servers in a project (servers/<name>,
+// described by pyide-server.json), the Java each needs, the client pack (.mrpack) players import to get a modded
+// server's mods, the resource pack a server sends players when they join, and a Velocity proxy's wiring to the
+// project's Paper servers. Downloads are checked against the checksum their source publishes; Java comes from this
+// computer's JDKs or, when the version a server needs is missing, from Adoptium's Temurin into ~/.pyide/java. Nothing
+// runs for a project the user has not trusted.
 // PYIDE_MC_JAVA (tests): a Java home used for every version.
 const { execFile } = require('child_process');
 const crypto = require('crypto');
@@ -12,12 +12,11 @@ const path = require('path');
 const trust = require('../trust');
 const { download, tarExe } = require('../installer/servers');
 const { createToolchains, installRoot } = require('../installer/toolchains');
-const { KINDS, javaFor, temurin, HEADERS, mojangProfile } = require('../minecraft/sources');
+const { KINDS, javaFor, temurin, mojangProfile } = require('../minecraft/sources');
 const { writeZip, readEntry } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
 const { createImports, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
-const gameWindow = require('../minecraft/game-window');
 const translation = require('../minecraft/translate');
 const serverSettings = require('../minecraft/server-settings');
 const xray = require('../minecraft/anti-xray');
@@ -27,23 +26,14 @@ const { createPlayers } = require('../minecraft/players');
 const { forNewServer } = require('../minecraft/players/bridge');
 const { complete } = require('../ai/claude');
 const { privateShare } = require('./port-sharing');
-const { app, BrowserWindow, desktopCapturer, safeStorage, screen } = require('electron');
-const { allowWindowCapture } = require('../security');
+const { app, safeStorage } = require('electron');
 
 const SERVER = 'pyide-server.json';
 // The app-wide level new servers start with, in settings.json: the Server Settings tab writes it through ide.settings.
 const XRAY_DEFAULT = 'minecraft.antiXrayDefault';
-const PLUGIN = 'pyide-plugin.json';
-const MOD = 'pyide-mod.json';
 const NAME = /^[A-Za-z][\w-]{0,39}$/;
-const MOD_ID = /^[a-z][a-z0-9_]{1,63}$/;
-const PACKAGE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
 // Windows keeps these names for devices: no folder can have one, whatever its case.
 const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
-const KEYWORDS = new Set(('abstract assert boolean break byte case catch char class const continue default do double else enum extends final '
-  + 'finally float for goto if implements import instanceof int interface long native new package private protected public return short '
-  + 'static strictfp super switch synchronized this throw throws transient try void volatile while true false null').split(' '));
-const javaPackage = (pkg) => PACKAGE.test(pkg || '') && !pkg.split('.').some((w) => KEYWORDS.has(w));
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 const writeJson = (p, v) => fs.writeFileSync(p, `${JSON.stringify(v, null, 2)}\n`);
@@ -94,28 +84,28 @@ const majorOf = (v) => { const m = /^1\.(\d+)|^(\d+)/.exec(v || ''); return m ? 
 
 // ---------- Java ----------
 const javaRoot = () => path.join(installRoot(), 'java');
-// A Java home of exactly `major` (a JDK when jdk is set): this computer's JDKs, then a Temurin downloaded before.
-async function findJava(major, jdk) {
+// A Java home of exactly `major`: this computer's JDKs, then a Temurin downloaded before (JDKs too, which mod builds
+// used to fetch).
+async function findJava(major) {
   if (process.env.PYIDE_MC_JAVA) return process.env.PYIDE_MC_JAVA;
-  const exe = (home) => isFile(path.join(home, 'bin', jdk ? 'javac.exe' : 'java.exe'));
+  const exe = (home) => isFile(path.join(home, 'bin', 'java.exe'));
   for (const t of await createToolchains().detect('jdk')) if (majorOf(t.version) === major && exe(t.home)) return t.home;
-  for (const kind of jdk ? ['jdk'] : ['jre', 'jdk']) {
+  for (const kind of ['jre', 'jdk']) {
     const dir = path.join(javaRoot(), `temurin-${major}-${kind}`);
     const home = fs.existsSync(dir) ? fs.readdirSync(dir).map((n) => path.join(dir, n)).find(exe) : null;
     if (home) return home;
   }
   return null;
 }
-async function ensureJava(major, { jdk = false, log }) {
-  const found = await findJava(major, jdk);
+async function ensureJava(major, { log }) {
+  const found = await findJava(major);
   if (found) return found;
-  const kind = jdk ? 'jdk' : 'jre';
-  const t = await temurin(major, jdk).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
-  log(`Java ${major} is not installed; downloading Temurin ${kind.toUpperCase()} ${major} from Adoptium.\n`);
+  const t = await temurin(major).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
+  log(`Java ${major} is not installed; downloading Temurin JRE ${major} from Adoptium.\n`);
   fs.mkdirSync(javaRoot(), { recursive: true });
   const archive = path.join(javaRoot(), t.name);
   await fetchFile(t.url, archive, { sha256: t.sha256, size: t.size }, log);
-  const dir = path.join(javaRoot(), `temurin-${major}-${kind}`);
+  const dir = path.join(javaRoot(), `temurin-${major}-jre`);
   const staging = `${dir}.extract`;
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true });
@@ -123,13 +113,7 @@ async function ensureJava(major, { jdk = false, log }) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.renameSync(staging, dir);
   fs.rmSync(archive, { force: true });
-  return findJava(major, jdk);
-}
-// javac of any JDK at least `major` compiles for it (--release); else a JDK of that version is downloaded.
-async function ensureJavac(major, log) {
-  if (process.env.PYIDE_MC_JAVA) return process.env.PYIDE_MC_JAVA;
-  const jdks = (await createToolchains().detect('jdk')).filter((t) => majorOf(t.version) >= major && isFile(path.join(t.home, 'bin', 'javac.exe')));
-  return jdks.sort((a, b) => majorOf(a.version) - majorOf(b.version))[0]?.home || ensureJava(major, { jdk: true, log });
+  return findJava(major);
 }
 
 // ---------- servers ----------
@@ -144,16 +128,13 @@ const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLo
 // AutoModpack's jar in the server's mods: players who have it get the server's mods when they join.
 const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).find((n) => /^automodpack.*\.jar$/i.test(n)) : null) || null;
 
-// The project's servers, each with what its kind runs and the plugin and mod projects that deploy to it.
+// The project's servers, each with what its kind runs.
 function servers(root) {
-  const projects = [...described(path.join(root, 'plugins'), PLUGIN).map((p) => ({ ...p, type: 'plugin' })),
-    ...described(path.join(root, 'mods'), MOD).map((p) => ({ ...p, type: 'mod' }))];
   return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind]).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
     // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
     offline: /^online-mode=false\s*$/m.test(fs.existsSync(path.join(s.dir, 'server.properties')) ? fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8') : ''),
-    projects: projects.filter((p) => sameDir(path.resolve(p.dir, p.server), s.dir)).map(({ type, name, dir }) => ({ type, name, dir })),
   }));
 }
 const serverOf = (dir) => {
@@ -227,7 +208,7 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
     }
     for (const sub of source.plugins ? ['plugins'] : source.mods ? ['mods'] : []) fs.mkdirSync(path.join(dir, sub), { recursive: true });
     const antiXrayPending = xray.newServerLevel({ ...source, mc }, readJson(path.join(app.getPath('userData'), 'settings.json'))?.[XRAY_DEFAULT]);
-    const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, mdk: r.mdk || null, ...(antiXrayPending && { antiXrayPending }) };
+    const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, ...(antiXrayPending && { antiXrayPending }) };
     writeJson(path.join(dir, SERVER), desc);
     forNewServer(readJson(path.join(app.getPath('userData'), 'settings.json')), dir, { kind, version: mc }, log);
     log(`Created ${path.relative(root, dir)}\n`);
@@ -257,9 +238,7 @@ const jvmArgsOf = (desc) => (Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(Stri
 const ENCODING_ARGS = ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', '-Dstdin.encoding=UTF-8',
   '-Dsun.stdout.encoding=UTF-8', '-Dsun.stderr.encoding=UTF-8'];
 
-// opts.debugPort: the JVM also listens for the debugger there, suspended until the debugger has set its breakpoints
-// (a plugin's onEnable runs within moments of the start).
-async function launch(dir, log, { debugPort } = {}) {
+async function launch(dir, log) {
   const desc = serverOf(dir);
   // A description edited by hand: what a start needs, said before any Java is looked for.
   if (!KINDS[desc.kind]) throw fail(`${SERVER} names no server type Nano Studio knows (kind: ${JSON.stringify(desc.kind ?? null)})`);
@@ -271,19 +250,12 @@ async function launch(dir, log, { debugPort } = {}) {
   if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
   const mem = /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G';
   const args = [...ENCODING_ARGS, `-Xmx${mem}`, ...jvmArgsOf(desc)];
-  if (debugPort) args.push(`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`);
   if (desc.launch.argsFile) {
     if (isFile(path.join(dir, 'user_jvm_args.txt'))) args.push('@user_jvm_args.txt');
     args.push(`@${desc.launch.argsFile}`);
   } else args.push('-jar', desc.launch.jar);
   if (!KINDS[desc.kind]?.proxy) args.push('nogui');
   return { cmd: path.join(home, 'bin', 'java.exe'), args, cwd: dir, java: desc.java };
-}
-
-// The source folders of the plugin and mod projects that deploy to a server, for the debugger to find .java files in.
-function sourceRoots(root, dir) {
-  const srv = servers(root).find((s) => sameDir(s.dir, dir));
-  return (srv?.projects || []).flatMap((p) => ['main', 'client'].map((set) => path.join(p.dir, 'src', set, 'java'))).filter((d) => fs.existsSync(d));
 }
 
 // ---------- Velocity ----------
@@ -304,312 +276,6 @@ function rewireProxies(root) {
   const proxies = servers(root).filter((s) => s.proxy && fs.existsSync(path.join(s.dir, 'forwarding.secret')));
   for (const p of proxies) wireProxy(root, p.dir);
   return proxies.map((p) => p.name);
-}
-
-// ---------- plugins ----------
-// What a plugin compiles against: the server's API (the jars Paper unpacks into libraries/ and versions/ at its first
-// start; Velocity's own jar holds its API) and the plugin's libs/.
-function pluginClasspath(pluginDir, serverDir, api) {
-  const server = api === 'velocity' ? [path.join(serverDir, 'server.jar')].filter(isFile)
-    : [...jarsUnder(path.join(serverDir, 'libraries')), ...jarsUnder(path.join(serverDir, 'versions'))];
-  return { server, all: [...server, ...jarsUnder(path.join(pluginDir, 'libs'))] };
-}
-function pluginContext(pluginDir) {
-  const meta = readJson(path.join(pluginDir, PLUGIN));
-  if (!meta) throw fail(`No ${PLUGIN} in ${pluginDir}`);
-  const serverDir = path.resolve(pluginDir, meta.server);
-  const desc = readJson(path.join(serverDir, SERVER));
-  if (!desc) throw fail(`The plugin's server ${serverDir} is gone`);
-  return { meta, serverDir, desc, api: KINDS[desc.kind]?.plugins || 'paper' };
-}
-// The Eclipse files that give the editor the plugin's classpath; written again whenever that may have changed (the
-// server's first start, a dependency added, a build).
-function syncPlugin(pluginDir) {
-  const { meta, serverDir, desc, api } = pluginContext(pluginDir);
-  T.writeEclipseProject(pluginDir, { name: meta.name, java: desc.java, jars: pluginClasspath(pluginDir, serverDir, api).all });
-}
-function syncPlugins(root, serverDir) {
-  for (const p of described(path.join(root, 'plugins'), PLUGIN)) {
-    if (!serverDir || sameDir(path.resolve(p.dir, p.server), serverDir)) { try { syncPlugin(p.dir); } catch {} }
-  }
-}
-
-function newPlugin({ root, name, pkg, server }) {
-  if (!/^[A-Z][A-Za-z0-9]{0,39}$/.test(name || '')) throw fail('Use a class-style name: a capital letter, then letters and digits');
-  notReserved(name);
-  if (!javaPackage(pkg)) throw fail('Use a Java package such as com.example.myplugin');
-  const srv = servers(root).find((s) => s.name === server && s.plugins);
-  if (!srv) throw fail('Choose a Paper, Purpur or Velocity server for the plugin');
-  const dir = path.join(root, 'plugins', name);
-  if (fs.existsSync(dir)) throw fail(`${path.relative(root, dir)} already exists`);
-  const main = T.writePlugin(dir, { api: srv.plugins, pkg, name, mc: srv.mc });
-  writeJson(path.join(dir, PLUGIN), { name, server: path.relative(dir, srv.dir).replace(/\\/g, '/') });
-  syncPlugin(dir);
-  return { dir, main };
-}
-
-// javac against the server's API and libs/, then a jar (the plugin's classes and resources; libs/ are other plugins'
-// APIs, present on the server at run time) into the server's plugins folder.
-async function buildPlugin(dir, log) {
-  const { meta, serverDir, desc, api } = pluginContext(dir);
-  const cp = pluginClasspath(dir, serverDir, api);
-  if (!cp.server.length) throw fail('Start the server once first: Paper unpacks the libraries a plugin compiles against at its first start', 'notStarted');
-  syncPlugin(dir);
-  const sources = filesUnder(path.join(dir, 'src', 'main', 'java'), (n) => n.endsWith('.java'));
-  if (!sources.length) throw fail('The plugin has no .java files in src/main/java');
-  const home = await ensureJavac(desc.java, log);
-  const build = path.join(dir, 'build');
-  const classes = path.join(build, 'classes');
-  fs.rmSync(classes, { recursive: true, force: true });
-  fs.mkdirSync(classes, { recursive: true });
-  const argfile = path.join(build, 'javac-args.txt');
-  const q = (s) => `"${s.replace(/\\/g, '/')}"`;
-  fs.writeFileSync(argfile, [`--release ${desc.java}`, '-encoding UTF-8', '-proc:none', '-g', `-d ${q(classes)}`, `-cp ${q(cp.all.join(path.delimiter))}`, ...sources.map(q)].join('\n'));
-  log(`javac --release ${desc.java} (${sources.length} file${sources.length === 1 ? '' : 's'})\n`);
-  await run(path.join(home, 'bin', 'javac.exe'), [`@${argfile}`], { cwd: dir }, log);
-  const jar = path.join(build, `${meta.name}.jar`);
-  fs.rmSync(jar, { force: true });
-  await run(path.join(home, 'bin', 'jar.exe'), ['--create', '--file', jar, '-C', classes, '.', '-C', path.join(dir, 'src', 'main', 'resources'), '.'], { cwd: dir }, log);
-  const deployed = path.join(serverDir, 'plugins', `${meta.name}.jar`);
-  fs.mkdirSync(path.dirname(deployed), { recursive: true });
-  fs.copyFileSync(jar, deployed);
-  log(`Copied to ${deployed}\n`);
-  return { jar, deployed, server: serverDir };
-}
-
-// A library from a Maven repository into the plugin's libs/ (compile only: the plugin that provides it is installed
-// on the server), and, when `depend` names that plugin, into plugin.yml's depend list (velocity-plugin.json's
-// dependencies) so the server loads it first.
-const REPOS = {
-  central: 'https://repo.maven.apache.org/maven2',
-  papermc: 'https://repo.papermc.io/repository/maven-public',
-  jitpack: 'https://jitpack.io',
-  codemc: 'https://repo.codemc.io/repository/maven-public',
-};
-async function addDependency({ dir, coords, repo, depend }, log) {
-  const parts = (coords || '').trim().split(':');
-  const [group, artifact, version] = parts;
-  // Each part becomes a folder or file name of the download: no separators, no leading dot.
-  if (parts.length !== 3 || parts.some((p) => !/^\w[\w.-]*$/.test(p))) throw fail('Write the library as group:artifact:version, e.g. net.luckperms:api:5.4');
-  if (depend && !/^[\w .-]{1,64}$/.test(depend)) throw fail('The required plugin name may hold letters, digits, spaces, _, . and - only');
-  const base = (REPOS[repo] || repo || '').replace(/\/$/, '');
-  if (!/^https:\/\//.test(base)) throw fail('Choose a repository, or give its https address');
-  const url = `${base}/${group.replace(/\./g, '/')}/${artifact}/${version}/${artifact}-${version}.jar`;
-  const file = path.join(dir, 'libs', `${artifact}-${version}.jar`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Maven repositories publish each file's SHA-1 next to it.
-  const sha1 = await fetch(`${url}.sha1`, { headers: HEADERS }).then((r) => (r.ok ? r.text() : '')).then((t) => t.trim().split(/\s/)[0], () => '');
-  await fetchFile(url, file, {}, log);
-  if (/^[0-9a-f]{40}$/.test(sha1) && hashOf('sha1', file) !== sha1) { fs.rmSync(file, { force: true }); throw fail(`Checksum mismatch for ${artifact}-${version}.jar`); }
-  if (depend) {
-    const { api } = pluginContext(dir);
-    if (api === 'velocity') {
-      const jsonFile = path.join(dir, 'src', 'main', 'resources', 'velocity-plugin.json');
-      const json = readJson(jsonFile) || {};
-      json.dependencies = [...(json.dependencies || []).filter((d) => d.id !== depend.toLowerCase()), { id: depend.toLowerCase(), optional: false }];
-      writeJson(jsonFile, json);
-    } else T.addToYamlList(path.join(dir, 'src', 'main', 'resources', 'plugin.yml'), 'depend', depend);
-  }
-  syncPlugin(dir);
-  return { file };
-}
-
-// ---------- mods ----------
-// The first of the server's MDK addresses that answers (NeoForge's newest versions may have none of their own yet).
-async function fetchMdk(urls, zip, log) {
-  let last;
-  for (const url of urls) {
-    try { await fetchFile(url, zip, {}, log); return url; } catch (err) { last = err; log(`${url}: ${err.message}\n`); }
-  }
-  throw last || fail('This server has no mod template');
-}
-
-async function newMod({ root, id, display, pkg, server }, log) {
-  if (!MOD_ID.test(id || '')) throw fail('Use a mod id of lower-case letters, digits and _, starting with a letter (2-64 characters)');
-  notReserved(id);
-  if (!javaPackage(pkg)) throw fail('Use a Java package such as com.example.mymod');
-  const srv = servers(root).find((s) => s.name === server && s.mods);
-  if (!srv?.mdk) throw fail('Choose a Fabric, Forge or NeoForge server for the mod');
-  const dir = path.join(root, 'mods', id);
-  if (fs.existsSync(dir)) throw fail(`${path.relative(root, dir)} already exists`);
-  const tmp = `${dir}.download`;
-  fs.rmSync(tmp, { recursive: true, force: true });
-  fs.mkdirSync(tmp, { recursive: true });
-  try {
-    const zip = path.join(tmp, 'mdk.zip');
-    const used = await fetchMdk([].concat(srv.mdk), zip, log);
-    const out = path.join(tmp, 'out');
-    fs.mkdirSync(out);
-    await run(tarExe(), ['-xf', zip, '-C', out], {}, log);
-    // GitHub's archive has one top folder; Forge's MDK zip has none.
-    const entries = fs.readdirSync(out);
-    const top = entries.length === 1 && fs.statSync(path.join(out, entries[0])).isDirectory() ? path.join(out, entries[0]) : out;
-    if (!isFile(path.join(top, 'gradlew.bat'))) throw fail('The mod template has no gradlew.bat');
-    const cls = id.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join('');
-    T.renameMod(top, srv.kind, { id, display: (display || '').trim() || cls, pkg, cls });
-    // The template's loader version becomes the server's, so the mod asks for no newer loader than the server has.
-    const props = path.join(top, 'gradle.properties');
-    if (srv.kind === 'fabric' && srv.loader) T.setProperty(props, 'loader_version', srv.loader);
-    if (srv.kind === 'neoforge') {
-      T.setProperty(props, 'neo_version', srv.loader);
-      T.setProperty(props, 'minecraft_version', srv.mc);
-      T.setProperty(props, 'minecraft_version_range', `[${srv.mc}]`);
-      if (!used.includes(`MDK-${srv.mc}-`)) log(`NeoForge has no template for ${srv.mc} yet; this one is for an older version, set to ${srv.mc} in gradle.properties. Its build may need changes.\n`);
-    }
-    fs.mkdirSync(path.dirname(dir), { recursive: true });
-    fs.renameSync(top, dir);
-    writeJson(path.join(dir, MOD), { name: id, server: path.relative(dir, srv.dir).replace(/\\/g, '/') });
-    log(`Created ${path.relative(root, dir)}: mod id ${id}, package ${pkg}, class ${cls}\n`);
-    return { dir, main: filesUnder(path.join(dir, 'src', 'main', 'java'), (n) => n === `${cls}.java`)[0] || null };
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-// gradlew with the JDK of the server's Java version (Forge's Gradle plugin refuses another).
-// Debug of the test client: an init script makes runClient's JVM wait for the debugger on the port given (Fabric's
-// Loom, ForgeGradle and NeoForge's ModDevGradle all run the game as a JavaExec task of that name), and pyideClasspath
-// writes each source set's sources, class path and output, which HotSwap compiles a saved file against.
-const HOTSWAP_DIR = 'build/pyide';
-const INIT_SCRIPT = `// Written by Nano Studio for Debug of the test client.
-allprojects {
-  def port = findProperty('pyide.debugPort')
-  if (port) {
-    tasks.withType(JavaExec).matching { it.name == 'runClient' }.configureEach {
-      jvmArgs "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:\${port}"
-    }
-  }
-  def out = findProperty('pyide.classpathFile')
-  if (out) {
-    tasks.register('pyideClasspath') {
-      doLast {
-        def sets = project.extensions.findByName('sourceSets')
-        def data = (sets == null ? [] : sets.findAll { it.name != 'test' }).collect { s ->
-          [name: s.name, sources: s.java.srcDirs*.absolutePath, classpath: s.compileClasspath.files*.absolutePath,
-           output: s.java.destinationDirectory.get().asFile.absolutePath,
-           resources: s.resources.srcDirs*.absolutePath, resourcesOutput: s.output.resourcesDir?.absolutePath]
-        }
-        new File(project.rootDir, out).text = groovy.json.JsonOutput.toJson(data)
-      }
-    }
-  }
-}
-`;
-
-function modContext(dir) {
-  const meta = readJson(path.join(dir, MOD));
-  if (!meta) throw fail(`No ${MOD} in ${dir}`);
-  const desc = readJson(path.join(path.resolve(dir, meta.server), SERVER));
-  if (!desc) throw fail('The mod\'s server is gone');
-  return { meta, desc };
-}
-
-// opts.debugPort: runClient waits for the debugger there.
-async function modTask(dir, task, log, opts = {}) {
-  const { desc } = modContext(dir);
-  const home = await ensureJava(desc.java, { jdk: true, log });
-  const debug = [];
-  if (opts.debugPort) {
-    fs.mkdirSync(path.join(dir, HOTSWAP_DIR), { recursive: true });
-    fs.writeFileSync(path.join(dir, HOTSWAP_DIR, 'init.gradle'), INIT_SCRIPT);
-    fs.rmSync(path.join(dir, HOTSWAP_DIR, 'classpath.json'), { force: true });
-    keepPlayingUnfocused(dir);
-    debug.push('--no-configuration-cache', '-I', `${HOTSWAP_DIR}/init.gradle`, `-Ppyide.debugPort=${Number(opts.debugPort)}`,
-      `-Ppyide.classpathFile=${HOTSWAP_DIR}/classpath.json`, 'pyideClasspath');
-  }
-  // .\ because cmd finds a program in the current folder only that way when NoDefaultCurrentDirectoryInExePath is set.
-  return { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/c', '.\\gradlew.bat', '--console=plain', ...debug, task], cwd: dir, env: { JAVA_HOME: home } };
-}
-
-// The game shown beside the IDE (or in its Game View) keeps running while the user types in the editor: Minecraft
-// opens its pause menu when its window loses focus unless options.txt in the run folder says otherwise.
-function keepPlayingUnfocused(dir) {
-  const file = path.join(dir, 'run', 'options.txt');
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-    if (/^pauseOnLostFocus:false\s*$/m.test(text)) return;
-    fs.writeFileSync(file, /^pauseOnLostFocus:/m.test(text) ? text.replace(/^pauseOnLostFocus:.*$/m, () => 'pauseOnLostFocus:false')
-      : `${text}${text && !text.endsWith('\n') ? '\n' : ''}pauseOnLostFocus:false\n`);
-  } catch { /* the game pauses as it would anyway */ }
-}
-
-// HotSwap: the saved .java files compiled with javac against their source set's class path (written when Debug
-// started), the classes written over the source set's output (so a class the game has not loaded yet, or a restart,
-// has them too) -> [{name, file}] for the debugger to redefine.
-async function hotswapCompile(dir, files, log) {
-  const { desc } = modContext(dir);
-  const sets = readJson(path.join(dir, HOTSWAP_DIR, 'classpath.json'));
-  if (!sets) throw fail('The test client was not started with Debug, or Gradle has not written its class path yet');
-  const under = (file, d) => path.resolve(file).toLowerCase().startsWith(path.resolve(d).toLowerCase() + path.sep);
-  const groups = new Map(); // source set -> files
-  for (const f of files) {
-    const set = sets.find((s) => s.sources.some((d) => under(f, d)));
-    if (set) groups.set(set, [...(groups.get(set) || []), f]);
-  }
-  if (!groups.size) return [];
-  const home = await ensureJavac(desc.java, log);
-  const classes = [];
-  for (const [set, list] of groups) {
-    const tmp = fs.mkdtempSync(path.join(dir, HOTSWAP_DIR, 'javac-'));
-    try {
-      const outputs = sets.map((s) => s.output);
-      const q = (s) => `"${s.replace(/\\/g, '/')}"`;
-      const argfile = path.join(tmp, 'args.txt');
-      fs.writeFileSync(argfile, [`--release ${desc.java}`, '-encoding UTF-8', '-proc:none', '-g', '-implicit:none', `-d ${q(path.join(tmp, 'out'))}`,
-        `-cp ${q([...outputs, ...set.classpath].join(path.delimiter))}`, ...list.map(q)].join('\n'));
-      await run(path.join(home, 'bin', 'javac.exe'), [`@${argfile}`], { cwd: dir }, log);
-      for (const f of filesUnder(path.join(tmp, 'out'), (n) => n.endsWith('.class'))) {
-        const rel = path.relative(path.join(tmp, 'out'), f);
-        const dest = path.join(set.output, rel);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.copyFileSync(f, dest);
-        classes.push({ name: rel.replace(/\.class$/, '').split(path.sep).join('.'), file: dest });
-      }
-    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
-  }
-  return classes;
-}
-
-// A saved texture, model, language file or other file under assets/ or data/ of a source set's resources, copied
-// over its output, which the test client reads (F3+T reloads assets/, /reload data/). Other resources (fabric.mod.json,
-// mods.toml) are filled in by Gradle's processResources, so they wait for the next start.
-function hotswapResources(dir, files) {
-  const sets = readJson(path.join(dir, HOTSWAP_DIR, 'classpath.json'));
-  if (!sets) throw fail('The test client was not started with Debug, or Gradle has not written its class path yet');
-  const out = { copied: [], assets: false, data: false };
-  for (const f of files) {
-    const file = path.resolve(f);
-    for (const set of sets) {
-      const root = (set.resources || []).find((d) => file.toLowerCase().startsWith(path.resolve(d).toLowerCase() + path.sep));
-      if (!root || !set.resourcesOutput) continue;
-      const rel = path.relative(root, file);
-      const top = rel.split(path.sep)[0].toLowerCase();
-      if ((top !== 'assets' && top !== 'data') || rel.split(path.sep).includes('..')) break;
-      const dest = path.join(set.resourcesOutput, rel);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(file, dest);
-      out.copied.push(rel.split(path.sep).join('/'));
-      out[top] = true;
-      break;
-    }
-  }
-  return out;
-}
-
-// The built jar (not -sources, -dev, -slim or -javadoc) into the server's mods folder.
-function deployMod(dir) {
-  const meta = readJson(path.join(dir, MOD));
-  if (!meta) throw fail(`No ${MOD} in ${dir}`);
-  const libs = path.join(dir, 'build', 'libs');
-  const jar = fs.existsSync(libs) && fs.readdirSync(libs).filter((n) => n.endsWith('.jar') && !/-(sources|dev|slim|javadoc)\.jar$/.test(n))
-    .map((n) => path.join(libs, n)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  if (!jar) throw fail('Build the mod first: build/libs has no jar', 'notBuilt');
-  const serverDir = path.resolve(dir, meta.server);
-  const deployed = path.join(serverDir, 'mods', path.basename(jar));
-  fs.mkdirSync(path.dirname(deployed), { recursive: true });
-  fs.copyFileSync(jar, deployed);
-  return { jar, deployed, server: serverDir };
 }
 
 // ---------- client pack ----------
@@ -824,13 +490,13 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
       if (r.outcome === 'applied' || r.outcome === 'refused') send('minecraft:antiXray', { dir, restart, ...r });
     } catch (err) { playersLog.warn(`anti-xray: ${err.message}`); }
   };
-  ipcMain.handle('minecraft:launch', (_e, root, dir, job, opts) => { guard(root); settleXray(dir, false); return launch(dir, logTo(job), opts); });
-  // Starts a launch spec ({cmd, args, cwd, env}) as an IDE process the Run window shows; -> process id.
-  // A server's process gets a players session; a mod's Gradle task, which also starts here, does not.
+  ipcMain.handle('minecraft:launch', (_e, root, dir, job) => { guard(root); settleXray(dir, false); return launch(dir, logTo(job)); });
+  // Starts a launch spec ({cmd, args, cwd}) as an IDE process the Run window shows; -> process id. A process outside
+  // the project's servers/ gets no players session.
   ipcMain.handle('minecraft:start', (_e, root, spec) => {
     guard(root);
     const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
-    const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, filter: session?.filter });
+    const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, windowsHide: true, filter: session?.filter });
     session?.attach(procs.get(id));
     if (session) procs.get(id)?.once('close', () => settleXray(spec.cwd, true));
     return id;
@@ -843,32 +509,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     try { probe.listen(port, ...(host ? [host] : []), () => probe.close(() => resolve(true))); } catch { resolve(false); }
   });
   ipcMain.handle('minecraft:portFree', async (_e, port) => (await listenable(port, '127.0.0.1')) && listenable(port));
-  ipcMain.handle('minecraft:sourceRoots', (_e, root, dir) => sourceRoots(root, dir));
   ipcMain.handle('minecraft:wireProxy', (_e, root, dir) => { guard(root); return wireProxy(root, dir); });
-  ipcMain.handle('minecraft:newPlugin', (_e, opts) => { guard(opts?.root); return newPlugin(opts); });
-  ipcMain.handle('minecraft:syncPlugins', (_e, root, serverDir) => { guard(root); syncPlugins(root, serverDir); return true; });
-  ipcMain.handle('minecraft:buildPlugin', (_e, root, dir, job) => { guard(root); return buildPlugin(dir, logTo(job)); });
-  ipcMain.handle('minecraft:addDependency', (_e, root, opts, job) => { guard(root); return addDependency(opts, logTo(job)); });
-  ipcMain.handle('minecraft:newMod', (_e, opts, job) => { guard(opts?.root); return newMod(opts, logTo(job)); });
-  ipcMain.handle('minecraft:modTask', (_e, root, dir, task, job, opts) => { guard(root); return modTask(dir, task, logTo(job), opts); });
-  ipcMain.handle('minecraft:hotswapCompile', (_e, root, dir, files, job) => { guard(root); return hotswapCompile(dir, files, logTo(job)); });
-  ipcMain.handle('minecraft:hotswapResources', (_e, root, dir, files) => { guard(root); return hotswapResources(dir, files); });
-  // The test client's window: found by its debug port (then its process), placed beside the window that asks, kept
-  // on top, brought to the front, sent F3+T; gameSource names it for the Game View's video.
-  ipcMain.handle('minecraft:gameFind', (_e, q) => gameWindow.find(q || {}));
-  ipcMain.handle('minecraft:gamePlace', (e, hwnd, top) => gameWindow.placeBeside(BrowserWindow.fromWebContents(e.sender), screen, hwnd, top));
-  ipcMain.handle('minecraft:gameTop', (_e, hwnd, top) => gameWindow.setTop(hwnd, top));
-  ipcMain.handle('minecraft:gameFront', (_e, hwnd) => gameWindow.front(hwnd));
-  ipcMain.handle('minecraft:gameReload', (_e, hwnd) => gameWindow.reload(hwnd));
-  ipcMain.handle('minecraft:gameSource', async (_e, hwnd) => {
-    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
-    const source = sources.find((s) => s.id.startsWith(`window:${Number(hwnd)}:`));
-    if (!source) return null;
-    allowWindowCapture();
-    return source.id;
-  });
-  app.on('will-quit', gameWindow.stop);
-  ipcMain.handle('minecraft:deployMod', (_e, root, dir) => { guard(root); return deployMod(dir); });
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
   ipcMain.handle('minecraft:settings', (_e, root, dir) => settings(dir));

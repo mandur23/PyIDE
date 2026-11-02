@@ -1,16 +1,12 @@
-// Minecraft servers, plugins and mods at run time under hostile use (minecraft plugin), offline and without accepting
-// the real Minecraft EULA. Stand-ins as in verify/minecraft.mjs: a local web server plays Mojang, PaperMC, the Forge MDK
-// and Adoptium; a small Java program plays the server (with flag files that make it crash at start, quit at once or
-// ignore "stop"); a Node script plays Gradle and a FakeGame JVM the game for HotSwap. Each stand-in process writes its
-// pid to pids/, so the suite can tell that none is left running. Checks: hostile server, plugin, mod and package
-// names (invalid, Korean, emoji, too long, CON/NUL, duplicates), bad and busy game ports, Start, Stop and Restart
-// clicked 20 times, a server that crashes, quits at once or hangs on "stop" (killed 30 s later, also on a Rerun), its
-// folder deleted or renamed while it runs, a damaged pyide-server.json, a wrong Java, plugin builds with compile errors
-// or no sources, libraries with bad coordinates or http, HotSwap with compile errors, 30 saves a second, saves outside
-// the mod or while not debugging, a changed signature, a second debug session and Stop during the Gradle phase, the
-// resource pack sent with none made, the Minecraft screen opened and closed many times, 50 servers in the project,
-// New Project with an empty or bad version, without the EULA or into an existing folder, and a server whose Java is
-// missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
+// Craft's Minecraft servers at run time under hostile use (minecraft plugin in a craft window), offline and without
+// accepting the real Minecraft EULA. Stand-ins as in verify/minecraft.mjs: a local web server plays Mojang, PaperMC and
+// Adoptium; a small Java program plays the server (with flag files that make it crash at start, quit at once or ignore
+// "stop"). Each stand-in process writes its pid to pids/, so the suite can tell that none is left running. Checks:
+// hostile server names (invalid, Korean, emoji, too long, CON/NUL, duplicates), bad and busy game ports, Start, Stop and
+// Restart clicked 20 times, a server that crashes, quits at once or hangs on "stop" (killed 30 s later, also on a
+// Rerun), its folder deleted or renamed while it runs, a damaged pyide-server.json, a wrong Java, the resource pack sent
+// with none made, the Minecraft screen's pages switched many times, 50 servers in the project, and a server whose Java
+// is missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
 import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'fs';
@@ -90,50 +86,6 @@ const paperJarFile = path.join(work, 'out', 'jars', 'paper.jar');
 execFileSync(bin('jar'), ['--create', '--file', paperJarFile, '--main-class', 'FakeServer', '-C', serverClasses, '.', '-C', paperRes, '.']);
 const paperJar = readFileSync(paperJarFile);
 
-// The MDK, Gradle as a Node script (slow.flag in the mod: a long Gradle phase before the game starts) and the game.
-const mdk = out('mdk');
-write(path.join(mdk, 'gradle.properties'), 'mod_id=examplemod\nmod_name=Example Mod\nmod_group_id=com.example.examplemod\n');
-write(path.join(mdk, 'src', 'main', 'java', 'com', 'example', 'examplemod', 'ExampleMod.java'), 'package com.example.examplemod;\n\npublic class ExampleMod {\n    public static final String MODID = "examplemod";\n}\n');
-write(path.join(mdk, 'src', 'main', 'resources', 'assets', 'examplemod', 'lang', 'en_us.json'), '{}\n');
-write(path.join(src, 'game', 'FakeGame.java'), `public class FakeGame {
-  public static void main(String[] a) throws Exception {
-    java.nio.file.Files.write(java.nio.file.Paths.get(${S(J(pidsDir))}, "game-" + ProcessHandle.current().pid()), new byte[0]);
-    java.lang.reflect.Method m = Class.forName(a[0]).getMethod("greeting");
-    System.out.println("Fake Minecraft window open");
-    for (int i = 0; i < 1500; i++) { System.out.println("game: " + m.invoke(null)); Thread.sleep(250); }
-  }
-}`);
-const fakeGradle = path.join(work, 'fake-gradle.cjs');
-const gameDir = path.join(work, 'out', 'game');
-writeFileSync(fakeGradle, `const fs = require('fs'); const path = require('path'); const { execFileSync, spawn } = require('child_process');
-fs.writeFileSync(path.join(${S(pidsDir)}, 'gradle-' + process.pid), process.cwd());
-const args = process.argv.slice(2);
-const prop = (k) => (args.find((a) => a.startsWith('-P' + k + '=')) || '').slice(k.length + 3) || null;
-const task = args[args.length - 1];
-const home = process.env.JAVA_HOME;
-console.log('task ' + task);
-const out = path.join(process.cwd(), 'build', 'classes', 'java', 'main');
-const srcDir = path.join(process.cwd(), 'src', 'main', 'java');
-const go = () => {
-  if (args.includes('pyideClasspath')) fs.writeFileSync(prop('pyide.classpathFile'), JSON.stringify([{ name: 'main', sources: [srcDir], classpath: [], output: out }]));
-  if (task === 'build') { fs.mkdirSync('build/libs', { recursive: true }); fs.copyFileSync('gradle.properties', 'build/libs/mymod-1.0.jar'); console.log('BUILD SUCCESSFUL'); }
-  if (task === 'runClient') {
-    const files = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith('.java')) files.push(p); } };
-    walk(srcDir);
-    execFileSync(path.join(home, 'bin', 'javac.exe'), ['-g', '-d', out, ...files], { stdio: 'inherit' });
-    const port = prop('pyide.debugPort');
-    const jvm = port ? ['-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:' + port] : [];
-    const game = spawn(path.join(home, 'bin', 'java.exe'), [...jvm, '-cp', out + path.delimiter + ${S(gameDir)}, 'FakeGame', 'com.example.mymod.Mymod'], { stdio: 'inherit' });
-    game.on('exit', (c) => process.exit(c ?? 0));
-  }
-};
-if (fs.existsSync('slow.flag')) { console.log('Gradle is preparing Minecraft (slow)'); setTimeout(go, 60000); } else go();
-`);
-write(path.join(mdk, 'gradlew.bat'), `@"${process.execPath}" "${fakeGradle}" %*\r\n`);
-javac(gameDir, [path.join(src, 'game', 'FakeGame.java')]);
-const mdkZip = path.join(work, 'out', 'jars', 'mdk.zip');
-execFileSync(bin('jar'), ['--create', '--no-manifest', '--file', mdkZip, '-C', mdk, '.']);
-
 // ---------- stand-in services ----------
 const sha = (algo, b) => crypto.createHash(algo).update(b).digest('hex');
 const routes = new Map();
@@ -151,16 +103,21 @@ routes.set('/mojang/1.20.1.json', { javaVersion: { majorVersion: 17 }, downloads
 routes.set('/paper', { versions: { '1.20': ['1.20.1'] } });
 routes.set('/paper/versions/1.20.1/builds', [{ id: 7, channel: 'STABLE', downloads: { 'server:default': { url: `${base}/files/paper.jar`, size: paperJar.length, checksums: { sha256: sha('sha256', paperJar) } } } }]);
 routes.set('/files/paper.jar', paperJar);
-routes.set('/files/mdk.zip', readFileSync(mdkZip));
 routes.set('/modrinth/search', { total_hits: 0, hits: [] });
 routes.set('/fabric/versions/game', [{ version: '1.20.1', stable: true }]);
 const SOURCES = S({ mojang: `${base}/mojang/manifest.json`, paper: `${base}/paper`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, forge: `${base}/forge`,
-  forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, fabricMdk: `${base}/fabricmdk`, neoforge: `${base}/neoforge`, neoforgeMdk: `${base}/neoforgemdk`,
+  forgePromos: `${base}/forge/promos.json`, fabric: `${base}/fabric`, neoforge: `${base}/neoforge`,
   adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` });
 
 // ---------- processes ----------
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+// A pid file can outlive its process, and Windows reuses pids: this says what holds one now.
+const image = (pid) => { try { return /"([^"]+)"/.exec(execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' }))?.[1] || 'gone'; } catch { return 'unknown'; } };
+const alive = (pid) => {
+  try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
+  return ['java.exe', 'unknown'].includes(image(pid));
+};
 const pidFiles = () => readdirSync(pidsDir).map((f) => ({ kind: f.split('-')[0], pid: Number(f.split('-')[1]), info: readFileSync(path.join(pidsDir, f), 'utf8') }));
+writeFileSync(path.join(pidsDir, `server-${process.pid}`), 'a stand-in that died, its pid given to this process');
 // The runner's %TEMP% has an 8.3 name (RUNNER~1) that Java's getCanonicalPath expands, and a stand-in server's folder may
 // be gone by the time it is compared, so `work`'s long form is put in by hand.
 const workLower = path.resolve(work).toLowerCase();
@@ -168,15 +125,14 @@ const workLong = realpathSync.native(work).toLowerCase();
 const longForm = (p) => { const low = path.resolve(p).toLowerCase(); return low === workLower || low.startsWith(`${workLower}\\`) ? workLong + low.slice(workLower.length) : low; };
 const sameDir = (a, b) => longForm(a) === longForm(b);
 const aliveServers = (dir) => pidFiles().filter((p) => p.kind === 'server' && (!dir || sameDir(p.info, dir)) && alive(p.pid));
-const aliveOf = (kind) => pidFiles().filter((p) => p.kind === kind && alive(p.pid));
 const waitFor = async (fn, ms = 15000, step = 150) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(step); } return !!(await fn()); };
 
 const project = path.join(work, 'project');
 mkdirSync(project);
-const t = await launch({ name: 'stress-minecraft-runtime', port: 8620, projectDir: project, env: { PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES } });
+const t = await launch({ name: 'stress-minecraft-runtime', port: 8620, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES } });
 const { js, until, check } = t;
 const root = await js('ide.root');
-const card = (name, host = '#minecraftTool') => `document.querySelector('${host} .mc-server[data-name="${name}"]')`;
+const card = (name) => `document.querySelector('#minecraftScreen .mc-server[data-name="${name}"]')`;
 const runTab = (title) => `ide.run.sessions().find((s) => s.title === ${S(title)})`;
 const tabText = (title) => js(`${runTab(title)}?.host.textContent || ''`);
 const serverDir = (name) => path.join(project, 'servers', name);
@@ -197,8 +153,8 @@ const section = async (label, fn) => {
 };
 
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
-  await until(`!!document.querySelector('#minecraftTool .mc-empty')`, 'empty Minecraft window');
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.minecraft.screen.show('servers'), true)`);
+  await until(`!!document.querySelector('#minecraftScreen .mcc-empty')`, 'empty server list');
 
   // ---------- names ----------
   await section('server names', async () => {
@@ -329,7 +285,7 @@ try {
     await js(`(ide.run.runConfig(${runTab('gamma')}.cfg, { confirm: false }), true)`);
     const ok = await waitFor(async () => old.every((p) => !alive(p)) && await js(`(() => { const s = ${runTab('gamma')}; return s.running && !s.starting && s.host.textContent.includes('Done (0.4s)!'); })()`), 60000, 500);
     check(ok && aliveServers(serverDir('gamma')).length === 1,
-      `Rerun of a server that ignores "stop" kills the old one 30 s later and the new one starts (${Math.round((Date.now() - t1) / 1000)} s, old alive: ${old.filter(alive).length}, running: ${aliveServers(serverDir('gamma')).length})`);
+      `Rerun of a server that ignores "stop" kills the old one 30 s later and the new one starts (${Math.round((Date.now() - t1) / 1000)} s, old alive: ${old.filter(alive).length}, running: ${S(aliveServers(serverDir('gamma')).map((p) => `${p.pid} ${image(p.pid)}`))})`);
     rmSync(path.join(serverDir('gamma'), 'hang.flag'));
     await js(`(${runTab('gamma')}.stop(), true)`);
     await stopped('gamma');
@@ -386,192 +342,6 @@ try {
     await refresh();
   });
 
-  // ---------- plugins ----------
-  await section('plugin builds', async () => {
-    await js(`ide.minecraft.createPlugin({ name: 'HelloPlugin', pkg: 'com.example.hello', server: 'alpha' }).then(() => true)`);
-    const pluginDir = path.join(project, 'plugins', 'HelloPlugin');
-    const main = path.join(pluginDir, 'src', 'main', 'java', 'com', 'example', 'hello', 'HelloPlugin.java');
-    await until(`!!${card('alpha')}.querySelector('.mc-build[data-project="HelloPlugin"]')`, 'plugin listed', 10000);
-    const build = async () => {
-      await js(`(${card('alpha')}.querySelector('.mc-build[data-project="HelloPlugin"] .mc-build-run').click(), true)`);
-      await waitFor(async () => (await js(`!!(${runTab('Build HelloPlugin')}) && !(${runTab('Build HelloPlugin')}).starting`)), 60000);
-      return tabText('Build HelloPlugin');
-    };
-    const deployed = path.join(serverDir('alpha'), 'plugins', 'HelloPlugin.jar');
-    let text = await build();
-    check(/Plugin built and copied/.test(text) && existsSync(deployed), `the plugin builds${/Plugin built/.test(text) ? '' : ` (${text.slice(-300)})`}`);
-    rmSync(deployed);
-    const good = readFileSync(main, 'utf8');
-    writeFileSync(main, good.replace('getLogger()', 'getLoger()').replace(/}\s*$/, '  int broken = "text";\n}\n'));
-    text = await build();
-    check(/HelloPlugin\.java:\d+: error/.test(text) && /javac(\.exe)? failed/.test(text) && !/Plugin built/.test(text) && !existsSync(deployed),
-      `a compile error shows javac's file:line message and deploys nothing (${text.split('\n').filter((l) => /error/.test(l)).slice(0, 2).join(' | ')})`);
-    renameSync(main, `${main}.txt`);
-    text = await build();
-    check(/no \.java files|no source files/i.test(text) && !/Plugin built/.test(text) && !existsSync(deployed), `a plugin with no sources says so (${text.trim().split('\n').pop()})`);
-    renameSync(`${main}.txt`, main);
-    writeFileSync(main, good);
-    // Hostile plugin names.
-    for (const name of ['CON', 'Nul', 'Aux', 'lowercase', 'Has Space', 'Ünicode', `A${'b'.repeat(40)}`, 'HelloPlugin']) {
-      const r = await ipc('minecraft:newPlugin', { root, name, pkg: 'com.example.x', server: 'alpha' });
-      check(!r.ok, `a plugin named ${S(name)} is refused (${r.e || 'created!'})`);
-    }
-    for (const pkg of ['', 'Com.Example', 'com..x', 'com.example.', 'com.example.class', 'com.int.x', '1com.x', 'com.example.한글']) {
-      const r = await ipc('minecraft:newPlugin', { root, name: 'PkgTest', pkg, server: 'alpha' });
-      check(!r.ok, `a plugin package ${S(pkg)} is refused (${r.e || 'created!'})`);
-    }
-    check(S(readdirSync(path.join(project, 'plugins'))) === S(['HelloPlugin']), `nothing is left in plugins/ (${S(readdirSync(path.join(project, 'plugins')))})`);
-  });
-
-  await section('libraries', async () => {
-    const pluginDir = path.join(project, 'plugins', 'HelloPlugin');
-    const add = (coords, repo = 'central', depend = null) => ipc('minecraft:addDependency', root, { dir: pluginDir, coords, repo, depend }, 'x');
-    for (const coords of ['', 'foo', 'a:b', 'a::1', ' : : ', '../x:y:1', 'g:a/../../evil:1', 'g:a:1/../../x', 'g:a:1\nb']) {
-      const r = await add(coords);
-      check(!r.ok && /group:artifact:version/.test(r.e), `library ${S(coords)} is refused as bad coordinates (${r.e})`);
-    }
-    for (const repo of ['http://repo.example.com/maven', 'ftp://x', 'file:///C:/', 'javascript:alert(1)', 'repo.example.com', '']) {
-      const r = await add('net.test:api:1.0', repo);
-      check(!r.ok && /https/.test(r.e), `repository ${S(repo)} is refused (${r.e})`);
-    }
-    const r = await add('net.test:api:1.0', 'central', 'Evil\ndepend: [x]');
-    check(!r.ok && /plugin name|Requires/i.test(r.e), `a required plugin name with a line break is refused (${r.e})`);
-    const libs = path.join(pluginDir, 'libs');
-    check(!existsSync(path.join(project, 'plugins', 'evil-1.jar')) && !existsSync(path.join(pluginDir, 'evil-1.jar')) && (!existsSync(libs) || !readdirSync(libs).length),
-      'nothing is written outside libs/ (or in it) by the refused libraries');
-    const yml = readFileSync(path.join(pluginDir, 'src', 'main', 'resources', 'plugin.yml'), 'utf8');
-    check(!/Evil/.test(yml), 'plugin.yml is untouched');
-  });
-
-  // ---------- mods, HotSwap ----------
-  const modded = serverDir('modded');
-  write(path.join(modded, 'server.jar'), paperJar);
-  write(path.join(modded, 'eula.txt'), 'eula=true\n');
-  write(path.join(modded, 'server.properties'), 'server-port=25807\n');
-  write(path.join(modded, 'pyide-server.json'), S({ kind: 'forge', mc: '1.20.1', loader: '47.9.9', build: null, java: 17, memory: '1G', launch: { jar: 'server.jar' }, mdk: [`${base}/files/mdk.zip`] }));
-  mkdirSync(path.join(modded, 'mods'), { recursive: true });
-  await refresh();
-  const modDir = path.join(project, 'mods', 'mymod');
-  const modMain = path.join(modDir, 'src', 'main', 'java', 'com', 'example', 'mymod', 'Mymod.java');
-  await section('mod names', async () => {
-    for (const id of ['', 'a', 'My Mod', '1mod', 'mod-x', 'con', 'nul', 'aux', 'prn', 'com1', 'lpt1', 'm'.repeat(65), '모드', '🎮']) {
-      const r = await ipc('minecraft:newMod', { root, id, display: 'x', pkg: 'com.example.ok', server: 'modded' }, 'x');
-      check(!r.ok, `a mod id ${S(id)} is refused (${r.e || 'created!'})`);
-    }
-    for (const pkg of ['', 'Com.Example', 'com..x', 'com.example.class', 'com.new.x', 'com.example.mod-x']) {
-      const r = await ipc('minecraft:newMod', { root, id: 'okmod', display: 'x', pkg, server: 'modded' }, 'x');
-      check(!r.ok, `a mod package ${S(pkg)} is refused (${r.e || 'created!'})`);
-    }
-    const r = await ipc('minecraft:newMod', { root, id: 'okmod', display: 'x', pkg: 'com.example.ok', server: 'alpha' }, 'x');
-    check(!r.ok && /Fabric, Forge or NeoForge/.test(r.e), `a mod for a Paper server is refused (${r.e})`);
-    check(!existsSync(path.join(project, 'mods')) || !readdirSync(path.join(project, 'mods')).length, 'nothing is left in mods/');
-    await js(`ide.minecraft.createMod({ id: 'mymod', display: 'My Mod', pkg: 'com.example.mymod', server: 'modded' }).then(() => true)`);
-    check(existsSync(modMain), 'a mod is made from the template');
-    const again = await ipc('minecraft:newMod', { root, id: 'mymod', display: 'x', pkg: 'com.example.mymod', server: 'modded' }, 'x');
-    check(!again.ok && /already exists/.test(again.e), `a second mod with the same id is refused (${again.e})`);
-  });
-
-  const dbgOut = () => js(`document.querySelector('#dbgOut')?.textContent || ''`);
-  const editAndSave = (file, text) => js(`(async () => { await ide.openFile(${S(file)}); const t = ide.findTab(${S(file)}); t.doc.model.setValue(${S(text)}); await ide.saveTab(t); return true; })()`);
-  const modSource = (body) => `package com.example.mymod;\n\npublic class Mymod {\n    public static final String MODID = "mymod";\n\n${body}}\n`;
-  const greeting = (v) => modSource(`    public static String greeting() {\n        return "hello ${v}";\n    }\n`);
-  const clientBtn = `${card('modded')}.querySelector('.mc-build[data-project="mymod"] .mc-client')`;
-  const debugEnded = () => waitFor(() => js('!window.__debugger.state()'), 20000);
-  await section('HotSwap', async () => {
-    await until(`!!${clientBtn}`, 'mod listed', 10000);
-    await editAndSave(modMain, greeting('v1'));
-    await sleep(800);
-    check(!/HotSwap/.test(await dbgOut()), 'saving the mod while nothing is debugged does no HotSwap');
-    await js(`(${clientBtn}.click(), true)`);
-    check(await waitFor(async () => (await dbgOut()).includes('game: hello v1'), 60000), 'the test client runs under the debugger');
-    // A file outside the mod.
-    writeFileSync(path.join(project, 'Outside.java'), '');
-    await editAndSave(path.join(project, 'Outside.java'), 'public class Outside {}\n');
-    await sleep(1000);
-    check(!/HotSwap/.test(await dbgOut()), 'saving a .java file outside the mod does no HotSwap');
-    // A compile error, then the fix.
-    await editAndSave(modMain, greeting('v1').replace('return "hello v1";', 'return 42 +;'));
-    check(await waitFor(async () => /HotSwap failed/.test(await dbgOut()), 30000), 'a compile error fails the HotSwap');
-    let o = await dbgOut();
-    check(/Mymod\.java:\d+: error/.test(o) && await waitFor(async () => { const x = await dbgOut(); return x.slice(x.lastIndexOf('HotSwap failed')).includes('game: hello v1'); }, 5000),
-      'javac says where, and the game keeps running the old code');
-    // 30 saves in a second, the last one the code that should run.
-    const compilesBefore = ((await dbgOut()).match(/HotSwap: compiling/g) || []).length;
-    await js(`(async () => { const t = ide.findTab(${S(modMain)}); for (let i = 1; i <= 30; i++) { t.doc.model.setValue(${S(greeting('burst'))}.replace('burst', 'burst' + i)); await ide.saveTab(t); await new Promise((r) => setTimeout(r, 30)); } return true; })()`);
-    check(await waitFor(async () => (await dbgOut()).includes('game: hello burst30'), 30000), 'after 30 saves in a second the game runs the last one');
-    await sleep(1500);
-    o = await dbgOut();
-    const compiles = (o.match(/HotSwap: compiling/g) || []).length - compilesBefore;
-    check(compiles >= 1 && compiles <= 3 && !/HotSwap failed/.test(o.slice(o.lastIndexOf('burst'))), `the 30 saves compile ${compiles} time(s), not 30`);
-    // A changed signature.
-    await editAndSave(modMain, modSource('    public static String greeting(int times) {\n        return "hello sig";\n    }\n\n    public static String greeting() {\n        return "hello sig2";\n    }\n\n    public static int extra(String s) {\n        return 1;\n    }\n'));
-    check(await waitFor(async () => /cannot take this change without a restart/.test(await dbgOut()), 30000), 'a changed signature says the game needs a restart');
-    await editAndSave(modMain, greeting('v3'));
-    check(await waitFor(async () => (await dbgOut()).includes('game: hello v3'), 30000), 'a body-only change after that still swaps');
-    // Direct requests the debugger may get.
-    const missing = await js(`ide.debugger.jvmRequest('redefineClasses', { classes: [{ name: 'com.example.Nope', file: 'C:\\\\nope.class' }] }).then((r) => r, (e) => ({ error: e.message }))`);
-    check(S(missing.notLoaded) === S(['com.example.Nope']), `a class the game has not loaded is reported as not loaded (${S(missing)})`);
-    const badFile = await js(`ide.debugger.jvmRequest('redefineClasses', { classes: [{ name: 'com.example.mymod.Mymod', file: ${S(path.join(work, 'missing.class'))} }] }).then((r) => r, (e) => ({ error: e.message }))`);
-    const garbage = path.join(work, 'garbage.class');
-    writeFileSync(garbage, 'not a class');
-    const badClass = await js(`ide.debugger.jvmRequest('redefineClasses', { classes: [{ name: 'com.example.mymod.Mymod', file: ${S(garbage)} }] }).then((r) => r, (e) => ({ error: e.message }))`);
-    const junk = await js(`ide.debugger.jvmRequest('redefineClasses', { classes: 'junk' }).then((r) => r, (e) => ({ error: e.message }))`);
-    await sleep(1200);
-    o = await dbgOut();
-    check(!!badFile.error && !!badClass.error && !!(junk.error || junk.redefined) && o.slice(-200).includes('game: hello v3'),
-      `a missing or broken class file fails cleanly and the game keeps running (${badFile.error} | ${badClass.error} | ${junk.error || S(junk)})`);
-    // A second debug session of the same client.
-    const games = aliveOf('game').map((p) => p.pid);
-    await js(`(${clientBtn}.click(), true)`);
-    check(await waitFor(async () => games.every((p) => !alive(p)) && aliveOf('game').length === 1 && (await dbgOut()).includes('game: hello v3'), 60000), 'a second Test Client replaces the first');
-    await waitFor(() => games.every((p) => !alive(p)), 10000);
-    check(games.every((p) => !alive(p)) && aliveOf('game').length === 1, `the first game is ended (${aliveOf('game').length} running)`);
-    await sleep(1500);
-    await editAndSave(modMain, greeting('v4'));
-    check(await waitFor(async () => (await dbgOut()).includes('game: hello v4'), 30000), `HotSwap still works in the second session (${(await dbgOut()).split('\n').filter((l) => /HotSwap/.test(l)).slice(-2).join(' | ')})`);
-    await js(`(ide.runAction('StopDebug'), true)`);
-    check(await debugEnded(), 'Stop ends the debug session');
-    await waitFor(() => !aliveOf('game').length && !aliveOf('gradle').length, 10000);
-    check(!aliveOf('game').length && !aliveOf('gradle').length, 'no game or Gradle process is left');
-    const tail = (await dbgOut()).length;
-    await editAndSave(modMain, greeting('v5'));
-    await sleep(1200);
-    check(!/HotSwap/.test((await dbgOut()).slice(tail)), 'saving after the session ended does no HotSwap');
-  });
-
-  await section('two kinds of debug sessions', async () => {
-    await js(`(${clientBtn}.click(), true)`);
-    check(await waitFor(async () => (await dbgOut()).includes('game: hello v5'), 60000), 'the test client runs again');
-    await js(`(${card('alpha')}.querySelector('.mc-debug').click(), true)`);
-    check(await waitFor(async () => (await dbgOut()).includes('Done (0.4s)!'), 60000), 'Debug of a server replaces the test client\'s session');
-    await waitFor(() => !aliveOf('game').length, 10000);
-    check(!aliveOf('game').length, 'the game is ended');
-    const tail = (await dbgOut()).length;
-    await editAndSave(modMain, greeting('v6'));
-    await sleep(1500);
-    check(!/HotSwap/.test((await dbgOut()).slice(tail)), 'saving the mod while the server is debugged swaps nothing into the server');
-    await js(`(ide.runAction('StopDebug'), true)`);
-    await debugEnded();
-    await waitFor(() => !aliveServers(serverDir('alpha')).length, 10000);
-    check(!aliveServers(serverDir('alpha')).length, 'stopping the server\'s debug session ends it');
-  });
-
-  await section('Stop during the Gradle phase', async () => {
-    write(path.join(modDir, 'slow.flag'), '');
-    await js(`(${clientBtn}.click(), true)`);
-    check(await waitFor(() => aliveOf('gradle').length > 0, 30000), 'Gradle runs');
-    await sleep(1000);
-    await js(`(ide.runAction('StopDebug'), true)`);
-    check(await debugEnded(), 'Stop during the Gradle phase ends the session');
-    await waitFor(() => !aliveOf('gradle').length && !aliveOf('game').length, 10000);
-    check(!aliveOf('gradle').length && !aliveOf('game').length, `no Gradle or game process is left (${aliveOf('gradle').length} Gradle, ${aliveOf('game').length} games)`);
-    const tail = (await dbgOut()).length;
-    await editAndSave(modMain, greeting('v7'));
-    await sleep(1200);
-    check(!/HotSwap/.test((await dbgOut()).slice(tail)), 'saving after a stopped start does no HotSwap');
-    rmSync(path.join(modDir, 'slow.flag'));
-  });
-
   // ---------- resource and client packs ----------
   await section('packs', async () => {
     rmSync(path.join(serverDir('alpha'), 'resourcepack'), { recursive: true, force: true });
@@ -589,25 +359,23 @@ try {
   });
 
   // ---------- the Minecraft screen, many servers ----------
-  await section('screen tab', async () => {
-    await js(`(async () => { for (let i = 0; i < 30; i++) { ide.minecraft.screen.show(i % 3 ? 'servers' : 'market'); await new Promise((r) => setTimeout(r, 15)); await ide.closeTab('minecraft:home'); } return true; })()`);
+  await section('screen', async () => {
+    await js(`(async () => { for (let i = 0; i < 30; i++) { ide.minecraft.screen.show(i % 3 ? 'servers' : 'market'); await new Promise((r) => setTimeout(r, 15)); } ide.minecraft.screen.show('servers'); return true; })()`);
     await sleep(500);
-    check(await js(`!document.querySelector('#minecraftScreen') && !ide.findTab('minecraft:home') && ide.minecraft.screen.page() === null`), 'opened and closed 30 times, the screen leaves nothing behind');
-    await js(`(ide.minecraft.screen.show('servers'), true)`);
-    check(await js(`document.querySelectorAll('#minecraftScreen').length === 1 && document.querySelectorAll('#minecraftScreen .mc-server').length === document.querySelectorAll('#minecraftTool .mc-server').length`),
-      'opened again, it shows the servers once');
+    check(await js(`document.querySelectorAll('#minecraftScreen').length === 1 && document.querySelectorAll('#minecraftScreen .mc-server').length === ide.minecraft.servers().length`),
+      'switched between its pages 30 times, the screen shows the servers once');
     const renders = await js(`(async () => { let n = 0; const orig = Element.prototype.replaceChildren; Element.prototype.replaceChildren = function (...a) { if (this.classList?.contains('mc-tool')) n++; return orig.apply(this, a); };
       await ide.minecraft.refresh(); Element.prototype.replaceChildren = orig; return n; })()`);
-    check(renders === 2, `a refresh renders the tool window and the screen only, not closed screens (${renders} renders)`);
+    check(renders === 1, `a refresh renders the server list once (${renders} renders)`);
   });
   await section('50 servers', async () => {
     for (let i = 0; i < 50; i++) {
       const d = serverDir(`bulk${String(i).padStart(2, '0')}`);
-      write(path.join(d, 'pyide-server.json'), S({ kind: i % 2 ? 'paper' : 'forge', mc: '1.20.1', loader: i % 2 ? null : '47.9.9', java: 17, memory: '1G', launch: { jar: 'server.jar' }, mdk: [`${base}/files/mdk.zip`] }));
+      write(path.join(d, 'pyide-server.json'), S({ kind: i % 2 ? 'paper' : 'forge', mc: '1.20.1', loader: i % 2 ? null : '47.9.9', java: 17, memory: '1G', launch: { jar: 'server.jar' } }));
       write(path.join(d, 'server.properties'), `server-port=${25840 + i}\n`);
     }
     const ms = await js(`(async () => { const t0 = performance.now(); await ide.minecraft.refresh(); return performance.now() - t0; })()`);
-    const cards = await js(`document.querySelectorAll('#minecraftTool .mc-server').length`);
+    const cards = await js(`document.querySelectorAll('#minecraftScreen .mc-server').length`);
     const total = readdirSync(path.join(project, 'servers')).length;
     check(cards === total && ms < 2000, `${cards} cards for ${total} servers, refreshed in ${Math.round(ms)} ms`);
     const ui = await js(`(async () => { const t0 = performance.now(); for (let i = 0; i < 10; i++) { ide.minecraft.screen.show('servers'); await new Promise((r) => requestAnimationFrame(r)); } return performance.now() - t0; })()`);
@@ -615,71 +383,15 @@ try {
     const scroll = await js(`(() => { const s = document.querySelector('#minecraftScreen'); return s.scrollHeight > s.clientHeight || getComputedStyle(s).overflowY; })()`);
     check(scroll === true || /auto|scroll/.test(String(scroll)), `the screen's server list scrolls (${scroll})`);
     for (let i = 0; i < 50; i++) rmSync(serverDir(`bulk${String(i).padStart(2, '0')}`), { recursive: true, force: true });
-    await js(`(ide.closeTab('minecraft:home'), true)`);
     await refresh();
   });
 
-  // ---------- New Project ----------
-  await section('New Project', async () => {
-    const where = path.join(work, 'newprojects');
-    mkdirSync(path.join(where, 'Taken'), { recursive: true });
-    writeFileSync(path.join(where, 'Taken', 'keep.txt'), 'mine');
-    const setValue = (sel, value) => js(`(() => { const i = document.querySelector(${S(sel)}); i.value = ${S(value)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-    const npError = () => js(`document.querySelector('.np-error')?.textContent || ''`);
-    const open = async (type, name) => {
-      await js(`ide.runAction('NewProject')`);
-      await until(`!!document.querySelector('.np-dialog #npName')`, 'wizard');
-      await js(`(document.querySelector('.np-type[data-type="${type}"]').click(), true)`);
-      await setValue('#npName', name);
-      await setValue('#npLocation', where);
-      const what = type.replace('minecraft-', '');
-      await until(`[...document.querySelectorAll('#npMc-${what}-version option')].some((o) => o.value === '1.20.1')`, 'versions')
-        .catch(async (e) => { console.log(await js(`[document.querySelectorAll('.np-dialog').length, document.querySelector('.np-type.selected')?.dataset.type, [...document.querySelectorAll('[id^=npMc-][id$=-version]')].map((v) => v.id + ':' + [...v.options].map((o) => o.value).join('/')).join(' ')]`)); throw e; });
-      return what;
-    };
-    let what = await open('minecraft-server', 'Taken');
-    await js(`(document.querySelector('#npMc-${what}-eula').checked = true, true)`);
-    await js(`(() => { const v = document.querySelector('#npMc-${what}-version'); v.value = ''; return true; })()`);
-    await js(`(document.querySelector('#npCreate').click(), true)`);
-    await sleep(500);
-    check(/Choose a version/.test(await npError()), `an empty version is refused (${await npError()})`);
-    await js(`(document.querySelector('#npMc-${what}-version').value = '1.20.1', true)`);
-    await js(`(document.querySelector('#npMc-${what}-eula').checked = false, true)`);
-    await js(`(document.querySelector('#npCreate').click(), true)`);
-    await sleep(500);
-    check(/EULA/.test(await npError()), 'without the EULA nothing is made');
-    await js(`(document.querySelector('#npMc-${what}-eula').checked = true, true)`);
-    await js(`(document.querySelector('#npCreate').click(), true)`);
-    await sleep(800);
-    check(/already exists/.test(await npError()) && S(readdirSync(path.join(where, 'Taken'))) === S(['keep.txt']) && ide_root_is(await js('ide.root'), project),
-      `a location that exists is refused and left as it was (${await npError()})`);
-    await js(`(document.querySelector('#npCancel').click(), true)`);
-    for (const [type, name] of [['minecraft-plugin', 'Con'], ['minecraft-mod', 'nul']]) {
-      what = await open(type, name);
-      await js(`(document.querySelector('#npMc-${what}-eula').checked = true, true)`);
-      await js(`(document.querySelector('#npCreate').click(), true)`);
-      await sleep(600);
-      check(/reserved|Windows/i.test(await npError()) && !existsSync(path.join(where, name)), `New Project › ${type} named ${S(name)} is refused (${await npError()})`);
-      await js(`(document.querySelector('#npCancel').click(), true)`);
-    }
-    // A version the service does not have: the project opens, the server is not made, and the error is shown.
-    what = await open('minecraft-plugin', 'BadVersion');
-    await js(`(() => { const v = document.querySelector('#npMc-${what}-version'); v.add(new Option('9.9.9', '9.9.9')); v.value = '9.9.9'; document.querySelector('#npMc-${what}-eula').checked = true; return true; })()`);
-    await js(`(document.querySelector('#npCreate').click(), true)`);
-    const dir = path.join(where, 'BadVersion');
-    await until(`ide.root && ide.root.toLowerCase() === ${S(dir.toLowerCase())}`, 'new project opened', 30000);
-    check(await waitFor(async () => /HTTP 404|no build/i.test(await tabText('Minecraft: New Server')), 30000), `a bad version is reported in the New Server tab (${(await tabText('Minecraft: New Server')).trim().split('\n').pop()})`);
-    await sleep(800);
-    check(!existsSync(path.join(dir, 'servers', 'server')) && !existsSync(path.join(dir, 'plugins')), 'no half-made server or plugin is left');
-  });
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);
 } catch (err) {
   check(false, err.message);
   await t.shot('failure.png').catch(() => {});
 }
-function ide_root_is(a, b) { return !!a && sameDir(a, b); }
 await js(`ide.run.sessions().forEach((s) => s.running && s.stop())`).catch(() => {});
-await js(`(ide.runAction('StopDebug'), true)`).catch(() => {});
 await waitFor(() => !aliveServers().length, 10000);
 t.close();
 
@@ -693,8 +405,8 @@ try {
   write(path.join(d, 'pyide-server.json'), S({ kind: 'paper', mc: '1.20.1', java: 17, memory: '1G', launch: { jar: 'server.jar' } }));
   const toolchains = path.join(work, 'toolchains.json');
   writeFileSync(toolchains, S({ system: false }));
-  const t2 = await launch({ name: 'stress-minecraft-runtime-2', port: 8621, projectDir: project2, env: { PYIDE_MC_SOURCES: SOURCES, PYIDE_INSTALL_ROOT: path.join(work, 'install'), PYIDE_TOOLCHAINS: toolchains } });
-  await t2.js(`(ide.toolWindows.get('Minecraft').show(), true)`);
+  const t2 = await launch({ name: 'stress-minecraft-runtime-2', port: 8621, mode: 'craft', projectDir: project2, env: { PYIDE_CRAFT_HOME: project2, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_SOURCES: SOURCES, PYIDE_INSTALL_ROOT: path.join(work, 'install'), PYIDE_TOOLCHAINS: toolchains } });
+  await t2.js(`(ide.minecraft.screen.show('servers'), true)`);
   await t2.until(`!!${card('nojava')}`, 'server listed');
   await t2.js(`(${card('nojava')}.querySelector('.mc-start').click(), true)`);
   const text2 = () => t2.js(`${runTab('nojava')}?.host.textContent || ''`);
@@ -708,7 +420,8 @@ try {
 // ---------- nothing left running ----------
 await sleep(1500);
 const left = pidFiles().filter((p) => alive(p.pid));
-for (const p of left) try { execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
-check(!left.length, `no stand-in process is left running (${S(left.map((p) => `${p.kind} ${p.pid} ${p.info}`))})`);
+const holders = new Map(left.map((p) => [p.pid, image(p.pid)]));
+for (const p of left) if (holders.get(p.pid) === 'java.exe') try { execFileSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+check(!left.length, `no stand-in process is left running (${S(left.map((p) => `${p.kind} ${p.pid} ${holders.get(p.pid)} ${p.info}`))})`);
 server.close();
 t.finish();

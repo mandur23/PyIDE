@@ -2,9 +2,9 @@
 // process, started through the real minecraft:start. A Node script plays the server: it prints log lines in each kind's
 // format (vanilla, Paper, Fabric, Forge), answers list, data get and the action commands, writes ops.json, whitelist.json
 // and banned-players.json as a server does, and records every command that reached it in commands.log. A second run shows
-// the tab in Korean and a third in Nano Studio Craft. No real server, game, launcher or sign-in, and no network: the
+// the tab in Korean and later ones the craft window's own flows. No real server, game, launcher or sign-in, and no network: the
 // catalog's Mojang address is a closed port, and its items come from a seeded cache.
-// Checks: the card's Players button in both modes, offline data from fixture files (a playerdata .dat written by hand, a
+// Checks: the card's Players button, offline data from fixture files (a playerdata .dat written by hand, a
 // damaged one, a missing one), join and leave, online first, the timeline with its filters, search and paging, forged
 // chat, the console not showing the app's queries, inventories in both item formats, tooltips, a slot replaced and
 // emptied, give and clear with the exact commands that reached the server, confirmations, each action's result, the
@@ -12,7 +12,7 @@
 // 900 px and narrower, and no CSP violation.
 // Every press and hover goes through Input.dispatchMouseEvent at a spot elementFromPoint says is the control: a synthetic
 // click reaches a button that is covered, has moved or was never on screen, which is how this tab once lost every click
-// under an open list while its checks passed. Wide, 1024 and 900 px screenshots are taken in Code and Craft, in Korean.
+// under an open list while its checks passed. Wide, 1024 and 900 px screenshots are taken in Korean.
 // The log lines and SNBT here are written from the formats in docs/craft-players-design.md and the commands' wiki pages.
 // They are not captures from a real server. Ports 9932-9934. Screenshots go to verify/out/minecraft-players/.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
@@ -304,8 +304,10 @@ function helpers({ js, until, cdp, sleep }) {
     await until(`!!${q('.mcpl-result')}?.textContent && !${q('.mcpl-result')}.classList.contains('sending')`, 'an action result', 10000);
     return textOf('.mcpl-result');
   };
+  // A tab covers the whole craft window, the server list included.
+  const toCards = () => js(`(ide.tabs.slice().forEach((tab) => ide.closeTabObject(tab, true)), ide.minecraft.screen.show('servers'), true)`);
   const openCard = async (name, host = '#minecraftScreen') => {
-    await js(`(ide.minecraft.screen.show?.('servers'), true)`);
+    await toCards();
     await until(`!!document.querySelector('${host} .mc-server[data-name="${name}"] .mc-players')?.offsetParent`, `Players on the card of ${name}`, 15000);
     await mouse(`document.querySelector('${host} .mc-server[data-name="${name}"] .mc-players')`);
     await until(`${tabOf} && ide.activeTab()?.path.endsWith(${S(`servers\\${name}`.toLowerCase())})`, `the players tab of ${name}`, 10000);
@@ -330,7 +332,7 @@ function helpers({ js, until, cdp, sleep }) {
     await sleep(60);
     return seen;
   };
-  return { q, qa, press, textOf, setValue, row, folded, choose, section, answer, resultOf, openCard, mouse, hover, away, spotOf, dragTo, up };
+  return { q, qa, press, textOf, setValue, row, folded, choose, section, answer, resultOf, openCard, toCards, mouse, hover, away, spotOf, dragTo, up };
 }
 // Real press and release on the button below an open list, and in the dialog, where the list used to open by itself.
 // The list must move nothing, whatever it does on the blur the press causes.
@@ -433,17 +435,18 @@ const reached = async (name, line, ms = 6000) => {
 };
 const say = (ctx, id, msg) => tell(ctx, id, `emit ${msg}`);
 
-// ---------- Code mode, English ----------
+// ---------- English ----------
 mkdirSync(project, { recursive: true });
-const t = await launch({ name: 'minecraft-players', port: 9932, projectDir: project, env });
+const t = await launch({ name: 'minecraft-players', port: 9932, mode: 'craft', projectDir: project, env });
 const { js, until, check, shot, cdp, type } = t;
-const { q, qa, press, textOf, setValue, row, choose, section, answer, resultOf, openCard, mouse, hover, away, folded } = helpers(t);
+const { q, qa, press, textOf, setValue, row, choose, section, answer, resultOf, openCard, toCards, mouse, hover, away, folded } = helpers(t);
 // A Start press must never launch anything here: it records the config the card's flow hands over and takes a moment.
 const stubRun = (ctx) => ctx.js(`(() => { window.__started = []; ide.run.runConfig = async (cfg) => { window.__started.push(cfg); await new Promise((r) => { setTimeout(r, 400); }); }; return true; })()`);
 
 try {
+  await until(`!!document.querySelector('#craftHost .mcs-nav')`, 'the craft app', 15000);
   await js(`ide.minecraft.refresh()`);
-  await js(`(ide.minecraft.screen.show('servers'), true)`);
+  await toCards();
   if (!samePath(await js('ide.root'), project)) throw new Error('the window is not on the test project');
   await stubRun(t);
 
@@ -458,7 +461,7 @@ try {
   await until(`window.__started.length === 1`, 'Start in the tab', 3000);
   const offWhileLaunching = await js(`${q('.mcpl-start')}.disabled`);
   await until(`!${q('.mcpl-start')}.disabled`, 'Start back after the launch', 3000);
-  await js(`(ide.minecraft.screen.show('servers'), true)`);
+  await toCards();
   await until(`!!document.querySelector('#minecraftScreen .mc-server[data-name="vanilla"] .mc-start')?.offsetParent`, 'the card\'s Start', 5000);
   await mouse(`document.querySelector('#minecraftScreen .mc-server[data-name="vanilla"] .mc-start')`);
   await until(`window.__started.length === 2`, 'Start on the card', 3000);
@@ -536,6 +539,7 @@ try {
 
   // ---------- a running server ----------
   await openCard('vanilla');
+  await choose('Steve');
   // Counts what the tab asks for, from here on: it must follow pushes, not a timer.
   await js(`(() => { const real = ide.api; window.__calls = {}; ide.api = { ...real, invoke: (ch, ...a) => { window.__calls[ch] = (window.__calls[ch] || 0) + 1; return real.invoke(ch, ...a); } }; return true; })()`);
   const v = await start(t, 'vanilla');
@@ -1162,12 +1166,13 @@ const english = (ctx) => ctx.js(`(() => {
 
 // ---------- Korean ----------
 {
-  const k = await launch({ name: 'minecraft-players', port: 9933, lang: 'ko-KR', projectDir: project, env });
+  const k = await launch({ name: 'minecraft-players', port: 9933, lang: 'ko-KR', mode: 'craft', projectDir: project, env });
   k.korean = true;
   const h = helpers(k);
   try {
+    await k.until(`!!document.querySelector('#craftHost .mcs-nav')`, 'the craft app', 15000);
     await k.js(`ide.minecraft.refresh()`);
-    await k.js(`(ide.minecraft.screen.show('servers'), true)`);
+    await h.toCards();
     if (!samePath(await k.js('ide.root'), project)) throw new Error('the Korean window is not on the test project');
     await stubRun(k);
     await h.openCard('vanilla');

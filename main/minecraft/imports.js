@@ -126,10 +126,7 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
     }
     const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
       || javaOfJar(path.join(dir, found.launch.jar || ''));
-    const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java, memory: '2G', launch: found.launch, mdk: null, imported: true };
-    if (KINDS[found.kind]?.mods && found.mc) {
-      try { desc.mdk = (await KINDS[found.kind].resolve(found.mc, found.loader || undefined)).mdk || null; } catch {}
-    }
+    const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java, memory: '2G', launch: found.launch, imported: true };
     writeServer(dir, desc);
     log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${java}\n`);
     return { name: path.basename(dir), dir, ...desc };

@@ -1,5 +1,5 @@
 // The Minecraft content pipeline under hostile input, offline against a local stand-in for Mojang, Fabric and
-// Modrinth: what is dropped on the Minecraft window (truncated, empty and misnamed archives, zip-slip entries, zip
+// Modrinth: what is dropped on My Servers in a craft window (truncated, empty and misnamed archives, zip-slip entries, zip
 // bombs, huge entry counts, names with Korean, emoji, quotes, & and %, paths past MAX_PATH, hundreds of files at once,
 // folders that only half look like a server, a world named like the server's own), modpacks (.mrpack files whose
 // index points outside the server folder, lacks or breaks checksums, repeats paths, names unknown loaders, and Modrinth
@@ -100,7 +100,7 @@ const outside = path.join(work, 'outside');
 const escape = path.join(work, 'escape');
 mkdirSync(escape, { recursive: true });
 const serverDir = (name) => path.join(project, 'servers', name);
-const describe = (name, desc) => write(path.join(serverDir(name), 'pyide-server.json'), `${S({ build: null, java: 17, memory: '2G', launch: { jar: 'server.jar' }, mdk: null, ...desc }, null, 2)}\n`);
+const describe = (name, desc) => write(path.join(serverDir(name), 'pyide-server.json'), `${S({ build: null, java: 17, memory: '2G', launch: { jar: 'server.jar' }, ...desc }, null, 2)}\n`);
 describe('fab', { kind: 'fabric', mc: '1.20.1', loader: '0.15.0', launch: { jar: 'fabric-server-mc.1.20.1-loader.0.15.0-launcher.1.0.jar' } });
 write(path.join(serverDir('fab'), 'fabric-server-mc.1.20.1-loader.0.15.0-launcher.1.0.jar'), fabricServerJar);
 write(path.join(serverDir('fab'), 'server.properties'), 'server-port=25661\n');
@@ -143,7 +143,9 @@ const desc = (name) => JSON.parse(readFileSync(path.join(serverDir(name), 'pyide
   if (saved === undefined) delete process.env.PYIDE_MC_SOURCES; else process.env.PYIDE_MC_SOURCES = saved;
 }
 
-const t = await launch({ name: 'stress-minecraft-content', port: 8610, projectDir: project, env: {
+const t = await launch({ name: 'stress-minecraft-content', port: 8610, mode: 'craft', projectDir: project, env: {
+  PYIDE_CRAFT_HOME: project,
+  PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe',
   PYIDE_MC_SOURCES: S({ mojang: `${base}/mojang/manifest.json`, fabric: `${base}/fabric`, paper: `${base}/paper`, forge: `${base}/forge`, forgePromos: `${base}/forge/promos.json`,
     neoforge: `${base}/neoforge`, purpur: `${base}/purpur`, velocity: `${base}/velocity`, adoptium: `${base}/adoptium`, modrinth: `${base}/modrinth` }),
 } });
@@ -159,13 +161,13 @@ const install = (dir, id, type = 'mod') => call('minecraft:marketInstall', ROOT,
 const remove = (dir, id) => call('minecraft:marketRemove', ROOT, dir, id);
 const internal = () => js(`ide.api.invoke('diagnostics:errors').then((l) => l.map((e) => e.message))`);
 const skippedOf = (r, name) => r.ok?.skipped.find((s) => s.name === name);
-const card = (name) => `document.querySelector('#minecraftTool .mc-server[data-name="${name}"]')`;
+const card = (name) => `document.querySelector('#minecraftScreen .mc-server[data-name="${name}"]')`;
 const runTab = (title) => `ide.run.sessions().find((s) => s.title === ${S(title)})`;
 const tabText = (title) => js(`${runTab(title)}?.host.textContent || ''`);
 // A real drag of files from outside (CDP, with their paths) onto an element of the window.
 const dragOn = async (target, files) => {
   await js(`(document.querySelectorAll('.ide-balloon').forEach((n) => n.remove()), true)`);
-  const box = await js(`(() => { const n = ${target}; n.scrollIntoView({ block: 'center' }); const r = n.getBoundingClientRect(); const x = r.x + 20, y = r.y + 10; return { x, y, hit: n.contains(document.elementFromPoint(x, y)) }; })()`);
+  const box = await js(`(() => { const n = ${target}; n.scrollIntoView({ block: 'start' }); const r = n.getBoundingClientRect(); const x = r.x + 20, y = r.y + 10; return { x, y, hit: n.contains(document.elementFromPoint(x, y)) }; })()`);
   if (!box.hit) throw new Error(`the drop point is not on ${target}`);
   const data = { items: [], files, dragOperationsMask: 1 };
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, x: box.x, y: box.y, data });
@@ -173,7 +175,7 @@ const dragOn = async (target, files) => {
 const timed = async (step) => { const at = Date.now(); const r = await step(); return { r, ms: Date.now() - at }; };
 
 try {
-  await js(`(ide.toolWindows.get('Minecraft').show(), true)`);
+  await js(`(ide.minecraft.screen.show('servers'), true)`);
   await until(`!!${card('pap')} && !!${card('fab')}`, 'server cards');
 
   // ---------- sources ----------
@@ -323,7 +325,7 @@ try {
 
   // a real drag of a hostile .mrpack onto the window opens New Server from Modpack with what it holds
   const hostilePack = packFile('팩 & 100% 😀.mrpack', { name: { evil: true }, versionId: '1', dependencies: deps, files: [good] });
-  await dragOn(`document.querySelector('#minecraftTool .mc-bar')`, [hostilePack]);
+  await dragOn(`document.querySelector('#minecraftScreen')`, [hostilePack]);
   await until(`/팩 & 100% 😀 1: Minecraft 1\\.20\\.1, Fabric 0\\.15\\.0\\. 1 files for the server/.test(document.querySelector('#mcPackInfo')?.textContent || '')`, 'hostile modpack dialog', 15000)
     .then(() => check(true, 'a dropped .mrpack with a hostile name and index opens New Server from Modpack with what it holds'),
       async () => check(false, `modpack dialog: ${await js("document.querySelector('#mcPackInfo')?.textContent")} ${await js("document.querySelector('.mc-dialog-error')?.textContent")}`));

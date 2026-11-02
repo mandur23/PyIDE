@@ -1,4 +1,4 @@
-.aic { flex: 1; display: flex; flex-direction: column; min-height: 0; font-size: 13px; }
+.aic { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; font-size: 13px; }
 .aic-list { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
 .aic-empty { margin: auto 8px; text-align: center; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
 .aic-empty-title { font-weight: 600; color: var(--gray11); }
@@ -42,10 +42,15 @@
 .aic-input { resize: none; min-height: 54px; max-height: 200px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4);
   border-radius: 6px; padding: 6px 8px; outline: none; font: 13px/1.45 inherit; font-family: inherit; }
 .aic-input:focus { border-color: var(--blue6); }
-.aic-foot { display: flex; align-items: center; gap: 8px; }
-.aic-chat-status { flex: 1; color: var(--gray8); font-size: 12px; }
+.aic-foot { display: flex; align-items: center; gap: 4px; }
+.aic-tool { display: flex; align-items: center; gap: 2px; flex-shrink: 0; height: 26px; min-width: 26px; padding: 0 5px; border-radius: 4px; color: var(--gray10); font-size: 12px; white-space: nowrap; }
+.aic-tool:hover { background: var(--gray3); }
+.aic-chat-status { flex: 1; min-width: 0; margin: 0 4px; color: var(--gray8); font-size: 12px; overflow-wrap: anywhere; }
 .aic-chat-status.error { color: var(--red); }
-.aic-send { min-width: 64px; }
+.aic-send { min-width: 64px; flex-shrink: 0; }
+.aic-drop-hint { display: none; position: absolute; inset: 4px; z-index: 40; align-items: center; justify-content: center; border: 2px dashed var(--blue6);
+  border-radius: 6px; background: var(--gray1); color: var(--gray11); pointer-events: none; }
+.aic.dropping .aic-drop-hint { display: flex; }
 .aic-send.stop { background: var(--red); border-color: var(--red); }
 .aic-complete { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 30; padding: 4px; background: var(--gray2);
   border: 1px solid var(--gray5); border-radius: 6px; box-shadow: 0 6px 18px #0006; }

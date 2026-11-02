@@ -1,28 +1,16 @@
-// Minecraft servers against the real services (opt-in, not in CI: it downloads servers, installers and Java, a few
-// hundred MB). Creates one server of each kind through the IDE, then starts each Minecraft server with eula.txt set
-// back to false, so the real server unpacks or downloads what it needs and stops at Mojang's EULA check: nothing is
-// agreed to here. A Velocity proxy has no EULA and runs for real: it is wired to the Paper server and loads a Velocity
-// plugin built in the IDE. Also: a plugin built against the real Paper, and resource packs whose format comes from the
-// real servers' version.json.
-// MC_LIVE_KINDS=paper,velocity limits the kinds. MC_LIVE_LSP=1 opens the Paper plugin with the Eclipse JDT Language
-// Server (the pinned archive, cached in verify/out/downloads-cache like verify/java-lsp.mjs) and checks the editor
-// knows the Paper API. MC_LIVE_GRADLE=1 builds a renamed mod from the real Forge MDK and from Fabric's example mod with
-// Gradle and deploys them (Minecraft and Gradle download, ~15 minutes). MC_LIVE_MODPACK=<Modrinth slug> makes a server
-// from that modpack and starts it as far as the EULA check. MC_LIVE_CLIENT=1 (with MC_LIVE_GRADLE) starts the Fabric
-// mod's real test client under Debug: its client initializer prints a message every 40 ticks, the message is changed
-// and saved, and the game's output shows the HotSwap; the game stays open until mclive-client-go.txt appears in the
-// temporary folder (for a screenshot of it), mclive-client-up.txt there saying when it is. Port 9792.
-import { spawnSync } from 'child_process';
-import { createHash } from 'crypto';
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
-import http from 'http';
+// Craft's Minecraft servers against the real services (opt-in, not in CI: it downloads servers, installers and Java,
+// a few hundred MB). Creates one server of each kind in a craft window, then starts each Minecraft server with eula.txt
+// set back to false, so the real server unpacks or downloads what it needs and stops at Mojang's EULA check: nothing is
+// agreed to here. A Velocity proxy has no EULA and runs for real, wired to the Paper server. Also: resource packs whose
+// format comes from the real servers' version.json.
+// MC_LIVE_KINDS=paper,velocity limits the kinds. MC_LIVE_MODPACK=<Modrinth slug> makes a server from that modpack and
+// starts it as far as the EULA check. Port 9792.
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { launch } from './lib.mjs';
 
 const S = JSON.stringify;
-const APP = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const work = mkdtempSync(path.join(tmpdir(), 'mclive-'));
 const project = path.join(work, 'p');
 mkdirSync(project);
@@ -37,26 +25,7 @@ const SERVERS = [
 ].filter((s) => !process.env.MC_LIVE_KINDS || process.env.MC_LIVE_KINDS.split(',').includes(s.kind));
 const has = (kind) => SERVERS.some((s) => s.kind === kind);
 
-// The JDT LS archive for MC_LIVE_LSP, handed out by a local server as verify/java-lsp.mjs does.
-const env = { PYIDE_INSTALL_ROOT: path.join(work, 'root') };
-let lspServer = null;
-if (process.env.MC_LIVE_LSP === '1') {
-  const name = 'jdt-language-server-1.63.0-202610191322.tar.gz';
-  const archive = path.join(APP, 'verify', 'out', 'downloads-cache', name);
-  const sha256 = 'b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4';
-  if (!existsSync(archive)) {
-    mkdirSync(path.dirname(archive), { recursive: true });
-    writeFileSync(archive, Buffer.from(await (await fetch(`https://download.eclipse.org/jdtls/milestones/1.63.0/${name}`)).arrayBuffer()));
-  }
-  if (createHash('sha256').update(readFileSync(archive)).digest('hex') !== sha256) throw new Error('JDT LS archive checksum');
-  lspServer = http.createServer((q, r) => { r.writeHead(200, { 'content-length': statSync(archive).size }); createReadStream(archive).pipe(r); });
-  await new Promise((r) => lspServer.listen(0, '127.0.0.1', r));
-  const feed = path.join(work, 'toolchains.json');
-  writeFileSync(feed, S({ jdtls: { url: `http://127.0.0.1:${lspServer.address().port}/${name}`, size: statSync(archive).size, sha256 } }));
-  env.PYIDE_TOOLCHAINS = feed;
-}
-
-const t = await launch({ name: 'minecraft-live', port: 9792, projectDir: project, env });
+const t = await launch({ name: 'minecraft-live', port: 9792, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_INSTALL_ROOT: path.join(work, 'root') } });
 const { js, until, check, sleep, shot } = t;
 const tab = (title) => `ide.run.sessions().find((s) => s.title === ${S(title)})`;
 const tabText = (title) => js(`${tab(title)}?.host.textContent || ''`);
@@ -64,13 +33,8 @@ const elapsed = (t0) => `${Math.round((Date.now() - t0) / 1000)} s`;
 const serverDir = (name) => path.join(project, 'servers', name);
 const runServer = (name) => js(`ide.run.runConfig(ide.run.configs().find((c) => c.type === 'minecraft-server' && c.dir === 'servers/${name}'))`);
 const ended = (name, ms) => until(`${tab(name)} && !${tab(name)}.running && !${tab(name)}.starting && /Process finished/.test(${tab(name)}.host.textContent)`, `${name} ended`, ms).catch(() => {});
-const buildRun = async (title, cfg, done, ms) => {
-  await js(`ide.run.runConfig(ide.run.addTemporary(${S(cfg)}))`);
-  await until(`${done}.test(${tab(title)}?.host.textContent || '') || /Process finished with exit code [1-9]|Plugin built and copied|error: /.test(${tab(title)}?.host.textContent || '')`, title, ms).catch(() => {});
-  return tabText(title);
-};
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.minecraft.screen.show('servers'), true)`);
   for (const s of SERVERS) {
     const t0 = Date.now();
     await js(`(window.__mcDone = null, ide.minecraft.createServer({ name: ${S(s.name)}, kind: ${S(s.kind)}, mc: ${S(s.mc)}, memory: '2G', port: ${25700 + SERVERS.indexOf(s)} }).then((r) => { window.__mcDone = r ? 'ok' : 'failed'; }), true)`);
@@ -111,11 +75,6 @@ try {
   }
 
   if (has('paper')) {
-    await js(`ide.api.invoke('minecraft:newPlugin', { root: ide.root, name: 'HelloPlugin', pkg: 'com.example.hello', server: 'paper' }).then(() => ide.minecraft.refresh())`);
-    const out = await buildRun('Build HelloPlugin', { type: 'minecraft-plugin', name: 'Build HelloPlugin', dir: 'plugins/HelloPlugin' }, '/Plugin built and copied/', 300000);
-    check(/Plugin built and copied/.test(out), `the template plugin compiles against the real Paper 1.21.11${/Plugin built/.test(out) ? '' : `: ${out.slice(-3000)}`}`);
-    const cp = readFileSync(path.join(project, 'plugins', 'HelloPlugin', '.classpath'), 'utf8');
-    check(/paper-api-[^"]+\.jar/.test(cp), `the plugin's .classpath names the real Paper API (${(/paper-api-[^"/]+\.jar/.exec(cp) || ['none'])[0]})`);
     const rp = await js(`ide.api.invoke('minecraft:newResourcePack', ide.root, ${S(serverDir('paper'))}).then((r) => r, (e) => ({ error: e.message }))`);
     const meta = rp.error ? rp.error : readFileSync(path.join(serverDir('paper'), 'resourcepack', 'pack.mcmeta'), 'utf8');
     check(!rp.error && /"min_format": 75|"pack_format": \d+|"min_format": \d+/.test(meta), `the resource pack's format comes from the real Paper's Minecraft jar: ${meta.replace(/\s+/g, ' ').slice(0, 200)}`);
@@ -127,129 +86,21 @@ try {
   }
 
   if (has('velocity') && has('paper')) {
-    // The proxy runs for real: no EULA. It is wired to the Paper servers and loads a plugin built here.
-    await js(`ide.api.invoke('minecraft:newPlugin', { root: ide.root, name: 'NetPlugin', pkg: 'com.example.net', server: 'proxy' }).then(() => ide.minecraft.refresh())`);
+    // The proxy runs for real: no EULA. It is wired to the Paper servers.
     await runServer('proxy');
     await until(`/Done \\(|Listening on/.test(${tab('proxy')}?.host.textContent || '')`, 'proxy up', 300000).catch(() => {});
-    let out = await tabText('proxy');
+    const out = await tabText('proxy');
     check(/Done \(|Listening on/.test(out) && /Players are sent on to: paper/.test(out), `the real Velocity proxy starts, sent on to the Paper servers${/Done \(/.test(out) ? '' : `: ${out.slice(-2500)}`}`);
     const toml = readFileSync(path.join(serverDir('proxy'), 'velocity.toml'), 'utf8');
     check(/^"paper" = "127\.0\.0\.1:257\d\d"$/m.test(toml) && existsSync(path.join(serverDir('paper'), 'config', 'paper-global.yml')), 'velocity.toml lists the Paper server, and Paper takes the forwarding secret');
-    const build = await buildRun('Build NetPlugin', { type: 'minecraft-plugin', name: 'Build NetPlugin', dir: 'plugins/NetPlugin' }, '/Plugin built and copied/', 300000);
-    check(/Plugin built and copied/.test(build), `a Velocity plugin compiles against the real Velocity${/Plugin built/.test(build) ? '' : `: ${build.slice(-3000)}`}`);
-    await until(`/NetPlugin enabled/.test(${tab('proxy')}?.host.textContent || '') && ${tab('proxy')}.running`, 'plugin loaded', 300000).catch(() => {});
-    out = await tabText('proxy');
-    check(/NetPlugin enabled/.test(out), `the restarted proxy loads the plugin and runs its initialize handler${/NetPlugin enabled/.test(out) ? '' : `: ${out.slice(-3000)}`}`);
     await js(`${tab('proxy')}.stop()`);
     await ended('proxy', 60000);
     check(!(await js(`${tab('proxy')}.running`)) && !/killed/i.test(await tabText('proxy')), 'Stop ends the real proxy with its own command');
-  }
-
-  if (process.env.MC_LIVE_LSP === '1' && has('paper')) {
-    const main = path.join(project, 'plugins', 'HelloPlugin', 'src', 'main', 'java', 'com', 'example', 'hello', 'HelloPlugin.java');
-    await js(`ide.openFile(${S(main)})`);
-    await until(`document.querySelector('#javaLspStatus')?.dataset.state === 'missing' || document.querySelector('#javaLspStatus')?.dataset.state === 'ready'`, 'java lsp state', 120000).catch(() => {});
-    if (await js(`document.querySelector('#javaLspStatus')?.dataset.state === 'missing'`)) {
-      await js(`ide.installer.run('toolchain:jdtls')`).catch(() => {});
-    }
-    await until(`document.querySelector('#javaLspStatus')?.dataset.state === 'ready'`, 'java lsp ready', 600000).catch(() => {});
-    await sleep(20000);
-    const errors = await js(`ide.monaco.editor.getModelMarkers({ resource: ide.editor.getModel().uri }).filter((m) => m.severity === ide.monaco.MarkerSeverity.Error).map((m) => m.startLineNumber + ': ' + m.message)`);
-    check(!errors.length, `the editor knows the Paper API: no errors in the plugin (${S(errors).slice(0, 600)})`);
-    const line = await js(`ide.editor.getModel().getLinesContent().findIndex((l) => l.includes('getLogger().info')) + 1`);
-    await js(`(ide.editor.focus(), ide.editor.executeEdits('t', [{ range: new ide.monaco.Range(${line}, 1, ${line}, 1), text: '        getServer().getPluginM\\n' }]), ide.editor.setPosition({ lineNumber: ${line}, column: 31 }), ide.editor.trigger('t', 'editor.action.triggerSuggest', {}), true)`);
-    await until(`[...document.querySelectorAll('.suggest-widget.visible .monaco-list-row .label-name')].some((n) => n.textContent.startsWith('getPluginManager'))`, 'completion', 60000).catch(() => {});
-    const names = await js(`[...document.querySelectorAll('.suggest-widget.visible .monaco-list-row .label-name')].map((n) => n.textContent)`);
-    check(names.some((n) => n.startsWith('getPluginManager')), `completion offers Paper's API (getServer().getPluginM… -> ${S(names.slice(0, 5))})`);
-  }
-
-  if (process.env.MC_LIVE_GRADLE === '1') {
-    for (const [server, id] of [['forge', 'forge_tools'], ['fabric', 'fabric_tools']].filter(([k]) => has(k))) {
-      const t2 = Date.now();
-      const made = await js(`ide.minecraft.createMod({ id: ${S(id)}, display: 'Live Tools', pkg: ${S(`kr.live.${id}`)}, server: ${S(server)} }).then((r) => !!r)`);
-      if (!made) { check(false, `${server} mod created: ${(await tabText('Minecraft: New Mod')).slice(-2000)}`); continue; }
-      const out = await buildRun(`Deploy ${id}`, { type: 'minecraft-mod', name: `Deploy ${id}`, dir: `mods/${id}`, task: 'deploy' }, '/Mod copied to/', 2400000);
-      const mods = existsSync(path.join(serverDir(server), 'mods')) ? readdirSync(path.join(serverDir(server), 'mods')) : [];
-      check(/Mod copied to/.test(out) && mods.some((m) => m.includes(id.replace(/_/g, '')) || m.includes(id) || m.endsWith('.jar')),
-        `the renamed ${server} mod builds with Gradle and is deployed in ${elapsed(t2)} (${S(mods)})${/Mod copied/.test(out) ? '' : `: ${out.slice(-3000)}`}`);
-    }
-    if (process.env.MC_LIVE_CLIENT === '1' && has('fabric')) {
-      const t3 = Date.now();
-      const modDir = path.join(project, 'mods', 'fabric_tools');
-      const files = [];
-      const walk = (d) => { for (const e of existsSync(d) ? readdirSync(d, { withFileTypes: true }) : []) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/Client\.java$/.test(e.name)) files.push(p); } };
-      walk(path.join(modDir, 'src', 'client', 'java'));
-      const clientFile = files[0];
-      const pkg = /^package ([\w.]+);/m.exec(readFileSync(clientFile, 'utf8'))[1];
-      const cls = path.basename(clientFile, '.java');
-      const source = (message) => `package ${pkg};
-
-import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-
-public class ${cls} implements ClientModInitializer {
-    private static int ticks;
-
-    @Override
-    public void onInitializeClient() {
-        ClientTickEvents.END_CLIENT_TICK.register(client -> tick());
-    }
-
-    private static void tick() {
-        if (++ticks % 40 == 0) System.out.println("pyide-hotswap: " + message());
-    }
-
-    private static String message() {
-        return "${message}";
-    }
-}
-`;
-      const editAndSave = (file, text) => js(`(async () => { await ide.openFile(${S(file)}); const t = ide.findTab(${S(file)}); t.doc.model.setValue(${S(text)}); await ide.saveTab(t); return true; })()`);
-      const dbgOut = () => js(`document.querySelector('#dbgOut')?.textContent || ''`);
-      await editAndSave(clientFile, source('version one'));
-      await js(`ide.run.debugConfig(ide.run.configs().find((c) => c.type === 'minecraft-mod' && c.task === 'runClient' && c.dir === 'mods/fabric_tools'))`);
-      const up = await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('pyide-hotswap: version one')`, 'client up', 2400000).then(() => true, () => false);
-      check(up, `the real test client starts under Debug in ${elapsed(t3)}${up ? '' : `: ${(await dbgOut()).slice(-3000)}`}`);
-      if (up) {
-        writeFileSync(path.join(tmpdir(), 'mclive-client-up.txt'), 'up');
-        await sleep(20000);
-        await editAndSave(clientFile, source('version two'));
-        const swapped = await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('pyide-hotswap: version two')`, 'hotswap', 120000).then(() => true, () => false);
-        const log = await dbgOut();
-        check(swapped && /HotSwap: \d+ classes reloaded/.test(log), `saving the client initializer swaps it into the running game (${(log.match(/HotSwap[^\n]*/g) || []).join(' | ')})`);
-        const found = await until(`(() => { const s = ide.minecraft.game.state(); return !!s.game?.hwnd && /Minecraft/.test(s.game.title); })()`, 'game window', 120000).then(() => true, () => false);
-        check(found, `the Game View finds the real game window beside the IDE (${S(await js('ide.minecraft.game.state()'))})`);
-        const lang = path.join(modDir, 'src', 'main', 'resources', 'assets', 'fabric_tools', 'lang', 'en_us.json');
-        mkdirSync(path.dirname(lang), { recursive: true });
-        writeFileSync(lang, '{}\n');
-        const reloads = () => dbgOut().then((t) => (t.match(/Reloading ResourceManager/g) || []).length);
-        const before = await reloads();
-        await editAndSave(lang, '{ "key.fabric_tools.test": "PyIDE live" }\n');
-        const reloaded = await until(`((document.querySelector('#dbgOut')?.textContent || '').match(/Reloading ResourceManager/g) || []).length > ${before}`, 'F3+T', 60000).then(() => true, () => false);
-        check(reloaded, `saving a language file reloads the real game's resources (F3+T)${reloaded ? '' : `: ${(await dbgOut()).slice(-1500)}`}`);
-        await js(`(ide.minecraft.game.show(), (() => { const s = document.querySelector('#minecraftGame .mcg-mode'); s.value = 'inside'; s.dispatchEvent(new Event('change')); })(), true)`);
-        const shown = await until(`ide.minecraft.game.state().streaming && document.querySelector('#minecraftGame video').videoWidth > 0`, 'game picture', 30000).then(() => true, () => false);
-        check(shown, `Inside the IDE shows the real game's picture in the Game View (${S(await js('ide.minecraft.game.state()'))})`);
-        await sleep(3000);
-        await shot('game-view-live.png');
-        writeFileSync(path.join(tmpdir(), 'mclive-client-up.txt'), 'swapped');
-        const go = path.join(tmpdir(), 'mclive-client-go.txt');
-        for (let i = 0; i < 120 && !existsSync(go); i++) await sleep(5000);
-      }
-      await js(`(ide.runAction('StopDebug'), true)`);
-      await until('!window.__debugger.state()', 'client stopped', 60000).catch(() => {});
-    }
-    // A Gradle daemon outlives the build and inherits the window's debugging port, so the next run could not start.
-    for (const id of ['forge_tools', 'fabric_tools']) {
-      const dir = path.join(project, 'mods', id);
-      if (existsSync(path.join(dir, 'gradlew.bat'))) spawnSync('cmd.exe', ['/d', '/c', '.\\gradlew.bat', '--stop'], { cwd: dir, stdio: 'ignore', timeout: 60000 });
-    }
   }
 } catch (err) {
   check(false, err.message);
 }
 await js(`ide.run.sessions().forEach((s) => s.running && s.stop())`).catch(() => {});
 await sleep(3000);
-lspServer?.close();
 console.log(`work folder: ${work}`);
 t.finish();

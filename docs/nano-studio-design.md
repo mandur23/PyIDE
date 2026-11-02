@@ -25,7 +25,7 @@ The user's decisions (2026-10-31): the name is Nano Studio. It is a full rename 
   - It has `servers/` (as today) and `instances/` (the launcher's).
   - `ide.emit('craftReady', {host})` fires once the workspace is open. The Minecraft plugin mounts its screen into `host` (workstream B2).
   - Window title: "Nano Studio Craft" (code mode: "<project> - Nano Studio Code").
-- **Code mode** must look and behave exactly as PyIDE does now. The Minecraft plugin stays available in code (its plugin.json has both modes).
+- **Code mode** is the IDE alone. The Minecraft plugin is craft only (`"modes": ["craft"]`): Code loads none of its renderer scripts, locales or main modules and shows no Minecraft UI, and writing Minecraft plugins and mods, which hung off a server in the project and needed the editor, is gone from both apps.
 
 ## 2. Launcher core (workstream B1: main side)
 
@@ -95,7 +95,7 @@ It covers create (fabric), profiles merged, version JSON with quickPlay args, Pl
 
 Files: new `renderer/features/minecraft/craft.js` (loaded by `index.js` like the other files), plus `screen.js`, `style.css`, `locales/ko.json`, and `index.js` small hooks. B2 owns these after B1 (B1 does not touch the renderer).
 
-In craft mode, on `craftReady`, the Minecraft screen mounts full-window as the app. In code mode the existing editor-tab screen stays as is, with the new pages too. Left navigation:
+On `craftReady`, the Minecraft screen mounts full-window as the app. Left navigation:
 
 - **Play (플레이)**: instance cards (name, Minecraft and loader, mod count, last played) with a big **Play** button, Mods (the instance's mods folder list with enable/disable by `.disabled` rename and remove), Open Folder, Delete. Also **New Instance** (name, version, loader) and **From Modpack** (opens the Market on Modpacks; a modpack's button becomes "Install as Instance" in craft).
 - **Servers to join (서버 참여)**: the saved servers with Join, which runs Play with the server and auto-syncs mods. Add Server takes a join code or an address. With an address only, it asks for version and loader, or finds them with a server list ping when it can (the version from the ping; Forge and NeoForge from `forgeData`).

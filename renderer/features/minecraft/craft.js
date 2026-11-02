@@ -4,8 +4,7 @@
 //   modpacks, or a .mrpack file), the instance's mods turned on and off, Open Folder and Delete.
 // - Servers to Join: servers added by a join code (nanostudio:join?…) or an address. Join plays the server's instance
 //   with the server to join, after its client pack is synced.
-// In craft mode they are the app; in code mode they are pages of the editor tab too. A missing launcher is a banner
-// with Mojang's download page: Nano Studio never installs it.
+// A missing launcher is a banner with Mojang's download page: Nano Studio never installs it.
 (() => {
   const { el } = ide.util;
   const mc = ide.minecraft;
@@ -793,10 +792,9 @@
     render();
     refresh();
   }
-  const unmount = () => { view = null; };
 
   ide.on('projectOpened', () => { loaded = false; refresh(); });
   ide.on('projectClosed', () => { loaded = false; refresh(); });
   ide.registerAction({ id: 'Minecraft.NewInstance', title: tr('New Minecraft Instance…'), needsProject: true, run: newInstance });
-  mc.craft = { mount, unmount, refresh, play, joinServer, addServer, newInstance, installPack, head, button, state: () => ({ instances, servers: joined, status }) };
+  mc.craft = { mount, refresh, play, joinServer, addServer, newInstance, installPack, head, button, state: () => ({ instances, servers: joined, status }) };
 })();

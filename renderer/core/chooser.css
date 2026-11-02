@@ -42,8 +42,9 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 
 .chooser-sep { width: 1px; height: 76px; align-self: center; background: rgba(255, 255, 255, .34); }
 .chooser-update-plate { position: relative; display: grid; place-items: center; width: 82px; height: 82px; border-radius: 19px; background: linear-gradient(#f4f6fb, #cfd6e4);
-  box-shadow: 0 6px 10px rgba(0, 0, 0, .25); transition: transform .14s ease-out; }
-.chooser-update:focus .chooser-update-plate { transform: scale(1.08); }
+  box-shadow: 0 6px 10px rgba(0, 0, 0, .25); transition: width .14s ease-out, height .14s ease-out; }
+/* It grows as the others do: one big item keeps the Dock's width, so nothing slides out from under the pointer. */
+.chooser-update:focus .chooser-update-plate { width: 118px; height: 118px; }
 .chooser-update-icon { width: 46px; height: 46px; }
 .chooser-ring { position: absolute; inset: 6px; }
 .chooser-ring circle { fill: none; stroke-width: 7; }

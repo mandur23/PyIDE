@@ -54,7 +54,6 @@
 - **`safeStorage`의 동기 API는 Electron 45에서 deprecated입니다.** 아직 동작합니다. 12곳(`clipboard-history`, `database`, `installer`, `askpass`)이 씁니다.
 - **IPC 오류는 메시지만 넘어오고 `.code`는 사라집니다.** 화면이 분기해야 하는 조건은 throw가 아니라 결과 값으로 돌려줍니다(`{launched: false, code: 'noLauncher'}`).
 - **배열에 덧붙인 속성은 contextBridge를 건너지 못합니다.** `players:items`의 `reason`과 `coverage`가 렌더러에서 사라졌습니다. `v8.serialize`로는 살아남아서 Node 테스트는 통과했습니다. 목록과 함께 보낼 값은 `{items, reason}`처럼 객체에 담고, IPC 값은 실제 창에서 확인합니다.
-- **창 캡처 권한은 Electron 45에서 다시 확인이 필요했습니다.** 업그레이드 후 게임 캡처가 검은 화면이 됐습니다.
 - **스크립트 로드 순서에 기대지 않습니다.** Monaco 콜백이 `editors.js`보다 먼저 끝나 `ide.initEditors is not a function`이 났습니다. 지금은 `DOMContentLoaded`를 기다립니다.
 - **외부 라이브러리는 정적으로 먼저 로드합니다.** `marked`를 지연 로드하다 `window.marked`가 비어 AI Chat 창이 무한 루프로 멈췄습니다. 이미 끝난 Promise를 기다리는 반복문은 창을 멈춥니다.
 
@@ -78,6 +77,8 @@
 ## 코딩: Code와 Craft 모드
 
 - **플러그인 `modes`의 기본값은 `['code']`입니다.** 필수 플러그인만 모든 모드에서 로드됩니다. `bundled`가 아닌 플러그인의 `required`는 무시합니다.
+- **실행 구성의 타입이 없을 수 있습니다.** `minecraft`가 Craft 전용이 되자 Code 프로젝트에 남은 `minecraft-server` 구성이 Edit Configurations의 `t.icon`에서 예외를 던져 창이 열리지 않았습니다. 플러그인을 끈 경우에도 같습니다. 구성은 지우지 않고(플러그인을 다시 켜면 돌아옵니다) `types.get()`의 빈 값을 처리합니다.
+- **Craft에는 메뉴가 없어도 액션이 살아 있습니다.** Find Action(Ctrl+Shift+A)이 코어에 있어서 `ide.registerAction`한 액션은 Craft에서도 실행됩니다. 메뉴에서 뺐다고 그 액션을 안 쓴다고 보지 않습니다. `Minecraft.NewServer` 등은 그래서 남겼습니다.
 - **Craft에는 편집기 영역, 툴바, 스트라이프가 없습니다.** 편집기 탭으로 여는 화면은 `body.mc-craft-tab`으로만 보입니다. 설정 페이지는 `craft: true`인 것만 나옵니다.
 - **Craft에는 `ide.debugger`가 없습니다.** code 전용 플러그인의 API는 `?.`로 부릅니다.
 - **`ide.openProject`, `ide.closeProject`는 Craft에서 거부됩니다.**
@@ -102,6 +103,7 @@
 ## 코딩: 번역
 
 - **한국어 사전은 모드별로 합쳐집니다.** Code 전용 플러그인 사전에만 있는 문구는 Craft에서 영어로 나옵니다. `Loading…`, `Type:`, `Port:`처럼 공용 문구는 `renderer/locales/ko.json`에 넣습니다.
+- **`tr()` 리터럴이 없어도 쓰이는 키가 있습니다.** 알림은 `tr(e.group)`으로 그룹 이름을 번역합니다. 지운 코드의 문구를 사전에서 뺄 때 `Minecraft`가 함께 빠질 뻔했습니다. 변수로 넘기는 `tr()`을 먼저 찾습니다.
 - **같은 키는 나중에 로드된 플러그인이 이깁니다.** `Play`가 뷰어의 "재생"과 겹쳐 Craft는 `Play Minecraft`, `Launch`를 씁니다.
 - **이름 뒤 조사를 쓰지 않습니다.** `{name}을(를)`이 어색합니다. `'{name}' 서버를 추가했어요`처럼 조사가 이름에 붙지 않게 씁니다.
 - **Craft 문구는 -요 말투입니다.** 메인의 영어 로그를 그대로 풍선에 보이지 않습니다. 원문은 Run 탭에 두고 화면에는 한국어 단계를 보여 줍니다.
@@ -131,6 +133,7 @@
 - **로그 형식은 실제 파일로 확인합니다.** 대역은 우리가 쓴 형식만 재현합니다. 26.3의 `System chat: ` 접두사는 Gradle 캐시의 실제 jar를 읽고서야 찾았고, 그 뒤 실제 Paper 26.3에서 확인했습니다.
 - **`CloseMainWindow()`의 `true`는 메시지를 넣었다는 뜻이지 닫혔다는 뜻이 아닙니다.** 숨겨진 데스크톱에서는 Windows가 프로세스 안에 `UAC_InputIndicatorOverlayWnd`를 만들어 맨 위에 올리고, `MainWindowHandle`이 그 창을 가리켜 폼은 `WM_CLOSE`를 받지 못합니다. 반환값만 본 조사 두 번이 틀린 결론을 냈습니다. 프로세스가 실제로 끝났는지 봅니다. 대역 창은 타이머로 자기를 계속 맨 위로 올립니다. `tasklist`에 보여도 창이 아직 없을 수 있으니 창이 뜬 신호를 기다립니다.
 - **대역 런처를 쓰는 창에는 `PYIDE_MC_LAUNCHER_IMAGE`도 줍니다.** 사용자의 실제 런처가 열려 있으면 `alreadyOpen`이 참이 되어 문구가 바뀌고 테스트가 실패합니다. `closeLauncher`는 대역 런처에 이미지 지정이 없으면 아무것도 하지 않습니다. 그래야 테스트가 사용자의 런처를 닫을 수 없습니다.
+- **pid가 살아 있다고 그 프로세스가 살아 있는 것은 아닙니다.** Windows는 pid를 금방 다시 씁니다. `stress-minecraft-runtime`이 네 번에 한 번꼴로 "stand-in이 남았다"고 실패했는데, 죽은 대역의 pid 파일에 적힌 번호를 `node.exe`가 쓰고 있었습니다. pid 파일로 생존을 볼 때는 `tasklist`로 이미지 이름까지 확인합니다. 낡은 pid 파일을 하나 심어 두면 이 검사를 항상 시험합니다.
 - **일시정지한 소켓은 상대가 끊긴 것을 모릅니다.** 서버 대역을 멈춰 두면 터널이 닫아도 `close`가 오지 않아 누수처럼 보입니다. 계속 쓰게 해서 재설정으로 알게 합니다.
 - **`write` 한 번에 5 MB를 주면 `bytesWritten`은 상대가 받은 양을 말해 주지 않습니다.** libuv가 전부 가져갑니다. 조각으로 나눠 `drain`을 기다려야 역압이 측정됩니다.
 - **`kill()`과 포트가 풀린 것은 다릅니다.** `verify/private-share.mjs`가 join 프로세스를 죽이고 `sleep(300)` 뒤 같은 포트를 기대했습니다. 혼자서는 117/117, 부하에서는 포트가 아직 잡혀 있어 새 포트로 옮겨 가서 실패했습니다. `sleep`을 늘리지 않고 `close`를 기다립니다(`private-join.js`의 `stop`). 앱의 키 교체도 같은 경로를 씁니다.
@@ -145,7 +148,7 @@
 - **게임 파일은 실행하지 않아도 읽을 수 있습니다.** 이 PC의 Gradle 캐시에 실제 jar가 있습니다(`~/.gradle/caches/fabric-loom/26.3`, `forge_gradle/.../1.20.1`). `en_us.json`을 읽고 `javap`로 클래스를 읽으면 기억이나 위키로 추측하던 것을 확인할 수 있습니다. 문구, 이스케이프 규칙, 콘솔의 문자셋, NBT 깊이가 그렇게 확인됐습니다. 실행은 하지 않습니다.
 - **전체 대조 검사의 기대값에 쓴 문구도 대역이 지어낸 것일 수 있습니다.** 서버 답 모양을 좁히면 `verify/minecraft-players.mjs` 대역의 문구도 실제 문구와 같은지 봅니다.
 - **CI는 느린 1024x720 러너입니다.** 릴리스마다 다른 단계가 실패합니다. 클릭과 타이밍 문제가 많습니다. 로컬에서 통과해도 CI 결과를 확인합니다.
-- **러너와 비슷하게 돌리려면 `PYIDE_TEST_VIEWPORT=1024x720 PYIDE_TEST_CPU=2`를 줍니다.** `verify/lib.mjs`가 창 크기와 렌더러 CPU를 에뮬레이션합니다. 프로세스 CPU를 2개로 묶고 `PYIDE_TEST_CPU=4`를 주면 러너보다 훨씬 느려져 러너에서 안 나는 실패가 나옵니다. 러너의 Prettier 대역은 0.3초, 이 조건에서는 8초가 걸렸습니다. 화면 에뮬레이션은 `screen.avail*`을 실제 작업 영역과 다르게 만드니 `minecraft`는 이 변수 없이 돌립니다. 숨겨진 데스크톱에서는 `minecraft`의 F3+T와 Inside the IDE 검사 3개가 실패합니다. 러너에서는 통과합니다.
+- **러너와 비슷하게 돌리려면 `PYIDE_TEST_VIEWPORT=1024x720 PYIDE_TEST_CPU=2`를 줍니다.** `verify/lib.mjs`가 창 크기와 렌더러 CPU를 에뮬레이션합니다. 프로세스 CPU를 2개로 묶고 `PYIDE_TEST_CPU=4`를 주면 러너보다 훨씬 느려져 러너에서 안 나는 실패가 나옵니다. 러너의 Prettier 대역은 0.3초, 이 조건에서는 8초가 걸렸습니다.
 - **러너의 `%TEMP%`는 8.3 이름입니다(`C:\Users\RUNNER~1`).** Java의 `getCanonicalPath`, `where`, venv는 긴 이름을 돌려줘서 경로를 문자열로 비교하면 틀립니다. 서버가 0개 실행 중으로 보이고 "서버 없음"을 확인하는 검사는 거짓으로 통과했습니다. `realpathSync.native`로 맞춥니다. 8.3 이름이 꺼진 드라이브에서는 `%TEMP%` 안의 junction을 `TEMP`, `TMP`로 주고 Java 쪽을 `toRealPath()`로 바꾸면 재현됩니다.
 - **러너에는 `CI=true`가 있습니다.** pytest는 이 변수가 있으면 실패한 `==`를 전부 포맷하고 ndiff합니다. 100만 개 리스트 다섯 번이 0.2초에서 19초(로컬), 120초 초과(러너)가 됐습니다. 사용자의 pytest를 재는 테스트는 `CI`와 `BUILD_NUMBER`를 뺍니다.
 - **크기 기대값은 앱과 같은 식으로 계산합니다.** Beside 배치는 작업 영역의 40%지만 최소 480 px입니다. 1024 px 화면에서는 최소값이 이깁니다.

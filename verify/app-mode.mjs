@@ -4,8 +4,9 @@
 // craftReady with #craftHost; plugins load per mode (bundled ones and user plugins with and without "modes", their
 // renderer scripts and main modules); a path argument without --mode goes straight to code mode; a restart keeps the
 // mode; the chooser's Dock offers an update from a local feed, downloads it and hands it to the main window, says when
-// there is none and when the feed cannot be read. Screenshots: chooser.png, chooser-ko.png, chooser-update.png and
-// craft-empty.png in verify/out/app-mode. Ports 9642-9651.
+// there is none and when the feed cannot be read; Code shows no Minecraft UI and loads no Craft code, and a run
+// configuration and servers/ folder a project kept from before do no harm there. Screenshots: chooser.png,
+// chooser-ko.png, chooser-update.png and craft-empty.png in verify/out/app-mode. Ports 9642-9651.
 import { spawn, execSync } from 'child_process';
 import { createHash, randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -103,6 +104,9 @@ async function connect(target) {
     const box = await js(`(() => { const r = document.querySelector(${S(selector)})?.getBoundingClientRect(); return r && { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (!box) throw new Error(`no element ${selector}`);
     await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
+    await sleep(250);
+    const left = await js(`document.elementFromPoint(${box.x}, ${box.y})?.closest(${S(selector)}) ? 1 : 0`);
+    if (!left) throw new Error(`${selector} slid out from under the pointer`);
     for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
   };
   const key = async (k, code) => {
@@ -150,10 +154,12 @@ try {
     check(s.mode === 'code' && !s.craft && s.toolbar !== 'none' && s.title === `${PRODUCT} Code`, `the Code card opens the IDE in code mode (${S({ mode: s.mode, title: s.title, toolbar: s.toolbar })})`);
     await sleep(500);
     check(!(await pages(9642)).some((u) => CHOOSER.test(u)), 'the chooser closed');
-    check(s.def && !s.probe && s.scripts.includes('vcs') && s.scripts.includes('minecraft') && !s.scripts.includes('craft-probe'),
-      `code mode loads the code plugins, Minecraft and a user plugin without "modes", not a craft-only one (${s.scripts.length} scripts)`);
-    const ipc = await ide.js(`Promise.all([ide.api.invoke('db:drivers').then(() => 'ok', (e) => String(e.message)), ide.api.invoke('craft-probe:hello').then(() => 'ok', (e) => String(e.message))])`);
-    check(ipc[0] === 'ok' && /No handler registered/.test(ipc[1]), `code mode registers code main modules and not a craft-only plugin's (${S(ipc)})`);
+    check(s.def && !s.probe && s.scripts.includes('vcs') && !s.scripts.includes('minecraft') && !s.scripts.includes('craft-probe'),
+      `code mode loads the code plugins and a user plugin without "modes", not Minecraft or a craft-only one (${s.scripts.length} scripts)`);
+    const ipc = await ide.js(`Promise.all(['db:drivers', 'craft-probe:hello', 'minecraft:kinds', 'launcher:status', 'players:bridgeServers'].map((c) => ide.api.invoke(c).then(() => 'ok', (e) => String(e.message))))`);
+    check(ipc[0] === 'ok' && ipc.slice(1).every((m) => /No handler registered/.test(m)), `code mode registers code main modules and not a craft-only plugin's or Minecraft's (${S(ipc)})`);
+    const listed = await ide.js(`ide.api.invoke('plugins:list').then((l) => l.map((p) => p.id))`);
+    check(listed.includes('vcs') && !listed.includes('minecraft') && listed.includes('port-sharing'), `the Plugins list of code does not show Minecraft and keeps port sharing (${listed.length})`);
     ide.close();
     run.kill();
   }
@@ -180,6 +186,8 @@ try {
     const run = start(9648, { env, settings: { 'updates.feedUrl': release('9.9.9') } });
     const c = await page(9648, CHOOSER);
     await c.until(`document.readyState === 'complete' && ${tip}.includes('9.9.9')`, 'the update icon');
+    await sleep(500);
+    await c.until(`document.readyState === 'complete' && ${tip}.includes('9.9.9')`, 'the update icon, still there');
     check(/9\.9\.9/.test(await c.js(tip)) && (await c.js(`getComputedStyle(document.getElementById('chooserBadge')).display`)) !== 'none' && (await c.js(status)) === '',
       `a new version puts an icon with a badge in the Dock (${await c.js(tip)})`);
     check(await c.js(`document.getElementById('chooserVersion').textContent`) === JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version, 'the menu bar shows this version');
@@ -214,6 +222,8 @@ try {
     const unsigned = start(9651, { env: { ...env, PYIDE_UPDATE_FEED: release('9.9.8') } });
     const u = await page(9651, CHOOSER);
     await u.until(`document.readyState === 'complete' && ${tip}.includes('9.9.8')`, 'the update icon');
+    await sleep(500);
+    await u.until(`document.readyState === 'complete' && ${tip}.includes('9.9.8')`, 'the update icon, still there');
     await u.click('#chooseUpdate');
     await u.until(`${tip} === 'Could not download Nano Studio 9.9.8.'`, 'the refused download', 60000);
     check(unsigned.child.exitCode === null, 'the default feed without a signature is refused: the icon says so and nothing installs');
@@ -327,6 +337,61 @@ try {
     check(s.mode === 'code' && !s.craft && s.root?.toLowerCase() === t.project.toLowerCase() && s.title === `project - ${PRODUCT} Code`,
       `a folder argument opens it in code mode without the chooser (${S(s)})`);
     check(!(await pages(9646)).some((u) => CHOOSER.test(u)), 'no chooser for a path argument');
+
+    const code = await t.js(`(async () => {
+      const said = (n) => /minecraft|game view|hotswap/i.test(\`\${n.title || ''} \${n.textContent || ''} \${n.getAttribute?.('aria-label') || ''}\`);
+      return { api: typeof ide.minecraft,
+        scripts: [...document.scripts].map((n) => n.src).filter((u) => /features\\/minecraft\\//.test(u)),
+        styles: [...document.styleSheets].map((n) => n.href || '').filter((u) => /features\\/minecraft\\//.test(u)),
+        actions: ide.actions.filter((a) => /minecraft|game view|hotswap/i.test(\`\${a.id} \${a.title}\`)).map((a) => a.id),
+        toolWindows: [...ide.toolWindows.keys()].filter((id) => /minecraft/i.test(id)),
+        stripes: [...document.querySelectorAll('#stripe *, #stripeRight *')].filter(said).length,
+        projectTypes: (ide.projectTypes || []).filter((p) => /minecraft/i.test(\`\${p.id} \${p.name()}\`)).map((p) => p.id),
+        runTypes: [...ide.run.types.keys()].filter((id) => /minecraft/i.test(id)) };
+    })()`);
+    check(code.api === 'undefined' && !code.scripts.length && !code.styles.length, `code loads no Minecraft source file (${S(code)})`);
+    check(!code.actions.length, `code has no Minecraft action (${S(code.actions)})`);
+    check(!code.toolWindows.length && !code.stripes, `code has no Minecraft tool window or stripe button (${S(code)})`);
+    check(!code.projectTypes.length, `New Project has no Minecraft type (${S(code.projectTypes)})`);
+    check(!code.runTypes.length, `code has no Minecraft run configuration type (${S(code.runTypes)})`);
+    await t.click('#mainMenuBtn');
+    await t.until(`!!document.querySelector('#mainMenu')`, 'main menu');
+    await t.js(`([...document.querySelectorAll('#mainMenu .menu-item')].find((r) => r.querySelector('.menu-label').textContent === 'Tools').dispatchEvent(new MouseEvent('mousedown', { bubbles: true })), true)`);
+    await t.until(`document.querySelectorAll('.context-menu[data-level="1"] .menu-item').length > 5`, 'Tools menu');
+    const tools = await t.js(`[...document.querySelectorAll('.context-menu[data-level="1"] .menu-label')].map((n) => n.textContent)`);
+    check(tools.includes('Manage Plugins…') || tools.some((x) => /Plugins/.test(x)), `the Tools menu opens with its entries (${tools.length})`);
+    check(!tools.some((x) => /minecraft/i.test(x)), `the Tools menu has no Minecraft entry (${S(tools)})`);
+    await t.press('Escape');
+    await t.press('Escape');
+
+    // A project kept from before the split: a saved minecraft-server configuration, selected, and its servers/ folder.
+    const CFG = { id: 'cfg-old-server', type: 'minecraft-server', name: 'old survival', dir: 'servers/survival', beforeLaunch: [] };
+    mkdirSync(path.join(t.project, 'servers', 'survival'), { recursive: true });
+    writeFileSync(path.join(t.project, 'servers', 'survival', 'pyide-server.json'), S({ kind: 'paper', mc: '1.21.1', java: 21, memory: '2G', launch: { jar: 'server.jar' } }));
+    await t.js(`(ide.settings.set('runConfigs:' + ide.root, ${S({ configs: [CFG], selected: CFG.id })}), true)`);
+    await t.reload();
+    check(await t.js(`ide.run.selected()?.id`) === CFG.id && await t.js(`document.querySelector('.run-target-name')?.textContent`) === CFG.name, 'the saved configuration of a type code has not is kept and shown in the run widget');
+    await t.js(`ide.run.runSelected().then(() => true)`);
+    await t.until(`!!document.querySelector('.dialog')`, 'the message of Run');
+    const said = await t.js(`document.querySelector('.dialog').textContent`);
+    check(/not loaded/.test(said), `Run says the configuration's plugin is not loaded (${said})`);
+    await t.js(`(document.querySelector('.dialog button').click(), true)`);
+    await t.until(`!document.querySelector('.dialog')`, 'the message closed');
+    check(await t.js(`ide.run.debugConfig(ide.run.selected()).then(() => true, (e) => String(e))`) === true, 'Debug of it neither throws nor rejects');
+    await t.until(`!document.querySelector('.dialog') || !!document.querySelector('.dialog button')`, 'Debug settled');
+    await t.js(`(document.querySelector('.dialog button')?.click(), true)`);
+    await t.js(`(ide.runAction('editRunConfigurations'), true)`);
+    await t.until(`!!document.querySelector('.rc-dialog')`, 'Edit Configurations');
+    const edit = await t.js(`({ groups: [...document.querySelectorAll('.rc-group')].map((n) => n.textContent.trim()), items: [...document.querySelectorAll('.rc-item')].map((n) => n.textContent), note: document.querySelector('.rc-unavailable')?.textContent || '' })`);
+    check(S(edit.groups) === S(['Unavailable']) && S(edit.items) === S([CFG.name]) && /not loaded/.test(edit.note), `Edit Configurations opens and lists it as unavailable (${S(edit)})`);
+    await t.js(`(document.querySelector('.rc-tool[data-tool="remove"]').click(), true)`);
+    await t.js(`([...document.querySelectorAll('.dialog-footer button, .dialog button')].find((b) => b.textContent === 'OK').click(), true)`);
+    await t.until(`!document.querySelector('.rc-dialog')`, 'Edit Configurations closed');
+    check(await t.js(`ide.run.configs().length`) === 0 && !(await t.js(`ide.run.selected()`)), 'it can be removed there');
+    await t.sleep(500);
+    const errors = await t.js(`ide.api.invoke('diagnostics:errors')`);
+    check(Array.isArray(errors) && !errors.length, `no IDE internal errors from the old configuration (${S(errors?.map?.((e) => e.title))})`);
+    check(!t.consoleErrors.length, `no renderer exceptions from it (${S(t.consoleErrors)})`);
     t.close();
   }
 } catch (err) {

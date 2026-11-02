@@ -1,15 +1,11 @@
-// Minecraft servers, plugins and mods (minecraft plugin) against stand-ins, offline and without accepting the real
-// Minecraft EULA: a local web server plays Mojang, PaperMC (Paper, Velocity), Purpur, the Forge Maven and a Maven
-// repository; a small Java program plays the server (listens on its port, prints "Done", takes console commands,
-// saves on "stop", unpacks an API jar at its first start the way Paper does, and loads the plugins' jars and calls
-// their onEnable) and the Velocity proxy; stub Bukkit classes stand in for the API; a stand-in cloudflared gives the
-// shared resource pack its address. Checks: the New Server dialog (types, versions, the EULA), Paper and Purpur
-// servers with their checksums, a bad checksum leaving nothing behind, the console and a graceful Stop, a plugin with
-// the Eclipse files that give the editor its classpath, a library added from a Maven repository, the plugin built,
-// deployed and run by the restarted server, a breakpoint in the plugin hit under Debug, the resource pack sent to
-// players through server.properties, a Velocity proxy wired to the project's Paper servers, a Forge server through
-// its installer, a mod from the MDK renamed to the user's id and package, built with the server's Java and deployed,
-// and the client pack (.mrpack) read back by Python's zipfile. Port 9793; the servers listen on 25611-25614.
+// Craft's Minecraft servers (minecraft plugin) in a craft window against stand-ins, offline and without accepting the
+// real Minecraft EULA: a local web server plays Mojang, PaperMC (Paper, Velocity), Purpur and the Forge Maven; a small
+// Java program plays the server (listens on its port, prints "Done", takes console commands, saves on "stop", unpacks
+// an API jar at its first start the way Paper does) and the Velocity proxy; a stand-in cloudflared gives the shared
+// resource pack its address. Checks: the New Server dialog (types, versions, the EULA), Paper and Purpur servers with
+// their checksums, a bad checksum leaving nothing behind, the console and a graceful Stop, the resource pack sent to
+// players through server.properties, a Velocity proxy wired to the project's Paper servers, a Forge server through its
+// installer, and the client pack (.mrpack) read back by Python's zipfile. Port 9793; the servers listen on 25611-25614.
 import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
@@ -107,77 +103,6 @@ const vanillaJar = jarOf('vanilla.jar', [serverClasses], 'FakeServer');
 const installerClasses = out('installer');
 javac(installerClasses, [path.join(src, 'installer', 'FakeInstaller.java')]);
 const installerJar = jarOf('installer.jar', [installerClasses, serverClasses], 'FakeInstaller');
-// The MDK as Forge's: its names are the template's (examplemod, ExampleMod, com.example.examplemod).
-const mdk = out('mdk');
-write(path.join(mdk, 'gradle.properties'), 'mod_id=examplemod\nmod_name=Example Mod\nmod_group_id=com.example.examplemod\n');
-write(path.join(mdk, 'src', 'main', 'java', 'com', 'example', 'examplemod', 'ExampleMod.java'), 'package com.example.examplemod;\n\npublic class ExampleMod {\n    public static final String MODID = "examplemod";\n}\n');
-write(path.join(mdk, 'src', 'main', 'resources', 'assets', 'examplemod', 'lang', 'en_us.json'), '{ "itemGroup.examplemod": "Example Mod" }\n');
-// Gradle as a Node script: build makes the jars; with the init script's properties, pyideClasspath writes the source
-// set and runClient compiles the mod and starts a stand-in game under the JDWP agent, which prints the mod's
-// greeting() every 300 ms (so a HotSwap shows in its output) and quits by itself after two minutes.
-// Its window (titled like Minecraft's) prints its bounds when placed and "F3+T" when those keys reach it.
-write(path.join(src, 'game', 'FakeGame.java'), `import java.awt.*;
-import java.awt.event.*;
-
-public class FakeGame {
-  static boolean f3;
-  public static void main(String[] a) throws Exception {
-    java.lang.reflect.Method m = Class.forName(a[0]).getMethod("greeting");
-    Frame f = new Frame("Minecraft* Fake 1.20.1");
-    f.setBackground(new Color(40, 160, 70));
-    f.setBounds(100, 100, 640, 400);
-    KeyAdapter keys = new KeyAdapter() {
-      public void keyPressed(KeyEvent e) {
-        if (e.getKeyCode() == KeyEvent.VK_F3) f3 = true;
-        else if (e.getKeyCode() == KeyEvent.VK_T && f3) System.out.println("game: F3+T");
-      }
-      public void keyReleased(KeyEvent e) { if (e.getKeyCode() == KeyEvent.VK_F3) f3 = false; }
-    };
-    f.addKeyListener(keys);
-    f.addComponentListener(new ComponentAdapter() {
-      public void componentMoved(ComponentEvent e) { bounds(f); }
-      public void componentResized(ComponentEvent e) { bounds(f); }
-    });
-    f.addWindowListener(new WindowAdapter() { public void windowClosing(WindowEvent e) { System.exit(0); } });
-    f.setVisible(true);
-    System.out.println("Fake Minecraft window open");
-    for (int i = 0; i < 400; i++) { System.out.println("game: " + m.invoke(null)); Thread.sleep(300); }
-    System.exit(0);
-  }
-  static void bounds(Frame f) { Rectangle r = f.getBounds(); System.out.println("game: bounds " + r.x + "," + r.y + "," + r.width + "," + r.height); }
-}`);
-const fakeGradle = path.join(work, 'fake-gradle.cjs');
-const gameDir = path.join(work, 'out', 'game');
-writeFileSync(fakeGradle, `const fs = require('fs'); const path = require('path'); const { execFileSync, spawn } = require('child_process');
-const args = process.argv.slice(2);
-const prop = (k) => (args.find((a) => a.startsWith('-P' + k + '=')) || '').slice(k.length + 3) || null;
-const task = args[args.length - 1];
-const home = process.env.JAVA_HOME;
-console.log('JAVA_HOME=' + home);
-console.log('task ' + task);
-const out = path.join(process.cwd(), 'build', 'classes', 'java', 'main');
-const srcDir = path.join(process.cwd(), 'src', 'main', 'java');
-if (args.includes('pyideClasspath')) fs.writeFileSync(prop('pyide.classpathFile'), JSON.stringify([{ name: 'main', sources: [srcDir], classpath: [], output: out,
-  resources: [path.join(process.cwd(), 'src', 'main', 'resources')], resourcesOutput: path.join(process.cwd(), 'build', 'resources', 'main') }]));
-if (task === 'build') {
-  fs.mkdirSync('build/libs', { recursive: true });
-  for (const n of ['mymod-1.0.jar', 'mymod-1.0-sources.jar']) fs.copyFileSync('gradle.properties', path.join('build/libs', n));
-  console.log('BUILD SUCCESSFUL');
-}
-if (task === 'runClient') {
-  const files = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith('.java')) files.push(p); } };
-  walk(srcDir);
-  execFileSync(path.join(home, 'bin', 'javac.exe'), ['-g', '-d', out, ...files], { stdio: 'inherit' });
-  const port = prop('pyide.debugPort');
-  const jvm = port ? ['-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:' + port] : [];
-  const game = spawn(path.join(home, 'bin', 'java.exe'), [...jvm, '-cp', out + path.delimiter + ${S(gameDir)}, 'FakeGame', 'com.example.mymod.Mymod'], { stdio: 'inherit' });
-  game.on('exit', (c) => process.exit(c ?? 0));
-}
-`);
-write(path.join(mdk, 'gradlew.bat'), `@"${process.execPath}" "${fakeGradle}" %*\r\n`);
-javac(gameDir, [path.join(src, 'game', 'FakeGame.java')]);
-const mdkZip = path.join(work, 'out', 'jars', 'mdk.zip');
-execFileSync(bin('jar'), ['--create', '--no-manifest', '--file', mdkZip, '-C', mdk, '.']);
 // A stand-in cloudflared: the quick tunnel's banner and registration.
 const fakeTunnel = path.join(work, 'fake-cloudflared.cjs');
 writeFileSync(fakeTunnel, `const port = (process.argv.join(' ').match(/:(\\d+)/) || [])[1];
@@ -243,10 +168,6 @@ routes.set('/velocity/versions/4.3.1/builds', [{ id: 45, channel: 'STABLE', down
 routes.set('/forge/promos.json', { promos: { '1.20.1-recommended': '47.9.9', '1.20.1-latest': '47.9.9' } });
 routes.set('/forge/1.20.1-47.9.9/forge-1.20.1-47.9.9-installer.jar', installerJar);
 routes.set('/forge/1.20.1-47.9.9/forge-1.20.1-47.9.9-installer.jar.sha256', sha('sha256', installerJar));
-routes.set('/forge/1.20.1-47.9.9/forge-1.20.1-47.9.9-mdk.zip', readFileSync(mdkZip));
-const libJar = readFileSync(apiJar);
-routes.set('/maven/net/test/api/1.0/api-1.0.jar', libJar);
-routes.set('/maven/net/test/api/1.0/api-1.0.jar.sha1', sha('sha1', libJar));
 // What is dropped on the window from outside: a plugin and a Fabric mod jar, a world, a resource pack zip, a server
 // folder made elsewhere, and a Modrinth modpack (a server mod, a client-only mod, overrides).
 const outside = path.join(work, 'outside');
@@ -308,7 +229,9 @@ routes.set('/modrinth/project/BADP/version', [{ id: 'vp', version_number: '3.0',
 
 const project = path.join(work, 'project');
 mkdirSync(project);
-const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, env: {
+const t = await launch({ name: 'minecraft', port: 9793, projectDir: project, mode: 'craft', env: {
+  PYIDE_CRAFT_HOME: project,
+  PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe',
   PYIDE_MC_JAVA: javaHome,
   PYIDE_CLOUDFLARED: S([process.execPath, fakeTunnel]),
   PYIDE_BORE: S([process.execPath, fakeBore]),
@@ -321,12 +244,12 @@ const { js, until, check, sleep, shot, cdp } = t;
 const dropOn = async (target, files) => {
   // Balloons stack over the right side after many steps; a drop on one would go to the window, not the target.
   await js(`(document.querySelectorAll('.ide-balloon').forEach((n) => n.remove()), true)`);
-  const box = await js(`(() => { const n = ${target}; n.scrollIntoView({ block: 'center' }); const r = n.getBoundingClientRect(); const x = r.x + 20, y = r.y + 10; return { x, y, hit: n.contains(document.elementFromPoint(x, y)) }; })()`);
+  const box = await js(`(() => { const n = ${target}; n.scrollIntoView({ block: 'start' }); const r = n.getBoundingClientRect(); const x = r.x + 20, y = r.y + 10; return { x, y, hit: n.contains(document.elementFromPoint(x, y)) }; })()`);
   if (!box.hit) throw new Error(`the drop point is not on ${target}`);
   const data = { items: [], files, dragOperationsMask: 1 };
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, x: box.x, y: box.y, data });
 };
-const card = (name) => `document.querySelector('#minecraftTool .mc-server[data-name="${name}"]')`;
+const card = (name) => `document.querySelector('#minecraftScreen .mc-server[data-name="${name}"]')`;
 const click = (sel) => js(`(document.querySelector(${S(sel)}).click(), true)`);
 const runTab = (title) => `ide.run.sessions().find((s) => s.title === ${S(title)})`;
 const tabText = (title) => js(`${runTab(title)}?.host.textContent || ''`);
@@ -344,12 +267,13 @@ const stopServer = async (name) => {
 };
 
 try {
-  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.toolWindows.get('Minecraft').show(), true)`);
-  await until(`!!document.querySelector('#minecraftTool .mc-empty')`, 'empty Minecraft window');
-  check(true, 'the Minecraft tool window opens on a project without servers');
+  check(await js(`ide.root.toLowerCase()`) === project.toLowerCase(), `the craft window opens the test workspace (${await js('ide.root')})`);
+  await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), ide.minecraft.screen.show('servers'), true)`);
+  await until(`!!document.querySelector('#minecraftScreen .mcc-empty') && !!document.querySelector('#minecraftScreen').offsetParent`, 'empty server list');
+  check(true, 'My Servers opens on a workspace without servers');
 
   // ---------- New Server ----------
-  await click('#minecraftTool .mc-new');
+  await click('.mcc-new-server');
   await until(`document.querySelectorAll('#mcKind option').length === 7`, 'server types');
   check(S(await js(`[...document.querySelectorAll('#mcKind option')].map((o) => o.textContent)`)) === S(['Paper', 'Purpur', 'Velocity', 'Vanilla', 'Fabric', 'Forge', 'NeoForge']),
     'New Server offers Paper, Purpur, Velocity, Vanilla, Fabric, Forge and NeoForge');
@@ -394,40 +318,7 @@ try {
   await stopServer('survival');
   check((await tabText('survival')).includes('Stopping the server') && existsSync(path.join(serverDir('survival'), 'world.saved')), 'Stop asks the server to save and quit ("stop"), not a kill');
 
-  // ---------- plugin ----------
-  await js(`(${card('survival')}.querySelector('.mc-plugin').click(), true)`);
-  await until(`!!document.querySelector('#mcPluginName')`, 'plugin dialog');
-  await js(`(() => { document.querySelector('#mcPluginServer').value = 'survival'; document.querySelector('#mcPluginName').value = 'HelloPlugin'; document.querySelector('#mcPluginPkg').value = 'com.example.hello'; return true; })()`);
-  await js(`(${dialogButton('Create')}).click()`);
-  const pluginDir = path.join(project, 'plugins', 'HelloPlugin');
-  const main = path.join(pluginDir, 'src', 'main', 'java', 'com', 'example', 'hello', 'HelloPlugin.java');
-  await until(`ide.activeTab()?.path.toLowerCase() === ${S(main.toLowerCase())}`, 'plugin source open', 15000);
-  check(/api-version: '1\.20'/.test(readFileSync(path.join(pluginDir, 'src', 'main', 'resources', 'plugin.yml'), 'utf8')), 'New Plugin writes the class and plugin.yml (api-version 1.20) and opens the class');
-  const classpath = () => readFileSync(path.join(pluginDir, '.classpath'), 'utf8');
-  check(existsSync(path.join(pluginDir, '.project')) && /kind="src" path="src\/main\/java"/.test(classpath()) && /paper-api\.jar/.test(classpath())
-    && /compliance=17/.test(readFileSync(path.join(pluginDir, '.settings', 'org.eclipse.jdt.core.prefs'), 'utf8')),
-  'the plugin has Eclipse project files with its sources, the server\'s API and Java 17, for the editor\'s Java support');
-  await until(`!!${card('survival')}.querySelector('.mc-build[data-project="HelloPlugin"] .mc-add-lib')`, 'plugin listed', 10000);
-
-  await js(`(${card('survival')}.querySelector('.mc-build[data-project="HelloPlugin"] .mc-add-lib').click(), true)`);
-  await until(`!!document.querySelector('#mcLibCoords')`, 'library dialog');
-  await js(`(() => { document.querySelector('#mcLibCoords').value = 'net.test:api:1.0'; document.querySelector('#mcLibRepo').value = 'custom'; document.querySelector('#mcLibUrl').value = ${S(`${base.replace('http:', 'https:')}/maven`)}; document.querySelector('#mcLibDepend').value = 'TestPlugin'; return true; })()`);
-  await js(`(${dialogButton('Add')}).click()`);
-  await until(`!!document.querySelector('.mc-dialog-error')?.textContent`, 'https required', 10000);
-  check(/https|Checksum|fetch/i.test(await js(`document.querySelector('.mc-dialog-error').textContent`)), 'a repository is reached over https only');
-  await js(`(${dialogButton('Cancel')}).click()`);
-  const added = await js(`ide.api.invoke('minecraft:addDependency', ide.root, { dir: ${S(pluginDir)}, coords: 'net.test:api:1.0', repo: 'https://unused', depend: null }, 'x').then(() => 'ok', (e) => e.message)`);
-  check(/https|fetch|failed/i.test(added), `an unreachable repository fails cleanly (${added.slice(0, 120)})`);
-
   await startServer('survival');
-  const before = starts(serverDir('survival'));
-  await js(`(${card('survival')}.querySelector('.mc-build[data-project="HelloPlugin"] .mc-build-run').click(), true)`);
-  await until(`(${runTab('Build HelloPlugin')})?.host.textContent.includes('Plugin built and copied')`, 'plugin built', 60000)
-    .catch(async (e) => { console.log(await tabText('Build HelloPlugin')); throw e; });
-  const listing = execFileSync(bin('jar'), ['--list', '--file', path.join(serverDir('survival'), 'plugins', 'HelloPlugin.jar')], { encoding: 'utf8' });
-  check(/plugin\.yml/.test(listing) && /com\/example\/hello\/HelloPlugin\.class/.test(listing), 'the plugin compiles against the server\'s libraries and its jar goes to plugins/');
-  await until(`(${runTab('survival')}).host.textContent.includes('Enabled HelloPlugin.jar')`, 'plugin enabled', 60000).catch(() => {});
-  check(starts(serverDir('survival')) === before + 1 && (await tabText('survival')).includes('Enabled HelloPlugin.jar'), 'the running server restarts and the plugin\'s onEnable runs');
 
   // ---------- sharing ----------
   await js(`(ide.settings.set('ports.confirmShare', false), ide.settings.set('ports.confirmShareTcp', false), true)`);
@@ -443,16 +334,6 @@ try {
   await until(`!${card('survival')}?.querySelector('.mc-public') && !!${card('survival')}?.querySelector('.mc-share')`, 'sharing stopped', 15000)
     .then(() => check(true, 'Stop Sharing takes the address off the card'), () => check(false, 'Stop Sharing takes the address off the card'));
   await stopServer('survival');
-
-  // ---------- debugging ----------
-  const line = readFileSync(main, 'utf8').split('\n').findIndex((l) => l.includes('getLogger().info')) + 1;
-  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${line}, column: 1 }), ide.runAction('ToggleLineBreakpoint'), true)`);
-  await js(`(${card('survival')}.querySelector('.mc-debug').click(), true)`);
-  await until(`(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx]; return !!f && f.path?.endsWith('HelloPlugin.java') && f.line === ${line}; })()`, 'breakpoint hit', 60000)
-    .then(() => check(true, `Debug stops at a breakpoint in the plugin's onEnable (HelloPlugin.java:${line})`), async () => check(false, `Debug stops at the plugin's breakpoint: ${S(await js('window.__debugger.state()'))}`));
-  await js(`(ide.runAction('StopDebug'), true)`);
-  await until(`!window.__debugger.state()`, 'debug ended', 20000);
-  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${line}, column: 1 }), ide.runAction('ToggleLineBreakpoint'), true)`);
 
   // ---------- resource pack ----------
   await js(`(${card('survival')}.querySelector('.mc-rp').click(), true)`);
@@ -518,87 +399,7 @@ try {
   check(/-Xmx2G -XX:\+UseSerialGC @user_jvm_args\.txt/.test(await tabText('modded')), 'jvmArgs in pyide-server.json replace the GC options');
   await stopServer('modded');
 
-  await js(`(${card('modded')}.querySelector('.mc-mod').click(), true)`);
-  await until(`!!document.querySelector('#mcModId')`, 'mod dialog');
-  await js(`(() => { document.querySelector('#mcModId').value = 'mymod'; document.querySelector('#mcModName').value = 'My Mod'; document.querySelector('#mcModPkg').value = 'com.example.mymod'; return true; })()`);
-  await js(`(${dialogButton('Create')}).click()`);
-  await until(`!!${card('modded')}.querySelector('.mc-build[data-project="mymod"]')`, 'mod listed', 30000)
-    .catch(async (e) => { console.log(await tabText('Minecraft: New Mod')); throw e; });
-  const modDir = path.join(project, 'mods', 'mymod');
-  const modMain = path.join(modDir, 'src', 'main', 'java', 'com', 'example', 'mymod', 'Mymod.java');
-  check(existsSync(modMain) && /^package com\.example\.mymod;/m.test(readFileSync(modMain, 'utf8')) && /MODID = "mymod"/.test(readFileSync(modMain, 'utf8'))
-    && existsSync(path.join(modDir, 'src', 'main', 'resources', 'assets', 'mymod', 'lang', 'en_us.json'))
-    && /^mod_id=mymod$/m.test(readFileSync(path.join(modDir, 'gradle.properties'), 'utf8')) && /^mod_name=My Mod$/m.test(readFileSync(path.join(modDir, 'gradle.properties'), 'utf8')),
-  'New Mod renames the MDK to the mod id, name and package (class, package folders, assets, gradle.properties)');
-  await until(`ide.activeTab()?.path.toLowerCase() === ${S(modMain.toLowerCase())}`, 'mod class open', 10000)
-    .then(() => check(true, 'the mod\'s main class opens'), () => check(false, 'the mod\'s main class opens'));
-  await js(`(${card('modded')}.querySelector('.mc-build[data-project="mymod"] .mc-build-run').click(), true)`);
-  await until(`(${runTab('Deploy mymod')})?.host.textContent.includes('Mod copied to')`, 'mod deployed', 60000)
-    .catch(async (e) => { console.log(await tabText('Deploy mymod')); throw e; });
-  const modLog = await tabText('Deploy mymod');
-  check(modLog.includes(`JAVA_HOME=${javaHome}`) && modLog.includes('task build'), 'the mod builds with gradlew and the server\'s Java (JAVA_HOME)');
-  check(S(readdirSync(path.join(serverDir('modded'), 'mods'))) === S(['mymod-1.0.jar']), 'the built jar (not -sources) goes to the server\'s mods');
-
-  // ---------- the test client under Debug, HotSwap ----------
-  const dbgOut = () => js(`document.querySelector('#dbgOut')?.textContent || ''`);
-  const editAndSave = (file, text) => js(`(async () => { await ide.openFile(${S(file)}); const t = ide.findTab(${S(file)}); t.doc.model.setValue(${S(text)}); await ide.saveTab(t); return true; })()`);
-  const modSource = (body) => `package com.example.mymod;\n\npublic class Mymod {\n    public static final String MODID = "mymod";\n\n${body}}\n`;
-  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v1";\n    }\n'));
-  await js(`(${card('modded')}.querySelector('.mc-build[data-project="mymod"] .mc-client').click(), true)`);
-  await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('game: hello v1')`, 'test client running', 60000)
-    .catch(async (e) => { console.log(await dbgOut()); throw e; });
-  const clientLog = await dbgOut();
-  check(/gradlew runClient \(debug port \d+\)/.test(clientLog) && /Connected to the target VM/.test(clientLog) && /Fake Minecraft window open/.test(clientLog),
-    'Test Client runs runClient through Gradle with the debug port, and the game starts under the debugger');
-  const initScript = readFileSync(path.join(modDir, 'build', 'pyide', 'init.gradle'), 'utf8');
-  check(/tasks\.withType\(JavaExec\)\.matching \{ it\.name == 'runClient' \}/.test(initScript) && /suspend=y,address=127\.0\.0\.1:\$\{port\}/.test(initScript),
-    'the init script gives runClient\'s JVM the JDWP agent');
-  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v2";\n    }\n'));
-  await until(`/HotSwap: 1 classes reloaded/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'hotswap', 30000)
-    .catch(async (e) => { console.log(await dbgOut()); throw e; });
-  await until(`(document.querySelector('#dbgOut')?.textContent || '').includes('game: hello v2')`, 'new code running', 10000)
-    .then(() => check(true, 'saving the mod\'s code swaps it into the running game: its output changes without a restart'), async () => check(false, `HotSwap output: ${(await dbgOut()).slice(-800)}`));
-  check(readFileSync(path.join(modDir, 'build', 'classes', 'java', 'main', 'com', 'example', 'mymod', 'Mymod.class')).includes(Buffer.from('hello v2')),
-    'the new class is also written over the build output');
-  await editAndSave(modMain, modSource('    public static String greeting() {\n        return "hello v2";\n    }\n\n    public static int added() {\n        return 1;\n    }\n'));
-  await until(`/cannot take this change without a restart \\(a method was added\\)/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'hotswap refused', 30000)
-    .then(() => check(true, 'a change the JVM cannot swap (a new method) says the game needs a restart'), async () => check(false, `refused HotSwap: ${(await dbgOut()).slice(-800)}`));
-  await until(`(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; return t.slice(t.lastIndexOf('without a restart')).includes('game: hello v2'); })()`, 'game after a refused swap', 5000)
-    .then(() => check(true, 'the game keeps running the last code that swapped'), async () => check(false, `after the refused swap: ${(await dbgOut()).slice(-400)}`));
-
-  // ---------- Game View ----------
-  const gameState = () => js(`ide.minecraft.game.state()`);
-  check(await js(`ide.minecraft.game.state().note.includes('without a restart') && document.querySelector('#minecraftGame .mcg-restart').classList.contains('primary')`),
-    'the Game View says the change needs a restart and points at Restart');
-  check(readFileSync(path.join(modDir, 'run', 'options.txt'), 'utf8').includes('pauseOnLostFocus:false'), 'the test client keeps playing while the IDE has the focus (options.txt)');
-  await until(`!!ide.minecraft.game.state().game?.hwnd`, 'game window found', 20000).catch(async () => check(false, `game window: ${S(await gameState())}`));
-  const besideNow = `(() => { const t = document.querySelector('#dbgOut')?.textContent || ''; const m = [...t.matchAll(/game: bounds (-?\\d+),(-?\\d+),(\\d+),(\\d+)/g)].pop();
-    const b = m && m.slice(1).map(Number); return { b, ide: [screenX, screenY, outerWidth, outerHeight], avail: [screen.availLeft, screen.availTop, screen.availWidth, screen.availHeight],
-    ok: !!b && Math.abs(b[0] - (screen.availLeft + outerWidth)) <= 16 && Math.abs(b[2] - Math.max(480, Math.round(screen.availWidth * 0.4))) <= 16 && Math.abs(b[3] - screen.availHeight) <= 16 && outerWidth < screen.availWidth * 0.7 }; })()`;
-  await until(`${besideNow}.ok`, 'game beside the IDE', 15000).catch(() => {});
-  const beside = await js(besideNow);
-  check(beside.ok, `Beside the IDE gives the game the right part of the screen and the IDE the rest (${S(beside)})`);
-  const lang = path.join(modDir, 'src', 'main', 'resources', 'assets', 'mymod', 'lang', 'en_us.json');
-  await editAndSave(lang, '{ "itemGroup.mymod": "My Mod v2" }\n');
-  await until(`/game: F3\\+T/.test(document.querySelector('#dbgOut')?.textContent || '')`, 'F3+T', 20000)
-    .then(() => check(true, 'saving a language file of the mod makes the game reload its resources (F3+T)'), async () => check(false, `resource reload: ${(await dbgOut()).slice(-800)}`));
-  check(readFileSync(path.join(modDir, 'build', 'resources', 'main', 'assets', 'mymod', 'lang', 'en_us.json'), 'utf8').includes('My Mod v2'),
-    'the saved language file is written over the resources the game reads');
-  await js(`(ide.minecraft.game.show(), (() => { const s = document.querySelector('#minecraftGame .mcg-mode'); s.value = 'inside'; s.dispatchEvent(new Event('change')); })(), true)`);
-  await until(`ide.minecraft.game.state().streaming && document.querySelector('#minecraftGame video').videoWidth > 0`, 'game picture', 20000)
-    .then(() => check(true, 'Inside the IDE shows the game window\'s picture in the Game View'), async () => check(false, `game picture: ${S(await gameState())}`));
-  await sleep(500);
-  const centre = await js(`(() => { const v = document.querySelector('#minecraftGame video'); const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
-    const g = c.getContext('2d'); g.drawImage(v, 0, 0); return [...g.getImageData(c.width >> 1, c.height >> 1, 1, 1).data.slice(0, 3)]; })()`);
-  check(centre[1] > 120 && centre[0] < 100 && centre[2] < 120, `the picture is the game window's (green at its centre: ${S(centre)})`);
-  await shot('game-view.png');
-  const firstWindow = (await gameState()).game.hwnd;
-  await js(`(document.querySelector('#minecraftGame .mcg-restart').click(), true)`);
-  await until(`(() => { const s = ide.minecraft.game.state(); return s.streaming && s.game?.hwnd && s.game.hwnd !== ${firstWindow}; })()`, 'restarted game', 60000)
-    .then(() => check(true, 'Restart debugs the test client again, and the Game View shows the new game'), async () => check(false, `restart: ${S(await gameState())} ${(await dbgOut()).slice(-600)}`));
-  await js(`(ide.runAction('StopDebug'), true)`);
-  await until(`!window.__debugger.state()`, 'client debug ended', 20000);
-
+  write(path.join(serverDir('modded'), 'mods', 'mymod-1.0.jar'), 'a mod the user put here');
   await js(`(${card('modded')}.querySelector('.mc-pack').click(), true)`);
   const pack = path.join(serverDir('modded'), 'client-pack', 'modded-1.20.1.mrpack');
   await until(`ide.api.exists(${S(pack)})`, 'client pack', 20000);
@@ -617,14 +418,14 @@ try {
   check(/dropped/.test(readFileSync(path.join(serverDir('survival'), 'resourcepack', 'pack.mcmeta'), 'utf8')) && existsSync(path.join(serverDir('survival'), 'resourcepack', 'assets', 'minecraft', 'textures', 'item', 'apple.png')),
     'a resource pack zip dropped on a server is unpacked into its resourcepack/');
 
-  await dropOn(`document.querySelector('#minecraftTool .mc-bar')`, [oldServer]);
+  await dropOn(`document.querySelector('#minecraftScreen')`, [oldServer]);
   await until(`!!${card('OldServer')}`, 'imported server', 30000);
   const old = JSON.parse(readFileSync(path.join(serverDir('OldServer'), 'pyide-server.json'), 'utf8'));
   check(old.kind === 'vanilla' && old.mc === '1.20.1' && old.java === 17 && old.imported && readFileSync(path.join(serverDir('OldServer'), 'eula.txt'), 'utf8') === 'eula=false\n'
     && existsSync(path.join(oldServer, 'server.jar')),
   `a server folder dropped on the window is copied into servers/ and recognized, its eula.txt left as it was (${S(old)})`);
 
-  await dropOn(`document.querySelector('#minecraftTool .mc-bar')`, [mrpack]);
+  await dropOn(`document.querySelector('#minecraftScreen')`, [mrpack]);
   await until(`/Test Pack 1\\.0: Minecraft 1\\.20\\.1, Forge 47\\.9\\.9\\. 1 files for the server/.test(document.querySelector('#mcPackInfo')?.textContent || '')`, 'modpack dialog', 20000)
     .then(() => check(true, 'a dropped .mrpack opens New Server from Modpack with what it holds'), async () => check(false, `modpack dialog: ${await js("document.querySelector('#mcPackInfo')?.textContent")}`));
   check(await js(`document.querySelector('#mcPackName').value`) === 'Test-Pack', 'the server is named after the modpack');
@@ -649,7 +450,7 @@ try {
   const moddedMods = () => readdirSync(path.join(serverDir('modded'), 'mods')).sort();
   await js(`(${card('modded')}.querySelector('.mc-server-market').click(), true)`);
   await until(`!!${marketCard('MODA')}`, 'market results', 20000);
-  check(await js(`ide.activeTab()?.path === 'minecraft:home' && ide.minecraft.screen.page() === 'market' && document.querySelectorAll('.mcm-tab').length === 4 && document.querySelector('.mcm-tab.active').dataset.type === 'mod'`)
+  check(await js(`ide.minecraft.screen.page() === 'market' && !!document.querySelector('.mcs-market').offsetParent && document.querySelectorAll('.mcm-tab').length === 4 && document.querySelector('.mcm-tab.active').dataset.type === 'mod'`)
     && await js(`document.querySelector('#mcmServer').selectedOptions[0].textContent`) === 'modded (Forge 1.20.1)',
   'Market on a server\'s card opens the Minecraft screen\'s Market on Mods for that server');
   const modSearch = requests.filter((u) => u.startsWith('/modrinth/search')).pop();
@@ -814,50 +615,16 @@ try {
     && await js(`!ide.run.configs().some((c) => c.type === 'minecraft-server' && /purp$/.test(c.dir)) && !ide.findTab(ide.minecraft.settings.tabId(${S(serverDir('purp'))}))`),
     'Delete moves the server folder to the Recycle Bin, takes it out of the proxy, drops its run configuration and closes its settings tab');
 
-  // ---------- the Minecraft screen, New Project ----------
-  await js(`(document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);
+  // ---------- the Minecraft screen ----------
+  await js(`(ide.tabs.slice().forEach((tab) => ide.closeTabObject(tab, true)), document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);
   await until(`!!document.querySelector('#minecraftScreen .mc-server[data-name="survival"]') && !!document.querySelector('#minecraftScreen').offsetParent`, 'screen servers', 10000);
-  check(await js(`document.querySelectorAll('#minecraftScreen .mc-server').length === document.querySelectorAll('#minecraftTool .mc-server').length && !!document.querySelector('#minecraftScreen .mc-server[data-name="modded"] .mc-start')`),
-    'the Minecraft screen\'s Servers page lists the same servers, with their actions, as the tool window');
+  check(await js(`document.querySelectorAll('#minecraftScreen .mc-server').length === ide.minecraft.servers().length && !!document.querySelector('#minecraftScreen .mc-server[data-name="modded"] .mc-start')`),
+    'the Minecraft screen\'s My Servers page lists every server, with its actions');
   await shot('screen.png');
   await js(`(document.querySelector('.mcs-action.mcs-new-server').click(), true)`);
   await until(`document.querySelectorAll('#mcKind option').length === 7`, 'new server from the screen');
   check(true, 'New Server… on the screen opens the New Server dialog');
   await js(`(${dialogButton('Cancel')}).click()`);
-
-  const where = path.join(work, 'newprojects');
-  mkdirSync(where, { recursive: true });
-  const setValue = (sel, value) => js(`(() => { const i = document.querySelector(${S(sel)}); i.value = ${S(value)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-  await js(`ide.runAction('NewProject')`);
-  await until(`!!document.querySelector('.np-dialog #npName')`, 'wizard');
-  check(S(await js(`[...document.querySelectorAll('.np-type')].map((n) => n.dataset.type).filter((x) => x.startsWith('minecraft'))`)) === S(['minecraft-mod', 'minecraft-plugin', 'minecraft-server']),
-    'New Project lists Minecraft Mod, Minecraft Plugin and Minecraft Server');
-  await js(`(document.querySelector('.np-type[data-type="minecraft-plugin"]').click(), true)`);
-  await setValue('#npName', 'CoolPlugin');
-  await setValue('#npLocation', where);
-  await until(`[...document.querySelectorAll('#npMc-plugin-version option')].some((o) => o.value === '1.20.1')`, 'plugin versions');
-  check(await js(`document.querySelector('#npMc-plugin-id').value === 'CoolPlugin' && document.querySelector('#npMc-plugin-pkg').value === 'com.example.coolplugin'
-    && [...document.querySelectorAll('#npMc-plugin-kind option')].map((o) => o.value).join() === 'paper,purpur,velocity'`),
-  'the plugin form offers Paper, Purpur and Velocity and names the plugin and package after the project');
-  await shot('new-project.png');
-  await js(`(document.querySelector('#npMc-plugin-version').value = '1.20.1', true)`);
-  await js(`(document.querySelector('#npCreate').click(), true)`);
-  await until(`/accept the Minecraft EULA/.test(document.querySelector('.np-error')?.textContent || '')`, 'EULA asked', 5000)
-    .then(() => check(true, 'a Minecraft project waits for the EULA'), () => check(false, 'a Minecraft project waits for the EULA'));
-  await js(`(document.querySelector('#npMc-plugin-eula').checked = true, true)`);
-  await js(`(document.querySelector('#npCreate').click(), true)`);
-  const newDir = path.join(where, 'CoolPlugin');
-  await until(`ide.root && ide.root.toLowerCase() === ${S(newDir.toLowerCase())}`, 'new project opened', 30000);
-  await until(`!!document.querySelector('#minecraftScreen .mc-build[data-project="CoolPlugin"]')`, 'plugin project made', 60000)
-    .catch(async (e) => { console.log(await tabText('Minecraft: New Server')); throw e; });
-  const made = JSON.parse(readFileSync(path.join(newDir, 'servers', 'server', 'pyide-server.json'), 'utf8'));
-  check(made.kind === 'paper' && made.mc === '1.20.1' && existsSync(path.join(newDir, 'plugins', 'CoolPlugin', 'pyide-plugin.json'))
-    && existsSync(path.join(newDir, 'plugins', 'CoolPlugin', 'src', 'main', 'java', 'com', 'example', 'coolplugin', 'CoolPlugin.java'))
-    && /servers\/\*\/libraries\//.test(readFileSync(path.join(newDir, '.gitignore'), 'utf8')),
-  `New Project › Minecraft Plugin makes the project with a Paper server and the plugin in it (${S(made)})`);
-  check(await js(`!!ide.findTab('minecraft:home') && ide.minecraft.screen.page() === 'servers' && /CoolPlugin\.java$/.test(ide.activeTab()?.path || '')`),
-    'the new project opens on the Minecraft screen, then the plugin\'s class in front of it');
-  await shot('window.png');
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);
 } catch (err) {
   check(false, err.message);

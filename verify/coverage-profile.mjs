@@ -102,11 +102,11 @@ try {
   check(await js(`ide.installables.some(i => i.id === 'pip:coverage')`), 'coverage.py is listed in the Install Manager');
   if (!process.env.COVERAGE_KEEP) check(!hadCoverage, 'coverage.py starts uninstalled in the test interpreter');
 
-  // ---------- toolbar: More Actions next to Run and Debug ----------
+  // ---------- toolbar: More Actions after Stop ----------
   await openFile(t, 'app.py');
   const widget = await js(`[...document.querySelector('.run-btn').parentElement.children].filter(n => !n.classList.contains('hidden')).map(n => n.className.split(' ')[1] || n.className)`);
   const iRun = widget.indexOf('run-btn');
-  check(iRun >= 0 && widget[iRun + 1] === 'dbg-tb-btn' && widget[iRun + 2] === 'run-more-btn', `run widget: Run, Debug, then More Actions (${widget.join(', ')})`);
+  check(iRun >= 0 && widget[iRun + 1] === 'dbg-tb-btn' && widget[iRun + 2] === 'stop-btn' && widget[iRun + 3] === 'run-more-btn', `run widget: Run, Debug, Stop, then More Actions (${widget.join(', ')})`);
   check(await js(`!!document.querySelector('.run-more-btn svg')`), 'More Actions uses the PyCharm icon');
   await t.click('.run-more-btn');
   await until(`!!document.querySelector('.context-menu')`, 'More Actions menu');

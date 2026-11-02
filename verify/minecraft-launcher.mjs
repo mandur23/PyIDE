@@ -1,5 +1,5 @@
-// Nano Studio Craft's launcher core (main/minecraft/launcher.js) through its launcher:* IPC in a code-mode window,
-// against stand-ins only: a local web server plays Mojang, Fabric's and Quilt's meta, the Forge Maven, Modrinth and a
+// Nano Studio Craft's launcher core (main/minecraft/launcher.js) through its launcher:* IPC in a craft window, against
+// stand-ins only: a local web server plays Mojang, Fabric's and Quilt's meta, the Forge Maven, Modrinth and a
 // server's client pack; small Java programs play the Forge installer (its headless --installClient, and an old one
 // without it); a Node script plays the official Minecraft Launcher (it records its arguments and a copy of
 // launcher_profiles.json). No real launcher, no game, no sign-in, no EULA. Checks: versions and loader versions,
@@ -8,8 +8,8 @@
 // line (before 1.13), Play starting the launcher with --workDir, a join code parsed and joined, the server's pack
 // synced (added, updated, removed, a user's mod and a disabled pack mod kept, a bad hash changing nothing, Minecraft
 // and the loader following the pack), modpacks from a file and from Modrinth, mods turned off and on, Remove, the
-// servers list, and noLauncher, and the code-mode Minecraft screen's Play and Servers to Join pages. Port 9895. Then
-// the same through Nano Studio Craft's UI in craft mode (craftUi, below; ports 9897-9898; screenshots craft-play.png,
+// servers list, and noLauncher, the Minecraft screen's pages, and none of it in a code window. Ports 9895 and 9894.
+// Then the same through Nano Studio Craft's UI (craftUi, below; ports 9897-9898; screenshots craft-play.png,
 // craft-join-error.png, craft-servers.png, craft-my-servers.png, craft-settings.png, craft-play-900.png,
 // craft-no-launcher.png and craft-unreachable.png).
 // MC_LAUNCHER_LIVE=1 instead installs the real Fabric, Quilt, Forge and NeoForge client loaders into a temporary
@@ -246,7 +246,7 @@ const launcherDir = path.join(project, '.launcher');
 // The launcher's own profiles and settings, there before Nano Studio's.
 write(path.join(launcherDir, 'launcher_profiles.json'), S({ profiles: { abc123: { name: 'Latest release', type: 'latest-release', lastVersionId: 'latest-release', icon: 'Furnace' } },
   settings: { enableSnapshots: true, locale: 'ko-kr' }, version: 3 }, null, 2));
-const t = await launch({ name: 'minecraft-launcher', port: 9895, projectDir: project, env: { PYIDE_MC_JAVA: javaHome, PYIDE_MC_LAUNCHER: LAUNCHER, PYIDE_MC_SOURCES: SOURCES } });
+const t = await launch({ name: 'minecraft-launcher', port: 9895, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_LAUNCHER: LAUNCHER, PYIDE_MC_SOURCES: SOURCES } });
 const { js, check, shot } = t;
 const call = (ch, ...args) => js(`ide.api.invoke(${S(ch)}, ${args.map((a) => (a === undefined ? 'undefined' : S(a))).join(', ')}).then((r) => ({ ok: r }), (e) => ({ err: String(e.message || e) }))`);
 const ok = async (ch, ...args) => {
@@ -431,17 +431,21 @@ try {
     `without the launcher Play returns {code: 'noLauncher'} with Mojang's download page, before any download (${S(none)})`);
   check(offline.status(project).launcher === null, 'launcher:status says when there is no launcher');
 
-  // ---------- the code-mode Minecraft screen's new pages ----------
+  // ---------- the Minecraft screen, and a code window ----------
   await js(`(ide.minecraft.screen.show('play'), true)`);
   await t.until(`document.querySelectorAll('.mcs-play .mcc-card').length === ${all.length}`, 'Play page cards', 10000);
-  const codeScreen = await js(`({ tab: ide.activeTab()?.path, pages: [...document.querySelectorAll('.mcs-page')].map((p) => p.dataset.page), first: document.querySelector('.mcs-play .mcc-card')?.dataset.name,
-    plugin: !!document.querySelector('.mcs-new-plugin'), market: document.querySelector('.mcs-market').classList.contains('hidden') })`);
+  const screen = await js(`({ pages: [...document.querySelectorAll('.mcs-page')].map((p) => p.dataset.page), first: document.querySelector('.mcs-play .mcc-card')?.dataset.name,
+    making: [...document.querySelectorAll('.mcs-action')].map((a) => a.textContent), market: document.querySelector('.mcs-market').classList.contains('hidden') })`);
   await js(`(document.querySelector('.mcs-page[data-page="join"]').click(), true)`);
   await t.until(`document.querySelectorAll('.mcs-join .mcc-joined').length === 2`, 'Servers to Join cards', 10000);
-  check(codeScreen.tab === 'minecraft:home' && S(codeScreen.pages) === S(['play', 'join', 'servers', 'market']) && codeScreen.first === 'Market' && codeScreen.plugin && codeScreen.market,
-    `in code mode the Minecraft editor tab has Play and Servers to Join too, beside My Servers and the Market (${S(codeScreen)})`);
+  check(S(screen.pages) === S(['play', 'join', 'servers', 'market']) && screen.first === 'Market' && screen.market && !screen.making.some((x) => /Plugin|Mod\b/.test(x)),
+    `the Minecraft screen has Play, Servers to Join, My Servers and the Market, and nothing for writing plugins or mods (${S(screen)})`);
   await shot('launcher-ipc.png');
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${S(t.consoleErrors)}` : ''}`);
+  const codeWindow = await launch({ fixture: 'core', name: 'minecraft-launcher-code', port: 9894 });
+  const inCode = await codeWindow.js(`Promise.all([typeof ide.minecraft, document.querySelectorAll('.mcs-page, .mcc-card, #craftHost > *').length, ide.api.invoke('launcher:instances', ide.root).then(() => 'ok', (e) => String(e.message))])`);
+  check(inCode[0] === 'undefined' && inCode[1] === 0 && /No handler registered/.test(inCode[2]), `a code window has no Minecraft screen, Play or Servers to Join, and no launcher in main (${S(inCode)})`);
+  codeWindow.close();
 } catch (err) {
   check(false, err.message);
   await shot('failure.png').catch(() => {});
@@ -835,7 +839,9 @@ async function craftUi(first) {
     await until(`!!${dialogButton('켜고 공유')}`, 'whitelist offer', 10000);
     const offered = await js(`document.querySelector('.dialog').textContent`);
     await js(`(${dialogButton('켜고 공유')}).click()`);
-    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611' && !!document.querySelector('#minecraftScreen .mc-join-code')`, 'shared server', 90000);
+    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611' && !!document.querySelector('#minecraftScreen .mc-join-code')`, 'shared server', 90000).catch(async (err) => {
+      throw new Error(`${err.message}: ${await js(`document.querySelector('#minecraftScreen .mc-server')?.textContent + ' | ' + (document.querySelector('.dialog')?.textContent || 'no dialog') + ' | ' + JSON.stringify(ide.notifications.list().slice(-3).map((n) => n.title + ': ' + n.text))`)}`);
+    });
     const props = text(path.join(friends, 'server.properties'));
     const typed = await js(`ide.run.sessions().find((s) => s.cfg?.type === 'minecraft-server')?.host.textContent || ''`);
     check(/화이트리스트/.test(offered) && /^white-list=true$/m.test(props) && /^enforce-whitelist=true$/m.test(props) && /> whitelist on/.test(typed) && await js(`[...document.querySelectorAll('.ide-balloon')].some((n) => /화이트리스트를 켰어요/.test(n.textContent))`),
@@ -1097,7 +1103,7 @@ async function live() {
     help[name] = `${r.stdout || ''}${r.stderr || ''}`;
     console.log(`----- ${name} installer (${url}) --help, exit ${r.status}${r.error ? ` ${r.error.message}` : ''} -----\n${help[name].trim()}\n`);
   }
-  const t = await launch({ name: 'minecraft-launcher-live', port: 9896, projectDir: liveProject, env: { PYIDE_INSTALL_ROOT: path.join(work, 'install-root'), PYIDE_MC_LAUNCHER: LAUNCHER } });
+  const t = await launch({ name: 'minecraft-launcher-live', port: 9896, mode: 'craft', projectDir: liveProject, env: { PYIDE_CRAFT_HOME: liveProject, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_INSTALL_ROOT: path.join(work, 'install-root'), PYIDE_MC_LAUNCHER: LAUNCHER } });
   const { js, check } = t;
   const call = (ch, ...args) => js(`ide.api.invoke(${S(ch)}, ${args.map(S).join(', ')}).then((r) => ({ ok: r }), (e) => ({ err: String(e.message || e) }))`);
   const work2 = path.join(liveProject, '.launcher');
