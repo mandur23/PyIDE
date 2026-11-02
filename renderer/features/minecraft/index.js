@@ -224,13 +224,9 @@
         { label: tr('Create'), primary: true, run: () => {
           if (!version.value) { f.error.textContent = tr('Choose a version.'); return false; }
           if (!proxy() && !eula.checked) { f.error.textContent = tr('A Minecraft server runs only after you accept the Minecraft EULA.'); return false; }
-          // What main refuses, said while the dialog still holds what was typed.
           const n = name.value.trim();
           const p = Number(port.value.trim() || 25565);
-          const why = !/^[A-Za-z][\w-]{0,39}$/.test(n) ? tr('Use letters, digits, - and _ for the name, starting with a letter (40 at most).')
-            : RESERVED.test(n) ? tr('{name} is a name Windows keeps for a device: choose another.', { name: n })
-              : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
-                : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
+          const why = refused(n, p);
           if (why) { f.error.textContent = why; return false; }
           const k = kinds.find((x) => x.id === kind.value);
           createServer({ name: n, kind: kind.value, mc: version.value, memory: memory.value, port: p, autoSync: !!k?.mods && sync.checked });
@@ -239,6 +235,22 @@
         { label: tr('Cancel') },
       ],
     });
+  }
+
+  // What main refuses for a new server's name and port, said while the dialog still holds what was typed.
+  function refused(n, p) {
+    return !/^[A-Za-z][\w-]{0,39}$/.test(n) ? tr('Use letters, digits, - and _ for the name, starting with a letter (40 at most).')
+      : RESERVED.test(n) ? tr('{name} is a name Windows keeps for a device: choose another.', { name: n })
+        : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
+          : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
+  }
+  // A name main takes for the modpack, after the servers there are: COBBLEVERSE, then COBBLEVERSE-2.
+  function freeName(raw) {
+    const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32).replace(/-+$/, '') || 'modpack');
+    const taken = (n) => RESERVED.test(n) || list.some((s) => s.name.toLowerCase() === n.toLowerCase());
+    let n = base;
+    for (let i = 2; taken(n); i++) n = `${base}-${i}`;
+    return n;
   }
 
   async function createServer({ autoSync, ...opts }) {
@@ -512,7 +524,7 @@
         details.textContent = tr('{name} {version}: Minecraft {mc}, {loader} {loaderVersion}. {count} files for the server{client}.', {
           name: info.name, version: info.version, mc: info.mc, loader: kindTitle(info.kind), loaderVersion: info.loader, count: info.serverFiles,
           client: info.clientOnly ? tr(' ({count} client-only files stay in the players\' pack)', { count: info.clientOnly }) : '' });
-        if (!name.value) name.value = info.name.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || 'modpack';
+        if (!name.value) name.value = freeName(info.name);
       } catch (err) {
         details.textContent = '';
         f.error.textContent = errorText(err);
@@ -527,9 +539,13 @@
       buttons: [
         { label: tr('Create'), primary: true, run: () => {
           if (!info) { f.error.textContent = tr('Choose a modpack first.'); return false; }
+          const n = name.value.trim();
+          const p = Number(port.value.trim() || 25565);
+          const why = refused(n, p);
+          if (why) { f.error.textContent = why; return false; }
           if (!eula.checked) { f.error.textContent = tr('A Minecraft server runs only after you accept the Minecraft EULA.'); return false; }
           created = true;
-          createFromModpack({ file: info.file, name: name.value.trim(), memory: memory.value, port: Number(port.value) || 25565 });
+          createFromModpack({ file: info.file, name: n, memory: memory.value, port: p });
           return true;
         } },
         { label: tr('Cancel') },

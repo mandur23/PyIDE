@@ -429,6 +429,11 @@ try {
   await until(`/Test Pack 1\\.0: Minecraft 1\\.20\\.1, Forge 47\\.9\\.9\\. 1 files for the server/.test(document.querySelector('#mcPackInfo')?.textContent || '')`, 'modpack dialog', 20000)
     .then(() => check(true, 'a dropped .mrpack opens New Server from Modpack with what it holds'), async () => check(false, `modpack dialog: ${await js("document.querySelector('#mcPackInfo')?.textContent")}`));
   check(await js(`document.querySelector('#mcPackName').value`) === 'Test-Pack', 'the server is named after the modpack');
+  await js(`(document.querySelector('#mcPackName').value = '내 서버', true)`);
+  await js(`(${dialogButton('Create')}).click()`);
+  check(/starting with a letter/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)) && await js(`document.querySelector('#mcPackName')?.value === '내 서버'`),
+    'a name main would refuse is said in the modpack dialog, which keeps what was typed');
+  await js(`(document.querySelector('#mcPackName').value = 'Test-Pack', true)`);
   await js(`(${dialogButton('Create')}).click()`);
   check(/accept the Minecraft EULA/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)), 'a modpack server also waits for the EULA');
   await js(`(document.querySelector('#mcPackEula').checked = true, true)`);
