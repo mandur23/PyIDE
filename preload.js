@@ -32,7 +32,7 @@ if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWo
   list: invoke('fs:list'),
   walk: invoke('fs:walk'),
   exists: invoke('fs:exists'),
-  read: invoke('fs:read'),
+  read: (p) => ipcRenderer.invoke('fs:read', p).then((r) => { if (r.missing) throw new Error(r.missing); return r.text; }),
   write: invoke('fs:write'),
   create: invoke('fs:create'),
   rename: invoke('fs:rename'),

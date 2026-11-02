@@ -897,6 +897,8 @@ try {
     console.log('---- close-quit');
     const errs = await internalErrors();
     check(!errs.length, `no internal errors in the whole session${errs.length ? ` ${J(errs.map((e) => e.title || e.message))}` : ''}`);
+    const stale = await js(`ide.api.read(${J(file('geo/shapes.py'))}).then(() => 'read', (err) => err.message)`);
+    check(/ENOENT/.test(stale), `reading a file renamed away still rejects, as its readers expect (${stale})`);
     const log = readFileSync(path.join(t.userData, 'logs', 'pyide.log'), 'utf8');
     const severe = log.split('\n').filter((l) => / ERROR - /.test(l));
     check(!severe.length, `the IDE log has no ERROR lines${severe.length ? ` ${J(severe.slice(0, 5))}` : ''}`);

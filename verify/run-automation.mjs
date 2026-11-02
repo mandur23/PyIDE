@@ -36,6 +36,8 @@ async function clickButton(label) {
 }
 const blRows = () => js(`[...document.querySelectorAll('.rc-bl-item')].map((n) => n.textContent)`);
 const cfgJs = (id) => `ide.run.configs().find((c) => c.id === ${q(id)})`;
+// Its marker is written before the program exits, and a run pressed while it is still going waits on the rerun question.
+const mainExited = () => until(`(() => { const s = ide.run.sessions().find((x) => x.title === 'Main'); return !!s && !s.running && !s.starting; })()`, 'Main to exit', 30000);
 const saved = (id) => js(`(ide.settings.get('runConfigs:' + ide.root).configs.find((c) => c.id === ${q(id)}) || {}).beforeLaunch || []`);
 // The Before launch section and the watcher list can sit below the fold of their scrolling form.
 async function clickSeen(ctx, sel) {
@@ -91,6 +93,7 @@ try {
   await until(`ide.tasks.list().some((x) => x.text === 'Run External Tool: Tool One')`, 'progress names the tool', 20000);
   check(true, 'the progress names the running task');
   await until(`(async () => await ide.api.exists(ide.util.joinPath(ide.root, 'main.txt')))()`, 'main.txt', 30000);
+  await mainExited();
   let log = readLog('bl-log.jsonl');
   const tool1 = log.find((l) => l.label === 'tool1' && l.phase === 'start');
   const tool1End = log.find((l) => l.label === 'tool1' && l.phase === 'end');
@@ -117,6 +120,7 @@ try {
   rm('dep.txt', 'main.txt');
   await js(`(ide.run.runConfig(ide.run.selected()), true)`);
   await until(`(async () => await ide.api.exists(ide.util.joinPath(ide.root, 'main.txt')))()`, 'main.txt again', 30000);
+  await mainExited();
   const tool2 = readLog('bl-log.jsonl').find((l) => l.label === 'tool2' && l.phase === 'end');
   check(tool2 && tool2.t <= num('dep.txt') && num('dep.txt') <= num('main.txt'), 'the tasks run in the new order');
 

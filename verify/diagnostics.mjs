@@ -244,7 +244,7 @@ const dropExpected = (t) => t.consoleErrors.splice(0, t.consoleErrors.length, ..
 
     // ---- Collect Logs and Diagnostic Data ----
     await js(`(ide.logger('#process').info('#7 started (pid 1): tool.exe --password ${SECRETS.commandLine} --verbose'), true)`);
-    await until(`ide.api.invoke('fs:read', ${JSON.stringify(path.join(logDir, 'pyide.log'))}).then((s) => s.includes('tool.exe --password <redacted> --verbose'))`, 'command line in the log, masked');
+    await until(`ide.api.read(${JSON.stringify(path.join(logDir, 'pyide.log'))}).then((s) => s.includes('tool.exe --password <redacted> --verbose'))`, 'command line in the log, masked');
     await js(`ide.runAction('CollectZippedLogs')`);
     await until(`document.querySelector('.diag-saved-dialog')`, 'saved dialog', 30000);
     check(await js(`document.querySelector('.diag-saved-path').textContent === ${JSON.stringify(zipPath)}`), 'the dialog names the saved archive');

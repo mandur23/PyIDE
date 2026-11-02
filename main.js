@@ -211,7 +211,14 @@ ipcMain.handle('fs:probe', async (_e, p, ms = 5000) => {
   const volume = await within(accessible(path.parse(path.resolve(p)).root), Math.max(500, ms - (Date.now() - started)));
   return volume === true ? 'missing' : 'unreachable';
 });
-ipcMain.handle('fs:read', (_e, p) => fs.readFileSync(p, 'utf8'));
+// A handler that throws is logged as an error. A file gone between a rename and a reader that knew its old path is no
+// error, so that one comes back as a value and preload.js rejects with it.
+ipcMain.handle('fs:read', (_e, p) => {
+  try { return { text: fs.readFileSync(p, 'utf8') }; } catch (err) {
+    if (err.code === 'ENOENT') return { missing: err.message };
+    throw err;
+  }
+});
 ipcMain.handle('fs:write', (_e, p, text) => fs.writeFileSync(p, text, 'utf8'));
 ipcMain.handle('fs:create', (_e, p, isDir) => {
   if (fs.existsSync(p)) throw new Error(`${path.basename(p)} already exists`);
