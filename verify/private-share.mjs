@@ -1188,6 +1188,8 @@ class Stand : Form {
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   static string record = "";
   static bool stay = false;
+  static string profiles = null;
+  static string held = null;
   int ticks = 0;
   void Raise() {
     SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x13);
@@ -1195,11 +1197,14 @@ class Stand : Form {
   }
   protected override void OnFormClosing(FormClosingEventArgs e) {
     if (stay) e.Cancel = true; else File.WriteAllText(record, "asked to close");
+    if (profiles != null) File.WriteAllText(profiles, held);
     base.OnFormClosing(e);
   }
   [STAThread] static void Main(string[] a) {
     record = a[0];
     stay = Array.IndexOf(a, "stay") >= 0;
+    int kept = Array.IndexOf(a, "rewrites");
+    if (kept >= 0) { profiles = a[kept + 1]; held = File.ReadAllText(profiles); }
     var f = new Stand();
     f.Opacity = 0;
     var timer = new Timer();
@@ -1264,10 +1269,15 @@ async function launcherReopen() {
   const { craft } = makeCraft(REVERSED);
   const made = await craft.create(root, { name: 'reopen', mc: '1.20.1', loader: 'vanilla' }, () => {});
   const before = starts(root);
-  await start(launcherImage);
+  const profiles = path.join(root, '.launcher', 'launcher_profiles.json');
+  mkdirSync(path.dirname(profiles), { recursive: true });
+  writeFileSync(profiles, S({ profiles: { mine: { name: 'Mine', type: 'custom', lastVersionId: '1.20.1' } }, settings: {}, version: 3 }));
+  await start(launcherImage, 'rewrites', profiles);
   const reopened = await craft.play(root, made.name, {}, () => {});
   await until(() => starts(root) === before + 1, 'the launcher to start again', 30000);
   check(reopened.launched && reopened.reopened && reopened.alreadyOpen === false && !running(launcherImage), `Play closes the open launcher and starts it again, so it reads the new profile (${S({ reopened: reopened.reopened, alreadyOpen: reopened.alreadyOpen })})`);
+  const left = JSON.parse(readFileSync(profiles, 'utf8')).profiles;
+  check(left.mine && left[`nano-${made.name}`], `a launcher that rewrites its profiles as it closes does not take the instance's profile with it (${S(Object.keys(left))})`);
   await start(launcherImage, 'stay');
   const kept = await craft.play(root, made.name, {}, () => {});
   check(kept.launched && kept.alreadyOpen === true && !kept.reopened, 'a launcher that will not close keeps today\'s message');

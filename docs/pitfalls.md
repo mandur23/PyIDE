@@ -96,6 +96,8 @@
 
 - **26.3의 `item` 명령은 새로 쓰였습니다.** `item replace ... from ...`의 모양은 같지만 슬롯 범위를 받고, 답이 `Replaced a slot on X`에서 `Replaced 1 slot(s) on X with [x]`로, 거부가 `... into specified slots`로 바뀌었습니다. 1.20.1의 문구만 보면 틀립니다. `javap`로 `ItemCommands`를 읽어 확인합니다.
 - **26.3의 Paper API는 서버 없이 `new ItemStack`을 만들 수 없습니다.** 레지스트리를 찾다가 실패합니다. 플러그인 테스트는 `ItemStack`을 상속해 씁니다. 같은 클래스를 두 API로 돌리고, 상수 풀의 Bukkit 메서드를 각 API에서 찾아 연결을 확인합니다(`tools/nano-bridge/build.mjs`).
+- **Store 런처도 `launcher_profiles.json`을 읽습니다.** 런처 코어 3.42.5는 시작할 때 `launcher_profiles_microsoft_store.json`을 지웁니다. 앱이 그 파일에 쓰는 동안 프로필이 런처에 나오지 않아 모드팩도 Quick Play도 적용되지 않았고, 대역 테스트는 같은 잘못된 이름을 확인하며 통과했습니다. 런처가 읽는 파일과 동작은 실제 런처의 `launcher_log.txt`로 확인합니다.
+- **열린 런처는 메모리에 든 프로필로 파일을 다시 씁니다.** 시작할 때와 플레이를 누를 때 봤습니다. 그래서 앱의 프로필은 런처가 닫힌 다음에 씁니다. 먼저 쓰면 런처가 지울 수 있습니다.
 
 ## 코딩: 번역
 

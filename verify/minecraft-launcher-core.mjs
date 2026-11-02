@@ -394,7 +394,8 @@ try {
   const storeScript = path.join(work, 'store', 'store.cjs');
   write(storeScript, `require('fs').writeFileSync(${S(storeLog)}, JSON.stringify(process.argv.slice(2)));`);
   const storeWork = path.join(work, 'store', '.minecraft');
-  const storeProfiles = path.join(storeWork, 'launcher_profiles_microsoft_store.json');
+  // The real Store launcher's log: it loads launcher_profiles.json, and deletes launcher_profiles_microsoft_store.json.
+  const storeProfiles = path.join(storeWork, 'launcher_profiles.json');
   write(storeProfiles, S({ profiles: { mine: { name: 'Mine', type: 'custom', lastVersionId: '1.20.1' } }, settings: {}, version: 3 }));
   const packages = path.join(work, 'store', 'Local');
   mkdirSync(path.join(packages, 'Packages', 'Microsoft.4297127D64EC6_8wekyb3d8bbwe'), { recursive: true });

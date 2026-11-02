@@ -196,10 +196,10 @@ function findLauncher(env = process.env) {
 }
 // The launcher from the Microsoft Store or the Xbox app, which is what Mojang's download page gives Windows 10 and 11.
 // A Store app takes no command line (Mojang's MCL-20059), so there is no --workDir: it always works in the default
-// .minecraft, with its own profiles file. {argv, work}, or null.
+// .minecraft. It reads launcher_profiles.json like the classic launcher, and removes launcher_profiles_microsoft_store.json
+// at its start (launcher core 3.42.5's own log). {argv, work}, or null.
 const STORE_PACKAGE = 'Microsoft.4297127D64EC6_8wekyb3d8bbwe';
 const PROFILES = 'launcher_profiles.json';
-const STORE_PROFILES = 'launcher_profiles_microsoft_store.json';
 // By full path: a bare name is looked up in the folder a program starts in first, and a pack writes files.
 const systemRoot = (env) => env.SystemRoot || 'C:\\Windows';
 function findStore(env = process.env) {
@@ -221,7 +221,7 @@ function launchMethod(env = process.env) {
   const argv = findLauncher(env);
   if (argv) return { id: 'official', argv, work: workDir, profiles: PROFILES, args: (work) => ['--workDir', work] };
   const store = findStore(env);
-  return store && { id: 'store', argv: store.argv, work: () => store.work, profiles: STORE_PROFILES, args: () => [] };
+  return store && { id: 'store', argv: store.argv, work: () => store.work, profiles: PROFILES, args: () => [] };
 }
 // Detached, so it outlives Nano Studio. A stand-in is a console program whose window would only flash; the real
 // launcher's window must show.
@@ -757,8 +757,8 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
   function remove(root, name) {
     if (busy.has(dirOf(root, name).toLowerCase())) throw fail(`${name} is busy with another download or Play`, 'busy');
     const store = findStore();
-    for (const [work, profiles] of [[workDir(root), PROFILES], ...(store ? [[store.work, STORE_PROFILES]] : [])]) {
-      const file = path.join(work, profiles);
+    for (const work of [workDir(root), ...(store ? [store.work] : [])]) {
+      const file = path.join(work, PROFILES);
       if (fs.existsSync(file)) {
         const data = readProfiles(file);
         if (data.profiles[versionId(name)]) { delete data.profiles[versionId(name)]; writeJson(file, data); }
@@ -966,14 +966,15 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       if (srv?.private && !local.has(srv.address.toLowerCase())) return { launched: false, code: 'privateGone' };
       const joinAt = srv && (local.get(srv.address.toLowerCase()) || srv.address);
       const version = await writeVersion(root, inst, inst.loaderId, srv && { ...srv, address: joinAt });
-      writeProfile(root, inst, how);
-      writeInstance(root, inst);
-      writeServerList(root, inst, srv ? [...moved, { ip: joinAt, name: srv.name }] : moved, log);
-      log(`Starting the Minecraft Launcher with the profile ${inst.title || inst.name} (Nano Studio)${srv ? `, joining ${srv.address}` : ''}\n`);
+      // An open launcher keeps profiles in memory and rewrites the file from them, as it does at each Play, so ours goes in once it has closed.
       const open = !!(await launcherOpen());
       log.signal?.throwIfAborted();
       const reopened = open && await closeLauncher();
       log.signal?.throwIfAborted();
+      writeProfile(root, inst, how);
+      writeInstance(root, inst);
+      writeServerList(root, inst, srv ? [...moved, { ip: joinAt, name: srv.name }] : moved, log);
+      log(`Starting the Minecraft Launcher with the profile ${inst.title || inst.name} (Nano Studio)${srv ? `, joining ${srv.address}` : ''}\n`);
       await startLauncher(how, how.work(root));
       return { launched: true, launcher: how.argv[0], method: how.id, versionId: version.id, instance: describe(root, inst), packStale, alreadyOpen: open && !reopened, reopened, private: local.size > 0 };
     }).catch(asked);
