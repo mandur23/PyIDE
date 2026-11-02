@@ -72,6 +72,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/app-mode.mjs
+      - name: session
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/session.mjs
       - name: safe-mode
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

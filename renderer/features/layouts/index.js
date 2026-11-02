@@ -154,6 +154,76 @@
       ] })),
     ].filter(Boolean);
   }
+  // ---------- what a project had open ----------
+  // Setting `project.session`, {[project]: {groups: [{tabs: [{path, pinned, view}], active}], focus, layout}}, kept for
+  // the recent projects: closing Nano Studio or the project and coming back shows the same files, carets and tool
+  // windows. Written when the tabs change, before the project changes and as the window closes. A project's record is
+  // written only once its own tabs are back, or a project still opening would save its empty tab bar over them.
+  const SESSION = 'project.session';
+  const MAX_TABS = 40;
+  const keyOf = (dir) => ide.util.pathKey(dir);
+  const tabsBackFor = { root: null };
+  let timer = null;
+
+  // Monaco's own form, which it can restore; folds and other contributions may not fit a file changed since.
+  const viewOf = (group, tab) => {
+    const state = group.active === tab && tab.kind === 'file' ? group.editor.saveViewState() : tab.viewState;
+    return state?.cursorState ? { cursorState: state.cursorState, viewState: state.viewState, contributionsState: {} } : null;
+  };
+  function saveSession() {
+    clearTimeout(timer);
+    timer = null;
+    if (!ide.root || tabsBackFor.root !== keyOf(ide.root)) return;
+    const openTabs = (group) => group.tabs.filter((t) => t.path && !t.doc?.untitled && (t.kind === 'file' || t.viewer));
+    const groups = ide.groups().filter((g) => openTabs(g).length).map((group) => ({
+      tabs: openTabs(group).slice(0, MAX_TABS).map((t) => ({ path: t.path, pinned: !!t.pinned, view: viewOf(group, t) })),
+      active: group.active?.path || null,
+    }));
+    const focus = Math.max(0, ide.groups().filter((g) => openTabs(g).length).findIndex((g) => g.editor === ide.editor));
+    const { areas } = capture();
+    const keep = new Set(ide.settings.get('recentProjects', []).map((p) => keyOf(p.path)));
+    const all = Object.fromEntries(Object.entries(ide.settings.get(SESSION, {})).filter(([k]) => keep.has(k)));
+    ide.settings.set(SESSION, { ...all, [keyOf(ide.root)]: { groups, focus, layout: { areas } } });
+  }
+  const saveSoon = () => { clearTimeout(timer); timer = setTimeout(saveSession, 1000); };
+
+  // Two editor groups at most (a third joins the second), and a file that has gone is left out.
+  async function openGroup(group, into) {
+    let first = true;
+    let last = null;
+    for (const { path, pinned, view } of group.tabs) {
+      if (!(await ide.api.exists(path))) continue;
+      const tab = await ide.openFile(path, { focus: false, ...(first && into ? { group: into } : {}) });
+      if (!tab) continue;
+      first = false;
+      if (view && tab.kind === 'file') { tab.viewState = view; ide.editor.restoreViewState(view); }
+      if (pinned && !tab.pinned) ide.runAction('PinActiveTab');
+      last = tab;
+    }
+    return last;
+  }
+  async function restoreSession(root) {
+    const saved = ide.settings.get(SESSION, {})[keyOf(root)];
+    const groups = Array.isArray(saved?.groups) ? saved.groups.filter((g) => Array.isArray(g?.tabs)) : [];
+    const [one, ...rest] = groups;
+    const two = rest.length ? { tabs: rest.flatMap((g) => g.tabs), active: rest.at(-1).active } : null;
+    const sameProject = () => ide.root && keyOf(ide.root) === keyOf(root);
+    const show = async (path, group) => { if (path && sameProject() && await ide.api.exists(path)) await ide.openFile(path, { focus: false, group }); };
+    if (one) await openGroup(one);
+    if (two && sameProject()) await openGroup(two, 'right');
+    // 'right' is the other group from the one in use, and each show moves to the group it shows.
+    if (two) await show(two.active);
+    await show(one?.active, two ? 'right' : undefined);
+    if (two && saved.focus === 1) await show(two.active, 'right');
+    if (saved?.layout && sameProject()) await apply(saved.layout);
+    if (sameProject()) tabsBackFor.root = keyOf(root);
+  }
+  ide.on('projectOpened', (root) => { tabsBackFor.root = null; restoreSession(root).catch((err) => ide.log.error(`restoring ${root}: ${err?.stack || err}`)); });
+  ide.on('activeTabChanged', saveSoon);
+  ide.on('fileClosed', saveSoon);
+  ide.beforeProjectChange.push(() => { saveSession(); tabsBackFor.root = null; });
+  addEventListener('beforeunload', saveSession);
+
   ide.layouts = {
     capture, apply, defaultLayout, list: () => saved().map((l) => l.name), current, save: store, saveAs, restore, restoreDefault, rename, remove,
     menu: () => ({ label: tr('Layouts'), submenu: menuItems }),

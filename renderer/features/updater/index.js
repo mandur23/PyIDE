@@ -220,7 +220,8 @@
       : ['checking', 'downloading', 'downloaded'].includes(state.phase) ? state.phase
       : powerSave() ? 'powerSave'
       : navigator.onLine === false ? 'offline'
-      : due > now ? (state.failures ? 'backoff' : 'recent')
+      // An update the start chooser found and left for this window counts as due: checking it again starts its download.
+      : due > now && state.phase !== 'available' ? (state.failures ? 'backoff' : 'recent')
       : null;
     decision = { reason: reason || 'check', at: now, due };
     decisions++;

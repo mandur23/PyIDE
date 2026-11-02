@@ -3,8 +3,11 @@
 // and whose workspace (PYIDE_CRAFT_HOME here) is created, opened and trusted without the Trust question, firing
 // craftReady with #craftHost; plugins load per mode (bundled ones and user plugins with and without "modes", their
 // renderer scripts and main modules); a path argument without --mode goes straight to code mode; a restart keeps the
-// mode. Screenshots: chooser.png, chooser-ko.png and craft-empty.png in verify/out/app-mode. Ports 9642-9647.
+// mode; the chooser's Dock offers an update from a local feed, downloads it and hands it to the main window, says when
+// there is none and when the feed cannot be read. Screenshots: chooser.png, chooser-ko.png, chooser-update.png and
+// craft-empty.png in verify/out/app-mode. Ports 9642-9651.
 import { spawn, execSync } from 'child_process';
+import { createHash, randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -43,8 +46,9 @@ ide.on('craftReady', (e) => { window.__craftReady = (window.__craftReady || []).
 // ---------- a raw CDP driver for runs that start at the chooser (verify/lib.mjs launch() waits for the IDE page) ----------
 const procs = new Set();
 process.on('exit', () => { for (const pid of procs) try { execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); } catch {} });
-function start(port, { lang = 'en-US', env = {}, args = [] } = {}) {
+function start(port, { lang = 'en-US', env = {}, args = [], settings = null } = {}) {
   const data = userData();
+  if (settings) writeFileSync(path.join(data, 'settings.json'), S(settings));
   const craft = path.join(tempDir('app-mode-craft'), 'Nano Studio Craft');
   const child = spawn(ELECTRON, [APP_DIR, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...args], {
     env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_CLAUDE_IDE_DIR: path.join(data, '..', 'claude-ide'), ...process.env,
@@ -122,14 +126,21 @@ try {
   {
     const run = start(9642);
     const c = await page(9642, CHOOSER);
-    await c.until(`document.querySelectorAll('.chooser-card svg').length === 2 && document.visibilityState === 'visible'`, 'chooser drawn');
+    await c.until(`!!document.querySelector('.chooser-name')?.textContent && document.visibilityState === 'visible'`, 'chooser drawn');
     const st = await chooserState(c);
     check(st.cards.length === 2 && st.cards[0].name === `${PRODUCT} Code` && st.cards[1].name === `${PRODUCT} Craft` && st.cards.every((x) => x.icon && x.sub),
       `the chooser shows a Code and a Craft card with icons (${S(st.cards)})`);
-    check(Math.abs(st.w - 640) <= 20 && Math.abs(st.h - 380) <= 20, `the chooser is about 640x380 (${st.w}x${st.h})`);
-    check(S(st.api) === S(['close', 'loadSettingsSync', 'localeSync', 'pick', 'saveSettingsSync']) && st.ide === 'undefined', `the chooser page gets only its own calls (${S(st.api)})`);
+    check(Math.abs(st.w - 860) <= 20 && Math.abs(st.h - 540) <= 20, `the chooser is about 860x540 (${st.w}x${st.h})`);
+    check(S(st.api) === S(['close', 'loadSettingsSync', 'localeSync', 'onUpdate', 'pick', 'saveSettingsSync', 'update', 'updateState']) && st.ide === 'undefined', `the chooser page gets only its own calls (${S(st.api)})`);
     check(st.focused === 'chooseCode' && !(await c.js(`document.body.textContent.toLowerCase().includes('remember')`)), 'the Code card has the focus; there is no remember option');
     check(S(await pages(9642)).match(/index\.html/) === null, 'no main window opens while the chooser is up');
+    check(await c.js(`document.getElementById('chooseUpdate').hidden && document.getElementById('chooserStatus').textContent === ''`), 'with no update feed the Dock has no update icon and nothing is checked');
+    const big = (id) => `document.querySelector('#${id} .chooser-icon').getBoundingClientRect().width`;
+    await c.key('ArrowRight', 39);
+    await c.until(`document.activeElement.id === 'chooseCraft' && ${big('chooseCraft')} > 110 && ${big('chooseCode')} < 90`, 'Craft grows as Code shrinks');
+    check(await c.js(`getComputedStyle(document.querySelector('#chooseCraft .chooser-label')).display`) === 'block', 'Right moves along the Dock: the icon grows and shows its name');
+    await c.key('ArrowLeft', 37);
+    await c.until(`document.activeElement.id === 'chooseCode'`, 'back on Code');
     console.log(`screenshot: ${await c.shot('chooser.png')}`);
     await c.click('#chooseCode');
     const ide = await page(9642, IDE);
@@ -147,11 +158,73 @@ try {
     run.kill();
   }
 
+  // ---------- the Dock and updates: a local feed needs no signature, so a download waits for a second click ----------
+  {
+    const feed = tempDir('app-mode-feed');
+    const release = (version) => {
+      const dir = path.join(feed, version);
+      mkdirSync(dir, { recursive: true });
+      const exe = randomBytes(256 * 1024);
+      const name = `NanoStudio-Setup-${version}.exe`;
+      const sha512 = createHash('sha512').update(exe).digest('base64');
+      writeFileSync(path.join(dir, name), exe);
+      writeFileSync(path.join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${sha512}\n    size: ${exe.length}\npath: ${name}\nsha512: ${sha512}\nreleaseDate: '2026-11-02T00:00:00.000Z'\n`);
+      return dir;
+    };
+    const config = path.join(feed, 'dev-app-update.yml');
+    writeFileSync(config, 'provider: generic\nurl: http://127.0.0.1:9/\nupdaterCacheDirName: nano-studio-updater\n');
+    const env = { PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', PYIDE_UPDATE_CONFIG: config, PYIDE_UPDATE_DIFFERENTIAL: '0', LOCALAPPDATA: tempDir('app-mode-local') };
+    const tip = `document.getElementById('chooserUpdateTip').textContent`;
+    const status = `document.getElementById('chooserStatus').textContent`;
+
+    const run = start(9648, { env, settings: { 'updates.feedUrl': release('9.9.9') } });
+    const c = await page(9648, CHOOSER);
+    await c.until(`document.readyState === 'complete' && ${tip}.includes('9.9.9')`, 'the update icon');
+    check(/9\.9\.9/.test(await c.js(tip)) && (await c.js(`getComputedStyle(document.getElementById('chooserBadge')).display`)) !== 'none' && (await c.js(status)) === '',
+      `a new version puts an icon with a badge in the Dock (${await c.js(tip)})`);
+    check(await c.js(`document.getElementById('chooserVersion').textContent`) === JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version, 'the menu bar shows this version');
+    await c.key('ArrowRight', 39);
+    await c.key('ArrowRight', 39);
+    await c.until(`document.activeElement.id === 'chooseUpdate'`, 'the update icon by the keyboard');
+    console.log(`screenshot: ${await c.shot('chooser-update.png')}`);
+    await c.click('#chooseUpdate');
+    await c.until(`${tip} === 'Restart to Update'`, 'the download to end', 60000);
+    check(run.child.exitCode === null, 'a download from a feed nobody signs does not install by itself');
+    await c.click('#chooseCode');
+    const ide = await page(9648, IDE);
+    await ide.until('window.__ideReady === true', 'IDE ready with an update waiting');
+    const after = await ide.js(`Promise.all([ide.api.invoke('updater:state'), ide.api.invoke('diagnostics:errors')])`);
+    check(after[0].phase === 'downloaded' && after[0].available === '9.9.9' && after[0].signature === 'unchecked', `the main window takes the download over (${S({ phase: after[0].phase, available: after[0].available })})`);
+    check(!after[1].length, `the updater registered once, for the chooser and the features (${S(after[1].map((e) => e.title))})`);
+    ide.close();
+    run.kill();
+
+    const old = start(9649, { env: { ...env, PYIDE_UPDATE_FEED: release('0.0.1') } });
+    const o = await page(9649, CHOOSER);
+    await o.until(`${status}.includes('latest version')`, 'the up-to-date message');
+    check(await o.js(`document.getElementById('chooseUpdate').hidden`), `no update leaves the Dock alone and says so (${await o.js(status)})`);
+    old.kill();
+
+    const bad = start(9650, { env: { ...env, PYIDE_UPDATE_FEED: path.join(feed, 'nowhere') } });
+    const b = await page(9650, CHOOSER);
+    await b.until(`${status} === 'Could not check for updates.'`, 'the failed check');
+    check(await b.js(`document.getElementById('chooseUpdate').hidden`) && await b.js(`!!document.getElementById('chooseCode')`), 'a feed that cannot be read is one line in the menu bar; the Dock still works');
+    bad.kill();
+
+    const unsigned = start(9651, { env: { ...env, PYIDE_UPDATE_FEED: release('9.9.8') } });
+    const u = await page(9651, CHOOSER);
+    await u.until(`document.readyState === 'complete' && ${tip}.includes('9.9.8')`, 'the update icon');
+    await u.click('#chooseUpdate');
+    await u.until(`${tip} === 'Could not download Nano Studio 9.9.8.'`, 'the refused download', 60000);
+    check(unsigned.child.exitCode === null, 'the default feed without a signature is refused: the icon says so and nothing installs');
+    unsigned.kill();
+  }
+
   // ---------- Esc on the chooser quits ----------
   {
     const run = start(9643);
     const c = await page(9643, CHOOSER);
-    await c.until(`document.querySelectorAll('.chooser-card svg').length === 2`, 'chooser drawn');
+    await c.until(`!!document.querySelector('.chooser-name')?.textContent`, 'chooser drawn');
     await c.key('Escape', 27);
     const code = await Promise.race([run.exited, sleep(10000).then(() => 'timeout')]);
     check(code !== 'timeout', `Esc on the chooser quits the app (exit ${code})`);
@@ -163,9 +236,10 @@ try {
   {
     const run = start(9644, { lang: 'ko-KR' });
     const c = await page(9644, CHOOSER);
-    await c.until(`document.querySelectorAll('.chooser-card svg').length === 2 && document.visibilityState === 'visible'`, 'chooser drawn');
+    await c.until(`!!document.querySelector('.chooser-name')?.textContent && document.visibilityState === 'visible'`, 'chooser drawn');
     const st = await chooserState(c);
-    check(st.cards[0].sub === 'Python·웹 개발' && st.cards[1].sub === '마인크래프트 플레이·서버' && (await c.js(`document.getElementById('chooserClose').title`)) === '닫기',
+    check(st.cards[0].sub === 'Python·웹 개발' && st.cards[1].sub === '마인크래프트 플레이·서버' && (await c.js(`document.getElementById('chooserClose').title`)) === '닫기'
+      && (await c.js(`document.getElementById('chooserAsk').textContent + '|' + document.getElementById('chooserHint').textContent`)) === '무엇을 열까요?|Dock에서 앱을 고르세요',
       `the chooser speaks Korean (${S(st.cards.map((x) => x.sub))})`);
     console.log(`screenshot: ${await c.shot('chooser-ko.png')}`);
     await c.click('#chooseCraft');

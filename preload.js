@@ -15,6 +15,9 @@ if (chooserPage && pagePath(location.href) === chooserPage) contextBridge.expose
   saveSettingsSync: (settings, changed) => ipcRenderer.sendSync('settings:saveSync', settings, changed),
   pick: (mode) => ipcRenderer.send('chooser:pick', mode),
   close: () => ipcRenderer.send('chooser:close'),
+  updateState: () => ipcRenderer.sendSync('chooser:updateState'),
+  update: () => ipcRenderer.send('chooser:update'),
+  onUpdate: (fn) => ipcRenderer.on('updater:state', (_e, state) => fn(state)),
 });
 if (idePage && pagePath(location.href) === idePage) contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),

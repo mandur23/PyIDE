@@ -43,6 +43,9 @@ input, select, textarea { font: inherit; }
 .stripe-more { margin-top: 4px; color: var(--gray9); }
 .more-panel { position: fixed; z-index: 60; min-width: 280px; max-height: calc(100vh - 16px); overflow: auto; padding: 4px;
   background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 8px 24px #0008; }
+.more-panel.more-wide { width: 600px; max-width: calc(100vw - 16px); }
+.more-wide .more-rows { column-count: 2; column-gap: 8px; }
+.more-row { break-inside: avoid; }
 .more-group { padding: 6px 10px 2px; color: var(--gray8); font-size: 12px; }
 .more-row { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 10px; border-radius: 5px; cursor: default; }
 .more-row:hover { background: var(--blue2); }

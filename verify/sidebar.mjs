@@ -1,4 +1,4 @@
-// Sidebar (tool window stripe): only pinned windows show, the rest are behind "More"; pins persist; icons are SVG.
+// Sidebar (tool window stripe): only pinned windows show, the rest are behind a More button per side; pins persist; icons are SVG.
 import { launch } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
@@ -19,10 +19,21 @@ try {
   check(await a.js(`[...document.querySelectorAll('.bottom-tab')].filter(t => !t.classList.contains('hidden')).length`) <= 5, 'bottom panel tabs follow the sidebar instead of listing every window');
 
   // ---------- More popup ----------
-  await a.click('#stripeMore');
-  await a.until(`!!document.querySelector('#moreToolWindows')`, 'more panel');
-  const rows = await a.js(`[...document.querySelectorAll('#moreToolWindows .more-row')].map(r => r.dataset.tool)`);
-  check(rows.length === all.length, `More lists all ${all.length} tool windows`);
+  const listed = {};
+  for (const [side, button] of [['left', '#stripeMoreLeft'], ['right', '#stripeMoreRight'], ['bottom', '#stripeMore']]) {
+    await a.click(button);
+    await a.until(`document.querySelector('#moreToolWindows')?.dataset.side === '${side}'`, `the ${side} More panel`);
+    listed[side] = await a.js(`({ rows: [...document.querySelectorAll('#moreToolWindows .more-row')].map(r => r.dataset.tool), columns: getComputedStyle(document.querySelector('#moreToolWindows .more-rows')).columnCount, box: document.querySelector('#moreToolWindows').getBoundingClientRect().toJSON(), button: document.querySelector('${button}').getBoundingClientRect().toJSON(), title: document.querySelector('${button}').title, head: document.querySelector('#moreToolWindows .more-group').textContent })`);
+    await a.shot(`more-${side}.png`);
+    if (side !== 'bottom') await a.click(button);
+    if (side !== 'bottom') await a.until(`!document.querySelector('#moreToolWindows')`, 'the button closes its panel');
+  }
+  const rows = [...listed.left.rows, ...listed.bottom.rows, ...listed.right.rows];
+  check(rows.length === all.length && new Set(rows).size === all.length, `the three More buttons list all ${all.length} tool windows once (${listed.left.rows.length}, ${listed.bottom.rows.length}, ${listed.right.rows.length})`);
+  check(listed.left.rows.includes('Project') && listed.bottom.rows.includes('Terminal') && listed.right.rows.includes('Notifications'), 'each button lists its own side');
+  check(listed.bottom.columns === '2' && listed.left.columns !== '2' && listed.right.columns !== '2', 'only the bottom panel has two columns');
+  check(listed.left.box.left >= listed.left.button.right && listed.right.box.right <= listed.right.button.left && listed.bottom.box.left >= listed.bottom.button.right, 'each panel opens beside its button');
+  check(listed.left.title === 'Left Tool Windows' && listed.bottom.title === 'Bottom Tool Windows' && listed.right.title === 'Right Tool Windows' && listed.bottom.head === 'Bottom Tool Windows', 'each button says which side it lists');
   check(await a.js(`document.querySelector('#moreToolWindows .more-row[data-tool="Terminal"] .more-keys').textContent === 'Alt+F12'`), 'More shows each shortcut');
   await a.shot('more.png');
   await a.click('#moreToolWindows .more-row[data-tool="TODO"]');
@@ -63,7 +74,7 @@ try {
   await c.click('#stripeMore');
   await c.until(`!!document.querySelector('#moreToolWindows')`, 'more (ko)');
   const leaks = await englishLeaks(c, '#moreToolWindows, #stripe', ['Git', 'TODO']);
-  check(!leaks.length && await c.js(`document.querySelector('#stripeMore').title === '더 많은 도구 창'`), `More and sidebar are in Korean${leaks.length ? ` ${JSON.stringify(leaks)}` : ''}`);
+  check(!leaks.length && await c.js(`document.querySelector('#stripeMore').title === '아래쪽 도구 창'`), `More and sidebar are in Korean${leaks.length ? ` ${JSON.stringify(leaks)}` : ''}`);
   await c.shot('more-ko.png');
   await c.press('Escape');
   await c.js(`(ide.settings.set('appearance.theme', 'light'), true)`);

@@ -66,16 +66,16 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     return w;
   }
 
-  // The start chooser (renderer/chooser.html): a small frameless window with a card for each mode. Resolves the mode
-  // picked, or null when it was closed (Esc, its close button). It stays open until closeChooser, so the app does not
-  // quit for having no window while the main window is being created.
+  // The start chooser (renderer/chooser.html): a frameless window with a Dock of the modes. Resolves the mode picked, or
+  // null when it was closed (Esc, its close button). It stays open until closeChooser, so the app does not quit for
+  // having no window while the main window is being created. updates: {state(), update()} for its update icon, or null.
   let chooser = null;
-  function choose() {
+  function choose(updates) {
     const page = path.join(appDir, 'renderer', 'chooser.html');
     return new Promise((resolve) => {
       const w = new BrowserWindow({
-        width: 640, height: 380, frame: false, resizable: false, maximizable: false, fullscreenable: false, show: false,
-        backgroundColor: '#1e1f22', title: product,
+        width: 860, height: 540, frame: false, resizable: false, maximizable: false, fullscreenable: false, show: false,
+        backgroundColor: '#101a33', title: product,
         // The preload gives this page only the chooser's calls (--pyide-chooser).
         webPreferences: {
           preload: path.join(appDir, 'preload.js'), contextIsolation: true, sandbox: true,
@@ -86,12 +86,18 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
       const mine = (e) => e.sender === w.webContents;
       const onPick = (e, picked) => { if (mine(e) && (picked === 'code' || picked === 'craft')) resolve(picked); };
       const onClose = (e) => { if (mine(e)) w.close(); };
+      const onUpdateState = (e) => { e.returnValue = mine(e) ? updates?.state() ?? null : null; };
+      const onUpdate = (e) => { if (mine(e)) updates?.update(); };
       ipcMain.on('chooser:pick', onPick);
       ipcMain.on('chooser:close', onClose);
+      ipcMain.on('chooser:updateState', onUpdateState);
+      ipcMain.on('chooser:update', onUpdate);
       w.once('ready-to-show', () => w.show());
       w.on('closed', () => {
         ipcMain.removeListener('chooser:pick', onPick);
         ipcMain.removeListener('chooser:close', onClose);
+        ipcMain.removeListener('chooser:updateState', onUpdateState);
+        ipcMain.removeListener('chooser:update', onUpdate);
         if (chooser === w) chooser = null;
         resolve(null);
       });
@@ -239,6 +245,8 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     main: () => main,
     choose,
     closeChooser() { if (chooser && !chooser.isDestroyed()) chooser.destroy(); },
+    chooserOpen: () => !!chooser && !chooser.isDestroyed(),
+    toChooser(channel, payload) { if (chooser && !chooser.isDestroyed()) chooser.webContents.send(channel, payload); },
   };
 }
 

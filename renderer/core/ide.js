@@ -1319,50 +1319,63 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
 };
 $('hideBottomBtn').onclick = () => areas.bottom.active?.hide();
 
-// "More Tool Windows": every tool window, with a pin to keep it on the sidebar.
-const moreBtn = $('stripeMore');
-moreBtn.appendChild(ide.icon('more', '⋯'));
-moreBtn.title = tr('More Tool Windows');
+// "More Tool Windows", one button per side: that side's tool windows, with a pin to keep one on the sidebar. Bottom
+// has by far the most, so its panel has two columns.
+const MORE = [
+  { side: 'left', button: $('stripeMoreLeft'), title: tr('Left Tool Windows') },
+  { side: 'bottom', button: $('stripeMore'), title: tr('Bottom Tool Windows') },
+  { side: 'right', button: $('stripeMoreRight'), title: tr('Right Tool Windows') },
+];
 let morePanel = null;
+let moreOpen = null;
 function closeMore() {
   morePanel?.remove();
   morePanel = null;
+  moreOpen = null;
   removeEventListener('mousedown', outsideMore, true);
   removeEventListener('keydown', escMore, true);
 }
-const outsideMore = (e) => { if (!morePanel?.contains(e.target) && !moreBtn.contains(e.target)) closeMore(); };
+const outsideMore = (e) => { if (!morePanel?.contains(e.target) && !MORE.some((m) => m.button.contains(e.target))) closeMore(); };
 const escMore = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeMore(); } };
+const windowsOf = (side) => [...ide.toolWindows.values()].filter((tw) => tw.area === areas[side]).sort((a, b) => a.order - b.order);
 function renderMore() {
-  morePanel.replaceChildren();
-  for (const [side, label] of [['left', tr('Left')], ['bottom', tr('Bottom')], ['right', tr('Right')]]) {
-    const list = [...ide.toolWindows.values()].filter((tw) => tw.area === areas[side]).sort((a, b) => a.order - b.order);
-    if (!list.length) continue;
-    morePanel.appendChild(el('div', 'more-group', label));
-    for (const tw of list) {
-      const row = el('div', 'more-row' + (tw.isVisible() ? ' visible' : ''));
-      row.dataset.tool = tw.id;
-      row.append(ide.icon(tw.iconName, tw.glyph), el('span', 'more-title', tw.title), el('span', 'more-keys', tw.keys));
-      const pin = el('button', 'more-pin' + (isPinned(tw.id) ? ' pinned' : ''));
-      pin.appendChild(ide.icon(isPinned(tw.id) ? 'pinSelected' : 'pin', '📌'));
-      pin.title = isPinned(tw.id) ? tr('Remove from Sidebar') : tr('Pin to Sidebar');
-      pin.onclick = (e) => { e.stopPropagation(); setPinned(tw.id, !isPinned(tw.id)); renderMore(); };
-      row.appendChild(pin);
-      row.onclick = () => { closeMore(); tw.show(); };
-      morePanel.appendChild(row);
-    }
+  const rows = el('div', 'more-rows');
+  morePanel.replaceChildren(el('div', 'more-group', moreOpen.title), rows);
+  for (const tw of windowsOf(moreOpen.side)) {
+    const row = el('div', 'more-row' + (tw.isVisible() ? ' visible' : ''));
+    row.dataset.tool = tw.id;
+    row.append(ide.icon(tw.iconName, tw.glyph), el('span', 'more-title', tw.title), el('span', 'more-keys', tw.keys));
+    const pin = el('button', 'more-pin' + (isPinned(tw.id) ? ' pinned' : ''));
+    pin.appendChild(ide.icon(isPinned(tw.id) ? 'pinSelected' : 'pin', '📌'));
+    pin.title = isPinned(tw.id) ? tr('Remove from Sidebar') : tr('Pin to Sidebar');
+    pin.onclick = (e) => { e.stopPropagation(); setPinned(tw.id, !isPinned(tw.id)); renderMore(); };
+    row.appendChild(pin);
+    row.onclick = () => { closeMore(); tw.show(); };
+    rows.appendChild(row);
   }
 }
-moreBtn.onclick = () => {
-  if (morePanel) return closeMore();
-  morePanel = el('div', 'more-panel');
+function openMore(more) {
+  moreOpen = more;
+  morePanel = el('div', 'more-panel' + (more.side === 'bottom' ? ' more-wide' : ''));
   morePanel.id = 'moreToolWindows';
+  morePanel.dataset.side = more.side;
   document.body.appendChild(morePanel);
   renderMore();
-  const r = moreBtn.getBoundingClientRect();
-  morePanel.style.left = `${r.right + 6}px`;
-  morePanel.style.top = `${Math.max(8, Math.min(r.bottom - morePanel.offsetHeight, innerHeight - morePanel.offsetHeight - 8))}px`;
+  const r = more.button.getBoundingClientRect();
+  const fitted = (top) => Math.max(8, Math.min(top, innerHeight - morePanel.offsetHeight - 8));
+  morePanel.style.left = `${more.side === 'right' ? r.left - morePanel.offsetWidth - 6 : r.right + 6}px`;
+  morePanel.style.top = `${fitted(more.side === 'bottom' ? r.bottom - morePanel.offsetHeight : r.top)}px`;
   setTimeout(() => { addEventListener('mousedown', outsideMore, true); addEventListener('keydown', escMore, true); });
-};
+}
+for (const more of MORE) {
+  more.button.appendChild(ide.icon('more', '⋯'));
+  more.button.title = more.title;
+  more.button.onclick = () => {
+    const again = moreOpen === more;
+    closeMore();
+    if (!again) openMore(more);
+  };
+}
 ide.on('settingsChanged', (key) => { if (key === 'sidebar.pinned') refreshStripe(); });
 
 // ---------- problems ----------
@@ -2575,6 +2588,7 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   }
 
   const params = pageParams;
+  ide.settings.set('app.lastMode', ide.appMode);
   // Craft keeps its console tool windows collapsed until a run shows one.
   if (craftHome) areas.bottom.active?.hide();
   const last = params.get('open') || (() => { try { return localStorage.getItem('lastProject'); } catch { return null; } })();

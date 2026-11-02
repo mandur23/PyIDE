@@ -52,7 +52,8 @@ let win;
 const procs = new Map();
 let nextProcId = 1;
 
-const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
+// Until the main window exists the start chooser hears what is sent, which is the updater's state.
+const send = (channel, payload) => (win && !win.isDestroyed() ? win.webContents.send(channel, payload) : windows.toChooser(channel, payload));
 
 // Spawns a child whose output streams to the renderer as proc:data / proc:exit, keyed by the returned id.
 // The log records the launch and exit code; the output itself is the user's and stays out of it.
@@ -537,6 +538,21 @@ let appMode = 'code';
 // Craft's project is always this folder (PYIDE_CRAFT_HOME for tests), so every Minecraft feature has its ide.root.
 const craftHome = () => path.resolve(process.env.PYIDE_CRAFT_HOME || path.join(require('os').homedir(), 'Nano Studio Craft'));
 
+// The chooser checks for updates from before any feature module runs, so the updater registers here unless its plugin
+// is off. Its update survives the chooser: a download goes on, and the main window takes it from there.
+function chooseMode() {
+  let updates = null;
+  try {
+    const file = plugins.mainModules().find((f) => path.basename(f) === 'updater.js');
+    updates = file ? require(file).register(featureContext) : null;
+  } catch (err) {
+    diagnostics.logger('#app').warn(`the start chooser cannot offer updates: ${err.message}`);
+  }
+  const picked = windows.choose(updates && { state: updates.state, update: () => updates.updateNow(readSettings(), windows.chooserOpen) });
+  updates?.checkAtStart(readSettings());
+  return picked;
+}
+
 // A folder argument opens it as the project; a file ("Open with PyIDE" on a .py) opens its folder and then the file.
 // A path on an unreachable network share takes ~20 s to fail: the window opens without it after 3 s, and the main
 // process is not blocked meanwhile. Returns false when the chooser was closed.
@@ -548,7 +564,7 @@ async function createWindow() {
     stat = await Promise.race([fs.promises.stat(full).catch(() => null), new Promise((r) => { setTimeout(r, 3000, null); })]);
     if (stat) { target = full; break; }
   }
-  const mode = modeArg || (target ? 'code' : await windows.choose());
+  const mode = modeArg || (target ? 'code' : await chooseMode());
   if (!mode) return false;
   appMode = mode;
   plugins.setMode(mode);

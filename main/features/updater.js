@@ -207,7 +207,11 @@ exports.compareVersions = compareVersions;
 exports.sectionsUpTo = sectionsUpTo;
 exports.notesAfterUpdate = notesAfterUpdate;
 
-exports.register = ({ ipcMain, app, send, diagnostics }) => {
+// Once: the start chooser registers this module before the feature modules do. -> {state, checkAtStart, updateNow}.
+let registered = null;
+exports.register = (context) => (registered ||= start(context));
+
+function start({ ipcMain, app, send, diagnostics }) {
   const log = diagnostics?.logger('#updater') || console;
   const kind = installKind(app);
   let updater = null;
@@ -233,6 +237,8 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   function getUpdater() {
     if (updater) return updater;
     ({ autoUpdater: updater } = require('electron-updater'));
+    // A source run downloads only with a config file, which verify/app-mode.mjs keeps out of the repository.
+    if (process.env.PYIDE_UPDATE_TEST === '1' && process.env.PYIDE_UPDATE_CONFIG) updater.updateConfigPath = process.env.PYIDE_UPDATE_CONFIG;
     updater.logger = log;
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
@@ -325,7 +331,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
 
   // options: {channel: 'stable' | 'beta'} (the setting updates.channel).
   // -> {available: version | null}; throws with a readable message when the feed cannot be read.
-  ipcMain.handle('updater:check', async (_e, feedValue, options) => {
+  async function check(feedValue, options) {
     if (state.phase === 'downloading' || state.phase === 'downloaded') return { available: state.available };
     setState({ phase: 'checking', error: null, checks: state.checks + 1, lastAttempt: Date.now() });
     offered = null;
@@ -348,7 +354,8 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
       if (diagnostics?.isEnvironmentError(err) || /^(HTTP_ERROR_|ERR_UPDATER_)/.test(err?.code)) diagnostics?.markExpected(err);
       throw err;
     }
-  });
+  }
+  ipcMain.handle('updater:check', (_e, feedValue, options) => check(feedValue, options));
 
   // Test hook for verify/report-update.mjs and verify/updater.mjs: a source run cannot download, so the test sets the
   // phase (or, given an object, any state fields) itself.
@@ -386,7 +393,7 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
   }
 
   // options: {differential} (the setting updates.differential; PYIDE_UPDATE_DIFFERENTIAL=0 overrides it).
-  ipcMain.handle('updater:download', async (_e, options) => {
+  async function download(options) {
     if (kind !== 'nsis') throw new Error('Only the Nano Studio installer (.exe) updates itself');
     if (state.phase === 'downloaded') return true;
     const u = getUpdater();
@@ -407,18 +414,20 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
       if (/^ERR_UPDATER_/.test(err?.code)) diagnostics?.markExpected?.(err);
       throw err;
     }
-  });
+  }
+  ipcMain.handle('updater:download', (_e, options) => download(options));
 
   // Starts the downloaded installer silently (it restarts Nano Studio) and quits. The installer closes it even if a window
   // refuses to close, so the renderer saves unsaved files first.
-  ipcMain.handle('updater:install', () => {
+  function install() {
     if (state.phase !== 'downloaded') return false;
     setImmediate(() => getUpdater().quitAndInstall(true, true));
     return true;
-  });
+  }
+  ipcMain.handle('updater:install', install);
 
   // MSI installs: show the new .msi in the feed folder, or open its download link.
-  ipcMain.handle('updater:openInstaller', async () => {
+  async function openInstaller() {
     if (!feed || !state.available) return false;
     const name = `NanoStudio-${state.available}.msi`; // package.json build.msi.artifactName
     if (feed.dir) {
@@ -429,7 +438,26 @@ exports.register = ({ ipcMain, app, send, diagnostics }) => {
     }
     await shell.openExternal(new URL(name, feed.url).href);
     return true;
-  });
+  }
+  ipcMain.handle('updater:openInstaller', openInstaller);
+
+  // ---------- the start chooser ----------
+  // It runs before any renderer of the app, so these read the settings the renderer's check reads.
+  async function checkAtStart(settings) {
+    const value = String(settings?.['updates.feedUrl'] ?? state.defaultFeed ?? '').trim();
+    if (settings?.['updates.checkOnStartup'] === false || !value) return;
+    try { await check(value, { channel: settings?.['updates.channel'] }); } catch (err) { log.warn(`update check failed: ${err.message}`); }
+  }
+  // The update icon. Nothing is open that could lose work, so a verified download installs at once, unless the user has
+  // picked an app meanwhile: its window offers the restart. A download from a feed nobody signs waits for a second click.
+  async function updateNow(settings, stillChoosing) {
+    if (state.phase === 'downloaded') return void install();
+    if (kind === 'msi') return void openInstaller();
+    if (kind !== 'nsis' || !offered) return;
+    try { await download({ differential: settings?.['updates.differential'] !== false }); } catch (err) { log.warn(`update download failed: ${err.message}`); }
+    if (state.signature === 'verified' && stillChoosing()) install();
+  }
 
   app.on('before-quit', () => feed?.server?.close());
-};
+  return { state: () => state, checkAtStart, updateNow };
+}
