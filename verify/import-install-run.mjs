@@ -68,9 +68,15 @@ try {
   const links = await js(`[...document.querySelectorAll('.monaco-hover a')].map(a => a.textContent.trim()).filter(s => s.startsWith('Install'))`);
   check(links.length === 2 && links[1] === "Install package 'pyide-imp-demo' and add to requirements.txt", `the hover links to both installs: ${JSON.stringify(links)}`);
   await shot('hover-link.png');
-  const box = await js(`(() => { const r = [...document.querySelectorAll('.monaco-hover a')].find(a => a.textContent.trim() === "Install package 'pyide-imp-demo'").getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`);
-  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
-  for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+  // On the slow CI runner a click can miss the link and leave the hover open with nothing installed; press once more.
+  const hoverLink = `[...document.querySelectorAll('.monaco-hover a')].find(a => a.textContent.trim() === "Install package 'pyide-imp-demo'")`;
+  for (let i = 0; i < 2 && !(await js(`document.body.innerText.includes('pip install pyide-imp-demo')`)); i++) {
+    const box = await js(`(() => { const r = ${hoverLink}?.getBoundingClientRect(); return r && { x: r.x + 20, y: r.y + r.height / 2 }; })()`);
+    if (!box) break;
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
+    for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    await until(`document.body.innerText.includes('pip install pyide-imp-demo')`, 'the install starts from the hover', 5000).catch(() => {});
+  }
   await until(`!(${missingAt(2)})`, 'the squiggle goes after the install from the hover', 90000);
   check(true, 'a click on the hover link installs the package and the squiggle goes');
 

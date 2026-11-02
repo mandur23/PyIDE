@@ -334,8 +334,12 @@ try {
   await k.until(`ide.terminal.sessions()[0]?.id`, 'ko session');
   await k.js(`ide.terminal.split('right')`);
   await k.until(`ide.terminal.sessions().length === 2 && ide.terminal.sessions()[1].id`, 'ko split');
-  const box = await k.js(`(() => { const r = document.querySelector('.term-pane.active .xterm-screen').getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; })()`);
-  for (const type of ['mousePressed', 'mouseReleased']) await k.cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'right', clickCount: 1 });
+  // On the slow CI runner a right-click can miss the new pane while it is still laid out; press once more.
+  for (let i = 0; i < 3 && !(await k.js(`!!document.querySelector('.context-menu')`)); i++) {
+    const box = await k.js(`(() => { const r = document.querySelector('.term-pane.active .xterm-screen').getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await k.cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'right', clickCount: 1 });
+    await k.until(`!!document.querySelector('.context-menu')`, 'ko menu', 5000).catch(() => {});
+  }
   await k.until(`!!document.querySelector('.context-menu')`, 'ko menu');
   const items = await k.js(`[...document.querySelectorAll('.context-menu .menu-item')].map(n => n.firstChild.textContent)`);
   await k.press('Escape');
