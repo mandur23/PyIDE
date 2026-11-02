@@ -1,7 +1,7 @@
 {
   "name": "nano-studio",
   "productName": "Nano Studio",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Nano Studio: Python IDE (Code) and Minecraft app (Craft)",
   "updateFeed": "https://github.com/mandur23/Portfolio-Nano-/releases/download/nano-studio/",
   "repository": {
