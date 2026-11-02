@@ -208,6 +208,9 @@ try {
   await until(`(${rowExpr('python -m app')})?.classList.contains('ws-row')`, 'launchers of the first project again');
   check(await consoleOf('python -m app').then((s) => s.includes('Hello from app, Claude')), 'launcher consoles survive switching projects');
   // A recent project whose folder was deleted (its drive is there) is offered for removal.
+  // The first project came back with the file it had in front (verify/session.mjs).
+  await js(`(ide.runAction('WorkspaceHome'), true)`);
+  await until(`document.querySelector('#wsHome')?.getClientRects().length > 0`, 'Workspace in front');
   const deleted = path.join(path.dirname(second), 'Deleted_Project');
   await js(`(ide.settings.set('workspace.recent', [...ide.settings.get('workspace.recent'), { path: ${q(deleted)}, name: 'Deleted_Project', opened: new Date().toISOString() }]), ide.emit('interpreterChanged', ide.currentInterp()), true)`);
   await clickNode(`[...document.querySelectorAll('#wsHome .ws-recent')].find(r => r.dataset.path === ${q(deleted)})`, 'deleted recent project');

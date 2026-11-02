@@ -289,11 +289,18 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     await sleep(60);
   };
   const type = async (text) => { await cdp('Input.insertText', { text }); await sleep(30); };
-  const click = async (selector) => {
-    const box = await js(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); if (!n) return null; const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  // A toolbar or grid that redraws between the press and the release takes the click away from its button: on a slow
+  // runner the page then goes on as if nothing was pressed. One that did not reach the element is pressed once more.
+  const click = async (selector, again = true) => {
+    const q = JSON.stringify(selector);
+    const box = await js(`(() => { const n = document.querySelector(${q}); if (!n) return null; const r = n.getBoundingClientRect();
+      window.__clickReached = false;
+      addEventListener('click', (e) => { window.__clickReached = n.contains(e.target) || !!document.querySelector(${q})?.contains(e.target); }, { capture: true, once: true });
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (!box) throw new Error(`no element ${selector}`);
     for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
     await sleep(60);
+    if (again && await js(`window.__clickReached === false && !!document.querySelector(${q})?.getClientRects().length && !document.querySelector(${q}).disabled`).catch(() => false)) await click(selector, false);
   };
   const shot = async (file) => {
     const r = await cdp('Page.captureScreenshot', { format: 'png' });

@@ -1,6 +1,6 @@
 // What a project had open comes back: after quitting (and after a crash, from the last write) the file tabs in their
 // editor groups, the active file, the caret and scroll, a pinned tab, the tool windows and their sizes return, without
-// a file that has gone; another project keeps its own; leaving a project and opening it again brings them back too.
+// a file that has gone; a file named on the command line ends up in front; another project keeps its own; leaving a project and opening it again brings them back too.
 // Ports 9662-9664.
 import { rmSync, writeFileSync } from 'fs';
 import path from 'path';
@@ -64,6 +64,10 @@ try {
   check(after.pinned.includes('hello.py'), 'a pinned tab stays pinned');
   check(after.todo && after.width === '333px', `the tool windows and their sizes come back (${after.width})`);
   check(!(await b.js(`ide.isDirty(ide.activeTab())`)), 'nothing is left modified');
+
+  await quit(b);
+  b = await launch({ fixture: 'core', port: 9663, name: 'session-file', userData: a.userData, projectDir: a.project, open: 'broken.py' });
+  check(await b.js(`ide.tabs.some((t) => t.path?.endsWith('hello.py')) && ide.activeTab()?.path?.endsWith('broken.py')`), 'at ready the tabs are back, and a file named on the command line is in front');
 
   const other = tempDir('session-other');
   writeFileSync(path.join(other, 'other.py'), 'y = 2\n');

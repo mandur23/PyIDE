@@ -74,8 +74,12 @@ async function openScript(ctx, name) {
 }
 // Selects a node by a click on its title, which also gives the canvas the keyboard.
 async function selectNode(ctx, ui, id) {
-  await ui.click(await ui.titleOf(id));
-  await ctx.until(`${S(id)} === ${V}.selection().join() && document.activeElement?.classList.contains('vs-canvas')`, `${id} selected, canvas focused`);
+  const selected = `${S(id)} === ${V}.selection().join() && document.activeElement?.classList.contains('vs-canvas')`;
+  for (let i = 0; i < 2; i++) {
+    await ui.click(await ui.titleOf(id));
+    if (await ctx.until(selected, 'selected', 5000).then(() => true, () => false)) return;
+  }
+  await ctx.until(selected, `${id} selected, canvas focused`, 5000);
 }
 const bps = (ctx) => ctx.js(`document.querySelector(${S(HOST)}).dataset.breakpoints`);
 const pausedAt = (ctx) => ctx.js(`document.querySelector(${S(HOST)}).dataset.paused`);
@@ -160,8 +164,13 @@ try {
   await press('Enter');
   await until(`document.querySelector('#dbgWatches').textContent.includes('index_n3 = {int} 0')`, 'a watch on index_n3');
   check(true, 'a watch on the generated name still evaluates (index_n3 = 0)');
-  await ui.clickOn('#dbgWatches .dbg-watch-del');
-  await until(`!document.querySelector('#dbgWatches .dbg-watch')`, 'the watch removed');
+  // The Variables view redraws after a stop, which can take the press away from the small delete button.
+  const removed = `!document.querySelector('#dbgWatches .dbg-watch')`;
+  for (let i = 0; i < 3 && !(await js(removed)); i++) {
+    await ui.clickOn('#dbgWatches .dbg-watch-del');
+    await until(removed, 'the watch removed', 4000).catch(() => {});
+  }
+  await until(removed, 'the watch removed', 1000);
   const frames = await js(`document.querySelector('#dbgFrames').textContent`);
   check(frames.includes('main, loop.pyflow: Set Variable (n4)') && !frames.includes('loop.py:'), `Frames name the .pyflow and the node (${frames})`);
   check(await js(`(() => { const c = document.querySelector(${S(`${HOST} .vs-canvas`)}).getBoundingClientRect(); const r = document.querySelector(${S(node('n4'))}).getBoundingClientRect();

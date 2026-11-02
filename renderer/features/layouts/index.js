@@ -215,16 +215,24 @@
     if (two) await show(two.active);
     await show(one?.active, two ? 'right' : undefined);
     if (two && saved.focus === 1) await show(two.active, 'right');
+    // A group whose front tab has no file was showing the Workspace tab.
+    if (one && !one.active && sameProject() && ide.actions.some((a) => a.id === 'WorkspaceHome')) ide.runAction('WorkspaceHome');
     if (saved?.layout && sameProject()) await apply(saved.layout);
     if (sameProject()) tabsBackFor.root = keyOf(root);
   }
-  ide.on('projectOpened', (root) => { tabsBackFor.root = null; restoreSession(root).catch((err) => ide.log.error(`restoring ${root}: ${err?.stack || err}`)); });
+  let restoring = Promise.resolve();
+  ide.on('projectOpened', (root) => {
+    tabsBackFor.root = null;
+    restoring = restoreSession(root).catch((err) => ide.log.error(`restoring ${root}: ${err?.stack || err}`));
+  });
   ide.on('activeTabChanged', saveSoon);
   ide.on('fileClosed', saveSoon);
   ide.beforeProjectChange.push(() => { saveSession(); tabsBackFor.root = null; });
   addEventListener('beforeunload', saveSession);
 
   ide.layouts = {
+    // The startup waits for this, so a file named on the command line ends up in front of the restored tabs.
+    restored: () => restoring,
     capture, apply, defaultLayout, list: () => saved().map((l) => l.name), current, save: store, saveAs, restore, restoreDefault, rename, remove,
     menu: () => ({ label: tr('Layouts'), submenu: menuItems }),
   };

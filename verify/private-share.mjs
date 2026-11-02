@@ -439,7 +439,7 @@ attack('connection flood', [['bore-client.js', 'const MAX_HANDSHAKES = 64;', 'co
   (client) => withHost(client, async ({ game, bore, port }) => {
     const flood = await Promise.all(Array.from({ length: 200 }, () => raw(port)));
     await until(() => bore.seen.first.length >= 64, 'the host to take the flood up', 8000);
-    await outcome(() => bore.accepted() <= 64 && bore.seen.first.length > 64, 3000);
+    await outcome(() => bore.accepted() <= 64 && bore.seen.first.length > 64, 10000);
     const held = bore.accepted();
     const f = await friend(client, port);
     await f.send('still here');

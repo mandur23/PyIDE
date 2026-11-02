@@ -2598,6 +2598,7 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   if (last && await reachable(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
   if (!ide.root) document.body.classList.add('no-project');
+  await ide.layouts?.restored();
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
   if (craftHome && ide.root) ide.emit('craftReady', { host: $('craftHost') });

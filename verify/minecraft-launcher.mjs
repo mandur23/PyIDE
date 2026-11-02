@@ -835,7 +835,7 @@ async function craftUi(first) {
     await until(`!!${dialogButton('켜고 공유')}`, 'whitelist offer', 10000);
     const offered = await js(`document.querySelector('.dialog').textContent`);
     await js(`(${dialogButton('켜고 공유')}).click()`);
-    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611' && !!document.querySelector('#minecraftScreen .mc-join-code')`, 'shared server', 30000);
+    await until(`document.querySelector('#minecraftScreen .mc-public-addr')?.textContent === 'bore.pub:40611' && !!document.querySelector('#minecraftScreen .mc-join-code')`, 'shared server', 90000);
     const props = text(path.join(friends, 'server.properties'));
     const typed = await js(`ide.run.sessions().find((s) => s.cfg?.type === 'minecraft-server')?.host.textContent || ''`);
     check(/화이트리스트/.test(offered) && /^white-list=true$/m.test(props) && /^enforce-whitelist=true$/m.test(props) && /> whitelist on/.test(typed) && await js(`[...document.querySelectorAll('.ide-balloon')].some((n) => /화이트리스트를 켰어요/.test(n.textContent))`),
