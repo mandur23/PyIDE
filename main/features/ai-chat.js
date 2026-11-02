@@ -27,6 +27,7 @@ Reply with only the commit message: no code fences, no quotes, nothing before or
 // Claude Code model ids and aliases; the value ends up on a command line.
 const MODEL_ID = /^[\w.\-[\]]+$/;
 const MAX_FILE_CHARS = 40000;
+const MAX_CONTEXT_CHARS = 200000;
 const MAX_HISTORY_CHARS = 60000;
 // The most bytes MAX_FILE_CHARS can take, in the encodings the IDE reads.
 const MAX_FILE_BYTES = MAX_FILE_CHARS * 4;
@@ -228,12 +229,18 @@ exports.register = ({ ipcMain, app, getWindow }) => {
 
   // req: {reqId, model, messages: [{role, text}], context: [{kind, path, language, text, startLine?, endLine?, current?, truncated?}]}
   ipcMain.handle('ai-chat:send', async (e, req) => {
-    const context = (req.context || []).map((c) => (c.text.length > MAX_FILE_CHARS ? { ...c, text: c.text.slice(0, MAX_FILE_CHARS), truncated: true } : c));
+    let left = MAX_CONTEXT_CHARS;
+    const context = (req.context || []).map((c) => {
+      const room = Math.min(MAX_FILE_CHARS, left);
+      left -= Math.min(room, c.text.length);
+      return c.text.length > room ? { ...c, text: c.text.slice(0, room), truncated: true } : c;
+    });
     const r = await run(req.reqId, {
       system: CHAT_SYSTEM, prompt: chatPrompt({ messages: req.messages, context }), model: req.model, timeoutMs: 300000,
       onText: streamTo(e, 'ai-chat:stream', req.reqId),
     });
-    return r.ok ? { ok: true, text: r.text, ms: r.ms } : r;
+    const cut = context.filter((c) => c.truncated).map((c) => path.basename(c.path));
+    return r.ok ? { ok: true, text: r.text, ms: r.ms, cut } : { ...r, cut };
   });
 
   // req: {reqId, root, files: [{path, status}], language: 'ko'|'en', model}

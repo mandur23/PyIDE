@@ -245,7 +245,6 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     main: () => main,
     choose,
     closeChooser() { if (chooser && !chooser.isDestroyed()) chooser.destroy(); },
-    chooserOpen: () => !!chooser && !chooser.isDestroyed(),
     toChooser(channel, payload) { if (chooser && !chooser.isDestroyed()) chooser.webContents.send(channel, payload); },
   };
 }

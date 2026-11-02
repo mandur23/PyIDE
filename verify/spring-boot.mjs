@@ -359,12 +359,16 @@ process.exit(r.status ?? 1);
     await a.until(`ide.root && ide.root.toLowerCase() === ${q(app.toLowerCase())}`, 'debugapp opened', 30000);
     await a.js(`ide.settings.set(${q(`toolchains.jdk:${app}`)}, ${q(jdk.id)})`);
     await openFile(a, 'src/main/java/demo/DemoApplication.java');
-    // A breakpoint on line 6 (the println), set from the gutter as a user would.
-    const p6 = await a.js(`(() => { const e = ide.editor; const li = e.getLayoutInfo(); const pos = e.getScrolledVisiblePosition({ lineNumber: 6, column: 1 });
-      const r = e.getDomNode().getBoundingClientRect(); return { x: r.left + li.glyphMarginLeft + li.glyphMarginWidth / 2, y: r.top + pos.top + pos.height / 2 }; })()`);
-    await a.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p6.x, y: p6.y });
-    for (const type of ['mousePressed', 'mouseReleased']) await a.cdp('Input.dispatchMouseEvent', { type, x: p6.x, y: p6.y, button: 'left', clickCount: 1, buttons: 1 });
-    await a.until(`ide.debugger.breakpoints?.().some((b) => b.line === 6) ?? window.__debugger.breakpoints().some((b) => b.line === 6)`, 'breakpoint set', 5000).catch(() => {});
+    // A breakpoint on line 6 (the println), set from the gutter as a user would. On a slow runner code lenses still move
+    // the lines when the first click lands, and a debug run without the breakpoint goes straight through.
+    const breakpointSet = 'ide.debugger.breakpoints?.().some((b) => b.line === 6) ?? window.__debugger.breakpoints().some((b) => b.line === 6)';
+    for (let i = 0; i < 4 && !(await a.js(breakpointSet)); i++) {
+      const p6 = await a.js(`(() => { const e = ide.editor; const li = e.getLayoutInfo(); const pos = e.getScrolledVisiblePosition({ lineNumber: 6, column: 1 });
+        const r = e.getDomNode().getBoundingClientRect(); return { x: r.left + li.glyphMarginLeft + li.glyphMarginWidth / 2, y: r.top + pos.top + pos.height / 2 }; })()`);
+      await a.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p6.x, y: p6.y });
+      for (const type of ['mousePressed', 'mouseReleased']) await a.cdp('Input.dispatchMouseEvent', { type, x: p6.x, y: p6.y, button: 'left', clickCount: 1, buttons: 1 });
+      await a.until(breakpointSet, 'breakpoint set', 5000).catch(() => {});
+    }
     const stoppedAt6 = `(() => { const s = window.__debugger.state(); const f = s?.state === 'suspended' && s.frames[s.frameIdx]; return !!f && f.path?.endsWith('DemoApplication.java') && f.line === 6; })()`;
     for (const [tool, goals, sign] of [['maven', 'spring-boot:run', '-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:'], ['gradle', 'bootRun', '--init-script']]) {
       await a.js(`(ide.run.debugConfig({ ...ide.run.types.get('build').defaults(), id: 'dbg-${tool}', type: 'build', name: 'DemoApplication', tool: '${tool}', goals: '${goals}' }), true)`);
@@ -381,6 +385,18 @@ process.exit(r.status ?? 1);
       await new Promise((r) => setTimeout(r, 1500));
     }
     check(!readdirSync(tmpdir()).some((n) => /^pyide-debug-\d+-\d+\.gradle$/.test(n)), 'the Gradle init script is deleted when the build ends');
+
+    // ---------- the Spring Boot fields of a Maven / Gradle configuration ----------
+    const build = (spec) => a.js(`ide.api.invoke('toolchains:build', ${q({ cwd: app, ...spec })}).then((r) => (ide.api.kill(r.id).catch(() => {}), r.command), (e) => 'refused: ' + e.message)`);
+    const fields = { profiles: 'dev, local', port: '8097', vmOptions: '-Xmx400m  -Dmy.flag=1', args: '--a=b' };
+    const maven = await build({ tool: 'maven', goals: 'spring-boot:run', spring: fields });
+    check(maven.includes('"-Dspring-boot.run.jvmArguments=-Xmx400m -Dmy.flag=1"') && maven.includes('"-Dspring-boot.run.profiles=dev,local"') && maven.includes('"-Dspring-boot.run.arguments=--server.port=8097 --a=b"'), `Maven gets the Spring Boot fields as the plugin's properties (${maven})`);
+    const gradle = await build({ tool: 'gradle', goals: 'bootRun', spring: fields });
+    check(gradle.includes('"--args=--server.port=8097 --spring.profiles.active=dev,local --a=b"') && gradle.includes('--init-script'), `Gradle gets them as --args and the init script (${gradle})`);
+    check(!(await build({ tool: 'maven', goals: 'clean package', spring: fields })).includes('spring-boot.run'), 'other goals leave the Spring Boot fields out');
+    const refused = await Promise.all(['-Dx=1 & calc', '-Dx="1"', '-Dx=%PATH%', 'a|b', 'a^b', 'C:\\dir\\'].map((vmOptions) => build({ tool: 'maven', goals: 'spring-boot:run', spring: { vmOptions } })));
+    check(refused.every((r) => r.startsWith('refused:')), `what cmd.exe would read as syntax is refused (${q(refused.map((r) => r.slice(0, 40)))})`);
+    check((await build({ tool: 'maven', goals: 'spring-boot:run', spring: { port: '70000' } })).startsWith('refused:'), 'a port out of range is refused');
   }
   check(a.consoleErrors.length === 0, `no renderer exceptions${a.consoleErrors.length ? ` ${q(a.consoleErrors)}` : ''}`);
   const internal = await a.js(`ide.api.invoke('diagnostics:errors')`);

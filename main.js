@@ -548,8 +548,10 @@ function chooseMode() {
   } catch (err) {
     diagnostics.logger('#app').warn(`the start chooser cannot offer updates: ${err.message}`);
   }
-  const picked = windows.choose(updates && { state: updates.state, update: () => updates.updateNow(readSettings(), windows.chooserOpen) });
-  updates?.checkAtStart(readSettings());
+  // A settings file that stays locked must not stop the app from starting.
+  const settings = () => { try { return readSettings(); } catch { return null; } };
+  const picked = windows.choose(updates && { state: updates.state, update: () => updates.updateNow(settings()) });
+  updates?.checkAtStart(settings());
   return picked;
 }
 

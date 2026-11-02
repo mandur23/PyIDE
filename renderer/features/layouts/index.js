@@ -177,22 +177,28 @@
     const openTabs = (group) => group.tabs.filter((t) => t.path && !t.doc?.untitled && (t.kind === 'file' || t.viewer));
     const groups = ide.groups().filter((g) => openTabs(g).length).map((group) => ({
       tabs: openTabs(group).slice(0, MAX_TABS).map((t) => ({ path: t.path, pinned: !!t.pinned, view: viewOf(group, t) })),
-      active: group.active?.path || null,
+      active: openTabs(group).includes(group.active) ? group.active.path : null,
     }));
     const focus = Math.max(0, ide.groups().filter((g) => openTabs(g).length).findIndex((g) => g.editor === ide.editor));
-    const { areas } = capture();
+    // The file as it is now: another Nano Studio process on the same user data keeps its projects' records there.
+    const onDisk = ide.api.loadSettingsSync()?.[SESSION];
+    const records = onDisk && typeof onDisk === 'object' ? onDisk : ide.settings.get(SESSION, {});
     const keep = new Set(ide.settings.get('recentProjects', []).map((p) => keyOf(p.path)));
-    const all = Object.fromEntries(Object.entries(ide.settings.get(SESSION, {})).filter(([k]) => keep.has(k)));
-    ide.settings.set(SESSION, { ...all, [keyOf(ide.root)]: { groups, focus, layout: { areas } } });
+    const all = Object.fromEntries(Object.entries(records).filter(([k]) => keep.has(k)));
+    // A chromeless appearance mode has hidden the tool windows only for itself.
+    const layout = ide.appearanceModes?.mode() ? all[keyOf(ide.root)]?.layout : { areas: capture().areas };
+    ide.settings.set(SESSION, { ...all, [keyOf(ide.root)]: { groups, focus, layout } });
   }
   const saveSoon = () => { clearTimeout(timer); timer = setTimeout(saveSession, 1000); };
 
   // Two editor groups at most (a third joins the second), and a file that has gone is left out.
-  async function openGroup(group, into) {
+  const exists = (path) => Promise.race([ide.api.exists(path), new Promise((r) => { setTimeout(r, 2000, false); })]);
+  async function openGroup(group, stillOpen, into) {
     let first = true;
     let last = null;
     for (const { path, pinned, view } of group.tabs) {
-      if (!(await ide.api.exists(path))) continue;
+      if (!stillOpen()) break;
+      if (!(await exists(path)) || !stillOpen()) continue;
       const tab = await ide.openFile(path, { focus: false, ...(first && into ? { group: into } : {}) });
       if (!tab) continue;
       first = false;
@@ -208,13 +214,13 @@
     const [one, ...rest] = groups;
     const two = rest.length ? { tabs: rest.flatMap((g) => g.tabs), active: rest.at(-1).active } : null;
     const sameProject = () => ide.root && keyOf(ide.root) === keyOf(root);
-    const show = async (path, group) => { if (path && sameProject() && await ide.api.exists(path)) await ide.openFile(path, { focus: false, group }); };
-    if (one) await openGroup(one);
-    if (two && sameProject()) await openGroup(two, 'right');
+    const show = async (path, group) => { if (path && sameProject() && await exists(path)) await ide.openFile(path, { focus: false, group }); };
+    if (one) await openGroup(one, sameProject);
+    const second = two && sameProject() && await openGroup(two, sameProject, 'right');
     // 'right' is the other group from the one in use, and each show moves to the group it shows.
-    if (two) await show(two.active);
-    await show(one?.active, two ? 'right' : undefined);
-    if (two && saved.focus === 1) await show(two.active, 'right');
+    if (second) await show(two.active);
+    await show(one?.active, second ? 'right' : undefined);
+    if (second && saved.focus === 1) await show(two.active, 'right');
     // A group whose front tab has no file was showing the Workspace tab.
     if (one && !one.active && sameProject() && ide.actions.some((a) => a.id === 'WorkspaceHome')) ide.runAction('WorkspaceHome');
     if (saved?.layout && sameProject()) await apply(saved.layout);
@@ -227,7 +233,13 @@
   });
   ide.on('activeTabChanged', saveSoon);
   ide.on('fileClosed', saveSoon);
-  ide.beforeProjectChange.push(() => { saveSession(); tabsBackFor.root = null; });
+  // A later hook or an unsaved file can still keep the project open, so saving stops only for the tabs closing next.
+  ide.beforeProjectChange.push(() => {
+    saveSession();
+    const held = tabsBackFor.root;
+    tabsBackFor.root = null;
+    setTimeout(() => { if (ide.root && keyOf(ide.root) === held) tabsBackFor.root = held; }, 3000);
+  });
   addEventListener('beforeunload', saveSession);
 
   ide.layouts = {

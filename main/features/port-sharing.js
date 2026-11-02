@@ -20,6 +20,7 @@ const tls = require('tls');
 const { createToolchains, installRoot } = require('../installer/toolchains');
 
 const POLL_MS = 3000;
+const LISTEN_WAIT_MS = 60000;
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 const BORE_SERVER = 'bore.pub';
 const BORE_RE = /listening at ([\w.-]+:\d+)/;
@@ -199,7 +200,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       const was = JSON.stringify(ports);
       ports = next;
       // A shared server that stopped listening takes its tunnel with it.
-      for (const port of [...tunnels.keys()]) if (!ports.some((p) => p.port === port)) stop(port);
+      for (const [port, t] of [...tunnels]) if (!t.awaited && !ports.some((p) => p.port === port)) stop(port);
       if (JSON.stringify(ports) !== was) changed();
     }
   }
@@ -248,9 +249,20 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   });
 
   // -> the tunnel's state; its address arrives with ports:changed once the tool reports it.
+  // A server that has just started may not listen yet, and the list can be a few seconds old.
+  async function listening(port) {
+    const end = Date.now() + LISTEN_WAIT_MS;
+    let row = ports.find((p) => p.port === port);
+    while (!row && tunnels.has(port) && Date.now() < end) {
+      await poll().catch(() => {});
+      row = ports.find((p) => p.port === port);
+      if (!row) await new Promise((r) => { setTimeout(r, 1000); });
+    }
+    return row;
+  }
+  const noServer = (port) => Object.assign(new Error(`Nothing the IDE started listens on port ${port}`), { expected: true });
   ipcMain.handle('ports:share', async (_e, port, options) => {
-    const row = ports.find((p) => p.port === port);
-    if (!row) throw Object.assign(new Error(`Nothing the IDE started listens on port ${port}`), { expected: true });
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw noServer(port);
     const wanted = options?.private === true;
     const running = tunnels.get(port);
     if (running) {
@@ -258,10 +270,18 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       if (!!running.secret !== wanted) throw Object.assign(new Error(`Port ${port} is already shared ${running.secret ? 'privately' : 'publicly'}: stop sharing it first`), { expected: true });
       return state();
     }
-    // Listed before the probe (seconds for a server that does not answer), so Stop Sharing meanwhile cancels it.
-    const t = { kind: null, state: 'starting', url: null, error: null, log: '', secret: wanted ? crypto.randomBytes(32) : null };
+    // Listed before the wait and the probe (seconds for a server that does not answer), so the window says it is
+    // starting and Stop Sharing meanwhile cancels it. awaited: the port may not be open yet, and polling leaves it.
+    const t = { kind: null, state: 'starting', url: null, error: null, log: '', secret: wanted ? crypto.randomBytes(32) : null, awaited: true };
     tunnels.set(port, t);
     changed();
+    const row = await listening(port);
+    t.awaited = false;
+    if (tunnels.get(port) !== t) return state();
+    if (!row) {
+      stop(port);
+      throw noServer(port);
+    }
     // A private share is always bore, so what the server speaks does not matter.
     const proto = t.secret ? 'tcp' : row.proto || await probeRow(row);
     if (tunnels.get(port) !== t) return state();

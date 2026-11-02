@@ -273,10 +273,12 @@
     return tab.path;
   };
 
+  // null: the file has gone or cannot be read since it was added.
   async function fileText(path) {
     const doc = ide.getDocument(path);
     if (doc) return doc.model.getValue();
-    return (await ide.api.invoke('ai-chat:readFile', path).catch(() => null))?.text ?? '';
+    const r = await ide.api.invoke('ai-chat:readFile', path).catch(() => null);
+    return r?.ok ? r.text : null;
   }
   const languageFor = (path) => ide.getDocument(path)?.model.getLanguageId()
     || languageOf(path.split('.').pop()) || 'plaintext';
@@ -326,30 +328,40 @@
     const items = [];
     const current = currentFilePath();
     const paths = [...new Set([current, ...chips.mentions].filter(Boolean))];
+    const unread = [];
     for (const path of paths) {
-      items.push({ kind: 'file', path: rel(path), language: languageFor(path), text: await fileText(path), current: path === current });
+      const fileContent = await fileText(path);
+      if (fileContent === null) unread.push(basename(path));
+      else items.push({ kind: 'file', path: rel(path), language: languageFor(path), text: fileContent, current: path === current });
     }
+    if (unread.length) setStatus(tr('Not sent, because it could not be read: {names}', { names: unread.join(', ') }), 'error');
     const s = chips.selection;
     if (s) items.push({ kind: 'selection', path: rel(s.path), language: s.language, text: s.text, startLine: s.startLine, endLine: s.endLine });
     return items;
   }
 
   // ---------- sending ----------
+  let gathering = false; // reading the attachments, before `pending` is set: a second Enter must not send twice
   async function send(textArg) {
     const text = (textArg ?? input.value).trim();
-    if (!text || pending) return;
+    if (!text || pending || gathering) return;
     if (!ide.root) return setStatus(tr('Open a project to chat about it.'), 'error');
-    if (loadedFor !== ide.root) await loadHistory();
+    gathering = true;
+    let context;
+    try {
+      if (loadedFor !== ide.root) await loadHistory();
+      context = await gatherContext(text);
+    } finally { gathering = false; }
     const project = ide.root;
     const hist = history;
     const chat = currentChat() || newChat();
-    const context = await gatherContext(text);
     chat.messages.push({ role: 'user', text, at: Date.now(), context: context.map(({ text: _t, language: _l, ...c }) => c) });
     chat.title ||= text.split('\n')[0].slice(0, 60);
     const reply = { role: 'assistant', text: '', at: Date.now(), pending: true };
     chat.messages.push(reply);
     chat.updated = Date.now();
     input.value = '';
+    const attached = chips.mentions;
     chips.selection = null;
     chips.mentions = [];
     closeComplete();
@@ -368,7 +380,10 @@
     else {
       reply.error = errorText(res);
       if (res.code === 'auth') reply.errorCode = 'auth';
+      // A failed send keeps its files for the next try.
+      if (!chips.mentions.length) { chips.mentions = attached; renderChips(); }
     }
+    if (res.cut?.length) setStatus(tr('Only the start of these files was sent: {names}', { names: res.cut.join(', ') }), 'error');
     if (pending?.reqId === reqId) pending = null;
     chat.updated = Date.now();
     // Another project was opened meanwhile: the reply belongs to the chat history of the one it was asked in.

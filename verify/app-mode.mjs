@@ -6,7 +6,7 @@
 // mode; the chooser's Dock offers an update from a local feed, downloads it and hands it to the main window, says when
 // there is none and when the feed cannot be read; Code shows no Minecraft UI and loads no Craft code, and a run
 // configuration and servers/ folder a project kept from before do no harm there. Screenshots: chooser.png,
-// chooser-ko.png, chooser-update.png and craft-empty.png in verify/out/app-mode. Ports 9642-9651.
+// chooser-ko.png, chooser-update.png and craft-empty.png in verify/out/app-mode. Ports 9642-9652.
 import { spawn, execSync } from 'child_process';
 import { createHash, randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -47,9 +47,10 @@ ide.on('craftReady', (e) => { window.__craftReady = (window.__craftReady || []).
 // ---------- a raw CDP driver for runs that start at the chooser (verify/lib.mjs launch() waits for the IDE page) ----------
 const procs = new Set();
 process.on('exit', () => { for (const pid of procs) try { execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); } catch {} });
-function start(port, { lang = 'en-US', env = {}, args = [], settings = null } = {}) {
+function start(port, { lang = 'en-US', env = {}, args = [], settings = null, pluginState = null } = {}) {
   const data = userData();
   if (settings) writeFileSync(path.join(data, 'settings.json'), S(settings));
+  if (pluginState) writeFileSync(path.join(data, 'plugin-state.json'), S(pluginState));
   const craft = path.join(tempDir('app-mode-craft'), 'Nano Studio Craft');
   const child = spawn(ELECTRON, [APP_DIR, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...args], {
     env: { PYIDE_SEMANTIC_BACKEND: 'fake', PYIDE_AI_COMPLETE_BACKEND: 'fake', PYIDE_CLAUDE_IDE_DIR: path.join(data, '..', 'claude-ide'), ...process.env,
@@ -228,6 +229,16 @@ try {
     await u.until(`${tip} === 'Could not download Nano Studio 9.9.8.'`, 'the refused download', 60000);
     check(unsigned.child.exitCode === null, 'the default feed without a signature is refused: the icon says so and nothing installs');
     unsigned.kill();
+  }
+
+  // ---------- Minecraft turned off while Code listed it, in 0.3.6: Craft is nothing without it ----------
+  {
+    const run = start(9652, { args: ['--mode=craft'], pluginState: { disabled: ['minecraft'] } });
+    const ide = await page(9652, IDE);
+    await ide.until('window.__ideReady === true', 'Craft ready');
+    check(await ide.until(`!!ide.minecraft`, 'the Minecraft plugin', 10000).catch(() => false), 'a Minecraft plugin turned off earlier still loads in Craft');
+    ide.close();
+    run.kill();
   }
 
   // ---------- Esc on the chooser quits ----------

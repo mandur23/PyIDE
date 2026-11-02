@@ -263,7 +263,8 @@ function previewPolicy(site, scripts) {
 
 function siteFor(root) {
   for (const [id, r] of sites) if (r.toLowerCase() === root.toLowerCase()) return id;
-  const id = crypto.randomBytes(6).toString('hex');
+  // Starting with a letter: a host of digits alone is read as an IP address, and the URL is refused.
+  const id = `s${crypto.randomBytes(6).toString('hex')}`;
   sites.set(id, root);
   return id;
 }

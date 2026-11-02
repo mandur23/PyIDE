@@ -1019,6 +1019,7 @@
           input.value = current[fd.key] || '';
           input.placeholder = fd.placeholderFor?.(current) || fd.placeholder || '';
           input.oninput = () => (current[fd.key] = input.value);
+          if (fd.redraw) input.onchange = () => renderForm();
         }
         input.dataset.key = fd.key;
         if (fd.browse) {

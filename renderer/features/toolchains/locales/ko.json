@@ -35,6 +35,8 @@
   "Extra JAR files or folders, separated by ;": "추가 JAR 파일 또는 폴더(;로 구분)",
   "Source file": "소스 파일",
   "VM options": "VM 옵션",
+  "Active profiles": "활성 프로필",
+  "Server port": "서버 포트",
   "Program arguments": "프로그램 인수",
   "JDK": "JDK",
   "Source file is not specified. Edit the configuration first.": "소스 파일이 지정되지 않았습니다. 먼저 구성을 편집하세요.",

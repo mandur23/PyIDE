@@ -69,6 +69,17 @@ try {
   b = await launch({ fixture: 'core', port: 9663, name: 'session-file', userData: a.userData, projectDir: a.project, open: 'broken.py' });
   check(await b.js(`ide.tabs.some((t) => t.path?.endsWith('hello.py')) && ide.activeTab()?.path?.endsWith('broken.py')`), 'at ready the tabs are back, and a file named on the command line is in front');
 
+  await b.js(`(ide.runAction('WorkspaceHome'), true)`);
+  await b.until(`ide.activeTab()?.path === 'workspace:home'`, 'the Workspace tab');
+  await b.sleep(1300);
+  await quit(b);
+  b = await launch({ fixture: 'core', port: 9663, name: 'session-home', userData: a.userData, projectDir: a.project });
+  await b.until(`ide.activeTab()?.path === 'workspace:home'`, 'the Workspace tab in front again', 10000);
+  check(await b.js(`ide.tabs.some((t) => t.path?.endsWith('hello.py'))`), 'a project left on the Workspace tab comes back on it, with its files');
+  await b.js(`(ide.closeTab(${q(file(a, 'broken.py'))}, true), true)`);
+  await b.sleep(1300);
+  check(!(await b.js(`ide.settings.get('project.session')[ide.util.pathKey(ide.root)].groups.flatMap((g) => g.tabs).some((t) => t.path.endsWith('broken.py'))`)), 'a closed tab leaves the record: saving goes on after a project change was asked for');
+
   const other = tempDir('session-other');
   writeFileSync(path.join(other, 'other.py'), 'y = 2\n');
   await b.js(`ide.openProject(${q(other)})`);

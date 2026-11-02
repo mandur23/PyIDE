@@ -1,4 +1,4 @@
-// Plugins: a folder with plugin.json ({id, name, version, vendor, description, depends?, required?, main?, modes?}).
+// Plugins: a folder with plugin.json ({id, name, version, vendor, description, depends?, required?, requiredIn?, main?, modes?}).
 // Renderer code is index.js / style.css next to plugin.json, translations are locales/<lang>.json, and `main`
 // lists main-process modules. Bundled plugins are renderer/features/*; user plugins live in <userData>/plugins.
 // Enabling, disabling, installing and uninstalling take effect after a restart, as in PyCharm.
@@ -76,6 +76,8 @@ function createPluginManager({ appDir, userDataDir, mode: initialMode = 'code' }
       depends: strings(meta?.depends),
       // Only the IDE's own plugins: from an installed one this would make it impossible to turn off, in every mode.
       required: bundled && !!meta?.required,
+      // The modes in which it cannot be turned off, without loading in any other: Craft is nothing but Minecraft.
+      requiredIn: bundled ? strings(meta?.requiredIn) : [],
       detached: !!meta?.detached,
       modes: modes.length ? modes : ['code'],
       bundled,
@@ -117,7 +119,7 @@ function createPluginManager({ appDir, userDataDir, mode: initialMode = 'code' }
     const disabled = new Set(state().disabled);
     const byId = discoverAll();
     const plugins = [...byId.values()].filter(inMode);
-    for (const p of plugins) p.enabled = !p.broken && (p.required || !disabled.has(p.id));
+    for (const p of plugins) p.enabled = !p.broken && (p.required || p.requiredIn?.includes(mode) || !disabled.has(p.id));
     // A plugin whose dependency is off or missing cannot load.
     let changed = true;
     while (changed) {
@@ -152,8 +154,8 @@ function createPluginManager({ appDir, userDataDir, mode: initialMode = 'code' }
     const { loadFailure } = require('./diagnostics');
     return discover().map((p) => ({
       id: p.id, name: p.name, version: p.version, vendor: p.vendor, description: p.description, i18n: p.i18n,
-      depends: p.depends, required: p.required, bundled: p.bundled, dir: p.dir, blockedBy: p.blockedBy || null,
-      enabled: !p.broken && (p.required || !disabled.has(p.id)),
+      depends: p.depends, required: p.required || !!p.requiredIn?.includes(mode), bundled: p.bundled, dir: p.dir, blockedBy: p.blockedBy || null,
+      enabled: !p.broken && (p.required || p.requiredIn?.includes(mode) || !disabled.has(p.id)),
       loaded: loadedIds().has(p.id),
       broken: p.broken || null,
       loadError: (loadedIds().has(p.id) && running.get(p.id).mainModules.map(loadFailure).find(Boolean)?.split('\n')[0]) || null,

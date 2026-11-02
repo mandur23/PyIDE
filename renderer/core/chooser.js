@@ -1,6 +1,7 @@
 // The start chooser (main/windows.js): which app this process runs, Code (the IDE) or Craft (the Minecraft app), picked
 // from a Dock. Picking an icon answers main, which opens the main window in that mode; Esc or the close button quits.
-// Main checks for updates meanwhile (main/features/updater.js), and a new version gets an icon of its own in the Dock.
+// Main checks for updates meanwhile (main/features/updater.js), and a new version gets an icon of its own in the Dock:
+// a click downloads it, the next one installs it.
 (() => {
   const product = new URLSearchParams(location.search).get('product') || 'Nano Studio';
   const $ = (id) => document.getElementById(id);
@@ -22,6 +23,7 @@
     const c = cards[card.dataset.mode];
     card.querySelector('.chooser-name').textContent = c.name;
     card.querySelector('.chooser-sub').textContent = c.sub;
+    card.setAttribute('aria-label', `${c.name}, ${c.sub}`);
     hoverFocus(card);
     card.onclick = () => {
       if (picked) return;
@@ -40,10 +42,10 @@
   const skipped = () => window.__initialSettings?.['updates.skippedVersion'] === state.available;
   // What the update icon says, by how this copy updates; null when there is nothing to offer.
   function offer() {
-    const { phase, available: version, percent = 0, kind, signature, version: current } = state;
+    const { phase, available: version, percent = 0, kind, version: current } = state;
     if (!version || skipped()) return null;
     if (phase === 'downloading') return tr('Downloading Nano Studio {version}… {percent}%', { version, percent });
-    if (phase === 'downloaded') return signature === 'verified' ? tr('Nano Studio {version} is ready to install', { version }) : tr('Restart to Update');
+    if (phase === 'downloaded') return tr('Restart to Update');
     if (phase === 'error') return tr('Could not download Nano Studio {version}.', { version });
     if (phase !== 'available') return null;
     if (kind === 'source') return tr('Nano Studio updates itself only when it was installed with the Nano Studio installer.');
@@ -53,10 +55,11 @@
     const { phase, version, checks, error } = state;
     $('chooserVersion').textContent = version || '';
     const text = offer();
-    const busy = phase === 'downloading' || (phase === 'downloaded' && state.signature === 'verified');
+    const busy = phase === 'downloading';
     update.hidden = $('chooserSep').hidden = !text;
     $('chooserUpdateTip').textContent = text || '';
     update.title = text || '';
+    update.setAttribute('aria-label', text || '');
     document.body.classList.toggle('updating', busy);
     $('chooserRing').hidden = !busy;
     $('chooserRingBar').setAttribute('stroke-dashoffset', String(RING * (1 - (state.percent || 0) / 100)));

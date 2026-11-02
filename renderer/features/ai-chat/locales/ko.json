@@ -1,4 +1,6 @@
 {
+  "Not sent, because it could not be read: {names}": "읽을 수 없어 보내지 않았어요: {names}",
+  "Only the start of these files was sent: {names}": "다음 파일은 앞부분만 보냈어요: {names}",
   "AI Chat (Claude)": "AI 채팅 (Claude)",
   "A chat tool window about your code, with file and selection context, and commit messages written from the staged diff, with Claude Code signed in to your Claude subscription.": "파일과 선택 영역을 컨텍스트로 코드에 관해 대화하는 채팅 도구 창과, 스테이징된 diff로 작성하는 커밋 메시지입니다. Claude 구독으로 로그인한 Claude Code를 사용합니다.",
   "AI Chat": "AI 채팅",

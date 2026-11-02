@@ -502,17 +502,24 @@ int main() {
 
   // ---------- run configuration: Maven / Gradle ----------
   // Goals or tasks run through the project's wrapper (mvnw.cmd, gradlew.bat) or mvn / gradle on PATH, with the
-  // project's JDK as JAVA_HOME. A Spring Boot project runs this way: its classpath comes from the build tool.
+  // project's JDK as JAVA_HOME. A Spring Boot project runs this way: its classpath comes from the build tool, and its
+  // profiles, port, VM options and arguments are fields of their own.
+  const isSpringRun = (c) => /(^|\s)(spring-boot:run|bootRun)(\s|$)/.test(c.goals || '');
+  const springOf = (c) => ({ profiles: c.springProfiles, port: c.springPort, vmOptions: c.vmOptions, args: c.params });
   const buildType = {
     type: 'build', title: tr('Maven / Gradle'), icon: 'maven', needsInterp: false,
     fields: [
       { key: 'tool', label: tr('Build tool'), kind: 'select', options: () => [['maven', 'Maven'], ['gradle', 'Gradle']] },
-      { key: 'goals', label: tr('Goals or tasks'), placeholder: 'spring-boot:run' },
+      { key: 'goals', label: tr('Goals or tasks'), placeholder: 'spring-boot:run', redraw: true },
+      { key: 'springProfiles', label: tr('Active profiles'), placeholder: 'dev,local', shown: isSpringRun },
+      { key: 'springPort', label: tr('Server port'), placeholder: '8080', shown: isSpringRun },
+      { key: 'vmOptions', label: tr('VM options'), placeholder: '-Xmx512m', shown: isSpringRun },
+      { key: 'params', label: tr('Program arguments'), placeholder: '--spring.main.banner-mode=off', shown: isSpringRun },
       { key: 'cwd', label: tr('Working directory'), placeholder: tr('Defaults to the project root') },
       { key: 'env', label: tr('Environment variables'), placeholder: tr('NAME=value;OTHER=value') },
       { key: 'jdk', label: tr('JDK'), kind: 'select', options: toolchainOptions('jdk') },
     ],
-    defaults: () => ({ tool: 'maven', goals: '', cwd: '', env: '', jdk: '' }),
+    defaults: () => ({ tool: 'maven', goals: '', springProfiles: '', springPort: '', vmOptions: '', params: '', cwd: '', env: '', jdk: '' }),
     identity: (c) => `${c.tool}:${(c.goals || '').trim()}|${(c.cwd || '').trim().toLowerCase()}`,
     file: () => null,
     async start(cfg, s) {
@@ -531,7 +538,7 @@ int main() {
         s.setIcon('error', 'failed');
         return;
       }
-      const { id, command, firstRun } = await ide.api.invoke('toolchains:build', { tool: cfg.tool, goals: cfg.goals, cwd, env: r.parseEnv(cfg.env), jdk: jdk && { home: jdk.home } });
+      const { id, command, firstRun } = await ide.api.invoke('toolchains:build', { tool: cfg.tool, goals: cfg.goals, spring: springOf(cfg), cwd, env: r.parseEnv(cfg.env), jdk: jdk && { home: jdk.home } });
       con.append(`${command}\n`, 'sys');
       if (firstRun && !synced.has(cwd.toLowerCase())) {
         const tool = cfg.tool === 'maven' ? 'Maven' : 'Gradle';
@@ -557,7 +564,7 @@ int main() {
           const jdk = await resolve('jdk', cfg.jdk);
           if (!(await afterSync(cwd, (text) => con.append(text, 'sys'), cancelled)) || cancelled()) return null;
           const { id, command, firstRun } = await ide.api.invoke('toolchains:build', {
-            tool: cfg.tool, goals: cfg.goals, cwd, env: r.parseEnv(cfg.env), jdk: jdk && { home: jdk.home }, debugPort: port,
+            tool: cfg.tool, goals: cfg.goals, spring: springOf(cfg), cwd, env: r.parseEnv(cfg.env), jdk: jdk && { home: jdk.home }, debugPort: port,
           });
           con.append(`${command}\n`, 'sys');
           if (firstRun && !synced.has(cwd.toLowerCase())) {

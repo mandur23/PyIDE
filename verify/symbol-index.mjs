@@ -84,8 +84,11 @@ try {
   await t.js(`(() => { const e = ide.editor.getModel().getFullModelRange().getEndPosition(); ide.editor.executeEdits('t', [{ range: { startLineNumber: e.lineNumber, startColumn: e.column, endLineNumber: e.lineNumber, endColumn: e.column }, text: '\\nclass AddedLater:\\n    pass\\n' }]); return 1; })()`);
   await t.press('Ctrl+S');
   await t.until('!ide.isDirty(ide.activeTab())', 'saved');
+  const repliesBefore = await t.js('__replies.length');
   const added = await gotoClass(t, 'AddedLat', 'AddedLater');
-  const addedReply = await settle(t);
+  await settle(t);
+  // A later ask may answer that nothing changed: the reply that carried the class counts.
+  const addedReply = (await t.js(`__replies.slice(${repliesBefore})`)).find((r) => r.files) || { files: 0, paths: [] };
   record(added.ok && addedReply.files === 1 && /mod0\.py$/.test(addedReply.paths[0]), `a saved class is found; only its file is sent (${JSON.stringify(addedReply.paths)})`);
 
   // A save inside a function body leaves the symbols as they were: nothing is sent.

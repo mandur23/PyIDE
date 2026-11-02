@@ -11,6 +11,18 @@ const TOOL = /^[\w+.-]+$/;
 // What New Project runs in the background so the first run starts quickly, like IntelliJ's import. Maven resolves the
 // dependencies and the plugins; Gradle's dependencies task reads only the metadata, so the classes are compiled, which
 // downloads the jars too. -B leaves out Maven's transfer progress lines.
+// The run configuration's Spring Boot fields go on a cmd.exe command line in double quotes, so they hold words only.
+const SPRING_WORDS = /^[\p{L}\p{N}_:.=,@/\\+\- ]*$/u;
+function springOptions(s) {
+  const field = (name, value) => {
+    const text = String(value ?? '').trim().replace(/\s+/g, ' ');
+    if (!SPRING_WORDS.test(text) || text.endsWith('\\')) throw Object.assign(new Error(`${name} may hold letters, digits and : . = , @ / \\ + - only: ${text}`), { expected: true });
+    return text;
+  };
+  const port = field('The server port', s?.port);
+  if (port && !(/^\d+$/.test(port) && Number(port) > 0 && Number(port) < 65536)) throw Object.assign(new Error(`Not a port: ${port}`), { expected: true });
+  return { profiles: field('Active profiles', s?.profiles).replace(/ /g, ''), port, vm: field('VM options', s?.vmOptions), args: field('Program arguments', s?.args) };
+}
 const SYNC_GOALS = { maven: '-B dependency:go-offline', gradle: 'classes testClasses' };
 
 // -> {code, out}; a probe that hangs (a broken compiler waiting on something) counts as failed after 10 seconds, and
@@ -38,7 +50,9 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
   // nobody asked for it. debugPort: the application's JVM listens there for the debugger (JDWP, suspended until it
   // attaches): Maven's spring-boot:run gets it as -Dspring-boot.run.jvmArguments (the plugin forks that JVM), other
   // Maven goals through MAVEN_OPTS (exec:java runs in Maven's own JVM), and Gradle's JavaExec tasks (bootRun, run)
-  // through an init script.
+  // through an init script. spring: {profiles, port, vmOptions, args} for spring-boot:run and bootRun, the run
+  // configuration's Spring Boot fields: Maven's plugin takes them as properties, and Gradle takes the arguments as
+  // --args and the VM options through the same init script.
   let debugScripts = 0;
   ipcMain.handle('toolchains:build', (_e, spec = {}) => {
     const { tool, cwd, env = {}, jdk, sync, debugPort } = spec;
@@ -52,15 +66,28 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
     const extra = jdk?.home && path.isAbsolute(jdk.home) ? { JAVA_HOME: jdk.home } : {};
     let command = `${program} ${goals.trim()}`;
     let initScript = null;
+    const springRun = /(^| )spring-boot:run( |$)/.test(goals.trim());
+    const spring = !sync && (springRun || /(^| )bootRun( |$)/.test(goals.trim())) ? springOptions(spec.spring) : null;
+    const jvm = spring?.vm ? [spring.vm] : [];
     if (debugPort !== undefined) {
       if (!Number.isInteger(debugPort) || debugPort < 1024 || debugPort > 65535) throw new Error(`Bad debug port ${debugPort}`);
       const agent = `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debugPort}`;
-      if (tool === 'gradle') {
-        initScript = path.join(os.tmpdir(), `pyide-debug-${process.pid}-${++debugScripts}.gradle`);
-        fs.writeFileSync(initScript, `allprojects {\n    tasks.withType(JavaExec).configureEach { jvmArgs '${agent}' }\n}\n`);
-        command += ` --init-script "${initScript}"`;
-      } else if (/(^| )spring-boot:run( |$)/.test(goals.trim())) command += ` "-Dspring-boot.run.jvmArguments=${agent}"`;
+      if (tool === 'gradle' || springRun) jvm.unshift(agent);
       else extra.MAVEN_OPTS = `${env.MAVEN_OPTS || process.env.MAVEN_OPTS || ''} ${agent}`.trim();
+    }
+    const appArgs = [spring?.port && `--server.port=${spring.port}`, tool === 'gradle' && spring?.profiles && `--spring.profiles.active=${spring.profiles}`, spring?.args].filter(Boolean).join(' ');
+    if (tool === 'gradle') {
+      if (jvm.length) {
+        initScript = path.join(os.tmpdir(), `pyide-debug-${process.pid}-${++debugScripts}.gradle`);
+        const list = jvm.join(' ').split(/ +/).map((a) => `'${a.replace(/\\/g, '\\\\')}'`).join(', ');
+        fs.writeFileSync(initScript, `allprojects {\n    tasks.withType(JavaExec).configureEach { jvmArgs ${list} }\n}\n`);
+        command += ` --init-script "${initScript}"`;
+      }
+      if (appArgs) command += ` "--args=${appArgs}"`;
+    } else {
+      if (jvm.length) command += ` "-Dspring-boot.run.jvmArguments=${jvm.join(' ')}"`;
+      if (spring?.profiles) command += ` "-Dspring-boot.run.profiles=${spring.profiles}"`;
+      if (appArgs) command += ` "-Dspring-boot.run.arguments=${appArgs}"`;
     }
     // Nothing downloaded yet (the wrapper's build tool, the dependency cache): the first run takes minutes.
     const home = process.env.PYIDE_BUILD_HOME || os.homedir();

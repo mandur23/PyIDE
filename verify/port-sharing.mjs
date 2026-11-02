@@ -8,7 +8,7 @@
 // database; a TCP server's warning says what bore exposes; a game server's port is private from Share and left alone by
 // automatic sharing, after a restart too; a tunnel is never answered for in the wrong mode; without cloudflared, Share
 // offers the Install Manager download; the window in Korean.
-// Ports 9782-9783 for the IDE; the servers listen on 18631-18644.
+// Ports 9782-9783 for the IDE; the servers listen on 18631-18646.
 import { spawn } from 'child_process';
 import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -218,6 +218,19 @@ try {
   const fromRow = await tunnelsOf(18643);
   check(fromRow[0].private && boreLines().at(-1).endsWith(' keyed') && !(await js(`!!document.querySelector('#portsDontAsk')`)), `Share in the Ports window keeps a game server private, even after Don't ask again (${q(fromRow[0])})`);
   check(await js(`document.querySelector('#portsList .ports-row[data-port="18643"] .ports-private')?.textContent === 'Private'`) && !(await js(`!!document.querySelector('#portsList .ports-row[data-port="18643"] .ports-url')`)), 'its row says Private and shows no address');
+  // Share pressed before the server listens: the tunnel says it is starting, and polling leaves it until the port opens.
+  const early = js(`ide.api.invoke('ports:share', 18645, { private: true }).then(() => 'ok', (e) => e.message)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18645 && t.state === 'starting')`, 'a share waiting for its port', 5000);
+  await new Promise((r) => { setTimeout(r, 4000); });
+  check(await js(`ide.ports.state().tunnels.some((t) => t.port === 18645 && t.state === 'starting')`), 'a share pressed before the port opens says it is starting, through the polls');
+  await startServer(18645);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18645 && t.state === 'shared')`, 'the waiting share', 30000);
+  check(await early === 'ok', 'and it goes on once the server listens');
+  await js(`ide.api.invoke('ports:unshare', 18645)`);
+  const cancelled = js(`ide.api.invoke('ports:share', 18646).then(() => 'ok', (e) => e.message)`);
+  await until(`ide.ports.state().tunnels.some((t) => t.port === 18646)`, 'a share of a port nobody opens', 5000);
+  await js(`ide.api.invoke('ports:unshare', 18646)`);
+  check(await cancelled === 'ok' && !(await tunnelsOf(18646)).length, 'Stop Sharing cancels the wait');
   const wrongWay = await js(`ide.api.invoke('ports:share', 18643, { private: false }).then(() => 'shared', (e) => e.message)`);
   const otherWay = await js(`ide.api.invoke('ports:share', 18644, { private: true }).then(() => 'shared', (e) => e.message)`);
   check(/already shared privately/.test(wrongWay) && /already shared publicly/.test(otherWay) && (await tunnelsOf(18643))[0].private && !(await tunnelsOf(18644))[0].private && boreLines().length === 1,

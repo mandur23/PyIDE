@@ -78,7 +78,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && p.toLowerCase().startsWith(ide.root.toLowerCase()) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');
@@ -2598,7 +2598,8 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   if (last && await reachable(last)) await ide.openProject(last);
   else await ide.reloadInterpreters();
   if (!ide.root) document.body.classList.add('no-project');
-  await ide.layouts?.restored();
+  // A file on a share that does not answer must not hold the window back.
+  await Promise.race([ide.layouts?.restored(), new Promise((r) => { setTimeout(r, 8000); })]);
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
   if (craftHome && ide.root) ide.emit('craftReady', { host: $('craftHost') });

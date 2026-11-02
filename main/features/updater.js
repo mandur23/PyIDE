@@ -228,7 +228,6 @@ function start({ ipcMain, app, send, diagnostics }) {
   // PYIDE_CHANGELOG replaces the shipped CHANGELOG.md (verify/updater.mjs).
   const changelog = readChangelog(process.env.PYIDE_CHANGELOG || path.join(app.getAppPath(), 'CHANGELOG.md'));
   let afterUpdate = notesAfterUpdate(changelog, state.version, state.seenVersion);
-  if (state.seenVersion !== state.version) { state.seenVersion = state.version; saveHistory(); }
   const setState = (patch) => {
     state = { ...state, ...patch };
     send('updater:state', state);
@@ -297,6 +296,8 @@ function start({ ipcMain, app, send, diagnostics }) {
   ipcMain.handle('updater:releaseNotes', () => {
     const notes = { version: state.version, afterUpdate, all: sectionsUpTo(changelog, state.version) };
     afterUpdate = [];
+    // Here and not at the start: a start chooser closed without picking an app has shown no notes.
+    if (state.seenVersion !== state.version) { state.seenVersion = state.version; saveHistory(); }
     return notes;
   });
 
@@ -445,17 +446,22 @@ function start({ ipcMain, app, send, diagnostics }) {
   // It runs before any renderer of the app, so these read the settings the renderer's check reads.
   async function checkAtStart(settings) {
     const value = String(settings?.['updates.feedUrl'] ?? state.defaultFeed ?? '').trim();
-    if (settings?.['updates.checkOnStartup'] === false || !value) return;
+    if (settings?.['updates.checkOnStartup'] === false || settings?.['powerSave.enabled'] === true || !value) return;
+    // A folder feed is read with sync calls, which on a share that does not answer hold the main process for ~20 s.
+    if (!/^https?:/i.test(value)) {
+      const dir = /^file:/i.test(value) ? fileURLToPath(value) : value;
+      const answers = await Promise.race([fs.promises.access(dir).then(() => true, () => true), new Promise((r) => { setTimeout(r, 3000, false); })]);
+      if (!answers) return void log.warn(`update feed ${dir} does not answer`);
+    }
     try { await check(value, { channel: settings?.['updates.channel'] }); } catch (err) { log.warn(`update check failed: ${err.message}`); }
   }
-  // The update icon. Nothing is open that could lose work, so a verified download installs at once, unless the user has
-  // picked an app meanwhile: its window offers the restart. A download from a feed nobody signs waits for a second click.
-  async function updateNow(settings, stillChoosing) {
+  // The update icon: one click downloads, the next installs. Another Nano Studio process may hold unsaved work, and the
+  // installer closes every one of them, so it never starts by itself.
+  async function updateNow(settings) {
     if (state.phase === 'downloaded') return void install();
     if (kind === 'msi') return void openInstaller();
     if (kind !== 'nsis' || !offered) return;
     try { await download({ differential: settings?.['updates.differential'] !== false }); } catch (err) { log.warn(`update download failed: ${err.message}`); }
-    if (state.signature === 'verified' && stillChoosing()) install();
   }
 
   app.on('before-quit', () => feed?.server?.close());
