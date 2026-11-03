@@ -80,8 +80,16 @@
   clock();
   setInterval(clock, 15000);
 
+  // Keys make the focused item the big one until the pointer really moves (Chromium also sends moves when the Dock grows under it).
+  let pointer = '';
+  addEventListener('mousemove', (e) => {
+    const at = `${e.screenX},${e.screenY}`;
+    if (pointer && at !== pointer) document.body.classList.remove('keys');
+    pointer = at;
+  });
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') api.close();
+    if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') document.body.classList.add('keys');
     // Left and Right move along the Dock, as Tab does.
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const items = [...document.querySelectorAll('.chooser-dock button:not([hidden])')];

@@ -141,11 +141,20 @@ try {
     check(S(await pages(9642)).match(/index\.html/) === null, 'no main window opens while the chooser is up');
     check(await c.js(`document.getElementById('chooseUpdate').hidden && document.getElementById('chooserStatus').textContent === ''`), 'with no update feed the Dock has no update icon and nothing is checked');
     const big = (id) => `document.querySelector('#${id} .chooser-icon').getBoundingClientRect().width`;
+    await sleep(400);
+    check(await c.js(`${big('chooseCode')} < 90 && ${big('chooseCraft')} < 90 && getComputedStyle(document.querySelector('#chooseCode .chooser-label')).display === 'none'`),
+      'at start no icon is big and no name shows, though Code has the focus');
     await c.key('ArrowRight', 39);
     await c.until(`document.activeElement.id === 'chooseCraft' && ${big('chooseCraft')} > 110 && ${big('chooseCode')} < 90`, 'Craft grows as Code shrinks');
     check(await c.js(`getComputedStyle(document.querySelector('#chooseCraft .chooser-label')).display`) === 'block', 'Right moves along the Dock: the icon grows and shows its name');
     await c.key('ArrowLeft', 37);
-    await c.until(`document.activeElement.id === 'chooseCode'`, 'back on Code');
+    await c.until(`document.activeElement.id === 'chooseCode' && ${big('chooseCode')} > 110`, 'back on Code');
+    const craft = await c.js(`(() => { const r = document.querySelector('#chooseCraft').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    for (const dx of [0, 2]) await c.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: craft.x + dx, y: craft.y });
+    await c.until(`${big('chooseCraft')} > 110 && ${big('chooseCode')} < 90 && getComputedStyle(document.querySelector('#chooseCraft .chooser-label')).display === 'block'`, 'the pointer grows Craft and shrinks Code');
+    for (const dx of [0, 2]) await c.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 40 + dx, y: 200 });
+    await c.until(`${big('chooseCraft')} < 90 && ${big('chooseCode')} < 90`, 'off the Dock every icon is small again');
+    check(true, 'the pointer grows the icon under it, and leaving the Dock shrinks it');
     console.log(`screenshot: ${await c.shot('chooser.png')}`);
     await c.click('#chooseCode');
     const ide = await page(9642, IDE);

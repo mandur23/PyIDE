@@ -30,13 +30,14 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   border-radius: 26px; background: rgba(255, 255, 255, .2); border: 1px solid rgba(255, 255, 255, .3); box-shadow: 0 16px 40px rgba(0, 0, 0, .3); }
 .chooser-card, .chooser-update { position: relative; display: block; border-radius: 19px; outline: none; }
 .chooser-icon { display: block; width: 82px; height: 82px; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .3)); transition: width .14s ease-out, height .14s ease-out; }
-.chooser-card:focus .chooser-icon { width: 118px; height: 118px; }
-.chooser-card:focus::after { content: ''; position: absolute; bottom: -7px; left: 50%; width: 5px; height: 5px; margin-left: -2px; border-radius: 50%; background: #fff; }
+/* The item under the pointer grows, or the one the keyboard moved to (body.keys): the focus the last app gets at start stays small. */
+body:not(.keys) .chooser-card:hover .chooser-icon, body.keys .chooser-card:focus .chooser-icon { width: 118px; height: 118px; }
+body:not(.keys) .chooser-card:hover::after, body.keys .chooser-card:focus::after { content: ''; position: absolute; bottom: -7px; left: 50%; width: 5px; height: 5px; margin-left: -2px; border-radius: 50%; background: #fff; }
 
 /* Above the icon the Dock has made big or left small: the label moves with the item. */
 .chooser-label { position: absolute; bottom: calc(100% + 14px); left: 50%; transform: translateX(-50%); display: none; padding: 6px 12px; border-radius: 8px; max-width: 420px; width: max-content;
   background: rgba(20, 26, 44, .78); text-align: center; pointer-events: none; }
-.chooser-card:focus .chooser-label, .chooser-update:focus .chooser-label { display: block; }
+body:not(.keys) :is(.chooser-card, .chooser-update):hover .chooser-label, body.keys :is(.chooser-card, .chooser-update):focus .chooser-label { display: block; }
 .chooser-name { display: block; font-weight: 600; }
 .chooser-sub { display: block; margin-top: 1px; font-size: 12px; color: rgba(255, 255, 255, .78); }
 
@@ -44,7 +45,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .chooser-update-plate { position: relative; display: grid; place-items: center; width: 82px; height: 82px; border-radius: 19px; background: linear-gradient(#f4f6fb, #cfd6e4);
   box-shadow: 0 6px 10px rgba(0, 0, 0, .25); transition: width .14s ease-out, height .14s ease-out; }
 /* It grows as the others do: one big item keeps the Dock's width, so nothing slides out from under the pointer. */
-.chooser-update:focus .chooser-update-plate { width: 118px; height: 118px; }
+body:not(.keys) .chooser-update:hover .chooser-update-plate, body.keys .chooser-update:focus .chooser-update-plate { width: 118px; height: 118px; }
 .chooser-update-icon { width: 46px; height: 46px; }
 .chooser-ring { position: absolute; inset: 6px; }
 .chooser-ring circle { fill: none; stroke-width: 7; }
