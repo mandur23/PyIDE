@@ -68,6 +68,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/core-lifecycle.mjs
+      - name: watch-overflow
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/watch-overflow.mjs
       - name: app-mode
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

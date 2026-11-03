@@ -10,13 +10,17 @@
 // and typed pack addresses under the join code's rule. Archives that lie about their sizes or share their data, and a
 // server's modpack keeping to the allowed hosts. The Store launcher (no --workDir, its own profiles file), the server
 // list ping against stand-in TCP servers (real answers and garbage), retries of a service, a download's limit and the
-// pack file server.
+// pack file server. Then the servers' main side (main/features/minecraft.js, Electron stubbed, stand-in services): what
+// a quit sends a server, Velocity forwarding for each Paper version and undone with the last proxy, the Market while a
+// server runs and a dependency that fails, a modpack server's client pack with added mods, one Java download for two
+// starts, a damaged ko_kr.json, and a create cut off half-way.
 // Usage: node verify/minecraft-launcher-core.mjs
 import { spawn } from 'child_process';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import http from 'http';
-import { createRequire } from 'module';
+import Module, { createRequire } from 'module';
 import net from 'net';
 import { networkInterfaces, tmpdir } from 'os';
 import path from 'path';
@@ -546,6 +550,188 @@ try {
     c.once('error', () => resolve(false));
   });
   check(sockets === '127.0.0.1' && open !== true, `the pack server listens on loopback only (through this computer's own network address: ${open})`);
+
+  // ---------- the servers' main side ----------
+  {
+    process.env.PYIDE_TRUST_ALL = '1';
+    process.env.PYIDE_INSTALL_ROOT = path.join(work, 'install-root');
+    const routes = new Map(); // path -> Buffer | JSON
+    const asked = [];
+    const stand = http.createServer((q, r) => {
+      const p = q.url.split('?')[0];
+      asked.push(p);
+      const body = routes.get(p);
+      if (body === undefined) { r.writeHead(404); return r.end(); }
+      // The Java archive takes a moment, so two starts overlap on it.
+      setTimeout(() => r.end(Buffer.isBuffer(body) ? body : S(body)), p.endsWith('.zip') ? 400 : 0);
+    });
+    await new Promise((resolve) => { stand.listen(0, '127.0.0.1', resolve); });
+    const sb = `http://127.0.0.1:${stand.address().port}`;
+    process.env.PYIDE_MC_SOURCES = S({ paper: `${sb}/paper`, adoptium: `${sb}/adoptium`, modrinth: `${sb}/modrinth`, mojang: `${sb}/mojang/manifest.json` });
+    const load = Module._load;
+    const stub = new Proxy({}, { get: (_t, key) => (key === 'app' ? { getPath: () => work, on() {}, isPackaged: false, getVersion: () => '0.0.0', getName: () => 'test' } : class {}) });
+    Module._load = function loadWithoutElectron(request, parent, isMain) { return request === 'electron' ? stub : load.call(this, request, parent, isMain); };
+    const feature = require('../main/features/minecraft.js');
+    Module._load = load;
+    const handlers = new Map();
+    const procs = new Map();
+    const started = [];
+    const startProcess = (cmd, args, opts) => { const id = started.length + 1; procs.set(id, new EventEmitter()); started.push(opts); return id; };
+    feature.register({ ipcMain: { handle: (h, fn) => handlers.set(h, fn), on() {} }, send() {}, startProcess, procs, diagnostics: { logger: () => ({ warn() {}, info() {} }) } });
+    const call = (name, ...args) => handlers.get(name)({}, ...args);
+    const proj = path.join(work, 'servers-project');
+    const srvDir = (n) => path.join(proj, 'servers', n);
+    // A server made by hand: its description and server.properties. `elsewhere` is a folder outside servers/, which no
+    // players session watches.
+    const serverAt = (dir, desc, props = '') => { write(path.join(dir, 'pyide-server.json'), S({ java: 21, memory: '1G', launch: { jar: 'server.jar' }, ...desc })); write(path.join(dir, 'server.properties'), props); return dir; };
+    const elsewhere = (n) => path.join(proj, 'elsewhere', n);
+    const text = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
+
+    // Quitting the app: the server is asked to save, as Stop does, and has a minute.
+    serverAt(elsewhere('quitPaper'), { kind: 'paper', mc: '1.20.1' });
+    serverAt(elsewhere('quitProxy'), { kind: 'velocity', mc: '3.4.0' });
+    const quitPaper = call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitPaper') });
+    call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitProxy') });
+    check(started[0].quitInput === 'stop\n' && started[1].quitInput === 'end\n' && started.every((o) => o.quitWaitMs === 60000),
+      `a server is started with what a quit sends it: "stop" ("end" for a Velocity proxy) and 60 s to save (${S(started.map((o) => [o.quitInput, o.quitWaitMs]))})`);
+    procs.get(quitPaper).emit('close', 0);
+
+    // Velocity: each Paper or Purpur takes modern forwarding in the file its version reads; one older than 1.13 is left out.
+    const proxyDir = serverAt(srvDir('proxy'), { kind: 'velocity', mc: '3.4.0' }, 'server-port=25600\n');
+    write(path.join(proxyDir, 'forwarding.secret'), 'the-secret');
+    serverAt(srvDir('modern'), { kind: 'paper', mc: '1.20.1' }, 'server-port=25601\n');
+    serverAt(srvDir('legacy'), { kind: 'purpur', mc: '1.16.5' }, 'server-port=25602\nonline-mode=true\n');
+    serverAt(srvDir('ancient'), { kind: 'paper', mc: '1.12.2' }, 'server-port=25603\nonline-mode=false\n');
+    // What an older Nano Studio wrote into the 1.12.2 server: paper-global.yml, which it never reads, and account checks off.
+    write(path.join(srvDir('ancient'), 'config', 'paper-global.yml'), "proxies:\n  velocity:\n    enabled: true\n    online-mode: true\n    secret: 'the-secret'\n");
+    write(path.join(srvDir('legacy'), 'paper.yml'), 'config-version: 20\nsettings:\n  console-has-all-permissions: false\n');
+    const wired = await call('minecraft:wireProxy', proj, proxyDir);
+    const toml = text(path.join(proxyDir, 'velocity.toml'));
+    const legacyYml = text(path.join(srvDir('legacy'), 'paper.yml'));
+    const onlineOf = (n) => /^online-mode=(\w+)$/m.exec(text(path.join(srvDir(n), 'server.properties')) || '')?.[1];
+    check(/^"modern" = "127\.0\.0\.1:25601"$/m.test(toml) && /^"legacy" = "127\.0\.0\.1:25602"$/m.test(toml) && !/ancient/.test(toml)
+      && S(wired.skipped) === S([{ name: 'ancient', mc: '1.12.2' }]), `the proxy sends players to the 1.13+ servers and names the older one it leaves out (${S(wired)})`);
+    check(/^proxies:\n {2}velocity:\n {4}enabled: true\n {4}online-mode: true\n {4}secret: 'the-secret'$/m.test(text(path.join(srvDir('modern'), 'config', 'paper-global.yml')) || '') && onlineOf('modern') === 'false',
+      'a 1.19+ server takes the secret in config/paper-global.yml');
+    check(/^settings:\n {2}velocity-support:\n {4}enabled: true\n {4}online-mode: true\n {4}secret: 'the-secret'\n {2}console-has-all-permissions: false$/m.test(legacyYml || '')
+      && /^config-version: 20$/m.test(legacyYml) && !existsSync(path.join(srvDir('legacy'), 'config', 'paper-global.yml')) && onlineOf('legacy') === 'false',
+    `a 1.13 to 1.18 server takes it in paper.yml (settings.velocity-support), where that version reads it (${S(legacyYml)})`);
+    check(onlineOf('ancient') === 'true' && /enabled: false/.test(text(path.join(srvDir('ancient'), 'config', 'paper-global.yml'))) && !existsSync(path.join(srvDir('ancient'), 'paper.yml')),
+      'a server older than 1.13 keeps its account checks, and the ones an older Nano Studio turned off come back on');
+    rmSync(proxyDir, { recursive: true, force: true });
+    await call('minecraft:rewireProxies', proj);
+    const listed = await call('minecraft:servers', proj);
+    check(/velocity:\n {4}enabled: false/.test(text(path.join(srvDir('modern'), 'config', 'paper-global.yml'))) && /velocity-support:\n {4}enabled: false/.test(text(path.join(srvDir('legacy'), 'paper.yml')))
+      && onlineOf('modern') === 'true' && onlineOf('legacy') === 'true' && !listed.some((s) => s.offline),
+    `with the last proxy deleted its servers take direct joins again: forwarding off, account checks on (${S(listed.map((s) => [s.name, s.offline]))})`);
+
+    // The Market while the server runs: Java holds its jars, so an update or a removal waits for Stop.
+    const modded = serverAt(elsewhere('modded'), { kind: 'forge', mc: '1.20.1', loader: '47.9.9',
+      market: { MODA: { title: 'Mod A', version: '1.0', versionId: 'va1', files: ['mods/mod-a-1.0.jar'], needs: [], dependency: false } } });
+    write(path.join(modded, 'mods', 'mod-a-1.0.jar'), 'mod a 1.0');
+    const jar = (name, data) => { routes.set(`/files/${name}`, Buffer.from(data)); return { filename: name, url: `${sb}/files/${name}`, primary: true, size: data.length, hashes: { sha512: sha512(Buffer.from(data)) } }; };
+    routes.set('/modrinth/project/MODA', { id: 'MODA', title: 'Mod A', server_side: 'required' });
+    routes.set('/modrinth/project/MODA/version', [{ id: 'va2', version_number: '2.0', version_type: 'release', files: [jar('mod-a-2.0.jar', 'mod a 2.0')], dependencies: [] }]);
+    const moddedRun = call('minecraft:start', proj, { cmd: 'java', args: [], cwd: modded });
+    const mods = () => readdirSync(path.join(modded, 'mods')).sort();
+    const record = () => JSON.parse(readFileSync(path.join(modded, 'pyide-server.json'), 'utf8')).market || {};
+    const busyUpdate = await errOf(() => call('minecraft:marketInstall', proj, modded, { id: 'MODA', type: 'mod' }, 'job'));
+    const busyRemove = await errOf(() => call('minecraft:marketRemove', proj, modded, 'MODA'));
+    check(/Stop modded first/.test(busyUpdate?.message || '') && /Stop modded first/.test(busyRemove?.message || '') && S(mods()) === S(['mod-a-1.0.jar'])
+      && record().MODA?.version === '1.0' && !asked.includes('/files/mod-a-2.0.jar'),
+    `while the server runs, Update and Remove are refused before anything is downloaded or deleted (${busyUpdate?.message})`);
+    procs.get(moddedRun).emit('close', 0);
+    await call('minecraft:marketInstall', proj, modded, { id: 'MODA', type: 'mod' }, 'job');
+    check(S(mods()) === S(['mod-a-2.0.jar']) && record().MODA?.version === '2.0', `once it has stopped, Update replaces the jar (${S(mods())})`);
+    // A required dependency that fails its checksum after the project's own jar is in: that jar goes too.
+    routes.set('/modrinth/project/MODB', { id: 'MODB', title: 'Mod B', server_side: 'required' });
+    routes.set('/modrinth/project/MODB/version', [{ id: 'vb1', version_number: '1.0', version_type: 'release', files: [jar('mod-b-1.0.jar', 'mod b')], dependencies: [{ project_id: 'LIBX', dependency_type: 'required' }] }]);
+    routes.set('/modrinth/project/LIBX', { id: 'LIBX', title: 'Lib X', server_side: 'required' });
+    routes.set('/modrinth/project/LIBX/version', [{ id: 'vx1', version_number: '1.0', version_type: 'release', files: [{ ...jar('lib-x-1.0.jar', 'lib x'), hashes: { sha512: '0'.repeat(128) } }], dependencies: [] }]);
+    const depFailed = await errOf(() => call('minecraft:marketInstall', proj, modded, { id: 'MODB', type: 'mod' }, 'job'));
+    check(/Checksum mismatch for lib-x-1\.0\.jar/.test(depFailed?.message || '') && S(mods()) === S(['mod-a-2.0.jar']) && !record().MODB,
+      `a dependency that fails takes out the jar installed before it, so mods/ holds nothing pyide-server.json does not record (${S(mods())})`);
+    await call('minecraft:marketRemove', proj, modded, 'MODA');
+    check(S(mods()) === S([]) && !record().MODA, 'a stopped server\'s project is removed');
+
+    // A modpack server's client pack: the modpack, with the mods added since in its overrides.
+    const packSrv = serverAt(srvDir('packsrv'), { kind: 'forge', mc: '1.20.1', loader: '47.9.9', modpack: { name: 'Test Pack', version: '1.0', clientPack: 'client-pack/Test Pack.mrpack' } }, 'server-port=25605\n');
+    const packIndex = { formatVersion: 1, game: 'minecraft', versionId: '1.0', name: 'Test Pack', dependencies: { minecraft: '1.20.1', forge: '47.9.9' }, files: [
+      { path: 'mods/server-mod.jar', hashes: { sha1: '1'.repeat(40) }, env: { client: 'required', server: 'required' }, downloads: ['https://cdn.modrinth.com/s.jar'] },
+      { path: 'mods/client-mod.jar', hashes: { sha1: '2'.repeat(40) }, env: { client: 'required', server: 'unsupported' }, downloads: ['https://cdn.modrinth.com/c.jar'] }] };
+    const originalPack = writeZip([{ name: 'modrinth.index.json', data: Buffer.from(S(packIndex)) }, { name: 'overrides/mods/bundled.jar', data: Buffer.from('bundled') },
+      { name: 'client-overrides/options.txt', data: Buffer.from('client') }]);
+    write(path.join(packSrv, 'client-pack', 'Test Pack.mrpack'), originalPack);
+    for (const m of ['server-mod.jar', 'bundled.jar']) write(path.join(packSrv, 'mods', m), m);
+    const plain = await call('minecraft:clientPack', proj, packSrv);
+    write(path.join(packSrv, 'mods', 'market-mod.jar'), 'added later');
+    const grown = await call('minecraft:clientPack', proj, packSrv);
+    const { openZip } = require('../main/minecraft/zipfile.js');
+    const grownZip = openZip(grown.file);
+    const grownNames = [...grownZip.names].sort();
+    const grownIndex = grownZip.read('modrinth.index.json').toString('utf8');
+    const addedData = grownZip.read('overrides/mods/market-mod.jar')?.toString('utf8');
+    grownZip.close();
+    check(plain.file === path.join(packSrv, 'client-pack', 'Test Pack.mrpack') && S(plain.added) === S([]), 'without added mods the client pack is the modpack itself');
+    check(grown.file !== plain.file && S(grown.added) === S(['market-mod.jar']) && addedData === 'added later' && grownIndex === S(packIndex)
+      && S(grownNames) === S(['client-overrides/options.txt', 'modrinth.index.json', 'overrides/mods/bundled.jar', 'overrides/mods/market-mod.jar'])
+      && readFileSync(plain.file).equals(originalPack),
+    `a mod added to the server goes into the players' pack with everything of the modpack, its client-only mods too (${S(grownNames)})`);
+
+    // Two servers starting at once that need a Java not on this computer: one download.
+    const javaZip = writeZip([{ name: 'jdk-99.0.1+1-jre/bin/java.exe', data: Buffer.from('') }]);
+    routes.set('/adoptium/java.zip', javaZip);
+    routes.set('/adoptium/assets/latest/99/hotspot', [{ binary: { package: { link: `${sb}/adoptium/java.zip`, checksum: crypto.createHash('sha256').update(javaZip).digest('hex'), size: javaZip.length, name: 'java-99.zip' } } }]);
+    const j1 = serverAt(elsewhere('java1'), { kind: 'paper', mc: '1.20.1', java: 99 });
+    const j2 = serverAt(elsewhere('java2'), { kind: 'paper', mc: '1.20.1', java: 99 });
+    const launched = await Promise.allSettled([call('minecraft:launch', proj, j1, 'job'), call('minecraft:launch', proj, j2, 'job')]);
+    check(launched.every((r) => r.status === 'fulfilled' && /temurin-99-jre/.test(r.value.cmd)) && asked.filter((p) => p === '/adoptium/java.zip').length === 1,
+      `two starts that need the same missing Java share one download (${S(launched.map((r) => r.reason?.message || r.value.cmd))}, ${asked.filter((p) => p === '/adoptium/java.zip').length} downloads)`);
+
+    // A ko_kr.json the user broke by hand is not written over.
+    const translation = require('../main/minecraft/translate.js');
+    const tdir = path.join(work, 'translate');
+    write(path.join(tdir, 'mods', 'tm.jar'), writeZip([{ name: 'assets/tm/lang/en_us.json', data: Buffer.from(S({ 'item.tm.gem': 'Gem' })) }]));
+    const koFile = path.join(tdir, 'resourcepack', 'assets', 'tm', 'lang', 'ko_kr.json');
+    write(koFile, '{\n  "item.tm.old": "내가 쓴 줄",\n');
+    let asks = 0;
+    const badPack = await errOf(async () => translation.translateMods(tdir, { mods: translation.scan(tdir).mods, translate: async () => { asks++; return S({ 'item.tm.gem': '보석' }); }, log() {} }));
+    check(badPack?.message.includes(koFile) && /not valid JSON/.test(badPack.message) && text(koFile) === '{\n  "item.tm.old": "내가 쓴 줄",\n' && asks === 0,
+      `a damaged ko_kr.json is refused with its name, and neither asked about nor written over (${badPack?.message})`);
+    write(koFile, '{"item.tm.old": "내가 쓴 줄"}');
+    const fine = await translation.translateMods(tdir, { mods: translation.scan(tdir).mods, translate: async () => S({ 'item.tm.gem': '보석' }), log() {} });
+    check(fine.translated === 1 && S(JSON.parse(text(koFile))) === S({ 'item.tm.old': '내가 쓴 줄', 'item.tm.gem': '보석' }), 'a sound one gets the new line beside the user\'s');
+
+    // A create cut off half-way (the app closed) leaves a folder marked unfinished: not listed, and taken back by the next
+    // create of its name. A folder without the mark is the user's and is never removed.
+    const paperJar = Buffer.from('a stand-in paper jar');
+    routes.set('/mojang/manifest.json', { latest: { release: '1.20.1' }, versions: [{ id: '1.20.1', type: 'release', url: `${sb}/mojang/1.20.1.json` }] });
+    routes.set('/mojang/1.20.1.json', { javaVersion: { majorVersion: 17 } });
+    routes.set('/paper/versions/1.20.1/builds', [{ id: 7, channel: 'STABLE', downloads: { 'server:default': { url: `${sb}/files/paper.jar`, size: paperJar.length, checksums: { sha256: crypto.createHash('sha256').update(paperJar).digest('hex') } } } }]);
+    routes.set('/files/paper.jar', paperJar);
+    const create = (name) => call('minecraft:create', { root: proj, name, kind: 'paper', mc: '1.20.1', memory: '1G', port: 25606, eula: true }, 'job');
+    write(path.join(srvDir('Half'), 'pyide-server.unfinished'), '');
+    write(path.join(srvDir('Half'), 'pyide-server.json'), S({ kind: 'forge', mc: '1.20.1', java: 17, launch: { jar: 'x.jar' } }));
+    write(path.join(srvDir('Half'), 'mods', 'half-downloaded.jar'), 'half');
+    write(path.join(srvDir('Mine'), 'notes.txt'), 'the user\'s own folder');
+    const before = (await call('minecraft:servers', proj)).map((s) => s.name);
+    const blocked = await call('minecraft:blockedNames', proj);
+    check(!before.includes('Half') && S(blocked) === S(['Mine']), `a half-made server is not listed and blocks no name; a folder of the user's does (${S(before)}, ${S(blocked)})`);
+    await create('Half');
+    check(existsSync(path.join(srvDir('Half'), 'server.jar')) && !existsSync(path.join(srvDir('Half'), 'mods', 'half-downloaded.jar')) && !existsSync(path.join(srvDir('Half'), 'pyide-server.unfinished'))
+      && JSON.parse(text(path.join(srvDir('Half'), 'pyide-server.json'))).kind === 'paper' && (await call('minecraft:servers', proj)).some((s) => s.name === 'Half'),
+    'a new create of that name replaces what was left and finishes');
+    const mine = await errOf(() => create('Mine'));
+    check(/not a Nano Studio server/.test(mine?.message || '') && text(path.join(srvDir('Mine'), 'notes.txt')) === 'the user\'s own folder', `a folder of the user's is refused, not removed (${mine?.message})`);
+    routes.set('/files/paper.jar', Buffer.from('a different jar of the same size!!!'.slice(0, paperJar.length)));
+    const cut = await errOf(() => create('Broken'));
+    check(/Checksum|sha/i.test(cut?.message || '') && !existsSync(srvDir('Broken')), `a create that fails leaves nothing (${cut?.message})`);
+    const twins = await Promise.allSettled([create('Twin'), create('Twin')]);
+    check(twins.filter((r) => r.status === 'rejected' && /being made already/.test(r.reason.message)).length === 1 && !existsSync(srvDir('Twin')),
+      `a second create of a name being made is refused, and does not take the first one's folder (${S(twins.map((r) => r.reason?.message))})`);
+    stand.close();
+    delete process.env.PYIDE_MC_SOURCES;
+  }
 } catch (err) {
   check(false, err.stack || err.message);
 }

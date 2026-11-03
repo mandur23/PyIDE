@@ -109,7 +109,9 @@ function detectServer(dir, javaOfJar) {
   return null;
 }
 
-function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, writeServer, readServer }) {
+// unfinished (main/features/minecraft.js): claim(dir) makes a server folder marked as being made, done(dir) unmarks it,
+// undo(dir) removes it.
+function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, fetchFile, writeServer, readServer }) {
   // A server folder made elsewhere becomes one of the project's: copied into servers/ (left where it is when it is
   // there already) and described. Its eula.txt is left as it is: agreeing is the user's.
   async function importServer(src, log) {
@@ -119,17 +121,24 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
     const already = path.resolve(path.dirname(src)).toLowerCase() === path.resolve(parent).toLowerCase();
     if (already && readServer(src)) throw fail(`${path.basename(src)} is one of the project's servers already`);
     const dir = already ? src : path.join(parent, freeName(parent, path.basename(src)));
-    if (!already) {
-      log(`Copying ${src} to ${dir}…\n`);
-      fs.mkdirSync(parent, { recursive: true });
-      await fs.promises.cp(src, dir, { recursive: true, errorOnExist: true });
+    if (!already) unfinished.claim(dir);
+    try {
+      if (!already) {
+        log(`Copying ${src} to ${dir}…\n`);
+        await fs.promises.cp(src, dir, { recursive: true, errorOnExist: true });
+      }
+      const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
+        || javaOfJar(path.join(dir, found.launch.jar || ''));
+      const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java, memory: '2G', launch: found.launch, imported: true };
+      writeServer(dir, desc);
+      if (!already) unfinished.done(dir);
+      log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${java}\n`);
+      return { name: path.basename(dir), dir, ...desc };
+    } catch (err) {
+      // A copy cut off half-way is not left to look like the user's folder.
+      if (!already) unfinished.undo(dir);
+      throw err;
     }
-    const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
-      || javaOfJar(path.join(dir, found.launch.jar || ''));
-    const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java, memory: '2G', launch: found.launch, imported: true };
-    writeServer(dir, desc);
-    log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${java}\n`);
-    return { name: path.basename(dir), dir, ...desc };
   }
 
   // Files and folders dropped on the window (serverDir null) or on one server's card.
@@ -253,7 +262,8 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
         return { path: f.path, from, sum, size: f.fileSize };
       });
       log(`${pack.name} ${pack.version}: Minecraft ${pack.mc}, ${KINDS[pack.kind].title} ${pack.loader}, ${pack.serverFiles} files for the server\n`);
-      srv = await create({ root, name: name || freeName(path.join(root, 'servers'), pack.name), kind: pack.kind, mc: pack.mc, loader: pack.loader, memory, port, eula }, log);
+      // The folder stays marked unfinished until the pack's files are in.
+      srv = await create({ root, name: name || freeName(path.join(root, 'servers'), pack.name), kind: pack.kind, mc: pack.mc, loader: pack.loader, memory, port, eula }, log, { keepUnfinished: true });
       // What create described: a file of the pack named pyide-server.json does not replace it.
       const created = readServer(srv.dir);
       let n = 0;
@@ -272,10 +282,11 @@ function createImports({ root, servers, create, javaFor, javaOfJar, fetchFile, w
       discardDownload(pack.file);
       const desc = { ...created, modpack: { name: pack.name, version: pack.version, clientPack: path.relative(srv.dir, clientPack).replace(/\\/g, '/') } };
       writeServer(srv.dir, desc);
+      unfinished.done(srv.dir);
       log(`${pack.name} is installed in ${path.relative(root, srv.dir)}\n`);
       return { ...srv, ...desc };
     } catch (err) {
-      if (srv) fs.rmSync(srv.dir, { recursive: true, force: true });
+      if (srv) unfinished.undo(srv.dir);
       discardDownload(pack.file);
       throw err;
     }

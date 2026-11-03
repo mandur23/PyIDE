@@ -20,7 +20,17 @@ const parse = (buf) => {
 };
 const strings = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => typeof v === 'string'));
 const packFile = (dir, ns) => path.join(dir, 'resourcepack', 'assets', ns, 'lang', 'ko_kr.json');
-const readPack = (dir, ns) => (fs.existsSync(packFile(dir, ns)) ? strings(parse(fs.readFileSync(packFile(dir, ns)))) : {});
+// The pack's lines for a namespace. A file that is there but not a JSON object (a hand edit gone wrong) is refused: it
+// holds the user's lines, and writing the translation over it would lose them.
+function readPack(dir, ns) {
+  const file = packFile(dir, ns);
+  if (!fs.existsSync(file)) return {};
+  const raw = fs.readFileSync(file);
+  if (!raw.toString('utf8').replace(/^﻿/, '').trim()) return {};
+  const lines = parse(raw);
+  if (!lines) throw Object.assign(new Error(`${file} is not valid JSON: fix it, or move it away, before translating (Nano Studio does not write over its lines)`), { expected: true, code: 'badPack', badPack: true });
+  return strings(lines);
+}
 
 // The format codes of a line, in a canonical order: what a translation must keep.
 const CODES = /%(\d+\$)?[-#+ 0,(]*\d*(\.\d+)?[a-zA-Z%]|§[0-9a-fk-orA-FK-OR]|\n/g;
@@ -52,7 +62,10 @@ function scan(dir) {
         const missing = Object.fromEntries(Object.entries(en).filter(([k, v]) => v.trim() && !own[k] && !pack[k]));
         mods.push({ jar, ns, total: Object.keys(en).length, missing });
       }
-    } catch { skipped.push(jar); } finally { zip?.close(); }
+    } catch (err) {
+      if (err.badPack) throw err;
+      skipped.push(jar);
+    } finally { zip?.close(); }
   }
   return { mods, skipped };
 }

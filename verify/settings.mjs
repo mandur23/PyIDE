@@ -49,6 +49,26 @@ try {
   await a.click('#settingsApply');
   await a.until(`ide.editor.getOption(ide.monaco.editor.EditorOption.fontSize) === 16`, 'font applied');
   check(true, 'Apply changes the editor font live');
+  // An editor a viewer creates keeps the options it set itself (a notebook cell's and the DB console's rulers: [],
+  // the cell's wordWrap: 'off') when an editor setting changes, and follows the others.
+  const own = await a.js(`(() => {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:0;top:0;width:300px;height:80px';
+    document.body.append(host);
+    const ed = ide.createEditor(host, { value: 'x = 1', rulers: [], wordWrap: 'off' });
+    const O = ide.monaco.editor.EditorOption;
+    ide.settings.set('editor.softWrap', true);
+    ide.settings.set('editor.fontSize', 17);
+    const r = { rulers: ed.getOption(O.rulers).length, wrap: ed.getOption(O.wordWrap), font: ed.getOption(O.fontSize),
+      mainRulers: ide.editor.getOption(O.rulers).length, mainWrap: ide.editor.getOption(O.wordWrap) };
+    ide.settings.set('editor.softWrap', false);
+    ide.settings.set('editor.fontSize', 16);
+    ed.dispose();
+    host.remove();
+    return r;
+  })()`);
+  check(own.rulers === 0 && own.wrap === 'off' && own.font === 17 && own.mainRulers === 1 && own.mainWrap === 'on',
+    `a settings change keeps an embedded editor's own rulers and wrapping and still sets its font (${JSON.stringify(own)})`);
 
   // ---------- console cycle buffer ----------
   const buf = `document.querySelector('[data-key="console.cycleBufferKB"]')`;

@@ -43,7 +43,15 @@ setTimeout(() => process.stdout.write('\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::
   + '\\x1b[32m INFO\\x1b[0m \\x1b[2mbore_cli::client\\x1b[0m: listening at bore.pub:40123\\n'), 300);
 setInterval(() => {}, 1000);
 `);
-const env = { PYIDE_CLOUDFLARED: q([process.execPath, fake]), PYIDE_BORE: q([process.execPath, fakeBore]), PYIDE_INSTALL_ROOT: path.join(work, 'root') };
+// netstat as it is, with a line in a log for every run.
+const fakeNetstat = path.join(work, 'fake-netstat.cjs');
+const netstatLog = path.join(work, 'netstat.txt');
+writeFileSync(fakeNetstat, `require('fs').appendFileSync(${q(netstatLog)}, 'run\\n');
+process.stdout.write(require('child_process').execFileSync('netstat', process.argv.slice(2), { encoding: 'latin1', windowsHide: true }), 'latin1');
+`);
+writeFileSync(netstatLog, '');
+const netstatRuns = () => readFileSync(netstatLog, 'utf8').split('\n').filter(Boolean).length;
+const env = { PYIDE_CLOUDFLARED: q([process.execPath, fake]), PYIDE_BORE: q([process.execPath, fakeBore]), PYIDE_NETSTAT: q([process.execPath, fakeNetstat]), PYIDE_INSTALL_ROOT: path.join(work, 'root') };
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'port-sharing');
 // A game-server-like TCP server: it reads a request and closes, never answering HTTP.
 const tcpCode = (port, host = '127.0.0.1') => `require('net').createServer((s) => { s.on('data', () => s.destroy()); s.on('error', () => {}); }).listen(${port}, '${host}')`;
@@ -58,7 +66,18 @@ const fakeTunnels = () => processSnapshot().filter((p) => /fake-(cloudflared|bor
 const a = await launch({ fixture: 'core', port: 9782, name: 'port-sharing', env });
 const { js, until, check, click } = a;
 const outside = spawn(process.execPath, ['-e', serverCode(18632)], { stdio: 'ignore', windowsHide: true });
+// The list is read every 3 s only while something needs it; it ran about 2,400 netstat processes an hour from the
+// start. Idle: nothing the user runs, the Ports window closed, nothing shared.
+const idleLooks = async (label) => {
+  await new Promise((r) => setTimeout(r, 4000));
+  const before = netstatRuns();
+  await new Promise((r) => setTimeout(r, 7000));
+  check(netstatRuns() === before, `${label}, the ports are not read (${netstatRuns() - before} netstat runs in 7 s)`);
+};
 try {
+  for (let i = 0; i < 150 && !netstatRuns(); i++) await new Promise((r) => setTimeout(r, 100));
+  check(netstatRuns() > 0, `the plugin reads the ports once at its start (${netstatRuns()} runs)`);
+  await idleLooks('with nothing running and the Ports window closed');
   const startServer = (port) => js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(serverCode(port))}], ide.root)`);
   const s1 = await startServer(18631);
   await until(`ide.ports.state().ports.some((p) => p.port === 18631)`, 'IDE server listed', 30000);
@@ -112,6 +131,10 @@ try {
   await until(`!ide.ports.state().ports.some((p) => p.port === 18631) && !ide.ports.state().tunnels.length`, 'server gone', 20000);
   await new Promise((r) => setTimeout(r, 1500));
   check(!fakeTunnels().length, 'when the server stops, its row and its tunnel go too');
+  await js(`ide.proc.kill(${counted})`);
+  await js(`(ide.toolWindows.get('Ports').hide(), true)`);
+  await idleLooks('once the servers stopped and the Ports window is closed');
+  await js(`(ide.toolWindows.get('Ports').show(), true)`);
 
   const startCode = (code) => js(`ide.api.invoke('project:exec', ${q(process.execPath)}, ['-e', ${q(code)}], ide.root)`);
   const tcp = await startCode(tcpCode(18635, '0.0.0.0'));

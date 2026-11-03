@@ -1,8 +1,10 @@
 // Core lifecycle under impatient or long use: two projects opened at once end on the last one with one projectOpened,
 // switching projects does not pile up listeners in the main process, closed diff views give their editor back,
 // a program that cannot start in a too-long folder is no internal error, environment errors read as sentences, and a
-// plugin whose main module fails names the plugin. Ports 9276-9277 (9277: the main process's Node inspector).
-import { mkdirSync, writeFileSync } from 'fs';
+// plugin whose main module fails names the plugin; at the end, the quit waits for a program asked to stop and for a
+// holdQuit job, runs the quit handlers once, and kills a program that does not stop. Ports 9276-9277 (9277: the main
+// process's Node inspector).
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 
@@ -12,6 +14,30 @@ const plugin = path.join(userData, 'plugins', 'broken-main');
 mkdirSync(plugin, { recursive: true });
 writeFileSync(path.join(plugin, 'plugin.json'), q({ id: 'broken-main', name: 'Broken Main Demo', version: '1.0.0', main: ['m.js'] }));
 writeFileSync(path.join(plugin, 'm.js'), "throw new Error('boom from m.js');\n");
+// A plugin whose work holds the quit (main.js's quit gate): a program that saves for 2 s after `stop`, one that ignores
+// `stop`, and a holdQuit job of 1 s; each, and the plugin's before-quit and will-quit handlers, leave a timed mark.
+const marks = path.join(userData, 'quit-marks.txt');
+const quitDemo = path.join(userData, 'plugins', 'quit-demo');
+mkdirSync(quitDemo, { recursive: true });
+writeFileSync(path.join(quitDemo, 'plugin.json'), q({ id: 'quit-demo', name: 'Quit Demo', version: '1.0.0', main: ['q.js'] }));
+const saver = `const fs = require('fs'); fs.appendFileSync(${q(marks)}, 'started ' + Date.now() + '\\n');
+process.stdin.on('data', (d) => { if (String(d) === 'stop\\n') setTimeout(() => { fs.appendFileSync(${q(marks)}, 'saved ' + Date.now() + '\\n'); process.exit(0); }, 2000); });`;
+const stubborn = `require('fs').appendFileSync(${q(marks)}, 'stubborn ' + process.pid + '\\n'); process.stdin.on('data', () => {}); setInterval(() => {}, 1000);`;
+writeFileSync(path.join(quitDemo, 'q.js'), `const fs = require('fs');
+const mark = (m) => fs.appendFileSync(${q(marks)}, m + ' ' + Date.now() + '\\n');
+exports.register = ({ ipcMain, app, startProcess, holdQuit }) => {
+  const env = { ELECTRON_RUN_AS_NODE: '1' };
+  ipcMain.handle('quitDemo:start', () => [
+    startProcess(process.execPath, ['-e', ${q(saver)}], { env, quitInput: 'stop\\n', quitWaitMs: 20000 }),
+    startProcess(process.execPath, ['-e', ${q(stubborn)}], { env, quitInput: 'stop\\n', quitWaitMs: 1500 }),
+  ]);
+  holdQuit(() => new Promise((r) => { setTimeout(() => { mark('held'); r(); }, 1000); }), 10000);
+  app.on('before-quit', () => mark('before-quit'));
+  app.on('will-quit', () => mark('will-quit'));
+};
+`);
+const readMarks = () => { try { return readFileSync(marks, 'utf8'); } catch { return ''; } };
+const markTime = (name) => Number(new RegExp(`^${name} (\\d+)$`, 'm').exec(readMarks())?.[1]) || null;
 
 const t = await launch({ fixture: 'core', port: 9276, name: 'core-lifecycle', userData, args: ['--inspect=9277'] });
 const { js, until, check, sleep, cdp } = t;
@@ -123,6 +149,27 @@ try {
   check(!!loadError && /Broken Main Demo/.test(loadError.title || ''), `the load error names the plugin (${q(loadError?.title)})`);
 
   check(t.consoleErrors.length === 0, 'no renderer exceptions');
+
+  // ---------- the quit gate (last: the app quits) ----------
+  await js(`ide.api.invoke('quitDemo:start')`);
+  for (let i = 0; i < 100 && !(markTime('started') && /^stubborn \d+$/m.test(readMarks())); i++) await sleep(100);
+  const stubbornPid = Number(/^stubborn (\d+)$/m.exec(readMarks())?.[1]);
+  const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  // A main-process inspector session that has evaluated code keeps Electron from exiting at all.
+  mainWs.close();
+  await sleep(300);
+  js(`(ide.api.invoke('window:closeNow'), true)`).catch(() => {});
+  const quitAt = Date.now();
+  while (isAlive(t.pid) && Date.now() - quitAt < 60000) await sleep(100);
+  const took = Date.now() - quitAt;
+  const m = readMarks();
+  check(!isAlive(t.pid) && took < 30000, `closing the window quits the app after the work it waits for (${took} ms)`);
+  check(markTime('saved') > markTime('started'), `a program started with quitInput gets it at quit and the time to finish saving (${q(m)})`);
+  check(!!markTime('held'), 'a holdQuit job is waited for');
+  check((m.match(/^before-quit /gm) || []).length === 1 && (m.match(/^will-quit /gm) || []).length === 1,
+    'the quit handlers of the features run once each, though the quit was held and taken up again');
+  check(markTime('will-quit') >= markTime('saved') && markTime('will-quit') >= markTime('held'), 'the will-quit handlers run after the wait, not before it');
+  check(stubbornPid > 0 && !isAlive(stubbornPid), 'a program that does not stop within its quitWaitMs is killed');
 } catch (err) {
   check(false, err.message);
 }

@@ -8,7 +8,7 @@ const { withEnvFiles } = require('../dotenv');
 // Python runs the scripts from the unpacked copy in packaged builds; it cannot read app.asar.
 // A notebook on a Colab runtime runs main/notebook/colab-bridge.js instead (the IDE's Electron as Node), which speaks
 // the same lines to the runtime's Jupyter server; colab:* finds, makes and releases the runtimes (main/notebook/colab.js).
-exports.register = ({ ipcMain, startProcess, appDir, unpackedDir = appDir }) => {
+exports.register = ({ ipcMain, startProcess, holdQuit, appDir, unpackedDir = appDir }) => {
   const script = path.join(unpackedDir, 'renderer', 'features', 'notebook', 'kernel_bridge.py');
   ipcMain.handle('notebook:start', (_e, interp, cwd, paths = []) =>
     startProcess(interp.cmd, [...interp.args, '-u', script, cwd, ...paths], { cwd, env: { PYTHONIOENCODING: 'utf-8' } }));
@@ -96,14 +96,10 @@ exports.register = ({ ipcMain, startProcess, appDir, unpackedDir = appDir }) => 
   handle('colab:release', (_e, name) => release(name));
   // Quitting with notebooks on runtimes they asked for gives those back first (a window's own release may still be on
   // its way), for at most 10 seconds. gcloud waits on localhost for the browser's answer: an unfinished sign-in ends
-  // with the IDE.
-  let released = false;
-  app.on('will-quit', (e) => {
+  // with the IDE. (main.js's quit gate waits.)
+  holdQuit(() => {
     colab.cancelSignIn();
-    if (released || !owned.size && !releasing.size) return;
-    e.preventDefault();
-    released = true;
-    const pending = [...[...owned].map((name) => release(name)), ...releasing].map((p) => p.catch(() => {}));
-    Promise.race([Promise.all(pending), new Promise((r) => setTimeout(r, 10000))]).then(() => app.quit());
-  });
+    if (!owned.size && !releasing.size) return null;
+    return Promise.all([...[...owned].map((name) => release(name)), ...releasing].map((p) => p.catch(() => {})));
+  }, 10000);
 };

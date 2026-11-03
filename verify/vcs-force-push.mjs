@@ -2,7 +2,8 @@
 // as non-fast-forward and PyCharm's Push Rejected question offers Force Push (--force-with-lease, listing the commits it
 // removes); Cancel keeps the remote; a push someone made after the question (even once fetched) is never overwritten;
 // a protected branch (main, master by default; Settings › Git) asks again with a warning. Real mouse input, English,
-// Korean and 1008x681, then main-process checks (fetch first, a lease that no longer matches, no upstream yet).
+// Korean and 1008x681, then main-process checks (fetch first, a lease that no longer matches, no upstream yet, a push
+// to a remote that stops answering ends, and a push still running at quit is killed with its children).
 // Ports 9420-9421.
 import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, appendFileSync } from 'fs';
@@ -10,7 +11,8 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch } from './lib.mjs';
+import net from 'net';
+import { launch, processSnapshot } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -254,9 +256,12 @@ k.close();
 {
   const require = createRequire(path.join(APP, 'main/features/git.js'));
   const handlers = {};
+  const quitHandlers = [];
+  // A transfer that stops moving is given up after 3 s here (60 s in the app).
+  process.env.PYIDE_GIT_STALL_SECONDS = '3';
   require(path.join(APP, 'main/features/git.js')).register({
     ipcMain: { handle: (name, fn) => { handlers[name] = fn; }, on: () => {} },
-    app: { getPath: () => mkdtempSync(path.join(tmpdir(), 'pyide-vcs-force-main-')), on: () => {} },
+    app: { getPath: () => mkdtempSync(path.join(tmpdir(), 'pyide-vcs-force-main-')), on: (event, fn) => { if (event === 'will-quit') quitHandlers.push(fn); } },
   });
   const call = (name, ...args) => handlers[`git:${name}`](null, ...args);
   try {
@@ -294,6 +299,39 @@ k.close();
     const freshForced = freshRej.lease ? await call('push', repo, { lease: freshRej.lease }) : freshRej;
     t.check(freshRej.rejected === 'non-fast-forward' && freshForced.ok && remoteHead(remote, 'fresh') === git(repo, 'rev-parse', 'HEAD') && git(repo, 'rev-parse', '--abbrev-ref', 'fresh@{u}') === 'origin/fresh',
       `a branch without an upstream is force pushed to the branch of its name, which becomes its upstream (${q({ rejected: freshRej.rejected, err: freshForced.err })})`);
+
+    // A remote that takes the connection and never answers: the push ends at the stall limit instead of holding its
+    // git operation until quit.
+    const silent = net.createServer((s) => { s.on('error', () => {}); });
+    await new Promise((r) => { silent.listen(0, '127.0.0.1', r); });
+    const stalled = mkdtempSync(path.join(tmpdir(), 'pyide-vcs-force-stalled-'));
+    writeFileSync(path.join(stalled, 'a.txt'), 'a\n');
+    git(stalled, 'init', '-q');
+    git(stalled, 'add', '-A');
+    git(stalled, 'commit', '-qm', 'Initial commit');
+    git(stalled, 'remote', 'add', 'origin', `http://127.0.0.1:${silent.address().port}/repo.git`);
+    let started = Date.now();
+    const stall = await Promise.race([call('push', stalled), sleep(30000).then(() => null)]);
+    t.check(stall && !stall.ok && Date.now() - started < 20000,
+      `a push to a remote that stops answering gives up (${stall ? `${Date.now() - started} ms: ${stall.err.trim().split(/\r?\n/).pop()}` : 'still running after 30 s'})`);
+
+    // With limits of the repository's own (10 minutes), the same push waits, and quitting kills it with git's helper
+    // (git-remote-http), which would otherwise outlive the IDE.
+    git(stalled, 'config', 'http.lowSpeedLimit', '1');
+    git(stalled, 'config', 'http.lowSpeedTime', '600');
+    const helpers = () => processSnapshot().filter((p) => p.cmd.includes(`127.0.0.1:${silent.address().port}`));
+    const pushing = call('push', stalled);
+    started = Date.now();
+    while (helpers().length < 2 && Date.now() - started < 20000) await sleep(300);
+    const waited = helpers().map((p) => p.name).sort();
+    await sleep(4000);
+    const stillThere = helpers().length;
+    for (const fn of quitHandlers) fn();
+    const ended = await Promise.race([pushing.then(() => true), sleep(10000).then(() => false)]);
+    t.check(waited.length >= 2 && stillThere >= 2 && ended && !helpers().length,
+      `the repository's own limits are kept, and quitting kills a push that is still waiting, its helper too (${q({ waited, stillThere, ended, left: helpers().map((p) => p.name) })})`);
+    for (const p of helpers()) try { process.kill(p.pid); } catch {}
+    silent.close();
   } catch (err) {
     t.check(false, err.message);
   }

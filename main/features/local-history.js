@@ -202,9 +202,10 @@ function createStore(dir, root, limits, onChange, { isEnvironmentError = () => f
   });
   const ignored = createIgnore(root);
 
+  // Not startsWith('..'): a folder named ..data is in the project.
   const relOf = (abs) => {
     const rel = path.relative(root, abs);
-    return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? null : rel;
+    return !rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? null : rel;
   };
   const keyOf = (rel) => rel.toLowerCase();
   const tracked = (rel) => index.files[keyOf(rel)];

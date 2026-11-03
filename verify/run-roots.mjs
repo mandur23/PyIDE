@@ -205,6 +205,26 @@ try {
   await t.press('Ctrl+F2');
   await until(`!ide.run.activeSession().running && ${termText}.includes('Process finished with exit code')`, 'Ctrl+F2 ends the terminal run', 15000);
   check(true, "Stop (Ctrl+F2, pressed in the terminal) ends the program: the IDE's shortcuts work there as in PyCharm's Run console");
+
+  // A rerun or a closed tab disposes the whole terminal. xterm 5.5's device-pixel-ratio monitor, its only window
+  // 'resize' listener, stays unless disposed by hand, and it holds the terminal.
+  await js(`(window.__ttyCfg = ${config({ name: 'forever-rerun', script: 'forever.py', emulateTerminal: true })}, ide.run.runConfig(window.__ttyCfg).then(() => true))`);
+  await until(`${termText}.includes('LONG') && ide.run.activeSession().running`, 'terminal run to rerun', 30000);
+  await js(`(() => { const add = window.addEventListener, remove = window.removeEventListener; window.__resizeNet = 0;
+    window.addEventListener = function (type, ...rest) { if (type === 'resize') window.__resizeNet++; return add.call(this, type, ...rest); };
+    window.removeEventListener = function (type, ...rest) { if (type === 'resize') window.__resizeNet--; return remove.call(this, type, ...rest); };
+    window.__restoreListeners = () => { window.addEventListener = add; window.removeEventListener = remove; };
+    return true; })()`);
+  for (let i = 1; i <= 3; i++) {
+    await js(`(ide.run.activeSession().stop(), true)`);
+    await until(`!ide.run.activeSession().running`, `terminal run stopped (${i})`, 15000);
+    await js(`ide.run.runConfig(window.__ttyCfg).then(() => true)`);
+    await until(`${termText}.includes('LONG') && ide.run.activeSession().running`, `terminal rerun ${i}`, 30000);
+  }
+  await js(`(ide.run.activeSession().tab.querySelector('.run-tab-close').click(), true)`);
+  await sleep(300);
+  const resizeNet = await js(`(window.__restoreListeners(), window.__resizeNet)`);
+  check(resizeNet <= 0, `3 reruns and closing the tab leave no window resize listener behind (net ${resizeNet})`);
   await js(`ide.run.runConfig(${config({ name: 'forever', script: 'forever.py', emulateTerminal: true })}).then(() => true)`);
   await until(`${termText}.includes('LONG') && ide.run.activeSession().running`, 'forever.py again', 30000);
   await js(`ide.run.runConfig(${config({ name: 'use_src', script: 'use_src.py' })}).then(() => true)`);

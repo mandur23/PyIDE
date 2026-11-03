@@ -9,7 +9,8 @@
 // port gets nothing. The key is made for the share, lives here in memory, goes to the client through its environment
 // (argv is visible to other processes, and the app logs it) and never into ports:state or ports:changed. Stopping forgets
 // it. Friends get it from privateShare, through minecraft:privateCode.
-// PYIDE_CLOUDFLARED, PYIDE_BORE (tests): a JSON array, the program and its first arguments run in place of the tool.
+// PYIDE_CLOUDFLARED, PYIDE_BORE, PYIDE_NETSTAT (tests): a JSON array, the program and its first arguments run in place
+// of the tool.
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -30,10 +31,17 @@ const run = (cmd, args) => new Promise((resolve) => {
   execFile(cmd, args, { windowsHide: true, timeout: 20000, maxBuffer: 32 << 20, encoding: 'latin1' }, (err, stdout) => resolve(err ? '' : stdout));
 });
 
+const standIn = (env) => {
+  if (!process.env[env]) return null;
+  try { const argv = JSON.parse(process.env[env]); if (Array.isArray(argv) && argv.length) return argv; } catch {}
+  return null;
+};
+
 // netstat -ano's listening TCP sockets as [{port, pid, address}]. Its state column is localized ("LISTENING",
 // "수신 대기"), so a listener is told by its idle foreign address.
 async function listeners() {
-  const [out, v6] = await Promise.all([run('netstat', ['-ano', '-p', 'TCP']), run('netstat', ['-ano', '-p', 'TCPv6'])]);
+  const [cmd, ...pre] = standIn('PYIDE_NETSTAT') || ['netstat'];
+  const [out, v6] = await Promise.all([run(cmd, [...pre, '-ano', '-p', 'TCP']), run(cmd, [...pre, '-ano', '-p', 'TCPv6'])]);
   const seen = new Map();
   for (const line of `${out}\n${v6}`.split(/\r?\n/)) {
     const p = line.trim().split(/\s+/);
@@ -108,13 +116,8 @@ async function processes() {
 let privateShare = () => null;
 exports.privateShare = (port) => privateShare(port);
 
-exports.register = ({ ipcMain, app, send, unpackedDir }) => {
+exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   const toolchains = createToolchains();
-  const standIn = (env) => {
-    if (!process.env[env]) return null;
-    try { const argv = JSON.parse(process.env[env]); if (Array.isArray(argv) && argv.length) return argv; } catch {}
-    return null;
-  };
   const cloudflared = () => {
     const argv = standIn('PYIDE_CLOUDFLARED');
     if (argv) return argv;
@@ -150,8 +153,15 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     const t = tunnels.get(port);
     return t?.secret && t.state === 'shared' ? { address: t.url, key: t.secret.toString('base64url') } : null;
   };
+  // The list is read every POLL_MS (two netstat runs) only while something needs it: a window shows the Ports tool
+  // window, a port is shared (it ends with its server), or a program the user runs may open a port (it is announced).
+  // Without that, it ran about 2,400 netstat processes an hour from the plugin's start until quit. After the need ends
+  // one more look sees the servers gone, so a port that comes back is announced again.
+  let started = false; // the renderer has asked for the list
   let timer = null;
   let polling = null;
+  const shownIn = new Set(); // webContents ids of windows showing the Ports tool window
+  const needed = () => shownIn.size > 0 || tunnels.size > 0 || programs.count() > 0;
 
   const state = () => ({
     ports,
@@ -204,14 +214,17 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
       if (JSON.stringify(ports) !== was) changed();
     }
   }
+  // Arms the next look unless one is armed; it arms the one after it only while the list is needed.
   function schedule() {
-    clearTimeout(timer);
+    if (!started || timer) return;
     timer = setTimeout(async () => {
       polling = poll().catch(() => {});
       await polling;
-      schedule();
+      timer = null;
+      if (needed()) schedule();
     }, POLL_MS);
   }
+  programs.onChange(schedule);
 
   function stop(port) {
     const t = tunnels.get(port);
@@ -224,8 +237,23 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   }
 
   ipcMain.handle('ports:state', async () => {
-    if (!timer) { await poll().catch(() => {}); schedule(); }
+    if (!started) { started = true; await poll().catch(() => {}); }
+    if (needed()) schedule();
     return state();
+  });
+  // shown: whether the sender shows the Ports tool window now.
+  const tracked = new WeakSet();
+  ipcMain.handle('ports:shown', (e, shown) => {
+    const wc = e.sender;
+    if (shown) shownIn.add(wc.id); else shownIn.delete(wc.id);
+    if (!tracked.has(wc)) {
+      tracked.add(wc);
+      const { id } = wc;
+      // A reloaded page tells again only once it shows the window.
+      wc.on('did-navigate', () => shownIn.delete(id));
+      wc.once('destroyed', () => shownIn.delete(id));
+    }
+    schedule();
   });
   // Looks again now (a run just started), instead of at the next poll.
   ipcMain.handle('ports:refresh', async () => { snapshot = ''; await poll().catch(() => {}); return state(); });
@@ -243,8 +271,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
   ipcMain.handle('ports:setAdded', async (_e, list) => {
     added = new Set((Array.isArray(list) ? list : []).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 65536));
     snapshot = '';
+    started = true;
     await poll().catch(() => {});
-    if (!timer) schedule();
+    if (needed()) schedule();
     return state();
   });
 
@@ -275,6 +304,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     const t = { kind: null, state: 'starting', url: null, error: null, log: '', secret: wanted ? crypto.randomBytes(32) : null, awaited: true };
     tunnels.set(port, t);
     changed();
+    schedule();
     const row = await listening(port);
     t.awaited = false;
     if (tunnels.get(port) !== t) return state();

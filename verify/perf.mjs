@@ -11,7 +11,7 @@ const PKGS = 100;
 const PER_PKG = 100;
 const WIDE = 10000;
 const RUNS = Number(process.env.PERF_RUNS || 3);
-const BUDGET = { readyMs: 1500, treeMs: 1500, expandMs: 100, ipcBlockMs: 100, todosMs: 2000 };
+const BUDGET = { readyMs: 1500, treeMs: 1500, expandMs: 100, ipcBlockMs: 100, todosMs: 2000, gotoTaskMs: 300, gotoKeyMs: 100 };
 
 function generateProject() {
   const dir = path.join(tmpdir(), 'pyide-perf-20k');
@@ -180,6 +180,67 @@ console.log(`scroll frames: ${JSON.stringify(results.scroll)}`);
 check(results.scroll.visible && results.scroll.p95 < 50, `scrolling the 10,000-file folder keeps frames short (p95 ${round(results.scroll.p95)} ms)`);
 await js(`document.getElementById('tree').scrollTop = 0`);
 await clickRow('wide', 'w00000.py');
+
+// Go to File (Ctrl+Shift+N) on the 20,000 files: until its rows are drawn (the project walk included), the longest
+// renderer task meanwhile and the file icons built; then each key of a query, and five keys typed within one frame.
+// Building every file's icon before the popup opened held the renderer for 0.6-1.2 s.
+const gotoRuns = [];
+for (let i = 0; i < RUNS; i++) {
+  gotoRuns.push(await js(`(async () => {
+    const settle = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    const list = document.getElementById('popupList');
+    const input = document.getElementById('popupIn');
+    const rows = () => list.querySelectorAll('.popup-item:not(.hint)').length;
+    const fileIcon = ide.fileIcon;
+    let icons = 0;
+    ide.fileIcon = (...args) => (icons++, fileIcon(...args));
+    let longest = 0;
+    const tasks = new PerformanceObserver((l) => { for (const e of l.getEntries()) longest = Math.max(longest, e.duration); });
+    tasks.observe({ type: 'longtask' });
+    list.replaceChildren();
+    const t0 = performance.now();
+    ide.runAction('GotoFile');
+    await new Promise((resolve) => { const tick = () => (rows() || performance.now() - t0 > 20000 ? resolve() : setTimeout(tick, 1)); tick(); });
+    await settle();
+    const open = performance.now() - t0;
+    const openIcons = icons;
+    const keys = [];
+    for (const ch of 'mod05') {
+      input.value += ch;
+      const t = performance.now();
+      input.dispatchEvent(new Event('input'));
+      await settle();
+      keys.push(performance.now() - t);
+    }
+    const first = list.querySelector('.popup-item.active .label')?.textContent;
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    await settle();
+    let draws = 0;
+    const watch = new MutationObserver((ms) => { draws += ms.filter((m) => m.removedNodes.length).length; });
+    watch.observe(list, { childList: true });
+    const b0 = performance.now();
+    for (const ch of 'w0123') { input.value += ch; input.dispatchEvent(new Event('input')); }
+    await settle();
+    const burst = performance.now() - b0;
+    watch.disconnect();
+    tasks.disconnect();
+    ide.fileIcon = fileIcon;
+    const burstFirst = list.querySelector('.popup-item.active .label')?.textContent;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+    return { open, longestTask: longest, icons: openIcons, keys, first, burst, draws, burstFirst };
+  })()`));
+  await sleep(300);
+}
+results.gotoFile = { open: stats(gotoRuns.map((r) => r.open)), longestTask: stats(gotoRuns.map((r) => r.longestTask)), key: stats(gotoRuns.flatMap((r) => r.keys)),
+  burst: stats(gotoRuns.map((r) => r.burst)), icons: Math.max(...gotoRuns.map((r) => r.icons)), draws: gotoRuns.map((r) => r.draws) };
+console.log(`Go to File: ${JSON.stringify(results.gotoFile)}`);
+check(gotoRuns.every((r) => r.first === 'mod050.py' && r.burstFirst === 'w01230.py'), `Go to File finds mod050.py and w01230.py (${gotoRuns.map((r) => `${r.first}, ${r.burstFirst}`).join('; ')})`);
+check(results.gotoFile.icons <= 200, `opening Go to File builds icons only for the rows it draws (${results.gotoFile.icons} for 20,000 files)`);
+check(results.gotoFile.longestTask.median < BUDGET.gotoTaskMs, `opening Go to File holds the renderer for at most ${results.gotoFile.longestTask.median} ms < ${BUDGET.gotoTaskMs} ms`);
+check(results.gotoFile.key.median < BUDGET.gotoKeyMs, `a key in Go to File shows its rows in ${results.gotoFile.key.median} ms < ${BUDGET.gotoKeyMs} ms`);
+check(gotoRuns.every((r) => r.draws === 1), `five keys typed within one frame draw the rows once (${results.gotoFile.draws.join(', ')})`);
 
 // The longest wait of a trivial IPC call (fs:exists) while `call` runs in the main process.
 const blocking = (label, call) => js(`(async () => {

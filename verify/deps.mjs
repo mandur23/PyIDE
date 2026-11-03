@@ -178,4 +178,24 @@ try {
   t.check(false, err.message);
   await shot('failure.png');
 }
+
+// The IDE is a windowed program, so a console program it starts without windowsHide opens a console window of its own:
+// the Python Packages list's `pip list` flashed one.
+{
+  const require = createRequire(import.meta.url);
+  const cp = require('child_process');
+  const real = cp.execFile;
+  let seen = null;
+  cp.execFile = (_file, _args, opts, cb) => { seen = opts; cb(null, '[]', ''); return {}; };
+  try {
+    const handlers = {};
+    require('../main/features/packages.js').register({ ipcMain: { handle: (name, fn) => { handlers[name] = fn; }, on: () => {} }, startProcess: () => 0 });
+    await handlers['packages:list'](null, { cmd: 'python', args: [] });
+  } catch (err) {
+    t.check(false, err.message);
+  } finally {
+    cp.execFile = real;
+  }
+  t.check(seen?.windowsHide === true, `pip list runs without a console window (${JSON.stringify({ windowsHide: seen?.windowsHide })})`);
+}
 t.finish();

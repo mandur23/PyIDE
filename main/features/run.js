@@ -224,7 +224,7 @@ function killTerminal(id) {
   try { t.proc.kill(); } catch {}
 }
 
-async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles, { interpOptions = [], cols = 80, rows = 24 } = {}) {
+async function startTerminal(ctx, e, interp, file, cwd, params, env, roots, envFiles, { interpOptions = [], cols = 80, rows = 24 } = {}) {
   const pty = require('@lydell/node-pty');
   const runEnv = { ...programEnv(), PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1', ...withPath(withEnvFiles(env, envFiles, roots[0]), roots) };
   delete runEnv.ELECTRON_RUN_AS_NODE;
@@ -236,6 +236,7 @@ async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles,
   const owner = e.sender;
   watchNavigation(owner);
   terminals.set(id, { proc, owner, nav: navigations.get(owner) });
+  const ended = ctx.programs.started();
   let buffer = '';
   let scheduled = false;
   proc.onData((data) => {
@@ -253,6 +254,7 @@ async function startTerminal(e, interp, file, cwd, params, env, roots, envFiles,
   proc.onExit(({ exitCode }) => {
     releasePty(proc);
     terminals.delete(id);
+    ended();
     owner.removeListener('destroyed', onWindowGone);
     // After the last output, which onData coalesces with setImmediate.
     if (!owner.isDestroyed()) setImmediate(() => owner.send('run:terminalExit', { id, code: exitCode }));
@@ -281,7 +283,7 @@ exports.register = (ctx) => {
   // The same run in a pseudo-console (a local interpreter only). opts: {interpOptions?, cols, rows} -> {id, cwd}
   ctx.ipcMain.handle('run:startTerminal', (e, interp, file, cwd, params = [], env = {}, roots = [], envFiles, opts = {}) => {
     if (remote.isRemote(interp)) return { error: 'remote' };
-    return startTerminal(e, interp, file, cwd, params, env, roots, envFiles, opts);
+    return startTerminal(ctx, e, interp, file, cwd, params, env, roots, envFiles, opts);
   });
   ctx.ipcMain.on('run:terminalWrite', (_e, { id, data } = {}) => { try { terminals.get(id)?.proc.write(String(data)); } catch {} });
   ctx.ipcMain.on('run:terminalResize', (_e, { id, cols, rows } = {}) => {

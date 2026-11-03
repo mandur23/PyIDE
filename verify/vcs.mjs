@@ -340,6 +340,22 @@ try {
     const got = await js(marksOf);
     check(got === 'vcs-modified:2-2', `editing line 2 of ${name === 'legacy.py' ? 'a CP949' : 'a UTF-8 BOM'} file marks only line 2 (got ${got})`);
   }
+  // Two panes edited within the pause before the change bars update: each file gets its own update.
+  await js(`(ide.runAction('SplitVertically'), true)`);
+  await until(`ide.editors().length === 2 && ide.editor !== ide.editors()[0]`, 'split pane');
+  await openFile(t, 'legacy.py');
+  await until(`ide.editors()[0].getModel()?.uri.path.endsWith('bom.py') && ide.editors()[1].getModel()?.uri.path.endsWith('legacy.py')`, 'bom.py and legacy.py side by side');
+  const marksIn = (i) => marksOf.replace('ide.activeTab().model', `ide.editors()[${i}].getModel()`);
+  await sleep(600); // the refresh that switching tabs starts (it saves, and redraws every pane's bars) ends first
+  await js(`(ide.editors().forEach((ed) => ed.executeEdits('test', [{ range: new ide.monaco.Range(1, 1, 1, 1), text: 'z = 0  ' }])), true)`);
+  await sleep(1500);
+  const paneMarks = [await js(marksIn(0)), await js(marksIn(1))];
+  check(paneMarks.every((m) => m === 'vcs-modified:1-2'), `edits in two panes within 250 ms both update their change bars (${paneMarks.join(' | ')})`);
+  await js(`(ide.editors().forEach((ed) => ed.trigger('test', 'undo')), true)`);
+  await js(`(ide.runAction('Unsplit'), true)`);
+  await until(`ide.editors().length === 1`, 'unsplit');
+  await openFile(t, 'legacy.py');
+  await openFile(t, 'bom.py');
   await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'bom.py'), true), true)`);
   await until(`ide.activeTab()?.title === 'legacy.py'`, 'legacy.py active');
   await js(`ide.runAction('Compare.SameVersion')`);

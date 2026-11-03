@@ -8,7 +8,7 @@
 // installer, and the client pack (.mrpack) read back by Python's zipfile. Port 9793; the servers listen on 25611-25614.
 import { execFileSync } from 'child_process';
 import crypto from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -64,6 +64,8 @@ public class FakeServer {
     BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
     for (String line; (line = in.readLine()) != null;) {
       if (line.trim().equals(proxy ? "end" : "stop")) { System.out.println("Stopping the server"); Files.write(Paths.get("world.saved"), "ok".getBytes()); System.exit(0); }
+      // As a dedicated server does: the setting saved with the rest of server.properties as it was read at the start.
+      if (line.trim().equals("whitelist on")) { p.setProperty("white-list", "true"); try (Writer w = new FileWriter("server.properties")) { p.store(w, "Minecraft server properties"); } System.out.println("Whitelist is now turned on"); continue; }
       System.out.println("Unknown command: " + line.trim());
     }
   }
@@ -315,8 +317,11 @@ try {
   await js(`(() => { const s = ${runTab('survival')}; ide.proc.input(s.procId, 'list\\n'); return true; })()`);
   await until(`(${runTab('survival')}).host.textContent.includes('Unknown command: list')`, 'console command', 10000);
   check(true, 'the console sends commands to the server');
+  await js(`(window.delays = [], window.ownSetTimeout = window.setTimeout, window.setTimeout = (fn, ms, ...a) => (window.delays.push(ms), window.ownSetTimeout(fn, ms, ...a)), true)`);
   await stopServer('survival');
+  const stopDelays = await js(`(window.setTimeout = window.ownSetTimeout, window.delays)`);
   check((await tabText('survival')).includes('Stopping the server') && existsSync(path.join(serverDir('survival'), 'world.saved')), 'Stop asks the server to save and quit ("stop"), not a kill');
+  check(stopDelays.includes(60000) && !stopDelays.includes(30000), `a stopping server has 60 s to save before it is killed, which a big modpack needs (${S(stopDelays)})`);
 
   await startServer('survival');
 
@@ -333,6 +338,21 @@ try {
   await js(`(${card('survival')}.querySelector('.mc-public-stop').click(), true)`);
   await until(`!${card('survival')}?.querySelector('.mc-public') && !!${card('survival')}?.querySelector('.mc-share')`, 'sharing stopped', 15000)
     .then(() => check(true, 'Stop Sharing takes the address off the card'), () => check(false, 'Stop Sharing takes the address off the card'));
+  // Turn On and Share on the running server: its "whitelist on" saves server.properties as the server read it at its
+  // start (the stand-in does this as a dedicated server does), and what was saved since must survive.
+  const survivalProps = path.join(serverDir('survival'), 'server.properties');
+  writeFileSync(survivalProps, readFileSync(survivalProps, 'utf8').replace(/^motd=.*$/m, 'motd=Saved while running'));
+  await js(`(${card('survival')}.querySelector('.mc-share-public').click(), true)`);
+  await until(`!!${dialogButton('Turn On and Share')}`, 'whitelist offer again', 10000);
+  await js(`(${dialogButton('Turn On and Share')}.click(), true)`);
+  await until(`${card('survival')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40611'`, 'shared with the whitelist', 30000);
+  await until(`(${runTab('survival')}).host.textContent.includes('Whitelist is now turned on')`, 'whitelist command', 10000);
+  let kept = '';
+  for (let i = 0; i < 40 && !/^motd=Saved while running$/m.test(kept); i++) { await sleep(250); kept = readFileSync(survivalProps, 'utf8'); }
+  check(/^motd=Saved while running$/m.test(kept) && /^white-list=true$/m.test(kept) && /^enforce-whitelist=true$/m.test(kept),
+    `the whitelist goes on without the server's start-time copy of server.properties replacing what was saved since (${S(kept)})`);
+  await js(`(${card('survival')}.querySelector('.mc-public-stop').click(), true)`);
+  await until(`!${card('survival')}?.querySelector('.mc-public')`, 'sharing stopped again', 15000);
   await stopServer('survival');
 
   // ---------- resource pack ----------
@@ -425,6 +445,8 @@ try {
     && existsSync(path.join(oldServer, 'server.jar')),
   `a server folder dropped on the window is copied into servers/ and recognized, its eula.txt left as it was (${S(old)})`);
 
+  // A folder in servers/ that is no server takes its name: the dialog says so before Create.
+  write(path.join(serverDir('Blocked'), 'notes.txt'), 'the user\'s own folder');
   await dropOn(`document.querySelector('#minecraftScreen')`, [mrpack]);
   await until(`/Test Pack 1\\.0: Minecraft 1\\.20\\.1, Forge 47\\.9\\.9\\. 1 files for the server/.test(document.querySelector('#mcPackInfo')?.textContent || '')`, 'modpack dialog', 20000)
     .then(() => check(true, 'a dropped .mrpack opens New Server from Modpack with what it holds'), async () => check(false, `modpack dialog: ${await js("document.querySelector('#mcPackInfo')?.textContent")}`));
@@ -433,6 +455,11 @@ try {
   await js(`(${dialogButton('Create')}).click()`);
   check(/starting with a letter/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)) && await js(`document.querySelector('#mcPackName')?.value === '내 서버'`),
     'a name main would refuse is said in the modpack dialog, which keeps what was typed');
+  await js(`(document.querySelector('#mcPackName').value = 'blocked', true)`);
+  await js(`(${dialogButton('Create')}).click()`);
+  check(/servers\/blocked is a folder that is not a server/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)) && readFileSync(path.join(serverDir('Blocked'), 'notes.txt'), 'utf8') === 'the user\'s own folder',
+    'a name taken by a folder that is no server is said in the dialog (whatever its case), and the folder is left alone');
+  rmSync(serverDir('Blocked'), { recursive: true, force: true });
   await js(`(document.querySelector('#mcPackName').value = 'Test-Pack', true)`);
   await js(`(${dialogButton('Create')}).click()`);
   check(/accept the Minecraft EULA/.test(await js(`document.querySelector('.mc-dialog-error').textContent`)), 'a modpack server also waits for the EULA');
@@ -606,6 +633,14 @@ try {
   check(!leftover().length, `a modpack downloaded for a cancelled dialog is deleted (${S(leftover())})`);
 
   // ---------- Delete ----------
+  // purp has modded's port (as every server has 25565 by default) while modded runs, shared: deleting the stopped purp
+  // leaves modded's share alone.
+  const purpProps = path.join(serverDir('purp'), 'server.properties');
+  writeFileSync(purpProps, readFileSync(purpProps, 'utf8').replace(/^server-port=.*$/m, 'server-port=25612'));
+  await js('ide.minecraft.refresh().then(() => true)');
+  await startServer('modded');
+  await js(`(ide.ports.share(25612, { private: false }), true)`);
+  await until(`${card('modded')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40612'`, 'modded shared before the delete', 30000);
   const trashed = path.join(work, 'trashed-purp');
   await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(trashed)}), true)`);
   await js(`(${card('purp')}.querySelector('.mc-settings').click(), true)`);
@@ -619,6 +654,12 @@ try {
   check(existsSync(path.join(trashed, 'pyide-server.json')) && !existsSync(serverDir('purp')) && !/"purp"/.test(tomlAfter) && /^"survival" = /m.test(tomlAfter)
     && await js(`!ide.run.configs().some((c) => c.type === 'minecraft-server' && /purp$/.test(c.dir)) && !ide.findTab(ide.minecraft.settings.tabId(${S(serverDir('purp'))}))`),
     'Delete moves the server folder to the Recycle Bin, takes it out of the proxy, drops its run configuration and closes its settings tab');
+  await sleep(1000);
+  check(await js(`ide.ports.state().tunnels.some((t) => t.port === 25612 && t.state === 'shared') && !!${card('modded')}?.querySelector('.mc-public-addr')`),
+    `deleting a stopped server keeps the share of the running server on the same port (${S(await js('ide.ports.state().tunnels'))})`);
+  await js(`(${card('modded')}.querySelector('.mc-public-stop').click(), true)`);
+  await until(`!${card('modded')}?.querySelector('.mc-public')`, 'modded unshared', 15000);
+  await stopServer('modded');
 
   // ---------- the Minecraft screen ----------
   await js(`(ide.tabs.slice().forEach((tab) => ide.closeTabObject(tab, true)), document.querySelector('.mcs-page[data-page="servers"]').click(), true)`);

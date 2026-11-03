@@ -31,7 +31,9 @@
   let groupSeq = 0;
   const viewers = [];
   const editorHooks = new Set();
-  const embedded = new Set(); // editors created by viewers through ide.createEditor
+  // Editors created by viewers through ide.createEditor -> the option names their creator set (a notebook cell's
+  // rulers: [], wordWrap: 'off'), which settings changes leave as set.
+  const embedded = new Map();
   const closedTabs = [];
   const mru = []; // most recently activated tabs, newest first
   let editorOptions = {};
@@ -975,13 +977,13 @@
     if (theme) ide.monaco.editor.setTheme(theme);
     editorOptions = { ...editorOptions, ...opts };
     for (const g of groups) g.editor.updateOptions(opts);
-    for (const ed of embedded) ed.updateOptions(opts);
+    for (const [ed, own] of embedded) ed.updateOptions(Object.fromEntries(Object.entries(opts).filter(([k]) => !own.has(k))));
   };
   ide.editorOptions = () => ({ ...editorOptions });
   // An extra Monaco editor (inside a viewer) that behaves like a group editor for plugins.
   ide.createEditor = (host, opts = {}) => {
     const ed = ide.monaco.editor.create(host, { ...editorOptions, ...opts });
-    embedded.add(ed);
+    embedded.set(ed, new Set(Object.keys(opts)));
     ed.onDidDispose(() => embedded.delete(ed));
     ownActions(ed);
     for (const fn of editorHooks) safe(() => fn(ed));
@@ -1133,7 +1135,7 @@
   const saveActions = [];
   ide.registerSaveAction = (a) => { saveActions.push(a); saveActions.sort((x, y) => (x.order ?? 50) - (y.order ?? 50)); };
 
-  const editorsOf = (model) => [...groups.map((g) => g.editor), ...embedded].filter((ed) => ed.getModel() === model);
+  const editorsOf = (model) => [...groups.map((g) => g.editor), ...embedded.keys()].filter((ed) => ed.getModel() === model);
 
   // Returns false when the text changed while the actions ran (their result is then dropped).
   async function runSaveActions(doc, auto) {

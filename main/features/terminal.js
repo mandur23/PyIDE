@@ -103,7 +103,7 @@ function releasePty(proc) {
   try { agent?._conoutSocketWorker?.dispose(); } catch {}
 }
 
-exports.register = ({ ipcMain, app }) => {
+exports.register = ({ ipcMain, app, programs }) => {
   // A page reload (Trust Project reopens the page) leaves nothing to show a window's sessions: they end, or they would
   // keep running unseen until quit. The renderer asks the user first.
   const navigations = new WeakMap(); // webContents -> main-frame navigations since its first session
@@ -189,6 +189,7 @@ exports.register = ({ ipcMain, app }) => {
     const owner = e.sender;
     watchNavigation(owner);
     sessions.set(id, { proc, owner, nav: navigations.get(owner) });
+    const ended = programs.started();
     // ConPTY delivers about one chunk per line and one per event-loop turn, so a flood (a long `dir`, a chatty build)
     // is batched by time: at most one message per 10 ms window, the first after a pause sent at once.
     const batch = outputBatch((data) => { if (!owner.isDestroyed()) owner.send('pty:data', { id, data }); });
@@ -201,6 +202,7 @@ exports.register = ({ ipcMain, app }) => {
       releasePty(proc);
       release?.();
       sessions.delete(id);
+      ended();
       owner.removeListener('destroyed', onWindowGone);
       setImmediate(() => {
         batch.flush();

@@ -51,12 +51,15 @@
 
   const svgOf = (variant, type) => window.PYIDE_FILE_ICONS?.[variant]?.[type];
   ide.fileIconType = (nameOrPath, { dir = false } = {}) => typeOf(nameOrPath.split(/[\\/]/).pop(), dir);
+  // type -> {light, dark, span}: each drawing is parsed once and cloned after (a list of 200 files parsed 400 SVGs).
+  // A plugin may add or replace drawings later (project-roots), so the cached strings are compared.
+  const parsed = new Map();
   ide.fileIcon = (nameOrPath, opts = {}) => {
     const type = opts.type || ide.fileIconType(nameOrPath, opts);
-    const span = document.createElement('span');
-    span.className = 'file-icon';
-    span.dataset.type = type;
     if (type === 'database') {
+      const span = document.createElement('span');
+      span.className = 'file-icon';
+      span.dataset.type = type;
       // The Database plugin's icon; it is drawn in currentColor, so one drawing serves both themes.
       span.appendChild(ide.icon('database', '⛁'));
       return span;
@@ -64,7 +67,14 @@
     const lightSvg = svgOf('light', type) || svgOf('light', DEFAULT);
     // An icon without a dark drawing keeps its own light one rather than turning generic.
     const darkSvg = svgOf('dark', type) || (svgOf('light', type) ? lightSvg : svgOf('dark', DEFAULT)) || lightSvg;
-    span.innerHTML = `<span class="fi-light">${lightSvg}</span><span class="fi-dark">${darkSvg}</span>`;
-    return span;
+    let p = parsed.get(type);
+    if (!p || p.light !== lightSvg || p.dark !== darkSvg) {
+      const span = document.createElement('span');
+      span.className = 'file-icon';
+      span.dataset.type = type;
+      span.innerHTML = `<span class="fi-light">${lightSvg}</span><span class="fi-dark">${darkSvg}</span>`;
+      parsed.set(type, (p = { light: lightSvg, dark: darkSvg, span }));
+    }
+    return p.span.cloneNode(true);
   };
 })();

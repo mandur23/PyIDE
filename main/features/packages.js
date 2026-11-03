@@ -82,7 +82,7 @@ exports.register = (ctx) => {
     }
     return new Promise((resolve) => {
       execFile(interp.cmd, [...interp.args, ...PIP, 'list', '--format=json'],
-        { encoding: 'utf8', timeout: 60000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
+        { encoding: 'utf8', timeout: 60000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
         (err, stdout, stderr) => resolve(parseList(stdout, stderr, err?.message)));
     });
   });

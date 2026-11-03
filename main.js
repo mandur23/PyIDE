@@ -55,12 +55,32 @@ let nextProcId = 1;
 // Until the main window exists the start chooser hears what is sent, which is the updater's state.
 const send = (channel, payload) => (win && !win.isDestroyed() ? win.webContents.send(channel, payload) : windows.toChooser(channel, payload));
 
+// The programs the user runs from the IDE (Run, Debug, the Terminal's shells): the Ports feature looks for the ports
+// they open only while any runs. started() -> ended(), which may be called more than once.
+const programs = (() => {
+  let count = 0;
+  const listeners = new Set();
+  const tell = () => { for (const fn of listeners) fn(count); };
+  return {
+    started() {
+      count++;
+      tell();
+      let ended = false;
+      return () => { if (!ended) { ended = true; count--; tell(); } };
+    },
+    count: () => count,
+    onChange: (fn) => listeners.add(fn),
+  };
+})();
+
 // Spawns a child whose output streams to the renderer as proc:data / proc:exit, keyed by the returned id.
 // The log records the launch and exit code; the output itself is the user's and stays out of it.
+// opts.quitInput: what the program is sent on stdin when the IDE quits ('stop\n' for a Minecraft server, which then
+// saves its world), with up to opts.quitWaitMs (10 s) to exit before it is killed (see the quit gate below).
 const procLog = diagnostics.logger('#process');
 function startProcess(cmd, args, opts = {}) {
   const id = nextProcId++;
-  const { encoding, filter, ...spawnOpts } = opts;
+  const { encoding, filter, quitInput, quitWaitMs, ...spawnOpts } = opts;
   let proc;
   try {
     proc = spawn(cmd, args, {
@@ -78,6 +98,8 @@ function startProcess(cmd, args, opts = {}) {
     return id;
   }
   procs.set(id, proc);
+  if (quitInput) Object.assign(proc, { quitInput: String(quitInput), quitWaitMs: Number(quitWaitMs) || 10000 });
+  const ended = programs.started();
   procLog.info(`#${id} started (pid ${proc.pid}): ${cmd} ${args.join(' ')}${opts.cwd ? ` in ${opts.cwd}` : ''}`);
   // opts.encoding: output encoding of the child (e.g. 'cp949' for cmd.exe/Maven on Korean Windows); UTF-8 by default.
   // Streaming decoders keep multi-byte characters intact across chunk boundaries.
@@ -106,6 +128,7 @@ function startProcess(cmd, args, opts = {}) {
   proc.on('close', (code) => {
     procLog.info(`#${id} exited with code ${code}`);
     procs.delete(id);
+    ended();
     // A filter that holds back a half line gives it up here: no more output will end that line.
     const held = filter?.flush?.();
     if (held) batch.push(held, 'out');
@@ -496,6 +519,8 @@ const featureContext = {
   startProcess,
   killProcess,
   procs,
+  programs,
+  holdQuit,
   getWindow: () => win,
   appDir: __dirname,
   unpackedDir,
@@ -600,3 +625,53 @@ app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => {
   for (const id of procs.keys()) killProcess(id, { sync: true });
 });
+
+// ---------- the quit gate ----------
+// What must finish before the app ends: programs started with quitInput get it and up to their quitWaitMs to exit,
+// and every holdQuit(fn, ms) has fn() called, which returns a promise of its work (or nothing to wait for), waited
+// for up to ms. All of it at once, at the first will-quit: the windows have closed by then (a window that keeps the
+// quit for unsaved files has had its say), but no will-quit handler has torn anything down yet. Electron calls every
+// listener of an event whatever one of them prevents, so the gate sits in front of the listeners: while it waits,
+// will-quit and the before-quit of any app.quit() meanwhile reach none of them, and after it the second pass runs
+// them once (before-quit already ran for this quit), main.js's above killing whatever did not exit.
+const quitHolds = [];
+function holdQuit(fn, ms = 15000) { quitHolds.push({ fn, ms }); }
+let quitGate = 'open'; // 'open' | 'waiting' | 'passed'
+const quitLog = diagnostics.logger('#quit');
+const atMost = (promise, ms) => Promise.race([Promise.resolve(promise).catch(() => {}), new Promise((r) => { setTimeout(r, ms); })]);
+function quitWork() {
+  const work = [];
+  for (const [id, proc] of procs) {
+    if (!proc.quitInput) continue;
+    quitLog.info(`#${id} asked to stop (up to ${proc.quitWaitMs} ms)`);
+    const exited = new Promise((r) => { proc.once('close', r); });
+    try { proc.stdin.write(proc.quitInput); } catch {}
+    work.push(atMost(exited, proc.quitWaitMs));
+  }
+  for (const { fn, ms } of quitHolds) {
+    let pending = null;
+    try { pending = fn(); } catch (err) { quitLog.warn(`a quit hold failed: ${err.message}`); }
+    if (pending && typeof pending.then === 'function') work.push(atMost(pending, ms));
+  }
+  return work;
+}
+const emitApp = app.emit;
+app.emit = function emit(name, ...args) {
+  if (name === 'before-quit' && quitGate !== 'open') return false;
+  if (name === 'will-quit' && quitGate === 'waiting') { args[0]?.preventDefault(); return true; }
+  if (name === 'will-quit' && quitGate === 'open') {
+    const work = quitWork();
+    if (work.length) {
+      quitGate = 'waiting';
+      args[0]?.preventDefault();
+      const started = Date.now();
+      Promise.all(work).then(() => {
+        quitLog.info(`waited ${Date.now() - started} ms before quitting`);
+        quitGate = 'passed';
+        app.quit();
+      });
+      return true;
+    }
+  }
+  return emitApp.call(this, name, ...args);
+};

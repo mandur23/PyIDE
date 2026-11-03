@@ -69,8 +69,11 @@ async function search({ type, query = '', sort = 'relevance', offset = 0, server
   return { total: Number.isFinite(r.total_hits) ? r.total_hits : hits.length, hits };
 }
 
-function createMarket({ readServer, writeServer, fetchFile }) {
+// running(dir): whether the server runs. Its Java holds the jars in mods/ and plugins/ open, and Windows refuses to delete
+// or replace a held file: an update or a removal then waits until the server is stopped.
+function createMarket({ readServer, writeServer, fetchFile, running = () => false }) {
   const api = () => modrinthApi();
+  const stopFirst = (dir, what) => fail(`Stop ${path.basename(dir)} first: while it runs, Java holds its jars, and ${what} cannot be taken out`, 'running');
   // The newest version of a project for the server (a release before a beta), or the version a dependency names.
   async function versionFor(id, target, versionId) {
     const list = await getJson(`${api()}/project/${encodeURIComponent(id)}/version?loaders=${q(target.loaders)}${target.versions ? `&game_versions=${q(target.versions)}` : ''}`);
@@ -146,41 +149,59 @@ function createMarket({ readServer, writeServer, fetchFile }) {
     if (type === 'resourcepack' && fs.existsSync(path.join(dir, 'resourcepack', 'pack.mcmeta')) && !owner) {
       throw fail('The server has its own resource pack in resourcepack/: move it away first, a server sends one pack');
     }
+    if (type !== 'resourcepack' && old.length && running(dir)) throw stopFirst(dir, `the old ${market[id].title} ${market[id].version}`);
 
     const installed = [];
-    for (const [pid, { project, version, file, dependency }] of plan) {
-      log(`${project.title} ${version.version_number}: ${file.filename}\n`);
-      let rel;
-      if (type === 'resourcepack') {
-        // The new pack replaces the server's only once it is downloaded, checked and unpacked.
-        const tmp = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${file.filename}`);
-        const staging = path.join(dir, 'resourcepack.part');
-        try {
-          await download(file, tmp, log);
-          fs.rmSync(staging, { recursive: true, force: true });
-          unpackZip(tmp, staging);
-          if (!fs.existsSync(path.join(staging, 'pack.mcmeta'))) throw fail(`${file.filename} is not a resource pack (no pack.mcmeta)`);
-          if (owner) { fs.rmSync(path.join(dir, 'resourcepack'), { recursive: true, force: true }); delete market[owner]; }
-          fs.renameSync(staging, path.join(dir, 'resourcepack'));
-        } finally {
-          fs.rmSync(tmp, { force: true });
-          fs.rmSync(staging, { recursive: true, force: true });
+    // Files this install put where there was none: a later download that fails takes them out again, so no jar is left
+    // that pyide-server.json does not record.
+    const added = [];
+    try {
+      for (const [pid, { project, version, file, dependency }] of plan) {
+        log(`${project.title} ${version.version_number}: ${file.filename}\n`);
+        let rel;
+        if (type === 'resourcepack') {
+          // The new pack replaces the server's only once it is downloaded, checked and unpacked.
+          const tmp = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${file.filename}`);
+          const staging = path.join(dir, 'resourcepack.part');
+          try {
+            await download(file, tmp, log);
+            fs.rmSync(staging, { recursive: true, force: true });
+            unpackZip(tmp, staging);
+            if (!fs.existsSync(path.join(staging, 'pack.mcmeta'))) throw fail(`${file.filename} is not a resource pack (no pack.mcmeta)`);
+            if (owner) { fs.rmSync(path.join(dir, 'resourcepack'), { recursive: true, force: true }); delete market[owner]; }
+            fs.renameSync(staging, path.join(dir, 'resourcepack'));
+          } finally {
+            fs.rmSync(tmp, { force: true });
+            fs.rmSync(staging, { recursive: true, force: true });
+          }
+          rel = 'resourcepack';
+        } else {
+          // A server folder deleted since is not made again by the download.
+          readServer(dir);
+          fs.mkdirSync(path.join(dir, target.folder), { recursive: true });
+          const dest = path.join(dir, target.folder, file.filename);
+          const fresh = !fs.existsSync(dest);
+          await download(file, dest, log);
+          if (fresh) added.push(dest);
+          rel = `${target.folder}/${file.filename}`;
         }
-        rel = 'resourcepack';
-      } else {
-        // A server folder deleted since is not made again by the download.
-        readServer(dir);
-        fs.mkdirSync(path.join(dir, target.folder), { recursive: true });
-        await download(file, path.join(dir, target.folder, file.filename), log);
-        rel = `${target.folder}/${file.filename}`;
+        const needs = (Array.isArray(version.dependencies) ? version.dependencies : []).filter((d) => d?.dependency_type === 'required' && d.project_id).map((d) => d.project_id);
+        market[pid] = { title: project.title, version: version.version_number, versionId: version.id, files: [rel], needs, dependency: !!dependency };
+        installed.push({ title: project.title, version: version.version_number, file: rel, dependency: !!dependency });
       }
-      const needs = (Array.isArray(version.dependencies) ? version.dependencies : []).filter((d) => d?.dependency_type === 'required' && d.project_id).map((d) => d.project_id);
-      market[pid] = { title: project.title, version: version.version_number, versionId: version.id, files: [rel], needs, dependency: !!dependency };
-      installed.push({ title: project.title, version: version.version_number, file: rel, dependency: !!dependency });
+    } catch (err) {
+      for (const f of added) fs.rmSync(f, { force: true });
+      throw err;
     }
-    // An update replaces the old version's file once the new one is in place.
-    for (const f of old) if (!market[id].files.includes(f) && inside(dir, f)) fs.rmSync(inside(dir, f), { recursive: true, force: true });
+    // An update replaces the old version's file once the new one is in place. One that cannot be deleted (held by a
+    // server started outside Nano Studio) is said, since the server would load both versions.
+    const stuck = [];
+    for (const f of old) {
+      if (market[id].files.includes(f) || !inside(dir, f)) continue;
+      try { fs.rmSync(inside(dir, f), { recursive: true, force: true }); } catch (err) { stuck.push(`${f} (${err.code || err.message})`); }
+    }
     writeServer(dir, { ...readServer(dir), market });
+    if (stuck.length) throw fail(`${market[id].title} ${market[id].version} is installed, but the old file could not be deleted: ${stuck.join(', ')}. Delete it before the server starts again, or it loads both versions`);
     return { installed, skipped };
   }
 
@@ -191,19 +212,29 @@ function createMarket({ readServer, writeServer, fetchFile }) {
     const desc = readServer(dir);
     const market = { ...(desc.market || {}) };
     if (!market[id]) throw fail('The Market did not install that project on this server');
+    // What goes: the project, then the dependencies no project left needs. Worked out before anything is deleted.
+    const kept = new Set();
+    const keep = (pid) => { if (pid !== id && market[pid] && !kept.has(pid)) { kept.add(pid); for (const n of market[pid].needs || []) keep(n); } };
+    for (const [pid, e] of Object.entries(market)) if (!e.dependency) keep(pid);
+    const going = [id, ...Object.keys(market).filter((pid) => pid !== id && !kept.has(pid))];
+    // Only what lies in the server's folder, whatever pyide-server.json says.
+    const filesOf = (pid) => (Array.isArray(market[pid].files) ? market[pid].files : []).filter((f) => inside(dir, f));
+    if (running(dir) && going.some((pid) => filesOf(pid).some((f) => f !== 'resourcepack'))) throw stopFirst(dir, market[id].title);
     const removed = [];
-    const take = (pid) => {
-      // Only what lies in the server's folder, whatever pyide-server.json says.
-      for (const f of Array.isArray(market[pid].files) ? market[pid].files : []) if (inside(dir, f)) fs.rmSync(inside(dir, f), { recursive: true, force: true });
+    const stuck = [];
+    for (const pid of going) {
+      try {
+        for (const f of filesOf(pid)) fs.rmSync(inside(dir, f), { recursive: true, force: true });
+      } catch (err) {
+        // Still recorded: Remove can be tried again once what holds it lets go.
+        stuck.push(`${market[pid].title} (${err.code || err.message})`);
+        continue;
+      }
       removed.push(market[pid].title);
       delete market[pid];
-    };
-    take(id);
-    const kept = new Set();
-    const keep = (pid) => { if (market[pid] && !kept.has(pid)) { kept.add(pid); for (const n of market[pid].needs || []) keep(n); } };
-    for (const [pid, e] of Object.entries(market)) if (!e.dependency) keep(pid);
-    for (const pid of Object.keys(market)) if (!kept.has(pid)) take(pid);
+    }
     writeServer(dir, { ...desc, market });
+    if (stuck.length) throw fail(`Could not delete the files of ${stuck.join(', ')}: close what holds them (a server started outside Nano Studio) and remove again`);
     return { removed };
   }
 

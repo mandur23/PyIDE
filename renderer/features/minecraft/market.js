@@ -166,9 +166,18 @@
     return c;
   }
 
+  // Java holds a running server's jars, which Windows will not let go: an update or removal waits for Stop (main refuses
+  // it too).
+  const held = (srv, h) => {
+    if (state.type === 'resourcepack' || !mc.runningAt(srv.dir)) return false;
+    ide.ui.alert(tr('Stop {server} first: while it runs, Java holds its jars, and {title} cannot be taken out of it.', { server: srv.name, title: h.title }));
+    return true;
+  };
+
   async function install(h, b) {
     const srv = serverOf();
     if (!srv || ide.trusted === false || working.has(h.id)) return;
+    if (srv.market?.[h.id] && held(srv, h)) return;
     working.add(h.id);
     b.disabled = true;
     b.textContent = tr('Installing…');
@@ -208,7 +217,7 @@
 
   async function remove(h, installed) {
     const srv = serverOf();
-    if (!srv || ide.trusted === false) return;
+    if (!srv || ide.trusted === false || held(srv, h)) return;
     if (working.has(h.id) || !(await ide.ui.confirm(tr('Remove {title} {version} from {server}?', { title: h.title, version: installed.version, server: srv.name }), { ok: tr('Remove') }))) return;
     working.add(h.id);
     try {

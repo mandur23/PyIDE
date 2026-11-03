@@ -609,6 +609,9 @@
     s.dispose = () => {
       size.disconnect();
       input.dispose();
+      // xterm 5.5 leaves its device-pixel-ratio monitor (a window 'resize' listener) behind, which keeps the whole
+      // terminal alive; the Terminal plugin's closeSession disposes it the same way.
+      term._core?._coreBrowserService?._screenDprMonitor?.dispose();
       term.dispose();
       if (s.term === term) s.term = null;
       // A replaced run's last output and exit still arrive; they are dropped instead of waiting in `early`.

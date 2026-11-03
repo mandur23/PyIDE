@@ -368,6 +368,8 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       setTimeout(() => { if (pending.delete(id)) resolve(null); }, timeout);
     });
     // detach: a Colab kernel the notebook keeps goes on running on the runtime.
+    // The bridge sends no done for the runs a shutdown cuts off, and its exit comes after procId is cleared, so the
+    // stop itself tells onExit (stopped: true); the caller sets the state.
     k.stop = ({ detach = false } = {}) => {
       const id = k.procId;
       if (!id) return;
@@ -376,6 +378,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       for (const resolve of pending.values()) resolve(null);
       pending.clear();
       setTimeout(() => ide.proc.kill(id), 4000);
+      onExit(null, true);
     };
     return k;
   }
@@ -662,10 +665,10 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       }
     }
 
-    function onKernelExit() {
+    function onKernelExit(code, stopped) {
       if (disposed) return;
-      for (const id of [...runs.keys()]) finishRun(id, 'dead', null);
-      if (!['missing', 'error', 'dead'].includes(kernel.state)) setKernelState('stopped');
+      for (const id of [...runs.keys()]) finishRun(id, stopped ? 'aborted' : 'dead', null);
+      if (!stopped && !['missing', 'error', 'dead'].includes(kernel.state)) setKernelState('stopped');
     }
 
     // ipykernel missing from the interpreter: install it through the Install Manager's pip queue.

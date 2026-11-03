@@ -205,6 +205,14 @@
       list.id = 'portsList';
       container.append(bar, list);
       render();
+      // Main reads the list of listening ports only while something needs it, this window showing it being one. A
+      // tool window is hidden in several ways (its area closes, another window takes the area), all display: none.
+      let shown = false;
+      new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting === shown) return;
+        shown = entry.isIntersecting;
+        ide.api.invoke('ports:shown', shown).catch(() => {});
+      }).observe(container);
     },
   });
 

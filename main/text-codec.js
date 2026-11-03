@@ -88,7 +88,15 @@ function encode(text, encoding) {
 function read(p, forced) {
   const size = fs.statSync(p).size;
   if (size > MAX_TEXT_BYTES) return { tooLarge: true, size };
-  const buf = fs.readFileSync(p);
+  return textOf(fs.readFileSync(p), size, forced);
+}
+// The same without holding the thread while the disk answers.
+async function readAsync(p, forced) {
+  const { size } = await fs.promises.stat(p);
+  if (size > MAX_TEXT_BYTES) return { tooLarge: true, size };
+  return textOf(await fs.promises.readFile(p), size, forced);
+}
+function textOf(buf, size, forced) {
   const encoding = ENCODINGS.includes(forced) ? forced : detect(buf);
   if (!forced && !encoding.startsWith('utf-16') && looksBinary(buf)) return { binary: true, size };
   return { text: decode(buf, encoding), encoding, size };
@@ -167,4 +175,4 @@ function replaceFile(p, buf) {
   }
 }
 
-module.exports = { read, write, ENCODINGS, looksBinary, detect, decode, encode, replacedRecently };
+module.exports = { read, readAsync, write, ENCODINGS, looksBinary, detect, decode, encode, replacedRecently };

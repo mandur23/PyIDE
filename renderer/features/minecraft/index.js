@@ -6,7 +6,7 @@
 //   the user accepts the Minecraft EULA; or a Velocity proxy, which sends players on to the project's Paper and Purpur
 //   servers. The Java version comes from Mojang's data and is downloaded when missing.
 // - A server runs as a "Minecraft Server" run configuration: its console takes server commands (op, whitelist), and
-//   Stop sends "stop" so the world is saved, killing the process only if it has not ended 30 s later.
+//   Stop sends "stop" so the world is saved, killing the process only if it has not ended 60 s later.
 // - Client Pack: a .mrpack of a modded server's mods, which Prism Launcher or the Modrinth App imports in one step.
 // - Resource Pack: a resourcepack/ folder for textures and sounds; Send to Players zips it, serves it with a public link
 //   and names it in server.properties, so every player's game downloads it when they join.
@@ -21,6 +21,7 @@
   const EULA = 'https://aka.ms/MinecraftEULA';
   let kinds = [];
   let list = [];
+  let blocked = []; // names in servers/ that are not servers
   let host = null; // My Servers' list (screen.js)
 
   // ---------- jobs: main's log lines go to the console of the job that asked ----------
@@ -48,36 +49,40 @@
   // Processes of servers asked to stop that have not ended yet (process id -> server folder, lower case): they still
   // hold their ports and worlds.
   const stopping = new Map();
+  // How long a stopping server has to save before it is killed (main gives it as long when the app quits).
+  const STOP_WAIT = 60000;
 
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
   // starts, the Ports window learns its port is a game server's.
   async function beforeStart(dir, con) {
     const srv = serverAt(dir);
     if (srv?.proxy) {
-      const { backends } = await ide.api.invoke('minecraft:wireProxy', ide.root, dir);
+      const { backends, skipped = [] } = await ide.api.invoke('minecraft:wireProxy', ide.root, dir);
       con.append(`${backends.length ? tr('Players are sent on to: {servers}', { servers: backends.map((b) => `${b.name} (${b.port})`).join(', ') })
         : tr('No Paper or Purpur server in the project yet: the proxy has nowhere to send players.')}\n`, backends.length ? 'sys' : 'err');
+      for (const s of skipped) con.append(`${tr('{name} runs Minecraft {mc}, older than 1.13, which has no modern forwarding: the proxy does not send players there, and it keeps its own account checks.', s)}\n`, 'err');
     }
     const port = srv?.port || 25565;
     ide.ports?.gamePort(port);
-    // A server still stopping (Rerun of a running one) holds its world and port until it has saved, 30 s at most; a
-    // port that another program holds does not come free, so the start ends here instead of failing to bind it.
+    // A server still stopping (Rerun of a running one) holds its world and port until it has saved, STOP_WAIT at most;
+    // a port that another program holds does not come free, so the start ends here instead of failing to bind it.
     const free = () => ide.api.invoke('minecraft:portFree', port);
     const saving = () => [...stopping.values()].includes(dir.toLowerCase());
     if (srv && (saving() || !(await free()))) {
       con.append(`${tr('Waiting for port {port} to be free…', { port })}\n`, 'sys');
-      for (let i = 0; i < 80 && (stopping.size || i < 6) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
+      for (let i = 0; i < (STOP_WAIT + 10000) / 500 && (stopping.size || i < 6) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
       if (!(await free())) throw new Error(tr('Port {port} is in use by another program: stop it, or change server-port in server.properties.', { port }));
     }
   }
   // Stop asks the server to save and quit ("end" for a Velocity proxy); the process is killed only if it is still
-  // there 30 s later. By its id: a Rerun has moved the session on to the next process by then.
+  // there STOP_WAIT later, which a big modpack's save needs. By its id: a Rerun has moved the session on to the next
+  // process by then.
   function gracefulStop(s, dir) {
     s.kill = (pid) => {
       if (stopping.has(pid)) return;
       stopping.set(pid, dir.toLowerCase());
       ide.proc.input(pid, serverAt(dir)?.proxy ? 'end\n' : 'stop\n');
-      setTimeout(() => { if (stopping.has(pid)) ide.proc.kill(pid); }, 30000);
+      setTimeout(() => { if (stopping.has(pid)) ide.proc.kill(pid); }, STOP_WAIT);
     };
   }
 
@@ -112,7 +117,7 @@
     const s = sessionOf(serverDir);
     if (!s?.running) return;
     con.append(`${tr('Restarting the server to load it…')}\n`, 'sys');
-    const ended = new Promise((resolve) => { s.exitHooks.push(resolve); setTimeout(resolve, 35000); });
+    const ended = new Promise((resolve) => { s.exitHooks.push(resolve); setTimeout(resolve, STOP_WAIT + 5000); });
     s.stop();
     await ended;
     await run.runConfig(s.cfg, { confirm: false, remember: false });
@@ -237,17 +242,19 @@
     });
   }
 
-  // What main refuses for a new server's name and port, said while the dialog still holds what was typed.
+  // What main refuses for a new server's name and port, said while the dialog still holds what was typed. A folder
+  // in servers/ that is no server (the user's own) takes its name too.
   function refused(n, p) {
     return !/^[A-Za-z][\w-]{0,39}$/.test(n) ? tr('Use letters, digits, - and _ for the name, starting with a letter (40 at most).')
       : RESERVED.test(n) ? tr('{name} is a name Windows keeps for a device: choose another.', { name: n })
         : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
-          : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
+          : blocked.some((b) => b.toLowerCase() === n.toLowerCase()) ? tr('servers/{name} is a folder that is not a server: choose another name, or move that folder away.', { name: n })
+            : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
   }
   // A name main takes for the modpack, after the servers there are: COBBLEVERSE, then COBBLEVERSE-2.
   function freeName(raw) {
     const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32).replace(/-+$/, '') || 'modpack');
-    const taken = (n) => RESERVED.test(n) || list.some((s) => s.name.toLowerCase() === n.toLowerCase());
+    const taken = (n) => RESERVED.test(n) || [...list.map((s) => s.name), ...blocked].some((x) => x.toLowerCase() === n.toLowerCase());
     let n = base;
     for (let i = 2; taken(n); i++) n = `${base}-${i}`;
     return n;
@@ -306,7 +313,9 @@
     if (!(await ide.ui.confirm(tr('Move the server {name} (its folder, worlds and settings) to the Recycle Bin?', { name: srv.name }),
       { title: tr('Delete Minecraft Server'), ok: tr('Delete') }))) return;
     try {
-      if (tunnels.some((t) => t.port === srv.port)) await ide.ports?.unshare(srv.port);
+      // A share is a port's, and 25565 is every server's default: one another running server owns stays.
+      const owned = list.some((s) => s.dir.toLowerCase() !== srv.dir.toLowerCase() && s.port === srv.port && runningAt(s.dir));
+      if (!owned && tunnels.some((t) => t.port === srv.port)) await ide.ports?.unshare(srv.port);
       await ide.api.trash(srv.dir);
     } catch (err) {
       return ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: srv.name, error: errorText(err) }));
@@ -432,6 +441,7 @@
       ide.notifications?.notify({
         title: tr('Client pack for {name}', { name: srv.name }),
         text: r.autoSync ? tr('AutoModpack alone, Minecraft {mc}, {loader}. Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import); at their first join it downloads the server\'s mods.', { mc: r.mc, loader: r.loader })
+          : r.modpack && r.added?.length ? tr('The modpack {name} and the {count} mods added to the server since (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { name: r.modpack, count: r.added.length, mc: r.mc, loader: r.loader })
           : r.modpack ? tr('The modpack {name} (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { name: r.modpack, mc: r.mc, loader: r.loader })
           : tr('{count} mods, Minecraft {mc}, {loader}. Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).', { count: r.mods.length, mc: r.mc, loader: r.loader }),
         kind: 'ok', group: 'Minecraft', raw: true,
@@ -631,9 +641,9 @@
 
   // ---------- server list ----------
   async function refresh() {
-    if (!ide.root) { list = []; render(); return; }
+    if (!ide.root) { list = []; blocked = []; render(); return; }
     kinds = kinds.length ? kinds : await ide.api.invoke('minecraft:kinds').catch(() => []);
-    list = await ide.api.invoke('minecraft:servers', ide.root).catch(() => []);
+    [list, blocked] = await Promise.all([ide.api.invoke('minecraft:servers', ide.root).catch(() => []), ide.api.invoke('minecraft:blockedNames', ide.root).catch(() => [])]);
     render();
   }
   function button(label, cls, onClick, title) {
@@ -813,7 +823,12 @@
     try {
       await ide.api.invoke('minecraft:saveSettings', ide.root, srv.dir, { props: { 'white-list': 'true', 'enforce-whitelist': 'true' } });
     } catch (err) { ide.ui.alert(errorText(err)); return false; }
-    sendCommand(srv.dir, 'whitelist on');
+    // The running server saves its own copy of server.properties for the command, from its start: main reads the file
+    // as just saved before the command is sent, and puts it back once the server has written.
+    if (runningAt(srv.dir)) {
+      await ide.api.invoke('minecraft:keepProperties', ide.root, srv.dir).catch(() => {});
+      sendCommand(srv.dir, 'whitelist on');
+    }
     ide.notifications?.notify({
       title: tr('Whitelist on'), text: tr('Add your friends, and yourself, in the server\'s settings under Players.'), kind: 'ok', group: 'Minecraft',
       actions: [{ label: tr('Settings…'), run: (n) => { n.expire(); serverSettings(srv); } }],

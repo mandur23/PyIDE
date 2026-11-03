@@ -170,9 +170,9 @@ async function conflictedPaths(root, info) {
 
 // Runs a git command that may stop on conflicts (merge, rebase, cherry-pick, revert, unstash, pull) and reports
 // where it left the work tree: the files still in conflict, the operation waiting for --continue, whether HEAD moved.
-async function runStoppable(root, args) {
+async function runStoppable(root, args, env, opts) {
   const before = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
-  const r = await git(root, args);
+  const r = await git(root, args, '', env, opts);
   const info = await repoInfo(root);
   const after = (await git(root, ['rev-parse', '-q', '--verify', 'HEAD'])).out.trim();
   let updated = [];
@@ -719,6 +719,34 @@ exports.backgroundFetch = backgroundFetch;
 exports.stopFetches = stopFetches;
 exports.fetchPids = () => [...fetchProcs.keys()].map((p) => p.pid).filter(Boolean);
 
+// ---------- push and pull ----------
+// They talk to the remote, and one that stops moving (a dead connection, a server that never answers) held its git
+// operation, and with it every later background fetch, until quit, then outlived the IDE. git gives up an http transfer
+// slower than 1 KB/s for STALL_S seconds, and ssh a server that stops answering, unless the user set their own limits or
+// ssh command; the process tree is killed after an hour whatever it does, and at quit.
+const STALL_S = Number(process.env.PYIDE_GIT_STALL_SECONDS) || 60;
+const TRANSFER_LIMIT = 60 * 60 * 1000;
+const transfers = new Set(); // their git processes
+async function transferEnv(root) {
+  const own = (await git(root, ['config', '--get-regexp', '^(core\\.sshcommand|http\\.lowspeed(limit|time))$'])).out.toLowerCase();
+  const env = {};
+  if (!/^http\.lowspeed/m.test(own) && !process.env.GIT_HTTP_LOW_SPEED_LIMIT && !process.env.GIT_HTTP_LOW_SPEED_TIME) {
+    Object.assign(env, { GIT_HTTP_LOW_SPEED_LIMIT: '1000', GIT_HTTP_LOW_SPEED_TIME: String(STALL_S) });
+  }
+  if (!/^core\.sshcommand/m.test(own) && !process.env.GIT_SSH_COMMAND && !process.env.GIT_SSH) {
+    env.GIT_SSH_COMMAND = `ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=${Math.max(1, Math.round(STALL_S / 15))}`;
+  }
+  return env;
+}
+const transferOpts = {
+  onSpawn(p) {
+    transfers.add(p);
+    const timer = setTimeout(() => killFetchTree(p), TRANSFER_LIMIT);
+    p.once('close', () => { clearTimeout(timer); transfers.delete(p); });
+  },
+};
+exports.transferPids = () => [...transfers].map((p) => p.pid).filter(Boolean);
+
 exports.register = ({ ipcMain, app }) => {
   const h = (name, fn) => ipcMain.handle(`git:${name}`, (_e, ...args) => (READS.has(name) ? fn(...args) : asOperation(name, args[0], () => fn(...args))));
   shelfRoot = path.join(app.getPath('userData'), 'shelf');
@@ -735,7 +763,10 @@ exports.register = ({ ipcMain, app }) => {
     }
     return backgroundFetch(root, { owner: wc || null });
   });
-  app.on('will-quit', () => stopFetches({ sync: true }));
+  app.on('will-quit', () => {
+    stopFetches({ sync: true });
+    for (const p of transfers) killFetchTree(p, { sync: true });
+  });
 
   h('status', status);
 
@@ -1012,7 +1043,7 @@ exports.register = ({ ipcMain, app }) => {
       args = ['push', '--porcelain', `--force-with-lease=refs/heads/${branch}:${opts.lease}`, ...(st.upstream ? [] : ['-u']), remote, `HEAD:refs/heads/${branch}`];
     } else args = st.upstream ? ['push', '--porcelain'] : ['push', '--porcelain', '-u', remote, st.branch];
     const count = await git(root, ['rev-list', '--count', ...(st.upstream ? ['@{u}..HEAD'] : ['HEAD', '--not', '--remotes'])]);
-    const r = await git(root, args);
+    const r = await git(root, args, '', await transferEnv(root), transferOpts);
     const res = { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err, pushed: Number(count.out.trim()) || 0, target, branch, forced: opts.lease !== undefined };
     const rejected = !res.ok && /^!\t\S+\t\[rejected\] \(([^)]*)\)/m.exec(r.out);
     if (!rejected) return res;
@@ -1030,7 +1061,7 @@ exports.register = ({ ipcMain, app }) => {
     const st = await status(root);
     if (!st.isRepo) return { ok: false, reason: 'notRepo', err: 'Not a Git repository' };
     if (!st.remotes.length) return { ok: false, noRemote: true, reason: 'noRemote', err: 'No remotes are defined for this repository.' };
-    const r = await runStoppable(root, ['pull', '--no-rebase', '--no-edit']);
+    const r = await runStoppable(root, ['pull', '--no-rebase', '--no-edit'], await transferEnv(root), transferOpts);
     return { ...r, upToDate: r.ok && !r.moved };
   });
 

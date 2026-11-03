@@ -13,7 +13,7 @@ const trust = require('../trust');
 const { download, tarExe } = require('../installer/servers');
 const { createToolchains, installRoot } = require('../installer/toolchains');
 const { KINDS, javaFor, temurin, mojangProfile } = require('../minecraft/sources');
-const { writeZip, readEntry } = require('../minecraft/zipfile');
+const { writeZip, readEntry, openZip } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
 const { createImports, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
@@ -97,7 +97,14 @@ async function findJava(major) {
   }
   return null;
 }
-async function ensureJava(major, { log }) {
+// One download a version at a time: two servers starting at once would share its archive and staging folder.
+const javaJobs = new Map(); // major -> Promise<home>
+function ensureJava(major, { log }) {
+  if (!javaJobs.has(major)) javaJobs.set(major, installJava(major, { log }).finally(() => javaJobs.delete(major)));
+  else log(`Waiting for Java ${major}, which is being downloaded already…\n`);
+  return javaJobs.get(major);
+}
+async function installJava(major, { log }) {
   const found = await findJava(major);
   if (found) return found;
   const t = await temurin(major).catch((err) => { throw fail(`Java ${major} is not installed, and Adoptium could not be asked for it: ${err.message}`); });
@@ -128,9 +135,9 @@ const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLo
 // AutoModpack's jar in the server's mods: players who have it get the server's mods when they join.
 const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).find((n) => /^automodpack.*\.jar$/i.test(n)) : null) || null;
 
-// The project's servers, each with what its kind runs.
+// The project's servers, each with what its kind runs; not one still being made.
 function servers(root) {
-  return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind]).map((s) => ({
+  return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind] && !isFile(path.join(s.dir, UNFINISHED))).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
     // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
@@ -167,8 +174,39 @@ function installedLaunch(dir) {
   throw fail('The installer finished but left no way to start the server');
 }
 
-// loader: the exact mod loader version (a modpack's), else the recommended or newest.
-async function create({ root, name, kind, mc, loader, memory = '2G', port = 25565, eula }, log) {
+// A server folder being made holds this file from its first write to its last: a folder with it is what a create or an
+// import cut off half-way (the app closed) left, not the user's. It is not listed, and a new create of its name
+// replaces it; a folder without it is never removed.
+const UNFINISHED = 'pyide-server.unfinished';
+const building = new Set(); // folders (lower case) a create or import of this run is making
+const keyOf = (dir) => path.resolve(dir).toLowerCase();
+const unfinished = {
+  claim(dir) {
+    if (building.has(keyOf(dir))) throw fail(`${path.basename(dir)} is being made already`);
+    if (fs.existsSync(dir)) {
+      if (!isFile(path.join(dir, UNFINISHED))) {
+        throw fail(isFile(path.join(dir, SERVER)) ? `A server named ${path.basename(dir)} exists already`
+          : `servers/${path.basename(dir)} is a folder that is not a Nano Studio server: choose another name, or move that folder away`);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    building.add(keyOf(dir));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, UNFINISHED), '');
+  },
+  done(dir) { fs.rmSync(path.join(dir, UNFINISHED), { force: true }); building.delete(keyOf(dir)); },
+  undo(dir) { fs.rmSync(dir, { recursive: true, force: true }); building.delete(keyOf(dir)); },
+};
+// What blocks a new server's name: entries of servers/ that are neither a server nor an unfinished one.
+function blockedNames(root) {
+  const parent = path.join(root, 'servers');
+  const known = new Set(servers(root).map((s) => s.name.toLowerCase()));
+  return (fs.existsSync(parent) ? fs.readdirSync(parent) : []).filter((n) => !known.has(n.toLowerCase()) && !isFile(path.join(parent, n, UNFINISHED)));
+}
+
+// loader: the exact mod loader version (a modpack's), else the recommended or newest. keepUnfinished: the caller adds
+// more and finishes the folder itself (unfinished.done).
+async function create({ root, name, kind, mc, loader, memory = '2G', port = 25565, eula }, log, { keepUnfinished = false } = {}) {
   const source = KINDS[kind];
   if (!source) throw fail(`Unknown server type ${kind}`);
   // A proxy runs no Minecraft server, so Mojang's EULA is not its to accept.
@@ -177,8 +215,8 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
   notReserved(name);
   port = gamePort(port);
   const dir = path.join(root, 'servers', name);
-  if (fs.existsSync(dir)) throw fail(`${path.relative(root, dir)} already exists`);
-  fs.mkdirSync(dir, { recursive: true });
+  if (isFile(path.join(dir, UNFINISHED)) && !building.has(keyOf(dir))) log(`Removing what an unfinished create of ${name} left…\n`);
+  unfinished.claim(dir);
   try {
     log(`${source.title} ${mc}\n`);
     const r = await source.resolve(mc, loader);
@@ -211,10 +249,11 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
     const desc = { kind, mc, loader: r.loader || null, build: r.build || null, java, memory, launch, ...(antiXrayPending && { antiXrayPending }) };
     writeJson(path.join(dir, SERVER), desc);
     forNewServer(readJson(path.join(app.getPath('userData'), 'settings.json')), dir, { kind, version: mc }, log);
+    if (!keepUnfinished) unfinished.done(dir);
     log(`Created ${path.relative(root, dir)}\n`);
     return { name, dir, ...desc };
   } catch (err) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    unfinished.undo(dir);
     throw err;
   }
 }
@@ -260,21 +299,28 @@ async function launch(dir, log) {
 
 // ---------- Velocity ----------
 // The proxy sends players to every Paper or Purpur server of the project: its [servers] table lists them, and each of
-// them takes modern forwarding with the proxy's secret. Runs before each start of the proxy.
+// them takes modern forwarding with the proxy's secret. Runs before each start of the proxy. A server older than
+// Minecraft 1.13 has no modern forwarding: it is left out (skipped) and keeps its own account checks.
 function wireProxy(root, dir) {
   const desc = serverOf(dir);
-  if (!KINDS[desc.kind]?.proxy) return { backends: [] };
-  const backends = servers(root).filter((s) => s.plugins === 'paper').map((s) => ({ name: s.name, port: s.port, dir: s.dir }));
+  if (!KINDS[desc.kind]?.proxy) return { backends: [], skipped: [] };
+  const paper = servers(root).filter((s) => s.plugins === 'paper');
+  const backends = paper.filter((s) => T.velocityConfig(s.mc)).map((s) => ({ name: s.name, port: s.port, dir: s.dir, mc: s.mc }));
+  const skipped = paper.filter((s) => !T.velocityConfig(s.mc));
   const toml = path.join(dir, 'velocity.toml');
   fs.writeFileSync(toml, T.setVelocityServers(fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : T.velocityToml(portOf(dir), []), backends));
   const secret = fs.readFileSync(path.join(dir, 'forwarding.secret'), 'utf8').trim();
-  for (const b of backends) T.setPaperVelocity(b.dir, secret);
-  return { backends: backends.map(({ name, port }) => ({ name, port })) };
+  for (const b of backends) T.setPaperVelocity(b.dir, secret, b.mc);
+  // An older Nano Studio turned their account checks off too.
+  for (const s of skipped) T.unsetPaperVelocity(s.dir);
+  return { backends: backends.map(({ name, port }) => ({ name, port })), skipped: skipped.map(({ name, mc }) => ({ name, mc })) };
 }
-// After a server is deleted, each proxy sends players on to the servers left.
+// After a server is deleted, each proxy sends players on to the servers left. With no proxy left, the Paper servers
+// that were behind one take direct joins again: forwarding off, account checks on.
 function rewireProxies(root) {
   const proxies = servers(root).filter((s) => s.proxy && fs.existsSync(path.join(s.dir, 'forwarding.secret')));
   for (const p of proxies) wireProxy(root, p.dir);
+  if (!proxies.length) for (const s of servers(root).filter((x) => x.plugins === 'paper')) T.unsetPaperVelocity(s.dir);
   return proxies.map((p) => p.name);
 }
 
@@ -285,10 +331,26 @@ function clientPack(dir) {
   const desc = serverOf(dir);
   const loaderKey = KINDS[desc.kind]?.mods;
   if (!loaderKey) throw fail('Players of a server without mods need nothing but Minecraft itself');
-  // A server made from a modpack hands players the modpack itself: it has the client mods the server leaves out.
-  const pack = desc.modpack?.clientPack && path.join(dir, desc.modpack.clientPack);
-  if (pack && isFile(pack)) return { file: pack, mods: [], modpack: desc.modpack.name, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
   const name = path.basename(dir);
+  // A server made from a modpack hands players the modpack itself, which has the client mods the server leaves out,
+  // with the mods added to the server since (the Market, dropped jars) in its overrides.
+  const pack = desc.modpack?.clientPack && path.join(dir, desc.modpack.clientPack);
+  if (pack && isFile(pack)) {
+    const info = { modpack: desc.modpack.name, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
+    const zip = openZip(pack);
+    try {
+      let index = null;
+      try { index = JSON.parse(zip.read('modrinth.index.json').toString('utf8').replace(/^﻿/, '')); } catch {}
+      const ofPack = new Set([...(Array.isArray(index?.files) ? index.files : []).map((f) => path.posix.basename(String(f?.path || ''))),
+        ...zip.names.filter((n) => /^(client-|server-)?overrides\/mods\/[^/]+$/.test(n)).map((n) => path.posix.basename(n))].map((n) => n.toLowerCase()));
+      const added = (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')) : []).filter((n) => n.endsWith('.jar') && !ofPack.has(n.toLowerCase())).sort();
+      if (!added.length) return { file: pack, mods: [], added: [], ...info };
+      const file = path.join(dir, 'client-pack', `${name}-${desc.mc}.mrpack`);
+      fs.writeFileSync(file, writeZip([...zip.names.filter((n) => !n.endsWith('/')).map((n) => ({ name: n, data: zip.read(n) })),
+        ...added.map((m) => ({ name: `overrides/mods/${m}`, data: fs.readFileSync(path.join(dir, 'mods', m)) }))]));
+      return { file, mods: added, added, ...info };
+    } finally { zip.close(); }
+  }
   // With AutoModpack the pack holds it alone: it fetches the server's mods into its own folder at the first join, and
   // the same mods in mods/ as well would load twice.
   const sync = autoModpackOf(dir);
@@ -420,7 +482,11 @@ async function translateMods(dir, log, signal) {
   return translation.translateMods(dir, { mods, translate: ask, log, signal });
 }
 
-const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile });
+// Server folders (lower case) with a process minecraft:start started that has not ended -> how many: a Rerun's new
+// process starts before the old one has closed.
+const runningDirs = new Map();
+const isRunning = (dir) => runningDirs.has(keyOf(dir));
+const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile, running: isRunning });
 
 // A saved private server's key, encrypted as a data source's password is, but with no plain fallback: without safeStorage
 // it stays in memory and the friend pastes the code again.
@@ -430,7 +496,7 @@ const keyring = {
 };
 const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring });
 
-const imports = (root) => createImports({ root, servers: () => servers(root), create, javaFor, javaOfJar, fetchFile,
+const imports = (root) => createImports({ root, servers: () => servers(root), create, unfinished, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
 exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
@@ -492,13 +558,22 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   };
   ipcMain.handle('minecraft:launch', (_e, root, dir, job) => { guard(root); settleXray(dir, false); return launch(dir, logTo(job)); });
   // Starts a launch spec ({cmd, args, cwd}) as an IDE process the Run window shows; -> process id. A process outside
-  // the project's servers/ gets no players session.
+  // the project's servers/ gets no players session. When the app quits, the server is asked to save and stop as Stop
+  // does ("end" for a Velocity proxy) and given a big modpack's minute to do it before it is killed.
   ipcMain.handle('minecraft:start', (_e, root, spec) => {
     guard(root);
     const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
-    const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, windowsHide: true, filter: session?.filter });
+    let proxy = false;
+    try { proxy = !!KINDS[serverOf(spec.cwd).kind]?.proxy; } catch {}
+    const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, windowsHide: true, filter: session?.filter, quitInput: proxy ? 'end\n' : 'stop\n', quitWaitMs: 60000 });
     session?.attach(procs.get(id));
-    if (session) procs.get(id)?.once('close', () => settleXray(spec.cwd, true));
+    const proc = procs.get(id);
+    if (proc) {
+      const k = keyOf(spec.cwd);
+      runningDirs.set(k, (runningDirs.get(k) || 0) + 1);
+      proc.once('close', () => { if (runningDirs.get(k) > 1) runningDirs.set(k, runningDirs.get(k) - 1); else runningDirs.delete(k); });
+    }
+    if (session) proc?.once('close', () => settleXray(spec.cwd, true));
     return id;
   });
   // Whether nothing listens on a port (a server about to start there would fail to bind it).
@@ -512,6 +587,34 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('minecraft:wireProxy', (_e, root, dir) => { guard(root); return wireProxy(root, dir); });
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
+  ipcMain.handle('minecraft:blockedNames', (_e, root) => (root ? blockedNames(root) : []));
+  // A dedicated server that runs a command changing a setting (whitelist on) saves server.properties as it read it at
+  // its start, losing what was saved since. The window awaits this before it sends the command: the file is read now,
+  // and once the server has written its copy (within `wait` ms) the file goes back to what it was.
+  ipcMain.handle('minecraft:keepProperties', (_e, root, dir, wait = 15000) => {
+    guard(root);
+    if (!inServers(root, dir)) throw fail(`${dir} is not a server of this project`);
+    const file = path.join(dir, 'server.properties');
+    const kept = fs.readFileSync(file);
+    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      for (const end = Date.now() + Math.min(Number(wait) || 0, 60000); Date.now() < end;) {
+        await pause(100);
+        let now;
+        try { now = fs.readFileSync(file); } catch { continue; }
+        if (now.equals(kept)) continue;
+        // A moment for the server to finish writing its copy, which is then replaced whole.
+        await pause(300);
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, kept);
+        // A virus scanner may still have the file just written open for a moment.
+        for (let i = 0; ; i++) {
+          try { fs.renameSync(tmp, file); return; } catch (err) { if (i === 10) { fs.rmSync(tmp, { force: true }); throw err; } await pause(200); }
+        }
+      }
+    })().catch((err) => playersLog.warn(`server.properties of ${dir} was not put back: ${err.message}`));
+    return true;
+  });
   ipcMain.handle('minecraft:settings', (_e, root, dir) => settings(dir));
   // A new port is written into the proxies that send players to the server.
   ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => {

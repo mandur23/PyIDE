@@ -2,7 +2,7 @@ import { readFileSync, statSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
-const t = await launch({ fixture: 'search-nav', port: 9403, env: { PYIDE_FIND_TIMEOUT_MS: '4000' } });
+const t = await launch({ fixture: 'search-nav', port: 9403, env: { PYIDE_FIND_TIMEOUT_MS: '4000', PYIDE_REPLACE_TIMEOUT_MS: '4000' } });
 const { js, until, press, type, click, shot, cdp, project } = t;
 let seenErrors = 0;
 const check = (ok, label) => {
@@ -298,6 +298,26 @@ try {
   const stuck = await js(`Promise.all([ide.api.invoke('search:find', ide.root, ${slow}, {}), ide.api.invoke('search:todos', ide.root, {}), ide.api.invoke('search:find', ide.root, ${opts('greet')}, {})])`);
   check(stuck[0].stopped === 4 && stuck[0].count === 0 && stuck[1].count > 0 && stuck[2].count > 0 && Date.now() - t0 < 12000,
     `a runaway regex search is stopped and the TODO scan and search queued behind it answer (${J([stuck[0], stuck[1].count, stuck[2].count])}, ${Date.now() - t0} ms)`);
+  // Replace with it, in a file the main side reads and writes (CP949) and in an unsaved buffer: the pattern runs on the
+  // worker under the replace limit (4 s here, PYIDE_REPLACE_TIMEOUT_MS), and the main process, which answers every
+  // window's calls, is not held meanwhile. It used to run there with no limit.
+  const krBacktrack = Buffer.concat([cp949('x'), Buffer.from(`${'a'.repeat(40)}b\n`)]);
+  writeFileSync(path.join(project, 'backtrack_kr.txt'), krBacktrack);
+  t0 = Date.now();
+  const runaway = await js(`(async () => {
+    const opts = { ...${slow}, replacement: 'z' };
+    const replace = ide.api.invoke('search:replace', opts, [ide.util.joinPath(ide.root, 'backtrack_kr.txt')]);
+    await new Promise((r) => setTimeout(r, 500));
+    const asked = performance.now();
+    await ide.api.invoke('fs:exists', ide.root);
+    const answered = Math.round(performance.now() - asked);
+    const buffer = await ide.api.invoke('search:replaceText', opts, ${J(`${'a'.repeat(40)}b`)});
+    return { replace: await replace, answered, buffer };
+  })()`);
+  check(runaway.replace.stopped === 4 && runaway.buffer.stopped === 4 && runaway.buffer.count === 0 && runaway.buffer.text === `${'a'.repeat(40)}b`
+    && runaway.answered < 1000 && readFileSync(path.join(project, 'backtrack_kr.txt')).equals(krBacktrack) && Date.now() - t0 < 20000,
+    `a runaway regex in Replace is stopped in a CP949 file and in an unsaved buffer, and the main process answers meanwhile (${J(runaway)}, ${Date.now() - t0} ms)`);
+  writeFileSync(path.join(project, 'backtrack_kr.txt'), 'gone\n');
   // A preview replaced by a newer one is stopped after a second instead of running to the limit.
   t0 = Date.now();
   const typed = await js(`(async () => {

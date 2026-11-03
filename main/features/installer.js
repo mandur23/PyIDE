@@ -117,7 +117,7 @@ function credentialStore(file) {
   };
 }
 
-exports.register = ({ ipcMain, app, send }) => {
+exports.register = ({ ipcMain, app, send, holdQuit }) => {
   const root = process.env.PYIDE_INSTALL_ROOT || path.join(os.homedir(), '.pyide');
   const system = systemRunner();
   const store = credentialStore(path.join(app.getPath('userData'), 'installer', 'servers.json'));
@@ -265,15 +265,12 @@ exports.register = ({ ipcMain, app, send }) => {
   ipcMain.handle('installer:toolchains', () => toolchains.names().map((n) => toolchains.status(n)));
   ipcMain.handle('installer:root', () => root);
 
-  // Servers started here belong to this IDE session: shut them down cleanly before quitting.
-  let quitting = false;
-  app.on('before-quit', (e) => {
+  // Servers started here belong to this IDE session: they are shut down cleanly before the app ends (main.js's quit
+  // gate, at most 15 s).
+  holdQuit(() => {
     const names = servers.ownedNames();
-    if (quitting || !names.length) return;
-    e.preventDefault();
-    quitting = true;
+    if (!names.length) return null;
     const quiet = { log: () => {}, signal: new AbortController().signal };
-    const stopAll = Promise.all(names.map((n) => servers.stop(n, { ...quiet, exec: exec(quiet) }).catch(() => {})));
-    Promise.race([stopAll, new Promise((r) => setTimeout(r, 15000))]).then(() => app.quit());
-  });
+    return Promise.all(names.map((n) => servers.stop(n, { ...quiet, exec: exec(quiet) }).catch(() => {})));
+  }, 15000);
 };

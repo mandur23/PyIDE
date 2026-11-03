@@ -62,10 +62,17 @@ function register({ ipcMain }) {
   // root: the window's project folder, or null to stop watching. A project on a network share may show its images
   // (main/security.js).
   // Not existsSync: on a share that just dropped it blocks the main process for ~20 s; an unanswered check is given up.
+  // A window that opens another project during that check makes a second call, which may answer first: only a window's
+  // latest call changes what it watches, or the older one would put the previous project's watcher back.
   const reachable = (p) => Promise.race([fs.promises.access(p).then(() => true, () => false), new Promise((r) => { setTimeout(r, 3000, false); })]);
+  const latest = new WeakMap(); // webContents -> its latest call
   ipcMain.handle('watch:project', async (e, root) => {
+    const call = {};
+    latest.set(e.sender, call);
     if (root) allowShare(root);
-    return watch(e.sender, root && await reachable(root) ? root : null);
+    const ok = !!root && await reachable(root);
+    if (latest.get(e.sender) !== call || e.sender.isDestroyed()) return false;
+    return watch(e.sender, ok ? root : null);
   });
 }
 

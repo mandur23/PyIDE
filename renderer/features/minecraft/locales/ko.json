@@ -821,5 +821,9 @@
   "Killed {other} with {item}": "'{other}' 대상을 {item} 아이템으로 처치했어요",
   "Killed {other}": "'{other}' 대상을 처치했어요",
   "empty": "비어 있음",
-  "{slot} now holds: {what}": "{slot} 슬롯의 지금 내용: {what}"
+  "{slot} now holds: {what}": "{slot} 슬롯의 지금 내용: {what}",
+  "{name} runs Minecraft {mc}, older than 1.13, which has no modern forwarding: the proxy does not send players there, and it keeps its own account checks.": "{name} 서버는 마인크래프트 {mc} 버전이라 모던 포워딩이 없어요(1.13부터 있어요). 프록시는 이 서버로 플레이어를 보내지 않고, 서버가 계정을 직접 확인해요.",
+  "servers/{name} is a folder that is not a server: choose another name, or move that folder away.": "servers/{name} 폴더가 이미 있지만 서버가 아니에요. 다른 이름을 고르거나 그 폴더를 옮기세요.",
+  "The modpack {name} and the {count} mods added to the server since (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).": "모드팩 {name}, 그리고 그 뒤 서버에 추가한 모드 {count}개(마인크래프트 {mc}, {loader}). 플레이어는 Prism Launcher나 Modrinth 앱에서 한 번 가져오면 돼요(인스턴스 추가 › 가져오기).",
+  "Stop {server} first: while it runs, Java holds its jars, and {title} cannot be taken out of it.": "먼저 {server} 서버를 중지하세요. 실행 중에는 Java가 jar 파일을 쥐고 있어서 {title} 파일을 뺄 수 없어요."
 }

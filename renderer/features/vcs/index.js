@@ -1029,15 +1029,19 @@
 
   // The change markers are model decorations, so every pane showing the file has them; an edit typed in any pane
   // (or in an editor embedded in a viewer) recomputes them.
-  const tabOf = (ed) => { const m = ed.getModel(); return m ? ide.tabs.find((t) => t.model === m) || null : null; };
-  const fileTabOf = (ed) => { const t = tabOf(ed); return t && { kind: 'file', path: t.path, model: t.model }; };
-  let gutterTimer;
+  const tabOfModel = (m) => (m ? ide.tabs.find((t) => t.model === m) || null : null);
+  const tabOf = (ed) => tabOfModel(ed.getModel());
+  const fileTab = (t) => t && { kind: 'file', path: t.path, model: t.model };
+  const fileTabOf = (ed) => fileTab(tabOf(ed));
+  // One pending update per file: an edit in another file within the pause must not cancel this one's.
+  const gutterTimers = new WeakMap(); // model -> timer
   ide.onEditor((ed) => ed.onDidChangeModelContent(() => {
-    clearTimeout(gutterTimer);
+    const model = ed.getModel();
+    clearTimeout(gutterTimers.get(model));
     // A file whose last diff took long (big and heavily changed) is diffed after a longer pause in typing.
-    const tab = tabOf(ed);
+    const tab = tabOfModel(model);
     const slow = tab && gutters.get(key(tab.path))?.ms > 40;
-    gutterTimer = setTimeout(() => updateGutter(fileTabOf(ed)), slow ? 1000 : 250);
+    gutterTimers.set(model, setTimeout(() => { gutterTimers.delete(model); updateGutter(fileTab(tabOfModel(model))); }, slow ? 1000 : 250));
   }));
 
   // Every file shown in some pane, not just the active one, so a split view stays current after commits and checkouts.

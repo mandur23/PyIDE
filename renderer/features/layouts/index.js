@@ -193,13 +193,13 @@
 
   // Two editor groups at most (a third joins the second), and a file that has gone is left out.
   const exists = (path) => Promise.race([ide.api.exists(path), new Promise((r) => { setTimeout(r, 2000, false); })]);
-  async function openGroup(group, stillOpen, into) {
+  async function openGroup(group, stillOpen, into, front) {
     let first = true;
     let last = null;
     for (const { path, pinned, view } of group.tabs) {
       if (!stillOpen()) break;
       if (!(await exists(path)) || !stillOpen()) continue;
-      const tab = await ide.openFile(path, { focus: false, ...(first && into ? { group: into } : {}) });
+      const tab = await front.open(() => ide.openFile(path, { focus: false, ...(first && into ? { group: into } : {}) }));
       if (!tab) continue;
       first = false;
       if (view && tab.kind === 'file') { tab.viewState = view; ide.editor.restoreViewState(view); }
@@ -214,15 +214,33 @@
     const [one, ...rest] = groups;
     const two = rest.length ? { tabs: rest.flatMap((g) => g.tabs), active: rest.at(-1).active } : null;
     const sameProject = () => ide.root && keyOf(ide.root) === keyOf(root);
-    const show = async (path, group) => { if (path && sameProject() && await exists(path)) await ide.openFile(path, { focus: false, group }); };
-    if (one) await openGroup(one, sameProject);
-    const second = two && sameProject() && await openGroup(two, sameProject, 'right');
+    // A tab the user brings to the front while the files come back (one clicked in the tree) stays in front: the
+    // restore's own opens and its last front tabs would cover it. The other projectOpened handlers (Workspace Home)
+    // have run after the first await.
+    await null;
+    const front = {
+      tab: ide.activeTab(),
+      picked: null,
+      async open(fn) {
+        if (!this.picked && ide.activeTab() !== this.tab) this.picked = ide.activeTab();
+        const tab = await fn();
+        this.tab = ide.activeTab();
+        return tab;
+      },
+    };
+    const show = async (path, group) => {
+      if (path && sameProject() && await exists(path) && !front.picked) await front.open(() => ide.openFile(path, { focus: false, group }));
+    };
+    if (one) await openGroup(one, sameProject, undefined, front);
+    const second = two && sameProject() && await openGroup(two, sameProject, 'right', front);
     // 'right' is the other group from the one in use, and each show moves to the group it shows.
     if (second) await show(two.active);
     await show(one?.active, second ? 'right' : undefined);
     if (second && saved.focus === 1) await show(two.active, 'right');
+    await front.open(() => null);
     // A group whose front tab has no file was showing the Workspace tab.
-    if (one && !one.active && sameProject() && ide.actions.some((a) => a.id === 'WorkspaceHome')) ide.runAction('WorkspaceHome');
+    if (one && !one.active && !front.picked && sameProject() && ide.actions.some((a) => a.id === 'WorkspaceHome')) ide.runAction('WorkspaceHome');
+    if (front.picked?.path && front.picked !== ide.activeTab() && ide.tabs.includes(front.picked) && sameProject()) await ide.openFile(front.picked.path);
     if (saved?.layout && sameProject()) await apply(saved.layout);
     if (sameProject()) tabsBackFor.root = keyOf(root);
   }

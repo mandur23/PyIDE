@@ -317,8 +317,13 @@ class Server {
   // 'rename' event); a batch goes once nothing has arrived for 250 ms, after checking which of its files still exist
   // off the main thread. (An existsSync per event kept the main process, and every window's IPC, busy for most of a
   // second when 10,000 files changed.)
+  // An event without a name is Windows saying its change buffer overflowed (a checkout of thousands of files): the
+  // changes in it are lost, so the server is told that the project folder itself changed. Pyright takes a change to a
+  // folder as "anything under it may have changed": it reads every file again and lists the project's files afresh.
+  // Without it a big checkout left Pyright with the old files until the next restart. The watcher goes on by itself.
   watch() {
     let batch = new Map(); // full path -> renamed (added or removed) at some point in the batch
+    let lost = false; // the buffer overflowed during the batch
     let timer = null;
     let last = 0;
     const flush = async () => {
@@ -326,12 +331,15 @@ class Server {
       if (quiet < 250) { timer = setTimeout(flush, 250 - quiet); return; }
       timer = null;
       const events = batch;
+      const resync = lost;
       batch = new Map();
+      lost = false;
       const changes = await Promise.all([...events].map(async ([full, renamed]) => {
         const exists = await fs.promises.access(full).then(() => true, () => false);
         // A save that replaced the file by rename is a change, not a new file.
         return { uri: pathToFileURL(full).href, type: exists ? (renamed && !textCodec.replacedRecently(full) ? 1 : 2) : 3 };
       }));
+      if (resync) changes.push({ uri: pathToFileURL(this.root).href, type: 2 });
       if (!this.initialized || this.dead) return;
       this.notify('workspace/didChangeWatchedFiles', { changes });
       this.bindSoon(this.openUris);
@@ -339,9 +347,12 @@ class Server {
     const ignored = this.spec.watchIgnored;
     try {
       this.watcher = fs.watch(this.root, { recursive: true }, (event, file) => {
-        if (!file || WATCH_IGNORED.test(`\\${file}`) || ignored?.test(`\\${file}`) || !this.spec.watched.test(file)) return;
-        const full = path.join(this.root, file);
-        batch.set(full, batch.get(full) || event === 'rename');
+        if (!file) lost = true;
+        else if (WATCH_IGNORED.test(`\\${file}`) || ignored?.test(`\\${file}`) || !this.spec.watched.test(file)) return;
+        else {
+          const full = path.join(this.root, file);
+          batch.set(full, batch.get(full) || event === 'rename');
+        }
         last = Date.now();
         if (!timer) timer = setTimeout(flush, 250);
       });

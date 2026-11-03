@@ -454,7 +454,12 @@ function invalidateScans(paths) {
 
 // File scans run on a worker thread: on a large project they read thousands of files, and doing that on the main
 // process froze every window and IPC call until it finished.
-const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), todos, pyFiles, invalidate: invalidateScans };
+// replaceTexts: the replacement in texts main read (files in other encodings, unsaved buffers) -> [{text, count}].
+const replaceTexts = (texts, opts) => {
+  const c = compile(opts);
+  return texts.map((t) => replaceText(t, c));
+};
+const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), replaceTexts, todos, pyFiles, invalidate: invalidateScans };
 if (!isMainThread && workerData?.role === 'pyide-search') {
   // One request at a time, answered in order (worker-host times the first one waiting), although find awaits reads.
   let queue = Promise.resolve();
@@ -491,22 +496,34 @@ function keyedOverrides(overrides) {
   return { texts, dirs: [...dirs] };
 }
 
-// Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding. A file whose
-// encoding cannot hold the new text (an emoji into CP949) is left as it was and reported.
-function replaceForeign(paths, opts) {
-  const c = compile(opts);
+// Replaces in the files the worker left alone (CP949 and other non-UTF-8 text), keeping their encoding. This side
+// reads and writes them as the editor does (text-codec, which the worker cannot load), the worker runs the pattern
+// within `timeout` ms (ETIMEDOUT past it), as it does for the other files: on this thread a user's regex that
+// backtracks for hours froze every window. A file whose encoding cannot hold the new text (an emoji into CP949) is
+// left as it was and reported.
+async function replaceForeign(paths, opts, timeout) {
   const changed = [];
   const skipped = [];
   let count = 0;
+  const files = [];
   for (const p of paths) {
     try {
-      const file = textCodec.read(p);
-      if (file.text === undefined) { skipped.push(skip(p, file.binary ? 'binary' : 'tooLarge')); continue; }
-      const { text, count: n } = replaceText(file.text, c);
-      if (!n || text === file.text) continue;
+      const file = await textCodec.readAsync(p);
+      if (file.text === undefined) skipped.push(skip(p, file.binary ? 'binary' : 'tooLarge'));
+      else files.push({ p, ...file });
+    } catch (e) {
+      skipped.push(skip(p, 'error', e));
+    }
+  }
+  const results = files.length ? await scan.with({ timeout }, 'replaceTexts', files.map((f) => f.text), opts) : [];
+  files.forEach((file, i) => {
+    const { p } = file;
+    const { text, count: n } = results[i];
+    if (!n || text === file.text) return;
+    try {
       if (textCodec.decode(textCodec.encode(text, file.encoding), file.encoding) !== text) {
         skipped.push({ path: p, reason: 'encoding', encoding: file.encoding });
-        continue;
+        return;
       }
       textCodec.write(p, text, file.encoding);
       changed.push(p);
@@ -514,7 +531,7 @@ function replaceForeign(paths, opts) {
     } catch (e) {
       skipped.push(skip(p, 'error', e));
     }
-  }
+  });
   return { changed, count, skipped };
 }
 
@@ -523,7 +540,7 @@ function replaceForeign(paths, opts) {
 // PYIDE_FIND_TIMEOUT_MS shortens both search limits for the tests.
 const FIND_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 60000;
 const PREVIEW_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 30000;
-const REPLACE_TIMEOUT = 120000;
+const REPLACE_TIMEOUT = Number(process.env.PYIDE_REPLACE_TIMEOUT_MS) || 120000;
 const SUPERSEDED = () => ({ files: [], count: 0, superseded: true });
 const findOnWorker = (args, timeout, signal) => scan.with({ timeout, signal }, 'find', ...args).catch((e) => {
   if (e.code === 'ABORT_ERR') return SUPERSEDED();
@@ -876,18 +893,28 @@ exports.register = ({ ipcMain, app }) => {
   // {changed, count, skipped}, or {stopped} when the worker was stopped partway: some of `paths` may then have been
   // replaced.
   ipcMain.handle('search:replace', async (_e, opts, paths) => {
+    const until = Date.now() + REPLACE_TIMEOUT;
     let res;
     try {
       res = await scan.with({ timeout: REPLACE_TIMEOUT, resend: false }, 'replace', paths, opts);
+      const other = await replaceForeign(res.foreign, opts, Math.max(1, until - Date.now()));
+      return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped] };
     } catch (e) {
-      if (e.code === 'ETIMEDOUT') return { changed: [], count: 0, stopped: REPLACE_TIMEOUT / 1000 };
+      if (e.code === 'ETIMEDOUT') return { changed: res?.changed || [], count: res?.count || 0, stopped: REPLACE_TIMEOUT / 1000 };
       throw e;
     }
-    const other = replaceForeign(res.foreign, opts);
-    return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped] };
   });
-  // The same replacement applied to an unsaved buffer's text -> {text, count}.
-  ipcMain.handle('search:replaceText', (_e, opts, text) => replaceText(text, compile(opts)));
+  // The same replacement applied to an unsaved buffer's text -> {text, count}, the text unchanged when the pattern ran
+  // past the limit ({stopped}).
+  ipcMain.handle('search:replaceText', async (_e, opts, text) => {
+    try {
+      const [r] = await scan.with({ timeout: REPLACE_TIMEOUT }, 'replaceTexts', [text], opts);
+      return r;
+    } catch (e) {
+      if (e.code === 'ETIMEDOUT') return { text, count: 0, stopped: REPLACE_TIMEOUT / 1000 };
+      throw e;
+    }
+  });
   ipcMain.handle('search:todos', (_e, root, overrides) => scan('todos', root, keyedOverrides(overrides), excludedOf(root)));
   ipcMain.handle('search:outline', async (_e, interp, text) => (await runAst(interp, 'outline', text, 30000)) || { error: 'Python interpreter failed' });
   // The index as one list of {name, kind, line, col, container, path}.

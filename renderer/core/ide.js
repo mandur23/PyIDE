@@ -599,9 +599,11 @@ ide.ui.listKeys = (host, { rows, selected, select, open = (row) => row.click(), 
 
 // Popup chooser used by search everywhere, find action, recent files, and prompts.
 let popupState = null;
-const fuzzyScore = (text, q) => {
+let popupFrame = 0; // a draw waiting for the next frame
+const POPUP_ROWS = 200;
+// t: already lowercased.
+const fuzzyScore = (t, q) => {
   if (!q) return 1;
-  const t = text.toLowerCase();
   if (t.startsWith(q)) return 4;
   if (t.includes(q)) return 3;
   let i = 0;
@@ -609,7 +611,29 @@ const fuzzyScore = (text, q) => {
   return i === q.length ? 1 : 0;
 };
 
+// The rows for the typed text: the best POPUP_ROWS, in the order a stable sort by score gives. Scores are 0-9 (the
+// label's twice, plus 1 for the detail), so buckets do it without sorting every item; the lowercased texts are kept
+// for the item list, since Go to File ranks 20,000 files on every keystroke.
+function popupMatches(s, q) {
+  if (s.filter === false) return s.items;
+  if (s.lowerOf !== s.items) {
+    s.lowerOf = s.items;
+    s.lower = s.items.map((it) => [it.label.toLowerCase(), it.detail ? it.detail.toLowerCase() : null]);
+  }
+  const buckets = Array.from({ length: 10 }, () => []);
+  for (let i = 0; i < s.items.length; i++) {
+    const [label, detail] = s.lower[i];
+    const sc = fuzzyScore(label, q) * 2 + (detail !== null && fuzzyScore(detail, q) ? 1 : 0);
+    if (sc > 0) buckets[sc].push(s.items[i]);
+  }
+  const out = [];
+  for (let sc = 9; sc > 0 && out.length < POPUP_ROWS; sc--) out.push(...buckets[sc].slice(0, POPUP_ROWS - out.length));
+  return out;
+}
+
 function renderPopup() {
+  cancelAnimationFrame(popupFrame);
+  popupFrame = 0;
   const s = popupState;
   const list = $('popupList');
   list.innerHTML = '';
@@ -617,14 +641,11 @@ function renderPopup() {
     list.appendChild(el('div', 'popup-item hint', tr('{label} — Enter to confirm, Esc to cancel', { label: s.placeholder })));
     return;
   }
-  const q = $('popupIn').value.trim().toLowerCase();
-  const items = s.filter === false ? s.items
-    : s.items.map((it) => [it, fuzzyScore(it.label, q) * 2 + (it.detail ? fuzzyScore(it.detail, q) && 1 : 0)])
-      .filter(([, sc]) => sc > 0).sort((a, b) => b[1] - a[1]).map(([it]) => it);
-  items.slice(0, 200).forEach((it, i) => {
+  const items = popupMatches(s, $('popupIn').value.trim().toLowerCase());
+  items.slice(0, POPUP_ROWS).forEach((it, i) => {
     const row = el('div', 'popup-item' + (i === 0 ? ' active' : ''));
     if (it.icon) {
-      const icon = typeof it.icon === 'string' ? ide.icon(it.icon) : it.icon.cloneNode(true);
+      const icon = typeof it.icon === 'function' ? it.icon() : typeof it.icon === 'string' ? ide.icon(it.icon) : it.icon.cloneNode(true);
       icon.classList.add('icon');
       row.appendChild(icon);
     }
@@ -668,7 +689,8 @@ function openPopup(state) {
   });
 }
 
-// items: [{label, detail?, hint?, icon?, value?}] or an async function(query) returning that list
+// items: [{label, detail?, hint?, icon?, value?}] or an async function(query) returning that list.
+// icon: an icon name, an element (cloned per row), or a function returning one, called only for the rows drawn.
 ide.ui.pick = ({ placeholder, items, initial }) => {
   if (typeof items === 'function') {
     const load = items;
@@ -687,10 +709,16 @@ ide.ui.pick = ({ placeholder, items, initial }) => {
 };
 ide.ui.prompt = (placeholder, initial = '') => openPopup({ placeholder, mode: 'prompt', initial });
 
-$('popupIn').oninput = () => (popupState?.onQuery ? popupState.onQuery() : popupState && renderPopup());
+// The rows are drawn in the next frame, which shows them no later than drawing at once: keys typed faster than the
+// rows draw are drawn once. Enter and Up/Down draw the pending rows first.
+$('popupIn').oninput = () => {
+  if (popupState?.onQuery) popupState.onQuery();
+  else if (popupState) popupFrame ||= requestAnimationFrame(() => { popupFrame = 0; if (popupState) renderPopup(); });
+};
 $('popupIn').onkeydown = (e) => {
   if (!popupState) return;
   if (e.key === 'Escape') { e.stopPropagation(); return closePopup(); }
+  if (popupFrame && ['Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) renderPopup();
   // preventDefault: the Enter must not also reach the editor that gets the keyboard back.
   if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup($('popupIn').value.trim() || null); } return; }
   const rows = [...$('popupList').querySelectorAll('.popup-item:not(.hint)')];
@@ -2360,7 +2388,7 @@ async function gotoFile() {
   }
   const path = await ide.ui.pick({
     placeholder: tr('Search files'),
-    items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: ide.fileIcon(p), value: p })),
+    items: files.map((p) => ({ label: basename(p), detail: ide.util.rel(dirname(p)), icon: () => ide.fileIcon(p), value: p })),
   });
   if (path) ide.openFile(path);
 }

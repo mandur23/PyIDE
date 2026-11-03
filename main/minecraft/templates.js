@@ -2,6 +2,7 @@
 // project's servers.
 const fs = require('fs');
 const path = require('path');
+const { atLeast } = require('./anti-xray');
 
 // A key=value in a .properties file, set (added when missing).
 function setProperty(file, key, value) {
@@ -47,18 +48,45 @@ function setVelocityServers(text, backends) {
   const table = `[servers]\n${backends.map((b) => `${JSON.stringify(b.name)} = "127.0.0.1:${b.port}"`).join('\n')}\ntry = [${backends.map((b) => JSON.stringify(b.name)).join(', ')}]\n\n`;
   return /^\[servers\][\s\S]*?(?=^\[)/m.test(text) ? text.replace(/^\[servers\][\s\S]*?(?=^\[)/m, () => table) : `${text.replace(/\n?$/, '\n\n')}${table}`;
 }
-// A Paper backend behind Velocity: modern forwarding with the proxy's secret in config/paper-global.yml (the
-// proxies.velocity block), and online-mode off in server.properties since the proxy checks the players' accounts.
-function setPaperVelocity(serverDir, secret) {
-  const file = path.join(serverDir, 'config', 'paper-global.yml');
-  const block = `  velocity:\n    enabled: true\n    online-mode: true\n    secret: '${secret}'\n`;
+// Where a Paper or Purpur of Minecraft `mc` reads modern forwarding: config/paper-global.yml's proxies.velocity from
+// 1.19, paper.yml's settings.velocity-support from 1.13 to 1.18. null before 1.13, which has no modern forwarding.
+const VELOCITY_FILES = {
+  global: { file: ['config', 'paper-global.yml'], parent: 'proxies', key: 'velocity' },
+  legacy: { file: ['paper.yml'], parent: 'settings', key: 'velocity-support' },
+};
+const velocityConfig = (mc) => (atLeast(mc, 1, 19) ? VELOCITY_FILES.global : atLeast(mc, 1, 13) ? VELOCITY_FILES.legacy : null);
+const blockRe = (key) => new RegExp(`^ {2}${key}:\\n(?: {4}.*\\n)*`, 'm');
+// A Paper backend behind Velocity: modern forwarding with the proxy's secret in the file its version reads, and
+// online-mode off in server.properties since the proxy checks the players' accounts. false (nothing written) for a
+// Minecraft older than 1.13: with account checks off and no forwarding to check, anyone could join as anyone.
+function setPaperVelocity(serverDir, secret, mc) {
+  const where = velocityConfig(mc);
+  if (!where) return false;
+  const file = path.join(serverDir, ...where.file);
+  const block = `  ${where.key}:\n    enabled: true\n    online-mode: true\n    secret: '${secret}'\n`;
   let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (/^ {2}velocity:\n(?: {4}.*\n)*/m.test(text)) text = text.replace(/^ {2}velocity:\n(?: {4}.*\n)*/m, () => block);
-  else if (/^proxies:\n/m.test(text)) text = text.replace(/^proxies:\n/m, () => `proxies:\n${block}`);
-  else text = `${text.replace(/\n?$/, text ? '\n' : '')}proxies:\n${block}`;
+  if (blockRe(where.key).test(text)) text = text.replace(blockRe(where.key), () => block);
+  else if (new RegExp(`^${where.parent}:\\n`, 'm').test(text)) text = text.replace(new RegExp(`^${where.parent}:\\n`, 'm'), () => `${where.parent}:\n${block}`);
+  else text = `${text.replace(/\n?$/, text ? '\n' : '')}${where.parent}:\n${block}`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
   setProperty(path.join(serverDir, 'server.properties'), 'online-mode', 'false');
+  return true;
+}
+// A backend no proxy sends players to any more: forwarding off wherever it is on (either file: an older Nano Studio
+// wrote paper-global.yml for every version), and the server checks accounts itself again. -> whether it was on.
+function unsetPaperVelocity(serverDir) {
+  let was = false;
+  for (const where of Object.values(VELOCITY_FILES)) {
+    const file = path.join(serverDir, ...where.file);
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    const block = blockRe(where.key).exec(text)?.[0];
+    if (!block || !/^ {4}enabled: true$/m.test(block)) continue;
+    fs.writeFileSync(file, text.replace(blockRe(where.key), () => block.replace(/^ {4}enabled: true$/m, '    enabled: false')));
+    was = true;
+  }
+  if (was) setProperty(path.join(serverDir, 'server.properties'), 'online-mode', 'true');
+  return was;
 }
 
-module.exports = { setProperty, packMcmeta, velocityToml, setVelocityServers, setPaperVelocity };
+module.exports = { setProperty, packMcmeta, velocityToml, setVelocityServers, setPaperVelocity, unsetPaperVelocity, velocityConfig };

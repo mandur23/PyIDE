@@ -4,7 +4,7 @@
 // Ctrl+F11 assigns a mnemonic, Ctrl+digit jumps, bookmarks follow edits, the Alt+2 tool window lists them, and both
 // bookmarks and history survive a restart. Then the same surfaces in Korean. Ports 9710-9712.
 import { execFileSync } from 'child_process';
-import { readFileSync, readdirSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdtempSync, chmodSync } from 'fs';
+import { readFileSync, readdirSync, writeFileSync, appendFileSync, unlinkSync, existsSync, mkdirSync, mkdtempSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -119,6 +119,11 @@ try {
   writeFileSync(file('pkg/new_mod.py'), 'NEW = True\n');
   await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'pkg\\\\new_mod.py'), false).then(r => r.revisions[0]?.k === 'create')`, 'created file', 8000);
   check(true, 'a file created outside the IDE gets a "create" revision');
+  // A folder whose name starts with two dots is in the project, not above it.
+  mkdirSync(file('..data'));
+  writeFileSync(file('..data/notes.py'), 'NOTES = 1\n');
+  await until(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, '..data\\\\notes.py'), false).then(r => r.revisions[0]?.k === 'create')`, '..data file', 8000)
+    .then(() => check(true, 'a file in a folder named ..data has its history'), () => check(false, 'a file in a folder named ..data has its history'));
 
   // A Git rollback (vcs plugin) puts a label first.
   git(t.project, 'init');

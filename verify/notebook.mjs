@@ -266,6 +266,19 @@ try {
   await runAt(t, probe, "'x' in globals()", 'after restart');
   check((await outputsText(t, probe)).includes('False'), 'Restart Kernel clears the kernel state');
 
+  // ---------- stopping the kernel ends its running and queued cells (the bridge sends no done on shutdown) ----------
+  const sleeper = await addCodeCell(t, 'import time\ntime.sleep(120)');
+  const waiting = await addCodeCell(t, '1 + 1');
+  await js(`${V}.runCell(${sleeper})`);
+  await js(`${V}.runCell(${waiting})`);
+  await until(`${H}.dataset.kernel === 'busy' && ${H}.querySelectorAll('.nb-cell')[${waiting}].matches('.queued')`, 'busy with a queued cell');
+  await js(`ide.emit('interpreterChanged', ide.currentInterp())`);
+  await click(`${HS} .nb-banner button.primary`); // the banner's Restart Kernel stops the kernel and starts a new one
+  await until(`!${H}.querySelector('.nb-cell.running, .nb-cell.queued')`, 'stopped runs end', 10000).catch(() => {});
+  const stoppedRuns = await js(`[${sleeper}, ${waiting}].map(i => ({ runs: ${V}.cells()[i].runs, prompt: ${H}.querySelectorAll('.nb-cell')[i].querySelector('.nb-prompt').textContent }))`);
+  check(stoppedRuns.every((r) => !r.runs && r.prompt !== '[*]:'), `stopping the kernel finishes its running and queued cells (${JSON.stringify(stoppedRuns)})`);
+  await until(`${H}.dataset.kernel === 'idle'`, 'new kernel after stop', 60000);
+
   // ---------- output flood: a stream output keeps its last 1 MB ----------
   const flood = await addCodeCell(t, 'for i in range(200000):\n    print("line", i)');
   await runAt(t, flood, undefined, 'flood');
