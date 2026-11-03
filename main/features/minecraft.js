@@ -185,7 +185,7 @@ const unfinished = {
     if (building.has(keyOf(dir))) throw fail(`${path.basename(dir)} is being made already`);
     if (fs.existsSync(dir)) {
       if (!isFile(path.join(dir, UNFINISHED))) {
-        throw fail(isFile(path.join(dir, SERVER)) ? `A server named ${path.basename(dir)} exists already`
+        throw fail(isFile(path.join(dir, SERVER)) ? `A server named ${path.basename(dir)} already exists`
           : `servers/${path.basename(dir)} is a folder that is not a Nano Studio server: choose another name, or move that folder away`);
       }
       fs.rmSync(dir, { recursive: true, force: true });

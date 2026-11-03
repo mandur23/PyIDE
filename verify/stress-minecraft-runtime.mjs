@@ -3,7 +3,7 @@
 // Adoptium; a small Java program plays the server (with flag files that make it crash at start, quit at once or ignore
 // "stop"). Each stand-in process writes its pid to pids/, so the suite can tell that none is left running. Checks:
 // hostile server names (invalid, Korean, emoji, too long, CON/NUL, duplicates), bad and busy game ports, Start, Stop and
-// Restart clicked 20 times, a server that crashes, quits at once or hangs on "stop" (killed 30 s later, also on a
+// Restart clicked 20 times, a server that crashes, quits at once or hangs on "stop" (killed 60 s later, also on a
 // Rerun), its folder deleted or renamed while it runs, a damaged pyide-server.json, a wrong Java, the resource pack sent
 // with none made, the Minecraft screen's pages switched many times, 50 servers in the project, and a server whose Java
 // is missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
@@ -147,7 +147,7 @@ const startCard = async (name, label = name) => {
   await js(`(${card(name)}.querySelector('.mc-start').click(), true)`);
   return waitFor(() => js(`!!(${runTab(label)})?.running && (${runTab(label)}).host.textContent.includes('Done (0.4s)!')`), 30000);
 };
-const stopped = (name) => waitFor(() => js(`!(${runTab(name)})?.running`), 40000);
+const stopped = (name) => waitFor(() => js(`!(${runTab(name)})?.running`), 75000);
 const section = async (label, fn) => {
   try { await fn(); } catch (err) { check(false, `${label}: ${(err.message.split('\n').find((l) => l.startsWith('=>')) || err.message).slice(0, 300)}`); await closeDialogs().catch(() => {}); }
 };
@@ -276,16 +276,16 @@ try {
     const t0 = Date.now();
     await js(`(${card('gamma')}.querySelector('.mc-stop').click(), true)`);
     const ended = await stopped('gamma');
-    check(ended && /Ignoring stop/.test(await tabText('gamma')) && Date.now() - t0 > 25000 && !aliveServers(serverDir('gamma')).length,
-      `a server that ignores "stop" is killed about 30 s later (${Math.round((Date.now() - t0) / 1000)} s)`);
+    check(ended && /Ignoring stop/.test(await tabText('gamma')) && Date.now() - t0 > 55000 && !aliveServers(serverDir('gamma')).length,
+      `a server that ignores "stop" is killed about 60 s later (${Math.round((Date.now() - t0) / 1000)} s)`);
     // Rerun of a hung server: the old process must not be left running.
     check(await startCard('gamma'), 'it starts again');
     const old = aliveServers(serverDir('gamma')).map((p) => p.pid);
     const t1 = Date.now();
     await js(`(ide.run.runConfig(${runTab('gamma')}.cfg, { confirm: false }), true)`);
-    const ok = await waitFor(async () => old.every((p) => !alive(p)) && await js(`(() => { const s = ${runTab('gamma')}; return s.running && !s.starting && s.host.textContent.includes('Done (0.4s)!'); })()`), 60000, 500);
+    const ok = await waitFor(async () => old.every((p) => !alive(p)) && await js(`(() => { const s = ${runTab('gamma')}; return s.running && !s.starting && s.host.textContent.includes('Done (0.4s)!'); })()`), 100000, 500);
     check(ok && aliveServers(serverDir('gamma')).length === 1,
-      `Rerun of a server that ignores "stop" kills the old one 30 s later and the new one starts (${Math.round((Date.now() - t1) / 1000)} s, old alive: ${old.filter(alive).length}, running: ${S(aliveServers(serverDir('gamma')).map((p) => `${p.pid} ${image(p.pid)}`))})`);
+      `Rerun of a server that ignores "stop" kills the old one 60 s later and the new one starts (${Math.round((Date.now() - t1) / 1000)} s, old alive: ${old.filter(alive).length}, running: ${S(aliveServers(serverDir('gamma')).map((p) => `${p.pid} ${image(p.pid)}`))})`);
     rmSync(path.join(serverDir('gamma'), 'hang.flag'));
     await js(`(${runTab('gamma')}.stop(), true)`);
     await stopped('gamma');

@@ -401,7 +401,7 @@ try {
   check(zf.ok?.name === 'Remote' && /second\.mrpack$/.test(zf.ok.file), `a version whose primary file is not a .mrpack gives its .mrpack (${S(zf.ok?.file || zf.err)})`);
   await call('minecraft:discardModpack', zf.ok?.file);
   r = await fromPack({ url: 'remote', name: 'pap' });
-  check(/servers.pap already exists/.test(r.err || '') && !tempLeft().length && existsSync(path.join(serverDir('pap'), 'pyide-server.json')),
+  check(/A server named pap already exists/.test(r.err || '') && !tempLeft().length && existsSync(path.join(serverDir('pap'), 'pyide-server.json')),
     `a modpack from Modrinth whose server cannot be made leaves no download behind (${r.err}; ${S(tempLeft())})`);
 
   // ---------- the Market ----------
