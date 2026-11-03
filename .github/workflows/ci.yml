@@ -92,6 +92,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/private-share.mjs
+      - name: port-sharing-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/port-sharing-core.mjs
       - name: csp
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
@@ -104,6 +108,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/minecraft-launcher-core.mjs
+      - name: minecraft-content-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/minecraft-content-core.mjs
+      - name: minecraft-server-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/minecraft-server-core.mjs
       - name: minecraft-launcher
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 15

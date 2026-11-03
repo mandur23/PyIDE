@@ -4,7 +4,7 @@
 // something a player typed. A data answer can run over many lines that a player wrote (see snbtEnd): until it ends, the
 // stream is that answer, whatever its lines look like. A session starts with the process and ends at its exit; nothing
 // outlives that.
-const { split, plain, classify, typed, validName } = require('./logparse');
+const { split, plain, classify, typed, namesIn } = require('./logparse');
 const { parseSnbt, snbtEnd, posOf } = require('./nbt');
 const { offlineUuid } = require('../server-settings');
 
@@ -20,6 +20,9 @@ const ANSWER_SIZE = 16 << 20;
 const ANSWER_LINES = 100000;
 const ANSWER_MS = 10000;
 const QUEUE_MAX = 32;
+// How long, and how many, queries that timed out still wait for their answer.
+const LATE_MS = 10000;
+const LATE_MAX = 8;
 const WATCH_MS = 30000;
 const failure = (message, code) => Object.assign(new Error(message), { expected: true, code });
 
@@ -33,23 +36,25 @@ const matchData = (name) => {
   };
 };
 // A `data get` nobody here asked, typed into the console by the owner. A lectern's book prints the same way.
-const DATA_ANSWER = /^(?:[A-Za-z0-9_.]{1,16} has the following entity data|-?\d+, -?\d+, -?\d+ has the following block data|Storage \S+ has the following contents): /;
+// An entity that is no player prints its type or custom name (group 1), which can be any text.
+const DATA_ANSWER = /^(?:(.{1,256}?) has the following entity data|-?\d+, -?\d+, -?\d+ has the following block data|Storage \S+ has the following contents): /;
 
-// The names in `list`'s answer, or null when they are display names that cannot be compared. The answer is one line from
-// 1.13, two before it (and with Bukkit's own list, whose second line starts with a group).
-const namesOf = (text) => {
-  const names = text.replace(/^[^:,]*: /, '').split(',').map((s) => s.trim()).filter(Boolean);
-  return names.every(validName) ? names : null;
+// `list uuids` prints each player's own name and id (commands.list.nameAndId, getName() in ListPlayersCommand of 1.20.1 and
+// 26.3); plain `list` prints display names, which a team's prefix makes into other names. -> [{name, uuid}], or null when
+// an entry is not that pair. The answer is one line from 1.13, two before it (and with Bukkit's own list, whose second
+// line starts with a group).
+const ENTRY = /^([A-Za-z0-9_.]{1,16}) \(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)$/;
+const playersOf = (text, count) => {
+  const entries = text.replace(/^[^:,(]*: /, '').split(',').map((s) => s.trim()).filter(Boolean).map((s) => ENTRY.exec(s));
+  if (entries.length !== count || !entries.every(Boolean)) return null;
+  return entries.map((m) => ({ name: m[1], uuid: m[2].toLowerCase() }));
 };
 function matchList() {
-  let expected = null; // how many names the second line has to hold; any other line is not that line
+  let expected = null; // how many players the second line has to hold; any other line is not that line
   return (msg) => {
-    if (expected !== null) {
-      const names = namesOf(msg);
-      return names?.length === expected ? names : undefined;
-    }
-    let m = /^There are \d+ of a max of \d+ players online:(?: (.*))?$/.exec(msg);
-    if (m) return namesOf(m[1] ?? '');
+    if (expected !== null) return playersOf(msg, expected) ?? undefined;
+    let m = /^There are (\d+) of a max of \d+ players online:(?: (.*))?$/.exec(msg);
+    if (m) return playersOf(m[2] ?? '', Number(m[1]));
     m = /^There are (\d+)(?:\/| out of maximum )\d+ players online[:.]$/.exec(msg);
     if (!m) return undefined;
     if (m[1] === '0') return [];
@@ -68,6 +73,8 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
   const uuids = new Map(); // name -> uuid, from the server's own lines
   let usercache = new Map();
   let current = null; // the query in flight
+  // Queries that timed out, oldest first. The server answers in order, so a late answer is theirs before the current one's.
+  const late = [];
   let open = null; // a data answer not yet at its end: {q, shown, scan, parts, size, until}
   const queue = [];
   let poller = null;
@@ -105,11 +112,14 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     ping('roster');
     ping('event');
   }
-  // Join and leave lines can be missing (a plugin that replaces them, a line lost at a crash): `list` has the last word.
-  function reconcile(names, asked) {
-    const listed = new Set(names);
-    for (const p of [...online.values()]) if (!listed.has(p.name) && p.since < asked) left(p.name, '', 'reconciled');
-    for (const name of names) if (!online.has(name)) joined(name, { why: 'reconciled' });
+  // Join and leave lines can be missing (a plugin that replaces them, a line lost at a crash): `list uuids` has the last word.
+  function reconcile(listed, asked) {
+    const ids = new Set(listed.map((p) => p.uuid));
+    for (const p of [...online.values()]) if (!ids.has(p.uuid) && p.since < asked) left(p.name, '', 'reconciled');
+    for (const { name, uuid } of listed) {
+      uuids.set(name, uuid);
+      if (!online.has(name)) joined(name, { why: 'reconciled' });
+    }
   }
 
   // ---------- queries ----------
@@ -117,6 +127,7 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     const all = current ? [current, ...queue] : [...queue];
     current = null;
     queue.length = 0;
+    late.length = 0;
     for (const q of all) {
       clearTimeout(q.timer);
       q.reject(failure('The server stopped', code));
@@ -133,7 +144,14 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     if (current || !queue.length) return;
     const q = queue.shift();
     current = q;
-    q.timer = setTimeout(() => settle(q, 'reject', failure(`The server did not answer ${q.command}`, 'timeout')), q.timeoutMs);
+    q.timer = setTimeout(() => {
+      // One whose answer a late answer may have taken is owed none: waiting for it would pass the mistake on.
+      if (!q.robbed && open?.q !== q) {
+        late.push(Object.assign(q, { until: now() + LATE_MS }));
+        if (late.length > LATE_MAX) late.shift();
+      }
+      settle(q, 'reject', failure(`The server did not answer ${q.command}`, 'timeout'));
+    }, q.timeoutMs);
     q.timer.unref?.();
     try { proc.stdin.write(`${q.command}\n`); } catch (err) { settle(q, 'reject', failure(err.message, 'stopped')); }
   }
@@ -200,14 +218,23 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     open = { q, shown: !q, scan: snbtEnd(), parts: [], size: 0, until: now() + ANSWER_MS };
     absorb(ended ? `${text}\n` : text, 0);
   }
+  // A line is tried on the late queries first, then on the one in flight. The one it answers ends the wait of all before
+  // it. A late query is settled already, so its answer is only consumed. -> whether the line is hidden.
   function answer(head, ended) {
-    const q = current;
-    let r;
-    try { r = q.match(head.msg, head); } catch (err) { log(`a query's match failed: ${err.message}`); }
-    if (r === undefined || r === false) return false;
-    if (r instanceof Snbt) openAnswer(q, r.text, ended);
-    else if (r !== MORE) settle(q, 'resolve', r);
-    return r instanceof Snbt || !q.visible;
+    while (late.length && late[0].until < now()) late.shift();
+    const waiting = current ? [...late, current] : [...late];
+    for (let i = 0; i < waiting.length; i++) {
+      const q = waiting[i];
+      let r;
+      try { r = q.match(head.msg, head); } catch (err) { log(`a query's match failed: ${err.message}`); }
+      if (r === undefined || r === false) continue;
+      late.splice(0, r === MORE ? i : i + 1);
+      if (q !== current && current && r !== MORE) current.robbed = true;
+      if (r instanceof Snbt) openAnswer(q, r.text, ended);
+      else if (r !== MORE) settle(q, 'resolve', r);
+      return r instanceof Snbt || !q.visible;
+    }
+    return false;
   }
 
   // ---------- the output ----------
@@ -219,7 +246,8 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     switch (ev.type) {
       case 'uuid': uuids.set(ev.name, ev.uuid); return;
       case 'login': setState('running'); joined(ev.name, ev); return;
-      case 'join': setState('running'); joined(ev.name, {}); return;
+      // A join line prints the display name. The uuid line and `list uuids` print the name, and only a name they gave is believed.
+      case 'join': setState('running'); if (uuids.has(ev.name)) joined(ev.name, {}); return;
       case 'leave': left(ev.name, ev.text); return;
       case 'server': setState(ev.state); return;
       default: {
@@ -235,13 +263,20 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
   function take(line, ended = true) {
     const head = split(line);
     if (!head) return false;
+    const unasked = head.server ? DATA_ANSWER.exec(head.msg) : null;
+    // An entity's custom name can start like chat (<, * , [x] ), and on 1.20.1 a book it holds prints its line breaks raw.
+    // No player can send a line break, so chat is one line: a line of both shapes is an answer unless the part before
+    // `has the following` holds an online name. An online player can still name an entity after himself.
+    if (unasked?.[1] !== undefined && typed(head.msg) && !namesIn(unasked[1], online).length) {
+      openAnswer(null, head.msg.slice(unasked[0].length), ended);
+      return false;
+    }
     if (ended) {
       const ev = classify(head, online);
       if (ev) { apply(ev); return false; }
     }
     if (!head.server || typed(head.msg)) return false;
-    if (current && answer(head, ended)) return true;
-    const unasked = DATA_ANSWER.exec(head.msg);
+    if ((current || late.length) && answer(head, ended)) return true;
     if (unasked && !open) openAnswer(null, head.msg.slice(unasked[0].length), ended);
     return false;
   }
@@ -320,8 +355,8 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
       const t = now();
       if (t >= nextList) {
         nextList = t + listMs;
-        const names = await query('list', matchList(), 3000);
-        if (names && state === 'running') reconcile(names, t);
+        const listed = await query('list uuids', matchList(), 3000);
+        if (listed && state === 'running') reconcile(listed, t);
       } else if (t < watchUntil && hasDataCommand(version)) await pollPosition();
     } catch (err) {
       if (!['timeout', 'stopped', 'notRunning'].includes(err.code)) log(`polling failed: ${err.message}`);

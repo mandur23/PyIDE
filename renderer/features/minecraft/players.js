@@ -43,6 +43,7 @@
     version: tr('Nano Studio has no confirmed command for this on this server\'s Minecraft version, so nothing was sent.'), action: tr('That is not a player action.'),
     noItem: tr('Choose an item.'), noEffect: tr('Choose an effect.'),
     offline: tr('The player is not online, so nothing was sent.'), changed: tr('Those slots changed in the game after this tab read them, so nothing was sent. Look at the inventory again and retry.'),
+    otherAccount: tr('The server does not know this name as this player\'s account right now, so nothing was sent. Names can pass to another account, and the command would reach whoever holds the name.'),
     noRoom: tr('A swap goes through an empty inventory slot, and this player has none. Nothing was sent.'), armorFit: tr('That item does not go in that armor slot, so nothing was sent.'),
     emptySlot: tr('That slot is empty, so nothing was sent.'), sameSlot: tr('The item is in that slot already.'),
     notMoved: tr('Nothing moved. The slots are as they were, and nothing was sent again.'), mismatch: tr('The slots are not what they should be after this move. Nothing was sent again: check them below.'),
@@ -907,7 +908,8 @@
     paintGates(v);
     paintResult(v, 'sending', headingOf(action, name), tr('Sending to the server…'));
     let r;
-    try { r = await call('action', v, { ...action, target: name }); } catch (err) {
+    // The uuid lets main refuse a name that has passed to another account since.
+    try { r = await call('action', v, { ...action, target: name, uuid: v.player.uuid }); } catch (err) {
       r = { ok: false, code: 'failed', text: mc.errorText(err), commands: [] };
     }
     v.acting = false;

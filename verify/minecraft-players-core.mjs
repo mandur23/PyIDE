@@ -3,9 +3,10 @@
 // from a real server.
 // Checks: the log prefixes of each server kind; deaths and what only looks like one; chat that tries to forge a join, a
 // death, a query answer and a command, each line first shown to fool a naive parser; queries (serial, hidden, timed out,
-// ended by a stop or a crash); the output filter on split chunks; binary NBT from a hand-built gzip fixture in both item
-// formats, damaged and hostile files; SNBT; the store (batching, torn lines, retention, paging, a rebuilt index, the
-// masked IP); the server's own files; the IPC core with the real actions.js against a fake process; books written to
+// answered late, ended by a stop or a crash); the output filter on split chunks; binary NBT from a hand-built gzip
+// fixture in both item formats, damaged and hostile files; SNBT; the store (batching, torn lines, retention, paging, a
+// rebuilt index and a file too large for it, an index cut short at quit, a junction out of the server, the masked IP);
+// the server's own files; the IPC core with the real actions.js against a fake process; books written to
 // forge server lines; answers by shape; addresses in every stored path; a deleted server; search; and the real launch()
 // against a Node stand-in for a JVM on Korean Windows. What a real JVM does is the stand-in's assumption, not proven here.
 // Usage: node verify/minecraft-players-core.mjs
@@ -82,6 +83,10 @@ check(parseLine('[12:00:00] [Server thread/INFO] [net.minecraft.server.Minecraft
 check(parseLine('[07Jan2026 12:00:00.123] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Steve joined the game')?.type === 'join', 'Forge line with a date');
 check(parseLine(`${VANILLA}Bob (formerly known as Steve) joined the game`)?.name === 'Bob', 'a renamed player');
 check(parseLine(`${VANILLA}Steve has just earned the achievement [Taking Inventory]`, ONLINE)?.type === 'advancement', 'achievement of old versions');
+// Chat shows the display name, which a team's prefix and suffix are glued to.
+check(parseLine(`${VANILLA}<VIPSteve> hi`, ONLINE)?.name === 'Steve', 'chat: a team prefix of name characters, and the speaker is the online name inside');
+check(parseLine(`${VANILLA}<Steve Alex> hi`, ONLINE)?.name === 'Steve', 'chat: a suffix that looks like a name is not the speaker');
+check(parseLine(`${VANILLA}<Steve Bob> hi`, ONLINE)?.type === 'chat' && parseLine(`${VANILLA}<Steve Bob> hi`, ONLINE).name === null, 'chat: a display name holding two online names is nobody\'s');
 const login = parseLine(`${VANILLA}Steve[/1.2.3.4:51234] logged in with entity id 123 at (10.5, 64.0, -3.25)`);
 check(login?.type === 'login' && login.ip === '1.2.*.*' && login.x === 10.5 && login.z === -3.25 && !J(login).includes('1.2.3.4'), 'login: the IP is masked before anything sees it');
 check(parseLine(`${PAPER}Steve[/1.2.3.4:51234] logged in with entity id 123 at ([world]10.5, 64.0, -3.25)`)?.y === 64, 'login on Paper names the world');
@@ -400,6 +405,68 @@ await damaged(zlib.gzipSync(T.compound('', named(9, 'l', Buffer.concat([Buffer.f
   await store.flush();
   check((await store.timeline(STEVE)).events[0]?.text === 'kept', 'lines the disk refused are written once it accepts them');
 }
+{
+  // A junction in place of .nano or .nano/players must not lead the store out of the server folder.
+  const old = J({ t: new Date(Date.now() - 40 * 86400000).toISOString(), type: 'chat', name: 'Steve', uuid: STEVE, text: 'old' });
+  for (const at of ['.nano', path.join('.nano', 'players')]) {
+    const dir = freshDir();
+    const outside = freshDir();
+    const files = at === '.nano' ? path.join(outside, 'players') : outside;
+    mkdirSync(files, { recursive: true });
+    writeFileSync(path.join(files, `${STEVE}.jsonl`), `${old}\n`);
+    writeFileSync(path.join(files, 'admin.jsonl'), `${old}\n`);
+    mkdirSync(path.dirname(path.join(dir, at)), { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, at), 'junction');
+    const logs = [];
+    const store = createStore(dir, { flushMs: 5, log: (l) => logs.push(l) });
+    await store.open();
+    store.add({ type: 'chat', name: 'Steve', uuid: STEVE, text: 'new' });
+    store.touch(STEVE, 'Steve');
+    store.admin({ action: { type: 'kick' }, commands: [], ok: true, text: '' });
+    await store.flush();
+    store.add({ type: 'chat', name: 'Steve', uuid: STEVE, text: 'at quit' });
+    store.touch(BOB, 'Bob');
+    store.flushSync();
+    const left = readdirSync(files).sort();
+    check(same(left, [`${STEVE}.jsonl`, 'admin.jsonl']) && readFileSync(path.join(files, `${STEVE}.jsonl`), 'utf8') === `${old}\n`
+      && readFileSync(path.join(files, 'admin.jsonl'), 'utf8') === `${old}\n` && !existsSync(path.join(outside, '.gitignore')),
+    `a junction at ${at}: nothing outside the server is pruned, written or removed (${left})`);
+    check(logs.some((l) => l.includes('out of the server folder')), `a junction at ${at}: the log says why (${logs.join('; ')})`);
+    check((await store.timeline(STEVE)).events.length === 0, `a junction at ${at}: nothing is read through it either`);
+  }
+}
+{
+  // At quit the index is written whole or not at all.
+  const dir = freshDir();
+  const store = createStore(dir, { flushMs: 100000 });
+  await store.open();
+  store.touch(STEVE, 'Steve');
+  store.flushSync();
+  const indexFile = path.join(store.folder, 'index.json');
+  const whole = readFileSync(indexFile, 'utf8');
+  store.touch(BOB, 'Bob');
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, data, ...more) => { realWrite(file, String(data).slice(0, 10), ...more); throw Object.assign(new Error('the disk is full'), { code: 'ENOSPC' }); };
+  try { store.flushSync(); } finally { fs.writeFileSync = realWrite; }
+  check(readFileSync(indexFile, 'utf8') === whole, 'a write cut short at quit leaves the last whole index');
+  store.flushSync();
+  check(JSON.parse(readFileSync(indexFile, 'utf8')).players[BOB]?.name === 'Bob', 'and the next write puts in what it missed');
+}
+{
+  // A rebuild of the index reads every player file at once: one too large to read so is left out, and said so.
+  const dir = freshDir();
+  const folder = path.join(dir, '.nano', 'players');
+  mkdirSync(folder, { recursive: true });
+  const joinLine = (name, uuid) => `${J({ t: new Date().toISOString(), type: 'join', name, uuid, text: '' })}\n`;
+  writeFileSync(path.join(folder, `${STEVE}.jsonl`), joinLine('Steve', STEVE));
+  const big = path.join(folder, `${BOB}.jsonl`);
+  writeFileSync(big, joinLine('Bob', BOB));
+  fs.truncateSync(big, 40 << 20);
+  const logs = [];
+  const known = createStore(dir, { log: (l) => logs.push(l) }).known();
+  check(known[STEVE]?.name === 'Steve' && !known[BOB] && logs.some((l) => l.includes(`${BOB}.jsonl`)), `a player file too large to rebuild from is skipped with a log line (${logs.join('; ')})`);
+  rmSync(big);
+}
 
 // ---------- a session against a fake process ----------
 class FakeProcess extends EventEmitter {
@@ -504,31 +571,34 @@ const pos = (name, x = 1) => `${VANILLA}${name} has the following entity data: [
   // Serial, one in flight.
   const t = running();
   join(t);
-  const a = t.session.query('list', matchList(), 2000);
+  const a = t.session.query('list uuids', matchList(), 2000);
   const b = t.session.query('data get entity Steve Pos', matchData('Steve'), 2000);
   check(t.proc.written.filter((w) => w.startsWith('data')).length === 0, 'the second query waits for the first');
-  check(t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve`) === '', 'list answer hidden');
-  check(same(await a, ['Steve']), 'list -> names');
+  check(t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve (${STEVE})`) === '', 'list answer hidden');
+  check(same(await a, [{ name: 'Steve', uuid: STEVE }]), 'list uuids -> names and ids');
   check(t.proc.written.at(-1) === 'data get entity Steve Pos\n', 'then the second goes out');
   t.say(pos('Steve'));
   check(!!await b, 'and is answered');
+  const both = [{ name: 'Steve', uuid: STEVE }, { name: 'Bob', uuid: BOB }];
   for (const [lines, want, label] of [
     [['There are 0 of a max of 20 players online: '], [], 'nobody on'],
-    [['There are 2 of a max of 20 players online: Steve, Bob'], ['Steve', 'Bob'], 'two on'],
-    [['There are 1/20 players online:', 'Steve'], ['Steve'], 'the two-line answer of 1.12'],
-    [['There are 2 out of maximum 20 players online.', 'default: Steve, Bob'], ['Steve', 'Bob'], "Bukkit's list"],
+    [[`There are 2 of a max of 20 players online: Steve (${STEVE}), Bob (${BOB.toUpperCase()})`], both, 'two on'],
+    [['There are 1/20 players online:', `Steve (${STEVE})`], both.slice(0, 1), 'the two-line answer of 1.12'],
+    [['There are 2 out of maximum 20 players online.', `default: Steve (${STEVE}), Bob (${BOB})`], both, "Bukkit's list"],
     [['There are 1 of a max of 20 players online: [Admin] Steve'], null, 'a display name cannot be compared'],
+    [['There are 1 of a max of 20 players online: VIPSteve'], null, 'nor a name without its id, from a list that ignores uuids'],
+    [[`There are 2 of a max of 20 players online: Steve (${STEVE})`], null, 'nor a count the entries do not make'],
   ]) {
-    const q = t.session.query('list', matchList(), 2000);
+    const q = t.session.query('list uuids', matchList(), 2000);
     const out = lines.map((l) => t.say(`${PAPER}${l}`));
     check(same(await q, want) && out.every((o) => o === ''), `list: ${label}`);
   }
-  const two = t.session.query('list', matchList(), 2000);
+  const two = t.session.query('list uuids', matchList(), 2000);
   t.say(`${PAPER}There are 2/20 players online:`);
   check(t.say(`${PAPER}Saving chunks for level`) === `${PAPER}Saving chunks for level\n`, 'a stray line inside a two-line answer stays in the console');
   check(t.say(`${PAPER}Saving`) === `${PAPER}Saving\n`, 'and one word is not two names');
-  t.say(`${PAPER}Steve, Bob`);
-  check(same(await two, ['Steve', 'Bob']), 'the names still arrive');
+  t.say(`${PAPER}Steve (${STEVE}), Bob (${BOB})`);
+  check(same(await two, both), 'the names still arrive');
   const bad = await errOf(() => t.session.query('data get entity Steve\nop Bob', matchData('Steve')));
   const bad2 = await errOf(() => t.session.query('x\rop Bob', matchData('Steve')));
   check(bad?.code === 'badCommand' && bad2?.code === 'badCommand' && !t.proc.written.some((w) => w.includes('op Bob')), 'a command with a line break is refused before it is written');
@@ -541,15 +611,67 @@ const pos = (name, x = 1) => `${VANILLA}${name} has the following entity data: [
   t.say(`${VANILLA}No entity was found`);
   check(await c === null, 'the server saying no entity answers with null');
   const stale = t.session.query('data get entity Steve Pos', matchData('Steve'), 30);
-  const after = t.session.query('list', matchList(), 2000);
-  check((await errOf(() => stale))?.code === 'timeout' && t.proc.written.at(-1) === 'list\n', 'a timeout lets the next query go');
-  t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve`);
+  const after = t.session.query('list uuids', matchList(), 2000);
+  check((await errOf(() => stale))?.code === 'timeout' && t.proc.written.at(-1) === 'list uuids\n', 'a timeout lets the next query go');
+  t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve (${STEVE})`);
   await after;
   const many = [];
   for (let i = 0; i < 40; i++) many.push(t.session.query('list', () => undefined, 5).catch((err) => err.code));
   const codes = await Promise.all(many);
   check(codes.includes('busy') && codes.includes('timeout'), 'a full queue refuses with code busy');
   t.session.end();
+}
+{
+  // An answer that comes after its query gave up is still that query's: the server answers in order.
+  const t = running();
+  join(t);
+  const first = t.session.query('data get entity Steve Pos', matchData('Steve'), 20);
+  check((await errOf(() => first))?.code === 'timeout', 'a slow answer times its query out');
+  const second = t.session.query('data get entity Steve Pos', matchData('Steve'), 2000);
+  check(t.say(pos('Steve', 1)) === '', 'its late answer is still hidden');
+  t.say(pos('Steve', 2));
+  const got = await second.catch((err) => err.code);
+  check(got === '[2.5d, 64.0d, 2.5d]', `the next query of the same shape gets its own answer, not the late one (${got})`);
+
+  const shapes = { ok: /^Applied effect /, refused: /^Could not apply /i };
+  check(await t.session.command('effect give Steve speed', shapes, 20) === null, 'a command whose answer is slow answers null');
+  const again = t.session.command('effect give Steve speed', shapes, 2000);
+  t.say(`${VANILLA}Applied effect Speed to Steve`);
+  t.say(`${VANILLA}Could not apply effect`);
+  const said = await again;
+  check(said?.refused === true && said.text === 'Could not apply effect', `and the next command gets its own refusal, not the success before it (${J(said)})`);
+
+  // A line that answers a later query ends the wait of every one before it.
+  await errOf(() => t.session.query('data get entity Steve Pos', matchData('Steve'), 20));
+  const listed = t.session.query('list uuids', matchList(), 2000);
+  t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve (${STEVE})`);
+  check(same(await listed, [{ name: 'Steve', uuid: STEVE }]), 'a query of another shape is answered while one waits for a late answer');
+  const after = t.session.query('data get entity Steve Pos', matchData('Steve'), 2000);
+  t.say(pos('Steve', 3));
+  check(await after.catch((err) => err.code) === '[3.5d, 64.0d, 2.5d]', 'and after it nothing waits for that late answer any more');
+
+  // An answer that never comes: the next query's answer is taken in its place, and that is where it stops.
+  await errOf(() => t.session.query('data get entity Steve Pos', matchData('Steve'), 20));
+  const robbed = t.session.query('data get entity Steve Pos', matchData('Steve'), 20);
+  t.say(pos('Steve', 4));
+  check((await errOf(() => robbed))?.code === 'timeout', 'a lost answer costs the next query of its shape');
+  const next = t.session.query('data get entity Steve Pos', matchData('Steve'), 2000);
+  t.say(pos('Steve', 5));
+  check(await next.catch((err) => err.code) === '[5.5d, 64.0d, 2.5d]', 'but not the one after it');
+  t.session.end();
+
+  let clock = 1000;
+  const s = createSession({ version: '1.21.1', store: fakeStore(freshDir()), now: () => clock, pingMs: 1, pollMs: 1000000, listMs: 1000000 });
+  s.attach(new FakeProcess());
+  const say = (line) => s.filter(`${line}\n`, 'out');
+  say(`${VANILLA}Done (1.0s)! For help, type "help"`);
+  join({ say });
+  await errOf(() => s.query('data get entity Steve Pos', matchData('Steve'), 20));
+  clock += 11000;
+  const fresh = s.query('data get entity Steve Pos', matchData('Steve'), 2000);
+  say(pos('Steve', 6));
+  check(await fresh.catch((err) => err.code) === '[6.5d, 64.0d, 2.5d]', 'a late answer is waited for ten seconds at most');
+  s.end();
 }
 {
   // A stop or a crash mid-query ends everything waiting.
@@ -665,12 +787,12 @@ const pos = (name, x = 1) => `${VANILLA}${name} has the following entity data: [
   await sleep(60);
   check(written() === 0, 'nobody on: no polling');
   t.proc.answer = (cmd) => {
-    if (cmd === 'list') t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve`);
+    if (cmd === 'list uuids') t.say(`${VANILLA}There are 1 of a max of 20 players online: Steve (${STEVE})`);
     else if (cmd.endsWith(' Pos')) t.say(pos('Steve', 9));
     else if (cmd.endsWith(' Dimension')) t.say(`${VANILLA}Steve has the following entity data: "minecraft:the_nether"`);
   };
   join(t);
-  check(await waitFor(() => t.proc.written.includes('list\n')), 'the roster is reconciled with list');
+  check(await waitFor(() => t.proc.written.includes('list uuids\n')), 'the roster is reconciled with list uuids');
   await sleep(40);
   check(!t.proc.written.some((w) => w.startsWith('data')), 'no position polling while the tab is closed');
   t.session.watch(true);
@@ -705,16 +827,45 @@ const pos = (name, x = 1) => `${VANILLA}${name} has the following entity data: [
 
   // list has the last word on join and leave lines that were missing.
   const r = running({ pollMs: 5, listMs: 1 });
-  let names = 'Bob';
-  r.proc.answer = (cmd) => { if (cmd === 'list') r.say(`${VANILLA}There are 1 of a max of 20 players online: ${names}`); };
+  let names = `Bob (${BOB})`;
+  r.proc.answer = (cmd) => { if (cmd === 'list uuids') r.say(`${VANILLA}There are 1 of a max of 20 players online: ${names}`); };
   join(r);
   check(await waitFor(() => r.session.players().map((p) => p.name).join() === 'Bob'), 'list drops who is gone and adds who is there');
+  check(r.session.players()[0].uuid === BOB, 'by the id the list gives, not one derived from the name');
   const steve = await r.store.timeline(STEVE, {});
   check(steve.events[0].type === 'leave' && steve.events[0].why === 'reconciled', 'a reconciled leave says so');
   names = '[Admin] Bob';
   await sleep(30);
   check(r.session.players().length === 1, 'display names change nothing');
   r.session.end();
+
+  // A team's prefix or suffix is glued to the display name, which join, leave, chat and plain `list` print; the login
+  // lines and `list uuids` print the name itself.
+  const v = running({ pollMs: 5, listMs: 1 });
+  let on = [['Steve', STEVE]];
+  v.proc.answer = (cmd) => {
+    if (cmd === 'list') v.say(`${VANILLA}There are ${on.length} of a max of 20 players online: ${on.map(([n]) => `VIP${n}`).join(', ')}`);
+    if (cmd === 'list uuids') v.say(`${VANILLA}There are ${on.length} of a max of 20 players online: ${on.map(([n, u]) => `${n} (${u})`).join(', ')}`);
+  };
+  v.say(`[12:00:00] [User Authenticator #1/INFO]: UUID of player Steve is ${STEVE}`);
+  v.say(`${VANILLA}Steve[/1.2.3.4:51234] logged in with entity id 1 at (1.5, 64.0, 2.5)`);
+  v.say(`${VANILLA}VIPSteve joined the game`);
+  check(v.session.players().map((p) => p.name).join() === 'Steve', 'a join line with a team prefix makes no second player');
+  await waitFor(() => v.proc.written.filter((w) => w.startsWith('list')).length >= 3);
+  check(v.session.players().map((p) => p.name).join() === 'Steve', 'and the list keeps the real one on');
+  v.say(`${VANILLA}<VIPSteve> hello`);
+  v.say(`${VANILLA}VIPSteve left the game`);
+  check(v.session.players().length === 1, 'a leave line with the prefix is nobody on');
+  const steveV = (await v.store.timeline(STEVE, {})).events.map((e) => e.type);
+  check(same(steveV, ['chat', 'join']), `Steve's record: his join and his chat, no leave (${steveV})`);
+  on = [['Bob', BOB]];
+  check(await waitFor(() => v.session.players().map((p) => p.name).join() === 'Bob'), 'the list by id still drops who is gone and adds who is there');
+  // A backend behind a proxy logs no uuid line, so the id was derived from the name; the list says whose it is.
+  v.say(`${VANILLA}Kim[/1.2.3.4:51234] logged in with entity id 2 at (1.5, 64.0, 2.5)`);
+  check(v.session.players().find((p) => p.name === 'Kim')?.uuid === offlineUuid('Kim'), 'control: a login with no uuid line gets the offline id');
+  on = [['Bob', BOB], ['Kim', STEVE]];
+  check(await waitFor(() => v.session.players().find((p) => p.name === 'Kim')?.uuid === STEVE), 'and the list puts the real one in its place');
+  v.session.end();
 
   const old = running({ version: '1.12.2', pollMs: 5, listMs: 100000000 });
   join(old);
@@ -728,15 +879,21 @@ const pos = (name, x = 1) => `${VANILLA}${name} has the following entity data: [
   // Whose id a line belongs to.
   const t = running();
   t.session.learn(new Map([['Alex', BOB]]));
-  t.say(`${VANILLA}Alex joined the game`);
+  const loggedIn = (name) => t.say(`${VANILLA}${name}[/1.2.3.4:51234] logged in with entity id 1 at (1.5, 64.0, 2.5)`);
+  loggedIn('Alex');
   check(t.session.players()[0].uuid === BOB, 'usercache gives the uuid when no line did');
-  t.say(`${VANILLA}Pat joined the game`);
+  loggedIn('Pat');
   check(t.session.players().find((p) => p.name === 'Pat').uuid === offlineUuid('Pat'), 'offline mode: the uuid the server derives from the name');
   t.say(`${VANILLA}Alex joined the game`);
-  check(t.session.players().length === 2, 'a second join line for one player is one player');
+  check(t.session.players().length === 2, 'a join line after the login is the same player');
+  t.say(`${VANILLA}Kim joined the game`);
+  check(t.session.players().length === 2, 'a join line of a name no login line gave is no player: a team prefix can make one');
+  t.say(`[12:00:00] [User Authenticator #1/INFO]: UUID of player Kim is ${STEVE}`);
+  t.say(`${VANILLA}Kim joined the game`);
+  check(t.session.players().find((p) => p.name === 'Kim')?.uuid === STEVE, 'one whose uuid line came is');
   t.say(`${VANILLA}Nobody left the game`);
   t.say(`${VANILLA}Nobody fell from a high place`);
-  check(t.session.players().length === 2, 'a leave of someone not on changes nothing');
+  check(t.session.players().length === 3, 'a leave of someone not on changes nothing');
   t.session.end();
 }
 {
@@ -899,6 +1056,50 @@ const serverDir = () => {
   check((await proxied.action(px, { type: 'kick', target: 'x' })).code === 'proxy' && !existsSync(path.join(px, '.nano')), 'an action on a proxy is refused and logs nothing');
   const noServer = createPlayers({ send: () => {}, describe: () => { throw new Error('no server'); } });
   check(noServer.begin(freshDir()) === null, 'a process that is no server gets no session');
+}
+{
+  // A name can pass to another account. op, ban, pardon and the whitelist resolve the name they are sent through the
+  // server's own cache (GameProfileArgument of 1.20.1 and 26.3 takes no uuid), so a row's name must still be its account's.
+  const dir = freshDir();
+  const [OLD, NEW] = ['dddddddd-0000-4000-8000-000000000001', 'dddddddd-0000-4000-8000-000000000002'];
+  const [SOON, PAST] = ['2099-01-01 00:00:00 +0000', '2020-01-01 00:00:00 +0000'];
+  put(path.join(dir, 'usercache.json'), J([{ name: 'Steve', uuid: STEVE, expiresOn: SOON }, { name: 'Moved', uuid: NEW, expiresOn: SOON },
+    { name: 'Stale', uuid: OLD, expiresOn: PAST }, { name: 'Twice', uuid: OLD, expiresOn: SOON }, { name: 'twice', uuid: NEW, expiresOn: SOON },
+    { name: 'Odd', uuid: OLD, expiresOn: 'whenever' }]));
+  const players = createPlayers({ send: () => {}, describe: () => ({ version: '1.21.1', kind: 'paper', proxy: false }), sessionOptions: { pingMs: 1, pollMs: 1000000, listMs: 1000000 }, storeOptions: { flushMs: 5 } });
+  const session = players.begin(dir);
+  const proc = new FakeProcess();
+  session.attach(proc);
+  const say = (line) => session.filter(`${line}\n`, 'out');
+  say(`${VANILLA}Done (1.0s)! For help, type "help"`);
+  join({ say }, 'Bob', BOB);
+  proc.answer = (cmd) => {
+    const m = /^(\S+(?: add| remove)?) (\S+)/.exec(cmd);
+    const said = { op: `Made ${m[2]} a server operator`, deop: `Made ${m[2]} no longer a server operator`, ban: `Banned ${m[2]}: Banned by an operator.`, pardon: `Unbanned ${m[2]}`,
+      'whitelist add': `Added ${m[2]} to the whitelist`, kick: `Kicked ${m[2]}: Bye` }[m[1]];
+    if (said) say(`${VANILLA}${said}`);
+  };
+  const sent = async (act) => { proc.written.length = 0; const r = await players.action(dir, act); return { ...r, wrote: proc.written.map((w) => w.trim()).join('|') }; };
+  let r = await sent({ type: 'op', target: 'Steve', uuid: STEVE });
+  check(r.ok && r.wrote === 'op Steve', `offline, a name the server's cache gives this account goes out (${r.code ?? r.wrote})`);
+  r = await sent({ type: 'whitelistAdd', target: 'steve', uuid: STEVE });
+  check(r.ok && r.wrote === 'whitelist add steve', 'in any case, as the cache looks names up');
+  for (const [act, label] of [[{ type: 'op', target: 'Moved', uuid: OLD }, 'the cache gives the name to another account'],
+    [{ type: 'whitelistAdd', target: 'Stale', uuid: OLD }, 'the entry ran out, so the server would ask Mojang who has the name now'],
+    [{ type: 'ban', target: 'Nobody', uuid: OLD }, 'the name is not in the cache'], [{ type: 'pardon', target: 'Twice', uuid: OLD }, 'two accounts hold the name'],
+    [{ type: 'deop', target: 'Odd', uuid: OLD }, 'an expiry the server could not read'], [{ type: 'op', target: 'Bob', uuid: OLD }, 'another account is online under the name']]) {
+    r = await sent(act);
+    check(!r.ok && r.code === 'otherAccount' && r.wrote === '' && same(r.commands, []), `refused, nothing sent: ${label} (${r.code ?? r.wrote})`);
+  }
+  r = await sent({ type: 'op', target: 'Bob', uuid: BOB });
+  check(r.ok && r.wrote === 'op Bob', 'an online player is his name, cached or not');
+  r = await sent({ type: 'kick', target: 'Bob', uuid: BOB });
+  check(r.ok && r.wrote === 'kick Bob', 'and so is every action on him');
+  r = await sent({ type: 'op', target: 'Moved' });
+  check(r.ok && r.wrote === 'op Moved', 'an action that names no row is sent as it is');
+  const logged = await players.adminLog(dir, { limit: 50 });
+  check(logged.filter((e) => e.code === 'otherAccount' && !e.commands.length).length === 6, 'every refusal is in the admin log');
+  session.end();
 }
 
 // ---------- a book written to forge server lines ----------
@@ -1076,11 +1277,17 @@ check(parseSnbt('{a: "one\ntwo"}').a === 'one\ntwo', 'a raw line break is part o
   // The owner types `data get` into the console: not a query, the same print.
   const t = served();
   const lines = [`Mallory has the following entity data: ${BOOKS[0][1](forgery(VANILLA))}`, `1, 64, -3 has the following block data: {Book: {id: "minecraft:written_book", tag: {pages: [${javaQuote(forgery(PAPER))}]}}}`,
-    `Storage minecraft:x has the following contents: {a: ${javaQuote(forgery(VANILLA))}}`];
+    `Storage minecraft:x has the following contents: {a: ${javaQuote(forgery(VANILLA))}}`,
+    // An entity that is no player prints its type or its custom name, which can be any text.
+    `Armor Stand has the following entity data: {ArmorItems: [{id: "minecraft:written_book", Count: 1b, tag: {pages: [${javaQuote(forgery(VANILLA))}]}}, {}, {}, {}]}`,
+    `Bob's [Shop]: open 9-5 has the following entity data: {Item: {id: "minecraft:writable_book", Count: 1b, tag: {pages: [${javaQuote(forgery(PAPER))}]}}}`];
+  // A custom name can start like chat. Nobody online could have said these, and chat is one line, so they are answers.
+  const held = (page) => `has the following entity data: {Item: {id: "minecraft:writable_book", Count: 1b, tag: {pages: [${javaQuote(page)}]}}}`;
+  for (const name of ['<Bob> hi', '[Not Secure] <Bob> hi', '* Bob waves', '[Shop] open', '[] x']) lines.push(`${name} ${held(forgery(VANILLA))}`);
   for (const line of lines) {
     const text = `${VANILLA}${line}\n`;
     check(t.session.filter(text, 'out') === text, `the console keeps what it was asked for: ${line.slice(0, 40)}`);
-    check(t.session.state === 'running' && namesOn(t) === 'Alice,Mallory', 'and it forges nothing');
+    check(t.session.state === 'running' && namesOn(t) === 'Alice,Mallory', `and it forges nothing: ${line.slice(0, 40)}`);
   }
   const busy = t.session.query('data get entity Alice Pos', matchData('Alice'), 2000);
   const text = `${VANILLA}Mallory has the following entity data: ${BOOKS[1][1](forgery(VANILLA))}\n`;
@@ -1090,6 +1297,21 @@ check(parseSnbt('{a: "one\ntwo"}').a === 'one\ntwo', 'a raw line break is part o
   check(same((await t.players.timeline(t.dir, ALICE, {})).events.map((e) => e.type), ['join']), 'nobody\'s record changed');
   t.session.end();
 }
+{
+  // Chat from someone online stays chat whatever it says: a player cannot send a line break, so the next line is a line.
+  const t = served();
+  const said = ['<Alice> look', '<[VIP] Alice> look', '[Not Secure] <VIPAlice> look', '* Alice looks'];
+  for (const s of said) {
+    const line = `${VANILLA}${s} has the following entity data: {pages: ["`;
+    check(t.say(line) === `${line}\n`, `chat shaped like an answer stays in the console: ${s}`);
+    t.say(`${VANILLA}Mallory has made the advancement [Stone Age]`);
+  }
+  const mallory = (await t.players.timeline(t.dir, MALLORY, {})).events.map((e) => e.type);
+  check(same(mallory, [...said.map(() => 'advancement'), 'join']), `and opens no answer: each line after it counts (${mallory})`);
+  const chats = (await t.players.timeline(t.dir, ALICE, {})).events.filter((e) => e.type === 'chat').length;
+  check(chats === said.length, `and is her chat (${chats})`);
+  t.session.end();
+}
 
 // ---------- a server of 26.3, whose answers and broadcasts all come behind `System chat: ` ----------
 {
@@ -1097,7 +1319,7 @@ check(parseSnbt('{a: "one\ntwo"}').a === 'one\ntwo', 'a raw line break is part o
   const say = (msg) => t.say(`${SYS}${msg}`);
   t.proc.answer = (cmd) => {
     if (cmd === 'data get entity Mallory') say(`Mallory has the following entity data: {Health: 7.0f, Pos: [1.0d, 2.0d, 3.0d], Inventory: [{Slot: 0b, id: "minecraft:writable_book", count: 1, components: {"minecraft:writable_book_content": {pages: [{raw: "a\\n${VANILLA}Stopping the server"}]}}}], EnderItems: []}`);
-    if (cmd === 'list') say('There are 2 of a max of 20 players online: Alice, Mallory');
+    if (cmd === 'list uuids') say(`There are 2 of a max of 20 players online: Alice (${ALICE}), Mallory (${MALLORY})`);
     if (cmd === 'data get entity Alice Pos') say('Alice has the following entity data: [5.5d, 64.0d, 2.5d]');
     if (cmd === 'data get entity Alice Dimension') say('Alice has the following entity data: "minecraft:the_nether"');
     if (cmd.startsWith('op ')) say('Nothing changed. The player is already an operator');
@@ -1106,7 +1328,7 @@ check(parseSnbt('{a: "one\ntwo"}').a === 'one\ntwo', 'a raw line break is part o
   const d = await t.players.detail(t.dir, MALLORY);
   check(d.source === 'live' && d.health === 7, `live data: the answer is found behind the prefix (${d.source})`);
   check(BOOKS[1][2](d.inventory[0].raw) === `a\n${VANILLA}Stopping the server` && t.session.state === 'running', 'an escaped line break is a line break in the page and none in the console');
-  check(same(await t.session.query('list', matchList(), 2000), ['Alice', 'Mallory']), 'list');
+  check(same(await t.session.query('list uuids', matchList(), 2000), [{ name: 'Alice', uuid: ALICE }, { name: 'Mallory', uuid: MALLORY }]), 'list uuids');
   const answer = await t.session.query('data get entity Alice Pos', matchData('Alice'), 2000);
   check(answer === '[5.5d, 64.0d, 2.5d]', `position: ${answer}`);
   const refused = await t.players.action(t.dir, { type: 'op', target: 'Alice' });

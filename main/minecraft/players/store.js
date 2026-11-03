@@ -20,6 +20,7 @@ const STAMP_AT = 6; // after {"t":"
 const STAMP_LENGTH = 24;
 const BLOCK = 64 << 10; // how much of a player's file a search reads between turns of the event loop
 const LINE_LIMIT = 1 << 20; // a block run with no line break is damage, not a line
+const REBUILD_MAX = 32 << 20; // a player file the synchronous index rebuild still reads
 const POINT = /^\s*(-?\d+)[\s,]+(-?\d+)[\s,]+(-?\d+)\s*$/;
 // Whether an event happened at this block: a record of a burst lists every block it covers.
 const isAt = (e, [x, y, z]) => (Array.isArray(e.at) && e.at.some((p) => Array.isArray(p) && p[0] === x && p[1] === y && p[2] === z))
@@ -75,6 +76,28 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   let index = null; // {players: {uuid: {name, firstSeen, lastSeen, playTimeMs}}}
   let indexDirty = false;
   let lastStamp = 0;
+  let warned = false;
+
+  // A junction in place of .nano or .nano/players must not lead the prune, the writes or the reads out of the server
+  // folder (bridge.js refuses the same). Asked at each use: the folder can be replaced while the server runs.
+  function inside() {
+    let base;
+    try { base = `${fs.realpathSync.native(dir).toLowerCase()}${path.sep}`; } catch (err) { return err.code === 'ENOENT'; }
+    for (const p of [path.dirname(folder), folder]) {
+      let real;
+      try { real = fs.realpathSync.native(p); } catch {
+        // Not there yet: made inside. There but not to be followed (a junction to nowhere): refused.
+        try { fs.lstatSync(p); } catch { return true; }
+        real = '';
+      }
+      if (!real.toLowerCase().startsWith(base)) {
+        if (!warned) log('.nano/players leads out of the server folder, so no record is kept or read there');
+        warned = true;
+        return false;
+      }
+    }
+    return true;
+  }
 
   const enqueue = (name, line) => {
     if (!queue.has(name)) queue.set(name, []);
@@ -92,6 +115,10 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
 
   function loadIndexSync() {
     if (index) return index;
+    if (!inside()) {
+      index = { players: {} };
+      return index;
+    }
     try {
       const saved = JSON.parse(fs.readFileSync(fileOf(INDEX), 'utf8'));
       index = saved && typeof saved.players === 'object' && saved.players ? saved : null;
@@ -110,7 +137,18 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
       const uuid = name.replace(/\.jsonl$/, '');
       if (!UUID.test(uuid)) continue;
       let events = [];
-      try { events = linesOf(fs.readFileSync(fileOf(name), 'utf8')); } catch { continue; }
+      try {
+        const { size } = fs.statSync(fileOf(name));
+        // Read whole and synchronously, a file of hundreds of MB would hold the main process.
+        if (size > REBUILD_MAX) {
+          log(`${name}: ${Math.round(size / 1048576)} MB, too large to rebuild the index from, so the player is left out of it`);
+          continue;
+        }
+        events = linesOf(fs.readFileSync(fileOf(name), 'utf8'));
+      } catch (err) {
+        log(`${name}: ${err.code || err.message}`);
+        continue;
+      }
       if (!events.length) continue;
       let since = null;
       let playTimeMs = 0;
@@ -125,9 +163,9 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   }
 
   // The server was deleted: its records went with it. Writing them would bring its folder back, and a folder with no
-  // description is neither a server nor a free name.
+  // description is neither a server nor a free name. A folder that leads out of it is dropped the same way.
   const deleted = () => {
-    if (fs.existsSync(dir)) return false;
+    if (fs.existsSync(dir) && inside()) return false;
     queue = new Map();
     queued = 0;
     indexDirty = false;
@@ -174,7 +212,11 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
       for (const [name, lines] of queue) fs.appendFileSync(fileOf(name), `${lines.join('\n')}\n`);
       queue = new Map();
       queued = 0;
-      if (indexDirty && index) { fs.writeFileSync(fileOf(INDEX), JSON.stringify(index)); indexDirty = false; }
+      if (indexDirty && index) {
+        fs.writeFileSync(fileOf(`${INDEX}.tmp`), JSON.stringify(index));
+        fs.renameSync(fileOf(`${INDEX}.tmp`), fileOf(INDEX));
+        indexDirty = false;
+      }
     } catch (err) { log(err.message); }
   }
 
@@ -223,6 +265,7 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   // Session start. The folder ignores itself, so chat logs do not reach a project's git repository.
   const open = () => {
     chain = chain.then(async () => {
+      if (!inside()) return;
       await fs.promises.mkdir(folder, { recursive: true });
       await fs.promises.writeFile(path.join(dir, '.nano', '.gitignore'), '*\n');
       await prune();
@@ -286,6 +329,7 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   async function timeline(uuid, { before, limit, types, q, ids } = {}) {
     if (!UUID.test(uuid || '')) return { events: [], more: false };
     await flush();
+    if (!inside()) return { events: [], more: false };
     const wants = matcher({ types, q, ids });
     const max = clamp(limit, 100);
     const events = [];
@@ -308,6 +352,7 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
     const wants = matcher({ types, q, ids });
     const max = clamp(limit, 200);
     let names = [];
+    if (!inside()) return [];
     try { names = await fs.promises.readdir(folder); } catch { return []; }
     let top = [];
     let floor = ''; // older than this cannot make the list. Set between blocks, while top is in order.
@@ -355,6 +400,7 @@ function createStore(dir, { retentionDays = 30, flushMs = 1000, now = Date.now, 
   }
   async function adminLog({ limit } = {}) {
     await flush();
+    if (!inside()) return [];
     return linesOf(await readFile(fileOf(ADMIN))).reverse().slice(0, clamp(limit, 200));
   }
 

@@ -83,7 +83,7 @@ branches on, because Electron passes only the message of a thrown error.
 
 ## Polling
 
-- Roster: from join and leave lines, reconciled with `list` every 60 s.
+- Roster: from join and leave lines, reconciled by uuid with `list uuids` every 60 s.
 - Position: `data get entity <name> Pos` and `Dimension`, one player per second in turn, only while the tab is open.
 - Inventory: only when opened or refreshed.
 - No poll while the server is starting or stopping, or when nobody is on.

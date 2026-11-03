@@ -4,7 +4,7 @@ const path = require('path');
 const { createSession, matchData } = require('./session');
 const { createStore, UUID } = require('./store');
 const { parseSnbt, detailOf, slotIn } = require('./nbt');
-const { readUsercache, readFlags, readDetail, extras } = require('./files');
+const { readUsercache, cachedIds, readFlags, readDetail, extras } = require('./files');
 const { createTail, refusal, installed, install, remove } = require('./bridge');
 
 // describe(dir) -> {version, kind, proxy}, throwing for a folder that is not a server.
@@ -156,6 +156,17 @@ function createPlayers({ send, describe, log = () => {}, actions = () => require
     } finally { moving.delete(session); }
   }
 
+  // A name can pass to another account. The commands take a name, never a uuid (GameProfileArgument of 1.20.1 and 26.3
+  // reads a name or a selector), and the server resolves it among the players on, then through its cache. An action on a
+  // row (act.uuid) goes only where that resolves to the row's account.
+  async function nameIsTheirs(dir, session, act) {
+    const target = String(act.target ?? '').toLowerCase();
+    const on = session.players().find((p) => p.name.toLowerCase() === target);
+    if (on) return on.uuid === act.uuid;
+    const ids = await cachedIds(dir, target);
+    return ids.length === 1 && ids[0] === act.uuid;
+  }
+
   // Commands run in order and the first refused one ends the action: a later one may depend on it.
   async function action(dir, act) {
     const desc = describe(dir);
@@ -169,6 +180,7 @@ function createPlayers({ send, describe, log = () => {}, actions = () => require
       return result;
     };
     if (session?.state !== 'running') return done({ ok: false, code: 'notRunning', text: '', commands: [] });
+    if (act?.uuid !== undefined && !await nameIsTheirs(dir, session, act)) return done({ ok: false, code: 'otherAccount', text: '', commands: [] });
     if (act?.type === 'moveItem') return moveItem(session, desc, act, done);
     let built;
     try { built = actions().build(act, { version: desc.version, kind: desc.kind }); } catch (err) {

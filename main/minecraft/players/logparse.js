@@ -6,8 +6,6 @@
 const { isIPv6 } = require('net');
 
 const NAME = '[A-Za-z0-9_.]{1,16}';
-const NAME_ONLY = new RegExp(`^${NAME}$`);
-const LAST_WORD = new RegExp(`(?:^|[^A-Za-z0-9_.])(${NAME})$`);
 const TEXT_MAX = 512;
 
 // Forge's debug log writes a date in front of the clock.
@@ -98,6 +96,16 @@ function split(raw) {
 
 const typed = (msg) => TYPED.test(msg);
 
+// The online names that text holds. A team's prefix and suffix are glued to a name wherever the game prints the display
+// name (chat, join, leave, plain list): VIPSteve, [VIP] Bob, Steve Alex.
+const namesIn = (text, online) => [...(online?.keys() ?? [])].filter((name) => text.includes(name));
+// The one online player a display name can be, or null.
+function speaker(display, online) {
+  if (online?.has(display)) return display;
+  const held = namesIn(display, online);
+  return held.length === 1 ? held[0] : null;
+}
+
 const chat = (name, text, notSecure) => ({ type: 'chat', name, text: clean(text), secure: !notSecure });
 
 // A split line -> an event: {type: 'join'|'leave'|'chat'|'death'|'advancement'|'command'|'server', name, text, ...}, or
@@ -107,10 +115,7 @@ function classify(head, online) {
   const { msg } = head;
   const isOn = (name) => !!online?.has(name);
   let m = CHAT.exec(msg);
-  if (m) {
-    // A team's or a plugin's prefix sits inside the brackets: <[VIP] Bob>.
-    return chat(LAST_WORD.exec(m[2])?.[1] ?? null, m[3], m[1]);
-  }
+  if (m) return chat(speaker(m[2], online), m[3], m[1]);
   if ((m = ME.exec(msg))) return chat(m[2], m[3], m[1]);
   if ((m = SAY.exec(msg))) return isOn(m[2]) ? chat(m[2], m[3], m[1]) : null;
   if ((m = UUID_LINE.exec(msg))) return { type: 'uuid', name: m[1], uuid: m[2].toLowerCase() };
@@ -136,6 +141,4 @@ function parseLine(line, online) {
   return head && classify(head, online);
 }
 
-const validName = (name) => typeof name === 'string' && NAME_ONLY.test(name);
-
-module.exports = { parseLine, split, plain, classify, typed, maskIp, maskAddresses, validName };
+module.exports = { parseLine, split, plain, classify, typed, namesIn, maskIp, maskAddresses };

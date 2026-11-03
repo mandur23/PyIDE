@@ -32,29 +32,37 @@ const KNOWN = new Map(PROPERTIES.map((p) => [p.key, p]));
 const unescape = (s) => s.replace(/\\(u[0-9a-fA-F]{4}|.)/g, (_m, c) => (c.length === 5 ? String.fromCharCode(parseInt(c.slice(1), 16))
   : { t: '\t', n: '\n', r: '\r', f: '\f' }[c] ?? c));
 // Written ASCII-only (other characters as \uXXXX): older servers read the file as ISO-8859-1, newer ones as UTF-8, and
-// both decode the escapes. A leading space is escaped so it stays part of the value; a line break becomes \n.
-const escape = (s) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/^ /, '\\ ')
+// both decode the escapes. A leading space is escaped so it stays part of the value; a line break becomes \n; : and =
+// are escaped as Java's Properties.store writes them.
+const escape = (s) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/^ /, '\\ ').replace(/[:=]/g, (c) => `\\${c}`)
   .replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
-// {key: value} of the file's property lines (comments and blank lines skipped).
+// {key: value} of the file's property lines (comments and blank lines skipped). A key given twice has its last value,
+// as Java reads it.
 function readProperties(file) {
   const out = {};
   const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   for (const line of raw.split(/\r?\n/)) {
-    const m = /^\s*([^#!\s=:][^=:]*?)\s*[=:]\s?(.*)$/.exec(line);
+    const m = /^\s*([^#!\s=:][^=:]*?)\s*[=:]\s*(.*)$/.exec(line);
     if (m) out[unescape(m[1])] = unescape(m[2]);
   }
   return out;
 }
-// Each changed line is replaced where it is (or added at the end): comments, order and the other lines stay.
+// Each changed line is replaced where it first is (or added at the end), and later lines of the key, which Java would
+// read instead, are dropped: comments, order and the other lines stay.
 function writeProperties(file, changes) {
-  let raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  const lines = raw ? raw.replace(/\r?\n$/, '').split(/\r?\n/) : [];
   for (const [key, value] of Object.entries(changes)) {
-    const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}\\s*[=:].*$`, 'm');
+    const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}\\s*[=:]`);
     const line = `${key}=${escape(value)}`;
-    raw = re.test(raw) ? raw.replace(re, () => line) : `${raw.replace(/\n?$/, raw ? '\n' : '')}${line}\n`;
+    const at = lines.findIndex((l) => re.test(l));
+    if (at < 0) { lines.push(line); continue; }
+    lines[at] = line;
+    for (let i = lines.length - 1; i > at; i--) if (re.test(lines[i])) lines.splice(i, 1);
   }
-  fs.writeFileSync(file, raw);
+  fs.writeFileSync(file, lines.length ? `${lines.join(eol)}${eol}` : '');
 }
 
 // The value a property may be given, as the file's text; throws with what is wrong.
@@ -88,30 +96,40 @@ function offlineUuid(name) {
 const dashed = (hex) => hex.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
 const NAME = /^[A-Za-z0-9_]{1,16}$/;
 
+const LISTS = { whitelist: 'whitelist.json', ops: 'ops.json' };
+// A list file that is there but cannot be read is null, not empty: a Save would otherwise write over the players in it.
 const readList = (file) => {
+  if (!fs.existsSync(file)) return [];
   try {
-    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Array.isArray(v) ? v.filter((e) => e && typeof e === 'object' && typeof e.name === 'string') : [];
-  } catch { return []; }
+    const v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '') || '[]');
+    return Array.isArray(v) ? v.filter((e) => e && typeof e === 'object' && typeof e.name === 'string') : null;
+  } catch { return null; }
 };
+const levelOf = (e) => (Number.isInteger(e.level) && e.level >= 0 && e.level <= 4 ? e.level : 4);
+// Each list, and damaged: the list files that cannot be read (their lists show empty and are not saved).
 function players(dir) {
+  const whitelist = readList(path.join(dir, LISTS.whitelist));
+  const ops = readList(path.join(dir, LISTS.ops));
   return {
-    whitelist: readList(path.join(dir, 'whitelist.json')).map((e) => ({ name: e.name, uuid: String(e.uuid || '') })),
-    ops: readList(path.join(dir, 'ops.json')).map((e) => ({ name: e.name, uuid: String(e.uuid || ''), level: Number(e.level) || 4,
-      bypassesPlayerLimit: !!e.bypassesPlayerLimit })),
+    whitelist: (whitelist || []).map((e) => ({ name: e.name, uuid: String(e.uuid || '') })),
+    ops: (ops || []).map((e) => ({ name: e.name, uuid: String(e.uuid || ''), level: levelOf(e), bypassesPlayerLimit: !!e.bypassesPlayerLimit })),
+    damaged: Object.entries({ whitelist, ops }).filter(([, l]) => !l).map(([k]) => LISTS[k]),
   };
 }
-// The lists as the server writes them; a name given twice is kept once.
-function checkedList(list, op) {
+// The lists as the server writes them; a name given twice is kept once. Only a player added here has to have a Java
+// name: one the file has already (a Bedrock player through Floodgate, say) stays as the server wrote it.
+function checkedList(list, op, known) {
   if (!Array.isArray(list)) throw fail('A player list is a list');
+  const had = new Set(known.map((e) => `${String(e.uuid || '').toLowerCase()}|${e.name}`));
   const seen = new Set();
   const out = [];
   for (const e of list) {
-    if (!NAME.test(e?.name || '')) throw fail(`${e?.name} is not a Minecraft name (letters, digits and _, up to 16)`);
+    const old = typeof e?.name === 'string' && had.has(`${String(e.uuid || '').toLowerCase()}|${e.name}`);
+    if (!old && !NAME.test(e?.name || '')) throw fail(`${e?.name} is not a Minecraft name (letters, digits and _, up to 16)`);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.uuid || '')) throw fail(`${e.name} has no UUID`);
     if (seen.has(e.name.toLowerCase())) continue;
     seen.add(e.name.toLowerCase());
-    out.push(op ? { uuid: e.uuid.toLowerCase(), name: e.name, level: Math.min(4, Math.max(1, Number(e.level) || 4)), bypassesPlayerLimit: !!e.bypassesPlayerLimit }
+    out.push(op ? { uuid: e.uuid.toLowerCase(), name: e.name, level: levelOf(e), bypassesPlayerLimit: !!e.bypassesPlayerLimit }
       : { uuid: e.uuid.toLowerCase(), name: e.name });
   }
   return out;
@@ -137,12 +155,16 @@ function prepare(dir, { props = {}, whitelist, ops } = {}) {
   const file = path.join(dir, 'server.properties');
   const current = readProperties(file);
   const lines = Object.fromEntries(Object.entries(props).map(([k, v]) => [k, checked(k, v, current[k])]));
-  const lists = { whitelist: whitelist && checkedList(whitelist, false), ops: ops && checkedList(ops, true) };
+  const list = (name, given) => {
+    if (!given) return null;
+    const known = readList(path.join(dir, LISTS[name]));
+    if (!known) throw fail(`${LISTS[name]} cannot be read: fix it or delete it, then save the list again`, 'damagedList');
+    return checkedList(given, name === 'ops', known);
+  };
+  const lists = { whitelist: list('whitelist', whitelist), ops: list('ops', ops) };
   return () => {
     if (Object.keys(lines).length) writeProperties(file, lines);
-    for (const [name, list] of Object.entries(lists)) {
-      if (list) fs.writeFileSync(path.join(dir, `${name === 'ops' ? 'ops' : 'whitelist'}.json`), `${JSON.stringify(list, null, 2)}\n`);
-    }
+    for (const [name, l] of Object.entries(lists)) if (l) fs.writeFileSync(path.join(dir, LISTS[name]), `${JSON.stringify(l, null, 2)}\n`);
   };
 }
 

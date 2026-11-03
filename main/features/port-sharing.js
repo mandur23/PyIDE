@@ -27,8 +27,9 @@ const BORE_SERVER = 'bore.pub';
 const BORE_RE = /listening at ([\w.-]+:\d+)/;
 const ANSI = /\x1b\[[0-9;]*m/g;
 
+// -> stdout, or null when the program failed or timed out: that is not an empty answer.
 const run = (cmd, args) => new Promise((resolve) => {
-  execFile(cmd, args, { windowsHide: true, timeout: 20000, maxBuffer: 32 << 20, encoding: 'latin1' }, (err, stdout) => resolve(err ? '' : stdout));
+  execFile(cmd, args, { windowsHide: true, timeout: 20000, maxBuffer: 32 << 20, encoding: 'latin1' }, (err, stdout) => resolve(err ? null : stdout));
 });
 
 const standIn = (env) => {
@@ -37,11 +38,12 @@ const standIn = (env) => {
   return null;
 };
 
-// netstat -ano's listening TCP sockets as [{port, pid, address}]. Its state column is localized ("LISTENING",
-// "수신 대기"), so a listener is told by its idle foreign address.
+// netstat -ano's listening TCP sockets as [{port, pid, address}], or null when it did not answer. Its state column is
+// localized ("LISTENING", "수신 대기"), so a listener is told by its idle foreign address.
 async function listeners() {
   const [cmd, ...pre] = standIn('PYIDE_NETSTAT') || ['netstat'];
   const [out, v6] = await Promise.all([run(cmd, [...pre, '-ano', '-p', 'TCP']), run(cmd, [...pre, '-ano', '-p', 'TCPv6'])]);
+  if (out === null || v6 === null) return null;
   const seen = new Map();
   for (const line of `${out}\n${v6}`.split(/\r?\n/)) {
     const p = line.trim().split(/\s+/);
@@ -98,10 +100,11 @@ async function probe(h, port) {
   return secure ? 'https' : 'tcp';
 }
 
-// Every process with its parent, name and command line (one PowerShell call, a few hundred ms).
+// Every process with its parent, name and command line (one PowerShell call, a few hundred ms), or null when it failed.
 async function processes() {
   const out = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
     "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ForEach-Object { '{0}\t{1}\t{2}\t{3}\t{4}' -f $_.ProcessId,$_.ParentProcessId,$_.Name,$_.ExecutablePath,($_.CommandLine -replace '[\\r\\n\\t]',' ') }"]);
+  if (out === null) return null;
   const text = Buffer.from(out, 'latin1').toString('utf8');
   const map = new Map();
   for (const line of text.split(/\r?\n/)) {
@@ -130,6 +133,9 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   // programs and the ports the user added listen on. proto is null until a probe answers.
   let ports = [];
   let added = new Set(); // ports the user added, listed whatever started them
+  // Game servers' ports, which the Minecraft plugin names before each server starts. Here rather than in the window that
+  // started the server, so another window, or the same one reloaded, still shares one privately.
+  const games = new Set();
   // "port:pid" -> Promise<proto>, so each server is probed once. A probe connects and sends a request, which a program
   // that accepts a single connection would take as its client, so nothing is probed in the background: only while
   // the Ports window is shown (ports:probe) and for a port being shared.
@@ -166,6 +172,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   const state = () => ({
     ports,
     added: [...added],
+    games: [...games],
     tunnels: [...tunnels].map(([port, t]) => ({ port, kind: t.kind, state: t.state, url: t.url || null, error: t.error || null, log: t.state === 'shared' ? '' : t.log.slice(-1500), private: !!t.secret })),
     cloudflared: !!cloudflared(),
     bore: !!bore(),
@@ -189,12 +196,19 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   // A JVM started for the debugger listens on its JDWP port too; that port is the debugger's, not a server.
   const debuggerPorts = (p) => [...p.cmd.matchAll(/jdwp=[^\s"]*address=(?:[\w.]+:)?(\d+)/g)].map((m) => Number(m[1]));
 
+  // A read that failed says nothing about what listens: taken as "nothing", it stopped every tunnel and lost a private
+  // share's key. The snapshot stays as it was, so the next look tries again.
   async function poll() {
     const list = await listeners();
+    if (!list) return;
     const key = list.map((l) => `${l.port}:${l.pid}`).sort().join();
     if (key !== snapshot) {
+      if (list.length) {
+        const read = await processes();
+        if (!read) return;
+        tree = read;
+      }
       snapshot = key;
-      if (list.length) tree = await processes();
       const next = [];
       for (const l of list) {
         const p = tree.get(l.pid);
@@ -276,6 +290,13 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
     if (needed()) schedule();
     return state();
   });
+  ipcMain.handle('ports:gamePort', (_e, port) => {
+    if (Number.isInteger(port) && port > 0 && port < 65536 && !games.has(port)) {
+      games.add(port);
+      changed();
+    }
+    return state();
+  });
 
   // -> the tunnel's state; its address arrives with ports:changed once the tool reports it.
   // A server that has just started may not listen yet, and the list can be a few seconds old.
@@ -293,6 +314,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir, programs }) => {
   ipcMain.handle('ports:share', async (_e, port, options) => {
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw noServer(port);
     const wanted = options?.private === true;
+    // auto: the window's automatic sharing. A game server's port comes back with every restart, as if it were new.
+    if (options?.auto === true && !wanted && games.has(port)) throw Object.assign(new Error(`Port ${port} is a game server's, which automatic sharing does not share publicly`), { expected: true });
     const running = tunnels.get(port);
     if (running) {
       // Answering "shared" here would tell a caller who asked for a private share that it has one.

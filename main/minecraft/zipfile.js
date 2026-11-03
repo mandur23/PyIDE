@@ -115,9 +115,15 @@ function readEntry(file, name) {
   }
 }
 
+// A relative path that is written where its text says: Windows reads \ as a separator, drops a trailing dot or space,
+// and finds a folder by its 8.3 name (MODS~1), and . or .. moves elsewhere, so `mods/a.jar\` or `mods/b.jar/.` land as
+// mods/a.jar and mods/b.jar past a check on the text. A colon names an alternate data stream.
+const canonical = (rel) => typeof rel === 'string' && rel.split('/').every((s) => s && s !== '.' && s !== '..' && !/[\\:]|[. ]$/.test(s)
+  && !/^[^.]{1,6}~\d+(\.[^.]{1,3})?$/.test(s));
+
 // Every file of a zip (or of its folder prefix, left out of the names) written under dest: a resource pack, a
-// modpack's overrides. An entry naming a path outside dest, or an alternate data stream (a colon), is skipped; an
-// archive that unpacks to more than LIMITS.total writes nothing.
+// modpack's overrides. An entry whose name is not canonical is skipped; an archive that unpacks to more than
+// LIMITS.total writes nothing.
 function unpackZip(file, dest, prefix = '') {
   const zip = openZip(file);
   const top = path.resolve(dest);
@@ -127,12 +133,13 @@ function unpackZip(file, dest, prefix = '') {
     if (total > LIMITS.total) throw fail(`${path.basename(file)} unpacks to ${mb(total)} MB, more than the ${mb(LIMITS.total)} MB Nano Studio unpacks`);
     if (names.length > LIMITS.files) throw fail(`${path.basename(file)} holds ${names.length} files, more than the ${LIMITS.files} Nano Studio unpacks`);
     for (const n of names) {
+      if (!canonical(n.slice(prefix.length))) continue;
       const out = path.resolve(top, n.slice(prefix.length));
-      if (!out.startsWith(top + path.sep) || out.slice(top.length).includes(':')) continue;
+      if (!out.startsWith(top + path.sep)) continue;
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, zip.read(n));
     }
   } finally { zip.close(); }
 }
 
-module.exports = { writeZip, readEntry, openZip, unpackZip };
+module.exports = { writeZip, readEntry, openZip, unpackZip, canonical };

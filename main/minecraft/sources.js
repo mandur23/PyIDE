@@ -126,6 +126,18 @@ function neoforgeMc(v) {
   return parts[1] === '0' ? `1.${parts[0]}` : `1.${parts[0]}.${parts[1]}`;
 }
 
+// The checksum Maven publishes beside an installer: .sha256 where the repository has one, else .sha1 -> {sha256} or
+// {sha1}. Old builds have neither (404), which is said and not an error; a repository that fails to answer is.
+async function mavenSum(url, log) {
+  for (const [algo, length] of [['sha256', 64], ['sha1', 40]]) {
+    let sum = '';
+    try { sum = (await getText(`${url}.${algo}`)).trim().split(/\s/)[0]; } catch (err) { if (err.status !== 404) throw err; }
+    if (/^[0-9a-f]+$/i.test(sum) && sum.length === length) return { [algo]: sum.toLowerCase() };
+  }
+  log?.(`${url} has no published checksum (.sha256 or .sha1): the installer is not verified\n`);
+  return {};
+}
+
 // A Fill v3 project (Paper, Velocity): the newest STABLE build of a version, else the newest build.
 async function fillBuild(projectUrl, version, title) {
   const builds = await getJson(`${projectUrl}/versions/${version}/builds`);
@@ -141,7 +153,8 @@ const fillVersions = async (projectUrl) => Object.values((await getJson(projectU
 // mod loader players need, proxy: it fronts other servers, java?: the Java it needs when that is not Minecraft's,
 // versions(), resolve(mc)}. resolve gives {file, url, sha256?, sha1?, md5?, loader?, build?, installer?: true} where
 // installer means the file is an installer run with --installServer. A mod loader's resolve takes the loader version
-// wanted (a modpack names the one it was made with); without one it picks the recommended or newest.
+// wanted (a modpack names the one it was made with); without one it picks the recommended or newest. Forge's and
+// NeoForge's take a job's log too, which hears of an installer Maven publishes no checksum for.
 const KINDS = {
   paper: {
     title: 'Paper', plugins: 'paper', mods: null,
@@ -195,14 +208,13 @@ const KINDS = {
       const promos = (await getJson(base().forgePromos)).promos || {};
       return [...new Set(Object.keys(promos).map((k) => k.replace(/-(latest|recommended)$/, '')))].filter((v) => RELEASE.test(v)).sort(byVersion);
     },
-    async resolve(mc, wanted) {
+    async resolve(mc, wanted, log) {
       const promos = (await getJson(base().forgePromos)).promos || {};
       const loader = wanted || promos[`${mc}-recommended`] || promos[`${mc}-latest`];
       if (!loader) throw new Error(`Forge has no build for ${mc}`);
       const name = `forge-${mc}-${loader}-installer.jar`;
       const url = `${base().forge}/${mc}-${loader}/${name}`;
-      const sha256 = (await getText(`${url}.sha256`).catch(() => '')).trim().split(/\s/)[0] || undefined;
-      return { file: name, url, sha256, loader, installer: true };
+      return { file: name, url, ...(await mavenSum(url, log)), loader, installer: true };
     },
   },
   neoforge: {
@@ -215,14 +227,13 @@ const KINDS = {
       const all = await this.allVersions();
       return [...new Set(all.filter((v) => !/-/.test(v)).map(neoforgeMc))].filter((v) => RELEASE.test(v)).sort(byVersion);
     },
-    async resolve(mc, wanted) {
+    async resolve(mc, wanted, log) {
       const all = (await this.allVersions()).filter((v) => neoforgeMc(v) === mc);
       const loader = wanted || all.filter((v) => !/-/.test(v)).sort(byVersion)[0] || all.sort(byVersion)[0];
       if (!loader) throw new Error(`NeoForge has no build for ${mc}`);
       const name = `neoforge-${loader}-installer.jar`;
       const url = `${base().neoforge}/${loader}/${name}`;
-      const sha256 = (await getText(`${url}.sha256`).catch(() => '')).trim().split(/\s/)[0] || undefined;
-      return { file: name, url, sha256, loader, installer: true };
+      return { file: name, url, ...(await mavenSum(url, log)), loader, installer: true };
     },
   },
 };

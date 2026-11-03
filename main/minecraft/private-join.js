@@ -71,8 +71,18 @@ function createPrivateJoin({ argv = clientArgv } = {}) {
     });
   };
 
-  // -> the port the game connects to: wanted while it is free, else one the system picks.
-  async function start({ address, key, port }) {
+  // -> the port the game connects to: wanted while it is free, else one the system picks. One start per address at a
+  // time: two at once would both find nothing running, and the process launched first would never be stopped.
+  const pending = new Map(); // address (lower case) -> the start() in progress
+  function start(options) {
+    const id = options.address.toLowerCase();
+    const job = (pending.get(id) || Promise.resolve()).catch(() => {}).then(() => begin(options));
+    pending.set(id, job);
+    const done = () => { if (pending.get(id) === job) pending.delete(id); };
+    job.then(done, done);
+    return job;
+  }
+  async function begin({ address, key, port }) {
     const id = address.toLowerCase();
     const running = joins.get(id);
     if (running?.key === key) return running.ready;

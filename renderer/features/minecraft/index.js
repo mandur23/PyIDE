@@ -43,6 +43,10 @@
   const sessionOf = (dir) => run.sessions().find((s) => s.cfg?.type === 'minecraft-server' && run.resolvePath(s.cfg.dir).toLowerCase() === dir.toLowerCase()) || null;
   const runningAt = (dir) => !!sessionOf(dir)?.running;
   const serverAt = (dir) => list.find((s) => s.dir.toLowerCase() === dir.toLowerCase()) || null;
+  // The port each server's process was started with (folder, lower case): a server-port saved while it runs applies at
+  // its next start, and until then its share and its addresses stay at this one.
+  const livePorts = new Map();
+  const portAt = (srv) => (runningAt(srv.dir) && livePorts.get(srv.dir.toLowerCase())) || srv.port;
 
   // Windows keeps these names for devices: no folder can have one.
   const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
@@ -51,6 +55,9 @@
   const stopping = new Map();
   // How long a stopping server has to save before it is killed (main gives it as long when the app quits).
   const STOP_WAIT = 60000;
+  const stoppingAt = (dir) => [...stopping.values()].includes(dir.toLowerCase());
+  // A server whose folder is in use: running, starting (a Java download, say), or still saving after Stop or Rerun.
+  const busyAt = (dir) => runningAt(dir) || !!sessionOf(dir)?.starting || launching.has(dir.toLowerCase()) || stoppingAt(dir);
 
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
   // starts, the Ports window learns its port is a game server's.
@@ -67,12 +74,13 @@
     // A server still stopping (Rerun of a running one) holds its world and port until it has saved, STOP_WAIT at most;
     // a port that another program holds does not come free, so the start ends here instead of failing to bind it.
     const free = () => ide.api.invoke('minecraft:portFree', port);
-    const saving = () => [...stopping.values()].includes(dir.toLowerCase());
+    const saving = () => stoppingAt(dir);
     if (srv && (saving() || !(await free()))) {
       con.append(`${tr('Waiting for port {port} to be free…', { port })}\n`, 'sys');
       for (let i = 0; i < (STOP_WAIT + 10000) / 500 && (stopping.size || i < 6) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
       if (!(await free())) throw new Error(tr('Port {port} is in use by another program: stop it, or change server-port in server.properties.', { port }));
     }
+    livePorts.set(dir.toLowerCase(), port);
   }
   // Stop asks the server to save and quit ("end" for a Velocity proxy); the process is killed only if it is still
   // there STOP_WAIT later, which a big modpack's save needs. By its id: a Rerun has moved the session on to the next
@@ -309,19 +317,21 @@
 
   // ---------- delete ----------
   async function deleteServer(srv) {
-    if (runningAt(srv.dir)) return ide.ui.alert(tr('Stop {name} first, so its world is saved.', { name: srv.name }));
+    if (busyAt(srv.dir)) return ide.ui.alert(tr('Stop {name} first, so its world is saved.', { name: srv.name }));
     if (!(await ide.ui.confirm(tr('Move the server {name} (its folder, worlds and settings) to the Recycle Bin?', { name: srv.name }),
       { title: tr('Delete Minecraft Server'), ok: tr('Delete') }))) return;
     try {
       // A share is a port's, and 25565 is every server's default: one another running server owns stays.
-      const owned = list.some((s) => s.dir.toLowerCase() !== srv.dir.toLowerCase() && s.port === srv.port && runningAt(s.dir));
+      const owned = list.some((s) => s.dir.toLowerCase() !== srv.dir.toLowerCase() && portAt(s) === srv.port && runningAt(s.dir));
       if (!owned && tunnels.some((t) => t.port === srv.port)) await ide.ports?.unshare(srv.port);
       await ide.api.trash(srv.dir);
     } catch (err) {
       return ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: srv.name, error: errorText(err) }));
     }
     // A proxy that sent players to it sends them on to the servers left.
-    if (ide.trusted !== false) await ide.api.invoke('minecraft:rewireProxies', ide.root).catch(() => {});
+    if (ide.trusted !== false) {
+      await ide.api.invoke('minecraft:rewireProxies', ide.root).catch((err) => ide.ui.alert(tr('{name} was deleted, but the proxies could not be updated: {error}', { name: srv.name, error: errorText(err) })));
+    }
     run.removeConfigs((c) => c.type === 'minecraft-server' && run.resolvePath(c.dir).toLowerCase() === srv.dir.toLowerCase());
     await ide.documentsMoved?.(srv.dir, null);
     ide.closeTab(ide.minecraft.settings.tabId(srv.dir), true);
@@ -676,6 +686,7 @@
     }
     for (const srv of list) {
       const running = runningAt(srv.dir);
+      const port = portAt(srv);
       const card = el('div', 'mc-server');
       card.dataset.name = srv.name;
       card.dataset.dir = srv.dir;
@@ -683,11 +694,11 @@
       const title = el('span', 'mc-server-name', srv.name);
       title.dataset.userText = '';
       head.append(el('span', `mc-dot${running ? ' on' : ''}`), title,
-        el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${srv.port}`));
+        el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
       const actions = el('div', 'mc-server-actions');
       if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
       else actions.append(button(tr('Start'), 'mc-start', () => launchOnce(srv, run.runConfig)));
-      const tunnel = running && ide.ports ? tunnels.find((t) => t.port === srv.port) : null;
+      const tunnel = running && ide.ports ? tunnels.find((t) => t.port === port) : null;
       if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') {
         actions.append(button(tr('Share'), 'mc-share', () => shareServer(srv), tr('A private join code friends use in Nano Studio Craft')),
           button(tr('Share Publicly'), 'mc-share-public', () => shareServer(srv, { publicly: true }), tr('A public address anyone can join (bore.pub)')));
@@ -703,7 +714,7 @@
       actions.append(button(tr('Players'), 'mc-players', () => serverPlayers(srv), tr('Who is on, their inventories, a log of what they did, and actions on them')));
       actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
       actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
-      if (!running) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
+      if (!busyAt(srv.dir)) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
       const info = srv.proxy ? tr('Players join this proxy and are sent on to the project\'s Paper and Purpur servers.')
         : srv.plugins ? tr('Plugins run on the server: players need nothing.')
           : srv.autoSync ? tr('AutoModpack is on: players import the Client Pack once, then get the server\'s mods, and every change to them, when they join.')
@@ -718,7 +729,8 @@
 
   // What other computers on the same network connect to: no sharing, no third party.
   function lanRows(srv) {
-    const addresses = (listening.find((p) => p.port === srv.port)?.lan || []).map((ip) => `${ip}:${srv.port}`);
+    const port = portAt(srv);
+    const addresses = (listening.find((p) => p.port === port)?.lan || []).map((ip) => `${ip}:${port}`);
     return addresses.map((address) => {
       const row = el('div', 'mc-lan');
       row.title = tr('Address for other computers on the same network');
@@ -735,7 +747,7 @@
     if (tunnel.state === 'shared') {
       row.append(el('span', 'mcc-chip private', tr('Private')),
         button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel), tr('The code friends paste into Servers to Join. It is a key: send it only to friends.')),
-        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)),
+        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(tunnel.port)),
         el('div', 'mc-private-note muted', tr('Friends need Nano Studio Craft and this join code. The join code is a key: send it only to friends.')));
     } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Starting private sharing…')));
     else row.append(el('span', 'mc-public-error', tr('Private sharing failed: {error}', { error: tunnel.error || '' })));
@@ -752,7 +764,7 @@
       row.append(el('span', 'muted', tr('Public address:')), addr,
         button(tr('Copy Address'), 'mc-public-copy', () => ide.api.invoke('clipboard:writeText', tunnel.url)),
         button(tr('Copy Join Code'), 'mc-join-code', () => copyJoinCode(srv, tunnel), tr('The code friends paste into Servers to Join: this address and, for a modded server, its client pack')),
-        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(srv.port)));
+        button(tr('Stop Sharing'), 'mc-public-stop', () => ide.ports.unshare(tunnel.port)));
     } else if (tunnel.state === 'starting') row.append(el('span', 'muted', tr('Making a public address…')));
     else row.append(el('span', 'mc-public-error', tr('The public address failed: {error}', { error: tunnel.error || '' })));
     return row;
@@ -769,7 +781,7 @@
         if (!base) return ide.ui.alert(tr('The link could not be made; see the Ports window.'));
         pack = `${base}/${encodeURIComponent(basename(r.file))}`;
       }
-      const code = await (tunnel.private ? ide.api.invoke('minecraft:privateCode', ide.root, srv.dir, { pack })
+      const code = await (tunnel.private ? ide.api.invoke('minecraft:privateCode', ide.root, srv.dir, { pack, port: tunnel.port })
         : ide.api.invoke('launcher:joinCode', { address: tunnel.url, pack, name: srv.name }));
       await ide.api.invoke('clipboard:writeText', code);
       ide.notifications?.notify({ title: tr('Join code copied'), text: tr('Friends paste it into Servers to Join in Nano Studio Craft.'), kind: 'ok', group: 'Minecraft' });
@@ -799,8 +811,9 @@
     if (publicly && !(await offerWhitelist(target))) return;
     await ide.api.invoke('ports:refresh');
     // A failed tunnel stays listed, and sharing a listed port does nothing.
-    if (tunnels.find((t) => t.port === target.port)?.state === 'failed') await ide.ports.unshare(target.port);
-    await ide.ports.share(target.port, { private: !publicly });
+    const port = portAt(target);
+    if (tunnels.find((t) => t.port === port)?.state === 'failed') await ide.ports.unshare(port);
+    await ide.ports.share(port, { private: !publicly });
     render();
   }
   // A public address reaches anyone who finds it, and a server without a whitelist lets them in. false: not shared.
@@ -844,7 +857,7 @@
   ide.registerAction({ id: 'Minecraft.NewServer', title: tr('New Minecraft Server…'), needsProject: true, run: newServer });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, sharePack, resourcePack, sendPack,
-    job, jobSession, errorText, kindTitle, runningAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig),
+    job, jobSession, errorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig),
     // The server list (with drops) in the Minecraft screen's My Servers page.
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 

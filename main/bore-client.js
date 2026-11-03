@@ -78,11 +78,17 @@ async function accept(id, { server, localHost, localPort }) {
   let local;
   try {
     remote = await dial(server, CONTROL_PORT);
+    // dial's own listener is gone: a reset while the local server is reached would end the whole client.
+    remote.on('error', () => {});
     send(remote, { Accept: id });
     local = await dial(localHost, localPort);
   } catch (err) {
     console.error(`connection exited with error: ${err.message}`);
     remote?.destroy();
+    return;
+  }
+  if (remote.destroyed) {
+    local.destroy();
     return;
   }
   const close = () => { remote.destroy(); local.destroy(); };

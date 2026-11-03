@@ -5,26 +5,63 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { openZip, readEntry, unpackZip } = require('./zipfile');
+const { openZip, readEntry, unpackZip, canonical } = require('./zipfile');
 const { KINDS, PACK_HOSTS, neoforgeMc, getJson, modrinthApi, packFile } = require('./sources');
+const { swapPack, packOwner } = require('./market');
 
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const fail = (message, code) => Object.assign(new Error(message), { expected: true, code });
+// Windows keeps these names for devices: no folder can have one, whatever its case (main/features/minecraft.js).
+const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+// The most a file a pack lists may be when it names no size.
+const FILE_LIMIT = 1024 * 1024 * 1024;
+// Streamed: a pack's mods are hashed at every Play, in the process that also answers the window.
+async function hashOf(algo, file) {
+  const hash = crypto.createHash(algo);
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+// A file a pack lists ({rel, from: its allowed addresses, sum: [algo, lower-case hex], size}) at dest, from the first
+// of its addresses that gives it whole and with its checksum: a pack may name mirrors.
+async function fetchChecked(fetchFile, f, dest, log) {
+  const quiet = Object.assign(() => {}, { signal: log.signal });
+  let last = null;
+  for (const url of f.from) {
+    try {
+      await fetchFile(url, dest, { size: f.size, limit: f.size || FILE_LIMIT }, quiet);
+      if (await hashOf(f.sum[0], dest) === f.sum[1]) return;
+      last = fail(`Checksum mismatch for ${f.rel}`);
+    } catch (err) {
+      if (err.name === 'AbortError' || err.code === 'ENOSPC') throw err;
+      last = err;
+    }
+  }
+  throw last;
+}
+// A pack's entry for a file -> {rel, from, sum, size}, or a reason it cannot be had: no allowed address or no checksum.
+function packEntry(f, rel) {
+  const from = (Array.isArray(f.downloads) ? f.downloads : []).filter(packFile);
+  const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
+  if (!from.length) return { why: `gives no https download address on ${PACK_HOSTS.join(', ')} for ${rel}` };
+  if (!sum) return { why: `gives no checksum for ${rel}` };
+  return { rel, from, sum: [sum[0], String(sum[1]).toLowerCase()], size: Number.isSafeInteger(f.fileSize) && f.fileSize > 0 ? f.fileSize : null };
+}
 // A .mrpack fromModrinth downloaded (into the temporary folder, under a pyide-<hex>- name) is removed once the server
 // has its copy or the dialog is cancelled; any other file, the user's own, is left alone.
 function discardDownload(file) {
   if (file && path.dirname(path.resolve(file)) === path.resolve(os.tmpdir()) && /^pyide-[0-9a-f]{8}-.*\.mrpack$/.test(path.basename(file))) fs.rmSync(file, { force: true });
 }
-// rel under root, or null when it names a path outside it or an alternate data stream (a colon).
+// rel under root, or null when it names a path outside it or is not written where its text says (zipfile.js canonical).
 const inside = (root, rel) => {
-  if (typeof rel !== 'string') return null;
+  if (!canonical(rel)) return null;
   const p = path.resolve(root, rel);
   return p.startsWith(path.resolve(root) + path.sep) && !p.slice(path.resolve(root).length).includes(':') ? p : null;
 };
 // A free folder name under parent, from a name made safe for a server name (fallback when nothing of it is).
 function freeName(parent, raw, fallback = 'server') {
-  const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || fallback).replace(/-+$/, '') || fallback;
+  let base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32) || fallback).replace(/-+$/, '') || fallback;
+  if (RESERVED.test(base)) base = `${base}-mc`;
   let name = base;
   for (let i = 2; fs.existsSync(path.join(parent, name)); i++) name = `${base}-${i}`;
   return name;
@@ -129,7 +166,11 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
       }
       const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
         || javaOfJar(path.join(dir, found.launch.jar || ''));
-      const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java, memory: '2G', launch: found.launch, imported: true };
+      // A folder that was a Nano Studio server elsewhere keeps the memory and JVM options it was given.
+      const had = readServer(dir) || {};
+      const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java,
+        memory: /^\d+[MG]$/i.test(had.memory || '') ? had.memory.toUpperCase() : '2G', launch: found.launch, imported: true,
+        ...(Array.isArray(had.jvmArgs) && had.jvmArgs.every((a) => typeof a === 'string' && /^-\S+$/.test(a) && !/^-Xmx/i.test(a)) && { jvmArgs: had.jvmArgs }) };
       writeServer(dir, desc);
       if (!already) unfinished.done(dir);
       log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${java}\n`);
@@ -173,9 +214,25 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
         } else if (it.kind === 'resourcepack') {
           const s = target((x) => !x.proxy);
           if (!s) { skipped.push({ name: it.name, why: 'target' }); continue; }
+          // The pack dropped is the server's pack now: as the Market's, it replaces the old one whole once it is unpacked,
+          // keeps the translations, and the Market no longer claims the folder.
           const dest = path.join(s.dir, 'resourcepack');
-          if (it.zip) unpackZip(it.path, dest);
-          else await fs.promises.cp(it.path, dest, { recursive: true, force: true });
+          const desc = readServer(s.dir);
+          const owner = packOwner(desc?.market);
+          // Not the Market's resourcepack.part: an install may be using it.
+          const staging = path.join(s.dir, 'resourcepack.drop');
+          fs.rmSync(staging, { recursive: true, force: true });
+          try {
+            if (it.zip) unpackZip(it.path, staging);
+            else await fs.promises.cp(it.path, staging, { recursive: true });
+            if (!isFile(path.join(staging, 'pack.mcmeta'))) throw fail(`${it.name} is not a resource pack (no pack.mcmeta)`);
+            swapPack(s.dir, staging, owner ? desc.market[owner].packLang : null);
+          } finally { fs.rmSync(staging, { recursive: true, force: true }); }
+          if (owner) {
+            const market = { ...desc.market };
+            delete market[owner];
+            writeServer(s.dir, { ...desc, market });
+          }
           done.push({ name: it.name, what: 'resourcepack', to: dest, server: s.name });
         } else if (it.kind === 'world') {
           const s = target((x) => !x.proxy);
@@ -201,21 +258,27 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
   // ---------- modpacks ----------
   const LOADERS = { 'fabric-loader': 'fabric', forge: 'forge', neoforge: 'neoforge' };
   const VERSION = (v) => typeof v === 'string' && /^[\w.+-]+$/.test(v) && !/^\.+$/.test(v);
-  // A Modrinth project (its address or slug) -> the newest version's .mrpack, downloaded with its SHA-512 or SHA-1 checked.
-  async function fromModrinth(ref, log) {
+  // A Modrinth project (its address or slug) -> the .mrpack of its newest version for one of loaders (Modrinth's names;
+  // a server's by default), a release before a beta, downloaded with its SHA-512 or SHA-1 checked. A version that names
+  // no loaders is not left out: modpackInfo reads the loader from the pack itself.
+  async function fromModrinth(ref, log, loaders = Object.values(LOADERS)) {
     const slug = /modrinth\.com\/modpack\/([\w.-]+)/.exec(ref)?.[1] || (/^[\w.-]+$/.test(ref) ? ref : null);
     if (!slug || /^\.+$/.test(slug)) throw fail('Give a Modrinth modpack address (https://modrinth.com/modpack/…) or its name');
     const versions = await getJson(`${modrinthApi()}/project/${slug}/version`).catch((err) => { throw err.status ? fail(`Modrinth has no modpack ${slug} (HTTP ${err.status})`) : err; });
-    const packs = (Array.isArray(versions) ? versions : []).flatMap((v) => (Array.isArray(v?.files) ? v.files : []).filter((f) => /\.mrpack$/i.test(f?.filename || '') && f.url));
-    const file = packs.find((f) => f.primary) || packs[0];
-    if (!file) throw fail(`${slug} has no .mrpack to download`);
+    const packsOf = (v) => (Array.isArray(v.files) ? v.files : []).filter((f) => /\.mrpack$/i.test(f?.filename || '') && f.url);
+    const when = (v) => Date.parse(v.date_published) || 0;
+    const packs = (Array.isArray(versions) ? versions : []).filter((v) => v && typeof v === 'object' && packsOf(v).length);
+    const fitting = packs.filter((v) => !Array.isArray(v.loaders) || v.loaders.some((l) => loaders.includes(l))).sort((a, b) => when(b) - when(a));
+    const version = fitting.find((v) => v.version_type === 'release') || fitting[0];
+    const file = version && (packsOf(version).find((f) => f.primary) || packsOf(version)[0]);
+    if (!file) throw fail(packs.length ? `${slug} has no version for ${loaders.join(', ')}` : `${slug} has no .mrpack to download`);
     const sum = file.hashes?.sha512 ? ['sha512', file.hashes.sha512] : file.hashes?.sha1 ? ['sha1', file.hashes.sha1] : null;
     if (!sum) throw fail(`Modrinth publishes no checksum for ${file.filename}`);
     // Modrinth's name for the file is only a name in the temporary folder: no folders, nothing Windows refuses.
     const name = path.basename(file.filename.replace(/\\/g, '/')).replace(/[<>:"|?*\x00-\x1f]/g, '-');
     const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-${name}`);
     await fetchFile(file.url, dest, { size: file.size }, log);
-    if (crypto.createHash(sum[0]).update(fs.readFileSync(dest)).digest('hex') !== sum[1]) {
+    if (await hashOf(sum[0], dest) !== String(sum[1]).toLowerCase()) {
       fs.rmSync(dest, { force: true });
       throw fail(`Checksum mismatch for ${file.filename}`);
     }
@@ -255,11 +318,9 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
     try {
       // Every file has an address and a checksum before anything is made.
       const files = pack.index.files.filter((f) => f.env?.server !== 'unsupported').map((f) => {
-        const from = (Array.isArray(f.downloads) ? f.downloads : []).find(packFile);
-        const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
-        if (!from) throw fail(`The modpack gives no https download address on ${PACK_HOSTS.join(', ')} for ${f.path}`);
-        if (!sum) throw fail(`The modpack gives no checksum for ${f.path}`);
-        return { path: f.path, from, sum, size: f.fileSize };
+        const e = packEntry(f, String(f.path || '').replace(/\\/g, '/'));
+        if (e.why) throw fail(`The modpack ${e.why}`);
+        return e;
       });
       log(`${pack.name} ${pack.version}: Minecraft ${pack.mc}, ${KINDS[pack.kind].title} ${pack.loader}, ${pack.serverFiles} files for the server\n`);
       // The folder stays marked unfinished until the pack's files are in.
@@ -268,14 +329,21 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
       const created = readServer(srv.dir);
       let n = 0;
       for (const f of files) {
-        const dest = inside(srv.dir, f.path);
-        if (!dest) { log(`Skipped ${f.path}: outside the server folder\n`); continue; }
+        const dest = inside(srv.dir, f.rel);
+        if (!dest) { log(`Skipped ${f.rel}: outside the server folder\n`); continue; }
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        log(`(${++n}/${pack.serverFiles}) ${f.path}\n`);
-        await fetchFile(f.from, dest, { size: f.size }, () => {});
-        if (crypto.createHash(f.sum[0]).update(fs.readFileSync(dest)).digest('hex') !== f.sum[1]) throw fail(`Checksum mismatch for ${f.path}`);
+        log(`(${++n}/${pack.serverFiles}) ${f.rel}\n`);
+        await fetchChecked(fetchFile, f, dest, log);
       }
+      // The pack's server.properties and eula.txt may come with it: its settings are the pack's, but the port is the
+      // one the dialog gave, and agreeing to the EULA is the user's, as create wrote it.
+      const props = path.join(srv.dir, 'server.properties');
+      const eulaFile = path.join(srv.dir, 'eula.txt');
+      const agreed = isFile(eulaFile) ? fs.readFileSync(eulaFile) : null;
+      const ownPort = /^server-port=(\d+)/m.exec(isFile(props) ? fs.readFileSync(props, 'utf8') : '')?.[1];
       for (const prefix of ['overrides/', 'server-overrides/']) unpackZip(pack.file, srv.dir, prefix);
+      if (agreed) fs.writeFileSync(eulaFile, agreed);
+      if (ownPort) require('./templates').setProperty(props, 'server-port', ownPort);
       const clientPack = path.join(srv.dir, 'client-pack', path.basename(pack.file).replace(/^pyide-[0-9a-f]{8}-/, ''));
       fs.mkdirSync(path.dirname(clientPack), { recursive: true });
       fs.copyFileSync(pack.file, clientPack);
@@ -295,4 +363,4 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
   return { importServer, drop, modpackInfo, fromModrinth, createFromModpack };
 }
 
-module.exports = { createImports, classify, detectServer, discardDownload };
+module.exports = { createImports, classify, detectServer, discardDownload, fetchChecked, hashOf, packEntry };

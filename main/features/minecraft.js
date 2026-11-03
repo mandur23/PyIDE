@@ -56,13 +56,33 @@ const run = (cmd, args, opts, log) => new Promise((resolve, reject) => {
 });
 const filesUnder = (dir, test) => {
   const out = [];
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (test(e.name)) out.push(p); } };
+  // A link is not followed: what it points at would go into the zips players download.
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(p); else if (test(e.name)) out.push(p);
+    }
+  };
   if (fs.existsSync(dir)) walk(dir);
   return out;
 };
 const jarsUnder = (dir) => filesUnder(dir, (n) => n.endsWith('.jar'));
 const hashOf = (algo, file) => crypto.createHash(algo).update(fs.readFileSync(file)).digest('hex');
-const portOf = (dir) => Number(/^server-port=(\d+)/m.exec(fs.existsSync(path.join(dir, 'server.properties')) ? fs.readFileSync(path.join(dir, 'server.properties'), 'utf8') : '')?.[1]) || 25565;
+const propsOf = (dir) => serverSettings.readProperties(path.join(dir, 'server.properties'));
+// The port a server binds: a Minecraft server's from server.properties as Java reads it (a value it cannot read is the
+// default), a Velocity proxy's from velocity.toml's bind.
+function portOf(dir, kind) {
+  if (KINDS[kind]?.proxy) {
+    const toml = path.join(dir, 'velocity.toml');
+    const bind = /^[ \t]*bind[ \t]*=[ \t]*"[^"\n]*:(\d{1,5})"/m.exec(fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : '')?.[1];
+    if (bind) return Number(bind);
+  }
+  const v = propsOf(dir)['server-port'];
+  return /^\d{1,5}$/.test(v || '') ? Number(v) : 25565;
+}
+// Account checks off: Minecraft reads anything but "true" (any case) as false.
+const offlineAt = (dir) => { const v = propsOf(dir)['online-mode']; return v !== undefined && v.toLowerCase() !== 'true'; };
 
 // Mojang's and the Maven hosts' downloads break off now and then (a reset connection mid-file): a step that fetches
 // over the network is tried three times, a few seconds apart. What trying again cannot change is not retried: a
@@ -138,10 +158,10 @@ const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readd
 // The project's servers, each with what its kind runs; not one still being made.
 function servers(root) {
   return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind] && !isFile(path.join(s.dir, UNFINISHED))).map((s) => ({
-    ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir),
+    ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir, s.kind),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
     // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
-    offline: /^online-mode=false\s*$/m.test(fs.existsSync(path.join(s.dir, 'server.properties')) ? fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8') : ''),
+    offline: !KINDS[s.kind]?.proxy && offlineAt(s.dir),
   }));
 }
 const serverOf = (dir) => {
@@ -195,7 +215,13 @@ const unfinished = {
     fs.writeFileSync(path.join(dir, UNFINISHED), '');
   },
   done(dir) { fs.rmSync(path.join(dir, UNFINISHED), { force: true }); building.delete(keyOf(dir)); },
-  undo(dir) { fs.rmSync(dir, { recursive: true, force: true }); building.delete(keyOf(dir)); },
+  // Never throws, so the caller's error is the one shown. A folder a virus scanner or a Java still holds a file of is
+  // marked again (the removal took the mark first), and the next create of its name replaces it.
+  undo(dir) {
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); } catch {
+      try { fs.writeFileSync(path.join(dir, UNFINISHED), ''); } catch {}
+    } finally { building.delete(keyOf(dir)); }
+  },
 };
 // What blocks a new server's name: entries of servers/ that are neither a server nor an unfinished one.
 function blockedNames(root) {
@@ -219,7 +245,7 @@ async function create({ root, name, kind, mc, loader, memory = '2G', port = 2556
   unfinished.claim(dir);
   try {
     log(`${source.title} ${mc}\n`);
-    const r = await source.resolve(mc, loader);
+    const r = await source.resolve(mc, loader, log);
     const file = path.join(dir, r.file);
     await fetchFile(r.url, file, { sha256: r.sha256, size: r.size }, log);
     if (r.sha1 && hashOf('sha1', file) !== r.sha1) throw fail(`Checksum mismatch for ${r.file}`);
@@ -283,7 +309,7 @@ async function launch(dir, log) {
   if (!KINDS[desc.kind]) throw fail(`${SERVER} names no server type Nano Studio knows (kind: ${JSON.stringify(desc.kind ?? null)})`);
   if (!Number.isInteger(desc.java) || desc.java < 8) throw fail(`${SERVER} names no Java version (java: ${JSON.stringify(desc.java ?? null)})`);
   if (!desc.launch?.jar && !desc.launch?.argsFile) throw fail(`${SERVER} does not say how to start the server (launch)`);
-  const port = portOf(dir);
+  const port = portOf(dir, desc.kind);
   if (port > 65535) throw fail(`server.properties sets server-port=${port}: use a port from 1 to 65535`);
   const home = await ensureJava(desc.java, { log });
   if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
@@ -308,8 +334,12 @@ function wireProxy(root, dir) {
   const backends = paper.filter((s) => T.velocityConfig(s.mc)).map((s) => ({ name: s.name, port: s.port, dir: s.dir, mc: s.mc }));
   const skipped = paper.filter((s) => !T.velocityConfig(s.mc));
   const toml = path.join(dir, 'velocity.toml');
-  fs.writeFileSync(toml, T.setVelocityServers(fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : T.velocityToml(portOf(dir), []), backends));
-  const secret = fs.readFileSync(path.join(dir, 'forwarding.secret'), 'utf8').trim();
+  // An imported proxy that never ran has no secret yet.
+  const secretFile = path.join(dir, 'forwarding.secret');
+  if (!fs.existsSync(secretFile) || !fs.readFileSync(secretFile, 'utf8').trim()) fs.writeFileSync(secretFile, crypto.randomBytes(18).toString('base64url'));
+  const secret = fs.readFileSync(secretFile, 'utf8').trim();
+  const text = fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : T.velocityToml(portOf(dir, desc.kind), []);
+  fs.writeFileSync(toml, T.setVelocityForwarding(T.setVelocityServers(text, backends)));
   for (const b of backends) T.setPaperVelocity(b.dir, secret, b.mc);
   // An older Nano Studio turned their account checks off too.
   for (const s of skipped) T.unsetPaperVelocity(s.dir);
@@ -402,10 +432,9 @@ function packResourcePack(dir) {
 }
 // Players are sent the pack when they join: server.properties names its address and SHA-1, and requires it.
 function applyResourcePack(dir, url, sha1) {
-  // Both go into server.properties lines as they are.
   if (!/^https?:\/\/\S+$/.test(url || '') || !/^[0-9a-f]{40}$/.test(sha1 || '')) throw fail('The resource pack needs an http(s) address and a SHA-1');
   const props = path.join(dir, 'server.properties');
-  T.setProperty(props, 'resource-pack', url.replace(/[:=]/g, (c) => `\\${c}`));
+  T.setProperty(props, 'resource-pack', url);
   T.setProperty(props, 'resource-pack-sha1', sha1);
   T.setProperty(props, 'require-resource-pack', 'true');
   return { props };
@@ -418,7 +447,10 @@ const xrayView = (desc) => ({ ...KINDS[desc.kind], mc: desc.mc, pending: desc.an
 function settings(dir) {
   const desc = serverOf(dir);
   const proxy = !!KINDS[desc.kind]?.proxy;
-  return { proxy, memory: desc.memory || '2G', jvmArgs: Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : null,
+  // A proxy of the project sends its players here with their real accounts: Paper and Purpur from 1.13 (wireProxy).
+  const behindProxy = KINDS[desc.kind]?.plugins === 'paper' && !!T.velocityConfig(desc.mc)
+    && servers(path.dirname(path.dirname(dir))).some((s) => s.proxy);
+  return { proxy, behindProxy, memory: desc.memory || '2G', jvmArgs: Array.isArray(desc.jvmArgs) ? desc.jvmArgs.map(String) : null,
     defaultJvmArgs: proxy ? PROXY_JVM_ARGS : SERVER_JVM_ARGS, schema: proxy ? [] : serverSettings.PROPERTIES,
     antiXray: xray.status(dir, xrayView(desc)), ...(proxy ? { props: {}, whitelist: [], ops: [] } : serverSettings.read(dir)) };
 }
@@ -513,9 +545,12 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     },
   });
   const inServers = (root, dir) => typeof dir === 'string' && path.resolve(dir).toLowerCase().startsWith(path.resolve(root, 'servers').toLowerCase() + path.sep);
+  const ofProject = (root, dir) => { if (!root || !inServers(root, dir)) throw fail(`${dir} is not a server of this project`); };
+  // What writes a server's settings and packs: a trusted project's, under its servers/. A run configuration may name a
+  // server folder elsewhere, so a launch is not held to it.
   const playersAt = (root, dir) => {
     guard(root);
-    if (!inServers(root, dir)) throw fail(`${dir} is not a server of this project`);
+    ofProject(root, dir);
   };
   const playersChannel = (name, step) => ipcMain.handle(`players:${name}`, (_e, root, dir, ...args) => { playersAt(root, dir); return step(dir, ...args); });
   playersChannel('list', (dir) => players.list(dir));
@@ -584,16 +619,15 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     try { probe.listen(port, ...(host ? [host] : []), () => probe.close(() => resolve(true))); } catch { resolve(false); }
   });
   ipcMain.handle('minecraft:portFree', async (_e, port) => (await listenable(port, '127.0.0.1')) && listenable(port));
-  ipcMain.handle('minecraft:wireProxy', (_e, root, dir) => { guard(root); return wireProxy(root, dir); });
-  ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { guard(root); return clientPack(dir); });
+  ipcMain.handle('minecraft:wireProxy', (_e, root, dir) => { playersAt(root, dir); return wireProxy(root, dir); });
+  ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { playersAt(root, dir); return clientPack(dir); });
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
   ipcMain.handle('minecraft:blockedNames', (_e, root) => (root ? blockedNames(root) : []));
   // A dedicated server that runs a command changing a setting (whitelist on) saves server.properties as it read it at
   // its start, losing what was saved since. The window awaits this before it sends the command: the file is read now,
   // and once the server has written its copy (within `wait` ms) the file goes back to what it was.
   ipcMain.handle('minecraft:keepProperties', (_e, root, dir, wait = 15000) => {
-    guard(root);
-    if (!inServers(root, dir)) throw fail(`${dir} is not a server of this project`);
+    playersAt(root, dir);
     const file = path.join(dir, 'server.properties');
     const kept = fs.readFileSync(file);
     const pause = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -615,10 +649,10 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     })().catch((err) => playersLog.warn(`server.properties of ${dir} was not put back: ${err.message}`));
     return true;
   });
-  ipcMain.handle('minecraft:settings', (_e, root, dir) => settings(dir));
+  ipcMain.handle('minecraft:settings', (_e, root, dir) => { ofProject(root, dir); return settings(dir); });
   // A new port is written into the proxies that send players to the server.
   ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => {
-    guard(root);
+    playersAt(root, dir);
     const r = saveSettings(dir, values);
     if (values?.props?.['server-port'] !== undefined) rewireProxies(root);
     return r;
@@ -630,7 +664,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     return applyXray(dirs, level);
   });
   ipcMain.handle('minecraft:player', (_e, name, online) => serverSettings.player(name, online, mojangProfile));
-  ipcMain.handle('minecraft:langStatus', (_e, root, dir) => langStatus(dir));
+  ipcMain.handle('minecraft:langStatus', (_e, root, dir) => { ofProject(root, dir); return langStatus(dir); });
   // A translation or a launcher job runs until it ends or minecraft:cancel names its job.
   const running = new Map(); // job -> AbortController
   const cancellable = async (job, step) => {
@@ -643,16 +677,16 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     } finally { running.delete(job); }
   };
   ipcMain.handle('minecraft:translateMods', async (_e, root, dir, job) => {
-    guard(root);
+    playersAt(root, dir);
     const ctl = new AbortController();
     running.set(job, ctl);
     try { return await translateMods(dir, logTo(job), ctl.signal); } finally { running.delete(job); }
   });
   ipcMain.handle('minecraft:cancel', (_e, job) => { running.get(job)?.abort(); return true; });
-  ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { guard(root); return newResourcePack(dir); });
-  ipcMain.handle('minecraft:packResourcePack', (_e, root, dir) => { guard(root); return packResourcePack(dir); });
+  ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { playersAt(root, dir); return newResourcePack(dir); });
+  ipcMain.handle('minecraft:packResourcePack', (_e, root, dir) => { playersAt(root, dir); return packResourcePack(dir); });
   // Files and folders dropped on the window or on a server's card -> {done, skipped, modpacks}.
-  ipcMain.handle('minecraft:drop', (_e, root, serverDir, paths, job) => { guard(root); return imports(root).drop(serverDir, paths, logTo(job)); });
+  ipcMain.handle('minecraft:drop', (_e, root, serverDir, paths, job) => { guard(root); if (serverDir) ofProject(root, serverDir); return imports(root).drop(serverDir, paths, logTo(job)); });
   // A modpack's contents before it becomes a server: a .mrpack file, or a Modrinth address downloaded first.
   ipcMain.handle('minecraft:modpackInfo', async (_e, root, { file, url }, job) => {
     guard(root);
@@ -668,7 +702,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('minecraft:marketSearch', (_e, opts) => market.search({ ...opts, server: opts.serverDir ? serverOf(opts.serverDir) : null }));
   ipcMain.handle('minecraft:marketInstall', (_e, root, dir, project, job) => { guard(root); return shop.install(dir, project, logTo(job)); });
   ipcMain.handle('minecraft:marketRemove', (_e, root, dir, id) => { guard(root); return shop.remove(dir, id); });
-  ipcMain.handle('minecraft:applyResourcePack', (_e, root, dir, url, sha1) => { guard(root); return applyResourcePack(dir, url, sha1); });
+  ipcMain.handle('minecraft:applyResourcePack', (_e, root, dir, url, sha1) => { playersAt(root, dir); return applyResourcePack(dir, url, sha1); });
   ipcMain.handle('minecraft:serveFolder', (_e, root, folder) => { guard(root); return fileServer.serve(folder); });
 
   // Instances played through the official Minecraft Launcher (main/minecraft/launcher.js).
@@ -690,9 +724,11 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
   // The join code of this server's private share, on request: ports:state never carries its key, and the window holds the
   // code only to copy it.
+  // A running server is shared at the port it started with (options.port), which a saved server-port does not change.
   ipcMain.handle('minecraft:privateCode', (_e, root, dir, options) => {
-    guard(root);
-    const share = privateShare(portOf(dir));
+    playersAt(root, dir);
+    const port = Number.isInteger(options?.port) ? options.port : portOf(dir, serverOf(dir).kind);
+    const share = privateShare(port);
     if (!share) throw fail('This server is not shared privately', 'notShared');
     return craft.joinCode({ ...share, pack: options?.pack, name: path.basename(dir) });
   });

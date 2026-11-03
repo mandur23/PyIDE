@@ -15,9 +15,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
-const { KINDS, RELEASE, PACK_HOSTS, base, getJson, getText, mojangVersion, byVersion, neoforgeMc, packFile, standIn } = require('./sources');
-const { openZip, readEntry, unpackZip } = require('./zipfile');
-const { createImports, discardDownload } = require('./imports');
+const { KINDS, RELEASE, base, getJson, getText, mojangVersion, byVersion, neoforgeMc, standIn } = require('./sources');
+const { openZip, readEntry, unpackZip, canonical } = require('./zipfile');
+const { createImports, discardDownload, fetchChecked, hashOf, packEntry } = require('./imports');
 const { ping } = require('./ping');
 const { mergeServers } = require('./serversdat');
 const { createPrivateJoin, freePort } = require('./private-join');
@@ -33,9 +33,8 @@ const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
 const HTTP = /^https?:\/\/\S+$/i;
 // A server's pack address is anyone's text and is fetched at every Play, so it may not point at this computer or its
 // network.
-const PRIVATE_HOST = /^(localhost$|.+\.local(host)?$|127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[(::1?\]|::ffff:|f[cd]|fe[89ab]))/i;
-// The most a download may be: a file whose pack names no size, and a pack itself (zipfile.js unpacks 2 GB at most).
-const FILE_LIMIT = 1024 * 1024 * 1024;
+const PRIVATE_HOST = /^(localhost$|.+\.local(host)?$|127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[(::1?\]|::ffff:|f[cd]|fe[89ab]))/i;
+// The most a pack may be (zipfile.js unpacks 2 GB at most).
 const PACK_LIMIT = 2 * 1024 * 1024 * 1024;
 const SPARE_SPACE = 64 * 1024 * 1024;
 const HOUR = 3600000;
@@ -63,12 +62,6 @@ const writeJson = (p, v) => {
 };
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const fail = (message, code) => Object.assign(new Error(message), { expected: true, code });
-// Streamed: a pack's mods are hashed at every Play, in the process that also answers the window.
-async function hashOf(algo, file) {
-  const hash = crypto.createHash(algo);
-  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
-}
 const mb = (n) => Math.ceil(n / 1048576);
 // bytes more fit on dir's disk, or a clear error before anything is written.
 function roomFor(dir, bytes) {
@@ -88,14 +81,17 @@ function sweep(dir, prefix) {
 const now = () => new Date().toISOString();
 // A name or title as one line of at most 64 characters.
 const oneLine = (s) => String(s ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 64).trim();
-// rel under dir, or null when it names a path outside it or an alternate data stream (a colon).
+// rel under dir, or null when it names a path outside it or is not written where its text says (zipfile.js canonical).
 const inside = (dir, rel) => {
-  if (typeof rel !== 'string' || !rel) return null;
+  if (!canonical(rel)) return null;
   const top = path.resolve(dir);
   const p = path.resolve(top, rel);
   return p.startsWith(top + path.sep) && !p.slice(top.length).includes(':') ? p : null;
 };
 const atLeast = (mc, v) => byVersion(mc, v) <= 0;
+// A pack's override files, as the paths unpackZip writes them in the instance.
+const OVERRIDE = /^(client-)?overrides\/[^/]/;
+const overridesOf = (zip) => zip.names.filter((n) => OVERRIDE.test(n) && !n.endsWith('/')).map((n) => n.slice(n.indexOf('/') + 1)).filter(canonical);
 
 const workDir = (root) => path.join(root, WORK);
 const instancesDir = (root) => path.join(root, 'instances');
@@ -153,7 +149,10 @@ const JOIN_CODE = /nanostudio:(?:\/\/)?join\/?\?([^\s"'`()<>]+)/i;
 function parseJoinCode(text) {
   const m = JOIN_CODE.exec(String(text ?? ''));
   if (!m) throw fail('This is not a Nano Studio join code (nanostudio:join?addr=…)', 'badCode');
-  const q = new URLSearchParams(m[1].replace(/[.,;:!?]+$/, ''));
+  const raw = m[1].replace(/[.,;:!?]+$/, '');
+  const q = new URLSearchParams(raw);
+  // URLSearchParams decodes names too, so k%65y= is a key that redact.js, which masks key=, would leave in a log.
+  if (q.getAll('key').length !== (raw.match(/(^|&)key=/g) || []).length) throw fail('The join code has a damaged key', 'badCode');
   const { address } = parseAddress(q.get('addr'));
   return { address, pack: packUrl(q.get('pack')), name: oneLine(q.get('name')) || address, key: q.has('key') ? keyIn(q.get('key')) : null };
 }
@@ -432,11 +431,12 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     const work = gameDir(root);
     fs.mkdirSync(work, { recursive: true });
     sweep(work, 'installer-');
-    const r = await source.resolve(inst.mc, inst.loaderVersion);
+    const r = await source.resolve(inst.mc, inst.loaderVersion, log);
     const tmp = fs.mkdtempSync(path.join(work, 'installer-'));
     try {
       const jar = path.join(tmp, r.file);
       await fetchFile(r.url, jar, { sha256: r.sha256 }, log);
+      if (r.sha1 && await hashOf('sha1', jar) !== r.sha1) throw fail(`Checksum mismatch for ${r.file}`);
       if (!headlessClient(jar)) {
         throw fail(`The ${source.title} ${inst.loaderVersion} installer has no client install without its window (--installClient), so Nano Studio cannot install it. Choose a newer ${source.title} version.`, 'noHeadless');
       }
@@ -509,16 +509,17 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
   // A pack address -> a local .mrpack: a Modrinth modpack's newest version, or the file at the address. Both land in
   // the temporary folder (discardDownload removes them).
   async function downloadPack(url, log) {
-    if (/^https:\/\/(www\.)?modrinth\.com\/modpack\//i.test(url) || !/^https?:/i.test(url)) return createImports({ fetchFile }).fromModrinth(url, log);
+    if (/^https:\/\/(www\.)?modrinth\.com\/modpack\//i.test(url) || !/^https?:/i.test(url)) return createImports({ fetchFile }).fromModrinth(url, log, Object.values(PACK_LOADERS));
     const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-pack.mrpack`);
     await fetchFile(packUrl(url), dest, { limit: PACK_LIMIT, allow: allowedPack }, log);
     return dest;
   }
   // What the user sees before a server's pack may change an instance. A pack's mods run with the game, with the user's
   // rights, and only the files it lists are limited to PACK_HOSTS and checked: overrides are whatever its owner put in.
+  // The overrides are named as applyPack writes them: unpackZip skips what is not canonical.
   function packReview(file, pack, url, inst, sha1) {
     const zip = openZip(file);
-    const inner = zip.names.filter((n) => /^(client-)?overrides\/./.test(n) && !n.endsWith('/')).map((n) => n.slice(n.indexOf('/') + 1));
+    const inner = overridesOf(zip);
     zip.close();
     const listed = pack.files.filter((f) => f.env?.client !== 'unsupported').map((f) => String(f.path || '').replace(/\\/g, '/'));
     const code = (rel) => /\.jar$|^mods\/.+\.(zip|litemod)$/i.test(rel);
@@ -527,22 +528,6 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     const mods = [...listed.filter(code).map((rel) => row(rel, false)), ...inner.filter(code).map((rel) => row(rel, true))];
     return { sha1, host: new URL(url).host, name: pack.name, version: pack.version, mc: pack.mc, loader: pack.loader, update: !!inst.pack, mods,
       others: listed.length + inner.length - mods.length, autoModpack: mods.some((m) => /automodpack/i.test(m.file)) };
-  }
-  // The file at the first of its addresses that gives it whole and with its checksum: a pack may name mirrors.
-  async function fetchChecked(f, tmp, log) {
-    const quiet = Object.assign(() => {}, { signal: log.signal });
-    let last = null;
-    for (const url of f.from) {
-      try {
-        await fetchFile(url, tmp, { size: f.size, limit: f.size || FILE_LIMIT }, quiet);
-        if (await hashOf(f.sum[0], tmp) === f.sum[1]) return;
-        last = fail(`Checksum mismatch for ${f.rel}`);
-      } catch (err) {
-        if (err.name === 'AbortError' || err.code === 'ENOSPC') throw err;
-        last = err;
-      }
-    }
-    throw last;
   }
   // The pack's client files into the instance: each listed file downloaded with its hash checked (all of them before
   // anything in the instance changes), then the files the previous pack installed and this one does not removed, the
@@ -557,17 +542,14 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       const rel = String(f.path || '').replace(/\\/g, '/');
       const dest = inside(dir, rel);
       if (!dest) throw fail(`The pack names a file outside the instance: ${f.path}`, 'badPack');
-      const from = (Array.isArray(f.downloads) ? f.downloads : []).filter(packFile);
-      const sum = f.hashes?.sha512 ? ['sha512', f.hashes.sha512] : f.hashes?.sha1 ? ['sha1', f.hashes.sha1] : null;
-      if (!from.length) throw fail(`The pack gives no https download address on ${PACK_HOSTS.join(', ')} for ${rel}`, 'badPack');
-      if (!sum) throw fail(`The pack gives no checksum for ${rel}`, 'badPack');
-      return { rel, dest, from, sum: [sum[0], String(sum[1]).toLowerCase()], size: Number.isSafeInteger(f.fileSize) && f.fileSize > 0 ? f.fileSize : null };
+      const e = packEntry(f, rel);
+      if (e.why) throw fail(`The pack ${e.why}`, 'badPack');
+      return { ...e, dest };
     });
     const zip = openZip(file);
-    const packed = zip.names.filter((n) => /^(client-)?overrides\/./.test(n) && !n.endsWith('/'));
-    const unpacked = packed.reduce((s, n) => s + zip.size(n), 0);
+    const unpacked = zip.names.filter((n) => OVERRIDE.test(n)).reduce((s, n) => s + zip.size(n), 0);
+    const overrides = [...new Set(overridesOf(zip).filter((rel) => inside(dir, rel)))];
     zip.close();
-    const overrides = [...new Set(packed.map((n) => n.slice(n.indexOf('/') + 1)).filter((rel) => inside(dir, rel)))];
     sweep(dir, '.pack-');
     const staging = fs.mkdtempSync(path.join(dir, '.pack-'));
     try {
@@ -582,7 +564,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       for (const f of needed) {
         log(`(${f.i + 1}/${files.length}) ${f.rel}\n`);
         const tmp = path.join(staging, String(f.i));
-        await fetchChecked(f, tmp, log);
+        await fetchChecked(fetchFile, f, tmp, log);
         ready.push({ tmp, dest: f.dest });
       }
       const owned = [...new Set([...files.map((f) => f.rel), ...overrides])];
@@ -1014,9 +996,11 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       const { host, port } = parseAddress(code?.address ?? text);
       return ping(host, port);
     }
+    // A join process already running is the game's, which start() hands back: only the one started here is stopped.
+    const ours = !joins.running().includes(code.address.toLowerCase());
     try {
       return await ping(LOCAL, await joins.start({ address: code.address, key: code.key, port: 0 }));
-    } finally { joins.stop(code.address); }
+    } finally { if (ours) joins.stop(code.address); }
   }
 
   const status = (root) => {

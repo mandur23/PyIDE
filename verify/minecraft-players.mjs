@@ -34,6 +34,8 @@ const STEVE = '069a79f4-44e9-4726-a5be-fca90e38aaf5';
 const ALEX = '853c80ef-3c37-49fd-aa49-938b674adae6';
 const GRIEFER = '11111111-2222-3333-4444-555555555555';
 const UUIDS = { Steve: STEVE, Alex: ALEX, Griefer: GRIEFER };
+// usercache.json as a server writes it: an entry without a date it can read is no entry to it.
+const cached = (...names) => S(names.map((name) => ({ name, uuid: UUIDS[name], expiresOn: '2099-01-01 00:00:00 +0000' })));
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 // ---------- the stand-in server ----------
@@ -80,6 +82,8 @@ function standIn() {
       return;
     }
     if (line === 'list') { const names = [...online.keys()]; say(`There are ${names.length} of a max of 20 players online: ${names.join(', ')}`); return; }
+    // commands.list.nameAndId, "%s (%s)", joined by ", ".
+    if (line === 'list uuids') { const names = [...online.keys()]; say(`There are ${names.length} of a max of 20 players online: ${names.map((n) => `${n} (${uuidOf(n)})`).join(', ')}`); return; }
     if ((m = /^data get entity (\S+)(?: (\S+))?$/.exec(line))) {
       const p = online.get(m[1]);
       if (!p) { say('No entity was found'); return; }
@@ -132,6 +136,9 @@ function standIn() {
       const name = rest[0];
       online.set(name, { x: 10.5, y: 64, z: -3.25, dimension: cfg.dimension });
       out(`${AUTH}UUID of player ${name} is ${uuidOf(name)}`);
+      // The server caches who has the name for a month and saves the file at once (yyyy-MM-dd HH:mm:ss Z).
+      const month = new Date(Date.now() + 30 * 86400000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000');
+      edit('usercache.json', (l) => [{ name, uuid: uuidOf(name), expiresOn: month }, ...l.filter((e) => e.uuid !== uuidOf(name) && e.name?.toLowerCase() !== name.toLowerCase())]);
       log(`${name}[/203.0.113.7:51234] logged in with entity id 123 at (10.5, 64.0, -3.25)`);
       say(`${name} joined the game`);
     }
@@ -205,14 +212,14 @@ for (const [kind, s] of Object.entries(SERVERS)) {
 }
 write(path.join(serverDir('modern'), 'pyide-server.json'), desc('vanilla', '26.3'));
 write(path.join(serverDir('modern'), 'standin.json'), S({ kind: 'vanilla', mc: '26.3', data: { Steve: EQUIPMENT_DATA() }, uuids: UUIDS, dimension: 'minecraft:overworld', systemChat: true }));
-write(path.join(serverDir('modern'), 'usercache.json'), S([{ name: 'Steve', uuid: STEVE }, { name: 'Alex', uuid: ALEX }]));
+write(path.join(serverDir('modern'), 'usercache.json'), cached('Steve', 'Alex'));
 write(path.join(serverDir('proxy'), 'pyide-server.json'), desc('velocity', '3.4.0'));
 write(path.join(serverDir('proxy'), 'standin.json'), S({ kind: 'vanilla', mc: '3.4.0', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld' }));
 const GAME = path.join(path.dirname(fileURLToPath(import.meta.url)), 'minecraft-players-game.cjs');
 const DRAG_STACKS = { 0: { id: 'minecraft:diamond_sword', count: 1, extra: 'components: {"minecraft:damage": 12}' }, 1: { id: 'minecraft:dirt', count: 32 }, 2: { id: 'minecraft:diamond', count: 3 }, 9: { id: 'minecraft:stone', count: 64 }, 10: { id: 'minecraft:dirt', count: 7 }, 200: { id: 'minecraft:diamond', count: 5 } };
 write(path.join(serverDir('drag'), 'pyide-server.json'), desc('paper', '1.21.1'));
 write(path.join(serverDir('drag'), 'standin.json'), S({ kind: 'paper', mc: '1.21.1', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld', game: { path: GAME, stacks: DRAG_STACKS } }));
-write(path.join(serverDir('drag'), 'usercache.json'), S([{ name: 'Steve', uuid: STEVE }, { name: 'Alex', uuid: ALEX }]));
+write(path.join(serverDir('drag'), 'usercache.json'), cached('Steve', 'Alex'));
 write(path.join(serverDir('drag'), 'world', 'playerdata', `${STEVE}.dat`), savedSteve);
 write(path.join(serverDir('papertwo'), 'pyide-server.json'), desc('purpur', '1.21.1'));
 write(path.join(serverDir('papertwo'), 'standin.json'), S({ kind: 'paper', mc: '1.21.1', data: {}, uuids: UUIDS, dimension: 'minecraft:overworld' }));
@@ -221,7 +228,7 @@ write(path.join(serverDir('big'), 'pyide-server.json'), desc('vanilla', '1.21.1'
 const crowd = Array.from({ length: 3000 }, (_, i) => ({ name: `Player${i}`, uuid: `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`, expiresOn: '2030-01-01 00:00:00 +0000' }));
 write(path.join(serverDir('big'), 'usercache.json'), S(crowd));
 const vanilla = serverDir('vanilla');
-write(path.join(vanilla, 'usercache.json'), S([{ name: 'Steve', uuid: STEVE }, { name: 'Alex', uuid: ALEX }, { name: 'Griefer', uuid: GRIEFER }]));
+write(path.join(vanilla, 'usercache.json'), cached('Steve', 'Alex', 'Griefer'));
 write(path.join(vanilla, 'whitelist.json'), S([{ uuid: STEVE, name: 'Steve' }]));
 write(path.join(vanilla, 'banned-players.json'), S([{ uuid: GRIEFER, name: 'Griefer', reason: 'x', expires: 'forever' }]));
 write(path.join(vanilla, 'world', 'playerdata', `${STEVE}.dat`), savedSteve);
@@ -427,7 +434,7 @@ async function start(ctx, name) {
 const tell = (ctx, id, line) => ctx.js(`(ide.proc.input(${id}, ${S(`#${line}\n`)}), true)`);
 const consoleOf = (ctx, id) => ctx.js(`window.__out[${id}].join('')`);
 const logOf = (name) => { const f = path.join(serverDir(name), 'commands.log'); return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean) : []; };
-const sentBy = (name) => logOf(name).filter((l) => !/^(data get |list$)/.test(l));
+const sentBy = (name) => logOf(name).filter((l) => !/^(data get |list uuids$)/.test(l));
 const reached = async (name, line, ms = 6000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (logOf(name).includes(line)) return true; await pause(50); }

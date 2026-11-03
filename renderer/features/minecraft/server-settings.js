@@ -415,7 +415,7 @@
   // ---------- players ----------
   // An online-mode server (or one behind a proxy, which forwards the players' real accounts) knows players by their
   // Mojang account; an offline one by the UUID their name gives.
-  const realAccounts = (v) => v.draft.props['online-mode'] !== 'false' || mc.servers().some((s) => s.proxy);
+  const realAccounts = (v) => v.draft.props['online-mode'] !== 'false' || !!v.base.behindProxy;
   function playerList(v, which) {
     const box = el('div', 'mcset-players');
     box.dataset.list = which;
@@ -431,14 +431,16 @@
     const paint = () => {
       const running = mc.runningAt(v.srv.dir);
       list.replaceChildren();
-      if (!v.draft[which].length) list.append(el('div', 'mcset-pempty muted', which === 'ops' ? tr('No operators yet.') : tr('No players on the whitelist yet.')));
+      const file = which === 'ops' ? 'ops.json' : 'whitelist.json';
+      if (v.base.damaged?.includes(file)) list.append(el('div', 'mcset-note mcset-pdamaged', tr('{file} cannot be read, so its players are not shown. Fix it or delete it before changing this list.', { file })));
+      else if (!v.draft[which].length) list.append(el('div', 'mcset-pempty muted', which === 'ops' ? tr('No operators yet.') : tr('No players on the whitelist yet.')));
       for (const p of v.draft[which]) {
         const r = el('div', 'mcset-player');
         r.append(el('span', 'mcset-pface', p.name.slice(0, 1).toUpperCase()), el('span', 'mcset-pn', p.name), el('span', 'mcset-puuid muted', p.uuid));
         if (which === 'ops') {
           const lv = el('select', 'input mcset-plevel');
-          for (let i = 1; i <= 4; i++) lv.add(new Option(tr('Level {level}', { level: i }), String(i)));
-          lv.value = String(p.level || 4);
+          for (let i = p.level === 0 ? 0 : 1; i <= 4; i++) lv.add(new Option(tr('Level {level}', { level: i }), String(i)));
+          lv.value = String(p.level ?? 4);
           lv.disabled = running;
           lv.title = running ? tr('Stop the server to change a level: a running server keeps its own list') : CHOICES()['op-permission-level'][lv.value];
           lv.onchange = () => { p.level = Number(lv.value); update(v); };
@@ -471,6 +473,17 @@
     paint();
     box.append(list, add, error);
     return box;
+  }
+  // A stopped server's list as the file has it now, with this tab's changes: a player added in the console since the tab
+  // was read stays.
+  function mergedList(now, before, after) {
+    const key = (p) => p.name.toLowerCase();
+    const had = new Map(before.map((p) => [key(p), p]));
+    const has = new Map(after.map((p) => [key(p), p]));
+    const edited = (p) => had.has(key(p)) && has.has(key(p)) && JSON.stringify(had.get(key(p))) !== JSON.stringify(has.get(key(p)));
+    const out = now.filter((p) => !had.has(key(p)) || has.has(key(p))).map((p) => (edited(p) ? has.get(key(p)) : p));
+    for (const p of after) if (!had.has(key(p)) && !out.some((q) => key(q) === key(p))) out.push(p);
+    return out;
   }
   // What a running server is told for the list changes: it writes its own files.
   function listCommands(which, before, after) {
@@ -677,6 +690,12 @@
   async function commit(v) {
     const c = changes(v);
     const running = mc.runningAt(v.srv.dir);
+    // A server saving after Stop runs no more commands, and writes its lists as it holds them.
+    if ((c.whitelist || c.ops) && mc.stoppingAt(v.srv.dir)) {
+      v.status.textContent = tr('{name} is stopping. Save the player lists once it has stopped.', { name: v.srv.name });
+      v.status.classList.add('mcset-error');
+      return;
+    }
     const payload = {};
     if (Object.keys(c.props).length) payload.props = c.props;
     if (c.memory) payload.memory = v.draft.memory;
@@ -684,14 +703,15 @@
     if (c.antiXray) payload.antiXray = v.draft.antiXray;
     const newDefault = c.xrayDefault ? nextXrayDefault(v) : null;
     const commands = [];
-    for (const which of ['whitelist', 'ops']) {
-      if (!c[which]) continue;
-      if (running) commands.push(...listCommands(which, v.base[which], v.draft[which]));
-      else payload[which] = v.draft[which];
-    }
     v.save.disabled = true;
     let fresh = null;
     try {
+      const now = !running && (c.whitelist || c.ops) ? await ide.api.invoke('minecraft:settings', ide.root, v.srv.dir) : null;
+      for (const which of ['whitelist', 'ops']) {
+        if (!c[which]) continue;
+        if (running) commands.push(...listCommands(which, v.base[which], v.draft[which]));
+        else payload[which] = mergedList(now[which], v.base[which], v.draft[which]);
+      }
       if (Object.keys(payload).length) fresh = await ide.api.invoke('minecraft:saveSettings', ide.root, v.srv.dir, payload);
     } catch (err) {
       v.status.textContent = mc.errorText(err);

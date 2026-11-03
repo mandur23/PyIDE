@@ -185,18 +185,23 @@
     const j = mc.job(con);
     try {
       const r = await ide.api.invoke('minecraft:marketInstall', ide.root, srv.dir, { id: h.id, type: state.type }, j.id);
-      for (const i of r.installed) {
-        const what = { title: i.title, version: i.version };
-        con.append(`${i.dependency ? tr('{title} {version} installed (a required dependency)', what) : tr('{title} {version} installed', what)} → ${i.file}\n`, 'ok');
+      if (r.duplicate) {
+        con.append(`${tr('{title} is on the server already, as {file}, which the Market did not install: a second copy would stop the server from starting. Delete that file first to install it from the Market.', r.duplicate)}\n`, 'err');
+      } else {
+        for (const i of r.installed) {
+          const what = { title: i.title, version: i.version };
+          con.append(`${i.dependency ? tr('{title} {version} installed (a required dependency)', what) : tr('{title} {version} installed', what)} → ${i.file}\n`, 'ok');
+        }
+        for (const s of r.skipped) con.append(`${tr('{title} is client-only: players add it themselves', { title: s })}\n`, 'sys');
+        for (const p of r.present || []) con.append(`${tr('{title} is on the server already, as {file}: it is left as it is', p)}\n`, 'sys');
+        if (!r.installed.length) con.append(`${tr('{title} is installed already, the newest for this server', { title: h.title })}\n`, 'ok');
+        if (state.type === 'resourcepack' && r.installed.length) con.append(`${tr('Send to Players on the server\'s card sends the pack to everyone who joins.')}\n`, 'sys');
+        if (mc.runningAt(srv.dir)) con.append(`${tr('Restart the server to load what was added.')}\n`, 'sys');
+        ide.notifications?.notify({
+          title: tr('{title} installed on {server}', { title: h.title, server: srv.name }), kind: 'ok', group: 'Minecraft', raw: true,
+          actions: mc.runningAt(srv.dir) ? [{ label: tr('Restart Server'), run: (n) => { n.expire(); mc.restartIfRunning(srv.dir, con); } }] : [],
+        });
       }
-      for (const s of r.skipped) con.append(`${tr('{title} is client-only: players add it themselves', { title: s })}\n`, 'sys');
-      if (!r.installed.length) con.append(`${tr('{title} is installed already, the newest for this server', { title: h.title })}\n`, 'ok');
-      if (state.type === 'resourcepack' && r.installed.length) con.append(`${tr('Send to Players on the server\'s card sends the pack to everyone who joins.')}\n`, 'sys');
-      if (mc.runningAt(srv.dir)) con.append(`${tr('Restart the server to load what was added.')}\n`, 'sys');
-      ide.notifications?.notify({
-        title: tr('{title} installed on {server}', { title: h.title, server: srv.name }), kind: 'ok', group: 'Minecraft', raw: true,
-        actions: mc.runningAt(srv.dir) ? [{ label: tr('Restart Server'), run: (n) => { n.expire(); mc.restartIfRunning(srv.dir, con); } }] : [],
-      });
     } catch (err) {
       con.append(`${mc.errorText(err)}\n`, /installed already/.test(err.message || '') ? 'ok' : 'err');
     } finally { j.done(); working.delete(h.id); }
@@ -221,7 +226,8 @@
     if (working.has(h.id) || !(await ide.ui.confirm(tr('Remove {title} {version} from {server}?', { title: h.title, version: installed.version, server: srv.name }), { ok: tr('Remove') }))) return;
     working.add(h.id);
     try {
-      await ide.api.invoke('minecraft:marketRemove', ide.root, srv.dir, h.id);
+      const r = await ide.api.invoke('minecraft:marketRemove', ide.root, srv.dir, h.id);
+      if (r?.neededBy?.length) ide.ui.alert(tr('{title} stays: {projects} needs it. Remove that first.', { title: h.title, projects: r.neededBy.join(', ') }));
     } catch (err) { ide.ui.alert(mc.errorText(err)); } finally { working.delete(h.id); }
     ide.refreshTree?.();
     await mc.refresh();

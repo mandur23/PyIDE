@@ -111,6 +111,9 @@
   "{title} installed on {server}": "{server}에 {title} 설치됨",
   "Restart Server": "서버 다시 시작",
   "Remove {title} {version} from {server}?": "{server}에서 {title} {version}을(를) 제거할까요?",
+  "{title} stays: {projects} needs it. Remove that first.": "{projects}에 필요해서 {title} 프로젝트는 제거하지 않았어요. 그쪽을 먼저 제거하세요.",
+  "{title} is on the server already, as {file}, which the Market did not install: a second copy would stop the server from starting. Delete that file first to install it from the Market.": "{title} 프로젝트는 이미 서버에 있어요. Market이 설치하지 않은 파일이에요: {file}. 하나 더 설치하면 서버가 시작하지 못해요. Market으로 설치하려면 그 파일을 먼저 지우세요.",
+  "{title} is on the server already, as {file}: it is left as it is": "{title} 프로젝트는 이미 서버에 있어서 그대로 두었어요: {file}",
   "Send to Players on the server's card sends the pack to everyone who joins.": "서버 카드의 \"플레이어에게 보내기\"를 누르면 접속하는 모든 플레이어에게 이 팩이 전송됩니다.",
   "Loader:": "로더:",
   "Minecraft Screen": "마인크래프트 화면",
@@ -796,6 +799,7 @@
   "The file there is not the one this version of the app ships. Installing replaces it.": "그 파일은 이 버전의 앱에 들어 있는 파일과 달라요. 설치하면 바꿔 넣어요.",
   "The item is in that slot already.": "아이템이 이미 그 슬롯에 있어요.",
   "The player is not online, so nothing was sent.": "플레이어가 접속해 있지 않아서 보내지 않았어요.",
+  "The server does not know this name as this player's account right now, so nothing was sent. Names can pass to another account, and the command would reach whoever holds the name.": "서버가 지금 이 이름을 이 플레이어의 계정으로 알고 있지 않아서 보내지 않았어요. 이름은 다른 계정으로 넘어갈 수 있고, 명령은 지금 그 이름을 가진 계정에 가요.",
   "The player's stacks do not add up either: something else in the inventory changed at the same moment.": "아이템 수도 맞지 않아요. 같은 순간에 인벤토리의 다른 곳도 바뀌었어요.",
   "The plugin file could not be written.": "플러그인 파일을 쓰지 못했어요.",
   "The server is holding that file. Stop the server and try again.": "서버가 그 파일을 쓰고 있어요. 서버를 멈춘 뒤 다시 해 주세요.",
@@ -825,5 +829,8 @@
   "{name} runs Minecraft {mc}, older than 1.13, which has no modern forwarding: the proxy does not send players there, and it keeps its own account checks.": "{name} 서버는 마인크래프트 {mc} 버전이라 모던 포워딩이 없어요(1.13부터 있어요). 프록시는 이 서버로 플레이어를 보내지 않고, 서버가 계정을 직접 확인해요.",
   "servers/{name} is a folder that is not a server: choose another name, or move that folder away.": "servers/{name} 폴더가 이미 있지만 서버가 아니에요. 다른 이름을 고르거나 그 폴더를 옮기세요.",
   "The modpack {name} and the {count} mods added to the server since (Minecraft {mc}, {loader}). Players import it once in Prism Launcher or the Modrinth App (Add Instance › Import).": "모드팩 {name}, 그리고 그 뒤 서버에 추가한 모드 {count}개(마인크래프트 {mc}, {loader}). 플레이어는 Prism Launcher나 Modrinth 앱에서 한 번 가져오면 돼요(인스턴스 추가 › 가져오기).",
-  "Stop {server} first: while it runs, Java holds its jars, and {title} cannot be taken out of it.": "먼저 {server} 서버를 중지하세요. 실행 중에는 Java가 jar 파일을 쥐고 있어서 {title} 파일을 뺄 수 없어요."
+  "Stop {server} first: while it runs, Java holds its jars, and {title} cannot be taken out of it.": "먼저 {server} 서버를 중지하세요. 실행 중에는 Java가 jar 파일을 쥐고 있어서 {title} 파일을 뺄 수 없어요.",
+  "{file} cannot be read, so its players are not shown. Fix it or delete it before changing this list.": "{file} 파일을 읽을 수 없어 플레이어를 보여 주지 못해요. 이 목록을 바꾸기 전에 파일을 고치거나 지우세요.",
+  "{name} is stopping. Save the player lists once it has stopped.": "{name} 서버가 멈추는 중이에요. 완전히 멈춘 뒤에 플레이어 목록을 저장하세요.",
+  "{name} was deleted, but the proxies could not be updated: {error}": "{name} 서버를 지웠지만 프록시 설정을 바꾸지 못했어요: {error}"
 }

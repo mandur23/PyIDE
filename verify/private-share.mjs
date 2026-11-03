@@ -14,7 +14,7 @@ import path from 'path';
 import { Duplex, PassThrough } from 'stream';
 import { fileURLToPath } from 'url';
 import { gzipSync } from 'zlib';
-import { standInBore } from './stand-in-bore.mjs';
+import { frame, standInBore } from './stand-in-bore.mjs';
 
 const require = createRequire(import.meta.url);
 const S = JSON.stringify;
@@ -707,6 +707,66 @@ attack('the key on the command line', [['minecraft/private-join.js', "'--listen'
     `(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--to ${address}*' -and $_.Name -eq 'electron.exe' }).CommandLine`], { encoding: 'utf8' });
   await joins.stopAll();
   return { ok: line.includes(address) && !line.includes(key), why: `the join process's command line ${line.includes(key) ? 'holds' : 'does not hold'} the key (${line.length} characters read)` };
+});
+// Two starts of one server at once (the card's Play and a code pasted again): the process nobody tracks would keep the key
+// and the port after stopAll.
+attack('two joins of one server at once', [['minecraft/private-join.js', 'const job = (pending.get(id) || Promise.resolve()).catch(() => {}).then(() => begin(options));', 'const job = begin(options);']], async (client) => {
+  const { createPrivateJoin } = require(path.join(path.dirname(client), 'minecraft', 'private-join.js'));
+  const pids = path.join(work, `pids-${crypto.randomBytes(4).toString('hex')}.txt`);
+  const recorder = path.join(work, `${path.basename(pids, '.txt')}.cjs`);
+  writeFileSync(recorder, `require('fs').appendFileSync(${S(pids)}, process.pid + '\\n');\nconst client = process.argv[2];\nprocess.argv.splice(2, 1);\nrequire(client);\n`);
+  writeFileSync(pids, '');
+  const joins = createPrivateJoin({ argv: () => [electron, recorder, client] });
+  const address = `127.0.0.1:${crypto.randomInt(20000, 60000)}`;
+  const key = SECRET.toString('base64url');
+  const ports = await Promise.all([joins.start({ address, key, port: 0 }), joins.start({ address, key, port: 0 })]);
+  await joins.stopAll();
+  const started = readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number);
+  const alive = started.filter((pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
+  for (const pid of alive) { try { process.kill(pid); } catch {} }
+  return { ok: started.length === 1 && !alive.length && ports[0] === ports[1],
+    why: `${started.length} join processes started for one server (ports ${ports.join(', ')}), ${alive.length} still running after stopAll` };
+});
+// A public share: bore resetting a player's connection while the local server is still being reached ends that
+// connection, not the client and every other player's with it.
+const slowLocal = path.join(work, 'slow-local.cjs');
+writeFileSync(slowLocal, `const net = require('net');
+const connect = net.connect;
+const slow = Number(process.env.SLOW_PORT);
+net.connect = (options, ...more) => {
+  if (options?.port !== slow) return connect(options, ...more);
+  const socket = new net.Socket();
+  setTimeout(() => socket.connect(options), 1500);
+  return socket;
+};
+const client = process.argv[2];
+process.argv.splice(2, 1);
+require(client);
+`);
+attack('a reset while the server is reached', [['bore-client.js', "    remote.on('error', () => {});\n", '']], async (client) => {
+  const game = gameServer();
+  const gamePort = await listen(game.server);
+  const bore = standInBore();
+  const controlPort = await listen(bore.server);
+  const host = runClient(client, ['local', String(gamePort), '--local-host', '127.0.0.1', '--to', '127.0.0.1'],
+    { secret: null, prefix: [slowLocal], env: { PYIDE_BORE_CONTROL_PORT: String(controlPort), SLOW_PORT: String(gamePort) } });
+  try {
+    await until(() => /listening at/.test(host.out) || host.code !== undefined, 'the host', 15000);
+    bore.seen.control.write(frame({ Connection: 'one' }));
+    (await until(() => bore.seen.accepted.get('one'), 'the first Accept')).resetAndDestroy();
+    await outcome(() => host.code !== undefined || game.connections, 5000);
+    await sleep(300);
+    if (host.code === undefined) bore.seen.control.write(frame({ Connection: 'two' }));
+    await outcome(() => host.code !== undefined || bore.seen.accepted.has('two'), 5000);
+    const alive = host.code === undefined;
+    return { ok: alive && bore.seen.accepted.has('two'),
+      why: alive ? `the client lived on${bore.seen.accepted.has('two') ? ' and took the next connection' : ', but took no next connection'}` : `the client stopped with code ${host.code}: ${/Error: [^\r\n]*/.exec(host.err)?.[0] ?? host.err.trim()}` };
+  } finally {
+    host.child.kill();
+    bore.server.close();
+    for (const c of game.open) c.destroy();
+    game.server.close();
+  }
 });
 
 // ---------- what a friend gets ----------

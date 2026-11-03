@@ -16,13 +16,15 @@
     cloudflared: { item: 'tool:cloudflared', homepage: 'https://github.com/cloudflare/cloudflared',
       description: () => tr('Cloudflare Tunnel client (Apache 2.0) that gives a web server running in Nano Studio a public https address, for the Ports tool window.') },
   };
-  let st = { ports: [], added: [], tunnels: [], cloudflared: false, bore: false };
+  let st = { ports: [], added: [], games: [], tunnels: [], cloudflared: false, bore: false };
   const announced = new Set(); // ports told about this session
   const tunnelOf = (port) => st.tunnels.find((t) => t.port === port) || null;
   // A plugin that knows what a port speaks before any probe (minecraft: a game server's port is TCP) says so.
   const hints = new Map(); // port -> 'http' | 'https' | 'tcp'
-  const games = new Set(); // game servers' ports, which the Minecraft plugin names before each server starts
-  const protoOf = (p) => p.proto || hints.get(p.port) || null;
+  // Game servers' ports, which the Minecraft plugin names before each server starts. Main keeps them, so a window that did
+  // not start the server, or this one reloaded, knows them too.
+  const isGame = (port) => !!st.games?.includes(port);
+  const protoOf = (p) => p.proto || hints.get(p.port) || (isGame(p.port) ? 'tcp' : null);
   const web = (p) => protoOf(p) !== 'tcp';
   const toolFor = (p) => (web(p) ? 'cloudflared' : 'bore');
   const hostPort = (host, port) => `${host}:${port}`;
@@ -101,14 +103,15 @@
 
   // private: reachable only with a join code. Nothing to warn about, and always bore. A game server's port is private
   // unless the caller says otherwise, so no earlier "Don't ask again" can put one on a public address in one click.
-  async function share(port, { asked = false, private: secure = games.has(port) } = {}) {
+  // auto: automatic sharing, which main refuses for a game server's port.
+  async function share(port, { asked = false, auto = false, private: secure = isGame(port) } = {}) {
     if (!asked && !secure && !(await confirmShare(port))) return;
     for (let attempt = 0; attempt < 2; attempt++) {
       const p = st.ports.find((x) => x.port === port);
       // Before the probe answers, main picks the tool; a missing one comes back as "<tool> is not installed".
       if (!secure && p && protoOf(p) && !(await ensureTool(toolFor(p)))) return;
       try {
-        st = await ide.api.invoke('ports:share', port, { private: secure });
+        st = await ide.api.invoke('ports:share', port, { private: secure, ...(auto && { auto }) });
         render();
         return;
       } catch (err) {
@@ -116,6 +119,8 @@
         if (missing && attempt === 0) { if (await ensureTool(missing)) continue; return; }
         const blocked = /Windows did not start (cloudflared)\.exe/.exec(ide.util.errorText(err))?.[1];
         if (blocked) return blockedTool(port, blocked);
+        // A game server's port that main knew of before this window did: left alone, as intended.
+        if (auto && /is a game server's/.test(ide.util.errorText(err))) return;
         const shared = /already shared (privately|publicly)/.exec(ide.util.errorText(err))?.[1];
         const why = shared === 'privately' ? tr('It is already shared privately. Stop sharing it first.')
           : shared === 'publicly' ? tr('It is already shared publicly. Stop sharing it first.') : ide.util.errorText(err);
@@ -262,7 +267,7 @@
       const act = el('span', 'ports-actions');
       if (!t) {
         act.append(button(tr('Share'), 'secondary ports-share', () => share(p.port)));
-        if (games.has(p.port)) act.lastChild.title = tr('Only someone with the join code can connect.');
+        if (isGame(p.port)) act.lastChild.title = tr('Only someone with the join code can connect.');
       } else if (t.state === 'starting') {
         pub.append(el('span', 'muted', tr('Starting the tunnel…')));
         act.append(button(tr('Stop Sharing'), 'secondary ports-stop', () => unshare(p.port)));
@@ -317,8 +322,8 @@
       if (announced.has(p.port)) continue;
       announced.add(p.port);
       // A game server comes back with its port after every restart, and a private share ended with it.
-      if (ide.settings.get(AUTO, false) && !p.added && !games.has(p.port)) {
-        if (st.cloudflared || st.bore) share(p.port, { asked: true });
+      if (ide.settings.get(AUTO, false) && !p.added && !isGame(p.port)) {
+        if (st.cloudflared || st.bore) share(p.port, { asked: true, auto: true });
         continue;
       }
       if (p.added) continue;
@@ -364,5 +369,10 @@
   start.then((s) => { const before = st; st = s; announce(before); render(); }, () => {});
 
   const hint = (port, proto) => { hints.set(port, proto); render(); };
-  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint, gamePort: (port) => { games.add(port); hint(port, 'tcp'); } };
+  const gamePort = (port) => {
+    if (!isGame(port)) st = { ...st, games: [...(st.games || []), port] };
+    hint(port, 'tcp');
+    ide.api.invoke('ports:gamePort', port).catch(() => {});
+  };
+  ide.ports = { state: () => st, share, unshare, setAutoShare: setAuto, addPort, removePort, hint, gamePort };
 })();

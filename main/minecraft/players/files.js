@@ -43,6 +43,19 @@ async function readUsercache(dir) {
   }
   return map;
 }
+// The ids the server's cache gives a name now. It looks names up without case, and an entry past expiresOn, or one whose
+// date it cannot parse (yyyy-MM-dd HH:mm:ss Z), it does not use: it asks Mojang instead (GameProfileCache of 1.20.1,
+// CachedUserNameToIdResolver of 26.3). It saves the file at each change.
+async function cachedIds(dir, name) {
+  const lower = String(name).toLowerCase();
+  const ids = new Set();
+  for (const e of await listOf(path.join(dir, 'usercache.json'))) {
+    const uuid = String(e.uuid || '').toLowerCase();
+    const at = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/.test(e.expiresOn) ? Date.parse(e.expiresOn) : NaN;
+    if (typeof e.name === 'string' && e.name.toLowerCase() === lower && UUID.test(uuid) && at > Date.now()) ids.add(uuid);
+  }
+  return [...ids];
+}
 
 // ops.json, whitelist.json and banned-players.json -> lookups by uuid or lower-case name, and who they name.
 async function readFlags(dir) {
@@ -108,4 +121,4 @@ async function readDetail(dir, uuid) {
   return { source: 'file', code: 'missing', error: 'The server has saved nothing for this player yet', ...extra };
 }
 
-module.exports = { worldOf, readUsercache, readFlags, readDetail, extras };
+module.exports = { worldOf, readUsercache, cachedIds, readFlags, readDetail, extras };
