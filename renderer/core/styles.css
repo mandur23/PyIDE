@@ -3,7 +3,7 @@
   --gray1: #1e1f22; --gray2: #2b2d30; --gray3: #393b40; --gray4: #43454a;
   --gray5: #4e5157; --gray6: #5a5d63; --gray7: #6f737a; --gray8: #868a91; --gray9: #9da0a8; --gray10: #b4b8bf; --gray11: #ced0d6; --gray12: #dfe1e5;
   --blue2: #2e436e; --blue6: #3574f0; --blue8: #548af7; --green6: #57965c; --red: #db5c5c; --yellow: #f2c55c;
-  --text: #bcbec4; --mono: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  --text: #bcbec4; --tree-guide: #4e5157; --mono: 'JetBrains Mono', Consolas, 'Courier New', monospace;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--gray1); color: var(--gray11);
@@ -88,7 +88,13 @@ input, select, textarea { font: inherit; }
 .node { display: flex; align-items: center; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; }
 .node:hover { background: var(--gray3); }
 .node.selected { background: var(--blue2); }
-.node .arrow { width: 16px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
+.node .arrow { width: 16px; height: 16px; display: inline-flex; color: var(--gray9); flex-shrink: 0; }
+.node .arrow svg { width: 16px; height: 16px; }
+.node .arrow.open svg { transform: rotate(90deg); }
+.node:hover .arrow, .node.selected .arrow { color: var(--gray12); }
+/* Indent guides (rowNode sets --guides): a 1px line at the centre of each ancestor folder's chevron, from level 1. */
+.node::before { content: ''; position: absolute; top: 0; bottom: 0; left: 28px; width: var(--guides, 0); pointer-events: none;
+  background: repeating-linear-gradient(to right, var(--tree-guide) 0 1px, transparent 1px 16px); }
 .node .icon { width: 20px; font-size: 12px; flex-shrink: 0; }
 .tree-badge { margin-left: 6px; color: var(--gray7); font-size: 11px; flex-shrink: 0; }
 /* A name too long for its row or tab is cut with "…" before its extension (ide.util.fileLabel); a tab stops growing at
@@ -385,6 +391,6 @@ body.app-craft #statusItems > :not(#bgTasks, #ideErrors, #updateStatus, #install
 .trust-bar span { flex: 1; }
 .trust-bar.hidden { display: none; }
 /* The light theme (settings plugin) maps gray1..gray12 but not these in-between shades that plugins use too. */
-:root[data-theme="light"] { --gray6: #959aa9; --gray8: #737786; --gray10: #383a42; }
+:root[data-theme="light"] { --gray6: #959aa9; --gray8: #737786; --gray10: #383a42; --tree-guide: #c9ccd6; }
 :root[data-theme="light"] #toolbar { --gray6: #6c707e; --gray8: #9a9fae; --gray10: #c9ccd6; }
 :root[data-theme="light"] .trust-bar { background: #fff4d6; color: #6b4a00; border-bottom-color: #ebd9a3; }

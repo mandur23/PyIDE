@@ -43,8 +43,8 @@ const helpers = (t) => {
       const sub = top === 'Scratches and Consoles' ? 'Scratches' : '스크래치';
       if (!(await js(`!!${rowSel(sub)}`))) await t.js(`(${rowSel(top)}.click(), true)`);
       await until(`!!${rowSel(sub)}`, `${sub} node`);
-      if ((await js(`${rowSel(sub)}.querySelector('.arrow').textContent`)) === '▸') await js(`(${rowSel(sub)}.click(), true)`);
-      await until(`${rowSel(sub)}.querySelector('.arrow').textContent === '▾'`, `${sub} open`);
+      if (!(await js(`${rowSel(sub)}.querySelector('.arrow').classList.contains('open')`))) await js(`(${rowSel(sub)}.click(), true)`);
+      await until(`${rowSel(sub)}.querySelector('.arrow').classList.contains('open')`, `${sub} open`);
     },
   };
 };
@@ -285,7 +285,7 @@ try {
   await js(`ide.openProject(${S(other)}).then(() => true)`);
   await until(`ide.util.samePath(ide.root, ${S(other)})`, 'project reopened');
   await until(`!!${rowSel('Scratches')}`, 'Scratches node after reopening');
-  check(await js(`${rowSel('Scratches and Consoles')}.querySelector('.arrow').textContent === '▾' && ${rowSel('Scratches')}.querySelector('.arrow').textContent === '▸' && !${rowSel('scratch.py')}`),
+  check(await js(`${rowSel('Scratches and Consoles')}.querySelector('.arrow').classList.contains('open') && !${rowSel('Scratches')}.querySelector('.arrow').classList.contains('open') && !${rowSel('scratch.py')}`),
     'after reopening a project, Scratches and Consoles is open and the Scratches node closed with ArrowLeft stays closed');
   await reveal(path.join(other, 'root.txt'));
   await treeKey('Ctrl+V');
@@ -298,7 +298,7 @@ try {
   await until(`ide.util.samePath(ide.root, ${S(parent)})`, 'project holding the user data folder');
   await reveal(path.join(scratchDir, 'scratch.py'));
   check(await js(`ide.selectedTreeEntry()?.treeRoot === 'scratches' && document.querySelector('#tree .node.selected')?.classList.contains('tree-extra')`), 'with the project holding the user data, reveal selects the scratch under Scratches');
-  check(await js(`${rowSel('Scratches')}?.querySelector('.arrow').textContent === '▾'`), 'and expands the Scratches node');
+  check(await js(`${rowSel('Scratches')}?.querySelector('.arrow').classList.contains('open')`), 'and expands the Scratches node');
   await treeKey('Ctrl+X'); // a scratch row cannot be cut
   await reveal(path.join(parent, 'project', 'main.py'));
   check(await js(`ide.selectedTreeEntry()?.name === 'main.py' && !ide.selectedTreeEntry().treeRoot`), 'a project file in it is still revealed in the project');
@@ -310,7 +310,7 @@ try {
   await js(`ide.openProject(${S(long)}).then(() => true)`);
   await until(`ide.util.samePath(ide.root, ${S(long)})`, 'long project open');
   await reveal(path.join(scratchDir, 'scratch.py'));
-  check(await js(`ide.selectedTreeEntry()?.treeRoot === 'scratches' && ${rowSel('Scratches')}?.querySelector('.arrow').textContent === '▾' && document.querySelector('#tree .node.selected .name')?.textContent === 'scratch.py'`),
+  check(await js(`ide.selectedTreeEntry()?.treeRoot === 'scratches' && ${rowSel('Scratches')}?.querySelector('.arrow').classList.contains('open') && document.querySelector('#tree .node.selected .name')?.textContent === 'scratch.py'`),
     'with a project path longer than the user data path, reveal expands Scratches and selects the scratch');
   // Closing the top node keeps the open Scratches inside it for the next time (checked in the Korean run).
   await js(`(${rowSel('Scratches and Consoles')}.click(), true)`);
@@ -330,7 +330,7 @@ try {
   const h = helpers(k);
   await until(`!!${rowSel('스크래치 및 콘솔')}`, 'Korean node');
   await k.sleep(500);
-  check(await js(`${rowSel('스크래치 및 콘솔')}.querySelector('.arrow').textContent === '▸' && !${rowSel('스크래치')}`), 'after a restart the closed Scratches and Consoles node is still closed');
+  check(await js(`!${rowSel('스크래치 및 콘솔')}.querySelector('.arrow').classList.contains('open') && !${rowSel('스크래치')}`), 'after a restart the closed Scratches and Consoles node is still closed');
   await js(`(${rowSel('스크래치 및 콘솔')}.click(), true)`);
   await until(`!!${rowSel('scratch.py')}`, 'Scratches open inside the reopened node');
   check(true, 'opening it shows Scratches still expanded inside');

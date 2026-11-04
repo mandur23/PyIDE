@@ -44,6 +44,15 @@ try {
   check(await js(`${selectedName} === 'sub'`), 'Right on a closed folder opens it and keeps the selection');
   await press('ArrowRight');
   check(await js(`${selectedName} === 'b.py'`), 'Right on an open folder moves into it');
+  // Folders get a chevron (turned down when open), files none; rows under pkg get one indent guide per level below the
+  // project's children, each centred under its folder's chevron.
+  const look = await js(`(() => {
+    const at =(n) => [...document.querySelectorAll('#tree .node')].find((x) => x.querySelector('.name').textContent === n);
+    const arrow = (n) => { const a = at(n).querySelector('.arrow'); return !a.querySelector('svg') ? '-' : getComputedStyle(a.querySelector('svg')).transform === 'none' ? 'right' : 'down'; };
+    const guides = (n) => getComputedStyle(at(n), '::before').width;
+    const centre = (n) => { const b = at(n).querySelector('.arrow').getBoundingClientRect(); return Math.round(b.left + b.width / 2 - at(n).getBoundingClientRect().left); };
+    return { arrows: ['pkg', 'docs', 'sub', 'b.py'].map(arrow).join(','), guides: ['pkg', 'sub', 'b.py'].map(guides).join(','), sub: centre('sub') }; })()`);
+  check(look.arrows === 'down,right,down,-' && look.guides === '0px,16px,32px' && look.sub === 28 + 16, `the chevrons show which folders are open and the indent guides line up under them (${q(look)})`);
   await press('ArrowLeft');
   check(await js(`${selectedName} === 'sub'`), 'Left on a file moves to its folder');
   await press('ArrowLeft');
@@ -241,6 +250,23 @@ try {
   await press('Delete');
   await until(`window.questions.length && /Recycle Bin/.test(window.questions[window.questions.length - 1])`, 'delete question');
   check(await js(`window.questions[window.questions.length - 1]`) === 'Move 3 items to the Recycle Bin?' && existsSync(path.join(t.project, 'multi', 'm2.txt')), 'Delete asks once for the whole selection (answered No here, nothing deleted)');
+
+  const mouseClick = async (rel) => {
+    const p = await js(`(() => { const r = ${at(rel)}.getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 }; })()`);
+    await t.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
+    for (const type of ['mousePressed', 'mouseReleased']) await t.cdp('Input.dispatchMouseEvent', { type, ...p, button: 'left', clickCount: 1, buttons: 1 });
+  };
+  await js(`ide.openFile(${q(path.join(t.project, 'multi', 'm1.txt'))})`);
+  for (const rel of ['multi\\m2.txt', 'dest']) {
+    const n = await js(`window.questions.length`);
+    await mouseClick(rel);
+    await until(`!!${at(rel)}?.classList.contains('selected')`, `${rel} clicked`);
+    if (rel.endsWith('.txt')) await until(`ide.editor?.getModel()?.getValue() === 'm2.txt\\n'`, 'clicked file shown');
+    await press('Delete');
+    await until(`window.questions.length > ${n}`, `delete question for ${rel}`);
+    const asked = await js(`[window.questions[window.questions.length - 1], document.activeElement?.id, ide.editor?.getModel()?.getValue()]`);
+    check(asked[0] === `Move ${rel.split('\\').pop()} to the Recycle Bin?` && asked[1] === 'tree' && asked[2] === 'm2.txt\n', `after a mouse click on ${rel} the tree keeps the keyboard and Delete asks about it, not the editor (${q(asked)})`);
+  }
 
   await press('Ctrl+A');
   const all = await js(`[ide.selectedTreeEntries().length, [...document.querySelectorAll('#tree .node:not(.tree-extra)')].filter((n) => n._entry.path !== ide.root).every((n) => n.classList.contains('selected')), ide.selectedTreeEntries().some((e) => e.path === ide.root || e.treeRoot)]`);

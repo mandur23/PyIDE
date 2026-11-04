@@ -1568,16 +1568,22 @@ async function subtreeRows(entry, depth) {
   return out;
 }
 
+// A folder's chevron, turned down by CSS when the folder is open; parsed once and cloned for each row.
+const chevron = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>', 'image/svg+xml').documentElement;
+
 function rowNode({ entry, depth }, index) {
   const open = entry.dir && expanded.has(keyOf(entry.path));
   const node = el('div', 'node' + (inSelection(entry) ? ' selected' : ''));
   node._entry = entry;
   node.style.top = `${index * ROW_HEIGHT}px`;
   node.style.paddingLeft = `${depth * 16 + 4}px`;
+  // Indent guides: a line under each open folder from the project's children down, one per level above this row.
+  if (depth > 1) node.style.setProperty('--guides', `${(depth - 1) * 16}px`);
   node.draggable = depth > 0 && !entry.treeRoot;
   if (entry.treeRoot) node.classList.add('tree-extra');
   else if (cutEntries.some((c) => samePath(entry.path, c.path))) node.classList.add('cut');
-  node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
+  const arrow = node.appendChild(el('span', 'arrow' + (open ? ' open' : '')));
+  if (entry.dir) arrow.appendChild(document.importNode(chevron, true));
   const decorations = treeDecorators.map((deco) => deco(entry)).filter(Boolean);
   // A decorator's iconType draws another icon for the entry (a sources root's blue folder, Mark Directory As).
   const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: decorations.find((d) => d.iconType)?.iconType || entry.iconType });
@@ -2032,11 +2038,12 @@ function wireTree(tree) {
     alsoSelected = [];
     anchor = entry;
     drawTree();
-    // Alt+click opens a file beside the current pane; a single click opens it as a preview tab.
+    // Alt+click opens a file beside the current pane; a single click opens it as a preview tab. Either way the tree
+    // keeps the keyboard, so Delete or the arrows act on the row just clicked, not on the opened file's text.
     if (entry.dir) toggleDir(entry);
-    else ide.openFile(entry.path, e.altKey ? { group: 'right' } : { preview: true });
+    else ide.openFile(entry.path, e.altKey ? { group: 'right', focus: false } : { preview: true, focus: false });
   });
-  // Double-click keeps a file that a single click opened as a preview tab.
+  // Double-click keeps a file that a single click opened as a preview tab, and moves the keyboard to it.
   tree.addEventListener('dblclick', (e) => {
     const entry = entryAt(e);
     if (entry && !entry.dir) ide.openFile(entry.path);
