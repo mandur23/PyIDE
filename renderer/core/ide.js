@@ -9,6 +9,17 @@ const el = (tag, cls, text) => {
 
 const basename = (p) => p.split(/[\\/]/).pop();
 
+// A file name that fits its space: what does not fit is cut with "…" before the extension, which stays
+// ("experiment_resu….ipynb"; styles.css .file-stem). The text is the whole name, so textContent reads it as before.
+const fileLabel = (name, { cls = 'name', ext = true } = {}) => {
+  const n = el('span', `${cls} file-label`);
+  const dot = name.lastIndexOf('.');
+  const tail = ext && dot > 0 && name.length - dot <= 12 ? name.slice(dot) : '';
+  n.appendChild(el('span', 'file-stem', tail ? name.slice(0, -tail.length) : name));
+  if (tail) n.appendChild(el('span', 'file-ext', tail));
+  return n;
+};
+
 // ResizeObserver with its work moved to the next animation frame, and skipped while the size stays the same. A callback
 // that changes layout (a redraw, a terminal fit, a scrollbar appearing) then cannot re-trigger itself within the same
 // frame, which the browser reports as "ResizeObserver loop completed with undelivered notifications".
@@ -78,7 +89,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, fileLabel, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');
@@ -1462,14 +1473,37 @@ const treeDecorators = [];
 const treeActions = [];
 let rows = [];
 let selected = null;
-// More rows added to the selection with Ctrl+click (two files for Compare Files); any plain selection clears them.
+// More rows added to the selection with Ctrl+click, Shift+click, Shift+arrows or Ctrl+A (two files for Compare Files,
+// several to move or delete at once); any plain selection clears them.
 let alsoSelected = [];
+// Where a Shift range starts: the row last clicked or moved to without Shift.
+let anchor = null;
 const sameEntry = (a, b) => samePath(a.path, b.path) && (a.treeRoot || null) === (b.treeRoot || null);
 const inSelection = (entry) => !!selected && (sameEntry(entry, selected) || alsoSelected.some((s) => sameEntry(entry, s)));
-// The entry cut with Ctrl+X (or Cut), drawn dimmed until it is pasted, Escape in the tree, another cut, or the project
-// closes. setCut redraws, so the mark follows the entry through scrolling and refreshes.
-let cutEntry = null;
-const setCut = (entry) => { cutEntry = entry; drawTree(); };
+// The entries cut with Ctrl+X (or Cut), drawn dimmed until they are pasted, Escape in the tree, another cut, or the
+// project closes. setCut redraws, so the mark follows them through scrolling and refreshes.
+let cutEntries = [];
+const setCut = (entries) => { cutEntries = entries; drawTree(); };
+const movableEntry = (e) => !!e && !!ide.root && !samePath(e.path, ide.root) && !e.fixed && !e.treeRoot;
+// Rows under Scratches and Consoles cannot be dragged or cut into the project, but they can be deleted (not the node).
+const deletableEntry = (e) => !!e && !!ide.root && !samePath(e.path, ide.root) && !e.fixed && !treeRoots.some((r) => r.id === e.treeRoot && samePath(r.entry.path, e.path));
+// What an operation on entry acts on: the whole selection when entry is in it, else entry alone, as far as `ok` allows
+// each. A row inside a folder that is also in the list goes with the folder.
+function operands(entry, ok = movableEntry) {
+  const list = (inSelection(entry) ? [selected, ...alsoSelected] : [entry]).filter(ok);
+  return list.filter((x) => !list.some((y) => y !== x && isUnder(x.path, y.path) && !samePath(x.path, y.path)));
+}
+// Selects the rows from the anchor to row i, i the focused one.
+function selectRange(i) {
+  const a = anchor ? rowIndexOf(anchor.path, anchor.treeRoot) : -1;
+  if (a < 0) return selectRow(i);
+  i = Math.max(0, Math.min(rows.length - 1, i));
+  const [lo, hi] = a < i ? [a, i] : [i, a];
+  selected = rows[i].entry;
+  alsoSelected = rows.slice(lo, hi + 1).map((r) => r.entry).filter((x) => x !== selected && (x === anchor || !samePath(x.path, ide.root)));
+  scrollToRow(i);
+  drawTree();
+}
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
 // {title, when?(entry, selection), run(entry, selection)}; entry = {name, path, dir}; selection = the selected entries.
@@ -1542,14 +1576,15 @@ function rowNode({ entry, depth }, index) {
   node.style.paddingLeft = `${depth * 16 + 4}px`;
   node.draggable = depth > 0 && !entry.treeRoot;
   if (entry.treeRoot) node.classList.add('tree-extra');
-  else if (cutEntry && samePath(entry.path, cutEntry.path)) node.classList.add('cut');
+  else if (cutEntries.some((c) => samePath(entry.path, c.path))) node.classList.add('cut');
   node.appendChild(el('span', 'arrow', entry.dir ? (open ? '▾' : '▸') : ''));
   const decorations = treeDecorators.map((deco) => deco(entry)).filter(Boolean);
   // A decorator's iconType draws another icon for the entry (a sources root's blue folder, Mark Directory As).
   const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: decorations.find((d) => d.iconType)?.iconType || entry.iconType });
   icon.classList.add('icon');
   node.appendChild(icon);
-  const name = el('span', 'name', entry.label || entry.name);
+  const name = fileLabel(entry.label || entry.name, { ext: !entry.dir });
+  name.title = entry.label || entry.name;
   node.appendChild(name);
   for (const d of decorations) {
     if (d.color) name.style.color = d.color;
@@ -1583,6 +1618,7 @@ function selectRow(i) {
   i = Math.max(0, Math.min(rows.length - 1, i));
   selected = rows[i].entry;
   alsoSelected = [];
+  anchor = selected;
   scrollToRow(i);
   drawTree();
 }
@@ -1760,10 +1796,14 @@ async function moveTo(entry, to) {
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
 }
 
-// A plugin can take over a rename or move from the tree (refactor: a Python module with its imports):
-// handler({kind: 'rename'|'move', entry, dir}) resolves true when it handled it (done or cancelled), else the plain
-// rename or move below runs. ide.moveTreeEntry(entry, to) is that plain rename or move.
+// A plugin can take over a rename or a move of one entry from the tree, before the confirmation (refactor's Move
+// dialog, when asked for): handler({kind: 'rename'|'move', entry, dir}) resolves true when it handled it (done or
+// cancelled), else the plain rename or move below runs. ide.moveTreeEntry(entry, to) is that plain rename or move.
+// Once a move is confirmed, each entry goes to the first mover that takes it ({move(entry, to, batch) -> true when it
+// moved it or reported why not, done?(batch)}, batch shared by one drop or paste; refactor: a Python module with its
+// imports), else to the plain move.
 ide.treeMoveHandlers = [];
+ide.treeMovers = [];
 ide.moveTreeEntry = moveTo;
 const handledByPlugin = async (request) => {
   for (const handler of ide.treeMoveHandlers) {
@@ -1779,13 +1819,29 @@ async function renameEntry(entry) {
   await moveTo(entry, joinPath(dirname(entry.path), name));
 }
 
-// Dropping a row on a folder (or Ctrl+X, Ctrl+V) moves it there, after a confirmation.
-async function moveEntry(entry, dir) {
-  if (samePath(dirname(entry.path), dir) || isUnder(dir, entry.path)) return;
-  if (await handledByPlugin({ kind: 'move', entry, dir })) return;
-  if (!(await ide.ui.confirm(tr('Move {name} to {dir}?', { name: entry.name, dir: ide.util.rel(dir) || basename(dir) }), { ok: tr('Move') }))) return;
+// Dropping rows on a folder (or Ctrl+X, Ctrl+V) moves them there after one confirmation. Rows already there, and a
+// folder dropped into itself, are left out.
+async function moveEntries(entries, dir) {
+  const list = entries.filter((x) => !samePath(dirname(x.path), dir) && !isUnder(dir, x.path));
+  if (!list.length) return;
+  if (list.length === 1 && await handledByPlugin({ kind: 'move', entry: list[0], dir })) return;
+  const where = ide.util.rel(dir) || basename(dir);
+  const question = list.length === 1 ? tr('Move {name} to {dir}?', { name: list[0].name, dir: where }) : tr('Move {n} items to {dir}?', { n: list.length, dir: where });
+  if (!(await ide.ui.confirm(question, { ok: tr('Move') }))) return;
   expanded.add(keyOf(dir));
-  await moveTo(entry, joinPath(dir, entry.name));
+  const batch = {};
+  for (const entry of list) {
+    const to = joinPath(dir, entry.name);
+    let taken = false;
+    for (const m of ide.treeMovers) {
+      try { taken = await m.move(entry, to, batch); } catch (e) { console.error(e); }
+      if (taken) break;
+    }
+    if (!taken) await moveTo(entry, to);
+  }
+  for (const m of ide.treeMovers) {
+    try { await m.done?.(batch); } catch (e) { console.error(e); }
+  }
 }
 
 // fs:copyInto's failures that Node words as a long sentence with both paths in it.
@@ -1829,16 +1885,23 @@ async function copyDropped(paths, dir) {
   ide.emit('filesChanged', { created: copied });
 }
 
-async function deleteEntry(entry) {
-  if (!(await ide.ui.confirm(tr('Move {name} to the Recycle Bin?', { name: entry.name }), { ok: tr('Delete') }))) return;
-  // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
-  try { await ide.api.trash(entry.path); } catch (e) {
-    return void ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) }));
+async function deleteEntries(entries) {
+  if (!entries.length) return;
+  const question = entries.length === 1 ? tr('Move {name} to the Recycle Bin?', { name: entries[0].name }) : tr('Move {n} items to the Recycle Bin?', { n: entries.length });
+  if (!(await ide.ui.confirm(question, { ok: tr('Delete') }))) return;
+  const deleted = [];
+  const failed = [];
+  for (const entry of entries) {
+    // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
+    try { await ide.api.trash(entry.path); } catch (e) { failed.push(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) })); continue; }
+    // Every tab of a deleted file closes, in every window, so nothing saves the document back to the deleted path.
+    await ide.documentsMoved(entry.path, null);
+    deleted.push(entry.path);
   }
-  // Every tab of a deleted file closes, in every window, so nothing saves the document back to the deleted path.
-  await ide.documentsMoved(entry.path, null);
+  if (failed.length) ide.ui.alert(failed.join('\n'));
+  if (!deleted.length) return;
   renderTree();
-  ide.emit('filesChanged', { deleted: [entry.path] });
+  ide.emit('filesChanged', { deleted });
 }
 
 // PyCharm's New ›: File, Directory, Python File (Alt+Insert), Python Package… Core adds Directory, and Python File when
@@ -1871,40 +1934,48 @@ function showTreeMenu(entry, x, y) {
     ]),
     ...(extra.length ? [...extra, { separator: true }] : []),
     ...(treeRoot ? [] : [
-      { label: tr('Cut'), hint: 'Ctrl+X', run: () => setCut(entry), disabled: fixed },
-      { label: tr('Paste'), hint: 'Ctrl+V', run: () => pasteInto({ entry }), disabled: !cutEntry },
+      { label: tr('Cut'), hint: 'Ctrl+X', run: () => setCut(operands(entry)), disabled: fixed },
+      { label: tr('Paste'), hint: 'Ctrl+V', run: () => pasteInto({ entry }), disabled: !cutEntries.length },
     ]),
     { label: tr('Rename…'), keyAction: 'RenameElement', run: () => renameEntry(entry), disabled: fixed },
-    { label: tr('Delete'), hint: 'Delete', run: () => deleteEntry(entry), disabled: fixed },
+    { label: tr('Delete'), hint: 'Delete', run: () => deleteEntries(operands(entry, deletableEntry)), disabled: fixed },
   ]);
 }
 
-// Up/Down/Home/End/PageUp/PageDown move the selection, Right opens a folder or enters it, Left closes it or goes to
-// the parent, Enter opens a file or toggles a folder, Delete moves the selection to the Recycle Bin.
-// Shift+F6 renames the selection; Ctrl+X and then Ctrl+V on a folder (or a file in it) moves it there, Escape
+// Up/Down/Home/End/PageUp/PageDown move the selection (with Shift, they extend it from the anchor; Ctrl+A selects every
+// project row), Right opens a folder or enters it, Left closes it or goes to the parent, Enter opens a file or toggles
+// a folder, Delete moves the selection to the Recycle Bin.
+// Shift+F6 renames the focused row; Ctrl+X and then Ctrl+V on a folder (or a file in it) moves the selection there, Escape
 // cancels the cut. Escape is an action registered on ready, after core's FocusEditor (also Escape), so it wins while
 // the tree has the keyboard and something is cut; the global keymap handler runs before the tree's own keys.
 ide.on('ready', () => ide.registerAction({
   id: 'ProjectView.CancelCut', keys: 'Escape',
-  when: () => !!cutEntry && document.activeElement === $('tree'),
-  run: () => setCut(null),
+  when: () => !!cutEntries.length && document.activeElement === $('tree'),
+  run: () => setCut([]),
 }));
 const movable = (row) => !!row && row.depth > 0 && !row.entry.fixed && !row.entry.treeRoot && !treeRootOf(row.entry);
 // Only into the project: rows under Scratches and Consoles (and their nodes) are not paste targets, even when the
-// project folder contains them, and the cut entry stays cut for another try.
+// project folder contains them, and the cut entries stay cut for another try.
 const pasteInto = (row) => {
-  const entry = cutEntry;
-  if (!entry || row?.entry.treeRoot) return;
+  const entries = cutEntries;
+  if (!entries.length || row?.entry.treeRoot) return;
   const dir = !row ? ide.root : row.entry.dir ? row.entry.path : dirname(row.entry.path);
-  if (!isUnder(dir, ide.root) || !isUnder(entry.path, ide.root) || treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path))) return;
-  setCut(null);
-  moveEntry(entry, dir);
+  if (!isUnder(dir, ide.root) || !entries.every((x) => isUnder(x.path, ide.root)) || treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path))) return;
+  setCut([]);
+  moveEntries(entries, dir);
+};
+const selectAll = () => {
+  const all = rows.filter((r) => r.depth > 0 && !r.entry.treeRoot).map((r) => r.entry);
+  if (!all.length) return;
+  const keep = selected && all.find((x) => sameEntry(x, selected));
+  [selected, ...alsoSelected] = keep ? [keep, ...all.filter((x) => x !== keep)] : all;
+  drawTree();
 };
 function treeKey(e) {
   if (!rows.length || e.altKey || e.metaKey) return;
   const i = selected ? rowIndexOf(selected.path, selected.treeRoot) : -1;
   const row = rows[i];
-  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) setCut(row.entry); }, KeyV: () => pasteInto(row) }[e.code]
+  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) setCut(operands(row.entry)); }, KeyV: () => pasteInto(row), KeyA: selectAll }[e.code]
     : !e.ctrlKey && e.shiftKey && e.key === 'F6' ? () => movable(row) && renameEntry(row.entry) : null;
   if (special) {
     e.preventDefault();
@@ -1914,13 +1985,14 @@ function treeKey(e) {
   if (e.ctrlKey) return;
   const page = Math.max(1, Math.floor($('tree').clientHeight / ROW_HEIGHT) - 1);
   const isOpen = row?.entry.dir && expanded.has(keyOf(row.entry.path));
+  const go = e.shiftKey ? selectRange : selectRow;
   const keys = {
-    ArrowDown: () => selectRow(i + 1),
-    ArrowUp: () => selectRow(i < 0 ? 0 : i - 1),
-    Home: () => selectRow(0),
-    End: () => selectRow(rows.length - 1),
-    PageDown: () => selectRow(i + page),
-    PageUp: () => selectRow(i - page),
+    ArrowDown: () => go(i + 1),
+    ArrowUp: () => go(i < 0 ? 0 : i - 1),
+    Home: () => go(0),
+    End: () => go(rows.length - 1),
+    PageDown: () => go(i + page),
+    PageUp: () => go(i - page),
     ArrowRight: () => row?.entry.dir && (isOpen ? rows[i + 1]?.depth > row.depth && selectRow(i + 1) : toggleDir(row.entry)),
     ArrowLeft: () => {
       if (!row) return;
@@ -1930,7 +2002,7 @@ function treeKey(e) {
       if (j >= 0) selectRow(j);
     },
     Enter: () => row && (row.entry.dir ? toggleDir(row.entry) : ide.openFile(row.entry.path)),
-    Delete: () => row && row.depth > 0 && !row.entry.fixed && deleteEntry(row.entry),
+    Delete: () => row && row.depth > 0 && !row.entry.fixed && deleteEntries(operands(row.entry, deletableEntry)),
   };
   if (!keys[e.key]) return;
   e.preventDefault();
@@ -1946,19 +2018,23 @@ function wireTree(tree) {
   tree.addEventListener('click', (e) => {
     const entry = entryAt(e);
     if (!entry) return;
-    // Ctrl+click adds the row to the selection or takes it out, and opens nothing.
+    // Ctrl+click adds the row to the selection or takes it out, Shift+click selects the rows from the anchor to it;
+    // neither opens anything.
     if (e.ctrlKey && selected) {
       if (sameEntry(entry, selected)) [selected, ...alsoSelected] = alsoSelected.length ? alsoSelected : [selected];
       else if (alsoSelected.some((s) => sameEntry(s, entry))) alsoSelected = alsoSelected.filter((s) => !sameEntry(s, entry));
       else alsoSelected.push(entry);
+      anchor = entry;
       return drawTree();
     }
+    if (e.shiftKey && selected) return selectRange(rowIndexOf(entry.path, entry.treeRoot));
     selected = entry;
     alsoSelected = [];
+    anchor = entry;
     drawTree();
-    // Shift+click opens a file beside the current pane; a single click opens it as a preview tab.
+    // Alt+click opens a file beside the current pane; a single click opens it as a preview tab.
     if (entry.dir) toggleDir(entry);
-    else ide.openFile(entry.path, e.shiftKey ? { group: 'right' } : { preview: true });
+    else ide.openFile(entry.path, e.altKey ? { group: 'right' } : { preview: true });
   });
   // Double-click keeps a file that a single click opened as a preview tab.
   tree.addEventListener('dblclick', (e) => {
@@ -2039,7 +2115,7 @@ function wireTree(tree) {
     }
     const dir = dropDir(e);
     clearDropMark();
-    if (!dir || samePath(dirname(dragged.path), dir) || isUnder(dir, dragged.path)) return;
+    if (!dir || !operands(dragged).some((x) => !samePath(dirname(x.path), dir) && !isUnder(dir, x.path))) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = ide.treeDrag ? 'copy' : 'move';
     markDrop(dir);
@@ -2062,7 +2138,7 @@ function wireTree(tree) {
     e.preventDefault();
     e.stopPropagation();
     if (ide.treeDrag) { ide.treeDrag = null; dragged = null; }
-    moveEntry(entry, dir);
+    moveEntries(operands(entry), dir);
   });
 }
 ide.TREE_PATH_TYPE = 'application/x-pyide-path';
@@ -2276,7 +2352,7 @@ ide.openProject = async (dir) => {
   ide.trusted = trust === 'trusted';
   if (ide.trusted) trustBar.classList.add('hidden'); else showTrustBar(dir);
   ide.root = dir;
-  cutEntry = null;
+  cutEntries = [];
   expanded.clear();
   expanded.add(keyOf(dir));
   for (const rel of ide.settings.get(EXPANDED_KEY, {})[keyOf(dir)] || []) expanded.add(keyOf(joinPath(dir, rel)));
@@ -2339,7 +2415,7 @@ ide.closeProject = async () => {
   if (craftHome || !ide.root || !(await projectChangeAllowed(null)) || !(await ide.closeAllTabs(false))) return false;
   openSeq++;
   ide.root = null;
-  cutEntry = null;
+  cutEntries = [];
   trustBar.classList.add('hidden');
   expanded.clear();
   selected = null;

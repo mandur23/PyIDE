@@ -1,6 +1,6 @@
 // The main IDE window plus detached editor windows ("Open in New Window"). Windows edit the same documents: edits,
-// saves, renames and deletes are relayed between them, and closing asks about unsaved changes first (closing the main
-// window asks once about every window's, since it closes them all). Before the main window, the start chooser may ask
+// saves, renames and deletes are relayed between them, and closing asks about unsaved changes and running programs
+// (Run sessions, Craft servers) first (closing the main window asks once about every window's, since it closes them all). Before the main window, the start chooser may ask
 // which app mode the process runs in (main.js).
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
@@ -12,6 +12,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
   const all = new Set();
   const initialState = new Map(); // webContents id -> payload for a detached window
   const dirty = new Map(); // webContents id -> paths of its modified documents
+  const busy = new Map(); // webContents id -> names of what runs in it (the run plugin's sessions), stopped by closing
   let main = null;
   let mode = 'code'; // the process's app mode, which every window's page is told (?mode=)
   let closingAll = false; // the user answered for every window: close them without asking again
@@ -19,6 +20,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
   const alive = () => [...all].filter((w) => !w.isDestroyed());
   const others = (sender) => alive().filter((w) => w.webContents.id !== sender.id);
   const dirtyPaths = (w) => dirty.get(w.webContents.id) || [];
+  const busyNames = (w) => busy.get(w.webContents.id) || [];
   const announcePeers = () => {
     const n = alive().length;
     for (const w of alive()) w.webContents.send('window:peers', n);
@@ -44,14 +46,16 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     w.on('close', (e) => {
       if (closingAll) return;
       const elsewhere = w === main ? others(w.webContents).flatMap(dirtyPaths) : [];
-      if (!dirtyPaths(w).length && !elsewhere.length) return;
+      const running = [...busyNames(w), ...(w === main ? others(w.webContents).flatMap(busyNames) : [])];
+      if (!dirtyPaths(w).length && !elsewhere.length && !running.length) return;
       e.preventDefault();
-      w.webContents.send('window:confirmClose', { others: elsewhere });
+      w.webContents.send('window:confirmClose', { others: elsewhere, running });
     });
     w.on('closed', () => {
       all.delete(w);
       initialState.delete(id);
       dirty.delete(id);
+      busy.delete(id);
       leaveAll(id);
       if (w === main) {
         main = null;
@@ -122,9 +126,11 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     return true;
   });
   ipcMain.on('window:setDirty', (e, paths) => dirty.set(e.sender.id, Array.isArray(paths) ? paths : []));
+  ipcMain.on('window:setBusy', (e, names) => busy.set(e.sender.id, Array.isArray(names) ? names.map(String) : []));
   // Closes the window without asking (the user answered); from the main window, every window.
   ipcMain.handle('window:closeNow', (e) => {
     dirty.delete(e.sender.id);
+    busy.delete(e.sender.id);
     if (e.sender.id === main?.webContents.id) closingAll = true;
     BrowserWindow.fromWebContents(e.sender)?.close();
   });

@@ -103,5 +103,19 @@
   "Search for references": "참조 검색",
   "Rename Without References": "참조 없이 이름 변경",
   "Move Without References": "참조 없이 이동",
-  "{name} has unsaved changes that could not be saved, so it was not moved.": "{name}에 저장할 수 없는 변경 내용이 있어 이동하지 않았습니다."
+  "{name} has unsaved changes that could not be saved, so it was not moved.": "{name}에 저장할 수 없는 변경 내용이 있어 이동하지 않았습니다.",
+  "Moved {name} and updated imports in {files} files": "{name}을(를) 옮기고 파일 {files}개의 import를 고쳤습니다",
+  "Moved {n} modules and updated imports in {files} files": "모듈 {n}개를 옮기고 파일 {files}개의 import를 고쳤습니다",
+  "Moved {name} and updated imports in 1 file": "{name}을(를) 옮기고 파일 1개의 import를 고쳤습니다",
+  "Moved {n} modules and updated imports in 1 file": "모듈 {n}개를 옮기고 파일 1개의 import를 고쳤습니다",
+  "Imports were not updated": "import를 고치지 못했습니다",
+  "{name} was not moved": "{name}을(를) 옮기지 않았습니다",
+  "Move Without Updating Imports": "import를 고치지 않고 이동",
+  "Refactoring": "리팩터링",
+  "Moving files in the project tree": "프로젝트 트리에서 파일 이동",
+  "Update imports of moved Python modules:": "옮긴 Python 모듈의 import 고치기:",
+  "Automatically": "자동으로",
+  "Show the Move dialog": "Move 대화상자 표시",
+  "Never (move the files only)": "고치지 않음(파일만 이동)",
+  "Automatically: imports are updated without a dialog and a notification offers Undo. Ctrl+Z in a changed file also undoes it.": "자동으로: 대화상자 없이 import를 고치고, 알림에서 되돌릴 수 있습니다. 바뀐 파일에서 Ctrl+Z를 눌러도 되돌아갑니다."
 }

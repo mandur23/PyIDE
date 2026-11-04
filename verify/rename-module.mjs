@@ -5,6 +5,8 @@
 // keep unqualified uses, `import a.b` stays qualified), unsaved editor text kept, one undo step, plain renames with the checkbox off, files
 // that keep the plain rename (non-Python, untrusted projects), the rope install offer with its plain fallback, and the
 // Korean dialog. The fixture program's output is compared after every refactoring.
+// Moves from the tree update imports without the Move dialog by default (Settings › Refactoring): one confirmation for
+// a drop or paste of several modules, a notification with Undo; 'ask' brings the dialog back and 'never' only moves.
 // A src-layout project (src/shop, tests/) checks that importers are named relative to rope's source folder.
 // rope comes from verify/out/refactor-venv, the venv verify/refactor.mjs keeps (made here when missing). Ports 9110-9112.
 import { execFileSync } from 'child_process';
@@ -83,7 +85,10 @@ function helpers(t) {
   const setInput = (sel, value) => js(`(() => { const i = document.querySelector(${q(sel)}); i.value = ${q(value)}; i.dispatchEvent(new Event('input')); return true; })()`);
   const button = (id, action) => t.click(`#${id} [data-action="${action}"]`);
   const exists = (rel) => existsSync(P(rel));
-  return { P, disk, doc, selectRow, contextMenu, drag, dialog, gone, setInput, button, exists, press };
+  // The tree's confirmation is answered Move, and its question kept.
+  const acceptMoves = () => js(`(window.__confirms = [], ide.ui.confirm = async (m) => (window.__confirms.push(m), true), true)`);
+  const lastNote = () => js(`(() => { const n = ide.notifications.list().filter((e) => e.group === 'Refactoring').pop(); return n ? { title: n.title, text: n.text, kind: n.kind, id: n.id } : null; })()`);
+  return { P, disk, doc, selectRow, contextMenu, drag, dialog, gone, setInput, button, exists, press, acceptMoves, lastNote };
 }
 
 // A package with relative and absolute importers, moved with Cut / Paste (written into the fixture project, and under
@@ -201,7 +206,9 @@ try {
   check(true, 'a tab inside the renamed package reopens at its new place');
   check((await appOutput()) === baseline, 'the program prints the same after renaming the package');
 
-  // ---- Ctrl+X, Ctrl+V: move a module into another package ----
+  // ---- Ctrl+X, Ctrl+V with Settings › Refactoring set to show the Move dialog ----
+  await h.acceptMoves();
+  await js(`(ide.settings.set('refactor.moveImports', 'ask'), true)`);
   await h.selectRow('geometry/figures.py');
   await press('Ctrl+X');
   await h.selectRow('tools');
@@ -223,13 +230,23 @@ try {
     `relative from-imports of a module moved to another top-level package become absolute from-imports, call sites unchanged (${report3.split('\n').slice(0, 2).join(' | ')})`);
   check(h.disk('tools/figures.py') === '# edited\n"""Shape formulas."""\n\n\ndef area(r):\n    return 3 * r * r\n', 'the moved module keeps its text (rope\'s blank-line change is dropped)');
   check((await appOutput()) === baseline, 'the program prints the same after moving the module');
+  check(!(await js(`window.__confirms.length`)), 'with the dialog the tree asks nothing else');
 
-  // ---- drag a namespace package (no __init__.py) onto a package ----
+  // ---- drag a namespace package (no __init__.py) onto a package: imports updated without a dialog (the default) ----
+  await js(`(ide.settings.set('refactor.moveImports', 'auto'), true)`);
+  const mainBeforeDrag = await h.doc('main.py');
   await h.drag('scripts', 'geometry');
-  await h.dialog('rfMoveDialog');
-  check(await js(`document.querySelector('#rfMoveDialog .rf-dest').value`) === 'geometry', 'dropping a folder opens Move with the drop target');
-  await h.button('rfMoveDialog', 'refactor');
-  await h.gone('rfMoveDialog');
+  await until(`(async () => await ide.api.exists(${q(h.P('geometry/scripts/extra.py'))}))()`, 'namespace package moved without a dialog', 60000);
+  check(!(await js(`!!document.querySelector('#rfMoveDialog')`)) && q(await js(`window.__confirms`)) === q(['Move scripts to geometry?']), `the drop asks once, as for any file, and opens no Move dialog (${await js(`JSON.stringify(window.__confirms)`)})`);
+  let note = await h.lastNote();
+  check(note?.kind === 'ok' && /^Moved scripts and updated imports in (1 file|[2-9]\d* files)$/.test(note.title), `a notification says what moved and how many files' imports changed (${note?.title})`);
+  check((await h.doc('main.py')).includes('import geometry.scripts.extra\n'), 'the importer is rewritten');
+  await until(`[...document.querySelectorAll('.ide-balloon-action')].some((b) => b.textContent === 'Undo')`, 'Undo in the balloon');
+  await js(`[...document.querySelectorAll('.ide-balloon-action')].find((b) => b.textContent === 'Undo').click(), true`);
+  await until(`(async () => await ide.api.exists(${q(h.P('scripts/extra.py'))}))()`, 'move undone from the notification', 30000);
+  check(!h.exists('geometry/scripts') && (await h.doc('main.py')) === mainBeforeDrag, 'Undo in the notification moves it back and restores the imports');
+  await js(`(window.__confirms = [], true)`);
+  await h.drag('scripts', 'geometry');
   await until(`(async () => await ide.api.exists(${q(h.P('geometry/scripts/extra.py'))}))()`, 'namespace package moved', 60000).catch(async (e) => {
     const seen = await js(`[...document.querySelectorAll('.dialog, .notification, .balloon, .ide-notification')].map((n) => n.textContent.slice(0, 200)).join(' || ')`);
     throw new Error(`${e.message} (geometry: ${readdirSync(h.P('geometry')).join(',')}; on screen: ${seen || 'nothing'})`);
@@ -251,9 +268,6 @@ try {
   check(shopBefore === '36 6 16', `the shop package runs (${shopBefore})`);
   await h.contextMenu('shop/models/price.py', 'Cut');
   await h.contextMenu('shop/views', 'Paste');
-  await h.dialog('rfMoveDialog');
-  await h.button('rfMoveDialog', 'refactor');
-  await h.gone('rfMoveDialog');
   await until(`(async () => await ide.api.exists(${q(h.P('shop/views/price.py'))}))()`, 'shop price moved', 60000);
   check(!h.exists('shop/models/price.py') && h.disk('shop/views/price.py') === SHOP['shop/models/price.py'], 'Cut and Paste in the context menu move the module');
   const cart = h.disk('shop/models/cart.py');
@@ -266,6 +280,35 @@ try {
   check(shopMain === 'from shop.views import price\nimport shop.views.price\nimport shop.views.price as sp\n\n\ndef run():\n    return price.total(5) + shop.views.price.total(6) + sp.total(7)\n',
     `\`from pkg import x\` keeps x.f() unqualified, \`import a.b\` and \`import a.b as c\` keep the qualified style (${shopMain.split('\n').slice(0, 3).join(' | ')})`);
   check(shopOutput() === shopBefore, 'the shop package prints the same after the move');
+
+  // ---- several modules at once: Shift+Down selects two rows, one paste moves both with their imports ----
+  await js(`(window.__confirms = [], true)`);
+  await h.selectRow('shop/views/page.py');
+  await press('Shift+ArrowDown');
+  check(q(await js(`ide.selectedTreeEntries().map((e) => e.name).sort()`)) === q(['page.py', 'price.py']), 'Shift+Down adds the next row to the selection');
+  await press('Ctrl+X');
+  await h.selectRow('shop/models');
+  await press('Ctrl+V');
+  await until(`(async () => (await ide.api.exists(${q(h.P('shop/models/page.py'))})) && (await ide.api.exists(${q(h.P('shop/models/price.py'))})))()`, 'two modules moved', 60000);
+  check(q(await js(`window.__confirms`)) === q(['Move 2 items to shop\\models?']), `one question for both (${await js(`JSON.stringify(window.__confirms)`)})`);
+  note = await h.lastNote();
+  check(/^Moved 2 modules and updated imports in [1-9]\d* files$/.test(note?.title || ''), `one notification for both (${note?.title})`);
+  const shopAfter = run(VENV_PY, ['-c', 'import shop_main, shop.models.cart, shop.models.page; print(shop_main.run(), shop.models.cart.cart(), shop.models.page.page())'],
+    { cwd: t.project, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }).trim();
+  check(shopAfter === shopBefore, `the shop package prints the same after moving two modules at once (${shopAfter})`);
+
+  // ---- 'never': only the file moves ----
+  writeFileSync(h.P('loose.py'), 'V = 1\n');
+  writeFileSync(h.P('uses_loose.py'), 'import loose\n\nprint(loose.V)\n');
+  await js('ide.refreshTree()');
+  await js(`(ide.settings.set('refactor.moveImports', 'never'), true)`);
+  await h.selectRow('loose.py');
+  await press('Ctrl+X');
+  await h.selectRow('tools');
+  await press('Ctrl+V');
+  await until(`(async () => await ide.api.exists(${q(h.P('tools/loose.py'))}))()`, 'plain move', 30000);
+  check(h.disk('uses_loose.py') === 'import loose\n\nprint(loose.V)\n', "with 'never' the importer is left as it was");
+  await js(`(ide.settings.set('refactor.moveImports', 'auto'), true)`);
 
   // ---- Search for references off: a plain rename, nothing else changes ----
   await js('ide.saveAll()');
@@ -319,6 +362,14 @@ try {
   await h.button('rfInstallDialog', 'fallback');
   await until(`(async () => await ide.api.exists(${q(h.P('app.py'))}))()`, 'fallback rename', 30000);
   check(!h.exists('main.py'), 'Rename Without References renames the file');
+  // A move without rope: the file moves and a warning offers to install rope.
+  await h.selectRow('app.py');
+  await press('Ctrl+X');
+  await h.selectRow('tools');
+  await press('Ctrl+V');
+  await until(`(async () => await ide.api.exists(${q(h.P('tools/app.py'))}))()`, 'move without rope', 30000);
+  note = await h.lastNote();
+  check(note?.kind === 'warn' && note.title === 'Imports were not updated' && /rope/.test(note.text), `without rope the module moves and a warning says its imports were not updated (${note?.title}: ${note?.text})`);
   await useInterpreter(t, VENV_PY);
 } catch (err) {
   check(false, `unexpected error: ${err.stack || err.message}`);
@@ -343,11 +394,9 @@ try {
     { cwd: srcDir, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }).trim();
   const srcBefore = srcOutput();
   s.check(srcBefore === '36 6 16', `the src-layout shop package runs (${srcBefore})`);
+  await hs.acceptMoves();
   await hs.contextMenu('src/shop/models/price.py', 'Cut');
   await hs.contextMenu('src/shop/views', 'Paste');
-  await hs.dialog('rfMoveDialog');
-  await hs.button('rfMoveDialog', 'refactor');
-  await hs.gone('rfMoveDialog');
   await s.until(`(async () => await ide.api.exists(${q(hs.P('src/shop/views/price.py'))}))()`, 'src-layout price moved', 60000);
   s.check(!hs.exists('src/shop/models/price.py') && hs.disk('src/shop/views/price.py') === SHOP['shop/models/price.py'], 'src layout: the module moves');
   const srcCart = hs.disk('src/shop/models/cart.py');
@@ -390,6 +439,7 @@ try {
   k.check(/패키지 'geo'의 이름을 다음으로 변경/.test(text) && /참조 검색/.test(text), `the rename dialog is in Korean (${text.replace(/\n/g, ' | ')})`);
   await look('#rfRenameModuleDialog', 'Rename');
   await hk.button('rfRenameModuleDialog', 'cancel');
+  await k.js(`(ide.settings.set('refactor.moveImports', 'ask'), true)`);
   await hk.drag('geo/shapes.py', 'tools');
   await hk.dialog('rfMoveDialog');
   await look('#rfMoveDialog', 'Move');

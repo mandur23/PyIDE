@@ -90,7 +90,13 @@ input, select, textarea { font: inherit; }
 .node.selected { background: var(--blue2); }
 .node .arrow { width: 16px; color: var(--gray7); font-size: 10px; text-align: center; flex-shrink: 0; }
 .node .icon { width: 20px; font-size: 12px; flex-shrink: 0; }
-.tree-badge { margin-left: 6px; color: var(--gray7); font-size: 11px; }
+.tree-badge { margin-left: 6px; color: var(--gray7); font-size: 11px; flex-shrink: 0; }
+/* A name too long for its row or tab is cut with "…" before its extension (ide.util.fileLabel); a tab stops growing at
+   --tab-name-max. */
+.file-label { display: inline-flex; min-width: 0; overflow: hidden; }
+.file-stem { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.file-ext { flex-shrink: 0; white-space: pre; }
+.tab .file-label { max-width: var(--tab-name-max, 220px); }
 /* An entry cut with Ctrl+X, until it is pasted (PyCharm and Explorer dim it). */
 .node.cut .icon, .node.cut .name, .node.cut .tree-badge { opacity: 0.5; }
 

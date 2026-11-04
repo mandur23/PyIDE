@@ -1,5 +1,6 @@
 // Project tree: virtualized rows, incremental expand/collapse, keyboard navigation, drag and drop, decorators,
-// context menu, reveal, and open folders restored after a restart.
+// context menu, reveal, several rows selected (Ctrl/Shift+click, Shift+arrows, Ctrl+A) and moved, cut or deleted at
+// once, and open folders restored after a restart.
 import { launch } from './lib.mjs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
@@ -104,6 +105,7 @@ try {
   await js(`(() => {
     ide.ui.confirm = async () => true;
     ide.treeMoveHandlers.length = 0;
+    ide.treeMovers.length = 0;
     const dt = new DataTransfer();
     const fire = (type, node) => node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
     fire('dragstart', ${row('main.py')});
@@ -189,6 +191,82 @@ try {
   await until(`(async () => await ide.api.exists(${q(path.join(t.project, 'pkg', 'main.py'))}))()`, 'pasted into pkg');
   await until(`!!${at('pkg\\main.py')}`, 'moved row drawn');
   check(await js(`${cutRows} === ''`), 'pasting moves the file and the dimming is gone');
+
+  // Several rows at once.
+  mkdirSync(path.join(t.project, 'multi'));
+  mkdirSync(path.join(t.project, 'dest'));
+  for (const n of ['m1.txt', 'm2.txt', 'm3.txt']) writeFileSync(path.join(t.project, 'multi', n), `${n}\n`);
+  await pick('multi\\m1.txt');
+  const click = (rel, mods = {}) => js(`(${at(rel)}.dispatchEvent(new MouseEvent('click', { bubbles: true, ...${q(mods)} })), true)`);
+  const picked = `ide.selectedTreeEntries().map((e) => e.name).sort().join(',')`;
+  const tabsBefore = await js(`ide.tabs.length`);
+  await click('multi\\m3.txt', { shiftKey: true });
+  check(await js(picked) === 'm1.txt,m2.txt,m3.txt' && await js(`[...document.querySelectorAll('#tree .node.selected')].length`) === 3, 'Shift+click selects the rows from the last clicked one');
+  check(await js(`ide.tabs.length`) === tabsBefore, 'Shift+click opens nothing');
+  await click('multi\\m2.txt', { ctrlKey: true });
+  check(await js(picked) === 'm1.txt,m3.txt', 'Ctrl+click takes a row out of the selection');
+  await js(`(() => {
+    window.questions = [];
+    ide.ui.confirm = async (m) => (window.questions.push(m), true);
+    const dt = new DataTransfer();
+    const fire = (type, node) => node.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+    fire('dragstart', ${at('multi\\m3.txt')});
+    fire('dragover', ${row('dest')});
+    fire('drop', ${row('dest')});
+    fire('dragend', document.getElementById('tree'));
+  })()`);
+  await until(`(async () => (await ide.api.exists(${q(path.join(t.project, 'dest', 'm1.txt'))})) && (await ide.api.exists(${q(path.join(t.project, 'dest', 'm3.txt'))})))()`, 'both selected files moved');
+  check(existsSync(path.join(t.project, 'multi', 'm2.txt')) && !existsSync(path.join(t.project, 'multi', 'm1.txt')), 'dragging one selected row moves every selected row, and only those');
+  check(q(await js(`window.questions`)) === q(['Move 2 items to dest?']), `one question for the whole drop (${await js(`JSON.stringify(window.questions)`)})`);
+
+  await until(`!!${at('dest\\m1.txt')}`, 'moved rows drawn');
+  await pick('dest\\m1.txt');
+  await press('Shift+ArrowDown');
+  check(await js(picked) === 'm1.txt,m3.txt', 'Shift+Down extends the selection');
+  await press('Shift+ArrowUp');
+  check(await js(picked) === 'm1.txt', 'Shift+Up takes it back to the anchor');
+  await press('Shift+ArrowDown');
+  await press('Ctrl+X');
+  check(await js(`${cutRows}`) === 'm1.txt,m3.txt', 'Ctrl+X cuts every selected row');
+  await pick('multi');
+  await press('Ctrl+V');
+  await until(`(async () => (await ide.api.exists(${q(path.join(t.project, 'multi', 'm1.txt'))})) && (await ide.api.exists(${q(path.join(t.project, 'multi', 'm3.txt'))})))()`, 'both pasted');
+  check(q(await js(`window.questions`).then((qs) => qs.slice(-1))) === q(['Move 2 items to multi?']), 'Ctrl+V moves them all after one question');
+
+  await until(`!!${at('multi\\m3.txt')}`, 'pasted rows drawn');
+  await pick('multi\\m1.txt');
+  await press('Shift+ArrowDown');
+  await press('Shift+ArrowDown');
+  await js(`(ide.ui.confirm = async (m) => (window.questions.push(m), false), true)`);
+  await press('Delete');
+  await until(`window.questions.length && /Recycle Bin/.test(window.questions[window.questions.length - 1])`, 'delete question');
+  check(await js(`window.questions[window.questions.length - 1]`) === 'Move 3 items to the Recycle Bin?' && existsSync(path.join(t.project, 'multi', 'm2.txt')), 'Delete asks once for the whole selection (answered No here, nothing deleted)');
+
+  await press('Ctrl+A');
+  const all = await js(`[ide.selectedTreeEntries().length, [...document.querySelectorAll('#tree .node:not(.tree-extra)')].filter((n) => n._entry.path !== ide.root).every((n) => n.classList.contains('selected')), ide.selectedTreeEntries().some((e) => e.path === ide.root || e.treeRoot)]`);
+  check(all[0] > 5 && all[1] && !all[2], `Ctrl+A selects every project row but the root (${all[0]})`);
+
+  await js(`(window.__open = ide.openFile, ide.openFile = (p, o) => (window.__opened = o, window.__open(p, o)), true)`);
+  await click('multi\\m2.txt', { altKey: true });
+  await until(`!!window.__opened`, 'Alt+click opened the file');
+  check(await js(`window.__opened?.group`) === 'right' && await js(picked) === 'm2.txt', 'Alt+click selects the row alone and opens the file beside the current pane');
+  await js(`(ide.openFile = window.__open, true)`);
+
+  // A name longer than the row or the tab is cut with "…" before its extension, and the tree gets no horizontal scroll.
+  const LONG = 'a_really_long_file_name_that_does_not_fit_in_the_project_tree_or_a_tab_at_all.py';
+  writeFileSync(path.join(t.project, 'multi', LONG), 'x = 1\n');
+  await pick(`multi/${LONG}`);
+  const fit = (sel) => `(() => { const n = ${sel}; const stem = n.querySelector('.file-stem'); const ext = n.querySelector('.file-ext'); const box = n.closest('.node, .tab').getBoundingClientRect();
+    return { text: n.textContent, cut: stem.scrollWidth > stem.clientWidth + 1, ext: ext?.textContent, extIn: !!ext && ext.getBoundingClientRect().right <= box.right + 0.5, width: Math.round(n.getBoundingClientRect().width), title: n.title || n.closest('.tab')?.title }; })()`;
+  const inTree = await js(fit(`${at(`multi/${LONG}`)}.querySelector('.name')`));
+  const tree = await js(`(() => { const t = document.getElementById('tree'); return { scroll: t.scrollWidth, client: t.clientWidth }; })()`);
+  check(inTree.text === LONG && inTree.cut && inTree.ext === '.py' && inTree.extIn && inTree.title === LONG && tree.scroll <= tree.client,
+    `a long name in the tree is cut before ".py", keeps the whole name as its text and tooltip, and the tree does not scroll sideways (${JSON.stringify({ ...inTree, tree })})`);
+  await js(`ide.openFile(${q(path.join(t.project, 'multi', LONG))})`);
+  await until(`ide.activeTab()?.title === ${q(LONG)}`, 'long-named tab');
+  const inTab = await js(fit(`[...document.querySelectorAll('.tab .name')].find((n) => n.textContent === ${q(LONG)})`));
+  check(inTab.text === LONG && inTab.cut && inTab.ext === '.py' && inTab.extIn && inTab.width <= 220 && /a_really_long/.test(inTab.title),
+    `its tab stops at 220 px, cut before ".py", with the path as its tooltip (${JSON.stringify(inTab)})`);
   await sleep(1500);
 } catch (err) {
   check(false, err.message);

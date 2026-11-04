@@ -317,6 +317,14 @@ try {
   await js(`(() => { const s = ${runTab('survival')}; ide.proc.input(s.procId, 'list\\n'); return true; })()`);
   await until(`(${runTab('survival')}).host.textContent.includes('Unknown command: list')`, 'console command', 10000);
   check(true, 'the console sends commands to the server');
+  await js(`(ide.api.invoke('window:close'), true)`);
+  await until(`!!document.querySelector('#closeConfirmDialog')`, 'close question while a server runs', 10000);
+  const closeAsk = await js(`(() => { const d = document.querySelector('#closeConfirmDialog'); return { text: d.innerText, buttons: [...d.querySelectorAll('.dialog-buttons button')].map((b) => b.textContent) }; })()`);
+  check(/Servers Are Running/.test(closeAsk.text) && /survival/.test(closeAsk.text) && S(closeAsk.buttons) === S(['Stop Servers and Close', 'Cancel']),
+    `closing the window while a server runs asks first, naming it (${S(closeAsk)})`);
+  await js(`([...document.querySelectorAll('#closeConfirmDialog .dialog-buttons button')].find((b) => b.textContent === 'Cancel').click(), true)`);
+  await until(`!document.querySelector('#closeConfirmDialog')`, 'close question answered');
+  check(await js(`!!(${runTab('survival')}).running`), 'Cancel keeps the window and the server running');
   await js(`(window.delays = [], window.ownSetTimeout = window.setTimeout, window.setTimeout = (fn, ms, ...a) => (window.delays.push(ms), window.ownSetTimeout(fn, ms, ...a)), true)`);
   await stopServer('survival');
   const stopDelays = await js(`(window.setTimeout = window.ownSetTimeout, window.delays)`);

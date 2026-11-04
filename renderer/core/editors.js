@@ -4,7 +4,7 @@
 // tab bar and its own Monaco editor; the same document can be open in several groups (they share the model, so
 // edits show everywhere). Groups are arranged in a binary split tree. `ide.editor` is the active group's editor.
 (() => {
-  const { $, el, basename, dirname, samePath, isUnder, pathKey: key } = ide.util;
+  const { $, el, fileLabel, basename, dirname, samePath, isUnder, pathKey: key } = ide.util;
 
   const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
     ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', xhtml: 'html', css: 'css', yml: 'yaml',
@@ -522,7 +522,7 @@
       node.draggable = true;
       node.dataset.path = t.path;
       node.appendChild(tabIcon(t));
-      node.appendChild(el('span', 'name', t.title));
+      node.appendChild(fileLabel(t.title, { ext: t.kind === 'file' }));
       const dirty = ide.isDirty(t);
       if (t.doc) t.doc.shownDirty = dirty;
       if (dirty) node.appendChild(el('span', 'dirty', '●'));
@@ -1648,33 +1648,50 @@
   // main window closes them all, so it asks about every window's files at once (others: modified files open only in
   // other windows) and nothing closes before the answer. Clicking the close button again while it asks does not stack
   // a second dialog.
+  // Programs still running (running: Run sessions, Craft servers, by name) are listed too: closing stops them (Craft's
+  // servers get a minute to save their worlds, main.js), so a window with only those asks Stop and Close or Cancel.
   let confirmingClose = false;
-  ide.api.on('window:confirmClose', ({ others = [] } = {}) => {
+  ide.api.on('window:confirmClose', ({ others = [], running = [] } = {}) => {
     if (confirmingClose) return;
     const own = [...docs.values()].filter(docDirty).map((d) => d.path);
     const paths = [...own, ...others.filter((p) => !own.some((o) => samePath(o, p)))];
-    if (!paths.length) { ide.api.invoke('window:closeNow'); return; }
-    const list = el('ul', 'close-confirm-list');
-    for (const p of paths) list.appendChild(el('li', null, ide.util.rel(p)));
-    const body = el('div');
-    body.append(el('div', null, tr('These files have unsaved changes:')), list);
+    if (!paths.length && !running.length) { ide.api.invoke('window:closeNow'); return; }
+    const craft = ide.appMode === 'craft';
+    const body = el('div', 'close-confirm');
+    if (paths.length) {
+      const list = el('ul', 'close-confirm-list');
+      for (const p of paths) list.appendChild(el('li', null, ide.util.rel(p)));
+      body.append(el('div', null, tr('These files have unsaved changes:')), list);
+    }
+    if (running.length) {
+      const list = el('ul', 'close-confirm-list close-confirm-running');
+      list.dataset.userText = '';
+      for (const name of running) list.appendChild(el('li', null, name));
+      body.append(el('div', null, craft ? tr('These servers are running. Closing stops them, and each saves its world first (up to a minute):')
+        : tr('These are still running. Closing stops them:')), list);
+    }
     confirmingClose = true;
-    ide.ui.dialog({
-      title: tr('Save Changes?'),
+    const closeNow = () => ide.api.invoke('window:closeNow');
+    const dlg = ide.ui.dialog({
+      title: paths.length ? tr('Save Changes?') : craft ? tr('Servers Are Running') : tr('Programs Are Running'),
       body,
       width: 460,
       onClose: () => { confirmingClose = false; },
-      buttons: [
+      buttons: paths.length ? [
         // A file that could not be saved (its error was shown) keeps the windows open.
         { label: tr('Save All'), primary: true, run: async () => {
           await ide.saveAll();
           const othersSaved = !others.length || await ide.api.invoke('window:saveOthers');
-          if (othersSaved && ![...docs.values()].some(docDirty)) ide.api.invoke('window:closeNow');
+          if (othersSaved && ![...docs.values()].some(docDirty)) closeNow();
         } },
-        { label: tr("Don't Save"), run: () => ide.api.invoke('window:closeNow') },
+        { label: tr("Don't Save"), run: closeNow },
+        { label: tr('Cancel') },
+      ] : [
+        { label: craft ? tr('Stop Servers and Close') : tr('Stop and Close'), primary: true, run: closeNow },
         { label: tr('Cancel') },
       ],
     });
+    dlg.el.id = 'closeConfirmDialog';
   });
   // The main window's Save All, for the files open only here.
   ide.api.on('window:saveAll', async (id) => {

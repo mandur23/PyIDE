@@ -874,12 +874,70 @@
     return dlg;
   }
 
+  // Settings › Refactoring › Update imports when moving: 'auto' moves a module dropped or pasted in the tree with its
+  // imports and no dialog (the tree's own confirmation is the only question), 'ask' opens the Move dialog for a single
+  // module (several at once are moved as with 'auto'), 'never' only moves the files.
+  const MOVE_IMPORTS = 'refactor.moveImports';
+  const moveMode = () => ide.settings.get(MOVE_IMPORTS, 'auto');
   ide.treeMoveHandlers?.push(async ({ kind, entry, dir }) => {
+    if (kind === 'move' && moveMode() !== 'ask') return false;
     const what = await moduleEntry(entry);
     if (!what) return false;
     if (kind === 'rename') renameModule(entry, what);
     else moveElement(entry.path, { dest: dir });
     return true;
+  });
+  const plainTreeMove = (path, dir) => ide.moveTreeEntry({ name: basename(path), path, dir: !isPy(path) }, joinPath(dir, basename(path)));
+  ide.treeMovers?.push({
+    // One rope Move per module, each its own undo step. Problems rope reports still go through the preview. Without
+    // rope or an interpreter the files move without their imports; any other failure leaves the module where it was.
+    async move(entry, to, batch) {
+      if (moveMode() === 'never' || !(await moduleEntry(entry))) return false;
+      const dest = ide.util.dirname(to);
+      const label = tr('Move');
+      try {
+        const result = await call('move', { file: entry.path, pos: null, target: entry.path, dest });
+        if (result.warnings?.length && !(await preview(result, label))) return true;
+        const rec = await applyResult(result, label);
+        const importers = result.changes.filter((c) => !isUnder(c.path, entry.path)).length;
+        (batch.refactorMoves ||= []).push({ name: entry.name, rec, importers });
+      } catch (err) {
+        if (err?.code === 'no-rope' || err?.code === 'no-interpreter') { batch.refactorPlain = err; return false; }
+        if (!err?.code) console.error(err);
+        (batch.refactorFailed ||= []).push({ path: entry.path, dest, reason: errorText(err) });
+      }
+      return true;
+    },
+    done(batch) {
+      const moves = batch.refactorMoves || [];
+      const importers = moves.reduce((n, m) => n + m.importers, 0);
+      if (importers) {
+        const note = ide.notifications.notify({
+          kind: 'ok', group: 'Refactoring',
+          title: tr(`${moves.length === 1 ? 'Moved {name}' : 'Moved {n} modules'} and updated imports in ${importers === 1 ? '1 file' : '{files} files'}`,
+            { name: moves[0].name, n: moves.length, files: importers }),
+          actions: [{
+            label: tr('Undo'), valid: () => moves.some((m) => m.rec.state === 'done'),
+            run: async () => {
+              for (const m of [...moves].reverse()) if (m.rec.state === 'done') await replay(m.rec, 'undo');
+              note.expire();
+            },
+          }],
+        });
+      }
+      if (batch.refactorPlain) {
+        ide.notifications.notify({
+          kind: 'warn', group: 'Refactoring', title: tr('Imports were not updated'), text: errorText(batch.refactorPlain),
+          actions: batch.refactorPlain.code === 'no-rope' ? [{ label: tr('Install rope'), run: () => offerRope() }] : [],
+        });
+      }
+      for (const f of batch.refactorFailed || []) {
+        ide.notifications.notify({
+          kind: 'error', group: 'Refactoring', title: tr('{name} was not moved', { name: basename(f.path) }), text: f.reason,
+          actions: [{ label: tr('Move Without Updating Imports'), run: (note) => { note.expire(); plainTreeMove(f.path, f.dest); } }],
+        });
+      }
+    },
   });
 
   // ---------- Refactor This (Ctrl+Alt+Shift+T) ----------
@@ -923,6 +981,18 @@
     keyAction: 'Move',
     when: (entry) => (entry.dir ? !samePath(entry.path, ide.root) : isPy(entry.path)),
     run: (entry) => moveElement(entry.path),
+  });
+
+  (ide.settingsPages ||= []).push({
+    id: 'refactoring', group: 'editor', title: () => tr('Refactoring'), defaults: { [MOVE_IMPORTS]: 'auto' },
+    keywords: 'refactoring move imports project tree drag rope 리팩터링 이동 import 프로젝트 트리 끌어다 놓기',
+    mount(host, ctx) {
+      const s = ctx.ui.section(host, tr('Moving files in the project tree'));
+      s.appendChild(ctx.ui.fieldRow(tr('Update imports of moved Python modules:'), ctx.ui.selectInput(MOVE_IMPORTS, [
+        ['auto', tr('Automatically')], ['ask', tr('Show the Move dialog')], ['never', tr('Never (move the files only)')],
+      ], 'auto')));
+      s.appendChild(el('div', 'muted settings-note', tr('Automatically: imports are updated without a dialog and a notification offers Undo. Ctrl+Z in a changed file also undoes it.')));
+    },
   });
 
   ide.refactor = { call, applyResult, preview, errorText, hint, records:() => records.map(({ label, state, files, moves }) => ({ label, state, files: files.map((f) => f.path), moves })) };

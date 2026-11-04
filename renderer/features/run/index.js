@@ -732,6 +732,16 @@
 
   function updateToolbar() {
     stopBtn.disabled = !sessions.some(busy) && !debugActive;
+    reportBusy();
+  }
+  // What closing the window would stop, for main to ask about first (windows.js): every run still going or starting
+  // (a Craft server too), and a debug session the debugger owns.
+  let lastBusy = '';
+  function reportBusy() {
+    const names = sessions.filter(busy).map((s) => s.title);
+    if (debugActive && !names.length) names.push(tr('Debug session'));
+    const now = JSON.stringify(names);
+    if (now !== lastBusy) { lastBusy = now; ide.api.send('window:setBusy', names); }
   }
   // The toolbar Stop button also stops a debug session (the debugger owns that process).
   ide.on('debugSessionChanged', (active) => { debugActive = active; updateToolbar(); });

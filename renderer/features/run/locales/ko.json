@@ -104,5 +104,6 @@
   "Input file doesn't exist: {path}": "입력 파일이 없습니다: {path}",
   "Redirect input from is not used while Emulate terminal in output console is on.": "출력 콘솔에서 터미널 에뮬레이션이 켜져 있으면 입력 리디렉션을 사용하지 않습니다.",
   "Unavailable": "사용할 수 없음",
-  "'{name}' cannot run: the plugin it belongs to is not loaded.": "'{name}' 구성을 실행할 수 없습니다. 이 구성의 플러그인이 로드되어 있지 않습니다."
+  "'{name}' cannot run: the plugin it belongs to is not loaded.": "'{name}' 구성을 실행할 수 없습니다. 이 구성의 플러그인이 로드되어 있지 않습니다.",
+  "Debug session": "디버그 세션"
 }

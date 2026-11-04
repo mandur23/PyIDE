@@ -483,10 +483,12 @@ try {
     await press('Ctrl+X');
     await selectRow('geo/plane');
     await press('Ctrl+V');
-    await until(`!!document.querySelector('#rfMoveDialog')`, 'move dialog', 30000);
-    await click('#rfMoveDialog [data-action="refactor"]');
-    await until(`!document.querySelector('#rfMoveDialog')`, 'move dialog closed', 60000);
+    const moveButton = `[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Move')`;
+    await until(`!!${moveButton}`, 'move question', 30000);
+    check(!(await js(`!!document.querySelector('#rfMoveDialog')`)), 'pasting a module asks only the tree\'s question, without the Move dialog');
+    await js(`(${moveButton}.click(), true)`);
     await until(`(async () => await ide.api.exists(${J(file('geo/plane/figures.py'))}))()`, 'moved', 60000);
+    await until(`ide.notifications.list().some((n) => n.group === 'Refactoring' && /^Moved figures\\.py and updated imports/.test(n.title))`, 'move notification', 30000);
     await js(`ide.saveAll()`);
     await sleep(300);
     check(/^from geo\.plane\.figures import/m.test(read('main.py')) && read('test_shapes.py').startsWith('from geo.plane.figures import Rect, circle_area'),
