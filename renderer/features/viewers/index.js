@@ -1259,7 +1259,8 @@
   const PREVIEW_RELOAD_EXT = new Set(['html', 'htm', 'xhtml', 'css', 'js', 'mjs', 'json', 'svg']);
   const previewWidths = () => [['', tr('Responsive')], ['1280', tr('Desktop (1280 px)')], ['768', tr('Tablet (768 px)')], ['375', tr('Mobile (375 px)')]];
 
-  function mountHtml(host, { path, doc }) {
+  // previewOnly: the page alone, for a template whose editor is a tab of its own (Preview Template).
+  function mountHtml(host, { path, doc, previewOnly = false }) {
     host.classList.add('vw', 'vw-md', 'vw-html');
     if (!doc) { host.classList.add('vw-center'); fallbackCard(host, path, tr('This file is too large to edit.')); return {}; }
     const MODES = [
@@ -1267,7 +1268,7 @@
       { value: 'split', label: tr('Editor and Preview'), title: tr('Show Editor and Preview') },
       { value: 'preview', label: tr('Preview'), title: tr('Show Preview Only') },
     ];
-    let mode = ide.settings.get('viewers.htmlMode', 'split');
+    let mode = previewOnly ? 'preview' : ide.settings.get('viewers.htmlMode', 'split');
     const bar = toolbar();
     const seg = segmented(MODES, mode, (v) => setMode(v, true));
     const reloadBtn = button('⟳', tr('Reload Preview'), () => reload());
@@ -1279,7 +1280,9 @@
     const browserBtn = button(tr('Open in Browser'), tr('Open the saved file in the system browser'), () => invoke('viewers:openInBrowser', path));
     const status = el('span', 'vw-status vw-html-errors');
     const scriptsOff = el('span', 'vw-status vw-html-scripts-off');
-    bar.append(seg.el, reloadBtn, width, browserBtn, status, scriptsOff);
+    const templateNote = el('span', 'vw-status vw-html-template');
+    bar.append(seg.el, reloadBtn, width, browserBtn, status, scriptsOff, templateNote);
+    seg.el.classList.toggle('hidden', previewOnly);
     const split = el('div', 'vw-md-split');
     const edHost = el('div', 'vw-md-editor');
     const divider = el('div', 'vw-md-divider');
@@ -1294,7 +1297,7 @@
     split.append(edHost, divider, stage);
     host.append(bar, split);
 
-    const editor = embedEditor(edHost, doc);
+    const editor = previewOnly ? null : embedEditor(edHost, doc);
     let ratio = 0.5;
     let disposed = false;
     let url = null;
@@ -1320,9 +1323,9 @@
       divider.classList.toggle('hidden', v !== 'split');
       edHost.style.flex = v === 'split' ? `${ratio} 1 0` : '1 1 0';
       stage.style.flex = v === 'split' ? `${1 - ratio} 1 0` : '1 1 0';
-      if (persist) ide.settings.set('viewers.htmlMode', v);
+      if (persist && !previewOnly) ide.settings.set('viewers.htmlMode', v);
       if (v !== 'editor' && !frame.src) reload();
-      if (v !== 'preview') editor.layout();
+      if (v !== 'preview') editor?.layout();
     }
 
     // A page an app's dev server fills in shows nothing here: Create React App's public/index.html (%PUBLIC_URL%, an
@@ -1377,8 +1380,19 @@
       if (disposed || mode === 'editor') return;
       updateNotice();
       if (!url) {
-        const site = await invoke('viewers:previewUrl', path, ide.root);
+        // A Django or Jinja2 template is put together from its parts in main, with what the server fills in left empty.
+        // The frameworks plugin knows which files are templates once its inspection has run.
+        const fw = ide.frameworks;
+        if (fw?.ready) await Promise.race([fw.ready(), new Promise((r) => setTimeout(r, 3000))]);
+        if (disposed) return;
+        const template = fw?.templateLanguage?.(path) ? { dirs: fw.info()?.templateDirs || [] } : null;
+        const site = await invoke('viewers:previewUrl', path, ide.root, template);
+        if (disposed) return;
         ({ url, root } = site);
+        if (template) {
+          templateNote.textContent = tr('Template preview: what the server fills in is left empty');
+          templateNote.title = tr('Blocks, includes and static files are put together; values, conditions and loops are not run.');
+        }
         if (site.scripts) frame.sandbox = 'allow-scripts allow-forms allow-modals allow-popups';
         else scriptsOff.textContent = tr('Scripts are off: this folder is not trusted');
       }
@@ -1434,7 +1448,7 @@
       addEventListener('mousemove', move);
       addEventListener('mouseup', up);
     });
-    host.addEventListener('focus', () => { if (mode !== 'preview') editor.focus(); });
+    host.addEventListener('focus', () => { if (mode !== 'preview') editor?.focus(); });
 
     applyWidth();
     setMode(mode);
@@ -1447,7 +1461,7 @@
         offSaved?.();
         offChanged?.();
         removeEventListener('message', onMessage);
-        editor.dispose();
+        editor?.dispose();
       },
     };
   }
@@ -1834,6 +1848,42 @@
   // Django and Jinja2 templates stay in the editor with their template language: {% %} and {{ }} do not preview.
   const isPage = byExt('html', 'htm', 'xhtml');
   ide.registerFileViewer({ id: 'html', text: true, match: (p) => isPage(p) && !ide.frameworks?.templateLanguage?.(p), mount: mountHtml });
+
+  // A Django or Jinja2 template keeps its own editor (template language, Ctrl+B, completion); Preview Template opens
+  // its page beside it, put together by main (main/template-preview.js) and following its unsaved text.
+  const isTemplate = (t) => t?.kind === 'file' && !!t.doc && !!ide.frameworks?.templateLanguage?.(t.path);
+  function previewTemplate(t = ide.activeTab()) {
+    if (!isTemplate(t)) return;
+    const id = `template-preview:${t.path}`;
+    let view = null;
+    let off = null;
+    ide.openCustomTab({
+      id, group: 'right', icon: 'web', title: tr('Preview: {name}', { name: ide.util.basename(t.path) }),
+      mount: (host) => {
+        view = mountHtml(host, { path: t.path, doc: t.doc, previewOnly: true });
+        off = t.doc.model.onWillDispose(() => ide.closeTab(id, true));
+      },
+      onClose: () => { off?.dispose(); view?.dispose?.(); },
+    });
+  }
+  ide.registerAction({ id: 'Viewers.PreviewTemplate', title: tr('Preview Template'), when: () => isTemplate(ide.activeTab()), run: () => previewTemplate() });
+  const TEMPLATE_LANGS = ['jinja2', 'django-html'];
+  ide.onEditor((ed) => {
+    ed.addAction({ id: 'viewers.previewTemplate', label: tr('Preview Template'), contextMenuGroupId: '2_run', contextMenuOrder: 8,
+      precondition: 'editorLangId == jinja2 || editorLangId == django-html', run: () => previewTemplate() });
+    // A button in the editor's top right corner while it shows a template, as PyCharm puts its browser icons there.
+    const btn = el('button', 'vw-template-preview-btn hidden');
+    btn.title = tr('Preview Template');
+    btn.append(ide.icon('web'), el('span', '', tr('Preview')));
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => previewTemplate());
+    ed.addOverlayWidget({ getId: () => 'viewers.templatePreviewButton', getDomNode: () => btn,
+      getPosition: () => ({ preference: monaco.editor.OverlayWidgetPositionPreference.TOP_RIGHT_CORNER }) });
+    const update = () => btn.classList.toggle('hidden', !TEMPLATE_LANGS.includes(ed.getModel()?.getLanguageId()));
+    ed.onDidChangeModel(update);
+    ed.onDidChangeModelLanguage(update);
+    update();
+  });
   ide.registerFileViewer({ id: 'csv', text: true, match: byExt('csv', 'tsv'),
     mount: (host, ctx) => mountTableViewer(host, ctx, { kind: 'csv', build: (text) => tableFromCsv(text, ctx.path) }) });
   ide.registerFileViewer({ id: 'jsonl', text: true, match: byExt('jsonl', 'ndjson'),

@@ -427,6 +427,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/html-preview-app.mjs
+      - name: html-preview-templates
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node verify/html-preview-templates.mjs
       - name: rerun-on-save
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

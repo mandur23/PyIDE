@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const trust = require('../trust');
+const { renderTemplate, renderThymeleaf, isThymeleaf } = require('../template-preview');
 
 const MAX_READ = 512 * 1024 * 1024;
 
@@ -246,8 +247,27 @@ const overrides = new Map(); // site id -> Map(lowercase absolute path -> unsave
 const hiddenShown = new Map(); // site id -> Set(lowercase hidden names on the paths of previewed pages)
 // site id -> Set(folders of previewed pages). A built app's page (build/index.html, dist/index.html) asks for its
 // files from the root of the server it is meant for (/static/js/main.js); what the project root does not have is
-// looked up from the folders of the pages previewed in that site.
+// looked up from the folders of the pages previewed in that site, then from the folders above them and their static
+// folders (fallbackBases), where a web framework keeps what it serves at its root: Spring Boot's
+// src/main/resources/static, a Flask app's static/ beside its templates/, a Django app's static/.
 const pageDirs = new Map();
+// site id -> Map(lowercase page path -> template folders): pages that are Django or Jinja2 templates, previewed as
+// main/template-preview.js puts them together, with {% extends %} and {% include %} found in those folders.
+const templatePages = new Map();
+const STATIC_DIRS = ['static', 'public', 'resources', path.join('META-INF', 'resources')];
+function fallbackBases(site, root) {
+  const out = new Map();
+  const add = (d) => { if (d.toLowerCase() !== root.toLowerCase()) out.set(d.toLowerCase(), d); };
+  for (const dir of pageDirs.get(site) || []) add(dir);
+  for (const dir of pageDirs.get(site) || []) {
+    for (let a = dir; isInside(a, root) || a.toLowerCase() === root.toLowerCase(); a = path.dirname(a)) {
+      add(a);
+      for (const sub of STATIC_DIRS) add(path.join(a, sub));
+      if (a.toLowerCase() === root.toLowerCase() || path.dirname(a) === a) break;
+    }
+  }
+  return [...out.values()];
+}
 const isInside = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
 const injectHelper = (html) => (/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + PREVIEW_HELPER) : PREVIEW_HELPER + html);
 const hiddenIn = (rel, shown) => rel.split(path.sep).some((seg) => seg.startsWith('.') && !shown?.has(seg.toLowerCase()));
@@ -293,8 +313,7 @@ async function servePreview(req) {
   const over = overrides.get(u.hostname)?.get(file.toLowerCase());
   let body = over !== undefined ? Buffer.from(over, 'utf8') : real && await fs.promises.readFile(real).catch(() => null);
   if (!body) {
-    for (const dir of pageDirs.get(u.hostname) || []) {
-      if (dir.toLowerCase() === root.toLowerCase()) continue;
+    for (const dir of fallbackBases(u.hostname, root)) {
       let alt = path.resolve(dir, `.${rel}`);
       if (!isInside(alt, dir)) continue;
       try { if (fs.statSync(alt).isDirectory()) alt = path.join(alt, 'index.html'); } catch {}
@@ -307,6 +326,29 @@ async function servePreview(req) {
   }
   if (!body) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   const type = MIME[path.extname(file).slice(1).toLowerCase()] || 'application/octet-stream';
+  const isPage = type.startsWith('text/html');
+  // A template's parts are read like any file of the site: unsaved text first, never through a link out of it.
+  const loader = (dirs) => async (name) => {
+    for (const dir of dirs) {
+      const p = path.resolve(dir, name);
+      if (!isInside(p, dir)) continue;
+      const o = overrides.get(u.hostname)?.get(p.toLowerCase());
+      if (o !== undefined) return o;
+      const r = await fs.promises.realpath(p).catch(() => null);
+      if (!r || !isInside(r, realRoot) || hiddenIn(path.relative(realRoot, r), shown)) continue;
+      const text = await fs.promises.readFile(r, 'utf8').catch(() => null);
+      if (text != null) return text;
+    }
+    return null;
+  };
+  const dirs = isPage && templatePages.get(u.hostname)?.get(file.toLowerCase());
+  if (dirs) body = Buffer.from(await renderTemplate(body.toString('utf8'), { load: loader(dirs) }), 'utf8');
+  // A Thymeleaf page (Spring) finds its fragments from the nearest templates folder above it.
+  if (isPage && isThymeleaf(body.toString('utf8'))) {
+    let base = path.dirname(file);
+    for (let d = base; isInside(d, root); d = path.dirname(d)) if (path.basename(d).toLowerCase() === 'templates') { base = d; break; }
+    body = Buffer.from(await renderThymeleaf(body.toString('utf8'), { load: loader([base]) }), 'utf8');
+  }
   const scripts = siteScripts(root);
   if (scripts && type.startsWith('text/html')) body = Buffer.from(injectHelper(body.toString('utf8')), 'utf8');
   // A sandboxed page's origin is opaque and serializes as "null": without this header it could not read its own site.
@@ -316,11 +358,17 @@ async function servePreview(req) {
 exports.register = ({ ipcMain }) => {
   protocol.handle('pyide-preview', servePreview);
   // -> {url, root, scripts} for an HTML file, served from the project (or from the file's folder when it is outside the
-  // project). scripts: whether the site's pages may run scripts.
-  ipcMain.handle('viewers:previewUrl', (_e, file, projectRoot) => {
+  // project). scripts: whether the site's pages may run scripts. template: {dirs} when the file is a Django or Jinja2
+  // template (the frameworks plugin's template folders), so the preview puts it together (main/template-preview.js).
+  ipcMain.handle('viewers:previewUrl', (_e, file, projectRoot, template) => {
     const root = projectRoot && isInside(file, projectRoot) ? projectRoot : path.dirname(file);
     const segs = path.relative(root, file).split(path.sep);
     const site = siteFor(root);
+    const pages = templatePages.get(site) || new Map();
+    const dirs = Array.isArray(template?.dirs) ? template.dirs.filter((d) => typeof d === 'string' && path.isAbsolute(d) && (isInside(d, root) || d.toLowerCase() === root.toLowerCase())) : [];
+    if (template && dirs.length) pages.set(file.toLowerCase(), dirs);
+    else pages.delete(file.toLowerCase());
+    templatePages.set(site, pages);
     for (const seg of segs) if (seg.startsWith('.')) hiddenShown.set(site, (hiddenShown.get(site) || new Set()).add(seg.toLowerCase()));
     pageDirs.set(site, (pageDirs.get(site) || new Set()).add(path.dirname(file)));
     return { url: `pyide-preview://${site}/${segs.map(encodeURIComponent).join('/')}`, root, scripts: siteScripts(root) };

@@ -74,6 +74,14 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 트리에서 옮긴 Python 파일의 import 수정은 기본이 자동이고, 알림에서 되돌릴 수 있습니다. rope가 없으면 경고 후 import 없이 옮깁니다.
 - 테스트: `verify/refactor.mjs`(rope가 든 venv를 `verify/out/refactor-venv`에 만들어 다시 씁니다), `verify/rename-module.mjs`.
 
+### HTML과 템플릿 미리보기 (viewers)
+
+- `.html` 파일은 HTML 뷰어(편집기와 미리보기)로 열립니다. 미리보기는 `main/features/viewers.js`가 `pyide-preview://` 주소로 프로젝트 폴더를 웹 서버처럼 내줍니다.
+- 루트 경로(`/css/x.css`)가 프로젝트 루트에 없으면 미리보는 페이지의 폴더와 그 위 폴더, 그 안의 `static`, `public`, `resources`에서 찾습니다(`fallbackBases`). Spring Boot의 `src/main/resources/static`, Flask의 `static/`이 여기서 잡힙니다.
+- Django와 Jinja2 템플릿은 템플릿 편집기로 열고, 미리보기는 따로 여는 탭(`Preview Template`, 편집기 오른쪽 위 버튼)입니다. 뷰어 안의 편집기는 `ide.editor`가 아니라서 템플릿 기능이 깨지기 때문입니다.
+- 템플릿을 페이지로 합치는 일은 `main/template-preview.js`가 합니다. Jinja2/Django는 `renderTemplate`, Thymeleaf는 `renderThymeleaf`입니다. 서버 값은 실행하지 않습니다.
+- 테스트: `verify/html-preview.mjs`, `verify/html-preview-app.mjs`, `verify/html-preview-templates.mjs`.
+
 ### 다이어그램과 ERD (diagrams, database)
 
 - `renderer/features/diagrams/index.js`의 `layoutGraph`가 배치합니다. ERD는 모델이 `layout: 'erd'`를 주고, 외래 키로 열을 나누며 선은 테이블 사이 통로로만 지나갑니다.
