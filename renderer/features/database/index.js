@@ -1118,8 +1118,9 @@
       id: idOf(sc.name, t.name), name: t.name, qualname: idOf(sc.name, t.name), module: sc.name, stereotype: t.kind === 'view' ? 'view' : '',
       inScope: true, externalBases: [], methods: [], fields: t.columns.map((c) => ({ name: c.name, type: c.type, kind: c.pk ? 'key' : 'field' })),
     })));
-    const edges = (keys.ok ? keys.keys : []).map((k) => ({ from: idOf(k.schema, k.table), to: idOf(k.refSchema, k.refTable), kind: 'assoc', label: k.columns.join(', '), many: true }));
-    return { classes, edges, stats: {} };
+    const edges = (keys.ok ? keys.keys : []).map((k) => ({ from: idOf(k.schema, k.table), to: idOf(k.refSchema, k.refTable), kind: 'assoc', label: k.columns.join(', '), many: true,
+      fromField: k.columns[0], toField: k.refColumns[0] }));
+    return { classes, edges, stats: {}, layout: 'erd' };
   }
   async function generateErd(s, schema = null) {
     try {

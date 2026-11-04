@@ -22,6 +22,8 @@
   const MAX_TEXT = 64;
   const FONT = () => getComputedStyle(document.body).fontFamily || 'Segoe UI, sans-serif';
 
+  // An ERD key takes its referenced table's colour; a selected table's keys keep theirs and thicken.
+  const KEY_COLOURS = Array.from({ length: 8 }, (_, i) => `--dg-k${i}`);
   // SVG styling. Shown on screen through a <style> in the page (theme colours from the --dg-* variables in style.css);
   // an export gets the same rules with the variables replaced by the current theme's values.
   const svgCss = (font) => `
@@ -59,9 +61,12 @@
 .dg-has-sel .dg-edge:not(.dg-hl) { opacity: 0.2; }
 .dg-edge.dg-hl .dg-line { stroke: var(--dg-sel); stroke-width: 2; }
 .dg-edge.dg-hl .dg-arrow { stroke: var(--dg-sel); }
+.dg-key .dg-line { stroke-width: 1.5; }
+${KEY_COLOURS.map((v, i) => `.dg-key.dg-k${i} .dg-line, .dg-key.dg-k${i} .dg-arrow { stroke: var(${v}); }`).join('\n')}
+.dg-key.dg-hl .dg-line { stroke-width: 2.4; }
 `;
   const VARS = ['--dg-bg', '--dg-box', '--dg-head', '--dg-border', '--dg-text', '--dg-muted', '--dg-field', '--dg-enum',
-    '--dg-method', '--dg-property', '--dg-ext', '--dg-assoc', '--dg-sel'];
+    '--dg-method', '--dg-property', '--dg-ext', '--dg-assoc', '--dg-sel', ...KEY_COLOURS];
   const pageStyle = document.createElement('style');
   pageStyle.id = 'dgSvgStyle';
   pageStyle.textContent = svgCss(FONT());
@@ -138,26 +143,41 @@
 
   // ---------- layout ----------
   // nodes: [{id, w, h}]; edges: [{from, to, kind: 'extends' | 'assoc'}] (extends: from the subclass to its base).
+  // Class diagrams are layered by inheritance, top to bottom. An ERD (erd: true) is layered by foreign key, left to
+  // right: a referenced table stands left of the tables that reference it, and each key runs from its column's row
+  // (nodes' rows: Map(column -> y), keyRow, headY; edges' fromField, toField) to the referenced column's row, through
+  // the gaps between the columns.
   // Returns {pos: Map(id -> {x, y, w, h}), routes: [{from, to, kind, points}], width, height, ms}.
-  function layoutGraph(nodes, edges, { hgap = 36, vgap = 64, cgap = 56 } = {}) {
+  function layoutGraph(nodes, edges, { hgap = 36, vgap = 64, cgap = 56, erd = false } = {}) {
     const t0 = performance.now();
     const index = new Map(nodes.map((n, i) => [n.id, i]));
     const N = nodes.length;
     const parents = Array.from({ length: N }, () => []);
     const children = Array.from({ length: N }, () => []);
     const seenPair = new Set();
+    const keys = [];
     for (const e of edges) {
-      if (e.kind !== 'extends') continue;
+      if (e.kind !== (erd ? 'assoc' : 'extends')) continue;
       const c = index.get(e.from);
       const p = index.get(e.to);
-      if (c === undefined || p === undefined || c === p || seenPair.has(`${c}>${p}`)) continue;
+      if (c === undefined || p === undefined || c === p) continue;
+      if (erd) keys.push({ e, c, p });
+      if (seenPair.has(`${c}>${p}`)) continue;
       seenPair.add(`${c}>${p}`);
       parents[c].push(p);
       children[p].push(c);
     }
-    // Inheritance cannot loop in valid code, but a half-typed file can: drop the edges that close a cycle.
+    // Inheritance cannot loop in valid code, but a half-typed file can: drop the edges that close a cycle. Foreign
+    // keys loop often (stores and their managers): such a key is laid out the other way round instead.
+    const flipped = new Set();
     const state = new Uint8Array(N);
-    const dropEdge = (c, p) => { parents[c] = parents[c].filter((x) => x !== p); children[p] = children[p].filter((x) => x !== c); };
+    const dropEdge = (c, p) => {
+      parents[c] = parents[c].filter((x) => x !== p);
+      children[p] = children[p].filter((x) => x !== c);
+      if (!erd) return;
+      flipped.add(`${c}>${p}`);
+      if (!parents[p].includes(c)) { parents[p].push(c); children[c].push(p); }
+    };
     for (let s = 0; s < N; s++) {
       if (state[s]) continue;
       const stack = [[s, 0]];
@@ -185,6 +205,12 @@
       comps.push(list);
     }
 
+    // A key's port: the y of a column's row in its box, else the primary key's row (a key naming no parent columns
+    // points at the primary key), else the middle of the head.
+    const portOf = (v, field, parent) => {
+      const n = nodes[v];
+      return n.rows?.get(field) ?? (parent ? n.keyRow : undefined) ?? n.headY ?? n.h / 2;
+    };
     const pos = new Map();
     const routes = [];
     const items = [];
@@ -192,10 +218,10 @@
       if (list.length === 1) {
         const n = nodes[list[0]];
         items.push({ w: n.w, h: n.h, single: true, place: (dx, dy) => pos.set(n.id, { x: dx, y: dy, w: n.w, h: n.h }) });
-      } else items.push(layoutComponent(list));
+      } else items.push(layoutComponent(list, comp[list[0]]));
     }
 
-    function layoutComponent(list) {
+    function layoutComponent(list, ci) {
       // Longest-path layering: a base sits above every subclass (layer = 1 + the deepest base's layer); a class
       // without bases then moves down next to its highest subclass, so short hierarchies do not stretch.
       const layer = new Map();
@@ -227,19 +253,21 @@
         real.set(v, ln);
         lnodes.push(ln);
       }
+      // One chain per inheritance pair; in an ERD one per foreign key, so two keys between the same tables are two lines.
+      const links = erd
+        ? keys.filter((k) => comp[k.c] === ci).map((k) => (flipped.has(`${k.c}>${k.p}`) ? { ...k, c: k.p, p: k.c, flip: true } : k))
+        : list.flatMap((c) => parents[c].map((p) => ({ c, p })));
       const chains = [];
-      for (const c of list) {
-        for (const p of parents[c]) {
-          const chain = [real.get(p)];
-          for (let L = layer.get(p) + 1; L < layer.get(c); L++) {
-            const d = { dummy: true, w: 12, h: 0, layer: L, up: [], down: [], x: 0, order: 0 };
-            lnodes.push(d);
-            chain.push(d);
-          }
-          chain.push(real.get(c));
-          for (let i = 0; i + 1 < chain.length; i++) { chain[i].down.push(chain[i + 1]); chain[i + 1].up.push(chain[i]); }
-          chains.push({ from: nodes[c].id, to: nodes[p].id, chain });
+      for (const { c, p, e, flip } of links) {
+        const chain = [real.get(p)];
+        for (let L = layer.get(p) + 1; L < layer.get(c); L++) {
+          const d = { dummy: true, w: 12, h: erd ? 12 : 0, layer: L, up: [], down: [], x: 0, order: 0 };
+          lnodes.push(d);
+          chain.push(d);
         }
+        chain.push(real.get(c));
+        for (let i = 0; i + 1 < chain.length; i++) { chain[i].down.push(chain[i + 1]); chain[i + 1].up.push(chain[i]); }
+        chains.push({ from: nodes[c].id, to: nodes[p].id, chain, e, flip });
       }
       const layers = Array.from({ length: layerCount }, () => []);
       // Initial order: depth-first from the top layer, so subtrees start together.
@@ -297,13 +325,14 @@
 
       // Coordinates: each layer keeps its order and minimum gaps, and its nodes move as close as they can to the
       // mean of their neighbours in the layer just placed (a least-squares fit under the order constraints, solved by
-      // pooling adjacent violators).
+      // pooling adjacent violators). In an ERD the layers are columns, so x here runs down the column.
+      const len = (n) => (erd ? n.h : n.w);
       const gapOf = (a, b) => (a.dummy || b.dummy ? hgap / 3 : hgap);
       const place = (l, desired) => {
         const offs = [];
         let acc = 0;
         for (let i = 0; i < l.length; i++) {
-          if (i) acc += l[i - 1].w / 2 + gapOf(l[i - 1], l[i]) + l[i].w / 2;
+          if (i) acc += len(l[i - 1]) / 2 + gapOf(l[i - 1], l[i]) + len(l[i]) / 2;
           offs.push(acc);
         }
         const blocks = [];
@@ -329,7 +358,8 @@
       for (const l of layers) place(l, l.map((n) => mean([...n.up, ...n.down], n.x)));
       let minX = Infinity;
       let maxX = -Infinity;
-      for (const n of lnodes) { minX = Math.min(minX, n.x - n.w / 2); maxX = Math.max(maxX, n.x + n.w / 2); }
+      for (const n of lnodes) { minX = Math.min(minX, n.x - len(n) / 2); maxX = Math.max(maxX, n.x + len(n) / 2); }
+      if (erd) return erdComponent(layers, chains, minX, maxX);
       const layerTop = [];
       const layerH = layers.map((l) => Math.max(0, ...l.map((n) => n.h)));
       let y = 0;
@@ -372,6 +402,72 @@
       };
     }
 
+    // An ERD component's columns, left to right, with boxes at the left of their column. The gap after a column holds
+    // a vertical track per key crossing it (keys into the same row share one, so they join before it) and widens to fit
+    // them; a key runs out of its row, along its track and into the referenced row, and crosses a column it skips
+    // between the boxes, where its place in the order left room.
+    function erdComponent(layers, chains, minY, maxY) {
+      const SPACE = 10;
+      const MIN_GAP = 56;
+      const top = (n) => n.x - n.h / 2 - minY;
+      const thick = layers.map((l) => Math.max(0, ...l.filter((n) => !n.dummy).map((n) => n.w)));
+      const yOf = (n, ch) => {
+        if (n.dummy) return n.x - minY;
+        const child = nodes[n.v].id === ch.e.from;
+        return top(n) + portOf(n.v, child ? ch.e.fromField : ch.e.toField, !child);
+      };
+      const gaps = layers.map(() => new Map());
+      const segs = chains.map((ch, ci) => ch.chain.slice(1).map((b, i) => {
+        const a = ch.chain[i];
+        const s = { ya: yOf(a, ch), yb: yOf(b, ch) };
+        const key = !a.dummy ? `l${a.v}:${s.ya}` : !b.dummy && nodes[b.v].id === ch.e.to ? `r${b.v}:${s.yb}` : `s${ci}:${i}`;
+        const g = gaps[a.layer];
+        if (!g.has(key)) g.set(key, { lo: Infinity, hi: -Infinity });
+        s.group = g.get(key);
+        s.group.lo = Math.min(s.group.lo, s.ya, s.yb);
+        s.group.hi = Math.max(s.group.hi, s.ya, s.yb);
+        return s;
+      }));
+      // Tracks are shared by keys whose spans do not overlap (interval colouring). Ordering them by direction or port
+      // instead changed the crossings of a 23-table schema by ±4 of 26 and widened it, so it is not done.
+      const gapW = gaps.map((g) => {
+        const ends = [];
+        for (const grp of [...g.values()].sort((a, b) => a.lo - b.lo)) {
+          let t = ends.findIndex((hi) => hi + SPACE / 2 < grp.lo);
+          if (t < 0) { t = ends.length; ends.push(0); }
+          ends[t] = grp.hi;
+          grp.track = t;
+        }
+        g.tracks = ends.length;
+        return Math.max(MIN_GAP, 40 + (ends.length - 1) * SPACE);
+      });
+      const colX = [];
+      let x = 0;
+      layers.forEach((_, L) => { colX.push(x); x += thick[L] + gapW[L]; });
+      const width = x - gapW[layers.length - 1];
+      return {
+        w: width, h: maxY - minY,
+        place(dx, dy) {
+          for (const l of layers) for (const n of l) if (!n.dummy) pos.set(nodes[n.v].id, { x: colX[n.layer] + dx, y: top(n) + dy, w: n.w, h: n.h });
+          chains.forEach((ch, ci) => {
+            const first = ch.chain[0];
+            const pts = [[colX[first.layer] + nodes[first.v].w + dx, segs[ci][0].ya + dy]];
+            segs[ci].forEach((s, i) => {
+              const a = ch.chain[i];
+              const b = ch.chain[i + 1];
+              const g = gaps[a.layer];
+              const tx = colX[a.layer] + thick[a.layer] + (gapW[a.layer] - (g.tracks - 1) * SPACE) / 2 + s.group.track * SPACE + dx;
+              pts.push([tx, s.ya + dy], [tx, s.yb + dy], [colX[b.layer] + dx, s.yb + dy]);
+              if (b.dummy) pts.push([colX[b.layer] + thick[b.layer] + dx, s.yb + dy]);
+            });
+            // From the key's table to the referenced one.
+            if (!ch.flip) pts.reverse();
+            routes.push({ ...ch.e, points: simplify(pts), erd: true });
+          });
+        },
+      };
+    }
+
     // Shelf packing: hierarchies first (largest first), then single classes, in rows about as wide as the whole
     // diagram is tall times 1.6.
     const area = items.reduce((s, it) => s + (it.w + cgap) * (it.h + cgap), 0);
@@ -389,13 +485,27 @@
       width = Math.max(width, x - cgap);
     }
     const height = items.length ? y + rowH : 0;
-    // Associations: straight from border to border.
+    // Associations: straight from border to border. A table's key to itself is a loop on its right, from the key's row
+    // to the referenced row.
     for (const e of edges) {
       if (e.kind !== 'assoc') continue;
       const a = pos.get(e.from);
       const b = pos.get(e.to);
-      if (!a || !b || e.from === e.to) continue;
-      routes.push({ ...e, points: borderLine(a, b) });
+      if (!a || !b) continue;
+      if (e.from !== e.to) { if (!erd) routes.push({ ...e, points: borderLine(a, b) }); continue; }
+      if (!erd) continue;
+      const v = index.get(e.from);
+      const y1 = a.y + portOf(v, e.fromField, false);
+      let y2 = a.y + portOf(v, e.toField, true);
+      if (Math.abs(y2 - y1) < 8) y2 = y1 + 12;
+      const x2 = a.x + a.w;
+      routes.push({ ...e, points: [[x2, y1], [x2 + 16, y1], [x2 + 16, y2], [x2, y2]], erd: true });
+    }
+    // Keys into the same table share its colour. Tables take colours in order of place (columns left to right, each
+    // top to bottom), so neighbouring tables, whose keys run side by side, differ.
+    if (erd) {
+      const refs = [...new Set(routes.map((r) => r.to))].sort((a, b) => pos.get(a).x - pos.get(b).x || pos.get(a).y - pos.get(b).y);
+      for (const r of routes) r.colour = refs.indexOf(r.to) % KEY_COLOURS.length;
     }
     return { pos, routes, width, height, ms: performance.now() - t0 };
   }
@@ -448,9 +558,32 @@
       ? `<polygon class="dg-arrow" points="${f(l)} ${f([x2, y2])} ${f(r)}"/>`
       : `<polyline class="dg-arrow" points="${f(l)} ${f([x2, y2])} ${f(r)}"/>`;
   }
+  // A foreign key's ends: a crow's foot at the key's table (many rows) and a bar at the referenced one.
+  function keyEnds(pts) {
+    const f = (p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
+    const along = (p, q, dist) => {
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+      return [(q[0] - p[0]) / len, (q[1] - p[1]) / len].map((u, k) => p[k] + u * dist);
+    };
+    const side = (p, q, half) => {
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+      const [nx, ny] = [-(q[1] - p[1]) / len, (q[0] - p[0]) / len];
+      return [[p[0] + nx * half, p[1] + ny * half], [p[0] - nx * half, p[1] - ny * half]];
+    };
+    const [a, a2] = [pts[0], pts[1]];
+    const foot = along(a, a2, 10);
+    const [l, r] = side(a, a2, 5);
+    const [z, z2] = [pts[pts.length - 1], pts[pts.length - 2]];
+    const [b1, b2] = side(along(z, z2, 7), z2, 5);
+    return `M${f(foot)} L${f(l)} M${f(foot)} L${f(r)} M${f(b1)} L${f(b2)}`;
+  }
   function edgeMarkup(r, i) {
     const pts = r.points;
     const d = `M${pts.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L')}`;
+    if (r.erd) {
+      const tip = `${r.from} (${r.label}) → ${r.to}`;
+      return `<g class="dg-edge dg-assoc dg-key dg-k${r.colour}" data-i="${i}" data-from="${esc(r.from)}" data-to="${esc(r.to)}"><title>${esc(tip)}</title><path class="dg-line" d="${d}"/><path class="dg-arrow" d="${keyEnds(pts)}"/></g>`;
+    }
     const cls = r.kind === 'extends' ? 'dg-ext' : 'dg-assoc';
     let extra = '';
     if (r.kind === 'assoc') {
@@ -552,7 +685,7 @@
       up.get(e.from).push(e);
       down.get(e.to).push(e);
     }
-    return { classes, edges: r.edges.filter((e) => classes.has(e.from) && classes.has(e.to)), up, down, stats: r.stats };
+    return { classes, edges: r.edges.filter((e) => classes.has(e.from) && classes.has(e.to)), up, down, stats: r.stats, layout: r.layout };
   }
   const ancestors = (m, id, out = new Set()) => {
     for (const e of m.up.get(id) || []) if (e.kind === 'extends' && !out.has(e.to)) { out.add(e.to); ancestors(m, e.to, out); }
@@ -734,9 +867,16 @@
       const t0 = performance.now();
       const shown = [...d.shown].map((id) => d.model.classes.get(id)).filter(Boolean);
       boxes = new Map(shown.map((c) => [c.id, boxOf(c, d.opts)]));
-      const nodes = shown.map((c) => ({ id: c.id, w: boxes.get(c.id).w, h: boxes.get(c.id).h }));
+      const erd = d.model.layout === 'erd';
+      const nodes = shown.map((c) => {
+        const box = boxes.get(c.id);
+        if (!erd) return { id: c.id, w: box.w, h: box.h };
+        const rows = box.sections.find((sec) => sec.key === 'fields')?.rows || [];
+        const key = rows.find((r) => r.kind === 'key');
+        return { id: c.id, w: box.w, h: box.h, rows: new Map(rows.map((r) => [r.name, r.y - 4])), keyRow: key && key.y - 4, headY: box.headH / 2 };
+      });
       const edges = d.model.edges.filter((e) => d.shown.has(e.from) && d.shown.has(e.to));
-      layout = layoutGraph(nodes, edges);
+      layout = layoutGraph(nodes, edges, erd ? { erd, hgap: 28 } : undefined);
       d.layout = layout;
       const t1 = performance.now();
       svg.setAttribute('viewBox', `${-MARGIN} ${-MARGIN} ${layout.width + 2 * MARGIN} ${layout.height + 2 * MARGIN}`);
@@ -1065,8 +1205,9 @@
   const api = {
     slowMs: 0,
     showPaths, showAt, show: showDiagram, layout: layoutGraph, measure: boxOf,
-    // {key, title, load() -> {classes, edges, stats?}}: classes as main/features/diagrams.js gives them (fields with
-    // kind 'key' get a k; no path: double-click opens nothing), edges {from, to, kind: 'assoc' | 'extends', label?, many?}.
+    // {key, title, load() -> {classes, edges, stats?, layout?}}: classes as main/features/diagrams.js gives them (fields
+    // with kind 'key' get a k; no path: double-click opens nothing), edges {from, to, kind: 'assoc' | 'extends', label?,
+    // many?}. layout 'erd' lays foreign keys (assoc edges with fromField and toField, the columns' names) out as layoutGraph says.
     // The same key shows its tab again, reloaded.
     showModel: ({ key, title, load }) => openDiagram({ key, source: { title, load } }),
     get: current,
