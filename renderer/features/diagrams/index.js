@@ -21,6 +21,9 @@
   const MARGIN = 40;
   const MAX_TEXT = 64;
   const FONT = () => getComputedStyle(document.body).fontFamily || 'Segoe UI, sans-serif';
+  const MONO = "'Cascadia Mono', Consolas, monospace";
+  const ERD_ROW = 20;
+  const ERD_HEAD = 30;
 
   // An ERD key takes its referenced table's colour; a selected table's keys keep theirs and thicken.
   const KEY_COLOURS = Array.from({ length: 8 }, (_, i) => `--dg-k${i}`);
@@ -64,9 +67,21 @@
 .dg-key .dg-line { stroke-width: 1.5; }
 ${KEY_COLOURS.map((v, i) => `.dg-key.dg-k${i} .dg-line, .dg-key.dg-k${i} .dg-arrow { stroke: var(${v}); }`).join('\n')}
 .dg-key.dg-hl .dg-line { stroke-width: 2.4; }
+.dg-tname { fill: var(--dg-text); font: 600 13.5px ${font}; }
+.dg-table.dg-view .dg-tname { font-style: italic; }
+.dg-tschema { fill: var(--dg-muted); font: 11px ${font}; }
+.dg-pkband { fill: var(--dg-pk); fill-opacity: 0.12; }
+.dg-ik { fill: none; stroke-width: 1.7; stroke-linecap: round; }
+.dg-ik-pk { stroke: var(--dg-pk); }
+.dg-ik-fk { stroke: var(--dg-fk); }
+.dg-ik-dot { fill: var(--dg-fk); stroke: var(--dg-box); stroke-width: 1; }
+.dg-cn { fill: var(--dg-text); font: 12.5px ${font}; }
+.dg-col.dg-pk .dg-cn { font-weight: 600; }
+.dg-ct { fill: var(--dg-muted); font: 11.5px ${MONO}; }
+.dg-cr { fill: var(--dg-fk); font: 11px ${font}; }
 `;
   const VARS = ['--dg-bg', '--dg-box', '--dg-head', '--dg-border', '--dg-text', '--dg-muted', '--dg-field', '--dg-enum',
-    '--dg-method', '--dg-property', '--dg-ext', '--dg-assoc', '--dg-sel', ...KEY_COLOURS];
+    '--dg-method', '--dg-property', '--dg-ext', '--dg-assoc', '--dg-sel', '--dg-pk', '--dg-fk', ...KEY_COLOURS];
   const pageStyle = document.createElement('style');
   pageStyle.id = 'dgSvgStyle';
   pageStyle.textContent = svgCss(FONT());
@@ -623,6 +638,52 @@ ${KEY_COLOURS.map((v, i) => `.dg-key.dg-k${i} .dg-line, .dg-key.dg-k${i} .dg-arr
     return `${s}</g>`;
   }
 
+  // ERD tables (a model with layout 'erd'): the name and schema in the head, then a row per column, the primary key's
+  // first on a tinted band, each with a key icon (gold: primary, blue: foreign, gold with a blue dot: both), its name, its
+  // type in a column of its own and, for a foreign key, the table it references. Row centres are r.y - 4, as in boxOf.
+  function erdBoxOf(t, opts) {
+    const font = FONT();
+    const cols = opts.fields ? [...t.fields].sort((a, b) => (b.kind === 'key') - (a.kind === 'key')) : [];
+    const name = (c) => clip(c.name);
+    const type = (c) => clip(c.type || '');
+    const ref = (c) => (c.ref ? `→ ${clip(c.ref)}` : '');
+    const nameW = Math.max(0, ...cols.map((c) => textWidth(name(c), `${c.kind === 'key' ? 600 : 400} 12.5px ${font}`)));
+    const typeW = Math.max(0, ...cols.map((c) => textWidth(type(c), `11.5px ${MONO}`)));
+    const refW = Math.max(0, ...cols.map((c) => textWidth(ref(c), `11px ${font}`)));
+    const nameX = PAD_X + 22;
+    const typeX = nameX + nameW + 20;
+    const head = textWidth(t.name, `600 13.5px ${font}`) + textWidth(t.module, `11px ${font}`) + 3 * PAD_X + 12;
+    const w = Math.ceil(Math.min(MAX_W, Math.max(MIN_W, head, typeX + typeW + (refW ? refW + 16 : 0) + PAD_X + 2)));
+    const rows = cols.map((c, i) => ({ name: c.name, kind: c.kind, y: ERD_HEAD + 3 + i * ERD_ROW + ERD_ROW / 2 + 4, text: name(c), type: type(c), ref: ref(c) }));
+    const h = ERD_HEAD + (cols.length ? cols.length * ERD_ROW + 6 : 0);
+    return { w, h: Math.ceil(h), headH: ERD_HEAD, sections: [{ key: 'fields', y: ERD_HEAD, rows }], nameX, typeX };
+  }
+  const keyIcon = (x, y, cls) => `<g class="dg-ik ${cls}" transform="translate(${x},${y})"><circle cx="4" cy="4" r="3"/><path d="M6.2 6.2 L11.5 11.5 M9.2 9.2 L10.9 7.5 M10.6 10.6 L12 9.2"/></g>`;
+  function erdNodeMarkup(t, p, box) {
+    const w = p.w;
+    let s = `<g class="dg-node dg-table${t.stereotype === 'view' ? ' dg-view' : ''}" data-id="${esc(t.id)}" transform="translate(${p.x.toFixed(1)},${p.y.toFixed(1)})">`;
+    s += `<title>${esc(`${t.qualname}${t.stereotype === 'view' ? ' (view)' : ''}`)}</title>`;
+    s += `<rect class="dg-box" width="${w}" height="${p.h}" rx="5"/>`;
+    s += `<path class="dg-head" d="M0.5 ${box.headH} V5.5 a5 5 0 0 1 5 -5 H${w - 5.5} a5 5 0 0 1 5 5 V${box.headH} Z"/>`;
+    s += `<text class="dg-tname" x="${PAD_X + 2}" y="${box.headH / 2 + 5}">${esc(t.name)}</text>`;
+    s += `<text class="dg-tschema" x="${w - PAD_X}" y="${box.headH / 2 + 4.5}" text-anchor="end">${esc(t.stereotype === 'view' ? `${t.module} · view` : t.module)}</text>`;
+    const rows = box.sections[0].rows;
+    if (rows.length) s += `<line class="dg-sep" x1="0" y1="${box.headH}" x2="${w}" y2="${box.headH}"/>`;
+    for (const r of rows) {
+      const cy = r.y - 4;
+      const pk = r.kind === 'key';
+      s += `<g class="dg-m dg-col${pk ? ' dg-pk' : ''}${r.ref ? ' dg-fk' : ''}" data-name="${esc(r.name)}" data-cy="${cy}">`;
+      if (pk) s += `<rect class="dg-pkband" x="1" y="${cy - ERD_ROW / 2}" width="${w - 2}" height="${ERD_ROW}"/>`;
+      if (pk || r.ref) s += keyIcon(PAD_X + 1, cy - 6, pk ? 'dg-ik-pk' : 'dg-ik-fk');
+      if (pk && r.ref) s += `<circle class="dg-ik-dot" cx="${PAD_X + 12}" cy="${cy - 4}" r="2.6"/>`;
+      s += `<text class="dg-cn" x="${box.nameX}" y="${r.y}">${esc(r.text)}</text>`;
+      if (r.type) s += `<text class="dg-ct" x="${box.typeX}" y="${r.y}">${esc(r.type)}</text>`;
+      if (r.ref) s += `<text class="dg-cr" x="${w - PAD_X}" y="${r.y}" text-anchor="end">${esc(r.ref)}</text>`;
+      s += '</g>';
+    }
+    return `${s}</g>`;
+  }
+
   // ---------- diagrams ----------
   const diagrams = new Map(); // tab id -> diagram
   let seq = 0;
@@ -866,8 +927,8 @@ ${KEY_COLOURS.map((v, i) => `.dg-key.dg-k${i} .dg-line, .dg-key.dg-k${i} .dg-arr
     function relayout() {
       const t0 = performance.now();
       const shown = [...d.shown].map((id) => d.model.classes.get(id)).filter(Boolean);
-      boxes = new Map(shown.map((c) => [c.id, boxOf(c, d.opts)]));
       const erd = d.model.layout === 'erd';
+      boxes = new Map(shown.map((c) => [c.id, (erd ? erdBoxOf : boxOf)(c, d.opts)]));
       const nodes = shown.map((c) => {
         const box = boxes.get(c.id);
         if (!erd) return { id: c.id, w: box.w, h: box.h };
@@ -904,7 +965,8 @@ ${KEY_COLOURS.map((v, i) => `.dg-key.dg-k${i} .dg-line, .dg-key.dg-k${i} .dg-arr
       s += '<g class="dg-edges">';
       layout.routes.forEach((r, i) => { s += edgeMarkup(r, i); });
       s += '</g><g class="dg-nodes">';
-      for (const [id, p] of layout.pos) s += nodeMarkup(d.model.classes.get(id), p, boxes.get(id));
+      const node = d.model.layout === 'erd' ? erdNodeMarkup : nodeMarkup;
+      for (const [id, p] of layout.pos) s += node(d.model.classes.get(id), p, boxes.get(id));
       return `${s}</g>`;
     }
 

@@ -1114,9 +1114,15 @@
     if (!tree.ok) throw new Error(tree.error);
     if (!keys.ok) ide.notifications.notify({ title: tr('Foreign keys could not be read'), text: keys.error, kind: 'warn', raw: true });
     const idOf = (schema, table) => `${schema}.${table}`;
+    // The table each foreign key column references (schema-qualified when it is another schema's), shown on its row.
+    const refs = new Map();
+    for (const k of keys.ok ? keys.keys : []) {
+      for (const c of k.columns) refs.set(`${idOf(k.schema, k.table)}\0${c}`, k.refSchema === k.schema ? k.refTable : idOf(k.refSchema, k.refTable));
+    }
     const classes = tree.schemas.filter((sc) => !only || sc.name === only).flatMap((sc) => (sc.children || []).filter((t) => t.columns).map((t) => ({
       id: idOf(sc.name, t.name), name: t.name, qualname: idOf(sc.name, t.name), module: sc.name, stereotype: t.kind === 'view' ? 'view' : '',
-      inScope: true, externalBases: [], methods: [], fields: t.columns.map((c) => ({ name: c.name, type: c.type, kind: c.pk ? 'key' : 'field' })),
+      inScope: true, externalBases: [], methods: [],
+      fields: t.columns.map((c) => ({ name: c.name, type: c.type, kind: c.pk ? 'key' : 'field', ref: refs.get(`${idOf(sc.name, t.name)}\0${c.name}`) || '' })),
     })));
     const edges = (keys.ok ? keys.keys : []).map((k) => ({ from: idOf(k.schema, k.table), to: idOf(k.refSchema, k.refTable), kind: 'assoc', label: k.columns.join(', '), many: true,
       fromField: k.columns[0], toField: k.refColumns[0] }));

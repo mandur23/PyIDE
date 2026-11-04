@@ -1,6 +1,6 @@
 // Database › Generate ERD over SQLite: the data source's and a schema's context menus open a diagram tab with the
-// tables and views, their columns (primary keys marked), and foreign keys as labelled associations, composite keys
-// included, laid out in columns with each key running row to row around the boxes; Refresh reads a changed schema
+// tables and views as tables (primary key rows first on a band, key icons, names and types in columns, a foreign key's
+// referenced table on its row), and foreign keys as labelled associations, composite keys included, laid out in columns with each key running row to row around the boxes; Refresh reads a changed schema
 // again; the database tree draws SVG icons.
 import { mkdtempSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,7 +31,8 @@ try {
     CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), placed TEXT);
     CREATE TABLE order_items (order_id INTEGER REFERENCES orders, sku TEXT, region TEXT, qty INTEGER, gift_for INTEGER REFERENCES customers(id),
       FOREIGN KEY (sku, region) REFERENCES products (sku, region));
-    CREATE TABLE stores (id INTEGER PRIMARY KEY, manager_id INTEGER REFERENCES staff(id));
+    CREATE TABLE stores (manager_id INTEGER REFERENCES staff(id), id INTEGER PRIMARY KEY);
+    CREATE TABLE profiles (customer_id INTEGER PRIMARY KEY REFERENCES customers(id), bio TEXT);
     CREATE TABLE staff (id INTEGER PRIMARY KEY, store_id INTEGER REFERENCES stores(id));
     CREATE VIEW big_orders AS SELECT * FROM orders;`);
   db.close();
@@ -45,11 +46,11 @@ try {
   const labels = await menuLabels();
   check(labels.includes('Generate ERD') && labels.indexOf('Generate ERD') === labels.indexOf('New Query Console') + 1, `the data source's menu has Generate ERD (${labels.join(' | ')})`);
   await choose('Generate ERD');
-  await until(`ide.diagrams.state()?.classes.length >= 7`, 'ERD drawn', 15000);
+  await until(`ide.diagrams.state()?.classes.length >= 8`, 'ERD drawn', 15000);
   const erd = await state();
-  check(S(erd.classes) === S(['main.big_orders', 'main.customers', 'main.order_items', 'main.orders', 'main.products', 'main.staff', 'main.stores']), `every table and view is a box (${erd.classes.join(', ')})`);
+  check(S(erd.classes) === S(['main.big_orders', 'main.customers', 'main.order_items', 'main.orders', 'main.products', 'main.profiles', 'main.staff', 'main.stores']), `every table and view is a box (${erd.classes.join(', ')})`);
   check(S(erd.edges) === S(['main.customers>main.customers:referred_by', 'main.order_items>main.customers:gift_for', 'main.order_items>main.orders:order_id', 'main.order_items>main.products:sku, region',
-    'main.orders>main.customers:customer_id', 'main.staff>main.stores:store_id', 'main.stores>main.staff:manager_id']),
+    'main.orders>main.customers:customer_id', 'main.profiles>main.customers:customer_id', 'main.staff>main.stores:store_id', 'main.stores>main.staff:manager_id']),
     `foreign keys are associations labelled with their columns, composite ones as one, a table's key to itself and keys that loop included (${erd.edges.join(' ; ')})`);
 
   // The layout: referenced tables stand left of the tables that reference them, every key runs from its column's row
@@ -57,7 +58,7 @@ try {
   const geo = await js(`(() => {
     const s = ide.diagrams.state();
     const box = Object.fromEntries(s.classes.map((c) => [c.qualname, c]));
-    const row = (t, col) => box[t].y + Number(document.querySelector(\`.dg-node[data-id="\${t}"] .dg-m[data-name="\${col}"] circle\`).getAttribute('cy'));
+    const row = (t, col) => box[t].y + Number(document.querySelector(\`.dg-node[data-id="\${t}"] .dg-m[data-name="\${col}"]\`).dataset.cy);
     const near = (a, b) => Math.abs(a - b) < 0.6;
     const edge = (from, to) => s.edges.find((e) => e.from === from && e.to === to);
     const ends = (from, col, to, refCol, side = 'left') => {
@@ -101,8 +102,24 @@ try {
   })()`);
   check(colours.same && colours.distinct === colours.tables, `keys into one table share its colour and each referenced table has its own (${colours.distinct} colours for ${colours.tables} tables)`);
   check(await js(`document.querySelector('.tab.active .tab-title, .tab.active .name')?.textContent === 'shop'`), 'the tab is named after the data source');
-  check(await js(`(() => { const box = [...document.querySelectorAll('.dg-node')].find((n) => n.textContent.includes('products'));
-    return box && box.querySelectorAll('.dg-ic-k').length === 2 && box.textContent.includes('title: TEXT'); })()`), 'primary key columns are marked k, the others show their type');
+  const look = await js(`(() => {
+    const node = (id) => document.querySelector(\`.dg-node[data-id="main.\${id}"]\`);
+    const rows = (id) => [...node(id).querySelectorAll('.dg-col')].map((r) => ({
+      name: r.querySelector('.dg-cn').textContent, type: r.querySelector('.dg-ct')?.textContent || '', ref: r.querySelector('.dg-cr')?.textContent || '',
+      pk: r.classList.contains('dg-pk'), band: !!r.querySelector('.dg-pkband'), pkIcon: !!r.querySelector('.dg-ik-pk'), fkIcon: !!r.querySelector('.dg-ik-fk'), dot: !!r.querySelector('.dg-ik-dot'),
+      x: [r.querySelector('.dg-cn').getAttribute('x'), r.querySelector('.dg-ct')?.getAttribute('x')] }));
+    return { products: rows('products'), stores: rows('stores'), orders: rows('orders'), profiles: rows('profiles'), head: node('products').querySelector('.dg-tschema')?.textContent,
+      pkColour: getComputedStyle(node('products').querySelector('.dg-ik-pk')).stroke, fkColour: getComputedStyle(node('orders').querySelector('.dg-ik-fk')).stroke };
+  })()`);
+  const p = look.products;
+  check(p.length === 3 && p[0].pk && p[1].pk && p[0].band && p[0].pkIcon && !p[2].pk && !p[2].pkIcon && !p[2].fkIcon && p[2].name === 'title' && p[2].type === 'TEXT'
+    && p.every((r) => r.x[0] === p[0].x[0] && r.x[1] === p[0].x[1]) && look.head === 'main',
+    `a table shows its schema in the head and its columns as a table: names and types each in a column, primary key rows on a band with a key (${S(p)})`);
+  check(look.stores[0].name === 'id' && look.stores[0].pk && look.stores[1].name === 'manager_id', `primary key columns come first (${look.stores.map((r) => r.name)})`);
+  const fk = look.orders.find((r) => r.name === 'customer_id');
+  check(fk.fkIcon && !fk.pkIcon && fk.ref === '→ customers' && look.pkColour !== look.fkColour, `a foreign key column has a key of another colour and names the table it references (${S(fk)}, ${look.pkColour} / ${look.fkColour})`);
+  const both = look.profiles[0];
+  check(both.pkIcon && both.dot && both.ref === '→ customers', `a column that is both keys has the primary key's icon with a dot and names its table (${S(both)})`);
   check(await js(`!document.querySelector('.dg-methods') && !document.querySelector('.dg-private') && document.querySelector('.dg-add')?.textContent === 'Add Table…'`), 'the toolbar has no Python-only toggles and adds tables');
   await shot('erd.png');
 
