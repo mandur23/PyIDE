@@ -23,7 +23,8 @@ const state = (t) => t.js(`(() => {
   };
 })()`);
 const quit = async (t) => {
-  await t.js(`(ide.api.invoke('window:closeNow'), true)`);
+  // A window that closes at once never answers the call that closed it.
+  await t.js(`(ide.api.invoke('window:closeNow'), true)`).catch((e) => { if (!/the CDP connection closed/.test(e.message)) throw e; });
   for (let i = 0; i < 100; i++) {
     try { process.kill(t.pid, 0); } catch { return; }
     await t.sleep(100);
