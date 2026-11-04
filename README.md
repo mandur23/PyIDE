@@ -68,4 +68,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out v
 
 ## 구조
 
-기능별 플러그인 구조입니다. 화면 쪽은 `renderer/features/<기능>/`, 메인 프로세스 쪽은 `main/features/<기능>.js`에 있습니다. 자세한 구조와 API는 [FEATURES.md](FEATURES.md)에 있습니다.
+기능별 플러그인 구조입니다. 화면 쪽은 `renderer/features/<기능>/`, 메인 프로세스 쪽은 `main/features/<기능>.js`에 있습니다.
+
+개발 문서는 [docs/README.md](docs/README.md)에서 시작합니다. 공통 개발 방법은 [docs/development.md](docs/development.md), 앱별 안내는 [docs/code-app.md](docs/code-app.md)와 [docs/craft-app.md](docs/craft-app.md)에 있습니다. 기능과 API의 상세 명세는 [FEATURES.md](FEATURES.md)에 있습니다.
