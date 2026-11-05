@@ -102,8 +102,17 @@ const hasEdge = (s, from, to, kind) => s.edges.some((e) => e.from === from && e.
 const nodeCenter = (qualname) => js(`(() => {
   const d = ide.diagrams.get(); const id = ide.diagrams.findClass(${S(qualname)});
   const n = [...d.svg.querySelectorAll('.dg-node')].find((x) => x.dataset.id === id);
-  if (!n) return null; const r = n.querySelector('.dg-box').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + Math.min(14, r.height / 2) };
+  if (!n) return null; const r = n.querySelector('.dg-box').getBoundingClientRect(); const x = r.x + r.width / 2; const y = r.y + Math.min(14, r.height / 2);
+  const top = document.elementFromPoint(x, y);
+  return { x, y, hit: top?.closest('.dg-node') === n, top: top ? top.tagName + '.' + String(top.className?.baseVal ?? top.className) : null };
 })()`);
+// On the CI runner a class box was once not under its own centre when clicked; wait until it is and say what covered it.
+const clickNode = async (qualname, clickCount = 1) => {
+  let p = await nodeCenter(qualname);
+  for (let i = 0; i < 50 && !p?.hit; i++) { await sleep(100); p = await nodeCenter(qualname); }
+  if (!p?.hit) console.log(`note: ${qualname} is covered at its centre by ${p?.top}`);
+  await clickAt(p, clickCount);
+};
 const mouse = async (type, x, y, extra = {}) => cdp('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1, ...extra });
 const clickAt = async ({ x, y }, clickCount = 1) => { await mouse('mousePressed', x, y, { clickCount }); await mouse('mouseReleased', x, y, { clickCount }); await sleep(60); };
 // A point of the canvas outside every class box.
@@ -195,17 +204,17 @@ try {
   await until(`document.querySelectorAll('.dg-vis-private, .dg-vis-protected').length === ${before.p}`, 'private back');
 
   // ---------- selection, navigation, Delete ----------
-  await clickAt(await nodeCenter('Circle'));
+  await clickNode('Circle');
   check(await js(`document.querySelector('.dg-root').dataset.selected === ide.diagrams.findClass('Circle')`), 'clicking a class selects it');
   check(await js(`(() => { const hl = [...document.querySelectorAll('.dg-edge.dg-hl')].map((e) => e.dataset.from + '>' + e.dataset.to);
     const c = ide.diagrams.findClass('Circle'); return hl.length === 2 && hl.every((x) => x.includes(c)) && document.querySelector('.dg-svg').classList.contains('dg-has-sel'); })()`), 'its two relations are highlighted, the rest dimmed');
   check(await js(`[...document.querySelectorAll('.dg-node.dg-rel')].map((n) => n.dataset.id).sort().join() === [ide.diagrams.findClass('Shape'), ide.diagrams.findClass('StyledCircle')].sort().join()`), 'related classes are marked');
-  await clickAt(await nodeCenter('Circle'), 2);
+  await clickNode('Circle', 2);
   await until(`ide.activeTab()?.path?.toLowerCase().endsWith('circle.py')`, 'double-click opened circle.py');
   check(await js(`ide.editor.getPosition().lineNumber === 4`), 'double-click jumps to the class line');
   await js(`(ide.openCustomTab({ id: ide.tabs.find((x) => String(x.path).startsWith('pyide-diagram:scope:')).path, mount() {} }), true)`);
   await until(`ide.activeTab()?.kind === 'custom'`, 'back on the diagram');
-  await clickAt(await nodeCenter('Danger'));
+  await clickNode('Danger');
   await press('Delete');
   await until(`!ide.diagrams.state().classes.some((c) => c.qualname === 'Danger')`, 'Delete removed Danger');
   check(true, 'Delete removes the selected class from the diagram');
