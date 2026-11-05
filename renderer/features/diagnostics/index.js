@@ -233,7 +233,7 @@
     logo.alt = '';
     body.append(logo);
     const text = el('div', 'diag-about-text');
-    text.append(el('h2', null, ide.appTitle), el('div', 'muted', ide.appMode === 'craft' ? tr('Play Minecraft and run servers') : tr('A PyCharm-style Python IDE')));
+    text.append(el('h2', null, ide.appTitle), el('div', 'muted', { craft: tr('Play Minecraft and run servers'), cut: tr('Edit videos') }[ide.appMode] || tr('A PyCharm-style Python IDE')));
     const facts = el('table', 'diag-facts');
     for (const [label, value] of [
       [tr('Version'), v.app],

@@ -76,6 +76,26 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10
         run: node verify/app-mode.mjs
+      - name: cut-formats
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-formats.mjs
+      - name: cut-model
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-model.mjs
+      - name: cut-main
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-main.mjs
+      - name: cut-engine-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-engine-core.mjs
+      - name: cut-export-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-export-core.mjs
       - name: session
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 10

@@ -1,0 +1,17 @@
+/* Nano Studio Cut: tokens shared by the editor's stylesheets (css/*.css). The IDE's colors (--gray1..12, --blue6...)
+   come from renderer/core/styles.css, light theme included; Cut adds its accent and the clip colors. */
+:root {
+  --cut-accent: #e8743b;
+  --cut-accent-hover: #f08a52;
+  --cut-playhead: #e05555;
+  --cut-clip-video: #2f4a78;
+  --cut-clip-audio: #2c6152;
+  --cut-clip-text: #7a4bb0;
+  --cut-clip-solid: #6b5a2a;
+  --cut-selected: #f2c55c;
+  --cut-monitor-bg: #0f1012;
+}
+:root[data-theme="light"] {
+  --cut-monitor-bg: #20232a;
+}
+#cutHost { background: var(--gray1); color: var(--gray11); }

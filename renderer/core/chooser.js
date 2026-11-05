@@ -1,4 +1,5 @@
-// The start chooser (main/windows.js): which app this process runs, Code (the IDE) or Craft (the Minecraft app), picked
+// The start chooser (main/windows.js): which app this process runs, Code (the IDE), Craft (the Minecraft app) or Cut
+// (the video editor), picked
 // from a Dock. Picking an icon answers main, which opens the main window in that mode; Esc or the close button quits.
 // Main checks for updates meanwhile (main/features/updater.js), and a new version gets an icon of its own in the Dock:
 // a click downloads it, the next one installs it.
@@ -16,6 +17,7 @@
   const cards = {
     code: { name: `${product} Code`, sub: tr('Python and web development') },
     craft: { name: `${product} Craft`, sub: tr('Play Minecraft and run servers') },
+    cut: { name: `${product} Cut`, sub: tr('Edit videos') },
   };
   let picked = false;
   const hoverFocus = (button) => { button.onmouseenter = () => button.focus(); };
@@ -98,5 +100,5 @@
     }
   });
   // The app used last comes first.
-  $(window.__initialSettings?.['app.lastMode'] === 'craft' ? 'chooseCraft' : 'chooseCode').focus();
+  $({ craft: 'chooseCraft', cut: 'chooseCut' }[window.__initialSettings?.['app.lastMode']] || 'chooseCode').focus();
 })();

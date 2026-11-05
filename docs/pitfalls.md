@@ -2,7 +2,7 @@
 
 실제로 겪은 문제와 그때 정한 규칙입니다. 코드를 고치거나 테스트하기 전에 공통 절과 작업할 앱의 절을 읽습니다. 새 문제를 고치면 원인과 규칙을 맞는 절에 한 줄 추가합니다.
 
-개발 방법은 [development.md](development.md), 앱별 안내는 [code-app.md](code-app.md)와 [craft-app.md](craft-app.md), 문서 전체 안내는 [README.md](README.md)에 있습니다.
+개발 방법은 [development.md](development.md), 앱별 안내는 [code-app.md](code-app.md), [craft-app.md](craft-app.md), [cut-app.md](cut-app.md), 문서 전체 안내는 [README.md](README.md)에 있습니다.
 
 ## 공통: 보안
 
@@ -59,8 +59,9 @@
 - **스크립트로 준 포커스는 `:focus` 모양을 켭니다.** 시작 화면 Dock은 Enter를 위해 마지막 앱에 포커스를 주는데, `:focus`로 아이콘을 키워 포인터 없이도 커져 있었습니다. 포인터 아래 항목은 `:hover`로, 키보드로 옮긴 항목은 `body.keys`일 때만 키웁니다.
 - **xterm 5.5는 `term.dispose()`로 DPR 모니터를 지우지 않습니다.** 터미널을 만드는 곳마다 `_screenDprMonitor.dispose()`를 부릅니다. Run의 터미널 에뮬레이션에 빠져 재실행마다 터미널이 하나씩 남았습니다.
 - **`const`로 만든 도우미는 쓰기 전에 정의합니다.** ERD 배치에서 `portOf`를 그 정의보다 위의 반복문이 불러 TDZ `ReferenceError`가 났습니다. `function` 선언과 달리 끌어올려지지 않습니다.
+- **Monaco의 `loader.js`가 모든 모드의 페이지에 전역 AMD `require`를 만듭니다.** `typeof require === 'function'`으로 Node를 판별한 Cut 모듈(model, commands, srt)이 앱에서 `Check dependency list!`로 로드되지 않았고, 편집기가 시작되지 않았습니다. Node 판별은 `typeof module === 'object' && module.exports`로 합니다. 테스트는 `loader.js`를 vm에 올린 뒤 스크립트를 불러 확인합니다(`verify/cut-formats.mjs`).
 
-## 공통: Code와 Craft 모드
+## 공통: Code, Craft, Cut 모드
 
 - **플러그인 `modes`의 기본값은 `['code']`입니다.** 필수 플러그인만 모든 모드에서 로드됩니다. `bundled`가 아닌 플러그인의 `required`는 무시합니다.
 - **실행 구성의 타입이 없을 수 있습니다.** `minecraft`가 Craft 전용이 되자 Code 프로젝트에 남은 `minecraft-server` 구성이 Edit Configurations의 `t.icon`에서 예외를 던져 창이 열리지 않았습니다. 플러그인을 끈 경우에도 같습니다. 구성은 지우지 않고(플러그인을 다시 켜면 돌아옵니다) `types.get()`의 빈 값을 처리합니다.
@@ -69,6 +70,9 @@
 - **Craft에는 `ide.debugger`가 없습니다.** code 전용 플러그인의 API는 `?.`로 부릅니다.
 - **`ide.openProject`, `ide.closeProject`는 Craft에서 거부됩니다.**
 - **플러그인의 `required`는 모든 모드에서 불러옵니다.** 한 모드에서만 끌 수 없게 하려면 `requiredIn`을 씁니다. `required`를 Minecraft에 쓰면 Code와 Craft 분리가 깨집니다.
+- **Cut에도 필수 플러그인(diagnostics, terminal, run, settings 등)이 로드됩니다.** Cut 화면은 `#cutHost`가 창을 채우고 IDE 영역은 CSS로 숨깁니다. 설정 페이지는 Craft처럼 `craft: true`인 것만 나옵니다.
+- **시작 화면에서 Cut을 고르면 기본(내장) GPU를 씁니다.** 모드는 app ready 뒤에 정해져서 `force_high_performance_gpu` 스위치를 줄 수 없습니다. 이 PC에서는 AMD 내장 GPU가 잡힙니다.
+- **시작 화면 카드가 늘면 키보드 테스트의 화살표 수가 바뀝니다.** Cut 카드가 생겨 `app-mode`의 업데이트 아이콘 검사가 오른쪽 세 번이 됐습니다.
 
 ## 공통: 번역
 
@@ -236,6 +240,55 @@
 - **`main/features/minecraft.js`는 `Module._load`로 `electron`만 바꾸면 일반 Node에서 IPC 핸들러째 시험할 수 있습니다(`verify/minecraft-launcher-core.mjs`).** 고치기 전 코드로 돌릴 때는 작업 트리를 stash하지 말고 `verify/out` 아래에 복사한 뒤 바꾼 파일만 `git show HEAD:`로 되돌립니다.
 - **`verify/minecraft.mjs`의 survival 서버는 드롭 단계 뒤로 다시 시작할 수 없습니다.** 드롭한 `extra-plugin.jar`를 대역 서버가 읽다가 죽습니다. 그 뒤 단계에서는 modded 서버를 씁니다.
 
+## Cut: 형식과 프로젝트
+
+- **음수 시간을 BigInt로 나누면 0쪽으로 잘려 1틱 어긋납니다.** AAC 프라이밍, B 프레임 지연, MP3 encoder delay에서 음수가 나옵니다. `time.rescale`/`toScale`은 부호를 보고 반올림합니다. 테스트 기대값은 BigInt로 따로 계산합니다.
+- **QuickTime PCM은 stsz 크기 1, stts가 PCM 프레임마다 하나라 2시간이면 3억 개 항목이 됩니다.** PCM은 청크 단위로 색인하고 1초 이하 조각으로 나눕니다.
+- **mp4write가 쓴 샘플을 pending 배열에서 참조하면 내보내기에서 수백 MB가 남습니다.** 청크를 쓴 뒤 샘플 데이터 참조를 바로 끊습니다.
+- **faststart에서 co64를 stco로 줄이면 moov 크기가 바뀝니다.** co64는 co64로 두고, stco는 넘칠 때만 co64로 바꿉니다. 크기가 바뀌면 멈출 때까지 다시 계산합니다.
+- **속도가 1이 아닌 클립의 in/out은 정수 틱이 아닙니다.** 긴 원본 끝의 느린 속도에서 `(out-in)/speed`가 1틱 넘게 어긋나 길이가 프레임에서 벗어났습니다. 0.25, 0.5 같은 속도로는 재현되지 않고 1/3에서 드러났습니다. 길이는 `model.clipDuration`(QUANTUM으로 반올림)으로만 셉니다.
+- **프레임 수를 바꿀 때 아주 짧은 클립을 1프레임으로 늘리면 다음 클립과 겹칩니다.** 트랙마다 앞 클립 끝부터 차례로 다시 맞춥니다.
+- **Node의 `TextDecoder('euc-kr')`에는 CP949 확장(UHC) 8,822자가 없고 리드 바이트를 FFFD 없이 버립니다(똠, 뷁이 깨짐).** Chromium에는 있습니다. `srt.decode`는 없으면 확장을 계산해 쓰고, 능력은 (0x81, 0x41)이 한 글자로 풀리는지로 봅니다. 테스트는 공개된 코드값(갂 8141, 똠 8C63, 뷁 94EE, 햏 C164)으로 확인합니다.
+- **8.3 이름(`TRICK-~1.MP4`)은 긴 이름(`.mp4x`)과 다른 확장자를 보여 줍니다.** main의 확장자 검사는 받은 이름과 realpath 양쪽에서 합니다.
+
+## Cut: 엔진과 내보내기
+
+- **하드웨어 VideoDecoder는 넣어 준 만큼 계속 풀어 냅니다.** 프리페치가 디코더 안에 남은 프레임을 세지 않아 캐시가 넘치고, 8프레임마다 키 프레임부터 다시 풀었습니다(27 fps, 30장 떨굼). 디코더 안의 프레임까지 세고, 한 장씩 넣고, 재생 위치 뒤의 프레임을 먼저 버립니다.
+- **하드웨어 VideoDecoder는 호출한 쪽이 출력 프레임을 쥐고 있으면 멈춥니다(작은 프레임 풀).** `flush()`가 끝나지 않아 테스트가 on-desktop 시간 초과로 출력 없이 끝났습니다. 프레임은 output 콜백 안에서 그리고 닫습니다.
+- **`importExternalTexture(VideoFrame)`는 그 task가 끝나면 만료됩니다.** 프레임을 가져온 뒤 submit까지 await 없이 하고, 프레임은 `onSubmittedWorkDone` 뒤에 반납합니다.
+- **WebGPU layout `'auto'`는 셰이더가 읽지 않는 binding을 빼서 `createBindGroup`이 실패합니다.** 모든 binding을 씁니다(`_ = u.size;`).
+- **버퍼 usage에 `GPUTextureUsage` 상수를 쓰면 `mapAsync` 때가 되어서야 실패합니다.** 버퍼는 `GPUBufferUsage`를 씁니다.
+- **Chromium 인코더는 CPU 메모리의 VideoFrame(willReadFrequently 2D 캔버스, RGBA 버퍼)을 full range YUV로 바꿉니다.** 하드웨어로 인코딩한 파일이 어둡게 풀렸습니다(29 → 14, PSNR 27.6 dB). 인코더에는 GPU 캔버스의 프레임을 줍니다.
+- **Windows의 AAC 인코더(Media Foundation)는 96/128/160/192 kbps만 받고, 오류는 configure가 아니라 encode 중 error 콜백으로 옵니다.** 실제 인코딩으로 비트레이트를 확인하고 낮은 쪽으로 내려갑니다.
+- **`textBaseline 'middle'`은 em 상자의 가운데라서 맑은 고딕 한글이 0.1em 위로 그려졌습니다.** 줄마다 ascent+descent를 가운데 두고 alphabetic 기준선으로 그립니다.
+- **DOMException의 숫자 `.code`(9 = NotSupportedError)가 오류 코드 `'9'`로 새어 나갔습니다.** 문자열 코드만 넘깁니다.
+- **`o.loudness ?? p.loudness`는 사용자가 고른 "바꾸지 않음"(null)을 사전 설정의 -14로 덮었습니다.** 게다가 `export.run`은 목표를 읽지도 않아, 대화상자의 라우드니스 선택이 아무 일도 하지 않았는데 테스트는 통과했습니다. null이 뜻을 가진 덮어쓰기는 `!== undefined`로 고르고, 설정마다 결과 파일에서 확인하는 테스트를 둡니다.
+- **이 PC의 H.264 VideoEncoder는 B 프레임을 만들지 않습니다.** 테스트 클립으로는 재정렬 경로가 검증되지 않습니다.
+
+## Cut: 화면
+
+- **`ide.ui.dialog`는 Enter를 capture 단계에서 받아 기본 버튼을 먼저 누릅니다.** 숫자 칸에 치고 Enter를 누르면 값이 들어가기 전에 OK가 실행됐습니다. OK에서 열린 숫자, 타임코드 입력칸을 먼저 blur합니다.
+- **프로젝트 변경마다 트랙 헤더 DOM을 다시 만들면 높이 손잡이의 pointer capture가 끊깁니다.** 보이는 내용이 같으면 높이만 고칩니다. 프로젝트 패널도 이름을 쓰는 동안에는 다시 그리지 않습니다.
+- **트림 미리보기는 `history.begin` → 이동마다 cancel + begin + do → 놓을 때 commit입니다.** 명령이 막힌 이유(clamped)를 주므로 화면에 clamp 규칙을 다시 만들지 않습니다.
+- **`Object.assign`으로 getter를 복사하면 그 순간의 값으로 굳습니다(`Cut.ui.workspace`가 늘 null).** 살아 있는 getter는 `Object.defineProperty`로 둡니다.
+- **모니터의 빈 화면 안내 div에 `hidden`이 없어서 프로그램 캔버스를 덮었습니다(재생은 되는데 검정).** 겹치는 레이어는 기본을 hidden으로 두고, `elementFromPoint`와 compositor 픽셀로 확인합니다.
+- **저장 직전 편집이 예약한 자동 저장 타이머가 저장 뒤에 돌아 바뀌지 않은 사본을 남겼습니다.** 저장할 때 타이머를 지우고 dirty일 때만 자동 저장합니다.
+- **색 공식을 UI에 복제하지 않습니다.** 엔진의 화이트 밸런스 이득이 작업 중에 바뀌었습니다. 스포이트는 `Cut.effects.whiteBalance`를 씁니다.
+- **Electron의 `beforeunload`는 사용자 입력이 있었던 페이지에서만 닫기를 막습니다.** 저장 안 한 프로젝트의 닫기 확인이 여기에 기대고 있습니다. 테스트는 실제 클릭 뒤에 `window:close`를 부릅니다.
+
+## Cut: 테스트
+
+- **CSP의 `media-src`에 `blob:`이 없어 `<video>`로 내보낸 파일을 재생할 수 없습니다.** `verify/cut-export.mjs`는 그 단계에서만 `Page.setBypassCSP`를 켜고 새로고침합니다. 이 설정은 지금 문서에는 적용되지 않습니다.
+- **`Page.addScriptToEvaluateOnNewDocument`는 `Page.enable` 없이 부르면 다시 불러온 페이지에 적용되지 않았습니다.**
+- **앱 테스트는 쓰는 모듈마다 `Cut[name]`이 있는지 먼저 확인합니다.** 로드 실패한 모듈은 쓰기 전까지 아무 증상이 없습니다.
+- **기록 한도(1000)가 무작위 2,000단계 테스트에서 조용히 오래된 단계를 버렸습니다.** 이런 테스트는 `limit: Infinity`로 만듭니다.
+- **테스트 쪽 박스 파서도 크기 루프마다 진행을 보장합니다.** 크기 0인 박스에서 무한 루프로 메모리를 다 써 FAIL 대신 Node가 죽었습니다.
+- **사용 순서가 결과인 LRU 검사는 하나씩 await합니다.** `Promise.all`로 보내면 절반쯤 실패합니다.
+- **실패 문구에 바이트 배열을 넣으면 수 MB가 출력되어 `execFileSync`의 maxBuffer를 넘깁니다.** 자식이 죽고 임시 폴더가 남습니다. 바이트는 길이만 찍습니다.
+- **숨겨진 데스크톱의 창 크기는 실행마다 다릅니다(1733x974, 1386x779).** 좌표와 확대 비율은 매번 페이지에서 계산합니다. 20 px/s에서 1 px은 1.5프레임이라 프레임 단위 위치 검사는 100 px/s 이상에서 합니다.
+- **`lib.mjs`의 `finish()`는 그 ctx의 결과만 셉니다.** 앱을 다시 띄우는 테스트는 첫 ctx의 results, consoleErrors, cspViolations를 합칩니다.
+- **변이 시험이 테스트의 빈틈을 찾았습니다.** 테스트를 쓴 뒤 사본에서 코드를 한 줄씩 깨 보고 실패하는지 확인합니다.
+
 ## 도구 사용
 
 - **Bash heredoc과 `sed` 치환은 역슬래시를 먹습니다.** Windows 경로와 `\u`가 깨진 일이 여러 번 있었습니다. 파일 수정은 Edit/Write 도구를 쓰고, 스크립트는 파일로 만들어 실행합니다.
@@ -243,6 +296,7 @@
 - **`node -e` 안의 백틱은 Bash가 실행합니다.** 템플릿 문자열이 든 코드는 `node -e`로 쓰지 않습니다.
 - **`String.replace`에는 함수를 넘깁니다.** 치환 문자열의 `$`가 해석됩니다.
 - **Write와 Edit 도구는 내용의 유니코드 이스케이프를 실제 문자로 바꿉니다.** 정규식에 쓴 U+2028 이스케이프가 진짜 줄 구분 문자가 되어 `node --check`가 실패했습니다. 소스에서는 `p{Zl}p{Zp}`나 코드 포인트 숫자를 씁니다. `sed` 치환의 역슬래시 u는 다음 글자를 대문자로 바꿉니다.
+- **같은 일이 BOM, NBSP, LRM 이스케이프에도 일어났습니다(`srt.js`).** 특수 문자는 `String.fromCharCode`로 쓰고, 쓴 뒤 0x7F 넘는 문자를 검사합니다.
 - **새 파일은 LF로 씁니다. 이미 CRLF로 커밋된 파일은 CRLF를 지킵니다.** `verify/scratches.mjs`처럼 CRLF인 파일을 `sed -i`로 고치면 줄바꿈이 LF로 바뀌어 전체 diff가 납니다. 고친 뒤 `git diff --stat`으로 바뀐 줄 수를 봅니다. CI는 `core.autocrlf false`로 커밋된 줄바꿈 그대로 받습니다.
 - **시스템 전체를 바꾸지 않습니다.** subst 드라이브, 전역 환경 변수, 레지스트리, 프로토콜 핸들러를 건드리지 않습니다.
 - **`git worktree remove`는 작업 트리 안의 정션을 따라가 대상까지 지웁니다.** HEAD 비교용 작업 트리에 `node_modules` 정션을 걸고 지웠더니 저장소의 `node_modules`가 비어 `npm ci`로 다시 설치했습니다. 정션은 먼저 `cmd /c rmdir`로 끊고 지웁니다.
@@ -268,6 +322,16 @@
 - `safeStorage` 비동기 API로 옮기지 않았습니다.
 - `shell.openPath`가 없는 파일에서 25초 넘게 돌아오지 않았습니다. 원인을 모릅니다.
 - 첫 시작 PyIDE 가져오기 알림은 일부가 실패해도 모두 복사했다고 말합니다. 실패한 항목은 다음 시작 때 다시 시도합니다.
+
+## 아직 남은 문제: Cut
+
+- B 프레임이 있는 스트림, 회전된 영상(90/180/270), 실제 카메라와 휴대폰 파일은 확인하지 못했습니다. 이 PC의 인코더가 B 프레임을 만들지 않고, mp4write는 회전 행렬을 쓰지 못하고, 테스트는 다운로드를 하지 않습니다.
+- 하드웨어 디코더나 인코더가 중간에 실패할 때 소프트웨어로 넘어가는 경로는 강제로 실패시킬 방법이 없어 시험하지 않았습니다.
+- 내보낸 파일은 Chromium으로만 확인했습니다. Windows 미디어 플레이어와 휴대폰은 시험하지 않았습니다.
+- WebGPU 장치 손실은 알리기만 하고 복구하지 않습니다. 프레임 메모리 한도는 VRAM의 50%가 아니라 설정값(1.5 GB)입니다.
+- AAC 인코더의 마지막 패딩 때문에 내보낸 소리가 영상보다 최대 약 20 ms 깁니다(7초 영상이 7.0187초).
+- 저장 안 한 프로젝트의 닫기 확인은 `beforeunload`에 기댑니다. `editors.js`의 `window:confirmClose`에 연결하지 않았습니다.
+- 네트워크 공유(`\\nas\...`)의 미디어는 거부합니다. 매핑된 드라이브는 됩니다.
 
 ## 아직 남은 문제: Code
 

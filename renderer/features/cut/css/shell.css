@@ -1,0 +1,144 @@
+/* Nano Studio Cut: the editor's frame (ui-shell.js), the shared widgets (ui-base.js) and the monitors (ui-monitors.js).
+   Colors come from the IDE's variables (both themes) and the Cut tokens in style.css. */
+.cut-root { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; background: var(--gray1);
+  color: var(--gray11); font-size: 12px; user-select: none; --cut-wave: #3fae8c; }
+.cut-stage { flex: 1; min-height: 0; display: flex; }
+.cut-shelf { display: none; }
+
+/* top bar */
+.cut-topbar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; flex: none; background: var(--gray2);
+  border-bottom: 1px solid var(--gray3); min-width: 0; container: cut-top / inline-size; }
+.cut-brand { display: flex; align-items: center; gap: 8px; color: var(--gray12); font-weight: 600; font-size: 13px; padding-right: 6px; flex: none; }
+.cut-brand-logo { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px;
+  background: var(--cut-accent); color: #fff; font-weight: 800; font-size: 13px; }
+@container cut-top (max-width: 1100px) { .cut-brand-name { display: none; } }
+.cut-topbar-group { display: flex; align-items: center; gap: 2px; flex: none; padding: 0 4px; border-left: 1px solid var(--gray3); }
+.cut-topbar-group.right { margin-left: auto; border-left: 0; gap: 6px; }
+.cut-project-name { display: flex; align-items: baseline; gap: 8px; min-width: 60px; flex: 0 1 auto; overflow: hidden; padding: 0 6px; }
+.cut-project-title { font-weight: 600; color: var(--gray12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cut-root.dirty .cut-project-title::after { content: ' ●'; color: var(--cut-accent); }
+.cut-save-state { color: var(--gray8); white-space: nowrap; font-size: 11px; }
+.cut-ws-tabs { display: flex; align-items: stretch; gap: 2px; height: 100%; flex: 0 1 auto; min-width: 0; overflow: hidden; margin: 0 auto; }
+.cut-ws-tab { border: 0; background: none; color: var(--gray9); padding: 0 12px; font: inherit; font-size: 12.5px; white-space: nowrap;
+  border-bottom: 2px solid transparent; cursor: default; }
+.cut-ws-tab:hover { color: var(--gray12); background: var(--gray3); }
+.cut-ws-tab[aria-selected="true"] { color: var(--gray12); border-bottom-color: var(--cut-accent); }
+
+/* buttons and fields */
+.cut-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-width: 26px; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 5px; background: none; color: var(--gray10); font: inherit; cursor: default; flex: none; }
+.cut-btn.icon-only { padding: 0; width: 26px; }
+.cut-btn:hover:not(:disabled) { background: var(--gray4); color: var(--gray12); }
+.cut-btn:disabled { opacity: .4; }
+.cut-btn[aria-pressed="true"] { background: var(--blue2); color: var(--gray12); box-shadow: inset 0 0 0 1px var(--blue6); }
+.cut-btn.accent { background: var(--cut-accent); color: #fff; font-weight: 600; padding: 0 12px; }
+.cut-btn.accent:hover:not(:disabled) { background: var(--cut-accent-hover); color: #fff; }
+.cut-btn .ide-icon svg { width: 16px; height: 16px; display: block; }
+.cut-btn-label { white-space: nowrap; }
+.cut-select, .cut-root input[type="text"], .cut-root input[type="search"], .cut-dialog input[type="text"], .cut-root textarea {
+  font: inherit; color: var(--gray12); background: var(--gray1); border: 1px solid var(--gray5); border-radius: 4px; padding: 3px 6px; min-width: 0; }
+.cut-select { height: 24px; padding: 0 4px; }
+.cut-select:focus, .cut-root input:focus, .cut-root textarea:focus, .cut-dialog input:focus { outline: none; border-color: var(--blue6); }
+.cut-slider { accent-color: var(--cut-accent); }
+.cut-number { display: inline-flex; align-items: baseline; gap: 2px; color: var(--blue8); cursor: ew-resize; font-variant-numeric: tabular-nums;
+  border-bottom: 1px dotted currentColor; padding: 0 1px; outline: none; }
+.cut-number:focus-visible { box-shadow: 0 0 0 1px var(--blue6); border-radius: 2px; }
+.cut-number.disabled { color: var(--gray7); cursor: default; }
+.cut-number.dragging { color: var(--cut-accent); }
+.cut-number-unit { color: var(--gray8); font-size: 11px; }
+.cut-number-input { width: 70px; padding: 0 3px !important; }
+.cut-timecode { font-family: var(--mono); color: var(--cut-accent); cursor: text; font-variant-numeric: tabular-nums; outline: none; }
+.cut-timecode-input { width: 104px; font-family: var(--mono) !important; padding: 0 3px !important; }
+
+/* workspace grid */
+.cut-grid { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 4px; gap: 0; }
+.cut-row { display: flex; flex: 1 1 0; min-height: 80px; min-width: 0; }
+.cut-slot { display: flex; flex-direction: column; flex: 1 1 0; min-width: 80px; min-height: 0; background: var(--gray2); border: 1px solid var(--gray3);
+  border-radius: 6px; overflow: hidden; }
+.cut-slot-tabs { display: flex; gap: 0; height: 28px; flex: none; border-bottom: 1px solid var(--gray3); overflow: hidden; padding: 0 4px; }
+.cut-slot-tab { border: 0; background: none; color: var(--gray9); font: inherit; padding: 0 10px; white-space: nowrap; border-bottom: 2px solid transparent; cursor: default; }
+.cut-slot-tab:hover { color: var(--gray12); }
+.cut-slot-tab[aria-selected="true"] { color: var(--gray12); border-bottom-color: var(--gray8); }
+.cut-slot:has(.cut-panel.focused) .cut-slot-tab[aria-selected="true"] { border-bottom-color: var(--cut-accent); }
+.cut-slot:has(.cut-panel.focused) { border-color: color-mix(in srgb, var(--cut-accent) 55%, var(--gray3)); }
+.cut-slot-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.cut-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; outline: none; }
+.cut-panel-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.cut-splitter { flex: none; position: relative; z-index: 1; }
+.cut-splitter.v { width: 4px; cursor: col-resize; }
+.cut-splitter.h { height: 4px; cursor: row-resize; }
+.cut-splitter:hover { background: color-mix(in srgb, var(--cut-accent) 40%, transparent); }
+.cut-empty { margin: auto; padding: 16px; color: var(--gray8); text-align: center; max-width: 320px; line-height: 1.5; }
+
+/* toast */
+.cut-toast { position: absolute; left: 50%; bottom: 18px; transform: translate(-50%, 8px); padding: 6px 14px; border-radius: 6px; background: var(--gray3);
+  color: var(--gray12); box-shadow: 0 6px 18px #0008; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 20; max-width: 70%; }
+.cut-toast.shown { opacity: 1; transform: translate(-50%, 0); }
+.cut-toast[data-kind="warn"], .cut-toast[data-kind="error"] { border-left: 3px solid var(--cut-accent); }
+
+/* drag ghost */
+.cut-drag-ghost { position: fixed; z-index: 1000; pointer-events: none; padding: 3px 8px; border-radius: 4px; background: var(--cut-accent); color: #fff;
+  font-size: 12px; box-shadow: 0 4px 12px #0007; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+body.cut-dragging, body.cut-dragging * { cursor: grabbing !important; }
+
+/* dialogs */
+.cut-dialog .cut-form { display: flex; flex-direction: column; gap: 8px; }
+.cut-form-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 26px; }
+.cut-form-label { color: var(--gray9); }
+.cut-form-hint { color: var(--gray8); font-size: 11px; }
+.cut-form-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--gray3); color: var(--gray12); font-weight: 600; }
+.cut-form-group[hidden] { display: none; }
+.cut-dialog-note { margin-top: 6px; color: var(--gray8); }
+.cut-recovery-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.cut-recovery-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; }
+.cut-recovery-row:hover { background: var(--gray3); }
+.cut-recovery-time { color: var(--gray8); font-size: 11px; }
+
+/* monitors */
+.cut-monitor { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--gray2); container-type: inline-size; }
+.cut-monitor-head { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; color: var(--gray9); flex: none; }
+.cut-monitor-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-monitor-head .cut-btn { height: 20px; min-width: 20px; width: 20px; }
+.cut-monitor-view { flex: 1; min-height: 40px; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  background: var(--cut-monitor-bg); margin: 0 6px; border-radius: 4px; }
+.cut-monitor-view.zoomed { overflow: auto; justify-content: flex-start; align-items: flex-start; }
+.cut-monitor-view:fullscreen { margin: 0; border-radius: 0; background: #000; }
+.cut-monitor-frame { position: relative; flex: none; background: #000; box-shadow: 0 0 0 1px #0006; }
+.cut-monitor-frame[hidden] { display: none; }
+.cut-monitor-canvas, .cut-monitor-wave { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.cut-monitor-wave { background: #0d1513; }
+.cut-monitor-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center;
+  color: var(--gray8); background: var(--cut-monitor-bg); }
+.cut-monitor-empty[hidden] { display: none; }
+.cut-safe { position: absolute; inset: 0; pointer-events: none; }
+.cut-safe-action, .cut-safe-title { position: absolute; border: 1px solid rgba(255, 255, 255, .55); }
+.cut-safe-action { inset: 3.5%; }
+.cut-safe-title { inset: 5%; border-style: dashed; }
+.cut-dropped { position: absolute; right: 8px; top: 6px; padding: 1px 6px; border-radius: 3px; background: #b03a3acc; color: #fff; font-size: 11px; }
+.cut-trim-view { display: flex; gap: 6px; width: 100%; height: 100%; align-items: center; justify-content: center; padding: 6px; box-sizing: border-box; }
+.cut-trim-view[hidden] { display: none; }
+.cut-trim-canvas { flex: 1 1 0; min-width: 0; max-height: 100%; object-fit: contain; background: #000; }
+.cut-scrub { position: relative; height: 14px; margin: 4px 10px 0; flex: none; border-radius: 3px; background: var(--gray3); cursor: pointer; touch-action: none; }
+.cut-scrub-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--cut-accent) 35%, transparent); }
+.cut-scrub-range[hidden] { display: none; }
+.cut-scrub-head { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--cut-playhead); border-radius: 1px; }
+.cut-transport { display: grid; grid-template-columns: minmax(90px, 1fr) auto auto minmax(90px, 1fr); align-items: center; gap: 6px; padding: 4px 8px 2px; flex: none; min-width: 0; }
+.cut-transport-side { display: flex; align-items: center; min-width: 0; }
+.cut-transport-side.right { justify-content: flex-end; color: var(--gray9); font-family: var(--mono); }
+.cut-transport-mid, .cut-transport-extra { display: flex; align-items: center; gap: 1px; }
+.cut-transport-extra:empty { display: none; }
+.cut-transport .cut-tr-play { width: 30px; height: 30px; border-radius: 50%; background: var(--gray4); color: var(--gray12); }
+.cut-transport .cut-tr-play:hover:not(:disabled) { background: var(--gray5); }
+.cut-transport .cut-tr-play.playing { color: var(--cut-accent); }
+.cut-monitor-tc { font-size: 13px; }
+.cut-monitor-tools { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 8px 4px; flex: none; }
+.cut-monitor-tools .cut-select { height: 22px; font-size: 11px; }
+.cut-monitor-tools .cut-tr-proxy { height: 22px; font-size: 11px; padding: 0 6px; }
+.cut-drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 4px; color: var(--gray9); cursor: grab; }
+.cut-drag-handle:hover { background: var(--gray4); color: var(--gray12); }
+.cut-monitor-source.no-source .cut-drag-handle, .cut-monitor-source.no-source .cut-tr-insert, .cut-monitor-source.no-source .cut-tr-overwrite { opacity: .4; pointer-events: none; }
+.cut-monitor-source:not(.no-source) .cut-monitor-frame { cursor: grab; }
+
+/* small screens: the monitor tools fold into the transport row */
+@container (max-width: 420px) { .cut-transport { grid-template-columns: 1fr auto; } .cut-transport-side.right { display: none; } }
+.cut-root [hidden], .cut-dialog [hidden] { display: none !important; }

@@ -33,22 +33,36 @@
     <button id="chooseCode" class="chooser-card" data-mode="code">
       <span class="chooser-label"><span class="chooser-name"></span><span class="chooser-sub"></span></span>
       <svg class="chooser-icon" viewBox="0 0 256 256" aria-hidden="true">
-        <defs><linearGradient id="codePlate" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5a9bff"/><stop offset="1" stop-color="#2a52d8"/></linearGradient></defs>
+        <defs><linearGradient id="codePlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262932"/><stop offset="1" stop-color="#101116"/></linearGradient></defs>
         <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#codePlate)"/>
-        <path d="M102 82 52 128l50 46M154 82l50 46-50 46" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M140 66 116 190" fill="none" stroke="#cfe0ff" stroke-width="16" stroke-linecap="round"/>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
+        <path d="M100 86 56 128l44 42M156 86l44 42-44 42" fill="none" stroke="#5b9bff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M140 74 116 182" stroke="#5b9bff" stroke-opacity=".55" stroke-width="14" stroke-linecap="round"/>
+        <circle cx="204" cy="204" r="9" fill="#5b9bff"/>
       </svg>
     </button>
     <button id="chooseCraft" class="chooser-card" data-mode="craft">
       <span class="chooser-label"><span class="chooser-name"></span><span class="chooser-sub"></span></span>
       <svg class="chooser-icon" viewBox="0 0 256 256" aria-hidden="true">
-        <defs><linearGradient id="craftPlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fe3a2"/><stop offset="1" stop-color="#1f9b63"/></linearGradient></defs>
+        <defs><linearGradient id="craftPlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262932"/><stop offset="1" stop-color="#101116"/></linearGradient></defs>
         <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#craftPlate)"/>
-        <path d="M128 54 206 96 128 138 50 96Z" fill="#7bd651"/>
-        <path d="M50 96 128 138V206L50 164Z" fill="#8a5a33"/>
-        <path d="M206 96 128 138V206L206 164Z" fill="#6c4526"/>
-        <path d="M50 96 128 138V156L108 145 96 152 78 140 64 130 50 124Z" fill="#62bd3e"/>
-        <path d="M206 96 128 138V156L146 146 160 154 178 140 192 132 206 122Z" fill="#4fa32f"/>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
+        <path d="M128 52 194 90V166L128 204 62 166V90Z M62 90 128 128 194 90 M128 128V204" fill="none" stroke="#3ddc84" stroke-width="14" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M128 70 166 92 128 114 90 92Z" fill="#3ddc84" opacity=".35"/>
+        <circle cx="204" cy="204" r="9" fill="#3ddc84"/>
+      </svg>
+    </button>
+    <button id="chooseCut" class="chooser-card" data-mode="cut">
+      <span class="chooser-label"><span class="chooser-name"></span><span class="chooser-sub"></span></span>
+      <svg class="chooser-icon" viewBox="0 0 256 256" aria-hidden="true">
+        <defs><linearGradient id="cutPlate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262932"/><stop offset="1" stop-color="#101116"/></linearGradient></defs>
+        <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#cutPlate)"/>
+        <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
+        <circle cx="90" cy="172" r="24" fill="none" stroke="#ff7a3d" stroke-width="14"/>
+        <circle cx="166" cy="172" r="24" fill="none" stroke="#ff7a3d" stroke-width="14"/>
+        <path d="M104 152 178 58M152 152 78 58" stroke="#ff7a3d" stroke-width="14" stroke-linecap="round"/>
+        <circle cx="128" cy="122" r="7" fill="#101116"/>
+        <circle cx="204" cy="204" r="9" fill="#ff7a3d"/>
       </svg>
     </button>
     <span id="chooserSep" class="chooser-sep" hidden></span>

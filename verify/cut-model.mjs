@@ -1,0 +1,1096 @@
+// Nano Studio Cut's project model, keyframes, edit commands and caption files, in plain Node (no Electron, no media).
+// Checks: every command's effect on a small project against the expected timeline, and that undo gives back the exact
+// previous JSON and redo the next; 2,000 random valid commands on a random project, each leaving a valid project,
+// a failed command changing nothing, and undoing all of them giving back the start; sync lock, linked clips, the
+// trim clamps at source ends and neighbours in normal, ripple and roll; frame snapping; keyframe interpolation values;
+// history grouping, dirty state and the step limit; SRT and VTT round trips with CP949 and UTF-16 bytes and odd
+// timestamps; migrate() of older and newer files.
+// Usage: node verify/cut-model.mjs
+import crypto from 'crypto';
+import { readFileSync } from 'fs';
+import { createRequire } from 'module';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import vm from 'vm';
+
+const require = createRequire(import.meta.url);
+const time = require('../renderer/features/cut/time.js');
+const model = require('../renderer/features/cut/model.js');
+const kf = require('../renderer/features/cut/keyframes.js');
+const C = require('../renderer/features/cut/commands.js');
+const srt = require('../renderer/features/cut/srt.js');
+
+const S = JSON.stringify;
+const results = [];
+const check = (ok, label) => { results.push({ ok: !!ok, label }); if (!ok) console.log(`FAIL ${label}`); };
+const eq = (got, want, label) => check(S(got) === S(want), `${label}${S(got) === S(want) ? '' : ` (got ${S(got)}, want ${S(want)})`}`);
+const near = (a, b, eps, label) => check(Math.abs(a - b) <= eps, `${label} (${a} vs ${b})`);
+const throws = (fn, code, label) => {
+  try { fn(); check(false, `${label}: did not throw`); } catch (err) { check(!code || err.code === code, `${label} (${err.code}: ${err.message})`); }
+};
+const SEC = time.TICKS;
+const F = time.frameTicks([30, 1]);
+const f = (n) => n * F;
+
+const VID = { w: 1920, h: 1080, fps: [30, 1], codec: 'avc1.640028', vfr: false, rotation: 0 };
+const AUD = { rate: 48000, channels: 2 };
+const MEDIA = [
+  { path: 'D:/clips/a.mp4', name: 'a.mp4', kind: 'video', duration: 20 * SEC + 1234, video: VID, audio: AUD },
+  { path: 'D:/clips/music.wav', name: 'music.wav', kind: 'audio', duration: 60 * SEC, video: null, audio: AUD },
+  { path: 'D:/clips/pic.png', name: 'pic.png', kind: 'image', duration: 0, video: { w: 640, h: 480 }, audio: null },
+  { path: 'D:/clips/b.mp4', name: 'b.mp4', kind: 'video', duration: 10 * SEC, video: VID, audio: null },
+];
+
+function setup() {
+  const project = model.createProject();
+  const h = C.createHistory(project);
+  const [a, music, pic, b] = h.do(C.importMedia(MEDIA)).ids;
+  return { h, s: project.sequences[0].id, a, music, pic, b, seq: () => h.project.sequences[0] };
+}
+const clipsOf = (h, s) => h.project.sequences.find((x) => x.id === s).clips;
+const clip = (h, s, id) => clipsOf(h, s).find((x) => x.id === id);
+const fr = (t) => Math.round((t / F) * 1000) / 1000;
+// Each track as "start-end:sourceStart" in frames (sourceStart is out for a reversed clip), sorted by start.
+function lay(h, s) {
+  const seq = h.project.sequences.find((x) => x.id === s);
+  const out = {};
+  for (const tr of seq.tracks) {
+    out[tr.id] = seq.clips.filter((c) => c.track === tr.id).sort((x, y) => x.start - y.start)
+      .map((c) => `${fr(c.start)}-${fr(model.clipEnd(c))}${c.source.media ? `:${fr(c.reverse ? c.out : c.in)}` : ''}`).join(' ');
+  }
+  return out;
+}
+// do, check the result validates, undo (exact previous JSON), redo (exact next JSON).
+function step(h, cmd, label) {
+  const before = h.serialize();
+  const r = h.do(cmd);
+  const after = h.serialize();
+  const valid = model.validate(h.project);
+  h.undo();
+  const undone = h.serialize();
+  h.redo();
+  const redone = h.serialize();
+  check(valid.ok && after !== before && undone === before && redone === after, `${label}: valid, undo exact, redo exact${valid.ok ? '' : ` ${valid.errors.join('; ')}`}`);
+  return r;
+}
+const unchanged = (h, fn, code, label) => {
+  const before = h.serialize();
+  throws(fn, code, label);
+  check(h.serialize() === before, `${label}: nothing changed`);
+};
+const place = (h, s, o) => h.do(C.place(s, { mode: 'overwrite', ...o })).ids;
+
+// ---------- model ----------
+try {
+  const p = model.createProject();
+  check(model.validate(p).ok, 'a new project validates');
+  eq(p.sequences[0].tracks.map((t) => t.id), ['V1', 'V2', 'A1', 'A2'], 'a new sequence has V1, V2, A1, A2');
+  eq([p.sequences[0].fps, p.sequences[0].rate, p.nextId], [[30, 1], 48000, 2], 'sequence defaults and nextId');
+
+  const { h, s, a } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: f(10), out: f(100), at: f(30), video: 'V1', audio: 'A1' });
+  const seq = h.project.sequences[0];
+  const vc = clip(h, s, v);
+  eq([model.clipDuration(vc), model.clipEnd(vc), model.sequenceDuration(seq)], [f(90), f(120), f(120)], 'clipDuration, clipEnd, sequenceDuration');
+  eq(model.clipsAt(seq, f(30)).map((c) => c.track), ['V1', 'A1'], 'clipsAt: V1 first, then audio');
+  eq(model.clipsAt(seq, f(30), { kind: 'audio' }).map((c) => c.id), [au], 'clipsAt by kind');
+  eq([model.clipsAt(seq, f(29)).length, model.clipsAt(seq, f(120)).length], [0, 0], 'clipsAt: start included, end excluded');
+  eq(model.sourceTime(vc, f(40)), f(20), 'sourceTime at speed 1');
+  eq([model.trackIndex(seq, 'V2'), model.trackIndex(seq, 'A1'), model.trackIndex(seq, 'X')], [1, 0, -1], 'trackIndex within its kind');
+  eq(model.linkedClips(seq, vc).map((c) => c.id), [au], 'linkedClips');
+  eq(model.mediaOf(h.project, vc).id, a, 'mediaOf');
+  const fast = { ...model.clone(vc), speed: 2, in: f(0), out: f(180) };
+  eq([model.clipDuration(fast), model.sourceTime(fast, f(40))], [f(90), f(20)], 'speed 2: duration and source time');
+  const rev = { ...model.clone(vc), reverse: true };
+  eq([model.sourceTime(rev, f(30)), model.sourceTime(rev, f(119))], [f(100) - 1, f(11) - 1], 'reverse: starts just before out');
+  eq(model.sourceTime({ ...model.clone(vc), source: { media: a, freeze: true } }, f(90)), f(10), 'freeze shows its in frame');
+
+  const bad = (mut, label) => {
+    const q = model.clone(h.project);
+    mut(q, q.sequences[0]);
+    check(!model.validate(q).ok, `validate refuses ${label}`);
+  };
+  bad((q, sq) => { sq.clips[0].start = f(30) + 5; }, 'a start off the frame grid');
+  bad((q, sq) => { sq.clips.push({ ...model.clone(sq.clips[0]), id: 'c900', link: null, start: f(60) }); q.nextId = 1000; }, 'overlapping clips on a track');
+  bad((q, sq) => { sq.clips[1].id = sq.clips[0].id; }, 'an id used twice');
+  bad((q, sq) => { sq.clips[0].id = `c${q.nextId + 5}`; }, 'an id at or above nextId');
+  bad((q, sq) => { sq.clips[0].source.media = 'm999'; }, 'a clip of missing media');
+  bad((q, sq) => { sq.clips[1].link = null; }, 'a link with one clip');
+  bad((q, sq) => { sq.transitions.push({ id: 'x1', track: 'V1', at: f(45), type: 'dissolve', duration: f(10), align: 'center', params: {} }); }, 'a transition off a clip edge');
+  bad((q, sq) => { sq.clips[0].keyframes.opacity = [{ t: f(5), v: 1, ease: 'linear' }, { t: f(2), v: 0, ease: 'linear' }]; }, 'keyframes out of order');
+  bad((q, sq) => { sq.clips[0].keyframes.volume = [{ t: 0, v: 1, ease: 'linear' }]; }, 'a video clip keyframing volume');
+  bad((q, sq) => { sq.clips[0].out = 21 * SEC; sq.clips[0].in = 21 * SEC - f(90); }, 'in/out past the media end');
+  bad((q, sq) => { sq.clips[0].source.media = q.media[1].id; }, 'audio-only media on a video track');
+  bad((q, sq) => { sq.clips[1].props.opacity = 50; }, 'a video property on an audio clip');
+  bad((q) => { q.sequences[0].fps = [17, 1]; }, 'a frame rate the editor does not offer');
+
+  // migrate
+  throws(() => model.migrate({ format: 'ncut', version: 2 }), 'newer', 'migrate refuses a newer version');
+  throws(() => model.migrate('{"hello":1}'), 'notProject', 'migrate refuses a file that is not a project');
+  const old = model.migrate({
+    format: 'ncut', version: 1,
+    media: [{ id: 'm1', path: 'D:/영상/여행_01.mp4', kind: 'video', duration: 5080320000000, video: VID, audio: AUD, interpret: null, proxy: 'cache:ab12' }],
+    bins: [{ id: 'b1', name: '촬영본', items: ['m1'] }],
+    sequences: [{
+      id: 's1', name: '브이로그', w: 1920, h: 1080, fps: [30, 1], rate: 48000,
+      tracks: [{ id: 'V1', kind: 'video', locked: false, visible: true, syncLock: true }, { id: 'A1', kind: 'audio', mute: false, solo: false, volume: 0, pan: 0 }],
+      clips: [{ id: 'c1', track: 'V1', source: { media: 'm1' }, start: 0, in: 254016000000, out: 2540160000000, speed: 1, reverse: false, link: null, group: null, enabled: true, label: 'blue',
+        props: { position: [0, 0], scale: [100, 100], rotation: 0, anchor: [0, 0], opacity: 100 }, keyframes: { opacity: [{ t: 0, v: 0, ease: 'out' }, { t: 7620480000, v: 100 }] },
+        effects: [{ id: 'e1', type: 'color.basic', on: true, params: { exposure: 0.3 } }] }],
+      transitions: [], markers: [{ id: 'k7', t: 0, name: '인트로', kind: 'chapter', color: 'green' }],
+      captions: [{ track: 'CC1', lang: 'ko', items: [{ id: 'q2', start: 0, end: 762048000000, text: '안녕하세요' }] }],
+    }],
+  });
+  const ov = model.validate(old);
+  check(ov.ok, `migrate fills an old file to a valid project${ov.ok ? '' : `: ${ov.errors.join('; ')}`}`);
+  eq([old.nextId > 7, old.sequences[0].clips[0].keyframes.opacity[0].ease, old.sequences[0].clips[0].props.crop, old.media[0].proxy], [true, 'easeOut', [0, 0, 0, 0], { path: 'cache:ab12' }], 'migrate: nextId above every id, old ease names, missing props, proxy');
+  check(C.createHistory(old) && true, 'a migrated project can be edited');
+  throws(() => C.createHistory({ ...model.createProject(), nextId: 0 }), 'damaged', 'createHistory refuses a damaged project');
+} catch (err) {
+  check(false, `model: ${err.stack}`);
+}
+
+// ---------- placing, frame snapping ----------
+try {
+  const { h, s, a, music, pic, b } = setup();
+  const [v1, a1] = step(h, C.place(s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1', mode: 'overwrite' }), 'place overwrite').ids;
+  eq(lay(h, s), { V1: '0-90:0', V2: '', A1: '0-90:0', A2: '' }, 'place puts linked video and audio');
+  check(clip(h, s, v1).link && clip(h, s, v1).link === clip(h, s, a1).link, 'placed video and audio share a link');
+  eq(h.list().at(-1).label, 'Overwrite', 'history label of an overwrite');
+  place(h, s, { source: { media: music }, in: 0, out: f(300), at: 0, video: 'V1', audio: 'A2' });
+  eq(lay(h, s).A2, '0-300:0', 'audio-only media ignores the video target');
+  step(h, C.place(s, { source: { media: b }, in: 0, out: f(60), at: f(30), video: 'V1', audio: 'A1', mode: 'insert' }), 'place insert');
+  eq(lay(h, s), { V1: '0-30:0 30-90:0 90-150:30', V2: '', A1: '0-30:0 90-150:30', A2: '0-30:0 90-360:30' }, 'insert splits and pushes the targeted and every sync-locked track');
+  eq(h.list().at(-1).label, 'Insert', 'history label of an insert');
+  const sq = h.project.sequences[0];
+  const rightV = sq.clips.find((c) => c.track === 'V1' && c.start === f(90));
+  const rightA = sq.clips.find((c) => c.track === 'A1' && c.start === f(90));
+  check(rightV.link && rightV.link === rightA.link && rightV.link !== clip(h, s, v1).link, 'the right halves of a split linked pair share a new link');
+  h.undo();
+  h.do(C.setTrack(s, 'A2', { syncLock: false }));
+  h.do(C.place(s, { source: { media: b }, in: 0, out: f(60), at: f(30), video: 'V1', mode: 'insert' }));
+  eq(lay(h, s).A2, '0-300:0', 'a track without sync lock does not move on insert');
+  h.undo();
+  h.do(C.setTrack(s, 'A2', { syncLock: true, locked: true }));
+  h.do(C.place(s, { source: { media: b }, in: 0, out: f(60), at: f(30), video: 'V1', mode: 'insert' }));
+  eq(lay(h, s).A2, '0-300:0', 'a locked track does not move on insert');
+  unchanged(h, () => h.do(C.place(s, { source: { media: music }, in: 0, out: f(10), at: 0, audio: 'A2' })), 'locked', 'placing onto a locked track');
+  unchanged(h, () => h.do(C.place(s, { source: { media: music }, in: 0, out: f(10), at: 0, video: 'V1' })), 'noTarget', 'audio media with only a video target');
+  unchanged(h, () => h.do(C.place(s, { source: { media: a }, in: 0, out: 100, at: 0, video: 'V2' })), 'tooShort', 'a clip shorter than a frame');
+
+  // overwrite trims what is under it; times snap to frames
+  const g = setup();
+  place(g.h, g.s, { source: { media: g.a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  step(g.h, C.place(g.s, { source: { media: g.b }, in: f(5) + 1000, out: f(35) + 7, at: f(60) + F / 2, video: 'V1', audio: 'A1' }), 'overwrite over a clip');
+  eq(lay(g.h, g.s), { V1: '0-60:0 60-90:5', V2: '', A1: '0-90:0', A2: '' }, 'overwrite trims the clip under it, only on the targeted track; times snap to frame starts');
+  step(g.h, C.place(g.s, { source: { media: g.b }, in: 0, out: f(10), at: f(20), video: 'V1' }), 'overwrite inside a clip');
+  eq(lay(g.h, g.s).V1, '0-20:0 20-30:0 30-60:30 60-90:5', 'overwrite inside a clip cuts it in two');
+  // the end of the media clamps out; a still gets the default length
+  step(g.h, C.place(g.s, { source: { media: g.a }, in: f(590), at: f(200), video: 'V2' }), 'place to the media end');
+  eq(lay(g.h, g.s).V2, '200-210:590', 'out defaults to the media end, floored to a frame');
+  const [still] = step(g.h, C.place(g.s, { source: { media: g.pic }, at: f(300), video: 'V2' }), 'place an image').ids;
+  eq([model.clipDuration(clip(g.h, g.s, still)), lay(g.h, g.s).V2], [5 * SEC, '200-210:590 300-450:0'], 'an image gets the still duration');
+
+  // three-point edits
+  const t3 = setup();
+  step(t3.h, C.placeRange(t3.s, { source: { media: t3.a }, in: f(10), out: f(40), range: { in: f(100) }, video: 'V1', audio: 'A1', mode: 'overwrite' }), 'three-point: source in/out + sequence in');
+  eq(lay(t3.h, t3.s).V1, '100-130:10', 'three-point edit at the sequence In');
+  t3.h.do(C.placeRange(t3.s, { source: { media: t3.a }, in: f(10), out: f(40), range: { out: f(300) }, video: 'V2' }));
+  eq(lay(t3.h, t3.s).V2, '270-300:10', 'three-point edit backtimed from the sequence Out');
+  t3.h.do(C.placeRange(t3.s, { source: { media: t3.b }, in: f(20), range: { in: f(400), out: f(415) }, video: 'V2' }));
+  eq(lay(t3.h, t3.s).V2, '270-300:10 400-415:20', 'three-point edit: source In, sequence In and Out');
+  unchanged(t3.h, () => t3.h.do(C.placeRange(t3.s, { source: { media: t3.b }, range: {}, video: 'V2' })), 'noRange', 'three-point edit without points');
+} catch (err) {
+  check(false, `placing: ${err.stack}`);
+}
+
+// ---------- moving and linked clips ----------
+try {
+  const { h, s, a, b } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  const [w] = place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(120), video: 'V1' });
+  step(h, C.move(s, [v], { delta: f(10) }), 'move linked');
+  eq(lay(h, s), { V1: '10-100:0 120-180:0', V2: '', A1: '10-100:0', A2: '' }, 'linked clips move together');
+  h.undo();
+  step(h, C.move(s, [v], { delta: f(10), linked: false }), 'move one side');
+  eq(lay(h, s), { V1: '10-100:0 120-180:0', V2: '', A1: '0-90:0', A2: '' }, 'linked: false moves one side only');
+  h.undo();
+  step(h, C.move(s, [v], { delta: f(60) }), 'move over a clip');
+  eq(lay(h, s), { V1: '60-150:0 150-180:30', V2: '', A1: '60-150:0', A2: '' }, 'a move overwrites what it lands on');
+  h.undo();
+  step(h, C.move(s, [v], { trackDelta: 1 }), 'move up a track');
+  eq(lay(h, s), { V1: '120-180:0', V2: '0-90:0', A1: '', A2: '0-90:0' }, 'trackDelta moves video up and audio down a track');
+  h.undo();
+  step(h, C.move(s, [w], { delta: -f(80), insert: true }), 'insert move');
+  eq(lay(h, s), { V1: '0-40:0 40-100:0 100-150:40', V2: '', A1: '0-40:0 100-150:40', A2: '' }, 'an insert move pushes the sync-locked tracks apart');
+  h.undo();
+  const r = h.do(C.move(s, [v], { delta: -f(50) }));
+  eq(r.delta, 0, 'a move before 0 stops at 0');
+  unchanged(h, () => h.do(C.move(s, [v], { trackDelta: 5 })), 'noTrack', 'a move off the tracks');
+  h.do(C.setTrack(s, 'V2', { locked: true }));
+  unchanged(h, () => h.do(C.move(s, [v], { trackDelta: 1 })), 'locked', 'a move onto a locked track');
+  const n0 = h.list().length;
+  eq([h.do(C.move(s, [v], { delta: F / 3 })).delta, h.list().length], [0, n0], 'a move of less than half a frame snaps to no move and no step');
+} catch (err) {
+  check(false, `moving: ${err.stack}`);
+}
+
+// ---------- trimming: modes and clamps ----------
+try {
+  const { h, s, a, b, pic } = setup();
+  // a: 20 s + 1234 ticks of media = 600 whole frames. Clip [30,120) shows source 100..190.
+  const [v, au] = place(h, s, { source: { media: a }, in: f(100), out: f(190), at: f(30), video: 'V1', audio: 'A1' });
+  const [n] = place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(150), video: 'V1' });
+  let r = step(h, C.trim(s, v, { edge: 'end', delta: f(10) }), 'trim end out');
+  eq([r, lay(h, s).V1, lay(h, s).A1], [{ applied: f(10), clamped: null }, '30-130:100 150-210:0', '30-130:100'], 'a normal trim of the end, linked audio with it');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: f(50) }));
+  eq([r, lay(h, s).V1], [{ applied: f(30), clamped: 'neighbour' }, '30-150:100 150-210:0'], 'a normal trim stops at the next clip');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'start', delta: -f(200) }));
+  eq([r, lay(h, s).V1], [{ applied: -f(30), clamped: 'neighbour' }, '0-120:70 150-210:0'], 'a start trim stops at 0');
+  h.undo();
+  h.do(C.move(s, [v], { delta: f(200) }));
+  r = h.do(C.trim(s, v, { edge: 'start', delta: -f(50) }));
+  eq([r, lay(h, s).V1], [{ applied: -f(20), clamped: 'neighbour' }, '150-210:0 210-320:80'], 'a start trim stops at the clip before');
+  h.undo();
+  h.undo();
+  h.do(C.move(s, [v], { delta: f(300) }));
+  r = h.do(C.trim(s, v, { edge: 'start', delta: -f(150) }));
+  eq([r, lay(h, s).V1], [{ applied: -f(100), clamped: 'source' }, '150-210:0 230-420:0'], 'a start trim stops at the source start');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: f(1000) }));
+  eq([r, lay(h, s).A1], [{ applied: f(410), clamped: 'source' }, '330-830:100'], 'an end trim stops at the source end (whole frames)');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: -f(500) }));
+  eq([r, lay(h, s).A1], [{ applied: -f(89), clamped: 'length' }, '330-331:100'], 'a trim keeps one frame');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: f(10), linked: false }));
+  eq([lay(h, s).V1, lay(h, s).A1], ['150-210:0 330-430:100', '330-420:100'], 'linked: false trims one side');
+  h.undo();
+  h.undo();
+
+  // ripple
+  place(h, s, { source: { media: b }, in: 0, out: f(30), at: f(400), video: 'V2' });
+  r = step(h, C.trim(s, v, { edge: 'end', delta: -f(20), mode: 'ripple' }), 'ripple trim end in');
+  eq([r.applied, lay(h, s)], [-f(20), { V1: '30-100:100 130-190:0', V2: '380-410:0', A1: '30-100:100', A2: '' }], 'a ripple trim pulls everything after, on every sync-locked track');
+  eq(h.list().at(-1).label, 'Ripple Trim', 'ripple trim label');
+  h.undo();
+  r = step(h, C.trim(s, v, { edge: 'end', delta: f(100), mode: 'ripple' }), 'ripple trim end out');
+  eq([r, lay(h, s)], [{ applied: f(100), clamped: null }, { V1: '30-220:100 250-310:0', V2: '500-530:0', A1: '30-220:100', A2: '' }], 'a ripple trim out pushes instead of stopping at the neighbour');
+  h.undo();
+  r = step(h, C.trim(s, v, { edge: 'start', delta: f(15), mode: 'ripple' }), 'ripple trim start in');
+  eq(lay(h, s), { V1: '30-105:115 135-195:0', V2: '385-415:0', A1: '30-105:115', A2: '' }, 'a ripple trim of the start keeps the start and pulls the rest');
+  h.undo();
+  r = step(h, C.trim(s, v, { edge: 'start', delta: -f(500), mode: 'ripple' }), 'ripple trim start out');
+  eq([r, lay(h, s)], [{ applied: -f(100), clamped: 'source' }, { V1: '30-220:0 250-310:0', V2: '500-530:0', A1: '30-220:0', A2: '' }], 'a ripple trim of the start out stops at the source start');
+  h.undo();
+
+  // roll
+  h.do(C.move(s, [n], { delta: -f(30) }));
+  eq(lay(h, s).V1, '30-120:100 120-180:0', 'roll setup: two touching clips');
+  r = step(h, C.trim(s, v, { edge: 'end', delta: f(10), mode: 'roll' }), 'roll right');
+  eq([r, lay(h, s).V1, lay(h, s).A1], [{ applied: f(10), clamped: null }, '30-130:100 130-180:10', '30-130:100'], 'a roll moves the edit point, total length the same');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: -f(10), mode: 'roll' }));
+  eq([r, lay(h, s).V1], [{ applied: 0, clamped: 'source' }, '30-120:100 120-180:0'], 'a roll stops when the next clip has no head');
+  r = h.do(C.trim(s, n, { edge: 'start', delta: f(100), mode: 'roll' }));
+  eq([r, lay(h, s).V1], [{ applied: f(59), clamped: 'length' }, '30-179:100 179-180:59'], 'a roll from the right clip keeps it one frame');
+  h.undo();
+  const rl = setup();
+  const [ra] = place(rl.h, rl.s, { source: { media: rl.a }, in: 0, out: f(60), at: 0, video: 'V1' });
+  const [rb] = place(rl.h, rl.s, { source: { media: rl.a }, in: f(200), out: f(260), at: f(60), video: 'V1' });
+  r = rl.h.do(C.trim(rl.s, rb, { edge: 'start', delta: -f(1000), mode: 'roll' }));
+  eq([r, lay(rl.h, rl.s).V1], [{ applied: -f(59), clamped: 'neighbour' }, '0-1:0 1-120:141'], 'a roll from the right clip stops when the left one is one frame');
+  rl.h.undo();
+  r = rl.h.do(C.trim(rl.s, ra, { edge: 'end', delta: f(1000), mode: 'roll' }));
+  eq([r, lay(rl.h, rl.s).V1], [{ applied: f(59), clamped: 'neighbour' }, '0-119:0 119-120:259'], 'a roll from the left clip stops when the right one is one frame');
+  h.do(C.setClip(s, v, { reverse: true }));
+  r = h.do(C.trim(s, v, { edge: 'start', delta: -f(1000) }));
+  eq([r, lay(h, s).V1], [{ applied: -f(30), clamped: 'neighbour' }, '0-120:220 120-180:0'], 'a reversed clip extends its start from out');
+  h.undo();
+  r = h.do(C.trim(s, v, { edge: 'end', delta: f(30), mode: 'roll' }));
+  eq(r, { applied: f(30), clamped: null }, 'a reversed clip rolls into the next one');
+  h.undo();
+  // a still has no source ends
+  const [im] = place(h, s, { source: { media: pic }, at: f(600), out: f(30), video: 'V2' });
+  r = h.do(C.trim(s, im, { edge: 'start', delta: -f(100) }));
+  eq([r, lay(h, s).V2], [{ applied: -f(100), clamped: null }, '400-430:0 500-630:0'], 'a still clip grows past any source length');
+  r = h.do(C.trim(s, im, { edge: 'start', delta: -f(100) }));
+  eq(r, { applied: -f(70), clamped: 'neighbour' }, 'a still clip stops at the clip before');
+  // speed 2: the source room counts double
+  const g = setup();
+  const [sp] = place(g.h, g.s, { source: { media: g.a }, in: f(500), out: f(560), at: 0, video: 'V1' });
+  g.h.do(C.setClip(g.s, sp, { speed: 2 }));
+  r = g.h.do(C.trim(g.s, sp, { edge: 'end', delta: f(100) }));
+  eq([r, lay(g.h, g.s).V1], [{ applied: f(20), clamped: 'source' }, '0-50:500'], 'at speed 2 the source end comes twice as soon');
+  h.do(C.setTrack(s, 'V2', { locked: true }));
+  unchanged(h, () => h.do(C.trim(s, im, { edge: 'end', delta: f(5) })), 'locked', 'trimming a clip on a locked track');
+  // Slow motion late in a long recording: in/out are large and not whole ticks.
+  const lg = setup();
+  const [long] = lg.h.do(C.importMedia([{ path: 'D:/clips/stream.mp4', kind: 'video', duration: 9 * 3600 * SEC, video: VID, audio: AUD }])).ids;
+  const [lv] = place(lg.h, lg.s, { source: { media: long }, in: 8 * 3600 * SEC + f(7), out: 8 * 3600 * SEC + f(97), at: f(30), video: 'V1', audio: 'A1' });
+  let bad = 0;
+  const longer = (k) => () => ({ duration: Math.round((model.clipDuration(clip(lg.h, lg.s, lv)) * k) / F) * F });
+  for (const [i, sp] of [1 / 3, Math.E / 10, Math.SQRT1_2 / 3, 0.0137, 3.3, longer(0.77), longer(1.31)].entries()) {
+    try {
+      lg.h.do(C.setClip(lg.s, lv, typeof sp === 'number' ? { speed: sp, ripple: true } : { ...sp(), ripple: true }));
+      lg.h.do(C.trim(lg.s, lv, { edge: 'start', delta: f(3 + i) }));
+      lg.h.do(C.trim(lg.s, lv, { edge: 'end', delta: -f(2), mode: 'ripple' }));
+      lg.h.do(C.trim(lg.s, lv, { edge: 'start', delta: -f(1), mode: 'ripple' }));
+      lg.h.do(C.split(lg.s, clip(lg.h, lg.s, lv).start + f(1)));
+    } catch (err) {
+      bad++;
+      console.log(`  slow motion at ${sp}: ${err.message} ${err.detail || ''}`);
+    }
+  }
+  check(!bad && model.validate(lg.h.project).ok && clipsOf(lg.h, lg.s).every((x) => model.clipDuration(x) % F === 0), 'slow and fast speeds late in a 9 hour source keep whole-frame durations through trims and splits');
+} catch (err) {
+  check(false, `trimming: ${err.stack}`);
+}
+
+// ---------- cutting: split, remove, Q/W, gaps, lift and extract ----------
+try {
+  const { h, s, a, b, music } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: 0, v: 0 }, { t: f(60), v: 100 }]));
+  h.do(C.setClip(s, au, { fadeIn: f(10), fadeOut: f(20) }));
+  const r = step(h, C.split(s, f(45) + 77), 'split at the playhead');
+  eq(lay(h, s), { V1: '0-45:0 45-90:45', V2: '', A1: '0-45:0 45-90:45', A2: '' }, 'split cuts linked clips together at the frame start');
+  const right = clip(h, s, r.ids[0]);
+  eq([clip(h, s, v).keyframes.opacity, right.keyframes.opacity], [[{ t: 0, v: 0, ease: 'linear' }, { t: f(45), v: 75, ease: 'linear' }], [{ t: 0, v: 75, ease: 'linear' }, { t: f(15), v: 100, ease: 'linear' }]], 'split divides keyframes at the cut');
+  for (const t of [f(10), f(44), f(50), f(80)]) {
+    const c0 = t < f(45) ? clip(h, s, v) : right;
+    near(kf.propValue(c0, 'opacity', t - c0.start, 100), kf.valueAt([{ t: 0, v: 0 }, { t: f(60), v: 100 }], t), 1e-9, `opacity at frame ${t / F} is the same after the split`);
+  }
+  const ra = clipsOf(h, s).find((c) => c.track === 'A1' && c.start === f(45));
+  eq([clip(h, s, au).fadeIn, clip(h, s, au).fadeOut, ra.fadeIn, ra.fadeOut], [f(10), 0, 0, f(20)], 'split keeps the fade in on the left and the fade out on the right');
+  eq(h.do(C.split(s, f(45))).ids, [], 'split on an edit point does nothing');
+  h.do(C.split(s, f(20), { trackIds: ['A1'], linked: false }));
+  eq([lay(h, s).V1, lay(h, s).A1], ['0-45:0 45-90:45', '0-20:0 20-45:20 45-90:45'], 'split on one track with linked: false');
+  h.undo();
+  h.undo();
+
+  // remove and ripple delete with sync lock
+  const k = setup();
+  const [kv] = place(k.h, k.s, { source: { media: k.a }, in: 0, out: f(60), at: 0, video: 'V1', audio: 'A1' });
+  const [kw] = place(k.h, k.s, { source: { media: k.a }, in: f(100), out: f(160), at: f(60), video: 'V1', audio: 'A1' });
+  place(k.h, k.s, { source: { media: k.b }, in: 0, out: f(30), at: f(150), video: 'V2' });
+  place(k.h, k.s, { source: { media: k.music }, in: 0, out: f(300), at: 0, audio: 'A2' });
+  const cc = k.h.do(C.addCaptionTrack(k.s, { items: [{ start: f(10), end: f(20), text: 'one' }, { start: f(70), end: f(80), text: 'two' }, { start: f(130), end: f(140), text: 'three' }] })).id;
+  k.h.do(C.addMarker(k.s, { t: f(130), name: 'chapter', kind: 'chapter' }));
+  step(k.h, C.remove(k.s, [kv]), 'delete');
+  eq(lay(k.h, k.s), { V1: '60-120:100', V2: '150-180:0', A1: '60-120:100', A2: '0-300:0' }, 'delete leaves a gap, takes the linked audio');
+  k.h.undo();
+  step(k.h, C.remove(k.s, [kv], { ripple: true }), 'ripple delete');
+  eq(lay(k.h, k.s), { V1: '0-60:100', V2: '90-120:0', A1: '0-60:100', A2: '0-240:60' }, 'ripple delete pulls every sync-locked track by the same amount');
+  const items = k.h.project.sequences[0].captions[0].items.map((it) => [it.text, fr(it.start), fr(it.end)]);
+  eq(items, [['two', 10, 20], ['three', 70, 80]], 'ripple delete moves the sync-locked captions the same amount');
+  eq(k.h.project.sequences[0].markers.map((m) => fr(m.t)), [70], 'ripple delete moves the sequence markers');
+  eq(k.h.list().at(-1).label, 'Ripple Delete', 'ripple delete label');
+  k.h.undo();
+  k.h.do(C.setTrack(k.s, 'A2', { syncLock: false }));
+  k.h.do(C.setCaptionTrack(k.s, cc, { syncLock: false }));
+  k.h.do(C.remove(k.s, [kv], { ripple: true }));
+  eq([lay(k.h, k.s).A2, k.h.project.sequences[0].captions[0].items.length, k.h.project.sequences[0].markers[0].t], ['0-300:0', 3, f(130)], 'without sync lock the music, the captions and the markers stay');
+  k.h.undo();
+  k.h.undo();
+  k.h.undo();
+
+  // Q and W
+  step(k.h, C.rippleToPlayhead(k.s, f(90), 'before', { trackIds: ['V1'] }), 'Q');
+  eq(lay(k.h, k.s), { V1: '0-60:0 60-90:130', V2: '120-150:0', A1: '0-60:0 60-90:130', A2: '0-60:0 60-270:90' }, 'Q removes from the previous edit to the playhead, linked audio and sync-locked tracks too');
+  k.h.undo();
+  step(k.h, C.rippleToPlayhead(k.s, f(30), 'after', { trackIds: ['V1'] }), 'W');
+  eq(lay(k.h, k.s), { V1: '0-30:0 30-90:100', V2: '120-150:0', A1: '0-30:0 30-90:100', A2: '0-30:0 30-270:60' }, 'W removes from the playhead to the next edit');
+  k.h.undo();
+  eq(k.h.do(C.rippleToPlayhead(k.s, f(500), 'after')).range, null, 'W after the last edit does nothing');
+
+  // gaps
+  const q = setup();
+  place(q.h, q.s, { source: { media: q.b }, in: 0, out: f(30), at: 0, video: 'V1' });
+  place(q.h, q.s, { source: { media: q.b }, in: 0, out: f(30), at: f(60), video: 'V1' });
+  step(q.h, C.closeGap(q.s, 'V1', f(45)), 'close a gap');
+  eq(lay(q.h, q.s).V1, '0-30:0 30-60:0', 'closing a gap pulls the next clips');
+  q.h.undo();
+  const qc = q.h.do(C.addCaptionTrack(q.s, { items: [{ start: f(35), end: f(40), text: '빈자리 위' }] })).id;
+  unchanged(q.h, () => q.h.do(C.closeGap(q.s, 'V1', f(45))), 'gapBlocked', 'a gap under a sync-locked caption');
+  q.h.do(C.setCaptionTrack(q.s, qc, { syncLock: false }));
+  place(q.h, q.s, { source: { media: q.music }, in: 0, out: f(10), at: f(40), audio: 'A1' });
+  unchanged(q.h, () => q.h.do(C.closeGap(q.s, 'V1', f(45))), 'gapBlocked', 'a gap over a sync-locked clip');
+  q.h.do(C.setTrack(q.s, 'A1', { syncLock: false }));
+  q.h.do(C.closeGap(q.s, 'V1', f(45)));
+  eq([lay(q.h, q.s).V1, lay(q.h, q.s).A1], ['0-30:0 30-60:0', '40-50:0'], 'with sync lock off the gap closes on its own track');
+  unchanged(q.h, () => q.h.do(C.closeGap(q.s, 'V1', f(15))), 'noGap', 'closing a gap on a clip');
+
+  // lift and extract
+  const l = setup();
+  place(l.h, l.s, { source: { media: l.a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  place(l.h, l.s, { source: { media: l.music }, in: 0, out: f(120), at: 0, audio: 'A2' });
+  step(l.h, C.lift(l.s, f(30), f(60), ['V1', 'A1']), 'lift');
+  eq(lay(l.h, l.s), { V1: '0-30:0 60-90:60', V2: '', A1: '0-30:0 60-90:60', A2: '0-120:0' }, 'lift leaves a gap on the targeted tracks');
+  l.h.undo();
+  step(l.h, C.extract(l.s, f(30), f(60), ['V1', 'A1']), 'extract');
+  eq(lay(l.h, l.s), { V1: '0-30:0 30-60:60', V2: '', A1: '0-30:0 30-60:60', A2: '0-30:0 30-90:60' }, 'extract closes the gap, and the sync-locked music loses the same range');
+  unchanged(l.h, () => l.h.do(C.lift(l.s, f(30), f(30))), 'noRange', 'lift without a range');
+} catch (err) {
+  check(false, `cutting: ${err.stack}`);
+}
+
+// ---------- clip settings, speed, keyframes, links ----------
+try {
+  const { h, s, a, b } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  place(h, s, { source: { media: b }, in: 0, out: f(30), at: f(90), video: 'V1' });
+  step(h, C.setClip(s, v, { props: { opacity: 50, position: [10, -20] }, name: 'Intro', label: 'blue', enabled: false }), 'clip settings');
+  eq([clip(h, s, v).props.opacity, clip(h, s, v).props.position, clip(h, s, v).name, clip(h, s, v).enabled, clip(h, s, au).enabled], [50, [10, -20], 'Intro', false, true], 'setClip sets props and fields on the clip only');
+  unchanged(h, () => h.do(C.setClip(s, au, { props: { opacity: 3 } })), 'invalid', 'an audio clip has no opacity');
+  unchanged(h, () => h.do(C.setClip(s, v, { props: { opacity: 'x' } })), 'invalidResult', 'a prop of the wrong type');
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: f(30), v: 1 }]));
+  step(h, C.setClip(s, v, { speed: 2 }), 'speed 200%');
+  eq([lay(h, s).V1, lay(h, s).A1, clip(h, s, v).keyframes.opacity[0].t], ['0-45:0 90-120:0', '0-45:0', f(15)], 'speed 2 halves the linked clips and moves keyframes to their source frames');
+  eq(h.list().at(-1).label, 'Speed/Duration', 'speed label');
+  h.undo();
+  h.do(C.setClip(s, v, { speed: 0.5 }));
+  eq([lay(h, s).V1, clip(h, s, v).out], ['0-90:0 90-120:0', f(45)], 'a slower clip without ripple stops at the next clip and shows less source');
+  h.undo();
+  step(h, C.setClip(s, v, { speed: 0.5, ripple: true }), 'speed 50% with ripple');
+  eq(lay(h, s), { V1: '0-180:0 180-210:0', V2: '', A1: '0-180:0', A2: '' }, 'speed with ripple pushes the clips after');
+  h.undo();
+  h.do(C.setClip(s, v, { speed: 1.5 }));
+  eq([model.clipDuration(clip(h, s, v)), model.validate(h.project).ok], [f(60), true], 'speed 1.5 gives whole frames');
+  h.undo();
+  unchanged(h, () => h.do(C.setClip(s, v, { speed: 0 })), 'speed', 'speed 0');
+  step(h, C.setClip(s, v, { reverse: true }), 'reverse');
+  check(clip(h, s, v).reverse && clip(h, s, au).reverse, 'reverse turns the linked audio too');
+  h.undo();
+  step(h, C.setClip(s, au, { fadeIn: f(10) + 3, fadeOut: f(500) }), 'fades');
+  eq([clip(h, s, au).fadeIn, clip(h, s, au).fadeOut], [f(10), f(80)], 'fades snap to frames and fit the clip');
+
+  step(h, C.setKeyframes(s, v, 'position', [{ t: f(20), v: [100, 0], ease: 'bezier', h: [0.1, 0.2, 0.3, 0.4] }, { t: 5, v: [0, 0], ease: 'easeIn' }]), 'set keyframes');
+  eq(clip(h, s, v).keyframes.position, [{ t: 0, v: [0, 0], ease: 'easeIn' }, { t: f(20), v: [100, 0], ease: 'bezier', h: [0.1, 0.2, 0.3, 0.4] }], 'keyframes snap, sort and keep handles');
+  unchanged(h, () => h.do(C.setKeyframes(s, v, 'volume', [{ t: 0, v: 1 }])), 'invalid', 'keyframes on a property the clip lacks');
+  h.do(C.setKeyframes(s, v, 'scale', [{ t: 0, v: [100, 100] }]));
+  eq(Object.keys(clip(h, s, v).keyframes), ['opacity', 'position', 'scale'], 'keyframed props in the order they were set');
+  step(h, C.setKeyframes(s, v, 'opacity', null), 'clear the first keyframed prop');
+  step(h, C.setKeyframes(s, v, 'position', null), 'clear keyframes');
+  check(!('position' in clip(h, s, v).keyframes) && !('opacity' in clip(h, s, v).keyframes), 'null clears the keyframes');
+  h.undo();
+  h.undo();
+  eq(Object.keys(clip(h, s, v).keyframes), ['opacity', 'position', 'scale'], 'undoing a cleared prop puts it back in its place');
+
+  h.do(C.trim(s, v, { edge: 'start', delta: f(10) }));
+  eq(clip(h, s, v).keyframes.opacity[0].t, f(20), 'a start trim keeps keyframes on their frames');
+
+  step(h, C.unlink(s, [v]), 'unlink');
+  eq([clip(h, s, v).link, clip(h, s, au).link], [null, null], 'unlink clears both sides');
+  step(h, C.link(s, [v, au]), 'link');
+  check(clip(h, s, v).link && clip(h, s, v).link === clip(h, s, au).link, 'link joins clips');
+  unchanged(h, () => h.do(C.link(s, [v])), 'linkOne', 'linking one clip');
+} catch (err) {
+  check(false, `clip settings: ${err.stack}`);
+}
+
+// ---------- effects, transitions, generators, freeze frame ----------
+try {
+  const { h, s, a, b } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1', audio: 'A1' });
+  const [w] = place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(90), video: 'V1' });
+  const e1 = step(h, C.addEffect(s, v, 'blur.gaussian'), 'add effect').id;
+  const e2 = h.do(C.addEffect(s, v, 'color.basic', 0, { exposure: 0.5 })).id;
+  eq(clip(h, s, v).effects.map((e) => [e.id, e.type]), [[e2, 'color.basic'], [e1, 'blur.gaussian']], 'effects get ids in the clip and go where asked');
+  step(h, C.setEffect(s, v, e1, { on: false, params: { radius: 12 } }), 'set effect');
+  h.do(C.setEffect(s, v, e2, { params: { exposure: null } }));
+  eq([clip(h, s, v).effects[1].on, clip(h, s, v).effects[1].params, clip(h, s, v).effects[0].params], [false, { radius: 12 }, {}], 'setEffect merges params, null takes one back to its default');
+  step(h, C.moveEffect(s, v, e1, 0), 'move effect');
+  eq(clip(h, s, v).effects.map((e) => e.id), [e1, e2], 'moveEffect reorders');
+  h.do(C.setKeyframes(s, v, `effects.${e1}.radius`, [{ t: 0, v: 0 }, { t: f(30), v: 20 }]));
+  near(kf.propValue(clip(h, s, v), `effects.${e1}.radius`, f(15)), 10, 1e-9, 'an effect parameter animates');
+  eq(kf.propValue(clip(h, s, v), `effects.${e2}.exposure`, 0, 0), 0, 'a parameter at its default reads the fallback');
+  step(h, C.removeEffect(s, v, e1), 'remove effect');
+  check(!clip(h, s, v).effects.some((e) => e.id === e1) && !Object.keys(clip(h, s, v).keyframes).length, 'removing an effect removes its keyframes');
+
+  const t1 = step(h, C.addTransition(s, { track: 'V1', at: f(90) + 9, type: 'dissolve' }), 'add transition').id;
+  const tr = () => h.project.sequences[0].transitions.find((x) => x.id === t1);
+  eq([tr().at, tr().duration, tr().align], [f(90), SEC, 'center'], 'a transition snaps to the edit point with the default length');
+  unchanged(h, () => h.do(C.addTransition(s, { track: 'V1', at: f(45), type: 'dissolve' })), 'noEdge', 'a transition mid-clip');
+  step(h, C.setTransition(s, t1, { duration: f(15), align: 'start' }), 'set transition');
+  eq([tr().duration, tr().align], [f(15), 'start'], 'setTransition');
+  h.do(C.trim(s, v, { edge: 'end', delta: f(10), mode: 'roll' }));
+  eq(tr().at, f(100), 'a transition follows a rolled edit point');
+  h.undo();
+  h.do(C.trim(s, v, { edge: 'end', delta: -f(30), mode: 'ripple' }));
+  eq(tr()?.at, f(60), 'a transition follows a ripple trim');
+  h.undo();
+  h.do(C.move(s, [w], { delta: f(100) }));
+  eq(tr()?.at, f(90), 'a transition between a clip and a moved one stays on the clip that stayed');
+  h.undo();
+  const t2 = h.do(C.addTransition(s, { track: 'V1', at: f(150), type: 'dipBlack', duration: f(10) })).id;
+  h.do(C.move(s, [w], { delta: f(100) }));
+  eq(h.project.sequences[0].transitions.find((x) => x.id === t2)?.at, f(250), 'a transition on the moved clip alone goes with it');
+  h.undo();
+  step(h, C.removeTransition(s, t1), 'remove transition');
+
+  const text = step(h, C.addGenerated(s, { track: 'V2', at: f(10), duration: f(60), source: { generator: 'text', layers: [{ text: '안녕' }, { text: 'two', id: 'x' }] } }), 'add text').id;
+  const tc = clip(h, s, text);
+  eq([tc.source.layers.map((l) => [l.id, l.text, l.size]), lay(h, s).V2, h.list().at(-1).label], [[['l1', '안녕', 96], ['x', 'two', 96]], '10-70', 'Add Text'], 'a text clip with default layer styles');
+  h.do(C.setKeyframes(s, text, 'layers.x.size', [{ t: 0, v: 10 }]));
+  h.do(C.trim(s, text, { edge: 'end', delta: f(1000) }));
+  eq(lay(h, s).V2, '10-1070', 'a text clip has no source end');
+  const solid = h.do(C.addGenerated(s, { track: 'V2', at: f(1100), source: { generator: 'solid', color: '#ff0000' } })).id;
+  eq([clip(h, s, solid).source, model.clipDuration(clip(h, s, solid))], [{ generator: 'solid', color: '#ff0000' }, 5 * SEC], 'a solid with the still length');
+  unchanged(h, () => h.do(C.addGenerated(s, { track: 'A1', at: 0, source: { generator: 'solid' } })), 'noTrack', 'a generator on an audio track');
+
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: 0, v: 0 }, { t: f(60), v: 60 }]));
+  const fz = step(h, C.freezeFrame(s, v, f(30) + 1, f(60)), 'freeze frame').id;
+  eq([lay(h, s).V1, lay(h, s).A1], ['0-30:0 30-90:30 90-150:30 150-210:0', '0-30:0 90-150:30'], 'freeze frame cuts the clip and pushes the rest with its audio');
+  const fc = clip(h, s, fz);
+  eq([fc.source, fc.keyframes.opacity, model.sourceTime(fc, f(80))], [{ media: a, freeze: true }, [{ t: 0, v: 30, ease: 'linear' }], f(30)], 'the freeze holds the frame and the values at the playhead');
+  h.do(C.trim(s, fz, { edge: 'end', delta: f(10), mode: 'ripple' }));
+  eq(lay(h, s).V1, '0-30:0 30-100:30 100-160:30 160-220:0', 'a freeze frame trims like a still');
+  unchanged(h, () => h.do(C.freezeFrame(s, au, f(10))), 'noFrame', 'freezing an audio clip');
+  unchanged(h, () => h.do(C.freezeFrame(s, v, f(500))), 'notOnClip', 'freezing off the clip');
+} catch (err) {
+  check(false, `effects: ${err.stack}`);
+}
+
+// ---------- markers, captions ----------
+try {
+  const { h, s, a } = setup();
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: f(30), video: 'V1' });
+  const m1 = step(h, C.addMarker(s, { t: f(60) + 3, name: 'b', kind: 'chapter', color: 'red' }), 'add marker').id;
+  const m0 = h.do(C.addMarker(s, { t: f(10), name: 'a' })).id;
+  eq(h.project.sequences[0].markers.map((m) => [m.id, fr(m.t), m.name, m.kind, m.color]), [[m0, 10, 'a', 'comment', 'green'], [m1, 60, 'b', 'chapter', 'red']], 'markers snap, default and stay in time order');
+  step(h, C.setMarker(s, m1, { t: 0, note: 'start', duration: f(15) }), 'edit marker');
+  eq(h.project.sequences[0].markers.map((m) => [m.id, fr(m.t), fr(m.duration), m.note]), [[m1, 0, 15, 'start'], [m0, 10, 0, '']], 'setMarker moves and re-sorts');
+  unchanged(h, () => h.do(C.setMarker(s, m1, { kind: 'region' })), 'invalid', 'an unknown marker kind');
+  step(h, C.removeMarker(s, m0), 'remove marker');
+  const cm = step(h, C.addMarker(s, { t: f(50), name: 'clip' }, { clipId: v }), 'add clip marker').id;
+  eq(clip(h, s, v).markers.map((m) => [m.id, fr(m.t)]), [[cm, 20]], 'a clip marker counts from the clip start');
+  h.do(C.move(s, [v], { delta: f(10) }));
+  h.do(C.split(s, f(60)));
+  eq([clip(h, s, v).markers.length, clipsOf(h, s).find((c) => c.start === f(60)).markers.map((m) => fr(m.t))], [0, [0]], 'clip markers move with the clip and go to the right piece of a split');
+
+  const ct = step(h, C.addCaptionTrack(s, { lang: 'ko', name: '한국어' }), 'add caption track').id;
+  const track = () => h.project.sequences[0].captions.find((x) => x.id === ct);
+  eq([track().style.position, track().syncLock], ['bottom', true], 'a caption track has the default style');
+  step(h, C.setCaptions(s, ct, [{ start: 2 * SEC, end: 3 * SEC, text: '둘' }, { start: 1.5 * SEC + 1, end: 1.5 * SEC + 2, text: '하나' }]), 'set captions');
+  eq(track().items.map((it) => [it.text, fr(it.start), fr(it.end)]), [['하나', 45, 46], ['둘', 60, 90]], 'setCaptions sorts, snaps to the nearest frame, keeps a frame');
+  const c3 = step(h, C.addCaption(s, ct, { start: SEC, end: 1.2 * SEC, text: '영' }), 'add caption').id;
+  eq(track().items[0].id, c3, 'addCaption keeps time order');
+  step(h, C.setCaption(s, ct, c3, { start: 4 * SEC, end: 5 * SEC, text: '셋' }), 'edit caption');
+  eq(track().items.map((it) => it.text), ['하나', '둘', '셋'], 'setCaption re-sorts');
+  unchanged(h, () => h.do(C.setCaption(s, ct, c3, { color: 'x' })), 'invalid', 'an unknown caption field');
+  step(h, C.removeCaption(s, ct, c3), 'remove caption');
+  step(h, C.setCaptionTrack(s, ct, { style: { size: 70, position: 'top' }, name: 'KO' }), 'caption style');
+  eq([track().style.size, track().style.position, track().style.font, track().name], [70, 'top', 'Malgun Gothic', 'KO'], 'caption style merges');
+  // captions follow insert as a sync-locked track
+  h.do(C.place(s, { source: { media: a }, in: 0, out: f(30), at: f(50), video: 'V2', mode: 'insert' }));
+  eq(track().items.map((it) => [fr(it.start), fr(it.end)]), [[45, 46], [90, 120]], 'captions after an insert move with it');
+  h.do(C.place(s, { source: { media: a }, in: 0, out: f(10), at: f(100), video: 'V2', mode: 'insert' }));
+  eq(track().items.map((it) => [it.text, fr(it.start), fr(it.end)]), [['하나', 45, 46], ['둘', 90, 100], ['둘', 110, 130]], 'a caption across an insert shows on both sides');
+  step(h, C.removeCaptionTrack(s, ct), 'remove caption track');
+} catch (err) {
+  check(false, `markers and captions: ${err.stack}`);
+}
+
+// ---------- media, bins, sequences, tracks ----------
+try {
+  const { h, s, a, b, music } = setup();
+  const bin = step(h, C.addBin('Footage'), 'add bin').id;
+  const sub = h.do(C.addBin('Day 1', bin)).id;
+  const [m] = step(h, C.importMedia([{ path: 'E:\\x\\c.mov', kind: 'video', duration: SEC, video: VID, audio: null }], sub), 'import into a bin').ids;
+  eq([h.project.media.at(-1).name, h.project.bins.find((x) => x.id === sub).items], ['c.mov', [m]], 'import names media by file and files it in the bin');
+  step(h, C.moveToBin([a, b], bin), 'move to bin');
+  step(h, C.moveToBin([a], sub), 'move between bins');
+  eq(h.project.bins.map((x) => x.items), [[b], [m, a]], 'an item is in one bin at a time');
+  unchanged(h, () => h.do(C.moveToBin([bin], sub)), 'binLoop', 'a bin into its own child');
+  step(h, C.renameItem(bin, 'Shots'), 'rename');
+  step(h, C.removeBin(sub), 'remove bin');
+  eq(h.project.bins.map((x) => [x.name, x.items]), [['Shots', [b, m, a]]], 'removing a bin hands its items to the parent');
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(30), at: 0, video: 'V1', audio: 'A1' });
+  step(h, C.relinkMedia(a, { path: 'F:/moved/a.mp4', size: 99, mtime: 5 }), 'relink');
+  eq([h.project.media[0].path, h.project.media[0].size, clip(h, s, v).source.media], ['F:/moved/a.mp4', 99, a], 'relink changes the path, clips keep their media');
+  step(h, C.removeMedia([a]), 'remove media');
+  eq([clipsOf(h, s).length, h.project.bins[0].items], [0, [b, m]], 'removing media removes its clips and bin entries');
+  h.undo();
+
+  const s2 = step(h, C.addSequence({ name: 'Shorts', w: 1080, h: 1920, fps: [60, 1] }), 'add sequence').id;
+  const seq2 = h.project.sequences.find((x) => x.id === s2);
+  eq([seq2.w, seq2.h, seq2.fps, seq2.tracks.length], [1080, 1920, [60, 1], 4], 'a new sequence with its settings');
+  h.do(C.addTransition(s, { track: 'V1', at: f(30), type: 'dissolve' }));
+  h.do(C.addMarker(s, { t: f(5) }));
+  const s3 = step(h, C.addSequence({ from: s }), 'duplicate sequence').id;
+  const dup = h.project.sequences.find((x) => x.id === s3);
+  const orig = h.project.sequences.find((x) => x.id === s);
+  check(dup.clips.length === 2 && dup.clips.every((c, i) => c.id !== orig.clips[i].id) && dup.clips[0].link !== orig.clips[0].link && dup.clips[0].link === dup.clips[1].link && dup.name === `${orig.name} Copy`,
+    'a duplicated sequence has new ids and its own link');
+  eq(h.list().at(-1).label, 'Duplicate Sequence', 'duplicate label');
+  h.do(C.split(s3, f(10)));
+  eq(clipsOf(h, s).length, 2, 'editing the copy leaves the original');
+  unchanged(h, () => h.do(C.addSequence({ fps: [17, 1] })), 'fps', 'a sequence with an odd frame rate');
+  // 30 -> 25 fps: every time moves to the nearest 25 fps frame
+  step(h, C.setSequence(s, { fps: [25, 1], name: 'PAL', background: '#112233' }), 'change the frame rate');
+  const F25 = time.frameTicks([25, 1]);
+  const o = h.project.sequences.find((x) => x.id === s);
+  eq([o.fps, o.clips.map((c) => [c.start / F25, model.clipDuration(c) / F25]), o.transitions[0].at / F25, o.name], [[25, 1], [[0, 25], [0, 25]], 25, 'PAL'], 'a frame rate change re-snaps clips and transitions');
+  unchanged(h, () => h.do(C.setSequence(s, { w: 3 })), 'size', 'a frame size too small');
+  eq(o.masterGain, 0, 'a new sequence has a master gain of 0 dB');
+  step(h, C.setSequence(s, { masterGain: -3.5 }), 'set the master gain');
+  eq(h.project.sequences.find((x) => x.id === s).masterGain, -3.5, 'the master gain is kept on the sequence');
+  unchanged(h, () => h.do(C.setSequence(s, { masterGain: NaN })), 'gain', 'a master gain that is not a number');
+  {
+    const p = JSON.parse(h.serialize());
+    delete p.sequences[0].masterGain;
+    eq(model.migrate(JSON.stringify(p)).sequences[0].masterGain, 0, 'a project saved before master gain opens with 0 dB');
+    p.sequences[0].masterGain = 'loud';
+    check(!model.validate(p).ok, 'validate refuses a master gain that is not a number');
+  }
+  step(h, C.removeSequence(s2), 'remove sequence');
+
+  const vt = step(h, C.addTrack(s3, 'video', 0), 'add track').id;
+  const at = h.do(C.addTrack(s3, 'audio')).id;
+  eq([vt, at, h.project.sequences.find((x) => x.id === s3).tracks.map((t) => t.id)], ['V3', 'A3', ['V3', 'V1', 'V2', 'A1', 'A2', 'A3']], 'tracks go where asked with new ids');
+  step(h, C.setTrack(s3, 'A3', { volume: -6, pan: 300, mute: true, name: 'Music' }), 'track settings');
+  const t3 = h.project.sequences.find((x) => x.id === s3).tracks.at(-1);
+  eq([t3.volume, t3.pan, t3.mute, t3.name], [-6, 100, true, 'Music'], 'track settings, pan clamped');
+  unchanged(h, () => h.do(C.setTrack(s3, 'V3', { mute: true })), 'invalid', 'a video track has no mute');
+  step(h, C.removeTrack(s3, 'V1'), 'remove track');
+  eq(lay(h, s3), { V3: '', V2: '', A1: '0-10:0 10-30:10', A2: '', A3: '' }, 'removing a track removes its clips and clears their links');
+  check(clipsOf(h, s3).every((c) => c.link === null), 'links left with one clip are cleared');
+} catch (err) {
+  check(false, `media and sequences: ${err.stack}`);
+}
+
+// ---------- paste, text layers, generators, settings, proxies, speed by duration ----------
+try {
+  const { h, s, a, b, music } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: f(10), out: f(70), at: f(30), video: 'V1', audio: 'A1' });
+  place(h, s, { source: { media: music }, in: 0, out: f(20), at: f(100), audio: 'A2' });
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: 0, v: 0 }, { t: f(10), v: 100 }]));
+  h.do(C.addEffect(s, v, 'vignette'));
+  // what the timeline copies: clip objects as they are, plus the kind of track they were on
+  const copied = clipsOf(h, s).map((x) => ({ ...model.clone(x), kind: h.project.sequences[0].tracks.find((t) => t.id === x.track).kind }));
+  const r = step(h, C.paste(s, copied, { at: f(200) }), 'paste');
+  eq(lay(h, s), { V1: '30-90:10 200-260:10', V2: '', A1: '30-90:10 200-260:10', A2: '100-120:0 270-290:0' }, 'paste keeps the spacing in time and tracks');
+  const pv = clip(h, s, r.ids[0]);
+  check(r.ids.length === 3 && pv.link && pv.link !== clip(h, s, v).link && clip(h, s, r.ids[1]).link === pv.link && pv.keyframes.opacity.length === 2 && pv.effects[0].type === 'vignette', 'pasted clips have new ids, a new link of their own, the keyframes and effects');
+  step(h, C.paste(s, copied, { at: f(10), video: 'V2', audio: 'A1', mode: 'insert' }), 'paste insert onto other tracks');
+  eq(lay(h, s), { V1: '120-180:10 290-350:10', V2: '10-70:10', A1: '10-70:10 120-180:10 290-350:10', A2: '80-100:0 190-210:0 360-380:0' }, 'insert paste: the lowest copied tracks land on the targets, sync-locked tracks make room');
+  h.undo();
+  h.do(C.setTrack(s, 'V2', { locked: true }));
+  unchanged(h, () => h.do(C.paste(s, copied, { at: 0, video: 'V2' })), 'locked', 'pasting onto a locked track');
+  unchanged(h, () => h.do(C.paste(s, copied, { at: 0, audio: 'A2' })), 'noTrack', 'pasting two audio tracks from the last one');
+
+  const t = h.do(C.addGenerated(s, { track: 'V1', at: f(400), source: { generator: 'text' } })).id;
+  const tc = () => clip(h, s, t);
+  step(h, C.setLayer(s, t, 'l1', { text: '제목', size: 120, stroke: { color: '#000000', width: 4 } }), 'edit a text layer');
+  eq([tc().source.layers[0].text, tc().source.layers[0].size, tc().source.layers[0].stroke], ['제목', 120, { color: '#000000', width: 4 }], 'setLayer sets fields');
+  unchanged(h, () => h.do(C.setLayer(s, t, 'l1', { colour: 'x' })), 'invalid', 'an unknown text layer field');
+  const l2 = step(h, C.addLayer(s, t, { text: '부제' }, 0), 'add a text layer').id;
+  eq(tc().source.layers.map((l) => [l.id, l.text]), [[l2, '부제'], ['l1', '제목']], 'addLayer puts a new layer where asked');
+  h.do(C.setKeyframes(s, t, `layers.${l2}.size`, [{ t: 0, v: 10 }, { t: f(10), v: 50 }]));
+  step(h, C.removeLayer(s, t, l2), 'remove a text layer');
+  eq([tc().source.layers.map((l) => l.id), Object.keys(tc().keyframes)], [['l1'], []], 'removing a layer removes its keyframes');
+  step(h, C.setGenerator(s, t, { layers: [{ text: 'A' }, { text: 'B' }] }), 'replace the layers');
+  eq(tc().source.layers.map((l) => [l.id, l.text]), [['l1', 'A'], ['l2', 'B']], 'setGenerator replaces the layers');
+  const solid = h.do(C.addGenerated(s, { track: 'V1', at: f(600), source: { generator: 'solid', color: '#000000' } })).id;
+  step(h, C.setGenerator(s, solid, { color: '#123456' }), 'solid color');
+  eq(clip(h, s, solid).source.color, '#123456', 'a solid changes color');
+  unchanged(h, () => h.do(C.setGenerator(s, t, { color: '#ffffff' })), 'invalid', 'a text clip has no color');
+  unchanged(h, () => h.do(C.setLayer(s, v, 'l1', { text: 'x' })), 'invalid', 'a video clip has no text layers');
+
+  step(h, C.setSettings({ transitionDuration: f(15), fit: 'fill', textStyles: [{ id: 'st1', name: '제목', style: { size: 100 } }] }), 'project settings');
+  eq([h.project.settings.fit, h.project.settings.textStyles[0].name], ['fill', '제목'], 'settings hold the fit mode and saved text styles');
+  const tr = h.do(C.addTransition(s, { track: 'V1', at: f(90), type: 'dissolve' })).id;
+  eq(h.project.sequences[0].transitions.find((x) => x.id === tr).duration, f(15), 'a new transition takes the default length from the settings');
+  unchanged(h, () => h.do(C.setSettings({ fit: 'stretch' })), 'invalid', 'an unknown fit mode');
+  unchanged(h, () => h.do(C.setSettings({ stillDuration: -5 })), 'invalid', 'a negative still length');
+
+  step(h, C.setProxy(a, { path: 'cache:proxy-a' }), 'set a proxy');
+  eq(h.project.media[0].proxy, { path: 'cache:proxy-a' }, 'a media proxy');
+  h.do(C.relinkMedia(a, { path: 'G:/a.mp4' }));
+  eq(h.project.media[0].proxy, null, 'relinking drops the proxy of the old file');
+
+  step(h, C.setClip(s, v, { duration: f(30) }), 'speed by duration');
+  eq([lay(h, s).V1.split(' ')[0], clip(h, s, v).speed, clip(h, s, au).speed, h.list().at(-1).label], ['30-60:10', 2, 2, 'Speed/Duration'], 'a duration gives the speed that fits the source into it');
+  h.do(C.setClip(s, solid, { duration: f(20) }));
+  eq(model.clipDuration(clip(h, s, solid)), f(20), 'a still takes the duration as its length');
+  unchanged(h, () => h.do(C.setClip(s, v, { duration: f(30), speed: 2 })), 'invalid', 'speed and duration together');
+} catch (err) {
+  check(false, `paste and text: ${err.stack}`);
+}
+
+// ---------- history: grouping, dirty, limit, events, failures ----------
+try {
+  const { h, s, a } = setup();
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1' });
+  const reasons = [];
+  const off = h.onChange((r) => reasons.push(r));
+  const before = h.serialize();
+  const steps = h.list().length;
+  h.begin('Opacity');
+  for (const o of [90, 70, 50, 30]) h.do(C.setClip(s, v, { props: { opacity: o } }));
+  h.commit();
+  eq([h.list().length - steps, h.list().at(-1).label, clip(h, s, v).props.opacity], [1, 'Opacity', 30], 'a group is one undo step');
+  h.undo();
+  eq([h.serialize() === before, clip(h, s, v).props.opacity], [true, 100], 'undoing a group takes it all back');
+  h.redo();
+  eq(clip(h, s, v).props.opacity, 30, 'redo of a group');
+  h.undo();
+  h.begin('Drag');
+  h.begin('inner');
+  h.do(C.setClip(s, v, { props: { opacity: 10 } }));
+  h.commit();
+  check(h.grouping, 'a nested commit leaves the outer group open');
+  h.do(C.setClip(s, v, { props: { opacity: 20 } }));
+  h.cancel();
+  eq([h.serialize() === before, h.grouping, h.canRedo], [true, false, false], 'cancel takes the whole group back and leaves no step');
+  eq(reasons.slice(0, 7), ['do', 'do', 'do', 'do', 'undo', 'redo', 'undo'], 'onChange reasons');
+  off();
+  h.do(C.setClip(s, v, { name: 'x' }));
+  eq(reasons.length, 10, 'a removed listener hears nothing');
+
+  check(h.dirty, 'edits make the project dirty');
+  h.markSaved();
+  check(!h.dirty, 'markSaved clears dirty');
+  h.do(C.setClip(s, v, { name: 'y' }));
+  check(h.dirty, 'an edit after saving is dirty');
+  h.undo();
+  check(!h.dirty, 'undoing back to the saved state is clean');
+  h.undo();
+  check(h.dirty, 'undoing past the saved state is dirty');
+  h.redo();
+  check(!h.dirty, 'redo back to the saved state is clean');
+  h.undo();
+  h.do(C.setClip(s, v, { name: 'z' }));
+  h.do(C.setClip(s, v, { name: 'x' }));
+  check(h.dirty && !h.canRedo, 'a new edit drops the redo steps; the saved state is gone');
+
+  const noop = h.list().length;
+  h.do(C.setClip(s, v, { name: 'x' }));
+  h.do(C.move(s, [v], { delta: 0 }));
+  eq(h.list().length, noop, 'a command that changes nothing is not a step');
+  unchanged(h, () => h.do({ type: 'nope' }), 'invalid', 'an unknown command');
+  unchanged(h, () => h.do(C.split('s999', 0)), 'notFound', 'a missing sequence');
+  const [bad] = place(h, s, { source: { media: a }, in: 0, out: f(30), at: f(200), video: 'V1' });
+  unchanged(h, () => h.do(C.setClip(s, bad, { props: { scale: [1] } })), 'invalidResult', 'a command whose result does not validate');
+
+  const small = setup();
+  const lim = C.createHistory(small.h.project, { limit: 3 });
+  const [lv] = lim.do(C.place(small.s, { source: { media: small.a }, in: 0, out: f(30), at: 0, video: 'V1' })).ids;
+  lim.markSaved();
+  for (const n of ['1', '2', '3', '4']) lim.do(C.setClip(small.s, lv, { name: n }));
+  eq(lim.list().length, 3, 'the step limit drops the oldest steps');
+  while (lim.undo());
+  eq([clip(lim, small.s, lv).name, lim.dirty], ['1', true], 'after dropped steps, undoing all stops at the oldest kept step and stays dirty');
+  check(JSON.parse(lim.serialize()).format === 'ncut', 'serialize gives the project JSON');
+} catch (err) {
+  check(false, `history: ${err.stack}`);
+}
+
+// ---------- keyframes ----------
+try {
+  const lin = [{ t: 0, v: 0, ease: 'linear' }, { t: 100, v: 10, ease: 'linear' }, { t: 200, v: 30, ease: 'hold' }, { t: 300, v: 0 }];
+  eq([kf.valueAt(lin, -5), kf.valueAt(lin, 0), kf.valueAt(lin, 50), kf.valueAt(lin, 150), kf.valueAt(lin, 250), kf.valueAt(lin, 300), kf.valueAt(lin, 999)], [0, 0, 5, 20, 30, 0, 0], 'linear and hold values, clamped before and after');
+  eq([kf.valueAt([], 5, 7), kf.valueAt(null, 5, 7), kf.valueAt([{ t: 9, v: 3 }], 0, 7)], [7, 7, 3], 'no keyframes: the fallback; one keyframe: its value');
+  // An independent cubic-bezier: sample the curve densely and read y where x crosses.
+  const ref = (h, x) => {
+    let best = 0;
+    for (let i = 0; i <= 200000; i++) {
+      const s = i / 200000;
+      const bx = 3 * (1 - s) ** 2 * s * h[0] + 3 * (1 - s) * s * s * h[2] + s ** 3;
+      if (bx >= x) return 3 * (1 - s) ** 2 * s * h[1] + 3 * (1 - s) * s * s * h[3] + s ** 3;
+      best = s;
+    }
+    return best;
+  };
+  for (const [ease, h] of [['easeIn', [0.42, 0, 1, 1]], ['easeOut', [0, 0, 0.58, 1]], ['easeInOut', [0.42, 0, 0.58, 1]]]) {
+    for (const u of [0.1, 0.25, 0.5, 0.8]) near(kf.valueAt([{ t: 0, v: 0, ease }, { t: 1000, v: 100 }], u * 1000), 100 * ref(h, u), 0.01, `${ease} at ${u}`);
+  }
+  near(kf.valueAt([{ t: 0, v: 0, ease: 'easeIn' }, { t: 1000, v: 100 }], 500), 31.53, 0.01, 'ease-in at the middle is about 31.5%');
+  const handles = [0.68, -0.55, 0.27, 1.55];
+  for (const u of [0.2, 0.5, 0.9]) near(kf.valueAt([{ t: 0, v: 0, ease: 'bezier', h: handles }, { t: 1, v: 1 }], u), ref(handles, u), 1e-4, `bezier with overshooting handles at ${u}`);
+  near(kf.valueAt([{ t: 0, v: 0, ease: 'bezier', h: [0, 0, 1, 1] }, { t: 10, v: 1 }], 3), 0.3, 1e-6, 'bezier (0,0,1,1) is linear');
+  eq(kf.valueAt([{ t: 0, v: [0, 100], ease: 'linear' }, { t: 10, v: [10, 0] }], 5), [5, 50], 'arrays interpolate per element');
+  eq(kf.valueAt([{ t: 0, v: '#000000', ease: 'linear' }, { t: 10, v: '#ff8040' }], 5), '#804020', 'colors interpolate per channel');
+  eq(kf.valueAt([{ t: 0, v: 'a', ease: 'linear' }, { t: 10, v: 'b' }], 5), 'a', 'other values hold');
+  const shared = [{ t: 0, v: [1, 2], ease: 'linear' }];
+  kf.valueAt(shared, 0).push(9);
+  eq(shared[0].v, [1, 2], 'a returned array is a copy');
+  const list = [{ t: 0, v: 1, ease: 'linear' }, { t: 20, v: 2, ease: 'linear' }];
+  const ins = kf.insert(list, { t: 10, v: 5, ease: 'bezier' });
+  eq([list.length, ins.map((k) => k.t), ins[1].h.length, kf.insert(ins, { t: 10, v: 6 }).map((k) => k.v)], [2, [0, 10, 20], 4, [1, 6, 2]], 'insert returns a new sorted list and replaces a keyframe at the same time');
+  eq([kf.remove(ins, 10).map((k) => k.t), kf.next(ins, 10).t, kf.prev(ins, 10).t, kf.next(ins, 20), kf.prev(ins, 0)], [[0, 20], 20, 0, null, null], 'remove, next, prev');
+  const cl = { props: { opacity: 40 }, keyframes: {}, effects: [{ id: 'e1', params: { amount: 3 } }], source: { layers: [{ id: 'l1', size: 50 }] } };
+  eq([kf.propValue(cl, 'opacity', 5, 100), kf.propValue(cl, 'effects.e1.amount', 0, 0), kf.propValue(cl, 'effects.e1.other', 0, 8), kf.propValue(cl, 'layers.l1.size', 0, 1)], [40, 3, 8, 50], 'propValue reads static values');
+} catch (err) {
+  check(false, `keyframes: ${err.stack}`);
+}
+
+// ---------- SRT, VTT, encodings ----------
+try {
+  const MS = SEC / 1000;
+  const file = '\uFEFF1\r\n00:00:01,000 --> 00:00:02,500\r\n첫 줄\r\n둘째 줄\r\n\r\n\r\n  \r\n3\r\n0:00:03.5 --> 0:00:04.25 X1:10 X2:20\r\n<i>기울임</i>\r\n\r\n00:05,000 --> 00:06,000\r\n번호 없음\r\n7\r\n00:00:07,000 --> 00:00:08,001\r\n빈 줄 없이 다음\r\n00:00:09,000 --> 00:00:09,500\r\n번호도 빈 줄도 없이\r\n\r\n100:00:00,000 --> 100:00:01,000\r\n긴 시간\r\n\r\nnot a cue\r\n\r\n';
+  const items = srt.parse(file);
+  eq(items.map((it) => [it.start / MS, it.end / MS, it.text]), [
+    [1000, 2500, '첫 줄\n둘째 줄'], [3500, 4250, '<i>기울임</i>'], [5000, 6000, '번호 없음'], [7000, 8001, '빈 줄 없이 다음'], [9000, 9500, '번호도 빈 줄도 없이'],[360000000, 360001000, '긴 시간'],
+  ], 'SRT: BOM, CRLF, extra blank lines, . for ,, one or two fraction digits, no hours, settings, missing number, no blank line between cues, 100 hours, junk');
+  const back = srt.parse(srt.write(items));
+  eq(back, items, 'SRT write then parse is the same');
+  check(srt.write(items).startsWith('1\r\n00:00:01,000 --> 00:00:02,500\r\n첫 줄\r\n둘째 줄\r\n\r\n2\r\n'), 'SRT is written numbered with CRLF');
+  eq(srt.write([{ start: SEC / 30, end: SEC, text: 'a\n\nb' }]), '1\r\n00:00:00,033 --> 00:00:01,000\r\na\r\nb\r\n', 'a frame time rounds to the millisecond; a blank line inside a caption collapses');
+  eq(srt.parse('1\n00:00:00,000 --> 00:00:01,000\nx\r2\r00:00:01,000 --> 00:00:02,000\ry\r'), [{ start: 0, end: SEC, text: 'x' }, { start: SEC, end: 2 * SEC, text: 'y' }], 'SRT with mixed LF and CR line ends');
+
+  const vtt = 'WEBVTT - 제목\nKind: captions\n\nNOTE 메모\n여러 줄\n\nSTYLE\n::cue { color: red }\n\nintro\n00:01.000 --> 00:02.000 align:start\nA &amp; B &lt;3\n\n01:00:00.250 --> 01:00:01.000\n<v Kim>안녕</v>\n';
+  const vi = srt.parseVtt(vtt);
+  eq(vi.map((it) => [it.start / MS, it.end / MS, it.text]), [[1000, 2000, 'A & B <3'], [3600250, 3601000, '<v Kim>안녕</v>']], 'VTT: header, NOTE, STYLE, cue ids, settings, entities');
+  const plain = [{ start: 0, end: 1500 * MS, text: 'Tom & Jerry <3 -->' }, { start: 2 * SEC, end: 3 * SEC, text: '두 줄\n자막' }];
+  eq(srt.parseVtt(srt.writeVtt(plain)), plain, 'VTT write then parse is the same, with & < > escaped');
+  check(srt.writeVtt(plain).startsWith('WEBVTT\n\n00:00.000 --> 00:01.500\nTom &amp; Jerry &lt;3 --&gt;\n'), 'VTT is written with short times and escapes');
+  eq([srt.parseAny(vtt, 'x.srt').length, srt.parseAny(file, 'x.srt').length, srt.isVtt('', 'a.VTT'), srt.isVtt('1 ', 'a.srt')], [2, 6, true, false], 'parseAny picks the parser by content or name');
+
+  // CP949: the KS X 1001 part from the platform's EUC-KR decoder (rows 0xA1-0xFE), the UHC extension syllables (which
+  // Node's decoder lacks) from published code points, so the test does not reuse the code under test.
+  const dec = new TextDecoder('euc-kr');
+  const table = new Map([['갂', [0x81, 0x41]], ['똠', [0x8c, 0x63]], ['뷁', [0x94, 0xee]], ['햏', [0xc1, 0x64]]]);
+  for (let lead = 0xa1; lead <= 0xfe; lead++) {
+    for (let trail = 0xa1; trail <= 0xfe; trail++) {
+      const ch = dec.decode(Uint8Array.of(lead, trail));
+      if (ch.length === 1 && ch !== '\uFFFD' && !table.has(ch)) table.set(ch, [lead, trail]);
+    }
+  }
+  const cp949 = (text) => Uint8Array.from([...text].flatMap((ch) => (ch.charCodeAt(0) < 0x80 ? [ch.charCodeAt(0)] : table.get(ch) || (() => { throw new Error(`no CP949 for ${ch}`); })())));
+  const korean = '1\r\n00:00:01,000 --> 00:00:02,000\r\n안녕하세요, 똠방각하! 뷁 갂 햏\r\n\r\n2\r\n00:00:02,000 --> 00:00:03,000\r\n가나다 ABC 123\r\n';
+  const bytes = cp949(korean);
+  check(bytes.length < Buffer.byteLength(korean) && (() => { try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return false; } catch { return true; } })(), 'the CP949 bytes are not UTF-8');
+  eq(srt.decode(bytes), korean, 'CP949 bytes (with the UHC-only syllables 똠, 뷁, 갂, 햏) decode');
+  eq(srt.parse(srt.decode(bytes)).map((it) => it.text), ['안녕하세요, 똠방각하! 뷁 갂 햏', '가나다 ABC 123'], 'a CP949 SRT parses');
+  const utf8 = Buffer.from(korean, 'utf8');
+  eq([srt.decode(utf8), srt.decode(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), utf8]))], [korean, korean], 'UTF-8 with and without a BOM');
+  const le = Buffer.from(korean, 'utf16le');
+  const be = Buffer.from(le).swap16();
+  eq([srt.decode(Buffer.concat([Buffer.from([0xff, 0xfe]), le])), srt.decode(Buffer.concat([Buffer.from([0xfe, 0xff]), be])), srt.decode(le), srt.decode(be)], [korean, korean, korean, korean], 'UTF-16 LE and BE, with a BOM and without');
+  eq(srt.decode(new Uint8Array([0x41, 0x42])), 'AB', 'a tiny ASCII file');
+} catch (err) {
+  check(false, `captions files: ${err.stack}`);
+}
+
+// ---------- the page loads them as plain scripts ----------
+try {
+  // As index.js does: no require, no module; each file adds itself to globalThis.Cut, in index.js order.
+  const page = { TextDecoder, console, JSON, Math, Number, String, Array, Object, Map, Set, BigInt, Error, RegExp, Uint8Array };
+  page.globalThis = page;
+  vm.createContext(page);
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'features', 'cut');
+  const order = readFileSync(path.join(dir, 'index.js'), 'utf8').match(/'[a-z0-9-]+\.js'/g).map((x) => x.slice(1, -1));
+  const mine = ['time.js', 'state.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js'];
+  check(mine.every((x) => order.includes(x)) && order.indexOf('model.js') < order.indexOf('keyframes.js') && order.indexOf('keyframes.js') < order.indexOf('commands.js'), 'index.js loads model, keyframes, commands and srt after time');
+  for (const file of order.filter((x) => mine.includes(x))) vm.runInContext(readFileSync(path.join(dir, file), 'utf8'), page, { filename: file });
+  const out = vm.runInContext(`(() => {
+    const p = Cut.model.createProject();
+    const h = Cut.commands.createHistory(p);
+    const [m] = h.do(Cut.commands.importMedia([{ path: 'a.mp4', kind: 'video', duration: 10 * Cut.time.TICKS, video: { w: 8, h: 8 }, audio: null }])).ids;
+    h.do(Cut.commands.place('s1', { source: { media: m }, in: 0, out: Cut.time.TICKS, at: 0, video: 'V1' }));
+    h.do(Cut.commands.split('s1', Cut.time.TICKS / 2));
+    const n = h.project.sequences[0].clips.length;
+    h.undo();
+    return [n, h.project.sequences[0].clips.length, Cut.keyframes.valueAt([{ t: 0, v: 0 }, { t: 2, v: 4 }], 1), Cut.srt.parse('1\\n00:00:01,000 --> 00:00:02,000\\nx\\n').length];
+  })()`, page);
+  eq(out, [2, 1, 2, 1], 'the modules work as page scripts through globalThis.Cut');
+} catch (err) {
+  check(false, `page scripts: ${err.stack}`);
+}
+
+// ---------- 2,000 random commands ----------
+try {
+  let seed = 20261105;
+  const rnd = () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const int = (n) => Math.floor(rnd() * n);
+  const pick = (list) => list[int(list.length)];
+  const T = () => (rnd() < 0.85 ? f(int(400)) : int(400 * F));
+  const D = () => (rnd() < 0.85 ? f(int(121) - 60) : int(120 * F) - 60 * F);
+
+  const first = setup();
+  const { s, a, music, pic, b } = first;
+  // Unlimited steps, so undoing all of them reaches the start.
+  const h = C.createHistory(first.h.project, { limit: Infinity });
+  let changes = 0;
+  h.onChange((reason) => { if (reason === 'do') changes++; });
+  h.do(C.addSequence({ fps: [24000, 1001], name: 'film' }));
+  // a random start: a few clips on each track
+  for (let i = 0; i < 12; i++) {
+    try { h.do(C.place(s, { source: { media: pick([a, music, pic, b]) }, in: f(int(100)), out: f(100 + int(200)), at: T(), video: pick(['V1', 'V2']), audio: pick(['A1', 'A2']), mode: pick(['insert', 'overwrite']) })); } catch {}
+  }
+  h.do(C.addCaptionTrack(s, { items: [{ start: f(10), end: f(40), text: 'a' }, { start: f(100), end: f(130), text: 'b' }] }));
+  const hash = () => crypto.createHash('sha1').update(h.serialize()).digest('hex');
+  const start = hash();
+  const states = [start];
+  const kinds = {};
+  let failed = 0;
+  let rollbackBad = 0;
+  let invalid = 0;
+  let exactBad = 0;
+  const randomCommand = () => {
+    const sid = rnd() < 0.85 ? s : pick(h.project.sequences).id;
+    const seq = h.project.sequences.find((x) => x.id === sid);
+    if (!seq) return C.addSequence({});
+    const cl = seq.clips.length ? pick(seq.clips) : null;
+    const tracks = seq.tracks.map((t) => t.id);
+    const vt = seq.tracks.filter((t) => t.kind === 'video').map((t) => t.id);
+    const at = seq.tracks.filter((t) => t.kind === 'audio').map((t) => t.id);
+    const some = () => seq.clips.filter(() => rnd() < 0.2).map((x) => x.id).concat(cl ? [cl.id] : []);
+    const many = seq.clips.length > 40;
+    const r = rnd() * (many ? 0.8 : 1);
+    if (rnd() < 0.04) {
+      const texts = seq.clips.filter((x) => x.source.generator === 'text');
+      const solids = seq.clips.filter((x) => x.source.generator === 'solid');
+      const tx2 = texts.length ? pick(texts) : null;
+      const layer = tx2?.source.layers.length ? pick(tx2.source.layers).id : 'l1';
+      return pick([
+        cl ? C.paste(sid, seq.clips.filter(() => rnd() < 0.15).concat([cl]).map((x) => ({ ...model.clone(x), kind: seq.tracks.find((t) => t.id === x.track).kind })), { at: T(), mode: pick(['insert', 'overwrite']), video: rnd() < 0.5 ? pick(vt) : null }) : C.addBin('p'),
+        tx2 ? C.setLayer(sid, tx2.id, layer, { text: `t${int(9)}`, size: 10 + int(100) }) : C.setSettings({ fit: pick(['fit', 'fill', 'original']) }),
+        tx2 ? C.addLayer(sid, tx2.id, { text: 'n' }, int(3)) : C.setSettings({ transitionDuration: f(1 + int(40)) }),
+        tx2 ? C.removeLayer(sid, tx2.id, layer) : C.setProxy(pick(h.project.media).id, rnd() < 0.5 ? null : { path: `cache:p${int(9)}` }),
+        tx2 && rnd() < 0.5 ? C.setGenerator(sid, tx2.id, { layers: [{ text: 'x' }] }) : solids.length ? C.setGenerator(sid, pick(solids).id, { color: '#00ff00' }) : C.setProxy(a, { path: 'cache:a' }),
+        cl ? C.setClip(sid, cl.id, { duration: f(1 + int(200)), ripple: rnd() < 0.5 }) : C.addBin('d'),
+      ]);
+    }
+    if (r < 0.1) return C.place(sid, { source: rnd() < 0.85 ? { media: pick([a, a, music, pic, b]) } : { generator: pick(['text', 'solid', 'adjustment']) }, in: T() / 4, out: T(), at: T(), video: rnd() < 0.8 ? pick(vt) : null, audio: rnd() < 0.8 ? pick(at) : null, mode: pick(['insert', 'overwrite']) });
+    if (r < 0.13) return C.placeRange(sid, { source: { media: pick([a, b, music]) }, in: rnd() < 0.7 ? f(int(100)) : undefined, out: rnd() < 0.5 ? f(100 + int(100)) : undefined, range: { in: rnd() < 0.8 ? T() : undefined, out: rnd() < 0.5 ? T() + f(30) : undefined }, video: pick(vt), audio: pick(at), mode: pick(['insert', 'overwrite']) });
+    if (r < 0.22 && cl) return C.move(sid, some(), { delta: D(), trackDelta: pick([0, 0, 0, 1, -1, { video: 1, audio: 0 }]), insert: rnd() < 0.3, linked: rnd() < 0.8 });
+    if (r < 0.36 && cl) return C.trim(sid, cl.id, { edge: pick(['start', 'end']), mode: pick(['normal', 'ripple', 'roll']), delta: D(), linked: rnd() < 0.85 });
+    if (r < 0.42) return C.split(sid, T(), pick([{}, { allTracks: true }, { trackIds: [pick(tracks)] }, { clipIds: cl ? [cl.id] : [], linked: rnd() < 0.5 }]));
+    if (r < 0.47 && cl) return C.remove(sid, some(), { ripple: rnd() < 0.5, linked: rnd() < 0.8 });
+    if (r < 0.51) return C.rippleToPlayhead(sid, T(), pick(['before', 'after']), rnd() < 0.5 ? {} : { trackIds: [pick(tracks)] });
+    if (r < 0.53) return C.closeGap(sid, pick(tracks), T());
+    if (r < 0.56) {
+      const t = T();
+      return (rnd() < 0.5 ? C.lift : C.extract)(sid, t, t + f(1 + int(60)), rnd() < 0.5 ? null : [pick(tracks)]);
+    }
+    if (r < 0.62 && cl) {
+      const audio = seq.tracks.find((t) => t.id === cl.track).kind === 'audio';
+      return C.setClip(sid, cl.id, pick([
+        { props: audio ? { volume: -int(20) } : { opacity: int(101), position: [int(100), int(100)] } },
+        { speed: pick([0.25, 0.5, 1, 1.5, 2, 3]), ripple: rnd() < 0.5 },
+        { reverse: rnd() < 0.5 }, { enabled: rnd() < 0.5 }, { fadeIn: D(), fadeOut: D() }, { name: `n${int(9)}`, label: pick([null, 'red']) },
+      ]), { linked: rnd() < 0.8 });
+    }
+    if (r < 0.66 && cl) {
+      const audio = seq.tracks.find((t) => t.id === cl.track).kind === 'audio';
+      const prop = audio ? pick(['volume', 'pan']) : pick(['opacity', 'position', 'scale', ...cl.effects.map((e) => `effects.${e.id}.amount`)]);
+      const v = () => (prop === 'position' || prop === 'scale' ? [int(100), int(100)] : int(100));
+      return C.setKeyframes(sid, cl.id, prop, rnd() < 0.2 ? null : [...Array(1 + int(3))].map(() => ({ t: D() + f(60), v: v(), ease: pick(model.EASES), h: [rnd(), rnd() * 2 - 0.5, rnd(), rnd()] })));
+    }
+    if (r < 0.68 && cl) return rnd() < 0.5 ? C.link(sid, some()) : C.unlink(sid, some());
+    if (r < 0.72 && cl) {
+      const withFx = seq.clips.filter((x) => x.effects.length);
+      if (!withFx.length || rnd() < 0.4) return C.addEffect(sid, cl.id, pick(['blur.gaussian', 'color.basic', 'vignette']), rnd() < 0.5 ? 0 : null);
+      const x = pick(withFx);
+      const e = pick(x.effects).id;
+      return pick([C.removeEffect(sid, x.id, e), C.setEffect(sid, x.id, e, { on: rnd() < 0.5, params: { amount: rnd() < 0.3 ? null : int(10) } }), C.moveEffect(sid, x.id, e, int(3))]);
+    }
+    if (r < 0.77) {
+      const t = seq.transitions.length ? pick(seq.transitions).id : 'none';
+      if (rnd() < 0.6 && cl) return C.addTransition(sid, { track: cl.track, at: rnd() < 0.5 ? cl.start : model.clipEnd(cl), type: 'dissolve', duration: rnd() < 0.5 ? undefined : D(), align: pick(model.ALIGNS) });
+      return rnd() < 0.5 ? C.removeTransition(sid, t) : C.setTransition(sid, t, { duration: D(), align: pick(model.ALIGNS) });
+    }
+    if (r < 0.79) return C.addGenerated(sid, { track: pick(vt), at: T(), duration: rnd() < 0.5 ? undefined : D() + f(61), source: { generator: 'text', layers: [{ text: '자막' }] }, mode: pick(['insert', 'overwrite']) });
+    if (r < 0.81 && cl) return C.freezeFrame(sid, cl.id, cl.start + int(Math.max(1, model.clipDuration(cl) / F)) * F, rnd() < 0.5 ? null : f(1 + int(60)));
+    if (r < 0.85) {
+      const m = seq.markers.length ? pick(seq.markers).id : 'x';
+      return pick([C.addMarker(sid, { t: T(), kind: pick(model.MARKER_KINDS), duration: rnd() < 0.3 ? f(int(30)) : 0 }, rnd() < 0.3 && cl ? { clipId: cl.id } : {}), C.setMarker(sid, m, { t: T(), name: 'm' }), C.removeMarker(sid, m)]);
+    }
+    if (r < 0.9) {
+      const ct = seq.captions.length ? pick(seq.captions) : null;
+      if (!ct || rnd() < 0.05) return C.addCaptionTrack(sid, { syncLock: rnd() < 0.8 });
+      if (seq.captions.length > 1 && rnd() < 0.1) return C.removeCaptionTrack(sid, ct.id);
+      const it = ct.items.length ? pick(ct.items).id : 'x';
+      return pick([
+        C.addCaption(sid, ct.id, { start: T(), end: T() + f(1 + int(60)), text: 't' }), C.setCaption(sid, ct.id, it, { start: T(), end: T() + f(30) }), C.removeCaption(sid, ct.id, it),
+        C.setCaptions(sid, ct.id, [...Array(int(4))].map(() => ({ start: T(), end: T() + f(20), text: 'x' }))), C.setCaptionTrack(sid, ct.id, { syncLock: rnd() < 0.7 }),
+      ]);
+    }
+    if (r < 0.96) {
+      const tid = pick(tracks);
+      return pick([C.addTrack(sid, pick(['video', 'audio']), int(3)), C.setTrack(sid, tid, pick([{ locked: rnd() < 0.15 }, { syncLock: rnd() < 0.7 }, { height: 20 + int(100) }])), seq.tracks.length > 5 ? C.removeTrack(sid, tid) : C.setTrack(sid, tid, { name: 'T' })]);
+    }
+    return pick([
+      C.addSequence(rnd() < 0.5 ? { from: sid } : { fps: pick(time.FRAME_RATES) }), C.setSequence(sid, { fps: pick(time.FRAME_RATES) }), C.setSequence(sid, { name: 'x', w: 1280, h: 720 }),
+      h.project.sequences.length > 3 ? C.removeSequence(pick(h.project.sequences.filter((x) => x.id !== s)).id) : C.addBin('b'),
+      C.importMedia([{ path: `D:/r${int(99)}.mp4`, kind: 'video', duration: 30 * SEC, video: VID, audio: AUD }], h.project.bins.length ? pick(h.project.bins).id : null),
+      C.moveToBin([pick(h.project.media).id], h.project.bins.length ? pick(h.project.bins).id : null),
+      C.renameItem(pick([...h.project.media, ...h.project.bins, ...h.project.sequences]).id, `r${int(9)}`),
+      C.relinkMedia(pick(h.project.media).id, { path: `E:/moved${int(9)}.mp4`, size: int(1000), mtime: int(1000) }),
+      h.project.media.length > 4 ? C.removeMedia([pick(h.project.media.slice(4)).id]) : C.addBin('m'),
+      h.project.bins.length > 2 ? C.removeBin(pick(h.project.bins).id) : C.addBin('n', h.project.bins.length ? pick(h.project.bins).id : null),
+    ]);
+  };
+  let done = 0;
+  let tries = 0;
+  const noops = {};
+  const refusals = {};
+  const t0 = Date.now();
+  while (done < 2000 && tries < 12000) {
+    tries++;
+    const cmd = randomCommand();
+    const steps = changes;
+    try {
+      h.do(cmd);
+    } catch (err) {
+      failed++;
+      refusals[err.code] = (refusals[err.code] || 0) + 1;
+      // Nothing changed: the project is still the last recorded state.
+      if (hash() !== states[states.length - 1]) rollbackBad++;
+      if (err.code === 'invalidResult') {
+        invalid++;
+        if (invalid < 4) console.log(`  invalid result from ${S(cmd)}: ${err.detail}`);
+      }
+      continue;
+    }
+    if (changes === steps) {
+      noops[cmd.type] = (noops[cmd.type] || 0) + 1;
+      if (hash() !== states[states.length - 1]) rollbackBad++;
+      continue;
+    }
+    kinds[cmd.type] = (kinds[cmd.type] || 0) + 1;
+    if (!model.validate(h.project).ok) invalid++;
+    done++;
+    states.push(hash());
+    if (done % 97 === 0) {
+      h.undo();
+      if (hash() !== states[states.length - 2]) exactBad++;
+      h.redo();
+      if (hash() !== states[states.length - 1]) exactBad++;
+    }
+  }
+  console.log(`  random: ${done} commands in ${tries} tries (${failed} refused: ${S(refusals)}) in ${Date.now() - t0} ms`);
+  console.log(`  applied ${S(kinds)}`);
+  console.log(`  no change ${S(noops)}`);
+  check(done === 2000, `2,000 random commands applied (${done})`);
+  check(Object.keys(kinds).length >= 50, `the random commands cover the command set (${Object.keys(kinds).length} kinds)`);
+  eq([invalid, rollbackBad, exactBad], [0, 0, 0], 'no random command left an invalid project, a refused one changed nothing, undo/redo spot checks were exact');
+  let stepBad = 0;
+  for (let i = states.length - 2; i >= 0; i--) {
+    h.undo();
+    if (hash() !== states[i]) stepBad++;
+  }
+  eq([stepBad, hash() === start, h.canUndo], [0, true, true], 'undoing all 2,000 steps passes every earlier state and returns to the start');
+  for (let i = 1; i < states.length; i++) {
+    h.redo();
+    if (hash() !== states[i]) stepBad++;
+  }
+  eq([stepBad, h.canRedo], [0, false], 'redoing all of them passes every state again');
+  check(model.validate(h.project).ok && model.validate(model.migrate(h.serialize())).ok, 'the final project survives serialize and migrate');
+} catch (err) {
+  check(false, `random: ${err.stack}`);
+}
+
+const failedCount = results.filter((r) => !r.ok).length;
+console.log(`${results.length - failedCount}/${results.length} passed`);
+process.exit(failedCount ? 1 : 0);

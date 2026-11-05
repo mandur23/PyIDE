@@ -1,5 +1,5 @@
 // Every literal passed to tr() anywhere in the renderer (core, bundled plugins, catalog plugins) must have a Korean
-// entry in the dictionary that will be loaded with it, in each app mode (code, craft) the plugin runs in.
+// entry in the dictionary that will be loaded with it, in each app mode (code, craft, cut) the plugin runs in.
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,7 +17,7 @@ const bundledDirs = readdirSync(path.join(APP, 'renderer', 'features')).map((d) 
 // A process loads only the plugins of its mode, and their dictionaries (main/plugin-manager.js: inMode).
 const inMode = (d, mode) => {
   const meta = readDict(path.join(d, 'plugin.json'));
-  const modes = [].concat(meta.modes || []).filter((m) => m === 'code' || m === 'craft');
+  const modes = [].concat(meta.modes || []).filter((m) => ['code', 'craft', 'cut'].includes(m));
   return !!meta.required || (modes.length ? modes : ['code']).includes(mode);
 };
 const dictOf = (dirs) => Object.assign({}, core, ...dirs.map((d) => readDict(path.join(d, 'locales', 'ko.json'))));
@@ -34,7 +34,7 @@ const checkUnit = (label, files, dict) => {
 };
 checkUnit('core', jsFiles(path.join(APP, 'renderer', 'core')), core);
 const counts = {};
-for (const mode of ['code', 'craft']) {
+for (const mode of ['code', 'craft', 'cut']) {
   const before = problems.length;
   const dirs = bundledDirs.filter((d) => inMode(d, mode));
   const dict = dictOf(dirs);
@@ -55,6 +55,6 @@ for (const m of html.matchAll(/data-i18n(?:-title|-placeholder)?="([^"]+)"/g)) {
 }
 
 const dynamic = Object.keys(bundledDict).filter((k) => !used.has(k));
-console.log(`${used.size} distinct UI strings checked; ${problems.length} missing (code mode ${counts.code}, craft mode ${counts.craft}); ${dynamic.length} dictionary entries only reachable dynamically (plugin names, mapped messages)`);
+console.log(`${used.size} distinct UI strings checked; ${problems.length} missing (code mode ${counts.code}, craft mode ${counts.craft}, cut mode ${counts.cut}); ${dynamic.length} dictionary entries only reachable dynamically (plugin names, mapped messages)`);
 for (const p of problems) console.log(`FAIL ${p}`);
 process.exit(problems.length ? 1 : 0);

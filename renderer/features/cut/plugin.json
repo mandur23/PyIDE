@@ -1,0 +1,10 @@
+{
+  "id": "cut",
+  "name": "Video Editor",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "Nano Studio Cut: edit videos on a multi-track timeline with source and program monitors, trim tools, keyframes, effects, transitions, color correction, titles, captions and audio mixing, and export MP4, all on the PC's own GPU encoders and decoders.",
+  "modes": ["cut"],
+  "requiredIn": ["cut"],
+  "main": ["cut.js"]
+}

@@ -1,14 +1,15 @@
-# 개발 가이드 (Code와 Craft 공통)
+# 개발 가이드 (Code, Craft, Cut 공통)
 
-Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만드는 방법, 코딩 규칙, 테스트, 커밋과 릴리스 순서를 다룹니다. 앱별 내용은 [code-app.md](code-app.md)와 [craft-app.md](craft-app.md), 겪은 문제와 규칙은 [pitfalls.md](pitfalls.md), 기능과 API의 상세 명세는 [FEATURES.md](../FEATURES.md)에 있습니다.
+Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만드는 방법, 코딩 규칙, 테스트, 커밋과 릴리스 순서를 다룹니다. 앱별 내용은 [code-app.md](code-app.md), [craft-app.md](craft-app.md), [cut-app.md](cut-app.md), 겪은 문제와 규칙은 [pitfalls.md](pitfalls.md), 기능과 API의 상세 명세는 [FEATURES.md](../FEATURES.md)에 있습니다.
 
 ## 1. 한눈에 보기
 
 - Windows 전용 Electron 45 앱입니다. 편집기는 Monaco입니다.
-- 설치본 하나에 앱이 두 개 있습니다. 프로세스마다 모드가 하나입니다.
+- 설치본 하나에 앱이 세 개 있습니다. 프로세스마다 모드가 하나입니다.
   - `code`: Nano Studio Code. PyCharm 스타일 Python IDE입니다.
   - `craft`: Nano Studio Craft. 공식 Minecraft Launcher로 플레이하고 서버를 여는 앱입니다.
-  - `--mode=code|craft`로 고르고, 경로 인자가 있으면 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
+  - `cut`: Nano Studio Cut. 영상 편집기입니다. 디코딩과 인코딩은 WebCodecs, 합성은 WebGPU, 소리는 Web Audio로 하고 FFmpeg 같은 외부 라이브러리를 쓰지 않습니다.
+  - `--mode=code|craft|cut`로 고르고, 경로 인자가 있으면 code입니다. 둘 다 없으면 시작 화면(`renderer/chooser.html`)이 뜹니다.
 - 프로세스는 셋입니다.
   - 메인: `main.js`와 `main/`. 파일, 프로세스, 네트워크, 창을 맡습니다.
   - 프리로드: `preload.js`. IDE 페이지(`renderer/index.html`)에만 `window.api`를 줍니다.
@@ -24,21 +25,23 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 | `main/features/<기능>.js` | 기능의 메인 모듈. `register(ctx)`로 IPC를 등록합니다 |
 | `main/trust.js`, `main/security.js`, `main/program-env.js` | 안전 모드, 창 탐색과 권한 차단, 자식 프로세스 환경 |
 | `main/minecraft/`, `main/bore-*.js` | Craft의 서버, 런처, 플레이어, 비공개 공유 |
+| `main/features/cut.js`, `main/cut/` | Cut의 파일 읽기와 쓰기, 자동 저장과 복구, 캐시, 글꼴 |
 | `renderer/core/ide.js` | `window.ide` API, 액션과 키맵, 프로젝트 트리, 툴 윈도우, 대화상자, 설정 |
 | `renderer/core/editors.js` | 편집기 탭, 그룹 분할, `ide.openFile`, 창 닫기 대화상자 |
 | `renderer/features/<기능>/` | 플러그인: `plugin.json`, `index.js`, `style.css`, `locales/ko.json` |
+| `renderer/features/cut/` | Cut 편집기 전체(형식, 모델, 엔진, 내보내기, 화면). 지도는 [cut-app.md](cut-app.md) |
 | `renderer/locales/ko.json` | 코어와 공용 문구의 한국어 |
 | `verify/` | 테스트(`<이름>.mjs`), 공용 도구 `lib.mjs`, 고정 프로젝트 `fixtures/` |
 | `scripts/release.mjs` | 릴리스 전 과정 |
 | `tools/` | 아이콘 생성기, NanoBridge 플러그인 소스 |
-| `docs/` | 이 문서들과 Craft 설계 문서 |
+| `docs/` | 이 문서들과 Craft, Cut 설계 문서 |
 
 ## 3. 기능(플러그인) 만들기
 
 기능 `foo`는 다음 파일로 이루어집니다. 자세한 규칙은 FEATURES.md의 "Layout of a feature named `foo`"와 "Plugins"에 있습니다.
 
 - `renderer/features/foo/plugin.json`: `{id, name, version, vendor, description, main?, depends?, modes?, required?, requiredIn?}`.
-  - `modes`의 기본값은 `["code"]`입니다. Craft에도 필요하면 `["code", "craft"]`, Craft 전용이면 `["craft"]`를 씁니다.
+  - `modes`의 기본값은 `["code"]`입니다. Craft에도 필요하면 `["code", "craft"]`, Craft 전용이면 `["craft"]`, Cut 전용이면 `["cut"]`을 씁니다.
   - `required`는 모든 모드에서 로드됩니다. 한 모드에서만 끌 수 없게 하려면 `requiredIn`을 씁니다.
   - `main`에 적은 파일은 `main/features/`에서 찾습니다. 꺼진 플러그인은 렌더러와 메인 모듈 모두 로드되지 않습니다.
 - `renderer/features/foo/index.js`: IIFE로 감싸고 전역 `ide`를 씁니다. 모든 플러그인 스크립트가 차례로 실행되고, `depends`가 먼저 로드됩니다.
@@ -52,7 +55,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 - 액션: `ide.registerAction({id, title, keys, run, when, context})`. 키는 PyCharm 기본 키맵을 따르고 다른 기능의 키를 빼앗지 않습니다. 화면에 단축키를 쓸 때는 `ide.keymap.label(id)`를 읽습니다.
 - 툴 윈도우: `ide.registerToolWindow({id, title, icon, side, order, mount})`. 아이콘은 `ide.icon(name)`의 이름입니다.
 - 대화상자와 목록: `ide.ui.dialog`, `ide.ui.pick`, `ide.ui.contextMenu`, `ide.ui.confirm`, `ide.ui.listKeys`.
-- 설정: `ide.settings.get/set`, 설정 페이지는 `ide.settingsPages`에 넣습니다. Craft에도 보이려면 `craft: true`입니다.
+- 설정: `ide.settings.get/set`, 설정 페이지는 `ide.settingsPages`에 넣습니다. Craft와 Cut에도 보이려면 `craft: true`입니다.
 - 이벤트: `ide.on('projectOpened' | 'fileSaved' | 'settingsChanged' | ...)`. 해제 함수를 돌려줍니다.
 - 프로세스: 메인의 `ctx.startProcess`가 돌려준 id를 `ide.proc.attach(id, {data, exit})`에 넘깁니다.
 - 다른 플러그인 API(`ide.lsp`, `ide.run`, `ide.debugger`...)는 없을 수 있습니다. `?.`로 부릅니다.
@@ -90,7 +93,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 ## 5. 번역
 
 - 원문은 영어이고 `tr('Run {name}', {name})`으로 번역합니다. 정적 마크업은 `data-i18n`을 씁니다.
-- 한국어는 플러그인의 `locales/ko.json`에 넣습니다. 두 앱이 함께 쓰는 문구는 `renderer/locales/ko.json`에 넣습니다. 사전은 모드별로 합쳐지므로 Code 전용 플러그인의 문구는 Craft에 없습니다.
+- 한국어는 플러그인의 `locales/ko.json`에 넣습니다. 여러 앱이 함께 쓰는 문구는 `renderer/locales/ko.json`에 넣습니다. 사전은 모드별로 합쳐지므로 Code 전용 플러그인의 문구는 Craft에 없습니다.
 - 사용자 데이터(코드, 파일 이름, 경로, 출력)는 번역하지 않습니다. 용어는 PyCharm 한국어 팩을 따릅니다.
 - Craft 문구는 -요 말투입니다. 이름 뒤에 조사를 붙이지 않습니다.
 - 바꾼 뒤 `node verify/i18n-static.mjs`가 누락 0개여야 합니다.
@@ -153,7 +156,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
    PYIDE_DIST_DIR="$LOCALAPPDATA\\Temp\\pyidedist-0.3.14" npm run release -- 0.3.14 --dry-run
    ```
 
-4. 만든 `win-unpacked`의 exe를 띄워 Code와 Craft가 열리는지 직접 확인합니다.
+4. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다.
 5. 실제 릴리스를 합니다. `--skip-tests`는 CI가 통과했을 때만 씁니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.
 6. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`의 옛 버전은 지우지 않습니다. 그 뒤 임시 폴더를 지웁니다.
 7. `gh release list -R mandur23/Portfolio-Nano-`에서 Latest가 여전히 v1.4.3인지 봅니다. `nano-studio` 릴리스가 Latest가 되면 안 됩니다.

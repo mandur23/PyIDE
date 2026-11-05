@@ -294,7 +294,8 @@
     const nested = { 'editor-group': 'editor', 'appearance-behavior': 'appearance' };
     const base = BASE_TREE.map((n) => (nested[n.group] ? { ...n, children: [...n.children, ...pluginPages.filter((p) => p.group === nested[n.group])] } : n));
     const tree = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
-    if (ide.appMode !== 'craft') return tree;
+    // craft: true marks the pages the apps outside the IDE (Craft, Cut) show; only their own plugins' pages exist there.
+    if (ide.appMode === 'code') return tree;
     return tree.map((n) => (n.children ? { ...n, children: n.children.filter((p) => p.craft) } : n)).filter((n) => (n.children ? n.children.length : n.craft));
   }
   function rebuildTree() {

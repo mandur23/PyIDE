@@ -297,6 +297,12 @@ body.app-craft #craftHost { display: flex; flex-direction: column; flex: 1; min-
 body.app-craft :is(#toolbar, #stripe, #stripeRight, #sidePanel, #sideSplitter, #editorArea, #trustBar,
   #statusPath, #statusPos, #statusEncodingSlot, #statusInterp) { display: none !important; }
 body.app-craft #statusItems > :not(#bgTasks, #ideErrors, #updateStatus, #installerStatus) { display: none !important; }
+/* Cut mode: the video editor fills #cutHost, the whole window above the status bar. */
+#cutHost { display: none; }
+body.app-cut #cutHost { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+body.app-cut :is(#toolbar, #stripe, #stripeRight, #sidePanel, #sideSplitter, #editorArea, #trustBar, #bottom, #bottomSplitter,
+  #rightPanel, #rightSplitter, #statusPath, #statusPos, #statusEncodingSlot, #statusInterp) { display: none !important; }
+body.app-cut #statusItems > :not(#bgTasks, #ideErrors, #updateStatus) { display: none !important; }
 
 /* Main toolbar (PyCharm New UI): main menu, project widget, run widget, search, settings. */
 #toolbar { padding: 0 6px; }

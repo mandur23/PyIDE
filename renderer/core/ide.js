@@ -77,9 +77,9 @@ const ide = (window.ide = {
   logger: ideDiagnostics.logger,
   // A detached window ("Open in New Window") shows only editors; see editors.js.
   detached: pageParams.has('detached'),
-  // The process's app mode (main.js): 'code', the IDE, or 'craft', the Minecraft app, where the IDE chrome is hidden
-  // and the Minecraft plugin fills #craftHost (craftReady).
-  appMode: pageParams.get('mode') === 'craft' ? 'craft' : 'code',
+  // The process's app mode (main.js): 'code', the IDE; 'craft', the Minecraft app, where the IDE chrome is hidden and
+  // the Minecraft plugin fills #craftHost (craftReady); or 'cut', the video editor, which fills #cutHost (cutReady).
+  appMode: ['craft', 'cut'].includes(pageParams.get('mode')) ? pageParams.get('mode') : 'code',
   productName: pageParams.get('product') || 'Nano Studio',
   root: null,
   monaco: null,
@@ -93,11 +93,11 @@ const ide = (window.ide = {
 });
 
 if (ide.detached) document.body.classList.add('detached');
-ide.appTitle = `${ide.productName} ${ide.appMode === 'craft' ? 'Craft' : 'Code'}`;
+ide.appTitle = `${ide.productName} ${{ craft: 'Craft', cut: 'Cut' }[ide.appMode] || 'Code'}`;
 document.title = ide.appTitle;
-if (ide.appMode === 'craft') document.body.classList.add('app-craft');
-// Craft has one project, its workspace, which main.js creates and trusts and the page opens at start.
-const craftHome = ide.appMode === 'craft' ? pageParams.get('open') : null;
+if (ide.appMode !== 'code') document.body.classList.add(`app-${ide.appMode}`);
+// Craft and Cut have one project each, their workspace, which main.js creates and trusts and the page opens at start.
+const craftHome = ide.appMode !== 'code' ? pageParams.get('open') : null;
 // Which of `folder` and its parents are case-sensitive; editors ask for each document they open, before keying it.
 ide.learnPathCase = learnPathCase;
 
@@ -2713,7 +2713,7 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   await Promise.race([ide.layouts?.restored(), new Promise((r) => { setTimeout(r, 8000); })]);
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
-  if (craftHome && ide.root) ide.emit('craftReady', { host: $('craftHost') });
+  if (craftHome && ide.root) ide.emit(`${ide.appMode}Ready`, { host: $(`${ide.appMode}Host`) });
   ide.api.invoke('core:migrationNotice').then((m) => m && ide.notifications?.notify({
     title: tr('PyIDE settings imported'), kind: m.failed.length ? 'warn' : 'info', group: 'Settings', raw: true,
     text: m.failed.length

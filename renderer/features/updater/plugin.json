@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "vendor": "Nano Studio",
   "description": "Checks an update feed on startup, daily or weekly and from Help, downloads new versions in the background and installs them on restart.",
-  "modes": ["code", "craft"],
+  "modes": ["code", "craft", "cut"],
   "main": ["updater.js"]
 }

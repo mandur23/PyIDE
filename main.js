@@ -556,12 +556,15 @@ function registerFeatures() {
 
 const windows = createWindowManager({ appDir: __dirname, product: app.getName() });
 
-// The process runs one app mode, 'code' (the IDE) or 'craft' (the Minecraft app); running both takes two processes.
-// --mode=code|craft picks it, a file or folder argument means code, and otherwise the start chooser asks.
-const modeArg = /^--mode=(code|craft)$/.exec(process.argv.find((a) => a.startsWith('--mode=')) || '')?.[1] || null;
+// The process runs one app mode, 'code' (the IDE), 'craft' (the Minecraft app) or 'cut' (the video editor); running
+// two takes two processes. --mode=<mode> picks it, a file or folder argument means code, and otherwise the start chooser asks.
+const modeArg = /^--mode=(code|craft|cut)$/.exec(process.argv.find((a) => a.startsWith('--mode=')) || '')?.[1] || null;
 let appMode = 'code';
-// Craft's project is always this folder (PYIDE_CRAFT_HOME for tests), so every Minecraft feature has its ide.root.
+// Craft's and Cut's project is always their own folder (PYIDE_CRAFT_HOME, PYIDE_CUT_HOME for tests), so every feature
+// of theirs has its ide.root.
 const craftHome = () => path.resolve(process.env.PYIDE_CRAFT_HOME || path.join(require('os').homedir(), 'Nano Studio Craft'));
+const cutHome = () => path.resolve(process.env.PYIDE_CUT_HOME || path.join(require('os').homedir(), 'Nano Studio Cut'));
+const appHome = (mode) => (mode === 'craft' ? craftHome() : mode === 'cut' ? cutHome() : null);
 
 // The chooser checks for updates from before any feature module runs, so the updater registers here unless its plugin
 // is off. Its update survives the chooser: a download goes on, and the main window takes it from there.
@@ -597,10 +600,10 @@ async function createWindow() {
   plugins.setMode(mode);
   diagnostics.logger('#app').info(`mode ${mode}${modeArg ? ' (--mode)' : target ? ' (path argument)' : ' (chooser)'}`);
   let query = !target ? {} : stat.isDirectory() ? { open: target } : { open: path.dirname(target), file: target };
-  if (mode === 'craft') {
-    query = { open: craftHome() };
+  if (appHome(mode)) {
+    query = { open: appHome(mode) };
     try { await fs.promises.mkdir(query.open, { recursive: true }); } catch (err) {
-      diagnostics.logger('#app').warn(`cannot create the craft workspace ${query.open}: ${err.message}`);
+      diagnostics.logger('#app').warn(`cannot create the ${mode} workspace ${query.open}: ${err.message}`);
     }
   }
   win = windows.createMain(query, mode);
@@ -614,7 +617,7 @@ app.whenReady().then(async () => {
   if (!(await createWindow())) return void app.quit();
   // Before anything else: interpreter discovery and git ask it about the first project right away.
   trust.register(featureContext);
-  if (appMode === 'craft' && !trust.isTrusted(craftHome())) trust.trust(craftHome());
+  if (appHome(appMode) && !trust.isTrusted(appHome(appMode))) trust.trust(appHome(appMode));
   win.webContents.once('dom-ready', registerFeatures);
   // A page that never gets that far (it crashed, or hangs) still gets them, for its reload.
   setTimeout(registerFeatures, 3000);

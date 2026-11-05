@@ -33,7 +33,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
       x: bounds.x,
       y: bounds.y,
       backgroundColor: '#1e1f22',
-      title: `${product} ${mode === 'craft' ? 'Craft' : 'Code'}`,
+      title: `${product} ${{ craft: 'Craft', cut: 'Cut' }[mode] || 'Code'}`,
       autoHideMenuBar: true,
       // The preload hands the IPC API only to the IDE page (--pyide-page); the renderer process runs in Chromium's sandbox.
       webPreferences: {
@@ -88,7 +88,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
       });
       chooser = w;
       const mine = (e) => e.sender === w.webContents;
-      const onPick = (e, picked) => { if (mine(e) && (picked === 'code' || picked === 'craft')) resolve(picked); };
+      const onPick = (e, picked) => { if (mine(e) && ['code', 'craft', 'cut'].includes(picked)) resolve(picked); };
       const onClose = (e) => { if (mine(e)) w.close(); };
       const onUpdateState = (e) => { e.returnValue = mine(e) ? updates?.state() ?? null : null; };
       const onUpdate = (e) => { if (mine(e)) updates?.update(); };

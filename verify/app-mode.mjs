@@ -5,8 +5,9 @@
 // renderer scripts and main modules); a path argument without --mode goes straight to code mode; a restart keeps the
 // mode; the chooser's Dock offers an update from a local feed, downloads it and hands it to the main window, says when
 // there is none and when the feed cannot be read; Code shows no Minecraft UI and loads no Craft code, and a run
-// configuration and servers/ folder a project kept from before do no harm there. Screenshots: chooser.png,
-// chooser-ko.png, chooser-update.png and craft-empty.png in verify/out/app-mode. Ports 9642-9652.
+// configuration and servers/ folder a project kept from before do no harm there; --mode=cut opens the video editor's
+// window on its own workspace (PYIDE_CUT_HOME), with only its plugins. Screenshots: chooser.png, chooser-ko.png,
+// chooser-update.png and craft-empty.png in verify/out/app-mode. Ports 9642-9652 and 9758.
 import { spawn, execSync } from 'child_process';
 import { createHash, randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -133,8 +134,8 @@ try {
     const c = await page(9642, CHOOSER);
     await c.until(`!!document.querySelector('.chooser-name')?.textContent && document.visibilityState === 'visible'`, 'chooser drawn');
     const st = await chooserState(c);
-    check(st.cards.length === 2 && st.cards[0].name === `${PRODUCT} Code` && st.cards[1].name === `${PRODUCT} Craft` && st.cards.every((x) => x.icon && x.sub),
-      `the chooser shows a Code and a Craft card with icons (${S(st.cards)})`);
+    check(st.cards.length === 3 && st.cards[0].name === `${PRODUCT} Code` && st.cards[1].name === `${PRODUCT} Craft` && st.cards[2].name === `${PRODUCT} Cut`
+      && st.cards.every((x) => x.icon && x.sub), `the chooser shows a Code, a Craft and a Cut card with icons (${S(st.cards)})`);
     check(Math.abs(st.w - 860) <= 20 && Math.abs(st.h - 540) <= 20, `the chooser is about 860x540 (${st.w}x${st.h})`);
     check(S(st.api) === S(['close', 'loadSettingsSync', 'localeSync', 'onUpdate', 'pick', 'saveSettingsSync', 'update', 'updateState']) && st.ide === 'undefined', `the chooser page gets only its own calls (${S(st.api)})`);
     check(st.focused === 'chooseCode' && !(await c.js(`document.body.textContent.toLowerCase().includes('remember')`)), 'the Code card has the focus; there is no remember option');
@@ -203,6 +204,7 @@ try {
     check(await c.js(`document.getElementById('chooserVersion').textContent`) === JSON.parse(readFileSync(path.join(APP_DIR, 'package.json'), 'utf8')).version, 'the menu bar shows this version');
     await c.key('ArrowRight', 39);
     await c.key('ArrowRight', 39);
+    await c.key('ArrowRight', 39);
     await c.until(`document.activeElement.id === 'chooseUpdate'`, 'the update icon by the keyboard');
     console.log(`screenshot: ${await c.shot('chooser-update.png')}`);
     await c.click('#chooseUpdate');
@@ -268,7 +270,7 @@ try {
     const c = await page(9644, CHOOSER);
     await c.until(`!!document.querySelector('.chooser-name')?.textContent && document.visibilityState === 'visible'`, 'chooser drawn');
     const st = await chooserState(c);
-    check(st.cards[0].sub === 'Python·웹 개발' && st.cards[1].sub === '마인크래프트 플레이·서버' && (await c.js(`document.getElementById('chooserClose').title`)) === '닫기'
+    check(st.cards[0].sub === 'Python·웹 개발' && st.cards[1].sub === '마인크래프트 플레이·서버' && st.cards[2].sub === '영상 편집' && (await c.js(`document.getElementById('chooserClose').title`)) === '닫기'
       && (await c.js(`document.getElementById('chooserAsk').textContent + '|' + document.getElementById('chooserHint').textContent`)) === '무엇을 열까요?|Dock에서 앱을 고르세요',
       `the chooser speaks Korean (${S(st.cards.map((x) => x.sub))})`);
     console.log(`screenshot: ${await c.shot('chooser-ko.png')}`);
@@ -348,6 +350,30 @@ try {
     check(after === 'craft' && !(await pages(9645)).some((u) => CHOOSER.test(u)), `a restart keeps craft mode and skips the chooser (${after})`);
     again?.close();
     for (const p of processSnapshot()) if (p.name === 'electron.exe' && p.cmd.includes('--remote-debugging-port=9645')) try { execSync(`taskkill /pid ${p.pid} /T /F`, { stdio: 'ignore' }); } catch {}
+  }
+
+  // ---------- --mode=cut: the video editor ----------
+  {
+    const data = userData();
+    const cut = path.join(tempDir('app-mode-cut'), 'Cut Home');
+    const t = await launch({ fixture: 'core', port: 9758, name: 'app-mode', mode: 'cut', userData: data, env: { PYIDE_CUT_HOME: cut, PYIDE_TRUST_ALL: '0' } });
+    const s = await t.js(`(() => {
+      const shown = (id) => { const n = document.getElementById(id); return !!n && getComputedStyle(n).display !== 'none' && n.getClientRects().length > 0; };
+      const host = document.getElementById('cutHost').getBoundingClientRect();
+      return { mode: ide.appMode, root: ide.root, trusted: ide.trusted, title: document.title, dialogs: document.querySelectorAll('.dialog').length,
+        hidden: ['toolbar', 'runWidget', 'stripe', 'sidePanel', 'editorArea', 'bottom', 'craftHost', 'statusPath'].filter(shown),
+        host: { x: host.x, y: host.y, w: host.width }, win: innerWidth, scripts: [...document.querySelectorAll('script[data-plugin]')].map((n) => n.dataset.plugin) };
+    })()`);
+    check(s.mode === 'cut' && s.title.endsWith(`${PRODUCT} Cut`), `--mode=cut opens the Cut window (${S({ mode: s.mode, title: s.title })})`);
+    const trusted = JSON.parse(readFileSync(path.join(data, 'trusted-projects.json'), 'utf8'));
+    check(existsSync(cut) && s.root?.toLowerCase() === cut.toLowerCase() && s.trusted && !s.dialogs && trusted.includes(cut.toLowerCase()),
+      `the Cut workspace is created, opened as the project and trusted without asking (${S({ root: s.root, trusted: s.trusted })})`);
+    check(!s.hidden.length && s.host.x === 0 && s.host.y === 0 && Math.abs(s.host.w - s.win) <= 1, `the editor fills the window and the IDE chrome is hidden (${S(s.hidden)})`);
+    check(s.scripts.includes('cut') && !s.scripts.includes('vcs') && !s.scripts.includes('minecraft'), `cut mode loads the editor, not Code's or Craft's plugins (${S(s.scripts)})`);
+    await t.until('window.__cutReady === true', 'the editor started in #cutHost', 30000);
+    check(true, 'cutReady starts the editor');
+    check(!t.consoleErrors.length, `no renderer exceptions in cut (${S(t.consoleErrors)})`);
+    t.close();
   }
 
   // ---------- a path argument without --mode goes to code mode ----------

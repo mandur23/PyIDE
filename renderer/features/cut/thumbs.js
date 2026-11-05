@@ -1,0 +1,216 @@
+// Thumbnails and waveform peaks of Nano Studio Cut's media (docs/cut-architecture.md section 8), for the project panel
+// and the timeline's clips. Both are cached twice: in memory for this session and in the app's common cache
+// (cut:cacheGet / cut:cachePut, least recently used files go first), keyed by the file's path, size and mtime, so a
+// changed file gets new ones. The work runs in one queue, one job at a time, held while the player plays.
+//
+// strip() snaps each time to the frame shown there, so zooming the timeline reuses the thumbnails it already has.
+// Bitmaps are shared: callers draw them and never close them.
+(function (factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else (globalThis.Cut = globalThis.Cut || {}).thumbs = api;
+})(() => {
+  // Not `typeof require`: Monaco's AMD loader makes require a global function in the page.
+  const NODE = typeof module === 'object' && !!module.exports;
+  const need = (name) => (NODE ? require(`./${name}.js`) : globalThis.Cut[name]);
+
+  const invoke = (...args) => Promise.resolve(globalThis.ide?.api?.invoke?.(...args));
+  const cacheGet = (key) => invoke('cut:cacheGet', key).then((r) => (r instanceof Uint8Array && r.length ? r : null)).catch(() => null);
+  const cachePut = (key, bytes) => invoke('cut:cachePut', key, bytes).catch(() => {});
+
+  // ---- the work queue --------------------------------------------------------------------------------------------------
+
+  const jobs = [];
+  let running = false;
+  let paused = false;
+  let resume = null;
+  function enqueue(fn) {
+    return new Promise((resolve, reject) => {
+      jobs.push({ fn, resolve, reject });
+      pump();
+    });
+  }
+  async function pump() {
+    if (running) return;
+    running = true;
+    try {
+      while (jobs.length) {
+        while (paused) await new Promise((r) => { resume = r; });
+        const job = jobs.shift();
+        try { job.resolve(await job.fn()); } catch (err) { job.reject(err); }
+      }
+    } finally { running = false; }
+  }
+  function pause(on) {
+    paused = !!on;
+    if (!paused && resume) { const r = resume; resume = null; r(); }
+  }
+
+  // ---- thumbnails ----------------------------------------------------------------------------------------------------
+
+  const bitmaps = new Map(); // key -> ImageBitmap (LRU)
+  const KEEP_BITMAPS = 600;
+  function remember(key, bmp) {
+    bitmaps.delete(key);
+    bitmaps.set(key, bmp);
+    while (bitmaps.size > KEEP_BITMAPS) {
+      const [k, old] = bitmaps.entries().next().value;
+      bitmaps.delete(k);
+      old.close?.();
+    }
+    return bmp;
+  }
+  const recall = (key) => {
+    const b = bitmaps.get(key);
+    if (b) { bitmaps.delete(key); bitmaps.set(key, b); }
+    return b || null;
+  };
+  // One frame source per file for thumbnails, closed when idle.
+  const thumbSources = new Map(); // path -> { src, timer }
+  function thumbSource(opened) {
+    let e = thumbSources.get(opened.path);
+    if (!e) {
+      e = { src: need('decoder').createFrameSource(opened, opened.video, { hardware: true, cacheFrames: 4 }), timer: null };
+      thumbSources.set(opened.path, e);
+    }
+    clearTimeout(e.timer);
+    e.timer = setTimeout(() => { e.src.close(); thumbSources.delete(opened.path); }, 10000);
+    return e.src;
+  }
+
+  function canvasOf(w, h) {
+    return typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+  }
+  async function encode(canvas) {
+    const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 }) : await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.82));
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+  function drawTurned(g, source, w, h, rotation) {
+    g.save();
+    g.translate(w / 2, h / 2);
+    g.rotate(((rotation || 0) * Math.PI) / 180);
+    const turned = rotation === 90 || rotation === 270;
+    g.drawImage(source, turned ? -h / 2 : -w / 2, turned ? -w / 2 : -h / 2, turned ? h : w, turned ? w : h);
+    g.restore();
+  }
+
+  // `count` thumbnails evenly from `from` to `to` (source ticks), `height` pixels high. Images give `count` copies of
+  // one; audio gives none.
+  async function strip(project, mediaId, { from = 0, to = null, count = 8, height = 48 } = {}) {
+    const m = project.media.find((x) => x.id === mediaId);
+    if (!m || m.kind === 'audio') return [];
+    const o = await need('media').open(project, mediaId);
+    if (o.error) return [];
+    const h = Math.max(8, Math.round(height));
+    const w = Math.max(8, Math.round((h * (o.width || 16)) / (o.height || 9)));
+    const base = `thumb1|${o.path}|${o.size}|${o.mtime}|${h}`;
+    if (o.image) {
+      const key = `${base}|img`;
+      let b = recall(key);
+      if (!b) {
+        const c = canvasOf(w, h);
+        c.getContext('2d').drawImage(o.image, 0, 0, w, h);
+        b = remember(key, await createImageBitmap(c));
+      }
+      return Array.from({ length: Math.max(0, count) }, () => b);
+    }
+    if (!o.video) return [];
+    const end = to ?? o.duration;
+    const n = Math.max(0, Math.floor(count));
+    const probe = need('probe');
+    const times = Array.from({ length: n }, (_, i) => (n === 1 ? from : from + ((end - from) * i) / Math.max(1, n - 1)));
+    const samples = times.map((t) => Math.max(0, probe.sampleAtTime(o.video, Math.min(t, Math.max(0, o.duration - 1)))));
+    const out = new Array(n).fill(null);
+    const missing = [];
+    for (let i = 0; i < n; i++) {
+      const key = `${base}|${samples[i]}`;
+      const b = recall(key);
+      if (b) out[i] = b;
+      else missing.push(i);
+    }
+    if (!missing.length) return out;
+    // Disk cache first, then decode what is left in time order.
+    const left = [];
+    await Promise.all(missing.map(async (i) => {
+      const key = `${base}|${samples[i]}`;
+      const bytes = await cacheGet(key);
+      if (!bytes) { left.push(i); return; }
+      try { out[i] = recall(key) || remember(key, await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }))); } catch { left.push(i); }
+    }));
+    if (left.length) {
+      left.sort((a, b) => o.video.samples.pts[samples[a]] - o.video.samples.pts[samples[b]]);
+      await enqueue(async () => {
+        const src = thumbSource(o);
+        const c = canvasOf(w, h);
+        const g = c.getContext('2d');
+        for (const i of left) {
+          const key = `${base}|${samples[i]}`;
+          const hit = recall(key);
+          if (hit) { out[i] = hit; continue; }
+          const frame = await src.frameAt(o.video.samples.pts[samples[i]]);
+          try {
+            g.clearRect(0, 0, w, h);
+            drawTurned(g, frame, w, h, o.rotation);
+          } finally { src.release(frame); }
+          out[i] = remember(key, await createImageBitmap(c));
+          encode(c).then((bytes) => cachePut(key, bytes)).catch(() => {});
+        }
+      });
+    }
+    // A frame that could not be made shows its neighbour's thumbnail.
+    const any = out.find(Boolean) || null;
+    return any ? out.map((b) => b || any) : [];
+  }
+
+  // ---- peaks ---------------------------------------------------------------------------------------------------------
+
+  // min/max pairs over blocks of `samplesPerPeak` samples, every channel together: [min0, max0, min1, max1, ...].
+  function computePeaks(data, samplesPerPeak) {
+    const len = data[0]?.length || 0;
+    const spp = Math.max(1, Math.round(samplesPerPeak));
+    const n = Math.ceil(len / spp);
+    const out = new Float32Array(n * 2);
+    for (let b = 0; b < n; b++) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      const a = b * spp;
+      const e = Math.min(len, a + spp);
+      for (const ch of data) {
+        for (let i = a; i < e; i++) {
+          const v = ch[i];
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+      out[b * 2] = lo === Infinity ? 0 : lo;
+      out[b * 2 + 1] = hi === -Infinity ? 0 : hi;
+    }
+    return out;
+  }
+  const peakMemo = new Map();
+  // Peaks of a file's audio at its own sample rate (rate = the track's, in the result's `rate` property).
+  async function peaks(project, mediaId, { samplesPerPeak = 256 } = {}) {
+    const m = project.media.find((x) => x.id === mediaId);
+    if (!m || !m.audio) return new Float32Array(0);
+    const o = await need('media').open(project, mediaId);
+    if (o.error || !o.audio) return new Float32Array(0);
+    const key = `peaks1|${o.path}|${o.size}|${o.mtime}|${o.audio.id}|${samplesPerPeak}`;
+    if (peakMemo.has(key)) return peakMemo.get(key);
+    const p = (async () => {
+      const bytes = await cacheGet(key);
+      if (bytes && bytes.length % 8 === 0) return new Float32Array(bytes.slice().buffer);
+      return enqueue(async () => {
+        const pcm = await need('decoder').decodeAudio(o, o.audio);
+        const out = computePeaks(pcm.data, samplesPerPeak);
+        cachePut(key, new Uint8Array(out.buffer.slice(0)));
+        return out;
+      });
+    })();
+    peakMemo.set(key, p);
+    p.catch(() => peakMemo.delete(key));
+    if (peakMemo.size > 200) peakMemo.delete(peakMemo.keys().next().value);
+    return p;
+  }
+
+  return { strip, peaks, computePeaks, pause, get paused() { return paused; }, get queued() { return jobs.length; } };
+});

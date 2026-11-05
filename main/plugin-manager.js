@@ -2,7 +2,7 @@
 // Renderer code is index.js / style.css next to plugin.json, translations are locales/<lang>.json, and `main`
 // lists main-process modules. Bundled plugins are renderer/features/*; user plugins live in <userData>/plugins.
 // Enabling, disabling, installing and uninstalling take effect after a restart, as in PyCharm.
-// `modes` lists the app modes a plugin runs in ('code', 'craft'; ['code'] when absent). A process has one mode
+// `modes` lists the app modes a plugin runs in ('code', 'craft', 'cut'; ['code'] when absent). A process has one mode
 // (main.js), and only the plugins of that mode load; required plugins, which only bundled ones can be, load in every mode.
 const fs = require('fs');
 const path = require('path');
@@ -10,7 +10,7 @@ const { extractZip } = require('./zip');
 const market = require('./marketplace');
 
 const ID = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
-const MODES = ['code', 'craft'];
+const MODES = ['code', 'craft', 'cut'];
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return fallback; }
