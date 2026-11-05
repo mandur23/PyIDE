@@ -208,6 +208,12 @@ try {
   check(await S(`document.fullscreenElement === document.querySelector('.cut-monitor-program .cut-monitor-view')`), 'Ctrl+` shows the program monitor full screen');
   await key('Ctrl+Backquote');
   await until(`!document.fullscreenElement`, 'full screen left', 5000).catch(() => {});
+  const sharp = `(() => { const c = Cut.ui.monitors.program.canvas; return Math.abs(c.width - c.clientWidth * devicePixelRatio) <= 2 && Math.abs(c.height - c.clientHeight * devicePixelRatio) <= 2; })()`;
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1.25, mobile: false });
+  const resized = await until(sharp, 'the stopped program monitor drawn at its new size', 5000).catch(() => false);
+  await cdp('Emulation.clearDeviceMetricsOverride');
+  check(resized && await until(sharp, 'the program monitor back at the window size', 5000).catch(() => false),
+    'a stopped monitor draws again at its new size and scale when the window changes (not the old frame stretched)');
   check(await S(`!document.fullscreenElement`), 'and Ctrl+` again leaves full screen');
   await sleep(500);
   check(await S(`Cut.ui.monitors.program.player && !Cut.ui.monitors.program.player.fallback`), 'the program monitor plays through the engine\'s player');
@@ -219,6 +225,16 @@ try {
   await key('Space');
   await until(`!Cut.app.playing`, 'stopped', 5000);
   check(tPlay > 5 * F, `Space plays and the playhead moves (${(tPlay / F).toFixed(1)} frames after 0.7 s)`);
+  await app(`(app.setTime(${45 * F}), true)`);
+  await sleep(200);
+  await S(`(() => { window.__heads = []; window.__offHeads = Cut.app.on('time', ({ t }) => window.__heads.push(t)); return true; })()`);
+  await key('Space');
+  await sleep(900);
+  await key('Space');
+  await until(`!Cut.app.playing`, 'stopped', 5000);
+  const heads = await S(`(() => { window.__offHeads(); return window.__heads; })()`);
+  check(heads.length > 5 && heads.every((t, i) => t >= 45 * F && (i === 0 || t >= heads[i - 1])),
+    `playing from frame 45 moves the playhead on from there, never back to 0 while the sound starts (${heads.slice(0, 4).map((t) => (t / F).toFixed(0)).join(', ')} … ${heads.length} moves)`);
   await key('Home');
   await key('L');
   await until(`Cut.app.playing && Cut.ui.monitors.program.player.rate === 1`, 'L plays forward', 5000);

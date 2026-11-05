@@ -39,9 +39,17 @@
   };
 
   // Which decoder configs to try, best first.
+  // Up to 1080p the software decoder goes first: a hardware decoder lends its frames from a pool of about ten and holds
+  // up to twenty back for reordering, so with B-frame footage the small cache that pool allows dropped frames before
+  // they were shown and every drop restarted the run at a sync sample (12-16 fps and 10 frames dropped a second on a
+  // 1080p30 YouTube file; software kept up with none dropped). Larger pictures, and codecs only hardware decodes, keep
+  // the hardware decoder.
+  const SOFTWARE_FIRST_PIXELS = 1920 * 1088;
   async function configs(track, hardware) {
     const media = need('media');
-    const order = hardware === false ? ['prefer-software', 'no-preference'] : ['prefer-hardware', 'prefer-software', 'no-preference'];
+    const order = hardware === false ? ['prefer-software', 'no-preference']
+      : (track.width || 0) * (track.height || 0) <= SOFTWARE_FIRST_PIXELS ? ['prefer-software', 'prefer-hardware', 'no-preference']
+        : ['prefer-hardware', 'prefer-software', 'no-preference'];
     const out = [];
     for (const pref of order) {
       const cfg = media.videoConfig(track, pref);
@@ -58,7 +66,9 @@
     const rank = new Uint32Array(count);
     for (let r = 0; r < count; r++) rank[s.order[r]] = r;
     const hardwareWanted = opts.hardware !== false;
-    const limits = { frames: opts.cacheFrames ?? (hardwareWanted ? 8 : 48), bytes: opts.cacheBytes ?? 384 * 1024 * 1024 };
+    // The frame limit follows the decoder in use (makeDecoder): a hardware decoder whose pool is all in the cache stops.
+    const cacheFramesFor = (cfg) => opts.cacheFrames ?? (cfg?.hardwareAcceleration === 'prefer-software' ? 48 : 8);
+    const limits = { frames: cacheFramesFor(hardwareWanted ? null : { hardwareAcceleration: 'prefer-software' }), bytes: opts.cacheBytes ?? 384 * 1024 * 1024 };
 
     const cache = new Map(); // sample index -> { frame, bytes }
     let cacheBytes = 0;
@@ -156,6 +166,7 @@
     async function makeDecoder() {
       if (!cfgs) cfgs = await configs(track, hardwareWanted);
       if (!cfgs.length) throw Object.assign(new Error(`this PC cannot decode ${track.codec}`), { code: 'unsupported' });
+      limits.frames = cacheFramesFor(cfgs[0]);
       decoder = new VideoDecoder({ output: onFrame, error: onError });
       counts.decoders++;
       decoder.configure(cfgs[0]);
@@ -481,9 +492,117 @@
     return entry.promise;
   }
 
+  // Sync samples one by one, each decoded alone and flushed out: a thumbnail of a sync sample costs one frame's
+  // decode, where a frame source feeds a run and waits for the frames a decoder holds back (a software decoder holds
+  // several). draw(index, frame) uses the frame before it is closed.
+  async function keyFrames(opened, track, indices, draw) {
+    const probe = need('probe');
+    const list = await configs(track, true);
+    if (!list.length) throw Object.assign(new Error(`this PC cannot decode ${track.codec}`), { code: 'unsupported' });
+    let got = null;
+    let error = null;
+    const dec = new VideoDecoder({ output: (f) => { got?.close(); got = f; }, error: (e) => { error = e; } });
+    try {
+      dec.configure(list[0]);
+      for (const idx of indices) {
+        const [data] = await probe.readSamples(opened.reader, track, idx, idx + 1);
+        dec.decode(new EncodedVideoChunk({ type: 'key', timestamp: 0, data }));
+        await dec.flush();
+        if (error) throw error;
+        const f = got;
+        got = null;
+        if (f) { try { await draw(idx, f); } finally { f.close(); } }
+      }
+    } finally {
+      got?.close();
+      if (dec.state !== 'closed') dec.close();
+    }
+  }
+
+  // Part of an audio track on demand, for long files: decoding all of a 42-minute track took 11.6 s and 0.9 GB before
+  // the first sound. -> Promise<{ rate, channels, length, read(from, to) }>, rate the decoder's output rate (HE-AAC
+  // doubles the track's) and length in samples at it. read(from, to) -> Promise<[Float32Array per channel]> of samples
+  // [from, to), zeros where the track has none. Each read decodes PREROLL packets before `from` and drops them, so an
+  // AAC frame's overlap and an MP3 frame's bit reservoir are whole at the window's edge. Raw PCM reads its bytes; a
+  // format AudioDecoder does not take is decoded whole once (decodeAudio) and sliced.
+  const PREROLL = 12;
+  async function audioReader(opened, track) {
+    const probe = need('probe');
+    const s = track.samples;
+    const seconds = time.toSeconds(track.duration || opened.duration || 0);
+    const cfg = need('media').audioConfig(track);
+    let supported = false;
+    if (!/^pcm-/.test(track.codec)) { try { supported = !!(await AudioDecoder.isConfigSupported(cfg)).supported; } catch {} }
+    if (!/^pcm-/.test(track.codec) && !supported) {
+      const whole = await decodeAudio(opened, track);
+      const length = whole.data[0]?.length || 0;
+      const read = async (from, to) => whole.data.map((d) => { const out = new Float32Array(Math.max(0, to - from)); const a = Math.max(0, from); const b = Math.min(length, to); if (b > a) out.set(d.subarray(a, b), a - from); return out; });
+      return { rate: whole.rate, channels: whole.channels, length, read };
+    }
+    // Decodes samples [i0, i1) -> { rate, channels, pieces: [{ at: seconds, planes }] }.
+    async function decodeSamples(i0, i1) {
+      if (/^pcm-/.test(track.codec)) {
+        const codecs = need('codecs');
+        const datas = await probe.readSamples(opened.reader, track, i0, i1);
+        return { rate: track.sampleRate, channels: track.channels, pieces: datas.map((d, k) => ({ at: time.toSeconds(s.pts[i0 + k]), planes: codecs.pcmToFloat(d, track.codec, track.channels) })) };
+      }
+      const pieces = [];
+      let rate = track.sampleRate;
+      let channels = track.channels;
+      let error = null;
+      const dec = new AudioDecoder({
+        output: (ad) => {
+          try {
+            rate = ad.sampleRate;
+            channels = ad.numberOfChannels;
+            const planes = [];
+            for (let c = 0; c < ad.numberOfChannels; c++) {
+              const p = new Float32Array(ad.numberOfFrames);
+              ad.copyTo(p, { planeIndex: c, format: 'f32-planar' });
+              planes.push(p);
+            }
+            pieces.push({ at: ad.timestamp / 1e6, planes });
+          } finally { ad.close(); }
+        },
+        error: (e) => { error = e; },
+      });
+      dec.configure(cfg);
+      const datas = await probe.readSamples(opened.reader, track, i0, i1);
+      for (let k = 0; k < datas.length && !error; k++) dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: time.toMicros(s.pts[i0 + k]), data: datas[k] }));
+      if (!error) await dec.flush().catch((e) => { error = error || e; });
+      if (dec.state !== 'closed') dec.close();
+      if (error) throw error;
+      return { rate, channels, pieces };
+    }
+    const first = s.count ? await decodeSamples(0, Math.min(s.count, 2)) : { rate: track.sampleRate, channels: track.channels };
+    const rate = first.rate || track.sampleRate;
+    const channels = first.channels || track.channels;
+    const length = Math.round(seconds * rate);
+    async function read(from, to) {
+      const out = Array.from({ length: channels }, () => new Float32Array(Math.max(0, to - from)));
+      if (!s.count || to <= from || to <= 0 || from >= length) return out;
+      const ia = Math.max(0, probe.sampleAtTime(track, time.fromSeconds(Math.max(0, from) / rate)) - PREROLL);
+      const ib = Math.min(s.count, probe.sampleAtTime(track, time.fromSeconds(to / rate)) + 2);
+      const raw = await decodeSamples(ia, ib);
+      for (const p of raw.pieces) {
+        const at = Math.round(p.at * rate) - from;
+        for (let c = 0; c < channels; c++) {
+          const src = p.planes[Math.min(c, p.planes.length - 1)];
+          const skip = Math.max(0, -at);
+          const n = Math.min(src.length - skip, out[c].length - Math.max(0, at));
+          if (n > 0) out[c].set(src.subarray(skip, skip + n), Math.max(0, at));
+        }
+      }
+      return out;
+    }
+    return { rate, channels, length, read };
+  }
+
   return {
     createFrameSource: trackedSource,
     decodeAudio,
+    audioReader,
+    keyFrames,
     assemble,
     // Every frame source: open = VideoFrames not closed yet (cached and lent out), sources and decoders alive.
     stats: () => ({ ...counts, live: live.size, budget: budget.bytes }),

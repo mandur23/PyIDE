@@ -847,15 +847,16 @@
         if (kind === 'video') {
           const th = thumbsFor(c, m, cw, bh);
           if (th && th.bitmaps.length) {
+            // Tiles at the picture's own aspect, each showing the strip frame under its middle; squeezing all n
+            // frames into the clip's width drew them narrower than they are.
             const n = th.bitmaps.length;
-            const slot = th.still ? th.tw : cw / n;
-            const first = Math.max(0, Math.floor((0 - x1) / slot));
-            const last = th.still ? Math.ceil((Math.min(w, x2) - x1) / slot) : Math.min(n - 1, Math.ceil((w - x1) / slot));
-            for (let i = first; i <= last; i++) {
-              const bm = th.bitmaps[th.still ? 0 : i];
+            const tw = th.tw;
+            const first = Math.max(0, Math.floor((0 - x1) / tw));
+            const last = Math.ceil((Math.min(w, x2) - x1) / tw);
+            for (let k = first; k < last; k++) {
+              const bm = th.bitmaps[th.still ? 0 : Math.min(n - 1, Math.floor((((k + 0.5) * tw) / cw) * n))];
               if (!bm) continue;
-              const bw = Math.min(th.tw, slot);
-              try { ctx.drawImage(bm, x1 + i * slot, by, bw, bh); stats.thumbs++; } catch {}
+              try { ctx.drawImage(bm, x1 + k * tw, by, tw, bh); stats.thumbs++; } catch {}
             }
           }
         } else if (kind === 'audio') drawWave(ctx, c, m, x1, x2, by, bh, w);

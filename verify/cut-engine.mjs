@@ -598,6 +598,42 @@ try {
     const a = au.out[1];
     check(a.codec.startsWith('mp4a') && Math.abs(a.length - 48000) <= 1100 && Math.abs(a.cross / (a.length / 48000) - 2000) <= 40 && Math.abs(a.rms - 0.5 / Math.SQRT2) < 0.05, `AAC decoded through AudioDecoder: about 1 s of the 1 kHz tone (${S(a)})`);
   } else console.log('NOTE no AAC encoder here; AAC decoding not checked');
+  // Long files are read in windows (decoder.audioReader) and mixed from 10 s blocks: the same samples as decoding
+  // all of it, across a block's edge, through the resampler (44.1 kHz WAV) and AudioDecoder (AAC).
+  const win = await js(`(async () => {
+    const aac = await __eng.makeAac(25, 440);
+    const paths = [await __eng.write('tone-44k.wav', __eng.makeWav(25, 440, 44100))].concat(aac ? [await __eng.write('tone-25s.m4a', aac)] : []);
+    const out = [];
+    for (const p of paths) {
+      const hist = __eng.history(640, 360);
+      const seq = hist.project.sequences[0].id;
+      const [id] = await __eng.importAll(hist, [p]);
+      hist.do(Cut.commands.place(seq, { source: { media: id }, at: 0, video: null, audio: 'A1' }));
+      const o = await Cut.media.open(hist.project, id);
+      const whole = await Cut.decoder.decodeAudio(o, o.audio);
+      const r = await Cut.decoder.audioReader(o, o.audio);
+      let readDiff = 0;
+      for (const [a, b] of [[0, 4000], [r.rate * 9 + 17, r.rate * 11], [r.rate * 20, r.length]]) {
+        const part = await r.read(a, b);
+        for (let i = 0; i < part[0].length; i++) readDiff = Math.max(readDiff, Math.abs(part[0][i] - whole.data[0][a + i]));
+      }
+      const blocks = Cut.audioengine.createMixer({ rate: 48000 });
+      const flat = Cut.audioengine.createMixer({ rate: 48000, getAudio: async () => whole });
+      const s0 = 48000 * 9;
+      const n = 48000 * 2;
+      const ma = await blocks.mixLoaded(hist.project, seq, s0, n);
+      const mb = await flat.mixLoaded(hist.project, seq, s0, n);
+      let mixDiff = 0;
+      let peak = 0;
+      for (let i = 0; i < n; i++) { mixDiff = Math.max(mixDiff, Math.abs(ma.out[0][i] - mb.out[0][i])); peak = Math.max(peak, Math.abs(ma.out[0][i])); }
+      out.push({ codec: o.audio.codec, rate: r.rate, length: r.length, wholeLength: whole.data[0].length, readDiff, mixDiff, peak, missing: ma.missing });
+    }
+    return out;
+  })()`);
+  for (const w of win) {
+    check(w.length === w.wholeLength && w.readDiff < 1e-3 && w.mixDiff < 1e-4 && w.peak > 0.2 && !w.missing,
+      `${w.codec} read in windows and mixed from 10 s blocks gives the samples of the whole decode, across the block edge at 10 s (${S(w)})`);
+  }
 
   const th = await js(`(async () => {
     const hist = __eng.history(640, 360);

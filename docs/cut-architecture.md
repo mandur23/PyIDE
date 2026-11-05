@@ -494,15 +494,22 @@ lines; `align` places the lines inside that block. `animations = { list(), make(
 Promise<VideoFrame>, sampleAt(t), prefetch(fromTicks, toTicks), release(frame), close(), hardware, stats() }`.
 Frames returned are clones the caller owns until `release(frame)`. One VideoDecoder per source, fed in decode order
 from `keyBefore`; chunks carry the sample's presentation rank as timestamp, so an output maps back to its sample.
-Decoded frames stay in a cache limited by count (8 with hardware, 48 in software) and bytes, evicting those farthest
-from the playhead, behind it first; prefetch counts the frames still inside the decoder and feeds one at a time.
-Configs are tried in order prefer-hardware, prefer-software, no-preference (`hardware: false` skips hardware). A seek
+Decoded frames stay in a cache limited by count (8 for a hardware decoder, 48 for a software one: the decoder in use
+decides) and bytes, evicting those farthest from the playhead, behind it first; prefetch counts the frames still
+inside the decoder and feeds one at a time. Up to 1920x1088 configs are tried in order prefer-software,
+prefer-hardware, no-preference, and above that hardware first (`hardware: false` skips hardware): a hardware decoder
+holds back about twenty B-frame-reordered frames from a pool of about ten, which an 8-frame cache cannot ride. A seek
 the run cannot reach restarts at `keyBefore`. Every VideoFrame is counted and closed exactly once.
 
 `decoder.stats()` -> `{ open, sources, decoders, cacheBytes, live, budget }`; `decoder.setBudget(bytes)` sets the
 memory all frame caches share (default 1.5 GB; WebGPU does not report VRAM). `decodeAudio(opened, track)` ->
 `Promise<{ rate, channels, data: [Float32Array] }>`: the whole track from source time 0 at the decoder's output rate
-(the decodeAudioData fallback is 48 kHz), kept in an LRU of 1.5 GB. Also `assemble`, `forgetAudio`.
+(the decodeAudioData fallback is 48 kHz), kept in an LRU of 1.5 GB. `audioReader(opened, track)` ->
+`Promise<{ rate, channels, length, read(from, to) -> Promise<[Float32Array]> }>` reads a part of the track at the
+decoder's output rate, decoding 12 packets before it and dropping them (AAC overlap, MP3 bit reservoir); raw PCM reads
+its bytes, and a format AudioDecoder does not take is decoded whole once and sliced. The mixer and the waveform read
+through it, so a long file is never all in memory. `keyFrames(opened, track, indices, draw)` decodes sync samples one
+at a time, each flushed out alone, for thumbnails. Also `assemble`, `forgetAudio`.
 
 ### `Cut.compositor`
 
@@ -535,15 +542,19 @@ captions, overlays, proxy, size })` -> `{ play(rate = 1), pause(), seek(t), play
 dropped, setProxy(on), ready /* Promise of the compositor */, compositor, render(), frameRect() /* the frame in CSS
 pixels */, stats() /* {shown, dropped, fps, renderMs, renderMaxMs} */, on(fn) /* frame, play, pause, error */,
 destroy() }`. It renders `app.t` whenever the time, the project or the sequence changes; while playing it follows the
-audio clock (only at rate 1 in program mode) or `performance.now()`, updates `app.setTime`, prefetches ahead, counts
-dropped frames and pauses `Cut.thumbs`. `RATES` are the J/K/L shuttle rates (-8..8). Source mode reads and writes
+audio clock (only at rate 1 in program mode; one that stands still 2.5 s gives way to the wall clock) or
+`performance.now()`, moves `app.setTime` with the clock even while a slow frame is still drawing, prefetches ahead,
+counts dropped frames and pauses `Cut.thumbs`. `RATES` are the J/K/L shuttle rates (-8..8). Source mode reads and writes
 `app.source.t`.
 
 ### `Cut.thumbs`
 
 `strip(project, mediaId, { from, to, count, height }) -> Promise<[ImageBitmap]>` (shared bitmaps: callers must not
 close them), `peaks(project, mediaId, { samplesPerPeak })` -> min/max pairs at the track's own sample rate, all
-channels together; both cached through `cut:cacheGet/Put`. Also `computePeaks`, `pause(on)`, `paused`, `queued`.
+channels together; both cached through `cut:cacheGet/Put`. A strip whose thumbnails are further apart than twice the
+distance to their sync sample shows that sync sample (one decoded frame each, through `decoder.keyFrames`); closer
+ones show their exact frame. Peaks are computed about ten seconds at a time through `decoder.audioReader`. Also
+`computePeaks`, `pause(on)`, `paused`, `queued`.
 
 ## 9. Sound and export
 
@@ -581,7 +592,15 @@ full level; mono is copied to both). Fade handles are linear in amplitude. Audio
 - `loudness(buffer)` -> `{ integrated /* LUFS, BS.1770-4 gated */, truePeak /* dBTP */, samplePeak, momentaryMax,
   shortTermMax }`, `createMeter`, `normalizeGain(peaks, target = -1)` -> dB, `matchGain(measured, target, {ceiling =
   -1})` -> dB.
-- Also `createMixer`, `transitionRange`, `resample`, `stretch`, `kFilters`, `dbToGain`, `gainToDb`, `makeBuffer`,
+- `createMixer({ rate, getAudio })` -> `{ rate, load(project, seqId, from, to), mix(project, seqId, s0, n, {masterGain}),
+  mixLoaded(...) /* mix once the samples and 15 s after them are read */, sources, forget() }`. A source's sound is
+  kept in 10 s blocks at the mixer's rate: one block of all of it when `getAudio` gives the whole track
+  (`{rate, data}`), else read on demand from the reader it gives (`{rate, length, read}`, the default) with at most
+  48 blocks kept, least recently used dropped. Blocks are resampled from windows aligned to an output sample with the
+  filter's reach on both sides, so they join without a seam. `load` reads at most 120 s of its range; `mix` counts a
+  clip whose blocks are not read yet as `missing` and asks for them. The preview reads 15 s ahead of what it
+  schedules; the export, `measure` and `renderOffline` go through `mixLoaded`.
+- Also `transitionRange`, `resample`, `stretch`, `kFilters`, `dbToGain`, `gainToDb`, `makeBuffer`,
   `decodeTrack(reader, track)`, `fileReader(path)`, `defaultGetAudio` (used when `Cut.decoder` is missing).
 
 ### `Cut.export`

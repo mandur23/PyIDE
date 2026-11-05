@@ -119,7 +119,15 @@
     const n = Math.max(0, Math.floor(count));
     const probe = need('probe');
     const times = Array.from({ length: n }, (_, i) => (n === 1 ? from : from + ((end - from) * i) / Math.max(1, n - 1)));
-    const samples = times.map((t) => Math.max(0, probe.sampleAtTime(o.video, Math.min(t, Math.max(0, o.duration - 1)))));
+    // Thumbnails far apart show the sync sample before their time when it is within half the spacing: one decoded
+    // frame each instead of a sync sample's whole run (64 thumbnails of a 42-minute file took 32 s).
+    const spacing = n > 1 ? (end - from) / (n - 1) : 0;
+    const vs = o.video.samples;
+    const samples = times.map((t) => {
+      const idx = Math.max(0, probe.sampleAtTime(o.video, Math.min(t, Math.max(0, o.duration - 1))));
+      const key = probe.keyBefore(o.video, idx);
+      return key >= 0 && vs.pts[idx] - vs.pts[key] <= spacing / 2 ? key : idx;
+    });
     const out = new Array(n).fill(null);
     const missing = [];
     for (let i = 0; i < n; i++) {
@@ -140,20 +148,28 @@
     if (left.length) {
       left.sort((a, b) => o.video.samples.pts[samples[a]] - o.video.samples.pts[samples[b]]);
       await enqueue(async () => {
-        const src = thumbSource(o);
         const c = canvasOf(w, h);
         const g = c.getContext('2d');
-        for (const i of left) {
+        const keep = async (i, frame) => {
           const key = `${base}|${samples[i]}`;
-          const hit = recall(key);
-          if (hit) { out[i] = hit; continue; }
-          const frame = await src.frameAt(o.video.samples.pts[samples[i]]);
-          try {
-            g.clearRect(0, 0, w, h);
-            drawTurned(g, frame, w, h, o.rotation);
-          } finally { src.release(frame); }
+          g.clearRect(0, 0, w, h);
+          drawTurned(g, frame, w, h, o.rotation);
           out[i] = remember(key, await createImageBitmap(c));
           encode(c).then((bytes) => cachePut(key, bytes)).catch(() => {});
+        };
+        const todo = left.filter((i) => !(out[i] = recall(`${base}|${samples[i]}`)));
+        const dec = need('decoder');
+        const keys = dec.keyFrames ? todo.filter((i) => vs.key[samples[i]]) : [];
+        if (keys.length) {
+          const byIndex = new Map(keys.map((i) => [samples[i], i]));
+          try { await dec.keyFrames(o, o.video, [...byIndex.keys()], (idx, frame) => keep(byIndex.get(idx), frame)); } catch {}
+        }
+        for (const i of todo) {
+          if (out[i] || (out[i] = recall(`${base}|${samples[i]}`))) continue;
+          // Asked for each frame: that keeps the source's idle timer from closing it under a long strip.
+          const src = thumbSource(o);
+          const frame = await src.frameAt(vs.pts[samples[i]]);
+          try { await keep(i, frame); } finally { src.release(frame); }
         }
       });
     }
@@ -200,8 +216,12 @@
       const bytes = await cacheGet(key);
       if (bytes && bytes.length % 8 === 0) return new Float32Array(bytes.slice().buffer);
       return enqueue(async () => {
-        const pcm = await need('decoder').decodeAudio(o, o.audio);
-        const out = computePeaks(pcm.data, samplesPerPeak);
+        // About ten seconds (a whole number of peaks) at a time: the whole track's PCM is never held.
+        const r = await need('decoder').audioReader(o, o.audio);
+        const spp = Math.max(1, Math.round(samplesPerPeak));
+        const win = spp * Math.max(1, Math.round((r.rate * 10) / spp));
+        const out = new Float32Array(Math.ceil(r.length / spp) * 2);
+        for (let a = 0; a < r.length; a += win) out.set(computePeaks(await r.read(a, Math.min(r.length, a + win)), spp), (a / spp) * 2);
         cachePut(key, new Uint8Array(out.buffer.slice(0)));
         return out;
       });

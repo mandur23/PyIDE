@@ -544,6 +544,7 @@
       const rate = settings.audio.rate;
       const tps = TICKS / rate;
       const mixer = ae.createMixer({ rate, getAudio: o.getAudio });
+      // The first minutes now; the rest as the mix gets there (mixLoaded), so a long range is never all in memory.
       await mixer.load(project, seq.id, from, to);
       if (signal?.aborted) return abort(cancelled());
       const { bitrate: audioBitrate, delay } = await aacSetup(rate, settings.audio.channels, settings.audio.bitrate);
@@ -575,7 +576,7 @@
         const until = Math.min(sTotal, Math.round(untilTicks / tps));
         while (sDone < until && !failure) {
           const n = Math.min(rate, until - sDone);
-          aenc.push(mixer.mix(project, seq.id, s0 + sDone, n, { masterGain }).out);
+          aenc.push((await mixer.mixLoaded(project, seq.id, s0 + sDone, n, { masterGain })).out);
           sDone += n;
           while (aenc.enc.encodeQueueSize > 8 && !failure) await sleep(1);
         }

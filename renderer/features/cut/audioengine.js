@@ -413,7 +413,8 @@
       const opened = await C.media.open(project, media.id);
       if (opened.error) throw Object.assign(new Error(opened.error.detail || opened.error.code), { code: opened.error.code });
       const track = opened.audio || opened.source?.tracks?.find((t) => t.kind === 'audio');
-      return track ? C.decoder.decodeAudio(opened, track) : null;
+      if (!track) return null;
+      return C.decoder.audioReader ? C.decoder.audioReader(opened, track) : C.decoder.decodeAudio(opened, track);
     }
     const reader = await fileReader(media.path);
     const source = await mod('probe').open(reader, { name: media.name });
@@ -458,11 +459,23 @@
 
   const KF_STEP = 32;
 
+  // A source's sound at the mixer's rate is kept in blocks of BLOCK_SECONDS: one block of all of it when getAudio gives
+  // the whole track ({rate, data}), else read on demand from the reader it gives ({rate, length, read(from, to)}), at
+  // most MAX_BLOCKS kept and the least recently used dropped. A 42-minute file then starts after one block's decode
+  // instead of decoding and resampling all of it first (11.6 s and about 2 GB).
+  const BLOCK_SECONDS = 10;
+  const MAX_BLOCKS = 48;
+  const LOAD_SECONDS = 120; // the most of a range one load() reads ahead
+  const LOOKAHEAD_SECONDS = 15;
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const stereo = (data) => (data.length === 1 ? [data[0], data[0]] : [data[0], data[1]]);
+
   function createMixer({ rate = 48000, getAudio = defaultGetAudio } = {}) {
     const tps = TICKS / rate; // ticks a sample
-    const sources = new Map(); // `${id}|${path}` -> {state: 'loading' | 'ready' | 'failed', promise, pcm: {data: [L, R], length}}
+    const sources = new Map(); // `${id}|${path}` -> {state: 'loading' | 'ready' | 'failed' | 'none', promise, pcm: store}
     const stretched = new Map(); // a clip's sound at its speed -> {data, origin}
     const keyOf = (m) => `${m.id}|${m.path}`;
+    let useTick = 0;
 
     function loadMedia(project, media) {
       const key = keyOf(media);
@@ -472,10 +485,17 @@
       s.promise = (async () => {
         try {
           const a = await getAudio(project, media);
+          if (a && typeof a.read === 'function') {
+            if (!a.length) { s.state = 'none'; return; }
+            s.pcm = { reader: a, length: Math.round((a.length * rate) / a.rate), size: rate * BLOCK_SECONDS, blocks: new Map(), loading: new Map() };
+            s.state = 'ready';
+            return;
+          }
           if (!a || !a.data?.length) { s.state = 'none'; return; }
-          let data = a.data.length === 1 ? [a.data[0], a.data[0]] : [a.data[0], a.data[1]];
+          let data = stereo(a.data);
           if (a.rate !== rate) data = resample(data, a.rate, rate);
-          s.pcm = { data, length: data[0].length };
+          const length = data[0].length;
+          s.pcm = { reader: null, length, size: Math.max(1, length), blocks: new Map([[0, { data, used: 0 }]]), loading: new Map() };
           s.state = 'ready';
         } catch (err) {
           s.state = 'failed';
@@ -484,6 +504,94 @@
       })();
       sources.set(key, s);
       return s.promise;
+    }
+
+    // Block indexes [a, b) covering samples [k0, k1) of a store, inside its length.
+    function blockRange(pcm, k0, k1) {
+      const a = Math.max(0, Math.floor(Math.max(0, k0) / pcm.size));
+      const b = Math.min(Math.ceil(pcm.length / pcm.size), Math.ceil(Math.min(pcm.length, k1) / pcm.size));
+      return [a, b];
+    }
+    // Whether samples [k0, k1) are all in memory; marks their blocks used.
+    function has(pcm, k0, k1) {
+      const [a, b] = blockRange(pcm, k0, k1);
+      useTick++;
+      for (let i = a; i < b; i++) {
+        const e = pcm.blocks.get(i);
+        if (!e) return false;
+        e.used = useTick;
+      }
+      return true;
+    }
+    function loadBlock(pcm, i, keep) {
+      if (pcm.blocks.has(i)) return Promise.resolve();
+      if (pcm.loading.has(i)) return pcm.loading.get(i);
+      const p = (async () => {
+        const r = pcm.reader;
+        const o0 = i * pcm.size;
+        const o1 = Math.min(pcm.length, o0 + pcm.size);
+        let data;
+        if (r.rate === rate) data = stereo(await r.read(o0, o1));
+        else {
+          // A window whose first sample falls on an output sample, with the resampling filter's reach on both sides,
+          // so the blocks join without a seam.
+          const g = gcd(r.rate, rate);
+          const si = r.rate / g;
+          const so = rate / g;
+          const w0 = Math.max(0, Math.floor(((o0 * r.rate) / rate - RS_HALF - 2) / si)) * si;
+          const w1 = Math.ceil((o1 * r.rate) / rate) + RS_HALF + 2;
+          const res = resample(stereo(await r.read(w0, w1)), r.rate, rate);
+          const off = o0 - (w0 / si) * so;
+          data = res.map((c) => { const out = new Float32Array(o1 - o0); out.set(c.subarray(off, off + (o1 - o0))); return out; });
+        }
+        pcm.blocks.set(i, { data, used: ++useTick });
+        while (pcm.blocks.size > MAX_BLOCKS) {
+          let worst = -1;
+          let oldest = Infinity;
+          for (const [k, e] of pcm.blocks) if (!keep?.has(k) && e.used < oldest) { oldest = e.used; worst = k; }
+          if (worst < 0) break;
+          pcm.blocks.delete(worst);
+        }
+      })().finally(() => pcm.loading.delete(i));
+      pcm.loading.set(i, p);
+      return p;
+    }
+    // Loads samples [k0, k1) of a store (a whole store has them already).
+    async function ensure(pcm, k0, k1) {
+      if (!pcm.reader) return;
+      const [a, b] = blockRange(pcm, k0, k1);
+      const keep = new Set();
+      for (let i = a; i < b; i++) keep.add(i);
+      for (let i = a; i < b; i++) await loadBlock(pcm, i, keep);
+    }
+    // Samples [k0, k1) as one array per channel (a clip played at another speed or backwards is stretched from it).
+    function copyRange(pcm, k0, k1) {
+      const n = Math.max(0, k1 - k0);
+      const out = [new Float32Array(n), new Float32Array(n)];
+      const [a, b] = blockRange(pcm, k0, k1);
+      for (let i = a; i < b; i++) {
+        const e = pcm.blocks.get(i);
+        if (!e) continue;
+        const s0 = i * pcm.size;
+        const from = Math.max(k0, s0);
+        const to = Math.min(k1, s0 + e.data[0].length);
+        if (to > from) for (let c = 0; c < 2; c++) out[c].set(e.data[c].subarray(from - s0, to - s0), from - k0);
+      }
+      return out;
+    }
+    // The source samples [k0, k1) a clip plays over the timeline range [t0, t1) (ticks); all of the clip when it plays
+    // at another speed (it is stretched whole).
+    function sourceSpan(x, span, t0, t1) {
+      const { clip } = x;
+      if (clip.speed !== 1) {
+        const pre = clip.start - span.from;
+        const post = span.to - (clip.start + x.dur);
+        return [Math.max(0, Math.round((clip.in - pre * clip.speed) / tps)), Math.round((clip.out + post * clip.speed) / tps)];
+      }
+      const a = Math.max(t0, span.from) - clip.start;
+      const b = Math.min(t1, span.to) - clip.start;
+      return clip.reverse ? [Math.floor((clip.out - b) / tps) - 1, Math.ceil((clip.out - a) / tps) + 1]
+        : [Math.floor((clip.in + a) / tps) - 1, Math.ceil((clip.in + b) / tps) + 1];
     }
 
     function audioClips(project, seq) {
@@ -500,11 +608,21 @@
       const seq = project.sequences.find((s) => s.id === seqId);
       if (!seq) return [];
       const wanted = new Map();
+      const ranges = [];
       for (const x of audioClips(project, seq)) {
         const span = clipSpan(seq, x.clip, x.dur);
-        if (span.to > from && span.from < to) wanted.set(keyOf(x.media), x.media);
+        if (span.to > from && span.from < to) { wanted.set(keyOf(x.media), x.media); ranges.push({ x, span }); }
       }
       await Promise.all([...wanted.values()].map((m) => loadMedia(project, m)));
+      // Read sources: the blocks of the range, at most LOAD_SECONDS of it from its start (all of a sped-up clip).
+      await Promise.all(ranges.map(({ x, span }) => {
+        const pcm = sources.get(keyOf(x.media))?.pcm;
+        if (!pcm?.reader) return null;
+        const t0 = Math.max(from, span.from);
+        const t1 = Math.min(to, span.to, t0 + LOAD_SECONDS * TICKS);
+        const [k0, k1] = sourceSpan(x, span, t0, t1);
+        return ensure(pcm, k0, k1).catch((err) => { const s = sources.get(keyOf(x.media)); s.state = 'failed'; s.error = err; });
+      }));
       return [...wanted.values()].filter((m) => sources.get(keyOf(m))?.state === 'failed').map((m) => ({ media: m.id, error: String(sources.get(keyOf(m)).error?.message || sources.get(keyOf(m)).error) }));
     }
 
@@ -518,7 +636,8 @@
       if (hit) { hit.used = performance.now?.() || Date.now(); return hit; }
       const srcFrom = Math.max(0, Math.round((clip.in - pre * clip.speed) / tps));
       const srcTo = Math.min(pcm.length, Math.round((clip.out + post * clip.speed) / tps));
-      let seg = pcm.data.map((c) => c.slice(srcFrom, Math.max(srcFrom, srcTo)));
+      if (!has(pcm, srcFrom, srcTo)) return null;
+      let seg = copyRange(pcm, srcFrom, Math.max(srcFrom, srcTo));
       if (clip.reverse) seg = seg.map((c) => c.reverse());
       const out = keepPitch ? stretch(seg, 1 / clip.speed, rate) : resample(seg, rate, rate / clip.speed);
       // origin: the timeline offset from clip.start of sample 0 of `out`, in ticks.
@@ -543,11 +662,25 @@
       const a = Math.max(s0, Math.ceil(span.from / tps));
       const b = Math.min(s0 + n, Math.ceil(span.to / tps));
       if (b <= a) return true;
-      const L = pcm.data[0];
-      const R = pcm.data[1];
       const plain = clip.speed === 1 && !clip.reverse;
       const revPlain = clip.speed === 1 && clip.reverse;
+      // A block not read yet: asked for, and this clip is missing from this mix.
+      const need = sourceSpan(x, span, a * tps, b * tps);
+      if (pcm.reader && !has(pcm, need[0], need[1])) { ensure(pcm, need[0], need[1]).catch(() => {}); return false; }
       const st = plain || revPlain ? null : stretchedOf(pcm, clip, span, dur, keyOf(media));
+      if (!plain && !revPlain && !st) return false;
+      let bStart = 0;
+      let bEnd = 0;
+      let L = null;
+      let R = null;
+      const blockAt = (k) => {
+        const i = Math.floor(k / pcm.size);
+        const e = pcm.blocks.get(i);
+        bStart = i * pcm.size;
+        bEnd = bStart + pcm.size;
+        L = e ? e.data[0] : null;
+        R = e ? e.data[1] : null;
+      };
       const inS = clip.in / tps;
       const outS = clip.out / tps;
       const startT = clip.start;
@@ -601,14 +734,12 @@
           let k;
           let l;
           let r;
-          if (plain) {
-            k = Math.round(inS + along);
+          if (plain || revPlain) {
+            k = plain ? Math.round(inS + along) : Math.round(outS - along) - 1;
             if (k < 0 || k >= pcm.length) continue;
-            l = L[k]; r = R[k];
-          } else if (revPlain) {
-            k = Math.round(outS - along) - 1;
-            if (k < 0 || k >= pcm.length) continue;
-            l = L[k]; r = R[k];
+            if (k < bStart || k >= bEnd) blockAt(k);
+            if (!L) continue;
+            l = L[k - bStart]; r = R[k - bStart];
           } else {
             k = Math.round(along - st.origin / tps);
             if (k < 0 || k >= st.data[0].length) continue;
@@ -676,7 +807,13 @@
       return { out, tracks, master: [ml, mr], missing };
     }
 
-    return { rate, load, mix, sources, forget: () => { sources.clear(); stretched.clear(); } };
+    // mix() once the blocks of those samples, and LOOKAHEAD_SECONDS after them, are read: for loops through a range.
+    async function mixLoaded(project, seqId, s0, n, opts) {
+      await load(project, seqId, s0 * tps, (s0 + n) * tps + LOOKAHEAD_SECONDS * TICKS);
+      return mix(project, seqId, s0, n, opts);
+    }
+
+    return { rate, load, mix, mixLoaded, sources, forget: () => { sources.clear(); stretched.clear(); } };
   }
 
   function makeBuffer(channels, rate) {
@@ -692,7 +829,6 @@
   // The mix of [from, to) (sequence ticks) -> AudioBuffer (stereo at `rate`). opts: {masterGain, getAudio, mixer}.
   async function renderOffline(project, seqId, from, to, rate = 48000, opts = {}) {
     const mixer = opts.mixer || createMixer({ rate, getAudio: opts.getAudio || defaultGetAudio });
-    await mixer.load(project, seqId, from, to);
     const tps = TICKS / mixer.rate;
     const s0 = Math.round(from / tps);
     const total = Math.max(0, Math.round(to / tps) - s0);
@@ -700,7 +836,7 @@
     const STEP = 48000;
     for (let i = 0; i < total; i += STEP) {
       const n = Math.min(STEP, total - i);
-      const m = mixer.mix(project, seqId, s0 + i, n, { masterGain: opts.masterGain || 0 });
+      const m = await mixer.mixLoaded(project, seqId, s0 + i, n, { masterGain: opts.masterGain || 0 });
       out[0].set(m.out[0], i);
       out[1].set(m.out[1], i);
     }
@@ -710,7 +846,6 @@
   // Loudness of the mix of [from, to) without holding all of it: -> the meter's result.
   async function measure(project, seqId, from, to, { rate = 48000, masterGain = 0, getAudio, onProgress, signal } = {}) {
     const mixer = createMixer({ rate, getAudio: getAudio || defaultGetAudio });
-    await mixer.load(project, seqId, from, to);
     const tps = TICKS / rate;
     const s0 = Math.round(from / tps);
     const total = Math.max(0, Math.round(to / tps) - s0);
@@ -718,7 +853,7 @@
     const STEP = rate;
     for (let i = 0; i < total; i += STEP) {
       if (signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-      meter.push(mixer.mix(project, seqId, s0 + i, Math.min(STEP, total - i), { masterGain }).out);
+      meter.push((await mixer.mixLoaded(project, seqId, s0 + i, Math.min(STEP, total - i), { masterGain })).out);
       onProgress?.(Math.min(1, (i + STEP) / total));
       if ((i / STEP) % 10 === 9) await new Promise((r) => setTimeout(r, 0));
     }
@@ -750,6 +885,7 @@
     let timer = null;
     let lastNow = 0;
     let gen = 0;
+    let aheadFrom = -Infinity; // where the preview last asked the mixer to read ahead from
     const live = new Set();
     let heard = [];
 
@@ -794,6 +930,10 @@
         nextSample += audible ? span : Math.round(BLOCK * playRate);
         scheduledUntil += seconds;
       }
+      if (project && seqId && nextSample * tps - aheadFrom > TICKS) {
+        aheadFrom = nextSample * tps;
+        mixer.load(project, seqId, aheadFrom, aheadFrom + LOOKAHEAD_SECONDS * TICKS * Math.max(1, playRate));
+      }
       const now = outputTime();
       while (heard.length > 1 && heard[0].to < now) heard.shift();
     }
@@ -803,7 +943,10 @@
       ensure();
       const my = ++gen;
       playRate = r;
-      if (ctx.state !== 'running') await ctx.resume().catch(() => {});
+      // Until the sound starts, now() is where it will start: it said the last stop (0 the first time), and the
+      // playhead jumped there and back on every play.
+      lastNow = Math.max(0, Math.round(t));
+      if (ctx.state !== 'running') await Promise.race([ctx.resume().catch(() => {}), new Promise((res) => setTimeout(res, 1000))]);
       const project = app.project;
       const seqId = app.sequenceId;
       // Wait for the first seconds' sources, but not long: the picture is waiting for the clock.
@@ -816,9 +959,9 @@
       scheduledUntil = ctxT0;
       nextSample = Math.round(t0 / tps);
       heard = [];
+      aheadFrom = -Infinity;
       pump();
       timer = setInterval(pump, 40);
-      if (project && seqId) mixer.load(project, seqId);
     }
 
     function now() {

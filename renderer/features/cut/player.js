@@ -40,8 +40,9 @@
     let quality = 1;
     let dropped = 0;
     let shown = 0;
-    let lastFrame = null;
-    let clock = null; // { t0, wall0, rate, audio: boolean }
+    let lastFrame = null; // the frame last sent to be drawn
+    let lastSet = null; // the time the playhead was last moved to
+    let clock = null; // { t0, wall0, rate, audio: boolean, heard, heardAt }
     let loop = null;
     let busy = false;
     let want = null; // { t, q } waiting for the render in progress
@@ -134,15 +135,25 @@
       });
     }
 
+    // An audio clock that stands still this long has stopped (no output device, or it never started): the picture goes
+    // on by the wall clock from there. Starting waits up to 1.5 s for the first seconds' sound.
+    const AUDIO_STALL_MS = 2500;
     function clockNow() {
-      if (clock.audio) return audio.now();
+      if (clock.audio) {
+        const v = audio.now();
+        const wall = performance.now();
+        if (v !== clock.heard) { clock.heard = v; clock.heardAt = wall; return v; }
+        if (wall - clock.heardAt < AUDIO_STALL_MS) return v;
+        try { audio.stop(); } catch {}
+        clock = { t0: v, wall0: wall, rate: clock.rate, audio: false };
+      }
       return clock.t0 + ((performance.now() - clock.wall0) / 1000) * clock.rate * time.TICKS;
     }
     function startClock(t) {
       const useAudio = !!audio && mode === 'program' && rate === 1;
-      clock = { t0: t, wall0: performance.now(), rate, audio: useAudio };
+      clock = { t0: t, wall0: performance.now(), rate, audio: useAudio, heard: t, heardAt: performance.now() };
       if (useAudio) {
-        try { audio.start(t); } catch { clock.audio = false; }
+        try { Promise.resolve(audio.start(t)).catch(() => { if (clock?.audio) clock = { t0: t, wall0: performance.now(), rate, audio: false }; }); } catch { clock.audio = false; }
       }
     }
     function stopClock() {
@@ -161,12 +172,13 @@
       if (rate > 0 && t >= end - ft / 2) { t = Math.max(0, end - ft); stop = true; }
       if (rate < 0 && t <= 0) { t = 0; stop = true; }
       const frame = time.frameAt(Math.max(0, t), f);
+      const ts = time.frameStart(frame, f);
+      // The playhead keeps the clock's time even while a slow frame is still being drawn; the picture catches up.
+      if (ts !== lastSet) { lastSet = ts; setNow(ts); }
       if (!busy && frame !== lastFrame) {
         dropped += droppedBetween(lastFrame, frame, rate);
         lastFrame = frame;
         shownSincePlay++;
-        const ts = time.frameStart(frame, f);
-        setNow(ts);
         request(ts, quality);
         if (Math.abs(ts - lastPrefetch) > time.TICKS / 2 && mode === 'program' && comp) {
           lastPrefetch = ts;
@@ -206,6 +218,7 @@
         stopClock();
         dropped = 0;
         lastFrame = null;
+        lastSet = t;
         shownSincePlay = 0;
         playStart = performance.now();
         lastPrefetch = -Infinity;
@@ -229,6 +242,7 @@
       },
       seek(t) {
         const v = Math.max(0, Math.min(Math.round(t), Math.max(0, duration())));
+        lastSet = v;
         setNow(v);
         if (playing) {
           stopClock();
@@ -270,7 +284,7 @@
       return c;
     });
     // Our own setTime while playing comes back as a 'time' event; only outside changes ask for a draw.
-    const onTime = () => { if (!playing) redraw(); else if (clock && Math.abs(now() - time.frameStart(lastFrame ?? 0, fps())) > time.frameTicks(fps())) player.seek(now()); };
+    const onTime = () => { if (!playing) redraw(); else if (clock && Math.abs(now() - (lastSet ?? 0)) > time.frameTicks(fps())) player.seek(now()); };
     if (app?.on) {
       if (mode === 'program') {
         offs.push(app.on('time', onTime));
@@ -279,6 +293,13 @@
         offs.push(app.on('source', () => { if (!playing) redraw(); }));
       }
       offs.push(app.on('project', () => { if (!playing) redraw(); }));
+    }
+    // A canvas shown at a new size (window or panel resized, or moved to a screen of another scale) is drawn again
+    // at that size; stopped, nothing else would, and the old frame stayed stretched and blurred.
+    if (canvas && typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => redraw());
+      try { ro.observe(canvas, { box: 'device-pixel-content-box' }); } catch { ro.observe(canvas); }
+      offs.push(() => ro.disconnect());
     }
     return player;
   }
