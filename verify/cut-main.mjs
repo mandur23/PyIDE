@@ -31,7 +31,8 @@ const bytesEqual = (a, b) => a && b && a.length === b.length && Buffer.compare(B
 const isBytes = (v) => v instanceof Uint8Array;
 const brief = (v) => (isBytes(v) ? `${v.length} bytes` : S(v));
 
-const work = fs.mkdtempSync(path.join(tmpdir(), 'pyide-cut-main-'));
+// main answers with real paths; the CI runner's %TEMP% is an 8.3 name (C:\Users\RUNNER~1), so expectations start real.
+const work = fs.realpathSync.native(fs.mkdtempSync(path.join(tmpdir(), 'pyide-cut-main-')));
 process.on('exit', () => { try { fs.rmSync(work, { recursive: true, force: true }); } catch {} });
 const home = path.join(work, 'home');
 const userData = path.join(work, 'userData');

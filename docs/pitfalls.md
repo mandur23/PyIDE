@@ -279,6 +279,7 @@
 ## Cut: 테스트
 
 - **CSP의 `media-src`에 `blob:`이 없어 `<video>`로 내보낸 파일을 재생할 수 없습니다.** `verify/cut-export.mjs`는 그 단계에서만 `Page.setBypassCSP`를 켜고 새로고침합니다. 이 설정은 지금 문서에는 적용되지 않습니다.
+- **`cut-main`이 이 PC에서는 통과하고 CI에서 실패했습니다.** main은 실제 경로로 답하는데 테스트의 기대 경로는 러너의 8.3 `%TEMP%`에서 만들어졌습니다. 작업 폴더는 `fs.realpathSync.native`로 풀어 둡니다. 로컬에서는 `%TEMP%` 안의 junction을 `TEMP`, `TMP`로 주면 재현됩니다.
 - **`Page.addScriptToEvaluateOnNewDocument`는 `Page.enable` 없이 부르면 다시 불러온 페이지에 적용되지 않았습니다.**
 - **앱 테스트는 쓰는 모듈마다 `Cut[name]`이 있는지 먼저 확인합니다.** 로드 실패한 모듈은 쓰기 전까지 아무 증상이 없습니다.
 - **기록 한도(1000)가 무작위 2,000단계 테스트에서 조용히 오래된 단계를 버렸습니다.** 이런 테스트는 `limit: Infinity`로 만듭니다.
