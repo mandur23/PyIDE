@@ -66,6 +66,12 @@ try {
   await until(`document.querySelector('#wsHome .ws-branch-name')?.textContent === 'feature/demo'`, 'git branch after refresh');
   check(true, 'git branch shown after git init (rev-parse in main)');
   await shot('home.png');
+  await t.cdp('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
+  await sleep(400);
+  const narrow = await js(`(() => { const m = document.querySelector('#wsHome .ws-home-main'); const cards = [...m.querySelectorAll('.ws-card')].map((c) => c.getBoundingClientRect().right);
+    return { scroll: m.scrollWidth - m.clientWidth, right: Math.max(...cards) - m.getBoundingClientRect().right, side: document.querySelector('#wsHome .ws-home-side').getBoundingClientRect().width }; })()`);
+  await t.cdp('Emulation.clearDeviceMetricsOverride');
+  check(narrow.scroll <= 1 && narrow.right <= 0 && narrow.side < 300, `in a 900 px window the home's cards fit beside a narrower recent list (${JSON.stringify(narrow)})`);
 
   // ---------- Launchers tool window: discovery ----------
   await press('Alt+Shift+L');

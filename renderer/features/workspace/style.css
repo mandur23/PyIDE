@@ -79,7 +79,7 @@
 #toolbar .ws-home-btn:hover { color: var(--gray12); }
 
 /* ---------- Workspace home tab ---------- */
-.ws-home-tab { overflow: hidden; }
+.ws-home-tab { overflow: hidden; container-type: inline-size; }
 .ws-home { display: flex; flex: 1; min-height: 0; background: var(--gray1); }
 .ws-home-side { width: 300px; flex-shrink: 0; background: var(--gray2); border-right: 1px solid var(--gray3);
   display: flex; flex-direction: column; padding: 18px 10px 14px; min-height: 0; }
@@ -113,7 +113,7 @@
 .ws-chip-info.none { color: var(--gray7); }
 .ws-refresh { align-self: flex-start; }
 
-.ws-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; max-width: 1100px; }
+.ws-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; max-width: 1100px; }
 .ws-card { background: var(--gray2); border: 1px solid var(--gray3); border-radius: 10px; padding: 14px 16px 12px;
   box-shadow: var(--ws-card-shadow); min-width: 0; }
 .ws-card-launchers { grid-column: 1 / -1; }
@@ -125,10 +125,15 @@
 .ws-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .ws-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 12px; background: var(--gray3); color: var(--gray11); font-size: 12px; }
 .ws-pill b { color: var(--gray12); font-weight: 600; }
-.ws-quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; }
+.ws-quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 4px 12px; }
 .ws-quick-row { border-radius: 7px; padding-left: 8px; }
 .ws-more { margin-top: 8px; font-size: 12px; }
 .ws-venv { display: flex; align-items: center; gap: 8px; padding: 5px 2px; }
 .ws-badge { font-size: 11px; color: var(--ws-run); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
 .ws-readme-title { color: var(--gray12); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
 .ws-readme-summary { margin: 0; color: var(--gray9); line-height: 1.55; }
+/* A narrow tab (a small window, a split) gives the room to the project, not to the recent list. */
+@container (max-width: 760px) {
+  .ws-home-side { width: 190px; }
+  .ws-home-main { padding: 20px 18px 24px; }
+}
