@@ -774,6 +774,17 @@ try {
   await setValue('.mcpl-whisper-text', 'hi there');
   await resultOf(() => press('.mcpl-whisper-go'));
   check(await reached('vanilla', 'msg Steve hi there') && await js(`${q('.mcpl-whisper-text')}.value === ''`), 'a whisper is sent, and its box empties');
+  // Enter in the message box and in a coordinate box sends, as the Give card's Enter does.
+  await press('.mcpl-whisper-text');
+  await t.type('by enter');
+  await resultOf(() => t.press('Enter'));
+  check(await reached('vanilla', 'msg Steve by enter') && await js(`${q('.mcpl-whisper-text')}.value === ''`), 'Enter in the whisper box sends it');
+  await setValue('.mcpl-tp-x', '2');
+  await setValue('.mcpl-tp-y', '64');
+  await setValue('.mcpl-tp-z', '3');
+  await press('.mcpl-tp-z');
+  await resultOf(() => t.press('Enter'));
+  check(await reached('vanilla', 'tp Steve 2 64 3'), 'Enter in a coordinate box teleports there');
   const emptyWhisper = await resultOf(() => press('.mcpl-whisper-go'));
   check(/empty or too long/.test(emptyWhisper), `an empty whisper is refused before it is sent (${emptyWhisper})`);
   await resultOf(async () => { await press('.mcpl-op'); await until(`/an operator/.test(${lastDialog}?.textContent)`, 'op asks first', 5000); await answer('Make Operator'); });

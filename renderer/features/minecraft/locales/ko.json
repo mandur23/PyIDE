@@ -832,5 +832,9 @@
   "Stop {server} first: while it runs, Java holds its jars, and {title} cannot be taken out of it.": "먼저 {server} 서버를 중지하세요. 실행 중에는 Java가 jar 파일을 쥐고 있어서 {title} 파일을 뺄 수 없어요.",
   "{file} cannot be read, so its players are not shown. Fix it or delete it before changing this list.": "{file} 파일을 읽을 수 없어 플레이어를 보여 주지 못해요. 이 목록을 바꾸기 전에 파일을 고치거나 지우세요.",
   "{name} is stopping. Save the player lists once it has stopped.": "{name} 서버가 멈추는 중이에요. 완전히 멈춘 뒤에 플레이어 목록을 저장하세요.",
-  "{name} was deleted, but the proxies could not be updated: {error}": "{name} 서버를 지웠지만 프록시 설정을 바꾸지 못했어요: {error}"
+  "{name} was deleted, but the proxies could not be updated: {error}": "{name} 서버를 지웠지만 프록시 설정을 바꾸지 못했어요: {error}",
+  "Starting…": "시작 중…",
+  "Stopping…": "중지 중…",
+  "No setting matches “{query}”.": "“{query}”에 맞는 설정이 없어요.",
+  "Stop {name} to change an operator's level: a running server keeps its own list.": "관리자 레벨을 바꾸려면 먼저 {name} 서버를 중지하세요. 실행 중인 서버는 자기 목록을 따로 들고 있어요."
 }

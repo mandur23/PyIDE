@@ -91,6 +91,7 @@
       stopping.set(pid, dir.toLowerCase());
       ide.proc.input(pid, serverAt(dir)?.proxy ? 'end\n' : 'stop\n');
       setTimeout(() => { if (stopping.has(pid)) ide.proc.kill(pid); }, STOP_WAIT);
+      render();
     };
   }
 
@@ -184,7 +185,9 @@
     kinds = kinds.length ? kinds : await ide.api.invoke('minecraft:kinds');
     const kind = select('mcKind', kinds.map((k) => [k.id, k.title]), 'paper');
     const version = select('mcVersion', []);
-    const name = input('mcName', 'survival');
+    // A name no server has yet: a second New Server suggests survival-2, not a name Create refuses.
+    const suggested = { name: freeName('survival'), proxy: freeName('proxy') };
+    const name = input('mcName', suggested.name);
     const memory = select('mcMemory', MEMORY.map((m) => [m, m]), '2G');
     const port = input('mcPort', '25565');
     const eula = el('input');
@@ -212,18 +215,25 @@
             : tr('Vanilla runs no plugins or mods.');
       eulaRow.classList.toggle('hidden', !!k?.proxy);
       syncRow.classList.toggle('hidden', !k?.mods);
-      if (k?.proxy && name.value === 'survival') { name.value = 'proxy'; port.value = '25577'; }
+      // The suggestions follow the type while the user has not typed their own; back from Velocity they go back too.
+      if (k?.proxy && name.value === suggested.name) { name.value = suggested.proxy; port.value = '25577'; }
+      else if (!k?.proxy && name.value === suggested.proxy) { name.value = suggested.name; if (port.value === '25577') port.value = '25565'; }
     };
+    // Only the last type's answer fills the list: a slow answer for the type before cannot land under the new one.
+    let versionsSeq = 0;
     const loadVersions = async () => {
+      const mine = ++versionsSeq;
       version.replaceChildren(new Option(tr('Loading…'), ''));
       version.disabled = true;
-      try {
-        const vs = await ide.api.invoke('minecraft:versions', kind.value);
-        version.replaceChildren(...vs.map((v) => new Option(v, v)));
-      } catch (err) {
+      f.error.textContent = '';
+      let vs = null;
+      let failed = null;
+      try { vs = await ide.api.invoke('minecraft:versions', kind.value); } catch (err) { failed = err; }
+      if (mine !== versionsSeq) return;
+      if (failed) {
         version.replaceChildren(new Option(tr('Could not load the versions'), ''));
-        f.error.textContent = errorText(err);
-      }
+        f.error.textContent = errorText(failed);
+      } else version.replaceChildren(...vs.map((v) => new Option(v, v)));
       version.disabled = false;
     };
     kind.onchange = () => { describe(); loadVersions(); };
@@ -696,7 +706,12 @@
       head.append(el('span', `mc-dot${running ? ' on' : ''}`), title,
         el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
       const actions = el('div', 'mc-server-actions');
-      if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
+      // Starting (a Java download, a busy port being waited out) and saving after Stop take a while, and a second
+      // press does nothing then: the card says so instead of offering a button that cannot work.
+      const wait = (label, cls) => Object.assign(button(label, cls, () => {}), { disabled: true });
+      if (stoppingAt(srv.dir)) actions.append(wait(tr('Stopping…'), 'mc-stopping'));
+      else if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
+      else if (busyAt(srv.dir)) actions.append(wait(tr('Starting…'), 'mc-starting'));
       else actions.append(button(tr('Start'), 'mc-start', () => launchOnce(srv, run.runConfig)));
       const tunnel = running && ide.ports ? tunnels.find((t) => t.port === port) : null;
       if (running && ide.ports && tunnel?.state !== 'shared' && tunnel?.state !== 'starting') {

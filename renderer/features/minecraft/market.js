@@ -24,13 +24,15 @@
     if (server) state.server = server.dir;
     if (query !== undefined) state.query = query;
     state.hits = [];
+    state.error = '';
     mc.screen.show('market');
   }
-  // The screen builds the page once per tab, and shows it: the first time, or after open(), it searches.
+  // The screen builds the page once per tab, and shows it: the first time, after open(), or after an error (no
+  // server for the tab yet, the network down), it searches again; the servers may have changed meanwhile.
   const mount = (container) => { view = build(container); };
   function shown() {
     syncControls();
-    if (!state.hits.length && !state.error) search();
+    if (!state.hits.length || state.error) search();
   }
 
   function build(host) {

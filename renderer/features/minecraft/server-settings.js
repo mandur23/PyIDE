@@ -119,8 +119,18 @@
       const running = mc.runningAt(v.srv.dir);
       chip.classList.toggle('on', running);
       chip.textContent = running ? tr('Running') : tr('Stopped');
+      // The level boxes follow the server too: drawn while it was stopped they would take a change it then drops.
+      for (const lv of v.scroll.querySelectorAll('.mcset-plevel')) {
+        lv.disabled = running;
+        lv.title = running ? tr('Stop the server to change a level: a running server keeps its own list') : CHOICES()['op-permission-level'][lv.value];
+      }
     }
   }
+  // An operator kept whose level the draft changes: a running server takes op and deop from the console, not levels.
+  const levelChanged = (v) => v.draft.ops.some((p) => {
+    const was = v.base.ops.find((q) => q.uuid === p.uuid);
+    return was && (was.level ?? 4) !== (p.level ?? 4);
+  });
 
   function mount(host, srv) {
     host.classList.add('mcset');
@@ -147,6 +157,13 @@
     revert.onclick = () => { reset(v); render(v); };
     save.onclick = () => commit(v);
     search.oninput = () => filter(v);
+    search.onkeydown = (e) => {
+      if (e.key !== 'Escape' || e.isComposing || !search.value) return;
+      e.preventDefault();
+      e.stopPropagation();
+      search.value = '';
+      filter(v);
+    };
     scroll.onscroll = () => spy(v);
     load(v);
   }
@@ -273,6 +290,15 @@
       }
       s.sec.classList.toggle('hidden', !any);
       s.item.classList.toggle('dim', !any);
+    }
+    // No match leaves the page blank otherwise, as if the settings had not loaded.
+    if (!v.sections) return;
+    const none = words.length > 0 && v.sections.every((s) => s.sec.classList.contains('hidden'));
+    let empty = v.scroll.querySelector('.mcset-noresult');
+    if (none && !empty) v.scroll.prepend(empty = el('div', 'mcset-noresult muted', ''));
+    if (empty) {
+      empty.classList.toggle('hidden', !none);
+      empty.textContent = none ? tr('No setting matches “{query}”.', { query: v.search.value.trim() }) : '';
     }
   }
 
@@ -693,6 +719,11 @@
     // A server saving after Stop runs no more commands, and writes its lists as it holds them.
     if ((c.whitelist || c.ops) && mc.stoppingAt(v.srv.dir)) {
       v.status.textContent = tr('{name} is stopping. Save the player lists once it has stopped.', { name: v.srv.name });
+      v.status.classList.add('mcset-error');
+      return;
+    }
+    if (running && c.ops && levelChanged(v)) {
+      v.status.textContent = tr('Stop {name} to change an operator\'s level: a running server keeps its own list.', { name: v.srv.name });
       v.status.classList.add('mcset-error');
       return;
     }

@@ -1268,6 +1268,7 @@
     const point = el('div', 'mcpl-coords');
     point.append(x, y, z);
     c.append(field(tr('Player'), v.tpTo), v.tpWhy, row(to), field(tr('Coordinates'), point), row(at));
+    enterPresses(point, at);
     return c;
   }
   function modeCard(v) {
@@ -1312,7 +1313,16 @@
     text.maxLength = 256;
     const send = actionButton(v, tr('Send'), 'mcpl-whisper-go', async () => { if ((await act(v, { type: 'whisper', text: text.value }))?.ok) text.value = ''; });
     c.append(field(tr('Message'), text), row(send));
+    enterPresses(text, send);
     return c;
+  }
+  // Enter in a card's text fields presses its button, as in the Give card. A disabled button (no one online) does nothing.
+  function enterPresses(fields, button) {
+    fields.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || !e.target.matches('input')) return;
+      e.preventDefault();
+      if (!button.disabled) button.click();
+    });
   }
   function moderationCard(v) {
     const c = card(tr('Moderation'), 'mcpl-moderation');

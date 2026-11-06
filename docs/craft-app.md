@@ -129,6 +129,7 @@ npm start -- --mode=craft
 | `verify/minecraft-antixray.mjs`, `minecraft-antixray-ui.mjs` | 안티 엑스레이 파일 고치기와 화면 |
 | `verify/private-share.mjs`, `verify/port-sharing.mjs` | 비공개 공유 프로토콜, 포트 공유 |
 | `verify/app-mode.mjs` | 시작 화면, 모드별 플러그인, Craft 셸 |
+| `verify/craft-polish.mjs` | 새 서버 이름과 버전 목록, Market 재검색, 카드의 시작 중·중지 중, 콘솔 기록, 설정 탭의 레벨 칸과 검색, 저장 실패 때 안티 엑스레이 되돌리기 |
 
 `MC_LAUNCHER_LIVE=1`(실제 로더 설치), `verify/minecraft-live.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing-bore-live.mjs`는 실제 네트워크를 쓰므로 CI에 없고, 사용자의 승인 없이 돌리지 않습니다.
 

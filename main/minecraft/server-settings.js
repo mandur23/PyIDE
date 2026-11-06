@@ -62,7 +62,22 @@ function writeProperties(file, changes) {
     lines[at] = line;
     for (let i = lines.length - 1; i > at; i--) if (re.test(lines[i])) lines.splice(i, 1);
   }
-  fs.writeFileSync(file, lines.length ? `${lines.join(eol)}${eol}` : '');
+  replaceFile(file, lines.length ? `${lines.join(eol)}${eol}` : '');
+}
+// A temporary file renamed over the old one: a write that fails halfway (disk full, the file read-only or held) leaves
+// the file as it was, never half of it. A virus scanner's brief hold is waited out.
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function replaceFile(file, text) {
+  const tmp = `${file}.pyide-tmp`;
+  try {
+    fs.writeFileSync(tmp, text);
+    for (let i = 0; ; i++) {
+      try { fs.renameSync(tmp, file); break; } catch (err) {
+        if (i === 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+        pause(25);
+      }
+    }
+  } finally { try { fs.rmSync(tmp, { force: true }); } catch {} }
 }
 
 // The value a property may be given, as the file's text; throws with what is wrong.
@@ -164,7 +179,7 @@ function prepare(dir, { props = {}, whitelist, ops } = {}) {
   const lists = { whitelist: list('whitelist', whitelist), ops: list('ops', ops) };
   return () => {
     if (Object.keys(lines).length) writeProperties(file, lines);
-    for (const [name, l] of Object.entries(lists)) if (l) fs.writeFileSync(path.join(dir, LISTS[name]), `${JSON.stringify(l, null, 2)}\n`);
+    for (const [name, l] of Object.entries(lists)) if (l) replaceFile(path.join(dir, LISTS[name]), `${JSON.stringify(l, null, 2)}\n`);
   };
 }
 

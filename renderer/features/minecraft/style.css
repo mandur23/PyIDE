@@ -82,7 +82,7 @@
 .mcset-sub { font-size: 12px; margin-top: 2px; }
 .mcset-tools { display: flex; gap: 6px; flex-shrink: 0; }
 .mcset-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 28px 32px; scroll-padding-top: 8px; }
-.mcset-loading, .mcset-error { padding: 20px 0; }
+.mcset-loading, .mcset-error, .mcset-noresult { padding: 20px 0; }
 .mcset-error { color: var(--red); }
 .mcset-section { max-width: 860px; }
 .mcset-section-title { font-size: 14px; font-weight: 600; margin: 22px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--gray3); }

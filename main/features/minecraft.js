@@ -476,7 +476,13 @@ function saveSettings(dir, { memory, jvmArgs, props, whitelist, ops, antiXray } 
   // Anti-xray's files go first: they are the one write that can be refused whole, and a Save it refuses saves nothing.
   const refused = plan && xray.commit(plan.changes);
   if (refused) return { ...settings(dir), antiXrayRefused: refused };
-  writeProps?.();
+  // The properties and lists failing after them (server.properties read-only, say) put anti-xray's files back, so a
+  // Save that says it failed changed nothing; a file that would not go back is named.
+  try { writeProps?.(); } catch (err) {
+    const left = plan ? xray.rollBack(plan.changes) : [];
+    if (left.length) throw fail(`${err.message}; the anti-xray settings in ${left.join(', ')} could not be put back`);
+    throw err;
+  }
   writeJson(path.join(dir, SERVER), next);
   return settings(dir);
 }

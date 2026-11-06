@@ -386,4 +386,4 @@ function settle(dir, srv) {
   return r.refused ? { outcome: 'refused', level, ...r.refused } : { outcome: 'applied', level, clear: true };
 }
 
-module.exports = { DEFAULTS, BACKUP, LEVELS, atLeast, wanted, levelsFor, supportOf, newServerLevel, status, planned, commit, assign, settle, edit, readBlock };
+module.exports = { DEFAULTS, BACKUP, LEVELS, atLeast, wanted, levelsFor, supportOf, newServerLevel, status, planned, commit, rollBack, assign, settle, edit, readBlock };
