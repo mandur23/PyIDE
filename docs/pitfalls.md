@@ -389,7 +389,7 @@
 - DB: Redis, Mongo, ClickHouse의 TLS는 기본 꺼짐입니다. Oracle은 SSL 항목이 없습니다. 검증 모드에 CA 파일을 지정할 수 없습니다.
 - 안전 모드: 신뢰한 프로젝트의 HTML 미리보기는 이미지, 이동, WebRTC로 데이터를 내보낼 수 있습니다.
 - dompurify: Monaco 0.57.0이 3.4.15를 묶고 있어 npm audit에 critical로 남습니다. Monaco 번들은 해당 모드를 쓰지 않는 것으로 보입니다(코드 확인, 시험은 안 함).
-- spring-boot: 0.3.13 커밋의 CI에서 Maven `spring-boot:run` 디버그가 한 번 중단점에서 멈추지 않았습니다. JDWP 연결 뒤 약 3초 만에 세션이 끝났고, 바로 뒤 Gradle 디버그는 멈췄습니다. 로컬에서는 75/75로 재현되지 않았습니다. 원인을 모릅니다.
+- spring-boot: 0.3.13 커밋의 CI에서 Maven `spring-boot:run` 디버그가 한 번 중단점에서 멈추지 않았습니다. JDWP 연결 뒤 약 3초 만에 세션이 끝났고, 바로 뒤 Gradle 디버그는 멈췄습니다. 로컬에서는 75/75로 재현되지 않았습니다. 원인을 모릅니다. 0.3.17 직전 CI(2203e24)에서 같은 Maven 디버그가 다시 실패했습니다. JDWP 연결 직후 "Not debugging"이 되었고, 바로 뒤 Gradle 디버그는 멈췄습니다. 11월 5일 CI(cf8a36d)에서는 Gradle 쪽이 같은 식으로 실패했습니다.
 - diagrams: 0.3.16 커밋의 CI에서 Circle 클래스 상자의 클릭과 더블클릭이 모두 빗나갔습니다(선택 안 됨, 파일 안 열림). 바로 앞 CI와 로컬 5회는 통과했습니다. 원인을 모릅니다. 이제 테스트가 상자 중앙이 `elementFromPoint`로 그 상자를 가리킬 때까지 기다리고, 끝내 가려지면 `note:` 줄에 덮은 요소를 남깁니다. 다시 실패하면 그 줄부터 봅니다.
 
 ## 아직 남은 문제: Craft
