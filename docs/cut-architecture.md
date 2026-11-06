@@ -553,8 +553,10 @@ counts dropped frames and pauses `Cut.thumbs`. `RATES` are the J/K/L shuttle rat
 close them), `peaks(project, mediaId, { samplesPerPeak })` -> min/max pairs at the track's own sample rate, all
 channels together; both cached through `cut:cacheGet/Put`. A strip whose thumbnails are further apart than twice the
 distance to their sync sample shows that sync sample (one decoded frame each, through `decoder.keyFrames`); closer
-ones show their exact frame. Peaks are computed about ten seconds at a time through `decoder.audioReader`. Also
-`computePeaks`, `pause(on)`, `paused`, `queued`.
+ones show their exact frame. Peaks are computed about ten seconds at a time through `decoder.audioReader`, at 256
+samples a peak; a multiple of that is merged from them (`coarsen(peaks, k)`), so the panel (512), the timeline (256)
+and the monitor (1024) share one decode. Thumbnails and peaks run in two queues, so a long file's peaks never hold
+back thumbnails. Also `computePeaks`, `pause(on)` (holds both), `paused`, `queued`.
 
 ## 9. Sound and export
 

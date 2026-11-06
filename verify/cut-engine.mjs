@@ -653,6 +653,31 @@ try {
   check(th.same && th.second < th.first, `thumbnails come from memory the second time (${th.first.toFixed(0)} ms, then ${th.second.toFixed(1)} ms)`);
   check(th.files >= 5, `thumbnails and peaks are in the cache folder (${th.files} files)`);
 
+  // A long file's peaks (its audio decoded while the reader is held here) do not hold back thumbnails asked for after
+  // them, and the coarser peaks the panel and the monitor ask for come from the same decode.
+  const lane = await js(`(async () => {
+    const hist = __eng.history(640, 360);
+    const [vid, aud] = await __eng.importAll(hist, [${S(made['30'].path)}, await __eng.write('tone-lanes.wav', __eng.makeWav(5, 1000))]);
+    const orig = Cut.decoder.audioReader;
+    let open;
+    const gate = new Promise((r) => { open = r; });
+    let reads = 0;
+    Cut.decoder.audioReader = async (...a) => { reads++; await gate; return orig(...a); };
+    try {
+      let peaksDone = false;
+      const fine = Cut.thumbs.peaks(hist.project, aud, { samplesPerPeak: 256 }).then((p) => { peaksDone = true; return p; });
+      const coarse = Cut.thumbs.peaks(hist.project, aud, { samplesPerPeak: 1024 });
+      const strip = await Promise.race([Cut.thumbs.strip(hist.project, vid, { from: 254016000000, to: 254016000000 * 2, count: 3, height: 72 }), __eng.sleep(10000).then(() => null)]);
+      const stripFirst = !!strip?.length && !peaksDone;
+      open();
+      const [f, c] = await Promise.all([fine, coarse]);
+      const merged = Cut.thumbs.coarsen(f, 4);
+      return { stripFirst, reads, fine: f.length, coarse: c.length, same: c.length === merged.length && c.every((v, i) => v === merged[i]) };
+    } finally { Cut.decoder.audioReader = orig; open(); }
+  })()`);
+  check(lane.stripFirst, `thumbnails are made while a file's peaks are still being computed (${S(lane)})`);
+  check(lane.reads === 1 && lane.fine === 1876 && lane.same, `peaks of 1024 samples are merged from the 256-sample ones, one decode of the audio (${S(lane)})`);
+
   // ---- 2D fallback: the same layout ----
   const two = await js(`(async () => {
     const hist = __eng.history(640, 360);

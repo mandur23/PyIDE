@@ -341,6 +341,10 @@ const asm = decoder.assemble({ rate: 10, channels: 2, pieces: [{ at: -0.2, plane
 check(S([...asm.data[0]]) === '[3,4,9,9,0]' && S([...asm.data[1]]) === '[7,8,9,9,0]', `assemble: priming before 0 is dropped, a mono piece fills both channels (${S([...asm.data[0]])} ${S([...asm.data[1]])})`);
 const pk = thumbs.computePeaks([Float32Array.from([0.1, -0.5, 0.2, 0.9, 0]), Float32Array.from([0, 0, -0.7, 0, 0.3])], 2);
 check(S([...pk].map((x) => +x.toFixed(2))) === '[-0.5,0.1,-0.7,0.9,0,0.3]', 'peaks: min/max of every channel per block');
+const noise = [0, 1].map((c) => Float32Array.from({ length: 1000 }, (_, i) => Math.sin(i * 0.37 + c) * Math.cos(i * 0.011)));
+const peakDirect = thumbs.computePeaks(noise, 12);
+const peakMerged = thumbs.coarsen(thumbs.computePeaks(noise, 3), 4);
+check(peakDirect.length === peakMerged.length && peakDirect.every((v, i) => v === peakMerged[i]), `peaks merged from 4 smaller blocks are the peaks of the larger block, the partial last one too (${peakDirect.length}, ${peakMerged.length})`);
 
 // ---- dropped frames ----
 check(player.droppedBetween(null, 5, 1) === 0 && player.droppedBetween(4, 5, 1) === 0 && player.droppedBetween(4, 7, 1) === 2, 'dropped: frames skipped at rate 1');

@@ -1,7 +1,8 @@
 // Thumbnails and waveform peaks of Nano Studio Cut's media (docs/cut-architecture.md section 8), for the project panel
 // and the timeline's clips. Both are cached twice: in memory for this session and in the app's common cache
 // (cut:cacheGet / cut:cachePut, least recently used files go first), keyed by the file's path, size and mtime, so a
-// changed file gets new ones. The work runs in one queue, one job at a time, held while the player plays.
+// changed file gets new ones. Thumbnails and peaks each run in their own queue, one job at a time, both held while the
+// player plays.
 //
 // strip() snaps each time to the frame shown there, so zooming the timeline reuses the thumbnails it already has.
 // Bitmaps are shared: callers draw them and never close them.
@@ -18,32 +19,33 @@
   const cacheGet = (key) => invoke('cut:cacheGet', key).then((r) => (r instanceof Uint8Array && r.length ? r : null)).catch(() => null);
   const cachePut = (key, bytes) => invoke('cut:cachePut', key, bytes).catch(() => {});
 
-  // ---- the work queue --------------------------------------------------------------------------------------------------
+  // ---- the work queues -------------------------------------------------------------------------------------------------
 
-  const jobs = [];
-  let running = false;
+  // One queue for pictures and one for sound, each a job at a time: a long file's peaks (seconds of audio decoding)
+  // must not hold back the thumbnails asked for after them.
+  const lanes = { video: { jobs: [], running: false }, audio: { jobs: [], running: false } };
   let paused = false;
-  let resume = null;
-  function enqueue(fn) {
+  let resumes = [];
+  function enqueue(fn, lane = lanes.video) {
     return new Promise((resolve, reject) => {
-      jobs.push({ fn, resolve, reject });
-      pump();
+      lane.jobs.push({ fn, resolve, reject });
+      pump(lane);
     });
   }
-  async function pump() {
-    if (running) return;
-    running = true;
+  async function pump(lane) {
+    if (lane.running) return;
+    lane.running = true;
     try {
-      while (jobs.length) {
-        while (paused) await new Promise((r) => { resume = r; });
-        const job = jobs.shift();
+      while (lane.jobs.length) {
+        while (paused) await new Promise((r) => resumes.push(r));
+        const job = lane.jobs.shift();
         try { job.resolve(await job.fn()); } catch (err) { job.reject(err); }
       }
-    } finally { running = false; }
+    } finally { lane.running = false; }
   }
   function pause(on) {
     paused = !!on;
-    if (!paused && resume) { const r = resume; resume = null; r(); }
+    if (!paused) { const r = resumes; resumes = []; for (const f of r) f(); }
   }
 
   // ---- thumbnails ----------------------------------------------------------------------------------------------------
@@ -203,34 +205,59 @@
     }
     return out;
   }
+  // Peaks of `k` neighbouring blocks merged: the peaks of blocks k times as long.
+  function coarsen(fine, k) {
+    const n = fine.length / 2;
+    const out = new Float32Array(Math.ceil(n / k) * 2);
+    for (let b = 0; b * k < n; b++) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let i = b * k, e = Math.min(n, i + k); i < e; i++) {
+        if (fine[i * 2] < lo) lo = fine[i * 2];
+        if (fine[i * 2 + 1] > hi) hi = fine[i * 2 + 1];
+      }
+      out[b * 2] = lo;
+      out[b * 2 + 1] = hi;
+    }
+    return out;
+  }
+  // The panel, the timeline and the monitor ask for different block sizes; multiples of this one are merged from it,
+  // so a file's audio is decoded once.
+  const BASE_SPP = 256;
   const peakMemo = new Map();
-  // Peaks of a file's audio at its own sample rate (rate = the track's, in the result's `rate` property).
-  async function peaks(project, mediaId, { samplesPerPeak = 256 } = {}) {
-    const m = project.media.find((x) => x.id === mediaId);
-    if (!m || !m.audio) return new Float32Array(0);
-    const o = await need('media').open(project, mediaId);
-    if (o.error || !o.audio) return new Float32Array(0);
-    const key = `peaks1|${o.path}|${o.size}|${o.mtime}|${o.audio.id}|${samplesPerPeak}`;
+  function remembered(key, make) {
     if (peakMemo.has(key)) return peakMemo.get(key);
-    const p = (async () => {
-      const bytes = await cacheGet(key);
-      if (bytes && bytes.length % 8 === 0) return new Float32Array(bytes.slice().buffer);
-      return enqueue(async () => {
-        // About ten seconds (a whole number of peaks) at a time: the whole track's PCM is never held.
-        const r = await need('decoder').audioReader(o, o.audio);
-        const spp = Math.max(1, Math.round(samplesPerPeak));
-        const win = spp * Math.max(1, Math.round((r.rate * 10) / spp));
-        const out = new Float32Array(Math.ceil(r.length / spp) * 2);
-        for (let a = 0; a < r.length; a += win) out.set(computePeaks(await r.read(a, Math.min(r.length, a + win)), spp), (a / spp) * 2);
-        cachePut(key, new Uint8Array(out.buffer.slice(0)));
-        return out;
-      });
-    })();
+    const p = make();
     peakMemo.set(key, p);
     p.catch(() => peakMemo.delete(key));
     if (peakMemo.size > 200) peakMemo.delete(peakMemo.keys().next().value);
     return p;
   }
+  // Peaks of a file's audio, `samplesPerPeak` samples of the track's own rate each.
+  async function peaks(project, mediaId, { samplesPerPeak = BASE_SPP } = {}) {
+    const m = project.media.find((x) => x.id === mediaId);
+    if (!m || !m.audio) return new Float32Array(0);
+    const o = await need('media').open(project, mediaId);
+    if (o.error || !o.audio) return new Float32Array(0);
+    const spp = Math.max(1, Math.round(samplesPerPeak));
+    const key = (s) => `peaks1|${o.path}|${o.size}|${o.mtime}|${o.audio.id}|${s}`;
+    if (spp > BASE_SPP && spp % BASE_SPP === 0) {
+      return remembered(key(spp), async () => coarsen(await peaks(project, mediaId, { samplesPerPeak: BASE_SPP }), spp / BASE_SPP));
+    }
+    return remembered(key(spp), async () => {
+      const bytes = await cacheGet(key(spp));
+      if (bytes && bytes.length % 8 === 0) return new Float32Array(bytes.slice().buffer);
+      return enqueue(async () => {
+        // About ten seconds (a whole number of peaks) at a time: the whole track's PCM is never held.
+        const r = await need('decoder').audioReader(o, o.audio);
+        const win = spp * Math.max(1, Math.round((r.rate * 10) / spp));
+        const out = new Float32Array(Math.ceil(r.length / spp) * 2);
+        for (let a = 0; a < r.length; a += win) out.set(computePeaks(await r.read(a, Math.min(r.length, a + win)), spp), (a / spp) * 2);
+        cachePut(key(spp), new Uint8Array(out.buffer.slice(0)));
+        return out;
+      }, lanes.audio);
+    });
+  }
 
-  return { strip, peaks, computePeaks, pause, get paused() { return paused; }, get queued() { return jobs.length; } };
+  return { strip, peaks, computePeaks, coarsen, pause, get paused() { return paused; }, get queued() { return lanes.video.jobs.length + lanes.audio.jobs.length; } };
 });
