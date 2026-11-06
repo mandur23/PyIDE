@@ -289,5 +289,9 @@
   "Servers Are Running": "서버가 실행 중입니다",
   "Programs Are Running": "프로그램이 실행 중입니다",
   "Stop Servers and Close": "서버를 멈추고 닫기",
-  "Stop and Close": "멈추고 닫기"
+  "Stop and Close": "멈추고 닫기",
+  "1 char": "1자",
+  "{n} chars": "{n}자",
+  "1 line break": "줄 바꿈 1개",
+  "{n} line breaks": "줄 바꿈 {n}개"
 }

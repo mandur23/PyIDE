@@ -164,6 +164,10 @@ async function mixAt(h, s, sources, seconds, n = 1, opts = {}) {
   h.do(C.setKeyframes(s, ca, 'volume', [{ t: 0, v: 0, ease: 'linear' }, { t: 2 * SEC, v: -20, ease: 'linear' }]));
   m = await mixAt(h, s, src, 1);
   near(m.out[0][0], 0.5 * Math.pow(10, -10 / 20), 2e-4, 'volume keyframes 0 -> -20 dB: -10 dB halfway');
+  h.do(C.setKeyframes(s, ca, 'duck', [{ t: 0, v: -12, ease: 'linear' }, { t: 2 * SEC, v: -12, ease: 'linear' }]));
+  m = await mixAt(h, s, src, 1);
+  near(m.out[0][0], 0.5 * Math.pow(10, -22 / 20), 2e-4, 'Auto Ducking\'s -12 dB adds to the volume curve\'s -10 dB');
+  h.do(C.setKeyframes(s, ca, 'duck', null));
   h.do(C.setKeyframes(s, ca, 'volume', null));
   h.do(C.setClip(s, ca, { fadeIn: SEC, fadeOut: SEC }));
   m = await mixAt(h, s, src, 0.5);

@@ -156,7 +156,12 @@
     // Notifications tool window), so no balloon's text or close button is ever above the window's top edge.
     while (balloons.childElementCount > 1 && balloons.getClientRects().length && balloons.getBoundingClientRect().top < 48) balloons.firstElementChild.remove();
     const timeout = opts.timeout ?? (entry.kind === 'error' ? 20000 : 10000);
-    if (timeout > 0) setTimeout(() => b.remove(), timeout);
+    // The pointer on a balloon holds it while it is read or its link is aimed at; leaving gives it a few more seconds.
+    if (timeout > 0) {
+      let timer = setTimeout(() => b.remove(), timeout);
+      b.addEventListener('mouseenter', () => clearTimeout(timer));
+      b.addEventListener('mouseleave', () => { clearTimeout(timer); timer = setTimeout(() => b.remove(), Math.min(timeout, 4000)); });
+    }
     return b;
   }
 

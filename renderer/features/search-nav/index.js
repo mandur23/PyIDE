@@ -134,7 +134,7 @@
       findList = el('div', 'list sn-tree');
       findList.id = 'snFindResults';
       groupKeys(findList);
-      findHead.append(ide.keymap.text(el('span'), () => tr('Use {action} to search the project', { action: ide.keymap.withKeys(tr('Find in Files'), 'FindInPath') })));
+      emptyFind();
       container.append(findHead, findList);
       tw.setActions([
         { icon: 'rerun', title: tr('Rerun Search'), run: () => findState && showFindResults(findState.opts, findState.replace) },
@@ -182,10 +182,19 @@
     findTw.setBadge('');
   }
 
+  // The window before any search, and again in another project: the last project's matches would open its files
+  // and Rerun Search would search its folder.
+  function emptyFind() {
+    findHead.replaceChildren(ide.keymap.text(el('span'), () => tr('Use {action} to search the project', { action: ide.keymap.withKeys(tr('Find in Files'), 'FindInPath') })));
+    findList.replaceChildren();
+  }
+  let findSeq = 0;
   async function showFindResults(o, replace, note) {
     findTw.show();
     findHead.replaceChildren(el('span', 'muted', tr("Searching for '{query}'…", { query: o.query })));
+    const mine = ++findSeq;
     const res = await runFind(o);
+    if (mine !== findSeq) return;
     findState = { opts: o, res, replace };
     renderFindResults(note);
   }
@@ -862,7 +871,15 @@
   const refreshTodos = debounce(refreshTodosNow, 300);
 
   // ---------- wiring ----------
+  const forgetFind = () => {
+    findSeq++;
+    findState = null;
+    findCollapsed.clear();
+    if (findHead) emptyFind();
+  };
+  ide.on('projectClosed', forgetFind);
   ide.on('projectOpened', () => {
+    forgetFind();
     recent = ide.settings.get(recentKey(), []);
     back = []; fwd = []; cur = null; edits = []; editIdx = null; places = [];
     outline = null;

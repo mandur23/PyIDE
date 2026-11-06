@@ -554,6 +554,22 @@ try {
   check(tx.boxA && Math.abs((tx.boxA[0] + tx.boxA[2]) / 2 - 320) <= 12 && Math.abs((tx.boxA[1] + tx.boxA[3]) / 2 - 180) <= 16, `the text layer is centered on its position (ink ${S(tx.boxA)})`);
   check(tx.boxA && tx.mbox && tx.boxA[0] >= tx.mbox[0] - 4 && tx.boxA[1] >= tx.mbox[1] - 4 && tx.boxA[2] <= tx.mbox[2] + 4 && tx.boxA[3] <= tx.mbox[3] + 4, `the ink is inside the box measure() gives (${S(tx.mbox.map(Math.round))})`);
   check(tx.capNone === null && tx.capBox && tx.capBox[1] > 250, `captions burn in near the bottom only when asked (${S(tx.capBox)})`);
+  const capScale = await js(`(async () => {
+    const white = (r, g, b) => r > 128 && g > 128 && b > 128;
+    const share = async (w, h) => {
+      const hist = __eng.history(w, h);
+      const seq = hist.project.sequences[0].id;
+      hist.do(Cut.commands.addCaptionTrack(seq, {}));
+      hist.do(Cut.commands.setCaptions(seq, hist.project.sequences[0].captions[0].id, [{ start: 0, end: 254016000000, text: '자막이 보입니다' }]));
+      await __comp.render(hist.project, seq, 0, { captions: true });
+      // The compositor draws every sequence into its 640x360 canvas.
+      const b = __eng.bbox(await __comp.readPixels(), 640, 360, white);
+      return b && [(b[2] - b[0]) / 640, (b[3] - b[1]) / 360];
+    };
+    return { small: await share(640, 360), large: await share(1280, 720) };
+  })()`);
+  check(capScale.small && capScale.large && Math.abs(capScale.small[0] - capScale.large[0]) < 0.03 && Math.abs(capScale.small[1] - capScale.large[1]) < 0.03,
+    `a caption covers the same share of the frame at 360 and 720 lines (width, height shares ${S(capScale.small?.map((v) => +v.toFixed(3)))} and ${S(capScale.large?.map((v) => +v.toFixed(3)))})`);
 
   // ---- offline media, import errors ----
   const off = await js(`(async () => {

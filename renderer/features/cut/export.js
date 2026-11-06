@@ -449,7 +449,9 @@
   const cancelled = () => fail('cancelled', 'The export was cancelled.');
 
   // run({project, seqId, path, preset, range, captions, onProgress, signal, overrides, hardware, masterGain,
-  //      captionTrack, verify, backend}) -> {ok, path, bytes, seconds, speed, verified, encoder, sidecars} | {ok: false, code, error}
+  //      captionTrack, verify, backend, gate}) -> {ok, path, bytes, seconds, speed, verified, encoder, sidecars} | {ok: false, code, error}
+  // settings.audio null writes video only (proxies). gate: an async function awaited before each frame, which holds the
+  // export while it has not resolved (a background job waiting while the player plays).
   async function run(opts) {
     const started = performance.now();
     const model = mod('model');
@@ -541,13 +543,13 @@
 
       // Sound: the sources first (decoding may take a while), then mixed and encoded a second ahead of the picture.
       progress({ phase: 'audio', fraction: 0 });
-      const rate = settings.audio.rate;
+      const rate = settings.audio?.rate || 48000;
       const tps = TICKS / rate;
-      const mixer = ae.createMixer({ rate, getAudio: o.getAudio });
+      const mixer = settings.audio ? ae.createMixer({ rate, getAudio: o.getAudio }) : null;
       // The first minutes now; the rest as the mix gets there (mixLoaded), so a long range is never all in memory.
-      await mixer.load(project, seq.id, from, to);
+      if (mixer) await mixer.load(project, seq.id, from, to);
       if (signal?.aborted) return abort(cancelled());
-      const { bitrate: audioBitrate, delay } = await aacSetup(rate, settings.audio.channels, settings.audio.bitrate);
+      const { bitrate: audioBitrate, delay } = settings.audio ? await aacSetup(rate, settings.audio.channels, settings.audio.bitrate) : { bitrate: null, delay: 0 };
       const s0 = Math.round(from / tps);
       const sTotal = Math.round(duration / tps);
       let sDone = 0;
@@ -618,6 +620,7 @@
         encodeStart = performance.now();
         const keyEvery = settings.video.keyInterval;
         for (let i = 0; i < frames; i++) {
+          if (o.gate) await o.gate();
           if (signal?.aborted) return abort(cancelled());
           if (failure) break;
           const pts = plan.ptsOf(i);

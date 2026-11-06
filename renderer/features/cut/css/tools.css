@@ -1,0 +1,78 @@
+/* Nano Studio Cut: the convenience tools. The shortcut editor and the ? cheat sheet (ui-shortcuts.js), the settings
+   page (ui-settings.js), the proxy badges and offer (ui-proxy.js, ui-project.js), the export queue (ui-queue.js). */
+
+/* the shortcut editor */
+.cut-keys { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.cut-keys-search { height: 26px; }
+.cut-keys-list { height: min(56vh, 520px); overflow: auto; border: 1px solid var(--gray3); border-radius: 4px; outline: none; }
+.cut-keys-kind { position: sticky; top: 0; z-index: 1; padding: 4px 8px; background: var(--gray2); color: var(--gray9); font-size: 11px;
+  border-bottom: 1px solid var(--gray3); }
+.cut-keys-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(160px, 1.3fr) auto auto; gap: 6px; align-items: center;
+  padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--gray3) 50%, transparent); }
+.cut-keys-row.modified .cut-keys-title { color: var(--blue6); }
+.cut-keys-row.recording { background: color-mix(in srgb, var(--cut-accent) 14%, transparent); }
+.cut-keys-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-keys-keys { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 22px; }
+.cut-key-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 0; border-radius: 4px; background: var(--gray3); }
+.cut-key-chip kbd, .cut-keysheet kbd { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--gray3);
+  color: var(--gray12); border: 1px solid var(--gray5); }
+.cut-key-chip.conflict kbd { border-color: var(--red); color: var(--red); }
+.cut-key-remove { border: 0; background: none; color: var(--gray8); font: inherit; line-height: 1; padding: 0 3px; border-radius: 3px; cursor: pointer; }
+.cut-key-remove:hover { background: var(--gray5); color: var(--gray12); }
+.cut-keys-listening { color: var(--cut-accent); font-size: 12px; }
+.cut-keys-notes { grid-column: 1 / -1; font-size: 11px; }
+.cut-keys-conflict { color: var(--red); }
+.cut-keys-shadow { color: var(--gray8); }
+.cut-keys-status { min-height: 16px; color: var(--gray9); }
+.cut-keys-status[data-state="conflict"] { color: var(--red); }
+
+/* the ? cheat sheet */
+.cut-keysheet { position: absolute; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--gray1) 70%, transparent); }
+.cut-keysheet-box { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 48px); display: flex; flex-direction: column; overflow: hidden;
+  background: var(--gray2); border: 1px solid var(--gray4); border-radius: 8px; box-shadow: 0 12px 40px #0006; }
+.cut-keysheet-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--gray3); }
+.cut-keysheet-title { font-weight: 600; color: var(--gray12); }
+.cut-keysheet-hint { flex: 1; color: var(--gray8); font-size: 12px; }
+.cut-keysheet-grid { overflow: auto; padding: 10px 14px 14px; columns: 3 260px; column-gap: 24px; }
+.cut-keysheet-group { break-inside: avoid; margin-bottom: 12px; }
+.cut-keysheet-group h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--cut-accent); }
+.cut-keysheet-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 0; color: var(--gray11); font-size: 12px; }
+.cut-keysheet-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-keysheet-keys { display: flex; gap: 3px; flex: none; }
+
+/* the settings page */
+.cut-cache-row .cut-cache-size { color: var(--gray11); font-variant-numeric: tabular-nums; }
+.cut-cache-row .cut-cache-clear { margin-left: 8px; }
+
+/* proxies and media cleanup in the project panel */
+.cut-proxy-badge { flex: none; margin-left: auto; padding: 0 4px; border-radius: 3px; font-size: 10px; font-weight: 600; line-height: 15px;
+  background: var(--gray4); color: var(--gray10); font-variant-numeric: tabular-nums; }
+.cut-proxy-badge[data-state="ready"] { background: color-mix(in srgb, var(--green6) 30%, transparent); color: var(--gray12); }
+.cut-proxy-badge[data-state="running"], .cut-proxy-badge[data-state="paused"] { background: color-mix(in srgb, var(--cut-accent) 30%, transparent); color: var(--gray12); }
+.cut-proxy-badge[data-state="missing"], .cut-proxy-badge[data-state="failed"] { background: color-mix(in srgb, var(--red) 30%, transparent); color: var(--gray12); }
+.cut-proxy-offer-slot:empty { display: none; }
+.cut-proxy-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px; padding: 6px 8px; border-radius: 5px;
+  background: color-mix(in srgb, var(--cut-accent) 14%, var(--gray2)); border: 1px solid color-mix(in srgb, var(--cut-accent) 40%, transparent); }
+.cut-proxy-offer-text { flex: 1 1 200px; color: var(--gray11); }
+.cut-crumb-all { margin-left: 8px; color: var(--blue6); }
+.cut-remove-unused-list { margin: 8px 0 0; padding-left: 18px; max-height: 260px; overflow: auto; }
+.cut-remove-unused-list li { margin: 2px 0; }
+
+/* the export queue */
+.cut-queue { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.cut-queue-note { flex: none; padding: 6px 8px; color: var(--gray8); font-size: 12px; border-bottom: 1px solid var(--gray3); }
+.cut-queue-list { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+.cut-queue-job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 6px 8px; margin-bottom: 4px; border-radius: 5px;
+  background: var(--gray2); border: 1px solid var(--gray3); }
+.cut-queue-job[data-state="running"] { border-color: color-mix(in srgb, var(--cut-accent) 60%, transparent); }
+.cut-queue-job[data-state="failed"] .cut-queue-state { color: var(--red); }
+.cut-queue-job[data-state="done"] .cut-queue-state { color: var(--green6); }
+.cut-queue-name { font-weight: 600; color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-queue-details, .cut-queue-path, .cut-queue-progress, .cut-queue-state, .cut-queue-problems { grid-column: 1 / -1; }
+.cut-queue-details { color: var(--gray9); font-size: 12px; }
+.cut-queue-path { color: var(--gray8); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.cut-queue-state { color: var(--gray9); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cut-queue-problems { color: var(--yellow); font-size: 11px; }
+.cut-queue-tools { grid-column: 2; grid-row: 1; display: flex; gap: 2px; }
+.cut-queue-foot { flex: none; display: flex; justify-content: flex-end; padding: 4px 6px; border-top: 1px solid var(--gray3); }

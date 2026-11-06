@@ -161,7 +161,7 @@
 
   async function editDescription(m) {
     if (!m) return;
-    const text = await ide.ui.prompt(tr('Bookmark description'), m.description || '');
+    const text = await ide.ui.prompt(tr('Bookmark description'), m.description || '', { allowEmpty: true });
     if (text === null) return;
     if (text) m.description = text; else delete m.description;
     changed(m.path);

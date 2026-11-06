@@ -202,7 +202,7 @@
       // A console in the session (or in `parent`); typed lines go to the running process's stdin.
       console({ parent, input = false, placeholder = '' } = {}) {
         const con = ide.ui.console(parent || s.host, {
-          input, placeholder,
+          input, placeholder, history: (s.inputHistory ??= []),
           onInput(text) {
             if (!s.running) return;
             con.append(`${text}\n`, 'cmd');
@@ -578,6 +578,9 @@
     const v = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return { background: v('--gray1'), foreground: v('--text'), cursor: v('--gray11'), cursorAccent: v('--gray1') };
   };
+  // A theme switch (also the OS's, under Sync with OS) repaints the emulated terminals, as the Terminal does: the
+  // colours are read once the new theme's variables apply.
+  ide.on('themeChanged', () => requestAnimationFrame(() => { for (const s of sessions) if (s.term) s.term.options.theme = termTheme(); }));
 
   async function startInTerminal(cfg, s, interp, r) {
     await loadXterm();

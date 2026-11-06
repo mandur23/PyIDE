@@ -18,6 +18,8 @@ const { createCache } = require('../cut/cache');
 const { faststart } = require('../cut/faststart');
 const { findMedia, listMedia } = require('../cut/find');
 const { createFonts, fontDirs } = require('../cut/fonts');
+const { createSpeech } = require('../cut/whisper');
+const { createAi } = require('../cut/ai');
 
 const CACHE_LIMIT_SETTING = 'cut.cacheLimitGB';
 const DEFAULT_CACHE_GB = 10;
@@ -28,7 +30,7 @@ const cutHome = () => path.resolve(process.env.PYIDE_CUT_HOME || path.join(os.ho
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 const text = (v, fallback, max = 200) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : fallback);
 
-function register({ ipcMain, app, getWindow, diagnostics }) {
+function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   const log = diagnostics?.logger?.('#cut');
   const home = cutHome();
   const dirs = { home, projects: path.join(home, 'Projects'), autosave: path.join(home, 'Autosave'), cache: path.join(home, 'Cache') };
@@ -53,6 +55,8 @@ function register({ ipcMain, app, getWindow, diagnostics }) {
   });
   cache = createCache({ dir: dirs.cache, limit: cacheLimit, busy: () => sinks.openParts(), log });
   sinks.sweep().catch((err) => log?.warn?.(`export cleanup: ${err.message}`));
+  const speech = createSpeech({ script: path.join(unpackedDir || path.join(__dirname, '..', '..'), 'main', 'ai', 'whisper_server.py'), log });
+  const ai = createAi({ log });
 
   const watched = new Set();
   function watch(wc) {
@@ -68,6 +72,8 @@ function register({ ipcMain, app, getWindow, diagnostics }) {
       watched.delete(id);
       sinks.ownerGone(id).catch(() => {});
       projects.ownerGone(id, { crashed: false }).catch(() => {});
+      speech.ownerGone(id).catch(() => {});
+      ai.ownerGone(id);
     });
   }
   // Every channel learns its window, so what a window opened is cleaned up when it goes.
@@ -187,7 +193,7 @@ function register({ ipcMain, app, getWindow, diagnostics }) {
     if (r.ok) forgetChecks();
     return r;
   });
-  handle('cut:autosave', (_o, key, t) => projects.autosave(key, t));
+  handle('cut:autosave', (_o, key, t, opts) => projects.autosave(key, t, opts && typeof opts === 'object' ? { latest: opts.latest === true, keep: opts.keep } : {}));
   handle('cut:sessionStart', (owner, key) => projects.sessionStart(key, owner));
   handle('cut:sessionEnd', (owner, key) => projects.sessionEnd(key, owner));
   handle('cut:recovery', () => projects.recovery());
@@ -223,7 +229,25 @@ function register({ ipcMain, app, getWindow, diagnostics }) {
     return { ok: true };
   });
 
-  return { dirs, run };
+  // ---------- speech recognition (main/cut/whisper.js) ----------
+  handle('cut:speechStatus', () => speech.status());
+  ipcMain.handle('cut:speechSetup', (e, opts) => { watch(e?.sender); return speech.setup(opts?.model, e?.sender); });
+  handle('cut:speechCancelSetup', () => speech.cancelSetup());
+  handle('cut:speechConfigure', (_o, opts) => speech.configure(opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:speechOpen', (owner) => speech.open(owner));
+  handle('cut:speechWrite', (owner, id, bytes) => speech.write(owner, id, bytes));
+  ipcMain.handle('cut:speechTranscribe', (e, id, opts) => { watch(e?.sender); return speech.transcribe(e?.sender?.id ?? 0, id, opts && typeof opts === 'object' ? opts : {}, e?.sender); });
+  handle('cut:speechCancel', (owner, request) => speech.cancel(owner, request));
+  handle('cut:speechClose', (owner, id) => speech.close(owner, id));
+  handle('cut:speechTestConfig', (_o, cfg) => speech.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
+  app.on?.('before-quit', () => { speech.dispose().catch(() => {}); });
+
+  // ---------- text AI through Claude Code (main/cut/ai.js): text in, text out ----------
+  handle('cut:aiStatus', () => ai.status());
+  ipcMain.handle('cut:aiComplete', (e, req) => { watch(e?.sender); return ai.run(e?.sender?.id ?? 0, req, e?.sender); });
+  handle('cut:aiCancel', (owner, request) => ai.cancel(owner, request));
+
+  return { dirs, run, speech, ai };
 }
 
 module.exports = { register, cutHome };

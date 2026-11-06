@@ -85,20 +85,31 @@ const torchUsable = async () => usable(await torchVersion(python));
 // For status checks, which cannot wait for an import: true only when torch's dist-info shows a version below the
 // floor. The environment's own torch wins over the one reused from the interpreter it was made from; a torch found
 // nowhere (a user-site or conda install) is not held against the environment.
-function torchTooOld() {
+// The folders the environment imports from: its own site-packages, then the interpreter's when it reuses them.
+function siteDirs() {
   const dirs = [sitePackages];
   try {
     const cfg = fs.readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8');
     const home = /^home\s*=\s*(.+)$/m.exec(cfg)?.[1].trim();
     if (home && /^include-system-site-packages\s*=\s*true/im.test(cfg)) dirs.push(path.join(home, 'Lib', 'site-packages'));
   } catch {}
-  for (const d of dirs) {
+  return dirs;
+}
+// Like hasPackage, also counting the packages reused from the interpreter the environment was made from.
+const importable = (name) => siteDirs().some((d) => fs.existsSync(path.join(d, name)));
+// The version of the torch the environment imports, from its dist-info, or null when none is found.
+function torchOnDisk() {
+  for (const d of siteDirs()) {
     let names = [];
     try { names = fs.readdirSync(d); } catch {}
     const version = names.map((n) => /^torch-(\d[^-]*)\.dist-info$/i.exec(n)?.[1]).find(Boolean);
-    if (version) return !usable(version);
+    if (version) return version;
   }
-  return false;
+  return null;
+}
+function torchTooOld() {
+  const version = torchOnDisk();
+  return version ? !usable(version) : false;
 }
 
 // pip decides whether a torch build fits the interpreter (its version, 32/64-bit, ARM64, free-threaded) and honours
@@ -293,7 +304,7 @@ function startSidecar({ script, env, onEvent = () => {}, onLog = () => {}, onExi
 }
 
 module.exports = {
-  dir, venv, python, sitePackages, hasPackage, pythonReady, TORCH, torchUsable, torchTooOld, hfCacheDir, hfRepoDir, hfCachedFile,
+  dir, venv, python, sitePackages, hasPackage, pythonReady, TORCH, torchUsable, torchTooOld, torchOnDisk, importable, usable, hfCacheDir, hfRepoDir, hfCachedFile,
   createJob, exclusive, ensureVenv, pipInstall, installTorchvision, hfDownload, startSidecar, idleMsOf,
   // For verify/ai-runtime-python.mjs.
   pythons,

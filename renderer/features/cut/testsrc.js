@@ -147,9 +147,18 @@
     return lo;
   }
 
+  // The background of hard scene cuts (opts.scenes): scene k is SCENE_COLORS[k % 4].
+  const SCENE_COLORS = ['#1d2a3a', '#b4552a', '#2f7a3c', '#7a3c8c'];
+  // The background at timeline time t: opts.background, else the colour of the scene t is in.
+  function backgroundAt(t, { background = null, scenes = [] } = {}) {
+    if (background) return background;
+    const k = scenes.filter((s) => s * TICKS <= t).length;
+    return SCENE_COLORS[k % SCENE_COLORS.length];
+  }
+
   // Draws frame i on a Canvas 2D context.
-  function drawFrame(ctx, w, h, i, { flash = false, t = 0 } = {}) {
-    ctx.fillStyle = flash ? '#ffffff' : '#1d2a3a';
+  function drawFrame(ctx, w, h, i, { flash = false, t = 0, background = '#1d2a3a' } = {}) {
+    ctx.fillStyle = flash ? '#ffffff' : background;
     ctx.fillRect(0, 0, w, h);
     // A bar that moves a little every frame, so frames differ beyond their digits.
     ctx.fillStyle = flash ? '#c0c0c0' : '#3a6ea5';
@@ -174,12 +183,13 @@
   }
 
   // The sound: silence with a 1 kHz sine (amplitude `beepLevel`) of `beepLength` seconds at each beep, or a steady
-  // tone of `tone` Hz all along. -> [Float32Array per channel]
-  function soundOf(sch, { sampleRate = 48000, channels = 2, beepLength = 0.1, beepLevel = 0.5, tone = 0, toneLevel = 0.1 } = {}) {
+  // tone of `tone` Hz all along, silent in the `toneGaps` ([[from, to]] seconds). -> [Float32Array per channel]
+  function soundOf(sch, { sampleRate = 48000, channels = 2, beepLength = 0.1, beepLevel = 0.5, tone = 0, toneLevel = 0.1, toneGaps = [] } = {}) {
     const n = Math.round((sch.duration * sampleRate) / TICKS);
     const a = new Float32Array(n);
     if (tone > 0) {
       for (let i = 0; i < n; i++) a[i] = toneLevel * Math.sin((2 * Math.PI * tone * i) / sampleRate);
+      for (const [x, y] of toneGaps) a.fill(0, Math.max(0, Math.round(x * sampleRate)), Math.min(n, Math.round(y * sampleRate)));
     } else {
       const len = Math.round(beepLength * sampleRate);
       for (const b of sch.beeps) {
@@ -209,8 +219,10 @@
   }
 
   // -> {bytes, schedule, codec, hardware, audioDelay}. Options: seconds, fps, w, h, codec ('avc' | 'hevc' | a codec
-  // string), beepEvery, vfr, audio (false for none), beepLength, tone (a steady tone instead of beeps), hardware
-  // ('no-preference' | 'prefer-hardware' | 'prefer-software'), bitrate, keyEvery (seconds), sampleRate, channels.
+  // string), beepEvery, vfr, audio (false for none), beepLength, tone (a steady tone instead of beeps), toneGaps
+  // ([[from, to]] seconds of silence in the tone), background (#rrggbb), scenes (seconds where the background cuts to
+  // the next scene colour), hardware ('no-preference' | 'prefer-hardware' | 'prefer-software'), bitrate, keyEvery
+  // (seconds), sampleRate, channels.
   async function build(o = {}) {
     const opts = { seconds: 10, fps: [30, 1], w: 1280, h: 720, codec: 'avc', beepEvery: 1, vfr: false, audio: true, hardware: 'no-preference', keyEvery: 1, sampleRate: 48000, channels: 2, ...o };
     const presets = mod('presets');
@@ -244,7 +256,7 @@
     for (let i = 0; i < sch.frames.length; i++) {
       if (failure) break;
       const f = sch.frames[i];
-      drawFrame(ctx, w, h, i, { flash: sch.flashes.has(i), t: f.t });
+      drawFrame(ctx, w, h, i, { flash: sch.flashes.has(i), t: f.t, background: backgroundAt(f.t, opts) });
       const frame = new VideoFrame(canvas, { timestamp: time.toMicros(f.t), duration: time.toMicros(f.duration), alpha: 'discard' });
       const key = f.t >= nextKey;
       while (nextKey <= f.t) nextKey += opts.keyEvery * TICKS;
@@ -288,5 +300,5 @@
     return { ...saved, schedule: r.schedule, codec: r.codec };
   }
 
-  return { make, build, write, schedule, frameAtTime, readFrameNumber, paintBlocks, blockLayout, drawFrame, soundOf, memorySink, CELLS, BITS };
+  return { make, build, write, schedule, frameAtTime, readFrameNumber, paintBlocks, blockLayout, drawFrame, backgroundAt, soundOf, memorySink, CELLS, BITS, SCENE_COLORS };
 });

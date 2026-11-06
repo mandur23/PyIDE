@@ -35,6 +35,8 @@
     ['addMarker', 'Add Marker', 'M'],
     ['insert', 'Insert', ','],
     ['overwrite', 'Overwrite', '.'],
+    ['lift', 'Lift', ';'],
+    ['extract', 'Extract', "'"],
     ['split', 'Add Edit', 'Ctrl+K'],
     ['splitAll', 'Add Edit to All Tracks', 'Ctrl+Shift+K'],
     ['rippleStart', 'Ripple Trim Previous Edit to Playhead', 'Q'],
@@ -43,6 +45,15 @@
     ['delete', 'Clear', ['Delete', 'Backspace']],
     ['toggleEnabled', 'Enable', 'Shift+E'],
     ['link', 'Link/Unlink', 'Ctrl+L'],
+    ['group', 'Group', 'Ctrl+G'],
+    ['ungroup', 'Ungroup', 'Ctrl+Shift+G'],
+    ['nudgeLeft', 'Nudge Clip Selection Left One Frame', 'Alt+ArrowLeft'],
+    ['nudgeRight', 'Nudge Clip Selection Right One Frame', 'Alt+ArrowRight'],
+    ['nudgeLeft5', 'Nudge Clip Selection Left Five Frames', 'Alt+Shift+ArrowLeft'],
+    ['nudgeRight5', 'Nudge Clip Selection Right Five Frames', 'Alt+Shift+ArrowRight'],
+    ['selectAtPlayhead', 'Select Clip at Playhead', 'D'],
+    ['matchFrame', 'Match Frame', 'F'],
+    ['extendEdit', 'Extend Selected Edit to Playhead', 'E'],
     ['speed', 'Speed/Duration…', 'Ctrl+R'],
     ['freezeFrame', 'Insert Frame Hold', 'Shift+F'],
     ['transitionVideo', 'Apply Video Transition', 'Ctrl+D'],
@@ -51,6 +62,7 @@
     ['cut', 'Cut', 'Ctrl+X'],
     ['copy', 'Copy', 'Ctrl+C'],
     ['paste', 'Paste', 'Ctrl+V'],
+    ['pasteInsert', 'Paste Insert', 'Ctrl+Shift+V'],
     ['selectAll', 'Select All', 'Ctrl+A'],
     ['deselect', 'Deselect All', 'Escape'],
     ['tool.select', 'Selection Tool', 'V'],
@@ -58,7 +70,11 @@
     ['tool.trackBackward', 'Track Select Backward Tool', 'Shift+A'],
     ['tool.ripple', 'Ripple Edit Tool', 'B'],
     ['tool.roll', 'Rolling Edit Tool', 'N'],
+    ['tool.rate', 'Rate Stretch Tool', 'R'],
     ['tool.razor', 'Razor Tool', 'C'],
+    ['tool.slip', 'Slip Tool', 'Y'],
+    ['tool.slide', 'Slide Tool', 'U'],
+    ['tool.pen', 'Pen Tool', 'P'],
     ['tool.hand', 'Hand Tool', 'H'],
     ['tool.zoom', 'Zoom Tool', 'Z'],
     ['tool.text', 'Type Tool', 'T'],
@@ -80,7 +96,29 @@
     ['workspace.color', 'Color Workspace', 'Alt+Shift+2', 'always'],
     ['workspace.captions', 'Captions and Graphics Workspace', 'Alt+Shift+3', 'always'],
     ['workspace.export', 'Export Workspace', 'Alt+Shift+4', 'always'],
+    // the shortcut editor and the ? cheat sheet (ui-shortcuts.js), the settings page (ui-settings.js), media cleanup
+    // (ui-project.js) and proxies (ui-proxy.js)
+    ['keyHelp', 'Keyboard Shortcut Overview', 'Shift+/', 'global'],
+    ['keyboardShortcuts', 'Keyboard Shortcuts…', [], 'always'],
+    ['settings', 'Video Editor Settings…', [], 'always'],
+    ['selectUnused', 'Select Unused Media', [], 'global'],
+    ['removeUnused', 'Remove Unused Media…', [], 'global'],
+    ['findMissing', 'Find Missing Media…', [], 'global'],
+    ['createProxy', 'Create Proxy', [], 'global'],
   ];
+  // The kinds the shortcut editor and the cheat sheet group the actions by (an id's first match).
+  const KINDS = [
+    ['playback', 'Playback and Navigation', /^(playPause|shuttle|frame|prevEdit|nextEdit|goStart|goEnd|goIn|goOut|fullscreen)/],
+    ['marks', 'Marking', /^(markIn|markOut|markClip|clearInOut|addMarker)$/],
+    ['tools', 'Tools', /^(tool\.|snap$)/],
+    ['view', 'View', /^(zoomIn|zoomOut|zoomFit|keyHelp)$/],
+    ['project', 'Project', /^(undo|redo|save|saveAs|open|newProject|import|export|exportFrame|keyboardShortcuts|settings)$/],
+    ['media', 'Media', /^(selectUnused|removeUnused|findMissing|createProxy)$/],
+    ['workspaces', 'Workspaces and Panels', /^(workspace\.|window\.)/],
+    ['automation', 'Automation', /^auto\./],
+    ['editing', 'Editing', /./],
+  ];
+  const kindOf = (id) => KINDS.find(([, , re]) => re.test(id))[0];
   const TITLES = new Map(ACTIONS.map(([id, title]) => [id, title]));
 
   // The keyboard belongs to the editor when it is in the editor's window part (not a dialog, a menu or the status bar).
@@ -93,7 +131,7 @@
     const a = document.activeElement;
     return a?.tagName === 'INPUT' && ['range', 'radio'].includes(a.type);
   };
-  const ARROWS = new Set(['frameBack', 'frameForward', 'frameBack5', 'frameForward5', 'prevEdit', 'nextEdit']);
+  const ARROWS = new Set(['frameBack', 'frameForward', 'frameBack5', 'frameForward5', 'prevEdit', 'nextEdit', 'nudgeLeft', 'nudgeRight', 'nudgeLeft5', 'nudgeRight5']);
   function allowed(id, scope) {
     if (!inEditor() && scope !== 'always') return false;
     if (scope === 'always') return !!document.querySelector('.cut-root');
@@ -104,7 +142,10 @@
   }
 
   // K held down: J and L step one frame instead of shuttling (the monitors read ui.keys.kHeld).
-  const keys = { kHeld: false, actions: ACTIONS.map(([id]) => id), title: (id) => tr(TITLES.get(id) || id) };
+  const keys = {
+    kHeld: false, actions: ACTIONS.map(([id]) => id), title: (id) => tr(TITLES.get(id) || id),
+    kinds: KINDS.map(([id, title]) => ({ id, title: () => tr(title) })), kindOf,
+  };
   addEventListener('keydown', (e) => { if (e.code === 'KeyK' && !e.ctrlKey && !e.altKey && !ui.isTyping()) keys.kHeld = true; }, true);
   addEventListener('keyup', (e) => { if (e.code === 'KeyK') keys.kHeld = false; }, true);
   addEventListener('blur', () => { keys.kHeld = false; });
@@ -134,7 +175,8 @@
   for (const ws of ['editing', 'color', 'captions', 'export']) on(`workspace.${ws}`, () => { ui.setWorkspace?.(ws); });
 
   const TOOLS = { 'tool.select': 'select', 'tool.trackForward': 'trackForward', 'tool.trackBackward': 'trackBackward', 'tool.ripple': 'ripple',
-    'tool.roll': 'roll', 'tool.razor': 'razor', 'tool.hand': 'hand', 'tool.zoom': 'zoom', 'tool.text': 'text' };
+    'tool.roll': 'roll', 'tool.rate': 'rate', 'tool.razor': 'razor', 'tool.slip': 'slip', 'tool.slide': 'slide', 'tool.pen': 'pen',
+    'tool.hand': 'hand', 'tool.zoom': 'zoom', 'tool.text': 'text' };
   const EDITING = ['timeline', 'program', 'controls'];
   for (const [id, tool] of Object.entries(TOOLS)) on(id, ({ app }) => { app.setTool(tool); }, EDITING);
   on('snap', ({ app }) => {

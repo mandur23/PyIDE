@@ -1,0 +1,33 @@
+/* speech recognition (ui-speech.js): the transcript panel, the setup dialog, the settings section */
+.cut-transcript { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.cut-transcript .cut-tr-run, .cut-transcript .cut-tr-remove, .cut-transcript .cut-tr-fillers { height: 24px; padding: 0 8px; border: 1px solid var(--gray5); border-radius: 3px; font-size: 11.5px; }
+.cut-transcript .cut-tr-run:hover:not(:disabled), .cut-transcript .cut-tr-remove:hover:not(:disabled), .cut-transcript .cut-tr-fillers:hover:not(:disabled) { background: var(--gray4); color: var(--gray12); }
+.cut-tr-count { flex: none; color: var(--gray8); font-size: 11px; margin-right: 4px; white-space: nowrap; }
+.cut-tr-count:empty { display: none; }
+.cut-tr-text { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px; outline: none; line-height: 1.7; color: var(--gray11); user-select: none; }
+.cut-tr-text[hidden] { display: none; }
+.cut-tr-para { margin: 0 0 8px; }
+.cut-tr-time { display: inline-block; margin-right: 8px; color: var(--gray8); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.cut-tr-word { padding: 1px 1px; border-radius: 2px; cursor: pointer; }
+.cut-tr-word:hover { background: var(--gray4); color: var(--gray12); }
+.cut-tr-word.match { background: color-mix(in srgb, var(--yellow) 28%, transparent); color: var(--gray12); }
+.cut-tr-word.selected { background: color-mix(in srgb, var(--blue6) 45%, transparent); color: var(--gray12); }
+.cut-tr-word.current { box-shadow: inset 0 -2px 0 var(--cut-accent); color: var(--gray12); background: color-mix(in srgb, var(--cut-accent) 18%, transparent); }
+.cut-tr-word.selected.current { background: color-mix(in srgb, var(--blue6) 55%, transparent); }
+.cut-tr-empty[hidden] { display: none; }
+
+.cut-speech-setup-list { margin: 4px 0 8px 18px; padding: 0; color: var(--gray11); }
+.cut-speech-setup-list li { margin: 3px 0; }
+.cut-speech-bar { height: 6px; margin-top: 8px; border-radius: 3px; background: var(--gray4); overflow: hidden; }
+.cut-speech-bar[hidden] { display: none; }
+.cut-speech-fill { height: 100%; width: 0; background: var(--cut-accent); transition: width .2s; }
+.cut-speech-bar.indeterminate .cut-speech-fill { width: 30% !important; animation: cut-speech-slide 1.2s ease-in-out infinite; }
+@keyframes cut-speech-slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.cut-speech-status { min-height: 16px; margin-top: 6px; color: var(--gray9); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-speech-error { margin-top: 6px; padding: 6px 8px; border-radius: 4px; color: var(--gray12); background: color-mix(in srgb, var(--red) 18%, transparent); font-size: 12px; line-height: 1.45; }
+.cut-speech-error[hidden] { display: none; }
+.cut-check-row { display: flex; align-items: center; gap: 8px; }
+.cut-speech-model-row { display: flex; align-items: center; gap: 8px; }
+.cut-speech-download[hidden] { display: none; }
+.cut-speech-state-row { margin: 0 0 6px; }
+.cut-speech-model-state[data-ready="true"] { color: var(--green6); }

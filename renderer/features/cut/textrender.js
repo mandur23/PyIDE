@@ -145,14 +145,15 @@
   }
 
   // Burned-in captions: the items under t in the track's style (model.defaultCaptionStyle): centered lines near the
-  // bottom (or top), margin a percent of the height, each line on its own background box.
+  // bottom (or top), margin a percent of the height, each line on its own background box. The size scales with the
+  // shorter side of the sequence over the style's `ref`.
   function drawCaptions(ctx, items, style = {}, { w, h, scale } = {}) {
     const k = scale ?? ctx.canvas.width / w;
-    const s = { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ...style };
+    const s = { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ref: 1080, ...style };
     const lines = [];
     for (const it of items || []) for (const line of String(it.text ?? '').split(/\r?\n/)) lines.push(line);
     if (!lines.length) return;
-    const size = Math.max(1, Number(s.size) || 54);
+    const size = Math.max(1, ((Number(s.size) || 54) * Math.min(w, h)) / (Number(s.ref) || 1080));
     const lh = size * 1.3;
     const pad = size * 0.25;
     const margin = ((Number(s.margin) || 0) / 100) * h;

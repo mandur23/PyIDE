@@ -3,7 +3,10 @@
 // in order with their parameters built from the registry's definitions (Cut.effects), and, when a transition is
 // selected in the timeline, the transition's settings. Values are those at the playhead. Each keyframable row has a
 // stopwatch, previous/add/next keyframe buttons and a small lane of the clip's span with its keyframes: click to pick,
-// Shift to pick more, drag to move them, right-click for the ease, copy and paste.
+// Shift to pick more, drag to move them, right-click for the interpolation (linear, ease in/out, bezier, hold), copy
+// and paste. Between two keyframes the lane draws the segment's shape from the first value to the next (rising or
+// falling with the value): a step for hold, the timing curve for the others; a bezier segment shows its two handles,
+// which are dragged to reshape it (one undo step).
 //
 // The form is built once per clip shape (which properties and effects it has) and only its values change with the
 // playhead or an edit, so a field being typed in is never replaced.
@@ -15,7 +18,7 @@
   const edit = ui.edit;
   const el = ui.el;
 
-  const EASES = [['linear', 'Linear'], ['easeIn', 'Ease In'], ['easeOut', 'Ease Out'], ['easeInOut', 'Ease In and Out']];
+  const EASES = edit.EASES;
   const svg = (body) => `<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
   const GLYPHS = {
     watch: svg('<circle cx="8" cy="9" r="5.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 6v3.2l2 1.3M6.5 2h3M8 2v1.8" stroke="currentColor" stroke-width="1.3"/>'),
@@ -430,10 +433,39 @@
     const laneX = (clip, w, t) => 6 + (t / Math.max(1, model.clipDuration(clip))) * (w - 12);
     const laneT = (clip, w, x) => ((x - 6) / Math.max(1, w - 12)) * model.clipDuration(clip);
     function cssVar(name, fb) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb; }
+    // Which way a segment's value goes: up (1) or down (-1); a value that does not change counts as up.
+    function direction(a, b) {
+      if (typeof a === 'number' && typeof b === 'number') return b < a ? -1 : 1;
+      if (Array.isArray(a) && Array.isArray(b)) {
+        for (let i = 0; i < Math.min(a.length, b.length); i++) if (typeof a[i] === 'number' && b[i] !== a[i]) return b[i] < a[i] ? -1 : 1;
+      }
+      return 1;
+    }
+    // The drawing of segment i of a lane (keyframe i to i + 1), in lane pixels: its ends, the y of a progress p
+    // (0 at the first value, 1 at the next) and back, and the bezier handles' points when it has them.
+    const LANE_PAD = 4;
+    function segment(c, list, i, w, h) {
+      const a = list[i];
+      const b = list[i + 1];
+      if (!b) return null;
+      const xa = laneX(c, w, a.t);
+      const xb = laneX(c, w, b.t);
+      const lo = h - LANE_PAD;
+      const hi = LANE_PAD;
+      const dir = direction(a.v, b.v);
+      const yOf = (p) => (dir > 0 ? lo - p * (lo - hi) : hi + p * (lo - hi));
+      const pOf = (y) => (dir > 0 ? (lo - y) / (lo - hi) : (y - hi) / (lo - hi));
+      const hd = a.ease === 'hold' ? null : K.handles(a);
+      const pts = hd ? [[xa + hd[0] * (xb - xa), yOf(hd[1])], [xa + hd[2] * (xb - xa), yOf(hd[3])]] : null;
+      // handles only where there is room to grab them
+      const handles = a.ease === 'bezier' && xb - xa >= 16 ? pts : null;
+      return { a, b, xa, xb, yOf, pOf, pts, handles };
+    }
     function drawLanes() {
       const accent = cssVar('--cut-accent', '#e8743b');
       const text = cssVar('--gray10', '#b4b8bf');
       const line = cssVar('--gray4', '#43454a');
+      const curve = cssVar('--gray8', '#868a91');
       const head = cssVar('--cut-playhead', '#e05555');
       for (const r of rows) {
         if (!r.lane) continue;
@@ -444,6 +476,31 @@
         ctx.fillStyle = line;
         ctx.fillRect(6, Math.round(h / 2), w - 12, 1);
         const list = c.keyframes?.[r.path] || [];
+        // the segments' shapes under the keyframes
+        for (let i = 0; i < list.length - 1; i++) {
+          const s = segment(c, list, i, w, h);
+          ctx.strokeStyle = curve;
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          ctx.moveTo(s.xa, s.yOf(0));
+          if (s.a.ease === 'hold') {
+            ctx.lineTo(s.xb, s.yOf(0));
+            ctx.lineTo(s.xb, s.yOf(1));
+          } else ctx.bezierCurveTo(s.pts[0][0], s.pts[0][1], s.pts[1][0], s.pts[1][1], s.xb, s.yOf(1));
+          ctx.stroke();
+          if (s.handles) {
+            const on = picked.has(`${c.id}|${r.path}|${s.a.t}`);
+            ctx.strokeStyle = on ? accent : text;
+            ctx.fillStyle = on ? accent : text;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(s.xa, s.yOf(0)); ctx.lineTo(s.handles[0][0], s.handles[0][1]);
+            ctx.moveTo(s.xb, s.yOf(1)); ctx.lineTo(s.handles[1][0], s.handles[1][1]);
+            ctx.stroke();
+            for (const [hx, hy] of s.handles) { ctx.beginPath(); ctx.arc(hx, hy, 2.5, 0, Math.PI * 2); ctx.fill(); }
+          }
+        }
+        ctx.lineWidth = 1;
         for (let i = 0; i < list.length; i++) {
           const k = list[i];
           const x = laneX(c, w, k.t);
@@ -453,15 +510,11 @@
           ctx.strokeStyle = on ? accent : text;
           ctx.beginPath();
           const sz = 5;
-          if (k.ease === 'easeIn' || k.ease === 'easeOut' || k.ease === 'easeInOut') {
-            ctx.arc(x, y, sz - 0.5, 0, Math.PI * 2);
-          } else { ctx.moveTo(x, y - sz); ctx.lineTo(x + sz, y); ctx.lineTo(x, y + sz); ctx.lineTo(x - sz, y); ctx.closePath(); }
+          // linear: a diamond; eased and bezier: a circle; hold: a square
+          if (k.ease === 'hold') ctx.rect(x - sz + 1, y - sz + 1, 2 * sz - 2, 2 * sz - 2);
+          else if (k.ease && k.ease !== 'linear') ctx.arc(x, y, sz - 0.5, 0, Math.PI * 2);
+          else { ctx.moveTo(x, y - sz); ctx.lineTo(x + sz, y); ctx.lineTo(x, y + sz); ctx.lineTo(x - sz, y); ctx.closePath(); }
           ctx.fill();
-          if (i < list.length - 1) {
-            ctx.globalAlpha = 0.35;
-            ctx.fillRect(x + sz, y - 1, laneX(c, w, list[i + 1].t) - x - 2 * sz, 2);
-            ctx.globalAlpha = 1;
-          }
         }
         if (edit.inClip(app, c)) {
           const px = Math.round(laneX(c, w, app.t - c.start)) + 0.5;
@@ -521,6 +574,60 @@
       }
       return best?.k || null;
     }
+    // A bezier handle under a lane point: {index (the segment), which: 0 | 1}.
+    function handleAt(entry, x, y) {
+      const c = clipNow(entry.clipId);
+      if (!c) return null;
+      const w = entry.lane.canvas.parentElement.clientWidth;
+      const h = entry.lane.canvas.parentElement.clientHeight || 22;
+      const list = c.keyframes?.[entry.path] || [];
+      let best = null;
+      for (let i = 0; i < list.length - 1; i++) {
+        const s = segment(c, list, i, w, h);
+        if (!s?.handles) continue;
+        s.handles.forEach(([hx, hy], which) => {
+          const d = Math.hypot(hx - x, hy - y);
+          if (d <= 5 && (!best || d < best.d)) best = { index: i, which, d };
+        });
+      }
+      return best;
+    }
+    // Dragging a bezier handle: x stays inside the segment (0..1), y may overshoot (-1..2); live in one undo step.
+    function dragHandle(e, entry, hit) {
+      const node = entry.lane.el;
+      const c = clipNow(entry.clipId);
+      const list = (c.keyframes?.[entry.path] || []).map((k) => ({ ...k, h: k.h?.slice() }));
+      const r = node.getBoundingClientRect();
+      const s = segment(c, list, hit.index, r.width, r.height);
+      node.setPointerCapture(e.pointerId);
+      picked.clear();
+      picked.add(`${c.id}|${entry.path}|${s.a.t}`);
+      let open = false;
+      const move = (ev) => {
+        const u = Math.max(0, Math.min(1, (ev.clientX - r.left - s.xa) / Math.max(1, s.xb - s.xa)));
+        const p = Math.max(-1, Math.min(2, s.pOf(ev.clientY - r.top)));
+        const next = list.map((k) => ({ ...k, h: k.h?.slice() }));
+        const k = next[hit.index];
+        k.h = (k.h || K.handles(k)).slice();
+        k.h[hit.which * 2] = Math.round(u * 1000) / 1000;
+        k.h[hit.which * 2 + 1] = Math.round(p * 1000) / 1000;
+        if (open) app.history.cancel();
+        app.history.begin('Keyframes');
+        open = true;
+        try { app.history.do(C.setKeyframes(seq().id, c.id, entry.path, next.map(({ h: hh, ...rest }) => (rest.ease === 'bezier' ? { ...rest, h: hh } : rest)))); } catch (err) { ui.toast(ui.errorText(err)); }
+      };
+      const up = () => {
+        node.removeEventListener('pointermove', move);
+        node.removeEventListener('pointerup', up);
+        node.removeEventListener('lostpointercapture', up);
+        if (open) app.history.commit();
+        drawLanes();
+      };
+      node.addEventListener('pointermove', move);
+      node.addEventListener('pointerup', up);
+      node.addEventListener('lostpointercapture', up);
+      drawLanes();
+    }
     function laneEvents(entry) {
       const node = entry.lane.el;
       node.addEventListener('pointerdown', (e) => {
@@ -530,6 +637,8 @@
         e.preventDefault();
         const r = node.getBoundingClientRect();
         const x = e.clientX - r.left;
+        const hh = handleAt(entry, x, e.clientY - r.top);
+        if (hh) { dragHandle(e, entry, hh); return; }
         const k = keyAt(entry, x);
         const f = time.frameTicks(fps());
         if (!k) {
@@ -608,7 +717,7 @@
         ui.menu(e.clientX, e.clientY, [
           ...EASES.map(([ease, label]) => ({ label: tr(label), disabled: !sel.length, checked: sel.length > 0 && sel.every((x) => x.k.ease === ease), run: () => setEase(c, sel, ease) })),
           { separator: true },
-          { label: tr('Copy'), disabled: !sel.length, run: () => { const t0 = Math.min(...sel.map((x) => x.k.t)); kfClipboard = sel.map((x) => ({ path: x.path, t: x.k.t - t0, v: x.k.v, ease: x.k.ease })); } },
+          { label: tr('Copy'), disabled: !sel.length, run: () => { const t0 = Math.min(...sel.map((x) => x.k.t)); kfClipboard = sel.map((x) => ({ path: x.path, t: x.k.t - t0, v: x.k.v, ease: x.k.ease, h: x.k.h })); } },
           { label: tr('Paste'), disabled: !kfClipboard?.length, run: () => pasteKeys(c) },
           { label: tr('Delete'), disabled: !sel.length, run: () => deleteKeys(c, sel) },
         ]);
@@ -633,8 +742,7 @@
       app.history.begin('Keyframes');
       try {
         for (const [p, times] of groupByPath(sel)) {
-          const set = new Set(times);
-          app.history.do(C.setKeyframes(seq().id, c.id, p, c.keyframes[p].map((k) => (set.has(k.t) ? { ...k, ease } : k))));
+          app.history.do(C.setKeyframes(seq().id, c.id, p, edit.easeList(c.keyframes[p], times, ease)));
         }
         app.history.commit();
       } catch (err) { app.history.cancel(); ui.report(err); }
@@ -661,7 +769,7 @@
         for (const [p, list] of byPath) {
           if (!model.validPropPath(c, edit.kindOf(seq(), c), p)) continue;
           let next = c.keyframes?.[p] || [];
-          for (const k of list) if (t0 + k.t < D) next = K.insert(next, { t: t0 + k.t, v: k.v, ease: k.ease });
+          for (const k of list) if (t0 + k.t < D) next = K.insert(next, { t: t0 + k.t, v: k.v, ease: k.ease, h: k.h });
           app.history.do(C.setKeyframes(seq().id, c.id, p, next));
         }
         app.history.commit();
@@ -695,7 +803,7 @@
       if (c && (e.key === 'Delete' || e.key === 'Backspace') && pickedOf(c).length) { e.preventDefault(); e.stopPropagation(); deleteKeys(c, pickedOf(c)); }
     });
     offs.push(ui.onAction('delete', () => { const c = subjectClip(); if (!c || !pickedOf(c).length) return false; deleteKeys(c, pickedOf(c)); return true; }, { panels: ['controls'] }));
-    offs.push(ui.onAction('copy', () => { const c = subjectClip(); const sel = c ? pickedOf(c) : []; if (!sel.length) return false; const t0 = Math.min(...sel.map((x) => x.k.t)); kfClipboard = sel.map((x) => ({ path: x.path, t: x.k.t - t0, v: x.k.v, ease: x.k.ease })); return true; }, { panels: ['controls'] }));
+    offs.push(ui.onAction('copy', () => { const c = subjectClip(); const sel = c ? pickedOf(c) : []; if (!sel.length) return false; const t0 = Math.min(...sel.map((x) => x.k.t)); kfClipboard = sel.map((x) => ({ path: x.path, t: x.k.t - t0, v: x.k.v, ease: x.k.ease, h: x.k.h })); return true; }, { panels: ['controls'] }));
     offs.push(ui.onAction('paste', () => { const c = subjectClip(); if (!c || !kfClipboard?.length) return false; pasteKeys(c); return true; }, { panels: ['controls'] }));
 
     let raf = 0;
@@ -709,7 +817,21 @@
     offs.push(() => ro.disconnect());
     offs.push(() => cancelAnimationFrame(raf));
     refresh();
-    ui.controls = { refresh, get subject() { return subject; }, get picked() { return [...picked]; } };
+    // For tests: the client point of a lane's keyframe, or of a bezier handle of the segment leaving it.
+    const lanePoint = (path, t, which = null) => {
+      const r = rows.find((x) => x.lane && x.path === path);
+      const c = r && clipNow(r.clipId);
+      if (!c) return null;
+      const box = r.lane.el.getBoundingClientRect();
+      const list = c.keyframes?.[path] || [];
+      const i = list.findIndex((k) => k.t === t);
+      if (i < 0) return null;
+      if (which === null) return { x: box.left + laneX(c, box.width, t), y: box.top + box.height / 2 };
+      const s = segment(c, list, i, box.width, box.height);
+      const pt = s?.pts?.[which];
+      return pt ? { x: box.left + pt[0], y: box.top + pt[1], shown: !!s.handles } : null;
+    };
+    ui.controls = { refresh, lanePoint, get subject() { return subject; }, get picked() { return [...picked]; } };
     return {
       dispose() { for (const off of offs.splice(0)) { try { off(); } catch {} } root.remove(); },
     };

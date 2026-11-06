@@ -1,7 +1,8 @@
 // The color panel of Nano Studio Cut (video-editor-features.md section 10): the basic correction of the selected video
 // clip, which is its `color.basic` effect (added at the end of the effect list the first time a control moves), and
 // the vignette (the `vignette` effect). White balance has an eyedropper: a click on the program monitor picks a pixel
-// that should be white or gray, and temperature and tint are set so it becomes neutral. A slider drag is one undo step;
+// that should be white or gray, and temperature and tint are set so it becomes neutral; Auto (ui-auto.js) sets them and
+// the exposure from the whole picture. A slider drag is one undo step;
 // values are those at the playhead when a parameter has keyframes.
 (() => {
   const Cut = globalThis.Cut;
@@ -131,6 +132,12 @@
     dropper.addEventListener('mousedown', (e) => e.preventDefault());
     dropper.addEventListener('click', () => pick());
     wbGroup.querySelector('.cut-color-gname').appendChild(dropper);
+    // Auto (ui-auto.js): white balance and exposure from the clip's picture at the playhead.
+    const autoBtn = el('button', 'cut-btn cut-color-auto', tr('Auto'), { type: 'button', title: tr('Auto Color: neutral white balance and mid-grey exposure from the picture at the playhead') });
+    autoBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    autoBtn.addEventListener('click', () => { ui.auto?.autoColor(app); });
+    autoBtn.hidden = !ui.auto;
+    wbGroup.querySelector('.cut-color-gname').appendChild(autoBtn);
     group(BASIC[1][0], 'color.basic', BASIC[1][1]);
     group(BASIC[2][0], 'color.basic', BASIC[2][1]);
     const vig = group('Vignette', 'vignette', VIGNETTE);
@@ -181,6 +188,7 @@
       onCheck.disabled = !ok;
       resetBtn.disabled = !ok;
       dropper.disabled = !ok;
+      autoBtn.disabled = !ok || Cut.model.mediaOf(app.project, c)?.kind == null;
       const vals = { 'color.basic': paramsOf('color.basic'), vignette: paramsOf('vignette') };
       for (const ctl of controls) {
         const v = vals[ctl.type][ctl.id];

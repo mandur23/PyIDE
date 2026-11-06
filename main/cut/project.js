@@ -2,8 +2,10 @@
 //
 // Autosaves are <autosave>/<name>-<hash>-<stamp>.ncut: <name> is the project's file name (or the untitled key), <hash>
 // the first 8 hex digits of the SHA-1 of the key (a project path in lower case, or the untitled key), so two projects
-// of one name in different folders keep their own 20, and <stamp> the UTC time to the millisecond, kept increasing
-// within a run. A session marker is <autosave>/.sessions/<pid>-<run>-<hash>.json ({pid, run, started, key, since,
+// of one name in different folders keep their own copies, and <stamp> the UTC time to the millisecond, kept increasing
+// within a run. Two kinds share the folder: copies (the editor's interval copies, <stamp>.ncut, the newest `keep` of a
+// key kept, 20 by default) and the latest state (the save 2 s after edits stop, <stamp>.latest.ncut, only the newest
+// of a key kept), so the quick saves never push the interval copies out. Recovery offers the newest of either. A session marker is <autosave>/.sessions/<pid>-<run>-<hash>.json ({pid, run, started, key, since,
 // saved, crashed}); it is removed when the session ends, when its window closes normally, or when the user dismisses
 // the recovery. A marker whose run is gone (or whose window's renderer crashed) is a session that never ended:
 // recovery offers its newest autosave when that autosave is newer than both the session's start and its last save.
@@ -15,7 +17,8 @@ const { fail, localPath, realFile, writableFile } = require('./paths');
 
 const KEEP = 20;
 const NCUT = new Set(['ncut']);
-const AUTOSAVE = /-([0-9a-f]{8})-(\d{8}-\d{6}-\d{3})\.ncut$/;
+const AUTOSAVE = /-([0-9a-f]{8})-(\d{8}-\d{6}-\d{3})(\.latest)?\.ncut$/;
+const MAX_KEEP = 100;
 const MARKER = /^\d+-[0-9a-f]+-[0-9a-f]{8}\.json$/;
 const MAX_AGE_MS = 30 * 24 * 3600000;
 const MAX_KEY = 1024;
@@ -112,25 +115,29 @@ function createProjects({ autosaveDir, run, log }) {
     return { ok: true, path: target.path, bak };
   }
 
-  // Autosaves of one key (by its hash), newest first: [{file, time}].
+  // Autosaves of one key (by its hash), newest first: [{file, time, latest}].
   async function autosavesOf(hash) {
     const out = [];
     for (const name of await list(autosaveDir)) {
       const m = AUTOSAVE.exec(name);
-      if (m && m[1] === hash) out.push({ file: path.join(autosaveDir, name), time: timeOfStamp(m[2]) });
+      if (m && m[1] === hash) out.push({ file: path.join(autosaveDir, name), time: timeOfStamp(m[2]), latest: !!m[3] });
     }
     return out.sort((a, b) => b.time - a.time);
   }
 
-  async function autosave(key, text) {
+  // opts: {latest: true} for the latest state (replaces the previous one), else a copy with {keep} copies kept.
+  async function autosave(key, text, opts = {}) {
     if (badKey(key) || badText(text)) return fail('badArgs', 'autosave takes a key and the project text');
+    const latest = opts?.latest === true;
+    const keep = Number.isInteger(opts?.keep) ? Math.min(MAX_KEEP, Math.max(1, opts.keep)) : KEEP;
     const hash = hashOf(key);
-    const file = path.join(autosaveDir, `${nameOf(key)}-${hash}-${stampOf(nextStamp())}.ncut`);
+    const file = path.join(autosaveDir, `${nameOf(key)}-${hash}-${stampOf(nextStamp())}${latest ? '.latest' : ''}.ncut`);
     try {
       await fs.promises.mkdir(autosaveDir, { recursive: true });
       await writeAtomic(file, text);
     } catch (err) { return fail('io', err.message); }
-    for (const old of (await autosavesOf(hash)).slice(KEEP)) await fs.promises.rm(old.file, { force: true }).catch(() => {});
+    const same = (await autosavesOf(hash)).filter((a) => a.latest === latest);
+    for (const old of same.slice(latest ? 1 : keep)) await fs.promises.rm(old.file, { force: true }).catch(() => {});
     return { ok: true, file };
   }
 

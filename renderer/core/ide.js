@@ -337,7 +337,7 @@ document.addEventListener('keydown', (e) => {
 // text overwrites it (progress bars), \b steps back, colors carry across chunks. Finished lines are written once.
 // append() writes at once and only the scroll to the end, which lays out the whole output, waits for the next frame,
 // so a flood of output costs one layout per frame instead of one per chunk.
-ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
+ide.ui.console = (host, { input = false, placeholder = '', onInput, history = [] } = {}) => {
   host.classList.add('console-host');
   const out = el('pre', 'console');
   host.appendChild(out);
@@ -386,10 +386,30 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput } = {}) => {
   if (input) {
     inp = el('input', 'console-in');
     inp.placeholder = placeholder;
+    // Up and Down walk the lines typed before, newest first, as in a shell. history: an array the caller keeps (a Run
+    // tab's, so a rerun or a server's restart keeps it); it lives in memory only, since typed lines can hold secrets.
+    let back = history.length;
+    let draft = '';
     inp.onkeydown = (e) => {
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        const next = back + (e.key === 'ArrowUp' ? -1 : 1);
+        if (next < 0 || next > history.length) return;
+        e.preventDefault();
+        if (back === history.length) draft = inp.value;
+        back = next;
+        inp.value = back === history.length ? draft : history[back];
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+        return;
+      }
       if (e.key !== 'Enter') return;
       const text = inp.value;
       inp.value = '';
+      if (text.trim() && history[history.length - 1] !== text) {
+        history.push(text);
+        if (history.length > 200) history.splice(0, history.length - 200);
+      }
+      back = history.length;
+      draft = '';
       onInput?.(text);
     };
     host.appendChild(inp);
@@ -718,7 +738,9 @@ ide.ui.pick = ({ placeholder, items, initial }) => {
   }
   return openPopup({ placeholder, items, initial });
 };
-ide.ui.prompt = (placeholder, initial = '') => openPopup({ placeholder, mode: 'prompt', initial });
+// -> the text, or null for Escape. Enter on an empty box is null too, unless allowEmpty, which answers '' (a description
+// the user clears).
+ide.ui.prompt = (placeholder, initial = '', { allowEmpty = false } = {}) => openPopup({ placeholder, mode: 'prompt', initial, allowEmpty });
 
 // The rows are drawn in the next frame, which shows them no later than drawing at once: keys typed faster than the
 // rows draw are drawn once. Enter and Up/Down draw the pending rows first.
@@ -731,7 +753,7 @@ $('popupIn').onkeydown = (e) => {
   if (e.key === 'Escape') { e.stopPropagation(); return closePopup(); }
   if (popupFrame && ['Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) renderPopup();
   // preventDefault: the Enter must not also reach the editor that gets the keyboard back.
-  if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup($('popupIn').value.trim() || null); } return; }
+  if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup($('popupIn').value.trim() || (popupState.allowEmpty ? '' : null)); } return; }
   const rows = [...$('popupList').querySelectorAll('.popup-item:not(.hint)')];
   const i = rows.findIndex((r) => r.classList.contains('active'));
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -895,7 +917,17 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   };
   for (const b of buttons) {
     const btn = el('button', b.primary ? 'primary' : 'secondary', b.label);
-    btn.onclick = async () => { if ((await b.run?.(dlg)) !== false) dlg.close(); };
+    // A run that is still working (Replace All writing files, a Git command) takes no second press: a double click or
+    // a second Enter would run it twice, and Replace All would replace in its own replacements.
+    btn.onclick = async () => {
+      if (dlg.running) return;
+      let answer = b.run?.(dlg);
+      if (typeof answer?.then === 'function') {
+        dlg.running = true;
+        try { answer = await answer; } finally { dlg.running = false; }
+      }
+      if (answer !== false) dlg.close();
+    };
     foot.appendChild(btn);
   }
   const shown = (n) => !n.disabled && n.getClientRects().length > 0;
@@ -1798,7 +1830,10 @@ async function moveTo(entry, to) {
   if (!samePath(entry.path, to) && await ide.api.exists(to)) return void ide.ui.alert(tr('{path} already exists', { path: to }));
   try { await ide.api.rename(entry.path, to); } catch (e) { return void ide.ui.alert(ipcError(e)); }
   await ide.documentsMoved(entry.path, to);
-  renderTree();
+  const wasSelected = selected && samePath(selected.path, entry.path);
+  await renderTree();
+  // The renamed row keeps the selection under its new name.
+  if (wasSelected) { const i = rowIndexOf(to); if (i >= 0) selectRow(i); }
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
 }
 
@@ -1897,6 +1932,7 @@ async function deleteEntries(entries) {
   if (!(await ide.ui.confirm(question, { ok: tr('Delete') }))) return;
   const deleted = [];
   const failed = [];
+  const rowsBefore = new Map(entries.map((e) => [e, rowIndexOf(e.path, e.treeRoot)]));
   for (const entry of entries) {
     // A file another program holds open, or a drive without a Recycle Bin, stays where it is.
     try { await ide.api.trash(entry.path); } catch (e) { failed.push(tr('Could not move {name} to the Recycle Bin: {error}', { name: entry.name, error: ipcError(e) })); continue; }
@@ -1906,7 +1942,13 @@ async function deleteEntries(entries) {
   }
   if (failed.length) ide.ui.alert(failed.join('\n'));
   if (!deleted.length) return;
-  renderTree();
+  // The selection was the deleted row: the row now in its place takes it (the next one, as in PyCharm), so the arrow
+  // keys go on from there and New File does not aim at a folder that is gone.
+  // The rows are where they were before the trash calls: the folder watcher may have redrawn the tree meanwhile.
+  const gone = (p) => deleted.some((d) => samePath(d, p) || isUnder(p, d));
+  const at = selected && gone(selected.path) ? Math.min(...entries.filter((e) => deleted.includes(e.path)).map((e) => rowsBefore.get(e)).filter((i) => i >= 0)) : -1;
+  await renderTree();
+  if (at >= 0 && Number.isFinite(at)) selectRow(at);
   ide.emit('filesChanged', { deleted });
 }
 

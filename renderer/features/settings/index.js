@@ -282,7 +282,7 @@
     ] },
     { id: 'tools', title: () => tr('Tools'), keywords: 'ruff actions on save reformat format lint check line length 저장 시 서식 린트 도구', mount: mountTools },
   ];
-  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, index?, craft?,
+  // Other plugins add pages by pushing {id, title: () => string, keywords, group?: 'ai' | 'editor' | 'appearance', defaults?, index?, craft?, cut?,
   // mount(host, ctx)} to ide.settingsPages, so plugin load order does not matter; the tree is rebuilt each time the
   // dialog opens. Search mounts every page off screen once per dialog to read its labels; index: false (a page whose
   // mount lists data or starts slow work) is found by its title and keywords only. craft: true shows the page in craft
@@ -295,8 +295,10 @@
     const base = BASE_TREE.map((n) => (nested[n.group] ? { ...n, children: [...n.children, ...pluginPages.filter((p) => p.group === nested[n.group])] } : n));
     const tree = [...base, ...(ai.length ? [{ group: 'ai-group', title: () => tr('AI'), children: ai }] : []), ...pluginPages.filter((p) => p.group !== 'ai' && !Object.values(nested).includes(p.group))];
     // craft: true marks the pages the apps outside the IDE (Craft, Cut) show; only their own plugins' pages exist there.
+    // cut: true marks a page Cut shows besides those.
     if (ide.appMode === 'code') return tree;
-    return tree.map((n) => (n.children ? { ...n, children: n.children.filter((p) => p.craft) } : n)).filter((n) => (n.children ? n.children.length : n.craft));
+    const shown = (p) => p.craft || (ide.appMode === 'cut' && p.cut);
+    return tree.map((n) => (n.children ? { ...n, children: n.children.filter(shown) } : n)).filter((n) => (n.children ? n.children.length : shown(n)));
   }
   function rebuildTree() {
     TREE = buildTree();

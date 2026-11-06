@@ -754,6 +754,6 @@ fn transition(uv: vec2f) -> vec4f {
     srgbToLinear, linearToSrgb, hexToLinear, LUMA,
     // For the compositor and the tests.
     wgsl: { VERTEX, EFFECT_PRELUDE, EFFECT_MAIN, TRANSITION_PRELUDE, TRANSITION_MAIN },
-    cpu: { image, pixel, tap: tapCpu, mapImage },
+    cpu: { image, pixel, tap: tapCpu, mapImage, basicPlan, basicPixel },
   };
 });

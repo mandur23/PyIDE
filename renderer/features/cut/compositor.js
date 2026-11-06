@@ -241,21 +241,37 @@
         it.h = H;
         return;
       }
-      const o = await media.open(project, it.clip.source.media, { proxy: !!ctx.proxy });
+      let o = await media.open(project, it.clip.source.media, { proxy: !!ctx.proxy });
       if (o.error || (it.kind === 'video' && !o.video) || (it.kind === 'image' && !o.image)) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'));
-      const fit = fitScale(o.width, o.height, W, H, project.settings?.fit);
-      it.w = o.width * fit;
-      it.h = o.height * fit;
-      it.rotation0 = o.rotation || 0;
+      const place = () => {
+        const fit = fitScale(o.width, o.height, W, H, project.settings?.fit);
+        it.w = o.width * fit;
+        it.h = o.height * fit;
+        it.rotation0 = o.rotation || 0;
+      };
+      place();
       if (it.kind === 'image') {
         it.bitmap = o.image;
         it.path = o.path;
         return;
       }
-      const src = ctx.sources.get(it.clip, o);
-      const frame = await src.frameAt(it.srcT);
+      let src = ctx.sources.get(it.clip, o);
+      let frame;
+      try {
+        frame = await src.frameAt(it.srcT);
+      } catch (err) {
+        // A proxy file that went away while open (the cache was cleared): the original plays instead.
+        if (!o.proxy) throw err;
+        media.forget(o.path);
+        o = await media.open(project, it.clip.source.media, { proxy: false });
+        if (o.error || !o.video) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'));
+        place();
+        src = ctx.sources.get(it.clip, o);
+        frame = await src.frameAt(it.srcT);
+      }
+      const from = src;
       it.frame = frame;
-      it.release = () => src.release(frame);
+      it.release = () => from.release(frame);
       frames.push(it);
     }
     return frames;
@@ -955,7 +971,7 @@ ${V}
         return serial(() => renderSeq(project, mediaSequence(project, mediaId), Math.max(0, t), ropts));
       },
       // Starts decoding what the sequence shows between two times (the player calls it ahead of the playhead).
-      prefetch(project, seqId, from, to) {
+      prefetch(project, seqId, from, to, { proxy = false } = {}) {
         const seq = project.sequences.find((s) => s.id === seqId);
         if (!seq) return;
         const model = need('model');
@@ -968,7 +984,7 @@ ${V}
           if (!track || track.kind !== 'video' || track.visible === false) continue;
           const end = model.clipEnd(c);
           if (end <= a || c.start > b) continue;
-          media.open(project, c.source.media).then((o) => {
+          media.open(project, c.source.media, { proxy }).then((o) => {
             if (destroyed || o.error || !o.video) return;
             const s0 = model.sourceTime(c, Math.max(a, c.start));
             const s1 = model.sourceTime(c, Math.min(b, end - 1));

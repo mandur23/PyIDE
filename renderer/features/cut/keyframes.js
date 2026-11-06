@@ -9,6 +9,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else (globalThis.Cut = globalThis.Cut || {}).keyframes = api;
 })(() => {
+  const DEFAULT_HANDLES = [0.25, 0.1, 0.25, 1];
   const PRESETS = { easeIn: [0.42, 0, 1, 1], easeOut: [0, 0, 0.58, 1], easeInOut: [0.42, 0, 0.58, 1] };
 
   // y of the cubic-bezier timing curve (0,0) (x1,y1) (x2,y2) (1,1) at x: solve x(s) = x by Newton steps, bisection when
@@ -45,8 +46,18 @@
     const ease = k.ease || 'linear';
     if (ease === 'linear') return u;
     if (ease === 'hold') return 0;
-    const h = ease === 'bezier' ? k.h || [0.25, 0.1, 0.25, 1] : PRESETS[ease];
+    const h = ease === 'bezier' ? k.h || DEFAULT_HANDLES : PRESETS[ease];
     return h ? bezier(h[0], h[1], h[2], h[3], u) : u;
+  }
+
+  // The bezier handles that draw a keyframe's segment as it is now: the preset's for the eases, a straight line for
+  // linear, its own for bezier. Hold has none (null). Turning a keyframe into a bezier one with these keeps its shape.
+  function handles(k) {
+    const ease = typeof k === 'string' ? k : k?.ease || 'linear';
+    if (ease === 'hold') return null;
+    if (ease === 'bezier') return (typeof k === 'object' && k.h ? k.h : DEFAULT_HANDLES).slice(0, 4);
+    if (ease === 'linear') return [1 / 3, 1 / 3, 2 / 3, 2 / 3];
+    return (PRESETS[ease] || DEFAULT_HANDLES).slice();
   }
 
   const HEX = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/;
@@ -106,7 +117,7 @@
   function insert(keyframes, kf) {
     const list = (keyframes || []).filter((k) => k.t !== kf.t);
     const k = { t: kf.t, v: copy(kf.v), ease: kf.ease || 'linear' };
-    if (k.ease === 'bezier') k.h = (kf.h || [0.25, 0.1, 0.25, 1]).slice();
+    if (k.ease === 'bezier') k.h = (kf.h || DEFAULT_HANDLES).slice();
     let i = list.length;
     while (i > 0 && list[i - 1].t > k.t) i--;
     list.splice(i, 0, k);
@@ -121,5 +132,5 @@
     return null;
   }
 
-  return { valueAt, propValue, staticValue, insert, remove, next, prev, bezier, eased, mix };
+  return { valueAt, propValue, staticValue, insert, remove, next, prev, bezier, eased, handles, mix, DEFAULT_HANDLES };
 });

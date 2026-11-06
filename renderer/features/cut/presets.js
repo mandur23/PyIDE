@@ -129,7 +129,8 @@
       if (width % 2 || height % 2) errors.push('The width and height must be even.');
       if (!(settings.video?.bitrate >= 100000 && settings.video.bitrate <= 400e6)) errors.push('The video bitrate must be between 0.1 and 400 Mbps.');
     }
-    if (!AUDIO_BITRATES.includes(settings.audio?.bitrate)) errors.push('The audio bitrate must be 128, 160 or 192 kbps.');
+    // settings.audio null: no sound track (a proxy); a preset always has one.
+    if (settings.audio !== null && !AUDIO_BITRATES.includes(settings.audio?.bitrate)) errors.push('The audio bitrate must be 128, 160 or 192 kbps.');
     return errors;
   }
 

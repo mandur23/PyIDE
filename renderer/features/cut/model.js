@@ -25,7 +25,10 @@
   const VIDEO_PROPS = ['position', 'scale', 'rotation', 'anchor', 'opacity', 'crop'];
   const AUDIO_PROPS = ['volume', 'pan'];
   const PROP_SHAPE = { position: 2, scale: 2, anchor: 2, crop: 4, rotation: 0, opacity: 0, volume: 0, pan: 0 };
-  const MARKER_KINDS = ['comment', 'chapter'];
+  // 'beat' markers come from beat detection (ui-auto.js): drawn small, never chapters.
+  const MARKER_KINDS = ['comment', 'chapter', 'beat'];
+  // What a clip's sound is, for the automation (ducking lowers 'music' under 'dialogue'); null when not said.
+  const ROLES = ['dialogue', 'music', 'effects', 'ambience'];
   const ALIGNS = ['center', 'start', 'end'];
   const ID_RE = /^([A-Za-z]+)(\d+)$/;
 
@@ -96,8 +99,10 @@
     };
   }
 
+  // `size` is in pixels of a picture whose shorter side is `ref` (1080) lines: captions keep their look at 720p, 4K and
+  // 9:16. Tracks saved before `ref` existed held sequence pixels; migrate() converts them.
   function defaultCaptionStyle() {
-    return { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8 };
+    return { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ref: 1080 };
   }
 
   // A clip with every field; `kind` is the kind of the track it goes on.
@@ -105,7 +110,7 @@
     return {
       id: opts.id, track: opts.track, start: opts.start ?? 0, in: opts.in ?? 0, out: opts.out ?? 0,
       source: clone(opts.source), speed: 1, reverse: false, enabled: true, link: null, group: null,
-      name: opts.name ?? '', label: null, props: kind === 'audio' ? audioProps() : videoProps(),
+      name: opts.name ?? '', label: null, role: null, props: kind === 'audio' ? audioProps() : videoProps(),
       keyframes: {}, effects: [], fadeIn: 0, fadeOut: 0,
     };
   }
@@ -187,7 +192,9 @@
   function validPropPath(clip, kind, prop) {
     if (!isStr(prop)) return false;
     const parts = prop.split('.');
-    if (parts.length === 1) return (kind === 'audio' ? AUDIO_PROPS : VIDEO_PROPS).includes(prop);
+    // `duck` (dB added to the volume) has keyframes only: Auto Ducking writes it, so running it again replaces its
+    // dips instead of lowering the user's own volume curve a second time.
+    if (parts.length === 1) return (kind === 'audio' ? [...AUDIO_PROPS, 'duck'] : VIDEO_PROPS).includes(prop);
     if (parts.length === 3 && parts[0] === 'effects') return !!parts[2] && (clip.effects || []).some((e) => e.id === parts[1]);
     if (parts.length === 3 && parts[0] === 'layers') return !!parts[2] && (clip.source?.layers || []).some((l) => l.id === parts[1]);
     return false;
@@ -309,6 +316,7 @@
       if (c.group !== null && !isStr(c.group)) err(`${C}: group`);
       if (!isStr(c.name)) err(`${C}: name`);
       if (c.label !== null && !isStr(c.label)) err(`${C}: label`);
+      if (c.role !== null && !ROLES.includes(c.role)) err(`${C}: role ${c.role}`);
       if (!isObj(c.source)) err(`${C}: source`);
       else if (isGenerator(c)) {
         if (!GENERATORS.includes(c.source.generator)) err(`${C}: generator ${c.source.generator}`);
@@ -489,9 +497,11 @@
       for (const c of seq.clips) {
         const full = createClip(kinds.get(c.track) || 'video', { id: c.id, track: c.track, source: c.source });
         for (const k of Object.keys(full)) c[k] ??= full[k];
+        if (c.role !== null && !ROLES.includes(c.role)) c.role = null;
         c.props = { ...(kinds.get(c.track) === 'audio' ? audioProps() : videoProps()), ...c.props };
         for (const list of Object.values(c.keyframes)) for (const k of list) k.ease = EASES.includes(k.ease) ? k.ease : ({ in: 'easeIn', out: 'easeOut', inOut: 'easeInOut' }[k.ease] || 'linear');
         for (const e of c.effects) { e.on ??= true; e.params ??= {}; }
+        for (const m of c.markers || []) { m.duration ??= 0; m.name ??= ''; m.note ??= ''; m.kind ??= 'comment'; m.color ??= 'green'; }
       }
       for (const t of seq.transitions) { t.align ??= 'center'; t.params ??= {}; }
       for (const m of seq.markers) {
@@ -499,6 +509,12 @@
       }
       for (const ct of seq.captions) {
         if (ct.id == null && ct.track != null) { ct.id = ct.track; delete ct.track; }
+        // A size chosen in sequence pixels keeps its look; the untouched default (54) takes the new meaning, which is
+        // what it was meant to look like at every resolution.
+        const short = Math.min(Number(seq.w) || 0, Number(seq.h) || 0);
+        if (isObj(ct.style) && ct.style.ref == null && Number.isFinite(ct.style.size) && ct.style.size !== 54 && short > 0) {
+          ct.style.size = Math.max(1, Math.round((ct.style.size * 1080) / short));
+        }
         ct.lang ??= ''; ct.name ??= ct.lang || 'Captions'; ct.style = { ...defaultCaptionStyle(), ...(ct.style || {}) }; ct.syncLock ??= true; ct.items ??= [];
       }
       // Keyframe, marker and caption times written by hand or by another frame grid go to the nearest frame.
@@ -537,7 +553,7 @@
   }
 
   return {
-    VERSION, QUANTUM, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ALIGNS,
+    VERSION, QUANTUM, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ROLES, ALIGNS,
     clone, newId, defaultSettings, createProject, createSequence, createTrack, createClip, createTextLayer, defaultCaptionStyle,
     videoProps, audioProps, validate, validPropPath, validFps, migrate,
     clipDuration, clipEnd, sequenceDuration, clipsAt, sourceTime, trackIndex, trackOf, linkedClips, mediaOf, isGenerator, isStill,

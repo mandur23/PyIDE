@@ -8,7 +8,8 @@
 // - Times are snapped to the sequence's frames: absolute times to the start of the frame they fall in, lengths and
 //   deltas to the nearest whole frame.
 // - Linked clips (the same `link`) move, trim, split, change speed and get removed together, unless the command says
-//   { linked: false } (Alt in the timeline).
+//   { linked: false } (Alt in the timeline). Grouped clips (the same `group`) move and get removed together too, and
+//   nothing else.
 // - A ripple (insert, ripple delete, ripple trim, extract, Q/W, speed with ripple) applies the same time change to the
 //   tracks it targets and to every sync-locked track: time inserted at p splits what crosses p and pushes the rest;
 //   a range removed takes what is in it and pulls the rest. Locked tracks never change. Caption tracks with syncLock
@@ -144,11 +145,15 @@
     c.tx.splice(arr, i, 0, item);
   }
 
-  function withLinked(c, clipIds, linked = true) {
+  // The clips and those linked to them; with groups, also the members of their groups (and what those link to).
+  function withLinked(c, clipIds, linked = true, groups = false) {
     const set = new Set(ids(clipIds, 'clipIds').map((id) => clipOf(c, id)));
-    if (linked) {
+    if (!linked) return [...set];
+    for (let size = -1; size !== set.size;) {
+      size = set.size;
       const links = new Set([...set].map((x) => x.link).filter(Boolean));
-      for (const x of c.seq.clips) if (x.link && links.has(x.link)) set.add(x);
+      const grouped = new Set(groups ? [...set].map((x) => x.group).filter(Boolean) : []);
+      for (const x of c.seq.clips) if ((x.link && links.has(x.link)) || (x.group && grouped.has(x.group))) set.add(x);
     }
     return [...set];
   }
@@ -368,12 +373,15 @@
     return out;
   }
 
-  // After every command: links of one clip are cleared, transitions off every clip edge (or doubled) are removed.
+  // After every command: links and groups of one clip are cleared, transitions off every clip edge (or doubled) are
+  // removed.
   function normalize(project, tx) {
     for (const seq of project.sequences) {
-      const count = new Map();
-      for (const x of seq.clips) if (x.link) count.set(x.link, (count.get(x.link) || 0) + 1);
-      for (const x of seq.clips) if (x.link && count.get(x.link) < 2) tx.set(x, 'link', null);
+      for (const key of ['link', 'group']) {
+        const count = new Map();
+        for (const x of seq.clips) if (x[key]) count.set(x[key], (count.get(x[key]) || 0) + 1);
+        for (const x of seq.clips) if (x[key] && count.get(x[key]) < 2) tx.set(x, key, null);
+      }
       const edges = new Map();
       for (const x of seq.clips) {
         if (!edges.has(x.track)) edges.set(x.track, new Set());
@@ -563,11 +571,16 @@
     copy.id = nid(c, 's');
     copy.name = name ?? `${src.name} Copy`;
     const links = new Map();
+    const groups = new Map();
     for (const x of copy.clips) {
       x.id = nid(c, 'c');
       if (x.link) {
         if (!links.has(x.link)) links.set(x.link, nid(c, 'L'));
         x.link = links.get(x.link);
+      }
+      if (x.group) {
+        if (!groups.has(x.group)) groups.set(x.group, nid(c, 'G'));
+        x.group = groups.get(x.group);
       }
       for (const m of x.markers || []) m.id = nid(c, 'mk');
     }
@@ -750,7 +763,7 @@
   H.move = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const o = cmd.opts || {};
-    const clips = withLinked(c, cmd.clipIds, o.linked !== false);
+    const clips = withLinked(c, cmd.clipIds, o.linked !== false, true);
     if (!clips.length) return { ids: [], delta: 0 };
     for (const x of clips) unlocked(c, x.track);
     let d = frames(c, o.delta ?? 0, 'delta');
@@ -835,6 +848,7 @@
       }
     }
     const links = new Map();
+    const groups = new Map();
     const made = [];
     for (const x of src) {
       const kind = kindOfCopy(x);
@@ -844,10 +858,15 @@
       const source = x.source?.freeze ? { ...normSource(c, x.source), freeze: true } : normSource(c, x.source);
       const clip = model.createClip(kind, { id: null, track: track.id, start: p + at(c, x.start - minStart), in: num(x.in, 'in'), out: num(x.out, 'out'), source });
       for (const k of ['speed', 'reverse', 'enabled', 'name', 'label', 'props', 'keyframes', 'effects', 'fadeIn', 'fadeOut']) if (x[k] !== undefined) clip[k] = x[k];
+      if (x.role !== undefined) clip.role = model.ROLES.includes(x.role) ? x.role : null;
       if (x.markers) clip.markers = x.markers;
       if (x.link) {
         if (!links.has(x.link)) links.set(x.link, null);
         clip.link = x.link;
+      }
+      if (typeof x.group === 'string' && x.group) {
+        if (!groups.has(x.group)) groups.set(x.group, null);
+        clip.group = x.group;
       }
       made.push(clip);
     }
@@ -860,9 +879,11 @@
     if (o.mode === 'insert') rippleInsert(c, tracks, p, span);
     else for (const x of made) clearRange(c, x.track, x.start, end(x));
     for (const l of links.keys()) links.set(l, nid(c, 'L'));
+    for (const g of groups.keys()) groups.set(g, nid(c, 'G'));
     for (const x of made) {
       x.id = nid(c, 'c');
       if (x.link) x.link = links.get(x.link);
+      if (x.group) x.group = groups.get(x.group);
       for (const m of x.markers || []) m.id = nid(c, 'mk');
       append(c, c.seq.clips, x);
     }
@@ -973,6 +994,177 @@
     return { applied, clamped };
   };
 
+  // The lowest and highest delta every limit allows, and the reason of the one a wanted delta runs into.
+  function limits() {
+    const r = { lo: -Infinity, hi: Infinity, loWhy: null, hiWhy: null };
+    r.limit = (low, high, why) => {
+      if (low > r.lo) { r.lo = low; r.loWhy = why; }
+      if (high < r.hi) { r.hi = high; r.hiWhy = why; }
+    };
+    r.apply = (d) => {
+      const applied = Math.min(Math.max(d, r.lo), r.hi);
+      return { applied, clamped: applied === d ? null : d > r.hi ? r.hiWhy : r.loWhy };
+    };
+    return r;
+  }
+  // Transitions on these tracks at time p, taken off the list to be put back where the edit point goes.
+  function liftTransitions(c, tracks, p) {
+    const carried = c.seq.transitions.filter((t) => t.at === p && tracks.includes(t.track));
+    for (const t of carried) removeFrom(c, c.seq.transitions, t);
+    return carried;
+  }
+  function dropTransitions(c, carried, p) {
+    for (const t of carried) {
+      c.tx.set(t, 'at', p);
+      append(c, c.seq.transitions, t);
+    }
+  }
+
+  // Slip (Y): the clip keeps its place and length and shows another part of its source: in and out move by `delta`
+  // timeline frames (later source for a positive delta), with the linked clips, up to the source's ends ('source').
+  // Keyframes stay on the clip's frames.
+  H.slip = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const o = cmd.opts || {};
+    const clip = clipOf(c, cmd.clipId);
+    if (still(c, clip)) fail('This clip has no source frames to slip.', 'still');
+    const group = [clip, ...(o.linked === false ? [] : model.linkedClips(c.seq, clip).filter((x) => !still(c, x)))];
+    for (const g of group) unlocked(c, g.track);
+    const lim = limits();
+    for (const g of group) {
+      const m = model.mediaOf(project, g);
+      lim.limit(-floorFrames(c, g.in / g.speed), floorFrames(c, (m.duration - g.out) / g.speed), 'source');
+    }
+    const r = lim.apply(frames(c, o.delta ?? 0, 'delta'));
+    for (const g of group) {
+      if (!r.applied) break;
+      const sd = r.applied * g.speed;
+      tx.set(g, 'in', g.in + sd);
+      tx.set(g, 'out', g.out + sd);
+    }
+    return r;
+  };
+
+  // Slide (U): the clip, its content unchanged, moves by `delta`; the clip that ends where it starts and the one that
+  // starts where it ends trim their touching ends with it, so the track's length stays. With no clip touching a side,
+  // the clip slides into the gap there. Stops at the neighbours' sources ('source'), a neighbour of one frame
+  // ('length') or the next clip beyond a gap ('neighbour'). Linked clips of the same span slide along.
+  H.slide = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const o = cmd.opts || {};
+    const clip = clipOf(c, cmd.clipId);
+    const group = [clip, ...(o.linked === false ? [] : model.linkedClips(c.seq, clip).filter((x) => x.start === clip.start && end(x) === end(clip)))];
+    for (const g of group) unlocked(c, g.track);
+    const lim = limits();
+    const plan = group.map((g) => {
+      const s = g.start;
+      const e = end(g);
+      const prev = c.seq.clips.find((x) => x !== g && x.track === g.track && end(x) === s) || null;
+      const next = c.seq.clips.find((x) => x !== g && x.track === g.track && x.start === e) || null;
+      const n = neighbours(c, g);
+      if (prev) {
+        lim.limit(-(dur(prev) - c.f), Infinity, 'length');
+        lim.limit(-Infinity, room(c, prev).tail, 'source');
+      } else lim.limit(n.prevEnd - s, Infinity, 'neighbour');
+      if (next) {
+        lim.limit(-Infinity, dur(next) - c.f, 'length');
+        lim.limit(-room(c, next).head, Infinity, 'source');
+      } else lim.limit(-Infinity, n.nextStart - e, 'neighbour');
+      return { g, s, e, prev, next };
+    });
+    const r = lim.apply(frames(c, o.delta ?? 0, 'delta'));
+    if (!r.applied) return r;
+    const tracks = group.map((g) => g.track);
+    const atStart = liftTransitions(c, tracks, clip.start);
+    const atEnd = liftTransitions(c, tracks, end(clip));
+    for (const { g, s, e, prev, next } of plan) {
+      if (prev) setEnd(c, prev, s + r.applied);
+      if (next) setStart(c, next, e + r.applied);
+      tx.set(g, 'start', s + r.applied);
+    }
+    dropTransitions(c, atStart, plan[0].s + r.applied);
+    dropTransitions(c, atEnd, plan[0].e + r.applied);
+    return r;
+  };
+
+  // Rate Stretch (R): an edge moves by `delta` and the clip's speed changes so the same source fills the new length
+  // (in and out stay). Stops at the neighbour ('neighbour'), one frame ('length') and 1% to 10000% ('speed'). A still
+  // has no speed: its edge is trimmed. Linked clips of the same span change with it.
+  H.stretch = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const o = cmd.opts || {};
+    const clip = clipOf(c, cmd.clipId);
+    const edge = o.edge;
+    if (edge !== 'start' && edge !== 'end') fail(`unknown edge ${edge}`);
+    if (still(c, clip)) return H.trim(project, tx, { seqId: cmd.seqId, clipId: clip.id, opts: { edge, delta: o.delta, mode: 'normal', linked: o.linked } });
+    const s0 = clip.start;
+    const e0 = end(clip);
+    const old = e0 - s0;
+    const group = [clip, ...(o.linked === false ? [] : model.linkedClips(c.seq, clip).filter((x) => x.start === s0 && end(x) === e0 && !still(c, x)))];
+    for (const g of group) unlocked(c, g.track);
+    // limits on the new length, as a delta of the edge
+    const sign = edge === 'end' ? 1 : -1;
+    const lim = limits();
+    const len = (lo, hi, why) => (sign > 0 ? lim.limit(lo - old, hi - old, why) : lim.limit(old - hi, old - lo, why));
+    len(c.f, Infinity, 'length');
+    for (const g of group) {
+      const span = g.out - g.in;
+      len(Math.max(c.f, Math.ceil(span / 100 / c.f - 1e-9) * c.f), floorFrames(c, span / 0.01), 'speed');
+      const n = neighbours(c, g);
+      len(-Infinity, edge === 'end' ? n.nextStart - s0 : e0 - n.prevEnd, 'neighbour');
+    }
+    const r = lim.apply(frames(c, o.delta ?? 0, 'delta'));
+    if (!r.applied) return { ...r, speed: clip.speed };
+    const nd = old + sign * r.applied;
+    const carried = liftTransitions(c, group.map((g) => g.track), edge === 'end' ? e0 : s0);
+    for (const g of group) {
+      const speed = (g.out - g.in) / nd;
+      const ratio = g.speed / speed;
+      tx.set(g, 'speed', speed);
+      if (edge === 'start') tx.set(g, 'start', e0 - nd);
+      rescaleKeys(c, g, ratio);
+      clampFades(c, g, nd);
+    }
+    dropTransitions(c, carried, edge === 'end' ? s0 + nd : e0 - nd);
+    return { ...r, speed: clip.speed };
+  };
+
+  // Extend Edit (E): the edit point nearest t (not at t) among the given clips' edges, else among the clip edges on
+  // the given tracks, moves to t: a roll where a clip touches it on the other side, else a trim of that end. One clip
+  // per track at that point (the one ending there first). -> {at, applied, clamped}
+  H.extendEdit = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const o = cmd.opts || {};
+    const t = at(c, cmd.t);
+    const linked = o.linked !== false;
+    const open = (x) => !trackOf(c, x.track).locked;
+    let clips;
+    if (o.clipIds?.length) clips = ids(o.clipIds, 'clipIds').map((id) => clipOf(c, id)).filter(open);
+    else {
+      const tracks = (o.trackIds ?? c.seq.tracks.map((x) => x.id)).map((id) => trackOf(c, id)).filter((x) => !x.locked).map((x) => x.id);
+      clips = c.seq.clips.filter((x) => tracks.includes(x.track));
+    }
+    const edges = clips.flatMap((x) => [{ clip: x, edge: 'end', pos: end(x) }, { clip: x, edge: 'start', pos: x.start }]);
+    let p = null;
+    for (const e of edges) if (e.pos !== t && (p === null || Math.abs(e.pos - t) < Math.abs(p - t))) p = e.pos;
+    if (p === null) fail('There is no edit point here.', 'noEdit');
+    const byTrack = new Map();
+    for (const e of edges.filter((x) => x.pos === p).sort((x, y) => (x.edge === 'end' ? 0 : 1) - (y.edge === 'end' ? 0 : 1))) {
+      if (!byTrack.has(e.clip.track)) byTrack.set(e.clip.track, e);
+    }
+    let first = null;
+    let clamped = null;
+    for (const { clip, edge } of byTrack.values()) {
+      // A linked clip trimmed with an earlier one has already moved.
+      if ((edge === 'end' ? end(clip) : clip.start) !== p) continue;
+      const partner = c.seq.clips.some((x) => x !== clip && x.track === clip.track && (edge === 'end' ? x.start === p : end(x) === p));
+      const r = H.trim(project, tx, { seqId: cmd.seqId, clipId: clip.id, opts: { edge, delta: t - p, mode: partner ? 'roll' : 'normal', linked } });
+      if (first === null) first = r.applied;
+      clamped = clamped || r.clamped;
+    }
+    return { at: p, applied: first ?? 0, clamped };
+  };
+
   // cutting
   H.split = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
@@ -994,7 +1186,7 @@
   H.remove = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const o = cmd.opts || {};
-    const clips = withLinked(c, cmd.clipIds, o.linked !== false);
+    const clips = withLinked(c, cmd.clipIds, o.linked !== false, true);
     for (const x of clips) unlocked(c, x.track);
     const ranges = mergeRanges(clips.map((x) => [x.start, end(x)]));
     const tracks = [...new Set(clips.map((x) => x.track))];
@@ -1069,7 +1261,11 @@
   };
 
   // clip settings
-  const CLIP_FIELDS = ['props', 'speed', 'duration', 'ripple', 'reverse', 'enabled', 'name', 'label', 'fadeIn', 'fadeOut'];
+  const CLIP_FIELDS = ['props', 'speed', 'duration', 'ripple', 'reverse', 'enabled', 'name', 'label', 'role', 'fadeIn', 'fadeOut'];
+  function roleOf(x) {
+    if (x !== null && !model.ROLES.includes(x)) fail(`unknown clip role ${x}`);
+    return x;
+  }
   H.setClip = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const clip = clipOf(c, cmd.clipId);
@@ -1087,6 +1283,7 @@
     }
     if (p.name !== undefined) tx.set(clip, 'name', String(p.name));
     if (p.label !== undefined) tx.set(clip, 'label', p.label === null ? null : String(p.label));
+    if (p.role !== undefined) tx.set(clip, 'role', roleOf(p.role));
     if (p.enabled !== undefined) tx.set(clip, 'enabled', !!p.enabled);
     if (p.reverse !== undefined) {
       const group = [clip, ...(linked ? model.linkedClips(c.seq, clip) : [])];
@@ -1118,6 +1315,18 @@
   function setLength(c, clip, d, ripple, linked) {
     H.trim(c.project, c.tx, { seqId: c.seq.id, clipId: clip.id, opts: { edge: 'end', delta: d - dur(clip), mode: ripple ? 'ripple' : 'normal', linked } });
   }
+  // Keyframes and clip markers of a clip whose speed changed by `ratio` (old / new) stay on their source frames.
+  function rescaleKeys(c, g, ratio) {
+    for (const [prop, list] of Object.entries(g.keyframes)) {
+      const byT = new Map();
+      for (const k of list) {
+        const t = Math.round((k.t * ratio) / c.f) * c.f;
+        byT.set(t, { ...k, t });
+      }
+      c.tx.set(g.keyframes, prop, [...byT.values()].sort((a, b) => a.t - b.t));
+    }
+    if (g.markers) c.tx.set(g, 'markers', g.markers.map((m) => ({ ...m, t: Math.round((m.t * ratio) / c.f) * c.f })));
+  }
   function setSpeed(c, clip, speed, ripple, linked, wantDur) {
     if (speed < 0.01 || speed > 100) fail('Speed must be between 1% and 10000%.', 'speed');
     const group = [clip, ...(linked ? model.linkedClips(c.seq, clip).filter((x) => x.start === clip.start && end(x) === end(clip)) : [])];
@@ -1144,15 +1353,7 @@
       c.tx.set(g, 'speed', speed);
       if (still(c, g) || !g.reverse) c.tx.set(g, 'out', g.in + nd * speed);
       else c.tx.set(g, 'in', g.out - nd * speed);
-      for (const [prop, list] of Object.entries(g.keyframes)) {
-        const byT = new Map();
-        for (const k of list) {
-          const t = Math.round((k.t * ratio) / c.f) * c.f;
-          byT.set(t, { ...k, t });
-        }
-        c.tx.set(g.keyframes, prop, [...byT.values()].sort((a, b) => a.t - b.t));
-      }
-      if (g.markers) c.tx.set(g, 'markers', g.markers.map((m) => ({ ...m, t: Math.round((m.t * ratio) / c.f) * c.f })));
+      rescaleKeys(c, g, ratio);
       clampFades(c, g, nd);
     }
     if (ripple && L < 0) rippleRemove(c, tracks, pos + L, pos);
@@ -1195,6 +1396,32 @@
     const c = context(project, tx, cmd.seqId);
     for (const id of ids(cmd.clipIds, 'clipIds')) tx.set(clipOf(c, id), 'link', null);
     return {};
+  };
+  // A group (Ctrl+G) moves and is removed as one (move and remove take every member, unless linked: false); unlike a
+  // link it never trims, splits or changes speed together. A clip is in one group: grouping again makes a new one.
+  H.group = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const clips = [...new Set(ids(cmd.clipIds, 'clipIds').map((id) => clipOf(c, id)))];
+    if (clips.length < 2) fail('Choose two or more clips to group.', 'groupOne');
+    const group = nid(c, 'G');
+    for (const x of clips) tx.set(x, 'group', group);
+    return { group };
+  };
+  // Ungroup (Ctrl+Shift+G): the groups of the given clips, every member.
+  H.ungroup = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const groups = new Set(ids(cmd.clipIds, 'clipIds').map((id) => clipOf(c, id).group).filter(Boolean));
+    for (const x of c.seq.clips) if (x.group && groups.has(x.group)) tx.set(x, 'group', null);
+    return { groups: [...groups] };
+  };
+  // What the clips' sound is (dialogue, music, effects, ambience or null), for the automation; linked clips too.
+  H.setRole = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const role = roleOf(cmd.role ?? null);
+    const clips = withLinked(c, cmd.clipIds, cmd.opts?.linked !== false);
+    for (const x of clips) unlocked(c, x.track);
+    for (const x of clips) tx.set(x, 'role', role);
+    return { ids: clips.map((x) => x.id) };
   };
 
   // effects
@@ -1544,8 +1771,11 @@
     setMarker: 'Edit Marker', removeMarker: 'Remove Marker', addCaptionTrack: 'Add Caption Track', setCaptionTrack: 'Caption Track Settings',
     removeCaptionTrack: 'Delete Caption Track', setCaptions: 'Replace Captions', addCaption: 'Add Caption', setCaption: 'Edit Caption',
     removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', paste: 'Paste', setGenerator: 'Graphic Settings',
-    setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer',
+    setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer', setRole: 'Audio Role', batch: 'Edit',
+    group: 'Group', ungroup: 'Ungroup', slip: 'Slip', slide: 'Slide', stretch: 'Rate Stretch', extendEdit: 'Extend Edit',
   };
+  // Labels the automation (ui-auto.js) gives its batches.
+  const BATCH_LABELS = ['Remove Silence', 'Add Scene Markers', 'Split at Scene Changes', 'Add Beat Markers', 'Match Loudness', 'Match Clip Loudness', 'Auto Ducking', 'Auto Color'];
   function label(cmd) {
     const o = cmd.opts || {};
     switch (cmd.type) {
@@ -1553,15 +1783,16 @@
       case 'placeRange': return o.mode === 'insert' ? 'Insert' : 'Overwrite';
       case 'trim': return { ripple: 'Ripple Trim', roll: 'Roll Edit' }[o.mode] || 'Trim';
       case 'remove': return o.ripple ? 'Ripple Delete' : 'Delete';
-      case 'move': return o.insert ? 'Insert Move' : 'Move';
+      case 'move': return o.insert ? 'Insert Move' : o.nudge ? 'Nudge' : 'Move';
       case 'addSequence': return o.from != null ? 'Duplicate Sequence' : 'New Sequence';
       case 'addGenerated': return o.source?.generator === 'text' ? 'Add Text' : 'Add Graphic';
       case 'setClip': return cmd.patch?.speed !== undefined || cmd.patch?.duration !== undefined ? 'Speed/Duration' : 'Clip Settings';
       case 'paste': return o.mode === 'insert' ? 'Paste Insert' : 'Paste';
+      case 'batch': return typeof cmd.label === 'string' && cmd.label ? cmd.label : 'Edit';
       default: return LABELS[cmd.type] || cmd.type;
     }
   }
-  const ALL_LABELS = [...new Set([...Object.values(LABELS), 'Insert', 'Ripple Trim', 'Roll Edit', 'Ripple Delete', 'Insert Move', 'Duplicate Sequence', 'Add Text', 'Speed/Duration', 'Paste Insert'])];
+  const ALL_LABELS = [...new Set([...Object.values(LABELS), 'Insert', 'Ripple Trim', 'Roll Edit', 'Ripple Delete', 'Insert Move', 'Duplicate Sequence', 'Add Text', 'Speed/Duration', 'Paste Insert', 'Nudge', ...BATCH_LABELS])];
 
   // ---- history ----
 
@@ -1569,6 +1800,16 @@
     if (!cmd || typeof cmd !== 'object' || !H[cmd.type]) fail(`unknown command ${cmd && cmd.type}`);
     return H[cmd.type](project, tx, cmd);
   }
+  // Several commands as one step with one label (an automation's edits): they run in order on the same recording, so
+  // one that fails takes back all of them; the project is checked once, after the last. -> {results: [...]}
+  H.batch = (project, tx, cmd) => {
+    const results = [];
+    for (const sub of ids(cmd.commands, 'commands')) {
+      if (sub?.type === 'batch') fail('a batch cannot hold a batch');
+      results.push(apply(project, tx, sub));
+    }
+    return { results };
+  };
 
   function createHistory(project, { limit = 1000 } = {}) {
     const first = model.validate(project);
@@ -1645,7 +1886,8 @@
         if (!all && --group.depth > 0) return;
         const g = group;
         group = null;
-        if (g.ops.length) push({ label: g.label, ops: g.ops });
+        // The project is as it was after the group's last do; only the list of steps changed.
+        if (g.ops.length) { push({ label: g.label, ops: g.ops }); emit('commit'); }
       },
       cancel() {
         if (!group) return;
@@ -1656,6 +1898,28 @@
           emit('undo');
         }
       },
+      // Undoes or redoes until `position` steps are done (list()'s first `position` entries), in one go: one change
+      // event ('undo' or 'redo'). -> true when it moved.
+      goTo(position) {
+        if (group) history.commit(true);
+        const target = Math.max(0, Math.min(undoStack.length + redoStack.length, Math.round(Number(position) || 0)));
+        if (target === undoStack.length) return false;
+        const reason = target < undoStack.length ? 'undo' : 'redo';
+        while (undoStack.length > target) {
+          const entry = undoStack.pop();
+          rollback(entry.ops);
+          redoStack.push(entry);
+        }
+        while (undoStack.length < target) {
+          const entry = redoStack.pop();
+          for (const op of entry.ops) op.redo();
+          undoStack.push(entry);
+        }
+        emit(reason);
+        return true;
+      },
+      // How many steps are done: the index in list() of the first step that can be redone.
+      get position() { return undoStack.length; },
       // Oldest first: the steps that can be undone (done: true), then those that can be redone, next first.
       list() {
         return [...undoStack.map((e) => ({ label: e.label, done: true })), ...redoStack.slice().reverse().map((e) => ({ label: e.label, done: false }))];
@@ -1710,6 +1974,12 @@
     setKeyframes: (seqId, clipId, prop, list) => ({ type: 'setKeyframes', seqId, clipId, prop, keyframes: list }),
     link: (seqId, clipIds) => ({ type: 'link', seqId, clipIds }),
     unlink: (seqId, clipIds) => ({ type: 'unlink', seqId, clipIds }),
+    group: (seqId, clipIds) => ({ type: 'group', seqId, clipIds }),
+    ungroup: (seqId, clipIds) => ({ type: 'ungroup', seqId, clipIds }),
+    slip: (seqId, clipId, opts = {}) => ({ type: 'slip', seqId, clipId, opts }),
+    slide: (seqId, clipId, opts = {}) => ({ type: 'slide', seqId, clipId, opts }),
+    stretch: (seqId, clipId, opts) => ({ type: 'stretch', seqId, clipId, opts }),
+    extendEdit: (seqId, t, opts = {}) => ({ type: 'extendEdit', seqId, t, opts }),
     addEffect: (seqId, clipId, effectType, index = null, params = {}) => ({ type: 'addEffect', seqId, clipId, effectType, index, params }),
     removeEffect: (seqId, clipId, effectId) => ({ type: 'removeEffect', seqId, clipId, effectId }),
     setEffect: (seqId, clipId, effectId, patch) => ({ type: 'setEffect', seqId, clipId, effectId, patch }),
@@ -1736,6 +2006,8 @@
     setLayer: (seqId, clipId, layerId, patch) => ({ type: 'setLayer', seqId, clipId, layerId, patch }),
     addLayer: (seqId, clipId, layer = {}, index = null) => ({ type: 'addLayer', seqId, clipId, layer, index }),
     removeLayer: (seqId, clipId, layerId) => ({ type: 'removeLayer', seqId, clipId, layerId }),
+    setRole: (seqId, clipIds, role, opts = {}) => ({ type: 'setRole', seqId, clipIds, role, opts }),
+    batch: (label, list) => ({ type: 'batch', label, commands: list }),
   };
 
   return { ...commands, createHistory, label, LABELS: ALL_LABELS };

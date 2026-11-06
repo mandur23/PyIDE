@@ -211,6 +211,32 @@ await section('A script folder longer than Windows allows', async () => {
   const longErrs = (await errorsNow(t)).slice(errs2);
   check(!longErrs.length, `long folders record no internal error (${q(longErrs)})`);
 });
+
+await section('Variables asked for after the program resumed', async () => {
+  writeFileSync(path.join(t.project, 'stale.py'), 'import time\nx = 1\ntime.sleep(4)\n');
+  await openFile(t, 'stale.py');
+  await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }))`);
+  await press('Ctrl+F8');
+  const errs = (await errorsNow(t)).length;
+  await js(`(ide.debugger.debugFile(${q(path.join(t.project, 'stale.py'))}), true)`);
+  await until(`!!ide.debugger.stopped()`, 'stopped in stale.py', 40000);
+  const held = await js(`(async () => {
+    const id = __debugger.state().cur;
+    const frameId = ide.debugger.stopped().frames[0].id;
+    const { scopes } = await ide.api.invoke('debug:request', id, 'scopes', { frameId });
+    return { id, ref: scopes[0].variablesReference };
+  })()`);
+  await press('F9');
+  await until(`!ide.debugger.isSuspended()`, 'stale.py resumed', 10000);
+  const ask = () => js(`ide.api.invoke('debug:request', ${held.id}, 'variables', { variablesReference: ${held.ref} }).then(() => 'answered', (e) => 'refused: ' + e.message)`);
+  const running = await ask();
+  await until(`${DBG_OUT}.includes('Process finished')`, 'stale.py finished', 40000).catch(() => {});
+  const ended = await ask();
+  await sleep(500);
+  const after = (await errorsNow(t)).slice(errs);
+  check(/^refused/.test(running) && /^refused/.test(ended), `variables of a frame that is gone are refused while running and after the end (${q([running, ended])})`);
+  check(!after.length, `and that records no internal error (${q(after)})`);
+});
 t.close();
 
 // ---------- Pyright crashes ----------

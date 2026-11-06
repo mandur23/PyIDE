@@ -1,7 +1,8 @@
 // The editor's frame (docs/cut-architecture.md section 10): the top bar, the workspaces (fixed panel layouts the top
 // tabs switch between) and the project's life: an untitled project at start, New, Open, Save, Save As, an autosave
-// 2 s after edits stop, the recovery offer after a crash, and the question about unsaved changes before the project
-// or the window closes.
+// of the latest state 2 s after edits stop and a copy every few minutes (settings cut.autosave.minutes and
+// cut.autosave.keep), the recovery offer after a crash, and the question about unsaved changes before the project or
+// the window closes.
 //
 // Panels are mounted once, the first time a workspace shows them, and moved between workspaces after that, so a
 // monitor keeps its player and a list its scroll position. The panel with the keyboard (app.focusPanel) is the one
@@ -13,27 +14,36 @@
   const log = ide.logger('#cut');
 
   const AUTOSAVE_MS = 2000;
+  // The interval copies (video-editor-features.md section 17): every `cut.autosave.minutes`, while the project has
+  // changes the last copy does not have; the newest `cut.autosave.keep` are kept.
+  const COPY_MINUTES = 5;
+  const COPY_KEEP = 20;
+  const copyMinutes = () => { const v = Number(ide.settings.get('cut.autosave.minutes', COPY_MINUTES)); return Number.isFinite(v) && v >= 1 ? Math.min(120, v) : COPY_MINUTES; };
+  const copyKeep = () => { const v = Math.round(Number(ide.settings.get('cut.autosave.keep', COPY_KEEP))); return Number.isFinite(v) && v >= 1 ? Math.min(100, v) : COPY_KEEP; };
   const FILTERS = () => [{ name: tr('Nano Studio Cut project'), extensions: ['ncut'] }];
 
   // rows top to bottom, slots left to right; sizes are percentages. A slot shows its panels as tabs.
+  // A slot with `dock: true` takes the panels the Window menu adds to its workspace.
   const WORKSPACES = [
     { id: 'editing', title: () => tr('Editing'), rows: [
-      { size: 55, slots: [{ size: 42, panels: ['source', 'controls'] }, { size: 58, panels: ['program'] }] },
-      { size: 45, slots: [{ size: 28, panels: ['project', 'effects'] }, { size: 72, panels: ['timeline'] }] },
+      { size: 55, slots: [{ size: 42, panels: ['source', 'controls'] }, { size: 51, panels: ['program'] }, { size: 7, panels: ['meters'] }] },
+      { size: 45, slots: [{ size: 28, panels: ['project', 'effects', 'markers', 'history', 'transcript'], dock: true }, { size: 72, panels: ['timeline'] }] },
     ] },
     { id: 'color', title: () => tr('Color'), rows: [
       { size: 60, slots: [{ size: 68, panels: ['program'] }, { size: 32, panels: ['color', 'controls'] }] },
-      { size: 40, slots: [{ size: 26, panels: ['project', 'effects'] }, { size: 74, panels: ['timeline'] }] },
+      { size: 40, slots: [{ size: 26, panels: ['project', 'effects', 'history'], dock: true }, { size: 74, panels: ['timeline'] }] },
     ] },
     { id: 'captions', title: () => tr('Captions and Graphics'), rows: [
-      { size: 58, slots: [{ size: 30, panels: ['captions'] }, { size: 44, panels: ['program'] }, { size: 26, panels: ['text', 'controls'] }] },
-      { size: 42, slots: [{ size: 26, panels: ['project', 'effects'] }, { size: 74, panels: ['timeline'] }] },
+      { size: 58, slots: [{ size: 30, panels: ['captions', 'transcript', 'markers'] }, { size: 44, panels: ['program'] }, { size: 26, panels: ['text', 'controls'] }] },
+      { size: 42, slots: [{ size: 26, panels: ['project', 'effects', 'history'], dock: true }, { size: 74, panels: ['timeline'] }] },
     ] },
     { id: 'export', title: () => tr('Export'), rows: [
-      { size: 62, slots: [{ size: 36, panels: ['export'] }, { size: 64, panels: ['program'] }] },
+      { size: 62, slots: [{ size: 36, panels: ['export', 'queue', 'markers'], dock: true }, { size: 57, panels: ['program'] }, { size: 7, panels: ['meters'] }] },
       { size: 38, slots: [{ size: 100, panels: ['timeline'] }] },
     ] },
   ];
+  // The Window menu's order.
+  const PANEL_ORDER = ['project', 'source', 'program', 'timeline', 'controls', 'effects', 'color', 'text', 'captions', 'transcript', 'markers', 'history', 'meters', 'export', 'queue'];
 
   let app = null;
   let root = null;
@@ -112,7 +122,8 @@
   function slot(ws, ri, si, def, size) {
     const s = el('div', 'cut-slot');
     s.style.flexGrow = String(size);
-    const available = def.panels.filter((p) => ui.panels.has(p));
+    const added = addedPanels(ws).filter((x) => x.slot === `${ri}:${si}`).map((x) => x.panel);
+    const available = [...def.panels, ...added].filter((p) => ui.panels.has(p));
     const list = available.length ? available : def.panels.slice(0, 1);
     const tabs = el('div', 'cut-slot-tabs', undefined, { role: 'tablist' });
     const body = el('div', 'cut-slot-body');
@@ -131,6 +142,14 @@
       const t = el('button', 'cut-slot-tab', panelTitle(id), { 'data-panel': id, role: 'tab', type: 'button' });
       t.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
       t.addEventListener('click', () => show(id, { focus: true }));
+      // A panel the Window menu added has a close mark that takes it out of this workspace again.
+      if (added.includes(id)) {
+        t.classList.add('added');
+        const x = el('span', 'cut-slot-tab-close', '×', { title: tr('Close'), 'aria-label': tr('Close'), role: 'button' });
+        x.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+        x.addEventListener('click', (e) => { e.stopPropagation(); closeAdded(id); });
+        t.appendChild(x);
+      }
       tabs.appendChild(t);
     }
     s.append(tabs, body);
@@ -195,6 +214,48 @@
     root.querySelector(`.cut-grid .cut-slot-tab[data-panel="${id}"]`)?.click();
     return focusPanel(id);
   }
+  // ---------- the Window menu: any panel, in this workspace ----------
+  // A panel the current workspace lacks joins it as a tab of its dock slot (kept in `cut.addedPanels`), until that
+  // tab is closed.
+  const addedPanels = (ws) => {
+    const all = ide.settings.get('cut.addedPanels', null);
+    const list = all && Array.isArray(all[ws.id]) ? all[ws.id] : [];
+    const own = new Set(ws.rows.flatMap((r) => r.slots.flatMap((x) => x.panels)));
+    return list.filter((x) => x && typeof x.panel === 'string' && typeof x.slot === 'string' && !own.has(x.panel));
+  };
+  const saveAdded = (wsId, list) => {
+    const all = { ...(ide.settings.get('cut.addedPanels', null) || {}) };
+    all[wsId] = list;
+    ide.settings.set('cut.addedPanels', all);
+  };
+  const inWorkspace = (id) => !!root.querySelector(`.cut-grid .cut-slot-tab[data-panel="${id}"]`);
+  // Shows a panel in the current workspace (its tab, or a new tab in the dock slot) and gives it the keyboard.
+  function openPanel(id) {
+    if (!ui.panels.has(id)) return false;
+    if (!inWorkspace(id)) {
+      const ws = WORKSPACES.find((w) => w.id === current) || WORKSPACES[0];
+      let slotKey = null;
+      ws.rows.forEach((r, ri) => r.slots.forEach((x, si) => { if (x.dock && !slotKey) slotKey = `${ri}:${si}`; }));
+      saveAdded(ws.id, [...addedPanels(ws).filter((x) => x.panel !== id), { panel: id, slot: slotKey || '0:0' }]);
+      setWorkspace(ws.id);
+    }
+    root.querySelector(`.cut-grid .cut-slot-tab[data-panel="${id}"]`)?.click();
+    return focusPanel(id);
+  }
+  function closeAdded(id) {
+    const ws = WORKSPACES.find((w) => w.id === current) || WORKSPACES[0];
+    saveAdded(ws.id, addedPanels(ws).filter((x) => x.panel !== id));
+    setWorkspace(ws.id);
+  }
+  const panelIds = () => [...PANEL_ORDER.filter((id) => ui.panels.has(id)), ...[...ui.panels.keys()].filter((id) => !PANEL_ORDER.includes(id))];
+  const windowMenuItems = () => panelIds().map((id) => ({ label: panelTitle(id), checked: inWorkspace(id), run: () => openPanel(id) }));
+  function windowButton() {
+    const b = button({ icon: 'grid', label: tr('Window'), title: tr('Window'), cls: 'cut-window-btn', onClick: () => ui.menu(b, windowMenuItems()) });
+    b.appendChild(el('span', 'cut-auto-caret', '▾'));
+    b.setAttribute('aria-haspopup', 'menu');
+    return b;
+  }
+
   const markFocus = () => {
     for (const { host } of mounted.values()) host.classList.toggle('focused', host.dataset.panel === app.focusPanel);
   };
@@ -203,6 +264,10 @@
   let key = null; // the autosave and session key: the project path, or untitled-<id>
   let autosaveTimer = 0;
   let lastAutosave = null;
+  let lastCopy = null;
+  let copyTimer = 0;
+  let changes = 0; // edits seen since the project was adopted
+  let copiedAt = 0; // `changes` when the last copy was written
   const untitledKey = () => `untitled-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const projectName = () => (app.path ? ui.basename(app.path).replace(/\.ncut$/i, '') : tr('Untitled'));
   // history.dirty knows only edits made since it was created; a recovered project is modified from the start.
@@ -222,7 +287,9 @@
     ui.monitors?.program?.pause?.();
     ui.monitors?.source?.pause?.();
     app.setHistory(history, path, reason);
-    history.onChange(() => projectChanged());
+    changes = 0;
+    copiedAt = 0;
+    history.onChange(() => { changes += 1; projectChanged(); });
     await startSession(sessionKey || path || untitledKey());
     refreshTitle();
     app.emit('lifecycle', { reason, path });
@@ -231,9 +298,11 @@
   function newHistory(project) {
     return Cut.commands.createHistory(project);
   }
+  // A new project takes the default durations of the settings page (ui-settings.js).
+  const freshProject = () => Cut.model.createProject({ sequence: { name: tr('Sequence {n}', { n: 1 }) }, settings: ui.projectDefaults?.() || {} });
   async function newProject({ ask = true } = {}) {
     if (ask && !(await askToSave())) return false;
-    await adopt(newHistory(Cut.model.createProject({ sequence: { name: tr('Sequence {n}', { n: 1 }) } })), null, { reason: 'new' });
+    await adopt(newHistory(freshProject()), null, { reason: 'new' });
     return true;
   }
 
@@ -343,6 +412,7 @@
     if (sessionEnded || !key) return;
     sessionEnded = true;
     clearTimeout(autosaveTimer);
+    clearInterval(copyTimer);
     ide.api.invoke('cut:sessionEnd', key).catch(() => {});
   }
 
@@ -358,7 +428,7 @@
     if (!app.history || !key || !dirty()) return null;
     // A slider drag in progress is not a state worth keeping; its commit schedules another one.
     if (app.history.grouping) { autosaveTimer = setTimeout(autosaveNow, AUTOSAVE_MS); return null; }
-    const r = await ide.api.invoke('cut:autosave', key, app.history.serialize()).catch((err) => ({ error: { message: err.message } }));
+    const r = await ide.api.invoke('cut:autosave', key, app.history.serialize(), { latest: true }).catch((err) => ({ error: { message: err.message } }));
     if (r?.ok) {
       lastAutosave = { file: r.file, time: Date.now() };
       refreshSaveState();
@@ -366,6 +436,24 @@
     } else log.warn(`autosave failed: ${r?.error?.message || r?.error?.code}`);
     return r;
   }
+  // A copy that stays (one of the newest `keep`), when there are unsaved changes the last copy does not have.
+  async function autosaveCopy({ force = false } = {}) {
+    if (!app.history || !key || !dirty() || app.history.grouping) return null;
+    if (!force && changes === copiedAt) return null;
+    const at = changes;
+    const r = await ide.api.invoke('cut:autosave', key, app.history.serialize(), { keep: copyKeep() }).catch((err) => ({ error: { message: err.message } }));
+    if (r?.ok) {
+      copiedAt = at;
+      lastCopy = { file: r.file, time: Date.now() };
+      app.emit('autosaved', { ...lastCopy, copy: true });
+    } else log.warn(`autosave copy failed: ${r?.error?.message || r?.error?.code}`);
+    return r;
+  }
+  function scheduleCopies() {
+    clearInterval(copyTimer);
+    copyTimer = setInterval(() => { autosaveCopy().catch(() => {}); }, copyMinutes() * 60000);
+  }
+  ide.on('settingsChanged', (k) => { if (k === 'cut.autosave.minutes' && app) scheduleCopies(); });
 
   // ---------- recovery ----------
   async function offerRecovery() {
@@ -447,6 +535,11 @@
     }
     const right = el('div', 'cut-topbar-group right');
     const exportBtn = button({ icon: 'export', label: tr('Export'), title: tr('Export'), action: 'export', cls: 'cut-export-btn accent' });
+    // The Automation menu (ui-auto.js) when it loaded.
+    right.appendChild(windowButton());
+    if (ui.auto?.topBarButton) right.appendChild(ui.auto.topBarButton());
+    // Settings and the keyboard shortcuts (ui-settings.js, ui-shortcuts.js) when they loaded.
+    if (ui.settingsButton) right.appendChild(ui.settingsButton());
     right.append(button({ icon: 'add', title: tr('Import Media…'), action: 'import', cls: 'cut-import-btn' }), exportBtn);
     bar.append(brand, file, edit, project, tabs, right);
     return bar;
@@ -491,8 +584,16 @@
     app.on('project', () => refreshTitle());
     // Saving after a recovery makes it a normal project again.
     app.on('lifecycle', ({ reason }) => { if (reason !== 'recover') { forceDirty = false; refreshTitle(); } });
-    await adopt(newHistory(Cut.model.createProject({ sequence: { name: tr('Sequence {n}', { n: 1 }) } })), null, { reason: 'new' });
+    await adopt(newHistory(freshProject()), null, { reason: 'new' });
+    scheduleCopies();
     setWorkspace(ide.settings.get('cut.workspace', 'editing'));
+    // Find Action reaches every panel: "Window: History" and so on.
+    for (const id of panelIds()) {
+      if (ide.actions.some((a) => a.id === `Cut.window.${id}`)) continue;
+      ide.registerAction({ id: `Cut.window.${id}`, title: tr('Window: {panel}', { panel: panelTitle(id) }), when: () => !!document.querySelector('.cut-root'), run: () => openPanel(id) });
+    }
+    // The user's Cut keys (ui-shortcuts.js) reach the actions registered just now too.
+    ui.shortcuts?.apply?.();
     offerRecovery().catch((err) => log.warn(`recovery: ${err?.message || err}`));
   }
 
@@ -502,13 +603,16 @@
     workspaces: WORKSPACES,
     setWorkspace,
     showPanel,
+    openPanel,
+    windowMenuItems,
     focusPanel,
     mountedPanel: (id) => mounted.get(id)?.host || null,
     lifecycle: {
-      newProject, open, openPath, save, saveAs, askToSave, autosaveNow, offerRecovery,
+      newProject, open, openPath, save, saveAs, askToSave, autosaveNow, autosaveCopy, offerRecovery,
       get key() { return key; },
       get dirty() { return dirty(); },
       get lastAutosave() { return lastAutosave; },
+      get lastCopy() { return lastCopy; },
       projectName,
     },
   });

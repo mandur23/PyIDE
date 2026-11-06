@@ -11,6 +11,7 @@
 //   'source'    the source monitor shows another clip, or its In/Out changed: {source}
 //   'inout'     the sequence In/Out changed: {in, out}
 //   'focus'     the panel that has the keyboard changed: {panel}
+//   'history'   the list of undo steps changed (an edit, undo, redo, a group committed, another history): {reason}
 // on(event, fn) returns a function that removes the listener.
 (function (factory) {
   const api = factory();
@@ -49,7 +50,11 @@
         app.history?.dispose?.();
         app.history = history;
         app.path = path;
-        history.onChange?.((r) => app.emit('project', { project: history.project, reason: r }));
+        history.onChange?.((r) => {
+          // A committed group changes the list of steps, not the project.
+          if (r !== 'commit') app.emit('project', { project: history.project, reason: r });
+          if (app.history === history) app.emit('history', { reason: r });
+        });
         app.selection = new Set();
         app.sequenceId = history.project.sequences[0]?.id || null;
         app.t = 0;
@@ -58,6 +63,7 @@
         app.emit('sequence', { id: app.sequenceId });
         app.emit('time', { t: 0 });
         app.emit('selection', { ids: [] });
+        app.emit('history', { reason });
       },
       setSequence(id) {
         if (id === app.sequenceId) return;

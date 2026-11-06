@@ -685,6 +685,7 @@
       const outS = clip.out / tps;
       const startT = clip.start;
       const volList = clip.keyframes?.volume;
+      const duckList = clip.keyframes?.duck;
       const panList = clip.keyframes?.pan;
       const baseVol = clip.props?.volume ?? 0;
       const basePan = clip.props?.pan ?? 0;
@@ -709,7 +710,7 @@
       const tin = span.fadeIn ? transitionGains(seq, clip.track, clip.start) : null;
       const tout = span.fadeOut ? transitionGains(seq, clip.track, clip.start + dur) : null;
       const gainsAt = (tau) => {
-        let g = dbToGain(volList?.length ? keyframes.valueAt(volList, tau, baseVol) : baseVol);
+        let g = dbToGain((volList?.length ? keyframes.valueAt(volList, tau, baseVol) : baseVol) + (duckList?.length ? keyframes.valueAt(duckList, tau, 0) : 0));
         if (fx.length) g *= effectGain(tau);
         if (tau >= 0 && tau < dur) {
           if (clip.fadeIn > 0 && tau < clip.fadeIn) g *= tau / clip.fadeIn;
@@ -759,7 +760,7 @@
       const tracks = {};
       let missing = 0;
       const seq = project?.sequences.find((s) => s.id === seqId);
-      if (!seq) return { out, tracks, master: [0, 0], missing };
+      if (!seq) return { out, tracks, master: [0, 0], rms: [0, 0], missing };
       const t0 = s0 * tps;
       const t1 = (s0 + n) * tps;
       const audio = seq.tracks.filter((t) => t.kind === 'audio');
@@ -798,13 +799,17 @@
       const mg = dbToGain(masterGain + (seq.masterGain ?? 0));
       let ml = 0;
       let mr = 0;
+      let sl = 0;
+      let sr = 0;
       for (let i = 0; i < n; i++) {
-        out[0][i] *= mg;
-        out[1][i] *= mg;
-        if (Math.abs(out[0][i]) > ml) ml = Math.abs(out[0][i]);
-        if (Math.abs(out[1][i]) > mr) mr = Math.abs(out[1][i]);
+        const l = (out[0][i] *= mg);
+        const r = (out[1][i] *= mg);
+        if (Math.abs(l) > ml) ml = Math.abs(l);
+        if (Math.abs(r) > mr) mr = Math.abs(r);
+        sl += l * l;
+        sr += r * r;
       }
-      return { out, tracks, master: [ml, mr], missing };
+      return { out, tracks, master: [ml, mr], rms: n ? [Math.sqrt(sl / n), Math.sqrt(sr / n)] : [0, 0], missing };
     }
 
     // mix() once the blocks of those samples, and LOOKAHEAD_SECONDS after them, are read: for loops through a range.
@@ -868,7 +873,8 @@
 
   // The preview of app's active sequence: start(t, rate) plays from t (rate 0.25..4 forward plays the mix faster or
   // slower like tape; other rates are silent but the clock runs), now() is the sequence time being heard,
-  // meters() the peaks being heard in dBFS: {master, masterChannels: [l, r], tracks: {id: dB}}.
+  // meters() the levels being heard in dBFS: {master (peak), masterChannels: [l, r] (peaks), masterRms: [l, r] (RMS of
+  // the block being heard, about 43 ms), tracks: {id: peak dB}}.
   function create(app, opts = {}) {
     const rate = opts.rate || 48000;
     const tps = TICKS / rate;
@@ -924,7 +930,7 @@
           node.start(Math.max(scheduledUntil, ctx.currentTime));
           live.add(node);
           const g = dbToGain(masterDb);
-          heard.push({ from: scheduledUntil, to: scheduledUntil + seconds, master: [m.master[0] * g, m.master[1] * g], tracks: m.tracks });
+          heard.push({ from: scheduledUntil, to: scheduledUntil + seconds, master: [m.master[0] * g, m.master[1] * g], rms: [m.rms[0] * g, m.rms[1] * g], tracks: m.tracks });
           if (m.missing) mixer.load(project, seqId, nextSample * tps, (nextSample + span) * tps + 5 * TICKS);
         }
         nextSample += audible ? span : Math.round(BLOCK * playRate);
@@ -984,14 +990,14 @@
     }
 
     function meters() {
-      const quiet = { master: -Infinity, masterChannels: [-Infinity, -Infinity], tracks: {} };
+      const quiet = { master: -Infinity, masterChannels: [-Infinity, -Infinity], masterRms: [-Infinity, -Infinity], tracks: {} };
       if (!playing || !ctx) return quiet;
       const out = outputTime();
       const h = heard.find((x) => x.from <= out && out < x.to) || null;
       if (!h) return quiet;
       const tracks = {};
       for (const [id, [l, r]] of Object.entries(h.tracks)) tracks[id] = gainToDb(Math.max(l, r));
-      return { master: gainToDb(Math.max(h.master[0], h.master[1])), masterChannels: h.master.map(gainToDb), tracks };
+      return { master: gainToDb(Math.max(h.master[0], h.master[1])), masterChannels: h.master.map(gainToDb), masterRms: h.rms.map(gainToDb), tracks };
     }
 
     function setMasterGain(db) {

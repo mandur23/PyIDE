@@ -7,16 +7,18 @@
 //   Cut.ui.onAction(actionId, fn(ctx) -> false to pass it on, { panels: [panelId] | null })  -> remove()
 //   Cut.ui.dnd.start(pointerEvent, payload, { label })   Cut.ui.dnd.target(el, { accepts, over, leave, drop }) -> remove()
 //
-// Panel ids: project, source, program, timeline, controls, effects, captions, text, color, export.
+// Panel ids: project, source, program, timeline, controls, effects, captions, text, color, export, history, meters,
+// markers.
 //
 // Action ids (ui-keys.js binds the keys; each is also the IDE action 'Cut.<id>' for Find Action):
 //   transport  playPause shuttleBack shuttleStop shuttleForward frameBack frameForward frameBack5 frameForward5
 //              prevEdit nextEdit goStart goEnd goIn goOut
 //   marks      markIn markOut markClip clearInOut addMarker
-//   editing    insert overwrite split splitAll rippleStart rippleEnd rippleDelete delete toggleEnabled link speed
-//              freezeFrame transitionVideo transitionAudio transitionBoth copy paste selectAll deselect
-//   tools      tool.select tool.trackForward tool.trackBackward tool.ripple tool.roll tool.razor tool.hand tool.zoom
-//              tool.text snap
+//   editing    insert overwrite lift extract split splitAll rippleStart rippleEnd rippleDelete delete toggleEnabled link
+//              group ungroup nudgeLeft nudgeRight nudgeLeft5 nudgeRight5 selectAtPlayhead matchFrame extendEdit speed
+//              freezeFrame transitionVideo transitionAudio transitionBoth copy paste pasteInsert selectAll deselect
+//   tools      tool.select tool.trackForward tool.trackBackward tool.ripple tool.roll tool.rate tool.razor tool.slip
+//              tool.slide tool.pen tool.hand tool.zoom tool.text snap
 //   view       zoomIn zoomOut zoomFit fullscreen
 //   project    undo redo save saveAs open newProject import export exportFrame
 // The monitors handle transport and marks for their own panel (the program monitor also for the timeline); the
@@ -364,6 +366,57 @@
     return r;
   };
 
+  // virtualList({rowHeight, cls, render(i) -> row element}): a scrolling list that keeps only the rows in view (and a
+  // few around them) in the DOM, so a list of thousands of entries stays fast. -> {el, count, setCount(n), refresh(),
+  // scrollTo(i), indexAt(clientY)}. Each row gets data-index and its place; render() builds its content.
+  function virtualList({ rowHeight = 22, cls = '', render } = {}) {
+    const box = el('div', `cut-vlist${cls ? ` ${cls}` : ''}`, undefined, { tabindex: 0 });
+    const spacer = el('div', 'cut-vlist-spacer');
+    box.appendChild(spacer);
+    let count = 0;
+    let raf = 0;
+    const draw = () => {
+      raf = 0;
+      spacer.style.height = `${count * rowHeight}px`;
+      const h = box.clientHeight || rowHeight * 20;
+      const first = Math.max(0, Math.floor(box.scrollTop / rowHeight) - 4);
+      const last = Math.min(count, Math.ceil((box.scrollTop + h) / rowHeight) + 4);
+      const rows = [];
+      for (let i = first; i < last; i++) {
+        const r = render(i);
+        r.classList.add('cut-vlist-row');
+        r.dataset.index = String(i);
+        r.style.top = `${i * rowHeight}px`;
+        r.style.height = `${rowHeight}px`;
+        rows.push(r);
+      }
+      spacer.replaceChildren(...rows);
+    };
+    const refresh = () => { if (!raf) raf = requestAnimationFrame(draw); };
+    box.addEventListener('scroll', refresh, { passive: true });
+    const ro = ide.util.observeSize(box, refresh);
+    return {
+      el: box,
+      get count() { return count; },
+      setCount(n) { count = Math.max(0, n | 0); refresh(); },
+      refresh,
+      // right away, for a caller that reads the rows next
+      drawNow() { cancelAnimationFrame(raf); draw(); },
+      // Scrolls just enough to show row i.
+      scrollTo(i) {
+        const top = i * rowHeight;
+        if (top < box.scrollTop) box.scrollTop = top;
+        else if (top + rowHeight > box.scrollTop + box.clientHeight) box.scrollTop = top + rowHeight - box.clientHeight;
+        refresh();
+      },
+      indexAt(clientY) {
+        const i = Math.floor((clientY - box.getBoundingClientRect().top + box.scrollTop) / rowHeight);
+        return i >= 0 && i < count ? i : -1;
+      },
+      dispose() { cancelAnimationFrame(raf); ro?.disconnect?.(); },
+    };
+  }
+
   // ---------- typing ----------
   // Keys never act while a person types: in a text field, a contenteditable (a text layer being edited sets
   // Cut.ui.typing too) or while an IME composes.
@@ -490,6 +543,7 @@
     menu,
     dialog,
     row,
+    virtualList,
     confirm: (text, opts) => ide.ui.confirm(text, opts),
     isTyping,
     typing: false,

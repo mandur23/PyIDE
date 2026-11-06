@@ -507,6 +507,9 @@
     if (!g || activeGroup === g) return;
     activeGroup = g;
     for (const o of groups) o.el.classList.toggle('active-group', o === g);
+    // Clicking into the other split's text makes its tab the latest, so Ctrl+Tab goes back to the one left.
+    const i = g.active ? mru.indexOf(g.active) : -1;
+    if (i > 0) { mru.splice(i, 1); mru.unshift(g.active); }
     updateStatus();
     ide.emit('activeEditorChanged', g.editor);
     ide.emit('activeTabChanged', g.active || null);
@@ -582,7 +585,8 @@
     g.tabs.splice(i, 1);
     const m = mru.indexOf(tab);
     if (m >= 0) mru.splice(m, 1);
-    if (!moving) {
+    // Only what Reopen Closed Tab can open again is kept: a Workspace, diff or history tab would use up a press.
+    if (!moving && tab.path && (tab.kind !== 'custom' || tab.viewer)) {
       closedTabs.push({ path: tab.path, kind: tab.kind, viewer: tab.viewer?.id });
       if (closedTabs.length > 30) closedTabs.shift();
     }
@@ -647,7 +651,7 @@
     g.editor = ide.monaco.editor.create(g.editorHost, { ...editorOptions, model: null });
     g.editor.onDidFocusEditorWidget(() => setActiveGroup(g));
     g.el.addEventListener('mousedown', () => setActiveGroup(g), true);
-    g.editor.onDidChangeCursorPosition((e) => { if (g === activeGroup) $('statusPos').textContent = `${e.position.lineNumber}:${e.position.column}`; });
+    g.editor.onDidChangeCursorSelection(() => { if (g === activeGroup) $('statusPos').textContent = posLabel(g.editor); });
     g.editor.onDidChangeModelContent(() => {
       const t = g.active;
       if (t?.preview) { t.preview = false; renderTabs(g); }
@@ -1449,12 +1453,25 @@
   encodingItem.id = 'statusEncoding';
   encodingItem.title = tr('File encoding');
   $('statusEncodingSlot').replaceWith(encodingItem);
+  // line:column, and with a selection its size as PyCharm words it: 12:5 (23 chars, 1 line break). A line break
+  // counts as one character, whatever the file's line separator.
+  function posLabel(ed) {
+    const pos = ed.getPosition();
+    if (!pos) return '';
+    const at = `${pos.lineNumber}:${pos.column}`;
+    const sel = ed.getSelection();
+    const model = ed.getModel();
+    if (!sel || sel.isEmpty() || !model) return at;
+    const chars = model.getValueLengthInRange(sel, ide.monaco.editor.EndOfLinePreference.LF);
+    const breaks = sel.endLineNumber - sel.startLineNumber;
+    const size = chars === 1 ? tr('1 char') : tr('{n} chars', { n: chars });
+    return `${at} (${breaks ? `${size}, ${breaks === 1 ? tr('1 line break') : tr('{n} line breaks', { n: breaks })}` : size})`;
+  }
   function updateStatus() {
     const t = activeGroup?.active;
     $('statusPath').textContent = !t ? '' : t.kind === 'file' || t.doc || t.viewer ? ide.util.rel(t.path) : t.title;
     encodingItem.textContent = t?.doc ? ENCODING_LABEL[t.doc.encoding] || t.doc.encoding : '';
-    const pos = t?.kind === 'file' ? activeGroup.editor.getPosition() : null;
-    $('statusPos').textContent = pos ? `${pos.lineNumber}:${pos.column}` : '';
+    $('statusPos').textContent = t?.kind === 'file' ? posLabel(activeGroup.editor) : '';
     if (ide.detached) ide.api.invoke('window:setTitle', t ? `${t.title} - ${ide.appTitle}` : ide.appTitle);
   }
   encodingItem.onclick = () => {
@@ -1582,9 +1599,10 @@
   }
 
   async function reopenClosed() {
-    const last = closedTabs.pop();
-    if (!last || last.kind === 'custom' && !last.viewer) return;
-    await ide.openFile(last.path);
+    // A file opened again since it was closed is skipped: the press goes to the one closed before it.
+    let last;
+    while ((last = closedTabs.pop()) && ide.findTab(last.path));
+    if (last) await ide.openFile(last.path);
   }
 
   const copyPath = (text) => ide.api.invoke('clipboard:writeText', text);

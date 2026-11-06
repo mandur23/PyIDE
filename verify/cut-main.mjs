@@ -274,6 +274,15 @@ try {
   const evil = await call('cut:autosave', '..\\..\\..\\evil', S({ format: 'ncut', version: 1 }));
   check(evil.ok && path.dirname(evil.file) === h.autosave && !fs.existsSync(path.join(work, 'evil.ncut')), `a key with ..\\ stays in the Autosave folder (${evil.file})`);
   check((await call('cut:autosave', '', 'x'))?.code === 'badArgs', 'an empty key is refused');
+  // The latest state (the save 2 s after edits) replaces itself and never pushes the interval copies out; copies keep
+  // as many as asked.
+  const keyL = path.join(work, 'latest', 'Lat.ncut');
+  for (let i = 1; i <= 4; i++) await call('cut:autosave', keyL, S({ format: 'ncut', version: 1, n: `c${i}` }), { keep: 3 });
+  for (let i = 1; i <= 6; i++) await call('cut:autosave', keyL, S({ format: 'ncut', version: 1, n: `l${i}` }), { latest: true });
+  const ofL = fs.readdirSync(h.autosave).filter((n) => n.startsWith('Lat-')).sort();
+  const lnums = ofL.map((n) => JSON.parse(fs.readFileSync(path.join(h.autosave, n), 'utf8')).n);
+  check(ofL.length === 4 && S(lnums) === S(['c2', 'c3', 'c4', 'l6']) && ofL.filter((n) => n.endsWith('.latest.ncut')).length === 1,
+    `copies keep the newest {keep}, the latest state only its newest, and neither pushes out the other (${S(lnums)})`);
 
   // ---------- sessions and recovery ----------
   const k = (n) => path.join(h.projects, `Session ${n}.ncut`);

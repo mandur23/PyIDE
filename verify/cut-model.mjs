@@ -145,6 +145,13 @@ try {
   check(ov.ok, `migrate fills an old file to a valid project${ov.ok ? '' : `: ${ov.errors.join('; ')}`}`);
   eq([old.nextId > 7, old.sequences[0].clips[0].keyframes.opacity[0].ease, old.sequences[0].clips[0].props.crop, old.media[0].proxy], [true, 'easeOut', [0, 0, 0, 0], { path: 'cache:ab12' }], 'migrate: nextId above every id, old ease names, missing props, proxy');
   check(C.createHistory(old) && true, 'a migrated project can be edited');
+  {
+    const seq4k = (style) => model.migrate({ format: 'ncut', version: 1, sequences: [{ id: 's1', w: 3840, h: 2160, fps: [30, 1], tracks: [], clips: [], transitions: [], markers: [], captions: [{ id: 'CC1', lang: 'ko', items: [], style }] }] }).sequences[0].captions[0].style;
+    eq([seq4k({ size: 108 }).size, seq4k({ size: 108 }).ref], [54, 1080], 'an old 4K caption size chosen in sequence pixels keeps its look (108 px of 2160 lines is 54 at 1080p)');
+    eq(seq4k({ size: 54 }).size, 54, 'the untouched default 54 stays 54 and is now drawn at 1080p proportions');
+    eq(seq4k({ size: 80, ref: 1080 }).size, 80, 'a style that already has ref is not converted again');
+    eq(model.defaultCaptionStyle().ref, 1080, 'new caption tracks measure their size at 1080p');
+  }
   throws(() => C.createHistory({ ...model.createProject(), nextId: 0 }), 'damaged', 'createHistory refuses a damaged project');
 } catch (err) {
   check(false, `model: ${err.stack}`);
@@ -746,10 +753,10 @@ try {
   h.do(C.setClip(s, v, { props: { opacity: 20 } }));
   h.cancel();
   eq([h.serialize() === before, h.grouping, h.canRedo], [true, false, false], 'cancel takes the whole group back and leaves no step');
-  eq(reasons.slice(0, 7), ['do', 'do', 'do', 'do', 'undo', 'redo', 'undo'], 'onChange reasons');
+  eq(reasons.slice(0, 8), ['do', 'do', 'do', 'do', 'commit', 'undo', 'redo', 'undo'], 'onChange reasons (a commit tells the list of steps changed)');
   off();
   h.do(C.setClip(s, v, { name: 'x' }));
-  eq(reasons.length, 10, 'a removed listener hears nothing');
+  eq(reasons.length, 11, 'a removed listener hears nothing');
 
   check(h.dirty, 'edits make the project dirty');
   h.markSaved();
@@ -902,6 +909,311 @@ try {
   check(false, `page scripts: ${err.stack}`);
 }
 
+// ---------- edit tools: slip, slide, rate stretch, extend edit, groups, nudge ----------
+try {
+  const { h, s, a, b, pic } = setup();
+  // a: 600 whole frames with sound. v/au: [30,120) showing source 100..190.
+  const [v, au] = place(h, s, { source: { media: a }, in: f(100), out: f(190), at: f(30), video: 'V1', audio: 'A1' });
+  let r = step(h, C.slip(s, v, { delta: f(10) }), 'slip');
+  eq([r, lay(h, s).V1, lay(h, s).A1], [{ applied: f(10), clamped: null }, '30-120:110', '30-120:110'], 'slip moves in and out of the clip and its linked audio, place and length kept');
+  eq(h.list().at(-1).label, 'Slip', 'slip label');
+  h.undo();
+  r = h.do(C.slip(s, v, { delta: -f(150) }));
+  eq([r, lay(h, s).V1, lay(h, s).A1], [{ applied: -f(100), clamped: 'source' }, '30-120:0', '30-120:0'], 'slip stops at the source start');
+  h.undo();
+  r = h.do(C.slip(s, v, { delta: f(1000) }));
+  eq([r, clip(h, s, v).out / F], [{ applied: f(410), clamped: 'source' }, 600], 'slip stops at the last whole frame of the source');
+  h.undo();
+  r = h.do(C.slip(s, v, { delta: f(10) + 5000 }));
+  eq([r.applied, clip(h, s, v).in % F, lay(h, s).V1], [f(10), 0, '30-120:110'], 'a slip delta goes to whole frames');
+  h.undo();
+  h.do(C.slip(s, v, { delta: f(5), linked: false }));
+  eq([lay(h, s).V1, lay(h, s).A1], ['30-120:105', '30-120:100'], 'slip with linked: false moves one side');
+  h.undo();
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: f(10), v: 0 }, { t: f(40), v: 100 }]));
+  h.do(C.slip(s, v, { delta: f(20) }));
+  eq(clip(h, s, v).keyframes.opacity.map((k) => fr(k.t)), [10, 40], 'keyframes stay on the clip frames through a slip');
+  h.undo();
+  h.undo();
+  h.do(C.setTrack(s, 'A1', { locked: true }));
+  unchanged(h, () => h.do(C.slip(s, v, { delta: f(5) })), 'locked', 'slip with the linked audio on a locked track');
+  h.do(C.setTrack(s, 'A1', { locked: false }));
+  const [still] = place(h, s, { source: { media: pic }, at: f(300), video: 'V2' });
+  unchanged(h, () => h.do(C.slip(s, still, { delta: f(5) })), 'still', 'a still has no source to slip');
+  h.undo();
+  h.do(C.setClip(s, v, { speed: 2, ripple: true }));
+  eq(lay(h, s).V1, '30-75:100', 'speed 2 clip');
+  h.do(C.slip(s, v, { delta: f(10) }));
+  eq([clip(h, s, v).in / F, clip(h, s, v).out / F, lay(h, s).V1], [120, 210, '30-75:120'], 'at speed 2 a slip of 10 frames shows source 20 frames later');
+  h.undo();
+  h.undo();
+
+  // slide: x [0,60):0, y [60,120):100, z [120,180):300 on V2, nothing else there
+  const [x] = place(h, s, { source: { media: a }, in: 0, out: f(60), at: f(400), video: 'V2' });
+  const [y] = place(h, s, { source: { media: a }, in: f(100), out: f(160), at: f(460), video: 'V2' });
+  const [z] = place(h, s, { source: { media: a }, in: f(300), out: f(360), at: f(520), video: 'V2' });
+  h.do(C.addTransition(s, { track: 'V2', at: f(460), type: 'dissolve', duration: f(10) }));
+  r = step(h, C.slide(s, y, { delta: f(10) }), 'slide right');
+  eq([r, lay(h, s).V2], [{ applied: f(10), clamped: null }, '400-470:0 470-530:100 530-580:310'], 'slide: the clip moves with its content, the neighbours trim their touching ends, the length stays');
+  eq(h.project.sequences[0].transitions.map((t) => fr(t.at)), [470], 'the transition on the edit point slides with it');
+  eq(h.list().at(-1).label, 'Slide', 'slide label');
+  h.undo();
+  h.do(C.slide(s, y, { delta: -f(10) }));
+  eq(lay(h, s).V2, '400-450:0 450-510:100 510-580:290', 'slide left');
+  h.undo();
+  r = h.do(C.slide(s, y, { delta: -f(100) }));
+  eq([r, lay(h, s).V2], [{ applied: -f(59), clamped: 'length' }, '400-401:0 401-461:100 461-580:241'], 'slide stops with the clip before at one frame');
+  h.undo();
+  place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(580), video: 'V2' });
+  const before = h.serialize();
+  r = h.do(C.slide(s, z, { delta: -f(10) }));
+  eq([r, h.serialize() === before], [{ applied: 0, clamped: 'source' }, true], 'a slide left stops when the clip after has no head left (b starts at 0)');
+  r = h.do(C.slide(s, z, { delta: f(10) }));
+  eq([r.applied, lay(h, s).V2], [f(10), '400-460:0 460-530:100 530-590:300 590-640:10'], 'the same clip slides right, trimming the head of the one after');
+  h.undo();
+  h.do(C.move(s, [x], { delta: -f(20) }));
+  r = h.do(C.slide(s, y, { delta: -f(500) }));
+  eq([r, lay(h, s).V2], [{ applied: -f(20), clamped: 'neighbour' }, '380-440:0 440-500:100 500-580:280 580-640:0'], 'with a gap before it the clip slides into the gap and stops at the clip beyond');
+  h.undo();
+  h.undo();
+  h.do(C.setTrack(s, 'V2', { locked: true }));
+  unchanged(h, () => h.do(C.slide(s, y, { delta: f(5) })), 'locked', 'slide on a locked track');
+  h.do(C.setTrack(s, 'V2', { locked: false }));
+  // linked: the audio of three linked pairs slides with the video
+  {
+    const L = setup();
+    for (const [inF, atF] of [[0, 0], [100, 60], [300, 120]]) place(L.h, L.s, { source: { media: L.a }, in: f(inF), out: f(inF + 60), at: f(atF), video: 'V1', audio: 'A1' });
+    const mid = clipsOf(L.h, L.s).find((c) => c.track === 'V1' && c.start === f(60)).id;
+    step(L.h, C.slide(L.s, mid, { delta: f(5) }), 'linked slide');
+    eq([lay(L.h, L.s).V1, lay(L.h, L.s).A1], ['0-65:0 65-125:100 125-180:305', '0-65:0 65-125:100 125-180:305'], 'a linked slide moves the audio and trims its neighbours too');
+  }
+
+  // rate stretch: v [30,120) source 100..190, n on V1 at 150
+  const [n] = place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(150), video: 'V1' });
+  r = step(h, C.stretch(s, v, { edge: 'end', delta: f(30) }), 'rate stretch the end');
+  eq([r.applied, r.clamped, Math.round(r.speed * 1000) / 1000, lay(h, s).V1, lay(h, s).A1], [f(30), null, 0.75, '30-150:100 150-210:0', '30-150:100'], 'rate stretch: 90 frames of source over 120, speed 75%, the linked audio too');
+  eq([clip(h, s, v).in / F, clip(h, s, v).out / F, clip(h, s, au).speed === clip(h, s, v).speed], [100, 190, true], 'the source range is kept');
+  eq(h.list().at(-1).label, 'Rate Stretch', 'rate stretch label');
+  h.undo();
+  r = h.do(C.stretch(s, v, { edge: 'end', delta: f(50) }));
+  eq([r.applied, r.clamped, lay(h, s).V1], [f(30), 'neighbour', '30-150:100 150-210:0'], 'rate stretch stops at the next clip');
+  h.undo();
+  r = h.do(C.stretch(s, v, { edge: 'start', delta: f(45) + 999 }));
+  eq([r.applied, r.speed, lay(h, s).V1], [f(45), 2, '75-120:100 150-210:0'], 'rate stretch of the start: the end stays, speed 200%, a whole-frame delta');
+  h.undo();
+  r = h.do(C.stretch(s, v, { edge: 'start', delta: -f(100) }));
+  eq([r.applied, r.clamped, lay(h, s).V1], [-f(30), 'neighbour', '0-120:100 150-210:0'], 'rate stretch of the start stops at 0');
+  h.undo();
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: f(30), v: 50 }]));
+  h.do(C.stretch(s, v, { edge: 'end', delta: f(30) }));
+  eq(clip(h, s, v).keyframes.opacity.map((k) => fr(k.t)), [40], 'keyframes stay on their source frames');
+  h.undo();
+  h.undo();
+  {
+    const L = setup();
+    const [long] = place(L.h, L.s, { source: { media: L.a }, in: 0, out: f(300), at: 0, video: 'V1', audio: null });
+    r = L.h.do(C.stretch(L.s, long, { edge: 'end', delta: -f(299) }));
+    eq([r.applied, r.clamped, lay(L.h, L.s).V1, r.speed], [-f(297), 'speed', '0-3:0', 100], 'rate stretch stops at 10000%');
+    const [ph] = place(L.h, L.s, { source: { media: L.pic }, at: f(100), video: 'V2' });
+    L.h.do(C.stretch(L.s, ph, { edge: 'end', delta: f(10) }));
+    eq([lay(L.h, L.s).V2, clip(L.h, L.s, ph).speed], ['100-260:0', 1], 'a still is trimmed, its speed stays');
+  }
+  h.do(C.setTrack(s, 'A1', { locked: true }));
+  unchanged(h, () => h.do(C.stretch(s, v, { edge: 'end', delta: f(5) })), 'locked', 'rate stretch with the linked audio locked');
+  h.do(C.setTrack(s, 'A1', { locked: false }));
+  h.do(C.remove(s, [n]));
+
+  // extend edit: p [0,60):0 and q [60,120):100 linked with audio, touching
+  {
+    const E = setup();
+    const [p, pa] = place(E.h, E.s, { source: { media: E.a }, in: 0, out: f(60), at: 0, video: 'V1', audio: 'A1' });
+    const [q] = place(E.h, E.s, { source: { media: E.a }, in: f(100), out: f(160), at: f(60), video: 'V1', audio: 'A1' });
+    r = step(E.h, C.extendEdit(E.s, f(70), { trackIds: ['V1', 'A1'] }), 'extend edit');
+    eq([r, lay(E.h, E.s).V1, lay(E.h, E.s).A1], [{ at: f(60), applied: f(10), clamped: null }, '0-70:0 70-120:110', '0-70:0 70-120:110'], 'extend edit rolls the nearest edit point to the playhead on the targeted tracks');
+    eq(E.h.list().at(-1).label, 'Extend Edit', 'extend edit label');
+    E.h.undo();
+    r = E.h.do(C.extendEdit(E.s, f(100), { clipIds: [q] }));
+    eq([r.at, lay(E.h, E.s).V1, lay(E.h, E.s).A1], [f(120), '0-60:0 60-100:100', '0-60:0 60-100:100'], 'extend edit of a selected clip moves its nearest edge; with nothing after it, a trim');
+    E.h.undo();
+    r = E.h.do(C.extendEdit(E.s, f(130) + 77, { clipIds: [q] }));
+    eq([r.applied, lay(E.h, E.s).V1], [f(10), '0-60:0 60-130:100'], 'extend edit to a playhead off the frame grid lands on its frame');
+    E.h.undo();
+    r = E.h.do(C.extendEdit(E.s, f(70), { trackIds: ['V1'], linked: false }));
+    eq([lay(E.h, E.s).V1, lay(E.h, E.s).A1], ['0-70:0 70-120:110', '0-60:0 60-120:100'], 'extend edit with linked: false leaves the audio');
+    E.h.undo();
+    E.h.do(C.setTrack(E.s, 'A1', { locked: true }));
+    unchanged(E.h, () => E.h.do(C.extendEdit(E.s, f(70), { trackIds: ['V1'] })), 'locked', 'extend edit when the linked audio is locked');
+    E.h.do(C.setTrack(E.s, 'A1', { locked: false }));
+    void p; void pa;
+    const empty = setup();
+    unchanged(empty.h, () => empty.h.do(C.extendEdit(empty.s, f(10))), 'noEdit', 'extend edit with no edit point');
+  }
+
+  // groups: v (+ au) on V1/A1 at 30, g2 on V2 at 300
+  groups(setup());
+} catch (err) {
+  check(false, `edit tools: ${err.stack}`);
+}
+function groups({ h, s, a, b }) {
+  const [v, au] = place(h, s, { source: { media: a }, in: f(100), out: f(190), at: f(30), video: 'V1', audio: 'A1' });
+  const [g2] = place(h, s, { source: { media: b }, in: 0, out: f(30), at: f(300), video: 'V2' });
+  let r;
+  r = step(h, C.group(s, [v, g2]), 'group');
+  check(/^G\d+$/.test(r.group) && clip(h, s, v).group === r.group && clip(h, s, g2).group === r.group && clip(h, s, au).group === null, `group gives the clips one group id (${r.group})`);
+  check(model.validate(h.project).ok, 'a grouped project validates');
+  step(h, C.move(s, [g2], { delta: f(10), nudge: true }), 'move a group member');
+  eq([lay(h, s).V1, lay(h, s).A1, lay(h, s).V2], ['40-130:100', '40-130:100', '310-340:0'], 'moving one member moves the group and the members\' linked clips');
+  eq(h.list().at(-1).label, 'Nudge', 'a nudge is labelled Nudge');
+  h.undo();
+  h.do(C.move(s, [g2], { delta: f(10), linked: false }));
+  eq([lay(h, s).V1, lay(h, s).V2], ['30-120:100', '310-340:0'], 'linked: false (Alt) moves one member');
+  h.undo();
+  h.do(C.split(s, f(310), { clipIds: [g2] }));
+  eq([lay(h, s).V1, lay(h, s).V2], ['30-120:100', '300-310:0 310-330:10'], 'a split of a member cuts only that clip');
+  h.undo();
+  h.do(C.trim(s, g2, { edge: 'end', delta: -f(10) }));
+  eq([lay(h, s).V1, lay(h, s).V2], ['30-120:100', '300-320:0'], 'a trim of a member trims only that clip');
+  h.undo();
+  step(h, C.remove(s, [g2]), 'remove a group member');
+  eq([lay(h, s).V1, lay(h, s).A1, lay(h, s).V2], ['', '', ''], 'removing one member removes the group');
+  h.undo();
+  h.do(C.setTrack(s, 'V1', { locked: true }));
+  unchanged(h, () => h.do(C.move(s, [g2], { delta: f(10) })), 'locked', 'a group with a member on a locked track does not move');
+  h.do(C.setTrack(s, 'V1', { locked: false }));
+  const dup = h.do(C.addSequence({ from: s })).id;
+  const dg = clipsOf(h, dup).filter((c) => c.group);
+  check(dg.length === 2 && dg[0].group === dg[1].group && dg[0].group !== r.group, 'a duplicated sequence has its own group');
+  h.undo();
+  const pasted = h.do(C.paste(s, [v, g2].map((id) => ({ ...model.clone(clip(h, s, id)), kind: 'video' })), { at: f(500) })).ids;
+  const pg = pasted.map((id) => clip(h, s, id).group);
+  check(pg[0] && pg[0] === pg[1] && pg[0] !== clip(h, s, v).group, 'pasted members form a new group');
+  h.undo();
+  h.do(C.remove(s, [g2], { linked: false }));
+  eq(clip(h, s, v).group, null, 'a group left with one clip is cleared');
+  h.undo();
+  step(h, C.ungroup(s, [g2]), 'ungroup');
+  eq([clip(h, s, v).group, clip(h, s, g2).group], [null, null], 'ungroup clears every member');
+  h.undo();
+  unchanged(h, () => h.do(C.group(s, [v])), 'groupOne', 'a group of one clip');
+  eq(model.migrate(h.serialize()).sequences[0].clips.find((c) => c.id === v).group, r.group, 'the group survives save and migrate');
+}
+
+// ---------- automation: clip roles, batches, beat markers ----------
+try {
+  const { h, s, a, music } = setup();
+  const [v, au] = place(h, s, { source: { media: a }, in: 0, out: f(300), at: 0, video: 'V1', audio: 'A1' });
+  const [m] = place(h, s, { source: { media: music }, in: 0, out: f(600), at: 0, audio: 'A2' });
+  eq([clip(h, s, v).role, clip(h, s, m).role], [null, null], 'a new clip has no role');
+  step(h, C.setRole(s, [v], 'dialogue'), 'set a role');
+  eq([clip(h, s, v).role, clip(h, s, au).role, clip(h, s, m).role], ['dialogue', 'dialogue', null], 'setRole sets the linked audio too');
+  h.do(C.setRole(s, [m], 'music', { linked: false }));
+  eq(h.list().at(-1).label, 'Audio Role', 'setRole label');
+  unchanged(h, () => h.do(C.setRole(s, [m], 'narration')), undefined, 'an unknown role');
+  step(h, C.setClip(s, m, { role: 'ambience' }), 'setClip with a role');
+  h.undo();
+  unchanged(h, () => h.do(C.setClip(s, m, { role: 'speech' })), undefined, 'setClip with an unknown role');
+  h.do(C.setTrack(s, 'A2', { locked: true }));
+  unchanged(h, () => h.do(C.setRole(s, [m], null)), 'locked', 'setRole on a locked track');
+  h.do(C.setTrack(s, 'A2', { locked: false }));
+  const bad = model.clone(h.project);
+  bad.sequences[0].clips[0].role = 'narration';
+  check(!model.validate(bad).ok, 'validate refuses an unknown role');
+  const mig = model.clone(h.project);
+  delete mig.sequences[0].clips[0].role;
+  mig.sequences[0].clips[1].role = 'narration';
+  const mp = model.migrate(mig);
+  eq([mp.sequences[0].clips[0].role, mp.sequences[0].clips[1].role, model.validate(mp).ok], [null, null, true], 'migrate fills a missing role and drops an unknown one');
+  step(h, C.setKeyframes(s, m, 'duck', [{ t: 0, v: 0 }, { t: f(30), v: -12 }]), 'an audio clip takes duck keyframes');
+  unchanged(h, () => h.do(C.setKeyframes(s, v, 'duck', [{ t: 0, v: -12 }])), undefined, 'a video clip has no duck curve');
+  const pasted = h.do(C.paste(s, [{ ...model.clone(clip(h, s, m)), kind: 'audio' }], { at: f(600), audio: 'A2' })).ids;
+  eq(clip(h, s, pasted[0]).role, 'music', 'paste keeps the role');
+  h.undo();
+  check(model.MARKER_KINDS.includes('beat') && model.ROLES.join() === 'dialogue,music,effects,ambience', 'beat markers and the four roles are in the model');
+
+  // a batch is one undo step; a failing part takes back the others
+  const steps = h.list().filter((x) => x.done).length;
+  const before = h.serialize();
+  const r = step(h, C.batch('Remove Silence', [C.extract(s, f(200), f(250), ['V1', 'A1']), C.extract(s, f(50), f(100), ['V1', 'A1'])]), 'a batch of extracts');
+  eq(lay(h, s), { V1: '0-50:0 50-150:100 150-200:250', V2: '', A1: '0-50:0 50-150:100 150-200:250', A2: '0-50:0 50-150:100 150-500:250' }, 'two ranges removed from the end first: linked and sync-locked tracks follow');
+  eq([h.list().filter((x) => x.done).length, h.list().at(-1).label, r.results.map((x) => x.range.map(fr))], [steps + 1, 'Remove Silence', [[200, 250], [50, 100]]], 'the batch is one step with its label and each result');
+  h.undo();
+  check(h.serialize() === before, 'one undo takes the whole batch back');
+  h.do(C.setTrack(s, 'A2', { locked: true }));
+  h.do(C.batch('Remove Silence', [C.extract(s, f(50), f(100), ['V1', 'A1'])]));
+  eq([lay(h, s).V1, lay(h, s).A2], ['0-50:0 50-250:100', '0-600:0'], 'a locked track keeps its clips through the batch');
+  h.undo();
+  h.do(C.setTrack(s, 'A2', { locked: false }));
+  unchanged(h, () => h.do(C.batch('Edit', [C.addMarker(s, { t: f(10), kind: 'beat' }), C.addMarker(s, { t: f(20), kind: 'nope' })])), undefined, 'a batch whose second part fails');
+  unchanged(h, () => h.do(C.batch('Edit', [C.batch('Edit', [])])), undefined, 'a batch inside a batch');
+  const beats = h.do(C.batch('Add Beat Markers', [10, 25, 40].map((n) => C.addMarker(s, { t: f(n), kind: 'beat', color: 'cyan' }))));
+  eq([h.project.sequences[0].markers.map((x) => [fr(x.t), x.kind]), beats.results.length], [[[10, 'beat'], [25, 'beat'], [40, 'beat']], 3], 'beat markers in one step');
+  h.undo();
+  // a split at several scene cuts, from the last one back, keeps the first part's id
+  const sp = h.do(C.batch('Split at Scene Changes', [f(200), f(100)].map((t) => C.split(s, t, { clipIds: [v] }))));
+  eq([lay(h, s).V1, lay(h, s).A1, clip(h, s, v).start], ['0-100:0 100-200:100 200-300:200', '0-100:0 100-200:100 200-300:200', 0], 'splits at the scene cuts take the linked audio along');
+  eq(sp.results.map((x) => x.ids.length), [2, 2], 'each split made a video and an audio piece');
+} catch (err) {
+  check(false, `automation: ${err.stack}`);
+}
+
+// ---------- panels: history jumps, keyframe interpolation, markers ----------
+try {
+  const { h, s, a } = setup();
+  const start = h.serialize();
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1' });
+  const states = [start, h.serialize()];
+  for (const o of [80, 60, 40]) { h.do(C.setClip(s, v, { props: { opacity: o } })); states.push(h.serialize()); }
+  const reasons = [];
+  h.onChange((r) => reasons.push(r));
+  eq([h.position, h.list().length], [5, 5], 'position counts the steps done');
+  // states[i] is the project after i + 1 steps (the import is the first)
+  check(h.goTo(2) && h.serialize() === states[1] && h.position === 2, 'goTo(2) undoes three steps at once to the state after the second');
+  eq([reasons, h.list().map((x) => x.done)], [['undo'], [true, true, false, false, false]], 'one change event for the jump; the later steps can be redone');
+  check(h.goTo(5) && h.serialize() === states[4], 'goTo forward redoes them all');
+  check(h.goTo(0) && !h.canUndo && h.project.media.length === 0, 'goTo(0) is the start');
+  eq([h.goTo(0), h.goTo(-3), h.position], [false, false, 0], 'goTo the current point (or before the start) does nothing');
+  h.goTo(99);
+  eq([h.position, h.serialize() === states[4]], [5, true], 'goTo past the end stops at the last step');
+  h.goTo(3);
+  h.do(C.setClip(s, v, { name: 'new' }));
+  eq([h.list().length, h.canRedo], [4, false], 'an edit after a jump back drops the steps after it');
+  h.begin('Drag');
+  h.do(C.setClip(s, v, { props: { opacity: 10 } }));
+  check(h.goTo(1) && !h.grouping && h.list().length === 5 && h.list()[4].label === 'Drag', 'goTo during a drag first commits the drag as a step');
+  reasons.length = 0;
+  h.goTo(5);
+  h.begin('Drag');
+  h.do(C.setClip(s, v, { props: { opacity: 20 } }));
+  h.commit();
+  eq(reasons, ['redo', 'do', 'commit'], 'a committed group tells the listeners the list changed');
+
+  // interpolation: hold keeps the value to the next keyframe; bezier through the command keeps its handles
+  h.do(C.setKeyframes(s, v, 'opacity', [{ t: 0, v: 0, ease: 'hold' }, { t: f(30), v: 100, ease: 'linear' }, { t: f(60), v: 50 }]));
+  const ck = () => clip(h, s, v);
+  eq([0, 15, 29, 30, 45].map((n) => kf.propValue(ck(), 'opacity', f(n), 0)), [0, 0, 0, 100, 75], 'a hold keyframe keeps its value until the next one');
+  for (const ease of ['linear', 'easeIn', 'easeOut', 'easeInOut']) {
+    const before = [0.2, 0.5, 0.8].map((u) => kf.valueAt([{ t: 0, v: 0, ease }, { t: 1000, v: 100 }], u * 1000));
+    const after = [0.2, 0.5, 0.8].map((u) => kf.valueAt([{ t: 0, v: 0, ease: 'bezier', h: kf.handles(ease) }, { t: 1000, v: 100 }], u * 1000));
+    check(before.every((x, i) => Math.abs(x - after[i]) < 0.05), `${ease} turned into bezier with handles(${ease}) keeps its values (${S(before.map((x) => +x.toFixed(2)))} vs ${S(after.map((x) => +x.toFixed(2)))})`);
+  }
+  eq([kf.handles('hold'), kf.handles({ ease: 'bezier', h: [0.1, 0.9, 0.2, 1.3] }), kf.handles({ ease: 'bezier' })], [null, [0.1, 0.9, 0.2, 1.3], kf.DEFAULT_HANDLES], 'handles of hold, of a bezier keyframe and of one without handles');
+  const n0 = h.list().length;
+  h.do(C.setKeyframes(s, v, 'opacity', ck().keyframes.opacity.map((k, i) => (i === 1 ? { ...k, ease: 'bezier', h: [0.3, 1.4, 0.6, 1] } : k))));
+  eq([ck().keyframes.opacity[1], h.list().length - n0], [{ t: f(30), v: 100, ease: 'bezier', h: [0.3, 1.4, 0.6, 1] }, 1], 'a bezier keyframe with handles that overshoot is one step');
+  const lowest = Math.min(...[36, 40, 44, 48, 52, 56].map((n) => kf.propValue(ck(), 'opacity', f(n), 0)));
+  check(lowest < 50, `the overshooting handle takes the value past the next keyframe's 50 (${lowest.toFixed(1)})`);
+  unchanged(h, () => h.do(C.setKeyframes(s, v, 'opacity', [{ t: 0, v: 0, ease: 'bezier' }])), undefined, 'a bezier keyframe without handles');
+
+  // markers: clip markers of an older file get their fields; range markers keep a frame-aligned duration
+  const old = JSON.parse(h.serialize());
+  old.sequences[0].clips[0].markers = [{ id: 'mk900', t: f(3) + 7 }];
+  old.sequences[0].markers = [{ id: 'mk901', t: f(5), duration: f(10) + 5 }];
+  const mg = model.migrate(old);
+  eq([mg.sequences[0].clips[0].markers[0], mg.sequences[0].markers[0].duration, model.validate(mg).ok], [{ id: 'mk900', t: f(3), duration: 0, name: '', note: '', kind: 'comment', color: 'green' }, f(10), true], 'migrate fills clip markers and snaps range markers');
+} catch (err) {
+  check(false, `panels: ${err.stack}`);
+}
+
 // ---------- 2,000 random commands ----------
 try {
   let seed = 20261105;
@@ -959,6 +1271,18 @@ try {
         tx2 ? C.removeLayer(sid, tx2.id, layer) : C.setProxy(pick(h.project.media).id, rnd() < 0.5 ? null : { path: `cache:p${int(9)}` }),
         tx2 && rnd() < 0.5 ? C.setGenerator(sid, tx2.id, { layers: [{ text: 'x' }] }) : solids.length ? C.setGenerator(sid, pick(solids).id, { color: '#00ff00' }) : C.setProxy(a, { path: 'cache:a' }),
         cl ? C.setClip(sid, cl.id, { duration: f(1 + int(200)), ripple: rnd() < 0.5 }) : C.addBin('d'),
+        cl ? C.setRole(sid, some(), pick([null, ...model.ROLES]), { linked: rnd() < 0.7 }) : C.addBin('r'),
+        C.batch('Edit', [0, 1, 2].slice(0, 1 + int(3)).map(() => (rnd() < 0.5 ? C.extract(sid, T(), T() + f(1 + int(30)), null) : C.addMarker(sid, { t: T(), kind: 'beat' })))),
+      ]);
+    }
+    if (rnd() < 0.06 && cl) {
+      return pick([
+        C.slip(sid, cl.id, { delta: D(), linked: rnd() < 0.8 }),
+        C.slide(sid, cl.id, { delta: D(), linked: rnd() < 0.8 }),
+        C.stretch(sid, cl.id, { edge: pick(['start', 'end']), delta: D(), linked: rnd() < 0.8 }),
+        C.extendEdit(sid, T(), rnd() < 0.5 ? { clipIds: some() } : { trackIds: rnd() < 0.5 ? null : [pick(tracks)], linked: rnd() < 0.8 }),
+        C.group(sid, some()),
+        C.ungroup(sid, some()),
       ]);
     }
     if (r < 0.1) return C.place(sid, { source: rnd() < 0.85 ? { media: pick([a, a, music, pic, b]) } : { generator: pick(['text', 'solid', 'adjustment']) }, in: T() / 4, out: T(), at: T(), video: rnd() < 0.8 ? pick(vt) : null, audio: rnd() < 0.8 ? pick(at) : null, mode: pick(['insert', 'overwrite']) });

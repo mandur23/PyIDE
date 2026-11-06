@@ -13,6 +13,7 @@ const { withEnvFiles } = require('../dotenv');
 const { workingDir } = require('./run');
 const projectRoots = require('../project-roots');
 const { JvmSession } = require('./debug-jvm');
+const { markExpected } = require('../diagnostics');
 const log = require('../diagnostics').logger('#debugger');
 
 const { stoppedError } = attachTo;
@@ -68,7 +69,9 @@ class DapClient {
       if (msg.success) p.resolve(msg.body || {});
       else {
         log.warn(`DAP ${msg.command} failed: ${msg.body?.error?.format || msg.message || ''}`);
-        p.reject(new Error(msg.body?.error?.format || msg.message || `${msg.command} failed`));
+        // A failed response is the adapter's answer, shown by the renderer (a watch that raises, variables asked for just
+        // after the thread resumed): not an IDE internal error.
+        p.reject(markExpected(new Error(msg.body?.error?.format || msg.message || `${msg.command} failed`)));
       }
     } else if (msg.type === 'event') {
       this.waiters = this.waiters.filter((w) => (w.event === msg.event ? (w.resolve(msg.body || {}), false) : true));
@@ -542,7 +545,8 @@ exports.register = (ctx) => {
   // Breakpoints belong to the whole group: kept for the processes that start later and sent to the others too.
   ipcMain.handle('debug:request', (_e, id, command, args) => {
     const s = sessions.get(id);
-    if (!s) throw new Error('No debug session');
+    // A request racing the session's end (Variables filling in as the program exits) is answered, not an IDE error.
+    if (!s) throw markExpected(new Error('No debug session'));
     if (command === 'setBreakpoints' && !s.remote && args?.source?.path) args = { ...args, source: { ...args.source, path: longPath(args.source.path) } };
     const { group } = s;
     if (command === 'setBreakpoints' && args?.source?.path) group.bps.set(args.source.path.toLowerCase(), args);

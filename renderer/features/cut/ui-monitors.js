@@ -6,7 +6,8 @@
 // Overwrite (',' '.') and handles to drag the clip, or only its video or audio, onto the timeline.
 //
 // Cut.ui.monitors: { source, program }, each { el, player, app, fullscreen() }; program.showTrim({left, right} | null)
-// shows the two frames on either side of an edit point while the timeline trims.
+// shows two sequence frames side by side while the timeline trims (the frames on either side of the edit point), slips
+// (the clip's first and last frame) or slides; program.trimTimes is what it shows.
 (() => {
   const Cut = (globalThis.Cut = globalThis.Cut || {});
   const ui = Cut.ui;
@@ -302,7 +303,20 @@
     m.pause = pause;
     m.seek = seek;
     m.onTime = onTime;
+    // The settings page (ui-settings.js) changes the playback quality and the proxy switch: the monitor follows.
+    const offSettings = ide.on('settingsChanged', (k) => {
+      if (k === `cut.${kind}.quality`) {
+        const q = Number(ide.settings.get(k, 1)) || 1;
+        if (Number(quality.value) !== q) { quality.value = String(q); m.player?.setQuality?.(q); }
+      } else if (k === 'cut.proxy') {
+        const on = !!ide.settings.get('cut.proxy', false);
+        if (proxyBtn.pressed !== on) { proxyBtn.setPressed(on); m.player?.setProxy?.(on); }
+      }
+    });
+    m.proxyButton = proxyBtn;
+    m.qualitySelect = quality;
     m.dispose = () => {
+      offSettings?.();
       ro.disconnect();
       cancelAnimationFrame(raf);
       try { m.player?.destroy?.(); } catch {}
@@ -347,6 +361,8 @@
     let trimComps = null;
     m.showTrim = async (spec) => {
       const tv = root.querySelector('.cut-trim-view');
+      // the sequence times the two frames show (null while hidden)
+      m.trimTimes = spec ? { left: spec.left, right: spec.right } : null;
       if (!spec) { tv.hidden = true; m.frame.hidden = false; return; }
       if (!Cut.compositor?.create || !app.sequence) return;
       tv.hidden = false;
@@ -367,6 +383,8 @@
         spec.right != null && b.comp.render(app.project, app.sequenceId, spec.right, { quality: 0.25 }),
       ]).catch((err) => log.warn(`trim view: ${err?.message || err}`));
     };
+    // The pixels of the two frames ([{px, w, h}] left and right; null before the view was first shown).
+    m.readTrim = async () => (trimComps ? Promise.all(trimComps.map(async ({ canvas, comp }) => ({ px: await comp.readPixels(), w: canvas.width, h: canvas.height }))) : null);
     monitors.program = m;
     // The program monitor's on-canvas handles (ui-overlay.js), when that file is there.
     let overlay = null;

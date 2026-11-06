@@ -2,7 +2,8 @@
 // text, edited in place; a row clicked moves the playhead to its start, and the caption under the playhead is
 // highlighted. Captions are imported from and exported to SRT (the encoding is detected: UTF-8, UTF-16, CP949), and
 // the track's style (font, size, color, background, top or bottom) is set here. Text edits are committed when the
-// field is left or Enter is pressed, never while an IME is composing, so undo never splits a syllable.
+// field is left or Enter is pressed, never while an IME is composing, so undo never splits a syllable. The toolbar
+// also starts Auto Captions (ui-speech.js) and Claude's polish and translation (ui-ai.js).
 //
 // Cut.ui.captions: importFile(app, path), exportFile(app, path), trackOf(app).
 (() => {
@@ -120,7 +121,7 @@
     const alpha = ui.numberField({ value: Math.round((parseInt(bgHex.slice(7, 9) || 'ff', 16) / 255) * 100), min: 0, max: 100, step: 1, precision: 0, unit: '%', cls: 'cut-cap-bg-alpha' });
     const pos = ui.select({ options: [{ value: 'bottom', label: tr('Bottom') }, { value: 'top', label: tr('Top') }], value: s.position, cls: 'cut-cap-pos' });
     const body = el('div', 'cut-form');
-    body.append(ui.row(tr('Font'), font), ui.row(tr('Size'), size), ui.row(tr('Text color'), color), ui.row(tr('Background'), bg), ui.row(tr('Background opacity'), alpha), ui.row(tr('Position'), pos));
+    body.append(ui.row(tr('Font'), font), ui.row(tr('Size at 1080p'), size), ui.row(tr('Text color'), color), ui.row(tr('Background'), bg), ui.row(tr('Background opacity'), alpha), ui.row(tr('Position'), pos));
     ui.dialog({
       title: tr('Caption Style'),
       id: 'cutCaptionStyle',
@@ -146,6 +147,12 @@
       button({ icon: 'download', title: tr('Import SRT…'), cls: 'cut-cap-import', onClick: () => importDialog(app) }),
       button({ icon: 'export', title: tr('Export SRT…'), cls: 'cut-cap-export', onClick: () => exportDialog(app) }),
       button({ icon: 'edit', title: tr('Caption Style…'), cls: 'cut-cap-style', onClick: () => styleDialog(app) }),
+      button({ label: tr('Auto Captions…'), title: tr('Create captions from the speech (on this PC)'), cls: 'cut-cap-auto', onClick: () => Promise.resolve(ui.speech?.autoCaptions(app)).catch((err) => ui.report(err)) }),
+      // Claude (ui-ai.js): polish or translate the shown track
+      button({ label: tr('Claude'), title: tr('Polish or translate the captions with Claude'), cls: 'cut-cap-ai', onClick: (_e, b) => ui.menu(b, [
+        { label: tr('Polish Captions with Claude…'), run: () => Promise.resolve(ui.ai?.polishCaptions(app)).catch((err) => ui.report(err)) },
+        { label: tr('Translate Captions with Claude…'), run: () => Promise.resolve(ui.ai?.translateCaptions(app)).catch((err) => ui.report(err)) },
+      ]) }),
     );
     const list = el('div', 'cut-cap-list');
     const foot = el('div', 'cut-panel-foot');
@@ -214,7 +221,7 @@
       });
       for (const [id, r] of rows) if (!seen.has(id)) { r.el.remove(); rows.delete(id); }
       list.querySelector(':scope > .cut-empty')?.remove();
-      if (!items.length) list.appendChild(el('div', 'cut-empty', tr('No captions. Add one at the playhead, or import an SRT file.')));
+      if (!items.length) list.appendChild(el('div', 'cut-empty', tr('No captions. Add one at the playhead, import an SRT file, or create them from the speech with Auto Captions.')));
       foot.textContent = items.length ? tr('{n} captions', { n: items.length }) : '';
       highlight();
     }

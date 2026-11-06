@@ -52,7 +52,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - `ide.openFile(path, {line, col, focus, group, preview})`. `preview`는 `editor.previewTab` 설정이 켜져 있을 때만 미리보기 탭이 됩니다.
 - 긴 이름은 `ide.util.fileLabel`이 확장자를 남기고 줄입니다. 탭은 `--tab-name-max`(220px)에서 멈춥니다.
 - 창 닫기: 메인(`main/windows.js`)이 저장 안 한 파일(`window:setDirty`)과 실행 중인 프로그램(`window:setBusy`)을 알고, 있으면 `window:confirmClose`를 보냅니다. 렌더러가 대화상자를 띄우고 `window:closeNow`로 닫습니다.
-- 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`.
+- 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`. 작은 수정 모음(Ctrl+Tab, Reopen Closed Tab, 상태 표시줄 선택 크기, 트리 삭제 뒤 선택, 대화상자 버튼 중복 실행, 풍선, Run 터미널 테마, Maven 경로, Find in Files 초기화)은 `verify/code-polish.mjs`입니다.
 
 ### 실행, 디버그, 테스트 (run, debugger, tests)
 

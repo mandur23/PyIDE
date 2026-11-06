@@ -37,6 +37,24 @@ const probe = (cmd, args) => new Promise((resolve) => {
   }
 });
 
+// mvn or gradle where PATH has it, as a full path: cmd.exe looks in the current folder first when the program's
+// environment lacks NoDefaultCurrentDirectoryInExePath (programEnv drops it), so a project's own mvn.cmd would run
+// in place of Maven. Relative PATH entries and the project folder itself are skipped. -> the path, or null.
+function onPath(name, env, cwd) {
+  const key = (o, k) => Object.keys(o).find((x) => x.toLowerCase() === k);
+  const dirs = String(env[key(env, 'path')] ?? process.env[key(process.env, 'path')] ?? '').split(';').map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
+  const exts = String(process.env[key(process.env, 'pathext')] || '.COM;.EXE;.BAT;.CMD').split(';').filter((e) => /^\.(com|exe|bat|cmd)$/i.test(e));
+  const here = path.resolve(cwd).toLowerCase();
+  for (const dir of dirs) {
+    if (!path.isAbsolute(dir) || path.resolve(dir).toLowerCase() === here) continue;
+    for (const ext of exts) {
+      const file = path.join(dir, name + ext.toLowerCase());
+      try { if (fs.statSync(file).isFile()) return file; } catch {}
+    }
+  }
+  return null;
+}
+
 exports.register = ({ ipcMain, startProcess, procs }) => {
   const toolchains = createToolchains({ run: probe });
   let argfiles = 0;
@@ -62,8 +80,15 @@ exports.register = ({ ipcMain, startProcess, procs }) => {
     const goals = sync ? SYNC_GOALS[tool] : spec.goals || '';
     if (!/^[\w:.=,@/+-]+( [\w:.=,@/+-]+)*$/.test(goals.trim())) throw Object.assign(new Error(`Goals or tasks may hold letters, digits and : . = , @ / + - only: ${goals}`), { expected: true });
     const wrapper = tool === 'maven' ? 'mvnw.cmd' : 'gradlew.bat';
-    const program = fs.existsSync(path.join(cwd, wrapper)) ? `.\\${wrapper}` : tool === 'maven' ? 'mvn' : 'gradle';
+    const bare = tool === 'maven' ? 'mvn' : 'gradle';
     const extra = jdk?.home && path.isAbsolute(jdk.home) ? { JAVA_HOME: jdk.home } : {};
+    let program = `.\\${wrapper}`;
+    if (!fs.existsSync(path.join(cwd, wrapper))) {
+      const found = onPath(bare, env, cwd);
+      program = found ? `"${found}"` : bare;
+      // Not on PATH: cmd.exe then says it is not recognized, instead of running a mvn.cmd from the project.
+      if (!found) extra.NoDefaultCurrentDirectoryInExePath = '1';
+    }
     let command = `${program} ${goals.trim()}`;
     let initScript = null;
     const springRun = /(^| )spring-boot:run( |$)/.test(goals.trim());

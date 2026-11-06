@@ -147,6 +147,19 @@
       const r = app.history.do(C.addGenerated(seq.id, { track: target, at: a, duration: Math.max(f, d), name: tr('Text'), source: { generator: 'text', layers: [{ text, position }] } }));
       return r.id;
     },
+    // The interpolations a keyframe's menu offers, in its order.
+    EASES: [['linear', 'Linear'], ['easeIn', 'Ease In'], ['easeOut', 'Ease Out'], ['easeInOut', 'Ease In and Out'], ['bezier', 'Bezier'], ['hold', 'Hold']],
+    // A keyframe list with the keyframes at `times` set to `ease`. One turned into a bezier keyframe gets the handles
+    // that draw its segment as it was (Cut.keyframes.handles), so its motion does not jump.
+    easeList(list, times, ease) {
+      const set = new Set(times);
+      return list.map((k) => {
+        if (!set.has(k.t)) return k;
+        const next = { t: k.t, v: k.v, ease };
+        if (ease === 'bezier') next.h = K.handles(k) || K.DEFAULT_HANDLES.slice();
+        return next;
+      });
+    },
     // A drag of a slider or a field: begin() on press, change(v) while it moves, end() on release: one undo step.
     gesture(app, label) {
       let open = false;
@@ -216,7 +229,11 @@
     trackBackward: svg('<path d="M13 3v10" stroke="currentColor" stroke-width="1.4"/><path d="M10 5.5H4.5M6.5 3.5 4 5.5l2.5 2M10 10.5H4.5M6.5 8.5 4 10.5l2.5 2" stroke="currentColor" stroke-width="1.2"/>'),
     ripple: svg('<path d="M9 2.5H6.5v11H9" stroke="currentColor" stroke-width="1.4"/><path d="M2 8h3M3.5 6.5 2 8l1.5 1.5M11 8h3.5M13 6.5 14.5 8 13 9.5" stroke="currentColor" stroke-width="1.2"/>'),
     roll: svg('<path d="M5.5 2.5h2.5v11H5.5M10.5 2.5H8v11h2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 8h2.5M2.8 6.6 1.5 8l1.3 1.4M12 8h2.5M13.2 6.6 14.5 8l-1.3 1.4" stroke="currentColor" stroke-width="1.1"/>'),
+    rate: svg('<path d="M13.5 2.5v11" stroke="currentColor" stroke-width="1.4"/><path d="M1.5 8h1.6l1.2-2.6 1.6 5.2 1.6-5.2 1.6 5.2 1.2-2.6h1.2" stroke="currentColor" stroke-width="1.1"/>'),
     razor: svg('<path d="M3 13 13 3" stroke="currentColor" stroke-width="1.4"/><path d="M9.5 3.5h3v3" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="11.5" r="1.8" stroke="currentColor"/>'),
+    slip: svg('<rect x="2" y="4" width="12" height="8" rx=".8" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M6.4 6.6 5 8l1.4 1.4M9.6 6.6 11 8l-1.4 1.4" stroke="currentColor" stroke-width="1.1"/>'),
+    slide: svg('<rect x="5.5" y="4" width="5" height="8" rx=".8" stroke="currentColor" stroke-width="1.2"/><path d="M1.2 8h2.8M2.5 6.6 1.2 8l1.3 1.4M12 8h2.8M13.5 6.6 14.8 8l-1.3 1.4" stroke="currentColor" stroke-width="1.1"/>'),
+    pen: svg('<path d="M3 13.2 4 9.4 10.6 2.8l2.6 2.6L6.6 12z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M3 13.2l2.6-2.6" stroke="currentColor" stroke-width="1.1"/><circle cx="7.3" cy="8.7" r=".9" fill="currentColor"/>'),
     hand: svg('<path d="M5 8V3.8a1 1 0 0 1 2 0V7.5M7 7V2.8a1 1 0 0 1 2 0V7M9 7V3.5a1 1 0 0 1 2 0V8M11 8V5.5a1 1 0 0 1 2 0v4C13 12 11.5 14 9 14H8c-1.6 0-2.5-.7-3.4-2L3 9.3a1 1 0 0 1 1.7-1L5 8.8" stroke="currentColor" stroke-width="1.1"/>'),
     zoom: svg('<circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="m10.3 10.3 3.7 3.7M5 7h4M7 5v4" stroke="currentColor" stroke-width="1.3"/>'),
     text: svg('<path d="M3 3.5h10M8 3.5V13M6 13h4" stroke="currentColor" stroke-width="1.5"/>'),
@@ -244,12 +261,16 @@
     { id: 'trackBackward', title: 'Track Select Backward Tool', key: 'Shift+A' },
     { id: 'ripple', title: 'Ripple Edit Tool', key: 'B' },
     { id: 'roll', title: 'Rolling Edit Tool', key: 'N' },
+    { id: 'rate', title: 'Rate Stretch Tool', key: 'R' },
     { id: 'razor', title: 'Razor Tool', key: 'C' },
+    { id: 'slip', title: 'Slip Tool', key: 'Y' },
+    { id: 'slide', title: 'Slide Tool', key: 'U' },
+    { id: 'pen', title: 'Pen Tool', key: 'P' },
     { id: 'hand', title: 'Hand Tool', key: 'H' },
     { id: 'zoom', title: 'Zoom Tool', key: 'Z' },
     { id: 'text', title: 'Type Tool', key: 'T' },
   ];
-  const CURSORS = { razor: 'crosshair', hand: 'grab', zoom: 'zoom-in', text: 'text' };
+  const CURSORS = { razor: 'crosshair', hand: 'grab', zoom: 'zoom-in', text: 'text', pen: 'cell' };
 
   const RULER_H = 30;
   const CAPTION_H = 28;
@@ -269,6 +290,7 @@
     const v = {
       pps: 60, scrollX: 0, scrollY: 0, linked: true,
       hover: null, drag: null, guide: null, gap: null, transition: null, caption: null, drop: null, razorAt: null,
+      overlay: null, // {ranges: [[a, b]], tracks: [ids] | null}: time ranges an automation previews (ui-auto.js)
       tabs: [], perSeq: new Map(),
     };
     const stats = { base: [], top: [], frames: 0, thumbs: 0, waves: 0 };
@@ -551,15 +573,25 @@
         if (major) ctx.fillText(time.timecode(snapT(t), fps()), x + 3, 3);
       }
       ctx.stroke();
-      // markers
+      // markers (beat markers are a thin tick: there are hundreds of them)
+      // A marker being dragged is drawn where it would land.
+      const md = v.markerDrag;
       for (const m of seq.markers) {
-        const x = xOf(m.t);
-        if (x < -20 || x > w + 20) continue;
+        const mt = md?.id === m.id ? md.t : m.t;
+        const mdur = md?.id === m.id ? md.duration : m.duration;
+        const x = xOf(mt);
+        if ((x < -20 && x + pxOf(mdur) < -20) || x > w + 20) continue;
         ctx.fillStyle = MARKER_COLORS[m.color] || MARKER_COLORS.green;
-        if (m.duration > 0) {
+        if (m.kind === 'beat') {
+          ctx.fillRect(Math.round(x) - (m.name ? 1 : 0.5), m.name ? 12 : 16, m.name ? 2 : 1, m.name ? 12 : 8);
+          continue;
+        }
+        if (mdur > 0) {
+          // a range marker: the band and a handle at its end
           ctx.globalAlpha = 0.45;
-          ctx.fillRect(x, 14, pxOf(m.duration), 6);
+          ctx.fillRect(x, 14, pxOf(mdur), 6);
           ctx.globalAlpha = 1;
+          ctx.fillRect(Math.round(x + pxOf(mdur)) - 1, 12, 2, 10);
         }
         ctx.beginPath();
         ctx.moveTo(x - 5, 13);
@@ -882,20 +914,23 @@
       if (showsBand(r) && !offline) {
         const prop = bandProp(kind);
         const list = c.keyframes?.[prop];
+        // An audio clip's line is the level it plays at: its volume with Auto Ducking's dips added.
+        const duck = kind === 'audio' ? c.keyframes?.duck : null;
         ctx.strokeStyle = kind === 'audio' ? '#f2d36b' : '#e8e8e8';
         ctx.globalAlpha = (c.enabled ? 0.85 : 0.35);
         ctx.lineWidth = 1;
         ctx.beginPath();
-        if (list?.length) {
+        if (list?.length || duck?.length) {
           const step = 3;
           for (let x = Math.max(x1, 0); x <= Math.min(x2, w); x += step) {
-            const val = K.valueAt(list, tOf(x) - c.start, 0);
+            const tau = tOf(x) - c.start;
+            const val = (list?.length ? K.valueAt(list, tau, 0) : c.props[prop] ?? 0) + (duck?.length ? K.valueAt(duck, tau, 0) : 0);
             const yy = bandY(prop, val, cy, ch);
             if (x === Math.max(x1, 0)) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
           }
           ctx.stroke();
           ctx.fillStyle = ctx.strokeStyle;
-          for (const k of list) {
+          for (const k of list || []) {
             const kx = xOf(c.start + k.t);
             const ky = bandY(prop, k.v, cy, ch);
             ctx.beginPath();
@@ -936,9 +971,12 @@
         if (room.head <= 0) { ctx.beginPath(); ctx.moveTo(x1, cy); ctx.lineTo(x1 + 6, cy); ctx.lineTo(x1, cy + 6); ctx.closePath(); ctx.fill(); }
         if (room.tail <= 0) { ctx.beginPath(); ctx.moveTo(x2, cy); ctx.lineTo(x2 - 6, cy); ctx.lineTo(x2, cy + 6); ctx.closePath(); ctx.fill(); }
       }
-      ctx.strokeStyle = sel ? colors.selected : 'rgba(0,0,0,0.45)';
+      // a grouped clip has a dashed outline
+      ctx.strokeStyle = sel ? colors.selected : c.group ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.45)';
       ctx.lineWidth = sel ? 2 : 1;
+      if (c.group) ctx.setLineDash([4, 3]);
       ctx.strokeRect(x1 + (sel ? 1 : 0.5), cy + (sel ? 1 : 0.5), cw - (sel ? 2 : 1), ch - (sel ? 2 : 1));
+      ctx.setLineDash([]);
     }
     function drawWave(ctx, c, m, x1, x2, by, bh, w) {
       const p = peaksFor(m);
@@ -1039,6 +1077,24 @@
       if (v.guide != null) {
         ctx.fillStyle = colors.guide;
         ctx.fillRect(Math.round(xOf(v.guide)) - 0.5, 0, 1, h);
+      }
+      // ranges an automation is about to change, over the tracks it names (all of them when none)
+      if (v.overlay?.ranges?.length) {
+        const rows = v.overlay.tracks ? v.overlay.tracks.map((id) => rowOfTrack.get(id)).filter(Boolean) : null;
+        ctx.fillStyle = colors.playhead;
+        for (const [a, b] of v.overlay.ranges) {
+          const x1 = xOf(a);
+          const x2 = xOf(b);
+          if (x2 < 0 || x1 > w) continue;
+          const bw = Math.max(1, x2 - x1);
+          ctx.globalAlpha = 0.28;
+          if (rows) for (const r of rows) ctx.fillRect(x1, r.y - v.scrollY, bw, r.h);
+          else ctx.fillRect(x1, 0, bw, h);
+          ctx.globalAlpha = 0.9;
+          ctx.fillRect(Math.round(x1) - 0.5, 0, 1, h);
+          ctx.fillRect(Math.round(x2) - 0.5, 0, 1, h);
+        }
+        ctx.globalAlpha = 1;
       }
       // the playhead
       const px = xOf(app.t);
@@ -1329,9 +1385,18 @@
 
     // ---------- pointer gestures ----------
     const flash = (text) => ui.toast(text);
-    const CLAMPS = { source: 'Source end', neighbour: 'The next clip is in the way', length: 'A clip is at least one frame long' };
+    const CLAMPS = { source: 'Source end', neighbour: 'The next clip is in the way', length: 'A clip is at least one frame long', speed: 'Speed must be between 1% and 10000%.' };
+    // What a click on c selects: the members of its group and, with linked selection on, what they link to; with Alt
+    // only c.
+    function partnersOf(c, alt = false) {
+      if (alt) return [c.id];
+      const out = new Set([c]);
+      if (c.group) for (const x of seq.clips) if (x.group === c.group) out.add(x);
+      if (v.linked) for (const x of [...out]) for (const l of model.linkedClips(seq, x)) out.add(l);
+      return [...out].map((x) => x.id);
+    }
     function selectClip(c, e) {
-      const group = e.altKey || !v.linked ? [c.id] : [c.id, ...model.linkedClips(seq, c).map((x) => x.id)];
+      const group = partnersOf(c, e.altKey);
       if (e.shiftKey) {
         if (app.selection.has(c.id)) app.select([...app.selection].filter((id) => !group.includes(id)));
         else app.select(group, { add: true });
@@ -1394,6 +1459,14 @@
         if (h.part === 'tstart' || h.part === 'tend') startTransitionDrag(e, h);
         return;
       }
+      if (h.clip && (tool === 'slip' || tool === 'slide')) { selectClip(h.clip, e); startSlipSlide(e, h, tool); return; }
+      if (h.clip && tool === 'pen') {
+        selectClip(h.clip, e);
+        if (h.part === 'kf') startBand(e, h);
+        else startPen(e, h);
+        return;
+      }
+      if (h.clip && tool === 'rate' && (h.part === 'start' || h.part === 'end')) { selectClip(h.clip, e); startStretch(e, h); return; }
       if (h.clip && (h.part === 'kf' || h.part === 'band')) { selectClip(h.clip, e); startBand(e, h); return; }
       if (h.clip && (h.part === 'fadeIn' || h.part === 'fadeOut')) { selectClip(h.clip, e); startFade(e, h); return; }
       if (h.clip && (h.part === 'start' || h.part === 'end')) {
@@ -1468,13 +1541,13 @@
       if (v.pendingSolo) {
         const { clip: c, alt } = v.pendingSolo;
         v.pendingSolo = null;
-        if (!d.moved) app.select(alt || !v.linked ? [c.id] : [c.id, ...model.linkedClips(seq, c).map((x) => x.id)]);
+        if (!d.moved) app.select(partnersOf(c, alt));
       }
       if (v.pendingToggle) {
         const c = v.pendingToggle;
         v.pendingToggle = null;
         if (!d.moved) {
-          const group = e.altKey || !v.linked ? [c.id] : [c.id, ...model.linkedClips(seq, c).map((x) => x.id)];
+          const group = partnersOf(c, e.altKey);
           if (app.selection.has(c.id)) app.select([...app.selection].filter((id) => !group.includes(id)));
           else app.select(group, { add: true });
         }
@@ -1506,7 +1579,10 @@
         invalidateTop();
       }
       let cursor = CURSORS[app.tool] || '';
-      if (['select', 'ripple', 'roll', 'trackForward', 'trackBackward'].includes(app.tool)) {
+      if ((app.tool === 'slip' || app.tool === 'slide') && h.clip) cursor = app.tool === 'slip' ? 'ew-resize' : 'move';
+      else if (app.tool === 'rate' && (h.part === 'start' || h.part === 'end')) cursor = 'col-resize';
+      else if (app.tool === 'pen' && h.part === 'kf') cursor = 'move';
+      else if (['select', 'ripple', 'roll', 'trackForward', 'trackBackward', 'rate'].includes(app.tool)) {
         if (h.part === 'start' || h.part === 'end') cursor = app.tool === 'roll' ? 'col-resize' : 'ew-resize';
         else if (h.part === 'tstart' || h.part === 'tend') cursor = 'ew-resize';
         else if (h.part === 'band') cursor = 'ns-resize';
@@ -1530,10 +1606,7 @@
       for (const r of rows) {
         if (!r.track || r.y + r.h < ya || r.y > yb) continue;
         for (const c of byTrack.get(r.id) || []) {
-          if (c.start < tb && model.clipEnd(c) > ta) {
-            ids.add(c.id);
-            if (v.linked && !d.alt) for (const l of model.linkedClips(seq, c)) ids.add(l.id);
-          }
+          if (c.start < tb && model.clipEnd(c) > ta) for (const id of partnersOf(c, d.alt)) ids.add(id);
         }
       }
       if (ids.size !== app.selection.size || [...ids].some((id) => !app.selection.has(id))) app.select([...ids]);
@@ -1669,6 +1742,130 @@
           if (d.moved) ui.monitors?.program?.showTrim?.(null);
           if (!cancelled && d.clampedSource) flash(tr('Source end'));
         },
+      };
+      v.drag = d;
+      scroller.setPointerCapture(e.pointerId);
+    }
+
+    // Rate Stretch (R) on an edge: live like a trim; the tip shows the speed the clip gets.
+    function startStretch(e, h) {
+      const c = h.clip;
+      const edge = h.part;
+      const linked = !e.altKey;
+      const pos = edge === 'start' ? c.start : model.clipEnd(c);
+      const pts = points(new Set([c.id, ...model.linkedClips(seq, c).map((x) => x.id)]));
+      const { x: x0 } = localXY(e);
+      const sx0 = v.scrollX;
+      const f = frame();
+      const live = liveEdit('Rate Stretch');
+      const seqId = seq.id;
+      const d = {
+        type: 'stretch', moved: false,
+        step(ev) {
+          const p = localXY(ev);
+          if (!d.moved && Math.abs(p.x - x0) < 2) return;
+          d.moved = true;
+          autoScroll(p.x);
+          let delta = Math.round(((p.x + v.scrollX - (x0 + sx0)) / v.pps) * T / f) * f;
+          const s = snapDelta([pos], delta, pts, ui.editing.snapping !== ev.shiftKey);
+          delta = s.delta;
+          v.guide = s.at;
+          const r = live.set(C.stretch(seqId, c.id, { edge, delta, linked }));
+          const speed = clipById(app.sequence, c.id)?.speed ?? c.speed;
+          const why = r?.clamped ? ` — ${tr(CLAMPS[r.clamped] || 'Stopped')}` : r?.error ? ` — ${ui.errorText(r.error)}` : '';
+          showTip(p.x, p.y, `${tr('Rate Stretch')} ${Math.round(speed * 1000) / 10}%${why}`);
+          invalidate();
+        },
+        end(ev, cancelled) { live.finish(!cancelled && d.moved); },
+      };
+      v.drag = d;
+      scroller.setPointerCapture(e.pointerId);
+    }
+
+    // Slip (Y) and Slide (U): a drag inside the clip. Slip shows the clip's new first and last frames in the program
+    // monitor; dragging right shows earlier source, as the content moves with the pointer. Slide shows the frames on
+    // either side of its new start.
+    function startSlipSlide(e, h, tool) {
+      const c = h.clip;
+      const linked = !e.altKey;
+      const { x: x0 } = localXY(e);
+      const sx0 = v.scrollX;
+      const f = frame();
+      const seqId = seq.id;
+      const live = liveEdit(tool === 'slip' ? 'Slip' : 'Slide');
+      // the clip object changes with each try: its place when the drag began
+      const s0 = c.start;
+      const e0 = model.clipEnd(c);
+      const touching = seq.clips.filter((x) => x.track === c.track && (model.clipEnd(x) === s0 || x.start === e0));
+      const pts = points(new Set([c.id, ...model.linkedClips(seq, c).map((x) => x.id), ...touching.map((x) => x.id)]));
+      const d = {
+        type: tool, moved: false,
+        step(ev) {
+          const p = localXY(ev);
+          if (!d.moved && Math.abs(p.x - x0) < 2) return;
+          d.moved = true;
+          autoScroll(p.x);
+          let delta = Math.round(((p.x + v.scrollX - (x0 + sx0)) / v.pps) * T / f) * f;
+          if (tool === 'slide') {
+            const s = snapDelta([s0, e0], delta, pts, ui.editing.snapping !== ev.shiftKey);
+            delta = s.delta;
+            v.guide = s.at;
+          }
+          const r = live.set(tool === 'slip' ? C.slip(seqId, c.id, { delta: -delta, linked }) : C.slide(seqId, c.id, { delta, linked }));
+          const applied = r?.applied ?? 0;
+          if (tool === 'slip') ui.monitors?.program?.showTrim?.({ left: s0, right: e0 - f });
+          else ui.monitors?.program?.showTrim?.({ left: s0 + applied >= f ? s0 + applied - f : null, right: s0 + applied });
+          if (r?.clamped === 'source') d.clampedSource = true;
+          const why = r?.clamped ? ` — ${tr(CLAMPS[r.clamped] || 'Stopped')}` : r?.error ? ` — ${ui.errorText(r.error)}` : '';
+          showTip(p.x, p.y, `${tr(tool === 'slip' ? 'Slip' : 'Slide')} ${fmtDelta(tool === 'slip' ? -applied : applied)}${why}`);
+          invalidate();
+        },
+        end(ev, cancelled) {
+          live.finish(!cancelled && d.moved);
+          if (d.moved) ui.monitors?.program?.showTrim?.(null);
+          if (!cancelled && d.clampedSource) flash(tr('Source end'));
+        },
+      };
+      v.drag = d;
+      scroller.setPointerCapture(e.pointerId);
+    }
+
+    // Pen (P): a click in a clip's keyframe area adds a keyframe of its line (volume, opacity) at that frame: on the
+    // line, the line's value there; above or below it, the value of that height. Dragging on moves the new keyframe.
+    function startPen(e, h) {
+      const c = h.clip;
+      const row = rowOfTrack.get(c.track);
+      const ry = row.y - v.scrollY + 1;
+      if (!showsBand(row) || h.y <= ry + 15) return;
+      const prop = bandProp(row.type);
+      const f = frame();
+      const list = c.keyframes?.[prop] || [];
+      const kt = Math.max(0, Math.min(model.clipDuration(c) - f, Math.round((h.t - c.start) / f) * f));
+      const lineValue = K.propValue(c, prop, kt, c.props[prop]);
+      const val = Math.abs(bandY(prop, lineValue, ry, row.h - 3) - h.y) <= 3 ? lineValue : bandValue(prop, h.y, ry, row.h - 3);
+      const next = K.insert(list, { t: kt, v: val, ease: K.prev(list, kt)?.ease || 'linear' });
+      const kfIndex = next.findIndex((k) => k.t === kt);
+      const seqId = seq.id;
+      const live = liveEdit('Keyframes');
+      live.set(C.setKeyframes(seqId, c.id, prop, next));
+      invalidate();
+      const d = {
+        type: 'pen', moved: false,
+        step(ev) {
+          const p = localXY(ev);
+          if (!d.moved && Math.hypot(p.x - h.x, p.y - h.y) < 3) return;
+          d.moved = true;
+          const lo = kfIndex > 0 ? next[kfIndex - 1].t + f : 0;
+          const hi = kfIndex < next.length - 1 ? next[kfIndex + 1].t - f : model.clipDuration(c) - f;
+          const t2 = Math.max(lo, Math.min(hi, Math.round((tOf(p.x) - c.start) / f) * f));
+          const v2 = bandValue(prop, p.y, ry, row.h - 3);
+          const moved = next.slice();
+          moved[kfIndex] = { ...next[kfIndex], t: t2, v: v2 };
+          live.set(C.setKeyframes(seqId, c.id, prop, moved));
+          showTip(p.x, p.y, prop === 'volume' ? `${v2.toFixed(1)} dB` : `${Math.round(v2)}%`);
+          invalidate();
+        },
+        end(ev, cancelled) { live.finish(!cancelled); invalidate(); },
       };
       v.drag = d;
       scroller.setPointerCapture(e.pointerId);
@@ -1997,8 +2194,8 @@
       app.setFocus('timeline');
       const r = rulerBox.getBoundingClientRect();
       const x = e.clientX - r.left;
-      const mk = markerAt(x, e.clientY - r.top);
-      if (mk) { startMarkerDrag(e, mk, x); return; }
+      const mh = markerHit(x, e.clientY - r.top);
+      if (mh) { startMarkerDrag(e, mh.m, x, mh.part); return; }
       const scrub = (ev) => {
         const px = ev.clientX - r.left;
         let t = snapT(tOf(px));
@@ -2024,23 +2221,47 @@
       rulerBox.addEventListener('pointerup', up);
       rulerBox.addEventListener('lostpointercapture', up);
     }
-    const markerAt = (x, y) => (seq && y >= 10 && y <= 25 ? seq.markers.find((m) => Math.abs(xOf(m.t) - x) <= 6) || null : null);
-    function startMarkerDrag(e, mk, x0) {
+    // The marker under a point of the ruler: its flag ('start'), or the end handle of a range marker ('end'). The
+    // nearest wins; flags before ends.
+    function markerHit(x, y) {
+      if (!seq || y < 10 || y > 25) return null;
+      let best = null;
+      for (const m of seq.markers) {
+        const d = Math.abs(xOf(m.t) - x);
+        if (d <= 6 && (!best || d < best.d)) best = { m, part: 'start', d };
+      }
+      if (best) return best;
+      for (const m of seq.markers) {
+        if (!(m.duration > 0)) continue;
+        const d = Math.abs(xOf(m.t + m.duration) - x);
+        if (d <= 4 && (!best || d < best.d)) best = { m, part: 'end', d };
+      }
+      return best;
+    }
+    const markerAt = (x, y) => markerHit(x, y)?.m || null;
+    // Dragging a marker moves it (a range marker keeps its length); dragging a range marker's end changes its length.
+    // Both snap to frames and, with snapping on, to edit points, the playhead and other markers; one undo step on
+    // release. A click without moving puts the playhead on the marker.
+    function startMarkerDrag(e, mk, x0, part = 'start') {
       const f = frame();
       const target = rulerBox;
       target.setPointerCapture(e.pointerId);
       let moved = false;
       let t = mk.t;
-      const pts = points(null).filter((p) => p !== mk.t);
+      let duration = mk.duration;
+      const own = part === 'end' ? mk.t + mk.duration : mk.t;
+      const pts = points(null).filter((p) => p !== mk.t && p !== mk.t + mk.duration);
       const r = rulerBox.getBoundingClientRect();
       const move = (ev) => {
         const dx = ev.clientX - r.left - x0;
         if (!moved && Math.abs(dx) < 3) return;
         moved = true;
-        let nt = Math.max(0, Math.round((mk.t + (dx / v.pps) * T) / f) * f);
+        let nt = Math.max(0, Math.round((own + (dx / v.pps) * T) / f) * f);
         nt += snapDelta([nt], 0, pts).delta;
-        t = nt;
+        if (part === 'end') { nt = Math.max(mk.t + f, nt); duration = nt - mk.t; } else t = nt;
         v.guide = nt;
+        v.markerDrag = { id: mk.id, t, duration };
+        showTip(ev.clientX - scroller.getBoundingClientRect().left, 4, part === 'end' ? time.timecode(duration, fps()) : time.timecode(nt, fps()));
         invalidate();
       };
       const up = () => {
@@ -2048,8 +2269,11 @@
         target.removeEventListener('pointerup', up);
         target.removeEventListener('lostpointercapture', up);
         v.guide = null;
-        if (moved && t !== mk.t) ui.exec(app, C.setMarker(seq.id, mk.id, { t }));
-        else if (!moved) app.setTime(mk.t);
+        v.markerDrag = null;
+        tip.classList.remove('shown');
+        if (moved && part === 'end' && duration !== mk.duration) ui.exec(app, C.setMarker(seq.id, mk.id, { duration }));
+        else if (moved && part !== 'end' && t !== mk.t) ui.exec(app, C.setMarker(seq.id, mk.id, { t }));
+        else if (!moved) app.setTime(part === 'end' ? mk.t + mk.duration : mk.t);
         invalidate();
       };
       target.addEventListener('pointermove', move);
@@ -2067,35 +2291,24 @@
       if (!seq) return;
       const r = rulerBox.getBoundingClientRect();
       const mk = markerAt(e.clientX - r.left, e.clientY - r.top);
+      const setMk = (patch) => ui.exec(app, C.setMarker(seq.id, mk.id, patch));
       const items = mk ? [
         { label: tr('Edit Marker…'), run: () => editMarker(mk) },
+        { label: tr('Color'), submenu: Object.keys(MARKER_COLORS).map((k) => ({ label: tr(MARKER_NAMES[k]), checked: mk.color === k, run: () => setMk({ color: k }) })) },
+        { label: tr('Type'), submenu: [['comment', 'Comment'], ['chapter', 'Chapter'], ['beat', 'Beat']].map(([k, label]) => ({ label: tr(label), checked: mk.kind === k, run: () => setMk({ kind: k }) })) },
+        { separator: true },
         { label: tr('Remove Marker'), run: () => ui.exec(app, C.removeMarker(seq.id, mk.id)) },
       ] : [
         { label: tr('Add Marker'), run: () => api.addMarker() },
         { separator: true },
+        { label: tr('Lift'), hint: ';', disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('lift') },
+        { label: tr('Extract'), hint: "'", disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('extract') },
         { label: tr('Clear In and Out'), disabled: app.inOut.in == null && app.inOut.out == null, run: () => app.setInOut({ in: null, out: null }) },
       ];
       ui.menu(e.clientX, e.clientY, items);
     });
-    function editMarker(mk) {
-      const name = el('input', 'cut-input', undefined, { type: 'text', value: mk.name });
-      const note = el('textarea', 'cut-input', undefined, { rows: 3 });
-      note.value = mk.note || '';
-      const kind = ui.select({ options: [{ value: 'comment', label: tr('Comment') }, { value: 'chapter', label: tr('Chapter') }], value: mk.kind });
-      const color = ui.select({ options: Object.keys(MARKER_COLORS).map((k) => ({ value: k, label: tr(MARKER_NAMES[k]) })), value: mk.color });
-      const dur = ui.timecodeField({ fps, value: mk.duration || 0 });
-      const body = el('div', 'cut-form');
-      body.append(ui.row(tr('Name'), name), ui.row(tr('Comment'), note), ui.row(tr('Type'), kind), ui.row(tr('Color'), color), ui.row(tr('Duration'), dur));
-      ui.dialog({
-        title: tr('Marker'), body, width: 420,
-        buttons: [
-          { label: tr('OK'), primary: true, run: () => { ui.exec(app, C.setMarker(seq.id, mk.id, { name: name.value, note: note.value, kind: kind.value, color: color.value, duration: dur.value })); } },
-          { label: tr('Delete'), run: () => { ui.exec(app, C.removeMarker(seq.id, mk.id)); } },
-          { label: tr('Cancel') },
-        ],
-      });
-      setTimeout(() => name.focus());
-    }
+    // The marker dialog is the markers panel's (ui-markers.js).
+    const editMarker = (mk) => ui.markers?.edit?.(app, mk.id);
 
     // ---------- context menus on the lanes ----------
     on(scroller, 'contextmenu', (e) => {
@@ -2105,6 +2318,7 @@
       const h = hit(x, y);
       app.setFocus('timeline');
       if (h.transition) { setTransition(h.transition.id); transitionMenu(e, h.transition); return; }
+      if (h.clip && h.part === 'kf') { keyframeMenu(e, h.clip, h.prop, h.kfIndex); return; }
       if (h.clip) {
         if (!app.selection.has(h.clip.id)) selectClip(h.clip, e);
         clipMenu(e, h.clip);
@@ -2116,6 +2330,7 @@
       ui.menu(e.clientX, e.clientY, [
         { label: tr('Close Gap'), disabled: !gap, run: () => api.deleteSelection({ ripple: true }) },
         { label: tr('Paste'), disabled: !clipboard.length, run: () => api.paste() },
+        { label: tr('Paste Insert'), hint: 'Ctrl+Shift+V', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
         { separator: true },
         { label: tr('Add Video Track'), run: () => ui.exec(app, C.addTrack(seq.id, 'video')) },
         { label: tr('Add Audio Track'), run: () => ui.exec(app, C.addTrack(seq.id, 'audio')) },
@@ -2131,11 +2346,14 @@
         { label: tr('Cut'), hint: 'Ctrl+X', run: () => api.cut() },
         { label: tr('Copy'), hint: 'Ctrl+C', run: () => api.copy() },
         { label: tr('Paste'), hint: 'Ctrl+V', disabled: !clipboard.length, run: () => api.paste() },
+        { label: tr('Paste Insert'), hint: 'Ctrl+Shift+V', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
         { label: tr('Clear'), hint: 'Delete', run: () => api.deleteSelection({ ripple: false }) },
         { label: tr('Ripple Delete'), hint: 'Shift+Delete', run: () => api.deleteSelection({ ripple: true }) },
         { separator: true },
         { label: tr('Enable'), checked: c.enabled, hint: 'Shift+E', run: () => api.toggleEnabled() },
         { label: linkedAny ? tr('Unlink') : tr('Link'), hint: 'Ctrl+L', disabled: !linkedAny && clips.length < 2, run: () => api.toggleLink() },
+        { label: tr('Group'), hint: 'Ctrl+G', disabled: clips.length < 2, run: () => api.group() },
+        { label: tr('Ungroup'), hint: 'Ctrl+Shift+G', disabled: !clips.some((x) => x.group), run: () => api.ungroup() },
         { separator: true },
         { label: tr('Speed/Duration…'), hint: 'Ctrl+R', run: () => api.speedDialog() },
         { label: tr('Add Frame Hold'), disabled: kind !== 'video' || !m || m.kind === 'image' || !edit.inClip(app, c), run: () => api.freezeFrame() },
@@ -2145,11 +2363,25 @@
         { label: tr('Label'), submenu: [{ label: tr('None'), checked: !c.label, run: () => setLabel(null) }, ...Object.keys(LABELS).map((k) => ({ label: tr(LABEL_NAMES[k]), checked: c.label === k, run: () => setLabel(k) }))] },
         { separator: true },
         { label: tr('Reveal in Source Monitor'), disabled: !m, run: () => openInSource(c) },
+        { label: tr('Match Frame'), hint: 'F', disabled: !m || !edit.inClip(app, c), run: () => api.matchFrame() },
+        ...(ui.auto ? [{ separator: true }, ...ui.auto.clipMenuItems(app, c)] : []),
       ]);
       function setLabel(label) {
         app.history.begin('Clip Settings');
         try { for (const x of clips) app.history.do(C.setClip(seq.id, x.id, { label })); } catch (err) { ui.report(err); } finally { app.history.commit(); }
       }
+    }
+    // A keyframe of a clip's line: its interpolation, and Delete.
+    function keyframeMenu(e, c, prop, index) {
+      const list = c.keyframes?.[prop] || [];
+      const k = list[index];
+      if (!k) return;
+      const seqId = seq.id;
+      ui.menu(e.clientX, e.clientY, [
+        ...edit.EASES.map(([ease, label]) => ({ label: tr(label), checked: (k.ease || 'linear') === ease, run: () => ui.exec(app, C.setKeyframes(seqId, c.id, prop, edit.easeList(list, [k.t], ease))) })),
+        { separator: true },
+        { label: tr('Delete Keyframe'), run: () => { const left = K.remove(list, k.t); ui.exec(app, C.setKeyframes(seqId, c.id, prop, left.length ? left : null)); } },
+      ]);
     }
     function transitionMenu(e, tr0) {
       ui.menu(e.clientX, e.clientY, [
@@ -2388,6 +2620,78 @@
         const r = c ? ui.exec(app, C.addMarker(seq.id, { t: app.t }, { clipId: c.id })) : ui.exec(app, C.addMarker(seq.id, { t: app.t }));
         return r;
       },
+      // Lift (;) and Extract ('): the sequence In to Out (one point missing: the start or the end) off the targeted
+      // tracks; the playhead goes to the In, which is cleared with the Out.
+      liftRange(kind = 'lift') {
+        if (!seq) return null;
+        const { in: a, out: b } = app.inOut;
+        if (a == null && b == null) { flash(tr('Set an In and an Out point.')); return null; }
+        const tracks = targeted(seq);
+        if (!tracks.length) { flash(tr('Choose a target track.')); return null; }
+        const r = ui.exec(app, (kind === 'extract' ? C.extract : C.lift)(seq.id, a ?? 0, b ?? seqEnd(), tracks));
+        if (r?.range) {
+          app.setInOut({ in: null, out: null });
+          app.setTime(r.range[0]);
+        }
+        return r;
+      },
+      // Alt+Left/Right: the selected clips by n frames, as a drag would move them (overwriting what they land on).
+      nudge(n) {
+        const clips = sel();
+        if (!seq || !clips.length) return null;
+        return ui.exec(app, C.move(seq.id, clips.map((c) => c.id), { delta: n * frame(), linked: false, nudge: true }));
+      },
+      group() {
+        const clips = sel();
+        if (clips.length < 2) { flash(tr('Choose two or more clips to group.')); return null; }
+        return ui.exec(app, C.group(seq.id, clips.map((c) => c.id)));
+      },
+      ungroup() {
+        const clips = sel().filter((c) => c.group);
+        if (!clips.length) { flash(tr('No selected clip is in a group.')); return null; }
+        return ui.exec(app, C.ungroup(seq.id, clips.map((c) => c.id)));
+      },
+      // D: the clips under the playhead on the targeted tracks, with their groups and (linked selection) links.
+      selectAtPlayhead() {
+        if (!seq) return [];
+        const t = app.t;
+        const tracks = targeted(seq);
+        const ids = new Set();
+        for (const c of seq.clips) if (tracks.includes(c.track) && c.start <= t && t < model.clipEnd(c)) for (const id of partnersOf(c)) ids.add(id);
+        app.select([...ids]);
+        v.gap = null;
+        setTransition(null);
+        return [...ids];
+      },
+      // F: the source of the clip under the playhead (the selected one, else the top video clip on the targeted
+      // tracks, else the first one with a source) in the source monitor at the same source frame, its In/Out marked.
+      matchFrame() {
+        if (!seq) return null;
+        const t = app.t;
+        const tracks = targeted(seq);
+        const under = model.clipsAt(seq, t).filter((c) => c.source?.media != null && media.get(c.source.media));
+        const video = (c) => kindOf(seq, c) === 'video';
+        const c = under.find((x) => app.selection.has(x.id)) || under.filter((x) => video(x) && tracks.includes(x.track)).pop()
+          || under.find((x) => tracks.includes(x.track)) || under.filter(video).pop() || under[0];
+        if (!c) { flash(tr('There is no source clip under the playhead.')); return null; }
+        const m = media.get(c.source.media);
+        const image = m.kind === 'image';
+        const st = image ? 0 : model.sourceTime(c, t);
+        app.setSource({ mediaId: m.id, in: image ? null : c.in, out: image ? null : c.out, t: st });
+        ui.showPanel?.('source');
+        ui.monitors?.source?.seek?.(st);
+        return { clipId: c.id, mediaId: m.id, t: st };
+      },
+      // E: the selected clips' edit point nearest the playhead (none selected: the nearest on the targeted tracks)
+      // rolls to the playhead, or its clip end trims there when nothing touches it.
+      extendEdit() {
+        if (!seq) return null;
+        const clips = sel();
+        const opts = clips.length ? { clipIds: clips.map((c) => c.id), linked: v.linked } : { trackIds: targeted(seq), linked: v.linked };
+        const r = ui.exec(app, C.extendEdit(seq.id, app.t, opts));
+        if (r?.clamped) flash(tr(CLAMPS[r.clamped] || 'Stopped'));
+        return r;
+      },
       editPoints() {
         if (!seq) return [];
         const set = new Set([0]);
@@ -2398,6 +2702,8 @@
       placeItems: (items, at, mode) => placeItems(items.map((it) => ({ ...it, tracks: it.tracks || dropTracks(it.row ? rowOfTrack.get(it.row) : null, it) })), at, mode),
       cancelDrag,
       invalidate,
+      get overlay() { return v.overlay; },
+      setOverlay(o) { v.overlay = o?.ranges ? { ranges: o.ranges.map((r) => [r[0], r[1]]), tracks: o.tracks || null } : null; invalidateTop(); },
       dispose() {},
     };
 
@@ -2467,6 +2773,14 @@
     act('cut', () => { api.cut(); }, ['timeline']);
     act('paste', () => { api.paste(); }, ['timeline']);
     act('pasteInsert', () => { api.paste({ insert: true }); }, ['timeline']);
+    act('lift', () => { api.liftRange('lift'); });
+    act('extract', () => { api.liftRange('extract'); });
+    for (const [id, n] of [['nudgeLeft', -1], ['nudgeRight', 1], ['nudgeLeft5', -5], ['nudgeRight5', 5]]) act(id, () => { api.nudge(n); }, ['timeline']);
+    act('group', () => { api.group(); }, ['timeline']);
+    act('ungroup', () => { api.ungroup(); }, ['timeline']);
+    act('selectAtPlayhead', () => { api.selectAtPlayhead(); });
+    act('matchFrame', () => { api.matchFrame(); });
+    act('extendEdit', () => { api.extendEdit(); });
     act('selectAll', () => { api.selectAll(); }, ['timeline']);
     act('deselect', () => { api.deselect(); }, ['timeline']);
     act('zoomIn', () => { api.zoomIn(); }, ['timeline']);
@@ -2504,6 +2818,7 @@
       if (key === 'current') return current;
       if (key === 'LABELS') return LABELS;
       if (key === 'MARKER_COLORS') return MARKER_COLORS;
+      if (key === 'MARKER_NAMES') return MARKER_NAMES;
       if (!current) return typeof key === 'string' && !['then', 'toJSON'].includes(key) ? () => null : undefined;
       return current[key];
     },

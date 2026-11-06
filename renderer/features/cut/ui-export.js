@@ -3,9 +3,11 @@
 // bitrate, keyframe interval, audio bitrate, the range (all or In to Out), captions (burned in, an SRT file beside the
 // video, or both), the loudness target, the file; the estimated size and time; then progress with Cancel, and the
 // result with what the check of the written file found. Export Frame (Ctrl+Shift+E) saves the program frame as PNG,
-// and the chapter markers can be copied as a YouTube chapter list.
+// and the chapter markers can be copied as a YouTube chapter list. Add to Queue hands the same settings, with a copy
+// of the project as it is now, to the export queue (ui-queue.js), which runs one export at a time in the background.
 //
 // Cut.ui.exportDialog: open(app), exportFrame(app), running (the export in progress or null), form(app) -> Form.
+// Cut.ui.syncBusy(): tells the IDE's close question about the exports that run (this one and the queue's).
 (() => {
   const Cut = (globalThis.Cut = globalThis.Cut || {});
   const ui = Cut.ui;
@@ -16,6 +18,13 @@
   const MBPS = 1e6;
   let running = null; // {controller, name, task, promise}
   let hevcOk = null;
+
+  // Closing the window while exports run asks first (window:setBusy, like a running program in the IDE).
+  function syncBusy() {
+    const names = running ? [tr('Export of {name}', { name: running.name })] : [];
+    names.push(...(ui.exportQueue?.busyLabels?.() || []));
+    ide.api.send('window:setBusy', names);
+  }
 
   // HEVC is offered only when this PC has a hardware encoder for it (software HEVC is too slow to be useful).
   async function hevcAvailable() {
@@ -213,36 +222,62 @@
       ui.toast(tr('YouTube chapters copied'));
     }
 
-    // Runs the export with these settings. -> the result, or null when it did not start.
-    async function start() {
-      if (running) { ui.toast(tr('An export is already running.')); return null; }
+    // The checks before an export starts or joins the queue -> {seq, path, resolved, range, captions} or null.
+    async function prepare({ queued = false } = {}) {
       await refresh();
       if (api.problems.length) { ui.toast(tr(api.problems[0])); return null; }
       if (typeof Cut.export?.run !== 'function') { ui.notify(tr('The export engine is not available.'), { kind: 'error' }); return null; }
       const seq = seqOf();
+      const title = queued ? tr('Add to Queue') : tr('Export');
       const offline = seq.clips.some((c) => c.source?.media != null && ui.offline?.has(c.source.media));
-      if (offline && !(await ui.confirm(tr('Some clips use offline media and will export as a red "media offline" picture. Export anyway?'), { title: tr('Export'), ok: tr('Export') }))) return null;
+      if (offline && !(await ui.confirm(tr('Some clips use offline media and will export as a red "media offline" picture. Export anyway?'), { title, ok: title }))) return null;
       const path = pathIn.value.trim();
+      if (ui.exportQueue?.writes?.(path)) { ui.toast(tr('An export in the queue already writes {name}.', { name: ui.basename(path) })); return null; }
       const st = await ide.api.invoke('cut:stat', path).catch(() => null);
-      if (st && !st.missing && !(await ui.confirm(tr('{name} already exists. Replace it?', { name: ui.basename(path) }), { title: tr('Export'), ok: tr('Replace') }))) return null;
+      if (st && !st.missing && !(await ui.confirm(tr('{name} already exists. Replace it?', { name: ui.basename(path) }), { title, ok: tr('Replace') }))) return null;
+      return { seq, path, resolved: resolvedNow(), range: range(), captions: capSel.value === 'none' ? null : capSel.value };
+    }
+    // Adds these settings and a copy of the project as it is now to the export queue. -> the job, or null.
+    async function enqueue() {
+      if (!ui.exportQueue) return null;
+      const job = await prepare({ queued: true });
+      if (!job) return null;
+      const preset = Cut.presets?.get?.(presetSel.value);
+      const added = ui.exportQueue.add({
+        project: JSON.parse(JSON.stringify(app.project)), seqId: job.seq.id, seqName: job.seq.name, fps: [...job.seq.fps],
+        path: job.path, settings: JSON.parse(JSON.stringify(job.resolved)), range: job.range, captions: job.captions,
+        presetName: preset ? tr(preset.name) : presetSel.value,
+      });
+      ui.toast(tr('Added {name} to the export queue', { name: ui.basename(job.path) }));
+      pathTouched = false;
+      refresh();
+      return added;
+    }
+    // Runs the export with these settings. -> the result, or null when it did not start.
+    async function start() {
+      if (running || ui.exportQueue?.busy) { ui.toast(tr('An export is already running.')); return null; }
+      const job = await prepare();
+      if (!job) return null;
+      const { seq, path } = job;
+      if (running || ui.exportQueue?.busy) { ui.toast(tr('An export is already running.')); return null; }
       const controller = new AbortController();
       const name = ui.basename(path);
       const task = ide.tasks?.start({ title: tr('Exporting {name}', { name }), fraction: 0, onCancel: () => controller.abort() });
       const started = performance.now();
       running = { controller, name, task, path };
-      ide.api.send('window:setBusy', [tr('Export of {name}', { name })]);
+      syncBusy();
       root.classList.add('exporting');
       progress.hidden = false;
       result.hidden = true;
       fill.style.width = '0%';
       ptext.textContent = tr('Starting…');
       api.onChange?.();
-      const resolved = resolvedNow();
+      const resolved = job.resolved;
       let r;
       try {
         r = await Cut.export.run({
           project: app.project, seqId: seq.id, path, preset: presetSel.value, overrides: overrides(), settings: resolved,
-          range: range(), captions: capSel.value === 'none' ? null : capSel.value, signal: controller.signal,
+          range: job.range, captions: job.captions, signal: controller.signal,
           onProgress: (p) => {
             const f = typeof p === 'number' ? p : p?.fraction ?? (p?.frame != null && p?.frames ? p.frame / p.frames : null);
             if (f != null) {
@@ -260,13 +295,15 @@
       } finally {
         task?.done();
         running = null;
-        ide.api.send('window:setBusy', []);
+        syncBusy();
         root.classList.remove('exporting');
         progress.hidden = true;
       }
       showResult(r, controller.signal.aborted);
       api.onChange?.();
       app.emit('exported', r);
+      // The queue waits while this export runs.
+      ui.exportQueue?.kick?.();
       return r;
     }
     function showResult(r, aborted) {
@@ -302,7 +339,7 @@
       if (ok) codecSel.setOptions([{ value: 'h264', label: 'H.264' }, { value: 'hevc', label: tr('HEVC (hardware)') }], codecSel.value);
     });
     const api = {
-      el: root, refresh, start, problems: [], onChange: null,
+      el: root, refresh, start, enqueue, problems: [], onChange: null,
       settings: () => ({ seqId: seqOf()?.id, preset: presetSel.value, overrides: overrides(), resolved: resolvedNow(), range: range(), captions: capSel.value, path: pathIn.value }),
       cancel: () => running?.controller.abort(),
       dispose: () => { for (const off of offs) off(); },
@@ -323,21 +360,25 @@
     if (dialogForm) return dialogForm;
     const f = form(app);
     const exportBtn = { label: tr('Export'), primary: true, run: async () => { f.start(); return false; } };
+    const queueBtn = { label: tr('Add to Queue'), run: async () => { f.enqueue(); return false; } };
     const dlg = ui.dialog({
       title: tr('Export Media'),
       id: 'cutExportDialog',
       body: f.el,
       width: 560,
-      onClose: () => { f.dispose(); if (dialogForm === f) dialogForm = null; },
-      buttons: [exportBtn, { label: tr('Cancel Export'), run: () => { f.cancel(); return false; } }, { label: tr('Close') }],
+      onClose: () => { f.dispose(); offQueue?.(); if (dialogForm === f) dialogForm = null; },
+      buttons: [exportBtn, queueBtn, { label: tr('Cancel Export'), run: () => { f.cancel(); return false; } }, { label: tr('Close') }],
     });
-    const [startBtn, cancelBtn] = dlg.el.querySelectorAll('.dialog-buttons button');
+    const [startBtn, addBtn, cancelBtn] = dlg.el.querySelectorAll('.dialog-buttons button');
     startBtn.classList.add('cut-export-start');
+    addBtn.classList.add('cut-export-queue');
     cancelBtn.classList.add('cut-export-cancel');
     f.onChange = () => {
-      startBtn.disabled = !!running;
+      startBtn.disabled = !!running || !!ui.exportQueue?.busy;
+      addBtn.hidden = !ui.exportQueue;
       cancelBtn.hidden = !running;
     };
+    const offQueue = app.on('exportQueue', () => f.onChange?.());
     f.onChange();
     f.dialog = dlg;
     dialogForm = f;
@@ -374,23 +415,26 @@
       const f = form(app, { inline: true });
       const actions = el('div', 'cut-export-actions');
       const go = button({ icon: 'export', label: tr('Export'), cls: 'accent cut-export-start', onClick: () => f.start() });
+      const queue = button({ label: tr('Add to Queue'), cls: 'cut-export-queue', onClick: () => f.enqueue() });
       const cancel = button({ label: tr('Cancel Export'), cls: 'cut-export-cancel', onClick: () => f.cancel() });
       const frameBtn = button({ icon: 'frame', label: tr('Export Frame…'), cls: 'cut-export-frame', action: 'exportFrame', onClick: () => exportFrame(app) });
-      actions.append(go, cancel, frameBtn);
+      actions.append(go, queue, cancel, frameBtn);
       // The settings scroll; the buttons stay in view under them.
       const scroll = el('div', 'cut-export-scroll');
       scroll.appendChild(f.el);
       root.append(scroll, actions);
-      f.onChange = () => { go.disabled = !!running; cancel.hidden = !running; };
+      f.onChange = () => { go.disabled = !!running || !!ui.exportQueue?.busy; queue.hidden = !ui.exportQueue; cancel.hidden = !running; };
       f.onChange();
+      const offQueue = app.on('exportQueue', () => f.onChange?.());
       panelForm = f;
-      return { dispose: () => { f.dispose(); if (panelForm === f) panelForm = null; } };
+      return { dispose: () => { f.dispose(); offQueue(); if (panelForm === f) panelForm = null; } };
     },
   });
   let panelForm = null;
 
+  ui.syncBusy = syncBusy;
   ui.exportDialog = {
-    open, exportFrame, form, chaptersText,
+    open, exportFrame, form, chaptersText, formatSeconds,
     get running() { return running; },
     get dialogForm() { return dialogForm; },
     get panelForm() { return panelForm; },

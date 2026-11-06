@@ -2,10 +2,14 @@
 // (name, duration, size, frame rate, codec, uses) or as thumbnails that show the frame under the pointer (hover
 // scrub). Import by the dialog, a whole folder (its subfolders become bins) or a drop from Explorer; files that cannot
 // be used are listed with the reason. Media whose file moved is offline: it shows so, and the relink dialog finds the
-// files again in a folder by name and size. New Sequence and new text and color items are here too.
+// files again in a folder by name and size (or by name and duration when the size changed). New Sequence and new text
+// and color items are here too. The More menu: Select Unused (media no sequence uses, shown across the bins), Remove
+// Unused (one undo step, after a list of what goes), Find Missing Media (checks every file, then the relink dialog),
+// and the proxies of the selected media (ui-proxy.js), whose state each item shows.
 //
 // Cut.ui.media: importDialog(app), importFolder(app), importPaths(app, paths, {binId}), checkOffline(app),
-// relinkDialog(app), offline (Set of media ids), matchSequence(app, mediaId) -> Promise<bool>, describe(media).
+// relinkDialog(app), offline (Set of media ids), matchSequence(app, mediaId) -> Promise<bool>, describe(media),
+// unusedIds(project), removeUnused(app), findMissing(app), selected() and selectUnused() (while the panel is mounted).
 (() => {
   const Cut = (globalThis.Cut = globalThis.Cut || {});
   const ui = Cut.ui;
@@ -132,6 +136,7 @@
     if (failed.length) showImportErrors(failed);
     else if (made.length) ui.toast(tr('{n} files imported', { n: made.length }));
     for (const id of made) prefetch(app, id);
+    if (made.length) ui.proxy?.offer?.(app, made)?.catch?.((err) => log.warn(`proxy offer: ${err?.message || err}`));
     return made;
   }
   function showImportErrors(failed) {
@@ -224,6 +229,28 @@
     if (old) Cut.media?.forget?.(old);
     return true;
   }
+  // Offline media -> {paths: Map(media id -> path)} found under a folder: the same file name and size, else the same
+  // name and a duration within a frame (a file saved again, or copied by a tool that changed its size).
+  async function findInFolder(folder, list) {
+    const named = (m) => ui.basename(m.path);
+    const exact = await ide.api.invoke('cut:findMedia', folder, list.map((m) => ({ name: named(m), size: m.size })));
+    if (!exact || exact.error) return { error: exact?.error || exact || 'error' };
+    const paths = new Map();
+    for (const m of list) if (exact[named(m)]) paths.set(m.id, exact[named(m)]);
+    const rest = list.filter((m) => !paths.has(m.id) && m.kind !== 'image');
+    if (!rest.length) return { paths };
+    const loose = await ide.api.invoke('cut:findMedia', folder, rest.map((m) => ({ name: named(m) })));
+    if (!loose || loose.error) return { paths };
+    for (const m of rest) {
+      const p = loose[named(m)];
+      if (!p) continue;
+      const [probed] = await probeAll([p]).catch(() => []);
+      const d = probed?.media?.duration;
+      const frame = m.video?.fps ? Cut.time.frameTicks(Cut.model.validFps(m.video.fps) ? m.video.fps : nearestRate(m.video.fps)) : Cut.time.TICKS / 100;
+      if (Number.isFinite(d) && Math.abs(d - m.duration) <= frame) paths.set(m.id, p);
+    }
+    return { paths };
+  }
   function relinkDialog(app) {
     const project = app.project;
     const missing = project.media.filter((m) => offline.has(m.id));
@@ -260,15 +287,15 @@
         { label: tr('Find in Folder…'), primary: true, run: async () => {
           const folder = await ide.api.invoke('cut:pickFolder', { title: tr('Find Media in Folder') });
           if (!folder) return false;
-          const wanted = missing.filter((m) => offline.has(m.id)).map((m) => ({ name: ui.basename(m.path), size: m.size }));
           status.textContent = tr('Searching…');
-          const found = await ide.api.invoke('cut:findMedia', folder, wanted);
+          const found = await findInFolder(folder, missing.filter((m) => offline.has(m.id)));
           let n = 0;
-          if (found && !found.error) {
+          if (found.error) status.textContent = tr('The folder could not be searched: {error}', { error: found.error.message || found.error.code || String(found.error) });
+          else {
             app.history.begin(tr('Relink Media'));
             try {
               for (const m of missing) {
-                const p = found[ui.basename(m.path)];
+                const p = found.paths.get(m.id);
                 if (p && offline.has(m.id) && await relinkTo(app, m.id, p)) n += 1;
               }
             } finally { app.history.commit(); }
@@ -283,6 +310,50 @@
     });
     return dlg;
   }
+
+  // ---------- unused and missing media ----------
+  // Media no clip of any sequence uses.
+  const unusedIds = (project) => (project?.media || []).filter((m) => !project.sequences.some((s) => s.clips.some((c) => c.source?.media === m.id))).map((m) => m.id);
+  function removeUnused(app) {
+    const ids = unusedIds(app.project);
+    if (!ids.length) { ui.toast(tr('There is no unused media.')); return null; }
+    const body = el('div', 'cut-remove-unused');
+    body.appendChild(el('div', 'dialog-message', tr('Remove these {n} media items that no sequence uses from the project? The files stay where they are.', { n: ids.length })));
+    const list = el('ul', 'cut-remove-unused-list');
+    for (const id of ids) {
+      const m = app.project.media.find((x) => x.id === id);
+      const li = el('li', null, m.name);
+      li.dataset.userText = '';
+      li.dataset.media = m.id;
+      li.title = m.path;
+      list.appendChild(li);
+    }
+    body.appendChild(list);
+    return ui.dialog({
+      title: tr('Remove Unused Media'),
+      id: 'cutRemoveUnused',
+      body,
+      width: 480,
+      buttons: [
+        { label: tr('Remove'), primary: true, run: () => {
+          // Checked again: an edit may have used one since the list was made.
+          const now = new Set(unusedIds(app.project));
+          const gone = ids.filter((id) => now.has(id));
+          if (gone.length && ui.exec(app, Cut.commands.removeMedia(gone))) ui.toast(tr('{n} unused media items removed', { n: gone.length }));
+        } },
+        { label: tr('Cancel') },
+      ],
+    });
+  }
+  // Every media file is checked again; the offline ones go to the relink dialog.
+  async function findMissing(app) {
+    const ids = await checkOffline(app, { ask: false });
+    if (!ids.length) { ui.toast(tr('No media is missing.')); return null; }
+    return relinkDialog(app);
+  }
+  ui.onAction('selectUnused', () => { ui.showPanel('project'); ui.media.selectUnused?.(); });
+  ui.onAction('removeUnused', ({ app }) => { removeUnused(app); });
+  ui.onAction('findMissing', ({ app }) => { findMissing(app); });
 
   // ---------- sequences that follow their first clip ----------
   // Placing a clip whose size or frame rate differ: an empty sequence takes the clip's settings, a sequence with clips
@@ -352,25 +423,28 @@
     root.classList.add('cut-project');
     let view = ide.settings.get(settingKey, 'grid') === 'list' ? 'list' : 'grid';
     let query = '';
+    let filter = null; // 'unused': the unused media of the whole project
     const selected = new Set();
     let anchor = null;
 
     // toolbar: made once (the search field keeps its text and caret), the list below is redrawn
     const bar = el('div', 'cut-panel-toolbar');
     const search = el('input', 'cut-search', undefined, { type: 'search', placeholder: tr('Search'), spellcheck: 'false' });
-    search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); draw(); });
+    search.addEventListener('input', () => { query = search.value.trim().toLowerCase(); filter = null; draw(); });
     const listBtn = button({ icon: 'list', title: tr('List View'), toggle: true, pressed: view === 'list', cls: 'cut-view-list', onClick: () => setView('list') });
     const gridBtn = button({ icon: 'grid', title: tr('Icon View'), toggle: true, pressed: view === 'grid', cls: 'cut-view-grid', onClick: () => setView('grid') });
     const newBtn = button({ icon: 'add', title: tr('New Item'), cls: 'cut-new-item', onClick: () => ui.menu(newBtn, newItems()) });
+    const moreBtn = button({ icon: 'more', title: tr('More'), cls: 'cut-project-more', onClick: () => { const m = ui.menu(moreBtn, moreItems()); if (m) m.id = 'cutProjectMore'; } });
     bar.append(
       button({ icon: 'download', title: tr('Import Media…'), cls: 'cut-import', onClick: () => importDialog(app) }),
       button({ icon: 'bin', title: tr('New Bin'), cls: 'cut-new-bin', onClick: () => newBin() }),
-      newBtn, search, listBtn, gridBtn,
+      newBtn, search, listBtn, gridBtn, moreBtn,
     );
+    const offerSlot = el('div', 'cut-proxy-offer-slot');
     const crumbs = el('div', 'cut-crumbs');
     const items = el('div', 'cut-items', undefined, { tabindex: 0 });
     const foot = el('div', 'cut-panel-foot');
-    root.append(bar, crumbs, items, foot);
+    root.append(bar, offerSlot, crumbs, items, foot);
 
     function setView(v) {
       view = v;
@@ -388,6 +462,29 @@
       { separator: true },
       { label: tr('Import Folder…'), icon: 'folder', run: () => importFolder(app) },
     ];
+    const selectedMedia = () => [...selected].filter((id) => app.project.media.some((m) => m.id === id));
+    const moreItems = () => {
+      const media = selectedMedia().map((id) => app.project.media.find((m) => m.id === id));
+      const video = media.filter((m) => m.kind === 'video');
+      return [
+        { label: tr('Select Unused Media'), hint: ide.keymap.hint('Cut.selectUnused'), run: () => selectUnused() },
+        { label: tr('Remove Unused Media…'), hint: ide.keymap.hint('Cut.removeUnused'), run: () => removeUnused(app) },
+        { label: tr('Find Missing Media…'), hint: ide.keymap.hint('Cut.findMissing'), run: () => findMissing(app) },
+        { separator: true },
+        { label: tr('Create Proxy'), disabled: !video.length, run: () => ui.proxy?.create(app, video.map((m) => m.id)) },
+        { label: tr('Remove Proxy'), disabled: !media.some((m) => m.proxy), run: () => ui.proxy?.remove(app, media.map((m) => m.id)) },
+      ];
+    };
+    function selectUnused() {
+      filter = 'unused';
+      query = '';
+      search.value = '';
+      selected.clear();
+      for (const id of unusedIds(app.project)) selected.add(id);
+      anchor = [...selected][0] || null;
+      draw();
+      if (!selected.size) ui.toast(tr('There is no unused media.'));
+    }
     function newBin() {
       const r = ui.exec(app, Cut.commands.addBin(tr('Bin'), currentBin));
       if (r?.id) { draw(); rename(r.id); }
@@ -399,6 +496,10 @@
     function entries() {
       const p = app.project;
       if (!p) return [];
+      if (filter === 'unused') {
+        const ids = new Set(unusedIds(p));
+        return p.media.filter((m) => ids.has(m.id)).map((m) => ({ kind: 'media', id: m.id, name: m.name, item: m }));
+      }
       const all = [
         ...p.bins.map((b) => ({ kind: 'bin', id: b.id, name: b.name, item: b })),
         ...p.media.map((m) => ({ kind: 'media', id: m.id, name: m.name, item: m })),
@@ -430,8 +531,13 @@
       };
       crumbs.appendChild(crumb(tr('Project'), null));
       for (const b of chain) { crumbs.appendChild(el('span', 'cut-crumb-sep', '›')); const c = crumb(b.name, b.id); c.dataset.userText = ''; crumbs.appendChild(c); }
-      crumbs.hidden = !chain.length && !query;
+      crumbs.hidden = !chain.length && !query && !filter;
       if (query) crumbs.replaceChildren(el('span', 'cut-crumb-search', tr('Results in the whole project')));
+      if (filter === 'unused') {
+        const all = el('button', 'cut-crumb cut-crumb-all', tr('Show All'), { type: 'button' });
+        all.addEventListener('click', () => { filter = null; draw(); });
+        crumbs.replaceChildren(el('span', 'cut-crumb-search', tr('Unused media in the whole project')), all);
+      }
     }
 
     // Every redraw makes new rows, so the drop targets of the old ones go first. A name being typed holds redraws
@@ -452,9 +558,10 @@
       for (const id of [...selected]) if (!list.some((e) => e.id === id)) selected.delete(id);
       items.className = `cut-items ${view}`;
       items.replaceChildren();
+      offerSlot.replaceChildren(...[ui.proxy?.offerBanner?.(app)].filter(Boolean));
       if (view === 'list') items.appendChild(header());
       for (const e of list) items.appendChild(view === 'list' ? listRow(e) : card(e));
-      if (!list.length) items.appendChild(el('div', 'cut-empty', query ? tr('Nothing matches.') : tr('Import media to start: drop files here or use Import.')));
+      if (!list.length) items.appendChild(el('div', 'cut-empty', filter === 'unused' ? tr('Every media item is used.') : query ? tr('Nothing matches.') : tr('Import media to start: drop files here or use Import.')));
       foot.textContent = tr('{n} items', { n: list.length }) + (offline.size ? ` · ${tr('{n} offline', { n: offline.size })}` : '');
     }
     function header() {
@@ -490,7 +597,21 @@
       const n = el('span', 'cut-item-name', e.name);
       n.dataset.userText = '';
       c.appendChild(n);
+      if (e.kind === 'media') {
+        const p = ui.proxy?.state?.(e.item);
+        if (p && p.state !== 'none') c.appendChild(proxyBadge(p));
+      }
       return c;
+    }
+    const PROXY_TEXT = {
+      waiting: () => tr('Proxy queued'), running: (p) => tr('Making proxy {pct}%', { pct: Math.floor(p.fraction * 100) }), paused: () => tr('Proxy waits while playing'),
+      ready: () => tr('Has a proxy'), missing: () => tr('Proxy file missing: the original plays'), failed: (p) => tr('The proxy could not be made: {error}', { error: tr(String(p.error || '')) }),
+    };
+    function proxyBadge(p) {
+      const label = p.state === 'running' ? `P ${Math.floor(p.fraction * 100)}%` : 'P';
+      const b = el('span', 'cut-proxy-badge', label, { 'data-state': p.state });
+      b.title = (PROXY_TEXT[p.state] || (() => ''))(p);
+      return b;
     }
     function listRow(e) {
       const r = el('div', 'cut-item-row');
@@ -637,6 +758,13 @@
       if (e.kind === 'media') {
         list.push({ label: tr('Open in Source Monitor'), run: () => openEntry(e) });
         if (offline.has(e.id)) list.push({ label: tr('Relink Media…'), run: () => relinkDialog(app) });
+        if (e.item.kind === 'video' && ui.proxy) {
+          const st = ui.proxy.state(e.item).state;
+          const ids = selected.has(e.id) ? selectedMedia() : [e.id];
+          if (st === 'waiting' || st === 'running' || st === 'paused') list.push({ label: tr('Cancel Proxy'), run: () => { for (const id of ids) ui.proxy.cancel(id); } });
+          else list.push({ label: e.item.proxy ? tr('Create Proxy Again') : tr('Create Proxy'), run: () => { if (e.item.proxy) ui.proxy.remove(app, ids); ui.proxy.create(app, ids); } });
+          if (e.item.proxy) list.push({ label: tr('Remove Proxy'), run: () => ui.proxy.remove(app, ids) });
+        }
         list.push({ label: tr('Reveal in Explorer'), run: () => ide.api.invoke('cut:reveal', e.item.path) });
         list.push({ label: tr('New Sequence from Clip'), run: () => sequenceFromClip(app, e.item) });
       }
@@ -708,10 +836,14 @@
       app.on('project', later),
       app.on('offline', later),
       app.on('sequence', later),
+      app.on('proxies', later),
     ];
     draw();
     ui.media.select = (ids) => { selected.clear(); for (const id of ids) selected.add(id); draw(); };
     ui.media.visibleItems = () => entries().map((e) => e.id);
+    ui.media.selected = () => selectedMedia();
+    ui.media.selectUnused = () => selectUnused();
+    ui.media.filter = () => filter;
     return { dispose: () => { for (const off of offs) off(); clearTargets(); }, focus: () => items.focus({ preventScroll: true }) };
   }
 
@@ -803,7 +935,8 @@
   }
 
   ui.offline = offline;
-  ui.media = { importDialog, importFolder, importFolderPath, importPaths, importDropped, checkOffline, relinkDialog, relinkTo, offline, matchSequence, describe, probeFile, newSequenceDialog };
+  ui.media = { importDialog, importFolder, importFolderPath, importPaths, importDropped, checkOffline, relinkDialog, relinkTo, findInFolder, offline, matchSequence, describe, probeFile, newSequenceDialog,
+    unusedIds, removeUnused, findMissing };
   // Opening a project looks for its files; a new one has none.
   ui.registerPanel('project', { title: () => tr('Project'), mount });
 })();

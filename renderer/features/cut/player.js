@@ -183,7 +183,7 @@
         if (Math.abs(ts - lastPrefetch) > time.TICKS / 2 && mode === 'program' && comp) {
           lastPrefetch = ts;
           const seq = sequence();
-          if (seq) comp.prefetch(project(), seq.id, ts, ts + 2 * time.TICKS * Math.sign(rate) * Math.max(1, Math.abs(rate)));
+          if (seq) comp.prefetch(project(), seq.id, ts, ts + 2 * time.TICKS * Math.sign(rate) * Math.max(1, Math.abs(rate)), { proxy: player.proxy });
         }
       }
       if (stop) { player.pause(); return; }
@@ -194,6 +194,8 @@
       proxy: !!opts.proxy,
       ready: null,
       get compositor() { return comp; },
+      // the audio engine heard while playing (the meters read it), or null
+      get audio() { return audio; },
       get playing() { return playing; },
       get rate() { return rate; },
       get quality() { return quality; },

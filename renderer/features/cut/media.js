@@ -205,15 +205,42 @@
     return p;
   }
 
-  // The media entry of a project opened (the proxy file with { proxy: true } when it has one).
+  // The media entry of a project opened (the proxy file with { proxy: true } when it has one). A proxy that cannot be
+  // opened (its file is gone: the cache was cleared or it was deleted) opens the original instead, so the clip plays
+  // from the original rather than showing offline; proxyMissing(path) then tells the panels.
+  // An open proxy is read from memory blocks: whether its file is still there is asked again every PROXY_CHECK_MS.
+  const missingProxies = new Set();
+  // The panels learn that a proxy went missing or came back (the app's 'proxies' event).
+  const proxyChanged = (path) => { try { globalThis.Cut?.app?.emit?.('proxies', { path }); } catch {} };
+  const PROXY_CHECK_MS = 2000;
+  const proxyChecks = new Map(); // path -> {at, there: Promise<boolean>}
+  function proxyThere(path) {
+    const hit = proxyChecks.get(path);
+    if (hit && Date.now() - hit.at < PROXY_CHECK_MS) return hit.there;
+    const there = stat(path).then((s) => !s.missing && !!s.isFile, () => false);
+    proxyChecks.set(path, { at: Date.now(), there });
+    if (proxyChecks.size > 256) proxyChecks.delete(proxyChecks.keys().next().value);
+    return there;
+  }
   function open(project, mediaId, { proxy = false } = {}) {
     const m = project.media.find((x) => x.id === mediaId);
     if (!m) return Promise.resolve({ path: null, error: { code: 'notFound', detail: `no media ${mediaId}` }, video: null, audio: null, image: null });
-    const path = proxy && m.proxy?.path ? m.proxy.path : m.path;
-    return openPath(path, path === m.path ? { size: m.size, mtime: m.mtime } : {}).then((o) => ({ ...o, mediaId, media: m, proxy: path !== m.path }));
+    const original = () => openPath(m.path, { size: m.size, mtime: m.mtime }).then((o) => ({ ...o, mediaId, media: m, proxy: false }));
+    if (!proxy || !m.proxy?.path) return original();
+    const p = m.proxy.path;
+    return proxyThere(p).then((there) => (there ? openPath(p) : null)).then((o) => {
+      if (!o || o.error || !o.video) {
+        if (!o) forget(p);
+        if (!missingProxies.has(p)) { missingProxies.add(p); proxyChanged(p); }
+        return original();
+      }
+      if (missingProxies.delete(p)) proxyChanged(p);
+      return { ...o, mediaId, media: m, proxy: true };
+    });
   }
   // Drops cached opens of a path (all of them without one), after a relink or when the file was replaced.
   function forget(path) {
+    if (path) proxyChecks.delete(path); else proxyChecks.clear();
     for (const [k, p] of [...opened]) {
       if (path && !k.startsWith(`${path}|`)) continue;
       opened.delete(k);
@@ -253,5 +280,5 @@
     return out;
   }
 
-  return { reader, ipcReader, stat, open, openPath, forget, importFiles, videoConfig, audioConfig, shownSize, usable };
+  return { reader, ipcReader, stat, open, openPath, forget, importFiles, videoConfig, audioConfig, shownSize, usable, proxyMissing: (path) => missingProxies.has(path) };
 });
