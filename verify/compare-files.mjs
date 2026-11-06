@@ -63,11 +63,15 @@ try {
 
   // ---------- two files from the project tree ----------
   await js(`ide.refreshTree().then(() => true)`);
-  await until(`!!document.querySelector('#tree .node') && [...document.querySelectorAll('#tree .node .name')].some(n => n.textContent === 'b.py')`, 'tree rows');
+  // Every file written above has its row: a watcher refresh for big.txt landing later redraws the tree between the
+  // two clicks below (CI: the Ctrl+click on b.py was lost).
+  await until(`(() => { const names = [...document.querySelectorAll('#tree .node .name')].map(n => n.textContent); return ['a.py', 'b.py', 'big.txt', 'one.bin', 'two.bin', 'three.bin'].every(f => names.includes(f)); })()`, 'tree rows');
   const a = await rowBox('a.py');
-  const b = await rowBox('b.py');
   await mouse(a.x, a.y);
+  await until(`JSON.stringify(ide.selectedTreeEntries().map(e => e.name)) === '["a.py"]'`, 'a.py selected').catch(() => {});
+  const b = await rowBox('b.py');
   await mouse(b.x, b.y, { modifiers: 2 });
+  await until(`ide.selectedTreeEntries().length === 2`, 'two files selected').catch(() => {});
   const sel = await js(`ide.selectedTreeEntries().map(e => e.name)`);
   check(S(sel) === S(['a.py', 'b.py']) && (await js(`document.querySelectorAll('#tree .node.selected').length`)) === 2, `Ctrl+click selects a second file (${S(sel)})`);
   await js(`(() => { const n = [...document.querySelectorAll('#tree .node')].find(n => n.querySelector('.name')?.textContent === 'b.py'); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); return true; })()`);
