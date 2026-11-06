@@ -17,7 +17,11 @@
 //   does not reach a queued job), move up, cancel, retry and remove, survive workspace switches, and closing the window
 //   while one runs asks first;
 // - screenshots in the dark and the light theme (verify/out/cut-tools/*.png).
-// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,settings,media,proxy,queue,shots)
+// - drop: files and a folder dragged from Explorer onto the timeline are imported (a file already in the project is
+//   used again) and placed where dropped, Ctrl inserting, one undo step, never opened in the code editor;
+// - speed: the clip menu's Speed submenu (quick speeds, Reverse, disabled for a still) and the Speed section of Effect
+//   Controls (typed speed, Reverse, Reset), later clips moving along;
+// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,settings,media,proxy,queue,drop,speed,shots)
 import fs from 'fs';
 import path from 'path';
 import { launch, tempDir, menuRow } from './lib.mjs';
@@ -600,6 +604,140 @@ await section('queue', async () => {
   await until(`!!document.querySelector('#cutExportDialog .cut-export-queue')`, 'the dialog');
   check(await js(`__ct.visible('#cutExportDialog .cut-export-queue')`), 'the export dialog has Add to Queue next to Export');
   await clickSel('#cutExportDialog .dialog-buttons button:last-child');
+});
+
+// ---------- files dropped from Explorer on the timeline ----------
+await section('drop', async () => {
+  await workspace('editing');
+  const dir = path.join(home, 'drop');
+  const sub = path.join(dir, 'folder');
+  fs.mkdirSync(sub, { recursive: true });
+  const file = (n) => path.join(dir, n);
+  for (const [f, secs] of [[file('a.mp4'), 3], [file('b.mp4'), 2], [path.join(sub, 'c.mp4'), 1]]) {
+    const r = await js(`__ct.write(${S(f)}, { seconds: ${secs}, fps: [30, 1], w: 320, h: 180, keyEvery: 1 })`);
+    if (r !== 'ok') throw new Error(`testsrc ${f}: ${r}`);
+  }
+  await js(`__ct.fresh({})`);
+  const tabs = await js('ide.tabs.length');
+  const point = (t, track) => js(`Cut.ui.timeline.clientPoint(${t * T}, ${S(track)})`);
+  const dragEvent = async (type, files, p, modifiers = 0) => cdp('Input.dispatchDragEvent', { type, x: p.x, y: p.y, modifiers, data: { items: [], files, dragOperationsMask: 1 } });
+  const drop = async (files, t, track, modifiers = 0) => {
+    const p = await point(t, track);
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await dragEvent(type, files, p, modifiers);
+  };
+  const clips = () => js(`__ct.seq().clips.map((c) => ({ track: c.track, start: Math.round(c.start / ${T} * 100) / 100, end: Math.round(Cut.model.clipEnd(c) / ${T} * 100) / 100, media: Cut.app.project.media.find((m) => m.id === c.source.media)?.name })).sort((a, b) => a.track.localeCompare(b.track) || a.start - b.start)`);
+
+  const two = [file('a.mp4'), file('b.mp4')];
+  const p2 = await point(2, 'V1');
+  await dragEvent('dragEnter', two, p2);
+  await dragEvent('dragOver', two, p2);
+  const guide = await js('Cut.ui.timeline.view.guide');
+  check(guide != null && Math.abs(guide / T - 2) < 0.05, `dragging files over the timeline shows where they go (${guide == null ? null : guide / T} s)`);
+  await dragEvent('drop', two, p2);
+  await until(`__ct.seq().clips.length === 4`, 'the dropped files placed', 20000);
+  let cl = await clips();
+  const v1 = cl.filter((c) => c.track === 'V1');
+  const a1 = cl.filter((c) => c.track === 'A1');
+  check(S(v1) === S([{ track: 'V1', start: 2, end: 5, media: 'a.mp4' }, { track: 'V1', start: 5, end: 7, media: 'b.mp4' }]),
+    `two files dropped on V1 at 2 s are imported and placed there one after the other (${S(v1)})`);
+  check(a1.length === 2 && a1[0].start === 2 && a1[1].start === 5, `their sound goes on A1 under them (${S(a1)})`);
+  check(await js(`Cut.app.project.media.length === 2 && ide.tabs.length === ${tabs} && Cut.app.selection.size === 4`), 'the files are in the project, selected on the timeline, and not opened in the code editor');
+  check(await js(`Cut.ui.timeline.view.guide == null`), 'the drop guide goes after the drop');
+
+  // Ctrl inserts; a file already in the project is used again, not imported twice
+  await drop([file('a.mp4')], 0, 'V1', 2);
+  await until(`__ct.seq().clips.length === 6`, 'the second drop placed', 20000);
+  cl = (await clips()).filter((c) => c.track === 'V1');
+  check(await js('Cut.app.project.media.length') === 2, 'a file already in the project is not imported again');
+  check(S(cl.map((c) => [c.start, c.media])) === S([[0, 'a.mp4'], [5, 'a.mp4'], [8, 'b.mp4']]), `Ctrl+drop inserts and moves the later clips along (${S(cl)})`);
+  await focusTimeline();
+  await press('Ctrl+z');
+  await sleep(150);
+  cl = (await clips()).filter((c) => c.track === 'V1');
+  check(S(cl.map((c) => c.start)) === S([2, 5]) && await js('Cut.app.project.media.length') === 2, `one undo takes the inserted clip back (${S(cl)})`);
+
+  // a folder: its files are imported into a bin and placed
+  await drop([sub], 9, 'V2');
+  await until(`__ct.seq().clips.some((c) => c.track === 'V2')`, 'the folder placed', 20000);
+  cl = (await clips()).filter((c) => c.track === 'V2');
+  check(S(cl) === S([{ track: 'V2', start: 9, end: 10, media: 'c.mp4' }]) && await js(`Cut.app.project.bins.some((b) => b.name === 'folder')`), `a dropped folder goes into a bin and its file onto V2 at 9 s (${S(cl)})`);
+
+  // the project panel's own drop still only imports, and does not open the file in the code editor
+  await js(`__ct.fresh({})`);
+  await showTab('project');
+  const pp = await rect('.cut-panel[data-panel="project"] .cut-items');
+  for (const type of ['dragEnter', 'dragOver', 'drop']) await dragEvent(type, [file('b.mp4')], pp);
+  await until(`Cut.app.project.media.length === 1`, 'the project panel import', 20000);
+  await sleep(300);
+  check(await js(`__ct.seq().clips.length === 0 && ide.tabs.length === ${tabs}`), 'a file dropped on the project panel is imported without a clip and not opened in the code editor');
+});
+
+// ---------- the clip's speed from its menu and Effect Controls ----------
+await section('speed', async () => {
+  await workspace('editing');
+  await js(`__ct.fresh({ media: [__ct.fake('a')], clips: [{ at: 0, len: 4 }, { at: 4, len: 4, in: 8 }] })`);
+  const state = () => js(`__ct.seq().clips.filter((c) => c.track === 'V1').map((c) => ({ start: c.start / ${T}, len: Math.round(Cut.model.clipDuration(c) / ${T} * 1000) / 1000, speed: c.speed, reverse: c.reverse })).sort((a, b) => a.start - b.start)`);
+  const first = await js(`__ct.seq().clips.find((c) => c.start === 0).id`);
+  const at = await js(`Cut.ui.timeline.clientPoint(${1 * T}, 'V1')`);
+  await clickAt(at);
+  await clickAt(at, { button: 'right' });
+  await menuClick('Speed');
+  await until(`!!${menuRow('50%', 1)}`, 'the Speed submenu', 4000);
+  const items = await js(`[...document.querySelectorAll('.context-menu[data-level="1"] > .menu-item')].map((r) => r.querySelector('.menu-label')?.textContent)`);
+  check(S(items) === S(['25%', '50%', '75%', '100%', '150%', '200%', '400%', 'Reverse Speed']), `the clip menu's Speed submenu offers quick speeds and Reverse (${S(items)})`);
+  const before = await js('Cut.app.history.position');
+  await menuClick('50%', 1);
+  await sleep(150);
+  let st = await state();
+  check(S(st) === S([{ start: 0, len: 8, speed: 0.5, reverse: false }, { start: 8, len: 4, speed: 1, reverse: false }]), `50% doubles the clip and moves the next one along (${S(st)})`);
+  check(await js('Cut.app.history.position') === before + 1, 'the speed change is one undo step');
+  await focusTimeline();
+  await press('Ctrl+z');
+  await sleep(150);
+  st = await state();
+  check(st[0].speed === 1 && st[1].start === 4, `undo brings the speed and the next clip back (${S(st)})`);
+  await clickAt(at);
+  await clickAt(at, { button: 'right' });
+  await menuClick('Speed');
+  await until(`!!${menuRow('Reverse Speed', 1)}`, 'the Speed submenu', 4000);
+  await menuClick('Reverse Speed', 1);
+  await sleep(150);
+  check((await state())[0].reverse === true, 'Reverse Speed in the submenu reverses the clip');
+
+  // a still has no speed
+  await js(`(() => { const C = Cut.commands, h = Cut.app.history, s = __ct.seq(); h.do(C.addGenerated(s.id, { track: 'V2', at: 0, duration: 2 * ${T}, source: { generator: 'solid', color: '#ff0000' } })); return true; })()`);
+  const sp = await js(`Cut.ui.timeline.clientPoint(${1 * T}, 'V2')`);
+  await clickAt(sp);
+  await clickAt(sp, { button: 'right' });
+  await until(`!!${menuRow('Speed')}`, 'the clip menu', 4000);
+  check(await js(`${menuRow('Speed')}.classList.contains('disabled')`), 'a still clip has Speed disabled');
+  await js(`(ide.ui.closeMenus?.(), true)`);
+  await press('Escape');
+  await sleep(100);
+
+  // Effect Controls: a Speed section with the speed and Reverse
+  await clickAt(at);
+  await showTab('controls');
+  await until(`!!document.querySelector('.cut-ec-sec[data-section="speed:${first}"] .cut-ec-row[data-path="speed"] .cut-number')`, 'the Speed section in Effect Controls', 5000);
+  check(await js(`document.querySelector('.cut-ec-row[data-path="speed"] .cut-number-text').textContent === '100.00' && document.querySelector('.cut-ec-row[data-path="reverse"] input').checked === true`),
+    'Effect Controls shows the clip speed (100%) and Reverse on');
+  check(await js(`!document.querySelector('.cut-ec-row[data-path="speed"] .watch') && !document.querySelector('.cut-ec-row[data-path="reverse"] .watch')`), 'the speed rows have no stopwatch (not keyframed)');
+  await clickSel('.cut-ec-row[data-path="speed"] .cut-number');
+  await until(`!!document.querySelector('.cut-ec-row[data-path="speed"] .cut-number-input')`, 'the speed field turns into an input');
+  await press('Ctrl+a');
+  await type('200');
+  await press('Enter');
+  await sleep(200);
+  st = await state();
+  check(st[0].speed === 2 && st[0].len === 2 && st[1].start === 2, `200% typed in Effect Controls halves the clip and pulls the next one in (${S(st)})`);
+  check(await js(`document.querySelector('.cut-ec-row[data-path="speed"] .cut-number-text').textContent`) === '200.00', 'the field shows 200.00');
+  await clickSel('.cut-ec-row[data-path="reverse"] input');
+  await sleep(150);
+  check((await state())[0].reverse === false, 'the Reverse box turns reverse off');
+  await clickSel(`.cut-ec-sec[data-section="speed:${first}"] .cut-ec-sectools button`);
+  await sleep(150);
+  st = await state();
+  check(st[0].speed === 1 && st[0].len === 4 && st[1].start === 4, `Reset puts the speed back to 100% (${S(st)})`);
 });
 
 // ---------- screenshots ----------

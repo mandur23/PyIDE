@@ -235,6 +235,24 @@ try {
   const heads = await S(`(() => { window.__offHeads(); return window.__heads; })()`);
   check(heads.length > 5 && heads.every((t, i) => t >= 45 * F && (i === 0 || t >= heads[i - 1])),
     `playing from frame 45 moves the playhead on from there, never back to 0 while the sound starts (${heads.slice(0, 4).map((t) => (t / F).toFixed(0)).join(', ')} … ${heads.length} moves)`);
+  // the Play/Stop button with a real click on its icon, held a moment as a person does, while it plays
+  const pb = await center('.cut-monitor-program .cut-tr-play svg');
+  await key('Home');
+  await clickAt(pb.x, pb.y);
+  await until(`Cut.app.playing`, 'the button plays', 5000);
+  await sleep(300);
+  await mouse('mouseMoved', pb.x, pb.y);
+  await S(`(() => { const b = document.querySelector('.cut-monitor-program .cut-tr-play'); window.__pb = { icon: b.querySelector('svg'), clicks: 0 }; b.addEventListener('click', () => window.__pb.clicks++); return true; })()`);
+  await mouse('mousePressed', pb.x, pb.y);
+  // the monitor redraws its controls while the button is held (it used to put a new icon under the pointer)
+  const redrawn = await until(`document.querySelector('.cut-monitor-program .cut-tr-play svg') !== window.__pb.icon`, 'the icon redrawn', 400).then(() => true, () => false);
+  await sleep(100);
+  await mouse('mouseReleased', pb.x, pb.y);
+  await sleep(300);
+  const pressed = await S(`({ clicks: window.__pb.clicks, playing: Cut.app.playing, t: Cut.app.t, end: Cut.model.sequenceDuration(Cut.app.sequence) })`);
+  check(pressed.clicks === 1 && !pressed.playing && pressed.t < pressed.end - 2 * F,
+    `clicking Play/Stop while playing stops playback before the end (${JSON.stringify({ ...pressed, redrawn })})`);
+  if (pressed.playing) { await key('Space'); await until(`!Cut.app.playing`, 'stopped', 5000).catch(() => {}); }
   await key('Home');
   await key('L');
   await until(`Cut.app.playing && Cut.ui.monitors.program.player.rate === 1`, 'L plays forward', 5000);

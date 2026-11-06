@@ -2,7 +2,7 @@
 // and the timeline's clips. Both are cached twice: in memory for this session and in the app's common cache
 // (cut:cacheGet / cut:cachePut, least recently used files go first), keyed by the file's path, size and mtime, so a
 // changed file gets new ones. Thumbnails and peaks each run in their own queue, one job at a time, both held while the
-// player plays.
+// player plays, also between the frames and blocks of a job under way.
 //
 // strip() snaps each time to the frame shown there, so zooming the timeline reuses the thumbnails it already has.
 // Bitmaps are shared: callers draw them and never close them.
@@ -37,12 +37,15 @@
     lane.running = true;
     try {
       while (lane.jobs.length) {
-        while (paused) await new Promise((r) => resumes.push(r));
+        await held();
         const job = lane.jobs.shift();
         try { job.resolve(await job.fn()); } catch (err) { job.reject(err); }
       }
     } finally { lane.running = false; }
   }
+  // While the player plays, also between the frames of a job under way: one strip of a 4K file is seconds of decoding.
+  // Sync-sample thumbnails (decoder.keyFrames) are not held: waiting there would keep a decoder and its frame open.
+  const held = async () => { while (paused) await new Promise((r) => resumes.push(r)); };
   function pause(on) {
     paused = !!on;
     if (!paused) { const r = resumes; resumes = []; for (const f of r) f(); }
@@ -168,6 +171,7 @@
         }
         for (const i of todo) {
           if (out[i] || (out[i] = recall(`${base}|${samples[i]}`))) continue;
+          await held();
           // Asked for each frame: that keeps the source's idle timer from closing it under a long strip.
           const src = thumbSource(o);
           const frame = await src.frameAt(vs.pts[samples[i]]);
@@ -252,7 +256,10 @@
         const r = await need('decoder').audioReader(o, o.audio);
         const win = spp * Math.max(1, Math.round((r.rate * 10) / spp));
         const out = new Float32Array(Math.ceil(r.length / spp) * 2);
-        for (let a = 0; a < r.length; a += win) out.set(computePeaks(await r.read(a, Math.min(r.length, a + win)), spp), (a / spp) * 2);
+        for (let a = 0; a < r.length; a += win) {
+          await held();
+          out.set(computePeaks(await r.read(a, Math.min(r.length, a + win)), spp), (a / spp) * 2);
+        }
         cachePut(key(spp), new Uint8Array(out.buffer.slice(0)));
         return out;
       }, lanes.audio);

@@ -244,7 +244,9 @@
         dur.textContent = T().timecode(Math.max(0, len), spec.fps());
         dur.title = io.in != null || io.out != null ? tr('In to Out duration') : tr('Duration');
         const playing = !!m.player?.playing;
-        playBtn.replaceChildren(icon(playing ? 'pause' : 'play'));
+        // Only on a change: a new icon under a press made the release land on another element, so no click came and
+        // the button could not stop playback.
+        if (playBtn.classList.contains('playing') !== playing || !playBtn.firstChild) playBtn.replaceChildren(icon(playing ? 'pause' : 'play'));
         playBtn.classList.toggle('playing', playing);
         root.classList.toggle('playing', playing);
         const n = m.player?.dropped || 0;

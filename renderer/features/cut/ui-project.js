@@ -810,6 +810,7 @@
       root.classList.remove('drop-files');
       if (!ev.dataTransfer.files.length) return;
       ev.preventDefault();
+      ev.stopPropagation();
       const paths = [...ev.dataTransfer.files].map((f) => { try { return ide.api.pathForFile(f); } catch { return null; } }).filter(Boolean);
       await importDropped(app, paths);
     });
@@ -847,15 +848,36 @@
     return { dispose: () => { for (const off of offs) off(); clearTargets(); }, focus: () => items.focus({ preventScroll: true }) };
   }
 
-  // Dropped paths: folders through importFolderPath, files together.
+  // Dropped paths: folders through importFolderPath, files together. -> the new media ids.
   async function importDropped(app, paths) {
     const files = [];
+    const made = [];
     for (const p of paths) {
       const st = await ide.api.invoke('cut:stat', p).catch(() => null);
-      if (st && !st.missing && !st.isFile) await importFolderPath(app, p);
+      if (st && !st.missing && !st.isFile) made.push(...await importFolderPath(app, p));
       else files.push(p);
     }
-    if (files.length) await importPaths(app, files, { binId: currentBin });
+    if (files.length) made.push(...await importPaths(app, files, { binId: currentBin }));
+    return made;
+  }
+  // Paths dropped on the timeline -> media ids in the order dropped (a folder's files in its order): a file already in
+  // the project is used as it is, the others are imported.
+  async function mediaForPaths(app, paths) {
+    const key = (p) => String(p).replace(/\//g, '\\').toLowerCase();
+    const have = new Map(app.project.media.map((m) => [key(m.path), m.id]));
+    const fresh = paths.filter((p) => !have.has(key(p)));
+    const made = fresh.length ? await importDropped(app, fresh) : [];
+    const madeMedia = made.map((id) => app.project.media.find((m) => m.id === id)).filter(Boolean);
+    const out = [];
+    for (const p of paths) {
+      if (have.has(key(p))) { out.push(have.get(key(p))); continue; }
+      const k = key(p);
+      const under = k.endsWith('\\') ? k : `${k}\\`;
+      for (const m of madeMedia) if (key(m.path) === k || key(m.path).startsWith(under)) out.push(m.id);
+    }
+    // main may answer with another spelling of a path (its real path): what was imported is placed all the same.
+    for (const m of madeMedia) out.push(m.id);
+    return [...new Set(out)];
   }
 
   // ---------- new sequence, text and color items ----------
@@ -935,7 +957,7 @@
   }
 
   ui.offline = offline;
-  ui.media = { importDialog, importFolder, importFolderPath, importPaths, importDropped, checkOffline, relinkDialog, relinkTo, findInFolder, offline, matchSequence, describe, probeFile, newSequenceDialog,
+  ui.media = { importDialog, importFolder, importFolderPath, importPaths, importDropped, mediaForPaths, checkOffline, relinkDialog, relinkTo, findInFolder, offline, matchSequence, describe, probeFile, newSequenceDialog,
     unusedIds, removeUnused, findMissing };
   // Opening a project looks for its files; a new one has none.
   ui.registerPanel('project', { title: () => tr('Project'), mount });

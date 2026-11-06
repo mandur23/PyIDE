@@ -186,6 +186,7 @@
 
   // ---------- look ----------
 
+  const QUICK_SPEEDS = [25, 50, 75, 100, 150, 200, 400];
   const LABELS = {
     violet: '#8a6bd6', iris: '#6c7fe0', caribbean: '#22a08c', lavender: '#b98ad8',
     cerulean: '#2f8ad0', forest: '#4f8c3a', rose: '#cf5a7a', mango: '#d9962e',
@@ -2049,6 +2050,46 @@
       },
     });
     offs.push(offDrop);
+    // Files dragged in from Explorer: imported (a file already in the project is used as it is) and placed where they
+    // are dropped, as the project panel's items would be (Ctrl inserts). The window's own drop, which opens files in
+    // the code editor, never sees them.
+    const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+    on(lanes, 'dragover', (e) => {
+      if (!seq || !hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      const { x } = localXY(e);
+      v.guide = snapT(tOf(x));
+      invalidateTop();
+    });
+    on(lanes, 'dragleave', (e) => {
+      if (lanes.contains(e.relatedTarget)) return;
+      v.guide = null;
+      invalidateTop();
+    });
+    on(lanes, 'drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      v.guide = null;
+      invalidateTop();
+      if (!seq) return;
+      const { x, y } = localXY(e);
+      const h = hit(x, y);
+      const paths = [...e.dataTransfer.files].map((f) => { try { return ide.api.pathForFile(f); } catch { return null; } }).filter(Boolean);
+      dropFiles(paths, h, { ctrl: e.ctrlKey }).catch((err) => ui.report(err));
+    });
+    async function dropFiles(paths, h, info) {
+      const seqId = seq.id;
+      const ids = await ui.media.mediaForPaths(app, paths);
+      if (!ids.length || seq?.id !== seqId) return;
+      const p = { kind: 'media', ids };
+      const plan = dropPlan(p, h, info);
+      v.guide = null;
+      invalidateTop();
+      if (plan) await performDrop(p, plan, info);
+    }
     // The items a drop places: [{media, in, out, video, audio}] from a project selection or the source monitor.
     function dropItems(p) {
       if (p.kind === 'source') return [{ media: p.mediaId, in: p.in ?? null, out: p.out ?? null, video: p.video !== false, audio: p.audio !== false }];
@@ -2356,6 +2397,11 @@
         { label: tr('Ungroup'), hint: 'Ctrl+Shift+G', disabled: !clips.some((x) => x.group), run: () => api.ungroup() },
         { separator: true },
         { label: tr('Speed/Duration…'), hint: 'Ctrl+R', run: () => api.speedDialog() },
+        { label: tr('Speed'), disabled: !clips.some((x) => !model.isStill(app.project, x)), submenu: [
+          ...QUICK_SPEEDS.map((p) => ({ label: `${p}%`, checked: Math.abs(c.speed * 100 - p) < 1e-6, run: () => api.setSpeed({ speed: p / 100 }) })),
+          { separator: true },
+          { label: tr('Reverse Speed'), checked: !!c.reverse, run: () => api.setSpeed({ reverse: !c.reverse }) },
+        ] },
         { label: tr('Add Frame Hold'), disabled: kind !== 'video' || !m || m.kind === 'image' || !edit.inClip(app, c), run: () => api.freezeFrame() },
         { label: tr('Apply Default Transitions'), hint: 'Shift+D', run: () => api.addTransitions({ video: true, audio: true }) },
         { separator: true },
@@ -2614,6 +2660,7 @@
         return { ids };
       },
       speedDialog: () => speedDialog(),
+      setSpeed: (patch) => setSpeed(patch),
       addMarker() {
         if (!seq) return null;
         const c = sel().find((x) => edit.inClip(app, x));
@@ -2706,6 +2753,28 @@
       setOverlay(o) { v.overlay = o?.ranges ? { ranges: o.ranges.map((r) => [r[0], r[1]]), tracks: o.tracks || null } : null; invalidateTop(); },
       dispose() {},
     };
+
+    // The clip menu's Speed submenu: the selected clips (stills have no speed) get a speed or reverse, later clips
+    // moving along, in one undo step. A linked pair changes once, through either clip.
+    function setSpeed(patch) {
+      const done = new Set();
+      const clips = sel().filter((x) => !model.isStill(app.project, x));
+      if (!clips.length) { flash(tr('Select a clip first.')); return false; }
+      app.history.begin('Clip Settings');
+      try {
+        for (const x of clips) {
+          if (done.has(x.id)) continue;
+          for (const l of [x, ...model.linkedClips(seq, x)]) done.add(l.id);
+          app.history.do(C.setClip(seq.id, x.id, { ...patch, ripple: true }));
+        }
+        app.history.commit();
+      } catch (err) {
+        app.history.cancel();
+        ui.report(err);
+        return false;
+      }
+      return true;
+    }
 
     function speedDialog() {
       const clips = sel();

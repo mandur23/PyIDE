@@ -129,7 +129,13 @@
       st.dropped++;
       return true;
     }
-    const full = () => cache.size >= limits.frames || cacheBytes >= limits.bytes;
+    // How many frames the cache holds: the count limit, or fewer when the bytes run out first (a 4K frame is 12 MB, so
+    // 384 MB is 31 frames) or the caches of all sources together reach the budget.
+    let frameSize = Math.ceil((track.width || 1) * (track.height || 1) * 1.5);
+    const capacity = () => {
+      const others = counts.cacheBytes - cacheBytes;
+      return Math.max(2, Math.min(limits.frames, Math.floor(limits.bytes / frameSize), Math.floor((budget.bytes - others) / frameSize)));
+    };
 
     function onFrame(frame) {
       counts.open++;
@@ -141,6 +147,7 @@
       if (cache.has(idx)) drop(idx);
       // The new frame competes with the cached ones: the farthest from the playhead goes, which may be this one.
       const bytes = frameBytes(frame);
+      frameSize = bytes;
       cache.set(idx, { frame, bytes });
       cacheBytes += bytes;
       counts.cacheBytes += bytes;
@@ -233,10 +240,10 @@
       if (!prefetchRange) return null;
       const [ra, rb] = prefetchRange;
       // Frames ahead of the playhead in the cache and still inside the decoder: decoding more than the cache holds
-      // would push out frames that are about to be shown.
+      // would push out frames that are about to be shown, and showing one of them would restart at a sync sample.
       let ahead = run ? run.fed - run.start - run.outputs.size : 0;
       for (const idx of cache.keys()) if ((rank[idx] - focus) * dir >= 0) ahead++;
-      if (ahead >= limits.frames - 1) return null;
+      if (ahead >= capacity() - 1) return null;
       for (let r = ra; r <= rb; r++) {
         const idx = s.order[r];
         if (cache.has(idx) || run?.outputs.has(idx)) continue;
@@ -330,6 +337,9 @@
         const r = rank[idx];
         if (r !== focus) dir = r > focus ? 1 : -1;
         focus = r;
+        // A frame outside the prefetch window means the playhead went elsewhere (a seek, or a pause and a click): the
+        // old window would restart the run at its sync sample, and the next frame here would restart it back.
+        if (prefetchRange && (r < prefetchRange[0] || r > prefetchRange[1])) prefetchRange = null;
         const hit = cache.get(idx);
         if (hit) { st.hits++; return borrow(hit); }
         st.misses++;
@@ -353,7 +363,7 @@
         borrowed--;
         closeFrame(frame);
       },
-      stats: () => ({ ...st, why: { ...st.why }, cached: cache.size, cacheBytes, borrowed, hardware: cfgs?.[0]?.hardwareAcceleration || null, delay, run: run && { start: run.start, fed: run.fed } }),
+      stats: () => ({ ...st, why: { ...st.why }, cached: cache.size, capacity: capacity(), cacheBytes, borrowed, hardware: cfgs?.[0]?.hardwareAcceleration || null, delay, run: run && { start: run.start, fed: run.fed } }),
       close() {
         if (closed) return;
         closed = true;

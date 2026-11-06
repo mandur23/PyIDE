@@ -584,11 +584,14 @@ Promise<VideoFrame>, sampleAt(t), prefetch(fromTicks, toTicks), release(frame), 
 Frames returned are clones the caller owns until `release(frame)`. One VideoDecoder per source, fed in decode order
 from `keyBefore`; chunks carry the sample's presentation rank as timestamp, so an output maps back to its sample.
 Decoded frames stay in a cache limited by count (8 for a hardware decoder, 48 for a software one: the decoder in use
-decides) and bytes, evicting those farthest from the playhead, behind it first; prefetch counts the frames still
-inside the decoder and feeds one at a time. Up to 1920x1088 configs are tried in order prefer-software,
+decides) and bytes (384 MB a source, and the shared budget), evicting those farthest from the playhead, behind it
+first; prefetch counts the frames still inside the decoder, feeds one at a time and stops at what the cache holds by
+the tightest of the three limits (`stats().capacity`: 31 frames of 4K, not 48), since a frame decoded ahead and evicted
+before it is shown restarts the run at a sync sample. Up to 1920x1088 configs are tried in order prefer-software,
 prefer-hardware, no-preference, and above that hardware first (`hardware: false` skips hardware): a hardware decoder
 holds back about twenty B-frame-reordered frames from a pool of about ten, which an 8-frame cache cannot ride. A seek
-the run cannot reach restarts at `keyBefore`. Every VideoFrame is counted and closed exactly once.
+the run cannot reach restarts at `keyBefore`; a `frameAt` outside the prefetch window drops that window, so a playhead
+moved while paused does not pull the decoder back to where it was. Every VideoFrame is counted and closed exactly once.
 
 `decoder.stats()` -> `{ open, sources, decoders, cacheBytes, live, budget }`; `decoder.setBudget(bytes)` sets the
 memory all frame caches share (default 1.5 GB; WebGPU does not report VRAM). `decodeAudio(opened, track)` ->
@@ -645,7 +648,8 @@ distance to their sync sample shows that sync sample (one decoded frame each, th
 ones show their exact frame. Peaks are computed about ten seconds at a time through `decoder.audioReader`, at 256
 samples a peak; a multiple of that is merged from them (`coarsen(peaks, k)`), so the panel (512), the timeline (256)
 and the monitor (1024) share one decode. Thumbnails and peaks run in two queues, so a long file's peaks never hold
-back thumbnails. Also `computePeaks`, `pause(on)` (holds both), `paused`, `queued`.
+back thumbnails. Also `computePeaks`, `pause(on)` (holds both, also between the exact frames of
+a strip and the blocks of peaks already under way: the player pauses them while it plays), `paused`, `queued`.
 
 ## 9. Sound and export
 
@@ -902,7 +906,9 @@ export joins the IDE's close question through `window:setBusy`.
 ### Project panel (`ui-project.js`)
 
 `Cut.ui.media = { importDialog, importFolder, importFolderPath, importPaths(app, paths, {binId, bins}),
-importDropped, checkOffline, relinkDialog, relinkTo, findInFolder(folder, media) -> {paths}, offline,
+importDropped(app, paths) -> new media ids, mediaForPaths(app, paths) -> media ids in the order dropped (a file
+already in the project reused, the rest imported; the timeline's Explorer drop), checkOffline, relinkDialog, relinkTo,
+findInFolder(folder, media) -> {paths}, offline,
 matchSequence(app, mediaId), describe, probeFile, newSequenceDialog, unusedIds(project), removeUnused(app),
 findMissing(app) }` and, while the panel is mounted, `selected()`, `selectUnused()`, `filter()` (null or 'unused');
 `Cut.ui.offline` (the Set of offline media ids). Relinking matches the file name and size (`cut:findMedia`), then for

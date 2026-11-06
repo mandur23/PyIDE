@@ -7,8 +7,10 @@
 // rotation, anchor, crop, opacity and keyframed position read back from the pixels; every video effect against its
 // CPU reference on a known image; each transition at known points (the dissolve's midpoint is the average); Korean
 // text drawn with the font from cut:fontData; captions burned in; offline media drawn red; import errors; audio decoded
-// to PCM (WAV and AAC); thumbnails and peaks with their caches; the player playing a 1080p30 H.264 clip for 10 s with
-// seeks, the measured fps, and no VideoFrame left open afterwards; the Canvas 2D fallback drawing the same layout.
+// to PCM (WAV and AAC); a one-GOP clip played through a frame cache that fills by bytes before its frame count, with
+// no restart at the sync sample; thumbnails and peaks with their caches; the player playing a 1080p30 H.264 clip for
+// 10 s with seeks, the measured fps, and no VideoFrame left open afterwards; the Canvas 2D fallback drawing the same
+// layout.
 // Usage: powershell -NoProfile -ExecutionPolicy Bypass -File verify/on-desktop.ps1 -Out verify/out/cut-engine.log -TimeoutMinutes 20 node verify/cut-engine.mjs
 import { rmSync } from 'fs';
 import { launch, tempDir } from './lib.mjs';
@@ -385,6 +387,55 @@ try {
   check(S(more.nums) === '[0,100,37,179]' && more.swInfo === 'prefer-software', `the software decoder gives the right frames too (${S(more.nums)}, ${more.swInfo})`);
   check(more.twoD === 50, `the 2D fallback draws video frames (frame ${more.twoD})`);
 
+  // ---- prefetch stops where the cache's bytes run out, not only its frame count (4K frames: 31 of 48) ----
+  const byBytes = await js(`(async () => {
+    const T = Cut.time;
+    const fps = [30, 1];
+    const r = await __eng.makeMp4({ w: 640, h: 360, fps, frames: 240, gop: 240 });
+    const path = await __eng.write('one-gop.mp4', r.bytes);
+    const hist = __eng.history(640, 360);
+    const [mid] = await __eng.importAll(hist, [path]);
+    const o = await Cut.media.open(hist.project, mid);
+    const src = Cut.decoder.createFrameSource(o, o.video, { hardware: false, cacheBytes: 12 * 640 * 368 * 1.5 });
+    const wrong = [];
+    for (let i = 0; i < 200; i++) {
+      src.prefetch(T.frameStart(i, fps), T.frameStart(i + 60, fps));
+      await __eng.sleep(8);
+      const f = await src.frameAt(T.frameStart(i, fps));
+      const c = new OffscreenCanvas(640, 360);
+      c.getContext('2d').drawImage(f, 0, 0);
+      src.release(f);
+      if (i % 20 === 0) { const n = __eng.readNumber(c.getContext('2d').getImageData(0, 0, 640, 360).data, 640, 360); if (n !== i) wrong.push([i, n]); }
+    }
+    const st = src.stats();
+    src.close();
+    return { keys: r.keys, restarts: st.restarts, why: st.why, capacity: st.capacity, hw: st.hardware, wrong };
+  })()`);
+  // Played to 5 s, paused, clicked back to 1 s, played: the window prefetched at 5 s must not pull the run back there.
+  const stale = await js(`(async () => {
+    const T = Cut.time;
+    const fps = [30, 1];
+    const r = await __eng.makeMp4({ w: 640, h: 360, fps, frames: 240, gop: 30 });
+    const path = await __eng.write('gop30.mp4', r.bytes);
+    const hist = __eng.history(640, 360);
+    const [mid] = await __eng.importAll(hist, [path]);
+    const o = await Cut.media.open(hist.project, mid);
+    const src = Cut.decoder.createFrameSource(o, o.video, { hardware: false });
+    const show = async (k) => { const f = await src.frameAt(T.frameStart(k, fps)); src.release(f); };
+    src.prefetch(T.frameStart(150, fps), T.frameStart(210, fps));
+    await show(150);
+    await __eng.sleep(300);
+    await show(40);
+    await __eng.sleep(500);
+    const before = src.stats();
+    for (let k = 41; k <= 50; k++) { src.prefetch(T.frameStart(k, fps), T.frameStart(k + 60, fps)); await show(k); }
+    const after = src.stats();
+    src.close();
+    return { restarts: after.restarts - before.restarts, run: before.run, why: after.why };
+  })()`);
+  check(stale.restarts === 0 && stale.run.start === 30, `after a seek back while paused, the old prefetch window does not move the run (run from ${stale.run.start}, then ${stale.restarts} restarts, ${S(stale.why)})`);
+  check(byBytes.keys === 1 && byBytes.restarts === 1 && !byBytes.why.dropped && byBytes.wrong.length === 0, `playing a long GOP through a cache that fills by bytes (${byBytes.capacity} frames) never restarts at the sync sample (restarts ${byBytes.restarts}, ${S(byBytes.why)}, ${byBytes.hw}${byBytes.wrong.length ? `, wrong frames ${S(byBytes.wrong)}` : ''})`);
+
   // ---- transforms and opacity by pixels ----
   const tf = await js(`(async () => {
     const hist = __eng.history(640, 360);
@@ -668,6 +719,31 @@ try {
   check(th.n === 5 && S(th.size) === '[320,180]' && S(th.nums) === '[0,15,30,45,60]', `thumbnail strip: 5 frames at 0, 0.5 ... 2 s (${S(th.nums)}, ${S(th.size)})`);
   check(th.same && th.second < th.first, `thumbnails come from memory the second time (${th.first.toFixed(0)} ms, then ${th.second.toFixed(1)} ms)`);
   check(th.files >= 5, `thumbnails and peaks are in the cache folder (${th.files} files)`);
+
+  // Play pauses thumbnails also inside a strip already being made: its frames would compete with the player's.
+  const held = await js(`(async () => {
+    const hist = __eng.history(640, 360);
+    const [id] = await __eng.importAll(hist, [${S(made['60'].path)}]);
+    const orig = Cut.decoder.createFrameSource;
+    let asked = 0;
+    Cut.decoder.createFrameSource = (...a) => { const s = orig(...a); const fa = s.frameAt; s.frameAt = (t) => { asked++; return fa(t); }; return s; };
+    try {
+      let done = false;
+      const strip = Cut.thumbs.strip(hist.project, id, { from: 254016000000 / 10, to: 254016000000 * 2.9, count: 24, height: 90 }).then((x) => { done = true; return x; });
+      const end = performance.now() + 5000;
+      while (asked < 2 && !done && performance.now() < end) await __eng.sleep(1);
+      Cut.thumbs.pause(true);
+      await __eng.sleep(50);
+      const atPause = asked;
+      await __eng.sleep(700);
+      const whilePaused = asked - atPause;
+      const doneWhilePaused = done;
+      Cut.thumbs.pause(false);
+      const list = await strip;
+      return { atPause, whilePaused, doneWhilePaused, n: list.length, asked };
+    } finally { Cut.decoder.createFrameSource = orig; Cut.thumbs.pause(false); }
+  })()`);
+  check(held.atPause >= 2 && held.whilePaused === 0 && !held.doneWhilePaused && held.n === 24 && held.asked > held.atPause, `a strip under way waits while the player plays and finishes after (${S(held)})`);
 
   // A long file's peaks (its audio decoded while the reader is held here) do not hold back thumbnails asked for after
   // them, and the coarser peaks the panel and the monitor ask for come from the same decode.

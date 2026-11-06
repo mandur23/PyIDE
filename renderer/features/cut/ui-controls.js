@@ -151,7 +151,11 @@
             { label: tr('Fill'), path: `layers.${l.id}.fill`, type: 'color' },
           ]);
         }
-      } else audioSections(c);
+        speedSection(c);
+      } else {
+        audioSections(c);
+        speedSection(c);
+      }
       for (const a of companions(c)) audioSections(a, true);
       effectSections(c);
       for (const a of companions(c)) effectSections(a);
@@ -166,6 +170,16 @@
         { label: tr('Fade Out'), path: 'fadeOut', type: 'duration' },
       ]);
       section(`panner:${c.id}`, tr('Panner'), c, [{ label: tr('Balance'), path: 'pan', type: 'number', min: -100, max: 100, step: 1, slider: [-100, 100] }]);
+    }
+    // Speed and reverse of a clip with a source (a still has none); later clips move along, a linked pair together.
+    function speedSection(c) {
+      if (model.isStill(app.project, c)) return;
+      section(`speed:${c.id}`, tr('Speed'), c, [
+        { label: tr('Speed'), path: 'speed', type: 'number', min: 1, max: 10000, step: 1, precision: 2, unit: '%', slider: [10, 400],
+          field: { get: (x) => Math.round(x.speed * 10000) / 100, patch: (v) => ({ speed: v / 100 }), reset: { speed: 1 } } },
+        { label: tr('Reverse Speed'), path: 'reverse', type: 'bool',
+          field: { get: (x) => !!x.reverse, patch: (v) => ({ reverse: !!v }), reset: { reverse: false } } },
+      ]);
     }
     function effectSections(c) {
       c.effects.forEach((e, i) => {
@@ -234,6 +248,7 @@
       app.history.begin('Reset');
       try {
         for (const spec of specs) {
+          if (spec.field) { app.history.do(C.setClip(seq().id, c.id, { ...spec.field.reset, ripple: true })); continue; }
           if (spec.type === 'duration') { app.history.do(C.setClip(seq().id, c.id, { [spec.path]: 0 })); continue; }
           if (edit.keyframed(c, spec.path)) app.history.do(C.setKeyframes(seq().id, c.id, spec.path, null));
           const def = edit.defaultOf(c, spec.path) ?? spec.fallback;
@@ -253,7 +268,7 @@
       const left = el('div', 'cut-ec-left');
       const lane = el('div', 'cut-ec-lane');
       const path = spec.path;
-      const keyframable = spec.type !== 'duration' && spec.type !== 'choice' && spec.type !== 'bool' && spec.keyframable !== false && spec.index == null;
+      const keyframable = spec.type !== 'duration' && spec.type !== 'choice' && spec.type !== 'bool' && spec.keyframable !== false && !spec.field && spec.index == null;
       const keyframableArray = spec.index != null; // crop: the whole array is one keyframed property
       let watch = null;
       if (keyframable || (keyframableArray && spec.index === 0)) {
@@ -269,14 +284,16 @@
       const value = () => {
         const c = clipNow(clipId);
         if (!c) return undefined;
+        if (spec.field) return spec.field.get(c);
         if (spec.type === 'duration') return c[path] || 0;
         const v = edit.valueAt(app, c, path);
         return v === undefined ? spec.fallback : v;
       };
-      const gesture = edit.gesture(app, spec.type === 'duration' ? 'Clip Settings' : 'Effect Settings');
+      const gesture = edit.gesture(app, spec.type === 'duration' || spec.field ? 'Clip Settings' : 'Effect Settings');
       const write = (v) => {
         const c = clipNow(clipId);
         if (!c) return;
+        if (spec.field) { ui.exec(app, C.setClip(seq().id, c.id, { ...spec.field.patch(v), ripple: true })); return; }
         if (spec.type === 'duration') { ui.exec(app, C.setClip(seq().id, c.id, { [path]: v }, { linked: false })); return; }
         let next = v;
         if (spec.index != null) { next = (value() || [0, 0, 0, 0]).slice(); next[spec.index] = v; }
@@ -287,7 +304,7 @@
       const numberCtl = (get, set, opts = {}) => {
         const f = ui.numberField({
           value: get() ?? 0, min: opts.min ?? spec.min, max: opts.max ?? spec.max, step: opts.step ?? spec.step ?? 1, unit: opts.unit ?? spec.unit ?? '',
-          precision: (opts.step ?? spec.step ?? 1) < 1 ? String(opts.step ?? spec.step).split('.')[1].length : 0,
+          precision: spec.precision ?? ((opts.step ?? spec.step ?? 1) < 1 ? String(opts.step ?? spec.step).split('.')[1].length : 0),
           onBegin: () => gesture.begin(), onEnd: () => gesture.end(), onChange: (v) => set(v),
         });
         updates.push(() => { const v = get(); if (!f.querySelector('input')) f.value = typeof v === 'number' ? v : NaN; });
