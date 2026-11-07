@@ -1123,7 +1123,13 @@
       const targets = ui.editing.targets;
       const key = seq ? JSON.stringify([seq.id, rows.map((r) => [r.id, r.type, r.index, r.track && [r.track.name, r.track.locked, r.track.syncLock, r.track.visible, r.track.mute, r.track.solo], r.ct && [r.ct.name, r.ct.lang, r.ct.syncLock]]), patch, targets]) : '';
       if (key === headsKey) {
-        for (const r of rows) { const n = headOf.get(r.id); if (n) n.style.height = `${r.h}px`; }
+        for (const r of rows) {
+          const n = headOf.get(r.id);
+          if (!n) continue;
+          n.style.height = `${r.h}px`;
+          const vol = n.querySelector('.cut-tl-hvol');
+          if (vol && r.track) showVolume(vol, r.track.volume, r.h);
+        }
         return;
       }
       headsKey = key;
@@ -1165,11 +1171,12 @@
         } else {
           head.appendChild(headButton(`mute${t.mute ? ' on' : ''}`, 'M', tr('Mute Track'), t.mute, () => setTrack(t.id, { mute: !t.mute })));
           head.appendChild(headButton(`solo${t.solo ? ' on' : ''}`, 'S', tr('Solo Track'), t.solo, () => setTrack(t.id, { solo: !t.solo })));
+          head.appendChild(volumeControl(t, r.h));
         }
         const grip = el('div', 'cut-tl-hgrip', undefined, { title: tr('Drag to change the track height') });
         grip.addEventListener('pointerdown', (e) => startHeightDrag(e, t));
         head.appendChild(grip);
-        head.addEventListener('dblclick', (e) => { if (!e.target.closest('button')) renameTrack(t); });
+        head.addEventListener('dblclick', (e) => { if (!e.target.closest('button, .cut-tl-hvol')) renameTrack(t); });
         head.addEventListener('contextmenu', (e) => { e.preventDefault(); trackMenu(e, t); });
         headsInner.appendChild(head);
       }
@@ -1201,6 +1208,66 @@
       target.addEventListener('pointerup', up);
       target.addEventListener('lostpointercapture', up);
     }
+    // ---------- track volume: a percent of the clips' level in the header; the model keeps dB (0% is -144 dB, which
+    // the audio engine plays as silence) ----------
+    const VOLUME_MAX = 200;
+    const percentOf = (db) => (!(db > -144) ? 0 : 100 * Math.pow(10, (db ?? 0) / 20));
+    const dbOf = (pct) => (pct <= 0 ? -144 : Math.round(2000 * Math.log10(pct / 100)) / 100);
+    const clampPercent = (pct) => Math.max(0, Math.min(VOLUME_MAX, Math.round(pct)));
+    const setVolume = (id, pct) => setTrack(id, { volume: dbOf(clampPercent(pct)) });
+    function showVolume(node, db, h) {
+      const pct = percentOf(db ?? 0);
+      node.hidden = h < 44;
+      node.querySelector('.cut-tl-hvol-fill').style.width = `${Math.min(100, (pct / VOLUME_MAX) * 100)}%`;
+      node.querySelector('.cut-tl-hvol-text').textContent = `${Math.round(pct)}%`;
+      node.setAttribute('aria-valuenow', String(Math.round(pct)));
+    }
+    async function askVolume(t) {
+      const text = await ide.ui.prompt(tr('Track volume (0 to 200%)'), String(Math.round(percentOf(t.volume ?? 0))));
+      if (text == null) return;
+      const pct = Number(String(text).replace('%', '').trim());
+      if (Number.isFinite(pct)) setVolume(t.id, pct);
+    }
+    // Dragging sideways changes the volume by the distance moved (the bar's width is 0 to 200%), so a click alone
+    // changes nothing; double-click types a value, Alt+click is 100%.
+    function volumeControl(t, h) {
+      const node = el('div', 'cut-tl-hvol', undefined, { role: 'slider', 'aria-label': tr('Track Volume'), 'aria-valuemin': '0', 'aria-valuemax': String(VOLUME_MAX),
+        title: tr('Track volume: drag sideways to change, double-click to type a value, Alt+click for 100%') });
+      const bar = el('div', 'cut-tl-hvol-bar');
+      bar.append(el('div', 'cut-tl-hvol-fill'), el('div', 'cut-tl-hvol-unity'));
+      node.append(bar, el('span', 'cut-tl-hvol-text'));
+      showVolume(node, t.volume, h);
+      node.addEventListener('dblclick', (e) => { e.stopPropagation(); askVolume(trackOf(app.sequence, t.id) || t); });
+      node.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.altKey) { setVolume(t.id, 100); return; }
+        const x0 = e.clientX;
+        const p0 = percentOf(trackOf(app.sequence, t.id)?.volume ?? 0);
+        const perPx = VOLUME_MAX / Math.max(40, bar.getBoundingClientRect().width);
+        node.setPointerCapture(e.pointerId);
+        app.history.begin('Track Volume');
+        const move = (ev) => {
+          const db = dbOf(clampPercent(p0 + (ev.clientX - x0) * perPx));
+          const cur = trackOf(app.sequence, t.id);
+          if (cur && cur.volume !== db) {
+            try { app.history.do(C.setTrack(seq.id, t.id, { volume: db })); } catch {}
+            showVolume(node, db, h);
+          }
+        };
+        const up = () => {
+          node.removeEventListener('pointermove', move);
+          node.removeEventListener('pointerup', up);
+          node.removeEventListener('lostpointercapture', up);
+          app.history.commit();
+        };
+        node.addEventListener('pointermove', move);
+        node.addEventListener('pointerup', up);
+        node.addEventListener('lostpointercapture', up);
+      });
+      return node;
+    }
     async function renameTrack(t) {
       const name = await ide.ui.prompt(tr('Track name'), t.name);
       if (name != null && name.trim()) setTrack(t.id, { name: name.trim() });
@@ -1220,6 +1287,11 @@
           ui.exec(app, C.removeTrack(seq.id, t.id));
         } },
         { separator: true },
+        ...(kind === 'audio' ? [{ label: tr('Track Volume'), submenu: [
+          ...[0, 50, 100, 150, 200].map((p) => ({ label: `${p}%`, checked: Math.round(percentOf(t.volume ?? 0)) === p, run: () => setVolume(t.id, p) })),
+          { separator: true },
+          { label: tr('Set Volume…'), run: () => askVolume(t) },
+        ] }] : []),
         { label: tr('Track Height'), submenu: heights.map(([label, hh]) => ({ label, checked: t.height === hh, run: () => setTrack(t.id, { height: hh }) })) },
         { label: tr('Make Every Track This Height'), run: () => {
           app.history.begin('Track Height');

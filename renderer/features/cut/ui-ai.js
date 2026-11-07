@@ -288,8 +288,10 @@
         buttons: [
           { label: tr('Apply'), primary: true, run: () => {
             const seq = app.sequence;
-            const cmds = changes.filter((c) => keep.has(c.id) && seq.captions.find((t) => t.id === trackId)?.items.some((it) => it.id === c.id))
-              .map((c) => C.setCaption(seq.id, trackId, c.id, { text: c.after }));
+            const items = seq.captions.find((t) => t.id === trackId)?.items || [];
+            // Claude did not hear the speech: a caption's doubtful words stay doubtful
+            const cmds = changes.filter((c) => keep.has(c.id) && items.some((it) => it.id === c.id))
+              .map((c) => C.setCaption(seq.id, trackId, c.id, { text: c.after, doubt: items.find((it) => it.id === c.id).doubt ?? null }));
             if (!cmds.length) return;
             const r = ui.exec(app, C.batch('Polish Captions', cmds));
             if (r) { result = { changed: cmds.length }; ui.toast(tr('Captions polished: {n}.', { n: cmds.length })); }
@@ -335,7 +337,7 @@
     });
     if (!texts) return null;
     const s = app.sequence;
-    const made = items.map(({ i, it }) => ({ start: it.start, end: it.end, text: AI.lineBreak(texts.get(i), o.to) }));
+    const made = items.map(({ i, it }) => ({ start: it.start, end: it.end, text: AI.lineBreak(texts.get(i), o.to), ...(it.speaker ? { speaker: it.speaker } : {}) }));
     const name = `${track.name} (${tr(LANG_LABELS[o.to])})`;
     const r = ui.exec(app, C.batch('Translate Captions', [C.addCaptionTrack(s.id, { name, lang: o.to, style: track.style, syncLock: track.syncLock, items: made })]));
     if (!r) return null;

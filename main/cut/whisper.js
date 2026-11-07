@@ -31,6 +31,11 @@ const MAX_WINDOW = 31 * RATE;
 const WRITE_LIMIT = 16 * 1024 * 1024;
 const FILE_LIMIT = 2 * 1024 * 1024 * 1024; // about 9 hours
 const LANGS = new Set(['auto', 'ko', 'en']);
+// The person's word list (names, products, terms), given to Whisper as the text before each window. Whisper reads
+// about 200 tokens of it; more than this is never useful.
+const TERMS = { count: 200, chars: 100 };
+const termsOf = (list) => (Array.isArray(list) ? list : []).filter((t) => typeof t === 'string')
+  .map((t) => t.replace(/\s+/g, ' ').trim()).filter((t) => t && t.length <= TERMS.chars).slice(0, TERMS.count);
 const fail = (code, error) => ({ error, code });
 
 // The kind of a failed setup, from its error and the end of its log: what the renderer explains in plain words.
@@ -71,7 +76,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) 
 function createSpeech({ script, tmpDir = path.join(os.tmpdir(), 'nano-studio-speech'), log, env = process.env } = {}) {
   const fake = env.PYIDE_WHISPER_BACKEND === 'fake';
   const fakeSetup = fake ? env.PYIDE_WHISPER_FAKE_SETUP || '' : '';
-  const fakeState = { runtime: !fakeSetup, models: new Set(fakeSetup ? [] : MODELS.map((m) => m.id)), delay: 0, load: 0 };
+  const fakeState = { runtime: !fakeSetup, models: new Set(fakeSetup ? [] : MODELS.map((m) => m.id)), delay: 0, load: 0, stopAfter: 0 };
   const stats = { setups: 0, windows: 0, cancelled: 0 };
   const modelOf = (id) => MODELS.find((m) => m.id === id) || MODELS[0];
   const installed = (m) => (fake ? fakeState.models.has(m.id) : NEEDED.every((f) => !!runtime.hfCachedFile(m.repo, f)));
@@ -171,6 +176,7 @@ function createSpeech({ script, tmpDir = path.join(os.tmpdir(), 'nano-studio-spe
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) return fail('badArgs', 'transcribe takes an offset and a length in samples');
     if (length > MAX_WINDOW) return fail('tooLarge', 'one window is 31 s at most');
     const language = LANGS.has(opts.language) ? opts.language : 'auto';
+    const terms = termsOf(opts.terms);
     const m = modelOf(opts.model);
     const key = `${owner}:${opts.request}`;
     if (sender) lastSender = sender;
@@ -190,18 +196,25 @@ function createSpeech({ script, tmpDir = path.join(os.tmpdir(), 'nano-studio-spe
       const late = await Promise.race([stopped, new Promise((r) => setTimeout(() => r(false), fakeState.delay))]);
       inflight.delete(key);
       if (late) { stats.cancelled++; return { cancelled: true }; }
-      return { words: words.fakeWords(samples, { offset, total: f.size / 4, language: language === 'en' ? 'en' : 'ko' }), language: language === 'en' ? 'en' : 'ko' };
+      let heard = words.fakeWords(samples, { offset, total: f.size / 4, language: language === 'en' ? 'en' : 'ko', terms });
+      let end = null;
+      // like Whisper under music: the file's first window ends after stopAfter seconds of text
+      if (fakeState.stopAfter > 0 && offset === 0) {
+        heard = heard.filter(([a]) => a < fakeState.stopAfter);
+        end = heard.length ? heard[heard.length - 1][1] : null;
+      }
+      return { words: heard, end, language: language === 'en' ? 'en' : 'ko' };
     }
     const sc = startServer();
     if (engine.model !== m.id) setEngine({ model: m.id });
-    const job = sc.send({ op: 'transcribe', model: m.repo, file: f.file, offset, length, language });
+    const job = sc.send({ op: 'transcribe', model: m.repo, file: f.file, offset, length, language, terms });
     inflight.set(key, () => sc.notify({ op: 'cancel', target: job.id }));
     // The file is complete up to here: the writes before this request were awaited in readSamples.
     const r = await job.reply;
     inflight.delete(key);
     if (r.cancelled) { stats.cancelled++; return { cancelled: true }; }
     if (r.error) return fail('model', r.error);
-    return { words: words.refine(samples, r.words || []), language: r.language || null, ms: r.ms };
+    return { words: words.refine(samples, r.words || []), end: r.end ?? null, language: r.language || null, ms: r.ms };
   }
   const cancel = (owner, request) => { inflight.get(`${owner}:${request}`)?.(); return true; };
 
@@ -289,12 +302,22 @@ function createSpeech({ script, tmpDir = path.join(os.tmpdir(), 'nano-studio-spe
 
   return {
     MODELS, status, open, write, close, transcribe, cancel, setup, cancelSetup, ownerGone, dispose, classify,
+    // A sound file of open(), for main/cut/speakers.js, once its writes are done: {file, samples, read(offset, length)}.
+    async sound(owner, id) {
+      const f = own(owner, id);
+      if (!f) return null;
+      await f.queue.catch(() => {});
+      return { file: f.file, samples: f.size / 4, read: (offset, length) => readSamples(f, offset, length) };
+    },
     configure({ idleMinutes } = {}) { idleMs = runtime.idleMsOf(idleMinutes); sidecar?.idle(); return true; },
-    // fake only: delay (ms per window), load (ms the next model load takes), unload (the model goes, as after idle)
+    // fake only: delay (ms per window), load (ms the next model load takes), unload (the model goes, as after idle),
+    // stopAfter (s: the first window's text stops there, 0 = off), installed (the ids of the models on this PC)
     testConfig(cfg = {}) {
       if (!fake) return false;
+      if (Array.isArray(cfg.installed)) fakeState.models = new Set(MODELS.map((m) => m.id).filter((id) => cfg.installed.includes(id)));
       if (Number.isFinite(cfg.delay)) fakeState.delay = Math.max(0, cfg.delay);
       if (Number.isFinite(cfg.load)) fakeState.load = Math.max(0, cfg.load);
+      if (Number.isFinite(cfg.stopAfter)) fakeState.stopAfter = Math.max(0, cfg.stopAfter);
       if (cfg.unload) setEngine({ state: 'idle', model: null });
       return true;
     },
@@ -302,4 +325,4 @@ function createSpeech({ script, tmpDir = path.join(os.tmpdir(), 'nano-studio-spe
   };
 }
 
-module.exports = { createSpeech, classify, MODELS };
+module.exports = { createSpeech, classify, termsOf, MODELS, TERMS };

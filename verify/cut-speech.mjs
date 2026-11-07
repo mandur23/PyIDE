@@ -10,6 +10,9 @@
 // - main/cut/whisper.js with the fake backend: temp files written in pieces and read by window, another window's
 //   file refused, windows limited to 31 s, cancel, files deleted on close and when the window goes, the setup
 //   flow (missing, progress, ready; offline and disk failures as codes) and the error classification;
+// - confidence and the word list: Whisper's p kept through refine, the seams and the timeline, uncertain words in the
+//   captions' doubt, a caption's doubt validated, dropped when a person changes its text and kept when the patch says
+//   so; the word list parsed, fingerprinted and validated as a project setting; the fake hears a term it was told of;
 // - speech.js as a page script next to an AMD `require` (Monaco's loader.js), in index.js order.
 // Usage: node verify/cut-speech.mjs
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
@@ -23,7 +26,8 @@ const time = require('../renderer/features/cut/time.js');
 const model = require('../renderer/features/cut/model.js');
 const Sp = require('../renderer/features/cut/speech.js');
 const W = require('../main/cut/speech-words.js');
-const { createSpeech, classify } = require('../main/cut/whisper.js');
+const C = require('../renderer/features/cut/commands.js');
+const { createSpeech, classify, termsOf } = require('../main/cut/whisper.js');
 
 const S = JSON.stringify;
 const results = [];
@@ -72,6 +76,43 @@ await section('seams', () => {
     { from: 25 * R, to: 55 * R, words: [[0, 1.1, 'half'], [3.8, 4.2, 'voice'], [4.2, 4.8, 'recognition'], [4.8, 5.3, 'runs'], [6, 6.4, 'here']] },
   ]);
   eq(edges.map((x) => `${x.text}@${x.t0.toFixed(1)}`), ['before@26.0', 'voice@28.8', 'recognition@29.2', 'runs@29.8', 'here@31.0'], 'the squeezed end words come from the second window, its half-heard start is dropped');
+});
+
+// Under music Whisper wrote "Good evening." (0-2 s) for a 30 s window full of speech and stopped. The windows walked
+// as recognise() does: a fake model that hears a word every second, but stops after 2 s in the window at 0.
+await section('early stop', () => {
+  eq(Sp.nextWindow(0, 30 * R, 29.5, { total: 70 * R }), { next: 25 * R }, 'text to the end of a window: the next starts 5 s before its end');
+  eq(Sp.nextWindow(0, 30 * R, null, { total: 70 * R }), { next: 25 * R }, 'no text: the same');
+  eq(Sp.nextWindow(0, 30 * R, 2, { total: 70 * R }), { next: 2 * R, until: 2 * R }, 'text stopping at 2 s: the next window starts there and this one counts up to there');
+  eq(Sp.nextWindow(2 * R, 32 * R, 3, { total: 70 * R, again: false }), { next: 27 * R }, 'a window that began where the one before stopped does not stop the walk again (lyrics: a pause every few seconds)');
+  eq(Sp.nextWindow(50 * R, 70 * R, 19.5, { total: 70 * R }), { next: null }, 'after the last window with text to its end, none');
+  eq(Sp.nextWindow(50 * R, 70 * R, 3, { total: 70 * R }), { next: 53 * R, until: 53 * R }, 'the last window stopping early is read again from there');
+  eq(Sp.nextWindow(50 * R, 70 * R, 16, { total: 70 * R }), { next: null }, 'but not for the last 4 s of the file (noise there becomes made-up text)');
+  eq(Sp.textStop([[1, 1.4, 'a'], [1.6, 2, 'b'], [6, 6.3, 'c'], [6.5, 7, 'd']], 7.2), 2, 'text with 4 s without words after "b" (Whisper jumped over speech in noise) stops there');
+  eq(Sp.textStop([[1, 1.4, 'a'], [2.5, 3, 'b']], 3.2), 3.2, 'pauses shorter than 2.5 s: the end Whisper gave');
+  eq(Sp.textStop([], null), null, 'no words, no stop');
+  const heard = (from, to) => {
+    const words = [];
+    for (let t = Math.ceil(from / R); t + 0.4 <= to / R; t++) words.push([t - from / R, t + 0.4 - from / R, `w${t}`]);
+    const stopped = from === 0 ? words.filter(([a]) => a < 2) : words;
+    return { words: stopped, end: stopped.length ? stopped[stopped.length - 1][1] : null };
+  };
+  const walk = (total) => {
+    const results = [];
+    let again = true;
+    for (let from = 0; from != null;) {
+      const to = Math.min(total, from + 30 * R);
+      const r = heard(from, to);
+      const step = Sp.nextWindow(from, to, Sp.textStop(r.words, r.end), { total, again });
+      results.push({ from, to, until: step.until, words: r.words });
+      from = step.next;
+      again = step.until == null;
+    }
+    return Sp.mergeWindows(results);
+  };
+  const want = Array.from({ length: 61 }, (_, t) => `w${t}`);
+  eq(walk(60.5 * R).map((w) => w.text), want, 'every word of the 60.5 s, the 28 s Whisper skipped heard from the next window');
+  check(walk(60.5 * R).every((w, i, all) => !i || w.t0 > all[i - 1].t0), 'in time order');
 });
 
 // ---------- timeline ----------
@@ -178,6 +219,75 @@ await section('search', () => {
   eq(Sp.search(ws, '  '), [], 'an empty query finds nothing');
 });
 
+// ---------- confidence and the word list ----------
+await section('confidence', () => {
+  const merged = Sp.mergeWindows([{ from: 0, to: 30 * R, words: [[1, 1.4, 'sure', 0.97], [2, 2.4, 'unsure', 0.21], [3, 3.4, 'old']] }]);
+  eq(merged.map((w) => w.p ?? null), [0.97, 0.21, null], 'the seams keep each word\'s p (none for a word without one)');
+  const clip = { id: 'c1', start: 0, in: 0, out: 10 * T, speed: 1, reverse: false, source: { media: 'm1' } };
+  const tl = Sp.clipWords(clip, merged);
+  eq(tl.map((w) => [w.p ?? null, w.src]), [[0.97, 0], [0.21, 1], [null, 2]], 'the timeline words keep p and their index in the transcript');
+  eq(tl.map((w) => Sp.isUncertain(w)), [false, true, false], 'below UNCERTAIN a word is uncertain; without p it is not');
+  check(!Sp.isUncertain({ p: 1 }) && !Sp.isUncertain({ p: 0.2 }, 0), 'a corrected word (p 1) is not; threshold 0 marks none');
+  const words = [{ ...word(1, 1.4, '오늘은'), p: 0.98 }, { ...word(1.5, 1.9, '박진희'), p: 0.09 }, { ...word(2, 2.6, '감독의'), p: 0.97 }, { ...word(5, 5.4, '신작'), p: 0.95 }];
+  const caps = Sp.captions(words, { frame: F, uncertain: Sp.UNCERTAIN });
+  eq(caps.length, 2, 'two captions (a pause between)');
+  eq(caps[0].doubt?.map((d) => [d.text, d.p]), [['박진희', 0.09]], 'the first caption\'s doubt holds its uncertain word with its p');
+  check(Math.abs(caps[0].doubt[0].at - (1.5 * T - caps[0].start)) < 1 && Number.isInteger(caps[0].doubt[0].at), 'at: whole ticks from the caption\'s start');
+  check(!('doubt' in caps[1]), 'a caption without uncertain words has no doubt');
+  check(Sp.captions(words, { frame: F, uncertain: 0 }).every((c) => !c.doubt), 'uncertain 0: no doubts');
+  check(Sp.captions(words.map(({ p, ...w }) => w), { frame: F }).every((c) => !c.doubt), 'words without p (older transcripts): no doubts');
+});
+await section('word list', () => {
+  eq(Sp.parseTerms('부산국제영화제\n 박지민,  Nano  Studio ;nano studio\n\n김수현、해운대'), ['부산국제영화제', '박지민', 'Nano Studio', '김수현', '해운대'], 'terms: one a line or between commas, spaces tidied, each once (case aside)');
+  eq(Sp.parseTerms(Array.from({ length: 250 }, (_, i) => `t${i}`).join('\n')).length, Sp.TERMS.count, 'at most 200 terms');
+  eq(Sp.termsKey([]), '', 'no list: no fingerprint, so the transcript keys of before stay');
+  check(/^[0-9a-f]{8}$/.test(Sp.termsKey(['박지민'])) && Sp.termsKey(['박지민']) === Sp.termsKey(['박지민']), 'a list has a stable 8-digit fingerprint');
+  check(Sp.termsKey(['박지민', '김수현']) !== Sp.termsKey(['김수현', '박지민']) && Sp.termsKey(['a b']) !== Sp.termsKey(['a', 'b']), 'another order or split, another fingerprint');
+  eq(termsOf([' Nano   Studio ', 3, '', 'x'.repeat(101), null, '박지민']), ['Nano Studio', '박지민'], 'main takes strings only, tidied, at most 100 characters each');
+  eq(termsOf('not a list'), [], 'main: anything but a list is no list');
+  // the benchmark's irrelevant list, read back by Whisper in the room noise after the last sentence
+  const list = ['제주도', '한라산', '롯데월드', 'Microsoft Azure', 'Kubernetes'];
+  const heard = ['도와주시기로', '했습니다.', '제주도,', '한라산,', '롯데월드,', 'Azure,', 'Kubernetes,', 'and', 'the', 'cloud.'].map((text, k) => [k, k + 0.5, text, 0.9]);
+  eq(Sp.dropEcho(heard, list).map((w) => w[2]), ['도와주시기로', '했습니다.', 'and', 'the', 'cloud.'], 'the list read back (terms with its commas, two or more in a row) is dropped');
+  const spoken = ['제주도와', '한라산,', '그리고', '롯데월드에', '갔고,', '제주도,', '좋았어요.'].map((text) => ({ text }));
+  eq(Sp.dropEcho(spoken, list), spoken, 'terms said with particles, or one term alone with a comma, stay');
+  check(Sp.dropEcho(heard, []) === heard, 'without a list nothing changes');
+});
+await section('caption doubt', () => {
+  const p = model.createProject();
+  const seqId = p.sequences[0].id;
+  const h = C.createHistory(p);
+  const doubt = [{ at: F, text: '박진희', p: 0.09 }];
+  const { id } = h.do(C.addCaptionTrack(seqId, { name: 'Auto Captions', items: [{ start: 0, end: 30 * F, text: '박진희 감독의', doubt }, { start: 30 * F, end: 60 * F, text: '신작' }] }));
+  const items = () => h.project.sequences[0].captions.find((t) => t.id === id).items;
+  eq(items().map((it) => it.doubt?.[0]?.text ?? null), ['박진희', null], 'a caption keeps its doubt');
+  check(model.validate(h.project).ok, 'and the project is valid');
+  let threw = false;
+  try { h.do(C.setCaptions(seqId, id, [{ start: 0, end: F, text: 'x', doubt: [{ at: -1, text: 'x', p: 2 }] }])); } catch { threw = true; }
+  check(threw, 'a doubt with a negative time or p over 1 is refused');
+  const a = items()[0].id;
+  h.do(C.setCaption(seqId, id, a, { start: F }));
+  check(items()[0].doubt?.length === 1, 'moving a caption keeps its doubt');
+  h.do(C.setCaption(seqId, id, a, { text: '박지민 감독의', doubt: items()[0].doubt }));
+  check(items()[0].doubt?.length === 1, 'a text change that names the doubt keeps it (Claude\'s polish did not hear the speech)');
+  h.do(C.setCaption(seqId, id, a, { text: '박지민 감독의 신작' }));
+  check(!('doubt' in items()[0]), 'a person\'s text change drops it');
+  h.undo();
+  check(items()[0].doubt?.length === 1, 'undo brings it back');
+  h.do(C.setCaption(seqId, id, a, { doubt: null }));
+  check(!('doubt' in items()[0]) && items()[0].text === '박지민 감독의', 'Mark as Checked: doubt null drops it, the text stays');
+  const bad = model.clone(h.project);
+  bad.sequences[0].captions[0].items[1].doubt = [{ at: 0.5, text: 'x', p: 0.1 }];
+  check(model.validate(bad).errors.some((e) => /doubt/.test(e)), 'validate refuses a doubt at a time that is not whole ticks');
+  h.do(C.setSettings({ speechTerms: ['부산국제영화제', '박지민'] }));
+  eq(h.project.settings.speechTerms, ['부산국제영화제', '박지민'], 'the word list is a project setting');
+  for (const v of [['  padded '], [''], ['x'.repeat(101)], 'text', [3]]) {
+    let refused = false;
+    try { h.do(C.setSettings({ speechTerms: v })); } catch { refused = true; }
+    check(refused, `a word list ${S(v).slice(0, 30)} is refused`);
+  }
+});
+
 // ---------- main/cut/speech-words.js ----------
 const tone = (spans, seconds, { level = 0.3, freq = 440 } = {}) => {
   const a = new Float32Array(Math.round(seconds * R));
@@ -200,6 +310,8 @@ await section('refine', () => {
   const c = tone([[1, 1.3], [1.7, 2.3]], 3);
   const leak = W.refine(c, [[1.25, 2.4, 'word', 0]]);
   check(Math.abs(leak[0][0] - 1.68) < 0.03, `any other word is its longest run (${S(leak[0])})`);
+  const sure = W.refine(a, [[0, 1.9, 'first', 1, 0.31], [3.6, 4, 'quiet', 0, 0.9], [1.9, 3.6, 'second', 0]]);
+  eq(sure.map((w) => w[3] ?? null), [0.31, 0.9, null], 'refine passes Whisper\'s p through (a word without one stays without)');
 });
 await section('bursts', () => {
   const a = tone([[0.5, 0.8], [0.82, 1.0], [2, 2.02], [3, 3.5]], 4);
@@ -208,6 +320,9 @@ await section('bursts', () => {
   eq(words.map((w) => w[2]), [W.FAKE_WORDS.ko[2], W.FAKE_WORDS.ko[4]], 'the fake names a burst by its half second; one cut by the window end is left to the next window');
   const later = W.fakeWords(tone([[1, 1.3]], 10), { offset: 25 * R, total: 60 * R, language: 'en' });
   eq(later.map((w) => w[2]), [W.FAKE_WORDS.en[52 % 10]], 'a later window names its bursts by their time in the file');
+  eq(words.map((w) => w[3]), [W.FAKE_P[2], W.FAKE_P[4]], 'each fake word has its p');
+  const told = W.fakeWords(tone([[1.5, 1.8], [2, 2.3]], 4), { language: 'ko', terms: ['박지민'] });
+  eq(told.map((w) => [w[2], w[3]]), [['박지민', 0.99], [W.FAKE_WORDS.ko[4], W.FAKE_P[4]]], 'with a word list the fake hears its doubtful word as the first term');
 });
 
 // ---------- main/cut/whisper.js with the fake backend ----------
@@ -237,6 +352,12 @@ await section('main', async () => {
     check(Math.abs(r.words[0][0] - 1) < 0.02 && Math.abs(r.words[0][1] - 1.3) < 0.02, 'with their times');
     const r2 = await sp.transcribe(1, f.id, { offset: R * 1.5, length: 10 * R, language: 'en', request: 'b' });
     check(r2.words.length === 2 && Math.abs(r2.words[0][0] - 0.5) < 0.02 && r2.words[0][2] === W.FAKE_WORDS.en[4], 'a window later in the file: times from its start, words named by the file time');
+    const named = await sp.open(1);
+    await sp.write(1, named.id, new Uint8Array(tone([[1.5, 1.8]], 4).buffer));
+    const plain = await sp.transcribe(1, named.id, { offset: 0, length: 4 * R, language: 'ko', request: 'd' });
+    const listed = await sp.transcribe(1, named.id, { offset: 0, length: 4 * R, language: 'ko', terms: ['박지민', 7], request: 'e' });
+    eq([plain.words[0]?.slice(2), listed.words[0]?.slice(2)], [[W.FAKE_WORDS.ko[3], W.FAKE_P[3]], ['박지민', 0.99]], 'the word list reaches the backend: the doubtful word is heard as the first term');
+    await sp.close(1, named.id);
     sp.testConfig({ delay: 2000 });
     const slow = sp.transcribe(1, f.id, { offset: 0, length: R * 10, request: 'c' });
     setTimeout(() => sp.cancel(1, 'c'), 50);

@@ -104,6 +104,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/cut-speech.mjs
+      - name: cut-speakers-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-speakers-core.mjs
+      - name: cut-voice-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-voice-core.mjs
       - name: cut-ai-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

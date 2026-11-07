@@ -491,7 +491,7 @@
       const tracks = seq.captions.filter((c) => c.items.length);
       for (const ct of tracks) {
         const file = sidecarPath(path, ct.lang, tracks.length);
-        const r = await saveBytes(file, srt.write(captionsInRange(ct.items, range)));
+        const r = await saveBytes(file, srt.write(mod('speakers').written(project, ct, captionsInRange(ct.items, range), globalThis.tr)));
         if (!r.ok) return fail(r.code, r.error, { path });
         sidecars.push(r.path);
       }

@@ -5,9 +5,10 @@
 // cache, with the current size and Clear Cache), cut.transitionSeconds and cut.stillSeconds (the default durations:
 // new projects take them and the open project is set to them as one undo step), cut.quality (both monitors'
 // playback quality), cut.proxy (the monitors' proxy switch), cut.proxy.offer (the offer on import) and
-// cut.proxy.height (the proxy size, ui-proxy.js), cut.speech.model, cut.speech.language and cut.speech.lineChars
-// (speech recognition, whose section ui-speech.js adds), cut.ai.model and cut.ai.acknowledged (text AI through Claude,
-// whose section ui-ai.js adds).
+// cut.proxy.height (the proxy size, ui-proxy.js), cut.speech.model, cut.speech.language, cut.speech.lineChars and
+// cut.speech.markUncertain and cut.speech.isolateVoice (speech recognition, whose section ui-speech.js adds; the
+// voice isolation section is ui-voice.js'), cut.ai.model and
+// cut.ai.acknowledged (text AI through Claude, whose section ui-ai.js adds).
 //
 // Cut.ui.settingsButton() -> the top bar's button; Cut.ui.projectDefaults() -> the project settings a new project gets.
 (() => {
@@ -27,9 +28,12 @@
     'cut.proxy.offer': true,
     'cut.proxy.height': 720,
     // speech recognition (ui-speech.js)
-    'cut.speech.model': 'whisper-small',
+    'cut.speech.model': 'whisper-large-v3-turbo',
     'cut.speech.language': 'auto',
     'cut.speech.lineChars': 0,
+    'cut.speech.markUncertain': true,
+    // the voice isolated (ui-voice.js) before speech recognition
+    'cut.speech.isolateVoice': false,
     // text AI through Claude (ui-ai.js)
     'cut.ai.model': 'sonnet',
     'cut.ai.acknowledged': false,
@@ -121,12 +125,13 @@
     proxy.appendChild(el('div', 'muted settings-note', tr('Export always reads the original media.')));
 
     ui.speech?.settingsSection(host, ctx);
+    ui.voice?.settingsSection(host, ctx);
     ui.ai?.settingsSection(host, ctx);
   }
 
   (ide.settingsPages ||= []).push({
     id: 'cut', title: () => tr('Video Editor'), cut: true, index: false, defaults: DEFAULTS, mount,
-    keywords: 'video editor cut autosave copies cache clear proxy transition still image duration playback quality speech recognition whisper captions transcript claude ai translate youtube shorts 영상 편집 자동 저장 사본 캐시 지우기 프록시 전환 정지 이미지 길이 재생 화질 음성 인식 자막 받아쓰기 클로드 번역 유튜브 쇼츠',
+    keywords: 'video editor cut autosave copies cache clear proxy transition still image duration playback quality speech recognition whisper captions transcript claude ai translate youtube shorts voice isolation demucs noise music 영상 편집 자동 저장 사본 캐시 지우기 프록시 전환 정지 이미지 길이 재생 화질 음성 인식 자막 받아쓰기 클로드 번역 유튜브 쇼츠 음성 분리 잡음 음악',
   });
 
   // ---------- the top bar's menu ----------

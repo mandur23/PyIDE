@@ -1,0 +1,18 @@
+/* speaker labels (ui-speakers.js): the Transcript panel's speakers row and paragraph labels. --spk is the speaker's
+   color, set on the element. */
+.cut-spk-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--gray4); min-height: 30px; box-sizing: border-box; }
+.cut-spk-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; }
+.cut-spk-none { font-size: 11px; color: var(--gray8); }
+.cut-spk-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; max-width: 180px; padding: 0 7px; border: 1px solid var(--gray5); border-radius: 11px; font-size: 11.5px; color: var(--gray11); background: var(--gray2); }
+.cut-spk-chip:hover { background: var(--gray4); color: var(--gray12); }
+.cut-spk-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-spk-chip-count { color: var(--gray8); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.cut-spk-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--spk); box-shadow: 0 0 0 1px color-mix(in srgb, var(--gray12) 20%, transparent); }
+.cut-spk-count { flex: none; height: 24px; font-size: 11.5px; }
+.cut-transcript .cut-spk-run { flex: none; height: 24px; padding: 0 8px; border: 1px solid var(--gray5); border-radius: 3px; font-size: 11.5px; }
+.cut-transcript .cut-spk-run:hover:not(:disabled) { background: var(--gray4); color: var(--gray12); }
+.cut-tr-speaker { display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; padding: 0 6px 0 4px; height: 19px; vertical-align: 1px; border-radius: 3px; font-size: 11.5px; font-weight: 600;
+  color: color-mix(in srgb, var(--spk) 50%, var(--gray12)); background: color-mix(in srgb, var(--spk) 14%, transparent); max-width: 160px; }
+.cut-tr-speaker:hover { background: color-mix(in srgb, var(--spk) 26%, transparent); }
+.cut-tr-speaker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-spk-name { width: 100%; box-sizing: border-box; }

@@ -19,6 +19,8 @@ const { faststart } = require('../cut/faststart');
 const { findMedia, listMedia } = require('../cut/find');
 const { createFonts, fontDirs } = require('../cut/fonts');
 const { createSpeech } = require('../cut/whisper');
+const { createSpeakers } = require('../cut/speakers');
+const { createVoice } = require('../cut/voice');
 const { createAi } = require('../cut/ai');
 
 const CACHE_LIMIT_SETTING = 'cut.cacheLimitGB';
@@ -56,6 +58,11 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   cache = createCache({ dir: dirs.cache, limit: cacheLimit, busy: () => sinks.openParts(), log });
   sinks.sweep().catch((err) => log?.warn?.(`export cleanup: ${err.message}`));
   const speech = createSpeech({ script: path.join(unpackedDir || path.join(__dirname, '..', '..'), 'main', 'ai', 'whisper_server.py'), log });
+  const speakers = createSpeakers({ script: path.join(unpackedDir || path.join(__dirname, '..', '..'), 'main', 'ai', 'speaker_server.py'), speech, log });
+  const voice = createVoice({
+    script: path.join(unpackedDir || path.join(__dirname, '..', '..'), 'main', 'ai', 'voice_server.py'),
+    mediaDir: path.join(home, 'Media'), cacheDir: dirs.cache, onCached: (file) => cache.added(file), log,
+  });
   const ai = createAi({ log });
 
   const watched = new Set();
@@ -72,7 +79,9 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
       watched.delete(id);
       sinks.ownerGone(id).catch(() => {});
       projects.ownerGone(id, { crashed: false }).catch(() => {});
+      speakers.ownerGone(id);
       speech.ownerGone(id).catch(() => {});
+      voice.ownerGone(id).catch(() => {});
       ai.ownerGone(id);
     });
   }
@@ -242,12 +251,36 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   handle('cut:speechTestConfig', (_o, cfg) => speech.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
   app.on?.('before-quit', () => { speech.dispose().catch(() => {}); });
 
+  // ---------- speaker labels (main/cut/speakers.js), on the sound files of speech recognition ----------
+  handle('cut:speakersStatus', () => speakers.status());
+  ipcMain.handle('cut:speakersSetup', (e) => { watch(e?.sender); return speakers.setup(e?.sender); });
+  handle('cut:speakersCancelSetup', () => speakers.cancelSetup());
+  handle('cut:speakersConfigure', (_o, opts) => speakers.configure(opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:speakersEmbed', (owner, id, opts) => speakers.embed(owner, id, opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:speakersCancel', (owner, request) => speakers.cancel(owner, request));
+  handle('cut:speakersTestConfig', (_o, cfg) => speakers.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
+  app.on?.('before-quit', () => { speakers.dispose().catch(() => {}); });
+
+  // ---------- voice isolation (main/cut/voice.js) ----------
+  handle('cut:voiceStatus', () => voice.status());
+  ipcMain.handle('cut:voiceSetup', (e) => { watch(e?.sender); return voice.setup(e?.sender); });
+  handle('cut:voiceCancelSetup', () => voice.cancelSetup());
+  handle('cut:voiceConfigure', (_o, opts) => voice.configure(opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:voiceFind', (_o, opts) => voice.find(opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:voiceOpen', (owner, opts) => voice.open(owner, opts && typeof opts === 'object' ? opts : {}));
+  handle('cut:voiceWrite', (owner, id, bytes) => voice.write(owner, id, bytes));
+  ipcMain.handle('cut:voiceSeparate', (e, id, opts) => { watch(e?.sender); return voice.separate(e?.sender?.id ?? 0, id, opts && typeof opts === 'object' ? opts : {}, e?.sender); });
+  handle('cut:voiceCancel', (owner, request) => voice.cancel(owner, request));
+  handle('cut:voiceClose', (owner, id) => voice.close(owner, id));
+  handle('cut:voiceTestConfig', (_o, cfg) => voice.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
+  app.on?.('before-quit', () => { voice.dispose().catch(() => {}); });
+
   // ---------- text AI through Claude Code (main/cut/ai.js): text in, text out ----------
   handle('cut:aiStatus', () => ai.status());
   ipcMain.handle('cut:aiComplete', (e, req) => { watch(e?.sender); return ai.run(e?.sender?.id ?? 0, req, e?.sender); });
   handle('cut:aiCancel', (owner, request) => ai.cancel(owner, request));
 
-  return { dirs, run, speech, ai };
+  return { dirs, run, speech, speakers, voice, ai };
 }
 
 module.exports = { register, cutHome };

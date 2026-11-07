@@ -49,6 +49,13 @@
 .cut-tl-hb.eye:not(.on) { color: var(--gray6); }
 .cut-tl-hb.mute.on { background: #2f7d4a; color: #fff; }
 .cut-tl-hb.solo.on { background: #b38f1a; color: #fff; }
+.cut-tl-hvol { position: absolute; left: 6px; right: 6px; top: 26px; height: 14px; display: flex; align-items: center; gap: 6px; cursor: ew-resize; touch-action: none; }
+.cut-tl-hvol[hidden] { display: none; }
+.cut-tl-hvol-bar { position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--gray4); }
+.cut-tl-hvol-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--gray8); }
+.cut-tl-hvol:hover .cut-tl-hvol-fill { background: var(--cut-accent); }
+.cut-tl-hvol-unity { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--gray7); }
+.cut-tl-hvol-text { flex: none; min-width: 34px; text-align: right; font-family: var(--mono); font-size: 10px; color: var(--gray9); }
 .cut-tl-hgrip { position: absolute; left: 0; right: 0; bottom: -2px; height: 6px; cursor: ns-resize; }
 
 .cut-tl-lanes { position: relative; overflow: hidden; min-width: 0; min-height: 0; }

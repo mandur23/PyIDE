@@ -21,8 +21,8 @@ function frameDb(samples) {
   return out;
 }
 
-// words: [[t0, t1, text, lead?]] in seconds from the window's start -> [[t0, t1, text]] with t0 and t1 moved in to
-// the sound of the word (never out, and only by more than `slack`). The span's sound is split into runs at quiet gaps
+// words: [[t0, t1, text, lead?, p?]] in seconds from the window's start -> [[t0, t1, text, p?]] with t0 and t1 moved
+// in to the sound of the word (never out, and only by more than `slack`); p, Whisper's confidence, passes through. The span's sound is split into runs at quiet gaps
 // of `gap` seconds or more: a word's sound is its longest run (Whisper stretches words over the pauses around them,
 // and a neighbour's last syllable can reach in), except for the first word of a segment (lead), whose start Whisper
 // puts before the pause ahead of it, at a window's start even over speech it did not write out: its sound is its last
@@ -34,7 +34,8 @@ function refine(samples, words, { floor = -48, below = 38, slack = 0.08, lead = 
   const thr = Math.max(floor, peak - below);
   const step = FRAME / RATE;
   const join = Math.round(gap / step);
-  return words.map(([t0, t1, text, first]) => {
+  return words.map(([t0, t1, text, first, p]) => {
+    const word = (a, b) => (p == null ? [a, b, text] : [a, b, text, p]);
     const f0 = Math.max(0, Math.floor(t0 / step));
     const f1 = Math.min(db.length, Math.ceil(t1 / step));
     const runs = [];
@@ -44,13 +45,13 @@ function refine(samples, words, { floor = -48, below = 38, slack = 0.08, lead = 
       if (r && f - r[1] <= join) r[1] = f + 1;
       else runs.push([f, f + 1]);
     }
-    if (!runs.length) return [t0, t1, text];
+    if (!runs.length) return word(t0, t1);
     const [s, e] = first ? runs[runs.length - 1] : runs.reduce((x, y) => (y[1] - y[0] > x[1] - x[0] ? y : x));
     const a = Math.max(t0, s * step - lead);
     const b = Math.min(t1, e * step + tail);
     const n0 = a - t0 > slack ? a : t0;
     const n1 = t1 - b > slack ? b : t1;
-    return n1 > n0 ? [round(n0), round(n1), text] : [t0, t1, text];
+    return n1 > n0 ? word(round(n0), round(n1)) : word(t0, t1);
   });
 }
 const round = (x) => Math.round(x * 1000) / 1000;
@@ -79,12 +80,14 @@ function bursts(samples, { threshold = -35, join = 0.03, min = 0.04 } = {}) {
 
 // The fake model's words: one per burst, its text from the burst's half second (rounded) in the file, so every window that
 // holds a burst names it the same way. Bursts cut by the window's edge are left to the window that holds them whole,
-// except at the start and end of the file.
+// except at the start and end of the file. Each word has its confidence (FAKE_P: two of the ten are doubtful), and
+// with a word list the doubtful 4th word is heard as the list's first term, as Whisper hears a name it was told.
 const FAKE_WORDS = {
   ko: ['안녕하세요', '음', '오늘은', '자막을', '어', '만들어', '봅니다.', '그', '편집이', '쉬워요.'],
   en: ['Hello', 'um', 'today', 'we', 'uh', 'make', 'captions.', 'This', 'is', 'easy.'],
 };
-function fakeWords(samples, { offset = 0, total = Infinity, language = 'ko' } = {}) {
+const FAKE_P = [0.98, 0.9, 0.97, 0.31, 0.88, 0.95, 0.99, 0.86, 0.42, 0.96];
+function fakeWords(samples, { offset = 0, total = Infinity, language = 'ko', terms = [] } = {}) {
   const list = FAKE_WORDS[language] || FAKE_WORDS.ko;
   const seconds = samples.length / RATE;
   const atStart = offset <= 0;
@@ -93,10 +96,10 @@ function fakeWords(samples, { offset = 0, total = Infinity, language = 'ko' } = 
   const out = [];
   for (const [a, b] of bursts(samples)) {
     if ((a < edge && !atStart) || (b > seconds - edge && !atEnd)) continue;
-    const abs = offset / RATE + a;
-    out.push([a, b, list[Math.round(abs * 2) % list.length]]);
+    const k = Math.round((offset / RATE + a) * 2) % list.length;
+    out.push(k === 3 && terms.length ? [a, b, terms[0], 0.99] : [a, b, list[k], FAKE_P[k]]);
   }
   return out;
 }
 
-module.exports = { RATE, frameDb, refine, bursts, fakeWords, FAKE_WORDS };
+module.exports = { RATE, frameDb, refine, bursts, fakeWords, FAKE_WORDS, FAKE_P };

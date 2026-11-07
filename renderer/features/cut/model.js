@@ -18,6 +18,7 @@
   // Not `typeof require`: Monaco's AMD loader makes require a global function in the page.
   const NODE = typeof module === 'object' && !!module.exports;
   const time = NODE ? require('./time.js') : globalThis.Cut.time;
+  const captionwords = () => (NODE ? require('./captionwords.js') : globalThis.Cut.captionwords);
 
   const VERSION = 1;
   const EASES = ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut', 'bezier'];
@@ -100,9 +101,14 @@
   }
 
   // `size` is in pixels of a picture whose shorter side is `ref` (1080) lines: captions keep their look at 720p, 4K and
-  // 9:16. Tracks saved before `ref` existed held sequence pixels; migrate() converts them.
+  // 9:16. Tracks saved before `ref` existed held sequence pixels; migrate() converts them. `highlight` lights the word
+  // being spoken (captions with word timings only) in `highlightColor`, as its text color or as a box behind it
+  // (`highlightMode`: captionwords.MODES).
   function defaultCaptionStyle() {
-    return { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ref: 1080 };
+    return {
+      font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ref: 1080,
+      highlight: false, highlightColor: '#ffd23f', highlightMode: 'color',
+    };
   }
 
   // A clip with every field; `kind` is the kind of the track it goes on.
@@ -182,6 +188,29 @@
   const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
   const isNumArr = (x, n) => Array.isArray(x) && x.length === n && x.every(isNum);
   const kfValue = (v) => isNum(v) || (Array.isArray(v) && v.length > 0 && v.every(isNum)) || isStr(v) || isBool(v);
+  // A caption's doubt: the words of it speech recognition was unsure of, [{at: ticks from the caption's start, text,
+  // p: Whisper's confidence 0-1}]. Auto Captions writes it; editing the caption's text drops it.
+  const validDoubt = (d) => Array.isArray(d) && d.every((x) => isObj(x) && isInt(x.at) && x.at >= 0 && isStr(x.text) && isNum(x.p) && x.p >= 0 && x.p <= 1);
+  // Speaker labels (Cut.speakers): {list: [{id, name, color}], turns: {mediaId: [[t0, t1, id]] source seconds, in
+  // order and apart}, count: 0 for Auto or the fixed number asked for}. A media id without media is kept (the media
+  // can come back with undo); a turn's speaker must be in the list.
+  const SPEAKER_ID = /^sp\d+$/;
+  function validateSpeakers(sp, err) {
+    if (!isObj(sp) || !Array.isArray(sp.list) || !isObj(sp.turns) || !isInt(sp.count) || sp.count < 0 || sp.count > 10) return err('speakers: fields');
+    const ids = new Set();
+    for (const s of sp.list) {
+      if (!isObj(s) || !isStr(s.id) || !SPEAKER_ID.test(s.id) || ids.has(s.id) || !isStr(s.name) || !isColor(s.color)) { err('speakers: list'); return; }
+      ids.add(s.id);
+    }
+    for (const [media, turns] of Object.entries(sp.turns)) {
+      if (!Array.isArray(turns)) { err(`speakers: turns of ${media}`); continue; }
+      let last = -Infinity;
+      for (const t of turns) {
+        if (!Array.isArray(t) || t.length !== 3 || !isNum(t[0]) || !isNum(t[1]) || t[0] < last || t[1] <= t[0] || !ids.has(t[2])) { err(`speakers: turns of ${media}`); break; }
+        last = t[1];
+      }
+    }
+  }
 
   // A sequence runs at one of the offered rates (features section 3); clipDuration's rounding relies on it.
   function validFps(fps) {
@@ -264,6 +293,7 @@
       if (!isObj(seq)) continue;
       validateSequence(project, seq, mediaById, claim, err, linkSeq);
     }
+    if (project.speakers !== undefined) validateSpeakers(project.speakers, err);
     return { ok: errors.length === 0, errors };
   }
 
@@ -429,6 +459,9 @@
         if (it.start < last) err(`${X}: captions are not in order`);
         last = it.start;
         if (!isStr(it.text)) err(`${X}: caption ${it.id} text`);
+        if (it.doubt !== undefined && !validDoubt(it.doubt)) err(`${X}: caption ${it.id} doubt`);
+        if (it.words !== undefined && !captionwords().valid(it.words, it.text)) err(`${X}: caption ${it.id} words`);
+        if (it.speaker !== undefined && !(isStr(it.speaker) && SPEAKER_ID.test(it.speaker))) err(`${X}: caption ${it.id} speaker`);
       }
     }
   }
@@ -532,6 +565,13 @@
         for (const m of seq.markers) { m.t = sn(m.t); m.duration = sn(m.duration); }
         for (const ct of seq.captions) {
           for (const it of ct.items) { it.start = sn(it.start); it.end = Math.max(it.start + f, sn(it.end)); }
+          // word timings that no longer fit their text (written by hand or by another tool) are fitted again or dropped
+          for (const it of ct.items) {
+            if (it?.words === undefined) continue;
+            const words = captionwords().realign(it.words, it.text, { frame: f, duration: it.end - it.start });
+            if (words) it.words = words;
+            else delete it.words;
+          }
           ct.items.sort((a, b) => a.start - b.start);
         }
       }
@@ -555,7 +595,7 @@
   return {
     VERSION, QUANTUM, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ROLES, ALIGNS,
     clone, newId, defaultSettings, createProject, createSequence, createTrack, createClip, createTextLayer, defaultCaptionStyle,
-    videoProps, audioProps, validate, validPropPath, validFps, migrate,
+    videoProps, audioProps, validate, validPropPath, validFps, validDoubt, migrate,
     clipDuration, clipEnd, sequenceDuration, clipsAt, sourceTime, trackIndex, trackOf, linkedClips, mediaOf, isGenerator, isStill,
   };
 });

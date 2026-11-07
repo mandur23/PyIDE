@@ -5,7 +5,8 @@
 // white balance keeping gray, blur weights summing to one, mosaic blocks, the vignette's center and corners, crop),
 // the transitions at their ends and midpoints, the constant power crossfade, the compositor's plan of a sequence
 // (track order, transitions with their progress and handles, disabled clips and hidden tracks, keyframed props and
-// effect parameters at t, captions), fit scales, the motion presets' keyframes, the reader's block cache, audio
+// effect parameters at t, captions), fit scales, the motion presets' keyframes, the caption word highlight standing
+// out on every speaker color (a box for a line close to the highlight color), the reader's block cache, audio
 // assembly with encoder priming, peaks and the dropped-frame count.
 // Usage: node verify/cut-engine-core.mjs
 import { createRequire } from 'module';
@@ -310,6 +311,33 @@ check(S(merged['layers.l1.opacity'].map((k) => [k.t / SEC, k.v])) === '[[0,0],[0
 const resolved = textrender.resolveLayer(layer, { keyframes: tw }, SEC * 0.35);
 near(resolved.reveal, 0.5, 1e-9, 'resolveLayer: a keyframe-only field at t');
 check(resolved.opacity === 100 && resolved.text === layer.text, 'resolveLayer: defaults and static fields');
+
+// the lit word stands out on every speaker color: each fillText's and fill's color, from a recording context
+function drawnCaption(item, style) {
+  const ops = [];
+  const noop = () => {};
+  const ctx = { canvas: { width: 1920 }, fillStyle: '', font: '', save: noop, restore: noop, setTransform: noop, beginPath: noop, rect: noop, roundRect: noop, clip: noop, fillRect: noop,
+    measureText: (s) => ({ width: s.length * 20 }), fillText() { ops.push(['text', this.fillStyle]); }, fill() { ops.push(['box', this.fillStyle]); } };
+  textrender.drawCaptions(ctx, [item], { ...model.defaultCaptionStyle(), highlight: true, ...style }, { w: 1920, h: 1080, t: SEC / 4 });
+  return ops;
+}
+const apart = (a, b) => {
+  const [p, q] = [a, b].map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
+  const r = (p[0] + q[0]) / 2;
+  return Math.sqrt((2 + r / 256) * (p[0] - q[0]) ** 2 + 4 * (p[1] - q[1]) ** 2 + (2 + (255 - r) / 256) * (p[2] - q[2]) ** 2);
+};
+const spoken = { start: 0, end: SEC, text: 'alpha beta', words: [{ t0: 0, t1: SEC / 2, text: 'alpha' }, { t0: SEC / 2, t1: SEC, text: 'beta' }] };
+const boxedOn = [];
+for (const c of ['#ffffff', ...require(`${dir}speakers.js`).PALETTE]) {
+  const ops = drawnCaption({ ...spoken, color: c }, {});
+  const [rest, lit] = ops.filter((o) => o[0] === 'text').map((o) => o[1]);
+  const box = ops.find((o) => o[0] === 'box')?.[1];
+  if (box) boxedOn.push(c);
+  check(rest === c && apart(lit, c) >= 150 && (!box || apart(lit, box) >= 150), `a line in ${c} lights its word in ${lit}${box ? ` on a ${box} box` : ''}, apart from the line`);
+}
+check(S(boxedOn) === S(['#ffb74d', '#fff176']), `in color mode only the lines too close to the highlight get the box (${S(boxedOn)})`);
+const own = drawnCaption({ ...spoken }, { color: '#ffd23f' });
+check(own.some((o) => o[0] === 'box'), 'and so does a caption color the person chose close to the highlight');
 
 // ---- reader block cache ----
 const file = new Uint8Array(1_000_000).map((_, i) => (i * 7 + (i >> 9)) & 255);

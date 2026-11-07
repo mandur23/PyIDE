@@ -126,12 +126,14 @@
     return layers.filter((l) => (l.kind === 'clip' ? l.item.kind !== 'adjustment' : true));
   }
 
-  // Caption tracks to burn in: opts.captions true = the first track, a track id, or a list of ids.
+  // Caption tracks to burn in: opts.captions true = the first track, a track id, or a list of ids. `t` goes along at
+  // the start of its frame, so the word lit while playing (any t inside a frame) is the one exported for that frame.
   function captionsAt(seq, t, which) {
     if (!which) return [];
     const tracks = seq.captions || [];
     const chosen = which === true ? tracks.slice(0, 1) : tracks.filter((c) => (Array.isArray(which) ? which.includes(c.id) : c.id === which));
-    return chosen.map((c) => ({ style: c.style, items: (c.items || []).filter((it) => it.start <= t && t < it.end) })).filter((c) => c.items.length);
+    const ft = seq.fps ? need('time').snap(t, seq.fps) : t;
+    return chosen.map((c) => ({ style: c.style, t: ft, items: (c.items || []).filter((it) => it.start <= t && t < it.end) })).filter((c) => c.items.length);
   }
 
   // A sequence that shows one media file at its own size, for the source monitor.
@@ -861,7 +863,7 @@ ${V}
       if (captions.length || overlays) {
         const c = newCanvas(Math.round(seq.w * k), Math.round(seq.h * k));
         const g = c.getContext('2d');
-        for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k });
+        for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k, t: cap.t });
         drawOverlays(g, overlays, seq.w, seq.h, k);
         ctx.drawImage(c, 0, 0, seq.w, seq.h);
       }
@@ -909,7 +911,7 @@ ${V}
       g.setTransform(1, 0, 0, 1, 0, 0);
       g.clearRect(0, 0, cw, ch);
       const k = cw / seq.w;
-      for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k });
+      for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k, t: cap.t });
       drawOverlays(g, overlays, seq.w, seq.h, k);
       return capCanvas;
     }
@@ -919,7 +921,8 @@ ${V}
       const t0 = performance.now();
       const q = [1, 0.5, 0.25].includes(ropts.quality) ? ropts.quality : 1;
       const layers = plan(project, seq, t);
-      const captions = captionsAt(seq, t, ropts.captions);
+      // with the speaker's name and color where the track shows them
+      const captions = need('speakers').decorate(project, captionsAt(seq, t, ropts.captions), globalThis.tr);
       const k = be.backend === 'webgpu' ? q : Math.min(be.width / seq.w, be.height / seq.h) * q;
       const ctx = { sources, k, proxy: !!ropts.proxy, textCanvas: (it, W, H) => texts(it, W, H, k) };
       const frames = await fetchSources(project, seq, layers, ctx);

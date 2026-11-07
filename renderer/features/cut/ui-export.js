@@ -72,6 +72,9 @@
     const loudSel = ui.select({ options: [{ value: '-14', label: tr('YouTube (-14 LUFS)') }, { value: '-24', label: tr('Broadcast (-24 LUFS)') }, { value: 'off', label: tr('Do not change') }], value: '-14', cls: 'cut-export-loudness', onChange: () => refresh() });
     const rangeSel = ui.select({ options: [{ value: 'all', label: tr('Entire sequence') }, { value: 'inout', label: tr('In to Out') }], value: 'all', cls: 'cut-export-range', onChange: () => refresh() });
     const capSel = ui.select({ options: [{ value: 'none', label: tr('None') }, { value: 'burn', label: tr('Burn into the video') }, { value: 'srt', label: tr('SRT file beside the video') }, { value: 'both', label: tr('Both') }], value: 'none', cls: 'cut-export-captions', onChange: () => refresh() });
+    // which of several caption tracks is burned in: the one shown in the captions panel (and the program monitor)
+    const burnNote = el('div', 'cut-dialog-note cut-export-burn-track');
+    burnNote.hidden = true;
     const pathIn = el('input', 'cut-export-path', undefined, { type: 'text', spellcheck: 'false' });
     let pathTouched = false;
     pathIn.addEventListener('input', () => { pathTouched = true; refresh(); });
@@ -96,7 +99,7 @@
       ui.row(tr('Sequence'), seqSel), ui.row(tr('Preset'), presetSel),
       el('div', 'cut-form-section', tr('Video')), videoRows,
       el('div', 'cut-form-section', tr('Audio')), ui.row(tr('Audio bitrate'), audioSel), ui.row(tr('Loudness'), loudSel),
-      el('div', 'cut-form-section', tr('Output')), ui.row(tr('Range'), rangeSel), ui.row(tr('Captions'), capSel), ui.row(tr('File'), pathRow),
+      el('div', 'cut-form-section', tr('Output')), ui.row(tr('Range'), rangeSel), ui.row(tr('Captions'), capSel), burnNote, ui.row(tr('File'), pathRow),
     );
     const tools = el('div', 'cut-export-tools');
     tools.append(measureBtn, chaptersBtn);
@@ -113,6 +116,8 @@
     root.append(body, estimate, warn, loudness, tools, progress, result);
 
     const seqOf = () => app.project?.sequences.find((s) => s.id === seqSel.value) || app.sequence;
+    // The caption track burned in: the one the captions panel shows for the active sequence, else the first.
+    const burnTrack = (seq) => (seq && seq.id === app.sequenceId && ui.captions?.trackOf(app)) || seq?.captions?.[0] || null;
     function fillSequences() {
       const list = app.project?.sequences || [];
       seqSel.setOptions(list.map((s) => ({ value: s.id, label: s.name })), list.some((s) => s.id === seqSel.value) ? seqSel.value : app.sequenceId);
@@ -170,6 +175,9 @@
       const hasCaptions = !!seq?.captions?.some((c) => c.items.length);
       capSel.disabled = !hasCaptions || !isVideo;
       if (capSel.disabled) capSel.value = 'none';
+      const burned = burnTrack(seq);
+      burnNote.hidden = !(burned && seq.captions.length > 1 && (capSel.value === 'burn' || capSel.value === 'both'));
+      burnNote.textContent = burned ? tr('Burns in the caption track shown in the Captions panel: {name}', { name: burned.name }) : '';
       const io = app.inOut;
       rangeSel.disabled = seq?.id !== app.sequenceId || (io.in == null && io.out == null);
       if (rangeSel.disabled) rangeSel.value = 'all';
@@ -235,7 +243,7 @@
       if (ui.exportQueue?.writes?.(path)) { ui.toast(tr('An export in the queue already writes {name}.', { name: ui.basename(path) })); return null; }
       const st = await ide.api.invoke('cut:stat', path).catch(() => null);
       if (st && !st.missing && !(await ui.confirm(tr('{name} already exists. Replace it?', { name: ui.basename(path) }), { title, ok: tr('Replace') }))) return null;
-      return { seq, path, resolved: resolvedNow(), range: range(), captions: capSel.value === 'none' ? null : capSel.value };
+      return { seq, path, resolved: resolvedNow(), range: range(), captions: capSel.value === 'none' ? null : capSel.value, captionTrack: burnTrack(seq)?.id || null };
     }
     // Adds these settings and a copy of the project as it is now to the export queue. -> the job, or null.
     async function enqueue() {
@@ -245,7 +253,7 @@
       const preset = Cut.presets?.get?.(presetSel.value);
       const added = ui.exportQueue.add({
         project: JSON.parse(JSON.stringify(app.project)), seqId: job.seq.id, seqName: job.seq.name, fps: [...job.seq.fps],
-        path: job.path, settings: JSON.parse(JSON.stringify(job.resolved)), range: job.range, captions: job.captions,
+        path: job.path, settings: JSON.parse(JSON.stringify(job.resolved)), range: job.range, captions: job.captions, captionTrack: job.captionTrack,
         presetName: preset ? tr(preset.name) : presetSel.value,
       });
       ui.toast(tr('Added {name} to the export queue', { name: ui.basename(job.path) }));
@@ -277,7 +285,7 @@
       try {
         r = await Cut.export.run({
           project: app.project, seqId: seq.id, path, preset: presetSel.value, overrides: overrides(), settings: resolved,
-          range: job.range, captions: job.captions, signal: controller.signal,
+          range: job.range, captions: job.captions, captionTrack: job.captionTrack, signal: controller.signal,
           onProgress: (p) => {
             const f = typeof p === 'number' ? p : p?.fraction ?? (p?.frame != null && p?.frames ? p.frame / p.frames : null);
             if (f != null) {
@@ -334,7 +342,7 @@
       result.appendChild(button({ label: tr('Show in Explorer'), cls: 'cut-result-reveal', onClick: () => ide.api.invoke('cut:reveal', r.path) }));
     }
 
-    const offs = [app.on('project', () => refresh()), app.on('sequence', () => { pathTouched = false; refresh(); }), app.on('inout', () => refresh())];
+    const offs = [app.on('project', () => refresh()), app.on('sequence', () => { pathTouched = false; refresh(); }), app.on('inout', () => refresh()), app.on('captionTrack', () => refresh())];
     hevcAvailable().then((ok) => {
       if (ok) codecSel.setOptions([{ value: 'h264', label: 'H.264' }, { value: 'hevc', label: tr('HEVC (hardware)') }], codecSel.value);
     });

@@ -765,6 +765,7 @@
           else list.push({ label: e.item.proxy ? tr('Create Proxy Again') : tr('Create Proxy'), run: () => { if (e.item.proxy) ui.proxy.remove(app, ids); ui.proxy.create(app, ids); } });
           if (e.item.proxy) list.push({ label: tr('Remove Proxy'), run: () => ui.proxy.remove(app, ids) });
         }
+        if (e.item.audio && ui.voice) list.push({ label: tr('Isolate Voice'), run: () => ui.voice.isolateMedia(app, selected.has(e.id) ? selectedMedia() : [e.id]).catch((err) => ui.report(err)) });
         list.push({ label: tr('Reveal in Explorer'), run: () => ide.api.invoke('cut:reveal', e.item.path) });
         list.push({ label: tr('New Sequence from Clip'), run: () => sequenceFromClip(app, e.item) });
       }

@@ -2,9 +2,10 @@
 
 Reads one JSON request per line on stdin and answers with one JSON line on stdout:
   {"id": 1, "op": "transcribe", "model": "openai/whisper-small", "file": "<raw float32 LE, 16 kHz mono>",
-   "offset": 0, "length": 480000, "language": "ko" | "en" | "auto"}
-  -> {"id": 1, "words": [[t0, t1, "text", lead], ...], "language": "ko", "ms": 2100}
-     (seconds from `offset`; lead = 1 for the first word of one of Whisper's segments)
+   "offset": 0, "length": 480000, "language": "ko" | "en" | "auto", "terms": ["Nano Studio", ...]}
+  -> {"id": 1, "words": [[t0, t1, "text", lead, p], ...], "end": 28.4, "language": "ko", "ms": 2100}
+     (seconds from `offset`; lead = 1 for the first word of one of Whisper's segments; p = how sure Whisper was of
+     the word, the lowest probability of its tokens; end = where the text stops, null without words)
   {"id": 2, "op": "cancel", "target": 1}  (no reply; the target answers {"id": 1, "cancelled": true})
 Events without an id report the model state: {"event": "loading"}, {"event": "ready", "ms": 2400}.
 
@@ -28,12 +29,21 @@ RATE = 16000
 MAX_SECONDS = 30
 SILENT_DB = -50.0
 LANGUAGES = ("ko", "en")
-
+# A window whose text repeats itself (zlib ratio of its tokens above 1.35, "김치김치김치...") or that Whisper is unsure
+# of (average log-probability under -1) is decoded again at a higher temperature, as OpenAI's transcribe does, and
+# one it is unsure of that is likely no speech (probability over 0.6) gives no words: song lyrics under a music intro
+# came out as captions. The seed makes the samples, and so the transcript, the same on every run.
+FALLBACK = {"temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0), "compression_ratio_threshold": 1.35, "logprob_threshold": -1.0, "no_speech_threshold": 0.6}
+# The person's word list goes to Whisper as the text before the window (prompt_ids), the terms joined by commas, as
+# many as fit in PROMPT_TOKENS (Whisper's limit is 223); the first terms win.
+PROMPT_TOKENS = 200
+NOT_TEXT = chr(0xFFFD)  # what a token holding part of a character's bytes decodes to
 np = None
 torch = None
 processor = None
 model = None
 loaded = None
+decoded = {}  # id of a decode's output -> its temperature (this request's)
 cancelled = set()
 requests = collections.deque()
 pending_input = b""
@@ -57,6 +67,17 @@ def load(repo):
     processor = WhisperProcessor.from_pretrained(repo, local_files_only=True)
     # Eager attention: word timestamps come from the cross-attention weights, which the fused kernels do not return.
     model = WhisperForConditionalGeneration.from_pretrained(repo, local_files_only=True, dtype=torch.float32, attn_implementation="eager").eval()
+    # The scores of a decode at temperature T are the logits divided by T; the words' probabilities need T back. The
+    # fallback asks _need_fallback about every decode it makes; the output it keeps is the one asked about last. One
+    # window can take two passes (Whisper seeks on when its last segment is cut off), each with its own temperature, so
+    # the temperature is kept per output: a greedy first pass read with the second pass's 0.2 gave every word p 0.001.
+    need = getattr(model, "_need_fallback", None)
+    if need is not None:
+        def remember(seek_sequence, seek_outputs, index, logits_processor, generation_config, vocab_size, temperature, *rest):
+            decoded[id(seek_outputs[index])] = temperature
+            return need(seek_sequence, seek_outputs, index, logits_processor, generation_config, vocab_size, temperature, *rest)
+
+        model._need_fallback = remember
     loaded = repo
     emit({"event": "ready", "ms": round((time.perf_counter() - t) * 1000)})
 
@@ -89,10 +110,27 @@ class Cancel:
         return torch.full((input_ids.shape[0],), stop, dtype=torch.bool)
 
 
-def words_of(ids, stamps):
-    """Token ids and their end times (one segment) -> [[t0, t1, text, lead]]: a word starts at a token that begins
-    with a space; punctuation and the pieces of a split character stay with the word before. lead is 1 for the first
-    word of the segment, whose start Whisper often puts where the segment starts, before a pause."""
+def confidence(probs):
+    """A word's tokens' probabilities -> how sure Whisper was of the word: the least sure token."""
+    return round(min(probs), 3) if probs else None
+
+
+def token_probs(scores, tokens, temperature):
+    """The probability Whisper gave each chosen token, from the scores of its decode (the logits after its rules,
+    divided by the temperature when it sampled)."""
+    if not scores:
+        return []
+    scale = temperature if temperature and temperature > 0 else 1.0
+    logits = torch.stack([s.float() for s in scores[: len(tokens)]]) * scale
+    chosen = torch.as_tensor(tokens[: logits.shape[0]], dtype=torch.long)
+    return torch.softmax(logits, dim=-1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1).tolist()
+
+
+def words_of(ids, stamps, probs):
+    """Token ids, their end times and probabilities (one segment) -> [[t0, t1, text, lead, p]]: a word starts at a
+    token that begins with a space; punctuation and the pieces of a split character stay with the word before. lead is
+    1 for the first word of the segment, whose start Whisper often puts where the segment starts, before a pause. p
+    leaves out punctuation tokens: Whisper is often unsure of a comma, which the words do not depend on."""
     tok = processor.tokenizer
     special = set(tok.all_special_ids)
     first_stamp = tok.convert_tokens_to_ids("<|0.00|>")
@@ -106,7 +144,12 @@ def words_of(ids, stamps):
             # A token's stamp is the time it ends: a word starts where the token before it ends.
             t0 = float(stamps[cur[0] - 1]) if cur[0] > 0 else 0.0
             t1 = float(stamps[cur[-1]])
-            out.append([round(t0, 3), round(max(t0, t1), 3), text, 0 if out else 1])
+            ps = []
+            for i in cur:
+                piece = tok.decode([ids[i]]).strip()
+                if probs[i] is not None and (NOT_TEXT in piece or any(ch.isalnum() for ch in piece)):
+                    ps.append(probs[i])
+            out.append([round(t0, 3), round(max(t0, t1), 3), text, 0 if out else 1, confidence(ps)])
 
     for i, t in enumerate(ids):
         if t in special or (first_stamp is not None and t >= first_stamp):
@@ -125,9 +168,39 @@ def words_of(ids, stamps):
         if joined and not any(ch.isalnum() for ch in w[2]):
             joined[-1][2] += w[2]
             joined[-1][1] = max(joined[-1][1], w[1])
+            if joined[-1][4] is None:
+                joined[-1][4] = w[4]
         else:
             joined.append(w)
     return joined
+
+
+def segment_probs(segment):
+    """The probabilities of one of Whisper's segments' tokens. Its decode's scores cover the generated tokens only,
+    and the segment's idxs count the decoder's prompt too. None when the decode's temperature is not known."""
+    result = segment.get("result") or {}
+    scores = result.get("scores")
+    sequence = result.get("sequences")
+    if not scores or sequence is None or id(result) not in decoded:
+        return []
+    temperature = decoded[id(result)]
+    start = len(sequence) - len(scores)
+    a, b = segment["idxs"]
+    return token_probs(list(scores[max(0, a - start): max(0, b - start)]), segment["tokens"].tolist(), temperature)
+
+
+def prompt_ids(terms):
+    """The word list as Whisper's previous text: "term, term, ..." with as many terms as fit in PROMPT_TOKENS."""
+    tok = processor.tokenizer
+    kept = []
+    for term in terms:
+        term = " ".join(str(term).split())
+        if not term:
+            continue
+        if len(tok(" " + ", ".join(kept + [term]), add_special_tokens=False)["input_ids"]) > PROMPT_TOKENS:
+            break
+        kept.append(term)
+    return processor.get_prompt_ids(", ".join(kept), return_tensors="pt") if kept else None
 
 
 def detect_language(features):
@@ -153,24 +226,46 @@ def transcribe(req):
         kwargs["language"] = heard
     from transformers import StoppingCriteriaList
 
+    kwargs.update(FALLBACK)
+    prompt = prompt_ids(req.get("terms") or [])
+    if prompt is not None:
+        kwargs["prompt_ids"] = prompt
+    decoded.clear()
+    torch.manual_seed(0)
     with torch.inference_mode():
         out = model.generate(feats.input_features, attention_mask=feats.attention_mask, stopping_criteria=StoppingCriteriaList([Cancel(rid)]), **kwargs)
     if rid in cancelled:
         return {"id": rid, "cancelled": True}
     # Segment by segment: the joined sequence restarts the times of a segment Whisper began anew at the window's end,
     # while each segment's own token times are from the window's start.
-    pieces = [(s["tokens"].tolist(), s["token_timestamps"].tolist()) for s in (out.get("segments") or [[]])[0] if "token_timestamps" in s]
-    if not pieces:
-        pieces = [(out["sequences"][0].tolist(), out["token_timestamps"][0].tolist())]
     seconds = audio.size / RATE
+    segments = [s for s in (out.get("segments") or [[]])[0] if "token_timestamps" in s]
+    pieces = [(s["tokens"].tolist(), s["token_timestamps"].tolist(), segment_probs(s), float(s["start"]), float(s["end"])) for s in segments]
+    if not pieces:
+        ids = out["sequences"][0].tolist()
+        scores = [s[0] if s.dim() == 2 else s for s in (out.get("scores") or [])]
+        lead = max(0, len(ids) - len(scores))
+        temps = set(decoded.values())
+        probs = [None] * lead + token_probs(scores, ids[lead:], temps.pop()) if len(temps) == 1 else []
+        pieces = [(ids, out["token_timestamps"][0].tolist(), probs, 0.0, seconds)]
     words = []
-    for ids, stamps in pieces:
+    end = 0.0
+    for ids, stamps, probs, s0, s1 in pieces:
+        probs = (probs + [None] * len(ids))[: len(ids)]
         # The stamps belong to the last tokens when the two lists differ in length (a prompt left out of one of them).
         if len(stamps) != len(ids):
             n = min(len(stamps), len(ids))
-            ids, stamps = ids[-n:], stamps[-n:]
-        words += [[min(a, seconds), min(b, seconds), w, lead] for a, b, w, lead in words_of(ids, stamps)]
-    return {"id": rid, "words": words, "language": heard, "ms": round((time.perf_counter() - t) * 1000)}
+            ids, stamps, probs = ids[-n:], stamps[-n:], probs[-n:]
+        # A word stays inside its segment: under music the token times of "Good evening." (0-2 s) ran to 29 s.
+        s0, s1 = max(0.0, min(s0, seconds)), max(0.0, min(max(s0, s1), seconds))
+        clamp = lambda x: round(min(max(x, s0), s1), 3)  # noqa: E731
+        found = words_of(ids, stamps, probs)
+        words += [[clamp(a), clamp(b), w, lead, p] for a, b, w, lead, p in found]
+        if found:
+            end = max(end, s1)
+    # end: where Whisper's text stops. Under music it can stop after one sentence with 28 s of speech left; the editor
+    # then starts the next window there (speech.nextWindow).
+    return {"id": rid, "words": words, "end": round(end, 3) if words else None, "language": heard, "ms": round((time.perf_counter() - t) * 1000)}
 
 
 # Input is polled from the one thread that also runs the model, as in complete_server.py: on Windows a thread blocked

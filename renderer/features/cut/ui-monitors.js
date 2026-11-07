@@ -27,7 +27,9 @@
     let audio = null;
     try { audio = Cut.audioengine?.create?.(app) || null; } catch (err) { log.warn(`audio engine: ${err?.message || err}`); }
     if (Cut.player?.create) {
-      try { return Cut.player.create({ app, canvas, audio }); } catch (err) { log.error(`player: ${err?.stack || err}`); }
+      // captions: the track shown in the captions panel, the one export burns in, drawn by the same code (word
+      // highlight included)
+      try { return Cut.player.create({ app, canvas, audio, captions: () => ui.captions?.trackOf(app)?.id || true }); } catch (err) { log.error(`player: ${err?.stack || err}`); }
     }
     let raf = 0;
     let last = 0;

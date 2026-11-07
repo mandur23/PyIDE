@@ -30,7 +30,7 @@
 .cut-item-card { display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 5px; }
 .cut-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden; background: var(--cut-monitor-bg); display: flex;
   align-items: center; justify-content: center; color: var(--gray8); }
-.cut-thumb .ide-icon svg { width: 28px; height: 28px; }
+.cut-thumb .ide-icon, .cut-thumb .ide-icon svg { width: 28px; height: 28px; }
 .cut-thumb-canvas { width: 100%; height: 100%; display: block; }
 .cut-scrub-head { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--cut-accent); display: none; }
 .cut-thumb.scrubbing .cut-scrub-head { display: block; }
@@ -60,6 +60,14 @@
 .cut-cap-num { color: var(--gray8); text-align: right; padding-top: 4px; font-variant-numeric: tabular-nums; }
 .cut-cap-row .cut-timecode { padding-top: 4px; font-size: 11.5px; }
 .cut-cap-text { resize: none; width: 100%; box-sizing: border-box; min-height: 40px; line-height: 1.35; user-select: text; }
+/* a caption holding words Whisper was unsure of: a yellow edge, the words under the text (ui-captions.js) */
+.cut-cap-row.uncertain { box-shadow: inset 2px 0 0 var(--yellow); }
+.cut-cap-row.uncertain.current { box-shadow: inset 2px 0 0 var(--yellow), inset 4px 0 0 var(--cut-accent); }
+.cut-cap-doubt { grid-column: 4 / 6; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: -2px; font-size: 11px; color: var(--gray9); }
+.cut-cap-doubt[hidden] { display: none; }
+.cut-cap-doubt-word { height: 18px; padding: 0 6px; border-radius: 9px; font-size: 11px; color: var(--gray11); background: color-mix(in srgb, var(--yellow) 18%, transparent); }
+.cut-cap-doubt-word:hover { background: color-mix(in srgb, var(--yellow) 32%, transparent); color: var(--gray12); }
+.cut-cap-doubt-ok { width: 20px; height: 18px; padding: 0; margin-left: 2px; }
 
 /* export form (dialog and the Export workspace) */
 .cut-export-form { display: flex; flex-direction: column; gap: 8px; }

@@ -144,14 +144,46 @@
     }
   }
 
+  const HEX = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
+  // Black or white text, whichever reads on a highlight box of this color.
+  function contrastOn(hex) {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 ? '#000000' : '#ffffff';
+  }
+  // How far apart two colors look ("redmean" weighted RGB, 0 to about 765). A word lit in a color under CLOSE from its
+  // line's (a yellow speaker's line under the yellow highlight: 58 and 99, the next speaker color 209) does not stand
+  // out, so that line lights the word on a box instead.
+  const CLOSE = 150;
+  function colorDistance(a, b) {
+    const [r1, g1, b1] = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+    const [r2, g2, b2] = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+    const r = (r1 + r2) / 2;
+    return Math.sqrt((2 + r / 256) * (r1 - r2) ** 2 + 4 * (g1 - g2) ** 2 + (2 + (255 - r) / 256) * (b1 - b2) ** 2);
+  }
+
   // Burned-in captions: the items under t in the track's style (model.defaultCaptionStyle): centered lines near the
   // bottom (or top), margin a percent of the height, each line on its own background box. The size scales with the
-  // shorter side of the sequence over the style's `ref`.
-  function drawCaptions(ctx, items, style = {}, { w, h, scale } = {}) {
+  // shorter side of the sequence over the style's `ref`. With `style.highlight` and `t` (the sequence time), the word
+  // spoken at t of an item with word timings (Cut.captionwords) is lit in `highlightColor`: its text, or a box behind it.
+  function drawCaptions(ctx, items, style = {}, { w, h, scale, t } = {}) {
     const k = scale ?? ctx.canvas.width / w;
     const s = { font: 'Malgun Gothic', size: 54, weight: 600, color: '#ffffff', background: '#00000099', position: 'bottom', margin: 8, ref: 1080, ...style };
+    const CW = need('captionwords');
     const lines = [];
-    for (const it of items || []) for (const line of String(it.text ?? '').split(/\r?\n/)) lines.push(line);
+    for (const it of items || []) {
+      // the lit token, counted per line: lit is its index among the line's tokens there, else -1
+      let n = s.highlight && t != null ? CW.litAt(it, t) : -1;
+      // a speaker's name before the first line (Cut.speakers.decorate) is never lit: the lit index skips its tokens
+      let prefix = typeof it.prefix === 'string' ? it.prefix : '';
+      for (const line of String(it.text ?? '').split(/\r?\n/)) {
+        const head = prefix ? CW.spans(prefix).length : 0;
+        const spans = CW.spans(prefix + line);
+        const at = n >= 0 ? n + head : -1;
+        lines.push({ text: prefix + line, spans, lit: at >= head && at < spans.length ? at : -1, color: it.color || null });
+        if (n >= 0) n -= spans.length - head;
+        prefix = '';
+      }
+    }
     if (!lines.length) return;
     const size = Math.max(1, ((Number(s.size) || 54) * Math.min(w, h)) / (Number(s.ref) || 1080));
     const lh = size * 1.3;
@@ -164,15 +196,59 @@
     ctx.font = fontString({ font: s.font, weight: s.weight, italic: !!s.italic }, size);
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
+    const color = s.color || '#ffffff';
+    const hl = HEX.test(String(s.highlightColor)) ? s.highlightColor : '#ffd23f';
+    const box = s.highlightMode === 'box';
     lines.forEach((line, i) => {
       const y = top + (i + 0.5) * lh;
-      const width = ctx.measureText(line).width;
+      const text = line.text;
+      const width = ctx.measureText(text).width;
       if (s.background) {
         ctx.fillStyle = s.background;
         ctx.fillRect(-width / 2 - pad, y - lh / 2, width + 2 * pad, lh);
       }
-      ctx.fillStyle = s.color || '#ffffff';
-      ctx.fillText(line, 0, y);
+      if (line.lit < 0) {
+        ctx.fillStyle = line.color || color;
+        ctx.fillText(text, 0, y);
+        return;
+      }
+      // The line is drawn whole twice, clipped to the lit word and to the rest, so the glyphs sit exactly where an
+      // unlit line puts them and no pixel is drawn in both colors. The clip edges are halfway into the spaces.
+      const xAt = (c) => -width / 2 + ctx.measureText(text.slice(0, c)).width;
+      const [from, to] = line.spans[line.lit];
+      const prev = line.spans[line.lit - 1];
+      const next = line.spans[line.lit + 1];
+      const x0 = xAt(from);
+      const x1 = xAt(to);
+      const far = w + width;
+      const c0 = prev ? (xAt(prev[1]) + x0) / 2 : -far;
+      const c1 = next ? (x1 + xAt(next[0])) / 2 : far;
+      const lineColor = line.color || color;
+      const boxed = box || (HEX.test(lineColor) && colorDistance(lineColor, hl) < CLOSE);
+      if (boxed) {
+        const bx = pad * 0.6;
+        const by = lh * 0.08;
+        ctx.fillStyle = hl;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x0 - bx, y - lh / 2 + by, x1 - x0 + 2 * bx, lh - 2 * by, size * 0.18);
+        else ctx.rect(x0 - bx, y - lh / 2 + by, x1 - x0 + 2 * bx, lh - 2 * by);
+        ctx.fill();
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-far, y - lh, c0 + far, 2 * lh);
+      ctx.rect(c1, y - lh, far - c1, 2 * lh);
+      ctx.clip();
+      ctx.fillStyle = lineColor;
+      ctx.fillText(text, 0, y);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(c0, y - lh, c1 - c0, 2 * lh);
+      ctx.clip();
+      ctx.fillStyle = boxed ? contrastOn(hl) : hl;
+      ctx.fillText(text, 0, y);
+      ctx.restore();
     });
     ctx.restore();
   }

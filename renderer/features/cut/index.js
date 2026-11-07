@@ -10,24 +10,24 @@
     'time.js', 'state.js',
     // formats: containers in and out
     'codecs.js', 'mp4read.js', 'mkvread.js', 'audioread.js', 'probe.js', 'mp4write.js',
-    // the project: model, keyframes, edit commands, captions files
-    'model.js', 'keyframes.js', 'commands.js', 'srt.js',
+    // the project: caption word timings, model, keyframes, edit commands, captions files
+    'captionwords.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js',
     // the engine: effects, text, media, decoding, compositing, playback, thumbnails
     'effects.js', 'textrender.js', 'media.js', 'decoder.js', 'compositor.js', 'player.js', 'thumbs.js',
     // sound and export
     'presets.js', 'audioengine.js', 'export.js', 'testsrc.js',
     // automation: signal analysis, what is done with speech recognition's words, and Claude's prompts and answers
-    'analyze.js', 'speech.js', 'ai.js',
+    'analyze.js', 'speech.js', 'speakers.js', 'ai.js',
     // the screen
     'ui-base.js', 'ui-shell.js', 'ui-project.js', 'ui-monitors.js', 'ui-export.js', 'ui-captions.js', 'ui-keys.js',
     'ui-timeline.js', 'ui-controls.js', 'ui-effects.js', 'ui-text.js', 'ui-color.js', 'ui-overlay.js', 'ui-auto.js',
     'ui-history.js', 'ui-meters.js', 'ui-markers.js',
-    // speech recognition: auto captions, the transcript panel, filler words; text AI through Claude
-    'ui-speech.js', 'ui-ai.js',
+    // speech recognition: auto captions, the transcript panel, filler words; text AI through Claude; voice isolation
+    'ui-speech.js', 'ui-speakers.js', 'ui-ai.js', 'ui-voice.js',
     // convenience: the shortcut editor, the settings page, proxies, the export queue
     'ui-shortcuts.js', 'ui-settings.js', 'ui-proxy.js', 'ui-queue.js',
   ];
-  const STYLES = ['shell.css', 'timeline.css', 'panels.css', 'tools.css', 'speech.css', 'ai.css'];
+  const STYLES = ['shell.css', 'timeline.css', 'panels.css', 'tools.css', 'speech.css', 'speakers.css', 'ai.css'];
   const here = document.currentScript.src.replace(/[^/]*$/, '');
   for (const file of STYLES) {
     const link = document.createElement('link');

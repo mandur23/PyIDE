@@ -618,6 +618,12 @@
     // speech recognition (ui-speech.js, which loads after this file)
     ['captions', 'Auto Captions…', (app) => ui.speech.autoCaptions(app)],
     ['fillers', 'Remove Filler Words…', (app) => ui.speech.removeFillers(app)],
+    // who speaks when, on the transcripts (ui-speakers.js)
+    ['speakers', 'Label Speakers', (app) => ui.speakers.label(app)],
+    // the words Whisper was unsure of, one after another (Alt+] and Alt+[: free in Cut, unlike F2, the project
+    // panel's Rename)
+    ['nextUncertain', 'Next Uncertain Word', (app) => ui.speech.nextUncertain(app, 1), 'Alt+]'],
+    ['prevUncertain', 'Previous Uncertain Word', (app) => ui.speech.nextUncertain(app, -1), 'Alt+['],
     null,
     // text AI through Claude (ui-ai.js, which loads after this file)
     ['aiPolish', 'Polish Captions with Claude…', (app) => ui.ai.polishCaptions(app)],
@@ -629,6 +635,8 @@
     ['loudness', 'Match Loudness…', matchLoudness],
     ['clipLoudness', 'Match Clip Loudness…', matchClipLoudness],
     ['duck', 'Auto Ducking…', autoDuck],
+    // the vocals of HTDemucs in place of the clips' sound (ui-voice.js, which loads after this file)
+    ['isolateVoice', 'Isolate Voice', (app) => ui.voice.isolate(app)],
     null,
     ['color', 'Auto Color', autoColor],
   ];

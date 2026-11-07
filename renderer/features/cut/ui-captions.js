@@ -1,11 +1,14 @@
 // The captions panel (video-editor-features.md section 13): the caption track's items as a list of start, end and
 // text, edited in place; a row clicked moves the playhead to its start, and the caption under the playhead is
 // highlighted. Captions are imported from and exported to SRT (the encoding is detected: UTF-8, UTF-16, CP949), and
-// the track's style (font, size, color, background, top or bottom) is set here. Text edits are committed when the
-// field is left or Enter is pressed, never while an IME is composing, so undo never splits a syllable. The toolbar
-// also starts Auto Captions (ui-speech.js) and Claude's polish and translation (ui-ai.js).
+// the track's style (font, size, color, background, top or bottom, the word-by-word highlight) is set here. Text
+// edits are committed when the field is left or Enter is pressed, never while an IME is composing, so undo never
+// splits a syllable. The toolbar
+// also starts Auto Captions (ui-speech.js) and Claude's polish and translation (ui-ai.js). A caption holding words
+// speech recognition was unsure of (its doubt) is marked, with those words under its text: a word moves the playhead
+// to it, the check mark keeps the text as it is, and editing the text clears the mark.
 //
-// Cut.ui.captions: importFile(app, path), exportFile(app, path), trackOf(app).
+// Cut.ui.captions: importFile(app, path), exportFile(app, path), trackOf(app), reveal(app, t).
 (() => {
   const Cut = (globalThis.Cut = globalThis.Cut || {});
   const ui = Cut.ui;
@@ -19,12 +22,18 @@
     if (!seq?.captions?.length) return null;
     return seq.captions.find((c) => c.id === chosenTrack) || seq.captions[0];
   };
+  // The shown track is also the one the program monitor draws and export burns in: a change is the app's 'captionTrack'.
+  function choose(app, id) {
+    if (chosenTrack === id) return;
+    chosenTrack = id;
+    app.emit('captionTrack', { id });
+  }
   // The track to write into, made when the sequence has none yet.
   function ensureTrack(app) {
     const t = trackOf(app);
     if (t) return t.id;
     const r = ui.exec(app, C().addCaptionTrack(app.sequence.id, { name: tr('Captions'), lang: i18n?.locale === 'ko' ? 'ko' : 'en' }));
-    chosenTrack = r?.id || null;
+    choose(app, r?.id || null);
     return chosenTrack;
   }
 
@@ -66,7 +75,7 @@
     try {
       const id = existing?.id || app.history.do(C().addCaptionTrack(seq.id, { name: ui.basename(path).replace(/\.[^.]+$/, ''), lang: i18n?.locale === 'ko' ? 'ko' : 'en' })).id;
       app.history.do(C().setCaptions(seq.id, id, items));
-      chosenTrack = id;
+      choose(app, id);
       app.history.commit();
     } catch (err) {
       app.history.cancel();
@@ -80,7 +89,7 @@
     const t = trackOf(app);
     if (!t?.items.length) { ui.toast(tr('There are no captions to export.')); return null; }
     try {
-      const r = await writeText(path, Cut.srt.write(t.items.map(({ start, end, text }) => ({ start, end, text }))));
+      const r = await writeText(path, Cut.srt.write(Cut.speakers.written(app.project, t, t.items, tr).map(({ start, end, text }) => ({ start, end, text }))));
       ui.toast(tr('Saved {name}', { name: ui.basename(path) }));
       return r;
     } catch (err) {
@@ -120,8 +129,20 @@
     bg.value = bgHex.slice(0, 7);
     const alpha = ui.numberField({ value: Math.round((parseInt(bgHex.slice(7, 9) || 'ff', 16) / 255) * 100), min: 0, max: 100, step: 1, precision: 0, unit: '%', cls: 'cut-cap-bg-alpha' });
     const pos = ui.select({ options: [{ value: 'bottom', label: tr('Bottom') }, { value: 'top', label: tr('Top') }], value: s.position, cls: 'cut-cap-pos' });
+    // the word-by-word highlight: only captions with word timings (made from speech) light up
+    const hlOn = el('input', 'cut-cap-hl', undefined, { type: 'checkbox' });
+    hlOn.checked = !!s.highlight;
+    const hlColor = el('input', 'cut-cap-hl-color', undefined, { type: 'color' });
+    hlColor.value = String(s.highlightColor || '#ffd23f').slice(0, 7);
+    const hlMode = ui.select({ options: [{ value: 'color', label: tr('Word color') }, { value: 'box', label: tr('Word color and box') }], value: s.highlightMode === 'box' ? 'box' : 'color', cls: 'cut-cap-hl-mode' });
+    const timed = t.items.filter((it) => Cut.captionwords.valid(it.words, it.text)).length;
+    // the speakers' colors and names (ui-speakers.js), for captions that know their speaker
+    const spk = ui.speakers ? ui.select({ options: ui.speakers.CAPTION_MODES.map(([value, label]) => ({ value, label: tr(label) })), value: ui.speakers.modeOf(s), cls: 'cut-cap-speakers' }) : null;
     const body = el('div', 'cut-form');
-    body.append(ui.row(tr('Font'), font), ui.row(tr('Size at 1080p'), size), ui.row(tr('Text color'), color), ui.row(tr('Background'), bg), ui.row(tr('Background opacity'), alpha), ui.row(tr('Position'), pos));
+    body.append(ui.row(tr('Font'), font), ui.row(tr('Size at 1080p'), size), ui.row(tr('Text color'), color), ui.row(tr('Background'), bg), ui.row(tr('Background opacity'), alpha), ui.row(tr('Position'), pos),
+      ui.row(tr('Highlight each word as it is spoken'), hlOn), ui.row(tr('Highlight color'), hlColor), ui.row(tr('Highlight style'), hlMode),
+      el('div', 'cut-dialog-note cut-cap-hl-note', tr('{n} of {m} captions have word timings. Captions made with Auto Captions have them; imported or typed ones show no highlight.', { n: timed, m: t.items.length })),
+      spk ? ui.row(tr('Speakers'), spk) : '');
     ui.dialog({
       title: tr('Caption Style'),
       id: 'cutCaptionStyle',
@@ -130,7 +151,7 @@
       buttons: [
         { label: tr('OK'), primary: true, run: () => {
           const a = Math.round((alpha.value / 100) * 255).toString(16).padStart(2, '0');
-          ui.exec(app, C().setCaptionTrack(app.sequence.id, t.id, { style: { font: font.value, size: size.value, color: color.value, background: `${bg.value}${a}`, position: pos.value } }));
+          ui.exec(app, C().setCaptionTrack(app.sequence.id, t.id, { style: { font: font.value, size: size.value, color: color.value, background: `${bg.value}${a}`, position: pos.value, highlight: hlOn.checked, highlightColor: hlColor.value, highlightMode: hlMode.value, ...(spk ? ui.speakers.styleOf(spk.value) : {}) } }));
         } },
         { label: tr('Cancel') },
       ],
@@ -140,7 +161,7 @@
   function mount(root, app) {
     root.classList.add('cut-captions');
     const bar = el('div', 'cut-panel-toolbar');
-    const trackSel = ui.select({ options: [], cls: 'cut-cap-track', title: tr('Caption track'), onChange: (v) => { chosenTrack = v; draw(); } });
+    const trackSel = ui.select({ options: [], cls: 'cut-cap-track', title: tr('Caption track'), onChange: (v) => { choose(app, v); draw(); } });
     bar.append(
       button({ icon: 'add', title: tr('Add Caption at Playhead'), cls: 'cut-cap-add', onClick: () => addAtPlayhead() }),
       trackSel,
@@ -182,6 +203,9 @@
       const text = el('textarea', 'cut-cap-text', undefined, { rows: 2, spellcheck: 'false' });
       text.value = item.text;
       text.dataset.userText = '';
+      const doubt = el('div', 'cut-cap-doubt');
+      doubt.hidden = true;
+      let shownDoubt = '';
       const remove = button({ icon: 'closeSmall', title: tr('Delete Caption'), cls: 'cut-cap-remove', onClick: () => ui.exec(app, C().removeCaption(app.sequence.id, trackId(), item.id)) });
       const commit = () => { if (text.value !== current().text) set({ text: text.value }); };
       text.addEventListener('change', commit);
@@ -194,14 +218,31 @@
         if (e.target.closest('textarea, input, .cut-timecode, button')) return;
         app.setTime(current().start);
       });
-      r.append(num, start, end, text, remove);
+      r.append(num, start, end, text, remove, doubt);
       const current = () => trackOf(app)?.items.find((x) => x.id === item.id) || item;
       function set(patch) { ui.exec(app, C().setCaption(app.sequence.id, trackId(), item.id, patch)); }
+      // the doubtful words: each seeks to itself; the check mark says the caption is right as it is
+      function paintDoubt(it) {
+        const list = ui.speech?.marking() !== false ? it.doubt || [] : [];
+        const key = JSON.stringify(list);
+        if (key === shownDoubt) return;
+        shownDoubt = key;
+        r.classList.toggle('uncertain', list.length > 0);
+        doubt.hidden = !list.length;
+        if (!list.length) { doubt.replaceChildren(); return; }
+        const pct = (p) => ui.speech?.percent(p) ?? `${Math.round(p * 100)}%`;
+        doubt.replaceChildren(
+          el('span', 'cut-cap-doubt-label', tr('Unsure:')),
+          ...list.map((d) => button({ label: `${d.text} ${pct(d.p)}`, title: tr('Whisper was unsure of this word ({p}). Go to it.', { p: pct(d.p) }), cls: 'cut-cap-doubt-word', onClick: () => app.setTime(Cut.time.snap(Math.min(current().start + d.at, current().end - 1), fps())) })),
+          button({ icon: 'check', title: tr('Mark as Checked: the caption is right as it is'), cls: 'cut-cap-doubt-ok', onClick: () => set({ doubt: null }) }),
+        );
+      }
       return { el: r, num, start, end, text, update(it, i) {
         num.textContent = String(i + 1);
         start.value = it.start;
         end.value = it.end;
         if (document.activeElement !== text) text.value = it.text;
+        paintDoubt(it);
       } };
     }
     function draw() {
@@ -222,7 +263,8 @@
       for (const [id, r] of rows) if (!seen.has(id)) { r.el.remove(); rows.delete(id); }
       list.querySelector(':scope > .cut-empty')?.remove();
       if (!items.length) list.appendChild(el('div', 'cut-empty', tr('No captions. Add one at the playhead, import an SRT file, or create them from the speech with Auto Captions.')));
-      foot.textContent = items.length ? tr('{n} captions', { n: items.length }) : '';
+      const unsure = ui.speech?.marking() !== false ? items.filter((it) => it.doubt?.length).length : 0;
+      foot.textContent = !items.length ? '' : unsure ? tr('{n} captions, {u} with uncertain words', { n: items.length, u: unsure }) : tr('{n} captions', { n: items.length });
       highlight();
     }
     function highlight() {
@@ -232,13 +274,22 @@
     }
     const offs = [
       app.on('project', draw),
-      app.on('sequence', () => { chosenTrack = null; for (const r of rows.values()) r.el.remove(); rows.clear(); draw(); }),
+      app.on('sequence', () => { choose(app, null); for (const r of rows.values()) r.el.remove(); rows.clear(); draw(); }),
       app.on('time', highlight),
+      ide.on('settingsChanged', (k) => { if (k === 'cut.speech.markUncertain') draw(); }),
     ];
+    // Next Uncertain Word: the caption at t scrolled into view.
+    shown = (t) => {
+      const it = trackOf(app)?.items.find((x) => x.start <= t && t < x.end);
+      rows.get(it?.id)?.el.scrollIntoView({ block: 'nearest' });
+    };
+    offs.push(() => { shown = null; });
     draw();
     return { dispose: () => { for (const off of offs) off(); } };
   }
 
-  ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf };
+  let shown = null; // the mounted panel's reveal
+  const reveal = (app, t) => shown?.(t);
+  ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf, reveal };
   ui.registerPanel('captions', { title: () => tr('Captions'), mount });
 })();

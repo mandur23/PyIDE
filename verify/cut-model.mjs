@@ -601,6 +601,121 @@ try {
   check(false, `markers and captions: ${err.stack}`);
 }
 
+// ---------- caption word timings (the word-by-word highlight) ----------
+try {
+  const CW = require('../renderer/features/cut/captionwords.js');
+  const Sp = require('../renderer/features/cut/speech.js');
+  const ws = (list) => list.map(([a, b, text]) => ({ t0: f(a), t1: f(b), text }));
+  const three = ws([[0, 15, 'alpha'], [21, 36, 'beta'], [42, 57, 'gamma']]);
+  const D = { frame: F, duration: f(66) };
+  const timesOf = (words) => words && words.map((w) => [fr(w.t0), fr(w.t1), w.text]);
+  eq(CW.tokens(' alpha  beta\ngamma '), ['alpha', 'beta', 'gamma'], 'a caption\'s tokens run across its lines');
+  check(CW.valid(three, 'alpha beta\ngamma') && !CW.valid(three, 'alpha gamma') && !CW.valid(ws([[21, 36, 'alpha'], [0, 15, 'beta'], [42, 57, 'gamma']]), 'alpha beta gamma'),
+    'words are valid only one per token, in order, never going back in time');
+  eq(CW.realign(three, 'alpha beta gamma', D), three, 'the same text keeps every timing');
+  eq(timesOf(CW.realign(three, 'Alpha, beta\ngamma!', D)), [[0, 15, 'Alpha,'], [21, 36, 'beta'], [42, 57, 'gamma!']], 'case, punctuation and line breaks keep the timings');
+  eq(timesOf(CW.realign(three, 'alpha bravo gamma', D)), [[0, 15, 'alpha'], [21, 36, 'bravo'], [42, 57, 'gamma']], 'a replaced word takes the time of the word it replaces');
+  eq(timesOf(CW.realign(three, 'alpha bravo charlie gamma', D)), [[0, 15, 'alpha'], [21, 29, 'bravo'], [29, 36, 'charlie'], [42, 57, 'gamma']], 'two words for one share its time evenly, on frames');
+  eq(timesOf(CW.realign(three, 'alpha beta gamma delta', D)), [[0, 15, 'alpha'], [21, 36, 'beta'], [42, 57, 'gamma'], [57, 66, 'delta']], 'a word added at the end takes the time left in the caption');
+  eq(timesOf(CW.realign(three, 'alpha beta new gamma', D)), [[0, 15, 'alpha'], [21, 36, 'beta'], [36, 42, 'new'], [42, 57, 'gamma']], 'a word added in a pause takes the pause');
+  eq(CW.realign(ws([[0, 15, 'alpha'], [15, 30, 'beta']]), 'alpha new beta', D), null, 'a word added where there is no time turns the highlight off');
+  eq(CW.realign(three, 'something else entirely', D), null, 'a text with no word left from the speech has no timings');
+  eq(timesOf(CW.realign(three, 'alpha gamma', D)), [[0, 15, 'alpha'], [42, 57, 'gamma']], 'a deleted word takes its timing with it');
+  eq(timesOf(CW.realign([{ t0: 0, t1: f(20), text: 'two words' }], 'two words', D)), [[0, 10, 'two'], [10, 20, 'words']], 'a recognised word holding two tokens shares its time');
+  eq([CW.realign('x', 'a'), CW.realign([{ t0: 'a' }], 'a'), CW.realign([], 'a'), CW.realign(three, '')], [null, null, null, null], 'anything else gives null, never an exception');
+  eq([-1, 0, 14, 15, 18, 21, 40, 42, 56, 57, 70].map((n) => CW.lit(three, f(n))), [-1, 0, 0, 0, 0, 1, 1, 2, 2, -1, -1],
+    'the lit word: the last begun, held through a pause until the next begins, none after the last one ends');
+  eq([0, 5, 10].map((n) => CW.lit(ws([[0, 5, 'a'], [5, 5, 'gone'], [5, 10, 'c']]), f(n))), [0, 2, -1], 'a word of no length (cut away) is never lit');
+  eq(CW.litAt({ start: f(100), text: 'alpha beta gamma', words: three }, f(122)), 1, 'litAt counts from the caption start');
+  eq(CW.litAt({ start: f(100), text: 'alpha beta', words: three }, f(122)), -1, 'words that do not match the text light nothing');
+
+  // speech recognition's captions carry them
+  const heard = [[0.5, 1.0, 'alpha'], [1.2, 1.7, 'beta'], [1.9, 2.4, 'gamma']].map(([a, b, text]) => ({ t0: a * SEC, t1: b * SEC, text }));
+  const made = Sp.captions(heard, { frame: F });
+  eq(made.map((c) => [fr(c.start), fr(c.end), c.text, timesOf(c.words)]), [[15, 81, 'alpha beta gamma', [[0, 15, 'alpha'], [21, 36, 'beta'], [42, 57, 'gamma']]]],
+    'Auto Captions\' captions carry each word\'s time from the caption start, on frames');
+  check(made.every((c) => CW.valid(c.words, c.text)), 'and they fit the caption text');
+
+  const { h, s, a } = setup();
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(600), at: 0, video: 'V1' });
+  const ct = step(h, C.addCaptionTrack(s, { name: 'Auto Captions', items: made }), 'a caption track with word timings').id;
+  const item = () => h.project.sequences[0].captions.find((x) => x.id === ct).items[0];
+  eq(timesOf(item().words), [[0, 15, 'alpha'], [21, 36, 'beta'], [42, 57, 'gamma']], 'the command keeps the timings');
+  eq([model.defaultCaptionStyle().highlight, model.defaultCaptionStyle().highlightMode], [false, 'color'], 'the highlight is off until it is turned on');
+  step(h, C.setCaptionTrack(s, ct, { style: { highlight: true, highlightColor: '#00ff88', highlightMode: 'box' } }), 'turn the highlight on');
+  const id = item().id;
+  step(h, C.setCaption(s, ct, id, { text: 'Alpha bravo\ngamma delta' }), 'edit a caption with word timings');
+  eq(timesOf(item().words), [[0, 15, 'Alpha'], [21, 36, 'bravo'], [42, 57, 'gamma'], [57, 66, 'delta']], 'editing the text keeps the words that still match and fits the new ones');
+  h.undo();
+  eq(timesOf(item().words), [[0, 15, 'alpha'], [21, 36, 'beta'], [42, 57, 'gamma']], 'undo brings the old timings back');
+  h.redo();
+  eq(item().text, 'Alpha bravo\ngamma delta', 'redo the edit');
+  h.undo();
+  step(h, C.setCaption(s, ct, id, { text: 'nothing like it' }), 'a rewritten caption');
+  check(item().words === undefined && model.validate(h.project).ok, 'a rewritten caption loses its timings and stays valid');
+  h.undo();
+  step(h, C.setCaption(s, ct, id, { start: f(25), end: f(91) }), 'move a caption');
+  eq(timesOf(item().words)[1], [21, 36, 'beta'], 'a moved caption takes its words along');
+  h.undo();
+  step(h, C.setCaption(s, ct, id, { start: f(20) }), 'trim a caption start');
+  eq(timesOf(item().words), [[-5, 10, 'alpha'], [16, 31, 'beta'], [37, 52, 'gamma']], 'a trimmed start leaves the words where they are spoken');
+  h.undo();
+  step(h, C.setCaption(s, ct, id, { words: null }), 'turn one caption\'s timings off');
+  check(item().words === undefined, 'words: null drops them');
+  h.undo();
+  unchanged(h, () => h.do(C.setCaption(s, ct, id, { word: [] })), 'invalid', 'an unknown caption field');
+
+  // ripples keep the words with their sound, and the words Whisper was unsure of (doubt) too
+  step(h, C.setCaption(s, ct, id, { doubt: [[0, 'alpha'], [21, 'beta'], [42, 'gamma']].map(([at, text]) => ({ at: f(at), text, p: 0.3 })), speaker: 'sp1' }), 'mark all three words uncertain, said by sp1');
+  const doubtAt = (items) => items.flatMap((it) => (it.doubt || []).map((d) => [fr(it.start + d.at), d.text]));
+  const abs = () => item().words.map((w) => fr(item().start + w.t0));
+  step(h, C.place(s, { source: { media: a }, in: 0, out: f(30), at: f(45), video: 'V2', mode: 'insert' }), 'an insert across a caption with word timings');
+  const pieces = () => h.project.sequences[0].captions.find((x) => x.id === ct).items;
+  eq(pieces().map((it) => [fr(it.start), fr(it.end), timesOf(it.words).map((w) => [fr(it.start) + w[0], fr(it.start) + w[1]])]),
+    [[15, 45, [[15, 30], [36, 81], [87, 102]]], [75, 111, [[15, 30], [36, 81], [87, 102]]]],
+    'the words after the insert move with their sound (beta, begun before it, ends after it), in both pieces of the caption');
+  eq(pieces().map((it) => doubtAt([it])), [[[15, 'alpha'], [36, 'beta']], [[87, 'gamma']]],
+    'the uncertain words move with their sound too, each marked on the piece that holds its start');
+  eq(pieces().map((it) => it.speaker), ['sp1', 'sp1'], 'both pieces keep who says the caption');
+  eq([CW.litAt(pieces()[0], f(20)), CW.litAt(pieces()[0], f(40)), CW.litAt(pieces()[1], f(78)), CW.litAt(pieces()[1], f(90)), CW.litAt(pieces()[1], f(105))], [0, 1, 1, 2, -1],
+    'each piece lights what it shows: alpha and beta before the insert, the rest of beta and gamma after');
+  h.undo();
+  step(h, C.split(s, f(30), { trackIds: ['V1'] }), 'split');
+  const [left] = clipsOf(h, s).filter((x) => x.track === 'V1').sort((x, y) => x.start - y.start);
+  step(h, C.remove(s, [left.id], { ripple: true }), 'a ripple delete under a caption with word timings');
+  eq([fr(item().start), fr(item().end), abs(), CW.litAt(item(), f(0)), CW.litAt(item(), f(6))], [0, 51, [0, 6, 27], -1, 1],
+    'a ripple delete pulls the words with the sound: alpha is gone, beta is lit where it is now heard');
+  eq(timesOf(item().words)[0].slice(0, 2), [0, 0], 'the word cut away has no length left');
+  eq(doubtAt([item()]), [[6, 'beta'], [27, 'gamma']], 'a ripple delete pulls the uncertain words with the sound, and alpha, cut away, is no longer marked');
+  h.undo();
+  h.undo();
+  step(h, C.setSequence(s, { fps: [25, 1] }), 'a new frame rate');
+  const F25 = time.frameTicks([25, 1]);
+  check(item().words.every((w) => w.t0 % F25 === 0 && w.t1 % F25 === 0) && CW.valid(item().words, item().text), 'word times move to the new frames');
+  check(item().doubt.length === 3 && item().doubt.every((d, i) => d.at % F25 === 0 && Math.abs(item().start + d.at - f([15, 36, 57][i])) <= F25 / 2),
+    `uncertain words move to the new frames, where they are spoken (${S(item().doubt.map((d) => (item().start + d.at) / F25))})`);
+  h.undo();
+  step(h, C.setCaption(s, ct, id, { start: f(30) }), 'trim the start of a caption with uncertain words');
+  eq(doubtAt([item()]), [[36, 'beta'], [57, 'gamma']], 'a trimmed start leaves the uncertain words where they are spoken, and alpha, before it now, is no longer marked');
+  h.undo();
+
+  // files: saved and opened again, written by hand
+  const back = model.migrate(h.serialize());
+  eq(back.sequences[0].captions[0].items[0].words, item().words, 'the timings survive serialize and migrate');
+  eq([back.sequences[0].captions[0].style.highlight, back.sequences[0].captions[0].style.highlightColor], [true, '#00ff88'], 'and so does the highlight style');
+  const json = JSON.parse(h.serialize());
+  json.sequences[0].captions[0].items[0].text = 'ALPHA beta gamma';
+  json.sequences[0].captions[0].items.push({ id: 'cap999', start: f(200), end: f(230), text: 'x', words: [{ t0: 'bad' }] });
+  const fixed = model.migrate(JSON.stringify(json));
+  eq([timesOf(fixed.sequences[0].captions[0].items[0].words)[0], fixed.sequences[0].captions[0].items[1].words, model.validate(fixed).ok], [[0, 15, 'ALPHA'], undefined, true],
+    'migrate fits timings to a text changed by hand and drops ones it cannot read');
+  const broken = model.clone(h.project);
+  broken.sequences[0].captions[0].items[0].text = 'alpha beta';
+  check(!model.validate(broken).ok, 'validate refuses words that do not match the text');
+} catch (err) {
+  check(false, `caption word timings: ${err.stack}`);
+}
+
 // ---------- media, bins, sequences, tracks ----------
 try {
   const { h, s, a, b, music } = setup();
@@ -891,8 +1006,8 @@ try {
   vm.createContext(page);
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'features', 'cut');
   const order = readFileSync(path.join(dir, 'index.js'), 'utf8').match(/'[a-z0-9-]+\.js'/g).map((x) => x.slice(1, -1));
-  const mine = ['time.js', 'state.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js'];
-  check(mine.every((x) => order.includes(x)) && order.indexOf('model.js') < order.indexOf('keyframes.js') && order.indexOf('keyframes.js') < order.indexOf('commands.js'), 'index.js loads model, keyframes, commands and srt after time');
+  const mine = ['time.js', 'state.js', 'captionwords.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js'];
+  check(mine.every((x) => order.includes(x)) && order.indexOf('captionwords.js') < order.indexOf('model.js') && order.indexOf('model.js') < order.indexOf('keyframes.js') && order.indexOf('keyframes.js') < order.indexOf('commands.js'), 'index.js loads captionwords, model, keyframes, commands and srt after time');
   for (const file of order.filter((x) => mine.includes(x))) vm.runInContext(readFileSync(path.join(dir, file), 'utf8'), page, { filename: file });
   const out = vm.runInContext(`(() => {
     const p = Cut.model.createProject();
@@ -902,9 +1017,13 @@ try {
     h.do(Cut.commands.split('s1', Cut.time.TICKS / 2));
     const n = h.project.sequences[0].clips.length;
     h.undo();
-    return [n, h.project.sequences[0].clips.length, Cut.keyframes.valueAt([{ t: 0, v: 0 }, { t: 2, v: 4 }], 1), Cut.srt.parse('1\\n00:00:01,000 --> 00:00:02,000\\nx\\n').length];
+    const fl = Cut.time.frameTicks([30, 1]);
+    const ct = h.do(Cut.commands.addCaptionTrack('s1', { items: [{ start: 0, end: Cut.time.TICKS, text: 'a b', words: [{ t0: 0, t1: 10 * fl, text: 'a' }, { t0: 10 * fl, t1: 20 * fl, text: 'b' }] }] })).id;
+    h.do(Cut.commands.setCaption('s1', ct, h.project.sequences[0].captions[0].items[0].id, { text: 'a c' }));
+    const words = h.project.sequences[0].captions[0].items[0].words.map((w) => w.text).join();
+    return [n, h.project.sequences[0].clips.length, Cut.keyframes.valueAt([{ t: 0, v: 0 }, { t: 2, v: 4 }], 1), Cut.srt.parse('1\\n00:00:01,000 --> 00:00:02,000\\nx\\n').length, words, Cut.model.validate(h.project).ok];
   })()`, page);
-  eq(out, [2, 1, 2, 1], 'the modules work as page scripts through globalThis.Cut');
+  eq(out, [2, 1, 2, 1, 'a,c', true], 'the modules work as page scripts through globalThis.Cut (caption word timings too)');
 } catch (err) {
   check(false, `page scripts: ${err.stack}`);
 }
@@ -1337,6 +1456,8 @@ try {
       const it = ct.items.length ? pick(ct.items).id : 'x';
       return pick([
         C.addCaption(sid, ct.id, { start: T(), end: T() + f(1 + int(60)), text: 't' }), C.setCaption(sid, ct.id, it, { start: T(), end: T() + f(30) }), C.removeCaption(sid, ct.id, it),
+        C.addCaption(sid, ct.id, { start: T(), end: T() + f(40), text: 'a b\nc', words: [{ t0: 0, t1: f(10), text: 'a' }, { t0: f(12), t1: f(20), text: 'b' }, { t0: f(25), t1: f(35), text: 'c' }] }),
+        C.setCaption(sid, ct.id, it, pick([{ text: pick(['a x c', 'a b c d', 'z', 'A, b']) }, { start: T() }, { end: T() + f(5) }])),
         C.setCaptions(sid, ct.id, [...Array(int(4))].map(() => ({ start: T(), end: T() + f(20), text: 'x' }))), C.setCaptionTrack(sid, ct.id, { syncLock: rnd() < 0.7 }),
       ]);
     }
@@ -1357,6 +1478,7 @@ try {
   };
   let done = 0;
   let tries = 0;
+  let timed = 0; // steps that left a caption with word timings in the project
   const noops = {};
   const refusals = {};
   const t0 = Date.now();
@@ -1384,6 +1506,7 @@ try {
     }
     kinds[cmd.type] = (kinds[cmd.type] || 0) + 1;
     if (!model.validate(h.project).ok) invalid++;
+    if (h.project.sequences.some((sq) => sq.captions.some((ct) => ct.items.some((it) => it.words)))) timed++;
     done++;
     states.push(hash());
     if (done % 97 === 0) {
@@ -1397,6 +1520,7 @@ try {
   console.log(`  applied ${S(kinds)}`);
   console.log(`  no change ${S(noops)}`);
   check(done === 2000, `2,000 random commands applied (${done})`);
+  check(timed >= 200, `the random commands edit and ripple captions with word timings (${timed} steps had some)`);
   check(Object.keys(kinds).length >= 50, `the random commands cover the command set (${Object.keys(kinds).length} kinds)`);
   eq([invalid, rollbackBad, exactBad], [0, 0, 0], 'no random command left an invalid project, a refused one changed nothing, undo/redo spot checks were exact');
   let stepBad = 0;

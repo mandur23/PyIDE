@@ -5,7 +5,7 @@
 // - the notice before the first request (Cancel sends nothing; Continue is remembered in the settings);
 // - Polish Captions: the review list with the changes marked, one change unchecked, Apply as one undo step, the times
 //   unchanged, Ctrl+Z; the captions panel's menu;
-// - Translate Captions into Japanese: a new track, the same times, lines of at most 16 characters without spaces;
+// - Translate Captions into Japanese: a new track, the same times and speakers, lines of at most 16 characters without spaces;
 // - YouTube metadata: the chapters fixed (0:00 first, 10 s apart, inside the video), titles of 100 characters at most,
 //   tags, Copy, Add as Chapter Markers (one undo step, the old chapter replaced); only text sent (no paths); without
 //   captions, the offer to recognise the speech and the transcript's words sent (the fake Whisper backend);
@@ -263,6 +263,15 @@ function eq(got, wantV, label) { check(S(got) === S(wantV), `${label}${S(got) ==
 await section('translate', async () => {
   await freshTalk();
   await js(`ide.settings.set('cut.ai.acknowledged', true)`);
+  await js(`(() => {
+    const C = Cut.commands, s = __ai.seq(), t = s.captions[0];
+    Cut.app.history.do(C.batch('Label Speakers', [
+      C.setSpeakers({ list: [{ id: 'sp1', name: 'Mina', color: '#4fc3f7' }, { id: 'sp2', name: '', color: '#ffb74d' }], turns: {}, count: 0 }),
+      C.setCaption(s.id, t.id, t.items[0].id, { speaker: 'sp1' }), C.setCaption(s.id, t.id, t.items[1].id, { speaker: 'sp2' }),
+      C.setCaptionTrack(s.id, t.id, { style: { speakerName: true } })]));
+    return true;
+  })()`);
+  const speakersOf = (k) => js(`__ai.seq().captions[${k}].items.map((it) => it.speaker ?? null)`);
   await automation('Translate Captions with Claude…');
   await until(`!!document.querySelector('#cutAiTranslate .cut-ai-lang')`, 'the translate dialog');
   check((await js(`document.querySelector('#cutAiTranslate .cut-ai-lang').value`)) === 'en' && (await js(`[...document.querySelector('#cutAiTranslate .cut-ai-lang').options].map((o) => o.value).join()`)) === 'ko,en,ja,zh,es',
@@ -279,6 +288,7 @@ await section('translate', async () => {
   check(ja.items.every((it) => it.text.split('\n').length === 2) && lines.every((l) => [...l].length <= 16 && !/\s/.test(l)), `lines broken for Japanese: two of at most 16 characters, no spaces (${S(ja.items[0].text)})`);
   check(ja.items[0].text.replace('\n', '') === '字幕1番の日本語訳です。行の長さを試すために少し長くしています。', 'nothing of the translation lost');
   check(S(src.items.map((it) => it.text)) === S(CAPS.map((c) => c[2])), 'the source track is unchanged');
+  eq([await speakersOf(1), await js(`__ai.seq().captions[1].style.speakerName`)], [['sp1', 'sp2', null, null, null], true], 'each translated caption keeps its speaker, and the track shows the names');
   check((await js('__ai.steps()')) === steps0 + 1 && (await js('__ai.last()')) === 'Translate Captions', 'one undo step');
   await editor();
   await key('Ctrl+Z');

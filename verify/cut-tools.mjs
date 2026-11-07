@@ -21,7 +21,16 @@
 //   used again) and placed where dropped, Ctrl inserting, one undo step, never opened in the code editor;
 // - speed: the clip menu's Speed submenu (quick speeds, Reverse, disabled for a still) and the Speed section of Effect
 //   Controls (typed speed, Reverse, Reset), later clips moving along;
-// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,settings,media,proxy,queue,drop,speed,shots)
+// - volume: an audio track header's volume, 0 to 200% (drag, Alt+click, double-click to type, the track menu), one
+//   undo step a change, and the mix playing the track at that level;
+// - highlight: captions made from recognised words light the word being spoken once Caption Style turns it on: read
+//   from the program monitor's pixels at each word's first frame and the frame before, while scrubbing its bar, and on
+//   every frame read back while playing, and from the exported file's frames; with a second caption track, the monitor
+//   and the export panel's burn-in follow the track chosen in the captions panel (the stopped monitor redrawn at once,
+//   the export panel naming it, the written file's pixels); editing the caption text in the panel
+//   keeps the matching words' timings (undo and redo exact), a rewritten caption shows unlit, the box style, and the
+//   timings saved in the project file and opened again;
+// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,settings,media,proxy,queue,drop,speed,volume,highlight,shots)
 import fs from 'fs';
 import path from 'path';
 import { launch, tempDir, menuRow } from './lib.mjs';
@@ -738,6 +747,364 @@ await section('speed', async () => {
   await sleep(150);
   st = await state();
   check(st[0].speed === 1 && st[0].len === 4 && st[1].start === 4, `Reset puts the speed back to 100% (${S(st)})`);
+});
+
+await section('volume', async () => {
+  await workspace('editing');
+  await js(`__ct.fresh({ media: [{ ...__ct.fake('a'), audio: { rate: 48000, channels: 2, codec: 'mp4a.40.2' } }] })`);
+  await js(`(() => { const C = Cut.commands, s = __ct.seq(), m = Cut.app.project.media[0].id; Cut.app.history.do(C.place(s.id, { source: { media: m }, in: 0, out: 4 * ${T}, at: 0, video: null, audio: 'A1', mode: 'overwrite' })); return true; })()`);
+  const vol = '.cut-tl-head.audio[data-track="A1"] .cut-tl-hvol';
+  const db = () => js(`__ct.seq().tracks.find((t) => t.id === 'A1').volume ?? 0`);
+  const text = () => js(`document.querySelector(${S(vol)}).textContent`);
+  await until(`!!__ct.rect(${S(vol)})?.w`, 'the volume control in the A1 header', 5000);
+  check(await text() === '100%' && await js(`__ct.visible(${S(vol)})`), `an audio track header shows its volume, 100% (${await text()})`);
+  const bar = await rect(`${vol} .cut-tl-hvol-bar`);
+  const node = await rect(vol);
+  const drag = async (dx, { alt = false } = {}) => {
+    await mouse('mouseMoved', node.x, node.y, { buttons: 0 });
+    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: node.x, y: node.y, button: 'left', buttons: 1, clickCount: 1, modifiers: alt ? 1 : 0 });
+    for (let i = 1; i <= 8; i++) await mouse('mouseMoved', node.x + (dx * i) / 8, node.y);
+    await mouse('mouseReleased', node.x + dx, node.y, { buttons: 0 });
+    await sleep(150);
+  };
+  const before = await js('Cut.app.history.position');
+  await drag(bar.w / 4);
+  check(Math.abs(await db() - 3.52) < 0.01 && await text() === '150%', `dragging right by a quarter of the bar raises it to 150% (+3.52 dB) (${await db()} dB, ${await text()})`);
+  check(await js('Cut.app.history.position') === before + 1, 'one drag is one undo step');
+  await drag(bar.w * 2);
+  check(Math.abs(await db() - 6.02) < 0.01 && await text() === '200%', `it stops at 200% (+6.02 dB) (${await db()} dB, ${await text()})`);
+  await drag(-bar.w * 3);
+  check(await db() === -144 && await text() === '0%', `dragging left stops at 0%, silence (${await db()} dB, ${await text()})`);
+  const pos = await js('Cut.app.history.position');
+  await drag(0);
+  check(await js('Cut.app.history.position') === pos && await db() === -144, 'a click without moving changes nothing');
+  await drag(0, { alt: true });
+  check(await db() === 0 && await text() === '100%', `Alt+click puts it back to 100% (${await db()} dB)`);
+  await focusTimeline();
+  await press('Ctrl+z');
+  await sleep(150);
+  check(await db() === -144, `undo takes the Alt+click back (${await db()} dB)`);
+
+  // the track menu
+  await clickAt(await rect('.cut-tl-head.audio[data-track="A1"] .cut-tl-hb.target'), { button: 'right' });
+  await menuClick('Track Volume');
+  await until(`!!${menuRow('50%', 1)}`, 'the Track Volume submenu', 4000);
+  const items = await js(`[...document.querySelectorAll('.context-menu[data-level="1"] > .menu-item')].map((r) => r.querySelector('.menu-label')?.textContent)`);
+  check(S(items) === S(['0%', '50%', '100%', '150%', '200%', 'Set Volume…']), `the track menu's Track Volume submenu (${S(items)})`);
+  await menuClick('50%', 1);
+  await sleep(150);
+  check(Math.abs(await db() + 6.02) < 0.01 && await text() === '50%', `50% in the menu sets -6.02 dB (${await db()} dB, ${await text()})`);
+
+  // double-click types a value and does not rename the track
+  const name = await js(`__ct.seq().tracks.find((t) => t.id === 'A1').name`);
+  await mouse('mouseMoved', node.x, node.y, { buttons: 0 });
+  for (const clickCount of [1, 2]) {
+    await mouse('mousePressed', node.x, node.y, { clickCount });
+    await mouse('mouseReleased', node.x, node.y, { buttons: 0, clickCount });
+  }
+  await until(`document.querySelector('#popup:not(.hidden)') && document.querySelector('#popupIn').placeholder === 'Track volume (0 to 200%)'`, 'the volume prompt', 4000);
+  await press('Ctrl+a');
+  await type('75');
+  await press('Enter');
+  await sleep(200);
+  check(Math.abs(await db() + 2.5) < 0.01 && await text() === '75%', `typing 75 sets 75% (${await db()} dB, ${await text()})`);
+  check(await js(`__ct.seq().tracks.find((t) => t.id === 'A1').name`) === name, 'double-clicking the volume does not rename the track');
+
+  // what the mix plays: a steady 0.25 signal at 0, 50, 100 and 200%
+  const levels = await js(`(async () => {
+    const out = {};
+    for (const pct of [0, 50, 100, 200]) {
+      const p = JSON.parse(JSON.stringify(Cut.app.project));
+      const s = p.sequences.find((x) => x.id === __ct.seq().id);
+      s.tracks.find((t) => t.id === 'A1').volume = pct === 0 ? -144 : Math.round(2000 * Math.log10(pct / 100)) / 100;
+      const mixer = Cut.audioengine.createMixer({ rate: 48000, getAudio: async () => ({ rate: 48000, length: 48000 * 4, data: [new Float32Array(48000 * 4).fill(0.25)] }) });
+      const m = await mixer.mixLoaded(p, s.id, 48000, 4800);
+      out[pct] = Math.round(m.out[0][100] * 1000) / 1000;
+    }
+    return out;
+  })()`);
+  check(levels[0] === 0 && levels[50] === 0.125 && levels[100] === 0.25 && levels[200] === 0.5, `the mix plays the track at its volume: 0, 50, 100, 200% (${S(levels)})`);
+
+  // a small track has no room for it
+  await js(`(Cut.app.history.do(Cut.commands.setTrack(__ct.seq().id, 'A1', { height: 32 })), true)`);
+  await sleep(150);
+  check(await js(`document.querySelector(${S(vol)}).hidden`), 'a small audio track hides the volume control (the track menu still has it)');
+});
+
+// ---------- the word-by-word caption highlight ----------
+await section('highlight', async () => {
+  const dir = path.join(home, 'highlight');
+  fs.mkdirSync(dir, { recursive: true });
+  const src = path.join(dir, 'src.mp4');
+  const r = await js(`__ct.write(${S(src)}, { seconds: 4, fps: [30, 1], w: 640, h: 360, keyEvery: 1, beepEvery: 0, audio: false })`);
+  if (r !== 'ok') throw new Error(`testsrc: ${r}`);
+  await js(`__ct.fresh({})`);
+  const made = await js(`Cut.ui.media.importPaths(Cut.app, [${S(src)}])`);
+  // the captions as Auto Captions makes them from recognised words: alpha 0.5-1.0 s, beta 1.2-1.7 s, gamma 1.9-2.4 s
+  await js(`(() => {
+    const C = Cut.commands, s = __ct.seq(), T = Cut.time.TICKS;
+    Cut.app.history.do(C.place(s.id, { source: { media: ${S(made[0])} }, in: 0, out: 4 * T, at: 0, video: 'V1', audio: null, mode: 'overwrite' }));
+    const words = [[0.5, 1.0, 'alpha'], [1.2, 1.7, 'beta'], [1.9, 2.4, 'gamma']].map(([a, b, text]) => ({ t0: a * T, t1: b * T, text }));
+    const items = Cut.speech.captions(words, { frame: Cut.time.frameTicks(s.fps) });
+    Cut.app.history.do(C.batch('Auto Captions', [C.addCaptionTrack(s.id, { name: 'Auto Captions', lang: 'en', items })]));
+    // the highlight's pixels (#ffd23f: red and green high, blue low) and the caption's white ones in the band the
+    // caption sits in (below the test picture's digits and time)
+    __ct.lit = (px, W, box) => {
+      let sx = 0, n = 0, white = 0;
+      for (let y = Math.round(box.y + box.h * 0.84); y < Math.round(box.y + box.h); y++) {
+        for (let x = Math.round(box.x); x < Math.round(box.x + box.w); x++) {
+          const i = (y * W + x) * 4, r = px[i], g = px[i + 1], b = px[i + 2];
+          if (r > 190 && g > 150 && b < 110) { sx += x; n++; } else if (r > 200 && g > 200 && b > 200) white++;
+        }
+      }
+      return { n, white, x: n ? +((sx / n - box.x) / box.w).toFixed(4) : null };
+    };
+    __ct.monitorLit = async () => {
+      const m = Cut.ui.monitors.program;
+      await m.player.render();
+      const comp = m.player.compositor;
+      await comp.idle?.();
+      const px = await comp.readPixels();
+      const fr = m.player.frameRect();
+      const k = comp.width / (m.canvas.clientWidth || comp.width);
+      return __ct.lit(px, comp.width, { x: fr.x * k, y: fr.y * k, w: fr.w * k, h: fr.h * k });
+    };
+    __ct.litAt = async (t) => { Cut.app.setTime(t); return __ct.monitorLit(); };
+    __ct.fileLit = async (file, index) => {
+      const rd = await Cut.audioengine.fileReader(file);
+      const src = await Cut.probe.open(rd, { name: file });
+      const vt = src.tracks.find((t) => t.kind === 'video');
+      const d = await Cut.export.decodeRange(rd, vt, Cut.probe.keyBefore(vt, index), index, { pixels: true });
+      return d.pixels ? __ct.lit(d.pixels, vt.width, { x: 0, y: 0, w: vt.width, h: vt.height }) : null;
+    };
+    __ct.item = () => __ct.seq().captions[0].items[0];
+    // which word the project says is lit at t (on its frame)
+    __ct.expect = (t) => { const s = __ct.seq(); const it = s.captions[0].items.find((x) => x.start <= t && t < x.end); return it ? Cut.captionwords.litAt(it, Cut.time.snap(t, s.fps)) : -1; };
+    return true;
+  })()`);
+  check(await js(`!!Cut.captionwords && Cut.captionwords.valid(__ct.item().words, __ct.item().text)`), 'captions made from speech carry a timing for each word');
+  const F = await js('Cut.time.frameTicks([30, 1])');
+  const starts = await js(`__ct.item().words.map((w) => __ct.item().start + w.t0)`);
+  const ends = await js(`__ct.item().words.map((w) => __ct.item().start + w.t1)`);
+  await workspace('captions');
+  await showTab('captions');
+  const off = await js(`__ct.litAt(${starts[1] + F})`);
+  check(off.n === 0 && off.white > 200, `the program monitor shows the caption, and nothing is lit before the highlight is on (${S(off)})`);
+
+  // the Caption Style dialog turns it on
+  await clickSel('.cut-cap-style');
+  await until(`!!document.querySelector('#cutCaptionStyle .cut-cap-hl')`, 'the caption style dialog', 5000);
+  check(/1 of 1 captions have word timings/.test(await js(`document.querySelector('#cutCaptionStyle .cut-cap-hl-note').textContent`)), 'the dialog says how many captions have word timings');
+  await clickSel('#cutCaptionStyle .cut-cap-hl');
+  check(await js(`document.querySelector('#cutCaptionStyle .cut-cap-hl').checked`), 'a click ticks Highlight each word as it is spoken');
+  await clickSel('#cutCaptionStyle .dialog-buttons button.primary');
+  await until(`!document.querySelector('#cutCaptionStyle')`, 'the dialog closed', 5000);
+  check(await js(`(() => { const st = __ct.seq().captions[0].style; return st.highlight === true && st.highlightColor === '#ffd23f' && st.highlightMode === 'color' && Cut.app.history.list().at(-1)?.label === 'Caption Track Settings'; })()`),
+    'OK turns the highlight on for the track in one undo step');
+
+  // each word lights at its own frame; the frame before still shows the word before
+  const ref = [];
+  // the same word: the lit pixels' center within 0.4% of the frame (edge pixels blend with the moving picture)
+  const same = (a, b) => a != null && b != null && Math.abs(a - b) < 0.004;
+  for (let i = 0; i < 3; i++) {
+    const at = await js(`__ct.litAt(${starts[i]})`);
+    const mid = await js(`__ct.litAt(${starts[i] + 5 * F})`);
+    const before = await js(`__ct.litAt(${starts[i] - F})`);
+    ref.push(at.x);
+    check(at.n > 30 && same(mid.x, at.x), `word ${i + 1} is lit from its first frame on (${S(at)}, ${S(mid)})`);
+    if (i === 0) check(before.n === 0 && before.white < 50, `the frame before the first word shows no caption yet (${S(before)})`);
+    else check(same(before.x, ref[i - 1]), `the frame before word ${i + 1} still lights word ${i} (${S(before)})`);
+  }
+  check(ref[0] < ref[1] - 0.02 && ref[1] < ref[2] - 0.02, `the lit word moves left to right through the caption (${S(ref)})`);
+  const after = await js(`__ct.litAt(${ends[2] + F})`);
+  check(after.n === 0 && after.white > 200, `after the last word the caption stays a moment with nothing lit (${S(after)})`);
+  const xOf = (t) => js(`__ct.expect(${t})`);
+
+  // scrubbing the program monitor's bar
+  const bar = await rect('.cut-monitor-program .cut-scrub');
+  const dur = await js(`Cut.model.sequenceDuration(__ct.seq())`);
+  const xAt = (t) => bar.x - bar.w / 2 + (t / dur) * bar.w;
+  const scrubbed = [];
+  await mouse('mouseMoved', xAt(starts[0] + 2 * F), bar.y, { buttons: 0 });
+  await mouse('mousePressed', xAt(starts[0] + 2 * F), bar.y);
+  for (const t of [starts[0] + 8 * F, starts[1] + 3 * F, starts[2] + 2 * F, starts[1] + 9 * F]) {
+    await mouse('mouseMoved', xAt(t), bar.y);
+    await sleep(120);
+    const now = await js('Cut.app.t');
+    const want = await xOf(now);
+    scrubbed.push({ want, got: (await js('__ct.monitorLit()')).x });
+  }
+  await mouse('mouseReleased', xAt(starts[1] + 9 * F), bar.y);
+  check(scrubbed.every((s) => s.want >= 0 && same(s.got, ref[s.want])) && new Set(scrubbed.map((s) => s.want)).size === 3, `while scrubbing, the monitor lights the word under the playhead (${S(scrubbed)})`);
+
+  // playing: frames read back as they are shown
+  await js(`(() => {
+    const m = Cut.ui.monitors.program, p = m.player, comp = p.compositor;
+    window.__hl = { samples: [], busy: false };
+    __hl.off = p.on(async (e) => {
+      if (e.type !== 'frame' || __hl.busy) return;
+      __hl.busy = true;
+      try {
+        const px = await comp.readPixels();
+        const fr = p.frameRect();
+        const k = comp.width / (m.canvas.clientWidth || comp.width);
+        __hl.samples.push({ t: e.t, ...__ct.lit(px, comp.width, { x: fr.x * k, y: fr.y * k, w: fr.w * k, h: fr.h * k }) });
+      } finally { __hl.busy = false; }
+    });
+    Cut.app.setTime(${starts[0] - 3 * F});
+    return true;
+  })()`);
+  await focusProgram();
+  await space();
+  await until(`Cut.app.t > ${ends[2] + 3 * F} || !Cut.app.playing`, 'playback past the last word', 15000).catch(() => {});
+  await space();
+  const samples = await js(`(__hl.off(), __hl.samples.map((s) => ({ t: s.t, x: s.x, n: s.n, want: __ct.expect(s.t) })))`);
+  const wrong = samples.filter((s) => (s.want < 0 ? s.n !== 0 : !same(s.x, ref[s.want])));
+  check(samples.length >= 8 && new Set(samples.map((s) => s.want)).size >= 3 && !wrong.length,
+    `while playing, every frame read back lights the word spoken at its time (${samples.length} frames, wrong: ${S(wrong.slice(0, 4))})`);
+
+  // export burns in the same highlight
+  const out = path.join(dir, 'burned.mp4');
+  const ex = await js(`Cut.export.run({ project: Cut.app.project, seqId: __ct.seq().id, path: ${S(out)}, preset: '720p', overrides: { loudness: null }, captions: 'burn' }).then((r) => ({ ok: r.ok, error: r.error }))`);
+  check(ex.ok, `the sequence exports with the captions burned in (${S(ex)})`);
+  const frames = [];
+  for (const t of [starts[0], starts[1] - F, starts[1], starts[2] - F, starts[2] + 5 * F, ends[2] + F]) {
+    const want = await xOf(t);
+    const file = await js(`__ct.fileLit(${S(out)}, ${Math.round(t / F)})`);
+    const shown = await js(`__ct.litAt(${t})`);
+    frames.push({ frame: Math.round(t / F), want, file: file?.x ?? null, monitor: shown.x });
+  }
+  check(frames.every((x) => (x.want < 0 ? x.file === null && x.monitor === null : x.file !== null && Math.abs(x.file - x.monitor) < 0.01)),
+    `each exported frame lights the word the monitor lights at that frame (${S(frames)})`);
+
+  // a second caption track at the top: the monitor and export follow the track the captions panel shows
+  await js(`(() => {
+    const s = __ct.seq(), T = Cut.time.TICKS;
+    Cut.app.history.do(Cut.commands.addCaptionTrack(s.id, { name: 'Top', lang: 'en', style: { position: 'top' }, items: [{ start: 0, end: 4 * T, text: 'TOP LINE HERE' }] }));
+    // white pixels in the top sixth of a frame, and the bottom band's highlight (__ct.lit)
+    __ct.bands = (px, W, box) => {
+      let top = 0;
+      for (let y = Math.round(box.y); y < Math.round(box.y + box.h * 0.16); y++) {
+        for (let x = Math.round(box.x); x < Math.round(box.x + box.w); x++) { const i = (y * W + x) * 4; if (px[i] > 200 && px[i + 1] > 200 && px[i + 2] > 200) top++; }
+      }
+      return { top, bottom: __ct.lit(px, W, box) };
+    };
+    // what the program monitor shows now, without asking it to draw
+    __ct.shown = async () => {
+      const m = Cut.ui.monitors.program, comp = m.player.compositor;
+      await comp.idle?.();
+      const px = await comp.readPixels();
+      const fr = m.player.frameRect();
+      const k = comp.width / (m.canvas.clientWidth || comp.width);
+      return __ct.bands(px, comp.width, { x: fr.x * k, y: fr.y * k, w: fr.w * k, h: fr.h * k });
+    };
+    __ct.fileBands = async (file, index) => {
+      const rd = await Cut.audioengine.fileReader(file);
+      const src = await Cut.probe.open(rd, { name: file });
+      const vt = src.tracks.find((t) => t.kind === 'video');
+      const d = await Cut.export.decodeRange(rd, vt, Cut.probe.keyBefore(vt, index), index, { pixels: true });
+      return __ct.bands(d.pixels, vt.width, { x: 0, y: 0, w: vt.width, h: vt.height });
+    };
+    return true;
+  })()`);
+  const [firstTrack, topTrack] = await js(`__ct.seq().captions.map((c) => c.id)`);
+  const tWord = starts[1] + 2 * F;
+  await js(`__ct.litAt(${tWord})`);
+  const shownFirst = await js(`__ct.shown()`);
+  check(shownFirst.bottom.n > 30 && (await js(`Cut.ui.captions.trackOf(Cut.app).id`)) === firstTrack, `with two caption tracks the monitor shows the panel's track, the first one by default (${S(shownFirst)})`);
+  const pickTrack = (id) => js(`(() => { const s = document.querySelector('.cut-panel[data-panel="captions"] .cut-cap-track'); s.value = ${S(id)}; s.dispatchEvent(new Event('change')); return true; })()`);
+  check(await js(`[...document.querySelector('.cut-panel[data-panel="captions"] .cut-cap-track').options].map((o) => o.value).join()`) === `${firstTrack},${topTrack}`, 'the captions panel lists both tracks');
+  await pickTrack(topTrack);
+  const switched = await until(`__ct.shown().then((b) => b.bottom.n === 0 && b.top > ${shownFirst.top + 150})`, 'the monitor drawn again with the top track', 5000).then(() => true, () => false);
+  const shownTop = await js(`__ct.shown()`);
+  check(switched && shownTop.bottom.white < 50 && (await js('Cut.app.t')) === tWord, `choosing the top track in the captions panel redraws the stopped monitor with it, the playhead unmoved (${S(shownFirst)} -> ${S(shownTop)})`);
+
+  // the export panel burns in the same track and says which
+  await workspace('export');
+  await showTab('export');
+  const xp = '.cut-panel[data-panel="export"]';
+  await js(`(() => { for (const [c, v] of [['preset', '720p'], ['loudness', 'off'], ['captions', 'burn']]) { const s = document.querySelector('${xp} .cut-export-' + c); s.value = v; s.dispatchEvent(new Event('change')); } return true; })()`);
+  await until(`!document.querySelector('${xp} .cut-export-burn-track').hidden`, 'the burned-in track note', 5000).catch(() => {});
+  const note = await js(`document.querySelector('${xp} .cut-export-burn-track').textContent`);
+  check(await js(`(document.querySelector('${xp} .cut-export-burn-track').scrollIntoView({ block: 'nearest' }), __ct.visible('${xp} .cut-export-burn-track'))`) && note === await js(`tr('Burns in the caption track shown in the Captions panel: {name}', { name: 'Top' })`), `the export panel names the track it burns in (${note})`);
+  const topOut = path.join(dir, 'burned-top.mp4');
+  await clickSel(`${xp} .cut-export-path`);
+  await press('Ctrl+A');
+  await type(topOut);
+  await clickSel(`${xp} .cut-export-queue`);
+  await until(`Cut.ui.exportQueue.jobs().some((j) => j.path.toLowerCase() === ${S(topOut.toLowerCase())} && j.state === 'done')`, 'the top track export done', 60000);
+  const fileFirst = await js(`__ct.fileBands(${S(out)}, ${Math.round(tWord / F)})`);
+  const fileTop = await js(`__ct.fileBands(${S(topOut)}, ${Math.round(tWord / F)})`);
+  check(fileTop.bottom.n === 0 && fileTop.bottom.white < 50 && fileTop.top > fileFirst.top + 150 && fileFirst.bottom.n > 30,
+    `the export burns in the track the panel and the monitor show (first track ${S(fileFirst)}, top track ${S(fileTop)})`);
+  await js(`(() => { const s = document.querySelector('${xp} .cut-export-captions'); s.value = 'none'; s.dispatchEvent(new Event('change')); return true; })()`);
+  await workspace('captions');
+  await showTab('captions');
+  await pickTrack(firstTrack);
+  const back = await until(`__ct.shown().then((b) => b.bottom.n > 30)`, 'the monitor back on the first track', 5000).then(() => true, () => false);
+  check(back, 'choosing the first track again brings its caption and highlight back to the monitor');
+  await js(`(Cut.app.history.undo(), true)`);
+  check(await js(`__ct.seq().captions.length === 1`), 'the top track taken away again');
+
+  // editing the text in the captions panel keeps the timings of the words that still match
+  const before = await js(`__ct.item().words`);
+  await clickSel('.cut-cap-row .cut-cap-text');
+  await press('Ctrl+A');
+  await type('alpha bravo gamma delta');
+  await press('Enter');
+  await until(`__ct.item().text === 'alpha bravo gamma delta'`, 'the edited caption', 5000);
+  const edited = await js(`__ct.item().words`);
+  check(edited.length === 4 && edited[0].t0 === before[0].t0 && edited[1].t0 === before[1].t0 && edited[1].t1 === before[1].t1 && edited[2].t0 === before[2].t0 && edited[3].t0 >= before[2].t1 && await js(`Cut.captionwords.valid(__ct.item().words, __ct.item().text)`),
+    `the edit keeps alpha and gamma, gives bravo beta's time and delta the time after gamma (${S(edited.map((w) => [w.text, w.t0 / F, w.t1 / F]))})`);
+  const bravo = await js(`__ct.litAt(${starts[1] + 2 * F})`);
+  const delta = await js(`__ct.litAt(${starts[0] + edited[3].t0 + F})`);
+  check(bravo.n > 30 && delta.n > 30 && delta.x > bravo.x, `the monitor lights bravo at beta's time and delta after gamma (${S(bravo)}, ${S(delta)})`);
+  await focusProgram();
+  await press('Ctrl+Z');
+  check(await js(`__ct.item().text === 'alpha beta gamma' && JSON.stringify(__ct.item().words) === ${S(S(before))}`), 'Ctrl+Z brings back the text and its exact timings');
+  await press('Ctrl+Shift+Z');
+  check(await js(`__ct.item().text === 'alpha bravo gamma delta' && __ct.item().words.length === 4`), 'Ctrl+Shift+Z redoes the edit');
+  await press('Ctrl+Z');
+  await clickSel('.cut-cap-row .cut-cap-text');
+  await press('Ctrl+A');
+  await type('nothing like it');
+  await press('Enter');
+  await until(`__ct.item().text === 'nothing like it'`, 'the rewritten caption', 5000);
+  const rewritten = await js(`__ct.litAt(${starts[1] + 2 * F})`);
+  check(await js(`__ct.item().words === undefined && Cut.model.validate(Cut.app.project).ok`) && rewritten.n === 0 && rewritten.white > 100,
+    `a caption rewritten with no word left from the speech shows unlit, never a wrong word (${S(rewritten)})`);
+  await focusProgram();
+  await press('Ctrl+Z');
+
+  // the box style: the word on a box of the highlight color, its text dark on it
+  const colorOnly = await js(`__ct.litAt(${starts[1] + 2 * F})`);
+  await clickSel('.cut-cap-style');
+  await until(`!!document.querySelector('#cutCaptionStyle .cut-cap-hl-mode')`, 'the caption style dialog', 5000);
+  await js(`(() => { const s = document.querySelector('#cutCaptionStyle .cut-cap-hl-mode'); s.value = 'box'; s.dispatchEvent(new Event('change')); return true; })()`);
+  await clickSel('#cutCaptionStyle .dialog-buttons button.primary');
+  await until(`__ct.seq().captions[0].style.highlightMode === 'box'`, 'the box style', 5000);
+  const boxed = await js(`__ct.litAt(${starts[1] + 2 * F})`);
+  check(boxed.n > 3 * colorOnly.n && Math.abs(boxed.x - colorOnly.x) < 0.01, `Word color and box puts a box of the color behind the same word (${S(colorOnly)} -> ${S(boxed)})`);
+  await js(`Cut.app.setTime(${starts[1] + 2 * F})`);
+  await sleep(300);
+  log(`  saved ${await ctx.shot('tools-highlight-box-dark.png')}`);
+
+  // saved and opened again
+  const projectPath = path.join(dir, 'highlight.ncut');
+  answer({ saveAs: projectPath });
+  await focusProgram();
+  await press('Ctrl+S');
+  await until(`Cut.app.path && !Cut.ui.lifecycle.dirty`, 'saved', 10000);
+  const saved = JSON.parse(fs.readFileSync(projectPath, 'utf8')).sequences[0].captions[0];
+  check(saved.style.highlight === true && saved.style.highlightMode === 'box' && S(saved.items[0].words) === S(before), 'the project file keeps the highlight style and the word timings');
+  await js(`__ct.fresh({})`);
+  check(await js(`__ct.seq().captions.length === 0`), 'another project is open');
+  answer({ pickProject: projectPath });
+  await clickSel('.cut-topbar .cut-open');
+  await until(`Cut.app.path && __ct.seq().captions.length === 1`, 'the saved project reopened', 10000);
+  const reopened = await js(`__ct.litAt(${starts[1] + 2 * F})`);
+  check(await js(`JSON.stringify(__ct.item().words) === ${S(S(before))}`) && Math.abs(reopened.x - boxed.x) < 0.005 && reopened.n > 30, `opened again, the captions light the same word (${S(reopened)})`);
+  answer({});
 });
 
 // ---------- screenshots ----------

@@ -151,6 +151,10 @@ try {
   await sleep(150);
   const s2 = await S(`({ i: document.querySelector('${thumb}').dataset.scrub, h: ${pixels} })`);
   check(s1.i === '0' && Number(s2.i) >= 9 && s1.h !== s2.h, `moving over a thumbnail shows other frames (${JSON.stringify([s1, s2])})`);
+  const off = await S(`[...document.querySelectorAll('.cut-project .cut-item-card .cut-thumb')].filter((t) => t.querySelector('.ide-icon svg')).map((t) => {
+    const a = t.getBoundingClientRect(), s = t.querySelector('.ide-icon svg').getBoundingClientRect();
+    return [t.closest('.cut-item-card').dataset.kind, Math.round(s.x + s.width / 2 - a.x - a.width / 2), Math.round(s.y + s.height / 2 - a.y - a.height / 2)]; })`);
+  check(off.length > 0 && off.every(([, dx, dy]) => Math.abs(dx) <= 1 && Math.abs(dy) <= 1), `the icon of a card without a picture sits in the middle of its thumbnail (${JSON.stringify(off)})`);
   await click('.cut-project .cut-view-list');
 
   // ---------- source monitor: In/Out, insert and overwrite ----------

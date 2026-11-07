@@ -29,6 +29,7 @@
   const time = req('time');
   const model = req('model');
   const keyframes = req('keyframes');
+  const cw = () => req('captionwords');
   const { clipDuration: dur, clipEnd: end, clone } = model;
 
   function fail(message, code = 'invalid', detail) {
@@ -296,19 +297,39 @@
     for (const t of c.seq.transitions) if (t.track === trackId && t.at > b) c.tx.set(t, 'at', t.at - L);
   }
 
+  // A caption's word timings and doubt moved with their sound by fn (a sequence time -> its new time; isEnd: a word's
+  // end), for the caption now at [to, end); cut: the range a ripple took away, whose doubtful words are gone.
+  // -> {words, doubt}, each only when there are some.
+  function timed(it, to, end, fn, cut = null) {
+    const out = {};
+    if (it.words) out.words = cw().remap(it.words, it.start, to, fn);
+    const heard = cut && it.doubt ? it.doubt.filter((d) => it.start + d.at < cut[0] || it.start + d.at >= cut[1]) : it.doubt;
+    const doubt = heard && cw().remapDoubt(heard, it.start, to, fn, end - to);
+    if (doubt?.length) out.doubt = doubt;
+    return out;
+  }
+  function retime(tx, it, t) {
+    if (t.words) tx.set(it, 'words', t.words);
+    if (t.doubt) tx.set(it, 'doubt', t.doubt);
+    else if (it.doubt !== undefined) tx.del(it, 'doubt');
+  }
+
   function captionsInsert(c, ct, p, L) {
+    const shift = (x, isEnd) => ((isEnd ? x > p : x >= p) ? x + L : x);
+    const pieces = [];
     for (const it of [...ct.items]) {
-      if (it.start >= p) c.tx.set(it, 'start', it.start + L);
-      if (it.end > p) c.tx.set(it, 'end', it.end + L);
-    }
-    // A caption across p shows on both sides of the inserted time.
-    for (const it of [...ct.items]) {
-      if (it.start < p && it.end > p + L) {
-        const piece = { id: nid(c, 'cap'), start: p + L, end: it.end, text: it.text };
-        c.tx.set(it, 'end', p);
-        insertSorted(c, ct.items, piece, 'start');
+      if (it.start < p) {
+        // A caption across p shows on both sides of the inserted time. The words of each piece stay with their sound
+        // (those from p on move by L); a doubtful word is marked on the piece that holds its start.
+        if (it.end > p) pieces.push({ id: nid(c, 'cap'), start: p + L, end: it.end + L, text: it.text, ...timed(it, p + L, it.end + L, shift), ...(it.speaker ? { speaker: it.speaker } : {}) });
+        retime(c.tx, it, timed(it, it.start, Math.min(it.end, p), shift));
+        if (it.end > p) c.tx.set(it, 'end', p);
+      } else {
+        c.tx.set(it, 'start', it.start + L);
+        c.tx.set(it, 'end', it.end + L);
       }
     }
+    for (const piece of pieces) insertSorted(c, ct.items, piece, 'start');
   }
   function captionsRemove(c, ct, a, b) {
     const L = b - a;
@@ -318,6 +339,7 @@
       const e = map(it.end);
       if (e <= s) removeFrom(c, ct.items, it);
       else {
+        retime(c.tx, it, timed(it, s, e, map, [a, b]));
         c.tx.set(it, 'start', s);
         c.tx.set(it, 'end', e);
       }
@@ -505,15 +527,37 @@
     tx.set(m, 'proxy', cmd.proxy == null ? null : { path: cmd.proxy.path });
     return {};
   };
-  // Project settings, and the saved text styles of the text panel ({ id, name, style }).
-  const SETTINGS = { fit: ['fit', 'fill', 'original'], stillDuration: 'ticks', transitionDuration: 'ticks', freezeDuration: 'ticks', textStyles: 'list' };
+  // Project settings, the saved text styles of the text panel ({ id, name, style }), and speech recognition's word
+  // list (names, products and terms Whisper is told of; ui-speech.js).
+  const SETTINGS = { fit: ['fit', 'fill', 'original'], stillDuration: 'ticks', transitionDuration: 'ticks', freezeDuration: 'ticks', textStyles: 'list', speechTerms: 'terms' };
+  const validTerms = (v) => Array.isArray(v) && v.length <= 200 && v.every((t) => typeof t === 'string' && t.trim() === t && t.length > 0 && t.length <= 100);
   H.setSettings = (project, tx, cmd) => {
     for (const [k, v] of Object.entries(clone(cmd.patch || {}))) {
       const kind = SETTINGS[k];
       if (!kind) fail(`unknown project setting ${k}`);
-      if (Array.isArray(kind) ? !kind.includes(v) : kind === 'ticks' ? !(Number.isInteger(v) && v > 0) : !Array.isArray(v)) fail(`project setting ${k} is not valid`);
+      const ok = Array.isArray(kind) ? kind.includes(v) : kind === 'ticks' ? Number.isInteger(v) && v > 0 : kind === 'terms' ? validTerms(v) : Array.isArray(v);
+      if (!ok) fail(`project setting ${k} is not valid`);
       tx.set(project.settings, k, v);
     }
+    return {};
+  };
+  // Speaker labels (Cut.speakers, model.validate): the patch's list, count and turns of each media (null: none) replace
+  // those of before; `speakers: null` takes every label away. One undo step whatever it changes.
+  H.setSpeakers = (project, tx, cmd) => {
+    if (cmd.patch === null) { tx.del(project, 'speakers'); return {}; }
+    const p = clone(cmd.patch || {});
+    for (const k of Object.keys(p)) if (!['list', 'turns', 'count'].includes(k)) fail(`unknown speakers field ${k}`);
+    const now = project.speakers || { list: [], turns: {}, count: 0 };
+    const turns = { ...now.turns };
+    for (const [media, list] of Object.entries(p.turns || {})) {
+      if (list === null) delete turns[media];
+      else turns[media] = list;
+    }
+    const next = { list: p.list ?? clone(now.list), turns, count: p.count ?? now.count };
+    const bad = [];
+    model.validate({ ...project, speakers: next }).errors.forEach((e) => { if (e.startsWith('speakers')) bad.push(e); });
+    if (bad.length) fail('the speaker labels are not valid', 'invalid', bad.join('; '));
+    tx.set(project, 'speakers', next);
     return {};
   };
   H.relinkMedia = (project, tx, cmd) => {
@@ -685,8 +729,10 @@
     for (const ct of seq.captions) {
       for (const it of ct.items) {
         const s = sn(it.start);
+        const e = Math.max(s + f, sn(it.end));
+        retime(tx, it, timed(it, s, e, sn));
         tx.set(it, 'start', s);
-        tx.set(it, 'end', Math.max(s + f, sn(it.end)));
+        tx.set(it, 'end', e);
       }
     }
   }
@@ -1423,6 +1469,21 @@
     for (const x of clips) tx.set(x, 'role', role);
     return { ids: clips.map((x) => x.id) };
   };
+  // Audio clips take their sound from another media file whose time runs as theirs does (Isolate Voice's vocals): in,
+  // out, speed, keyframes, effects, links and groups stay.
+  H.replaceAudio = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const m = mediaById(c, cmd.mediaId);
+    if (!m.audio) fail('The media has no sound.', 'noAudio');
+    const clips = ids(cmd.clipIds, 'clipIds').map((id) => clipOf(c, id));
+    for (const x of clips) {
+      if (kindOf(c, x) !== 'audio' || x.source?.media == null) fail('Only audio clips of a media file can take another sound.', 'notAudio');
+      unlocked(c, x.track);
+      if (Math.max(x.in, x.out) > m.duration + 0.5) fail('The new sound is shorter than the clip.', 'tooShort');
+    }
+    for (const x of clips) tx.set(x, 'source', { media: m.id });
+    return { ids: clips.map((x) => x.id) };
+  };
 
   // effects
   function effectOf(c, clip, id) {
@@ -1683,7 +1744,22 @@
     if (!it || typeof it !== 'object') fail('a caption is not an object');
     const start = near(c, it.start, 'caption start');
     const e = near(c, it.end, 'caption end');
-    return { start, end: e > start ? e : start + c.f, text: String(it.text ?? '') };
+    const out = { start, end: e > start ? e : start + c.f, text: String(it.text ?? '') };
+    if (it.doubt != null) {
+      if (!model.validDoubt(it.doubt)) fail('a caption\'s doubt is not valid');
+      if (it.doubt.length) out.doubt = clone(it.doubt);
+    }
+    // word timings fitted to the text: the words that match keep their time; none when they cannot be fitted
+    if (it.words != null) {
+      const words = cw().realign(it.words, out.text, { frame: c.f, duration: out.end - out.start });
+      if (words) out.words = words;
+    }
+    // who says it (an id of project.speakers' list): its color and name when the track shows them
+    if (it.speaker != null) {
+      if (typeof it.speaker !== 'string' || !/^sp\d+$/.test(it.speaker)) fail('a caption\'s speaker is not valid');
+      out.speaker = it.speaker;
+    }
+    return out;
   }
   H.addCaptionTrack = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
@@ -1739,10 +1815,27 @@
     const ct = captionTrackOf(c, cmd.trackId);
     const it = captionOf(c, ct, cmd.itemId);
     const p = cmd.patch || {};
-    for (const k of Object.keys(p)) if (!['start', 'end', 'text'].includes(k)) fail(`unknown caption field ${k}`);
-    const next = captionItem(c, { start: p.start ?? it.start, end: p.end ?? it.end, text: p.text ?? it.text });
+    for (const k of Object.keys(p)) if (!['start', 'end', 'text', 'doubt', 'words', 'speaker'].includes(k)) fail(`unknown caption field ${k}`);
+    // A person who changed the text has heard it: the doubt goes, unless the patch says what it is (null: none).
+    let doubt = p.doubt !== undefined ? p.doubt : p.text !== undefined && String(p.text) !== it.text ? null : it.doubt;
+    // Word timings and doubt (unless the patch gives them): a caption moved (start and end by the same time) takes
+    // them along; a trimmed start leaves them where they are spoken. captionItem fits the words to a changed text.
+    let words = p.words !== undefined ? p.words : it.words;
+    const s = near(c, p.start ?? it.start, 'caption start');
+    const e = p.end !== undefined ? near(c, p.end, 'caption end') : it.end;
+    if (s !== it.start && s - it.start !== e - it.end) {
+      if (p.words === undefined && words) words = cw().remap(words, it.start, s, (x) => x);
+      if (p.doubt === undefined && doubt) doubt = cw().remapDoubt(doubt, it.start, s, (x) => x, e - s);
+    }
+    const next = captionItem(c, { start: p.start ?? it.start, end: p.end ?? it.end, text: p.text ?? it.text, doubt, words, speaker: p.speaker !== undefined ? p.speaker : it.speaker });
+    if (next.speaker) tx.set(it, 'speaker', next.speaker);
+    else if (it.speaker !== undefined) tx.del(it, 'speaker');
     tx.set(it, 'text', next.text);
     tx.set(it, 'end', next.end);
+    if (next.doubt) tx.set(it, 'doubt', next.doubt);
+    else if (it.doubt !== undefined) tx.del(it, 'doubt');
+    if (next.words) tx.set(it, 'words', next.words);
+    else if (it.words !== undefined) tx.del(it, 'words');
     if (next.start !== it.start) {
       tx.set(it, 'start', next.start);
       removeFrom(c, ct.items, it);
@@ -1770,8 +1863,8 @@
     setTransition: 'Transition Settings', addGenerated: 'Add Graphic', freezeFrame: 'Freeze Frame', addMarker: 'Add Marker',
     setMarker: 'Edit Marker', removeMarker: 'Remove Marker', addCaptionTrack: 'Add Caption Track', setCaptionTrack: 'Caption Track Settings',
     removeCaptionTrack: 'Delete Caption Track', setCaptions: 'Replace Captions', addCaption: 'Add Caption', setCaption: 'Edit Caption',
-    removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', paste: 'Paste', setGenerator: 'Graphic Settings',
-    setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer', setRole: 'Audio Role', batch: 'Edit',
+    removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', setSpeakers: 'Speakers', paste: 'Paste', setGenerator: 'Graphic Settings',
+    setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer', setRole: 'Audio Role', replaceAudio: 'Replace Audio', batch: 'Edit',
     group: 'Group', ungroup: 'Ungroup', slip: 'Slip', slide: 'Slide', stretch: 'Rate Stretch', extendEdit: 'Extend Edit',
   };
   // Labels the automation (ui-auto.js) gives its batches.
@@ -2001,12 +2094,14 @@
     removeCaption: (seqId, trackId, itemId) => ({ type: 'removeCaption', seqId, trackId, itemId }),
     setProxy: (id, proxy) => ({ type: 'setProxy', id, proxy }),
     setSettings: (patch) => ({ type: 'setSettings', patch }),
+    setSpeakers: (patch) => ({ type: 'setSpeakers', patch }),
     paste: (seqId, clips, opts = {}) => ({ type: 'paste', seqId, clips, opts }),
     setGenerator: (seqId, clipId, patch) => ({ type: 'setGenerator', seqId, clipId, patch }),
     setLayer: (seqId, clipId, layerId, patch) => ({ type: 'setLayer', seqId, clipId, layerId, patch }),
     addLayer: (seqId, clipId, layer = {}, index = null) => ({ type: 'addLayer', seqId, clipId, layer, index }),
     removeLayer: (seqId, clipId, layerId) => ({ type: 'removeLayer', seqId, clipId, layerId }),
     setRole: (seqId, clipIds, role, opts = {}) => ({ type: 'setRole', seqId, clipIds, role, opts }),
+    replaceAudio: (seqId, clipIds, mediaId) => ({ type: 'replaceAudio', seqId, clipIds, mediaId }),
     batch: (label, list) => ({ type: 'batch', label, commands: list }),
   };
 

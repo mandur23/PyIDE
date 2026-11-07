@@ -19,7 +19,7 @@ main/features/cut.js  --IPC cut:*-->  renderer/features/cut/
 main/cut/*.js                           index.js        loads the scripts in order, starts Cut.ui on cutReady
   files, project I/O, autosave,         time.js state.js                                   shared
   recovery, export file sink,           codecs mp4read mkvread audioread probe mp4write    formats
-  cache, relink search, fonts           model keyframes commands srt                       project
+  cache, relink search, fonts           captionwords model keyframes commands srt          project
                                         effects textrender media decoder compositor player thumbs   engine
                                         presets audioengine export testsrc                 sound and export
                                         analyze speech ai                                  automation (signals, speech, Claude)
@@ -239,8 +239,13 @@ Files: `model.js`, `keyframes.js`, `commands.js`, `srt.js`. Tests: `verify/cut-m
 The project JSON is video-editor-features.md §19. Exact shape, all times in ticks:
 
 ```js
-Project = { format: 'ncut', version: 1, settings: Settings, media: [Media], bins: [Bin], sequences: [Sequence], nextId }
-Settings = { fit: 'fit' | 'fill' | 'original', stillDuration, transitionDuration, freezeDuration, textStyles? }
+Project = { format: 'ncut', version: 1, settings: Settings, media: [Media], bins: [Bin], sequences: [Sequence], nextId,
+            speakers? /* speaker labels: Speakers */ }
+Speakers = { list: [{ id: 'sp<n>', name /* '' shows as "Speaker N" */, color: '#rrggbb' }],
+             turns: { [mediaId]: [[t0, t1, speakerId]] /* source SECONDS, in order, apart */ },
+             count: 0 /* Auto */ | 1..10 /* the fixed number the labels were made with */ }
+Settings = { fit: 'fit' | 'fill' | 'original', stillDuration, transitionDuration, freezeDuration, textStyles?,
+             speechTerms? /* speech recognition's word list: [string], at most 200 of at most 100 characters */ }
 Media = { id, path, name, kind: 'video' | 'audio' | 'image', size, mtime, duration,
           video: {w, h, fps, codec, vfr, rotation} | null, audio: {rate, channels, codec} | null,
           interpret: null | { fps }, proxy: null | { path } }
@@ -261,7 +266,13 @@ Effect = { id, type, on: true, params: {} }   // params only where they differ f
 Keyframe = { t /* from clip start */, v /* number or array */, ease: 'linear' | 'hold' | 'easeIn' | 'easeOut' | 'easeInOut' | 'bezier', h?: [x1, y1, x2, y2] }
 Transition = { id, track, at /* edit point ticks */, type, duration, align: 'center' | 'start' | 'end', params: {} }
 Marker = { id, t, duration: 0, name, note, kind: 'comment' | 'chapter' | 'beat', color }
-CaptionTrack = { id, lang, name, style: {...}, syncLock: true, items: [{ id, start, end, text }] }
+CaptionTrack = { id, lang, name, style: {...}, syncLock: true, items: [{ id, start, end, text, doubt?, words?, speaker? }] }
+// speaker: an id of project.speakers' list; the track shows its color (style.speakerColor) and name (style.speakerName)
+// doubt: the words speech recognition was unsure of, [{ at /* whole ticks from the caption's start */, text, p /* 0-1 */ }]
+// words: each token of the text (a run without white space, across lines) with its time, [{ t0, t1 /* whole ticks from
+//   the caption's start; may lie before it or past its end */, text /* the token */ }], t0 never decreasing (Cut.captionwords)
+// style: defaultCaptionStyle() plus what the track changed: font, size, weight, color, background, position, margin,
+//   ref, highlight (false), highlightColor ('#ffd23f'), highlightMode ('color' | 'box')
 ```
 
 A text clip is `source: { generator: 'text', layers: [TextLayer] }`; TextLayer = `{ id, text, font, size, weight,
@@ -330,7 +341,9 @@ Options are nested, never spread to the top level. The builders:
 - media: `importMedia(mediaList, binId?)`, `removeMedia(ids)`, `relinkMedia(id, {path, size, mtime})`,
   `addBin(name, parent?)`, `removeBin(id)`, `renameItem(id, name)`, `moveToBin(ids, binId)`,
   `setProxy(mediaId, {path} | null)`
-- project: `setSettings({fit, stillDuration, transitionDuration, freezeDuration, textStyles})`
+- project: `setSettings({fit, stillDuration, transitionDuration, freezeDuration, textStyles, speechTerms})`,
+  `setSpeakers({list?, turns? /* {mediaId: turns | null} merged into the old */, count?} | null)` (label Speakers; the
+  result is checked by `validate`: every turn's speaker in the list, turns in order; `null` removes the labels)
 - sequences: `addSequence(opts)` (`{from: seqId}` duplicates), `removeSequence(id)`,
   `setSequence(id, patch)` (name, w, h, fps, background, masterGain)
 - tracks: `addTrack(seqId, kind, index?, {name})`, `removeTrack(seqId, trackId)`, `setTrack(seqId, trackId, patch)`
@@ -378,7 +391,14 @@ Options are nested, never spread to the top level. The builders:
   `removeMarker(seqId, id)`
 - captions: `addCaptionTrack(seqId, opts)`, `setCaptionTrack(seqId, trackId, {lang, name, style, syncLock})`,
   `removeCaptionTrack(seqId, trackId)`, `setCaptions(seqId, trackId, items)`, `addCaption(seqId, trackId, item)`,
-  `setCaption(seqId, trackId, itemId, patch)`, `removeCaption(seqId, trackId, itemId)`
+  `setCaption(seqId, trackId, itemId, patch)`, `removeCaption(seqId, trackId, itemId)`. A caption item may carry
+  `doubt`; `setCaption` drops it when the patch changes the text, unless the patch names `doubt` itself (`null`: none,
+  Mark as Checked; the old one: Claude's polish, which did not hear the speech). An item's `words` go through
+  `Cut.captionwords.realign` in every command that takes an item (fitted to its text, dropped when they cannot be);
+  `setCaption` fits them to a changed text, keeps them relative for a move (start and end by the same time) and in
+  place for a trimmed start, and takes `words` itself (`null`: none). An item's `speaker` (`sp<n>`) stays through
+  every edit; `setCaption` sets it (`null`: none). Ripples, the split of a caption across an insert
+  and a frame rate change carry them with their sound (`captionwords.remap`).
 - several as one: `batch(label, [commands])` runs them in order on one recording, so it is one undo step with that
   label (the automation's labels are part of `LABELS`); a part that fails takes back the others; the project is
   validated once, at the end; a batch inside a batch is refused. -> `{ results: [each result] }`
@@ -412,6 +432,19 @@ and `err.code`, sometimes `err.detail`: `locked`, `noTrack`, `noTarget`, `tooSho
 `parseAny(text, name)`, `isVtt(text, name)`, `formatTime`, `decode(bytes) -> text` (UTF-8 with or without BOM,
 UTF-16 LE/BE by BOM, else CP949 when it is not valid UTF-8; the CP949 extension is computed when the runtime's
 `euc-kr` decoder lacks it, as Node's does).
+
+### `Cut.captionwords`
+
+A caption's word timings, for the word-by-word highlight (`captionwords.js`, pure, loaded before model.js; tests in
+`verify/cut-model.mjs`). `tokens(text)`, `spans(line) -> [[from, to]]`, `valid(words, text)` (one word per token, in
+order, whole ticks, t0 never decreasing: what `model.validate` asks), `realign(words, text, {frame, duration}) -> words
+| null` (the tokens matched to the old words by the longest common run, compared without case and punctuation, keep
+their times; a run of new tokens takes the time of the old words it replaces, else the pause between its neighbours
+(or 0 and `duration` at the ends), split evenly on frames; null when a run has less than a frame a word, when no
+token matches, or for anything that is not words), `remap(words, from, to, fn(x, isEnd))` (each absolute time through
+fn, relative to `to`), `remapDoubt(doubt, from, to, fn, length)` (a caption's `doubt` the same way, each `at` as a
+word start; only those within `[0, length]` stay, so a doubt marks the caption that holds its word's start), `lit(words, rel) -> index | -1` (the last word begun, until the next begins; the last one until
+it ends; a word of no length never), `litAt(item, t)` (-1 when the words do not fit the text), `MODES`.
 
 ## 7. Main process
 
@@ -481,7 +514,8 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
   `ai.idleUnloadMinutes`, default 10). Cut mode loads no installer or ai-* plugin, so its setup is here.
   - `cut:speechStatus()` -> `{ backend: 'whisper' | 'fake', runtime, runtimeBytes, models: [{ id, name, repo, bytes,
     installed }], engine: { state: 'idle' | 'loading' | 'ready', model }, stats: { setups, windows, cancelled } }`.
-    Models: `whisper-small` (`openai/whisper-small`, the default) and `whisper-large-v3-turbo`; installed means
+    Models: `whisper-small` (`openai/whisper-small`) and `whisper-large-v3-turbo` (`openai/whisper-large-v3-turbo`,
+    the default: 128 mel bins and its own alignment heads, both read from its repo); installed means
     `model.safetensors`, `preprocessor_config.json` and `tokenizer.json` are in the Hugging Face cache. The runtime
     is ready when the environment imports torch 2.6 or later (its own or the interpreter's, read from dist-info),
     transformers, numpy and huggingface_hub (`runtime.importable`, `runtime.torchOnDisk`).
@@ -496,21 +530,87 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
     `cut:speechWrite(id, bytes)` (float32 LE, 16 kHz mono, appended; 16 MB a call, 2 GB a file), `cut:speechClose(id)`
     (deletes it). Files belong to their window and go with it; files of a process that is gone are removed at start.
   - `cut:speechTranscribe(id, { offset, length /* samples, at most 31 s */, language: 'auto' | 'ko' | 'en', model,
-    request })` -> `{ words: [[t0, t1, text]] /* seconds from offset */, language, ms }` | `{ cancelled: true }` |
+    terms /* the word list */, request })` -> `{ words: [[t0, t1, text, p]] /* seconds from offset; p: Whisper's
+    confidence */, end /* where Whisper's text stops, s; null: no text */, language, ms }` | `{ cancelled: true }` |
     `{ error, code: 'notInstalled' | 'model' | ... }`; `cut:speechCancel(request)` (seen between generated tokens).
     The sidecar loads the model from the cache only (`HF_HUB_OFFLINE=1`), writes no words for a window quieter than
-    -50 dBFS (Whisper writes text into silence), detects the language with one encoder pass for `auto`, and reads
-    each of Whisper's segments with its own token times (the joined sequence restarts the times of a segment begun
-    anew at the window's end). `speech-words.refine(samples, words)` then narrows each word to its sound: the span is
+    -50 dBFS (Whisper writes text into silence), detects the language with one encoder pass for `auto`, decodes a
+    window again at a higher temperature when its tokens repeat (zlib ratio over 1.35) or their average
+    log-probability is under -1 (`FALLBACK`, temperatures 0 to 1.0, seeded so the transcript is the same every
+    run) and skips one it is unsure of whose no-speech probability is over 0.6 (small: lyrics under a music intro;
+    large-v3 turbo's stays near 1e-11, so it never skips), and reads each of Whisper's segments with its own token
+    times (the joined sequence restarts the times of a segment begun anew at the window's end), each word kept
+    inside its segment's start and end. A word's `p` is the lowest probability of its tokens (punctuation left out),
+    from the kept decode's scores times its temperature (the scores of a sampled decode are the logits divided by it;
+    a wrapper on `_need_fallback` records the temperature of the last decode, the one kept). `terms` (strings only,
+    tidied, at most 200 of 100 characters: `whisper.termsOf`) goes to Whisper as the text before the window
+    (`prompt_ids` of "term, term, …", as many terms as fit in 200 tokens, the first ones kept). `speech-words.refine(samples, words)` then narrows each word to its sound: the span is
     split into runs at quiet gaps of 0.25 s; a segment's first word is its last run (Whisper starts it before the
     pause ahead, at a window's start even over speech it did not write out), any other word its longest run.
-  - `cut:speechConfigure({ idleMinutes })`, `cut:speechTestConfig({ delay, load, unload })` (fake only: the time per
-    window, the time the next model load takes, and the model unloaded as after idle; the fake reports `loading` and
+  - `cut:speechConfigure({ idleMinutes })`, `cut:speechTestConfig({ delay, load, unload, stopAfter })` (fake only: the
+    time per window, the time the next model load takes, the model unloaded as after idle, and a first window whose
+    text stops after `stopAfter` seconds with its `end`, as Whisper does under music; the fake reports `loading` and
     `ready` like the sidecar).
   - `PYIDE_WHISPER_BACKEND=fake`: no Python; `speech-words.fakeWords` gives one word per burst of sound above -35 dBFS
-    (testsrc beeps, tone stretches), its text from `FAKE_WORDS` by the burst's half second in the file.
+    (testsrc beeps, tone stretches), its text from `FAKE_WORDS` by the burst's half second in the file and its p from
+    `FAKE_P` (자막을/we 0.31 and 편집이/is 0.42 are uncertain); with a word list, 자막을/we is heard as its first term
+    (p 0.99).
     `PYIDE_WHISPER_FAKE_SETUP=ok | offline | disk | noPython`: the runtime and the models start missing and the setup
     pretends to download (progress in ten steps), then succeeds or fails with that code.
+- Speaker labels (`main/cut/speakers.js`, `createSpeakers({ script, speech, log, env })`): one speaker embedding per
+  window of speech from WeSpeaker ResNet34-LM (`Wespeaker/wespeaker-voxceleb-resnet34-LM`: `voxceleb_resnet34_LM.onnx`,
+  26.5 MB, and `config.yaml`) through onnxruntime on the CPU, in the sidecar `main/ai/speaker_server.py` inside the
+  same shared AI environment (no torch needed; idle unload after `ai.idleUnloadMinutes`). It reads the 16 kHz temp
+  files of speech recognition (`speech.sound(owner, id)` of `createSpeech`, after their writes), so the renderer
+  streams a media file's sound with `cut:speechOpen`/`cut:speechWrite` and closes it with `cut:speechClose`.
+  - `cut:speakersStatus()` -> `{ backend: 'wespeaker' | 'fake', runtime /* python, onnxruntime, numpy and
+    huggingface_hub importable */, runtimeBytes, model: { name, repo, bytes, installed /* both files in the Hugging
+    Face cache; HF_HUB_CACHE moves it */ }, engine: { state }, stats: { setups, embeds, windows, cancelled } }`.
+  - `cut:speakersSetup()` -> `{ ok }` | `{ ok: false, code, error, log? }` (codes as `cut:speechSetup`, by its
+    `classify`), only after Download: the free space, `ensureVenv` (no torch), the missing packages, then
+    `snapshot_download(repo, allow_patterns=[the two files])`. Progress: `cut:speakersProgress` `{ phase: 'runtime' |
+    'download' | 'done', fraction /* null while unknown */, bytes, text }`. `cut:speakersCancelSetup()`.
+  - `cut:speakersEmbed(fileId, { windows: [[offset, length]] /* samples, at most 30 s each, 20,000 at most */,
+    request })` -> `{ dim: 256, data: Uint8Array /* float32 LE, dim per window */, ms }` | `{ cancelled: true }` |
+    `{ error, code: 'notInstalled' | 'notFound' | 'badArgs' | 'model' }`; `cut:speakersCancel(request)` (seen between
+    batches of 32); a window that closes cancels its embeddings (`ownerGone`, before speech's deletes their sound). The features are Kaldi fbank as WeSpeaker trained on them (80 mel bins, 25 ms frames every 10 ms,
+    Hamming window, no dither, samples scaled to 16 bit, each window's mean taken away), computed in numpy step for step
+    as `torchaudio.compliance.kaldi.fbank` (torchaudio is not in the environment). Windows of one length run together.
+  - `cut:speakersConfigure({ idleMinutes })`, `cut:speakersTestConfig({ delay })` (fake only: ms per window).
+  - `PYIDE_SPEAKERS_BACKEND=fake`: no Python; a window's embedding is its energy at 24 log-spaced frequencies (Goertzel,
+    `fakeEmbedding`), so tones of different pitch are different speakers. `PYIDE_SPEAKERS_FAKE_SETUP=ok | offline |
+    disk | noPython`: the model starts missing and the setup pretends to download it, then ends with that code.
+- Voice isolation (`main/cut/voice.js`, `createVoice({ script, mediaDir, cacheDir, tmpDir, onCached, log, env })`): the vocals
+  stem of HTDemucs (`adefossez/HTDemucs`, one 84 MB safetensors file named by `htdemucs.yaml`) on the CPU, in the sidecar
+  `main/ai/voice_server.py` inside the same shared AI environment (idle unload after `ai.idleUnloadMinutes`).
+  - `cut:voiceStatus()` -> `{ backend: 'demucs' | 'fake', runtime, runtimeBytes, model: { id, name, repo, bytes, installed },
+    engine: { state }, stats: { setups, separations, cancelled, last }, open /* temp files */ }`. The runtime is ready
+    when the environment has a usable torch and demucs, einops, julius, safetensors, soundfile, tqdm and numpy; the model
+    when the yaml and the weight files it names are in the Hugging Face cache (`HF_HUB_CACHE` moves it; an empty folder
+    gives the missing state).
+  - `cut:voiceSetup()` -> `{ ok }` | `{ ok: false, code, error, log? }` (codes as `cut:speechSetup`), only after Download:
+    the free space, `ensureVenv(..., { torch: true })`, torch when missing, `pip install --no-deps demucs` (its
+    dependencies would bring sphn, lameenc and pyyaml), then einops, julius, safetensors, soundfile, tqdm, numpy and
+    huggingface_hub, then `snapshot_download('adefossez/HTDemucs')`. Progress: `cut:voiceSetupProgress` `{ phase:
+    'runtime' | 'download' | 'done', fraction, text }`. `cut:voiceCancelSetup()`.
+  - Sound: `cut:voiceOpen({ channels: 1 | 2 })` -> `{ id }` (`%TEMP%\nano-studio-voice\<pid>-<id>.f32`),
+    `cut:voiceWrite(id, bytes)` (float32 LE, 44.1 kHz, interleaved; whole frames, 16 MB a call, 4 GB a file),
+    `cut:voiceClose(id)`. Files belong to their window; files of a process that is gone are removed at start.
+  - `cut:voiceFind({ name, key })` -> `{ path, place }` | `{ missing }`: a WAV made before, in the media folder first.
+  - `cut:voiceSeparate(id, { request, name, key /* 8-32 hex */, place: 'media' | 'cache', frames })` -> `{ ok, path, place,
+    frames, ms }` | `{ cancelled: true }` | `{ error, code: 'notInstalled' | 'disk' | 'model' | 'io' | ... }`. The WAV is
+    `<place>\<name> voice <key>.wav` ('media' = `<home>\Media`, outside the cache's LRU; 'cache' = `<home>\Cache`, indexed
+    by it), 16-bit, 44.1 kHz, the input's channels, at least `frames` long (silence after the sound), written as `.part`
+    and renamed when complete; a cancel or a failure deletes the `.part`. Progress: `cut:voiceProgress` `{ request,
+    fraction }`; the model's state: `cut:voiceState`. `cut:voiceCancel(request)` (seen between segments). The sidecar
+    builds the model from the safetensors metadata (`klass` must be `demucs.htdemucs.HTDemucs`; `kwargs` with `segment` as
+    a fraction), takes the input's offset out (a 1 s moving average; HTDemucs adds each segment's mean back to every stem,
+    which filled the vocals' pauses), scales by the whole sound's deviation (as `demucs.separate` does), and runs one
+    7.8 s segment at a time with a quarter of overlap and `demucs.apply`'s triangular cross-fade, writing each finished
+    part at once, so its memory is the same for any length.
+  - `cut:voiceConfigure({ idleMinutes })`, `cut:voiceTestConfig({ delay })` (fake only: ms per second of sound).
+  - `PYIDE_VOICE_BACKEND=fake`: no Python, the vocals are the sound itself. `PYIDE_VOICE_FAKE_SETUP=ok | offline | disk |
+    noPython`: the runtime and the model start missing and the setup pretends to download, then ends with that code.
 - Text AI (`main/cut/ai.js`, `createAi({ log, complete, find, timeoutMs = 180 s })`): one Claude request per call through
   `main/ai/claude.js` (`complete({ system, prompt, model, signal, onText })`: the Claude Code CLI, no tools, no session,
   an empty working folder). Cut mode does not load the ai-* plugins, so the channels are here. The renderer builds the
@@ -553,9 +653,12 @@ Transitions: `dissolve`, `dip.black`, `dip.white`, `push`, `wipe`; audio `crossf
 ### `Cut.textrender`
 
 `draw(ctx2d, layers, { w, h, t, clip, scale })` (synchronous; call `prepare(layers)` first so the fonts are loaded),
-`drawCaptions(ctx, items, style, {w, h, scale})` (the style's `size` is in pixels of a picture whose shorter side is
+`drawCaptions(ctx, items, style, {w, h, scale, t})` (the style's `size` is in pixels of a picture whose shorter side is
 `style.ref`, 1080; it is drawn at `size * min(w, h) / ref` sequence pixels; `model.migrate` converts a size saved
-without `ref` other than the default 54 by `1080 / min(w, h)`), `measure(layer, ctx?) -> {lines, width, height, lineHeight, box}`,
+without `ref` other than the default 54 by `1080 / min(w, h)`; with `style.highlight` and `t`, the token
+`captionwords.litAt(item, t)` is drawn in `highlightColor`, or for `highlightMode: 'box'` on a rounded box of it in
+black or white, also in `'color'` mode for a line whose color is within 150 ("redmean" RGB distance) of the highlight,
+such as the yellow and orange speaker colors: the line is drawn whole twice, clipped to the word and to the rest, so the glyphs never move), `measure(layer, ctx?) -> {lines, width, height, lineHeight, box}`,
 `resolveLayer`, `prepare`, `loadFont`, `fontList`, `fontString`. A layer's `position` is the center of its block of
 lines; `align` places the lines inside that block. `animations = { list(), make(id, opts), apply(clip, layerId, id,
 {out, length, frame, perChar, distance}) }` for the motion presets `fade`, `rise`, `typewriter`; `apply` returns
@@ -625,15 +728,16 @@ with `backend: '2d'`) a Canvas 2D fallback; `compositor.backend` says which.
   transforms, opacity, crop, text, the transitions and colors through CSS `filter` (mixed in sRGB values; vignette is a
   radial gradient; wipes have a hard edge; edge extend is not drawn). Missing media draws a red "Media Offline" frame.
 - Pure helpers: `plan`, `planItem`, `fitScale`, `transitionRange`, `extendedSourceTime`, `missingHandles(project,
-  seq, transition) -> {a, b}` (missing handle ticks, for the striped warning), `captionsAt`, `mediaSequence`.
+  seq, transition) -> {a, b}` (missing handle ticks, for the striped warning), `captionsAt(seq, t, which) -> [{style,
+  t, items}]` (`t` at the start of its frame, so a playing monitor and export light the same word), `mediaSequence`.
 
 ### `Cut.player`
 
 `create({ app, canvas, audio /* Cut.audioengine instance or null */, mode: 'program' | 'source', backend, hardware,
-captions, overlays, proxy, size })` -> `{ play(rate = 1), pause(), seek(t), playing, rate, quality, setQuality(q),
+captions /* true | a track id | a function giving one, asked at each draw */, overlays, proxy, size })` -> `{ play(rate = 1), pause(), seek(t), playing, rate, quality, setQuality(q),
 dropped, setProxy(on), ready /* Promise of the compositor */, compositor, audio /* the audio engine given */, render(), frameRect() /* the frame in CSS
 pixels */, stats() /* {shown, dropped, fps, renderMs, renderMaxMs} */, on(fn) /* frame, play, pause, error */,
-destroy() }`. It renders `app.t` whenever the time, the project or the sequence changes; while playing it follows the
+destroy() }`. It renders `app.t` whenever the time, the project, the sequence or the shown caption track (`captionTrack`) changes; while playing it follows the
 audio clock (only at rate 1 in program mode; one that stands still 2.5 s gives way to the wall clock) or
 `performance.now()`, moves `app.setTime` with the clock even while a slow frame is still drawing, prefetches ahead,
 counts dropped frames and pauses `Cut.thumbs`. `RATES` are the J/K/L shuttle rates (-8..8). Source mode reads and writes
@@ -787,16 +891,23 @@ ticks for timeline ranges; ranges are `[a, b]` pairs.
 ### `Cut.speech`
 
 What is done with speech recognition's words (`speech.js`, pure; tests `verify/cut-speech.mjs`). Words are
-`{ t0, t1, text }` (seconds per media file; ticks on the timeline, with `clip`).
+`{ t0, t1, text, p? }` (seconds per media file; ticks on the timeline, with `clip` and `src`, the word's index in its
+transcript; `p` Whisper's confidence, 0-1, absent in transcripts cached before it was kept).
 
-- Windows: `windows(total, { size = 30 s, overlap = 5 s })` -> `[[from, to]]` samples; `mergeWindows(results /* [{ from,
-  to, words: [[t0, t1, text]] }] */, { edge = 1.5 })` -> words in seconds: a window's words count up to `edge` seconds
-  before its end (the last window's all), the next window's from the last one counted on; `dedupe(words)` drops a word
+- Windows: `nextWindow(from, to, stop /* s into the window, or null */, { total, again = true })` -> `{ next /* samples,
+  null after the last */, until? }`: the next window starts 5 s before this one ends, or at `stop` when Whisper's
+  text stopped there with more than 6 s of the window left (`until` = `stop`; not for a window that itself began at a
+  stop, `again: false`); `textStop(words, end, { pause = 2.5 })`: the end of the first word followed by 2.5 s without
+  words, else the sidecar's `end`; `windows(total, { size = 30 s, overlap = 5 s })` -> `[[from, to]]` (the walk when
+  no window stops early); `mergeWindows(results /* [{ from, to, until?, words: [[t0, t1, text, p?]] }] */, { edge = 1.5 })`
+  -> words in seconds: a window's words count up to `edge` seconds before its end (or up to `until`; the last
+  window's all), the next window's from the last one counted on; `dedupe(words)` drops a word
   heard twice (the same text within 0.5 s, or overlapping by half).
 - Timeline: `clipWords(clip, words)` (the words whose middle the clip shows, through `analyze.toTimeline`: in, speed,
   reverse; none for a freeze frame), `joinClips(lists)` (a word two overlapping clips hold kept once), `wordAt(words, t)`.
 - Captions: `captions(words, { maxChars /* 0: 18 for Korean text, else 42 */, maxLines = 2, maxDuration = 6, pause = 0.6,
-  linger = 0.3, minDuration = 0.8, frame })` -> `[{ start, end, text /* lines joined with \n */ }]`: a new caption at a
+  linger = 0.3, minDuration = 0.8, frame })` -> `[{ start, end, text /* lines joined with \n */, words /* each word's
+  t0, t1 from the caption's start, on frames */, doubt? }]`: a new caption at a
   pause, past 6 s, when the words no longer fit, or after a sentence end (.?! or a Korean -다/-요/-죠/-까 before half a
   pause) once it holds half a line; `layout(texts, maxChars, maxLines)` -> balanced lines (the longest as short as it
   can be) or null.
@@ -807,6 +918,89 @@ What is done with speech recognition's words (`speech.js`, pure; tests `verify/c
   `removalRanges(words, indexes, { ext = 0.25, keep = 0.08, frame })` (the transcript's delete), `runs(indexes)`,
   `search(words, query)` -> `[[i, j]]`, `normalize(text)`, `isKorean(text)`.
   `layout(texts, maxChars, maxLines, sep = ' ')`: `sep` '' lays out Japanese and Chinese, whose units are characters.
+- Confidence: `UNCERTAIN` (0.5), `isUncertain(word, threshold = UNCERTAIN)` (p under it; never without p, and p 1 is a
+  word the person corrected); `captions(..., { uncertain })` gives a caption the `doubt` of its uncertain words. The
+  measure and the threshold come from the speech benchmark (8 conditions, 3,161 words, 321 wrong): the lowest token
+  probability of a word found the wrong words best (average precision 0.67, against 0.62 for the geometric mean, 0.58
+  for the mean and 0.57 for the first token). Below 0.5: precision 0.67, recall 0.57, 8.7% of the words marked (clean
+  speech: 1 of 421); below 0.3: 0.85 and 0.32 (3.8%); below 0.7: 0.45 and 0.76 (17.4%). Music hallucinations are
+  confident and seldom marked (recall 0.13 in music10).
+- Word list: `parseTerms(text)` (one a line or between commas, tidied, each once, at most `TERMS.count` 200 of
+  `TERMS.chars` 100), `termsKey(terms)` (FNV-1a fingerprint, '' for none), `dropEcho(words, terms)` (two or more list
+  terms in a row with the list's commas: Whisper reading the list back where nobody speaks, dropped). Measured with
+  the passages' names: Korean white and pink noise +0.9 to +1.5 points (names heard 9-16 -> 19-21 of 22), clean
+  +0.1, the English music-intro file -5.7 (a phrase made up in the room noise after the speech); an irrelevant list
+  left clean speech as it was, lost 0.8 in white noise, and was read back after the speech until `dropEcho` (93.1 ->
+  97.2 Korean, 87.5 -> 91.3 English, on the stored outputs).
+
+### `Cut.speakers`
+
+Who speaks when, from speaker embeddings of the speech recognition found (`speakers.js`, pure; tests
+`verify/cut-speakers-core.mjs`). Words are a transcript's `{ t0, t1 }` in source seconds; `DEFAULTS` holds the tuned
+options (`gap` 0.3, `sentences` true, `short` 4, `size` 3, `hop` 1.5, `min` 1, `trust` 0.8, `threshold` 0.5,
+`minSpeech` 2.5, `spare` 3, `minRun` 1, `limit` 1500; benchmark below).
+
+- Windows: `segments(words, { gap, sentences })` -> `[[first, last]]` word indexes without a pause of `gap` s, also
+  split after a word that ends a sentence (. ? ! and a closing quote: in noise Whisper's refined times lose the pause
+  between two speakers, and a window across the change is neither of them);
+  `windowsOf(words, opts)` -> `[{ t0, t1, seg, speech }]`: a segment up to `short` s is one window, a longer one
+  `size` s windows every about `hop` s from its start to its end; a window under `min` s takes the silence around it
+  (at most half of each pause, the part one side cannot take goes to the other).
+- Clusters: `tree(unitVectors)` -> `[{ a, b, sim }]` merges, most similar first (average linkage on cosine, NN-chain,
+  O(n²)); `cut(n, merges, { threshold } | { count })` -> a root per item; `cluster(embeddings, speech, { count, threshold,
+  trust, minSpeech, limit })` -> a speaker index per window (0, 1, … by first appearance; -1 without an embedding).
+  Windows with less than `trust` s of speech stay out of the tree (all of them when none has enough), at most `limit`
+  evenly spread windows go in. Clusters with less than `minSpeech` s (or 15% of all the speech, whichever is less) are
+  strays. Auto (`count` null or 0) cuts at `threshold` and leaves the strays out; a count cuts `spare` clusters finer,
+  leaves strays out while more than `count` remain, then joins the two most alike centroids until `count` are left
+  (cutting the tree at the count itself kept one odd 1 s window as a speaker and joined two real speakers: 71.5% of
+  the words right on the noisy 3-speaker case, 100% this way). Every window then takes the nearest kept centroid.
+  At most `MAX` (10).
+- Words: `wordLabels(words, windows, labels, { minRun })`: each word takes the label its windows vote for (overlap
+  times `min(1, length / size)`); inside a segment a run shorter than `minRun` s joins the longer neighbouring run.
+  `turnsOf(words, ids)` -> `[[t0, t1, id]]` (a speaker's words joined; the silence between two speakers split in its
+  middle; milliseconds; overlapping word times, as at a window seam, never give overlapping turns: a turn starts where
+  the one kept before it ends, one left empty is dropped and its neighbours join when they are one speaker's); `at(turns, t, reach = 1)` -> the id at source second t (or the nearest turn within reach);
+  `assign(turns, a, b, id)` -> the turns with [a, b) given to `id` (split around, joined with neighbours of `id`).
+- Labels made again: `match(oldTurns, newTurns, newIds)` -> `Map(newLabel -> oldId)` by shared time, largest first;
+  `listFor(count, before, matched, taken)` -> `{ list, ids }`: matched speakers keep their entry (name, color), new ones
+  get the next `sp<n>` above every id of the list and of `taken` and a `PALETTE` color not used yet; `inUse(project)`
+  -> the list's ids and every caption's `speaker` in every sequence (`taken`: a caption keeps its id after its speaker
+  leaves the list, so that id never goes to someone else).
+- Names and captions: `nameOf(speakers, id, tr)` (its name, else `tr('Speaker {n}')` by its place), `colorOf`,
+  `runsOf(words)` (runs of one `speaker`), `shown(speakers, style, item, tr)` -> `{ prefix /* 'Name: ' with
+  style.speakerName */, color /* with style.speakerColor */ }`, `decorate(project, captionsAt, tr)` (each item with
+  `prefix` and `color` for `textrender.drawCaptions`, which draws the prefix before the first line, never lit by the
+  word highlight, and the item in that color), `written(project, track, items, tr)` (names in the text, for SRT and
+  VTT files).
+
+Benchmark (scratchpad `speakerbench`, not in the repository): Korean and English dialogues of 2 and 3 speakers
+(67 to 91 s, 18 or 19 turns, pauses of 0.25 to 0.9 s, no overlap) made with Windows SAPI. This PC has one voice per
+language (Heami, Zira), so the speakers are that voice played 1.2 times faster and 0.84 times slower (pitch and formants
+move together, like a shorter or longer vocal tract) at their own SAPI rates; one clean and one noisy copy each (white
+noise at 20 dB SNR, or synthetic music 12 dB under the speech). The words are Whisper small's through the app's own
+windows and refine; the score maps the labels to the script's speakers in the best way. Results with the defaults
+(one run; the embeddings are the same every run):
+
+| Case | Speakers | Auto found | Words right (Auto) | Speech time right (Auto) | Words right (count given) |
+| --- | --- | --- | --- | --- | --- |
+| ko2 clean | 2 | 2 | 99.3% | 99.0% | 99.3% |
+| ko2 music | 2 | 2 | 100% | 98.4% | 100% |
+| ko3 clean | 3 | 3 | 99.2% | 98.9% | 99.2% |
+| ko3 noise | 3 | 3 | 100% | 99.8% | 100% |
+| en2 clean | 2 | 2 | 99.1% | 98.7% | 99.1% |
+| en2 noise | 2 | 2 | 100% | 99.2% | 100% |
+| en3 clean | 3 | 3 | 100% | 100% | 100% |
+| en3 music | 3 | 3 | 100% | 99.9% | 100% |
+
+Auto finds the number of speakers in 8 of 8 cases for a threshold anywhere from 0.45 to 0.55 (English alone: 0.35 to
+0.65, so a choice made on English carries to Korean). Without the sentence splits the best threshold found the count
+in 7 of 8 (96.9% of the words), and 2 s or 1.5 s windows were less stable than 3 s ones. The embeddings take a median
+of 0.63 s per minute of sound (0.49 to 0.83 s, 12 runs over four cases, about 20 ms a window, so the time follows the
+number of windows) after a 0.6 s load, on a Ryzen 7 4800H; clustering takes under 5 ms. The speakers are one voice
+changed in speed, with no overlap, one room and level and clean turn-taking. Real people (two similar voices, phone
+sound, crosstalk) are harder, so these numbers are an upper bound; the threshold was also tuned on the same eight
+cases it is scored on.
 
 ### `Cut.ai`
 
@@ -934,9 +1128,17 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
   `tr(message, params)`.
 - The form's `enqueue()` (Add to Queue in the dialog and the Export Settings panel) runs the same checks as `start()`
   and hands `Cut.ui.exportQueue.add({ project: a JSON copy of app.project, seqId, seqName, fps, path, settings (the
-  resolved settings), range, captions, presetName })`. `Cut.ui.syncBusy()` sends `window:setBusy` with the dialog's
+  resolved settings), range, captions, captionTrack, presetName })`. `Cut.ui.syncBusy()` sends `window:setBusy` with the dialog's
   export and the queue's live jobs; `start()` refuses while the queue runs and calls `exportQueue.kick()` when done.
-- `Cut.ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf }`.
+- `Cut.ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf, reveal(app, t) }`. A
+  caption with a `doubt` is `.uncertain` (a yellow edge) with its words under the text (`.cut-cap-doubt-word`, the
+  confidence in percent; a click seeks to the word) and a check mark (`.cut-cap-doubt-ok`, `setCaption` with
+  `doubt: null`); the foot counts them; `cut.speech.markUncertain` off hides it all. The style dialog
+  (`#cutCaptionStyle`) also has the highlight (`.cut-cap-hl`, `.cut-cap-hl-color`, `.cut-cap-hl-mode`) and says how many
+  of the track's captions have word timings (`.cut-cap-hl-note`). The track shown (`trackOf(app)`: the one chosen in `.cut-cap-track`, the
+  first until then) is also the one the program monitor's player draws (`captions: () => trackOf(app)?.id`) and export
+  burns in (the form's `captionTrack`, also on queued jobs; `.cut-export-burn-track` names it when the sequence has
+  several tracks); a change emits `captionTrack` {id}.
 - `Cut.ui.keys = { kHeld, actions, title }`. `ui-keys.js` holds the key map (features §18 [1]) as IDE actions
   `Cut.<id>` and sends each to the focused panel; keys never act while typing in a field or a text layer. Ctrl+X is
   `cut`. The [2] editing keys: `;` lift, `'` extract, Ctrl+Shift+V `pasteInsert`, Alt+Left/Right `nudgeLeft`/
@@ -1031,38 +1233,118 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
 
 - `Cut.ui.speech = { autoCaptions(app), removeFillers(app), ensureReady(modelId?) -> Promise<bool>, transcribe(app,
   clips, ctx, range?), timelineWords(app, clips, range?), speechClips(app, { selected }), settingsSection(host, ctx),
-  status(), forget(), defaults }`. `ensureReady` shows the setup dialog (`#cutSpeechSetup`: the model's and the
+  status(), forget(), defaults, nextUncertain(app, dir), editTerms(app), correctWord(app, word, text), terms(app),
+  marking(), percent(p) }`. `ensureReady` shows the setup dialog (`#cutSpeechSetup`: the model's and the
   runtime's sizes, "runs entirely on this PC", Download with progress, the failure explained, Try Again) when the
-  model or the runtime is missing; nothing is downloaded before Download is pressed.
+  model or the runtime is missing; nothing is downloaded before Download is pressed. Called without `modelId` (before a
+  recognition) with the runtime there and the other model installed, it also offers Use <that model> (`.cut-speech-other`
+  says so), which sets `cut.speech.model` to it and resolves true: someone with only small is not sent to a 1.6 GB
+  download, or stopped offline, by the turbo default.
 - The clips: audio-track clips with sound, enabled, not a freeze frame, whose role is not music, effects or ambience;
   the selected ones (with their links) when there are any; only those the In-Out range touches when it is set.
 - Sound: each media file's needed source seconds (the clips' parts in the range and a second around them, less what
   its transcript covers already) are read with `Cut.decoder.audioReader` in 10 s blocks, mixed to mono, resampled to
   16 kHz with `Cut.audioengine.resample` (each block starts on an output sample and reads the filter's reach on both
-  sides, so the blocks join without a seam) and streamed to `cut:speechWrite`; `Cut.speech.windows` splits them for
-  `cut:speechTranscribe` and `mergeWindows` joins the answers. One `Cut.ui.auto.task` shows the progress (with
+  sides, so the blocks join without a seam) and streamed to `cut:speechWrite`; windows of 30 s go to
+  `cut:speechTranscribe` one after another, each starting where `Cut.speech.nextWindow` says (5 s of overlap, or
+  where the window before stopped early), and `mergeWindows` joins the answers. One `Cut.ui.auto.task` shows the progress (with
   "Loading the speech model…" as soon as main reports `loading`, while the first window's request waits) and Cancel,
   which also cancels the window in flight.
-- Transcripts: per media file, model and language (key `speech|v1|<path>|<size>|<mtime>|<model>|<language>`), kept in
-  memory and in the Cut cache (`cut:cachePut`, JSON `{ v: 1, ranges, language, words: [[t0, t1, text]] }` in source
-  seconds), and mapped to the timeline with `Cut.speech.clipWords` whenever they are shown, so edits need no new
+- Transcripts: per media file, model, language and word list (key
+  `speech|v2|<path>|<size>|<mtime>|<model>|<language>` plus `|t<Cut.speech.termsKey(list)>` when the project has a
+  word list, so a transcript made without one keeps its key; the `v` goes up whenever what Whisper is asked changes,
+  so older transcripts are recognised again), kept in memory and in the Cut cache (`cut:cachePut`, JSON `{ v: 1,
+  ranges, language, words: [[t0, t1, text, p?]] }` in source seconds; transcripts cached before confidences were kept
+  have no `p`, and their words are never marked), and mapped to the timeline with `Cut.speech.clipWords` whenever they are shown, so edits need no new
   recognition. The app emits `transcripts` when new ones are made.
-- Auto Captions: the dialog `#cutSpeechCaptions` (the scope, language, characters per line), then `Cut.speech.captions`
-  and one batch `Auto Captions`: `addCaptionTrack` (named "Auto Captions", in the language heard) or, when that track
+- Auto Captions: the dialog `#cutSpeechCaptions` (the scope, language, characters per line, the word list
+  `.cut-speech-terms`, the highlight `.cut-speech-highlight` (setting `cut.speech.highlight`, false; over an existing
+  "Auto Captions" track it starts from that track's `style.highlight`, and a change goes into the batch); a changed list is its own undo step `Project Settings` first), then `Cut.speech.captions`
+  and one batch `Auto Captions` (`captions(..., { uncertain: UNCERTAIN })`, so each caption carries its `doubt`): `addCaptionTrack` (named "Auto Captions", in the language heard) or, when that track
   exists, `setCaptions` keeping its captions outside the range.
 - Remove Filler Words: `#cutSpeechFillers` (filler words, pauses, the pause length, what to keep); the summary and
   `Cut.ui.timeline.setOverlay` follow the settings; Remove is `Cut.ui.auto.rippleRanges(..., 'Remove Filler Words')`.
   Its settings are `cut.auto.fillers`.
 - Transcript panel (`transcript`; in Captions and Graphics beside Captions, in Editing's dock slot): paragraphs at
   pauses of 1.2 s with their timecode and a span per word (`.cut-tr-word`, `data-i`); the word under the playhead is
-  `.current` (scrolled into view while playing); a click seeks and selects, Shift+click and a drag extend, Esc clears;
+  `.current` (scrolled into view while playing); a word Whisper was unsure of (`Cut.speech.isUncertain`) is
+  `.uncertain` (a wavy underline, the confidence in its tooltip), and the foot's `.cut-tr-next-uncertain` counts them
+  and goes to the next; a double-click makes a word a field (`.cut-tr-edit`): Enter or leaving it stores the text in
+  the media file's transcript with `p: 1` (also when unchanged: confirmed), Esc puts it back (`correctWord`; the
+  transcript is not project state, so this is not an undo step); Word List… (`.cut-tr-terms`) opens `#cutSpeechTerms`; a click seeks and selects, Shift+click and a drag extend, Esc clears;
   the `delete` and `rippleDelete` actions of the panel and its Remove button run `Cut.speech.removalRanges` through
   `rippleRanges` on the words' clips (label `Delete Words`); the search marks the matches, Enter and Shift+Enter go
-  through them. `Cut.ui.transcript = { words, selection, select(i, j), removeSelected(), transcribe(), refresh() }`
+  through them. `Cut.ui.transcript = { words, selection, select(i, j), removeSelected(), transcribe(), refresh(), edit(i),
+  reveal(t) }`
   while it is mounted.
-- Settings: `cut.speech.model` (`whisper-small`), `cut.speech.language` (`auto`), `cut.speech.lineChars` (0), in the
+- Next / Previous Uncertain Word (`Cut.auto.nextUncertain` Alt+], `Cut.auto.prevUncertain` Alt+[, in the Automation
+  menu; F2, PyCharm's next highlighted error, is the project panel's Rename): the playhead goes to the next frame (after
+  or before it) of an uncertain word: the shown caption track's doubts, or the transcript's words when the Transcript
+  panel has the keyboard or no caption holds a doubt; the Transcript panel selects the word and the captions panel
+  scrolls to its caption.
+- Word list: the project setting `speechTerms` (it names what this video is about and travels with the project; a
+  global list would bias every other project), edited in the Auto Captions dialog and Word List…, parsed by
+  `Cut.speech.parseTerms` and sent with every window.
+- Settings: `cut.speech.model` (`whisper-large-v3-turbo`), `cut.speech.language` (`auto`), `cut.speech.lineChars` (0),
+  `cut.speech.markUncertain` (true: the marks, the doubts shown, Next Uncertain Word), in the
   Video Editor page through `settingsSection` (with the model's state and Download…). The idle unload follows
   `ai.idleUnloadMinutes` (`cut:speechConfigure`).
+  `cut.speech.isolateVoice` (false; also the Auto Captions dialog's checkbox `.cut-speech-isolate`): each part to
+  recognise is first `Cut.ui.voice.forSpeech` (the vocals of those source seconds, in the cache) and read from that WAV;
+  the transcript key ends in `|iv`, so isolated and plain transcripts are kept apart. `Cut.ui.speech.ensureReady()`
+  without a model id also asks for HTDemucs when the option is on.
+
+### Speaker labels (`ui-speakers.js`)
+
+- `Cut.ui.speakers = { label(app, { count }), ensureReady(), status(), rename(app, id), reassign(app, words, id | 'new'),
+  wordSpeakers(app, timelineWords, speakers?), captions(app, words, make, frame), captionField(app), bar(app, api),
+  paraLabel(app, id, firstWord), selectSpeaker(app, id), CAPTION_MODES, styleOf(mode), modeOf(style), forget() }`.
+- Label Speakers (`Cut.auto.speakers`, the Automation menu, the Transcript panel's `.cut-spk-run`): the sequence's
+  speech clips; media without a transcript are recognised first (in the same task, after Whisper's setup when it is
+  missing), then each media file's transcript gives `windowsOf`, its sound goes to `cut:speechOpen`/`Write` (`Cut.ui.speech.
+  writeSound`) and `cut:speakersEmbed` 64 windows at a time (progress, Cancel), all media are clustered together (one
+  speaker across files), and one batch `Label Speakers`: `setSpeakers({ list, turns, count })` (matched to the speakers
+  of before) plus `setCaption(..., { speaker })` for captions whose speaker changed. Embeddings are cached
+  (`speakers|v1|<path>|<size>|<mtime>|<windows>|<FNV of the windows>`, `cut:cacheGet`/`Put`: dim, count, float32), so
+  another count clusters again without the sound or the model.
+- Transcript panel (ui-speech.js calls in): `bar(app, { words, segment, selectWords })` above the text: a chip per
+  speaker (`.cut-spk-chip[data-speaker]`: dot, name, word count; click selects the words, double-click renames,
+  right-click the speaker menu), the count (`.cut-spk-count`: Auto, 1 to 6; the labels' `count`, else the choice made for this history and sequence, else Auto) and `.cut-spk-run`. A paragraph breaks at a
+  pause and where the speaker changes and starts with `paraLabel` (`.cut-tr-speaker`, its `--spk` color): Change Speaker
+  (the list, New Speaker), Rename Speaker…, Select Words. The words a speaker chip selects are `Cut.ui.transcript.picked`
+  (Delete and Remove take them; Escape or a click clears them).
+- Change Speaker: the paragraph's words' source seconds per media given to the speaker (`assign`), a speaker left
+  without turns leaves the list, the captions follow; one batch `Change Speaker`. Rename: `#cutSpeakerRename`, one batch
+  `Rename Speaker`.
+- Captions: Auto Captions makes its captions per run of one speaker (`captions(app, words, make)`, each item with its
+  `speaker`, ends clipped at the next start) and, with labels, offers `.cut-spk-captions` (No speakers, Speaker colors,
+  Speaker names, both; setting `cut.speakers.captions`, default colors) written to the track's style; the Caption
+  Style dialog has the same choice (`.cut-cap-speakers`). The compositor draws through `Cut.speakers.decorate`;
+  exported and saved SRT files get the names (`written`).
+- The setup dialog `#cutSpeakersSetup` follows the speech one (what is downloaded and its size, on this PC, nothing
+  before Download, progress, failures explained, Try Again).
+
+### Voice isolation (`ui-voice.js`)
+
+- `Cut.ui.voice = { isolate(app), isolateMedia(app, mediaIds), ensureReady(), render(app, mediaId, { from, to, place, ctx,
+  onPart }) -> { path, from }, forSpeech(app, mediaId, a, b, ctx, onPart), status(), settingsSection(host, ctx), keyOf }`.
+- Isolate Voice (`Cut.auto.isolateVoice`, the Automation menu and the clip menu's Automation submenu): the selected audio
+  clips (a selected video clip brings its linked audio; locked tracks left out), each media file once in one
+  `Cut.ui.auto.task` with progress and Cancel, then one history group `Isolate Voice`: `importMedia` of each WAV (named
+  "<name> (Voice)", into the source's bin; a media of that file already in the project is used) and
+  `replaceAudio(seqId, clipIds, mediaId)` (label Replace Audio: audio clips of a media file take another media's sound,
+  which must reach their out; everything else of the clip stays), and in the same group `setSpeakers` copying the
+  source's speaker turns to the vocals' media id. Before the group the source file's transcripts are stored under the
+  vocals file's keys too (`Cut.ui.speech.carryTranscripts(from, to)`: every key in memory, and the one for the current
+  settings from the disk cache), since the vocals run on the source's time: the Transcript panel, its speaker paragraphs
+  and the captions' speaker ids stay, and nothing is recognised again. The project panel's item menu has Isolate Voice
+  for media with sound: the import (with the turns) only, the timeline unchanged.
+- `render`: `cut:voiceFind` first; else the media's sound through `Cut.decoder.audioReader` in 10 s blocks, one or two
+  channels (more folded into two), resampled to 44.1 kHz with `Cut.audioengine.resample` (blocks start on output samples
+  and read the filter's reach on both sides), streamed to `cut:voiceWrite`, then `cut:voiceSeparate` (a whole file is
+  padded to the media's duration). The key is FNV of path, size, mtime, range and model. The setup dialog
+  `#cutVoiceSetup` follows the speech one (sizes, on this PC, nothing before Download, progress, the failure explained).
+- Settings: the Video Editor page's Voice Isolation section (`.cut-voice-state` with `data-ready`, `.cut-voice-download`).
 
 ### Text AI through Claude (`ui-ai.js`)
 
@@ -1132,7 +1414,7 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
 
 Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open' | 'save' | 'recover', path},
 `autosaved` {file, time, copy?}, `offline` {ids}, `exported` (the run result), `proxies`, `exportQueue`, `transcripts`, `patch`, `snapping`, `targets` {ids},
-`transitionSelection` {id, open?} (with `app.selectedTransition`), `captionSelection` {track, id}, `trimPreview`
+`transitionSelection` {id, open?} (with `app.selectedTransition`), `captionSelection` {track, id}, `captionTrack` {id} (the captions panel's shown track), `trimPreview`
 {clipId, edge, mode, t, active}, `scrub` {active}.
 
 ## 11. Strings and styles
@@ -1152,9 +1434,9 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | File | Kind | Port | What it covers |
 | --- | --- | --- | --- |
 | `verify/cut-formats.mjs` | Node | - | Readers and writer: mp4write output read back table by table; handcrafted ctts v1, co64 past 4 GB, stz2, elst, fragments, QuickTime PCM, Matroska lacing and damage, MP3 Xing/VBRI, RF64; truncated copies come back as values; a two-hour table against a clock; the scripts loading next to Monaco's AMD `require` |
-| `verify/cut-model.mjs` | Node | - | Every command against the expected timeline, exact undo/redo; 2,000 random commands; sync lock, links, groups, trim, slip, slide and rate stretch clamps, extend edit, snapping; keyframe values; history grouping, dirty, limit; SRT/VTT with CP949 and UTF-16; migrate |
+| `verify/cut-model.mjs` | Node | - | Every command against the expected timeline, exact undo/redo; 2,000 random commands; sync lock, links, groups, trim, slip, slide and rate stretch clamps, extend edit, snapping; keyframe values; history grouping, dirty, limit; SRT/VTT with CP949 and UTF-16; migrate; caption word timings (realign after edits, the lit word, Auto Captions' timings, edit/move/trim/ripple/insert/frame rate with exact undo, the uncertain words (`doubt`) and the speaker through ripple, insert, frame rate and a start trim, files, the random commands with timed captions) |
 | `verify/cut-main.mjs` | Node | - | Every `cut:*` channel with Electron stubbed: read ranges and limits, UNC/`\\?\UNC`/`\\.\` paths, links to network paths, junctions, 8.3 names, streams; atomic project writes and .bak; autosave rotation, sessions, recovery; the sink; faststart; cache LRU; findMedia/listMedia; real fonts |
-| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references, transitions, crossfade, the compositor's plan, fit scales, motion presets, the reader's block cache, audio assembly, peaks, dropped-frame count |
+| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references, transitions, crossfade, the compositor's plan, fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
 | `verify/cut-analyze.mjs` | Node | - | Levels streamed in odd blocks, silences with minimum length and margins on frames, speech; click tracks at 90, 120 and 140 BPM (beats within 12 ms, bar phase on the accents); scene cuts on their frame with a flash ignored and a fade in giving one cut at most; auto color through color.basic's own math (a light picture kept light); ducking keyframes; ranges and clip time; loading as a page script |
 | `verify/cut-export-core.mjs` | Node | - | Presets (levels, bitrates, estimates), resampler and WSOLA, BS.1770-4 loudness and true peak, normalize and match gains, the mixer, testsrc frame numbers, export's pure parts (frame plan, chapters, captions in a range, SRT names) |
 | `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference; transitions; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback |
@@ -1164,11 +1446,15 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | `verify/cut-timeline.mjs` | app | 9756 | Timeline gestures and keys checked in the model and undone; drops; effect controls and keyframes; effects panel; color panel and eyedropper; overlay handles and Korean IME text; 500 clips; screenshots (`CUT_TL_ONLY` picks parts) |
 | `verify/cut-edit.mjs` | app | 9759 | The [2] editing keys and tools with real keys and drags: the keys as `Cut.<id>` actions (Find Action), the tool bar; lift and extract on targeted and locked tracks; paste insert; nudge with links and a locked track; groups (select, Alt-click, drag, nudge, delete, ungroup); D; E; rate stretch; slip with the two-up frames read from pixels; slide; pen keyframes on volume and opacity; match frame to the source monitor's frame (`CUT_EDIT_ONLY` picks parts) |
 | `verify/cut-panels.mjs` | app | 9762 | The History, Markers and Audio Meters panels and the Window menu with real clicks and keys: jumps through the history in one go, dimmed later steps, 1,500 steps in a virtual list; marker filters, search, click, double click and Delete; marker drags on the ruler (frames, snapping, range end) and its menu; Hold and Bezier in the lane and timeline menus, the hold step from pixels, a bezier handle drag; meters' peak, RMS, hold and clip lights from a 1080p30 source, read from the canvas; dropped frames with and without the meters (`CUT_PANELS_ONLY` picks parts) |
-| `verify/cut-tools.mjs` | app | 9765 | The convenience tools with real clicks and keys: the shortcut editor (record, use, conflict refusal, remove, reset, Reset All, the typing guard), the ? cheat sheet; the Video Editor settings page (transition length through Ctrl+D, playback quality, Clear Cache, copies kept); Select and Remove Unused with undo, Find Missing Media relinking by size and by duration; proxies (offer, 720p H.264 GOP 15 in the cache, the monitor drawing it and export the original by pixels, fallback when deleted, waiting while playing, cancel, the offer dismissed per project); the export queue (order, a later edit not leaking in, move, cancel, retry, remove, the close question) (`CUT_TOOLS_ONLY`) |
-| `verify/cut-speech.mjs` | Node | - | Speech recognition without a model: windows and their seams (squeezed end words, a half-heard start), words mapped through in, speed and reverse, two clips of one recording; caption line breaking (Korean 18 and English 42 characters, two balanced lines, 6 s, pauses, sentence ends, frames); fillers and pauses; deleting words; search; word times narrowed to their sound; the fake's bursts; main's temp files, windows, cancel, setup flow and error codes; loading as a page script |
-| `verify/cut-whisper.mjs` | app | 9768 | Speech recognition with the fake backend through the real UI: the setup dialog (sizes, on this PC, nothing before Download, Cancel, progress); Auto Captions on testsrc beeps over two windows, again over In-Out from the captions panel and from the cache, "Loading the speech model…" while a slow model loads; the Transcript panel's click, highlight while playing, Shift+click, Delete across linked tracks, undo, Remove, search; Remove Filler Words with its overlay; the settings section; the Window menu; an offline failure in Korean; screenshots (`CUT_WHISPER_ONLY`) |
+| `verify/cut-tools.mjs` | app | 9765 | The convenience tools with real clicks and keys: the shortcut editor (record, use, conflict refusal, remove, reset, Reset All, the typing guard), the ? cheat sheet; the Video Editor settings page (transition length through Ctrl+D, playback quality, Clear Cache, copies kept); Select and Remove Unused with undo, Find Missing Media relinking by size and by duration; proxies (offer, 720p H.264 GOP 15 in the cache, the monitor drawing it and export the original by pixels, fallback when deleted, waiting while playing, cancel, the offer dismissed per project); the export queue (order, a later edit not leaking in, move, cancel, retry, remove, the close question); the word-by-word caption highlight from the program monitor's pixels (each word's first frame, scrubbing, every frame read back while playing), the exported frames lighting the same word, a text edit in the panel with undo and redo, a rewritten caption unlit, the box style, a second track chosen in the captions panel redrawing the stopped monitor and burned in by the export panel (which names it), saved and opened again (`CUT_TOOLS_ONLY`) |
+| `verify/cut-speech.mjs` | Node | - | Speech recognition without a model: windows and their seams (squeezed end words, a half-heard start), words mapped through in, speed and reverse, two clips of one recording; caption line breaking (Korean 18 and English 42 characters, two balanced lines, 6 s, pauses, sentence ends, frames); fillers and pauses; deleting words; search; word times narrowed to their sound; Whisper's confidence through refine, the seams and the timeline, captions' doubts, the doubt in the model and `setCaption`; the word list parsed, fingerprinted, validated (project setting and main) and heard by the fake; the fake's bursts; main's temp files, windows, cancel, setup flow and error codes; loading as a page script |
+| `verify/cut-speakers-core.mjs` | Node | - | Speaker labels without a model: windows from word times; the NN-chain average-linkage tree against a brute-force one, Auto and a fixed count, stray windows, numbering; each word's speaker with a flip smoothed and a short answer kept; turns (also of 2,000 random overlapping word lists, always valid), the speaker at a time, a segment reassigned, labels made again matched to the old speakers (names, colors), no id a caption still names given to a new speaker; `validate`, `setSpeakers` with undo, redo and `null`, a caption's speaker through the caption commands, save and reload; the caption prefix and color, SRT names; `main/cut/speakers.js` (the fake's embeddings, bad windows, cancel, a closed window's embeddings cancelled, an empty model cache, the fake setup); a page script |
+| `verify/cut-speakers.mjs` | app | 9766 | Speaker labels with the fake backends through the real UI: Label Speakers (Auto: three speakers, paragraphs and colors, every word's speaker, one step); rename by double-clicking a chip, undo and redo; 2 speakers then Auto without recognising or embedding again, the name kept; the row's count per project (another project starts at Auto and labels with it); a chip selects all of a speaker's words; Change Speaker from a paragraph's label and its undo; Auto Captions with speaker colors and names (one speaker per caption, the speaker's color in the compositor's pixels, names in SRT text, Caption Style turns them off); save and reopen; the real backend with an empty model cache (the setup dialog, nothing downloaded); an offline pretend download in Korean; screenshots (`CUT_SPEAKERS_ONLY`) |
+| `verify/cut-whisper.mjs` | app | 9768 | Speech recognition with the fake backend through the real UI: the setup dialog (sizes, on this PC, nothing before Download, Cancel, progress; with only small installed, Use Whisper small instead of the turbo download); Auto Captions on testsrc beeps over two windows, again over In-Out from the captions panel and from the cache, "Loading the speech model…" while a slow model loads, the dialog's highlight checkbox (off at first, on the new track, remembered, an existing track's state); the Transcript panel's click, highlight while playing, Shift+click, Delete across linked tracks, undo, Remove, search; the uncertain words (wavy underline and tooltip, the captions panel's marks, Alt+] and Alt+[ and the menu, Mark as Checked, an edited caption, a corrected or confirmed transcript word kept in the cache, the marks off); the word list (Auto Captions dialog, Word List…, project setting, its own transcript then the cache, one undo step); Remove Filler Words with its overlay; the settings section; the Window menu; an offline failure in Korean; screenshots (`CUT_WHISPER_ONLY`) |
 | `verify/cut-ai-core.mjs` | Node | - | Text AI without Claude: JSON from answers, the retry prompt; transcripts condensed within a budget the same way every time; what each prompt sends (no paths); caption answers checked line by line; YouTube chapters fixed (0:00, 10 s, inside, at least 3), titles and tags; highlights checked (inside, lengths, frames, overlap), the shorts complement and fit/fill scale; every plan operation validated strictly (unknown operations and fields, prototype names, tracks, times, selection), described, applied as one undo step on a real project and undone exactly; ko/en/ja/zh/es line breaks and the diff; main/cut/ai.js (checks, progress, cancel, time limit, window gone); the fake CLI through main/ai/claude.js and `PYIDE_CLAUDE_PATH=none`; loading as a page script |
-| `verify/cut-ai.mjs` | app | 9779 | Text AI against the stand-in CLI `verify/fake-claude-cut.mjs` through the real UI: the notice (Cancel sends nothing, Continue remembered); Polish with the marked review, one change unchecked, one undo step, times kept; Translate into Japanese (a new track, same times, 16-character lines); YouTube metadata (chapters fixed, Copy, chapter markers replacing the old one), from the transcript after the offer to recognise the speech (fake Whisper); Highlights (the overlapping answer refused and asked again, the review, a 1080x1920 sequence of the chosen ranges with captions, fill, undo); Edit Command by Ctrl+J (silences with the overlay, the first 10 s, the music quieter, an unknown operation refused twice, an unknown field fixed on the retry, no edits); Cancel; signed out; the settings section; Claude Code missing, in Korean; screenshots (`CUT_AI_ONLY`) |
+| `verify/cut-ai.mjs` | app | 9779 | Text AI against the stand-in CLI `verify/fake-claude-cut.mjs` through the real UI: the notice (Cancel sends nothing, Continue remembered); Polish with the marked review, one change unchecked, one undo step, times kept; Translate into Japanese (a new track, same times and speakers, 16-character lines); YouTube metadata (chapters fixed, Copy, chapter markers replacing the old one), from the transcript after the offer to recognise the speech (fake Whisper); Highlights (the overlapping answer refused and asked again, the review, a 1080x1920 sequence of the chosen ranges with captions, fill, undo); Edit Command by Ctrl+J (silences with the overlay, the first 10 s, the music quieter, an unknown operation refused twice, an unknown field fixed on the retry, no edits); Cancel; signed out; the settings section; Claude Code missing, in Korean; screenshots (`CUT_AI_ONLY`) |
+| `verify/cut-voice-core.mjs` | Node | - | main/cut/voice.js without Python: names and keys, temp files and their window, the fake's WAV (44.1 kHz 16-bit, padded), Cancel leaving no WAV or .part, the cache's index, an empty Hugging Face cache giving a missing model and `notInstalled` |
+| `verify/cut-voice.mjs` | app | 9767 | Voice isolation through the real UI: the setup dialog and its progress (fake), Isolate Voice from the Automation menu (a WAV in the workspace's Media folder, never beside the source; imported into its bin; only the audio clip changes, place, in, out and link kept; one undo step; the same file used again), Cancel leaving nothing (no WAV, .part, temp file, media or step), the project panel's Isolate Voice, isolation before recognition (the Auto Captions checkbox and the setting, the isolated sound in the cache, its own transcript); the real backend with an empty `HF_HUB_CACHE` (the setup dialog and Download… with nothing downloaded); `CUT_VOICE_REAL=1` the real HTDemucs (`CUT_VOICE_ONLY`) |
 | `verify/app-mode.mjs` | app | 9758 (cut block) | `--mode=cut` opens the Cut window, workspace and trust, only Cut's plugins, `__cutReady`, no renderer exceptions |
 
 - Node suites: `node verify/cut-<name>.mjs`, printing `N/M passed` and `FAIL <what>` lines.
@@ -1178,5 +1464,8 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
   -Out verify/out/<name>.log -TimeoutMinutes 20 node verify/<name>.mjs`.
 - Test env: `PYIDE_CUT_HOME` (the workspace), `PYIDE_CUT_DIALOG` (dialog answers), `PYIDE_CUT_FONT_DIRS` (font
   folders), `PYIDE_WHISPER_BACKEND=fake` and `PYIDE_WHISPER_FAKE_SETUP` (speech recognition without a model),
+  `PYIDE_SPEAKERS_BACKEND=fake` and `PYIDE_SPEAKERS_FAKE_SETUP` (speaker labels without a model),
+  `PYIDE_VOICE_BACKEND=fake` and `PYIDE_VOICE_FAKE_SETUP` (voice isolation without a model; `HF_HUB_CACHE` at an empty
+  folder for the real backend's missing model),
   `PYIDE_CLAUDE_PATH` (a stand-in Claude Code CLI, or `none`) with `FAKE_CLAUDE_DIR` (`verify/fake-claude-cut.mjs`'s
   scenario and log). Media comes from `Cut.testsrc` or bytes the test builds: no downloads, no copyrighted media.

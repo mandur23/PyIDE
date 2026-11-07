@@ -28,7 +28,8 @@
   }
 
   // opts: { app, canvas, audio (a Cut.audioengine instance or null), mode: 'program' | 'source', backend, hardware,
-  // captions (burn in: true | trackId), overlays, proxy }
+  // captions (burn in: true | trackId, or a function giving one, asked at each draw; the app's 'captionTrack' draws
+  // again), overlays, proxy }
   function create(opts = {}) {
     const { app, canvas } = opts;
     const audio = opts.audio || null;
@@ -89,7 +90,7 @@
       if (!comp || !p) return;
       fitCanvas();
       const t0 = performance.now();
-      const ropts = { quality: q, captions: opts.captions, overlays: opts.overlays, proxy: player.proxy };
+      const ropts = { quality: q, captions: typeof opts.captions === 'function' ? opts.captions() : opts.captions, overlays: opts.overlays, proxy: player.proxy };
       if (mode === 'program') {
         const seq = sequence();
         if (!seq) return;
@@ -291,6 +292,7 @@
       if (mode === 'program') {
         offs.push(app.on('time', onTime));
         offs.push(app.on('sequence', () => { if (playing) player.pause(); redraw(); }));
+        offs.push(app.on('captionTrack', () => { if (!playing) redraw(); }));
       } else {
         offs.push(app.on('source', () => { if (!playing) redraw(); }));
       }

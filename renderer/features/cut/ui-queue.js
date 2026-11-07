@@ -49,7 +49,7 @@
     let r;
     try {
       r = await Cut.export.run({
-        project: job.project, seqId: job.seqId, path: job.path, settings: job.settings, range: job.range, captions: job.captions, signal,
+        project: job.project, seqId: job.seqId, path: job.path, settings: job.settings, range: job.range, captions: job.captions, captionTrack: job.captionTrack, signal,
         onProgress: (p) => {
           const f = typeof p === 'number' ? p : p?.fraction;
           if (f == null || !Number.isFinite(f)) return;
