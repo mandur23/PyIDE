@@ -12,6 +12,9 @@ const MAX_SIZE = 2 * 1024 * 1024;
 const MAX_MATCHES = 5000;
 const MAX_FILES = 20000;
 const PY_EXT = /\.py[iw]?$/i;
+// A save in progress (text-codec.js and replace below write a temp file, then rename it over the target): the file's
+// own text, found twice, or a replace that writes into the temp file.
+const TMP_FILE = /\.pyide-tmp$/i;
 
 // excluded: the folders marked Excluded (absolute; main/project-roots.js excludedDirs), compared without case as
 // fs-scan.js does. A walk that starts inside one (Find in Files with that directory chosen) still searches it.
@@ -26,7 +29,7 @@ function walk(root, onFile, excluded = []) {
     for (const d of entries) {
       if (n >= MAX_FILES) return;
       const p = path.join(dir, d.name);
-      if (d.isDirectory()) { if (!SKIP_DIRS.has(d.name) && !skipped.has(p.toLowerCase())) visit(p); } else if (d.isFile()) { n++; if (onFile(p) === false) { n = MAX_FILES; return; } }
+      if (d.isDirectory()) { if (!SKIP_DIRS.has(d.name) && !skipped.has(p.toLowerCase())) visit(p); } else if (d.isFile() && !TMP_FILE.test(d.name)) { n++; if (onFile(p) === false) { n = MAX_FILES; return; } }
     }
   };
   visit(root);

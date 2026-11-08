@@ -79,6 +79,10 @@ try {
   r = await find('IN_EDITOR');
   const disk = await find('ON_DISK');
   check(r.count === 1 && disk.count === 0, `a modified file is searched in its unsaved text (editor ${r.count}, disk ${disk.count})`);
+  writeFileSync(file(plain, '.4242-1.pyide-tmp'), 'IN_SAVE = 1\n');
+  const saving = await find('IN_SAVE');
+  check(saving.count === 0, `a save's temp file is not searched (${q(saving.files)})`);
+  rmSync(file(plain, '.4242-1.pyide-tmp'));
 
   if (sensitive) {
     // ---------- case-sensitive folder: a.py and A.py both modified ----------
