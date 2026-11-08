@@ -1,24 +1,11 @@
-// The multi-window sync's operational transformation (renderer/core/editors.js: mapPoint, survivors, over, xform),
+// The multi-window sync's operational transformation (renderer/core/ot.js: mapPoint, survivors, over, xform),
 // without the IDE: every pair of single changes on a short text meets in one text whichever is applied first, and
 // 20,000 random sessions of two windows following the protocol of main/windows.js (an op is accepted only on the
 // current revision, a refused one is sent again after what it missed) end with the same text everywhere. Before the
 // fix, two windows replacing at the same point, or one typing inside a range the other replaced, ended apart.
-import { readFileSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
-const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'core', 'editors.js'), 'utf8');
-const grab = (name) => {
-  const start = src.indexOf(`function ${name}(`);
-  let depth = 0;
-  for (let i = src.indexOf('{', start); i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
-  }
-  throw new Error(`${name} not found in editors.js`);
-};
-// eslint-disable-next-line no-new-func
-const { xform } = new Function(`${['mapPoint', 'survivors', 'over', 'xform'].map(grab).join('\n')}; return { xform };`)();
+const { xform } = createRequire(import.meta.url)('../renderer/core/ot.js');
 
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
