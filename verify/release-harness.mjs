@@ -163,6 +163,13 @@ world({ tagOnOrigin: true });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && /already on origin/.test(text()) && !has(' commit '), 'tag already on origin: stops in step 1');
 
+// node_modules a junction to another checkout's: electron-builder leaves it out (0.3.21 first shipped so and did not start)
+world();
+io.lstatSync = (f) => ({ isSymbolicLink: () => /[\\/]node_modules$/.test(f) });
+code = await run([V, '--skip-tests']);
+delete io.lstatSync;
+ok(code === 1 && /node_modules is a link/.test(text()) && !has('npm run dist') && !has(' commit ') && pkgVersion() === '0.2.0', 'node_modules that is a link: stops in step 1, nothing built');
+
 world({ failAt: 'npm run dist' });
 code = await run([V, '--skip-tests']);
 ok(code === 1 && pkgVersion() === '0.2.0' && /Nothing was committed/.test(text()) && /put back to 0.2.0/.test(text()), 'build fails: version restored, nothing committed');

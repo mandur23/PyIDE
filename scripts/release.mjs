@@ -61,6 +61,7 @@ const channelFile = (v) => (isBeta(v) ? 'beta.yml' : 'latest.yml');
 export const io = {
   spawnSync,
   existsSync: fs.existsSync,
+  lstatSync: fs.lstatSync,
   readFileSync: fs.readFileSync,
   writeFileSync: fs.writeFileSync,
   copyFileSync: fs.copyFileSync,
@@ -445,6 +446,13 @@ async function main() {
   const dirty = sh('git', ['status', '--porcelain'], { capture: true }).out;
   if (dirty) blocker(`the working tree has changes:\n${dirty.split(/\r?\n/).map((l) => `      ${l}`).join('\n')}`);
   else log('  working tree clean');
+  // electron-builder leaves out a node_modules or vendor that is a link (a junction to another checkout's): 0.3.21 first
+  // went up without them, 16 MB smaller, and its window never started ("require is not defined").
+  for (const dir of ['node_modules', 'vendor']) {
+    let linked = false;
+    try { linked = io.lstatSync(path.join(ROOT, dir)).isSymbolicLink(); } catch {}
+    if (linked) blocker(`${dir} is a link (a junction): the installer would be built without it. Copy the folder in, or release from the checkout that owns it`);
+  }
   if (sh('git', ['rev-parse', '-q', '--verify', `refs/tags/v${V}`], { capture: true, allowFail: true }).status === 0) blocker(`tag v${V} already exists`);
   const origin = originRefs();
   if (origin.error) blocker(`could not read origin (git ls-remote): ${origin.error}`);
