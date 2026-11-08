@@ -272,6 +272,13 @@
     { id: 'text', title: 'Type Tool', key: 'T' },
   ];
   const CURSORS = { razor: 'crosshair', hand: 'grab', zoom: 'zoom-in', text: 'text', pen: 'cell' };
+  // The tools and their glyphs for the Tools panel (ui-toolspanel.js).
+  ui.timelineTools = { list: TOOLS, icon };
+  // The tool buttons in the timeline's own bar: off by default (the Tools panel has them, as in Premiere), on with
+  // the setting `cut.timelineTools` (Window > Timeline Tool Bar).
+  const BAR_TOOLS_KEY = 'cut.timelineTools';
+  // Track heights the keys change (Ctrl/Alt+= and -) and Expand/Minimize All Tracks set.
+  const TRACK_H = { min: 24, max: 240, step: 16, expanded: 100 };
 
   const RULER_H = 30;
   const CAPTION_H = 28;
@@ -305,9 +312,8 @@
     for (const tl of TOOLS) {
       const b = el('button', 'cut-tl-tool', undefined, { type: 'button', 'data-tool': tl.id });
       b.appendChild(icon(tl.id));
-      const tip = `${tr(tl.title)} (${tl.key})`;
-      b.title = tip;
-      b.setAttribute('aria-label', tip);
+      ide.keymap.tooltip(b, tr(tl.title), `Cut.tool.${tl.id}`);
+      b.setAttribute('aria-label', tr(tl.title));
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => app.setTool(tl.id));
       toolButtons.set(tl.id, b);
@@ -315,7 +321,7 @@
     }
     const snapBtn = el('button', 'cut-tl-toggle', undefined, { type: 'button', 'data-role': 'snap' });
     snapBtn.appendChild(icon('snap'));
-    snapBtn.title = `${tr('Snap in Timeline')} (S)`;
+    ide.keymap.tooltip(snapBtn, tr('Snap in Timeline'), 'Cut.snap');
     snapBtn.addEventListener('mousedown', (e) => e.preventDefault());
     snapBtn.addEventListener('click', () => ui.setSnapping(app, !ui.editing.snapping));
     const linkBtn = el('button', 'cut-tl-toggle', undefined, { type: 'button', 'data-role': 'linked' });
@@ -324,12 +330,12 @@
     linkBtn.addEventListener('mousedown', (e) => e.preventDefault());
     linkBtn.addEventListener('click', () => { v.linked = !v.linked; syncBar(); });
     const zoomBox = el('div', 'cut-tl-zoom');
-    const zoomOutBtn = el('button', 'cut-tl-toggle', undefined, { type: 'button', title: `${tr('Zoom Out')} (-)` });
+    const zoomOutBtn = ide.keymap.tooltip(el('button', 'cut-tl-toggle', undefined, { type: 'button' }), tr('Zoom Out'), 'Cut.zoomOut');
     zoomOutBtn.appendChild(icon('zoomOut'));
     const zoomRange = el('input', 'cut-tl-zoomrange', undefined, { type: 'range', min: 0, max: 1000, step: 1, title: tr('Zoom') });
-    const zoomInBtn = el('button', 'cut-tl-toggle', undefined, { type: 'button', title: `${tr('Zoom In')} (=)` });
+    const zoomInBtn = ide.keymap.tooltip(el('button', 'cut-tl-toggle', undefined, { type: 'button' }), tr('Zoom In'), 'Cut.zoomIn');
     zoomInBtn.appendChild(icon('zoomIn'));
-    const fitBtn = el('button', 'cut-tl-toggle', undefined, { type: 'button', title: `${tr('Zoom to Sequence')} (\\)` });
+    const fitBtn = ide.keymap.tooltip(el('button', 'cut-tl-toggle', undefined, { type: 'button' }), tr('Zoom to Sequence'), 'Cut.zoomFit');
     fitBtn.appendChild(icon('fit'));
     for (const b of [zoomOutBtn, zoomInBtn, fitBtn]) b.addEventListener('mousedown', (e) => e.preventDefault());
     zoomOutBtn.addEventListener('click', () => zoomBy(1 / 1.6));
@@ -1178,19 +1184,21 @@
         head.dataset.track = t.id;
         head.classList.toggle('locked', t.locked);
         const letter = kind === 'video' ? 'V' : 'A';
+        // Premiere's order: source patch, track lock, track targeting, sync lock, then the output (video) or mute and
+        // solo (audio).
         head.appendChild(headButton(`patch${isPatched ? ' on' : ''}`, `${letter}${r.index + 1}`, tr('Source Patch: place source clips on this track'), isPatched, () => {
           ui.setPatch(app, { [kind]: isPatched ? null : t.id });
         }));
-        head.appendChild(headButton(`target${isTarget ? ' on' : ''}`, t.name, tr('Target this track (edits at the playhead, paste)'), isTarget, () => {
+        head.appendChild(headButton(`lock${t.locked ? ' on' : ''}`, t.locked ? 'lock' : 'unlock', tr('Toggle Track Lock'), t.locked, () => setTrack(t.id, { locked: !t.locked })));
+        head.appendChild(headButton(`target${isTarget ? ' on' : ''}`, t.name, tr('Toggle Track Targeting'), isTarget, () => {
           const all = seq.tracks.map((x) => x.id);
           const now = new Set(ui.editing.targets || all);
           if (now.has(t.id)) now.delete(t.id); else now.add(t.id);
           ui.setTargets(app, now.size === all.length ? null : all.filter((id) => now.has(id)));
         }));
-        head.appendChild(headButton(`lock${t.locked ? ' on' : ''}`, t.locked ? 'lock' : 'unlock', t.locked ? tr('Unlock Track') : tr('Lock Track'), t.locked, () => setTrack(t.id, { locked: !t.locked })));
-        head.appendChild(headButton(`sync${t.syncLock ? ' on' : ''}`, 'sync', tr('Sync Lock'), t.syncLock, () => setTrack(t.id, { syncLock: !t.syncLock })));
+        head.appendChild(headButton(`sync${t.syncLock ? ' on' : ''}`, 'sync', tr('Toggle Sync Lock'), t.syncLock, () => setTrack(t.id, { syncLock: !t.syncLock })));
         if (kind === 'video') {
-          head.appendChild(headButton(`eye${t.visible ? ' on' : ''}`, t.visible ? 'eye' : 'eyeOff', t.visible ? tr('Hide Track Output') : tr('Show Track Output'), t.visible, () => setTrack(t.id, { visible: !t.visible })));
+          head.appendChild(headButton(`eye${t.visible ? ' on' : ''}`, t.visible ? 'eye' : 'eyeOff', tr('Toggle Track Output'), t.visible, () => setTrack(t.id, { visible: !t.visible })));
         } else {
           head.appendChild(headButton(`mute${t.mute ? ' on' : ''}`, 'M', tr('Mute Track'), t.mute, () => setTrack(t.id, { mute: !t.mute })));
           head.appendChild(headButton(`solo${t.solo ? ' on' : ''}`, 'S', tr('Solo Track'), t.solo, () => setTrack(t.id, { solo: !t.solo })));
@@ -1325,6 +1333,7 @@
 
     // ---------- the bar ----------
     function syncBar() {
+      tools.hidden = !ide.settings.get(BAR_TOOLS_KEY, false);
       for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(app.tool === id));
       snapBtn.setAttribute('aria-pressed', String(!!ui.editing.snapping));
       linkBtn.setAttribute('aria-pressed', String(v.linked));
@@ -1754,18 +1763,34 @@
           d.delta = delta;
           d.rows = dr;
           d.insert = ev.ctrlKey;
+          d.copy = ev.altKey;
           d.ghosts = clips.map((c) => {
             const r = rowOfTrack.get(c.track);
             let track = c.track;
             if (r.type === kind && dr) track = kindRows.find((x) => x.index === r.index + dr)?.id || c.track;
             return { track, start: c.start + delta, end: model.clipEnd(c) + delta };
           });
-          showTip(p.x, p.y, `${fmtDelta(delta)}${d.insert ? `  ${tr('Insert')}` : ''}`);
+          showTip(p.x, p.y, `${fmtDelta(delta)}${d.copy ? `  ${tr('Duplicate')}` : ''}${d.insert ? `  ${tr('Insert')}` : ''}`);
           invalidateTop();
         },
         end(ev, cancelled) {
           if (cancelled || !d.moved) return;
           const insert = !!ev?.ctrlKey;
+          // Alt held at the drop: copies go there and the clips stay (Premiere's Alt+drag), linked and grouped among
+          // themselves like the originals.
+          if (ev?.altKey) {
+            const copies = clips.map((c) => ({ ...clone(c), kind: kindOf(seq, c), trackIndex: model.trackIndex(seq, c.track) }));
+            const opts = { at: minStart + d.delta, mode: insert ? 'insert' : 'overwrite' };
+            for (const k of ['video', 'audio']) {
+              const mine = copies.filter((c) => c.kind === k);
+              if (!mine.length) continue;
+              const list = seq.tracks.filter((t) => t.kind === k);
+              opts[k] = list[Math.min(...mine.map((c) => c.trackIndex)) + (k === kind ? d.rows : 0)]?.id;
+            }
+            const r = ui.exec(app, C.paste(seq.id, copies, opts));
+            if (r?.ids) app.select(r.ids);
+            return;
+          }
           if (!d.delta && !d.rows) return;
           const td = kind === 'video' ? { video: d.rows, audio: 0 } : { video: 0, audio: d.rows };
           ui.exec(app, C.move(seq.id, clips.map((c) => c.id), { delta: d.delta, trackDelta: td, insert, linked: false }));
@@ -2435,11 +2460,11 @@
         { separator: true },
         { label: tr('Remove Marker'), run: () => ui.exec(app, C.removeMarker(seq.id, mk.id)) },
       ] : [
-        { label: tr('Add Marker'), run: () => api.addMarker() },
+        { label: tr('Add Marker'), keyAction: 'Cut.addMarker', run: () => api.addMarker() },
         { separator: true },
-        { label: tr('Lift'), hint: ';', disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('lift') },
-        { label: tr('Extract'), hint: "'", disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('extract') },
-        { label: tr('Clear In and Out'), disabled: app.inOut.in == null && app.inOut.out == null, run: () => app.setInOut({ in: null, out: null }) },
+        { label: tr('Lift'), keyAction: 'Cut.lift', disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('lift') },
+        { label: tr('Extract'), keyAction: 'Cut.extract', disabled: app.inOut.in == null && app.inOut.out == null, run: () => api.liftRange('extract') },
+        { label: tr('Clear In and Out'), keyAction: 'Cut.clearInOut', disabled: app.inOut.in == null && app.inOut.out == null, run: () => app.setInOut({ in: null, out: null }) },
       ];
       ui.menu(e.clientX, e.clientY, items);
     });
@@ -2466,7 +2491,7 @@
       ui.menu(e.clientX, e.clientY, [
         { label: tr('Close Gap'), disabled: !gap, run: () => api.deleteSelection({ ripple: true }) },
         { label: tr('Paste'), disabled: !clipboard.length, run: () => api.paste() },
-        { label: tr('Paste Insert'), hint: 'Ctrl+Shift+V', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
+        { label: tr('Paste Insert'), keyAction: 'Cut.pasteInsert', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
         { separator: true },
         { label: tr('Add Video Track'), run: () => ui.exec(app, C.addTrack(seq.id, 'video')) },
         { label: tr('Add Audio Track'), run: () => ui.exec(app, C.addTrack(seq.id, 'audio')) },
@@ -2479,32 +2504,33 @@
       const kind = kindOf(seq, c);
       const m = media.get(c.source?.media);
       ui.menu(e.clientX, e.clientY, [
-        { label: tr('Cut'), hint: 'Ctrl+X', run: () => api.cut() },
-        { label: tr('Copy'), hint: 'Ctrl+C', run: () => api.copy() },
-        { label: tr('Paste'), hint: 'Ctrl+V', disabled: !clipboard.length, run: () => api.paste() },
-        { label: tr('Paste Insert'), hint: 'Ctrl+Shift+V', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
-        { label: tr('Clear'), hint: 'Delete', run: () => api.deleteSelection({ ripple: false }) },
-        { label: tr('Ripple Delete'), hint: 'Shift+Delete', run: () => api.deleteSelection({ ripple: true }) },
+        { label: tr('Cut'), keyAction: 'Cut.cut', run: () => api.cut() },
+        { label: tr('Copy'), keyAction: 'Cut.copy', run: () => api.copy() },
+        { label: tr('Paste'), keyAction: 'Cut.paste', disabled: !clipboard.length, run: () => api.paste() },
+        { label: tr('Paste Insert'), keyAction: 'Cut.pasteInsert', disabled: !clipboard.length, run: () => api.paste({ insert: true }) },
+        { label: tr('Clear'), keyAction: 'Cut.delete', run: () => api.deleteSelection({ ripple: false }) },
+        { label: tr('Ripple Delete'), keyAction: 'Cut.rippleDelete', run: () => api.deleteSelection({ ripple: true }) },
         { separator: true },
-        { label: tr('Enable'), checked: c.enabled, hint: 'Shift+E', run: () => api.toggleEnabled() },
-        { label: linkedAny ? tr('Unlink') : tr('Link'), hint: 'Ctrl+L', disabled: !linkedAny && clips.length < 2, run: () => api.toggleLink() },
-        { label: tr('Group'), hint: 'Ctrl+G', disabled: clips.length < 2, run: () => api.group() },
-        { label: tr('Ungroup'), hint: 'Ctrl+Shift+G', disabled: !clips.some((x) => x.group), run: () => api.ungroup() },
+        { label: tr('Enable'), checked: c.enabled, keyAction: 'Cut.toggleEnabled', run: () => api.toggleEnabled() },
+        { label: linkedAny ? tr('Unlink') : tr('Link'), keyAction: 'Cut.link', disabled: !linkedAny && clips.length < 2, run: () => api.toggleLink() },
+        { label: tr('Group'), keyAction: 'Cut.group', disabled: clips.length < 2, run: () => api.group() },
+        { label: tr('Ungroup'), keyAction: 'Cut.ungroup', disabled: !clips.some((x) => x.group), run: () => api.ungroup() },
         { separator: true },
-        { label: tr('Speed/Duration…'), hint: 'Ctrl+R', run: () => api.speedDialog() },
+        { label: tr('Label'), submenu: [{ label: tr('None'), checked: !c.label, run: () => setLabel(null) }, ...Object.keys(LABELS).map((k) => ({ label: tr(LABEL_NAMES[k]), checked: c.label === k, run: () => setLabel(k) }))] },
+        { separator: true },
+        { label: tr('Speed/Duration…'), keyAction: 'Cut.speed', run: () => api.speedDialog() },
         { label: tr('Speed'), disabled: !clips.some((x) => !model.isStill(app.project, x)), submenu: [
           ...QUICK_SPEEDS.map((p) => ({ label: `${p}%`, checked: Math.abs(c.speed * 100 - p) < 1e-6, run: () => api.setSpeed({ speed: p / 100 }) })),
           { separator: true },
           { label: tr('Reverse Speed'), checked: !!c.reverse, run: () => api.setSpeed({ reverse: !c.reverse }) },
         ] },
-        { label: tr('Add Frame Hold'), disabled: kind !== 'video' || !m || m.kind === 'image' || !edit.inClip(app, c), run: () => api.freezeFrame() },
-        { label: tr('Apply Default Transitions'), hint: 'Shift+D', run: () => api.addTransitions({ video: true, audio: true }) },
+        { label: tr('Insert Frame Hold Segment'), keyAction: 'Cut.freezeFrame', disabled: kind !== 'video' || !m || m.kind === 'image' || !edit.inClip(app, c), run: () => api.freezeFrame() },
+        { label: tr('Apply Default Transitions to Selection'), keyAction: 'Cut.transitionBoth', run: () => api.addTransitions({ video: true, audio: true }) },
         { separator: true },
         { label: tr('Rename…'), run: () => renameClip(c) },
-        { label: tr('Label'), submenu: [{ label: tr('None'), checked: !c.label, run: () => setLabel(null) }, ...Object.keys(LABELS).map((k) => ({ label: tr(LABEL_NAMES[k]), checked: c.label === k, run: () => setLabel(k) }))] },
         { separator: true },
         { label: tr('Reveal in Source Monitor'), disabled: !m, run: () => openInSource(c) },
-        { label: tr('Match Frame'), hint: 'F', disabled: !m || !edit.inClip(app, c), run: () => api.matchFrame() },
+        { label: tr('Match Frame'), keyAction: 'Cut.matchFrame', disabled: !m || !edit.inClip(app, c), run: () => api.matchFrame() },
         ...(ui.auto ? [{ separator: true }, ...ui.auto.clipMenuItems(app, c)] : []),
       ]);
       function setLabel(label) {
@@ -2562,7 +2588,8 @@
     on(scroller, 'pointerleave', () => { if (!v.drag && v.razorAt != null) { v.razorAt = null; invalidateTop(); } });
     on(window, 'keydown', (e) => {
       if (e.key === 'Escape' && v.drag) { e.preventDefault(); e.stopPropagation(); cancelDrag(); return; }
-      if ((e.key === 'Control' || e.key === 'Shift') && v.drag?.type === 'move' && v.drag.lastEvent) scheduleStep(new PointerEvent('pointermove', { clientX: v.drag.lastEvent.clientX, clientY: v.drag.lastEvent.clientY, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey }));
+      if (e.key === 'Alt' && v.drag?.type === 'move') e.preventDefault();
+      if ((e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt') && v.drag?.type === 'move' && v.drag.lastEvent) scheduleStep(new PointerEvent('pointermove', { clientX: v.drag.lastEvent.clientX, clientY: v.drag.lastEvent.clientY, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey }));
     }, true);
     on(root, 'pointerdown', () => app.setFocus('timeline'), true);
 
@@ -2609,6 +2636,7 @@
     offs.push(app.on('inout', () => invalidate()));
     offs.push(app.on('tool', () => { syncBar(); v.razorAt = null; invalidateTop(); }));
     offs.push(app.on('snapping', () => syncBar()));
+    offs.push(ide.on('settingsChanged', (k) => { if (k === BAR_TOOLS_KEY) syncBar(); }));
     offs.push(app.on('patch', () => buildHeads()));
     offs.push(app.on('targets', () => buildHeads()));
     offs.push(app.on('offline', () => invalidate()));
@@ -2788,6 +2816,43 @@
         if (!seq || !clips.length) return null;
         return ui.exec(app, C.move(seq.id, clips.map((c) => c.id), { delta: n * frame(), linked: false, nudge: true }));
       },
+      // Alt+Up/Down: the selected clips one track up or down (video toward V2, audio toward A1 for Up), overwriting
+      // what they land on; a kind with no track there stays.
+      nudgeTrack(dir) {
+        const clips = sel();
+        if (!seq || !clips.length) return null;
+        const count = (kind) => seq.tracks.filter((t) => t.kind === kind).length;
+        const idx = (c) => rowOfTrack.get(c.track)?.index ?? 0;
+        const step = (kind, d) => {
+          const list = clips.filter((c) => kindOf(seq, c) === kind).map(idx);
+          return list.length && Math.min(...list) + d >= 0 && Math.max(...list) + d < count(kind) ? d : 0;
+        };
+        const td = { video: step('video', dir), audio: step('audio', -dir) };
+        if (!td.video && !td.audio) { flash(tr('There is no track there.')); return null; }
+        return ui.exec(app, C.move(seq.id, clips.map((c) => c.id), { delta: 0, trackDelta: td, linked: false }));
+      },
+      // Ctrl+= and Ctrl+- (video), Alt+= and Alt+- (audio): every track of the kind a step taller or shorter; Shift+=
+      // expands every track and Shift+- minimizes it. One undo step.
+      trackHeights(kind, how) {
+        if (!seq) return null;
+        const ids = seq.tracks.filter((t) => !kind || t.kind === kind).map((t) => t.id);
+        const next = (h) => (how === 'taller' ? h + TRACK_H.step : how === 'shorter' ? h - TRACK_H.step : how === 'expand' ? TRACK_H.expanded : TRACK_H.min);
+        const seqId = seq.id;
+        app.history.begin('Track Height');
+        try {
+          for (const id of ids) {
+            const t = trackOf(app.sequence, id);
+            const h = Math.max(TRACK_H.min, Math.min(TRACK_H.max, next(t.height)));
+            if (h !== t.height) app.history.do(C.setTrack(seqId, id, { height: h }));
+          }
+          app.history.commit();
+        } catch (err) {
+          app.history.cancel();
+          ui.report(err);
+          return null;
+        }
+        return ids.map((id) => trackOf(app.sequence, id).height);
+      },
       group() {
         const clips = sel();
         if (clips.length < 2) { flash(tr('Choose two or more clips to group.')); return null; }
@@ -2945,6 +3010,10 @@
     act('lift', () => { api.liftRange('lift'); });
     act('extract', () => { api.liftRange('extract'); });
     for (const [id, n] of [['nudgeLeft', -1], ['nudgeRight', 1], ['nudgeLeft5', -5], ['nudgeRight5', 5]]) act(id, () => { api.nudge(n); }, ['timeline']);
+    act('nudgeUp', () => { api.nudgeTrack(1); }, ['timeline']);
+    act('nudgeDown', () => { api.nudgeTrack(-1); }, ['timeline']);
+    for (const [id, kind, how] of [['videoTracksTaller', 'video', 'taller'], ['videoTracksShorter', 'video', 'shorter'], ['audioTracksTaller', 'audio', 'taller'],
+      ['audioTracksShorter', 'audio', 'shorter'], ['expandTracks', null, 'expand'], ['minimizeTracks', null, 'minimize']]) act(id, () => { api.trackHeights(kind, how); }, ['timeline']);
     act('group', () => { api.group(); }, ['timeline']);
     act('ungroup', () => { api.ungroup(); }, ['timeline']);
     act('selectAtPlayhead', () => { api.selectAtPlayhead(); });

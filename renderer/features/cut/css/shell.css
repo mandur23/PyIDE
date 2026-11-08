@@ -14,7 +14,8 @@
 @container cut-top (max-width: 1100px) { .cut-brand-name { display: none; } }
 .cut-topbar-group { display: flex; align-items: center; gap: 2px; flex: none; padding: 0 4px; border-left: 1px solid var(--gray3); }
 .cut-topbar-group.right { margin-left: auto; border-left: 0; gap: 6px; }
-.cut-project-name { display: flex; align-items: baseline; gap: 8px; min-width: 60px; flex: 0 1 auto; overflow: hidden; padding: 0 6px; }
+/* the project name gives up its room before the workspace tabs do */
+.cut-project-name { display: flex; align-items: baseline; gap: 8px; min-width: 60px; flex: 0 1000 auto; overflow: hidden; padding: 0 6px; }
 .cut-project-title { font-weight: 600; color: var(--gray12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cut-root.dirty .cut-project-title::after { content: ' ●'; color: var(--cut-accent); }
 .cut-save-state { color: var(--gray8); white-space: nowrap; font-size: 11px; }
@@ -23,6 +24,17 @@
   border-bottom: 2px solid transparent; cursor: default; }
 .cut-ws-tab:hover { color: var(--gray12); background: var(--gray3); }
 .cut-ws-tab[aria-selected="true"] { color: var(--gray12); border-bottom-color: var(--cut-accent); }
+.cut-ws-more { border: 0; background: none; color: var(--gray9); padding: 0 8px; font: inherit; font-size: 13px; flex: none; }
+.cut-ws-more:hover { color: var(--gray12); background: var(--gray3); }
+/* a narrow top bar keeps the icons of Window and Automation and drops their words */
+@container cut-top (max-width: 1240px) { .cut-topbar :is(.cut-window-btn, .cut-auto-btn) :is(.cut-btn-label, .cut-auto-caret) { display: none; } }
+@container cut-top (max-width: 1100px) { .cut-save-state { display: none; } }
+
+/* menu bar (ui-menubar.js): Premiere's File, Edit, Clip, Sequence, Markers, Graphics and Titles, View, Window, Help */
+.cut-menubar { display: flex; align-items: stretch; gap: 0; height: 26px; padding: 0 4px; flex: none; background: var(--gray1);
+  border-bottom: 1px solid var(--gray3); min-width: 0; overflow: hidden; }
+.cut-menubar-item { border: 0; background: none; color: var(--gray10); font: inherit; font-size: 12px; padding: 0 9px; white-space: nowrap; cursor: default; border-radius: 4px; margin: 2px 0; }
+.cut-menubar-item:hover, .cut-menubar-item.open { background: var(--gray4); color: var(--gray12); }
 
 /* buttons and fields */
 .cut-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-width: 26px; padding: 0 8px;
@@ -56,12 +68,20 @@
 .cut-slot { display: flex; flex-direction: column; flex: 1 1 0; min-width: 80px; min-height: 0; background: var(--gray2); border: 1px solid var(--gray3);
   border-radius: 6px; overflow: hidden; }
 .cut-slot-tabs { display: flex; gap: 0; height: 28px; flex: none; border-bottom: 1px solid var(--gray3); overflow: hidden; padding: 0 4px; }
-.cut-slot-tab { border: 0; background: none; color: var(--gray9); font: inherit; padding: 0 10px; white-space: nowrap; border-bottom: 2px solid transparent; cursor: default; }
+.cut-slot-tab { display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 30px; border: 0; background: none; color: var(--gray9); font: inherit; padding: 0 10px;
+  white-space: nowrap; border-bottom: 2px solid transparent; cursor: default; }
+.cut-slot-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cut-slot-tab-close { flex: none; }
 .cut-slot-tab:hover { color: var(--gray12); }
 .cut-slot-tab[aria-selected="true"] { color: var(--gray12); border-bottom-color: var(--gray8); }
 .cut-slot:has(.cut-panel.focused) .cut-slot-tab[aria-selected="true"] { border-bottom-color: var(--cut-accent); }
 .cut-slot:has(.cut-panel.focused) { border-color: color-mix(in srgb, var(--cut-accent) 55%, var(--gray3)); }
 .cut-slot-body { flex: 1; min-height: 0; display: flex; position: relative; }
+/* a fixed slot (the Tools panel): no tabs, its own width */
+.cut-slot.fixed { min-width: 0; margin: 0 2px; }
+.cut-slot.fixed > .cut-slot-tabs { display: none; }
+/* Maximize or Restore Frame (` and Shift+`): one slot fills the workspace */
+.cut-grid.maximized > .cut-row:not(:has(> .cut-slot.max)), .cut-grid.maximized .cut-splitter, .cut-grid.maximized > .cut-row > .cut-slot:not(.max) { display: none; }
 .cut-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; outline: none; }
 .cut-panel-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .cut-splitter { flex: none; position: relative; z-index: 1; }
@@ -122,23 +142,34 @@ body.cut-dragging, body.cut-dragging * { cursor: grabbing !important; }
 .cut-scrub-range { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--cut-accent) 35%, transparent); }
 .cut-scrub-range[hidden] { display: none; }
 .cut-scrub-head { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--cut-playhead); border-radius: 1px; }
-.cut-transport { display: grid; grid-template-columns: minmax(90px, 1fr) auto auto minmax(90px, 1fr); align-items: center; gap: 6px; padding: 4px 8px 2px; flex: none; min-width: 0; }
-.cut-transport-side { display: flex; align-items: center; min-width: 0; }
+/* under the picture, as in Premiere: timecode, zoom and resolution, duration; the time bar; the button bar */
+.cut-monitor-info { display: flex; align-items: center; gap: 6px; padding: 3px 8px 0; flex: none; min-width: 0; }
+.cut-transport-side { display: flex; align-items: center; min-width: 0; flex: none; }
 .cut-transport-side.right { justify-content: flex-end; color: var(--gray9); font-family: var(--mono); }
-.cut-transport-mid, .cut-transport-extra { display: flex; align-items: center; gap: 1px; }
+.cut-transport { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 2px 6px; padding: 3px 8px 4px; flex: none; min-width: 0; }
+.cut-transport-mid, .cut-transport-extra { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 1px; min-width: 0; }
 .cut-transport-extra:empty { display: none; }
+.cut-transport .cut-btn { color: var(--gray10); }
 .cut-transport .cut-tr-play { width: 30px; height: 30px; border-radius: 50%; background: var(--gray4); color: var(--gray12); }
 .cut-transport .cut-tr-play:hover:not(:disabled) { background: var(--gray5); }
 .cut-transport .cut-tr-play.playing { color: var(--cut-accent); }
+.cut-transport .cut-tr-editor { margin-left: 2px; color: var(--gray8); }
 .cut-monitor-tc { font-size: 13px; }
-.cut-monitor-tools { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 8px 4px; flex: none; }
-.cut-monitor-tools .cut-select { height: 22px; font-size: 11px; }
-.cut-monitor-tools .cut-tr-proxy { height: 22px; font-size: 11px; padding: 0 6px; }
+.cut-monitor-tools { display: flex; align-items: center; justify-content: center; gap: 4px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.cut-monitor-tools .cut-select { height: 22px; font-size: 11px; min-width: 0; }
+.cut-monitor-tools .cut-btn { height: 22px; min-width: 22px; }
+.cut-monitor-tools .cut-btn.icon-only { width: 22px; }
+.cut-monitor-tools .cut-tr-proxy { font-size: 11px; padding: 0 6px; }
+.cut-button-editor-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; margin-top: 10px; }
+.cut-button-editor-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; }
+.cut-button-editor-row:hover { background: var(--gray3); }
+.cut-button-editor-row .cut-icon svg { width: 16px; height: 16px; display: block; color: var(--gray11); }
 .cut-drag-handle { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 4px; color: var(--gray9); cursor: grab; }
 .cut-drag-handle:hover { background: var(--gray4); color: var(--gray12); }
-.cut-monitor-source.no-source .cut-drag-handle, .cut-monitor-source.no-source .cut-tr-insert, .cut-monitor-source.no-source .cut-tr-overwrite { opacity: .4; pointer-events: none; }
+.cut-monitor-source.no-source .cut-drag-handle, .cut-monitor-source.no-source .cut-tr-insert, .cut-monitor-source.no-source .cut-tr-overwrite,
+.cut-monitor-source.no-source .cut-tr-exportFrame { opacity: .4; pointer-events: none; }
 .cut-monitor-source:not(.no-source) .cut-monitor-frame { cursor: grab; }
 
 /* small screens: the monitor tools fold into the transport row */
-@container (max-width: 420px) { .cut-transport { grid-template-columns: 1fr auto; } .cut-transport-side.right { display: none; } }
+@container (max-width: 380px) { .cut-monitor-info .cut-transport-side.right { display: none; } }
 .cut-root [hidden], .cut-dialog [hidden] { display: none !important; }

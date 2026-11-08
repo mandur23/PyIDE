@@ -3,7 +3,7 @@
 // live in the Cut workspace (PYIDE_CUT_HOME for tests): Projects, Autosave and Cache. Paths from the renderer go
 // through main/cut/paths.js (local regular files, real paths, no network paths); results are values, never throws.
 //
-// PYIDE_CUT_DIALOG (tests): a JSON file {pickMedia, pickFolder, pickProject, saveAs} whose value answers that dialog
+// PYIDE_CUT_DIALOG (tests): a JSON file {pickMedia, pickFolder, pickProject, pickLut, saveAs} whose value answers that dialog
 // instead of showing it (null or missing: cancelled). PYIDE_CUT_FONT_DIRS (tests): a JSON list of font folders.
 const fs = require('fs');
 const os = require('os');
@@ -172,6 +172,17 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
       defaultPath: dirs.projects,
       properties: ['openFile'],
       filters: [{ name: text(opts?.filterName, 'Nano Studio Cut project'), extensions: ['ncut'] }],
+    });
+    return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+  });
+  // Lumetri Color's Look: one .cube file (the renderer reads it through cut:read and keeps a copy in the project).
+  ipcMain.handle('cut:pickLut', async (e, opts = {}) => {
+    watch(e?.sender);
+    if (process.env.PYIDE_CUT_DIALOG) return answered('pickLut');
+    const r = await dialog.showOpenDialog(windowOf(e), {
+      title: text(opts?.title, 'Load LUT'),
+      properties: ['openFile'],
+      filters: [{ name: text(opts?.filterName, 'Cube LUT'), extensions: ['cube'] }, { name: text(opts?.allName, 'All files'), extensions: ['*'] }],
     });
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
   });

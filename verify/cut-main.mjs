@@ -112,7 +112,7 @@ const call = (name, ...args) => A.call(win, name, ...args);
 
 try {
   // ---------- channels ----------
-  const contract = ['home', 'stat', 'read', 'pickMedia', 'pickFolder', 'pickProject', 'saveAs', 'projectRead', 'projectWrite', 'autosave',
+  const contract = ['home', 'stat', 'read', 'pickMedia', 'pickFolder', 'pickProject', 'pickLut', 'saveAs', 'projectRead', 'projectWrite', 'autosave',
     'sessionStart', 'sessionEnd', 'recovery', 'writeOpen', 'writeAt', 'writeClose', 'faststart', 'cacheGet', 'cachePut', 'cacheInfo',
     'cacheClear', 'findMedia', 'fonts', 'fontData', 'reveal'].map((c) => `cut:${c}`);
   const missingChannels = contract.filter((c) => !A.handlers.has(c));
@@ -220,11 +220,17 @@ try {
   const saved = await call('cut:saveAs', { defaultPath: 'My Video.mp4', filters: [{ name: 'MP4', extensions: ['mp4'] }, { name: 'bad', extensions: ['../x'] }] });
   check(saved === path.join(work, 'exports', 'final.mp4') && asked[4].defaultPath === path.join(h.projects, 'My Video.mp4') && asked[4].filters.length === 1,
     `cut:saveAs adds the first filter's extension, puts a bare default name in Projects and drops bad filters (${saved})`);
-  const answers = write(path.join(work, 'dialog.json'), S({ pickMedia: [clip], pickFolder: media, saveAs: path.join(work, 'x') }));
+  dialogAnswer = { canceled: false, filePaths: [path.join(media, 'look.cube')] };
+  asked.length = 0;
+  check(await call('cut:pickLut', { title: 'LUT 불러오기', filterName: 'Cube LUT' }) === path.join(media, 'look.cube') && asked[0]?.title === 'LUT 불러오기'
+    && S(asked[0].filters[0].extensions) === '["cube"]' && !asked[0].properties.includes('multiSelections'), 'cut:pickLut picks one .cube file with the renderer\'s title');
+  dialogAnswer = { canceled: true, filePaths: [] };
+  check(await call('cut:pickLut') === null && asked[1]?.title === 'Load LUT', 'cut:pickLut cancelled is null; the title falls back to English');
+  const answers = write(path.join(work, 'dialog.json'), S({ pickMedia: [clip], pickFolder: media, pickLut: path.join(media, 'look.cube'), saveAs: path.join(work, 'x') }));
   process.env.PYIDE_CUT_DIALOG = answers;
   asked.length = 0;
   check(S(await call('cut:pickMedia')) === S([clip]) && await call('cut:pickFolder') === media && await call('cut:pickProject') === null
-    && await call('cut:saveAs', { filters: [{ name: 'SRT', extensions: ['srt'] }] }) === path.join(work, 'x.srt') && !asked.length,
+    && await call('cut:pickLut') === path.join(media, 'look.cube') && await call('cut:saveAs', { filters: [{ name: 'SRT', extensions: ['srt'] }] }) === path.join(work, 'x.srt') && !asked.length,
   'PYIDE_CUT_DIALOG answers the dialogs for app tests, without showing any');
   delete process.env.PYIDE_CUT_DIALOG;
 

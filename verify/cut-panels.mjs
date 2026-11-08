@@ -166,7 +166,8 @@ await section('window', async () => {
   check(!(await js(`!!document.querySelector('.cut-grid .cut-slot-tab[data-panel="markers"]')`)), 'the Color workspace has no Markers tab of its own');
   await clickAt(await rect('.cut-topbar .cut-window-btn'));
   const rows = await js(`[...document.querySelectorAll('.context-menu[data-level="0"] > .menu-item')].map((r) => (r.querySelector('.menu-icon').textContent === '✓' ? '+' : '') + r.querySelector('.menu-label').textContent)`);
-  check(['Markers', '+History', 'Audio Meters', 'Source', '+Program', '+Timeline'].every((x) => rows.includes(x)), `the Window menu lists every panel, ticking those on screen (${S(rows)})`);
+  // Premiere's Color workspace: Lumetri Scopes and Source, Program, Lumetri Color; the Tools panel and the meters below
+  check(['Markers', 'Text', '+History', '+Audio Meters', '+Source', '+Program', '+Timeline', '+Tools'].every((x) => rows.includes(x)), `the Window menu lists every panel, ticking those on screen (${S(rows)})`);
   await menuClick('Markers');
   await sleep(200);
   const shown = await js(`({ tab: !!document.querySelector('.cut-grid .cut-slot-tab.added[data-panel="markers"]'), visible: __pn.visible('.cut-panel[data-panel="markers"] .cut-markers-head'), focus: Cut.app.focusPanel, ws: Cut.ui.workspace })`);

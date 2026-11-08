@@ -560,6 +560,17 @@
     tx.set(project, 'speakers', next);
     return {};
   };
+  // A LUT for Lumetri Color's Look (lumetri.js store(): { id, entry }), kept in the project so it travels with it.
+  // The same LUT again changes nothing; migrate drops the ones no effect names.
+  H.addLut = (project, tx, cmd) => {
+    const id = cmd.id;
+    const entry = clone(cmd.entry);
+    if (typeof id !== 'string' || model.validate({ ...project, luts: { [id]: entry } }).errors.some((e) => e.startsWith('luts'))) fail('the LUT is not valid', 'invalid');
+    if (project.luts?.[id]) return { id };
+    if (!project.luts) tx.set(project, 'luts', { [id]: entry });
+    else tx.set(project.luts, id, entry);
+    return { id };
+  };
   H.relinkMedia = (project, tx, cmd) => {
     const c = projectContext(project, tx);
     const m = mediaById(c, cmd.id);
@@ -1910,7 +1921,7 @@
     setTransition: 'Transition Settings', addGenerated: 'Add Graphic', freezeFrame: 'Freeze Frame', addMarker: 'Add Marker',
     setMarker: 'Edit Marker', removeMarker: 'Remove Marker', addCaptionTrack: 'Add Caption Track', setCaptionTrack: 'Caption Track Settings',
     removeCaptionTrack: 'Delete Caption Track', setCaptions: 'Replace Captions', addCaption: 'Add Caption', setCaption: 'Edit Caption',
-    removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', setSpeakers: 'Speakers', paste: 'Paste', setGenerator: 'Graphic Settings',
+    removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', setSpeakers: 'Speakers', addLut: 'Load LUT', paste: 'Paste', setGenerator: 'Graphic Settings',
     setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer', setRole: 'Audio Role', replaceAudio: 'Replace Audio', batch: 'Edit',
     group: 'Group', ungroup: 'Ungroup', slip: 'Slip', slide: 'Slide', stretch: 'Rate Stretch', extendEdit: 'Extend Edit',
   };
@@ -2142,6 +2153,7 @@
     setProxy: (id, proxy) => ({ type: 'setProxy', id, proxy }),
     setSettings: (patch) => ({ type: 'setSettings', patch }),
     setSpeakers: (patch) => ({ type: 'setSpeakers', patch }),
+    addLut: ({ id, entry }) => ({ type: 'addLut', id, entry }),
     paste: (seqId, clips, opts = {}) => ({ type: 'paste', seqId, clips, opts }),
     setGenerator: (seqId, clipId, patch) => ({ type: 'setGenerator', seqId, clipId, patch }),
     setLayer: (seqId, clipId, layerId, patch) => ({ type: 'setLayer', seqId, clipId, layerId, patch }),

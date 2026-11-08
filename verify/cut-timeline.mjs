@@ -15,8 +15,10 @@
 // - the program monitor's handles: a drag moves the clip; the Type tool and Korean typed through the IME into a text
 //   layer, nothing recorded until the composition and the editor end;
 // - 500 clips: scroll and drag frame times;
+// - the track headers in Premiere's order, sync lock, output, mute, solo and lock by real clicks, and the track height
+//   keys (Ctrl+= and Ctrl+- for video, Alt+= and Alt+- for audio, Shift+= and Shift+- for all) without zooming the page;
 // - screenshots in the dark and the light theme (verify/out/cut-timeline/*.png), the effects panel's new folders too.
-// Usage: node verify/cut-timeline.mjs   (CUT_TL_ONLY=edits,gestures,drops,controls,effects,color,overlay,text,perf,shots)
+// Usage: node verify/cut-timeline.mjs   (CUT_TL_ONLY=edits,gestures,drops,controls,effects,color,overlay,text,perf,headers,shots)
 import { writeFileSync } from 'fs';
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
@@ -133,6 +135,14 @@ async function section(name, fn) {
 }
 await js(`Cut.ui.setWorkspace('editing')`);
 await sleep(400);
+// On a narrow window (1024 px) the timeline beside Premiere's Tools panel and meters is under 560 px of lanes, where
+// the checks at 100 px/s (a razor click at 5 s) and at 20 px/s past 30 s fall off its right edge: the project panel gives it room, as a person
+// would drag the splitter.
+if ((await js(`Cut.ui.timeline.root.querySelector('.cut-tl-scroll').clientWidth`)) < 600) {
+  await js(`(ide.settings.set('cut.layout.editing', { rows: [54, 46], slots: [[45, 55], [8, 1, 86, 6]] }), Cut.ui.setWorkspace('editing'), true)`);
+  await sleep(400);
+  log(`  (the timeline widened to ${await js(`Cut.ui.timeline.root.querySelector('.cut-tl-scroll').clientWidth`)} px)`);
+}
 
 // ---------- edits with the tools ----------
 await section('edits', async () => {
@@ -208,6 +218,7 @@ await section('edits', async () => {
 
   // razor (C): a click at 5 s cuts c1 and its audio (zoomed in: a click lands on a frame, not on a pixel's worth)
   await press('c');
+  if ((await js('__tl.app().tool')) !== 'razor') await shot('razor-key-missed.png');
   await js('__tl.view(100)');
   await clickAt(await pt(5, 'V1'));
   await js('__tl.view()');
@@ -463,6 +474,9 @@ await section('gestures', async () => {
 
 // ---------- drops from the project panel and the source monitor; thumbnails and waveforms ----------
 await section('drops', async () => {
+  // the drops come from the project panel and the source monitor: the default layout, with the project panel at its width
+  await js(`(ide.settings.set('cut.layout.editing', null), Cut.ui.setWorkspace('editing'), true)`);
+  await sleep(300);
   // real media: an H.264 test source (no audio) made with WebCodecs, and a WAV made here
   const wav = path.join(home, 'tone.wav');
   writeFileSync(wav, wavBytes(4, 440));
@@ -485,9 +499,12 @@ await section('drops', async () => {
   await js('__tl.view(100)');
   await js(`Cut.ui.showPanel('project')`);
   await sleep(300);
-  // the video item from the project panel onto V1 at 1 s, with the real mouse (Cut.ui.dnd)
+  // the video item from the project panel onto V1 at 1 s, with the real mouse (Cut.ui.dnd); a narrow project panel
+  // shows one card a row, so the card is scrolled into view first
+  await js(`(document.querySelector('.cut-panel[data-panel="project"] [data-id="${ids[0]}"]')?.scrollIntoView({ block: 'nearest' }), true)`);
   const item = await js(`__tl.rect('.cut-panel[data-panel="project"] [data-id="${ids[0]}"]')`);
   check(!!item, 'the imported video shows in the project panel');
+  if (!item || (await js(`(() => { const p = ${S(item)}, n = document.elementFromPoint(p.x, p.y); return !n?.closest('.cut-panel[data-panel="project"]'); })()`))) await shot('drop-item-hidden.png');
   let before = await steps();
   if (item) {
     await drag(item, await pt(1, 'V1', 0.5), { steps: 14 });
@@ -499,7 +516,12 @@ await section('drops', async () => {
     check(S(await js(`[__tl.seq().w, __tl.seq().h]`)) === S([640, 360]), 'the first clip in an empty sequence sets the sequence to its size');
   }
   // the WAV from the project panel onto A2 at 2 s with Ctrl: an insert
+  // (the second card can be below the panel's fold on a short window: scrolled into view as a person would)
+  await js(`(document.querySelector('.cut-panel[data-panel="project"] [data-id="${ids[1]}"]')?.scrollIntoView({ block: 'nearest' }), true)`);
   const wavItem = await js(`__tl.rect('.cut-panel[data-panel="project"] [data-id="${ids[1]}"]')`);
+  // (and A2 scrolled into the lanes: a short window shows only the top tracks)
+  await js(`(() => { const tl = Cut.ui.timeline, r = tl.rowOf('A2'), h = tl.root.querySelector('.cut-tl-scroll').clientHeight; if (r.y + r.h > h) tl.setScroll(tl.view.scrollX, tl.view.scrollY + r.y + r.h - h + 4); return true; })()`);
+  await sleep(100);
   if (wavItem) {
     await drag(wavItem, await pt(2, 'A2', 0.5), { steps: 14, modifiers: ['Ctrl'], late: true });
     const a2 = await clips('A2');
@@ -906,6 +928,9 @@ await section('perf', async () => {
 
   // more video clips on screen than the thumbnail cache holds (500): once each has asked, the timeline rests.
   // A real file (a missing one is offline and asks for none); each clip starts a frame later in it, so each has its own strip; 90 a track keeps each over 8 px on an 810 px timeline.
+  // The timeline frame is maximized (Shift+`) for this: beside the Tools panel and the meters it is narrower than 810 px.
+  await focusTimeline();
+  await js(`(Cut.ui.toggleMaximize(), true)`);
   const manyFile = path.join(home, 'many.mp4');
   check((await js(`Cut.testsrc.write(${S(manyFile)}, { seconds: 33, fps: [30, 1], w: 160, h: 90, audio: false }).then((r) => r.ok)`)) === true, 'a 33 s test source for the thumbnails');
   const many = await js(`(async () => {
@@ -945,7 +970,69 @@ await section('perf', async () => {
       return { clips: seq.clips.length, view: [box.clientWidth, box.clientHeight], asked: before, seconds: Math.round((performance.now() - t0) / 1000), askedAfter: asked - before, draws: s.base.length };
     } finally { Cut.thumbs.strip = orig; }
   })()`);
+  await js(`(document.querySelector('.cut-grid.maximized') && Cut.ui.toggleMaximize(), true)`);
   check(many.asked > 500 && many.asked <= 600 && many.askedAfter === 0 && many.draws <= 1, `${many.clips} video clips on screen ask for their thumbnails once each, then the timeline stops redrawing (${S(many)})`);
+});
+
+// ---------- the track headers: Premiere's order, the toggles by real clicks, the track height keys ----------
+// A key as a real keyboard sends it (Equal and Minus have their codes; lib.mjs press() gives none).
+const CODES = { '=': ['=', 'Equal', 187], '-': ['-', 'Minus', 189] };
+async function key(combo) {
+  const parts = combo.split('+');
+  const name = parts.pop();
+  const [k, code, vk] = CODES[name];
+  const base = { modifiers: mods(parts), key: k, code, windowsVirtualKeyCode: vk };
+  await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await sleep(80);
+}
+await section('headers', async () => {
+  await js(`__tl.fresh({ clips: [{ media: 0, at: 0, len: 4 * ${T} }] })`);
+  await js('__tl.view()');
+  await sleep(150);
+  const order = await js(`['V1', 'A1'].map((id) => [...document.querySelector('.cut-tl-head[data-track="' + id + '"]').querySelectorAll(':scope > .cut-tl-hb')].map((b) => b.classList[1]).join())`);
+  check(order[0] === 'patch,lock,target,sync,eye' && order[1] === 'patch,lock,target,sync,mute,solo', `the headers are in Premiere's order: source patch, lock, targeting, sync lock, then output or mute and solo (${S(order)})`);
+  const state = () => js(`(() => { const t = (id) => __tl.seq().tracks.find((x) => x.id === id); return [t('V1').syncLock, t('V1').visible, t('A1').mute, t('A1').solo, t('V2').locked, t('A2').syncLock]; })()`);
+  const before = await state();
+  const s0 = await steps();
+  const titles = [];
+  for (const [track, cls] of [['V1', 'sync'], ['V1', 'eye'], ['A1', 'mute'], ['A1', 'solo'], ['V2', 'lock'], ['A2', 'sync']]) {
+    const sel = `.cut-tl-head[data-track="${track}"] .cut-tl-hb.${cls}`;
+    titles.push(await js(`document.querySelector(${S(sel)}).getAttribute('aria-label')`));
+    await clickAt(await js(`__tl.rect(${S(sel)})`));
+  }
+  const after = await state();
+  check(S(before) === S([true, true, false, false, false, true]) && S(after) === S([false, false, true, true, true, false]) && (await steps()) === s0 + 6,
+    `clicking sync lock, output, mute, solo, lock and sync lock flips each, one undo step each (${S(before)} -> ${S(after)})`);
+  check(S(titles) === S(['Toggle Sync Lock', 'Toggle Track Output', 'Mute Track', 'Solo Track', 'Toggle Track Lock', 'Toggle Sync Lock']), `with Premiere's names (${S(titles)})`);
+  check(await js(`document.querySelector('.cut-tl-head[data-track="V1"] .cut-tl-hb.sync').getAttribute('aria-pressed') === 'false' && document.querySelector('.cut-tl-head[data-track="A1"] .cut-tl-hb.mute').classList.contains('on')`), 'the buttons show the new state');
+  await undoAll(6);
+  check(S(await state()) === S(before), 'Ctrl+Z six times turns them back');
+
+  // Ctrl+= / Ctrl+- the video tracks, Alt+= / Alt+- the audio tracks, Shift+= expands and Shift+- minimizes all
+  await focusTimeline();
+  const heights = () => js(`__tl.seq().tracks.map((t) => t.id + ':' + t.height).join(' ')`);
+  const zoom0 = await js('devicePixelRatio');
+  const h0 = await heights();
+  const s1 = await steps();
+  await key('Ctrl+=');
+  const vTall = await heights();
+  await key('Ctrl+-');
+  const vBack = await heights();
+  await key('Alt+=');
+  const aTall = await heights();
+  await key('Alt+-');
+  await key('Shift+-');
+  const mini = await heights();
+  const miniHead = await js(`document.querySelector('.cut-tl-head[data-track="V1"]').getBoundingClientRect().height`);
+  await key('Shift+=');
+  const maxi = await heights();
+  check(h0 === 'V1:56 V2:56 A1:48 A2:48' && vTall === 'V1:72 V2:72 A1:48 A2:48' && vBack === h0 && aTall === 'V1:56 V2:56 A1:64 A2:64',
+    `Ctrl+= and Ctrl+- change the video tracks' height, Alt+= the audio tracks' (${h0} / ${vTall} / ${aTall})`);
+  check(mini === 'V1:24 V2:24 A1:24 A2:24' && Math.round(miniHead) === 24 && maxi === 'V1:100 V2:100 A1:100 A2:100', `Shift+- minimizes every track and Shift+= expands them (${mini}, header ${miniHead}; ${maxi})`);
+  check((await steps()) === s1 + 6 && (await js('devicePixelRatio')) === zoom0, `each key is one undo step and the window did not zoom (${(await steps()) - s1} steps, ${zoom0})`);
+  await undoAll(6);
+  check((await heights()) === h0, 'Ctrl+Z puts the heights back');
 });
 
 // ---------- screenshots in both themes ----------

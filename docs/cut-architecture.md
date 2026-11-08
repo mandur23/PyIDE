@@ -343,7 +343,11 @@ Options are nested, never spread to the top level. The builders:
   `setProxy(mediaId, {path} | null)`
 - project: `setSettings({fit, stillDuration, transitionDuration, freezeDuration, textStyles, speechTerms})`,
   `setSpeakers({list?, turns? /* {mediaId: turns | null} merged into the old */, count?} | null)` (label Speakers; the
-  result is checked by `validate`: every turn's speaker in the list, turns in order; `null` removes the labels)
+  result is checked by `validate`: every turn's speaker in the list, turns in order; `null` removes the labels),
+  `addLut({id, entry})` (label Load LUT; `Cut.lumetri.store`'s result into `project.luts`; the same id again changes
+  nothing; a bad entry is refused with code `invalid`). `project.luts` (optional) is `{ 'lut-<16 hex>': { name, title,
+  size, min, max, data /* base64 float32 rgb */ } }`; `validate` checks every entry, `migrate` drops the ones no
+  effect's `lut` names and the damaged ones (`model.lutsInUse(project)`)
 - sequences: `addSequence(opts)` (`{from: seqId}` duplicates), `removeSequence(id)`,
   `setSequence(id, patch)` (name, w, h, fps, background, masterGain)
 - tracks: `addTrack(seqId, kind, index?, {name})`, `removeTrack(seqId, trackId)`, `setTrack(seqId, trackId, patch)`
@@ -473,9 +477,10 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
   ncut srt vtt cube.
 - Dialogs, with the UI text from the renderer (English when missing): `cut:pickMedia({multi, title, filterName,
   allName, defaultPath})` -> paths | null, `cut:pickFolder({title})` -> path | null, `cut:pickProject({title,
-  filterName})` -> path | null, `cut:saveAs({defaultPath, filters, title})` -> path | null (the first filter's
-  extension is added when the name has none). `PYIDE_CUT_DIALOG` (tests) names a JSON file
-  `{pickMedia, pickFolder, pickProject, saveAs}`; each dialog returns that value (missing = cancelled) without
+  filterName})` -> path | null, `cut:pickLut({title, filterName, allName})` -> one `.cube` path | null (Lumetri
+  Color's Look; the renderer reads it with `cut:read`), `cut:saveAs({defaultPath, filters, title})` -> path | null (the
+  first filter's extension is added when the name has none). `PYIDE_CUT_DIALOG` (tests) names a JSON file
+  `{pickMedia, pickFolder, pickProject, pickLut, saveAs}`, read at each call; each dialog returns that value (missing = cancelled) without
   showing anything.
 - `cut:projectRead(path)` -> `{ text, path, mtime }` | `{ missing }` | `{ error, code }`;
   `cut:projectWrite(path, text)` -> `{ ok, path, bak }` | `{ error }`. Only `.ncut`, the text must be a JSON
@@ -626,7 +631,7 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
 
 ## 8. Engine
 
-Files: `effects.js`, `textrender.js`, `media.js`, `decoder.js`, `compositor.js`, `player.js`, `thumbs.js`. Tests:
+Files: `lumetri.js`, `effects.js`, `scopes.js`, `textrender.js`, `media.js`, `decoder.js`, `compositor.js`, `player.js`, `thumbs.js`. Tests:
 `verify/cut-engine-core.mjs` (Node) and `verify/cut-engine.mjs` (app, port 9753).
 
 ### `Cut.effects`
@@ -638,8 +643,9 @@ The registry: `list()`, `get(type)`, `defaults(type)`, `resolve(type, params)`, 
 color math stays here).
 
 A def: `{ type, name /* English, shown through tr() */, category, kind: 'video' | 'audio', params: [{ id, name, type:
-'number' | 'angle' | 'percent' | 'color' | 'bool' | 'choice' | 'point', min, max, step, default, choices?
-/* [[id, English label]] */, keyframable }], gpu, cpu, canvas2d }`. `gpu.wgsl` is the body, `gpu.code` the complete
+'number' | 'angle' | 'percent' | 'color' | 'bool' | 'choice' | 'point' | 'curve' /* [x0, y0, x1, y1...], keyframed as
+a whole */ | 'lut' /* an id of project.luts */, min, max, step, default, choices? /* [[id, English label]] */,
+keyframable, group? /* Lumetri Color's section, shown by Effect Controls */ }], gpu, cpu, canvas2d, assets? }`. `gpu.wgsl` is the body, `gpu.code` the complete
 WGSL. A video effect's `gpu.uniforms(params, {width, height, pxScale, quality, frame})` returns a list of passes (each
 at most 16 floats; `[]` means nothing to do); a transition's `gpu.uniforms(params, progress)` returns one array.
 `cpu(image, params, info)` is the reference the tests compare with, `canvas2d(params, info)` a hint for the 2D back end
@@ -650,19 +656,64 @@ random (grain, glitch) is a hash of integers, the pixel and the frame (`cpu.hash
 PCG hash in u32 arithmetic, the same bits on both), and every render of a frame agrees. In WGSL an effect reads its
 pass's input with `tap(uv)` and the effect's own input with `tapOrig(uv)` (binding 3, the same texture in the first
 pass), which sharpen and glow use after a separable blur; `texel(uv)`, `toSrgb`, `toLinear` and `hash3` are shared
-helpers. Audio effects have `gain(params, tSeconds, lengthSeconds)` -> linear gain; `crossfade.power` has
-`gains(progress)` -> `[outgoing, incoming]`.
+helpers. Audio effects have `gain(params, tSeconds, lengthSeconds)` -> linear gain, or `dsp`, the name of a processor
+in `Cut.audiofx.processors` (section 9); `crossfade.power` has `gains(progress)` -> `[outgoing, incoming]`.
 
 Type ids. Video: `flip.horizontal`, `flip.vertical`, `crop`, `edge.extend`, `blur.gaussian`, `blur.directional`,
 `sharpen` (amount, radius = sigma, threshold), `mosaic`, `color.bw`, `color.tint`, `color.brightnessContrast`,
-`color.basic` (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance),
+`color.basic` (Lumetri Color: the basic correction's temperature, tint, exposure, contrast, highlights, shadows,
+whites, blacks, saturation, vibrance; the Creative Look `lut` (an id of project.luts) and `lutIntensity`; the curves
+`curveMaster`, `curveRed`, `curveGreen`, `curveBlue`; the HSL secondary's `hslHue`, `hslHueRange`, `hslHueSoft`,
+`hslSatLow/High/Soft`, `hslLumLow/High/Soft`, `hslMask` and its correction `hslTemperature`, `hslTint`, `hslContrast`,
+`hslSaturation`, `hslHueShift`; one pass per section that changes something, in Lumetri's order, `u.p[3].w` naming
+the stage; the math is `Cut.lumetri`'s),
 `color.invert` (in sRGB values), `color.hue` (CSS hue-rotate matrix on linear light), `vignette`, `glow` (a bright
 pass, then a two-pass blur added onto the input), `posterize` (sRGB steps), `chromatic` (radial or linear),
 `glitch` (bands of `bandHeight` moved by a hash of the band and `floor(frame / hold)`), `distort.lens` (center + d (1 +
 curvature / 200 r^2)), `key.chroma` (CbCr distance in Rec. 709 Y'CbCr of the sRGB values; similarity, smoothness, spill,
 output composite or matte), `noise.grain` (value noise with cells `size` pixels across, added to the sRGB values).
-Audio: `audio.gain`, `audio.fade`. Transitions: `dissolve`, `dip.black`, `dip.white`, `push`, `slide`, `wipe`,
+Audio: `audio.gain`, `audio.fade`; processors `audio.eq` (hpOn/hpFreq/hpSlope '12'|'24'|'48', lsOn/lsFreq/lsGain,
+b1..b3 On/Freq/Gain/Q, hsOn/hsFreq/hsGain, lpOn/lpFreq/lpSlope, output), `audio.bass` and `audio.treble` (boost),
+`audio.compressor` (threshold, ratio, attack, release, knee, makeup), `audio.limiter` (ceiling, release, truePeak),
+`audio.gate` (threshold, attack, hold, release, range), `audio.dehum` (frequency '50'|'60', harmonics, reduction, Q).
+Transitions: `dissolve`, `dip.black`, `dip.white`, `push`, `slide`, `wipe`,
 `iris.round` (open or close, feather), `zoom.cross` (zoom amount); audio `crossfade.power`.
+
+### `Cut.lumetri`
+
+The math of Lumetri Color's sections after the basic correction (pure; effects.js reads it when used, so a page that
+loads effects.js alone still works). Curves, the LUT and the qualifier work on the sRGB values shown (0..1); the
+corrections inside the qualifier work in linear light.
+
+- Curves: `points(flat)` (clamped, sorted, points closer than `MIN_GAP` dropped, 2 to `MAX_POINTS` 16; anything
+  unusable is the straight line), `sanitize`, `flatten`, `slopes`/`evalCurve` (a monotone cubic, Fritsch-Carlson, flat
+  beyond the ends), `isIdentityCurve`, `curvesIdentity(params)`, `curvesTable(params)` (`TABLE` 1024 entries x master,
+  red, green, blue, cached by `curveKey`), `curvesPixel(linearRgb, table)` (master on every channel, then each channel's
+  own, linear between table entries as the shader reads them).
+- LUTs: `parseCube(text)` -> `{ title, size, min, max, data: Float32Array }` or throws an Error with `code: 'lut'`, an
+  English message template and `params` (line numbers, counts): not text, no LUT_3D_SIZE, a 1D LUT, a size outside 2..65,
+  a data line without three numbers, a bad number, too few or too many lines, an upside-down domain, two sizes.
+  Keywords are upper-case words (others ignored); `#` starts a comment anywhere. `store(lut, name)` -> `{ id, entry }`
+  (id `lut-` + a 64-bit FNV-1a of size, domain and numbers), `validEntry`, `decode(entry, id)` (cached per entry
+  object), `lutOf(project, id)`, `sampleLut(lut, srgb)` (trilinear, domain-normalized and clamped), `lutPixel(rgb, lut,
+  k)` (mixed in sRGB values), `identityCube(n, {min, max})`, `toBase64`/`fromBase64`, `toHalf`, `lutHalf`, `curvesHalf`
+  (the rgba16float data for the GPU).
+- HSL secondary: `hueOf(srgb)`, `hslPlan(params)` (`active` when it changes anything), `hslMask(rgb, plan)`,
+  `hslPixel(rgb, plan)` (Show Mask: the keyed pixels in their color, the rest `MID_GRAY`, sRGB 128), `qualifierFor([r,
+  g, b] 0..255)` (the eyedropper's key: 50 degrees of hue, 30 soft, saturation and luma around the color),
+  `HSL_PARAMS`.
+
+### `Cut.scopes`
+
+The Lumetri Scopes' counts (pure). `layout(cols = 256, size = 256)` -> offsets of one u32 array: `wave` (level x
+column), `parade` (three planes), `vector` (size x size, Cb right, Cr up, +-`RANGE` 0.6), `hist` (red, green, blue,
+luma x 256). `frameRect(width, height, seqW, seqH)` (the frame's box in a letterboxed output), `stepFor(rect)` (every
+`step`-th pixel across and down, about `BUDGET` 262,144 pixels), `analyze(rgba, width, height, rect, {cols, size,
+step})` -> `{ bins, layout }`, `WGSL`, `uniforms`, `dispatch` (the compute pass the compositor runs), `views(bins,
+layout)`, `peaks(plane, cols)`, `vectorPeak(vector, size)`, `vectorBin`, `vectorAt`, `angleAt`, `chroma`,
+`targets(size)` (75% and 100% bars), `SKIN_DEGREES` (123). All integer math on the 8-bit values: Y' = (13933 R + 46871
+G + 4732 B + 32768) >> 16, Cb = (-7509 R - 25259 G + 32768 B) >> 7, Cr = (32768 R - 29763 G - 3005 B) >> 7 (Rec. 709),
+so the GPU's and the CPU's bins agree exactly.
 
 ### `Cut.textrender`
 
@@ -735,6 +786,16 @@ with `backend: '2d'`) a Canvas 2D fallback; `compositor.backend` says which.
   from, to)`, `idle()` (resolves once frames are back with their decoders: call it before `destroy()`),
   `readPixels() -> Promise<Uint8Array RGBA>`, `videoFrame(init)` (a VideoFrame of the canvas), `resize`, `stats`,
   `info`, `errors`, `lost` (WebGPU device loss, reported, not recovered), `width`, `height`.
+- `scopes({ cols = 256, size = 256 })` -> `Promise<{ bins, layout, rect, step, width, height, backend } | null>`: the
+  Lumetri Scopes' counts (`Cut.scopes`) of what the canvas shows now. WebGPU runs `Cut.scopes.WGSL` as a compute pass
+  over its rgba8unorm output (the frame's box only, `scopes.frameRect`), the histograms gathered per workgroup, and
+  reads the bins back (one count at a time; null while one is under way); the 2D back end counts its canvas's pixels
+  on the CPU (`scopes.analyze`). Both count the same integers, so the GPU's bins equal the CPU's over `readPixels()`
+  exactly. It waits for a render in progress, not for the read back, so playback does not wait for it.
+- Effects that read tables (`gpu.bindings`, Lumetri Color's LUT and curves) get them at bindings 4 and up:
+  `gpu.textures(params, info)` names each by a key and gives its rgba16float data; the compositor makes one texture per
+  key (the last 24 kept beyond those a frame uses) and binds a small dummy for an empty one. `planItem` gives each
+  effect `assets` (`def.assets(project, params)`: the LUT of project.luts), passed on as `info.assets`.
 - Units: position and anchor in sequence pixels; anchor from the center of the fitted clip before scaling; rotation in
   degrees clockwise; crop `[top, right, bottom, left]` % in the clip's own frame. Text and solid clips are full-frame
   layers with the same transforms. Each clip on screen gets its own frame source. An effect pass binds its input
@@ -774,9 +835,10 @@ a strip and the blocks of peaks already under way: the player pauses them while 
 
 ## 9. Sound and export
 
-Files: `presets.js`, `audioengine.js`, `export.js`, `testsrc.js`, and `analyze.js` (the automation's measurements).
-Tests: `verify/cut-export-core.mjs` and `verify/cut-analyze.mjs` (Node), `verify/cut-export.mjs` (app, port 9754) and
-`verify/cut-auto.mjs` (app, port 9757).
+Files: `presets.js`, `audiofx.js`, `audioengine.js`, `export.js`, `testsrc.js`, and `analyze.js` (the automation's
+measurements). Tests: `verify/cut-export-core.mjs`, `verify/cut-audiofx-core.mjs` and `verify/cut-analyze.mjs` (Node),
+`verify/cut-export.mjs` (app, port 9754), `verify/cut-auto.mjs` (app, port 9757) and `verify/cut-mixer.mjs` (app, port
+9778).
 
 ### `Cut.presets`
 
@@ -799,12 +861,25 @@ the pitch kept (WSOLA time stretch), reverse, and audio effects. Pan is a balanc
 full level; mono is copied to both). Fade handles are linear in amplitude. Audio transitions use the registry's
 `gains(progress)`, else constant power.
 
+A clip whose effects include a processor (`dsp`) runs all its enabled audio effects in order as one chain
+(`audiofx.createChain`; gain effects become stages in their place) over its source sound, before its volume, fades
+and pan. The chain runs in segments of 32,768 samples counted from the clip's first audible sample, each from a
+warm-up of the stages' summed `memory()` (at least 32 samples, at most `audiofx.MAX_MEMORY` = 4 s) before it, or the
+clip's start, with fresh state, and on 512 samples past its end, which cross-fade linearly into the next segment's
+start; the stages' `latency()` is taken out. Segments are kept (96, LRU) under a key of the clip's source range,
+place, transitions, effects and their keyframes; a segment whose input blocks are not read counts the clip as
+`missing`, and `load` reads the warm-up and the tail too. Effect parameters and the clip's gains are read on a
+32-sample grid from the same first sample. So a sample of the mix does not depend on the block it is mixed in or on
+where playback started: the preview and the export give the same samples (`verify/cut-audiofx-core.mjs`,
+`verify/cut-mixer.mjs`).
+
 - `create(app, { getAudio, rate })` -> `{ start(t, rate = 1) -> Promise, stop(), now() /* sequence ticks heard */,
-  meters() -> { master, masterChannels: [l, r], masterRms: [l, r], tracks: {id: dB} } /* dBFS of the block being heard
-  (about 43 ms): peaks, RMS; -Infinity when silent */, setMasterGain(db), close(), playing, rate, masterGain, context,
-  mixer }`. Rates 0.25 to 4 play forward like tape; other rates are silent while the clock runs. The Audio Meters
-  panel (ui-meters.js) reads `meters()` of the program player's engine (`player.audio`). `mix()` also returns
-  `rms: [l, r]` of the master.
+  meters() -> { master, masterChannels: [l, r], masterRms: [l, r], tracks: {id: dB}, trackChannels: {id: [l, r]} }
+  /* dBFS of the block being heard (about 43 ms): peaks, RMS; a track's after its fader and pan; -Infinity when
+  silent */, setMasterGain(db), close(), playing, rate, masterGain, context, mixer }`. Rates 0.25 to 4 play forward
+  like tape; other rates are silent while the clock runs. The Audio Meters panel (ui-meters.js) and the Audio Track
+  Mixer (ui-mixer.js) read `meters()` of the program player's engine (`player.audio`). `mix()` also returns
+  `rms: [l, r]` of the master. `opts.onBlock(sample, [L, R], missing)` sees every block the preview schedules (tests).
 - `renderOffline(project, seqId, from, to, rate = 48000, {masterGain, getAudio})` -> AudioBuffer (holds the whole
   mix: about 1.4 GB an hour). `measure(project, seqId, from, to, {rate, masterGain, onProgress, signal})` streams the
   mix through a meter and returns the loudness without keeping it.
@@ -821,6 +896,30 @@ full level; mono is copied to both). Fade handles are linear in amplitude. Audio
   schedules; the export, `measure` and `renderOffline` go through `mixLoaded`.
 - Also `transitionRange`, `resample`, `stretch`, `kFilters`, `dbToGain`, `gainToDb`, `makeBuffer`,
   `decodeTrack(reader, track)`, `fileReader(path)`, `defaultGetAudio` (used when `Cut.decoder` is missing).
+
+### `Cut.audiofx`
+
+The clip audio effects' signal processing, pure and deterministic (double arithmetic, no clock, no randomness).
+
+- `processors.{eq, bass, treble, dehum, compressor, limiter, gate}`: `{ latency(rate) -> samples, memory(params, rate)
+  -> seconds after which the state no longer depends on what came before (about -100 dB), create(rate) -> state,
+  process(state, L, R, from, to, params) }` in place on Float64Arrays; the state carries over between calls, so any
+  split of a signal into calls gives the same samples. Filters: RBJ Audio EQ Cookbook biquads in transposed direct
+  form II (`design(type, f0, gainDb, Q, fs)` -> `[b0, b1, b2, a1, a2]`; types lowpass, highpass, peaking, lowshelf,
+  highshelf, notch and `cut` = 1 - (1 - g) BP for the hum notches, whose bandwidth stays Q at any depth), high- and
+  low-pass as Butterworth sections (`BUTTERWORTH`), coefficients recomputed only when the parameters change, a 0 dB
+  band skipped (bit-exact pass-through), subnormal states flushed. Compressor: feed-forward, stereo linked, the
+  soft-knee static curve (`compressCurve`) smoothed in dB with the attack while the reduction grows and the release
+  while it shrinks. Limiter: 1.5 ms look-ahead (latency 1.5 ms + 8 samples), the needed gain (with `truePeak`, also the
+  16-tap 4x interpolated peaks either side) pulls the gain down on a straight line over the look-ahead, exponential
+  release, and a final clamp that only rounding can reach. Gate: a 5 ms peak follower of the louder channel, open at
+  or over the threshold and for the hold time after, attack to 1 and release to the range; it starts closed.
+- `createChain(stages, rate)` -> `{ process(L, R, n, {paramsAt(k, i), secondsAt(i)}), latency }`: stages
+  `{proc}` or `{gain(params, seconds)}` run in order, one `CONTROL` (32) sample block at a time; a stage's parameters
+  are read at its block's start moved back by the latency before it.
+- `filtersOf(dsp, params)`, `response(dsp, params, freqs, fs)` -> dB (the effect controls' graph), `magnitudeDb`,
+  `ringSamples`, `processBuffer(dsp, params, [L, R], fs, {blocks})` (one processor over whole channels, the latency
+  taken out; for tests), `MAX_MEMORY`, `BASS_HZ` 200, `TREBLE_HZ` 4000, `LOOKAHEAD_MS` 1.5.
 
 ### `Cut.export`
 
@@ -1202,9 +1301,22 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
 - `Cut.ui.overlay = { attach(viewEl, app, player) -> {detach, editText, pickColor, sample, layout, geometry, editor},
   editText(clipId, {created}), pickColor() -> Promise<[r, g, b] | null>, pickColorAt(u, v), active }`. Text editing
   sets `Cut.ui.typing` while open and is one undo group per visit.
-- The color panel's eyedropper sets temperature and tint to the current values plus
-  `Cut.effects.whiteBalance(the linear color seen, with saturation and contrast undone)`. Its Auto button runs
-  `Cut.ui.auto.autoColor`.
+- The Lumetri Color panel (`ui-color.js`, panel `color`) edits the selected video clip's `color.basic` in sections
+  (Basic Correction, Creative, Curves, HSL Secondary, Vignette, folded ones in `cut.color.collapsed`); every control
+  writes through `Cut.ui.edit.write` (a keyframe at the playhead when the parameter has keyframes) inside one
+  `history.begin/commit`. Its white balance eyedropper sets temperature and tint to the current values plus
+  `Cut.effects.whiteBalance(the linear color seen, with saturation and contrast undone)`; its Auto button runs
+  `Cut.ui.auto.autoColor`. Browse… asks `cut:pickLut`, reads the file (`cut:stat`, `cut:read`, 64 MB at most),
+  `Cut.lumetri.parseCube`s it and runs `addLut` and the Look in one step (`Cut.ui.color.readLut(path)` -> `{id,
+  entry}`); a refusal shows `tr(message, params)` in the section and as a notification. The curve square
+  (`canvas.cut-lm-curve`, `data-pad` CSS pixels around its 0..1 area) adds, drags (one step), Ctrl+click removes, a
+  double click straightens (the point its first click added is undone). The HSL eyedropper sets
+  `Cut.lumetri.qualifierFor(the color seen)`.
+- The Lumetri Scopes panel (`ui-scopes.js`, panel `scopes`) asks the program monitor's compositor for `scopes()` after
+  each frame it draws (the player's `frame` and `pause` events), at most every 40 ms stopped and every 150 ms (WebGPU)
+  or 300 ms (2D) playing (`budget` a quarter of `Cut.scopes.BUDGET` then), only while it is on screen, and draws the waveform, parade, vectorscope and histogram on 2D
+  canvases (dark plots in both themes). `Cut.ui.scopes`: `last` (the counts drawn, with `at`, `t`, `renders`),
+  `count`, `shown`, `refresh()`.
 - `Cut.ui.auto` (`ui-auto.js`): `removeSilence(app)`, `detectScenes(app, {action})`, `detectBeats(app, {every})`,
   `matchLoudness(app)`, `matchClipLoudness(app)`, `autoDuck(app)`, `autoColor(app)`, `setRole(app, role)` (the
   selection), `menuItems(app)`, `clipMenuItems(app, clip)`, `topBarButton()` (ui-shell.js puts it in the top bar),
@@ -1245,6 +1357,26 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
   the value): hold a step, the others `bezierCurveTo` through their handles; bezier segments at least 16 px wide show
   their handles, dragged live in one history group. `Cut.ui.controls.lanePoint(path, t, which?)` gives a keyframe's
   (or handle's) client point for tests.
+
+### Audio Track Mixer and Essential Sound (`ui-mixer.js`, `ui-audiofx.js`)
+
+- Mixer (panel `mixer`): a strip per audio track of `app.sequence` (pan knob, M and S, a fader over `track.volume` in
+  dB on a console scale from -inf at the bottom through 0 dB at 84% to +6 dB at the top: the timeline header's 0-200%
+  is the same value, 200% being +6.02 dB and 0% -144 dB; a stereo meter; the name) and a master strip over
+  `seq.masterGain`. A fader or knob drag is `history.begin('Track Volume' | 'Master Volume' | 'Track Pan')`, a
+  `setTrack`/`setSequence` per move, `commit()`; Alt+click resets, a double click on the value or the knob types it.
+  Strips are rebuilt only when the tracks or their names change. Meters as in the Audio Meters panel (rise at once,
+  fall 30 dB/s, hold 1.5 s) from `meters().trackChannels` and `masterChannels`. `Cut.ui.mixer = { strips, running,
+  fader(id) /* client geometry of the travel and the cap */, rect(id, part), posOf(db), dbOf(pos), refresh }`.
+- The Audio workspace is defined in ui-shell.js (mixer, effect controls and source; program; Essential Sound; the
+  timeline and the meters below); ui-mixer.js adds its own only when the shell has none.
+- `Cut.ui.effectViews[type]({app, clipId, effectId}) -> {node, update()}`: the effect controls put `node` above an
+  effect's rows and call `update()` with them. ui-audiofx.js registers the frequency response graph for `audio.eq`,
+  `audio.bass`, `audio.treble` and `audio.dehum` (20 Hz to 20 kHz, +-24 dB, the curve from `Cut.audiofx.response` at
+  the playhead's parameter values, the EQ's bands as dots; redrawn on resize and theme change).
+- Essential Sound (panel `essential`): the selected audio clips (`ui.auto.soundClips`), their type (`ui.auto.setRole`)
+  and actions; the effect presets are `Cut.ui.audiofx.PRESETS`, added by `addEffects(app, preset, label)` in one
+  `batch`.
 
 ### Speech recognition (`ui-speech.js`)
 
@@ -1443,7 +1575,8 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
   them: add them to ko.json by hand.
 - Styles: `css/shell.css` (shell), `css/timeline.css` (timeline), `css/panels.css` (panels, one block per area),
   `css/tools.css` (shortcut editor, cheat sheet, settings page, proxies, export queue), `css/speech.css` (the
-  transcript panel, the speech setup dialog), `css/ai.css` (the Claude dialogs and review lists) and the tokens in
+  transcript panel, the speech setup dialog), `css/ai.css` (the Claude dialogs and review lists), `css/audio.css` (the
+  Audio Track Mixer, Essential Sound, the EQ graph) and the tokens in
   `style.css`. Use the IDE's variables so dark and light themes work.
 
 ## 12. Tests
@@ -1456,13 +1589,17 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references (every effect at chosen pixels and unchanged at its neutral parameters, grain and glitch per frame, the 2D hints and skips), transitions, crossfade, the compositor's plan (with the clip-local frame), fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
 | `verify/cut-analyze.mjs` | Node | - | Levels streamed in odd blocks, silences with minimum length and margins on frames, speech; click tracks at 90, 120 and 140 BPM (beats within 12 ms, bar phase on the accents); scene cuts on their frame with a flash ignored and a fade in giving one cut at most; auto color through color.basic's own math (a light picture kept light); ducking keyframes; ranges and clip time; loading as a page script |
 | `verify/cut-export-core.mjs` | Node | - | Presets (levels, bitrates, estimates), resampler and WSOLA, BS.1770-4 loudness and true peak, normalize and match gains, the mixer, testsrc frame numbers, export's pure parts (frame plan, chapters, captions in a range, SRT names) |
-| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference (all registered ones, grain and glitch at given frames, the same anywhere in a frame and from a new compositor); transitions at known points and every one against its CPU reference on two pictures; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback (a skipped effect left out, invert's filter drawn) |
+| `verify/cut-audiofx-core.mjs` | Node | - | Audio effects: each filter's response at chosen frequencies against the analog theory (Butterworth 12/24/48 dB/oct, shelves, peaking, hum notches), the graph's `response()` against the processor, the defaults bit-exact; the compressor's static curve, knee, makeup, attack and release times; the limiter's ceiling with and without true peak, a smooth gain (no clipping), transparency and recovery; the gate closed at first, opening, holding, closing to its range; processors in calls of odd lengths; the mixer in one block, in blocks of 1 to 3,000 samples and from the middle (the same samples), against one continuous run (no seam; a 2 s release drifts, never steps), effect order and the on switch (`CUT_SRC_DIR` tests a copy) |
+| `verify/cut-color-core.mjs` | Node | - | Lumetri Color and Scopes math: curves (cleaning, the straight line, through every point without overshoot, master and channel at chosen pixels), `.cube` files good (TITLE, comments, CRLF, domains, input range, sizes 2/17/33/65) and bad (each refusal and its line), the LUT's id, base64 and decode, trilinear lookup exact on a channel swap, the HSL qualifier and correction at chosen pixels and Show Mask, Lumetri Color's order and nothing to do at its defaults; scopes: every 75% bar at its angle and in its target, gray in the middle, skin tone near its line, ramps as diagonals on the waveform and the parade, histograms, the frame box and step, the WGSL's integers; `addLut`, undo, a bad entry, migrate keeping and dropping LUTs, save and reopen; page scripts; the refusals translated |
+| `verify/cut-color.mjs` | app | 9781 | Lumetri Color and Lumetri Scopes with real mouse events: the Color workspace's layout and sections; the scopes following the playhead over gray, red and blue solids and a ramp, a scrub along the ruler, playing a 1080p30 source (counts about every 150 ms, no frames lost, none off screen), the toggles; a curve point added and dragged (one step, the monitor and the waveform brighter), the red channel, Ctrl+click, double click, Ctrl+Z; a LUT through `PYIDE_CUT_DIALOG` pickLut (red turns cyan), intensity, two bad files refused with nothing changed, undo and redo, saved and reopened with the `.cube` deleted; the HSL eyedropper, saturation 0, Show Mask; Effect Controls' groups; screenshots (`CUT_COLOR_ONLY`) |
+| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference (all registered ones, Lumetri Color's curves, Looks of 17 and 33 points kept in the project, HSL secondary and Show Mask too, grain and glitch at given frames, the same anywhere in a frame and from a new compositor); the scopes' GPU count equal to the CPU's bin for bin on 640, 800 (pillarboxed) and 1920 (step 3) wide canvases, the six 75% bars on the vectorscope, a ramp's diagonal, the 2D back end's CPU count; transitions at known points and every one against its CPU reference on two pictures; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback (a skipped effect left out, invert's filter drawn) |
 | `verify/cut-export.mjs` | app | 9754 | Test sources decode frame-exact; exported sequences re-decode with the right frames (PSNR >= 35 dB), beeps on flashes, pitch kept; hardware, software, HEVC and 2D back end; playback in `<video>`; range, captions, cancel, export frame, chapters; loudness; preview clock and meters; export speed |
 | `verify/cut-shell.mjs` | app | 9755 | The frame with real mouse and keys: lifecycle, autosave, recovery, close question, import, bins, offline and relink, monitors, export dialog, captions, keys; dialogs answered through `PYIDE_CUT_DIALOG` |
 | `verify/cut-auto.mjs` | app | 9757 | The Automation menu, the clip menu and the color panel's Auto with real clicks: silence removal with its timeline preview, a locked track, one undo step; roles and ducking keyframes; loudness and clip loudness measured again; beat markers on a click track and a drag snapping to them; scene markers and splits, waiting while playing, Cancel; auto color seen in the rendered frame; a 10-minute file's analysis time and memory; screenshots |
 | `verify/cut-timeline.mjs` | app | 9756 | Timeline gestures and keys checked in the model and undone; drops; effect controls and keyframes; effects panel (every effect and transition under its category, Chroma Key and Iris Round typed and dragged); color panel and eyedropper; overlay handles and Korean IME text; 500 clips; screenshots (`CUT_TL_ONLY` picks parts) |
 | `verify/cut-edit.mjs` | app | 9759 | The [2] editing keys and tools with real keys and drags: the keys as `Cut.<id>` actions (Find Action), the tool bar; lift and extract on targeted and locked tracks; paste insert; nudge with links and a locked track; groups (select, Alt-click, drag, nudge, delete, ungroup); D; E; rate stretch; slip with the two-up frames read from pixels; slide; pen keyframes on volume and opacity; match frame to the source monitor's frame (`CUT_EDIT_ONLY` picks parts) |
 | `verify/cut-panels.mjs` | app | 9762 | The History, Markers and Audio Meters panels and the Window menu with real clicks and keys: jumps through the history in one go, dimmed later steps, 1,500 steps in a virtual list; marker filters, search, click, double click and Delete; marker drags on the ruler (frames, snapping, range end) and its menu; Hold and Bezier in the lane and timeline menus, the hold step from pixels, a bezier handle drag; meters' peak, RMS, hold and clip lights from a 1080p30 source, read from the canvas; dropped frames with and without the meters (`CUT_PANELS_ONLY` picks parts) |
+| `verify/cut-mixer.mjs` | app | 9778 | The Audio workspace; the Audio Track Mixer with real drags and clicks: a fader drag (the track volume, the header's percent, one undo step, Ctrl+Z, +6 dB at the top, Alt+click), the master fader, the pan knob, M and S, the strips' meters while playing (two tracks, a mute, canvas pixels); the EQ's parameters and graph in the effect controls, a typed value; Essential Sound (one step, the audio type); an exported EQ cut at 1 kHz measured; the preview's and the export's samples compared; screenshots (`CUT_MIXER_ONLY` picks parts) |
 | `verify/cut-tools.mjs` | app | 9765 | The convenience tools with real clicks and keys: the shortcut editor (record, use, conflict refusal, remove, reset, Reset All, the typing guard), the ? cheat sheet; the Video Editor settings page (transition length through Ctrl+D, playback quality, Clear Cache, copies kept); Select and Remove Unused with undo, Find Missing Media relinking by size and by duration; proxies (offer, 720p H.264 GOP 15 in the cache, the monitor drawing it and export the original by pixels, fallback when deleted, waiting while playing, cancel, the offer dismissed per project); the export queue (order, a later edit not leaking in, move, cancel, retry, remove, the close question); the word-by-word caption highlight from the program monitor's pixels (each word's first frame, scrubbing, every frame read back while playing), the exported frames lighting the same word, a text edit in the panel with undo and redo, a rewritten caption unlit, the box style, a second track chosen in the captions panel redrawing the stopped monitor and burned in by the export panel (which names it), saved and opened again (`CUT_TOOLS_ONLY`) |
 | `verify/cut-speech.mjs` | Node | - | Speech recognition without a model: windows and their seams (squeezed end words, a half-heard start), words mapped through in, speed and reverse, two clips of one recording; caption line breaking (Korean 18 and English 42 characters, two balanced lines, 6 s, pauses, sentence ends, frames); fillers and pauses; deleting words; search; word times narrowed to their sound; Whisper's confidence through refine, the seams and the timeline, captions' doubts, the doubt in the model and `setCaption`; the word list parsed, fingerprinted, validated (project setting and main) and heard by the fake; the fake's bursts; main's temp files, windows, cancel, setup flow and error codes; loading as a page script |
 | `verify/cut-speakers-core.mjs` | Node | - | Speaker labels without a model: windows from word times; the NN-chain average-linkage tree against a brute-force one, Auto and a fixed count, stray windows, numbering; each word's speaker with a flip smoothed and a short answer kept; turns (also of 2,000 random overlapping word lists, always valid), the speaker at a time, a segment reassigned, labels made again matched to the old speakers (names, colors), no id a caption still names given to a new speaker; `validate`, `setSpeakers` with undo, redo and `null`, a caption's speaker through the caption commands, save and reload; the caption prefix and color, SRT names; `main/cut/speakers.js` (the fake's embeddings, bad windows, cancel, a closed window's embeddings cancelled, an empty model cache, the fake setup); a page script |

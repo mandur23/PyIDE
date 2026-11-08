@@ -11,8 +11,12 @@
 // - Rate Stretch (R) drags an end and changes the speed; Slip (Y) with the first and last frames in the program
 //   monitor, stopping at the source start; Slide (U) trims the neighbours; Pen (P) adds keyframes on the volume and
 //   opacity lines;
-// - Match Frame (F) opens the source at the same frame with the clip's In/Out.
-// Usage: node verify/cut-edit.mjs   (CUT_EDIT_ONLY=keys,lift,paste,nudge,groups,select,extend,rate,slip,slide,pen,match)
+// - Match Frame (F) opens the source at the same frame with the clip's In/Out;
+// - Premiere Pro's keys (the default preset): Ctrl+Shift+I/O/X clear In, Out and both, / marks the selection,
+//   Ctrl+Shift+A deselects, Shift+M and Ctrl+Shift+M go to markers, Ctrl+Alt+M and Ctrl+Alt+Shift+M clear them,
+//   Up/Down stay on the targeted tracks and Shift+Up/Down do not, Alt+Up/Down move clips a track, Alt+drag duplicates,
+//   Ctrl+Shift+Space plays In to Out, Ctrl+N and Ctrl+B; the classic preset brings Alt+X back.
+// Usage: node verify/cut-edit.mjs   (CUT_EDIT_ONLY=keys,lift,paste,nudge,groups,select,extend,rate,slip,slide,pen,match,premiere)
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 
@@ -176,6 +180,10 @@ await section('keys', async () => {
     await press(k);
     check((await js('Cut.app.tool')) === tool, `${k.toUpperCase()} picks the ${tool} tool`);
   }
+  // The timeline's own tool bar is an option now (the Tools panel has the tools, as in Premiere): turned on here.
+  check(await js(`document.querySelector('.cut-tl-tools').hidden`), 'the timeline tool bar is off by default');
+  await js(`(ide.settings.set('cut.timelineTools', true), true)`);
+  await until(`!document.querySelector('.cut-tl-tools').hidden`, 'the timeline tool bar shown', 3000);
   const bar = await js(`['rate', 'slip', 'slide', 'pen'].map((id) => { const b = document.querySelector('.cut-tl-tool[data-tool="' + id + '"]'); return b ? { svg: !!b.querySelector('svg path'), title: b.title } : null; })`);
   check(bar.every((b) => b?.svg) && bar.map((b) => b.title.slice(-3)).join() === '(R),(Y),(U),(P)', `the tool bar has Rate Stretch, Slip, Slide and Pen with icons and keys (${S(bar)})`);
   const order = await js(`[...document.querySelectorAll('.cut-tl-tool')].map((b) => b.dataset.tool).join()`);
@@ -184,8 +192,11 @@ await section('keys', async () => {
   const pen = await js(`[Cut.app.tool, document.querySelector('.cut-tl-tool[data-tool="pen"]').getAttribute('aria-pressed'), Cut.ui.timeline.root.querySelector('.cut-tl-scroll').style.cursor]`);
   check(pen[0] === 'pen' && pen[1] === 'true' && pen[2] === 'cell', `the Pen button picks the tool, shows it pressed and sets its cursor (${S(pen)})`);
   await js(`Cut.app.setTool('select')`);
+  await js(`(ide.settings.set('cut.timelineTools', false), true)`);
 
-  // Find Action runs one of them: Select Clip at Playhead at 5 s
+  // Find Action runs one of them: Select Clip at Playhead at 5 s. Ctrl+Shift+A is Deselect All in the timeline with
+  // the Premiere Pro keys, so this part uses the classic keys.
+  await js(`(Cut.ui.keys.setPreset('classic'), true)`);
   await focusTimeline();
   await setTime(5);
   await press('Ctrl+Shift+A');
@@ -195,6 +206,7 @@ await section('keys', async () => {
   await press('Enter');
   await sleep(200);
   check((await js('__ed.sel()')) === 'A1@0 V1@0', `Find Action runs Select Clip at Playhead (${await js('__ed.sel()')})`);
+  await js(`(Cut.ui.keys.setPreset('premiere'), true)`);
 });
 
 // ---------- Lift and Extract ----------
@@ -416,7 +428,7 @@ await section('rate', async () => {
 
 // ---------- real media for the monitors ----------
 let real = null;
-if (want('slip') || want('match')) {
+if (want('slip') || want('match') || want('premiere')) {
   const mp4 = path.join(home, 'frames.mp4');
   const made = await js(`(async () => {
     try {
@@ -539,6 +551,160 @@ await section('match', async () => {
     return 'other';
   })()`);
   check(n === 60, `the source monitor shows source frame 60 (${n})`);
+});
+
+// ---------- Premiere Pro's keys (the default preset) ----------
+// A key as a real keyboard sends it: the code Chromium gives (Slash, Equal, Backquote, Digit1...) with the modifiers.
+const CODES = { '/': ['/', 'Slash', 191], '=': ['=', 'Equal', 187], '-': ['-', 'Minus', 189], '`': ['`', 'Backquote', 192], Space: [' ', 'Space', 32],
+  ArrowUp: ['ArrowUp', 'ArrowUp', 38], ArrowDown: ['ArrowDown', 'ArrowDown', 40], Escape: ['Escape', 'Escape', 27] };
+async function key(combo) {
+  const parts = combo.split('+');
+  const name = parts.pop();
+  const modifiers = mods(parts);
+  const [k, code, vk] = CODES[name] || (/^\d$/.test(name) ? [name, `Digit${name}`, name.charCodeAt(0)]
+    : [modifiers & 8 ? name.toUpperCase() : name.toLowerCase(), `Key${name.toUpperCase()}`, name.toUpperCase().charCodeAt(0)]);
+  const base = { modifiers, key: k, code, windowsVirtualKeyCode: vk };
+  await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await sleep(70);
+}
+const io = () => js(`[Cut.app.inOut.in == null ? null : Cut.app.inOut.in / ${T}, Cut.app.inOut.out == null ? null : Cut.app.inOut.out / ${T}]`);
+const tNow = () => js(`Cut.app.t / ${T}`);
+
+await section('premiere', async () => {
+  check(await js(`Cut.ui.keys.preset === 'premiere' && ide.settings.get('cut.keyPreset') === 'premiere'`), 'a new user gets the Adobe Premiere Pro keys');
+
+  // In and Out: Ctrl+Shift+I and Ctrl+Shift+O clear one, Ctrl+Shift+X both (Alt+X is the classic key, not Premiere's)
+  await fresh(TWO);
+  await focusTimeline();
+  await setTime(2);
+  await press('i');
+  await setTime(5);
+  await press('o');
+  const marked = await io();
+  await key('Ctrl+Shift+I');
+  const noIn = await io();
+  await press('i');
+  await key('Ctrl+Shift+O');
+  const noOut = await io();
+  check(S(noIn) === S([null, marked[1]]) && S(noOut) === S([5, null]), `Ctrl+Shift+I clears the In and Ctrl+Shift+O the Out (${S(marked)} -> ${S(noIn)}, ${S(noOut)})`);
+  await press('o');
+  await key('Alt+X');
+  const afterAlt = await io();
+  await key('Ctrl+Shift+X');
+  const afterX = await io();
+  check(afterAlt[0] === 5 && afterAlt[1] != null && S(afterX) === S([null, null]), `Ctrl+Shift+X clears In and Out; Alt+X does nothing with these keys (${S(afterAlt)} -> ${S(afterX)})`);
+
+  // Mark Selection (/): In and Out around the selected clips
+  await clickAt(await pt(14, 'V1'));
+  await key('/');
+  check(S(await io()) === S([10, 20]), `/ marks the selected clip's range (${S(await io())})`);
+  await key('Ctrl+Shift+X');
+
+  // Ctrl+Shift+A deselects in the timeline (Find Action keeps the key elsewhere)
+  check((await js('__ed.sel()')) === 'A1@10 V1@10', `a click selects the clip and its link (${await js('__ed.sel()')})`);
+  await key('Ctrl+Shift+A');
+  check((await js('__ed.sel()')) === '' && !(await js(`!!document.querySelector('#popup:not(.hidden)')`)), `Ctrl+Shift+A deselects all in the timeline instead of opening Find Action (${await js('__ed.sel()')})`);
+
+  // markers: Shift+M next, Ctrl+Shift+M previous, Ctrl+Alt+M clears the one at the playhead, Ctrl+Alt+Shift+M all of them
+  await js(`(() => { const C = Cut.commands, s = __ed.seq().id; for (const t of [3, 8]) Cut.app.history.do(C.addMarker(s, { t: t * ${T} })); return true; })()`);
+  await setTime(5);
+  await key('Shift+M');
+  const next = await tNow();
+  await key('Ctrl+Shift+M');
+  const prev = await tNow();
+  check(next === 8 && prev === 3, `Shift+M goes to the next marker and Ctrl+Shift+M to the previous one (5 -> ${next} -> ${prev})`);
+  await key('Ctrl+Alt+M');
+  const left = await js(`__ed.seq().markers.map((m) => m.t / ${T}).join()`);
+  await undo();
+  const s0 = await steps();
+  await key('Ctrl+Alt+Shift+M');
+  const none = await js(`__ed.seq().markers.length`);
+  const allStep = [await steps() - s0, await label()];
+  await undo();
+  check(left === '8' && none === 0 && allStep[0] === 1 && allStep[1] === 'Clear All Markers' && (await js(`__ed.seq().markers.length`)) === 2,
+    `Ctrl+Alt+M clears the marker at the playhead and Ctrl+Alt+Shift+M every marker in one step (${left}; ${none} left, ${S(allStep)})`);
+
+  // Up/Down: the edit points of the targeted tracks; Shift+Up/Down: of any track
+  await fresh({ clips: [{ media: 0, at: 0, len: 10, audio: null }] });
+  await js(`(() => { const C = Cut.commands; Cut.app.history.do(C.place(__ed.seq().id, { source: { media: Cut.app.project.media[1].id }, in: 0, out: 3 * ${T}, at: 4 * ${T}, video: null, audio: 'A2', mode: 'overwrite' })); return true; })()`);
+  check((await lay()) === 'A2:4-7[0] V1:0-10[0]', `a video clip on V1 and a sound on A2 (${await lay()})`);
+  await focusTimeline();
+  await js(`(Cut.ui.setTargets(Cut.app, ['V1']), true)`);
+  await setTime(0);
+  await key('ArrowDown');
+  const down = await tNow();
+  await setTime(0);
+  await key('Shift+ArrowDown');
+  const anyDown = await tNow();
+  await setTime(10);
+  await key('Shift+ArrowUp');
+  const anyUp = await tNow();
+  check(down === 10 && anyDown === 4 && anyUp === 7, `Down skips the untargeted A2 (0 -> ${down}); Shift+Down and Shift+Up stop at A2's edits too (0 -> ${anyDown}, 10 -> ${anyUp})`);
+  await js(`(Cut.ui.setTargets(Cut.app, null), true)`);
+
+  // Alt+Up/Alt+Down: the selected clips one track up and down
+  await fresh(TWO);
+  await focusTimeline();
+  await clickAt(await pt(4, 'V1'), { modifiers: ['Alt'] });
+  await key('Alt+ArrowUp');
+  const up = await lay();
+  await key('Alt+ArrowDown');
+  const back = await lay();
+  check(up === 'A1:0-10[0] A1:10-20[0] V1:10-20[0] V2:0-10[0]' && back === START, `Alt+Up moves the selected video clip to V2 and Alt+Down back (${up}; ${back})`);
+  await clickAt(await pt(4, 'V1'));
+  await key('Alt+ArrowUp');
+  check((await lay()) === 'A1:0-10[0] A1:10-20[0] V1:10-20[0] V2:0-10[0]', `with its sound selected too, the sound stays on A1 where there is no track above (${await lay()})`);
+  await undo();
+
+  // Alt+drag duplicates: the copies land where the clips are dropped, linked to each other; the clips stay
+  // (40 s in view, so the drop point is on screen on a narrow window too)
+  await js(`(Cut.ui.timeline.setZoom(Math.min(__ed.pps(), (Cut.ui.timeline.root.querySelector('.cut-tl-scroll').clientWidth - 20) / 40), { t: 0, x: 0 }), Cut.ui.timeline.setScroll(0, 0), true)`);
+  await sleep(100);
+  await clickAt(await pt(14, 'V1'));
+  const before = await steps();
+  await drag(await pt(14, 'V1'), await pt(29, 'V1'), { modifiers: ['Alt'] });
+  const dup = await lay();
+  const links = await js(`(() => { const c = __ed.seq().clips; const a = c.filter((x) => x.start === 25 * ${T}); const o = c.find((x) => x.start === 10 * ${T}); return !!o && a.length === 2 && !!a[0].link && a[0].link === a[1].link && a[0].link !== o.link; })()`);
+  check(dup === 'A1:0-10[0] A1:10-20[0] A1:25-35[0] V1:0-10[0] V1:10-20[0] V1:25-35[0]' && links && (await steps()) === before + 1,
+    `Alt+drag leaves the clips and puts linked copies where they were dropped, in one step (${dup}, linked ${links})`);
+  await undo();
+  check((await lay()) === START, 'Ctrl+Z takes the copies away');
+
+  // Play In to Out (Ctrl+Shift+Space) on the real test source
+  if (real) {
+    await fresh({ media: [real], clips: [{ media: 0, at: 0, len: 4, audio: null }] });
+    await focusTimeline();
+    await js(`(Cut.app.setInOut({ in: 1 * ${T}, out: 2 * ${T} }), Cut.app.setTime(3 * ${T}), true)`);
+    await key('Ctrl+Shift+Space');
+    const started = await until('Cut.app.playing', 'playing', 5000).then(() => true, () => false);
+    const from = await tNow();
+    await until('!Cut.app.playing', 'stopped at the Out', 8000).catch(() => {});
+    const to = await tNow();
+    check(started && from >= 1 && from < 1.6 && to > 1.9 && to < 2, `Ctrl+Shift+Space plays from the In and stops at the Out (${from.toFixed(2)} -> ${to.toFixed(2)} s)`);
+  } else check(false, 'the real test source for Play In to Out');
+
+  // Ctrl+N: New Sequence; Ctrl+B: New Bin
+  await focusTimeline();
+  await key('Ctrl+N');
+  const seqDialog = await until(`!!document.querySelector('#cutSequenceDialog')`, 'the new sequence dialog', 4000).then(() => true, () => false);
+  if (seqDialog) await js(`([...document.querySelectorAll('#cutSequenceDialog .dialog-buttons button')].pop().click(), true)`);
+  const bins = await js('Cut.app.project.bins.length');
+  await focusTimeline();
+  await key('Ctrl+B');
+  check(seqDialog && (await js('Cut.app.project.bins.length')) === bins + 1, `Ctrl+N opens New Sequence and Ctrl+B makes a bin (${seqDialog}, ${bins} -> ${await js('Cut.app.project.bins.length')})`);
+
+  // the classic keys are still there to pick: Alt+X clears again and Ctrl+Shift+X does not
+  await js(`(Cut.ui.keys.setPreset('classic'), true)`);
+  await focusTimeline();
+  await js(`(Cut.app.setInOut({ in: 1 * ${T}, out: 2 * ${T} }), true)`);
+  await key('Ctrl+Shift+X');
+  const classicX = await io();
+  await key('Alt+X');
+  check(S(classicX) === S([1, 2]) && S(await io()) === S([null, null]) && (await js(`ide.actions.find((a) => a.id === 'Cut.clearInOut').keys.join()`)) === 'Alt+X',
+    `with the classic preset Alt+X clears In and Out and Ctrl+Shift+X does not (${S(classicX)})`);
+  await js(`(Cut.ui.keys.setPreset('premiere'), true)`);
+  check((await js(`ide.actions.find((a) => a.id === 'Cut.clearInOut').keys.join()`)) === 'Ctrl+Shift+X', 'and the Premiere preset comes back');
 });
 
 ctx.finish();

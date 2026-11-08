@@ -1,0 +1,55 @@
+/* The Audio Track Mixer (ui-mixer.js), the Essential Sound panel and the effect controls' frequency response graph
+   (ui-audiofx.js). */
+.cut-mixer { --cut-meter-low: #3fae5a; --cut-meter-mid: #e6c84a; --cut-meter-high: #e05555; --cut-meter-bg: var(--gray3); --cap-h: 22px;
+  display: flex; flex: 1; min-height: 0; min-width: 0; outline: none; background: var(--gray1); }
+.cut-mx-strips { display: flex; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+.cut-mx-masterbox { display: flex; flex: none; border-left: 2px solid var(--gray4); }
+.cut-mx-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gray8); pointer-events: none; }
+.cut-mx-empty[hidden] { display: none; }
+.cut-mx-strip { display: flex; flex-direction: column; flex: none; width: 76px; min-height: 0; padding: 4px 4px 2px; gap: 4px; box-sizing: border-box;
+  border-right: 1px solid var(--gray3); }
+.cut-mx-strip.master { width: 84px; background: color-mix(in srgb, var(--gray2) 70%, transparent); }
+.cut-mx-top { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; }
+.cut-mx-knob { width: 28px; height: 28px; cursor: ns-resize; touch-action: none; }
+.cut-mx-knob svg { display: block; }
+.cut-mx-knob .ring { fill: var(--gray3); stroke: var(--gray6); stroke-width: 1.2; }
+.cut-mx-knob .arc { fill: none; stroke: var(--cut-accent); stroke-width: 2.4; }
+.cut-mx-knob .mark { stroke: var(--gray12); stroke-width: 2; stroke-linecap: round; }
+.cut-mx-knob:hover .ring { stroke: var(--gray8); }
+.cut-mx-panvalue { font-family: var(--mono); font-size: 10px; color: var(--gray9); height: 12px; line-height: 12px; }
+.cut-mx-btns { display: flex; gap: 3px; }
+.cut-mx-btns .cut-btn { min-width: 0; width: 24px; height: 18px; padding: 0; justify-content: center; font-size: 11px; font-weight: 600; }
+.cut-mx-mute[aria-pressed="true"] { background: #2f6fb8; color: #fff; border-color: #2f6fb8; }
+.cut-mx-solo[aria-pressed="true"] { background: #c9a227; color: #1b1b1b; border-color: #c9a227; }
+.cut-mx-mastertitle { height: 58px; display: flex; align-items: center; color: var(--gray10); font-weight: 600; }
+.cut-mx-body { flex: 1; min-height: 60px; display: grid; grid-template-columns: 20px 18px 1fr; gap: 3px; }
+.cut-mx-scale { position: relative; }
+.cut-mx-tick { position: absolute; right: 0; transform: translateY(50%); font-family: var(--mono); font-size: 8px; line-height: 9px; color: var(--gray8); white-space: nowrap; }
+.cut-mx-fader { position: relative; cursor: ns-resize; touch-action: none; }
+.cut-mx-groove { position: absolute; left: 50%; top: calc(var(--cap-h) / 2); bottom: calc(var(--cap-h) / 2); width: 4px; margin-left: -2px; border-radius: 2px; background: var(--gray4); box-shadow: inset 0 0 0 1px var(--gray5); }
+.cut-mx-unity { position: absolute; left: 1px; right: 1px; height: 1px; background: var(--gray8); }
+.cut-mx-cap { position: absolute; left: 0; right: 0; height: var(--cap-h); border-radius: 3px; box-sizing: border-box;
+  background: linear-gradient(var(--gray8), var(--gray6)); border: 1px solid var(--gray9); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+.cut-mx-cap::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 2px; margin-top: -1px; background: var(--gray12); }
+.cut-mx-fader:hover .cut-mx-cap { border-color: var(--gray11); }
+.cut-mx-meter { position: relative; min-width: 8px; margin: calc(var(--cap-h) / 2) 0; }
+.cut-mx-meter-canvas { position: absolute; left: 0; top: 0; }
+.cut-mx-value { flex: none; text-align: center; font-family: var(--mono); font-size: 10px; color: var(--gray11); background: var(--gray2); border: 1px solid var(--gray4); border-radius: 3px; height: 16px; line-height: 16px; cursor: text; }
+.cut-mx-name { flex: none; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.cut-mx-name-text { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--gray11); }
+.cut-mx-name-id { font-family: var(--mono); font-size: 9px; color: var(--gray8); height: 11px; }
+.cut-mx-strip.muted .cut-mx-cap { opacity: 0.6; }
+
+.cut-es { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; gap: 8px; outline: none; }
+.cut-es-sel { color: var(--gray9); font-size: 11px; }
+.cut-es-sec { display: flex; flex-direction: column; gap: 4px; }
+.cut-es-title { color: var(--gray10); font-weight: 600; font-size: 11px; text-transform: none; border-bottom: 1px solid var(--gray3); padding-bottom: 2px; }
+.cut-es-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.cut-es-role[aria-pressed="true"] { background: color-mix(in srgb, var(--cut-accent) 30%, var(--gray3)); border-color: var(--cut-accent); color: var(--gray12); }
+.cut-es .cut-btn { justify-content: flex-start; min-width: 0; }
+.cut-es .cut-btn .cut-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-es-hint { color: var(--gray8); font-size: 11px; line-height: 1.4; }
+
+.cut-ec-graph { height: 96px; margin: 4px 6px 4px 18px; border: 1px solid var(--gray4); border-radius: 3px; overflow: hidden; }
+.cut-ec-graph-canvas { display: block; }
+.cut-mixer { position: relative; }

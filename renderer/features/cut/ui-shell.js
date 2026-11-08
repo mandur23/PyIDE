@@ -1,5 +1,7 @@
-// The editor's frame (docs/cut-architecture.md section 10): the top bar, the workspaces (fixed panel layouts the top
-// tabs switch between) and the project's life: an untitled project at start, New, Open, Save, Save As, an autosave
+// The editor's frame (docs/cut-architecture.md section 10): the menu bar (ui-menubar.js) and the top bar, the
+// workspaces (Premiere Pro's panel layouts the top tabs switch between: Editing, Color, Effects, Audio, Captions and
+// Graphics, plus Export), saving and resetting a workspace's layout, maximizing one frame, and the project's life: an
+// untitled project at start, New, Open, Save, Save As, Save a Copy, an autosave
 // of the latest state 2 s after edits stop and a copy every few minutes (settings cut.autosave.minutes and
 // cut.autosave.keep), the recovery offer after a crash, and the question about unsaved changes before the project or
 // the window closes.
@@ -22,20 +24,37 @@
   const copyKeep = () => { const v = Math.round(Number(ide.settings.get('cut.autosave.keep', COPY_KEEP))); return Number.isFinite(v) && v >= 1 ? Math.min(100, v) : COPY_KEEP; };
   const FILTERS = () => [{ name: tr('Nano Studio Cut project'), extensions: ['ncut'] }];
 
-  // rows top to bottom, slots left to right; sizes are percentages. A slot shows its panels as tabs.
-  // A slot with `dock: true` takes the panels the Window menu adds to its workspace.
+  // rows top to bottom, slots left to right; sizes are percentages. A slot shows its panels as tabs; a panel that is
+  // not registered (the audio mixer and the color scopes until their files load) is left out of its slot.
+  // A slot with `dock: true` takes the panels the Window menu adds to its workspace. `min` is a smaller least width (px). A `fixed` slot is that many pixels
+  // wide with no tabs (the Tools panel between the project panel and the timeline, as in Premiere Pro); the splitter
+  // beside it moves the space between its two other neighbours.
+  const TOOLS_SLOT = { panels: ['tools'], fixed: 36 };
+  // Panels other files bring (the color scopes, the audio mixer, Essential Sound): their slots wait for them.
+  const OPTIONAL = new Set(['scopes', 'mixer', 'essential']);
   const WORKSPACES = [
+    // Premiere's Editing: Source and Effect Controls over the Project panel and its tabs, the Program monitor over the
+    // timeline, the Tools panel between them and the audio meters at the right of the timeline.
     { id: 'editing', title: () => tr('Editing'), rows: [
-      { size: 55, slots: [{ size: 42, panels: ['source', 'controls'] }, { size: 51, panels: ['program'] }, { size: 7, panels: ['meters'] }] },
-      { size: 45, slots: [{ size: 28, panels: ['project', 'effects', 'markers', 'history', 'transcript'], dock: true }, { size: 72, panels: ['timeline'] }] },
+      { size: 54, slots: [{ size: 45, panels: ['source', 'controls'] }, { size: 55, panels: ['program'] }] },
+      { size: 46, slots: [{ size: 28, panels: ['project', 'effects', 'markers', 'history', 'transcript'], dock: true }, TOOLS_SLOT, { size: 66, panels: ['timeline'] }, { size: 6, panels: ['meters'], min: 56 }] },
     ] },
     { id: 'color', title: () => tr('Color'), rows: [
-      { size: 60, slots: [{ size: 68, panels: ['program'] }, { size: 32, panels: ['color', 'controls'] }] },
-      { size: 40, slots: [{ size: 26, panels: ['project', 'effects', 'history'], dock: true }, { size: 74, panels: ['timeline'] }] },
+      { size: 60, slots: [{ size: 28, panels: ['scopes', 'source'] }, { size: 44, panels: ['program'] }, { size: 28, panels: ['color', 'controls'] }] },
+      { size: 40, slots: [{ size: 24, panels: ['project', 'effects', 'history'], dock: true }, TOOLS_SLOT, { size: 70, panels: ['timeline'] }, { size: 6, panels: ['meters'], min: 56 }] },
+    ] },
+    { id: 'effects', title: () => tr('Effects'), rows: [
+      { size: 56, slots: [{ size: 30, panels: ['controls', 'source'] }, { size: 46, panels: ['program'] }, { size: 24, panels: ['effects', 'markers'] }] },
+      { size: 44, slots: [{ size: 24, panels: ['project', 'history'], dock: true }, TOOLS_SLOT, { size: 70, panels: ['timeline'] }, { size: 6, panels: ['meters'], min: 56 }] },
+    ] },
+    // Premiere's Audio: the Audio Track Mixer (panel 'mixer') top left, the program monitor, Essential Sound at the right.
+    { id: 'audio', title: () => tr('Audio'), rows: [
+      { size: 56, slots: [{ size: 38, panels: ['mixer', 'controls', 'source'] }, { size: 42, panels: ['program'] }, { size: 20, panels: ['essential'] }] },
+      { size: 44, slots: [{ size: 24, panels: ['project', 'effects', 'markers', 'history', 'transcript'], dock: true }, TOOLS_SLOT, { size: 66, panels: ['timeline'] }, { size: 10, panels: ['meters'], min: 56 }] },
     ] },
     { id: 'captions', title: () => tr('Captions and Graphics'), rows: [
       { size: 58, slots: [{ size: 30, panels: ['captions', 'transcript', 'markers'] }, { size: 44, panels: ['program'] }, { size: 26, panels: ['text', 'controls'] }] },
-      { size: 42, slots: [{ size: 26, panels: ['project', 'effects', 'history'], dock: true }, { size: 74, panels: ['timeline'] }] },
+      { size: 42, slots: [{ size: 26, panels: ['project', 'effects', 'history'], dock: true }, TOOLS_SLOT, { size: 74, panels: ['timeline'] }] },
     ] },
     { id: 'export', title: () => tr('Export'), rows: [
       { size: 62, slots: [{ size: 36, panels: ['export', 'queue', 'markers'], dock: true }, { size: 57, panels: ['program'] }, { size: 7, panels: ['meters'] }] },
@@ -43,7 +62,7 @@
     ] },
   ];
   // The Window menu's order.
-  const PANEL_ORDER = ['project', 'source', 'program', 'timeline', 'controls', 'effects', 'color', 'text', 'captions', 'transcript', 'markers', 'history', 'meters', 'export', 'queue'];
+  const PANEL_ORDER = ['project', 'source', 'program', 'timeline', 'tools', 'controls', 'effects', 'mixer', 'essential', 'color', 'scopes', 'text', 'captions', 'transcript', 'markers', 'history', 'meters', 'export', 'queue'];
 
   let app = null;
   let root = null;
@@ -103,13 +122,17 @@
       const rowEl = el('div', 'cut-row');
       rowEl.style.flexGrow = String(sizes.rows[ri]);
       rowDef.slots.forEach((slotDef, si) => {
-        if (si) rowEl.appendChild(splitter('v', rowEl, ws, ri, si));
+        // No splitter right after a fixed slot: the one before it moves the space around it.
+        if (si && !rowDef.slots[si - 1].fixed) rowEl.appendChild(splitter('v', rowEl, ws, ri, si));
         rowEl.appendChild(slot(ws, ri, si, slotDef, sizes.slots[ri][si]));
       });
+      for (const bar of rowEl.querySelectorAll(':scope > .cut-splitter')) if (bar.nextElementSibling?.hidden) bar.hidden = true;
       grid.appendChild(rowEl);
     });
     stage.replaceChildren(grid);
     root.dataset.workspace = ws.id;
+    for (const t of root.querySelectorAll('.cut-ws-tab')) t.hidden = false;
+    fitTabs();
     app.emit('workspace', { id: ws.id });
     // The keyboard stays with its panel when that panel is still on screen; otherwise the main one of this workspace.
     if (!grid.querySelector(`.cut-panel[data-panel="${app.focusPanel}"]`)) {
@@ -120,10 +143,18 @@
   }
 
   function slot(ws, ri, si, def, size) {
-    const s = el('div', 'cut-slot');
-    s.style.flexGrow = String(size);
+    const s = el('div', `cut-slot${def.fixed ? ' fixed' : ''}`);
+    if (def.fixed) s.style.flex = `0 0 ${def.fixed}px`;
+    else s.style.flexGrow = String(size);
+    // a narrow panel (the audio meters beside the timeline, as in Premiere) may go below the usual 80 px
+    if (def.min) s.style.minWidth = `${def.min}px`;
     const added = addedPanels(ws).filter((x) => x.slot === `${ri}:${si}`).map((x) => x.panel);
     const available = [...def.panels, ...added].filter((p) => ui.panels.has(p));
+    // A slot kept for panels that are not there (the mixer before its file loads) stays out of sight.
+    if (!available.length && def.panels.every((p) => OPTIONAL.has(p))) {
+      s.hidden = true;
+      return s;
+    }
     const list = available.length ? available : def.panels.slice(0, 1);
     const tabs = el('div', 'cut-slot-tabs', undefined, { role: 'tablist' });
     const body = el('div', 'cut-slot-body');
@@ -139,7 +170,9 @@
       if (focus) focusPanel(id);
     };
     for (const id of list) {
-      const t = el('button', 'cut-slot-tab', panelTitle(id), { 'data-panel': id, role: 'tab', type: 'button' });
+      // The label shortens with an ellipsis when the slot is narrow, so every tab (and an added tab's close mark) stays on screen.
+      const t = el('button', 'cut-slot-tab', undefined, { 'data-panel': id, role: 'tab', type: 'button', title: panelTitle(id) });
+      t.appendChild(el('span', 'cut-slot-tab-label', panelTitle(id)));
       t.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
       t.addEventListener('click', () => show(id, { focus: true }));
       // A panel the Window menu added has a close mark that takes it out of this workspace again.
@@ -164,8 +197,16 @@
       if (e.button !== 0) return;
       e.preventDefault();
       bar.setPointerCapture(e.pointerId);
-      const a = bar.previousElementSibling;
-      const b = bar.nextElementSibling;
+      // the nearest resizable neighbours (a fixed slot keeps its width)
+      const near = (dirn) => {
+        let x = bar;
+        do x = dirn < 0 ? x.previousElementSibling : x.nextElementSibling;
+        while (x && (x.classList.contains('cut-splitter') || x.classList.contains('fixed') || x.hidden));
+        return x;
+      };
+      const a = near(-1);
+      const b = near(1);
+      if (!a || !b) return;
       const ra = a.getBoundingClientRect();
       const rb = b.getBoundingClientRect();
       const ga = Number(a.style.flexGrow) || 1;
@@ -182,17 +223,65 @@
       const up = () => {
         bar.removeEventListener('pointermove', move);
         bar.removeEventListener('pointerup', up);
-        const grid = stage.querySelector('.cut-grid');
-        const rows = [...grid.querySelectorAll(':scope > .cut-row')];
-        ide.settings.set(sizesKey(ws.id), {
-          rows: rows.map((r) => Number(r.style.flexGrow) || 1),
-          slots: rows.map((r) => [...r.querySelectorAll(':scope > .cut-slot')].map((x) => Number(x.style.flexGrow) || 1)),
-        });
+        ide.settings.set(sizesKey(ws.id), currentSizes());
       };
       bar.addEventListener('pointermove', move);
       bar.addEventListener('pointerup', up);
     });
     return bar;
+  }
+
+  // The splitters' places in the workspace on screen (what `cut.layout.<id>` keeps).
+  function currentSizes() {
+    const rows = [...stage.querySelectorAll('.cut-grid > .cut-row')];
+    return {
+      rows: rows.map((r) => Number(r.style.flexGrow) || 1),
+      slots: rows.map((r) => [...r.querySelectorAll(':scope > .cut-slot')].map((x) => Number(x.style.flexGrow) || 1)),
+    };
+  }
+
+  // ---------- saved layouts ----------
+  // Save Changes to This Workspace keeps its splitters and the panels the Window menu added (`cut.layoutSaved`);
+  // Reset to Saved Layout ("이 작업 영역 재설정", Alt+Shift+0) brings that back, or the built-in layout when none was saved.
+  const SAVED_KEY = 'cut.layoutSaved';
+  const savedLayouts = () => { const v = ide.settings.get(SAVED_KEY, null); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+  function saveWorkspace(id = current) {
+    const ws = WORKSPACES.find((w) => w.id === id);
+    if (!ws) return false;
+    const sizes = id === current ? currentSizes() : savedSizes(ws);
+    ide.settings.set(SAVED_KEY, { ...savedLayouts(), [id]: { sizes, added: addedPanels(ws) } });
+    ui.toast(tr('Saved the {name} workspace', { name: ws.title() }));
+    return true;
+  }
+  function resetWorkspace(id = current) {
+    const ws = WORKSPACES.find((w) => w.id === id);
+    if (!ws) return false;
+    const saved = savedLayouts()[id];
+    ide.settings.set(sizesKey(id), saved?.sizes || null);
+    saveAdded(id, Array.isArray(saved?.added) ? saved.added : []);
+    for (const k of [...activeTab.keys()]) if (k.startsWith(`${id}:`)) activeTab.delete(k);
+    setWorkspace(id);
+    return true;
+  }
+
+  // ---------- maximize a frame (` and Shift+`) ----------
+  // One slot fills the workspace until the key comes again (or another workspace shows). underCursor: the slot under
+  // the pointer, else the one whose panel has the keyboard.
+  let pointer = null;
+  function toggleMaximize({ underCursor = false } = {}) {
+    const grid = stage.querySelector('.cut-grid');
+    if (!grid) return false;
+    if (grid.classList.contains('maximized')) {
+      grid.classList.remove('maximized');
+      for (const s of grid.querySelectorAll('.cut-slot.max')) s.classList.remove('max');
+      return false;
+    }
+    const hit = underCursor && pointer ? document.elementFromPoint(pointer.x, pointer.y)?.closest?.('.cut-grid .cut-slot') : null;
+    const s = hit || mounted.get(app.focusPanel)?.host.closest('.cut-slot');
+    if (!s || !grid.contains(s) || s.classList.contains('fixed')) return false;
+    s.classList.add('max');
+    grid.classList.add('maximized');
+    return true;
   }
 
   function focusPanel(id) {
@@ -248,7 +337,23 @@
     setWorkspace(ws.id);
   }
   const panelIds = () => [...PANEL_ORDER.filter((id) => ui.panels.has(id)), ...[...ui.panels.keys()].filter((id) => !PANEL_ORDER.includes(id))];
-  const windowMenuItems = () => panelIds().map((id) => ({ label: panelTitle(id), checked: inWorkspace(id), run: () => openPanel(id) }));
+  const panelItems = () => panelIds().map((id) => ({ label: panelTitle(id), checked: inWorkspace(id), keyAction: `Cut.window.${id}`, run: () => openPanel(id) }));
+  // Window > Workspaces, as in Premiere: the workspaces, then Reset to Saved Layout and Save Changes.
+  const workspaceItems = () => [
+    ...WORKSPACES.map((ws) => ({ label: ws.title(), checked: ws.id === current, keyAction: `Cut.workspace.${ws.id}`, run: () => setWorkspace(ws.id) })),
+    { separator: true },
+    { label: tr('Reset to Saved Layout'), keyAction: 'Cut.workspace.reset', run: () => resetWorkspace() },
+    { label: tr('Save Changes to This Workspace'), run: () => saveWorkspace() },
+  ];
+  const toolBarItem = () => ({ label: tr('Timeline Tool Bar'), checked: !!ide.settings.get('cut.timelineTools', false), run: () => ide.settings.set('cut.timelineTools', !ide.settings.get('cut.timelineTools', false)) });
+  // The Window menu (the top bar's button and the menu bar's Window): every panel, then the workspaces.
+  const windowMenuItems = () => [
+    ...panelItems(),
+    { separator: true },
+    { label: tr('Workspaces'), submenu: workspaceItems },
+    toolBarItem(),
+    { label: tr('Maximize or Restore Active Frame'), keyAction: 'Cut.maximizePanel', run: () => toggleMaximize() },
+  ];
   function windowButton() {
     const b = button({ icon: 'grid', label: tr('Window'), title: tr('Window'), cls: 'cut-window-btn', onClick: () => ui.menu(b, windowMenuItems()) });
     b.appendChild(el('span', 'cut-auto-caret', '▾'));
@@ -367,6 +472,23 @@
     const path = await ide.api.invoke('cut:saveAs', { defaultPath, filters: FILTERS(), title: tr('Save Project As') });
     if (!path) return false;
     return writeTo(path);
+  }
+  // Save a Copy (Ctrl+Alt+S): the project as it is now into another file; the open project stays where it was, with
+  // its unsaved changes still unsaved.
+  async function saveCopy() {
+    if (!app.history) return false;
+    const home = await ide.api.invoke('cut:home').catch(() => null);
+    const name = tr('{name} copy', { name: projectName() });
+    const dir = app.path ? app.path.replace(/[\\/][^\\/]*$/, '') : home?.projects || '';
+    const path = await ide.api.invoke('cut:saveAs', { defaultPath: dir ? `${dir}\\${name}.ncut` : `${name}.ncut`, filters: FILTERS(), title: tr('Save a Copy') });
+    if (!path) return false;
+    const r = await ide.api.invoke('cut:projectWrite', path, app.history.serialize());
+    if (!r?.ok) {
+      ui.notify(tr('The project could not be saved: {error}', { error: r?.error?.message || r?.error?.code || tr('unknown error') }), { kind: 'error' });
+      return false;
+    }
+    ui.toast(tr('Saved a copy as {name}', { name: ui.basename(r.path || path) }));
+    return true;
   }
 
   // Unsaved changes: asks Save, Don't Save or Cancel. -> true when it is fine to go on (saved or discarded).
@@ -535,10 +657,27 @@
     const tabs = el('nav', 'cut-ws-tabs', undefined, { role: 'tablist' });
     for (const ws of WORKSPACES) {
       const t = el('button', 'cut-ws-tab', ws.title(), { type: 'button', role: 'tab', 'data-ws': ws.id });
+      ide.keymap.tooltip(t, ws.title(), `Cut.workspace.${ws.id}`);
       t.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
       t.addEventListener('click', () => setWorkspace(ws.id));
+      // As Premiere's workspace tabs: Reset to Saved Layout and Save Changes for that workspace.
+      t.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        ui.menu(e.clientX, e.clientY, [
+          { label: tr('Reset to Saved Layout'), keyAction: ws.id === current ? 'Cut.workspace.reset' : undefined, run: () => resetWorkspace(ws.id) },
+          { label: tr('Save Changes to This Workspace'), run: () => saveWorkspace(ws.id) },
+        ]);
+      });
       tabs.appendChild(t);
     }
+    // The tabs that do not fit go into a » menu at the end, as in Premiere.
+    wsMore = el('button', 'cut-ws-more', '»', { type: 'button', title: tr('More Workspaces'), 'aria-label': tr('More Workspaces') });
+    wsMore.hidden = true;
+    wsMore.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
+    wsMore.addEventListener('click', () => ui.menu(wsMore, WORKSPACES.filter((ws) => tabs.querySelector(`.cut-ws-tab[data-ws="${ws.id}"]`)?.hidden)
+      .map((ws) => ({ label: ws.title(), run: () => setWorkspace(ws.id) }))));
+    tabs.appendChild(wsMore);
+    wsTabs = tabs;
     const right = el('div', 'cut-topbar-group right');
     const exportBtn = button({ icon: 'export', label: tr('Export'), title: tr('Export'), action: 'export', cls: 'cut-export-btn accent' });
     // The Automation menu (ui-auto.js) when it loaded.
@@ -548,7 +687,23 @@
     if (ui.settingsButton) right.appendChild(ui.settingsButton());
     right.append(button({ icon: 'add', title: tr('Import Media…'), action: 'import', cls: 'cut-import-btn' }), exportBtn);
     bar.append(brand, file, edit, project, tabs, right);
+    ide.util.observeSize(bar, () => fitTabs());
     return bar;
+  }
+  let wsTabs = null;
+  let wsMore = null;
+  // Hides the last workspace tabs (never the one shown) until the rest fit, and shows » for them.
+  function fitTabs() {
+    if (!wsTabs) return;
+    const list = [...wsTabs.querySelectorAll('.cut-ws-tab')];
+    for (const t of list) t.hidden = false;
+    wsMore.hidden = true;
+    if (wsTabs.scrollWidth <= wsTabs.clientWidth + 1) return;
+    wsMore.hidden = false;
+    for (const t of list.reverse()) {
+      if (wsTabs.scrollWidth <= wsTabs.clientWidth + 1) break;
+      if (t.dataset.ws !== current) t.hidden = true;
+    }
   }
   function refreshTitle() {
     if (!nameEl || !app.history) return;
@@ -576,8 +731,12 @@
     stage = el('div', 'cut-stage');
     shelf = el('div', 'cut-shelf');
     shelf.hidden = true;
+    // Premiere's menu bar (ui-menubar.js) over the top bar's quick buttons, when that file loaded.
+    const menubar = ui.menubar?.build?.(app);
+    if (menubar) root.appendChild(menubar);
     root.append(topBar(), stage, shelf);
     host.replaceChildren(root);
+    root.addEventListener('pointermove', (e) => { pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
     root.addEventListener('pointerdown', (e) => {
       const p = e.target.closest?.('.cut-panel');
       if (p) app.setFocus(p.dataset.panel);
@@ -608,13 +767,18 @@
     start,
     workspaces: WORKSPACES,
     setWorkspace,
+    resetWorkspace,
+    saveWorkspace,
+    toggleMaximize,
     showPanel,
     openPanel,
     windowMenuItems,
+    workspaceItems,
+    panelItems,
     focusPanel,
     mountedPanel: (id) => mounted.get(id)?.host || null,
     lifecycle: {
-      newProject, open, openPath, save, saveAs, askToSave, autosaveNow, autosaveCopy, offerRecovery,
+      newProject, open, openPath, save, saveAs, saveCopy, askToSave, autosaveNow, autosaveCopy, offerRecovery,
       get key() { return key; },
       get dirty() { return dirty(); },
       get lastAutosave() { return lastAutosave; },

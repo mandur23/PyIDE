@@ -5,6 +5,11 @@
 // title 90%), zoom, playback quality, a dropped-frames count and full screen. The source monitor also has Insert and
 // Overwrite (',' '.') and handles to drag the clip, or only its video or audio, onto the timeline.
 //
+// The button bar under the picture follows Premiere Pro's default set and order (Add Marker, Mark In, Mark Out, Go to In,
+// Step Back, Play-Stop, Step Forward, Go to Out, then Insert and Overwrite in the source monitor or Lift and Extract in
+// the program monitor, and Export Frame). Its "+" opens the Button Editor, which adds or takes away buttons (Loop, Play
+// In to Out, Clear In/Out, the edit and marker steps...); the choice is the setting `cut.<source|program>.buttons`.
+//
 // Cut.ui.monitors: { source, program }, each { el, player, app, fullscreen() }; program.showTrim({left, right} | null)
 // shows two sequence frames side by side while the timeline trims (the frames on either side of the edit point), slips
 // (the clip's first and last frame) or slides; program.trimTimes is what it shows.
@@ -18,7 +23,99 @@
   const SHUTTLE = [1, 2, 4, 8];
   const ZOOMS = ['fit', 25, 50, 75, 100, 150, 200, 400];
   const QUALITIES = [[1, 'Full'], [0.5, '1/2'], [0.25, '1/4']];
-  const PROGRAM_PANELS = ['program', 'timeline', 'controls', 'effects', 'color', 'text', 'captions', 'export'];
+  const PROGRAM_PANELS = ['program', 'timeline', 'controls', 'effects', 'color', 'scopes', 'text', 'captions', 'export', 'tools'];
+
+  // ---------- the button bar ----------
+  // Glyphs for the buttons ui-base has none for. Constant markup only.
+  const svg = (body) => `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+  const GLYPHS = {
+    addMarker: svg('<path d="M4 2.5h8v8L8 14l-4-3.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'),
+    lift: svg('<rect x="1.5" y="10" width="13" height="3.5" rx=".5" stroke="currentColor"/><rect x="5" y="10" width="6" height="3.5" fill="currentColor" opacity=".35"/><path d="M8 8.5V2M5.5 4.5 8 2l2.5 2.5" stroke="currentColor" stroke-width="1.3"/>'),
+    extract: svg('<rect x="1.5" y="10" width="4" height="3.5" rx=".5" stroke="currentColor"/><rect x="10.5" y="10" width="4" height="3.5" rx=".5" stroke="currentColor"/><path d="M8 8.5V2M5.5 4.5 8 2l2.5 2.5" stroke="currentColor" stroke-width="1.3"/><path d="M6 11.75h4" stroke="currentColor" stroke-dasharray="1 1"/>'),
+    clearIn: svg('<path d="M4 2.5v11M4 2.5h4M4 13.5h4" stroke="currentColor" stroke-width="1.4"/><path d="m9.5 6 4 4M13.5 6l-4 4" stroke="currentColor" stroke-width="1.2"/>'),
+    clearOut: svg('<path d="M12 2.5v11M12 2.5H8M12 13.5H8" stroke="currentColor" stroke-width="1.4"/><path d="m2.5 6 4 4M6.5 6l-4 4" stroke="currentColor" stroke-width="1.2"/>'),
+    markClip: svg('<path d="M3 2.5v11M3 2.5h3M3 13.5h3M13 2.5v11M13 2.5h-3M13 13.5h-3" stroke="currentColor" stroke-width="1.4"/><rect x="6" y="6" width="4" height="4" fill="currentColor" opacity=".6"/>'),
+    prevEdit: svg('<path d="M3 3v10" stroke="currentColor" stroke-width="1.4"/><path d="M13 3.5v9L6 8z" fill="currentColor"/><path d="M3 8h2" stroke="currentColor"/>'),
+    nextEdit: svg('<path d="M13 3v10" stroke="currentColor" stroke-width="1.4"/><path d="M3 3.5v9L10 8z" fill="currentColor"/><path d="M11 8h2" stroke="currentColor"/>'),
+    prevMarker: svg('<path d="M9.5 3h4v5L11.5 10 9.5 8z" stroke="currentColor" stroke-linejoin="round"/><path d="M7.5 4v8L2 8z" fill="currentColor"/>'),
+    nextMarker: svg('<path d="M2.5 3h4v5L4.5 10 2.5 8z" stroke="currentColor" stroke-linejoin="round"/><path d="M8.5 4v8L14 8z" fill="currentColor"/>'),
+    editor: svg('<path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5"/>'),
+  };
+  const glyph = (name) => {
+    if (!GLYPHS[name]) return icon(name);
+    const span = el('span', 'ide-icon cut-icon');
+    span.dataset.iconName = name;
+    span.innerHTML = GLYPHS[name];
+    return span;
+  };
+  // Every button a monitor can show, in the order the bar shows them. kinds: the monitors that have it.
+  const BUTTONS = [
+    { id: 'addMarker', title: 'Add Marker', glyph: 'addMarker', kinds: ['program'] },
+    { id: 'markIn', title: 'Mark In', glyph: 'markIn' },
+    { id: 'markOut', title: 'Mark Out', glyph: 'markOut' },
+    { id: 'markClip', title: 'Mark Clip', glyph: 'markClip', kinds: ['program'] },
+    { id: 'clearIn', title: 'Clear In', glyph: 'clearIn' },
+    { id: 'clearOut', title: 'Clear Out', glyph: 'clearOut' },
+    { id: 'goIn', title: 'Go to In', glyph: 'goIn' },
+    { id: 'prevMarker', title: 'Go to Previous Marker', glyph: 'prevMarker', kinds: ['program'] },
+    { id: 'prevEdit', title: 'Go to Previous Edit Point', glyph: 'prevEdit', kinds: ['program'] },
+    { id: 'frameBack', title: 'Step Back One Frame', glyph: 'stepBack' },
+    { id: 'playPause', title: 'Play/Stop', glyph: 'play' },
+    { id: 'frameForward', title: 'Step Forward One Frame', glyph: 'stepForward' },
+    { id: 'nextEdit', title: 'Go to Next Edit Point', glyph: 'nextEdit', kinds: ['program'] },
+    { id: 'nextMarker', title: 'Go to Next Marker', glyph: 'nextMarker', kinds: ['program'] },
+    { id: 'goOut', title: 'Go to Out', glyph: 'goOut' },
+    { id: 'playInToOut', title: 'Play In to Out', glyph: 'playInOut' },
+    { id: 'loop', title: 'Loop', glyph: 'loop' },
+    { id: 'insert', title: 'Insert', glyph: 'insert', kinds: ['source'] },
+    { id: 'overwrite', title: 'Overwrite', glyph: 'overwrite', kinds: ['source'] },
+    { id: 'lift', title: 'Lift', glyph: 'lift', kinds: ['program'] },
+    { id: 'extract', title: 'Extract', glyph: 'extract', kinds: ['program'] },
+    { id: 'exportFrame', title: 'Export Frame', glyph: 'frame' },
+  ];
+  // Premiere Pro's default button bars. The source monitor has no Add Marker: Cut has no markers on media files.
+  const DEFAULT_BUTTONS = {
+    source: ['markIn', 'markOut', 'goIn', 'frameBack', 'playPause', 'frameForward', 'goOut', 'insert', 'overwrite', 'exportFrame'],
+    program: ['addMarker', 'markIn', 'markOut', 'goIn', 'frameBack', 'playPause', 'frameForward', 'goOut', 'lift', 'extract', 'exportFrame'],
+  };
+  const buttonsKey = (kind) => `cut.${kind}.buttons`;
+  const availableButtons = (kind) => BUTTONS.filter((b) => !b.kinds || b.kinds.includes(kind));
+  // The buttons a monitor shows: the saved choice (Play/Stop always), else the default.
+  function shownButtons(kind) {
+    const v = ide.settings.get(buttonsKey(kind), null);
+    const ok = new Set(availableButtons(kind).map((b) => b.id));
+    const list = Array.isArray(v) ? v.filter((id) => ok.has(id)) : DEFAULT_BUTTONS[kind];
+    return list.includes('playPause') ? list : [...list, 'playPause'];
+  }
+  // The Button Editor: a box per button; OK keeps the choice, Reset Layout goes back to Premiere's set.
+  function buttonEditor(kind) {
+    const shown = new Set(shownButtons(kind));
+    const body = el('div', 'cut-button-editor');
+    body.appendChild(el('div', 'cut-dialog-note', tr('Choose the buttons under the picture.')));
+    const boxes = new Map();
+    const grid = el('div', 'cut-button-editor-list');
+    for (const b of availableButtons(kind)) {
+      const row = el('label', 'cut-button-editor-row', undefined, { 'data-button': b.id });
+      const box = el('input', null, undefined, { type: 'checkbox' });
+      box.checked = shown.has(b.id);
+      box.disabled = b.id === 'playPause';
+      boxes.set(b.id, box);
+      row.append(box, glyph(b.glyph), el('span', null, tr(b.title)));
+      grid.appendChild(row);
+    }
+    body.appendChild(grid);
+    ui.dialog({
+      title: tr('Button Editor'),
+      id: 'cutButtonEditor',
+      body,
+      width: 440,
+      buttons: [
+        { label: tr('OK'), primary: true, run: () => { ide.settings.set(buttonsKey(kind), availableButtons(kind).map((b) => b.id).filter((id) => boxes.get(id).checked)); } },
+        { label: tr('Reset Layout'), run: () => { for (const [id, box] of boxes) box.checked = DEFAULT_BUTTONS[kind].includes(id) || id === 'playPause'; return false; } },
+        { label: tr('Cancel') },
+      ],
+    });
+  }
 
   // ---------- a player for an app ----------
   // The engine's player when it is there. Without it, a clock that moves the playhead (nothing is drawn), so the
@@ -94,7 +191,6 @@
 
     const tc = ui.timecodeField({ fps: () => spec.fps(), value: 0, cls: 'cut-monitor-tc', title: tr('Playhead position'), onChange: (t) => seek(t) });
     const dur = el('span', 'cut-monitor-dur');
-    const act = (id, name, label) => button({ icon: name, title: label, action: id, cls: `cut-tr-${id}`, onClick: () => run(id) });
     const playBtn = button({ icon: 'play', title: tr('Play/Stop'), action: 'playPause', cls: 'cut-tr-play', onClick: () => run('playPause') });
     const loopBtn = button({ icon: 'loop', title: tr('Loop'), toggle: true, cls: 'cut-tr-loop', onClick: () => { loop = !loop; loopBtn.setPressed(loop); } });
     const safeBtn = button({ icon: 'safe', title: tr('Safe Margins'), toggle: true, pressed: !safe.hidden, cls: 'cut-tr-safe', onClick: () => {
@@ -114,23 +210,49 @@
       ide.settings.set('cut.proxy', on);
       m.player?.setProxy?.(on);
     } });
-    const transport = el('div', 'cut-transport');
+    // As in Premiere: the timecode, the zoom and resolution menus and the duration under the picture, then the time bar,
+    // then the buttons.
+    const info = el('div', 'cut-monitor-info');
     const left = el('div', 'cut-transport-side');
     left.append(tc);
-    const mid = el('div', 'cut-transport-mid');
-    mid.append(
-      act('markIn', 'markIn', tr('Mark In')), act('markOut', 'markOut', tr('Mark Out')), act('goIn', 'goIn', tr('Go to In')),
-      act('frameBack', 'stepBack', tr('Step Back One Frame')), playBtn, act('frameForward', 'stepForward', tr('Step Forward One Frame')),
-      act('goOut', 'goOut', tr('Go to Out')), loopBtn,
-      button({ icon: 'playInOut', title: tr('Play In to Out'), cls: 'cut-tr-inout', onClick: () => playInToOut() }),
-    );
-    const extra = el('div', 'cut-transport-extra');
+    const tools = el('div', 'cut-monitor-tools');
+    tools.append(zoom, quality, proxyBtn, safeBtn, fsBtn);
     const right = el('div', 'cut-transport-side right');
     right.append(dur);
-    transport.append(left, mid, extra, right);
-    const tools = el('div', 'cut-monitor-tools');
-    tools.append(proxyBtn, safeBtn, zoom, quality, fsBtn);
-    root.append(head, view, scrub, transport, tools);
+    info.append(left, tools, right);
+    const transport = el('div', 'cut-transport');
+    const mid = el('div', 'cut-transport-mid');
+    const extra = el('div', 'cut-transport-extra');
+    const editorBtn = el('button', 'cut-btn icon-only cut-tr-editor', undefined, { type: 'button', title: tr('Button Editor'), 'aria-label': tr('Button Editor') });
+    editorBtn.appendChild(glyph('editor'));
+    editorBtn.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
+    editorBtn.addEventListener('click', () => buttonEditor(kind));
+    transport.append(mid, extra, editorBtn);
+    root.append(head, view, info, scrub, transport);
+    // The bar's buttons, made once each; a button with a key shows it in its tooltip (it follows the keymap).
+    const made = new Map([['playPause', playBtn], ['loop', loopBtn]]);
+    playBtn.dataset.button = 'playPause';
+    loopBtn.dataset.button = 'loop';
+    const press = (id) => {
+      if (['insert', 'overwrite', 'lift', 'extract', 'addMarker'].includes(id)) return ui.runAction(id, { source: 'button', panel: kind });
+      if (id === 'exportFrame') return ui.exportDialog?.exportFrame(spec.app);
+      return run(id);
+    };
+    function barButton(def) {
+      if (made.has(def.id)) return made.get(def.id);
+      const b = el('button', `cut-btn icon-only cut-tr-${def.id === 'playInToOut' ? 'inout' : def.id}`, undefined, { type: 'button', 'aria-label': tr(def.title), 'data-button': def.id });
+      b.appendChild(glyph(def.glyph));
+      ide.keymap.tooltip(b, tr(def.title), `Cut.${def.id}`);
+      b.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
+      b.addEventListener('click', () => press(def.id));
+      made.set(def.id, b);
+      return b;
+    }
+    const buildBar = () => {
+      const want = shownButtons(kind);
+      mid.replaceChildren(...BUTTONS.filter((b) => want.includes(b.id)).map(barButton));
+    };
+    buildBar();
 
     let loop = false;
     let stopAt = null; // play In to Out ends here
@@ -171,9 +293,10 @@
       m.player?.play(1);
       stopAt = io.out ?? end();
     }
-    const edits = () => {
+    // Up/Down: the edit points of the targeted tracks; Shift+Up/Down: of every track.
+    const edits = (any = false) => {
       const pts = new Set([0, end()]);
-      for (const c of spec.clips?.() || []) { pts.add(c.start); pts.add(Cut.model.clipEnd(c)); }
+      for (const c of spec.clips?.(any) || []) { pts.add(c.start); pts.add(Cut.model.clipEnd(c)); }
       return [...pts].sort((a, b) => a - b);
     };
 
@@ -202,8 +325,15 @@
         case 'frameForward5': pause(); seek(t + 5 * f); break;
         case 'goStart': pause(); seek(0); break;
         case 'goEnd': pause(); seek(end()); break;
-        case 'prevEdit': { pause(); const p = edits().filter((x) => x < t).pop(); seek(p ?? 0); break; }
-        case 'nextEdit': { pause(); const p = edits().find((x) => x > t); seek(p ?? end()); break; }
+        case 'prevEdit': case 'prevEditAny': { pause(); const p = edits(id === 'prevEditAny').filter((x) => x < t).pop(); seek(p ?? 0); break; }
+        case 'nextEdit': case 'nextEditAny': { pause(); const p = edits(id === 'nextEditAny').find((x) => x > t); seek(p ?? end()); break; }
+        case 'prevMarker': case 'nextMarker': {
+          const list = (spec.markers?.() || []).sort((a, b) => a - b);
+          const p = id === 'prevMarker' ? list.filter((x) => x < t).pop() : list.find((x) => x > t);
+          if (p != null) { pause(); seek(p); }
+          break;
+        }
+        case 'playInToOut': playInToOut(); break;
         case 'goIn': if (io.in != null) { pause(); seek(io.in); } break;
         case 'goOut': if (io.out != null) { pause(); seek(io.out - f); } break;
         case 'markIn': spec.setInOut({ in: t, out: io.out != null && io.out <= t ? null : io.out }); break;
@@ -215,6 +345,8 @@
           break;
         }
         case 'clearInOut': spec.setInOut({ in: null, out: null }); break;
+        case 'clearIn': spec.setInOut({ in: null }); break;
+        case 'clearOut': spec.setInOut({ out: null }); break;
         case 'fullscreen': fullscreen(); break;
         default: return false;
       }
@@ -312,6 +444,11 @@
       if (k === `cut.${kind}.quality`) {
         const q = Number(ide.settings.get(k, 1)) || 1;
         if (Number(quality.value) !== q) { quality.value = String(q); m.player?.setQuality?.(q); }
+      } else if (k === buttonsKey(kind)) {
+        buildBar();
+      } else if (k === `cut.${kind}.safe`) {
+        const on = !!ide.settings.get(k, false);
+        if (safe.hidden === on) { safe.hidden = !on; safeBtn.setPressed(on); }
       } else if (k === 'cut.proxy') {
         const on = !!ide.settings.get('cut.proxy', false);
         if (proxyBtn.pressed !== on) { proxyBtn.setPressed(on); m.player?.setProxy?.(on); }
@@ -338,7 +475,12 @@
       duration: () => (app.sequence ? Cut.model.sequenceDuration(app.sequence) : 0),
       inOut: () => app.inOut,
       setInOut: (p) => app.setInOut(p),
-      clips: () => app.sequence?.clips || [],
+      // the clips of the targeted tracks (every track with `any`)
+      clips: (any) => {
+        const ids = !any && ui.editing.targets;
+        return (app.sequence?.clips || []).filter((c) => !ids || ids.includes(c.track));
+      },
+      markers: () => (app.sequence?.markers || []).map((mk) => mk.t),
       // X: the selected clip under the playhead, else the top clip there.
       markClip: () => {
         const seq = app.sequence;
@@ -358,7 +500,8 @@
       app.on('sequence', () => { m.pause(); m.setTitle(app.sequence?.name || ''); m.layout(); m.refresh(); }),
     ];
     for (const id of ['playPause', 'shuttleBack', 'shuttleStop', 'shuttleForward', 'frameBack', 'frameForward', 'frameBack5', 'frameForward5',
-      'prevEdit', 'nextEdit', 'goStart', 'goEnd', 'goIn', 'goOut', 'markIn', 'markOut', 'markClip', 'clearInOut', 'fullscreen']) {
+      'prevEdit', 'nextEdit', 'prevEditAny', 'nextEditAny', 'prevMarker', 'nextMarker', 'goStart', 'goEnd', 'goIn', 'goOut', 'markIn', 'markOut',
+      'markClip', 'clearIn', 'clearOut', 'clearInOut', 'playInToOut', 'fullscreen']) {
       offs.push(ui.onAction(id, (ctx) => m.run(id, ctx), { panels: PROGRAM_PANELS }));
     }
     // Two frames side by side while the timeline trims an edit point: the outgoing clip's last and the incoming first.
@@ -434,13 +577,11 @@
       setInOut: (p) => { if (src()) app.setSource({ ...src(), ...p }); },
     });
     // Insert and Overwrite, and the handles that drag the clip (or only its video or audio) to the timeline.
-    const insertBtn = button({ icon: 'insert', title: tr('Insert'), action: 'insert', cls: 'cut-tr-insert', onClick: () => place('insert') });
-    const overwriteBtn = button({ icon: 'overwrite', title: tr('Overwrite'), action: 'overwrite', cls: 'cut-tr-overwrite', onClick: () => place('overwrite') });
     const dragV = el('span', 'cut-drag-handle video', undefined, { title: tr('Drag Video Only') });
     dragV.appendChild(icon('video'));
     const dragA = el('span', 'cut-drag-handle audio', undefined, { title: tr('Drag Audio Only') });
     dragA.appendChild(icon('audio'));
-    m.extra.append(insertBtn, overwriteBtn, dragV, dragA);
+    m.extra.append(dragV, dragA);
     const payload = (video, audio) => {
       const s = src();
       const total = Cut.model.sequenceDuration(own.sequence);
@@ -556,7 +697,7 @@
       }),
     ];
     for (const id of ['playPause', 'shuttleBack', 'shuttleStop', 'shuttleForward', 'frameBack', 'frameForward', 'frameBack5', 'frameForward5',
-      'goStart', 'goEnd', 'goIn', 'goOut', 'markIn', 'markOut', 'markClip', 'clearInOut', 'fullscreen', 'prevEdit', 'nextEdit']) {
+      'goStart', 'goEnd', 'goIn', 'goOut', 'markIn', 'markOut', 'markClip', 'clearIn', 'clearOut', 'clearInOut', 'playInToOut', 'fullscreen', 'prevEdit', 'nextEdit']) {
       offs.push(ui.onAction(id, (ctx) => m.run(id, ctx), { panels: ['source'] }));
     }
     // Insert and Overwrite work from the source monitor and from the timeline, as long as a clip is open here.

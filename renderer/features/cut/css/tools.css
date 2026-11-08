@@ -4,6 +4,8 @@
 /* the shortcut editor */
 .cut-keys { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .cut-keys-search { height: 26px; }
+.cut-keys-preset-row { display: flex; align-items: center; gap: 10px; }
+.cut-keys-preset-row .cut-select { height: 26px; min-width: 220px; }
 .cut-keys-list { height: min(56vh, 520px); overflow: auto; border: 1px solid var(--gray3); border-radius: 4px; outline: none; }
 .cut-keys-kind { position: sticky; top: 0; z-index: 1; padding: 4px 8px; background: var(--gray2); color: var(--gray9); font-size: 11px;
   border-bottom: 1px solid var(--gray3); }

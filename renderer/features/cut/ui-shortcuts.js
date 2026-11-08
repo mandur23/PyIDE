@@ -11,6 +11,9 @@
 // resets one, and Reset All; two Cut actions with one key are marked and Save waits until each is resolved. A key
 // that also belongs to an IDE action (Find Action...) is noted: inside the editor Cut takes it.
 //
+// The built-in keys are those of the keyboard preset (ui-keys.js: Adobe Premiere Pro or the classic Cut keys); the editor's
+// preset menu switches it, which starts the draft from that preset's keys as Premiere's own Keyboard Shortcuts does.
+//
 // Cut.ui.shortcuts: apply(), open() -> the dialog, sheet() (toggles the cheat sheet), builtin(id), current(id).
 (() => {
   const Cut = (globalThis.Cut = globalThis.Cut || {});
@@ -20,7 +23,9 @@
   const KEY = 'cut.keys';
   const MODIFIERS = new Set(['Control', 'Alt', 'Shift', 'Meta']);
   const own = new Set((ui.keys?.actions || []).map((id) => `Cut.${id}`));
-  const builtinKeys = new Map(); // action id -> the keys it was registered with
+  const registered = new Map(); // action id -> the keys it was registered with (for actions no preset names)
+  // An action's built-in keys in a preset (the current one by default).
+  const builtinOf = (id, preset) => ui.keys?.presetKeys?.(id.slice(4), preset) ?? registered.get(id) ?? [];
   const isCut = (a) => typeof a.id === 'string' && a.id.startsWith('Cut.') && !!a.title;
   const cutActions = () => ide.actions.filter(isCut);
   const fmt = (k) => ide.keymap.format(k);
@@ -33,8 +38,8 @@
   function apply() {
     const ov = ide.keymap.parse(stored());
     for (const a of cutActions()) {
-      if (!builtinKeys.has(a.id)) builtinKeys.set(a.id, [...(a.defaultKeys || a.keys || [])]);
-      const want = ov.get(a.id) || builtinKeys.get(a.id);
+      if (!registered.has(a.id)) registered.set(a.id, [...(a.defaultKeys || a.keys || [])]);
+      const want = ov.get(a.id) || builtinOf(a.id);
       a.defaultKeys = [...want];
       if (!ide.keymap.isModified(a.id)) a.keys = [...want];
       if (!own.has(a.id) && !a.cutGuard) {
@@ -57,16 +62,22 @@
     const order = new Map(kinds.map((k, i) => [k.id, i]));
     actions.sort((a, b) => (order.get(kindOf(a)) - order.get(kindOf(b))) || a.title.localeCompare(b.title));
     const draft = new Map(actions.map((a) => [a.id, [...(a.defaultKeys || a.keys || [])]]));
-    const builtin = (id) => builtinKeys.get(id) || [];
+    let preset = ui.keys?.preset || 'premiere';
+    const builtin = (id) => builtinOf(id, preset);
     let recording = null;
     let query = '';
 
     const body = el('div', 'cut-keys');
+    // The keyboard preset: another one starts every key from that preset (the person's own keys go).
+    const presetSelect = ui.select({ options: (ui.keys?.presets || []).map((p) => ({ value: p.id, label: p.title() })), value: preset, cls: 'cut-keys-preset', title: tr('Keyboard Layout Preset'),
+      onChange: (v) => { preset = v; recording = null; for (const id of draft.keys()) draft.set(id, [...builtin(id)]); render(); } });
+    const presetRow = el('label', 'cut-keys-preset-row');
+    presetRow.append(el('span', null, tr('Keyboard Layout Preset')), presetSelect);
     const search = el('input', 'cut-keys-search', undefined, { type: 'search', placeholder: tr('Search actions or keys'), spellcheck: 'false' });
     search.dataset.enter = 'ignore';
     const list = el('div', 'cut-keys-list', undefined, { tabindex: -1 });
     const status = el('div', 'cut-keys-status');
-    body.append(el('div', 'cut-dialog-note', tr('Click Record, then press the key. Keys apply as soon as you save; a key two actions share must be changed first.')), search, list, status);
+    body.append(presetRow, el('div', 'cut-dialog-note', tr('Click Record, then press the key. Keys apply as soon as you save; a key two actions share must be changed first.')), search, list, status);
 
     const conflicts = () => {
       const by = new Map();
@@ -164,6 +175,7 @@
           // Keys of actions not loaded now stay as they are.
           for (const [id, keys] of Object.entries(stored())) if (!draft.has(id)) out[id] = keys;
           for (const [id, keys] of draft) if (!same(keys, builtin(id))) out[id] = keys;
+          if (preset !== ui.keys?.preset) ui.keys?.setPreset?.(preset);
           ide.settings.set(KEY, out);
           ui.toast(tr('Keyboard shortcuts saved'));
           return undefined;
@@ -178,7 +190,7 @@
     resetAllBtn.classList.add('cut-keys-reset-all');
     render();
     search.focus();
-    editor = { dialog: dlg, draft, render, get recording() { return recording; } };
+    editor = { dialog: dlg, draft, render, get recording() { return recording; }, get preset() { return preset; }, presetSelect };
     return editor;
   }
 
@@ -240,7 +252,7 @@
     apply, open, sheet: toggleSheet, closeSheet,
     get sheetOpen() { return !!sheet; },
     get editor() { return editor; },
-    builtin: (id) => [...(builtinKeys.get(id) || [])],
+    builtin: (id) => [...builtinOf(id)],
     current: (id) => [...(ide.actions.find((a) => a.id === id)?.keys || [])],
   };
 })();

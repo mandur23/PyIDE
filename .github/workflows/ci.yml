@@ -92,6 +92,14 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/cut-engine-core.mjs
+      - name: cut-color-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-color-core.mjs
+      - name: cut-audiofx-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-audiofx-core.mjs
       - name: cut-export-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

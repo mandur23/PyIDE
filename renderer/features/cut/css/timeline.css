@@ -65,3 +65,21 @@
 .cut-tl-tip { position: absolute; pointer-events: none; padding: 2px 6px; border-radius: 3px; background: var(--gray3); color: var(--gray12);
   font-family: var(--mono); font-size: 11px; white-space: nowrap; opacity: 0; transition: opacity .1s; z-index: 2; box-shadow: 0 2px 6px #0006; }
 .cut-tl-tip.shown { opacity: 1; }
+
+/* the Tools panel (ui-toolspanel.js): Premiere's vertical tool bar, its groups and flyouts */
+.cut-panel[data-panel="tools"] > .cut-panel-body { container-type: size; }
+.cut-tools { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; flex: 1; min-height: 0; overflow: hidden; }
+.cut-tools-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none;
+  border: 0; border-radius: 4px; background: none; color: var(--gray10); padding: 0; }
+.cut-tools-btn:hover, .cut-tools-btn.open { background: var(--gray4); color: var(--gray12); }
+.cut-tools-btn[aria-pressed="true"] { background: var(--blue2); color: var(--gray12); box-shadow: inset 0 0 0 1px var(--blue6); }
+.cut-tools-btn .cut-icon svg { width: 16px; height: 16px; display: block; }
+.cut-tools-more { position: absolute; right: 2px; bottom: 2px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .7; }
+@container (orientation: landscape) { .cut-tools { flex-direction: row; padding: 0 4px; } }
+.cut-tools-flyout { position: fixed; z-index: 1001; min-width: 200px; padding: 4px; border-radius: 6px; background: var(--gray2);
+  border: 1px solid var(--gray4); box-shadow: 0 8px 22px #0007; color: var(--gray11); font-size: 12px; }
+.cut-tools-flyout-item { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: 4px; outline: none; }
+.cut-tools-flyout-item:hover, .cut-tools-flyout-item:focus { background: var(--blue2); color: var(--gray12); }
+.cut-tools-flyout-item[aria-checked="true"] .cut-tools-flyout-name { font-weight: 600; color: var(--gray12); }
+.cut-tools-flyout-item .cut-icon svg { width: 16px; height: 16px; display: block; }
+.cut-tools-flyout-key { color: var(--gray8); font-family: var(--mono); font-size: 11px; }

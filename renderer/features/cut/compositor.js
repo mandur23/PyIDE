@@ -78,7 +78,9 @@
       if (!def || def.kind !== 'video') continue;
       const params = {};
       for (const pd of def.params) params[pd.id] = kf.propValue(clip, `effects.${e.id}.${pd.id}`, local, e.params?.[pd.id] ?? pd.default);
-      effects.push({ id: e.id, def, params: fx.resolve(e.type, params) });
+      const resolved = fx.resolve(e.type, params);
+      // What an effect reads from the project besides its parameters (Lumetri Color's LUT), as info.assets.
+      effects.push({ id: e.id, def, params: resolved, assets: def.assets ? def.assets(project, resolved) : null });
     }
     let kind;
     let srcT = 0;
@@ -92,7 +94,8 @@
       anchor: prop('anchor', [0, 0]), opacity: prop('opacity', 100), crop: prop('crop', ZERO4),
       extend: effects.some((e) => e.def.layer?.extend),
       // The clip-local frame, for effects whose look changes every frame (grain, glitch).
-      frame: seq.fps ? need('time').frameAt(local, seq.fps) : 0,
+      // Not `frame`: fetchItem puts the decoded VideoFrame there, and grain and glitch on video then read NaN.
+      frameIndex: seq.fps ? need('time').frameAt(local, seq.fps) : 0,
     };
   }
 
@@ -523,6 +526,91 @@ ${V}
       return tex;
     }
 
+    // Tables an effect reads besides its input (gpu.bindings / gpu.textures: Lumetri Color's LUT and curves), rgba16float,
+    // one texture per key while used; a binding the effect leaves empty gets a small dummy of its dimension.
+    const tables = new Map(); // key -> { tex, used }
+    const dummies = {};
+    function dummy(dim) {
+      if (!dummies[dim]) {
+        const size = dim === '3d' ? [2, 2, 2] : [2, 1, 1];
+        dummies[dim] = device.createTexture({ size, dimension: dim === '3d' ? '3d' : '2d', format: F16, usage: U.TEXTURE_BINDING | U.COPY_DST });
+        device.queue.writeTexture({ texture: dummies[dim] }, new Uint16Array(size[0] * size[1] * size[2] * 4), { bytesPerRow: size[0] * 8, rowsPerImage: size[1] }, size);
+      }
+      return dummies[dim];
+    }
+    function effectTextures(g, params, finfo) {
+      const specs = g.textures ? g.textures(params, finfo) || {} : {};
+      return Object.entries(g.bindings).map(([b, dim]) => {
+        const s = specs[b];
+        if (!s) return [Number(b), dummy(dim)];
+        let e = tables.get(s.key);
+        if (!e) {
+          const size = s.size.length === 3 ? s.size : [s.size[0], s.size[1], 1];
+          const tex = device.createTexture({ size, dimension: s.dim === '3d' ? '3d' : '2d', format: F16, usage: U.TEXTURE_BINDING | U.COPY_DST });
+          device.queue.writeTexture({ texture: tex }, s.data(), { bytesPerRow: size[0] * 8, rowsPerImage: size[1] }, size);
+          e = { tex };
+          tables.set(s.key, e);
+        }
+        e.used = frameNo;
+        return [Number(b), e.tex];
+      });
+    }
+    // After a submit: tables beyond the last 24 that this frame did not use go.
+    function sweepTables() {
+      for (const [k, e] of tables) {
+        if (tables.size <= 24) break;
+        if (e.used !== frameNo) { e.tex.destroy(); tables.delete(k); }
+      }
+    }
+
+    // The Lumetri Scopes' counts (scopes.js) of what `out` shows now: a compute pass over the frame's box, its bins
+    // copied to a buffer that is read back. One count at a time (null while one is under way).
+    let scopeBuf = null;
+    let scopeRead = null;
+    let scopeU = null;
+    let scopePipe = null;
+    let scopeBusy = false;
+    function scopes({ seqW, seqH, cols, size, budget }) {
+      if (!out || scopeBusy) return null;
+      const S = need('scopes');
+      const L = S.layout(cols, size);
+      const rect = S.frameRect(outW, outH, seqW, seqH);
+      const step = S.stepFor(rect, budget);
+      const bytes = L.total * 4;
+      if (!scopeBuf || scopeBuf.size !== bytes) {
+        scopeBuf?.destroy();
+        scopeRead?.destroy();
+        scopeBuf = device.createBuffer({ size: bytes, usage: B.STORAGE | B.COPY_SRC | B.COPY_DST });
+        scopeRead = device.createBuffer({ size: bytes, usage: B.MAP_READ | B.COPY_DST });
+      }
+      if (!scopeU) scopeU = device.createBuffer({ size: 48, usage: B.UNIFORM | B.COPY_DST });
+      if (!scopePipe) {
+        const module = device.createShaderModule({ code: S.WGSL });
+        scopePipe = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+      }
+      device.queue.writeBuffer(scopeU, 0, S.uniforms(rect, L, step));
+      const enc = device.createCommandEncoder();
+      enc.clearBuffer(scopeBuf);
+      const [gx, gy] = S.dispatch(rect, step);
+      if (gx > 0 && gy > 0) {
+        const pass = enc.beginComputePass();
+        pass.setPipeline(scopePipe);
+        pass.setBindGroup(0, device.createBindGroup({ layout: scopePipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: out.createView() }, { binding: 1, resource: { buffer: scopeBuf } }, { binding: 2, resource: { buffer: scopeU } }] }));
+        pass.dispatchWorkgroups(gx, gy);
+        pass.end();
+      }
+      enc.copyBufferToBuffer(scopeBuf, 0, scopeRead, 0, bytes);
+      device.queue.submit([enc.finish()]);
+      scopeBusy = true;
+      const read = scopeRead;
+      const meta = { layout: L, rect, step, width: outW, height: outH, backend: 'webgpu' };
+      return read.mapAsync(GPUMapMode.READ).then(() => {
+        const bins = new Uint32Array(read.getMappedRange().slice(0));
+        read.unmap();
+        return { bins, ...meta };
+      }).finally(() => { scopeBusy = false; });
+    }
+
     let out = null;
     let outW = 0;
     let outH = 0;
@@ -561,14 +649,16 @@ ${V}
         for (const e of it.effects) {
           const g = e.def.gpu;
           if (!g?.code) continue;
-          const passes = g.uniforms(e.params, { width: tw, height: th, pxScale, quality: q, frame: it.frame || 0 }) || [];
+          const finfo = { width: tw, height: th, pxScale, quality: q, frame: it.frameIndex || 0, assets: e.assets };
+          const passes = g.uniforms(e.params, finfo) || [];
           const orig = cur;
+          const tex = passes.length && g.bindings ? effectTextures(g, e.params, finfo) : null;
           for (const pass of passes) {
             const next = texture(tw, th);
             const data = new Float32Array(20);
             data.set([tw, th, 1 / tw, 1 / th], 0);
             data.set(pass.slice(0, 16), 4);
-            ops.push({ op: 'effect', type: e.def.type, code: g.code, src: cur, orig, out: next, u: slot(data) });
+            ops.push({ op: 'effect', type: e.def.type, code: g.code, src: cur, orig, out: next, u: slot(data), tex });
             cur = next;
           }
         }
@@ -648,6 +738,7 @@ ${V}
         } else if (o.op === 'effect') {
           p = pipeline(`fx:${o.type}`, o.code, F16);
           entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }, { binding: 3, resource: view(o.orig) }];
+          if (o.tex) for (const [binding, t] of o.tex) entries.push({ binding, resource: view(t) });
         } else if (o.op === 'composite') {
           p = pipeline('composite', src.composite, F16, OVER);
           entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
@@ -677,6 +768,7 @@ ${V}
         pass.end();
       }
       device.queue.submit([enc.finish()]);
+      sweepTables();
       frameNo++;
       recycle();
     }
@@ -712,11 +804,17 @@ ${V}
       },
       encodeFrame,
       readPixels,
+      scopes,
       done: () => device.queue.onSubmittedWorkDone(),
       destroy() {
         for (const list of free.values()) for (const t of list) t.tex.destroy();
         for (const t of inUse) t.tex.destroy();
         for (const e of images.values()) e.tex.destroy();
+        for (const e of tables.values()) e.tex.destroy();
+        for (const t of Object.values(dummies)) t.destroy();
+        scopeBuf?.destroy();
+        scopeRead?.destroy();
+        scopeU?.destroy();
         out?.destroy();
         ubuf?.destroy();
         device.destroy();
@@ -741,7 +839,7 @@ ${V}
       const lh = Math.max(1, Math.round(it.h * k));
       const c = newCanvas(lw, lh);
       const g = c.getContext('2d');
-      const hints = it.effects.map((e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k, frame: it.frame || 0 }) || {});
+      const hints = it.effects.map((e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k, frame: it.frameIndex || 0 }) || {});
       g.filter = hints.map((h) => h.filter).filter(Boolean).join(' ') || 'none';
       const flipX = hints.filter((h) => h.flipX).length % 2 === 1;
       const flipY = hints.filter((h) => h.flipY).length % 2 === 1;
@@ -924,6 +1022,7 @@ ${V}
     let destroyed = false;
     let chain = Promise.resolve();
     const st = { renders: 0, lastMs: 0, layers: 0 };
+    let shownSeq = null; // the size of the sequence the canvas shows, for the scopes
 
     // Captions and overlays share one full-frame canvas at the render size.
     let capCanvas = null;
@@ -966,6 +1065,7 @@ ${V}
         throw err;
       }
       sources.sweep();
+      shownSeq = { w: seq.w, h: seq.h };
       st.renders++;
       st.layers = layers.length;
       st.lastMs = performance.now() - t0;
@@ -1018,6 +1118,21 @@ ${V}
         }
       },
       readPixels: () => serial(() => be.readPixels()),
+      // The Lumetri Scopes' counts of what the canvas shows now (Cut.scopes): the GPU counts with a compute pass, the
+      // Canvas 2D back end on the CPU from its pixels; budget: about how many pixels to count (Cut.scopes.BUDGET). -> { bins, layout, rect, step, width, height, backend } | null
+      // (nothing drawn yet, or a count still under way). It waits for the render in progress, not for the read back.
+      async scopes({ cols = 256, size = 256, budget } = {}) {
+        const S = need('scopes');
+        const job = await serial(async () => {
+          if (destroyed || !shownSeq) return null;
+          if (be.scopes) return { p: be.scopes({ seqW: shownSeq.w, seqH: shownSeq.h, cols, size, budget }) };
+          const px = await be.readPixels();
+          const rect = S.frameRect(be.width, be.height, shownSeq.w, shownSeq.h);
+          const step = S.stepFor(rect, budget);
+          return { p: { ...S.analyze(px, be.width, be.height, rect, { cols, size, step }), rect, step, width: be.width, height: be.height, backend: '2d' } };
+        });
+        return job?.p ? job.p : null;
+      },
       // A VideoFrame of what the canvas shows now (export).
       videoFrame(init) { return new VideoFrame(canvas || be.canvas, init); },
       // Resolves once every frame of earlier renders is back with its decoder.

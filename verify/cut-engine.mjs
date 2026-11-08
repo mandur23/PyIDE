@@ -535,7 +535,28 @@ try {
       ['distort.lens', { curvature: -60 }], ['distort.lens', { curvature: 50, repeat: true }],
       ['key.chroma', { similarity: 30, smoothness: 20, spill: 30 }], ['key.chroma', { similarity: 30, smoothness: 20, output: 'matte' }],
       ['noise.grain', { amount: 40 }, 7], ['noise.grain', { amount: 30, size: 2.5, color: true }, 3],
+      // Lumetri Color's other sections: curves (an S on the master, a lifted blue), the Look (a 17-point LUT kept in
+      // the project, at full and part intensity, then a 33-point one with a domain), the HSL secondary (a correction
+      // inside a key, Show Mask), and every section at once.
+      ['color.basic', { curveMaster: [0, 0, 0.25, 0.15, 0.75, 0.88, 1, 1], curveBlue: [0, 0.2, 1, 0.9] }],
+      ['color.basic', { curveRed: [0, 0, 0.3, 0.6, 1, 1], curveGreen: [0, 0, 0.6, 0.3, 1, 1] }],
+      ['color.basic', { lut: '@look17', lutIntensity: 100 }], ['color.basic', { lut: '@look17', lutIntensity: 40 }], ['color.basic', { lut: '@look33' }],
+      ['color.basic', { hslHue: 0, hslHueRange: 70, hslHueSoft: 40, hslSatLow: 20, hslSatSoft: 15, hslSaturation: 30, hslHueShift: 60, hslTemperature: 30, hslContrast: 20 }],
+      ['color.basic', { hslHue: 120, hslHueRange: 60, hslHueSoft: 30, hslMask: true }],
+      ['color.basic', { exposure: 0.4, saturation: 120, lut: '@look17', lutIntensity: 70, curveMaster: [0, 0.05, 0.5, 0.55, 1, 0.95], hslHue: 220, hslHueRange: 80, hslHueSoft: 30, hslSaturation: 150 }],
     ];
+    // The Looks those cases name: LUTs made here (a curved, crossed look), kept in the project as the panel does.
+    const look = (n, max) => {
+      const lines = ['TITLE "test look"', 'LUT_3D_SIZE ' + n, 'DOMAIN_MAX ' + max.join(' ')];
+      for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) {
+        const [x, y, z] = [r / (n - 1), g / (n - 1), b / (n - 1)];
+        lines.push([0.85 * x ** 0.8 + 0.15 * z, 0.1 + 0.8 * y ** 1.3, Math.min(1, 0.3 * x + 0.7 * Math.sqrt(z))].map((v) => v.toFixed(6)).join(' '));
+      }
+      return Cut.lumetri.store(Cut.lumetri.parseCube(lines.join('\\n')), 'look' + n + '.cube');
+    };
+    const looks = { '@look17': look(17, [1, 1, 1]), '@look33': look(33, [1.2, 1, 0.9]) };
+    for (const l of Object.values(looks)) hist.do(Cut.commands.addLut(l));
+    for (const c of cases) if (typeof c[1].lut === 'string') c[1] = { ...c[1], lut: looks[c[1].lut].id };
     // Every video effect of the registry is here (edge.extend has its own check below).
     const missing = Cut.effects.list('video').map((d) => d.type).filter((t) => t !== 'edge.extend' && !cases.some((c) => c[0] === t));
     const out = [{ type: 'none', ...base }];
@@ -546,7 +567,8 @@ try {
       await comp.render(hist.project, seq, Cut.time.frameStart(frame, [30, 1]));
       const got = await comp.readPixels();
       const def = Cut.effects.get(type);
-      const want = __eng.encode(def.cpu(input, Cut.effects.resolve(type, params), { width: W, height: H, pxScale: 1, frame }));
+      const resolved = Cut.effects.resolve(type, params);
+      const want = __eng.encode(def.cpu(input, resolved, { width: W, height: H, pxScale: 1, frame, assets: def.assets ? def.assets(hist.project, resolved) : null }));
       let over3 = 0;
       for (let i = 0; i < got.length; i += 4) for (let k = 0; k < 3; k++) if (Math.abs(got[i + k] - want[i + k]) > 3) over3++;
       out.push({ type, params, frame, ...__eng.diff(got, want), over3, changed: __eng.diff(got, plain).mean });
@@ -605,6 +627,138 @@ try {
     check(f.inside === 0 && f.fresh === 0 && f.next > 0.5, `${type} is a function of the frame: the same at 0.6 of the frame and from a new compositor (max diff ${f.inside}, ${f.fresh}), different on the next frame (${f.next.toFixed(2)})`);
   }
   check(fxr.errors.length === 0, `no WebGPU validation errors (${S(fxr.errors)})`);
+  // On a video clip the decoded picture rides on the plan item too; grain and glitch must still get the frame number.
+  const vidLook = await js(`(async () => {
+    const W = 640, H = 360, fps = [30, 1];
+    const r = await __eng.makeMp4({ w: W, h: H, fps, frames: 30, gop: 30 });
+    const path = await __eng.write('fx-video.mp4', r.bytes);
+    const hist = __eng.history(W, H);
+    const seq = hist.project.sequences[0].id;
+    const [mid] = await __eng.importAll(hist, [path]);
+    const { ids: [cid] } = hist.do(Cut.commands.place(seq, { source: { media: mid }, at: 0, out: 254016000000, video: 'V1', audio: null }));
+    const comp = await Cut.compositor.create(__eng.canvas(W, H), { width: W, height: H });
+    const F = Cut.time.frameTicks(fps);
+    const at = async (t) => { await comp.render(hist.project, seq, t); return comp.readPixels(); };
+    const linear = (d) => {
+      const img = Cut.effects.cpu.image(W, H);
+      for (let i = 0; i < d.length; i += 4) img.data.set([Cut.effects.srgbToLinear(d[i] / 255), Cut.effects.srgbToLinear(d[i + 1] / 255), Cut.effects.srgbToLinear(d[i + 2] / 255), 1], i);
+      return img;
+    };
+    const plain = { 7: await at(7 * F), 8: await at(8 * F) };
+    const out = {};
+    for (const [type, params] of [['noise.grain', { amount: 60 }], ['glitch', { amount: 100, shift: 24, bandHeight: 6, hold: 1 }]]) {
+      for (const e of [...hist.project.sequences[0].clips.find((x) => x.id === cid).effects]) hist.do(Cut.commands.removeEffect(seq, cid, e.id));
+      hist.do(Cut.commands.addEffect(seq, cid, type, null, params));
+      const def = Cut.effects.get(type);
+      const resolved = Cut.effects.resolve(type, params);
+      const ref = {};
+      for (const frame of [7, 8]) {
+        const got = await at(frame * F);
+        const want = __eng.encode(def.cpu(linear(plain[frame]), resolved, { width: W, height: H, pxScale: 1, frame }));
+        ref[frame] = { ...__eng.diff(got, want), changed: __eng.diff(got, plain[frame]).mean };
+      }
+      const inside = __eng.diff(await at(7 * F), await at(7 * F + F * 0.6)).max;
+      out[type] = { ref, inside };
+    }
+    const errors = comp.errors.slice();
+    await comp.idle();
+    comp.destroy();
+    return { out, errors };
+  })()`);
+  for (const [type, f] of Object.entries(vidLook.out)) {
+    for (const [frame, r] of Object.entries(f.ref)) {
+      check(r.max <= 4 && r.mean <= 0.6 && r.changed > 1, `${type} on a video clip at frame ${frame}: GPU = CPU reference of that frame (max ${r.max}, mean ${r.mean.toFixed(3)}), changes the picture (${r.changed.toFixed(1)})`);
+    }
+    check(f.inside === 0, `${type} on a video clip: the same anywhere inside a frame (max diff ${f.inside})`);
+  }
+  check(vidLook.errors.length === 0, `no WebGPU errors with effects on video (${S(vidLook.errors)})`);
+
+  // ---- Lumetri Scopes: the GPU's count against the CPU's of the same pixels, and pictures with known scopes ----
+  const sc = await js(`(async () => {
+    const SC = Cut.scopes;
+    const S = JSON.stringify;
+    const F = Cut.time.frameTicks([30, 1]);
+    const out = { errors: [] };
+    // Counts of one render, from the GPU (comp.scopes) and from the CPU over the pixels read back.
+    const both = async (comp, hist, seq) => {
+      await comp.render(hist.project, seq, 0);
+      const g = await comp.scopes();
+      const px = await comp.readPixels();
+      const c = SC.analyze(px, comp.width, comp.height, g.rect, { step: g.step });
+      let bins = 0;
+      let sum = 0;
+      for (let i = 0; i < g.bins.length; i++) if (g.bins[i] !== c.bins[i]) { bins++; sum += Math.abs(g.bins[i] - c.bins[i]); }
+      return { g, c, bins, sum, total: SC.views(g.bins, g.layout).hist[3].reduce((a, b) => a + b, 0) };
+    };
+    const pic = async (name, w, h, paint) => {
+      const hist = __eng.history(w, h);
+      const seq = hist.project.sequences[0].id;
+      const [mid] = await __eng.importAll(hist, [await __eng.write(name, await __eng.png(w, h, paint))]);
+      hist.do(Cut.commands.place(seq, { source: { media: mid }, at: 0, out: 30 * F, video: 'V1', audio: null }));
+      return { hist, seq };
+    };
+    // A colorful picture: hues across, light down, a gray ramp at the bottom.
+    const rich = await pic('scope-rich.png', 640, 360, (g, w, h) => {
+      for (let x = 0; x < w; x++) { const gr = g.createLinearGradient(0, 0, 0, h * 0.8); gr.addColorStop(0, 'hsl(' + (x / w) * 360 + ',90%,85%)'); gr.addColorStop(1, 'hsl(' + (x / w) * 360 + ',70%,15%)'); g.fillStyle = gr; g.fillRect(x, 0, 1, h * 0.8); }
+      for (let x = 0; x < w; x++) { g.fillStyle = 'rgb(' + [x, x, x].map((v) => Math.round((v * 255) / (w - 1))).join(',') + ')'; g.fillRect(x, h * 0.8, 1, h * 0.2); }
+    });
+    for (const [W, H] of [[640, 360], [800, 360], [1920, 1080]]) {
+      const comp = await Cut.compositor.create(__eng.canvas(W, H), { width: W, height: H });
+      const r = await both(comp, rich.hist, rich.seq);
+      out['rich' + W] = { backend: r.g.backend, bins: r.bins, sum: r.sum, total: r.total, rect: r.g.rect, step: r.g.step, nonzero: r.g.bins.filter((v) => v > 0).length };
+      out.errors.push(...comp.errors);
+      await comp.idle();
+      comp.destroy();
+    }
+    // Solid 75% color bars, each its own frame: one vectorscope point at the bar's angle, in its target.
+    const comp = await Cut.compositor.create(__eng.canvas(320, 180), { width: 320, height: 180 });
+    out.bars = [];
+    for (const [name, c] of SC.BARS) {
+      const hist = __eng.history(1280, 720);
+      const seq = hist.project.sequences[0].id;
+      const hex = '#' + c.map((v) => Math.round(v * 0.75 * 255).toString(16).padStart(2, '0')).join('');
+      hist.do(Cut.commands.addGenerated(seq, { track: 'V1', at: 0, duration: 30 * F, source: { generator: 'solid', color: hex } }));
+      const r = await both(comp, hist, seq);
+      const pk = SC.vectorPeak(SC.views(r.g.bins, r.g.layout).vector, r.g.layout.size);
+      const t = SC.targets(r.g.layout.size).find((x) => x.name === name);
+      const [cb, cr] = SC.chroma(...c.map((v) => Math.round(v * 0.75 * 255) / 255));
+      out.bars.push({ name, hex, angle: pk.angle, want: ((Math.atan2(cr, cb) * 180) / Math.PI + 360) % 360, n: pk.n, total: r.total, fromTarget: Math.hypot(pk.x - t.at75[0], pk.y - t.at75[1]), bins: r.bins });
+    }
+    // A horizontal gray ramp: the waveform's diagonal, the same on the parade's three channels.
+    const ramp = await pic('scope-ramp.png', 1280, 720, (g, w, h) => { for (let x = 0; x < w; x++) { const v = Math.round((x * 255) / (w - 1)); g.fillStyle = 'rgb(' + v + ',' + v + ',' + v + ')'; g.fillRect(x, 0, 1, h); } });
+    const rr = await both(comp, ramp.hist, ramp.seq);
+    const v = SC.views(rr.g.bins, rr.g.layout);
+    const pk = [...SC.peaks(v.wave, rr.g.layout.cols)];
+    const n = pk.length;
+    const mx = (n - 1) / 2;
+    const my = pk.reduce((a, b) => a + b, 0) / n;
+    let sxy = 0; let sxx = 0; let syy = 0;
+    pk.forEach((l, i) => { sxy += (i - mx) * (l - my); sxx += (i - mx) ** 2; syy += (l - my) ** 2; });
+    out.ramp = { first: pk[0], last: pk[n - 1], rising: pk.every((l, i) => !i || l >= pk[i - 1]), slope: sxy / sxx, corr: sxy / Math.sqrt(sxx * syy), parade: v.parade.every((p) => S(SC.peaks(p, rr.g.layout.cols)) === S(SC.peaks(v.wave, rr.g.layout.cols))), bins: rr.bins };
+    out.errors.push(...comp.errors);
+    // The Canvas 2D back end counts on the CPU: the same ramp and red.
+    const c2 = await Cut.compositor.create(__eng.canvas(320, 180), { width: 320, height: 180, backend: '2d' });
+    await c2.render(ramp.hist.project, ramp.seq, 0);
+    const r2 = await c2.scopes();
+    const pk2 = [...SC.peaks(SC.views(r2.bins, r2.layout).wave, r2.layout.cols)];
+    out.twoD = { backend: r2.backend, first: pk2[0], last: pk2[pk2.length - 1], rising: pk2.every((l, i) => !i || l >= pk2[i - 1] - 1) };
+    await comp.idle();
+    comp.destroy();
+    c2.destroy();
+    return out;
+  })()`);
+  for (const W of [640, 800, 1920]) {
+    const r = sc[`rich${W}`];
+    check(r.backend === 'webgpu' && r.bins === 0 && r.nonzero > 1000 && r.total === Math.ceil((r.rect.x1 - r.rect.x0) / r.step) * Math.ceil((r.rect.y1 - r.rect.y0) / r.step),
+      `scopes of a colorful frame on a ${W}-wide canvas: the GPU's compute count equals the CPU's over the same pixels, bin for bin (${r.bins} bins differ by ${r.sum}; ${r.nonzero} bins used; frame box ${S(r.rect)}, step ${r.step})`);
+  }
+  check(sc.rich800.rect.x0 === 80 && sc.rich800.rect.x1 === 720, `a pillarboxed canvas: the scopes count the frame, not the bars (${S(sc.rich800.rect)})`);
+  check(sc.rich1920.step === 3, `a 1920x1080 canvas is counted every third pixel (${sc.rich1920.step})`);
+  for (const b of sc.bars) check(b.bins === 0 && b.n === b.total && Math.abs(b.angle - b.want) < 1.5 && b.fromTarget < 1.5, `75% ${b.name} (${b.hex}): one vectorscope point at ${b.angle.toFixed(1)} degrees (want ${b.want.toFixed(1)}), ${b.fromTarget.toFixed(2)} bins from its target; GPU = CPU`);
+  check(sc.ramp.bins === 0 && sc.ramp.first <= 1 && sc.ramp.last >= 254 && sc.ramp.rising && Math.abs(sc.ramp.slope - 1) < 0.02 && sc.ramp.corr > 0.999 && sc.ramp.parade,
+    `a gray ramp is a diagonal on the waveform (${sc.ramp.first} to ${sc.ramp.last}, slope ${sc.ramp.slope.toFixed(4)}, correlation ${sc.ramp.corr.toFixed(5)}) and on each parade channel; GPU = CPU`);
+  check(sc.twoD.backend === '2d' && sc.twoD.first <= 1 && sc.twoD.last >= 254 && sc.twoD.rising, `the Canvas 2D back end counts the scopes on the CPU: the ramp's diagonal (${S(sc.twoD)})`);
+  check(sc.errors.length === 0, `no WebGPU validation errors from the scopes (${S(sc.errors)})`);
 
   // ---- transitions ----
   const tr = await js(`(async () => {

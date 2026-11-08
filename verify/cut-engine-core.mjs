@@ -43,14 +43,15 @@ const video = fx.list('video').map((d) => d.type);
 const wantEffects = ['flip.horizontal', 'flip.vertical', 'crop', 'edge.extend', 'blur.gaussian', 'blur.directional', 'mosaic', 'color.bw', 'color.tint', 'color.brightnessContrast', 'color.basic', 'vignette',
   'sharpen', 'glow', 'color.invert', 'color.hue', 'posterize', 'chromatic', 'glitch', 'distort.lens', 'key.chroma', 'noise.grain'];
 for (const t of wantEffects) check(video.includes(t), `video effect ${t} is registered`);
-check(fx.list('audio').map((d) => d.type).join() === 'audio.gain,audio.fade', 'audio effects gain and fade');
+check(fx.list('audio').map((d) => d.type).join() === 'audio.gain,audio.fade,audio.eq,audio.bass,audio.treble,audio.compressor,audio.limiter,audio.gate,audio.dehum', 'audio effects: gain, fade and the processors (audiofx.js)');
+for (const d of fx.list('audio')) check(typeof d.gain === 'function' || !!require(`${dir}audiofx.js`).processors[d.dsp], `${d.type}: a gain or an audiofx processor`);
 const trTypes = fx.transitions().map((d) => d.type);
 for (const t of ['dissolve', 'dip.black', 'dip.white', 'push', 'wipe', 'slide', 'iris.round', 'zoom.cross', 'crossfade.power']) check(trTypes.includes(t), `transition ${t} is registered`);
 check(fx.defaultTransition('video') === 'dissolve' && fx.defaultTransition('audio') === 'crossfade.power', 'default transitions');
 for (const d of [...fx.list(), ...fx.transitions()]) {
   check(typeof d.name === 'string' && d.name && typeof d.category === 'string' && ['video', 'audio'].includes(d.kind), `${d.type}: name, category, kind`);
   for (const p of d.params) {
-    const ok = p.id && p.name && ['number', 'angle', 'percent', 'color', 'bool', 'choice', 'point'].includes(p.type) && p.default !== undefined && typeof p.keyframable === 'boolean'
+    const ok = p.id && p.name && ['number', 'angle', 'percent', 'color', 'bool', 'choice', 'point', 'curve', 'lut'].includes(p.type) && p.default !== undefined && typeof p.keyframable === 'boolean'
       && (!['number', 'angle', 'percent'].includes(p.type) || (p.min <= p.default && p.default <= p.max && p.step > 0))
       && (p.type !== 'choice' || p.choices.some(([id]) => id === p.default));
     check(ok, `${d.type}.${p.id}: a complete parameter`);
@@ -60,7 +61,15 @@ for (const d of [...fx.list(), ...fx.transitions()]) {
     check(typeof d.cpu === 'function', `${d.type}: a CPU reference`);
   }
 }
-check(S(fx.defaults('color.basic')) === S({ temperature: 0, tint: 0, exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 100, vibrance: 0 }), 'color.basic defaults are the identity');
+{
+  // Lumetri Color: the basic correction's defaults as before, the other sections' neutral, and nothing to draw.
+  const d = fx.defaults('color.basic');
+  const basic = Object.fromEntries(['temperature', 'tint', 'exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'saturation', 'vibrance'].map((k) => [k, d[k]]));
+  check(S(basic) === S({ temperature: 0, tint: 0, exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, saturation: 100, vibrance: 0 }), 'color.basic defaults are the identity');
+  check(d.lut === '' && d.lutIntensity === 100 && ['curveMaster', 'curveRed', 'curveGreen', 'curveBlue'].every((k) => S(d[k]) === '[0,0,1,1]') && d.hslHueRange === 360 && d.hslMask === false,
+    `Lumetri Color's creative, curves and HSL secondary defaults are neutral (${S(d)})`);
+  check(fx.get('color.basic').gpu.uniforms(fx.resolve('color.basic', {}), { assets: { lut: null } }).length === 0, 'Lumetri Color at its defaults has no pass to run');
+}
 const r1 = fx.resolve('blur.gaussian', { blurriness: 9999, dimensions: 'sideways', repeat: 1, other: 3 });
 check(r1.blurriness === 500 && r1.dimensions === 'both' && r1.repeat === true && !('other' in r1), `resolve clamps and validates (${S(r1)})`);
 check(S(fx.resolve('vignette', { center: [10, -20] }).center) === '[10,-20]', 'resolve keeps a point');
@@ -456,7 +465,7 @@ check(L.length === 1 && L[0].kind === 'clip' && L[0].item.clip.id === p1.ids[0],
 near(L[0].item.opacity, 50, 1e-9, 'plan: keyframed opacity at t');
 near(L[0].item.effects[0].params.blurriness, 10, 1e-9, 'plan: keyframed effect parameter at t');
 near(L[0].item.srcT, SEC / 2, 0, 'plan: source time');
-check(L[0].item.frame === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F / 2)[0].item.frame === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F)[0].item.frame === 16, 'plan: the clip-local frame (any time inside a frame gives that frame)');
+check(L[0].item.frameIndex === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F / 2)[0].item.frameIndex === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F)[0].item.frameIndex === 16, 'plan: the clip-local frame (any time inside a frame gives that frame)');
 L = compositor.plan(h.project, seqOf(), SEC + SEC / 2);
 check(L.length === 2 && L[0].item.clip.track === 'V1' && L[1].item.kind === 'text', 'plan: V1 under V2 (text)');
 L = compositor.plan(h.project, seqOf(), 2 * SEC);
@@ -465,7 +474,7 @@ check(tl && tl.a.clip.id === p1.ids[0] && tl.b.clip.id === p2.ids[0], 'plan at t
 near(tl.progress, 0.5, 1e-12, 'plan: a centered transition is half way at its edit point');
 near(tl.a.srcT, 2 * SEC, 0, 'plan: the outgoing clip shows its handle past out');
 near(tl.b.srcT, 10 * SEC, 0, 'plan: the incoming clip at its in point');
-check(tl.a.frame === 60 && tl.b.frame === 0, `plan: frames of the clips in a transition count from each clip's start (${tl.a.frame}, ${tl.b.frame})`);
+check(tl.a.frameIndex === 60 && tl.b.frameIndex === 0, `plan: frames of the clips in a transition count from each clip's start (${tl.a.frameIndex}, ${tl.b.frameIndex})`);
 L = compositor.plan(h.project, seqOf(), 2 * SEC - 5 * F);
 near(L.find((x) => x.kind === 'transition').progress, 0, 1e-12, 'plan: the transition starts half its length before the edit');
 near(L.find((x) => x.kind === 'transition').b.srcT, 10 * SEC - 5 * F, 0, 'plan: the incoming clip shows its frames before in');

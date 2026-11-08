@@ -1,6 +1,9 @@
-// Nano Studio Cut, the editor's frame (renderer/features/cut/ui-shell.js, ui-project.js, ui-monitors.js, ui-export.js,
-// ui-captions.js, ui-keys.js): driven with real mouse and key events in the app. The media comes from Cut.testsrc,
-// written into a temporary Cut home; native dialogs answer from PYIDE_CUT_DIALOG (main/features/cut.js).
+// Nano Studio Cut, the editor's frame (renderer/features/cut/ui-shell.js, ui-menubar.js, ui-project.js, ui-monitors.js,
+// ui-export.js, ui-captions.js, ui-keys.js): driven with real mouse and key events in the app. The media comes from
+// Cut.testsrc, written into a temporary Cut home; native dialogs answer from PYIDE_CUT_DIALOG (main/features/cut.js).
+// Premiere Pro's frame: the workspace tabs and their arrangements, Alt+Shift+number, Reset to Saved Layout and Save
+// Changes from a tab's menu (Alt+Shift+0), maximizing a frame (` and Shift+`), and the menu bar (opening, moving over
+// and Right between menus, Sequence > Add Edit acting on the timeline, Window > Workspaces, File > Save a Copy).
 import { launch, clickMenuPath } from './lib.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, rmSync, renameSync, copyFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -58,7 +61,8 @@ async function drag(from, to) {
 }
 const KEYS = { Space: [' ', 'Space', 32], Comma: [',', 'Comma', 188], Period: ['.', 'Period', 190], Home: ['Home', 'Home', 36], End: ['End', 'End', 35],
   ArrowLeft: ['ArrowLeft', 'ArrowLeft', 37], ArrowRight: ['ArrowRight', 'ArrowRight', 39], ArrowUp: ['ArrowUp', 'ArrowUp', 38], ArrowDown: ['ArrowDown', 'ArrowDown', 40], Enter: ['Enter', 'Enter', 13], Escape: ['Escape', 'Escape', 27],
-  Backspace: ['Backspace', 'Backspace', 8], Delete: ['Delete', 'Delete', 46], Backquote: ['`', 'Backquote', 192] };
+  Backspace: ['Backspace', 'Backspace', 8], Delete: ['Delete', 'Delete', 46], Backquote: ['`', 'Backquote', 192],
+  ...Object.fromEntries([...'0123456789'].map((d) => [d, [d, `Digit${d}`, d.charCodeAt(0)]])) };
 // A key stroke: 'J', 'Ctrl+S', 'Shift+ArrowRight', 'Comma'... `text` makes it type (a keyDown with text).
 async function key(combo, { down = true, up = true, text } = {}) {
   const parts = combo.split('+');
@@ -399,6 +403,142 @@ try {
   for (let i = 0; i < 100 && !existsSync(path.join(home, 'frame.png')); i++) await sleep(100);
   check(existsSync(path.join(home, 'frame.png')) && readFileSync(path.join(home, 'frame.png')).subarray(1, 4).toString() === 'PNG', 'Ctrl+Shift+E saves the program frame as a PNG');
 
+  // ---------- Premiere Pro's workspaces ----------
+  // A workspace as rows of slots, each slot its panels' tabs ('source|controls'); slots kept for panels not loaded are left out.
+  const layoutNow = () => S(`[...document.querySelectorAll('.cut-grid > .cut-row')].map((r) => [...r.querySelectorAll(':scope > .cut-slot:not([hidden])')]
+    .map((s) => [...s.querySelectorAll('.cut-slot-tab')].map((t) => t.dataset.panel).join('|')).join(' / ')).join(' ;; ')`);
+  // what Premiere's arrangement gives with the panels this window has (the mixer, Essential Sound and the scopes come from other files)
+  const expected = (rows) => S(`${JSON.stringify(rows)}.map((r) => r.map((s) => s.filter((p) => Cut.ui.panels.has(p)).join('|')).filter(Boolean).join(' / ')).join(' ;; ')`);
+  const tabsNow = await S(`[...document.querySelectorAll('.cut-ws-tab')].map((t) => t.dataset.ws + (t.hidden ? '(hidden)' : '')).join()`);
+  check(tabsNow === 'editing,color,effects,audio,captions,export', `the workspace tabs are Editing, Color, Effects, Audio, Captions and Graphics, and Export, all shown (${tabsNow})`);
+  const WS = {
+    editing: [[['source', 'controls'], ['program']], [['project', 'effects', 'markers', 'history', 'transcript'], ['tools'], ['timeline'], ['meters']]],
+    color: [[['scopes', 'source'], ['program'], ['color', 'controls']], [['project', 'effects', 'history'], ['tools'], ['timeline'], ['meters']]],
+    effects: [[['controls', 'source'], ['program'], ['effects', 'markers']], [['project', 'history'], ['tools'], ['timeline'], ['meters']]],
+    audio: [[['mixer', 'controls', 'source'], ['program'], ['essential']], [['project', 'effects', 'markers', 'history', 'transcript'], ['tools'], ['timeline'], ['meters']]],
+  };
+  for (const [ws, rows] of Object.entries(WS)) {
+    await click(`.cut-ws-tab[data-ws="${ws}"]`);
+    await until(`Cut.ui.workspace === '${ws}'`, ws);
+    const got = await layoutNow();
+    const want = await expected(rows);
+    check(got === want, `the ${ws} workspace is arranged as Premiere's (${got})`);
+  }
+  check(await S(`Cut.ui.panels.has('mixer') ? !!document.querySelector('.cut-grid .cut-panel[data-panel="mixer"]') : true`), 'the Audio workspace shows the Audio Track Mixer when its panel is there');
+  await key('Alt+Shift+3');
+  const k3 = await S('Cut.ui.workspace');
+  await key('Alt+Shift+5');
+  const k5 = await S('Cut.ui.workspace');
+  await key('Alt+Shift+1');
+  check(k3 === 'effects' && k5 === 'captions' && (await S('Cut.ui.workspace')) === 'editing', `Alt+Shift+3, 5 and 1 go to Effects, Captions and Graphics and Editing (${k3}, ${k5})`);
+  // a moved splitter and an added panel go away with Reset to Saved Layout; Save Changes makes the layout the one to go back to
+  const widthOf = (p) => S(`Math.round(document.querySelector('.cut-grid .cut-panel[data-panel="${p}"]').closest('.cut-slot').getBoundingClientRect().width)`);
+  const w0 = await widthOf('source');
+  const dragBar = async (dx) => {
+    const bar = await S(`(() => { const b = document.querySelector('.cut-grid > .cut-row .cut-splitter.v').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+    await mouse('mouseMoved', bar.x, bar.y);
+    await mouse('mousePressed', bar.x, bar.y);
+    for (let i = 1; i <= 6; i++) await mouse('mouseMoved', bar.x + (dx * i) / 6, bar.y, { button: 'left', buttons: 1 });
+    await mouse('mouseReleased', bar.x + dx, bar.y);
+    await sleep(150);
+  };
+  await dragBar(120);
+  const w1 = await widthOf('source');
+  await S(`Cut.ui.openPanel('captions')`);
+  const added = await S(`!!document.querySelector('.cut-grid .cut-slot-tab.added[data-panel="captions"]')`);
+  // the Editing tab's own menu: 1 Reset to Saved Layout, 2 Save Changes to This Workspace
+  const tabMenu = async (item) => {
+    const tab = await center('.cut-ws-tab[data-ws="editing"]');
+    await mouse('mouseMoved', tab.x, tab.y);
+    await mouse('mousePressed', tab.x, tab.y, { button: 'right', buttons: 2 });
+    await mouse('mouseReleased', tab.x, tab.y, { button: 'right', buttons: 0 });
+    await until(`[...document.querySelectorAll('.context-menu .menu-label')].some((n) => n.textContent === 'Reset to Saved Layout')`, 'the workspace tab menu', 3000);
+    await click(`.context-menu .menu-item:nth-child(${item})`);
+    await sleep(200);
+  };
+  await tabMenu(1);
+  const w2 = await widthOf('source');
+  check(w1 > w0 + 80 && added && Math.abs(w2 - w0) <= 2 && !(await S(`!!document.querySelector('.cut-grid .cut-slot-tab[data-panel="captions"]')`)),
+    `Reset to Saved Layout on the tab's menu puts the splitter back and takes the added panel out (${w0} -> ${w1} -> ${w2})`);
+  await dragBar(-100);
+  const saved = await widthOf('source');
+  await tabMenu(2);
+  await dragBar(150);
+  await key('Alt+Shift+0');
+  await sleep(200);
+  const back = await widthOf('source');
+  check(Math.abs(back - saved) <= 2 && Math.abs(saved - w0) > 60, `after Save Changes, Alt+Shift+0 resets to the saved layout (${saved} saved, ${back} after the reset)`);
+  await S(`(ide.settings.set('cut.layoutSaved', {}), Cut.ui.resetWorkspace(), true)`);
+  // ` and Shift+`: one frame fills the workspace and comes back
+  const slotsShown = () => S(`[...document.querySelectorAll('.cut-grid .cut-slot')].filter((s) => s.getClientRects().length).map((s) => s.querySelector('.cut-slot-tab')?.dataset.panel).join()`);
+  await click('.cut-monitor-program .cut-monitor-head');
+  await key('Shift+Backquote');
+  const maxed = await slotsShown();
+  const full = await S(`(() => { const g = document.querySelector('.cut-grid').getBoundingClientRect(), s = document.querySelector('.cut-grid .cut-panel[data-panel="program"]').closest('.cut-slot').getBoundingClientRect(); return s.width > g.width * 0.95 && s.height > g.height * 0.9; })()`);
+  await key('Shift+Backquote');
+  const restored = await slotsShown();
+  const lanes0 = await center('.cut-tl-lanes');
+  await mouse('mouseMoved', lanes0.x, lanes0.y);
+  await key('Backquote');
+  const under = await slotsShown();
+  await key('Backquote');
+  check(maxed === 'program' && full && restored.split(',').length === 6 && under === 'timeline' && (await slotsShown()) === restored,
+    `Shift+\` maximizes the frame with the keyboard and \` the one under the pointer; again restores (${maxed}, ${under}; ${restored})`);
+
+  // ---------- the menu bar ----------
+  const titles = await S(`[...document.querySelectorAll('.cut-menubar .cut-menubar-item')].map((b) => b.textContent).join()`);
+  check(titles === 'File,Edit,Clip,Sequence,Markers,Graphics and Titles,View,Window,Help', `the menu bar has Premiere's menus (${titles})`);
+  const menuRows = () => S(`[...document.querySelectorAll('.context-menu[data-level="0"] > .menu-item')].map((r) => r.querySelector('.menu-label').textContent + (r.querySelector('.hint-right') ? '=' + r.querySelector('.hint-right').textContent : '')).join('|')`);
+  await click('.cut-project .cut-panel-foot');
+  await click('.cut-menubar-item[data-menu="sequence"]');
+  const seqMenu = await menuRows();
+  const mk = await center('.cut-menubar-item[data-menu="markers"]');
+  await mouse('mouseMoved', mk.x, mk.y);
+  await sleep(150);
+  const markMenu = await menuRows();
+  await key('ArrowRight');
+  await sleep(100);
+  const nextMenu = await menuRows();
+  await key('Escape');
+  await sleep(100);
+  check(/Add Edit=Ctrl\+K\|Add Edit to All Tracks=Ctrl\+Shift\+K/.test(seqMenu) && /Lift=;\|Extract='/.test(seqMenu), `Sequence has the edits with their keys (${seqMenu.slice(0, 160)}…)`);
+  check(/Add Marker=M\|Go to Next Marker=Shift\+M\|Go to Previous Marker=Ctrl\+Shift\+M/.test(markMenu) && /Clear In and Out=Ctrl\+Shift\+X/.test(markMenu), `moving over Markers opens it while a menu is open (${markMenu.slice(0, 160)}…)`);
+  check(/^New Layer/.test(nextMenu) && !(await S(`!!document.querySelector('.context-menu') || !!document.querySelector('.cut-menubar-item.open')`)), `Right goes to Graphics and Titles, Esc closes the menu (${nextMenu.slice(0, 80)})`);
+  // Sequence > Add Edit cuts at the playhead while the project panel has the keyboard
+  const n0 = await app('app.sequence.clips.length');
+  await app(`(app.setTime(10 * ${F}), true)`);
+  await click('.cut-project .cut-panel-foot');
+  await click('.cut-menubar-item[data-menu="sequence"]');
+  await click(`.context-menu .menu-item:nth-child(${(await S(`[...document.querySelectorAll('.context-menu[data-level="0"] > *')].findIndex((r) => r.querySelector?.('.menu-label')?.textContent === 'Add Edit')`)) + 1})`);
+  const n1 = await app('app.sequence.clips.length');
+  check(n1 === n0 + 2 && (await focusOf()) === 'project', `Sequence > Add Edit splits the clips at the playhead, whichever panel has the keyboard (${n0} -> ${n1})`);
+  await click('.cut-monitor-program .cut-monitor-head');
+  await key('Ctrl+Z');
+  // Window > Workspaces > Audio
+  await click('.cut-menubar-item[data-menu="window"]');
+  const ws = await center(`.context-menu[data-level="0"] .menu-item.has-sub`);
+  await mouse('mouseMoved', ws.x, ws.y);
+  await until(`!!document.querySelector('.context-menu[data-level="1"]')`, 'the Workspaces submenu', 3000);
+  const audioRow = await S(`[...document.querySelectorAll('.context-menu[data-level="1"] > *')].findIndex((r) => r.querySelector?.('.menu-label')?.textContent === 'Audio') + 1`);
+  if (audioRow > 0) await click(`.context-menu[data-level="1"] > :nth-child(${audioRow})`);
+  else await key('Escape');
+  check((await S('Cut.ui.workspace')) === 'audio', 'Window > Workspaces > Audio switches the workspace');
+  await click('.cut-ws-tab[data-ws="editing"]');
+  // File > Save a Copy writes the project to another file and leaves the open one as it was
+  const copyPath = path.join(home, 'Projects', 'shell-copy.ncut');
+  const pathBefore = await app('app.path');
+  const dirtyBefore = await S('Cut.ui.lifecycle.dirty');
+  answer({ saveAs: copyPath });
+  await click('.cut-menubar-item[data-menu="file"]');
+  const copyRow = await S(`[...document.querySelectorAll('.context-menu[data-level="0"] > *')].findIndex((r) => r.querySelector?.('.menu-label')?.textContent === 'Save a Copy…') + 1`);
+  const copyHint = await S(`document.querySelector('.context-menu[data-level="0"] > :nth-child(${copyRow}) .hint-right')?.textContent`);
+  await click(`.context-menu[data-level="0"] > :nth-child(${copyRow})`);
+  for (let i = 0; i < 50 && !existsSync(copyPath); i++) await sleep(100);
+  check(copyHint === 'Ctrl+Alt+S' && existsSync(copyPath) && JSON.parse(readFileSync(copyPath, 'utf8')).sequences[0].markers.length === 1 && (await app('app.path')) === pathBefore && (await S('Cut.ui.lifecycle.dirty')) === dirtyBefore,
+    `File > Save a Copy (Ctrl+Alt+S) writes the project as it is to another file; the open one keeps its file and changes (${copyHint})`);
+  answer({});
+  await shot('menubar-workspaces.png');
+
   // ---------- captions ----------
   await click('.cut-ws-tab[data-ws="captions"]');
   await until(`Cut.ui.workspace === 'captions' && !!document.querySelector('.cut-grid .cut-captions')?.getClientRects().length`, 'the Captions and Graphics workspace');
@@ -430,7 +570,7 @@ try {
   for (const theme of ['dark', 'light']) {
     await S(`ide.settings.set('appearance.theme', '${theme}')`);
     await sleep(300);
-    for (const ws of ['editing', 'color', 'captions', 'export']) {
+    for (const ws of ['editing', 'color', 'effects', 'audio', 'captions', 'export']) {
       await click(`.cut-ws-tab[data-ws="${ws}"]`);
       await until(`Cut.ui.workspace === '${ws}'`, ws);
       await sleep(400);

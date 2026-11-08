@@ -19,6 +19,7 @@
   const NODE = typeof module === 'object' && !!module.exports;
   const time = NODE ? require('./time.js') : globalThis.Cut.time;
   const captionwords = () => (NODE ? require('./captionwords.js') : globalThis.Cut.captionwords);
+  const lumetri = () => (NODE ? require('./lumetri.js') : globalThis.Cut.lumetri);
 
   const VERSION = 1;
   const EASES = ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut', 'bezier'];
@@ -212,6 +213,20 @@
     }
   }
 
+  // Lumetri Color's LUTs (lumetri.js store()): { 'lut-<16 hex>': { name, title, size, min, max, data } }. An effect
+  // may name a LUT that is not here (it is drawn without one).
+  const LUT_ID = /^lut-[0-9a-f]{16}$/;
+  function validateLuts(luts, err) {
+    if (!isObj(luts)) return err('luts: not an object');
+    for (const [id, e] of Object.entries(luts)) if (!LUT_ID.test(id) || !lumetri().validEntry(e)) err(`luts: ${id}`);
+  }
+  // The LUT ids the effects of a project name.
+  function lutsInUse(project) {
+    const used = new Set();
+    for (const seq of project.sequences || []) for (const c of seq.clips || []) for (const e of c.effects || []) if (typeof e?.params?.lut === 'string' && e.params.lut) used.add(e.params.lut);
+    return used;
+  }
+
   // A sequence runs at one of the offered rates (features section 3); clipDuration's rounding relies on it.
   function validFps(fps) {
     return Array.isArray(fps) && fps.length === 2 && time.FRAME_RATES.some(([n, d]) => n === fps[0] && d === fps[1]);
@@ -294,6 +309,7 @@
       validateSequence(project, seq, mediaById, claim, err, linkSeq);
     }
     if (project.speakers !== undefined) validateSpeakers(project.speakers, err);
+    if (project.luts !== undefined) validateLuts(project.luts, err);
     return { ok: errors.length === 0, errors };
   }
 
@@ -589,13 +605,20 @@
       for (const ct of seq.captions) { visit(ct.id); ct.items.forEach((it) => visit(it.id)); }
     }
     p.nextId = Math.max(isInt(p.nextId) ? p.nextId : 1, max + 1);
+    // LUTs no effect names any more, and damaged ones (their effects draw without a LUT), are left behind.
+    if (p.luts !== undefined) {
+      const used = lutsInUse(p);
+      const keep = isObj(p.luts) ? Object.entries(p.luts).filter(([id, e]) => used.has(id) && LUT_ID.test(id) && lumetri().validEntry(e)) : [];
+      if (keep.length) p.luts = Object.fromEntries(keep);
+      else delete p.luts;
+    }
     return p;
   }
 
   return {
     VERSION, QUANTUM, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ROLES, ALIGNS,
     clone, newId, defaultSettings, createProject, createSequence, createTrack, createClip, createTextLayer, defaultCaptionStyle,
-    videoProps, audioProps, validate, validPropPath, validFps, validDoubt, migrate,
+    videoProps, audioProps, validate, validPropPath, validFps, validDoubt, migrate, lutsInUse,
     clipDuration, clipEnd, sequenceDuration, clipsAt, sourceTime, trackIndex, trackOf, linkedClips, mediaOf, isGenerator, isStill,
   };
 });

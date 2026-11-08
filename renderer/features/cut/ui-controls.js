@@ -188,8 +188,14 @@
           label: tr(p.name), path: `effects.${e.id}.${p.id}`, type: p.type === 'percent' || p.type === 'angle' ? 'number' : p.type, min: p.min, max: p.max, step: p.step,
           unit: p.unit || (p.type === 'percent' ? '%' : p.type === 'angle' ? '°' : ''), choices: p.choices, keyframable: p.keyframable !== false,
           slider: Number.isFinite(p.min) && Number.isFinite(p.max) && p.max - p.min <= 2000 ? [p.min, p.max] : null, fallback: p.default,
-        }));
-        section(`fx:${c.id}:${e.id}`, def ? tr(def.name) : e.type, c, params, { effect: e, index: i, count: c.effects.length });
+        })).flatMap((spec, k, all) => {
+          const g = def.params[k].group;
+          return g && g !== def.params[k - 1]?.group ? [{ heading: tr(g) }, spec] : [spec];
+        });
+        const sec = section(`fx:${c.id}:${e.id}`, def ? tr(def.name) : e.type, c, params, { effect: e, index: i, count: c.effects.length });
+        // An effect may add a view above its rows (ui-audiofx.js: the EQ's frequency response): {node, update()}.
+        const view = ui.effectViews?.[e.type]?.({ app, clipId: c.id, effectId: e.id });
+        if (view) { sec.querySelector('.cut-ec-rows').prepend(view.node); rows.push(view); }
       });
     }
 
@@ -236,7 +242,8 @@
       top.appendChild(tools);
       sec.appendChild(top);
       const list = el('div', 'cut-ec-rows');
-      for (const spec of specs) list.appendChild(paramRow(clip.id, spec));
+      // An effect whose parameters have groups (Lumetri Color) shows each group's name above its rows.
+      for (const spec of specs) list.appendChild(spec.heading ? el('div', 'cut-ec-subhead', spec.heading) : paramRow(clip.id, spec));
       sec.appendChild(list);
       body.appendChild(sec);
       return sec;
@@ -248,6 +255,7 @@
       app.history.begin('Reset');
       try {
         for (const spec of specs) {
+          if (spec.heading) continue;
           if (spec.field) { app.history.do(C.setClip(seq().id, c.id, { ...spec.field.reset, ripple: true })); continue; }
           if (spec.type === 'duration') { app.history.do(C.setClip(seq().id, c.id, { [spec.path]: 0 })); continue; }
           if (edit.keyframed(c, spec.path)) app.history.do(C.setKeyframes(seq().id, c.id, spec.path, null));
@@ -355,6 +363,19 @@
           const f = ui.timecodeField({ fps, value: value() || 0, onChange: (t) => write(t) });
           updates.push(() => { f.value = value() || 0; });
           ctl.appendChild(f);
+          break;
+        }
+        // Lumetri Color's curves and Look are edited in its panel; the row shows what is set (and keyframes the curve).
+        case 'curve': {
+          const t = el('span', 'cut-ec-note');
+          updates.push(() => { const v = value(); t.textContent = tr('{n} points', { n: Array.isArray(v) ? Math.floor(v.length / 2) : 2 }); });
+          ctl.appendChild(t);
+          break;
+        }
+        case 'lut': {
+          const t = el('span', 'cut-ec-note');
+          updates.push(() => { const v = value(); t.textContent = v ? app.project.luts?.[v]?.name || tr('Missing LUT') : tr('None'); });
+          ctl.appendChild(t);
           break;
         }
         default: break;

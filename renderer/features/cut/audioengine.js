@@ -1,6 +1,7 @@
 // The sound of Nano Studio Cut (docs/cut-architecture.md §9, features §12): one mixer computes the sequence's audio
 // sample by sample (every audio clip with its volume and volume keyframes, pan, fade handles, audio crossfades, track
-// volume, pan, mute and solo, speed changes with the pitch kept by a WSOLA time stretch, reverse), and both the preview
+// volume, pan, mute and solo, speed changes with the pitch kept by a WSOLA time stretch, reverse, and the clip's audio
+// effects: gains, and processors (EQ, dynamics, hum removal: audiofx.js) run as a chain), and both the preview
 // and the export use it, so what is heard is what is exported. The preview plays the mix through Web Audio in short
 // blocks scheduled on the AudioContext clock, which is the sequence clock the player follows (now()). Also: BS.1770-4
 // loudness (K-weighting, gating) and true peak, the gain that normalizes a peak to -1 dB, and a resampler.
@@ -620,7 +621,14 @@
         if (!pcm?.reader) return null;
         const t0 = Math.max(from, span.from);
         const t1 = Math.min(to, span.to, t0 + LOAD_SECONDS * TICKS);
-        const [k0, k1] = sourceSpan(x, span, t0, t1);
+        let [k0, k1] = sourceSpan(x, span, t0, t1);
+        // A clip with an effect chain also reads its segments' warm-up before and cross-fade tail after.
+        const chain = x.clip.speed === 1 ? chainOf(x, span) : null;
+        if (chain) {
+          const reach = 2 * FX_SEGMENT + chain.warm + FX_XFADE + chain.latency;
+          k0 -= reach;
+          k1 += reach;
+        }
         return ensure(pcm, k0, k1).catch((err) => { const s = sources.get(keyOf(x.media)); s.state = 'failed'; s.error = err; });
       }));
       return [...wanted.values()].filter((m) => sources.get(keyOf(m))?.state === 'failed').map((m) => ({ media: m.id, error: String(sources.get(keyOf(m)).error?.message || sources.get(keyOf(m)).error) }));
@@ -651,6 +659,141 @@
       return entry;
     }
 
+    // ---- clip effects that process the sound (audiofx.js) ----
+    // A clip with a processor among its effects runs them all, in order, as one chain over its source sound, before
+    // its volume, fades and pan. So that the sound does not depend on how the mix is cut into blocks (the preview's
+    // 2048 samples, the export's second, a seek), the chain runs in fixed segments of FX_SEGMENT samples counted from
+    // the clip's first audible sample: each from a warm-up before it (or the clip's start) with fresh state, the
+    // warm-up long enough for the state to forget its start (the processors' memory(), at most audiofx.MAX_MEMORY),
+    // and on FX_XFADE samples past its end, which cross-fade into the next segment's start. Segments are kept (LRU).
+    const FX_SEGMENT = 32768;
+    const FX_XFADE = 512;
+    const FX_KEEP = 96;
+    const fxSegments = new Map(); // `${chain.key}|${j}` -> {body: [L, R], tail: [L, R], used}
+
+    // The clip's chain, or null when none of its effects processes the sound (the gains then stay in gainsAt).
+    function chainOf(x, span) {
+      const registry = mod('effects');
+      const fxm = mod('audiofx');
+      if (!registry?.get || !fxm) return null;
+      const clip = x.clip;
+      const list = (clip.effects || []).filter((e) => e.on !== false).map((e) => ({ e, def: registry.get(e.type) }))
+        .filter(({ def }) => def && def.kind === 'audio' && (def.dsp ? !!fxm.processors[def.dsp] : typeof def.gain === 'function'));
+      if (!list.some(({ def }) => def.dsp)) return null;
+      const durS = x.dur / TICKS;
+      const kfs = {};
+      let memory = 0;
+      let latency = 0;
+      const stages = list.map(({ e, def }) => {
+        const base = registry.resolve ? registry.resolve(e.type, e.params || {}) : { ...e.params };
+        const keyed = Object.keys(base).map((k) => [k, clip.keyframes?.[`effects.${e.id}.${k}`]]).filter(([, l]) => l?.length);
+        for (const [k, l] of keyed) kfs[`${e.id}.${k}`] = l;
+        const proc = def.dsp ? fxm.processors[def.dsp] : null;
+        if (proc) { memory += proc.memory(base, rate); latency += proc.latency(rate); }
+        return proc ? { proc, base, keyed } : { gain: (p, t) => def.gain(p, t, durS), base, keyed };
+      });
+      const C = fxm.CONTROL;
+      const warm = Math.max(C, Math.ceil((Math.min(fxm.MAX_MEMORY, memory) * rate) / C) * C);
+      const key = JSON.stringify([keyOf(x.media), clip.in, clip.out, clip.speed, !!clip.reverse, clip.keepPitch !== false, clip.start, span.from, span.to, x.dur,
+        list.map(({ e }) => [e.id, e.type, e.params]), kfs]);
+      const keyframes = mod('keyframes');
+      // Stage k's parameters at sequence sample i: the stored ones, keyframes evaluated at that sample.
+      const paramsAt = (k, i) => {
+        const s = stages[k];
+        if (!s.keyed.length) return s.base;
+        const tau = i * tps - clip.start;
+        const p = { ...s.base };
+        for (const [id, l] of s.keyed) p[id] = keyframes.valueAt(l, tau, s.base[id]);
+        return p;
+      };
+      return { stages, warm, latency, key, paramsAt, anchor: Math.ceil(span.from / tps), end: Math.ceil(span.to / tps) };
+    }
+    // Sequence samples of segment j ([s0, s1)) and of its run ([r0, r1): the warm-up, the segment, its cross-fade
+    // tail); the run's input reaches `latency` samples further.
+    function segmentRun(chain, j) {
+      const s0 = chain.anchor + j * FX_SEGMENT;
+      const s1 = Math.min(chain.end, s0 + FX_SEGMENT);
+      return { s0, s1, r0: Math.max(chain.anchor, s0 - chain.warm), r1: Math.min(chain.end, s1 + FX_XFADE) };
+    }
+    // The samples of the source store that sequence samples [i0, i1) of a clip at speed 1 (forward or reversed) read.
+    function sourceOf(x, i0, i1) {
+      const { clip } = x;
+      const startS = clip.start / tps;
+      if (clip.reverse) return [Math.floor(clip.out / tps - (i1 - startS)) - 2, Math.ceil(clip.out / tps - (i0 - startS)) + 1];
+      return [Math.floor(clip.in / tps + (i0 - startS)) - 1, Math.ceil(clip.in / tps + (i1 - startS)) + 1];
+    }
+    function fxSegment(chain, x, srcAt, j) {
+      const k = `${chain.key}|${j}`;
+      const hit = fxSegments.get(k);
+      if (hit) { hit.used = ++useTick; return hit; }
+      const fxm = mod('audiofx');
+      const { s0, s1, r0, r1 } = segmentRun(chain, j);
+      const lat = chain.latency;
+      const n = r1 - r0 + lat;
+      const L = new Float64Array(n);
+      const R = new Float64Array(n);
+      const two = [0, 0];
+      for (let i = r0, e = Math.min(chain.end, r0 + n); i < e; i++) {
+        srcAt(i, two);
+        L[i - r0] = two[0];
+        R[i - r0] = two[1];
+      }
+      const clipStart = x.clip.start;
+      fxm.createChain(chain.stages, rate).process(L, R, n, {
+        paramsAt: (k2, i) => chain.paramsAt(k2, r0 + i),
+        secondsAt: (i) => ((r0 + i) * tps - clipStart) / TICKS,
+      });
+      // The output for sequence sample i is at (i - r0) + latency.
+      const cut = (a, b) => [Float32Array.from(L.subarray(a - r0 + lat, b - r0 + lat)), Float32Array.from(R.subarray(a - r0 + lat, b - r0 + lat))];
+      const entry = { body: cut(s0, s1), tail: cut(s1, r1), used: ++useTick };
+      fxSegments.set(k, entry);
+      while (fxSegments.size > FX_KEEP) {
+        let worst = null;
+        let oldest = Infinity;
+        for (const [key, e] of fxSegments) if (e.used < oldest) { oldest = e.used; worst = key; }
+        fxSegments.delete(worst);
+      }
+      return entry;
+    }
+    // The chain's output for sequence samples [a, b) -> [L, R], or null while a block of the source it reads is not
+    // in memory yet (it is asked for).
+    function chainRange(chain, x, pcm, srcAt, a, b, speed1) {
+      const jA = Math.floor((a - chain.anchor) / FX_SEGMENT);
+      const jB = Math.floor((b - 1 - chain.anchor) / FX_SEGMENT);
+      const first = jA > 0 && a - (chain.anchor + jA * FX_SEGMENT) < FX_XFADE ? jA - 1 : jA;
+      if (speed1 && pcm.reader) {
+        for (let j = first; j <= jB; j++) {
+          if (fxSegments.has(`${chain.key}|${j}`)) continue;
+          const { r0, r1 } = segmentRun(chain, j);
+          const [k0, k1] = sourceOf(x, r0, Math.min(chain.end, r1 + chain.latency));
+          if (!has(pcm, k0, k1)) { ensure(pcm, k0, k1).catch(() => {}); return null; }
+        }
+      }
+      const out = [new Float32Array(b - a), new Float32Array(b - a)];
+      for (let j = jA; j <= jB; j++) {
+        const seg = fxSegment(chain, x, srcAt, j);
+        const s0 = chain.anchor + j * FX_SEGMENT;
+        const from = Math.max(a, s0);
+        const to = Math.min(b, s0 + seg.body[0].length);
+        const prev = j > 0 && from - s0 < FX_XFADE ? fxSegment(chain, x, srcAt, j - 1) : null;
+        for (let c = 0; c < 2; c++) {
+          const body = seg.body[c];
+          const tail = prev ? prev.tail[c] : null;
+          const o = out[c];
+          for (let i = from; i < to; i++) {
+            const at = i - s0;
+            let v = body[at];
+            if (tail && at < tail.length) {
+              const w = (at + 0.5) / FX_XFADE;
+              v = tail[at] * (1 - w) + v * w;
+            }
+            o[i - a] = v;
+          }
+        }
+      }
+      return out;
+    }
+
     // Adds one clip's sound for samples [s0, s0 + n) into the stereo bus.
     function renderClip(bus, project, seq, x, s0, n) {
       const keyframes = mod('keyframes');
@@ -664,9 +807,12 @@
       if (b <= a) return true;
       const plain = clip.speed === 1 && !clip.reverse;
       const revPlain = clip.speed === 1 && clip.reverse;
-      // A block not read yet: asked for, and this clip is missing from this mix.
-      const need = sourceSpan(x, span, a * tps, b * tps);
-      if (pcm.reader && !has(pcm, need[0], need[1])) { ensure(pcm, need[0], need[1]).catch(() => {}); return false; }
+      const chain = chainOf(x, span);
+      // A block not read yet: asked for, and this clip is missing from this mix. (A chain checks its segments' input.)
+      if (!(chain && (plain || revPlain))) {
+        const need = sourceSpan(x, span, a * tps, b * tps);
+        if (pcm.reader && !has(pcm, need[0], need[1])) { ensure(pcm, need[0], need[1]).catch(() => {}); return false; }
+      }
       const st = plain || revPlain ? null : stretchedOf(pcm, clip, span, dur, keyOf(media));
       if (!plain && !revPlain && !st) return false;
       let bStart = 0;
@@ -684,14 +830,37 @@
       const inS = clip.in / tps;
       const outS = clip.out / tps;
       const startT = clip.start;
+      const startS = startT / tps;
+      // The source's sound at sequence sample i -> out [l, r] (0 outside the source).
+      const srcAt = (i, out) => {
+        const along = i - startS; // samples from the clip start
+        out[0] = 0;
+        out[1] = 0;
+        if (plain || revPlain) {
+          const k = plain ? Math.round(inS + along) : Math.round(outS - along) - 1;
+          if (k < 0 || k >= pcm.length) return;
+          if (k < bStart || k >= bEnd) blockAt(k);
+          if (!L) return;
+          out[0] = L[k - bStart];
+          out[1] = R[k - bStart];
+        } else {
+          const k = Math.round(along - st.origin / tps);
+          if (k < 0 || k >= st.data[0].length) return;
+          out[0] = st.data[0][k];
+          out[1] = st.data[1][k];
+        }
+      };
+      const fxOut = chain ? chainRange(chain, x, pcm, srcAt, a, b, plain || revPlain) : null;
+      if (chain && !fxOut) return false;
       const volList = clip.keyframes?.volume;
       const duckList = clip.keyframes?.duck;
       const panList = clip.keyframes?.pan;
       const baseVol = clip.props?.volume ?? 0;
       const basePan = clip.props?.pan ?? 0;
-      // Audio effects of the registry (effects.js): gain(params, seconds into the clip, clip seconds) -> linear gain.
+      // Gain effects of the registry (effects.js) on a clip without a chain: gain(params, seconds into the clip, clip
+      // seconds) -> linear gain. With a chain they are stages of it, in their place among the processors.
       const registry = mod('effects');
-      const fx = (clip.effects || []).map((e) => ({ e, def: e.on !== false ? registry?.get?.(e.type) : null }))
+      const fx = chain ? [] : (clip.effects || []).map((e) => ({ e, def: e.on !== false ? registry?.get?.(e.type) : null }))
         .filter((x) => x.def && x.def.kind === 'audio' && typeof x.def.gain === 'function')
         .map(({ e, def }) => ({ def, id: e.id, params: registry.resolve ? registry.resolve(e.type, e.params || {}) : { ...e.params } }));
       const durS = dur / TICKS;
@@ -722,30 +891,19 @@
         const p = Math.max(-1, Math.min(1, (panList?.length ? keyframes.valueAt(panList, tau, basePan) : basePan) / 100));
         return [g * (p > 0 ? 1 - p : 1), g * (p < 0 ? 1 + p : 1)];
       };
-      // Gains are computed every KF_STEP samples and interpolated linearly between.
-      const startS = startT / tps;
-      for (let seg = a; seg < b; seg += KF_STEP) {
-        const segEnd = Math.min(b, seg + KF_STEP);
+      // Gains are computed every KF_STEP samples on a grid counted from the clip's first audible sample (not from the
+      // mix's block, so a sample's gain does not depend on where a block starts) and interpolated linearly between.
+      const anchor = Math.ceil(span.from / tps);
+      const two = [0, 0];
+      for (let seg = anchor + Math.floor((a - anchor) / KF_STEP) * KF_STEP; seg < b; seg += KF_STEP) {
+        const segEnd = seg + KF_STEP;
         const [gl0, gr0] = gainsAt(seg * tps - startT);
         const [gl1, gr1] = gainsAt(segEnd * tps - startT);
-        const len = segEnd - seg;
-        for (let i = seg; i < segEnd; i++) {
-          const f = (i - seg) / len;
-          const along = i - startS; // samples from the clip start
-          let k;
+        for (let i = Math.max(a, seg), e = Math.min(b, segEnd); i < e; i++) {
+          const f = (i - seg) / KF_STEP;
           let l;
           let r;
-          if (plain || revPlain) {
-            k = plain ? Math.round(inS + along) : Math.round(outS - along) - 1;
-            if (k < 0 || k >= pcm.length) continue;
-            if (k < bStart || k >= bEnd) blockAt(k);
-            if (!L) continue;
-            l = L[k - bStart]; r = R[k - bStart];
-          } else {
-            k = Math.round(along - st.origin / tps);
-            if (k < 0 || k >= st.data[0].length) continue;
-            l = st.data[0][k]; r = st.data[1][k];
-          }
+          if (fxOut) { l = fxOut[0][i - a]; r = fxOut[1][i - a]; } else { srcAt(i, two); l = two[0]; r = two[1]; }
           bus[0][i - s0] += l * (gl0 + (gl1 - gl0) * f);
           bus[1][i - s0] += r * (gr0 + (gr1 - gr0) * f);
         }
@@ -818,7 +976,7 @@
       return mix(project, seqId, s0, n, opts);
     }
 
-    return { rate, load, mix, mixLoaded, sources, forget: () => { sources.clear(); stretched.clear(); } };
+    return { rate, load, mix, mixLoaded, sources, forget: () => { sources.clear(); stretched.clear(); fxSegments.clear(); } };
   }
 
   function makeBuffer(channels, rate) {
@@ -874,7 +1032,8 @@
   // The preview of app's active sequence: start(t, rate) plays from t (rate 0.25..4 forward plays the mix faster or
   // slower like tape; other rates are silent but the clock runs), now() is the sequence time being heard,
   // meters() the levels being heard in dBFS: {master (peak), masterChannels: [l, r] (peaks), masterRms: [l, r] (RMS of
-  // the block being heard, about 43 ms), tracks: {id: peak dB}}.
+  // the block being heard, about 43 ms), tracks: {id: peak dB}, trackChannels: {id: [l, r] peaks dB}} (a track's level
+  // after its fader and pan, before the master). opts.onBlock(sample, [L, R], missing) sees every block scheduled.
   function create(app, opts = {}) {
     const rate = opts.rate || 48000;
     const tps = TICKS / rate;
@@ -931,6 +1090,7 @@
           live.add(node);
           const g = dbToGain(masterDb);
           heard.push({ from: scheduledUntil, to: scheduledUntil + seconds, master: [m.master[0] * g, m.master[1] * g], rms: [m.rms[0] * g, m.rms[1] * g], tracks: m.tracks });
+          opts.onBlock?.(nextSample, m.out, m.missing);
           if (m.missing) mixer.load(project, seqId, nextSample * tps, (nextSample + span) * tps + 5 * TICKS);
         }
         nextSample += audible ? span : Math.round(BLOCK * playRate);
@@ -990,14 +1150,15 @@
     }
 
     function meters() {
-      const quiet = { master: -Infinity, masterChannels: [-Infinity, -Infinity], masterRms: [-Infinity, -Infinity], tracks: {} };
+      const quiet = { master: -Infinity, masterChannels: [-Infinity, -Infinity], masterRms: [-Infinity, -Infinity], tracks: {}, trackChannels: {} };
       if (!playing || !ctx) return quiet;
       const out = outputTime();
       const h = heard.find((x) => x.from <= out && out < x.to) || null;
       if (!h) return quiet;
       const tracks = {};
-      for (const [id, [l, r]] of Object.entries(h.tracks)) tracks[id] = gainToDb(Math.max(l, r));
-      return { master: gainToDb(Math.max(h.master[0], h.master[1])), masterChannels: h.master.map(gainToDb), masterRms: h.rms.map(gainToDb), tracks };
+      const trackChannels = {};
+      for (const [id, [l, r]] of Object.entries(h.tracks)) { tracks[id] = gainToDb(Math.max(l, r)); trackChannels[id] = [gainToDb(l), gainToDb(r)]; }
+      return { master: gainToDb(Math.max(h.master[0], h.master[1])), masterChannels: h.master.map(gainToDb), masterRms: h.rms.map(gainToDb), tracks, trackChannels };
     }
 
     function setMasterGain(db) {

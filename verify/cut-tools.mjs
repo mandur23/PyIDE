@@ -16,6 +16,13 @@
 // - queue: jobs added from the Export workspace run one at a time in order while the project changes (a later edit
 //   does not reach a queued job), move up, cancel, retry and remove, survive workspace switches, and closing the window
 //   while one runs asks first;
+// - presets: the Adobe Premiere Pro keys by default (Shift+1/3/4 open panels, Ctrl+Alt+K the editor), the editor's
+//   preset menu switching to the classic keys and back, the cheat sheet following;
+// - toolspanel: the vertical Tools panel between the project panel and the timeline, a click picking a tool and
+//   leaving the keyboard with the timeline, a held or right-clicked group opening its flyout with keys, a key showing
+//   its tool on the group's button, the timeline tool bar as a Window menu option;
+// - buttons: the monitors' button bars in Premiere's set and order with their keys, Add Marker, Lift and Export Frame
+//   clicked, the Button Editor adding Clear In and Loop and Reset Layout;
 // - screenshots in the dark and the light theme (verify/out/cut-tools/*.png).
 // - drop: files and a folder dragged from Explorer onto the timeline are imported (a file already in the project is
 //   used again) and placed where dropped, Ctrl inserting, one undo step, never opened in the code editor;
@@ -30,7 +37,7 @@
 //   the export panel naming it, the written file's pixels); editing the caption text in the panel
 //   keeps the matching words' timings (undo and redo exact), a rewritten caption shows unlit, the box style, and the
 //   timings saved in the project file and opened again;
-// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,settings,media,proxy,queue,drop,speed,volume,highlight,shots)
+// Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,presets,toolspanel,buttons,settings,media,proxy,queue,drop,speed,volume,highlight,shots)
 import fs from 'fs';
 import path from 'path';
 import { launch, tempDir, menuRow } from './lib.mjs';
@@ -180,6 +187,8 @@ async function section(name, fn) {
 
 // ---------- the shortcut editor and the ? cheat sheet ----------
 await section('keys', async () => {
+  // This part records Shift+M, which the Premiere Pro preset gives to Go to Next Marker: it uses the classic keys.
+  await js(`(Cut.ui.keys.setPreset('classic'), true)`);
   await workspace('editing');
   await js(`__ct.fresh({ media: [__ct.fake('a')], clips: [{ at: 0, len: 6 }, { at: 6, len: 6, in: 7 }] })`);
   check(S(await js(`Cut.ui.shortcuts.current('Cut.addMarker')`)) === S(['M']), 'Add Marker starts with its built-in key M');
@@ -296,6 +305,154 @@ await section('keys', async () => {
   await press('G');
   check((await js(`Cut.app.focusPanel`)) !== 'history', 'a single-letter key of a Window action does not fire while typing in a field');
   await js(`(ide.settings.set('cut.keys', {}), true)`);
+  await js(`(Cut.ui.keys.setPreset('premiere'), true)`);
+});
+
+// ---------- the keyboard presets: Adobe Premiere Pro and the classic keys ----------
+await section('presets', async () => {
+  await workspace('editing');
+  await js(`__ct.fresh({ media: [__ct.fake('a')], clips: [{ at: 0, len: 6 }] })`);
+  const keysOf = (id) => js(`ide.actions.find((a) => a.id === ${S(id)})?.keys.join() ?? null`);
+  check((await js('Cut.ui.keys.preset')) === 'premiere' && (await keysOf('Cut.clearInOut')) === 'Ctrl+Shift+X' && (await keysOf('Cut.window.project')) === 'Shift+1',
+    'the Premiere Pro preset is on: Ctrl+Shift+X clears In and Out, Shift+1 is the project panel');
+  // Shift+1, Shift+3, Shift+4: the project panel, the timeline and the program monitor take the keyboard
+  await focusTimeline();
+  const went = [];
+  for (const k of ['Shift+1', 'Shift+4', 'Shift+3']) { await press(k); went.push(await js('Cut.app.focusPanel')); }
+  check(S(went) === S(['project', 'program', 'timeline']), `Shift+1, Shift+4 and Shift+3 go to the project panel, the program monitor and the timeline (${S(went)})`);
+  // Ctrl+Alt+K opens Keyboard Shortcuts on the Premiere Pro preset; the preset menu turns every key into the other set
+  await press('Ctrl+Alt+K');
+  await until(`!!document.querySelector('#cutKeysDialog')`, 'the shortcut editor from Ctrl+Alt+K', 4000);
+  const chips = (id) => js(`[...document.querySelectorAll('#cutKeysDialog .cut-keys-row[data-id="${id}"] .cut-key-chip')].map((c) => c.dataset.key).join()`);
+  const pre = [await js(`document.querySelector('#cutKeysDialog .cut-keys-preset').value`), await chips('Cut.clearInOut'), await chips('Cut.window.project')];
+  await js(`(() => { const s = document.querySelector('#cutKeysDialog .cut-keys-preset'); s.value = 'classic'; s.dispatchEvent(new Event('change')); return true; })()`);
+  const post = [await chips('Cut.clearInOut'), await chips('Cut.window.project'), await js(`document.querySelectorAll('#cutKeysDialog .cut-keys-row.modified').length`)];
+  check(S(pre) === S(['premiere', 'Ctrl+Shift+X', 'Shift+1']) && S(post) === S(['Alt+X', '', 0]), `the editor shows the preset; choosing the classic keys shows them as the built-in ones (${S(pre)} -> ${S(post)})`);
+  await clickSel('#cutKeysDialog .cut-keys-save');
+  await until(`!document.querySelector('#cutKeysDialog')`, 'saved');
+  check((await js(`ide.settings.get('cut.keyPreset')`)) === 'classic' && S(await js(`ide.settings.get('cut.keys')`)) === S({}) && (await keysOf('Cut.clearInOut')) === 'Alt+X',
+    `Save switches to the classic keys and stores no key of its own (${await js(`ide.settings.get('cut.keyPreset')`)}, ${S(await js(`ide.settings.get('cut.keys')`))})`);
+  await focusTimeline();
+  await js(`(Cut.app.setInOut({ in: 1 * ${T}, out: 2 * ${T} }), true)`);
+  await press('Alt+X');
+  check(await js(`Cut.app.inOut.in === null && Cut.app.inOut.out === null`), 'Alt+X clears In and Out with the classic keys');
+  // back to Premiere Pro, from the editor opened by Find Action (the classic preset has no key for it)
+  await js(`(ide.runAction('Cut.keyboardShortcuts'), true)`);
+  await until(`!!document.querySelector('#cutKeysDialog')`, 'the shortcut editor');
+  await js(`(() => { const s = document.querySelector('#cutKeysDialog .cut-keys-preset'); s.value = 'premiere'; s.dispatchEvent(new Event('change')); return true; })()`);
+  await clickSel('#cutKeysDialog .cut-keys-save');
+  await until(`!document.querySelector('#cutKeysDialog')`, 'saved');
+  await press('Shift+/');
+  await until(`!!document.querySelector('.cut-keysheet')`, 'the cheat sheet', 3000);
+  const sheetKeys = await js(`[...(document.querySelector('.cut-keysheet-row[data-id="Cut.clearInOut"]')?.querySelectorAll('kbd') || [])].map((k) => k.textContent).join()`);
+  await press('Escape');
+  check((await js(`ide.settings.get('cut.keyPreset')`)) === 'premiere' && sheetKeys === 'Ctrl+Shift+X', `the Premiere Pro keys come back and the cheat sheet shows them (${sheetKeys})`);
+});
+
+// ---------- the Tools panel: Premiere's vertical tool bar, its groups and flyouts ----------
+await section('toolspanel', async () => {
+  await workspace('editing');
+  await js(`__ct.fresh({ media: [__ct.fake('a')], clips: [{ at: 0, len: 6 }] })`);
+  const layout = await js(`(() => {
+    const box = (p) => document.querySelector('.cut-grid .cut-panel[data-panel="' + p + '"]')?.closest('.cut-slot')?.getBoundingClientRect();
+    const tools = box('tools'), project = box('project'), timeline = box('timeline'), meters = box('meters');
+    const btns = [...document.querySelectorAll('.cut-tools-btn')];
+    const inside = btns.every((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.top >= tools.top - 1 && r.bottom <= tools.bottom + 1 && r.left >= tools.left - 1 && r.right <= tools.right + 1; });
+    return { between: project.right <= tools.left + 1 && tools.right <= timeline.left + 1, meters: !!meters && timeline.right <= meters.left + 1 && Math.abs(meters.top - timeline.top) < 2,
+      upright: tools.height > tools.width * 3, n: btns.length, icons: btns.every((b) => !!b.querySelector('svg')), inside, groups: btns.filter((b) => b.querySelector('.cut-tools-more')).length };
+  })()`);
+  check(layout.between && layout.meters && layout.upright, `the Tools panel stands between the project panel and the timeline, the audio meters at the timeline's right (${S(layout)})`);
+  check(layout.n === 8 && layout.icons && layout.inside && layout.groups === 4, `eight buttons with icons, all on screen, four of them groups with a corner mark (${S(layout)})`);
+  check((await js(`document.querySelector('.cut-tools-btn[data-tool="razor"]').title`)) === 'Razor Tool (C)', 'a button names its tool and key');
+  // a click picks the tool and leaves the keyboard with the timeline
+  await focusTimeline();
+  await clickSel('.cut-tools-btn[data-tool="razor"]');
+  check(S(await js(`[Cut.app.tool, document.querySelector('.cut-tools-btn[data-tool="razor"]').getAttribute('aria-pressed'), Cut.app.focusPanel]`)) === S(['razor', 'true', 'timeline']),
+    `clicking Razor picks it, shows it pressed and the timeline keeps the keyboard (${S(await js(`[Cut.app.tool, Cut.app.focusPanel]`))})`);
+  // holding the Ripple group opens its flyout: Ripple, Rolling and Rate Stretch with their keys
+  const g = await rect('.cut-tools-btn[data-group="2"]');
+  await mouse('mouseMoved', g.x, g.y, { buttons: 0 });
+  await mouse('mousePressed', g.x, g.y);
+  await sleep(600);
+  const fly = await js(`(() => { const f = document.querySelector('.cut-tools-flyout'); return f && { rows: [...f.querySelectorAll('.cut-tools-flyout-item')].map((r) => r.dataset.tool + ':' + r.querySelector('.cut-tools-flyout-key').textContent), visible: __ct.visible('.cut-tools-flyout') }; })()`);
+  await mouse('mouseReleased', g.x, g.y, { buttons: 0 });
+  await sleep(100);
+  check(fly?.visible && S(fly.rows) === S(['ripple:B', 'roll:N', 'rate:R']) && (await js('Cut.app.tool')) === 'razor',
+    `holding the Ripple group opens its flyout with the three tools and keys, picking none yet (${S(fly)})`);
+  // (when holding did not open it, a right-click does, so the next checks still look at their own part)
+  if (!fly?.visible) await clickAt(g, { button: 'right' });
+  await clickSel('.cut-tools-flyout-item[data-tool="rate"]');
+  const picked = await js(`({ tool: Cut.app.tool, open: !!document.querySelector('.cut-tools-flyout'), shows: document.querySelector('.cut-tools-btn[data-group="2"]').dataset.tool, pressed: document.querySelector('.cut-tools-btn[data-group="2"]').getAttribute('aria-pressed'), saved: ide.settings.get('cut.toolGroups')?.[2] })`);
+  check(S(picked) === S({ tool: 'rate', open: false, shows: 'rate', pressed: 'true', saved: 'rate' }), `picking Rate Stretch closes the flyout and the group shows it (${S(picked)})`);
+  // a right-click opens a flyout too; Esc closes it and changes nothing
+  await clickAt(await rect('.cut-tools-btn[data-group="4"]'), { button: 'right' });
+  const slipFly = await js(`[...document.querySelectorAll('.cut-tools-flyout .cut-tools-flyout-item')].map((r) => r.dataset.tool).join()`);
+  await press('Escape');
+  check(slipFly === 'slip,slide' && !(await js(`!!document.querySelector('.cut-tools-flyout')`)) && (await js('Cut.app.tool')) === 'rate', `a right-click opens the Slip group's flyout and Esc closes it (${slipFly})`);
+  // a key of a grouped tool shows that tool on its button; a quick click picks what the button shows
+  await focusTimeline();
+  await press('n');
+  const rolled = await js(`[Cut.app.tool, document.querySelector('.cut-tools-btn[data-group="2"]').dataset.tool, document.querySelector('.cut-tools-btn[data-group="2"]').getAttribute('aria-pressed')]`);
+  await press('v');
+  await clickSel('.cut-tools-btn[data-group="2"]');
+  check(S(rolled) === S(['roll', 'roll', 'true']) && (await js('Cut.app.tool')) === 'roll' && !(await js(`!!document.querySelector('.cut-tools-flyout')`)),
+    `N shows Rolling Edit on the group's button, and a quick click on it picks Rolling Edit (${S(rolled)})`);
+  await press('v');
+  // the timeline's own tool bar: off, and on from the Window menu
+  check(await js(`document.querySelector('.cut-tl-tools').hidden`), 'the timeline tool bar is off while the Tools panel has the tools');
+  await clickSel('.cut-topbar .cut-window-btn');
+  await menuClick('Timeline Tool Bar');
+  check(await js(`!document.querySelector('.cut-tl-tools').hidden && __ct.visible('.cut-tl-tool[data-tool="razor"]')`), 'Window > Timeline Tool Bar shows it');
+  await clickSel('.cut-topbar .cut-window-btn');
+  await menuClick('Timeline Tool Bar');
+  check(await js(`document.querySelector('.cut-tl-tools').hidden`), 'and hides it again');
+});
+
+// ---------- the monitors' button bars ----------
+await section('buttons', async () => {
+  await workspace('editing');
+  await js(`__ct.fresh({ media: [__ct.fake('a')], clips: [{ at: 0, len: 6 }, { at: 6, len: 6 }] })`);
+  const bar = (kind) => js(`[...document.querySelectorAll('.cut-monitor-${kind} .cut-transport-mid > button')].map((b) => b.dataset.button).join()`);
+  const program = await bar('program');
+  const source = await bar('source');
+  check(program === 'addMarker,markIn,markOut,goIn,frameBack,playPause,frameForward,goOut,lift,extract,exportFrame', `the program monitor has Premiere's buttons in its order (${program})`);
+  check(source === 'markIn,markOut,goIn,frameBack,playPause,frameForward,goOut,insert,overwrite,exportFrame', `the source monitor too, with Insert and Overwrite (${source})`);
+  check(S(await js(`['markIn', 'lift', 'addMarker'].map((b) => document.querySelector('.cut-monitor-program [data-button="' + b + '"]').title)`)) === S(['Mark In (I)', 'Lift (;)', 'Add Marker (M)']), 'the buttons name their keys');
+  check(await js(`[...document.querySelectorAll('.cut-monitor-program .cut-transport-mid > button')].every((b) => { const r = b.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return r.width > 0 && b.contains(hit); })`),
+    'every program button is on screen');
+  // Add Marker and Lift by clicking them
+  await js(`(Cut.app.setTime(${2 * T}), true)`);
+  await clickSel('.cut-monitor-program [data-button="addMarker"]');
+  const marks = await markers();
+  await js(`(Cut.app.setInOut({ in: ${2 * T}, out: ${4 * T} }), true)`);
+  await clickSel('.cut-monitor-program [data-button="lift"]');
+  const lifted = await js(`__ct.seq().clips.map((c) => c.start / ${T} + '-' + Cut.model.clipEnd(c) / ${T}).sort().join(' ')`);
+  check(marks === 1 && lifted === '0-2 4-6 6-12', `the Add Marker button adds a marker and Lift lifts the In to Out (${marks}; ${lifted})`);
+  // Export Frame writes the program frame
+  const png = path.join(home, 'button-frame.png');
+  answer({ saveAs: png });
+  await clickSel('.cut-monitor-program [data-button="exportFrame"]');
+  for (let i = 0; i < 60 && !fs.existsSync(png); i++) await sleep(100);
+  check(fs.existsSync(png) && fs.readFileSync(png).subarray(1, 4).toString() === 'PNG', 'the Export Frame button saves the frame as a PNG');
+  answer({});
+  // the Button Editor adds Loop and Clear In; Reset Layout puts Premiere's set back
+  await clickSel('.cut-monitor-program .cut-tr-editor');
+  await until(`!!document.querySelector('#cutButtonEditor')`, 'the button editor');
+  for (const b of ['loop', 'clearIn']) await clickSel(`#cutButtonEditor .cut-button-editor-row[data-button="${b}"] input`);
+  await clickSel('#cutButtonEditor .dialog-buttons button.primary');
+  const more = await bar('program');
+  check(more === 'addMarker,markIn,markOut,clearIn,goIn,frameBack,playPause,frameForward,goOut,loop,lift,extract,exportFrame' && S(await js(`ide.settings.get('cut.program.buttons')`)).includes('loop'),
+    `the Button Editor adds Clear In and Loop in their places and keeps the choice (${more})`);
+  if (await rect('.cut-monitor-program [data-button="loop"]')) {
+    await clickSel('.cut-monitor-program [data-button="loop"]');
+    check(await js(`document.querySelector('.cut-monitor-program [data-button="loop"]').getAttribute('aria-pressed') === 'true'`), 'the added Loop button works');
+    await clickSel('.cut-monitor-program [data-button="loop"]');
+  } else check(false, 'the added Loop button works (it is not on the bar)');
+  await clickSel('.cut-monitor-program .cut-tr-editor');
+  await until(`!!document.querySelector('#cutButtonEditor')`, 'the button editor');
+  await clickSel('#cutButtonEditor .dialog-buttons button:nth-child(2)');
+  await clickSel('#cutButtonEditor .dialog-buttons button.primary');
+  check((await bar('program')) === program, `Reset Layout brings Premiere's buttons back (${await bar('program')})`);
 });
 
 // ---------- the Video Editor settings page ----------
@@ -628,7 +785,10 @@ await section('drop', async () => {
   }
   await js(`__ct.fresh({})`);
   const tabs = await js('ide.tabs.length');
-  const point = (t, track) => js(`Cut.ui.timeline.clientPoint(${t * T}, ${S(track)})`);
+  // a time off the lanes' right edge (a narrow window's timeline beside the Tools panel and the meters) is scrolled to first
+  const point = (t, track) => js(`(() => { const tl = Cut.ui.timeline, w = tl.root.querySelector('.cut-tl-scroll').clientWidth, x = tl.xOf(${t * T});
+    if (x < 20 || x > w - 20) tl.setScroll(tl.view.scrollX + x - w / 2, tl.view.scrollY);
+    return tl.clientPoint(${t * T}, ${S(track)}); })()`);
   const dragEvent = async (type, files, p, modifiers = 0) => cdp('Input.dispatchDragEvent', { type, x: p.x, y: p.y, modifiers, data: { items: [], files, dragOperationsMask: 1 } });
   const drop = async (files, t, track, modifiers = 0) => {
     const p = await point(t, track);
@@ -1103,7 +1263,9 @@ await section('highlight', async () => {
   await clickSel('#cutCaptionStyle .dialog-buttons button.primary');
   await until(`__ct.seq().captions[0].style.highlightMode === 'box'`, 'the box style', 5000);
   const boxed = await js(`__ct.litAt(${starts[1] + 2 * F})`);
-  check(boxed.n > 3 * colorOnly.n && Math.abs(boxed.x - colorOnly.x) < 0.01, `Word color and box puts a box of the color behind the same word (${S(colorOnly)} -> ${S(boxed)})`);
+  // The counts are the program monitor's pixels: with Premiere's Editing layout (the menu bar above, the monitor 55% wide)
+  // the box has 2.99 times the lit pixels of the coloured word alone, so the bar is 2.5 times.
+  check(boxed.n > 2.5 * colorOnly.n && Math.abs(boxed.x - colorOnly.x) < 0.01, `Word color and box puts a box of the color behind the same word (${S(colorOnly)} -> ${S(boxed)})`);
   await js(`Cut.app.setTime(${starts[1] + 2 * F})`);
   await sleep(300);
   log(`  saved ${await ctx.shot('tools-highlight-box-dark.png')}`);

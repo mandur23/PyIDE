@@ -1,0 +1,60 @@
+/* Nano Studio Cut: the Lumetri Color panel's sections (ui-color.js) and the Lumetri Scopes panel (ui-scopes.js). The
+   curve square and the scopes keep a dark plot in both themes, as video scopes do; their frames follow the theme. */
+
+/* ---------- Lumetri Color sections ---------- */
+.cut-lumetri .cut-color-body { display: flex; flex-direction: column; }
+.cut-lm-sec { border-bottom: 1px solid var(--gray3); }
+.cut-lm-sechead { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 4px; background: var(--gray2); user-select: none; }
+.cut-lm-twisty { width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--gray9); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.cut-lm-twisty::before { content: ''; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; transition: transform .1s; }
+.cut-lm-sec.collapsed .cut-lm-twisty::before { transform: rotate(-90deg); }
+.cut-lm-secname { flex: 1; min-width: 0; color: var(--gray12); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.cut-lm-reset { height: 20px; padding: 0 7px; border: 1px solid var(--gray5); border-radius: 3px; background: none; color: var(--gray10); font-size: 11px; cursor: pointer; }
+.cut-lm-reset:hover:not(:disabled) { background: var(--gray4); color: var(--gray12); }
+.cut-lm-reset:disabled { opacity: .4; }
+.cut-lm-sec.collapsed .cut-lm-content { display: none; }
+.cut-lm-content > .cut-color-group:last-child { border-bottom: 0; }
+.cut-lm-content { padding-bottom: 4px; }
+
+.cut-lm-look { grid-template-columns: 82px minmax(60px, 1fr) auto; padding: 6px 10px 2px; }
+.cut-lm-lutsel { width: 100%; min-width: 0; }
+.cut-lm-browse { height: 22px; padding: 0 8px; border: 1px solid var(--gray5); border-radius: 3px; font-size: 11px; font-weight: 400; }
+.cut-lm-lutinfo { padding: 0 10px 0 100px; color: var(--gray9); font-size: 11px; min-height: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-lm-lutinfo:empty { display: none; }
+.cut-lm-lutinfo.missing { color: var(--yellow); }
+.cut-lm-luterror { margin: 4px 10px; padding: 5px 8px; border: 1px solid var(--red); border-radius: 3px; color: var(--gray12); background: color-mix(in srgb, var(--red) 14%, transparent); line-height: 1.4; }
+.cut-lm-luterror[hidden] { display: none; }
+
+.cut-lumetri .cut-lm-content > .cut-color-gname { padding: 6px 10px 0; }
+.cut-lm-channels { display: flex; gap: 8px; padding: 4px 10px; }
+.cut-lm-chan { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 2px solid var(--gray5); background: var(--chan); cursor: pointer; position: relative; }
+.cut-lm-chan[aria-checked="true"] { border-color: var(--gray12); box-shadow: 0 0 0 2px var(--blue6); }
+.cut-lm-chan.changed::after { content: ''; position: absolute; right: -5px; top: -5px; width: 6px; height: 6px; border-radius: 50%; background: var(--cut-accent); }
+.cut-lm-curvewrap { padding: 2px 10px 4px; }
+.cut-lm-curve { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; border: 1px solid var(--gray5); border-radius: 3px; cursor: crosshair; touch-action: none; }
+.cut-lm-curve.keyframed { border-color: var(--cut-accent); }
+.cut-lm-note { padding: 0 10px 4px; color: var(--gray8); font-size: 11px; line-height: 1.4; }
+
+.cut-lm-huebar { display: block; width: 100%; height: 10px; border-radius: 2px; margin: 2px 0 4px; }
+.cut-lm-mask { display: flex; align-items: center; gap: 6px; padding: 4px 10px; color: var(--gray10); }
+
+/* ---------- Lumetri Scopes ---------- */
+.cut-scopes { display: flex; flex-direction: column; flex: 1; min-height: 0; font-size: 12px; position: relative; }
+.cut-scopes-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--gray3); flex: none; }
+.cut-scopes-toggle { height: 22px; padding: 0 7px; font-size: 11px; font-weight: 400; border: 1px solid var(--gray5); border-radius: 3px; }
+.cut-scopes-grid { flex: 1; min-height: 0; display: grid; gap: 4px; padding: 4px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); grid-auto-rows: minmax(0, 1fr); }
+.cut-scopes-grid[data-count="0"] { display: none; }
+.cut-scope { position: relative; min-height: 0; min-width: 0; background: #0b0c0e; border: 1px solid var(--gray4); border-radius: 3px; overflow: hidden; }
+.cut-scope-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.cut-scope-name { position: absolute; right: 6px; top: 3px; z-index: 1; color: rgba(255, 255, 255, .55); font-size: 10px; pointer-events: none; }
+.cut-scopes-empty { position: absolute; left: 0; right: 0; top: 50%; padding: 0 12px; text-align: center; color: var(--gray8); pointer-events: none; }
+.cut-scopes-empty[hidden] { display: none; }
+
+/* ---------- Effect Controls: Lumetri Color's groups ---------- */
+.cut-ec-subhead { height: 20px; display: flex; align-items: center; padding-left: 26px; color: var(--gray9); font-size: 11px; font-weight: 600; border-top: 1px solid var(--gray3); }
+.cut-ec-note { color: var(--gray9); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Lumetri's longer names (Saturation Softness) fit their label column. */
+.cut-lumetri .cut-color-row { grid-template-columns: 112px minmax(60px, 1fr) 52px; }
+.cut-lumetri .cut-lm-look { grid-template-columns: 112px minmax(60px, 1fr) auto; }
+.cut-lumetri .cut-lm-lutinfo { padding-left: 130px; }

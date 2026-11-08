@@ -162,6 +162,13 @@ fn tapB(uv: vec2f) -> vec4f { if (!inside(uv)) { return vec4f(0.0); } return tex
   const bool = (id, name, def) => ({ id, name, type: 'bool', default: def, keyframable: false });
   const choice = (id, name, def, choices) => ({ id, name, type: 'choice', default: def, choices, keyframable: false });
   const point = (id, name, def) => ({ id, name, type: 'point', default: def, keyframable: true });
+  // Lumetri Color's curves (a flat list of points, keyframed as a whole) and its creative LUT (an id of project.luts).
+  const curve = (id, name) => ({ id, name, type: 'curve', default: [0, 0, 1, 1], keyframable: true });
+  const lutRef = (id, name) => ({ id, name, type: 'lut', default: '', keyframable: false });
+  // Not `typeof require`: Monaco's AMD loader makes require a global function in the page. Read when used, so a page
+  // that loads effects.js alone (the auto color tests) still works.
+  const NODE = typeof module === 'object' && !!module.exports;
+  const lumetri = () => (NODE ? require('./lumetri.js') : globalThis.Cut.lumetri);
 
   // ---- video effects ---------------------------------------------------------------------------------------------------
 
@@ -540,19 +547,129 @@ fn effect(uv: vec2f) -> vec4f {
     if (q.saturation !== 1) c = c.map((x) => y + (x - y) * q.saturation);
     return c.map((x) => Math.max(0, x));
   }
+  // Lumetri Color: the basic correction above, then (lumetri.js) the creative LUT, the RGB curves and the HSL secondary,
+  // one pass each and only the sections that change something (u.p[3].w says which: 0 basic, 1 LUT, 2 curves, 3 HSL,
+  // 4 HSL showing its mask). The LUT is a 3D texture (binding 4) and the curves a TABLE x 1 texture (binding 5),
+  // both rgba16float read with textureLoad and interpolated here, as the CPU reference does (the sampler's 8-bit
+  // weights would differ). The panel (ui-color.js) groups the parameters by `group`.
+  const basicNeutral = (p) => !p.temperature && !p.tint && !p.exposure && !p.contrast && !p.highlights && !p.shadows && !p.whites && !p.blacks && p.saturation === 100 && !p.vibrance;
+  const grouped = (group, list) => list.map((d) => ({ ...d, group }));
+  function lumetriStages(p, info) {
+    const L = lumetri();
+    const out = [];
+    if (!basicNeutral(p)) { const q = basicPlan(p); out.push({ pass: [...q.gain, q.k, ...q.tone, q.vibrance, q.saturation, 0, 0, 0, 0, 0, 0], cpu: (rgb) => basicPixel(rgb, q) }); }
+    const lut = info?.assets?.lut || null;
+    const k = clamp((p.lutIntensity ?? 100) / 100, 0, 1);
+    if (lut && k > 0) out.push({ pass: [k, lut.size, 0, 0, ...lut.min, 0, ...lut.max, 0, 0, 0, 0, 1], cpu: (rgb) => L.lutPixel(rgb, lut, k) });
+    if (!L.curvesIdentity(p)) { const t = L.curvesTable(p); out.push({ pass: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], cpu: (rgb) => L.curvesPixel(rgb, t) }); }
+    const h = L.hslPlan(p);
+    if (h.active) out.push({ pass: [h.hue, h.half, h.hueSoft, ...h.sat, ...h.lum, ...h.gain, h.k, h.saturation, h.shift, h.mask ? 4 : 3], cpu: (rgb) => L.hslPixel(rgb, h) });
+    return out;
+  }
   def({
-    type: 'color.basic', name: 'Basic Correction', category: 'Color Correction',
+    type: 'color.basic', name: 'Lumetri Color', category: 'Color Correction',
     params: [
-      num('temperature', 'Temperature', 0, -100, 100), num('tint', 'Tint', 0, -100, 100),
-      num('exposure', 'Exposure', 0, -4, 4, 0.01), num('contrast', 'Contrast', 0, -100, 100),
-      num('highlights', 'Highlights', 0, -100, 100), num('shadows', 'Shadows', 0, -100, 100),
-      num('whites', 'Whites', 0, -100, 100), num('blacks', 'Blacks', 0, -100, 100),
-      pct('saturation', 'Saturation', 100, 0, 200), num('vibrance', 'Vibrance', 0, -100, 100),
+      ...grouped('Basic Correction', [
+        num('temperature', 'Temperature', 0, -100, 100), num('tint', 'Tint', 0, -100, 100),
+        num('exposure', 'Exposure', 0, -4, 4, 0.01), num('contrast', 'Contrast', 0, -100, 100),
+        num('highlights', 'Highlights', 0, -100, 100), num('shadows', 'Shadows', 0, -100, 100),
+        num('whites', 'Whites', 0, -100, 100), num('blacks', 'Blacks', 0, -100, 100),
+        pct('saturation', 'Saturation', 100, 0, 200), num('vibrance', 'Vibrance', 0, -100, 100),
+      ]),
+      ...grouped('Creative', [lutRef('lut', 'Look'), pct('lutIntensity', 'Intensity', 100)]),
+      ...grouped('Curves', [curve('curveMaster', 'Master Curve'), curve('curveRed', 'Red Curve'), curve('curveGreen', 'Green Curve'), curve('curveBlue', 'Blue Curve')]),
+      ...grouped('HSL Secondary', [
+        num('hslHue', 'Hue Center', 0, 0, 360, 1, { unit: '°' }), num('hslHueRange', 'Hue Range', 360, 0, 360, 1, { unit: '°' }), num('hslHueSoft', 'Hue Softness', 30, 0, 180, 1, { unit: '°' }),
+        pct('hslSatLow', 'Saturation Low', 0), pct('hslSatHigh', 'Saturation High', 100), pct('hslSatSoft', 'Saturation Softness', 10),
+        pct('hslLumLow', 'Luma Low', 0), pct('hslLumHigh', 'Luma High', 100), pct('hslLumSoft', 'Luma Softness', 10),
+        bool('hslMask', 'Show Mask', false),
+        num('hslTemperature', 'Temperature', 0, -100, 100), num('hslTint', 'Tint', 0, -100, 100), num('hslContrast', 'Contrast', 0, -100, 100),
+        pct('hslSaturation', 'Saturation', 100, 0, 200), num('hslHueShift', 'Hue Shift', 0, -180, 180, 1, { unit: '°' }),
+      ]),
     ],
+    // The LUT the Look names, from project.luts (compositor.planItem asks; the result reaches uniforms, textures and
+    // cpu as info.assets).
+    assets: (project, p) => ({ lut: lumetri().lutOf(project, p.lut) }),
     gpu: {
+      bindings: { 4: '3d', 5: '2d' },
       wgsl: /* wgsl */ `
+@group(0) @binding(4) var lutTex: texture_3d<f32>;
+@group(0) @binding(5) var curveTex: texture_2d<f32>;
+fn lutTap(r: i32, g: i32, b: i32) -> vec3f { return textureLoad(lutTex, vec3i(r, g, b), 0).rgb; }
+fn lutStage(c4: vec4f) -> vec4f {
+  let q = u.p[0];
+  let n = i32(q.y);
+  let s = toSrgb(unpremul(c4));
+  let x = clamp((s - u.p[1].xyz) / (u.p[2].xyz - u.p[1].xyz), vec3f(0.0), vec3f(1.0)) * f32(n - 1);
+  let i = min(vec3i(floor(x)), vec3i(n - 2));
+  let f = x - vec3f(i);
+  let c00 = mix(lutTap(i.x, i.y, i.z), lutTap(i.x + 1, i.y, i.z), f.x);
+  let c10 = mix(lutTap(i.x, i.y + 1, i.z), lutTap(i.x + 1, i.y + 1, i.z), f.x);
+  let c01 = mix(lutTap(i.x, i.y, i.z + 1), lutTap(i.x + 1, i.y, i.z + 1), f.x);
+  let c11 = mix(lutTap(i.x, i.y + 1, i.z + 1), lutTap(i.x + 1, i.y + 1, i.z + 1), f.x);
+  let v = mix(mix(c00, c10, f.y), mix(c01, c11, f.y), f.z);
+  return vec4f(toLinear(mix(s, v, q.x)) * c4.a, c4.a);
+}
+fn curveAt(x: f32, ch: u32) -> f32 {
+  let n = textureDimensions(curveTex).x;
+  let f = clamp(x, 0.0, 1.0) * f32(n - 1u);
+  let i = min(u32(floor(f)), n - 2u);
+  let t = f - f32(i);
+  return mix(textureLoad(curveTex, vec2u(i, 0u), 0)[ch], textureLoad(curveTex, vec2u(i + 1u, 0u), 0)[ch], t);
+}
+fn curvesStage(c4: vec4f) -> vec4f {
+  let s = toSrgb(unpremul(c4));
+  let m = vec3f(curveAt(s.r, 0u), curveAt(s.g, 0u), curveAt(s.b, 0u));
+  return vec4f(toLinear(vec3f(curveAt(m.r, 1u), curveAt(m.g, 2u), curveAt(m.b, 3u))) * c4.a, c4.a);
+}
+fn hueOf(s: vec3f) -> f32 {
+  let mx = max(s.r, max(s.g, s.b));
+  let C = mx - min(s.r, min(s.g, s.b));
+  if (C <= 0.0) { return 0.0; }
+  var h = 0.0;
+  if (mx == s.r) { h = (s.g - s.b) / C; if (h < 0.0) { h = h + 6.0; } }
+  else if (mx == s.g) { h = (s.b - s.r) / C + 2.0; }
+  else { h = (s.r - s.g) / C + 4.0; }
+  return h / 6.0;
+}
+fn fallW(x: f32, e: f32, w: f32) -> f32 { return 1.0 - smoothstep(e, e + max(w, 1e-4), x); }
+fn bandW(x: f32, lo: f32, hi: f32, w: f32) -> f32 { let ww = max(w, 1e-4); return smoothstep(lo - ww, lo, x) * fallW(x, hi, ww); }
+fn hueRotate(c: vec3f, deg: f32) -> vec3f {
+  let a = radians(deg);
+  let co = cos(a);
+  let si = sin(a);
+  let r0 = vec3f(0.213 + co * 0.787 - si * 0.213, 0.715 - co * 0.715 - si * 0.715, 0.072 - co * 0.072 + si * 0.928);
+  let r1 = vec3f(0.213 - co * 0.213 + si * 0.143, 0.715 + co * 0.285 + si * 0.14, 0.072 - co * 0.072 - si * 0.283);
+  let r2 = vec3f(0.213 - co * 0.213 - si * 0.787, 0.715 - co * 0.715 + si * 0.715, 0.072 + co * 0.928 + si * 0.072);
+  return vec3f(dot(r0, c), dot(r1, c), dot(r2, c));
+}
+fn hslStage(c4: vec4f, showMask: bool) -> vec4f {
+  let q0 = u.p[0];
+  let q1 = u.p[1];
+  let q2 = u.p[2];
+  let q3 = u.p[3];
+  let rgb = unpremul(c4);
+  let s = clamp(toSrgb(rgb), vec3f(0.0), vec3f(1.0));
+  let C = max(s.r, max(s.g, s.b)) - min(s.r, min(s.g, s.b));
+  let dh = abs(fract(hueOf(s) - q0.x + 0.5) - 0.5);
+  let m = fallW(dh, q0.y, q0.z) * bandW(C, q0.w, q1.x, q1.y) * bandW(luma(s), q1.z, q1.w, q2.x);
+  if (showMask) { let g = vec3f(0.2158605); return vec4f(mix(g, rgb, m) * c4.a, c4.a); }
+  var c = rgb * q2.yzw;
+  if (q3.x != 1.0) { c = select(c, 0.18 * pow(max(c, vec3f(1e-12)) / 0.18, vec3f(q3.x)), c > vec3f(0.0)); }
+  if (q3.z != 0.0) { c = hueRotate(c, q3.z); }
+  let y = luma(c);
+  c = max(vec3f(y) + (c - vec3f(y)) * q3.y, vec3f(0.0));
+  return vec4f(mix(rgb, c, m) * c4.a, c4.a);
+}
 fn effect(uv: vec2f) -> vec4f {
-  let src4 = tap(uv);
+  let c = tap(uv);
+  let st = u.p[3].w;
+  if (st < 0.5) { return basicStage(c); }
+  if (st < 1.5) { return lutStage(c); }
+  if (st < 2.5) { return curvesStage(c); }
+  return hslStage(c, st > 3.5);
+}
+fn basicStage(src4: vec4f) -> vec4f {
   var c = unpremul(src4) * u.p[0].xyz;
   let k = u.p[0].w;
   if (k != 1.0) { c = select(c, 0.18 * pow(max(c, vec3f(1e-12)) / 0.18, vec3f(k)), c > vec3f(0.0)); }
@@ -578,11 +695,18 @@ fn effect(uv: vec2f) -> vec4f {
   c = max(c, vec3f(0.0));
   return vec4f(c * src4.a, src4.a);
 }`,
-      uniforms: (p) => {
-        const q = basicPlan(p);
-        return [[...q.gain, q.k, ...q.tone, q.vibrance, q.saturation, 0, 0]];
+      uniforms: (p, info) => lumetriStages(p, info).map((s) => s.pass),
+      // binding -> { key (the compositor keeps one texture per key), dim, size, data() -> rgba half floats } | null
+      textures: (p, info) => {
+        const L = lumetri();
+        const lut = info?.assets?.lut || null;
+        return {
+          4: lut && (p.lutIntensity ?? 100) > 0 ? { key: `lut:${lut.id}`, dim: '3d', size: [lut.size, lut.size, lut.size], data: () => L.lutHalf(lut) } : null,
+          5: L.curvesIdentity(p) ? null : { key: L.curveKey(p), dim: '2d', size: [L.TABLE, 1], data: () => L.curvesHalf(p) },
+        };
       },
     },
+    // Canvas 2D does the basic correction through CSS filters; it has no LUT, curves or HSL secondary.
     canvas2d: (p) => {
       const parts = [];
       if (p.exposure) parts.push(`brightness(${(2 ** (p.exposure / 2.2)).toFixed(4)})`);
@@ -591,9 +715,14 @@ fn effect(uv: vec2f) -> vec4f {
       if (p.temperature > 0) parts.push(`sepia(${clamp(p.temperature / 300, 0, 1).toFixed(4)})`);
       return { filter: parts.join(' ') };
     },
-    cpu: (img, p) => {
-      const q = basicPlan(p);
-      return mapColor(img, (c) => basicPixel(unpremulCpu(c), q).map((x) => x * c[3]).concat(c[3]));
+    cpu: (img, p, info) => {
+      const stages = lumetriStages(p, info);
+      if (!stages.length) return img;
+      return mapColor(img, (c) => {
+        let rgb = unpremulCpu(c);
+        for (const s of stages) rgb = s.cpu(rgb);
+        return rgb.map((x) => x * c[3]).concat(c[3]);
+      });
     },
   });
 
@@ -1024,6 +1153,7 @@ fn effect(uv: vec2f) -> vec4f {
 
   // ---- audio effects: the audio engine reads gain(params, t, length) (linear gain at t seconds into the clip) ------
 
+  const SLOPES = [['12', '12 dB/oct'], ['24', '24 dB/oct'], ['48', '48 dB/oct']];
   const AUDIO = [
     {
       type: 'audio.gain', name: 'Gain', category: 'Audio', kind: 'audio',
@@ -1039,6 +1169,50 @@ fn effect(uv: vec2f) -> vec4f {
         if (p.fadeOut > 0 && t > length - p.fadeOut) g *= clamp((length - t) / p.fadeOut, 0, 1);
         return p.curve === 'power' ? Math.sin((g * Math.PI) / 2) : g;
       },
+    },
+    // Processors (audiofx.js, named by `dsp`): the mixer runs a clip's effects in order as one chain, before the clip's
+    // volume, fades and pan, with their state kept across the mix's blocks.
+    {
+      type: 'audio.eq', name: 'Parametric Equalizer', category: 'Filter and EQ', kind: 'audio', dsp: 'eq',
+      params: [
+        bool('hpOn', 'High-Pass', false), num('hpFreq', 'High-Pass Frequency', 80, 20, 20000, 1, { unit: 'Hz' }), choice('hpSlope', 'High-Pass Slope', '12', SLOPES),
+        bool('lsOn', 'Low Shelf', true), num('lsFreq', 'Low Shelf Frequency', 100, 20, 20000, 1, { unit: 'Hz' }), num('lsGain', 'Low Shelf Gain', 0, -24, 24, 0.1, { unit: 'dB' }),
+        ...[[1, 250], [2, 1000], [3, 4000]].flatMap(([b, f]) => [
+          bool(`b${b}On`, `Band ${b}`, true), num(`b${b}Freq`, `Band ${b} Frequency`, f, 20, 20000, 1, { unit: 'Hz' }),
+          num(`b${b}Gain`, `Band ${b} Gain`, 0, -24, 24, 0.1, { unit: 'dB' }), num(`b${b}Q`, `Band ${b} Q`, 1, 0.1, 30, 0.01),
+        ]),
+        bool('hsOn', 'High Shelf', true), num('hsFreq', 'High Shelf Frequency', 8000, 20, 20000, 1, { unit: 'Hz' }), num('hsGain', 'High Shelf Gain', 0, -24, 24, 0.1, { unit: 'dB' }),
+        bool('lpOn', 'Low-Pass', false), num('lpFreq', 'Low-Pass Frequency', 16000, 20, 20000, 1, { unit: 'Hz' }), choice('lpSlope', 'Low-Pass Slope', '12', SLOPES),
+        num('output', 'Output Gain', 0, -24, 24, 0.1, { unit: 'dB' }),
+      ],
+    },
+    { type: 'audio.bass', name: 'Bass', category: 'Filter and EQ', kind: 'audio', dsp: 'bass', params: [num('boost', 'Boost', 0, -24, 24, 0.1, { unit: 'dB' })] },
+    { type: 'audio.treble', name: 'Treble', category: 'Filter and EQ', kind: 'audio', dsp: 'treble', params: [num('boost', 'Boost', 0, -24, 24, 0.1, { unit: 'dB' })] },
+    {
+      type: 'audio.compressor', name: 'Compressor', category: 'Dynamics', kind: 'audio', dsp: 'compressor',
+      params: [
+        num('threshold', 'Threshold', -20, -60, 0, 0.1, { unit: 'dB' }), num('ratio', 'Ratio', 4, 1, 20, 0.1, { unit: ':1' }),
+        num('attack', 'Attack', 10, 0.1, 200, 0.1, { unit: 'ms' }), num('release', 'Release', 100, 5, 2000, 1, { unit: 'ms' }),
+        num('knee', 'Knee', 6, 0, 24, 0.1, { unit: 'dB' }), num('makeup', 'Makeup Gain', 0, 0, 24, 0.1, { unit: 'dB' }),
+      ],
+    },
+    {
+      type: 'audio.limiter', name: 'Hard Limiter', category: 'Dynamics', kind: 'audio', dsp: 'limiter',
+      params: [num('ceiling', 'Ceiling', -1, -24, 0, 0.1, { unit: 'dB' }), num('release', 'Release', 50, 1, 1000, 1, { unit: 'ms' }), bool('truePeak', 'True Peak (4x)', false)],
+    },
+    {
+      type: 'audio.gate', name: 'Noise Gate', category: 'Dynamics', kind: 'audio', dsp: 'gate',
+      params: [
+        num('threshold', 'Threshold', -50, -90, 0, 0.1, { unit: 'dB' }), num('attack', 'Attack', 2, 0.1, 100, 0.1, { unit: 'ms' }),
+        num('hold', 'Hold Time', 50, 0, 1000, 1, { unit: 'ms' }), num('release', 'Release', 100, 5, 2000, 1, { unit: 'ms' }), num('range', 'Range', 40, 0, 90, 0.1, { unit: 'dB' }),
+      ],
+    },
+    {
+      type: 'audio.dehum', name: 'DeHummer', category: 'Noise Reduction', kind: 'audio', dsp: 'dehum',
+      params: [
+        choice('frequency', 'Frequency', '60', [['50', '50 Hz'], ['60', '60 Hz']]), { ...num('harmonics', 'Harmonics', 4, 1, 10, 1), keyframable: false },
+        num('reduction', 'Reduction', 30, 0, 60, 0.1, { unit: 'dB' }), num('Q', 'Q', 20, 4, 100, 0.1),
+      ],
     },
   ];
 
@@ -1261,6 +1435,8 @@ fn transition(uv: vec2f) -> vec4f {
       else if (p.type === 'choice') out[p.id] = p.choices.some(([id]) => id === v) ? v : p.default;
       else if (p.type === 'color' && typeof v === 'string') out[p.id] = v;
       else if (p.type === 'point' && Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === 'number')) out[p.id] = v.slice();
+      else if (p.type === 'curve' && Array.isArray(v)) out[p.id] = lumetri().sanitize(v);
+      else if (p.type === 'lut' && typeof v === 'string') out[p.id] = v;
     }
     return out;
   }
