@@ -154,17 +154,34 @@
 
   // Frame sources per clip, LRU by the render that last used them.
   function sourcePool({ hardware }) {
-    const pool = new Map(); // clipId|path -> { src, used }
+    const pool = new Map(); // clipId|path -> { src, used, at }
     let tick = 0;
+    // A paused monitor, or one whose project was replaced, renders no more, so the sweep by renders never comes: the
+    // decoders it kept (a 4K one holds 8 hardware frames) made a proxy job six times slower. A source that neither the
+    // last render nor the one under way used, for IDLE_MS, closes on a timer; the timer runs while the pool has any.
+    const IDLE_MS = 3000;
+    let timer = null;
+    function idleCheck() {
+      const now = performance.now();
+      for (const [k, e] of pool) {
+        if (e.used < tick - 1 && now - e.at > IDLE_MS) {
+          e.src.close();
+          pool.delete(k);
+        }
+      }
+      if (!pool.size) { clearInterval(timer); timer = null; }
+    }
     return {
       get(clip, opened) {
         const key = `${clip.id}|${opened.path}`;
         let e = pool.get(key);
         if (!e) {
-          e = { src: need('decoder').createFrameSource(opened, opened.video, { hardware }), used: tick };
+          e = { src: need('decoder').createFrameSource(opened, opened.video, { hardware }), used: tick, at: 0 };
           pool.set(key, e);
         }
         e.used = tick;
+        e.at = performance.now();
+        if (!timer) { timer = setInterval(idleCheck, 1000); timer.unref?.(); }
         return e.src;
       },
       // Called once a render: closes sources unused for `idle` renders, and the oldest beyond `max`.
@@ -181,6 +198,8 @@
       get size() { return pool.size; },
       stats: () => [...pool.values()].map((e) => e.src.stats()),
       close() {
+        clearInterval(timer);
+        timer = null;
         for (const e of pool.values()) e.src.close();
         pool.clear();
       },

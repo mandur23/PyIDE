@@ -158,7 +158,8 @@
   function prefetch(app, mediaId) {
     const m = app.project?.media.find((x) => x.id === mediaId);
     if (!m || !Cut.thumbs) return;
-    if (m.kind !== 'audio') Cut.thumbs.strip?.(app.project, mediaId, { from: 0, to: m.duration, count: SCRUB_FRAMES, height: THUMB_H }).catch(() => {});
+    const h = app.history;
+    if (m.kind !== 'audio') Cut.thumbs.strip?.(app.project, mediaId, { from: 0, to: m.duration, count: SCRUB_FRAMES, height: THUMB_H, wanted: () => app.history === h }).catch(() => {});
     if (m.audio) Cut.thumbs.peaks?.(app.project, mediaId, { samplesPerPeak: 512 }).catch(() => {});
   }
 
@@ -664,7 +665,8 @@
       const load = () => {
         if (loading || !Cut.thumbs?.strip) return loading;
         const count = m.kind === 'image' ? 1 : SCRUB_FRAMES;
-        loading = Cut.thumbs.strip(app.project, m.id, { from: 0, to: m.duration, count, height: THUMB_H })
+        const h = app.history;
+        loading = Cut.thumbs.strip(app.project, m.id, { from: 0, to: m.duration, count, height: THUMB_H, wanted: () => app.history === h })
           .then((list) => { frames = list; thumb.dataset.frames = String(list?.length || 0); paint(0); })
           .catch((err) => { log.warn(`thumbnails of ${m.name}: ${err?.message || err}`); });
         return loading;

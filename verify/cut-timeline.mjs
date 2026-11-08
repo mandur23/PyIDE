@@ -850,6 +850,49 @@ await section('perf', async () => {
   check(moved === 1, 'the dragged clip lands 20 s later, overwriting what was there');
   check(dr.topP95 < 8 && dr.frameMedian < 34, `a drag over 500 clips stays at frame rate (ghost layer p95 ${dr.topP95.toFixed(2)} ms, frame median ${dr.frameMedian.toFixed(1)} ms, p95 ${dr.frameP95.toFixed(1)} ms)`);
   await press('Ctrl+z');
+
+  // more video clips on screen than the thumbnail cache holds (500): once each has asked, the timeline rests.
+  // A real file (a missing one is offline and asks for none); each clip starts a frame later in it, so each has its own strip; 90 a track keeps each over 8 px on an 810 px timeline.
+  const manyFile = path.join(home, 'many.mp4');
+  check((await js(`Cut.testsrc.write(${S(manyFile)}, { seconds: 33, fps: [30, 1], w: 160, h: 90, audio: false }).then((r) => r.ok)`)) === true, 'a 33 s test source for the thumbnails');
+  const many = await js(`(async () => {
+    const C = Cut.commands, M = Cut.model, T = Cut.time.TICKS, F = T / 30;
+    const h0 = C.createHistory(M.createProject({ sequence: { fps: [30, 1], w: 1920, h: 1080, videoTracks: 6, audioTracks: 0 } }));
+    const list = await Cut.media.importFiles([${S(manyFile)}]);
+    const mid = h0.do(C.importMedia(list)).ids[0];
+    const seq = h0.project.sequences[0];
+    let k = 0;
+    for (const tk of seq.tracks) {
+      tk.height = 32;
+      for (let i = 0; i < 90; i++, k++) seq.clips.push(M.createClip('video', { id: 'c' + h0.project.nextId++, track: tk.id, start: i * 2 * T, in: k * F, out: k * F + 2 * T, source: { media: mid }, name: 'm' + i }));
+    }
+    const v = M.validate(h0.project);
+    if (!v.ok) throw new Error(v.errors.slice(0, 3).join('; '));
+    const orig = Cut.thumbs.strip;
+    let asked = 0;
+    Cut.thumbs.strip = (...a) => { asked++; return orig(...a); };
+    try {
+      Cut.app.setHistory(C.createHistory(JSON.parse(JSON.stringify(h0.project))), null, 'open');
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const tl = __tl.tl();
+      tl.setZoom((tl.root.querySelector('.cut-tl-scroll').clientWidth - 10) / 180, { t: 0, x: 0 });
+      tl.setScroll(0, 0);
+      // until the requests stop (each strip decodes; before the fix they never stopped)
+      const t0 = performance.now();
+      for (let last = -1, still = 0; still < 4 && performance.now() - t0 < 120000; ) {
+        await new Promise((r) => setTimeout(r, 500));
+        still = asked === last ? still + 1 : 0;
+        last = asked;
+      }
+      const s = Cut.ui.timeline.stats;
+      s.base.length = 0;
+      const before = asked;
+      await new Promise((r) => setTimeout(r, 2000));
+      const box = tl.root.querySelector('.cut-tl-scroll');
+      return { clips: seq.clips.length, view: [box.clientWidth, box.clientHeight], asked: before, seconds: Math.round((performance.now() - t0) / 1000), askedAfter: asked - before, draws: s.base.length };
+    } finally { Cut.thumbs.strip = orig; }
+  })()`);
+  check(many.asked > 500 && many.asked <= 600 && many.askedAfter === 0 && many.draws <= 1, `${many.clips} video clips on screen ask for their thumbnails once each, then the timeline stops redrawing (${S(many)})`);
 });
 
 // ---------- screenshots in both themes ----------

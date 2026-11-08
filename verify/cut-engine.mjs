@@ -340,6 +340,26 @@ try {
   const leakAfterSeeks = await js(`(async () => { await __comp.idle(); const s = __comp.stats(); return { open: Cut.decoder.stats().open, cached: s.decoders.reduce((n, d) => n + d.cached, 0), borrowed: s.decoders.reduce((n, d) => n + d.borrowed, 0), restarts: s.decoders.map((d) => d.restarts), hw: s.decoders.map((d) => d.hardware) }; })()`);
   check(leakAfterSeeks.borrowed === 0 && leakAfterSeeks.open === leakAfterSeeks.cached, `after the seeks every frame is back: open ${leakAfterSeeks.open} = cached ${leakAfterSeeks.cached}, lent 0 (restarts ${S(leakAfterSeeks.restarts)}, ${S(leakAfterSeeks.hw)})`);
 
+  // ---- a compositor that stops rendering (a paused monitor) closes the decoders its last render did not use ----
+  const idle = await js(`(async () => {
+    const T = Cut.time.TICKS;
+    const hist = __eng.history(640, 360);
+    const [a, b] = await __eng.importAll(hist, [${S(made['30'].path)}, ${S(made['24'].path)}]);
+    const seq = hist.project.sequences[0].id;
+    hist.do(Cut.commands.place(seq, { source: { media: a }, in: 0, out: T, at: 0, video: 'V1', audio: null }));
+    hist.do(Cut.commands.place(seq, { source: { media: b }, in: 0, out: T, at: T, video: 'V1', audio: null }));
+    const comp = await Cut.compositor.create(__eng.canvas(640, 360), { width: 640, height: 360 });
+    try {
+      await comp.render(hist.project, seq, T / 2);
+      await comp.render(hist.project, seq, T + T / 2);
+      await comp.idle();
+      const both = comp.stats().sources;
+      await __eng.sleep(4500);
+      return { both, left: comp.stats().sources };
+    } finally { comp.destroy(); }
+  })()`);
+  check(idle.both === 2 && idle.left === 1, `left alone, the decoder of a clip the last frame did not show closes; the shown clip's stays (${S(idle)})`);
+
   // ---- the source monitor, proxies, software decoding, video in the 2D fallback ----
   const more = await js(`(async () => {
     const T = Cut.time;
@@ -744,6 +764,28 @@ try {
     } finally { Cut.decoder.createFrameSource = orig; Cut.thumbs.pause(false); }
   })()`);
   check(held.atPause >= 2 && held.whilePaused === 0 && !held.doneWhilePaused && held.n === 24 && held.asked > held.atPause, `a strip under way waits while the player plays and finishes after (${S(held)})`);
+
+  // A strip its caller no longer wants (the project was closed) stops decoding, also one under way. Another file than
+  // the check above: the thumbnails keep a file's frame source open for 10 s, made before this wrapper.
+  const unwanted = await js(`(async () => {
+    const hist = __eng.history(640, 360);
+    const [id] = await __eng.importAll(hist, [${S(made['2997'].path)}]);
+    const orig = Cut.decoder.createFrameSource;
+    let asked = 0;
+    Cut.decoder.createFrameSource = (...a) => { const s = orig(...a); const fa = s.frameAt; s.frameAt = (t) => { asked++; return fa(t); }; return s; };
+    try {
+      let want = true;
+      const strip = Cut.thumbs.strip(hist.project, id, { from: 254016000000 / 10, to: 254016000000 * 2.9, count: 24, height: 72, wanted: () => want });
+      const end = performance.now() + 5000;
+      while (asked < 2 && performance.now() < end) await __eng.sleep(1);
+      want = false;
+      const atStop = asked;
+      const t0 = performance.now();
+      await strip;
+      return { atStop, asked, ms: Math.round(performance.now() - t0) };
+    } finally { Cut.decoder.createFrameSource = orig; }
+  })()`);
+  check(unwanted.atStop >= 2 && unwanted.asked <= unwanted.atStop + 1, `a strip no longer wanted stops decoding (${S(unwanted)})`);
 
   // A long file's peaks (its audio decoded while the reader is held here) do not hold back thumbnails asked for after
   // them, and the coarser peaks the panel and the monitor ask for come from the same decode.

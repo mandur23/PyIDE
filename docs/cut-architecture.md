@@ -745,8 +745,9 @@ counts dropped frames and pauses `Cut.thumbs`. `RATES` are the J/K/L shuttle rat
 
 ### `Cut.thumbs`
 
-`strip(project, mediaId, { from, to, count, height }) -> Promise<[ImageBitmap]>` (shared bitmaps: callers must not
-close them), `peaks(project, mediaId, { samplesPerPeak })` -> min/max pairs at the track's own sample rate, all
+`strip(project, mediaId, { from, to, count, height, wanted }) -> Promise<[ImageBitmap]>` (shared bitmaps: callers must not
+close them; `wanted() === false` stops its decoding, before its turn or between frames, and gives what is made: the
+timeline and the project panel pass "this project is still open"), `peaks(project, mediaId, { samplesPerPeak })` -> min/max pairs at the track's own sample rate, all
 channels together; both cached through `cut:cacheGet/Put`. A strip whose thumbnails are further apart than twice the
 distance to their sync sample shows that sync sample (one decoded frame each, through `decoder.keyFrames`); closer
 ones show their exact frame. Peaks are computed about ten seconds at a time through `decoder.audioReader`, at 256

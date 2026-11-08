@@ -515,6 +515,7 @@
         dirtyBase = false;
         const a = performance.now();
         drawBase(fit(baseCanvas, w, h), w, h);
+        trimThumbs();
         pushStat(stats.base, performance.now() - a);
       }
       if (dirtyRuler) {
@@ -622,52 +623,73 @@
     }
 
     // ---------- thumbnails and waveforms ----------
-    const thumbCache = new Map(); // key -> {bitmaps | null, failed}
+    const thumbCache = new Map(); // key -> {bitmaps | null, gen}, least recently used first
+    const thumbReady = new Map(); // a clip's media and range -> the key of a strip of it already loaded
     const thumbQueue = [];
     let thumbBusy = 0;
+    let thumbGen = 0; // the base paint an entry was last used in
+    const THUMB_KEEP = 500;
+    const THUMB_MIN_W = 8; // px: a narrower clip shows no picture, so it asks for none
     const peaksCache = new Map(); // mediaId -> {peaks, rate} | 'pending' | 'failed'
-    function thumbKey(m, c, count, h) { return `${m.id}|${c.reverse ? 1 : 0}|${Math.round(c.in)}|${Math.round(c.out)}|${count}|${h}`; }
+    // By the file, not the media id: the timeline outlives a project, and another project's m1 is another file.
+    const rangeKey = (m, c) => `${m.path}|${m.size}|${m.mtime}|${c.reverse ? 1 : 0}|${Math.round(c.in)}|${Math.round(c.out)}|`;
+    function thumbKey(m, c, count, h) { return `${rangeKey(m, c)}${count}|${h}`; }
     function thumbsFor(c, m, w, h) {
-      if (!Cut.thumbs?.strip || !m || (m.kind !== 'video' && m.kind !== 'image')) return null;
+      if (!Cut.thumbs?.strip || !m || (m.kind !== 'video' && m.kind !== 'image') || w < THUMB_MIN_W) return null;
       const aspect = m.video?.w && m.video?.h ? m.video.w / m.video.h : 16 / 9;
       const still = m.kind === 'image' || c.source?.freeze;
       const tw = Math.max(12, h * aspect);
       const count = still ? 1 : Math.min(64, 2 ** Math.ceil(Math.log2(Math.max(1, w / tw))));
       const hb = h <= 40 ? 40 : h <= 72 ? 72 : 120;
       const key = thumbKey(m, c, count, hb);
+      const prefix = rangeKey(m, c);
       const hitC = thumbCache.get(key);
       if (hitC) {
         thumbCache.delete(key);
         thumbCache.set(key, hitC);
+        hitC.gen = thumbGen;
         if (hitC.bitmaps) return { bitmaps: hitC.bitmaps, tw, still };
       } else {
-        thumbCache.set(key, { bitmaps: null });
-        thumbQueue.push({ key, m, from: still ? c.in : Math.min(c.in, c.out), to: still ? c.in : Math.max(c.in, c.out), count, h: hb, reverse: c.reverse });
+        thumbCache.set(key, { bitmaps: null, gen: thumbGen });
+        thumbQueue.push({ key, prefix, m, history: app.history, from: still ? c.in : Math.min(c.in, c.out), to: still ? c.in : Math.max(c.in, c.out), count, h: hb, reverse: c.reverse });
         pumpThumbs();
-        while (thumbCache.size > 500) thumbCache.delete(thumbCache.keys().next().value);
       }
-      // While the right count loads, any strip of the same range keeps the clip from flashing empty.
-      const prefix = `${m.id}|${c.reverse ? 1 : 0}|${Math.round(c.in)}|${Math.round(c.out)}|`;
-      for (const [k, e] of thumbCache) if (e.bitmaps && k.startsWith(prefix)) return { bitmaps: e.bitmaps, tw, still };
-      return null;
+      // While the right count loads, a strip of the same range keeps the clip from flashing empty.
+      const ready = thumbCache.get(thumbReady.get(prefix));
+      return ready?.bitmaps ? { bitmaps: ready.bitmaps, tw, still } : null;
+    }
+    // After a base paint, never a strip it drew: with more clips on screen than the cache holds, each would push out
+    // another, be asked for again on the next frame, and the timeline would redraw and decode without end. (Trimming
+    // during the paint dropped clips it had not reached yet: 39,000 requests for 540 clips.)
+    function trimThumbs() {
+      while (thumbCache.size > THUMB_KEEP) {
+        const [k, e] = thumbCache.entries().next().value;
+        if (e.gen === thumbGen) break;
+        thumbCache.delete(k);
+      }
     }
     function pumpThumbs() {
       while (thumbBusy < 2 && thumbQueue.length) {
         // Visible clips first: the newest requests are for what is on screen now.
         const job = thumbQueue.pop();
-        if (!thumbCache.has(job.key)) continue;
+        // asked in a project since closed: its media ids may name other files now
+        if (!thumbCache.has(job.key) || job.history !== app.history) continue;
         thumbBusy++;
         Promise.resolve()
-          .then(() => Cut.thumbs.strip(app.project, job.m.id, { from: job.from, to: job.to, count: job.count, height: job.h }))
+          .then(() => Cut.thumbs.strip(app.project, job.m.id, { from: job.from, to: job.to, count: job.count, height: job.h, wanted: () => app.history === job.history }))
           .then((list) => {
             const e = thumbCache.get(job.key);
-            if (e) e.bitmaps = (job.reverse ? [...(list || [])].reverse() : list || []).filter(Boolean);
+            if (e) {
+              e.bitmaps = (job.reverse ? [...(list || [])].reverse() : list || []).filter(Boolean);
+              thumbReady.set(job.prefix, job.key);
+            }
             invalidate();
           })
           .catch((err) => { const e = thumbCache.get(job.key); if (e) e.bitmaps = []; log.warn(`thumbnails of ${job.m.name}: ${err?.message || err}`); })
           .finally(() => { thumbBusy--; pumpThumbs(); });
       }
-      if (thumbQueue.length > 200) thumbQueue.splice(0, thumbQueue.length - 200);
+      // A dropped request leaves the cache too, so its clip asks again when it is drawn (else it stays empty).
+      if (thumbQueue.length > 200) for (const job of thumbQueue.splice(0, thumbQueue.length - 200)) if (!thumbCache.get(job.key)?.bitmaps) thumbCache.delete(job.key);
     }
     function peaksFor(m) {
       if (!Cut.thumbs?.peaks || !m?.audio) return null;
@@ -746,6 +768,7 @@
       return false;
     }
     function drawBase(ctx, w, h) {
+      thumbGen++;
       ctx.fillStyle = colors.bg;
       ctx.fillRect(0, 0, w, h);
       if (!seq) {

@@ -100,8 +100,11 @@
   }
 
   // `count` thumbnails evenly from `from` to `to` (source ticks), `height` pixels high. Images give `count` copies of
-  // one; audio gives none.
-  async function strip(project, mediaId, { from = 0, to = null, count = 8, height = 48 } = {}) {
+  // one; audio gives none. `wanted` () -> false stops the decoding (before its turn and between frames) and gives what
+  // is made so far: the strips of a closed 4K project, held while it played, decoded for 15 s after it closed and made
+  // a proxy job of the next project take twice as long.
+  async function strip(project, mediaId, { from = 0, to = null, count = 8, height = 48, wanted = null } = {}) {
+    const gone = () => !!wanted && !wanted();
     const m = project.media.find((x) => x.id === mediaId);
     if (!m || m.kind === 'audio') return [];
     const o = await need('media').open(project, mediaId);
@@ -163,15 +166,18 @@
           encode(c).then((bytes) => cachePut(key, bytes)).catch(() => {});
         };
         const todo = left.filter((i) => !(out[i] = recall(`${base}|${samples[i]}`)));
+        if (gone()) return;
         const dec = need('decoder');
         const keys = dec.keyFrames ? todo.filter((i) => vs.key[samples[i]]) : [];
         if (keys.length) {
           const byIndex = new Map(keys.map((i) => [samples[i], i]));
-          try { await dec.keyFrames(o, o.video, [...byIndex.keys()], (idx, frame) => keep(byIndex.get(idx), frame)); } catch {}
+          // a throw from the callback ends the run and closes its decoder
+          try { await dec.keyFrames(o, o.video, [...byIndex.keys()], (idx, frame) => { if (gone()) throw new Error('not wanted'); return keep(byIndex.get(idx), frame); }); } catch {}
         }
         for (const i of todo) {
           if (out[i] || (out[i] = recall(`${base}|${samples[i]}`))) continue;
           await held();
+          if (gone()) break;
           // Asked for each frame: that keeps the source's idle timer from closing it under a long strip.
           const src = thumbSource(o);
           const frame = await src.frameAt(vs.pts[samples[i]]);
