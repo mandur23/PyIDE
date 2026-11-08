@@ -21,6 +21,9 @@ const { createImports, discardDownload, fetchChecked, hashOf, packEntry } = requ
 const { ping } = require('./ping');
 const { mergeServers } = require('./serversdat');
 const { createPrivateJoin, freePort } = require('./private-join');
+const { resolvesLocal } = require('./hosts');
+const translation = require('./translate');
+const { packMcmeta } = require('./templates');
 
 const INSTANCE = 'nano-instance.json';
 const SERVERS = 'servers-list.json';
@@ -32,7 +35,7 @@ const NAME = /^[A-Za-z0-9][\w-]{0,39}$/;
 const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
 const HTTP = /^https?:\/\/\S+$/i;
 // A server's pack address is anyone's text and is fetched at every Play, so it may not point at this computer or its
-// network.
+// network: neither by its text here, nor by what its name resolves to (vetPack).
 const PRIVATE_HOST = /^(localhost$|.+\.local(host)?$|127\.|10\.|0\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[(::1?\]|::ffff:|f[cd]|fe[89ab]))/i;
 // The most a pack may be (zipfile.js unpacks 2 GB at most).
 const PACK_LIMIT = 2 * 1024 * 1024 * 1024;
@@ -126,13 +129,25 @@ const packUrl = (url) => {
 };
 // A redirect is held to the same rule: it is the pack's owner who answers with one.
 const allowedPack = (url) => { try { return !!packUrl(url); } catch { return false; } };
+// A pack's host looked up before anything is fetched from it: a name that leads to this computer or its network
+// (localtest.me is 127.0.0.1) is refused as its address would be. The test stand-in's origin is not looked up. A name
+// that cannot be looked up cannot be fetched either, and says so as a download would.
+async function vetPack(url) {
+  if (standIn(url)) return;
+  const host = new URL(url).hostname;
+  const { local, failed } = await resolvesLocal(host);
+  if (local) throw fail('The pack points at a private address', 'badPack');
+  if (failed) throw fail(`${url}: getaddrinfo ENOTFOUND ${host}`);
+}
 // Whether an address is this computer or its network. Through URL, which reads the other spellings a resolver accepts
-// (2130706433, 0x7f.1). No name is looked up: one that resolves to a local address passes.
-function isLocalAddress(text) {
-  const { host, address } = parseAddress(text);
+// (2130706433, 0x7f.1), then by what the name resolves to, and without a port also by the SRV record the game follows.
+// A name that cannot be looked up is not local: the game cannot reach anything through it either.
+async function isLocalAddress(text) {
+  const { host, port, address } = parseAddress(text);
   let name = host;
   try { name = new URL(`http://${address}`).hostname; } catch {}
-  return PRIVATE_HOST.test(name);
+  if (PRIVATE_HOST.test(name)) return true;
+  return (await resolvesLocal(name, { srv: !port })).local;
 }
 const pastable = (s) => encodeURIComponent(s).replace(/[!'()*.]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 // A key as a code carries it: 32 bytes of base64url. A code that names a key and does not hold one is refused, never
@@ -265,6 +280,59 @@ if ($asked) { 'asked' } else { 'no window' }`;
     execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: SYSTEM_QUERY_MS }, (err, out) => resolve(!err && out.trim() === 'asked'));
   });
 }
+// Whether a game is running in this game folder (an instance's): its command line names it after --gameDir. -> true or
+// false, or null when Windows gave no answer. The folder reaches the script through the environment, and the script
+// prints one word.
+function gameRunningIn(dir, env = process.env) {
+  const games = (env.PYIDE_MC_GAME_IMAGE ? [env.PYIDE_MC_GAME_IMAGE] : GAME_IMAGES).map((n) => `Name='${n}'`).join(' OR ');
+  const script = `$dir = '--gameDir\\s+"?' + [regex]::Escape($env:NANO_GAME_DIR) + '[\\\\/]?"?(\\s|$)'
+$game = Get-CimInstance Win32_Process -Filter "${games}" | Where-Object { $_.CommandLine -match '${GAME_ARGS}' -and $_.CommandLine -match $dir }
+if ($game) { 'game' } else { 'none' }`;
+  const powershell = path.join(systemRoot(env), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return new Promise((resolve) => {
+    execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: SYSTEM_QUERY_MS, env: { ...env, NANO_GAME_DIR: path.resolve(dir) } },
+      (err, out) => resolve(err ? null : out.trim() === 'game' ? true : out.trim() === 'none' ? false : null));
+  });
+}
+
+// ---------- options.txt ----------
+// The game's own settings in the instance's folder, key:value lines; resourcePacks is a JSON list of the packs that are
+// on, the bottom one first: built-in packs by name (vanilla, fabric, mod_resources), the user's as file/<name>.
+const OPTIONS = 'options.txt';
+const KOREAN_PACK = 'Nano Studio Korean';
+const KOREAN_ENTRY = `file/${KOREAN_PACK}`;
+const TURN_ON = 'nano-turn-on.txt';
+const readText = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+const PACKS_LINE = 'resourcePacks:';
+const badOptions = (file) => fail(`${file} has a resourcePacks line that is not a list: the pack is not turned on there, so its other lines are kept. Turn on ${KOREAN_PACK} in the game's Resource Packs`, 'badOptions');
+// The list as the file has it (['vanilla'] without the line or the file); a line that is not a list of names throws.
+function resourcePacksOf(file) {
+  const line = (readText(file) ?? '').split(/\r?\n/).find((l) => l.startsWith(PACKS_LINE));
+  if (line === undefined) return ['vanilla'];
+  let packs = null;
+  try { packs = JSON.parse(line.slice(PACKS_LINE.length)); } catch {}
+  if (!Array.isArray(packs) || !packs.every((p) => typeof p === 'string')) throw badOptions(file);
+  return packs;
+}
+// entry put on in options.txt below the user's own packs (before the first file/ one), which so win over it; every other
+// line and pack stays as and where it was. The line, and the file, are made when missing. -> whether it was added.
+function enablePack(file, entry) {
+  const raw = readText(file) ?? '';
+  const packs = resourcePacksOf(file);
+  if (packs.includes(entry)) return false;
+  const at = packs.findIndex((p) => p.startsWith('file/'));
+  packs.splice(at < 0 ? packs.length : at, 0, entry);
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  const lines = raw ? raw.split(/\r?\n/) : [];
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const i = lines.findIndex((l) => l.startsWith(PACKS_LINE));
+  const line = `${PACKS_LINE}${JSON.stringify(packs)}`;
+  if (i >= 0) lines[i] = line; else lines.push(line);
+  fs.writeFileSync(`${file}.tmp`, `${lines.join(eol)}${eol}`);
+  renameRetried(`${file}.tmp`, file);
+  return true;
+}
+
 // -> true when the launcher has gone. A test with a stand-in launcher that names no image must not reach the user's real
 // one, which goes by the same names.
 async function closeLauncher(env = process.env) {
@@ -507,12 +575,32 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       name: oneLine(index.name) || null, version: oneLine(index.versionId) || null, files: Array.isArray(index.files) ? index.files.filter((f) => f && typeof f === 'object') : [] };
   }
   // A pack address -> a local .mrpack: a Modrinth modpack's newest version, or the file at the address. Both land in
-  // the temporary folder (discardDownload removes them).
+  // the temporary folder (discardDownload removes them). Each host on the way is looked up first (vetPack). The
+  // download's redirect check cannot wait for a lookup, so it lets through only hosts already looked up; one it stops at
+  // is looked up, and the download starts again, to the end of a chain as long as the download's own.
   async function downloadPack(url, log) {
     if (/^https:\/\/(www\.)?modrinth\.com\/modpack\//i.test(url) || !/^https?:/i.test(url)) return createImports({ fetchFile }).fromModrinth(url, log, Object.values(PACK_LOADERS));
     const dest = path.join(os.tmpdir(), `pyide-${crypto.randomBytes(4).toString('hex')}-pack.mrpack`);
-    await fetchFile(packUrl(url), dest, { limit: PACK_LIMIT, allow: allowedPack }, log);
-    return dest;
+    const first = packUrl(url);
+    await vetPack(first);
+    const vetted = new Set([new URL(first).host.toLowerCase()]);
+    for (let hop = 0; ; hop++) {
+      let next = null;
+      const allow = (u) => {
+        if (!allowedPack(u)) return false;
+        if (standIn(u) || vetted.has(new URL(u).host.toLowerCase())) return true;
+        next = u;
+        return false;
+      };
+      try {
+        await fetchFile(first, dest, { limit: PACK_LIMIT, allow }, log);
+        return dest;
+      } catch (err) {
+        if (!next || hop === 8) throw err;
+        await vetPack(next);
+        vetted.add(new URL(next).host.toLowerCase());
+      }
+    }
   }
   // What the user sees before a server's pack may change an instance. A pack's mods run with the game, with the user's
   // rights, and only the files it lists are limited to PACK_HOSTS and checked: overrides are whatever its owner put in.
@@ -858,9 +946,9 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
   // What a pasted code may not do without a yes: aim at this computer or its network, which a typed address may, put a new
   // key on a saved private server, or make one public, which would send the next Join in the clear. A saved server that
   // has no key left asks nothing of a code with a key: pasting it again is how that server comes back.
-  function codeAsks(target, known) {
+  async function codeAsks(target, known) {
     const asks = [];
-    if (!known && isLocalAddress(target.address)) asks.push('localAddress');
+    if (!known && await isLocalAddress(target.address)) asks.push('localAddress');
     if (known?.private) {
       const key = keyOf(known);
       if (!target.key) asks.push('noKey');
@@ -886,7 +974,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     })();
     const list = saved(root);
     const known = list.find((s) => sameAddress(s.address, target.address));
-    const ask = req.code && codeAsks(target, known).find((kind) => !req.confirmed?.includes(kind));
+    const ask = req.code && (await codeAsks(target, known)).find((kind) => !req.confirmed?.includes(kind));
     if (ask) return { needsConfirm: { kind: ask, address: target.address, name: known?.name || target.name } };
     const pack = target.pack || (!req.code && known?.pack) || null;
     const isPrivate = req.code ? !!target.key : !!known?.private;
@@ -967,6 +1055,10 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
       writeProfile(root, inst, how);
       writeInstance(root, inst);
       writeServerList(root, inst, srv ? [...moved, { ip: joinAt, name: srv.name }] : moved, log);
+      // A Korean pack translated while the game ran is turned on before the game starts again.
+      if (fs.existsSync(path.join(koreanDir(root, name), TURN_ON))) {
+        try { await turnKoreanOn(root, name, log); } catch (err) { log(`The Korean pack could not be turned on: ${err.message}\n`); }
+      }
       log(`Starting the Minecraft Launcher with the profile ${inst.title || inst.name} (Nano Studio)${srv ? `, joining ${srv.address}` : ''}\n`);
       await startLauncher(how, how.work(root));
       return { launched: true, launcher: how.argv[0], method: how.id, versionId: version.id, instance: describe(root, inst), packStale, alreadyOpen: open && !reopened, reopened, private: local.size > 0 };
@@ -999,6 +1091,97 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     return mods(root, name);
   }
 
+  // ---------- Korean translation of an instance's mods ----------
+  // translate.js, as for a server, into a folder pack of the instance's own (resourcepacks/Nano Studio Korean) that its
+  // options.txt turns on. The game reads options.txt when it starts and writes it back when it closes, so nothing is
+  // written there while the instance is being played: the pack is then turned on at its next Play (a TURN_ON file in it).
+  const koreanDir = (root, name) => path.join(dirOf(root, name), 'resourcepacks', KOREAN_PACK);
+  // Mods keep their text in .lang files before 1.13, and options.txt names packs without file/.
+  const koreanVersion = (inst) => {
+    if (!VERSION(inst.mc) || !atLeast(inst.mc, '1.13')) throw fail(`Korean translation needs Minecraft 1.13 or later: ${inst.mc} mods keep their text in .lang files`, 'oldVersion');
+  };
+  // The resource pack format of the instance's Minecraft: version.json in the client jar the launcher downloaded (from
+  // 1.14 on, as the server side reads the server jar's), or 4 for 1.13, whose jar has none. null before the first Play.
+  function clientPackVersion(root, mc) {
+    const store = findStore();
+    for (const work of [...new Set([gameDir(root), workDir(root), ...(store ? [store.work] : [])])]) {
+      const raw = readEntry(path.join(work, 'versions', mc, `${mc}.jar`), 'version.json');
+      const v = raw && (() => { try { return JSON.parse(raw.toString('utf8')).pack_version; } catch { return null; } })();
+      if (v != null) return v;
+    }
+    return atLeast(mc, '1.14') ? null : 4;
+  }
+  const koreanLines = (pack) => {
+    const assets = path.join(pack, 'assets');
+    let n = 0;
+    for (const ns of fs.existsSync(assets) ? fs.readdirSync(assets) : []) {
+      const lines = readJson(path.join(assets, ns, 'lang', 'ko_kr.json'));
+      if (lines && typeof lines === 'object') n += Object.values(lines).filter((v) => typeof v === 'string').length;
+    }
+    return n;
+  };
+  // The instance's mods, the lines they lack in Korean, and whether its options.txt has the pack on (null: the file's
+  // resourcePacks line cannot be read).
+  function koreanStatus(root, name) {
+    const inst = readInstance(root, name);
+    koreanVersion(inst);
+    const dir = dirOf(root, name);
+    const { mods, skipped } = translation.scan(dir, koreanDir(root, name));
+    const count = (m) => Object.keys(m.missing).length;
+    let enabled = null;
+    try { enabled = resourcePacksOf(path.join(dir, OPTIONS)).includes(KOREAN_ENTRY); } catch {}
+    return { mods: mods.map((m) => ({ jar: m.jar, ns: m.ns, total: m.total, missing: count(m) })), skipped,
+      missing: mods.reduce((s, m) => s + count(m), 0), lines: koreanLines(koreanDir(root, name)), enabled };
+  }
+  // The pack turned on in options.txt, unless this instance's game is running (or Windows cannot say), which would write
+  // its own list over it when it closes: then at the next Play. -> 'added', 'on' (it was), 'pending' or 'damaged'.
+  async function turnKoreanOn(root, name, log) {
+    const dir = dirOf(root, name);
+    const later = path.join(koreanDir(root, name), TURN_ON);
+    if ((await gameRunningIn(dir)) !== false) {
+      fs.writeFileSync(later, 'Nano Studio Craft turns this pack on in options.txt at the next Play.\n');
+      log('The game is running: the pack is turned on at the next Play.\n');
+      return 'pending';
+    }
+    try {
+      const added = enablePack(path.join(dir, OPTIONS), KOREAN_ENTRY);
+      fs.rmSync(later, { force: true });
+      log(added ? `${OPTIONS}: ${KOREAN_ENTRY} turned on, from the next game start.\n` : `${OPTIONS}: ${KOREAN_ENTRY} is on already.\n`);
+      return added ? 'added' : 'on';
+    } catch (err) {
+      if (err.code !== 'badOptions') throw err;
+      log(`${err.message}\n`);
+      return 'damaged';
+    }
+  }
+  // -> {translated, rejected, failed, files, pack, enabled (turnKoreanOn's, or null with no line to turn on)}.
+  const translatingNow = new Set();
+  async function translateKorean(root, name, { translate, log, signal }) {
+    const inst = readInstance(root, name);
+    koreanVersion(inst);
+    const dir = dirOf(root, name);
+    const key = dir.toLowerCase();
+    if (translatingNow.has(key)) throw fail(`${name} is being translated already`, 'busy');
+    translatingNow.add(key);
+    try {
+      if (await gameRunningIn(dir)) throw fail(`${inst.title || name} is being played: close Minecraft first, since the game writes its options.txt when it closes`, 'playing');
+      const pack = koreanDir(root, name);
+      const { mods } = translation.scan(dir, pack);
+      let result = { translated: 0, rejected: 0, failed: 0, files: [] };
+      if (mods.some((m) => Object.keys(m.missing).length)) {
+        const format = clientPackVersion(root, inst.mc);
+        if (format == null) throw fail('Launch the instance once first: the resource pack format comes from the Minecraft the launcher downloads', 'notPlayed');
+        // The instance's Minecraft may have changed since the pack was made (a server's pack moves it).
+        const meta = packMcmeta(format, `Korean for the mods of ${inst.title || name}, by Nano Studio Craft (Minecraft ${inst.mc})`);
+        fs.mkdirSync(pack, { recursive: true });
+        if (readText(path.join(pack, 'pack.mcmeta')) !== meta) fs.writeFileSync(path.join(pack, 'pack.mcmeta'), meta);
+        result = await translation.translateMods(dir, { mods, translate, log, signal, pack });
+      }
+      const enabled = koreanLines(pack) && fs.existsSync(path.join(pack, 'pack.mcmeta')) ? await turnKoreanOn(root, name, log) : null;
+      return { ...result, pack, enabled };
+    } finally { translatingNow.delete(key); }
+  }
+
   // What the server says it runs, for the dialog that asks for the version. A private server answers only through a join
   // process: the public port speaks the gate, and a server not added yet has its key only in the code it came with.
   async function pingServer(text) {
@@ -1025,7 +1208,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     return { ...code, private: !!key };
   };
 
-  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, joinCode, parseJoinCode: readCode, ping: pingServer, stopJoins: joins.stopAll };
+  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, koreanStatus, translateKorean, joinCode, parseJoinCode: readCode, ping: pingServer, stopJoins: joins.stopAll };
 }
 
-module.exports = { createLauncher, findLauncher, findStore, launchMethod, launcherOpen, closeLauncher, parseJoinCode, joinCode, parseAddress, serverArgs, headlessClient, readProfiles };
+module.exports = { createLauncher, findLauncher, findStore, launchMethod, launcherOpen, closeLauncher, gameRunningIn, enablePack, parseJoinCode, joinCode, parseAddress, serverArgs, headlessClient, readProfiles, KOREAN_PACK };

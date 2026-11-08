@@ -851,13 +851,17 @@
     return { dispose: () => { for (const off of offs) off(); clearTargets(); }, focus: () => items.focus({ preventScroll: true }) };
   }
 
-  // Dropped paths: folders through importFolderPath, files together. -> the new media ids.
+  // Dropped paths: folders through importFolderPath, caption files (.srt, .vtt) as a caption track each of the open
+  // sequence (on the project panel or the timeline alike; they were refused as media before), files together.
+  // -> the new media ids.
+  const CAPTION_FILE = /\.(srt|vtt)$/i;
   async function importDropped(app, paths) {
     const files = [];
     const made = [];
     for (const p of paths) {
       const st = await ide.api.invoke('cut:stat', p).catch(() => null);
       if (st && !st.missing && !st.isFile) made.push(...await importFolderPath(app, p));
+      else if (CAPTION_FILE.test(p) && ui.captions?.importFile) await ui.captions.importFile(app, p, { newTrack: true });
       else files.push(p);
     }
     if (files.length) made.push(...await importPaths(app, files, { binId: currentBin }));

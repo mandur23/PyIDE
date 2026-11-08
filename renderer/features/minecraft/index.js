@@ -371,47 +371,51 @@
     return true;
   }
 
-  // The mods' text without Korean, translated by Claude (the AI plugins' Claude Code) into resourcepack/, a run at a
-  // time per server; Send to Players then gives it to every player.
-  const translating = new Set(); // server folders (lower case)
-  async function translateKorean(srv) {
-    const key = srv.dir.toLowerCase();
-    if (translating.has(key)) return;
+  // The mods' text without Korean, translated by Claude (the AI plugins' Claude Code) into a resource pack, a run at a
+  // time per folder: a server's resourcepack/, which Send to Players then gives to every player, or an instance's own
+  // pack (craft.js). run(job id) -> main's result; done(r, extra) -> the result's notification {text, actions}, or null
+  // for none; failed(text) -> the UI's language for an error, or null for errorText's.
+  const translating = new Set(); // folders (lower case)
+  async function runTranslation({ key, name, run, done, failed = () => null }) {
+    if (translating.has(key)) return null;
     translating.add(key);
     const con = jobSession(tr('Korean Translation'));
     const j = job(con);
-    const progress = ide.notifications?.notify({ title: tr('Translating the mods of {name} into Korean…', { name: srv.name }), group: 'Minecraft', timeout: 0,
+    const progress = ide.notifications?.notify({ title: tr('Translating the mods of {name} into Korean…', { name }), group: 'Minecraft', timeout: 0,
       actions: [{ label: tr('Cancel'), run: () => ide.api.invoke('minecraft:cancel', j.id) }] });
     try {
-      const r = await ide.api.invoke('minecraft:translateMods', ide.root, srv.dir, j.id);
+      const r = await run(j.id);
       const extra = [r.rejected ? tr('{count} answers changed a format code (%s, §7) and were left out.', { count: r.rejected }) : '',
         r.failed ? tr('{count} lines got no answer.', { count: r.failed }) : ''].filter(Boolean).join(' ');
       con.append(`${tr('{count} lines translated into the resource pack.', { count: r.translated })}${extra ? ` ${extra}` : ''}\n`, r.translated ? 'ok' : 'sys');
       ide.refreshTree?.();
-      await refresh();
-      if (r.translated) {
-        ide.notifications?.notify({
-          title: tr('Mods of {name} translated into Korean', { name: srv.name }),
-          text: `${tr('{count} lines, in resourcepack/assets/<mod>/lang/ko_kr.json. Send to Players gives them to everyone who plays in Korean; edit a line there and it is kept.', { count: r.translated })}${extra ? ` ${extra}` : ''}`,
-          kind: 'ok', group: 'Minecraft',
-          actions: [
-            ...(ide.ports ? [{ label: tr('Send to Players'), run: (n) => { n.expire(); sendPack(serverAt(srv.dir) || srv); } }] : []),
-            { label: tr('Open File'), run: () => ide.openFile?.(r.files[0].file) },
-          ],
-        });
-      }
+      const said = done(r, extra);
+      if (said) ide.notifications?.notify({ title: tr('Mods of {name} translated into Korean', { name }), kind: 'ok', group: 'Minecraft', ...said });
+      return r;
     } catch (err) {
       const text = /Cancelled/.test(errorText(err)) ? tr('Cancelled. The lines translated so far are kept.')
         : /Claude Code is not installed/.test(errorText(err)) ? tr('Translation uses Claude Code, which is not installed. Install Claude Code and sign in to it, then try again.')
-          : errorText(err);
+          : failed(errorText(err)) || errorText(err);
       con.append(`${text}\n`, 'err');
-      if (!/Cancelled/.test(errorText(err))) ide.notifications?.notify({ title: tr('The mods of {name} could not be translated', { name: srv.name }), text, kind: 'error', group: 'Minecraft', raw: true });
+      if (!/Cancelled/.test(errorText(err))) ide.notifications?.notify({ title: tr('The mods of {name} could not be translated', { name }), text, kind: 'error', group: 'Minecraft', raw: true });
+      return null;
     } finally {
       progress?.expire();
       j.done();
       translating.delete(key);
     }
   }
+  const translateKorean = (srv) => runTranslation({
+    key: srv.dir.toLowerCase(), name: srv.name,
+    run: async (id) => { const r = await ide.api.invoke('minecraft:translateMods', ide.root, srv.dir, id); await refresh(); return r; },
+    done: (r, extra) => (!r.translated ? null : {
+      text: `${tr('{count} lines, in resourcepack/assets/<mod>/lang/ko_kr.json. Send to Players gives them to everyone who plays in Korean; edit a line there and it is kept.', { count: r.translated })}${extra ? ` ${extra}` : ''}`,
+      actions: [
+        ...(ide.ports ? [{ label: tr('Send to Players'), run: (n) => { n.expire(); sendPack(serverAt(srv.dir) || srv); } }] : []),
+        { label: tr('Open File'), run: () => ide.openFile?.(r.files[0].file) },
+      ],
+    }),
+  });
 
   // ---------- sharing files (client pack, resource pack) ----------
   // A server's client-pack/ folder is served by the app (main/minecraft/file-server.js, on loopback) and that port
@@ -895,7 +899,7 @@
 
   ide.registerAction({ id: 'Minecraft.NewServer', title: tr('New Minecraft Server…'), needsProject: true, run: newServer });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
-  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, sharePack, resourcePack, sendPack,
+  ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, runTranslation, sharePack, resourcePack, sendPack,
     job, jobSession, errorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig),
     // The server list (with drops) in the Minecraft screen's My Servers page.
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };

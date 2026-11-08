@@ -10,8 +10,9 @@
 // and the loader following the pack), modpacks from a file and from Modrinth, mods turned off and on, Remove, the
 // servers list, and noLauncher, the Minecraft screen's pages, and none of it in a code window. Ports 9895 and 9894.
 // Then the same through Nano Studio Craft's UI (craftUi, below; ports 9897-9898; screenshots craft-play.png,
-// craft-join-error.png, craft-servers.png, craft-my-servers.png, craft-settings.png, craft-play-900.png,
-// craft-no-launcher.png and craft-unreachable.png).
+// craft-join-error.png, craft-servers.png, craft-korean.png, craft-my-servers.png, craft-settings.png, craft-play-900.png,
+// craft-no-launcher.png and craft-unreachable.png), with an instance's mods translated into Korean by a stand-in Claude Code CLI
+// (cancelled from its balloon, then into resourcepacks/Nano Studio Korean, turned on in options.txt).
 // MC_LAUNCHER_LIVE=1 instead installs the real Fabric, Quilt, Forge and NeoForge client loaders into a temporary
 // .launcher (Mojang, Maven and Adoptium downloads, several hundred MB; not in CI) and prints what the real Forge and
 // NeoForge installers accept on their command line. Port 9896.
@@ -157,6 +158,30 @@ if (process.argv.includes('bore.pub')) process.exit(9);
 process.env.PYIDE_BORE_CONTROL_PORT = ${S(String(standIn.server.address().port))};
 require(${S(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'main', 'bore-client.js'))});
 `);
+// A stand-in Claude Code CLI for an instance's Korean translation, as verify/minecraft.mjs has for a server's: it answers
+// the JSON object of English lines with Korean (one answer drops a %s) in the CLI's stream-json format, logs what it was
+// asked, and while claudeHold exists it waits, so a run can be watched and cancelled.
+const fakeClaudeJs = path.join(work, 'fake-claude.mjs');
+const fakeClaude = path.join(work, 'claude.cmd');
+const claudeLog = path.join(work, 'claude-log.jsonl');
+const claudeHold = path.join(work, 'claude-hold');
+const KOREAN = { 'Ruby': '루비', 'Block of Ruby': '루비 블록', 'Shines with %s light': '빛나요' };
+writeFileSync(fakeClaudeJs, `import fs from 'fs';
+let stdin = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) stdin += chunk;
+const args = process.argv.slice(2);
+fs.appendFileSync(${S(claudeLog)}, JSON.stringify({ model: args[args.indexOf('--model') + 1], stdin }) + '\\n');
+while (fs.existsSync(${S(claudeHold)})) await new Promise((r) => setTimeout(r, 100));
+const words = ${S(KOREAN)};
+const reply = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(stdin)).map(([k, v]) => [k, words[v] || '[ko] ' + v])));
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+out({ type: 'system', subtype: 'init', model: 'fake', tools: [] });
+out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } });
+out({ type: 'result', subtype: 'success', is_error: false, result: reply, duration_ms: 5 });
+`);
+writeFileSync(fakeClaude, `@echo off\r\n"${process.execPath}" "${fakeClaudeJs}" %*\r\n`);
+const claudeCalls = () => (existsSync(claudeLog) ? readFileSync(claudeLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 // ---------- client packs (.mrpack, written by Python's zipfile) ----------
 const mrpack = (index, entries = {}) => {
@@ -246,7 +271,7 @@ const launcherDir = path.join(project, '.launcher');
 // The launcher's own profiles and settings, there before Nano Studio's.
 write(path.join(launcherDir, 'launcher_profiles.json'), S({ profiles: { abc123: { name: 'Latest release', type: 'latest-release', lastVersionId: 'latest-release', icon: 'Furnace' } },
   settings: { enableSnapshots: true, locale: 'ko-kr' }, version: 3 }, null, 2));
-const t = await launch({ name: 'minecraft-launcher', port: 9895, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_LAUNCHER: LAUNCHER, PYIDE_MC_SOURCES: SOURCES } });
+const t = await launch({ name: 'minecraft-launcher', port: 9895, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_LAUNCHER: LAUNCHER, PYIDE_MC_SOURCES: SOURCES, PYIDE_MC_DNS: '{}' } });
 const { js, check, shot } = t;
 const call = (ch, ...args) => js(`ide.api.invoke(${S(ch)}, ${args.map((a) => (a === undefined ? 'undefined' : S(a))).join(', ')}).then((r) => ({ ok: r }), (e) => ({ err: String(e.message || e) }))`);
 const ok = async (ch, ...args) => {
@@ -500,7 +525,9 @@ async function craftUi(first) {
     downloads: 1200, follows: 30, display_categories: ['adventure'], date_modified: '2026-10-01' };
   routes.set('/modrinth/search', () => ({ total_hits: 1, hits: [hit] }));
   // The image no launcher has: a real launcher open on this PC must not change what these windows say.
-  const env = { PYIDE_CRAFT_HOME: home, PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe' };
+  // The stand-in DNS knows no name, so no name is looked up for real; no game runs under the image named.
+  const env = { PYIDE_CRAFT_HOME: home, PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_DNS: '{}',
+    PYIDE_MC_GAME_IMAGE: 'nano-no-such-game.exe', PYIDE_CLAUDE_PATH: fakeClaude };
   let privateJoinAddress = null;
   let u;
   try {
@@ -661,6 +688,52 @@ async function craftUi(first) {
     await js(`(${dialogButton('닫기')}).click()`);
     await js(`(document.querySelector('.mcc-card[data-name="instance"] .mcc-folder').click(), true)`);
     check(S(await js('window.__shell')) === S([['shell:openPath', homeInst('instance')]]), 'Open Folder opens the instance folder (stubbed)');
+
+    // ---------- an instance's mods into Korean ----------
+    // A mod with English text and a little Korean of its own, the client jar the launcher would have downloaded (its
+    // version.json gives the pack format), and options.txt with the user's own packs.
+    const koMod = path.join(homeInst('instance'), 'mods', 'testmod-1.0.jar');
+    execFileSync('py', ['-3', '-I', '-c', 'import zipfile,sys; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr("assets/testmod/lang/en_us.json", sys.argv[2]); z.writestr("assets/testmod/lang/ko_kr.json", sys.argv[3]); z.close()',
+      koMod, S({ 'item.testmod.ruby': 'Ruby', 'block.testmod.ruby_block': 'Block of Ruby', 'item.testmod.ruby.tooltip': 'Shines with %s light', 'itemGroup.testmod': 'Test Mod' }), S({ 'itemGroup.testmod': '테스트 모드' })]);
+    write(path.join(home, '.launcher', 'versions', '1.20.1', '1.20.1.jar'), require('../main/minecraft/zipfile.js').writeZip([{ name: 'version.json', data: Buffer.from(S({ id: '1.20.1', pack_version: { resource: 15, data: 15 } })) }]));
+    const userOptions = 'version:3465\nlang:ko_kr\nresourcePacks:["vanilla","fabric","file/My Pack.zip"]\nfov:0.0\n';
+    write(path.join(homeInst('instance'), 'options.txt'), userOptions);
+    await js('ide.minecraft.craft.refresh().then(() => true)');
+    const koBtn = '.mcc-card[data-name="instance"] .mcc-korean-btn';
+    await until(`!!document.querySelector(${S(koBtn)})`, 'the Korean button on the card', 10000);
+    await press(koBtn);
+    await until(`/모드 1개 중 1개에서 3줄이 아직 한국어가 없습니다/.test(document.querySelector('.mcc-korean-status')?.textContent || '') && !document.querySelector('.mcc-korean-run').disabled`, 'the Korean dialog', 15000);
+    const koDialog = await js(`({ label: document.querySelector('.mcc-korean-run').textContent, tip: document.querySelector(${S(koBtn)}).title })`);
+    check(koDialog.label === '한국어로 번역' && koDialog.tip === '한국어 번역…', `the card's Korean button opens a dialog with the status of the instance's mods, in Korean (${S(koDialog)})`);
+    await shot('craft-korean.png');
+    // A run that is cancelled leaves nothing; its balloon has the server version's Cancel.
+    const koFile = path.join(homeInst('instance'), 'resourcepacks', 'Nano Studio Korean', 'assets', 'testmod', 'lang', 'ko_kr.json');
+    writeFileSync(claudeHold, '');
+    await press('.mcc-korean-run');
+    await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /한국어로 번역하는 중/.test(b.textContent) && [...b.querySelectorAll('button')].some((x) => x.textContent === '취소'))`, 'the progress balloon', 15000);
+    await until(() => claudeCalls().length === 1, 'Claude asked', 15000);
+    await js(`([...document.querySelectorAll('.ide-balloon')].find((b) => /한국어로 번역하는 중/.test(b.textContent)).querySelectorAll('button').forEach((x) => { if (x.textContent === '취소') x.click(); }), true)`);
+    await until(`/취소했습니다/.test(ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent || '')`, 'cancelled', 15000);
+    rmSync(claudeHold, { force: true });
+    check(!existsSync(koFile) && readFileSync(path.join(homeInst('instance'), 'options.txt'), 'utf8') === userOptions, 'Cancel in the progress balloon stops the translation, and nothing is written');
+    await until(`!document.querySelector('.mcc-korean-run').disabled`, 'Translate again', 15000);
+    await press('.mcc-korean-run');
+    await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /모드를 한국어로 번역했습니다/.test(b.textContent))`, 'translated balloon', 30000)
+      .catch(async (e) => { console.log(await js(`ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent`)); throw e; });
+    const koLines = existsSync(koFile) ? readJson(koFile) : null;
+    const koOptions = readFileSync(path.join(homeInst('instance'), 'options.txt'), 'utf8');
+    const koMeta = readJson(path.join(homeInst('instance'), 'resourcepacks', 'Nano Studio Korean', 'pack.mcmeta'));
+    const koAsked = claudeCalls().at(-1);
+    check(S(koLines) === S({ 'item.testmod.ruby': '루비', 'block.testmod.ruby_block': '루비 블록' }) && koMeta.pack?.pack_format === 15
+      && koAsked.model === 'sonnet' && !JSON.parse(koAsked.stdin)['itemGroup.testmod'],
+    `Translate puts Claude's Korean into the instance's own resource pack, refusing the answer that dropped a %s, and asks only for the lines without Korean (${S({ koLines, koMeta })})`);
+    check(koOptions === userOptions.replace('"fabric","file/My Pack.zip"', '"fabric","file/Nano Studio Korean","file/My Pack.zip"'),
+      `and turns the pack on in options.txt below the user's own pack, which stays (${S(koOptions)})`);
+    const koBalloon = await js(`[...document.querySelectorAll('.ide-balloon')].find((b) => /모드를 한국어로 번역했습니다/.test(b.textContent))?.textContent || ''`);
+    check(/Nano Studio Korean에 2줄/.test(koBalloon) && /다음에 게임을 시작할 때부터/.test(koBalloon) && /번역 1줄은 넣지 않았습니다/.test(koBalloon), `its balloon says where the lines are and that they apply from the next game start (${koBalloon})`);
+    await until(`/1줄이 아직 한국어가 없습니다/.test(document.querySelector('.mcc-korean-status')?.textContent || '')`, 'the status after', 15000);
+    check(true, 'the dialog counts again afterwards: only the refused line is left');
+    await js(`(${dialogButton('닫기')}).click()`);
 
     // ---------- an editor tab over the app; My Servers; the Market ----------
     writeFileSync(path.join(home, 'notes.txt'), 'notes');

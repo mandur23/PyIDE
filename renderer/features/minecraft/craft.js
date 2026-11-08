@@ -1,7 +1,7 @@
 // Nano Studio Craft's pages of the Minecraft screen (screen.js), over main/minecraft/launcher.js:
 // - Play: the instances (instances/<name>, each its own game folder), played through the official Minecraft Launcher,
 //   where the user signs in. New Instance (Vanilla, Fabric, Quilt, Forge, NeoForge), From Modpack (the Market's
-//   modpacks, or a .mrpack file), the instance's mods turned on and off, Open Folder and Delete.
+//   modpacks, or a .mrpack file), the instance's mods turned on and off, their Korean translation, Open Folder and Delete.
 // - Servers to Join: servers added by a join code (nanostudio:join?…) or an address. Join plays the server's instance
 //   with the server to join, after its client pack is synced.
 // A missing launcher is a banner with Mojang's download page: Nano Studio never installs it.
@@ -80,6 +80,10 @@
     [/^The (\w+) .+ has no client install without its window/, (m) => tr('This {loader} version cannot be installed without its own window. Choose a newer version.', { loader: m[1] })],
     [/^(\w+) has no loader for Minecraft (.+)$/, (m) => tr('{loader} has no version for Minecraft {mc}.', { loader: m[1], mc: m[2] })],
     [/^The Minecraft Launcher could not be started: (.+)$/, (m) => tr('The Minecraft Launcher could not be started: {error}', { error: m[1] })],
+    [/^(.+) is being played: close Minecraft first/, (m) => tr('{name} is being played. Close Minecraft first: the game writes its options.txt when it closes.', { name: m[1] })],
+    [/^Launch the instance once first: the resource pack format/, () => tr('Launch the instance once first: the resource pack needs the Minecraft the launcher downloads.')],
+    [/^Korean translation needs Minecraft 1\.13 or later/, () => tr('Korean translation needs Minecraft 1.13 or later: older mods keep their text in another format.')],
+    [/^(.+) is not valid JSON: fix it, or move it away, before translating/, (m) => tr('{file} is not valid JSON. Fix it or move it away, then translate again: Nano Studio does not write over its lines.', { file: m[1] })],
   ];
   function errorText(err) {
     const text = mc.errorText(err);
@@ -456,6 +460,53 @@
     });
   }
 
+  // ---------- Korean translation ----------
+  // The instance's mods into Korean, as a server's settings tab does (index.js runTranslation), into a resource pack of
+  // its own (resourcepacks/Nano Studio Korean) that its options.txt turns on. The game reads options.txt when it starts.
+  async function translateInstance(inst) {
+    const name = inst.title || inst.name;
+    return mc.runTranslation({
+      key: inst.dir.toLowerCase(), name,
+      run: (id) => ide.api.invoke('launcher:translateMods', ide.root, inst.name, id),
+      failed: (text) => { const t = errorText(text); return t === text ? null : t; },
+      done: (r, extra) => {
+        const on = r.enabled === 'added' || r.enabled === 'on' ? tr('It applies from the next game start: choose 한국어 in the game\'s Language settings if it is not already.')
+          : r.enabled === 'pending' ? tr('Minecraft is running, so the pack is turned on at the next Launch here.')
+            : r.enabled === 'damaged' ? tr('options.txt could not be read, so the pack is not turned on: turn on Nano Studio Korean in the game\'s Resource Packs.') : '';
+        if (!r.translated && r.enabled !== 'added' && r.enabled !== 'pending') return null;
+        const lines = r.translated ? tr('{count} lines, in the instance\'s resource pack Nano Studio Korean; edit a line there and it is kept.', { count: r.translated }) : tr('The Korean resource pack is turned on.');
+        return { text: [lines, on, extra].filter(Boolean).join(' '), kind: r.enabled === 'damaged' ? 'warn' : 'ok',
+          actions: r.files.length ? [{ label: tr('Open File'), run: () => ide.openFile?.(r.files[0].file) }] : [] };
+      },
+    });
+  }
+  function koreanDialog(inst) {
+    if (!trusted()) return;
+    const status = el('div', 'mcc-korean-status muted', tr('Looking for text without Korean…'));
+    const go = el('button', 'primary mcc-korean-run', tr('Translate to Korean'));
+    go.disabled = true;
+    const count = () => ide.api.invoke('launcher:langStatus', ide.root, inst.name).then((st) => {
+      const todo = st.mods.filter((m) => m.missing);
+      const off = !st.missing && st.lines > 0 && st.enabled === false;
+      status.textContent = !st.mods.length ? tr('No mod in mods/ has English text to translate.')
+        : st.missing ? tr('{lines} lines in {mods} of the {count} mods have no Korean yet.', { lines: st.missing, mods: todo.length, count: st.mods.length })
+          : off ? `${tr('Every line of the {count} mods has Korean.', { count: st.mods.length })} ${tr('The Korean resource pack is not on in this instance yet.')}`
+            : tr('Every line of the {count} mods has Korean.', { count: st.mods.length });
+      status.title = todo.map((m) => `${m.jar}: ${m.missing}/${m.total}`).join('\n');
+      go.textContent = off ? tr('Turn On the Korean Pack') : tr('Translate to Korean');
+      go.disabled = !st.missing && !off;
+    }, (err) => { status.textContent = errorText(err); go.disabled = true; });
+    go.onclick = async () => {
+      go.disabled = true;
+      await translateInstance(inst);
+      count();
+    };
+    count();
+    const body = el('div', 'mc-dialog mcc-korean');
+    body.append(status, go, el('div', 'mc-dialog-note muted', tr('Claude (your Claude Code) writes the lines into the instance\'s resource pack, resourcepacks/Nano Studio Korean, and turns it on in its options.txt. The game reads that file when it starts, so the Korean applies from the next game start. Lines already there, and your edits, are kept.')));
+    ide.ui.dialog({ title: tr('Korean Translation of {name}', { name: inst.title || inst.name }), body, width: 560, buttons: [{ label: tr('Close'), primary: true }] });
+  }
+
   // ---------- Servers to Join ----------
   // What a pasted code would do that needs a yes. Cancel is the default, so the Enter that added the code cannot answer.
   function confirmCode({ kind, address, name }) {
@@ -655,13 +706,17 @@
     for (const inst of instances) grid.append(instanceCard(inst));
     host.append(grid);
   }
-  // An icon, so the card's actions fit on one row in a two-column grid at 900 px.
+  // Icons, named by their tooltip, so the card's actions fit on one row in a two-column grid at 900 px.
+  function iconButton(icon, label, cls, onClick) {
+    const b = el('button', `secondary mcc-icon ${cls}`);
+    b.append(ide.icon(icon));
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.onclick = (e) => { e.preventDefault(); onClick(); };
+    return b;
+  }
   function deleteButton(inst) {
-    const del = el('button', 'secondary mcc-delete');
-    del.append(ide.icon('clear'));
-    del.title = tr('Delete…');
-    del.setAttribute('aria-label', tr('Delete…'));
-    del.onclick = (e) => { e.preventDefault(); deleteInstance(inst); };
+    const del = iconButton('clear', tr('Delete…'), 'mcc-delete', () => deleteInstance(inst));
     del.disabled = !deletable(inst);
     return del;
   }
@@ -707,7 +762,8 @@
     playBtn.disabled = working;
     actions.append(playBtn,
       button(tr('Mods'), 'secondary mcc-mods-btn', () => modsDialog(inst)),
-      button(tr('Open Folder'), 'secondary mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
+      iconButton('web', tr('Korean Translation…'), 'mcc-korean-btn', () => koreanDialog(inst)),
+      iconButton('folder', tr('Open Folder'), 'mcc-folder', () => ide.api.invoke('shell:openPath', inst.dir)), deleteButton(inst));
     c.append(art, body, actions);
     return c;
   }
@@ -797,5 +853,5 @@
   ide.on('projectOpened', () => { loaded = false; refresh(); });
   ide.on('projectClosed', () => { loaded = false; refresh(); });
   ide.registerAction({ id: 'Minecraft.NewInstance', title: tr('New Minecraft Instance…'), needsProject: true, run: newInstance });
-  mc.craft = { mount, refresh, play, joinServer, addServer, newInstance, installPack, head, button, state: () => ({ instances, servers: joined, status }) };
+  mc.craft = { mount, refresh, play, joinServer, addServer, newInstance, installPack, translateInstance, koreanDialog, head, button, state: () => ({ instances, servers: joined, status }) };
 })();

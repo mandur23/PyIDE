@@ -8,6 +8,9 @@
   // A Windows path with \ throughout: a traceback or a terminal link may name an open file as C:/proj/a.py, and a
   // document keeps the spelling its tab, its events and its saves use.
   const localPath = (p) => (typeof p === 'string' && /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(p) ? p.replace(/\//g, '\\') : p);
+  // The number of each doc:join, which every message for that join brings back (renderer/core/ot.js forThis). Counted
+  // from the time the page loaded, so a reloaded page does not take the old page's messages for its own.
+  let joins = Date.now() * 1000;
 
   const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
     ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', xhtml: 'html', css: 'css', yml: 'yaml',
@@ -53,17 +56,8 @@
   const NEW_FILE_SEPARATOR = { lf: '\n', crlf: '\r\n' };
   const newFileSeparator = () => NEW_FILE_SEPARATOR[settingOn('editor.lineSeparator', 'system')]
     || (/Win/i.test(navigator.platform) ? '\r\n' : '\n');
-  function detectSeparator(text) {
-    let crlf = 0, lf = 0, cr = 0;
-    for (let i = 0; i < text.length; i++) {
-      const c = text.charCodeAt(i);
-      if (c === 13) { if (text.charCodeAt(i + 1) === 10) { crlf++; i++; } else cr++; } else if (c === 10) lf++;
-    }
-    const kinds = [['\n', lf], ['\r\n', crlf], ['\r', cr]].filter(([, n]) => n);
-    if (!kinds.length) return { sep: newFileSeparator(), mixed: false };
-    kinds.sort((a, b) => b[1] - a[1]);
-    return { sep: kinds[0][0], mixed: kinds.length > 1 };
-  }
+  // The rule is renderer/core/ot.js separatorOf, which the host also reads a guest's file with (main/shared-docs.js).
+  const detectSeparator = (text) => NanoOT.separatorOf(text) || { sep: newFileSeparator(), mixed: false };
   // Makes the model use the separator found in `text` (setEOL is not an undo step). -> true when the model changed.
   // lineSeparatorChanged(doc) tells the status bar widget (line-separators plugin).
   function adoptSeparator(doc, text) {
@@ -118,7 +112,8 @@
       if (!applyingRemote) localEdit(doc, e, eolBefore);
     });
     doc.sync.joining = lfText(model.getValue());
-    ide.api.send('doc:join', { path });
+    doc.sync.ticket = ++joins;
+    ide.api.send('doc:join', { path, ticket: doc.sync.ticket });
     return doc;
   }
 
@@ -233,8 +228,9 @@
   // separator, so a conversion ({c: [], eol}) moves nothing and the edits other windows made beside it keep their place.
   // joining: this window's text (as LF) when it asked to join; what it types until the shared text arrives is kept in
   // `buffer` and moved past the difference then.
-  const newSync = () => ({ rev: 0, shared: false, sent: null, buffer: [] });
-  const lfText = (s) => s.replace(/\r\n?/g, '\n');
+  // The OT math and the client steps are renderer/core/ot.js; this file applies them to Monaco models.
+  const { lfText, diffOp } = NanoOT;
+  const newSync = NanoOT.newClient;
   function opOf(e, eolBefore) {
     if (e.isEolChange) return { c: [], eol: e.eol };
     const n = eolBefore.length - 1;
@@ -257,77 +253,6 @@
     }
     return { lineNumber: lo, column: Math.min(at - lineStart(lo) + 1, m.getLineMaxColumn(lo)) };
   }
-  // One change that turns text a into text b (both as LF).
-  function diffOp(a, b) {
-    let start = 0;
-    while (start < a.length && start < b.length && a[start] === b[start]) start++;
-    let endA = a.length;
-    let endB = b.length;
-    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
-    return { c: a === b ? [] : [{ at: start, del: endA - start, ins: b.slice(start, endB) }] };
-  }
-
-  // `pos` in the text after `op`. after: a point where op inserted text goes behind that text.
-  // A point inside a range op replaced lands after op's new text, whatever `after`: the windows must agree, and the
-  // replacing window puts its text at the start of the range, before what the other window typed inside it. A point at
-  // the start of a replaced range is a tie with op's text and follows `after`.
-  function mapPoint(pos, op, after) {
-    let shift = 0;
-    for (const c of op.c) {
-      const end = c.at + c.del;
-      if (end < pos || (end === pos && (c.del > 0 || after))) { shift += c.ins.length - c.del; continue; }
-      if (c.at < pos) return c.at + shift + c.ins.length;
-      if (c.at === pos && after) return pos + shift + c.ins.length;
-      break;
-    }
-    return pos + shift;
-  }
-  // The parts of [s, e) that `op` left in place, as [start, length] in the text after it: text another window inserted
-  // inside a range this one deletes is kept.
-  function survivors(s, e, op) {
-    const parts = [];
-    let x = s;
-    for (const c of op.c) {
-      if (c.at >= e) break;
-      if (c.at + c.del < x) continue;
-      if (c.at > x) parts.push([x, c.at]);
-      x = Math.max(x, c.at + c.del);
-    }
-    if (x < e) parts.push([x, e]);
-    return parts.map(([p, q]) => [mapPoint(p, op, true), q - p]);
-  }
-  // Op a made on the same text as op b, moved to apply after b. aFirst: a comes first in the shared order, so at the
-  // same point a's insertion goes before b's.
-  function over(a, b, aFirst) {
-    const out = [];
-    const put = (at, del, ins) => {
-      const last = out[out.length - 1];
-      if (last && last.at + last.del === at) Object.assign(last, { del: last.del + del, ins: last.ins + ins });
-      else out.push({ at, del, ins });
-    };
-    for (const c of a.c) {
-      if (!c.del) { put(mapPoint(c.at, b, !aFirst), 0, c.ins); continue; }
-      const parts = survivors(c.at, c.at + c.del, b);
-      // The new text goes where a plain insertion at the range's start would: the shared order breaks a tie there.
-      put(mapPoint(c.at, b, !aFirst), 0, c.ins);
-      for (const [p, n] of parts) put(p, n, '');
-    }
-    return { ...a, c: out.filter((c) => c.del || c.ins) };
-  }
-  // Two op lists made on the same text -> [as after bs, bs after as].
-  function xform(as, bs, aFirst) {
-    const a = [...as];
-    const b2 = bs.map((b) => {
-      for (let i = 0; i < a.length; i++) {
-        const ai = a[i];
-        a[i] = over(ai, b, aFirst);
-        b = over(b, ai, !aFirst);
-      }
-      return b;
-    });
-    return [a, b2];
-  }
-
   const setModelEOL = (model, eol) => model.setEOL(eol === '\n' ? ide.monaco.editor.EndOfLineSequence.LF : ide.monaco.editor.EndOfLineSequence.CRLF);
   function applyOps(doc, ops) {
     const m = doc.model;
@@ -343,19 +268,10 @@
     if (doc.savedText !== undefined && m.getValue() === doc.savedText) markSaved(doc, doc.savedText);
   }
 
+  const sendOps = (doc, msg) => { if (msg) ide.api.send('doc:op', { path: doc.path, ...msg }); };
   function localEdit(doc, e, eolBefore) {
     doc.savedText = undefined;
-    const s = doc.sync;
-    if (!s.shared && s.joining === undefined) return;
-    s.buffer.push(opOf(e, eolBefore));
-    flushSync(doc);
-  }
-  function flushSync(doc) {
-    const s = doc.sync;
-    if (!s.shared || s.sent || !s.buffer.length) return;
-    s.sent = s.buffer;
-    s.buffer = [];
-    ide.api.send('doc:op', { path: doc.path, base: s.rev, ops: s.sent });
+    sendOps(doc, NanoOT.local(doc.sync, opOf(e, eolBefore)));
   }
 
   // Applies another window's text as one minimal edit so cursors and undo history survive. remote: the text is the
@@ -373,44 +289,36 @@
   // Joined: alone with the document (shared false, its own text stands), or sharing it from revision `rev` on, with the
   // shared text (as LF) and line separator. What was typed meanwhile was made on this window's text when it joined:
   // moved past the difference to the shared text, it is kept and sent.
-  ide.api.on('doc:synced', ({ path, rev, text, eol, shared }) => {
-    const d = docAt(path);
+  // Every message of the shared documents carries the ticket of the join it is for, and one for an earlier join of
+  // the document (this window closed it and opened it again since) changes nothing (NanoOT checks it).
+  ide.api.on('doc:synced', (msg) => {
+    const d = docAt(msg.path);
     if (!d) return;
-    const { joining, buffer } = d.sync;
-    d.sync = { ...newSync(), rev, shared };
-    if (text === undefined) return;
-    const [[toShared], typed] = xform([diffOp(joining ?? lfText(d.model.getValue()), text)], buffer, true);
-    const ownEol = typed.some((op) => op.eol);
-    applyOps(d, [ownEol ? toShared : { ...toShared, eol }]);
-    d.sync.buffer = typed;
-    flushSync(d);
+    const r = NanoOT.synced(d.sync, msg, msg.text === undefined ? '' : lfText(d.model.getValue()));
+    d.sync = r.state;
+    if (r.apply) applyOps(d, r.apply);
+    sendOps(d, r.send);
   });
   // Another window opened this document: this one hands over the text, and from now on sends its edits.
-  ide.api.on('doc:share', ({ path }) => {
+  ide.api.on('doc:share', (msg) => {
+    const { path } = msg;
     const d = docAt(path);
     if (!d) return void ide.api.send('doc:leave', { path });
-    Object.assign(d.sync, { shared: true, sent: null, buffer: [] });
+    if (!NanoOT.share(d.sync, msg)) return;
     ide.api.send('doc:snapshot', { path, rev: d.sync.rev, text: lfText(d.model.getValue()), eol: d.model.getEOL() });
   });
-  ide.api.on('doc:unshared', ({ path }) => { const d = docAt(path); if (d) d.sync = { ...newSync(), rev: d.sync.rev }; });
-  ide.api.on('doc:op', ({ path, rev, ops, mine }) => {
-    const d = docAt(path);
-    if (!d || !d.sync.shared) return;
-    const s = d.sync;
-    s.rev = rev;
-    if (mine) { s.sent = null; flushSync(d); return; }
-    let remote = ops;
-    if (s.sent) [remote, s.sent] = xform(remote, s.sent, true);
-    [remote, s.buffer] = xform(remote, s.buffer, true);
-    applyOps(d, remote);
+  ide.api.on('doc:unshared', (msg) => { const d = docAt(msg.path); if (d) d.sync = NanoOT.unshared(d.sync, msg); });
+  ide.api.on('doc:op', (msg) => {
+    const d = docAt(msg.path);
+    if (!d) return;
+    const r = NanoOT.remote(d.sync, msg);
+    if (r.apply) applyOps(d, r.apply);
+    sendOps(d, r.send);
   });
   // Refused (another window's edit came first, and has arrived here since): sent again on top of it.
-  ide.api.on('doc:nack', ({ path }) => {
-    const d = docAt(path);
-    if (!d?.sync.sent) return;
-    d.sync.buffer = [...d.sync.sent, ...d.sync.buffer];
-    d.sync.sent = null;
-    flushSync(d);
+  ide.api.on('doc:nack', (msg) => {
+    const d = docAt(msg.path);
+    if (d) sendOps(d, NanoOT.nack(d.sync, msg));
   });
 
   // A save (or reload) in another window. Its last edits may still be on their way: the document turns unmodified once

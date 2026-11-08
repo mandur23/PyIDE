@@ -679,6 +679,25 @@ await section('drop', async () => {
   await until(`Cut.app.project.media.length === 1`, 'the project panel import', 20000);
   await sleep(300);
   check(await js(`__ct.seq().clips.length === 0 && ide.tabs.length === ${tabs}`), 'a file dropped on the project panel is imported without a clip and not opened in the code editor');
+
+  // caption files dropped (on the project panel or the timeline) become caption tracks of the sequence, each its own:
+  // the chosen track keeps its captions; nothing is refused as media
+  const srtA = file('intro.srt');
+  const srtB = file('대사.vtt');
+  fs.writeFileSync(srtA, '1\r\n00:00:00,500 --> 00:00:01,500\r\n<i>첫 자막</i>\r\n\r\n2\r\n00:00:02,000 --> 00:00:03,000\r\nsecond\r\n');
+  fs.writeFileSync(srtB, 'WEBVTT\n\n00:01.000 --> 00:02.000\n둘째 파일\n');
+  const capTracks = () => js(`__ct.seq().captions.map((t) => ({ name: t.name, texts: t.items.map((i) => i.text) }))`);
+  await js(`(() => { const C = Cut.commands, s = __ct.seq(); const id = Cut.app.history.do(C.addCaptionTrack(s.id, { name: 'mine', lang: 'en' })).id; Cut.app.history.do(C.setCaptions(s.id, id, [{ start: 0, end: 254016000000, text: 'kept' }])); return true; })()`);
+  const mediaBefore = await js('Cut.app.project.media.length');
+  for (const type of ['dragEnter', 'dragOver', 'drop']) await dragEvent(type, [srtA, srtB], pp);
+  await until(`__ct.seq().captions.length === 3`, 'two caption tracks from the drop', 10000).catch(() => {});
+  const ct = await capTracks();
+  check(S(ct) === S([{ name: 'mine', texts: ['kept'] }, { name: 'intro', texts: ['첫 자막', 'second'] }, { name: '대사', texts: ['둘째 파일'] }])
+    && await js(`Cut.app.project.media.length === ${mediaBefore} && !document.querySelector('#cutImportErrors')`),
+    `.srt and .vtt dropped on the project panel make a caption track each, the existing one untouched, nothing refused as media (${S(ct)})`);
+  await drop([srtA], 1, 'V1');
+  await until(`__ct.seq().captions.length === 4`, 'a caption track from the timeline drop', 10000).catch(() => {});
+  check(await js(`__ct.seq().captions.length === 4 && __ct.seq().clips.length === 0`), 'an .srt dropped on the timeline makes a caption track too, and no clip');
 });
 
 // ---------- the clip's speed from its menu and Effect Controls ----------

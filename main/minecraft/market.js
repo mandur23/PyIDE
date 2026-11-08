@@ -24,8 +24,8 @@ const MODPACK_LOADERS = ['fabric', 'forge', 'neoforge'];
 
 // The Korean that translate.js writes for the server's mods lives in its resource pack, and outlives the pack: one that
 // replaces it, or Remove, keeps those files. A pack's own ko_kr.json goes with it while it is as the pack shipped it
-// (own: rel -> sha1, recorded at install as packLang); one our lines were merged into differs, and stays. A record
-// from before packLang keeps them all.
+// (own: rel -> sha1, recorded at install as packLang); from one our lines were merged into, only those lines stay
+// (oursIn). A record from before packLang keeps them all.
 const LANG = /^assets\/[a-z0-9_.-]+\/lang\/ko_kr\.json$/;
 const filesIn = (dir, at = '') => fs.readdirSync(path.join(dir, at), { withFileTypes: true })
   .flatMap((e) => (e.isDirectory() ? filesIn(dir, `${at}${e.name}/`) : [`${at}${e.name}`]));
@@ -39,6 +39,49 @@ const onlyTranslations = (pack) => !fs.existsSync(pack) || filesIn(pack).every((
 const langOf = (file) => {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; }
 };
+// A copy of the pack's language files as it shipped them, made at install beside the server's records, tells the lines
+// we merged into one of them from its own: without it, a pack's file with our lines in it stays whole when the pack
+// goes, its own lines with ours. A .nano or pack-lang that is a link (it could lead out of the server folder) is not used.
+const shippedRoot = (dir) => {
+  const nano = path.join(dir, '.nano');
+  for (const p of [nano, path.join(nano, 'pack-lang')]) { try { if (fs.lstatSync(p).isSymbolicLink()) return null; } catch {} }
+  return path.join(nano, 'pack-lang');
+};
+// Ours in the pack's language file rel: {} when the file is as the pack shipped it, the lines that are not as it
+// shipped them (ours, and the user's edits) when the copy says what it shipped, or null for the whole file (one the pack
+// never had, or a pack installed before the copies).
+function oursIn(dir, pack, rel, own) {
+  if (shipped(pack, rel, own)) return {};
+  if (!own || typeof own !== 'object' || !Object.hasOwn(own, rel)) return null;
+  const root = shippedRoot(dir);
+  const copy = root && path.join(root, rel);
+  if (!copy || !fs.existsSync(copy) || sha1Of(copy) !== own[rel]) return null;
+  // A file that does not read (a hand edit gone wrong) cannot be told apart: it stays whole, as it did before the copies.
+  const now = langOf(path.join(pack, rel));
+  if (!now) return null;
+  const was = langOf(copy) || {};
+  return Object.fromEntries(Object.entries(now).filter(([k, v]) => !Object.hasOwn(was, k) || was[k] !== v));
+}
+// The new pack's language files copied as it ships them (into pack-lang.part, which keepShipped puts in place once the
+// pack is), or the copies of the old one dropped (staging null).
+function copyShipped(dir, staging) {
+  const root = shippedRoot(dir);
+  if (!root) return null;
+  const part = `${root}.part`;
+  fs.rmSync(part, { recursive: true, force: true });
+  if (!staging) return part;
+  for (const rel of filesIn(staging).filter((f) => LANG.test(f))) {
+    fs.mkdirSync(path.dirname(path.join(part, rel)), { recursive: true });
+    fs.copyFileSync(path.join(staging, rel), path.join(part, rel));
+  }
+  return part;
+}
+function keepShipped(dir, part) {
+  const root = shippedRoot(dir);
+  if (!root || !part) return;
+  fs.rmSync(root, { recursive: true, force: true });
+  if (fs.existsSync(part)) fs.renameSync(part, root);
+}
 // A folder another program has open (a terminal inside it, a file a scanner reads) can be neither renamed nor wholly
 // deleted on Windows, and a delete that stops part-way leaves half of it. So the old folder moves aside first, and a
 // move that fails has changed nothing; then staging (when given) moves in, and the old folder is deleted last. If
@@ -70,35 +113,53 @@ function replaceFolder(folder, staging) {
   // Out of the way already: a file of it still held leaves only that folder behind.
   if (aside) try { fs.rmSync(aside, { recursive: true, force: true, maxRetries: 3 }); } catch {}
 }
-// The server's resource pack (dir/resourcepack) becomes the folder staging, with the translations of the old one: a
-// language file the new pack has too keeps the new pack's lines and gains ours.
-function swapPack(dir, staging, own = null) {
-  const folder = path.join(dir, 'resourcepack');
-  for (const rel of translations(folder, own)) {
-    const from = path.join(folder, rel);
-    const to = path.join(staging, rel);
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    if (!fs.existsSync(to)) { fs.copyFileSync(from, to); continue; }
-    const ours = langOf(from);
-    if (!ours) throw fail(`${from} is not valid JSON: fix it, or move it away, before the resource pack is replaced (Nano Studio does not write over its lines)`);
-    fs.writeFileSync(to, `${JSON.stringify({ ...ours, ...langOf(to) }, null, 2)}\n`);
-  }
-  replaceFolder(folder, staging);
+// Our lines in the server's resource pack (dir/resourcepack), file by file: [{rel, lines}], lines null for a whole file
+// of ours.
+const oursOf = (dir, folder, own) => translations(folder, own).map((rel) => ({ rel, lines: oursIn(dir, folder, rel, own) }))
+  .filter((t) => t.lines === null || Object.keys(t.lines).length);
+// Our lines into a language file of the new pack or of what is left: a file the new pack has too keeps its lines and
+// gains ours.
+function putOurs(folder, staging, { rel, lines }) {
+  const from = path.join(folder, rel);
+  const to = path.join(staging, rel);
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  if (lines === null && !fs.existsSync(to)) return fs.copyFileSync(from, to);
+  const ours = lines ?? langOf(from);
+  if (!ours) throw fail(`${from} is not valid JSON: fix it, or move it away, before the resource pack is replaced (Nano Studio does not write over its lines)`);
+  const theirs = fs.existsSync(to) ? langOf(to) : {};
+  fs.writeFileSync(to, `${JSON.stringify({ ...ours, ...theirs }, null, 2)}\n`);
 }
-// The server's resource pack taken out: its translations stay, with its pack.mcmeta, which is for the server's version.
+// The server's resource pack becomes the folder staging, with our lines of the old one. A Market pack's own language
+// files are copied as it ships them (shipped), and the old one's copies go.
+function swapPack(dir, staging, own = null, { shipped: record = false } = {}) {
+  const folder = path.join(dir, 'resourcepack');
+  const part = copyShipped(dir, record ? staging : null);
+  try {
+    for (const t of oursOf(dir, folder, own)) putOurs(folder, staging, t);
+    replaceFolder(folder, staging);
+  } catch (err) {
+    if (part) fs.rmSync(part, { recursive: true, force: true });
+    throw err;
+  }
+  keepShipped(dir, part);
+}
+// The server's resource pack taken out: what is left is our lines, in a pack of their own with its pack.mcmeta, which is
+// for the server's version. The pack's own lines go with it, also from a file ours were merged into.
 function dropPack(dir, own = null) {
   const folder = path.join(dir, 'resourcepack');
-  const keep = translations(folder, own);
-  if (!keep.length) return replaceFolder(folder, null);
+  const keep = oursOf(dir, folder, own);
+  if (!keep.length) {
+    replaceFolder(folder, null);
+    return keepShipped(dir, copyShipped(dir, null));
+  }
   const staging = path.join(dir, 'resourcepack.part');
   fs.rmSync(staging, { recursive: true, force: true });
   try {
-    for (const rel of [...keep, 'pack.mcmeta'].filter((f) => fs.existsSync(path.join(folder, f)))) {
-      fs.mkdirSync(path.dirname(path.join(staging, rel)), { recursive: true });
-      fs.copyFileSync(path.join(folder, rel), path.join(staging, rel));
-    }
+    for (const t of keep) putOurs(folder, staging, t);
+    if (fs.existsSync(path.join(folder, 'pack.mcmeta'))) fs.copyFileSync(path.join(folder, 'pack.mcmeta'), path.join(staging, 'pack.mcmeta'));
     replaceFolder(folder, staging);
   } finally { fs.rmSync(staging, { recursive: true, force: true }); }
+  keepShipped(dir, copyShipped(dir, null));
 }
 // The Market's project whose file is the server's resource pack, if any.
 const packOwner = (market) => Object.keys(market || {}).find((k) => market[k]?.files?.includes('resourcepack')) || null;
@@ -328,7 +389,7 @@ function createMarket({ readServer, writeServer, fetchFile, running = () => fals
             unpackZip(tmp, staging);
             if (!fs.existsSync(path.join(staging, 'pack.mcmeta'))) throw fail(`${file.filename} is not a resource pack (no pack.mcmeta)`);
             packLang = packLangs(staging);
-            swapPack(dir, staging, owner ? market[owner].packLang : null);
+            swapPack(dir, staging, owner ? market[owner].packLang : null, { shipped: true });
             if (owner) delete market[owner];
           } finally {
             fs.rmSync(tmp, { force: true });

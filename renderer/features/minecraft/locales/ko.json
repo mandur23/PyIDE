@@ -840,5 +840,19 @@
   "Its pyide-server.json cannot be read. Open the folder to fix it.": "pyide-server.json 파일을 읽을 수 없어요. 폴더를 열어 고쳐 주세요.",
   "Its pyide-server.json names a server type Nano Studio does not know ({kind}). Open the folder to fix it.": "pyide-server.json 파일의 서버 종류({kind})는 Nano Studio에서 지원하지 않아요. 폴더를 열어 고쳐 주세요.",
   "another modpack: a server is made from one modpack at a time, so drop this one again after that": "다른 모드팩이에요. 모드팩 서버는 한 번에 하나씩 만들어요. 지금 서버를 만든 뒤 다시 끌어다 놓으세요",
-  "{name} is deleted, but the Minecraft Launcher stayed open, so it may keep the profile. If the launcher still lists it, delete it there.": "'{name}' 인스턴스를 삭제했어요. Minecraft Launcher가 닫히지 않아서 프로필이 남을 수 있어요. 런처에 아직 보이면 런처에서 삭제해 주세요."
+  "{name} is deleted, but the Minecraft Launcher stayed open, so it may keep the profile. If the launcher still lists it, delete it there.": "'{name}' 인스턴스를 삭제했어요. Minecraft Launcher가 닫히지 않아서 프로필이 남을 수 있어요. 런처에 아직 보이면 런처에서 삭제해 주세요.",
+  "{name} is being played. Close Minecraft first: the game writes its options.txt when it closes.": "'{name}' 인스턴스를 플레이하고 있어요. 게임이 닫힐 때 options.txt를 다시 쓰니 먼저 Minecraft를 닫아 주세요.",
+  "Launch the instance once first: the resource pack needs the Minecraft the launcher downloads.": "먼저 인스턴스를 한 번 실행해 주세요. 리소스팩을 만들려면 런처가 받는 Minecraft가 있어야 해요.",
+  "Korean translation needs Minecraft 1.13 or later: older mods keep their text in another format.": "한국어 번역은 Minecraft 1.13 이상에서만 돼요. 그보다 옛 모드는 문장을 다른 형식으로 담고 있어요.",
+  "{file} is not valid JSON. Fix it or move it away, then translate again: Nano Studio does not write over its lines.": "{file} 파일이 올바른 JSON이 아니에요. 고치거나 다른 곳으로 옮긴 뒤 다시 번역해 주세요. Nano Studio는 이 파일의 줄을 덮어쓰지 않아요.",
+  "It applies from the next game start: choose 한국어 in the game's Language settings if it is not already.": "다음에 게임을 시작할 때부터 적용돼요. 게임의 언어 설정이 한국어가 아니면 한국어를 고르세요.",
+  "Minecraft is running, so the pack is turned on at the next Launch here.": "Minecraft가 실행 중이라 다음에 여기서 실행할 때 리소스팩을 켜요.",
+  "options.txt could not be read, so the pack is not turned on: turn on Nano Studio Korean in the game's Resource Packs.": "options.txt를 읽지 못해서 리소스팩을 켜지 않았어요. 게임의 리소스팩 화면에서 Nano Studio Korean을 켜 주세요.",
+  "{count} lines, in the instance's resource pack Nano Studio Korean; edit a line there and it is kept.": "인스턴스의 리소스팩 Nano Studio Korean에 {count}줄을 넣었어요. 거기서 고친 줄은 그대로 남아요.",
+  "The Korean resource pack is turned on.": "한국어 리소스팩을 켰어요.",
+  "The Korean resource pack is not on in this instance yet.": "이 인스턴스에서는 아직 한국어 리소스팩이 꺼져 있어요.",
+  "Turn On the Korean Pack": "한국어 리소스팩 켜기",
+  "Claude (your Claude Code) writes the lines into the instance's resource pack, resourcepacks/Nano Studio Korean, and turns it on in its options.txt. The game reads that file when it starts, so the Korean applies from the next game start. Lines already there, and your edits, are kept.": "Claude(내 Claude Code)가 번역한 줄을 인스턴스의 리소스팩 resourcepacks/Nano Studio Korean에 넣고, options.txt에서 이 리소스팩을 켜요. 게임은 시작할 때 이 파일을 읽으니 한국어는 다음에 게임을 시작할 때부터 보여요. 이미 있는 줄과 직접 고친 줄은 그대로 남아요.",
+  "Korean Translation of {name}": "한국어 번역: {name}",
+  "Korean Translation…": "한국어 번역…"
 }

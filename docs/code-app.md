@@ -22,6 +22,9 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | --- | --- |
 | `renderer/core/ide.js` | `window.ide` API, 액션과 키맵(`KEYMAP_DEFAULTS`), 툴 윈도우와 스트라이프, 상태 표시줄, 대화상자(`ide.ui`), 설정, 프로젝트 열기, 프로젝트 트리 |
 | `renderer/core/editors.js` | 편집기 탭과 그룹 분할, `ide.openFile`, 미리보기 탭, 분리 창, 창 닫기 대화상자(`#closeConfirmDialog`) |
+| `renderer/core/ot.js` | 동시 편집의 순수 계산(OT 변환, 클라이언트 단계, 참여 번호, 파일의 줄바꿈 판단). 편집기, `main/shared-docs.js`, `verify/collab-core.mjs`가 함께 씁니다 |
+| `main/shared-docs.js` | 여러 곳(창, 협업 손님)에서 연 파일의 편집 순서를 매기는 서버 쪽. 손님의 op를 호스트의 글에 대고 검사하고, 창이 없는 파일은 `loadFromDisk`로 읽습니다. `main/windows.js`가 창을 연결합니다 |
+| `main/collab/protocol.js` | 협업 메시지 틀(길이 + JSON), 손님 메시지 검사, 손님 경로 규칙(프로젝트 밖·숨김 파일·8.3 이름 거절, `realGuest`가 실제 경로에서 다시 확인). 계획은 [collab-coding-plan.md](collab-coding-plan.md) |
 | `renderer/core/mainmenu.js` | 메인 툴바(메인 메뉴, 프로젝트 위젯, 실행 위젯 자리), 시작 화면, 인터프리터 위젯 |
 | `renderer/core/project-wizard.js` | New Project 마법사. 메인 쪽은 `main/new-project.js` |
 | `renderer/core/notifications.js` | 백그라운드 작업(`ide.tasks`)과 알림 |

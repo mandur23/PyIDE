@@ -91,6 +91,8 @@
       position: prop('position', [0, 0]), scale: prop('scale', [100, 100]), rotation: prop('rotation', 0),
       anchor: prop('anchor', [0, 0]), opacity: prop('opacity', 100), crop: prop('crop', ZERO4),
       extend: effects.some((e) => e.def.layer?.extend),
+      // The clip-local frame, for effects whose look changes every frame (grain, glitch).
+      frame: seq.fps ? need('time').frameAt(local, seq.fps) : 0,
     };
   }
 
@@ -559,13 +561,14 @@ ${V}
         for (const e of it.effects) {
           const g = e.def.gpu;
           if (!g?.code) continue;
-          const passes = g.uniforms(e.params, { width: tw, height: th, pxScale, quality: q }) || [];
+          const passes = g.uniforms(e.params, { width: tw, height: th, pxScale, quality: q, frame: it.frame || 0 }) || [];
+          const orig = cur;
           for (const pass of passes) {
             const next = texture(tw, th);
             const data = new Float32Array(20);
             data.set([tw, th, 1 / tw, 1 / th], 0);
             data.set(pass.slice(0, 16), 4);
-            ops.push({ op: 'effect', type: e.def.type, code: g.code, src: cur, out: next, u: slot(data) });
+            ops.push({ op: 'effect', type: e.def.type, code: g.code, src: cur, orig, out: next, u: slot(data) });
             cur = next;
           }
         }
@@ -644,7 +647,7 @@ ${V}
           entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
         } else if (o.op === 'effect') {
           p = pipeline(`fx:${o.type}`, o.code, F16);
-          entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
+          entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }, { binding: 3, resource: view(o.orig) }];
         } else if (o.op === 'composite') {
           p = pipeline('composite', src.composite, F16, OVER);
           entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
@@ -738,7 +741,7 @@ ${V}
       const lh = Math.max(1, Math.round(it.h * k));
       const c = newCanvas(lw, lh);
       const g = c.getContext('2d');
-      const hints = it.effects.map((e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k }) || {});
+      const hints = it.effects.map((e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k, frame: it.frame || 0 }) || {});
       g.filter = hints.map((h) => h.filter).filter(Boolean).join(' ') || 'none';
       const flipX = hints.filter((h) => h.flipX).length % 2 === 1;
       const flipY = hints.filter((h) => h.flipY).length % 2 === 1;

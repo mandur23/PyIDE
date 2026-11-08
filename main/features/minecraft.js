@@ -515,6 +515,8 @@ const applyXray = (dirs, level) => dirs.map((dir) => {
 
 
 // ---------- Korean translation ----------
+// translate.js's translate(system, prompt, signal): Claude through the user's Claude Code.
+const askClaude = async (system, prompt, signal) => (await complete({ system, prompt, model: 'sonnet', signal })).text;
 function langStatus(dir) {
   const { mods, skipped } = translation.scan(dir);
   const count = (m) => Object.keys(m.missing).length;
@@ -526,8 +528,7 @@ async function translateMods(dir, log, signal) {
   newResourcePack(dir);
   const { mods } = translation.scan(dir);
   if (!mods.some((m) => Object.keys(m.missing).length)) return { translated: 0, rejected: 0, failed: 0, files: [] };
-  const ask = async (system, prompt, sig) => (await complete({ system, prompt, model: 'sonnet', signal: sig })).text;
-  return translation.translateMods(dir, { mods, translate: ask, log, signal });
+  return translation.translateMods(dir, { mods, translate: askClaude, log, signal });
 }
 
 // Server folders (lower case) with a process minecraft:start started that has not ended -> how many: a Rerun's new
@@ -737,6 +738,9 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('launcher:ping', (_e, address) => craft.ping(address));
   ipcMain.handle('launcher:mods', (_e, root, name) => craft.mods(root, name));
   ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
+  // An instance's mods into Korean, as minecraft:langStatus and minecraft:translateMods do a server's.
+  ipcMain.handle('launcher:langStatus', (_e, root, name) => { guard(root); return craft.koreanStatus(root, name); });
+  ipcMain.handle('launcher:translateMods', (_e, root, name, job) => { guard(root); return cancellable(job, (log) => craft.translateKorean(root, name, { translate: askClaude, log, signal: log.signal })); });
   ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));
   ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
   // The join code of this server's private share, on request: ports:state never carries its key, and the window holds the

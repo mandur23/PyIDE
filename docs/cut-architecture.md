@@ -640,15 +640,29 @@ color math stays here).
 A def: `{ type, name /* English, shown through tr() */, category, kind: 'video' | 'audio', params: [{ id, name, type:
 'number' | 'angle' | 'percent' | 'color' | 'bool' | 'choice' | 'point', min, max, step, default, choices?
 /* [[id, English label]] */, keyframable }], gpu, cpu, canvas2d }`. `gpu.wgsl` is the body, `gpu.code` the complete
-WGSL. A video effect's `gpu.uniforms(params, {width, height, pxScale, quality})` returns a list of passes (each at most
-16 floats; `[]` means nothing to do); a transition's `gpu.uniforms(params, progress)` returns one array. `cpu` is the
-reference the tests compare with, `canvas2d` a hint for the 2D back end. Audio effects have
-`gain(params, tSeconds, lengthSeconds)` -> linear gain; `crossfade.power` has `gains(progress)` -> `[outgoing, incoming]`.
+WGSL. A video effect's `gpu.uniforms(params, {width, height, pxScale, quality, frame})` returns a list of passes (each
+at most 16 floats; `[]` means nothing to do); a transition's `gpu.uniforms(params, progress)` returns one array.
+`cpu(image, params, info)` is the reference the tests compare with, `canvas2d(params, info)` a hint for the 2D back end
+(a CSS `filter`, `flipX`/`flipY`, `crop`, `mosaic`, `vignette`, `extend`), or `{ skip: true }` when 2D cannot do the
+effect and draws the picture without it. Transitions have no hint: the 2D back end draws push and wipe itself and a
+cross dissolve for the others. `info.frame` is the clip-local frame (`compositor.planItem` gives it), so what looks
+random (grain, glitch) is a hash of integers, the pixel and the frame (`cpu.hash3(x, y, z)` and the WGSL `hash3`, a
+PCG hash in u32 arithmetic, the same bits on both), and every render of a frame agrees. In WGSL an effect reads its
+pass's input with `tap(uv)` and the effect's own input with `tapOrig(uv)` (binding 3, the same texture in the first
+pass), which sharpen and glow use after a separable blur; `texel(uv)`, `toSrgb`, `toLinear` and `hash3` are shared
+helpers. Audio effects have `gain(params, tSeconds, lengthSeconds)` -> linear gain; `crossfade.power` has
+`gains(progress)` -> `[outgoing, incoming]`.
 
 Type ids. Video: `flip.horizontal`, `flip.vertical`, `crop`, `edge.extend`, `blur.gaussian`, `blur.directional`,
-`mosaic`, `color.bw`, `color.tint`, `color.brightnessContrast`, `color.basic` (temperature, tint, exposure, contrast,
-highlights, shadows, whites, blacks, saturation, vibrance), `vignette`. Audio: `audio.gain`, `audio.fade`.
-Transitions: `dissolve`, `dip.black`, `dip.white`, `push`, `wipe`; audio `crossfade.power`.
+`sharpen` (amount, radius = sigma, threshold), `mosaic`, `color.bw`, `color.tint`, `color.brightnessContrast`,
+`color.basic` (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance),
+`color.invert` (in sRGB values), `color.hue` (CSS hue-rotate matrix on linear light), `vignette`, `glow` (a bright
+pass, then a two-pass blur added onto the input), `posterize` (sRGB steps), `chromatic` (radial or linear),
+`glitch` (bands of `bandHeight` moved by a hash of the band and `floor(frame / hold)`), `distort.lens` (center + d (1 +
+curvature / 200 r^2)), `key.chroma` (CbCr distance in Rec. 709 Y'CbCr of the sRGB values; similarity, smoothness, spill,
+output composite or matte), `noise.grain` (value noise with cells `size` pixels across, added to the sRGB values).
+Audio: `audio.gain`, `audio.fade`. Transitions: `dissolve`, `dip.black`, `dip.white`, `push`, `slide`, `wipe`,
+`iris.round` (open or close, feather), `zoom.cross` (zoom amount); audio `crossfade.power`.
 
 ### `Cut.textrender`
 
@@ -723,10 +737,12 @@ with `backend: '2d'`) a Canvas 2D fallback; `compositor.backend` says which.
   `info`, `errors`, `lost` (WebGPU device loss, reported, not recovered), `width`, `height`.
 - Units: position and anchor in sequence pixels; anchor from the center of the fitted clip before scaling; rotation in
   degrees clockwise; crop `[top, right, bottom, left]` % in the clip's own frame. Text and solid clips are full-frame
-  layers with the same transforms. Each clip on screen gets its own frame source.
+  layers with the same transforms. Each clip on screen gets its own frame source. An effect pass binds its input
+  (binding 0) and the effect's input (binding 3, `orig`).
 - WebGPU: intermediate pictures are rgba16float, linear light, premultiplied; sRGB / Rec.709 out. The 2D fallback does
   transforms, opacity, crop, text, the transitions and colors through CSS `filter` (mixed in sRGB values; vignette is a
-  radial gradient; wipes have a hard edge; edge extend is not drawn). Missing media draws a red "Media Offline" frame.
+  radial gradient; wipes have a hard edge; edge extend and the effects whose hint is `{ skip: true }` are not drawn;
+  slide, iris round and cross zoom are drawn as a cross dissolve). Missing media draws a red "Media Offline" frame.
 - Pure helpers: `plan`, `planItem`, `fitScale`, `transitionRange`, `extendedSourceTime`, `missingHandles(project,
   seq, transition) -> {a, b}` (missing handle ticks, for the striped warning), `captionsAt(seq, t, which) -> [{style,
   t, items}]` (`t` at the start of its frame, so a playing monitor and export light the same word), `mediaSequence`.
@@ -1437,14 +1453,14 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | `verify/cut-formats.mjs` | Node | - | Readers and writer: mp4write output read back table by table; handcrafted ctts v1, co64 past 4 GB, stz2, elst, fragments, QuickTime PCM, Matroska lacing and damage, MP3 Xing/VBRI, RF64; truncated copies come back as values; a two-hour table against a clock; the scripts loading next to Monaco's AMD `require` |
 | `verify/cut-model.mjs` | Node | - | Every command against the expected timeline, exact undo/redo; 2,000 random commands; sync lock, links, groups, trim, slip, slide and rate stretch clamps, extend edit, snapping; keyframe values; history grouping, dirty, limit; SRT/VTT with CP949 and UTF-16; migrate; caption word timings (realign after edits, the lit word, Auto Captions' timings, edit/move/trim/ripple/insert/frame rate with exact undo, the uncertain words (`doubt`) and the speaker through ripple, insert, frame rate and a start trim, files, the random commands with timed captions) |
 | `verify/cut-main.mjs` | Node | - | Every `cut:*` channel with Electron stubbed: read ranges and limits, UNC/`\\?\UNC`/`\\.\` paths, links to network paths, junctions, 8.3 names, streams; atomic project writes and .bak; autosave rotation, sessions, recovery; the sink; faststart; cache LRU; findMedia/listMedia; real fonts |
-| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references, transitions, crossfade, the compositor's plan, fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
+| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references (every effect at chosen pixels and unchanged at its neutral parameters, grain and glitch per frame, the 2D hints and skips), transitions, crossfade, the compositor's plan (with the clip-local frame), fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
 | `verify/cut-analyze.mjs` | Node | - | Levels streamed in odd blocks, silences with minimum length and margins on frames, speech; click tracks at 90, 120 and 140 BPM (beats within 12 ms, bar phase on the accents); scene cuts on their frame with a flash ignored and a fade in giving one cut at most; auto color through color.basic's own math (a light picture kept light); ducking keyframes; ranges and clip time; loading as a page script |
 | `verify/cut-export-core.mjs` | Node | - | Presets (levels, bitrates, estimates), resampler and WSOLA, BS.1770-4 loudness and true peak, normalize and match gains, the mixer, testsrc frame numbers, export's pure parts (frame plan, chapters, captions in a range, SRT names) |
-| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference; transitions; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback |
+| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference (all registered ones, grain and glitch at given frames, the same anywhere in a frame and from a new compositor); transitions at known points and every one against its CPU reference on two pictures; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback (a skipped effect left out, invert's filter drawn) |
 | `verify/cut-export.mjs` | app | 9754 | Test sources decode frame-exact; exported sequences re-decode with the right frames (PSNR >= 35 dB), beeps on flashes, pitch kept; hardware, software, HEVC and 2D back end; playback in `<video>`; range, captions, cancel, export frame, chapters; loudness; preview clock and meters; export speed |
 | `verify/cut-shell.mjs` | app | 9755 | The frame with real mouse and keys: lifecycle, autosave, recovery, close question, import, bins, offline and relink, monitors, export dialog, captions, keys; dialogs answered through `PYIDE_CUT_DIALOG` |
 | `verify/cut-auto.mjs` | app | 9757 | The Automation menu, the clip menu and the color panel's Auto with real clicks: silence removal with its timeline preview, a locked track, one undo step; roles and ducking keyframes; loudness and clip loudness measured again; beat markers on a click track and a drag snapping to them; scene markers and splits, waiting while playing, Cancel; auto color seen in the rendered frame; a 10-minute file's analysis time and memory; screenshots |
-| `verify/cut-timeline.mjs` | app | 9756 | Timeline gestures and keys checked in the model and undone; drops; effect controls and keyframes; effects panel; color panel and eyedropper; overlay handles and Korean IME text; 500 clips; screenshots (`CUT_TL_ONLY` picks parts) |
+| `verify/cut-timeline.mjs` | app | 9756 | Timeline gestures and keys checked in the model and undone; drops; effect controls and keyframes; effects panel (every effect and transition under its category, Chroma Key and Iris Round typed and dragged); color panel and eyedropper; overlay handles and Korean IME text; 500 clips; screenshots (`CUT_TL_ONLY` picks parts) |
 | `verify/cut-edit.mjs` | app | 9759 | The [2] editing keys and tools with real keys and drags: the keys as `Cut.<id>` actions (Find Action), the tool bar; lift and extract on targeted and locked tracks; paste insert; nudge with links and a locked track; groups (select, Alt-click, drag, nudge, delete, ungroup); D; E; rate stretch; slip with the two-up frames read from pixels; slide; pen keyframes on volume and opacity; match frame to the source monitor's frame (`CUT_EDIT_ONLY` picks parts) |
 | `verify/cut-panels.mjs` | app | 9762 | The History, Markers and Audio Meters panels and the Window menu with real clicks and keys: jumps through the history in one go, dimmed later steps, 1,500 steps in a virtual list; marker filters, search, click, double click and Delete; marker drags on the ruler (frames, snapping, range end) and its menu; Hold and Bezier in the lane and timeline menus, the hold step from pixels, a bezier handle drag; meters' peak, RMS, hold and clip lights from a 1080p30 source, read from the canvas; dropped frames with and without the meters (`CUT_PANELS_ONLY` picks parts) |
 | `verify/cut-tools.mjs` | app | 9765 | The convenience tools with real clicks and keys: the shortcut editor (record, use, conflict refusal, remove, reset, Reset All, the typing guard), the ? cheat sheet; the Video Editor settings page (transition length through Ctrl+D, playback quality, Clear Cache, copies kept); Select and Remove Unused with undo, Find Missing Media relinking by size and by duration; proxies (offer, 720p H.264 GOP 15 in the cache, the monitor drawing it and export the original by pixels, fallback when deleted, waiting while playing, cancel, the offer dismissed per project); the export queue (order, a later edit not leaking in, move, cancel, retry, remove, the close question); the word-by-word caption highlight from the program monitor's pixels (each word's first frame, scrubbing, every frame read back while playing), the exported frames lighting the same word, a text edit in the panel with undo and redo, a rewritten caption unlit, the box style, a second track chosen in the captions panel redrawing the stopped monitor and burned in by the export panel (which names it), saved and opened again (`CUT_TOOLS_ONLY`) |

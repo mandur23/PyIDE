@@ -4,7 +4,7 @@
 // keeps the server's Korean translations through a resource pack's update and removal and accepts a pack folder that
 // holds only them, never deletes a user's file of the same name on a bad checksum, follows dependencies given by
 // version, installs no second copy of a mod already in mods/ under another name (Modrinth names it by sha1; a failed
-// lookup does not stop the install), and takes a pack's own ko_kr.json with it while leaving ours; a server from a modpack keeps the dialog's port and the app's eula.txt, checks its files as the launcher
+// lookup does not stop the install), and takes a pack's own ko_kr.json with it while leaving ours (of one ours were merged into, our lines only); a server from a modpack keeps the dialog's port and the app's eula.txt, checks its files as the launcher
 // does and picks the newest fitting version on Modrinth; a dropped resource pack replaces the old one; an imported
 // server's name and settings; Forge and NeoForge installers checked with .sha1 when no .sha256 is published; a ping of a
 // private server leaves the game's join process running; a join code's key under another spelling; CGNAT addresses.
@@ -42,6 +42,8 @@ const work = mkdtempSync(path.join(tmpdir(), 'pyide-mccontent-core-'));
 process.on('exit', () => { try { rmSync(work, { recursive: true, force: true }); } catch {} });
 delete process.env.PYIDE_MC_SOURCES;
 process.env.PYIDE_MC_LAUNCHER = 'off';
+// Names are looked up in this stand-in (main/minecraft/hosts.js), never in the real DNS.
+process.env.PYIDE_MC_DNS = JSON.stringify({ 'packs.example': ['203.0.113.10'] });
 
 // Every web request answers from routes (address without its query -> {status, body}, or a function of the request
 // that gives one); nothing goes out.
@@ -263,28 +265,40 @@ try {
     const refused = await errOf(() => shop.install(own, { id: 'RPK', type: 'resourcepack' }, () => {}));
     check(/own resource pack/.test(refused?.message || '') && text(path.join(own, 'resourcepack', 'assets', 'minecraft', 'textures', 'mine.png')) === 'mine', 'a pack of the user\'s own is still refused and left alone');
 
-    // The pack's own ko_kr.json files go with it; ours (merged into one of them, or written beside) stay.
+    // The pack's own ko_kr.json files go with it; ours (merged into one of them, or written beside) stay. From a file
+    // ours were merged into only our lines stay, and the pack's own go: what is left is our translations as a pack of
+    // their own.
     const lang = (ns) => path.join('resourcepack', 'assets', ns, 'lang', 'ko_kr.json');
+    const shippedCopies = (dir) => filesUnder(path.join(dir, '.nano', 'pack-lang'));
     const packs = serverAt('packs', { kind: 'paper', mc: '1.20.1' });
     write(path.join(packs, lang('tm')), S(ko));
-    project('RPL', [ver('rpl1', [rp('rpl1', { 'pack.mcmeta': '{"pack":{"pack_format":15}}', 'assets/pk/lang/ko_kr.json': { 'item.pk.a': '팩' }, 'assets/pk2/lang/ko_kr.json': { 'item.pk2.a': '팩 2' },
+    project('RPL', [ver('rpl1', [rp('rpl1', { 'pack.mcmeta': '{"pack":{"pack_format":15}}', 'assets/pk/lang/ko_kr.json': { 'item.pk.a': '팩' }, 'assets/pk2/lang/ko_kr.json': { 'item.pk2.a': '팩 2', 'item.pk2.c': '팩 2의 줄' },
       'assets/tm/lang/ko_kr.json': { 'item.tm.ore': '광석' } })], { loaders: ['minecraft'] })]);
     await shop.install(packs, { id: 'RPL', type: 'resourcepack' }, () => {});
-    // translate.js later adds a line to one of the pack's files, and a file of its own.
-    write(path.join(packs, lang('pk2')), S({ 'item.pk2.a': '팩 2', 'item.pk2.b': '우리 번역' }));
+    check(S(readJson(path.join(packs, lang('tm')))) === S({ ...ko, 'item.tm.ore': '광석' }) && S(shippedCopies(packs)) === S(['assets/pk/lang/ko_kr.json', 'assets/pk2/lang/ko_kr.json', 'assets/tm/lang/ko_kr.json'])
+      && S(readJson(path.join(packs, '.nano', 'pack-lang', 'assets', 'tm', 'lang', 'ko_kr.json'))) === S({ 'item.tm.ore': '광석' }),
+    `a Market pack takes our lines into its own ko_kr.json, and its language files are kept as it ships them (${S(shippedCopies(packs))})`);
+    // translate.js later adds a line to one of the pack's files, and a file of its own; the user edits a line of the pack.
+    write(path.join(packs, lang('pk2')), S({ 'item.pk2.a': '팩 2', 'item.pk2.c': '고친 줄', 'item.pk2.b': '우리 번역' }));
     write(path.join(packs, lang('new')), S({ 'item.new.a': '새것' }));
     project('RPL', [ver('rpl2', [rp('rpl2', { 'pack.mcmeta': '{"pack":{"pack_format":15}}', 'assets/minecraft/textures/v2.png': 'v2' })], { loaders: ['minecraft'] })]);
     await shop.install(packs, { id: 'RPL', type: 'resourcepack' }, () => {});
     const updated = filesUnder(path.join(packs, 'resourcepack'));
     check(S(updated) === S(['assets/minecraft/textures/v2.png', 'assets/new/lang/ko_kr.json', 'assets/pk2/lang/ko_kr.json', 'assets/tm/lang/ko_kr.json', 'pack.mcmeta'])
-      && readJson(path.join(packs, lang('pk2')))['item.pk2.b'] === '우리 번역' && S(readJson(path.join(packs, lang('tm')))) === S({ ...ko, 'item.tm.ore': '광석' }),
-    `an update leaves out the old pack's own unchanged ko_kr.json and carries the ones with our lines (${S(updated)})`);
-    project('RPL', [ver('rpl3', [rp('rpl3', { 'pack.mcmeta': '{"pack":{"pack_format":15}}', 'assets/pk3/lang/ko_kr.json': { 'item.pk3.a': '팩 3' } })], { loaders: ['minecraft'] })]);
+      && S(readJson(path.join(packs, lang('pk2')))) === S({ 'item.pk2.c': '고친 줄', 'item.pk2.b': '우리 번역' }) && S(readJson(path.join(packs, lang('tm')))) === S(ko) && !shippedCopies(packs).length,
+    `an update leaves out the old pack's own unchanged ko_kr.json, and of the ones with our lines carries those lines and the user's edit, not the old pack's (${S(updated)}, ${S(readJson(path.join(packs, lang('pk2'))))})`);
+    project('RPL', [ver('rpl3', [rp('rpl3', { 'pack.mcmeta': '{"pack":{"pack_format":15}}', 'assets/pk3/lang/ko_kr.json': { 'item.pk3.a': '팩 3' }, 'assets/tm/lang/ko_kr.json': { 'item.tm.ore': '새 광석', 'item.tm.gem': '팩의 보석' } })], { loaders: ['minecraft'] })]);
     await shop.install(packs, { id: 'RPL', type: 'resourcepack' }, () => {});
+    const merged3 = readJson(path.join(packs, lang('tm')));
+    write(path.join(packs, lang('tm')), S({ ...merged3, 'item.tm.dust': '가루' }));
     await shop.remove(packs, 'RPL');
     const left = filesUnder(path.join(packs, 'resourcepack'));
+    const leftLines = Object.fromEntries(['new', 'pk2', 'tm'].map((ns) => [ns, existsSync(path.join(packs, lang(ns))) ? readJson(path.join(packs, lang(ns))) : null]));
     check(S(left) === S(['assets/new/lang/ko_kr.json', 'assets/pk2/lang/ko_kr.json', 'assets/tm/lang/ko_kr.json', 'pack.mcmeta']) && !record(packs).RPL,
       `Remove takes the pack's own ko_kr.json with it and keeps the translations (${S(left)})`);
+    check(S(leftLines.tm) === S({ 'item.tm.dust': '가루' }) && S(leftLines.pk2) === S({ 'item.pk2.c': '고친 줄', 'item.pk2.b': '우리 번역' }) && S(leftLines.new) === S({ 'item.new.a': '새것' })
+      && !existsSync(path.join(packs, '.nano', 'pack-lang')),
+    `from the pack's ko_kr.json our lines were merged into, Remove keeps only ours: the pack's own lines (one that won over ours too) go with it (${S(leftLines)})`);
     const alone = serverAt('alone', { kind: 'paper', mc: '1.20.1' });
     await shop.install(alone, { id: 'RPL', type: 'resourcepack' }, () => {});
     await shop.remove(alone, 'RPL');

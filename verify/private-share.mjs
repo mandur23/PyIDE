@@ -18,6 +18,20 @@ import { frame, standInBore } from './stand-in-bore.mjs';
 
 const require = createRequire(import.meta.url);
 const S = JSON.stringify;
+// Names are looked up in this stand-in (main/minecraft/hosts.js): localtest.me resolves to loopback as it does on the
+// internet. The real DNS is never asked; a lookup that reaches it is recorded and fails.
+process.env.PYIDE_MC_DNS = S({
+  'localtest.me': ['127.0.0.1'], 'lan.example.test': ['192.168.1.20'], 'link.example.test': ['fe80::1'], 'mapped.example.test': ['::ffff:7f00:1'],
+  'mixed.example.test': ['203.0.113.5', '10.0.0.7'], 'srv.example.test': ['203.0.113.6'], '_minecraft._tcp.srv.example.test': [{ name: 'localtest.me', port: 6379 }],
+  'play.example.test': ['203.0.113.7'], 'friend.example.test': ['203.0.113.8'], 'packs.example.test': ['203.0.113.9'], 'packs.loop.test': ['127.0.0.1'],
+  'redirect.example.test': ['203.0.113.10'], 'inside.example.test': ['192.168.0.9'],
+});
+const realDns = [];
+{
+  const dns = require('dns');
+  dns.promises.lookup = async (name) => { realDns.push(name); throw new Error(`the real DNS was asked for ${name}`); };
+  dns.promises.resolveSrv = async (name) => { realDns.push(name); throw new Error(`the real DNS was asked for ${name}`); };
+}
 const L = require('../main/minecraft/launcher.js');
 const { parseNbt, writeNbt } = require('../main/minecraft/players/nbt.js');
 const { mergeServers } = require('../main/minecraft/serversdat.js');
@@ -1204,7 +1218,7 @@ codeAttack('a pasted code with no key', ASKS_FIRST, async (Launcher) => {
     why: `the answer was ${S(first.needsConfirm ?? 'no question')}, and the server ${kept ? 'stayed private' : 'lost its key'} until the yes` };
 });
 
-codeAttack('a code aiming at this computer', [["if (!known && isLocalAddress(target.address)) asks.push('localAddress');", '']], async (Launcher) => {
+codeAttack('a code aiming at this computer', [["if (!known && await isLocalAddress(target.address)) asks.push('localAddress');", '']], async (Launcher) => {
   const root = mkdtempSync(path.join(work, 'code-'));
   const craft = Launcher.createLauncher({ fetchFile: never, ensureJava: never, javaFor: never, run: never, retried: never, keyring: REVERSED });
   const local = ['127.0.0.1:6379', 'localhost:5432', '192.168.0.1:80', '10.1.2.3:25565', '172.16.0.1:1', '[::1]:25565', '[fd00::1]:1', '2130706433:6379', '0x7f.1:6379', 'printer.local:9100'];
@@ -1216,6 +1230,51 @@ codeAttack('a code aiming at this computer', [["if (!known && isLocalAddress(tar
   const missed = local.filter((_, i) => answers[i] !== 'localAddress');
   return { ok: !missed.length && !existsSync(path.join(root, 'servers-list.json')) && typed.needsVersion && yes.needsVersion && away.needsVersion,
     why: `${local.length - missed.length} of ${local.length} local addresses asked first${missed.length ? ` (not ${missed.join(', ')})` : ''}, a typed one and an internet one went on to the version question` };
+});
+
+// A name is not an address: localtest.me is 127.0.0.1, and a name without a port is played where its SRV record points.
+codeAttack('a code whose name leads to this computer', [['return (await resolvesLocal(name, { srv: !port })).local;', 'return false;']], async (Launcher) => {
+  const root = mkdtempSync(path.join(work, 'code-'));
+  const craft = Launcher.createLauncher({ fetchFile: never, ensureJava: never, javaFor: never, run: never, retried: never, keyring: REVERSED });
+  const local = ['localtest.me:6379', 'lan.example.test:25565', 'link.example.test:1', 'mapped.example.test:80', 'mixed.example.test:25565', 'srv.example.test'];
+  const away = ['play.example.test:25565', 'nowhere.example.test:25565', 'srv.example.test:25565'];
+  const ask = async (address) => (await craft.join(root, { code: `nanostudio:join?addr=${address}` }, () => {})).needsConfirm?.kind ?? null;
+  const asked = [];
+  for (const address of local) asked.push(await ask(address));
+  const passed = [];
+  for (const address of away) passed.push(await ask(address));
+  const missed = local.filter((_, i) => asked[i] !== 'localAddress');
+  return { ok: !missed.length && passed.every((k) => k === null) && !existsSync(path.join(root, 'servers-list.json')),
+    why: `${local.length - missed.length} of ${local.length} names that resolve to a local address (or an SRV record to one) asked first${missed.length ? ` (not ${missed.join(', ')})` : ''}; a public name, one not found and an SRV name given a port asked ${S(passed)}` };
+});
+
+// A pack's name that resolves to this computer, directly or on a redirect, is refused before anything is fetched from it.
+const packJoin = async (Launcher, pack, fetchFile) => {
+  const root = mkdtempSync(path.join(work, 'code-'));
+  const craft = Launcher.createLauncher({ fetchFile, ensureJava: never, javaFor: never, run: never, retried: never, keyring: REVERSED });
+  try { await craft.join(root, { code: Launcher.joinCode({ address: 'play.example.test:25565', pack, name: 'p' }) }, () => {}); return null; } catch (err) { return err; }
+};
+codeAttack('a pack whose name leads to this computer', [['    await vetPack(first);\n', '']], async (Launcher) => {
+  const fetched = [];
+  const take = async (url) => { fetched.push(url); throw new Error('the stand-in serves nothing'); };
+  const loop = await packJoin(Launcher, 'https://packs.loop.test/a.mrpack', take);
+  const lan = await packJoin(Launcher, 'https://inside.example.test/a.mrpack', take);
+  const fine = await packJoin(Launcher, 'https://packs.example.test/a.mrpack', take);
+  return { ok: [loop, lan].every((e) => /points at a private address/.test(e?.message || '')) && S(fetched) === S(['https://packs.example.test/a.mrpack']) && /serves nothing/.test(fine?.message || ''),
+    why: `the loopback and LAN names ended with ${S([loop?.message, lan?.message])}, and what was fetched is ${S(fetched)}` };
+});
+codeAttack('a pack that redirects to a name of this computer', [['        await vetPack(next);\n', '']], async (Launcher) => {
+  // The download's redirect check, as main/installer/servers.js calls it: a hop it refuses ends the download.
+  const reached = [];
+  const redirecting = (to) => async (url, dest, { allow }) => {
+    if (!allow(to)) throw Object.assign(new Error(`Download refused: it redirects to ${new URL(to).host}`), { code: 'REDIRECT', expected: true });
+    reached.push(to);
+    throw new Error('the stand-in serves nothing');
+  };
+  const loop = await packJoin(Launcher, 'https://redirect.example.test/a.mrpack', redirecting('https://packs.loop.test/b.mrpack'));
+  const fine = await packJoin(Launcher, 'https://redirect.example.test/a.mrpack', redirecting('https://packs.example.test/b.mrpack'));
+  return { ok: /points at a private address/.test(loop?.message || '') && S(reached) === S(['https://packs.example.test/b.mrpack']),
+    why: `a redirect to a loopback name ended with ${S(loop?.message)}, a public one with ${S(fine?.message)}, and the download reached ${S(reached)}` };
 });
 
 codeAttack('a private server removed during a long sync', [["if (srv?.private && !local.has(srv.address.toLowerCase())) return { launched: false, code: 'privateGone' };", '']], async (Launcher) => {
@@ -1390,5 +1449,6 @@ try {
 } catch (err) {
   check(false, err.stack || err.message);
 }
+check(!realDns.length, `no name was looked up in the real DNS (${S(realDns)})`);
 console.log(`${passed}/${passed + failed} passed`);
 process.exit(failed ? 1 : 0);

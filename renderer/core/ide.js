@@ -92,7 +92,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, fileLabel, basename, dirname, joinPath, samePath, isUnder, pathKey, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, fileLabel, basename, dirname, joinPath, samePath, isUnder, pathKey, badName, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');

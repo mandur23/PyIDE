@@ -1,9 +1,10 @@
-// Korean for a server's mods: each jar in mods/ keeps its text in assets/<namespace>/lang/en_us.json and, when it has
-// one, its Korean in ko_kr.json; what neither that nor the server's resource pack (resourcepack/assets/<namespace>/
-// lang/ko_kr.json) has yet is translated and added to the pack, whose language files Minecraft merges line by line
-// over the mods' own. Lines already in the pack (an earlier run's, or the user's own edits) are never translated
-// again. A translation is kept only when it has the same format codes as the English (%s, %1$d, §7, line breaks):
-// the game fills those in, and a missing %s shows an error or crashes a tooltip.
+// Korean for the mods of a server or an instance: each jar in mods/ keeps its text in assets/<namespace>/lang/en_us.json
+// and, when it has one, its Korean in ko_kr.json; what neither that nor the resource pack (a server's resourcepack/,
+// an instance's resourcepacks/Nano Studio Korean/; assets/<namespace>/lang/ko_kr.json in it) has yet is translated and
+// added to the pack, whose language files Minecraft merges line by line over the mods' own. Lines already in the pack
+// (an earlier run's, or the user's own edits) are never translated again. A translation is kept only when it has the
+// same format codes as the English (%s, %1$d, §7, line breaks): the game fills those in, and a missing %s shows an
+// error or crashes a tooltip.
 const fs = require('fs');
 const path = require('path');
 const { openZip } = require('./zipfile');
@@ -19,11 +20,13 @@ const parse = (buf) => {
   } catch { return null; }
 };
 const strings = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => typeof v === 'string'));
-const packFile = (dir, ns) => path.join(dir, 'resourcepack', 'assets', ns, 'lang', 'ko_kr.json');
+// pack: the resource pack folder; a server's is resourcepack/.
+const serverPack = (dir) => path.join(dir, 'resourcepack');
+const packFile = (pack, ns) => path.join(pack, 'assets', ns, 'lang', 'ko_kr.json');
 // The pack's lines for a namespace. A file that is there but not a JSON object (a hand edit gone wrong) is refused: it
 // holds the user's lines, and writing the translation over it would lose them.
-function readPack(dir, ns) {
-  const file = packFile(dir, ns);
+function readPack(pack, ns) {
+  const file = packFile(pack, ns);
   if (!fs.existsSync(file)) return {};
   const raw = fs.readFileSync(file);
   if (!raw.toString('utf8').replace(/^﻿/, '').trim()) return {};
@@ -39,9 +42,9 @@ const CODES = /%(\d+\$)?(\.\d+)?[sdf]|%%|§[0-9a-fk-orA-FK-OR]|\n/g;
 const codesOf = (text) => (text.match(CODES) || []).sort().join('\u0000');
 const sameCodes = (en, ko) => typeof ko === 'string' && ko.trim() !== '' && codesOf(en) === codesOf(ko);
 
-// The server's mods with English text -> [{jar, ns, total, missing: {key: english}}]; a jar whose language file
+// The mods in dir/mods with English text -> [{jar, ns, total, missing: {key: english}}]; a jar whose language file
 // cannot be read is left out and named in skipped.
-function scan(dir) {
+function scan(dir, pack = serverPack(dir)) {
   const modsDir = path.join(dir, 'mods');
   const jars = fs.existsSync(modsDir) ? fs.readdirSync(modsDir).filter((n) => n.endsWith('.jar')).sort() : [];
   const mods = [];
@@ -60,8 +63,8 @@ function scan(dir) {
         const en = strings(parse(zip.read(files.en_us)));
         if (!Object.keys(en).length) { skipped.push(jar); continue; }
         const own = files.ko_kr ? strings(parse(zip.read(files.ko_kr))) : {};
-        const pack = readPack(dir, ns);
-        const missing = Object.fromEntries(Object.entries(en).filter(([k, v]) => v.trim() && !own[k] && !pack[k]));
+        const ours = readPack(pack, ns);
+        const missing = Object.fromEntries(Object.entries(en).filter(([k, v]) => v.trim() && !own[k] && !ours[k]));
         mods.push({ jar, ns, total: Object.keys(en).length, missing });
       }
     } catch (err) {
@@ -97,9 +100,9 @@ const SYSTEM = `You translate Minecraft mod text from English into natural Korea
 You get one JSON object of translation keys and English lines. Answer with one JSON object with exactly the same keys and the Korean lines, nothing else.
 Keep every format code exactly as it is: %s, %d, %1$s, %2$s and the like, § colour codes such as §7 and §r, and line breaks (\\n). Keep names of mods and of keys pressed (Shift, Ctrl) as they are.`;
 
-// Translates what scan() found and writes it into the server's resource pack. translate(system, prompt, signal)
-// -> Promise<text>. -> {translated, rejected (format codes changed), failed (no answer), files: [{ns, file, added}]}.
-async function translateMods(dir, { mods, translate, log, signal }) {
+// Translates what scan() found and writes it into the resource pack. translate(system, prompt, signal) -> Promise<text>.
+// -> {translated, rejected (format codes changed), failed (no answer), files: [{ns, file, added}]}.
+async function translateMods(dir, { mods, translate, log, signal, pack = serverPack(dir) }) {
   const result = { translated: 0, rejected: 0, failed: 0, files: [] };
   for (const mod of mods) {
     const todo = batches(mod.missing);
@@ -118,19 +121,19 @@ async function translateMods(dir, { mods, translate, log, signal }) {
       }
       if (!answer) { result.failed += Object.keys(batch).length; continue; }
       // Read again before writing: the user may have edited the file while the answer was coming.
-      const pack = readPack(dir, mod.ns);
+      const lines = readPack(pack, mod.ns);
       let ok = 0;
       for (const [k, en] of Object.entries(batch)) {
-        if (pack[k]) continue;
-        if (sameCodes(en, answer[k])) { pack[k] = answer[k]; ok++; } else result.rejected++;
+        if (lines[k]) continue;
+        if (sameCodes(en, answer[k])) { lines[k] = answer[k]; ok++; } else result.rejected++;
       }
-      fs.mkdirSync(path.dirname(packFile(dir, mod.ns)), { recursive: true });
-      fs.writeFileSync(packFile(dir, mod.ns), `${JSON.stringify(pack, null, 2)}\n`);
+      fs.mkdirSync(path.dirname(packFile(pack, mod.ns)), { recursive: true });
+      fs.writeFileSync(packFile(pack, mod.ns), `${JSON.stringify(lines, null, 2)}\n`);
       added += ok;
       result.translated += ok;
       log(`  ${i + 1}/${todo.length}: ${ok} translated\n`);
     }
-    if (added) result.files.push({ ns: mod.ns, file: packFile(dir, mod.ns), added });
+    if (added) result.files.push({ ns: mod.ns, file: packFile(pack, mod.ns), added });
   }
   return result;
 }

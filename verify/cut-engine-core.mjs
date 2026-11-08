@@ -2,8 +2,11 @@
 // plain Node: the parts that need no GPU, codec or canvas. Checks: the effect registry (every [1] effect and
 // transition, parameters with ranges and defaults, resolve() clamping and keyframe-friendly values), each effect's CPU
 // reference on known pixels against numbers worked out by hand (Rec. 709 luminance, gains, the contrast pivot, the
-// white balance keeping gray, blur weights summing to one, mosaic blocks, the vignette's center and corners, crop),
-// the transitions at their ends and midpoints, the constant power crossfade, the compositor's plan of a sequence
+// white balance keeping gray, blur weights summing to one, mosaic blocks, the vignette's center and corners, crop;
+// sharpen, glow, invert, hue shift, posterize, chromatic aberration, glitch, lens distortion, chroma key and film grain
+// at chosen pixels, each leaving the picture alone at its neutral parameters, grain and glitch the same for a frame
+// and different between frames), the 2D hints (a filter or an honest skip), the transitions at their ends and
+// midpoints (slide, iris and cross zoom too), the constant power crossfade, the compositor's plan of a sequence
 // (track order, transitions with their progress and handles, disabled clips and hidden tracks, keyframed props and
 // effect parameters at t, captions), fit scales, the motion presets' keyframes, the caption word highlight standing
 // out on every speaker color (a box for a line close to the highlight color), the reader's block cache, audio
@@ -37,11 +40,12 @@ const LUMA = [0.2126, 0.7152, 0.0722];
 
 // ---- registry ----
 const video = fx.list('video').map((d) => d.type);
-const wantEffects = ['flip.horizontal', 'flip.vertical', 'crop', 'edge.extend', 'blur.gaussian', 'blur.directional', 'mosaic', 'color.bw', 'color.tint', 'color.brightnessContrast', 'color.basic', 'vignette'];
+const wantEffects = ['flip.horizontal', 'flip.vertical', 'crop', 'edge.extend', 'blur.gaussian', 'blur.directional', 'mosaic', 'color.bw', 'color.tint', 'color.brightnessContrast', 'color.basic', 'vignette',
+  'sharpen', 'glow', 'color.invert', 'color.hue', 'posterize', 'chromatic', 'glitch', 'distort.lens', 'key.chroma', 'noise.grain'];
 for (const t of wantEffects) check(video.includes(t), `video effect ${t} is registered`);
 check(fx.list('audio').map((d) => d.type).join() === 'audio.gain,audio.fade', 'audio effects gain and fade');
 const trTypes = fx.transitions().map((d) => d.type);
-for (const t of ['dissolve', 'dip.black', 'dip.white', 'push', 'wipe', 'crossfade.power']) check(trTypes.includes(t), `transition ${t} is registered`);
+for (const t of ['dissolve', 'dip.black', 'dip.white', 'push', 'wipe', 'slide', 'iris.round', 'zoom.cross', 'crossfade.power']) check(trTypes.includes(t), `transition ${t} is registered`);
 check(fx.defaultTransition('video') === 'dissolve' && fx.defaultTransition('audio') === 'crossfade.power', 'default transitions');
 for (const d of [...fx.list(), ...fx.transitions()]) {
   check(typeof d.name === 'string' && d.name && typeof d.category === 'string' && ['video', 'audio'].includes(d.kind), `${d.type}: name, category, kind`);
@@ -62,6 +66,14 @@ check(r1.blurriness === 500 && r1.dimensions === 'both' && r1.repeat === true &&
 check(S(fx.resolve('vignette', { center: [10, -20] }).center) === '[10,-20]', 'resolve keeps a point');
 check(fx.get('nope') === null && S(fx.defaults('nope')) === '{}', 'an unknown type');
 check(fx.categories('video').includes('Color Correction') && fx.categories('video').includes('Dissolve'), 'categories of effects and transitions');
+check(S(fx.categories('video')) === S(['Transform', 'Blur & Sharpen', 'Stylize', 'Color Correction', 'Distort', 'Keying', 'Noise & Grain', 'Dissolve', 'Slide', 'Wipe', 'Zoom']), `the effects panel's video categories, in order (${S(fx.categories('video'))})`);
+// Every video effect says what the Canvas 2D back end does with it: something it can draw, or an honest skip.
+for (const d of fx.list('video')) {
+  const h = d.canvas2d?.(fx.defaults(d.type), { width: 64, height: 36, pxScale: 1, frame: 0 });
+  check(h && typeof h === 'object' && (!h.skip || Object.keys(h).length === 1), `${d.type}: a 2D hint ${S(h)}`);
+}
+check(S(fx.list('video').filter((d) => d.canvas2d(fx.defaults(d.type), { width: 64, height: 36, pxScale: 1 }).skip).map((d) => d.type)) === S(['sharpen', 'glow', 'posterize', 'chromatic', 'glitch', 'distort.lens', 'key.chroma', 'noise.grain']), 'the effects 2D cannot draw say so');
+check(fx.get('color.invert').canvas2d({ amount: 40 }).filter === 'invert(0.4)' && fx.get('color.hue').canvas2d({ hue: 90 }).filter === 'hue-rotate(90deg)', 'invert and hue shift have a CSS filter for 2D');
 // Every uniform array fits the shader's 16 floats.
 for (const d of fx.list('video')) {
   const passes = d.gpu.uniforms(fx.defaults(d.type), { width: 64, height: 36, pxScale: 1 });
@@ -194,6 +206,170 @@ check(pixel(out, 2, 0)[3] === 0 && pixel(out, 3, 0)[3] === 1, 'crop: the left ha
 out = run('crop', flat, { left: 50, feather: 2 });
 check(pixel(out, 3, 0)[3] > 0 && pixel(out, 3, 0)[3] < 1, 'crop: a feathered edge is partly transparent');
 
+// ---- the new effects at chosen pixels ----
+const enc = fx.linearToSrgb;
+const dec = fx.srgbToLinear;
+const runAt = (type, img, params, frame) => fx.get(type).cpu(img, fx.resolve(type, params), { ...info(img), frame });
+// A w x h image from f(x, y) -> rgba.
+const make = (w, h, f) => { const img = image(w, h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) img.data.set(f(x, y), (y * w + x) * 4); return img; };
+const noisy = make(12, 8, (x, y) => [((x * 37 + y * 11) % 17) / 16, ((x * 13 + y * 29) % 11) / 10, ((x * 7 + y * 5) % 13) / 12, 1]);
+const sameImage = (a, b) => a.w === b.w && a.h === b.h && a.data.every((v, i) => Math.abs(v - b.data[i]) <= 1e-9);
+// Each new effect leaves the picture alone at its neutral parameters, and asks the GPU for no pass there.
+for (const [type, params] of [['sharpen', { amount: 0 }], ['glow', { intensity: 0 }], ['color.invert', { amount: 0 }], ['color.hue', { hue: 0 }], ['color.hue', { hue: 360 }], ['color.hue', { hue: -720 }],
+  ['chromatic', { amount: 0 }], ['glitch', { amount: 0 }], ['glitch', { shift: 0 }], ['distort.lens', { curvature: 0 }], ['noise.grain', { amount: 0 }]]) {
+  const p = fx.resolve(type, params);
+  check(sameImage(fx.get(type).cpu(noisy, p, { ...info(noisy), frame: 3 }), noisy) && fx.get(type).gpu.uniforms(p, { ...info(noisy), frame: 3 }).length === 0, `${type} ${S(params)} changes nothing and needs no GPU pass`);
+}
+check(sameImage(run('key.chroma', noisy, { similarity: 0, smoothness: 0, spill: 0 }), noisy), 'chroma key with similarity, smoothness and spill at 0 keeps a picture without the key color');
+const onSteps = () => make(4, 1, (x) => [[0, 0, 0, 1], [1, 1, 1, 1], [1, 0, 0, 1], [dec(0.5), dec(0.5), dec(0.5), 1]][x]);
+check(sameImage(run('posterize', onSteps(), { levels: 3 }), onSteps()), 'posterize keeps colors already on its steps (3 levels: 0, 0.5, 1 in sRGB)');
+
+// sharpen: an unsharp mask of a white impulse on 0.5 gray, radius 1 (sigma 1, three taps a side, edges repeated)
+const sig = [-3, -2, -1, 0, 1, 2, 3].map((d) => Math.exp(-(d * d) / 2)).reduce((a, b) => a + b);
+const spike = () => make(9, 9, (x, y) => (x === 4 && y === 4 ? [1, 1, 1, 1] : [0.5, 0.5, 0.5, 1]));
+out = run('sharpen', spike(), { amount: 100, radius: 1 });
+const bc = 0.5 + 0.5 / (sig * sig);
+near(pixel(out, 4, 4)[0], 1 + (1 - bc), 1e-9, 'sharpen 100%: the impulse gains its difference from the blur');
+const bn = 0.5 + (0.5 * Math.exp(-0.5)) / (sig * sig);
+near(pixel(out, 5, 4)[1], 0.5 + (0.5 - bn), 1e-9, 'sharpen: the neighbor goes darker by its difference');
+near(pixel(out, 4, 4)[3], 1, 0, 'sharpen keeps alpha');
+out = run('sharpen', spike(), { amount: 250, radius: 1 });
+near(pixel(out, 4, 4)[0], 1 + 2.5 * (1 - bc), 1e-9, 'sharpen 250%');
+out = run('sharpen', spike(), { amount: 100, radius: 1, threshold: 200 });
+nearAll(pixel(out, 4, 4), [1, 1, 1, 1], 0, `sharpen: a difference under the threshold (${((1 - bc) * 255).toFixed(1)} < 200) is left alone`);
+check(sameImage(run('sharpen', image(6, 4, [0.3, 0.2, 0.1, 1]), { amount: 500, radius: 5 }), image(6, 4, [0.3, 0.2, 0.1, 1])), 'sharpen leaves a flat picture flat');
+check(fx.get('sharpen').gpu.uniforms(fx.resolve('sharpen', { radius: 4 }), { pxScale: 0.5 })[0][2] === 2, 'sharpen radius scales with playback quality');
+
+// glow: a white pixel on black, threshold 50 %, radius 3 (sigma 1)
+const dot = (bg) => make(9, 9, (x, y) => (x === 4 && y === 4 ? [1, 1, 1, 1] : bg));
+out = run('glow', dot([0, 0, 0, 1]), { threshold: 50, radius: 3, intensity: 100 });
+near(pixel(out, 4, 4)[0], 1 + 1 / (sig * sig), 1e-9, 'glow adds the blurred bright part onto it');
+near(pixel(out, 5, 4)[2], Math.exp(-0.5) / (sig * sig), 1e-9, 'glow: the neighbor lights by the Gaussian');
+near(pixel(out, 5, 5)[1], Math.exp(-1) / (sig * sig), 1e-9, 'glow: the diagonal neighbor by both directions');
+out = run('glow', dot([0, 0, 0, 1]), { threshold: 50, radius: 3, intensity: 200 });
+near(pixel(out, 5, 4)[0], (2 * Math.exp(-0.5)) / (sig * sig), 1e-9, 'glow intensity 200% doubles it');
+out = run('glow', dot([0, 0, 0, 0]), { threshold: 50, radius: 3 });
+near(pixel(out, 5, 4)[3], Math.exp(-0.5) / (sig * sig), 1e-9, 'glow spreads alpha onto a transparent surround');
+check(sameImage(run('glow', image(5, 5, [0.2, 0.2, 0.2, 1]), { threshold: 60 }), image(5, 5, [0.2, 0.2, 0.2, 1])), 'glow: nothing above the threshold, nothing changes');
+check(fx.get('glow').gpu.uniforms(fx.defaults('glow'), { pxScale: 1 }).length === 3, 'glow is a bright pass and two blur passes');
+
+// invert: in sRGB values
+nearAll(pixel(run('color.invert', sample()), 0, 0), [0, 1, 1, 1], 1e-9, 'invert: red -> cyan');
+nearAll(pixel(run('color.invert', sample()), 3, 0), [0, 0, 0, 1], 1e-9, 'invert: white -> black');
+near(pixel(run('color.invert', image(1, 1, [dec(0.5), dec(0.5), dec(0.5), 1])), 0, 0)[0], dec(0.5), 1e-9, 'invert keeps sRGB middle gray');
+nearAll(pixel(run('color.invert', sample()), 2, 1), [0, 0.5, 0.5, 0.5], 1e-9, 'invert: premultiplied half red -> half cyan');
+near(pixel(run('color.invert', sample(), { amount: 50 }), 3, 0)[0], dec(0.5), 1e-9, 'invert 50%: white -> sRGB 0.5');
+near(pixel(run('color.invert', image(1, 1, [0.18, 0.18, 0.18, 1])), 0, 0)[0], dec(1 - enc(0.18)), 1e-9, 'invert: 0.18 -> 1 - its sRGB value');
+
+// hue shift: the CSS hue-rotate matrix on linear light
+const s120 = Math.sin((120 * Math.PI) / 180);
+nearAll(pixel(run('color.hue', sample(), { hue: 120 }), 0, 0), [0, 0.213 + 0.5 * 0.213 + s120 * 0.143, 0, 1], 1e-9, 'hue 120: red turns green (r and b clamp at 0)');
+nearAll(pixel(run('color.hue', sample(), { hue: 90 }), 4, 0), [0.18, 0.18, 0.18, 1], 1e-9, 'hue shift keeps gray');
+nearAll(pixel(run('color.hue', sample(), { hue: 480 }), 0, 0), pixel(run('color.hue', sample(), { hue: 120 }), 0, 0), 1e-9, 'hue 480 = 120');
+const hc = pixel(run('color.hue', image(1, 1, [0.3, 0.2, 0.1, 1]), { hue: 45 }), 0, 0);
+near(lum(hc), lum([0.3, 0.2, 0.1]), 1e-4, 'hue shift keeps the luminance (to the precision of the CSS matrix)');
+
+// posterize: rounding sRGB values to even steps
+out = run('posterize', make(3, 1, (x) => [[0.18, 0.18, 0.18, 1], [0.25, 0.25, 0.25, 1], [0.5, 0, 0, 0.5]][x]), { levels: 2 });
+check(pixel(out, 0, 0)[0] === 0 && pixel(out, 1, 0)[0] === 1, `posterize 2 levels: sRGB ${enc(0.18).toFixed(3)} -> 0, ${enc(0.25).toFixed(3)} -> 1`);
+nearAll(pixel(out, 2, 0), [0.5, 0, 0, 0.5], 1e-9, 'posterize works on the unpremultiplied color');
+near(pixel(run('posterize', image(1, 1, [0.18, 0.18, 0.18, 1]), { levels: 5 }), 0, 0)[1], dec(0.5), 1e-9, 'posterize 5 levels: sRGB 0.461 -> 0.5');
+
+// chromatic aberration: red from one side, blue from the other
+const ramp = (w, h) => make(w, h, (x) => [x / (w - 1), x / (w - 1), x / (w - 1), 1]);
+out = run('chromatic', ramp(8, 1), { amount: 1, mode: 'linear', direction: 90 });
+nearAll(pixel(out, 3, 0), [4 / 7, 3 / 7, 2 / 7, 1], 1e-9, 'chromatic linear 90 deg, 1 px: red from the right, blue from the left');
+nearAll(pixel(out, 7, 0), [1, 1, 6 / 7, 1], 1e-9, 'chromatic: edge pixels repeat');
+out = run('chromatic', ramp(9, 9), { amount: 0.5 * Math.hypot(9, 9) * 0.5, mode: 'radial' });
+nearAll(pixel(out, 4, 4), [0.5, 0.5, 0.5, 1], 1e-9, 'chromatic radial: nothing at the center');
+nearAll(pixel(out, 6, 4), [7 / 8, 6 / 8, 5 / 8, 1], 1e-9, 'chromatic radial: the split grows with the distance from the center');
+out = run('chromatic', ramp(8, 1), { amount: 1, mode: 'linear', direction: 0 });
+nearAll(pixel(out, 3, 0), [3 / 7, 3 / 7, 3 / 7, 1], 1e-9, 'chromatic 0 deg on a one-row image moves up and down only');
+
+// lens distortion: center + d (1 + k r^2), k = curvature / 200
+const lensAt = (x, y, w, h, k) => {
+  const d = [(x + 0.5) / w - 0.5, (y + 0.5) / h - 0.5];
+  const f = 1 + (k * ((d[0] * w) ** 2 + (d[1] * h) ** 2)) / (0.25 * (w * w + h * h));
+  return [0.5 + d[0] * f, 0.5 + d[1] * f];
+};
+out = run('distort.lens', ramp(9, 9), { curvature: -100 });
+nearAll(pixel(out, 4, 4), [0.5, 0.5, 0.5, 1], 1e-9, 'lens: the center stays');
+near(pixel(out, 8, 4)[0], (lensAt(8, 4, 9, 9, -0.5)[0] * 9 - 0.5) / 8, 1e-9, `lens -100 pinches: the edge pixel shows x = ${(lensAt(8, 4, 9, 9, -0.5)[0] * 9 - 0.5).toFixed(3)}`);
+check(pixel(out, 8, 4)[0] < 1 && pixel(out, 0, 4)[0] > 0, 'lens: pincushion pulls the picture in from beyond the edges');
+out = run('distort.lens', ramp(9, 9), { curvature: 100 });
+nearAll(pixel(out, 8, 8), [0, 0, 0, 0], 0, `lens +100 bulges: the corner shows beyond the picture (u ${lensAt(8, 8, 9, 9, 0.5)[0].toFixed(3)}), transparent`);
+near(pixel(run('distort.lens', ramp(9, 9), { curvature: 100, repeat: true }), 8, 8)[0], 1, 1e-9, 'lens: with repeated edges the corner is the edge pixel');
+
+// chroma key: Rec. 709 Y'CbCr of the sRGB values, the CbCr distance to the key
+const cbcrOf = (s) => { const y = s[0] * 0.2126 + s[1] * 0.7152 + s[2] * 0.0722; return [(s[2] - y) / 1.8556, (s[0] - y) / 1.5748]; };
+const [kcb, kcr] = cbcrOf([0, 1, 0]);
+out = run('key.chroma', sample());
+nearAll(pixel(out, 1, 0), [0, 0, 0, 0], 1e-12, 'chroma key: the key green goes');
+nearAll(pixel(out, 0, 0), [1, 0, 0, 1], 1e-9, 'chroma key: red stays');
+nearAll(pixel(out, 3, 0), [1, 1, 1, 1], 1e-9, 'chroma key: white stays');
+out = run('key.chroma', sample(), { similarity: 0, smoothness: 0, spill: 0 });
+nearAll(pixel(out, 1, 0), [0, 0, 0, 0], 1e-12, 'chroma key: the key color goes even at similarity 0');
+const kd = Math.hypot(kcb, kcr) - 0.5;
+out = run('key.chroma', image(1, 1, [0.18, 0.18, 0.18, 1]), { similarity: 50, smoothness: 20, spill: 0 });
+near(pixel(out, 0, 0)[3], (kd / 0.2) ** 1.5, 1e-9, `chroma key: gray at CbCr distance ${(kd + 0.5).toFixed(4)} with similarity 50%, smoothness 20% keeps (d / 0.2)^1.5 of its alpha`);
+near(pixel(out, 0, 0)[0], 0.18 * (kd / 0.2) ** 1.5, 1e-9, 'chroma key output is premultiplied');
+const leaf = [dec(0.3), dec(0.7), dec(0.25), 1];
+const lr = pixel(run('key.chroma', image(1, 1, leaf), { similarity: 20, smoothness: 1, spill: 0 }), 0, 0);
+const ls = pixel(run('key.chroma', image(1, 1, leaf), { similarity: 20, smoothness: 1, spill: 60 }), 0, 0);
+const ld = Math.hypot(...cbcrOf([0.3, 0.7, 0.25]).map((v, i) => v - [kcb, kcr][i])) - 0.2;
+const keepK = Math.min(1, ld / 0.6) ** 1.5;
+const ly = 0.3 * 0.2126 + 0.7 * 0.7152 + 0.25 * 0.0722;
+nearAll(lr, leaf, 1e-9, 'chroma key: a green outside similarity + smoothness stays without spill suppression');
+near(ls[1], dec(ly + (0.7 - ly) * keepK), 1e-9, `chroma key spill: the green pulled toward its luma by ${(1 - keepK).toFixed(3)}`);
+check(enc(ls[1]) - enc(ls[0]) < enc(lr[1]) - enc(lr[0]), 'chroma key spill suppression takes green out');
+out = run('key.chroma', sample(), { output: 'matte' });
+check(S(pixel(out, 1, 0)) === '[0,0,0,1]' && S(pixel(out, 0, 0)) === '[1,1,1,1]' && S(pixel(out, 5, 0)) === '[0,0,0,1]', 'chroma key Matte output: alpha as gray');
+
+// film grain: value noise of the pixel and the frame, added to the sRGB value
+const { hash3 } = fx.cpu;
+let hs = 0;
+let hmin = 1;
+let hmax = 0;
+for (let i = 0; i < 4096; i++) { const v = hash3(i % 64, i >> 6, 7); hs += v; hmin = Math.min(hmin, v); hmax = Math.max(hmax, v); }
+check(Math.abs(hs / 4096 - 0.5) < 0.02 && hmin >= 0 && hmax < 1 && hmin < 0.01 && hmax > 0.99, `the hash is even in [0, 1) (mean ${(hs / 4096).toFixed(4)})`);
+check(hash3(3, 4, 5) === hash3(3, 4, 5) && hash3(3, 4, 5) !== hash3(4, 3, 5) && hash3(-1, 0, 0) !== hash3(1, 0, 0), 'the hash depends on every argument and its order, negative ones too');
+const mid = () => image(32, 32, [dec(0.5), dec(0.5), dec(0.5), 1]);
+const g1 = runAt('noise.grain', mid(), { amount: 100 }, 5);
+near(enc(pixel(g1, 3, 2)[0]), 0.5 + 0.3 * (hash3(3, 2, 20) * 2 - 1), 1e-6, 'grain at size 1, frame 5: pixel (3, 2) is its own lattice hash (z = 4 x frame), times 0.3');
+const h4 = [hash3(0, 0, 20), hash3(1, 0, 20), hash3(0, 1, 20), hash3(1, 1, 20)];
+near(enc(pixel(runAt('noise.grain', mid(), { amount: 100, size: 2 }, 5), 1, 1)[0]), 0.5 + 0.3 * (((h4[0] + h4[1] + h4[2] + h4[3]) / 4) * 2 - 1), 1e-6, 'grain at size 2: pixel (1, 1) is half way between four lattice hashes');
+check(sameImage(runAt('noise.grain', mid(), { amount: 100 }, 5), g1), 'grain: the same frame gives the same grain');
+check(!sameImage(runAt('noise.grain', mid(), { amount: 100 }, 6), g1), 'grain: the next frame gives other grain');
+check(sameImage(runAt('noise.grain', mid(), { amount: 100, animated: false }, 6), runAt('noise.grain', mid(), { amount: 100, animated: false }, 40)), 'grain not animated: the same every frame');
+const devs = [];
+for (let i = 0; i < 32 * 32; i++) devs.push(enc(g1.data[i * 4]) - 0.5);
+const dmean = devs.reduce((a, b) => a + b) / devs.length;
+const dsd = Math.sqrt(devs.reduce((a, b) => a + (b - dmean) ** 2, 0) / devs.length);
+check(Math.abs(dmean) < 0.02 && dsd > 0.05 && Math.max(...devs.map(Math.abs)) <= 0.3 + 1e-9, `grain 100%: mean ${dmean.toFixed(4)}, sd ${dsd.toFixed(3)}, within +-0.3 in sRGB`);
+check([...Array(32 * 32).keys()].every((i) => g1.data[i * 4] === g1.data[i * 4 + 1] && g1.data[i * 4] === g1.data[i * 4 + 2]), 'grain without Color Grain is the same on every channel');
+const gc = runAt('noise.grain', mid(), { amount: 100, color: true }, 5);
+check(pixel(gc, 3, 3)[0] !== pixel(gc, 3, 3)[2] && pixel(gc, 3, 3)[0] === pixel(g1, 3, 3)[0], 'Color Grain: other noise in green and blue, red as in mono');
+const roughness = (img) => { let s2 = 0; for (let y = 0; y < 32; y++) for (let x = 0; x < 31; x++) s2 += Math.abs(pixel(img, x + 1, y)[0] - pixel(img, x, y)[0]); return s2; };
+const rough1 = roughness(g1);
+const rough4 = roughness(runAt('noise.grain', mid(), { amount: 100, size: 4 }, 5));
+check(rough4 < rough1 / 2, `bigger grain is smoother from pixel to pixel (size 4: ${rough4.toFixed(1)}, size 1: ${rough1.toFixed(1)})`);
+nearAll(pixel(runAt('noise.grain', sample(), { amount: 100 }, 5), 1, 1), [0, 0, 0, 0], 0, 'grain leaves transparent pixels transparent');
+check(fx.get('noise.grain').gpu.uniforms(fx.defaults('noise.grain'), { pxScale: 1, frame: 9 })[0][3] === 9 && fx.get('noise.grain').gpu.uniforms(fx.resolve('noise.grain', { animated: false }), { pxScale: 1, frame: 9 })[0][3] === 0, 'grain passes the frame to the shader, 0 when not animated');
+
+// glitch: bands moved by a hash of the band and the frame (held for `hold` frames)
+const gl = (frame, params) => runAt('glitch', ramp(64, 64), { amount: 100, shift: 16, bandHeight: 8, hold: 2, ...params }, frame);
+const gl4 = gl(4);
+const o0 = (hash3(0, 2, 2) * 2 - 1) * (16 / 64);
+const fr = (x) => x - Math.floor(x);
+const at64 = (u) => fx.cpu.tap(ramp(64, 64), fr(u), 3.5 / 64);
+nearAll(pixel(gl4, 10, 3), [at64(10.5 / 64 + o0 * 1.3)[0], at64(10.5 / 64 + o0)[1], at64(10.5 / 64 + o0 * 0.7)[2], 1], 1e-9, `glitch frame 4 (step 2): band 0 moves by ${(o0 * 64).toFixed(2)} px, red 30% further, blue 30% less`);
+check(sameImage(gl(5), gl4) && !sameImage(gl(6), gl4), 'glitch holds for 2 frames, then changes');
+nearAll(pixel(gl4, 10, 3), pixel(gl4, 10, 7), 1e-12, 'glitch: a band moves as one');
+let moved = 0;
+const half = runAt('glitch', ramp(64, 64), { amount: 50, shift: 16, bandHeight: 1 }, 0);
+for (let y = 0; y < 64; y++) if (Math.abs(pixel(half, 20, y)[1] - 20 / 63) > 1e-6) moved++;
+check(moved > 18 && moved < 46, `glitch 50% moves about half the bands (${moved}/64)`);
+
 // transitions
 const A = image(4, 2, [1, 0, 0, 1]);
 const B = image(4, 2, [0, 0, 1, 1]);
@@ -211,6 +387,35 @@ check(pixel(wipe, 0, 0)[2] === 1 && pixel(wipe, 3, 0)[0] === 1, 'wipe from left 
 const wipeR = trn('wipe', 0.5, { direction: 'fromRight' });
 check(pixel(wipeR, 3, 0)[2] === 1 && pixel(wipeR, 0, 0)[0] === 1, 'wipe from right');
 check(pixel(trn('wipe', 0, { feather: 20 }), 0, 0)[0] === 1 && pixel(trn('wipe', 1, { feather: 20 }), 3, 0)[2] === 1, 'feathered wipe: A at 0, B at 1');
+// slide: B slides in over A, which stays
+nearAll(pixel(trn('slide', 0.5, { direction: 'left' }), 0, 0), [1, 0, 0, 1], 1e-12, 'slide left half way: A still on the left');
+nearAll(pixel(trn('slide', 0.5, { direction: 'left' }), 3, 0), [0, 0, 1, 1], 1e-12, 'slide left half way: B in from the right');
+nearAll(pixel(trn('slide', 0.2, { direction: 'down' }), 0, 0), [1, 0, 0, 1], 1e-12, 'slide down a fifth: B has not reached the first row yet');
+nearAll(pixel(trn('slide', 0.6, { direction: 'down' }), 0, 1), [1, 0, 0, 1], 1e-12, 'slide down 60%: A still at the bottom');
+nearAll(pixel(trn('slide', 0.6, { direction: 'down' }), 0, 0), [0, 0, 1, 1], 1e-12, 'slide down 60%: B in from the top over the top row');
+check(pixel(trn('slide', 0, { direction: 'right' }), 3, 1)[0] === 1 && pixel(trn('slide', 1, { direction: 'right' }), 0, 0)[2] === 1, 'slide: A at 0, B at 1');
+const ramp8 = image(8, 1);
+for (let x = 0; x < 8; x++) ramp8.data.set([x / 7, 0, 0, 1], x * 4);
+near(pixel(fx.get('slide').cpu(ramp8, ramp8, 0.5, fx.resolve('slide', { direction: 'left' })), 6, 0)[0], 2 / 7, 1e-9, 'slide left half way: B shows its own left half on the right (x 6 shows B at x 2)');
+const halfB = image(4, 2, [0, 0, 0.5, 0.5]);
+nearAll(pixel(fx.get('slide').cpu(A, halfB, 1, fx.resolve('slide', {})), 0, 0), [0.5, 0, 0.5, 1], 1e-12, 'slide: a half transparent B covers A by its alpha');
+// iris round: a circle about the center; d is the distance over the distance to a corner
+const irisD = (x, y) => Math.hypot(x + 0.5 - 2, y + 0.5 - 1) / Math.hypot(2, 1);
+check(irisD(1, 0) < 0.5 && irisD(0, 0) > 0.5, `iris test points: ${irisD(1, 0).toFixed(3)} inside, ${irisD(0, 0).toFixed(3)} outside half`);
+nearAll(pixel(trn('iris.round', 0.5), 1, 0), [0, 0, 1, 1], 1e-12, 'iris open half way: B inside the circle');
+nearAll(pixel(trn('iris.round', 0.5), 0, 0), [1, 0, 0, 1], 1e-12, 'iris open half way: A outside');
+nearAll(pixel(trn('iris.round', 0.5, { direction: 'close' }), 1, 0), [1, 0, 0, 1], 1e-12, 'iris close half way: A inside');
+nearAll(pixel(trn('iris.round', 0.5, { direction: 'close' }), 0, 0), [0, 0, 1, 1], 1e-12, 'iris close half way: B outside');
+for (const dir of ['open', 'close']) check(pixel(trn('iris.round', 0, { direction: dir }), 0, 0)[0] === 1 && pixel(trn('iris.round', 0, { direction: dir }), 1, 0)[0] === 1 && pixel(trn('iris.round', 1, { direction: dir }), 0, 0)[2] === 1 && pixel(trn('iris.round', 1, { direction: dir }), 1, 1)[2] === 1, `iris ${dir}: all A at 0, all B at 1`);
+const fe = 0.4;
+const e5 = 0.5 * (1 + fe) - fe;
+near(pixel(trn('iris.round', 0.5, { feather: 40 }), 0, 0)[2], 1 - (() => { const t = Math.min(1, Math.max(0, (irisD(0, 0) - e5) / fe)); return t * t * (3 - 2 * t); })(), 1e-12, 'iris feather: a smoothstep across the edge');
+// cross zoom: A zooms in, B zooms back to 100%, crossing with a smoothstep
+nearAll(pixel(trn('zoom.cross', 0.5), 2, 1), [0.5, 0, 0.5, 1], 1e-12, 'cross zoom half way on flat pictures: the average');
+nearAll(pixel(trn('zoom.cross', 0.25), 2, 1), [1 - 0.15625, 0, 0.15625, 1], 1e-12, 'cross zoom a quarter in: smoothstep(0.25) = 0.156 of B');
+check(pixel(trn('zoom.cross', 0), 0, 0)[0] === 1 && pixel(trn('zoom.cross', 1), 3, 1)[2] === 1, 'cross zoom: A at 0, B at 1');
+const zr = fx.get('zoom.cross').cpu(ramp8, image(8, 1, [0, 0, 0, 1]), 0.5, fx.resolve('zoom.cross', { zoom: 300 }));
+near(pixel(zr, 7, 0)[0], 0.5 * (((0.5 + (7.5 / 8 - 0.5) / 2) * 8 - 0.5) / 7), 1e-9, 'cross zoom 300% half way: A at 200% about the center');
 const g = fx.get('crossfade.power').gains;
 near(g(0.5)[0] ** 2 + g(0.5)[1] ** 2, 1, 1e-12, 'constant power: the power sums to one');
 check(S(g(0)) === '[1,0]' && Math.abs(g(1)[0]) < 1e-12 && g(1)[1] === 1, 'constant power ends');
@@ -251,6 +456,7 @@ check(L.length === 1 && L[0].kind === 'clip' && L[0].item.clip.id === p1.ids[0],
 near(L[0].item.opacity, 50, 1e-9, 'plan: keyframed opacity at t');
 near(L[0].item.effects[0].params.blurriness, 10, 1e-9, 'plan: keyframed effect parameter at t');
 near(L[0].item.srcT, SEC / 2, 0, 'plan: source time');
+check(L[0].item.frame === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F / 2)[0].item.frame === 15 && compositor.plan(h.project, seqOf(), SEC / 2 + F)[0].item.frame === 16, 'plan: the clip-local frame (any time inside a frame gives that frame)');
 L = compositor.plan(h.project, seqOf(), SEC + SEC / 2);
 check(L.length === 2 && L[0].item.clip.track === 'V1' && L[1].item.kind === 'text', 'plan: V1 under V2 (text)');
 L = compositor.plan(h.project, seqOf(), 2 * SEC);
@@ -259,6 +465,7 @@ check(tl && tl.a.clip.id === p1.ids[0] && tl.b.clip.id === p2.ids[0], 'plan at t
 near(tl.progress, 0.5, 1e-12, 'plan: a centered transition is half way at its edit point');
 near(tl.a.srcT, 2 * SEC, 0, 'plan: the outgoing clip shows its handle past out');
 near(tl.b.srcT, 10 * SEC, 0, 'plan: the incoming clip at its in point');
+check(tl.a.frame === 60 && tl.b.frame === 0, `plan: frames of the clips in a transition count from each clip's start (${tl.a.frame}, ${tl.b.frame})`);
 L = compositor.plan(h.project, seqOf(), 2 * SEC - 5 * F);
 near(L.find((x) => x.kind === 'transition').progress, 0, 1e-12, 'plan: the transition starts half its length before the edit');
 near(L.find((x) => x.kind === 'transition').b.srcT, 10 * SEC - 5 * F, 0, 'plan: the incoming clip shows its frames before in');

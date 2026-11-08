@@ -134,6 +134,12 @@ try {
   check(await js(`document.querySelector('#rfRenameModuleDialog .rf-refs input').checked`), 'Search for references is on by default');
   check(await js(`(() => { const i = document.querySelector('#rfRenameModuleDialog .rf-name'); return i.value.slice(i.selectionStart, i.selectionEnd); })()`) === 'shapes', 'the name without .py is selected');
   await shot('rename-dialog.png');
+  // a name Windows does not keep is refused in the dialog, in the project tree's words, before anything is renamed
+  await h.setInput('#rfRenameModuleDialog .rf-name', 'shapes.');
+  await press('Enter');
+  await until(`/does not allow a name that ends with a dot/.test(document.querySelector('#rfRenameModuleDialog .rf-error')?.textContent || '')`, 'the trailing-dot error', 10000).catch(() => {});
+  check(/does not allow a name that ends with a dot/.test(await js(`document.querySelector('#rfRenameModuleDialog .rf-error')?.textContent || ''`)) && h.exists('geo/shapes.py'),
+    `a trailing dot is refused in the dialog with the tree's message (${await js(`document.querySelector('#rfRenameModuleDialog .rf-error')?.textContent || ''`)})`);
   await h.setInput('#rfRenameModuleDialog .rf-name', 'figures.py');
   await press('Enter');
   await h.gone('rfRenameModuleDialog');

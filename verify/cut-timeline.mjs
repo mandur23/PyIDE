@@ -8,13 +8,14 @@
 //   and a waveform drawn from Cut.thumbs;
 // - effect controls: a keyframe made with the stopwatch, a second by typing a value, the values in between, a
 //   keyframe dragged in the lane, an ease from its menu;
-// - an effect and a transition dragged from the effects panel onto a clip and an edit point, Ctrl+D;
+// - an effect and a transition dragged from the effects panel onto a clip and an edit point, Ctrl+D; every effect and
+//   transition of the registry listed under its category; Chroma Key and Iris Round found by typing and dragged;
 // - the color panel: a slider drag writes color.basic in one undo step, a typed value, the eyedropper neutralizes a
 //   warm solid;
 // - the program monitor's handles: a drag moves the clip; the Type tool and Korean typed through the IME into a text
 //   layer, nothing recorded until the composition and the editor end;
 // - 500 clips: scroll and drag frame times;
-// - screenshots in the dark and the light theme (verify/out/cut-timeline/*.png).
+// - screenshots in the dark and the light theme (verify/out/cut-timeline/*.png), the effects panel's new folders too.
 // Usage: node verify/cut-timeline.mjs   (CUT_TL_ONLY=edits,gestures,drops,controls,effects,color,overlay,text,perf,shots)
 import { writeFileSync } from 'fs';
 import path from 'path';
@@ -629,6 +630,58 @@ await section('effects', async () => {
   check(trs.length === 1 && trs[0].type === 'dissolve' && trs[0].at === 10 && trs[0].track === 'V1', `Ctrl+D puts the default video transition on the edit point nearest the playhead of each targeted video track (${S(trs)}; focus ${await js('Cut.app.focusPanel + " " + document.activeElement?.className')})`);
   await press('Ctrl+z');
   check((await js('__tl.seq().transitions.length')) === 0, 'Ctrl+Z removes it');
+  // Every effect and transition of the registry is in the panel under its category, named by tr().
+  const listed = await js(`(() => {
+    const fx = Cut.effects;
+    const rows = [...fx.list('video').map((d) => ['video', d]), ...fx.list('audio').map((d) => ['audio', d]), ...fx.transitions('video').map((d) => ['vtrans', d]), ...fx.transitions('audio').map((d) => ['atrans', d])];
+    const bad = [];
+    for (const [group, d] of rows) {
+      Cut.ui.effectsPanel.search(d.name);
+      const row = document.querySelector('.cut-fx-item[data-type="' + d.type + '"]');
+      let f = row?.previousElementSibling;
+      while (f && !f.classList.contains('cut-fx-folder')) f = f.previousElementSibling;
+      if (!row || row.querySelector('.cut-fx-name')?.textContent !== tr(d.name) || f?.dataset.folder !== group + '/' + d.category) bad.push(d.type + ' ' + (f?.dataset.folder || 'no folder'));
+    }
+    Cut.ui.effectsPanel.search('');
+    return { n: rows.length, bad };
+  })()`);
+  check(listed.bad.length === 0 && listed.n >= 33, `all ${listed.n} effects and transitions are listed under their categories (${S(listed.bad)})`);
+  // A new effect typed, found and dragged onto a clip: its parameters become effect controls rows.
+  await clickAt(await js(`__tl.rect('.cut-fx-search')`));
+  await press('Ctrl+a');
+  await ctx.type('Chroma');
+  await sleep(150);
+  const keyItem = await js(`__tl.rect('.cut-fx-item[data-type="key.chroma"]')`);
+  const keyFolder = await js(`[...document.querySelectorAll('.cut-fx-folder')].map((n) => n.dataset.folder)`);
+  check(!!keyItem && keyFolder.includes('video/Keying'), `searching "Chroma" shows Chroma Key under Keying (${S(keyFolder)})`);
+  if (keyItem) {
+    await drag(keyItem, await pt(5, 'V1'), { steps: 14 });
+    const fx = await js(`__tl.seq().clips.find((c) => c.id === ${S(c1)}).effects.map((e) => e.type)`);
+    check(S(fx) === S(['key.chroma']), `Chroma Key dragged onto c1 lands on it (${S(fx)})`);
+    await clickAt(await js(`__tl.rect('.cut-slot-tab[data-panel="controls"]')`));
+    await sleep(200);
+    const rowsShown = await js(`[...document.querySelectorAll('.cut-ec-sec[data-section^="fx:${c1}:"] .cut-ec-row')].map((n) => n.dataset.path.split('.').pop())`);
+    check(['color', 'similarity', 'smoothness', 'spill', 'output'].every((id) => rowsShown.includes(id)), `effect controls show Chroma Key's parameters (${S(rowsShown)})`);
+    await press('Ctrl+z');
+    check((await js(`__tl.seq().clips.find((c) => c.id === ${S(c1)}).effects.length`)) === 0, 'Ctrl+Z removes it');
+    await clickAt(await js(`__tl.rect('.cut-slot-tab[data-panel="effects"]')`));
+    await sleep(150);
+  }
+  // A new transition dropped on the edit point.
+  await clickAt(await js(`__tl.rect('.cut-fx-search')`));
+  await press('Ctrl+a');
+  await ctx.type('Iris');
+  await sleep(150);
+  const iris = await js(`__tl.rect('.cut-fx-item[data-type="iris.round"]')`);
+  check(!!iris, 'searching "Iris" shows Iris Round');
+  if (iris) {
+    await drag(iris, await pt(10.1, 'V1', 0.8), { steps: 14 });
+    const trs = await js(`__tl.seq().transitions.map((t) => ({ type: t.type, at: t.at / ${T} }))`);
+    check(trs.length === 1 && trs[0].type === 'iris.round' && trs[0].at === 10, `Iris Round dropped near the edit point sits on it (${S(trs)})`);
+    await focusTimeline();
+    await press('Ctrl+z');
+    check((await js('__tl.seq().transitions.length')) === 0, 'Ctrl+Z removes it');
+  }
   await clickAt(await js(`__tl.rect('.cut-fx-search')`));
   await press('Ctrl+a');
   await press('Delete');
@@ -925,6 +978,33 @@ await section('shots', async () => {
   await sleep(600);
   log(`  saved ${await shot('color-dark.png')}`);
   await js(`Cut.ui.setWorkspace('editing')`);
+  // The effects panel with the new categories open, in both themes.
+  await sleep(300);
+  await clickAt(await js(`__tl.rect('.cut-slot-tab[data-panel="effects"]')`));
+  await sleep(200);
+  for (const f of ['video/Stylize', 'video/Distort', 'video/Keying', 'video/Noise & Grain', 'vtrans/Wipe', 'vtrans/Zoom']) {
+    const sel = `.cut-fx-folder[data-folder="${f}"]`;
+    await js(`document.querySelector(${S(sel)})?.scrollIntoView({ block: 'nearest' })`);
+    const r = await js(`__tl.rect(${S(sel)})`);
+    if (r) { await clickAt(r); await sleep(80); }
+  }
+  const opened = await js(`[...document.querySelectorAll('.cut-fx-item')].map((n) => n.dataset.type)`);
+  check(['glow', 'glitch', 'distort.lens', 'key.chroma', 'noise.grain', 'iris.round', 'zoom.cross'].every((t) => opened.includes(t)), `the opened folders show the new effects and transitions (${opened.length} items)`);
+  const fxTree = `document.querySelector('.cut-fx-tree')`;
+  await js(`${fxTree}.scrollTop = 0`);
+  log(`  saved ${await shot('effects-dark.png')}`);
+  await js(`${fxTree}.scrollTop = ${fxTree}.scrollHeight`);
+  await sleep(150);
+  log(`  saved ${await shot('effects-end-dark.png')}`);
+  await js(`ide.settings.set('appearance.theme', 'light')`);
+  await until(`document.documentElement.dataset.theme === 'light'`, 'the light theme', 5000).catch(() => {});
+  await sleep(600);
+  log(`  saved ${await shot('effects-end-light.png')}`);
+  await js(`${fxTree}.scrollTop = 0`);
+  await sleep(150);
+  log(`  saved ${await shot('effects-light.png')}`);
+  await js(`ide.settings.set('appearance.theme', 'dark')`);
+  await sleep(300);
   check(true, 'screenshots saved');
 });
 

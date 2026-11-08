@@ -36,6 +36,22 @@
 
   const withExt = (path, ext) => String(path).replace(/(\.[^.\\/]*)?$/, () => `.${ext}`);
   const baseName = (p) => String(p).split(/[\\/]/).pop();
+  // A frame the decoder never gives (a codec or profile it takes but cannot decode) held the export, and a proxy job,
+  // at 0 % with no word. Past this, it fails and names the video's codecs; a frame that comes later is closed.
+  const FRAME_LIMIT_MS = 60000;
+  function frameWithin(promise, ms, project, seq) {
+    let timer;
+    const late = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        promise.then((f) => f?.close?.(), () => {});
+        const used = new Set(seq.clips.map((c) => c.source?.media).filter(Boolean));
+        const codecs = [...new Set(project.media.filter((m) => used.has(m.id) && m.video).map((m) => m.video.codec))].join(', ') || 'unknown';
+        const t = globalThis.tr || ((s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k]));
+        reject(Object.assign(new Error(t('No video frame came from the decoder in {seconds} s (codec {codec}): this PC cannot decode the video. Convert it to H.264 and import it again.', { seconds: Math.round(ms / 1000), codec: codecs })), { code: 'decode' }));
+      }, ms);
+    });
+    return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+  }
   // The target was open in another program, so the finished file kept its .part name.
   const keptText = (path, part) => {
     const t = globalThis.tr || ((s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k]));
@@ -638,7 +654,7 @@
           if (failure) break;
           const pts = plan.ptsOf(i);
           if (aenc) await pumpAudio(pts + TICKS);
-          const frame = await renderer.frame(plan.timeOf(i), pts, plan.frame);
+          const frame = await frameWithin(renderer.frame(plan.timeOf(i), pts, plan.frame), o.frameLimitMs ?? FRAME_LIMIT_MS, project, seq);
           ptsQueue.push(pts);
           venc.encode(frame, { keyFrame: i % keyEvery === 0 });
           frame.close();

@@ -5,7 +5,9 @@
 // Checks: frame accuracy (frame N of 24, 29.97, 30 and 60 fps sources is shown where the frame math says in a 30 fps
 // sequence, also at speed 2x and reversed, in an order that seeks backwards and far forward); position, scale,
 // rotation, anchor, crop, opacity and keyframed position read back from the pixels; every video effect against its
-// CPU reference on a known image; each transition at known points (the dissolve's midpoint is the average); Korean
+// CPU reference on a known image (grain and glitch at given frames, the same anywhere inside a frame and from a new
+// compositor); each transition at known points (the dissolve's midpoint is the average) and every one against its CPU
+// reference on two pictures; Korean
 // text drawn with the font from cut:fontData; captions burned in; offline media drawn red; import errors; audio decoded
 // to PCM (WAV and AAC); a one-GOP clip played through a frame cache that fills by bytes before its frame count, with
 // no restart at the sync sample; thumbnails and peaks with their caches; the player playing a 1080p30 H.264 clip for
@@ -527,17 +529,49 @@ try {
       ['color.bw', {}], ['color.tint', { black: '#102030', white: '#ffe0a0', amount: 80 }], ['color.brightnessContrast', { brightness: 30, contrast: 40 }],
       ['color.basic', { temperature: 40, tint: -20, exposure: 0.5, contrast: 25, highlights: -30, shadows: 40, whites: 10, blacks: -10, saturation: 130, vibrance: 30 }],
       ['color.basic', { saturation: 0 }], ['vignette', { amount: -80, midpoint: 40, feather: 40, roundness: 50, center: [8, -4] }], ['vignette', { amount: 60 }],
+      ['sharpen', { amount: 150, radius: 1.5 }], ['sharpen', { amount: 80, radius: 3, threshold: 10 }], ['glow', { threshold: 50, radius: 8, intensity: 120 }],
+      ['color.invert', {}], ['color.invert', { amount: 40 }], ['color.hue', { hue: 120 }], ['color.hue', { hue: -45 }], ['posterize', { levels: 4 }],
+      ['chromatic', { amount: 4 }], ['chromatic', { amount: 2.5, mode: 'linear', direction: 60 }], ['glitch', { amount: 60, shift: 12, bandHeight: 4 }, 5], ['glitch', { amount: 100, shift: 20, bandHeight: 6, hold: 3 }, 11],
+      ['distort.lens', { curvature: -60 }], ['distort.lens', { curvature: 50, repeat: true }],
+      ['key.chroma', { similarity: 30, smoothness: 20, spill: 30 }], ['key.chroma', { similarity: 30, smoothness: 20, output: 'matte' }],
+      ['noise.grain', { amount: 40 }, 7], ['noise.grain', { amount: 30, size: 2.5, color: true }, 3],
     ];
+    // Every video effect of the registry is here (edge.extend has its own check below).
+    const missing = Cut.effects.list('video').map((d) => d.type).filter((t) => t !== 'edge.extend' && !cases.some((c) => c[0] === t));
     const out = [{ type: 'none', ...base }];
-    for (const [type, params] of cases) {
+    for (const [type, params, frame = 0] of cases) {
       const clip = () => hist.project.sequences[0].clips.find((x) => x.id === cid);
       for (const e of [...clip().effects]) hist.do(Cut.commands.removeEffect(seq, cid, e.id));
       hist.do(Cut.commands.addEffect(seq, cid, type, null, params));
-      await comp.render(hist.project, seq, 0);
+      await comp.render(hist.project, seq, Cut.time.frameStart(frame, [30, 1]));
       const got = await comp.readPixels();
       const def = Cut.effects.get(type);
-      const want = __eng.encode(def.cpu(input, Cut.effects.resolve(type, params), { width: W, height: H, pxScale: 1 }));
-      out.push({ type, params, ...__eng.diff(got, want), changed: __eng.diff(got, plain).mean });
+      const want = __eng.encode(def.cpu(input, Cut.effects.resolve(type, params), { width: W, height: H, pxScale: 1, frame }));
+      let over3 = 0;
+      for (let i = 0; i < got.length; i += 4) for (let k = 0; k < 3; k++) if (Math.abs(got[i + k] - want[i + k]) > 3) over3++;
+      out.push({ type, params, frame, ...__eng.diff(got, want), over3, changed: __eng.diff(got, plain).mean });
+    }
+    // Grain and glitch are a function of the frame: any time inside a frame, and another compositor (an export makes
+    // its own), give the same picture; the next frame another one.
+    const frameLook = {};
+    const clip0 = () => hist.project.sequences[0].clips.find((x) => x.id === cid);
+    for (const [type, params] of [['noise.grain', { amount: 50 }], ['glitch', { amount: 80, shift: 16, bandHeight: 4, hold: 1 }]]) {
+      for (const e of [...clip0().effects]) hist.do(Cut.commands.removeEffect(seq, cid, e.id));
+      hist.do(Cut.commands.addEffect(seq, cid, type, null, params));
+      const F = Cut.time.frameTicks([30, 1]);
+      await comp.render(hist.project, seq, 7 * F);
+      const start = await comp.readPixels();
+      await comp.render(hist.project, seq, 7 * F + F * 0.6);
+      const inside = await comp.readPixels();
+      await comp.render(hist.project, seq, 8 * F);
+      const next = await comp.readPixels();
+      const cOther = __eng.canvas(W, H);
+      const other = await Cut.compositor.create(cOther, { width: W, height: H });
+      await other.render(hist.project, seq, 7 * F);
+      const fresh = await other.readPixels();
+      await other.idle();
+      other.destroy();
+      frameLook[type] = { inside: __eng.diff(start, inside).max, fresh: __eng.diff(start, fresh).max, next: __eng.diff(start, next).mean };
     }
     // Edge extend: a half-size picture with its edges stretched to the frame instead of black around it.
     for (const e of [...hist.project.sequences[0].clips[0].effects]) hist.do(Cut.commands.removeEffect(seq, cid, e.id));
@@ -551,7 +585,7 @@ try {
     out.push({ type: 'edge.extend', corner: __eng.px(small, W, W - 1, H - 1), extendedCorner: __eng.px(extended, W, W - 1, H - 1), edge: __eng.px(small, W, 47, 26), centerSame: __eng.diff(__eng.px(small, W, 32, 18), __eng.px(extended, W, 32, 18)).max });
     const errors = comp.errors.slice();
     comp.destroy();
-    return { out, errors };
+    return { out, errors, missing, frameLook };
   })()`);
   const noneCase = fxr.out[0];
   check(noneCase.max <= 2, `the image without effects comes out as it went in (max diff ${noneCase.max})`);
@@ -560,7 +594,15 @@ try {
       check(r.corner.every((v) => v === 0) && S(r.extendedCorner) === '[252,245,224]' && r.centerSame <= 1, `edge.extend fills the frame around a smaller picture with its edge (${S(r.corner)} -> ${S(r.extendedCorner)}, the picture's corner pixel is [252,245,224])`);
       continue;
     }
-    check(r.max <= 3 && r.mean <= 0.6 && r.changed > 1, `${r.type} ${S(r.params)}: GPU = CPU reference (max ${r.max}, mean ${r.mean.toFixed(3)}), changes the picture (${r.changed.toFixed(1)})`);
+    // Lens distortion samples between texels at positions that vary continuously. The sampler's bilinear weights have 8
+    // bits: on the test picture's hard edges a dark pixel lands up to 4 codes from the exact reference (and within 1 of a
+    // CPU tap with weights rounded to 1/256), so a few values may pass 3.
+    const sub = r.type === 'distort.lens';
+    check((sub ? r.max <= 6 && r.over3 <= 12 : r.max <= 3) && r.mean <= 0.6 && r.changed > 1, `${r.type} ${S(r.params)}${r.frame ? ` at frame ${r.frame}` : ''}: GPU = CPU reference (max ${r.max}${sub ? `, ${r.over3} values over 3` : ''}, mean ${r.mean.toFixed(3)}), changes the picture (${r.changed.toFixed(1)})`);
+  }
+  check(fxr.missing.length === 0, `every video effect of the registry is checked against its CPU reference (missing ${S(fxr.missing)})`);
+  for (const [type, f] of Object.entries(fxr.frameLook)) {
+    check(f.inside === 0 && f.fresh === 0 && f.next > 0.5, `${type} is a function of the frame: the same at 0.6 of the frame and from a new compositor (max diff ${f.inside}, ${f.fresh}), different on the next frame (${f.next.toFixed(2)})`);
   }
   check(fxr.errors.length === 0, `no WebGPU validation errors (${S(fxr.errors)})`);
 
@@ -568,13 +610,13 @@ try {
   const tr = await js(`(async () => {
     const S1 = 254016000000;
     const out = {};
-    for (const [type, params] of [['dissolve', {}], ['dip.black', {}], ['dip.white', {}], ['push', { direction: 'left' }], ['wipe', { direction: 'fromLeft' }]]) {
+    for (const [type, params] of [['dissolve', {}], ['dip.black', {}], ['dip.white', {}], ['push', { direction: 'left' }], ['wipe', { direction: 'fromLeft' }], ['slide', { direction: 'left' }], ['iris.round', {}], ['zoom.cross', {}]]) {
       const hist = __eng.history(640, 360);
       const seq = hist.project.sequences[0].id;
       hist.do(Cut.commands.addGenerated(seq, { track: 'V1', at: 0, duration: S1, source: { generator: 'solid', color: '#ff0000' } }));
       hist.do(Cut.commands.addGenerated(seq, { track: 'V1', at: S1, duration: S1, source: { generator: 'solid', color: '#0000ff' } }));
       hist.do(Cut.commands.addTransition(seq, { track: 'V1', at: S1, type, duration: S1 / 3, align: 'center', params }));
-      const at = async (t) => { await __comp.render(hist.project, seq, t); const p = await __comp.readPixels(); return [__eng.px(p, 640, 100, 180), __eng.px(p, 640, 540, 180)]; };
+      const at = async (t) => { await __comp.render(hist.project, seq, t); const p = await __comp.readPixels(); return [__eng.px(p, 640, 100, 180), __eng.px(p, 640, 540, 180), __eng.px(p, 640, 320, 180), __eng.px(p, 640, 2, 2)]; };
       out[type] = { mid: await at(S1), before: await at(S1 - S1 / 6 - S1 / 30), after: await at(S1 + S1 / 6), start: await at(S1 - S1 / 6) };
     }
     return out;
@@ -586,6 +628,53 @@ try {
   check(close(tr['dip.black'].mid[0], [0, 0, 0]) && close(tr['dip.white'].mid[0], [255, 255, 255]), `dips are black / white at the middle (${S(tr['dip.black'].mid[0])}, ${S(tr['dip.white'].mid[0])})`);
   check(close(tr.push.mid[0], [255, 0, 0]) && close(tr.push.mid[1], [0, 0, 255]), `push left half way: A left, B right (${S(tr.push.mid)})`);
   check(close(tr.wipe.mid[0], [0, 0, 255]) && close(tr.wipe.mid[1], [255, 0, 0]), `wipe from left half way: B left, A right (${S(tr.wipe.mid)})`);
+  check(close(tr.slide.mid[0], [255, 0, 0]) && close(tr.slide.mid[1], [0, 0, 255]), `slide left half way: A still on the left, B in from the right (${S(tr.slide.mid)})`);
+  check(close(tr['iris.round'].mid[2], [0, 0, 255]) && close(tr['iris.round'].mid[3], [255, 0, 0]) && close(tr['iris.round'].mid[0], [255, 0, 0]), `iris round half way: B in the middle, A in the corner and at 0.6 of the radius (${S(tr['iris.round'].mid)})`);
+  check(close(tr['zoom.cross'].mid[2], [enc(0.5), 0, enc(0.5)]) && close(tr['zoom.cross'].mid[3], [enc(0.5), 0, enc(0.5)]), `cross zoom half way: the linear average everywhere (${S(tr['zoom.cross'].mid)})`);
+  for (const t of ['slide', 'iris.round', 'zoom.cross']) check(close(tr[t].before[2], [255, 0, 0]) && close(tr[t].after[3], [0, 0, 255]) && close(tr[t].start[3], [255, 0, 0]), `${t}: A before, A at its first frame, B after`);
+
+  // ---- every video transition against its CPU reference on two pictures ----
+  const trr = await js(`(async () => {
+    const W = 64, H = 36, S1 = 254016000000;
+    const pa = await __eng.write('tr-a.png', await __eng.png(W, H, (g) => {
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { g.fillStyle = 'rgb(' + Math.round(x * 4) + ',' + Math.round(y * 7) + ',' + Math.round(((x + y) % 9) * 28) + ')'; g.fillRect(x, y, 1, 1); }
+      g.fillStyle = '#ffffff'; g.fillRect(28, 14, 8, 8);
+    }));
+    const pb = await __eng.write('tr-b.png', await __eng.png(W, H, (g) => {
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { g.fillStyle = 'rgb(' + (255 - x * 4) + ',' + ((x * y) % 256) + ',' + Math.round(y * 7) + ')'; g.fillRect(x, y, 1, 1); }
+    }));
+    const cases = [['dissolve', {}], ['dip.black', {}], ['dip.white', {}], ['push', { direction: 'up' }], ['wipe', { direction: 'fromRight', feather: 20 }],
+      ['slide', { direction: 'right' }], ['slide', { direction: 'down' }], ['iris.round', { feather: 15 }], ['iris.round', { direction: 'close', feather: 10 }], ['zoom.cross', {}], ['zoom.cross', { zoom: 150 }]];
+    const missing = Cut.effects.transitions('video').map((d) => d.type).filter((t) => !cases.some((c) => c[0] === t));
+    const c = __eng.canvas(W, H);
+    const comp = await Cut.compositor.create(c, { width: W, height: H });
+    const out = [];
+    for (const [type, params] of cases) {
+      const hist = __eng.history(W, H);
+      const seq = hist.project.sequences[0].id;
+      const [ma, mb] = await __eng.importAll(hist, [pa, pb]);
+      hist.do(Cut.commands.place(seq, { source: { media: ma }, at: 0, out: S1, video: 'V1', audio: null }));
+      hist.do(Cut.commands.place(seq, { source: { media: mb }, at: S1, out: S1, video: 'V1', audio: null }));
+      hist.do(Cut.commands.addTransition(seq, { track: 'V1', at: S1, type, duration: S1 / 3, align: 'center', params }));
+      const ia = __eng.linearOf((await Cut.media.open(hist.project, ma)).image);
+      const ib = __eng.linearOf((await Cut.media.open(hist.project, mb)).image);
+      const def = Cut.effects.get(type);
+      for (const t of [S1 - S1 / 12, S1, S1 + S1 / 10]) {
+        const layer = Cut.compositor.plan(hist.project, hist.project.sequences[0], t).find((l) => l.kind === 'transition');
+        await comp.render(hist.project, seq, t);
+        const got = await comp.readPixels();
+        const want = __eng.encode(def.cpu(ia, ib, layer.progress, Cut.effects.resolve(type, params)));
+        out.push({ type, params, progress: +layer.progress.toFixed(3), ...__eng.diff(got, want), fromA: __eng.diff(got, __eng.encode(ia)).mean, fromB: __eng.diff(got, __eng.encode(ib)).mean });
+      }
+    }
+    const errors = comp.errors.slice();
+    await comp.idle();
+    comp.destroy();
+    return { out, missing, errors };
+  })()`);
+  for (const r of trr.out) check(r.max <= 3 && r.mean <= 0.6 && r.fromA > 1 && r.fromB > 1, `${r.type} ${S(r.params)} at ${r.progress}: GPU = CPU reference (max ${r.max}, mean ${r.mean.toFixed(3)}), neither picture alone (${r.fromA.toFixed(1)}, ${r.fromB.toFixed(1)})`);
+  check(trr.missing.length === 0, `every video transition of the registry is checked against its CPU reference (missing ${S(trr.missing)})`);
+  check(trr.errors.length === 0, `no WebGPU validation errors in the transitions (${S(trr.errors)})`);
 
   // ---- text: Korean through FontFace, captions ----
   const tx = await js(`(async () => {
@@ -837,7 +926,21 @@ try {
     h2.do(P.addTransition(s2, { track: 'V1', at: 254016000000, type: 'dissolve', duration: 254016000000 / 3, align: 'center' }));
     await comp2.render(h2.project, s2, 254016000000);
     const d = await comp2.readPixels();
-    return { backend: comp2.backend, red2d: __eng.bbox(a, 640, 360, red), redGpu: __eng.bbox(b, 640, 360, red), text2d: __eng.bbox(a, 640, 360, white), textGpu: __eng.bbox(b, 640, 360, white), mean: __eng.diff(a, b).mean, dissolve: __eng.px(d, 640, 320, 180) };
+    // An effect 2D cannot do is left out (the chroma key draws the green unkeyed); one with a CSS filter is drawn.
+    const h3 = __eng.history(640, 360);
+    const s3 = h3.project.sequences[0].id;
+    const g3 = h3.do(P.addGenerated(s3, { track: 'V1', at: 0, duration: 254016000000, source: { generator: 'solid', color: '#00ff00' } })).id;
+    h3.do(P.addEffect(s3, g3, 'key.chroma'));
+    h3.do(P.addEffect(s3, g3, 'noise.grain', null, { amount: 80 }));
+    await comp2.render(h3.project, s3, 0);
+    const keyed2d = __eng.px(await comp2.readPixels(), 640, 320, 180);
+    await __comp.render(h3.project, s3, 0);
+    const keyedGpu = __eng.px(await __comp.readPixels(), 640, 320, 180);
+    h3.do(P.addEffect(s3, g3, 'color.invert'));
+    await comp2.render(h3.project, s3, 0);
+    const inverted2d = __eng.px(await comp2.readPixels(), 640, 320, 180);
+    return { backend: comp2.backend, red2d: __eng.bbox(a, 640, 360, red), redGpu: __eng.bbox(b, 640, 360, red), text2d: __eng.bbox(a, 640, 360, white), textGpu: __eng.bbox(b, 640, 360, white), mean: __eng.diff(a, b).mean, dissolve: __eng.px(d, 640, 320, 180),
+      keyed2d, keyedGpu, inverted2d, errors2d: comp2.errors.slice() };
   })()`);
   const boxNear = (a, b, e) => a && b && a.every((v, i) => Math.abs(v - b[i]) <= e);
   check(two.backend === '2d', 'the 2D fallback can be chosen');
@@ -846,6 +949,8 @@ try {
   check(two.mean < 3, `2D and WebGPU pictures nearly match (mean diff ${two.mean.toFixed(2)})`);
   // Canvas 2D mixes the stored sRGB values (not linear light): the midpoint is half of 255.
   check(Math.abs(two.dissolve[0] - 127.5) <= 2 && Math.abs(two.dissolve[2] - 127.5) <= 2 && two.dissolve[1] < 4, `2D dissolve mixes the two clips at the midpoint, in sRGB values (${S(two.dissolve)})`);
+  check(S(two.keyed2d) === '[0,255,0]' && S(two.keyedGpu) === '[0,0,0]' && two.errors2d.length === 0, `an effect 2D cannot do is left out: the green stays unkeyed in 2D (${S(two.keyed2d)}), keyed to the black background in WebGPU (${S(two.keyedGpu)})`);
+  check(S(two.inverted2d) === '[255,0,255]', `2D draws invert with its CSS filter: green -> magenta (${S(two.inverted2d)})`);
 
   // ---- the player: 1080p30 H.264 for 10 s, seeks, dropped frames, no frame left open ----
   const perfClip = await js(`(async () => {

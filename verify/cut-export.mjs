@@ -455,6 +455,22 @@ if (want('cancel')) {
   check(!r.ok && r.code === 'cancelled' && r.partSeen, `cancel at a quarter: ${S(r)}`);
   const left = await js(`Promise.all([ide.api.invoke('cut:stat', ${S(out)}), ide.api.invoke('cut:stat', ${S(`${out}.part`)})])`);
   check(left.every((x) => x.missing) && !existsSync(out) && !existsSync(`${out}.part`), `cancel leaves no file and no part file (${S(left)})`);
+
+  // a decoder that takes the video but never gives a frame (a codec this PC accepts and cannot decode): the export
+  // fails and names the codec, instead of staying at 0 % (a proxy job sat there for good)
+  const stuckOut = P('stuck.mp4');
+  const stuck = await js(`(async () => {
+    const p = __cx.projects.s1;
+    const orig = Cut.decoder.createFrameSource;
+    Cut.decoder.createFrameSource = (...a) => { const s = orig(...a); s.frameAt = () => new Promise(() => {}); return s; };
+    const t0 = performance.now();
+    try {
+      const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(stuckOut)}, preset: '720p', backend: __cx.backend, frameLimitMs: 1500 });
+      return { ok: r.ok, code: r.code, error: String(r.error || ''), ms: Math.round(performance.now() - t0) };
+    } finally { Cut.decoder.createFrameSource = orig; }
+  })()`);
+  check(!stuck.ok && stuck.code === 'decode' && /codec avc1/.test(stuck.error) && stuck.ms < 15000 && !existsSync(stuckOut) && !existsSync(`${stuckOut}.part`),
+    `a decoder that never gives a frame ends the export with the codec named, and no file (${S(stuck)})`);
 }
 
 if (want('loudness')) {

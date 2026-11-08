@@ -49,6 +49,7 @@
     'not-in-function': () => tr('The selected expression is not inside a function body.'),
     'select-code': () => tr('Select a code fragment to extract.'),
     'invalid-name': (p) => tr("'{name}' is not a valid identifier", p),
+    'file-name': (p) => p.text, // ide.util.badName's reason, already translated
     'name-exists': (p) => tr("'{name}' is already defined in this scope.", p),
     'no-inline-target': () => tr('Caret should be positioned at a local variable, function or method to inline.'),
     'assigned-more-than-once': () => tr('The variable is assigned more than once, so it cannot be inlined.'),
@@ -869,7 +870,11 @@
       collect: () => {
         const n = name.value.trim();
         if (!n) throw new RefactorError('empty-name');
-        if (/[\\/:*?"<>|]/.test(n)) throw new RefactorError('invalid-name', { name: n });
+        if (/[\\/]/.test(n)) throw new RefactorError('invalid-name', { name: n });
+        // The names the project tree refuses (a stream a:b, a trailing dot, CON...), in the same words: main refused
+        // them too, but in English.
+        const refused = ide.util.badName?.(n);
+        if (refused) throw new RefactorError('file-name', { text: refused });
         return { target: entry.path, name: n };
       },
       plain: (params) => (params.name === entry.name ? () => {} : plain(params)),

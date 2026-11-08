@@ -35,7 +35,7 @@ npm start -- --mode=craft
 | --- | --- |
 | `index.js` | 내 서버 카드(시작, 정지, 공유, Market, 클라이언트 팩, 리소스 팩, 플레이어, 설정, 폴더), 새 서버 대화상자, 드롭 받기 |
 | `screen.js` | `#craftHost`의 전체 화면과 왼쪽 목록 |
-| `craft.js` | 플레이(인스턴스 카드, 모드 목록, 새 인스턴스)와 서버 참여(참여 코드, 주소, 참여) |
+| `craft.js` | 플레이(인스턴스 카드, 모드 목록, 모드 한국어 번역, 새 인스턴스)와 서버 참여(참여 코드, 주소, 참여) |
 | `market.js` | Modrinth를 상점처럼 보여 주는 Market |
 | `server-settings.js` | 서버 설정 탭(섹션, 검색, 화이트리스트, op, 안티 엑스레이, 모드 번역) |
 | `players.js`, `players-drag.js`, `players-bridge.js` | 플레이어 탭, 인벤토리 끌기, 상세 기록(NanoBridge) 설치 |
@@ -47,12 +47,13 @@ npm start -- --mode=craft
 | --- | --- |
 | `main/features/minecraft.js` | `minecraft:*` IPC 등록, 서버 만들기와 실행 |
 | `main/minecraft/sources.js` | Paper, Purpur, Vanilla, Fabric, Forge, NeoForge, Velocity의 버전과 다운로드 주소. `base()`로 테스트 대역 주소를 받습니다 |
-| `main/minecraft/launcher.js` | 인스턴스, 로더 설치, 공식 런처 프로필과 실행, 참여 코드, 팩 동기화 |
+| `main/minecraft/launcher.js` | 인스턴스, 로더 설치, 공식 런처 프로필과 실행, 참여 코드, 팩 동기화, 인스턴스 모드 번역과 `options.txt` |
+| `main/minecraft/hosts.js` | 이름이 이 컴퓨터나 내 네트워크로 풀리는지(참여 코드 주소, 팩 주소) |
 | `main/minecraft/market.js` | Modrinth 검색과 설치, 업데이트, 제거 |
 | `main/minecraft/imports.js` | 드롭한 파일과 폴더, 모드팩(.mrpack) 가져오기 |
 | `main/minecraft/server-settings.js` | `server.properties`, 화이트리스트, op 읽기와 쓰기(`readProperties`, `writeProperties`) |
 | `main/minecraft/anti-xray.js` | Paper 안티 엑스레이 설정 파일 고치기 |
-| `main/minecraft/translate.js` | 모드 문구 한국어 번역(Claude Code CLI) |
+| `main/minecraft/translate.js` | 모드 문구 한국어 번역(Claude Code CLI). 서버의 `resourcepack/`과 인스턴스의 `resourcepacks/Nano Studio Korean/`에 씁니다 |
 | `main/minecraft/templates.js` | 리소스 팩 `pack.mcmeta`, Velocity 연결 |
 | `main/minecraft/file-server.js` | 클라이언트 팩과 리소스 팩을 루프백 http로 제공 |
 | `main/minecraft/ping.js`, `serversdat.js` | 서버 목록 핑, 게임의 `servers.dat` |
@@ -81,6 +82,8 @@ npm start -- --mode=craft
 - Store 런처는 인자를 받지 않고 `%APPDATA%\.minecraft`만 씁니다.
 - 참여 코드는 `nanostudio:join?addr=…&pack=…&name=…`이고, 붙여 넣기로만 받습니다. 프로토콜 핸들러를 등록하지 않습니다.
 - 팩 주소는 https만, 팩 파일은 .mrpack 형식이 허용하는 호스트에서만 받습니다. 테스트 대역(`PYIDE_MC_SOURCES`)의 정확한 origin만 예외입니다.
+- 팩 주소와 리디렉트가 가는 호스트, 붙여 넣은 참여 코드의 주소는 이름을 풀어 봅니다(`hosts.js`). 주소 하나라도 이 컴퓨터나 내 네트워크면 팩은 거부하고 코드는 먼저 묻습니다.
+- 인스턴스 번역은 `options.txt`의 `resourcePacks`에 팩을 켭니다. 게임은 시작할 때 이 파일을 읽고 닫을 때 다시 쓰므로, 그 인스턴스의 게임이 실행 중이면 쓰지 않습니다.
 
 ### Market
 
@@ -115,6 +118,10 @@ npm start -- --mode=craft
 | `PYIDE_MC_STORE` | Microsoft Store 런처 |
 | `PYIDE_MC_LAUNCHER_IMAGE`, `PYIDE_MC_GAME_IMAGE` | 런처와 게임이 열려 있는지 볼 프로세스 이름 |
 | `PYIDE_MC_JAVA` | 서버를 돌릴 Java |
+| `PYIDE_MC_DNS` | DNS(`hosts.js`의 이름 풀기). JSON 객체에 없는 이름은 찾지 못한 것으로 봅니다 |
+| `PYIDE_CLAUDE_PATH` | 번역의 Claude Code CLI(물은 것을 기록하고 정해진 한국어로 답하는 node 스크립트) |
+
+참여 코드나 팩 주소를 다루는 테스트에는 `PYIDE_MC_DNS`를 줍니다. 안 주면 `mc.example.test` 같은 테스트 주소를 실제 DNS에 묻습니다. Node 테스트는 `dns.promises.lookup`이 불리면 실패로 셉니다.
 
 대역 런처를 쓰는 창에는 `PYIDE_MC_LAUNCHER_IMAGE`도 줍니다. 안 주면 사용자의 실제 런처가 열려 있을 때 결과가 바뀌고, 테스트가 사용자의 런처를 닫을 수 있습니다.
 
@@ -123,7 +130,10 @@ npm start -- --mode=craft
 | 테스트 | 내용 |
 | --- | --- |
 | `verify/minecraft-launcher-core.mjs`, `minecraft-content-core.mjs`, `minecraft-server-core.mjs` | 일반 Node. 메인 모듈을 IPC째 시험 |
-| `verify/minecraft-launcher.mjs` | 인스턴스, 플레이, 참여, 팩 동기화, Craft 화면 |
+| `verify/minecraft-launcher-core.mjs`의 인스턴스 번역 | 대역 Claude로 `resourcepacks/Nano Studio Korean`에 쓰기, 클라이언트 jar의 팩 형식, `options.txt`(사용자 팩의 순서와 다른 줄과 CRLF 유지, 줄과 파일 만들기, 목록이 아닌 줄은 그대로), 손상된 팩 파일 거부, 1.13 미만 거부, 그 인스턴스의 게임이 실행 중이면 거부, 번역 중에 시작한 게임은 다음 Play에서 켜기 |
+| `verify/minecraft-content-core.mjs`의 Market 리소스 팩 | 팩이 낸 그대로의 언어 파일 복사본(`.nano/pack-lang`), 업데이트와 제거 뒤 우리 줄과 사용자가 고친 줄만 남기 |
+| `verify/private-share.mjs`의 이름 검사 | 루프백·LAN·링크 로컬·IPv4 매핑 주소로 풀리는 이름, SRV 레코드, 그런 이름의 팩과 리디렉트를 방어를 뺀 사본과 함께 시험. 실제 DNS는 묻지 않습니다 |
+| `verify/minecraft-launcher.mjs` | 인스턴스, 플레이, 참여, 팩 동기화, Craft 화면, 인스턴스 카드의 한국어 번역(대역 Claude, 취소, `options.txt`) |
 | `verify/minecraft.mjs` | 서버 만들기, 실행, 드롭, Market, 설정, 리소스 팩, 프록시 |
 | `verify/minecraft-players-core.mjs`, `minecraft-players-actions.mjs`, `minecraft-players.mjs` | 로그 해석, 동작 명령, 플레이어 탭 화면 |
 | `verify/minecraft-antixray.mjs`, `minecraft-antixray-ui.mjs` | 안티 엑스레이 파일 고치기와 화면 |

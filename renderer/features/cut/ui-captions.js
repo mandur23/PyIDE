@@ -58,8 +58,9 @@
   }
 
   // An SRT (or VTT) file -> its captions replace those of the shown track (one undo step). -> the item count.
-  async function importFile(app, path) {
-    if (!app.sequence) return 0;
+  // newTrack: a track of its own (a file dropped in): the chosen track and its captions are left as they are.
+  async function importFile(app, path, { newTrack = false } = {}) {
+    if (!app.sequence) { ui.toast(tr('Open a sequence to import captions into.')); return 0; }
     let items;
     try {
       const text = await readText(path);
@@ -70,7 +71,7 @@
     }
     if (!items.length) { ui.toast(tr('The file has no captions.')); return 0; }
     const seq = app.sequence;
-    const existing = trackOf(app);
+    const existing = newTrack ? null : trackOf(app);
     app.history.begin(tr('Import Captions'));
     try {
       const id = existing?.id || app.history.do(C().addCaptionTrack(seq.id, { name: ui.basename(path).replace(/\.[^.]+$/, ''), lang: i18n?.locale === 'ko' ? 'ko' : 'en' })).id;

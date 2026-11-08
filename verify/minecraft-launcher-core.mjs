@@ -6,7 +6,7 @@
 // allows, or from the PYIDE_MC_SOURCES stand-in's origin only. Then what goes wrong: a mod held by a running game (a
 // real exclusive lock from PowerShell), a sync that crashed half-way, staging folders left behind, a dead mirror, a
 // pack too large for the disk, a pack that cannot be fetched, damaged instances, one name made twice at once, a broken
-// servers list. Consent: a server's pack applied only after the user agrees to its SHA-1, asked again when it changes,
+// servers list. An instance's mods into Korean: its own resource pack, options.txt turning it on, a running game. Consent: a server's pack applied only after the user agrees to its SHA-1, asked again when it changes,
 // and typed pack addresses under the join code's rule. Archives that lie about their sizes or share their data, and a
 // server's modpack keeping to the allowed hosts. The Store launcher (no --workDir, its own profiles file), the server
 // list ping against stand-in TCP servers (real answers and garbage), retries of a service, a download's limit and the
@@ -38,6 +38,14 @@ const readJsonEntry = (file) => require('../main/minecraft/zipfile.js').readEntr
 const work = mkdtempSync(path.join(tmpdir(), 'pyide-mclauncher-core-'));
 process.on('exit', () => { try { rmSync(work, { recursive: true, force: true }); } catch {} });
 delete process.env.PYIDE_MC_SOURCES;
+// Names are looked up in this stand-in (main/minecraft/hosts.js), never in the real DNS, which would also fail the run.
+process.env.PYIDE_MC_DNS = S({ 'packs.example': ['203.0.113.10'], 'packs.redirect.test': ['203.0.113.11'], 'loop.example.test': ['127.0.0.1'], 'lan.example.test': ['203.0.113.12', '192.168.1.20'] });
+const realDns = [];
+{
+  const dns = require('dns');
+  dns.promises.lookup = async (name) => { realDns.push(name); throw new Error(`the real DNS was asked for ${name}`); };
+  dns.promises.resolveSrv = async (name) => { realDns.push(name); throw new Error(`the real DNS was asked for ${name}`); };
+}
 const noop = path.join(work, 'launcher.cjs');
 write(noop, '');
 process.env.PYIDE_MC_LAUNCHER = S([process.execPath, noop]);
@@ -434,6 +442,115 @@ try {
   check(await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: running }) === true && await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: 'no-such-launcher.exe' }) === false, `a running launcher is told from none by its process name (${running})`);
   check(await L.launcherOpen({ PYIDE_MC_LAUNCHER_IMAGE: running, SystemRoot: path.join(work, 'nowhere') }) === null, 'tasklist runs from the system folder by its full path, so a planted one is never found on the way, and no answer is neither open nor closed');
 
+  // ---------- Korean for an instance's mods ----------
+  // translate.js into resourcepacks/Nano Studio Korean, turned on in options.txt; translate is a stand-in for Claude.
+  {
+    const KO = 'Nano Studio Korean';
+    const optionsOf = (name) => path.join(instDir(name), 'options.txt');
+    const koPack = (name) => path.join(instDir(name), 'resourcepacks', KO);
+    const koFile = (name) => path.join(koPack(name), 'assets', 'tm', 'lang', 'ko_kr.json');
+    const textOf = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
+    const WORDS = { Gem: '보석', 'Ore of %s': '%s 광석', 'Shiny %s': '반짝이는', Ruby: '루비' };
+    const asked = [];
+    const translate = async (system, prompt) => { asked.push(JSON.parse(prompt)); return `Here: ${S(Object.fromEntries(Object.entries(JSON.parse(prompt)).map(([k, v]) => [k, WORDS[v] || v])))}`; };
+    const withMods = async (name, mc = '1.20.1') => {
+      await craft.create(root, { name, mc, loader: 'vanilla' }, log);
+      write(path.join(instDir(name), 'mods', 'tm.jar'), writeZip([
+        { name: 'assets/tm/lang/en_us.json', data: Buffer.from(S({ 'item.tm.gem': 'Gem', 'block.tm.ore': 'Ore of %s', 'item.tm.shiny': 'Shiny %s', 'itemGroup.tm': 'Test Mod' })) },
+        { name: 'assets/tm/lang/ko_kr.json', data: Buffer.from(S({ 'itemGroup.tm': '테스트 모드' })) }]));
+      write(path.join(instDir(name), 'mods', 'off.jar.disabled'), writeZip([{ name: 'assets/off/lang/en_us.json', data: Buffer.from(S({ 'item.off.a': 'Off' })) }]));
+    };
+    await withMods('ko');
+    const st0 = craft.koreanStatus(root, 'ko');
+    const before = await errOf(() => craft.translateKorean(root, 'ko', { translate, log }));
+    check(st0.missing === 3 && st0.mods.length === 1 && st0.lines === 0 && st0.enabled === false && before?.code === 'notPlayed' && !asked.length && !existsSync(koPack('ko')),
+      `an instance's status counts the lines its enabled mods lack in Korean; before the launcher has its Minecraft (the pack format) nothing is asked or made (${S(st0)}; ${before?.message})`);
+    // The client jar the launcher downloads at the first Play: its version.json gives the pack format.
+    write(path.join(launcherDir, 'versions', '1.20.1', '1.20.1.jar'), writeZip([{ name: 'version.json', data: Buffer.from(S({ id: '1.20.1', pack_version: { resource: 15, data: 15 } })) }]));
+    const userOptions = 'version:3465\r\nlang:ko_kr\r\nresourcePacks:["vanilla","fabric","file/Mine.zip","file/Second Pack"]\r\nincompatibleResourcePacks:[]\r\nfov:0.0\r\n';
+    write(optionsOf('ko'), userOptions);
+    const r1 = await craft.translateKorean(root, 'ko', { translate, log });
+    const lines1 = readJson(koFile('ko'));
+    const meta = readJson(path.join(koPack('ko'), 'pack.mcmeta'));
+    check(r1.translated === 2 && r1.rejected === 1 && S(lines1) === S({ 'item.tm.gem': '보석', 'block.tm.ore': '%s 광석' }) && meta.pack?.pack_format === 15 && S(Object.keys(asked[0])) === S(['item.tm.gem', 'block.tm.ore', 'item.tm.shiny']),
+      `Translate writes Claude's lines into resourcepacks/${KO} with a pack.mcmeta of the instance's format, refusing the answer that lost its %s (${S({ r1, lines1, meta })})`);
+    check(r1.enabled === 'added' && textOf(optionsOf('ko')) === userOptions.replace('"fabric","file/Mine.zip"', `"fabric","file/${KO}","file/Mine.zip"`),
+      `the pack is turned on in options.txt below the user's packs, which keep their order, with every other line and the CRLF line ends kept (${S(textOf(optionsOf('ko')))})`);
+    write(koFile('ko'), S({ ...lines1, 'item.tm.gem': '빛나는 보석' }));
+    const r2 = await craft.translateKorean(root, 'ko', { translate, log });
+    check(asked.length === 2 && S(Object.keys(asked[1])) === S(['item.tm.shiny']) && readJson(koFile('ko'))['item.tm.gem'] === '빛나는 보석' && r2.enabled === 'on'
+      && textOf(optionsOf('ko')).split(`file/${KO}`).length === 2, 'translating again asks only for the line still missing, keeps the user\'s edit, and turns the pack on only once');
+
+    // options.txt without the line, and without the file (an instance never played).
+    await withMods('kofresh');
+    write(optionsOf('kofresh'), 'version:3465\nlang:en_us\n');
+    const fresh = await craft.translateKorean(root, 'kofresh', { translate, log });
+    await withMods('konew');
+    await craft.translateKorean(root, 'konew', { translate, log });
+    check(fresh.enabled === 'added' && textOf(optionsOf('kofresh')) === `version:3465\nlang:en_us\nresourcePacks:["vanilla","file/${KO}"]\n` && textOf(optionsOf('konew')) === `resourcePacks:["vanilla","file/${KO}"]\n`,
+      `a missing resourcePacks line is added with the game's own vanilla, and a missing options.txt is made (${S([textOf(optionsOf('kofresh')), textOf(optionsOf('konew'))])})`);
+
+    // What the user broke by hand is not written over.
+    await withMods('kobad');
+    write(koFile('kobad'), '{\n  "item.tm.gem": "내 줄",\n');
+    write(optionsOf('kobad'), userOptions);
+    const askedBefore = asked.length;
+    const badPack = await errOf(() => craft.translateKorean(root, 'kobad', { translate, log }));
+    check(badPack?.code === 'badPack' && badPack.message.includes(koFile('kobad')) && textOf(koFile('kobad')) === '{\n  "item.tm.gem": "내 줄",\n' && asked.length === askedBefore && textOf(optionsOf('kobad')) === userOptions
+      && (await errOf(() => craft.koreanStatus(root, 'kobad')))?.code === 'badPack', `a damaged ko_kr.json in the pack is refused with its name, nothing asked and nothing written (${badPack?.message})`);
+    await withMods('kooptions');
+    const brokenOptions = 'version:3465\nresourcePacks:vanilla,file/Mine.zip\n';
+    write(optionsOf('kooptions'), brokenOptions);
+    const damaged = await craft.translateKorean(root, 'kooptions', { translate, log });
+    check(damaged.translated === 2 && damaged.enabled === 'damaged' && textOf(optionsOf('kooptions')) === brokenOptions && craft.koreanStatus(root, 'kooptions').enabled === null,
+      `a resourcePacks line that is not a list is left as it is, and the result says the pack is not on (${damaged.enabled})`);
+    await craft.create(root, { name: 'koold', mc: '1.12.2', loader: 'vanilla' }, log);
+    check((await errOf(() => craft.translateKorean(root, 'koold', { translate, log })))?.code === 'oldVersion', 'an instance before 1.13, whose mods keep their text in .lang files, is refused');
+
+    // While the instance's game runs it writes options.txt when it closes: nothing is translated then, and a game that
+    // starts during a translation leaves the pack to be turned on at the next Play.
+    const gameScript = path.join(work, 'game.cjs');
+    write(gameScript, 'setInterval(() => {}, 1000);\n');
+    process.env.PYIDE_MC_GAME_IMAGE = path.basename(process.execPath);
+    const games = [];
+    const startGame = (dir) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [gameScript, '--username', 'Steve', '--gameDir', dir, '--assetsDir', path.join(launcherDir, 'assets')], { stdio: 'ignore' });
+      games.push(child);
+      child.once('spawn', () => resolve(child));
+      child.once('error', reject);
+    });
+    const stop = (child) => new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
+    try {
+      await withMods('koplay');
+      write(optionsOf('koplay'), userOptions);
+      const game = await startGame(instDir('koplay'));
+      const askedNow = asked.length;
+      const playing = await errOf(() => craft.translateKorean(root, 'koplay', { translate, log }));
+      check(playing?.code === 'playing' && asked.length === askedNow && !existsSync(koPack('koplay')) && textOf(optionsOf('koplay')) === userOptions,
+        `while the instance's game runs, translation is refused before anything is asked or written (${playing?.message})`);
+      // instances/koplay is the start of instances/koplay2: a game there is not this one's.
+      await withMods('koplay2');
+      const beside = await craft.translateKorean(root, 'koplay2', { translate, log });
+      check(beside.enabled === 'added', 'a game running in another instance, whose folder starts with this one\'s name, does not stop it');
+      await stop(game);
+
+      await withMods('kolate');
+      write(optionsOf('kolate'), userOptions);
+      let late = null;
+      const lateTranslate = async (system, prompt) => { late = await startGame(instDir('kolate')); return translate(system, prompt); };
+      const pending = await craft.translateKorean(root, 'kolate', { translate: lateTranslate, log });
+      check(pending.translated === 2 && pending.enabled === 'pending' && textOf(optionsOf('kolate')) === userOptions && existsSync(path.join(koPack('kolate'), 'nano-turn-on.txt')),
+        `a game started during the translation leaves options.txt alone, and the pack is marked to be turned on later (${pending.enabled})`);
+      await stop(late);
+      const played = await craft.play(root, 'kolate', {}, log);
+      check(played.launched && textOf(optionsOf('kolate')).includes(`"fabric","file/${KO}","file/Mine.zip"`) && !existsSync(path.join(koPack('kolate'), 'nano-turn-on.txt')),
+        `the next Play turns it on before the launcher starts (${S(textOf(optionsOf('kolate')))})`);
+    } finally {
+      for (const g of games) g.kill();
+      delete process.env.PYIDE_MC_GAME_IMAGE;
+    }
+  }
+
   // ---------- the server list ping ----------
   const P = require('../main/minecraft/ping.js');
   const said = (status) => { const { mc, loader } = P.summarize(status); return [mc, loader]; };
@@ -759,6 +876,7 @@ try {
 } catch (err) {
   check(false, err.stack || err.message);
 }
+check(!realDns.length, `no name was looked up in the real DNS (${S(realDns)})`);
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`${results.length - failed}/${results.length} passed`);
