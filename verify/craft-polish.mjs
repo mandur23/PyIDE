@@ -119,7 +119,8 @@ const pressAt = async (expr) => {
   await sleep(40);
 };
 // What a person sees of an element: it is drawn, and the spot at its middle is it.
-const seen = (expr) => js(`(() => { const n = ${expr}; if (!n || !n.getClientRects().length) return false; const r = n.getBoundingClientRect();
+// Brought into view first, as a person scrolls to it: on the CI runner's 1024x720 window a card added last is below it.
+const seen = (expr) => js(`(() => { const n = ${expr}; if (!n || !n.getClientRects().length) return false; n.scrollIntoView({ block: 'nearest' }); const r = n.getBoundingClientRect();
   const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!hit && (hit === n || n.contains(hit)); })()`);
 const choose = (id, value) => js(`(() => { const s = document.getElementById(${S(id)}); s.value = ${S(value)}; s.dispatchEvent(new Event('change')); return true; })()`);
 const valueOf = (id) => js(`document.getElementById(${S(id)})?.value`);

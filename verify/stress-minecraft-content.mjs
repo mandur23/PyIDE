@@ -198,8 +198,9 @@ try {
   const plugins = () => readdirSync(path.join(serverDir('pap'), 'plugins'));
   check(r.ok && S(plugins().sort()) === S(['UPPER.JAR', 'good-plugin.jar'])
     && ['truncated-plugin.jar', 'empty.jar', 'empty.zip', 'empty', 'huge-directory.zip', 'resource-pack.jar', 'plugin-as.zip'].every((n) => skippedOf(r, n)?.why === 'unknown')
-    && S(r.ok.modpacks) === S([truncPack, empties[2]]),
-  `truncated, empty and misnamed archives are skipped as unknown, the good plugins added (${S(r)})`);
+    // a server is made from one modpack at a time: the first opens the dialog (which reads it then), the next is said
+    && S(r.ok.modpacks) === S([truncPack]) && skippedOf(r, 'empty.mrpack')?.why === 'modpack',
+  `truncated, empty and misnamed archives are skipped as unknown, the good plugins added, one modpack opened (${S(r)})`);
   const truncInfo = await info({ file: truncPack });
   const emptyInfo = await info({ file: empties[2] });
   check(/is not a Modrinth modpack/.test(truncInfo.err) && /is not a Modrinth modpack/.test(emptyInfo.err), `a truncated or empty .mrpack: a clear error (${truncInfo.err} | ${emptyInfo.err})`);
