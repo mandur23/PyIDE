@@ -107,6 +107,37 @@ try {
   await press('Alt+Insert');
   const byKeys = await until(`ide.activeTab()?.title === 'by_keys.py'`, 'Alt+Insert file').then(() => true, () => false);
   check(byKeys && existsSync(path.join(t.project, 'docs', 'by_keys.py')), 'Alt+Insert still creates a Python file in the selected folder');
+
+  // Names Windows does not keep as typed are refused with the reason, before anything is made on disk: `bad:name.py`
+  // would be the stream name.py of a file `bad`, `notes.` would lose its dot, `aux` is a device.
+  const docsDir = path.join(t.project, 'docs');
+  const refusal = async (label) => {
+    const text = await until(`document.querySelector('.dialog-message')?.textContent`, label, 5000).then(() => js(`document.querySelector('.dialog-message').textContent`), () => '');
+    await press('Escape');
+    await until(`!document.querySelector('.dialog-message')`, 'refusal closed');
+    return text;
+  };
+  await js(`(ide.ui.prompt = async () => 'bad:name', ${row('docs')}.click(), document.getElementById('tree').focus(), true)`);
+  await press('Alt+Insert');
+  const colon = await refusal('refusal of a name with a colon');
+  check(colon === 'bad:name is not a valid name: Windows does not allow : in a name.' && !existsSync(path.join(docsDir, 'bad')) && !existsSync(path.join(docsDir, 'bad:name.py')),
+    `New Python File refuses a name with ":" and makes no file or stream (${q(colon)})`);
+  await js(`(ide.ui.prompt = async () => 'aux', ${row('docs')}.click(), true)`);
+  await t.click('button[title="New Directory"]');
+  const device = await refusal('refusal of a device name');
+  check(/^aux is not a valid name: Windows keeps it for a device\.$/.test(device), `New Directory refuses a device name (${q(device)})`);
+  await js(`(ide.ui.prompt = async () => 'notes.', ${row('notes.md')}.click(), document.getElementById('tree').focus(), true)`);
+  await press('Shift+F6');
+  const dot = await refusal('refusal of a trailing dot');
+  check(/ends with a dot or a space/.test(dot) && existsSync(path.join(docsDir, 'notes.md')) && !existsSync(path.join(docsDir, 'notes')),
+    `Rename refuses a name ending with a dot and leaves the file as it was (${q(dot)})`);
+  // Main refuses them from any other caller (file templates, plugins), as an expected error.
+  const errorsBefore = await js(`ide.api.invoke('diagnostics:errors').then((l) => l.length)`);
+  const backstop = await js(`Promise.all([ide.api.create(${q(path.join(docsDir, 'evil:zone'))}, false).then(() => 'made', (e) => e.message),
+    ide.api.rename(${q(path.join(docsDir, 'by_keys.py'))}, ${q(path.join(docsDir, 'spaced '))}).then(() => 'renamed', (e) => e.message)])`);
+  check(backstop.every((m) => /is not a valid file name on Windows/.test(m)) && !existsSync(path.join(docsDir, 'evil')) && existsSync(path.join(docsDir, 'by_keys.py'))
+    && (await js(`ide.api.invoke('diagnostics:errors').then((l) => l.length)`)) === errorsBefore,
+  `fs:create and fs:rename refuse such names too, with no IDE internal error (${q(backstop)})`);
   await js(`(ide.ui.prompt = window.__prompt, true)`);
 
   // Drag main.py onto docs: moves it after the confirmation. Drag a.py onto the editor: opens it there.

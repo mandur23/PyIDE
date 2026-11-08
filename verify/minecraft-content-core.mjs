@@ -9,8 +9,9 @@
 // server's name and settings; Forge and NeoForge installers checked with .sha1 when no .sha256 is published; a ping of a
 // private server leaves the game's join process running; a join code's key under another spelling; CGNAT addresses.
 // Usage: node verify/minecraft-content-core.mjs
+import { spawn } from 'child_process';
 import crypto from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import fsModule, { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -27,6 +28,15 @@ const sha1 = (b) => crypto.createHash('sha1').update(b).digest('hex');
 const errOf = async (step) => { try { await step(); return null; } catch (err) { return err; } };
 const filesUnder = (dir, at = '') => (existsSync(path.join(dir, at)) ? readdirSync(path.join(dir, at), { withFileTypes: true })
   .flatMap((e) => (e.isDirectory() ? filesUnder(dir, `${at}${e.name}/`) : [`${at}${e.name}`])).sort() : []);
+
+// A process whose working folder is dir, as a terminal opened there: Windows then refuses to rename dir or any folder
+// above it, and a recursive delete removes the files around it and stops.
+const holdFolder = (dir) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: dir, stdio: 'ignore' });
+  const gone = new Promise((r) => { child.once('exit', r); });
+  child.once('error', reject);
+  child.once('spawn', () => resolve({ release: () => { child.kill(); return gone; } }));
+});
 
 const work = mkdtempSync(path.join(tmpdir(), 'pyide-mccontent-core-'));
 process.on('exit', () => { try { rmSync(work, { recursive: true, force: true }); } catch {} });
@@ -62,6 +72,7 @@ const L = require('../main/minecraft/launcher.js');
 const { createMarket } = require('../main/minecraft/market.js');
 const { createImports } = require('../main/minecraft/imports.js');
 const { KINDS } = require('../main/minecraft/sources.js');
+const { readProperties } = require('../main/minecraft/server-settings.js');
 const zip = (entries) => writeZip(Object.entries(entries).map(([name, data]) => ({ name, data: Buffer.from(typeof data === 'string' ? data : S(data)) })));
 const KEY = crypto.randomBytes(32).toString('base64url');
 
@@ -278,6 +289,36 @@ try {
     await shop.install(alone, { id: 'RPL', type: 'resourcepack' }, () => {});
     await shop.remove(alone, 'RPL');
     check(!existsSync(path.join(alone, 'resourcepack')), `a pack whose only language files are its own goes entirely (${S(filesUnder(path.join(alone, 'resourcepack')))})`);
+
+    // A folder of the pack held open (a terminal inside it): Windows refuses to rename it and deletes it only part-way.
+    // The update and Remove stop with the pack whole; once it is let go, they work.
+    const heldDir = serverAt('held', { kind: 'paper', mc: '1.20.1', market: { RP: { title: 'RP', version: 'rp1', versionId: 'rp1', files: ['resourcepack'], needs: [], dependency: false } } });
+    write(path.join(heldDir, 'resourcepack', 'pack.mcmeta'), '{"pack":{"pack_format":15}}');
+    write(path.join(heldDir, 'resourcepack', 'assets', 'minecraft', 'textures', 'old.png'), 'old');
+    write(path.join(heldDir, 'resourcepack', 'assets', 'minecraft', 'textures', 'block', 'stone.png'), 'stone');
+    write(path.join(heldDir, 'resourcepack', 'assets', 'tm', 'lang', 'ko_kr.json'), S(ko));
+    const heldFiles = filesUnder(path.join(heldDir, 'resourcepack'));
+    const holder = await holdFolder(path.join(heldDir, 'resourcepack', 'assets', 'minecraft', 'textures', 'block'));
+    const heldUpdate = await errOf(() => shop.install(heldDir, { id: 'RP', type: 'resourcepack' }, () => {}));
+    const afterUpdate = filesUnder(path.join(heldDir, 'resourcepack'));
+    const heldRemove = await errOf(() => shop.remove(heldDir, 'RP'));
+    const afterRemove = filesUnder(path.join(heldDir, 'resourcepack'));
+    await holder.release();
+    const strays = () => readdirSync(heldDir).filter((n) => n !== 'resourcepack' && n !== 'pyide-server.json');
+    check(/in use/.test(heldUpdate?.message || '') && S(afterUpdate) === S(heldFiles) && record(heldDir).RP?.version === 'rp1' && !strays().length,
+      `an update whose old pack is held open stops with the pack whole and its record unchanged, and leaves no staging (${heldUpdate?.message}, ${S(afterUpdate)}, ${S(strays())})`);
+    check(/RP/.test(heldRemove?.message || '') && S(afterRemove) === S(heldFiles) && record(heldDir).RP && !strays().length,
+      `Remove of a pack held open leaves it whole and recorded (${heldRemove?.message}, ${S(afterRemove)})`);
+    // The new pack cannot move in after the old one moved aside: the old one goes back.
+    const renameSync = fsModule.renameSync;
+    fsModule.renameSync = (from, to) => { if (path.basename(from) === 'resourcepack.part') throw Object.assign(new Error(`EPERM: rename '${from}'`), { code: 'EPERM' }); return renameSync(from, to); };
+    let stuckIn;
+    try { stuckIn = await errOf(() => shop.install(heldDir, { id: 'RP', type: 'resourcepack' }, () => {})); } finally { fsModule.renameSync = renameSync; }
+    check(stuckIn?.code === 'EPERM' && S(filesUnder(path.join(heldDir, 'resourcepack'))) === S(heldFiles) && record(heldDir).RP?.version === 'rp1' && !strays().length,
+      `an update whose new pack cannot move in puts the old one back (${stuckIn?.message}, ${S(filesUnder(path.join(heldDir, 'resourcepack')))}, ${S(strays())})`);
+    const freed = await errOf(() => shop.install(heldDir, { id: 'RP', type: 'resourcepack' }, () => {}));
+    check(!freed && S(filesUnder(path.join(heldDir, 'resourcepack'))) === S(['assets/minecraft/textures/new.png', 'assets/tm/lang/ko_kr.json', 'pack.mcmeta']) && record(heldDir).RP?.version === 'rp2' && !strays().length,
+      `let go, the same update works and leaves no old folder beside it (${freed?.message}, ${S(strays())})`);
   }
 
   // ---------- imports ----------
@@ -372,7 +413,35 @@ try {
     write(path.join(folderPack, 'assets', 'minecraft', 'textures', 'folder.png'), 'folder');
     const r2 = await im.drop(card, [folderPack], () => {});
     check(r2.done.length === 1 && S(filesUnder(path.join(card, 'resourcepack'))) === S(['assets/minecraft/textures/folder.png', 'assets/tm/lang/ko_kr.json', 'pack.mcmeta']) && !existsSync(path.join(card, 'resourcepack.drop')),
-      `a dropped pack folder replaces a pack of the user's own the same way (${S(filesUnder(path.join(card, 'resourcepack')))})`);  }
+      `a dropped pack folder replaces a pack of the user's own the same way (${S(filesUnder(path.join(card, 'resourcepack')))})`);
+    const cardFiles = filesUnder(path.join(card, 'resourcepack'));
+    const cardHolder = await holdFolder(path.join(card, 'resourcepack', 'assets', 'minecraft', 'textures'));
+    const r3 = await im.drop(card, [dropped], () => {});
+    await cardHolder.release();
+    check(!r3.done.length && /in use/.test(r3.skipped[0]?.message || '') && S(filesUnder(path.join(card, 'resourcepack'))) === S(cardFiles) && S(readdirSync(card).sort()) === S(['pyide-server.json', 'resourcepack']),
+      `a pack dropped on a server whose pack is held open is skipped with the reason, the old pack whole (${S(r3.skipped)}, ${S(readdirSync(card))})`);
+
+    // A dropped world becomes level-name as Java reads the file: the last of two lines, one written with spaces.
+    write(path.join(card, 'server.properties'), 'motd=card\nlevel-name=world\nlevel-name = second\n');
+    write(path.join(work, 'drops', 'MyWorld', 'level.dat'), 'level');
+    const r4 = await im.drop(card, [path.join(work, 'drops', 'MyWorld')], () => {});
+    const cardProps = text(path.join(card, 'server.properties'));
+    check(r4.done[0]?.what === 'world' && readProperties(path.join(card, 'server.properties'))['level-name'] === 'MyWorld' && (cardProps.match(/level-name/g) || []).length === 1 && /^motd=card$/m.test(cardProps),
+      `a dropped world is the level-name the server reads, though the file gave the key twice (${S(cardProps)})`);
+    rmSync(path.join(card, 'MyWorld'), { recursive: true, force: true });
+    rmSync(path.join(card, 'server.properties'), { force: true });
+  }
+
+  // ---------- several modpacks dropped at once ----------
+  {
+    const root = path.join(work, 'imports-many');
+    const im = createImports({ root, servers: () => [], create: never, unfinished: {}, javaFor: never, javaOfJar: never, fetchFile, writeServer: never, readServer: () => null });
+    const packAt = (name) => { const p = path.join(work, 'many', name); write(p, zip({ 'modrinth.index.json': { formatVersion: 1, game: 'minecraft', versionId: '1', name, dependencies: { minecraft: '1.20.1', 'fabric-loader': '0.15.11' }, files: [] } })); return p; };
+    const [a, b, c] = ['One.mrpack', 'Two.mrpack', 'Three.mrpack'].map(packAt);
+    const r = await im.drop(null, [a, b, c], () => {});
+    check(S(r.modpacks) === S([a]) && S(r.skipped) === S([{ name: 'Two.mrpack', why: 'modpack' }, { name: 'Three.mrpack', why: 'modpack' }]),
+      `of several modpacks dropped at once the first opens New Server from Modpack and the others are skipped with the reason (${S(r)})`);
+  }
 } catch (err) {
   check(false, err.stack || err.message);
 }

@@ -15,6 +15,7 @@ import vm from 'vm';
 
 const require = createRequire(import.meta.url);
 const time = require('../renderer/features/cut/time.js');
+const compositor = require('../renderer/features/cut/compositor.js');
 const model = require('../renderer/features/cut/model.js');
 const kf = require('../renderer/features/cut/keyframes.js');
 const C = require('../renderer/features/cut/commands.js');
@@ -537,6 +538,22 @@ try {
   eq(h.project.sequences[0].transitions.find((x) => x.id === t2)?.at, f(250), 'a transition on the moved clip alone goes with it');
   h.undo();
   step(h, C.removeTransition(s, t1), 'remove transition');
+  {
+    // transitions on neighbouring edit points never overlap: the compositor shows only one per moment
+    const o = setup();
+    for (const [i0, i1] of [[0, 60], [60, 80], [80, 140]]) place(o.h, o.s, { source: { media: o.a }, in: f(i0), out: f(i1), at: f(i0), video: 'V1', audio: null });
+    o.h.do(C.addTransition(o.s, { track: 'V1', at: f(60), type: 'dissolve', duration: f(30) }));
+    const second = o.h.do(C.addTransition(o.s, { track: 'V1', at: f(80), type: 'dissolve', duration: f(30) })).id;
+    const range = (x) => compositor.transitionRange(x).map((t) => t / f(1));
+    const tn = o.h.project.sequences[0].transitions;
+    eq(tn.map(range), [[45, 75], [75, 85]], 'a transition next to another gets the room left between them');
+    o.h.do(C.setTransition(o.s, second, { align: 'end' }));
+    check(compositor.transitionRange(tn.find((x) => x.id === second))[0] >= f(75), 'changing its alignment keeps it out of its neighbour');
+    const q = setup();
+    for (const [i0, i1] of [[0, 60], [60, 64], [64, 124]]) place(q.h, q.s, { source: { media: q.a }, in: f(i0), out: f(i1), at: f(i0), video: 'V1', audio: null });
+    q.h.do(C.addTransition(q.s, { track: 'V1', at: f(64), type: 'dissolve', duration: f(30) }));
+    unchanged(q.h, () => q.h.do(C.addTransition(q.s, { track: 'V1', at: f(60), type: 'dissolve', duration: f(30) })), 'noRoom', 'no transition where its neighbour already covers the edit point');
+  }
 
   const text = step(h, C.addGenerated(s, { track: 'V2', at: f(10), duration: f(60), source: { generator: 'text', layers: [{ text: '안녕' }, { text: 'two', id: 'x' }] } }), 'add text').id;
   const tc = clip(h, s, text);
@@ -804,6 +821,23 @@ try {
   unchanged(h, () => h.do(C.paste(s, copied, { at: 0, video: 'V2' })), 'locked', 'pasting onto a locked track');
   unchanged(h, () => h.do(C.paste(s, copied, { at: 0, audio: 'A2' })), 'noTrack', 'pasting two audio tracks from the last one');
 
+  // copied at 30 fps (a 31-frame clip with a fade and keyframes), pasted into 25 and 23.976 fps tabs
+  {
+    const [odd] = place(h, s, { source: { media: a }, in: f(5), out: f(36), at: f(600), video: 'V1', audio: null });
+    h.do(C.setClip(s, odd, { fadeIn: f(7) }));
+    h.do(C.setKeyframes(s, odd, 'opacity', [{ t: f(1), v: 0 }, { t: f(29), v: 100 }]));
+    const one = [{ ...model.clone(clip(h, s, odd)), kind: 'video' }];
+    for (const fps of [[25, 1], [24000, 1001]]) {
+      const other = h.do(C.addSequence({ fps })).id;
+      const got = h.do(C.paste(other, one, { at: 0 }));
+      const pc = h.project.sequences.find((q) => q.id === other).clips.find((q) => q.id === got.ids[0]);
+      const F = time.frameTicks(fps);
+      const whole = (t) => Math.abs(t / F - Math.round(t / F)) < 1e-9;
+      check(model.validate(h.project).ok && whole(model.clipDuration(pc)) && whole(pc.fadeIn) && pc.keyframes.opacity.every((k) => whole(k.t)),
+        `a clip copied at 30 fps pastes into a ${fps[0]}/${fps[1]} fps sequence in its frames (${(model.clipDuration(pc) / F).toFixed(3)} frames, fade ${(pc.fadeIn / F).toFixed(3)})`);
+    }
+  }
+
   const t = h.do(C.addGenerated(s, { track: 'V1', at: f(400), source: { generator: 'text' } })).id;
   const tc = () => clip(h, s, t);
   step(h, C.setLayer(s, t, 'l1', { text: '제목', size: 120, stroke: { color: '#000000', width: 4 } }), 'edit a text layer');
@@ -956,7 +990,7 @@ try {
   const file = '\uFEFF1\r\n00:00:01,000 --> 00:00:02,500\r\n첫 줄\r\n둘째 줄\r\n\r\n\r\n  \r\n3\r\n0:00:03.5 --> 0:00:04.25 X1:10 X2:20\r\n<i>기울임</i>\r\n\r\n00:05,000 --> 00:06,000\r\n번호 없음\r\n7\r\n00:00:07,000 --> 00:00:08,001\r\n빈 줄 없이 다음\r\n00:00:09,000 --> 00:00:09,500\r\n번호도 빈 줄도 없이\r\n\r\n100:00:00,000 --> 100:00:01,000\r\n긴 시간\r\n\r\nnot a cue\r\n\r\n';
   const items = srt.parse(file);
   eq(items.map((it) => [it.start / MS, it.end / MS, it.text]), [
-    [1000, 2500, '첫 줄\n둘째 줄'], [3500, 4250, '<i>기울임</i>'], [5000, 6000, '번호 없음'], [7000, 8001, '빈 줄 없이 다음'], [9000, 9500, '번호도 빈 줄도 없이'],[360000000, 360001000, '긴 시간'],
+    [1000, 2500, '첫 줄\n둘째 줄'], [3500, 4250, '기울임'], [5000, 6000, '번호 없음'], [7000, 8001, '빈 줄 없이 다음'], [9000, 9500, '번호도 빈 줄도 없이'],[360000000, 360001000, '긴 시간'],
   ], 'SRT: BOM, CRLF, extra blank lines, . for ,, one or two fraction digits, no hours, settings, missing number, no blank line between cues, 100 hours, junk');
   const back = srt.parse(srt.write(items));
   eq(back, items, 'SRT write then parse is the same');
@@ -966,7 +1000,10 @@ try {
 
   const vtt = 'WEBVTT - 제목\nKind: captions\n\nNOTE 메모\n여러 줄\n\nSTYLE\n::cue { color: red }\n\nintro\n00:01.000 --> 00:02.000 align:start\nA &amp; B &lt;3\n\n01:00:00.250 --> 01:00:01.000\n<v Kim>안녕</v>\n';
   const vi = srt.parseVtt(vtt);
-  eq(vi.map((it) => [it.start / MS, it.end / MS, it.text]), [[1000, 2000, 'A & B <3'], [3600250, 3601000, '<v Kim>안녕</v>']], 'VTT: header, NOTE, STYLE, cue ids, settings, entities');
+  eq(vi.map((it) => [it.start / MS, it.end / MS, it.text]), [[1000, 2000, 'A & B <3'], [3600250, 3601000, '안녕']], 'VTT: header, NOTE, STYLE, cue ids, settings, entities, voice tag dropped');
+  eq(srt.parseVtt('WEBVTT\n\n00:00.000 --> 00:01.000\nhello<00:00:00.539><c> world</c> <c.yellow>노랑</c>\n').map((it) => it.text), ['hello world 노랑'], 'VTT: word timestamps and class spans are not shown as text');
+  eq(srt.parse('1\r\n00:00:01,000 --> 00:00:02,000\r\n<i>기울임</i> <b>굵게</b> <font color="#ffff00">노랑</font>\r\n\r\n2\r\n00:00:03,000 --> 00:00:04,000\r\n{\\an8}위쪽 a < b <중요>\r\n').map((it) => it.text),
+    ['기울임 굵게 노랑', '위쪽 a < b <중요>'], 'SRT: <i> <b> <font> and {\\an8} are not shown as text; "<" before a non-letter and Korean in <> stay');
   const plain = [{ start: 0, end: 1500 * MS, text: 'Tom & Jerry <3 -->' }, { start: 2 * SEC, end: 3 * SEC, text: '두 줄\n자막' }];
   eq(srt.parseVtt(srt.writeVtt(plain)), plain, 'VTT write then parse is the same, with & < > escaped');
   check(srt.writeVtt(plain).startsWith('WEBVTT\n\n00:00.000 --> 00:01.500\nTom &amp; Jerry &lt;3 --&gt;\n'), 'VTT is written with short times and escapes');

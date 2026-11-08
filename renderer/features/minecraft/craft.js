@@ -399,7 +399,8 @@
     try {
       // The folder first: a game still running refuses it, and the instance then stays as it was.
       await ide.api.trash(inst.dir);
-      await ide.api.invoke('launcher:remove', ide.root, inst.name);
+      const r = await ide.api.invoke('launcher:remove', ide.root, inst.name);
+      if (r?.alreadyOpen) ide.ui.alert(tr('{name} is deleted, but the Minecraft Launcher stayed open, so it may keep the profile. If the launcher still lists it, delete it there.', { name: inst.title || inst.name }));
     } catch (err) {
       ide.ui.alert(tr('Could not move {name} to the Recycle Bin: {error}', { name: inst.title || inst.name, error: errorText(err) }));
     }

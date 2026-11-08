@@ -22,6 +22,7 @@
   let kinds = [];
   let list = [];
   let blocked = []; // names in servers/ that are not servers
+  let damaged = []; // servers whose pyide-server.json cannot be used: {name, dir, damaged: 'unreadable' | 'kind', kind}
   let host = null; // My Servers' list (screen.js)
 
   // ---------- jobs: main's log lines go to the console of the job that asked ----------
@@ -60,8 +61,9 @@
   const busyAt = (dir) => runningAt(dir) || !!sessionOf(dir)?.starting || launching.has(dir.toLowerCase()) || stoppingAt(dir);
 
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
-  // starts, the Ports window learns its port is a game server's.
-  async function beforeStart(dir, con) {
+  // starts, the Ports window learns its port is a game server's. The port is main's, read from the files as the server
+  // will (launch): the list may be from before server.properties changed.
+  async function beforeStart(dir, con, port) {
     const srv = serverAt(dir);
     if (srv?.proxy) {
       const { backends, skipped = [] } = await ide.api.invoke('minecraft:wireProxy', ide.root, dir);
@@ -69,7 +71,6 @@
         : tr('No Paper or Purpur server in the project yet: the proxy has nowhere to send players.')}\n`, backends.length ? 'sys' : 'err');
       for (const s of skipped) con.append(`${tr('{name} runs Minecraft {mc}, older than 1.13, which has no modern forwarding: the proxy does not send players there, and it keeps its own account checks.', s)}\n`, 'err');
     }
-    const port = srv?.port || 25565;
     ide.ports?.gamePort(port);
     // A server still stopping (Rerun of a running one) holds its world and port until it has saved, STOP_WAIT at most;
     // a port that another program holds does not come free, so the start ends here instead of failing to bind it.
@@ -107,7 +108,7 @@
       const j = job(con);
       try {
         const spec = await ide.api.invoke('minecraft:launch', ide.root, dir, j.id);
-        await beforeStart(dir, con);
+        await beforeStart(dir, con, spec.port);
         con.append(`${[spec.cmd, ...spec.args].map(quote).join(' ')}\n`, 'sys');
         const id = await ide.api.invoke('minecraft:start', ide.root, spec);
         gracefulStop(s, dir);
@@ -265,14 +266,14 @@
   function refused(n, p) {
     return !/^[A-Za-z][\w-]{0,39}$/.test(n) ? tr('Use letters, digits, - and _ for the name, starting with a letter (40 at most).')
       : RESERVED.test(n) ? tr('{name} is a name Windows keeps for a device: choose another.', { name: n })
-        : list.some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
+        : [...list, ...damaged].some((s) => s.name.toLowerCase() === n.toLowerCase()) ? tr('A server named {name} already exists.', { name: n })
           : blocked.some((b) => b.toLowerCase() === n.toLowerCase()) ? tr('servers/{name} is a folder that is not a server: choose another name, or move that folder away.', { name: n })
             : !Number.isInteger(p) || p < 1 || p > 65535 ? tr('Use a port from 1 to 65535.') : '';
   }
   // A name main takes for the modpack, after the servers there are: COBBLEVERSE, then COBBLEVERSE-2.
   function freeName(raw) {
     const base = (raw.replace(/[^\w-]+/g, '-').replace(/^[^A-Za-z]+/, '').slice(0, 32).replace(/-+$/, '') || 'modpack');
-    const taken = (n) => RESERVED.test(n) || [...list.map((s) => s.name), ...blocked].some((x) => x.toLowerCase() === n.toLowerCase());
+    const taken = (n) => RESERVED.test(n) || [...list, ...damaged].map((s) => s.name).concat(blocked).some((x) => x.toLowerCase() === n.toLowerCase());
     let n = base;
     for (let i = 2; taken(n); i++) n = `${base}-${i}`;
     return n;
@@ -614,6 +615,7 @@
     'mod:neoforge': () => tr('a NeoForge mod: drop it on a NeoForge server'),
     target: () => tr('drop it on the server it is for'),
     curseforge: () => tr('a CurseForge modpack, whose mods only CurseForge\'s own service hands out: download its Server Pack from CurseForge and drop that folder here'),
+    modpack: () => tr('another modpack: a server is made from one modpack at a time, so drop this one again after that'),
     unknown: () => tr('not a server, world, resource pack, plugin, mod or modpack'),
     bomb: () => tr('Refused: its contents overlap, as in a zip bomb. Nothing was written.'),
   };
@@ -661,9 +663,10 @@
 
   // ---------- server list ----------
   async function refresh() {
-    if (!ide.root) { list = []; blocked = []; render(); return; }
+    if (!ide.root) { list = []; blocked = []; damaged = []; render(); return; }
     kinds = kinds.length ? kinds : await ide.api.invoke('minecraft:kinds').catch(() => []);
-    [list, blocked] = await Promise.all([ide.api.invoke('minecraft:servers', ide.root).catch(() => []), ide.api.invoke('minecraft:blockedNames', ide.root).catch(() => [])]);
+    [list, blocked, damaged] = await Promise.all([ide.api.invoke('minecraft:servers', ide.root).catch(() => []), ide.api.invoke('minecraft:blockedNames', ide.root).catch(() => []),
+      ide.api.invoke('minecraft:damagedServers', ide.root).catch(() => [])]);
     render();
   }
   function button(label, cls, onClick, title) {
@@ -688,7 +691,7 @@
   }
   function renderServers() {
     host.replaceChildren();
-    if (!list.length) {
+    if (!list.length && !damaged.length) {
       const empty = el('div', 'mcc-empty');
       empty.append(el('div', 'mcc-empty-title', tr('No servers yet')),
         el('div', 'muted', tr('Make a server for your friends with New Server, or start from a modpack with Server from Modpack.')));
@@ -740,6 +743,27 @@
       card.append(el('div', 'mc-server-note muted', info));
       host.append(card);
     }
+    for (const srv of damaged) host.append(damagedCard(srv));
+  }
+  // A server whose pyide-server.json cannot be used: it cannot start, but one running still stops, and its folder opens
+  // for the file to be fixed.
+  function damagedCard(srv) {
+    const card = el('div', 'mc-server mc-damaged');
+    card.dataset.name = srv.name;
+    card.dataset.dir = srv.dir;
+    const head = el('div', 'mc-server-head');
+    const title = el('span', 'mc-server-name', srv.name);
+    title.dataset.userText = '';
+    head.append(el('span', `mc-dot${runningAt(srv.dir) ? ' on' : ''}`), title, el('span', 'mcc-chip bad mc-damaged-chip', tr('Damaged')));
+    const actions = el('div', 'mc-server-actions');
+    if (stoppingAt(srv.dir)) actions.append(Object.assign(button(tr('Stopping…'), 'mc-stopping', () => {}), { disabled: true }));
+    else if (runningAt(srv.dir)) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
+    actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
+    const why = el('div', 'mc-server-note muted mc-damaged-why', srv.damaged === 'kind'
+      ? tr('Its pyide-server.json names a server type Nano Studio does not know ({kind}). Open the folder to fix it.', { kind: srv.kind ?? '—' })
+      : tr('Its pyide-server.json cannot be read. Open the folder to fix it.'));
+    card.append(head, actions, why);
+    return card;
   }
 
   // What other computers on the same network connect to: no sharing, no third party.

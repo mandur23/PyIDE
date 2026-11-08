@@ -32,8 +32,10 @@ function readPack(dir, ns) {
   return strings(lines);
 }
 
-// The format codes of a line, in a canonical order: what a translation must keep.
-const CODES = /%(\d+\$)?[-#+ 0,(]*\d*(\.\d+)?[a-zA-Z%]|§[0-9a-fk-orA-FK-OR]|\n/g;
+// The format codes of a line, in a canonical order: what a translation must keep. Only what the game fills: %s, %d
+// and %.1f (String.format, for a mod's own text), each maybe with its argument (%1$s), and %%; then § colours and line
+// breaks. Not Java's flags and widths: with them `10% per` read as the code `% p`, and any Korean without it was refused.
+const CODES = /%(\d+\$)?(\.\d+)?[sdf]|%%|§[0-9a-fk-orA-FK-OR]|\n/g;
 const codesOf = (text) => (text.match(CODES) || []).sort().join('\u0000');
 const sameCodes = (en, ko) => typeof ko === 'string' && ko.trim() !== '' && codesOf(en) === codesOf(ko);
 

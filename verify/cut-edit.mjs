@@ -271,6 +271,15 @@ await section('paste', async () => {
   check((await steps()) === before + 1 && (await label()) === 'Paste Insert', 'one undo step named Paste Insert');
   await undo();
   check((await lay()) === START, 'Ctrl+Z undoes the paste insert');
+  // clips name their media by id, and another project's m1 is another file: what was copied in one project does not
+  // paste into the next
+  await clickAt(await pt(5, 'V1'));
+  await press('Ctrl+c');
+  await fresh(TWO);
+  await setTime(15);
+  const other = await steps();
+  await press('Ctrl+v');
+  check((await steps()) === other && (await lay()) === START, 'clips copied in another project do not paste into this one');
 });
 
 // ---------- nudge ----------

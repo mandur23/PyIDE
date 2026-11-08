@@ -137,19 +137,19 @@ try {
   for (const u of ['https://cdn.modrinth.com/data/AABB/versions/1/a.jar', 'https://github.com/o/r/releases/download/v1/a.jar', 'https://raw.githubusercontent.com/o/r/main/a.jar', 'https://gitlab.com/o/r/-/raw/main/a.jar']) {
     const inst = await files([u]);
     allowed.push([u, fetched.at(-1) === u && inst.pack.files.length === 1]);
-    craft.remove(root, inst.name);
+    await craft.remove(root, inst.name);
     rmSync(inst.dir, { recursive: true, force: true });
   }
   check(allowed.every(([, ok]) => ok), `pack files from cdn.modrinth.com, github.com, raw.githubusercontent.com and gitlab.com over https are downloaded (${S(allowed)})`);
   const mixed = await files(['http://10.0.0.1/a.jar', 'https://github.com/o/r/releases/download/v1/b.jar']);
   check(fetched.at(-1) === 'https://github.com/o/r/releases/download/v1/b.jar', 'of several download addresses the first allowed one is used');
-  craft.remove(root, mixed.name);
+  await craft.remove(root, mixed.name);
   rmSync(mixed.dir, { recursive: true, force: true });
 
   process.env.PYIDE_MC_SOURCES = S({ modrinth: 'http://127.0.0.1:5999/modrinth', mojang: 'http://127.0.0.1:5999/mojang/manifest.json' });
   const standIn = await files(['http://127.0.0.1:5999/files/a.jar']);
   check(fetched.at(-1) === 'http://127.0.0.1:5999/files/a.jar' && standIn.pack.files.length === 1, 'with PYIDE_MC_SOURCES a pack file may come from the stand-in\'s origin');
-  craft.remove(root, standIn.name);
+  await craft.remove(root, standIn.name);
   rmSync(standIn.dir, { recursive: true, force: true });
   const otherPort = await errOf(() => files(['http://127.0.0.1:6000/files/a.jar']));
   const otherHost = await errOf(() => files(['http://localhost:5999/files/a.jar']));
@@ -249,7 +249,7 @@ try {
   `when the address starts serving something else Play stops and asks again, naming what is new, and declining leaves the instance as it was (${S(swapped.needsApproval?.mods)})`);
   const applied = await craft.play(root, askedName, { server: askReq, approve: swapped.needsApproval.sha1 }, log);
   check(applied.launched && existsSync(path.join(instDir(askedName), 'mods', 'asked-b.jar')) && mine().approved === swapped.needsApproval.sha1, 'agreeing applies it and pins the new SHA-1');
-  craft.remove(root, askedName);
+  await craft.remove(root, askedName);
   rmSync(instDir(askedName), { recursive: true, force: true });
   const again = await craft.join(root, askReq, log);
   check(!again.needsApproval && again.instance, 'a pinned pack is not asked about again when its instance is made anew');
@@ -419,7 +419,7 @@ try {
   check(viaStore.launched && viaStore.method === 'store' && S(readJson(storeLog)) === '[]' && storeProfile.profiles.mine?.name === 'Mine' && path.resolve(storeProfile.profiles['nano-bom']?.gameDir || '') === path.join(root, 'instances', 'bom')
     && S(readJson(path.join(storeWork, 'versions', 'nano-bom', 'nano-bom.json')).arguments) === S({ game: ['--quickPlayMultiplayer', 'store.example.test:25566'] }),
   `Play through the Store launcher writes the version into .minecraft and merges the profile into its own file (${S(Object.keys(storeProfile.profiles))})`);
-  craft.remove(root, 'bom');
+  await craft.remove(root, 'bom');
   check(!readJson(storeProfiles).profiles['nano-bom'] && readJson(storeProfiles).profiles.mine && !existsSync(path.join(storeWork, 'versions', 'nano-bom')) && !readJson(profilesFile).profiles['nano-bom'],
     'Remove takes the profile and version out of both places, and leaves the user\'s profile');
   process.env.PYIDE_MC_LAUNCHER = realLauncher;
@@ -427,7 +427,7 @@ try {
   const storeData = readJson(storeProfiles);
   write(storeProfiles, S({ ...storeData, profiles: { ...storeData.profiles, 'nano-later': { name: 'later' } } }));
   write(path.join(storeWork, 'versions', 'nano-later', 'nano-later.json'), '{}');
-  craft.remove(root, 'later');
+  await craft.remove(root, 'later');
   check(!readJson(storeProfiles).profiles['nano-later'] && !existsSync(path.join(storeWork, 'versions', 'nano-later')), 'Remove finds what the Store launcher had even once a launcher that takes --workDir is the one in use');
   delete process.env.PYIDE_MC_STORE;
   const running = path.basename(process.execPath);
@@ -687,6 +687,12 @@ try {
     const launched = await Promise.allSettled([call('minecraft:launch', proj, j1, 'job'), call('minecraft:launch', proj, j2, 'job')]);
     check(launched.every((r) => r.status === 'fulfilled' && /temurin-99-jre/.test(r.value.cmd)) && asked.filter((p) => p === '/adoptium/java.zip').length === 1,
       `two starts that need the same missing Java share one download (${S(launched.map((r) => r.reason?.message || r.value.cmd))}, ${asked.filter((p) => p === '/adoptium/java.zip').length} downloads)`);
+    // The port a start binds is main's to say: the renderer's list may be from before server.properties changed.
+    const later = serverAt(elsewhere('portLater'), { kind: 'paper', mc: '1.20.1', java: 99 }, 'server-port=25690\nserver-port = 25691\n');
+    const laterProxy = serverAt(elsewhere('portProxy'), { kind: 'velocity', mc: '3.4.0', java: 99 }, 'server-port=25692\n');
+    write(path.join(laterProxy, 'velocity.toml'), 'bind = "0.0.0.0:25693"\n');
+    const ports = await Promise.all([later, laterProxy].map((d) => call('minecraft:launch', proj, d, 'job').then((r) => r.port, (err) => err.message)));
+    check(S(ports) === S([25691, 25693]), `a start says the port the server will bind: server.properties' last line, a proxy's velocity.toml bind (${S(ports)})`);
 
     // A ko_kr.json the user broke by hand is not written over.
     const translation = require('../main/minecraft/translate.js');
@@ -701,6 +707,13 @@ try {
     write(koFile, '{"item.tm.old": "내가 쓴 줄"}');
     const fine = await translation.translateMods(tdir, { mods: translation.scan(tdir).mods, translate: async () => S({ 'item.tm.gem': '보석' }), log() {} });
     check(fine.translated === 1 && S(JSON.parse(text(koFile))) === S({ 'item.tm.old': '내가 쓴 줄', 'item.tm.gem': '보석' }), 'a sound one gets the new line beside the user\'s');
+    // A literal % before a space and a word is text, not a code the translation must keep; the codes the game fills are.
+    const codes = [
+      ['Speed +10% per level', '레벨당 속도 +10%', true], ['50% chance to drop %s', '%s 떨어뜨릴 확률 50%', true], ['100% done', '100% 완료', true],
+      ['%1$s gave %2$s %3$d', '%1$s 님이 %2$s 님에게 %3$d개', true], ['%.1f hearts', '하트 %.1f개', true], ['§aGreen%%', '§a초록%%', true], ['Line\nTwo', '줄\n둘', true],
+      ['Hello %s', '안녕', false], ['%1$s and %2$s', '%1$s 그리고', false], ['%d items', '아이템', false], ['§cRed', '빨강', false], ['Line\nTwo', '줄 둘', false], ['50%%', '50', false],
+    ].map(([en, ko, want]) => [en, translation.sameCodes(en, ko), want]);
+    check(codes.every(([, got, want]) => got === want), `a translation keeps %s, %d, %1$s, %.1f, %%, § and line breaks, and a literal "10% per" is no code (${S(codes.filter(([, got, want]) => got !== want))})`);
 
     // A create cut off half-way (the app closed) leaves a folder marked unfinished: not listed, and taken back by the next
     // create of its name. A folder without the mark is the user's and is never removed.
@@ -717,6 +730,17 @@ try {
     const before = (await call('minecraft:servers', proj)).map((s) => s.name);
     const blocked = await call('minecraft:blockedNames', proj);
     check(!before.includes('Half') && S(blocked) === S(['Mine']), `a half-made server is not listed and blocks no name; a folder of the user's does (${S(before)}, ${S(blocked)})`);
+    // A server whose pyide-server.json cannot be read, or names a type Nano Studio does not know, is listed as damaged
+    // with the reason: it keeps its card (Stop, Open Folder) and its name says it is a server, not a folder of the user's.
+    write(path.join(srvDir('Garbled'), 'pyide-server.json'), '{ "kind": "paper", ');
+    serverAt(srvDir('Spigot'), { kind: 'spigot', mc: '1.20.1' });
+    const damagedList = await Promise.resolve().then(() => call('minecraft:damagedServers', proj)).catch((err) => ({ error: err.message }));
+    const blockedNow = await call('minecraft:blockedNames', proj);
+    const listedNow = (await call('minecraft:servers', proj)).map((s) => s.name);
+    check(Array.isArray(damagedList) && S(damagedList.map((s) => [s.name, s.damaged, s.kind ?? null])) === S([['Garbled', 'unreadable', null], ['Spigot', 'kind', 'spigot']]) && S(blockedNow) === S(['Mine']) && !listedNow.some((n) => /Garbled|Spigot/.test(n)),
+      `a server with an unreadable pyide-server.json or an unknown type is listed as damaged with the reason, and its name is not taken for a folder of the user's (${S(damagedList)}, blocked ${S(blockedNow)})`);
+    rmSync(srvDir('Garbled'), { recursive: true, force: true });
+    rmSync(srvDir('Spigot'), { recursive: true, force: true });
     await create('Half');
     check(existsSync(path.join(srvDir('Half'), 'server.jar')) && !existsSync(path.join(srvDir('Half'), 'mods', 'half-downloaded.jar')) && !existsSync(path.join(srvDir('Half'), 'pyide-server.unfinished'))
       && JSON.parse(text(path.join(srvDir('Half'), 'pyide-server.json'))).kind === 'paper' && (await call('minecraft:servers', proj)).some((s) => s.name === 'Half'),

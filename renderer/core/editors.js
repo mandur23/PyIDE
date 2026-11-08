@@ -5,6 +5,9 @@
 // edits show everywhere). Groups are arranged in a binary split tree. `ide.editor` is the active group's editor.
 (() => {
   const { $, el, fileLabel, basename, dirname, samePath, isUnder, pathKey: key } = ide.util;
+  // A Windows path with \ throughout: a traceback or a terminal link may name an open file as C:/proj/a.py, and a
+  // document keeps the spelling its tab, its events and its saves use.
+  const localPath = (p) => (typeof p === 'string' && /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(p) ? p.replace(/\//g, '\\') : p);
 
   const LANG_BY_EXT = { py: 'python', pyw: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
     ts: 'typescript', json: 'json', jsonl: 'json', md: 'markdown', html: 'html', htm: 'html', xhtml: 'html', css: 'css', yml: 'yaml',
@@ -85,6 +88,7 @@
   // ---------- documents ----------
   // asText (Open as Text): a file that looks binary is read as text all the same, in the encoding detected.
   async function loadDoc(path, { asText } = {}) {
+    path = localPath(path);
     const existing = docs.get(key(path));
     if (existing) return existing;
     // The folder's case sensitivity is known before the document is keyed (a.py and A.py may be two files).
@@ -1026,6 +1030,7 @@
 
   // opts: {line, col, focus = true, group: 'active'|'right'|'down'|'window'|group, preview, asText, text}
   ide.openFile = async (path, opts = {}) => {
+    path = localPath(path);
     if (opts.group === 'window') { await openInNewWindow([{ path, line: opts.line }]); return null; }
     let viewer = opts.asText ? null : viewerFor(path);
     let doc = null;

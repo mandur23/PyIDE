@@ -311,6 +311,28 @@ try {
   const onEdge = await until(`ide.groups().length === 2 && ide.activeTab()?.title === '가장자리.py'`, 'split by an Explorer drop').then(() => true, () => false);
   check(onEdge, 'a file dropped on a pane edge opens in a new split, like a dragged tab');
   check((await errorCount()).length === errorsBefore, 'no IDE internal error from the Explorer drops');
+
+  // A traceback or a terminal link names an open file with / (C:/proj/a.py). Monaco's Uri.file reads / and \ alike, so
+  // a second document for that spelling would share the first one's model, look saved, and dispose the model (and the
+  // unsaved edits) when its tab closed.
+  const back = path.join(t.project, 'slashes.py');
+  const fwd = back.replace(/\\/g, '/');
+  const q = JSON.stringify;
+  writeFileSync(back, 'x = 1\n');
+  await js(`ide.openFile(${q(back)}).then(() => true)`);
+  await until(`ide.activeTab()?.title === 'slashes.py'`, 'slashes.py open');
+  await js(`(ide.activeTab().model.applyEdits([{ range: new ide.monaco.Range(1, 1, 1, 1), text: 'edited = 1\\n' }]), true)`);
+  const fileTabs = `ide.tabs.filter((x) => x.kind === 'file' && x.title === 'slashes.py')`;
+  await js(`ide.openFile(${q(fwd)}).then(() => true)`);
+  const slash = await js(`({ tabs: ${fileTabs}.length, dirty: ide.isDirty(ide.activeTab()), one: ide.getDocument(${q(fwd)}) === ide.getDocument(${q(back)}), path: ide.activeTab().path })`);
+  check(slash.tabs === 1 && slash.dirty && slash.one && slash.path === back,
+    `opening an open file by its path with / shows its tab, modified, with one document and the \\ path (${q(slash)})`);
+  // Where a second tab opened, closing it is what lost the edits.
+  if (slash.tabs > 1) await js(`(ide.closeTabObject(${fileTabs}.pop(), true), true)`);
+  const kept = await js(`(() => { const tab = ${fileTabs}[0]; return { open: !!tab, disposed: !tab || tab.model.isDisposed(), text: tab && !tab.model.isDisposed() ? tab.model.getValue() : null }; })()`);
+  check(kept.open && !kept.disposed && kept.text === 'edited = 1\nx = 1\n' && readFileSync(back, 'utf8') === 'x = 1\n',
+    `and the unsaved edit stays in the editor (${q(kept)})`);
+  await js(`(ide.closeTabObject(${fileTabs}[0], true), true)`);
   await shot('final.png');
 } catch (err) {
   check(false, err.message);

@@ -144,20 +144,28 @@ async function installJava(major, { log }) {
 }
 
 // ---------- servers ----------
-// Folders of `parent` holding `file`, as [{...file's JSON, name, dir}].
-const described = (parent, file) => (fs.existsSync(parent) ? fs.readdirSync(parent, { withFileTypes: true }) : [])
-  .filter((d) => d.isDirectory()).map((d) => {
-    const dir = path.join(parent, d.name);
-    const meta = readJson(path.join(dir, file));
-    return meta && typeof meta === 'object' && !Array.isArray(meta) && { ...meta, name: d.name, dir };
-  }).filter(Boolean);
+// The folders of servers/ holding a pyide-server.json, as [{...its JSON, name, dir}], not one still being made. One
+// whose file cannot be read, or names a server type Nano Studio does not know, is {name, dir, damaged: 'unreadable' |
+// 'kind', kind}: listed so, it keeps its card (and its Stop, if it runs) and its name, instead of going without a word.
+function serverFolders(root) {
+  const parent = path.join(root, 'servers');
+  return (fs.existsSync(parent) ? fs.readdirSync(parent, { withFileTypes: true }) : [])
+    .filter((d) => d.isDirectory() && isFile(path.join(parent, d.name, SERVER)) && !isFile(path.join(parent, d.name, UNFINISHED))).map((d) => {
+      const dir = path.join(parent, d.name);
+      const meta = readJson(path.join(dir, SERVER));
+      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return { name: d.name, dir, damaged: 'unreadable' };
+      if (!KINDS[meta.kind]) return { name: d.name, dir, damaged: 'kind', kind: typeof meta.kind === 'string' ? meta.kind.slice(0, 40) : null };
+      return { ...meta, name: d.name, dir };
+    });
+}
+const damagedServers = (root) => serverFolders(root).filter((s) => s.damaged);
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 // AutoModpack's jar in the server's mods: players who have it get the server's mods when they join.
 const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).find((n) => /^automodpack.*\.jar$/i.test(n)) : null) || null;
 
 // The project's servers, each with what its kind runs; not one still being made.
 function servers(root) {
-  return described(path.join(root, 'servers'), SERVER).filter((s) => KINDS[s.kind] && !isFile(path.join(s.dir, UNFINISHED))).map((s) => ({
+  return serverFolders(root).filter((s) => !s.damaged).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir, s.kind),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
     // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
@@ -223,10 +231,11 @@ const unfinished = {
     } finally { building.delete(keyOf(dir)); }
   },
 };
-// What blocks a new server's name: entries of servers/ that are neither a server nor an unfinished one.
+// What blocks a new server's name: entries of servers/ that are neither a server (damaged ones included, which are
+// listed as such) nor an unfinished one.
 function blockedNames(root) {
   const parent = path.join(root, 'servers');
-  const known = new Set(servers(root).map((s) => s.name.toLowerCase()));
+  const known = new Set(serverFolders(root).map((s) => s.name.toLowerCase()));
   return (fs.existsSync(parent) ? fs.readdirSync(parent) : []).filter((n) => !known.has(n.toLowerCase()) && !isFile(path.join(parent, n, UNFINISHED)));
 }
 
@@ -320,7 +329,8 @@ async function launch(dir, log) {
     args.push(`@${desc.launch.argsFile}`);
   } else args.push('-jar', desc.launch.jar);
   if (!KINDS[desc.kind]?.proxy) args.push('nogui');
-  return { cmd: path.join(home, 'bin', 'java.exe'), args, cwd: dir, java: desc.java };
+  // The port it will bind, which the renderer's list may not know yet (server.properties edited since).
+  return { cmd: path.join(home, 'bin', 'java.exe'), args, cwd: dir, java: desc.java, port };
 }
 
 // ---------- Velocity ----------
@@ -629,6 +639,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('minecraft:clientPack', (_e, root, dir) => { playersAt(root, dir); return clientPack(dir); });
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
   ipcMain.handle('minecraft:blockedNames', (_e, root) => (root ? blockedNames(root) : []));
+  ipcMain.handle('minecraft:damagedServers', (_e, root) => (root ? damagedServers(root) : []));
   // A dedicated server that runs a command changing a setting (whitelist on) saves server.properties as it read it at
   // its start, losing what was saved since. The window awaits this before it sends the command: the file is read now,
   // and once the server has written its copy (within `wait` ms) the file goes back to what it was.

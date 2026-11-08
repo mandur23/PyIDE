@@ -1153,5 +1153,9 @@
   "Speaker colors and names": "화자 색과 이름",
   "Isolate the voice first (HTDemucs): for speech over music; it makes steady noise worse, and takes about a sixth longer": "먼저 음성 분리(HTDemucs): 음악이 깔린 말에 씁니다. 일정한 잡음에서는 오히려 나빠지고, 시간이 약 6분의 1 더 걸립니다",
   "Isolate the voice before recognition (HTDemucs): for speech over music, not over steady noise": "인식하기 전에 음성 분리(HTDemucs): 음악이 깔린 말에 쓰고, 일정한 잡음에는 쓰지 않습니다",
-  "Isolate Voice (Automation menu, clip menu, project panel) keeps the speech of a clip and drops its music and noise. The new sound is a WAV in the Media folder of the Cut workspace; your files are never changed. It takes about 25 seconds per minute of sound on an 8-core CPU.": "음성 분리(자동화 메뉴, 클립 메뉴, 프로젝트 패널)는 클립의 말소리만 남기고 음악과 잡음을 뺍니다. 새 소리는 Cut 작업 폴더의 Media 폴더에 WAV로 만들고, 원래 파일은 바꾸지 않습니다. 8코어 CPU에서 소리 1분에 약 25초 걸립니다."
+  "Isolate Voice (Automation menu, clip menu, project panel) keeps the speech of a clip and drops its music and noise. The new sound is a WAV in the Media folder of the Cut workspace; your files are never changed. It takes about 25 seconds per minute of sound on an 8-core CPU.": "음성 분리(자동화 메뉴, 클립 메뉴, 프로젝트 패널)는 클립의 말소리만 남기고 음악과 잡음을 뺍니다. 새 소리는 Cut 작업 폴더의 Media 폴더에 WAV로 만들고, 원래 파일은 바꾸지 않습니다. 8코어 CPU에서 소리 1분에 약 25초 걸립니다.",
+  "{name} is open in another program, so it was not replaced. The finished export is kept as {part}: close that program and rename it, or export again.": "{name} 파일을 다른 프로그램이 열고 있어서 바꾸지 못했습니다. 다 만든 파일은 {part}에 남겨 두었습니다. 그 프로그램을 닫고 이름을 바꾸거나 다시 내보내세요.",
+  "{name} is a media file of this project. Export to another name.": "{name}은(는) 이 프로젝트가 쓰는 미디어 파일입니다. 다른 이름으로 내보내세요.",
+  "There is no room for a transition here: the transitions beside it reach this edit point.": "여기에는 전환을 넣을 자리가 없습니다. 옆의 전환이 이 편집점까지 이어져 있습니다.",
+  "The project file is damaged and cannot be opened.": "프로젝트 파일이 손상되어 열 수 없습니다."
 }

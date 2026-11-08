@@ -371,6 +371,7 @@
 
   const records = [];
   let replaying = false;
+  const afterReplay = []; // the undo/redo checks that came while a replay ran
 
   async function readDisk(path) {
     try { return await ide.api.invoke('fs:readText', path); } catch { return null; }
@@ -488,10 +489,15 @@
   // Undoing the refactoring's edit in any of its files (Ctrl+Z or Edit › Undo) undoes the whole refactoring.
   function track(rec) {
     rec.subs = rec.models.map((m) => m.model.onDidChangeContent((e) => {
-      if (replaying) return;
-      const v = m.model.getAlternativeVersionId();
-      if (e.isUndoing && rec.state === 'done' && v === m.pre) replay(rec, 'undo', m.model);
-      else if (e.isRedoing && rec.state === 'undone' && v === m.post) replay(rec, 'redo', m.model);
+      const check = () => {
+        const v = m.model.getAlternativeVersionId();
+        if (e.isUndoing && rec.state === 'done' && v === m.pre) replay(rec, 'undo', m.model);
+        else if (e.isRedoing && rec.state === 'undone' && v === m.post) replay(rec, 'redo', m.model);
+      };
+      // A Ctrl+Shift+Z while the undo still writes the other files redid this model alone: it is looked at again
+      // once the replay ends, so the files never part ways.
+      if (replaying) { if (e.isUndoing || e.isRedoing) afterReplay.push(check); return; }
+      check();
     }));
     records.push(rec);
     while (records.length > 30) records.shift().subs.forEach((s) => s.dispose());
@@ -544,6 +550,7 @@
     } finally {
       replaying = false;
     }
+    for (const check of afterReplay.splice(0)) check();
     if (skipped.length) hint(tr('Some files changed after the refactoring and were left as they are: {files}', { files: skipped.map((p) => basename(p)).join(', ') }));
   }
 

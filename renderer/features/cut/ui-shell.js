@@ -311,8 +311,14 @@
     let json;
     try { json = JSON.parse(text); } catch { throw Object.assign(new Error('This file is not a Nano Studio Cut project.'), { code: 'notProject' }); }
     if (!json || json.format !== 'ncut') throw Object.assign(new Error('This file is not a Nano Studio Cut project.'), { code: 'notProject' });
-    const project = Cut.model.migrate(json);
-    return newHistory(project);
+    // A part of the file that is not what migrate expects (a null clip, tracks that are not a list) threw a TypeError
+    // whose text ("Cannot read properties of null") was all the person saw.
+    try {
+      return newHistory(Cut.model.migrate(json));
+    } catch (err) {
+      if (err?.code) throw err;
+      throw Object.assign(new Error('The project file is damaged and cannot be opened.'), { code: 'damaged', detail: err?.message || String(err) });
+    }
   }
 
   async function openPath(path, { ask = true } = {}) {

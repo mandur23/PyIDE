@@ -339,6 +339,54 @@ function replaceText(text, { re, rep, perLine }) {
 // A file the preview listed that Replace left as it was: {path, reason: 'tooLarge'|'binary'|'encoding'|'error', ...}.
 const skip = (p, reason, e) => ({ path: p, reason, ...(e ? { message: e.message, code: e.code } : {}) });
 
+// A file is written as the editor saves one (replaceFile in main/text-codec.js, which the worker cannot load): a copy
+// beside it takes the new text and is renamed over it, so a full disk or a crash leaves the old text whole instead of
+// a truncated file. The copy keeps the file's attributes and streams. In place for a new file, a hard link (its other
+// names see the change), a read-only file (refused as it should be), and where the copy or the rename is refused.
+function writeOver(p, buf) {
+  let fd;
+  try {
+    fd = fs.openSync(p, 'r+');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fs.writeFileSync(p, buf);
+    throw err;
+  }
+  try {
+    fs.writeFileSync(fd, buf);
+    fs.ftruncateSync(fd, buf.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+let tmpSeq = 0;
+function replaceFile(p, buf) {
+  let target = p;
+  let st;
+  try {
+    if (fs.lstatSync(p).isSymbolicLink()) target = fs.realpathSync(p);
+    st = fs.statSync(target);
+  } catch {
+    return fs.writeFileSync(p, buf);
+  }
+  if (st.nlink > 1 || !(st.mode & 0o200)) return writeOver(p, buf);
+  // Not text-codec's names: the editor may save in the same folder at the same time, from the same process.
+  const tmp = path.join(path.dirname(target), `.${process.pid}-r${++tmpSeq}.pyide-tmp`);
+  try {
+    fs.copyFileSync(target, tmp);
+    writeOver(tmp, buf);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    if (err.code === 'EPERM' || err.code === 'EACCES') return writeOver(p, buf);
+    throw err;
+  }
+  try {
+    fs.renameSync(tmp, target);
+  } catch {
+    fs.rmSync(tmp, { force: true });
+    writeOver(p, buf);
+  }
+}
+
 // UTF-8 files only; the others are returned as `foreign` for the main side to rewrite in their own encoding.
 function replaceIn(paths, opts) {
   const c = compile(opts);
@@ -358,7 +406,7 @@ function replaceIn(paths, opts) {
       const bom = text.charCodeAt(0) === 0xfeff ? '﻿' : '';
       const { text: next, count: n } = replaceText(text.slice(bom.length), c);
       if (!n || bom + next === text) continue;
-      fs.writeFileSync(p, bom + next, 'utf8');
+      replaceFile(p, Buffer.from(bom + next, 'utf8'));
       changed.push(p);
       count += n;
     } catch (e) {
@@ -516,22 +564,22 @@ async function replaceForeign(paths, opts, timeout) {
     }
   }
   const results = files.length ? await scan.with({ timeout }, 'replaceTexts', files.map((f) => f.text), opts) : [];
-  files.forEach((file, i) => {
+  for (const [i, file] of files.entries()) {
     const { p } = file;
     const { text, count: n } = results[i];
-    if (!n || text === file.text) return;
+    if (!n || text === file.text) continue;
     try {
       if (textCodec.decode(textCodec.encode(text, file.encoding), file.encoding) !== text) {
         skipped.push({ path: p, reason: 'encoding', encoding: file.encoding });
-        return;
+        continue;
       }
-      textCodec.write(p, text, file.encoding);
+      await textCodec.writeAsync(p, text, file.encoding);
       changed.push(p);
       count += n;
     } catch (e) {
       skipped.push(skip(p, 'error', e));
     }
-  });
+  }
   return { changed, count, skipped };
 }
 
@@ -897,6 +945,8 @@ exports.register = ({ ipcMain, app }) => {
     let res;
     try {
       res = await scan.with({ timeout: REPLACE_TIMEOUT, resend: false }, 'replace', paths, opts);
+      // Replaced by rename on the worker: the language server's watcher is to see a change, not a new file.
+      res.changed.forEach(textCodec.noteReplaced);
       const other = await replaceForeign(res.foreign, opts, Math.max(1, until - Date.now()));
       return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped] };
     } catch (e) {

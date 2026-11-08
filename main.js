@@ -244,12 +244,26 @@ ipcMain.handle('fs:read', (_e, p) => {
   }
 });
 ipcMain.handle('fs:write', (_e, p, text) => fs.writeFileSync(p, text, 'utf8'));
+// A name Windows does not keep as given: `a:b` makes file a with an alternate data stream b, a trailing dot or space is
+// dropped (and the file then cannot be opened by the name given), CON or NUL is a device. The tree refuses these with
+// its own message (renderer/core/ide.js badName); this is for every other caller.
+const refuseBadName = (p) => {
+  const name = path.basename(p);
+  if (/[<>:"|?*\x00-\x1f]|[. ]$|^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\.|$)/i.test(name)) {
+    throw Object.assign(new Error(`${name} is not a valid file name on Windows`), { code: 'EBADNAME', expected: true });
+  }
+};
 ipcMain.handle('fs:create', (_e, p, isDir) => {
+  refuseBadName(p);
   if (fs.existsSync(p)) throw new Error(`${path.basename(p)} already exists`);
   if (isDir) fs.mkdirSync(p, { recursive: true });
   else fs.writeFileSync(p, '');
 });
-ipcMain.handle('fs:rename', (_e, from, to) => fs.renameSync(from, to));
+ipcMain.handle('fs:rename', (_e, from, to) => {
+  // A move keeps the name it has.
+  if (path.basename(from) !== path.basename(to)) refuseBadName(to);
+  fs.renameSync(from, to);
+});
 // Files and folders dropped on the project tree from Explorer -> {copied: [paths], failed: [{name, code, error}]}.
 // Each source is copied on its own, so one failure does not stop the rest. A name that exists in dir is skipped unless
 // overwrite (a folder is then merged into the existing one); a second source with the name of an earlier one is not
@@ -303,9 +317,11 @@ ipcMain.handle('fs:stat', async (_e, p) => {
 // when it cannot be resolved: two spellings of one python.exe are one interpreter.
 ipcMain.handle('fs:realpath', (_e, p) => fs.promises.realpath(p).catch(() => p));
 // Encoding-aware text IO for editor documents (UTF-8, UTF-8 with BOM, UTF-16, CP949/EUC-KR).
-ipcMain.handle('fs:readText', (_e, p) => textCodec.read(p));
-ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.write(p, text, encoding));
-ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.read(p, encoding));
+// On promises: the focus check and the auto save on blur go through these, and a share that stopped answering held
+// every window while the main thread waited on it.
+ipcMain.handle('fs:readText', (_e, p) => textCodec.readAsync(p));
+ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.writeAsync(p, text, encoding));
+ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.readAsync(p, encoding));
 ipcMain.handle('shell:showInFolder', (_e, p) => shell.showItemInFolder(p));
 // Open with Default App starts a program, so a program of an untrusted project stays closed (Safe Mode runs nothing).
 ipcMain.handle('shell:openPath', (e, p) => {
@@ -428,7 +444,8 @@ function readSettings() {
     throw err;
   }
   try {
-    const settings = JSON.parse(text);
+    // A settings.json saved by Notepad or PowerShell 5 starts with a byte order mark, which JSON.parse refuses.
+    const settings = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     if (settings && typeof settings === 'object' && !Array.isArray(settings)) return settings;
   } catch {}
   settingsLog.warn(`${SETTINGS_FILE} is not valid settings JSON; kept as settings.json.bak`);

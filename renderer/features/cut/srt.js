@@ -28,6 +28,11 @@
 
   const lines = (text) => String(text).replace(BOM, '').split(/\r\n|\r|\n/);
   const blank = (s) => /^\s*$/.test(s);
+  // Cue markup players read and do not show: <i>, <b>, <font ...>, ASS overrides ({\an8}) and VTT's <c>, <v Name> and
+  // <00:00:01.500>. Kept, it was drawn as text and burned into exports. A "<" before a non-letter ("a < b") stays.
+  const TAG = /<\/?[a-z][^<>]*>|<\d{1,2}:\d{2}(:\d{2})?[.,]\d{1,3}>/gi;
+  const ASS = /\{\\[^{}]*\}/g;
+  const plain = (s) => s.replace(TAG, '').replace(ASS, '');
 
   function parse(text) {
     const items = [];
@@ -54,7 +59,7 @@
         body.push(all[i]);
         i++;
       }
-      items.push({ start: stamp(m.slice(0, 5)), end: stamp([m[0], m[5], m[6], m[7], m[8]]), text: body.join('\n').replace(/\s+$/, '') });
+      items.push({ start: stamp(m.slice(0, 5)), end: stamp([m[0], m[5], m[6], m[7], m[8]]), text: plain(body.join('\n')).replace(/\s+$/, '') });
     }
     return items;
   }
@@ -107,7 +112,7 @@
       i++;
       const text = [];
       while (i < all.length && !blank(all[i])) text.push(all[i++]);
-      items.push({ start: stamp(m.slice(0, 5)), end: stamp([m[0], m[5], m[6], m[7], m[8]]), text: unescape(text.join('\n').replace(/\s+$/, '')) });
+      items.push({ start: stamp(m.slice(0, 5)), end: stamp([m[0], m[5], m[6], m[7], m[8]]), text: unescape(plain(text.join('\n'))).replace(/\s+$/, '') });
     }
     return items;
   }

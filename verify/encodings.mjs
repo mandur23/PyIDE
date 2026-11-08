@@ -1,5 +1,5 @@
 // Documents and their encodings: detection, a chosen encoding that sticks, re-encodings made outside PyIDE, Convert to,
-// CP949 refusals, notebooks with CRLF, and saves that cannot leave a half-written file. Ports 9270.
+// CP949 refusals, notebooks with CRLF, and saves that cannot leave a half-written file. Ports 9270 (inspector 9272).
 import { execFileSync } from 'child_process';
 import { chmodSync, linkSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { createRequire } from 'module';
@@ -102,9 +102,91 @@ const unit = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : '
   rmSync(dir, { recursive: true, force: true });
 }
 
+// ---------- codec: a BOM that is not there, long names, saves on promises ----------
+{
+  const dir = mkdtempSync(path.join(tmpdir(), 'pyide-encodings-async-'));
+  const f = (n) => path.join(dir, n);
+  const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+  const noTemp = () => !readdirSync(dir).some((n) => n.includes('pyide-tmp'));
+  const fails = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+  try {
+    // Reload in UTF-8 with BOM, or that encoding pinned while a checkout rewrote the file without a mark.
+    writeFileSync(f('nobom.py'), 'import os\n');
+    const asBom = codec.read(f('nobom.py'), 'utf-8-bom');
+    unit(asBom.text === 'import os\n' && codec.decode(Buffer.concat([BOM, Buffer.from('x = 1')]), 'utf-8-bom') === 'x = 1',
+      `a file without a BOM read as UTF-8 with BOM keeps its first characters (${JSON.stringify(asBom.text)})`);
+
+    // `.<name>.<pid>.pyide-tmp` went past the 255 characters a name may have.
+    const long = `${'n'.repeat(245)}.py`;
+    writeFileSync(f(long), 'a = 1\n');
+    const longSync = await fails(() => codec.write(f(long), 'a = 2\n', 'utf-8'));
+    const longAsync = await fails(() => codec.writeAsync(f(long), 'a = 3\n', 'utf-8'));
+    unit(!longSync && !longAsync && readFileSync(f(long), 'utf8') === 'a = 3\n' && noTemp(),
+      `a file with a ${long.length}-character name saves (${longSync?.code || longSync?.message || ''} ${longAsync?.code || longAsync?.message || ''})`);
+
+    // writeAsync: what write does, without holding the main thread.
+    writeFileSync(f('async.py'), 'old = 1\n');
+    const idBefore = statSync(f('async.py'), { bigint: true }).ino;
+    await codec.writeAsync(f('async.py'), 'new = 2\n', 'utf-8');
+    unit(readFileSync(f('async.py'), 'utf8') === 'new = 2\n' && statSync(f('async.py'), { bigint: true }).ino !== idBefore && noTemp(),
+      'writeAsync replaces the file by rename and leaves no temporary file');
+    await Promise.all(Array.from({ length: 20 }, (_, i) => codec.writeAsync(f('async.py'), `v = ${i}\n`, 'utf-8')));
+    unit(readFileSync(f('async.py'), 'utf8') === 'v = 19\n' && noTemp(), `saves of one file asked for at once end with the last one (${JSON.stringify(readFileSync(f('async.py'), 'utf8'))})`);
+    writeFileSync(f('full2.py'), 'precious = 1\n');
+    const realOpen = cjsFs.promises.open;
+    cjsFs.promises.open = async (...args) => {
+      const fh = await realOpen(...args);
+      const real = fh.writeFile.bind(fh);
+      fh.writeFile = async (data) => {
+        await real(Buffer.from(data).subarray(0, 3));
+        throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+      };
+      return fh;
+    };
+    const full = await fails(() => codec.writeAsync(f('full2.py'), 'precious = 2\n'.repeat(50), 'utf-8')).finally(() => { cjsFs.promises.open = realOpen; });
+    unit(full?.code === 'ENOSPC' && readFileSync(f('full2.py'), 'utf8') === 'precious = 1\n' && noTemp(),
+      `a writeAsync that fails halfway (disk full) leaves the old file whole (${JSON.stringify(readFileSync(f('full2.py'), 'utf8'))})`);
+    writeFileSync(f('linked2.py'), 'a = 1\n');
+    linkSync(f('linked2.py'), f('other-name2.py'));
+    await codec.writeAsync(f('linked2.py'), 'a = 2\n', 'utf-8');
+    unit(readFileSync(f('other-name2.py'), 'utf8') === 'a = 2\n', 'writeAsync writes a hard-linked file in place');
+    writeFileSync(f('ro2.py'), 'ro = 1\n');
+    chmodSync(f('ro2.py'), 0o444);
+    const ro = await fails(() => codec.writeAsync(f('ro2.py'), 'ro = 2\n', 'utf-8'));
+    chmodSync(f('ro2.py'), 0o666);
+    unit(['EPERM', 'EACCES'].includes(ro?.code) && readFileSync(f('ro2.py'), 'utf8') === 'ro = 1\n', `writeAsync still refuses a read-only file (${ro?.code})`);
+    writeFileSync(f('kr2.py'), iconv.encode(KO, 'cp949'));
+    const cp = await fails(() => codec.writeAsync(f('kr2.py'), '😀\n', 'cp949'));
+    unit(cp?.expected === true && readFileSync(f('kr2.py')).equals(iconv.encode(KO, 'cp949')), 'writeAsync refuses a CP949 save that would lose characters, as an expected error');
+    const attrs = (n) => execFileSync('attrib', [f(n)], { encoding: 'utf8' }).slice(0, 12).replace(/\s/g, '');
+    writeFileSync(f('marked2.py'), 'm = 1\n');
+    writeFileSync(`${f('marked2.py')}:Zone.Identifier`, '[ZoneTransfer]\r\nZoneId=3\r\n');
+    execFileSync('attrib', ['+h', f('marked2.py')]);
+    await codec.writeAsync(f('marked2.py'), 'm = 2\n', 'utf-8');
+    unit(readFileSync(f('marked2.py'), 'utf8') === 'm = 2\n' && attrs('marked2.py').includes('H') && readFileSync(`${f('marked2.py')}:Zone.Identifier`, 'utf8').includes('ZoneId=3') && noTemp(),
+      'writeAsync keeps a Hidden file Hidden, with its alternate data streams');
+    execFileSync('attrib', ['-h', f('marked2.py')]);
+  } catch (e) {
+    unit(false, `the codec checks stopped: ${e.message}`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // ---------- in the IDE ----------
-const t = await launch({ fixture: 'core', port: 9270, name: 'encodings' });
+const t = await launch({ fixture: 'core', port: 9270, name: 'encodings', args: ['--inspect=9272'] });
 const { js, until, press, type, check, sleep } = t;
+// The main process's Node inspector, to make one file's disk slow. Closed before the window: a session that has
+// evaluated code keeps Electron from exiting.
+const mainWs = new WebSocket((await (await fetch('http://127.0.0.1:9272/json/list')).json())[0].webSocketDebuggerUrl);
+await new Promise((r) => mainWs.addEventListener('open', r));
+let mainSeq = 0;
+const mainPending = new Map();
+mainWs.addEventListener('message', (m) => { const msg = JSON.parse(m.data); mainPending.get(msg.id)?.(msg); mainPending.delete(msg.id); });
+const mainEval = (expr) => new Promise((r) => {
+  const id = ++mainSeq;
+  mainPending.set(id, (msg) => r(msg.result?.result?.value));
+  mainWs.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true, includeCommandLineAPI: true } }));
+});
 for (const ok of results) t.results.push({ ok, label: 'codec' });
 const p = (n) => path.join(t.project, n);
 const status = () => js(`document.querySelector('#statusEncoding').textContent`);
@@ -135,6 +217,45 @@ const appendLine = async (text) => {
 };
 
 try {
+  // A file on a share that answers slowly: each look at it takes 1.5 s, holding the thread when made synchronously.
+  // Reading it (the focus check), decoding it and saving it (auto save on blur) must leave every other IPC answering.
+  writeFileSync(p('slowshare.py'), 'x = 1\n');
+  await mainEval(`(() => {
+    const fs = require('fs');
+    const slow = (p) => /slowshare/i.test(String(p));
+    globalThis.__slowRestore = [];
+    for (const [owner, names, wait] of [[fs, ['statSync', 'lstatSync', 'readFileSync', 'copyFileSync'], (ms) => { const end = Date.now() + ms; while (Date.now() < end); }],
+      [fs.promises, ['stat', 'lstat', 'readFile', 'copyFile'], (ms) => new Promise((r) => setTimeout(r, ms))]]) {
+      for (const name of names) {
+        const real = owner[name];
+        owner[name] = function (p, ...rest) {
+          if (!slow(p)) return real.call(this, p, ...rest);
+          const w = wait(1500);
+          return w ? w.then(() => real.call(this, p, ...rest)) : real.call(this, p, ...rest);
+        };
+        globalThis.__slowRestore.push(() => { owner[name] = real; });
+      }
+    }
+    return true;
+  })()`);
+  const blocking = await js(`(async () => {
+    const p = ide.util.joinPath(ide.root, 'slowshare.py');
+    const other = async () => { const t0 = performance.now(); await ide.api.invoke('fs:stat', ide.root); return Math.round(performance.now() - t0); };
+    const out = {};
+    for (const [name, call] of [['readText', () => ide.api.invoke('fs:readText', p)], ['decode', () => ide.api.invoke('fs:decode', p, 'utf-8')],
+      ['writeText', () => ide.api.invoke('fs:writeText', p, 'x = 2\\n', 'utf-8')]]) {
+      const slowCall = call();
+      await new Promise((r) => setTimeout(r, 100));
+      out[name] = await other();
+      await slowCall;
+    }
+    return out;
+  })()`);
+  await mainEval('(globalThis.__slowRestore.forEach((f) => f()), true)');
+  check(Object.values(blocking).every((ms) => ms < 700) && readFileSync(p('slowshare.py'), 'utf8') === 'x = 2\n',
+    `reading, decoding and saving a file on a slow disk leave the main process answering other calls (ms: ${JSON.stringify(blocking)})`);
+  mainWs.close();
+
   // A3: a stray byte no longer turns a UTF-8 file into CP949 mojibake, and it saves.
   writeFileSync(p('stray.py'), STRAY);
   await openFile(t, 'stray.py');
@@ -250,4 +371,5 @@ try {
   check(false, err.message);
   await t.shot('failure.png');
 }
+mainWs.close();
 t.finish();

@@ -187,7 +187,9 @@
         if (!pathTouched || !pathIn.value) pathIn.value = d;
       }
       const r = resolvedNow();
-      if (r && !/\.(mp4|m4a)$/i.test(pathIn.value)) pathIn.value = pathIn.value.replace(/(\.[^.\\/]*)?$/, `.${r.ext}`);
+      // The preset's extension, also over the other one: export writes withExt(path, ext), so a talk.mp4 left in the field
+      // with Audio only checked talk.mp4 for "Replace it?" and wrote over talk.m4a.
+      if (r && !pathIn.value.toLowerCase().endsWith(`.${r.ext}`)) pathIn.value = pathIn.value.replace(/(\.[^.\\/]*)?$/, `.${r.ext}`);
       const rg = range();
       const len = rg ? rg.out - rg.in : seq ? Cut.model.sequenceDuration(seq) : 0;
       const problems = r ? (Cut.presets.validate?.(r) || []) : [tr('Choose a preset.')];
@@ -240,6 +242,10 @@
       const offline = seq.clips.some((c) => c.source?.media != null && ui.offline?.has(c.source.media));
       if (offline && !(await ui.confirm(tr('Some clips use offline media and will export as a red "media offline" picture. Export anyway?'), { title, ok: title }))) return null;
       const path = pathIn.value.trim();
+      // Replacing a file the project reads would put the export where the footage was.
+      const same = (p) => String(p || '').replace(/\//g, '\\').toLowerCase();
+      const used = app.project.media.find((m) => same(m.path) === same(path) || same(m.proxy?.path) === same(path));
+      if (used) { ui.notify(tr('{name} is a media file of this project. Export to another name.', { name: ui.basename(path) }), { kind: 'warn' }); return null; }
       if (ui.exportQueue?.writes?.(path)) { ui.toast(tr('An export in the queue already writes {name}.', { name: ui.basename(path) })); return null; }
       const st = await ide.api.invoke('cut:stat', path).catch(() => null);
       if (st && !st.missing && !(await ui.confirm(tr('{name} already exists. Replace it?', { name: ui.basename(path) }), { title, ok: tr('Replace') }))) return null;

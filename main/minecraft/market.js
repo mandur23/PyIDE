@@ -39,6 +39,37 @@ const onlyTranslations = (pack) => !fs.existsSync(pack) || filesIn(pack).every((
 const langOf = (file) => {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; }
 };
+// A folder another program has open (a terminal inside it, a file a scanner reads) can be neither renamed nor wholly
+// deleted on Windows, and a delete that stops part-way leaves half of it. So the old folder moves aside first, and a
+// move that fails has changed nothing; then staging (when given) moves in, and the old folder is deleted last. If
+// staging cannot move in, the old folder goes back. A brief hold is waited out.
+const LOCKED = ['EPERM', 'EBUSY', 'EACCES'];
+function renameRetried(from, to) {
+  for (let i = 0; ; i++) {
+    try { return fs.renameSync(from, to); } catch (err) {
+      if (i === 4 || !LOCKED.includes(err.code)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+}
+function replaceFolder(folder, staging) {
+  const aside = fs.existsSync(folder) ? `${folder}.old-${crypto.randomBytes(4).toString('hex')}` : null;
+  if (aside) {
+    try { renameRetried(folder, aside); } catch (err) {
+      if (!LOCKED.includes(err.code)) throw err;
+      throw fail(`${folder} is in use (${err.code}): close what has it open (a terminal or a window in that folder) and try again. Nothing was changed`, 'inUse');
+    }
+  }
+  if (staging) {
+    try { renameRetried(staging, folder); } catch (err) {
+      if (!aside) throw err;
+      try { renameRetried(aside, folder); } catch { throw fail(`${folder} could not be replaced (${err.code || err.message}), and the old one could not be put back: it is in ${aside}`); }
+      throw err;
+    }
+  }
+  // Out of the way already: a file of it still held leaves only that folder behind.
+  if (aside) try { fs.rmSync(aside, { recursive: true, force: true, maxRetries: 3 }); } catch {}
+}
 // The server's resource pack (dir/resourcepack) becomes the folder staging, with the translations of the old one: a
 // language file the new pack has too keeps the new pack's lines and gains ours.
 function swapPack(dir, staging, own = null) {
@@ -52,14 +83,13 @@ function swapPack(dir, staging, own = null) {
     if (!ours) throw fail(`${from} is not valid JSON: fix it, or move it away, before the resource pack is replaced (Nano Studio does not write over its lines)`);
     fs.writeFileSync(to, `${JSON.stringify({ ...ours, ...langOf(to) }, null, 2)}\n`);
   }
-  fs.rmSync(folder, { recursive: true, force: true });
-  fs.renameSync(staging, folder);
+  replaceFolder(folder, staging);
 }
 // The server's resource pack taken out: its translations stay, with its pack.mcmeta, which is for the server's version.
 function dropPack(dir, own = null) {
   const folder = path.join(dir, 'resourcepack');
   const keep = translations(folder, own);
-  if (!keep.length) return fs.rmSync(folder, { recursive: true, force: true });
+  if (!keep.length) return replaceFolder(folder, null);
   const staging = path.join(dir, 'resourcepack.part');
   fs.rmSync(staging, { recursive: true, force: true });
   try {
@@ -67,8 +97,7 @@ function dropPack(dir, own = null) {
       fs.mkdirSync(path.dirname(path.join(staging, rel)), { recursive: true });
       fs.copyFileSync(path.join(folder, rel), path.join(staging, rel));
     }
-    fs.rmSync(folder, { recursive: true, force: true });
-    fs.renameSync(staging, folder);
+    replaceFolder(folder, staging);
   } finally { fs.rmSync(staging, { recursive: true, force: true }); }
 }
 // The Market's project whose file is the server's resource pack, if any.

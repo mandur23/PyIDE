@@ -42,10 +42,13 @@ const joinPath = (a, b) => `${a.replace(/[\\/]+$/, '')}\\${b}`;
 // A file's identity: its path in lower case, except the names inside folders with case sensitivity turned on, where
 // a.py and A.py are two files. Main finds those folders (main/path-case.js, which keys paths the same way) when a
 // project or document opens (learnPathCase), before the document is keyed.
+// / and \ are one separator, as Windows and Monaco's Uri.file read them: C:/proj/a.py from a traceback or a terminal
+// link is the C:\proj\a.py open in a tab (two documents over one model lost the unsaved one's edits when either closed).
 const caseSensitive = new Set(); // dirKey of each case-sensitive folder
 const caseSensitiveLower = [];
 const dirKey = (key) => key.replace(/[\\/]+/g, '\\').replace(/\\$/, '');
-const pathKey = (p) => {
+const pathKey = (path) => {
+  const p = path.replace(/\//g, '\\');
   const lower = p.toLowerCase();
   if (!caseSensitive.size) return lower;
   const probe = `${dirKey(lower)}\\`;
@@ -1804,10 +1807,26 @@ async function newFileText(path) {
 // Items for the project tree's context menu: `(entry) => [menu items]`. An item labelled New with a submenu is merged
 // into the menu's New › (file-templates: File, Python File, Python Package…).
 ide.treeNewItems = [];
+// Names Windows does not keep as typed: `a:b` writes the stream b of a file a, a trailing dot or space is dropped (the
+// file then cannot be opened by the name shown), and CON, NUL, COM1… are devices. Each part of a typed path (pkg\x.py)
+// is checked. -> why the name is refused, or null. Main refuses the same names from other callers (main.js).
+const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\.|$)/i;
+function badName(typed) {
+  for (const name of typed.split(/[\\/]+/).filter(Boolean)) {
+    const chars = [...new Set([...name].filter((c) => c.charCodeAt(0) < 32 || '<>:"|?*'.includes(c)))];
+    const shown = chars.map((c) => (c.charCodeAt(0) < 32 ? `U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}` : c)).join(' ');
+    if (chars.length) return tr('{name} is not a valid name: Windows does not allow {chars} in a name.', { name, chars: shown });
+    if (/[. ]$/.test(name)) return tr('{name} is not a valid name: Windows does not allow a name that ends with a dot or a space.', { name });
+    if (RESERVED_NAME.test(name)) return tr('{name} is not a valid name: Windows keeps it for a device.', { name });
+  }
+  return null;
+}
 async function createEntry(isDir) {
   if (!ide.root) return;
   const name = await ide.ui.prompt(isDir ? tr('New directory name') : tr('New Python file name'), isDir ? '' : 'main.py');
   if (!name) return;
+  const refused = badName(name);
+  if (refused) return void ide.ui.alert(refused);
   const target = joinPath(selectedDir(), !isDir && !name.includes('.') ? `${name}.py` : name);
   if (await ide.api.exists(target)) return void ide.ui.alert(tr('{path} already exists', { path: basename(target) }));
   try {
@@ -1827,6 +1846,9 @@ async function createEntry(isDir) {
 // Open documents under it, in every window, move along with their unsaved text: nothing is saved first, so a save
 // that fails (a read-only file) or is cancelled (File Cache Conflict) cannot lose an edit.
 async function moveTo(entry, to) {
+  // A new name, also from a plugin's plain rename (refactor's Rename Without References); a move keeps the name.
+  const refused = basename(to) !== entry.name && badName(basename(to));
+  if (refused) return void ide.ui.alert(refused);
   if (!samePath(entry.path, to) && await ide.api.exists(to)) return void ide.ui.alert(tr('{path} already exists', { path: to }));
   try { await ide.api.rename(entry.path, to); } catch (e) { return void ide.ui.alert(ipcError(e)); }
   await ide.documentsMoved(entry.path, to);
@@ -1857,6 +1879,8 @@ async function renameEntry(entry) {
   if (await handledByPlugin({ kind: 'rename', entry })) return;
   const name = await ide.ui.prompt(tr('New name'), entry.name);
   if (!name || name === entry.name) return;
+  const refused = badName(name);
+  if (refused) return void ide.ui.alert(refused);
   await moveTo(entry, joinPath(dirname(entry.path), name));
 }
 

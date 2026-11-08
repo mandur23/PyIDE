@@ -110,8 +110,14 @@ function createSinks({ journalDir, run, onCommit, log }) {
         result = commit ? fail('io', s.failed) : { ok: true, path: null, bytes: 0, aborted: true };
       }
     } catch (err) {
-      await fs.promises.rm(s.part, { force: true }).catch(() => {});
-      result = fail(err.code === 'EBUSY' || err.code === 'EPERM' ? 'busy' : 'io', err.message);
+      // A finished file that cannot take the target's place (a player has the target open) is kept: deleting it threw
+      // away the whole render.
+      const busy = err.code === 'EBUSY' || err.code === 'EPERM';
+      if (busy && commit && !s.failed) result = { ...fail('busy', err.message), part: s.part };
+      else {
+        await fs.promises.rm(s.part, { force: true }).catch(() => {});
+        result = fail(busy ? 'busy' : 'io', err.message);
+      }
     }
     await saveJournal();
     if (result.ok && result.path) await onCommit?.(result.path);

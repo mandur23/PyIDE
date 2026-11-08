@@ -2567,11 +2567,16 @@
     on(root, 'pointerdown', () => app.setFocus('timeline'), true);
 
     // ---------- clipboard ----------
-    let clipboard = [];
+    // Copied clips name their media by id, and another project's m2 is another file (or none): they paste only into the
+    // project they came from. The clipboard outlived opening another project and pasted that project's file.
+    let copied = [];
+    let copiedFrom = null;
+    const clipboard = { get length() { return copiedFrom === app.history ? copied.length : 0; } };
     function copySelection() {
       const clips = [...app.selection].map((id) => clipById(seq, id)).filter(Boolean);
-      clipboard = clips.map((c) => ({ ...clone(c), kind: kindOf(seq, c), trackIndex: model.trackIndex(seq, c.track) }));
-      return clipboard.length;
+      copied = clips.map((c) => ({ ...clone(c), kind: kindOf(seq, c), trackIndex: model.trackIndex(seq, c.track) }));
+      copiedFrom = app.history;
+      return copied.length;
     }
 
     // ---------- app events ----------
@@ -2697,13 +2702,13 @@
         const t = targeted(seq);
         const lowest = (kind) => seq.tracks.filter((x) => x.kind === kind && t.includes(x.id))[0]?.id;
         const opts = { at: app.t, mode: insert ? 'insert' : 'overwrite' };
-        if (clipboard.some((c) => c.kind === 'video') && lowest('video')) opts.video = lowest('video');
-        if (clipboard.some((c) => c.kind === 'audio') && lowest('audio')) opts.audio = lowest('audio');
-        const r = ui.exec(app, C.paste(seq.id, clipboard, opts));
+        if (copied.some((c) => c.kind === 'video') && lowest('video')) opts.video = lowest('video');
+        if (copied.some((c) => c.kind === 'audio') && lowest('audio')) opts.audio = lowest('audio');
+        const r = ui.exec(app, C.paste(seq.id, copied, opts));
         if (r?.ids) app.select(r.ids);
         return r;
       },
-      get clipboard() { return clipboard; },
+      get clipboard() { return clipboard.length ? copied.slice() : []; },
       selectAll: () => seq && app.select(seq.clips.map((c) => c.id)),
       deselect: () => { app.select([]); setTransition(null); v.gap = null; invalidate(); },
       freezeFrame() {

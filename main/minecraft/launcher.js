@@ -735,11 +735,22 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
   }
 
   // The instance's launcher profile and version, wherever a launcher had them; the renderer moves its folder to the
-  // Recycle Bin.
-  function remove(root, name) {
-    if (busy.has(dirOf(root, name).toLowerCase())) throw fail(`${name} is busy with another download or Play`, 'busy');
+  // Recycle Bin. An open launcher keeps profiles in memory and writes them back over the file, which would bring the
+  // profile back, so it is asked to close first, as Play does. -> {removed: true, alreadyOpen}: alreadyOpen when it
+  // stayed open (a game running), and may keep the profile.
+  // Exclusive: no Play of it starts while the launcher is being closed.
+  const remove = (root, name) => exclusive(root, name, async () => {
     const store = findStore();
-    for (const work of [workDir(root), ...(store ? [store.work] : [])]) {
+    const works = [workDir(root), ...(store ? [store.work] : [])];
+    // A file that does not read (an open launcher writing it this moment) may hold it too.
+    const holding = (work) => {
+      if (!isFile(path.join(work, PROFILES))) return false;
+      const profiles = readJson(path.join(work, PROFILES))?.profiles;
+      return !profiles || typeof profiles !== 'object' || Object.hasOwn(profiles, versionId(name));
+    };
+    const open = works.some(holding) && !!(await launcherOpen());
+    const closed = open && await closeLauncher();
+    for (const work of works) {
       const file = path.join(work, PROFILES);
       if (fs.existsSync(file)) {
         const data = readProfiles(file);
@@ -750,8 +761,8 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     const list = saved(root);
     for (const s of list) if (s.instance === name && s.private) joins.stop(s.address);
     if (list.some((s) => s.instance === name)) saveServers(root, list.map((s) => (s.instance === name ? { ...s, instance: null } : s)));
-    return true;
-  }
+    return { removed: true, alreadyOpen: open && !closed };
+  });
 
   // ---------- servers to join ----------
   const sameAddress = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();

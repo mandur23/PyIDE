@@ -378,6 +378,36 @@ if (want('range')) {
     check(r.sidecars?.length === 1 && r.sidecars[0].toLowerCase() === srtPath.toLowerCase(), `an SRT was written next to it (${S(r.sidecars)})`);
     const srt = existsSync(srtPath) ? readFileSync(srtPath, 'utf8') : '';
     check(/00:00:00,000 --> 00:00:00,500/.test(srt) && srt.includes('안녕하세요 captions'), `the SRT has the caption cut to the range and moved to 0 (${S(srt)})`);
+    // two caption tracks of one language (both made in the UI's language): two SRT files, not one written twice;
+    // and an audio-only export answers Cancel while it encodes (it ran to the end before)
+    const two = P('two-ko.m4a');
+    const r2 = await js(`(async () => {
+      const p = __cx.projects.s1;
+      const h = Cut.commands.createHistory(JSON.parse(JSON.stringify(p.history.project)));
+      const seq = h.project.sequences.find((s) => s.id === p.seq);
+      for (const ct of seq.captions) h.do(Cut.commands.setCaptionTrack(p.seq, ct.id, { lang: 'ko' }));
+      const id = h.do(Cut.commands.addCaptionTrack(p.seq, { lang: 'ko', name: '둘째' })).id;
+      h.do(Cut.commands.setCaptions(p.seq, id, [{ start: 0, end: Cut.time.TICKS, text: '둘째 트랙' }]));
+      const done = await Cut.export.run({ project: h.project, seqId: p.seq, path: ${S(two)}, preset: 'audio-m4a', captions: 'srt' });
+      // a couple of minutes of sound (the first clip over and over), cancelled once the audio encode is under way
+      const T = Cut.time.TICKS;
+      const long = Cut.commands.createHistory(Cut.model.createProject({ sequence: { fps: [30, 1] } }));
+      const mid = long.do(Cut.commands.importMedia(JSON.parse(JSON.stringify(p.history.project.media.filter((m) => m.audio))))).ids[0];
+      const md = long.project.media.find((m) => m.id === mid).duration;
+      const piece = Math.floor(md / T) * T;
+      for (let i = 0; i * piece < 120 * T; i++) long.do(Cut.commands.place(long.project.sequences[0].id, { source: { media: mid }, in: 0, out: piece, at: i * piece, video: null, audio: 'A1' }));
+      const ac = new AbortController();
+      const seen = [];
+      const t0 = performance.now();
+      const cut = await Cut.export.run({ project: long.project, seqId: long.project.sequences[0].id, path: ${S(P('cancel.m4a'))}, preset: 'audio-m4a', overrides: { loudness: null }, signal: ac.signal,
+        onProgress: (q) => { if (q.phase === 'audio' && q.fraction > 0) { seen.push(q.fraction); if (seen.length === 1) ac.abort(); } } });
+      return { ok: done.ok, error: done.error, sidecars: done.sidecars, cancelled: cut.code, ms: Math.round(performance.now() - t0), seen: seen.length, tracks: seq.captions.length,
+        seconds: Math.round(Cut.model.sequenceDuration(long.project.sequences[0]) / T) };
+    })()`);
+    const names = (r2.sidecars || []).map((x) => x.split(/[\\/]/).pop());
+    check(r2.ok && names.length === r2.tracks && new Set(names.map((x) => x.toLowerCase())).size === names.length && names.every((n) => existsSync(P(n))),
+      `caption tracks of one language get an SRT each (${S(names)}${r2.ok ? '' : `, ${r2.error}`})`);
+    check(r2.seen >= 1 && r2.cancelled === 'cancelled' && !existsSync(P('cancel.m4a')), `an audio-only export shows its progress and stops on Cancel (${S({ seconds: r2.seconds, progress: r2.seen, code: r2.cancelled, ms: r2.ms })})`);
     // Burned in: the exported frame at 1.2 s (range frame 6) matches the compositor with captions, not without.
     const cap = await js(`(async () => {
       const p = __cx.projects.s1;

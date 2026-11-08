@@ -201,7 +201,9 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
           const s = await importServer(it.path, log);
           done.push({ name: it.name, what: 'server', to: s.dir });
         } else if (it.kind === 'modpack') {
-          modpacks.push(it.path);
+          // New Server from Modpack makes one server at a time: the first opens it, the others are said.
+          if (modpacks.length) skipped.push({ name: it.name, why: 'modpack' });
+          else modpacks.push(it.path);
         } else if (it.kind === 'curseforge') {
           skipped.push({ name: it.name, why: 'curseforge' });
         } else if (it.kind === 'plugin' || it.kind === 'mod') {
@@ -249,10 +251,9 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
     return { done, skipped, modpacks };
   }
 
+  // As Java reads the file: the line may be written `level-name = x`, or twice (the last one counts).
   function setLevelName(dir, level) {
-    const file = path.join(dir, 'server.properties');
-    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-    fs.writeFileSync(file, /^level-name=.*$/m.test(text) ? text.replace(/^level-name=.*$/m, `level-name=${level}`) : `${text.replace(/\n?$/, '\n')}level-name=${level}\n`);
+    require('./templates').setProperty(path.join(dir, 'server.properties'), 'level-name', level);
   }
 
   // ---------- modpacks ----------

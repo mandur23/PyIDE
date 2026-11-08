@@ -347,6 +347,22 @@ try {
   check((await A.call(other, 'cut:writeClose', ab.id, { commit: true })).code === 'badArgs', 'another window cannot close the sink');
   const abClosed = await call('cut:writeClose', ab.id, { commit: false });
   check(abClosed.ok && abClosed.aborted && !fs.existsSync(path.join(outDir, 'aborted.mp4')) && !fs.existsSync(path.join(outDir, 'aborted.mp4.part')), 'an aborted export leaves no file');
+  // the target open in a player (no delete sharing): the finished file is kept as .part, not deleted with the render
+  {
+    const held = path.join(outDir, 'held.mp4');
+    write(held, 'playing in a player');
+    const { spawn } = await import('child_process');
+    const ps = spawn('powershell', ['-NoProfile', '-Command', `$f = [IO.File]::Open('${held.replace(/'/g, "''")}', 'Open', 'Read', 'Read'); 'held'; Start-Sleep 60`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    await new Promise((r) => { ps.stdout.on('data', (d) => { if (/held/.test(String(d))) r(); }); setTimeout(r, 15000); });
+    const hs = await call('cut:writeOpen', held);
+    await call('cut:writeAt', hs.id, new Uint8Array(2000).fill(7));
+    const hc = await call('cut:writeClose', hs.id, { commit: true });
+    ps.kill();
+    await new Promise((r) => ps.once('exit', r));
+    const kept = hc.part && fs.existsSync(hc.part) ? fs.statSync(hc.part).size : 0;
+    check(hc.code === 'busy' && kept === 2000 && fs.readFileSync(held, 'utf8') === 'playing in a player', `a target held open keeps the finished file as .part (${S({ code: hc.code, part: hc.part && path.basename(hc.part), kept })})`);
+    if (hc.part) fs.rmSync(hc.part, { force: true });
+  }
   const w8 = new Sender(8);
   const left = await A.call(w8, 'cut:writeOpen', path.join(outDir, 'left.mp4'));
   await A.call(w8, 'cut:writeAt', left.id, new Uint8Array(500));

@@ -868,6 +868,28 @@
   // Pastes copied clips (Clip objects, as the timeline copied them) at `at`, keeping their spacing in time and between
   // tracks: the lowest copied video track lands on opts.video (else on its own track), the lowest audio one on
   // opts.audio. A clip's kind is its `kind` field, else that of its track in this sequence, else what its props say.
+  // A clip copied in a sequence of another frame rate (the clipboard follows the sequence tabs): its length, fades,
+  // keyframes and markers in this sequence's frames, the way a frame-rate change does (refps). Unchanged at the same
+  // rate. A 31-frame clip from 30 fps pasted into 25 fps was refused as "would leave the project damaged".
+  function fitToFrames(c, clip) {
+    const sn = (t) => Math.round(t / c.f) * c.f;
+    let d = Math.max(c.f, sn(model.clipDuration(clip)));
+    if (!still(c, clip)) {
+      const m = model.mediaOf(c.project, clip);
+      if (m) d = Math.min(d, Math.floor((clip.reverse ? clip.out : m.duration - clip.in) / clip.speed / c.f + 1e-9) * c.f);
+      if (d < c.f) fail('The clip is too short.', 'tooShort');
+    }
+    if (still(c, clip) || !clip.reverse) clip.out = clip.in + d * clip.speed;
+    else clip.in = clip.out - d * clip.speed;
+    clip.fadeIn = Math.min(sn(clip.fadeIn || 0), d);
+    clip.fadeOut = Math.min(sn(clip.fadeOut || 0), d - clip.fadeIn);
+    for (const [prop, list] of Object.entries(clip.keyframes || {})) {
+      const byT = new Map();
+      for (const k of list || []) byT.set(Math.min(d, sn(k.t)), { ...k, t: Math.min(d, sn(k.t)) });
+      clip.keyframes[prop] = [...byT.values()].sort((a, b) => a.t - b.t);
+    }
+    if (clip.markers) clip.markers = clip.markers.map((m) => ({ ...m, t: sn(m.t), duration: sn(m.duration || 0) }));
+  }
   H.paste = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const o = cmd.opts || {};
@@ -906,6 +928,7 @@
       for (const k of ['speed', 'reverse', 'enabled', 'name', 'label', 'props', 'keyframes', 'effects', 'fadeIn', 'fadeOut']) if (x[k] !== undefined) clip[k] = x[k];
       if (x.role !== undefined) clip.role = model.ROLES.includes(x.role) ? x.role : null;
       if (x.markers) clip.markers = x.markers;
+      fitToFrames(c, clip);
       if (x.link) {
         if (!links.has(x.link)) links.set(x.link, null);
         clip.link = x.link;
@@ -1546,6 +1569,28 @@
     if (!t) fail(`there is no transition ${id}`, 'notFound');
     return t;
   }
+  // The longest a transition at `at` with `align` may be without overlapping another on its track. Where two overlapped,
+  // the compositor showed only the first in the list: a 4-frame clip between two 30-frame dissolves cut the first one
+  // off at 17 %.
+  function roomFor(c, track, at, align, except) {
+    const [k1, k2] = align === 'start' ? [0, 1] : align === 'end' ? [1, 0] : [0.5, 0.5];
+    let room = Infinity;
+    for (const t of c.seq.transitions) {
+      if (t.track !== track || t.id === except || t.at === at) continue;
+      const [a, b] = [t.align === 'start' ? t.at : t.align === 'end' ? t.at - t.duration : t.at - t.duration / 2, t.align === 'start' ? t.at + t.duration : t.align === 'end' ? t.at : t.at + t.duration / 2];
+      if (b <= at && k1) room = Math.min(room, (at - b) / k1);
+      if (a >= at && k2) room = Math.min(room, (a - at) / k2);
+      if (a < at && b > at) room = 0;
+    }
+    return room;
+  }
+  function fitTransition(c, track, at, align, d, except) {
+    const room = roomFor(c, track, at, align, except);
+    if (room === Infinity || d <= room) return d;
+    const fit = Math.floor(room / c.f + 1e-9) * c.f;
+    if (fit < c.f) fail('There is no room for a transition here: the transitions beside it reach this edit point.', 'noRoom');
+    return fit;
+  }
   H.addTransition = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const o = clone(cmd.opts || {});
@@ -1555,7 +1600,7 @@
     if (typeof o.type !== 'string' || !o.type) fail('the transition has no type');
     const align = o.align ?? 'center';
     if (!model.ALIGNS.includes(align)) fail(`unknown alignment ${align}`);
-    const d = Math.max(c.f, frames(c, o.duration ?? project.settings.transitionDuration, 'duration'));
+    const d = fitTransition(c, o.track, p, align, Math.max(c.f, frames(c, o.duration ?? project.settings.transitionDuration, 'duration')));
     for (const t of [...c.seq.transitions]) if (t.track === o.track && t.at === p) removeFrom(c, c.seq.transitions, t);
     const t = { id: nid(c, 't'), track: o.track, at: p, type: o.type, duration: d, align, params: o.params || {} };
     append(c, c.seq.transitions, t);
@@ -1575,11 +1620,13 @@
     const p = cmd.patch || {};
     for (const k of Object.keys(p)) if (!['type', 'duration', 'align', 'params'].includes(k)) fail(`unknown transition setting ${k}`);
     if (p.type !== undefined) tx.set(t, 'type', String(p.type));
-    if (p.duration !== undefined) tx.set(t, 'duration', Math.max(c.f, frames(c, p.duration, 'duration')));
-    if (p.align !== undefined) {
-      if (!model.ALIGNS.includes(p.align)) fail(`unknown alignment ${p.align}`);
-      tx.set(t, 'align', p.align);
+    if (p.align !== undefined && !model.ALIGNS.includes(p.align)) fail(`unknown alignment ${p.align}`);
+    const align = p.align ?? t.align;
+    if (p.duration !== undefined || p.align !== undefined) {
+      const d = p.duration !== undefined ? Math.max(c.f, frames(c, p.duration, 'duration')) : t.duration;
+      tx.set(t, 'duration', fitTransition(c, t.track, t.at, align, d, t.id));
     }
+    if (p.align !== undefined) tx.set(t, 'align', p.align);
     for (const [k, v] of Object.entries(p.params || {})) {
       if (v === null || v === undefined) tx.del(t.params, k);
       else tx.set(t.params, k, clone(v));

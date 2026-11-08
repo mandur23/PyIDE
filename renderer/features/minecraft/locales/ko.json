@@ -836,5 +836,9 @@
   "Starting…": "시작 중…",
   "Stopping…": "중지 중…",
   "No setting matches “{query}”.": "“{query}”에 맞는 설정이 없어요.",
-  "Stop {name} to change an operator's level: a running server keeps its own list.": "관리자 레벨을 바꾸려면 먼저 {name} 서버를 중지하세요. 실행 중인 서버는 자기 목록을 따로 들고 있어요."
+  "Stop {name} to change an operator's level: a running server keeps its own list.": "관리자 레벨을 바꾸려면 먼저 {name} 서버를 중지하세요. 실행 중인 서버는 자기 목록을 따로 들고 있어요.",
+  "Its pyide-server.json cannot be read. Open the folder to fix it.": "pyide-server.json 파일을 읽을 수 없어요. 폴더를 열어 고쳐 주세요.",
+  "Its pyide-server.json names a server type Nano Studio does not know ({kind}). Open the folder to fix it.": "pyide-server.json 파일의 서버 종류({kind})는 Nano Studio에서 지원하지 않아요. 폴더를 열어 고쳐 주세요.",
+  "another modpack: a server is made from one modpack at a time, so drop this one again after that": "다른 모드팩이에요. 모드팩 서버는 한 번에 하나씩 만들어요. 지금 서버를 만든 뒤 다시 끌어다 놓으세요",
+  "{name} is deleted, but the Minecraft Launcher stayed open, so it may keep the profile. If the launcher still lists it, delete it there.": "'{name}' 인스턴스를 삭제했어요. Minecraft Launcher가 닫히지 않아서 프로필이 남을 수 있어요. 런처에 아직 보이면 런처에서 삭제해 주세요."
 }

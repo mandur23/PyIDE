@@ -85,6 +85,7 @@ function helpers(t) {
 // ======================================================================
 const t = await launch({ fixture: 'refactor', port: 9690 });
 const { js, until, press, type, check, shot, sleep } = t;
+const settled = async (ok, ms = 5000) => { const end = Date.now() + ms; while (!ok() && Date.now() < end) await sleep(50); return ok(); };
 const h = helpers(t);
 // The program runs from disk, so unsaved editor changes are saved first.
 const appOutput = async () => { await js('ide.saveAll()'); return run(VENV_PY, ['app.py'], { cwd: t.project }).replace(/\r\n/g, '\n'); };
@@ -265,11 +266,13 @@ try {
   await press('Ctrl+Z');
   await until(`ide.editor.getModel().getValue(1) === ${JSON.stringify(beforeSig.pricing)}`, 'signature undone in the editor');
   await until(`(async () => (await ide.api.read(ide.util.joinPath(ide.root, 'app.py'))).replace(/\\r\\n/g, '\\n') === ${JSON.stringify(beforeSig.app)})()`, 'app.py restored');
-  check(h.disk('reports/daily.py') === beforeSig.daily, 'one Ctrl+Z undoes the refactoring in every file');
+  // the files are written one after another and main no longer holds every read behind a write: daily.py may land a
+  // moment after app.py. Ctrl+Shift+Z comes at once, while the undo may still be writing (it waits, then redoes).
+  check(await settled(() => h.disk('reports/daily.py') === beforeSig.daily), 'one Ctrl+Z undoes the refactoring in every file');
   await press('Ctrl+Shift+Z');
   await h.waitText((v) => v.includes('def line_total(quantity, price, rate=DISCOUNT_RATE):'), 'redo');
   await until(`(async () => (await ide.api.read(ide.util.joinPath(ide.root, 'app.py'))).includes('line_total(5, 4.0)'))()`, 'redo in app.py');
-  check(h.disk('reports/daily.py') === sigDaily, 'Ctrl+Shift+Z redoes it in every file');
+  check(await settled(() => h.disk('reports/daily.py') === sigDaily), 'Ctrl+Shift+Z redoes it in every file');
   await press('Ctrl+S');
 
   // errors stay in the dialog

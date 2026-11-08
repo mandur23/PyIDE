@@ -52,6 +52,14 @@ try {
   check(existsSync(`${file}.bak`) && readFileSync(`${file}.bak`, 'utf8').includes('oops') && disk()['editor.lineNumbers'] === 'relative' && disk()['editor.fontSize'] === 17,
     'an unreadable settings.json found at a write is kept as settings.json.bak and the window writes all of its settings');
 
+  // A settings.json saved with a byte order mark (Notepad, PowerShell 5) is still settings: the next write merges onto
+  // it instead of keeping it as settings.json.bak and starting over.
+  rmSync(`${file}.bak`, { force: true });
+  writeFileSync(file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify({ ...disk(), 'test.fromNotepad': 1 }, null, 2))]));
+  await set(a, 'editor.tabLimit', 8);
+  check(!existsSync(`${file}.bak`) && disk()['test.fromNotepad'] === 1 && disk()['editor.tabLimit'] === 8,
+    `a settings.json with a byte order mark is read as settings (${q({ bak: existsSync(`${file}.bak`), fromNotepad: disk()['test.fromNotepad'] })})`);
+
   // Cannot be written (a folder in the file's place): one notification, retried, written once possible.
   const notes = `ide.notifications.list().filter((n) => n.title === 'Settings cannot be saved').length`;
   rmSync(file, { force: true });

@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeFileSync } from 'fs';
+import { linkSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
@@ -286,6 +286,19 @@ try {
   check(wide.count === 2 && wide.files.every((f) => f.matches[0].col === 4), `UTF-16 files are searched as text (${J(wide.files.map((f) => [f.path.split(/[\\\\/]/).pop(), f.matches[0]?.col]))})`);
   const wideReplace = await js(`ide.api.invoke('search:replace', ${opts('wide_total', 'wide_sum')}, ['ps_out.txt', 'nobom.txt'].map((f) => ide.util.joinPath(ide.root, f)))`);
   check(wideReplace.count === 2 && readFileSync(path.join(project, 'ps_out.txt')).equals(utf16('wide_sum', true)) && readFileSync(path.join(project, 'nobom.txt')).equals(utf16('wide_sum', false)), 'Replace in Files keeps UTF-16 files in UTF-16 (with and without a BOM)');
+  // A UTF-8 file is written as a save writes it: a new file renamed over the old one (a new file id), so a full disk or
+  // a crash cannot leave it cut short. A hard-linked file is still written in place, so its other name sees the change.
+  const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+  writeFileSync(path.join(project, 'atomic.txt'), Buffer.concat([BOM, Buffer.from('atomic_total = 1\n')]));
+  writeFileSync(path.join(project, 'hardlinked.txt'), 'atomic_total = 2\n');
+  linkSync(path.join(project, 'hardlinked.txt'), path.join(project, 'hardlinked-other.txt'));
+  const fileId = (n) => statSync(path.join(project, n), { bigint: true }).ino;
+  const idBefore = fileId('atomic.txt');
+  const atomic = await js(`ide.api.invoke('search:replace', ${opts('atomic_total', 'atomic_sum')}, ['atomic.txt', 'hardlinked.txt'].map((f) => ide.util.joinPath(ide.root, f)))`);
+  const leftovers = readdirSync(project).filter((n) => n.includes('pyide-tmp'));
+  check(atomic.count === 2 && readFileSync(path.join(project, 'atomic.txt')).equals(Buffer.concat([BOM, Buffer.from('atomic_sum = 1\n')])) && fileId('atomic.txt') !== idBefore && !leftovers.length,
+    `Replace in Files writes a UTF-8 file through a temporary file renamed over it, keeping its BOM (${J({ count: atomic.count, renamed: fileId('atomic.txt') !== idBefore, leftovers })})`);
+  check(readFileSync(path.join(project, 'hardlinked-other.txt'), 'utf8') === 'atomic_sum = 2\n', 'and writes a hard-linked file in place');
   // Preview searches typed in a row: the one waiting behind a running search is replaced by the newer one.
   const live = await js(`Promise.all(['greet', 'compute', 'calculate'].map((q) => ide.api.invoke('search:find', ide.root, { ...${opts('')}, query: q }, {}, { live: true })))`);
   check(!live[0].superseded && live[1].superseded && !live[2].superseded && live[2].count > 0, `a queued preview search is superseded by a newer one (${J(live.map((r) => r.superseded || r.count))})`);

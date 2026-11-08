@@ -62,7 +62,9 @@ function detect(buf) {
 
 function decode(buf, encoding) {
   switch (encoding) {
-    case 'utf-8-bom': return buf.subarray(3).toString('utf8');
+    // Only a mark that is there: a file read in UTF-8 with BOM (Reload in, a pinned encoding after a checkout) may have
+    // none, and its first three bytes are text.
+    case 'utf-8-bom': return buf.subarray(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0).toString('utf8');
     case 'utf-16le': case 'utf-16le-nobom': return iconv.decode(buf.subarray(buf[0] === 0xff && buf[1] === 0xfe ? 2 : 0), 'utf-16le');
     case 'utf-16be': case 'utf-16be-nobom': return iconv.decode(buf.subarray(buf[0] === 0xfe && buf[1] === 0xff ? 2 : 0), 'utf-16be');
     case 'cp949': return iconv.decode(buf, 'cp949');
@@ -104,12 +106,28 @@ function textOf(buf, size, forced) {
 
 // Characters the target encoding cannot represent are refused rather than turned into '?'. The refusal is the user's
 // to read (expected), not an IDE internal error.
-function write(p, text, encoding = 'utf-8') {
+function encodeForSave(text, encoding) {
   const buf = encode(text, encoding);
   if (encoding === 'cp949' && iconv.decode(buf, 'cp949') !== text) {
     throw Object.assign(new Error('Some characters cannot be saved in CP949. Convert the file to UTF-8 first.'), { code: 'EUNMAPPABLE', expected: true });
   }
-  replaceFile(p, buf);
+  return buf;
+}
+function write(p, text, encoding = 'utf-8') {
+  replaceFile(p, encodeForSave(text, encoding));
+}
+// The same without holding the thread while the disk answers (an unreachable network share held every window for as
+// long as Windows tried it). Saves of one file run one after another, so the last one asked for is the one kept.
+const writing = new Map(); // resolved path, lower case -> the last save queued for it
+function writeAsync(p, text, encoding = 'utf-8') {
+  let buf;
+  try { buf = encodeForSave(text, encoding); } catch (err) { return Promise.reject(err); }
+  const k = path.resolve(p).toLowerCase();
+  const run = (writing.get(k) || Promise.resolve()).then(() => replaceFileAsync(p, buf));
+  const done = run.catch(() => {});
+  writing.set(k, done);
+  done.then(() => { if (writing.get(k) === done) writing.delete(k); });
+  return run;
 }
 
 // Writes a new file next to the old one and renames it over, so a write that fails halfway (a full disk) or a crash
@@ -119,6 +137,7 @@ function write(p, text, encoding = 'utf-8') {
 // Files a save just replaced by rename: a file watcher sees a rename there, which is not a new file (the language
 // server would take it as one and forget what it knew about every file).
 const replaced = new Map();
+const noteReplaced = (p) => { replaced.set(path.resolve(p).toLowerCase(), Date.now()); };
 const replacedRecently = (p) => {
   const k = path.resolve(p).toLowerCase();
   const t = replaced.get(k);
@@ -145,6 +164,27 @@ function writeOver(p, buf) {
   }
 }
 
+async function writeOverAsync(p, buf) {
+  let fh;
+  try {
+    fh = await fs.promises.open(p, 'r+');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fs.promises.writeFile(p, buf);
+    throw err;
+  }
+  try {
+    await fh.writeFile(buf);
+    await fh.truncate(buf.length);
+  } finally {
+    await fh.close();
+  }
+}
+
+// A short name of its own in the file's folder: one built from the file's name went past the 255 characters a name
+// may have when that name was longer than about 238, and every save of such a file failed.
+let tmpSeq = 0;
+const tmpNameIn = (dir) => path.join(dir, `.${process.pid}-${++tmpSeq}.pyide-tmp`);
+
 // The temp file starts as a copy of the file (CopyFile), so it carries the file's attributes (Hidden, System…) and
 // alternate data streams (Zone.Identifier) through the rename; the new text is written over the copy.
 function replaceFile(p, buf) {
@@ -157,7 +197,7 @@ function replaceFile(p, buf) {
     return fs.writeFileSync(p, buf);
   }
   if (st.nlink > 1 || !(st.mode & 0o200)) return writeOver(p, buf);
-  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.pyide-tmp`);
+  const tmp = tmpNameIn(path.dirname(target));
   try {
     fs.copyFileSync(target, tmp);
     writeOver(tmp, buf);
@@ -168,11 +208,39 @@ function replaceFile(p, buf) {
   }
   try {
     fs.renameSync(tmp, target);
-    replaced.set(path.resolve(target).toLowerCase(), Date.now());
+    noteReplaced(target);
   } catch {
     fs.rmSync(tmp, { force: true });
     writeOver(p, buf);
   }
 }
+// replaceFile with the same fallbacks, on promises.
+async function replaceFileAsync(p, buf) {
+  let target = p;
+  let st;
+  try {
+    if ((await fs.promises.lstat(p)).isSymbolicLink()) target = await fs.promises.realpath(p);
+    st = await fs.promises.stat(target);
+  } catch {
+    return fs.promises.writeFile(p, buf);
+  }
+  if (st.nlink > 1 || !(st.mode & 0o200)) return writeOverAsync(p, buf);
+  const tmp = tmpNameIn(path.dirname(target));
+  try {
+    await fs.promises.copyFile(target, tmp);
+    await writeOverAsync(tmp, buf);
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true });
+    if (err.code === 'EPERM' || err.code === 'EACCES') return writeOverAsync(p, buf);
+    throw err;
+  }
+  try {
+    await fs.promises.rename(tmp, target);
+    noteReplaced(target);
+  } catch {
+    await fs.promises.rm(tmp, { force: true });
+    await writeOverAsync(p, buf);
+  }
+}
 
-module.exports = { read, readAsync, write, ENCODINGS, looksBinary, detect, decode, encode, replacedRecently };
+module.exports = { read, readAsync, write, writeAsync, ENCODINGS, looksBinary, detect, decode, encode, replacedRecently, noteReplaced };

@@ -360,8 +360,40 @@ try {
   const result = await S(`({ ok: document.querySelector('#cutExportDialog .cut-export-result').dataset.ok, text: document.querySelector('#cutExportDialog .cut-export-result').textContent })`);
   check(result.ok === 'true' && existsSync(outFile) && statSync(outFile).size > 2000, `the export dialog exports the sequence to an MP4 (${result.text})`);
   check(/Checked/.test(result.text), 'the result says the written file was checked');
+  // the preset's extension replaces the other one: "Replace it?" looked at out.mp4 while Audio only wrote out.m4a
+  const preset = (id) => S(`(() => { const s = document.querySelector('#cutExportDialog .cut-export-preset'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change')); return true; })()`);
+  const pathNow = () => S(`document.querySelector('#cutExportDialog .cut-export-path').value`);
+  await preset('audio-m4a');
+  await until(`document.querySelector('#cutExportDialog .cut-export-path').value.toLowerCase().endsWith('.m4a')`, 'the m4a name', 3000).catch(() => {});
+  const asAudio = await pathNow();
+  await preset('720p');
+  await until(`document.querySelector('#cutExportDialog .cut-export-path').value.toLowerCase().endsWith('.mp4')`, 'the mp4 name', 3000).catch(() => {});
+  check(asAudio.toLowerCase() === outFile.toLowerCase().replace(/\.mp4$/, '.m4a') && (await pathNow()).toLowerCase() === outFile.toLowerCase(), `the file name follows the preset both ways (${asAudio})`);
+  // a media file of the project is never written over
+  const source = await S(`Cut.app.project.media.find((m) => m.kind === 'video' && m.path)?.path || null`);
+  if (source && existsSync(source)) {
+    const before = statSync(source);
+    await S(`(() => { const i = document.querySelector('#cutExportDialog .cut-export-path'); i.value = ${JSON.stringify(source)}; i.dispatchEvent(new Event('input')); return true; })()`);
+    await sleep(200);
+    await click('#cutExportDialog .cut-export-start');
+    await sleep(2500);
+    const after = statSync(source);
+    check(after.size === before.size && after.mtimeMs === before.mtimeMs && !existsSync(`${source}.part`) && !(await S(`[...document.querySelectorAll('.dialog')].some((d) => /already exists/.test(d.textContent))`)),
+      'exporting onto a media file of the project is refused, without asking to replace it');
+  } else check(false, `a source media file to test with (${source})`);
   await S(`[...document.querySelectorAll('#cutExportDialog .dialog-buttons button')].pop().click()`);
   await until(`!document.querySelector('#cutExportDialog')`, 'dialog closed');
+  // a project file with a broken part says it is damaged, not "Cannot read properties of null"
+  {
+    const damaged = path.join(home, 'damaged.ncut');
+    const json = JSON.parse(readFileSync(projectPath, 'utf8'));
+    json.sequences[0].clips.push(null);
+    writeFileSync(damaged, JSON.stringify(json));
+    const pathBefore = await app('app.path');
+    const opened = await S(`Cut.ui.lifecycle.openPath(${JSON.stringify(damaged)}, { ask: false })`);
+    const said = await S(`document.querySelector('.cut-toast')?.textContent || ''`);
+    check(opened === false && /damaged/i.test(said) && !/Cannot read|is not/.test(said) && (await app('app.path')) === pathBefore, `a damaged project file is refused as damaged (${said})`);
+  }
   answer({ saveAs: path.join(home, 'frame.png') });
   await key('Ctrl+Shift+E');
   for (let i = 0; i < 100 && !existsSync(path.join(home, 'frame.png')); i++) await sleep(100);

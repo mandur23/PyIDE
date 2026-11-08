@@ -35,6 +35,12 @@
   // ---- pure helpers ------------------------------------------------------------------------------------------------
 
   const withExt = (path, ext) => String(path).replace(/(\.[^.\\/]*)?$/, () => `.${ext}`);
+  const baseName = (p) => String(p).split(/[\\/]/).pop();
+  // The target was open in another program, so the finished file kept its .part name.
+  const keptText = (path, part) => {
+    const t = globalThis.tr || ((s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k]));
+    return t('{name} is open in another program, so it was not replaced. The finished export is kept as {part}: close that program and rename it, or export again.', { name: baseName(path), part });
+  };
   // The SRT file next to an export: "<name>.srt", or "<name>.<lang>.srt" when the sequence has several caption tracks.
   function sidecarPath(path, lang, count = 1) {
     const base = String(path).replace(/\.[^.\\/]*$/, () => '');
@@ -489,8 +495,12 @@
       const srt = mod('srt');
       const range = { in: from, out: to };
       const tracks = seq.captions.filter((c) => c.items.length);
+      const taken = new Set();
       for (const ct of tracks) {
-        const file = sidecarPath(path, ct.lang, tracks.length);
+        // Tracks are made in the UI's language, so two "ko" tracks are usual: the second gets a number, not the first's file.
+        let file = sidecarPath(path, ct.lang, tracks.length);
+        for (let n = 2; taken.has(file.toLowerCase()); n++) file = sidecarPath(path, `${ct.lang || 'captions'}-${n}`, 2);
+        taken.add(file.toLowerCase());
         const r = await saveBytes(file, srt.write(mod('speakers').written(project, ct, captionsInRange(ct.items, range), globalThis.tr)));
         if (!r.ok) return fail(r.code, r.error, { path });
         sidecars.push(r.path);
@@ -576,11 +586,14 @@
       }) : null;
       const pumpAudio = async (untilTicks) => {
         const until = Math.min(sTotal, Math.round(untilTicks / tps));
-        while (sDone < until && !failure) {
+        // With no picture this loop is the whole export: it answers Cancel and reports progress itself (an hour of
+        // audio-only ran to the end after Cancel, with the bar standing still).
+        while (sDone < until && !failure && !signal?.aborted) {
           const n = Math.min(rate, until - sDone);
           aenc.push((await mixer.mixLoaded(project, seq.id, s0 + sDone, n, { masterGain })).out);
           sDone += n;
           while (aenc.enc.encodeQueueSize > 8 && !failure) await sleep(1);
+          if (!settings.video && (sDone / rate) % 5 === 0) progress({ phase: 'audio', fraction: sDone / sTotal });
         }
       };
 
@@ -642,6 +655,7 @@
       if (signal?.aborted) return abort(cancelled());
       if (aenc && !failure) {
         await pumpAudio(duration);
+        if (signal?.aborted) return abort(cancelled());
         await aenc.enc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'audio' }); });
       }
       if (failure) return abort(fail(failure.stage === 'video' ? 'encode' : 'audio', String(failure.message || failure), { hardware: o.choice?.hardware }));
@@ -654,6 +668,7 @@
       if (signal?.aborted) return abort(cancelled());
       await writer.finish();
       const closed = await sink.close(true);
+      if (closed?.part) return fail('busy', keptText(path, closed.part), { part: closed.part });
       if (!closed?.ok) return fail(closed?.code || 'io', closed?.error || 'cannot write the file');
       return { ok: true, path: closed.path, bytes: closed.bytes, frames, encodeSeconds, audioDelay: aenc ? delay : null, audioBitrate: aenc ? audioBitrate : null, loudnessGain,
         encoder: settings.video ? { codec: settings.video.codec, hardware: !!o.choice.hardware } : null };

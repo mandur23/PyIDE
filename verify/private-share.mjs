@@ -1338,9 +1338,28 @@ async function launcherReopen() {
   check(reopened.launched && reopened.reopened && reopened.alreadyOpen === false && !running(launcherImage), `Play closes the open launcher and starts it again, so it reads the new profile (${S({ reopened: reopened.reopened, alreadyOpen: reopened.alreadyOpen })})`);
   const left = JSON.parse(readFileSync(profiles, 'utf8')).profiles;
   check(left.mine && left[`nano-${made.name}`], `a launcher that rewrites its profiles as it closes does not take the instance's profile with it (${S(Object.keys(left))})`);
-  await start(launcherImage, 'stay');
+  const stays = await start(launcherImage, 'stay');
   const kept = await craft.play(root, made.name, {}, () => {});
   check(kept.launched && kept.alreadyOpen === true && !kept.reopened, 'a launcher that will not close keeps today\'s message');
+  stays.child.kill();
+  await until(() => !running(launcherImage), 'the stubborn stand-in to go', 90000);
+
+  // Delete: a launcher left open writes the profiles it read at its start back over the file when it closes later,
+  // which would bring the deleted instance's profile back. Remove closes it first, as Play does, and starts nothing.
+  const startsBefore = starts(root);
+  const rewriting = await start(launcherImage, 'rewrites', profiles);
+  const removed = await craft.remove(root, made.name);
+  await L.closeLauncher(env);
+  await until(() => rewriting.exited() !== undefined, 'the rewriting stand-in to exit', 30000);
+  const afterRemove = JSON.parse(readFileSync(profiles, 'utf8')).profiles;
+  check(removed?.removed && removed.alreadyOpen === false && !afterRemove[`nano-${made.name}`] && afterRemove.mine && starts(root) === startsBefore,
+    `deleting an instance while the launcher is open closes the launcher before the profile goes, so its write-back cannot return it (${S({ removed, profiles: Object.keys(afterRemove) })})`);
+  writeFileSync(profiles, S({ profiles: { ...afterRemove, [`nano-${made.name}`]: { name: made.name, type: 'custom', lastVersionId: `nano-${made.name}` } }, settings: {}, version: 3 }));
+  const stubbornAtRemove = await start(launcherImage, 'stay');
+  const keptOpen = await craft.remove(root, made.name);
+  check(keptOpen?.alreadyOpen === true && !JSON.parse(readFileSync(profiles, 'utf8')).profiles[`nano-${made.name}`], `a launcher that will not close is said, and the profile still leaves the file (${S(keptOpen)})`);
+  stubbornAtRemove.child.kill();
+  await until(() => !running(launcherImage), 'the stubborn stand-in to go', 90000);
   delete process.env.PYIDE_MC_LAUNCHER_IMAGE;
   delete process.env.PYIDE_MC_GAME_IMAGE;
 }
