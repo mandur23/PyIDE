@@ -507,6 +507,7 @@
 - **CI는 같은 브랜치에 새 푸시가 오면 진행 중인 실행을 취소합니다(`cancel-in-progress`).** 0.3.12 때 ERD 커밋의 CI가 다음 푸시로 취소되어 그 커밋은 CI 결과 없이 배포됐습니다. 릴리스 스크립트의 `Release <버전>` 커밋도 진행 중인 CI를 취소합니다. CI는 약 70분 걸리니, 결과가 필요하면 끝날 때까지 푸시하지 않습니다.
 - **`npm run release -- <버전>`은 package.json보다 높은 버전만 받습니다.** 미리 버전을 올리지 않습니다. `CHANGELOG.md`에 그 버전 절이 있어야 합니다.
 - **정식 릴리스는 CI가 통과한 커밋에서만 나갑니다.** 전에는 CI 통과를 눈으로 확인해서, 0.3.22의 `Release` 커밋 CI가 실패한 것을 릴리스 뒤에야 봤습니다. 이제 1단계가 `gh run list --commit HEAD`로 확인하고, 푸시하지 않은 커밋이 있거나 CI가 돌고 있거나 실패했으면 멈춥니다. 먼저 베타(`x.y.z-beta.N`)를 내면 그 `Release` 커밋을 CI가 확인합니다.
+- **릴리스(드라이런 포함)가 도는 동안 커밋하지 않습니다.** 2단계가 package.json과 package-lock.json의 버전을 바꿔 두고 끝날 때 되돌립니다. 그 사이 `git add -A`로 커밋했더니 `0.3.23-beta.2`가 푸시되어, 되돌리는 커밋을 따로 넣었습니다.
 - **`nano-studio` 릴리스는 Latest가 되면 안 됩니다.** Melody Breeze APK 링크가 `releases/latest`를 씁니다.
 - **서명 비밀키는 `%USERPROFILE%\.nano-studio\release-key.pem`에 있습니다.** 저장소에 넣지 않습니다. 잃어버리면 설치된 앱에 업데이트를 보낼 수 없으니 안전한 곳에 백업합니다. 공개키는 `main/release-key.js`에 있습니다. 키가 바뀌면 기존 설치본은 새 업데이트를 거부합니다.
 - **`marketplace/index.json`을 바꾸면 같은 커밋에서 `npm run marketplace:sign`을 실행합니다.** 안 하면 release 1단계가 멈춥니다.
