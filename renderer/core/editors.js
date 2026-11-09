@@ -101,6 +101,7 @@
     });
     doc.sync.joining = '';
     doc.sync.ticket = ++joins;
+    ownUndo(doc);
     ide.api.send('doc:join', { path, ticket: doc.sync.ticket });
     return doc;
   }
@@ -298,8 +299,13 @@
     try {
       for (const op of ops) {
         const edits = op.c.map((c) => ({ range: ide.monaco.Range.fromPositions(positionAt(m, c.at), positionAt(m, c.at + c.del)), text: c.ins }));
-        if (edits.length) m.pushEditOperations([], edits, () => null);
+        // Others' edits stay out of Monaco's undo stack, and move this window's own undo history instead.
+        if (edits.length) { if (doc.history) m.applyEdits(edits); else m.pushEditOperations([], edits, () => null); }
         if (op.eol && m.getEOL() !== op.eol) setModelEOL(m, op.eol);
+        if (doc.history) {
+          doc.shadow = NanoOT.applyText(doc.shadow, [op]);
+          NanoOT.rebase(doc.history, op);
+        }
       }
     } finally { applyingRemote = false; }
     // A save announced by another window before its last edits arrived (see doc:saved).
@@ -309,7 +315,75 @@
   const sendOps = (doc, msg) => { if (msg) ide.api.send('doc:op', { path: doc.path, ...msg }); };
   function localEdit(doc, e, eolBefore) {
     doc.savedText = undefined;
-    sendOps(doc, NanoOT.local(doc.sync, opOf(e, eolBefore)));
+    const op = opOf(e, eolBefore);
+    if (doc.history) recordOwn(doc, op, eolBefore);
+    sendOps(doc, NanoOT.local(doc.sync, op));
+  }
+
+  // ---------- undo of one's own edits ----------
+  // Once a document is shared (another window has it, or a collaboration session), Ctrl+Z and Ctrl+Shift+Z (redo) undo
+  // and redo only this window's edits, never text another typed (renderer/core/ot.js history): others' edits go in
+  // outside Monaco's undo stack and move this history instead, and the model's undo and redo are this history's from
+  // then on, also once the document is alone again. A burst of typing is one step, as Monaco groups it: Monaco ends a
+  // step with pushStackElement. Edits made before the document was shared are not in the history. An undo or redo is an
+  // ordinary edit of this window, sent to the others. doc.shadow: the text as LF, which the inverse of an edit is
+  // taken from (Monaco's change event no longer has the replaced text).
+  function ownUndo(doc) {
+    if (doc.history) return;
+    const m = doc.model;
+    doc.history = NanoOT.newHistory();
+    doc.shadow = lfText(m.getValue());
+    doc.stepOpen = false;
+    const pushStackElement = m.pushStackElement.bind(m);
+    m.pushStackElement = () => { doc.stepOpen = false; return pushStackElement(); };
+    m.undo = () => undoStep(doc, 'undo');
+    m.redo = () => undoStep(doc, 'redo');
+    m.canUndo = () => doc.history.undo.length > 0;
+    m.canRedo = () => doc.history.redo.length > 0;
+  }
+  function recordOwn(doc, op, eolBefore) {
+    const before = doc.shadow;
+    doc.shadow = NanoOT.applyText(before, [op]);
+    if (doc.undoing) {
+      // An undo goes to the redo stack and a redo back to the undo stack, each as one step.
+      NanoOT.record(doc.history, op, before, eolBefore, { into: doc.undoing === 'undo' ? 'redo' : 'undo', join: !doc.undoFirst, caret: doc.undoCaret });
+      doc.undoFirst = false;
+      return;
+    }
+    NanoOT.record(doc.history, op, before, eolBefore, { join: doc.stepOpen });
+    doc.stepOpen = true;
+    doc.history.redo = [];
+  }
+  function undoStep(doc, kind) {
+    const m = doc.model;
+    if (m.isDisposed()) return;
+    const step = NanoOT.take(doc.history, kind);
+    if (!step) return;
+    const shown = editorsOf(m);
+    const ed = shown.find((x) => x.hasTextFocus()) || (ide.editor?.getModel() === m ? ide.editor : shown[0]);
+    const caret = ed?.getPosition();
+    // The step that undoes this one puts the caret back where it is now.
+    Object.assign(doc, { undoing: kind, undoFirst: true, undoCaret: caret ? ide.textOffsets.offset(m, caret) : step.caret });
+    try {
+      for (const op of step.ops) {
+        const edits = op.c.map((c) => ({ range: ide.monaco.Range.fromPositions(positionAt(m, c.at), positionAt(m, c.at + c.del)), text: c.ins }));
+        if (edits.length) m.pushEditOperations([], edits, () => null);
+        if (op.eol && m.getEOL() !== op.eol) setModelEOL(m, op.eol);
+      }
+    } finally {
+      Object.assign(doc, { undoing: null, stepOpen: false });
+    }
+    if (ed && ed.getModel() === m) {
+      const p = ide.textOffsets.position(m, step.caret);
+      ed.setPosition(p);
+      ed.revealPositionInCenterIfOutsideViewport(p);
+    }
+    // Back to the text on disk: unmodified again, as Monaco's own undo would leave it.
+    if (!doc.remote && textHash(diskText(doc)) === doc.diskHash) {
+      doc.savedVersion = m.getAlternativeVersionId();
+      clearChanged(doc);
+      renderAllTabs();
+    }
   }
 
   // Applies another window's text as one minimal edit so cursors and undo history survive. remote: the text is the
@@ -319,7 +393,15 @@
     if (!c) return;
     const range = ide.monaco.Range.fromPositions(doc.model.getPositionAt(c.at), doc.model.getPositionAt(c.at + c.del));
     applyingRemote = remote;
-    try { doc.model.pushEditOperations([], [{ range, text: c.ins }], () => null); } finally { applyingRemote = false; }
+    try {
+      if (remote && doc.history) {
+        // The history counts every line break as one character.
+        const op = diffOp(doc.shadow, lfText(text));
+        doc.model.applyEdits([{ range, text: c.ins }]);
+        doc.shadow = NanoOT.applyText(doc.shadow, [op]);
+        NanoOT.rebase(doc.history, op);
+      } else doc.model.pushEditOperations([], [{ range, text: c.ins }], () => null);
+    } finally { applyingRemote = false; }
   }
 
   const docAt = (path) => docs.get(key(path));
@@ -334,6 +416,7 @@
     if (!d) return;
     const r = NanoOT.synced(d.sync, msg, msg.text === undefined ? '' : lfText(d.model.getValue()));
     d.sync = r.state;
+    if (r.state.shared) ownUndo(d);
     if (r.apply) applyOps(d, r.apply);
     if (d.remote) { d.lineSeparator = d.model.getEOL(); ide.emit('lineSeparatorChanged', d); ide.emit('remoteDocumentSynced', d); }
     sendOps(d, r.send);
@@ -344,6 +427,7 @@
     const d = docAt(path);
     if (!d) return void ide.api.send('doc:leave', { path });
     if (!NanoOT.share(d.sync, msg)) return;
+    ownUndo(d);
     ide.api.send('doc:snapshot', { path, rev: d.sync.rev, text: lfText(d.model.getValue()), eol: d.model.getEOL() });
   });
   ide.api.on('doc:unshared', (msg) => { const d = docAt(msg.path); if (d) d.sync = NanoOT.unshared(d.sync, msg); });

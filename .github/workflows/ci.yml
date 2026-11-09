@@ -132,6 +132,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/collab-session.mjs
+      - name: ot-undo
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/ot-undo.mjs
       - name: cut-ai-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

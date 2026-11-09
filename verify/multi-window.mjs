@@ -180,6 +180,45 @@ try {
     check(await w.js(text('join.py')) === await js(text('join.py')), 'edits after the join are shared as before');
   });
 
+  // Ctrl+Z and Ctrl+Shift+Z (redo, PyCharm's) in a shared document undo and redo only that window's own typing, never the
+  // other window's. A word is one step: Monaco ends a step before a space, and the shared history follows its steps.
+  await section('each window undoes only its own edits', async () => {
+    const key = (k, mods) => ({ modifiers: mods, key: k, code: `Key${k.toUpperCase()}`, windowsVirtualKeyCode: k.toUpperCase().charCodeAt(0) });
+    const wpress = async (k) => { for (const type of ['rawKeyDown', 'keyUp']) await w.cdp('Input.dispatchKeyEvent', { type, ...key(k, 2) }); await sleep(80); };
+    const both = async (expected, label) => {
+      await until(`${text('u.py')} === ${q(expected)}`, `main: ${label}`, 8000);
+      await w.until(`${text('u.py')} === ${q(expected)}`, `detached: ${label}`, 8000);
+    };
+    writeFileSync(p('u.py'), 'first\nsecond\n');
+    await js(`ide.openFile(${q(p('u.py'))})`);
+    await w.js(`ide.openFile(${q(p('u.py'))})`);
+    await until(`${doc('u.py')}?.sync?.shared === true`, 'u.py shared in the main window');
+    await w.until(`${doc('u.py')}?.sync?.shared === true`, 'u.py shared in the detached window');
+    await js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 }), true)`);
+    await t.type('MAIN');
+    await w.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }), true)`);
+    await w.cdp('Input.insertText', { text: 'DET' });
+    await both('MAINfirst\nDETsecond\n', 'both edits');
+    await t.press('Ctrl+z');
+    await both('first\nDETsecond\n', 'the main window undid its own typing');
+    check(true, 'Ctrl+Z in one window undoes its own typing and keeps the other window\'s');
+    check(q(await js(`ide.editor.getPosition()`)) === q({ lineNumber: 1, column: 1 }), 'the caret goes back to where the typing began');
+    await wpress('z');
+    await both('first\nsecond\n', 'the detached window undid its own typing');
+    check(true, 'Ctrl+Z in the other window undoes only its own typing too');
+    await t.press('Ctrl+Shift+z');
+    await both('MAINfirst\nsecond\n', 'the main window redid its typing');
+    check(true, 'Ctrl+Shift+Z redoes it, in both windows');
+    await t.press('Ctrl+z');
+    await t.press('Ctrl+z');
+    await sleep(800);
+    check(await js(text('u.py')) === 'first\nsecond\n' && await w.js(text('u.py')) === 'first\nsecond\n', 'with nothing of its own left, Ctrl+Z changes nothing (the other window\'s undone typing stays undone)');
+    check(await js(`(() => { const d = ${doc('u.py')}; return d.shadow === d.model.getValue().replace(/\\r\\n/g, '\\n'); })()`), 'the history\'s text is the editor\'s');
+    check(!(await js(dirty('u.py'))), 'undone back to the file\'s text, the tab is unmodified');
+    await js(`ide.closeTab(${q(p('u.py'))}, true)`);
+    await w.js(`ide.closeTab(${q(p('u.py'))}, true)`);
+  });
+
   // C2: a rename in one window moves the document in the other, unsaved text included.
   await section('rename', async () => {
     await js(append('b.py', '\nMAIN_EDIT = 1'));

@@ -1,8 +1,8 @@
 // Collaboration step 2 (docs/collab-coding-plan.md): editing together. A guest who joined view only gets the right to
 // edit from the host's Collaboration tool window, then both type into the same file at once with real keys and end
-// with the same text; each sees the other's caret, selection and name tag where the other is; the guest follows the
-// host into another file and down it; the host takes the right to edit back and finally removes the guest, whose
-// copy goes. Two app instances on loopback through a stand-in bore. Ports 9457 (host), 9458 (guest).
+// with the same text; Ctrl+Z and Ctrl+Shift+Z undo and redo only one's own typing; each sees the other's caret,
+// selection and name tag where the other is; the guest follows the host into another file and down it; the host takes
+// the right to edit back and finally removes the guest, whose copy goes. Two app instances on loopback through a stand-in bore. Ports 9457 (host), 9458 (guest).
 import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { collabPair, sleep } from './collab-lib.mjs';
@@ -50,6 +50,34 @@ try {
     check(lf(a).includes('def greet(name):') && lf(a).startsWith('H0 '), 'the host\'s text went where it typed, the file around it intact');
     check(await h.js(`ide.getDocument(${S(hp('shared.py'))}).model.getEOL() === '\\r\\n'`) && await g.js(`ide.getDocument(ide.collab.localPath('shared.py')).model.getEOL() === '\\r\\n'`), 'both keep the file\'s CRLF');
     check(!readFileSync(hp('shared.py'), 'utf8').includes('G11'), 'nothing is saved until someone saves');
+  });
+
+  // A word is one undo step, as Monaco groups typing (it ends a step before a space).
+  await section('Ctrl+Z undoes only one\'s own typing', async () => {
+    const both = async (pred, label) => {
+      await h.until(`(() => { const t = ${hostText('shared.py')}; return ${pred}; })()`, `host: ${label}`, 10000);
+      await g.until(`(() => { const t = ${guestText('shared.py')}; return ${pred}; })()`, `guest: ${label}`, 10000);
+    };
+    await h.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 }), true)`);
+    await h.type('HOSTUNDO');
+    await g.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }), true)`);
+    await g.type('GUESTUNDO');
+    await both(`t.includes('HOSTUNDO') && t.includes('GUESTUNDO')`, 'both edits');
+    const before = await h.js(hostText('shared.py'));
+    await h.press('Ctrl+z');
+    await both(`!t.includes('HOSTUNDO') && t.includes('GUESTUNDO')`, 'the host\'s typing undone, the guest\'s kept');
+    check(lf(await h.js(hostText('shared.py'))) === lf(before).replace('HOSTUNDO', ''), 'the host\'s Ctrl+Z takes out only what the host typed, in both apps');
+    await g.press('Ctrl+z');
+    await both(`!t.includes('HOSTUNDO') && !t.includes('GUESTUNDO')`, 'the guest\'s typing undone');
+    check(lf(await g.js(guestText('shared.py'))) === lf(before).replace('HOSTUNDO', '').replace('GUESTUNDO', ''), 'the guest\'s Ctrl+Z takes out only what the guest typed');
+    const now = await h.js(hostText('shared.py'));
+    check(['H11 ', 'G11 '].every((w) => now.includes(w)), 'the earlier typing of both stays');
+    await g.press('Ctrl+Shift+z');
+    await both(`t.includes('GUESTUNDO') && !t.includes('HOSTUNDO')`, 'the guest redid its typing');
+    check(true, 'Ctrl+Shift+Z redoes the guest\'s typing, not the host\'s');
+    await h.press('Ctrl+Shift+z');
+    await both(`t.includes('GUESTUNDO') && t.includes('HOSTUNDO')`, 'the host redid its typing');
+    check(lf(await h.js(hostText('shared.py'))) === lf(await g.js(guestText('shared.py'))), 'both apps end with the same text');
   });
 
   await section('carets, selections and name tags', async () => {

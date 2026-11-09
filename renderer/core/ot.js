@@ -181,5 +181,65 @@
   // Alone with the document again: its own text stands, and it stops sending ops. -> the next state.
   const unshared = (s, msg) => (forThis(s, msg) ? { ...newClient(), rev: s.rev, ticket: s.ticket } : s);
 
-  return { lfText, separatorOf, diffOp, mapPoint, survivors, over, xform, applyText, newClient, forThis, flush, local, synced, remote, nack, share, unshared };
+  // ---------- undo history ----------
+  // Undo and redo of one client's own edits in a shared document: another's text is never undone. The history holds
+  // groups of inverse ops (one group per typing burst, as the editor groups them): undo[n-1] is the latest group, and
+  // a group's ops apply in their order to the text as it is now, each to the text the previous one left; a group's caret
+  // is a point in the text after it is undone (where the caret was before the edits). Another's op moves every group
+  // (rebase), so an undo deletes only what this client typed (survivors) and puts back what it deleted where it now
+  // belongs. Applied, an undo or redo is an ordinary local op, sent like any other.
+  const newHistory = () => ({ undo: [], redo: [] });
+  // The op that takes the text after `op` back to `before` (as LF); eolBefore: the separator before it.
+  function inverse(op, before, eolBefore) {
+    let shift = 0;
+    const c = [];
+    for (const x of op.c) {
+      const back = { at: x.at + shift, del: x.ins.length, ins: before.slice(x.at, x.at + x.del) };
+      if (back.del || back.ins) c.push(back);
+      shift += x.ins.length - x.del;
+    }
+    return op.eol && eolBefore && op.eol !== eolBefore ? { c, eol: eolBefore } : { c };
+  }
+  const empty = (op) => !op.c.length && !op.eol;
+  // A local op made on `before` (the text as LF) with separator eolBefore. into: 'undo' for an edit (or a redo), 'redo'
+  // for an undo. join: it belongs to the latest group of that stack (the same typing burst, or the same undo).
+  // caret: for a new group, the point the caret goes to when the group is applied (default: where the edit began).
+  function record(h, op, before, eolBefore, { into = 'undo', join = false, caret } = {}) {
+    const inv = inverse(op, before, eolBefore);
+    if (empty(inv)) return;
+    const stack = h[into];
+    const last = stack[stack.length - 1];
+    if (join && last) { last.ops.unshift(inv); return; }
+    const end = op.c[op.c.length - 1];
+    stack.push({ ops: [inv], caret: caret ?? (end ? end.at + end.del : 0) });
+  }
+  // Another's op `r` (on the text as it is now) moves both stacks: each group's ops, and `r` past them, newest first.
+  function rebase(h, r) {
+    for (const stack of [h.undo, h.redo]) {
+      let theirs = r;
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const g = stack[i];
+        for (let k = 0; k < g.ops.length; k++) {
+          const mine = g.ops[k];
+          g.ops[k] = over(mine, theirs, false);
+          theirs = over(theirs, mine, true);
+        }
+        g.caret = mapPoint(g.caret, theirs, false);
+      }
+    }
+  }
+  // The latest group of `kind` ('undo' | 'redo') that still changes something, taken off its stack, or null. A group
+  // whose text others have deleted entirely is dropped on the way.
+  function take(h, kind) {
+    const stack = h[kind];
+    while (stack.length) {
+      const g = stack.pop();
+      g.ops = g.ops.filter((op) => !empty(op));
+      if (g.ops.length) return g;
+    }
+    return null;
+  }
+
+  return { lfText, separatorOf, diffOp, mapPoint, survivors, over, xform, applyText, newClient, forThis, flush, local, synced, remote, nack, share, unshared,
+    newHistory, inverse, record, rebase, take };
 });
