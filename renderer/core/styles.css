@@ -306,6 +306,8 @@ body.app-cut #cutHost { display: flex; flex-direction: column; flex: 1; min-heig
 body.app-cut :is(#toolbar, #stripe, #stripeRight, #sidePanel, #sideSplitter, #editorArea, #trustBar, #bottom, #bottomSplitter,
   #rightPanel, #rightSplitter, #statusPath, #statusPos, #statusEncodingSlot, #statusInterp) { display: none !important; }
 body.app-cut #statusItems > :not(#bgTasks, #ideErrors, #updateStatus) { display: none !important; }
+/* With none of those to show, Cut gives the status bar's row to the editor. */
+body.app-cut #status:not(:has(:is(#bgTasks, #ideErrors, #updateStatus):not(.hidden))) { display: none; }
 
 /* Main toolbar (PyCharm New UI): main menu, project widget, run widget, search, settings. */
 #toolbar { padding: 0 6px; }

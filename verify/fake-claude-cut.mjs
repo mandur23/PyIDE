@@ -171,6 +171,43 @@ async function agent() {
     emit({ type: 'result', subtype: 'success', is_error: false, result: text, num_turns: n + 1 });
   };
   const seq = (await use('get_sequence', {})).value;
+  // verify/cut-ai-tools.mjs: the keyboard's actions, the editing tools, import, automation
+  if (/키보드 동작/.test(request)) {
+    say('편집 동작을 차례로 실행할게요.');
+    await use('list_actions', { search: 'extract' });
+    const steps = [
+      await use('run_action', { id: 'markIn', time: 1 }),
+      await use('run_action', { id: 'markOut', time: 3 }),
+      await use('run_action', { id: 'extract' }),
+      await use('run_action', { id: 'rippleDelete' }),
+      await use('run_action', { id: 'addMarker', time: 2 }),
+    ];
+    return finish(`${steps.filter((s) => s.ok).length}개를 했고 ${steps.filter((s) => !s.ok).length}개는 하지 못했어요.`);
+  }
+  if (/효과 편집/.test(request)) {
+    const video = seq.clips.find((c) => c.track === 'V1');
+    const audioTrack = seq.tracks.find((t) => t.kind === 'audio' && !t.locked);
+    const r = [
+      await use('set_time_remap', { clip_id: video.id, segments: [{ speed: 100, until: 2, ramp: 0.5 }, { speed: 50, until: 4 }, { hold: 1 }, { speed: 100 }] }),
+      await use('add_mask', { clip_id: video.id, shape: 'ellipse', width: 0.5, height: 0.5 }),
+    ];
+    const mask = r[1].value?.mask;
+    r.push(await use('set_keyframes', { clip_id: video.id, property: `masks.${mask}.path`, keyframes: [{ time: 0, value: { shape: 'ellipse', x: 0.3, width: 0.5, height: 0.5 } }, { time: 2, value: { shape: 'ellipse', x: 0.7, width: 0.5, height: 0.5 } }] }));
+    r.push(await use('set_keyframes', { clip_id: video.id, property: `masks.${mask}.feather`, keyframes: [{ time: 0, value: 0 }, { time: 2, value: 60 }] }));
+    r.push(await use('set_color', { clip_id: video.id, curves: { master: [0, 0, 0.5, 0.7, 1, 1] }, hsl: { hue: 200, hue_range: 60, saturation: 150 } }));
+    r.push(await use('set_track', { track_id: audioTrack.id, volume: -6, pan: 20 }));
+    r.push(await use('set_sequence', { master_gain: -2 }));
+    return finish(r.every((x) => x.ok) ? '속도 램프, 마스크 움직임, 커브, 믹서를 바꿨어요.' : `일부를 하지 못했어요: ${r.filter((x) => !x.ok).map((x) => x.text).join(' / ')}`);
+  }
+  if (/가져와/.test(request)) {
+    const paths = request.match(/[A-Za-z]:\\[^\s"]+/g) || [];
+    const r = await use('import_media', { paths });
+    return finish(r.ok ? `가져왔어요: ${(r.value.media || []).map((m) => m.name).join(', ')}` : `가져오지 못했어요: ${r.text}`);
+  }
+  if (/자동 자막/.test(request)) {
+    const r = await use('automation', { action: 'auto_captions', language: 'ko' });
+    return finish(r.ok ? `자막 ${r.value.count}개를 만들었어요.` : `자막을 만들지 못했어요: ${r.text}`);
+  }
   if (/잠긴|locked/i.test(request)) {
     const lockedTrack = seq.tracks.find((t) => t.locked);
     const clip = seq.clips.find((c) => c.track === lockedTrack?.id);

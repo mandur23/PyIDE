@@ -2,8 +2,22 @@
    Colors come from the IDE's variables (both themes) and the Cut tokens in style.css. */
 .cut-root { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; background: var(--gray1);
   color: var(--gray11); font-size: 12px; user-select: none; --cut-wave: #3fae8c; }
-.cut-stage { flex: 1; min-height: 0; display: flex; }
+.cut-body { flex: 1; min-height: 0; display: flex; }
+.cut-stage { flex: 1; min-height: 0; min-width: 0; display: flex; }
 .cut-shelf { display: none; }
+/* the AI dock: the AI Assistant as a full-height column right of the workspace (the top bar's AI button) */
+.cut-dock { flex: none; display: flex; flex-direction: column; min-width: 260px; max-width: 50%; margin: 4px 4px 4px 0; background: var(--gray2);
+  border: 1px solid var(--gray3); border-radius: 6px; overflow: hidden; }
+.cut-dock-head { display: flex; align-items: center; gap: 6px; height: 28px; flex: none; padding: 0 4px 0 10px; border-bottom: 1px solid var(--gray3);
+  color: var(--gray12); font-weight: 600; }
+.cut-dock-head .cut-icon { color: var(--cut-accent); }
+.cut-dock-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-dock-close { width: 22px; height: 22px; border: 0; border-radius: 4px; background: none; color: var(--gray9); font-size: 15px; line-height: 1; cursor: pointer; }
+.cut-dock-close:hover { color: var(--gray12); background: var(--gray4); }
+.cut-dock-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.cut-dock-splitter { margin: 4px 0; }
+.cut-ai-btn[aria-pressed="true"] { color: var(--gray12); background: color-mix(in srgb, var(--cut-accent) 22%, transparent); }
+.cut-ai-btn .cut-icon { color: var(--cut-accent); }
 
 /* top bar */
 .cut-topbar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; flex: none; background: var(--gray2);

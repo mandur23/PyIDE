@@ -18,14 +18,14 @@
     'presets.js', 'audiofx.js', 'audioengine.js', 'export.js', 'testsrc.js',
     // automation: signal analysis, what is done with speech recognition's words, Claude's prompts and answers, and the
     // tools an AI edits with (the control API)
-    'analyze.js', 'speech.js', 'speakers.js', 'ai.js', 'control.js',
+    'analyze.js', 'speech.js', 'speakers.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-actions.js',
     // the screen
     'ui-base.js', 'ui-shell.js', 'ui-project.js', 'ui-monitors.js', 'ui-export.js', 'ui-captions.js', 'ui-keys.js',
     'ui-timeline.js', 'ui-controls.js', 'ui-effects.js', 'ui-text.js', 'ui-color.js', 'ui-scopes.js', 'ui-overlay.js', 'ui-masks.js', 'ui-auto.js',
     'ui-history.js', 'ui-meters.js', 'ui-markers.js', 'ui-mixer.js', 'ui-audiofx.js',
     // speech recognition: auto captions, the transcript panel, filler words; text AI through Claude; voice isolation;
     // the AI assistant and the control API's tools in the page
-    'ui-speech.js', 'ui-speakers.js', 'ui-ai.js', 'ui-voice.js', 'ui-assistant.js',
+    'ui-speech.js', 'ui-speakers.js', 'ui-ai.js', 'ui-voice.js', 'ui-control.js', 'ui-assistant.js',
     // convenience: the shortcut editor, the settings page, proxies, the export queue; Premiere's Tools panel and menu bar
     'ui-shortcuts.js', 'ui-settings.js', 'ui-proxy.js', 'ui-queue.js', 'ui-toolspanel.js', 'ui-menubar.js',
   ];

@@ -31,6 +31,8 @@ const C = require('../renderer/features/cut/commands.js');
 const effects = require('../renderer/features/cut/effects.js');
 const state = require('../renderer/features/cut/state.js');
 const K = require('../renderer/features/cut/control.js');
+const lumetri = require('../renderer/features/cut/lumetri.js');
+const keyframes = require('../renderer/features/cut/keyframes.js');
 const { createControl } = require('../main/cut/control.js');
 const { createAgent } = require('../main/cut/agent.js');
 const claude = require('../main/ai/claude.js');
@@ -43,6 +45,19 @@ if (process.argv.includes('--table')) {
     for (const t of K.TOOLS.filter((x) => x.kind === kind)) {
       const req = new Set(t.input.required || []);
       console.log(`| \`${t.name}\` | ${Object.keys(t.input.properties).map((a) => (req.has(a) ? `**${a}**` : a)).join(', ') || '(none)'} | ${t.description.replace(/\|/g, '\\|')} |`);
+    }
+    console.log('');
+  }
+  process.exit(0);
+}
+// --inventory prints its inventory section (every feature and what covers it).
+if (process.argv.includes('--inventory')) {
+  const heads = { keys: 'Keyboard actions (ui-keys.js)', automation: 'The Automation menu (ui-auto.js)', menu: 'Menu items without an action (ui-menubar.js)', commands: 'Edit commands (commands.js)', panels: 'Panels' };
+  for (const [kind, title] of Object.entries(heads)) {
+    console.log(`### ${title}\n\n| Feature | AI path |\n| --- | --- |`);
+    for (const [id, e] of Object.entries(K.lib.inventory[kind])) {
+      const how = e.no ? `Not for AI: ${e.no}` : [e.act ? `run_action${e.act.needs ? ` (needs ${e.act.needs})` : ''}` : '', ...(e.tools || []).map((t) => `\`${t}\``)].filter(Boolean).join(', ');
+      console.log(`| \`${id}\` | ${how.replace(/\|/g, '\\|')} |`);
     }
     console.log('');
   }
@@ -106,12 +121,12 @@ await section('schemas', () => {
   check(defs.every((d) => d.annotations?.title && typeof d.annotations.readOnlyHint === 'boolean'), 'each has MCP annotations (a title, read-only hint)');
   check(defs.filter((d) => d.annotations.readOnlyHint).every((d) => K.kindOf(d.name) === 'read'), 'only the reading tools say read-only');
   const size = S(defs).length;
-  check(size < 60000, `the list fits a model's context (${size} characters)`);
+  check(size < 75000, `the list fits a model's context (${defs.length} tools, ${size} characters)`);
   const paths = defs.filter((d) => Object.keys(d.inputSchema.properties).some((k) => /path|file(?!_name)|dir|folder|url|command/i.test(k)));
-  eq(paths.map((d) => d.name), [], 'no tool takes a path, a folder, a URL or a command');
+  eq(paths.map((d) => d.name), ['import_media'], 'only import_media takes paths (the user confirms them); no tool takes a URL or a command');
   const doc = readFileSync(new URL('../docs/cut-ai-control.md', import.meta.url), 'utf8');
   eq(names.filter((n) => !doc.includes(`| \`${n}\` |`)), [], 'docs/cut-ai-control.md has a row for every tool (node verify/cut-control-core.mjs --table)');
-  check(/never by a file path|Nothing here reads or writes files/.test(K.INSTRUCTIONS) && /export_sequence, which asks the user/.test(K.INSTRUCTIONS), 'the server instructions say files are out of reach and export asks');
+  check(/import_media brings in only files the user confirms/.test(K.INSTRUCTIONS) && /ask the user first and write new files only/.test(K.INSTRUCTIONS) && /Nothing else reads or writes files/.test(K.INSTRUCTIONS) && /nothing is\s+downloaded unless the user agrees/.test(K.INSTRUCTIONS), 'the server instructions say which tools touch files, that they ask, and that nothing downloads without the user');
 });
 
 // ---------- the editing tools on a real project ----------
@@ -238,6 +253,376 @@ await section('mapping', async () => {
   check(x.h.serialize() === json0, 'undoing every step brings back the exact JSON');
 });
 
+// ---------- the tools of control-project.js, control-auto.js and control-actions.js on a real project ----------
+await section('more tools', async () => {
+  const x = fresh();
+  const [m3] = x.h.do(C.importMedia([{ path: 'C:/media/spare.wav', name: 'spare.wav', kind: 'audio', size: 1, mtime: 1, duration: 5 * T, video: null, audio: { rate: 48000, channels: 2, codec: 'pcm' } }])).ids;
+  const cube = lumetri.store(lumetri.parseCube(lumetri.identityCube(2)), 'Warm');
+  x.h.do(C.addLut(cube));
+  const steps = () => x.h.list().filter((s) => s.done).length;
+  const one = async (name, args, label, env = x.env) => {
+    const before = steps();
+    const r = await K.call(name, args, env);
+    check(r.ok && steps() === before + 1 && model.validate(x.app.project).ok, `${label} (one undo step, valid)${r.ok ? '' : ` ${r.error}`}`);
+    return r;
+  };
+  const refused = async (name, args, re, label, env = x.env) => {
+    const before = x.h.serialize();
+    const n = x.h.list().length;
+    const r = await K.call(name, args, env);
+    check(!r.ok && re.test(r.error || '') && x.h.serialize() === before && x.h.list().length === n, `${label}${r.ok ? ': accepted' : ` (${r.error})`}`);
+  };
+  const json0 = x.h.serialize();
+  const v1 = () => x.on('V1')[0];
+  const a1 = () => x.on('A1')[0];
+  const src = (clip, s2) => model.sourceTime(clip, Math.round(s2 * T)) / T;
+  let r;
+
+  // Time Remapping: a speed ramp, a hold and a reverse
+  r = await one('set_time_remap', { clip_id: v1().id, segments: [{ speed: 100, until: 2, ramp: 0.5 }, { speed: 50, until: 4 }, { hold: 1 }, { speed: 100, until: 6 }, { reverse: 1 }, { speed: 100 }] }, 'set_time_remap with a ramp, a hold and a reverse');
+  eq(v1().remap.speeds, [1, 0.5, 0, 1, -1, 1, 1], 'the speeds: 100 %, ramping to 50 %, a hold, 100 %, backward, forward again');
+  check(v1().remap.keys[0].t === 2 * T && v1().remap.keys[0].ramp === 0.5 * T && r.value.keys[0].ramp === 0.5, 'the ramp starts at 2 s and lasts 0.5 s (the result says so)');
+  check(src(v1(), 1) === 1 && src(v1(), 2.25) > 2.15 && src(v1(), 2.25) < 2.25, 'before the ramp 100 %; inside it slower');
+  check(src(v1(), 6.2) === src(v1(), 6.8), 'the hold shows one frame for its second');
+  check(src(v1(), 9.8) < src(v1(), 9.2) && src(v1(), 10.8) > src(v1(), 10.2), 'the reverse plays backward, then forward again');
+  check(r.value.duration === 15 && model.clipDuration(v1()) === 15 * T, 'the clip is 15 s long now (the hold, the slow part and the reverse added 5 s)');
+  await refused('set_time_remap', { clip_id: v1().id, segments: [{ hold: 1 }, { speed: 100 }] }, /goes between two speed segments/, 'a hold first');
+  await refused('set_time_remap', { clip_id: v1().id, segments: [{ speed: 100, until: 1, ramp: 0.5 }, { hold: 1 }, { speed: 100 }] }, /cannot ramp into a hold/, 'a ramp into a hold');
+  await refused('set_time_remap', { clip_id: v1().id, segments: [{ speed: 100, until: 0.5 }, { reverse: 5 }, { speed: 100 }] }, /only 0\.5 s of source before/, 'a reverse longer than the source before it');
+  await refused('set_time_remap', { clip_id: v1().id, segments: [{ speed: 100, hold: 1 }] }, /exactly one of speed, hold or reverse/, 'a segment of two kinds');
+  await one('set_time_remap', { clip_id: v1().id, off: true }, 'Time Remapping off');
+
+  // masks with keyframes
+  r = await one('add_mask', { clip_id: v1().id, shape: 'ellipse', width: 0.4, height: 0.4 }, 'add_mask');
+  const mid = r.value.mask;
+  await one('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.path`, keyframes: [{ time: 0, value: { shape: 'ellipse', x: 0.3, width: 0.4, height: 0.4 } }, { time: 2, value: { shape: 'ellipse', x: 0.7, width: 0.4, height: 0.4 } }] }, 'a mask path animated (the ellipse moves right)');
+  const pathKeys = v1().keyframes[`masks.${mid}.path`];
+  check(pathKeys.length === 2 && Math.abs(pathKeys[0].v[0] - 0.3) < 1e-9 && Math.abs(keyframes.valueAt(pathKeys, 1 * T)[0] - 0.5) < 1e-9, 'at 1 s the ellipse is halfway (x 0.5)');
+  await one('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.feather`, keyframes: [{ time: 0, value: 0 }, { time: 2, value: 120 }] }, 'mask feather keyframes');
+  await one('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.expansion`, keyframes: [{ time: 0, value: -20 }, { time: 1, value: 40, ease: 'easeOut' }] }, 'mask expansion keyframes');
+  await one('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.opacity`, keyframes: [{ time: 0, value: 100 }, { time: 1, value: 50 }] }, 'mask opacity keyframes');
+  await refused('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.feather`, keyframes: [{ time: 0, value: 5000 }] }, /from 0 to 1000/, 'a mask feather out of range');
+  await refused('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.path`, keyframes: [{ time: 0, value: { shape: 'star' } }] }, /shape must be ellipse or rectangle/, 'a mask shape that is not one');
+  await refused('set_keyframes', { clip_id: v1().id, property: `masks.${mid}.path`, keyframes: [{ time: 0, value: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0] }] }, /has 3 points; mask m\d+ has 4/, 'a path of another point count');
+  await refused('set_mask', { clip_id: v1().id, mask_id: mid, feather: 3 }, /has keyframes; change them with set_keyframes/, 'a static feather over keyframes');
+  await refused('set_mask', { clip_id: v1().id, mask_id: mid, shape: 'rectangle' }, /masks\.m\d+\.path has keyframes/, 'a new shape over path keyframes');
+  await one('set_mask', { clip_id: v1().id, mask_id: mid, inverted: true, mode: 'subtract' }, 'set_mask inverted and its mode');
+  r = await one('add_effect', { clip_id: v1().id, type: 'blur.gaussian', params: { blurriness: 30 } }, 'an effect to mask');
+  const blur = r.value.effect;
+  r = await one('add_mask', { clip_id: v1().id, effect_id: blur, shape: 'rectangle' }, 'a mask on the effect');
+  await one('set_keyframes', { clip_id: v1().id, property: `effects.${blur}.masks.${r.value.mask}.feather`, keyframes: [{ time: 0, value: 0 }, { time: 1, value: 50 }] }, 'an effect mask\'s feather keyframes');
+  await one('set_mask', { clip_id: v1().id, effect_id: blur, mask_id: r.value.mask, shape: 'ellipse', x: 0.25, y: 0.25, width: 0.2, height: 0.3 }, 'set_mask gives the effect\'s mask a new shape');
+  check(Math.abs(v1().effects.find((e) => e.id === blur).masks[0].path[0] - 0.25) < 1e-9, 'an ellipse centered at x 0.25');
+
+  // Lumetri: curves, the LUT, HSL secondary
+  await one('set_color', { clip_id: v1().id, curves: { master: [0, 0, 0.5, 0.62, 1, 1], blue: [0, 0.05, 1, 0.95] }, hsl: { hue: 30, hue_range: 40, sat_low: 20, saturation: 140, hue_shift: -10 } }, 'set_color curves and HSL secondary');
+  let lum = v1().effects.find((e) => e.type === 'color.basic');
+  check(S(lum.params.curveMaster) === S([0, 0, 0.5, 0.62, 1, 1]) && lum.params.curveBlue[1] === 0.05 && lum.params.hslHue === 30 && lum.params.hslHueRange === 40 && lum.params.hslSaturation === 140 && lum.params.hslHueShift === -10, 'the curves and the HSL range and correction are set');
+  await one('set_effect', { clip_id: v1().id, effect_id: lum.id, index: 0 }, 'set_effect moves Lumetri Color first');
+  check(v1().effects[0].id === lum.id && v1().effects[1].id === blur, 'Lumetri Color, then the blur');
+  await one('set_color', { clip_id: v1().id, lut: cube.id, lut_intensity: 60 }, 'set_color a LUT of the project');
+  lum = v1().effects.find((e) => e.type === 'color.basic');
+  check(lum.params.lut === cube.id && lum.params.lutIntensity === 60, 'the LUT at 60 %');
+  r = await K.call('get_project', {}, x.env);
+  check(r.value.luts.some((l) => l.id === cube.id && l.name === 'Warm'), 'get_project lists the project\'s LUTs');
+  await refused('set_color', { clip_id: v1().id, lut: 'lut-0000000000000000' }, /a LUT the project has \(get_project lists luts: lut-/, 'a LUT the project does not have');
+  await refused('set_color', { clip_id: v1().id, curves: { red: [0, 0, 2, 1] } }, /curves.red must be a flat list/, 'a curve point outside 0..1');
+  await refused('set_color', { clip_id: v1().id, hsl: { hue: 400 } }, /hsl.hue 400 is outside 0 to 360/, 'a hue outside 0..360');
+
+  // audio: effect parameters and their keyframes, the mixer, Essential Sound
+  r = await one('add_effect', { clip_id: a1().id, type: 'audio.compressor', params: { ratio: 4 } }, 'an audio effect');
+  await one('set_keyframes', { clip_id: a1().id, property: `effects.${r.value.effect}.threshold`, keyframes: [{ time: 0, value: -30 }, { time: 2, value: -12 }] }, 'an audio effect parameter animated');
+  await one('set_effect', { clip_id: a1().id, effect_id: r.value.effect, params: { ratio: 8, attack: 20 } }, 'an audio effect\'s parameters');
+  check(a1().effects.find((e) => e.id === r.value.effect).params.ratio === 8 && a1().keyframes[`effects.${r.value.effect}.threshold`].length === 2, 'ratio 8 and the threshold animated');
+  await one('set_track', { track_id: 'A1', volume: -4.5, pan: -30, solo: true }, 'the mixer: A1 volume, pan, solo');
+  await one('set_sequence', { master_gain: -1.5 }, 'the mixer\'s master');
+  check(x.seq().tracks.find((t) => t.id === 'A1').pan === -30 && x.seq().masterGain === -1.5, 'A1 pan -30 and master -1.5 dB');
+  r = await one('essential_sound', { clip_ids: [v1().id], action: 'clarity' }, 'Essential Sound clarity on a video clip goes to its linked audio');
+  check(S(r.value.clips) === S([a1().id]) && a1().effects.some((e) => e.type === 'audio.eq') && x.h.list().filter((s2) => s2.done).at(-1).label === 'Clarity', 'an EQ and a compressor on A1, one Clarity step');
+  await one('essential_sound', { clip_ids: [a1().id], action: 'reduce_hum_60' }, 'reduce hum 60 Hz');
+  check(a1().effects.some((e) => e.type === 'audio.dehum' && e.params.frequency === '60'), 'a 60 Hz hum remover');
+  await refused('essential_sound', { clip_ids: [x.on('V2')[0].id], action: 'noise_gate' }, /has no sound/, 'a picture has no sound');
+  await one('set_clip', { clip_id: a1().id, role: 'dialogue', label: 'mango', linked: false }, 'set_clip role (the audio type) and a label');
+  check(a1().role === 'dialogue' && a1().label === 'mango', 'dialogue, mango');
+
+  // speed, trims, text, mattes
+  const span = v1().out - v1().in;
+  await one('set_speed', { clip_id: v1().id, duration: 5, ripple: false }, 'set_speed by duration');
+  check(model.clipDuration(v1()) === 5 * T && Math.abs(v1().speed - span / (5 * T)) < 1e-9, `the same source fills 5 s (${Math.round(v1().speed * 100)} %)`);
+  const in0 = v1().in;
+  await one('trim_clip', { clip_id: v1().id, mode: 'slip', delta: 1 }, 'slip');
+  check(Math.abs(v1().in - (in0 + v1().speed * T)) < 2 && v1().start === 0 && model.clipDuration(v1()) === 5 * T, 'slip shows the source one timeline second later, in place');
+  await refused('trim_clip', { clip_id: v1().id, mode: 'slip', edge: 'end', delta: 1 }, /takes delta \(seconds\) and no edge/, 'slip with an edge');
+  await refused('trim_clip', { clip_id: v1().id, delta: 1 }, /needs edge/, 'a trim without an edge');
+  await one('trim_clip', { clip_id: v1().id, edge: 'end', mode: 'stretch', delta: 5 }, 'rate stretch');
+  check(model.clipDuration(v1()) === 10 * T && Math.abs(v1().speed - span / (10 * T)) < 1e-9, 'stretched to 10 s, the speed halved');
+  r = await one('add_color_matte', { at: 1, duration: 2, color: '#FF0000' }, 'add_color_matte');
+  const matte = x.seq().clips.find((c) => c.id === r.value.clip);
+  check(matte.source.generator === 'solid' && matte.source.color === '#ff0000' && model.clipDuration(matte) === 2 * T, 'a 2 s red matte');
+  await one('set_clip', { clip_id: matte.id, color: '#00ff00', interpolation: 'blend' }, 'set_clip a matte\'s color');
+  check(x.seq().clips.find((c) => c.id === matte.id).source.color === '#00ff00', 'the matte is green');
+  await refused('set_clip', { clip_id: v1().id, color: '#00ff00' }, /color is for color mattes/, 'a color on a video clip');
+  const title = x.seq().clips.find((c) => c.source?.generator === 'text');
+  await one('set_text', { clip_id: title.id, italic: true, align: 'left', stroke: { color: '#000000', width: 6 }, shadow: { color: '#00000099', blur: 10 } }, 'set_text style: italic, left, stroke, shadow');
+  const l1 = x.seq().clips.find((c) => c.id === title.id).source.layers[0];
+  check(l1.italic && l1.align === 'left' && l1.stroke.width === 6 && l1.shadow.blur === 10, 'the title has its outline and shadow');
+  r = await one('set_text', { clip_id: title.id, add_layer: true, text: '부제', size: 48, position: [0, 200] }, 'set_text adds a layer');
+  const layer = r.value.layer;
+  check(x.seq().clips.find((c) => c.id === title.id).source.layers.length === 2 && layer, 'two layers');
+  await one('set_text', { clip_id: title.id, layer_id: layer, animation: 'rise' }, 'a motion preset on the new layer');
+  check(x.seq().clips.find((c) => c.id === title.id).keyframes[`layers.${layer}.position`]?.length === 2, 'rise: the layer\'s position keyframes');
+  await one('set_keyframes', { clip_id: title.id, property: `layers.${layer}.reveal`, keyframes: [{ time: 6, value: 0 }, { time: 7, value: 1 }] }, 'a layer\'s reveal keyframes');
+  await one('set_text', { clip_id: title.id, layer_id: layer, remove_layer: true }, 'set_text removes the layer');
+  const tnow = x.seq().clips.find((c) => c.id === title.id);
+  check(tnow.source.layers.length === 1 && !Object.keys(tnow.keyframes).some((k) => k.includes(`.${layer}.`)), 'one layer, its keyframes gone');
+
+  // tracks, transitions, caption tracks
+  r = await one('add_track', { kind: 'audio', name: 'Music' }, 'add_track');
+  const music = r.value.track;
+  check(x.seq().tracks.find((t) => t.id === music)?.name === 'Music', `${music} named Music`);
+  await one('remove_track', { track_id: music }, 'remove_track');
+  await refused('remove_track', { track_id: 'A2' }, /A2 is locked/, 'removing a locked track');
+  await one('razor', { at: 5 }, 'a cut to put a transition on');
+  r = await one('add_transition', { track: 'V1', at: 5 }, 'add_transition');
+  await one('set_transition', { transition_id: r.value.transition, duration: 0.5, align: 'end' }, 'set_transition');
+  const tr1 = x.seq().transitions.find((t) => t.id === r.value.transition);
+  check(tr1.duration === 0.5 * T && tr1.align === 'end', 'half a second, at the end of the edit');
+  r = await one('add_captions', { name: '자막', items: [{ start: 0, end: 1, text: '하나' }] }, 'a caption track');
+  const shown = [];
+  await one('set_caption_track', { track_id: r.value.track, name: 'Korean', style: { size: 64, position: 'top', highlight: true, highlight_mode: 'box', background: null, speakers: 'name' }, shown: true }, 'set_caption_track: name and Caption Style', { ...x.env, services: { ...x.env.services, showCaptionTrack: (s2, id) => shown.push(id) } });
+  const ct = x.seq().captions.find((t) => t.id === r.value.track);
+  check(ct.name === 'Korean' && ct.style.size === 64 && ct.style.position === 'top' && ct.style.highlightMode === 'box' && ct.style.speakerName === true && ct.style.speakerColor === false && S(shown) === S([ct.id]), 'the style is set and the track is shown');
+
+  // the project: sequences, bins, media, settings
+  r = await one('add_sequence', { name: '세로', preset: 'shorts', fps: '25' }, 'add_sequence');
+  check(r.value.width === 1080 && r.value.height === 1920 && r.value.fps === 25 && x.app.sequenceId === r.value.sequence, 'a 1080x1920 25 fps sequence, now active');
+  const vert = r.value.sequence;
+  await one('set_sequence', { sequence_id: vert, width: 720, height: 1280, fps: '30', name: '세로 2' }, 'set_sequence size and rate');
+  check(x.app.project.sequences.find((s2) => s2.id === vert).w === 720 && x.app.project.sequences.find((s2) => s2.id === vert).fps[0] === 30, '720x1280 at 30 fps');
+  r = await K.call('set_sequence', { sequence_id: x.app.project.sequences[0].id, active: true }, x.env);
+  check(r.ok && x.app.sequenceId === x.app.project.sequences[0].id && !r.edit, 'set_sequence active brings it to the front (no undo step)');
+  await refused('set_sequence', { width: 721 }, /width must be even/, 'an odd width');
+  await one('remove_sequence', { sequence_id: vert }, 'remove_sequence');
+  await refused('remove_sequence', { sequence_id: x.app.project.sequences[0].id }, /only sequence/, 'the last sequence stays');
+  r = await one('project_items', { action: 'new_bin', name: '소리' }, 'a bin');
+  const bin = r.value.bin;
+  await one('project_items', { action: 'move', item_ids: [m3], bin_id: bin }, 'media into the bin');
+  await one('project_items', { action: 'rename', item_id: m3, name: 'room tone.wav' }, 'rename media');
+  r = await K.call('get_media', {}, x.env);
+  check(r.value.find((m) => m.id === m3)?.bin === bin && r.value.find((m) => m.id === m3)?.name === 'room tone.wav', 'get_media shows the bin and the name');
+  await refused('remove_media', { media_ids: [x.m1] }, /used by \d+ clips; delete them first \(the file itself is never deleted\)/, 'removing media that clips use');
+  r = await one('remove_media', { unused: true }, 'remove_media unused (Remove Unused)');
+  check(S(r.value.removed) === S([m3]) && /files stay on the disk/.test(r.value.note), 'only the unused media went, from the project only');
+  await one('project_items', { action: 'remove_bin', bin_id: bin }, 'remove_bin');
+  await one('set_project_settings', { still_duration: 3, transition_duration: 0.5, speech_terms: ['Nano Studio', '  Cut ', 'Cut'] }, 'set_project_settings');
+  check(x.app.project.settings.stillDuration === 3 * T && S(x.app.project.settings.speechTerms) === S(['Nano Studio', 'Cut']), 'still length 3 s, the word list cleaned');
+
+  // Highlights to Shorts
+  r = await one('create_shorts', { ranges: [{ from: 6, to: 8 }, { from: 1, to: 2 }], name: 'Shorts' }, 'create_shorts');
+  const shorts = x.app.project.sequences.find((s2) => s2.id === r.value.sequence);
+  check(shorts.w === 1080 && shorts.h === 1920 && r.value.duration === 3 && x.app.sequenceId === shorts.id && r.edit.seqId === shorts.id, 'a 3 s 9:16 sequence of the two parts, now in front');
+  await refused('create_shorts', { sequence_id: x.app.project.sequences[0].id, ranges: [{ from: 1, to: 3 }, { from: 2, to: 4 }] }, /overlap/, 'overlapping ranges');
+  x.app.setSequence(x.app.project.sequences[0].id);
+
+  // speakers
+  r = await K.call('speakers', {}, x.env);
+  check(r.ok && r.value.speakers.length === 0 && /label_speakers/.test(r.value.note), 'no speakers yet');
+  await refused('speakers', { action: 'rename', speaker_id: 'sp1', name: '민수' }, /no speaker labels yet/, 'renaming before labels');
+  x.h.do(C.setSpeakers({ list: [{ id: 'sp1', name: '', color: '#e5484d' }, { id: 'sp2', name: '', color: '#3e63dd' }], turns: {}, count: 2 }));
+  await one('speakers', { action: 'rename', speaker_id: 'sp2', name: ' 민수 ' }, 'rename a speaker');
+  check(x.app.project.speakers.list[1].name === '민수', 'speaker 2 is 민수');
+
+  while (x.h.canUndo && x.h.serialize() !== json0) x.h.undo();
+  check(x.h.serialize() === json0, 'undoing the steps brings back the exact JSON');
+});
+
+// ---------- the page's services, stood in ----------
+await section('services', async () => {
+  const x = fresh();
+  const calls = [];
+  const svc = (more) => ({ ...x.env, services: { ...x.env.services, ...more } });
+  const refused = async (name, args, re, label, env) => {
+    const before = x.h.serialize();
+    const r = await K.call(name, args, env);
+    check(!r.ok && re.test(r.error || '') && x.h.serialize() === before, `${label}${r.ok ? ': accepted' : ` (${r.error})`}`);
+  };
+  // import
+  const importer = svc({ importMedia: async (q) => { calls.push(q); if (q.paths?.[0]?.includes('no')) return { declined: true }; const ids = x.h.do(C.importMedia([{ path: q.paths?.[0] || 'C:/p/x.mp4', name: 'x.mp4', kind: 'video', size: 1, mtime: 1, duration: T, video: { w: 64, h: 64, fps: 30 }, audio: null }])).ids; return { ok: true, ids, failed: [] }; } });
+  let r = await K.call('import_media', { paths: ['C:\\Users\\me\\Videos\\a.mp4'] }, importer);
+  check(r.ok && r.value.media[0].name === 'x.mp4' && calls.at(-1).paths[0] === 'C:\\Users\\me\\Videos\\a.mp4', 'import_media hands the paths to the page (which confirms them) and names what came in');
+  await refused('import_media', { paths: ['\\\\nas\\share\\a.mp4'] }, /network share/, 'a network share', importer);
+  await refused('import_media', { paths: ['videos\\a.mp4'] }, /not an absolute file path/, 'a relative path', importer);
+  await refused('import_media', { paths: ['C:\\Users\\me\\..\\..\\Windows\\a.mp4'] }, /not an absolute file path/, 'a path that climbs with ..', importer);
+  await refused('import_media', { paths: ['C:\\no\\b.mp4'] }, /did not confirm these files. Nothing was imported/, 'files the user does not confirm', importer);
+  await refused('import_media', { paths: ['C:\\a.mp4'], folder: true }, /paths or folder/, 'paths and folder at once', importer);
+  // save
+  await refused('save_project', {}, /did not pick a place/, 'a save the user cancels', svc({ save: async () => ({ declined: true }) }));
+  r = await K.call('save_project', {}, svc({ save: async () => ({ ok: true, name: 'film.ncut' }) }));
+  check(r.ok && r.value.saved === 'film.ncut' && !/[\\/]/.test(S(r.value)), 'save_project says the file name, never a path');
+  // frame and caption exports
+  await refused('export_frame', { time: 1 }, /said no/, 'a frame export the user declines', svc({ exportFrame: async () => ({ ok: false, declined: true }) }));
+  await refused('export_frame', { file_name: 'C:\\x' }, /plain name/, 'a frame file name with a folder', svc({ exportFrame: async () => ({ ok: true }) }));
+  let asked = null;
+  r = await K.call('export_frame', { time: 2, file_name: 'thumb' }, svc({ exportFrame: async (q) => { asked = q; return { ok: true, name: 'thumb.png' }; } }));
+  check(r.ok && asked.t === 2 * T && asked.fileName === 'thumb', 'export_frame asks for the frame at 2 s');
+  x.h.do(C.addCaptionTrack(x.seq().id, { name: 'ko', lang: 'ko', items: [{ start: 0, end: T, text: '하나' }] }));
+  r = await K.call('export_captions', { format: 'vtt' }, svc({ exportCaptions: async (q) => { asked = q; return { ok: true, name: 'a.vtt', count: 1 }; } }));
+  check(r.ok && asked.format === 'vtt' && r.value.captions === 1, 'export_captions as VTT');
+  // export with options and waiting
+  r = await K.call('export_sequence', { preset: 'youtube-1080p', width: 1280, height: 720, codec: 'hevc', bitrate: 8, audio_bitrate: 160, loudness: null, wait: true }, { ...svc({ exportAsk: async (q) => { asked = q; return { ok: true, name: 'a.mp4', job: 7 }; }, exportWait: async (id, o) => { calls.push(['wait', id]); o.progress(0.5); return { ok: true }; } }), progress: (f) => calls.push(['progress', f]) });
+  check(r.ok && r.value.done && asked.settings.width === 1280 && asked.settings.video.family === 'hevc' && asked.settings.video.bitrate === 8e6 && asked.settings.audio.bitrate === 160000 && asked.settings.loudness === null, 'export_sequence with Export Settings overrides, waited for');
+  check(calls.some((c2) => c2[0] === 'wait' && c2[1] === 7) && calls.some((c2) => c2[0] === 'progress' && c2[1] === 0.5), 'the wait follows job 7 and reports its progress');
+  await refused('export_sequence', { preset: 'audio-m4a', width: 1280 }, /has no picture/, 'a picture size for audio only', svc({ exportAsk: async () => ({ ok: true }) }));
+  await refused('export_sequence', { preset: '720p', audio_bitrate: 96 }, /audio_bitrate must be one of 128, 160, 192/, 'an audio bitrate the encoder does not take', svc({ exportAsk: async () => ({ ok: true }) }));
+  await refused('export_sequence', { preset: '720p', wait: true }, /was cancelled/, 'an export stopped while waiting', svc({ exportAsk: async () => ({ ok: true, name: 'b.mp4', job: 8 }), exportWait: async () => ({ ok: false, cancelled: true }) }));
+  // the export queue
+  const jobs = [{ id: 1, name: 'a.mp4', state: 'running', fraction: 0.4 }, { id: 2, name: 'b.mp4', state: 'done', fraction: 1 }];
+  const q = { jobs: () => jobs, cancel: (id) => { calls.push(['cancel', id]); return true; }, retry: () => true, remove: () => true, clearFinished: () => calls.push(['clear']) };
+  r = await K.call('export_queue', {}, svc({ queue: q }));
+  check(r.ok && r.value.jobs.length === 2 && r.value.jobs[0].progress === 0.4 && !S(r.value).includes('\\'), 'export_queue lists the jobs, names only');
+  r = await K.call('export_queue', { action: 'cancel', job_id: 1 }, svc({ queue: q }));
+  check(r.ok && calls.some((c2) => c2[0] === 'cancel' && c2[1] === 1), 'export_queue cancels a running job');
+  await refused('export_queue', { action: 'retry', job_id: 1 }, /cannot be retried/, 'retrying a running job', svc({ queue: q }));
+  await refused('export_queue', { action: 'cancel', job_id: 9 }, /no job 9/, 'a job that is not there', svc({ queue: q }));
+  // proxies
+  const P = { state: () => ({ proxy: 'none' }), create: (ids2) => { calls.push(['proxy', ids2]); return ids2.length; }, wait: async (ids2, o) => { o.progress?.(0.25); return o.signal?.aborted ? { cancelled: true, done: 0 } : { done: ids2.length }; } };
+  r = await K.call('proxies', { action: 'create' }, svc({ proxies: P }));
+  check(r.ok && calls.some((c2) => c2[0] === 'proxy' && c2[1].includes(x.m1) && !c2[1].includes(x.m2)), 'proxies create makes one of the video media and waits');
+  const stopped = new AbortController();
+  stopped.abort();
+  await refused('proxies', { action: 'create', media_ids: [x.m1] }, /Stopped: the proxies not done yet were cancelled/, 'Stop during proxies', { ...svc({ proxies: P }), signal: stopped.signal });
+  await refused('proxies', { action: 'create', media_ids: [x.m2] }, /proxies are for video media/, 'a proxy of a picture', svc({ proxies: P }));
+  await refused('proxies', { action: 'remove' }, /None of these has a proxy/, 'removing proxies there are none of', svc({ proxies: P }));
+  // automation
+  const auto = (answer) => svc({ automation: async (action, a, o) => { calls.push(['auto', action, a, !!o.signal]); return typeof answer === 'function' ? answer(action, a, o) : answer; } });
+  await refused('automation', { action: 'detect_scenes', every: 'bar' }, /detect_scenes takes clip_ids, threshold, mode; not every/, 'an argument of another job', auto({ ok: true }));
+  await refused('automation', { action: 'detect_scenes', clip_ids: [x.on('A1')[0].id] }, /not a video clip of a media file/, 'scenes of an audio clip', auto({ ok: true }));
+  await refused('automation', { action: 'auto_duck', threshold: 35 }, /-90\.\.-5 \(dB\)/, 'a duck threshold in %', auto({ ok: true }));
+  await refused('automation', { action: 'transcribe', from: 1 }, /from and to together/, 'a range without its end', auto({ ok: true }));
+  await refused('automation', { action: 'auto_captions' }, /did not agree to set up speech recognition \(Whisper\).*nothing was downloaded/, 'the user declines the model download', auto({ declined: true }));
+  await refused('automation', { action: 'isolate_voice', clip_ids: [x.on('A1')[0].id] }, /was stopped. Nothing was changed/, 'a job stopped', auto({ cancelled: true }));
+  await refused('automation', { action: 'detect_beats', clip_ids: [x.on('A1')[0].id] }, /No beats were found/, 'a job that found nothing says the editor\'s words', auto({ ok: false, error: 'No beats were found.' }));
+  const ctl = new AbortController();
+  r = await K.call('automation', { action: 'remove_fillers', from: 1, to: 9, pause_length: 0.8 }, { ...auto((action, a) => { x.h.do(C.extract(x.seq().id, 2 * T, 3 * T, ['V1', 'A1'])); return { ok: true, changed: true, at: 2 * T, value: { job: action, cuts: 1, seconds: 1, range: a.range.map((t) => t / T) } }; }), signal: ctl.signal });
+  check(r.ok && r.value.cuts === 1 && S(r.value.range) === S([1, 9]) && r.edit?.at === 2 * T && calls.at(-1)[3] === true, 'a job runs with its range and the Stop signal, and its edit lands');
+});
+
+// ---------- every feature has an AI path (control-actions.js INVENTORY) ----------
+const cutFile = (f) => readFileSync(new URL(`../renderer/features/cut/${f}`, import.meta.url), 'utf8');
+const between = (text, a, b) => { const i = text.indexOf(a); return i < 0 ? '' : text.slice(i, text.indexOf(b, i + a.length)); };
+// What Cut has, read from its sources: keyboard actions, Automation items, menu items, panels, edit commands.
+function features({ keys = cutFile('ui-keys.js'), auto = cutFile('ui-auto.js'), menu = cutFile('ui-menubar.js'), panels = readdirSync(new URL('../renderer/features/cut/', import.meta.url)).filter((f) => /^ui-.*\.js$/.test(f)).map(cutFile).join('\n'), commands = Object.keys(C).filter((k) => typeof C[k] === 'function' && !['createHistory', 'label'].includes(k)) } = {}) {
+  return {
+    keys: [...between(keys, 'const ACTIONS = [', '\n  ];').matchAll(/^\s*\['([\w.]+)', '/gm)].map((m) => m[1]),
+    automation: [...between(auto, 'const ITEMS = [', '\n  ];').matchAll(/\['(\w+)', '/g)].map((m) => m[1]),
+    menu: [...new Set([...between(menu, 'const MENUS = [', '\n  let bar').matchAll(/label: tr\('([^']+)'\)/g)].map((m) => m[1]))],
+    panels: [...new Set([...panels.matchAll(/registerPanel\('(\w+)'/g)].map((m) => m[1]))],
+    commands,
+  };
+}
+// The features with no inventory entry: ["keys:<id>", ...].
+const uncovered = (f) => Object.entries(f).flatMap(([kind, list]) => list.filter((id) => !Object.hasOwn(K.lib.inventory[kind], id)).map((id) => `${kind}:${id}`));
+await section('inventory', async () => {
+  const inv = K.lib.inventory;
+  const f = features();
+  check(f.keys.length >= 116 && f.automation.length >= 19 && f.menu.length >= 30 && f.panels.length >= 20 && f.commands.length >= 69, `the sources were read (${f.keys.length} keyboard actions, ${f.automation.length} Automation items, ${f.menu.length} menu items, ${f.panels.length} panels, ${f.commands.length} edit commands)`);
+  eq(uncovered(f), [], 'every keyboard action, Automation item, menu item, panel and edit command has an AI path or a reason it is not for AI');
+  eq(f.keys.filter((id) => inv.keys[id]?.act && !K.lib.actions.has(id)), [], 'every action marked runnable is in run_action');
+  eq(Object.keys(inv.keys).filter((id) => !f.keys.includes(id)), [], 'no entry for a keyboard action that is gone');
+  eq(Object.keys(inv.automation).filter((id) => !f.automation.includes(id)), [], 'no entry for an Automation item that is gone');
+  eq(Object.keys(inv.commands).filter((id) => !f.commands.includes(id)), [], 'no entry for an edit command that is gone');
+  const names = new Set(K.names());
+  const entries = Object.entries(inv).flatMap(([kind, o]) => Object.entries(o).map(([id, e]) => [`${kind}:${id}`, e]));
+  eq(entries.filter(([, e]) => !e.no && !e.act && !e.tools?.length).map(([k]) => k), [], 'each entry names tools, is a run_action action, or says why not');
+  eq(entries.flatMap(([k, e]) => (e.tools || []).filter((t) => !names.has(t)).map((t) => `${k}:${t}`)), [], 'every tool an entry names exists');
+  eq(entries.filter(([, e]) => e.no && !/^[A-Z].{15,}[.)]$/.test(e.no)).map(([k]) => k), [], 'every "not for AI" reason is a sentence');
+  // a new feature without an entry fails the check
+  const fake = features({
+    keys: cutFile('ui-keys.js').replace('const ACTIONS = [', "const ACTIONS = [\n    ['fakeAction', 'Fake Action', []],"),
+    auto: cutFile('ui-auto.js').replace('const ITEMS = [', "const ITEMS = [\n    ['fakeJob', 'Fake Job…', () => {}],"),
+    menu: cutFile('ui-menubar.js').replace("{ label: tr('Import Folder…'),", "{ label: tr('Fake Item…'), run: () => {} },\n      { label: tr('Import Folder…'),"),
+    panels: `${features().panels.map((id) => `registerPanel('${id}'`).join('\n')}\nregisterPanel('fakePanel', {})`,
+    commands: [...f.commands, 'fakeCommand'],
+  });
+  eq(uncovered(fake), ['keys:fakeAction', 'automation:fakeJob', 'menu:Fake Item…', 'panels:fakePanel', 'commands:fakeCommand'], 'a keyboard action, Automation item, menu item, panel or command added without an entry fails the check');
+  const doc = readFileSync(new URL('../docs/cut-ai-control.md', import.meta.url), 'utf8');
+  eq(entries.map(([k]) => k).filter((k) => !doc.includes(`| \`${k.replace(/^\w+:/, '')}\` |`)), [], 'docs/cut-ai-control.md has the inventory (node verify/cut-control-core.mjs --inventory)');
+});
+
+// ---------- list_actions and run_action ----------
+await section('run_action', async () => {
+  const x = fresh();
+  const ran = [];
+  let said = [];
+  const action = async (id, o) => {
+    ran.push([id, o.panel]);
+    const seq = x.seq();
+    if (id === 'rippleDelete') x.h.do(C.remove(seq.id, [...x.app.selection], { ripple: true }));
+    if (id === 'markIn') x.app.setInOut({ in: x.app.t });
+    if (id === 'split') said = ['The playhead is not on a clip.'];
+    return { ran: true, toasts: said };
+  };
+  const env = { ...x.env, services: { ...x.env.services, action } };
+  const refused = async (args, re, label) => {
+    const before = x.h.serialize();
+    const n = ran.length;
+    const r = await K.call('run_action', args, env);
+    check(!r.ok && re.test(r.error || '') && x.h.serialize() === before && ran.length === n, `${label}${r.ok ? ': accepted' : ` (${r.error})`}`);
+  };
+  let r = await K.call('list_actions', {}, env);
+  const listed = r.value.actions.map((a) => a.id);
+  check(r.ok && listed.length === K.lib.actions.size && listed.includes('rippleStart') && listed.includes('window.mixer') && !listed.includes('save') && !listed.includes('open'), `list_actions lists the ${listed.length} runnable actions (not the ones with tools or not for AI)`);
+  check(r.value.actions.find((a) => a.id === 'rippleDelete')?.needs === 'selected clips (select_clips or clip_ids)' && r.value.actions.find((a) => a.id === 'zoomIn')?.view === true, 'each says what it needs and whether it only changes the view');
+  r = await K.call('list_actions', { search: 'marker' }, env);
+  check(r.value.actions.length >= 4 && r.value.actions.every((a) => /marker/i.test(`${a.id} ${a.what}`)), 'search narrows the list');
+  await refused({ id: 'save' }, /save has its own tool: save_project/, 'an action with a tool of its own');
+  await refused({ id: 'open' }, /open is not for AI: It closes this project/, 'an action not for AI says why');
+  await refused({ id: 'teleport' }, /no action teleport. list_actions/, 'an action that does not exist');
+  await refused({ id: 'rippleDelete' }, /rippleDelete needs selected clips.*Nothing was changed/, 'an action whose selection is missing is refused before it runs');
+  await refused({ id: 'goIn' }, /goIn needs a sequence In point/, 'Go to In without an In');
+  await refused({ id: 'rippleStart', time: 14 }, /14 s is outside the sequence/, 'a time outside the sequence');
+  const steps = x.h.list().filter((s) => s.done).length;
+  const v2 = x.on('V2')[0].id;
+  r = await K.call('run_action', { id: 'rippleDelete', clip_ids: [v2] }, env);
+  check(r.ok && r.value.changed.undoStep && x.h.list().filter((s) => s.done).length === steps + 1 && !x.seq().clips.some((c) => c.id === v2) && r.edit, `rippleDelete with clip_ids selects, runs and reports the undo step (${r.value?.changed?.undoStep})`);
+  check(S(ran.at(-1)) === S(['rippleDelete', 'timeline']), 'the action went to the timeline, as a key does');
+  r = await K.call('run_action', { id: 'markIn', time: 2 }, env);
+  check(r.ok && r.value.changed.inOut.in === 2 && r.value.playhead === 2 && !r.value.changed.undoStep && !r.edit, 'markIn at 2 s reports the In and the playhead, no undo step');
+  r = await K.call('run_action', { id: 'goIn' }, env);
+  check(r.ok, 'Go to In runs once there is an In');
+  const before = x.h.serialize();
+  r = await K.call('run_action', { id: 'split' }, env);
+  check(!r.ok && /split changed nothing; the editor said: The playhead is not on a clip\./.test(r.error) && x.h.serialize() === before, `an action that did nothing says why, in the editor's words (${r.error})`);
+  said = [];
+  r = await K.call('run_action', { id: 'zoomIn' }, env);
+  check(r.ok && S(r.value.changed) === '{}', 'a view action that ran is fine with nothing to report');
+  r = await K.call('run_action', { id: 'window.mixer' }, env);
+  check(r.ok && ran.at(-1)[0] === 'window.mixer', 'window.<panel> opens a panel');
+});
+
+// ---------- the chat's step lines are translated ----------
+await section('step lines', () => {
+  const ko = JSON.parse(cutFile('locales/ko.json'));
+  const dummy = (p) => {
+    const t = [].concat(p.type || 'string')[0];
+    if (p.enum) return p.enum[0];
+    return t === 'number' || t === 'integer' ? 1 : t === 'array' ? ['c1'] : t === 'boolean' ? true : t === 'object' ? {} : 'x';
+  };
+  const lines = new Set();
+  for (const t of K.TOOLS) {
+    lines.add(t.title);
+    const props = t.input.properties || {};
+    const base = Object.fromEntries((t.input.required || []).map((k) => [k, dummy(props[k])]));
+    const variants = [base];
+    for (const [k, p] of Object.entries(props)) {
+      if (p.enum && typeof p.enum[0] === 'string') for (const v of p.enum) variants.push({ ...base, [k]: v });
+      else if (['duration', 'ripple', 'whole_track', 'paths', 'remove_layer'].includes(k)) variants.push({ ...base, [k]: dummy(p) });
+    }
+    for (const v of variants) lines.add(K.describe(t.name, v)[0]);
+  }
+  eq([...lines].filter((l) => !Object.hasOwn(ko, l)), [], `every tool's title and step line (${lines.size}) has Korean in renderer/features/cut/locales/ko.json`);
+});
+
 // ---------- refusals ----------
 await section('refusals', async () => {
   const x = fresh();
@@ -269,7 +654,7 @@ await section('refusals', async () => {
   await refused('add_effect', { clip_id: v1.id, type: 'audio.eq' }, /audio effect.*video clip.*linked audio clip/, 'an audio effect on a video clip names the linked audio');
   await refused('add_effect', { clip_id: v1.id, type: 'blur.gaussian', params: { radius: 3 } }, /no parameter "radius". Its parameters: blurriness/, 'an unknown parameter lists the right ones');
   await refused('add_effect', { clip_id: v1.id, type: 'blur.gaussian', params: { blurriness: 9000 } }, /outside 0 to 500/, 'a parameter out of range');
-  await refused('add_effect', { clip_id: v1.id, type: 'color.basic', params: { lut: 'lut-1' } }, /cannot be set by these tools/, 'a LUT (a file) cannot be set');
+  await refused('add_effect', { clip_id: v1.id, type: 'color.basic', params: { lut: 'lut-1' } }, /a LUT the project has.*Loading a LUT file is the user's/, 'a LUT the project does not have (loading a file) is refused');
   await refused('set_color', { clip_id: v1.id, exposure: 9 }, /outside -4 to 4/, 'an exposure out of range');
   await refused('add_transition', { track: 'V1', at: 4 }, /no clip edge on V1 at 4 s/, 'a transition where there is no edit point');
   await refused('add_transition', { track: 'A1', at: 10, type: 'dissolve' }, /video transition and A1 a audio track/, 'a video transition on an audio track');
@@ -307,8 +692,10 @@ await section('refusals', async () => {
 
 // ---------- nothing reaches the disk ----------
 await section('no disk', async () => {
-  const src = readFileSync(new URL('../renderer/features/cut/control.js', import.meta.url), 'utf8');
-  check(!/require\(['"](fs|child_process|path|os|net|http)['"]\)|ide\.api|invoke\(|fetch\(|XMLHttpRequest|new Function|eval\(/.test(src), 'control.js has no file, process, network or IPC call in it');
+  for (const file of ['control.js', 'control-project.js', 'control-auto.js', 'control-actions.js']) {
+    const src = readFileSync(new URL(`../renderer/features/cut/${file}`, import.meta.url), 'utf8');
+    check(!/require\(['"](fs|child_process|path|os|net|http)['"]\)|ide\.api|invoke\(|fetch\(|XMLHttpRequest|new Function|eval\(/.test(src), `${file} has no file, process, network or IPC call in it`);
+  }
   const x = fresh();
   const touched = [];
   const watch = (obj, name) => {
@@ -585,16 +972,18 @@ await section('page', async () => {
   const dir = new URL('../renderer/features/cut/', import.meta.url);
   const order = readFileSync(new URL('index.js', dir), 'utf8').match(/'[a-z0-9-]+\.js'/g).map((x) => x.slice(1, -1));
   check(order.indexOf('control.js') > order.indexOf('ai.js') && order.indexOf('control.js') > order.indexOf('commands.js') && order.indexOf('ui-assistant.js') > order.indexOf('ui-ai.js') && order.indexOf('ui-assistant.js') < order.indexOf('ui-settings.js'), 'index.js loads control.js after ai.js, ui-assistant.js after ui-ai.js and before the settings page');
-  const mine = ['time.js', 'state.js', 'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'commands.js', 'lumetri.js', 'effects.js', 'analyze.js', 'speech.js', 'ai.js', 'control.js'];
+  check(['control-project.js', 'control-auto.js', 'control-actions.js'].every((x) => order.indexOf(x) > order.indexOf('control.js')) && order.indexOf('ui-control.js') < order.indexOf('ui-assistant.js') && order.indexOf('presets.js') < order.indexOf('control.js'), 'index.js loads the tool files after control.js, presets.js before it, ui-control.js before ui-assistant.js');
+  const mine = ['time.js', 'state.js', 'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'commands.js', 'lumetri.js', 'effects.js', 'textrender.js', 'presets.js', 'audiofx.js', 'analyze.js', 'speech.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-actions.js'];
   for (const file of order.filter((x) => mine.includes(x))) vm.runInContext(readFileSync(new URL(file, dir), 'utf8'), page, { filename: file });
   const out = await vm.runInContext(`(async () => {
     const p = Cut.model.createProject({ sequence: { fps: [30, 1], w: 320, h: 180 } });
     const app = Cut.state.createApp();
     app.setHistory(Cut.commands.createHistory(p));
     const r = await Cut.control.call('add_text', { text: 'hi', at: 0, duration: 1 }, { app, services: {} });
-    return [r.ok, Cut.control.definitions().length > 40, app.project.sequences[0].clips.length];
+    const m = await Cut.control.call('add_color_matte', { at: 0, duration: 1 }, { app, services: {} });
+    return [r.ok, m.ok, Cut.control.definitions().length, app.project.sequences[0].clips.length];
   })()`, page);
-  eq(out, [true, true, 1], 'control.js works as a page script through globalThis.Cut');
+  eq(out, [true, true, K.TOOLS.length, 2], 'control.js and its tool files work as page scripts through globalThis.Cut (every tool listed)');
 });
 
 const failedCount = results.filter((r) => !r.ok).length;

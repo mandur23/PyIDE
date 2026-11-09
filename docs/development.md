@@ -58,6 +58,8 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 - 설정: `ide.settings.get/set`, 설정 페이지는 `ide.settingsPages`에 넣습니다. Craft와 Cut에도 보이려면 `craft: true`입니다.
 - 이벤트: `ide.on('projectOpened' | 'fileSaved' | 'settingsChanged' | ...)`. 해제 함수를 돌려줍니다.
 - 프로세스: 메인의 `ctx.startProcess`가 돌려준 id를 `ide.proc.attach(id, {data, exit})`에 넘깁니다.
+
+Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 메뉴 항목, 메뉴 막대 항목, 편집 명령, 패널을 더하면 `renderer/features/cut/control-actions.js`의 `INVENTORY`에 그 기능을 다루는 도구, `run_action` 항목(하는 일, 필요한 상태), 또는 AI가 하지 않는 이유를 한 줄 넣습니다. 없으면 `verify/cut-control-core.mjs`가 실패합니다. 도구나 항목을 바꾸면 `node verify/cut-control-core.mjs --table`과 `--inventory`의 출력을 [cut-ai-control.md](cut-ai-control.md) 5절과 6절에 다시 붙입니다. 파일을 쓰거나 읽는 도구는 사용자에게 먼저 묻고(대화상자), 모델 내려받기는 Cut의 설치 대화상자에서 사용자가 누를 때만 합니다.
 - 다른 플러그인 API(`ide.lsp`, `ide.run`, `ide.debugger`...)는 없을 수 있습니다. `?.`로 부릅니다.
 
 ## 4. 코딩 규칙

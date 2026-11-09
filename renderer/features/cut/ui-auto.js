@@ -63,11 +63,18 @@
 
   // ---------- tasks: progress, cancel, waiting while the player plays ----------
   let running = null;
+  // The control API's job (ui-control.js): an AI's run of one of these follows the progress and stops with its signal.
+  // {signal, progress(fraction, text), cancelled}
+  let observer = null;
+  function observe(o) { observer = o; return () => { if (observer === o) observer = null; }; }
   // fn(ctx) with ctx = {signal, progress(fraction, text?), step() (throws when cancelled; waits while playing when the
   // task decodes video)}. -> its result, or null when it was cancelled or failed (the failure is shown).
   async function task(app, title, fn, { video = false } = {}) {
     if (running) { ui.toast(tr('Another analysis is running.')); return null; }
     const ctl = new AbortController();
+    const watch = observer;
+    if (watch?.signal?.aborted) ctl.abort();
+    else watch?.signal?.addEventListener('abort', () => ctl.abort(), { once: true });
     const host = document.querySelector('.cut-root') || document.body;
     const box = el('div', 'cut-auto-task', undefined, { role: 'status' });
     const name = el('div', 'cut-auto-task-title', title);
@@ -89,6 +96,7 @@
         box.dataset.progress = p.toFixed(3);
         shown = line ?? `${Math.round(p * 100)}%`;
         text.textContent = shown;
+        watch?.progress?.(p, line ?? '');
       },
       async step() {
         if (ctl.signal.aborted) throw cancelled();
@@ -115,7 +123,7 @@
     try {
       return await fn(ctx);
     } catch (err) {
-      if (err?.code === 'cancelled' || ctl.signal.aborted) ui.toast(tr('The analysis was cancelled.'));
+      if (err?.code === 'cancelled' || ctl.signal.aborted) { if (watch) watch.cancelled = true; ui.toast(tr('The analysis was cancelled.')); }
       else ui.report(err?.code ? err : Object.assign(new Error(tr('The analysis failed: {error}', { error: err?.message || String(err) })), { code: 'analysis' }));
       return null;
     } finally {
@@ -279,12 +287,14 @@
   }
 
   // ---------- scene changes ----------
-  async function detectScenes(app, { action } = {}) {
+  // ask false (the control API): no dialog, with threshold and action as given (else the last ones).
+  async function detectScenes(app, { action, threshold, ask = true } = {}) {
     const clips = pictureClips(app);
     if (!clips.length) { ui.toast(tr('There are no video clips to analyze.')); return null; }
     const o = settings('scenes', { threshold: 35, action: 'markers' });
     if (action) o.action = action;
-    const go = await new Promise((resolve) => {
+    if (threshold != null) o.threshold = threshold;
+    const go = !ask || await new Promise((resolve) => {
       let ok = false;
       const thr = ui.numberField({ value: o.threshold, min: 5, max: 95, step: 1, unit: '%', cls: 'cut-auto-scene-threshold', onChange: (v) => { o.threshold = v; } });
       const act = ui.select({ options: [{ value: 'markers', label: tr('Add sequence markers') }, { value: 'split', label: tr('Split the clips') }], value: o.action, cls: 'cut-auto-scene-action', onChange: (v) => { o.action = v; } });
@@ -354,13 +364,13 @@
   }
 
   // ---------- beats ----------
-  async function detectBeats(app, { every } = {}) {
+  async function detectBeats(app, { every, ask = true } = {}) {
     const clips = soundClips(app, { all: false });
     const clip = clips[0];
     if (!clip) { ui.toast(tr('Select an audio clip first.')); return null; }
     const o = settings('beats', { every: 'beat' });
     if (every) o.every = every;
-    const go = await new Promise((resolve) => {
+    const go = !ask || await new Promise((resolve) => {
       let ok = false;
       const sel = ui.select({ options: [{ value: 'beat', label: tr('Every beat') }, { value: 'bar', label: tr('Every bar (4 beats)') }], value: o.every, cls: 'cut-auto-beats-every', onChange: (v) => { o.every = v; } });
       const body = el('div', 'cut-form cut-auto-form');
@@ -416,11 +426,13 @@
 
   // ---------- loudness ----------
   const targetSelect = (value, cls) => ui.select({ options: TARGETS.map(([v, label]) => ({ value: String(v), label: tr(label) })), value: String(value), cls });
-  function matchLoudness(app) {
+  function matchLoudness(app, { target, ask = true } = {}) {
     const seq = app.sequence;
     const length = seq ? model().sequenceDuration(seq) : 0;
     if (!seq || !length || !seq.clips.some((c) => kindOf(seq, c) === 'audio')) { ui.toast(tr('The sequence has no sound.')); return Promise.resolve(null); }
     const o = settings('loudness', { target: -14 });
+    if (target != null) o.target = target;
+    if (!ask) return applyLoudness(app, seq, length, o.target);
     const ctl = new AbortController();
     let measured = null;
     const sel = targetSelect(o.target, 'cut-auto-loudness-target');
@@ -469,17 +481,29 @@
     });
   }
 
+  // Match Loudness without the dialog: measured in a task, then the master gain. -> {gain, lufs} or null.
+  async function applyLoudness(app, seq, length, target) {
+    const m = await task(app, tr('Measuring loudness…'), (ctx) => Cut.audioengine.measure(app.project, seq.id, 0, length, { signal: ctx.signal, onProgress: (p) => ctx.progress(p) }));
+    if (!m) return null;
+    if (!Number.isFinite(m.integrated)) { ui.toast(tr('The sequence is silent.')); return null; }
+    const g = Math.round(((seq.masterGain || 0) + Cut.audioengine.matchGain(m, target, { ceiling: -1 })) * 100) / 100;
+    const r = ui.exec(app, C.batch('Match Loudness', [C.setSequence(seq.id, { masterGain: g })]));
+    if (r) ui.toast(tr('Master gain set to {gain} dB.', { gain: g.toFixed(2) }));
+    return r ? { gain: g, lufs: Math.round(m.integrated * 10) / 10, truePeak: Math.round(m.truePeak * 10) / 10 } : null;
+  }
+
   // A clip alone: its own sequence with every track level and no master gain, for measuring.
   function alone(project, seq, clip) {
     const s = { ...seq, masterGain: 0, transitions: [], clips: [clip],
       tracks: seq.tracks.map((t) => (t.kind === 'audio' ? { ...t, volume: 0, pan: 0, mute: false, solo: false } : t)) };
     return { ...project, sequences: [s] };
   }
-  async function matchClipLoudness(app) {
+  async function matchClipLoudness(app, { target, ask = true } = {}) {
     const clips = soundClips(app, { all: false });
     if (!clips.length) { ui.toast(tr('Select the clips to match first.')); return null; }
     const o = settings('clipLoudness', { target: -14 });
-    const go = await new Promise((resolve) => {
+    if (target != null) o.target = target;
+    const go = !ask || await new Promise((resolve) => {
       let ok = false;
       const sel = targetSelect(o.target, 'cut-auto-clip-target');
       sel.addEventListener('change', () => { o.target = Number(sel.value); });
@@ -522,18 +546,20 @@
   }
 
   // ---------- ducking ----------
-  async function autoDuck(app) {
+  async function autoDuck(app, { amount, fade: fadeSeconds, threshold, ask = true } = {}) {
     const seq = app.sequence;
     if (!seq) return null;
     const dialogue = seq.clips.filter((c) => c.role === 'dialogue' && c.enabled && withSound(app, seq, c));
     const music = seq.clips.filter((c) => c.role === 'music' && kindOf(seq, c) === 'audio' && !trackOf(seq, c.track)?.locked);
     if (!dialogue.length || !music.length) {
+      if (!ask) { ui.toast(tr('Mark the clips first: right-click a clip in the timeline and choose Audio Role > Dialogue for speech and Music for the music to lower.')); return null; }
       ui.dialog({ title: tr('Auto Ducking'), id: 'cutAutoDuckRoles', width: 440,
         body: el('div', 'dialog-message', tr('Mark the clips first: right-click a clip in the timeline and choose Audio Role > Dialogue for speech and Music for the music to lower.')) });
       return null;
     }
     const o = settings('duck', { amount: -12, fade: 0.3, threshold: -40, hold: 0.5 });
-    const go = await new Promise((resolve) => {
+    for (const [k, v] of Object.entries({ amount, fade: fadeSeconds, threshold })) if (v != null) o[k] = v;
+    const go = !ask || await new Promise((resolve) => {
       let ok = false;
       const body = el('div', 'cut-form cut-auto-form');
       const field = (key, opts) => ui.numberField({ value: o[key], ...opts, onChange: (v) => { o[key] = v; } });
@@ -668,7 +694,7 @@
   }
 
   ui.auto = {
-    removeSilence, detectScenes, detectBeats, matchLoudness, matchClipLoudness, autoDuck, autoColor, setRole,
+    removeSilence, detectScenes, detectBeats, matchLoudness, matchClipLoudness, autoDuck, autoColor, setRole, observe,
     menuItems, clipMenuItems, topBarButton, task, soundClips, pictureClips, rippleTracks, rippleRanges, silencePlan,
     get running() { return running ? { title: running.title } : null; },
     cancel: () => running?.ctl.abort(),

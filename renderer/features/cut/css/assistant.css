@@ -27,6 +27,9 @@
 .cut-as-step[data-state="stopped"] .cut-as-step-mark { background: var(--gray7); border-radius: 1px; }
 .cut-as-step[data-state="refused"] .cut-as-step-text { color: var(--gray12); }
 .cut-as-step-error { grid-column: 2; color: var(--red); font-size: 11px; line-height: 1.4; }
+.cut-as-step-progress { grid-column: 2; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; margin-top: 2px; font-size: 11px; color: var(--gray9); }
+.cut-as-step-bar { height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--cut-accent) var(--p, 0%), var(--gray5) var(--p, 0%)); }
+.cut-as-step-progress-text { font-variant-numeric: tabular-nums; }
 @keyframes cut-as-pulse { 50% { opacity: .35; } }
 .cut-as-undo { margin-top: 4px; color: var(--gray9); font-size: 10.5px; }
 
@@ -52,6 +55,7 @@
 .cut-as-export-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 8px 0; }
 .cut-as-export-key { color: var(--gray9); }
 .cut-as-export-value { color: var(--gray12); overflow-wrap: anywhere; }
+.cut-as-import-list { margin: 6px 0; padding-left: 18px; max-height: 180px; overflow: auto; color: var(--gray12); overflow-wrap: anywhere; font-size: 12px; }
 
 .cut-as-connect { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .cut-as-connect[hidden] { display: none; }

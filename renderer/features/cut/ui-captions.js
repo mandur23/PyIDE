@@ -291,6 +291,6 @@
 
   let shown = null; // the mounted panel's reveal
   const reveal = (app, t) => shown?.(t);
-  ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf, reveal };
+  ui.captions = { importFile, exportFile, importDialog, exportDialog, styleDialog, trackOf, reveal, show: choose, writeText };
   ui.registerPanel('captions', { title: () => tr('Captions'), mount });
 })();

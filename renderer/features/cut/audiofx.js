@@ -425,5 +425,18 @@
     return [L.subarray(lat), R.subarray(lat)];
   }
 
-  return { CONTROL, MAX_MEMORY, design, magnitudeDb, ringSamples, processors, filtersOf, response, compressCurve, createChain, processBuffer, BUTTERWORTH, BASS_HZ, TREBLE_HZ, LOOKAHEAD_MS };
+  // Essential Sound's one-click repairs (ui-audiofx.js, the control API's essential_sound): the effects each adds, with
+  // the settings that differ from the defaults.
+  const ESSENTIAL = {
+    clarity: [
+      ['audio.eq', { hpOn: true, hpFreq: 80, hpSlope: '24', b1Freq: 250, b1Gain: -2, b1Q: 1, b2Freq: 3000, b2Gain: 3, b2Q: 1, hsFreq: 10000, hsGain: 1.5 }],
+      ['audio.compressor', { threshold: -24, ratio: 3, attack: 5, release: 120, knee: 6, makeup: 4 }],
+    ],
+    hum50: [['audio.dehum', { frequency: '50' }]],
+    hum60: [['audio.dehum', { frequency: '60' }]],
+    gate: [['audio.gate', { threshold: -50, attack: 2, hold: 80, release: 150, range: 18 }]],
+    limit: [['audio.limiter', { ceiling: -1, release: 50, truePeak: true }]],
+  };
+
+  return { CONTROL, MAX_MEMORY, ESSENTIAL, design, magnitudeDb, ringSamples, processors, filtersOf, response, compressCurve, createChain, processBuffer, BUTTERWORTH, BASS_HZ, TREBLE_HZ, LOOKAHEAD_MS };
 });

@@ -71,6 +71,12 @@
   let current = null; // workspace id
   const mounted = new Map(); // panel id -> {host, body, dispose, focus}
   const activeTab = new Map(); // `${workspace}:${slot index}` -> panel id
+  // Panels that live in the AI dock (a full-height column right of every workspace), never in a workspace's slots.
+  const DOCKED = new Set(['assistant']);
+  let dock = null;
+  let dockBody = null;
+  let dockSplit = null;
+  let aiBtn = null;
 
   // ---------- panels ----------
   function panelHost(id) {
@@ -114,7 +120,7 @@
     current = ws.id;
     ide.settings.set('cut.workspace', ws.id);
     for (const t of root.querySelectorAll('.cut-ws-tab')) t.setAttribute('aria-selected', String(t.dataset.ws === ws.id));
-    for (const { host } of mounted.values()) shelf.appendChild(host);
+    for (const [id, { host }] of mounted) if (!(DOCKED.has(id) && dockOpen())) shelf.appendChild(host);
     const sizes = savedSizes(ws);
     const grid = el('div', 'cut-grid', undefined, { 'data-workspace': ws.id });
     ws.rows.forEach((rowDef, ri) => {
@@ -294,6 +300,7 @@
   }
   // Shows a panel (switching its slot's tab, or to the first workspace that has it) and gives it the keyboard.
   function showPanel(id) {
+    if (DOCKED.has(id)) return setDock(true);
     const tab = root.querySelector(`.cut-grid .cut-slot-tab[data-panel="${id}"]`);
     if (!tab) {
       const ws = WORKSPACES.find((w) => w.rows.some((r) => r.slots.some((s) => s.panels.includes(id))));
@@ -310,7 +317,7 @@
     const all = ide.settings.get('cut.addedPanels', null);
     const list = all && Array.isArray(all[ws.id]) ? all[ws.id] : [];
     const own = new Set(ws.rows.flatMap((r) => r.slots.flatMap((x) => x.panels)));
-    return list.filter((x) => x && typeof x.panel === 'string' && typeof x.slot === 'string' && !own.has(x.panel));
+    return list.filter((x) => x && typeof x.panel === 'string' && typeof x.slot === 'string' && !own.has(x.panel) && !DOCKED.has(x.panel));
   };
   const saveAdded = (wsId, list) => {
     const all = { ...(ide.settings.get('cut.addedPanels', null) || {}) };
@@ -321,6 +328,7 @@
   // Shows a panel in the current workspace (its tab, or a new tab in the dock slot) and gives it the keyboard.
   function openPanel(id) {
     if (!ui.panels.has(id)) return false;
+    if (DOCKED.has(id)) return setDock(true);
     if (!inWorkspace(id)) {
       const ws = WORKSPACES.find((w) => w.id === current) || WORKSPACES[0];
       let slotKey = null;
@@ -337,7 +345,72 @@
     setWorkspace(ws.id);
   }
   const panelIds = () => [...PANEL_ORDER.filter((id) => ui.panels.has(id)), ...[...ui.panels.keys()].filter((id) => !PANEL_ORDER.includes(id))];
-  const panelItems = () => panelIds().map((id) => ({ label: panelTitle(id), checked: inWorkspace(id), keyAction: `Cut.window.${id}`, run: () => openPanel(id) }));
+  const panelItems = () => panelIds().map((id) => (DOCKED.has(id)
+    ? { label: panelTitle(id), checked: dockOpen(), keyAction: `Cut.window.${id}`, run: () => setDock(!dockOpen()) }
+    : { label: panelTitle(id), checked: inWorkspace(id), keyAction: `Cut.window.${id}`, run: () => openPanel(id) }));
+
+  // ---------- the AI dock ----------
+  // The AI Assistant opens as a full-height column on the right of the window (the top bar's AI button, Window > AI
+  // Assistant, Find Action), beside whatever workspace shows. Its width and whether it is open are kept in `cut.aiDock`.
+  const DOCK_KEY = 'cut.aiDock';
+  const DOCK_MIN = 260;
+  const dockState = () => {
+    const v = ide.settings.get(DOCK_KEY, null);
+    return { open: !!v?.open, width: Number.isFinite(v?.width) ? v.width : 380 };
+  };
+  const dockOpen = () => !!dock && !dock.hidden;
+  function buildDock() {
+    dock = el('aside', 'cut-dock', undefined, { 'aria-label': tr('AI Assistant') });
+    dock.hidden = true;
+    const head = el('div', 'cut-dock-head');
+    const close = el('button', 'cut-dock-close', '×', { type: 'button', title: tr('Close'), 'aria-label': tr('Close') });
+    close.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
+    close.addEventListener('click', () => setDock(false));
+    head.append(icon('sparkle'), el('span', 'cut-dock-title', tr('AI Assistant')), close);
+    dockBody = el('div', 'cut-dock-body');
+    dock.append(head, dockBody);
+    dockSplit = el('div', 'cut-splitter v cut-dock-splitter');
+    dockSplit.hidden = true;
+    dockSplit.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      dockSplit.setPointerCapture(e.pointerId);
+      const start = e.clientX;
+      const first = dock.getBoundingClientRect().width;
+      const most = () => Math.max(DOCK_MIN, root.getBoundingClientRect().width * 0.5);
+      // The dock is right of its splitter: dragging left widens it.
+      const move = (m) => { dock.style.width = `${Math.round(Math.min(most(), Math.max(DOCK_MIN, first - (m.clientX - start))))}px`; };
+      const up = () => {
+        dockSplit.removeEventListener('pointermove', move);
+        dockSplit.removeEventListener('pointerup', up);
+        ide.settings.set(DOCK_KEY, { ...dockState(), width: Math.round(dock.getBoundingClientRect().width) });
+      };
+      dockSplit.addEventListener('pointermove', move);
+      dockSplit.addEventListener('pointerup', up);
+    });
+  }
+  function setDock(open, { focus = true } = {}) {
+    if (!dock || !ui.panels.has('assistant')) return false;
+    if (open) {
+      const entry = panelHost('assistant');
+      dock.style.width = `${dockState().width}px`;
+      if (entry.host.parentNode !== dockBody) dockBody.appendChild(entry.host);
+    } else {
+      const entry = mounted.get('assistant');
+      if (entry) shelf.appendChild(entry.host);
+      if (app.focusPanel === 'assistant') app.setFocus(['timeline', 'program'].find((p) => root.querySelector(`.cut-grid .cut-panel[data-panel="${p}"]`)) || null);
+    }
+    dock.hidden = !open;
+    dockSplit.hidden = !open;
+    aiBtn?.setPressed(open);
+    ide.settings.set(DOCK_KEY, { ...dockState(), open });
+    if (open && focus) focusPanel('assistant');
+    return open;
+  }
+  function aiButton() {
+    aiBtn = button({ icon: 'sparkle', label: 'AI', title: tr('AI Assistant'), toggle: true, pressed: false, cls: 'cut-ai-btn', onClick: () => setDock(!dockOpen()) });
+    return aiBtn;
+  }
   // Window > Workspaces, as in Premiere: the workspaces, then Reset to Saved Layout and Save Changes.
   const workspaceItems = () => [
     ...WORKSPACES.map((ws) => ({ label: ws.title(), checked: ws.id === current, keyAction: `Cut.workspace.${ws.id}`, run: () => setWorkspace(ws.id) })),
@@ -683,6 +756,8 @@
     // The Automation menu (ui-auto.js) when it loaded.
     right.appendChild(windowButton());
     if (ui.auto?.topBarButton) right.appendChild(ui.auto.topBarButton());
+    // AI beside Automation: opens and closes the AI dock.
+    if (ui.panels.has('assistant')) right.appendChild(aiButton());
     // Settings and the keyboard shortcuts (ui-settings.js, ui-shortcuts.js) when they loaded.
     if (ui.settingsButton) right.appendChild(ui.settingsButton());
     right.append(button({ icon: 'add', title: tr('Import Media…'), action: 'import', cls: 'cut-import-btn' }), exportBtn);
@@ -734,7 +809,10 @@
     // Premiere's menu bar (ui-menubar.js) over the top bar's quick buttons, when that file loaded.
     const menubar = ui.menubar?.build?.(app);
     if (menubar) root.appendChild(menubar);
-    root.append(topBar(), stage, shelf);
+    buildDock();
+    const body = el('div', 'cut-body');
+    body.append(stage, dockSplit, dock);
+    root.append(topBar(), body, shelf);
     host.replaceChildren(root);
     root.addEventListener('pointermove', (e) => { pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
     root.addEventListener('pointerdown', (e) => {
@@ -752,6 +830,7 @@
     await adopt(newHistory(freshProject()), null, { reason: 'new' });
     scheduleCopies();
     setWorkspace(ide.settings.get('cut.workspace', 'editing'));
+    if (dockState().open) setDock(true, { focus: false });
     // Find Action reaches every panel: "Window: History" and so on.
     for (const id of panelIds()) {
       if (ide.actions.some((a) => a.id === `Cut.window.${id}`)) continue;
@@ -763,6 +842,7 @@
   }
 
   Object.defineProperty(ui, 'workspace', { get: () => current, configurable: true });
+  Object.defineProperty(ui, 'dockOpen', { get: () => dockOpen(), configurable: true });
   Object.assign(ui, {
     start,
     workspaces: WORKSPACES,
@@ -770,6 +850,7 @@
     resetWorkspace,
     saveWorkspace,
     toggleMaximize,
+    setDock,
     showPanel,
     openPanel,
     windowMenuItems,

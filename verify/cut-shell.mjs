@@ -485,6 +485,35 @@ try {
   check(maxed === 'program' && full && restored.split(',').length === 6 && under === 'timeline' && (await slotsShown()) === restored,
     `Shift+\` maximizes the frame with the keyboard and \` the one under the pointer; again restores (${maxed}, ${under}; ${restored})`);
 
+  // ---------- the window's bottom and the AI dock ----------
+  const bottom = await S(`({ status: !!document.querySelector('#status')?.getClientRects().length, root: Math.round(document.querySelector('.cut-root').getBoundingClientRect().bottom), h: innerHeight })`);
+  check(!bottom.status && bottom.root === bottom.h, `with no background task, error or update the status bar's row goes to the editor (${JSON.stringify(bottom)})`);
+  await S(`(window.__shellTask = ide.tasks.start({ title: 'shell test task' }), true)`);
+  // The task widget redraws on the next frame.
+  const withTask = await until(`!!document.querySelector('#bgTasks:not(.hidden)') && !!document.querySelector('#status').getClientRects().length`, 'the task in the status bar', 3000).then(() => true, () => false);
+  await S(`(window.__shellTask.done(), true)`);
+  const afterTask = await until(`!document.querySelector('#status').getClientRects().length`, 'the status bar gone again', 3000).then(() => true, () => false);
+  check(withTask && afterTask, `a background task brings the status bar back, and it goes again when the task ends (${withTask}, ${afterTask})`);
+  const right = await S(`[...document.querySelectorAll('.cut-topbar .cut-topbar-group.right > button')].map((b) => [...b.classList].find((c) => /^cut-(window|auto|ai|settings|import|export)-btn$/.test(c)))`);
+  check(right.indexOf('cut-ai-btn') === right.indexOf('cut-auto-btn') + 1, `the AI button sits right after Automation in the top bar (${right})`);
+  await click('.cut-ai-btn');
+  await until(`!!document.querySelector('.cut-dock:not([hidden]) .cut-panel[data-panel="assistant"]')`, 'the AI dock', 8000);
+  const docked = await S(`(() => { const d = document.querySelector('.cut-dock').getBoundingClientRect(), s = document.querySelector('.cut-stage').getBoundingClientRect(), t = document.querySelector('.cut-topbar').getBoundingClientRect();
+    return { rightGap: Math.round(innerWidth - d.right), top: Math.round(d.top - t.bottom), bottomGap: Math.round(innerHeight - d.bottom), width: Math.round(d.width), stageRight: Math.round(s.right), dockLeft: Math.round(d.left), pressed: document.querySelector('.cut-ai-btn').getAttribute('aria-pressed'), focus: Cut.app.focusPanel }; })()`);
+  check(docked.rightGap <= 6 && docked.top <= 6 && docked.bottomGap <= 6 && docked.width >= 260 && docked.stageRight < docked.dockLeft && docked.pressed === 'true' && docked.focus === 'assistant',
+    `AI opens the AI Assistant as a full-height column on the right, the workspace beside it, with the keyboard (${JSON.stringify(docked)})`);
+  await click('.cut-window-btn');
+  const ticked = await S(`[...document.querySelectorAll('.context-menu .menu-item')].find((n) => n.querySelector('.menu-label')?.textContent === tr('AI Assistant'))?.querySelector('.menu-icon')?.textContent === '✓'`);
+  await key('Escape');
+  await click('.cut-ws-tab[data-ws="color"]');
+  const keptOnSwitch = await S(`!!document.querySelector('.cut-dock:not([hidden]) .cut-panel[data-panel="assistant"]')`);
+  await click('.cut-ws-tab[data-ws="editing"]');
+  await click('.cut-dock-close');
+  const dockClosed = await S(`({ hidden: document.querySelector('.cut-dock').hidden, stageRightGap: Math.round(innerWidth - document.querySelector('.cut-stage').getBoundingClientRect().right), pressed: document.querySelector('.cut-ai-btn').getAttribute('aria-pressed'), saved: ide.settings.get('cut.aiDock', null)?.open })`);
+  check(keptOnSwitch && dockClosed.hidden && dockClosed.stageRightGap <= 1 && dockClosed.pressed === 'false' && dockClosed.saved === false,
+    `the dock stays across workspaces; × closes it and gives the room back (${JSON.stringify({ keptOnSwitch, ticked, ...dockClosed })})`);
+  check(ticked, 'Window shows AI Assistant ticked while the dock is open');
+
   // ---------- the menu bar ----------
   const titles = await S(`[...document.querySelectorAll('.cut-menubar .cut-menubar-item')].map((b) => b.textContent).join()`);
   check(titles === 'File,Edit,Clip,Sequence,Markers,Graphics and Titles,View,Window,Help', `the menu bar has Premiere's menus (${titles})`);

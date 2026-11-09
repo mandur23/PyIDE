@@ -41,6 +41,7 @@
   // Transport and editing glyphs the IDE's icon set has no match for. Constant markup only.
   const svg = (body) => `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
   const ICONS = {
+    sparkle: svg('<path d="M7 1.5l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5z" fill="currentColor"/><path d="M12.5 10.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor"/>'),
     play: svg('<path d="M4.5 3v10l8.5-5z" fill="currentColor"/>'),
     pause: svg('<rect x="4" y="3" width="3" height="10" rx=".5" fill="currentColor"/><rect x="9" y="3" width="3" height="10" rx=".5" fill="currentColor"/>'),
     stop: svg('<rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor"/>'),
@@ -132,8 +133,13 @@
     notify(errorText(err), { kind: err?.code ? 'warn' : 'error', title });
   }
   // A short line over the editor that fades (the reason a trim stopped, "Saved"...), and a notification for errors.
+  // Who hears what the editor says (the control API tells an AI why an action did nothing): fn(text, kind).
+  const hearers = new Set();
+  const listen = (fn) => { hearers.add(fn); return () => hearers.delete(fn); };
+  const said = (text, kind) => { for (const fn of hearers) { try { fn(String(text), kind); } catch {} } };
   let toastTimer = 0;
   function toast(text, { kind = 'info', ms = 2600 } = {}) {
+    said(text, kind);
     const host = document.querySelector('.cut-root');
     if (!host) return;
     let n = host.querySelector(':scope > .cut-toast');
@@ -145,6 +151,7 @@
     toastTimer = setTimeout(() => n.classList.remove('shown'), ms);
   }
   function notify(text, { kind = 'info', title } = {}) {
+    said(text, kind);
     if (kind === 'error' || kind === 'warn') {
       ide.notifications?.notify({ title: title || tr('Video Editor'), text, kind, group: 'Video Editor', raw: true });
     }
@@ -557,6 +564,7 @@
     errorText,
     toast,
     notify,
+    listen,
     fpsOf,
     formatDuration,
     formatBytes,

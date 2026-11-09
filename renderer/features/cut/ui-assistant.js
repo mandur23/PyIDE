@@ -57,58 +57,14 @@
     seek(t) { if (ui.monitors?.program?.seek) ui.monitors.program.seek(t); else Cut.app.setTime(t); },
     play() { if (!Cut.app.playing) ui.monitors?.program?.run?.('playPause'); },
     stop() { if (Cut.app.playing) ui.monitors?.program?.pause?.(); },
-    exportAsk,
+    // run_action, automation, import, save, the exports, the queue, proxies (ui-control.js)
+    ...ui.controlServices,
   };
-
-  // export_sequence: the user decides; the file is a new one next to the project (or in Projects), never replacing.
-  async function exportAsk({ seq, preset, fileName, range, captions }) {
-    const app = Cut.app;
-    const p = Cut.presets?.get?.(preset);
-    if (!p || !ui.exportQueue) return { ok: false, error: 'exporting is not available' };
-    const home = await invoke('cut:home').catch(() => null);
-    const dir = app.path ? app.path.replace(/[\\/][^\\/]*$/, '') : home?.projects;
-    if (!dir) return { ok: false, error: 'there is no folder to export to' };
-    const stem = String(fileName || seq.name || 'Sequence').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'Sequence';
-    let path = null;
-    for (let n = 1; n < 100 && !path; n++) {
-      const candidate = `${dir}\\${stem}${n > 1 ? ` (${n})` : ''}.${p.ext}`;
-      const used = app.project.media.some((m) => String(m.path).toLowerCase() === candidate.toLowerCase()) || ui.exportQueue.writes(candidate);
-      const st = used ? null : await invoke('cut:stat', candidate).catch(() => null);
-      if (!used && st?.missing) path = candidate;
-    }
-    if (!path) return { ok: false, error: 'no free file name' };
-    const body = el('div', 'cut-form cut-as-export');
-    const fps = seq.fps;
-    const rows = [
-      [tr('Sequence:'), seq.name],
-      [tr('Preset:'), tr(p.name)],
-      [tr('File:'), path],
-      [tr('Range:'), range ? `${Cut.time.timecode(range.in, fps)} – ${Cut.time.timecode(range.out, fps)}` : tr('Entire Sequence')],
-    ];
-    body.appendChild(el('div', 'dialog-message', tr('The AI wants to export this sequence to a new file.')));
-    const grid = el('div', 'cut-as-export-grid');
-    for (const [k, v] of rows) grid.append(el('span', 'cut-as-export-key', k), el('span', 'cut-as-export-value', v));
-    body.appendChild(grid);
-    body.appendChild(el('div', 'cut-dialog-note', tr('It joins the export queue. No existing file is replaced.')));
-    const yes = await new Promise((resolve) => {
-      let ok = false;
-      ui.dialog({ title: tr('Export Requested by AI'), id: 'cutAsExport', body, width: 520, onClose: () => resolve(ok),
-        buttons: [{ label: tr('Export'), primary: true, run: () => { ok = true; } }, { label: tr('Don\'t Export') }] });
-    });
-    if (!yes) return { ok: false, declined: true };
-    const settings = Cut.presets.resolve(preset, seq, {});
-    ui.exportQueue.add({
-      project: JSON.parse(JSON.stringify(app.project)), seqId: seq.id, seqName: seq.name, fps: [...seq.fps], path, settings: JSON.parse(JSON.stringify(settings)),
-      range, captions: captions && p.kind !== 'audio' && seq.captions?.length ? 'burn' : null, captionTrack: captions ? (ui.captions?.trackOf?.(app)?.id || seq.captions?.[0]?.id || null) : null,
-      presetName: tr(p.name),
-    });
-    ui.toast(tr('Added {name} to the export queue', { name: ui.basename(path) }));
-    return { ok: true, name: ui.basename(path), path };
-  }
 
   // ---------- the bridge ----------
   let turn = null; // the running chat turn: {id, request, floor (history position at its start), history, answer, stopped}
   let queue = Promise.resolve();
+  let calling = null; // the call running now: {client, ctl} (Stop and Disconnect end a long one)
   const listeners = new Set(); // panels: fn(event)
   const tell = (e) => { for (const fn of listeners) { try { fn(e); } catch (err) { log.error(err?.stack || String(err)); } } };
 
@@ -137,9 +93,13 @@
     else if (client?.kind === 'chat' && (!turn || turn.id !== client.turn || turn.stopped)) r = { ok: false, error: 'This request has ended; nothing more can be changed in it.' };
     else if (client?.kind === 'external' && setting('cut.control.external') !== true) r = { ok: false, error: 'External AIs are not allowed in Nano Studio Cut\'s settings.' };
     else {
-      const env = { app, services, undoFloor: client?.kind === 'chat' ? turn.floor : null };
-      r = await K.call(name, args, env);
-      if (r.ok && r.edit) land(r.edit);
+      const ctl = new AbortController();
+      calling = { client, ctl };
+      // a long job's progress shows on its step in the chat
+      const progress = (fraction, text) => tell({ type: 'progress', turn: client?.kind === 'chat' ? client.turn : null, name, fraction, text: text || '' });
+      const env = { app, services, undoFloor: client?.kind === 'chat' ? turn.floor : null, signal: ctl.signal, progress };
+      try { r = await K.call(name, args, env); } finally { calling = null; }
+      if (r.ok && r.edit && !(client?.kind === 'chat' && (turn?.id !== client.turn || turn?.stopped))) land(r.edit);
     }
     if (client?.kind === 'external') tell({ type: 'external', name, args, ok: r.ok, error: r.ok ? '' : r.error });
     return content(r);
@@ -163,6 +123,7 @@
   if (setting('cut.control.external') === true) applyExternal();
   ide.api.on('cut:controlClients', (s) => { clients = Array.isArray(s?.external) ? s.external : []; banner(); });
   async function disconnect() {
+    if (calling?.client?.kind === 'external') calling.ctl.abort();
     externalInfo = await invoke('cut:controlDisconnect').catch(() => externalInfo);
     clients = [];
     banner();
@@ -198,7 +159,9 @@
     'A tool result says what changed; a refused edit changed nothing, so fix the arguments or explain.',
     'When you are done, answer in one to three short sentences, in the language the user wrote in (Korean when they',
     'write Korean), saying what you changed. Never claim an edit that did not succeed.',
-    'You cannot open, import, delete or write files; export_sequence asks the user first.',
+    'You cannot open other projects, delete files or run programs. import_media, the exports and save_project ask the',
+    'user where the tools say so, and a job that needs a model asks the user to download it; when the user says no,',
+    'tell them what was not done. For a keyboard or menu command without its own tool, use list_actions and run_action.',
     K.INSTRUCTIONS,
   ].join(' ');
   const conversation = []; // [{request, answer}] of this project
@@ -262,6 +225,7 @@
     const id = turn.id;
     // nothing of this turn lands after Stop, not even a call already on its way
     turn.stopped = true;
+    if (calling?.client?.kind === 'chat') calling.ctl.abort();
     invoke('cut:agentStop', id).catch(() => {});
     tell({ type: 'stopping', turn: id });
     return true;
@@ -323,6 +287,8 @@
     }
     function step(list, name, input2) {
       const [text, params] = K.describe(name, input2);
+      // a keyboard action by the name its key has in the shortcut list
+      if (name === 'run_action' && params.id) params.id = ui.keys?.title?.(params.id) || params.id;
       const li = el('li', 'cut-as-step', undefined, { 'data-state': 'running', 'data-tool': name });
       li.append(el('span', 'cut-as-step-mark'), el('span', 'cut-as-step-text', tr(text, params)));
       list.appendChild(li);
@@ -330,6 +296,7 @@
       return li;
     }
     function result(li, ok, text) {
+      li.querySelector('.cut-as-step-progress')?.remove();
       li.dataset.state = ok ? 'done' : 'refused';
       if (!ok && text) li.appendChild(el('div', 'cut-as-step-error', text));
       scroll();
@@ -374,6 +341,19 @@
         case 'agent.result': {
           const li = current?.turn === e.turn ? current.byId.get(e.id) : null;
           if (li) result(li, e.ok, e.ok ? '' : e.text);
+          break;
+        }
+        case 'progress': {
+          // the running step of that tool in this turn
+          if (current?.turn !== e.turn) break;
+          const li = [...current.steps.querySelectorAll(`.cut-as-step[data-state="running"][data-tool="${e.name}"]`)].pop();
+          if (!li) break;
+          let p = li.querySelector('.cut-as-step-progress');
+          if (!p) { p = el('div', 'cut-as-step-progress'); p.append(el('span', 'cut-as-step-bar'), el('span', 'cut-as-step-progress-text')); li.appendChild(p); }
+          const f = Math.max(0, Math.min(1, Number(e.fraction) || 0));
+          p.dataset.progress = f.toFixed(3);
+          p.querySelector('.cut-as-step-bar').style.setProperty('--p', `${(f * 100).toFixed(1)}%`);
+          p.querySelector('.cut-as-step-progress-text').textContent = e.text ? `${Math.round(f * 100)}% · ${e.text}` : `${Math.round(f * 100)}%`;
           break;
         }
         case 'stopping':

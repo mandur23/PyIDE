@@ -37,9 +37,11 @@
   const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const MAX_ITEMS = 500;
-  const PRESETS = ['youtube-1080p', 'youtube-4k', 'shorts', '720p', 'audio-m4a'];
+  const PRESETS = need('presets').EXPORT.map((p) => p.id);
   const MARKER_COLORS = ['green', 'red', 'purple', 'orange', 'yellow', 'white', 'blue', 'cyan'];
   const CLIP_ID = /^c\d+$/;
+  // the timeline's clip labels (ui-timeline.js LABELS)
+  const LABELS = ['violet', 'iris', 'caribbean', 'lavender', 'cerulean', 'forest', 'rose', 'mango'];
 
   const INSTRUCTIONS = [
     'Nano Studio Cut is a video editor. These tools read and edit the project open in it. Every edit shows live in the',
@@ -49,8 +51,14 @@
     'Ids (clips c<n>, media m<n>, tracks V1/A1, markers, captions, effects e<n>) come from the read tools: call',
     'get_sequence before editing, and get_clip for one clip\'s details. sequence_id may be left out: the active sequence.',
     'A refused edit changes nothing. Read its message, then fix the arguments or tell the user why it cannot be done.',
-    'Nothing here reads or writes files, except export_sequence, which asks the user first. Locked tracks are the',
-    'user\'s: leave them alone.',
+    'Change only what the request asks for. Do not change project or sequence settings, other clips or anything else',
+    'the user did not ask about, not even to make a refused edit work; suggest such a change in your answer instead.',
+    'Keyboard and menu commands without a tool of their own run with run_action (list_actions lists them).',
+    'Long jobs (automation, proxies, an export with wait) report progress and end when the user presses Stop.',
+    'Files: import_media brings in only files the user confirms in a dialog or that are in the project\'s folder;',
+    'export_sequence, export_frame and export_captions ask the user first and write new files only; save_project writes',
+    'the project\'s own file (and asks where when it has none). Nothing else reads or writes files, and nothing is',
+    'downloaded unless the user agrees in Cut\'s setup dialog. Locked tracks are the user\'s: leave them alone.',
   ].join(' ');
 
   // ---------- schemas ----------
@@ -74,6 +82,7 @@
     if (types.length && !okType) return `${at} must be ${types.join(' or ')}.`;
     if (type === 'number' || type === 'integer') {
       if (!Number.isFinite(value)) return `${at} must be a finite number.`;
+      if (schema.enum && !schema.enum.includes(value)) return `${at} must be one of ${schema.enum.join(', ')}.`;
       if (schema.minimum !== undefined && value < schema.minimum) return `${at} must be at least ${schema.minimum}.`;
       if (schema.maximum !== undefined && value > schema.maximum) return `${at} must be at most ${schema.maximum}.`;
     }
@@ -239,7 +248,7 @@
     if (!def || def.kind === undefined || E.transitions().some((t) => t.type === type)) refuse(`There is no effect "${type}". list_effects lists them.`);
     return def;
   }
-  function paramValue(def, id, v, at = id) {
+  function paramValue(def, id, v, at = id, luts = null) {
     const p = def.params.find((x) => x.id === id);
     if (!p) refuse(`Effect ${def.type} has no parameter "${id}". Its parameters: ${def.params.map((x) => x.id).join(', ')}.`);
     switch (p.type) {
@@ -262,8 +271,12 @@
       case 'curve':
         if (!Array.isArray(v) || v.length % 2 || v.length < 4 || v.length > 32 || !v.every((x) => Number.isFinite(x) && x >= 0 && x <= 1)) refuse(`${at} must be a flat list of 2 to 16 points [x0, y0, x1, y1, ...] from 0 to 1.`);
         return v;
+      case 'lut':
+        if (v === '' || (typeof v === 'string' && luts && Object.hasOwn(luts, v))) return v;
+        refuse(`${at} must be "" (no LUT) or a LUT the project has (get_project lists luts: ${Object.keys(luts || {}).join(', ') || 'none'}). Loading a LUT file is the user's.`);
+        break;
       default:
-        refuse(`${at} cannot be set by these tools (a LUT is loaded from a file, which is the user's).`);
+        refuse(`${at} cannot be set by these tools.`);
     }
     return v;
   }
@@ -295,23 +308,33 @@
 
   // ---------- the tools ----------
   const TOOLS = [];
-  const tool = (name, kind, title, description, input, runFn, say = null) => TOOLS.push({ name, kind, title, description, input, run: runFn, say });
+  const BY_NAME = new Map();
+  const tool = (name, kind, title, description, input, runFn, say = null) => {
+    if (BY_NAME.has(name)) throw new Error(`tool ${name} twice`);
+    const t = { name, kind, title, description, input, run: runFn, say };
+    TOOLS.push(t);
+    BY_NAME.set(name, t);
+  };
 
   // reading
   tool('get_project', 'read', 'Read the project',
-    'The project\'s sequences (size, rate, length, clip count, which is active), its media count, the playhead and the selection. Start here.',
+    'The project\'s sequences (size, rate, length, clip count, which is active), its media count, bins, LUTs, settings, whether it was saved to a file and has unsaved changes, the playhead and the selection. Start here.',
     bare(), (c) => {
       const app = c.app;
       const p = app.project;
       if (!p) refuse('No project is open.');
       const T = TM().TICKS;
+      const s = p.settings;
       return {
-        sequences: p.sequences.map((s) => ({ id: s.id, name: s.name, width: s.w, height: s.h, fps: fpsOf(s), duration: r3(M().sequenceDuration(s) / T), clips: s.clips.length, active: s.id === app.sequenceId || undefined })),
+        sequences: p.sequences.map((q) => ({ id: q.id, name: q.name, width: q.w, height: q.h, fps: fpsOf(q), duration: r3(M().sequenceDuration(q) / T), clips: q.clips.length, active: q.id === app.sequenceId || undefined })),
         media: p.media.length,
+        bins: p.bins.map((b) => ({ id: b.id, name: b.name, ...(b.parent ? { parent: b.parent } : {}), items: b.items.length })),
+        luts: Object.entries(p.luts || {}).map(([id, e]) => ({ id, name: e.name })),
         activeSequence: app.sequenceId,
         playhead: r3(app.t / T),
         selection: [...(app.selection || [])],
-        settings: { stillDuration: r3(p.settings.stillDuration / T), transitionDuration: r3(p.settings.transitionDuration / T) },
+        savedToFile: !!app.path, unsavedChanges: !!app.history?.dirty,
+        settings: { stillDuration: r3(s.stillDuration / T), transitionDuration: r3(s.transitionDuration / T), freezeDuration: r3((s.freezeDuration || 0) / T), fit: s.fit, speechTerms: s.speechTerms || [] },
       };
     });
   tool('get_sequence', 'read', 'Read the timeline',
@@ -350,16 +373,18 @@
       return out;
     });
   tool('get_media', 'read', 'Read the media',
-    'The project\'s media: id, name, kind, length, picture size and rate, whether it has sound, how many clips use it. No file paths.',
+    'The project\'s media: id, name, kind, length, picture size and rate, whether it has sound, how many clips use it, its bin, whether it has a proxy or its file is missing (offline). No file paths.',
     bare(), (c) => {
       const T = TM().TICKS;
       const p = c.app.project;
       if (!p) refuse('No project is open.');
       const used = new Map();
       for (const s of p.sequences) for (const x of s.clips) if (x.source?.media) used.set(x.source.media, (used.get(x.source.media) || 0) + 1);
+      const binOf = new Map(p.bins.flatMap((b) => b.items.map((id) => [id, b.id])));
       return p.media.map((m) => ({
         id: m.id, name: m.name, kind: m.kind, duration: m.kind === 'image' ? null : r3(m.duration / T),
         ...(m.video ? { width: m.video.w, height: m.video.h, fps: m.video.fps ? r3(m.video.fps) : undefined } : {}), audio: !!m.audio, clips: used.get(m.id) || 0,
+        ...(binOf.has(m.id) ? { bin: binOf.get(m.id) } : {}), ...(m.proxy ? { proxy: true } : {}), ...(c.services?.offline?.(m.id) ? { offline: true } : {}),
       }));
     });
   tool('get_markers', 'read', 'Read the markers', 'The sequence markers and the clip markers (times on the timeline).',
@@ -483,17 +508,26 @@
       return { edit: { at: first + delta }, moved: a.clip_ids };
     }, (a) => ['Move {n} clips', { n: a.clip_ids.length }]);
   tool('trim_clip', 'edit', 'Trim a clip',
-    'Moves a clip\'s start or end edge (to: the new edge time, or delta: seconds). mode normal leaves a gap or fills one, ripple moves later clips with the edge, roll moves the neighbouring clip\'s edge too. The result says where it stopped and why (source, neighbour, length).',
-    obj({ clip_id: str('The clip.'), edge: str('start or end.', { enum: ['start', 'end'] }), to: num('The new edge time (s).', { minimum: 0 }), delta: num('Seconds to move the edge by.'), mode: str('normal (default), ripple or roll.', { enum: ['normal', 'ripple', 'roll'] }), linked: bool('Trim linked clips too (default true).') }, ['clip_id', 'edge']),
+    'Moves a clip\'s start or end edge (to: the new edge time, or delta: seconds). mode normal leaves a gap or fills one, ripple moves later clips with the edge, roll moves the neighbouring clip\'s edge too, stretch (Rate Stretch) changes the speed so the same source fills the new length. slip (delta s, no edge) shows a later (+) or earlier part of the source in place; slide (delta s, no edge) moves the clip while its neighbours trim. The result says where it stopped and why (source, neighbour, length, speed).',
+    obj({ clip_id: str('The clip.'), edge: str('start or end (not for slip and slide).', { enum: ['start', 'end'] }), to: num('The new edge time (s).', { minimum: 0 }), delta: num('Seconds to move the edge (or slip, slide) by.'), mode: str('normal (default), ripple, roll, stretch, slip or slide.', { enum: ['normal', 'ripple', 'roll', 'stretch', 'slip', 'slide'] }), linked: bool('Linked clips too (default true).') }, ['clip_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
+      const mode = a.mode || 'normal';
+      const linked = a.linked !== false;
+      if (mode === 'slip' || mode === 'slide') {
+        if (a.delta == null || a.to != null || a.edge != null) refuse(`${mode} takes delta (seconds) and no edge or to.`);
+        const r = run(c, C()[mode](c.seq.id, clip.id, { delta: ticks(c, a.delta), linked }));
+        const now = c.seq.clips.find((x) => x.id === clip.id);
+        return { edit: { at: now.start }, applied: r?.applied != null ? r3(r.applied / c.T) : null, stoppedBy: r?.clamped || null, start: sec(c, now.start), end: sec(c, M().clipEnd(now)), in: sec(c, now.in), out: sec(c, now.out) };
+      }
+      if (!a.edge) refuse(`mode ${mode} needs edge (start or end).`);
       if ((a.to == null) === (a.delta == null)) refuse('Give to or delta (one of them).');
       const edgeAt = a.edge === 'start' ? clip.start : M().clipEnd(clip);
       const delta = a.to != null ? ticks(c, a.to) - edgeAt : ticks(c, a.delta);
-      const r = run(c, C().trim(c.seq.id, clip.id, { edge: a.edge, delta, mode: a.mode || 'normal', linked: a.linked !== false }));
+      const r = run(c, mode === 'stretch' ? C().stretch(c.seq.id, clip.id, { edge: a.edge, delta, linked }) : C().trim(c.seq.id, clip.id, { edge: a.edge, delta, mode, linked }));
       const now = c.seq.clips.find((x) => x.id === clip.id);
-      return { edit: { at: edgeAt + (r?.applied ?? delta) }, applied: r ? r3(r.applied / c.T) : null, stoppedBy: r?.clamped || null, ...(now ? { start: sec(c, now.start), end: sec(c, M().clipEnd(now)) } : {}) };
-    }, (a) => [a.edge === 'start' ? 'Trim the start of {clip}' : 'Trim the end of {clip}', { clip: a.clip_id }]);
+      return { edit: { at: edgeAt + (r?.applied ?? delta) }, applied: r ? r3(r.applied / c.T) : null, stoppedBy: r?.clamped || null, ...(now ? { start: sec(c, now.start), end: sec(c, M().clipEnd(now)), ...(now.speed !== 1 ? { speed: r3(now.speed * 100) } : {}) } : {}) };
+    }, (a) => [a.mode === 'slip' ? 'Slip {clip}' : a.mode === 'slide' ? 'Slide {clip}' : a.edge === 'start' ? 'Trim the start of {clip}' : 'Trim the end of {clip}', { clip: a.clip_id }]);
   tool('razor', 'edit', 'Razor',
     'Cuts clips in two at a time: on every unlocked track, or only on track_ids, or only clip_ids (with their linked clips).',
     obj({ at: num('Where to cut (s).', { minimum: 0 }), track_ids: ids('Only these tracks.'), clip_ids: ids('Only these clips.') }, ['at']),
@@ -545,9 +579,10 @@
 
   // clip settings
   tool('set_clip', 'edit', 'Change a clip',
-    'Changes a clip\'s settings. Video clips: opacity (%), position ([x, y] px from the center), scale (% or [w %, h %]), rotation (deg), anchor, crop ([top, right, bottom, left] %). Audio clips: volume (dB, 0 unchanged), pan (-100..100), fade_in, fade_out (s). Both: name, enabled, role (dialogue, music, effects, ambience or null). The value is the clip\'s static value; set_keyframes animates it.',
+    'Changes a clip\'s settings. Video clips: opacity (%), position ([x, y] px from the center), scale (% or [w %, h %]), rotation (deg), anchor, crop ([top, right, bottom, left] %), interpolation (sample or blend: Time Interpolation), color (a color matte\'s #rrggbb). Audio clips: volume (dB, 0 unchanged), pan (-100..100), fade_in, fade_out (s). Both: name, enabled, role (Essential Sound\'s audio type: dialogue, music, effects, ambience or null), label (a color label or null). The value is the clip\'s static value; set_keyframes animates it.',
     obj({
       clip_id: str('The clip.'), name: str('A name.', { maxLength: 200 }), enabled: bool('false hides and mutes it.'), role: { type: ['string', 'null'], enum: ['dialogue', 'music', 'effects', 'ambience'], description: 'What its sound is.' },
+      label: { type: ['string', 'null'], enum: LABELS, description: `${LABELS.join(', ')} or null.` }, interpolation: str('sample or blend.', { enum: ['sample', 'blend'] }), color: str('A color matte\'s color like #2f6fdb.', { maxLength: 7 }),
       opacity: num('%', { minimum: 0, maximum: 100 }), position: pair('[x, y] px from the center.'), scale: { type: ['number', 'array'], items: { type: 'number' }, description: '% or [w %, h %].' },
       rotation: num('Degrees.'), anchor: pair('[x, y] px.'), crop: list({ type: 'number' }, '[top, right, bottom, left] %.', { minItems: 4, maxItems: 4 }),
       volume: num('dB.', { minimum: -60, maximum: 24 }), pan: num('-100 left to 100 right.', { minimum: -100, maximum: 100 }),
@@ -562,60 +597,131 @@
       for (const [k, key] of [['fade_in', 'fadeIn'], ['fade_out', 'fadeOut']]) if (a[k] !== undefined) { needKind(c, clip, 'audio', k); patch[key] = ticks(c, a[k]); }
       for (const [k, v] of Object.entries(props)) if (clip.keyframes?.[k]?.length) refuse(`${k} of ${clip.id} has keyframes; change them with set_keyframes (or clear them there first).`);
       if (Object.keys(props).length) patch.props = props;
-      for (const k of ['name', 'enabled', 'role']) if (a[k] !== undefined) patch[k] = a[k];
-      if (!Object.keys(patch).length) refuse('Give at least one setting to change.');
-      run(c, C().setClip(c.seq.id, clip.id, patch, { linked: a.linked !== false }));
+      for (const k of ['name', 'enabled', 'role', 'label']) if (a[k] !== undefined) patch[k] = a[k];
+      if (a.interpolation !== undefined) { needKind(c, clip, 'video', 'interpolation'); patch.sampling = a.interpolation; }
+      if (a.color !== undefined) {
+        if (clip.source?.generator !== 'solid') refuse(`color is for color mattes; ${clip.id} is not one${clip.source?.generator === 'text' ? ' (set_text changes a title\'s color)' : ''}.`);
+        if (!/^#[0-9a-f]{6}$/i.test(a.color)) refuse('color must look like #2f6fdb.');
+      }
+      if (!Object.keys(patch).length && a.color === undefined) refuse('Give at least one setting to change.');
+      atomic(c, 'Clip Settings', () => {
+        if (Object.keys(patch).length) run(c, C().setClip(c.seq.id, clip.id, patch, { linked: a.linked !== false }));
+        if (a.color !== undefined) run(c, C().setGenerator(c.seq.id, clip.id, { color: a.color.toLowerCase() }));
+      });
       return { edit: { at: clip.start }, clip: clip.id };
     }, (a) => ['Change {clip}', { clip: a.clip_id }]);
   tool('set_speed', 'edit', 'Change the speed',
-    'Speed/Duration: a clip\'s constant speed in % (100 normal, 50 slow motion, 200 twice as fast) and reverse. ripple (default true) moves later clips with the new length. Linked clips change too unless linked is false.',
-    obj({ clip_id: str('The clip.'), speed: num('% (1 to 10000).', { minimum: 1, maximum: 10000 }), reverse: bool('Play backwards.'), ripple: bool('Move later clips (default true).'), linked: bool('Linked clips too (default true).') }, ['clip_id']),
+    'Speed/Duration: a clip\'s constant speed in % (100 normal, 50 slow motion, 200 twice as fast), or the duration (s) that the same source should fill, and reverse. ripple (default true) moves later clips with the new length. Linked clips change too unless linked is false.',
+    obj({ clip_id: str('The clip.'), speed: num('% (1 to 10000).', { minimum: 1, maximum: 10000 }), duration: num('Instead of speed: the new length (s).', { minimum: 0.01, maximum: 86400 }), reverse: bool('Play backwards.'), ripple: bool('Move later clips (default true).'), linked: bool('Linked clips too (default true).') }, ['clip_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
-      if (a.speed == null && a.reverse == null) refuse('Give speed or reverse.');
+      if (a.speed == null && a.reverse == null && a.duration == null) refuse('Give speed, duration or reverse.');
+      if (a.speed != null && a.duration != null) refuse('Give speed or duration, not both.');
       if (clip.remap) refuse(`${clip.id} has Time Remapping; change it with set_time_remap, or turn it off there first.`);
       if (M().isStill(c.project, clip)) refuse(`${clip.id} is a still (a picture, text or a freeze frame) and has no speed; trim it to change its length.`);
       atomic(c, 'Speed/Duration', () => {
         if (a.speed != null) run(c, C().setClip(c.seq.id, clip.id, { speed: a.speed / 100, ripple: a.ripple !== false }, { linked: a.linked !== false }));
+        if (a.duration != null) run(c, C().setClip(c.seq.id, clip.id, { duration: Math.max(c.f, Math.round(ticks(c, a.duration) / c.f) * c.f), ripple: a.ripple !== false }, { linked: a.linked !== false }));
         if (a.reverse != null) run(c, C().setClip(c.seq.id, clip.id, { reverse: a.reverse }, { linked: a.linked !== false }));
       });
       const now = c.seq.clips.find((x) => x.id === clip.id);
-      return { edit: { at: clip.start }, start: sec(c, now.start), end: sec(c, M().clipEnd(now)) };
-    }, (a) => ['Speed of {clip}: {speed}%', { clip: a.clip_id, speed: a.speed ?? 100 }]);
+      return { edit: { at: clip.start }, start: sec(c, now.start), end: sec(c, M().clipEnd(now)), speed: r3(now.speed * 100) };
+    }, (a) => (a.duration != null ? ['Duration of {clip}: {s} s', { clip: a.clip_id, s: a.duration }] : ['Speed of {clip}: {speed}%', { clip: a.clip_id, speed: a.speed ?? 100 }]));
   tool('set_time_remap', 'edit', 'Time remapping',
-    'Time Remapping of a video clip: its speed changes along it. segments in order, each {speed: % (1 to 10000), until: the timeline time (s) where the next segment starts}; the last has no until. Each segment keeps its source frames, so the clip gets longer or shorter (up to the next clip). off: true goes back to one constant speed.',
-    obj({ clip_id: str('The video clip.'), segments: list(bare({ speed: num('%.', { minimum: 1, maximum: 10000 }), until: num('Timeline time (s) where this segment ends.', { minimum: 0 }) }, ['speed']), 'The speed segments.', { minItems: 1, maxItems: 16 }), off: bool('Turn Time Remapping off.') }, ['clip_id']),
+    'Time Remapping of a video clip: its speed changes along it, replacing any remapping it has. segments in order: {speed: % (1 to 10000), until: timeline time (s) where it ends, as the clip plays now; ramp: seconds of speed transition into the next speed segment}, {hold: seconds of a freeze frame} or {reverse: seconds it plays backward, then forward again for as long}. A hold or reverse goes between two speed segments; the last segment is a speed with no until. Each speed segment keeps its source frames, so the clip gets longer or shorter (up to the next clip). off: true goes back to one constant speed.',
+    obj({
+      clip_id: str('The video clip.'),
+      segments: list(bare({ speed: num('%.', { minimum: 1, maximum: 10000 }), until: num('Timeline time (s) where this speed segment ends.', { minimum: 0 }), ramp: num('Seconds of transition into the next speed (0.04..60).', { minimum: 0, maximum: 60 }), hold: num('A freeze frame this long (s).', { minimum: 0.01, maximum: 3600 }), reverse: num('Backward this long (s), then forward again.', { minimum: 0.01, maximum: 3600 }) }), 'The segments.', { minItems: 1, maxItems: 32 }),
+      off: bool('Turn Time Remapping off.'),
+    }, ['clip_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       needKind(c, clip, 'video', 'Time Remapping');
       const R = need('remap');
       if (a.off) { run(c, C().setRemap(c.seq.id, clip.id, null)); return { edit: { at: clip.start } }; }
       if (!a.segments) refuse('Give segments, or off: true.');
+      if (M().isStill(c.project, clip)) refuse(`${clip.id} is a still and has no source frames to remap.`);
+      const frames = (s) => Math.max(c.f, Math.round(ticks(c, s) / c.f) * c.f);
+      const moving = [];
+      const inserts = [];
+      a.segments.forEach((s, i) => {
+        const kinds = ['speed', 'hold', 'reverse'].filter((k) => s[k] != null);
+        if (kinds.length !== 1) refuse(`segments[${i}] needs exactly one of speed, hold or reverse.`);
+        if (kinds[0] === 'speed') { moving.push({ ...s, i }); return; }
+        if (s.until != null || s.ramp != null) refuse(`segments[${i}] (a ${kinds[0]}) takes no until or ramp.`);
+        if (!moving.length || a.segments[i + 1]?.speed == null) refuse(`segments[${i}] (a ${kinds[0]}) goes between two speed segments.`);
+        inserts.push({ key: moving.length - 1, kind: kinds[0], len: frames(s[kinds[0]]), i });
+      });
       const end = M().clipEnd(clip);
+      if (moving.at(-1).until != null) refuse('The last speed segment runs to the clip\'s end: leave out its "until".');
+      if (moving.at(-1).ramp) refuse('The last speed segment has no next speed to ramp into.');
+      // a remapped clip starts again from one speed: the speed it has at its first frame
       let r = M().remapOf(clip);
-      const cuts = a.segments.slice(0, -1).map((s, i) => {
-        if (s.until == null) refuse(`segments[${i}] needs "until" (only the last one goes to the clip's end).`);
+      if (clip.remap) { const v = R.speedAt(clip.remap, 0) || 1; r = R.constant(R.value(clip.remap, 0), Math.sign(v) * Math.min(R.MAX, Math.max(R.MIN, Math.abs(v))), M().clipDuration(clip)); }
+      const cuts = moving.slice(0, -1).map((s) => {
+        if (s.until == null) refuse(`segments[${s.i}] needs "until" (only the last speed goes to the clip's end).`);
         const t = Math.round((ticks(c, s.until) - clip.start) / c.f) * c.f;
-        if (t <= 0 || clip.start + t >= end) refuse(`segments[${i}].until ${s.until} s is not inside the clip (${sec(c, clip.start)} to ${sec(c, end)} s).`);
+        if (t <= 0 || clip.start + t >= end) refuse(`segments[${s.i}].until ${s.until} s is not inside the clip (${sec(c, clip.start)} to ${sec(c, end)} s).`);
         return t;
       });
-      if (a.segments.at(-1).until != null) refuse('The last segment runs to the clip\'s end: leave out its "until".');
       for (let i = 1; i < cuts.length; i++) if (cuts[i] <= cuts[i - 1]) refuse('The segments\' "until" times must grow.');
       for (const t of cuts) { const next = R.addKey(r, t); if (!next) refuse(`A segment cannot start at ${r3((clip.start + t) / c.T)} s.`); r = next; }
-      for (let i = a.segments.length - 1; i >= 0; i--) r = R.setSegmentSpeed(r, i, a.segments[i].speed / 100, c.f);
+      const sign = Math.sign(r.speeds[0]) || 1;
+      for (let i = moving.length - 1; i >= 0; i--) r = R.setSegmentSpeed(r, i, (sign * moving[i].speed) / 100, c.f);
+      for (let j = 0; j < moving.length - 1; j++) {
+        if (!moving[j].ramp) continue;
+        if (inserts.some((x) => x.key === j)) refuse(`segments[${moving[j].i}] cannot ramp into a hold or a reverse.`);
+        r = R.splitKey(r, j, 'right', frames(moving[j].ramp), c.f);
+        if (!r.keys[j].ramp) refuse(`There is no room for the ramp of segments[${moving[j].i}].`);
+      }
+      for (const x of inserts.slice().sort((p, q) => q.key - p.key)) {
+        if (x.kind === 'reverse') {
+          const room = R.reverseRoom(r, x.key, c.f);
+          if (x.len > room) refuse(`segments[${x.i}]: there is only ${r3(room / c.T)} s of source before that point to play backward.`);
+        }
+        const next = x.kind === 'hold' ? R.insertFreeze(r, x.key, x.len) : R.insertReverse(r, x.key, x.len);
+        if (!next) refuse(`segments[${x.i}] cannot go there.`);
+        r = next;
+      }
       const res = run(c, C().setRemap(c.seq.id, clip.id, r));
-      return { edit: { at: clip.start }, duration: sec(c, res.duration), stoppedBy: res.clamped || null };
+      const now = c.seq.clips.find((x) => x.id === clip.id);
+      const keys = now.remap?.keys || [];
+      return {
+        edit: { at: clip.start }, duration: sec(c, res.duration), stoppedBy: res.clamped || null,
+        speeds: (now.remap?.speeds || []).map((v) => r3(v * 100)), keys: keys.map((k) => ({ at: sec(c, clip.start + k.t), ...(k.ramp ? { ramp: sec(c, k.ramp) } : {}) })),
+      };
     }, (a) => ['Time Remapping of {clip}', { clip: a.clip_id }]);
   tool('set_keyframes', 'edit', 'Set keyframes',
-    'Animates a property of a clip: the full list of keyframes (time on the timeline in s, inside the clip; value; ease linear, hold, easeIn, easeOut or easeInOut). An empty list removes the animation. property: a clip property (opacity, position, scale, rotation, anchor, crop, volume, pan) or "effects.<effect id>.<parameter>".',
-    obj({ clip_id: str('The clip.'), property: str('The property path.', { maxLength: 80 }), keyframes: list(bare({ time: num('Timeline time (s).', { minimum: 0 }), value: { type: ['number', 'array', 'string', 'boolean'], description: 'The value.' }, ease: str('linear (default), hold, easeIn, easeOut, easeInOut.', { enum: ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut'] }) }, ['time', 'value']), 'The keyframes.', { maxItems: 200 }) }, ['clip_id', 'property', 'keyframes']),
+    'Animates a property of a clip: the full list of keyframes (time on the timeline in s, inside the clip; value; ease linear, hold, easeIn, easeOut or easeInOut). An empty list removes the animation. property: a clip property (opacity, position, scale, rotation, anchor, crop, volume, pan), "effects.<effect id>.<parameter>" (video and audio effects), a mask\'s "masks.<mask id>.<path|feather|opacity|expansion>" (an effect\'s mask: "effects.<effect id>.masks.<mask id>.<field>"; a path value is {shape: ellipse|rectangle, x, y, width, height} in fractions 0..1, like add_mask) or a title layer\'s "layers.<layer id>.<opacity|position|reveal|size>" (reveal 0..1 shows the text from the start).',
+    obj({ clip_id: str('The clip.'), property: str('The property path.', { maxLength: 80 }), keyframes: list(bare({ time: num('Timeline time (s).', { minimum: 0 }), value: { type: ['number', 'array', 'string', 'boolean', 'object'], description: 'The value.' }, ease: str('linear (default), hold, easeIn, easeOut, easeInOut.', { enum: ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut'] }) }, ['time', 'value']), 'The keyframes.', { maxItems: 200 }) }, ['clip_id', 'property', 'keyframes']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       const kind = kindOf(c, clip);
       if (!M().validPropPath(clip, kind, a.property) || a.property === 'duck') refuse(`${clip.id} has no property "${a.property}". It has ${(kind === 'audio' ? M().AUDIO_PROPS : M().VIDEO_PROPS).join(', ')} and effects.<id>.<parameter> of its effects (${clip.effects.map((e) => e.id).join(', ') || 'none'}).`);
       const parts = a.property.split('.');
+      const masks = need('masks');
+      const maskPath = masks.parsePath(a.property);
       const value = (v, i) => {
+        const at = `keyframes[${i}].value`;
         if (parts.length === 1) return propValue(parts[0], v);
+        if (maskPath) {
+          const holder = maskPath.effectId ? clip.effects.find((e) => e.id === maskPath.effectId) : clip;
+          const mask = (holder?.masks || []).find((m) => m.id === maskPath.maskId);
+          if (maskPath.field !== 'path') {
+            const [lo, hi] = masks.RANGES[maskPath.field];
+            if (typeof v !== 'number' || v < lo || v > hi) refuse(`${at} must be a number from ${lo} to ${hi}.`);
+            return v;
+          }
+          const path = isObj(v) ? shapePath(v, at) : v;
+          if (!masks.validPath(path)) refuse(`${at} must be {shape, x, y, width, height} or a mask path.`);
+          if (path.length !== mask.path.length) refuse(`${at} has ${path.length / 6} points; mask ${mask.id} has ${mask.path.length / 6} (an ellipse and a rectangle have 4).`);
+          return path;
+        }
+        if (parts[0] === 'layers') {
+          const rule = LAYER_KEYS[parts[2]];
+          if (!rule) refuse(`A title layer animates ${Object.keys(LAYER_KEYS).join(', ')}; not ${parts[2]}.`);
+          return rule(v, at);
+        }
         if (parts[0] === 'effects' && parts.length === 3) {
           const e = clip.effects.find((x) => x.id === parts[1]);
           const def = effectDef(c, e.type);
@@ -644,12 +750,12 @@
       const def = effectDef(c, a.type);
       needKind(c, clip, def.kind, `${def.type} (a ${def.kind} effect)`);
       const params = {};
-      for (const [k, v] of Object.entries(a.params || {})) params[k] = paramValue(def, k, v, `params.${k}`);
+      for (const [k, v] of Object.entries(a.params || {})) params[k] = paramValue(def, k, v, `params.${k}`, c.project.luts);
       const r = run(c, C().addEffect(c.seq.id, clip.id, def.type, a.index ?? null, params));
       return { edit: { at: clip.start }, effect: r.id };
     }, (a) => ['Add {type} to {clip}', { type: a.type, clip: a.clip_id }]);
-  tool('set_effect', 'edit', 'Change an effect', 'Turns an effect on or off and changes its parameters (null puts one back to its default).',
-    obj({ clip_id: str('The clip.'), effect_id: str('The effect (e<n>, from get_clip).'), on: bool('On or off.'), params: { type: 'object', description: 'Parameter values by id.' } }, ['clip_id', 'effect_id']),
+  tool('set_effect', 'edit', 'Change an effect', 'Turns an effect on or off, changes its parameters (null puts one back to its default) and moves it in the clip\'s effect order (index 0 is applied first).',
+    obj({ clip_id: str('The clip.'), effect_id: str('The effect (e<n>, from get_clip).'), on: bool('On or off.'), params: { type: 'object', description: 'Parameter values by id.' }, index: int('Its new place in the effect list.', { minimum: 0, maximum: 50 }) }, ['clip_id', 'effect_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       const e = clip.effects.find((x) => x.id === a.effect_id);
@@ -659,10 +765,14 @@
       for (const [k, v] of Object.entries(a.params || {})) {
         if (v !== null && clip.keyframes?.[`effects.${e.id}.${k}`]?.length) refuse(`${k} has keyframes; change it with set_keyframes.`);
         if (v === null && !def.params.some((x) => x.id === k)) paramValue(def, k, v);
-        params[k] = v === null ? null : paramValue(def, k, v, `params.${k}`);
+        params[k] = v === null ? null : paramValue(def, k, v, `params.${k}`, c.project.luts);
       }
-      if (a.on === undefined && !Object.keys(params).length) refuse('Give on or params.');
-      run(c, C().setEffect(c.seq.id, clip.id, e.id, { ...(a.on !== undefined ? { on: a.on } : {}), params }));
+      if (a.on === undefined && !Object.keys(params).length && a.index == null) refuse('Give on, params or index.');
+      if (a.index != null && a.index >= clip.effects.length) refuse(`index must be below ${clip.effects.length} (the clip has ${clip.effects.length} effects).`);
+      atomic(c, 'Effect Settings', () => {
+        if (a.on !== undefined || Object.keys(params).length) run(c, C().setEffect(c.seq.id, clip.id, e.id, { ...(a.on !== undefined ? { on: a.on } : {}), params }));
+        if (a.index != null) run(c, C().moveEffect(c.seq.id, clip.id, e.id, a.index));
+      });
       return { edit: { at: clip.start }, effect: e.id };
     }, (a) => ['Change {effect} on {clip}', { effect: a.effect_id, clip: a.clip_id }]);
   tool('remove_effect', 'edit', 'Remove an effect', 'Removes an effect from a clip, with its keyframes and masks.',
@@ -674,20 +784,38 @@
       return { edit: { at: clip.start } };
     }, (a) => ['Remove {effect} from {clip}', { effect: a.effect_id, clip: a.clip_id }]);
   const COLOR_KEYS = ['temperature', 'tint', 'exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'saturation', 'vibrance'];
+  const CURVES = { master: 'curveMaster', red: 'curveRed', green: 'curveGreen', blue: 'curveBlue' };
+  const HSL = {
+    hue: 'hslHue', hue_range: 'hslHueRange', hue_soft: 'hslHueSoft', sat_low: 'hslSatLow', sat_high: 'hslSatHigh', sat_soft: 'hslSatSoft',
+    lum_low: 'hslLumLow', lum_high: 'hslLumHigh', lum_soft: 'hslLumSoft', show_mask: 'hslMask',
+    temperature: 'hslTemperature', tint: 'hslTint', contrast: 'hslContrast', saturation: 'hslSaturation', hue_shift: 'hslHueShift',
+  };
+  const curve = (d) => list({ type: 'number' }, d, { minItems: 4, maxItems: 32 });
   tool('set_color', 'edit', 'Lumetri color',
-    'Lumetri Color\'s basic correction of a video clip: temperature, tint, contrast, highlights, shadows, whites, blacks, vibrance (-100..100), exposure (-4..4 stops), saturation (0..200 %, 100 unchanged). Uses the clip\'s Lumetri Color effect, adding one when it has none.',
-    obj(Object.fromEntries([['clip_id', str('The video clip.')], ...COLOR_KEYS.map((k) => [k, num(k === 'exposure' ? 'Stops, -4..4.' : k === 'saturation' ? '%, 0..200.' : '-100..100.')])]), ['clip_id']),
+    'Lumetri Color of a video clip, every section (its Lumetri Color, added when it has none). Basic: temperature, tint, contrast, highlights, shadows, whites, blacks, vibrance (-100..100), exposure (-4..4 stops), saturation (0..200 %). Creative: lut (a LUT id from get_project, or "" for none), lut_intensity (%). curves: master, red, green, blue as flat [x0, y0, x1, y1, ...] lists 0..1 ([0, 0, 1, 1] is unchanged). hsl (HSL Secondary): the range (hue 0..360, hue_range and hue_soft in degrees; sat_low, sat_high, sat_soft, lum_low, lum_high, lum_soft %), its correction (temperature, tint, contrast, saturation %, hue_shift -180..180) and show_mask.',
+    obj({
+      clip_id: str('The video clip.'),
+      ...Object.fromEntries(COLOR_KEYS.map((k) => [k, num(k === 'exposure' ? 'Stops, -4..4.' : k === 'saturation' ? '%, 0..200.' : '-100..100.')])),
+      lut: str('A LUT id of the project, or "".', { maxLength: 80 }), lut_intensity: num('%, 0..100.', { minimum: 0, maximum: 100 }),
+      curves: bare(Object.fromEntries(Object.keys(CURVES).map((k) => [k, curve(`The ${k} curve.`)]))),
+      hsl: bare(Object.fromEntries(Object.keys(HSL).map((k) => [k, k === 'show_mask' ? bool('Show the range as a mask.') : num(k)]))),
+    }, ['clip_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       needKind(c, clip, 'video', 'Lumetri Color');
       const def = effectDef(c, 'color.basic');
       const params = {};
-      for (const k of COLOR_KEYS) if (a[k] !== undefined) params[k] = paramValue(def, k, a[k]);
-      if (!Object.keys(params).length) refuse(`Give at least one of ${COLOR_KEYS.join(', ')}.`);
+      const put = (key, v, at) => { params[key] = paramValue(def, key, v, at, c.project.luts); };
+      for (const k of COLOR_KEYS) if (a[k] !== undefined) put(k, a[k], k);
+      if (a.lut !== undefined) put('lut', a.lut, 'lut');
+      if (a.lut_intensity !== undefined) put('lutIntensity', a.lut_intensity, 'lut_intensity');
+      for (const [k, key] of Object.entries(CURVES)) if (a.curves?.[k] !== undefined) put(key, a.curves[k], `curves.${k}`);
+      for (const [k, key] of Object.entries(HSL)) if (a.hsl?.[k] !== undefined) put(key, a.hsl[k], `hsl.${k}`);
+      if (!Object.keys(params).length) refuse(`Give at least one of ${[...COLOR_KEYS, 'lut', 'lut_intensity', 'curves', 'hsl'].join(', ')}.`);
       const e = clip.effects.find((x) => x.type === 'color.basic');
       for (const k of Object.keys(params)) if (e && clip.keyframes?.[`effects.${e.id}.${k}`]?.length) refuse(`${k} has keyframes; change it with set_keyframes on effects.${e.id}.${k}.`);
       const id = e ? (run(c, C().setEffect(c.seq.id, clip.id, e.id, { params })), e.id) : run(c, C().addEffect(c.seq.id, clip.id, 'color.basic', null, params)).id;
-      return { edit: { at: clip.start }, effect: id };
+      return { edit: { at: clip.start }, effect: id, changed: Object.keys(params) };
     }, (a) => ['Color of {clip}', { clip: a.clip_id }]);
 
   // transitions
@@ -720,19 +848,25 @@
     }, (a) => ['Remove transition {id}', { id: a.transition_id }]);
 
   // text and titles
+  const COLOR_RE = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
   const TEXT_STYLE = {
     size: int('Font size in px of a 1080-line picture.', { minimum: 8, maximum: 600 }), color: str('Text color like #ffffff.', { maxLength: 9 }), font: str('Font family.', { maxLength: 100 }),
-    weight: int('100 to 900 (700 bold).', { minimum: 100, maximum: 900 }), position: pair('[x, y] px from the center (y > 0 is lower).'), box: { type: ['string', 'null'], description: 'A background box color like #00000099, or null for none.' },
+    weight: int('100 to 900 (700 bold).', { minimum: 100, maximum: 900 }), italic: bool('Italic.'), align: str('left, center or right.', { enum: ['left', 'center', 'right'] }),
+    tracking: num('Letter spacing (px).', { minimum: -200, maximum: 1000 }), leading: num('Line height, times the size.', { minimum: 0.5, maximum: 5 }),
+    position: pair('[x, y] px from the center (y > 0 is lower).'), box: { type: ['string', 'null'], description: 'A background box color like #00000099, or null for none.' },
+    stroke: { type: ['object', 'null'], properties: { color: str('#rrggbb.', { maxLength: 9 }), width: num('px.', { minimum: 0, maximum: 100 }) }, additionalProperties: false, description: 'An outline {color, width}, or null.' },
+    shadow: { type: ['object', 'null'], properties: { color: str('#rrggbbaa.', { maxLength: 9 }), blur: num('px.', { minimum: 0, maximum: 200 }), x: num('px.', { minimum: -500, maximum: 500 }), y: num('px.', { minimum: -500, maximum: 500 }) }, additionalProperties: false, description: 'A drop shadow {color, blur, x, y}, or null.' },
   };
   function layerPatch(a) {
     const p = {};
+    const color = (v, at) => (COLOR_RE.test(v || '') ? v : refuse(`${at} must look like #ffffff.`));
     if (a.text !== undefined) p.text = a.text;
-    if (a.size !== undefined) p.size = a.size;
-    if (a.color !== undefined) { if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(a.color)) refuse('color must look like #ffffff.'); p.fill = a.color; }
-    if (a.font !== undefined) p.font = a.font;
-    if (a.weight !== undefined) p.weight = a.weight;
+    if (a.color !== undefined) p.fill = color(a.color, 'color');
+    for (const k of ['size', 'font', 'weight', 'italic', 'align', 'tracking', 'leading']) if (a[k] !== undefined) p[k] = a[k];
     if (a.position !== undefined) p.position = propValue('position', a.position);
-    if (a.box !== undefined) { if (a.box !== null && !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(a.box)) refuse('box must look like #00000099 or be null.'); p.box = a.box === null ? null : { color: a.box, padding: 16, radius: 6 }; }
+    if (a.box !== undefined) p.box = a.box === null ? null : { color: color(a.box, 'box'), padding: 16, radius: 6 };
+    if (a.stroke !== undefined) p.stroke = a.stroke === null ? null : { color: color(a.stroke.color, 'stroke.color'), width: a.stroke.width ?? 4 };
+    if (a.shadow !== undefined) p.shadow = a.shadow === null ? null : { color: color(a.shadow.color ?? '#000000aa', 'shadow.color'), blur: a.shadow.blur ?? 8, x: a.shadow.x ?? 0, y: a.shadow.y ?? 4 };
     return p;
   }
   tool('add_text', 'edit', 'Add a title',
@@ -755,17 +889,36 @@
       });
       return { edit: { at }, clip: id, track };
     }, (a) => ['Add the title "{text}"', { text: String(a.text).slice(0, 40) }]);
-  tool('set_text', 'edit', 'Change a title', 'Changes a text clip\'s text and look (its first layer, or layer_id).',
-    obj({ clip_id: str('The text clip.'), layer_id: str('A text layer (l<n>).'), text: str('New text.', { maxLength: 2000 }), ...TEXT_STYLE }, ['clip_id']),
+  tool('set_text', 'edit', 'Change a title',
+    'Changes a text clip: the text and look of its first layer (or layer_id); add_layer: true adds a new layer with these settings instead; remove_layer removes one. animation puts a motion preset on the layer as keyframes: fade, rise or typewriter, in (at the start, default) or out (at the end).',
+    obj({ clip_id: str('The text clip.'), layer_id: str('A text layer (l<n>).'), text: str('New text.', { maxLength: 2000 }), ...TEXT_STYLE, add_layer: bool('Add a layer.'), remove_layer: bool('Remove layer_id.'), animation: str('fade, rise or typewriter.', { enum: ['fade', 'rise', 'typewriter'] }), animation_at: str('in (default) or out.', { enum: ['in', 'out'] }) }, ['clip_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       if (clip.source?.generator !== 'text') refuse(`${clip.id} is not a text clip.`);
-      const layer = a.layer_id ? clip.source.layers.find((l) => l.id === a.layer_id) : clip.source.layers[0];
-      if (!layer) refuse(`${clip.id} has no text layer ${a.layer_id}.`);
       const patch = layerPatch(a);
-      if (!Object.keys(patch).length) refuse('Give something to change.');
-      run(c, C().setLayer(c.seq.id, clip.id, layer.id, patch));
-      return { edit: { at: clip.start }, clip: clip.id };
+      if (a.remove_layer) {
+        if (!a.layer_id || Object.keys(patch).length || a.add_layer || a.animation) refuse('remove_layer takes layer_id and nothing else.');
+        if (!clip.source.layers.some((l) => l.id === a.layer_id)) refuse(`${clip.id} has no text layer ${a.layer_id}.`);
+        if (clip.source.layers.length === 1) refuse('A title keeps one layer at least; delete_clips removes the title.');
+        run(c, C().removeLayer(c.seq.id, clip.id, a.layer_id));
+        return { edit: { at: clip.start }, clip: clip.id };
+      }
+      if (a.add_layer && a.layer_id) refuse('add_layer makes a new layer: leave out layer_id.');
+      if (a.add_layer && !String(patch.text || '').trim()) refuse('A new layer needs text.');
+      const layer = a.add_layer ? null : a.layer_id ? clip.source.layers.find((l) => l.id === a.layer_id) : clip.source.layers[0];
+      if (!a.add_layer && !layer) refuse(`${clip.id} has no text layer ${a.layer_id}.`);
+      if (!Object.keys(patch).length && !a.animation) refuse('Give something to change.');
+      const id = atomic(c, 'Edit Text', () => {
+        const lid = a.add_layer ? run(c, C().addLayer(c.seq.id, clip.id, patch)).id : layer.id;
+        if (!a.add_layer && Object.keys(patch).length) run(c, C().setLayer(c.seq.id, clip.id, lid, patch));
+        if (a.animation) {
+          const now = c.seq.clips.find((x) => x.id === clip.id);
+          const keys = need('textrender').animations.apply(now, lid, a.animation, { out: a.animation_at === 'out', frame: c.f });
+          for (const [prop, list2] of Object.entries(keys)) run(c, C().setKeyframes(c.seq.id, clip.id, prop, list2));
+        }
+        return lid;
+      });
+      return { edit: { at: clip.start }, clip: clip.id, layer: id };
     }, (a) => ['Change the title {clip}', { clip: a.clip_id }]);
 
   // captions
@@ -862,33 +1015,53 @@
     }, (a) => ['Remove markers', {}]);
 
   // masks
-  const MASK_FIELDS = { feather: num('Pixels, 0..1000.', { minimum: 0, maximum: 1000 }), opacity: num('%.', { minimum: 0, maximum: 100 }), expansion: num('Pixels, -2000..2000.', { minimum: -2000, maximum: 2000 }), inverted: bool('Keep the outside instead.'), mode: str('add, subtract, intersect, difference or none.', { enum: ['add', 'subtract', 'intersect', 'difference', 'none'] }) };
+  // An ellipse or a rectangle centered at x, y with width and height (fractions of the picture): a mask path of four
+  // points (masks.js: x, y and the two handles of each).
+  function shapePath(s, at = 'the shape') {
+    if (!['ellipse', 'rectangle'].includes(s.shape)) refuse(`${at}.shape must be ellipse or rectangle.`);
+    for (const k of ['x', 'y', 'width', 'height']) {
+      const min = k === 'width' || k === 'height' ? 0.001 : 0;
+      if (s[k] !== undefined && (typeof s[k] !== 'number' || !Number.isFinite(s[k]) || s[k] < min || s[k] > 4)) refuse(`${at}.${k} must be a fraction of the picture.`);
+    }
+    const cx = s.x ?? 0.5;
+    const cy = s.y ?? 0.5;
+    const hw = (s.width ?? 0.5) / 2;
+    const hh = (s.height ?? 0.5) / 2;
+    const k = need('masks').KAPPA;
+    return s.shape === 'ellipse'
+      ? [cx, cy - hh, -k * hw, 0, k * hw, 0, cx + hw, cy, 0, -k * hh, 0, k * hh, cx, cy + hh, k * hw, 0, -k * hw, 0, cx - hw, cy, 0, k * hh, 0, -k * hh]
+      : [cx - hw, cy - hh, 0, 0, 0, 0, cx + hw, cy - hh, 0, 0, 0, 0, cx + hw, cy + hh, 0, 0, 0, 0, cx - hw, cy + hh, 0, 0, 0, 0];
+  }
+  // What a title layer animates (textrender.resolveLayer, the motion presets).
+  const LAYER_KEYS = {
+    opacity: (v, at) => (typeof v === 'number' && v >= 0 && v <= 100 ? v : refuse(`${at} must be 0..100 (%).`)),
+    reveal: (v, at) => (typeof v === 'number' && v >= 0 && v <= 1 ? v : refuse(`${at} must be 0..1.`)),
+    size: (v, at) => (typeof v === 'number' && v >= 8 && v <= 600 ? v : refuse(`${at} must be 8..600 (px).`)),
+    position: (v) => propValue('position', v),
+  };
+  const MASK_FIELDS ={ feather: num('Pixels, 0..1000.', { minimum: 0, maximum: 1000 }), opacity: num('%.', { minimum: 0, maximum: 100 }), expansion: num('Pixels, -2000..2000.', { minimum: -2000, maximum: 2000 }), inverted: bool('Keep the outside instead.'), mode: str('add, subtract, intersect, difference or none.', { enum: ['add', 'subtract', 'intersect', 'difference', 'none'] }) };
   tool('add_mask', 'edit', 'Add a mask',
     'Adds a mask to a video clip\'s Opacity (the clip shows only inside it), or to one of its effects (effect_id: the effect applies only inside). shape ellipse or rectangle, centered at x, y with width and height, all fractions 0..1 of the clip\'s picture.',
     obj({ clip_id: str('The video clip.'), effect_id: str('Mask this effect instead of the clip.'), shape: str('ellipse or rectangle.', { enum: ['ellipse', 'rectangle'] }), x: num('Center, 0..1 from the left.', { minimum: 0, maximum: 1 }), y: num('Center, 0..1 from the top.', { minimum: 0, maximum: 1 }), width: num('0..1 of the picture width.', { minimum: 0.001, maximum: 4 }), height: num('0..1 of the picture height.', { minimum: 0.001, maximum: 4 }), ...MASK_FIELDS }, ['clip_id', 'shape']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       needKind(c, clip, 'video', 'A mask');
-      const masks = need('masks');
-      const cx = a.x ?? 0.5;
-      const cy = a.y ?? 0.5;
-      const hw = (a.width ?? 0.5) / 2;
-      const hh = (a.height ?? 0.5) / 2;
-      const k = masks.KAPPA;
-      const path = a.shape === 'ellipse'
-        ? [cx, cy - hh, -k * hw, 0, k * hw, 0, cx + hw, cy, 0, -k * hh, 0, k * hh, cx, cy + hh, k * hw, 0, -k * hw, 0, cx - hw, cy, 0, k * hh, 0, -k * hh]
-        : [cx - hw, cy - hh, 0, 0, 0, 0, cx + hw, cy - hh, 0, 0, 0, 0, cx + hw, cy + hh, 0, 0, 0, 0, cx - hw, cy + hh, 0, 0, 0, 0];
-      const mask = { path };
+      if (a.effect_id != null && !clip.effects.some((e) => e.id === a.effect_id)) refuse(`${clip.id} has no effect ${a.effect_id}.`);
+      const mask = { path: shapePath(a) };
       for (const f of Object.keys(MASK_FIELDS)) if (a[f] !== undefined) mask[f] = a[f];
       const r = run(c, C().addMask(c.seq.id, clip.id, mask, { effectId: a.effect_id ?? null }));
       return { edit: { at: clip.start }, mask: r.id };
     }, (a) => ['Add a mask to {clip}', { clip: a.clip_id }]);
-  tool('set_mask', 'edit', 'Change a mask', 'Changes a mask\'s feather, opacity, expansion, inverted or mode.',
-    obj({ clip_id: str('The clip.'), mask_id: str('The mask (m<n>).'), effect_id: str('When the mask is an effect\'s.'), ...MASK_FIELDS }, ['clip_id', 'mask_id']),
+  tool('set_mask', 'edit', 'Change a mask', 'Changes a mask\'s static feather, opacity, expansion, inverted or mode, or its shape (shape with x, y, width, height as in add_mask). set_keyframes animates masks.<mask id>.<path|feather|opacity|expansion>.',
+    obj({ clip_id: str('The clip.'), mask_id: str('The mask (m<n>).'), effect_id: str('When the mask is an effect\'s.'), shape: str('ellipse or rectangle: a new path.', { enum: ['ellipse', 'rectangle'] }), x: num('Center, 0..1 from the left.', { minimum: 0, maximum: 1 }), y: num('Center, 0..1 from the top.', { minimum: 0, maximum: 1 }), width: num('0..1 of the picture width.', { minimum: 0.001, maximum: 4 }), height: num('0..1 of the picture height.', { minimum: 0.001, maximum: 4 }), ...MASK_FIELDS }, ['clip_id', 'mask_id']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
       const patch = {};
       for (const f of Object.keys(MASK_FIELDS)) if (a[f] !== undefined) patch[f] = a[f];
+      if (a.shape) patch.path = shapePath(a);
+      else if (['x', 'y', 'width', 'height'].some((k) => a[k] !== undefined)) refuse('x, y, width and height go with shape.');
+      const kf = Object.keys(clip.keyframes || {}).find((k) => k.startsWith(`${a.effect_id ? `effects.${a.effect_id}.` : ''}masks.${a.mask_id}.`) && Object.hasOwn(patch, k.split('.').pop()));
+      if (kf) refuse(`${kf} has keyframes; change them with set_keyframes.`);
       if (!Object.keys(patch).length) refuse('Give something to change.');
       run(c, C().setMask(c.seq.id, clip.id, a.mask_id, patch, { effectId: a.effect_id ?? null }));
       return { edit: { at: clip.start } };
@@ -928,16 +1101,22 @@
       run(c, C().setTrack(c.seq.id, t.id, patch));
       return { edit: { at: c.app.t } };
     }, (a) => ['Change track {id}', { id: a.track_id }]);
-  tool('set_sequence', 'edit', 'Change the sequence', 'Changes the sequence\'s name, its master gain (dB on the whole mix, -60..24) or background color.',
-    obj({ name: str('Name.', { maxLength: 200 }), master_gain: num('dB.', { minimum: -60, maximum: 24 }), background: str('Color like #000000.', { maxLength: 7 }) }),
+  // frame rates as a model writes them -> [num, den] (time.FRAME_RATES)
+  const FPS = { '23.976': [24000, 1001], 24: [24, 1], 25: [25, 1], '29.97': [30000, 1001], 30: [30, 1], 50: [50, 1], '59.94': [60000, 1001], 60: [60, 1] };
+  tool('set_sequence', 'edit', 'Change the sequence',
+    'Sequence Settings and the master track: name, frame size (width, height px, even), fps (23.976, 24, 25, 29.97, 30, 50, 59.94 or 60; every time moves to the new frames), background color, master_gain (dB on the whole mix, -60..24: the Audio Track Mixer\'s master). active: true brings it to the front in the timeline (not an undo step).',
+    obj({ name: str('Name.', { maxLength: 200 }), width: int('px.', { minimum: 16, maximum: 8192 }), height: int('px.', { minimum: 16, maximum: 8192 }), fps: str('Frames a second.', { enum: Object.keys(FPS) }), master_gain: num('dB.', { minimum: -60, maximum: 24 }), background: str('Color like #000000.', { maxLength: 7 }), active: bool('Show it in the timeline.') }),
     (c, a) => {
       const patch = {};
       if (a.name !== undefined) patch.name = a.name;
       if (a.master_gain !== undefined) patch.masterGain = a.master_gain;
+      for (const k of ['width', 'height']) if (a[k] !== undefined) { if (a[k] % 2) refuse(`${k} must be even.`); patch[k[0]] = a[k]; }
+      if (a.fps !== undefined) patch.fps = FPS[a.fps];
       if (a.background !== undefined) { if (!/^#[0-9a-f]{6}$/i.test(a.background)) refuse('background must look like #000000.'); patch.background = a.background; }
-      if (!Object.keys(patch).length) refuse('Give something to change.');
-      run(c, C().setSequence(c.seq.id, patch));
-      return { edit: { at: c.app.t } };
+      if (!Object.keys(patch).length && !a.active) refuse('Give something to change.');
+      if (Object.keys(patch).length) run(c, C().setSequence(c.seq.id, patch));
+      if (a.active && c.app.sequenceId !== c.seq.id) c.app.setSequence(c.seq.id);
+      return Object.keys(patch).length ? { edit: { at: c.app.t }, sequence: c.seq.id } : { sequence: c.seq.id, active: true };
     }, () => ['Change the sequence', {}]);
   tool('remove_silence', 'edit', 'Remove silence',
     'Measures the sound on this PC and ripple-deletes every stretch quieter than threshold (dB, default -40) that lasts longer than longer_than seconds, on the speech tracks (music, effects and ambience clips do not count).',
@@ -988,21 +1167,50 @@
     });
 
   // export
+  // A plain file name (no folders): what the ask-first writers (export, frame, captions) take.
+  const plainName = (v, what = 'file_name') => {
+    if (v == null) return null;
+    if (/[\/:*?"<>|]/.test(v) || /^\.+$/.test(v.trim()) || !v.trim()) refuse(`${what} is a plain name, without folders or any of \ / : * ? " < > |.`);
+    return v.trim();
+  };
   tool('export_sequence', 'export', 'Export',
-    'Exports the sequence to a new video file with a preset (youtube-1080p, youtube-4k, shorts, 720p, audio-m4a), in the project\'s folder. The user is asked first and may say no; an existing file is never replaced. from/to export part of it; captions burn draws the shown caption track into the picture.',
-    obj({ preset: str('The preset.', { enum: PRESETS }), file_name: str('A file name without folders (the preset\'s extension is added).', { maxLength: 120 }), from: num('Start (s).', { minimum: 0 }), to: num('End (s).', { minimum: 0 }), captions: str('none (default) or burn.', { enum: ['none', 'burn'] }) }, ['preset']),
+    `Exports the sequence to a new file in the project's folder with a preset (${PRESETS.join(', ')}) and optional overrides of the Export Settings: width, height (px, even), codec (h264 or hevc), bitrate (Mbps), bitrate_mode, key_seconds, audio_bitrate (128, 160 or 192 kbps), loudness (target LUFS, or null to leave it). The user is asked first and may say no; an existing file is never replaced. from/to export part of it; captions burn draws the shown caption track into the picture. It joins the export queue; wait: true waits until it is written, with progress (Stop cancels it).`,
+    obj({
+      preset: str('The preset.', { enum: PRESETS }), file_name: str('A file name without folders (the preset\'s extension is added).', { maxLength: 120 }),
+      from: num('Start (s).', { minimum: 0 }), to: num('End (s).', { minimum: 0 }), captions: str('none (default) or burn.', { enum: ['none', 'burn'] }),
+      width: int('px.', { minimum: 16, maximum: 8192 }), height: int('px.', { minimum: 16, maximum: 8192 }), codec: str('h264 or hevc.', { enum: ['h264', 'hevc'] }),
+      bitrate: num('Video Mbps, 0.1..400.', { minimum: 0.1, maximum: 400 }), bitrate_mode: str('variable or constant.', { enum: ['variable', 'constant'] }),
+      key_seconds: num('Seconds between key frames.', { minimum: 0.5, maximum: 10 }), audio_bitrate: int('kbps.', { enum: [128, 160, 192] }),
+      loudness: { type: ['number', 'null'], minimum: -40, maximum: -5, description: 'Target LUFS, or null.' }, wait: bool('Wait for the file (default false).'),
+    }, ['preset']),
     async (c, a) => {
       if (!c.duration) refuse('The sequence is empty.');
-      if (a.file_name != null && (/[\\/:*?"<>|]/.test(a.file_name) || /^\.+$/.test(a.file_name.trim()) || !a.file_name.trim())) refuse('file_name is a plain name, without folders or any of \\ / : * ? " < > |.');
+      const fileName = plainName(a.file_name);
       const range = a.from != null || a.to != null ? { in: timeIn(c, a.from ?? 0, 'from'), out: timeIn(c, a.to ?? c.duration / c.T, 'to') } : null;
       if (range && range.out - range.in < c.f) refuse('"to" must be after "from".');
+      const P = need('presets');
+      const audioOnly = P.get(a.preset).kind === 'audio';
+      const o = {};
+      for (const [k, key] of [['width', 'w'], ['height', 'h'], ['codec', 'codec'], ['bitrate_mode', 'mode'], ['key_seconds', 'keySeconds']]) {
+        if (a[k] === undefined) continue;
+        if (audioOnly) refuse(`${a.preset} has no picture: ${k} does not apply.`);
+        o[key] = a[k];
+      }
+      if (a.bitrate !== undefined) { if (audioOnly) refuse(`${a.preset} has no picture: bitrate does not apply (audio_bitrate does).`); o.bitrate = Math.round(a.bitrate * 1e6); }
+      if (a.audio_bitrate !== undefined) o.audioBitrate = a.audio_bitrate * 1000;
+      if (a.loudness !== undefined) o.loudness = a.loudness;
+      const settings = P.resolve(a.preset, c.seq, o);
+      const bad = P.validate(settings);
+      if (bad.length) refuse(bad.join(' '));
       if (!c.services?.exportAsk) refuse('Exporting is not available here.');
-      const r = await c.services.exportAsk({ seq: c.seq, preset: a.preset, fileName: a.file_name ? a.file_name.trim() : null, range, captions: a.captions === 'burn' ? 'burn' : null });
+      const r = await c.services.exportAsk({ seq: c.seq, preset: a.preset, fileName, range, captions: a.captions === 'burn' ? 'burn' : null, settings });
       if (!r?.ok) refuse(r?.declined ? 'The user said no to this export. Nothing was written.' : `The export could not start: ${r?.error || 'unknown error'}`);
-      return { queued: r.name, note: 'The user agreed; the export runs in the export queue.' };
+      const out = { queued: r.name, job: r.job ?? null, settings: { width: settings.width, height: settings.height, video: settings.video ? `${settings.video.family} ${r3(settings.video.bitrate / 1e6)} Mbps` : null, audio: `${settings.audio.bitrate / 1000} kbps`, loudness: settings.loudness } };
+      if (!a.wait) return { ...out, note: 'The user agreed; the export runs in the export queue (export_queue shows it).' };
+      const w = await c.services.exportWait(r.job, { signal: c.signal, progress: c.progress });
+      if (!w?.ok) refuse(w?.cancelled ? `The export of ${r.name} was cancelled; its unfinished file is removed.` : `The export of ${r.name} failed: ${w?.error || 'unknown error'}`);
+      return { ...out, done: true };
     }, (a) => ['Export with {preset}', { preset: a.preset }]);
-
-  const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
   // The clips of the sequence whose JSON changed (or that are new) since `before` (snapshot()).
   const snapshot = (seq) => new Map((seq?.clips || []).map((x) => [x.id, JSON.stringify(x)]));
@@ -1029,8 +1237,9 @@
       let out = value;
       if (isObj(value) && value.$image) { image = value.$image; out = { ...value }; delete out.$image; }
       if (isObj(value) && value.edit) {
-        const s = seq && env.app.project?.sequences.includes(seq) ? seq : env.app.sequence;
-        edit = { seqId: s?.id ?? null, at: Number.isFinite(value.edit.at) ? value.edit.at : null, clips: before ? changedSince(s, before) : [] };
+        const named = value.edit.seqId ? env.app.project?.sequences.find((x) => x.id === value.edit.seqId) : null;
+        const s = named || (seq && env.app.project?.sequences.includes(seq) ? seq : env.app.sequence);
+        edit = { seqId: s?.id ?? null, at: Number.isFinite(value.edit.at) ? value.edit.at : null, clips: before && !named ? changedSince(s, before) : [] };
         out = { ...value };
         delete out.edit;
       }
@@ -1051,5 +1260,16 @@
     return [def.title, {}];
   }
 
-  return { TOOLS, INSTRUCTIONS, PRESETS, check, call, definitions, describe, kindOf: (name) => BY_NAME.get(name)?.kind || null, names: () => TOOLS.map((t) => t.name) };
+  // What the other tool files (control-project.js, control-auto.js, control-actions.js) build their tools with.
+  const lib = {
+    tool, refuse, Refusal, need, M, C, TM, r3, isObj, own, MAX_ITEMS, CLIP_ID, MARKER_COLORS,
+    num, int, str, bool, list, pair, ids, obj, bare, SEQ,
+    context, sec, frame, ticks, timeIn, clipOf, trackOf, kindOf, mediaOf, run, atomic, plan, effectDef, paramValue, propValue, needKind, clipSummary,
+    snapshot, changedSince, plainName,
+  };
+  const api = { TOOLS, INSTRUCTIONS, PRESETS, check, call, definitions, describe, kindOf: (name) => BY_NAME.get(name)?.kind || null, names: () => TOOLS.map((t) => t.name), lib };
+  // A tool file adds its tools: required here in Node, and in the page it loads after this file and calls extend.
+  api.extend = (part) => { part(lib); };
+  if (NODE) for (const name of ['control-project', 'control-auto', 'control-actions']) api.extend(require(`./${name}.js`));
+  return api;
 });

@@ -22,6 +22,7 @@
  { "name": "cut-ai", "file": "verify/cut-ai.mjs", "timeout": 15, "seconds": 30 },
  { "name": "cut-control-core", "file": "verify/cut-control-core.mjs", "timeout": 5, "seconds": null },
  { "name": "cut-ai-chat", "file": "verify/cut-ai-chat.mjs", "timeout": 15, "seconds": null },
+ { "name": "cut-ai-tools", "file": "verify/cut-ai-tools.mjs", "timeout": 15, "seconds": null },
  { "name": "session", "file": "verify/session.mjs", "timeout": 10, "seconds": 21 },
  { "name": "close-running", "file": "verify/close-running.mjs", "timeout": 10, "seconds": 6 },
  { "name": "safe-mode", "file": "verify/safe-mode.mjs", "timeout": 10, "seconds": 19 },

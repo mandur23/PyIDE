@@ -273,8 +273,8 @@
   }
 
   // Makes sure the clips' speech is transcribed (only what is not cached yet). ctx: an analysis task's context.
-  async function transcribe(app, clips, ctx, range = null) {
-    const o = opts();
+  async function transcribe(app, clips, ctx, range = null, language = null) {
+    const o = language ? { ...opts(), language } : opts();
     const work = [];
     for (const [mediaId, spans] of needed(app, clips, range)) {
       const m = app.project.media.find((x) => x.id === mediaId);
@@ -405,9 +405,9 @@
   // Ready, then transcribed: true, or false when declined, cancelled or failed (said already).
   // Whisper, and HTDemucs when the voice is isolated first: true once both are there.
   const readyToRecognise = async () => (await ensureReady()) && (!opts().isolate || await ui.voice.ensureReady());
-  async function prepare(app, clips, range) {
+  async function prepare(app, clips, range, language = null) {
     if (!(await readyToRecognise())) return false;
-    const r = await ui.auto.task(app, tr('Recognizing speech…'), (ctx) => transcribe(app, clips, ctx, range));
+    const r = await ui.auto.task(app, tr('Recognizing speech…'), (ctx) => transcribe(app, clips, ctx, range, language));
     if (r) app.emit('transcripts', {});
     return !!r;
   }
@@ -442,7 +442,8 @@
 
   // ---------- Auto Captions ----------
   const languageOptions = () => [{ value: 'auto', label: tr('Detect automatically') }, { value: 'ko', label: tr('Korean') }, { value: 'en', label: tr('English') }];
-  async function autoCaptions(app) {
+  // ask false (the control API): no dialog; language, chars and highlight as given, else the last choices.
+  async function autoCaptions(app, { ask = true, language, chars, highlight } = {}) {
     const seq = app.sequence;
     const clips = speechClips(app);
     if (!seq || !clips.length) { ui.toast(tr('There are no clips with speech to transcribe.')); return null; }
@@ -452,7 +453,12 @@
     const st = await status();
     const o = { language: opts().language, chars: Number(setting('cut.speech.lineChars')) || 0, terms: projectTerms(app) };
     let spk = null; // the speakers' color and name choice (ui-speakers.js), when the project has speaker labels
-    const go = await new Promise((resolve) => {
+    if (!ask) {
+      const shown = seq.captions.find((t) => t.name === tr('Auto Captions'));
+      Object.assign(o, { language: language ?? o.language, chars: chars ?? o.chars, isolate: opts().isolate, highlight: highlight ?? (shown ? !!shown.style.highlight : !!setting('cut.speech.highlight')) });
+      spk = ui.speakers?.captionField(app) || null;
+    }
+    const go = !ask || await new Promise((resolve) => {
       let ok = false;
       const lang = ui.select({ options: languageOptions(), value: o.language, cls: 'cut-speech-language', onChange: (v) => { o.language = v; } });
       const chars = ui.numberField({ value: o.chars, min: 0, max: 80, step: 1, precision: 0, cls: 'cut-speech-chars', onChange: (v) => { o.chars = v; } });
@@ -485,13 +491,15 @@
         buttons: [{ label: tr('Create Captions'), primary: true, run: () => { for (const n of body.querySelectorAll('input.cut-number-input')) n.blur(); o.terms = terms.value(); o.isolate = isolate.checked; o.highlight = hl.checked; ok = true; } }, { label: tr('Cancel') }] });
     });
     if (!go) return null;
-    if (ui.voice && o.isolate !== opts().isolate) ide.settings.set('cut.speech.isolateVoice', o.isolate);
-    if (o.highlight !== !!setting('cut.speech.highlight')) ide.settings.set('cut.speech.highlight', o.highlight);
-    if (o.language !== setting('cut.speech.language')) ide.settings.set('cut.speech.language', o.language);
-    if (o.chars !== Number(setting('cut.speech.lineChars'))) ide.settings.set('cut.speech.lineChars', o.chars);
-    if (!setTerms(app, o.terms)) return null;
+    if (ask) {
+      if (ui.voice && o.isolate !== opts().isolate) ide.settings.set('cut.speech.isolateVoice', o.isolate);
+      if (o.highlight !== !!setting('cut.speech.highlight')) ide.settings.set('cut.speech.highlight', o.highlight);
+      if (o.language !== setting('cut.speech.language')) ide.settings.set('cut.speech.language', o.language);
+      if (o.chars !== Number(setting('cut.speech.lineChars'))) ide.settings.set('cut.speech.lineChars', o.chars);
+      if (!setTerms(app, o.terms)) return null;
+    }
     const ids = clips.map((c) => c.id);
-    if (!(await prepare(app, clips, range))) return null;
+    if (!(await prepare(app, clips, range, ask ? null : o.language))) return null;
     const s = app.sequence;
     const now = ids.map((id) => s.clips.find((c) => c.id === id)).filter(Boolean);
     const words = timelineWords(app, now, range);
@@ -515,7 +523,16 @@
   }
 
   // ---------- Remove Filler Words ----------
-  async function removeFillers(app) {
+  // Speech recognition alone (the control API's transcribe): the speech clips (the selection, else all; In to Out).
+  // -> true when transcribed, false when declined, cancelled or failed.
+  async function recognize(app, { language = null } = {}) {
+    const clips = speechClips(app);
+    if (!app.sequence || !clips.length) { ui.toast(tr('There are no clips with speech to transcribe.')); return false; }
+    return prepare(app, clips, inOut(app), language);
+  }
+
+  // ask false (the control API): no dialog; the plan with the options given (else the last ones) is removed.
+  async function removeFillers(app, { ask = true, fillers, pauses, pauseLength, keep } = {}) {
     const seq = app.sequence;
     const clips = speechClips(app);
     if (!seq || !clips.length) { ui.toast(tr('There are no clips with speech to transcribe.')); return null; }
@@ -523,6 +540,7 @@
     const range = inOut(app);
     if (!(await prepare(app, clips, range))) return null;
     const o = { fillers: true, pauses: true, pauseLength: 1, keep: 0.15, ...(ide.settings.get('cut.auto.fillers', null) || {}) };
+    for (const [k, v] of Object.entries({ fillers, pauses, pauseLength, keep })) if (v != null) o[k] = v;
     const plan = () => {
       const s = app.sequence;
       const now = ids.map((id) => s.clips.find((c) => c.id === id)).filter(Boolean);
@@ -530,6 +548,13 @@
       const p = S.fillerPlan(words, { ...o, frame: Cut.time.frameTicks(s.fps) });
       return { ...p, words, ...ui.auto.rippleTracks(s, now) };
     };
+    if (!ask) {
+      const p = plan();
+      if (!p.ranges.length) { ui.toast(tr('No filler words or long pauses were found.')); return { cuts: 0 }; }
+      const r = ui.auto.rippleRanges(app, p.ranges, p.tracks, 'Remove Filler Words');
+      if (r) app.select([]);
+      return r ? { cuts: p.ranges.length, fillers: p.fillers.length, pauses: p.pauses.length, seconds: Math.round((A.total(p.ranges) / T) * 10) / 10 } : null;
+    }
     const summary = el('div', 'cut-auto-summary', '', { 'aria-live': 'polite' });
     const show = () => {
       const p = plan();
@@ -856,7 +881,7 @@
   }
 
   ui.speech = {
-    autoCaptions, removeFillers, ensureReady: (modelId) => (modelId ? ensureReady(modelId) : readyToRecognise()), transcribe, timelineWords, speechClips, settingsSection, status, defaults: DEFAULTS,
+    autoCaptions, removeFillers, recognize, ensureReady: (modelId) => (modelId ? ensureReady(modelId) : readyToRecognise()), transcribe, timelineWords, speechClips, settingsSection, status, defaults: DEFAULTS,
     nextUncertain, editTerms, correctWord, terms: projectTerms, marking, percent,
     // for speaker labels (ui-speakers.js): a media file's sound to main, its transcript, which clips speak
     writeSound, transcriptOf, speaks,
