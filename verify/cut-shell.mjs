@@ -502,6 +502,12 @@ try {
     return { rightGap: Math.round(innerWidth - d.right), top: Math.round(d.top - t.bottom), bottomGap: Math.round(innerHeight - d.bottom), width: Math.round(d.width), stageRight: Math.round(s.right), dockLeft: Math.round(d.left), pressed: document.querySelector('.cut-ai-btn').getAttribute('aria-pressed'), focus: Cut.app.focusPanel }; })()`);
   check(docked.rightGap <= 6 && docked.top <= 6 && docked.bottomGap <= 6 && docked.width >= 260 && docked.stageRight < docked.dockLeft && docked.pressed === 'true' && docked.focus === 'assistant',
     `AI opens the AI Assistant as a full-height column on the right, the workspace beside it, with the keyboard (${JSON.stringify(docked)})`);
+  // A notification balloon goes left of the open dock, not over its Send and Stop.
+  await S(`(ide.notifications.notify({ title: 'shell balloon', text: 'over the dock?' }), true)`);
+  await until(`!!document.querySelector('.ide-balloons > *')`, 'a balloon', 5000).catch(() => {});
+  const balloon = await S(`(() => { const b = document.querySelector('.ide-balloons > *')?.getBoundingClientRect(), d = document.querySelector('.cut-dock').getBoundingClientRect(); return b ? { right: Math.round(b.right), dockLeft: Math.round(d.left) } : null; })()`);
+  check(balloon && balloon.right <= balloon.dockLeft, `a notification balloon shows left of the AI dock (${JSON.stringify(balloon)})`);
+  await S(`(ide.notifications.clear(), true)`);
   await click('.cut-window-btn');
   const ticked = await S(`[...document.querySelectorAll('.context-menu .menu-item')].find((n) => n.querySelector('.menu-label')?.textContent === tr('AI Assistant'))?.querySelector('.menu-icon')?.textContent === '✓'`);
   await key('Escape');

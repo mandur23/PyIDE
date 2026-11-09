@@ -241,7 +241,11 @@ await section('automation', async () => {
   const mid = await js('__tools.steps().find((s) => s.tool === "automation")');
   check(mid.state === 'running' && Number(mid.progress) >= 0 && Number(mid.progress) < 1, `the running step shows the job's progress (${mid.progress})`);
   await themes('progress');
-  await clickAt(await js(`__tools.rect('.cut-assistant .cut-as-stop')`));
+  // A notification balloon in the lower right once covered Stop on CI, and the click went to the balloon.
+  const stopAt = await js(`__tools.rect('.cut-assistant .cut-as-stop')`);
+  const onTop = await js(`(() => { const n = document.elementFromPoint(${stopAt.x}, ${stopAt.y}); return n?.closest('.cut-as-stop') ? 'stop' : (n ? (n.closest('.ide-balloon, .ide-balloons') ? 'a notification balloon' : n.className || n.tagName) : null); })()`);
+  check(onTop === 'stop', `nothing covers the Stop button (${onTop})`);
+  await clickAt(stopAt);
   await idle();
   check(!(await js('!!Cut.ui.auto.running')), 'Stop ended the job in the page too');
   check((await js('Cut.app.history.serialize()')) === json0, 'nothing changed: no captions');

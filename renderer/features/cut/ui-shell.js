@@ -369,6 +369,8 @@
     head.append(icon('sparkle'), el('span', 'cut-dock-title', tr('AI Assistant')), close);
     dockBody = el('div', 'cut-dock-body');
     dock.append(head, dockBody);
+    // Notification balloons sit in the lower right corner, over the dock's Send and Stop: they move left of the dock.
+    ide.util.observeSize(dock, () => document.body.style.setProperty('--cut-dock-room', `${dock.hidden ? 0 : Math.round(dock.getBoundingClientRect().width) + 8}px`));
     dockSplit = el('div', 'cut-splitter v cut-dock-splitter');
     dockSplit.hidden = true;
     dockSplit.addEventListener('pointerdown', (e) => {
@@ -402,6 +404,7 @@
     }
     dock.hidden = !open;
     dockSplit.hidden = !open;
+    document.body.style.setProperty('--cut-dock-room', `${open ? Math.round(dock.getBoundingClientRect().width) + 8 : 0}px`);
     aiBtn?.setPressed(open);
     ide.settings.set(DOCK_KEY, { ...dockState(), open });
     if (open && focus) focusPanel('assistant');

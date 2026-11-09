@@ -16,6 +16,9 @@
 .cut-dock-close:hover { color: var(--gray12); background: var(--gray4); }
 .cut-dock-body { flex: 1; min-height: 0; display: flex; position: relative; }
 .cut-dock-splitter { margin: 4px 0; }
+/* what sits in the lower right corner moves left of the open dock, off its Send and Stop */
+body.app-cut .ide-balloons { right: calc(56px + var(--cut-dock-room, 0px)); }
+.cut-root .cut-auto-task { right: calc(16px + var(--cut-dock-room, 0px)); }
 .cut-ai-btn[aria-pressed="true"] { color: var(--gray12); background: color-mix(in srgb, var(--cut-accent) 22%, transparent); }
 .cut-ai-btn .cut-icon { color: var(--cut-accent); }
 
