@@ -48,6 +48,7 @@
 
 ## 공통: 렌더러
 
+- **편집기를 키로 하는 표는 WeakMap으로 둡니다.** 협업의 이름표 표(`presence.js`)가 `monaco.editor.getEditors()`의 모든 편집기를 Map에 넣고 지우지 않아, 파일 비교를 열고 닫을 때마다 닫힌 diff 편집기와 DOM 49개가 남았습니다(`core-lifecycle`가 잡음). 0.3.23-beta.1에 들어갔습니다.
 - **CSP가 있습니다(`renderer/index.html`).** 인라인 스크립트와 인라인 이벤트 핸들러, `eval`을 쓸 수 없습니다. 렌더러 코드는 네트워크에 직접 접속할 수 없고 메인 모듈을 거칩니다(`connect-src data:`). `srcdoc` 프레임은 IDE의 CSP를 물려받습니다.
 - **`innerHTML`에 외부 값을 넣지 않습니다.** 서버 이름, 참여 코드, 팩 이름은 `textContent`로 넣습니다. Markdown은 허용 목록 방식 sanitizer를 지납니다.
 - **입력칸이 있는 영역을 통째로 다시 그리지 않습니다.** `replaceChildren()`이 입력한 글자와 오류 표시를 지웠습니다. 폼은 마운트 때 한 번 만들고 목록만 다시 그립니다. 비동기 작업 뒤에 캡처해 둔 노드에 쓰면 화면에 안 보입니다.

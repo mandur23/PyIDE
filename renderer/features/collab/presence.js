@@ -103,7 +103,8 @@
   }
 
   // Name tags: a content widget per caret, in every editor that shows its document.
-  const tags = new Map(); // editor -> Map(id -> widget)
+  // Weak: drawTags runs for every editor, Compare Files' too, and a closed editor must not be kept with its DOM.
+  const tags = new WeakMap(); // editor -> Map(id -> widget)
   let tagTimer = null;
   const tagsSoon = () => { if (!tagTimer) tagTimer = setTimeout(() => { tagTimer = null; drawTags(); }, 30); };
   function drawTags() {
