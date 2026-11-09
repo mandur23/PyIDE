@@ -248,7 +248,10 @@ await section('polish', async () => {
   await key('Ctrl+Z');
   check((await js('__ai.caps()'))[0].items[0].text === '안녕  하세요', 'Ctrl+Z puts the captions back');
   // the captions panel's Claude menu
-  await clickAt(await js(`__ai.rect('.cut-ws-tab[data-ws="captions"]')`));
+  // On a narrow window (CI's 1024x720) the tab may wait in the » menu: then the workspace is chosen there.
+  const capTab = await js(`__ai.rect('.cut-ws-tab[data-ws="captions"]')`);
+  if (capTab?.w) await clickAt(capTab);
+  else await js(`(Cut.ui.setWorkspace('captions'), true)`);
   await until(`!!__ai.rect('.cut-panel[data-panel="captions"] .cut-cap-ai')?.w`, 'the Claude button in the captions panel');
   await clickAt(await js(`__ai.rect('.cut-panel[data-panel="captions"] .cut-cap-ai')`));
   await clickMenuPath(ctx, [await tr('Polish Captions with Claude…')]);

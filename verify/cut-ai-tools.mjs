@@ -232,7 +232,9 @@ await section('automation', async () => {
   check(!(await js(`ide.api.invoke('cut:speechStatus')`)).models.some((m) => m.installed) && (await js('Cut.app.history.serialize()')) === json0, 'nothing was downloaded or changed');
 
   // Download, then Stop in the middle of the job
-  await js(`ide.api.invoke('cut:speechTestConfig', { delay: 2500 })`);
+  // Each window waits long enough that the job cannot end during the screenshots before Stop (seen on CI); Stop cuts
+  // the wait short, so this costs no time.
+  await js(`ide.api.invoke('cut:speechTestConfig', { delay: 60000 })`);
   await ask('자동 자막 만들어줘');
   await dialogButton('cutSpeechSetup', 'Download');
   await until(`__tools.steps().some((s) => s.tool === 'automation' && s.progress !== null)`, 'the job\'s progress on its step', 30000);

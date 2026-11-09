@@ -40,8 +40,8 @@
 .cut-ws-tab[aria-selected="true"] { color: var(--gray12); border-bottom-color: var(--cut-accent); }
 .cut-ws-more { border: 0; background: none; color: var(--gray9); padding: 0 8px; font: inherit; font-size: 13px; flex: none; }
 .cut-ws-more:hover { color: var(--gray12); background: var(--gray3); }
-/* a narrow top bar keeps the icons of Window and Automation and drops their words */
-@container cut-top (max-width: 1240px) { .cut-topbar :is(.cut-window-btn, .cut-auto-btn) :is(.cut-btn-label, .cut-auto-caret) { display: none; } }
+/* a narrow top bar keeps the icons of Window, Automation and AI and drops their words */
+@container cut-top (max-width: 1240px) { .cut-topbar :is(.cut-window-btn, .cut-auto-btn, .cut-ai-btn) :is(.cut-btn-label, .cut-auto-caret) { display: none; } }
 @container cut-top (max-width: 1100px) { .cut-save-state { display: none; } }
 
 /* menu bar (ui-menubar.js): Premiere's File, Edit, Clip, Sequence, Markers, Graphics and Titles, View, Window, Help */
