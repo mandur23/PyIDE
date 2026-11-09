@@ -7,6 +7,8 @@ import { launch } from './lib.mjs';
 
 const S = JSON.stringify;
 const t = await launch({ fixture: 'tests-tree-menu', port: 9106 });
+// The rows these checks look for are single-child folders; compacting is covered by tree.mjs and java-assist.mjs.
+await t.js(`ide.settings.set('projectTree.compactFolders', false)`);
 const { js, until, check, press } = t;
 const project = path.basename(t.project);
 

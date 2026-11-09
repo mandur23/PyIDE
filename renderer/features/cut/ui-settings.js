@@ -127,6 +127,7 @@
     ui.speech?.settingsSection(host, ctx);
     ui.voice?.settingsSection(host, ctx);
     ui.ai?.settingsSection(host, ctx);
+    ui.assistant?.settingsSection(host, ctx);
   }
 
   (ide.settingsPages ||= []).push({

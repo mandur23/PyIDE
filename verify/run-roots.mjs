@@ -87,6 +87,8 @@ const pyProblems = (t, file) => t.js(`ide.problems.all().filter((p) => p.source 
 
 // ---------- English ----------
 const t = await launch({ fixture: 'run-roots', port: 9590, name: 'run-roots' });
+// The rows these checks look for are single-child folders; compacting is covered by tree.mjs and java-assist.mjs.
+await t.js(`ide.settings.set('projectTree.compactFolders', false)`);
 const { js, until, check, sleep } = t;
 const userData = t.userData;
 try {
@@ -268,6 +270,7 @@ t.close();
 
 // ---------- after a restart ----------
 const r = await launch({ fixture: 'run-roots', port: 9591, name: 'run-roots-restart', userData, projectDir: t.project });
+await r.js(`ide.settings.set('projectTree.compactFolders', false)`);
 try {
   await r.until(`ide.projectRoots && ide.projectRoots.get().excluded.length === 1`, 'roots loaded after restart', 20000);
   const got = await r.js(`ide.projectRoots.get()`);
@@ -283,6 +286,7 @@ r.close();
 
 // ---------- Korean ----------
 const k = await launch({ fixture: 'run-roots', port: 9592, name: 'run-roots-ko', lang: 'ko-KR' });
+await k.js(`ide.settings.set('projectTree.compactFolders', false)`);
 try {
   const title = "'src'이(가) 소스 루트로 표시됨";
   await k.until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes(${q(title)}))`, 'Korean notification', 20000);

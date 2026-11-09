@@ -227,6 +227,8 @@ try {
     for (const [sel, name] of [['#npSpringDeps input[value="webflux"]', 'Spring Reactive Web'], ['#npSpringDeps input[value="data-jpa"]', 'Spring Data JPA'],
       ['#npSpringDeps input[value="cloud-new"]', 'Cloud From 4.2'], ['#npSpringAdded .sb-chip[data-id="data-jpa"]', 'Spring Data JPA'],
       ['#npSpringDeps input[value="web"]', 'Spring Web'], ['#npSpringDeps input[value="webflux"]', 'Spring Reactive Web']]) {
+      // A row below the list's fold (CI's 1024x720) is scrolled to first, as a user would; the list's box stays put.
+      await a.js(`(document.querySelector(${q(sel)}).closest('.sb-dep, .sb-chip').scrollIntoView({ block: 'nearest' }), true)`);
       const to = await centre(sel);
       await a.js(`(() => { const d = document.querySelector('#npSpringDesc'); d.scrollTop = d.scrollHeight; return true; })()`);
       for (let i = 1; i <= 8; i++) {

@@ -22,6 +22,8 @@ const { createSpeech } = require('../cut/whisper');
 const { createSpeakers } = require('../cut/speakers');
 const { createVoice } = require('../cut/voice');
 const { createAi } = require('../cut/ai');
+const { createControl } = require('../cut/control');
+const { createAgent } = require('../cut/agent');
 
 const CACHE_LIMIT_SETTING = 'cut.cacheLimitGB';
 const DEFAULT_CACHE_GB = 10;
@@ -64,6 +66,8 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
     mediaDir: path.join(home, 'Media'), cacheDir: dirs.cache, onCached: (file) => cache.added(file), log,
   });
   const ai = createAi({ log });
+  const control = createControl({ configFile: path.join(app.getPath('userData'), 'cut-control.json'), log, version: app.getVersion?.() || '0' });
+  const agent = createAgent({ control, log });
 
   const watched = new Set();
   function watch(wc) {
@@ -83,6 +87,8 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
       speech.ownerGone(id).catch(() => {});
       voice.ownerGone(id).catch(() => {});
       ai.ownerGone(id);
+      agent.ownerGone(id);
+      if (controlPage === wc) { controlPage = null; control.abandon(); }
     });
   }
   // Every channel learns its window, so what a window opened is cleaned up when it goes.
@@ -291,7 +297,31 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   ipcMain.handle('cut:aiComplete', (e, req) => { watch(e?.sender); return ai.run(e?.sender?.id ?? 0, req, e?.sender); });
   handle('cut:aiCancel', (owner, request) => ai.cancel(owner, request));
 
-  return { dirs, run, speech, speakers, voice, ai };
+  // ---------- the control API and the AI assistant (main/cut/control.js, main/cut/agent.js) ----------
+  // The page that answers tool calls is the one that listed the tools last; a reloaded page lists them again, and
+  // what the old one left unanswered ends as errors.
+  let controlPage = null;
+  control.setTarget((channel, payload) => {
+    const wc = controlPage && !controlPage.isDestroyed?.() ? controlPage : null;
+    if (!wc) return false;
+    try { wc.send(channel, payload); return true; } catch { return false; }
+  });
+  control.onClients((state) => { try { if (controlPage && !controlPage.isDestroyed?.()) controlPage.send('cut:controlClients', state); } catch {} });
+  ipcMain.handle('cut:controlTools', (e, list, instructions) => {
+    watch(e?.sender);
+    control.abandon();
+    controlPage = e?.sender || null;
+    return control.setTools(list, instructions);
+  });
+  ipcMain.on('cut:controlResult', (e, msg) => { if (e?.sender === controlPage) control.answer(msg); });
+  handle('cut:controlExternal', (_o, on) => control.setExternal(on === true));
+  handle('cut:controlDisconnect', () => control.disconnect());
+  handle('cut:controlClients', () => ({ external: control.connected() }));
+  ipcMain.handle('cut:agentRun', (e, req) => { watch(e?.sender); return agent.run(e?.sender?.id ?? 0, req, e?.sender); });
+  handle('cut:agentStop', (owner, turn) => agent.stop(owner, turn));
+  app.on?.('will-quit', () => { control.close(); });
+
+  return { dirs, run, speech, speakers, voice, ai, control, agent };
 }
 
 module.exports = { register, cutHome };

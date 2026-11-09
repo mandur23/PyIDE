@@ -17,7 +17,7 @@ Nano Studio를 고칠 때 볼 문서입니다. 무엇을 하느냐에 따라 아
 - [development.md](development.md): 세 앱에 공통인 개발 방법입니다.
 - [code-app.md](code-app.md): Code의 코어 지도, 자주 고치는 영역, 플러그인별 메인 모듈과 테스트입니다.
 - [craft-app.md](craft-app.md): Craft의 화면 구조, 파일 지도, 기능별 규칙, 테스트 대역, 하지 않는 것입니다.
-- [cut-app.md](cut-app.md): Cut의 화면 구조, 파일 지도, 영역별 규칙, 테스트, 아직 없는 것입니다. 모듈마다의 API는 [cut-architecture.md](cut-architecture.md)에 있습니다(영어).
+- [cut-app.md](cut-app.md): Cut의 화면 구조, 파일 지도, 영역별 규칙, 테스트, 아직 없는 것입니다. 모듈마다의 API는 [cut-architecture.md](cut-architecture.md)에 있습니다(영어). AI가 Cut을 조작하는 도구와 AI 어시스턴트는 [cut-ai-control.md](cut-ai-control.md)에 있습니다(영어).
 - [pitfalls.md](pitfalls.md): 실제로 겪은 문제와 그때 정한 규칙입니다. 공통, Code, Craft, Cut, 도구, CI와 릴리스, 남은 문제로 나뉩니다.
 - [FEATURES.md](../FEATURES.md): 기능과 API의 상세 명세입니다(영어).
 - [CHANGELOG.md](../CHANGELOG.md): 버전별 변경 내역입니다. `## <버전>` 절이 릴리스 노트가 됩니다.

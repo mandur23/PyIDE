@@ -13,6 +13,11 @@ const S = JSON.stringify;
 const hp = (n) => path.join(h.project, n);
 const hostText = (n) => `ide.getDocument(${S(hp(n))})?.model.getValue()`;
 const guestText = (n) => `ide.getDocument(ide.collab.localPath(${S(n)}))?.model.getValue()`;
+// A person's menu (⋯) in the host's People list, then one of its items.
+async function personMenu(id, item) {
+  await pressNode(h, `document.querySelector('.collab-person[data-id="${id}"] .collab-more')`, `${id}'s menu`);
+  await pressNode(h, `[...document.querySelectorAll('.context-menu .menu-item')].find((r) => r.querySelector('.menu-label')?.textContent === ${S(item)})`, item);
+}
 const lf = (s) => (s || '').replace(/\r\n/g, '\n');
 
 try {
@@ -27,7 +32,7 @@ try {
 
   await section('the host lets the guest edit', async () => {
     check(await g.js(`ide.editor.getOption(ide.monaco.editor.EditorOption.readOnly)`), 'the guest starts view only');
-    await pressNode(h, `document.querySelector('.collab-person[data-id="1"] .collab-role')`, 'Allow Editing');
+    await personMenu(1, 'Allow Editing');
     await g.until(`ide.collab.canEdit() && !ide.editor.getOption(ide.monaco.editor.EditorOption.readOnly)`, 'the guest may edit', 10000);
     check(true, 'Allow Editing in the host\'s list makes the guest\'s editor writable');
     check(await h.js(`document.querySelector('.collab-person[data-id="1"] .collab-person-role').textContent === 'Can edit'`), 'the host\'s list says the guest can edit');
@@ -91,6 +96,26 @@ try {
     const tag = await h.js(`(() => { const t = [...document.querySelectorAll('.collab-tag')].find((x) => x.textContent === 'Min'); const r = t.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width }; })()`);
     check(tag.w > 10 && await h.js(`document.elementFromPoint(${tag.x}, ${tag.y})?.closest('.monaco-editor') !== null`), 'Min\'s name tag is on screen in the host\'s editor');
     check(await h.js(`getComputedStyle(document.querySelector('.collab-tag')).backgroundColor !== getComputedStyle(document.querySelector('.monaco-editor .view-lines')).backgroundColor`), 'the tag has the guest\'s color');
+    // The tag never covers the caret's line: on line 2, on line 1 at the top of the view, and after the caret rests
+    // (the tag shrinks to a mark).
+    const tagClear = `(() => { const t = [...document.querySelectorAll('.collab-tag')].find((x) => x.dataset.id === '1'); if (!t) return null;
+      const ed = ide.editor; const d = ed.getModel().getAllDecorations().find((x) => x.options.beforeContentClassName?.includes('collab-caret'));
+      const line = d.range.startLineNumber; const top = ed.getDomNode().getBoundingClientRect().top + ed.getTopForLineNumber(line) - ed.getScrollTop();
+      const bottom = top + ed.getOption(ide.monaco.editor.EditorOption.lineHeight); const r = t.getBoundingClientRect();
+      return { line, clear: r.height > 0 && (r.bottom <= top + 1 || r.top >= bottom - 1) }; })()`;
+    await sleep(300);
+    const onLine2 = await h.js(tagClear);
+    check(onLine2?.line === 2 && onLine2.clear, `Min's tag does not cover the caret's line (line 2: ${S(onLine2)})`);
+    await h.js(`(ide.editor.setScrollTop(0), true)`);
+    await g.js(`(ide.editor.setPosition({ lineNumber: 1, column: 4 }), true)`);
+    await h.until(`${tagClear}?.line === 1`, 'the caret on line 1', 5000);
+    await sleep(400);
+    const onLine1 = await h.js(tagClear);
+    check(onLine1?.clear, `nor on line 1 at the top of the view (${S(onLine1)})`);
+    await sleep(5000);
+    const resting = await h.js(tagClear);
+    check(resting?.clear && await h.js(`!!document.querySelector('.collab-tag.quiet')`), `nor once the caret rests and the tag shrinks (${S(resting)})`);
+    await g.js(`(ide.editor.setPosition({ lineNumber: 2, column: 1 }), true)`);
     // The host's caret on the guest.
     await h.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 4, column: 3 }), true)`);
     await h.press('ArrowRight');
@@ -112,7 +137,7 @@ try {
     await h.js(`(ide.editor.setScrollTop(ide.editor.getTopForLineNumber(200)), true)`);
     await g.until(`Math.abs((ide.editor.getVisibleRanges()[0]?.startLineNumber || 0) - 200) <= 1`, 'the guest scrolls with the host', 10000);
     check(true, 'following opens the host\'s file and scrolls where the host looks');
-    check(await g.js(`document.querySelector('.collab-person[data-id="0"] .collab-follow').textContent === 'Stop Following'`), 'the button says Stop Following');
+    check(await g.js(`(() => { const b = document.querySelector('.collab-person[data-id="0"] .collab-follow'); return b.classList.contains('on') && b.getAttribute('aria-pressed') === 'true' && b.title === 'Stop Following'; })()`), 'the follow button shows it is on (Stop Following)');
     await pressNode(g, `document.querySelector('.collab-person[data-id="0"] .collab-follow')`, 'Stop Following');
     await h.js(`ide.openFile(${S(hp('shared.py'))})`);
     await sleep(1200);
@@ -120,7 +145,7 @@ try {
   });
 
   await section('the host makes the guest view only again', async () => {
-    await pressNode(h, `document.querySelector('.collab-person[data-id="1"] .collab-role')`, 'Make View Only');
+    await personMenu(1, 'Allow Editing');
     await g.until(`!ide.collab.canEdit() && ide.editor.getOption(ide.monaco.editor.EditorOption.readOnly)`, 'the guest is view only', 10000);
     const before = await h.js(hostText('shared.py'));
     await g.js(`ide.openFile(ide.collab.localPath('shared.py'))`);
@@ -131,7 +156,7 @@ try {
   });
 
   await section('the host removes the guest', async () => {
-    await pressNode(h, `document.querySelector('.collab-person[data-id="1"] .collab-kick')`, 'Remove');
+    await personMenu(1, 'Remove from Session…');
     await pressButton(h, 'Remove from Session');
     await g.until(`ide.collab.state().role === null`, 'the guest is out', 15000);
     check(await g.js(`ide.notifications.list().some((n) => n.text === 'The host removed you from the session.')`), 'the guest is told it was removed');

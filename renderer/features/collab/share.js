@@ -184,7 +184,15 @@
   const unsharePort = async (port) => { hostPorts = await api.invoke('collab:sharePorts', hostPorts.filter((p) => p !== port)); C.render(); };
   C.on('ended', () => { hostPorts = []; forwarded = []; hostTerm = null; });
 
-  // ---------- in the Collaboration tool window ----------
+  // ---------- in the Collaboration tool window and the status bar's menu ----------
+  const chip = (cls, iconName, label) => {
+    const b = el('button', `collab-chip ${cls}`);
+    b.append(ide.icon(iconName), el('span', null, label));
+    return b;
+  };
+  C.addMenuItems(() => (C.state().role === 'host'
+    ? [{ label: hostTerm ? tr('Stop Sharing Terminal') : tr('Share Terminal'), icon: 'terminal', run: shareTerminal }, { label: tr('Open a Port…'), icon: 'endpoints', run: sharePort }]
+    : C.state().info ? [{ label: tr('Ask to Run This File'), icon: 'run', run: requestRun }] : []));
   const panel = C.panel;
   if (!panel) return;
   const section = el('div', 'collab-share');
@@ -193,32 +201,35 @@
     const role = C.state().role;
     const items = [];
     if (role === 'host') {
-      const t = el('button', 'secondary collab-share-terminal', hostTerm ? tr('Stop Sharing Terminal') : tr('Share Terminal'));
+      const row = el('div', 'collab-chips');
+      const t = chip(`collab-share-terminal${hostTerm ? ' on' : ''}`, 'terminal', hostTerm ? tr('Stop Sharing Terminal') : tr('Share Terminal'));
       t.onclick = shareTerminal;
-      const p = el('button', 'secondary collab-share-port', tr('Open a Port…'));
+      const p = chip('collab-share-port', 'endpoints', tr('Open a Port…'));
       p.onclick = sharePort;
-      items.push(el('div', 'collab-actions'));
-      items[0].append(t, p);
+      row.append(t, p);
+      items.push(row);
       if (hostTerm) items.push(el('div', 'collab-share-note', tr('Guests see the terminal {name}.', { name: hostTerm.name })));
       for (const port of hostPorts) {
-        const row = el('div', 'collab-port');
+        const line = el('div', 'collab-port');
         const stop = el('button', 'link', tr('Close'));
         stop.onclick = () => unsharePort(port);
-        row.append(el('span', null, tr('Port {port} is open to guests', { port })), stop);
-        items.push(row);
+        line.append(ide.icon('endpoints'), el('span', 'collab-port-text', tr('Port {port} is open to guests', { port })), stop);
+        items.push(line);
       }
     } else if (role === 'guest' && C.state().info) {
-      const r = el('button', 'secondary collab-request-run', tr('Ask to Run This File'));
+      const row = el('div', 'collab-chips');
+      const r = chip('collab-request-run', 'run', tr('Ask to Run This File'));
       r.title = ide.keymap?.label?.('Collab.RequestRun') || 'Shift+F10';
       r.onclick = requestRun;
-      items.push(r);
+      row.appendChild(r);
+      items.push(row);
       for (const f of forwarded) {
-        const row = el('div', 'collab-port');
-        row.dataset.port = f.port;
+        const line = el('div', 'collab-port');
+        line.dataset.port = f.port;
         const open = el('button', 'link', tr('Open in Browser'));
         open.onclick = () => api.invoke('collab:openForwarded', f.port);
-        row.append(el('span', 'collab-port-text', tr('localhost:{local} reaches the host\'s port {port}', { local: f.local, port: f.port })), open);
-        items.push(row);
+        line.append(ide.icon('endpoints'), el('span', 'collab-port-text', tr('localhost:{local} reaches the host\'s port {port}', { local: f.local, port: f.port })), open);
+        items.push(line);
       }
     }
     section.replaceChildren(...items);

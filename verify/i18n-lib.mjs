@@ -34,8 +34,8 @@ export async function englishLeaks(ctx, selector = 'body', extraAllowed = []) {
         const text = n.textContent.trim();
         // Already translated (Korean text may legitimately quote identifiers), or empty.
         if (!text || /[가-힣]/.test(text)) continue;
-        // Skip things that look like paths, file names, identifiers, versions, or key chords.
-        const words = text.replace(/[A-Za-z]:\\\\[^\\s]*|[\\w.-]+\\.(py|txt|md|json|toml|cfg|ini|exe|zip|yml|yaml)\\b|\\b[\\w.]+\\(\\)|\\b\\w+_\\w+\\b|v?\\d+(\\.\\d+)+/g, ' ')
+        // Skip things that look like paths, file names, identifiers, versions (a beta's 0.3.23-beta.2 too), or key chords.
+        const words = text.replace(/[A-Za-z]:\\\\[^\\s]*|[\\w.-]+\\.(py|txt|md|json|toml|cfg|ini|exe|zip|yml|yaml)\\b|\\b[\\w.]+\\(\\)|\\b\\w+_\\w+\\b|v?\\d+(\\.\\d+)+(?:-[A-Za-z]+(?:\\.\\d+)*)?/g, ' ')
           .match(/[A-Za-z][A-Za-z']{2,}/g) || [];
         const english = words.filter((w) => !allowed.has(w) && !/^[A-Z0-9_]+$/.test(w) && !/^F\\d+$/.test(w));
         if (english.length) out.push({ text: text.slice(0, 120), where: p.className || p.tagName });

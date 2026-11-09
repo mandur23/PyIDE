@@ -120,7 +120,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 - 보이는지는 `elementFromPoint`와 스크린샷으로 확인합니다. overflow 검사만으로는 부족합니다.
 - 테스트를 고치기 전 코드로 한 번 돌려 실패하는지 봅니다. 앱 파일 하나만 `git show HEAD:<파일>`로 되돌리고 테스트한 뒤 원래대로 복사합니다.
 - 영어가 기본입니다. 한국어는 `lang: 'ko-KR'`로 띄우고 `verify/i18n-lib.mjs`를 씁니다.
-- CI에 넣으려면 `.github/workflows/ci.yml`에 같은 모양의 단계를 추가합니다. 네트워크, AI 모델, DB, Docker, WSL이 필요한 테스트는 넣지 않습니다.
+- CI에 넣으려면 `verify/ci-suites.json`에 한 줄(`name`, `file`, 필요하면 `args`, `timeout` 분, `seconds`)을 추가합니다. CI는 Windows 러너 6대에서 동시에 돌고, `verify/ci-shard.mjs`가 `seconds`(모르면 60초로 셈)를 보고 고르게 나눕니다. 나뉜 모양은 `node verify/ci-shard.mjs --of 6 --list`로 봅니다. 한 묶음이 너무 길어지면 최근 CI의 걸린 시간으로 `seconds`를 고칩니다. 네트워크, AI 모델, DB, Docker, WSL이 필요한 테스트는 넣지 않습니다.
 
 ### 정리
 

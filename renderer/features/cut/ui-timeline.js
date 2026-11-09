@@ -303,6 +303,7 @@
       pps: 60, scrollX: 0, scrollY: 0, linked: true,
       hover: null, drag: null, guide: null, gap: null, transition: null, caption: null, drop: null, razorAt: null,
       overlay: null, // {ranges: [[a, b]], tracks: [ids] | null}: time ranges an automation previews (ui-auto.js)
+      highlight: null, // {ids: Set, until: ms}: the clips an AI just changed flash (ui-assistant.js)
       tabs: [], perSeq: new Map(),
       // what a clip's keyframe line shows when it was chosen (the fx badge, Show Clip Keyframes): clip id -> 'opacity' |
       // 'remap'; otherwise a remapped clip shows its speed and the others their opacity or volume
@@ -1215,6 +1216,32 @@
       if (v.guide != null) {
         ctx.fillStyle = colors.guide;
         ctx.fillRect(Math.round(xOf(v.guide)) - 0.5, 0, 1, h);
+      }
+      // the clips an AI's edit just changed: a bright edge that fades
+      if (v.highlight) {
+        const left = v.highlight.until - performance.now();
+        if (left <= 0) v.highlight = null;
+        else {
+          const k = Math.min(1, left / 450);
+          for (const c of seq.clips) {
+            if (!v.highlight.ids.has(c.id)) continue;
+            const r = rowOfTrack.get(c.track);
+            if (!r) continue;
+            const x1 = xOf(c.start);
+            const x2 = xOf(model.clipEnd(c));
+            if (x2 < 0 || x1 > w) continue;
+            const y = r.y - v.scrollY + 1;
+            ctx.globalAlpha = 0.3 * k;
+            ctx.fillStyle = colors.accent;
+            ctx.fillRect(x1, y, Math.max(2, x2 - x1), r.h - 3);
+            ctx.globalAlpha = k;
+            ctx.strokeStyle = colors.accent;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x1 + 1, y + 1, Math.max(2, x2 - x1 - 2), r.h - 5);
+          }
+          ctx.globalAlpha = 1;
+          requestAnimationFrame(invalidateTop);
+        }
       }
       // ranges an automation is about to change, over the tracks it names (all of them when none)
       if (v.overlay?.ranges?.length) {
@@ -3207,6 +3234,9 @@
       invalidate,
       get overlay() { return v.overlay; },
       setOverlay(o) { v.overlay = o?.ranges ? { ranges: o.ranges.map((r) => [r[0], r[1]]), tracks: o.tracks || null } : null; invalidateTop(); },
+      // Flashes these clips for `ms` (an AI's edit landing).
+      flash(ids, ms = 1400) { v.highlight = ids?.length ? { ids: new Set(ids), until: performance.now() + ms } : null; invalidateTop(); },
+      get flashing() { return v.highlight && v.highlight.until > performance.now() ? [...v.highlight.ids] : []; },
       dispose() {},
     };
 

@@ -11,6 +11,13 @@
 // - highlights: first two overlapping ranges (refused), then, asked again, non-overlapping ones;
 // - edit command: by the request's words (silence, "first N seconds", music quieter, chapters, "extra field" (refused
 //   once), "delete the project" (an unknown operation every time), anything else: no operations and a message).
+//
+// With --mcp-config (the AI assistant's turns, main/cut/agent.js) it is a scripted agent instead: it connects to the
+// Cut control server that file names (MCP over HTTP, with the token it holds), lists the tools and calls them as a
+// model would, printing the real CLI's stream-json events (system init, assistant text and tool_use, user
+// tool_result, result). The words of the request pick the script (agent() at the end); scenario.json's `stepMs`
+// waits after each call, so a test sees the timeline change while the turn runs. log.jsonl gets the start ({agent,
+// start, args, request, system, prompt}) and every call ({agent, tool, args, ok, text, image}).
 import fs from 'fs';
 import path from 'path';
 
@@ -19,6 +26,10 @@ let stdin = '';
 process.stdin.setEncoding('utf8');
 for await (const chunk of process.stdin) stdin += chunk;
 const args = process.argv.slice(2);
+if (args.includes('--mcp-config')) {
+  await agent();
+  process.exit(0);
+}
 const sysFile = args[args.indexOf('--system-prompt-file') + 1];
 const system = sysFile && fs.existsSync(sysFile) ? fs.readFileSync(sysFile, 'utf8') : '';
 const task = (stdin.match(/^Task: (.*)$/m)?.[1] || 'other').trim();
@@ -100,3 +111,96 @@ for (const piece of reply.match(/[\s\S]{1,40}/g) || []) {
 }
 out({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } });
 out({ type: 'result', subtype: 'success', is_error: false, result: reply, duration_ms: 5 });
+
+// ---------- the scripted agent ----------
+async function agent() {
+  const emit = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let scenario = {};
+  try { scenario = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8')); } catch {}
+  const note = (o) => { if (dir) fs.appendFileSync(path.join(dir, 'log.jsonl'), `${JSON.stringify({ agent: true, pid: process.pid, t: Date.now(), ...o })}\n`); };
+  const request = (stdin.match(/The user's request: ([\s\S]*)$/)?.[1] || '').trim();
+  const sysFile = args[args.indexOf('--system-prompt-file') + 1];
+  note({ start: true, args, request, system: sysFile && fs.existsSync(sysFile) ? fs.readFileSync(sysFile, 'utf8') : '', prompt: stdin, env: { mds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS || null } });
+  if (/quota|한도/.test(request)) {
+    const msg = 'Claude AI usage limit reached|1700000000';
+    emit({ type: 'system', subtype: 'init', model: 'fake', tools: [] });
+    emit({ type: 'result', subtype: 'success', is_error: true, result: msg });
+    process.exit(1);
+  }
+  const cfg = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'));
+  const server = Object.values(cfg.mcpServers)[0];
+  let session = null;
+  let rpcId = 0;
+  async function rpc(method, params) {
+    const res = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...server.headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(session ? { 'Mcp-Session-Id': session } : {}) },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
+    });
+    if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
+    const body = await res.json();
+    if (body.error) throw new Error(body.error.message);
+    return body.result;
+  }
+  await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-claude', version: '1' } });
+  const tools = (await rpc('tools/list', {})).tools.map((t) => t.name);
+  emit({ type: 'system', subtype: 'init', model: 'fake', tools: tools.map((n) => `mcp__cut__${n}`), mcp_servers: [{ name: 'cut', status: 'connected' }] });
+  let n = 0;
+  const say = (text) => {
+    emit({ type: 'stream_event', event: { type: 'message_start' } });
+    emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  };
+  // one tool call: the tool_use, the call, the tool_result -> {ok, text, value, image}
+  async function use(name, input) {
+    const id = `toolu_${++n}`;
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: `mcp__cut__${name}`, input }] } });
+    const r = await rpc('tools/call', { name, arguments: input });
+    const text = (r.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+    const image = (r.content || []).find((c) => c.type === 'image') || null;
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: r.content, is_error: !!r.isError }] } });
+    note({ tool: name, args: input, ok: !r.isError, text: text.slice(0, 400), image: image ? { mimeType: image.mimeType, bytes: Buffer.from(image.data, 'base64').length } : null });
+    let value = null;
+    try { value = JSON.parse(text); } catch {}
+    await sleep(scenario.stepMs ?? 0);
+    return { ok: !r.isError, text, value, image };
+  }
+  const finish = (text) => {
+    say(text);
+    emit({ type: 'result', subtype: 'success', is_error: false, result: text, num_turns: n + 1 });
+  };
+  const seq = (await use('get_sequence', {})).value;
+  if (/잠긴|locked/i.test(request)) {
+    const lockedTrack = seq.tracks.find((t) => t.locked);
+    const clip = seq.clips.find((c) => c.track === lockedTrack?.id);
+    const r = await use('delete_clips', { clip_ids: [clip?.id || 'c1'], ripple: true });
+    return finish(r.ok ? '지웠어요.' : `그 클립은 잠긴 트랙에 있어서 지우지 못했어요: ${r.text}`);
+  }
+  if (/모르는|unknown/i.test(request)) {
+    const r = await use('add_effect', { clip_id: seq.clips[0]?.id || 'c1', type: 'sparkle.magic' });
+    return finish(r.ok ? '넣었어요.' : `그런 효과는 없어요: ${r.text}`);
+  }
+  if (/천천히|slowly/i.test(request)) {
+    say('표시를 차례로 넣을게요.');
+    for (let k = 1; k <= 8; k++) await use('add_marker', { at: k * 0.5, name: `표시 ${k}` });
+    return finish('표시를 여덟 개 넣었어요.');
+  }
+  if (/내보내|export/i.test(request)) {
+    const r = await use('export_sequence', { preset: '720p', file_name: 'AI export' });
+    return finish(r.ok ? `내보내기 대기열에 넣었어요: ${r.value?.queued}` : `내보내지 않았어요: ${r.text}`);
+  }
+  if (/화면|frame/i.test(request)) {
+    const r = await use('get_frame', { time: 1, width: 320 });
+    return finish(r.ok && r.image ? `화면을 봤어요 (${r.value.width}x${r.value.height}).` : `화면을 보지 못했어요: ${r.text}`);
+  }
+  if (/잘라|cut/i.test(request)) {
+    say('앞 3초를 잘라내고 제목을 넣을게요.');
+    const cut = await use('delete_range', { from: 0, to: 3, ripple: true });
+    const title = await use('add_text', { text: '제목', at: 0, duration: 2, size: 120 });
+    const mark = await use('add_marker', { at: 0, name: '제목', kind: 'chapter' });
+    return finish(cut.ok && title.ok && mark.ok ? '앞 3초를 잘라내고 처음 2초에 제목을 넣었어요.' : '일부를 하지 못했어요.');
+  }
+  await use('get_project', {});
+  return finish('무엇을 바꿀까요?');
+}

@@ -1,12 +1,14 @@
-/* Collaboration: the tool window, the dialogs, the status item, and the others' carets, selections and name tags. */
+/* Collaboration: the tool window, the dialogs, the status item, and the others' carets, selections and name tags.
+   Colors are the IDE's variables (--gray*, --blue*, --red, --yellow), so both themes follow; a person's color is
+   --collab, set by .collab-c0 … .collab-c7. */
 .collab-c0 { --collab: #3574f0; }
-.collab-c1 { --collab: #e5534b; }
-.collab-c2 { --collab: #4f9d58; }
-.collab-c3 { --collab: #d08a3c; }
-.collab-c4 { --collab: #a571e6; }
-.collab-c5 { --collab: #23a3b5; }
-.collab-c6 { --collab: #c9a227; }
-.collab-c7 { --collab: #e0679a; }
+.collab-c1 { --collab: #d9534f; }
+.collab-c2 { --collab: #3f9a4f; }
+.collab-c3 { --collab: #c97a27; }
+.collab-c4 { --collab: #9a62e0; }
+.collab-c5 { --collab: #1f99ad; }
+.collab-c6 { --collab: #b8901a; }
+.collab-c7 { --collab: #d55a93; }
 
 /* A guest with no project of its own still sees the side panel, its stripe and the editors. */
 body.no-project.collab-guest #welcome { display: none !important; }
@@ -14,69 +16,167 @@ body.no-project.collab-guest #stripe { display: flex !important; }
 body.no-project.collab-guest #sidePanel:not(.hidden) { display: flex !important; }
 body.no-project.collab-guest #sideSplitter:not(.hidden) { display: block !important; }
 
+/* ---------- the tool window ---------- */
 .collab-tool { overflow: auto; }
-.collab-panel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; font-size: 13px; }
-.collab-panel > * { padding: 0 10px; }
-.collab-intro { color: var(--gray10); line-height: 1.5; }
-.collab-idle { display: flex; flex-direction: column; gap: 10px; }
-.collab-idle-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.collab-session { color: var(--gray12); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
-.collab-session.warn { color: var(--yellow); }
-.collab-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.collab-head { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; color: var(--gray9); font-size: 11px;
-  font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.collab-files-head { text-transform: none; letter-spacing: 0; }
-.collab-people, .collab-requests { display: flex; flex-direction: column; gap: 2px; }
-.collab-person, .collab-request { display: flex; align-items: center; gap: 6px; min-height: 26px; flex-wrap: wrap; }
-.collab-person.away { opacity: .6; }
-.collab-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--collab); flex: none; }
-.collab-person-name { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.collab-person-role { color: var(--gray9); font-size: 12px; white-space: nowrap; }
-.collab-person-tools { display: flex; gap: 8px; margin-left: auto; }
-.collab-panel button.link { background: none; border: none; padding: 0; color: var(--blue6); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.collab-panel { display: flex; flex-direction: column; padding: 4px 0 12px; font-size: 13px; color: var(--text); }
+.collab-panel button { font-size: 12.5px; }
+.collab-panel button.link { background: none; border: none; padding: 0; color: var(--blue8); cursor: pointer; white-space: nowrap; }
 .collab-panel button.link:hover { text-decoration: underline; }
-.collab-follow.on { font-weight: 600; }
-.collab-request button { padding: 2px 8px; }
-.collab-tree { display: flex; flex-direction: column; padding: 0 !important; }
-.collab-tree-row { display: flex; align-items: center; gap: 4px; height: 24px; cursor: pointer; color: var(--gray12); white-space: nowrap; }
-.collab-tree-row:hover, .collab-tree-row:focus { background: var(--gray4); outline: none; }
-.collab-tree-arrow { width: 12px; flex: none; color: var(--gray9); display: inline-block; text-align: center; transition: transform .1s; }
-.collab-tree-arrow.open { transform: rotate(90deg); }
+.collab-panel .primary, .collab-panel .secondary { padding: 4px 12px; display: inline-flex; align-items: center; gap: 6px; }
+.collab-panel .primary .ide-icon { width: 14px; height: 14px; }
+
+/* No session yet. */
+.collab-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 28px 20px 16px; }
+.collab-empty-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--gray3); color: var(--gray10); }
+.collab-empty-icon .ide-icon, .collab-empty-icon svg { width: 24px; height: 24px; }
+.collab-empty-title { font-size: 14px; font-weight: 600; color: var(--gray12); margin-top: 4px; }
+.collab-empty-text { color: var(--gray10); line-height: 1.5; max-width: 260px; }
+.collab-empty-buttons { display: flex; gap: 8px; margin-top: 6px; }
+.collab-empty-note { color: var(--gray9); font-size: 12px; line-height: 1.5; max-width: 260px; margin-top: 4px; }
+
+/* The session. */
+.collab-card { margin: 4px 10px 6px; padding: 10px 12px; border: 1px solid var(--gray4); border-radius: 8px; background: var(--gray1);
+  display: flex; flex-direction: column; gap: 10px; }
+.collab-card.warn { border-color: color-mix(in srgb, var(--yellow) 55%, var(--gray4)); }
+.collab-card-top { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.collab-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green6); margin-top: 6px; flex: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green6) 22%, transparent); }
+.collab-live-dot.busy { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); animation: collab-pulse 1.2s ease-in-out infinite; }
+@keyframes collab-pulse { 50% { opacity: .35; } }
+.collab-card-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.collab-session { color: var(--gray12); font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+.collab-session-sub { color: var(--gray9); font-size: 12px; }
+.collab-card.warn .collab-session-sub { color: var(--yellow); }
+.collab-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* What else is shared: the terminal, ports, a run request. */
+.collab-share { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 4px; }
+.collab-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.collab-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 7px; border-radius: 12px; border: 1px solid var(--gray4);
+  color: var(--gray11); background: var(--gray2); }
+.collab-chip:hover { background: var(--gray3); color: var(--gray12); }
+.collab-chip.on { border-color: var(--blue6); color: var(--blue8); }
+.collab-chip .ide-icon { width: 14px; height: 14px; }
+.collab-share-note { color: var(--gray9); font-size: 12px; }
+.collab-port { display: flex; align-items: center; gap: 6px; color: var(--gray11); font-size: 12px; min-width: 0; }
+.collab-port .ide-icon { width: 14px; height: 14px; color: var(--gray9); flex: none; }
+.collab-port-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.collab-port button.link { margin-left: auto; font-size: 12px; }
+
+/* Section heads, as small labels over their list. */
+.collab-head { display: flex; align-items: center; gap: 6px; padding: 12px 12px 4px; color: var(--gray9); font-size: 11.5px; font-weight: 600; }
+.collab-head-count { font-weight: 400; color: var(--gray8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Avatars: a person's initial in their color. */
+.collab-avatar { width: 24px; height: 24px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--collab);
+  color: #fff; font-size: 11.5px; font-weight: 700; line-height: 1; user-select: none; }
+.collab-avatar.neutral { background: var(--gray6); }
+.collab-avatar.small { width: 20px; height: 20px; font-size: 10px; }
+.collab-avatar.large { width: 36px; height: 36px; font-size: 15px; }
+
+/* People. */
+.collab-people, .collab-requests { display: flex; flex-direction: column; }
+.collab-person { display: flex; align-items: center; gap: 9px; padding: 5px 8px 5px 12px; min-height: 36px; }
+.collab-person:hover, .collab-person:focus-within { background: var(--gray3); }
+.collab-person.away .collab-avatar { filter: grayscale(1); opacity: .55; }
+.collab-person.following { background: color-mix(in srgb, var(--blue6) 12%, transparent); }
+.collab-person-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.collab-person-name { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.collab-you { color: var(--gray9); margin-left: 4px; }
+.collab-person-role { color: var(--gray9); font-size: 11.5px; white-space: nowrap; }
+.collab-person.away .collab-person-role { color: var(--yellow); }
+.collab-person-tools { display: flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity .1s; }
+.collab-person:hover .collab-person-tools, .collab-person:focus-within .collab-person-tools, .collab-person-tools:has(.on) { opacity: 1; }
+.collab-icon-btn { width: 24px; height: 24px; border-radius: 4px; display: grid; place-items: center; color: var(--gray10); }
+.collab-icon-btn:hover { background: var(--gray4); color: var(--gray12); }
+.collab-icon-btn.on { color: var(--blue8); }
+.collab-icon-btn .ide-icon { width: 16px; height: 16px; }
+
+/* Requests to join. */
+.collab-request { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 9px; margin: 2px 10px; padding: 8px 10px;
+  border-radius: 8px; border: 1px solid color-mix(in srgb, var(--blue6) 45%, var(--gray4)); background: color-mix(in srgb, var(--blue6) 8%, var(--gray1)); }
+.collab-request-text { display: flex; flex-direction: column; min-width: 0; }
+.collab-request-buttons { grid-column: 2; display: flex; gap: 6px; }
+
+/* The host's files. */
+.collab-tree { display: flex; flex-direction: column; }
+.collab-tree-row { display: flex; align-items: center; gap: 4px; height: 24px; padding-right: 8px; cursor: pointer; color: var(--text); white-space: nowrap; }
+.collab-tree-row:hover { background: var(--gray3); }
+.collab-tree-row:focus { background: var(--blue2); outline: none; }
+.collab-tree-arrow { width: 16px; height: 16px; flex: none; display: grid; place-items: center; color: var(--gray9); transform: rotate(-90deg); transition: transform .1s; }
+.collab-tree-arrow.open { transform: none; }
+.collab-tree-arrow .ide-icon { width: 12px; height: 12px; }
 .collab-tree-name { overflow: hidden; text-overflow: ellipsis; }
-.collab-tree-note { color: var(--gray9); padding: 4px 10px; }
+.collab-tree-note { color: var(--gray9); padding: 4px 12px; font-size: 12px; }
 
-.collab-form { display: flex; flex-direction: column; gap: 10px; }
-.collab-field { display: flex; flex-direction: column; gap: 4px; }
-.collab-field-label { color: var(--gray11); font-size: 12px; }
-.collab-field-hint { color: var(--gray9); font-size: 12px; }
-.collab-form input, .collab-form select, .collab-form textarea { width: 100%; box-sizing: border-box; }
-.collab-form textarea { font-family: var(--mono); resize: vertical; }
-.collab-error { color: var(--red); line-height: 1.4; }
-.collab-status { color: var(--gray11); }
+/* Chat. */
+.collab-chat { display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow: auto; padding: 2px 12px 8px; }
+.collab-chat-empty { color: var(--gray9); font-size: 12px; padding: 2px 0; }
+.collab-msg-group { display: flex; gap: 8px; align-items: flex-start; }
+.collab-msg-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.collab-msg-meta { display: flex; align-items: baseline; gap: 6px; }
+.collab-chat-name { color: var(--collab); font-weight: 600; font-size: 12px; }
+.collab-chat-time { color: var(--gray8); font-size: 11px; }
+.collab-chat-row { color: var(--gray12); line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; }
+.collab-chat-box { padding: 2px 10px 0; }
+.collab-panel input.collab-chat-input { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--gray4); background: var(--gray1); color: var(--gray12); }
+.collab-panel input.collab-chat-input:focus { outline: none; border-color: var(--blue6); }
+.collab-output { display: flex; flex-direction: column; min-height: 0; }
+
+/* ---------- dialogs ---------- */
+.collab-form { display: flex; flex-direction: column; gap: 14px; }
+.collab-lead { color: var(--gray10); line-height: 1.5; }
+.collab-field { display: flex; flex-direction: column; gap: 5px; }
+.collab-field-label { color: var(--gray11); font-size: 12px; font-weight: 600; }
+.collab-field-hint { color: var(--gray9); font-size: 12px; line-height: 1.4; }
+.collab-form input:not([type="radio"]), .collab-form textarea { width: 100%; box-sizing: border-box; }
+.collab-form textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.collab-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.collab-mode-card { display: flex; gap: 8px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--gray4); border-radius: 7px; cursor: pointer; }
+.collab-mode-card:hover { background: var(--gray3); }
+.collab-mode-card:has(input:checked) { border-color: var(--blue6); background: color-mix(in srgb, var(--blue6) 10%, transparent); }
+.collab-mode-card input { margin: 2px 0 0; accent-color: var(--blue6); }
+.collab-mode-text { display: flex; flex-direction: column; gap: 2px; }
+.collab-mode-title { color: var(--gray12); font-weight: 600; }
+.collab-mode-desc { color: var(--gray9); font-size: 12px; line-height: 1.35; }
+.collab-advanced { display: flex; flex-direction: column; gap: 6px; }
+.collab-advanced summary { cursor: pointer; color: var(--gray10); font-size: 12px; font-weight: 600; user-select: none; }
+.collab-advanced[open] summary { margin-bottom: 6px; }
+.collab-notice { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 6px; line-height: 1.45; }
+.collab-notice .ide-icon { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+.collab-notice.collab-error { background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--gray12); border: 1px solid color-mix(in srgb, var(--red) 45%, transparent); }
+.collab-notice.collab-error .ide-icon { color: var(--red); }
+.collab-notice.collab-status { background: var(--gray3); color: var(--gray11); }
+.collab-spinner { width: 12px; height: 12px; margin-top: 3px; flex: none; border-radius: 50%; border: 2px solid var(--gray6); border-top-color: var(--blue6); animation: collab-spin .8s linear infinite; }
+@keyframes collab-spin { to { transform: rotate(360deg); } }
 .dialog.collab-busy .dialog-buttons button { opacity: .6; pointer-events: none; }
+.collab-ask { display: flex; gap: 14px; align-items: center; }
+.collab-ask-title { color: var(--gray12); font-weight: 600; font-size: 14px; }
+.collab-ask-desc { color: var(--gray10); margin-top: 3px; line-height: 1.45; }
+.collab-run-detail { font-family: var(--mono); font-size: 12px; color: var(--gray11); margin-top: 8px; padding: 6px 8px; background: var(--gray1);
+  border: 1px solid var(--gray4); border-radius: 5px; overflow-wrap: anywhere; }
+.collab-run-detail + .collab-run-detail { margin-top: 4px; }
 
-.collab-status-item { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: inherit; padding: 0 6px; cursor: pointer; }
+/* ---------- status bar ---------- */
+.collab-status-item { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; color: inherit; padding: 0 6px; cursor: pointer; border-radius: 4px; }
+.collab-status-item:hover { background: var(--gray3); }
 .collab-status-item .ide-icon { width: 14px; height: 14px; }
 .collab-status-item.warn { color: var(--yellow); }
 
-/* Chat. */
-.collab-chat { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow: auto; padding: 4px 10px !important; }
-.collab-chat-row { line-height: 1.4; overflow-wrap: anywhere; color: var(--gray12); }
-.collab-chat-name { color: var(--collab); font-weight: 600; }
-.collab-panel input.collab-chat-input { margin: 0 10px; width: calc(100% - 20px); box-sizing: border-box; }
-.collab-output { display: flex; flex-direction: column; min-height: 0; }
-
-/* Running, the terminal and ports. */
-.collab-share { display: flex; flex-direction: column; gap: 6px; }
-.collab-share-note, .collab-port { color: var(--gray11); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.collab-run-detail { font-family: var(--mono); font-size: 12px; color: var(--gray11); margin-top: 6px; overflow-wrap: anywhere; }
+/* ---------- the terminal a host shares ---------- */
 .collab-term-tool { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .collab-term-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--gray11); }
 .collab-term-box { flex: 1; min-height: 0; padding: 0 4px; }
 
-/* In the editors. */
-.monaco-editor .collab-sel { background: color-mix(in srgb, var(--collab) 28%, transparent); }
+/* ---------- in the editors ---------- */
+.monaco-editor .collab-sel { background: color-mix(in srgb, var(--collab) 26%, transparent); }
 .monaco-editor .collab-caret { border-left: 2px solid var(--collab); margin-left: -1px; }
-.collab-tag { background: var(--collab); color: #fff; font-size: 11px; line-height: 15px; padding: 0 4px; border-radius: 3px 3px 3px 0;
-  white-space: nowrap; pointer-events: none; transform: translateY(2px); font-family: system-ui, sans-serif; transition: opacity .3s; }
-.collab-tag.quiet { opacity: .35; }
+/* A name tag sits on the caret like a flag, above or below its line (presence.js), never on it; once the caret rests
+   it shrinks to a small mark that hides no code. */
+.collab-tag { background: var(--collab); color: #fff; font: 600 11px/16px system-ui, 'Malgun Gothic', sans-serif; padding: 0 6px; border-radius: 4px 4px 4px 0;
+  white-space: nowrap; pointer-events: none; transform: translateX(-1px); box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; transition: max-width .25s, padding .25s; }
+.collab-tag.quiet { max-width: 6px; padding: 0; height: 6px; line-height: 6px; color: transparent; border-radius: 1px 1px 1px 0; box-shadow: none; }
+/* Below its line (no room above), the flag hangs from the caret. */
+.collab-tag.below { border-radius: 0 4px 4px 4px; }
+.collab-tag.quiet.below { border-radius: 0 1px 1px 1px; }

@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 
 class ClaudeError extends Error {
-  // code: 'not-installed' | 'auth' | 'cli' | 'cancelled'
+  // code: 'not-installed' | 'auth' | 'quota' | 'cli' | 'cancelled'
   constructor(code, message) {
     super(message);
     this.code = code;
@@ -53,8 +53,26 @@ function systemPromptFile(text) {
 
 const AUTH_ERROR = /not logged in|\/login|invalid api key|authentication|oauth|\b401\b/i;
 
+// The subscription's usage limit or the API's rate limit: "Claude AI usage limit reached", "You've hit your limit".
+const QUOTA_ERROR = /usage limit|limit reached|hit your (?:\w+ )?limit|rate.?limit|credit balance|quota|too many requests|\b429\b/i;
+const classify = (message) => (AUTH_ERROR.test(message) ? 'auth' : QUOTA_ERROR.test(message) ? 'quota' : 'cli');
+
 function killTree(child) {
   if (child.exitCode === null) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }).on('error', () => {});
+}
+
+// Starts the CLI with these arguments in the empty working directory. An npm install is a .cmd shim, which only runs
+// through cmd.exe: inside double quotes cmd.exe takes & | < > ^ literally, but it still expands %VAR% and a quote would
+// end the quoted string, so such an argument is refused. -> the child process; throws a ClaudeError.
+function launch(bin, args, { env: extra = {} } = {}) {
+  const viaShell = /\.cmd$/i.test(bin);
+  const unsafe = viaShell ? [bin, ...args].find((a) => /["%\r\n]/.test(a)) : undefined;
+  if (unsafe !== undefined) throw new ClaudeError('cli', `cannot pass ${JSON.stringify(unsafe)} to ${bin}`);
+  const quote = (a) => `"${a}"`;
+  const env = { ...process.env, ...extra };
+  delete env.ELECTRON_RUN_AS_NODE;
+  fs.mkdirSync(WORK_DIR, { recursive: true });
+  return spawn(viaShell ? quote(bin) : bin, viaShell ? args.map(quote) : args, { cwd: WORK_DIR, env, shell: viaShell, windowsHide: true });
 }
 
 // -> Promise<{text, ms}>. onText(textSoFar) streams the answer as it is generated. Rejects with a ClaudeError.
@@ -67,17 +85,9 @@ function complete({ system, prompt, model = 'haiku', signal, onText }) {
     '--model', model, '--tools', '', '--max-turns', '1', '--safe-mode', '--no-session-persistence',
     '--system-prompt-file', systemPromptFile(system),
   ];
-  // An npm install is a .cmd shim, which only runs through cmd.exe. Inside double quotes cmd.exe takes & | < > ^
-  // literally, but it still expands %VAR% and a quote would end the quoted string.
-  const viaShell = /\.cmd$/i.test(bin);
-  const unsafe = viaShell ? [bin, ...args].find((a) => /["%\r\n]/.test(a)) : undefined;
-  if (unsafe !== undefined) return Promise.reject(new ClaudeError('cli', `cannot pass ${JSON.stringify(unsafe)} to ${bin}`));
-  const quote = (a) => `"${a}"`;
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
+  let child;
+  try { child = launch(bin, args); } catch (err) { return Promise.reject(err); }
   const started = Date.now();
-  const child = spawn(viaShell ? quote(bin) : bin, viaShell ? args.map(quote) : args,
-    { cwd: WORK_DIR, env, shell: viaShell, windowsHide: true });
 
   return new Promise((resolve, reject) => {
     let streamed = '';
@@ -127,9 +137,9 @@ function complete({ system, prompt, model = 'haiku', signal, onText }) {
       if (result && !result.is_error) return resolve({ text: typeof result.result === 'string' ? result.result : streamed, ms });
       const message = (result && String(result.result || '')) || stderr.trim().split(/\r?\n/).slice(-3).join('\n')
         || `Claude Code exited with code ${code}`;
-      reject(new ClaudeError(AUTH_ERROR.test(message) ? 'auth' : 'cli', message));
+      reject(new ClaudeError(classify(message), message));
     });
   });
 }
 
-module.exports = { complete, findClaude, ClaudeError };
+module.exports = { complete, findClaude, launch, classify, killTree, systemPromptFile, ClaudeError, WORK_DIR };

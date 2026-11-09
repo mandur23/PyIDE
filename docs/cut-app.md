@@ -72,6 +72,7 @@ npm start -- --mode=cut
 | `testsrc.js` | 테스트 미디어: 프레임 번호 블록, 1 kHz 삑 소리, 흰 번쩍임, 끊긴 톤, 장면 전환, 배경색 |
 | `analyze.js` | 자동화의 신호 분석(순수): 레벨과 무음 구간, 스펙트럼 플럭스와 템포·박자, 색 히스토그램과 장면 전환, 자동 색, 덕킹 키프레임 |
 | `ai.js` | 텍스트 AI(순수): Claude에 보낼 프롬프트(텍스트만), 답의 JSON 읽기와 한 번 다시 묻기, 대본 줄이기(고르게, 매번 같게), 자막 답 검사, 유튜브 챕터 고치기(0:00, 10초, 3개 이상)와 태그, 하이라이트 구간 검사와 쇼츠의 화면 채우기, 편집 명령의 허용 목록 검사와 명령으로 바꾸기, 언어별 자막 줄 나누기(ko, en, ja, zh, es), 글자 단위 비교 |
+| `control.js` | AI 조작 API의 도구(순수, `Cut.control`): 도구 49개의 이름, 모델이 읽을 설명, JSON 스키마와 검사, 실행(편집은 모두 `Cut.commands`, 들어맞으면 `ai.js`의 허용 목록), 거부 문장, MCP 목록, 채팅 단계 문구. 파일, 프로세스, 네트워크, IPC를 쓰지 않음 ([cut-ai-control.md](cut-ai-control.md)) |
 | `speech.js` | 음성 인식 단어 다루기(순수): 30초 창과 이음매 합치기, 클립을 거쳐 타임라인 시간으로, 자막 줄 나누기(한국어 18자, 두 줄, 6초), 군말과 긴 쉼, 단어 삭제 구간, 검색 |
 | `speakers.js` | 화자 구분(순수): 단어 시간에서 임베딩 창 만들기, 평균 연결 코사인 군집(NN-chain, 자동은 기준값, 또는 정한 수), 단어마다의 화자와 짧은 뒤집힘 고르기, 화자 구간과 손으로 바꾸기, 다시 구분할 때 예전 화자와 맞추기, 자막의 화자 이름과 색 |
 | `ui-base.js` | `Cut.ui`의 바탕: 패널과 액션 등록, 패널 사이 끌어 놓기, 공용 위젯 |
@@ -104,8 +105,9 @@ npm start -- --mode=cut
 | `ui-speech.js` | 음성 인식: 처음 쓸 때의 내려받기 대화상자, 소리 읽기(16 kHz 모노)와 창별 인식, 미디어 파일마다의 대본 캐시, 자동 자막, 군말 삭제, 대본 패널(단어 시간, 재생 위치 단어 표시, 누르면 이동, 고른 단어 리플 삭제, 검색, 불확실한 단어의 물결 밑줄과 두 번 클릭 고치기), 다음/이전 불확실한 단어, 프로젝트의 단어 목록, 설정 페이지의 음성 인식 절 |
 | `ui-speakers.js` | 화자 구분: 처음 쓸 때의 내려받기 대화상자, 화자 구분(인식하지 않은 것은 먼저 인식, 임베딩 캐시, 미디어 전체를 함께 군집, 한 단계), 대본 패널의 화자 줄(칩, 화자 수, 화자 구분 버튼)과 문단 화자 표시(화자 바꾸기, 이름 바꾸기, 단어 고르기), 화자별 자동 자막과 자막의 화자 색·이름 |
 | `ui-ai.js` | Claude 텍스트 AI(자동화 메뉴, 자막 패널의 Claude 단추, Ctrl+J): 처음 요청 전 안내, Claude Code가 없거나 로그인하지 않았을 때의 설명, 진행 상자와 취소, 자막 다듬기(바뀐 곳 표시와 줄마다 고르기)와 번역(새 트랙), 유튜브 제목·설명·챕터(복사, 챕터 마커), 하이라이트 검토와 1080x1920 쇼츠 시퀀스, 편집 명령의 계획 미리 보기와 적용, 설정 페이지의 Claude 절 |
+| `ui-assistant.js` | AI 어시스턴트와 AI 조작의 페이지 쪽: 도구를 main에 등록하고 호출을 하나씩 실행(편집이 들어오면 그 시퀀스를 앞으로, 바뀐 클립 반짝임, 재생 위치 이동), AI 어시스턴트 패널(채팅, 단계, 정지, 요청 하나가 실행 취소 한 단계), 외부 AI 배너와 연결 끊기, 설정 페이지의 AI 조작 절, 내보내기 전에 묻는 대화상자 |
 | `ui-voice.js` | 음성 분리(HTDemucs): 자동화 메뉴와 클립 메뉴의 음성 분리(고른 오디오 클립이 보컬 WAV를 재생, 한 단계), 프로젝트 패널의 음성 분리(가져오기만), 처음 쓸 때의 내려받기 대화상자, 소리 읽기(44.1 kHz)와 진행·취소, 음성 인식 전에 분리한 소리(`forSpeech`), 설정 페이지의 음성 분리 절 |
-| `style.css`, `css/shell.css`, `css/timeline.css`, `css/panels.css`, `css/tools.css`, `css/speech.css`, `css/speakers.css`, `css/ai.css`, `css/audio.css`, `css/color.css` | 토큰과 영역별 모양(`color.css`는 Lumetri 색상의 섹션과 커브 사각형, Lumetri 스코프, `audio.css`는 오디오 트랙 믹서, 기본 사운드, 이퀄라이저 그래프, `tools.css`는 단축키, 설정, 프록시, 대기열, `speech.css`는 대본 패널과 음성 인식 대화상자, `speakers.css`는 화자 줄과 문단 화자 표시, `ai.css`는 Claude 대화상자와 검토 목록) |
+| `style.css`, `css/shell.css`, `css/timeline.css`, `css/panels.css`, `css/tools.css`, `css/speech.css`, `css/speakers.css`, `css/ai.css`, `css/assistant.css`, `css/audio.css`, `css/color.css` | 토큰과 영역별 모양(`color.css`는 Lumetri 색상의 섹션과 커브 사각형, Lumetri 스코프, `audio.css`는 오디오 트랙 믹서, 기본 사운드, 이퀄라이저 그래프, `tools.css`는 단축키, 설정, 프록시, 대기열, `speech.css`는 대본 패널과 음성 인식 대화상자, `speakers.css`는 화자 줄과 문단 화자 표시, `ai.css`는 Claude 대화상자와 검토 목록, `assistant.css`는 AI 어시스턴트 패널, 외부 AI 배너, 연결 방법) |
 | `locales/ko.json` | 한국어 |
 
 ### 메인
@@ -126,6 +128,8 @@ npm start -- --mode=cut
 | `main/cut/runs.js` | 표시를 쓴 실행이 아직 살아 있는지 판단 |
 | `main/cut/whisper.js` | 음성 인식의 main 쪽: `cut:speech*` 채널, 공용 AI 환경 준비와 모델 내려받기(진행률, 오류 코드), 소리 임시 파일, Whisper 사이드카와 유휴 해제, 테스트용 가짜(`PYIDE_WHISPER_BACKEND=fake`) |
 | `main/cut/ai.js` | 텍스트 AI의 main 쪽: `cut:aiStatus`, `cut:aiComplete`(요청 모양과 크기 검사, 모델 haiku/sonnet/opus, 3분 제한, `cut:aiProgress`), `cut:aiCancel`, 창이 닫히면 그 요청 취소 |
+| `main/cut/control.js` | AI 조작의 MCP 서버(127.0.0.1, `POST /mcp`, Streamable HTTP의 JSON 답): 토큰(채팅 턴마다 하나, 외부 AI는 설정이 켜진 동안만, `<userData>\cut-control.json`에 포트와 함께), Origin과 Host 거부, 도구 호출을 페이지로 보내고 답 받기(`cut:controlCall`, `cut:controlResult`), 외부 AI 연결 목록 |
+| `main/cut/agent.js` | AI 어시스턴트의 한 턴: Claude Code CLI를 Cut 도구만 허용해 실행(`--tools ""`, `--strict-mcp-config`, `--allowedTools mcp__cut__*`, `--permission-mode dontAsk`), stream-json을 `cut:agentEvent`로, 정지, 사용 한도(`quota`) |
 | `main/cut/speech-words.js` | 단어 시간을 소리가 있는 곳으로 좁히기(`refine`), 소리 덩어리 찾기와 가짜 모델의 단어(순수) |
 | `main/ai/whisper_server.py` | Whisper 사이드카(transformers, CPU): JSON 줄 요청, 30초 창 하나씩, 단어 시간, 언어 알아내기, 취소 |
 | `main/cut/speakers.js` | 화자 구분의 main 쪽: `cut:speakers*` 채널, 공용 AI 환경에 onnxruntime과 모델 내려받기(오류 코드), 음성 인식의 소리 임시 파일에서 창마다 임베딩, 사이드카와 유휴 해제, 테스트용 가짜(`PYIDE_SPEAKERS_BACKEND=fake`) |
@@ -277,6 +281,16 @@ npm start -- --mode=cut
 - 긴 대본은 `Cut.ai.condense`가 정해진 방법으로 줄이고(약 3만 자), 줄였다는 것을 대화상자에 씁니다. 자막 다듬기와 번역은 줄이지 않고 60개씩 나눠 묻습니다.
 - 테스트는 실제 Claude를 부르지 않습니다. `PYIDE_CLAUDE_PATH`로 `verify/fake-claude-cut.mjs`(프롬프트를 보고 정해진 답, 일부러 틀린 답 하나)를 씁니다.
 
+### AI 조작과 AI 어시스턴트 (`control.js`, `ui-assistant.js`, `main/cut/control.js`, `main/cut/agent.js`)
+
+- 도구 목록, 규칙, 보안 모델은 [cut-ai-control.md](cut-ai-control.md)에 있습니다. 도구를 바꾸면 `node verify/cut-control-core.mjs --table`로 그 문서의 표를 다시 만듭니다. 테스트가 문서에 없는 도구를 잡습니다.
+- 모든 편집 도구는 `Cut.commands`로만 바꿉니다. 여러 명령은 `history.begin`/`commit`으로 묶고 실패하면 `cancel`해서 반쯤 된 편집이 남지 않습니다. 들어맞는 작업(구간 자르기와 들어 올리기, 모든 트랙 편집 추가, 종류별 마커 지우기, 무음 삭제)은 `ai.js`의 `validatePlan`/`planCommands`를 거칩니다.
+- 거부는 모델이 고칠 수 있는 영어 문장 하나입니다(무엇이 틀렸고 대신 무엇을 할지). 잠긴 트랙은 사용자의 것이라 어떤 도구도 바꾸지 않고 잠금을 풀지도 못합니다.
+- 어떤 도구도 파일을 읽거나 쓰지 않고, 경로를 받지 않고, 프로그램을 실행하지 않습니다. 미디어는 프로젝트 안의 id로만 가리키고(경로를 주면 그렇게 말하며 거부), `get_media`는 경로를 주지 않습니다. 내보내기는 사용자에게 묻고, 새 파일 이름으로만 대기열에 넣습니다.
+- 채팅 턴의 편집은 하는 동안 작업 내역에 한 단계씩 보이고, 끝나면(정지 포함) `history.squash`로 요청 이름의 한 단계가 됩니다. 턴의 `undo` 도구는 턴 앞의 단계로 가지 못합니다. 정지 뒤에 도착한 호출은 페이지가 거부합니다.
+- `--safe-mode`를 쓰지 않습니다. safe mode의 CLI는 `--mcp-config`의 서버를 버려서 도구가 없는 턴이 됩니다(pitfalls).
+- 외부 AI 허용(`cut.control.external`)은 기본이 꺼짐입니다. 설정 창의 체크는 적용 전까지 보류이므로 절은 보류 값(`ctx.value`)으로 그립니다.
+
 ### 화면 (`ui-*.js`)
 
 - 클릭은 클립의 그룹 전체(항상)와 그 연결(연결된 선택이 켜졌을 때)을 고릅니다. Alt를 누르고 누르면 그 클립만 고릅니다. 그룹, 조금씩 옮기기, 삭제는 고른 것에 적용합니다.
@@ -301,7 +315,7 @@ npm start -- --mode=cut
 | `PYIDE_CUT_DIALOG` | 파일 대화상자. JSON 파일 `{pickMedia, pickFolder, pickProject, saveAs}`의 값을 창 없이 돌려줍니다(없으면 취소) |
 | `PYIDE_CUT_FONT_DIRS` | Windows 글꼴 폴더. 글꼴 폴더의 JSON 목록입니다 |
 | `PYIDE_WHISPER_BACKEND=fake` | Whisper 모델. Python 없이 소리 덩어리마다 단어 하나를 그 시간으로 돌려줍니다 |
-| `PYIDE_CLAUDE_PATH` | Claude Code CLI. `verify/fake-claude-cut.mjs`를 실행하는 `claude.cmd`를 주면 정해진 답을 하고(`FAKE_CLAUDE_DIR`의 `scenario.json`으로 지연과 오류, `log.jsonl`에 보낸 프롬프트), `none`이면 설치되지 않은 것처럼 동작합니다 |
+| `PYIDE_CLAUDE_PATH` | Claude Code CLI. `verify/fake-claude-cut.mjs`를 실행하는 `claude.cmd`를 주면 정해진 답을 하고(`--mcp-config`가 있으면 그 서버에 붙어 도구를 부르는 대본 에이전트, 요청의 낱말로 대본을 고르고 `scenario.json`의 `stepMs`로 속도를 정함)(`FAKE_CLAUDE_DIR`의 `scenario.json`으로 지연과 오류, `log.jsonl`에 보낸 프롬프트), `none`이면 설치되지 않은 것처럼 동작합니다 |
 | `PYIDE_WHISPER_FAKE_SETUP` | 음성 인식 준비. `ok`, `offline`, `disk`, `noPython`이면 모델과 환경이 없는 것으로 시작하고 내려받기를 흉내 낸 뒤 그 결과로 끝납니다 |
 | `PYIDE_SPEAKERS_BACKEND=fake` | 화자 임베딩 모델. Python 없이 창의 24개 주파수 에너지를 임베딩으로 돌려줍니다(높이가 다른 음은 다른 화자) |
 | `PYIDE_SPEAKERS_FAKE_SETUP` | 화자 구분 준비. `ok`, `offline`, `disk`, `noPython`이면 모델이 없는 것으로 시작하고 내려받기를 흉내 낸 뒤 그 결과로 끝납니다. 실제 백엔드의 모델 없음은 `HF_HUB_CACHE`를 빈 폴더로 줍니다 |
@@ -344,6 +358,8 @@ npm start -- --mode=cut
 | `verify/cut-speakers.mjs` | 앱 | 9766 | 화자 구분을 가짜 모델로 실제 화면에서: 화자 구분(자동, 세 화자, 문단과 색, 단어마다 화자, 한 단계); 칩 두 번 클릭으로 이름 바꾸기, 실행 취소와 다시 실행; 화자 2명 뒤 자동(다시 인식하거나 임베딩하지 않음, 이름 유지); 칩으로 화자의 단어 모두 고르기; 문단 화자 표시의 화자 바꾸기와 실행 취소; 화자 색과 이름이 든 자동 자막(자막마다 화자 하나, 합성 픽셀의 화자 색, SRT 이름, 자막 스타일에서 끄기); 저장하고 다시 열기; 빈 모델 캐시의 실제 백엔드(준비 대화상자, 내려받지 않음); 한국어로 인터넷 없음 설명; 화면 캡처 (`CUT_SPEAKERS_ONLY`로 일부만) |
 | `verify/cut-whisper.mjs` | 앱 | 9768 | 음성 인식을 가짜 모델로 실제 화면에서: 처음 쓸 때의 대화상자(크기, 이 PC에서, 누르기 전에는 내려받지 않음, 취소, 진행률), testsrc 삑 소리로 자동 자막(두 창), 자막 패널 버튼과 In-Out 범위, 캐시, 모델을 읽는 동안의 안내, 대화상자의 말하는 단어 강조(처음에는 꺼짐, 새 트랙에 적용, 기억, 다시 만드는 트랙의 상태); 대본 패널의 클릭 이동, 재생 중 단어 표시, Shift+클릭, Delete로 연결된 트랙까지 리플 삭제와 실행 취소, Remove, 검색; 불확실한 단어(물결 밑줄과 확신도, 자막 패널 표시, Alt+]/Alt+[와 메뉴, 확인함, 고친 자막, 대본 단어 고치기와 확인, 표시 끄기); 단어 목록(자동 자막 대화상자, 단어 목록…, 프로젝트 설정, 새 대본과 캐시, 실행 취소 한 단계); 군말 삭제와 미리 보기; 설정 절; 창 메뉴; 인터넷 없음 오류의 한국어 설명; 화면 캡처 (`CUT_WHISPER_ONLY`로 일부만) |
 | `verify/cut-ai.mjs` | 앱 | 9779 | Claude 텍스트 AI를 가짜 CLI로 실제 화면에서: 처음 안내(취소하면 아무것도 안 보냄, 계속은 기억), 자막 다듬기(바뀐 곳 표시, 하나 해제, 한 단계, 시간 그대로), 일본어 번역(새 트랙, 같은 시간, 16자 줄), 유튜브 메타데이터(챕터 고침, 복사, 옛 챕터를 바꾸는 챕터 마커), 자막이 없을 때 음성 인식을 권하고 대본으로 보내기(가짜 Whisper), 하이라이트(겹친 첫 답 거부 뒤 다시 묻기, 검토, 고른 구간의 1080x1920 시퀀스와 자막, 채우기, 실행 취소), Ctrl+J 편집 명령(무음과 미리 보기 표시, 처음 10초, 음악 6 dB, 허용 목록 밖 작업은 두 번 거부하고 오류, 모르는 필드는 다시 물어 고침, 편집 없음), 취소, 로그아웃 상태, 설정 절, 한국어로 Claude Code 없음 설명, 화면 캡처 (`CUT_AI_ONLY`로 일부만) |
+| `verify/cut-control-core.mjs` | Node | - | AI 조작 API: 도구 목록(이름, 모델용 설명, 엄격한 스키마, 크기, 경로 인자 없음, 문서에 모든 도구), 실제 프로젝트에서 편집 도구마다 결과와 실행 취소 한 단계, 거부와 그대로인 프로젝트(없는 id, 시퀀스 밖 시간, 잠긴 트랙, 모르는 효과와 매개변수, 범위, 미디어 id 자리의 경로, 인자, 턴의 실행 취소 바닥, 거절한 내보내기), 모든 도구를 돌리는 동안 fs·child_process·페이지 IPC를 건드리지 않음, `history.squash`, 실제 HTTP로 서버(토큰 없음, 틀린 토큰, Origin, Host, 끝난 턴의 토큰, 외부 토큰은 허용된 동안만, 연결 끊기 뒤 거부), 대본 CLI로 에이전트(플래그, 이벤트, 정지, 한도, CLI 없음, 남는 파일 없음), 페이지 스크립트 |
+| `verify/cut-ai-chat.mjs` | 앱 | 9807 | AI 어시스턴트와 외부 AI를 한국어 화면에서 실제 마우스와 키로: 창 > AI 어시스턴트, 처음 안내, 턴이 도는 동안 바뀌는 타임라인(단계, 반짝임, 재생 위치), Ctrl+Z 한 번에 턴 전체, 거부된 단계, 정지, 내보내기 전에 묻기(내보내지 않기, 내보내기), 사용 한도 설명, 외부 허용은 기본 꺼짐, 적용, 명령과 JSON 복사, 토큰 없음과 틀린 토큰 거부, 대본 외부 클라이언트의 실시간 편집과 배너, 연결 끊기; 화면 캡처 (`CUT_CHAT_ONLY`로 일부만) |
 | `verify/cut-voice.mjs` | 앱 | 9767 | 음성 분리를 가짜 백엔드로 실제 화면에서: 처음 쓸 때의 대화상자와 진행률, 자동화 메뉴의 음성 분리(작업 폴더 `Media`의 WAV, 원본 옆에는 쓰지 않음, 같은 빈에 가져오기, 오디오 클립만 새 소리, 자리·in/out·링크 그대로, 한 단계, Ctrl+Z/Ctrl+Shift+Z, 다시 하면 같은 파일), 취소(WAV, `.part`, 임시 파일, 미디어, 단계 모두 남지 않음), 프로젝트 패널의 음성 분리, 음성 인식 전 분리(자동 자막 대화상자와 설정의 체크, 캐시의 분리한 소리, 따로 캐시되는 대본); 실제 백엔드와 빈 `HF_HUB_CACHE`로 모델이 없을 때의 대화상자와 설정의 Download…(아무것도 내려받지 않음); `CUT_VOICE_REAL=1`이면 실제 HTDemucs (`CUT_VOICE_ONLY`로 일부만) |
 | `verify/app-mode.mjs` | 앱 | 9758(Cut 부분) | `--mode=cut` 창, 작업 폴더와 신뢰, 플러그인, `__cutReady` |
 

@@ -104,7 +104,7 @@ try {
 
   await section('a declined request says so', async () => {
     await pair.join(code, { name: 'Min', answer: 'Decline' });
-    await g.until(`document.querySelector('.collab-form .collab-error:not(.hidden)')?.textContent === '호스트가 참여 요청을 거절했습니다.'`, 'the guest is told it was declined', 15000);
+    await g.until(`document.querySelector('.collab-form .collab-error:not(.hidden) .collab-notice-text')?.textContent === '호스트가 참여 요청을 거절했습니다.'`, 'the guest is told it was declined', 15000);
     check(true, 'a declined guest is told so in its dialog');
     check(await h.js(`ide.collab.state().people.length === 1 && !ide.collab.state().pending.length`), 'the host has no one waiting');
     await g.press('Escape');

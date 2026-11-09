@@ -60,6 +60,11 @@
         el('div', 'dialog-message', tr('Claude Code is not signed in, or its sign-in has expired.')),
         el('div', 'cut-dialog-note', tr('Open a terminal (Windows Terminal or PowerShell), run claude, and sign in with your Claude account (type /login if it does not ask). Then try again.')),
       );
+    } else if (code === 'quota') {
+      body.append(
+        el('div', 'dialog-message', tr('Your Claude account has reached its usage limit for now.')),
+        el('div', 'cut-dialog-note', tr('The limit resets after a while (Claude Code says when). Try again later, or choose a smaller model in the settings.')),
+      );
     } else {
       body.append(
         el('div', 'dialog-message', tr('Claude Code is not installed on this PC.')),
@@ -71,7 +76,7 @@
     ui.dialog({ title: tr('Claude Code'), id: 'cutAiMissing', body, width: 500 });
   }
   function failed(err) {
-    if (err.code === 'not-installed' || err.code === 'auth') { explain(err.code); return; }
+    if (err.code === 'not-installed' || err.code === 'auth' || err.code === 'quota') { explain(err.code, err.code === 'quota' ? err.message : ''); return; }
     const text = err.code === 'timeout' ? tr('Claude did not answer in time. Try again, or ask for less at once.')
       : err.code === 'invalid' ? tr('Claude\'s answer could not be used, even when asked again: {error}', { error: err.message })
         : tr('Claude Code failed: {error}', { error: err.message });
@@ -659,5 +664,5 @@
     }).catch(() => {});
   }
 
-  ui.ai = { polishCaptions, translateCaptions, youtubeMetadata, highlights, editCommand, createShorts, addChapters, settingsSection, defaults: DEFAULTS };
+  ui.ai = { polishCaptions, translateCaptions, youtubeMetadata, highlights, editCommand, createShorts, addChapters, settingsSection, explain, model: claudeModel, defaults: DEFAULTS };
 })();

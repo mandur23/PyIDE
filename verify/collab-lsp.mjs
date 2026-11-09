@@ -84,14 +84,15 @@ try {
     await g.click('.collab-chat-input');
     await g.type('hello host');
     await g.press('Enter');
-    await h.until(`[...document.querySelectorAll('.collab-chat-row')].some((r) => r.textContent === 'Min: hello host')`, 'the host reads the guest', 15000);
+    await h.until(`[...document.querySelectorAll('.collab-chat-row')].some((r) => r.textContent === 'hello host' && r.closest('.collab-msg-group').querySelector('.collab-chat-name').textContent === 'Min')`, 'the host reads the guest', 15000);
     check(true, 'the guest\'s message reaches the host');
     await h.js(`ide.toolWindows.get('Collaboration').show()`);
     await h.click('.collab-chat-input');
     await h.type('안녕하세요 <b>x</b>');
     await h.press('Enter');
-    await g.until(`[...document.querySelectorAll('.collab-chat-row')].some((r) => r.textContent === 'Hana: 안녕하세요 <b>x</b>')`, 'the guest reads the host', 15000);
+    await g.until(`[...document.querySelectorAll('.collab-chat-row')].some((r) => r.textContent === '안녕하세요 <b>x</b>' && r.closest('.collab-msg-group').querySelector('.collab-chat-name').textContent === 'Hana')`, 'the guest reads the host', 15000);
     check(await g.js(`!document.querySelector('.collab-chat-row b')`), 'a message is shown as text, never as markup');
+    check(await g.js(`[...document.querySelectorAll('.collab-msg-group .collab-chat-time')].every((t) => t.textContent.length >= 4)`), 'each group of messages shows its time');
   });
 } catch (err) {
   check(false, `collab-lsp: ${err.message.split('\n')[0]}`);

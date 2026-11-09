@@ -1,0 +1,64 @@
+/* the AI assistant panel, the external AI banner and the settings' connection block (ui-assistant.js) */
+.cut-assistant { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.cut-as-log { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.cut-as-empty { margin: auto 0; padding: 12px 4px; color: var(--gray10); text-align: center; }
+.cut-as-empty-title { color: var(--gray12); font-weight: 600; margin-bottom: 4px; }
+.cut-as-empty-note { font-size: 11.5px; line-height: 1.5; }
+.cut-as-examples { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+.cut-as-example { height: auto; min-height: 22px; padding: 3px 8px; border: 1px solid var(--gray5); border-radius: 11px; font-size: 11px; white-space: normal; text-align: left; }
+.cut-as-example:hover { background: var(--gray4); color: var(--gray12); }
+
+.cut-as-msg { max-width: 92%; padding: 6px 9px; border-radius: 8px; line-height: 1.5; overflow-wrap: anywhere; }
+.cut-as-msg.user { align-self: flex-end; background: color-mix(in srgb, var(--cut-accent) 22%, var(--gray3)); color: var(--gray12); white-space: pre-wrap; }
+.cut-as-msg.assistant, .cut-as-msg.external { align-self: flex-start; background: var(--gray3); color: var(--gray12); }
+.cut-as-msg.external { border-left: 3px solid var(--blue6); }
+.cut-as-msg.error, .cut-as-msg[data-result]:not([data-result="ok"]):not([data-result="cancelled"]) { border-left: 3px solid var(--red); }
+.cut-as-text { white-space: pre-wrap; }
+.cut-as-thinking { color: var(--gray9); font-style: italic; }
+.cut-as-who { color: var(--gray9); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.cut-as-steps { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.cut-as-steps:empty { display: none; }
+.cut-as-note { color: var(--gray11); white-space: pre-wrap; margin: 2px 0; }
+.cut-as-step { display: grid; grid-template-columns: 14px 1fr; column-gap: 6px; align-items: baseline; font-size: 11.5px; color: var(--gray11); }
+.cut-as-step-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--gray7); align-self: center; justify-self: center; }
+.cut-as-step[data-state="running"] .cut-as-step-mark { background: var(--cut-accent); animation: cut-as-pulse 1s ease-in-out infinite; }
+.cut-as-step[data-state="done"] .cut-as-step-mark { background: var(--green6); }
+.cut-as-step[data-state="refused"] .cut-as-step-mark { background: var(--red); border-radius: 1px; }
+.cut-as-step[data-state="stopped"] .cut-as-step-mark { background: var(--gray7); border-radius: 1px; }
+.cut-as-step[data-state="refused"] .cut-as-step-text { color: var(--gray12); }
+.cut-as-step-error { grid-column: 2; color: var(--red); font-size: 11px; line-height: 1.4; }
+@keyframes cut-as-pulse { 50% { opacity: .35; } }
+.cut-as-undo { margin-top: 4px; color: var(--gray9); font-size: 10.5px; }
+
+.cut-as-form { flex: none; display: grid; grid-template-columns: 1fr auto; gap: 4px 6px; padding: 6px 8px 8px; border-top: 1px solid var(--gray4); }
+.cut-as-input { box-sizing: border-box; width: 100%; min-height: 44px; max-height: 140px; resize: none; padding: 6px 8px; border: 1px solid var(--gray5); border-radius: 6px;
+  background: var(--gray2); color: var(--gray12); font: inherit; font-size: 12.5px; line-height: 1.45; }
+.cut-as-input:focus { outline: none; border-color: var(--blue6); }
+.cut-as-actions { display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
+.cut-as-send, .cut-as-stop { height: 28px; padding: 0 12px; border-radius: 6px; }
+.cut-as-stop { border: 1px solid var(--red); color: var(--red); }
+.cut-as-stop:hover { background: color-mix(in srgb, var(--red) 15%, transparent); }
+.cut-as-status { grid-column: 1 / -1; min-height: 14px; color: var(--gray9); font-size: 10.5px; }
+.cut-as-status:empty { display: none; }
+
+.cut-as-banner { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); z-index: 25; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 12px;
+  border-radius: 16px; background: var(--gray3); border: 1px solid var(--blue6); color: var(--gray12); box-shadow: 0 6px 18px #0006; font-size: 12px; max-width: 80%; }
+.cut-as-banner[hidden] { display: none; }
+.cut-as-banner-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue6); flex: none; animation: cut-as-pulse 1.4s ease-in-out infinite; }
+.cut-as-banner-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cut-as-disconnect { height: 22px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--gray6); }
+.cut-as-disconnect:hover { background: var(--gray5); }
+
+.cut-as-export-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 8px 0; }
+.cut-as-export-key { color: var(--gray9); }
+.cut-as-export-value { color: var(--gray12); overflow-wrap: anywhere; }
+
+.cut-as-connect { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.cut-as-connect[hidden] { display: none; }
+.cut-as-connect-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.cut-as-connect-label { color: var(--gray11); font-size: 12px; }
+.cut-as-copy, .cut-as-new-token { height: 22px; padding: 0 10px; border: 1px solid var(--gray5); border-radius: 3px; font-size: 11.5px; }
+.cut-as-copy:hover, .cut-as-new-token:hover { background: var(--gray4); color: var(--gray12); }
+.cut-as-code { margin: 0; padding: 6px 8px; border-radius: 4px; background: var(--gray2); border: 1px solid var(--gray4); color: var(--gray12); font-family: var(--mono);
+  font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.cut-as-connect-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }

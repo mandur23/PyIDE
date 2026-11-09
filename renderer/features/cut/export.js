@@ -707,27 +707,37 @@
   // ---- export frame ------------------------------------------------------------------------------------------------
 
   // The sequence frame at t as a PNG at the sequence's size -> {ok, path, bytes}. opts: {backend, compositor}.
-  async function exportFrame(project, seqId, t, path, { compositor: factory, backend } = {}) {
+  // The sequence's frame at t as PNG bytes, `width` pixels wide at most (the sequence's size when larger or not given),
+  // with the captions of `captionTrack` burned in when one is named. -> {ok, bytes, width, height} | {ok: false, code, error}
+  async function framePng(project, seqId, t, { width = null, captionTrack = null, compositor: factory, backend } = {}) {
     const seq = project.sequences.find((s) => s.id === seqId);
     if (!seq) return fail('noSequence', 'There is no such sequence.');
+    const scale = width && width < seq.w ? width / seq.w : 1;
+    const w = Math.max(2, Math.round(seq.w * scale));
+    const h = Math.max(2, Math.round(seq.h * scale));
     let r = null;
     try {
-      r = await makeRenderer({ project, seqId, settings: { width: seq.w, height: seq.h }, burn: null, factory, backend });
+      r = await makeRenderer({ project, seqId, settings: { width: w, height: h }, burn: captionTrack || null, factory, backend });
       const frame = await r.frame(time.snap(t, seq.fps), 0, time.frameTicks(seq.fps));
-      const out = new OffscreenCanvas(seq.w, seq.h);
-      out.getContext('2d').drawImage(frame, 0, 0, seq.w, seq.h);
+      const out = new OffscreenCanvas(w, h);
+      out.getContext('2d').drawImage(frame, 0, 0, w, h);
       frame.close();
       const blob = await out.convertToBlob({ type: 'image/png' });
-      return await saveBytes(withExt(path, 'png'), new Uint8Array(await blob.arrayBuffer()));
+      return { ok: true, bytes: new Uint8Array(await blob.arrayBuffer()), width: w, height: h };
     } catch (err) {
       return fail('compositor', String(err?.message || err));
     } finally {
       try { r?.close(); } catch {}
     }
   }
+  async function exportFrame(project, seqId, t, path, { compositor: factory, backend } = {}) {
+    const r = await framePng(project, seqId, t, { compositor: factory, backend });
+    if (!r.ok) return r;
+    return saveBytes(withExt(path, 'png'), r.bytes);
+  }
 
   return {
-    run, exportFrame, chapters, chapterProblems, preflight, verifyFile, saveBytes, openSink, encodeAudio, aacDelay,
+    run, exportFrame, framePng, chapters, chapterProblems, preflight, verifyFile, saveBytes, openSink, encodeAudio, aacDelay,
     framePlan, captionsInRange, captionsAt, sidecarPath, withExt, psnr, speed, decodeRange,
   };
 });

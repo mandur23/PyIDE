@@ -631,6 +631,8 @@
     ['aiMetadata', 'YouTube Title, Description and Chapters…', (app) => ui.ai.youtubeMetadata(app)],
     ['aiHighlights', 'Highlights to Shorts…', (app) => ui.ai.highlights(app)],
     ['aiCommand', 'Edit Command…', (app) => ui.ai.editCommand(app), 'Ctrl+J'],
+    // the chat that edits while you watch (ui-assistant.js)
+    ['aiAssistant', 'AI Assistant', () => ui.openPanel('assistant')],
     null,
     ['loudness', 'Match Loudness…', matchLoudness],
     ['clipLoudness', 'Match Clip Loudness…', matchClipLoudness],

@@ -53,12 +53,18 @@
   C.on('ended', () => { con?.clear(); shownName = null; });
 
   // ---------- chat ----------
+  // Messages in a row from one person within GROUP_MS form one group under their name, avatar and time.
+  const GROUP_MS = 5 * 60000;
   const panel = C.panel;
   if (!panel) return;
-  const head = el('div', 'collab-head hidden', tr('Chat'));
+  const head = C.head(tr('Chat'));
+  head.classList.add('hidden');
   const list = el('div', 'collab-chat hidden');
-  const input = el('input', 'collab-chat-input hidden');
-  input.placeholder = tr('Message everyone in the session');
+  const none = el('div', 'collab-chat-empty', tr('No messages yet. Say hello.'));
+  list.appendChild(none);
+  const box = el('div', 'collab-chat-box hidden');
+  const input = el('input', 'collab-chat-input');
+  input.placeholder = tr('Message everyone');
   input.maxLength = 4000;
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || !input.value.trim()) return;
@@ -66,15 +72,30 @@
     api.send('collab:chat', input.value);
     input.value = '';
   });
-  panel.append(head, list, input);
+  box.appendChild(input);
+  panel.append(head, list, box);
+  const time = (at) => new Date(Number.isFinite(at) ? at : Date.now()).toLocaleTimeString(document.documentElement.lang || undefined, { hour: '2-digit', minute: '2-digit' });
+  let last = null; // {id, at, group}
   let unread = 0;
   C.on('chat', (m) => {
     if (typeof m.text !== 'string') return;
+    none.remove();
     const p = C.person(m.id);
-    const row = el('div', `collab-chat-row collab-c${(p?.color ?? m.id) % 8}`);
-    row.append(el('span', 'collab-chat-name', `${m.name || p?.name || ''}: `), el('span', 'collab-chat-text', m.text));
-    list.appendChild(row);
-    while (list.childElementCount > 200) list.firstChild.remove();
+    const at = Number.isFinite(m.at) ? m.at : Date.now();
+    if (!last || last.id !== m.id || at - last.at > GROUP_MS || !last.group.isConnected) {
+      const name = m.name || p?.name || '';
+      const group = el('div', `collab-msg-group collab-c${(p?.color ?? m.id) % 8}${m.id === C.me() ? ' mine' : ''}`);
+      const meta = el('div', 'collab-msg-meta');
+      meta.append(el('span', 'collab-chat-name', name), el('span', 'collab-chat-time', time(at)));
+      const body = el('div', 'collab-msg-body');
+      body.appendChild(meta);
+      group.append(C.avatar(name, p?.color ?? m.id, 'small'), body);
+      list.appendChild(group);
+      last = { id: m.id, at, group, body };
+    }
+    last.at = at;
+    last.body.appendChild(el('div', 'collab-chat-row', m.text));
+    while (list.querySelectorAll('.collab-chat-row').length > 200) list.querySelector('.collab-msg-group')?.remove();
     list.scrollTop = list.scrollHeight;
     const tool = ide.toolWindows.get('Collaboration');
     if (m.id !== C.me() && !tool?.isVisible()) { unread++; tool?.setBadge(String(unread)); }
@@ -82,8 +103,8 @@
   ide.on('toolWindowShown', (id) => { if (id === 'Collaboration' && unread) { unread = 0; ide.toolWindows.get('Collaboration')?.setBadge(''); } });
   C.on('rendered', () => {
     const on = !!C.state().role && (C.state().role === 'host' || !!C.state().info);
-    for (const n of [head, list, input]) n.classList.toggle('hidden', !on);
+    for (const n of [head, list, box]) n.classList.toggle('hidden', !on);
   });
-  C.on('ended', () => list.replaceChildren());
+  C.on('ended', () => { list.replaceChildren(none); last = null; });
   C.render();
 })();

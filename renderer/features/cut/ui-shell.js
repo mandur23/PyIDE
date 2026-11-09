@@ -62,7 +62,7 @@
     ] },
   ];
   // The Window menu's order.
-  const PANEL_ORDER = ['project', 'source', 'program', 'timeline', 'tools', 'controls', 'effects', 'mixer', 'essential', 'color', 'scopes', 'text', 'captions', 'transcript', 'markers', 'history', 'meters', 'export', 'queue'];
+  const PANEL_ORDER = ['project', 'source', 'program', 'timeline', 'tools', 'controls', 'effects', 'mixer', 'essential', 'color', 'scopes', 'text', 'captions', 'transcript', 'markers', 'history', 'meters', 'export', 'queue', 'assistant'];
 
   let app = null;
   let root = null;

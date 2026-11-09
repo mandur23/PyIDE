@@ -2317,6 +2317,20 @@
         emit(reason);
         return true;
       },
+      // Joins the steps done after `position` into one step named `name` (an AI assistant's turn: each edit is a step
+      // while the turn runs, then the turn is one). The project does not change; the list does ('commit'). -> true
+      // when there was a step to name.
+      squash(position, name) {
+        if (group) history.commit(true);
+        const from = Math.max(0, Math.min(undoStack.length, Math.round(Number(position) || 0)));
+        if (from >= undoStack.length) return false;
+        const parts = undoStack.splice(from);
+        const entry = { label: String(name || 'Edit'), ops: parts.flatMap((e) => e.ops) };
+        undoStack.push(entry);
+        if (saved === parts[parts.length - 1]) saved = entry;
+        emit('commit');
+        return true;
+      },
       // How many steps are done: the index in list() of the first step that can be redone.
       get position() { return undoStack.length; },
       // Oldest first: the steps that can be undone (done: true), then those that can be redone, next first.

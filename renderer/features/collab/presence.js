@@ -105,6 +105,39 @@
   // Name tags: a content widget per caret, in every editor that shows its document.
   // Weak: drawTags runs for every editor, Compare Files' too, and a closed editor must not be kept with its DOM.
   const tags = new WeakMap(); // editor -> Map(id -> widget)
+  // A tag sits above its caret's line, or below it, and never on the line's text. Where Monaco puts a widget depends
+  // on what it measures (a code lens over the first line, the top of the view, the tag shrinking when the caret rests),
+  // and on the first line under a code lens it drew the tag over the line itself. So the side is a first guess, and
+  // after each layout the tag's box is checked against the line's: if they meet, the tag goes to the other side. Above
+  // is first wherever the tag fits: there it covers a code lens at most, while below it covers the next line's code.
+  const P = monaco.editor.ContentWidgetPositionPreference;
+  const lineHeight = (ed) => ed.getOption(monaco.editor.EditorOption.lineHeight);
+  function lineBox(ed, line) {
+    const top = ed.getDomNode().getBoundingClientRect().top + ed.getTopForLineNumber(line) - ed.getScrollTop();
+    return { top, bottom: top + lineHeight(ed) };
+  }
+  function covers(ed, w) {
+    const r = w.node.getBoundingClientRect();
+    if (!r.height || !w.node.isConnected) return false;
+    const l = lineBox(ed, w.pos.lineNumber);
+    return r.top < l.bottom - 1 && r.bottom > l.top + 1;
+  }
+  function place(ed, w) {
+    // A caret on another line, or the view scrolled: the guess starts again (below when there is no room above).
+    const key = `${w.pos.lineNumber}:${ed.getScrollTop()}`;
+    if (w.placed !== key) {
+      w.placed = key;
+      w.below = ed.getTopForLineNumber(w.pos.lineNumber) - ed.getScrollTop() < (w.node.offsetHeight || 16) + 1;
+    }
+    w.node.classList.toggle('below', w.below);
+    ed.layoutContentWidget(w);
+    requestAnimationFrame(() => {
+      if (!covers(ed, w)) return;
+      w.below = !w.below;
+      w.node.classList.toggle('below', w.below);
+      ed.layoutContentWidget(w);
+    });
+  }
   let tagTimer = null;
   const tagsSoon = () => { if (!tagTimer) tagTimer = setTimeout(() => { tagTimer = null; drawTags(); }, 30); };
   function drawTags() {
@@ -121,14 +154,14 @@
         if (!w) {
           const node = el('div', `collab-tag collab-c${colorOf(id)}`, nameOf(id));
           node.dataset.id = id;
-          w = { id: `collab.tag.${id}`, node, pos, getId: () => w.id, getDomNode: () => w.node, getPosition: () => ({ position: w.pos, preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE, monaco.editor.ContentWidgetPositionPreference.BELOW] }) };
+          w = { id: `collab.tag.${id}`, node, pos, getId: () => w.id, getDomNode: () => w.node, getPosition: () => ({ position: w.pos, preference: w.below ? [P.BELOW, P.ABOVE] : [P.ABOVE, P.BELOW] }) };
           mine.set(id, w);
           ed.addContentWidget(w);
         }
         w.pos = pos;
         w.node.textContent = nameOf(id);
         w.node.className = `collab-tag collab-c${colorOf(id)}${Date.now() - (cursors.get(id)?.at || 0) > 4000 ? ' quiet' : ''}`;
-        ed.layoutContentWidget(w);
+        place(ed, w);
       }
     }
   }

@@ -442,6 +442,9 @@
 - **효과 매개변수 이름 `Hold`가 키프레임 보간의 `Hold`(정지)와 같은 번역 키라서 노이즈 게이트의 홀드가 "정지"로 나올 뻔했습니다.** 효과, 매개변수, 선택지 이름은 다른 화면과 같은 `tr()` 사전을 씁니다. 넣기 전에 같은 키가 있는지 찾고, 뜻이 다르면 이름을 바꿉니다(`Hold Time`).
 - **흰 썸네일 위의 흰 키프레임 줄은 보이지 않습니다.** testsrc의 흰 화면 위에 시간 다시 매핑 속도 줄(#e8e8e8)이 사라져 화면 캡처에서 줄과 키를 못 찾았습니다. 썸네일 위에 그리는 줄과 표시는 어두운 테두리를 먼저 그립니다(`ui-timeline.js`의 `drawRemap`).
 
+- **Claude Code의 `--safe-mode`는 `--mcp-config`로 준 MCP 서버도 버립니다.** AI 어시스턴트의 턴이 Cut 도구 없이 돌게 됩니다(CLI 2.1.318의 번들: "Configured via --mcp-config on this host (operator-supplied); ignored"). 도구를 줄 때는 safe mode 대신 `--tools ""`, `--strict-mcp-config`, `--allowedTools`, `--permission-mode dontAsk`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`로 막습니다(`main/cut/agent.js`).
+- **설정 창의 체크 상자는 적용이나 확인을 누를 때까지 보류입니다(`ctx.set`).** 외부 AI 허용을 체크해도 `ide.settings`와 `settingsChanged`가 오지 않아 연결 방법이 나오지 않았습니다. 체크에 따라 바뀌는 절은 `ctx.value(key)`(보류 값)로 그리고, 적용 전에는 적용하라고 말합니다(`ui-assistant.js`).
+
 ## Cut: 테스트
 
 - **CSP의 `media-src`에 `blob:`이 없어 `<video>`로 내보낸 파일을 재생할 수 없습니다.** `verify/cut-export.mjs`는 그 단계에서만 `Page.setBypassCSP`를 켜고 새로고침합니다. 이 설정은 지금 문서에는 적용되지 않습니다.

@@ -464,6 +464,9 @@ validate. Opened files go through `createHistory(Cut.model.migrate(text))`.
 - `list()` -> `[{ label, done }]`, oldest first: the steps that can be undone, then those that can be redone.
   `position` is how many are done; `goTo(position)` undoes or redoes until that many are done, in one go with one
   change event (an open group is committed first) -> true when it moved (the history panel).
+- `squash(position, label)` joins the steps done after `position` into one step named `label` (an AI assistant's turn:
+  each edit is a step while the turn runs, then the turn is one); the project does not change, the list does
+  ('commit'); an open group is committed first; -> true when there was a step to name.
 - `onChange(fn)` (fn(reason) with 'do' | 'undo' | 'redo' | 'commit'; 'commit' when a group became a step: the list
   changed, the project did not; returns a remover), `dispose()`, `serialize()` -> JSON text.
 
@@ -614,7 +617,8 @@ Files: `main/features/cut.js` (registers the `cut:*` channels; `module.exports =
 in `main/cut/`: `paths.js` (path checks), `limits.js` (sizes), `project.js` (projects, autosave, sessions,
 recovery), `sink.js` (export sink), `faststart.js`, `cache.js`, `find.js` (findMedia, listMedia), `fonts.js`,
 `runs.js` (which run wrote a marker), `whisper.js` and `speech-words.js` (speech recognition, below), `ai.js` (text AI
-through Claude Code, below). Tests: `verify/cut-main.mjs` (plain Node with Electron stubbed); `verify/cut-speech.mjs`
+through Claude Code, below), `control.js` and `agent.js` (the control API's MCP server and the AI assistant's turns,
+below and docs/cut-ai-control.md). Tests: `verify/cut-main.mjs` (plain Node with Electron stubbed); `verify/cut-speech.mjs`
 for the speech recognition side; `verify/cut-ai-core.mjs` for the text AI side.
 
 Folders: `<home>` is the Cut workspace (`PYIDE_CUT_HOME`, else `%USERPROFILE%\Nano Studio Cut`); projects =
@@ -786,6 +790,30 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
   - `cut:aiCancel(request)` aborts it (the CLI's process tree is killed); a window that goes aborts its requests.
   - `PYIDE_CLAUDE_PATH` points at another CLI (tests: `verify/fake-claude-cut.mjs` through a `claude.cmd`); `none`
     behaves as if Claude Code were not installed.
+  - `main/ai/claude.js` also exports `launch(bin, args, {env})` (the CLI in its empty folder; a `.cmd` shim runs
+    through cmd.exe, so an argument with a quote, a percent sign or a line break is refused), `classify(message)` ->
+    `'auth' | 'quota' | 'cli'` (a usage or rate limit is `quota`), `killTree`, `systemPromptFile`, `WORK_DIR`.
+- Control API (`main/cut/control.js`, `createControl({ configFile, log, version })`; docs/cut-ai-control.md): an MCP
+  server (Streamable HTTP, JSON answers, no event stream) on 127.0.0.1, `POST /mcp`. `start()` -> port (the one in
+  `<userData>\cut-control.json` when free), `setTools(definitions, instructions)` (from the page), `issue(turn,
+  owner)` -> a chat turn's token, `revoke(token)`, `setExternal(on)` -> `{ on, url, token }` (the external token,
+  kept in the config file with the port; off drops it), `disconnect()` (a new external token, its sessions ended),
+  `connected()` -> `[{ name, since }]` of the external sessions seen in the last 10 minutes, `onClients(fn)`,
+  `answer(msg)`, `abandon()` (pending calls end as errors), `close()`. A request needs `Authorization: Bearer
+  <token>` (compared in constant time; else 401), no `Origin` and a `Host` of `127.0.0.1:<port>` or
+  `localhost:<port>` (else 403), and at most 1 MB (413). `tools/call` of a listed tool goes to the page
+  (`cut:controlCall { id, name, args, client: { kind: 'chat', turn } | { kind: 'external' } }`) and the page's answer
+  (`cut:controlResult { id, result: { content, isError } }`) is the reply. Channels: `cut:controlTools(definitions,
+  instructions)` (the page that answers is the one that listed the tools last), `cut:controlExternal(on)`,
+  `cut:controlDisconnect()`, `cut:controlClients()`; event `cut:controlClients { external }`.
+- AI assistant turns (`main/cut/agent.js`, `createAgent({ control, log, find, launch, kill, timeoutMs = 20 min })`):
+  `cut:agentRun({ turn /* [\w.-]{1,64} */, system, prompt, model })` runs the CLI with `--tools "" --strict-mcp-config
+  --mcp-config <a file with this turn's token> --allowedTools mcp__cut__<each tool> --permission-mode dontAsk
+  --no-session-persistence --disable-slash-commands --max-turns 80` (and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`), sends
+  its stream-json as `cut:agentEvent { turn, type: 'text' | 'tool' | 'result' | 'done', ... }` and answers `{ ok,
+  text }` or `{ ok: false, code: 'not-installed' | 'auth' | 'quota' | 'cli' | 'cancelled' | 'timeout' | 'badArgs',
+  error }`; the token is revoked and the file deleted when the turn ends. `cut:agentStop(turn)`; a window that goes
+  stops its turns.
 
 ## 8. Engine
 
@@ -1145,6 +1173,8 @@ getAudio, compositor })`:
   `opts.masterGain`. `presets.resolve(..., {loudness: null})` turns the target off; a missing key keeps the preset's.
 
 Also: `exportFrame(project, seqId, t, path, {backend})` -> PNG (through a VideoFrame of the compositor canvas),
+`framePng(project, seqId, t, {width, captionTrack})` -> `{ ok, bytes, width, height }` (the same PNG in memory, at most
+`width` wide, the captions of `captionTrack` burned in; the control API's `get_frame`),
 `chapters(seq, {firstName = 'Intro', range})` -> YouTube chapter text, `chapterProblems(seq)`,
 `preflight(project, seqId, range)` -> `{ offline: [{id, name, path}], empty }` (inside nests too, over the part a nest
 clip shows), `saveBytes(path, bytes | text)`,
@@ -1362,7 +1392,7 @@ carry text only: transcript or caption text with times in seconds, clip, track a
 
 Files: `ui-base.js`, `ui-shell.js`, `ui-project.js`, `ui-monitors.js`, `ui-export.js`, `ui-captions.js`,
 `ui-keys.js`, `ui-timeline.js`, `ui-controls.js`, `ui-effects.js`, `ui-text.js`, `ui-color.js`, `ui-overlay.js`, `ui-masks.js`, `ui-auto.js`,
-`ui-history.js`, `ui-meters.js`, `ui-markers.js`, `ui-speech.js`, `ui-ai.js`, `ui-shortcuts.js`, `ui-settings.js`,
+`ui-history.js`, `ui-meters.js`, `ui-markers.js`, `ui-speech.js`, `ui-ai.js`, `ui-assistant.js`, `ui-shortcuts.js`, `ui-settings.js`,
 `ui-proxy.js`, `ui-queue.js`; styles `css/shell.css`, `css/timeline.css`, `css/panels.css`, `css/tools.css`,
 `css/speech.css`, `css/ai.css`, plus `style.css` (tokens). Tests:
 `verify/cut-shell.mjs` (app, port 9755), `verify/cut-timeline.mjs` (app, port 9756), `verify/cut-edit.mjs` (app, port 9759)
@@ -1735,6 +1765,42 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
   `#cutVoiceSetup` follows the speech one (sizes, on this PC, nothing before Download, progress, the failure explained).
 - Settings: the Video Editor page's Voice Isolation section (`.cut-voice-state` with `data-ready`, `.cut-voice-download`).
 
+### The control API (`control.js`, `Cut.control`)
+
+The tools an AI edits with (pure; docs/cut-ai-control.md has the list, the conventions and the security model; tests
+`verify/cut-control-core.mjs`). `TOOLS` (`{ name, kind: 'read' | 'edit' | 'play' | 'export', title, description,
+input /* JSON schema, additionalProperties false */, run(c, args), say }`), `INSTRUCTIONS` (the server's
+instructions), `PRESETS`, `check(schema, value)` -> an error sentence or '', `call(name, args, { app, services,
+undoFloor })` -> `{ ok: true, value, image, edit: { seqId, at, clips } | null }` | `{ ok: false, error }` (never
+throws; an edit goes through `history.do`, or a history group cancelled on failure, and through ai.js's
+`validatePlan`/`planCommands` for range cuts and lifts, edits on every track, marker removal by kind and silence
+removal), `definitions()` (MCP `tools/list`), `describe(name, args)` -> `[English text for tr(), params]`,
+`kindOf(name)`, `names()`. `services` (the page's; stand-ins in the test): `effects`, `frame(seq, t, width)` ->
+`{ ok, base64, width, height }` (`Cut.export.framePng`), `transcript(seq)` -> segments in seconds, `silence(seq,
+{ threshold, minLength })`, `seek(t)`, `play()`, `stop()`, `exportAsk({ seq, preset, fileName, range, captions })`
+-> `{ ok, name }` | `{ ok: false, declined }`. The module makes no file, process, network or IPC call.
+
+### AI assistant (`ui-assistant.js`)
+
+- At load it lists `Cut.control.definitions()` with main (`cut:controlTools`) and answers `cut:controlCall` one call
+  at a time on `Cut.app`. An edit that lands brings its sequence to the front, flashes its clips
+  (`Cut.ui.timeline.flash(ids, ms = 1400)`; `flashing` lists them) and moves the playhead (`program.seek`). A chat
+  call of a turn that is not running, or was stopped, and an external call while `cut.control.external` is off are
+  refused.
+- Panel `assistant` (AI Assistant; the Window menu, the Automation menu, `Cut.window.assistant`,
+  `Cut.auto.aiAssistant`): `.cut-as-log` with `.cut-as-msg.user`, `.assistant` (`.cut-as-steps` of `.cut-as-step
+  [data-state=running|done|refused|stopped][data-tool]` with `.cut-as-step-error`, `.cut-as-note` for what Claude said
+  between calls, `.cut-as-text` the answer, `data-result` the end code, `.cut-as-undo`) and `.external`;
+  `.cut-as-input` (Enter sends, Shift+Enter a new line, not while composing), `.cut-as-send`, `.cut-as-stop`.
+- `Cut.ui.assistant = { ask(request), stop(), settingsSection(host, ctx), disconnect(), running /* {id, request} */,
+  external /* {info, clients} */, relist, defaults }`. A turn remembers `history.position`; at its end (done, failed or
+  stopped) `history.squash(floor, request)` makes its edits one step. The prompt carries the last six requests and
+  answers of this project and `get_state` plus `get_sequence` (150 clips) as JSON. Settings:
+  `cut.assistant.acknowledged` (the notice), `cut.control.external` (off by default; the settings section, drawn from
+  the pending value until Apply, shows the `claude mcp add` command and the JSON with Copy, and New Token).
+  `.cut-as-banner` over `.cut-root` names the connected external AIs, with Disconnect. Claude Code's errors go to
+  `Cut.ui.ai.explain(code)` (which now also explains `quota`).
+
 ### Text AI through Claude (`ui-ai.js`)
 
 - `Cut.ui.ai = { polishCaptions(app), translateCaptions(app), youtubeMetadata(app), highlights(app), editCommand(app),
@@ -1850,6 +1916,8 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | `verify/cut-speakers.mjs` | app | 9766 | Speaker labels with the fake backends through the real UI: Label Speakers (Auto: three speakers, paragraphs and colors, every word's speaker, one step); rename by double-clicking a chip, undo and redo; 2 speakers then Auto without recognising or embedding again, the name kept; the row's count per project (another project starts at Auto and labels with it); a chip selects all of a speaker's words; Change Speaker from a paragraph's label and its undo; Auto Captions with speaker colors and names (one speaker per caption, the speaker's color in the compositor's pixels, names in SRT text, Caption Style turns them off); save and reopen; the real backend with an empty model cache (the setup dialog, nothing downloaded); an offline pretend download in Korean; screenshots (`CUT_SPEAKERS_ONLY`) |
 | `verify/cut-whisper.mjs` | app | 9768 | Speech recognition with the fake backend through the real UI: the setup dialog (sizes, on this PC, nothing before Download, Cancel, progress; with only small installed, Use Whisper small instead of the turbo download); Auto Captions on testsrc beeps over two windows, again over In-Out from the captions panel and from the cache, "Loading the speech model…" while a slow model loads, the dialog's highlight checkbox (off at first, on the new track, remembered, an existing track's state); the Transcript panel's click, highlight while playing, Shift+click, Delete across linked tracks, undo, Remove, search; the uncertain words (wavy underline and tooltip, the captions panel's marks, Alt+] and Alt+[ and the menu, Mark as Checked, an edited caption, a corrected or confirmed transcript word kept in the cache, the marks off); the word list (Auto Captions dialog, Word List…, project setting, its own transcript then the cache, one undo step); Remove Filler Words with its overlay; the settings section; the Window menu; an offline failure in Korean; screenshots (`CUT_WHISPER_ONLY`) |
 | `verify/cut-ai-core.mjs` | Node | - | Text AI without Claude: JSON from answers, the retry prompt; transcripts condensed within a budget the same way every time; what each prompt sends (no paths); caption answers checked line by line; YouTube chapters fixed (0:00, 10 s, inside, at least 3), titles and tags; highlights checked (inside, lengths, frames, overlap), the shorts complement and fit/fill scale; every plan operation validated strictly (unknown operations and fields, prototype names, tracks, times, selection), described, applied as one undo step on a real project and undone exactly; ko/en/ja/zh/es line breaks and the diff; main/cut/ai.js (checks, progress, cancel, time limit, window gone); the fake CLI through main/ai/claude.js and `PYIDE_CLAUDE_PATH=none`; loading as a page script |
+| `verify/cut-control-core.mjs` | Node | - | The control API: the tool list (names, descriptions, strict schemas, annotations, size, no path arguments, every tool in docs/cut-ai-control.md; `--table` prints its tables), every editing tool on a real project (one step each, valid, undo exact), refusals with the project unchanged (bad ids, times, locked tracks, unknown effects and parameters, ranges, paths for media ids, arguments, the undo floor, a declined export), no fs, child_process or page IPC while every tool runs, `history.squash`, `main/cut/control.js` over HTTP (tokens, Origin, Host, a turn's token after the turn, the external token while allowed and after Disconnect, a page that goes away), `main/cut/agent.js` with the scripted CLI (flags, events, Stop, quota, missing CLI, no file left), loading as a page script |
+| `verify/cut-ai-chat.mjs` | app | 9807 | The AI assistant and external AIs in Korean with real mouse and keys: Window > AI 어시스턴트, the notice, a turn that changes the timeline while it runs (steps, flash, playhead), one Ctrl+Z for the turn, a refused step, Stop, export asking (Don't Export, Export), a usage limit, the external setting off by default, Apply, the command and JSON with Copy, tokens refused, a scripted external client editing live with the banner, Disconnect; screenshots (`CUT_CHAT_ONLY`) |
 | `verify/cut-ai.mjs` | app | 9779 | Text AI against the stand-in CLI `verify/fake-claude-cut.mjs` through the real UI: the notice (Cancel sends nothing, Continue remembered); Polish with the marked review, one change unchecked, one undo step, times kept; Translate into Japanese (a new track, same times and speakers, 16-character lines); YouTube metadata (chapters fixed, Copy, chapter markers replacing the old one), from the transcript after the offer to recognise the speech (fake Whisper); Highlights (the overlapping answer refused and asked again, the review, a 1080x1920 sequence of the chosen ranges with captions, fill, undo); Edit Command by Ctrl+J (silences with the overlay, the first 10 s, the music quieter, an unknown operation refused twice, an unknown field fixed on the retry, no edits); Cancel; signed out; the settings section; Claude Code missing, in Korean; screenshots (`CUT_AI_ONLY`) |
 | `verify/cut-voice-core.mjs` | Node | - | main/cut/voice.js without Python: names and keys, temp files and their window, the fake's WAV (44.1 kHz 16-bit, padded), Cancel leaving no WAV or .part, the cache's index, an empty Hugging Face cache giving a missing model and `notInstalled` |
 | `verify/cut-voice.mjs` | app | 9767 | Voice isolation through the real UI: the setup dialog and its progress (fake), Isolate Voice from the Automation menu (a WAV in the workspace's Media folder, never beside the source; imported into its bin; only the audio clip changes, place, in, out and link kept; one undo step; the same file used again), Cancel leaving nothing (no WAV, .part, temp file, media or step), the project panel's Isolate Voice, isolation before recognition (the Auto Captions checkbox and the setting, the isolated sound in the cache, its own transcript); the real backend with an empty `HF_HUB_CACHE` (the setup dialog and Download… with nothing downloaded); `CUT_VOICE_REAL=1` the real HTDemucs (`CUT_VOICE_ONLY`) |

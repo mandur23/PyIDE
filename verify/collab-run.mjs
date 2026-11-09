@@ -76,7 +76,7 @@ try {
 
   await section('the shared terminal', async () => {
     await pressNode(h, `document.querySelector('.collab-share-terminal')`, 'Share Terminal');
-    await h.until(`document.querySelector('.collab-share-terminal')?.textContent === 'Stop Sharing Terminal'`, 'the terminal is shared', 30000);
+    await h.until(`document.querySelector('.collab-share-terminal')?.textContent.trim() === 'Stop Sharing Terminal'`, 'the terminal is shared', 30000);
     await g.until(`ide.toolWindows.get('CollabTerminal').isVisible() && !!document.querySelector('.collab-term-box .xterm')`, 'the guest sees the host\'s terminal', 20000);
     await h.js(`(ide.api.send('pty:write', { id: ide.terminal.active().id, data: 'echo HOST_SAYS_HI\\r' }), true)`);
     await g.until(`document.querySelector('.collab-term-box')?.textContent.includes('HOST_SAYS_HI')`, 'the guest sees the host\'s command', 20000);
