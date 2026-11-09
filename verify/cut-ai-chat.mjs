@@ -14,7 +14,11 @@
 //   with a wrong one is refused; a scripted external client edits live with the banner up, its steps in the panel;
 //   Disconnect in the banner ends it and the old token is refused;
 // - screenshots in the dark and the light theme (verify/out/cut-ai-chat/*.png).
-// Usage: node verify/cut-ai-chat.mjs   (CUT_CHAT_ONLY=turn,refused,stop,export,quota,external)
+// - under each answer the model and the usage the CLI reported; the model chosen in the panel (with keys) is the
+//   setting, runs the next request, is locked while one runs, and follows the settings;
+// - a call that outlasts the hold (the export question waiting for the user) answers that it runs, the AI waits for
+//   it with wait_job, and the chat shows it as its one step that ends with the call's own answer;
+// Usage: node verify/cut-ai-chat.mjs   (CUT_CHAT_ONLY=turn,model,refused,stop,export,quota,external)
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import zlib from 'zlib';
 import path from 'path';
@@ -33,7 +37,8 @@ const scenario = (s) => writeFileSync(path.join(fakeDir, 'scenario.json'), JSON.
 scenario({});
 const agentLog = () => readFileSync(path.join(fakeDir, 'log.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.agent);
 
-const env = { PYIDE_CUT_HOME: home, PYIDE_CLAUDE_PATH: fakeCmd, FAKE_CLAUDE_DIR: fakeDir };
+// PYIDE_CUT_HOLD_MS: a call still running after 1.5 s answers that it runs (a job; wait_job waits for it)
+const env = { PYIDE_CUT_HOME: home, PYIDE_CLAUDE_PATH: fakeCmd, FAKE_CLAUDE_DIR: fakeDir, PYIDE_CUT_HOLD_MS: '1500' };
 const ctx = await launch({ fixture: 'core', port: 9807, name: 'cut-ai-chat', mode: 'cut', lang: 'ko-KR', env });
 const { js, until, check, cdp, sleep } = ctx;
 const S = JSON.stringify;
@@ -123,7 +128,7 @@ async function key(combo) {
   const parts = combo.split('+');
   const name = parts.pop();
   const mods = (parts.includes('Alt') ? 1 : 0) | (parts.includes('Ctrl') ? 2 : 0) | (parts.includes('Shift') ? 8 : 0);
-  const KEYS = { Enter: ['Enter', 'Enter', 13], Escape: ['Escape', 'Escape', 27] };
+  const KEYS = { Enter: ['Enter', 'Enter', 13], Escape: ['Escape', 'Escape', 27], ArrowDown: ['ArrowDown', 'ArrowDown', 40] };
   const [k, code, vk] = KEYS[name] || [name.toLowerCase(), `Key${name.toUpperCase()}`, name.toUpperCase().charCodeAt(0)];
   await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: mods, key: k, code, windowsVirtualKeyCode: vk });
   await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: mods, key: k, code, windowsVirtualKeyCode: vk });
@@ -205,6 +210,8 @@ await section('turn', async () => {
   check(steps.some((s) => /0.*3/.test(s.text)) && steps.some((s) => /제목/.test(s.text)), `the steps say what each did, in Korean (${S(steps.map((s) => s.text))})`);
   const answer = await js(`[...document.querySelectorAll('.cut-assistant .cut-as-msg.assistant > .cut-as-text')].at(-1)?.textContent`);
   check(/앞 3초를 잘라내고/.test(answer || ''), `Claude's answer ends the turn (${answer})`);
+  const usage = await js(`[...document.querySelectorAll('.cut-assistant .cut-as-usage')].at(-1)?.textContent`);
+  check(usage === 'Sonnet · 입력 12k · 출력 450 · 2초 · ≈$0.042', `the answer shows the model and the usage the CLI reported (${usage})`);
   const after = await js('({ v1: __chat.v1(), done: __chat.done().map((x) => x.label), length: __chat.length(), title: __chat.seq().clips.find((c) => c.source.generator === "text")?.source.layers[0].text, markers: __chat.seq().markers.length })');
   check(S(after.v1) === S([[0, 2], [2, 7]]) && after.title === '제목' && after.markers === 1 && after.length === 7, `the edit: 3 s cut, a title, a chapter (${S(after)})`);
   check(after.done.length === done0 + 1 && after.done.at(-1) === REQUEST, `the whole turn is one undo step named after the request (${after.done.at(-1)})`);
@@ -225,6 +232,32 @@ await section('turn', async () => {
   const handSteps = (await js('__chat.done()')).length;
   check(await js(`(Cut.ui.exec(Cut.app, Cut.commands.split(Cut.app.sequence.id, Cut.time.TICKS)), Cut.app.history.list().filter((x) => x.done).length === ${handSteps + 1})`), 'the user can edit by hand between turns (its own step)');
   void red0;
+});
+
+// ---------- the model ----------
+await section('model', async () => {
+  const sel = `document.querySelector('.cut-assistant .cut-as-model')`;
+  await js(`(ide.settings.set('cut.assistant.acknowledged', true), true)`);
+  check((await js(`${sel}?.value`)) === 'sonnet', 'the panel shows the model, Sonnet by default');
+  await js(`(${sel}.focus(), true)`);
+  await key('ArrowDown');
+  await until(`ide.settings.get('cut.ai.model') === 'opus'`, 'the model setting changed to Opus', 5000).catch(() => {});
+  check((await js(`ide.settings.get('cut.ai.model')`)) === 'opus', 'choosing Opus in the panel saves it as the Claude model of Cut');
+  scenario({ stepMs: 900 });
+  await ask('무엇이든 해줘');
+  await until(`!!Cut.ui.assistant.running && ${sel}.disabled`, 'the model locked while the turn runs', 10000).catch(() => {});
+  check(await js(`${sel}.disabled`), 'the model cannot change while a request runs');
+  await idle();
+  const start = agentLog().filter((l) => l.start).at(-1);
+  const at = start ? start.args.indexOf('--model') : -1;
+  check(at >= 0 && start.args[at + 1] === 'opus', `the request ran on Opus (${S(start?.args.slice(at, at + 2))})`);
+  const u = await js(`(() => { const n = [...document.querySelectorAll('.cut-assistant .cut-as-usage')].at(-1); return n ? { text: n.textContent, tip: n.title } : null; })()`);
+  check(/^Opus · /.test(u?.text || '') && !(await js(`${sel}.disabled`)), `its usage line names Opus, and the model can change again (${u?.text})`);
+  const tip = u?.tip || '';
+  check(/캐시에서 읽음 8,100/.test(tip) && /청구되지 않고/.test(tip) && (!want('turn') || /이 대화 합계: 요청 2개/.test(tip)), `the tooltip has the cache, what the cost means and the conversation's total (${tip.replace(/\n/g, ' | ')})`);
+  await js(`(ide.settings.set('cut.ai.model', 'sonnet'), true)`);
+  await until(`${sel}.value === 'sonnet'`, 'the panel follows the setting', 5000).catch(() => {});
+  check((await js(`${sel}.value`)) === 'sonnet', 'a change in the settings shows in the panel');
 });
 
 // ---------- a refused call ----------
@@ -274,6 +307,13 @@ await section('export', async () => {
   check(/AI export\.mp4/.test(q) && /720p/.test(q), `the question names the new file and the preset (${q.slice(0, 160)})`);
   check(await js('!!Cut.ui.assistant.running') && (existsSync(projects) ? readdirSync(projects) : []).length === files0.length, 'the turn waits for the answer; nothing is written yet');
   await themes('export');
+  // the question outlasts the hold: the call answers that it runs, and the AI waits with wait_job
+  let waited = [];
+  for (let i = 0; i < 60 && waited.length < 2; i++) { await sleep(250); waited = agentLog().filter((l) => l.tool === 'wait_job'); }
+  const run = agentLog().filter((l) => l.running).at(-1)?.running;
+  check(run?.tool === 'export_sequence' && /^job\d+$/.test(run.job) && waited.length >= 2 && waited.every((l) => l.args.job === run.job), `the call waiting for the answer became a job the AI waits for with wait_job (${S(run)}, ${waited.length} waits)`);
+  const waiting = await js('__chat.steps()');
+  check(waiting.at(-1).tool === 'export_sequence' && waiting.at(-1).state === 'running' && !waiting.some((x) => x.tool === 'wait_job'), `the chat shows one export step, still running, and no wait steps (${S(waiting.map((x) => `${x.tool}:${x.state}`))})`);
   await dialogButton('cutAsExport', 'Don\'t Export');
   await idle();
   const step = (await js('__chat.steps()')).at(-1);

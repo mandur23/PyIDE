@@ -32,6 +32,10 @@
 .cut-as-step-progress-text { font-variant-numeric: tabular-nums; }
 @keyframes cut-as-pulse { 50% { opacity: .35; } }
 .cut-as-undo { margin-top: 4px; color: var(--gray9); font-size: 10.5px; }
+.cut-as-usage { margin-top: 2px; color: var(--gray9); font-size: 10.5px; font-variant-numeric: tabular-nums; cursor: default; }
+.cut-as-model { height: 24px; padding: 0 4px; border: 1px solid var(--gray5); border-radius: 6px; background: var(--gray2); color: var(--gray11); font: inherit; font-size: 11.5px; }
+.cut-as-model:focus { outline: none; border-color: var(--blue6); }
+.cut-as-model:disabled { opacity: .6; }
 
 .cut-as-form { flex: none; display: grid; grid-template-columns: 1fr auto; gap: 4px 6px; padding: 6px 8px 8px; border-top: 1px solid var(--gray4); }
 .cut-as-input { box-sizing: border-box; width: 100%; min-height: 44px; max-height: 140px; resize: none; padding: 6px 8px; border: 1px solid var(--gray5); border-radius: 6px;

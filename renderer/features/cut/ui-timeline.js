@@ -220,7 +220,7 @@
     colors = {
       bg: v('--gray1', '#1e1f22'), row: v('--gray2', '#2b2d30'), rowAlt: v('--gray1', '#1e1f22'), line: v('--gray3', '#393b40'),
       text: v('--gray11', '#ced0d6'), dim: v('--gray8', '#868a91'), faint: v('--gray5', '#4e5157'),
-      video: v('--cut-clip-video', '#2f4a78'), audio: v('--cut-clip-audio', '#2c6152'), textClip: v('--cut-clip-text', '#7a4bb0'),
+      video: v('--cut-clip-video', '#2f4a78'), audio: v('--cut-clip-audio', '#2c6152'), textClip: v('--cut-clip-text', '#7a4bb0'), graphicClip: v('--cut-clip-graphic', '#a24f86'),
       solid: v('--cut-clip-solid', '#6b5a2a'), nest: v('--cut-clip-nest', '#4f7a2e'), selected: v('--cut-selected', '#f2c55c'), playhead: v('--cut-playhead', '#e05555'),
       accent: v('--cut-accent', '#e8743b'), offline: '#a03030', inout: 'rgba(84, 138, 247, 0.16)', guide: '#4fc3f7',
       light: document.documentElement.dataset.theme === 'light',
@@ -723,6 +723,7 @@
     const clipColor = (c, kind) => {
       if (c.label && LABELS[c.label]) return LABELS[c.label];
       if (c.source?.generator === 'text') return colors.textClip;
+      if (c.source?.generator === 'graphic') return colors.graphicClip;
       if (c.source?.generator) return colors.solid;
       if (model.isNest(c)) return colors.nest;
       return kind === 'audio' ? colors.audio : colors.video;

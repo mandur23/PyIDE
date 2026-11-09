@@ -215,13 +215,13 @@ const clip = (id = vid) => seqOf().clips.find((c) => c.id === id);
 
   // ---- save and open, migrate, validate ----
   const back = model.migrate(h.serialize());
-  check(back.version === 4 && model.VERSION === 4 && model.validate(back).ok && S(back.sequences[0].clips.find((c) => c.id === vid).masks) === S(clip().masks) && S(back.sequences[0].clips.find((c) => c.id === vid).keyframes) === S(clip().keyframes), 'a project with masks saves and opens as it was (format version 4)');
-  check(code(() => model.migrate({ format: 'ncut', version: 5 })) === 'newer', 'a version 5 file is refused as newer');
+  check(back.version === model.VERSION && model.VERSION >= 4 && model.validate(back).ok && S(back.sequences[0].clips.find((c) => c.id === vid).masks) === S(clip().masks) && S(back.sequences[0].clips.find((c) => c.id === vid).keyframes) === S(clip().keyframes), 'a project with masks saves and opens as it was (the current format version)');
+  check(code(() => model.migrate({ format: 'ncut', version: model.VERSION + 1 })) === 'newer', 'a file of a newer version is refused as newer');
   const v3 = JSON.parse(h.serialize());
   v3.version = 3;
   for (const s of v3.sequences) for (const c of s.clips) { delete c.masks; for (const e of c.effects) delete e.masks; for (const p of Object.keys(c.keyframes)) if (p.includes('masks.')) delete c.keyframes[p]; }
   const m3 = model.migrate(v3);
-  check(model.validate(m3).ok && m3.version === 4 && m3.sequences[0].clips.every((c) => c.masks === undefined), 'a version 3 file opens with no masks');
+  check(model.validate(m3).ok && m3.version === model.VERSION && m3.sequences[0].clips.every((c) => c.masks === undefined), 'a version 3 file opens with no masks');
   const bad = JSON.parse(h.serialize());
   const bc = bad.sequences[0].clips.find((c) => c.id === vid);
   bc.masks[0].path = [0.1, 0.2];

@@ -152,8 +152,17 @@ async function agent() {
     emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } });
     emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
   };
-  // one tool call: the tool_use, the call, the tool_result -> {ok, text, value, image}
+  // one tool call: the tool_use, the call, the tool_result -> {ok, text, value, image}. A call still running
+  // ({running: true, job}) is waited for with wait_job, as the instructions say, until its own answer comes.
   async function use(name, input) {
+    let r = await use1(name, input);
+    for (let i = 0; i < 400 && r.ok && r.value?.running === true; i++) {
+      note({ running: r.value });
+      r = await use1('wait_job', { job: r.value.job });
+    }
+    return r;
+  }
+  async function use1(name, input) {
     const id = `toolu_${++n}`;
     emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: `mcp__cut__${name}`, input }] } });
     const r = await rpc('tools/call', { name, arguments: input });
@@ -168,7 +177,10 @@ async function agent() {
   }
   const finish = (text) => {
     say(text);
-    emit({ type: 'result', subtype: 'success', is_error: false, result: text, num_turns: n + 1 });
+    // the usage fields of the real CLI's result line; the model's id from --model
+    const model = args[args.indexOf('--model') + 1] || 'sonnet';
+    emit({ type: 'result', subtype: 'success', is_error: false, result: text, num_turns: n + 1, duration_ms: 2400, total_cost_usd: 0.0421,
+      usage: { input_tokens: 1200, cache_creation_input_tokens: 3000, cache_read_input_tokens: 8100, output_tokens: 450 }, modelUsage: { [`claude-${model}-fake`]: {} } });
   };
   const seq = (await use('get_sequence', {})).value;
   // verify/cut-ai-tools.mjs: the keyboard's actions, the editing tools, import, automation
@@ -183,6 +195,18 @@ async function agent() {
       await use('run_action', { id: 'addMarker', time: 2 }),
     ];
     return finish(`${steps.filter((s) => s.ok).length}개를 했고 ${steps.filter((s) => !s.ok).length}개는 하지 못했어요.`);
+  }
+  if (/그래픽/.test(request)) {
+    // a red box, a green ring that draws itself over 2 s, a counter (the 320x180 sequence of cut-ai-tools.mjs)
+    const g = await use('add_graphic', { at: 0, duration: 3, name: '차트', layers: [
+      { id: 'box', kind: 'rect', size: [80, 80], fill: '#ff0000', position: [-100, 0] },
+      { id: 'ring', kind: 'ellipse', size: [80, 80], fill: null, stroke: '#00ff00', strokeWidth: 14, cap: 'butt', trimEnd: 0, position: [90, 0] },
+      { id: 'n', kind: 'text', text: '{value}', fontSize: 30, position: [0, -60] },
+    ] });
+    const k1 = await use('set_keyframes', { clip_id: g.value?.clip, property: 'layers.ring.trimEnd', keyframes: [{ time: 0, value: 0 }, { time: 2, value: 100 }] });
+    const k2 = await use('set_keyframes', { clip_id: g.value?.clip, property: 'layers.n.value', keyframes: [{ time: 0, value: 0 }, { time: 2, value: 100 }] });
+    const f = await use('get_frame', { time: 2.5 });
+    return finish(g.ok && k1.ok && k2.ok && f.ok && f.image ? '그래픽을 넣고 원이 그려지게 했어요.' : `하지 못했어요: ${[g, k1, k2, f].filter((x) => !x.ok).map((x) => x.text).join(' / ')}`);
   }
   if (/효과 편집/.test(request)) {
     const video = seq.clips.find((c) => c.track === 'V1');

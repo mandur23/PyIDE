@@ -810,7 +810,7 @@ await section('server', async () => {
     r = await post(url, { jsonrpc: '2.0', method: 'notifications/initialized' }, auth);
     check(r.status === 202, 'a notification: 202');
     r = await post(url, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, auth);
-    check(r.json.result.tools.length === K.TOOLS.length && r.json.result.tools.every((t) => t.inputSchema?.type === 'object'), 'tools/list: every tool with its schema');
+    check(r.json.result.tools.length === K.TOOLS.length + 1 && r.json.result.tools.every((t) => t.inputSchema?.type === 'object'), 'tools/list: every tool with its schema');
     r = await post(url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'delete_range', arguments: { from: 0, to: 2 } } }, auth);
     check(r.json.result.isError === false && page.at(-1).client.kind === 'chat' && page.at(-1).client.turn === 'turn1' && x.on('V1')[0] && model.clipEnd(x.on('V1')[0]) === 8 * T, 'a call goes to the page with who called (this turn), runs there and answers');
     r = await post(url, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'delete_clips', arguments: { clip_ids: ['c999'] } } }, auth);
@@ -866,6 +866,196 @@ await section('server', async () => {
   }
 });
 
+// ---------- graphic clips (graphic.js, control-graphic.js) ----------
+await section('graphic', async () => {
+  const graphic = require('../renderer/features/cut/graphic.js');
+  const x = fresh();
+  const call = (name, args) => K.call(name, args, x.env);
+  const LAYERS = [
+    { id: 'bg', kind: 'rect', size: [500, 120], radius: 16, fill: '#102040cc', position: [0, 120] },
+    { id: 'grp', kind: 'group', position: [-200, 0] },
+    { id: 'bar', kind: 'rect', parent: 'grp', size: [80, 200], fill: '#ff8800', anchor: [0, 100], repeatCount: 4, repeatOffset: [110, 0] },
+    { id: 'wave', kind: 'path', d: 'M -250 0 C -150 -80 -50 80 50 0 S 200 -60 250 0', stroke: '#ffffff', strokeWidth: 6, trimEnd: 0 },
+    { id: 'num', kind: 'text', text: '{value}%', value: 0, fontSize: 64, position: [0, 120] },
+    { id: 'spark', kind: 'particles', count: 40, emitter: [600, 0], direction: 180, spread: 30, speed: 120, gravity: [0, 80], life: 1.5, fill: '#ffee88', fillEnd: '#ff4400' },
+    { kind: 'star', points: 5, radius: 40, innerRadius: 18, fill: '#ffd700', position: [260, -120] },
+  ];
+  const before = x.h.serialize();
+  let r = await call('add_graphic', { at: 1, duration: 3, name: 'Chart', layers: LAYERS });
+  const gid = r.value?.clip;
+  const clip = () => x.seq().clips.find((c) => c.id === gid);
+  check(r.ok && clip()?.source.generator === 'graphic' && S(r.value.layers) === S(['bg', 'grp', 'bar', 'wave', 'num', 'spark', 'g1']) && model.validate(x.app.project).ok, `add_graphic: a graphic clip with the layers in order; an id is given where none was (${S(r.value?.layers || r.error)})`);
+  check(x.h.list().filter((s) => s.done).at(-1).label === 'Add Graphic' && secs(clip()).join() === '1,4', 'one undo step, 1 s to 4 s on a free track');
+  const id = gid;
+  const refusals = [
+    [{ kind: 'path', d: 'M0 0 A 5 5 0 0 1 10 10' }, /arcs/],
+    [{ kind: 'rect', d: 'M0 0' }, /\(rect\) has no field d/],
+    [{ kind: 'ellipse', parent: 'nope' }, /parent nope must be a group earlier/],
+    [{ kind: 'rect', fill: 'red' }, /fill must be a color/],
+    [{ kind: 'line', strokeWidth: -1 }, /strokeWidth must be a number from 0/],
+  ];
+  for (const [layer, re] of refusals) {
+    r = await call('add_graphic', { at: 0, layers: [layer] });
+    check(!r.ok && re.test(r.error), `refused: ${S(layer)} (${r.error})`);
+  }
+  check(x.h.list().filter((s) => s.done).length === JSON.parse(before).done?.length || x.seq().clips.filter((c) => c.source?.generator === 'graphic').length === 1, 'a refused graphic adds nothing');
+
+  r = await call('get_clip', { clip_id: id });
+  const bar = r.value.layers.find((l) => l.id === 'bar');
+  check(r.ok && r.value.layers.length === 7 && bar.parent === 'grp' && bar.repeatCount === 4 && bar.cap === undefined, `get_clip shows each layer's fields that differ from the defaults (${S(bar)})`);
+
+  r = await call('set_keyframes', { clip_id: id, property: 'layers.wave.trimEnd', keyframes: [{ time: 1, value: 0, ease: 'easeOut' }, { time: 3, value: 100 }] });
+  check(r.ok, `set_keyframes animates a graphic layer's field (${r.error || ''})`);
+  r = await call('set_keyframes', { clip_id: id, property: 'layers.num.value', keyframes: [{ time: 1, value: 0 }, { time: 2, value: 75 }] });
+  check(r.ok, 'a counter: value keyframed');
+  r = await call('set_keyframes', { clip_id: id, property: 'layers.bg.fill', keyframes: [{ time: 1, value: '#000000' }, { time: 2, value: '#ffffff' }] });
+  check(r.ok, 'a color field animates');
+  r = await call('set_keyframes', { clip_id: id, property: 'layers.wave.d', keyframes: [{ time: 1, value: 'M0 0' }] });
+  check(!r.ok && /path layer animates .*trimEnd.*; not d/.test(r.error), `a field that cannot animate is refused with the ones that can (${r.error})`);
+  r = await call('set_keyframes', { clip_id: id, property: 'layers.bg.opacity', keyframes: [{ time: 1, value: 150 }] });
+  check(!r.ok && /0 to 100/.test(r.error), `a keyframe value out of range is refused (${r.error})`);
+  const at = (sec) => clip().source.layers.map((l) => graphic.resolve(l, clip(), (sec - 1) * T));
+  const mid = at(2);
+  check(Math.abs(mid.find((l) => l.id === 'num').value - 75) < 1e-9 && mid.find((l) => l.id === 'bg').fill === '#ffffffff' && at(1.5).find((l) => l.id === 'num').value === 37.5, 'resolve: the keyframed values at a time (75 at 2 s, 37.5 at 1.5 s, the color at its end)');
+  const trim = mid.find((l) => l.id === 'wave').trimEnd;
+  check(trim > 50 && trim < 100, `easeOut: the line is past half drawn at the middle (${trim.toFixed(1)}%)`);
+
+  // drawing, with a context that records what is drawn
+  const rec = () => {
+    const ops = [];
+    const g = new Proxy({ __alpha: 1 }, {
+      get: (o, k) => (k in o ? o[k] : typeof k === 'string' && /^(create\w+Gradient)$/.test(k) ? () => ({ addColorStop: () => {} }) : (...args) => { ops.push([k, ...args.map((v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v))]); }),
+      set: (o, k, v) => { o[k] = v; ops.push([`=${String(k)}`, v]); return true; },
+    });
+    return { g, ops };
+  };
+  const drawAt = (sec) => { const { g, ops } = rec(); graphic.draw(g, at(sec), { w: 640, h: 360, scale: 1, t: sec - 1 }); return ops; };
+  const o1 = drawAt(1);
+  const o2 = drawAt(2.5);
+  check(o1.filter((o) => o[0] === 'fill').length >= 5 && o1.filter((o) => o[0] === 'fillText').length === 1, `every kind draws (fills ${o1.filter((o) => o[0] === 'fill').length}, text 1)`);
+  check(!o1.some((o) => o[0] === 'stroke') && o2.some((o) => o[0] === 'stroke'), 'the wave is not drawn at trimEnd 0, and is once it grows');
+  check(o1.filter((o) => o[0] === 'fillText').every((o) => o[1] === '0%') && drawAt(2).find((o) => o[0] === 'fillText')[1] === '75%', 'the counter shows its value: 0% then 75%');
+  check(S(drawAt(2.2)) === S(drawAt(2.2)) && S(drawAt(2.2)) !== S(drawAt(2.3)), 'particles: the same frame draws the same, the next frame moves');
+  check(o1.filter((o) => o[0] === 'fillRect' || (o[0] === 'fill')).length > 0 && o1.filter((o) => o[0] === 'translate').length >= 4 + 3, 'the repeated bars are drawn as copies (moved each time)');
+
+  // set_graphic
+  const steps = () => x.h.list().filter((s) => s.done).length;
+  let n0 = steps();
+  r = await call('set_graphic', { clip_id: id, update: [{ id: 'bar', fill: '#00aaff', repeatCount: 6 }], add: [{ id: 'dot', kind: 'ellipse', size: [20, 20], after: 'bg' }], remove: ['wave'] });
+  const ids = clip().source.layers.map((l) => l.id);
+  check(r.ok && S(ids) === S(['bg', 'dot', 'grp', 'bar', 'num', 'spark', 'g1']) && clip().source.layers.find((l) => l.id === 'bar').repeatCount === 6 && steps() === n0 + 1, `set_graphic: update, add after a layer, remove, as one step (${S(ids)}${r.error || ''})`);
+  check(!Object.keys(clip().keyframes).some((k) => k.startsWith('layers.wave.')) && !!clip().keyframes['layers.num.value'], 'a removed layer\'s keyframes go with it; the others stay');
+  r = await call('set_graphic', { clip_id: id, update: [{ id: 'bar', kind: 'ellipse' }] });
+  check(!r.ok && /keeps its kind/.test(r.error), 'a layer keeps its kind');
+  r = await call('set_graphic', { clip_id: id, remove: ['grp'] });
+  check(!r.ok && /parent grp must be a group earlier/.test(r.error), `a group with children is not removed alone (${r.error})`);
+  r = await call('set_graphic', { clip_id: id, layers: [{ id: 'only', kind: 'ellipse', size: [100, 100] }] });
+  check(r.ok && S(clip().source.layers.map((l) => l.id)) === S(['only']) && Object.keys(clip().keyframes).every((k) => !k.startsWith('layers.')), 'layers replaces them all (and the old layers\' keyframes)');
+  r = await call('set_graphic', { clip_id: x.seq().clips.find((c) => c.source?.generator === 'text').id, update: [{ id: 'x' }] });
+  check(!r.ok && /not a graphic clip/.test(r.error), 'set_graphic on another clip is refused');
+  x.h.undo(); x.h.undo();
+  check(S(clip().source.layers.map((l) => l.id)) === S(['bg', 'grp', 'bar', 'wave', 'num', 'spark', 'g1']) && !!clip().keyframes['layers.wave.trimEnd'], 'undo brings the layers and keyframes back');
+
+  // saved and opened
+  const saved = JSON.parse(JSON.stringify(x.app.project));
+  const back = model.migrate(saved);
+  check(back.version === 5 && model.validate(back).ok && S(back.sequences[0].clips.find((c) => c.id === id).source) === S(clip().source), 'a project with a graphic saves and opens as it was (format version 5)');
+  const broken = JSON.parse(JSON.stringify(saved));
+  broken.sequences[0].clips.find((c) => c.id === id).source.layers[0].kind = 'blob';
+  check(!model.validate(broken).ok && model.validate(broken).errors.some((e) => /graphic layers\[0\]\.kind/.test(e)), 'a damaged graphic fails the project check');
+  check(graphic.parsePath('m 0 0 l 10 0 l 0 10 z').subpaths[0].closed && graphic.parsePath('M 0 0 X 1').error !== '', 'path data: relative commands and Z parse; junk is refused');
+
+  // the review's cases
+  r = await call('set_graphic', { clip_id: id, remove: ['grp', 'bar'] });
+  check(r.ok && !clip().source.layers.some((l) => l.id === 'grp' || l.id === 'bar'), `a group goes with its children in one call (${r.error || ''})`);
+  r = await call('set_graphic', { clip_id: id, add: [{ id: 'g2', kind: 'group', after: 'bg' }], update: [{ id: 'num', parent: 'g2' }] });
+  check(r.ok && clip().source.layers.find((l) => l.id === 'num').parent === 'g2', `a layer moves into a group added in the same call (${r.error || ''})`);
+  check(x.h.list().filter((s) => s.done).at(-1).label === 'Edit Graphic', 'set_graphic is one step named Edit Graphic');
+  await call('set_keyframes', { clip_id: id, property: 'layers.g1.rotation', keyframes: [{ time: 1, value: 0 }, { time: 2, value: 90 }] });
+  r = await call('set_graphic', { clip_id: id, layers: [{ kind: 'star' }, { kind: 'rect' }] });
+  check(r.ok && !r.value.layers.includes('g1') && !Object.keys(clip().keyframes).some((k) => k.startsWith('layers.')), `new layers without ids never take the old ids and their keyframes (${S(r.value?.layers)})`);
+  r = await call('add_graphic', { at: 0, layers: [{ kind: 'particles', count: 2000, repeatCount: 20 }] });
+  check(!r.ok && /at most 20000/.test(r.error), `per-frame work is bounded (${r.error})`);
+  r = await call('add_graphic', { at: 0, layers: [{ kind: 'group', blur: 4 }] });
+  check(!r.ok && /\(group\) has no field blur/.test(r.error), 'a group has no blend, blur or shadow of its own');
+  const ops = (layers, t = 0) => { const o = []; const g = new Proxy({ __alpha: 1 }, { get: (q, k) => (k in q ? q[k] : (...a) => o.push([k, ...a])), set: (q, k, v) => { q[k] = v; o.push([`=${String(k)}`, v]); return true; } }); graphic.draw(g, layers.map((l) => graphic.normalize(l)), { w: 640, h: 360, scale: 1, t }); return o; };
+  const lineOps = ops([{ id: 'l', kind: 'line', shadowColor: '#000000', shadowBlur: 6 }]);
+  check(lineOps.filter((o) => o[0] === '=shadowColor').at(-1)[1] === '#000000' && lineOps.some((o) => o[0] === 'stroke'), 'a line casts its shadow');
+  const sparks = ops([{ id: 'p', kind: 'particles', count: 1, emit: 'burst', life: 2, fill: '#ffffff', fillEnd: '#ff440000', speedVariation: 0 }], 1);
+  check(sparks.filter((o) => o[0] === '=fillStyle').at(-1)[1] === '#ffa28080', `particle colors with and without alpha blend (${sparks.filter((o) => o[0] === '=fillStyle').at(-1)[1]})`);
+  const wrap = graphic.strokeRuns({ trimStart: 0, trimEnd: 50, trimOffset: 75 }, graphic.outline(graphic.normalize({ kind: 'rect', size: [100, 100] }), 1));
+  check(wrap.length === 1 && wrap[0].pts.some((p) => p[0] === -50 && p[1] === -50), `a trim through the outline's start is one run (its corner keeps the join) (${wrap.length} runs)`);
+  check(!graphic.hasParticles([graphic.normalize({ kind: 'particles', emit: 'burst', life: 1 })], 2) && graphic.hasParticles([graphic.normalize({ kind: 'particles' })], 2), 'a finished burst stops redrawing every frame; a stream does not');
+  const over = graphic.resolve({ id: 'o', kind: 'rect', opacity: 50 }, { keyframes: { 'layers.o.opacity': [{ t: 0, v: 50, ease: 'bezier', h: [0.3, 1.8, 0.6, 1.4] }, { t: T, v: 100 }] } }, T / 2);
+  check(over.opacity === 100, `an ease that overshoots stops at the range's edge (${over.opacity})`);
+});
+
+// ---------- long calls: jobs and wait_job ----------
+await section('jobs', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cut-control-'));
+  const control = createControl({ configFile: path.join(dir, 'cut-control.json'), holdMs: 300 });
+  try {
+    const port = await control.start();
+    control.setTools(K.definitions(), K.INSTRUCTIONS);
+    // the page: get_state answers at once; automation runs 1.2 s and reports progress every 200 ms
+    const page = [];
+    control.setTarget((channel, call) => {
+      page.push(call);
+      if (call.name !== 'automation') { setTimeout(() => control.answer({ id: call.id, result: { content: [{ type: 'text', text: '{"ok":1}' }] } }), 5); return true; }
+      let k = 0;
+      const tick = setInterval(() => {
+        k++;
+        control.progress({ id: call.id, fraction: k / 6, text: `step ${k}` });
+        if (k === 6) { clearInterval(tick); control.answer({ id: call.id, result: { content: [{ type: 'text', text: '{"captions":12}' }] } }); }
+      }, 200);
+      return true;
+    });
+    const url = `http://127.0.0.1:${port}/mcp`;
+    const callAs = (tok) => (id, name, args = {}) => post(url, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }, { Authorization: `Bearer ${tok}` });
+    const chat = control.issue('turnA', 7);
+    const call = callAs(chat);
+    const list = await post(url, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { Authorization: `Bearer ${chat}` });
+    const wait = list.json.result.tools.find((t) => t.name === 'wait_job');
+    check(list.json.result.tools.length === K.TOOLS.length + 1 && list.json.result.tools.at(-1) === wait && /wait/i.test(wait.description) && wait.inputSchema.required[0] === 'job', 'tools/list ends with wait_job');
+    check(control.toolNames().includes('wait_job'), 'wait_job is among the names the agent allows');
+    let t0 = Date.now();
+    let r = await call(2, 'get_state');
+    check(r.json.result.content[0].text === '{"ok":1}' && Date.now() - t0 < 300, 'a quick call answers itself, as before');
+    t0 = Date.now();
+    r = await call(3, 'automation', { action: 'transcribe' });
+    const run = JSON.parse(r.json.result.content[0].text);
+    check(r.json.result.isError === false && run.running === true && /^job\d+$/.test(run.job) && run.tool === 'automation' && Date.now() - t0 < 700, `a long call answers within the hold that it still runs (${S(run)})`);
+    check(/wait_job/.test(run.note) && /Do not start automation again/.test(run.note), 'and says to wait with wait_job, not to start it again');
+    r = await call(4, 'get_state');
+    check(r.json.result.isError === true && new RegExp(`${run.job} \\(automation\\) is still running`).test(r.json.result.content[0].text) && page.filter((c) => c.name === 'get_state').length === 1, `another call meanwhile is refused and never reaches the page (${r.json.result.content[0].text})`);
+    const other = control.issue('turnB', 7);
+    r = await callAs(other)(5, 'wait_job', { job: run.job });
+    check(r.json.result.isError === true && /no running job/.test(r.json.result.content[0].text), 'another turn cannot wait for this turn\'s job');
+    r = await call(6, 'wait_job', { job: run.job });
+    const mid = JSON.parse(r.json.result.content[0].text);
+    check(mid.running === true && mid.job === run.job && mid.progress > 0 && mid.progress < 1 && /^step \d$/.test(mid.step) && mid.elapsed_s >= 0, `wait_job while it runs: the progress and the step (${S(mid)})`);
+    let last = mid;
+    for (let i = 0; i < 10 && last.running; i++) {
+      r = await call(7 + i, 'wait_job', { job: run.job });
+      try { last = JSON.parse(r.json.result.content[0].text); } catch { last = { text: r.json.result.content[0].text }; }
+    }
+    check(last.captions === 12 && r.json.result.isError === false, `wait_job ends with the tool's own answer (${S(last)})`);
+    r = await call(20, 'wait_job', { job: run.job });
+    check(r.json.result.isError === true && /given already/.test(r.json.result.content[0].text), 'a job\'s answer is handed over once');
+    r = await call(21, 'get_state');
+    check(r.json.result.isError === false && control.stats().jobs === 0, 'after the job other calls run again');
+    // a turn that ends drops its job; a refused long call is a refusal, not a job
+    r = await call(22, 'automation', { action: 'transcribe' });
+    check(JSON.parse(r.json.result.content[0].text).running === true && control.stats().jobs === 1, 'a second long call is a job');
+    control.revoke(chat);
+    check(control.stats().jobs === 0, 'the turn\'s end drops its job');
+    await sleep(1400);
+  } finally {
+    control.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------- the agent with the scripted fake CLI ----------
 await section('agent', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cut-agent-'));
@@ -901,7 +1091,7 @@ await section('agent', async () => {
     const log = readFileSync(path.join(dir, 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.agent);
     const args = log.find((l) => l.start).args;
     const allowed = args[args.indexOf('--allowedTools') + 1].split(',');
-    check(allowed.length === K.TOOLS.length && allowed.every((a) => /^mcp__cut__[a-z_]+$/.test(a)), 'only the Cut tools are allowed (mcp__cut__<name>)');
+    check(allowed.length === K.TOOLS.length + 1 && allowed.includes('mcp__cut__wait_job') && allowed.every((a) => /^mcp__cut__[a-z_]+$/.test(a)), 'only the Cut tools and wait_job are allowed (mcp__cut__<name>)');
     check(args[args.indexOf('--tools') + 1] === '' && args.includes('--strict-mcp-config') && args[args.indexOf('--permission-mode') + 1] === 'dontAsk' && !args.some((a) => /Bash|Write|Edit|WebFetch|Read\b/.test(a)), 'no built-in tool, only this MCP server, nothing asked or allowed beyond');
     check(args.includes('--no-session-persistence') && args.includes('--system-prompt-file') && log.find((l) => l.start).system === sys && log.find((l) => l.start).env.mds === '1', 'no session file, our system prompt, no CLAUDE.md');
     const cfgFile = args[args.indexOf('--mcp-config') + 1];
@@ -972,8 +1162,8 @@ await section('page', async () => {
   const dir = new URL('../renderer/features/cut/', import.meta.url);
   const order = readFileSync(new URL('index.js', dir), 'utf8').match(/'[a-z0-9-]+\.js'/g).map((x) => x.slice(1, -1));
   check(order.indexOf('control.js') > order.indexOf('ai.js') && order.indexOf('control.js') > order.indexOf('commands.js') && order.indexOf('ui-assistant.js') > order.indexOf('ui-ai.js') && order.indexOf('ui-assistant.js') < order.indexOf('ui-settings.js'), 'index.js loads control.js after ai.js, ui-assistant.js after ui-ai.js and before the settings page');
-  check(['control-project.js', 'control-auto.js', 'control-actions.js'].every((x) => order.indexOf(x) > order.indexOf('control.js')) && order.indexOf('ui-control.js') < order.indexOf('ui-assistant.js') && order.indexOf('presets.js') < order.indexOf('control.js'), 'index.js loads the tool files after control.js, presets.js before it, ui-control.js before ui-assistant.js');
-  const mine = ['time.js', 'state.js', 'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'commands.js', 'lumetri.js', 'effects.js', 'textrender.js', 'presets.js', 'audiofx.js', 'analyze.js', 'speech.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-actions.js'];
+  check(['control-project.js', 'control-auto.js', 'control-graphic.js', 'control-actions.js'].every((x) => order.indexOf(x) > order.indexOf('control.js')) && order.indexOf('ui-control.js') < order.indexOf('ui-assistant.js') && order.indexOf('presets.js') < order.indexOf('control.js'), 'index.js loads the tool files after control.js, presets.js before it, ui-control.js before ui-assistant.js');
+  const mine = ['time.js', 'state.js', 'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'graphic.js', 'commands.js', 'lumetri.js', 'effects.js', 'textrender.js', 'presets.js', 'audiofx.js', 'analyze.js', 'speech.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-graphic.js', 'control-actions.js'];
   for (const file of order.filter((x) => mine.includes(x))) vm.runInContext(readFileSync(new URL(file, dir), 'utf8'), page, { filename: file });
   const out = await vm.runInContext(`(async () => {
     const p = Cut.model.createProject({ sequence: { fps: [30, 1], w: 320, h: 180 } });

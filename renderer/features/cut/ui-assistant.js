@@ -95,8 +95,15 @@
     else {
       const ctl = new AbortController();
       calling = { client, ctl };
-      // a long job's progress shows on its step in the chat
-      const progress = (fraction, text) => tell({ type: 'progress', turn: client?.kind === 'chat' ? client.turn : null, name, fraction, text: text || '' });
+      // a long job's progress shows on its step in the chat and goes to main, which tells the AI (wait_job)
+      let sent = 0;
+      const progress = (fraction, text) => {
+        tell({ type: 'progress', turn: client?.kind === 'chat' ? client.turn : null, name, fraction, text: text || '' });
+        const t = performance.now();
+        if (t - sent < 250 && fraction < 1) return;
+        sent = t;
+        ide.api.send('cut:controlProgress', { id, fraction, text: text || '' });
+      };
       const env = { app, services, undoFloor: client?.kind === 'chat' ? turn.floor : null, signal: ctl.signal, progress };
       try { r = await K.call(name, args, env); } finally { calling = null; }
       if (r.ok && r.edit && !(client?.kind === 'chat' && (turn?.id !== client.turn || turn?.stopped))) land(r.edit);
@@ -192,6 +199,18 @@
         buttons: [{ label: tr('Continue'), primary: true, run: () => { ok = true; ide.settings.set('cut.assistant.acknowledged', true); } }, { label: tr('Cancel') }] });
     });
   }
+  // the usage of this project's conversation so far: {turns, input, output, costUsd}
+  function total() {
+    const t = { turns: 0, input: 0, output: 0, costUsd: 0 };
+    for (const { usage: u } of conversation) {
+      if (!u) continue;
+      t.turns++;
+      t.input += u.input + u.cacheRead + u.cacheWrite;
+      t.output += u.output;
+      t.costUsd += u.costUsd || 0;
+    }
+    return t;
+  }
   const labelOf = (request) => { const s = String(request).replace(/\s+/g, ' ').trim(); return [...s].length > 60 ? `${[...s].slice(0, 59).join('')}…` : s; };
 
   async function ask(request) {
@@ -203,10 +222,11 @@
     if (conversationOf !== app.history) { conversation.length = 0; conversationOf = app.history; }
     turn = { id: `turn${++turnSeq}`, request, floor: app.history.position, history: app.history, answer: '' };
     const my = turn;
-    tell({ type: 'start', turn: my.id, request });
+    const model = ui.ai?.model?.() || 'sonnet';
+    tell({ type: 'start', turn: my.id, request, model });
     let r;
     try {
-      r = await invoke('cut:agentRun', { turn: my.id, system: SYSTEM, prompt: await prompt(request), model: ui.ai?.model?.() || 'sonnet' });
+      r = await invoke('cut:agentRun', { turn: my.id, system: SYSTEM, prompt: await prompt(request), model });
     } catch (err) {
       r = { ok: false, code: 'cli', error: err?.message || String(err) };
     }
@@ -215,8 +235,9 @@
     if (turn === my) turn = null;
     const steps = my.history === app.history ? app.history.position - my.floor : 0;
     if (steps > 0) app.history.squash(my.floor, labelOf(request));
-    conversation.push({ request, answer: r?.ok ? r.text : '' });
-    tell({ type: 'end', turn: my.id, ok: !!r?.ok, code: r?.code || null, error: r?.error || '', text: r?.text || my.answer, steps });
+    const usage = r?.usage || null;
+    conversation.push({ request, answer: r?.ok ? r.text : '', usage });
+    tell({ type: 'end', turn: my.id, ok: !!r?.ok, code: r?.code || null, error: r?.error || '', text: r?.text || my.answer, steps, usage, total: total() });
     if (!r?.ok && (r?.code === 'not-installed' || r?.code === 'auth' || r?.code === 'quota')) ui.ai?.explain?.(r.code, r.code === 'quota' ? r.error : '');
     return r;
   }
@@ -238,6 +259,27 @@
 
   // ---------- the panel ----------
   const EXAMPLES = ['Cut the first 3 seconds and add a title', 'Make the music 6 dB quieter', 'Add a chapter marker at every scene'];
+  const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' };
+  const MODEL_NOTES = { haiku: 'Fastest, uses the least', sonnet: 'Balanced', opus: 'Most capable, slowest, uses the most' };
+  const tokens = (n) => (n < 1000 ? String(n) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : n < 1e6 ? `${Math.round(n / 1000)}k` : `${(n / 1e6).toFixed(1)}M`);
+  const dollars = (v) => (v < 0.001 ? '<$0.001' : `$${v.toFixed(v < 0.1 ? 3 : 2)}`);
+  // "Sonnet · 12.3k in · 450 out · 17 s · ≈$0.042", its tooltip the details and the conversation's total
+  function usageLine(u, t) {
+    const input = u.input + u.cacheRead + u.cacheWrite;
+    const parts = [MODEL_NAMES[u.model] || u.model, tr('{n} in', { n: tokens(input) }), tr('{n} out', { n: tokens(u.output) })];
+    if (u.durationMs) parts.push(tr('{n} s', { n: Math.max(1, Math.round(u.durationMs / 1000)) }));
+    if (u.costUsd !== null) parts.push(`≈${dollars(u.costUsd)}`);
+    const tip = [
+      tr('Tokens in: {n} (new {a}, read from the cache {b}, written to the cache {c})', { n: input.toLocaleString(), a: u.input.toLocaleString(), b: u.cacheRead.toLocaleString(), c: u.cacheWrite.toLocaleString() }),
+      tr('Tokens out: {n}', { n: u.output.toLocaleString() }),
+      u.turns ? tr('Claude\'s steps: {n}', { n: u.turns }) : '',
+      u.costUsd !== null ? tr('≈{cost}: Claude Code\'s estimate at API prices. On a Claude subscription it is not charged; it counts toward the plan\'s usage limit.', { cost: dollars(u.costUsd) }) : '',
+      t?.turns > 1 ? tr('This conversation: {n} requests, {i} in, {o} out, ≈{cost}', { n: t.turns, i: tokens(t.input), o: tokens(t.output), cost: dollars(t.costUsd) }) : '',
+    ].filter(Boolean).join('\n');
+    const line = el('div', 'cut-as-usage', parts.join(' · '));
+    line.title = tip;
+    return line;
+  }
   function mount(root, app) {
     root.classList.add('cut-assistant');
     const logBox = el('div', 'cut-as-log', undefined, { role: 'log', 'aria-live': 'polite' });
@@ -257,8 +299,25 @@
     const stopBtn = button({ label: tr('Stop'), cls: 'cut-as-stop', onClick: () => stop() });
     stopBtn.hidden = true;
     const status = el('div', 'cut-as-status');
+    // the model of the AI assistant and of Cut's other Claude features (the cut.ai.model setting)
+    const modelSel = el('select', 'cut-as-model', undefined, { 'aria-label': tr('Claude model') });
+    for (const [id, name] of Object.entries(MODEL_NAMES)) {
+      const o = el('option', '', name);
+      o.value = id;
+      o.title = tr(MODEL_NOTES[id]);
+      modelSel.appendChild(o);
+    }
+    const showModel = () => {
+      const m = ui.ai?.model?.() || 'sonnet';
+      modelSel.value = m;
+      modelSel.title = `${tr('Claude model')}: ${MODEL_NAMES[m] || m} (${tr(MODEL_NOTES[m] || '')})`;
+    };
+    showModel();
+    modelSel.addEventListener('change', () => { ide.settings.set('cut.ai.model', modelSel.value); showModel(); });
+    modelSel.addEventListener('keydown', (e) => e.stopPropagation());
+    const unwatch = ide.on('settingsChanged', (k) => { if (k === 'cut.ai.model') showModel(); });
     form.append(input, el('div', 'cut-as-actions', undefined), status);
-    form.querySelector('.cut-as-actions').append(sendBtn, stopBtn);
+    form.querySelector('.cut-as-actions').append(modelSel, sendBtn, stopBtn);
     root.append(logBox, form);
 
     const fit = () => { input.style.height = 'auto'; input.style.height = `${Math.min(140, Math.max(44, input.scrollHeight))}px`; };
@@ -275,6 +334,8 @@
       ask(text);
     }
     const scroll = () => { logBox.scrollTop = logBox.scrollHeight; };
+    // a call's answer that it still runs (main/cut/control.js): {running: true, job, ...}
+    const runningOf = (text) => { try { const v = JSON.parse(text); return v?.running === true && typeof v.job === 'string' ? v : null; } catch { return null; } };
     let current = null; // {box, text, steps, byId}
     let externalBox = null;
     function bubble(kind, text) {
@@ -304,6 +365,7 @@
     const working = (on) => {
       sendBtn.hidden = on;
       stopBtn.hidden = !on;
+      modelSel.disabled = on;
       root.classList.toggle('working', on);
     };
     const off = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
@@ -315,7 +377,7 @@
           const text = el('div', 'cut-as-text cut-as-thinking', tr('Thinking…'));
           const steps = el('ol', 'cut-as-steps');
           box.append(steps, text);
-          current = { turn: e.turn, box, text, steps, byId: new Map() };
+          current = { turn: e.turn, box, text, steps, byId: new Map(), jobs: new Map() };
           externalBox = null;
           working(true);
           status.textContent = tr('Claude is working on it…');
@@ -335,12 +397,17 @@
           break;
         case 'agent.tool':
           if (current?.turn !== e.turn) break;
+          // waiting for a job is not a step of its own: its answer finishes the job's step
+          if (e.name === 'wait_job') { current.byId.set(e.id, current.jobs.get(e.input?.job) || null); break; }
           current.byId.set(e.id, step(current.steps, e.name, e.input));
           status.textContent = tr('Step {n}…', { n: current.byId.size });
           break;
         case 'agent.result': {
           const li = current?.turn === e.turn ? current.byId.get(e.id) : null;
-          if (li) result(li, e.ok, e.ok ? '' : e.text);
+          if (!li) break;
+          const run = runningOf(e.ok && e.text);
+          if (run) { current.jobs.set(run.job, li); li.dataset.job = run.job; break; }
+          result(li, e.ok, e.ok ? '' : e.text);
           break;
         }
         case 'progress': {
@@ -372,6 +439,7 @@
             : e.code === 'quota' ? tr('Your Claude account has reached its usage limit for now.') : e.code === 'timeout' ? tr('Claude did not finish in time.') : tr('Claude Code failed: {error}', { error: e.error });
           current.box.dataset.result = e.ok ? 'ok' : e.code || 'error';
           if (e.steps) current.box.appendChild(el('div', 'cut-as-undo', tr('{n} edits · Ctrl+Z undoes them all', { n: e.steps })));
+          if (e.usage) current.box.appendChild(usageLine(e.usage, e.total));
           current = null;
           working(false);
           status.textContent = '';
@@ -396,7 +464,7 @@
     });
     if (turn) working(true);
     return {
-      dispose: () => unlisten(),
+      dispose: () => { unlisten(); unwatch(); },
       focus: () => input.focus(),
     };
   }

@@ -316,6 +316,14 @@
         it.h = H;
         return;
       }
+      if (it.kind === 'graphic') {
+        const fonts = need('graphic').fontsOf(it.clip.source?.layers);
+        if (fonts.length) await textrender.prepare(fonts);
+        it.canvas = ctx.graphicCanvas(it, W, H);
+        it.w = W;
+        it.h = H;
+        return;
+      }
       if (it.kind === 'nest') {
         const fit = fitScale(it.sequence.w, it.sequence.h, W, H, project.settings?.fit);
         it.w = it.sequence.w * fit;
@@ -376,6 +384,28 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, c.width, c.height);
       textrender.draw(ctx, layers, { w: W, h: H, scale: k });
+      cache.set(it.key, { key, canvas: c });
+      if (cache.size > 64) cache.delete(cache.keys().next().value);
+      return c;
+    };
+  }
+  // Graphic clip canvases (graphic.js), kept while the layers' values at t stay the same (particles move every frame).
+  function graphicCache() {
+    const cache = new Map();
+    return (it, W, H, k) => {
+      const graphic = need('graphic');
+      const source = it.clip.source?.layers || [];
+      const layers = source.map((l) => graphic.resolve(l, it.clip, it.local));
+      const sec = it.local / need('time').TICKS;
+      const key = JSON.stringify([layers, k, W, H, graphic.hasParticles(layers, sec) ? sec : 0]);
+      const hit = cache.get(it.key);
+      if (hit && hit.key === key) return hit.canvas;
+      const c = hit && hit.canvas.width === Math.round(W * k) && hit.canvas.height === Math.round(H * k) ? hit.canvas : newCanvas(Math.round(W * k), Math.round(H * k));
+      const ctx = c.getContext('2d');
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      try { graphic.draw(ctx, layers, { w: W, h: H, scale: k, t: sec }); } catch (err) { console.warn('a graphic clip failed to draw', err); }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       cache.set(it.key, { key, canvas: c });
       if (cache.size > 64) cache.delete(cache.keys().next().value);
       return c;
@@ -1183,6 +1213,7 @@ ${V}
     if (!be) be = create2d(canvas, opts);
     const sources = sourcePool({ hardware: opts.hardware !== false });
     const texts = textCache();
+    const graphics = graphicCache();
     let pending = Promise.resolve();
     let destroyed = false;
     let chain = Promise.resolve();
@@ -1210,7 +1241,7 @@ ${V}
       // with the speaker's name and color where the track shows them
       const captions = need('speakers').decorate(project, captionsAt(seq, t, ropts.captions), globalThis.tr);
       const k = be.backend === 'webgpu' ? q : Math.min(be.width / seq.w, be.height / seq.h) * q;
-      const ctx = { sources, k, proxy: !!ropts.proxy, textCanvas: (it, W, H) => texts(it, W, H, k) };
+      const ctx = { sources, k, proxy: !!ropts.proxy, textCanvas: (it, W, H) => texts(it, W, H, k), graphicCanvas: (it, W, H) => graphics(it, W, H, k) };
       const frames = await fetchSources(project, seq, layers, ctx);
       try {
         if (destroyed) return;

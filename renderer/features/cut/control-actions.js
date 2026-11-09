@@ -155,13 +155,13 @@
     addEffect: t('add_effect', 'essential_sound', 'set_color'), removeEffect: t('remove_effect'), setEffect: t('set_effect', 'set_color'), moveEffect: t('set_effect'),
     addMask: t('add_mask'), setMask: t('set_mask'), removeMask: t('remove_mask'),
     addTransition: t('add_transition'), removeTransition: t('remove_transition'), setTransition: t('set_transition'),
-    addGenerated: t('add_text', 'add_color_matte'), freezeFrame: t('run_action'),
+    addGenerated: t('add_text', 'add_color_matte', 'add_graphic'), freezeFrame: t('run_action'),
     addMarker: t('add_marker'), setMarker: t('set_marker'), removeMarker: t('remove_markers'),
     addCaptionTrack: t('add_captions'), setCaptionTrack: t('set_caption_track'), removeCaptionTrack: t('remove_captions'), setCaptions: t('automation'),
     addCaption: t('add_captions'), setCaption: t('set_caption'), removeCaption: t('remove_captions'),
     setProxy: t('proxies'), setSettings: t('set_project_settings'), setSpeakers: t('speakers', 'automation'),
     addLut: no('Loading a .cube LUT reads a file the user picks in the Lumetri Color panel; set_color uses the LUTs the project has.'),
-    paste: t('run_action'), setGenerator: t('set_clip'), setLayer: t('set_text'), addLayer: t('set_text'), removeLayer: t('set_text'), setRole: t('set_clip'),
+    paste: t('run_action'), setGenerator: t('set_clip', 'set_graphic'), setLayer: t('set_text', 'set_graphic'), addLayer: t('set_text', 'set_graphic'), removeLayer: t('set_text', 'set_graphic'), setRole: t('set_clip'),
     replaceAudio: t('automation'), batch: t('remove_silence', 'essential_sound'),
   };
   // Cut.ui.registerPanel ids

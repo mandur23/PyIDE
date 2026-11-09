@@ -1630,5 +1630,21 @@
   "The AI wants to import these files into the project:": "AI가 이 파일들을 프로젝트로 가져오려고 합니다:",
   "Only these files are read; they are not changed.": "이 파일들만 읽고, 파일은 바꾸지 않습니다.",
   "Don't Import": "가져오지 않음",
-  "Proxies: {n} of {m} ready": "프록시: {m}개 중 {n}개 준비됨"
+  "Proxies: {n} of {m} ready": "프록시: {m}개 중 {n}개 준비됨",
+  "{n} in": "입력 {n}",
+  "{n} out": "출력 {n}",
+  "Tokens in: {n} (new {a}, read from the cache {b}, written to the cache {c})": "입력 토큰: {n} (새 입력 {a}, 캐시에서 읽음 {b}, 캐시에 저장 {c})",
+  "Tokens out: {n}": "출력 토큰: {n}",
+  "Claude's steps: {n}": "Claude 작업 단계: {n}",
+  "≈{cost}: Claude Code's estimate at API prices. On a Claude subscription it is not charged; it counts toward the plan's usage limit.": "≈{cost}: Claude Code가 API 요금으로 계산한 추정치입니다. Claude 구독 요금제에서는 이 금액이 청구되지 않고, 요금제의 사용 한도에서 차감됩니다.",
+  "This conversation: {n} requests, {i} in, {o} out, ≈{cost}": "이 대화 합계: 요청 {n}개, 입력 {i}, 출력 {o}, ≈{cost}",
+  "Claude model": "Claude 모델",
+  "Fastest, uses the least": "가장 빠르고 사용량이 가장 적음",
+  "Balanced": "속도와 품질의 균형",
+  "Most capable, slowest, uses the most": "가장 뛰어나지만 가장 느리고 사용량이 가장 많음",
+  "Add a graphic": "그래픽 추가",
+  "Add a graphic at {at} s ({n} layers)": "{at}초에 그래픽 추가 (레이어 {n}개)",
+  "Change a graphic": "그래픽 바꾸기",
+  "Change graphic {clip}": "그래픽 {clip} 바꾸기",
+  "Edit Graphic": "그래픽 편집"
 }

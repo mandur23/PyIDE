@@ -54,7 +54,10 @@
     'Change only what the request asks for. Do not change project or sequence settings, other clips or anything else',
     'the user did not ask about, not even to make a refused edit work; suggest such a change in your answer instead.',
     'Keyboard and menu commands without a tool of their own run with run_action (list_actions lists them).',
-    'Long jobs (automation, proxies, an export with wait) report progress and end when the user presses Stop.',
+    'Long jobs (automation, proxies, an export with wait) report progress and end when the user presses Stop. A call',
+    'still running after a while (or one waiting for the user\'s answer in a dialog) answers {running: true, job,',
+    'progress}: it has not failed and goes on running. Call wait_job with that job until it gives the tool\'s own',
+    'result; never start the tool again, and do not tell the user it failed or timed out while it runs.',
     'Files: import_media brings in only files the user confirms in a dialog or that are in the project\'s folder;',
     'export_sequence, export_frame and export_captions ask the user first and write new files only; save_project writes',
     'the project\'s own file (and asks where when it has none). Nothing else reads or writes files, and nothing is',
@@ -367,6 +370,7 @@
       if (clip.masks?.length) out.masks = clip.masks.map((mk) => ({ id: mk.id, mode: mk.mode, inverted: mk.inverted, feather: mk.feather, opacity: mk.opacity, expansion: mk.expansion, points: mk.path.length / 6 }));
       if (clip.source?.generator === 'text') out.layers = clip.source.layers.map((l) => ({ id: l.id, text: l.text, font: l.font, size: l.size, weight: l.weight, color: l.fill, position: l.position, align: l.align }));
       if (clip.source?.generator === 'solid') out.color = clip.source.color;
+      if (clip.source?.generator === 'graphic') out.layers = lib.graphicLayers(clip);
       if (clip.markers?.length) out.markers = clip.markers.map((mk) => markerSummary(c, mk, clip.start));
       if (kindOf(c, clip) === 'audio') { out.fadeIn = sec(c, clip.fadeIn || 0); out.fadeOut = sec(c, clip.fadeOut || 0); }
       out.linked = M().linkedClips(c.seq, clip).map((l) => l.id);
@@ -692,7 +696,7 @@
       };
     }, (a) => ['Time Remapping of {clip}', { clip: a.clip_id }]);
   tool('set_keyframes', 'edit', 'Set keyframes',
-    'Animates a property of a clip: the full list of keyframes (time on the timeline in s, inside the clip; value; ease linear, hold, easeIn, easeOut or easeInOut). An empty list removes the animation. property: a clip property (opacity, position, scale, rotation, anchor, crop, volume, pan), "effects.<effect id>.<parameter>" (video and audio effects), a mask\'s "masks.<mask id>.<path|feather|opacity|expansion>" (an effect\'s mask: "effects.<effect id>.masks.<mask id>.<field>"; a path value is {shape: ellipse|rectangle, x, y, width, height} in fractions 0..1, like add_mask) or a title layer\'s "layers.<layer id>.<opacity|position|reveal|size>" (reveal 0..1 shows the text from the start).',
+    'Animates a property of a clip: the full list of keyframes (time on the timeline in s, inside the clip; value; ease linear, hold, easeIn, easeOut or easeInOut). An empty list removes the animation. property: a clip property (opacity, position, scale, rotation, anchor, crop, volume, pan), "effects.<effect id>.<parameter>" (video and audio effects), a mask\'s "masks.<mask id>.<path|feather|opacity|expansion>" (an effect\'s mask: "effects.<effect id>.masks.<mask id>.<field>"; a path value is {shape: ellipse|rectangle, x, y, width, height} in fractions 0..1, like add_mask) or a layer\'s "layers.<layer id>.<field>" (titles: opacity, position, reveal, size; graphics: number, [x, y], color fields).',
     obj({ clip_id: str('The clip.'), property: str('The property path.', { maxLength: 80 }), keyframes: list(bare({ time: num('Timeline time (s).', { minimum: 0 }), value: { type: ['number', 'array', 'string', 'boolean', 'object'], description: 'The value.' }, ease: str('linear (default), hold, easeIn, easeOut, easeInOut.', { enum: ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut'] }) }, ['time', 'value']), 'The keyframes.', { maxItems: 200 }) }, ['clip_id', 'property', 'keyframes']),
     (c, a) => {
       const clip = clipOf(c, a.clip_id);
@@ -717,6 +721,7 @@
           if (path.length !== mask.path.length) refuse(`${at} has ${path.length / 6} points; mask ${mask.id} has ${mask.path.length / 6} (an ellipse and a rectangle have 4).`);
           return path;
         }
+        if (parts[0] === 'layers' && clip.source?.generator === 'graphic') return lib.graphicKey(clip, parts[1], parts[2], v, at);
         if (parts[0] === 'layers') {
           const rule = LAYER_KEYS[parts[2]];
           if (!rule) refuse(`A title layer animates ${Object.keys(LAYER_KEYS).join(', ')}; not ${parts[2]}.`);
@@ -1270,6 +1275,6 @@
   const api = { TOOLS, INSTRUCTIONS, PRESETS, check, call, definitions, describe, kindOf: (name) => BY_NAME.get(name)?.kind || null, names: () => TOOLS.map((t) => t.name), lib };
   // A tool file adds its tools: required here in Node, and in the page it loads after this file and calls extend.
   api.extend = (part) => { part(lib); };
-  if (NODE) for (const name of ['control-project', 'control-auto', 'control-actions']) api.extend(require(`./${name}.js`));
+  if (NODE) for (const name of ['control-project', 'control-auto', 'control-graphic', 'control-actions']) api.extend(require(`./${name}.js`));
   return api;
 });

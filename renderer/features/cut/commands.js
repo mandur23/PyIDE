@@ -26,6 +26,7 @@
   // Not `typeof require`: Monaco's AMD loader makes require a global function in the page.
   const NODE = typeof module === 'object' && !!module.exports;
   const req = (name, key) => (NODE ? require(`./${name}.js`) : globalThis.Cut[key || name]);
+  const graphic = () => req('graphic');
   const time = req('time');
   const model = req('model');
   const keyframes = req('keyframes');
@@ -471,6 +472,22 @@
         return model.createTextLayer({ ...l, id });
       });
       return { generator: 'text', layers };
+    }
+    if (s.generator === 'graphic') {
+      const given = Array.isArray(s.layers) ? s.layers : [];
+      if (!given.length) fail('a graphic needs one layer at least');
+      const used = new Set(given.map((l) => l?.id).filter((id) => typeof id === 'string'));
+      let n = 0;
+      const layers = given.map((l) => {
+        if (l && typeof l === 'object' && typeof l.id === 'string') return l;
+        let id;
+        do id = `g${++n}`; while (used.has(id));
+        used.add(id);
+        return { ...l, id };
+      });
+      const errors = graphic().validate(layers);
+      if (errors.length) fail(`the graphic is not valid: ${errors.join('; ')}`, 'badGraphic');
+      return { generator: 'graphic', layers: layers.map((l) => graphic().normalize(l)) };
     }
     if (s.generator === 'solid') return { generator: 'solid', color: typeof s.color === 'string' ? s.color : '#ffffff' };
     if (s.generator === 'adjustment') return { generator: 'adjustment' };
@@ -1906,7 +1923,7 @@
   }
   function layerOf(clip, id) {
     const l = clip.source.layers.find((x) => x.id === id);
-    if (!l) fail(`there is no text layer ${id}`, 'notFound');
+    if (!l) fail(`there is no layer ${id}`, 'notFound');
     return l;
   }
   const dropLayerKeys = (c, clip, id) => { for (const prop of Object.keys(clip.keyframes)) if (prop.startsWith(`layers.${id}.`)) c.tx.del(clip.keyframes, prop); };
@@ -1921,8 +1938,8 @@
       tx.set(clip.source, 'color', String(p.color));
     }
     if (p.layers !== undefined) {
-      if (clip.source.generator !== 'text') fail('only a text clip has layers');
-      const layers = normSource(c, { generator: 'text', layers: p.layers }).layers;
+      if (clip.source.generator !== 'text' && clip.source.generator !== 'graphic') fail('only a text or graphic clip has layers');
+      const layers = normSource(c, { generator: clip.source.generator, layers: p.layers }).layers;
       for (const l of clip.source.layers) if (!layers.some((x) => x.id === l.id)) dropLayerKeys(c, clip, l.id);
       tx.set(clip.source, 'layers', layers);
     }
@@ -1931,7 +1948,18 @@
   const LAYER_FIELDS = Object.keys(model.createTextLayer()).filter((k) => k !== 'id');
   H.setLayer = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
-    const layer = layerOf(generatorClip(c, cmd.clipId, 'text'), cmd.layerId);
+    const clip = generatorClip(c, cmd.clipId);
+    const layer = layerOf(clip, cmd.layerId);
+    if (clip.source.generator === 'graphic') {
+      const patch = clone(cmd.patch || {});
+      if (patch.id !== undefined || (patch.kind !== undefined && patch.kind !== layer.kind)) fail('a layer keeps its id and kind');
+      const next = clip.source.layers.map((l) => (l === layer ? { ...l, ...patch } : l));
+      const errors = graphic().validate(next);
+      if (errors.length) fail(`the graphic is not valid: ${errors.join('; ')}`, 'badGraphic');
+      for (const [k, v] of Object.entries(patch)) if (k !== 'kind') tx.set(layer, k, v);
+      return {};
+    }
+    if (clip.source.generator !== 'text') fail(`clip ${cmd.clipId} has no layers`);
     for (const [k, v] of Object.entries(clone(cmd.patch || {}))) {
       if (!LAYER_FIELDS.includes(k)) fail(`unknown text layer field ${k}`);
       tx.set(layer, k, v);
@@ -1940,18 +1968,35 @@
   };
   H.addLayer = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
-    const clip = generatorClip(c, cmd.clipId, 'text');
+    const clip = generatorClip(c, cmd.clipId);
+    if (clip.source.generator !== 'text' && clip.source.generator !== 'graphic') fail(`clip ${cmd.clipId} has no layers`);
+    const index = cmd.index == null ? clip.source.layers.length : Math.max(0, Math.min(clip.source.layers.length, cmd.index));
+    if (clip.source.generator === 'graphic') {
+      const given = clone(cmd.layer || {});
+      let id = typeof given.id === 'string' ? given.id : null;
+      if (!id) { let n = clip.source.layers.length + 1; while (clip.source.layers.some((l) => l.id === `g${n}`)) n++; id = `g${n}`; }
+      const next = [...clip.source.layers];
+      next.splice(index, 0, { ...given, id });
+      const errors = graphic().validate(next);
+      if (errors.length) fail(`the graphic is not valid: ${errors.join('; ')}`, 'badGraphic');
+      tx.splice(clip.source.layers, index, 0, graphic().normalize({ ...given, id }));
+      return { id };
+    }
     let n = clip.source.layers.length + 1;
     while (clip.source.layers.some((l) => l.id === `l${n}`)) n++;
     const layer = model.createTextLayer({ ...clone(cmd.layer || {}), id: `l${n}` });
-    const index = cmd.index == null ? clip.source.layers.length : Math.max(0, Math.min(clip.source.layers.length, cmd.index));
     tx.splice(clip.source.layers, index, 0, layer);
     return { id: layer.id };
   };
   H.removeLayer = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
-    const clip = generatorClip(c, cmd.clipId, 'text');
+    const clip = generatorClip(c, cmd.clipId);
     const layer = layerOf(clip, cmd.layerId);
+    if (clip.source.generator === 'graphic') {
+      const next = clip.source.layers.filter((l) => l !== layer);
+      if (!next.length) fail('a graphic keeps one layer at least');
+      if (next.some((l) => l.parent === layer.id)) fail(`layer ${layer.id} is the parent of other layers; remove or move them first`);
+    } else if (clip.source.generator !== 'text') fail(`clip ${cmd.clipId} has no layers`);
     dropLayerKeys(c, clip, layer.id);
     removeFrom(c, clip.source.layers, layer);
     return {};

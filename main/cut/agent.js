@@ -9,7 +9,10 @@
 //
 // The CLI's stream-json lines become the page's events (cut:agentEvent {turn, type, ...}): 'text' (what Claude says,
 // as it streams), 'tool' {id, name, input} when it calls a tool, 'result' {id, ok, text} when the tool answered, and
-// last 'done' {ok, code, error, text}. Codes: not-installed, auth, quota, cli, cancelled, timeout, badArgs.
+// last 'done' {ok, code, error, text, usage}. Codes: not-installed, auth, quota, cli, cancelled, timeout, badArgs.
+// usage (null when the CLI ended without its result line, as on Stop) is what the result line reports: the tokens in
+// (with the prompt cache's reads and writes apart), the tokens out, the CLI's cost estimate in US dollars, the time
+// and the model.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -23,6 +26,26 @@ const MAX_TURNS = 80;
 const ID = /^[\w.-]{1,64}$/;
 const SERVER = 'cut';
 const fail = (code, error) => ({ ok: false, code, error });
+const count = (v) => (Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+
+function usageOf(result, alias) {
+  if (!result || typeof result !== 'object') return null;
+  const u = result.usage && typeof result.usage === 'object' ? result.usage : {};
+  const models = result.modelUsage && typeof result.modelUsage === 'object' ? Object.keys(result.modelUsage) : [];
+  const cost = Number(result.total_cost_usd);
+  const out = {
+    input: count(u.input_tokens),
+    cacheRead: count(u.cache_read_input_tokens),
+    cacheWrite: count(u.cache_creation_input_tokens),
+    output: count(u.output_tokens),
+    costUsd: Number.isFinite(cost) && cost >= 0 ? cost : null,
+    durationMs: count(result.duration_ms),
+    turns: count(result.num_turns),
+    model: alias,
+    models,
+  };
+  return out.input || out.cacheRead || out.cacheWrite || out.output || out.costUsd !== null ? out : null;
+}
 
 function createAgent({ control, log, find = claude.findClaude, launch = claude.launch, kill = claude.killTree, timeoutMs = TIMEOUT_MS } = {}) {
   const running = new Map(); // `${owner}|${turn}` -> {child, token, stop}
@@ -130,6 +153,7 @@ function createAgent({ control, log, find = claude.findClaude, launch = claude.l
           const message = (result && String(result.result || result.subtype || '')) || stderr.trim().split(/\r?\n/).slice(-3).join('\n') || `Claude Code exited with code ${code}`;
           out = fail(result?.subtype === 'error_max_turns' ? 'cli' : claude.classify(message), message);
         }
+        out.usage = usageOf(result, model);
         emit({ type: 'done', ...out });
         resolve(out);
       });

@@ -11,14 +11,14 @@
     // formats: containers in and out
     'codecs.js', 'mp4read.js', 'mkvread.js', 'audioread.js', 'probe.js', 'mp4write.js',
     // the project: caption word timings, the time remapping curve, model, keyframes, masks, edit commands, captions files
-    'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'commands.js', 'srt.js',
+    'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'masks.js', 'graphic.js', 'commands.js', 'srt.js',
     // the engine: effects, text, media, decoding, compositing, playback, thumbnails
     'lumetri.js', 'effects.js', 'scopes.js', 'textrender.js', 'media.js', 'decoder.js', 'compositor.js', 'player.js', 'thumbs.js',
     // sound and export
     'presets.js', 'audiofx.js', 'audioengine.js', 'export.js', 'testsrc.js',
     // automation: signal analysis, what is done with speech recognition's words, Claude's prompts and answers, and the
     // tools an AI edits with (the control API)
-    'analyze.js', 'speech.js', 'speakers.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-actions.js',
+    'analyze.js', 'speech.js', 'speakers.js', 'ai.js', 'control.js', 'control-project.js', 'control-auto.js', 'control-graphic.js', 'control-actions.js',
     // the screen
     'ui-base.js', 'ui-shell.js', 'ui-project.js', 'ui-monitors.js', 'ui-export.js', 'ui-captions.js', 'ui-keys.js',
     'ui-timeline.js', 'ui-controls.js', 'ui-effects.js', 'ui-text.js', 'ui-color.js', 'ui-scopes.js', 'ui-overlay.js', 'ui-masks.js', 'ui-auto.js',

@@ -10,7 +10,7 @@
 // - an automation job (auto captions): the setup dialog asks before any download (Cancel is a refusal, nothing
 //   changes), the job's progress shows on its step, Stop ends it with nothing changed, and a full run makes captions;
 // - screenshots in the dark and the light theme (verify/out/cut-ai-tools/*.png).
-// Usage: node verify/cut-ai-tools.mjs   (CUT_TOOLS_ONLY=actions,editing,import,automation)
+// Usage: node verify/cut-ai-tools.mjs   (CUT_TOOLS_ONLY=actions,editing,graphic,import,automation)
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import zlib from 'zlib';
 import path from 'path';
@@ -29,7 +29,7 @@ const scenario = (s) => writeFileSync(path.join(fakeDir, 'scenario.json'), JSON.
 scenario({});
 const agentLog = () => readFileSync(path.join(fakeDir, 'log.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.agent);
 
-const env = { PYIDE_CUT_HOME: home, PYIDE_CLAUDE_PATH: fakeCmd, FAKE_CLAUDE_DIR: fakeDir, PYIDE_WHISPER_BACKEND: 'fake', PYIDE_WHISPER_FAKE_SETUP: 'ok' };
+const env = { PYIDE_CUT_HOME: home, PYIDE_CLAUDE_PATH: fakeCmd, FAKE_CLAUDE_DIR: fakeDir, PYIDE_WHISPER_BACKEND: 'fake', PYIDE_WHISPER_FAKE_SETUP: 'ok', PYIDE_CUT_HOLD_MS: '1500' };
 const ctx = await launch({ fixture: 'core', port: 9808, name: 'cut-ai-tools', mode: 'cut', lang: 'ko-KR', env });
 const { js, until, check, cdp, sleep } = ctx;
 const S = JSON.stringify;
@@ -190,6 +190,47 @@ await section('editing', async () => {
   await themes('editing');
 });
 
+// ---------- a motion graphic: drawn in the real engine, animated, one undo step ----------
+await section('graphic', async () => {
+  await js('__tools.fresh()');
+  const done0 = (await js('__tools.done()')).length;
+  await ask('그래픽 넣어줘');
+  await idle();
+  const steps = await js('__tools.steps()');
+  check(steps.map((s) => `${s.tool}:${s.state}`).join() === 'get_sequence:done,add_graphic:done,set_keyframes:done,set_keyframes:done,get_frame:done', `the AI adds a graphic, animates it and looks at it (${S(steps.map((s) => `${s.tool}:${s.state}${s.error ? ` ${s.error}` : ''}`))})`);
+  check(steps.some((s) => s.tool === 'add_graphic' && /그래픽 추가/.test(s.text)), `its step reads in Korean (${steps.find((s) => s.tool === 'add_graphic')?.text})`);
+  check((await js('__tools.done()')).length === done0 + 1 && /그래픽 넣어줘/.test((await js('__tools.done()')).at(-1).label), 'the turn is one undo step');
+  // pixels of the exported frame (the engine the monitor and the export use), in sequence pixels from the center
+  const at = (t) => js(`(async () => {
+    const app = Cut.app;
+    const r = await Cut.export.framePng(app.project, app.sequence.id, ${t} * Cut.time.TICKS, { width: 320 });
+    if (!r.ok) return { error: r.error };
+    const bmp = await createImageBitmap(new Blob([r.bytes], { type: 'image/png' }));
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0);
+    const px = (x, y) => [...g.getImageData(Math.round(160 + x), Math.round(90 + y), 1, 1).data].slice(0, 3);
+    return { box: px(-100, 0), ring45: px(90 + 40 * Math.SQRT1_2, -40 * Math.SQRT1_2), ring225: px(90 - 40 * Math.SQRT1_2, 40 * Math.SQRT1_2), center: px(90, 0) };
+  })()`);
+  const red = (p) => p[0] > 200 && p[1] < 70 && p[2] < 70;
+  const green = (p) => p[1] > 200 && p[0] < 70 && p[2] < 70;
+  const early = await at(0.5);
+  const late = await at(2.5);
+  check(red(early.box) && red(late.box), `the red box is drawn over the video (${S(early.box)})`);
+  check(green(early.ring45) && !green(early.ring225), `at 0.5 s the ring is a quarter drawn (45°: ${S(early.ring45)}, 225°: ${S(early.ring225)})`);
+  check(green(late.ring45) && green(late.ring225) && !green(late.center), `at 2.5 s the ring is whole, and hollow (225°: ${S(late.ring225)}, center: ${S(late.center)})`);
+  const after = await at(3.5);
+  check(!red(after.box), 'after the clip ends the graphic is gone');
+  await js('(Cut.app.setTime(Math.round(1.2 * Cut.time.TICKS)), true)');
+  await sleep(400);
+  await themes('graphic');
+  await clickAt(await js(`__tools.rect('.cut-panel[data-panel="program"]')`));
+  await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: 2, key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90 });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 2, key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90 });
+  await until(`!__tools.seq().clips.some((c) => c.source?.generator === 'graphic')`, 'the graphic undone', 5000).catch(() => {});
+  check(!(await js(`__tools.seq().clips.some((c) => c.source?.generator === 'graphic')`)), 'one Ctrl+Z takes the graphic away');
+});
+
 // ---------- import: the project's folder, and a file the user confirms ----------
 await section('import', async () => {
   await js('__tools.fresh()');
@@ -240,6 +281,10 @@ await section('automation', async () => {
   await until(`__tools.steps().some((s) => s.tool === 'automation' && s.progress !== null)`, 'the job\'s progress on its step', 30000);
   const mid = await js('__tools.steps().find((s) => s.tool === "automation")');
   check(mid.state === 'running' && Number(mid.progress) >= 0 && Number(mid.progress) < 1, `the running step shows the job's progress (${mid.progress})`);
+  // the AI is told the progress too: the running answers of wait_job carry it
+  let told = null;
+  for (let i = 0; i < 40 && !told; i++) { told = agentLog().filter((l) => l.running?.tool === 'automation' && typeof l.running.progress === 'number').at(-1)?.running || null; if (!told) await sleep(250); }
+  check(!!told && told.progress >= 0 && told.progress < 1 && agentLog().some((l) => l.tool === 'wait_job'), `the AI waits with wait_job and hears the job's progress (${S(told)})`);
   await themes('progress');
   // A notification balloon in the lower right once covered Stop on CI, and the click went to the balloon.
   const stopAt = await js(`__tools.rect('.cut-assistant .cut-as-stop')`);

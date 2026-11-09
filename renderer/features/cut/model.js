@@ -34,14 +34,16 @@
   const R = NODE ? require('./remap.js') : globalThis.Cut.remap;
   // Read when a clip has masks, so a page that loads model.js without masks.js still works.
   const masks = () => (NODE ? require('./masks.js') : globalThis.Cut.masks);
+  const graphic = () => (NODE ? require('./graphic.js') : globalThis.Cut.graphic);
 
   // 2: nest clips (source.sequence). 3: time remapping (clip.remap) and frame sampling (clip.sampling). 4: masks
-  // (clip.masks, effect.masks). An app that reads an older version would call such a project damaged, or play a
-  // remapped clip at its old speed, or draw a masked clip whole; it says "newer" instead.
-  const VERSION = 4;
+  // (clip.masks, effect.masks). 5: graphic clips (source.generator 'graphic', graphic.js). An app that reads an older
+  // version would call such a project damaged, or play a remapped clip at its old speed, or draw a masked clip whole;
+  // it says "newer" instead.
+  const VERSION = 5;
   const SAMPLINGS = ['sample', 'blend'];
   const EASES = ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut', 'bezier'];
-  const GENERATORS = ['text', 'solid', 'adjustment'];
+  const GENERATORS = ['text', 'solid', 'adjustment', 'graphic'];
   const VIDEO_PROPS = ['position', 'scale', 'rotation', 'anchor', 'opacity', 'crop'];
   const AUDIO_PROPS = ['volume', 'pan'];
   const PROP_SHAPE = { position: 2, scale: 2, anchor: 2, crop: 4, rotation: 0, opacity: 0, volume: 0, pan: 0 };
@@ -513,6 +515,7 @@
           }
         }
         if (c.source.generator === 'solid' && !isColor(c.source.color)) err(`${C}: solid color`);
+        if (c.source.generator === 'graphic') for (const e of graphic().validate(c.source.layers)) err(`${C}: graphic ${e}`);
       } else if (c.source.sequence !== undefined) {
         if (!isNest(c) || c.source.media !== undefined || c.source.freeze !== undefined) err(`${C}: nest source`);
         else if (c.source.sequence === seq.id) err(`${C}: a nest of its own sequence`);

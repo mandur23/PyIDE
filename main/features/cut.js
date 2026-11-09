@@ -314,6 +314,7 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
     return control.setTools(list, instructions);
   });
   ipcMain.on('cut:controlResult', (e, msg) => { if (e?.sender === controlPage) control.answer(msg); });
+  ipcMain.on('cut:controlProgress', (e, msg) => { if (e?.sender === controlPage) control.progress(msg); });
   handle('cut:controlExternal', (_o, on) => control.setExternal(on === true));
   handle('cut:controlDisconnect', () => control.disconnect());
   handle('cut:controlClients', () => ({ external: control.connected() }));

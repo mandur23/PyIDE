@@ -232,7 +232,7 @@ built byte by byte. Real encoder output is checked in `verify/cut-export.mjs`.
 
 ## 6. Project model, commands, keyframes, captions
 
-Files: `remap.js`, `model.js`, `keyframes.js`, `masks.js`, `commands.js`, `srt.js`. Tests: `verify/cut-model.mjs` and `verify/cut-mask-core.mjs` (plain Node).
+Files: `remap.js`, `model.js`, `keyframes.js`, `masks.js`, `graphic.js`, `commands.js`, `srt.js`. Tests: `verify/cut-model.mjs` and `verify/cut-mask-core.mjs` (plain Node).
 
 ### `Cut.model`
 
@@ -255,7 +255,7 @@ Sequence = { id, name, w, h, fps: [num, den] /* one of time.FRAME_RATES */, rate
              markers: [Marker], captions: [CaptionTrack] }
 Track = { id, kind: 'video' | 'audio', name, locked, syncLock, height, visible /* video */, mute, solo, volume /* dB */, pan /* audio */ }
 Clip = { id, track, start, in, out,           // timeline position, source in/out (source ticks)
-         source: { media } | { media, freeze: true } | { generator: 'text' | 'solid' | 'adjustment', ...params }
+         source: { media } | { media, freeze: true } | { generator: 'text' | 'solid' | 'adjustment' | 'graphic', ...params }
                | { sequence: seqId },                // a nest clip: in/out are times of that sequence
          speed: 1, reverse: false, enabled: true, link: linkId | null, group: null, name, label,
          remap: null | Remap,                   // Time Remapping of a video clip (below); then speed 1, reverse false
@@ -352,6 +352,31 @@ by the delta in source ticks one for one; a frame rate change and a paste into a
 new grid (`refit`, the length kept inside the source); copy and paste carry the curve on a video track; nest clips are
 remapped the same way (their source is their sequence's time). Speed/Duration, Reverse Speed and the Rate Stretch tool
 refuse a remapped clip (`remap`), as Premiere greys them out. Frame Hold Segment cuts it like any clip.
+
+#### Graphic clips (`graphic.js`, `Cut.graphic`)
+
+Motion graphics drawn from data: `source: { generator: 'graphic', layers: [GraphicLayer] }`. Version 5 of the format; a
+version 1 to 4 file has none and reads as it is, and an app that reads version 4 calls a version 5 file newer. A layer
+is `{ id, kind, ...fields }` with kind rect, ellipse, polygon, star, line, path (SVG path data without arcs), text,
+group or particles; `graphic.FIELDS` lists every field with its type, default and range, and which kinds have it. The
+commands store layers normalized (every field of the kind), `graphic.validate` is part of `model.validate`, and the
+edit commands `addGenerated`, `setGenerator {layers}`, `setLayer`, `addLayer` and `removeLayer` check a graphic's
+whole list before they change it (unique ids, a parent is a group earlier in the list, a layer keeps its kind).
+
+Coordinates are sequence pixels from the frame's center, y down. A layer's transform is position, rotation, scale
+about its anchor, under the transforms of its parent groups; opacity multiplies down the groups. Layers draw in order
+into a Canvas 2D context (`graphic.draw`), which the compositor uploads like a text clip's canvas, so the program
+monitor, the GPU and CPU back ends and the export draw the same picture; the canvas is kept while the resolved layers
+stay the same (particles change every frame). Each layer draws its fill (a color or a gradient), then a stroke that
+`trimStart`, `trimEnd` and `trimOffset` cut along the outline's length (outlines are flattened to polylines, curves
+by their length at the drawn size), with its shadow, blur, blend mode, and `repeatCount` copies. Text layers use the
+fonts textrender.js loads; `{value}` shows the `value` field, formatted with `decimals`. Particles are a stream or a
+burst from an emitter area, from a seeded hash of (particle, cycle), so a frame always draws the same.
+
+Keyframes: `layers.<layer id>.<field>` of the clip, for every number, pair and color field (`graphic.ANIMATED`);
+`graphic.resolve` gives a layer's values at a clip time (whole numbers rounded, values out of range ignored). The
+control API's `add_graphic` and `set_graphic` (`control-graphic.js`) make and change graphics; `set_keyframes` animates
+them. There is no panel for a graphic's layers yet: the clip has the usual Motion, effects, masks and transitions.
 
 #### Masks (`masks.js`, `Cut.masks`)
 

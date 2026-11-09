@@ -12,6 +12,14 @@
 // The server checks the request's shape and the tool's name; the tool runs in the page (callRenderer: cut:controlCall
 // out, cut:controlResult back), which checks the arguments and answers {content, isError}. A page that reloads or
 // closes answers its calls here, as errors. Nothing in this file reads a project or media file.
+//
+// Long calls (automation jobs, a dialog waiting for the user): an MCP client gives up on an HTTP request after a
+// while (Claude Code: 60 s), and it sees no progress meanwhile. So a call never holds its request longer than holdMs:
+// one still running then answers {running: true, job, progress, step, elapsed_s} and keeps running in the page, and the
+// tool wait_job (this file's own, listed after the page's) waits up to holdMs again for that job's answer or says how
+// far it is. The page reports progress with cut:controlProgress. While a client's job runs, its other calls are
+// refused (the page runs calls one at a time anyway). A job belongs to the client that started it; a turn's jobs go
+// with its token.
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -19,7 +27,9 @@ const path = require('path');
 
 const PROTOCOL = '2025-06-18';
 const BODY_LIMIT = 1024 * 1024;
-const CALL_LIMIT_MS = 15 * 60 * 1000; // export_sequence waits for the user
+const CALL_LIMIT_MS = 15 * 60 * 1000; // without an answer or progress from the page this long, a call fails
+const HOLD_MS = 25 * 1000;
+const WAIT_TOOL = 'wait_job';
 const SESSION_IDLE_MS = 10 * 60 * 1000;
 const NAME = /^[a-z][a-z0-9_]{0,40}$/;
 
@@ -30,7 +40,17 @@ const sameToken = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-function createControl({ configFile = null, log = null, version = '0', now = Date.now } = {}) {
+const envHold = Number(process.env.PYIDE_CUT_HOLD_MS);
+const DEFAULT_HOLD = Number.isFinite(envHold) && envHold >= 200 ? envHold : HOLD_MS;
+
+function createControl({ configFile = null, log = null, version = '0', now = Date.now, holdMs = DEFAULT_HOLD } = {}) {
+  const holdS = Math.round(holdMs / 1000);
+  const waitTool = {
+    name: WAIT_TOOL,
+    description: `Waits for a job: a tool call that ran longer than ${holdS} s answered {running: true, job, progress} and goes on running on this PC. wait_job waits up to ${holdS} s more and answers that tool's own result when it ends, or {running: true, progress (0..1, or null when the job does not measure it), step, elapsed_s} while it runs; call it again until the job ends. Never start the tool again for a job that runs. The user sees the progress and can stop it.`,
+    inputSchema: { type: 'object', properties: { job: { type: 'string', description: 'The job from the running answer.', maxLength: 40 } }, required: ['job'], additionalProperties: false },
+    annotations: { title: 'Wait for a job', readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  };
   let server = null;
   let port = null;
   let listening = null;
@@ -40,7 +60,8 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
   const turns = new Map(); // token -> {turn, owner}
   let external = null; // {token} while allowed
   const sessions = new Map(); // session id -> {kind, name, seen}
-  const pending = new Map(); // call id -> {resolve, timer}
+  const pending = new Map(); // call id -> the call (callRenderer)
+  const jobs = new Map(); // job id -> a call that outlasted holdMs, until its answer is handed over
   let seq = 0;
   const listeners = new Set();
   const stats = { refused: 0, calls: 0 };
@@ -76,26 +97,72 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
   }
 
   // ---------- calls the page answers ----------
+  // -> the call {id, name, client, started, progress: {fraction, text} | null, result: null until answered, done:
+  // Promise of the answer}. CALL_LIMIT_MS counts from the last sign of life (the call, its progress).
   function callRenderer(name, args, client) {
-    return new Promise((resolve) => {
-      const id = ++seq;
-      const done = (result) => { clearTimeout(timer); pending.delete(id); resolve(result); };
-      const timer = setTimeout(() => done({ content: [{ type: 'text', text: 'The editor did not answer in time.' }], isError: true }), CALL_LIMIT_MS);
-      pending.set(id, { resolve: done });
-      if (!target || !target('cut:controlCall', { id, name, args, client })) done({ content: [{ type: 'text', text: 'The Nano Studio Cut window is not open.' }], isError: true });
+    const id = ++seq;
+    const call = { id, name, client, started: now(), progress: null, result: null };
+    call.done = new Promise((resolve) => {
+      const fail = () => call.resolve({ content: [{ type: 'text', text: 'The editor did not answer in time.' }], isError: true });
+      call.alive = () => { clearTimeout(call.timer); call.timer = setTimeout(fail, CALL_LIMIT_MS); };
+      call.resolve = (result) => { if (call.result) return; clearTimeout(call.timer); pending.delete(id); call.result = result; resolve(result); };
     });
+    call.alive();
+    pending.set(id, call);
+    if (!target || !target('cut:controlCall', { id, name, args, client })) call.resolve({ content: [{ type: 'text', text: 'The Nano Studio Cut window is not open.' }], isError: true });
+    return call;
+  }
+  // The page's progress of a call: {id, fraction (0..1), text}.
+  function progress(msg) {
+    const call = pending.get(msg?.id);
+    if (!call) return;
+    const f = Number(msg.fraction);
+    call.progress = { fraction: Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : null, text: typeof msg.text === 'string' ? msg.text.slice(0, 200) : '' };
+    call.alive();
+  }
+  const sameClient = (a, b) => a.kind === b.kind && (a.kind !== 'chat' || (a.turn === b.turn && a.owner === b.owner));
+  const jobOf = (client) => [...jobs.values()].find((j) => sameClient(j.client, client)) || null;
+  const listed = () => (tools.length ? [...tools, waitTool] : tools);
+  const dropJobs = (match) => { for (const [id, j] of jobs) if (match(j.client)) jobs.delete(id); };
+  const text = (t, isError = false) => ({ content: [{ type: 'text', text: t }], isError });
+  function running(call) {
+    const p = call.progress;
+    return text(JSON.stringify({
+      running: true, job: `job${call.id}`, tool: call.name,
+      progress: p?.fraction ?? null, step: p?.text || null, elapsed_s: Math.round((now() - call.started) / 1000),
+      note: `Still running on this PC; the user sees its progress. Call ${WAIT_TOOL} with this job until it ends (each call waits up to ${holdS} s). Do not start ${call.name} again; other tools are refused until it ends.`,
+    }));
+  }
+  // The call's answer if it comes within holdMs, else its running answer (and it becomes a job).
+  async function hold(call) {
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), holdMs); });
+    const r = await Promise.race([call.done, late]);
+    clearTimeout(timer);
+    if (r) { jobs.delete(`job${call.id}`); return r; }
+    jobs.set(`job${call.id}`, call);
+    return running(call);
+  }
+  function waitJob(args, client) {
+    const id = typeof args.job === 'string' ? args.job : '';
+    const call = jobs.get(id);
+    if (!call || !sameClient(call.client, client)) {
+      const mine = jobOf(client);
+      return text(mine ? `There is no job ${id || '(none given)'}; the running job is ${`job${mine.id}`} (${mine.name}).` : `There is no running job ${id || '(none given)'}; its answer was given already, or it never ran longer than ${holdS} s.`, true);
+    }
+    return hold(call);
   }
   // The page's answer: {id, result: {content, isError}}.
   function answer(msg) {
-    const p = pending.get(msg?.id);
-    if (!p) return;
+    const call = pending.get(msg?.id);
+    if (!call) return;
     const r = msg.result;
     const content = Array.isArray(r?.content) ? r.content.filter((x) => x && (x.type === 'text' || x.type === 'image')).slice(0, 8) : [];
-    p.resolve({ content: content.length ? content : [{ type: 'text', text: 'No answer.' }], isError: !!r?.isError });
+    call.resolve({ content: content.length ? content : [{ type: 'text', text: 'No answer.' }], isError: !!r?.isError });
   }
   // A page that went away answers nothing: its calls end as errors.
   function abandon() {
-    for (const p of [...pending.values()]) p.resolve({ content: [{ type: 'text', text: 'The Nano Studio Cut window was reloaded or closed.' }], isError: true });
+    for (const call of [...pending.values()]) call.resolve(text('The Nano Studio Cut window was reloaded or closed.', true));
   }
 
   // ---------- JSON-RPC ----------
@@ -119,14 +186,20 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
     }
     if (sessionId && sessions.has(sessionId)) sessions.get(sessionId).seen = now();
     if (method === 'ping') return result({});
-    if (method === 'tools/list') return result({ tools });
+    if (method === 'tools/list') return result({ tools: listed() });
     if (method === 'tools/call') {
       const name = params?.name;
-      if (typeof name !== 'string' || !tools.some((t) => t.name === name)) return error(-32602, `Unknown tool ${name}`);
+      if (typeof name !== 'string' || !listed().some((t) => t.name === name)) return error(-32602, `Unknown tool ${name}`);
       const args = params.arguments ?? {};
       if (!args || typeof args !== 'object' || Array.isArray(args)) return error(-32602, 'arguments must be an object');
       stats.calls++;
-      return result(await callRenderer(name, args, client));
+      if (name === WAIT_TOOL) return result(await waitJob(args, client));
+      const busy = jobOf(client);
+      if (busy) {
+        const pct = busy.progress?.fraction != null ? ` (${Math.round(busy.progress.fraction * 100)}%)` : '';
+        return result(text(`job${busy.id} (${busy.name}) is still running${pct}. Call ${WAIT_TOOL} with job "job${busy.id}" until it ends; nothing else runs before it.`, true));
+      }
+      return result(await hold(callRenderer(name, args, client)));
     }
     return error(-32601, `Method not found: ${method}`);
   }
@@ -203,18 +276,23 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
       instructions = String(text || '').slice(0, 8000);
       return { ok: true, count: tools.length };
     },
-    toolNames: () => tools.map((t) => t.name),
+    toolNames: () => listed().map((t) => t.name),
     // A chat turn's token, good until revoke().
     issue(turn, owner) {
       const t = token();
       turns.set(t, { turn, owner });
       return t;
     },
-    revoke(t) { turns.delete(t); },
+    revoke(t) {
+      const info = turns.get(t);
+      turns.delete(t);
+      if (info) dropJobs((c) => c.kind === 'chat' && c.turn === info.turn && c.owner === info.owner);
+    },
     // Allow or stop external AIs. -> {on, url, token} | {on: false}
     async setExternal(on) {
       if (!on) {
         external = null;
+        dropJobs((c) => c.kind === 'external');
         for (const [id, s] of sessions) if (s.kind === 'external') sessions.delete(id);
         changed();
         return { on: false };
@@ -232,6 +310,7 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
     async disconnect() {
       if (!external) return { on: false };
       external = { token: token() };
+      dropJobs((c) => c.kind === 'external');
       writeConfig({ ...readConfig(), port, token: external.token });
       for (const [id, s] of sessions) if (s.kind === 'external') sessions.delete(id);
       changed();
@@ -240,8 +319,9 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
     connected,
     onClients(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     answer,
+    progress,
     abandon,
-    stats: () => ({ ...stats, pending: pending.size, turns: turns.size }),
+    stats: () => ({ ...stats, pending: pending.size, turns: turns.size, jobs: jobs.size }),
     close() {
       clearInterval(sweep);
       abandon();
@@ -253,4 +333,4 @@ function createControl({ configFile = null, log = null, version = '0', now = Dat
   return api;
 }
 
-module.exports = { createControl, PROTOCOL };
+module.exports = { createControl, PROTOCOL, WAIT_TOOL };
