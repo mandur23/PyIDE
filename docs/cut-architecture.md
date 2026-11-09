@@ -19,7 +19,7 @@ main/features/cut.js  --IPC cut:*-->  renderer/features/cut/
 main/cut/*.js                           index.js        loads the scripts in order, starts Cut.ui on cutReady
   files, project I/O, autosave,         time.js state.js                                   shared
   recovery, export file sink,           codecs mp4read mkvread audioread probe mp4write    formats
-  cache, relink search, fonts           captionwords model keyframes commands srt          project
+  cache, relink search, fonts           captionwords remap model keyframes masks commands srt   project
                                         effects textrender media decoder compositor player thumbs   engine
                                         presets audioengine export testsrc                 sound and export
                                         analyze speech ai                                  automation (signals, speech, Claude)
@@ -232,14 +232,14 @@ built byte by byte. Real encoder output is checked in `verify/cut-export.mjs`.
 
 ## 6. Project model, commands, keyframes, captions
 
-Files: `model.js`, `keyframes.js`, `commands.js`, `srt.js`. Tests: `verify/cut-model.mjs` (plain Node).
+Files: `remap.js`, `model.js`, `keyframes.js`, `masks.js`, `commands.js`, `srt.js`. Tests: `verify/cut-model.mjs` and `verify/cut-mask-core.mjs` (plain Node).
 
 ### `Cut.model`
 
 The project JSON is video-editor-features.md §19. Exact shape, all times in ticks:
 
 ```js
-Project = { format: 'ncut', version: 1, settings: Settings, media: [Media], bins: [Bin], sequences: [Sequence], nextId,
+Project = { format: 'ncut', version: 4, settings: Settings, media: [Media], bins: [Bin], sequences: [Sequence], nextId,
             speakers? /* speaker labels: Speakers */ }
 Speakers = { list: [{ id: 'sp<n>', name /* '' shows as "Speaker N" */, color: '#rrggbb' }],
              turns: { [mediaId]: [[t0, t1, speakerId]] /* source SECONDS, in order, apart */ },
@@ -255,14 +255,19 @@ Sequence = { id, name, w, h, fps: [num, den] /* one of time.FRAME_RATES */, rate
              markers: [Marker], captions: [CaptionTrack] }
 Track = { id, kind: 'video' | 'audio', name, locked, syncLock, height, visible /* video */, mute, solo, volume /* dB */, pan /* audio */ }
 Clip = { id, track, start, in, out,           // timeline position, source in/out (source ticks)
-         source: { media } | { media, freeze: true } | { generator: 'text' | 'solid' | 'adjustment', ...params },
+         source: { media } | { media, freeze: true } | { generator: 'text' | 'solid' | 'adjustment', ...params }
+               | { sequence: seqId },                // a nest clip: in/out are times of that sequence
          speed: 1, reverse: false, enabled: true, link: linkId | null, group: null, name, label,
+         remap: null | Remap,                   // Time Remapping of a video clip (below); then speed 1, reverse false
+         sampling: 'sample' | 'blend',          // Time Interpolation: Frame Sampling (default) or Frame Blending
          role: null | 'dialogue' | 'music' | 'effects' | 'ambience',   // what its sound is (automation)
          props: { position: [x, y] /* px from center */, scale: [sx, sy] /* % */, rotation /* deg */, anchor: [x, y], opacity /* % */,
                   crop: [top, right, bottom, left] /* % */ }  |  { volume /* dB */, pan }   // video | audio clip
          keyframes: { [path]: [Keyframe] },
-         effects: [Effect], fadeIn: 0, fadeOut: 0 /* ticks, audio */, markers?: [Marker] /* t from the clip start */ }
-Effect = { id, type, on: true, params: {} }   // params only where they differ from the registry's defaults
+         effects: [Effect], fadeIn: 0, fadeOut: 0 /* ticks, audio */, markers?: [Marker] /* t from the clip start */,
+         masks?: [Mask] /* Opacity's masks, video clips only; absent when none (below) */ }
+Effect = { id, type, on: true, params: {},    // params only where they differ from the registry's defaults
+           masks?: [Mask] }                   // the masks that limit a video effect; absent when none
 Keyframe = { t /* from clip start */, v /* number or array */, ease: 'linear' | 'hold' | 'easeIn' | 'easeOut' | 'easeInOut' | 'bezier', h?: [x1, y1, x2, y2] }
 Transition = { id, track, at /* edit point ticks */, type, duration, align: 'center' | 'start' | 'end', params: {} }
 Marker = { id, t, duration: 0, name, note, kind: 'comment' | 'chapter' | 'beat', color }
@@ -281,6 +286,129 @@ box: {color, padding, radius} | null, position: [x, y] }`. Solid: `{ generator: 
 (`{ media, freeze: true }`) is a still showing the frame at `clip.in`. `settings.textStyles` entries are
 `{ id: 'ts<n>', name, style: {font, size, weight, italic, tracking, leading, align, fill, stroke, shadow, box} }`.
 
+A nest clip (`source: { sequence }`, Premiere's nested sequence; version 2 of the format, a version 1 file has none and
+migrates as it is) shows and plays another sequence of the project. Its in/out are ticks of that sequence, read through
+`sourceTime` like a file's (speed, reverse), so whatever later changes `sourceTime` (time remapping) applies to nests
+too. Its source length is the nested sequence's duration (`sourceLength`), never less than the clip's own `out`, since
+the nested sequence may get shorter after the clip was cut; past its end the clip is transparent and silent. It may sit
+on a video or an audio track; no `freeze`. `validate` refuses a nest clip of a missing sequence or of its own, and any
+loop of nest clips (A shows B shows A).
+
+#### Time remapping (`remap.js`, `Cut.remap`)
+
+Premiere's Time Remapping > Speed: a video clip's speed changes along it (ramps, reverse, holds) and its length follows.
+Version 3 of the format; a version 1 or 2 file has none (`remap: null`, `sampling: 'sample'`) and reads as it is.
+
+The shape is a **keyframed speed curve over clip time**, and source time is its integral:
+
+```js
+Remap = { at /* source ticks at clip time 0 */, speeds: [v0, ..., vn] /* 1 = 100%, 0 a hold, < 0 reverse */,
+          keys: [{ t, ramp }] /* n keys, whole frames from the clip start, in order */, duration /* whole frames */ }
+```
+
+`speeds[0]` runs until `keys[0].t`; key i ramps (speed linear in time) from `speeds[i]` to `speeds[i + 1]` over
+`[t, t + ramp]` (ramp 0: a jump); the last speed runs on. So the curve is made of constant pieces (source linear in
+time) and ramp pieces (source quadratic in time). A speed a person sets is 1% to 10000% in size, or 0 (`setSegmentSpeed`,
+the drags, `moveKey`, which limits the dragged length so the speed from whole frames stays inside); a stored curve may
+hold any speed up to 10000% in size, since a cut, a head trim or an overwrite inside a ramp next to a hold starts the
+new curve at the speed there (0.33% one frame in), and `valid` and `setRemap` accept it.
+
+Why this shape and not keyframes of source time over clip time. The timeline's rubber band and Effect Controls show and
+edit *speed*: dragging a segment up or down, a key splitting into a transition, a reverse or hold segment are each one
+number or one key in this shape, while with source-time keys a speed change has to move every later key's source time
+and a ramp has to keep its quadratic consistent with its neighbours' slopes (an invariant to keep, not a shape). Key
+times are whole frames of the sequence, as every other clip time, so the frame-exact rules hold: the clip's length is
+`duration`, a frame count, never a quotient. The three questions have closed forms:
+- clip time -> source time (compositor, prefetch, export): find the piece (binary search on its end), evaluate
+  `sr + vr x + a x^2 / 2`. `sourceAt` takes one tick off where the speed is negative, as a reversed clip shows the
+  frame before its out point first.
+- source time -> clip time (Match Frame's inverse, scene and beat markers through `analyze.toTimeline`): per piece a
+  linear or quadratic root; the earliest in the clip wins (`clipTimeOf`).
+- the duration: stored; a speed change computes the new one from the source frames the changed segment keeps.
+
+The curve is defined at every clip time (before 0 at the first speed, after the last key at the last speed); the clip
+shows `[0, duration)`. Keys past `duration` are the hidden tail, the way source past an out point is: a curve that grew
+into the next clip keeps its rest there, and an end trim brings it back. A remapped clip's `in`/`out` are the lowest and
+highest source time the curve reaches over the clip (`range(r)`; a tick apart for a clip that only holds one frame),
+kept by every command, so each existing source clamp, range and `sourceLength` check holds unchanged. Its `speed` is 1
+and `reverse` false: the curve has both. A curve without keys is a constant speed, so the commands store it as one
+(`speed`, `reverse`, `remap: null`): Speed/Duration works on it again.
+
+`Cut.remap`: `MIN`, `MAX`, `MAX_KEYS`; reading: `pieces(r)`, `value(r, t)` (continuous source time), `speedAt(r, t)`,
+`sourceAt(r, t)` (the frame's), `bounds(r, a, b)`, `range(r)`, `clipTimeOf(r, s, a = 0, b = duration)`, `stay(r, from,
+dir, lo, hi)` (how far from `from` the curve stays inside a source range: trim room and length limits), `segmentSpan`,
+`segmentAt(r, t) -> {index} | {ramp}`, `valid(r, f)`, `isConstant`; edits, each returning a new curve: `constant(at,
+speed, duration)`, `shift(r, d)` (seen from clip time d: a trimmed head or the right part of a cut, a ramp across d
+keeping its rest), `withDuration`, `setSegmentSpeed(r, i, v, f)` (the segment's constant part keeps its source frames, so
+its length changes and later keys and the end move), `addKey(r, t)` (null inside a ramp or on a key), `removeKey(r, i,
+f)` (the speed before it goes on), `splitKey(r, i, 'left' | 'right', x, f)`, `moveKey(r, i, dt, f, { keepSpeeds })`
+(keepSpeeds: Alt; otherwise the key keeps its source frame and the segment before it changes speed; a hold before it
+gets longer), `insertReverse(r, i, len)` and `reverseRoom` (Ctrl-drag: back `len` at the arriving speed, forward `len`
+to the key's frame), `insertFreeze(r, i, len)` (Ctrl+Alt-drag), `refit(r, fn, f)` (another frame grid).
+
+What edits do with a remapped clip (`commands.js`): a start trim and the right part of a razor see the curve from the
+new head (`shift`); an end trim, the left part, extend edit and slide change `duration`; slip moves `at` (and in/out)
+by the delta in source ticks one for one; a frame rate change and a paste into another rate move keys and length to the
+new grid (`refit`, the length kept inside the source); copy and paste carry the curve on a video track; nest clips are
+remapped the same way (their source is their sequence's time). Speed/Duration, Reverse Speed and the Rate Stretch tool
+refuse a remapped clip (`remap`), as Premiere greys them out. Frame Hold Segment cuts it like any clip.
+
+#### Masks (`masks.js`, `Cut.masks`)
+
+Premiere's masks of Opacity and of the video effects. Version 4 of the format; a version 1 to 3 file has none and reads
+as it is.
+
+```js
+Mask = { id /* 'm<n>', unique across the clip's lists */, mode: 'add' | 'subtract' | 'intersect' | 'difference' | 'none',
+         inverted: false, path: [x, y, inX, inY, outX, outY, ...] /* 3 to 256 vertices */, feather: 10 /* 0..1000 */,
+         opacity: 100 /* % */, expansion: 0 /* -2000..2000 */ }
+```
+
+The path is one flat list, six numbers a vertex: the vertex and its in and out bezier handles relative to it, all as
+fractions of the clip's picture (its fitted frame, a nest's fitted sequence, a text or solid clip's full frame), so a
+mask follows the clip's motion and survives a change of sequence size or fit. A corner has both handles 0. Edge i is the
+cubic (v_i, v_i + out_i, v_i+1 + in_i+1, v_i+1), the last back to the first: masks are always closed (the pen keeps its
+points in the screen until the path is closed). Feather and expansion are sequence pixels, scaled by `pxScale` as every
+pixel-sized effect parameter. Why a flat list: Mask Path is keyframed as one value, and `keyframes.mix` already
+interpolates two arrays of the same length element by element and holds the earlier one when the lengths differ, which
+is the rule: **Mask Path keyframes interpolate vertex by vertex (each vertex and its handles, with the keyframe's ease)
+when the vertex counts match, and hold the earlier path until the next keyframe when they do not.** Adding or deleting
+a vertex on a keyframed path does it on every keyframe (`mapKeyframes`), so the counts stay equal.
+
+Keyframable paths: `masks.<id>.<field>` (Opacity's) and `effects.<id>.masks.<id>.<field>` for `path`, `feather`,
+`opacity`, `expansion` (`FIELDS`); `inverted` and `mode` are not keyframed. `keyframes.staticValue` reads both shapes.
+Keyframe times are clip time like every other keyframe, also on a time-remapped clip.
+
+Coverage at a pixel center (CPU `coverage`, WGSL `WGSL`, the same arithmetic): the path flattened (`FLATTEN` 16
+segments a curved edge, one a straight edge); d = the distance to the segments, positive inside (even-odd); the shape's
+coverage is smoothstep(-w/2, w/2, d + expansion) with w = max(feather, 1); Inverted takes 1 - it; Mask Opacity
+multiplies it. The masks of a list combine top to bottom: the total starts at 0, or 1 when the first mask that is not
+None subtracts or intersects; Add a + m - am, Subtract a(1 - m), Intersect am, Difference a + m - 2am; None masks are
+left out, and a list of None masks only is no mask. Opacity's masks multiply the clip's picture after all its effects;
+an effect's masks mix its output over its input (`cutCpu`, `mixCpu` are the CPU references).
+
+`Cut.masks`: `MODES`, `FIELDS`, `DEFAULTS`, `RANGES`, `MAX_MASKS` (16 a list), `MAX_POINTS`, `MIN_POINTS` (3), `FLATTEN`,
+`KAPPA`, `SIGMA`; `count`, `validPath`, `validField`, `valid`, `problem` (why not), `full` (defaults filled), `lists(clip)`
+(`[{effectId, prefix, list}]`), `prefixOf(effectId)`, `nextId(clip)`, `parsePath(prop)` -> `{effectId, maskId, field}`;
+shapes `ellipse(w, h, {cx, cy, r})` (Create Ellipse Mask: a circle of a quarter of the shorter side, four smooth
+vertices), `polygon(w, h, {cx, cy, s})` (Create 4-point Polygon Mask: a centered square half the shorter side across),
+`fromPoints([{x, y, hx, hy}])` (the pen); geometry `flatten`, `signedDistance`, `contains`, `edge`, `cubic`, `vertex`,
+`isCorner`, `outline(path, w, h, d)` (the guide lines), `topPoint`; coverage `prepare`, `coverage`, `coverageAt`,
+`cutCpu`, `mixCpu`, `at(clip, prefix, list, local)` (the values at clip time, null when none counts), `gpuData`,
+`canvasCoverage`, `path2d`; edits `translate`, `moveVertex`, `setHandle(path, i, 'in' | 'out', hu, hv, w, h, {broken})`,
+`toggleSmooth`, `insertVertex(path, edge, t)` (de Casteljau, the shape kept), `removeVertex`, `nearestVertex`,
+`nearestEdge`, `mapKeyframes`.
+
+Commands: `addMask(seqId, clipId, mask, { effectId })` (label Add Mask; the mask's fields over `DEFAULTS`, the next id;
+refused `notVideo` off a video track, `noMasks` for an effect whose def says `masks: false` (Edge Extend) or an audio
+effect, `tooMany` past 16, `invalid` -> `{id}`), `setMask(seqId, clipId, maskId, patch, { effectId })` (label Mask; mode,
+inverted, path, feather, opacity, expansion; `invalid`), `removeMask(seqId, clipId, maskId, { effectId })` (label Remove
+Mask; its keyframes go too; the list goes when it is empty). Razor, paste (on a video track), freeze frame, nest and
+copy carry masks and their keyframes; `removeEffect` removes its masks' keyframes with its own. `validate` checks every
+mask (shape, ranges, ids unique across the clip, 1 to 16 a list, none on an audio track) and every mask keyframe's
+value; `migrate` fills a mask's missing fields and drops a damaged mask (with its keyframes), keyframes of a mask that is
+not there, and keyframe values that are not values of their field.
+
 Ids: track ids (V1, A2) are unique within their sequence; effect and text layer ids within their clip; every other id
 (media, bins, sequences, clips, transitions, markers, caption tracks and items, links) is project-wide
 (`newId(project, prefix)` = prefix + `nextId`). A link has two or more clips of one sequence.
@@ -290,7 +418,7 @@ frame length), not to whole ticks: at speeds other than 1, in/out are not whole 
 durations off the frame grid. That is why sequences accept only `time.FRAME_RATES` (`validFps`). Always use
 `clipDuration`/`clipEnd`, never `(out - in) / speed`.
 
-Exports: `VERSION`, `QUANTUM`, `EASES`, `GENERATORS`, `VIDEO_PROPS`, `AUDIO_PROPS`, `MARKER_KINDS`, `ROLES`, `ALIGNS`; `clone`,
+Exports: `VERSION`, `QUANTUM`, `SAMPLINGS`, `EASES`, `GENERATORS`, `VIDEO_PROPS`, `AUDIO_PROPS`, `MARKER_KINDS`, `ROLES`, `ALIGNS`; `clone`,
 `newId`, `defaultSettings`, `createProject(opts)`, `createSequence(opts)` (default tracks V1, V2, A1, A2),
 `createTrack`, `createClip`, `createTextLayer`, `defaultCaptionStyle`, `videoProps`, `audioProps`;
 `validate(project) -> { ok, errors: [string] }` (shapes, ids unique, references resolve, no overlapping clips on a
@@ -298,8 +426,16 @@ track, times frame-aligned to the sequence), `validPropPath(clip, kind, path)`, 
 `migrate(json) -> project` (fills missing fields with defaults, snaps keyframe, marker and caption times to frames;
 throws `code: 'notProject'` or `'newer'`; a missing or unknown clip `role` becomes null); `clipDuration`, `clipEnd`, `sequenceDuration(seq)`,
 `clipsAt(seq, t, {kind})` (enabled clips under t, V1 first), `sourceTime(clip, t)` (the source time a timeline time
-shows: speed, reverse and freeze included), `trackIndex(seq, id)` (the index among tracks of the same kind: V1 = 0,
-A1 = 0), `trackOf`, `linkedClips(seq, clip)`, `mediaOf(project, clip)`, `isGenerator`, `isStill`.
+shows: speed, reverse, freeze and time remapping included), `timelineTime(clip, src)` (the inverse: the first timeline
+time that shows src, clamped to the clip's edges outside it; null for a freeze), `sourceSpan(clip, a, b) -> [lo, hi]`
+(the source a timeline range shows, what to decode ahead), `sourceRoom(project, clip) -> {head, tail}` (timeline ticks
+the source lets the clip grow at each end), `remapOf(clip)` (its curve, or its constant speed as one), `trackIndex(seq, id)` (the index among tracks of the same kind: V1 = 0,
+A1 = 0), `trackOf`, `linkedClips(seq, clip)`, `mediaOf(project, clip)`, `isGenerator`, `isStill`; nests: `isNest(clip)`,
+`nestOf(project, clip)` (its sequence or null), `sourceLength(project, clip)` (the media's duration, or the nested
+sequence's, at least `clip.out`; every source clamp uses it), `nestedIds(seq)` (the sequences its nest clips show),
+`reaches(project, fromId, toId)` (through nest clips, any depth), `nestLoop(project, outerId, innerId)` (placing a nest
+of inner in outer would loop), `nestUses(project, seqId)` (`[{seq, clips}]` that show it), `nestKinds(project, seqId)`
+(`{video, audio}`: whether it has clips on tracks of each kind, so what a nest clip of it places).
 
 Engine and export map timeline time to source time only with `sourceTime(clip, t)`.
 
@@ -313,7 +449,7 @@ draw a segment as it is now: the preset's for the eases, `[1/3, 1/3, 2/3, 2/3]` 
 hold; turning a keyframe into bezier with them keeps its values), `DEFAULT_HANDLES`.
 
 Ease names have the CSS meaning: `easeIn` starts slowly, `easeOut` arrives slowly. A keyframe's ease shapes the
-segment that leaves it. Keyframable paths are the props (`'opacity'`, `'position'`...), `effects.<id>.<param>` and
+segment that leaves it. Keyframable paths are the props (`'opacity'`, `'position'`...), `effects.<id>.<param>`, the masks' fields (`masks.<id>.<field>`, `effects.<id>.masks.<id>.<field>`) and
 `layers.<id>.<field>`. A text layer's `opacity` (0..100) and `reveal` (0..1, typewriter) exist only as keyframes.
 
 ### `Cut.commands`
@@ -348,11 +484,14 @@ Options are nested, never spread to the top level. The builders:
   nothing; a bad entry is refused with code `invalid`). `project.luts` (optional) is `{ 'lut-<16 hex>': { name, title,
   size, min, max, data /* base64 float32 rgb */ } }`; `validate` checks every entry, `migrate` drops the ones no
   effect's `lut` names and the damaged ones (`model.lutsInUse(project)`)
-- sequences: `addSequence(opts)` (`{from: seqId}` duplicates), `removeSequence(id)`,
+- sequences: `addSequence(opts)` (`{from: seqId}` duplicates), `removeSequence(id)` (its nest clips in other sequences
+  go too),
   `setSequence(id, patch)` (name, w, h, fps, background, masterGain)
 - tracks: `addTrack(seqId, kind, index?, {name})`, `removeTrack(seqId, trackId)`, `setTrack(seqId, trackId, patch)`
 - placing: `place(seqId, { source, in, out, at, video: trackId | null, audio: trackId | null, mode: 'insert' | 'overwrite' })`
-  (linked video and audio clips), `placeRange(seqId, { source, in, out, range: {in, out}, video, audio, mode })`
+  (linked video and audio clips; a `{sequence}` source places a nest clip, video and audio as `nestKinds` says, its
+  whole length by default, unnamed; refused with `nestLoop` when it would loop and `emptySequence` for an empty one;
+  `paste` refuses a loop the same way), `placeRange(seqId, { source, in, out, range: {in, out}, video, audio, mode })`
   (three-point edit with the sequence In/Out; with all four points the source In/Out is used),
   `paste(seqId, clips, { at, video, audio, mode })` (copied Clip objects, best with a `kind` field)
 - moving: `move(seqId, clipIds, { delta, trackDelta, insert, linked, nudge })`; `trackDelta` is a number or
@@ -379,8 +518,13 @@ Options are nested, never spread to the top level. The builders:
   `remove(seqId, clipIds, { ripple, linked })`, `rippleToPlayhead(seqId, t, 'before' | 'after', { trackIds })` (Q and
   W), `closeGap(seqId, trackId, t)`, `lift(seqId, in, out, trackIds | null)`, `extract(seqId, in, out, trackIds | null)`
 - clip settings: `setClip(seqId, clipId, patch, { linked })` (props, speed or duration (the speed that fits the
-  source; not both), ripple, reverse, enabled, name, label, role, fadeIn, fadeOut), `setKeyframes(seqId, clipId, path,
-  keyframes | null)`, `link(seqId, ids)`, `unlink(seqId, ids)`, `setRole(seqId, clipIds, role, { linked })` (linked
+  source; not both), ripple, reverse, enabled, name, label, role, fadeIn, fadeOut, sampling (label Time
+  Interpolation)), `setKeyframes(seqId, clipId, path, keyframes | null)`, `setRemap(seqId, clipId, remap | null)` (label
+  Time Remapping; a video clip with source frames plays the curve, null a constant speed again (the speed at its start).
+  Only the clip changes: its linked audio keeps its speed (time remapping is video only, as in Premiere). As in
+  Premiere it does not push later clips: a longer curve grows the clip up to the next clip (`clamped: 'neighbour'`)
+  and the rest waits past its end; it also stops where the curve leaves the source (`'source'`). A transition at its
+  end moves with the end. -> `{ duration, clamped }`), `link(seqId, ids)`, `unlink(seqId, ids)`, `setRole(seqId, clipIds, role, { linked })` (linked
   clips too unless `linked: false`; refused on a locked track), `group(seqId, ids)` (two or more clips get one new
   `clip.group` id `G<n>`, else `groupOne`; -> `{group}`), `ungroup(seqId, ids)` (every member of their groups;
   -> `{groups}`)
@@ -403,6 +547,19 @@ Options are nested, never spread to the top level. The builders:
   place for a trimmed start, and takes `words` itself (`null`: none). An item's `speaker` (`sp<n>`) stays through
   every edit; `setCaption` sets it (`null`: none). Ripples, the split of a caption across an insert
   and a frame rate change carry them with their sound (`captionwords.remap`).
+- masks: `addMask(seqId, clipId, mask, { effectId })`, `setMask(seqId, clipId, maskId, patch, { effectId })`,
+  `removeMask(seqId, clipId, maskId, { effectId })` (Masks above)
+- nesting: `nest(seqId, clipIds, { name, linked })` (label Nest, Premiere's Clip > Nest): the clips, with what links
+  to them and the rest of their groups unless `linked: false`, move into a new sequence (this one's size, rate,
+  background and number of tracks of each kind; each inner track hidden, muted and soloed as its outer one, its volume
+  and pan less those of the audio track the nest clip lands on, which apply to the nest clip, so the nest sounds and
+  looks as the tracks did; a balance pan composes exactly only when that landing track is centered), each on the track
+  at the same place among its kind, at its time from
+  the earliest of them, keyframes, effects and clip markers unchanged; a transition moves along when every clip at its
+  edit point does; a link not moved whole is dropped from the moved side. One nest clip spans [earliest start, latest
+  end): video on the lowest of their video tracks, audio on the lowest audio track, linked, overwriting the rest of
+  that span there. The sequence joins the bin of this one. -> `{ id /* the new sequence */, ids /* the nest clips */ }`;
+  `noClips` for an empty list, `locked` for a clip on a locked track
 - several as one: `batch(label, [commands])` runs them in order on one recording, so it is one undo step with that
   label (the automation's labels are part of `LABELS`); a part that fails takes back the others; the project is
   validated once, at the end; a batch inside a batch is refused. -> `{ results: [each result] }`
@@ -427,7 +584,8 @@ Editing rules every command follows (the commands.js header has them too):
 Errors a person can cause throw an Error whose message is a fixed English sentence (shown with `tr(err.message)`)
 and `err.code`, sometimes `err.detail`: `locked`, `noTrack`, `noTarget`, `tooShort`, `noRange`, `noGap`,
 `gapBlocked`, `noEdge`, `noFrame`, `noRoom`, `notOnClip`, `overlap`, `linkOne`, `groupOne`, `noEdit`, `still`,
-`speed`, `gain`, `fps`, `size`,
+`speed`, `gain`, `fps`, `size`, `nestLoop`, `noClips`, `emptySequence`, `remap` (a speed edit of a remapped clip, or
+remapping an audio clip), `source` (a curve that starts outside its source),
 `binLoop`, `invalidResult`, `damaged`, `notFound` (unknown ids). `migrate` adds `newer` and `notProject`.
 
 ### `Cut.srt`
@@ -645,7 +803,7 @@ color math stays here).
 A def: `{ type, name /* English, shown through tr() */, category, kind: 'video' | 'audio', params: [{ id, name, type:
 'number' | 'angle' | 'percent' | 'color' | 'bool' | 'choice' | 'point' | 'curve' /* [x0, y0, x1, y1...], keyframed as
 a whole */ | 'lut' /* an id of project.luts */, min, max, step, default, choices? /* [[id, English label]] */,
-keyframable, group? /* Lumetri Color's section, shown by Effect Controls */ }], gpu, cpu, canvas2d, assets? }`. `gpu.wgsl` is the body, `gpu.code` the complete
+keyframable, group? /* Lumetri Color's section, shown by Effect Controls */ }], gpu, cpu, canvas2d, assets?, masks? /* false: takes no masks (Edge Extend) */ }`. `gpu.wgsl` is the body, `gpu.code` the complete
 WGSL. A video effect's `gpu.uniforms(params, {width, height, pxScale, quality, frame})` returns a list of passes (each
 at most 16 floats; `[]` means nothing to do); a transition's `gpu.uniforms(params, progress)` returns one array.
 `cpu(image, params, info)` is the reference the tests compare with, `canvas2d(params, info)` a hint for the 2D back end
@@ -804,7 +962,36 @@ with `backend: '2d'`) a Canvas 2D fallback; `compositor.backend` says which.
   transforms, opacity, crop, text, the transitions and colors through CSS `filter` (mixed in sRGB values; vignette is a
   radial gradient; wipes have a hard edge; edge extend and the effects whose hint is `{ skip: true }` are not drawn;
   slide, iris round and cross zoom are drawn as a cross dissolve). Missing media draws a red "Media Offline" frame.
-- Pure helpers: `plan`, `planItem`, `fitScale`, `transitionRange`, `extendedSourceTime`, `missingHandles(project,
+- Nests: `planItem` of a nest clip is `{ kind: 'nest', sequence, srcT /* its time in that sequence */, layers /* plan(project,
+  sequence, srcT) */, ...the clip's own effects and motion }`. Every item carries `key` (the ids of the nest clips above
+  it and its own, `'c12/c4'`, so a clip shown through two nests at once gets two frame sources and text canvases) and
+  `seqW`/`seqH` (the sequence it is placed in). Back ends draw a nest's layers into a transparent picture of its
+  sequence's size fitted to the outer one (`fitScale`, like a video frame of that size; the nested sequence's
+  background is not drawn, as in Premiere), then run the nest clip's effects on it and place it with its crop, motion
+  and opacity. `prefetch` follows nests to the frames they show. Later features (masks, time remapping) change the nest
+  item as they change any item (its masks and effects, its `srcT` through `sourceTime`), never its `layers`.
+- Masks (`Cut.masks`): every item carries `masks` (Opacity's, `masks.at` at its clip time; null when none counts) and
+  each of its effects `masks` (null likewise; never for a def with `masks: false`). They work in the item's own frame,
+  before its crop and motion, so they follow the clip. WebGPU: after an effect's last pass, a mask pass (`masks.WGSL`:
+  binding 0 the effect's output, 1 its input, 2 the uniforms, 3 a read-only storage buffer of `masks.gpuData`, all of a
+  frame's lists in one buffer at 256-byte offsets) mixes the output over the input by the coverage; after all effects
+  another pass multiplies the picture by Opacity's masks' coverage (binding 1 then weighs 0). An effect with no passes
+  (neutral parameters) gets no mask pass. Canvas 2D: `masks.canvasCoverage` draws the coverage as a canvas's alpha
+  (the modes are canvas compositing: source-over, destination-out, destination-in and xor are exactly Add, Subtract,
+  Intersect and Difference; expansion is a round-joined stroke of twice its size, exact; the feather is approximated by
+  a Gaussian blur of sigma = feather / 3.76, the smoothstep's slope at the edge, within about 0.03 of coverage along the
+  ramp); Opacity's masks are a destination-in of it, and an item with a masked effect draws its effects one at a time,
+  a masked one mixed over its input (destination-out and destination-in, added with 'lighter'). A nest item's masks
+  apply to the nested picture; the clips inside keep theirs in its `layers`.
+- Time remapping: a remapped clip's item is an ordinary item; its `srcT` is `model.sourceTime` (the curve) and its
+  `frameIndex` stays the clip-local frame (grain and glitch still change through a hold). `extendedSourceTime` reads
+  the curve past the clip's ends for transitions, `missingHandles` divides by the speed there, `prefetch` decodes
+  `model.sourceSpan` (a reverse part's range too). Frame Blending (`clip.sampling === 'blend'`, a media file of constant
+  rate): the item carries `blend: { srcT /* the next source frame */, w /* 0..1, how far past the frame before */ }`
+  (null on a frame and for Frame Sampling); `fetchSources` decodes that frame too (`frameB`, released with the first);
+  WebGPU draws it over the first with weight w (`decodeExternal` with `rot.y = w`, blended OVER, in linear light), 2D
+  with `globalAlpha`. A nest item is not blended (its sequence has no frames to mix).
+- Pure helpers: `plan(project, seq, t, scope = '')`, `planItem` (with `blend` and `masks`), `fitScale`, `transitionRange`, `extendedSourceTime`, `missingHandles(project,
   seq, transition) -> {a, b}` (missing handle ticks, for the striped warning), `captionsAt(seq, t, which) -> [{style,
   t, items}]` (`t` at the start of its frame, so a playing monitor and export light the same word), `mediaSequence`.
 
@@ -894,6 +1081,13 @@ where playback started: the preview and the export give the same samples (`verif
   filter's reach on both sides, so they join without a seam. `load` reads at most 120 s of its range; `mix` counts a
   clip whose blocks are not read yet as `missing` and asks for them. The preview reads 15 s ahead of what it
   schedules; the export, `measure` and `renderOffline` go through `mixLoaded`.
+- A nest clip on an audio track is a source like a file: a store of 10 s blocks whose reader `read(from, to)` is the
+  nested sequence's `mix` (after `load`) over those samples, so its tracks' volume, pan, mute and solo and its
+  `masterGain` are in it, and the nest clip's speed, reverse, effects, volume, pan and fades apply on top. The store's
+  key is `nest:<seqId>:<hash>`, the hash of the JSON of that sequence, the sequences under it and their media: an edit
+  inside is heard at once, and the stores of earlier contents are dropped. The key is kept per project revision
+  (`model.revisionOf`: a history counts every change of its project in the symbol `model.REVISION`), so `mix` does not
+  hash the nest every block; a project no history edits is hashed every time.
 - Also `transitionRange`, `resample`, `stretch`, `kFilters`, `dbToGain`, `gainToDb`, `makeBuffer`,
   `decodeTrack(reader, track)`, `fileReader(path)`, `defaultGetAudio` (used when `Cut.decoder` is missing).
 
@@ -952,7 +1146,8 @@ getAudio, compositor })`:
 
 Also: `exportFrame(project, seqId, t, path, {backend})` -> PNG (through a VideoFrame of the compositor canvas),
 `chapters(seq, {firstName = 'Intro', range})` -> YouTube chapter text, `chapterProblems(seq)`,
-`preflight(project, seqId, range)` -> `{ offline: [{id, name, path}], empty }`, `saveBytes(path, bytes | text)`,
+`preflight(project, seqId, range)` -> `{ offline: [{id, name, path}], empty }` (inside nests too, over the part a nest
+clip shows), `saveBytes(path, bytes | text)`,
 `openSink`, `encodeAudio(planes, rate, {bitrate})`, `aacDelay`, `verifyFile`, `decodeRange`, `speed()` (pixels a
 second of the last export, kept in localStorage `cut.exportSpeed`), `framePlan`, `captionsInRange`, `captionsAt`,
 `sidecarPath`, `withExt`, `psnr`.
@@ -1166,7 +1361,7 @@ carry text only: transcript or caption text with times in seconds, clip, track a
 ## 10. Screen
 
 Files: `ui-base.js`, `ui-shell.js`, `ui-project.js`, `ui-monitors.js`, `ui-export.js`, `ui-captions.js`,
-`ui-keys.js`, `ui-timeline.js`, `ui-controls.js`, `ui-effects.js`, `ui-text.js`, `ui-color.js`, `ui-overlay.js`, `ui-auto.js`,
+`ui-keys.js`, `ui-timeline.js`, `ui-controls.js`, `ui-effects.js`, `ui-text.js`, `ui-color.js`, `ui-overlay.js`, `ui-masks.js`, `ui-auto.js`,
 `ui-history.js`, `ui-meters.js`, `ui-markers.js`, `ui-speech.js`, `ui-ai.js`, `ui-shortcuts.js`, `ui-settings.js`,
 `ui-proxy.js`, `ui-queue.js`; styles `css/shell.css`, `css/timeline.css`, `css/panels.css`, `css/tools.css`,
 `css/speech.css`, `css/ai.css`, plus `style.css` (tokens). Tests:
@@ -1231,7 +1426,10 @@ are (already upright).
 `program.showTrim({left, right} | null)` shows the frames on either side of an edit point (the timeline calls it
 during edge trims). The program monitor draws through `Cut.player` with the audio engine; the source monitor plays the
 media through a `Cut.state` app of its own (a one-clip project at the media's size and rate, the player in program
-mode). `app.source = {mediaId, in, out, t}` with In/Out in source ticks; Out is the exclusive end (playhead + 1
+mode). A sequence opened there (the project panel's Open in Source Monitor) is a copy of the editor's project whose
+first sequence holds one nest clip of it, rebuilt at each change of the project; Insert and Overwrite then place a nest
+clip and its drag handles give `{kind: 'source', sequenceId, in, out, video, audio}`. `app.source = {mediaId, in, out,
+t}` or `{sequenceId, in, out, t}`, with In/Out in source ticks; Out is the exclusive end (playhead + 1
 frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe']`), playback quality
 (`setQuality`), Proxy (`setProxy`, setting `cut.proxy`), dropped-frame count, full screen.
 
@@ -1285,7 +1483,36 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
   `xOf`/`tOf`/`hit`/`rowOf`/`clientPoint`, `invalidate`, `cancelDrag`, `setOverlay({ ranges, tracks } | null)` and
   `overlay` (time ranges drawn over the given tracks, all when `tracks` is null: the silence preview). The ruler draws
   `beat` markers as thin ticks (a bar marker, one with a name, a little thicker). The clip menu ends with
-  `Cut.ui.auto.clipMenuItems` (Audio Role, Automation).
+  `Cut.ui.auto.clipMenuItems` (Audio Role, Automation). `nest()` opens the Nested Sequence Name dialog
+  (`#cutNestDialog`, the first free "Nested Sequence N") for the selection and runs `nest` with the timeline's linked
+  selection; the clip menu, Clip > Nest… and the action `Cut.nest` call it. A drop of `{kind: 'sequence', id}` (the
+  project panel) or of a source with `sequenceId` places a nest clip; one that would loop, or of an empty sequence, is
+  refused with its message before anything changes. A double-click on a nest clip opens its sequence (a timeline tab)
+  at `sourceTime` of the playhead (clamped into the clip). Nest clips are drawn in `--cut-clip-nest` with a two-frame
+  mark and the sequence's name (`c.name` first).
+- Time Remapping on the clip's line (Premiere's rubber band). A video clip has an fx badge (yellow with effects) whose
+  menu, like Clip > Show Clip Keyframes, picks what the line shows: Opacity or Time Remapping > Speed (`view.band`,
+  per clip id, not saved; a remapped clip shows its speed until another choice). The speed line is a log scale (10% at
+  the bottom, 100% in the middle, 1000% at the top), a transition's span shaded, reverse parts red and holds blue on the
+  bottom; each key is two halves on the line and a tab above it. Hit parts: `rband` (the line), `rkey` with `half`
+  (`left`, `right`, `tab`) and `keyIndex`, `fx` (the badge). Ctrl+click on the line, or a click with the Pen, adds a key
+  (`remap.addKey`); dragging the line sets that segment's speed (`setSegmentSpeed`, Shift steps of 5%, a tooltip with
+  the speed and the clip's new length); dragging a half splits the key into a transition (`splitKey`); dragging the tab
+  moves the key keeping its source frame (`moveKey`), Alt keeps the speeds instead; Ctrl-drag makes a reverse segment
+  of the dragged length (`insertReverse`, then forward again), Ctrl+Alt-drag a hold (`insertFreeze`). Each drag is one
+  `setRemap` step through `liveEdit`. A key's context menu has Join Speed Transition and Delete Keyframe. Clip >
+  Video Options > Time Interpolation and the clip menu's Time Interpolation set Frame Sampling or Frame Blending
+  (`setSampling(id)` on the selected video clips). Speed/Duration on a remapped clip shows the reason instead of the
+  dialog, and the clip menu's Speed submenu is off. `remapPoint(clipId, t, {index, half} | null)` gives the client point
+  of the line or a key (tests). A remapped clip's name ends in "(Time Remapping)"; its thumbnails show the frame the
+  curve reaches under each tile.
+- Effect Controls of a video clip with source frames has Time Remapping > Speed after Opacity (`[data-section=
+  "remap:<clipId>"]`, row `[data-path="remap.speed"]`): the speed at the playhead (at the start off the clip); typing
+  sets the segment under the playhead; the stopwatch adds a key at the playhead (curve on) or removes the curve (a
+  constant speed at its first speed); the arrows go to the keys; the diamond adds or removes the key at the playhead.
+  The lane draws the speed (the same log scale) and each key, a split one as two with its transition shaded. Cut's own
+  Speed section (speed and reverse, later clips moving along) stays at the end for clips without a curve; a remapped
+  clip has none.
 - Keys: Ctrl+K cuts the selected clips under the playhead (`{clipIds, linked: false}`), else the targeted tracks;
   Ctrl+Shift+K passes `{allTracks: true}`; Q/W, paste and Ctrl+D use the targeted tracks; Alt-drag and Alt-trim pass
   `{linked: false}`. Trims are live inside a history group (begin, cancel + begin + do on each move, commit on
@@ -1298,9 +1525,22 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
   line's value; elsewhere: the value of that height) and drags it on; on a keyframe it drags that keyframe. All are
   live inside one history group, Alt leaves the linked clips. A click selects a clip with its group members (always)
   and their links (linked selection); Alt-click selects the clip alone. Grouped clips have a dashed outline.
-- `Cut.ui.overlay = { attach(viewEl, app, player) -> {detach, editText, pickColor, sample, layout, geometry, editor},
+- `Cut.ui.overlay = { attach(viewEl, app, player) -> {detach, editText, pickColor, sample, layout, placement, geometry, editor},
   editText(clipId, {created}), pickColor() -> Promise<[r, g, b] | null>, pickColorAt(u, v), active }`. Text editing
   sets `Cut.ui.typing` while open and is one undo group per visit.
+- Masks (`ui-masks.js`): `Cut.ui.masks = { selected /* {clipId, effectId, maskId} | null */, pen /* {clipId, effectId} |
+  null */, select(app, sel), startPen(app, target), stopPen(app), editing(app), create(app, clip, effectId, 'ellipse' |
+  'polygon'), remove(app, sel), maskOf, prefix, screen(), clientPoint(u, v) }` (each change emits the app event `mask`);
+  `Cut.ui.maskOverlay.attach({ layer, app, player, frameRect, placement, toSeq })` is called by the overlay, draws on its
+  layer with its geometry and returns `{ layout(clip), detach() }`; while a mask of the shown clip (or the pen) is
+  active the overlay hides the motion handles. Effect Controls (`maskBlock` in ui-controls.js) puts the three mask
+  buttons (`.cut-ec-maskellipse`, `.cut-ec-maskpoly`, `.cut-ec-maskpen`) and each mask (`.cut-ec-maskhead[data-mask]`,
+  then the rows Mask Path, Mask Feather, Mask Opacity, Mask Expansion, Inverted, Mask Mode through the usual
+  `paramRow`, keyed by the mask paths) at the top of Opacity and of every video effect whose def takes masks;
+  `Cut.ui.edit.defaultOf`/`setStatic` know the mask paths (`setMask`). On the monitor, hit order: the feather and
+  expansion handles, a smooth vertex's handles, a vertex (Ctrl: delete, Alt: corner/smooth), the outline (insert, then
+  drag), inside (move), outside (deselect); every gesture is one `edit.gesture` (Mask Path, Mask Feather, Mask
+  Expansion).
 - The Lumetri Color panel (`ui-color.js`, panel `color`) edits the selected video clip's `color.basic` in sections
   (Basic Correction, Creative, Curves, HSL Secondary, Vignette, folded ones in `cut.color.collapsed`); every control
   writes through `Cut.ui.edit.write` (a keyframe at the playhead when the parameter has keyframes) inside one
@@ -1562,7 +1802,7 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
 ### App events from the panels
 
 Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open' | 'save' | 'recover', path},
-`autosaved` {file, time, copy?}, `offline` {ids}, `exported` (the run result), `proxies`, `exportQueue`, `transcripts`, `patch`, `snapping`, `targets` {ids},
+`autosaved` {file, time, copy?}, `mask` {selected, pen} (ui-masks.js), `offline` {ids}, `exported` (the run result), `proxies`, `exportQueue`, `transcripts`, `patch`, `snapping`, `targets` {ids},
 `transitionSelection` {id, open?} (with `app.selectedTransition`), `captionSelection` {track, id}, `captionTrack` {id} (the captions panel's shown track), `trimPreview`
 {clipId, edge, mode, t, active}, `scrub` {active}.
 
@@ -1584,15 +1824,15 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | File | Kind | Port | What it covers |
 | --- | --- | --- | --- |
 | `verify/cut-formats.mjs` | Node | - | Readers and writer: mp4write output read back table by table; handcrafted ctts v1, co64 past 4 GB, stz2, elst, fragments, QuickTime PCM, Matroska lacing and damage, MP3 Xing/VBRI, RF64; truncated copies come back as values; a two-hour table against a clock; the scripts loading next to Monaco's AMD `require` |
-| `verify/cut-model.mjs` | Node | - | Every command against the expected timeline, exact undo/redo; 2,000 random commands; sync lock, links, groups, trim, slip, slide and rate stretch clamps, extend edit, snapping; keyframe values; history grouping, dirty, limit; SRT/VTT with CP949 and UTF-16; migrate; caption word timings (realign after edits, the lit word, Auto Captions' timings, edit/move/trim/ripple/insert/frame rate with exact undo, the uncertain words (`doubt`) and the speaker through ripple, insert, frame rate and a start trim, files, the random commands with timed captions) |
+| `verify/cut-model.mjs` | Node | - | Every command against the expected timeline, exact undo/redo; 2,000 random commands (nests and sequence sources among them); Nest (tracks and times kept, transitions, keyframes and clip markers along, the bin, links, Alt), a nest clip's trims, slip, razor, ripple delete and speed against its sequence's length, `nestUses`/`reaches`, loops refused (direct, through a third sequence, by paste, by `validate`), locked and empty cases, save and migrate (versions 1 and 2 open as 3), deleting a nested sequence and its undo, a nest of a nest; time remapping (clip time to source time and back at frame boundaries, a 50% segment, a speed transition's exact integral, reverse and hold segments, the length and its neighbour and source limits with the linked audio unchanged, razor and trims keeping every frame's source, slip, the refusals of Speed/Duration, Reverse and Rate Stretch, turning it off, Frame Blending as a setting, copy and paste also into 24 fps, a frame rate change, save, open, a version 2 file, a damaged curve dropped, `validate`'s refusals, a remapped nest clip; remap edits among the 2,000 random commands); sync lock, links, groups, trim, slip, slide and rate stretch clamps, extend edit, snapping; keyframe values; history grouping, dirty, limit; SRT/VTT with CP949 and UTF-16; migrate; caption word timings (realign after edits, the lit word, Auto Captions' timings, edit/move/trim/ripple/insert/frame rate with exact undo, the uncertain words (`doubt`) and the speaker through ripple, insert, frame rate and a start trim, files, the random commands with timed captions) |
 | `verify/cut-main.mjs` | Node | - | Every `cut:*` channel with Electron stubbed: read ranges and limits, UNC/`\\?\UNC`/`\\.\` paths, links to network paths, junctions, 8.3 names, streams; atomic project writes and .bak; autosave rotation, sessions, recovery; the sink; faststart; cache LRU; findMedia/listMedia; real fonts |
-| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references (every effect at chosen pixels and unchanged at its neutral parameters, grain and glitch per frame, the 2D hints and skips), transitions, crossfade, the compositor's plan (with the clip-local frame), fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
+| `verify/cut-engine-core.mjs` | Node | - | Effect registry and CPU references (every effect at chosen pixels and unchanged at its neutral parameters, grain and glitch per frame, the 2D hints and skips), transitions, crossfade, the compositor's plan (with the clip-local frame; a nest clip's plan: its sequence's layers at its source time, keyed under it, its own keyframes, effects and motion, after a start trim, a razor and reverse, two levels deep; a remapped clip's source time and frameIndex through a transition and a hold, a transition reading the curve before the clip, Frame Blending's next frame and weight; a remapped nest playing its sequence back and forward), fit scales, motion presets, the caption word highlight on every speaker color (the box for a line close to the highlight), the reader's block cache, audio assembly, peaks, dropped-frame count |
 | `verify/cut-analyze.mjs` | Node | - | Levels streamed in odd blocks, silences with minimum length and margins on frames, speech; click tracks at 90, 120 and 140 BPM (beats within 12 ms, bar phase on the accents); scene cuts on their frame with a flash ignored and a fade in giving one cut at most; auto color through color.basic's own math (a light picture kept light); ducking keyframes; ranges and clip time; loading as a page script |
-| `verify/cut-export-core.mjs` | Node | - | Presets (levels, bitrates, estimates), resampler and WSOLA, BS.1770-4 loudness and true peak, normalize and match gains, the mixer, testsrc frame numbers, export's pure parts (frame plan, chapters, captions in a range, SRT names) |
+| `verify/cut-export-core.mjs` | Node | - | Presets (levels, bitrates, estimates), resampler and WSOLA, BS.1770-4 loudness and true peak, normalize and match gains, the mixer (a nest clip sample for sample against the clips it holds, in preview and export blocks, its volume and pan on top, an edit inside heard at once, a start trim), testsrc frame numbers, export's pure parts (frame plan, chapters, captions in a range, SRT names) |
 | `verify/cut-audiofx-core.mjs` | Node | - | Audio effects: each filter's response at chosen frequencies against the analog theory (Butterworth 12/24/48 dB/oct, shelves, peaking, hum notches), the graph's `response()` against the processor, the defaults bit-exact; the compressor's static curve, knee, makeup, attack and release times; the limiter's ceiling with and without true peak, a smooth gain (no clipping), transparency and recovery; the gate closed at first, opening, holding, closing to its range; processors in calls of odd lengths; the mixer in one block, in blocks of 1 to 3,000 samples and from the middle (the same samples), against one continuous run (no seam; a 2 s release drifts, never steps), effect order and the on switch (`CUT_SRC_DIR` tests a copy) |
 | `verify/cut-color-core.mjs` | Node | - | Lumetri Color and Scopes math: curves (cleaning, the straight line, through every point without overshoot, master and channel at chosen pixels), `.cube` files good (TITLE, comments, CRLF, domains, input range, sizes 2/17/33/65) and bad (each refusal and its line), the LUT's id, base64 and decode, trilinear lookup exact on a channel swap, the HSL qualifier and correction at chosen pixels and Show Mask, Lumetri Color's order and nothing to do at its defaults; scopes: every 75% bar at its angle and in its target, gray in the middle, skin tone near its line, ramps as diagonals on the waveform and the parade, histograms, the frame box and step, the WGSL's integers; `addLut`, undo, a bad entry, migrate keeping and dropping LUTs, save and reopen; page scripts; the refusals translated |
 | `verify/cut-color.mjs` | app | 9781 | Lumetri Color and Lumetri Scopes with real mouse events: the Color workspace's layout and sections; the scopes following the playhead over gray, red and blue solids and a ramp, a scrub along the ruler, playing a 1080p30 source (counts about every 150 ms, no frames lost, none off screen), the toggles; a curve point added and dragged (one step, the monitor and the waveform brighter), the red channel, Ctrl+click, double click, Ctrl+Z; a LUT through `PYIDE_CUT_DIALOG` pickLut (red turns cyan), intensity, two bad files refused with nothing changed, undo and redo, saved and reopened with the `.cube` deleted; the HSL eyedropper, saturation 0, Show Mask; Effect Controls' groups; screenshots (`CUT_COLOR_ONLY`) |
-| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference (all registered ones, Lumetri Color's curves, Looks of 17 and 33 points kept in the project, HSL secondary and Show Mask too, grain and glitch at given frames, the same anywhere in a frame and from a new compositor); the scopes' GPU count equal to the CPU's bin for bin on 640, 800 (pillarboxed) and 1920 (step 3) wide canvases, the six 75% bars on the vectorscope, a ramp's diagonal, the 2D back end's CPU count; transitions at known points and every one against its CPU reference on two pictures; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback (a skipped effect left out, invert's filter drawn) |
+| `verify/cut-engine.mjs` | app | 9753 | Frame accuracy at 24/29.97/30/60 fps, speed and reverse; transforms and keyframes from pixels; every effect against its CPU reference (all registered ones, Lumetri Color's curves, Looks of 17 and 33 points kept in the project, HSL secondary and Show Mask too, grain and glitch at given frames, the same anywhere in a frame and from a new compositor); the scopes' GPU count equal to the CPU's bin for bin on 640, 800 (pillarboxed) and 1920 (step 3) wide canvases, the six 75% bars on the vectorscope, a ramp's diagonal, the 2D back end's CPU count; transitions at known points and every one against its CPU reference on two pictures; Korean text; captions; offline media; import errors; audio decode; thumbnails and peaks; 10 s 1080p30 playback with seeks and no leaked VideoFrame; the 2D fallback (a skipped effect left out, invert's filter drawn); masks: Opacity's masks (ellipse, polygon, a bezier of smooth points, inverted, expansion, the four modes, a first mask that subtracts) and every video effect but Edge Extend under an ellipse mask (untouched outside), Lumetri Color in an ellipse minus a square, a blur outside an inverted ellipse, each against the CPU reference; the Canvas 2D back end's masks against it (the feather approximated) and a masked Invert there |
 | `verify/cut-export.mjs` | app | 9754 | Test sources decode frame-exact; exported sequences re-decode with the right frames (PSNR >= 35 dB), beeps on flashes, pitch kept; hardware, software, HEVC and 2D back end; playback in `<video>`; range, captions, cancel, export frame, chapters; loudness; preview clock and meters; export speed |
 | `verify/cut-shell.mjs` | app | 9755 | The frame with real mouse and keys: lifecycle, autosave, recovery, close question, import, bins, offline and relink, monitors, export dialog, captions, keys; dialogs answered through `PYIDE_CUT_DIALOG` |
 | `verify/cut-auto.mjs` | app | 9757 | The Automation menu, the clip menu and the color panel's Auto with real clicks: silence removal with its timeline preview, a locked track, one undo step; roles and ducking keyframes; loudness and clip loudness measured again; beat markers on a click track and a drag snapping to them; scene markers and splits, waiting while playing, Cancel; auto color seen in the rendered frame; a 10-minute file's analysis time and memory; screenshots |
@@ -1600,6 +1840,10 @@ Besides those of state.js: `workspace` {id}, `lifecycle` {reason: 'new' | 'open'
 | `verify/cut-edit.mjs` | app | 9759 | The [2] editing keys and tools with real keys and drags: the keys as `Cut.<id>` actions (Find Action), the tool bar; lift and extract on targeted and locked tracks; paste insert; nudge with links and a locked track; groups (select, Alt-click, drag, nudge, delete, ungroup); D; E; rate stretch; slip with the two-up frames read from pixels; slide; pen keyframes on volume and opacity; match frame to the source monitor's frame (`CUT_EDIT_ONLY` picks parts) |
 | `verify/cut-panels.mjs` | app | 9762 | The History, Markers and Audio Meters panels and the Window menu with real clicks and keys: jumps through the history in one go, dimmed later steps, 1,500 steps in a virtual list; marker filters, search, click, double click and Delete; marker drags on the ruler (frames, snapping, range end) and its menu; Hold and Bezier in the lane and timeline menus, the hold step from pixels, a bezier handle drag; meters' peak, RMS, hold and clip lights from a 1080p30 source, read from the canvas; dropped frames with and without the meters (`CUT_PANELS_ONLY` picks parts) |
 | `verify/cut-mixer.mjs` | app | 9778 | The Audio workspace; the Audio Track Mixer with real drags and clicks: a fader drag (the track volume, the header's percent, one undo step, Ctrl+Z, +6 dB at the top, Alt+click), the master fader, the pan knob, M and S, the strips' meters while playing (two tracks, a mute, canvas pixels); the EQ's parameters and graph in the effect controls, a typed value; Essential Sound (one step, the audio type); an exported EQ cut at 1 kHz measured; the preview's and the export's samples compared; screenshots (`CUT_MIXER_ONLY` picks parts) |
+| `verify/cut-nest.mjs` | app | 9784 | Nested sequences in Korean with real mouse events and keys: Clip > 중첩… on clicked clips (two linked pairs with a dissolve and a text clip), the name dialog, one undo step, the nest clips on V1 and A1, the new sequence in the project panel, the nest color from the timeline's pixels, Ctrl+Z and Ctrl+Shift+Z, Find Action with a typed name; the program monitor's picture with the nest equal to the clips' at five times (frame numbers and pixels, the dissolve, keyframed opacity and the text included), the same on the Canvas 2D back end, the nest clip's opacity on top; double-click into the nested sequence's tab at the shown frame and its picture; a sequence dragged from the project panel onto another timeline; Open in Source Monitor and Overwrite (.); loops refused in Korean with nothing changed (the drop, a sequence on its own timeline, the command); Delete of a nested sequence asking with where it is used, Cancel, Delete, Edit > Undo; an export over the nest against an export of the nested sequence (frames, pixels, samples); screenshots (`CUT_NEST_ONLY`) |
+| `verify/cut-mask-core.mjs` | Node | - | Masks: coverage at chosen pixels against numbers worked out in the test (an ellipse against the true circle, a 4-point polygon and a pen triangle exactly, smooth bezier points against their cubics sampled densely), feather, expansion both ways, Mask Opacity, Inverted, the five modes of two masks and a first mask that subtracts or intersects, None, the edits that keep the shape (a vertex on a curve, corner and smooth), the mirrored and broken handle, the GPU data; Mask Path keyframes vertex by vertex with the ease, held for other counts, a vertex added on every keyframe; the commands, refusals (audio clip, Edge Extend, too many, bad values) leaving the project as it was, removeMask and removeEffect with their keyframes, exact undo, razor, paste and freeze frame; save and open (version 4), a version 3 file, a version 5 file refused, migrate dropping damaged masks and keyframes, validate's refusals; the plans of a masked nest (its own masks and Lumetri Color's, the inner clip's in its layers) and of a masked remapped clip (source through the curve, mask keyframes at clip time); the page script; the Korean names |
+| `verify/cut-mask.mjs` | app | 9764 | Masks with real mouse events and keys: Create Ellipse Mask and Create 4-point Polygon Mask in Effect Controls (one step each, the mask selected, the program monitor's pixels inside and outside, Ctrl+Z and Ctrl+Shift+Z); on the program monitor a vertex dragged out, the whole mask dragged, the feather handle (a softer edge in the pixels, the guide line), the expansion handle, Alt+click, Ctrl+click, a click and a Ctrl+click on the outline, a click outside; the mask following the clip's position; the pen (corners and a dragged smooth point, closed on the first point, Escape); Invert limited to an ellipse and Lumetri Color outside an inverted one; the Mask Path stopwatch, a keyframe made by a drag at frame 20, the path half way at frame 10 in the pixels; an export's frames equal to the program monitor's; screenshots (`CUT_MASK_ONLY`) |
+| `verify/cut-remap.mjs` | app | 9785 | Time Remapping with real mouse events and keys: the fx badge's Time Remapping > Speed, Ctrl+click adding a key, the line dragged to 50% (the tooltip, a 5 s clip in one step, the next clip and the linked audio unchanged, the program monitor's frame numbers), Ctrl+Z and Ctrl+Shift+Z, 20% stopping at the next clip; a key's half dragged into a 10-frame transition (tooltip, frames); Alt and plain drags of the tab, Ctrl-drag reverse and Ctrl+Alt-drag hold with their frames; Effect Controls' Time Remapping > Speed (the speed at the playhead, the stopwatch, Add/Remove Keyframe, a typed speed, turning it off); Clip > Time Interpolation > Frame Blending mixing two frames in linear light; an export's frames equal to the monitor's and the curve's; screenshots (`CUT_REMAP_ONLY`) |
 | `verify/cut-tools.mjs` | app | 9765 | The convenience tools with real clicks and keys: the shortcut editor (record, use, conflict refusal, remove, reset, Reset All, the typing guard), the ? cheat sheet; the Video Editor settings page (transition length through Ctrl+D, playback quality, Clear Cache, copies kept); Select and Remove Unused with undo, Find Missing Media relinking by size and by duration; proxies (offer, 720p H.264 GOP 15 in the cache, the monitor drawing it and export the original by pixels, fallback when deleted, waiting while playing, cancel, the offer dismissed per project); the export queue (order, a later edit not leaking in, move, cancel, retry, remove, the close question); the word-by-word caption highlight from the program monitor's pixels (each word's first frame, scrubbing, every frame read back while playing), the exported frames lighting the same word, a text edit in the panel with undo and redo, a rewritten caption unlit, the box style, a second track chosen in the captions panel redrawing the stopped monitor and burned in by the export panel (which names it), saved and opened again (`CUT_TOOLS_ONLY`) |
 | `verify/cut-speech.mjs` | Node | - | Speech recognition without a model: windows and their seams (squeezed end words, a half-heard start), words mapped through in, speed and reverse, two clips of one recording; caption line breaking (Korean 18 and English 42 characters, two balanced lines, 6 s, pauses, sentence ends, frames); fillers and pauses; deleting words; search; word times narrowed to their sound; Whisper's confidence through refine, the seams and the timeline, captions' doubts, the doubt in the model and `setCaption`; the word list parsed, fingerprinted, validated (project setting and main) and heard by the fake; the fake's bursts; main's temp files, windows, cancel, setup flow and error codes; loading as a page script |
 | `verify/cut-speakers-core.mjs` | Node | - | Speaker labels without a model: windows from word times; the NN-chain average-linkage tree against a brute-force one, Auto and a fixed count, stray windows, numbering; each word's speaker with a flip smoothed and a short answer kept; turns (also of 2,000 random overlapping word lists, always valid), the speaker at a time, a segment reassigned, labels made again matched to the old speakers (names, colors), no id a caption still names given to a new speaker; `validate`, `setSpeakers` with undo, redo and `null`, a caption's speaker through the caption commands, save and reload; the caption prefix and color, SRT names; `main/cut/speakers.js` (the fake's embeddings, bad windows, cancel, a closed window's embeddings cancelled, an empty model cache, the fake setup); a page script |

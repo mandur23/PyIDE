@@ -563,6 +563,20 @@
     return history;
   }
 
+  // A sequence in the source monitor (Premiere's Open in Source Monitor): a copy of the editor's project whose first
+  // sequence holds one nest clip of it at its own size and rate, so Insert and Overwrite place a nest clip.
+  function sequenceHistory(seqId, editorProject) {
+    const project = JSON.parse(JSON.stringify(editorProject));
+    const seq = project.sequences.find((x) => x.id === seqId);
+    const id = `s${project.nextId}`;
+    project.nextId += 1;
+    project.sequences.unshift(Cut.model.createSequence({ id, w: seq.w, h: seq.h, fps: seq.fps, videoTracks: 1, audioTracks: 1, name: seq.name }));
+    const history = Cut.commands.createHistory(project);
+    const has = Cut.model.nestKinds(project, seqId);
+    if (has.video || has.audio) history.do(Cut.commands.place(id, { source: { sequence: seqId }, at: 0, video: has.video ? 'V1' : null, audio: has.audio ? 'A1' : null, mode: 'overwrite' }));
+    return history;
+  }
+
   function mountSource(root, app) {
     const own = Cut.state.createApp();
     let media = null;
@@ -576,6 +590,9 @@
       inOut: () => ({ in: src()?.in ?? null, out: src()?.out ?? null }),
       setInOut: (p) => { if (src()) app.setSource({ ...src(), ...p }); },
     });
+    // the sequence shown instead of a media file, or null
+    let shownSeq = null;
+    const has = () => (shownSeq ? Cut.model.nestKinds(app.project, shownSeq.id) : { video: !!media && media.kind !== 'audio', audio: !!media?.audio });
     // Insert and Overwrite, and the handles that drag the clip (or only its video or audio) to the timeline.
     const dragV = el('span', 'cut-drag-handle video', undefined, { title: tr('Drag Video Only') });
     dragV.appendChild(icon('video'));
@@ -585,12 +602,13 @@
     const payload = (video, audio) => {
       const s = src();
       const total = Cut.model.sequenceDuration(own.sequence);
+      if (shownSeq) return { kind: 'source', sequenceId: shownSeq.id, in: s.in ?? 0, out: s.out ?? total, video: video && has().video, audio: audio && has().audio };
       return { kind: 'source', mediaId: s.mediaId, in: s.in ?? 0, out: s.out ?? (media?.kind === 'image' ? null : total), video: video && media?.kind !== 'audio', audio: audio && !!media?.audio };
     };
     const startDrag = (e, video, audio) => {
-      if (!src() || !media) return;
+      if (!src() || (!media && !shownSeq)) return;
       e.preventDefault();
-      ui.dnd.start(e, payload(video, audio), { label: media.name });
+      ui.dnd.start(e, payload(video, audio), { label: shownSeq ? shownSeq.name : media.name });
     };
     m.frame.addEventListener('pointerdown', (e) => startDrag(e, true, true));
     dragV.addEventListener('pointerdown', (e) => startDrag(e, true, false));
@@ -606,6 +624,25 @@
 
     function show() {
       const s = src();
+      const nextSeq = s?.sequenceId != null ? app.project?.sequences.find((x) => x.id === s.sequenceId) || null : null;
+      if (nextSeq) {
+        // Rebuilt on every change of the editor's project: the copy shows that sequence as it is now.
+        const changed = shownSeq?.id !== nextSeq.id;
+        const keep = changed ? (s.t || 0) : own.t;
+        media = null;
+        shownSeq = nextSeq;
+        root.classList.remove('no-source');
+        m.empty.hidden = true;
+        m.wave.hidden = true;
+        if (changed) m.pause();
+        try { own.setHistory(sequenceHistory(nextSeq.id, app.project), null, 'open'); } catch (err) { ui.report(err); return; }
+        m.setTitle(nextSeq.name);
+        if (keep) m.seek(keep);
+        m.layout();
+        m.refresh();
+        return;
+      }
+      shownSeq = null;
       const next = s ? app.project?.media.find((x) => x.id === s.mediaId) : null;
       if (!next) {
         media = null;
@@ -659,16 +696,16 @@
     async function place(mode) {
       const s = src();
       const seq = app.sequence;
-      if (!s || !media || !seq) { ui.toast(tr('Open a clip in the source monitor first.')); return; }
-      await ui.media.matchSequence(app, media.id);
+      if (!s || (!media && !shownSeq) || !seq) { ui.toast(tr('Open a clip in the source monitor first.')); return; }
+      if (media) await ui.media.matchSequence(app, media.id);
       const patch = ui.patchFor(app);
       const total = Cut.model.sequenceDuration(own.sequence);
       const opts = {
-        source: { media: media.id },
+        source: shownSeq ? { sequence: shownSeq.id } : { media: media.id },
         in: s.in ?? 0,
         out: s.out ?? total,
-        video: media.kind === 'audio' ? null : patch.video,
-        audio: media.audio ? patch.audio : null,
+        video: has().video ? patch.video : null,
+        audio: has().audio ? patch.audio : null,
         mode,
       };
       if (opts.video == null && opts.audio == null) { ui.toast(tr('Choose a target track.')); return; }
@@ -692,7 +729,8 @@
       app.on('project', ({ reason }) => {
         if (reason === 'open' || reason === 'new' || reason === 'recover') { app.setSource(null); return; }
         const s = src();
-        if (s && !app.project.media.some((x) => x.id === s.mediaId)) app.setSource(null);
+        const there = s && (s.sequenceId != null ? app.project.sequences.some((x) => x.id === s.sequenceId) : app.project.media.some((x) => x.id === s.mediaId));
+        if (s && !there) app.setSource(null);
         else if (s) show();
       }),
     ];

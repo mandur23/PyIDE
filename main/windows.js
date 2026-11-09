@@ -171,16 +171,25 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
   // adds its guests to the same documents.
   ipcMain.handle('fs:caseSensitiveDirs', (_e, folder) => caseSensitiveDirs(folder));
   const sender = (wc) => (channel, msg) => { if (!wc.isDestroyed()) wc.send(channel, msg); };
-  ipcMain.on('doc:join', (e, { path: p, ticket }) => { sharedDocs.join(e.sender.id, p, sender(e.sender), { ticket }); });
-  ipcMain.on('doc:snapshot', (e, msg) => sharedDocs.snapshot(e.sender.id, msg));
-  ipcMain.on('doc:op', (e, msg) => sharedDocs.op(e.sender.id, msg));
-  ipcMain.on('doc:leave', (e, { path: p }) => sharedDocs.leave(e.sender.id, p));
+  // A document that is not a file here (a collaboration guest's collab:// document, main/features/collab.js) goes to
+  // the route that owns its path: {owns(path), join(wc, msg, reply), op(wc, msg), leave(wc, msg)}.
+  const routes = [];
+  const routeOf = (p) => routes.find((r) => r.owns(p));
+  ipcMain.on('doc:join', (e, { path: p, ticket }) => {
+    const r = routeOf(p);
+    if (r) return r.join(e.sender, { path: p, ticket }, sender(e.sender));
+    return sharedDocs.join(e.sender.id, p, sender(e.sender), { ticket });
+  });
+  ipcMain.on('doc:snapshot', (e, msg) => { if (!routeOf(msg?.path)) sharedDocs.snapshot(e.sender.id, msg); });
+  ipcMain.on('doc:op', (e, msg) => { const r = routeOf(msg?.path); if (r) r.op(e.sender, msg); else sharedDocs.op(e.sender.id, msg); });
+  ipcMain.on('doc:leave', (e, { path: p }) => { const r = routeOf(p); if (r) r.leave(e.sender, { path: p }); else sharedDocs.leave(e.sender.id, p); });
   function leaveAll(id) { sharedDocs.leaveAll(id); }
 
   return {
     createMain(query, appMode = 'code') { mode = appMode; main = create({ query }); return main; },
     main: () => main,
     sharedDocs,
+    routeDocs(route) { routes.push(route); },
     choose,
     closeChooser() { if (chooser && !chooser.isDestroyed()) chooser.destroy(); },
     toChooser(channel, payload) { if (chooser && !chooser.isDestroyed()) chooser.webContents.send(channel, payload); },

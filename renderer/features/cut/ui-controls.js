@@ -13,12 +13,13 @@
 (() => {
   const Cut = globalThis.Cut;
   const ui = Cut.ui;
-  const { time, model, keyframes: K } = Cut;
+  const { time, model, keyframes: K, remap: Remap } = Cut;
   const C = Cut.commands;
   const edit = ui.edit;
   const el = ui.el;
 
   const EASES = edit.EASES;
+  const M_MODES = Cut.masks?.MODES || [];
   const svg = (body) => `<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
   const GLYPHS = {
     watch: svg('<circle cx="8" cy="9" r="5.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 6v3.2l2 1.3M6.5 2h3M8 2v1.8" stroke="currentColor" stroke-width="1.3"/>'),
@@ -32,6 +33,9 @@
     down: svg('<path d="M8 12.5v-9M4.5 9 8 12.5 11.5 9" stroke="currentColor" stroke-width="1.3"/>'),
     fx: svg('<rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor"/><path d="M5.5 10.5 7 5.5h2M5.8 8h2.2M9.5 7.5l2 3M11.5 7.5l-2 3" stroke="currentColor"/>'),
     twisty: svg('<path d="m5.5 4 4 4-4 4" stroke="currentColor" stroke-width="1.4"/>'),
+    ellipse: svg('<ellipse cx="8" cy="8" rx="5.5" ry="4.5" stroke="currentColor" stroke-width="1.3"/>'),
+    polygon: svg('<rect x="3" y="3.5" width="10" height="9" stroke="currentColor" stroke-width="1.3"/>'),
+    pen: svg('<path d="M3 13l1.2-3.6L10.5 3.1l2.4 2.4-6.3 6.3z" stroke="currentColor" stroke-width="1.2"/><path d="M9.2 4.4l2.4 2.4" stroke="currentColor" stroke-width="1.2"/>'),
   };
   const glyph = (name) => {
     const s = el('span', 'ide-icon cut-icon');
@@ -91,7 +95,7 @@
       }
       const c = clipNow(sj.clipId);
       if (!c) return 'none';
-      const parts = [c.id, edit.kindOf(s, c), c.source?.generator || 'media', c.effects.map((e) => `${e.id}:${e.type}`).join(','), (c.source?.layers || []).map((l) => l.id).join(',')];
+      const parts = [c.id, edit.kindOf(s, c), c.remap ? 'remapped' : '', c.source?.generator || 'media', c.effects.map((e) => `${e.id}:${e.type}:${(e.masks || []).map((m) => m.id).join('+')}`).join(','), (c.source?.layers || []).map((l) => l.id).join(','), (c.masks || []).map((m) => m.id).join(',')];
       for (const a of companions(c)) parts.push(`+${a.id}:${a.effects.map((e) => `${e.id}:${e.type}`).join(',')}`);
       return parts.join('|');
     }
@@ -134,7 +138,8 @@
           { label: tr('Rotation'), path: 'rotation', type: 'number', min: -36000, max: 36000, step: 1, unit: '°' },
           { label: tr('Anchor Point'), path: 'anchor', type: 'point', step: 1 },
         ]);
-        section('opacity', tr('Opacity'), c, [{ label: tr('Opacity'), path: 'opacity', type: 'number', min: 0, max: 100, step: 1, unit: '%', slider: [0, 100] }]);
+        maskBlock(section('opacity', tr('Opacity'), c, [{ label: tr('Opacity'), path: 'opacity', type: 'number', min: 0, max: 100, step: 1, unit: '%', slider: [0, 100] }]), c, null);
+        remapSection(c);
         section('crop', tr('Crop'), c, [
           { label: tr('Top'), path: 'crop', index: 0, type: 'number', min: 0, max: 100, step: 0.5, unit: '%', slider: [0, 100] },
           { label: tr('Right'), path: 'crop', index: 1, type: 'number', min: 0, max: 100, step: 0.5, unit: '%', slider: [0, 100] },
@@ -159,7 +164,7 @@
       for (const a of companions(c)) audioSections(a, true);
       effectSections(c);
       for (const a of companions(c)) effectSections(a);
-      title.textContent = c.name || model.mediaOf(app.project, c)?.name || tr('Clip');
+      title.textContent = c.name || model.mediaOf(app.project, c)?.name || model.nestOf(app.project, c)?.name || tr('Clip');
       sub.textContent = kind === 'audio' ? tr('Audio Clip') : c.source?.generator === 'text' ? tr('Text') : c.source?.generator ? tr('Graphic') : tr('Video Clip');
       drawLaneRuler();
     }
@@ -172,14 +177,139 @@
       section(`panner:${c.id}`, tr('Panner'), c, [{ label: tr('Balance'), path: 'pan', type: 'number', min: -100, max: 100, step: 1, slider: [-100, 100] }]);
     }
     // Speed and reverse of a clip with a source (a still has none); later clips move along, a linked pair together.
+    // A remapped clip's speed is its Time Remapping curve, so it has no Speed section (as Premiere greys it out).
     function speedSection(c) {
-      if (model.isStill(app.project, c)) return;
+      if (model.isStill(app.project, c) || c.remap) return;
       section(`speed:${c.id}`, tr('Speed'), c, [
         { label: tr('Speed'), path: 'speed', type: 'number', min: 1, max: 10000, step: 1, precision: 2, unit: '%', slider: [10, 400],
           field: { get: (x) => Math.round(x.speed * 10000) / 100, patch: (v) => ({ speed: v / 100 }), reset: { speed: 1 } } },
         { label: tr('Reverse Speed'), path: 'reverse', type: 'bool',
           field: { get: (x) => !!x.reverse, patch: (v) => ({ reverse: !!v }), reset: { reverse: false } } },
       ]);
+    }
+    // Time Remapping > Speed (Premiere's) of a video clip with source frames: the speed at the playhead (at the
+    // start when the playhead is off the clip). Without keys it is the clip's constant speed. The stopwatch turns the
+    // curve on (a key at the playhead) or off (a constant speed again); the arrows go to the keys and the diamond adds
+    // or removes one at the playhead; typing a speed sets the segment under the playhead. The lane draws the speed
+    // between the keys and each key (a split one as two, its transition shaded).
+    function remapSection(c) {
+      if (model.isStill(app.project, c)) return;
+      const clipId = c.id;
+      const sec = section(`remap:${clipId}`, tr('Time Remapping'), c, []);
+      const row = el('div', 'cut-ec-row', undefined, { 'data-path': 'remap.speed' });
+      const left = el('div', 'cut-ec-left');
+      const lane = el('div', 'cut-ec-lane');
+      const f = () => time.frameTicks(fps());
+      const local = (x) => (edit.inClip(app, x) ? edit.clipTime(app, x) : 0);
+      const curve = () => { const x = clipNow(clipId); return x ? model.remapOf(x) : null; };
+      const keyed = () => !!clipNow(clipId)?.remap?.keys.length;
+      const apply = (next) => { if (next) ui.exec(app, C.setRemap(seq().id, clipId, next)); };
+      const watch = iconButton('watch', tr('Toggle Animation'), () => {
+        const x = clipNow(clipId);
+        if (!x) return;
+        if (keyed()) { ui.exec(app, C.setRemap(seq().id, clipId, null)); return; }
+        const fr = f();
+        const at = edit.inClip(app, x) && local(x) > 0 ? local(x) : Math.round(model.clipDuration(x) / 2 / fr) * fr;
+        apply(Remap.addKey(model.remapOf(x), at));
+      }, 'watch');
+      left.append(watch, el('span', 'cut-ec-label', tr('Speed')));
+      const ctl = el('span', 'cut-ec-ctl');
+      const gesture = edit.gesture(app, 'Time Remapping');
+      const speedNow = () => {
+        const x = clipNow(clipId);
+        return x ? Remap.speedAt(model.remapOf(x), Math.min(model.clipDuration(x) - 1, local(x))) : 1;
+      };
+      const field = ui.numberField({
+        value: 100, min: 1, max: 10000, step: 1, precision: 2, unit: '%',
+        onBegin: () => gesture.begin(), onEnd: () => gesture.end(),
+        onChange: (v) => {
+          const x = clipNow(clipId);
+          if (!x) return;
+          const r = model.remapOf(x);
+          const seg = Remap.segmentAt(r, Math.min(model.clipDuration(x) - 1, local(x)));
+          const old = seg.index == null ? 0 : r.speeds[seg.index];
+          if (!old) { ui.toast(tr('A hold has no speed to change.')); return; }
+          apply(Remap.setSegmentSpeed(r, seg.index, (Math.sign(old) * v) / 100, f()));
+        },
+      });
+      ctl.appendChild(field);
+      left.appendChild(ctl);
+      const nav = el('span', 'cut-ec-nav');
+      const jump = (dir) => {
+        const x = clipNow(clipId);
+        const r = curve();
+        if (!x || !r) return;
+        const now = local(x);
+        const times = r.keys.map((k) => k.t).filter((t) => t < model.clipDuration(x));
+        const t = dir > 0 ? times.find((k) => k > now) : times.filter((k) => k < now).pop();
+        if (t != null) app.setTime(x.start + t);
+      };
+      const prev = iconButton('prev', tr('Go to Previous Keyframe'), () => jump(-1), 'prev');
+      const add = iconButton('key', tr('Add/Remove Keyframe'), () => {
+        const x = clipNow(clipId);
+        if (!x || !edit.inClip(app, x)) return;
+        const r = model.remapOf(x);
+        const i = r.keys.findIndex((k) => k.t === local(x));
+        if (i >= 0) apply(Remap.removeKey(r, i, f()));
+        else {
+          const next = Remap.addKey(r, local(x));
+          if (next) apply(next);
+          else ui.toast(tr('A speed keyframe cannot go there.'));
+        }
+      }, 'addkey');
+      const next = iconButton('next', tr('Go to Next Keyframe'), () => jump(1), 'next');
+      nav.append(prev, add, next);
+      left.appendChild(nav);
+      row.append(left, lane);
+      sec.querySelector('.cut-ec-rows').appendChild(row);
+      const canvas = el('canvas', 'cut-ec-lanecanvas');
+      lane.appendChild(canvas);
+      const entry = {
+        clipId, path: 'remap.speed', lane: { canvas, el: lane },
+        update() {
+          const x = clipNow(clipId);
+          if (!x) return;
+          if (!field.querySelector('input')) field.value = Math.round(Math.abs(speedNow()) * 10000) / 100;
+          const on = keyed();
+          watch.setAttribute('aria-pressed', String(on));
+          nav.classList.toggle('shown', on);
+          const here = on && edit.inClip(app, x) && x.remap.keys.some((k) => k.t === local(x));
+          add.replaceChildren(glyph(here ? 'keyOn' : 'key'));
+          add.setAttribute('aria-pressed', String(here));
+        },
+        drawLane(ctx, x, w, h, colors) {
+          const r = model.remapOf(x);
+          const D = model.clipDuration(x);
+          const yOf = (sp) => {
+            const pct = Math.abs(sp) * 100;
+            const k = pct > 0 ? Math.max(0, Math.min(1, (Math.log10(pct) - 1) / 2)) : 0;
+            return h - LANE_PAD - k * (h - 2 * LANE_PAD);
+          };
+          ctx.fillStyle = colors.shade;
+          for (const k of r.keys) if (k.ramp && k.t < D) ctx.fillRect(laneX(x, w, k.t), 0, laneX(x, w, Math.min(D, k.t + k.ramp)) - laneX(x, w, k.t), h);
+          ctx.strokeStyle = colors.curve;
+          ctx.lineWidth = 1.25;
+          ctx.beginPath();
+          for (let px = 6; px <= w - 6; px += 2) {
+            const y = yOf(Remap.speedAt(r, Math.max(0, Math.min(D - 1, laneT(x, w, px)))));
+            if (px === 6) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+          }
+          ctx.stroke();
+          ctx.fillStyle = colors.text;
+          for (const k of r.keys) {
+            if (k.t >= D) continue;
+            for (const t of k.ramp ? [k.t, k.t + k.ramp] : [k.t]) {
+              const kx = laneX(x, w, Math.min(D, t));
+              const y = h / 2;
+              ctx.beginPath();
+              ctx.moveTo(kx, y - 5); ctx.lineTo(kx + 5, y); ctx.lineTo(kx, y + 5); ctx.lineTo(kx - 5, y); ctx.closePath();
+              ctx.fill();
+            }
+          }
+        },
+      };
+      laneEvents(entry);
+      rows.push(entry);
     }
     function effectSections(c) {
       c.effects.forEach((e, i) => {
@@ -193,10 +323,61 @@
           return g && g !== def.params[k - 1]?.group ? [{ heading: tr(g) }, spec] : [spec];
         });
         const sec = section(`fx:${c.id}:${e.id}`, def ? tr(def.name) : e.type, c, params, { effect: e, index: i, count: c.effects.length });
+        if (def?.kind === 'video' && def.masks !== false && edit.kindOf(seq(), c) === 'video') maskBlock(sec, c, e.id);
         // An effect may add a view above its rows (ui-audiofx.js: the EQ's frequency response): {node, update()}.
         const view = ui.effectViews?.[e.type]?.({ app, clipId: c.id, effectId: e.id });
         if (view) { sec.querySelector('.cut-ec-rows').prepend(view.node); rows.push(view); }
       });
+    }
+
+    // ---------- masks (masks.js, ui-masks.js) ----------
+    // Premiere's mask buttons and masks at the top of Opacity and of each video effect: Create Ellipse Mask, Create
+    // 4-point Polygon Mask, Free Draw Bezier; each mask a header (click: edit it on the program monitor) and its rows.
+    const MODE_NAMES = { add: 'Add', subtract: 'Subtract', intersect: 'Intersect', difference: 'Difference', none: 'None' };
+    function maskBlock(sec, c, effectId) {
+      const list = sec.querySelector('.cut-ec-rows');
+      const block = el('div', 'cut-ec-masks');
+      const tools = el('div', 'cut-ec-mrow cut-ec-masktools');
+      const left = el('div', 'cut-ec-left');
+      left.appendChild(el('span', 'cut-ec-ib-space'));
+      const make = (shape) => () => { const x = clipNow(c.id); if (x) ui.masks.create(app, x, effectId, shape); };
+      const penBtn = iconButton('pen', tr('Free draw bezier'), () => {
+        const on = ui.masks.pen?.clipId === c.id && (ui.masks.pen.effectId || null) === effectId;
+        if (on) ui.masks.stopPen(app);
+        else ui.masks.startPen(app, { clipId: c.id, effectId });
+      }, 'cut-ec-maskpen');
+      left.append(iconButton('ellipse', tr('Create ellipse mask'), make('ellipse'), 'cut-ec-maskellipse'), iconButton('polygon', tr('Create 4-point polygon mask'), make('polygon'), 'cut-ec-maskpoly'), penBtn);
+      tools.append(left, el('div', 'cut-ec-lane'));
+      block.appendChild(tools);
+      rows.push({ update() { const p = ui.masks.pen; penBtn.setAttribute('aria-pressed', String(!!p && p.clipId === c.id && (p.effectId || null) === effectId)); } });
+      const holder = effectId ? c.effects.find((e) => e.id === effectId) : c;
+      (holder?.masks || []).forEach((m, i) => {
+        const sel = { clipId: c.id, effectId, maskId: m.id };
+        const p = ui.masks.prefix(sel);
+        const head = el('div', 'cut-ec-mrow cut-ec-maskhead', undefined, { 'data-mask': m.id });
+        const hl = el('div', 'cut-ec-left');
+        hl.append(el('span', 'cut-ec-ib-space'), el('span', 'cut-ec-label cut-ec-maskname', tr('Mask ({n})', { n: i + 1 })));
+        const ctl = el('span', 'cut-ec-ctl');
+        ctl.appendChild(iconButton('remove', tr('Remove Mask'), () => ui.masks.remove(app, sel), 'remove'));
+        hl.appendChild(ctl);
+        head.append(hl, el('div', 'cut-ec-lane'));
+        head.addEventListener('pointerdown', (e) => { if (e.button === 0 && !e.target.closest('button')) ui.masks.select(app, sel); });
+        rows.push({ update() { const s2 = ui.masks.selected; head.classList.toggle('selected', !!s2 && s2.clipId === c.id && s2.maskId === m.id && (s2.effectId || null) === effectId); } });
+        block.appendChild(head);
+        for (const spec of [
+          { label: tr('Mask Path'), path: `${p}.path`, type: 'maskpath' },
+          { label: tr('Mask Feather'), path: `${p}.feather`, type: 'number', min: 0, max: 1000, step: 0.1, slider: [0, 200] },
+          { label: tr('Mask Opacity'), path: `${p}.opacity`, type: 'number', min: 0, max: 100, step: 0.1, unit: '%', slider: [0, 100] },
+          { label: tr('Mask Expansion'), path: `${p}.expansion`, type: 'number', min: -2000, max: 2000, step: 0.1, slider: [-200, 200] },
+          { label: tr('Inverted'), path: `${p}.inverted`, type: 'bool' },
+          { label: tr('Mask Mode'), path: `${p}.mode`, type: 'choice', choices: M_MODES.map((k) => [k, MODE_NAMES[k]]) },
+        ]) {
+          const row = paramRow(c.id, spec);
+          row.classList.add('cut-ec-maskrow');
+          block.appendChild(row);
+        }
+      });
+      list.prepend(block);
     }
 
     // ---------- a section and its rows ----------
@@ -365,6 +546,13 @@
           ctl.appendChild(f);
           break;
         }
+        // A mask's path is edited on the program monitor; the row keyframes it and says how many vertices it has.
+        case 'maskpath': {
+          const t = el('span', 'cut-ec-note');
+          updates.push(() => { const v = value(); t.textContent = tr('{n} points', { n: Array.isArray(v) ? Math.floor(v.length / 6) : 0 }); });
+          ctl.appendChild(t);
+          break;
+        }
         // Lumetri Color's curves and Look are edited in its panel; the row shows what is set (and keyframes the curve).
         case 'curve': {
           const t = el('span', 'cut-ec-note');
@@ -513,7 +701,8 @@
         ctx.clearRect(0, 0, w, h);
         ctx.fillStyle = line;
         ctx.fillRect(6, Math.round(h / 2), w - 12, 1);
-        const list = c.keyframes?.[r.path] || [];
+        if (r.drawLane) r.drawLane(ctx, c, w, h, { text, curve, shade: 'rgba(128,128,128,0.25)' });
+        const list = r.drawLane ? [] : c.keyframes?.[r.path] || [];
         // the segments' shapes under the keyframes
         for (let i = 0; i < list.length - 1; i++) {
           const s = segment(c, list, i, w, h);
@@ -850,6 +1039,7 @@
     offs.push(app.on('selection', () => { picked.clear(); later(); }));
     offs.push(app.on('sequence', later));
     offs.push(app.on('transitionSelection', later));
+    offs.push(app.on('mask', () => { for (const r of rows) r.update?.(); }));
     offs.push(app.on('time', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; for (const r of rows) r.update?.(); drawLanes(); drawLaneRuler(); }); }));
     const ro = ide.util.observeSize(root, () => { drawLanes(); drawLaneRuler(); });
     offs.push(() => ro.disconnect());

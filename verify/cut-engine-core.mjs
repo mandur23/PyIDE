@@ -31,6 +31,7 @@ const thumbs = require(`${dir}thumbs.js`);
 const S = JSON.stringify;
 const results = [];
 const check = (ok, label) => { results.push({ ok: !!ok, label }); if (!ok) console.log(`FAIL ${label}`); };
+const eq = (got, want, label) => check(S(got) === S(want), `${label}${S(got) === S(want) ? "" : ` (got ${S(got)}, want ${S(want)})`}`);
 // Pixels are Float32Array: anything but an exact (0) tolerance allows float32 rounding.
 const tol = (eps) => (eps === 0 ? 0 : Math.max(eps, 1e-6));
 const near = (a, b, eps, label) => check(Math.abs(a - b) <= tol(eps), `${label} (${a} vs ${b})`);
@@ -502,6 +503,82 @@ check(compositor.captionsAt(seqOf(), SEC / 2, null).length === 0 && compositor.c
 const ms = compositor.mediaSequence(h.project, m1);
 check(ms.w === 1920 && ms.clips.length === 1 && compositor.plan(h.project, ms, 5 * SEC)[0].item.srcT === 5 * SEC, 'the source monitor sequence shows the media at source time');
 check(model.validate(h.project).ok, 'the test project is valid');
+
+// ---- the plan of a nest clip ----
+{
+  const ph = C.createHistory(model.createProject());
+  const ps = ph.project.sequences[0].id;
+  const { ids: [pm] } = ph.do(C.importMedia([{ path: 'D:/a.mp4', name: 'a.mp4', kind: 'video', duration: 60 * SEC, video: VID, audio: null }]));
+  const q1 = ph.do(C.place(ps, { source: { media: pm }, in: 10 * SEC, out: 12 * SEC, at: SEC, video: 'V1', audio: null })).ids[0];
+  const q2 = ph.do(C.addGenerated(ps, { track: 'V2', at: SEC, duration: SEC, source: { generator: 'text', layers: [{ text: 'in' }] } })).id;
+  ph.do(C.setKeyframes(ps, q1, 'opacity', [{ t: 0, v: 20, ease: 'linear' }, { t: SEC, v: 80, ease: 'linear' }]));
+  const flat = compositor.plan(ph.project, ph.project.sequences[0], SEC + SEC / 2);
+  const { id: inner, ids: [n1] } = ph.do(C.nest(ps, [q1, q2], { name: 'Nested Sequence 1' }));
+  const outer = () => ph.project.sequences.find((s) => s.id === ps);
+  let N = compositor.plan(ph.project, outer(), SEC + SEC / 2);
+  const it = N[0]?.item;
+  check(N.length === 1 && it.kind === 'nest' && it.sequence.id === inner && it.srcT === SEC / 2, `plan: a nest clip is one item showing its sequence at its source time (${it?.kind}, ${it?.srcT / SEC} s)`);
+  eq(it.layers.map((l) => [l.item.clip.id, l.item.kind, l.item.srcT, l.item.opacity, l.item.key, l.item.seqW]), flat.map((l) => [l.item.clip.id, l.item.kind, l.item.srcT, l.item.opacity, `${n1}/${l.item.clip.id}`, 1920]),
+    'plan: its layers are the plan of the clips it holds, keyframes at the same frame, keyed under the nest clip');
+  check([1920, 1080].join() === [it.seqW, it.seqH].join() && it.key === n1, 'plan: the nest item itself sits in the outer sequence');
+  ph.do(C.setKeyframes(ps, n1, 'opacity', [{ t: 0, v: 0, ease: 'linear' }, { t: SEC, v: 100, ease: 'linear' }]));
+  const { id: fxId } = ph.do(C.addEffect(ps, n1, 'blur.gaussian', null, { blurriness: 7 }));
+  ph.do(C.setClip(ps, n1, { props: { scale: [50, 50], position: [100, -40] } }));
+  N = compositor.plan(ph.project, outer(), SEC + SEC / 2);
+  check(Math.abs(N[0].item.opacity - 50) < 1e-9 && N[0].item.effects[0]?.id === fxId && N[0].item.scale[0] === 50 && N[0].item.position[0] === 100, 'plan: the nest clip\'s own opacity keyframes, effects and motion are on the nest item');
+  ph.do(C.trim(ps, n1, { edge: 'start', delta: SEC / 2 }));
+  N = compositor.plan(ph.project, outer(), SEC + SEC / 2);
+  check(N[0].item.srcT === SEC / 2 && N[0].item.layers[0].item.srcT === flat[0].item.srcT, 'plan: after a start trim the nest still shows the same inner frame at the same sequence time');
+  ph.do(C.split(ps, SEC + SEC / 2 + 3 * F, { clipIds: [n1] }));
+  N = compositor.plan(ph.project, outer(), SEC + SEC / 2 + 6 * F);
+  check(N.length === 1 && N[0].item.clip.id !== n1 && N[0].item.srcT === SEC / 2 + 6 * F, 'plan: the right part of a razored nest clip continues the sequence where the cut was');
+  ph.do(C.setClip(ps, n1, { reverse: true }));
+  N = compositor.plan(ph.project, outer(), SEC + SEC / 2);
+  check(N[0].item.kind === 'nest' && N[0].item.srcT === model.sourceTime(outer().clips.find((c) => c.id === n1), SEC + SEC / 2), 'plan: a reversed nest clip reads its sequence through model.sourceTime');
+  const deep = ph.do(C.nest(ps, outer().clips.map((c) => c.id), { name: 'Nested Sequence 2' }));
+  N = compositor.plan(ph.project, outer(), 2 * SEC);
+  check(N[0].item.kind === 'nest' && N[0].item.layers[0].item.kind === 'nest' && N[0].item.layers[0].item.layers.length >= 1 && N[0].item.layers[0].item.layers[0].item.key.split('/').length === 3, 'plan: a nest inside a nest draws two levels down, keyed by both nest clips');
+  check(model.validate(ph.project).ok && deep.ids.length === 1, 'the nest test project is valid');
+}
+
+// ---- the plan of a remapped clip (Time Remapping) and of a remapped nest ----
+{
+  const R = require(`${dir}remap.js`);
+  const rh = C.createHistory(model.createProject());
+  const rs = rh.project.sequences[0].id;
+  const { ids: [rm] } = rh.do(C.importMedia([{ path: 'D:/a.mp4', name: 'a.mp4', kind: 'video', duration: 60 * SEC, video: VID, audio: null }]));
+  const rv = rh.do(C.place(rs, { source: { media: rm }, in: 10 * SEC, out: 13 * SEC, at: SEC, video: 'V1', audio: null })).ids[0];
+  const rc = () => rh.project.sequences[0].clips.find((c) => c.id === rv);
+  // a key 1 s in; 50% after it with a 10-frame transition; a 6-frame hold at a second key
+  let r = R.setSegmentSpeed(R.addKey(model.remapOf(rc()), SEC), 1, 0.5, F);
+  r = R.splitKey(r, 0, 'right', 10 * F, F);
+  r = R.insertFreeze(R.addKey(r, 2 * SEC), 1, 6 * F);
+  rh.do(C.setRemap(rs, rv, r));
+  const at = (t) => compositor.plan(rh.project, rh.project.sequences[0], t)[0]?.item;
+  const want = (t) => model.sourceTime(rc(), t);
+  eq([0, 29, 30, 35, 40, 59, 60, 63, 66, 70].map((k) => at(SEC + k * F).srcT), [0, 29, 30, 35, 40, 59, 60, 63, 66, 70].map((k) => want(SEC + k * F)), 'plan: a remapped clip\'s source time is the curve\'s at every point (before, through the transition, the hold)');
+  near(at(SEC + 35 * F).srcT, 10 * SEC + 30 * F + 4.375 * F, 1e-6, 'plan: halfway through the transition the source is the speed\'s integral');
+  check(at(SEC + 60 * F).srcT === at(SEC + 65 * F).srcT, 'plan: a hold shows one source time');
+  eq([0, 35, 63, 70].map((k) => at(SEC + k * F).frameIndex), [0, 35, 63, 70], 'plan: frameIndex is still the clip-local frame (grain and glitch change through a hold)');
+  near(compositor.extendedSourceTime(rc(), rc().start - 5 * F, 60 * SEC), 10 * SEC - 5 * F, 1e-6, 'a transition before a remapped clip reads its curve backward at the first speed');
+  rh.do(C.setClip(rs, rv, { sampling: 'blend' }, { linked: false }));
+  const half = at(SEC + 31 * F);
+  check(half.blend && Math.abs(half.blend.w - (half.srcT / F - Math.floor(half.srcT / F))) < 1e-9 && half.blend.srcT === (Math.floor(half.srcT / F) + 1) * F, `plan: Frame Blending mixes the next source frame in by how far the time is past the one before (w ${half.blend?.w.toFixed(3)})`);
+  check(at(SEC + 10 * F).blend === null, 'plan: on a frame there is nothing to blend');
+  rh.do(C.setClip(rs, rv, { sampling: 'sample' }, { linked: false }));
+  check(at(SEC + 31 * F).blend === null, 'plan: Frame Sampling (the default) shows the nearest frame alone');
+
+  // the same curve on a nest clip of that clip's sequence: the nest reads its sequence along the curve
+  const { id: inner, ids: [nn] } = rh.do(C.nest(rs, [rv], { name: 'N' }));
+  const nc = () => rh.project.sequences[0].clips.find((c) => c.id === nn);
+  rh.do(C.setRemap(rs, nn, R.insertReverse(R.addKey(model.remapOf(nc()), 20 * F), 0, 8 * F)));
+  const nAt = (k) => compositor.plan(rh.project, rh.project.sequences[0], nc().start + k * F)[0]?.item;
+  eq([10, 19, 20, 24, 28, 32, 36, 40].map((k) => Math.floor(Math.round(nAt(k).srcT) / F)), [10, 19, 19, 15, 12, 16, 20, 24], 'plan: a remapped nest clip plays its sequence back for 8 frames after the key, then forward');
+  const deep = nAt(24).layers[0].item;
+  check(nAt(24).kind === 'nest' && deep.clip.id === rv && deep.srcT === model.sourceTime(rh.project.sequences.find((s) => s.id === inner).clips[0], nAt(24).srcT), 'plan: inside, the nested clip shows its own curve at the time the nest reached');
+  eq([24, 36].map((k) => nAt(k).frameIndex), [24, 36], 'plan: the nest item\'s frameIndex is its own clip frame');
+  check(model.validate(rh.project).ok, 'the remap test project is valid');
+}
 
 // ---- text ----
 const layer = model.createTextLayer({ id: 'l1', text: 'Hello\n세계', size: 100, leading: 1.5, position: [10, 20], box: { color: '#000000', padding: 10, radius: 4 } });

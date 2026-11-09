@@ -172,6 +172,8 @@
     ]) },
     { label: tr('Tools'), submenu: () => tidy([
       act('RunPythonConsole'), act('ActivateTerminalToolWindow'), act('TerminalNewSession'), { separator: true },
+      // collab plugin: real-time collaboration.
+      act('Collab.Start'), act('Collab.Join'), act('Collab.CopyCode'), act('Collab.End'), { separator: true },
       act('ClaudeCode'), act('ClaudeCodeSendReference'), act('InstallClaudeCode'), { separator: true },
       act('Database.NewDataSource'), act('Database.OpenConsole'), { separator: true },
       ...(ide.frameworks?.kinds().length ? [act('Frameworks.RunServer'), act('Frameworks.DebugServer'), ...(ide.frameworks.info().django ? [act('Django.RunManageTask'), act('Django.MakeMigrations'), act('Django.Migrate')] : []), { separator: true }] : []),

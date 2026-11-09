@@ -5,7 +5,8 @@
 // for these names, and `\$` is a literal dollar. Any other ${VARIABLE} is asked for in a dialog when a file is
 // created, as in PyCharm. The project tree's New submenu creates files from them; core's New Python File (Alt+Insert,
 // toolbar, File menu) takes the "Python Script" template through ide.newFileHooks, and a package's __init__.py takes
-// "Python Package". Templates are IDE-level: `fileTemplates.custom` = {name: {ext?, body?}} holds edits of built-ins
+// "Python Package". A Java file (New › Java Class, or any new file named X.java) takes the Java template of its kind,
+// with ${PACKAGE_NAME} counted from the file's Java source root, as IntelliJ IDEA does. Templates are IDE-level: `fileTemplates.custom` = {name: {ext?, body?}} holds edits of built-ins
 // (reset by deleting them) and user templates; Settings export carries it (main/settings-sync/archive.js).
 (() => {
   const { el, basename, dirname, joinPath } = ide.util;
@@ -21,11 +22,19 @@
     { name: 'JSON File', ext: 'json', body: '{\n}\n' },
     { name: 'Markdown File', ext: 'md', body: '# ${NAME}\n' },
     { name: 'Text File', ext: 'txt', body: '' },
+    // IntelliJ IDEA's Class, Interface, Enum, Record and AnnotationType; a file in no package loses the package line.
+    { name: 'Java Class', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic class ${NAME} {\n}\n', java: true },
+    { name: 'Java Interface', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic interface ${NAME} {\n}\n', java: true },
+    { name: 'Java Enum', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic enum ${NAME} {\n}\n', java: true },
+    { name: 'Java Record', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic record ${NAME}() {\n}\n', java: true },
+    { name: 'Java Annotation', ext: 'java', body: 'package ${PACKAGE_NAME};\n\npublic @interface ${NAME} {\n}\n', java: true },
   ];
   const BUILTIN_BY_NAME = new Map(BUILTIN.map((t) => [t.name, t]));
   // Built-in names are shown translated; user templates keep the name the user typed.
   const NAMES = { [SCRIPT]: () => tr('Python Script'), [PACKAGE]: () => tr('Python Package'), 'Python Unit Test': () => tr('Python Unit Test'),
-    'HTML File': () => tr('HTML File'), 'JSON File': () => tr('JSON File'), 'Markdown File': () => tr('Markdown File'), 'Text File': () => tr('Text File') };
+    'HTML File': () => tr('HTML File'), 'JSON File': () => tr('JSON File'), 'Markdown File': () => tr('Markdown File'), 'Text File': () => tr('Text File'),
+    'Java Class': () => tr('Java Class'), 'Java Interface': () => tr('Java Interface'), 'Java Enum': () => tr('Java Enum'),
+    'Java Record': () => tr('Java Record'), 'Java Annotation': () => tr('Java Annotation') };
   const displayName = (t) => NAMES[t.name]?.() || t.name;
   const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
   const NAME_OK = (n) => typeof n === 'string' && !!n.trim() && n.length <= 100 && !['__proto__', 'constructor', 'prototype'].includes(n);
@@ -49,6 +58,32 @@
   const templates = () => merge();
   const find = (name) => templates().find((t) => t.name === name) || null;
 
+  // ---------- Java source roots ----------
+  // The Java source root a folder is in: the innermost marked Sources or Test Sources Root that holds it, else the
+  // nearest src/<set>/java above it (Maven and Gradle: src/main/java, src/test/java, also in a module), else the
+  // project's src (a plain project, which the Java language server reads from there). null outside all of them.
+  const { isUnder, samePath } = ide.util;
+  function javaSourceRoot(dir) {
+    if (!ide.root || !isUnder(dir, ide.root)) return null;
+    const marked = [...(ide.projectRoots?.sourceRoots() || []), ...(ide.projectRoots?.testRoots() || [])]
+      .filter((r) => isUnder(dir, r)).sort((a, b) => b.length - a.length)[0];
+    if (marked) return marked;
+    const parts = (ide.util.rel(dir) || '').split(/[\\/]/).filter(Boolean);
+    for (let i = parts.length - 1; i >= 2; i--) {
+      if (parts[i].toLowerCase() === 'java' && parts[i - 2].toLowerCase() === 'src') return joinPath(ide.root, parts.slice(0, i + 1).join('\\'));
+    }
+    // src/main/resources and the like are no source root in a Maven or Gradle layout.
+    return parts[0]?.toLowerCase() === 'src' && !/^(main|test)$/i.test(parts[1] || '') ? joinPath(ide.root, parts[0]) : null;
+  }
+  // The package of a Java file in dir: its folders below the source root, dotted ('' in the default package or outside
+  // any source root).
+  function javaPackage(dir) {
+    const root = javaSourceRoot(dir);
+    if (!root || samePath(root, dir)) return '';
+    return dir.slice(root.replace(/[\\/]+$/, '').length + 1).split(/[\\/]/).filter(Boolean).join('.');
+  }
+  const isJava = (path) => /\.java$/i.test(path);
+
   // ---------- variables ----------
   let userName = null;
   const user = async () => (userName ??= await ide.api.invoke('file-templates:user').catch(() => ''));
@@ -68,7 +103,7 @@
       HOUR: pad(now.getHours()),
       MINUTE: pad(now.getMinutes()),
       PROJECT_NAME: ide.root ? basename(ide.root) : '',
-      PACKAGE_NAME: relDir && !ide.util.samePath(dir, ide.root) ? relDir.split(/[\\/]/).filter(Boolean).join('.') : '',
+      PACKAGE_NAME: isJava(path) ? javaPackage(dir) : relDir && !ide.util.samePath(dir, ide.root) ? relDir.split(/[\\/]/).filter(Boolean).join('.') : '',
       PRODUCT_NAME: 'Nano Studio',
       DS: '$',
     };
@@ -119,7 +154,9 @@
       if (!asked) return null;
       Object.assign(vars, asked);
     }
-    return substitute(t.body, vars);
+    const text = substitute(t.body, vars);
+    // A Java file in the default package has no package line (IntelliJ IDEA's #if around it).
+    return isJava(path) ? text.replace(/^[ \t]*package[ \t]*;[ \t]*\r?\n(?:[ \t]*\r?\n)?/m, () => '') : text;
   }
 
   // ---------- creating files ----------
@@ -162,7 +199,8 @@
       const file = t?.ext && !basename(name).includes('.') ? `${name.trim()}.${t.ext}` : name.trim();
       const target = joinPath(dir, file);
       if (await exists(target)) { ide.ui.alert(tr('{path} already exists', { path: basename(target) })); return null; }
-      const text = t ? await render(t, target) : '';
+      // A plain file takes what a new file of its name gets elsewhere (X.java: the Java Class template).
+      const text = t ? await render(t, target) : await (ide.newFileText?.(target) ?? '');
       if (text === null) return null;
       await writeNew(target, text);
       await finish(target, [target]);
@@ -173,8 +211,91 @@
     }
   }
 
-  // Core's New Python File: the Python Script template.
+  // Core's New Python File: the Python Script template; any new file named X.java: the Java Class template.
   ide.newFileHooks?.push(async (path) => (/\.pyw?$/i.test(path) ? render(SCRIPT, path) : undefined));
+  ide.newFileHooks?.push(async (path) => (isJava(path) ? render('Java Class', path) : undefined));
+
+  // ---------- New › Java Class ----------
+  // IntelliJ IDEA's dialog: a name and a kind (Up and Down change it). A dotted name (web.HelloController) creates the
+  // packages too. -> the new file, or null.
+  const JAVA_KINDS = [['Java Class', 'class'], ['Java Interface', 'interface'], ['Java Enum', 'enum'], ['Java Record', 'record'], ['Java Annotation', 'annotation']];
+  const JAVA_NAME = /^[A-Za-z_$][\w$]*$/;
+  function askJavaClass() {
+    return new Promise((resolve) => {
+      let answer = null;
+      let kind = 0;
+      const body = el('div', 'ft-java');
+      const input = el('input', 'input ft-java-name');
+      input.placeholder = tr('Name');
+      const list = el('div', 'ft-java-kinds');
+      const rows = JAVA_KINDS.map(([name, k], i) => {
+        const r = el('div', 'ft-java-kind', NAMES[name]());
+        r.dataset.kind = k;
+        r.onmousedown = (e) => { e.preventDefault(); pick(i); };
+        list.appendChild(r);
+        return r;
+      });
+      const pick = (i) => { kind = (i + rows.length) % rows.length; rows.forEach((r, j) => r.classList.toggle('selected', j === kind)); };
+      pick(0);
+      input.onkeydown = (e) => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        e.preventDefault();
+        pick(kind + (e.key === 'ArrowDown' ? 1 : -1));
+      };
+      body.append(input, list);
+      ide.ui.dialog({
+        title: tr('New Java Class'), body, width: 360,
+        onClose: () => resolve(answer),
+        buttons: [
+          { label: tr('OK'), primary: true, run: () => { answer = { name: input.value.trim().replace(/\.java$/i, ''), template: JAVA_KINDS[kind][0] }; } },
+          { label: tr('Cancel') },
+        ],
+      });
+    });
+  }
+  // Creates a Java type in dir; without a name, asks for it and its kind.
+  async function createJavaClass(dir, name, templateName = 'Java Class') {
+    if (name == null) {
+      const a = await askJavaClass();
+      if (!a?.name) return null;
+      ({ name, template: templateName } = a);
+    }
+    const parts = name.split('.').map((p) => p.trim());
+    if (parts.some((p) => !JAVA_NAME.test(p))) { ide.ui.alert(tr('{name} is not a valid Java name', { name })); return null; }
+    const t = find(templateName);
+    if (!t) return null;
+    let folder = dir;
+    const folders = [];
+    for (const p of parts.slice(0, -1)) folders.push(folder = joinPath(folder, p));
+    const target = joinPath(folder, `${parts[parts.length - 1]}.java`);
+    try {
+      if (await exists(target)) { ide.ui.alert(tr('{path} already exists', { path: basename(target) })); return null; }
+      const text = await render(t, target);
+      if (text === null) return null;
+      const created = [];
+      for (const f of folders) if (!(await exists(f))) { await ide.api.create(f, true); created.push(f); }
+      await writeNew(target, text);
+      await finish(target, [...created, target]);
+      return target;
+    } catch (e) {
+      ide.ui.alert(ide.util.errorText(e));
+      return null;
+    }
+  }
+  // New › Java Class is offered in a source root of a Maven or Gradle layout (src/main/java), or in any Java source
+  // root of a project with a Java build file or a JDK chosen for it.
+  const BUILD_FILES = ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts'];
+  let javaProject = false;
+  ide.on('projectOpened', async (root) => {
+    javaProject = false;
+    const found = await Promise.all(BUILD_FILES.map((f) => exists(joinPath(root, f)).catch(() => false)));
+    if (samePath(ide.root, root)) javaProject = found.some(Boolean);
+  });
+  const offersJava = (dir) => {
+    const root = javaSourceRoot(dir);
+    if (!root) return false;
+    return /[\\/]src[\\/][^\\/]+[\\/]java$/i.test(root) || javaProject || !!ide.settings.get(`toolchains.jdk:${ide.root}`, '');
+  };
 
   // Project tree › New ›
   const dirOf = (entry) => (!entry ? ide.root : entry.dir ? entry.path : dirname(entry.path));
@@ -183,9 +304,10 @@
     const dir = dirOf(entry);
     return [{ label: tr('New'), submenu: () => {
       const all = templates();
-      const others = all.filter((t) => t.name !== SCRIPT && t.name !== PACKAGE);
+      const others = all.filter((t) => t.name !== SCRIPT && t.name !== PACKAGE && !t.java);
       return [
         { label: tr('File'), run: () => create(null, dir) },
+        ...(offersJava(dir) ? [{ label: tr('Java Class'), run: () => createJavaClass(dir) }] : []),
         { label: tr('Python File'), run: () => create(SCRIPT, dir) },
         { label: tr('Python Package'), run: () => create(PACKAGE, dir) },
         { separator: true },
@@ -204,7 +326,7 @@
     ['${TIME}', tr('the current time (HH:mm)')],
     ['${YEAR} ${MONTH} ${DAY} ${HOUR} ${MINUTE}', tr('parts of the current date and time')],
     ['${PROJECT_NAME}', tr('the name of the project')],
-    ['${PACKAGE_NAME}', tr('the folder of the new file as a dotted package name')],
+    ['${PACKAGE_NAME}', tr('the folder of the new file as a dotted package name (for a Java file, from its source root)')],
     ['${DS}', tr('a dollar sign')],
   ];
   function mountPage(host, ctx) {
@@ -335,10 +457,10 @@
 
   (ide.settingsPages ||= []).push({
     id: 'file-templates', group: 'editor', title: () => tr('File and Code Templates'),
-    keywords: 'file templates code template header new file python script unit test html json 파일 및 코드 템플릿 파일 템플릿 헤더',
+    keywords: 'file templates code template header new file python script unit test html json java class interface enum record annotation 파일 및 코드 템플릿 파일 템플릿 헤더',
     defaults: { [CUSTOM]: {} },
     mount: mountPage,
   });
 
-  ide.fileTemplates = { templates, find, render, create, substitute, variables: builtinVars, unknownVars };
+  ide.fileTemplates = { templates, find, render, create, createJavaClass, javaSourceRoot, javaPackage, substitute, variables: builtinVars, unknownVars };
 })();

@@ -210,6 +210,9 @@
           },
         });
         if (con.input) con.input.disabled = true;
+        // What the run prints is told too (runOutput): a collaboration session shows the host's runs to its guests.
+        const append = con.append;
+        con.append = (text, kind) => { ide.emit('runOutput', { name: s.title, text, kind }); return append.call(con, text, kind); };
         s.con = con;
         if (activeSession === s) { syncIds(); renderActions(); }
         return con;
@@ -1323,6 +1326,8 @@
     runConfig,
     runContext,
     runCurrentFile,
+    // A file run as Run on it would (its context configuration), whatever is in front.
+    runFile: (file, opts = {}) => runConfig(currentFileConfig(file), opts),
     runSelected,
     selectedTarget,
     // executor: {id, title, label(name), iconName?, glyph?, prepare(cfg, interp, session) -> Promise<interp | null>}.

@@ -126,7 +126,7 @@ try {
   bad((q) => { q.sequences[0].fps = [17, 1]; }, 'a frame rate the editor does not offer');
 
   // migrate
-  throws(() => model.migrate({ format: 'ncut', version: 2 }), 'newer', 'migrate refuses a newer version');
+  throws(() => model.migrate({ format: 'ncut', version: model.VERSION + 1 }), 'newer', 'migrate refuses a newer version');
   throws(() => model.migrate('{"hello":1}'), 'notProject', 'migrate refuses a file that is not a project');
   const old = model.migrate({
     format: 'ncut', version: 1,
@@ -877,6 +877,111 @@ try {
   check(false, `paste and text: ${err.stack}`);
 }
 
+// ---------- nested sequences: Nest, nest clips, loops, deleting, files ----------
+try {
+  const { h, s, a, music, b } = setup();
+  const [v1, a1] = place(h, s, { source: { media: a }, in: f(30), out: f(90), at: f(30), video: 'V1', audio: 'A1' });
+  const [v2] = place(h, s, { source: { media: b }, in: 0, out: f(60), at: f(90), video: 'V1', audio: null });
+  const [t2] = h.do(C.addGenerated(s, { track: 'V2', at: f(60), duration: f(30), source: { generator: 'text', layers: [{ text: 'T' }] } })).id ? [clipsOf(h, s).at(-1).id] : [];
+  const [other] = place(h, s, { source: { media: music }, in: 0, out: f(300), at: 0, video: null, audio: 'A2' });
+  const [stay] = place(h, s, { source: { media: b }, in: 0, out: f(30), at: f(300), video: 'V1', audio: null });
+  h.do(C.addTransition(s, { track: 'V1', at: f(90), type: 'dissolve', duration: f(10), align: 'center' }));
+  h.do(C.addTransition(s, { track: 'V1', at: f(30), type: 'dissolve', duration: f(10), align: 'start' }));
+  h.do(C.setKeyframes(s, v2, 'opacity', [{ t: 0, v: 0, ease: 'linear' }, { t: f(20), v: 100, ease: 'easeIn' }]));
+  h.do(C.addMarker(s, { t: f(100), name: 'on v2' }, { clipId: v2 }));
+  const binId = h.do(C.addBin('Edits')).id;
+  h.do(C.moveToBin([s], binId));
+  const before = clipsOf(h, s).map((c) => model.clone(c));
+  const r = step(h, C.nest(s, [v1, v2, t2], { name: 'Nested Sequence 1' }), 'nest');
+  eq(h.list().at(-1).label, 'Nest', 'history label of a nest');
+  const inner = h.project.sequences.find((x) => x.id === r.id);
+  eq([inner.name, inner.w, inner.h, inner.fps, inner.tracks.map((t) => t.id)], ['Nested Sequence 1', 1920, 1080, [30, 1], ['V1', 'V2', 'A1', 'A2']], 'the nested sequence has the parent\'s size, rate and tracks');
+  eq(lay(h, r.id), { V1: '0-60:30 60-120:0', V2: '30-60', A1: '0-60:30', A2: '' }, 'the clips (and the audio linked to the first) keep their tracks and times from the earliest');
+  eq(lay(h, s), { V1: '30-150 300-330:0', V2: '', A1: '30-150', A2: '0-300:0' }, 'one nest clip spans them on the lowest video and audio tracks; other clips stay');
+  const [nv, na] = r.ids.map((id) => clip(h, s, id));
+  eq([nv.source, na.source, nv.link === na.link && !!nv.link, nv.in, nv.out, nv.name], [{ sequence: r.id }, { sequence: r.id }, true, 0, f(120), ''], 'the nest clips show the sequence from 0, linked, named by it');
+  eq(inner.transitions.map((t) => [t.track, t.at / F, t.align]), [['V1', 60, 'center'], ['V1', 0, 'start']], 'transitions between and at the nested clips go along');
+  eq(h.project.sequences[0].transitions.length, 0, 'none is left in the parent');
+  const iv2 = inner.clips.find((c) => c.id === v2);
+  eq([iv2.keyframes.opacity, iv2.markers.map((m) => m.t)], [before.find((c) => c.id === v2).keyframes.opacity, [f(10)]], 'keyframes and clip markers come along unchanged (they count from the clip start)');
+  check(h.project.bins.find((x) => x.id === binId).items.includes(r.id), 'the new sequence goes in the parent sequence\'s bin');
+  check(clip(h, s, other) && clip(h, s, stay), 'unselected clips are not nested');
+  check(inner.clips.find((c) => c.id === v1).link === inner.clips.find((c) => c.id === a1).link, 'a link that moves whole stays');
+  // Alt (linked: false): only the video of a linked pair
+  {
+    const q = setup();
+    const [qv, qa] = place(q.h, q.s, { source: { media: q.a }, in: 0, out: f(60), at: 0, video: 'V1', audio: 'A1' });
+    const rr = step(q.h, C.nest(q.s, [qv], { linked: false }), 'nest with linked off');
+    const qi = q.h.project.sequences.find((x) => x.id === rr.id);
+    eq([rr.ids.length, qi.clips.length, qi.clips[0].link, clip(q.h, q.s, qa).link], [1, 1, null, null], 'nesting one side of a link leaves both sides unlinked, the audio in place');
+  }
+  // the nest clip edits like any clip
+  const outerEnd = model.clipEnd(nv);
+  let tr2 = h.do(C.trim(s, nv.id, { edge: 'end', delta: f(30) }));
+  eq([tr2.applied, tr2.clamped], [0, 'source'], 'a nest clip cannot be trimmed past its sequence\'s end');
+  tr2 = h.do(C.trim(s, nv.id, { edge: 'start', delta: f(15), linked: true }));
+  eq([clip(h, s, nv.id).in, clip(h, s, nv.id).start, clip(h, s, na.id).in], [f(15), f(45), f(15)], 'trimming its start moves in, linked audio too');
+  tr2 = h.do(C.trim(s, nv.id, { edge: 'start', delta: -f(40) }));
+  eq([tr2.applied, tr2.clamped, clip(h, s, nv.id).in], [-f(15), 'source', 0], 'and its start stops at its sequence\'s start');
+  const sl = h.do(C.slip(s, nv.id, { delta: f(5) }));
+  eq([sl.applied, sl.clamped], [0, 'source'], 'a nest clip that shows all of its sequence has nothing to slip');
+  h.do(C.trim(s, nv.id, { edge: 'end', delta: -f(20) }));
+  eq(h.do(C.slip(s, nv.id, { delta: f(5) })).applied, f(5), 'with room it slips like a clip');
+  const sp = h.do(C.split(s, f(80), { clipIds: [nv.id] }));
+  const right = clip(h, s, sp.ids.find((id) => clip(h, s, id).track === 'V1'));
+  eq([right.source, right.in, right.start], [{ sequence: r.id }, f(55), f(80)], 'the razor cuts a nest clip into two that continue the sequence');
+  h.do(C.remove(s, [right.id], { ripple: true }));
+  check(model.clipEnd(clip(h, s, nv.id)) === f(80) && clip(h, s, stay).start < f(300), 'ripple delete of a nest clip pulls the rest');
+  h.do(C.setClip(s, nv.id, { speed: 2 }));
+  check(model.validate(h.project).ok && clip(h, s, nv.id).speed === 2, 'a nest clip changes speed');
+  void outerEnd;
+  // where it is used
+  eq(model.nestUses(h.project, r.id).map((u) => [u.seq.id, u.clips.length]), [[s, 2]], 'nestUses lists the sequence and its nest clips');
+  check(model.reaches(h.project, s, r.id) && !model.reaches(h.project, r.id, s) && model.nestLoop(h.project, r.id, s), 'reaches and nestLoop follow the nest clips');
+  // loops are refused
+  unchanged(h, () => h.do(C.place(r.id, { source: { sequence: s }, at: 0, video: 'V1', audio: 'A1' })), 'nestLoop', 'a sequence cannot go inside the sequence it holds');
+  unchanged(h, () => h.do(C.place(s, { source: { sequence: s }, at: 0, video: 'V1', audio: 'A1' })), 'nestLoop', 'a sequence cannot go inside itself');
+  const third = h.do(C.addSequence({ name: 'C' })).id;
+  h.do(C.place(third, { source: { sequence: s }, at: 0, video: 'V1', audio: 'A1' }));
+  unchanged(h, () => h.do(C.place(r.id, { source: { sequence: third }, at: 0, video: 'V1', audio: null })), 'nestLoop', 'nor through a third sequence (C holds A holds B; C into B)');
+  unchanged(h, () => h.do(C.paste(r.id, [{ ...model.clone(clipsOf(h, third)[0]), kind: 'video' }], { at: 0 })), 'nestLoop', 'pasting a nest clip where it makes a loop is refused');
+  unchanged(h, () => h.do(C.nest(s, [])), 'noClips', 'nest with nothing selected');
+  h.do(C.setTrack(s, 'A2', { locked: true }));
+  unchanged(h, () => h.do(C.nest(s, [other])), 'locked', 'nest refuses clips on a locked track');
+  h.do(C.setTrack(s, 'A2', { locked: false }));
+  const empty = h.do(C.addSequence({ name: 'empty' })).id;
+  unchanged(h, () => h.do(C.place(s, { source: { sequence: empty }, at: 0, video: 'V1', audio: 'A1' })), 'emptySequence', 'an empty sequence cannot be placed');
+  const videoOnly = h.do(C.addSequence({ name: 'pictures' })).id;
+  place(h, videoOnly, { source: { media: b }, in: 0, out: f(30), at: 0, video: 'V1', audio: null });
+  eq(place(h, s, { source: { sequence: videoOnly }, at: f(400), video: 'V1', audio: 'A1' }).length, 1, 'a sequence without sound places a video nest clip only');
+  // validate
+  const vbad = (fn, label) => { const p = model.clone(h.project); fn(p); check(!model.validate(p).ok, `validate refuses ${label}`); };
+  vbad((p) => { p.sequences[0].clips.find((c) => c.source.sequence).source.sequence = 's999'; }, 'a nest clip of a missing sequence');
+  vbad((p) => { const c = p.sequences[0].clips.find((x) => x.source.sequence); c.source.sequence = p.sequences[0].id; }, 'a nest clip of its own sequence');
+  vbad((p) => { const c = p.sequences[0].clips.find((x) => x.source.sequence); c.source.freeze = true; }, 'a frozen nest clip');
+  vbad((p) => { const ri = p.sequences.find((x) => x.id === r.id); const c = model.clone(ri.clips[0]); c.id = `c${p.nextId++}`; c.source = { sequence: third }; c.start = f(500); ri.clips.push(c); }, 'a loop of nest clips written by hand (B holds C holds A holds B)');
+  // save and open
+  const text = h.serialize();
+  const back = model.migrate(text);
+  check(model.validate(back).ok && back.version === model.VERSION && S(back.sequences[0].clips.find((c) => c.id === nv.id).source) === S({ sequence: r.id }), 'a project with nest clips saves and opens as it was');
+  const v1file = JSON.parse(text);
+  v1file.version = 1;
+  for (const q of v1file.sequences) q.clips = q.clips.filter((c) => !c.source.sequence);
+  const mig = model.migrate(v1file);
+  check(model.validate(mig).ok && mig.version === model.VERSION, 'a version 1 project (no nests) opens as the current version');
+  // deleting a nested sequence takes its nest clips
+  const beforeDel = h.serialize();
+  step(h, C.removeSequence(r.id), 'delete a nested sequence');
+  check(!clipsOf(h, s).some((c) => c.source.sequence === r.id) && !h.project.bins.some((x) => x.items.includes(r.id)), 'deleting a nested sequence removes its nest clips and its bin entry');
+  h.undo();
+  check(h.serialize() === beforeDel, 'undo brings the sequence and its nest clips back');
+  // nest of a nest
+  const deep = step(h, C.nest(s, clipsOf(h, s).filter((c) => c.source.sequence === r.id).map((c) => c.id), { name: 'Nested Sequence 2' }), 'nest a nest clip');
+  check(model.reaches(h.project, s, r.id) && model.reaches(h.project, deep.id, r.id), 'a nest clip nested again keeps showing the first sequence');
+} catch (err) {
+  check(false, `nest: ${err.stack}`);
+}
+
 // ---------- history: grouping, dirty, limit, events, failures ----------
 try {
   const { h, s, a } = setup();
@@ -1043,8 +1148,8 @@ try {
   vm.createContext(page);
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'renderer', 'features', 'cut');
   const order = readFileSync(path.join(dir, 'index.js'), 'utf8').match(/'[a-z0-9-]+\.js'/g).map((x) => x.slice(1, -1));
-  const mine = ['time.js', 'state.js', 'captionwords.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js'];
-  check(mine.every((x) => order.includes(x)) && order.indexOf('captionwords.js') < order.indexOf('model.js') && order.indexOf('model.js') < order.indexOf('keyframes.js') && order.indexOf('keyframes.js') < order.indexOf('commands.js'), 'index.js loads captionwords, model, keyframes, commands and srt after time');
+  const mine = ['time.js', 'state.js', 'captionwords.js', 'remap.js', 'model.js', 'keyframes.js', 'commands.js', 'srt.js'];
+  check(mine.every((x) => order.includes(x)) && order.indexOf('captionwords.js') < order.indexOf('model.js') && order.indexOf('remap.js') < order.indexOf('model.js') && order.indexOf('model.js') < order.indexOf('keyframes.js') && order.indexOf('keyframes.js') < order.indexOf('commands.js'), 'index.js loads captionwords, remap, model, keyframes, commands and srt after time');
   for (const file of order.filter((x) => mine.includes(x))) vm.runInContext(readFileSync(path.join(dir, file), 'utf8'), page, { filename: file });
   const out = vm.runInContext(`(() => {
     const p = Cut.model.createProject();
@@ -1370,6 +1475,206 @@ try {
   check(false, `panels: ${err.stack}`);
 }
 
+// ---------- time remapping (Premiere's Time Remapping > Speed) ----------
+{
+  const R = require('../renderer/features/cut/remap.js');
+  // the frame a source time shows, to the tick (a reverse segment reads one tick before a frame start)
+  const frameOf = (t) => Math.floor(Math.round(t) / F);
+  // the source frame each timeline frame of a clip shows
+  const framesOf = (c, from = c.start, to = model.clipEnd(c)) => { const out = []; for (let t = from; t < to; t += F) out.push(frameOf(model.sourceTime(c, t))); return out; };
+  const range = (a, b, step = 1) => { const out = []; for (let x = a; step > 0 ? x < b : x > b; x += step) out.push(x); return out; };
+  const { h, s, a } = setup();
+  const [v, au] = h.do(C.place(s, { source: { media: a }, in: f(30), out: f(120), at: 0, video: 'V1', audio: 'A1', mode: 'overwrite' })).ids;
+  const vc = () => clip(h, s, v);
+  const audioBefore = S(clip(h, s, au));
+  // a key at 1 s and the part after it at 50%: the frames before stay, after it each source frame shows twice
+  let r = R.setSegmentSpeed(R.addKey(model.remapOf(vc()), f(30)), 1, 0.5, F);
+  const steps0 = h.list().length;
+  const res = h.do(C.setRemap(s, v, r));
+  eq([res.duration / F, res.clamped, h.list().length - steps0, C.label(C.setRemap(s, v, r))], [150, null, 1, 'Time Remapping'], 'a 50% segment after 1 s makes the 90-frame clip 150 frames, in one undo step labelled Time Remapping');
+  eq(framesOf(vc(), f(27), f(35)), [57, 58, 59, 60, 60, 61, 61, 62], 'clip time to source time at the key: frames 57-59, then each frame twice');
+  eq([vc().in / F, vc().out / F, vc().speed, vc().reverse], [30, 120, 1, false], 'in/out are the source range the curve reaches; speed and reverse stay 1 and forward');
+  eq([model.timelineTime(vc(), f(60)) / F, model.timelineTime(vc(), f(61)) / F, model.timelineTime(vc(), f(60) + F / 2) / F, model.timelineTime(vc(), f(5)) / F, model.timelineTime(vc(), f(500)) / F], [30, 32, 31, 0, 150], 'source time to clip time: the first frame that shows it (at and between frames), clamped outside the clip');
+  check(S(clip(h, s, au)) === audioBefore, 'the linked audio is not remapped: same place, length and speed (time remapping is video only)');
+  check(model.validate(h.project).ok, 'the remapped project is valid');
+  const after1 = h.serialize();
+  h.undo();
+  eq([model.clipDuration(vc()) / F, vc().remap], [90, null], 'undo gives back the constant clip');
+  h.redo();
+  check(h.serialize() === after1, 'redo gives back the same JSON');
+
+  // a speed transition (split key): the speed rises linearly, the source is its exact integral
+  r = R.splitKey(vc().remap, 0, 'right', f(10), F);
+  h.do(C.setRemap(s, v, r));
+  near(model.sourceTime(vc(), f(35)), f(60) + f(4.375), 1e-6, 'halfway through a 10-frame 100% to 50% transition the source moved 4.375 frames (5 - 0.5 x 25 / 20)');
+  near(R.value(vc().remap, f(40)), f(60) + f(10) * 0.75, 1e-6, 'a transition of 10 frames from 100% to 50% covers 7.5 source frames');
+  eq([R.speedAt(vc().remap, f(30)), R.speedAt(vc().remap, f(35)), R.speedAt(vc().remap, f(40))], [1, 0.75, 0.5], 'the speed along the transition');
+  h.undo();
+
+  // reverse: Ctrl-drag of the key by 10 frames plays 10 frames back, 10 forward, then goes on (20 frames longer)
+  r = R.insertReverse(vc().remap, 0, f(10));
+  h.do(C.setRemap(s, v, r));
+  eq(model.clipDuration(vc()) / F, 170, 'a 10-frame reverse makes the clip 20 frames longer');
+  eq(framesOf(vc(), f(28), f(52)), [58, 59, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 60], 'the reverse segment shows the frames before the key backward (the frame before first, as a reversed clip), then forward again');
+  eq([vc().in / F, vc().out / F], [30, 120], 'in/out still bound what the clip shows');
+  eq([model.timelineTime(vc(), f(55)) / F, model.timelineTime(vc(), f(60)) / F], [25, 30], 'source to clip time is the first time the curve reaches it (before the reverse plays it again)');
+  h.undo();
+
+  // a hold (0%): Ctrl+Alt-drag of the key by 6 frames
+  r = R.insertFreeze(vc().remap, 0, f(6));
+  h.do(C.setRemap(s, v, r));
+  eq([model.clipDuration(vc()) / F, framesOf(vc(), f(28), f(40))], [156, [58, 59, 60, 60, 60, 60, 60, 60, 60, 60, 61, 61]], 'a 6-frame hold shows the key frame for 6 frames and makes the clip 6 frames longer');
+  check(model.validate(h.project).ok, 'a hold is valid');
+  h.undo();
+
+  // length and its neighbours: as in Premiere, a slower curve grows the clip only up to the next clip
+  const [w2] = h.do(C.place(s, { source: { media: a }, in: 0, out: f(30), at: f(160), video: 'V1', audio: null, mode: 'overwrite' })).ids;
+  const r2 = R.setSegmentSpeed(vc().remap, 1, 0.25, F);
+  const res2 = h.do(C.setRemap(s, v, r2));
+  eq([res2.duration / F, res2.clamped, clip(h, s, w2).start / F], [160, 'neighbour', 160], 'at 25% the clip stops at the next clip (160 frames), which stays where it was');
+  near(model.sourceTime(vc(), f(159)), f(60) + f(129) * 0.25, 0, 'and its frames are those of the curve up to there; the rest waits past its end');
+  const tail = model.sourceRoom(h.project, vc()).tail;
+  check(tail > f(100), `trimming the end out would bring the hidden rest back (${fr(tail)} frames of room)`);
+  h.undo();
+  h.do(C.remove(s, [w2], { linked: false }));
+  const res3 = h.do(C.setRemap(s, v, R.withDuration(vc().remap, f(2000))));
+  eq([res3.clamped, fr(res3.duration)], ['source', 1110], 'a curve longer than the source stops where it reaches the media end (frame 600 at 50% after 30 frames)');
+  h.undo();
+  h.undo();
+  h.undo();
+
+  // razor: each part keeps its part of the curve, a transition across the cut included
+  h.do(C.setRemap(s, v, R.splitKey(vc().remap, 0, 'right', f(10), F)));
+  const whole = framesOf(vc());
+  const wholeSrc = range(0, 150).map((i) => model.sourceTime(vc(), f(i)));
+  h.do(C.split(s, f(35), { clipIds: [v], linked: false }));
+  const parts = clipsOf(h, s).filter((x) => x.track === 'V1').sort((x, y) => x.start - y.start);
+  eq(parts.map((x) => [x.start / F, model.clipEnd(x) / F]), [[0, 35], [35, 150]], 'the razor cuts the remapped clip at 35 frames');
+  check(S([...framesOf(parts[0]), ...framesOf(parts[1])]) === S(whole), 'the two parts show every frame the whole clip showed');
+  check(range(0, 150).every((i) => Math.abs(model.sourceTime(parts[i < 35 ? 0 : 1], f(i)) - wholeSrc[i]) < 1e-6), 'and the same source times, the transition cut in two included');
+  eq([R.speedAt(parts[1].remap, 0), parts[1].remap.keys[0]], [0.75, { t: 0, ramp: f(5) }], 'the right part starts at the transition\'s speed there and finishes its rest');
+  h.undo();
+
+  // trims: the start trim sees the curve from the new head, the end trim takes or gives back the tail
+  h.do(C.trim(s, v, { edge: 'start', delta: f(40), linked: false }));
+  check(range(40, 150).every((i) => Math.abs(model.sourceTime(vc(), f(i)) - wholeSrc[i]) < 1e-6), 'after a 40-frame start trim every remaining frame shows the same source');
+  h.undo();
+  h.do(C.trim(s, v, { edge: 'end', delta: -f(50), linked: false }));
+  eq(model.clipDuration(vc()) / F, 100, 'an end trim shortens the curve');
+  const tr2 = h.do(C.trim(s, v, { edge: 'end', delta: f(80), linked: false }));
+  eq([model.clipDuration(vc()) / F, tr2.clamped], [180, null], 'trimming it out again goes on along the curve (the source past frame 120 is its handle)');
+  check(range(0, 150).every((i) => Math.abs(model.sourceTime(vc(), f(i)) - wholeSrc[i]) < 1e-6), 'and shows the same frames as before');
+  h.undo();
+  h.undo();
+
+  // slip moves the whole curve through the source; Speed/Duration, reverse and Rate Stretch leave it alone
+  h.do(C.slip(s, v, { delta: f(5), linked: false }));
+  near(model.sourceTime(vc(), f(40)) - wholeSrc[40], f(5), 1e-6, 'slip by 5 frames shows 5 source frames later everywhere');
+  h.undo();
+  throws(() => h.do(C.setClip(s, v, { speed: 2 }, { linked: false })), 'remap', 'Speed/Duration is refused on a remapped clip');
+  throws(() => h.do(C.setClip(s, v, { reverse: true }, { linked: false })), 'remap', 'and Reverse Speed');
+  throws(() => h.do(C.stretch(s, v, { edge: 'end', delta: f(10), linked: false })), 'remap', 'and the Rate Stretch tool');
+  h.do(C.setClip(s, au, { speed: 2 }));
+  eq([clip(h, s, au).speed, model.clipDuration(vc()) / F], [2, 150], 'the linked audio (now of another length) changes speed alone; the remapped video stays');
+  h.undo();
+  throws(() => h.do(C.setRemap(s, au, model.remapOf(clip(h, s, au)))), 'remap', 'time remapping on an audio clip is refused');
+
+  // turning it off: a constant speed again (the speed at the start), the length kept
+  h.do(C.setRemap(s, v, null));
+  eq([vc().remap, vc().speed, model.clipDuration(vc()) / F, vc().in / F], [null, 1, 150, 30], 'Toggle Animation off gives a constant clip at its first speed and keeps its length');
+  h.undo();
+  // a curve whose keys all go turns back into a constant speed
+  h.do(C.setRemap(s, v, R.removeKey(vc().remap, 0, F)));
+  eq([vc().remap, vc().speed, vc().reverse], [null, 1, false], 'removing the last key leaves a constant clip that Speed/Duration works on again');
+  h.undo();
+
+  // frame sampling is a clip setting (Time Interpolation)
+  h.do(C.setClip(s, v, { sampling: 'blend' }, { linked: false }));
+  eq([vc().sampling, C.label(C.setClip(s, v, { sampling: 'blend' }))], ['blend', 'Time Interpolation'], 'Frame Blending is set on the clip (Time Interpolation)');
+  throws(() => h.do(C.setClip(s, v, { sampling: 'optical' })), 'invalid', 'an unknown frame sampling is refused (no Optical Flow)');
+
+  // copy and paste: the curve goes along, also into a 24 fps sequence
+  const copied = [{ ...model.clone(vc()), kind: 'video' }];
+  const pasted = h.do(C.paste(s, copied, { at: f(400), video: 'V2' })).ids[0];
+  check(range(0, 150).every((i) => Math.abs(model.sourceTime(clip(h, s, pasted), f(400 + i)) - wholeSrc[i]) < 1e-6) && clip(h, s, pasted).sampling === 'blend', 'a pasted remapped clip plays the same curve and keeps its frame sampling');
+  const film = h.do(C.addSequence({ fps: [24, 1], name: 'film' })).id;
+  const p24 = h.do(C.paste(film, copied, { at: 0, video: 'V1' })).ids[0];
+  const c24 = clipsOf(h, film).find((x) => x.id === p24);
+  const F24 = time.frameTicks([24, 1]);
+  check(model.validate(h.project).ok && c24.remap && c24.remap.keys.every((k) => k.t % F24 === 0 && k.ramp % F24 === 0) && c24.remap.duration % F24 === 0, 'pasted into 24 fps its keys and length move to 24 fps frames');
+  near(model.sourceTime(c24, 2 * SEC), wholeSrc[60], F, 'and it shows about the same source at the same time');
+  h.do(C.setSequence(film, { fps: [25, 1] }));
+  const c25 = clipsOf(h, film).find((x) => x.id === p24);
+  check(model.validate(h.project).ok && c25.remap.keys.every((k) => k.t % time.frameTicks([25, 1]) === 0), 'a frame rate change refits the keys too');
+
+  // save and open; older versions and damaged curves
+  const text = h.serialize();
+  const back = model.migrate(text);
+  check(back.version === model.VERSION && model.validate(back).ok && S(back.sequences[0].clips.find((x) => x.id === v).remap) === S(vc().remap), 'a project with time remapping saves and opens as it was (the current format version)');
+  const plain = setup();
+  plain.h.do(C.place(plain.s, { source: { media: plain.a }, in: f(30), out: f(120), at: 0, video: 'V1', audio: 'A1' }));
+  const v2 = JSON.parse(plain.h.serialize());
+  v2.version = 2;
+  for (const q of v2.sequences) for (const x of q.clips) { delete x.remap; delete x.sampling; }
+  const m2 = model.migrate(v2);
+  check(model.validate(m2).ok && m2.version === model.VERSION && m2.sequences.every((q) => q.clips.every((x) => x.remap === null && x.sampling === 'sample')), 'a version 2 file opens with no remapping and frame sampling');
+  const bad = JSON.parse(text);
+  const bc = bad.sequences[0].clips.find((x) => x.id === v);
+  bc.remap.keys[0].t = 7;
+  const mb = model.migrate(bad);
+  const mc = mb.sequences[0].clips.find((x) => x.id === v);
+  check(model.validate(mb).ok && mc.remap === null && model.clipDuration(mc) === f(150) && mc.in === vc().in && mc.out === vc().out, 'a damaged curve is dropped on open: the clip plays its source range over its length at a constant speed');
+  const vbad2 = (fn, label) => { const p = JSON.parse(text); fn(p, p.sequences[0].clips.find((x) => x.id === v)); check(!model.validate(p).ok, `validate refuses ${label}`); };
+  vbad2((p, x) => { x.remap.speeds[0] = 500; }, 'a speed above 10000%');
+  vbad2((p, x) => { x.in += F; }, 'in/out that are not the curve\'s range');
+  vbad2((p, x) => { x.speed = 2; }, 'a speed besides the curve');
+  vbad2((p, x) => { x.remap.keys[0].ramp = 3; }, 'a transition off the frame grid');
+  vbad2((p, x) => { x.sampling = 'flow'; }, 'an unknown frame sampling');
+  vbad2((p) => { const ac = p.sequences[0].clips.find((x) => x.id === au); ac.remap = model.clone(p.sequences[0].clips.find((x) => x.id === v).remap); }, 'time remapping on an audio clip');
+
+  // a nest clip remaps its sequence the same way
+  const nh = setup();
+  const [nv] = nh.h.do(C.place(nh.s, { source: { media: nh.a }, in: 0, out: f(120), at: 0, video: 'V1', audio: null })).ids;
+  const nested = nh.h.do(C.nest(nh.s, [nv], { name: 'N' }));
+  const nc = () => clip(nh.h, nh.s, nested.ids[0]);
+  nh.h.do(C.setRemap(nh.s, nested.ids[0], R.insertFreeze(R.addKey(model.remapOf(nc()), f(20)), 0, f(10))));
+  eq([model.clipDuration(nc()) / F, [19, 20, 25, 30, 31].map((i) => model.sourceTime(nc(), f(i)) / F)], [130, [19, 20, 20, 20, 21]], 'a nest clip holds its sequence\'s frame 20 for 10 frames');
+  check(model.validate(nh.h.project).ok, 'the remapped nest is valid');
+
+  // a cut, a head trim and an overwrite just inside a ramp out of a hold: the new curve starts under 1% (stored speeds
+  // may be anything up to 10000%; only what a person sets is 1% at least)
+  const rh = setup();
+  const [rv] = rh.h.do(C.place(rh.s, { source: { media: rh.a }, in: f(30), out: f(500), at: 0, video: 'V1', audio: null })).ids;
+  const rc = () => clip(rh.h, rh.s, rv);
+  rh.h.do(C.setRemap(rh.s, rv, R.addKey(model.remapOf(rc()), f(30))));
+  rh.h.do(C.setRemap(rh.s, rv, R.insertFreeze(rc().remap, 0, f(30))));
+  rh.h.do(C.setRemap(rh.s, rv, R.splitKey(rc().remap, 1, 'right', f(120), F)));
+  eq([rc().remap.speeds, rc().remap.keys.map((k) => [k.t / F, k.ramp / F])], [[1, 0, 1], [[30, 0], [60, 120]]], 'a hold and a 4 s ramp out of it');
+  const srcBefore = [60, 61, 62, 70, 120].map((i) => model.sourceTime(rc(), f(i)));
+  const tryDo = (cmd) => { try { return rh.h.do(cmd); } catch { return null; } };
+  const cut = tryDo(C.split(rh.s, f(61), { clipIds: [rv] }));
+  const rightPart = cut && clipsOf(rh.h, rh.s).find((x) => x.id === cut.ids[0]);
+  check(rightPart && rightPart.remap.speeds[0] > 0 && rightPart.remap.speeds[0] < R.MIN && model.validate(rh.h.project).ok, `a razor 1 frame into the ramp works: the right part starts at ${(rightPart?.remap.speeds[0] * 100).toFixed(2)}%`);
+  eq([60, 61, 62, 70, 120].map((i) => model.sourceTime(i < 61 || !rightPart ? rc() : rightPart, f(i))), srcBefore, 'and both parts show the same source frames as before the cut');
+  if (cut) rh.h.undo();
+  const trimmed = tryDo(C.trim(rh.s, rv, { edge: 'start', delta: f(61) }));
+  check(trimmed && model.validate(rh.h.project).ok && rc().remap.speeds[0] < R.MIN && model.sourceTime(rc(), rc().start) === srcBefore[1], 'a head trim 1 frame into the ramp works and keeps the frame there');
+  if (trimmed) rh.h.undo();
+  const [ov] = tryDo(C.place(rh.s, { source: { media: rh.b }, in: 0, out: f(61), at: 0, video: 'V1', audio: null, mode: 'overwrite' }))?.ids || [];
+  check(!!ov && model.validate(rh.h.project).ok && model.sourceTime(rc(), f(61)) === srcBefore[1], 'an overwrite up to 1 frame into the ramp leaves the rest playing as it did');
+  throws(() => rh.h.do(C.setRemap(rh.s, rv, { ...rc().remap, speeds: rc().remap.speeds.map((v, i) => (i === 1 ? 101 : v)) })), 'speed', 'a speed above 10000% is still refused');
+
+  // a key's tab dragged near the limits stays inside 1% to 10000% (the length is limited, not the speed)
+  const kh = setup();
+  const [kv] = kh.h.do(C.place(kh.s, { source: { media: kh.a }, in: 0, out: f(300), at: 0, video: 'V1', audio: null })).ids;
+  kh.h.do(C.setRemap(kh.s, kv, R.addKey(model.remapOf(clip(kh.h, kh.s, kv)), f(240))));
+  const dragged = [-237, -238, -239, -300].map((dt) => R.moveKey(clip(kh.h, kh.s, kv).remap, 0, f(dt), F));
+  check(dragged.every((m) => R.valid(m, F) && Math.abs(m.speeds[0]) <= R.MAX && m.keys[0].t % F === 0), `dragging a 100% key from 240 toward 0 stops at 10000% (${dragged.map((m) => `${Math.round(m.speeds[0] * 100)}%@${m.keys[0].t / F}`).join(', ')})`);
+  check(dragged.every((m) => { try { kh.h.do(C.setRemap(kh.s, kv, m)); kh.h.undo(); return true; } catch { return false; } }), 'and setRemap takes each of them (no snap back)');
+  const slow = R.moveKey(R.setSegmentSpeed(R.addKey(model.remapOf(clip(kh.h, kh.s, kv)), f(3)), 0, 1, F), 0, f(400), F);
+  check(R.valid(slow, F) && Math.abs(slow.speeds[0]) >= R.MIN - 1e-12, `dragging a 3-frame key far right stops at 1% (${(slow.speeds[0] * 100).toFixed(2)}%)`);
+}
+
 // ---------- 2,000 random commands ----------
 try {
   let seed = 20261105;
@@ -1404,6 +1709,25 @@ try {
   let rollbackBad = 0;
   let invalid = 0;
   let exactBad = 0;
+  // a time remapping edit of a clip, the way the timeline's rubber band and Effect Controls make them
+  const RM = require('../renderer/features/cut/remap.js');
+  const remapCommand = (sid, seq, cl) => {
+    const sf = time.frameTicks(seq.fps);
+    const dur = model.clipDuration(cl);
+    let r = model.remapOf(cl);
+    const i = r.keys.length ? int(r.keys.length) : -1;
+    const n = int(10);
+    if (n === 0) return C.setRemap(sid, cl.id, null);
+    if (n === 1) return C.setClip(sid, cl.id, { sampling: pick(model.SAMPLINGS) });
+    if (n <= 3 || i < 0) r = RM.addKey(r, Math.round((rnd() * dur) / sf) * sf) || r;
+    else if (n === 4) { const j = int(r.speeds.length); r = RM.setSegmentSpeed(r, j, Math.sign(r.speeds[j] || 1) * pick([0.1, 0.25, 0.5, 2, 4]), sf); }
+    else if (n === 5) r = RM.splitKey(r, i, pick(['left', 'right']), (int(25) - 5) * sf, sf);
+    else if (n === 6) r = RM.moveKey(r, i, (int(21) - 10) * sf, sf, { keepSpeeds: rnd() < 0.5 });
+    else if (n === 7) r = RM.insertReverse(r, i, (1 + int(10)) * sf) || r;
+    else if (n === 8) r = RM.insertFreeze(r, i, (1 + int(10)) * sf) || r;
+    else r = RM.removeKey(r, i, sf);
+    return C.setRemap(sid, cl.id, r);
+  };
   const randomCommand = () => {
     const sid = rnd() < 0.85 ? s : pick(h.project.sequences).id;
     const seq = h.project.sequences.find((x) => x.id === sid);
@@ -1431,6 +1755,7 @@ try {
         C.batch('Edit', [0, 1, 2].slice(0, 1 + int(3)).map(() => (rnd() < 0.5 ? C.extract(sid, T(), T() + f(1 + int(30)), null) : C.addMarker(sid, { t: T(), kind: 'beat' })))),
       ]);
     }
+    if (rnd() < 0.05 && cl) return remapCommand(sid, seq, cl);
     if (rnd() < 0.06 && cl) {
       return pick([
         C.slip(sid, cl.id, { delta: D(), linked: rnd() < 0.8 }),
@@ -1439,9 +1764,10 @@ try {
         C.extendEdit(sid, T(), rnd() < 0.5 ? { clipIds: some() } : { trackIds: rnd() < 0.5 ? null : [pick(tracks)], linked: rnd() < 0.8 }),
         C.group(sid, some()),
         C.ungroup(sid, some()),
+        C.nest(sid, some(), { name: `n${int(9)}`, linked: rnd() < 0.8 }),
       ]);
     }
-    if (r < 0.1) return C.place(sid, { source: rnd() < 0.85 ? { media: pick([a, a, music, pic, b]) } : { generator: pick(['text', 'solid', 'adjustment']) }, in: T() / 4, out: T(), at: T(), video: rnd() < 0.8 ? pick(vt) : null, audio: rnd() < 0.8 ? pick(at) : null, mode: pick(['insert', 'overwrite']) });
+    if (r < 0.1) return C.place(sid, { source: rnd() < 0.85 ? { media: pick([a, a, music, pic, b]) } : rnd() < 0.4 ? { sequence: pick(h.project.sequences).id } : { generator: pick(['text', 'solid', 'adjustment']) }, in: T() / 4, out: T(), at: T(), video: rnd() < 0.8 ? pick(vt) : null, audio: rnd() < 0.8 ? pick(at) : null, mode: pick(['insert', 'overwrite']) });
     if (r < 0.13) return C.placeRange(sid, { source: { media: pick([a, b, music]) }, in: rnd() < 0.7 ? f(int(100)) : undefined, out: rnd() < 0.5 ? f(100 + int(100)) : undefined, range: { in: rnd() < 0.8 ? T() : undefined, out: rnd() < 0.5 ? T() + f(30) : undefined }, video: pick(vt), audio: pick(at), mode: pick(['insert', 'overwrite']) });
     if (r < 0.22 && cl) return C.move(sid, some(), { delta: D(), trackDelta: pick([0, 0, 0, 1, -1, { video: 1, audio: 0 }]), insert: rnd() < 0.3, linked: rnd() < 0.8 });
     if (r < 0.36 && cl) return C.trim(sid, cl.id, { edge: pick(['start', 'end']), mode: pick(['normal', 'ripple', 'roll']), delta: D(), linked: rnd() < 0.85 });

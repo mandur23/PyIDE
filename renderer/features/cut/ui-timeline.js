@@ -14,7 +14,7 @@
 (() => {
   const Cut = globalThis.Cut;
   const ui = Cut.ui;
-  const { time, model, keyframes: K } = Cut;
+  const { time, model, keyframes: K, remap: Remap } = Cut;
   const C = Cut.commands;
   const T = time.TICKS;
   const log = ide.logger('#cut');
@@ -59,6 +59,8 @@
     defaultOf(clip, path) {
       const parts = path.split('.');
       if (parts.length === 1) return PROP_DEFAULTS[path];
+      const mask = Cut.masks?.parsePath(path, true);
+      if (mask) return mask.field === 'path' ? undefined : Cut.masks.DEFAULTS[mask.field];
       if (parts[0] === 'effects') {
         const e = clip.effects.find((x) => x.id === parts[1]);
         const p = e && paramDef(e.type, parts[2]);
@@ -72,12 +74,14 @@
       return K.propValue(clip, path, edit.clipTime(app, clip, t), edit.defaultOf(clip, path));
     },
     keyframed: (clip, path) => !!clip.keyframes?.[path]?.length,
-    // Writes the static value of a property path: props, effects.<id>.<param> (left out when it is the default), or
-    // layers.<id>.<field>.
+    // Writes the static value of a property path: props, effects.<id>.<param> (left out when it is the default),
+    // layers.<id>.<field>, or a mask's field (masks.<id>.<field>, effects.<id>.masks.<id>.<field>).
     setStatic(app, clip, path, value) {
       const seq = app.sequence;
       const parts = path.split('.');
       if (parts.length === 1) return ui.exec(app, C.setClip(seq.id, clip.id, { props: { [path]: value } }));
+      const mask = Cut.masks?.parsePath(path, true);
+      if (mask) return ui.exec(app, C.setMask(seq.id, clip.id, mask.maskId, { [mask.field]: value }, { effectId: mask.effectId }));
       if (parts[0] === 'effects') {
         const def = edit.defaultOf(clip, path);
         return ui.exec(app, C.setEffect(seq.id, clip.id, parts[1], { params: { [parts[2]]: def !== undefined && same(def, value) ? null : value } }));
@@ -217,7 +221,7 @@
       bg: v('--gray1', '#1e1f22'), row: v('--gray2', '#2b2d30'), rowAlt: v('--gray1', '#1e1f22'), line: v('--gray3', '#393b40'),
       text: v('--gray11', '#ced0d6'), dim: v('--gray8', '#868a91'), faint: v('--gray5', '#4e5157'),
       video: v('--cut-clip-video', '#2f4a78'), audio: v('--cut-clip-audio', '#2c6152'), textClip: v('--cut-clip-text', '#7a4bb0'),
-      solid: v('--cut-clip-solid', '#6b5a2a'), selected: v('--cut-selected', '#f2c55c'), playhead: v('--cut-playhead', '#e05555'),
+      solid: v('--cut-clip-solid', '#6b5a2a'), nest: v('--cut-clip-nest', '#4f7a2e'), selected: v('--cut-selected', '#f2c55c'), playhead: v('--cut-playhead', '#e05555'),
       accent: v('--cut-accent', '#e8743b'), offline: '#a03030', inout: 'rgba(84, 138, 247, 0.16)', guide: '#4fc3f7',
       light: document.documentElement.dataset.theme === 'light',
     };
@@ -300,6 +304,9 @@
       hover: null, drag: null, guide: null, gap: null, transition: null, caption: null, drop: null, razorAt: null,
       overlay: null, // {ranges: [[a, b]], tracks: [ids] | null}: time ranges an automation previews (ui-auto.js)
       tabs: [], perSeq: new Map(),
+      // what a clip's keyframe line shows when it was chosen (the fx badge, Show Clip Keyframes): clip id -> 'opacity' |
+      // 'remap'; otherwise a remapped clip shows its speed and the others their opacity or volume
+      band: new Map(),
     };
     const stats = { base: [], top: [], frames: 0, thumbs: 0, waves: 0 };
 
@@ -716,6 +723,7 @@
       if (c.label && LABELS[c.label]) return LABELS[c.label];
       if (c.source?.generator === 'text') return colors.textClip;
       if (c.source?.generator) return colors.solid;
+      if (model.isNest(c)) return colors.nest;
       return kind === 'audio' ? colors.audio : colors.video;
     };
     // Visible clips of a track (sorted, never overlapping: ends are sorted too).
@@ -732,7 +740,28 @@
       return out;
     }
     const bandProp = (kind) => (kind === 'audio' ? 'volume' : 'opacity');
+    // What clip c's line shows: Time Remapping > Speed ('remap'), else its opacity (video) or volume (audio).
+    function bandOf(c, kind) {
+      if (kind === 'audio') return 'volume';
+      const chosen = v.band.get(c.id);
+      if (chosen === 'remap' || (chosen == null && c.remap)) return model.isStill(app.project, c) ? 'opacity' : 'remap';
+      return 'opacity';
+    }
     const BAND = { volume: { lo: -60, hi: 15 }, opacity: { lo: 0, hi: 100 } };
+    // Time Remapping > Speed on the line: a log scale from 10% at the bottom to 1000% at the top (100% in the middle);
+    // a freeze lies on the bottom.
+    function remapY(pct, y, h) {
+      const top = y + 16;
+      const bottom = y + h - 4;
+      const k = pct > 0 ? Math.max(0, Math.min(1, (Math.log10(pct) - 1) / 2)) : 0;
+      return bottom - k * (bottom - top);
+    }
+    function remapPct(py, y, h, step = 1) {
+      const top = y + 16;
+      const bottom = y + h - 4;
+      const k = Math.max(0, Math.min(1, (bottom - py) / (bottom - top)));
+      return Math.max(10, Math.min(1000, Math.round(10 ** (1 + 2 * k) / step) * step));
+    }
     function bandY(prop, val, y, h) {
       const r = BAND[prop];
       const top = y + 16;
@@ -751,11 +780,9 @@
     // Source left beyond each end of a clip, in timeline ticks (Infinity for stills).
     function roomOf(c) {
       if (model.isStill(app.project, c)) return { head: Infinity, tail: Infinity };
-      const m = media.get(c.source?.media);
-      if (!m) return { head: 0, tail: 0 };
-      const head = c.reverse ? m.duration - c.out : c.in;
-      const tail = c.reverse ? c.in : m.duration - c.out;
-      return { head: Math.max(0, head / c.speed), tail: Math.max(0, tail / c.speed) };
+      if (!media.get(c.source?.media) && !model.isNest(c)) return { head: 0, tail: 0 };
+      const r = model.sourceRoom(app.project, c);
+      return { head: r.head >= frame() ? r.head : 0, tail: r.tail >= frame() ? r.tail : 0 };
     }
     function transitionSpan(tr0) {
       const d = tr0.duration;
@@ -915,8 +942,12 @@
             const tw = th.tw;
             const first = Math.max(0, Math.floor((0 - x1) / tw));
             const last = Math.ceil((Math.min(w, x2) - x1) / tw);
+            // a remapped clip's tile shows the strip frame nearest the source time under its middle
+            const lo = Math.min(c.in, c.out);
+            const span = Math.max(1, Math.abs(c.out - c.in));
+            const at = (k) => (c.remap ? Math.floor(((model.sourceTime(c, tOf(x1 + (k + 0.5) * tw)) - lo) / span) * n) : Math.floor((((k + 0.5) * tw) / cw) * n));
             for (let k = first; k < last; k++) {
-              const bm = th.bitmaps[th.still ? 0 : Math.min(n - 1, Math.floor((((k + 0.5) * tw) / cw) * n))];
+              const bm = th.bitmaps[th.still ? 0 : Math.max(0, Math.min(n - 1, at(k)))];
               if (!bm) continue;
               try { ctx.drawImage(bm, x1 + k * tw, by, tw, bh); stats.thumbs++; } catch {}
             }
@@ -928,20 +959,36 @@
       ctx.fillRect(x1, cy, cw, 15);
       if (cw > 18) {
         ctx.fillStyle = '#f2f2f2';
-        let label = offline ? `${c.name || m?.name || ''} — ${tr('Media Offline')}` : c.name || m?.name || '';
+        const nestSeq = model.nestOf(app.project, c);
+        let label = offline ? `${c.name || m?.name || ''} — ${tr('Media Offline')}` : c.name || m?.name || nestSeq?.name || '';
         if (c.speed !== 1) label += ` [${Math.round(c.speed * 1000) / 10}%]`;
+        if (c.remap) label += ` ${tr('(Time Remapping)')}`;
         if (c.reverse) label += ` ${tr('(Reversed)')}`;
         const lx = Math.max(x1 + 4, 4);
-        const fxW = c.effects.length ? 18 : 0;
-        if (fxW && cw > 40) {
-          ctx.fillStyle = '#f2c55c';
+        // the fx badge (Premiere's): yellow with effects; on video it opens what the keyframe line shows
+        const fxW = (c.effects.length || kind === 'video') && cw > 40 ? 18 : 0;
+        if (fxW) {
+          ctx.fillStyle = c.effects.length ? '#f2c55c' : 'rgba(242,242,242,0.55)';
           ctx.fillText('fx', x1 + 3, cy + 2);
           ctx.fillStyle = '#f2f2f2';
         }
-        fitText(ctx, label, lx + (lx === x1 + 4 ? fxW : 0), cy + 2, Math.min(x2, w) - lx - 6 - fxW);
+        // a nest clip's mark: two stacked frames before its sequence's name
+        const nestW = nestSeq && cw > 40 ? 14 : 0;
+        if (nestW) {
+          const nx = lx + (lx === x1 + 4 ? fxW : 0);
+          ctx.strokeStyle = '#f2f2f2';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(nx + 3.5, cy + 2.5, 7, 6);
+          ctx.fillStyle = 'rgba(0,0,0,0.35)';
+          ctx.fillRect(nx + 0.5, cy + 5.5, 7, 6);
+          ctx.strokeRect(nx + 0.5, cy + 5.5, 7, 6);
+          ctx.fillStyle = '#f2f2f2';
+        }
+        fitText(ctx, label, lx + (lx === x1 + 4 ? fxW : 0) + nestW, cy + 2, Math.min(x2, w) - lx - 6 - fxW - nestW);
       }
-      // the keyframe line (volume of audio, opacity of video)
-      if (showsBand(r) && !offline) {
+      // the keyframe line (volume of audio, opacity of video, or the video's Time Remapping > Speed)
+      if (showsBand(r) && !offline && bandOf(c, kind) === 'remap') drawRemap(ctx, c, x1, x2, cy, ch, w);
+      else if (showsBand(r) && !offline) {
         const prop = bandProp(kind);
         const list = c.keyframes?.[prop];
         // An audio clip's line is the level it plays at: its volume with Auto Ducking's dips added.
@@ -1007,6 +1054,67 @@
       if (c.group) ctx.setLineDash([4, 3]);
       ctx.strokeRect(x1 + (sel ? 1 : 0.5), cy + (sel ? 1 : 0.5), cw - (sel ? 2 : 1), ch - (sel ? 2 : 1));
       ctx.setLineDash([]);
+    }
+    // Time Remapping > Speed on the line: the speed along the clip, a speed transition's span shaded, reversed parts
+    // red and frozen ones blue (on the bottom); each key a pair of halves on the line (apart when split) and a tab above.
+    function drawRemap(ctx, c, x1, x2, cy, ch, w) {
+      const r = model.remapOf(c);
+      const D = model.clipDuration(c);
+      const top = cy + 16;
+      const bottom = cy + ch - 4;
+      ctx.globalAlpha = c.enabled ? 0.9 : 0.35;
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
+      for (const k of r.keys) {
+        if (k.t >= D || !k.ramp) continue;
+        const ka = xOf(c.start + k.t);
+        ctx.fillRect(ka, top, xOf(c.start + Math.min(D, k.t + k.ramp)) - ka, bottom - top);
+      }
+      const xa = Math.max(x1, 0);
+      const xb = Math.min(x2, w);
+      // the line over a dark edge, so it reads over bright thumbnails
+      const pts = [];
+      for (let x = xa; x <= xb + 1; x += 2) {
+        const px = Math.min(x, xb);
+        const sp = Remap.speedAt(r, Math.max(0, Math.min(D - 1, tOf(px) - c.start)));
+        pts.push({ x: px, y: remapY(Math.abs(sp) * 100, cy, ch), col: sp < 0 ? '#ff8a80' : sp === 0 ? '#80d8ff' : '#e8e8e8' });
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      for (let i = 1; i < pts.length; i++) {
+        ctx.strokeStyle = pts[i].col;
+        ctx.beginPath();
+        ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+        ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#f2f2f2';
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.lineWidth = 1;
+      for (const g of remapKeysOf(c, cy, ch)) {
+        for (const [x, y] of [[g.ka - 3, g.ya - 6], [g.kb, g.yb - 6]]) { ctx.fillRect(x, y, 3, 12); ctx.strokeRect(x - 0.5, y - 0.5, 4, 13); }
+        ctx.beginPath();
+        ctx.moveTo(g.mid - 4, top - 2); ctx.lineTo(g.mid + 4, top - 2); ctx.lineTo(g.mid, top + 4); ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.globalAlpha = c.enabled ? 1 : 0.4;
+    }
+    // Where each shown key of a remapped clip is drawn: its halves (x and line height) and its tab.
+    function remapKeysOf(c, cy, ch) {
+      const r = model.remapOf(c);
+      const D = model.clipDuration(c);
+      const out = [];
+      r.keys.forEach((k, i) => {
+        if (k.t >= D) return;
+        const ka = xOf(c.start + k.t);
+        const kb = xOf(c.start + k.t + k.ramp);
+        out.push({ i, k, ka, kb, mid: (ka + kb) / 2, ya: remapY(Math.abs(r.speeds[i]) * 100, cy, ch), yb: remapY(Math.abs(r.speeds[i + 1]) * 100, cy, ch) });
+      });
+      return out;
     }
     function drawWave(ctx, c, m, x1, x2, by, bh, w) {
       const p = peaksFor(m);
@@ -1411,7 +1519,15 @@
         if (Math.abs(x - xa) <= zone && (!near || Math.abs(x - xa) < near.d)) near = { c, edge: 'start', d: Math.abs(x - xa), inside: x >= xa };
         if (Math.abs(x - xb) <= zone && (!near || Math.abs(x - xb) < near.d || (Math.abs(x - xb) === near.d && x < xb))) near = { c, edge: 'end', d: Math.abs(x - xb), inside: x < xb };
       }
-      if (under && showsBand(row) && y > ry + 15) {
+      const remapLine = !!under && showsBand(row) && y > ry + 12 && bandOf(under, row.type) === 'remap';
+      if (remapLine) {
+        for (const g of remapKeysOf(under, ry + 1, row.h - 3)) {
+          if (Math.abs(x - g.mid) <= 5 && y >= ry + 13 && y <= ry + 22) return { ...out, clip: under, part: 'rkey', half: 'tab', keyIndex: g.i };
+          if (x >= g.ka - 6 && x <= g.ka + (g.ka === g.kb ? 0 : 2) && Math.abs(y - g.ya) <= 8) return { ...out, clip: under, part: 'rkey', half: 'left', keyIndex: g.i };
+          if (x >= g.kb - (g.ka === g.kb ? 0 : 2) && x <= g.kb + 6 && Math.abs(y - g.yb) <= 8) return { ...out, clip: under, part: 'rkey', half: 'right', keyIndex: g.i };
+        }
+      }
+      if (under && !remapLine && showsBand(row) && y > ry + 15) {
         const kind = row.type;
         const prop = bandProp(kind);
         const list2 = under.keyframes?.[prop];
@@ -1441,7 +1557,13 @@
       if (under) {
         out.clip = under;
         out.part = 'body';
-        if (showsBand(row) && y > ry + 15) {
+        const xa = xOf(under.start);
+        if (row.type === 'video' && y <= ry + 15 && x >= xa + 1 && x <= xa + 18 && xOf(model.clipEnd(under)) - xa > 40) out.part = 'fx';
+        else if (remapLine) {
+          const r = model.remapOf(under);
+          const tau = Math.max(0, Math.min(model.clipDuration(under) - 1, t - under.start));
+          if (Math.abs(remapY(Math.abs(Remap.speedAt(r, tau)) * 100, ry + 1, row.h - 3) - y) <= 4) out.part = 'rband';
+        } else if (showsBand(row) && y > ry + 15) {
           const prop = bandProp(row.type);
           const val = K.propValue(under, prop, t - under.start, under.props[prop]);
           if (Math.abs(bandY(prop, val, ry + 1, row.h - 3) - y) <= 3) { out.part = 'band'; out.prop = prop; }
@@ -1568,11 +1690,21 @@
       if (h.clip && tool === 'pen') {
         selectClip(h.clip, e);
         if (h.part === 'kf') startBand(e, h);
+        else if (h.part === 'rkey') startRemapKey(e, h);
+        else if (bandOf(h.clip, kindOf(seq, h.clip)) === 'remap') { if (h.y > rowOfTrack.get(h.clip.track).y - v.scrollY + 16) addRemapKey(h); }
         else startPen(e, h);
         return;
       }
       if (h.clip && tool === 'rate' && (h.part === 'start' || h.part === 'end')) { selectClip(h.clip, e); startStretch(e, h); return; }
       if (h.clip && (h.part === 'kf' || h.part === 'band')) { selectClip(h.clip, e); startBand(e, h); return; }
+      if (h.clip && h.part === 'fx') { selectClip(h.clip, e); bandMenu(e, h.clip); return; }
+      if (h.clip && h.part === 'rkey') { selectClip(h.clip, e); startRemapKey(e, h); return; }
+      if (h.clip && h.part === 'rband') {
+        selectClip(h.clip, e);
+        if (e.ctrlKey) addRemapKey(h);
+        else startRemapBand(e, h);
+        return;
+      }
       if (h.clip && (h.part === 'fadeIn' || h.part === 'fadeOut')) { selectClip(h.clip, e); startFade(e, h); return; }
       if (h.clip && (h.part === 'start' || h.part === 'end')) {
         const mode = tool === 'ripple' ? 'ripple' : tool === 'roll' ? 'roll' : e.ctrlKey ? 'ripple' : 'normal';
@@ -1690,7 +1822,8 @@
       else if (['select', 'ripple', 'roll', 'trackForward', 'trackBackward', 'rate'].includes(app.tool)) {
         if (h.part === 'start' || h.part === 'end') cursor = app.tool === 'roll' ? 'col-resize' : 'ew-resize';
         else if (h.part === 'tstart' || h.part === 'tend') cursor = 'ew-resize';
-        else if (h.part === 'band') cursor = 'ns-resize';
+        else if (h.part === 'band' || h.part === 'rband') cursor = 'ns-resize';
+        else if (h.part === 'rkey') cursor = 'ew-resize';
         else if (h.part === 'kf') cursor = 'move';
         else if (h.part === 'fadeIn' || h.part === 'fadeOut') cursor = 'ew-resize';
       }
@@ -2065,6 +2198,119 @@
       v.drag = d;
       scroller.setPointerCapture(e.pointerId);
     }
+    // ---- Time Remapping on the clip's line (Premiere's rubber band for Time Remapping > Speed) ----
+    // Ctrl+click on the speed line, or a click with the Pen: a key at that frame, the same speed on both sides.
+    function addRemapKey(h) {
+      const c = h.clip;
+      const f = frame();
+      const next = Remap.addKey(model.remapOf(c), Math.round((h.t - c.start) / f) * f);
+      if (!next) { flash(tr('A speed keyframe cannot go there.')); return; }
+      ui.exec(app, C.setRemap(seq.id, c.id, next));
+    }
+    // Dragging the speed line up or down sets that segment's speed (Shift: steps of 5%); its source frames stay, so
+    // the clip gets longer or shorter. One undo step.
+    function startRemapBand(e, h) {
+      const c = h.clip;
+      const row = rowOfTrack.get(c.track);
+      const base = model.remapOf(c);
+      const f = frame();
+      const seg = Remap.segmentAt(base, Math.max(0, Math.min(model.clipDuration(c) - 1, h.t - c.start)));
+      if (seg.index == null) return;
+      const old = base.speeds[seg.index];
+      if (!old) { flash(tr('A hold has no speed to change.')); return; }
+      const seqId = seq.id;
+      const live = liveEdit('Time Remapping');
+      const d = {
+        type: 'remap', moved: false,
+        step(ev) {
+          const p = localXY(ev);
+          if (!d.moved && Math.abs(p.y - h.y) < 2) return;
+          d.moved = true;
+          const pct = remapPct(p.y, row.y - v.scrollY + 1, row.h - 3, ev.shiftKey ? 5 : 1);
+          live.set(C.setRemap(seqId, c.id, Remap.setSegmentSpeed(base, seg.index, (Math.sign(old) * pct) / 100, f)));
+          const now = clipById(app.sequence, c.id);
+          showTip(p.x, p.y, `${old < 0 ? '-' : ''}${pct}%  ${time.timecode(now ? model.clipDuration(now) : 0, fps())}`);
+          invalidate();
+        },
+        end(ev, cancelled) { live.finish(!cancelled && d.moved); invalidate(); },
+      };
+      v.drag = d;
+      scroller.setPointerCapture(e.pointerId);
+    }
+    // Dragging a speed key: one half splits it into a speed transition; the tab above moves it (the segment before
+    // it plays faster or slower to reach the same frame), Alt moves it keeping the speeds; Ctrl makes a reverse
+    // segment after it of the dragged length (then forward again to its frame), Ctrl+Alt a hold.
+    function startRemapKey(e, h) {
+      const c = h.clip;
+      const base = model.remapOf(c);
+      const i = h.keyIndex;
+      const k = base.keys[i];
+      if (!k) return;
+      const f = frame();
+      const { x: x0 } = localXY(e);
+      const sx0 = v.scrollX;
+      const mode = e.ctrlKey && e.altKey ? 'hold' : e.ctrlKey ? 'reverse' : e.altKey ? 'slide' : h.half === 'tab' ? 'move' : 'split';
+      if ((mode === 'hold' || mode === 'reverse') && k.ramp) { flash(tr('Join the speed transition first.')); return; }
+      const seqId = seq.id;
+      const live = liveEdit('Time Remapping');
+      const d = {
+        type: 'remapKey', moved: false,
+        step(ev) {
+          const p = localXY(ev);
+          const dx = p.x + v.scrollX - (x0 + sx0);
+          if (!d.moved && Math.abs(dx) < 3) return;
+          d.moved = true;
+          const dt = Math.round(((dx / v.pps) * T) / f) * f;
+          let next;
+          let text;
+          if (mode === 'split') {
+            next = Remap.splitKey(base, i, h.half, h.half === 'left' ? -dt : dt, f);
+            text = `${tr('Speed Transition')} ${time.timecode(next.keys[i].ramp, fps())}`;
+          } else if (mode === 'move' || mode === 'slide') {
+            next = Remap.moveKey(base, i, dt, f, { keepSpeeds: mode === 'slide' });
+            text = `${Math.round(Math.abs(next.speeds[i]) * 100)}%`;
+          } else {
+            const len = mode === 'reverse' ? Math.min(Math.max(0, dt), Remap.reverseRoom(base, i, f)) : Math.max(0, dt);
+            next = len <= 0 ? base : mode === 'reverse' ? Remap.insertReverse(base, i, len) : Remap.insertFreeze(base, i, len);
+            text = `${mode === 'reverse' ? tr('Reverse') : tr('Hold')} ${time.timecode(len, fps())}`;
+          }
+          live.set(C.setRemap(seqId, c.id, next));
+          showTip(p.x, p.y, text);
+          invalidate();
+        },
+        end(ev, cancelled) { live.finish(!cancelled && d.moved); invalidate(); },
+      };
+      v.drag = d;
+      scroller.setPointerCapture(e.pointerId);
+    }
+    // What a video clip's keyframe line shows (the fx badge, Clip > Show Clip Keyframes).
+    function bandItems(c) {
+      const cur = bandOf(c, kindOf(seq, c));
+      const show = (what) => { v.band.set(c.id, what); invalidate(); };
+      return [
+        { label: tr('Opacity'), checked: cur === 'opacity', run: () => show('opacity') },
+        { label: tr('Time Remapping'), disabled: model.isStill(app.project, c), submenu: [{ label: tr('Speed'), checked: cur === 'remap', run: () => show('remap') }] },
+      ];
+    }
+    function bandMenu(e, c) {
+      if (kindOf(seq, c) === 'video') ui.menu(e.clientX, e.clientY, bandItems(c));
+    }
+    function remapKeyMenu(e, c, i) {
+      const r = model.remapOf(c);
+      const k = r.keys[i];
+      if (!k) return;
+      ui.menu(e.clientX, e.clientY, [
+        { label: tr('Join Speed Transition'), disabled: !k.ramp, run: () => ui.exec(app, C.setRemap(seq.id, c.id, Remap.splitKey(r, i, 'right', -k.ramp, frame()))) },
+        { label: tr('Delete Keyframe'), run: () => ui.exec(app, C.setRemap(seq.id, c.id, Remap.removeKey(r, i, frame()))) },
+      ]);
+    }
+    // Clip > Time Interpolation: Frame Sampling or Frame Blending for the selected video clips, one step.
+    function setSampling(sampling) {
+      const clips = sel().filter((x) => kindOf(seq, x) === 'video' && !model.isStill(app.project, x));
+      if (!clips.length) return;
+      app.history.begin('Time Interpolation');
+      try { for (const x of clips) app.history.do(C.setClip(seq.id, x.id, { sampling }, { linked: false })); } catch (err) { ui.report(err); } finally { app.history.commit(); }
+    }
     const clampBand = (prop, val) => Math.max(BAND[prop].lo, Math.min(BAND[prop].hi, Math.round(val * 10) / 10));
 
     function startTransitionDrag(e, h) {
@@ -2212,11 +2458,18 @@
     }
     // The items a drop places: [{media, in, out, video, audio}] from a project selection or the source monitor.
     function dropItems(p) {
+      if (p.kind === 'sequence') return [{ sequence: p.id, in: null, out: null, video: true, audio: true }];
+      if (p.kind === 'source' && p.sequenceId != null) return [{ sequence: p.sequenceId, in: p.in ?? null, out: p.out ?? null, video: p.video !== false, audio: p.audio !== false }];
       if (p.kind === 'source') return [{ media: p.mediaId, in: p.in ?? null, out: p.out ?? null, video: p.video !== false, audio: p.audio !== false }];
       if (p.kind === 'media') return (p.ids || []).map((id) => ({ media: id, in: null, out: null, video: true, audio: true }));
       return [];
     }
     function itemLength(it) {
+      if (it.sequence != null) {
+        const inner = app.project.sequences.find((x) => x.id === it.sequence);
+        const b = it.out ?? (inner ? model.sequenceDuration(inner) : 0);
+        return Math.max(frame(), Math.floor((b - (it.in ?? 0)) / frame()) * frame());
+      }
       const m = media.get(it.media);
       if (!m) return 0;
       if (m.kind === 'image') return app.project.settings.stillDuration;
@@ -2234,8 +2487,9 @@
       if (row?.type === 'video') { vt = row.id; at = auds[Math.min(row.index, auds.length - 1)]?.id ?? null; }
       else if (row?.type === 'audio') { at = row.id; vt = vids[Math.min(row.index, vids.length - 1)]?.id ?? null; }
       else { vt = patch.video || vids[0]?.id || null; at = patch.audio || auds[0]?.id || null; }
-      const hasV = m && (m.kind === 'image' || !!m.video);
-      const hasA = !!m?.audio;
+      const nestHas = it.sequence != null ? model.nestKinds(app.project, it.sequence) : null;
+      const hasV = nestHas ? nestHas.video : m && (m.kind === 'image' || !!m.video);
+      const hasA = nestHas ? nestHas.audio : !!m?.audio;
       return { video: hasV && it.video ? vt : null, audio: hasA && it.audio ? at : null };
     }
     function dropPlan(p, h, info) {
@@ -2249,7 +2503,9 @@
         const edge = edgeNear(h.row, h.t, p.type);
         return edge ? { edge } : null;
       }
-      if (p.kind === 'sequence') return { refuse: tr('Nesting sequences comes in a later version.') };
+      const nested = p.kind === 'sequence' ? p.id : p.kind === 'source' ? p.sequenceId : null;
+      if (nested != null && model.nestLoop(app.project, seq.id, nested)) return { refuse: tr('A sequence cannot be nested inside itself.') };
+      if (nested != null && !Object.values(model.nestKinds(app.project, nested)).some(Boolean)) return { refuse: tr('The sequence is empty.') };
       const items = p.kind === 'generator' ? [{ generator: p.source, length: p.duration || app.project.settings.stillDuration }] : dropItems(p);
       if (!items.length) return null;
       let at = snapT(h.t);
@@ -2333,7 +2589,7 @@
             continue;
           }
           if (!it.tracks.video && !it.tracks.audio) continue;
-          const r = app.history.do(C.place(app.sequence.id, { source: { media: it.media }, in: it.in ?? undefined, out: it.out ?? undefined, at: cur, video: it.tracks.video, audio: it.tracks.audio, mode }));
+          const r = app.history.do(C.place(app.sequence.id, { source: it.sequence != null ? { sequence: it.sequence } : { media: it.media }, in: it.in ?? undefined, out: it.out ?? undefined, at: cur, video: it.tracks.video, audio: it.tracks.audio, mode }));
           made.push(...r.ids);
           cur = r.at + r.duration;
         }
@@ -2480,6 +2736,7 @@
       app.setFocus('timeline');
       if (h.transition) { setTransition(h.transition.id); transitionMenu(e, h.transition); return; }
       if (h.clip && h.part === 'kf') { keyframeMenu(e, h.clip, h.prop, h.kfIndex); return; }
+      if (h.clip && h.part === 'rkey') { remapKeyMenu(e, h.clip, h.keyIndex); return; }
       if (h.clip) {
         if (!app.selection.has(h.clip.id)) selectClip(h.clip, e);
         clipMenu(e, h.clip);
@@ -2515,18 +2772,23 @@
         { label: linkedAny ? tr('Unlink') : tr('Link'), keyAction: 'Cut.link', disabled: !linkedAny && clips.length < 2, run: () => api.toggleLink() },
         { label: tr('Group'), keyAction: 'Cut.group', disabled: clips.length < 2, run: () => api.group() },
         { label: tr('Ungroup'), keyAction: 'Cut.ungroup', disabled: !clips.some((x) => x.group), run: () => api.ungroup() },
+        { label: tr('Nest…'), keyAction: 'Cut.nest', disabled: !clips.length, run: () => api.nest() },
         { separator: true },
         { label: tr('Label'), submenu: [{ label: tr('None'), checked: !c.label, run: () => setLabel(null) }, ...Object.keys(LABELS).map((k) => ({ label: tr(LABEL_NAMES[k]), checked: c.label === k, run: () => setLabel(k) }))] },
         { separator: true },
         { label: tr('Speed/Duration…'), keyAction: 'Cut.speed', run: () => api.speedDialog() },
-        { label: tr('Speed'), disabled: !clips.some((x) => !model.isStill(app.project, x)), submenu: [
+        { label: tr('Speed'), disabled: !clips.some((x) => !model.isStill(app.project, x)) || clips.some((x) => x.remap), submenu: [
           ...QUICK_SPEEDS.map((p) => ({ label: `${p}%`, checked: Math.abs(c.speed * 100 - p) < 1e-6, run: () => api.setSpeed({ speed: p / 100 }) })),
           { separator: true },
           { label: tr('Reverse Speed'), checked: !!c.reverse, run: () => api.setSpeed({ reverse: !c.reverse }) },
         ] },
+        ...(kind === 'video' && !model.isStill(app.project, c) ? [
+          { label: tr('Time Interpolation'), submenu: [['sample', 'Frame Sampling'], ['blend', 'Frame Blending']].map(([id, name]) => ({ label: tr(name), checked: c.sampling === id, run: () => setSampling(id) })) },
+        ] : []),
         { label: tr('Insert Frame Hold Segment'), keyAction: 'Cut.freezeFrame', disabled: kind !== 'video' || !m || m.kind === 'image' || !edit.inClip(app, c), run: () => api.freezeFrame() },
         { label: tr('Apply Default Transitions to Selection'), keyAction: 'Cut.transitionBoth', run: () => api.addTransitions({ video: true, audio: true }) },
         { separator: true },
+        ...(kind === 'video' ? [{ label: tr('Show Clip Keyframes'), submenu: bandItems(c) }] : []),
         { label: tr('Rename…'), run: () => renameClip(c) },
         { separator: true },
         { label: tr('Reveal in Source Monitor'), disabled: !m, run: () => openInSource(c) },
@@ -2566,6 +2828,16 @@
       const name = await ide.ui.prompt(tr('Clip name'), c.name);
       if (name != null) ui.exec(app, C.setClip(seq.id, c.id, { name }));
     }
+    // A nest clip opens its sequence in its own timeline tab, the playhead on the frame the clip shows (Premiere's
+    // double-click).
+    function openNest(c) {
+      const inner = model.nestOf(app.project, c);
+      if (!inner) return;
+      const at = Math.max(c.start, Math.min(model.clipEnd(c) - frame(), app.t));
+      const t = time.snap(Math.max(0, model.sourceTime(c, at)), inner.fps);
+      app.setSequence(inner.id);
+      app.setTime(t);
+    }
     function openInSource(c) {
       const m = media.get(c.source?.media);
       if (!m) return;
@@ -2578,6 +2850,7 @@
       if (h.transition) { setTransition(h.transition.id); app.emit('transitionSelection', { id: h.transition.id, open: true }); return; }
       if (!h.clip) return;
       if (h.clip.source?.generator === 'text') { app.setTime(Math.max(app.t, h.clip.start)); ui.overlay?.editText?.(h.clip.id); return; }
+      if (model.isNest(h.clip)) { openNest(h.clip); return; }
       openInSource(h.clip);
     });
 
@@ -2658,6 +2931,23 @@
         const box = scroller.getBoundingClientRect();
         return { x: box.left + xOf(t), y: box.top + (r ? r.y - v.scrollY + r.h * dy : 0) };
       },
+      // Client pixels of a clip's Time Remapping line at timeline time t, or of its key i ('left' | 'right' | 'tab').
+      remapPoint(clipId, t, key = null) {
+        const c = clipById(seq, clipId);
+        const r = c && rowOfTrack.get(c.track);
+        if (!r) return null;
+        const box = scroller.getBoundingClientRect();
+        const cy = r.y - v.scrollY + 1;
+        if (key) {
+          const g = remapKeysOf(c, cy, r.h - 3).find((x) => x.i === key.index);
+          if (!g) return null;
+          if (key.half === 'tab') return { x: box.left + g.mid, y: box.top + cy + 17 };
+          return key.half === 'left' ? { x: box.left + g.ka - 2, y: box.top + g.ya } : { x: box.left + g.kb + 2, y: box.top + g.yb };
+        }
+        const sp = Remap.speedAt(model.remapOf(c), Math.max(0, Math.min(model.clipDuration(c) - 1, t - c.start)));
+        return { x: box.left + xOf(t), y: box.top + remapY(Math.abs(sp) * 100, cy, r.h - 3) };
+      },
+      setSampling: (s) => setSampling(s),
       setZoom: (pps, anchor) => setZoom(pps, anchor),
       setScroll: (x, y) => setScroll(x, y),
       zoomIn: () => zoomBy(1.6),
@@ -2788,6 +3078,7 @@
         return { ids };
       },
       speedDialog: () => speedDialog(),
+      nest: () => nestDialog(),
       setSpeed: (patch) => setSpeed(patch),
       addMarker() {
         if (!seq) return null;
@@ -2945,6 +3236,8 @@
       const clips = sel();
       if (!clips.length) { flash(tr('Select a clip first.')); return null; }
       const c = clips[0];
+      // Premiere greys Speed/Duration out for a clip with Time Remapping; its speed is the curve's
+      if (clips.some((x) => x.remap)) { flash(tr('This clip has Time Remapping. Change its speed with Time Remapping.')); return null; }
       const still = model.isStill(app.project, c);
       const speed = ui.numberField({ value: Math.round(c.speed * 1000) / 10, min: 1, max: 10000, step: 1, precision: 1, unit: '%' });
       const durF = ui.timecodeField({ fps, value: model.clipDuration(c) });
@@ -2987,6 +3280,35 @@
       return true;
     }
 
+    // Clip > Nest…: Premiere's dialog for the new sequence's name, then the selected clips (and, with linked selection,
+    // what links to them) become one nest clip in a single step.
+    function nestDialog() {
+      const clips = sel();
+      if (!seq || !clips.length) { flash(tr('Select the clips to nest.')); return null; }
+      const taken = new Set(app.project.sequences.map((x) => x.name));
+      let n = 1;
+      while (taken.has(tr('Nested Sequence {n}', { n }))) n++;
+      const name = el('input', 'cut-nest-name', undefined, { type: 'text', spellcheck: 'false' });
+      name.value = tr('Nested Sequence {n}', { n });
+      const body = el('div', 'cut-form');
+      body.append(ui.row(tr('Name'), name));
+      const seqId = seq.id;
+      const ids = clips.map((c) => c.id);
+      ui.dialog({
+        title: tr('Nested Sequence Name'), id: 'cutNestDialog', body, width: 380,
+        buttons: [
+          { label: tr('OK'), primary: true, run: () => {
+            const r = ui.exec(app, C.nest(seqId, ids, { name: name.value.trim() || tr('Nested Sequence {n}', { n }), linked: v.linked }));
+            if (r) app.select(r.ids);
+          } },
+          { label: tr('Cancel') },
+        ],
+      });
+      name.focus();
+      name.select();
+      return true;
+    }
+
     // keys: the actions ui-keys.js dispatches (Cut.ui.onAction), while the timeline or the program monitor has them
     const EDIT = ['timeline', 'program'];
     const act = (id, fn, panels = EDIT) => offs.push(ui.onAction(id, (ctx) => fn(ctx), { panels }));
@@ -3015,6 +3337,7 @@
     for (const [id, kind, how] of [['videoTracksTaller', 'video', 'taller'], ['videoTracksShorter', 'video', 'shorter'], ['audioTracksTaller', 'audio', 'taller'],
       ['audioTracksShorter', 'audio', 'shorter'], ['expandTracks', null, 'expand'], ['minimizeTracks', null, 'minimize']]) act(id, () => { api.trackHeights(kind, how); }, ['timeline']);
     act('group', () => { api.group(); }, ['timeline']);
+    act('nest', () => { api.nest(); });
     act('ungroup', () => { api.ungroup(); }, ['timeline']);
     act('selectAtPlayhead', () => { api.selectAtPlayhead(); });
     act('matchFrame', () => { api.matchFrame(); });

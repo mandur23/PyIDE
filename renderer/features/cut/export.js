@@ -455,11 +455,21 @@
     const from = range?.in ?? 0;
     const to = range?.out ?? model.sequenceDuration(seq);
     const used = new Map();
-    for (const c of seq.clips) {
-      if (!c.enabled || model.clipEnd(c) <= from || c.start >= to) continue;
-      const m = model.mediaOf(project, c);
-      if (m) used.set(m.id, m);
-    }
+    // the media of the clips in [from, to), and of the clips a nest clip there shows (in its sequence's times)
+    const gather = (s, a, b) => {
+      for (const c of s.clips) {
+        if (!c.enabled || model.clipEnd(c) <= a || c.start >= b) continue;
+        const inner = model.nestOf(project, c);
+        if (inner) {
+          const [x, y] = model.sourceSpan(c, Math.max(a, c.start), Math.min(b, model.clipEnd(c)));
+          gather(inner, x, y + 1);
+          continue;
+        }
+        const m = model.mediaOf(project, c);
+        if (m) used.set(m.id, m);
+      }
+    };
+    gather(seq, from, to);
     const offline = [];
     for (const m of used.values()) {
       const st = await invoke('cut:stat', m.path).catch(() => ({ missing: true }));

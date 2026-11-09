@@ -1,0 +1,11 @@
+{
+  "id": "collab",
+  "name": "Collaboration",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "Real-time collaborative coding, like VS Code's Live Share: share the open project with a join code (through an encrypted bore.pub tunnel or directly on the same network), accept each person who asks to join, and edit the same files at once with everyone's carets, selections and names, follow mode, read-only or editing guests, chat, and the host's language server, saving and run output shared with guests.",
+  "modes": ["code"],
+  "main": [
+    "collab.js"
+  ]
+}

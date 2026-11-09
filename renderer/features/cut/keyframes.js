@@ -98,10 +98,13 @@
   }
 
   // The static value of a prop path on a clip: 'opacity' (clip.props), 'effects.<id>.<param>' (the effect's params),
-  // 'layers.<id>.<field>' (a text layer).
+  // 'layers.<id>.<field>' (a text layer), 'masks.<id>.<field>' (a mask of Opacity), 'effects.<id>.masks.<id>.<field>'
+  // (a mask of an effect).
   function staticValue(clip, prop) {
     const parts = prop.split('.');
     if (parts.length === 1) return clip.props?.[prop];
+    if (parts[0] === 'masks') return (clip.masks || []).find((m) => m.id === parts[1])?.[parts[2]];
+    if (parts[0] === 'effects' && parts[2] === 'masks') return ((clip.effects || []).find((e) => e.id === parts[1])?.masks || []).find((m) => m.id === parts[3])?.[parts[4]];
     if (parts[0] === 'effects') return (clip.effects || []).find((e) => e.id === parts[1])?.params?.[parts[2]];
     if (parts[0] === 'layers') return (clip.source?.layers || []).find((l) => l.id === parts[1])?.[parts[2]];
     return undefined;

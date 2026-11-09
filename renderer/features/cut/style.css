@@ -8,6 +8,7 @@
   --cut-clip-audio: #2c6152;
   --cut-clip-text: #7a4bb0;
   --cut-clip-solid: #6b5a2a;
+  --cut-clip-nest: #4f7a2e; /* nest clips: Premiere labels sequences Forest */
   --cut-selected: #f2c55c;
   --cut-monitor-bg: #0f1012;
 }

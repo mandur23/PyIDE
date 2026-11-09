@@ -80,11 +80,44 @@
   };
 
   // ---------- documents ----------
+  // Documents that are not files of this computer: a collaboration guest's collab:// documents (renderer/features/
+  // collab). A source is {owns(path), uri(path), readOnly(path), save(doc)}: its document starts empty and gets its text
+  // from the shared document it joins, is never read from or written to disk here, and is never modified as a file is
+  // (the host saves it; save(doc) asks).
+  const docSources = [];
+  ide.registerDocSource = (source) => { docSources.push(source); };
+  const sourceOf = (path) => docSources.find((s) => s.owns(path)) || null;
+  function loadRemoteDoc(path, source) {
+    const uri = source.uri(path);
+    const model = ide.monaco.editor.getModel(uri) || ide.monaco.editor.createModel('', languageFor(path), uri);
+    const doc = { path, model, savedVersion: model.getAlternativeVersionId(), encoding: 'utf-8', encodingPinned: false, fresh: true, diskHash: '', changed: [], forcedText: false, sync: newSync(),
+      remote: source, readOnly: !!source.readOnly(path), lineSeparator: model.getEOL(), mixedSeparators: false };
+    docs.set(key(path), doc);
+    let eol = model.getEOL();
+    model.onDidChangeContent((e) => {
+      const eolBefore = eol;
+      eol = e.eol;
+      if (!applyingRemote) localEdit(doc, e, eolBefore);
+    });
+    doc.sync.joining = '';
+    doc.sync.ticket = ++joins;
+    ide.api.send('doc:join', { path, ticket: doc.sync.ticket });
+    return doc;
+  }
+  // A document's editors follow its read-only state (a guest given or refused the right to edit).
+  ide.setDocumentReadOnly = (doc, readOnly) => {
+    if (!doc) return;
+    doc.readOnly = !!readOnly;
+    for (const g of groups) if (g.active?.doc === doc && g.active.kind === 'file') g.editor.updateOptions({ readOnly: doc.readOnly });
+  };
+
   // asText (Open as Text): a file that looks binary is read as text all the same, in the encoding detected.
   async function loadDoc(path, { asText } = {}) {
     path = localPath(path);
     const existing = docs.get(key(path));
     if (existing) return existing;
+    const source = sourceOf(path);
+    if (source) return loadRemoteDoc(path, source);
     // The folder's case sensitivity is known before the document is keyed (a.py and A.py may be two files).
     let [r] = await Promise.all([ide.api.invoke('fs:readText', path), ide.learnPathCase(dirname(path))]);
     if (r.binary && asText) r = { ...(await ide.api.invoke('fs:decode', path, 'auto')), forcedText: true };
@@ -168,7 +201,7 @@
   // The file's text for a reload: in the encoding the user chose, else detected again, since a program outside PyIDE
   // may have re-encoded the file.
   const readForReload = (doc) => (doc.encodingPinned ? readDisk(doc) : ide.api.invoke('fs:readText', doc.path));
-  const docDirty = (doc) => !!doc && !doc.model.isDisposed() && doc.model.getAlternativeVersionId() !== doc.savedVersion;
+  const docDirty = (doc) => !!doc && !doc.remote && !doc.model.isDisposed() && doc.model.getAlternativeVersionId() !== doc.savedVersion;
   const tabsOfDoc = (doc) => groups.flatMap((g) => g.tabs.filter((t) => t.doc === doc));
   const firstTabFor = (doc) => tabsOfDoc(doc)[0] || null;
 
@@ -177,7 +210,7 @@
     docs.delete(key(doc.path));
     ide.api.send('doc:leave', { path: doc.path });
     doc.model.dispose();
-    ide.emit('fileClosed', doc.path);
+    ide.emit(doc.remote ? 'remoteFileClosed' : 'fileClosed', doc.path);
   }
 
   const textHash = (s) => {
@@ -253,6 +286,11 @@
     }
     return { lineNumber: lo, column: Math.min(at - lineStart(lo) + 1, m.getLineMaxColumn(lo)) };
   }
+  // Op positions (every line break one LF) and model positions, for the carets of a collaboration session.
+  ide.textOffsets = {
+    position: (m, at) => positionAt(m, Math.max(0, Math.min(at, m.getValueLength() - (m.getLineCount() - 1) * (m.getEOL().length - 1)))),
+    offset: (m, pos) => m.getOffsetAt(pos) - (pos.lineNumber - 1) * (m.getEOL().length - 1),
+  };
   const setModelEOL = (model, eol) => model.setEOL(eol === '\n' ? ide.monaco.editor.EndOfLineSequence.LF : ide.monaco.editor.EndOfLineSequence.CRLF);
   function applyOps(doc, ops) {
     const m = doc.model;
@@ -297,6 +335,7 @@
     const r = NanoOT.synced(d.sync, msg, msg.text === undefined ? '' : lfText(d.model.getValue()));
     d.sync = r.state;
     if (r.apply) applyOps(d, r.apply);
+    if (d.remote) { d.lineSeparator = d.model.getEOL(); ide.emit('lineSeparatorChanged', d); ide.emit('remoteDocumentSynced', d); }
     sendOps(d, r.send);
   });
   // Another window opened this document: this one hands over the text, and from now on sends its edits.
@@ -396,6 +435,9 @@
     if (tab?.kind === 'file') {
       if (g.editor.getModel() !== tab.model) g.editor.setModel(tab.model);
       if (tab.viewState) g.editor.restoreViewState(tab.viewState);
+      // Only a collaboration guest's documents are read-only in a group's editor (ide.setDocumentReadOnly).
+      if (tab.doc.remote || g.readOnlyDoc) g.editor.updateOptions({ readOnly: !!tab.doc.readOnly });
+      g.readOnlyDoc = !!tab.doc.remote;
     } else g.editor.setModel(null);
     renderTabs(g);
     if (g === activeGroup) { updateStatus(); ide.emit('activeTabChanged', tab || null); }
@@ -936,7 +978,9 @@
   ide.registerFileViewer = (viewer) => { viewers.push(viewer); };
   const viewerFor = (path, { binary = false } = {}) => viewers.find((v) => v.match(path) && (!v.binaryOnly || binary)) || null;
 
-  // opts: {line, col, focus = true, group: 'active'|'right'|'down'|'window'|group, preview, asText, text}
+  // opts: {line, col, focus = true, group: 'active'|'right'|'down'|'window'|group, preview, asText, text, background}
+  // background: a new tab is added behind the group's active one, which stays in front (a file a collaboration guest
+  // opened, so the host's language server and saving cover it).
   ide.openFile = async (path, opts = {}) => {
     path = localPath(path);
     if (opts.group === 'window') { await openInNewWindow([{ path, line: opts.line }]); return null; }
@@ -967,7 +1011,9 @@
       addTab(g, tab, old ? g.tabs.indexOf(old) + 1 : undefined);
       if (old) closeTabObj(old, true);
     } else if (!opts.preview && tab.preview) tab.preview = false;
-    if (doc?.fresh) { delete doc.fresh; ide.emit('fileOpened', tab); }
+    // A collaboration guest's document is not a file here: the plugins that read, lint or record files never see it.
+    if (doc?.fresh) { delete doc.fresh; ide.emit(doc.remote ? 'remoteFileOpened' : 'fileOpened', tab); }
+    if (opts.background && g.active && g.active !== tab) { renderTabs(g); return tab; }
     setActiveGroup(g);
     activateTab(g, tab);
     if (opts.text !== undefined && doc) applyText(doc, opts.text, { remote: false });
@@ -1194,6 +1240,7 @@
 
   // force: write a document without unsaved changes too (Convert to). -> the text written, or null.
   async function saveDoc(doc, { auto = false, overwrite = false, force = false } = {}) {
+    if (doc.remote) return auto ? null : doc.remote.save?.(doc) ?? null;
     while (doc.saving) await doc.saving;
     if (doc.model.isDisposed() || !(docDirty(doc) || force)) return null;
     if (auto && !(await autoSavable(doc))) return null;
@@ -1266,7 +1313,7 @@
   }
 
   async function reloadDoc(doc) {
-    if (docDirty(doc)) return;
+    if (docDirty(doc) || doc.remote) return;
     let r;
     try { r = await readForReload(doc); } catch { return; }
     // Typed into or closed while the file was read: the editor's text wins.

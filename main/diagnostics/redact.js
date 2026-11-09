@@ -19,10 +19,10 @@ const TEXT_PATTERNS = [
   /\bnpm_[A-Za-z0-9]{30,}/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWT
 ];
-// A private server's key, in a Nano Studio join code (whatever it holds) or standing alone with the length of a key:
+// A private server's or a collaboration session's key, in a Nano Studio join code (whatever it holds) or standing alone with the length of a key:
 // key=<key>, key: <key>, "key":"<key>", or a code percent-encoded once or twice inside a URL (%26key%3D<key>).
 // A plain key= stays readable: sort keys and map keys are no secret, and a word like monkey= is no key.
-const JOIN_KEY = /(nanostudio:(?:\/\/)?join\/?\?(?:[^\s"'`()<>]*&)?key=)[^&\s"'`()<>]+/gi;
+const JOIN_KEY = /(nanostudio:(?:\/\/)?(?:join|collab)\/?\?(?:[^\s"'`()<>]*&)?key=)[^&\s"'`()<>]+/gi;
 const BARE_KEY = /((?:(?<![\w-])|(?<=%(?:25)*(?:26|3F)))["']?key["']?\s*(?:[:=]|%(?:25)*3D)\s*["']?)[A-Za-z0-9_-]{32,}/gi;
 // Bearer/Basic auth headers, key=value or "key": "value" assignments, and URL credentials (scheme://user:pass@host).
 const AUTH_HEADER =/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;

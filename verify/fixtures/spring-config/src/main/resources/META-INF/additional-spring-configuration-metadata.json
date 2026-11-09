@@ -1,0 +1,9 @@
+{
+  "properties": [
+    {
+      "name": "demo.custom.greeting",
+      "type": "java.lang.String",
+      "description": "The greeting this application shows, declared by the project itself."
+    }
+  ]
+}

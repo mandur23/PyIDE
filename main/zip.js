@@ -93,4 +93,51 @@ function extractZip(file, dest, limits = LIMITS) {
   }
 }
 
-module.exports = { extractZip, LIMITS };
+// Reads chosen entries of a zip (a jar in the Maven cache) without loading the whole file: the central directory, then
+// each wanted entry. want(name) picks them; entries larger than maxSize, damaged ones and other compression methods are
+// left out. Nothing is written, so names need no checks. -> Map name -> Buffer; a file that is no zip throws.
+async function readZipEntries(file, want, { maxSize = 16 * 1024 * 1024 } = {}) {
+  const fh = await fs.promises.open(file, 'r');
+  const at = async (pos, len) => {
+    const b = Buffer.alloc(len);
+    const { bytesRead } = await fh.read(b, 0, len, pos);
+    return bytesRead === len ? b : null;
+  };
+  try {
+    const size = (await fh.stat()).size;
+    const tailLen = Math.min(size, 22 + 0xffff);
+    const tail = await at(size - tailLen, tailLen);
+    let eocd = -1;
+    for (let i = tailLen - 22; tail && i >= 0; i--) if (tail.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('The file is not a zip archive');
+    const count = tail.readUInt16LE(eocd + 10);
+    const cdSize = tail.readUInt32LE(eocd + 12);
+    const cdOffset = tail.readUInt32LE(eocd + 16);
+    if (count === 0xffff || cdOffset === 0xffffffff || cdOffset + cdSize > size) throw new Error('ZIP64 archives are not supported');
+    const cd = await at(cdOffset, cdSize);
+    const out = new Map();
+    for (let p = 0, i = 0; cd && i < count && p + 46 <= cd.length && cd.readUInt32LE(p) === 0x02014b50; i++) {
+      const method = cd.readUInt16LE(p + 10);
+      const crc = cd.readUInt32LE(p + 16);
+      const compressed = cd.readUInt32LE(p + 20);
+      const length = cd.readUInt32LE(p + 24);
+      const nameLen = cd.readUInt16LE(p + 28);
+      const offset = cd.readUInt32LE(p + 42);
+      const name = cd.toString('utf8', p + 46, p + 46 + nameLen);
+      p += 46 + nameLen + cd.readUInt16LE(p + 30) + cd.readUInt16LE(p + 32);
+      if (!want(name) || (method !== 0 && method !== 8) || length > maxSize || compressed > maxSize) continue;
+      const head = await at(offset, 30);
+      if (!head || head.readUInt32LE(0) !== 0x04034b50) continue;
+      const data = await at(offset + 30 + head.readUInt16LE(26) + head.readUInt16LE(28), compressed);
+      if (!data) continue;
+      let body;
+      try { body = method === 0 ? data : zlib.inflateRawSync(data, { maxOutputLength: Math.max(1, length) }); } catch { continue; }
+      if (body.length === length && zlib.crc32(body) === crc) out.set(name, body);
+    }
+    return out;
+  } finally {
+    await fh.close();
+  }
+}
+
+module.exports = { extractZip, readZipEntries, LIMITS };

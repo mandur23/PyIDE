@@ -21,7 +21,7 @@ const home = tempDir('cut-engine-home');
 const ctx = await launch({ fixture: 'core', port: 9753, name: 'cut-engine', mode: 'cut', env: { PYIDE_CUT_HOME: home } });
 const { js, check, until } = ctx;
 const S = JSON.stringify;
-const MINE = /(effects|textrender|media|decoder|compositor|player|thumbs)\.js/;
+const MINE = /(effects|masks|textrender|media|decoder|compositor|player|thumbs)\.js/;
 
 // ---- page helpers ------------------------------------------------------------------------------------------------
 function pageHelpers() {
@@ -243,7 +243,7 @@ function pageHelpers() {
 try {
   await until('!!(window.Cut && Cut.loaded)', 'Cut scripts', 30000);
   await js('Cut.loaded');
-  const engine = await js(`['effects', 'textrender', 'media', 'decoder', 'compositor', 'player', 'thumbs', 'model', 'commands'].filter((n) => !Cut[n])`);
+  const engine = await js(`['effects', 'masks', 'textrender', 'media', 'decoder', 'compositor', 'player', 'thumbs', 'model', 'commands'].filter((n) => !Cut[n])`);
   check(engine.length === 0, `the engine's modules are loaded (${engine.join(', ') || 'all'})`);
   await js(`(window.__eng = (${pageHelpers.toString()})(), true)`);
 
@@ -627,6 +627,140 @@ try {
     check(f.inside === 0 && f.fresh === 0 && f.next > 0.5, `${type} is a function of the frame: the same at 0.6 of the frame and from a new compositor (max diff ${f.inside}, ${f.fresh}), different on the next frame (${f.next.toFixed(2)})`);
   }
   check(fxr.errors.length === 0, `no WebGPU validation errors (${S(fxr.errors)})`);
+  // Masks (masks.js): Opacity's masks cut the clip out, an effect's masks limit it, on the GPU against the CPU reference
+  // (coverage from masks.js, the effect from its own reference), for every video effect but Edge Extend (which takes
+  // none) under an ellipse; then the Canvas 2D back end, whose feather is a blur (an approximation, measured here).
+  const mk = await js(`(async () => {
+    const W = 64, H = 36;
+    const bytes = await __eng.png(W, H, (g) => {
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { g.fillStyle = 'rgb(' + Math.round(x * 4) + ',' + Math.round(y * 7) + ',' + Math.round(((x + y) % 9) * 28) + ')'; g.fillRect(x, y, 1, 1); }
+      g.fillStyle = '#ff0000'; g.fillRect(4, 4, 10, 10);
+      g.fillStyle = '#00ff00'; g.fillRect(20, 6, 8, 8);
+      g.fillStyle = '#ffffff'; g.fillRect(40, 20, 12, 10);
+    });
+    const path = await __eng.write('mask.png', bytes);
+    const hist = __eng.history(W, H);
+    const seq = hist.project.sequences[0].id;
+    const [mid] = await __eng.importAll(hist, [path]);
+    const { ids: [cid] } = hist.do(Cut.commands.place(seq, { source: { media: mid }, at: 0, out: 254016000000, video: 'V1', audio: null }));
+    const clip = () => hist.project.sequences[0].clips.find((x) => x.id === cid);
+    const c = __eng.canvas(W, H);
+    const comp = await Cut.compositor.create(c, { width: W, height: H });
+    const c2 = __eng.canvas(W, H);
+    const flat = await Cut.compositor.create(c2, { width: W, height: H, backend: '2d' });
+    const opened = await Cut.media.open(hist.project, mid);
+    const input = __eng.linearOf(opened.image);
+    const M = Cut.masks;
+    const E = M.ellipse(W, H, { cx: 0.45, cy: 0.5, r: 12 });
+    const P = M.polygon(W, H, { cx: 0.62, cy: 0.5, s: 20 });
+    const B = M.fromPoints([{ x: 0.15, y: 0.2, hx: 0.12, hy: -0.04 }, { x: 0.8, y: 0.3, hx: 0, hy: 0.25 }, { x: 0.35, y: 0.9, hx: -0.15, hy: -0.08 }]);
+    const reset = () => {
+      for (const m of [...(clip().masks || [])]) hist.do(Cut.commands.removeMask(seq, cid, m.id));
+      for (const e of [...clip().effects]) hist.do(Cut.commands.removeEffect(seq, cid, e.id));
+    };
+    const resolved = (prefix, list) => M.at(clip(), prefix, list, 0);
+    const opacity = [
+      ['ellipse, feather 6', [{ path: E, feather: 6 }]],
+      ['polygon, hard edge', [{ path: P, feather: 0 }]],
+      ['bezier of smooth points, feather 3', [{ path: B, feather: 3 }]],
+      ['inverted at 70%', [{ path: E, feather: 2, inverted: true, opacity: 70 }]],
+      ['expansion +4 and -3', [{ path: E, feather: 2, expansion: 4 }, { path: P, feather: 0, expansion: -3, mode: 'add' }]],
+      ['add', [{ path: E, feather: 2 }, { path: P, feather: 2, mode: 'add' }]],
+      ['subtract', [{ path: E, feather: 2 }, { path: P, feather: 2, mode: 'subtract' }]],
+      ['intersect', [{ path: E, feather: 2 }, { path: P, feather: 2, mode: 'intersect' }]],
+      ['difference', [{ path: E, feather: 2 }, { path: P, feather: 2, mode: 'difference' }]],
+      ['a first mask that subtracts', [{ path: E, feather: 4, mode: 'subtract' }]],
+    ];
+    const out = [];
+    const flatOut = [];
+    reset();
+    await flat.render(hist.project, seq, 0);
+    const plainFlat = await flat.readPixels();
+    // the 2D back end mixes in sRGB values (as its opacity does): its reference is its own picture times the coverage
+    const times = (px, cov) => { const o = new Uint8Array(px.length); for (let i = 0; i < cov.length; i++) { for (let k = 0; k < 3; k++) o[i * 4 + k] = Math.round(px[i * 4 + k] * cov[i]); o[i * 4 + 3] = 255; } return o; };
+    for (const [name, list] of opacity) {
+      reset();
+      for (const m of list) hist.do(Cut.commands.addMask(seq, cid, m));
+      await comp.render(hist.project, seq, 0);
+      const got = await comp.readPixels();
+      const want = __eng.encode(M.cutCpu(input, resolved('masks', clip().masks)));
+      out.push({ name: 'Opacity: ' + name, ...__eng.diff(got, want), changed: __eng.diff(got, __eng.encode(input)).mean });
+      await flat.render(hist.project, seq, 0);
+      const soft = list.some((m) => (m.feather || 0) >= 1);
+      flatOut.push({ name: 'Opacity: ' + name, soft, ...__eng.diff(await flat.readPixels(), times(plainFlat, M.coverage(resolved('masks', clip().masks), W, H))) });
+    }
+    // every video effect under an ellipse mask with a soft edge: the effect inside, its input outside
+    const PARAMS = {
+      crop: { left: 20, top: 10, right: 5, bottom: 30, feather: 3 }, 'blur.directional': { direction: 45, length: 12 }, mosaic: { horizontal: 8, vertical: 4 },
+      'color.tint': { black: '#102030', white: '#ffe0a0', amount: 80 }, 'color.brightnessContrast': { brightness: 30, contrast: 40 },
+      'color.basic': { exposure: 0.6, saturation: 0, curveMaster: [0, 0.05, 0.5, 0.6, 1, 0.95] }, vignette: { amount: -100, midpoint: 0, feather: 10 }, sharpen: { amount: 150, radius: 1.5 },
+      glow: { threshold: 50, radius: 8, intensity: 120 }, 'color.hue': { hue: 120 }, posterize: { levels: 4 }, chromatic: { amount: 4 },
+      glitch: { amount: 100, shift: 20, bandHeight: 6 }, 'distort.lens': { curvature: -60 }, 'key.chroma': { similarity: 30, smoothness: 20, spill: 30 }, 'noise.grain': { amount: 40 },
+    };
+    const types = Cut.effects.list('video').map((d) => d.type).filter((t) => Cut.effects.get(t).masks !== false);
+    for (const type of types) {
+      reset();
+      const e = hist.do(Cut.commands.addEffect(seq, cid, type, null, PARAMS[type] || {}));
+      hist.do(Cut.commands.addMask(seq, cid, { path: E, feather: 5 }, { effectId: e.id }));
+      await comp.render(hist.project, seq, 0);
+      const got = await comp.readPixels();
+      const def = Cut.effects.get(type);
+      const params = Cut.effects.resolve(type, PARAMS[type] || {});
+      const fx = def.cpu(input, params, { width: W, height: H, pxScale: 1, frame: 0, assets: null });
+      const want = __eng.encode(M.mixCpu(input, fx, resolved('effects.' + e.id + '.masks', clip().effects[0].masks)));
+      // outside the mask (the picture's corners) the effect is not there
+      const plain = __eng.encode(input);
+      const corner = Math.max(...[[0, 0], [W - 1, 0], [0, H - 1], [W - 1, H - 1]].map(([x, y]) => Math.max(...[0, 1, 2].map((k) => Math.abs(got[(y * W + x) * 4 + k] - plain[(y * W + x) * 4 + k])))));
+      out.push({ name: type + ' under an ellipse mask', type, ...__eng.diff(got, want), changed: __eng.diff(got, plain).mean, corner, full: __eng.diff(got, __eng.encode(fx)).mean });
+    }
+    // the effect's masks with Lumetri Color and two masks (subtract), and an inverted mask on a blur
+    for (const [name, type, params, list] of [
+      ['Lumetri Color in an ellipse minus a square', 'color.basic', { saturation: 0, exposure: 0.4 }, [{ path: E, feather: 3 }, { path: P, feather: 1, mode: 'subtract' }]],
+      ['Gaussian Blur outside an ellipse (inverted)', 'blur.gaussian', { blurriness: 9 }, [{ path: E, feather: 4, inverted: true }]],
+    ]) {
+      reset();
+      const e = hist.do(Cut.commands.addEffect(seq, cid, type, null, params));
+      for (const m of list) hist.do(Cut.commands.addMask(seq, cid, m, { effectId: e.id }));
+      await comp.render(hist.project, seq, 0);
+      const got = await comp.readPixels();
+      const fx = Cut.effects.get(type).cpu(input, Cut.effects.resolve(type, params), { width: W, height: H, pxScale: 1, frame: 0 });
+      const want = __eng.encode(M.mixCpu(input, fx, resolved('effects.' + e.id + '.masks', clip().effects[0].masks)));
+      out.push({ name, ...__eng.diff(got, want), changed: __eng.diff(got, __eng.encode(input)).mean });
+    }
+    // 2D: Invert is a CSS filter there; under a mask it is the 2D effect inside and the 2D picture outside
+    reset();
+    const inv = hist.do(Cut.commands.addEffect(seq, cid, 'color.invert'));
+    await flat.render(hist.project, seq, 0);
+    const inv2d = await flat.readPixels();
+    hist.do(Cut.commands.removeEffect(seq, cid, inv.id));
+    await flat.render(hist.project, seq, 0);
+    const plain2d = await flat.readPixels();
+    const inv2 = hist.do(Cut.commands.addEffect(seq, cid, 'color.invert'));
+    hist.do(Cut.commands.addMask(seq, cid, { path: E, feather: 0 }, { effectId: inv2.id }));
+    await flat.render(hist.project, seq, 0);
+    const masked2d = await flat.readPixels();
+    const cov = M.coverage(resolved('effects.' + inv2.id + '.masks', clip().effects[0].masks), W, H);
+    const want2d = new Uint8Array(masked2d.length);
+    for (let i = 0; i < cov.length; i++) for (let k = 0; k < 4; k++) want2d[i * 4 + k] = Math.round(plain2d[i * 4 + k] + (inv2d[i * 4 + k] - plain2d[i * 4 + k]) * cov[i]);
+    flatOut.push({ name: '2D: Invert under a hard ellipse mask', soft: false, ...__eng.diff(masked2d, want2d) });
+    const errors = comp.errors.slice();
+    comp.destroy();
+    flat.destroy();
+    return { out, flatOut, errors, types: types.length, all: Cut.effects.list('video').length };
+  })()`);
+  for (const r of mk.out) {
+    const sub = r.type === 'distort.lens';
+    const effectOk = r.type ? r.corner <= 1 && (r.full > 0.3 || r.changed > 0.3) : true;
+    check((sub ? r.max <= 6 : r.max <= 3) && r.mean <= 0.6 && r.changed > 0.3 && effectOk, `masks: ${r.name}: GPU = CPU reference (max ${r.max}, mean ${r.mean.toFixed(3)}), changes the picture (${r.changed.toFixed(2)})${r.type ? `, untouched outside (corner ${r.corner}), not the whole effect (${r.full.toFixed(2)})` : ''}`);
+  }
+  check(mk.types === mk.all - 1, `masks: every video effect but Edge Extend takes masks and is checked (${mk.types} of ${mk.all})`);
+  for (const r of mk.flatOut) {
+    // Canvas 2D mixes in sRGB values; against its own picture times the coverage, the modes and expansion are exact but
+    // for 8-bit rounding, a hard edge differs by the canvas's antialiasing (area, not the 1-pixel smoothstep) on the
+    // edge pixels, and the feather is a Gaussian blur of the same slope.
+    check(r.mean <= 1.5 && r.max <= 40, `masks on Canvas 2D: ${r.name}: near the CPU coverage over its own picture (max ${r.max}, mean ${r.mean.toFixed(3)})`);
+  }
+  check(mk.errors.length === 0, `no WebGPU validation errors with masks (${S(mk.errors)})`);
   // On a video clip the decoded picture rides on the plan item too; grain and glitch must still get the frame number.
   const vidLook = await js(`(async () => {
     const W = 640, H = 360, fps = [30, 1];

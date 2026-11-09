@@ -572,6 +572,8 @@ function registerFeatures() {
 }
 
 const windows = createWindowManager({ appDir: __dirname, product: app.getName() });
+// Collaboration (main/features/collab.js) adds its guests to the windows' shared documents.
+featureContext.windows = windows;
 
 // The process runs one app mode, 'code' (the IDE), 'craft' (the Minecraft app) or 'cut' (the video editor); running
 // two takes two processes. --mode=<mode> picks it, a file or folder argument means code, and otherwise the start chooser asks.

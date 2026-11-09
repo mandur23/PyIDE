@@ -110,6 +110,8 @@ const SCRUB = [
   ['secret_key = two words', `secret_key = ${MASK}`],
   ['nanostudio:join?addr=bore.pub:33862&key=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC&name=x', `nanostudio:join?addr=bore.pub:33862&key=${MASK}&name=x`],
   ['pasted: nanostudio:join?key=short', `pasted: nanostudio:join?key=${MASK}`],
+  // A collaboration session's join code (main/collab/guest.js).
+  ['nanostudio:collab?addr=bore.pub:41000&key=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC&name=Hana', `nanostudio:collab?addr=bore.pub:41000&key=${MASK}&name=Hana`],
   ['key=AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', `key=${MASK}`],
   ['{"key":"AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC"}', `{"key":"${MASK}"}`],
   ["{ key: 'AbCd-_0123456789abcdefghijklmnopqrstuvwxyzABC', port: 1 }", `{ key: '${MASK}', port: 1 }`],

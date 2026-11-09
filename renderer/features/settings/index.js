@@ -61,6 +61,7 @@
     'editor.ruler': 120,
     'editor.previewTab': false,
     'editor.tabLimit': 10,
+    'projectTree.compactFolders': true,
     'console.cycleBufferKB': 1024,
     'tools.formatOnSave': false,
     'tools.ruffOnSave': true,
@@ -273,7 +274,7 @@
     ] },
     { id: 'keymap', title: () => tr('Keymap'), keywords: 'keymap shortcut hotkey key 단축키 키맵', mount: mountKeymap, index: false },
     { group: 'editor-group', title: () => tr('Editor'), children: [
-      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines console cycle buffer 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄 콘솔 순환 버퍼', mount: mountEditor },
+      { id: 'editor', title: () => tr('General'), keywords: 'font size line height whitespace soft wrap tabs preview tab limit mouse wheel zoom sticky lines console cycle buffer project view compact middle packages folders 글꼴 크기 줄 높이 공백 탭 미리보기 마우스 휠 확대 고정 줄 콘솔 순환 버퍼 프로젝트 뷰 중간 패키지 압축 폴더', mount: mountEditor },
       { id: 'codestyle', title: () => tr('Code Style'), keywords: 'tab size indent detect ruler hard wrap line separator crlf lf 탭 들여쓰기 감지 눈금자 줄 구분자', mount: mountCodeStyle },
     ] },
     { id: 'plugins', title: () => tr('Plugins'), keywords: 'plugin marketplace install extension 플러그인 마켓플레이스 설치', mount: mountPlugins, index: false, craft: true },
@@ -364,7 +365,8 @@
     let current = null;
     const rows = new Map();
     const groupRows = new Map();
-    const collapsed = new Set();
+    // Groups open closed, as in PyCharm: show() opens only the group of the page shown, and a search opens them all.
+    const collapsed = new Set(TREE.filter((n) => n.children).map((n) => n.group));
     for (const node of TREE) {
       if (node.children) {
         const g = el('div', 'settings-nav-row settings-group');
@@ -395,6 +397,7 @@
         for (const c of node.children) rows.get(c.id).classList.toggle('collapsed', isCollapsed);
       }
     }
+    renderCollapse();
     // The category list is a tree for the keyboard, as in PyCharm: Up/Down/Home/End switch pages, Left/Right collapse
     // and expand a group or go to it. A group chosen with the keys is drawn selected in place of the page's row.
     let chosenGroup = null;
@@ -962,6 +965,8 @@
     const tabs = section(host, tr('Editor Tabs'));
     tabs.appendChild(checkbox(ctx, 'editor.previewTab', tr('Open files in a preview tab on single click')));
     tabs.appendChild(fieldRow(tr('Tab limit:'), numberInput(ctx, 'editor.tabLimit'), tr('0 means no limit')));
+    const project = section(host, tr('Project View'));
+    project.appendChild(checkbox(ctx, 'projectTree.compactFolders', tr('Compact middle packages')));
     consoleSection(host, ctx);
   }
 

@@ -174,7 +174,8 @@
     clearTimeout(timer);
     timer = null;
     if (!ide.root || tabsBackFor.root !== keyOf(ide.root)) return;
-    const openTabs = (group) => group.tabs.filter((t) => t.path && !t.doc?.untitled && (t.kind === 'file' || t.viewer));
+    // A collaboration guest's tabs (collab://, renderer/features/collab) are the host's files: never kept here.
+    const openTabs = (group) => group.tabs.filter((t) => t.path && !t.doc?.untitled && !t.doc?.remote && (t.kind === 'file' || t.viewer));
     const groups = ide.groups().filter((g) => openTabs(g).length).map((group) => ({
       tabs: openTabs(group).slice(0, MAX_TABS).map((t) => ({ path: t.path, pinned: !!t.pinned, view: viewOf(group, t) })),
       active: openTabs(group).includes(group.active) ? group.active.path : null,

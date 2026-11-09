@@ -103,6 +103,9 @@ input, select, textarea { font: inherit; }
 .file-stem { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .file-ext { flex-shrink: 0; white-space: pre; }
 .tab .file-label { max-width: var(--tab-name-max, 220px); }
+/* A compacted row (src.main.java): the segment the selection names is underlined while the row is selected. */
+.compact-name { white-space: pre; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+.node.selected .seg.picked { text-decoration: underline; text-underline-offset: 3px; }
 /* An entry cut with Ctrl+X, until it is pasted (PyCharm and Explorer dim it). */
 .node.cut .icon, .node.cut .name, .node.cut .tree-badge { opacity: 0.5; }
 

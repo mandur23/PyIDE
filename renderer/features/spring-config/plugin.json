@@ -1,0 +1,12 @@
+{
+  "id": "spring-config",
+  "name": "Spring Boot Configuration Files",
+  "version": "1.0.0",
+  "vendor": "Nano Studio",
+  "description": "Completion, hover and checks in a Spring Boot module's application.properties and application.yml: property keys with their type, default and description, known values (booleans, enums, log levels), and warnings for unknown and deprecated keys. The metadata comes from the module's Spring Boot jars in the Maven or Gradle cache, or from metadata bundled with the app.",
+  "modes": ["code"],
+  "detached": true,
+  "main": [
+    "spring-config.js"
+  ]
+}

@@ -76,10 +76,28 @@ const FROM_GUEST = {
   'doc:join': (m) => isStr(m.path),
   'doc:leave': (m) => isStr(m.path),
   'doc:op': (m) => isStr(m.path) && isInt(m.base) && Array.isArray(m.ops) && m.ops.length <= 1000 && m.ops.every(validOp),
-  'doc:save': (m) => isStr(m.path),
-  cursor: (m) => isStr(m.path) && Array.isArray(m.ranges) && m.ranges.length <= 100 && m.ranges.every((r) => Array.isArray(r) && r.length === 2 && r.every(isInt)),
+  'doc:save': (m) => isStr(m.path) && isInt(m.req),
+  // Files and folders, by a guest the host lets edit. req: the guest's number for the answer (fs:result).
+  'fs:create': (m) => isStr(m.path) && typeof m.dir === 'boolean' && isInt(m.req),
+  'fs:rename': (m) => isStr(m.from) && isStr(m.to) && isInt(m.req),
+  'fs:delete': (m) => isStr(m.path) && isInt(m.req),
+  // path null: no file of the project is in front (the caret is elsewhere).
+  cursor: (m) => (m.path === null || isStr(m.path)) && Array.isArray(m.ranges) && m.ranges.length <= 100 && m.ranges.every((r) => Array.isArray(r) && r.length === 2 && r.every(isInt)),
+  view: (m) => (m.path === null || isStr(m.path)) && isInt(m.line),
   tree: (m) => isStr(m.path),
-  chat: (m) => isStr(m.text, 4000),
+  chat: (m) => isStr(m.text, 4000) && m.text.trim() !== '',
+  // A language server request about a file, answered by the host's (lsp:answer). Positions are LSP's: line and
+  // character (UTF-16), from 0.
+  lsp: (m) => isInt(m.req) && ['completion', 'hover', 'definition', 'signature'].includes(m.method) && isStr(m.path) && isInt(m.line) && isInt(m.character),
+  // Running on the host's computer: only ever asked, and the host answers each time (run:answer).
+  'run:request': (m) => isInt(m.req) && isStr(m.path),
+  // The host's shared terminal: a guest asks to type (term:answer), and types only once allowed.
+  'term:ask': () => true,
+  'term:input': (m) => isStr(m.data, 4096),
+  // A host port the host opened to guests, relayed (main/collab/share.js).
+  'tcp:open': (m) => isInt(m.cid) && Number.isInteger(m.port) && m.port > 0 && m.port < 65536,
+  'tcp:data': (m) => isInt(m.cid) && isStr(m.data, 70000) && /^[A-Za-z0-9+/]*={0,2}$/.test(m.data),
+  'tcp:close': (m) => isInt(m.cid),
   bye: () => true,
 };
 // -> null when the guest's message may be handled, else why not.

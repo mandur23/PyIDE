@@ -742,14 +742,20 @@
         });
         return { suggestions, incomplete: !!res.isIncomplete };
       },
-      async resolveCompletionItem(item, token) {
-        if (!item.lsp || item.lsp.documentation) return item;
-        const r = await request('completionItem/resolve', item.lsp, token);
-        if (!r || token.isCancellationRequested) return item;
-        if (r.documentation) item.documentation = docOf(r.documentation);
-        if (r.detail) item.detail = r.detail;
-        if (r.additionalTextEdits) item.additionalTextEdits = [...r.additionalTextEdits.map(monacoEdit), ...(item.ownEdits || [])];
-        return item;
+      // One resolve per item, finished even when Monaco cancels it. Monaco keeps the first resolve's promise for the
+      // item and hands it to the insertion too, and the suggest widget cancels its own token when the item is accepted:
+      // a resolve that gave up then left the accepted item without the additionalTextEdits JDT LS sends only here (its
+      // import), so an Enter pressed right after the list appeared inserted @RestController without the import.
+      resolveCompletionItem(item) {
+        if (!item.lsp || (item.lsp.documentation && !item.lsp.data)) return item;
+        item.resolving ||= request('completionItem/resolve', item.lsp).then((r) => {
+          if (!r) return item;
+          if (r.documentation) item.documentation = docOf(r.documentation);
+          if (r.detail) item.detail = r.detail;
+          if (r.additionalTextEdits) item.additionalTextEdits = [...r.additionalTextEdits.map(monacoEdit), ...(item.ownEdits || [])];
+          return item;
+        }, () => item);
+        return item.resolving;
       },
     });
 

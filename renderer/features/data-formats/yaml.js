@@ -445,7 +445,9 @@
   function schemaFor(model) {
     if (model.isDisposed() || model.getLanguageId() !== 'yaml' || model.uri.scheme !== 'file') return null;
     const p = model.uri.path;
-    return yamlSchemas.find((s) => s.test(p))?.schema || null;
+    const hit = yamlSchemas.find((s) => s.test(p))?.schema;
+    // A function: a schema that depends on the file (spring-config's, from the module's own metadata), or null.
+    return (typeof hit === 'function' ? hit(model) : hit) || null;
   }
   const types = (s) => (Array.isArray(s.type) ? s.type : s.type ? [s.type] : []);
   const isObjectish = (s) => types(s).includes('object') || !!s.properties || !!s.patternProperties || (s.additionalProperties !== undefined && !s.anyOf);
@@ -651,10 +653,12 @@
   monaco.editor.getModels().forEach(watch);
   monaco.editor.onDidCreateModel(watch);
 
-  // test(path): the model's URI path (/c:/project/.github/workflows/ci.yml).
+  // test(path): the model's URI path (/c:/project/.github/workflows/ci.yml). schema: a schema, or model -> schema | null.
   function addYamlSchema(test, schema) {
     yamlSchemas.push({ test, schema });
     monaco.editor.getModels().forEach(schedule);
   }
-  Object.assign(df, { addYamlSchema, yaml: { walk, formatYaml, resolve, scanLine } });
+  // A function schema changed its answer: check the open YAML files again.
+  const revalidate = () => monaco.editor.getModels().forEach(schedule);
+  Object.assign(df, { addYamlSchema, revalidate, yaml: { walk, formatYaml, resolve, scanLine } });
 })();

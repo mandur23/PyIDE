@@ -744,15 +744,24 @@
       const seqs = ids.filter((id) => p.sequences.some((s) => s.id === id));
       const bins = ids.filter((id) => p.bins.some((b) => b.id === id));
       if (seqs.length && seqs.length >= p.sequences.length) { ui.toast(tr('A project keeps at least one sequence.')); return true; }
-      app.history.begin(tr('Clear'));
-      try {
-        if (media.length) app.history.do(Cut.commands.removeMedia(media));
-        for (const id of seqs) app.history.do(Cut.commands.removeSequence(id));
-        for (const id of bins) app.history.do(Cut.commands.removeBin(id));
-        app.history.commit();
-      } catch (err) { app.history.cancel(); ui.report(err); }
-      if (seqs.includes(app.sequenceId)) app.setSequence(app.project.sequences[0]?.id || null);
-      selected.clear();
+      // A sequence nested in another one (that is not going too) takes its nest clips with it: say where, and ask.
+      const uses = seqs.flatMap((id) => Cut.model.nestUses(p, id).filter((u) => !seqs.includes(u.seq.id)).map((u) => ({ id, ...u })));
+      const remove = () => {
+        app.history.begin(tr('Clear'));
+        try {
+          if (media.length) app.history.do(Cut.commands.removeMedia(media));
+          for (const id of seqs) app.history.do(Cut.commands.removeSequence(id));
+          for (const id of bins) app.history.do(Cut.commands.removeBin(id));
+          app.history.commit();
+        } catch (err) { app.history.cancel(); ui.report(err); }
+        if (!app.project.sequences.some((s) => s.id === app.sequenceId)) app.setSequence(app.project.sequences[0]?.id || null);
+        selected.clear();
+      };
+      if (!uses.length) { remove(); return true; }
+      const nameOf = (id) => p.sequences.find((s) => s.id === id)?.name || id;
+      const where = uses.map((u) => tr('"{name}" is nested in "{where}" ({n} clips).', { name: nameOf(u.id), where: u.seq.name, n: u.clips.length })).join(' ');
+      ide.ui.confirm(`${where} ${tr('Deleting it also removes those nest clips. Delete it?')}`, { title: tr('Delete Nested Sequence'), ok: tr('Delete') })
+        .then((yes) => { if (yes) remove(); });
       return true;
     }
     function contextItems(e) {
@@ -773,6 +782,7 @@
       }
       if (e.kind === 'sequence') {
         list.push({ label: tr('Open in Timeline'), run: () => openEntry(e) });
+        list.push({ label: tr('Open in Source Monitor'), run: () => { app.setSource({ sequenceId: e.id, in: null, out: null, t: 0 }); ui.showPanel('source'); } });
         list.push({ label: tr('Duplicate'), run: () => { const r = ui.exec(app, Cut.commands.addSequence({ from: e.id, name: tr('{name} Copy', { name: e.name }) })); if (r?.id) app.setSequence(r.id); } });
         list.push({ label: tr('Sequence Settings…'), run: () => newSequenceDialog(app, e.item) });
       }

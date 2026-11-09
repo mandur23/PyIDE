@@ -100,6 +100,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/cut-audiofx-core.mjs
+      - name: cut-mask-core
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/cut-mask-core.mjs
       - name: cut-export-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
@@ -124,6 +128,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5
         run: node verify/collab-core.mjs
+      - name: collab-session
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node verify/collab-session.mjs
       - name: cut-ai-core
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         timeout-minutes: 5

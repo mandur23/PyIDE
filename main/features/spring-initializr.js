@@ -13,6 +13,10 @@ const TYPES = new Set(['maven-project', 'gradle-project', 'gradle-project-kotlin
 const LANGUAGES = new Set(['java', 'kotlin', 'groovy']);
 const PACKAGINGS = new Set(['jar', 'war']);
 const TEXT = /^[\w.-]{1,100}$/;
+// The project name is the user's own words (Initializr turns it into the application class and pom.xml's <name>).
+const NAME = /^[^\x00-\x1f]{1,100}$/;
+// The application class Initializr makes: an ASCII Java identifier, whatever the name is in.
+const CLASS_NAME = /^[A-Za-z][A-Za-z0-9_]{0,119}$/;
 const TIMEOUT = 30000;
 
 // No network, a refused request or a lost download is the wizard's to show, not an IDE internal error.
@@ -91,8 +95,16 @@ exports.register = ({ ipcMain }) => {
     if (!LANGUAGES.has(language) || !PACKAGINGS.has(packaging)) throw new Error(`Unknown language or packaging ${language} ${packaging}`);
     const q = new URLSearchParams({ type: p.type, language, packaging });
     for (const k of ['bootVersion', 'javaVersion', 'groupId', 'artifactId', 'name', 'packageName']) {
-      if (!TEXT.test(String(p[k] ?? ''))) throw new Error(`Bad ${k}: ${p[k]}`);
+      if (k === 'name' ? !NAME.test(String(p.name ?? '')) : !TEXT.test(String(p[k] ?? ''))) {
+        // The name is the user's text: the wizard checks it at Next, and one that still gets here is theirs to fix.
+        if (k === 'name') throw expected(`The project name must be 1 to 100 characters without control characters: ${p.name}`);
+        throw new Error(`Bad ${k}: ${p[k]}`);
+      }
       q.set(k, p[k]);
+    }
+    if (p.applicationName !== undefined) {
+      if (!CLASS_NAME.test(String(p.applicationName))) throw new Error(`Bad applicationName: ${p.applicationName}`);
+      q.set('applicationName', p.applicationName);
     }
     const deps = (p.dependencies || []).filter((d) => TEXT.test(d));
     if (deps.length) q.set('dependencies', deps.join(','));

@@ -79,14 +79,9 @@
 
   // The source ticks [lo, hi) a clip shows.
   const sourceSpan = (clip) => [Math.min(clip.in, clip.out), Math.max(clip.in, clip.out)];
-  // The timeline time at which a clip shows source time `src` (ticks), the inverse of model.sourceTime; a reversed
-  // clip shows its out point first. null for a freeze frame.
-  function toTimeline(clip, src) {
-    if (clip.source?.freeze) return null;
-    const along = clip.reverse ? clip.out - src : src - clip.in;
-    const t = clip.start + along / clip.speed;
-    return Math.min(need('model').clipEnd(clip), Math.max(clip.start, t));
-  }
+  // The timeline time at which a clip shows source time `src` (ticks), the inverse of model.sourceTime (speed, reverse
+  // and time remapping); null for a freeze frame.
+  const toTimeline = (clip, src) => need('model').timelineTime(clip, src);
   // Source ranges (ticks) -> timeline ranges (ticks) of the clip, in timeline order.
   const rangesToTimeline = (clip, list) => union(list.map(([a, b]) => {
     const x = toTimeline(clip, a);

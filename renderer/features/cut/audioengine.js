@@ -9,6 +9,11 @@
 // Pan is a balance law for every source (center: both channels at full level; a mono source is copied to both). Fade
 // handles are linear in amplitude; audio transitions are constant power (sin/cos) over the transition's range, using
 // source audio past the clip's ends where there is some.
+//
+// A nest clip on an audio track (model.js: source.sequence) plays the mix of its sequence (its tracks, their volume,
+// pan, mute and solo, its master gain) as a source: a store read in blocks like a file's, each block that sequence's
+// mix() over those samples. So the nest clip's speed, reverse, effects, volume, pan and fades apply to it as to a file.
+// The store's key carries a fingerprint of what the nested sequences hold, so an edit inside them is heard at once.
 (function (factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -478,6 +483,60 @@
     const keyOf = (m) => `${m.id}|${m.path}`;
     let useTick = 0;
 
+    // A nest clip's source: a stand-in media entry whose id names the sequence and what it and the sequences under it
+    // hold (their JSON and their media's, hashed). The stores of earlier contents of that sequence are dropped.
+    // The stand-in is the same while the project's revision is (model.revisionOf): mix() asks for it every block, and
+    // hashing an 800-clip nest took 2.4 ms a call. A project with no revision is hashed every time.
+    const nestIds = new WeakMap(); // project -> { rev, ids: Map(seqId -> media) }
+    function nestMedia(project, seqId) {
+      const model = mod('model');
+      const rev = model.revisionOf(project);
+      let memo = rev === null ? null : nestIds.get(project);
+      if (memo && memo.rev !== rev) memo = null;
+      if (rev !== null && !memo) nestIds.set(project, (memo = { rev, ids: new Map() }));
+      const known = memo?.ids.get(seqId);
+      if (known) return known;
+      const seqs = [];
+      const seen = new Set();
+      const walk = (id) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        const seq = project.sequences.find((x) => x.id === id);
+        if (!seq) return;
+        seqs.push(seq);
+        for (const next of model.nestedIds(seq)) walk(next);
+      };
+      walk(seqId);
+      const used = new Set(seqs.flatMap((q) => q.clips.map((c) => c.source?.media).filter((m) => m != null)));
+      const text = JSON.stringify([seqs, project.media.filter((m) => used.has(m.id))]);
+      let h1 = 0x811c9dc5;
+      let h2 = 0x01000193;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 0x01000193) >>> 0;
+        h2 = Math.imul(h2 ^ ch, 0x5bd1e995) >>> 0;
+      }
+      const id = `nest:${seqId}:${h1.toString(16)}${h2.toString(16)}`;
+      const prefix = `nest:${seqId}:`;
+      for (const k of sources.keys()) if (k.startsWith(prefix) && k !== `${id}|`) sources.delete(k);
+      const media = { id, path: '', nest: seqId, project };
+      memo?.ids.set(seqId, media);
+      return media;
+    }
+    // The reader of a nest's store: samples [from, to) of its sequence's mix at the mixer's rate.
+    function nestReader(project, seqId) {
+      const seq = project.sequences.find((x) => x.id === seqId);
+      if (!seq) return null;
+      return {
+        rate,
+        length: Math.ceil(mod('model').sequenceDuration(seq) / tps),
+        async read(from, to) {
+          await load(project, seqId, from * tps, to * tps);
+          return mix(project, seqId, from, Math.max(0, to - from)).out;
+        },
+      };
+    }
+
     function loadMedia(project, media) {
       const key = keyOf(media);
       let s = sources.get(key);
@@ -485,7 +544,7 @@
       s = { state: 'loading', pcm: null, error: null };
       s.promise = (async () => {
         try {
-          const a = await getAudio(project, media);
+          const a = media.nest ? nestReader(media.project, media.nest) : await getAudio(project, media);
           if (a && typeof a.read === 'function') {
             if (!a.length) { s.state = 'none'; return; }
             s.pcm = { reader: a, length: Math.round((a.length * rate) / a.rate), size: rate * BLOCK_SECONDS, blocks: new Map(), loading: new Map() };
@@ -598,8 +657,10 @@
     function audioClips(project, seq) {
       const model = mod('model');
       const kinds = new Map(seq.tracks.map((t) => [t.id, t.kind]));
-      return seq.clips.filter((c) => c.enabled && kinds.get(c.track) === 'audio' && c.source && c.source.media != null)
-        .map((c) => ({ clip: c, media: model.mediaOf(project, c), dur: model.clipDuration(c) }))
+      const nests = new Map();
+      const nestOf = (id) => { if (!nests.has(id)) nests.set(id, project.sequences.some((q) => q.id === id) ? nestMedia(project, id) : null); return nests.get(id); };
+      return seq.clips.filter((c) => c.enabled && kinds.get(c.track) === 'audio' && c.source && (c.source.media != null || model.isNest(c)))
+        .map((c) => ({ clip: c, media: model.isNest(c) ? nestOf(c.source.sequence) : model.mediaOf(project, c), dur: model.clipDuration(c) }))
         .filter((x) => x.media);
     }
 

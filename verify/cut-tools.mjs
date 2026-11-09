@@ -465,7 +465,8 @@ await section('settings', async () => {
   await clickSel('.cut-topbar .cut-settings-btn');
   await menuClick('Video Editor Settings…');
   await until(`document.querySelector('.settings-page')?.dataset.page === 'cut'`, 'the Video Editor page', 8000);
-  const nav = await js(`[...document.querySelectorAll('.settings-nav-row')].filter((n) => n.offsetParent).map((n) => n.dataset.page || n.dataset.group)`);
+  // Every page the window lists, a closed group's included (groups open closed).
+  const nav = await js(`[...document.querySelectorAll('.settings-nav-row:not(.hidden)')].map((n) => n.dataset.page || n.dataset.group)`);
   check(nav.includes('cut') && nav.includes('appearance') && !nav.includes('editor') && !nav.includes('interpreter'), `Cut's settings window shows its page and the shared ones, not the IDE's (${S(nav)})`);
   const fields = await js(`['cut.autosave.minutes', 'cut.autosave.keep', 'cut.cacheLimitGB', 'cut.transitionSeconds', 'cut.stillSeconds', 'cut.quality', 'cut.proxy', 'cut.proxy.offer', 'cut.proxy.height'].filter((k) => !document.querySelector('.settings-page [data-key="' + k + '"]'))`);
   check(!fields.length, `the page has every setting (${S(fields)} missing)`);

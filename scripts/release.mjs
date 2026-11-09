@@ -2,7 +2,7 @@
 //   npm run release -- <version> [--dry-run [--no-build]] [--skip-tests] [--notes <file>] [--replace-local-install]
 //   npm run release -- <version> --publish-only [--dry-run] [--notes <file>]
 // 1. checks: clean tree on master, local master contains origin's, a semver version above package.json's, no tag v<v>
-//    here or on origin, release notes, the release key (NANO_RELEASE_KEY, by default
+//    here or on origin, for a stable version a pushed HEAD that CI passed (a beta goes before CI), release notes, the release key (NANO_RELEASE_KEY, by default
 //    %USERPROFILE%\.nano-studio\release-key.pem) matching main/release-key.js, a signed Marketplace index, gh signed in
 // 2. sets the version in package.json and package-lock.json   3. npm run dist and checks the installers and latest.yml (beta.yml)
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
@@ -228,6 +228,25 @@ function originRefs() {
   if (r.status !== 0) return { error: r.err || `exit ${r.status}` };
   const refs = new Map(r.out.split(/\r?\n/).filter(Boolean).map((l) => l.split('\t').reverse()));
   return { master: refs.get('refs/heads/master') || null, tag: refs.has(`refs/tags/v${V}`) };
+}
+// The CI run (.github/workflows/ci.yml) of a commit: {status, conclusion, url}, null when there is none, or {error}.
+function ciRun(sha) {
+  const r = sh('gh', ['run', 'list', '--workflow', 'ci.yml', '--commit', sha, '--limit', '1', '--json', 'status,conclusion,url'], { capture: true, allowFail: true });
+  if (r.status !== 0) return { error: r.err || `exit ${r.status}` };
+  try { return JSON.parse(r.out || '[]')[0] || null; } catch { return { error: `gh run list gave ${r.out.slice(0, 80)}` }; }
+}
+// A stable release goes out only from a commit CI passed (origin's master, so CI ran on exactly what is built); a beta
+// goes first, before CI, to the Beta channel, and its own Release commit is what CI then checks.
+function checkCi(head, originMaster) {
+  if (isBeta(V)) return log('  a beta does not wait for CI (a stable release needs this commit pushed and passed by CI)');
+  if (originMaster !== head) return blocker('a stable release is built from a commit CI passed: push master, wait for CI (a beta can go out meanwhile), then release');
+  const run = ciRun(head);
+  const short = head.slice(0, 7);
+  if (!run) blocker(`CI has not run on ${short} yet: wait for it (a beta can go out meanwhile)`);
+  else if (run.error) blocker(`could not read CI of ${short} (gh run list): ${run.error}`);
+  else if (run.status !== 'completed') blocker(`CI on ${short} is still running (${run.url}): wait for it to pass`);
+  else if (run.conclusion !== 'success') blocker(`CI on ${short} ended ${run.conclusion} (${run.url}): fix it, or rerun a flaky job, before a stable release`);
+  else log(`  CI passed on ${short}`);
 }
 function latestRelease() {
   const r = sh('gh', ['release', 'list', '-R', REPO, '--limit', '100', '--json', 'tagName,isLatest', '--jq', '.[] | select(.isLatest) | .tagName'], { capture: true, allowFail: true });
@@ -464,6 +483,7 @@ async function main() {
     else if (sh('git', ['merge-base', '--is-ancestor', origin.master, 'HEAD'], { capture: true, allowFail: true }).status === 0) {
       log(`  master is ${sh('git', ['rev-list', '--count', `${origin.master}..HEAD`], { capture: true }).out} commit(s) ahead of origin; step 6 pushes them too`);
     } else blocker(`origin's master (${origin.master.slice(0, 7)}) has commits local master does not (behind or diverged); git pull --ff-only first`);
+    if (origin.master) checkCi(head, origin.master);
   }
   const notes = releaseNotes(V);
   if (notes) log(`  release notes: ${notes.source}`);

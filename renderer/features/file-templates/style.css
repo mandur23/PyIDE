@@ -24,3 +24,10 @@
 .ft-var-row { display: contents; }
 .ft-var-row > span { font-family: var(--mono); font-size: 12px; max-width: 220px; overflow-wrap: anywhere; }
 .ft-var-row > input { min-width: 0; }
+/* New › Java Class: the name, then the kind (Up and Down in the name change it) */
+.ft-java { display: flex; flex-direction: column; gap: 6px; }
+.ft-java-name { width: 100%; box-sizing: border-box; }
+.ft-java-kinds { display: flex; flex-direction: column; }
+.ft-java-kind { height: 24px; line-height: 24px; padding: 0 8px; border-radius: 3px; cursor: default; color: var(--gray12); }
+.ft-java-kind:hover { background: var(--gray3); }
+.ft-java-kind.selected { background: var(--blue2); }

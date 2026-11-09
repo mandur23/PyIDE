@@ -331,6 +331,138 @@ async function mixAt(h, s, sources, seconds, n = 1, opts = {}) {
   near(exp.psnr(new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255]), new Uint8Array([255, 255, 255, 255, 0, 0, 0, 255])), 20 * Math.log10(255) - 10 * Math.log10((255 * 255) / 2), 1e-9, 'PSNR over RGB');
 }
 
+// ---- a nest clip plays its sequence's mix ------------------------------------------------------------------------------
+{
+  const { h, s, ids } = project([MED('r', 10), MED('q', 10)]);
+  const ramp = (seconds, k) => {
+    const n = RATE * seconds;
+    const L = new Float32Array(n);
+    const R = new Float32Array(n);
+    for (let i = 0; i < n; i++) { L[i] = ((i * k) % 997) / 2000; R[i] = -((i * 7 + k) % 1009) / 2500; }
+    return { rate: RATE, channels: 2, data: [L, R] };
+  };
+  const src = { 'r.wav': ramp(10, 3), 'q.wav': ramp(10, 11) };
+  const a = place(h, s, ids[0], { at: 1, inS: 2, outS: 5, track: 'A1' });
+  const b = place(h, s, ids[1], { at: 2, inS: 0, outS: 2, track: 'A2' });
+  h.do(C.setClip(s, b, { props: { volume: -6, pan: 30 } }));
+  h.do(C.setTrack(s, 'A2', { volume: -3 }));
+  const span = async (from, seconds, block) => {
+    const mixer = ae.createMixer({ rate: RATE, getAudio: async (_p, m) => src[m.name] });
+    const n = Math.round(seconds * RATE);
+    const L = new Float32Array(n);
+    const R = new Float32Array(n);
+    for (let k = 0; k < n; k += block) {
+      const m = await mixer.mixLoaded(h.project, h.project.sequences[0].id, Math.round(from * RATE) + k, Math.min(block, n - k));
+      L.set(m.out[0], k);
+      R.set(m.out[1], k);
+    }
+    return [L, R];
+  };
+  const maxDiff = (x, y, gain = 1) => { let d = 0; for (let c = 0; c < 2; c++) for (let i = 0; i < x[c].length; i++) d = Math.max(d, Math.abs(x[c][i] * gain - y[c][i])); return d; };
+  const flat = await span(0, 5, 48000);
+  const r = h.do(C.nest(s, [a, b], { name: 'Nested Sequence 1' }));
+  const nestClip = h.project.sequences[0].clips.find((c) => c.id === r.ids[0]);
+  eq([r.ids.length, nestClip.track, nestClip.start, h.project.sequences[0].clips.length], [1, 'A1', SEC, 1], 'nesting two audio clips leaves one nest clip on the lowest audio track at the earliest start');
+  // The inner A2's track volume stays with the inner track, so the nest sounds as the two tracks did.
+  h.do(C.setTrack(r.id, 'A2', { volume: -3 }));
+  const nested = await span(0, 5, 48000);
+  eq(maxDiff(flat, nested), 0, 'the nest clip plays its sequence\'s mix sample for sample (track volume, clip volume and pan inside)');
+  const preview = await span(0, 5, 2048);
+  eq(maxDiff(nested, preview), 0, 'the same samples in 2,048-sample preview blocks as in 1 s export blocks');
+  h.do(C.setClip(s, nestClip.id, { props: { volume: -6 } }));
+  near(maxDiff(flat, await span(0, 5, 48000), Math.pow(10, -6 / 20)), 0, 1e-6, 'the nest clip\'s volume (-6 dB) applies on top');
+  h.do(C.setClip(s, nestClip.id, { props: { volume: 0, pan: -100 } }));
+  const panned = await span(0, 5, 48000);
+  eq([maxDiff([flat[0], flat[0]], [panned[0], panned[0]]), panned[1].reduce((m, v) => Math.max(m, Math.abs(v)), 0)], [0, 0], 'the nest clip\'s pan (left) silences the right channel and keeps the left');
+  h.do(C.setClip(s, nestClip.id, { props: { pan: 0 } }));
+  h.do(C.setTrack(r.id, 'A2', { mute: true }));
+  const muted = await span(0, 5, 48000);
+  const onlyA = maxDiff([muted[0].subarray(2 * RATE, 3 * RATE), muted[1].subarray(2 * RATE, 3 * RATE)], [flat[0].subarray(2 * RATE, 3 * RATE), flat[1].subarray(2 * RATE, 3 * RATE)]);
+  check(onlyA > 0.01 && maxDiff([muted[0].subarray(RATE, 2 * RATE), muted[1].subarray(RATE, 2 * RATE)], [flat[0].subarray(RATE, 2 * RATE), flat[1].subarray(RATE, 2 * RATE)]) === 0, `an edit inside the nested sequence (mute its A2) is heard through the nest at once (${onlyA.toFixed(3)} off where A2 played, none before)`);
+  h.do(C.setTrack(r.id, 'A2', { mute: false }));
+  h.do(C.trim(s, nestClip.id, { edge: 'start', delta: SEC }));
+  const trimmed = await span(0, 5, 48000);
+  eq([maxDiff([trimmed[0].subarray(0, 2 * RATE), trimmed[1].subarray(0, 2 * RATE)], [new Float32Array(2 * RATE), new Float32Array(2 * RATE)]), maxDiff([trimmed[0].subarray(2 * RATE), trimmed[1].subarray(2 * RATE)], [flat[0].subarray(2 * RATE), flat[1].subarray(2 * RATE)])], [0, 0], 'a start trim of the nest clip by a second plays the rest of its sequence in place');
+}
+
+// ---- Nest keeps the tracks' settings: a muted, a turned-down and a panned track sound the same after Nest ----------
+{
+  const ramp = (k) => { const n = RATE * 6; const L = new Float32Array(n); const R = new Float32Array(n); for (let i = 0; i < n; i++) { L[i] = ((i * k) % 997) / 2000; R[i] = -((i * 5 + k) % 1009) / 2500; } return { rate: RATE, channels: 2, data: [L, R] }; };
+  const src = { 'u.wav': ramp(3), 'w.wav': ramp(13), 'z.wav': ramp(29) };
+  const run = async (h, seconds = 4) => {
+    const mixer = ae.createMixer({ rate: RATE, getAudio: async (_p, m) => src[m.name] });
+    const m = await mixer.mixLoaded(h.project, h.project.sequences[0].id, 0, seconds * RATE);
+    return m.out;
+  };
+  const diff = (x, y) => { let d = 0; for (let c = 0; c < 2; c++) for (let i = 0; i < x[c].length; i++) d = Math.max(d, Math.abs(x[c][i] - y[c][i])); return d; };
+  // A1 at -4 dB, A2 muted, A3 at -12 dB panned left: all three nested
+  {
+    const { h, s, ids } = project([MED('u', 6), MED('w', 6), MED('z', 6)]);
+    h.do(C.addTrack(s, 'audio'));
+    const a = place(h, s, ids[0], { at: 0, inS: 0, outS: 3, track: 'A1' });
+    const b = place(h, s, ids[1], { at: 0, inS: 0, outS: 3, track: 'A2' });
+    const z = place(h, s, ids[2], { at: 1, inS: 0, outS: 2, track: 'A3' });
+    h.do(C.setTrack(s, 'A1', { volume: -4 }));
+    h.do(C.setTrack(s, 'A2', { mute: true }));
+    h.do(C.setTrack(s, 'A3', { volume: -12, pan: -40 }));
+    const before = await run(h);
+    h.do(C.nest(s, [a, b, z], { name: 'Nested Sequence 1' }));
+    near(diff(before, await run(h)), 0, 1e-6, 'after Nest a muted track stays muted and turned-down and panned tracks keep their level and pan inside the nest');
+  }
+  // only clips of A2 at -12 dB: the nest clip lands on A2 itself, whose -12 dB applies once, not twice
+  {
+    const { h, s, ids } = project([MED('u', 6), MED('w', 6)]);
+    const b = place(h, s, ids[1], { at: 0, inS: 0, outS: 3, track: 'A2' });
+    h.do(C.setTrack(s, 'A2', { volume: -12 }));
+    const before = await run(h);
+    const r = h.do(C.nest(s, [b], { name: 'Nested Sequence 1' }));
+    eq([h.project.sequences[0].clips.find((c) => c.id === r.ids[0]).track], ['A2'], 'the nest of A2 clips goes on A2');
+    near(diff(before, await run(h)), 0, 1e-6, 'and its track volume is heard once (the inner track carries the difference to the track the nest clip is on)');
+  }
+}
+// ---- one mixer playing a nest: what the nest holds is fingerprinted once a project revision, not every block ----
+{
+  const { h, s, ids } = project([MED('u', 6), MED('w', 6)]);
+  const src = { 'u.wav': { rate: RATE, channels: 2, data: [new Float32Array(RATE * 6).fill(0.25), new Float32Array(RATE * 6).fill(0.25)] }, 'w.wav': { rate: RATE, channels: 2, data: [new Float32Array(RATE * 6).fill(0.5), new Float32Array(RATE * 6).fill(0.5)] } };
+  const many = [];
+  for (let i = 0; i < 400; i++) many.push(place(h, s, ids[i % 2], { at: i / 30, inS: 0, outS: 1 / 30, track: i % 2 ? 'A2' : 'A1' }));
+  const r = h.do(C.nest(s, many, { name: 'Nested Sequence 1' }));
+  const mixer = ae.createMixer({ rate: RATE, getAudio: async (_p, m) => src[m.name] });
+  const block = (at) => mixer.mixLoaded(h.project, s, at, 1024);
+  await block(0);
+  const real = JSON.stringify;
+  let big = 0;
+  JSON.stringify = (...a) => { const t = real(...a); if (t && t.length > 20000) big++; return t; };
+  let steady;
+  try {
+    for (let i = 1; i <= 20; i++) await block(i * 1024);
+    steady = big;
+    h.do(C.setTrack(r.id, 'A2', { mute: true }));
+    await block(0);
+  } finally { JSON.stringify = real; }
+  eq([steady, big], [0, 1], 'one mixer playing a 400-clip nest fingerprints it once a change (none in 20 blocks, one after an edit inside)');
+  const m1 = (await block(Math.round((1.5 / 30) * RATE))).out[0][0];
+  h.undo();
+  const m2 = (await block(Math.round((1.5 / 30) * RATE))).out[0][0];
+  check(m1 === 0 && m2 > 0.4, `and the same mixer hears the edit and its undo at once (A2 muted ${m1}, back ${m2})`);
+}
+// ---- Nest keeps a hidden video track hidden ----
+{
+  const comp = require('../renderer/features/cut/compositor.js');
+  const h = C.createHistory(model.createProject());
+  const s = h.project.sequences[0].id;
+  const VID = { w: 1920, h: 1080, fps: [30, 1], codec: 'avc1.640028', vfr: false, rotation: 0 };
+  const { ids: [m] } = h.do(C.importMedia([{ path: 'D:/v.mp4', name: 'v.mp4', kind: 'video', size: 1, mtime: 1, duration: 10 * SEC, video: VID, audio: null }]));
+  const v1 = h.do(C.place(s, { source: { media: m }, in: 0, out: 2 * SEC, at: 0, video: 'V1', audio: null })).ids[0];
+  const v2 = h.do(C.place(s, { source: { media: m }, in: 4 * SEC, out: 6 * SEC, at: 0, video: 'V2', audio: null })).ids[0];
+  h.do(C.setTrack(s, 'V2', { visible: false }));
+  const shown = (layers) => layers.flatMap((l) => (l.item.kind === 'nest' ? shown(l.item.layers) : [l.item.clip.id]));
+  const before = shown(comp.plan(h.project, h.project.sequences[0], SEC / 2));
+  h.do(C.nest(s, [v1, v2], { name: 'Nested Sequence 1' }));
+  const after = comp.plan(h.project, h.project.sequences[0], SEC / 2);
+  eq([before, after[0]?.item.kind, shown(after)], [[v1], 'nest', [v1]], 'after Nest a hidden video track stays hidden inside the nest');
+}
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);

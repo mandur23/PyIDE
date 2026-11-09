@@ -11,6 +11,17 @@
 //
 // One plan step decides what is visible and is shared by both back ends. Each clip on screen gets its own frame source
 // (decoder.js), so two clips of one file play as two independent streams; sources not used for a while are closed.
+//
+// A nest clip (model.js: source.sequence) is an item of kind 'nest' whose `layers` are the plan of its sequence at its
+// source time (`srcT`), drawn into a transparent picture of that sequence's size fitted to this one (`w`, `h`); the
+// clip's own effects, motion, opacity and keyframes then apply to that picture as to a video frame. Items of a nested
+// plan carry `key` (the nest clips' ids above them, then their own), so a clip shown by two nest clips at once gets
+// two frame sources, and `seqW`/`seqH`, the size of the sequence they are placed in.
+//
+// Masks (masks.js) work in the item's own frame, before its motion, so they follow it: an effect's masks mix the
+// effect's output over its input after its last pass (outside them the effect is not there), and Opacity's masks
+// multiply the picture after every effect (Premiere applies Opacity after the effects). The item carries them with
+// their values at t: `masks` (Opacity's) and each effect's `masks`, null when none counts.
 (function (factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -39,6 +50,7 @@
   // or holds the last frame there is).
   function extendedSourceTime(clip, t, duration) {
     if (clip.source?.freeze) return clip.in;
+    if (clip.remap) return Math.max(0, Math.min(need('remap').sourceAt(clip.remap, t - clip.start), Math.max(0, duration - 1)));
     const along = (t - clip.start) * clip.speed;
     const v = clip.reverse ? clip.out - along - 1 : clip.in + along;
     return Math.max(0, Math.min(v, Math.max(0, duration - 1)));
@@ -55,6 +67,11 @@
     const short = (clip, t) => {
       const m = clip && model.mediaOf(project, clip);
       if (!m || m.kind === 'image' || clip.source?.freeze) return 0;
+      if (clip.remap) {
+        const R = need('remap');
+        const v = R.value(clip.remap, t - clip.start);
+        return Math.max(0, v - m.duration, -v) / (Math.abs(R.speedAt(clip.remap, t - clip.start)) || 1);
+      }
       const along = (t - clip.start) * clip.speed;
       const v = clip.reverse ? clip.out - along : clip.in + along;
       return Math.max(0, v - m.duration, -v) / clip.speed;
@@ -62,8 +79,9 @@
     return { a: A ? short(A, te) : 0, b: B ? short(B, ts) : 0 };
   }
 
-  // Everything the back ends need to draw an item, values at t. kind: 'video' | 'image' | 'text' | 'solid' | 'adjustment'.
-  function planItem(project, seq, clip, t, extended) {
+  // Everything the back ends need to draw an item, values at t. kind: 'video' | 'image' | 'text' | 'solid' |
+  // 'adjustment' | 'nest'. scope: the ids of the nest clips the item is drawn inside, each ending in '/'.
+  function planItem(project, seq, clip, t, extended, scope = '') {
     const model = need('model');
     const kf = need('keyframes');
     const fx = need('effects');
@@ -80,27 +98,52 @@
       for (const pd of def.params) params[pd.id] = kf.propValue(clip, `effects.${e.id}.${pd.id}`, local, e.params?.[pd.id] ?? pd.default);
       const resolved = fx.resolve(e.type, params);
       // What an effect reads from the project besides its parameters (Lumetri Color's LUT), as info.assets.
-      effects.push({ id: e.id, def, params: resolved, assets: def.assets ? def.assets(project, resolved) : null });
+      const masks = e.masks?.length && def.masks !== false ? need('masks').at(clip, `effects.${e.id}.masks`, e.masks, local) : null;
+      effects.push({ id: e.id, def, params: resolved, assets: def.assets ? def.assets(project, resolved) : null, masks });
     }
     let kind;
     let srcT = 0;
+    let sequence = null;
+    let layers = null;
+    const nest = model.nestOf(project, clip);
+    let blend = null;
     if (media) {
       kind = media.kind === 'image' ? 'image' : 'video';
       srcT = extended ? extendedSourceTime(clip, t, media.duration) : model.sourceTime(clip, t);
-    } else kind = clip.source?.generator || 'solid';
+      if (kind === 'video') blend = blendOf(clip, media, srcT);
+    } else if (nest) {
+      kind = 'nest';
+      srcT = extended ? extendedSourceTime(clip, t, model.sequenceDuration(nest)) : model.sourceTime(clip, t);
+      sequence = nest;
+      layers = plan(project, nest, srcT, `${scope}${clip.id}/`);
+    } else kind = model.isNest(clip) ? 'empty' : clip.source?.generator || 'solid';
     return {
-      clip, media, kind, local, srcT, effects,
+      clip, media, kind, local, srcT, blend, effects, sequence, layers, key: `${scope}${clip.id}`, seqW: seq.w, seqH: seq.h,
       position: prop('position', [0, 0]), scale: prop('scale', [100, 100]), rotation: prop('rotation', 0),
       anchor: prop('anchor', [0, 0]), opacity: prop('opacity', 100), crop: prop('crop', ZERO4),
       extend: effects.some((e) => e.def.layer?.extend),
+      masks: clip.masks?.length ? need('masks').at(clip, 'masks', clip.masks, local) : null,
       // The clip-local frame, for effects whose look changes every frame (grain, glitch).
       // Not `frame`: fetchItem puts the decoded VideoFrame there, and grain and glitch on video then read NaN.
       frameIndex: seq.fps ? need('time').frameAt(local, seq.fps) : 0,
     };
   }
 
+  // Frame Blending (clip.sampling 'blend', Premiere's Time Interpolation): a source time between two frames of the
+  // file shows the next frame over the one before by how far it is along: { srcT: the next frame's time, w: 0..1 }.
+  // Null on a frame (within a thousandth), for Frame Sampling, and for a file of no constant rate. A nest is drawn at
+  // its time (its sequence has no frames to mix).
+  function blendOf(clip, media, srcT) {
+    if (clip.sampling !== 'blend' || !media.video?.fps || media.video.vfr) return null;
+    const fd = need('time').frameTicks(media.video.fps);
+    const k = Math.floor(srcT / fd + 1e-9);
+    const w = srcT / fd - k;
+    if (w < 1e-3 || w > 1 - 1e-3 || (k + 1) * fd >= media.duration) return null;
+    return { srcT: (k + 1) * fd, w };
+  }
+
   // The layers of a sequence at t, bottom first: { kind: 'clip', item } | { kind: 'transition', def, progress, a, b }.
-  function plan(project, seq, t) {
+  function plan(project, seq, t, scope = '') {
     const model = need('model');
     const fx = need('effects');
     const layers = [];
@@ -120,15 +163,15 @@
           const [a, b] = transitionRange(tn);
           layers.push({
             kind: 'transition', transition: tn, def, params: fx.resolve(tn.type, tn.params || {}), progress: Math.max(0, Math.min(1, (t - a) / (b - a))),
-            a: A && planItem(project, seq, A, t, true), b: B && planItem(project, seq, B, t, true),
+            a: A && planItem(project, seq, A, t, true, scope), b: B && planItem(project, seq, B, t, true, scope),
           });
           continue;
         }
       }
       const c = clips.find((x) => x.start <= t && t < model.clipEnd(x));
-      if (c) layers.push({ kind: 'clip', item: planItem(project, seq, c, t, false) });
+      if (c) layers.push({ kind: 'clip', item: planItem(project, seq, c, t, false, scope) });
     }
-    return layers.filter((l) => (l.kind === 'clip' ? l.item.kind !== 'adjustment' : true));
+    return layers.filter((l) => (l.kind === 'clip' ? l.item.kind !== 'adjustment' && l.item.kind !== 'empty' : true));
   }
 
   // Caption tracks to burn in: opts.captions true = the first track, a track id, or a list of ids. `t` goes along at
@@ -177,8 +220,8 @@
       if (!pool.size) { clearInterval(timer); timer = null; }
     }
     return {
-      get(clip, opened) {
-        const key = `${clip.id}|${opened.path}`;
+      get(itemKey, opened) {
+        const key = `${itemKey}|${opened.path}`;
         let e = pool.get(key);
         if (!e) {
           e = { src: need('decoder').createFrameSource(opened, opened.video, { hardware }), used: tick, at: 0 };
@@ -237,22 +280,28 @@
   async function fetchSources(project, seq, layers, ctx) {
     const media = need('media');
     const textrender = need('textrender');
-    const W = seq.w;
-    const H = seq.h;
     const frames = [];
     const items = [];
-    for (const l of layers) {
-      if (l.kind === 'clip') items.push(l.item);
-      else for (const it of [l.a, l.b]) if (it) items.push(it);
-    }
+    const collect = (list) => {
+      for (const l of list) {
+        for (const it of l.kind === 'clip' ? [l.item] : [l.a, l.b]) {
+          if (!it) continue;
+          items.push(it);
+          if (it.kind === 'nest') collect(it.layers);
+        }
+      }
+    };
+    collect(layers);
     const fail = (it, message) => {
       it.kind = 'error';
-      it.canvas = errorCanvas(W, H, ctx.k, message);
-      it.w = W;
-      it.h = H;
+      it.canvas = errorCanvas(it.seqW, it.seqH, ctx.k, message);
+      it.w = it.seqW;
+      it.h = it.seqH;
     };
     await Promise.all(items.map((it) => fetchItem(it).catch(() => fail(it, tr('Media Cannot Be Shown')))));
     async function fetchItem(it) {
+      const W = it.seqW;
+      const H = it.seqH;
       if (it.kind === 'solid') {
         it.color = need('effects').hexToLinear(it.clip.source?.color || '#ffffff');
         it.w = W;
@@ -265,6 +314,12 @@
         it.canvas = ctx.textCanvas(it, W, H);
         it.w = W;
         it.h = H;
+        return;
+      }
+      if (it.kind === 'nest') {
+        const fit = fitScale(it.sequence.w, it.sequence.h, W, H, project.settings?.fit);
+        it.w = it.sequence.w * fit;
+        it.h = it.sequence.h * fit;
         return;
       }
       let o = await media.open(project, it.clip.source.media, { proxy: !!ctx.proxy });
@@ -281,7 +336,7 @@
         it.path = o.path;
         return;
       }
-      let src = ctx.sources.get(it.clip, o);
+      let src = ctx.sources.get(it.key, o);
       let frame;
       try {
         frame = await src.frameAt(it.srcT);
@@ -292,12 +347,15 @@
         o = await media.open(project, it.clip.source.media, { proxy: false });
         if (o.error || !o.video) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'));
         place();
-        src = ctx.sources.get(it.clip, o);
+        src = ctx.sources.get(it.key, o);
         frame = await src.frameAt(it.srcT);
       }
       const from = src;
       it.frame = frame;
-      it.release = () => from.release(frame);
+      // Frame Blending's second frame, from the same stream (the next one after `frame`)
+      const second = it.blend ? await from.frameAt(it.blend.srcT).catch(() => null) : null;
+      it.frameB = second;
+      it.release = () => { from.release(frame); if (second) from.release(second); };
       frames.push(it);
     }
     return frames;
@@ -311,14 +369,14 @@
       const textrender = need('textrender');
       const layers = (it.clip.source?.layers || []).map((l) => textrender.resolveLayer(l, it.clip, it.local));
       const key = JSON.stringify([layers, k, W, H]);
-      const hit = cache.get(it.clip.id);
+      const hit = cache.get(it.key);
       if (hit && hit.key === key) return hit.canvas;
       const c = hit && hit.canvas.width === Math.round(W * k) && hit.canvas.height === Math.round(H * k) ? hit.canvas : newCanvas(Math.round(W * k), Math.round(H * k));
       const ctx = c.getContext('2d');
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, c.width, c.height);
       textrender.draw(ctx, layers, { w: W, h: H, scale: k });
-      cache.set(it.clip.id, { key, canvas: c });
+      cache.set(it.key, { key, canvas: c });
       if (cache.size > 64) cache.delete(cache.keys().next().value);
       return c;
     };
@@ -360,7 +418,9 @@ struct DU { rot: vec4f };
 ${V}${SRGB_WGSL}
 @fragment fn fs(v: VOut) -> @location(0) vec4f {
   let c = textureSampleBaseClampToEdge(ext, samp, turn(v.uv, u.rot.x));
-  return vec4f(toLinear(clamp(c.rgb, vec3f(0.0), vec3f(1.0))), 1.0);
+  // rot.y: the weight of a Frame Blending frame drawn over the one before (0: an opaque frame)
+  let a = select(1.0, u.rot.y, u.rot.y > 0.0);
+  return vec4f(toLinear(clamp(c.rgb, vec3f(0.0), vec3f(1.0))) * a, a);
 }`,
       decodeImage: /* wgsl */ `
 struct DU { rot: vec4f };
@@ -498,6 +558,25 @@ ${V}
       return (i) => ({ buffer: ubuf, offset: i * 256, size: 256 });
     }
 
+    // The masks' data of a frame in one storage buffer, each list at a 256-byte offset.
+    let sbuf = null;
+    let scap = 0;
+    function storage(lists) {
+      const offsets = [];
+      let at = 0;
+      for (const l of lists) { offsets.push(at); at += Math.ceil(Math.max(16, l.byteLength) / 256) * 256; }
+      if (at > scap) {
+        const old = sbuf;
+        scap = Math.max(at, scap * 2, 64 * 1024);
+        sbuf = device.createBuffer({ size: scap, usage: B.STORAGE | B.COPY_DST });
+        if (old) device.queue.onSubmittedWorkDone().then(() => old.destroy());
+      }
+      const data = new Float32Array(at / 4);
+      lists.forEach((l, i) => data.set(l, offsets[i] / 4));
+      device.queue.writeBuffer(sbuf, 0, data);
+      return (i) => ({ buffer: sbuf, offset: offsets[i], size: Math.ceil(Math.max(16, lists[i].byteLength) / 16) * 16 });
+    }
+
     // Images stay on the GPU while used (rgba8unorm, not premultiplied).
     const images = new Map();
     function imageTexture(it) {
@@ -626,6 +705,8 @@ ${V}
       const ops = [];
       const slots = [];
       const slot = (arr) => { slots.push(arr instanceof Float32Array ? arr : Float32Array.from(arr)); return slots.length - 1; };
+      const mslots = [];
+      const mslot = (arr) => { mslots.push(arr); return mslots.length - 1; };
       const fitDim = (w, h) => {
         let tw = Math.max(1, Math.round(w * q));
         let th = Math.max(1, Math.round(h * q));
@@ -634,13 +715,19 @@ ${V}
         return [tw, th];
       };
 
-      // An item's picture with its effects, as an rgba16float texture of its layer size.
+      // An item's picture with its effects, as an rgba16float texture of its layer size (a nest's: its sequence's
+      // layers drawn into it).
       function itemTexture(it) {
-        const [tw, th] = it.kind === 'video' || it.kind === 'image' ? fitDim(it.w, it.h) : [W, H];
+        const sized = it.kind === 'video' || it.kind === 'image' || it.kind === 'nest';
+        const [tw, th] = sized ? fitDim(it.w, it.h) : [Math.max(1, Math.round(it.seqW * q)), Math.max(1, Math.round(it.seqH * q))];
         let cur = texture(tw, th);
         const rot = [((it.rotation0 || 0) / 90) % 4, 0, 0, 0];
-        if (it.kind === 'video') ops.push({ op: 'decodeExternal', frame: it.frame, out: cur, u: slot(rot) });
+        if (it.kind === 'video') {
+          ops.push({ op: 'decodeExternal', frame: it.frame, out: cur, u: slot(rot) });
+          if (it.frameB) ops.push({ op: 'decodeExternal', frame: it.frameB, out: cur, u: slot([rot[0], it.blend.w, 0, 0]), over: true });
+        }
         else if (it.kind === 'image') ops.push({ op: 'decodeImage', src: imageTexture(it), out: cur, u: slot(rot) });
+        else if (it.kind === 'nest') layersInto(it.layers, cur, tw, th, null);
         else if (it.kind === 'solid') {
           const c = it.color;
           ops.push({ op: 'clear', out: cur, color: { r: c[0] * c[3], g: c[1] * c[3], b: c[2] * c[3], a: c[3] } });
@@ -661,8 +748,17 @@ ${V}
             ops.push({ op: 'effect', type: e.def.type, code: g.code, src: cur, orig, out: next, u: slot(data), tex });
             cur = next;
           }
+          if (e.masks && cur !== orig) cur = masked(cur, orig, e.masks, tw, th, pxScale, 1);
         }
+        if (it.masks) cur = masked(cur, cur, it.masks, tw, th, pxScale, 0);
         return cur;
+      }
+      // A mask pass (masks.js): keep inside the masks, under (weight `under`: 1 an effect's input, 0 transparent)
+      // outside.
+      function masked(keep, underTex, masks, tw, th, pxScale, under) {
+        const out = texture(tw, th);
+        ops.push({ op: 'mask', keep, under: underTex, out, u: slot([tw, th, 1 / tw, 1 / th, under, 0, 0, 0]), data: mslot(need('masks').gpuData(masks, tw, th, pxScale)) });
+        return out;
       }
       function placeUniforms(it) {
         const sx = (it.scale?.[0] ?? 100) / 100;
@@ -672,7 +768,7 @@ ${V}
         const crop = it.crop || ZERO4;
         // props.crop is [top, right, bottom, left]; the shader takes (left, top, right, bottom).
         return slot([
-          seq.w, seq.h, it.position?.[0] || 0, it.position?.[1] || 0,
+          it.seqW, it.seqH, it.position?.[0] || 0, it.position?.[1] || 0,
           Math.cos(a), Math.sin(a), 1 / safe(sx), 1 / safe(sy),
           it.w, it.h, it.anchor?.[0] || 0, it.anchor?.[1] || 0,
           (crop[3] || 0) / 100, (crop[0] || 0) / 100, (crop[1] || 0) / 100, (crop[2] || 0) / 100,
@@ -680,30 +776,35 @@ ${V}
         ]);
       }
 
-      const accum = texture(W, H);
-      const bg = need('effects').hexToLinear(seq.background || '#000000');
-      ops.push({ op: 'clear', out: accum, color: { r: bg[0], g: bg[1], b: bg[2], a: 1 } });
-      for (const l of layers) {
-        if (l.kind === 'clip') {
-          const tex = itemTexture(l.item);
-          ops.push({ op: 'composite', src: tex, out: accum, u: placeUniforms(l.item), blend: true });
-          continue;
+      // A sequence's layers over the target texture (tw x th): cleared to its background, or to transparent inside a nest.
+      function layersInto(layers, target, tw, th, background) {
+        const bg = background ? need('effects').hexToLinear(background) : null;
+        ops.push({ op: 'clear', out: target, color: bg ? { r: bg[0], g: bg[1], b: bg[2], a: 1 } : { r: 0, g: 0, b: 0, a: 0 } });
+        for (const l of layers) {
+          if (l.kind === 'clip') {
+            const tex = itemTexture(l.item);
+            ops.push({ op: 'composite', src: tex, out: target, u: placeUniforms(l.item), blend: true });
+            continue;
+          }
+          const ta = texture(tw, th);
+          const tb = texture(tw, th);
+          ops.push({ op: 'clear', out: ta, color: { r: 0, g: 0, b: 0, a: 0 } });
+          ops.push({ op: 'clear', out: tb, color: { r: 0, g: 0, b: 0, a: 0 } });
+          if (l.a) ops.push({ op: 'composite', src: itemTexture(l.a), out: ta, u: placeUniforms(l.a), blend: true });
+          if (l.b) ops.push({ op: 'composite', src: itemTexture(l.b), out: tb, u: placeUniforms(l.b), blend: true });
+          const data = new Float32Array(20);
+          data.set([tw, th, 1 / tw, 1 / th], 0);
+          data.set(l.def.gpu.uniforms(l.params, l.progress).slice(0, 16), 4);
+          ops.push({ op: 'transition', type: l.def.type, code: l.def.gpu.code, a: ta, b: tb, out: target, u: slot(data) });
         }
-        const ta = texture(W, H);
-        const tb = texture(W, H);
-        ops.push({ op: 'clear', out: ta, color: { r: 0, g: 0, b: 0, a: 0 } });
-        ops.push({ op: 'clear', out: tb, color: { r: 0, g: 0, b: 0, a: 0 } });
-        if (l.a) ops.push({ op: 'composite', src: itemTexture(l.a), out: ta, u: placeUniforms(l.a), blend: true });
-        if (l.b) ops.push({ op: 'composite', src: itemTexture(l.b), out: tb, u: placeUniforms(l.b), blend: true });
-        const data = new Float32Array(20);
-        data.set([W, H, 1 / W, 1 / H], 0);
-        data.set(l.def.gpu.uniforms(l.params, l.progress).slice(0, 16), 4);
-        ops.push({ op: 'transition', type: l.def.type, code: l.def.gpu.code, a: ta, b: tb, out: accum, u: slot(data) });
       }
+
+      const accum = texture(W, H);
+      layersInto(layers, accum, W, H, seq.background || '#000000');
       if (captions.length || opts2.overlays) {
         const c = textCanvasFor(captions, opts2.overlays, W, H);
-        const tex = itemTexture({ kind: 'canvas', canvas: c, effects: [], w: seq.w, h: seq.h });
-        ops.push({ op: 'composite', src: tex, out: accum, u: placeUniforms({ w: seq.w, h: seq.h }), blend: true });
+        const tex = itemTexture({ kind: 'canvas', canvas: c, effects: [], w: seq.w, h: seq.h, seqW: seq.w, seqH: seq.h });
+        ops.push({ op: 'composite', src: tex, out: accum, u: placeUniforms({ w: seq.w, h: seq.h, seqW: seq.w, seqH: seq.h }), blend: true });
       }
 
       if (!out || outW !== width || outH !== height) {
@@ -719,6 +820,7 @@ ${V}
       ops.push({ op: 'final', src: accum, out, u: slot(box) });
 
       const uref = uniforms(slots);
+      const mref = mslots.length ? storage(mslots) : null;
       const enc = device.createCommandEncoder();
       const view = (t) => t.createView();
       for (const o of ops) {
@@ -730,7 +832,8 @@ ${V}
         let entries;
         let load = 'clear';
         if (o.op === 'decodeExternal') {
-          p = pipeline('decodeExternal', src.decodeExternal, F16);
+          p = pipeline('decodeExternal', src.decodeExternal, F16, o.over ? OVER : null);
+          if (o.over) load = 'load';
           entries = [{ binding: 0, resource: device.importExternalTexture({ source: o.frame }) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
         } else if (o.op === 'decodeImage') {
           p = pipeline('decodeImage', src.decodeImage, F16);
@@ -747,6 +850,9 @@ ${V}
           p = pipeline(`tr:${o.type}`, o.code, F16, OVER);
           entries = [{ binding: 0, resource: view(o.a) }, { binding: 1, resource: view(o.b) }, { binding: 2, resource: sampler }, { binding: 3, resource: uref(o.u) }];
           load = 'load';
+        } else if (o.op === 'mask') {
+          p = pipeline('mask', need('masks').WGSL, F16);
+          entries = [{ binding: 0, resource: view(o.keep) }, { binding: 1, resource: view(o.under) }, { binding: 2, resource: uref(o.u) }, { binding: 3, resource: mref(o.data) }];
         } else if (o.op === 'final') {
           p = pipeline('final', src.final, 'rgba8unorm');
           entries = [{ binding: 0, resource: view(o.src) }, { binding: 1, resource: sampler }, { binding: 2, resource: uref(o.u) }];
@@ -817,6 +923,7 @@ ${V}
         scopeU?.destroy();
         out?.destroy();
         ubuf?.destroy();
+        sbuf?.destroy();
         device.destroy();
       },
     };
@@ -833,13 +940,53 @@ ${V}
     const ctx = target.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('no 2D context on this canvas');
 
-    // An item's picture with the effects 2D can do, in a canvas of its layer size at scale k.
+    // An item's picture with the effects 2D can do, in a canvas of its layer size at scale k. An effect with masks is
+    // drawn on its own and mixed over its input through the masks' coverage; Opacity's masks cut the result.
     function itemCanvas(it, k) {
       const lw = Math.max(1, Math.round(it.w * k));
       const lh = Math.max(1, Math.round(it.h * k));
+      const hintOf = (e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k, frame: it.frameIndex || 0 }) || {};
+      let c;
+      if (!it.effects.some((e) => e.masks)) c = paint(it, lw, lh, it.effects.map(hintOf));
+      else {
+        c = paint(it, lw, lh, []);
+        for (const e of it.effects) {
+          const h = hintOf(e);
+          if (h.skip) continue;
+          const next = paint({ kind: 'canvas', canvas: c }, lw, lh, [h]);
+          c = e.masks ? mixThrough(c, next, e.masks, lw, lh, k) : next;
+        }
+      }
+      if (it.masks) {
+        const g = c.getContext('2d');
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(need('masks').canvasCoverage(it.masks, lw, lh, k, newCanvas), 0, 0);
+        g.globalCompositeOperation = 'source-over';
+      }
+      return c;
+    }
+    // base outside the masks, top inside: top kept by the coverage plus base kept by its complement, added.
+    function mixThrough(base, top, masks, lw, lh, k) {
+      const cov = need('masks').canvasCoverage(masks, lw, lh, k, newCanvas);
+      const out = newCanvas(lw, lh);
+      const g = out.getContext('2d');
+      g.drawImage(base, 0, 0);
+      g.globalCompositeOperation = 'destination-out';
+      g.drawImage(cov, 0, 0);
+      const t = newCanvas(lw, lh);
+      const tg = t.getContext('2d');
+      tg.drawImage(top, 0, 0);
+      tg.globalCompositeOperation = 'destination-in';
+      tg.drawImage(cov, 0, 0);
+      g.globalCompositeOperation = 'lighter';
+      g.drawImage(t, 0, 0);
+      g.globalCompositeOperation = 'source-over';
+      return out;
+    }
+    // A picture (the item's source, or a canvas for one more effect) drawn with 2D hints into a new lw x lh canvas.
+    function paint(it, lw, lh, hints) {
       const c = newCanvas(lw, lh);
       const g = c.getContext('2d');
-      const hints = it.effects.map((e) => e.def.canvas2d?.(e.params, { width: lw, height: lh, pxScale: k, frame: it.frameIndex || 0 }) || {});
       g.filter = hints.map((h) => h.filter).filter(Boolean).join(' ') || 'none';
       const flipX = hints.filter((h) => h.flipX).length % 2 === 1;
       const flipY = hints.filter((h) => h.flipY).length % 2 === 1;
@@ -856,8 +1003,13 @@ ${V}
         g.fillStyle = `rgba(${cr},${cg},${cb},${ca})`;
         g.fillRect(-dw / 2, -dh / 2, dw, dh);
       } else {
-        const source = it.frame || it.bitmap || it.canvas;
+        const source = it.kind === 'nest' ? nestCanvas(it, lw, lh) : it.frame || it.bitmap || it.canvas;
         if (source) g.drawImage(source, -dw / 2, -dh / 2, dw, dh);
+        if (it.frameB) {
+          g.globalAlpha = it.blend.w;
+          g.drawImage(it.frameB, -dw / 2, -dh / 2, dw, dh);
+          g.globalAlpha = 1;
+        }
       }
       g.restore();
       g.filter = 'none';
@@ -890,6 +1042,15 @@ ${V}
           g.clearRect(0, lh * (1 - b), lw, lh * b);
         }
       }
+      return c;
+    }
+    // A nest's sequence drawn on a transparent canvas of lw x lh.
+    function nestCanvas(it, lw, lh) {
+      const c = newCanvas(lw, lh);
+      const g = c.getContext('2d');
+      const k = lw / it.sequence.w;
+      g.setTransform(k, 0, 0, lh / it.sequence.h, 0, 0);
+      drawLayers(g, it.sequence, it.layers, k, k);
       return c;
     }
     // Draws an item into a context whose transform maps sequence pixels.
@@ -927,6 +1088,20 @@ ${V}
       ctx.beginPath();
       ctx.rect(0, 0, seq.w, seq.h);
       ctx.clip();
+      drawLayers(ctx, seq, layers, k, kq);
+      ctx.restore();
+      if (captions.length || overlays) {
+        const c = newCanvas(Math.round(seq.w * k), Math.round(seq.h * k));
+        const g = c.getContext('2d');
+        for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k, t: cap.t });
+        drawOverlays(g, overlays, seq.w, seq.h, k);
+        ctx.drawImage(c, 0, 0, seq.w, seq.h);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    // A sequence's layers into g, whose transform maps the sequence's pixels; k: g's pixels a sequence pixel, kq: the
+    // items' (k at the playback quality).
+    function drawLayers(g0, seq, layers, k, kq) {
       const frameCanvas = () => {
         const c = newCanvas(Math.round(seq.w * k), Math.round(seq.h * k));
         const g = c.getContext('2d');
@@ -934,8 +1109,7 @@ ${V}
         return { c, g };
       };
       for (const l of layers) {
-        for (const it of l.kind === 'clip' ? [l.item] : [l.a, l.b]) if (it) { it.seqW = seq.w; it.seqH = seq.h; }
-        if (l.kind === 'clip') { place(ctx, l.item, kq); continue; }
+        if (l.kind === 'clip') { place(g0, l.item, kq); continue; }
         const A = frameCanvas();
         const B = frameCanvas();
         if (l.a) place(A.g, l.a, kq);
@@ -977,17 +1151,8 @@ ${V}
           m.globalAlpha = 1;
           m.globalCompositeOperation = 'source-over';
         }
-        ctx.drawImage(M.c, 0, 0, seq.w, seq.h);
+        g0.drawImage(M.c, 0, 0, seq.w, seq.h);
       }
-      ctx.restore();
-      if (captions.length || overlays) {
-        const c = newCanvas(Math.round(seq.w * k), Math.round(seq.h * k));
-        const g = c.getContext('2d');
-        for (const cap of captions) need('textrender').drawCaptions(g, cap.items, cap.style, { w: seq.w, h: seq.h, scale: k, t: cap.t });
-        drawOverlays(g, overlays, seq.w, seq.h, k);
-        ctx.drawImage(c, 0, 0, seq.w, seq.h);
-      }
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     return {
       backend: '2d',
@@ -1101,21 +1266,25 @@ ${V}
         if (!seq) return;
         const model = need('model');
         const media = need('media');
-        const a = Math.min(from, to);
-        const b = Math.max(from, to);
-        for (const c of seq.clips) {
-          if (!c.enabled || c.source?.media == null || c.source.freeze) continue;
-          const track = seq.tracks.find((x) => x.id === c.track);
-          if (!track || track.kind !== 'video' || track.visible === false) continue;
-          const end = model.clipEnd(c);
-          if (end <= a || c.start > b) continue;
-          media.open(project, c.source.media, { proxy }).then((o) => {
-            if (destroyed || o.error || !o.video) return;
-            const s0 = model.sourceTime(c, Math.max(a, c.start));
-            const s1 = model.sourceTime(c, Math.min(b, end - 1));
-            sources.get(c, o).prefetch(s0, s1);
-          }).catch(() => {});
-        }
+        // A nest clip's part of the range is the range of its sequence it shows, under the nest's key (fetchSources).
+        const walk = (s, a, b, scope) => {
+          for (const c of s.clips) {
+            if (!c.enabled || c.source?.freeze) continue;
+            const track = s.tracks.find((x) => x.id === c.track);
+            if (!track || track.kind !== 'video' || track.visible === false) continue;
+            const end = model.clipEnd(c);
+            if (end <= a || c.start > b) continue;
+            const [s0, s1] = model.sourceSpan(c, Math.max(a, c.start), Math.min(b + 1, end));
+            const inner = model.nestOf(project, c);
+            if (inner) { walk(inner, s0, s1, `${scope}${c.id}/`); continue; }
+            if (c.source?.media == null) continue;
+            media.open(project, c.source.media, { proxy }).then((o) => {
+              if (destroyed || o.error || !o.video) return;
+              sources.get(`${scope}${c.id}`, o).prefetch(s0, s1);
+            }).catch(() => {});
+          }
+        };
+        walk(seq, Math.min(from, to), Math.max(from, to), '');
       },
       readPixels: () => serial(() => be.readPixels()),
       // The Lumetri Scopes' counts of what the canvas shows now (Cut.scopes): the GPU counts with a compute pass, the

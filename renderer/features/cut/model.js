@@ -10,6 +10,17 @@
 //
 // Still clips (an image, a generator, a freeze frame: source.freeze) show the same picture whatever the time, so
 // trimming them only moves `out` and they can be any length. A freeze frame shows the frame at source time `in`.
+//
+// A nest clip (`source: { sequence }`, Premiere's nested sequence) shows and plays another sequence of the project:
+// its in/out are times of that sequence, read through sourceTime like a media file's. Its source runs to the end of
+// that sequence, which may get shorter after the clip was cut (the clip then shows nothing past it). No sequence
+// nests itself, through any number of others.
+//
+// A remapped video clip (`remap`, Premiere's Time Remapping > Speed; remap.js) plays a speed curve: its length is the
+// curve's `duration`, the source time at t is the curve's integral, and in/out are the lowest and highest source time
+// the curve reaches over the clip (kept by the commands), so every source clamp and range still holds. Its `speed`
+// is 1 and `reverse` false: the curve has both. `sampling` is Premiere's Time Interpolation: 'sample' shows the
+// nearest frame, 'blend' mixes the two source frames around the time (Frame Blending).
 (function (factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -20,8 +31,15 @@
   const time = NODE ? require('./time.js') : globalThis.Cut.time;
   const captionwords = () => (NODE ? require('./captionwords.js') : globalThis.Cut.captionwords);
   const lumetri = () => (NODE ? require('./lumetri.js') : globalThis.Cut.lumetri);
+  const R = NODE ? require('./remap.js') : globalThis.Cut.remap;
+  // Read when a clip has masks, so a page that loads model.js without masks.js still works.
+  const masks = () => (NODE ? require('./masks.js') : globalThis.Cut.masks);
 
-  const VERSION = 1;
+  // 2: nest clips (source.sequence). 3: time remapping (clip.remap) and frame sampling (clip.sampling). 4: masks
+  // (clip.masks, effect.masks). An app that reads an older version would call such a project damaged, or play a
+  // remapped clip at its old speed, or draw a masked clip whole; it says "newer" instead.
+  const VERSION = 4;
+  const SAMPLINGS = ['sample', 'blend'];
   const EASES = ['linear', 'hold', 'easeIn', 'easeOut', 'easeInOut', 'bezier'];
   const GENERATORS = ['text', 'solid', 'adjustment'];
   const VIDEO_PROPS = ['position', 'scale', 'rotation', 'anchor', 'opacity', 'crop'];
@@ -35,6 +53,10 @@
   const ID_RE = /^([A-Za-z]+)(\d+)$/;
 
   const clone = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
+  // A project's revision: a history (commands.js) counts every change of its project here. A symbol, so JSON (saving,
+  // clone) leaves it out; a project no history edits has none. Caches of what a project holds key on it.
+  const REVISION = Symbol.for('cut.revision');
+  const revisionOf = (project) => (project && typeof project[REVISION] === 'number' ? project[REVISION] : null);
 
   function newId(project, prefix) {
     const id = `${prefix}${project.nextId}`;
@@ -118,12 +140,15 @@
       id: opts.id, track: opts.track, start: opts.start ?? 0, in: opts.in ?? 0, out: opts.out ?? 0,
       source: clone(opts.source), speed: 1, reverse: false, enabled: true, link: null, group: null,
       name: opts.name ?? '', label: null, role: null, props: kind === 'audio' ? audioProps() : videoProps(),
-      keyframes: {}, effects: [], fadeIn: 0, fadeOut: 0,
+      keyframes: {}, effects: [], fadeIn: 0, fadeOut: 0, remap: null, sampling: 'sample',
     };
   }
 
   const isGenerator = (clip) => !!clip.source && typeof clip.source.generator === 'string';
   const mediaOf = (project, clip) => (clip.source && clip.source.media != null ? project.media.find((m) => m.id === clip.source.media) || null : null);
+  const isNest = (clip) => !!clip.source && typeof clip.source.sequence === 'string';
+  // The sequence a nest clip shows, or null.
+  const nestOf = (project, clip) => (isNest(clip) ? project.sequences.find((s) => s.id === clip.source.sequence) || null : null);
   // A clip whose picture does not change with time; its in/out bound nothing.
   function isStill(project, clip) {
     if (isGenerator(clip) || clip.source?.freeze) return true;
@@ -136,13 +161,60 @@
   // grows with the source time (about a tick at an hour and 25%); the rounding absorbs it so durations stay on frames.
   const gcd = (a, b) => (b ? gcd(b, a % b) : a);
   const QUANTUM = time.FRAME_RATES.map(time.frameTicks).reduce(gcd);
-  const clipDuration = (clip) => Math.round((clip.out - clip.in) / clip.speed / QUANTUM) * QUANTUM;
+  const clipDuration = (clip) => (clip.remap ? clip.remap.duration : Math.round((clip.out - clip.in) / clip.speed / QUANTUM) * QUANTUM);
   const clipEnd = (clip) => clip.start + clipDuration(clip);
 
   function sequenceDuration(seq) {
     let end = 0;
     for (const c of seq.clips) end = Math.max(end, clipEnd(c));
     return end;
+  }
+
+  // How much source a clip's in/out may span: the media's duration, or for a nest clip its sequence's duration (never
+  // less than what the clip already shows, since that sequence may have got shorter).
+  function sourceLength(project, clip) {
+    if (isNest(clip)) {
+      const inner = nestOf(project, clip);
+      return Math.max(inner ? sequenceDuration(inner) : 0, clip.out);
+    }
+    return mediaOf(project, clip)?.duration ?? 0;
+  }
+  // The ids of the sequences a sequence's nest clips show (directly).
+  function nestedIds(seq) {
+    const out = new Set();
+    for (const c of seq?.clips || []) if (isNest(c)) out.add(c.source.sequence);
+    return out;
+  }
+  // Whether sequence `fromId` shows sequence `toId`, itself or through nest clips any levels down.
+  function reaches(project, fromId, toId) {
+    const seen = new Set();
+    const walk = (id) => {
+      if (id === toId) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      const seq = project.sequences.find((s) => s.id === id);
+      for (const next of nestedIds(seq)) if (walk(next)) return true;
+      return false;
+    };
+    return walk(fromId);
+  }
+  // Whether a nest clip of `innerId` placed in `outerId` would make a sequence show itself.
+  const nestLoop = (project, outerId, innerId) => reaches(project, innerId, outerId);
+  // Where a sequence is nested: [{ seq, clips }] of the other sequences whose nest clips show it.
+  function nestUses(project, seqId) {
+    const out = [];
+    for (const seq of project.sequences) {
+      const clips = seq.clips.filter((c) => isNest(c) && c.source.sequence === seqId);
+      if (clips.length) out.push({ seq, clips });
+    }
+    return out;
+  }
+  // What a nest clip of a sequence has: a picture (a clip on a video track) and sound (one on an audio track).
+  function nestKinds(project, seqId) {
+    const seq = project.sequences.find((s) => s.id === seqId);
+    const kinds = new Map((seq?.tracks || []).map((t) => [t.id, t.kind]));
+    const has = (k) => !!seq && seq.clips.some((c) => kinds.get(c.track) === k);
+    return { video: has('video'), audio: has('audio') };
   }
 
   const trackOf = (seq, id) => seq.tracks.find((t) => t.id === id) || null;
@@ -169,9 +241,54 @@
   // so the decoder's "last sample at or before" lands inside the clip.
   function sourceTime(clip, t) {
     if (clip.source?.freeze) return clip.in;
+    if (clip.remap) return Math.min(clip.out, Math.max(clip.in, R.sourceAt(clip.remap, t - clip.start)));
     const along = (t - clip.start) * clip.speed;
     if (clip.reverse) return Math.max(clip.in, clip.out - along - 1);
     return Math.min(clip.in + along, clip.out);
+  }
+
+  // The timeline time at which a clip shows source time src, the inverse of sourceTime: a reversed clip shows its out
+  // point first, a remapped one the first time its curve reaches src. Outside what the clip shows it clamps to the
+  // nearer edge; null for a freeze frame.
+  function timelineTime(clip, src) {
+    if (clip.source?.freeze) return null;
+    const end = clipEnd(clip);
+    if (clip.remap) {
+      if (src <= clip.in) return clip.start + (R.clipTimeOf(clip.remap, clip.in) ?? 0);
+      if (src >= clip.out) return clip.start + (R.clipTimeOf(clip.remap, clip.out) ?? clip.remap.duration);
+      const x = R.clipTimeOf(clip.remap, src);
+      return x === null ? null : Math.min(end, clip.start + x);
+    }
+    const along = clip.reverse ? clip.out - src : src - clip.in;
+    return Math.min(end, Math.max(clip.start, clip.start + along / clip.speed));
+  }
+  // The lowest and highest source time a clip shows over timeline [a, b): what to decode ahead for that range.
+  function sourceSpan(clip, a, b) {
+    if (clip.remap && !clip.source?.freeze) {
+      const [lo, hi] = R.bounds(clip.remap, Math.max(0, a - clip.start), Math.max(0, Math.min(clipDuration(clip), b - clip.start) - 1));
+      return [Math.max(clip.in, lo - 1), Math.min(clip.out, hi)];
+    }
+    const x = sourceTime(clip, a);
+    const y = sourceTime(clip, Math.max(a, b - 1));
+    return [Math.min(x, y), Math.max(x, y)];
+  }
+  // How far, in timeline ticks, a clip's source lets it grow at its head and its tail (Infinity for a still).
+  function sourceRoom(project, clip) {
+    if (isStill(project, clip)) return { head: Infinity, tail: Infinity };
+    const len = sourceLength(project, clip);
+    if (clip.remap) {
+      return { head: R.stay(clip.remap, 0, -1, -0.25, len + 0.25), tail: R.stay(clip.remap, clip.remap.duration, 1, -0.25, len + 0.25) };
+    }
+    const before = clip.in / clip.speed;
+    const after = (len - clip.out) / clip.speed;
+    return clip.reverse ? { head: Math.max(0, after), tail: Math.max(0, before) } : { head: Math.max(0, before), tail: Math.max(0, after) };
+  }
+  // The curve a clip plays as it is now: its remap, or its constant speed (and direction) as a curve without keys.
+  function remapOf(clip) {
+    if (clip.remap) return clip.remap;
+    const d = clipDuration(clip);
+    const v = (clip.out - clip.in) / d;
+    return clip.reverse ? R.constant(clip.out, -v, d) : R.constant(clip.in, v, d);
   }
 
   function linkedClips(seq, clip) {
@@ -239,7 +356,10 @@
     // `duck` (dB added to the volume) has keyframes only: Auto Ducking writes it, so running it again replaces its
     // dips instead of lowering the user's own volume curve a second time.
     if (parts.length === 1) return (kind === 'audio' ? [...AUDIO_PROPS, 'duck'] : VIDEO_PROPS).includes(prop);
-    if (parts.length === 3 && parts[0] === 'effects') return !!parts[2] && (clip.effects || []).some((e) => e.id === parts[1]);
+    if (parts.length === 3 && parts[0] === 'effects') return !!parts[2] && parts[2] !== 'masks' && (clip.effects || []).some((e) => e.id === parts[1]);
+    // a mask's Path, Feather, Opacity or Expansion (masks.js): of Opacity, or of an effect
+    if (parts.length === 3 && parts[0] === 'masks') return kind === 'video' && masks().FIELDS.includes(parts[2]) && (clip.masks || []).some((m) => m?.id === parts[1]);
+    if (parts.length === 5 && parts[0] === 'effects' && parts[2] === 'masks') return kind === 'video' && masks().FIELDS.includes(parts[4]) && ((clip.effects || []).find((e) => e.id === parts[1])?.masks || []).some((m) => m?.id === parts[3]);
     if (parts.length === 3 && parts[0] === 'layers') return !!parts[2] && (clip.source?.layers || []).some((l) => l.id === parts[1]);
     return false;
   }
@@ -303,17 +423,30 @@
     }
 
     const linkSeq = new Map();
+    const seqById = new Map(project.sequences.filter(isObj).map((s) => [s.id, s]));
     for (const seq of project.sequences) {
       claim(seq?.id, 'sequence');
       if (!isObj(seq)) continue;
-      validateSequence(project, seq, mediaById, claim, err, linkSeq);
+      validateSequence(project, seq, mediaById, claim, err, linkSeq, seqById);
     }
+    // No sequence shows itself through nest clips (a depth-first walk that finds a sequence on its own path).
+    const state = new Map();
+    const loops = (id) => {
+      if (state.get(id) === 'open') return true;
+      if (state.get(id) === 'done') return false;
+      state.set(id, 'open');
+      const seq = seqById.get(id);
+      const found = Array.isArray(seq?.clips) && [...nestedIds({ clips: seq.clips.filter(isObj) })].some((next) => seqById.has(next) && loops(next));
+      state.set(id, 'done');
+      return found;
+    };
+    for (const id of seqById.keys()) if (loops(id)) { err(`sequence ${id} nests itself`); break; }
     if (project.speakers !== undefined) validateSpeakers(project.speakers, err);
     if (project.luts !== undefined) validateLuts(project.luts, err);
     return { ok: errors.length === 0, errors };
   }
 
-  function validateSequence(project, seq, mediaById, claim, err, linkSeq) {
+  function validateSequence(project, seq, mediaById, claim, err, linkSeq, seqById) {
     const S = `sequence ${seq.id}`;
     if (!isStr(seq.name)) err(`${S}: name`);
     if (!isInt(seq.w) || !isInt(seq.h) || seq.w < 16 || seq.h < 16 || seq.w > 16384 || seq.h > 16384) err(`${S}: size`);
@@ -354,6 +487,7 @@
       if (!aligned(c.start) || c.start < 0) err(`${C}: start ${c.start} is not on a frame`);
       if (!isNum(c.in) || !isNum(c.out)) { err(`${C}: in/out`); continue; }
       if (!isNum(c.speed) || c.speed <= 0) { err(`${C}: speed`); continue; }
+      if (c.remap !== null && !R.valid(c.remap, f)) { err(`${C}: remap`); continue; }
       const d = clipDuration(c);
       if (!aligned(d) || d < f) err(`${C}: duration ${d} is not a whole number of frames`);
       if (c.start + d > time.MAX_TICKS) err(`${C}: ends after the longest sequence`);
@@ -379,6 +513,11 @@
           }
         }
         if (c.source.generator === 'solid' && !isColor(c.source.color)) err(`${C}: solid color`);
+      } else if (c.source.sequence !== undefined) {
+        if (!isNest(c) || c.source.media !== undefined || c.source.freeze !== undefined) err(`${C}: nest source`);
+        else if (c.source.sequence === seq.id) err(`${C}: a nest of its own sequence`);
+        else if (!seqById.has(c.source.sequence)) err(`${C}: sequence ${c.source.sequence} missing`);
+        if (c.in < -0.5) err(`${C}: in ${c.in} before the nested sequence`);
       } else {
         const m = mediaById.get(c.source.media);
         if (!m) err(`${C}: media ${c.source.media} missing`);
@@ -391,6 +530,15 @@
         }
       }
       if (c.out <= c.in) err(`${C}: out is not after in`);
+      if (c.remap !== null) {
+        if (tr.kind !== 'video') err(`${C}: time remapping on an audio track`);
+        if (isStill(project, c)) err(`${C}: time remapping on a still`);
+        if (c.speed !== 1 || c.reverse !== false) err(`${C}: time remapping with a speed or reverse`);
+        const [lo, hi] = R.range(c.remap);
+        const tol = 0.5 + 1e-9 * Math.abs(hi);
+        if (Math.abs(c.in - lo) > tol || Math.abs(c.out - hi) > tol) err(`${C}: in/out ${c.in}..${c.out} are not the remapped range ${lo}..${hi}`);
+      }
+      if (!SAMPLINGS.includes(c.sampling)) err(`${C}: sampling ${c.sampling}`);
       validateProps(c, tr.kind, C, err);
       if (!isObj(c.keyframes)) err(`${C}: keyframes`);
       else {
@@ -403,6 +551,8 @@
             if (isObj(k) && k.t <= last) err(`${C}: keyframes of ${prop} are not in order`);
             if (isObj(k)) last = k.t;
             if (isObj(k) && !kfValue(k.v)) err(`${C}: keyframe value of ${prop}`);
+            const mf = isObj(k) && (prop.startsWith('masks.') || prop.includes('.masks.')) ? masks().parsePath(prop) : null;
+            if (mf && !masks().validField(mf.field, k.v)) err(`${C}: keyframe value of ${prop}`);
             if (isObj(k) && !EASES.includes(k.ease)) err(`${C}: keyframe ease ${k.ease}`);
             if (isObj(k) && k.ease === 'bezier' && !(isNumArr(k.h, 4) && k.h[0] >= 0 && k.h[0] <= 1 && k.h[2] >= 0 && k.h[2] <= 1)) err(`${C}: bezier handles`);
           }
@@ -417,6 +567,7 @@
           if (!isStr(e.type) || !isBool(e.on) || !isObj(e.params)) err(`${C}: effect ${e.id}`);
         }
       }
+      if (c.masks !== undefined || (Array.isArray(c.effects) && c.effects.some((e) => e?.masks !== undefined))) validateMasks(c, tr.kind, C, err);
       for (const k of ['fadeIn', 'fadeOut']) if (!(isInt(c[k]) && c[k] >= 0 && c[k] % f === 0)) err(`${C}: ${k}`);
       if (c.fadeIn + c.fadeOut > d) err(`${C}: fades are longer than the clip`);
       if (c.markers !== undefined) validateMarkers(c.markers, `${C} markers`, f, claim, err, true);
@@ -482,6 +633,24 @@
     }
   }
 
+  // Masks (masks.js) on a video clip: Opacity's and its effects', ids unique across them, each list at most MAX_MASKS.
+  function validateMasks(c, kind, C, err) {
+    const M = masks();
+    const seen = new Set();
+    for (const { effectId, list } of M.lists(c)) {
+      const holder = effectId ? c.effects.find((e) => e.id === effectId) : c;
+      if (holder.masks === undefined) continue;
+      const L = effectId ? `${C} effect ${effectId} masks` : `${C} masks`;
+      if (kind !== 'video') { err(`${L}: masks on an audio track`); continue; }
+      if (!Array.isArray(holder.masks) || !holder.masks.length || holder.masks.length > M.MAX_MASKS) { err(`${L}: not a list of 1 to ${M.MAX_MASKS}`); continue; }
+      for (const m of list) {
+        const why = M.problem(m);
+        if (why) err(`${L}: mask ${m?.id}: ${why}`);
+        else if (seen.has(m.id)) err(`${L}: mask id ${m.id} twice`);
+        else seen.add(m.id);
+      }
+    }
+  }
   function validateProps(c, kind, C, err) {
     if (!isObj(c.props)) return err(`${C}: props`);
     for (const [k, v] of Object.entries(c.props)) {
@@ -505,6 +674,27 @@
 
   // ---- reading files ----
 
+  // Masks get the fields they lack; a mask whose path is not a path, a list that is not a list, and masks on an audio
+  // track go (the clip draws without them), with their keyframes and the keyframes that are not values of their field.
+  function migrateMasks(c, kind) {
+    const M = masks();
+    for (const holder of [c, ...c.effects]) {
+      if (holder.masks === undefined) continue;
+      const keep = kind === 'video' && Array.isArray(holder.masks) ? holder.masks.filter((m) => isObj(m)).map((m) => M.full(m)).filter((m) => M.valid(m)) : [];
+      const ids = new Set();
+      holder.masks = keep.filter((m) => !ids.has(m.id) && ids.add(m.id)).slice(0, M.MAX_MASKS);
+      if (!holder.masks.length) delete holder.masks;
+    }
+    for (const [prop, list] of Object.entries(c.keyframes)) {
+      const mf = M.parsePath(prop);
+      if (!mf && !prop.startsWith('masks.') && !prop.includes('.masks.')) continue;
+      const holder = mf && (mf.effectId ? c.effects.find((e) => e.id === mf.effectId) : c);
+      if (!mf || !(holder?.masks || []).some((m) => m.id === mf.maskId)) { delete c.keyframes[prop]; continue; }
+      const good = (list || []).filter((k) => M.validField(mf.field, k?.v));
+      if (good.length) c.keyframes[prop] = good;
+      else delete c.keyframes[prop];
+    }
+  }
   // Older or partial projects get every field validate() needs; a newer version is refused with a clear message.
   function migrate(json) {
     let p = typeof json === 'string' ? JSON.parse(json) : clone(json);
@@ -519,6 +709,8 @@
       e.detail = `format version ${p.version}, this app reads ${VERSION}`;
       throw e;
     }
+    // 1 -> 2 added nest clips, 2 -> 3 time remapping and frame sampling, 3 -> 4 masks; an older file has none of them,
+    // so it reads as it is with the defaults (no remap, frame sampling, no masks).
     p.version = VERSION;
     p.settings = { ...defaultSettings(), ...(isObj(p.settings) ? p.settings : {}) };
     p.media = Array.isArray(p.media) ? p.media : [];
@@ -547,9 +739,11 @@
         const full = createClip(kinds.get(c.track) || 'video', { id: c.id, track: c.track, source: c.source });
         for (const k of Object.keys(full)) c[k] ??= full[k];
         if (c.role !== null && !ROLES.includes(c.role)) c.role = null;
+        if (!SAMPLINGS.includes(c.sampling)) c.sampling = 'sample';
         c.props = { ...(kinds.get(c.track) === 'audio' ? audioProps() : videoProps()), ...c.props };
         for (const list of Object.values(c.keyframes)) for (const k of list) k.ease = EASES.includes(k.ease) ? k.ease : ({ in: 'easeIn', out: 'easeOut', inOut: 'easeInOut' }[k.ease] || 'linear');
         for (const e of c.effects) { e.on ??= true; e.params ??= {}; }
+        if (c.masks !== undefined || c.effects.some((e) => e.masks !== undefined)) migrateMasks(c, kinds.get(c.track));
         for (const m of c.markers || []) { m.duration ??= 0; m.name ??= ''; m.note ??= ''; m.kind ??= 'comment'; m.color ??= 'green'; }
       }
       for (const t of seq.transitions) { t.align ??= 'center'; t.params ??= {}; }
@@ -571,6 +765,21 @@
         const sn = (t) => time.snap(t, seq.fps, { nearest: true });
         const f = time.frameTicks(seq.fps);
         for (const c of seq.clips) {
+          // A curve written by hand or by another tool that does not hold goes: the clip plays the source range it
+          // had over its length at a constant speed. In/out follow a curve that holds.
+          if (c.remap !== null && (!R.valid(c.remap, f) || kinds.get(c.track) !== 'video' || isStill(p, c))) {
+            const len = Number.isInteger(c.remap?.duration) && c.remap.duration >= f && c.remap.duration % f === 0 ? c.remap.duration : Math.max(f, sn(c.out - c.in));
+            const speed = (c.out - c.in) / len;
+            c.remap = null;
+            c.reverse = false;
+            if (speed >= 0.01 && speed <= 100) c.speed = speed;
+            else { c.speed = 1; c.out = c.in + len; }
+          }
+          if (c.remap) {
+            [c.in, c.out] = R.range(c.remap);
+            c.speed = 1;
+            c.reverse = false;
+          }
           for (const [prop, list] of Object.entries(c.keyframes)) {
             const byT = new Map();
             for (const k of list) byT.set(sn(k.t), { ...k, t: sn(k.t) });
@@ -616,9 +825,10 @@
   }
 
   return {
-    VERSION, QUANTUM, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ROLES, ALIGNS,
+    VERSION, REVISION, revisionOf, QUANTUM, SAMPLINGS, EASES, GENERATORS, VIDEO_PROPS, AUDIO_PROPS, MARKER_KINDS, ROLES, ALIGNS,
     clone, newId, defaultSettings, createProject, createSequence, createTrack, createClip, createTextLayer, defaultCaptionStyle,
     videoProps, audioProps, validate, validPropPath, validFps, validDoubt, migrate, lutsInUse,
-    clipDuration, clipEnd, sequenceDuration, clipsAt, sourceTime, trackIndex, trackOf, linkedClips, mediaOf, isGenerator, isStill,
+    clipDuration, clipEnd, sequenceDuration, clipsAt, sourceTime, timelineTime, sourceSpan, sourceRoom, remapOf, trackIndex, trackOf, linkedClips, mediaOf, isGenerator, isStill,
+    isNest, nestOf, sourceLength, nestedIds, reaches, nestLoop, nestUses, nestKinds,
   };
 });

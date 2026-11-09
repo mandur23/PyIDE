@@ -25,7 +25,7 @@
   "the current time (HH:mm)": "현재 시각(HH:mm)",
   "parts of the current date and time": "현재 날짜와 시각의 각 부분",
   "the name of the project": "프로젝트 이름",
-  "the folder of the new file as a dotted package name": "새 파일의 폴더를 점으로 구분한 패키지 이름",
+  "the folder of the new file as a dotted package name (for a Java file, from its source root)": "새 파일의 폴더를 점으로 구분한 패키지 이름(Java 파일은 소스 루트부터)",
   "a dollar sign": "달러 기호",
   "Files": "파일",
   "Predefined variables (any other ${VARIABLE} is asked for when the file is created):": "미리 정의된 변수(다른 ${VARIABLE}은 파일을 만들 때 입력을 요청합니다):",
@@ -36,5 +36,12 @@
   "Remove Template": "템플릿 제거",
   "Reset to Default": "디폴트로 재설정",
   "Restore the built-in template": "기본 제공 템플릿 복원",
-  "user": "사용자"
+  "user": "사용자",
+  "Java Class": "Java 클래스",
+  "Java Interface": "Java 인터페이스",
+  "Java Enum": "Java 열거형",
+  "Java Record": "Java 레코드",
+  "Java Annotation": "Java 어노테이션",
+  "New Java Class": "새 Java 클래스",
+  "{name} is not a valid Java name": "{name}은(는) 올바른 Java 이름이 아닙니다"
 }

@@ -116,6 +116,14 @@
     root.append(body, estimate, warn, loudness, tools, progress, result);
 
     const seqOf = () => app.project?.sequences.find((s) => s.id === seqSel.value) || app.sequence;
+    // A clip whose media is offline, or a nest clip whose sequence (any level down) holds one.
+    const usesOffline = (c, seen = new Set()) => {
+      if (c.source?.media != null) return !!ui.offline?.has(c.source.media);
+      const inner = Cut.model.nestOf(app.project, c);
+      if (!inner || seen.has(inner.id)) return false;
+      seen.add(inner.id);
+      return inner.clips.some((x) => usesOffline(x, seen));
+    };
     // The caption track burned in: the one the captions panel shows for the active sequence, else the first.
     const burnTrack = (seq) => (seq && seq.id === app.sequenceId && ui.captions?.trackOf(app)) || seq?.captions?.[0] || null;
     function fillSequences() {
@@ -194,7 +202,7 @@
       const len = rg ? rg.out - rg.in : seq ? Cut.model.sequenceDuration(seq) : 0;
       const problems = r ? (Cut.presets.validate?.(r) || []) : [tr('Choose a preset.')];
       if (!len) problems.push('The sequence is empty.');
-      const offline = seq ? seq.clips.filter((c) => c.source?.media != null && ui.offline?.has(c.source.media)).length : 0;
+      const offline = seq ? seq.clips.filter((c) => usesOffline(c)).length : 0;
       warn.replaceChildren(...problems.map((x) => el('div', 'cut-export-problem', tr(x))));
       if (offline) warn.appendChild(el('div', 'cut-export-offline', tr('{n} clips use offline media: they export as a red "media offline" picture.', { n: offline })));
       if (r && len) {
@@ -239,7 +247,7 @@
       if (typeof Cut.export?.run !== 'function') { ui.notify(tr('The export engine is not available.'), { kind: 'error' }); return null; }
       const seq = seqOf();
       const title = queued ? tr('Add to Queue') : tr('Export');
-      const offline = seq.clips.some((c) => c.source?.media != null && ui.offline?.has(c.source.media));
+      const offline = seq.clips.some((c) => usesOffline(c));
       if (offline && !(await ui.confirm(tr('Some clips use offline media and will export as a red "media offline" picture. Export anyway?'), { title, ok: title }))) return null;
       const path = pathIn.value.trim();
       // Replacing a file the project reads would put the export where the footage was.

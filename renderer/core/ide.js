@@ -1528,6 +1528,8 @@ function operands(entry, ok = movableEntry) {
   const list = (inSelection(entry) ? [selected, ...alsoSelected] : [entry]).filter(ok);
   return list.filter((x) => !list.some((y) => y !== x && isUnder(x.path, y.path) && !samePath(x.path, y.path)));
 }
+// The entry a path names on row i: a compacted row (src.main.java) stands for each folder of its chain.
+const entryOn = (i, path) => (path && rows[i]?.entry.compact?.find((c) => samePath(c.path, path))) || rows[i]?.entry;
 // Selects the rows from the anchor to row i, i the focused one.
 function selectRange(i) {
   const a = anchor ? rowIndexOf(anchor.path, anchor.treeRoot) : -1;
@@ -1563,7 +1565,34 @@ const enqueueTree = (fn) => (treeQueue = treeQueue.catch(() => {}).then(fn));
 const listDir = (dir) => ide.api.list(dir).catch(() => []);
 // A path can be listed twice (a project folder that holds the user-data folder also lists the scratches): a row is
 // looked up under its own top-level node, the project's (treeRoot null) or an extra one's (its id).
-const rowIndexOf = (path, treeRoot = null) => rows.findIndex((r) => samePath(r.entry.path, path) && (r.entry.treeRoot || null) === (treeRoot || null));
+const rowIndexOf = (path, treeRoot = null) => rows.findIndex((r) => (r.entry.treeRoot || null) === (treeRoot || null)
+  && (samePath(r.entry.path, path) || !!r.entry.compact?.some((c) => samePath(c.path, path))));
+
+// Compact middle packages (IntelliJ IDEA; VS Code's explorer.compactFolders): a folder whose only child is a folder
+// shares its row with it, `src.main.java` or `com.example.demo`. The row's entry is the last folder of the chain (what
+// expanding lists, and what New File aims at) with `compact`, the chain's entries from the top; clicking a segment
+// selects that folder. A folder drawn with its own icon (a sources root) keeps a row of its own, so a source root ends
+// one chain and its packages start the next. Only the project's rows are compacted, and only in a folder of at most
+// COMPACT_PROBES subfolders, each listed once more to see what it holds.
+const COMPACT_KEY = 'projectTree.compactFolders';
+const COMPACT_PROBES = 100;
+const compacting = () => ide.settings.get(COMPACT_KEY, true) !== false;
+const ownIcon = (e) => treeDecorators.some((deco) => deco(e)?.iconType);
+async function compactChains(items, list) {
+  if (!compacting() || items.filter((c) => c.dir).length > COMPACT_PROBES) return items;
+  return Promise.all(items.map(async (c) => {
+    if (!c.dir || ownIcon(c)) return c;
+    const chain = [c];
+    for (let cur = c; chain.length < 32;) {
+      const kids = await list(cur.path);
+      if (kids.length !== 1 || !kids[0].dir || ownIcon(kids[0])) break;
+      chain.push(cur = kids[0]);
+    }
+    return chain.length > 1 ? { ...chain[chain.length - 1], compact: chain } : c;
+  }));
+}
+// Every folder a row stands for (all of a compacted row's chain).
+const foldersOf = (entry) => entry.compact || [entry];
 // The top-level node a path is shown under: the one whose folder is the longest whole-segment prefix of it, so a
 // scratch file goes under Scratches even inside the project folder. {path, id} or null when none holds it.
 function treeBaseOf(path) {
@@ -1583,8 +1612,9 @@ async function subtreeRows(entry, depth) {
     return items.map((c) => ({ ...c, treeRoot: treeRoot.id }));
   };
   const listings = new Map();
+  const listed = treeRoot ? list : async (dir) => compactChains(await list(dir), list);
   for (let level = [entry.path]; level.length;) {
-    const lists = await Promise.all(level.map(list));
+    const lists = await Promise.all(level.map(listed));
     const next = [];
     level.forEach((dir, i) => {
       listings.set(keyOf(dir), lists[i]);
@@ -1606,9 +1636,20 @@ async function subtreeRows(entry, depth) {
 // A folder's chevron, turned down by CSS when the folder is open; parsed once and cloned for each row.
 const chevron = new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>', 'image/svg+xml').documentElement;
 
+// A compacted row's name: one segment per folder, joined by dots; the selected one is marked.
+function compactLabel(chain) {
+  const name = el('span', 'name file-label compact-name');
+  chain.forEach((c, i) => {
+    if (i) name.appendChild(document.createTextNode('.'));
+    const seg = name.appendChild(el('span', 'seg' + (inSelection(c) ? ' picked' : ''), c.name));
+    seg._entry = c;
+  });
+  return name;
+}
+
 function rowNode({ entry, depth }, index) {
   const open = entry.dir && expanded.has(keyOf(entry.path));
-  const node = el('div', 'node' + (inSelection(entry) ? ' selected' : ''));
+  const node = el('div', 'node' + (foldersOf(entry).some(inSelection) ? ' selected' : ''));
   node._entry = entry;
   node.style.top = `${index * ROW_HEIGHT}px`;
   node.style.paddingLeft = `${depth * 16 + 4}px`;
@@ -1624,8 +1665,8 @@ function rowNode({ entry, depth }, index) {
   const icon = ide.fileIcon(entry.name, { dir: entry.dir, type: decorations.find((d) => d.iconType)?.iconType || entry.iconType });
   icon.classList.add('icon');
   node.appendChild(icon);
-  const name = fileLabel(entry.label || entry.name, { ext: !entry.dir });
-  name.title = entry.label || entry.name;
+  const name = entry.compact ? compactLabel(entry.compact) : fileLabel(entry.label || entry.name, { ext: !entry.dir });
+  name.title = entry.compact ? entry.compact.map((c) => c.name).join('/') : entry.label || entry.name;
   node.appendChild(name);
   for (const d of decorations) {
     if (d.color) name.style.color = d.color;
@@ -1654,10 +1695,11 @@ function scrollToRow(i) {
   else if ((i + 1) * ROW_HEIGHT > tree.scrollTop + tree.clientHeight) tree.scrollTop = (i + 1) * ROW_HEIGHT - tree.clientHeight;
 }
 
-function selectRow(i) {
+// path: which folder of a compacted row to select (its last one by default).
+function selectRow(i, path) {
   if (!rows.length) return;
   i = Math.max(0, Math.min(rows.length - 1, i));
-  selected = rows[i].entry;
+  selected = entryOn(i, path);
   alsoSelected = [];
   anchor = selected;
   scrollToRow(i);
@@ -1671,7 +1713,8 @@ function saveExpanded() {
   const root = ide.root;
   saveExpandedTimer = setTimeout(() => {
     if (!root || !samePath(root, ide.root)) return;
-    const open = rows.filter((r) => r.depth > 0 && !r.entry.treeRoot && r.entry.dir && expanded.has(keyOf(r.entry.path))).map((r) => keyOf(r.entry.path).slice(root.replace(/[\\/]+$/, '').length + 1));
+    const open = rows.filter((r) => r.depth > 0 && !r.entry.treeRoot && r.entry.dir).flatMap((r) => foldersOf(r.entry))
+      .filter((e) => expanded.has(keyOf(e.path))).map((e) => keyOf(e.path).slice(root.replace(/[\\/]+$/, '').length + 1));
     const keep = new Set(ide.settings.get('recentProjects', []).map((p) => keyOf(p.path)));
     const all = Object.fromEntries(Object.entries(ide.settings.get(EXPANDED_KEY, {})).filter(([k]) => keep.has(k)));
     ide.settings.set(EXPANDED_KEY, { ...all, [keyOf(root)]: open.slice(0, 500) });
@@ -1724,11 +1767,15 @@ function renderTree() {
   return pendingRefresh;
 }
 ide.refreshTree = renderTree;
+ide.on('settingsChanged', (key) => { if (key === COMPACT_KEY) renderTree(); });
 
 const toggleDir = (entry) => enqueueTree(async () => {
   const i = rowIndexOf(entry.path, entry.treeRoot);
   if (i < 0) return;
   const { depth } = rows[i];
+  // A compacted row opens and closes as its last folder; opening it opens the whole chain, so the folders stay open
+  // when compacting is turned off or a file added to a middle one splits the row.
+  entry = rows[i].entry;
   const k = keyOf(entry.path);
   if (expanded.has(k)) {
     expanded.delete(k);
@@ -1737,7 +1784,7 @@ const toggleDir = (entry) => enqueueTree(async () => {
     rows.splice(i + 1, end - i - 1);
   } else {
     const rootPath = ide.root;
-    expanded.add(k);
+    for (const f of foldersOf(entry)) expanded.add(keyOf(f.path));
     const below = await subtreeRows(rows[i].entry, depth);
     if (!samePath(rootPath, ide.root)) return;
     rows = rows.slice(0, i + 1).concat(below, rows.slice(i + 1));
@@ -1754,7 +1801,7 @@ ide.revealInTree = async (path) => {
   alsoSelected = [];
   await renderTree();
   const i = rowIndexOf(path, base.id);
-  if (i >= 0) selectRow(i);
+  if (i >= 0) selectRow(i, path);
   if (base.id) saveRootsExpanded(); else saveExpanded();
 };
 
@@ -1803,6 +1850,8 @@ async function newFileText(path) {
   }
   return '';
 }
+// -> the first text of a new file at path from the hooks, '' when none gives one, null when one cancelled it.
+ide.newFileText = newFileText;
 
 // Items for the project tree's context menu: `(entry) => [menu items]`. An item labelled New with a submenu is merged
 // into the menu's New › (file-templates: File, Python File, Python Package…).
@@ -1855,7 +1904,7 @@ async function moveTo(entry, to) {
   const wasSelected = selected && samePath(selected.path, entry.path);
   await renderTree();
   // The renamed row keeps the selection under its new name.
-  if (wasSelected) { const i = rowIndexOf(to); if (i >= 0) selectRow(i); }
+  if (wasSelected) { const i = rowIndexOf(to); if (i >= 0) selectRow(i, to); }
   ide.emit('filesChanged', { renamed: [[entry.path, to]] });
 }
 
@@ -2083,7 +2132,14 @@ function treeKey(e) {
 }
 
 function wireTree(tree) {
-  const entryAt = (e) => e.target.closest?.('.node')?._entry;
+  // The folder of a compacted row's segment under the pointer, else the row's entry. A drag starts on the row itself,
+  // so its segment is found from the pointer's position.
+  const entryAt = (e) => {
+    const node = e.target.closest?.('.node');
+    if (!node) return undefined;
+    const seg = e.target.closest?.('.seg') || (e.type === 'dragstart' && document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.seg'));
+    return (seg && node.contains(seg) && seg._entry) || node._entry;
+  };
   tree.addEventListener('scroll', drawTree, { passive: true });
   observeSize(tree, () => drawTree());
   tree.addEventListener('keydown', treeKey);

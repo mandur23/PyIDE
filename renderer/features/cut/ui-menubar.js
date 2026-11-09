@@ -90,7 +90,12 @@
         action('group', { disabled: app.selection.size < 2 }),
         action('ungroup', { disabled: none }),
         sep,
-        { label: tr('Video Options'), submenu: [action('freezeFrame')] },
+        action('nest', { disabled: none }),
+        sep,
+        { label: tr('Video Options'), submenu: [
+          action('freezeFrame'),
+          { label: tr('Time Interpolation'), disabled: none, submenu: [['sample', 'Frame Sampling'], ['blend', 'Frame Blending']].map(([id, name]) => ({ label: tr(name), run: () => ui.timeline.setSampling?.(id) })) },
+        ] },
         { label: tr('Proxy'), submenu: [action('createProxy', { panel: 'project' })] },
         sep,
         action('nudgeUp', { disabled: none }),

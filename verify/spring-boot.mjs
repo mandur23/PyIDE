@@ -15,6 +15,7 @@ import zlib from 'zlib';
 import { launch, openFile } from './lib.mjs';
 
 const REAL = process.env.SPRING_REAL === '1';
+const BOOTS = 10; // META.bootVersion's versions
 const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const q = JSON.stringify;
@@ -51,12 +52,19 @@ function zip(files) {
 const META = {
   language: { default: 'java', values: [{ id: 'java', name: 'Java' }, { id: 'kotlin', name: 'Kotlin' }, { id: 'groovy', name: 'Groovy' }] },
   packaging: { default: 'jar', values: [{ id: 'jar', name: 'Jar' }, { id: 'war', name: 'War' }] },
-  bootVersion: { default: '4.1.2', values: [{ id: '4.2.0-SNAPSHOT', name: '4.2.0 (SNAPSHOT)' }, { id: '4.1.2', name: '4.1.2' }, { id: '4.0.9', name: '4.0.9' }] },
+  // Initializr's own mix: snapshots and milestones between the releases, one RC named without its kind, and an older
+  // server's .BUILD-SNAPSHOT / .RELEASE spelling.
+  bootVersion: { default: '4.1.2', values: [
+    { id: '4.2.0-SNAPSHOT', name: '4.2.0 (SNAPSHOT)' }, { id: '4.2.0-RC1', name: '4.2.0' }, { id: '4.2.0-M2', name: '4.2.0 (M2)' },
+    { id: '4.1.3-SNAPSHOT', name: '4.1.3 (SNAPSHOT)' }, { id: '4.1.2', name: '4.1.2' }, { id: '4.1.1', name: '4.1.1' },
+    { id: '4.0.10-SNAPSHOT', name: '4.0.10 (SNAPSHOT)' }, { id: '4.0.9', name: '4.0.9' },
+    { id: '3.5.9.BUILD-SNAPSHOT', name: '3.5.9 (SNAPSHOT)' }, { id: '3.5.8.RELEASE', name: '3.5.8' },
+  ] },
   javaVersion: { default: '17', values: [{ id: '25', name: '25' }, { id: '21', name: '21' }, { id: '17', name: '17' }] },
   dependencies: { values: [
-    { name: 'Web', values: [{ id: 'web', name: 'Spring Web', description: 'Build web apps with Spring MVC.' }, { id: 'webflux', name: 'Spring Reactive Web' }] },
-    { name: 'SQL', values: [{ id: 'data-jpa', name: 'Spring Data JPA' }, { id: 'refused', name: 'Refused Starter' }] },
-    { name: 'Cloud', values: [{ id: 'cloud-new', name: 'Cloud From 4.2', versionRange: '[4.2.0-M1,4.3.0-M1)' }] },
+    { name: 'Web', values: [{ id: 'web', name: 'Spring Web', description: 'Build web apps with Spring MVC.' }, { id: 'webflux', name: 'Spring Reactive Web', description: `${'Build reactive web applications with Spring WebFlux and Netty, a description long enough to wrap over several lines of the box. '.repeat(4)}NoBreakInThisVeryLongWordAtAllxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` }] },
+    { name: 'SQL', values: [{ id: 'data-jpa', name: 'Spring Data JPA', description: 'Persist data in SQL stores with the Java Persistence API.' }, { id: 'refused', name: 'Refused Starter' }] },
+    { name: 'Cloud', values: [{ id: 'cloud-new', name: 'Cloud From 4.2', description: `${'Cloud services that arrive with Spring Boot 4.2, described at length so the warning could scroll away. '.repeat(3)}`, versionRange: '[4.2.0-M1,4.3.0-M1)' }] },
   ] },
   type: { default: 'maven-project', values: [] },
 };
@@ -85,22 +93,26 @@ const server = http.createServer((req, res) => {
       return;
     }
     const pkg = p.packageName.split('.').join('/');
+    // Initializr names the application class applicationName and puts the name in pom.xml's <name>. Without
+    // applicationName it would make the class from the name (주문 관리 -> 주문관리Application), so this server makes
+    // one the tests notice.
+    const app = p.applicationName || 'NoApplicationNameSent';
     res.writeHead(200, { 'content-type': 'application/zip' });
     if (p.type === 'gradle-project-kotlin') {
       res.end(zip({
         'build.gradle.kts': 'plugins {\n    java\n    id("org.springframework.boot") version "4.1.2"\n}\n',
         'settings.gradle.kts': `rootProject.name = "${p.name}"\n`,
         'gradlew.bat': `@echo off\r\necho gradle wrapper %*\r\nif "%1"=="classes" goto sync\r\necho Tomcat started on port 18482 (http) with context path '/'\r\nping -n 120 127.0.0.1 >nul\r\nexit /b\r\n${gated('gradle', 'echo ^> Task :compileJava', 'echo FAILURE: Could not resolve all files for configuration')}`,
-        [`src/main/kotlin/${pkg}/KtApiApplication.kt`]: `package ${p.packageName}\n\n@SpringBootApplication\nclass KtApiApplication\n`,
+        [`src/main/kotlin/${pkg}/${app}.kt`]: `package ${p.packageName}\n\n@SpringBootApplication\nclass ${app}\n`,
       }));
       return;
     }
     res.end(zip({
       '.gitignore': 'target/\n!.mvn/wrapper/maven-wrapper.jar\n',
-      'pom.xml': `<project><artifactId>${p.artifactId}</artifactId><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n`,
+      'pom.xml': `<project><artifactId>${p.artifactId}</artifactId><name>${p.name}</name><build><plugins><plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>\n`,
       'mvnw.cmd': `@echo off\r\nif "%1"=="busy" (echo Web server failed to start. Port 18481 was already in use.& exit /b 1)\r\necho wrapper %*\r\nif "%2"=="dependency:go-offline" goto sync\r\necho JAVA_HOME=%JAVA_HOME%\r\necho Tomcat started on port 18481 (http) with context path '/'\r\nping -n 120 127.0.0.1 >nul\r\nexit /b\r\n${gated('mvn', 'echo Downloading from central: https://repo.maven.apache.org/maven2/org/springframework/boot/spring-boot-starter-web/4.1.2/spring-boot-starter-web-4.1.2.pom', 'echo [ERROR] Failed to execute goal dependency:go-offline')}`,
       '.mvn/wrapper/maven-wrapper.properties': 'distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.11/apache-maven-3.9.11-bin.zip\n',
-      [`src/main/java/${pkg}/ShopApiApplication.java`]: `package ${p.packageName};\n\n@SpringBootApplication\npublic class ShopApiApplication {}\n`,
+      [`src/main/java/${pkg}/${app}.java`]: `package ${p.packageName};\n\n@SpringBootApplication\npublic class ${app} {}\n`,
       'src/main/resources/application.properties': `spring.application.name=${p.name}\n`,
     }));
     return;
@@ -151,9 +163,16 @@ try {
     await a.until(`!!document.querySelector('#npSpringRetry')`, 'the failed options request offers Retry', 15000);
     check(/Could not reach Spring Initializr: .*503/.test(await a.js(`document.querySelector('#npSpringStatus').textContent`)), 'a failed options request is explained');
     await a.click('#npSpringRetry');
-    await a.until(`document.querySelector('#npSpringBoot').options.length === 3`, 'options after Retry', 15000);
+    await a.until(`document.querySelector('#npSpringBoot').options.length === ${BOOTS}`, 'options after Retry', 15000);
     check(await a.js(`document.querySelector('#npSpringBoot').value === '4.1.2' && document.querySelector('#npSpringStatus').textContent === ''`), 'Retry loads the options; Spring Boot defaults to Initializr\'s 4.1.2');
-    check((await a.js(`ide.api.invoke('spring:metadata')`)).bootVersion.values.length === 3, 'the options are read from the local Initializr');
+    check((await a.js(`ide.api.invoke('spring:metadata')`)).bootVersion.values.length === BOOTS, 'the options are read from the local Initializr');
+    const picker = await a.js(`[...document.querySelectorAll('#npSpringBoot optgroup')].map((g) => ({ label: g.label, options: [...g.children].map((o) => o.value + '=' + o.textContent) }))`);
+    check(q(picker) === q([
+      { label: 'Releases', options: ['4.1.2=4.1.2', '4.1.1=4.1.1', '4.0.9=4.0.9', '3.5.8.RELEASE=3.5.8'] },
+      { label: 'Snapshots and milestones', options: ['4.2.0-SNAPSHOT=4.2.0 (SNAPSHOT)', '4.2.0-RC1=4.2.0 (RC1)', '4.2.0-M2=4.2.0 (M2)', '4.1.3-SNAPSHOT=4.1.3 (SNAPSHOT)',
+        '4.0.10-SNAPSHOT=4.0.10 (SNAPSHOT)', '3.5.9.BUILD-SNAPSHOT=3.5.9 (SNAPSHOT)'] },
+    ]) && META.bootVersion.values.every((v) => picker.some((g) => g.options.some((o) => o.startsWith(`${v.id}=`)))),
+    `the Spring Boot picker lists every version the server offers, releases first, the snapshots and milestones labelled as such ${q(picker)}`);
     check(await a.js(`document.querySelector('#npSpringServer').value`) === env.PYIDE_INITIALIZR_URL, 'the server URL shows the server in use');
     check(await a.js(`[...document.querySelectorAll('#npSpringLanguage input')].map((i) => i.value + (i.checked ? '*' : '')).join() + '|' + [...document.querySelectorAll('#npSpringPackaging input')].map((i) => i.value + (i.checked ? '*' : '')).join()`) === 'java*,kotlin,groovy|jar*,war',
       'language (Java, Kotlin, Groovy) and packaging (Jar, War) come from the server');
@@ -195,6 +214,38 @@ try {
     check(await a.js(`document.querySelector('#npSpringDesc').textContent`) === 'Spring WebBuild web apps with Spring MVC.', 'the hovered dependency is described below the tree');
     const layout = await a.js(`(() => { const d = document.querySelector('#npSpringDesc').getBoundingClientRect(); const body = document.querySelector('.np-dialog .dialog-body').getBoundingClientRect(); return { bottom: Math.round(d.bottom), body: Math.round(body.bottom) }; })()`);
     check(layout.bottom <= layout.body, `the second page fits without scrolling the wizard ${q(layout)}`);
+    // Hovering with the real mouse, sweeping over the rows in small steps, swaps the description but moves and resizes
+    // nothing: not the dialog, the lists or the description box. A long description wraps and scrolls inside the box.
+    const rects = () => a.js(`Object.fromEntries(['.np-dialog', '#npSpringDeps', '#npSpringAdded', '#npSpringDesc', '#npSpringBoot'].map((s) => {
+      const r = document.querySelector(s).getBoundingClientRect(); return [s, [r.left, r.top, r.width, r.height].map((n) => Math.round(n * 10) / 10).join()]; }))`);
+    const centre = (sel) => a.js(`(() => { const n = document.querySelector(${q(sel)}).closest('.sb-dep, .sb-chip'); const r = n.getBoundingClientRect(); const l = document.querySelector('#npSpringDeps').getBoundingClientRect();
+      return { x: Math.round(r.left + Math.min(r.width / 2, 60)), y: Math.round(r.top + r.height / 2), inside: r.top >= l.top && r.bottom <= l.bottom || !n.closest('#npSpringDeps') }; })()`);
+    const rectsBefore = await rects();
+    let mouse = await centre('#npSpringDeps input[value="web"]');
+    await a.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: mouse.x, y: mouse.y });
+    const hovers = [];
+    for (const [sel, name] of [['#npSpringDeps input[value="webflux"]', 'Spring Reactive Web'], ['#npSpringDeps input[value="data-jpa"]', 'Spring Data JPA'],
+      ['#npSpringDeps input[value="cloud-new"]', 'Cloud From 4.2'], ['#npSpringAdded .sb-chip[data-id="data-jpa"]', 'Spring Data JPA'],
+      ['#npSpringDeps input[value="web"]', 'Spring Web'], ['#npSpringDeps input[value="webflux"]', 'Spring Reactive Web']]) {
+      const to = await centre(sel);
+      await a.js(`(() => { const d = document.querySelector('#npSpringDesc'); d.scrollTop = d.scrollHeight; return true; })()`);
+      for (let i = 1; i <= 8; i++) {
+        await a.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(mouse.x + (to.x - mouse.x) * i / 8), y: Math.round(mouse.y + (to.y - mouse.y) * i / 8) });
+      }
+      mouse = to;
+      const shownName = await a.until(`document.querySelector('#npSpringDesc b')?.textContent === ${q(name)}`, `hover describes ${name}`, 5000).then(() => true, () => false);
+      // The box was scrolled to its end on the last one; the next starts at the top, with the range warning in view.
+      const desc = await a.js(`(() => { const d = document.querySelector('#npSpringDesc'); const box = d.getBoundingClientRect(); const w = d.querySelector('.sb-desc-warn')?.getBoundingClientRect();
+        return { scrolls: d.scrollHeight > d.clientHeight, wraps: d.scrollWidth <= d.clientWidth, top: d.scrollTop, warn: w ? w.top >= box.top && w.bottom <= box.bottom : null }; })()`);
+      hovers.push({ name, inside: to.inside, shownName, ...desc, same: q(await rects()) === q(rectsBefore) });
+    }
+    check(hovers.every((h) => h.inside && h.shownName && h.wraps && h.same && h.top === 0), `hovering across dependencies and an added chip with the mouse describes each one and leaves the dialog, the lists and the description box where and as large as they were ${q({ before: rectsBefore, hovers })}`);
+    const long = ['Spring Reactive Web', 'Cloud From 4.2'];
+    check(hovers.filter((h) => long.includes(h.name)).every((h) => h.scrolls) && hovers.filter((h) => !long.includes(h.name)).every((h) => !h.scrolls),
+      'a long description wraps and scrolls inside the description box; short ones fit');
+    check(hovers.every((h) => (h.name === 'Cloud From 4.2' ? h.warn === true : h.warn === null)),
+      `a disabled dependency's "Needs Spring Boot" warning stays in view above a long description ${q(hovers.map((h) => [h.name, h.warn]))}`);
+    await a.shot('spring-hover.png');
 
     await a.click('#npPrevious');
     check(q(await pageState(a)) === q({ one: true, two: false, name: true, prev: false, button: 'Next' }), 'Previous goes back to the first page with its fields kept');
@@ -290,7 +341,7 @@ try {
     check(/Port 18481 is in use, perhaps by this application started from Launchers or another Run tab/.test(await a.js(`document.querySelector('#runOut').textContent`)), 'a port already in use is explained');
 
     await openSpring(a);
-    await a.until(`document.querySelector('#npSpringBoot').options.length === 3`, 'options again', 15000);
+    await a.until(`document.querySelector('#npSpringBoot').options.length === ${BOOTS}`, 'options again', 15000);
     await chooseJdk(a, jdk.id);
     await a.js(`([['npSpringBuild', 'gradle-project-kotlin'], ['npSpringLanguage', 'kotlin'], ['npSpringPackaging', 'war']].forEach(([n, v]) => document.querySelector('#' + n + ' input[value="' + v + '"]').click()), true)`);
     await setValue(a, '#npName', 'kt-api');
@@ -326,10 +377,74 @@ try {
       && await a.js(`!${syncTask}`), 'Rerun in the Sync tab downloads again; a failure is an error balloon and a line in the tab');
 
     await openSpring(a);
-    await a.until(`document.querySelector('#npSpringBoot').options.length === 3`, 'options for the remembered choices', 15000);
+    await a.until(`document.querySelector('#npSpringBoot').options.length === ${BOOTS}`, 'options for the remembered choices', 15000);
     const again = await a.js(`['npSpringLanguage', 'npSpringBuild', 'npSpringPackaging'].map((n) => document.querySelector('#' + n + ' input:checked').value).join()`);
     check(again === 'kotlin,gradle-project-kotlin,war', `the wizard comes back with the last project's language, type and packaging (${again})`);
-    await a.click('#npCancel');
+
+    // ---------- a project name of the user's own ----------
+    // The name is typed freely: the artifact follows it until typed, a name Windows would not keep as a folder is
+    // refused at Next with the project tree's message, and Initializr gets the name itself (the application class and
+    // pom.xml's <name>), while the artifact stays the user's.
+    await chooseJdk(a, jdk.id);
+    await a.js(`([['npSpringBuild', 'maven-project'], ['npSpringLanguage', 'java'], ['npSpringPackaging', 'jar']].forEach(([n, v]) => document.querySelector('#' + n + ' input[value="' + v + '"]').click()), true)`);
+    await setValue(a, '#npName', 'Order Desk');
+    const follows = await a.js(`document.querySelector('#npSpringArtifact').placeholder + '|' + document.querySelector('#npSpringPackage').placeholder`);
+    check(follows === 'order-desk|com.example.orderdesk', `the artifact and package follow a typed project name (${follows})`);
+    // Next refuses an empty name (Create would, with the name field hidden) and one longer than Initializr's 100.
+    const nextError = async (value) => {
+      await setValue(a, '#npName', value);
+      await a.click('#npCreate');
+      await a.until(`!!document.querySelector('.np-error').textContent`, `error for ${value.slice(0, 20)}`);
+      return `${await a.js(`document.querySelector('.np-error').textContent`)}|${(await pageState(a)).one}`;
+    };
+    check(await nextError('') === 'Enter a valid project name.|true', 'Next refuses an empty project name');
+    check(await nextError('가'.repeat(101)) === 'The project name is too long: at most 100 characters.|true', 'Next refuses a name over 100 characters');
+    // The application class is an ASCII identifier whatever the name: the name's ASCII words in PascalCase, else the
+    // artifact's, else Demo. A refused request shows what Create sends without making a folder.
+    const sentFor = async (value) => {
+      await setValue(a, '#npName', value);
+      await a.click('#npCreate');
+      await a.until(`document.querySelector('#npCreate').textContent === 'Create'`, `second page for ${value}`);
+      if (!(await a.js(`document.querySelector('#npSpringDeps input[value="refused"]').checked`))) await toggle(a, 'refused');
+      const count = requests.length;
+      await a.click('#npCreate');
+      await a.until(`/Unknown dependency 'refused'/.test(document.querySelector('.np-error').textContent)`, `refused request for ${value}`, 15000);
+      const r = requests.at(-1);
+      await a.click('#npPrevious');
+      return requests.length > count ? `${r.name}=${r.applicationName}` : 'no request';
+    };
+    const classes = [await sentFor('주문 관리'), await sentFor('1app'), await sentFor('my.shop app')];
+    check(q(classes) === q(['주문 관리=DemoApplication', '1app=DemoApplication', 'my.shop app=MyShopAppApplication']),
+      `a Korean name, a leading digit and a dotted name give ASCII application classes and keep the name as typed ${q(classes)}`);
+    await setValue(a, '#npSpringArtifact', 'orders');
+    const fromArtifact = await sentFor('주문 관리');
+    check(fromArtifact === '주문 관리=OrdersApplication', `a name without ASCII letters takes the class from the artifact (${fromArtifact})`);
+    await toggle(a, 'refused');
+    await setValue(a, '#npName', 'Order Desk:2');
+    await a.click('#npCreate');
+    await a.until(`!!document.querySelector('.np-error').textContent`, 'bad name error');
+    const badMsg = await a.js(`document.querySelector('.np-error').textContent`);
+    check(badMsg === 'Order Desk:2 is not a valid name: Windows does not allow : in a name.' && (await pageState(a)).one, `a name Windows would not keep is refused at Next with the project tree's message (${badMsg})`);
+    await setValue(a, '#npName', 'Order Desk.');
+    await a.click('#npCreate');
+    await a.until(`/ends with a dot/.test(document.querySelector('.np-error').textContent)`, 'trailing dot error');
+    check((await pageState(a)).one, 'a name ending with a dot is refused too');
+    await setValue(a, '#npName', 'Order Desk');
+    check(await a.js(`document.querySelector('#npSpringArtifact').value`) === 'orders', 'an artifact typed by hand stays when the name changes');
+    await a.click('#npCreate');
+    await a.until(`document.querySelector('#npCreate').textContent === 'Create'`, 'order desk second page');
+    await a.click('#npCreate');
+    const desk = path.join(where, 'Order Desk');
+    await a.until(`ide.root && ide.root.toLowerCase() === ${q(desk.toLowerCase())}`, 'Order Desk opened', 60000);
+    await a.until(`ide.activeTab()?.title === 'OrderDeskApplication.java'`, 'OrderDeskApplication opened', 15000).catch(() => {});
+    const deskReq = requests.at(-1);
+    const deskMain = path.join(desk, 'src', 'main', 'java', 'com', 'example', 'orders', 'OrderDeskApplication.java');
+    const deskPom = existsSync(path.join(desk, 'pom.xml')) ? readFileSync(path.join(desk, 'pom.xml'), 'utf8') : '';
+    check(deskReq.name === 'Order Desk' && deskReq.artifactId === 'orders' && deskReq.packageName === 'com.example.orders' && existsSync(deskMain)
+      && deskPom.includes('<artifactId>orders</artifactId><name>Order Desk</name>') && await a.js(`ide.activeTab()?.title`) === 'OrderDeskApplication.java',
+      `the project is made in the folder "Order Desk", Initializr gets the name (OrderDeskApplication, <name>Order Desk</name>) and the artifact orders ${q({ name: deskReq.name, artifactId: deskReq.artifactId, packageName: deskReq.packageName })}`);
+    const deskCfg = await a.js(`ide.run.selected()?.name`);
+    check(deskCfg === 'OrderDeskApplication', `its run configuration is named after the application class (${deskCfg})`);
 
     // ---------- debugging (Shift+F9 on the Maven / Gradle configuration) ----------
     // A project whose wrappers stand in for Maven and Gradle: they read the debug agent the IDE passes (Maven's
@@ -410,11 +525,17 @@ process.exit(r.status ?? 1);
     await openSpring(b);
     await b.until(`document.querySelector('#npName').value === 'demo'`, 'Spring Boot suggests the name demo', 10000);
     check(true, 'choosing Spring Boot suggests the project name demo');
-    await b.until(`document.querySelector('#npSpringBoot').options.length === 3`, 'options', 15000);
+    await b.until(`document.querySelector('#npSpringBoot').options.length === ${BOOTS}`, 'options', 15000);
     const labels = () => b.js(`[...document.querySelectorAll('#npSpring .field > span, #npSpring .sb-added-title, #npSpring .sb-deps-title')].filter((n) => n.offsetParent).map((n) => n.textContent).join('|') + '|' + document.querySelector('#npCreate').textContent`);
     const one = await labels();
     check(one.startsWith('서버 URL:|언어:|유형:|그룹:|아티팩트:|패키지 이름:|JDK:|Java:|패키징:') && one.endsWith('|다음'), `the first page is in Korean (${one})`);
     await b.shot('spring-wizard-ko.png');
+    await setValue(b, '#npName', 'a|b');
+    await b.click('#npCreate');
+    await b.until(`!!document.querySelector('.np-error').textContent`, 'Korean bad name error');
+    const badKo = await b.js(`document.querySelector('.np-error').textContent`);
+    check(badKo === '쓸 수 없는 이름입니다(a|b). Windows에서는 이름에 | 문자를 쓸 수 없습니다.', `a refused project name is explained in Korean as in the project tree (${badKo})`);
+    await setValue(b, '#npName', 'demo');
     await chooseJdk(b, jdk.id);
     await b.click('#npCreate');
     await b.until(`document.querySelector('#npCreate').textContent === '생성'`, 'Korean second page');

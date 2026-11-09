@@ -209,9 +209,13 @@ try {
   check(fm[L.sqSides]?.kind === 'up' && !fm[L.sqSides].implements && fm[L.sqSides].hover === 'Overrides method in Polygon', `Square.sides overrides Polygon.sides (${S(fm[L.sqSides])})`);
   check(fm[L.ciArea]?.kind === 'up' && !fm[L.square] && !fm[L.sqInit] && !fm[L.total], `Circle.area is marked; Square (no subclasses), __init__ and total_area are not (${S(Object.keys(fm))})`);
   await t.until(lensesShown(), 'code lenses', 10000).catch(() => {});
-  pt = await iconPoint(L.sqSides);
-  if (pt) await realClick(pt.x, pt.y);
-  await until(`ide.activeTab()?.title === 'base.py'`, 'Polygon.sides from the gutter', 10000).catch(() => {});
+  // A code lens drawn after the icon's point was read pushes the line down and the click lands beside it (seen once on
+  // CI): the icon is read again and clicked once more.
+  for (let attempt = 0; attempt < 2 && (await where())[0] !== 'base.py'; attempt++) {
+    pt = await iconPoint(L.sqSides);
+    if (pt) await realClick(pt.x, pt.y);
+    await until(`ide.activeTab()?.title === 'base.py'`, 'Polygon.sides from the gutter', 6000).catch(() => {});
+  }
   check(S(await where()) === S(['base.py', L.sides]), `a marker with one target opens it directly (${S(await where())})`);
 
   // An edit adds a subclass of Square: its area is now overridden too, and Square gets a down marker.

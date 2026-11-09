@@ -62,6 +62,7 @@
     ['link', 'Link/Unlink', 'Ctrl+L'],
     ['group', 'Group', 'Ctrl+G'],
     ['ungroup', 'Ungroup', 'Ctrl+Shift+G'],
+    ['nest', 'Nest…', []],
     ['nudgeLeft', 'Nudge Clip Selection Left One Frame', 'Alt+ArrowLeft'],
     ['nudgeRight', 'Nudge Clip Selection Right One Frame', 'Alt+ArrowRight'],
     ['nudgeLeft5', 'Nudge Clip Selection Left Five Frames', 'Alt+Shift+ArrowLeft'],
@@ -394,6 +395,7 @@
   on('speed', withSeq(({ app }, seq) => {
     const clip = selectedClips(app)[0];
     if (!clip) return void ui.toast(tr('Select a clip first.'));
+    if (clip.remap) return void ui.toast(tr('This clip has Time Remapping. Change its speed with Time Remapping.'));
     const fps = seq.fps;
     const speed = ui.numberField({ value: Math.round(clip.speed * 10000) / 100, min: 1, max: 10000, step: 1, precision: 2, unit: '%' });
     let duration = Cut.model.clipDuration(clip);

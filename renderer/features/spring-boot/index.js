@@ -8,11 +8,18 @@
   if (!tc) return;
   const { chooser, radios, field } = tc.ui;
 
-  // Initializr's versions read 4.1.2, 4.2.0-M1, 4.2.0-RC1 or 4.2.0-SNAPSHOT: milestones, then release candidates, then
-  // the snapshot, then the release.
+  // Initializr's versions read 4.1.2, 4.2.0-M1, 4.2.0-RC1 or 4.2.0-SNAPSHOT (an older server's 2.5.0.M1,
+  // 2.5.0.BUILD-SNAPSHOT or 2.5.0.RELEASE): milestones, then release candidates, then the snapshot, then the release.
+  const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:[.-](?:BUILD-)?(M|RC|SNAPSHOT|RELEASE)(\d*))?/i;
   function versionKey(v) {
-    const m = /^(\d+)\.(\d+)\.(\d+)(?:[.-](M|RC|SNAPSHOT|RELEASE)(\d*))?/i.exec(String(v).trim()) || [];
+    const m = VERSION.exec(String(v).trim()) || [];
     return [+m[1] || 0, +m[2] || 0, +m[3] || 0, { M: 1, RC: 2, SNAPSHOT: 3 }[(m[4] || '').toUpperCase()] ?? 4, +m[5] || 0];
+  }
+  // A pre-release's label (SNAPSHOT, M1, RC2), or '' for a release.
+  function preRelease(v) {
+    const m = VERSION.exec(String(v).trim());
+    const kind = (m?.[4] || '').toUpperCase();
+    return !kind || kind === 'RELEASE' ? '' : kind + (m[5] || '');
   }
   function compareVersions(a, b) {
     const x = versionKey(a);
@@ -110,6 +117,11 @@
       || name().toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || 'demo';
     const packageName = () => pkg.value.trim()
       || `${group.value.trim()}.${artifactId()}`.toLowerCase().replace(/[^a-z0-9_.]/g, '').replace(/\.(\d)/g, '._$1');
+    // The application class, an ASCII identifier whatever the name: Initializr would make 주문관리Application.java from a
+    // Korean name, which javac misreads where the source encoding is not set (Gradle on Korean Windows reads MS949).
+    // The name's ASCII words in PascalCase (Order Desk -> OrderDeskApplication), else the artifact's, else Demo.
+    const pascal = (text) => text.split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join('');
+    const applicationName = () => `${[pascal(name()), pascal(artifactId())].find((p) => /^[A-Za-z]/.test(p)) || 'Demo'}Application`;
     function hints() {
       if (!root.isConnected && hints.seen) return document.removeEventListener('input', hints);
       hints.seen ||= root.isConnected;
@@ -128,7 +140,10 @@
     function describe(d) {
       if (!d) return desc.replaceChildren();
       const why = compatible(d) ? '' : tr('Needs Spring Boot {range}', { range: d.versionRange });
-      desc.replaceChildren(el('b', null, d.name), el('span', null, d.description || ''), ...(why ? [el('span', 'sb-desc-warn', why)] : []));
+      // The range warning goes before the description, so a long description cannot scroll the only reason a checkbox
+      // is disabled out of the fixed box; each dependency starts at the top.
+      desc.replaceChildren(el('b', null, d.name), ...(why ? [el('span', 'sb-desc-warn', why)] : []), el('span', null, d.description || ''));
+      desc.scrollTop = 0;
     }
     function renderDeps() {
       const q = filter.value.trim().toLowerCase();
@@ -196,6 +211,24 @@
       select.replaceChildren(...s.values.map((v) => new Option(v.name, v.id)));
       select.value = s.default;
     };
+    // Every version Initializr offers, newest first: the releases, then the snapshots and milestones, each named with
+    // its kind ("4.2.0 (SNAPSHOT)") even when the server's name leaves it out.
+    function bootOptions(s) {
+      const group = (label, list) => {
+        const g = el('optgroup');
+        g.label = label;
+        g.append(...list.sort((x, y) => compareVersions(y.id, x.id)).map((v) => {
+          const kind = preRelease(v.id);
+          const name = v.name || v.id;
+          return new Option(kind && !name.toUpperCase().includes(kind) ? `${name} (${kind})` : name, v.id);
+        }));
+        return g;
+      };
+      const pre = s.values.filter((v) => preRelease(v.id));
+      const releases = s.values.filter((v) => !preRelease(v.id));
+      bootVersion.replaceChildren(...[[tr('Releases'), releases], [tr('Snapshots and milestones'), pre]].filter(([, l]) => l.length).map(([l, list]) => group(l, list)));
+      bootVersion.value = s.default;
+    }
     function say(text, warn = false, ...extra) {
       status.classList.toggle('warn', warn);
       status.replaceChildren(el('span', 'tc-offer-text', text), ...extra);
@@ -221,7 +254,7 @@
       const pairs = (s) => s.values.map((v) => [v.id, v.name]);
       if (meta.language.values.length) language.set(pairs(meta.language), language.value() || meta.language.default);
       if (meta.packaging.values.length) packaging.set(pairs(meta.packaging), packaging.value() || meta.packaging.default);
-      options(bootVersion, meta.bootVersion);
+      bootOptions(meta.bootVersion);
       options(javaVersion, meta.javaVersion);
       await tc.list('jdk');
       pickJava();
@@ -235,6 +268,11 @@
     });
 
     function checkFirstPage() {
+      // The project name names the folder, so Next refuses what Windows would not keep, as the project tree does.
+      // An empty name would only be caught at Create, with the name field hidden; main passes at most 100 characters.
+      if (!name() || /[\\/]/.test(name())) throw new Error(tr('Enter a valid project name.'));
+      const refused = ide.util.badName(name()) || (name().length > 100 ? tr('The project name is too long: at most {max} characters.', { max: 100 }) : null);
+      if (refused) throw new Error(refused);
       if (!meta) throw new Error(tr('The Spring Initializr options have not loaded yet.'));
       const t = jdk.chosen();
       if (!t) throw new Error(tr('Choose a JDK, or download one.'));
@@ -266,7 +304,7 @@
           download = await ide.api.invoke('spring:download', {
             server: server.value.trim(), type: build.value(), language: language.value(), packaging: packaging.value(),
             bootVersion: bootVersion.value, javaVersion: javaVersion.value, groupId: group.value.trim(),
-            artifactId: artifactId(), name: artifactId(), packageName: packageName(), dependencies: [...chosen],
+            artifactId: artifactId(), name: name(), applicationName: applicationName(), packageName: packageName(), dependencies: [...chosen],
           });
         } finally {
           say('');

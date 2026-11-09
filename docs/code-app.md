@@ -25,6 +25,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | `renderer/core/ot.js` | 동시 편집의 순수 계산(OT 변환, 클라이언트 단계, 참여 번호, 파일의 줄바꿈 판단). 편집기, `main/shared-docs.js`, `verify/collab-core.mjs`가 함께 씁니다 |
 | `main/shared-docs.js` | 여러 곳(창, 협업 손님)에서 연 파일의 편집 순서를 매기는 서버 쪽. 손님의 op를 호스트의 글에 대고 검사하고, 창이 없는 파일은 `loadFromDisk`로 읽습니다. `main/windows.js`가 창을 연결합니다 |
 | `main/collab/protocol.js` | 협업 메시지 틀(길이 + JSON), 손님 메시지 검사, 손님 경로 규칙(프로젝트 밖·숨김 파일·8.3 이름 거절, `realGuest`가 실제 경로에서 다시 확인). 계획은 [collab-coding-plan.md](collab-coding-plan.md) |
+| `main/collab/link.js`, `host.js`, `guest.js`, `share.js` | 협업 연결(게이트 암호화 위의 번호 매긴 메시지, 끊긴 뒤 이어 받기), 호스트(수락, 권한, 손님 메시지 처리), 손님(참여 코드, 다시 연결), 포트 중계. 기능 쪽은 `main/features/collab.js`와 `renderer/features/collab/` |
 | `renderer/core/mainmenu.js` | 메인 툴바(메인 메뉴, 프로젝트 위젯, 실행 위젯 자리), 시작 화면, 인터프리터 위젯 |
 | `renderer/core/project-wizard.js` | New Project 마법사. 메인 쪽은 `main/new-project.js` |
 | `renderer/core/notifications.js` | 백그라운드 작업(`ide.tasks`)과 알림 |
@@ -48,7 +49,8 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 선택은 `selected`, `alsoSelected`, `anchor`입니다. 여러 행을 다루는 동작은 `operands(entry, 조건)`으로 대상을 얻고, 이동은 `movableEntry`, 삭제는 `deletableEntry`가 조건입니다.
 - 옮기기는 `moveEntries(entries, dir)`가 한 번 묻고 `ide.treeMovers`를 부릅니다. refactor 플러그인이 Python 모듈의 import를 고치는 mover를 넣습니다(`refactor.moveImports`: auto, ask, never).
 - 키 처리는 `treeKey`입니다. 파일을 클릭해 열 때는 `focus: false`라 키보드가 트리에 남습니다.
-- 테스트: `verify/tree.mjs`. 키보드 동작은 CDP 마우스 클릭 뒤에 확인합니다.
+- 폴더 하나만 든 폴더는 한 행으로 합칩니다(`compactChains`, `com.example.demo`, 설정 `projectTree.compactFolders`). 행의 entry는 사슬의 마지막 폴더이고 `compact`에 사슬 전체가 있습니다. 세그먼트(`.seg`)를 누르면 그 폴더가 선택되고, `rowIndexOf`는 사슬의 어느 폴더로도 그 행을 찾습니다. 데코레이터가 `iconType`을 주는 폴더(소스 루트, `src/main/java`)는 합치지 않습니다.
+- 테스트: `verify/tree.mjs`, 합친 행은 `verify/java-assist.mjs`. 키보드 동작은 CDP 마우스 클릭 뒤에 확인합니다.
 
 ### 편집기 탭과 그룹 (`renderer/core/editors.js`)
 
@@ -85,6 +87,21 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 템플릿을 페이지로 합치는 일은 `main/template-preview.js`가 합니다. Jinja2/Django는 `renderTemplate`, Thymeleaf는 `renderThymeleaf`입니다. 서버 값은 실행하지 않습니다.
 - 테스트: `verify/html-preview.mjs`, `verify/html-preview-app.mjs`, `verify/html-preview-templates.mjs`.
 
+### Spring Boot 설정 파일 (spring-config)
+
+- Spring Boot 모듈의 `application*.properties`, `bootstrap*.properties`에서 키와 값을 완성하고, 호버로 설명을 보이고, 모르는 키와 사용 중단된 키를 경고합니다. `application*.yml`은 data-formats의 YAML 엔진에 메타데이터로 만든 스키마를 넘겨 같은 일을 합니다(`ide.dataFormats.addYamlSchema`에 모델을 받는 함수를 넘깁니다).
+- 메타데이터는 이 순서로 정했습니다. 첫째, 모듈의 빌드 파일(pom.xml과 부모, build.gradle)에서 Spring Boot 버전과 의존성을 읽고, Maven 저장소와 Gradle 캐시의 pom을 따라 의존성 트리를 만든 뒤, 그 jar의 `META-INF/spring-configuration-metadata.json`과 `additional-spring-configuration-metadata.json`을 읽습니다. 모듈이 컴파일한 메타데이터(`target/classes` 등)가 맨 앞입니다. enum 값은 클래스 파일에서 읽습니다. 아무것도 내려받거나 실행하지 않습니다. 둘째, 모듈의 Spring Boot jar가 캐시에 없거나(아직 빌드 전) 신뢰하지 않은 프로젝트면 앱에 든 `main/spring/boot-metadata.json`을 씁니다. 이때는 버전이 다를 수 있어, 완전히 읽은 모듈의 접두사 바로 아래 키만 검사하고 경고 끝에 내장 메타데이터 기준이라고 적습니다.
+- Spring Boot는 모르는 키를 말없이 무시합니다(`spring.application.port=80`이어도 8080으로 뜹니다). 그래서 모르는 키는 경고하고, 비슷한 키(편집 거리로 찾은 오타, 그다음 마지막 마디가 같은 키)를 제안하며 Alt+Enter로 바꿀 수 있게 합니다. 맵 아래 키(`logging.level.*`)와 프로젝트가 자기 `additional-spring-configuration-metadata.json`에 선언한 키는 경고하지 않습니다. 검사 범위는 `index.js`의 `prepare`(`checked`), 제안은 `suggestionsFor`입니다.
+- 내장 메타데이터는 `node tools/spring-boot-metadata.mjs [버전]`이 로컬 Maven 저장소에 이미 있는 Spring Boot jar에서 다시 만들고, 거기 없는 모듈(JDBC, JPA, Thymeleaf, Security, Actuator 등)의 흔한 속성은 스크립트 안에 손으로 적은 목록을 더합니다.
+- 테스트: `verify/spring-config.mjs`. `PYIDE_BUILD_HOME`으로 가짜 Maven 저장소를 만들어 씁니다.
+
+### 실시간 협업 (collab)
+
+- 호스트 중심입니다. 파일, 저장, 실행, 언어 서버는 호스트에 있고 손님은 `collab://<세션>/<상대 경로>` 문서(`ide.registerDocSource`)로 보고 고칩니다. 손님 문서는 디스크를 읽거나 쓰지 않고, `fileOpened` 대신 `remoteFileOpened`가 나갑니다. 파일을 다루는 플러그인이 손님 문서를 보게 하지 않습니다.
+- 손님은 `main/shared-docs.js`의 공유 문서에 창처럼 끼어 있습니다(`main/windows.js`의 `routeDocs`가 `collab://` 문서의 `doc:*`를 협업으로 보냅니다). 손님이 연 파일은 호스트 창에 뒤쪽 탭으로 열려(`openFile(path, {background: true})`) 언어 서버, 문제 표시, 저장이 그 탭을 씁니다.
+- 손님 메시지는 `main/collab/protocol.js`의 `FROM_GUEST`에서 모양을 검사합니다. 새 메시지를 만들면 거기에 검사를 넣고, 경로는 `resolveGuest`와 `realGuest`를 지납니다. 호스트에서 무언가를 실행하거나 쓰는 메시지는 손님 권한(`role`)과 호스트의 답(실행, 터미널 입력)을 확인합니다.
+- 테스트: `verify/collab-session.mjs`(Node), 앱 두 개를 띄우는 `verify/collab-join.mjs`, `collab-edit.mjs`, `collab-files.mjs`, `collab-lsp.mjs`, `collab-run.mjs`. 공용 도구는 `verify/collab-lib.mjs`(대역 bore와 실제 bore 클라이언트)입니다. 계획과 남은 일은 [collab-coding-plan.md](collab-coding-plan.md)에 있습니다.
+
 ### 다이어그램과 ERD (diagrams, database)
 
 - `renderer/features/diagrams/index.js`의 `layoutGraph`가 배치합니다. ERD는 모델이 `layout: 'erd'`를 주고, 외래 키로 열을 나누며 선은 테이블 사이 통로로만 지나갑니다.
@@ -101,7 +118,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | --- | --- | --- | --- |
 | `lsp` | Python Language Support (Pyright) | `main/features/lsp.js` | `verify/lsp-type-severity.mjs`, `verify/lsp.mjs` |
 | `language-servers` | Language Servers | `main/features/language-servers.js` | `verify/language-servers-live.mjs`, `verify/language-servers.mjs` |
-| `java-lsp` | Java Language Support (Eclipse JDT LS) | `main/features/java-lsp.js` | `verify/java-lsp.mjs` |
+| `java-lsp` | Java Language Support (Eclipse JDT LS) | `main/features/java-lsp.js` | `verify/java-lsp.mjs`, `verify/java-assist.mjs` |
 | `language-basics` | Language Basics | - | - |
 | `semantic-highlight` | Semantic Highlighting | `main/features/semantic-highlight.js` | `verify/semantic-highlight.mjs` |
 | `inlay-hints` | Inlay Hints | - | `verify/inlay-hints.mjs` |
@@ -137,7 +154,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | `code-generation` | Quick Fixes and Code Generation | - | `verify/code-generation-sidecar.mjs`, `verify/code-generation.mjs` |
 | `error-help` | Error Explanations | - | `verify/error-help.mjs` |
 | `import-install` | Install Missing Packages | `main/features/import-install.js` | `verify/import-install-run.mjs`, `verify/import-install.mjs` |
-| `file-templates` | File and Code Templates | `main/features/file-templates.js` | - |
+| `file-templates` | File and Code Templates | `main/features/file-templates.js` | `verify/java-assist.mjs` |
 
 ### 실행, 디버그, 테스트
 
@@ -163,6 +180,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | `remote-interp` | Remote Interpreters | `main/features/remote-interp.js` | `verify/remote-interp.mjs` |
 | `toolchains` | Java and C/C++ | `main/features/toolchains.js` | `verify/toolchains.mjs` |
 | `spring-boot` | Spring Boot | `main/features/spring-initializr.js` | `verify/spring-boot.mjs` |
+| `spring-config` | Spring Boot Configuration Files | `main/features/spring-config.js` | `verify/spring-config.mjs` |
 | `dotenv` | .env Files | - | `verify/dotenv.mjs` |
 | `frameworks` | Django, Flask and FastAPI | `main/features/frameworks.js` | `verify/frameworks.mjs` |
 | `installer` (Craft에도) | Install Manager | `main/features/installer.js` | `verify/installer-python.mjs`, `verify/installer.mjs` |
@@ -224,6 +242,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | `diagnostics` (Craft에도) | Diagnostics | `main/features/diagnostics.js` | `verify/diagnostics.mjs` |
 | `updater` (Craft에도) | Updates | `main/features/updater.js` | `verify/updater.mjs` |
 | `port-sharing` (Craft에도) | Ports | `main/features/port-sharing.js` | `verify/port-sharing-bore-live.mjs`, `verify/port-sharing-core.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing.mjs` |
+| `collab` | Collaboration | `main/features/collab.js` | `verify/collab-join.mjs`, `verify/collab-edit.mjs`, `verify/collab-files.mjs`, `verify/collab-lsp.mjs`, `verify/collab-run.mjs`, `verify/collab-session.mjs` |
 
 ## 5. 테스트 팁
 

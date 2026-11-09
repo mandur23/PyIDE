@@ -74,9 +74,16 @@
   });
   ide.on('projectClosed', () => apply(null));
 
+  // Maven's and Gradle's Java roots (src/main/java, src/test/java, also in a module) are drawn as roots without being
+  // marked, as IntelliJ IDEA draws them; the project tree then starts their packages on a row of their own.
+  const LAYOUT = /(^|[\\/])src[\\/](main|test)[\\/]java$/i;
+  const layoutKind = (path) => {
+    const m = ide.root && ide.util.isUnder(path, ide.root) && LAYOUT.exec(ide.util.rel(path) || '');
+    return m ? (m[2].toLowerCase() === 'test' ? 'tests' : 'sources') : null;
+  };
   ide.registerTreeDecorator((entry) => {
-    if (!entry.dir || entry.treeRoot || !byPath.size) return null;
-    const kind = kindOf(entry.path);
+    if (!entry.dir || entry.treeRoot) return null;
+    const kind = (byPath.size && kindOf(entry.path)) || layoutKind(entry.path);
     return kind ? { iconType: KINDS[kind].icon } : null;
   });
 

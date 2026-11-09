@@ -220,9 +220,10 @@ fn effect(uv: vec2f) -> vec4f {
     },
   });
   // Fills the empty part of the frame around a smaller clip with its edge pixels stretched outwards. The compositor
-  // does it while placing the clip (layer.extend); the pass itself changes nothing.
+  // does it while placing the clip (layer.extend); the pass itself changes nothing, so a mask has nothing to limit
+  // inside the picture and the effect takes none (masks: false).
   def({
-    type: 'edge.extend', name: 'Edge Extend', category: 'Transform', layer: { extend: true },
+    type: 'edge.extend', name: 'Edge Extend', category: 'Transform', layer: { extend: true }, masks: false,
     gpu: { wgsl: 'fn effect(uv: vec2f) -> vec4f { return tap(uv); }', uniforms: () => [] },
     canvas2d: () => ({ extend: true }),
     cpu: (img) => img,

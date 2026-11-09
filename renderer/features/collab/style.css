@@ -1,0 +1,82 @@
+/* Collaboration: the tool window, the dialogs, the status item, and the others' carets, selections and name tags. */
+.collab-c0 { --collab: #3574f0; }
+.collab-c1 { --collab: #e5534b; }
+.collab-c2 { --collab: #4f9d58; }
+.collab-c3 { --collab: #d08a3c; }
+.collab-c4 { --collab: #a571e6; }
+.collab-c5 { --collab: #23a3b5; }
+.collab-c6 { --collab: #c9a227; }
+.collab-c7 { --collab: #e0679a; }
+
+/* A guest with no project of its own still sees the side panel, its stripe and the editors. */
+body.no-project.collab-guest #welcome { display: none !important; }
+body.no-project.collab-guest #stripe { display: flex !important; }
+body.no-project.collab-guest #sidePanel:not(.hidden) { display: flex !important; }
+body.no-project.collab-guest #sideSplitter:not(.hidden) { display: block !important; }
+
+.collab-tool { overflow: auto; }
+.collab-panel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; font-size: 13px; }
+.collab-panel > * { padding: 0 10px; }
+.collab-intro { color: var(--gray10); line-height: 1.5; }
+.collab-idle { display: flex; flex-direction: column; gap: 10px; }
+.collab-idle-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.collab-session { color: var(--gray12); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.collab-session.warn { color: var(--yellow); }
+.collab-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.collab-head { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; color: var(--gray9); font-size: 11px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.collab-files-head { text-transform: none; letter-spacing: 0; }
+.collab-people, .collab-requests { display: flex; flex-direction: column; gap: 2px; }
+.collab-person, .collab-request { display: flex; align-items: center; gap: 6px; min-height: 26px; flex-wrap: wrap; }
+.collab-person.away { opacity: .6; }
+.collab-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--collab); flex: none; }
+.collab-person-name { color: var(--gray12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.collab-person-role { color: var(--gray9); font-size: 12px; white-space: nowrap; }
+.collab-person-tools { display: flex; gap: 8px; margin-left: auto; }
+.collab-panel button.link { background: none; border: none; padding: 0; color: var(--blue6); cursor: pointer; font-size: 12px; white-space: nowrap; }
+.collab-panel button.link:hover { text-decoration: underline; }
+.collab-follow.on { font-weight: 600; }
+.collab-request button { padding: 2px 8px; }
+.collab-tree { display: flex; flex-direction: column; padding: 0 !important; }
+.collab-tree-row { display: flex; align-items: center; gap: 4px; height: 24px; cursor: pointer; color: var(--gray12); white-space: nowrap; }
+.collab-tree-row:hover, .collab-tree-row:focus { background: var(--gray4); outline: none; }
+.collab-tree-arrow { width: 12px; flex: none; color: var(--gray9); display: inline-block; text-align: center; transition: transform .1s; }
+.collab-tree-arrow.open { transform: rotate(90deg); }
+.collab-tree-name { overflow: hidden; text-overflow: ellipsis; }
+.collab-tree-note { color: var(--gray9); padding: 4px 10px; }
+
+.collab-form { display: flex; flex-direction: column; gap: 10px; }
+.collab-field { display: flex; flex-direction: column; gap: 4px; }
+.collab-field-label { color: var(--gray11); font-size: 12px; }
+.collab-field-hint { color: var(--gray9); font-size: 12px; }
+.collab-form input, .collab-form select, .collab-form textarea { width: 100%; box-sizing: border-box; }
+.collab-form textarea { font-family: var(--mono); resize: vertical; }
+.collab-error { color: var(--red); line-height: 1.4; }
+.collab-status { color: var(--gray11); }
+.dialog.collab-busy .dialog-buttons button { opacity: .6; pointer-events: none; }
+
+.collab-status-item { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: inherit; padding: 0 6px; cursor: pointer; }
+.collab-status-item .ide-icon { width: 14px; height: 14px; }
+.collab-status-item.warn { color: var(--yellow); }
+
+/* Chat. */
+.collab-chat { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow: auto; padding: 4px 10px !important; }
+.collab-chat-row { line-height: 1.4; overflow-wrap: anywhere; color: var(--gray12); }
+.collab-chat-name { color: var(--collab); font-weight: 600; }
+.collab-panel input.collab-chat-input { margin: 0 10px; width: calc(100% - 20px); box-sizing: border-box; }
+.collab-output { display: flex; flex-direction: column; min-height: 0; }
+
+/* Running, the terminal and ports. */
+.collab-share { display: flex; flex-direction: column; gap: 6px; }
+.collab-share-note, .collab-port { color: var(--gray11); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.collab-run-detail { font-family: var(--mono); font-size: 12px; color: var(--gray11); margin-top: 6px; overflow-wrap: anywhere; }
+.collab-term-tool { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.collab-term-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--gray11); }
+.collab-term-box { flex: 1; min-height: 0; padding: 0 4px; }
+
+/* In the editors. */
+.monaco-editor .collab-sel { background: color-mix(in srgb, var(--collab) 28%, transparent); }
+.monaco-editor .collab-caret { border-left: 2px solid var(--collab); margin-left: -1px; }
+.collab-tag { background: var(--collab); color: #fff; font-size: 11px; line-height: 15px; padding: 0 4px; border-radius: 3px 3px 3px 0;
+  white-space: nowrap; pointer-events: none; transform: translateY(2px); font-family: system-ui, sans-serif; transition: opacity .3s; }
+.collab-tag.quiet { opacity: .35; }

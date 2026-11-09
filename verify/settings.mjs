@@ -13,6 +13,12 @@ const results = [];
 const check = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };
 const navRows = (t) => t.js(`[...document.querySelectorAll('.settings-nav-row')].filter(n => n.offsetParent).map(n => n.textContent.replace(/[▾▸]/g, '')).join('|')`);
 const openPage = async (t, page) => {
+  // Groups open closed: a page in a closed group is reached by opening its group first, as a user does.
+  const group = await t.js(`(() => { const r = document.querySelector('.settings-nav-row[data-page="${page}"]'); if (!r.classList.contains('collapsed')) return null; let g = r.previousElementSibling; while (g && !g.classList.contains('settings-group')) g = g.previousElementSibling; return g?.dataset.group || null; })()`);
+  if (group) {
+    await t.js(`(document.querySelector('.settings-group[data-group="${group}"]').scrollIntoView({ block: 'center' }), true)`);
+    await t.click(`.settings-group[data-group="${group}"]`);
+  }
   // The category list scrolls in a small window (more plugin pages since 0.2.3): bring the row into view first.
   await t.js(`(document.querySelector('.settings-nav-row[data-page="${page}"]').scrollIntoView({ block: 'center' }), true)`);
   await t.click(`.settings-nav-row[data-page="${page}"]`);
@@ -28,16 +34,19 @@ try {
   await a.press('Ctrl+Alt+S');
   await a.until(`!!document.querySelector('.settings-dialog')`, 'settings dialog');
   // Plugins add their own pages (under Appearance & Behavior, Editor, AI, or at the end), so the core tree is checked in order around them.
-  const tree = await navRows(a);
+  const shownAtOpen = await navRows(a);
+  check(/^Appearance & Behavior\|Appearance\|/.test(shownAtOpen) && shownAtOpen.includes('|Editor|') && !shownAtOpen.includes('Code Style') && !shownAtOpen.includes('Python Interpreter'),
+    `groups open closed except the shown page's (${shownAtOpen})`);
+  const tree = await a.js(`[...document.querySelectorAll('.settings-nav-row:not(.hidden)')].map(n => n.textContent.replace(/[▾▸]/g, '')).join('|')`);
   check(tree.replace('|Presentation and Distraction-Free Modes', '').replace('|Crash Recovery', '').startsWith('Appearance & Behavior|Appearance|Language and Region|System Settings|Keymap|Editor|General|Code Style|') && tree.includes('|Plugins|Project: project|Python Interpreter|Tools|AI|AI Chat|AI Completion|Claude Edits'),
     `category tree lists groups and pages, plugin pages under AI (${tree})`);
-  const indents = await a.js(`(() => { const x = (sel) => [...document.querySelectorAll(sel)].map(n => Math.round(n.querySelector('.settings-nav-label').getBoundingClientRect().left)); return { top: [...new Set(x('.settings-nav-row:not(.child)'))], child: [...new Set(x('.settings-nav-row.child'))] }; })()`);
+  const indents = await a.js(`(() => { const x = (sel) => [...document.querySelectorAll(sel)].filter(n => n.offsetParent).map(n => Math.round(n.querySelector('.settings-nav-label').getBoundingClientRect().left)); return { top: [...new Set(x('.settings-nav-row:not(.child)'))], child: [...new Set(x('.settings-nav-row.child'))] }; })()`);
   check(indents.top.length === 1 && indents.child.length === 1 && indents.child[0] > indents.top[0], `top-level and child labels each share one indent (${JSON.stringify(indents)})`);
-  await a.click('.settings-nav-row.settings-group[data-group="editor-group"]');
-  check(!(await navRows(a)).includes('General'), 'clicking a group collapses it');
   await a.click('.settings-nav-row.settings-group[data-group="editor-group"]');
   check((await navRows(a)).includes('General|Code Style') && (await a.js(`document.querySelector('.settings-page').dataset.page`)) === 'editor', 'expanding a group opens its first page');
   check(await a.js(`document.querySelector('.settings-crumb').textContent.replace(/\\s+/g, '') === 'Editor›General'`), 'breadcrumb shows group › page');
+  await a.click('.settings-nav-row.settings-group[data-group="appearance-behavior"]');
+  check(!(await navRows(a)).includes('Language and Region'), 'clicking an open group collapses it');
 
   // ---------- validation ----------
   await a.js(`(() => { const i = document.querySelector('[data-key="editor.fontSize"]'); i.focus(); i.select(); })()`);

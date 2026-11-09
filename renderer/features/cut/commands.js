@@ -29,6 +29,7 @@
   const time = req('time');
   const model = req('model');
   const keyframes = req('keyframes');
+  const R = req('remap');
   const cw = () => req('captionwords');
   const { clipDuration: dur, clipEnd: end, clone } = model;
 
@@ -173,13 +174,30 @@
     c.tx.set(clip, 'fadeIn', fi);
     c.tx.set(clip, 'fadeOut', Math.min(clip.fadeOut, d - fi));
   }
+  // A remapped clip plays curve r (remap.js) from now on: in/out become the source range it reaches. A curve without
+  // keys is a constant speed, so the clip turns back into one (Speed/Duration works on it again).
+  function setCurve(c, clip, r) {
+    const [lo, hi] = R.range(r);
+    if (R.isConstant(r)) {
+      if (clip.remap !== null) c.tx.set(clip, 'remap', null);
+      c.tx.set(clip, 'speed', Math.abs(r.speeds[0]));
+      c.tx.set(clip, 'reverse', r.speeds[0] < 0);
+    } else {
+      c.tx.set(clip, 'remap', r);
+      c.tx.set(clip, 'speed', 1);
+      c.tx.set(clip, 'reverse', false);
+    }
+    c.tx.set(clip, 'in', lo);
+    c.tx.set(clip, 'out', hi);
+  }
   // The clip's head moves to ns; its end stays. The source side that is shown first (in, or out when reversed)
-  // follows; a still clip only changes length.
+  // follows; a still clip only changes length. A remapped clip's curve is seen from the new head.
   function setStart(c, clip, ns) {
     const d = ns - clip.start;
     if (!d) return;
     const nd = end(clip) - ns;
-    if (still(c, clip) || clip.reverse) c.tx.set(clip, 'out', clip.in + nd * clip.speed);
+    if (clip.remap) setCurve(c, clip, R.shift(clip.remap, d));
+    else if (still(c, clip) || clip.reverse) c.tx.set(clip, 'out', clip.in + nd * clip.speed);
     else c.tx.set(clip, 'in', clip.out - nd * clip.speed);
     c.tx.set(clip, 'start', ns);
     shiftKeys(c, clip, d);
@@ -188,18 +206,16 @@
   function setEnd(c, clip, ne) {
     const nd = ne - clip.start;
     if (nd === dur(clip)) return;
-    if (still(c, clip) || !clip.reverse) c.tx.set(clip, 'out', clip.in + nd * clip.speed);
+    if (clip.remap) setCurve(c, clip, R.withDuration(clip.remap, nd));
+    else if (still(c, clip) || !clip.reverse) c.tx.set(clip, 'out', clip.in + nd * clip.speed);
     else c.tx.set(clip, 'in', clip.out - nd * clip.speed);
     clampFades(c, clip, nd);
   }
 
   // How far the source lets the clip grow at its head and its tail, in whole timeline frames.
   function room(c, clip) {
-    if (still(c, clip)) return { head: Infinity, tail: Infinity };
-    const m = model.mediaOf(c.project, clip);
-    const before = floorFrames(c, clip.in / clip.speed);
-    const after = floorFrames(c, (m.duration - clip.out) / clip.speed);
-    return clip.reverse ? { head: after, tail: before } : { head: before, tail: after };
+    const r = model.sourceRoom(c.project, clip);
+    return { head: floorFrames(c, r.head), tail: floorFrames(c, r.tail) };
   }
   // The end of the clip before and the start of the clip after, on the same track (0 and Infinity when none).
   function neighbours(c, clip) {
@@ -243,7 +259,16 @@
     const right = clone(clip);
     right.id = nid(c, 'c');
     right.start = p;
-    if (still(c, clip)) right.out = clip.in + rd * clip.speed;
+    if (clip.remap) {
+      // the right part plays the rest of the curve, a ramp across the cut included
+      right.remap = R.shift(clip.remap, off);
+      [right.in, right.out] = R.range(right.remap);
+      if (R.isConstant(right.remap)) {
+        right.speed = Math.abs(right.remap.speeds[0]);
+        right.reverse = right.remap.speeds[0] < 0;
+        right.remap = null;
+      }
+    } else if (still(c, clip)) right.out = clip.in + rd * clip.speed;
     else if (clip.reverse) right.out = clip.in + rd * clip.speed;
     else right.in = clip.out - rd * clip.speed;
     right.fadeIn = 0;
@@ -432,6 +457,11 @@
       mediaById(c, s.media);
       return { media: s.media };
     }
+    if (s.sequence != null) {
+      if (!c.project.sequences.some((x) => x.id === s.sequence)) fail(`there is no sequence ${s.sequence}`, 'notFound');
+      if (c.seq && model.nestLoop(c.project, c.seq.id, s.sequence)) fail('A sequence cannot be nested inside itself.', 'nestLoop');
+      return { sequence: s.sequence };
+    }
     if (s.generator === 'text') {
       const used = new Set();
       const layers = (Array.isArray(s.layers) && s.layers.length ? s.layers : [{}]).map((l, i) => {
@@ -451,14 +481,18 @@
   function placeClips(c, o) {
     const src = normSource(c, o.source);
     const media = src.media != null ? mediaById(c, src.media) : null;
-    const hasV = !media || media.kind === 'image' || !!media.video;
-    const hasA = !!media?.audio;
+    const nest = src.sequence != null ? c.project.sequences.find((x) => x.id === src.sequence) : null;
+    const nestHas = nest ? model.nestKinds(c.project, nest.id) : null;
+    if (nest && !nestHas.video && !nestHas.audio) fail('The sequence is empty.', 'emptySequence');
+    const hasV = nest ? nestHas.video : !media || media.kind === 'image' || !!media.video;
+    const hasA = nest ? nestHas.audio : !!media?.audio;
     const vId = hasV && o.video != null ? o.video : null;
     const aId = hasA && o.audio != null ? o.audio : null;
     if (!vId && !aId) fail('Choose a target track.', 'noTarget');
     if (vId && unlocked(c, vId).kind !== 'video') fail('There is no track there.', 'noTrack', vId);
     if (aId && unlocked(c, aId).kind !== 'audio') fail('There is no track there.', 'noTrack', aId);
-    const isStillSrc = !media || media.kind === 'image';
+    const isStillSrc = !nest && (!media || media.kind === 'image');
+    const length = nest ? model.sequenceDuration(nest) : media?.duration;
     let sin;
     let d;
     if (isStillSrc) {
@@ -467,7 +501,7 @@
       d = Math.max(c.f, frames(c, want));
     } else {
       sin = o.in == null ? 0 : at(c, o.in, 'in');
-      const sout = Math.min(o.out == null ? media.duration : num(o.out, 'out'), media.duration);
+      const sout = Math.min(o.out == null ? length : num(o.out, 'out'), length);
       d = floorFrames(c, sout - sin);
       if (d < c.f) fail('The clip is too short.', 'tooShort');
     }
@@ -479,7 +513,8 @@
     else for (const id of targets) clearRange(c, id, p, p + d);
     const link = vId && aId ? nid(c, 'L') : null;
     const made = [];
-    const name = typeof o.name === 'string' ? o.name : media ? media.name : { text: 'Text', solid: 'Color', adjustment: 'Adjustment' }[src.generator];
+    // A nest clip has no name of its own: the timeline shows its sequence's name, which follows a rename.
+    const name = typeof o.name === 'string' ? o.name : media ? media.name : nest ? '' : { text: 'Text', solid: 'Color', adjustment: 'Adjustment' }[src.generator];
     for (const [id, kind] of [[vId, 'video'], [aId, 'audio']]) {
       if (!id) continue;
       const clip = model.createClip(kind, { id: nid(c, 'c'), track: id, start: p, in: sin, out: sin + d, source: src, name });
@@ -668,8 +703,83 @@
     const seq = project.sequences.find((s) => s.id === cmd.id);
     if (!seq) fail(`there is no sequence ${cmd.id}`, 'notFound');
     for (const b of project.bins) if (b.items.includes(seq.id)) removeFrom(c, b.items, seq.id);
+    // Its nest clips in other sequences go with it, as a removed file's clips do.
+    for (const use of model.nestUses(project, seq.id)) for (const x of use.clips) removeFrom(c, use.seq.clips, x);
     removeFrom(c, project.sequences, seq);
     return {};
+  };
+  // Clip > Nest (Premiere's): the clips, with what links to them and their groups, move into a new sequence of this
+  // one's size, rate and tracks, keeping their tracks and their times from the earliest of them, with their keyframes,
+  // markers and effects; a transition goes along when every clip at its edit point does. In their place one nest clip
+  // spans them: its video on the lowest of their video tracks, its audio on the lowest of their audio tracks, linked,
+  // overwriting whatever else lies there. The new sequence goes in the bin of this one. -> { id (the sequence), ids }
+  H.nest = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const o = cmd.opts || {};
+    const chosen = withLinked(c, ids(cmd.clipIds, 'clipIds'), o.linked !== false, true);
+    if (!chosen.length) fail('Select the clips to nest.', 'noClips');
+    for (const x of chosen) unlocked(c, x.track);
+    const t0 = Math.min(...chosen.map((x) => x.start));
+    const t1 = Math.max(...chosen.map(end));
+    const tracksOf = (kind) => c.seq.tracks.filter((t) => t.kind === kind);
+    const inner = model.createSequence({
+      id: nid(c, 's'), name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : 'Nested Sequence',
+      w: c.seq.w, h: c.seq.h, fps: c.seq.fps, background: c.seq.background,
+      videoTracks: tracksOf('video').length, audioTracks: tracksOf('audio').length,
+    });
+    // A track of this sequence -> the track at the same place among its kind in the new one.
+    const innerTrack = (id) => {
+      const t = trackOf(c, id);
+      return tracksOf(t.kind).indexOf(t) + 1;
+    };
+    const letter = (id) => (kindOf(c, { track: id }) === 'video' ? 'V' : 'A');
+    const moved = new Set(chosen);
+    const carried = c.seq.transitions.filter((t) => {
+      const at2 = c.seq.clips.filter((x) => x.track === t.track && (x.start === t.at || end(x) === t.at));
+      return at2.length && at2.every((x) => moved.has(x));
+    });
+    for (const x of chosen) {
+      const copy = clone(x);
+      copy.track = `${letter(x.track)}${innerTrack(x.track)}`;
+      copy.start = x.start - t0;
+      // A link lives in one sequence: one that does not move whole (Alt) stays with the clips left behind.
+      if (copy.link && c.seq.clips.some((y) => y.link === copy.link && !moved.has(y))) copy.link = null;
+      inner.clips.push(copy);
+    }
+    for (const t of carried) inner.transitions.push({ ...clone(t), track: `${letter(t.track)}${innerTrack(t.track)}`, at: t.at - t0 });
+    for (const x of chosen) removeFrom(c, c.seq.clips, x);
+    for (const t of carried) removeFrom(c, c.seq.transitions, t);
+    append(c, project.sequences, inner);
+    const bin = project.bins.find((b) => b.items.includes(c.seq.id));
+    if (bin) append(c, bin.items, inner.id);
+    const lowest = (kind) => {
+      const used = new Set(chosen.filter((x) => kindOf(c, x) === kind).map((x) => x.track));
+      return tracksOf(kind).find((t) => used.has(t.id))?.id ?? null;
+    };
+    const vId = lowest('video');
+    const aId = lowest('audio');
+    // Each track plays inside as it did outside: hidden, muted and soloed as it was, its volume and pan less those of
+    // the track the nest clip goes on (which apply to the nest clip), so a clip is not turned down twice.
+    const land = trackOf(c, aId ?? tracksOf('audio')[0]?.id) || {};
+    tracksOf('video').forEach((t, i) => { inner.tracks.filter((x) => x.kind === 'video')[i].visible = t.visible; });
+    tracksOf('audio').forEach((t, i) => {
+      const x = inner.tracks.filter((y) => y.kind === 'audio')[i];
+      x.mute = t.mute;
+      x.solo = t.solo;
+      x.volume = (t.volume ?? 0) - (land.volume ?? 0);
+      x.pan = Math.max(-100, Math.min(100, (t.pan ?? 0) - (land.pan ?? 0)));
+    });
+    for (const id of [vId, aId]) if (id) clearRange(c, id, t0, t1);
+    const link = vId && aId ? nid(c, 'L') : null;
+    const made = [];
+    for (const [id, kind] of [[vId, 'video'], [aId, 'audio']]) {
+      if (!id) continue;
+      const clip = model.createClip(kind, { id: nid(c, 'c'), track: id, start: t0, in: 0, out: t1 - t0, source: { sequence: inner.id }, name: '' });
+      clip.link = link;
+      append(c, c.seq.clips, clip);
+      made.push(clip.id);
+    }
+    return { id: inner.id, ids: made };
   };
   H.setSequence = (project, tx, cmd) => {
     const c = context(project, tx, cmd.id);
@@ -704,17 +814,24 @@
       for (const x of clipsOn(c, tr.id)) {
         const s = Math.max(sn(x.start), prevEnd);
         let d = Math.max(f, sn(end(x)) - s);
-        if (!still(c2, x)) {
-          const m = model.mediaOf(c.project, x);
-          d = Math.min(d, Math.floor((x.reverse ? x.out : m.duration - x.in) / x.speed / f + 1e-9) * f);
+        let curve = null;
+        if (x.remap) {
+          // the keys keep their place in the timeline, on the new frames; the length stays inside the source
+          curve = R.refit(x.remap, (t) => sn(x.start + t) - s, f);
+          const len = model.sourceLength(c.project, x);
+          d = Math.min(d, Math.floor(R.stay(curve, 0, 1, -0.25, len + 0.25) / f + 1e-9) * f);
+          if (d < f) fail('The clip is too short.', 'tooShort', x.id);
+          curve.duration = d;
+        } else if (!still(c2, x)) {
+          d = Math.min(d, Math.floor((x.reverse ? x.out : model.sourceLength(c.project, x) - x.in) / x.speed / f + 1e-9) * f);
           if (d < f) fail('The clip is too short.', 'tooShort', x.id);
         }
-        plan.push([x, s, d]);
+        plan.push([x, s, d, curve]);
         prevEnd = s + d;
       }
     }
     tx.set(seq, 'fps', [fps[0], fps[1]]);
-    for (const [x, s, d] of plan) {
+    for (const [x, s, d, curve] of plan) {
       const rel = (t) => sn(x.start + t) - s;
       for (const [prop, list] of Object.entries(x.keyframes)) {
         const byT = new Map();
@@ -722,7 +839,8 @@
         tx.set(x.keyframes, prop, [...byT.values()].sort((a, b) => a.t - b.t));
       }
       if (x.markers) tx.set(x, 'markers', x.markers.map((m) => ({ ...m, t: rel(m.t), duration: sn(m.duration) })));
-      if (still(c2, x) || !x.reverse) tx.set(x, 'out', x.in + d * x.speed);
+      if (curve) setCurve(c2, x, curve);
+      else if (still(c2, x) || !x.reverse) tx.set(x, 'out', x.in + d * x.speed);
       else tx.set(x, 'in', x.out - d * x.speed);
       tx.set(x, 'start', s);
       const fi = Math.min(sn(x.fadeIn), d);
@@ -885,13 +1003,24 @@
   function fitToFrames(c, clip) {
     const sn = (t) => Math.round(t / c.f) * c.f;
     let d = Math.max(c.f, sn(model.clipDuration(clip)));
-    if (!still(c, clip)) {
-      const m = model.mediaOf(c.project, clip);
-      if (m) d = Math.min(d, Math.floor((clip.reverse ? clip.out : m.duration - clip.in) / clip.speed / c.f + 1e-9) * c.f);
+    if (clip.remap) {
+      const curve = R.refit(clip.remap, sn, c.f);
+      const len = model.sourceLength(c.project, clip);
+      if (len) d = Math.min(d, Math.floor(R.stay(curve, 0, 1, -0.25, len + 0.25) / c.f + 1e-9) * c.f);
       if (d < c.f) fail('The clip is too short.', 'tooShort');
+      clip.remap = { ...curve, duration: d };
+      [clip.in, clip.out] = R.range(clip.remap);
+      clip.speed = 1;
+      clip.reverse = false;
+    } else {
+      if (!still(c, clip)) {
+        const len = model.sourceLength(c.project, clip);
+        if (len) d = Math.min(d, Math.floor((clip.reverse ? clip.out : len - clip.in) / clip.speed / c.f + 1e-9) * c.f);
+        if (d < c.f) fail('The clip is too short.', 'tooShort');
+      }
+      if (still(c, clip) || !clip.reverse) clip.out = clip.in + d * clip.speed;
+      else clip.in = clip.out - d * clip.speed;
     }
-    if (still(c, clip) || !clip.reverse) clip.out = clip.in + d * clip.speed;
-    else clip.in = clip.out - d * clip.speed;
     clip.fadeIn = Math.min(sn(clip.fadeIn || 0), d);
     clip.fadeOut = Math.min(sn(clip.fadeOut || 0), d - clip.fadeIn);
     for (const [prop, list] of Object.entries(clip.keyframes || {})) {
@@ -938,7 +1067,11 @@
       const clip = model.createClip(kind, { id: null, track: track.id, start: p + at(c, x.start - minStart), in: num(x.in, 'in'), out: num(x.out, 'out'), source });
       for (const k of ['speed', 'reverse', 'enabled', 'name', 'label', 'props', 'keyframes', 'effects', 'fadeIn', 'fadeOut']) if (x[k] !== undefined) clip[k] = x[k];
       if (x.role !== undefined) clip.role = model.ROLES.includes(x.role) ? x.role : null;
+      if (model.SAMPLINGS.includes(x.sampling)) clip.sampling = x.sampling;
+      // a curve goes along on a video track (time remapping is video only)
+      if (x.remap && kind === 'video' && !still(c, clip)) clip.remap = x.remap;
       if (x.markers) clip.markers = x.markers;
+      if (Array.isArray(x.masks) && x.masks.length && kind === 'video') clip.masks = x.masks;
       fitToFrames(c, clip);
       if (x.link) {
         if (!links.has(x.link)) links.set(x.link, null);
@@ -1111,14 +1244,16 @@
     const group = [clip, ...(o.linked === false ? [] : model.linkedClips(c.seq, clip).filter((x) => !still(c, x)))];
     for (const g of group) unlocked(c, g.track);
     const lim = limits();
+    // a remapped clip slips its whole curve by the same source time as the timeline frames (its speeds vary)
+    const per = (g) => (g.remap ? 1 : g.speed);
     for (const g of group) {
-      const m = model.mediaOf(project, g);
-      lim.limit(-floorFrames(c, g.in / g.speed), floorFrames(c, (m.duration - g.out) / g.speed), 'source');
+      lim.limit(-floorFrames(c, g.in / per(g)), floorFrames(c, (model.sourceLength(project, g) - g.out) / per(g)), 'source');
     }
     const r = lim.apply(frames(c, o.delta ?? 0, 'delta'));
     for (const g of group) {
       if (!r.applied) break;
-      const sd = r.applied * g.speed;
+      const sd = r.applied * per(g);
+      if (g.remap) tx.set(g, 'remap', { ...g.remap, at: g.remap.at + sd });
       tx.set(g, 'in', g.in + sd);
       tx.set(g, 'out', g.out + sd);
     }
@@ -1182,6 +1317,7 @@
     const old = e0 - s0;
     const group = [clip, ...(o.linked === false ? [] : model.linkedClips(c.seq, clip).filter((x) => x.start === s0 && end(x) === e0 && !still(c, x)))];
     for (const g of group) unlocked(c, g.track);
+    for (const g of group) if (g.remap) remapped();
     // limits on the new length, as a delta of the edge
     const sign = edge === 'end' ? 1 : -1;
     const lim = limits();
@@ -1340,8 +1476,12 @@
     return { range: [a, b] };
   };
 
+  // Speed/Duration, reverse and the Rate Stretch tool leave a remapped clip alone, as Premiere greys them out: its speed
+  // is the Time Remapping curve's.
+  const remapped = () => fail('This clip has Time Remapping. Change its speed with Time Remapping.', 'remap');
+
   // clip settings
-  const CLIP_FIELDS = ['props', 'speed', 'duration', 'ripple', 'reverse', 'enabled', 'name', 'label', 'role', 'fadeIn', 'fadeOut'];
+  const CLIP_FIELDS = ['props', 'speed', 'duration', 'ripple', 'reverse', 'enabled', 'name', 'label', 'role', 'fadeIn', 'fadeOut', 'sampling'];
   function roleOf(x) {
     if (x !== null && !model.ROLES.includes(x)) fail(`unknown clip role ${x}`);
     return x;
@@ -1365,9 +1505,14 @@
     if (p.label !== undefined) tx.set(clip, 'label', p.label === null ? null : String(p.label));
     if (p.role !== undefined) tx.set(clip, 'role', roleOf(p.role));
     if (p.enabled !== undefined) tx.set(clip, 'enabled', !!p.enabled);
+    if (p.sampling !== undefined) {
+      if (!model.SAMPLINGS.includes(p.sampling)) fail(`unknown frame sampling ${p.sampling}`);
+      tx.set(clip, 'sampling', p.sampling);
+    }
     if (p.reverse !== undefined) {
       const group = [clip, ...(linked ? model.linkedClips(c.seq, clip) : [])];
       for (const g of group) unlocked(c, g.track);
+      for (const g of group) if (g.remap && !!p.reverse !== g.reverse) remapped();
       for (const g of group) tx.set(g, 'reverse', !!p.reverse);
     }
     if (p.speed !== undefined && p.duration !== undefined) fail('give a speed or a duration');
@@ -1375,6 +1520,7 @@
     // A duration sets the speed that shows the same source in that time (Speed/Duration with the length field).
     if (p.duration !== undefined) {
       const d = Math.max(c.f, frames(c, p.duration, 'duration'));
+      if (clip.remap) remapped();
       if (still(c, clip)) setLength(c, clip, d, !!p.ripple, linked);
       else setSpeed(c, clip, (clip.out - clip.in) / d, !!p.ripple, linked, d);
     }
@@ -1411,14 +1557,14 @@
     if (speed < 0.01 || speed > 100) fail('Speed must be between 1% and 10000%.', 'speed');
     const group = [clip, ...(linked ? model.linkedClips(c.seq, clip).filter((x) => x.start === clip.start && end(x) === end(clip)) : [])];
     for (const g of group) unlocked(c, g.track);
+    for (const g of group) if (g.remap) remapped();
     const old = dur(clip);
     const pos = end(clip);
     let nd = old;
     if (!still(c, clip)) {
       nd = wantDur ?? Math.max(c.f, Math.round((clip.out - clip.in) / speed / c.f) * c.f);
       for (const g of group) {
-        const m = model.mediaOf(c.project, g);
-        nd = Math.min(nd, floorFrames(c, (g.reverse ? g.out : m.duration - g.in) / speed));
+        nd = Math.min(nd, floorFrames(c, (g.reverse ? g.out : model.sourceLength(c.project, g) - g.in) / speed));
       }
     }
     if (!ripple) for (const g of group) nd = Math.min(nd, floorFrames(c, neighbours(c, g).nextStart - g.start));
@@ -1442,6 +1588,51 @@
       append(c, c.seq.transitions, t);
     }
   }
+  // Time Remapping (Premiere's Time Remapping > Speed): the clip plays curve `remap` (remap.js; frames of this
+  // sequence) from now on, or with null a constant speed again (the speed at its start, the length kept as far as the
+  // source goes). Only the video clip changes: its linked audio keeps its speed, as in Premiere. The clip keeps its
+  // start; as in Premiere it does not push the clips after it: a longer curve grows the clip up to the next clip
+  // ('neighbour') and the rest waits past the clip's end, the way source past an out point does. It also stops where
+  // the curve leaves the source ('source'). A transition at the clip's end moves with it.
+  // -> { duration, clamped: 'neighbour' | 'source' | null }
+  H.setRemap = (project, tx, cmd) => {
+    const c = context(project, tx, cmd.seqId);
+    const clip = clipOf(c, cmd.clipId);
+    unlocked(c, clip.track);
+    if (kindOf(c, clip) !== 'video') fail('Time Remapping is for video clips.', 'remap');
+    if (still(c, clip)) fail('This clip has no source frames to remap.', 'still');
+    const old = dur(clip);
+    let r;
+    if (cmd.remap == null) {
+      if (!clip.remap) return { duration: old, clamped: null };
+      const v = R.speedAt(clip.remap, 0) || 1;
+      r = R.constant(clip.remap.at, Math.sign(v) * Math.min(R.MAX, Math.max(R.MIN, Math.abs(v))), old);
+    } else {
+      const x = cmd.remap;
+      if (!x || typeof x !== 'object' || !Array.isArray(x.speeds) || !Array.isArray(x.keys)) fail('invalid time remapping');
+      r = {
+        at: num(x.at, 'at'),
+        speeds: x.speeds.map((v) => num(v, 'speed')),
+        keys: x.keys.map((k) => ({ t: Math.max(0, frames(c, k?.t, 'key time')), ramp: Math.max(0, frames(c, k?.ramp ?? 0, 'ramp')) })),
+        duration: Math.max(c.f, frames(c, x.duration, 'duration')),
+      };
+      if (r.speeds.some((v) => Math.abs(v) > R.MAX + 1e-9)) fail('Speed must be between 1% and 10000%.', 'speed');
+      if (!R.valid(r, c.f)) fail('invalid time remapping');
+    }
+    const len = model.sourceLength(project, clip);
+    const s0 = R.value(r, 0);
+    if (s0 < -0.5 || s0 > len + 0.5) fail('The source has no frames there.', 'source');
+    const lim = limits();
+    lim.limit(-Infinity, floorFrames(c, R.stay(r, 0, 1, -0.25, len + 0.25)), 'source');
+    lim.limit(-Infinity, floorFrames(c, neighbours(c, clip).nextStart - clip.start), 'neighbour');
+    const got = lim.apply(r.duration);
+    if (got.applied < c.f) fail('The clip is too short.', 'tooShort');
+    const carried = got.applied !== old ? liftTransitions(c, [clip.track], end(clip)) : [];
+    setCurve(c, clip, R.withDuration(r, got.applied));
+    clampFades(c, clip, got.applied);
+    dropTransitions(c, carried, clip.start + got.applied);
+    return { duration: got.applied, clamped: got.clamped };
+  };
   H.setKeyframes = (project, tx, cmd) => {
     const c = context(project, tx, cmd.seqId);
     const clip = clipOf(c, cmd.clipId);
@@ -1560,6 +1751,59 @@
       if (v === null || v === undefined) tx.del(e.params, k);
       else tx.set(e.params, k, clone(v));
     }
+    return {};
+  };
+  // masks (masks.js): Opacity's (opts.effectId null) or an effect's, on a video clip
+  function maskHolder(c, clip, effectId) {
+    if (kindOf(c, clip) !== 'video') fail('Masks go on video clips.', 'notVideo');
+    if (effectId == null) return clip;
+    const e = effectOf(c, clip, effectId);
+    const def = req('effects')?.get?.(e.type);
+    if (!def || def.kind !== 'video' || def.masks === false) fail('This effect takes no masks.', 'noMasks');
+    return e;
+  }
+  function maskOf(holder, id) {
+    const m = (holder.masks || []).find((x) => x.id === id);
+    if (!m) fail(`there is no mask ${id}`, 'notFound');
+    return m;
+  }
+  H.addMask = (project, tx, cmd) => {
+    const M = req('masks');
+    const c = context(project, tx, cmd.seqId);
+    const clip = clipOf(c, cmd.clipId);
+    unlocked(c, clip.track);
+    const holder = maskHolder(c, clip, cmd.opts?.effectId);
+    if ((holder.masks || []).length >= M.MAX_MASKS) fail('There are as many masks as there can be.', 'tooMany');
+    const mask = M.full({ ...clone(cmd.mask || {}), id: M.nextId(clip) });
+    if (!M.valid(mask)) fail(`the mask is not valid: ${M.problem(mask)}`, 'invalid');
+    if (holder.masks) append(c, holder.masks, mask);
+    else tx.set(holder, 'masks', [mask]);
+    return { id: mask.id };
+  };
+  H.setMask = (project, tx, cmd) => {
+    const M = req('masks');
+    const c = context(project, tx, cmd.seqId);
+    const clip = clipOf(c, cmd.clipId);
+    unlocked(c, clip.track);
+    const m = maskOf(maskHolder(c, clip, cmd.opts?.effectId), cmd.maskId);
+    const patch = cmd.patch || {};
+    const next = { ...m };
+    for (const k of ['mode', 'inverted', ...M.FIELDS]) if (patch[k] !== undefined) next[k] = clone(patch[k]);
+    if (!M.valid(next)) fail(`the mask is not valid: ${M.problem(next)}`, 'invalid');
+    for (const k of ['mode', 'inverted', ...M.FIELDS]) if (patch[k] !== undefined) tx.set(m, k, next[k]);
+    return {};
+  };
+  H.removeMask = (project, tx, cmd) => {
+    const M = req('masks');
+    const c = context(project, tx, cmd.seqId);
+    const clip = clipOf(c, cmd.clipId);
+    unlocked(c, clip.track);
+    const holder = maskHolder(c, clip, cmd.opts?.effectId);
+    const m = maskOf(holder, cmd.maskId);
+    const prefix = `${M.prefixOf(cmd.opts?.effectId)}.${m.id}.`;
+    for (const prop of Object.keys(clip.keyframes)) if (prop.startsWith(prefix)) tx.del(clip.keyframes, prop);
+    if (holder.masks.length === 1) tx.del(holder, 'masks');
+    else removeFrom(c, holder.masks, m);
     return {};
   };
   H.moveEffect = (project, tx, cmd) => {
@@ -1734,6 +1978,7 @@
     fz.enabled = clip.enabled;
     fz.props = clone(clip.props);
     fz.effects = clone(clip.effects);
+    if (clip.masks) fz.masks = clone(clip.masks);
     fz.keyframes = clone(frozen);
     append(c, c.seq.clips, fz);
     return { id: fz.id };
@@ -1924,6 +2169,7 @@
     removeCaption: 'Remove Caption', setProxy: 'Proxy', setSettings: 'Project Settings', setSpeakers: 'Speakers', addLut: 'Load LUT', paste: 'Paste', setGenerator: 'Graphic Settings',
     setLayer: 'Edit Text', addLayer: 'Add Layer', removeLayer: 'Remove Layer', setRole: 'Audio Role', replaceAudio: 'Replace Audio', batch: 'Edit',
     group: 'Group', ungroup: 'Ungroup', slip: 'Slip', slide: 'Slide', stretch: 'Rate Stretch', extendEdit: 'Extend Edit',
+    nest: 'Nest', setRemap: 'Time Remapping', addMask: 'Add Mask', setMask: 'Mask', removeMask: 'Remove Mask',
   };
   // Labels the automation (ui-auto.js) gives its batches.
   const BATCH_LABELS = ['Remove Silence', 'Add Scene Markers', 'Split at Scene Changes', 'Add Beat Markers', 'Match Loudness', 'Match Clip Loudness', 'Auto Ducking', 'Auto Color'];
@@ -1937,13 +2183,13 @@
       case 'move': return o.insert ? 'Insert Move' : o.nudge ? 'Nudge' : 'Move';
       case 'addSequence': return o.from != null ? 'Duplicate Sequence' : 'New Sequence';
       case 'addGenerated': return o.source?.generator === 'text' ? 'Add Text' : 'Add Graphic';
-      case 'setClip': return cmd.patch?.speed !== undefined || cmd.patch?.duration !== undefined ? 'Speed/Duration' : 'Clip Settings';
+      case 'setClip': return cmd.patch?.speed !== undefined || cmd.patch?.duration !== undefined ? 'Speed/Duration' : cmd.patch?.sampling !== undefined ? 'Time Interpolation' : 'Clip Settings';
       case 'paste': return o.mode === 'insert' ? 'Paste Insert' : 'Paste';
       case 'batch': return typeof cmd.label === 'string' && cmd.label ? cmd.label : 'Edit';
       default: return LABELS[cmd.type] || cmd.type;
     }
   }
-  const ALL_LABELS = [...new Set([...Object.values(LABELS), 'Insert', 'Ripple Trim', 'Roll Edit', 'Ripple Delete', 'Insert Move', 'Duplicate Sequence', 'Add Text', 'Speed/Duration', 'Paste Insert', 'Nudge', ...BATCH_LABELS])];
+  const ALL_LABELS = [...new Set([...Object.values(LABELS), 'Insert', 'Ripple Trim', 'Roll Edit', 'Ripple Delete', 'Insert Move', 'Duplicate Sequence', 'Add Text', 'Speed/Duration', 'Time Interpolation', 'Paste Insert', 'Nudge', ...BATCH_LABELS])];
 
   // ---- history ----
 
@@ -1973,7 +2219,9 @@
     let saved = base;
     const listeners = new Set();
     const top = () => (undoStack.length ? undoStack[undoStack.length - 1] : base);
+    project[model.REVISION] = 0;
     const emit = (reason) => {
+      if (reason !== 'commit') project[model.REVISION] += 1;
       for (const fn of [...listeners]) {
         try { fn(reason); } catch (err) { (globalThis.ide?.logger?.('#cut') || console).error?.(`history listener: ${err?.stack || err}`); }
       }
@@ -2123,9 +2371,11 @@
     extract: (seqId, inT, outT, trackIds = null) => ({ type: 'extract', seqId, in: inT, out: outT, trackIds }),
     setClip: (seqId, clipId, patch, opts = {}) => ({ type: 'setClip', seqId, clipId, patch, opts }),
     setKeyframes: (seqId, clipId, prop, list) => ({ type: 'setKeyframes', seqId, clipId, prop, keyframes: list }),
+    setRemap: (seqId, clipId, remap) => ({ type: 'setRemap', seqId, clipId, remap }),
     link: (seqId, clipIds) => ({ type: 'link', seqId, clipIds }),
     unlink: (seqId, clipIds) => ({ type: 'unlink', seqId, clipIds }),
     group: (seqId, clipIds) => ({ type: 'group', seqId, clipIds }),
+    nest: (seqId, clipIds, opts = {}) => ({ type: 'nest', seqId, clipIds, opts }),
     ungroup: (seqId, clipIds) => ({ type: 'ungroup', seqId, clipIds }),
     slip: (seqId, clipId, opts = {}) => ({ type: 'slip', seqId, clipId, opts }),
     slide: (seqId, clipId, opts = {}) => ({ type: 'slide', seqId, clipId, opts }),
@@ -2135,6 +2385,9 @@
     removeEffect: (seqId, clipId, effectId) => ({ type: 'removeEffect', seqId, clipId, effectId }),
     setEffect: (seqId, clipId, effectId, patch) => ({ type: 'setEffect', seqId, clipId, effectId, patch }),
     moveEffect: (seqId, clipId, effectId, index) => ({ type: 'moveEffect', seqId, clipId, effectId, index }),
+    addMask: (seqId, clipId, mask, opts = {}) => ({ type: 'addMask', seqId, clipId, mask, opts }),
+    setMask: (seqId, clipId, maskId, patch, opts = {}) => ({ type: 'setMask', seqId, clipId, maskId, patch, opts }),
+    removeMask: (seqId, clipId, maskId, opts = {}) => ({ type: 'removeMask', seqId, clipId, maskId, opts }),
     addTransition: (seqId, opts) => ({ type: 'addTransition', seqId, opts }),
     removeTransition: (seqId, id) => ({ type: 'removeTransition', seqId, id }),
     setTransition: (seqId, id, patch) => ({ type: 'setTransition', seqId, id, patch }),

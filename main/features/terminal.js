@@ -13,6 +13,12 @@ const { outputBatch } = require('../output-batch');
 const programEnv = require('../program-env');
 
 const sessions = new Map(); // id -> {proc, owner}
+// A collaboration session (main/features/collab.js) shows a terminal's output to its guests and, once the host allows
+// it, writes what a guest types: tap(id, data) hears every session's output (data null when it ended).
+const taps = new Set();
+exports.tapOutput = (fn) => { taps.add(fn); return () => taps.delete(fn); };
+exports.writeTo = (id, data) => { const s = sessions.get(id); if (!s) return false; s.proc.write(data); return true; };
+exports.alive = (id) => sessions.has(id);
 let nextId = 1;
 
 const run = (cmd, args, opts = {}) => new Promise((resolve) => {
@@ -193,7 +199,7 @@ exports.register = ({ ipcMain, app, programs }) => {
     // ConPTY delivers about one chunk per line and one per event-loop turn, so a flood (a long `dir`, a chatty build)
     // is batched by time: at most one message per 10 ms window, the first after a pause sent at once.
     const batch = outputBatch((data) => { if (!owner.isDestroyed()) owner.send('pty:data', { id, data }); });
-    proc.onData((data) => batch.push(data));
+    proc.onData((data) => { batch.push(data); for (const tap of taps) tap(id, data); });
     // Closing the window ends its shells; a shell that ends first takes its listener with it, or every session ever
     // opened would keep one on the window (and its proc alive).
     const onWindowGone = () => { try { proc.kill(); } catch {} sessions.delete(id); };
@@ -202,6 +208,7 @@ exports.register = ({ ipcMain, app, programs }) => {
       releasePty(proc);
       release?.();
       sessions.delete(id);
+      for (const tap of taps) tap(id, null);
       ended();
       owner.removeListener('destroyed', onWindowGone);
       setImmediate(() => {

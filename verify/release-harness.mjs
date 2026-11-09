@@ -56,7 +56,7 @@ const ASSETS = ['latest.yml', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.
 const blockmapOf = (length) => gzipSync(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, checksums: ['a', 'b'], sizes: [length - 3, 3] }] }));
 const ymlText = (version, exeName, sha) => `version: ${version}\nfiles:\n  - url: ${exeName}\n    sha512: ${sha}\npath: ${exeName}\nsha512: ${sha}\n`;
 // version: what dist holds; a beta has dist/beta.yml instead of latest.yml, and staleLatest adds an old dist/latest.yml.
-function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin = false, ahead = true, installed = false, testsPass = true, reinstallOk = true, uninstallFails = false, feed = version, ymlVersion = version, onSleep = null, assets = ASSETS, staleLatest = null } = {}) {
+function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin = false, ahead = true, installed = false, testsPass = true, reinstallOk = true, uninstallFails = false, feed = version, ymlVersion = version, onSleep = null, assets = ASSETS, staleLatest = null, ci = { status: 'completed', conclusion: 'success', url: 'https://ci/run/1' } } = {}) {
   const exeBody = 'fake exe bytes';
   const sha = createHash('sha512').update(exeBody).digest('base64');
   const exe = path.join(DIST, `NanoStudio-Setup-${version}.exe`);
@@ -68,7 +68,7 @@ function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin =
   ]);
   if (staleLatest) files.set(path.join(DIST, 'latest.yml'), ymlText(staleLatest, `NanoStudio-Setup-${staleLatest}.exe`, 'old'));
   if (installed) { files.set(UNINST, 'u'); files.set(INSTALLED, 'old'); }
-  W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets };
+  W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets, ci };
   return W;
 }
 const line = (cmd, args) => [path.basename(cmd), ...args].join(' ');
@@ -94,6 +94,7 @@ function fakeSpawn(cmd, args, opts) {
   if (l.startsWith('git merge-base')) return res(W.ahead ? 0 : 1);
   if (l.startsWith('git rev-list --count')) return res(0, '2');
   if (l.startsWith('gh release list')) return res(0, 'v1.4.3');
+  if (l.startsWith('gh run list')) return W.ci === 'error' ? res(1) : res(0, JSON.stringify(W.ci ? [W.ci] : []));
   if (l.startsWith('gh release view')) return res(0, W.assets.join('\n'));
   if (l.startsWith('tasklist')) return res(0, 'INFO: No tasks');
   if (l.startsWith('powershell')) return res(W.testsPass ? 0 : 1);
@@ -149,11 +150,32 @@ const order = ['git add', ' commit ', ' tag -a', 'git push --atomic origin maste
 ok(code === 0 && order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), `success: order commit < tag < push < installers < edit < latest.yml < delete old (${order.join(',')})`);
 ok(idx('git ls-remote origin refs/heads/master refs/tags/v0.2.1') >= 0 && idx('git ls-remote') < idx('git add'), 'step 1 reads origin with ls-remote');
 ok(/master is up to date with origin/.test(text()), 'origin master = HEAD: up to date');
-world({ originMaster: 'old', ahead: true });
-code = await run([V, '--skip-tests']);
-ok(code === 0 && /2 commit\(s\) ahead of origin/.test(text()) && has('git merge-base --is-ancestor old HEAD'), 'local ahead of origin: allowed, logged');
 ok(pkgVersion() === V, 'success: package.json keeps the new version');
 ok(!has('git fetch') && !has('reset'), 'no fetch, no reset');
+ok(has('gh run list --workflow ci.yml --commit abc') && /CI passed on abc/.test(text()), 'stable: reads the CI run of HEAD, which passed');
+
+// A stable release only from a commit CI passed; a beta goes first, before CI.
+const stopsBeforeBuild = (re, name) => ok(code === 1 && re.test(text()) && !has('npm run dist') && !has(' commit ') && pkgVersion() === '0.2.0', name);
+world({ originMaster: 'old', ahead: true });
+code = await run([V, '--skip-tests']);
+stopsBeforeBuild(/2 commit\(s\) ahead of origin/, 'stable with unpushed commits: logged, then stops in step 1 (CI has not seen them)');
+ok(/push master, wait for CI/.test(text()) && !has('gh run list'), 'stable ahead of origin: says to push and wait for CI');
+for (const [ci, re, name] of [
+  [null, /CI has not run on abc yet/, 'stable, no CI run on HEAD: stops in step 1'],
+  [{ status: 'in_progress', conclusion: '', url: 'https://ci/run/2' }, /still running \(https:\/\/ci\/run\/2\)/, 'stable, CI still running: stops in step 1 with its link'],
+  [{ status: 'completed', conclusion: 'failure', url: 'https://ci/run/3' }, /ended failure \(https:\/\/ci\/run\/3\)/, 'stable, CI failed: stops in step 1 with its link'],
+  ['error', /could not read CI of abc/, 'stable, gh run list fails: stops in step 1'],
+]) {
+  world({ ci });
+  code = await run([V, '--skip-tests']);
+  stopsBeforeBuild(re, name);
+}
+world({ ci: { status: 'completed', conclusion: 'failure', url: 'https://ci/run/3' } });
+code = await run([V, '--skip-tests', '--dry-run']);
+ok(code === 0 && /WARNING \(a real release would stop here\): CI on abc ended failure/.test(text()), 'dry run: a failed CI is a warning, the dry run goes on');
+world({ version: `${V}-beta.1`, originMaster: 'old', ahead: true, ci: null });
+code = await run([`${V}-beta.1`, '--skip-tests']);
+ok(code === 0 && /a beta does not wait for CI/.test(text()) && !has('gh run list') && has('git push --atomic'), 'beta: goes out before CI, unpushed commits and all');
 
 world({ originMaster: 'zzz', ahead: false });
 code = await run([V, '--skip-tests']);

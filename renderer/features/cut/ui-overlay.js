@@ -45,6 +45,7 @@
     let geom = null; // the shown clip's geometry, in layer pixels
     let mode = null; // null | 'text' (the Type tool) | 'pick' (eyedropper)
     let editor = null;
+    let masksLayer = null; // the masks' handles (ui-masks.js), on this layer with its geometry
 
     // ---------- geometry ----------
     // The frame's rectangle inside the layer (CSS px) and the scale (CSS px per sequence px).
@@ -71,9 +72,10 @@
       let h = H;
       let content = null; // [x, y, w, h] relative to the picture's center
       const m = model.mediaOf(app.project, clip);
-      if (m) {
-        const sw = m.video?.w || W;
-        const sh = m.video?.h || H;
+      const nest = model.nestOf(app.project, clip);
+      if (m || nest) {
+        const sw = nest ? nest.w : m.video?.w || W;
+        const sh = nest ? nest.h : m.video?.h || H;
         const fit = Cut.compositor?.fitScale ? Cut.compositor.fitScale(sw, sh, W, H, app.project.settings?.fit) : Math.min(W / sw, H / sh);
         w = sw * fit;
         h = sh * fit;
@@ -117,7 +119,9 @@
 
     function layout() {
       const fr = frameRect();
-      const c = fr && !editor && mode !== 'pick' ? shownClip() : null;
+      // a mask being edited (ui-masks.js) replaces the motion handles, as in Premiere
+      masksLayer?.layout(fr && !editor && mode !== 'pick' ? shownClip() : null);
+      const c = fr && !editor && mode !== 'pick' && !ui.masks?.editing(app) ? shownClip() : null;
       layer.classList.toggle('typing', mode === 'text' || app.tool === 'text');
       layer.classList.toggle('picking', mode === 'pick');
       svg.setAttribute('width', String(layer.clientWidth));
@@ -368,12 +372,14 @@
       return n ? sum.map((s) => s / n) : null;
     }
 
-    for (const ev of ['time', 'project', 'selection', 'sequence', 'tool']) offs.push(app.on(ev, later));
+    masksLayer = ui.maskOverlay?.attach({ layer, app, player, frameRect, placement, toSeq }) || null;
+    offs.push(() => masksLayer?.detach());
+    for (const ev of ['time', 'project', 'selection', 'sequence', 'tool', 'mask']) offs.push(app.on(ev, later));
     const ro = ide.util.observeSize(view, later);
     offs.push(() => ro.disconnect());
     offs.push(() => cancelAnimationFrame(raf));
     const api = {
-      editText, pickColor, layout, sample,
+      editText, pickColor, layout, sample, placement,
       get geometry() { return geom; },
       get editor() { return editor; },
       detach() {

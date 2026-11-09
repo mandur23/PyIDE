@@ -148,18 +148,21 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 
 ### 릴리스
 
-1. `CHANGELOG.md` 맨 위에 `## <버전>` 절을 쓰고 커밋, 푸시합니다. 이 절이 릴리스 노트가 됩니다. 버전은 package.json보다 높아야 하고, 미리 올리지 않습니다.
-2. CI 결과를 확인합니다. 실패가 있으면 원인을 보고, 그대로 배포할지는 사용자에게 묻습니다.
-3. 드라이런으로 빌드합니다. 빌드는 임시 폴더에 합니다.
+베타를 먼저 내고, CI가 통과한 뒤 정식을 냅니다. 정식 버전은 스크립트가 직접 막습니다: HEAD가 origin의 master와 같고 그 커밋의 CI(`ci.yml`)가 통과해야 1단계를 넘어갑니다. 베타는 CI를 기다리지 않습니다.
+
+1. `CHANGELOG.md` 맨 위에 `## <버전>` 절(정식 버전 번호, 예: `## 0.3.23`)을 쓰고 커밋, 푸시합니다. 이 절이 베타와 정식의 릴리스 노트가 됩니다. 버전은 package.json보다 높아야 하고, 미리 올리지 않습니다.
+2. 베타를 드라이런으로 빌드합니다. 빌드는 임시 폴더에 합니다.
 
    ```bash
-   PYIDE_DIST_DIR="$LOCALAPPDATA\\Temp\\pyidedist-0.3.14" npm run release -- 0.3.14 --dry-run
+   PYIDE_DIST_DIR="$LOCALAPPDATA\\Temp\\pyidedist-0.3.23-beta.1" npm run release -- 0.3.23-beta.1 --dry-run --skip-tests
    ```
 
-4. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다.
-5. 실제 릴리스를 합니다. `--skip-tests`는 CI가 통과했을 때만 씁니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.
-6. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`의 옛 버전은 지우지 않습니다. 그 뒤 임시 폴더를 지웁니다.
-7. `gh release list -R mandur23/Portfolio-Nano-`에서 Latest가 여전히 v1.4.3인지 봅니다. `nano-studio` 릴리스가 Latest가 되면 안 됩니다.
+3. 만든 `win-unpacked`의 exe를 띄워 Code, Craft, Cut이 열리는지 직접 확인합니다.
+4. 베타를 냅니다(같은 명령에서 `--dry-run`만 뺍니다). 업데이트 채널이 베타인 설치본만 받고, `latest.yml`은 그대로입니다. 베타의 `Release <버전>` 커밋이 푸시되면서 CI가 돕니다.
+5. CI 결과를 확인합니다. 실패가 있으면 원인을 보고, 고친 뒤 `-beta.2`를 냅니다. 한 번만 실패한 시간 초과는 그 job을 다시 돌려(`gh run rerun <id> --failed`) 확인합니다.
+6. CI가 통과하고 베타에 문제가 없으면 정식을 냅니다. 드라이런과 exe 확인을 한 번 더 하고 `npm run release -- 0.3.23 --skip-tests`를 실행합니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.
+7. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`의 옛 버전은 지우지 않습니다. 그 뒤 임시 폴더를 지웁니다.
+8. `gh release list -R mandur23/Portfolio-Nano-`에서 Latest가 여전히 v1.4.3인지 봅니다. `nano-studio` 릴리스가 Latest가 되면 안 됩니다.
 
 옵션: `--dry-run`(명령만 출력), `--skip-tests`(설치본 테스트 건너뛰기), `--publish-only`(푸시 뒤 멈춘 릴리스의 업로드만), `--no-build`(드라이런 시험용: 빌드를 건너뛰고 `dist`에 있는 것을 확인). 서명 키는 `%USERPROFILE%\.nano-studio\release-key.pem`에 있고 저장소에 넣지 않습니다. `marketplace/index.json`을 바꾸면 같은 커밋에서 `npm run marketplace:sign`을 실행합니다.
 
