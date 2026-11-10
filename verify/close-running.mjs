@@ -38,7 +38,8 @@ try {
   d = await dialog();
   check(/Save Changes\?/.test(d.text) && /hello\.py/.test(d.text) && /\blong\b/.test(d.text) && S(d.buttons) === S(['Save All', "Don't Save", 'Cancel']),
     `with unsaved files too, one dialog lists both (${S(d)})`);
-  await press("Don't Save");
+  // The click closes the app: it runs after this call has answered, or the answer is lost with the window.
+  await js(`(setTimeout(() => [...document.querySelectorAll('#closeConfirmDialog .dialog-buttons button')].find((b) => b.textContent === "Don't Save").click(), 50), true)`);
   for (let i = 0; i < 100 && alive(t.pid); i++) await sleep(100);
   check(!alive(t.pid), "Don't Save closes the app");
   for (let i = 0; i < 100 && alive(pid); i++) await sleep(100);
