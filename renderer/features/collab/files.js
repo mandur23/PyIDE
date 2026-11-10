@@ -17,8 +17,9 @@
     hidden: () => tr('The host does not share this file.'),
     badPath: () => tr('That name cannot be used on Windows.'),
     notOpen: () => tr('The host could not open it.'),
+    protected: (r) => C.lockedText(r.why),
   };
-  const why = (r) => WHY[r.code]?.() || r.error || tr('The host could not do it.');
+  const why = (r) => (Object.hasOwn(WHY, String(r.code)) && WHY[r.code](r)) || r.error || tr('The host could not do it.');
 
   // ---------- guest ----------
   C.save = async (doc) => {

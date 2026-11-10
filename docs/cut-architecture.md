@@ -992,11 +992,13 @@ with `backend: '2d'`) a Canvas 2D fallback; `compositor.backend` says which.
   ['safe' | fn(ctx2d, {w, h, scale})], proxy })` draws the sequence frame at t, letterboxed into the canvas: video
   tracks bottom to top (V1 first), each clip's source frame (or image, text, solid) through its effects in its own
   frame, then crop, anchor, scale, rotation, position, opacity (keyframed values at t), transitions between clips,
-  captions on top when asked. Renders on one compositor never overlap.
+  captions on top when asked. Renders on one compositor never overlap. It resolves to `{ failed: [{ clip, name, media,
+  missing, error }] }`: the items drawn as a red "Media Offline" or "Media Cannot Be Shown" frame instead (a nest's
+  clips too; `missing` when the file is not there), so the export can tell a slate it was asked for from one it was not.
 - `renderMedia(project, mediaId, t, opts)`, `renderSequence(project, seqObject, t, opts)`, `prefetch(project, seqId,
   from, to)`, `idle()` (resolves once frames are back with their decoders: call it before `destroy()`),
   `readPixels() -> Promise<Uint8Array RGBA>`, `videoFrame(init)` (a VideoFrame of the canvas), `resize`, `stats`,
-  `info`, `errors`, `lost` (WebGPU device loss, reported, not recovered), `width`, `height`.
+  `info`, `errors`, `lost` (WebGPU device loss, reported, not recovered; null on the 2D back end), `width`, `height`.
 - `scopes({ cols = 256, size = 256 })` -> `Promise<{ bins, layout, rect, step, width, height, backend } | null>`: the
   Lumetri Scopes' counts (`Cut.scopes`) of what the canvas shows now. WebGPU runs `Cut.scopes.WGSL` as a compute pass
   over its rgba8unorm output (the frame's box only, `scopes.frameRect`), the histograms gathered per workgroup, and
@@ -1130,10 +1132,22 @@ where playback started: the preview and the export give the same samples (`verif
   mixLoaded(...) /* mix once the samples and 15 s after them are read */, sources, forget() }`. A source's sound is
   kept in 10 s blocks at the mixer's rate: one block of all of it when `getAudio` gives the whole track
   (`{rate, data}`), else read on demand from the reader it gives (`{rate, length, read}`, the default) with at most
-  48 blocks kept, least recently used dropped. Blocks are resampled from windows aligned to an output sample with the
-  filter's reach on both sides, so they join without a seam. `load` reads at most 120 s of its range; `mix` counts a
-  clip whose blocks are not read yet as `missing` and asks for them. The preview reads 15 s ahead of what it
-  schedules; the export, `measure` and `renderOffline` go through `mixLoaded`.
+  48 blocks kept, least recently used dropped, except the blocks a `load` (or a block read for `mix`) in progress
+  reads: they are pinned until it is done, so clips of one mix far apart in one file no longer push out each other's
+  blocks. Blocks are resampled from windows aligned to an output sample with the filter's reach on both sides, so they
+  join without a seam. `load` reads at most 120 s of the source from the start of its range per clip; `mix` counts a
+  clip whose blocks are not read yet as `missing`, lists it in `missed: [{clip, media}]` (media null for a nest) and
+  asks for them; a source with no sound is not missing. The preview reads 15 s ahead of what it schedules; the export,
+  `measure` and `renderOffline` go through `mixLoaded`. `failures()` -> `[{media, error}]` of the sources that could
+  not be read (a nest's too), `held()` -> `{blocks, segments}` bytes in memory.
+- A clip at another speed is one stream: its source range (reversed when it plays backwards) through the WSOLA stretch
+  (or, with the pitch not kept, the resampler) made in segments of at most 10 s of output and about 40 s of source
+  (`stretchPart`, `resamplePart`), 32 kept (LRU). The stretch's frame path starts afresh at each segment (that frame
+  at its nominal place), so a segment needs only its own window of the source and the first one equals stretching the
+  whole range; only the source of segments not made yet is read. A 2-hour source at 8x holds about 250 MB (it held the
+  whole range and a copy of it, 7.7 GB). A fresh frame (a clip's first) reads the input from its nominal place from
+  its middle on: one placed at `outPos / factor` read silence before the clip's first sample, so every sped-up clip
+  began with 10 ms of nothing and a 10 ms fade.
 - A nest clip on an audio track is a source like a file: a store of 10 s blocks whose reader `read(from, to)` is the
   nested sequence's `mix` (after `load`) over those samples, so its tracks' volume, pan, mute and solo and its
   `masterGain` are in it, and the nest clip's speed, reverse, effects, volume, pan and fades apply on top. The store's
@@ -1179,7 +1193,14 @@ getAudio, compositor })`:
   tries the hardware encoder first, then software; a hardware encoder that fails on the way gets one more try in
   software. For a compositor that is not WebGPU, each frame is copied into a GPU-backed canvas first: Chromium's
   encoders turn frames from CPU memory into full-range YUV that decodes too dark. Export stops with code
-  `'compositor'` when the compositor reports GPU errors, instead of writing black video.
+  `'compositor'` when the compositor reports GPU errors or loses its device (looked at after every frame and once
+  the last one is drawn), instead of writing black video.
+- Media offline when the export starts (`preflight`, the dialog warned and asked) shows as the red "Media Offline"
+  picture with no sound; the result lists those clips (`offline: [clip ids]`, and a `verified.problems` entry with code
+  `'offline'`). Any other item the compositor draws as a red frame, a sound clip still `missing` after `mixLoaded`, or a
+  source in `failures()` stops the export with code `'media'`, its message naming the clip, the sequence time and the
+  reason (`lostMedia`, `lostSound`; the result also has `clip`, `media`, `t`). It is not retried in software; the part
+  file is deleted as on any failure.
 - Mixes the sound with the audio engine's mixer and encodes AAC-LC 48 kHz stereo at the chosen bitrate, falling back
   to the next lower one that works (the error arrives in the encode callback, not from configure). The AAC priming
   delay is measured once per configuration (`aacDelay`) and the audio is shifted by it.
@@ -1191,7 +1212,7 @@ getAudio, compositor })`:
   expectedFrames, duration, audioDuration, firstFrame, lastFrame, problems: [{ code, message /* English, for
   tr(message, params) */, params }] }, encoder: { codec, hardware }, audioDelay, audioBitrate, loudnessGain /* dB the loudness target added */, sidecars: [paths] }`.
 - Failure: `{ ok: false, code, error }` with code `cancelled`, `noSequence`, `settings`, `empty`, `noEncoder`,
-  `encode`, `audio`, `compositor`, `faststart`, `io` and the sink's codes.
+  `encode`, `audio`, `compositor`, `media`, `decode`, `faststart`, `io` and the sink's codes.
 - Progress events: `{ phase: 'audio' | 'video' | 'finish' | 'verify', done, total, fraction, elapsed, eta, speed }`.
 - A numeric `settings.loudness` (LUFS) makes `run` measure the mix first (`audioengine.measure`, progress phase
   `audio`) and add `audioengine.matchGain(measured, target)` (true peak kept under -1 dBTP) to `seq.masterGain` and
@@ -1491,8 +1512,9 @@ frame), like the sequence Out. Monitor buttons: safe margins (`overlays: ['safe'
 ### Export, captions, keys
 
 - `Cut.ui.exportDialog = { open(app), exportFrame(app), form(app), chaptersText, running }`. It calls
-  `Cut.export.run({ project, seqId, path, preset, overrides, settings: presets.resolve(...), range, captions, signal,
-  onProgress })`, offers `Cut.presets.AUDIO_BITRATES` (default 192 kbps), measures loudness with
+  `Cut.export.run({ project /* a JSON copy of app.project made when Export is pressed: commands change the project in
+  place, so edits during the export went into the rest of the file */, seqId, path, preset, overrides, settings:
+  presets.resolve(...), range, captions, signal, onProgress })`, offers `Cut.presets.AUDIO_BITRATES` (default 192 kbps), measures loudness with
   `Cut.audioengine.measure`, passes `chapters(seq, {firstName: tr('Intro')})`, and shows `verified.problems` through
   `tr(message, params)`.
 - The form's `enqueue()` (Add to Queue in the dialog and the Export Settings panel) runs the same checks as `start()`

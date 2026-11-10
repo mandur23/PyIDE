@@ -133,6 +133,8 @@ exports.register = ({ ipcMain, app, send, unpackedDir, windows, diagnostics }) =
   ipcMain.handle('collab:setRole', (_e, id, role) => host?.session.setRole(id, role) ?? false);
   ipcMain.handle('collab:kick', (_e, id) => host?.session.kick(id) ?? false);
   ipcMain.handle('collab:state', () => state());
+  // The share dialog's starting list: the host may take entries off it.
+  ipcMain.handle('collab:defaults', () => ({ hidden: P.DEFAULT_HIDDEN }));
   // Step 5: what runs on the host, only ever by the host's answer.
   ipcMain.handle('collab:runAnswer', (_e, by, req, allowed) => host?.session.runAnswer({ by, req, allowed: allowed === true }) ?? false);
   ipcMain.handle('collab:shareTerminal', (_e, id, name, cols, rows) => host?.session.shareTerminal(id, name, { cols, rows }) ?? false);
@@ -217,7 +219,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir, windows, diagnostics }) =
     if (['saved', 'fs:result', 'lsp:answer', 'run:answer'].includes(msg.type)) {
       const done = answers.get(msg.req);
       answers.delete(msg.req);
-      done?.({ ok: msg.type === 'lsp:answer' || !!msg.ok || msg.allowed === true, result: msg.result, code: typeof msg.code === 'string' ? msg.code.slice(0, 40) : undefined, error: typeof msg.error === 'string' ? msg.error.slice(0, 300) : undefined });
+      done?.({ ok: msg.type === 'lsp:answer' || !!msg.ok || msg.allowed === true, result: msg.result, code: typeof msg.code === 'string' ? msg.code.slice(0, 40) : undefined, why: typeof msg.why === 'string' ? msg.why.slice(0, 40) : undefined, error: typeof msg.error === 'string' ? msg.error.slice(0, 300) : undefined });
       return;
     }
     if (msg.type === 'ports') { guest.ports.set(msg.ports); return; }

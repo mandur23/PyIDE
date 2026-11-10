@@ -1,15 +1,22 @@
 // Electron main process for verify/update-delta.mjs and the signature cases of verify/updater.mjs: registers main/features/updater.js with a fake ipcMain, checks the
 // feed and downloads the update exactly as an NSIS install would (PYIDE_UPDATE_TEST_KIND=nsis), with the real
 // electron-updater and Electron's net module, then writes what happened to a JSON file and quits. Nothing is installed.
-// PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, channel, userData, out}. LOCALAPPDATA points at a temp folder,
-// so electron-updater's cache (<LOCALAPPDATA>\nano-studio-updater) is the test's own.
-const { app } = require('electron');
+// With PYIDE_UPDATE_TEST_KIND=msi it takes the MSI path instead (updater:openInstaller): the .msi goes to `downloads`,
+// and what would be shown in Explorer is recorded (`shown`) instead.
+// PYIDE_DELTA_CASE (JSON): {updaterJs, feedDir, http, differential, channel, userData, downloads, out}. LOCALAPPDATA points
+// at a temp folder, so electron-updater's cache (<LOCALAPPDATA>\nano-studio-updater) is the test's own.
+const { app, shell } = require('electron');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 
 const cfg = JSON.parse(process.env.PYIDE_DELTA_CASE);
 app.setPath('userData', cfg.userData);
+if (cfg.downloads) app.setPath('downloads', cfg.downloads);
+const shown = [];
+shell.showItemInFolder = (file) => { shown.push(file); };
+shell.openPath = async (file) => { shown.push(file); return ''; };
+shell.openExternal = async (url) => { shown.push(url); };
 app.on('window-all-closed', () => {});
 
 // Every HTTP server made here (the test's own feed server, or the one updater.js starts for a folder feed) records its
@@ -32,7 +39,7 @@ http.createServer = function (...args) {
 };
 
 function finish(result) {
-  fs.writeFileSync(cfg.out, JSON.stringify({ ...result, requests }, null, 2));
+  fs.writeFileSync(cfg.out, JSON.stringify({ ...result, requests, shown }, null, 2));
   app.quit();
 }
 
@@ -56,14 +63,15 @@ app.whenReady().then(async () => {
     result.kind = (await handlers['updater:state']()).kind;
     result.check = await handlers['updater:check'](null, feed, { channel: cfg.channel });
     const started = Date.now();
-    await handlers['updater:download'](null, cfg.differential == null ? undefined : { differential: cfg.differential });
+    if (result.kind === 'msi') await handlers['updater:openInstaller']();
+    else await handlers['updater:download'](null, cfg.differential == null ? undefined : { differential: cfg.differential });
     result.ms = Date.now() - started;
     const final = await handlers['updater:state']();
     result.download = final.download;
     result.phase = final.phase;
     result.signature = final.signature;
     const pending = path.join(process.env.LOCALAPPDATA, 'nano-studio-updater', 'pending');
-    const exe = fs.readdirSync(pending).find((n) => /^NanoStudio-Setup-.*\.exe$/.test(n));
+    const exe = result.kind === 'msi' ? null : fs.readdirSync(pending).find((n) => /^NanoStudio-Setup-.*\.exe$/.test(n));
     result.file = exe ? path.join(pending, exe) : null;
   } catch (err) {
     result.error = err.stack || String(err);

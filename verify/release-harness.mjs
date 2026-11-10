@@ -2,10 +2,12 @@
 // so no git, gh, installer, network or file outside it is touched; it only reads package.json, package-lock.json and
 // CHANGELOG.md. Covers failure advice by phase, the order of a release, local-install handling, signals, the
 // blockmap rules of differential updates, the beta channel (a beta publishes only beta.yml and leaves latest.yml
-// alone; a stable release writes both), and signing (the key's checks, each installer's .sig before the feed switches).
+// alone; a stable release writes both), and signing (the key's checks, each installer's .sig and signed .manifest before
+// the feed switches, the manifests read back from the feed in step 8).
 // The release key is a throwaway one that lives in the fake world. Usage: node verify/release-harness.mjs
 import { createHash, generateKeyPairSync, sign, verify } from 'crypto';
 import { readFileSync } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -19,6 +21,7 @@ const KEY_FILE = path.join(ROOT, 'fake-world', 'release-key.pem');
 process.env.NANO_RELEASE_KEY = KEY_FILE;
 process.env.PYIDE_RELEASE_PUBLIC_KEY = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const R = await import(pathToFileURL(path.join(ROOT, 'scripts', 'release.mjs')).href);
+const releaseKey = createRequire(import.meta.url)('../main/release-key.js');
 const { io, state, configure, failureAdvice, run, INSTALL_DIR, previousVersion, oldAssets, liveBeta } = R;
 const REPO_ARG = 'mandur23/Portfolio-Nano-';
 
@@ -68,7 +71,7 @@ function world({ version = V, failAt = null, originMaster = 'abc', tagOnOrigin =
   ]);
   if (staleLatest) files.set(path.join(DIST, 'latest.yml'), ymlText(staleLatest, `NanoStudio-Setup-${staleLatest}.exe`, 'old'));
   if (installed) { files.set(UNINST, 'u'); files.set(INSTALLED, 'old'); }
-  W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets, ci };
+  W = { version, files, calls: [], spawns: [], out: [], fetched: [], exitCode: null, failAt, originMaster, tagOnOrigin, ahead, testsPass, reinstallOk, uninstallFails, feed, onSleep, assets, ci, uploaded: new Map() };
   return W;
 }
 const line = (cmd, args) => [path.basename(cmd), ...args].join(' ');
@@ -96,6 +99,7 @@ function fakeSpawn(cmd, args, opts) {
   if (l.startsWith('gh release list')) return res(0, 'v1.4.3');
   if (l.startsWith('gh run list')) return W.ci === 'error' ? res(1) : res(0, JSON.stringify(W.ci ? [W.ci] : []));
   if (l.startsWith('gh release view')) return res(0, W.assets.join('\n'));
+  if (l.startsWith('gh release upload')) for (const a of args) if (W.files.has(a)) W.uploaded.set(path.basename(a), W.files.get(a));
   if (l.startsWith('tasklist')) return res(0, 'INFO: No tasks');
   if (l.startsWith('powershell')) return res(W.testsPass ? 0 : 1);
   return res(0);
@@ -108,7 +112,13 @@ Object.assign(io, {
   copyFileSync: (a, b) => { W.files.set(b, W.files.get(a)); },
   mkdtempSync: (p) => `${p}STAGE`,
   rmSync: () => {},
-  fetch: async (url) => { W.fetched.push(String(url)); return { ok: true, text: async () => `version: ${W.feed}\n` }; },
+  // The feed as the uploads left it: a manifest is served as it went up; the channel files report W.feed.
+  fetch: async (url) => {
+    W.fetched.push(String(url));
+    const name = String(url).split('/').pop();
+    if (!name.endsWith('.manifest')) return { ok: true, text: async () => `version: ${W.feed}\n` };
+    return { ok: W.uploaded.has(name), text: async () => W.uploaded.get(name) || '' };
+  },
   sleep: async () => { if (W.onSleep) { const f = W.onSleep; W.onSleep = null; f(); return new Promise(() => {}); } },
   log: (s) => W.out.push(String(s)),
   error: (s) => W.out.push(String(s)),
@@ -365,12 +375,13 @@ code = await run([B1, '--skip-tests']);
 ok(code === 0 && pkgVersion() === B1 && has(`commit -m Release ${B1}`) && has(`tag -a v${B1}`) && has(`push --atomic origin master refs/tags/v${B1}`), `beta ${B1}: version set, committed, tagged and pushed like a release`);
 ok(/release notes: CHANGELOG\.md, ## 0\.2\.1 \(a beta/.test(text()), 'beta without its own CHANGELOG section: the section of the release it previews (## 0.2.1)');
 let ups = uploads();
-ok(ups.length === 2 && ups[0] === `gh release upload nano-studio dist${sep}NanoStudio-Setup-${B1}.exe dist${sep}NanoStudio-Setup-${B1}.exe.blockmap dist${sep}NanoStudio-${B1}.msi ${staged(`NanoStudio-Setup-${B1}.exe.sig`)} ${staged(`NanoStudio-${B1}.msi.sig`)} -R ${REPO_ARG} --clobber`, `beta: installers, signatures and blockmap first, without NanoStudio-Setup.exe (${ups[0]})`);
+ok(ups.length === 2 && ups[0] === `gh release upload nano-studio dist${sep}NanoStudio-Setup-${B1}.exe dist${sep}NanoStudio-Setup-${B1}.exe.blockmap dist${sep}NanoStudio-${B1}.msi ${staged(`NanoStudio-Setup-${B1}.exe.sig`)} ${staged(`NanoStudio-${B1}.msi.sig`)} ${staged(`NanoStudio-Setup-${B1}.exe.manifest`)} ${staged(`NanoStudio-${B1}.msi.manifest`)} -R ${REPO_ARG} --clobber`, `beta: installers, signatures, manifests and blockmap first, without NanoStudio-Setup.exe (${ups[0]})`);
 ok(ups[1].includes(betaYmlUp) && idx(betaYmlUp) > idx(`NanoStudio-Setup-${B1}.exe.blockmap`), 'beta: beta.yml uploaded last, after the blockmap');
 ok(!W.calls.some((c) => /latest\.yml/.test(c)), 'beta: latest.yml is neither uploaded nor touched (dist holds a stale one of 0.2.0)');
 ok(!has('release edit nano-studio') && !has('--latest'), 'beta: the release title, notes and Latest flag are not edited');
 ok(!deletes().length && /keeping NanoStudio-Setup-0\.2\.0-beta\.3\.exe\.blockmap: 0\.2\.0-beta\.3 updates to 0\.2\.1-beta\.1 differentially/.test(text()), `beta: stable versions' files untouched, the previous beta's blockmap kept (deleted: ${deletes().join(', ') || 'none'})`);
-ok(W.fetched.length === 1 && W.fetched[0].endsWith('/beta.yml') && /beta\.yml reports 0\.2\.1-beta\.1/.test(text()), `beta: step 8 reads beta.yml back (${W.fetched.join(', ')})`);
+ok(W.fetched.map((u) => u.split('/').pop()).join() === `beta.yml,NanoStudio-Setup-${B1}.exe.manifest,NanoStudio-${B1}.msi.manifest` && /beta\.yml reports 0\.2\.1-beta\.1/.test(text()),
+  `beta: step 8 reads beta.yml and the installers' manifests back (${W.fetched.join(', ')})`);
 
 world({ version: B2, assets: BETA_ASSETS });
 code = await run([B2, '--skip-tests']);
@@ -389,7 +400,7 @@ ok(stagedBeta && W.files.get(stagedBeta) === W.files.get(path.join(DIST, 'latest
 ok(deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-0.2.1-beta.2.msi', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0-beta.3.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.1-beta.1.exe.blockmap', 'NanoStudio-Setup-0.2.1-beta.2.exe'].join(),
   `stable: older versions and betas deleted except the previous stable's and the previous beta's blockmaps (${deletes().join(', ')})`);
 ok(/keeping NanoStudio-Setup-0\.2\.0\.exe\.blockmap: 0\.2\.0 updates/.test(text()) && /keeping NanoStudio-Setup-0\.2\.1-beta\.2\.exe\.blockmap: 0\.2\.1-beta\.2 updates to 0\.2\.1/.test(text()), 'stable: says which two blockmaps it keeps');
-ok(W.fetched.map((u) => u.split('/').pop()).join() === 'latest.yml,beta.yml', `stable: step 8 reads latest.yml and beta.yml back (${W.fetched.join(', ')})`);
+ok(W.fetched.map((u) => u.split('/').pop()).join() === `latest.yml,beta.yml,NanoStudio-Setup-${V}.exe.manifest,NanoStudio-${V}.msi.manifest`, `stable: step 8 reads latest.yml, beta.yml and the installers' manifests back (${W.fetched.join(', ')})`);
 
 // A stable fix while a newer beta is out: beta.yml keeps the beta, whose files stay.
 world({ assets: [...ASSETS, 'beta.yml', 'NanoStudio-Setup-0.3.0-beta.1.exe', 'NanoStudio-Setup-0.3.0-beta.1.exe.blockmap', 'NanoStudio-0.3.0-beta.1.msi'] });
@@ -451,6 +462,28 @@ ok(code === 0 && ['NanoStudio-Setup-0.2.1.exe.sig', 'NanoStudio-0.2.1.msi.sig', 
 ok(signedBy(staged(`NanoStudio-Setup-${V}.exe.sig`), exeBytes()) && signedBy(staged(`NanoStudio-${V}.msi.sig`), 'msi') && signedBy(stableSig, exeBytes()), 'the signatures verify against the exact bytes of each installer');
 ok(!signedBy(staged(`NanoStudio-${V}.msi.sig`), `${exeBytes()}x`), 'a signature does not verify other bytes');
 ok(idx(`NanoStudio-Setup-${V}.exe.sig`) < idx(FEED_UP) && idx(`NanoStudio-${V}.msi.sig`) < idx(FEED_UP) && idx('NanoStudio-Setup.exe.sig') < idx(FEED_UP), 'every signature is up before latest.yml');
+const S = JSON.stringify;
+const sha = (body) => createHash('sha512').update(body).digest('base64');
+const exeManifest = await releaseKey.readManifest(W.files.get(staged(`NanoStudio-Setup-${V}.exe.manifest`)));
+const msiManifest = await releaseKey.readManifest(W.files.get(staged(`NanoStudio-${V}.msi.manifest`)));
+ok(firstUpload.includes(staged(`NanoStudio-Setup-${V}.exe.manifest`)) && firstUpload.includes(staged(`NanoStudio-${V}.msi.manifest`)) && idx(`NanoStudio-${V}.msi.manifest`) < idx(FEED_UP)
+  && !W.files.has(staged('NanoStudio-Setup.exe.manifest')), 'each versioned installer\'s manifest goes up with it, before latest.yml (the stable alias, which no update reads, has none)');
+ok(S(exeManifest) === S({ name: `NanoStudio-Setup-${V}.exe`, version: V, sha512: sha(exeBytes()) }) && S(msiManifest) === S({ name: `NanoStudio-${V}.msi`, version: V, sha512: sha('msi') }),
+  `the manifests read as the app reads them: file name, version and that file's SHA-512, signed (${S(exeManifest)})`);
+ok(W.files.get(staged(`NanoStudio-Setup-${V}.exe.manifest`)).startsWith(`Nano Studio update manifest 1\nNanoStudio-Setup-${V}.exe\n${V}\nsha512 `), 'the manifest is the documented text');
+ok(/NanoStudio-Setup-0\.2\.1\.exe\.manifest is signed for NanoStudio-Setup-0\.2\.1\.exe 0\.2\.1/.test(text()) && /NanoStudio-0\.2\.1\.msi\.manifest is signed for/.test(text()), 'step 8 reads both manifests back from the feed and checks them');
+const forged = W.files.get(staged(`NanoStudio-Setup-${V}.exe.manifest`)).replace(`\n${V}\n`, '\n9.9.9\n');
+ok(await releaseKey.readManifest(forged) === null, 'a manifest whose version was changed after signing does not read');
+
+world();
+W.uploaded = { set() {}, has: () => false, get: () => undefined };
+code = await run([V, '--skip-tests']);
+ok(code === 1 && /the feed's NanoStudio-Setup-0\.2\.1\.exe\.manifest is missing or not signed with the release key/.test(text()), 'a feed that does not serve the new manifest stops step 8 with a clear message');
+
+world();
+code = await run([V, '--dry-run', '--skip-tests']);
+ok(code === 0 && /NanoStudio-Setup-0\.2\.1\.exe\.manifest signed and read back/.test(text()) && /\[dry-run\] would read .*NanoStudio-0\.2\.1\.msi\.manifest/.test(text())
+  && !W.calls.some((c) => /^gh release (upload|edit|delete-asset)|^git (commit|tag|push)/.test(c)), 'a dry run with the key signs the manifests and reads them back, and uploads nothing');
 
 world({ version: B1, assets: BETA_ASSETS });
 code = await run([B1, '--skip-tests']);
@@ -515,15 +548,18 @@ W.files.set(INDEX, `${INDEX_BODY} `);
 code = await run([V, '--skip-tests']);
 ok(code === 1 && /does not match the index/.test(text()) && !has('npm run dist'), 'an index changed after signing: stops in step 1');
 
-const withSigs = [...ASSETS, 'NanoStudio-Setup-0.2.0.exe.sig', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup.exe.sig'];
+const withSigs = [...ASSETS, 'NanoStudio-Setup-0.2.0.exe.sig', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup.exe.sig', 'NanoStudio-Setup-0.2.0.exe.manifest', 'NanoStudio-0.2.0.msi.manifest'];
 world({ assets: withSigs });
 code = await run([V, '--skip-tests']);
-ok(code === 0 && deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.0.exe.sig'].join(), `an older version's .sig goes with its installer; its blockmap stays (${deletes().join(', ')})`);
+ok(code === 0 && deletes().sort().join() === ['NanoStudio-0.2.0.msi', 'NanoStudio-0.2.0.msi.manifest', 'NanoStudio-0.2.0.msi.sig', 'NanoStudio-Setup-0.1.9.exe.blockmap', 'NanoStudio-Setup-0.2.0.exe', 'NanoStudio-Setup-0.2.0.exe.manifest', 'NanoStudio-Setup-0.2.0.exe.sig'].join(),
+  `an older version's .sig and .manifest go with its installer; its blockmap stays (${deletes().join(', ')})`);
 ok(!deletes().includes('NanoStudio-Setup.exe.sig') && idx('delete-asset') > idx(FEED_UP), 'the stable alias\'s signature is replaced, not deleted, and deletes come after the feed switch');
-world({ version: B2, assets: [...BETA_ASSETS, `NanoStudio-Setup-${B1}.exe.sig`, `NanoStudio-${B1}.msi.sig`, 'NanoStudio-Setup-0.2.0.exe.sig'] });
+world({ version: B2, assets: [...BETA_ASSETS, `NanoStudio-Setup-${B1}.exe.sig`, `NanoStudio-${B1}.msi.sig`, 'NanoStudio-Setup-0.2.0.exe.sig', `NanoStudio-Setup-${B1}.exe.manifest`, `NanoStudio-${B1}.msi.manifest`, 'NanoStudio-Setup-0.2.0.exe.manifest'] });
 code = await run([B2, '--skip-tests']);
-ok(code === 0 && deletes().includes(`NanoStudio-Setup-${B1}.exe.sig`) && deletes().includes(`NanoStudio-${B1}.msi.sig`) && !deletes().includes('NanoStudio-Setup-0.2.0.exe.sig'), 'a beta deletes older betas\' signatures, not a stable version\'s');
+ok(code === 0 && deletes().includes(`NanoStudio-Setup-${B1}.exe.sig`) && deletes().includes(`NanoStudio-${B1}.msi.sig`) && !deletes().includes('NanoStudio-Setup-0.2.0.exe.sig')
+  && deletes().includes(`NanoStudio-Setup-${B1}.exe.manifest`) && deletes().includes(`NanoStudio-${B1}.msi.manifest`) && !deletes().includes('NanoStudio-Setup-0.2.0.exe.manifest'), 'a beta deletes older betas\' signatures and manifests, not a stable version\'s');
 ok(previousVersion(['NanoStudio-Setup-0.2.4.exe.sig'], '0.2.5') === '0.2.4' && oldAssets(['NanoStudio-Setup-0.2.4.exe.sig', 'NanoStudio-Setup.exe.sig'], '0.2.5').join() === 'NanoStudio-Setup-0.2.4.exe.sig', 'asset names: <installer>.sig belongs to that installer\'s version');
+ok(previousVersion(['NanoStudio-0.2.4.msi.manifest'], '0.2.5') === '0.2.4' && oldAssets(['NanoStudio-Setup-0.2.4.exe.manifest', 'NanoStudio-0.2.4.msi.manifest'], '0.2.5').length === 2, 'asset names: <installer>.manifest belongs to that installer\'s version');
 
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

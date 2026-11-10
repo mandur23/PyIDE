@@ -8,8 +8,9 @@ const { pathToFileURL } = require('url');
 const { pathKey, caseSensitiveDirs } = require('./path-case');
 const { createSharedDocs, loadFromDisk } = require('./shared-docs');
 
-// product: the app's name (package.json productName), which the window titles carry.
-function createWindowManager({ appDir, product = 'Nano Studio' }) {
+// product: the app's name (package.json productName), which the window titles carry. devToolsKey: F12 opens DevTools
+// (a run from the source folder); with no application menu (main.js) nothing else does.
+function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = false }) {
   const all = new Set();
   // A guest's document no window holds is read as the editor would read it.
   const sharedDocs = createSharedDocs({ keyOf: pathKey, load: loadFromDisk });
@@ -24,6 +25,15 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
   const others = (sender) => alive().filter((w) => w.webContents.id !== sender.id);
   const dirtyPaths = (w) => dirty.get(w.webContents.id) || [];
   const busyNames = (w) => busy.get(w.webContents.id) || [];
+  // Before the page sees the key: plain F12 is no shortcut of any mode.
+  const addDevToolsKey = (w) => {
+    if (!devToolsKey) return;
+    w.webContents.on('before-input-event', (e, input) => {
+      if (input.type !== 'keyDown' || input.key !== 'F12' || input.control || input.shift || input.alt || input.meta) return;
+      e.preventDefault();
+      w.webContents.toggleDevTools();
+    });
+  };
   const announcePeers = () => {
     const n = alive().length;
     for (const w of alive()) w.webContents.send('window:peers', n);
@@ -37,7 +47,6 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
       y: bounds.y,
       backgroundColor: '#1e1f22',
       title: `${product} ${{ craft: 'Craft', cut: 'Cut' }[mode] || 'Code'}`,
-      autoHideMenuBar: true,
       // The preload hands the IPC API only to the IDE page (--pyide-page); the renderer process runs in Chromium's sandbox.
       webPreferences: {
         preload: path.join(appDir, 'preload.js'), contextIsolation: true, sandbox: true,
@@ -45,6 +54,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
       },
     });
     all.add(w);
+    addDevToolsKey(w);
     const id = w.webContents.id;
     w.on('close', (e) => {
       if (closingAll) return;
@@ -90,6 +100,7 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
         },
       });
       chooser = w;
+      addDevToolsKey(w);
       const mine = (e) => e.sender === w.webContents;
       const onPick = (e, picked) => { if (mine(e) && ['code', 'craft', 'cut'].includes(picked)) resolve(picked); };
       const onClose = (e) => { if (mine(e)) w.close(); };
@@ -193,6 +204,10 @@ function createWindowManager({ appDir, product = 'Nano Studio' }) {
     choose,
     closeChooser() { if (chooser && !chooser.isDestroyed()) chooser.destroy(); },
     toChooser(channel, payload) { if (chooser && !chooser.isDestroyed()) chooser.webContents.send(channel, payload); },
+    // What closing every window would stop, by name (the update asks about it before its installer quits the app).
+    running: () => alive().flatMap(busyNames),
+    // on: the user has answered for every window (Restart to Update), so they close without asking.
+    closeWithoutAsking(on) { closingAll = !!on; },
   };
 }
 

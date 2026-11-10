@@ -138,7 +138,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 5. 그 기능의 테스트와 같은 영역을 쓰는 테스트를 하나씩 돌립니다. 화면이 바뀌면 다크와 라이트 화면을 캡처해 직접 봅니다.
 6. 문서를 고칩니다. 동작은 FEATURES.md의 그 기능 절에, 새로 겪은 문제는 pitfalls.md에 한 줄로 넣습니다. CHANGELOG.md는 릴리스할 때 씁니다.
 7. 테스트 잔여물을 정리합니다.
-8. 커밋은 요청이 있을 때만 합니다. 커밋 메시지 끝에 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`을 붙입니다.
+8. 커밋은 요청이 있을 때만 합니다. 커밋은 사용자의 것입니다. 메시지에 `Co-Authored-By` 같은 AI 표시를 붙이지 않습니다.
 
 ## 8. CI와 릴리스
 
@@ -165,8 +165,9 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 6. CI가 통과하고 베타에 문제가 없으면 정식을 냅니다. 드라이런과 exe 확인을 한 번 더 하고 `npm run release -- 0.3.23 --skip-tests`를 실행합니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.
 7. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`의 옛 버전은 지우지 않습니다. 그 뒤 임시 폴더를 지웁니다.
 8. `gh release list -R mandur23/Portfolio-Nano-`에서 Latest가 여전히 v1.4.3인지 봅니다. `nano-studio` 릴리스가 Latest가 되면 안 됩니다.
+9. `nano-studio` 릴리스에 이 버전의 `NanoStudio-Setup-<v>.exe.sig`, `NanoStudio-<v>.msi.sig`와 함께 `NanoStudio-Setup-<v>.exe.manifest`, `NanoStudio-<v>.msi.manifest`가 있는지 봅니다. 스크립트 8단계 출력에 두 줄 `<파일>.manifest is signed for <파일> <v>`가 있어야 합니다. `.sig`는 설치 파일 바이트만 서명하며 0.3.25 이하 설치본이 읽습니다. `.manifest`는 파일 이름, 버전, SHA-512를 묶어 서명한 것으로 그 뒤 버전이 읽고, 없으면 업데이트를 거부합니다. 둘 중 하나라도 빠지면 `--publish-only`로 다시 올립니다.
 
-옵션: `--dry-run`(명령만 출력), `--skip-tests`(설치본 테스트 건너뛰기), `--publish-only`(푸시 뒤 멈춘 릴리스의 업로드만), `--no-build`(드라이런 시험용: 빌드를 건너뛰고 `dist`에 있는 것을 확인). 서명 키는 `%USERPROFILE%\.nano-studio\release-key.pem`에 있고 저장소에 넣지 않습니다. `marketplace/index.json`을 바꾸면 같은 커밋에서 `npm run marketplace:sign`을 실행합니다.
+옵션: `--dry-run`(명령만 출력), `--skip-tests`(설치본 테스트 건너뛰기), `--publish-only`(푸시 뒤 멈춘 릴리스의 업로드만), `--no-build`(드라이런 시험용: 빌드를 건너뛰고 `dist`에 있는 것을 확인). 서명 키는 `%USERPROFILE%\.nano-studio\release-key.pem`에 있고 저장소에 넣지 않습니다. 키가 있으면 드라이런도 매니페스트를 임시 폴더에 서명하고 다시 읽어 확인합니다(올리지는 않습니다). `marketplace/index.json`을 바꾸면 같은 커밋에서 `npm run marketplace:sign`을 실행합니다.
 
 ## 9. 하지 않는 것
 

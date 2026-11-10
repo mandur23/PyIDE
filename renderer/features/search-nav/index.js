@@ -199,9 +199,31 @@
     renderFindResults(note);
   }
 
+  // The Local History label put before Replace All rewrites files (English; Local History translates it where shown).
+  const BEFORE_REPLACE = 'Before Replace in Files';
+
+  // Every file Replace All may rewrite goes into Local History first, closed ones with their content on disk: a file
+  // never opened in the editor has no revision there otherwise, and no undo. A file that cannot be kept is named and
+  // the user asked before anything changes. -> whether to go on.
+  async function keepBeforeReplace(paths) {
+    if (!ide.localHistory) return true;
+    const r = await ide.localHistory.checkpoint(BEFORE_REPLACE, { paths, disk: true });
+    // A file deleted since the search has no text to lose, and Replace cannot write it either.
+    const notKept = r && r.skipped.filter((s) => s.reason !== 'missing');
+    if (notKept && !notKept.length) return true;
+    const lost = notKept ? `${nt(notKept.length, 'Local History cannot keep the current text of {n} file, so Replace cannot be undone there:', 'Local History cannot keep the current text of {n} files, so Replace cannot be undone there:')} ${namedWhy(notKept)}`
+      : tr('Local History cannot keep the current text of these files, so Replace cannot be undone there.');
+    return ide.ui.confirm(`${lost}\n${tr('Replace anyway?')}`, { title: tr('Replace in Files'), ok: tr('Replace') });
+  }
+
+  // -> false when the user said no.
   async function replaceAll(o, res) {
     res = res || (await runFind(o));
     if (hasError(res) || !res.files.length) return showFindResults(o, true);
+    const question = nt2(res.count, res.files.length, ['Replace {count} occurrence in {files} file?', 'Replace {count} occurrence in {files} files?',
+      'Replace {count} occurrences in {files} file?', 'Replace {count} occurrences in {files} files?']);
+    if (!(await ide.ui.confirm(res.truncated ? `${question} ${tr('(results truncated)')}` : question, { title: tr('Replace in Files'), ok: tr('Replace') }))) return false;
+    if (!(await keepBeforeReplace(res.files.map((f) => f.path)))) return false;
     const changed = [];
     const onDisk = [];
     let count = 0;
@@ -240,15 +262,21 @@
     await showFindResults(o, true, r.skipped?.length ? `${done}. ${skippedText(r.skipped)}` : done);
   }
 
-  // Files the preview listed that Replace left as they were (main/features/search.js), each with why.
-  function skippedText(skipped) {
+  // Files left as they were, each with why: by Replace (main/features/search.js) or by Local History's checkpoint
+  // (main/features/local-history.js).
+  function namedWhy(skipped) {
     const why = (s) => (s.reason === 'tooLarge' ? tr('larger than 2 MB')
       : s.reason === 'binary' ? tr('not a text file')
         : s.reason === 'encoding' ? tr('{encoding} cannot store the new text', { encoding: s.encoding.toUpperCase() })
-          : ipcError(s.message || ''));
+          : s.reason === 'outside' ? tr('outside the project')
+            : s.reason === 'notFile' ? tr('not a file')
+              : ipcError(s.message || ''));
     const named = skipped.slice(0, 5).map((s) => `${basename(s.path)} (${why(s)})`);
     if (skipped.length > 5) named.push(tr('{n} more', { n: skipped.length - 5 }));
-    return `${nt(skipped.length, 'Not replaced in {n} file:', 'Not replaced in {n} files:')} ${named.join(', ')}`;
+    return named.join(', ');
+  }
+  function skippedText(skipped) {
+    return `${nt(skipped.length, 'Not replaced in {n} file:', 'Not replaced in {n} files:')} ${namedWhy(skipped)}`;
   }
 
   function selectedText() {
@@ -353,7 +381,8 @@
       showFindResults({ ...o }, replace);
     };
     const buttons = [{ label: tr('Open in Find Window'), primary: true, run: toWindow }];
-    if (replace) buttons.unshift({ label: tr('Replace All'), run: async () => { sync(); if (!o.query) return false; await replaceAll({ ...o }); } });
+    // Answering no to Replace All's question leaves this dialog open.
+    if (replace) buttons.unshift({ label: tr('Replace All'), run: async () => { sync(); if (!o.query) return false; if ((await replaceAll({ ...o })) === false) return false; } });
     const dlg = ide.ui.dialog({ title: replace ? tr('Replace in Files') : tr('Find in Files'), body, buttons, width: 780 });
     q.select();
     update();

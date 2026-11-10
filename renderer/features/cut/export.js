@@ -52,6 +52,40 @@
     });
     return Promise.race([promise, late]).finally(() => clearTimeout(timer));
   }
+  // A source that stopped giving its picture or sound during the export (a drive unplugged, a file locked, a damaged
+  // packet): the export stops, naming the clip and the sequence time, instead of writing a red frame or silence into a
+  // file it calls done. Media that was offline when the export started (the dialog asked) is not a failure (`accepted`:
+  // its ids). lost: [{clip, media, error}] -> an Error with code 'media', or null.
+  function lostMedia(project, seq, t, lost, accepted, kind) {
+    const bad = lost.filter((x) => !(x.media != null && accepted.has(x.media)));
+    if (!bad.length) return null;
+    const x = bad[0];
+    const clip = x.clip != null ? findClip(project, x.clip) : project.media.some((m) => m.id === x.media) ? findClip(project, null, x.media) : null;
+    const media = project.media.find((m) => m.id === (x.media ?? clip?.source?.media));
+    const name = clip?.name || media?.name || String(x.clip ?? x.media ?? '?');
+    const t2 = globalThis.tr || ((s2, v) => s2.replace(/\{(\w+)\}/g, (_, k) => v[k]));
+    const params = { clip: name, time: time.timecode(t, seq.fps), error: x.error || 'unknown error' };
+    const message = kind === 'sound'
+      ? t2('The sound of {clip} could not be read at {time} ({error}), so the export was stopped.', params)
+      : t2('The picture of {clip} could not be read at {time} ({error}), so the export was stopped.', params);
+    return Object.assign(new Error(message), { code: 'media', info: { clip: clip?.id ?? x.clip ?? null, media: media?.id ?? x.media ?? null, t } });
+  }
+  // A clip by id, or the first one that uses a media, in any sequence (a nest's clips are in theirs).
+  function findClip(project, id, mediaId) {
+    for (const q of project.sequences) {
+      const c = q.clips.find((x) => (id != null ? x.id === id : x.source?.media === mediaId));
+      if (c) return c;
+    }
+    return null;
+  }
+  // The sound clips of one mix that are missing or whose source failed -> [{clip, media, error}] (lostMedia).
+  function lostSound(m, failures) {
+    const out = (m.missed || []).map((x) => ({ clip: x.clip, media: x.media, error: 'the sound is not read' }));
+    for (const f of failures) out.push({ clip: null, media: f.media, error: f.error });
+    // a failed source makes its clips missing too: the source's reason is the useful one
+    for (const x of out) if (x.clip != null) { const f = failures.find((y) => y.media === x.media); if (f) x.error = f.error; }
+    return out;
+  }
   // The target was open in another program, so the finished file kept its .part name.
   const keptText = (path, part) => {
     const t = globalThis.tr || ((s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k]));
@@ -325,7 +359,9 @@
   // Chrome's encoders turn frames from CPU memory (the 2D back end's willReadFrequently canvas) into full-range YUV,
   // which most players show too dark; frames of a GPU canvas become the usual limited range. So a 2D back end's
   // picture is copied into a GPU canvas first.
-  async function makeRenderer({ project, seqId, settings, burn, factory, backend }) {
+  // `accepted` (a Set of media ids, or null for a single frame) makes a frame with a red "cannot be shown" picture of any
+  // other media throw (lostMedia); a lost GPU device ends the export too.
+  async function makeRenderer({ project, seqId, settings, burn, factory, backend, accepted = null, slated = null }) {
     const canvas = new OffscreenCanvas(settings.width, settings.height);
     const create = factory || mod('compositor')?.create;
     if (typeof create !== 'function') throw Object.assign(new Error('the compositor is not loaded'), { code: 'compositor' });
@@ -336,18 +372,34 @@
     return {
       backend: comp.backend,
       async frame(t, pts, duration) {
-        await comp.render(project, seqId, t, { quality: 1, captions: burn || null });
+        const drawn = await comp.render(project, seqId, t, { quality: 1, captions: burn || null });
+        if (accepted) {
+          const seq = project.sequences.find((q) => q.id === seqId);
+          const failed = drawn?.failed || [];
+          const err = lostMedia(project, seq, t, failed, accepted, 'picture');
+          if (err) throw err;
+          for (const f of failed) slated?.add(f.clip);
+        }
         if (!checked) {
           await comp.idle?.();
           checked = true;
-          if (comp.errors?.length) throw Object.assign(new Error(`the compositor failed: ${String(comp.errors[0]).split(/\r?\n/)[0]}`), { code: 'compositor' });
         }
+        this.check();
         const init = { timestamp: time.toMicros(pts), duration: time.toMicros(duration), alpha: 'discard' };
         if (copy) {
           cg.drawImage(canvas, 0, 0);
           return new VideoFrame(copy, init);
         }
         return typeof comp.videoFrame === 'function' ? comp.videoFrame(init) : new VideoFrame(canvas, init);
+      },
+      // GPU errors arrive after the work that caused them: looked at after every frame, and once the last is drawn.
+      check() {
+        if (comp.lost) throw Object.assign(new Error(`the GPU device was lost: ${comp.lost.message || comp.lost.reason || 'unknown reason'}`), { code: 'compositor' });
+        if (comp.errors?.length) throw Object.assign(new Error(`the compositor failed: ${String(comp.errors[0]).split(/\r?\n/)[0]}`), { code: 'compositor' });
+      },
+      async done() {
+        await comp.idle?.();
+        this.check();
       },
       close() { (comp.destroy || comp.close)?.call(comp); },
     };
@@ -503,6 +555,10 @@
     const burn = (captionMode === 'burn' || captionMode === 'both') && seq.captions?.length ? (opts.captionTrack || seq.captions[0].id) : null;
     const progress = (p) => { try { onProgress?.(p); } catch {} };
 
+    // Media offline as the export starts: the dialog warned and asked, and it shows as the red "media offline" picture
+    // with no sound. Anything else that cannot be shown or heard on the way stops the export (lostMedia).
+    const offline = (await preflight(project, seq.id, { in: from, out: to }).catch(() => ({ offline: [] }))).offline;
+    const accepted = new Set(offline.map((m) => m.id));
     let attempt = null;
     let choices = [null];
     if (settings.video) {
@@ -510,7 +566,7 @@
       if (!choices.length) return fail('noEncoder', settings.video.family === 'hevc' ? 'This PC has no HEVC encoder.' : 'This PC has no H.264 encoder for these settings.');
     }
     for (let i = 0; i < choices.length; i++) {
-      attempt = await encodeOnce({ ...opts, project, seq, settings, from, to, path, burn, choice: choices[i], progress, signal, started });
+      attempt = await encodeOnce({ ...opts, project, seq, settings, from, to, path, burn, choice: choices[i], progress, signal, started, accepted });
       // A hardware encoder that fails on the way gets one more try in software.
       if (attempt.ok || attempt.code !== 'encode' || i === choices.length - 1) break;
     }
@@ -540,6 +596,11 @@
     if (opts.verify !== false) {
       progress({ phase: 'verify', fraction: 1 });
       verified = await verifyFile(attempt.path, { video: settings.video ? { fps: seq.fps } : null, frames: attempt.frames, duration: to - from, audio: !!settings.audio });
+      if (attempt.slated.length) {
+        const names = attempt.slated.map((id) => findClip(project, id)?.name || id);
+        verified.problems.push({ code: 'offline', message: '{n} clips use offline media: they show the red "media offline" picture and are silent ({names}).', params: { n: names.length, names: names.join(', ') } });
+        verified.ok = false;
+      }
     }
     const seconds = (performance.now() - started) / 1000;
     const media = (to - from) / TICKS;
@@ -550,12 +611,14 @@
     const st = await invoke('cut:stat', attempt.path).catch(() => null);
     return {
       ok: true, path: attempt.path, bytes: st?.size ?? attempt.bytes, seconds, speed: media / Math.max(1e-6, seconds),
-      frames: attempt.frames, range: { in: from, out: to }, verified, encoder: attempt.encoder, audioDelay: attempt.audioDelay, audioBitrate: attempt.audioBitrate, loudnessGain: attempt.loudnessGain, sidecars,
+      frames: attempt.frames, range: { in: from, out: to }, verified, offline: attempt.slated, encoder: attempt.encoder, audioDelay: attempt.audioDelay, audioBitrate: attempt.audioBitrate, loudnessGain: attempt.loudnessGain, sidecars,
     };
   }
 
   async function encodeOnce(o) {
     const { project, seq, settings, from, to, path, progress, signal } = o;
+    const accepted = o.accepted || new Set();
+    const slated = new Set(); // clips of offline media drawn as the red picture or left silent
     const ae = mod('audioengine');
     const mp4write = mod('mp4write');
     if (signal?.aborted) return cancelled();
@@ -583,7 +646,11 @@
       const tps = TICKS / rate;
       const mixer = settings.audio ? ae.createMixer({ rate, getAudio: o.getAudio }) : null;
       // The first minutes now; the rest as the mix gets there (mixLoaded), so a long range is never all in memory.
-      if (mixer) await mixer.load(project, seq.id, from, to);
+      if (mixer) {
+        await mixer.load(project, seq.id, from, to);
+        const err = lostMedia(project, seq, from, lostSound({}, mixer.failures()), accepted, 'sound');
+        if (err) throw err;
+      }
       if (signal?.aborted) return abort(cancelled());
       const { bitrate: audioBitrate, delay } = settings.audio ? await aacSetup(rate, settings.audio.channels, settings.audio.bitrate) : { bitrate: null, delay: 0 };
       const s0 = Math.round(from / tps);
@@ -616,7 +683,13 @@
         // audio-only ran to the end after Cancel, with the bar standing still).
         while (sDone < until && !failure && !signal?.aborted) {
           const n = Math.min(rate, until - sDone);
-          aenc.push((await mixer.mixLoaded(project, seq.id, s0 + sDone, n, { masterGain })).out);
+          const m = await mixer.mixLoaded(project, seq.id, s0 + sDone, n, { masterGain });
+          // after mixLoaded every clip is read: one still missing, or a source that failed, is not in the file
+          const lost = lostSound(m, mixer.failures());
+          const err = lostMedia(project, seq, (s0 + sDone) * tps, lost, accepted, 'sound');
+          if (err) throw err;
+          for (const x of m.missed || []) slated.add(x.clip);
+          aenc.push(m.out);
           sDone += n;
           while (aenc.enc.encodeQueueSize > 8 && !failure) await sleep(1);
           if (!settings.video && (sDone / rate) % 5 === 0) progress({ phase: 'audio', fraction: sDone / sTotal });
@@ -636,7 +709,7 @@
       let encodeStart = performance.now();
       let lastWrite = Promise.resolve();
       if (settings.video) {
-        renderer = await makeRenderer({ project, seqId: seq.id, settings, burn: o.burn, factory: o.compositor, backend: o.backend });
+        renderer = await makeRenderer({ project, seqId: seq.id, settings, burn: o.burn, factory: o.compositor, backend: o.backend, accepted, slated });
         const ptsQueue = [];
         venc = new VideoEncoder({
           output: (chunk, meta) => {
@@ -677,6 +750,7 @@
           }
         }
         if (!failure) await venc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'video' }); });
+        if (!failure && !signal?.aborted) await renderer.done();
       }
       if (signal?.aborted) return abort(cancelled());
       if (aenc && !failure) {
@@ -696,11 +770,11 @@
       const closed = await sink.close(true);
       if (closed?.part) return fail('busy', keptText(path, closed.part), { part: closed.part });
       if (!closed?.ok) return fail(closed?.code || 'io', closed?.error || 'cannot write the file');
-      return { ok: true, path: closed.path, bytes: closed.bytes, frames, encodeSeconds, audioDelay: aenc ? delay : null, audioBitrate: aenc ? audioBitrate : null, loudnessGain,
+      return { ok: true, path: closed.path, bytes: closed.bytes, frames, encodeSeconds, slated: [...slated], audioDelay: aenc ? delay : null, audioBitrate: aenc ? audioBitrate : null, loudnessGain,
         encoder: settings.video ? { codec: settings.video.codec, hardware: !!o.choice.hardware } : null };
     } catch (err) {
       if (signal?.aborted) return abort(cancelled());
-      return abort(fail(codeOf(err, 'encode'), String(err.message || err)));
+      return abort(fail(codeOf(err, 'encode'), String(err.message || err), err.info || {}));
     }
   }
 
@@ -738,6 +812,6 @@
 
   return {
     run, exportFrame, framePng, chapters, chapterProblems, preflight, verifyFile, saveBytes, openSink, encodeAudio, aacDelay,
-    framePlan, captionsInRange, captionsAt, sidecarPath, withExt, psnr, speed, decodeRange,
+    framePlan, captionsInRange, captionsAt, sidecarPath, withExt, psnr, speed, decodeRange, lostMedia, lostSound,
   };
 });

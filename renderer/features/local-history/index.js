@@ -75,11 +75,16 @@
     return out;
   }
 
-  // A labeled point in time. The label is English UI text unless `user` (a name the user typed).
-  function checkpoint(label, { paths, user = false } = {}) {
-    if (!ide.root) return Promise.resolve(null);
+  // A labeled point in time. The label is English UI text unless `user` (a name the user typed). With `disk`, every
+  // one of `paths` without unsaved text goes in with its content on disk, for a caller about to rewrite files the
+  // history may never have seen: -> {t, skipped: [{path, reason}]} (main/features/local-history.js), null on failure.
+  async function checkpoint(label, { paths, user = false, disk = false } = {}) {
+    if (!ide.root) return null;
     const docs = openDocs(paths);
-    return invoke('checkpoint', ide.root, label, user, docs).catch(logError('cannot put a label'));
+    if (!disk) return invoke('checkpoint', ide.root, label, user, docs).catch(logError('cannot put a label'));
+    await ready;
+    const files = paths.filter((p) => !docs.some((d) => samePath(d.path, p)));
+    return invoke('checkpointFiles', ide.root, label, docs, files).then((r) => r || null, logError('cannot put a label'));
   }
 
   async function putLabel() {

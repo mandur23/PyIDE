@@ -1646,5 +1646,8 @@
   "Add a graphic at {at} s ({n} layers)": "{at}초에 그래픽 추가 (레이어 {n}개)",
   "Change a graphic": "그래픽 바꾸기",
   "Change graphic {clip}": "그래픽 {clip} 바꾸기",
-  "Edit Graphic": "그래픽 편집"
+  "Edit Graphic": "그래픽 편집",
+  "The picture of {clip} could not be read at {time} ({error}), so the export was stopped.": "{time}에서 {clip}의 영상을 읽지 못해({error}) 내보내기를 멈췄습니다.",
+  "The sound of {clip} could not be read at {time} ({error}), so the export was stopped.": "{time}에서 {clip}의 소리를 읽지 못해({error}) 내보내기를 멈췄습니다.",
+  "{n} clips use offline media: they show the red \"media offline\" picture and are silent ({names}).": "클립 {n}개가 오프라인 미디어를 씁니다. 빨간 \"미디어 없음\" 화면이 나오고 소리가 없습니다({names})."
 }

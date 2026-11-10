@@ -1,7 +1,7 @@
 // Updates, main side: electron-updater with a generic feed. The feed is the renderer's `updates.feedUrl` setting: an
 // https URL, http on this computer, or a local folder (or file: URL) holding latest.yml and the installers, which is
 // served on 127.0.0.1 while Nano Studio runs. The channel (`updates.channel`) picks the feed file: latest.yml for Stable, beta.yml for Beta. Only an NSIS install updates itself (download, then the silent installer on restart). An MSI install
-// is pointed at the new .msi instead, since MSI installs are upgraded by Windows Installer. Source runs only check.
+// downloads the new .msi and shows it instead, since MSI installs are upgraded by Windows Installer. Source runs only check.
 // NSIS downloads are differential when they can be: electron-updater rebuilds the new installer from the one this version
 // was installed with, which the NSIS installer copies to %LOCALAPPDATA%\nano-studio-updater\installer.exe, and the blocks that
 // changed. It reads the new installer's <url>.blockmap and the old one's (the same URL with the old version, unless
@@ -10,15 +10,20 @@
 // rebuilt file) falls back to the full installer. The setting updates.differential and PYIDE_UPDATE_DIFFERENTIAL=0 turn
 // it off.
 // Installers are not Authenticode-signed, so electron-updater only checks the sha512 in latest.yml, which comes from the
-// same release as the installer. The update is therefore checked here against <installer>.sig and main/release-key.js
-// before the phase can become 'downloaded', the only way to updater:install. A missing or bad signature refuses the
-// update. The default feed, https feeds and network shares need one; a folder on this computer or http on this computer
-// (test builds, nobody signs them) does not, and the Update Ready dialog says that this update was not checked.
+// same release as the installer. The update is therefore checked here against <installer>.manifest, signed with
+// main/release-key.js, before the phase can become 'downloaded', the only way to updater:install; an MSI is checked the
+// same way before it is shown. The manifest must name the file and version offered, a version newer than this one (and
+// no beta on the Stable channel), and the hash of the downloaded file; anything else refuses the update. Releases up to
+// 0.3.25 have only <installer>.sig, a signature of the bytes alone, which those versions still check (scripts/release.mjs
+// keeps publishing it). The default feed, https feeds and network shares need a manifest; a folder on this computer or
+// http on this computer (test builds, nobody signs them) does not, and the Update Ready dialog says that this update was
+// not checked.
 const { net, shell } = require('electron');
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { pipeline } = require('stream');
+const { pipeline, Readable, Transform } = require('stream');
 const { fileURLToPath } = require('url');
 const zlib = require('zlib');
 const { loopback } = require('../marketplace');
@@ -211,12 +216,13 @@ exports.notesAfterUpdate = notesAfterUpdate;
 let registered = null;
 exports.register = (context) => (registered ||= start(context));
 
-function start({ ipcMain, app, send, diagnostics }) {
+// quitAhead(begin) (main.js): the quit gate's work, done before the installer starts; windows: what runs in them.
+function start({ ipcMain, app, send, diagnostics, quitAhead, windows }) {
   const log = diagnostics?.logger('#updater') || console;
   const kind = installKind(app);
   let updater = null;
   let feed = null; // {key, url, dir, server, signed}
-  let offered = null; // what the last check found: {info, url (of the feed), signed}
+  let offered = null; // what the last check found: {info, url (of the feed), signed, channel ('latest' | 'beta')}
   const historyFile = path.join(app.getPath('userData'), 'updater.json');
   // PYIDE_UPDATE_INTERVAL_MS replaces the length of a day for the periodic check (verify/report-update.mjs).
   const intervalMs = Number(process.env.PYIDE_UPDATE_INTERVAL_MS) > 0 ? Number(process.env.PYIDE_UPDATE_INTERVAL_MS) : null;
@@ -341,10 +347,11 @@ function start({ ipcMain, app, send, diagnostics }) {
       const u = getUpdater();
       // electron-updater only checks packaged apps; a source run still reports what the feed offers.
       if (!app.isPackaged) u.forceDevUpdateConfig = true;
-      const result = await withDeadline(u, checkChannel(u, options?.channel === 'beta' ? 'beta' : 'latest'));
+      const channel = options?.channel === 'beta' ? 'beta' : 'latest';
+      const result = await withDeadline(u, checkChannel(u, channel));
       const latest = result?.updateInfo?.version;
       const available = result?.isUpdateAvailable && latest ? latest : null;
-      if (available) offered = { info: result.updateInfo, url, signed };
+      if (available) offered = { info: result.updateInfo, url, signed, channel };
       setState({ phase: available ? 'available' : 'idle', available, notes: result?.updateInfo?.releaseNotes || null, lastCheck: Date.now(), failures: 0, lastError: null });
       saveHistory();
       return { available };
@@ -368,29 +375,45 @@ function start({ ipcMain, app, send, diagnostics }) {
     return Object.assign(new Error(`UPDATE_SIGNATURE: ${why}`), { code: 'ERR_UPDATER_INVALID_SIGNATURE' });
   }
 
-  // Read before the download: a release without a signature costs no installer download. Electron's net, as the
-  // download uses, so a proxy that lets the installer through also lets this through.
-  async function readSignature() {
+  // Read before the download: a release without a manifest costs no installer download. Electron's net, as the
+  // download uses, so a proxy that lets the installer through also lets this through. name: the installer offered.
+  // -> {name, version, sha512}, what the manifest vouches for, once it matches the offer.
+  async function readManifest(name) {
     if (!offered) throw refused('no checked update to download');
-    const url = new URL(`${installerName(offered.info)}.sig`, offered.url).href;
+    const url = new URL(`${name}.manifest`, offered.url).href;
+    let text;
     try {
       const res = await net.fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
-      if (res.ok) return await res.text();
-      throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      text = await res.text();
     } catch (err) {
-      throw refused(`${url} could not be read (${err.message})`);
+      throw refused(`${url} could not be read (${err.message}); releases up to 0.3.25 have only ${name}.sig, which this version does not accept`);
     }
+    const m = await release.readManifest(text);
+    const version = offered.info.version;
+    if (!m) throw refused(`${url} is not a manifest signed with the release key`);
+    if (m.name !== name) throw refused(`the signed manifest at ${url} is for ${m.name}, not ${name}`);
+    if (m.version !== version) throw refused(`the signed manifest of ${name} says version ${m.version}, but the feed offers it as ${version}`);
+    if (compareVersions(m.version, state.version) <= 0) throw refused(`${name} is version ${m.version}, not newer than this version (${state.version})`);
+    if (offered.channel === 'latest' && isPrerelease(m.version)) throw refused(`${name} is the beta ${m.version}, and this copy is on the Stable channel`);
+    return m;
   }
+
+  // The SHA-512 (base64) of a file, read as a stream: an installer is about 100 MB.
+  const sha512Of = (file) => new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha512');
+    pipeline(fs.createReadStream(file), hash, (err) => (err ? reject(err) : resolve(hash.digest('base64'))));
+  });
 
   // After the download, not in electron-updater's verifySignature hook: that hook runs only when package.json names a
   // publisherName, and never for an installer already in its cache from an earlier run. installerPath is the final file
   // on both paths. A refused file leaves the cache, so nothing stays that a later run would find.
-  async function checkInstaller(u, signature) {
-    let ok = false;
-    try { ok = await release.verify(await fs.promises.readFile(u.installerPath), signature); } catch (err) { log.warn(`could not read the installer: ${err.message}`); }
-    if (ok) { log.info(`${path.basename(u.installerPath)} matches its signature`); return; }
+  async function checkInstaller(u, manifest) {
+    let sha512 = null;
+    try { sha512 = await sha512Of(u.installerPath); } catch (err) { log.warn(`could not read the installer: ${err.message}`); }
+    if (sha512 === manifest.sha512) { log.info(`${path.basename(u.installerPath)} matches its signed manifest (${manifest.name} ${manifest.version})`); return; }
     await u.downloadedUpdateHelper?.clear();
-    throw refused(`the installer does not match ${installerName(offered.info)}.sig`);
+    throw refused(`the downloaded installer's sha512 does not match ${manifest.name}.manifest`);
   }
 
   // options: {differential} (the setting updates.differential; PYIDE_UPDATE_DIFFERENTIAL=0 overrides it).
@@ -404,10 +427,10 @@ function start({ ipcMain, app, send, diagnostics }) {
     setState({ phase: 'downloading', percent: 0, signature: null, download: off ? { mode: 'full', size: null, bytes: null, reason: 'off' } : null });
     try {
       const unchecked = offered?.signed === false;
-      const signature = unchecked ? null : await readSignature();
+      const manifest = unchecked ? null : await readManifest(installerName(offered?.info));
       await u.downloadUpdate();
       if (unchecked) log.warn(`the installer from ${offered.url} was not checked: this feed needs no signature`);
-      else await checkInstaller(u, signature);
+      else await checkInstaller(u, manifest);
       setState({ phase: 'downloaded', percent: 100, signature: unchecked ? 'unchecked' : 'verified' });
       return true;
     } catch (err) {
@@ -418,27 +441,85 @@ function start({ ipcMain, app, send, diagnostics }) {
   }
   ipcMain.handle('updater:download', (_e, options) => download(options));
 
-  // Starts the downloaded installer silently (it restarts Nano Studio) and quits. The installer closes it even if a window
-  // refuses to close, so the renderer saves unsaved files first.
-  function install() {
-    if (state.phase !== 'downloaded') return false;
-    setImmediate(() => getUpdater().quitAndInstall(true, true));
-    return true;
+  // What would stop if Nano Studio quit now (Run sessions, Craft servers, by name), for the renderer to ask about first.
+  ipcMain.handle('updater:running', () => windows?.running() ?? []);
+
+  // Starts the downloaded installer silently (it restarts Nano Studio) and quits. The installer ends every process left
+  // under the install folder about a second after it starts, and will-quit is too late to wait in, so the quit gate's
+  // work (servers saving their worlds, main.js) is done first. If any of it does not finish in time nothing is installed
+  // over it. The renderer has asked about running programs and saved unsaved files.
+  // -> {installed, late: how many quit jobs did not finish in time}.
+  async function install() {
+    if (state.phase !== 'downloaded') return { installed: false, late: 0 };
+    let installed = false;
+    const begin = () => {
+      const u = getUpdater();
+      log.info('starting the installer');
+      // The user has answered for every window: one still listing a program must not stop the quit.
+      windows?.closeWithoutAsking(true);
+      u.quitAndInstall(true, true);
+      installed = !!u.quitAndInstallCalled;
+      if (!installed) windows?.closeWithoutAsking(false);
+      return installed;
+    };
+    const late = quitAhead ? await quitAhead(begin) : (begin(), 0);
+    if (late) log.warn(`not installing ${state.available}: ${late} of the jobs the quit waits for did not finish in time`);
+    return { installed, late };
   }
   ipcMain.handle('updater:install', install);
 
-  // MSI installs: show the new .msi in the feed folder, or open its download link.
+  // net.fetch of url into file -> the file's SHA-512 (base64). The status bar shows the progress.
+  async function fetchTo(url, file) {
+    const res = await net.fetch(url, { cache: 'no-store' });
+    if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
+    const total = Number(res.headers.get('content-length')) || null;
+    const hash = crypto.createHash('sha512');
+    let transferred = 0;
+    let shown = -1;
+    const tap = new Transform({
+      transform(chunk, _enc, done) {
+        hash.update(chunk);
+        transferred += chunk.length;
+        const percent = total ? Math.floor((transferred / total) * 100) : 0;
+        if (percent !== shown) { shown = percent; setState({ percent, transferred, total }); }
+        done(null, chunk);
+      },
+    });
+    await new Promise((resolve, reject) => { pipeline(Readable.fromWeb(res.body), tap, fs.createWriteStream(file), (err) => (err ? reject(err) : resolve())); });
+    return hash.digest('base64');
+  }
+
+  // MSI installs: the new .msi is downloaded into Downloads, checked against its signed manifest as the NSIS installer
+  // is, and only then shown in its folder. A folder feed that needs no signature (on this computer) shows its own copy.
   async function openInstaller() {
-    if (!feed || !state.available) return false;
+    if (!feed || !state.available || state.phase === 'downloading') return false;
     const name = `NanoStudio-${state.available}.msi`; // package.json build.msi.artifactName
-    if (feed.dir) {
+    if (feed.dir && !feed.signed) {
       const file = path.join(feed.dir, name);
       if (fs.existsSync(file)) shell.showItemInFolder(file);
       else await shell.openPath(feed.dir);
       return true;
     }
-    await shell.openExternal(new URL(name, feed.url).href);
-    return true;
+    const file = path.join(app.getPath('downloads'), name);
+    const part = `${file}.download`;
+    setState({ phase: 'downloading', percent: 0, signature: null, download: null });
+    try {
+      if (!offered || offered.info.version !== state.available) throw refused('no checked update to download');
+      const manifest = offered.signed ? await readManifest(name) : null;
+      const sha512 = await fetchTo(new URL(name, offered.url).href, part);
+      if (manifest && sha512 !== manifest.sha512) throw refused(`the downloaded ${name}'s sha512 does not match ${name}.manifest`);
+      if (manifest) log.info(`${name} matches its signed manifest (${manifest.version})`);
+      else log.warn(`${name} from ${offered.url} was not checked: this feed needs no signature`);
+      await fs.promises.rename(part, file);
+      setState({ phase: 'available', percent: 100, signature: manifest ? 'verified' : 'unchecked' });
+      shell.showItemInFolder(file);
+      return true;
+    } catch (err) {
+      await fs.promises.rm(part, { force: true }).catch(() => {});
+      setState({ phase: 'error', error: err.message });
+      if (/^ERR_UPDATER_/.test(err?.code)) diagnostics?.markExpected?.(err);
+      throw err;
+    }
   }
   ipcMain.handle('updater:openInstaller', openInstaller);
 
@@ -459,7 +540,7 @@ function start({ ipcMain, app, send, diagnostics }) {
   // installer closes every one of them, so it never starts by itself.
   async function updateNow(settings) {
     if (state.phase === 'downloaded') return void install();
-    if (kind === 'msi') return void openInstaller();
+    if (kind === 'msi') return void openInstaller().catch((err) => log.warn(`update download failed: ${err.message}`));
     if (kind !== 'nsis' || !offered) return;
     try { await download({ differential: settings?.['updates.differential'] !== false }); } catch (err) { log.warn(`update download failed: ${err.message}`); }
   }

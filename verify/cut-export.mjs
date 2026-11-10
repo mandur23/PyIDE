@@ -9,12 +9,15 @@
 //   from a blob URL and show the right frames after seeks;
 // - range export, captions burned in and as an SRT next to the file, cancel leaves no file or part file, export frame
 //   as PNG, chapters text;
+// - a source that stops giving its picture or sound on the way, or a lost GPU device, fails the export with the clip
+//   and the time named and no file; media offline from the start exports as the red picture and is listed; Export
+//   renders the project as it was when pressed, whatever is edited while it runs;
 // - loudness of a -20 dBFS sine through the mix and through an exported M4A matches theory within 0.5 LU; the preview
 //   clock follows the wall clock (and runs at twice the speed at rate 2), the meters read the level being heard;
 // - the export speed of a 60 s 1080p30 sequence (reported).
-// Usage: node verify/cut-export.mjs   (CUT_EXPORT_ONLY=testsrc,export,range,cancel,loudness,speed,video runs some
+// Usage: node verify/cut-export.mjs   (CUT_EXPORT_ONLY=testsrc,export,range,cancel,fail,live,loudness,speed,video runs some
 // sections; CUT_EXPORT_BACKEND=2d exports through the compositor's Canvas 2D back end)
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync } from 'fs';
 import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 
@@ -471,6 +474,132 @@ if (want('cancel')) {
   })()`);
   check(!stuck.ok && stuck.code === 'decode' && /codec avc1/.test(stuck.error) && stuck.ms < 15000 && !existsSync(stuckOut) && !existsSync(`${stuckOut}.part`),
     `a decoder that never gives a frame ends the export with the codec named, and no file (${S(stuck)})`);
+}
+
+// A source that stops giving its picture or sound during the export (a drive unplugged, a damaged packet), and a lost
+// GPU device: the export fails naming the clip and the time and leaves no file, where it wrote red "Media Cannot Be
+// Shown" frames and silence and said "Checked". Media offline when the export starts still exports (the dialog asked)
+// and the result lists it.
+if (want('fail')) {
+  await buildS1();
+  const gone = (file) => js(`Promise.all([ide.api.invoke('cut:stat', ${S(file)}), ide.api.invoke('cut:stat', ${S(`${file}.part`)})]).then((l) => l.every((x) => x.missing))`);
+  const pictureOut = P('unplugged.mp4');
+  const pic = await js(`(async () => {
+    const p = __cx.projects.s1;
+    const orig = Cut.decoder.createFrameSource;
+    let unplugged = false;
+    Cut.decoder.createFrameSource = (...a) => {
+      const s = orig(...a);
+      const frameAt = s.frameAt.bind(s);
+      s.frameAt = (t) => (unplugged ? Promise.reject(Object.assign(new Error('the device is not ready'), { code: 'io' })) : frameAt(t));
+      return s;
+    };
+    try {
+      const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(pictureOut)}, preset: '720p', backend: __cx.backend,
+        onProgress: (x) => { if (x.phase === 'video' && x.done >= 60) unplugged = true; } });
+      return { ok: r.ok, code: r.code, error: String(r.error || ''), clip: r.clip, t: r.t / Cut.time.TICKS, name: p.history.project.sequences[0].clips.find((c) => c.id === r.clip)?.name };
+    } finally { Cut.decoder.createFrameSource = orig; }
+  })()`);
+  check(!pic.ok && pic.code === 'media' && pic.name && pic.error.includes(pic.name) && /00:00:0[23]:\d\d/.test(pic.error) && /device is not ready/.test(pic.error) && pic.t >= 2 && pic.t < 3.5,
+    `a source whose frames stop coming at 2 s ends the export with the clip, the time and the reason named (${S(pic)})`);
+  check(await gone(pictureOut), 'and leaves no file and no part file');
+
+  // the sound: a 300 s clip whose reader fails past 130 s of its source (the first load reads 120 s)
+  const soundOut = P('unplugged.m4a');
+  const snd = await js(`(async () => {
+    const C = Cut;
+    const T = C.time.TICKS;
+    const file = ${S(P('long-sound.wav'))};
+    await C.export.saveBytes(file, new Uint8Array(64));
+    const h = C.commands.createHistory(C.model.createProject({ sequence: { w: 1280, h: 720, fps: [30, 1] } }));
+    const seq = h.project.sequences[0].id;
+    const [m] = h.do(C.commands.importMedia([{ path: file, name: 'long-sound.wav', kind: 'audio', size: 64, mtime: 1, duration: 300 * T, video: null, audio: { rate: 48000, channels: 2 } }])).ids;
+    const clip = h.do(C.commands.place(seq, { source: { media: m }, in: 0, out: 300 * T, at: 0, video: null, audio: 'A1', mode: 'overwrite' })).ids[0];
+    h.do(C.commands.setClip(seq, clip, { name: 'Narration' }));
+    const getAudio = async () => ({ rate: 48000, length: 300 * 48000, read: async (a, b) => {
+      if (b > 130 * 48000) throw new Error('the device is not ready');
+      const L = new Float32Array(b - a).fill(0.1);
+      return [L, L.slice()];
+    } });
+    const r = await C.export.run({ project: h.project, seqId: seq, path: ${S(soundOut)}, preset: 'audio-m4a', overrides: { loudness: null }, getAudio });
+    return { ok: r.ok, code: r.code, error: String(r.error || ''), clip: r.clip === clip, t: r.t / T };
+  })()`);
+  check(!snd.ok && snd.code === 'media' && snd.clip && /Narration/.test(snd.error) && /device is not ready/.test(snd.error) && snd.t > 100 && snd.t <= 130,
+    `a sound source that cannot be read past 130 s ends an audio export with the clip and the time named (${S(snd)})`);
+  check(await gone(soundOut), 'and leaves no file and no part file');
+
+  // a GPU device lost on the way
+  const lostOut = P('lost.mp4');
+  const lost = await js(`(async () => {
+    const p = __cx.projects.s1;
+    const compositor = async (canvas, o) => {
+      const c = await Cut.compositor.create(canvas, o);
+      let n = 0;
+      const render = c.render.bind(c);
+      c.render = (...a) => { n++; return render(...a); };
+      Object.defineProperty(c, 'lost', { get: () => (n > 30 ? { reason: 'unknown', message: 'the test lost the device' } : null) });
+      return c;
+    };
+    const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(lostOut)}, preset: '720p', backend: __cx.backend, compositor });
+    return { ok: r.ok, code: r.code, error: String(r.error || '') };
+  })()`);
+  check(!lost.ok && lost.code === 'compositor' && /device was lost: the test lost the device/.test(lost.error), `a lost GPU device ends the export (${S(lost)})`);
+  check(await gone(lostOut), 'and leaves no file and no part file');
+
+  // offline when the export starts: the red picture and silence, as the dialog said, and the result lists the clip
+  const offSrc = P('offline-src.mp4');
+  const made = await js(`__cx.src(${S(offSrc)}, { seconds: 2, fps: [30, 1], w: 640, h: 360 })`);
+  const offOut = P('offline.mp4');
+  await js(`(async () => {
+    const C = Cut;
+    const T = C.time.TICKS;
+    const h = C.commands.createHistory(C.model.createProject({ sequence: { w: 640, h: 360, fps: [30, 1] } }));
+    const [m] = await __cx.importFiles(h, [${S(offSrc)}]);
+    const seq = h.project.sequences[0].id;
+    h.do(C.commands.place(seq, { source: { media: m }, in: 0, out: 2 * T, at: 0, video: 'V1', audio: 'A1', mode: 'overwrite' }));
+    __cx.projects.offline = { history: h, seq };
+    return true;
+  })()`);
+  unlinkSync(offSrc);
+  const off = await js(`(async () => {
+    const p = __cx.projects.offline;
+    Cut.media.forget(${S(offSrc)});
+    const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(offOut)}, preset: '720p', backend: __cx.backend, overrides: { loudness: null } });
+    return { ok: r.ok, code: r.code, error: r.error, frames: r.frames, offline: r.offline?.length, problems: r.verified?.problems?.map((x) => x.code) };
+  })()`);
+  check(made.ok && off.ok && off.frames === 60 && off.offline === 2 && off.problems?.includes('offline') && !off.problems.includes('frames'),
+    `media offline from the start still exports, as the red picture, and the check lists its clips (${S(off)})`);
+}
+
+// "Export" renders a copy of the project made when it is pressed: a ripple delete while it runs changes neither the
+// file's frames nor its length (it rendered the live project, so the rest of the file showed the edit).
+if (want('live')) {
+  await buildS1();
+  const out = P('live-edit.mp4');
+  const r = await js(`(async () => {
+    const C = Cut;
+    Cut.app.setHistory(C.commands.createHistory(JSON.parse(JSON.stringify(__cx.projects.s1.history.project))), null, 'open');
+    const f = Cut.ui.exportDialog.open(Cut.app);
+    const set = (sel, v, ev = 'change') => { sel.value = v; sel.dispatchEvent(new Event(ev)); };
+    set(f.fields.presetSel, '720p');
+    set(f.fields.loudSel, 'off');
+    set(f.fields.pathIn, ${S(out)}, 'input');
+    const done = f.start();
+    const fill = () => parseFloat(document.querySelector('#cutExportDialog .cut-progress-fill')?.style.width || '0');
+    for (let i = 0; i < 600 && !(Cut.ui.exportDialog.running && fill() > 30); i++) await new Promise((res) => setTimeout(res, 20));
+    const seq = Cut.app.sequence;
+    const second = seq.clips.find((c) => c.track === 'V1' && c.start === 3 * C.time.TICKS);
+    const during = !!Cut.ui.exportDialog.running;
+    Cut.app.history.do(C.commands.remove(seq.id, [second.id], { ripple: true }));
+    const shorter = C.model.sequenceDuration(Cut.app.sequence) / C.time.TICKS;
+    const res = await done;
+    Cut.app.history.undo();
+    f.dialog?.close?.();
+    document.querySelector('#cutExportDialog')?.closest('.dialog-backdrop')?.querySelector('.dialog-buttons button:last-child')?.click();
+    return { ok: res?.ok, code: res?.code, error: res?.error, frames: res?.frames, verified: res?.verified?.ok, during, shorter, path: res?.path };
+  })()`);
+  check(r.ok && r.during && r.shorter === 5 && r.frames === S1_FRAMES && r.verified, `Export runs on while the timeline is ripple-deleted to ${r.shorter} s (${S(r)})`);
+  if (r.ok) await checkEdit('the export of a project edited while it ran', out);
 }
 
 if (want('loudness')) {

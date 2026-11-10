@@ -145,6 +145,9 @@ try {
   await until(`/1 match/.test(document.querySelector('.dialog')?.textContent || '')`, 'the preview', 5000).catch(() => {});
   const replaceAll = `[...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Replace All')`;
   await mouse(replaceAll, { twice: true });
+  const replaceAnswer = `[...[...document.querySelectorAll('#dialogHost .dialog')].pop().querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Replace')`;
+  await until(`/^Replace \\d+ occurrences? in \\d+ files?\\?$/.test([...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent || '')`, 'the question', 10000);
+  await mouse(replaceAnswer);
   await until(`!document.querySelector('#snReplace')`, 'the dialog closed', 10000);
   await sleep(500);
   const replaced = readFileSync(inProject('rep.txt'), 'utf8');

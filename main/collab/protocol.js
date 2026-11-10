@@ -110,13 +110,68 @@ function checkGuest(msg) {
 
 // ---------- paths ----------
 // Files a guest never sees or opens unless the host takes them off the list: secrets and the repository's internals.
-const DEFAULT_HIDDEN = ['.env', '.env.*', '*.key', '*.pem', '*.pfx', '*.p12', 'id_rsa*', '.git/', '.ssh/'];
+const DEFAULT_HIDDEN = ['.env', '.env.*', '*.key', '*.pem', '*.pfx', '*.p12', '*.ppk', 'id_rsa*', 'id_dsa*', 'id_ecdsa*', 'id_ed25519*',
+  '*.kdbx', '*.jks', '*.keystore', 'credentials.json', '.npmrc', '.pypirc', '.netrc', '_netrc', '.git-credentials',
+  '.git/', '.ssh/', '.aws/', '.azure/', '.docker/', '.gnupg/', '.kube/'];
+// Files a guest sees but never changes, whatever the host lets it do, by why: each runs on the host's computer by
+// itself, without the host running anything (main.js probes every project venv's python.exe, the packages and tests
+// tools start the project interpreter, the Java and Rust language servers import the build, ESLint and Prettier load
+// their configuration on save). Ordinary source stays editable: the host pressing Run is the approval. Not the host's
+// to edit, unlike the hidden list: it is what keeps "nothing of a guest runs unless the host allows it".
+const READ_ONLY = {
+  python: ['*.pth', 'sitecustomize.py', 'usercustomize.py'],
+  // A folder holding pyvenv.cfg or conda-meta is one too, whatever its name (guestReadOnly).
+  venv: ['pyvenv.cfg', 'conda-meta/', 'site-packages/', 'dist-packages/', '__pypackages__/'],
+  packages: ['node_modules/'],
+  wrapper: ['gradlew', 'gradlew.bat', 'mvnw', 'mvnw.cmd', 'gradle-wrapper.jar', 'gradle-wrapper.properties', '.mvn/'],
+  build: ['*.gradle', '*.gradle.kts', 'gradle.properties', 'pom.xml', 'build.rs', 'Cargo.toml', '.cargo/', 'rust-toolchain', 'rust-toolchain.toml'],
+  // package.json too: its eslintConfig and prettier keys can name a parser or plugin file.
+  lint: ['package.json', 'eslint.config.*', '.eslintrc*', '.prettierrc*', 'prettier.config.*'],
+  settings: ['.idea/', '.pyide/', '.vscode/', '.claude/', '.run/'],
+  hooks: ['.githooks/', '.husky/', '.pre-commit-config.yaml'],
+};
+// Files a guest may change, but the host is told when one does: they run once the host runs tests, builds or installs
+// the project, which the host does not take for running a guest's change.
+const NOTEWORTHY = ['conftest.py', 'setup.py', 'setup.cfg', 'pyproject.toml', 'pytest.ini', 'tox.ini', 'noxfile.py', 'requirements*.txt',
+  'Pipfile', 'Makefile', 'GNUmakefile', '*.mk', '*.bat', '*.cmd', '*.ps1', '*.sh'];
 const globRe = (g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`, 'i');
-// rel: a project-relative path with / -> hidden or not. A pattern ending in / hides that folder and all in it, at any
-// depth; another pattern hides files of that name in any folder.
-function isHidden(rel, hidden = DEFAULT_HIDDEN) {
+// rel: a project-relative path with / -> whether a pattern matches. A pattern ending in / names that folder and all in
+// it, at any depth; another pattern names files of that name in any folder.
+function matches(rel, patterns) {
   const parts = rel.split('/');
-  return hidden.some((g) => (g.endsWith('/') ? parts.some((p) => globRe(g.slice(0, -1)).test(p)) : globRe(g).test(parts[parts.length - 1])));
+  return patterns.some((g) => (g.endsWith('/') ? parts.some((p) => globRe(g.slice(0, -1)).test(p)) : globRe(g).test(parts[parts.length - 1])));
+}
+const isHidden = (rel, hidden = DEFAULT_HIDDEN) => matches(rel, hidden);
+// -> the READ_ONLY key that names rel, or null. By name only: guestReadOnly also looks at the disk.
+const readOnlyRule = (rel) => Object.keys(READ_ONLY).find((why) => matches(rel, READ_ONLY[why])) || null;
+const isNoteworthy = (rel) => matches(rel, NOTEWORTHY);
+const isFile = (p) => fs.promises.stat(p).then((s) => s.isFile(), () => false);
+const isDir = (p) => fs.promises.stat(p).then((s) => s.isDirectory(), () => false);
+// A clean project-relative path (resolveGuest's) -> why a guest may not create, change, rename or delete it, or null.
+// Its name, the name it really has (a link may lead to a protected folder under another name), and the folders it is
+// in: a virtual environment is any folder holding pyvenv.cfg or conda-meta.
+async function guestReadOnly(root, rel) {
+  const named = readOnlyRule(rel);
+  if (named) return named;
+  const parts = rel.split('/');
+  const realRoot = await fs.promises.realpath(root);
+  let have = parts.length; // the longest part of the path that exists
+  let real = null;
+  for (; have > 0; have--) {
+    try { real = await fs.promises.realpath(path.join(root, ...parts.slice(0, have))); break; } catch {}
+  }
+  const base = have ? relOf(realRoot, real) : '';
+  if (base === null) return null; // out of the project, which realGuest and parentOf refuse
+  const realRule = readOnlyRule([base, ...parts.slice(have)].filter(Boolean).join('/'));
+  if (realRule) return realRule;
+  const k = (p) => p.toLowerCase().replace(/[\\/]+$/, '');
+  for (let dir = have ? real : realRoot; k(dir) !== k(realRoot) && path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+    if (await isFile(path.join(dir, 'pyvenv.cfg')) || await isDir(path.join(dir, 'conda-meta'))) return 'venv';
+  }
+  return null;
+}
+function readOnlyError(rel, why) {
+  return Object.assign(new Error(`guests cannot change ${String(rel).slice(0, 200)}: it runs on the host's computer by itself (${why})`), { code: 'protected', why });
 }
 const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\.|$)/i;
 // A guest's path (project-relative, / or \) -> the absolute path under root, or throws {code: 'badPath' | 'hidden'}.
@@ -164,4 +219,5 @@ function relOf(root, abs) {
   return rel.split(path.sep).join('/');
 }
 
-module.exports = { encode, decoder, validOp, checkGuest, resolveGuest, realGuest, realUnder, relOf, isHidden, DEFAULT_HIDDEN, MAX_MESSAGE };
+module.exports = { encode, decoder, validOp, checkGuest, resolveGuest, realGuest, realUnder, relOf, isHidden, readOnlyRule, guestReadOnly, readOnlyError,
+  isNoteworthy, DEFAULT_HIDDEN, READ_ONLY, NOTEWORTHY, MAX_MESSAGE };

@@ -8,10 +8,11 @@
 // 4. verify/installed.mjs all on a hidden desktop              5. commit "Release <v>" and tag v<v>
 // 6. pushes master and the tag (atomic)
 // 7. publishes to the `nano-studio` release of mandur23/Portfolio-Nano- (never marked Latest): the installers, their
-//    <installer>.sig and the exe's blockmap, title and notes, then latest.yml and beta.yml (the update feed switches
-//    here), then deletes older versions' files except the previous versions' blockmaps, which installed copies of those
-//    versions need for a differential update
-// 8. reads the feed back
+//    <installer>.sig (the bytes alone, which 0.3.25 and older check) and <installer>.manifest (file name, version and
+//    hash, signed: what newer versions check, main/release-key.js), the exe's blockmap, title and notes, then
+//    latest.yml and beta.yml (the update feed switches here), then deletes older versions' files except the previous
+//    versions' blockmaps, which installed copies of those versions need for a differential update
+// 8. reads the feed back: the channel files, and the manifests of the installers they now offer
 // A beta (x.y.z-beta.N, which electron-builder builds with dist/beta.yml instead of latest.yml) goes only to beta
 // installs: step 7 uploads its installers, signatures and blockmap and then beta.yml, and leaves latest.yml, NanoStudio-Setup.exe, the
 // title, the notes and every stable version's files alone. A stable release writes beta.yml too (a copy of latest.yml),
@@ -39,7 +40,6 @@ const REPO = 'mandur23/Portfolio-Nano-';
 const TAG = 'nano-studio';
 const FEED = `https://github.com/${REPO}/releases/download/${TAG}/`;
 const AUTHOR = ['-c', 'user.name=Nano Studio', '-c', 'user.email=ms01048913077@gmail.com'];
-const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
 // PYIDE_DIST_DIR builds somewhere else than dist/, for when another program holds files in dist/win-unpacked open
 // (the Claude desktop app does in its own workspace folders). verify/installed.mjs reads the same variable.
 const DIST = process.env.PYIDE_DIST_DIR ? path.resolve(process.env.PYIDE_DIST_DIR) : path.join(ROOT, 'dist');
@@ -262,8 +262,8 @@ function releaseAssets() {
   const r = sh('gh', ['release', 'view', TAG, '-R', REPO, '--json', 'assets', '--jq', '.assets[].name'], { capture: true, allowFail: true });
   return r.status === 0 ? r.out.split(/\r?\n/).filter(Boolean) : null;
 }
-// The version of an installer, its signature or blockmap, or null (NanoStudio-Setup.exe, its signature, latest.yml and beta.yml are replaced, not deleted).
-const assetVersion = (name) => (/^NanoStudio-Setup-(.+)\.exe(\.blockmap|\.sig)?$/.exec(name) || /^NanoStudio-(.+)\.msi(\.blockmap|\.sig)?$/.exec(name))?.[1] ?? null;
+// The version of an installer, its signature, manifest or blockmap, or null (NanoStudio-Setup.exe, its signature, latest.yml and beta.yml are replaced, not deleted).
+const assetVersion = (name) => (/^NanoStudio-Setup-(.+)\.exe(\.blockmap|\.sig|\.manifest)?$/.exec(name) || /^NanoStudio-(.+)\.msi(\.blockmap|\.sig|\.manifest)?$/.exec(name))?.[1] ?? null;
 const versionsOn = (assets) => [...new Set(assets.map(assetVersion).filter((x) => x && VERSION.test(x)))].sort(compare);
 // The version installed copies run until this release: the newest stable one (with beta, the newest beta) below v.
 export function previousVersion(assets, v, beta = false) {
@@ -283,6 +283,10 @@ const keptVersions = (assets, v) => [...(isBeta(v) ? [] : [previousVersion(asset
 export function oldAssets(assets, v) {
   const keep = keptVersions(assets, v).map(keptBlockmap);
   return assets.filter((n) => { const x = assetVersion(n); return !!x && VERSION.test(x) && compare(x, v) < 0 && (!isBeta(v) || isBeta(x)) && !keep.includes(n); });
+}
+async function feedManifest(file) {
+  const res = await io.fetch(`${FEED}${file}`, { redirect: 'follow', headers: { 'Cache-Control': 'no-cache' } });
+  return res.ok ? release.readManifest(await res.text()) : null;
 }
 async function feedVersion(file) {
   const res = await io.fetch(`${FEED}${file}`, { redirect: 'follow', headers: { 'Cache-Control': 'no-cache' } });
@@ -550,7 +554,7 @@ async function main() {
 
   step(5, `commit "Release ${V}" and tag v${V}`);
   act('git', ['add', 'package.json', 'package-lock.json']);
-  act('git', [...AUTHOR, 'commit', '-m', `Release ${V}`, '-m', TRAILER]);
+  act('git', [...AUTHOR, 'commit', '-m', `Release ${V}`]);
   state.committed = !dryRun;
   act('git', [...AUTHOR, 'tag', '-a', `v${V}`, '-m', `Nano Studio ${V}`]);
   state.tagged = !dryRun;
@@ -607,6 +611,22 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
     if (!dryRun) io.writeFileSync(out, sign(io.readFileSync(file)));
     return out;
   };
+  // The signed manifest of this version's installer, read back as the app reads it before it goes up. A dry run with
+  // the key signs it too (into the staging folder, which goes at the end), so it shows the key makes manifests the app takes.
+  const manifests = [];
+  const manifest = async (file) => {
+    const name = path.basename(file);
+    const out = path.join(stage, `${name}.manifest`);
+    manifests.push({ name, out });
+    if (dryRun && (!sign || !io.existsSync(file))) return out;
+    const sha512 = createHash('sha512').update(io.readFileSync(file)).digest('base64');
+    const body = release.manifestBody(name, V, sha512);
+    io.writeFileSync(out, body + sign(body));
+    const back = await release.readManifest(io.readFileSync(out, 'utf8'));
+    if (back?.name !== name || back.version !== V || back.sha512 !== sha512) fail(`${name}.manifest does not read back as ${name} ${V} with that file's hash`);
+    log(`  ${name}.manifest signed and read back: ${name} ${V}`);
+    return out;
+  };
   try {
     if (!beta) {
       const ahead = liveBeta(assets);
@@ -618,7 +638,7 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
     }
     // The blockmap goes up with the exe, before the channel files: an update to this version reads it first.
     if (beta) {
-      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), '-R', REPO, '--clobber']);
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), await manifest(exe), await manifest(msi), '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
       log('  NanoStudio-Setup.exe, the title and the notes stay as they are (they belong to the stable version)');
     } else {
@@ -626,7 +646,7 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
       const notesFile = path.join(stage, 'notes.md');
       if (!dryRun) io.copyFileSync(exe, stable);
       io.writeFileSync(notesFile, notes?.text || '');
-      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), signature(stable), stable, '-R', REPO, '--clobber']);
+      act('gh', ['release', 'upload', TAG, rel(exe), rel(blockmap), rel(msi), signature(exe), signature(msi), await manifest(exe), await manifest(msi), signature(stable), stable, '-R', REPO, '--clobber']);
       state.installersUploaded = !dryRun;
       act('gh', ['release', 'edit', TAG, '-R', REPO, '--title', `Nano Studio ${V}`, '--notes-file', notesFile, '--latest=false']);
       if (dryRun) log(`  [dry-run] notes file ${notesFile}:\n${(notes?.text || '(none)').replace(/^/gm, '      | ')}`);
@@ -676,6 +696,13 @@ async function publish({ exe, blockmap, msi, yml }, notes) {
     }
     if (seen !== V) fail(`the feed's ${name} reports ${seen}, not ${V} (after 3 minutes)`);
     log(`  ${name} reports ${seen}`);
+  }
+  // Without its manifest a copy newer than 0.3.25 refuses the version the feed now offers.
+  for (const { name } of manifests) {
+    if (dryRun) { log(`  [dry-run] would read ${FEED}${name}.manifest and check its signature, ${name} and ${V}`); continue; }
+    const m = await feedManifest(`${name}.manifest`).catch(() => null);
+    if (m?.name !== name || m.version !== V) fail(`the feed's ${name}.manifest is ${m ? `for ${m.name} ${m.version}` : 'missing or not signed with the release key'}, not ${name} ${V}`);
+    log(`  ${name}.manifest is signed for ${name} ${V}`);
   }
 }
 

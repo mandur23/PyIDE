@@ -84,5 +84,17 @@
   "{encoding} cannot store the new text": "{encoding}(으)로 저장할 수 없는 문자가 있음",
   "{n} more": "외 {n}개",
   "Not replaced in {n} file:": "파일 {n}개에서 바꾸지 않음:",
-  "Not replaced in {n} files:": "파일 {n}개에서 바꾸지 않음:"
+  "Not replaced in {n} files:": "파일 {n}개에서 바꾸지 않음:",
+
+  "Replace {count} occurrence in {files} file?": "파일 {files}개에서 {count}개 항목을 바꾸시겠습니까?",
+  "Replace {count} occurrence in {files} files?": "파일 {files}개에서 {count}개 항목을 바꾸시겠습니까?",
+  "Replace {count} occurrences in {files} file?": "파일 {files}개에서 {count}개 항목을 바꾸시겠습니까?",
+  "Replace {count} occurrences in {files} files?": "파일 {files}개에서 {count}개 항목을 바꾸시겠습니까?",
+  "Before Replace in Files": "파일에서 바꾸기 전",
+  "Local History cannot keep the current text of {n} file, so Replace cannot be undone there:": "로컬 기록에 파일 {n}개의 지금 내용을 남길 수 없어서 바꾸기를 로컬 기록으로 되돌릴 수 없습니다:",
+  "Local History cannot keep the current text of {n} files, so Replace cannot be undone there:": "로컬 기록에 파일 {n}개의 지금 내용을 남길 수 없어서 바꾸기를 로컬 기록으로 되돌릴 수 없습니다:",
+  "Local History cannot keep the current text of these files, so Replace cannot be undone there.": "로컬 기록에 이 파일들의 지금 내용을 남길 수 없어서 바꾸기를 로컬 기록으로 되돌릴 수 없습니다.",
+  "Replace anyway?": "그래도 바꾸시겠습니까?",
+  "outside the project": "프로젝트 밖",
+  "not a file": "파일이 아님"
 }

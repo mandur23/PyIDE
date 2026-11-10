@@ -58,5 +58,14 @@
   "The update server did not answer. Check your internet connection or proxy settings.": "업데이트 서버가 응답하지 않습니다. 인터넷 연결이나 프록시 설정을 확인하세요.",
   "The update was refused because its signature could not be verified. Nano Studio stays on the current version.": "서명을 확인할 수 없어 업데이트를 거부했습니다. Nano Studio는 현재 버전을 그대로 유지합니다.",
   "An update feed on another computer must use https. Plain http works only on this computer.": "다른 컴퓨터의 업데이트 피드는 https를 사용해야 합니다. http는 이 컴퓨터에서만 사용할 수 있습니다.",
-  "This update comes from a local feed, so its signature was not checked.": "이 업데이트는 로컬 피드에서 받았으므로 서명을 확인하지 않았습니다."
+  "This update comes from a local feed, so its signature was not checked.": "이 업데이트는 로컬 피드에서 받았으므로 서명을 확인하지 않았습니다.",
+  "These servers are running. Updating stops them, and each saves its world first (up to a minute):": "실행 중인 서버가 있습니다. 업데이트하면 서버를 멈추며, 각 서버는 먼저 월드를 저장합니다(최대 1분):",
+  "These are still running. Updating stops them:": "아직 실행 중입니다. 업데이트하면 모두 멈춥니다:",
+  "Stop Servers and Update": "서버를 멈추고 업데이트",
+  "Stop and Update": "멈추고 업데이트",
+  "Stopping the servers. Each saves its world first (up to a minute)…": "서버를 멈추는 중입니다. 각 서버는 먼저 월드를 저장합니다(최대 1분)…",
+  "Stopping the running programs…": "실행 중인 프로그램을 멈추는 중입니다…",
+  "{count} of them did not stop in time, so Nano Studio was not updated.": "{count}개가 제때 멈추지 않아 Nano Studio를 업데이트하지 않았습니다.",
+  "Stop them, then choose Restart to Update again.": "직접 멈춘 뒤 다시 시작하여 업데이트를 다시 선택하세요.",
+  "The installer could not be started. Nano Studio stays on the current version.": "설치 프로그램을 시작할 수 없습니다. Nano Studio는 현재 버전을 그대로 유지합니다."
 }

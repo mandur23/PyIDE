@@ -115,13 +115,21 @@
     } else if (state.kind === 'msi') {
       report?.([available]);
       announce(version, manual, [available, tr('This copy was installed from an MSI package, so update it with the new MSI installer.')], [
-        { label: tr('Download the new installer'), primary: true, run: () => ide.api.invoke('updater:openInstaller') }, skip(version), later]);
+        { label: tr('Download the new installer'), primary: true, run: () => { downloadMsi(version); } }, skip(version), later]);
     } else if (report) {
       report([available, tr('Nano Studio updates itself only when it was installed with the Nano Studio installer.')]);
     } else {
       announce(version, manual, [available, tr('Nano Studio updates itself only when it was installed with the Nano Studio installer.')], [{ label: tr('Close'), primary: true }]);
     }
     return result;
+  }
+
+  // The download shows in the status bar; main shows the .msi in its folder once its signature is checked.
+  function downloadMsi(version) {
+    ide.api.invoke('updater:openInstaller').catch((err) => {
+      log.warn(`update download failed: ${reasonOf(err)}`);
+      message(tr('Update'), [tr('Could not download Nano Studio {version}.', { version }), reasonOf(err)], [{ label: tr('Close'), primary: true }]);
+    });
   }
 
   let restartDialog = null;
@@ -131,22 +139,56 @@
     const lines = [tr('Nano Studio {version} has been downloaded. Restart Nano Studio to install it.', { version })];
     if (state.signature === 'unchecked') lines.push(tr('This update comes from a local feed, so its signature was not checked.'));
     restartDialog = message(tr('Update Ready'), lines, [
-      { label: tr('Restart to Update'), primary: true, run: restart }, skip(version), later]);
+      { label: tr('Restart to Update'), primary: true, run: () => { restart(); } }, skip(version), later]);
     const close = restartDialog.close;
     restartDialog.close = () => { restartDialog = null; close(); };
   }
 
-  // The installer closes PyIDE whether or not a window agrees, so unsaved files are saved first.
+  // The installer closes Nano Studio whether or not a window agrees, so unsaved files are saved first, and what is still
+  // running (Run sessions, Craft servers) is asked about as closing the window asks. Main stops it as quitting does
+  // (servers save their worlds) before the installer starts, and installs nothing over a program that does not stop.
+  let restarting = false;
   async function restart() {
-    const dirty = ide.tabs.filter((t) => ide.isDirty(t));
-    if (dirty.length) {
-      const ok = await new Promise((resolve) => message(tr('Restart to Update'),
-        tr('Save {count} modified files and restart?', { count: dirty.length }), [
-          { label: tr('Save and Restart'), primary: true, run: () => resolve(true) }, { label: tr('Cancel'), run: () => resolve(false) }]));
-      if (!ok) return;
-      await ide.saveAll();
+    if (restarting) return;
+    restarting = true;
+    try {
+      const dirty = ide.tabs.filter((t) => ide.isDirty(t));
+      if (dirty.length) {
+        const ok = await new Promise((resolve) => message(tr('Restart to Update'),
+          tr('Save {count} modified files and restart?', { count: dirty.length }), [
+            { label: tr('Save and Restart'), primary: true, run: () => resolve(true) }, { label: tr('Cancel'), run: () => resolve(false) }], () => resolve(false)));
+        if (!ok) return;
+        await ide.saveAll();
+      }
+      const running = await ide.api.invoke('updater:running');
+      const craft = ide.appMode === 'craft';
+      if (running.length) {
+        const body = el('div', 'upd-message');
+        body.appendChild(el('p', null, craft ? tr('These servers are running. Updating stops them, and each saves its world first (up to a minute):')
+          : tr('These are still running. Updating stops them:')));
+        const list = body.appendChild(el('ul', 'close-confirm-list'));
+        list.dataset.userText = '';
+        for (const name of running) list.appendChild(el('li', null, name));
+        const ok = await new Promise((resolve) => ide.ui.dialog({
+          title: craft ? tr('Servers Are Running') : tr('Programs Are Running'), body, width: 460, onClose: () => resolve(false),
+          buttons: [{ label: craft ? tr('Stop Servers and Update') : tr('Stop and Update'), primary: true, run: () => resolve(true) }, { label: tr('Cancel'), run: () => resolve(false) }],
+        }));
+        if (!ok) return;
+      }
+      const stopping = running.length ? message(tr('Restart to Update'),
+        craft ? tr('Stopping the servers. Each saves its world first (up to a minute)…') : tr('Stopping the running programs…'), []) : null;
+      if (stopping) stopping.el.id = 'updateStopping';
+      let result;
+      try { result = await ide.api.invoke('updater:install'); } finally { stopping?.close(); }
+      if (result?.late) {
+        message(tr('Restart to Update'), [tr('{count} of them did not stop in time, so Nano Studio was not updated.', { count: result.late }),
+          tr('Stop them, then choose Restart to Update again.')], [{ label: tr('Close'), primary: true }]);
+      } else if (result && !result.installed) {
+        message(tr('Restart to Update'), tr('The installer could not be started. Nano Studio stays on the current version.'), [{ label: tr('Close'), primary: true }]);
+      }
+    } finally {
+      restarting = false;
     }
-    await ide.api.invoke('updater:install');
   }
 
   ide.registerAction({ id: 'CheckForUpdates', title: tr('Check for Updates…'), run: () => check({ manual: true }) });

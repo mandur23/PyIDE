@@ -295,10 +295,13 @@
       ptext.textContent = tr('Starting…');
       api.onChange?.();
       const resolved = job.resolved;
+      // A copy, as the queue takes: commands change the project in place, so edits made while the export ran went into
+      // the rest of the file.
+      const project = JSON.parse(JSON.stringify(app.project));
       let r;
       try {
         r = await Cut.export.run({
-          project: app.project, seqId: seq.id, path, preset: presetSel.value, overrides: overrides(), settings: resolved,
+          project, seqId: seq.id, path, preset: presetSel.value, overrides: overrides(), settings: resolved,
           range: job.range, captions: job.captions, captionTrack: job.captionTrack, signal: controller.signal,
           onProgress: (p) => {
             const f = typeof p === 'number' ? p : p?.fraction ?? (p?.frame != null && p?.frames ? p.frame / p.frames : null);

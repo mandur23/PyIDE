@@ -3,7 +3,8 @@
 // deleted file to its Recycle Bin, here a stand-in folder), and sees a file the host made appear. Then the network
 // goes dark (the stand-in bore drops every byte) while both keep typing: both notice, the guest reconnects once the
 // network is back, and no edit is lost or doubled. When the host ends the session, nothing of its files is left on the
-// guest. Two app instances on loopback through a stand-in bore. Ports 9463 (host), 9464 (guest).
+// guest. Files that run on the host by itself (package.json, a .pth) are read-only for the guest, with the reason, and
+// the host is told when the guest edits conftest.py. Two app instances on loopback through a stand-in bore. Ports 9463 (host), 9464 (guest).
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { collabPair, sleep } from './collab-lib.mjs';
@@ -36,6 +37,8 @@ async function promptAnswer(ctx, text) {
 
 try {
   writeFileSync(hp('shared.py'), `# ${MARKER}\nvalue = 1\n`);
+  writeFileSync(hp('package.json'), '{ "name": "demo" }\n');
+  writeFileSync(hp('conftest.py'), 'import pytest\n');
   const code = await pair.start({ name: 'Hana' });
   await pair.join(code, { name: 'Min', answer: 'Accept and Allow Editing' });
   await g.until(`!!${row('shared.py')}`, 'the guest\'s tree');
@@ -84,6 +87,27 @@ try {
     await promptAnswer(g, '.env');
     await sleep(1200);
     check(!existsSync(hp('.env')) && await g.js(`ide.notifications.list().some((n) => n.title.includes('.env') && n.text === 'The host does not share this file.')`), 'a hidden name is refused, with the reason');
+  });
+
+  await section('what runs on the host by itself is read-only for the guest', async () => {
+    await pressNode(g, row('package.json'), 'package.json');
+    await g.until(`(${guestText('package.json')} || '').includes('demo') && ide.activeTab()?.doc.readOnly === true`, 'package.json opens read-only', 15000);
+    check(await g.js(`ide.editor.getOption(ide.monaco.editor.EditorOption.readOnly)`), 'the guest\'s editor of package.json is read-only');
+    await g.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 }), true)`);
+    await g.type('EVIL');
+    await sleep(800);
+    check(!(await g.js(guestText('package.json'))).includes('EVIL') && !(await h.js(hostText('package.json')) || '').includes('EVIL'), 'typing in it changes nothing, here or on the host');
+    check(await g.js(`ide.notifications.list().some((n) => n.title === 'package.json is read-only' && n.text.startsWith('Guests cannot change this file') && n.text.includes('ESLint'))`), 'the guest is told why');
+    await menu(g, `document.querySelector('.collab-tree')`, 'New File…');
+    await promptAnswer(g, 'boot.pth');
+    await g.until(`ide.notifications.list().some((n) => n.title.includes('boot.pth'))`, 'the refusal of boot.pth', 15000);
+    check(!existsSync(hp('boot.pth')) && await g.js(`ide.notifications.list().some((n) => n.title.includes('boot.pth') && n.text.includes('Python runs it each time an interpreter starts.'))`), 'making a .pth is refused, with the reason');
+    await pressNode(g, row('conftest.py'), 'conftest.py');
+    await g.until(`(${guestText('conftest.py')} || '').includes('pytest') && ide.activeTab()?.doc.readOnly === false`, 'conftest.py opens editable', 15000);
+    await g.js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: 2, column: 1 }), true)`);
+    await g.type('FIXTURE = 1');
+    await h.until(`ide.notifications.list().some((n) => n.title === 'Min is changing conftest.py')`, 'the host is told about conftest.py', 15000);
+    check(true, 'a guest may edit conftest.py, and the host is told');
   });
 
   await section('a file the host makes appears for the guest', async () => {

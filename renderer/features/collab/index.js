@@ -31,6 +31,21 @@
   const me = () => (S.role === 'host' ? 0 : S.info?.you ?? -1);
   const person = (id) => S.people.find((p) => p.id === id) || null;
   const canEdit = () => S.role === 'host' || S.info?.role === 'edit';
+  // A guest's documents the host never lets a guest change (main/collab/protocol.js READ_ONLY): local path -> why.
+  const locked = new Map();
+  const mayChange = (p) => canEdit() && !locked.has(p);
+  // Why such a file runs on the host's computer by itself, by protocol.js's key.
+  const LOCKED_WHY = {
+    python: () => tr('Python runs it each time an interpreter starts.'),
+    venv: () => tr('It is part of a virtual environment, which the IDE starts by itself.'),
+    packages: () => tr('It is an installed package.'),
+    wrapper: () => tr('It is a build wrapper the IDE runs.'),
+    build: () => tr('The language server runs the build when it loads the project.'),
+    lint: () => tr('ESLint and Prettier load it when a file is saved.'),
+    settings: () => tr('IDE and tool settings can name commands to run.'),
+    hooks: () => tr('Git runs it when the host commits.'),
+  };
+  const lockedText = (why) => `${tr('Guests cannot change this file: it runs on the host\'s computer without the host running it.')} ${(Object.hasOwn(LOCKED_WHY, String(why)) && LOCKED_WHY[why]()) || ''}`.trim();
 
   // A guest document opens empty and takes its text when the host answers: what needs the text (a caret at a line, a
   // scroll position) waits for that. -> the tab, once its document has its text.
@@ -45,7 +60,7 @@
     }
     return tab;
   }
-  ide.collab = { on, state: () => S, isRemote, localPath, relOfLocal, inSession, me, person, canEdit, opened };
+  ide.collab = { on, state: () => S, isRemote, localPath, relOfLocal, inSession, me, person, canEdit, opened, lockedText };
 
   // ---------- a guest's documents ----------
   ide.registerDocSource({
@@ -55,7 +70,7 @@
       const m = /^collab:\/\/([^/]*)\/(.*)$/.exec(p) || [null, 'none', p];
       return ide.monaco.Uri.from({ scheme: 'collab', authority: m[1] || 'none', path: `/${m[2]}` });
     },
-    readOnly: () => !canEdit(),
+    readOnly: (p) => !mayChange(p),
     // Saving is the host's: files.js asks it to.
     save: (doc) => ide.collab.save?.(doc) ?? null,
   });
@@ -70,19 +85,20 @@
     readOnly: () => tr('You may only view this session: the host has not let you edit.'),
     badPath: () => tr('The host refused this path.'),
     offline: () => tr('You are not in the session.'),
+    protected: (msg) => lockedText(msg.why),
   };
   api.on('doc:failed', (msg) => {
     const doc = ide.getDocument(msg.path);
     if (!doc || doc.sync?.ticket !== msg.ticket) return;
     for (const t of ide.tabs.filter((x) => x.doc === doc)) ide.closeTabObject(t, true);
-    const why = FAILED[msg.code]?.() || tr('The host could not open it.');
+    const why = (Object.hasOwn(FAILED, String(msg.code)) && FAILED[msg.code](msg)) || tr('The host could not open it.');
     ide.notifications?.notify({ title: tr('Cannot open {name}', { name: basename(msg.path) }), text: why, kind: 'warn', group: tr('Collaboration') });
   });
   function closeRemoteTabs() {
     for (const t of remoteTabs()) ide.closeTabObject(t, true);
   }
   function refreshReadOnly() {
-    for (const t of remoteTabs()) if (t.doc) ide.setDocumentReadOnly(t.doc, !canEdit());
+    for (const t of remoteTabs()) if (t.doc) ide.setDocumentReadOnly(t.doc, !mayChange(t.doc.path));
   }
 
   // ---------- events from main ----------
@@ -130,6 +146,18 @@
         emit('welcome', S.info);
         break;
       case 'remote:people': S.people = Array.isArray(e.people) ? e.people : []; break;
+      case 'remote:readOnly': {
+        if (typeof e.path !== 'string') break;
+        const p = localPath(e.path);
+        const was = locked.has(p);
+        if (e.why) locked.set(p, String(e.why)); else locked.delete(p);
+        refreshReadOnly();
+        if (e.why && !was && canEdit()) ide.notifications?.notify({ title: tr('{name} is read-only', { name: basename(e.path) }), text: lockedText(e.why), group: tr('Collaboration') });
+        break;
+      }
+      case 'guestChanged':
+        if (S.role === 'host' && typeof e.rel === 'string') ide.notifications?.notify({ title: tr('{name} is changing {file}', { name: String(e.name || ''), file: e.rel }), text: tr('It runs when you run tests, build or install the project. Look at the change before you do.'), kind: 'warn', group: tr('Collaboration') });
+        break;
       case 'remote:role':
         if (S.info) S.info.role = e.role === 'edit' ? 'edit' : 'read';
         refreshReadOnly();
@@ -164,6 +192,7 @@
   function endSession() {
     const wasGuest = S.role === 'guest';
     Object.assign(S, { role: null, code: null, mode: null, people: [], pending: [], sid: null, state: null, info: null, hostName: '' });
+    locked.clear();
     if (wasGuest) {
       closeRemoteTabs();
       for (const m of ide.monaco.editor.getModels()) if (m.uri.scheme === 'collab' && !m.isDisposed()) m.dispose();
@@ -175,7 +204,18 @@
   }
 
   // ---------- starting and joining ----------
-  const DEFAULT_HIDDEN = ['.env', '.env.*', '*.key', '*.pem', '*.pfx', '*.p12', 'id_rsa*', '.git/', '.ssh/'];
+  // The hidden list the dialog starts from is main's (protocol.js DEFAULT_HIDDEN). A host's saved list gets the entries
+  // added since it was saved, and stays without the ones the host took off: collab.hiddenDefaults is the default list
+  // the host saw last (the first one when not set).
+  const FIRST_HIDDEN = ['.env', '.env.*', '*.key', '*.pem', '*.pfx', '*.p12', 'id_rsa*', '.git/', '.ssh/'];
+  let defaultHidden = FIRST_HIDDEN;
+  api.invoke('collab:defaults').then((d) => { if (Array.isArray(d?.hidden)) defaultHidden = d.hidden; }, () => {});
+  function hiddenList() {
+    const saved = ide.settings.get('collab.hidden', null);
+    if (!Array.isArray(saved)) return defaultHidden;
+    const seen = ide.settings.get('collab.hiddenDefaults', FIRST_HIDDEN);
+    return [...saved, ...defaultHidden.filter((h) => !saved.includes(h) && !seen.includes(h))];
+  }
   const field = (label, input, hint) => {
     const row = el('label', 'collab-field');
     row.append(el('span', 'collab-field-label', label), input);
@@ -230,14 +270,16 @@
     const hidden = el('textarea', 'collab-hidden');
     hidden.rows = 4;
     hidden.spellcheck = false;
-    hidden.value = ide.settings.get('collab.hidden', DEFAULT_HIDDEN).join('\n');
+    hidden.value = hiddenList().join('\n');
     const advanced = el('details', 'collab-advanced');
     advanced.append(el('summary', null, tr('Files guests never see')), hidden,
       el('span', 'collab-field-hint', tr('One pattern per line: a name (*.key), or a folder ending in / (.git/).')));
     const error = notice('error');
     body.append(
       el('div', 'collab-lead', tr('Share {project} with up to 4 people. Files, running and language servers stay on this computer.', { project: basename(ide.root) })),
-      field(tr('Your name'), name), field(tr('Connection'), modes), advanced, error.el,
+      field(tr('Your name'), name), field(tr('Connection'), modes), advanced,
+      el('div', 'collab-field-hint', tr('Guests who may edit still cannot change what runs on this computer by itself: virtual environments, node_modules, build wrappers and build files, lint and IDE settings.')),
+      error.el,
     );
     ide.ui.dialog({
       title: tr('Start Collaboration Session'), body, width: 500,
@@ -246,6 +288,7 @@
         ide.settings.set('collab.name', name.value.trim());
         ide.settings.set('collab.mode', mode());
         ide.settings.set('collab.hidden', patterns);
+        ide.settings.set('collab.hiddenDefaults', defaultHidden);
         error.set('');
         dlg.el.classList.add('collab-busy');
         const r = await api.invoke('collab:start', { root: ide.root, name: name.value.trim(), mode: mode(), hidden: patterns }).catch((err) => ({ error: err.message, code: 'failed' }));

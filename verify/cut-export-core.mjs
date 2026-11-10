@@ -462,6 +462,100 @@ async function mixAt(h, s, sources, seconds, n = 1, opts = {}) {
   const after = comp.plan(h.project, h.project.sequences[0], SEC / 2);
   eq([before, after[0]?.item.kind, shown(after)], [[v1], 'nest', [v1]], 'after Nest a hidden video track stays hidden inside the nest');
 }
+// ---- a sped-up clip of a long source between two clips of the same file, mixed as the export does ----
+// A 600 s range at 4x (60 blocks of 10 s, over the 48 kept) needed all of its source in memory, and the loads of its
+// neighbours, far away in the file, evicted each other's blocks: 17 of the 210 one-second blocks had a clip missing.
+const reader = (seconds, value = () => 0.5, opts = {}) => ({ rate: RATE, length: seconds * RATE, read: async (a, b) => {
+  opts.reads = (opts.reads || 0) + 1;
+  if (opts.failFrom != null && b > opts.failFrom * RATE) throw new Error('the device is not ready');
+  const L = new Float32Array(Math.max(0, b - a));
+  for (let i = 0; i < L.length; i++) L[i] = value(a + i);
+  return [L, L.slice()];
+} });
+{
+  const { h, s, ids } = project([MED('long', 1800)]);
+  const c1 = place(h, s, ids[0], { at: 0, inS: 0, outS: 30 });
+  const c2 = place(h, s, ids[0], { at: 30, inS: 60, outS: 660 });
+  h.do(C.setClip(s, c2, { speed: 4 }));
+  place(h, s, ids[0], { at: 180, inS: 1000, outS: 1030 });
+  const mixer = ae.createMixer({ rate: RATE, getAudio: async () => reader(1800) });
+  await mixer.load(h.project, s, 0, 210 * SEC);
+  const bad = [];
+  let most = 0;
+  for (let k = 0; k < 210; k++) {
+    const m = await mixer.mixLoaded(h.project, s, k * RATE, RATE);
+    let zeros = 0;
+    for (let i = 0; i < RATE; i += 97) if (m.out[0][i] === 0) zeros++;
+    if (m.missing || zeros) bad.push(`${k}s(missing=${m.missing},zeros=${zeros})`);
+    const held = mixer.held();
+    most = Math.max(most, held.blocks + held.segments);
+  }
+  eq(bad, [], `a 600 s source at 4x between two clips of the same file: no one-second export block misses a clip or has silence (it is ${model.clipDuration(h.project.sequences[0].clips.find((c) => c.id === c2)) / SEC} s long)`);
+  check(most <= 48 * 10 * RATE * 8 + 32 * 10 * RATE * 8, `and the mixer holds at most 48 source blocks and 32 stretched segments (${(most / 1e6).toFixed(0)} MB)`);
+  check(c1 && mixer.failures().length === 0, 'and no source failed');
+}
+// A 2-hour source at 8x: stretched whole, it held its 720 blocks and a copy of all of it (7.7 GB in Node).
+{
+  const { h, s, ids } = project([MED('twohours', 7300)]);
+  const c = place(h, s, ids[0], { at: 0, inS: 0, outS: 7200 });
+  h.do(C.setClip(s, c, { speed: 8 }));
+  const mixer = ae.createMixer({ rate: RATE, getAudio: async () => reader(7300) });
+  let most = 0;
+  let missing = 0;
+  for (let k = 0; k < 60; k++) {
+    const m = await mixer.mixLoaded(h.project, s, k * RATE, RATE);
+    missing += m.missing;
+    const held = mixer.held();
+    most = Math.max(most, held.blocks + held.segments);
+  }
+  check(!missing && most <= 300e6, `a 2-hour source at 8x: its first minute mixes with no clip missing and the mixer holds ${(most / 1e6).toFixed(0)} MB (at most 300)`);
+}
+// A segment of a sped-up clip is the same sound as stretching its source whole (the first one exactly), and the
+// segments join: no sample steps further than in the whole stretch.
+{
+  const { h, s, ids } = project([MED('tone', 200)]);
+  const tone = (i) => 0.5 * Math.sin((2 * Math.PI * 220 * i) / RATE) + 0.2 * Math.sin((2 * Math.PI * 1234.5 * i) / RATE);
+  const c = place(h, s, ids[0], { at: 0, inS: 2, outS: 82 });
+  h.do(C.setClip(s, c, { speed: 2 }));
+  const mixer = ae.createMixer({ rate: RATE, getAudio: async () => reader(200, tone) });
+  const n = 40 * RATE;
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k += RATE) out.set((await mixer.mixLoaded(h.project, s, k, RATE)).out[0], k);
+  const x = new Float32Array(80 * RATE);
+  for (let i = 0; i < x.length; i++) x[i] = tone(2 * RATE + i);
+  const whole = ae.stretch([x], 0.5, RATE)[0];
+  let first = 0;
+  for (let i = 0; i < 9.9 * RATE; i++) first = Math.max(first, Math.abs(out[i] - whole[i]));
+  const step = (a) => { let m = 0; for (let i = 1; i < n - 1; i++) m = Math.max(m, Math.abs(a[i] - a[i - 1])); return m; };
+  check(first === 0 && step(out) <= step(whole) + 1e-6, `a sped-up clip made in segments: the first 10 s equal the whole stretch (max difference ${first}), the joins step no further (${step(out).toFixed(4)} vs ${step(whole).toFixed(4)})`);
+  const lead = out.subarray(0, 480).reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  check(lead > 0.3, `and a sped-up clip starts with its sound, not 10 ms of silence (peak of its first 10 ms ${lead.toFixed(3)})`);
+}
+// ---- a source that fails during the export: the clip and its source are named, unless it was offline from the start ----
+{
+  const { h, s, ids } = project([MED('flaky', 400), MED('steady', 60)]);
+  const c = place(h, s, ids[0], { at: 0, outS: 300 });
+  h.do(C.setClip(s, c, { name: 'Interview' }));
+  place(h, s, ids[1], { at: 0, outS: 30, track: 'A2' });
+  // the first 130 s of it read, the rest not (the first load reads 120 s)
+  const flaky = { failFrom: 130 };
+  const mixer = ae.createMixer({ rate: RATE, getAudio: async (_p, m) => reader(m.name === 'flaky.wav' ? 400 : 60, () => 0.5, m.name === 'flaky.wav' ? flaky : {}) });
+  await mixer.load(h.project, s, 0, 300 * SEC);
+  const seq = h.project.sequences[0];
+  let k = 0;
+  let err = null;
+  let quiet = null;
+  for (; k < 300 && !err; k++) {
+    const m = await mixer.mixLoaded(h.project, s, k * RATE, RATE);
+    err = exp.lostMedia(h.project, seq, k * SEC, exp.lostSound(m, mixer.failures()), new Set(), 'sound');
+    quiet = exp.lostMedia(h.project, seq, k * SEC, exp.lostSound(m, mixer.failures()), new Set([ids[0]]), 'sound');
+  }
+  check(err && err.code === 'media' && /Interview/.test(err.message) && /00:0\d:\d\d:00/.test(err.message) && /device is not ready/.test(err.message) && err.info.clip === c && k > 100 && k <= 131,
+    `a source that cannot be read past 130 s stops the export at the first block it misses, naming the clip, the time and the reason (block ${k - 1}: ${err?.message})`);
+  check(quiet === null, 'media offline when the export started is not a failure (its red picture and silence were accepted)');
+  const m = await mixer.mixLoaded(h.project, s, 2 * RATE, RATE);
+  check(m.missed.some((x) => x.clip === c) && !m.missed.some((x) => x.media === ids[1]), `the mix lists the clip it is missing (${S(m.missed)})`);
+}
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`${results.length - failed}/${results.length} passed`);

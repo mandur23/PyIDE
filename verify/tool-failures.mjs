@@ -81,6 +81,9 @@ const commitBox = (js) => js(`(ide.toolWindows.get('Commit').show(), new Promise
       await press('Enter');
       await until(`!!document.querySelector('#snReplaceAll')`, 'Replace All');
       await click('#snReplaceAll');
+      await until(`document.querySelector('#dialogHost .dialog-message')?.textContent === 'Replace 3 occurrences in 3 files?'`, 'the question before Replace All', 10000);
+      await js(`([...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Replace').dataset.answer = '1', true)`);
+      await click('[data-answer="1"]');
       await until(`document.querySelector('#snFindHead').textContent.includes('Replaced 1 occurrence in 1 file')`, 'replace summary', 15000);
       const summary = await js(`document.querySelector('#snFindHead .sn-note')?.textContent || ''`);
       check(summary.includes('Not replaced in 2 files:') && summary.includes('kr949.py (CP949 cannot store the new text)') && summary.includes('ro.py (Access is denied'),

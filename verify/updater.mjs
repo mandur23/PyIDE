@@ -2,8 +2,8 @@
 // version, and a feed that cannot be read; the Settings > Updates page; a skipped version; the status bar text of a
 // differential download (states set through PYIDE_UPDATE_TEST's updater:testPhase); the Stable and Beta channels
 // (port 9070) and the version order and What's New sections of betas (pure Node); installer signatures and which feeds
-// are accepted (a windowless Electron with the real electron-updater and a small file as the installer, port 9806 for
-// the refusal in Korean); and the Korean strings.
+// are accepted (a windowless Electron with the real electron-updater and a small file as the installer: signed manifests,
+// downgrades and MSI downloads included; port 9806 for the refusal in Korean); and the Korean strings.
 // The differential download itself is verify/update-delta.mjs.
 // The real download and restart of an installed build is verify/update-e2e.mjs.
 import { spawn } from 'child_process';
@@ -78,20 +78,37 @@ const keys = generateKeyPairSync('ed25519');
 const otherKeys = generateKeyPairSync('ed25519');
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const sigOf = (bytes, key = keys.privateKey) => `${sign(null, bytes, key).toString('base64')}\n`;
+const sha512 = (bytes) => createHash('sha512').update(bytes).digest('base64');
+// The signed manifest scripts/release.mjs writes as <installer>.manifest: file name, version and hash, signed.
+const manifestOf = (name, version, bytes, key = keys.privateKey) => {
+  const body = release.manifestBody(name, version, sha512(bytes));
+  return body + sigOf(Buffer.from(body), key);
+};
 const EXE = 'NanoStudio-Setup-9.9.9.exe';
+const MSI = 'NanoStudio-9.9.9.msi';
 // A feed folder as a release leaves it. The channel file always hashes the installer it sits beside, as someone who can
-// write to the release would make it.
-function installerFeed(bytes, signature, extra = '') {
+// write to the release would make it. sig: the old <installer>.sig (bytes only); manifest: <installer>.manifest, by
+// default signed for this installer and version (null: none); name and version: what latest.yml offers; msi: the
+// bytes of NanoStudio-<version>.msi beside it, msiManifest its manifest (by default signed for them).
+function installerFeed(bytes, { sig = sigOf(bytes), manifest, extra = '', name = EXE, version = '9.9.9', msi = null, msiManifest } = {}) {
   const dir = tempDir('signed-feed');
-  const sha = createHash('sha512').update(bytes).digest('base64');
-  writeFileSync(path.join(dir, EXE), bytes);
-  writeFileSync(path.join(dir, 'latest.yml'), `version: 9.9.9\nfiles:\n  - url: ${EXE}\n    sha512: ${sha}\n    size: ${bytes.length}\npath: ${EXE}\nsha512: ${sha}\n${extra}releaseDate: '2026-10-20T00:00:00.000Z'\n`);
-  if (signature != null) writeFileSync(path.join(dir, `${EXE}.sig`), signature);
+  const sha = sha512(bytes);
+  writeFileSync(path.join(dir, name), bytes);
+  writeFileSync(path.join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${sha}\n    size: ${bytes.length}\npath: ${name}\nsha512: ${sha}\n${extra}releaseDate: '2026-10-20T00:00:00.000Z'\n`);
+  if (sig != null) writeFileSync(path.join(dir, `${name}.sig`), sig);
+  const m = manifest === undefined ? manifestOf(name, version, bytes) : manifest;
+  if (m != null) writeFileSync(path.join(dir, `${name}.manifest`), m);
+  if (msi) {
+    writeFileSync(path.join(dir, `NanoStudio-${version}.msi`), msi);
+    const mm = msiManifest === undefined ? manifestOf(`NanoStudio-${version}.msi`, version, msi) : msiManifest;
+    if (mm != null) writeFileSync(path.join(dir, `NanoStudio-${version}.msi.manifest`), mm);
+  }
   return dir;
 }
-// One check and download in a fresh Electron process, as an NSIS install would. By default the feed is the installation's
-// default feed (served on 127.0.0.1); custom: it is a folder set by the user. local: the LOCALAPPDATA holding the updater's cache.
-async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-local') } = {}) {
+// One check and download in a fresh Electron process, as an NSIS (or MSI) install would. By default the feed is the
+// installation's default feed (served on 127.0.0.1); custom: it is a folder set by the user. local: the LOCALAPPDATA
+// holding the updater's cache. channel: the setting updates.channel.
+async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-local'), kind = 'nsis', channel = 'stable' } = {}) {
   const dir = tempDir('signed-run');
   const appDir = path.join(dir, 'app');
   mkdirSync(appDir);
@@ -102,8 +119,10 @@ async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-l
   const read = [];
   server.prependListener('request', (req) => read.push(path.basename(new URL(req.url, 'http://x').pathname)));
   const out = path.join(dir, 'result.json');
-  const env = { ...process.env, PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', LOCALAPPDATA: local, PYIDE_UPDATE_FEED: custom ? 'off' : url, PYIDE_RELEASE_PUBLIC_KEY: publicKey,
-    PYIDE_DELTA_CASE: S({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir: custom ? feedDir : url, http: false, differential: false, channel: 'stable', userData: path.join(dir, 'userData'), out }) };
+  const downloads = path.join(dir, 'Downloads');
+  mkdirSync(downloads);
+  const env = { ...process.env, PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: kind, LOCALAPPDATA: local, PYIDE_UPDATE_FEED: custom ? 'off' : url, PYIDE_RELEASE_PUBLIC_KEY: publicKey,
+    PYIDE_DELTA_CASE: S({ updaterJs: path.join(ROOT, 'main', 'features', 'updater.js'), feedDir: custom ? feedDir : url, http: false, differential: false, channel, userData: path.join(dir, 'userData'), downloads, out }) };
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(require('electron'), [appDir], { env, stdio: 'ignore', windowsHide: true });
   await new Promise((resolve) => {
@@ -114,49 +133,93 @@ async function downloadFrom(feedDir, { custom = false, local = tempDir('signed-l
   server.closeAllConnections();
   const result = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : { error: 'the Electron run wrote no result', logs: [] };
   const pending = path.join(local, 'nano-studio-updater', 'pending');
-  return { ...result, read, local, cached: existsSync(pending) ? readdirSync(pending).filter((f) => f.endsWith('.exe')) : [] };
+  return { ...result, read, local, downloads: readdirSync(downloads), downloadsDir: downloads, cached: existsSync(pending) ? readdirSync(pending).filter((f) => f.endsWith('.exe')) : [] };
 }
-const isRefused = (r) => /UPDATE_SIGNATURE: /.test(r.error || '') && r.phase === 'error' && !r.cached.length && r.logs.some((l) => l.includes('update refused'));
+// Refused: the error the renderer explains, nothing cached, nothing shown or left in Downloads, and the reason logged.
+const refusal = (r) => r.logs?.find((l) => l.includes('update refused')) || '';
+const isRefused = (r, why = /./) => /UPDATE_SIGNATURE: /.test(r.error || '') && r.phase === 'error' && !r.cached.length && !r.downloads.length && !r.shown?.length && why.test(refusal(r));
 {
   const good = Buffer.from('the installer as it was released\n'.repeat(4000));
   const tampered = Buffer.from(good);
   tampered[100] ^= 1;
-  const signature = sigOf(good);
 
-  let r = await downloadFrom(installerFeed(good, signature));
-  pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'verified' && r.cached.join() === EXE && r.logs.some((l) => l.includes('matches its signature')), `a signed installer passes: downloaded and ready (${r.error || r.phase})`);
+  let r = await downloadFrom(installerFeed(good));
+  pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'verified' && r.cached.join() === EXE && r.logs.some((l) => l.includes(`matches its signed manifest (${EXE} 9.9.9)`)) && r.read.includes(`${EXE}.manifest`) && !r.read.includes(`${EXE}.sig`),
+    `a newer installer with its signed manifest passes: downloaded and ready, from the manifest alone (${r.error || r.phase})`);
 
-  r = await downloadFrom(installerFeed(tampered, signature));
-  pureCheck(r.read.includes(EXE) && isRefused(r), `a tampered installer whose latest.yml has the matching sha512 is refused and removed (${r.error?.split('\n')[0]})`);
+  r = await downloadFrom(installerFeed(tampered, { manifest: manifestOf(EXE, '9.9.9', good) }));
+  pureCheck(r.read.includes(EXE) && isRefused(r, /sha512 does not match/), `an installer that does not match the hash in its signed manifest is refused and removed, though latest.yml has its sha512 (${refusal(r)})`);
 
-  r = await downloadFrom(installerFeed(good, null));
-  pureCheck(!r.read.includes(EXE) && isRefused(r), `a missing .sig is refused before the installer is downloaded (${r.error?.split('\n')[0]})`);
+  r = await downloadFrom(installerFeed(good, { manifest: null }));
+  pureCheck(!r.read.includes(EXE) && isRefused(r, /releases up to 0\.3\.25 have only .*\.sig/), `a release with only the old .sig (every release up to 0.3.25) is refused before the installer is downloaded (${refusal(r)})`);
 
-  r = await downloadFrom(installerFeed(good, sigOf(good, otherKeys.privateKey)));
-  pureCheck(isRefused(r), 'a signature by another key is refused');
+  const old = Buffer.from('an older installer, genuinely released\n'.repeat(3000));
+  r = await downloadFrom(installerFeed(old, { name: 'NanoStudio-Setup-0.0.5.exe', manifest: manifestOf('NanoStudio-Setup-0.0.5.exe', '0.0.5', old) }));
+  pureCheck(!r.read.includes('NanoStudio-Setup-0.0.5.exe') && isRefused(r, /says version 0\.0\.5, but the feed offers it as 9\.9\.9/),
+    `an older signed installer that latest.yml offers as 9.9.9 (with its real .sig and manifest) is refused: no downgrade (${refusal(r)})`);
 
-  r = await downloadFrom(installerFeed(good, 'not a signature'));
-  pureCheck(isRefused(r), 'a .sig that is no signature is refused');
+  r = await downloadFrom(installerFeed(old, { manifest: manifestOf('NanoStudio-Setup-0.0.5.exe', '0.0.5', old) }));
+  pureCheck(isRefused(r, /is for NanoStudio-Setup-0\.0\.5\.exe, not NanoStudio-Setup-9\.9\.9\.exe/), `a signed manifest of another file, copied under this installer's name, is refused (${refusal(r)})`);
 
-  const feed = installerFeed(good, signature);
+  r = await downloadFrom(installerFeed(good, { manifest: manifestOf(EXE, '9.9.8', good) }));
+  pureCheck(isRefused(r, /says version 9\.9\.8/), 'a manifest that names another version of the same file is refused');
+
+  r = await downloadFrom(installerFeed(good, { manifest: manifestOf(EXE, '9.9.9', good, otherKeys.privateKey) }));
+  pureCheck(isRefused(r, /not a manifest signed with the release key/), 'a manifest signed by another key is refused');
+
+  r = await downloadFrom(installerFeed(good, { manifest: manifestOf(EXE, '9.9.9', good).replace('9.9.9\nsha512', '9.9.9-x\nsha512') }));
+  pureCheck(isRefused(r, /not a manifest signed/), 'a manifest changed after signing is refused');
+
+  r = await downloadFrom(installerFeed(good, { manifest: sigOf(good) }));
+  pureCheck(isRefused(r, /not a manifest signed/), 'the old .sig served as the manifest is refused');
+
+  const beta = Buffer.from('a beta installer\n'.repeat(3000));
+  const betaExe = 'NanoStudio-Setup-9.9.9-beta.1.exe';
+  r = await downloadFrom(installerFeed(beta, { name: betaExe, version: '9.9.9-beta.1' }));
+  pureCheck(r.phase !== 'downloaded' && !r.cached.length && !r.read.includes(betaExe) && (r.check?.available == null || /beta 9\.9\.9-beta\.1, and this copy is on the Stable channel/.test(refusal(r))),
+    `a signed beta in latest.yml is not installed on the Stable channel (${r.check?.available == null ? 'electron-updater offers nothing' : refusal(r)})`);
+  r = await downloadFrom(installerFeed(beta, { name: betaExe, version: '9.9.9-beta.1' }), { channel: 'beta' });
+  pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'verified', `a signed beta is installed on the Beta channel (${r.error?.split('\n')[0] || r.phase})`);
+
+  const feed = installerFeed(good);
   const first = await downloadFrom(feed);
-  writeFileSync(path.join(feed, `${EXE}.sig`), sigOf(good, otherKeys.privateKey));
+  // latest.yml still hashes the cached file, so electron-updater takes it from the cache; the manifest is for other bytes.
+  writeFileSync(path.join(feed, `${EXE}.manifest`), manifestOf(EXE, '9.9.9', tampered));
   r = await downloadFrom(feed, { local: first.local });
-  pureCheck(first.cached.join() === EXE && !r.read.includes(EXE) && isRefused(r), 'an installer electron-updater finds in its cache from an earlier run is checked too, and leaves the cache when refused');
-  writeFileSync(path.join(feed, `${EXE}.sig`), signature);
+  pureCheck(first.cached.join() === EXE && !r.read.includes(EXE) && isRefused(r, /sha512 does not match/), 'an installer electron-updater finds in its cache from an earlier run is checked against the manifest too, and leaves the cache when refused');
+  writeFileSync(path.join(feed, `${EXE}.manifest`), manifestOf(EXE, '9.9.9', good));
   r = await downloadFrom(feed, { local: first.local });
-  pureCheck(!r.error && r.phase === 'downloaded' && r.read.includes(EXE), 'after a refusal a good signature downloads the installer again');
+  pureCheck(!r.error && r.phase === 'downloaded' && r.read.includes(EXE), 'after a refusal a good manifest downloads the installer again');
 
   const packaged = Buffer.from('package').toString('base64');
-  r = await downloadFrom(installerFeed(good, signature, `packages:\n  x64:\n    path: extra.7z\n    sha512: ${packaged}\n    size: 7\n`));
-  pureCheck(/Web Installers are disabled/.test(r.error || '') && r.phase === 'error', 'a channel file that adds a web package is refused (a signature covers only the installer)');
+  r = await downloadFrom(installerFeed(good, { extra: `packages:\n  x64:\n    path: extra.7z\n    sha512: ${packaged}\n    size: 7\n` }));
+  pureCheck(/Web Installers are disabled/.test(r.error || '') && r.phase === 'error', 'a channel file that adds a web package is refused (a manifest covers only the installer)');
 
-  r = await downloadFrom(installerFeed(good, null), { custom: true });
+  r = await downloadFrom(installerFeed(good, { sig: null, manifest: null }), { custom: true });
   pureCheck(!r.error && r.phase === 'downloaded' && r.signature === 'unchecked' && r.logs.some((l) => l.includes('was not checked')), `a folder feed set by the user needs no signature, and state and log say it was not checked (${r.error || r.signature})`);
+
+  // ---------- MSI installs: the .msi is downloaded and checked in the app before it is shown ----------
+  const msi = Buffer.from('the MSI package as it was released\n'.repeat(3000));
+  r = await downloadFrom(installerFeed(good, { msi }), { kind: 'msi' });
+  const kept = path.join(r.downloadsDir, MSI);
+  pureCheck(!r.error && r.downloads.join() === MSI && readFileSync(kept).equals(msi) && S(r.shown) === S([kept]) && r.logs.some((l) => l.includes(`${MSI} matches its signed manifest (9.9.9)`)),
+    `MSI: a newer .msi with its signed manifest is downloaded into Downloads, checked, and only then shown in its folder (${r.error?.split('\n')[0] || S(r.shown)})`);
+  r = await downloadFrom(installerFeed(good, { msi, msiManifest: null }), { kind: 'msi' });
+  pureCheck(!r.read.includes(MSI) && isRefused(r, /NanoStudio-9\.9\.9\.msi\.manifest could not be read/), `MSI: a .msi without its manifest is refused before it is downloaded, and nothing is shown (${refusal(r)})`);
+  r = await downloadFrom(installerFeed(good, { msi, msiManifest: manifestOf(MSI, '9.9.9', msi, otherKeys.privateKey) }), { kind: 'msi' });
+  pureCheck(isRefused(r, /not a manifest signed/), 'MSI: a manifest signed by another key is refused');
+  r = await downloadFrom(installerFeed(good, { msi: Buffer.concat([msi, Buffer.from('x')]), msiManifest: manifestOf(MSI, '9.9.9', msi) }), { kind: 'msi' });
+  pureCheck(r.read.includes(MSI) && isRefused(r, /sha512 does not match/), `MSI: a .msi that does not match its manifest is refused and removed from Downloads (${refusal(r)})`);
+  r = await downloadFrom(installerFeed(good, { msi, msiManifest: manifestOf(EXE, '9.9.9', good) }), { kind: 'msi' });
+  pureCheck(isRefused(r, /is for NanoStudio-Setup-9\.9\.9\.exe, not NanoStudio-9\.9\.9\.msi/), 'MSI: the exe\'s manifest served for the .msi is refused');
+  const folder = installerFeed(good, { sig: null, manifest: null, msi, msiManifest: null });
+  r = await downloadFrom(folder, { kind: 'msi', custom: true });
+  pureCheck(!r.error && !r.downloads.length && S(r.shown) === S([path.join(folder, MSI)]), `MSI: a folder feed set by the user (no signatures) shows its own .msi, as before (${r.error?.split('\n')[0] || S(r.shown)})`);
 
   const key = process.env.PYIDE_RELEASE_PUBLIC_KEY;
   delete process.env.PYIDE_RELEASE_PUBLIC_KEY;
-  pureCheck(!release.isPlaceholder() && await release.verify(good, signature) === false, 'the key in main/release-key.js parses, is the real one and accepts no test signature');
+  pureCheck(!release.isPlaceholder() && await release.verify(good, sigOf(good)) === false && await release.readManifest(manifestOf(EXE, '9.9.9', good)) === null,
+    'the key in main/release-key.js parses, is the real one and accepts no test signature or manifest');
   if (key) process.env.PYIDE_RELEASE_PUBLIC_KEY = key;
 }
 const dialogText =(t) => t.js(`[...document.querySelectorAll('.dialog')].pop()?.textContent || ''`);
@@ -377,7 +440,7 @@ const settle = (t) => t.until(`!!ide.updater`, 'updater plugin').then(() => t.sl
 
 // ---------- a refused update, in Korean: an installed copy's automatic check of its default feed, no .sig there ----------
 {
-  const { server, url } = await U.serveFolder(installerFeed(Buffer.from('installer'), null));
+  const { server, url } = await U.serveFolder(installerFeed(Buffer.from('installer'), { sig: null, manifest: null }));
   const t = await launch({ fixture: 'core', port: 9806, name: 'updater-refused-ko', lang: 'ko-KR',
     env: { PYIDE_UPDATE_TEST: '1', PYIDE_UPDATE_TEST_KIND: 'nsis', PYIDE_UPDATE_FEED: url, PYIDE_RELEASE_PUBLIC_KEY: publicKey, LOCALAPPDATA: tempDir('refused-local') } });
   try {

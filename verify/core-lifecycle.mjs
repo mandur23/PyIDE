@@ -1,7 +1,8 @@
 // Core lifecycle under impatient or long use: two projects opened at once end on the last one with one projectOpened,
 // switching projects does not pile up listeners in the main process, closed diff views give their editor back,
 // a program that cannot start in a too-long folder is no internal error, environment errors read as sentences, and a
-// plugin whose main module fails names the plugin; at the end, the quit waits for a program asked to stop and for a
+// plugin whose main module fails names the plugin, there is no application menu whose Ctrl+R, Ctrl+Shift+R, Ctrl+W or
+// Ctrl+M would reload, close or minimize the window behind a key the page leaves alone (F12 opens DevTools); at the end, the quit waits for a program asked to stop and for a
 // holdQuit job, runs the quit handlers once, and kills a program that does not stop. Ports 9276-9277 (9277: the main
 // process's Node inspector).
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -147,6 +148,58 @@ try {
   // ---------- a plugin whose main module fails ----------
   const loadError = (await errors()).find((e) => e.source === 'plugin' && /boom from m\.js/.test(e.message));
   check(!!loadError && /Broken Main Demo/.test(loadError.title || ''), `the load error names the plugin (${q(loadError?.title)})`);
+
+  // ---------- window keys the page leaves alone ----------
+  // Sent by the main process: CDP key events never reach menu accelerators, so a suite pressing keys through CDP
+  // never saw Electron's default menu reload the page on Ctrl+R.
+  check(await mainEval(`require('electron').Menu.getApplicationMenu() === null`) === true, 'the app has no application menu');
+  const keysFile = path.join(p1, 'keys.py');
+  writeFileSync(keysFile, 'k = 1\n');
+  await js(`ide.openProject(${q(p1)})`);
+  await js(`ide.openFile(${q(keysFile)}).then(() => (ide.editor.trigger('test', 'type', { text: 'edited ' }), true))`);
+  const keysTab = `ide.findTab(${q(keysFile)})`;
+  await until(`${keysTab} && ide.isDirty(${keysTab}) && !![...document.querySelectorAll('#tree .node')].find((n) => n._entry?.name === 'keys.py')`, 'modified keys.py in the tree');
+  await js(`([...document.querySelectorAll('#tree .node')].find((n) => n._entry?.name === 'keys.py').dataset.keysRow = '1', true)`);
+  await t.click('[data-keys-row="1"]');
+  await js(`(window.__keysMark = 'same page', true)`);
+  const pressInMain = (keyCode, modifiers) => mainEval(`(() => {
+    const w = require('electron').BrowserWindow.getAllWindows().find((x) => x.isVisible());
+    w.webContents.focus();
+    for (const type of ['keyDown', 'keyUp']) w.webContents.sendInputEvent({ type, keyCode: ${q(keyCode)}, modifiers: ${q(modifiers)} });
+    return true;
+  })()`);
+  const windowState = () => mainEval(`require('electron').BrowserWindow.getAllWindows().map((w) => ({ visible: w.isVisible(), minimized: w.isMinimized() }))`);
+  const afterKey = async (label, dialogs) => {
+    await sleep(1500);
+    const page = await js(`({ mark: window.__keysMark, dirty: ide.isDirty(${keysTab}), dialogs: document.getElementById('dialogHost').childElementCount, focus: document.activeElement?.closest('.monaco-editor') ? 'editor' : document.activeElement?.closest('#tree') ? 'tree' : document.activeElement?.tagName })`).catch((e) => ({ error: e.message }));
+    const wins = await windowState();
+    check(page.mark === 'same page' && page.dirty && page.dialogs === dialogs && wins.length === 1 && wins[0].visible && !wins[0].minimized,
+      `${label}: the page, its modified document and the window stay (${q({ page, wins })})`);
+    if (page.mark !== 'same page') {
+      await until('window.__ideReady === true', 'the page after a reload', 60000).catch(() => {});
+      await js(`(window.__keysMark = 'same page', true)`).catch(() => {});
+    }
+  };
+  check(await js(`!!document.activeElement?.closest('#tree')`), 'the keyboard is in the project tree');
+  for (const [keyCode, mods, label] of [['R', ['control'], 'Ctrl+R in the project tree'], ['W', ['control'], 'Ctrl+W in the project tree'], ['M', ['control'], 'Ctrl+M in the project tree']]) {
+    await pressInMain(keyCode, mods);
+    await afterKey(label, 0);
+  }
+  // With a dialog up the IDE's keymap takes no key at all (Ctrl+Shift+R in the tree is Replace in Files).
+  await js(`(window.__keysDialog = ide.ui.dialog({ title: 'Keys', body: Object.assign(document.createElement('input'), { className: 'input' }) }), true)`);
+  for (const [keyCode, mods, label] of [['R', ['control'], 'Ctrl+R in a dialog'], ['R', ['control', 'shift'], 'Ctrl+Shift+R in a dialog'], ['W', ['control'], 'Ctrl+W in a dialog']]) {
+    await pressInMain(keyCode, mods);
+    await afterKey(label, 1);
+  }
+  await js(`(window.__keysDialog?.close(), ide.closeTabObject(${keysTab}, true), true)`).catch(() => {});
+  const devTools = async (open) => {
+    for (let i = 0; i < 50; i++) { if (await mainEval(`require('electron').BrowserWindow.getAllWindows()[0].webContents.isDevToolsOpened()`) === open) return true; await sleep(100); }
+    return false;
+  };
+  await pressInMain('F12', []);
+  const devToolsOpened = await devTools(true);
+  await pressInMain('F12', []);
+  check(devToolsOpened && await devTools(false), 'run from the source folder, F12 opens DevTools and closes them again');
 
   check(t.consoleErrors.length === 0, 'no renderer exceptions');
 

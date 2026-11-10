@@ -14,7 +14,11 @@ const launchDir = process.cwd();
   require('fs').stat(__filename, () => {});
   if (!own) delete process.env.UV_THREADPOOL_SIZE;
 }
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, protocol, nativeImage } = require('electron');
+// No application menu, before ready so Electron makes no default one. Its accelerators took every key the page left
+// unhandled (focus in the project tree, a dialog open): Ctrl+R reloaded the page with the unsaved edits, Ctrl+W
+// closed the window, Ctrl+M minimized it. The pages have their own keymaps (renderer/core/ide.js).
+Menu.setApplicationMenu(null);
 // The HTML preview serves project files over pyide-preview:// (main/features/viewers.js). A scheme gets standard URL
 // resolution (relative stylesheets, scripts, images) only when it is declared before the app is ready.
 protocol.registerSchemesAsPrivileged([{ scheme: 'pyide-preview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
@@ -538,6 +542,7 @@ const featureContext = {
   procs,
   programs,
   holdQuit,
+  quitAhead,
   getWindow: () => win,
   appDir: __dirname,
   unpackedDir,
@@ -571,7 +576,7 @@ function registerFeatures() {
   return featuresRegistered;
 }
 
-const windows = createWindowManager({ appDir: __dirname, product: app.getName() });
+const windows = createWindowManager({ appDir: __dirname, product: app.getName(), devToolsKey: !app.isPackaged });
 // Collaboration (main/features/collab.js) adds its guests to the windows' shared documents.
 featureContext.windows = windows;
 
@@ -658,9 +663,12 @@ app.on('will-quit', () => {
 // them once (before-quit already ran for this quit), main.js's above killing whatever did not exit.
 const quitHolds = [];
 function holdQuit(fn, ms = 15000) { quitHolds.push({ fn, ms }); }
-let quitGate = 'open'; // 'open' | 'waiting' | 'passed'
+// 'early': quitAhead waits; 'ahead': it has done the work, and the quit it begins runs every handler.
+let quitGate = 'open'; // 'open' | 'waiting' | 'passed' | 'early' | 'ahead'
+let quitAsked = false; // a will-quit came while quitAhead waited
 const quitLog = diagnostics.logger('#quit');
-const atMost = (promise, ms) => Promise.race([Promise.resolve(promise).catch(() => {}), new Promise((r) => { setTimeout(r, ms); })]);
+// -> Promise<boolean>: whether it finished within ms.
+const atMost = (promise, ms) => Promise.race([Promise.resolve(promise).then(() => true, () => true), new Promise((r) => { setTimeout(r, ms, false); })]);
 function quitWork() {
   const work = [];
   for (const [id, proc] of procs) {
@@ -677,10 +685,34 @@ function quitWork() {
   }
   return work;
 }
+// The gate's work, done before a quit that will-quit is too late for: the update installer ends the app about a second
+// after it starts (main/features/updater.js). Once the work has finished, begin() starts that quit (-> false when it did
+// not). -> Promise of how many jobs did not finish in time; with any, nothing is begun and the gate opens again. A quit
+// that came meanwhile (the window closed) goes on as it would have after its own wait.
+async function quitAhead(begin) {
+  if (quitGate !== 'open') return 0;
+  quitGate = 'early';
+  quitAsked = false;
+  const started = Date.now();
+  const late = (await Promise.all(quitWork())).filter((done) => !done).length;
+  quitLog.info(`waited ${Date.now() - started} ms ahead of the quit${late ? `, ${late} job(s) did not finish` : ''}`);
+  if (late || quitAsked) {
+    quitGate = quitAsked ? 'passed' : 'open';
+    if (quitAsked && (late || !begin())) app.quit();
+    return late;
+  }
+  quitGate = 'ahead';
+  if (!begin()) quitGate = 'open';
+  return 0;
+}
 const emitApp = app.emit;
 app.emit = function emit(name, ...args) {
-  if (name === 'before-quit' && quitGate !== 'open') return false;
-  if (name === 'will-quit' && quitGate === 'waiting') { args[0]?.preventDefault(); return true; }
+  if (name === 'before-quit' && (quitGate === 'waiting' || quitGate === 'passed')) return false;
+  if (name === 'will-quit' && (quitGate === 'waiting' || quitGate === 'early')) {
+    if (quitGate === 'early') quitAsked = true;
+    args[0]?.preventDefault();
+    return true;
+  }
   if (name === 'will-quit' && quitGate === 'open') {
     const work = quitWork();
     if (work.length) {

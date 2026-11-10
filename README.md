@@ -2,10 +2,11 @@
 
 [![CI](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml/badge.svg)](https://github.com/mandur23/PyIDE/actions/workflows/ci.yml)
 
-Windows용 앱 하나에 두 가지 앱이 들어 있습니다. 시작할 때마다 고릅니다. Electron 45와 Monaco 에디터로 만들었습니다.
+Windows용 앱 하나에 세 가지 앱이 들어 있습니다. 시작할 때마다 고릅니다. Electron 45와 Monaco 에디터로 만들었습니다.
 
 - **Nano Studio Code**: PyCharm 스타일의 Python IDE (이전 이름 PyIDE)
 - **Nano Studio Craft**: 마인크래프트 앱. 공식 Minecraft Launcher로 모드를 넣어 플레이하고, 서버에 참여하면 서버의 모드가 자동으로 맞춰지며, 서버를 직접 열 수도 있습니다.
+- **Nano Studio Cut**: 동영상 편집기. 타임라인 편집, 색 보정, 자막, 모션 그래픽, 내보내기를 하고 AI 어시스턴트에게 편집을 맡길 수 있습니다.
 
 PyIDE를 쓰던 컴퓨터에서 처음 시작하면 PyIDE의 설정, 플러그인, 인터프리터 목록을 복사해 옵니다 (`%APPDATA%\PyIDE`는 그대로 둡니다).
 

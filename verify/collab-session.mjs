@@ -3,7 +3,10 @@
 // gets nothing; a request to join waits for the host; a read-only guest's edits, saves and file operations are
 // refused and change nothing; typing in a terminal the host did not allow, a port the host did not open and a run
 // nobody answered do nothing; malformed messages and a flood drop the guest; a dropped connection resumes with every
-// message delivered once; a sixth person is refused. Usage: node verify/collab-session.mjs
+// message delivered once; a sixth person is refused. An edit guest cannot change what runs on the host by itself
+// (protocol.js READ_ONLY: a virtual environment of any name, node_modules, wrappers, lint and IDE settings, by a
+// rename or through a junction too, and a document that becomes part of one while open), and none of it reaches the
+// disk; the new hidden entries are neither listed nor read; ordinary source still syncs and saves. Usage: node verify/collab-session.mjs
 import { createRequire } from 'module';
 import fs from 'fs';
 import net from 'net';
@@ -26,6 +29,15 @@ const until = async (fn, ms = 5000) => { const end = Date.now() + ms; while (Dat
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collab-session-'));
 fs.writeFileSync(path.join(root, 'a.py'), 'x = 1\n');
 fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\n');
+const put = (rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
+const KEPT = ['main.py', 'conftest.py', 'gradlew.bat', 'package.json', '.idea/workspace.xml', 'node_modules/left-pad/index.js', 'myenv/pyvenv.cfg',
+  'myenv/Lib/site-packages/pkg.py', 'tools/data.txt', 'src/app.py'];
+const SECRETS = ['id_ed25519', 'id_ecdsa', '.npmrc', '.pypirc', '.netrc', 'credentials.json', 'keys/server.ppk', 'keys/vault.kdbx', 'keys/app.jks', '.aws/credentials', '.docker/config.json'];
+for (const rel of KEPT) put(rel, `# ${rel}\n`);
+for (const rel of SECRETS) put(rel, 'SECRET\n');
+fs.symlinkSync(path.join(root, '.idea'), path.join(root, 'ide-link'), 'junction');
+const disk = () => KEPT.filter((rel) => rel !== 'main.py' && rel !== 'conftest.py').map((rel) => fs.readFileSync(path.join(root, rel), 'utf8')).join('|');
+const before = disk();
 const docs = createSharedDocs({ keyOf: pathKey, load: loadFromDisk });
 const events = [];
 const typed = [];
@@ -143,6 +155,97 @@ try {
   await until(() => events.filter((e) => e.type === 'chat').length === 20, 5000);
   const chats = events.filter((e) => e.type === 'chat').map((e) => e.text);
   check(chats.length === 20 && chats.every((t, i) => t === `offline ${i}`), 'after a drop the session resumes and every message arrives once, in order');
+
+  // ---------- what an edit guest may not change ----------
+  let req = 100;
+  const ask = async (msg) => {
+    const n = ++req;
+    const answer = () => a.heard.find((m) => (m.type === 'fs:result' || m.type === 'saved') && m.req === n);
+    a.g.send({ ...msg, req: n });
+    await until(answer);
+    return answer() || {};
+  };
+  const refused = (r) => r.ok === false && r.code === 'protected' && typeof r.why === 'string' && /guests cannot change .*runs on the host/.test(r.error || '');
+  const creates = [['x.pth', 'python', false], ['sitecustomize.py', 'python', false], ['myenv/Lib/site-packages/evil.py', 'venv', false],
+    ['myenv/new.txt', 'venv', false], ['tools/pyvenv.cfg', 'venv', false], ['conda-meta', 'venv', true], ['node_modules/left-pad/evil.js', 'packages', false],
+    ['gradlew', 'wrapper', false], ['mvnw.cmd', 'wrapper', false], ['build.gradle', 'build', false], ['eslint.config.js', 'lint', false],
+    ['.idea/runConfigurations', 'settings', true], ['ide-link/evil.xml', 'settings', false], ['.vscode', 'settings', true], ['.husky', 'hooks', true],
+    ['SiteCustomize.PY', 'python', false], ['src/Node_Modules', 'packages', true]];
+  for (const [rel, why, dir] of creates) {
+    const r = await ask({ type: 'fs:create', path: rel, dir });
+    check(refused(r) && r.why === why && !fs.existsSync(path.join(root, rel)), `an edit guest cannot create ${rel} (${why}): ${r.code} "${String(r.error).slice(0, 80)}"`);
+  }
+  for (const [from, to] of [['main.py', 'x.pth'], ['main.py', 'myenv/main.py'], ['main.py', 'node_modules/main.py'], ['src', '.vscode'], ['src', 'conda-meta'],
+    ['gradlew.bat', 'gradlew.txt'], ['myenv', 'notenv'], ['package.json', 'pkg.json']]) {
+    const r = await ask({ type: 'fs:rename', from, to });
+    check(refused(r) && fs.existsSync(path.join(root, from)) && !fs.existsSync(path.join(root, to)), `a rename ${from} -> ${to} is refused (${r.why})`);
+  }
+  for (const rel of ['gradlew.bat', '.idea/workspace.xml', 'myenv/Lib/site-packages/pkg.py', 'node_modules']) {
+    const r = await ask({ type: 'fs:delete', path: rel });
+    check(refused(r) && fs.existsSync(path.join(root, rel)), `deleting ${rel} is refused`);
+  }
+  // Documents: the guest's editor is told, and an op or a save that comes anyway is refused.
+  const joined = async (rel, ticket) => {
+    a.g.send({ type: 'doc:join', path: rel, ticket });
+    await until(() => a.heard.some((m) => m.type === 'doc:synced' && m.path === rel && m.ticket === ticket));
+    await sleep(100);
+    return a.heard.filter((m) => m.type === 'readOnly' && m.path === rel).pop();
+  };
+  for (const [rel, why, ticket] of [['package.json', 'lint', 21], ['myenv/Lib/site-packages/pkg.py', 'venv', 22], ['.idea/workspace.xml', 'settings', 23], ['ide-link/workspace.xml', 'settings', 24]]) {
+    check((await joined(rel, ticket))?.why === why, `opening ${rel}, the guest hears it is read-only (${why})`);
+    a.g.send({ type: 'doc:op', path: rel, base: 0, ops: [{ c: [{ at: 0, del: 0, ins: 'import os\n' }] }] });
+    await until(() => a.heard.some((m) => m.type === 'doc:failed' && m.path === rel));
+    const failedDoc = a.heard.find((m) => m.type === 'doc:failed' && m.path === rel);
+    const abs = path.join(root, ...rel.split('/'));
+    check(failedDoc?.code === 'protected' && failedDoc.why === why && !docs.textOf(abs)?.text.includes('import os'), `an edit of ${rel} is refused, with why`);
+    const r = await ask({ type: 'doc:save', path: rel });
+    check(refused(r) && !events.some((e) => e.type === 'save' && pathKey(e.path) === pathKey(abs)), `saving ${rel} is refused`);
+  }
+  // A document already open when its folder becomes a virtual environment.
+  check((await joined('tools/data.txt', 25)) === undefined, 'an ordinary file opens editable');
+  fs.writeFileSync(path.join(root, 'tools', 'pyvenv.cfg'), 'home = C:\\Python\n');
+  host.filesChanged({ created: [path.join(root, 'tools', 'pyvenv.cfg')] });
+  await until(() => a.heard.some((m) => m.type === 'readOnly' && m.path === 'tools/data.txt' && m.why === 'venv'));
+  check(a.heard.some((m) => m.type === 'readOnly' && m.path === 'tools/data.txt' && m.why === 'venv'), 'once its folder becomes a virtual environment, an open document turns read-only');
+  a.g.send({ type: 'doc:op', path: 'tools/data.txt', base: 0, ops: [{ c: [{ at: 0, del: 0, ins: 'EVIL' }] }] });
+  await until(() => a.heard.some((m) => m.type === 'doc:failed' && m.path === 'tools/data.txt'));
+  check(a.heard.some((m) => m.type === 'doc:failed' && m.path === 'tools/data.txt' && m.code === 'protected') && !docs.textOf(path.join(root, 'tools', 'data.txt'))?.text.includes('EVIL'), 'and its edits are refused');
+  check(JSON.stringify(disk()) === JSON.stringify(before), 'nothing protected changed on the host\'s disk');
+
+  // ---------- secrets ----------
+  a.g.send({ type: 'tree', path: '' });
+  a.g.send({ type: 'tree', path: 'keys' });
+  await until(() => a.got('tree').length >= 2);
+  const names = a.got('tree').flatMap((m) => (m.entries || []).map((e) => e.name.toLowerCase()));
+  check(names.includes('main.py') && names.includes('myenv') && SECRETS.map((rel) => rel.split('/')[0].toLowerCase()).filter((n) => n !== 'keys').concat(['server.ppk', 'vault.kdbx', 'app.jks']).every((n) => !names.includes(n)),
+    'the new hidden files are not listed (id_ed25519, .npmrc, .aws/, *.ppk, *.kdbx, *.jks, ...)');
+  let ticket = 30;
+  for (const rel of SECRETS) {
+    const n = ++ticket;
+    a.g.send({ type: 'doc:join', path: rel, ticket: n });
+    await until(() => a.heard.some((m) => m.ticket === n && (m.type === 'doc:failed' || m.type === 'doc:synced')));
+    check(a.heard.some((m) => m.ticket === n && m.type === 'doc:failed' && m.code === 'hidden') && !a.heard.some((m) => m.ticket === n && m.type === 'doc:synced'), `${rel} cannot be read`);
+  }
+
+  // ---------- what an edit guest still does ----------
+  const revOf = (rel) => a.heard.filter((m) => m.type === 'doc:synced' && m.path === rel).pop()?.rev;
+  await joined('main.py', 50);
+  a.g.send({ type: 'doc:op', path: 'main.py', base: revOf('main.py'), ops: [{ c: [{ at: 0, del: 0, ins: 'print(1)\n' }] }] });
+  await until(() => docs.textOf(path.join(root, 'main.py'))?.text.startsWith('print(1)'));
+  check(docs.textOf(path.join(root, 'main.py'))?.text === 'print(1)\n# main.py\n', 'an ordinary source file still syncs');
+  a.g.send({ type: 'doc:save', path: 'main.py', req: 99 });
+  await until(() => events.some((e) => e.type === 'save' && e.rel === 'main.py'));
+  check(events.some((e) => e.type === 'save' && e.rel === 'main.py'), 'and its save reaches the host\'s window');
+  const made = await ask({ type: 'fs:create', path: 'src/new.py', dir: false });
+  const moved = await ask({ type: 'fs:rename', from: 'src/new.py', to: 'src/renamed.py' });
+  check(made.ok && moved.ok && fs.existsSync(path.join(root, 'src', 'renamed.py')), 'it still creates and renames ordinary files');
+  check(!events.some((e) => e.type === 'guestChanged'), 'the host is not told about ordinary files');
+  await joined('conftest.py', 51);
+  a.g.send({ type: 'doc:op', path: 'conftest.py', base: revOf('conftest.py'), ops: [{ c: [{ at: 0, del: 0, ins: '# fixture\n' }] }] });
+  a.g.send({ type: 'doc:op', path: 'conftest.py', base: revOf('conftest.py') + 1, ops: [{ c: [{ at: 0, del: 0, ins: '#\n' }] }] });
+  await until(() => docs.textOf(path.join(root, 'conftest.py'))?.text.startsWith('#\n# fixture'));
+  check(docs.textOf(path.join(root, 'conftest.py'))?.text.startsWith('#\n# fixture') && events.filter((e) => e.type === 'guestChanged').length === 1
+    && events.find((e) => e.type === 'guestChanged').rel === 'conftest.py', 'a guest may edit conftest.py, and the host is told once');
 
   // ---------- refusals ----------
   for (let i = 0; i < 30; i++) a.g.send({ type: 'doc:op', path: 'a.py', base: -1, ops: [] });

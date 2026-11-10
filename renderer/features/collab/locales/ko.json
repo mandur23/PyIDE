@@ -181,5 +181,18 @@
   "{name} was not run": "실행되지 않았습니다: {name}",
   "{name} was not saved": "{name} 파일을 저장하지 못했습니다",
   "{n} of 5 people": "{n}/5명",
-  "{port} is not a port number.": "포트 번호가 아닙니다: {port}"
+  "{port} is not a port number.": "포트 번호가 아닙니다: {port}",
+  "Python runs it each time an interpreter starts.": "Python이 인터프리터를 시작할 때마다 실행합니다.",
+  "It is part of a virtual environment, which the IDE starts by itself.": "가상 환경의 일부이고, IDE가 가상 환경을 스스로 실행합니다.",
+  "It is an installed package.": "설치된 패키지입니다.",
+  "It is a build wrapper the IDE runs.": "IDE가 실행하는 빌드 래퍼입니다.",
+  "The language server runs the build when it loads the project.": "언어 서버가 프로젝트를 읽을 때 빌드를 실행합니다.",
+  "ESLint and Prettier load it when a file is saved.": "파일을 저장할 때 ESLint와 Prettier가 이 파일을 읽어 실행합니다.",
+  "IDE and tool settings can name commands to run.": "IDE와 도구 설정에는 실행할 명령이 들어갈 수 있습니다.",
+  "Git runs it when the host commits.": "호스트가 커밋할 때 Git이 실행합니다.",
+  "Guests cannot change this file: it runs on the host's computer without the host running it.": "게스트는 이 파일을 바꿀 수 없습니다. 호스트가 실행하지 않아도 호스트 컴퓨터에서 실행되는 파일입니다.",
+  "{name} is read-only": "읽기 전용: {name}",
+  "{name} is changing {file}": "{name} 님이 {file} 파일을 바꾸고 있습니다",
+  "It runs when you run tests, build or install the project. Look at the change before you do.": "테스트, 빌드, 프로젝트 설치를 할 때 실행되는 파일입니다. 하기 전에 바뀐 내용을 확인하세요.",
+  "Guests who may edit still cannot change what runs on this computer by itself: virtual environments, node_modules, build wrappers and build files, lint and IDE settings.": "편집을 허용한 게스트도 이 컴퓨터에서 저절로 실행되는 파일은 바꿀 수 없습니다: 가상 환경, node_modules, 빌드 래퍼와 빌드 파일, 린트와 IDE 설정."
 }

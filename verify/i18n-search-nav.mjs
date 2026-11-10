@@ -163,6 +163,11 @@ try {
   check((await text('#snFindHead .sn-title')) === "바꾸기: 'compute' → 'calculate'", 'replace header');
   await noLeaks('#snFindHead, #snFindResults', 'Replace results');
   await click('#snReplaceAll');
+  await until(`!!document.querySelector('#dialogHost .dialog-message')`, 'the question before Replace All');
+  check(/^파일 \d+개에서 \d+개 항목을 바꾸시겠습니까\?$/.test(await text('#dialogHost .dialog-message')), `Replace All's question in Korean (${J(await text('#dialogHost .dialog-message'))})`);
+  await noLeaks('#dialogHost .dialog', 'Replace All question');
+  await js(`([...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === '바꾸기').dataset.answer = '1', true)`);
+  await click('[data-answer="1"]');
   await until(`!!document.querySelector('#snFindHead .sn-note')`, 'replace summary');
   check(/^파일 \d+개에서 \d+개 항목을 바꿨습니다$/.test(await text('#snFindHead .sn-note')), `replace summary in Korean (${J(await text('#snFindHead .sn-note'))})`);
   check(await waitText('#snFindResults', '일치 항목이 없습니다', 'no matches'), 'no matches left');

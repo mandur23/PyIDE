@@ -2,7 +2,7 @@
 // tunnel, on the clipboard), a guest with no project open joins from the welcome screen (in Korean), the host accepts
 // the request, and the guest sees the host's files read-only: the tree without hidden files, a file's text, typing that
 // changes nothing, hidden and escaping paths refused. Leaving wipes the guest's copy; a declined request says so. Two
-// app instances on loopback through a stand-in bore. Ports 9455 (host), 9456 (guest).
+// app instances on loopback (a host's saved hidden list gets the entries added since, without the ones it took off) through a stand-in bore. Ports 9455 (host), 9456 (guest).
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { collabPair, sleep } from './collab-lib.mjs';
@@ -25,6 +25,21 @@ try {
   await h.until(`ide.activeTab()?.path.endsWith('broken.py')`, 'host shows broken.py');
 
   let code = '';
+  await section('the start dialog: the hidden list and what guests cannot change', async () => {
+    const first = ['.env', '.env.*', '*.key', '*.pem', '*.pfx', '*.p12', 'id_rsa*', '.git/'];
+    await h.js(`(ide.settings.set('collab.hidden', ${S([...first, 'secrets/'])}), true)`);
+    await h.js(`(ide.runAction('Collab.Start'), true)`);
+    await h.until(`!!document.querySelector('.collab-form .collab-hidden')`, 'the start dialog');
+    const list = (await h.js(`document.querySelector('.collab-form .collab-hidden').value`)).split('\n');
+    check(['id_ed25519*', '.npmrc', '.aws/', '*.ppk'].every((p) => list.includes(p)) && list.includes('secrets/') && !list.includes('.ssh/'),
+      `a saved list gets the new defaults and keeps the host's own changes (${list.length} entries)`);
+    const hint = 'Guests who may edit still cannot change what runs on this computer by itself';
+    check(await h.js(`(() => { const n = [...document.querySelectorAll('.collab-form .collab-field-hint')].find((x) => x.textContent.startsWith(${S(hint)})); if (!n) return false;
+      const r = n.getBoundingClientRect(); return r.height > 0 && document.elementFromPoint(r.x + 4, r.y + r.height / 2) === n; })()`), 'the dialog says what guests cannot change');
+    await pressButton(h, 'Cancel');
+    await h.until(`!document.querySelector('.collab-form')`, 'the dialog closed');
+  });
+
   await section('the host starts a session', async () => {
     code = await pair.start({ name: 'Hana' });
     check(/^nanostudio:collab\?addr=127\.0\.0\.1:\d+&key=[A-Za-z0-9_-]{43}&name=Hana$/.test(code), 'the join code names the tunnel\'s address, a key and the host');

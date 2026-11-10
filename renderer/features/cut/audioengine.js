@@ -99,6 +99,29 @@
     });
   }
 
+  // Output samples [o0, o1) of resample() of an input of n samples, from `channels` holding its samples [x0, ...).
+  function resamplePart(channels, x0, n, from, to, o0, o1) {
+    const ratio = from / to;
+    const table = rsTable(Math.min(1, to / from) * 0.96);
+    const taps = 2 * RS_HALF;
+    return channels.map((x) => {
+      const y = new Float32Array(Math.max(0, o1 - o0));
+      for (let j = o0; j < o1; j++) {
+        const pos = j * ratio;
+        const i0 = Math.floor(pos);
+        const p = Math.round((pos - i0) * RS_PHASES) * taps;
+        const base = i0 - (RS_HALF - 1);
+        let acc = 0;
+        for (let k = 0; k < taps; k++) {
+          const i = base + k;
+          if (i >= 0 && i < n && i - x0 >= 0 && i - x0 < x.length) acc += x[i - x0] * table[p + k];
+        }
+        y[j - o0] = acc;
+      }
+      return y;
+    });
+  }
+
   // ---- time stretch (WSOLA) ----------------------------------------------------------------------------------------
 
   // channels -> channels about `factor` times as long (2: half speed), the pitch kept. Hann frames of 40 ms at a
@@ -106,40 +129,61 @@
   // previous frame best (cross-correlation, searched on a 4x decimated mono mix, then refined).
   function stretch(channels, factor, rate = 48000) {
     const inLen = channels[0]?.length || 0;
-    const outLen = Math.round(inLen * factor);
     if (Math.abs(factor - 1) < 1e-9) return channels.map((c) => c.slice());
-    const N = 2 * Math.max(64, Math.round(rate * 0.02));
-    const hop = N / 2;
+    return stretchPart(channels, 0, inLen, factor, rate, 0, Math.round(inLen * factor), Infinity);
+  }
+  const stretchHop = (rate) => Math.max(64, Math.round(rate * 0.02));
+  // The input samples, [x0, x1) of inLen, that stretchPart reads for output [o0, o1): the frames' nominal places with
+  // their search tolerance, the frame length and the correlation's reach.
+  function stretchWindow(inLen, factor, rate, o0, o1) {
+    const hop = stretchHop(rate);
+    const reach = 4 * hop + Math.round(rate * 0.01) + 16;
+    return [Math.floor(((o0 - hop) / factor - reach) / 4) * 4, Math.ceil(o1 / factor) + reach];
+  }
+  // Output samples [o0, o1) of stretching an input of inLen samples, from `channels` holding its samples [x0, ...) (x0
+  // a multiple of 4; outside them it is silence). The frames' path starts afresh every `seg` output samples (a
+  // multiple of the hop): that frame sits at its nominal place, so each segment can be made on its own, from a window
+  // of the input, and the segments join (a long sped-up source is never all in memory).
+  function stretchPart(channels, x0, inLen, factor, rate, o0, o1, seg) {
+    const hop = stretchHop(rate);
+    const N = 2 * hop;
     const tol = Math.round(rate * 0.01);
     const D = 4;
     const L = hop;
     const nCh = channels.length;
-    const mono = new Float32Array(inLen);
-    for (const c of channels) for (let i = 0; i < inLen; i++) mono[i] += c[i] / nCh;
+    const wLen = channels[0]?.length || 0;
+    const mono = new Float32Array(wLen);
+    for (const c of channels) for (let i = 0; i < wLen; i++) mono[i] += c[i] / nCh;
     const dLen = Math.floor(inLen / D);
-    const dec = new Float32Array(dLen);
-    for (let i = 0; i < dLen; i++) { let s = 0; for (let k = 0; k < D; k++) s += mono[i * D + k]; dec[i] = s / D; }
+    const d0 = x0 / D;
+    const dec = new Float32Array(Math.floor(wLen / D));
+    for (let i = 0; i < dec.length; i++) { let s = 0; for (let k = 0; k < D; k++) s += mono[i * D + k]; dec[i] = s / D; }
     const win = new Float32Array(N);
     for (let n = 0; n < N; n++) win[n] = 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / N);
-    const out = channels.map(() => new Float32Array(outLen));
-    const at = (arr, i) => (i >= 0 && i < arr.length ? arr[i] : 0);
+    const out = channels.map(() => new Float32Array(Math.max(0, o1 - o0)));
+    // arr holds samples [off, ...) of a signal of `len`.
+    const at = (arr, off, len, i) => (i >= 0 && i < len && i - off >= 0 && i - off < arr.length ? arr[i - off] : 0);
 
-    function corr(arr, a, b, len, step) {
+    function corr(arr, off, len, a, b, n, step) {
       let num = 0;
       let eb = 0;
-      for (let i = 0; i < len; i += step) {
-        const y = at(arr, b + i);
-        num += at(arr, a + i) * y;
+      for (let i = 0; i < n; i += step) {
+        const y = at(arr, off, len, b + i);
+        num += at(arr, off, len, a + i) * y;
         eb += y * y;
       }
       return eb > 1e-12 ? num / Math.sqrt(eb) : 0;
     }
 
     let prev = null;
-    for (let k = -1; k * hop < outLen; k++) {
+    for (let k = Math.floor(o0 / hop) - 1; k * hop < o1; k++) {
       const outPos = k * hop;
+      // A fresh frame is placed so that the output from its middle on reads the input from the nominal place: one at
+      // round(outPos / factor) read only silence before a clip's first sample when sped up, and the search that
+      // followed matched that silence, so every sped-up clip began with 10 ms of nothing and a 10 ms fade.
+      if ((outPos + hop) % seg === 0) prev = null;
       const nominal = Math.round(outPos / factor);
-      let best = nominal;
+      let best = prev === null ? Math.round((outPos + hop) / factor) - hop : nominal;
       if (prev !== null) {
         const target = prev + hop;
         let bestScore = -Infinity;
@@ -149,14 +193,14 @@
         const dL = Math.floor(L / D);
         let coarse = dn;
         for (let d = -dTol; d <= dTol; d++) {
-          const s = corr(dec, dt, dn + d, dL, 1);
+          const s = corr(dec, d0, dLen, dt, dn + d, dL, 1);
           if (s > bestScore) { bestScore = s; coarse = dn + d; }
         }
         bestScore = -Infinity;
         for (let d = -D; d <= D; d++) {
           const cand = coarse * D + d;
           if (Math.abs(cand - nominal) > tol + D) continue;
-          const s = corr(mono, target, cand, L, 2);
+          const s = corr(mono, x0, inLen, target, cand, L, 2);
           if (s > bestScore) { bestScore = s; best = cand; }
         }
       }
@@ -165,9 +209,9 @@
         const y = out[c];
         for (let n = 0; n < N; n++) {
           const o = outPos + n;
-          if (o < 0 || o >= outLen) continue;
+          if (o < o0 || o >= o1) continue;
           const i = best + n;
-          if (i >= 0 && i < inLen) y[o] += x[i] * win[n];
+          if (i >= 0 && i < inLen && i - x0 >= 0 && i - x0 < wLen) y[o - o0] += x[i - x0] * win[n];
         }
       }
       prev = best;
@@ -468,18 +512,25 @@
   // A source's sound at the mixer's rate is kept in blocks of BLOCK_SECONDS: one block of all of it when getAudio gives
   // the whole track ({rate, data}), else read on demand from the reader it gives ({rate, length, read(from, to)}), at
   // most MAX_BLOCKS kept and the least recently used dropped. A 42-minute file then starts after one block's decode
-  // instead of decoding and resampling all of it first (11.6 s and about 2 GB).
+  // instead of decoding and resampling all of it first (11.6 s and about 2 GB). The blocks a load in progress reads
+  // are pinned: clips of one mix that read far apart parts of a source evicted each other's blocks, so one of them
+  // was silent every other second.
   const BLOCK_SECONDS = 10;
   const MAX_BLOCKS = 48;
-  const LOAD_SECONDS = 120; // the most of a range one load() reads ahead
+  const LOAD_SECONDS = 120; // the most of a range one load() reads ahead (of the source, for a sped-up clip)
   const LOOKAHEAD_SECONDS = 15;
+  // A clip at another speed is stretched in segments of at most BLOCK_SECONDS of its output, each from at most about
+  // SPEED_INPUT_SECONDS of its source, SPEED_KEEP of them kept (LRU): stretching all of it at once held the whole
+  // source range and a copy of it (a 2-hour source at 8x: 7.7 GB in Node).
+  const SPEED_INPUT_SECONDS = 40;
+  const SPEED_KEEP = 32;
   const gcd = (a, b) => (b ? gcd(b, a % b) : a);
   const stereo = (data) => (data.length === 1 ? [data[0], data[0]] : [data[0], data[1]]);
 
   function createMixer({ rate = 48000, getAudio = defaultGetAudio } = {}) {
     const tps = TICKS / rate; // ticks a sample
     const sources = new Map(); // `${id}|${path}` -> {state: 'loading' | 'ready' | 'failed' | 'none', promise, pcm: store}
-    const stretched = new Map(); // a clip's sound at its speed -> {data, origin}
+    const speedSegs = new Map(); // `${speedOf(...).key}|${j}` -> {data: [L, R], used}: segment j of a clip's sound at its speed
     const keyOf = (m) => `${m.id}|${m.path}`;
     let useTick = 0;
 
@@ -541,13 +592,13 @@
       const key = keyOf(media);
       let s = sources.get(key);
       if (s) return s.promise;
-      s = { state: 'loading', pcm: null, error: null };
+      s = { state: 'loading', pcm: null, error: null, media };
       s.promise = (async () => {
         try {
           const a = media.nest ? nestReader(media.project, media.nest) : await getAudio(project, media);
           if (a && typeof a.read === 'function') {
             if (!a.length) { s.state = 'none'; return; }
-            s.pcm = { reader: a, length: Math.round((a.length * rate) / a.rate), size: rate * BLOCK_SECONDS, blocks: new Map(), loading: new Map() };
+            s.pcm = { reader: a, length: Math.round((a.length * rate) / a.rate), size: rate * BLOCK_SECONDS, blocks: new Map(), loading: new Map(), pins: new Map() };
             s.state = 'ready';
             return;
           }
@@ -555,7 +606,7 @@
           let data = stereo(a.data);
           if (a.rate !== rate) data = resample(data, a.rate, rate);
           const length = data[0].length;
-          s.pcm = { reader: null, length, size: Math.max(1, length), blocks: new Map([[0, { data, used: 0 }]]), loading: new Map() };
+          s.pcm = { reader: null, length, size: Math.max(1, length), blocks: new Map([[0, { data, used: 0 }]]), loading: new Map(), pins: new Map() };
           s.state = 'ready';
         } catch (err) {
           s.state = 'failed';
@@ -583,7 +634,15 @@
       }
       return true;
     }
-    function loadBlock(pcm, i, keep) {
+    // Counts a reader of blocks [a, b) in (by +1) or out (-1); a block with a reader is not evicted.
+    function pin(pcm, [a, b], by) {
+      for (let i = a; i < b; i++) {
+        const n = (pcm.pins.get(i) || 0) + by;
+        if (n > 0) pcm.pins.set(i, n);
+        else pcm.pins.delete(i);
+      }
+    }
+    function loadBlock(pcm, i) {
       if (pcm.blocks.has(i)) return Promise.resolve();
       if (pcm.loading.has(i)) return pcm.loading.get(i);
       const p = (async () => {
@@ -608,7 +667,7 @@
         while (pcm.blocks.size > MAX_BLOCKS) {
           let worst = -1;
           let oldest = Infinity;
-          for (const [k, e] of pcm.blocks) if (!keep?.has(k) && e.used < oldest) { oldest = e.used; worst = k; }
+          for (const [k, e] of pcm.blocks) if (!pcm.pins.has(k) && e.used < oldest) { oldest = e.used; worst = k; }
           if (worst < 0) break;
           pcm.blocks.delete(worst);
         }
@@ -619,10 +678,11 @@
     // Loads samples [k0, k1) of a store (a whole store has them already).
     async function ensure(pcm, k0, k1) {
       if (!pcm.reader) return;
-      const [a, b] = blockRange(pcm, k0, k1);
-      const keep = new Set();
-      for (let i = a; i < b; i++) keep.add(i);
-      for (let i = a; i < b; i++) await loadBlock(pcm, i, keep);
+      const range = blockRange(pcm, k0, k1);
+      pin(pcm, range, 1);
+      try {
+        for (let i = range[0]; i < range[1]; i++) await loadBlock(pcm, i);
+      } finally { pin(pcm, range, -1); }
     }
     // Samples [k0, k1) as one array per channel (a clip played at another speed or backwards is stretched from it).
     function copyRange(pcm, k0, k1) {
@@ -639,15 +699,9 @@
       }
       return out;
     }
-    // The source samples [k0, k1) a clip plays over the timeline range [t0, t1) (ticks); all of the clip when it plays
-    // at another speed (it is stretched whole).
+    // The source samples [k0, k1) a clip at speed 1 plays over the timeline range [t0, t1) (ticks).
     function sourceSpan(x, span, t0, t1) {
       const { clip } = x;
-      if (clip.speed !== 1) {
-        const pre = clip.start - span.from;
-        const post = span.to - (clip.start + x.dur);
-        return [Math.max(0, Math.round((clip.in - pre * clip.speed) / tps)), Math.round((clip.out + post * clip.speed) / tps)];
-      }
       const a = Math.max(t0, span.from) - clip.start;
       const b = Math.min(t1, span.to) - clip.start;
       return clip.reverse ? [Math.floor((clip.out - b) / tps) - 1, Math.ceil((clip.out - a) / tps) + 1]
@@ -676,48 +730,104 @@
         if (span.to > from && span.from < to) { wanted.set(keyOf(x.media), x.media); ranges.push({ x, span }); }
       }
       await Promise.all([...wanted.values()].map((m) => loadMedia(project, m)));
-      // Read sources: the blocks of the range, at most LOAD_SECONDS of it from its start (all of a sped-up clip).
-      await Promise.all(ranges.map(({ x, span }) => {
+      // Read sources: the blocks of the range, at most LOAD_SECONDS of the source from its start; for a clip at another
+      // speed, those its stretched segments there are made from.
+      const reads = [];
+      for (const { x, span } of ranges) {
         const pcm = sources.get(keyOf(x.media))?.pcm;
-        if (!pcm?.reader) return null;
+        if (!pcm?.reader) continue;
         const t0 = Math.max(from, span.from);
+        const chain = chainOf(x, span);
+        if (x.clip.speed !== 1) {
+          const t1 = Math.min(to, span.to, t0 + (LOAD_SECONDS * TICKS) / Math.max(1, x.clip.speed));
+          for (const r of speedReads(speedOf(pcm, x, span), chain, Math.ceil(t0 / tps), Math.ceil(t1 / tps))) reads.push({ x, pcm, r });
+          continue;
+        }
         const t1 = Math.min(to, span.to, t0 + LOAD_SECONDS * TICKS);
         let [k0, k1] = sourceSpan(x, span, t0, t1);
         // A clip with an effect chain also reads its segments' warm-up before and cross-fade tail after.
-        const chain = x.clip.speed === 1 ? chainOf(x, span) : null;
         if (chain) {
           const reach = 2 * FX_SEGMENT + chain.warm + FX_XFADE + chain.latency;
           k0 -= reach;
           k1 += reach;
         }
-        return ensure(pcm, k0, k1).catch((err) => { const s = sources.get(keyOf(x.media)); s.state = 'failed'; s.error = err; });
-      }));
+        reads.push({ x, pcm, r: [k0, k1] });
+      }
+      // All of this load's blocks stay until it is done: read one after another, a clip's blocks pushed out those
+      // another clip had read a moment before, and the mix after the load missed it.
+      for (const { pcm, r } of reads) pin(pcm, blockRange(pcm, r[0], r[1]), 1);
+      try {
+        await Promise.all(reads.map(({ x, pcm, r }) => ensure(pcm, r[0], r[1]).catch((err) => { const s = sources.get(keyOf(x.media)); s.state = 'failed'; s.error = err; })));
+      } finally {
+        for (const { pcm, r } of reads) pin(pcm, blockRange(pcm, r[0], r[1]), -1);
+      }
       return [...wanted.values()].filter((m) => sources.get(keyOf(m))?.state === 'failed').map((m) => ({ media: m.id, error: String(sources.get(keyOf(m)).error?.message || sources.get(keyOf(m)).error) }));
     }
 
-    // The clip's sound at its speed, kept while the clip's source range, speed and handles stay the same.
-    function stretchedOf(pcm, clip, span, dur, mediaKey) {
+    // A clip at another speed: its source range [srcFrom, srcTo) (reversed when it plays backwards), stretched (or, with
+    // the pitch not kept, resampled) as one stream of outLen samples whose sample 0 is `origin` ticks from clip.start
+    // (sequence sample i reads stream sample i - shift), made in segments of `seg` samples (speedSegment).
+    function speedOf(pcm, x, span) {
+      const { clip, dur } = x;
       const pre = clip.start - span.from;
       const post = span.to - (clip.start + dur);
       const keepPitch = clip.keepPitch !== false;
-      const key = `${mediaKey}|${clip.in}|${clip.out}|${clip.speed}|${clip.reverse}|${pre}|${post}|${keepPitch}`;
-      const hit = stretched.get(key);
-      if (hit) { hit.used = performance.now?.() || Date.now(); return hit; }
       const srcFrom = Math.max(0, Math.round((clip.in - pre * clip.speed) / tps));
-      const srcTo = Math.min(pcm.length, Math.round((clip.out + post * clip.speed) / tps));
-      if (!has(pcm, srcFrom, srcTo)) return null;
-      let seg = copyRange(pcm, srcFrom, Math.max(srcFrom, srcTo));
-      if (clip.reverse) seg = seg.map((c) => c.reverse());
-      const out = keepPitch ? stretch(seg, 1 / clip.speed, rate) : resample(seg, rate, rate / clip.speed);
-      // origin: the timeline offset from clip.start of sample 0 of `out`, in ticks.
+      const srcTo = Math.max(srcFrom, Math.min(pcm.length, Math.round((clip.out + post * clip.speed) / tps)));
+      const factor = 1 / clip.speed;
+      const hop = stretchHop(rate);
       const origin = clip.reverse ? -(srcTo * tps - clip.out) / clip.speed : -(clip.in - srcFrom * tps) / clip.speed;
-      const entry = { data: out, origin, used: Date.now() };
-      stretched.set(key, entry);
-      if (stretched.size > 64) {
-        const oldest = [...stretched.entries()].sort((a, b) => a[1].used - b[1].used).slice(0, stretched.size - 64);
-        for (const [k] of oldest) stretched.delete(k);
+      return {
+        srcFrom, srcTo, inLen: srcTo - srcFrom, outLen: Math.round((srcTo - srcFrom) * factor), factor, keepPitch, reverse: !!clip.reverse,
+        seg: hop * Math.max(1, Math.round((Math.min(BLOCK_SECONDS, SPEED_INPUT_SECONDS * factor) * rate) / hop)),
+        origin, shift: (clip.start + origin) / tps, to: rate / clip.speed,
+        key: `${keyOf(x.media)}|${clip.in}|${clip.out}|${clip.speed}|${clip.reverse}|${pre}|${post}|${keepPitch}`,
+      };
+    }
+    // Segment j's output [o0, o1), the input [x0, x1) it reads, the part [c0, c1) of that inside the source range, and
+    // the source samples that part is.
+    function speedWindow(g, j) {
+      const o0 = j * g.seg;
+      const o1 = Math.min(g.outLen, o0 + g.seg);
+      const [x0, x1] = g.keepPitch ? stretchWindow(g.inLen, g.factor, rate, o0, o1)
+        : [Math.floor(o0 / g.factor) - RS_HALF - 2, Math.ceil(o1 / g.factor) + RS_HALF + 2];
+      const c0 = Math.max(0, Math.min(g.inLen, x0));
+      const c1 = Math.max(c0, Math.min(g.inLen, x1));
+      return { o0, o1, x0, x1, c0, c1, src: g.reverse ? [g.srcTo - c1, g.srcTo - c0] : [g.srcFrom + c0, g.srcFrom + c1] };
+    }
+    // Segment j of the stream, or null while a block of the source it reads is not in memory.
+    function speedSegment(pcm, g, j) {
+      const k = `${g.key}|${j}`;
+      const hit = speedSegs.get(k);
+      if (hit) { hit.used = ++useTick; return hit; }
+      const w = speedWindow(g, j);
+      if (!has(pcm, w.src[0], w.src[1])) return null;
+      const input = copyRange(pcm, w.src[0], w.src[1]).map((c) => {
+        const x = new Float32Array(w.x1 - w.x0);
+        x.set(g.reverse ? c.reverse() : c, w.c0 - w.x0);
+        return x;
+      });
+      const data = g.keepPitch ? stretchPart(input, w.x0, g.inLen, g.factor, rate, w.o0, w.o1, g.seg)
+        : resamplePart(input, w.x0, g.inLen, rate, g.to, w.o0, w.o1);
+      const entry = { data, used: ++useTick };
+      speedSegs.set(k, entry);
+      while (speedSegs.size > SPEED_KEEP) {
+        let worst = null;
+        let oldest = Infinity;
+        for (const [key, e] of speedSegs) if (e.used < oldest) { oldest = e.used; worst = key; }
+        speedSegs.delete(worst);
       }
       return entry;
+    }
+    // The source ranges to read before sequence samples [a, b) of a clip at another speed can be mixed: those of the
+    // segments they hear (with a chain, over its runs' warm-up and tail too) that are not made yet.
+    function speedReads(g, chain, a, b) {
+      if (chain) [a, b] = chainSpan(chain, a, b);
+      const k0 = Math.max(0, Math.round(a - g.shift));
+      const k1 = Math.min(g.outLen - 1, Math.round(b - 1 - g.shift));
+      const out = [];
+      for (let j = Math.floor(k0 / g.seg); k1 >= k0 && j <= Math.floor(k1 / g.seg); j++) if (!speedSegs.has(`${g.key}|${j}`)) out.push(speedWindow(g, j).src);
+      return out;
     }
 
     // ---- clip effects that process the sound (audiofx.js) ----
@@ -775,6 +885,13 @@
       const s0 = chain.anchor + j * FX_SEGMENT;
       const s1 = Math.min(chain.end, s0 + FX_SEGMENT);
       return { s0, s1, r0: Math.max(chain.anchor, s0 - chain.warm), r1: Math.min(chain.end, s1 + FX_XFADE) };
+    }
+    // The sequence samples the chain's runs read to give samples [a, b) (as chainRange goes through them).
+    function chainSpan(chain, a, b) {
+      const jA = Math.floor((a - chain.anchor) / FX_SEGMENT);
+      const jB = Math.floor((b - 1 - chain.anchor) / FX_SEGMENT);
+      const first = jA > 0 && a - (chain.anchor + jA * FX_SEGMENT) < FX_XFADE ? jA - 1 : jA;
+      return [segmentRun(chain, first).r0, Math.min(chain.end, segmentRun(chain, jB).r1 + chain.latency)];
     }
     // The samples of the source store that sequence samples [i0, i1) of a clip at speed 1 (forward or reversed) read.
     function sourceOf(x, i0, i1) {
@@ -860,6 +977,7 @@
       const keyframes = mod('keyframes');
       const { clip, media, dur } = x;
       const src = sources.get(keyOf(media));
+      if (src?.state === 'none') return true;
       if (!src || src.state !== 'ready') return false;
       const pcm = src.pcm;
       const span = clipSpan(seq, clip, dur);
@@ -870,12 +988,17 @@
       const revPlain = clip.speed === 1 && clip.reverse;
       const chain = chainOf(x, span);
       // A block not read yet: asked for, and this clip is missing from this mix. (A chain checks its segments' input.)
-      if (!(chain && (plain || revPlain))) {
+      // A clip at another speed needs the source only of the segments it hears that are not made yet.
+      const g = plain || revPlain ? null : speedOf(pcm, x, span);
+      if (g) {
+        let ready = true;
+        for (const [k0, k1] of speedReads(g, chain, a, b)) if (!has(pcm, k0, k1)) { ensure(pcm, k0, k1).catch(() => {}); ready = false; }
+        if (!ready) return false;
+      } else if (!chain) {
         const need = sourceSpan(x, span, a * tps, b * tps);
         if (pcm.reader && !has(pcm, need[0], need[1])) { ensure(pcm, need[0], need[1]).catch(() => {}); return false; }
       }
-      const st = plain || revPlain ? null : stretchedOf(pcm, clip, span, dur, keyOf(media));
-      if (!plain && !revPlain && !st) return false;
+      const segs = new Map(); // the segments of g's stream this block has used (one the LRU drops meanwhile stays here)
       let bStart = 0;
       let bEnd = 0;
       let L = null;
@@ -905,10 +1028,14 @@
           out[0] = L[k - bStart];
           out[1] = R[k - bStart];
         } else {
-          const k = Math.round(along - st.origin / tps);
-          if (k < 0 || k >= st.data[0].length) return;
-          out[0] = st.data[0][k];
-          out[1] = st.data[1][k];
+          const k = Math.round(along - g.origin / tps);
+          if (k < 0 || k >= g.outLen) return;
+          const j = Math.floor(k / g.seg);
+          let e = segs.get(j);
+          if (e === undefined) segs.set(j, (e = speedSegment(pcm, g, j)));
+          if (!e) return;
+          out[0] = e.data[0][k - j * g.seg];
+          out[1] = e.data[1][k - j * g.seg];
         }
       };
       const fxOut = chain ? chainRange(chain, x, pcm, srcAt, a, b, plain || revPlain) : null;
@@ -978,8 +1105,9 @@
       const out = [new Float32Array(n), new Float32Array(n)];
       const tracks = {};
       let missing = 0;
+      const missed = [];
       const seq = project?.sequences.find((s) => s.id === seqId);
-      if (!seq) return { out, tracks, master: [0, 0], rms: [0, 0], missing };
+      if (!seq) return { out, tracks, master: [0, 0], rms: [0, 0], missing, missed };
       const t0 = s0 * tps;
       const t1 = (s0 + n) * tps;
       const audio = seq.tracks.filter((t) => t.kind === 'audio');
@@ -995,7 +1123,7 @@
           const span = clipSpan(seq, x.clip, x.dur);
           if (span.to <= t0 || span.from >= t1) continue;
           any = true;
-          if (!renderClip(bus, project, seq, x, s0, n)) missing++;
+          if (!renderClip(bus, project, seq, x, s0, n)) { missing++; missed.push({ clip: x.clip.id, media: x.media.nest ? null : x.media.id }); }
         }
         const audible = !track.mute && (!anySolo || track.solo);
         if (!any || !audible) { tracks[track.id] = [0, 0]; continue; }
@@ -1028,7 +1156,7 @@
         sl += l * l;
         sr += r * r;
       }
-      return { out, tracks, master: [ml, mr], rms: n ? [Math.sqrt(sl / n), Math.sqrt(sr / n)] : [0, 0], missing };
+      return { out, tracks, master: [ml, mr], rms: n ? [Math.sqrt(sl / n), Math.sqrt(sr / n)] : [0, 0], missing, missed };
     }
 
     // mix() once the blocks of those samples, and LOOKAHEAD_SECONDS after them, are read: for loops through a range.
@@ -1037,7 +1165,17 @@
       return mix(project, seqId, s0, n, opts);
     }
 
-    return { rate, load, mix, mixLoaded, sources, forget: () => { sources.clear(); stretched.clear(); fxSegments.clear(); } };
+    // The sources that could not be read, those of nests included: [{media, error}].
+    const failures = () => [...sources.values()].filter((s) => s.state === 'failed').map((s) => ({ media: s.media.nest ? null : s.media.id, error: String(s.error?.message || s.error) }));
+    // Bytes of sound held: source blocks and stretched segments.
+    function held() {
+      let blocks = 0;
+      for (const s of sources.values()) for (const e of s.pcm?.blocks.values() || []) blocks += e.data[0].byteLength + e.data[1].byteLength;
+      let segments = 0;
+      for (const e of speedSegs.values()) segments += e.data[0].byteLength + e.data[1].byteLength;
+      return { blocks, segments };
+    }
+    return { rate, load, mix, mixLoaded, sources, failures, held, forget: () => { sources.clear(); speedSegs.clear(); fxSegments.clear(); } };
   }
 
   function makeBuffer(channels, rate) {

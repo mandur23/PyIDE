@@ -4,8 +4,9 @@
 // "stop"). Each stand-in process writes its pid to pids/, so the suite can tell that none is left running. Checks:
 // hostile server names (invalid, Korean, emoji, too long, CON/NUL, duplicates), bad and busy game ports, Start, Stop and
 // Restart clicked 20 times, a server that crashes, quits at once or hangs on "stop" (killed 60 s later, also on a
-// Rerun), its folder deleted or renamed while it runs, a damaged pyide-server.json, a wrong Java, the resource pack sent
-// with none made, the Minecraft screen's pages switched many times, 50 servers in the project, and a server whose Java
+// Rerun), Restart to Update with a server running (asked first; Cancel keeps it; the server saves and exits before the
+// installer is started; one that ignores "stop" is not installed over), its folder deleted or renamed while it runs, a
+// damaged pyide-server.json, a wrong Java, the resource pack sent with none made, the Minecraft screen's pages switched many times, 50 servers in the project, and a server whose Java
 // is missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
 import { execFileSync } from 'child_process';
 import crypto from 'crypto';
@@ -129,7 +130,7 @@ const waitFor = async (fn, ms = 15000, step = 150) => { const end = Date.now() +
 
 const project = path.join(work, 'project');
 mkdirSync(project);
-const t = await launch({ name: 'stress-minecraft-runtime', port: 8620, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES } });
+const t = await launch({ name: 'stress-minecraft-runtime', port: 8620, mode: 'craft', projectDir: project, env: { PYIDE_CRAFT_HOME: project, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES, PYIDE_UPDATE_TEST: '1' } });
 const { js, until, check } = t;
 const root = await js('ide.root');
 const card = (name) => `document.querySelector('#minecraftScreen .mc-server[data-name="${name}"]')`;
@@ -289,6 +290,75 @@ try {
     rmSync(path.join(serverDir('gamma'), 'hang.flag'));
     await js(`(${runTab('gamma')}.stop(), true)`);
     await stopped('gamma');
+  });
+
+  // ---------- Restart to Update with a server running ----------
+  // A source run cannot install (no downloaded installer), so the install step logs "starting the installer", fails
+  // and the window stays: what the suite checks is that the server got "stop" and exited before that line.
+  await section('restart to update', async () => {
+    const logText = () => { try { return readFileSync(path.join(t.userData, 'logs', 'pyide.log'), 'utf8'); } catch { return ''; } };
+    const buttons = () => js(`[...[...document.querySelectorAll('.dialog')].pop()?.querySelectorAll('.dialog-buttons button') || []].map((b) => b.textContent)`);
+    const lastDialog = () => js(`[...document.querySelectorAll('.dialog')].pop()?.textContent || ''`);
+    const press = (label) => js(`(${dialogButton(label)}.click(), true)`);
+    const phase = () => js(`ide.api.invoke('updater:state').then((s) => s.phase)`);
+    const askRestart = async () => {
+      await js(`(document.getElementById('updateStatus').click(), true)`);
+      await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('has been downloaded')`, 'Update Ready');
+      await press('Restart to Update');
+      await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('Servers Are Running')`, 'the question about running servers');
+    };
+    check((await create({ name: 'upd', port: 25807 })).ok, 'a server for Restart to Update');
+    await refresh();
+    check(await startCard('upd'), 'it starts');
+    const pid = aliveServers(serverDir('upd')).map((p) => p.pid)[0];
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'downloaded', available: '9.9.9', signature: 'verified' })`);
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('has been downloaded')`, 'Update Ready after the download');
+    await press('Later');
+    await askRestart();
+    const asked = await lastDialog();
+    check(/These servers are running\. Updating stops them, and each saves its world first/.test(asked) && /upd/.test(asked) && S(await buttons()) === S(['Stop Servers and Update', 'Cancel']),
+      `Restart to Update with a server running asks first, naming it (${asked.slice(0, 160)}; ${S(await buttons())})`);
+    await press('Cancel');
+    await sleep(1500);
+    check(alive(pid) && await js(`(${runTab('upd')}).running`) && !/Stopping the server/.test(await tabText('upd')) && !/starting the installer/.test(logText()),
+      'Cancel leaves the server running and sends it nothing');
+    check(await phase() === 'downloaded' && await js(`document.getElementById('updateStatus').textContent === 'Restart to Update'`), 'after Cancel the update is still offered (status bar: Restart to Update)');
+
+    await askRestart();
+    await js(`(() => { window.__sawStopping = false; new MutationObserver(() => { if (document.getElementById('updateStopping')) window.__sawStopping = true; }).observe(document.body, { childList: true, subtree: true }); return true; })()`);
+    await press('Stop Servers and Update');
+    check(await waitFor(() => /starting the installer/.test(logText()), 30000), 'Stop Servers and Update reaches the install step');
+    const log = logText();
+    const wait = log.slice(log.lastIndexOf('asked to stop'));
+    const exitAt = wait.search(/#\d+ exited with code 0/);
+    const installAt = wait.indexOf('starting the installer');
+    check(/Stopping the server/.test(await tabText('upd')) && existsSync(path.join(serverDir('upd'), 'world.saved')), 'the server got its "stop" and saved its world');
+    check(exitAt >= 0 && installAt > exitAt && !alive(pid), `the server process exited before the installer was started (exit at ${exitAt}, installer at ${installAt} in the log after "asked to stop")`);
+    check(await js('window.__sawStopping'), 'a dialog says the servers are stopping while they do');
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('could not be started')`, 'the installer failure of a source run');
+    check(true, 'a source run cannot start the installer, says so and stays open');
+    await press('Close');
+
+    // A server that ignores "stop": nothing is installed over it.
+    write(path.join(serverDir('upd'), 'hang.flag'), '');
+    check(await startCard('upd'), 'it starts again, now ignoring stop');
+    const hung = aliveServers(serverDir('upd')).map((p) => p.pid)[0];
+    const before = (logText().match(/starting the installer/g) || []).length;
+    await askRestart();
+    const t0 = Date.now();
+    await press('Stop Servers and Update');
+    await sleep(1000);
+    check(await js(`!!document.getElementById('updateStopping')`), 'the stopping dialog shows while the server keeps running');
+    await t.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('did not stop in time')`, 'the not-installed message', 90000);
+    const said = await lastDialog();
+    check(/1 of them did not stop in time, so Nano Studio was not updated/.test(said) && Date.now() - t0 > 55000, `a server that ignores "stop" for the quit gate's minute is reported (${Math.round((Date.now() - t0) / 1000)} s: ${said.slice(0, 140)})`);
+    check((logText().match(/starting the installer/g) || []).length === before && /not installing 9\.9\.9/.test(logText()), 'and the installer is not started over it');
+    check(alive(hung) && await phase() === 'downloaded', 'the server is left running and the update is still offered');
+    await press('Close');
+    rmSync(path.join(serverDir('upd'), 'hang.flag'));
+    await js(`(${runTab('upd')}.stop(), true)`);
+    check(await stopped('upd') && !alive(hung), 'the server stops normally afterwards');
+    await js(`ide.api.invoke('updater:testPhase', { phase: 'idle', available: null, signature: null })`);
   });
 
   // ---------- the folder changing under a running server ----------

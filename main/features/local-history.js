@@ -20,6 +20,9 @@ const { isMainThread, parentPort, workerData } = require('worker_threads');
 
 const IGNORED = new Set(['.git', '__pycache__', 'node_modules', '.idea', '.mypy_cache', '.pytest_cache', '.ruff_cache', '.venv', 'venv', 'env']);
 const MAX_FILE_BYTES = 1024 * 1024;
+// A file another feature is about to rewrite (Replace in Files) is kept up to the size that feature rewrites
+// (main/features/search.js's MAX_SIZE), not only up to MAX_FILE_BYTES.
+const MAX_REWRITTEN_BYTES = 2 * 1024 * 1024;
 // Files the history has not seen yet that one burst of outside changes may add; a bigger burst (a branch switch, a
 // code generator) records only the files it already knows.
 const MAX_NEW = 200;
@@ -89,19 +92,20 @@ function createIgnore(root) {
 // ---------- worker side ----------
 const DISK = {
   // items [{rel, m?, s?}]: the stat last seen, if any; an equal stat answers 'same' without reading the file.
-  // -> [{rel, state: 'file', m, s, h, b} | {rel, state: 'dir', b} | {rel, state: 'same' | 'missing' | 'skip'}]
-  // b: the birth time.
-  ingest(root, blobDir, items) {
+  // -> [{rel, state: 'file', m, s, h, b} | {rel, state: 'dir', b} | {rel, state: 'same' | 'missing'} |
+  // {rel, state: 'skip', why: 'notFile' | 'tooLarge' | 'unreadable' | 'binary', message?}]  b: the birth time.
+  ingest(root, blobDir, items, max = MAX_FILE_BYTES) {
     return items.map(({ rel, m, s }) => {
       const abs = path.join(root, rel);
       let st;
       try { st = fs.statSync(abs); } catch { return { rel, state: 'missing' }; }
       if (st.isDirectory()) return { rel, state: 'dir', b: st.birthtimeMs };
-      if (!st.isFile() || st.size > MAX_FILE_BYTES) return { rel, state: 'skip' };
+      if (!st.isFile()) return { rel, state: 'skip', why: 'notFile' };
+      if (st.size > max) return { rel, state: 'skip', why: 'tooLarge' };
       if (st.mtimeMs === m && st.size === s) return { rel, state: 'same' };
       let buf;
-      try { buf = fs.readFileSync(abs); } catch { return { rel, state: 'skip' }; }
-      if (looksBinary(buf)) return { rel, state: 'skip' };
+      try { buf = fs.readFileSync(abs); } catch (e) { return { rel, state: 'skip', why: 'unreadable', message: e.message }; }
+      if (looksBinary(buf)) return { rel, state: 'skip', why: 'binary' };
       return { rel, state: 'file', m: st.mtimeMs, s: st.size, h: storeBlob(blobDir, buf), b: st.birthtimeMs };
     });
   },
@@ -482,19 +486,39 @@ function createStore(dir, root, limits, onChange, { isEnvironmentError = () => f
       if (rec) rec.m = undefined;
       return apply(r, kind);
     }),
-    // A labeled point in time, plus the unsaved text of open documents ({path, text, encoding}) where it differs.
-    checkpoint: (label, user, docs) => recording(() => {
+    // A labeled point in time, plus the unsaved text of open documents ({path, text, encoding}) where it differs, and
+    // the content on disk of `files` (absolute paths) about to be rewritten: the history may never have seen them (not
+    // opened, or changed in a burst of more than MAX_NEW unknown files), and the label is the only way back.
+    // -> {t, skipped: [{path, reason: 'outside' | 'missing' | 'notFile' | 'tooLarge' | 'unreadable' | 'binary', message?}]}
+    checkpoint: (label, user, docs, files = []) => recording(async () => {
       const t = Date.now();
+      const tag = { l: label, ...(user ? { u: 1 } : {}) };
       for (const doc of docs) {
         const rel = relOf(doc.path);
         if (!rel || ignored(rel)) continue;
         const h = storeBlob(blobDir, textCodec.encode(doc.text, doc.encoding));
-        addRevision(recordFor(rel), { t, h, k: 'checkpoint', l: label, ...(user ? { u: 1 } : {}) });
+        addRevision(recordFor(rel), { t, h, k: 'checkpoint', ...tag });
       }
-      index.labels.push({ t, l: label, ...(user ? { u: 1 } : {}) });
+      const skipped = [];
+      const rels = [];
+      for (const abs of files) {
+        const rel = relOf(abs);
+        if (rel) rels.push(rel); else skipped.push({ path: abs, reason: 'outside' });
+      }
+      const found = rels.length ? await disk('ingest', root, blobDir, rels.map((rel) => ({ rel })), MAX_REWRITTEN_BYTES) : [];
+      for (const r of found) {
+        if (r.state !== 'file') {
+          skipped.push({ path: path.join(root, r.rel), reason: r.state === 'skip' ? r.why : r.state === 'dir' ? 'notFile' : r.state, ...(r.message ? { message: r.message } : {}) });
+          continue;
+        }
+        const rec = recordFor(r.rel);
+        Object.assign(rec, { m: r.m, s: r.s, d: r.h });
+        addRevision(rec, { t, h: r.h, k: 'checkpoint', ...tag });
+      }
+      index.labels.push({ t, ...tag });
       scheduleSave();
       changed();
-      return t;
+      return { t, skipped };
     }),
     // Revisions of a file, or of every file under a folder, newest first, with the labels since the oldest.
     list: (abs, isDir) => serial(() => {
@@ -572,7 +596,11 @@ function register(ctx) {
   });
   ipcMain.handle('localHistory:limits', (_e, root, limits) => storeOf(root).setLimits({ ...DEFAULT_LIMITS, ...limits }));
   ipcMain.handle('localHistory:record', (_e, root, abs, kind, doc) => storeOf(root).record(abs, kind, doc));
-  ipcMain.handle('localHistory:checkpoint', (_e, root, label, user, docs) => storeOf(root).checkpoint(label, user, docs || []));
+  ipcMain.handle('localHistory:checkpoint', async (_e, root, label, user, docs) => {
+    const r = await storeOf(root).checkpoint(label, user, docs || []);
+    return r && r.t;
+  });
+  ipcMain.handle('localHistory:checkpointFiles', (_e, root, label, docs, files) => storeOf(root).checkpoint(label, false, docs || [], Array.isArray(files) ? files.map(String) : []));
   ipcMain.handle('localHistory:list', (_e, root, abs, isDir) => storeOf(root).list(abs, isDir));
   ipcMain.handle('localHistory:content', (_e, root, h) => storeOf(root).content(h));
   ipcMain.handle('localHistory:restore', (_e, root, abs, h) => storeOf(root).restore(abs, h));

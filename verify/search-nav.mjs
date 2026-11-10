@@ -1,9 +1,10 @@
-import { linkSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { linkSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
 const t = await launch({ fixture: 'search-nav', port: 9403, env: { PYIDE_FIND_TIMEOUT_MS: '4000', PYIDE_REPLACE_TIMEOUT_MS: '4000' } });
-const { js, until, press, type, click, shot, cdp, project } = t;
+const { js, until, press, type, click, shot, cdp, project, sleep } = t;
 let seenErrors = 0;
 const check = (ok, label) => {
   t.check(ok, label);
@@ -32,6 +33,14 @@ const setToggle = async (opt, on) => {
   if (cur !== on) await press({ caseSensitive: 'Alt+C', words: 'Alt+W', regex: 'Alt+X' }[opt]);
 };
 const setQuery = async (text) => { await js(`document.querySelector('#snQuery').select()`); await type(text); };
+// The topmost dialog's message, and a real click on one of its buttons.
+const question = () => js(`[...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent || ''`);
+const answer = async (label) => {
+  await js(`(() => { document.querySelectorAll('[data-answer]').forEach(n => n.removeAttribute('data-answer'));
+    const b = [...[...document.querySelectorAll('#dialogHost .dialog')].pop().querySelectorAll('.dialog-buttons button')].find(n => n.textContent === ${J(label)});
+    b.dataset.answer = '1'; return true; })()`);
+  await click('[data-answer="1"]');
+};
 const status = (expected) => until(`document.querySelector('#snStatus')?.textContent === ${J(expected)}`, `status "${expected}"`, 8000)
   .then(() => true, async () => { console.log('  status was:', await js(`document.querySelector('#snStatus')?.textContent`)); return false; });
 
@@ -249,10 +258,22 @@ try {
   await press('Enter');
   await until(`!!document.querySelector('#snReplaceAll')`, 'Replace All in find window');
   await shot('replace-window.png');
+  const disk = (rel) => readFileSync(path.join(project, rel), 'utf8');
+  const notesBefore = disk('notes.txt');
+  const historyLabels = () => js(`ide.api.invoke('localHistory:list', ide.root, ide.root, true).then(r => r.labels.map(l => l.l))`);
   await click('#snReplaceAll');
+  await until(`[...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent === 'Replace 6 occurrences in 3 files?'`, 'the question before Replace All')
+    .then(() => check(true, 'Replace All asks "Replace 6 occurrences in 3 files?" first'), async () => check(false, `Replace All asks first (${J(await question())})`));
+  await answer('Cancel');
+  await until(`!document.getElementById('dialogHost').childElementCount`, 'the question closed');
+  await sleep(500);
+  check(disk('notes.txt') === notesBefore && disk('pkg/models.py').includes('compute_total(self)') && await js(`ide.findTab(ide.util.joinPath(ide.root, 'main.py')).model.getValue().includes('print(compute(3))')`)
+    && !(await historyLabels()).includes('Before Replace in Files'), 'Cancel at the question changes no file, no buffer and no Local History');
+  await click('#snReplaceAll');
+  await until(`[...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent === 'Replace 6 occurrences in 3 files?'`, 'the question again');
+  await answer('Replace');
   await until(`document.querySelector('#snFindHead').textContent.includes('Replaced 6 occurrences in 3 files')`, 'replace summary');
   check(true, 'Replace All reports 6 occurrences in 3 files');
-  const disk = (rel) => readFileSync(path.join(project, rel), 'utf8');
   check(disk('notes.txt').includes('before calculate.') && disk('pkg/models.py').includes('calculate_total(self)'), 'closed and clean files rewritten on disk');
   check(await js(`ide.findTab(ide.util.joinPath(ide.root, 'pkg\\\\models.py')).model.getValue().includes('calculate_total(order)')`), 'open clean tab reloaded from disk');
   const mainTab = `ide.findTab(ide.util.joinPath(ide.root, 'main.py'))`;
@@ -261,6 +282,60 @@ try {
   check(disk('node_modules/dep/index.py').includes('compute') && disk('myenv/Lib/vendored.py').includes('compute') && statSync(path.join(project, 'big.txt')).size === bigSize, 'skipped files untouched');
   check(await js(`window.__treeRefreshes > 0`), 'project tree refreshed after Replace All');
   check(await js(`document.querySelector('#snFindResults').textContent.includes('No matches found')`), 'search reruns and shows nothing left');
+
+  // notes.txt was never opened: its text from before the replace is in Local History, under the label.
+  const notesPath = `ide.util.joinPath(ide.root, 'notes.txt')`;
+  check((await historyLabels()).includes('Before Replace in Files'), 'Replace All puts a "Before Replace in Files" label in Local History');
+  await js(`(ide.localHistory.show(${notesPath}, false), true)`);
+  await until(`ide.activeTab()?.title === 'Local History: notes.txt' && [...document.querySelectorAll('.lh-view:not(.hidden) .lh-row.label')].some(r => r.textContent.includes('Before Replace in Files'))`, 'notes.txt history with the label', 8000);
+  await clickText('.lh-view:not(.hidden) .lh-row.label', 'Before Replace in Files');
+  await until(`document.querySelector('.lh-view:not(.hidden) .lh-row.selected')?.textContent.includes('Before Replace in Files')`, 'the label selected');
+  await click('.lh-view:not(.hidden) .lh-revert');
+  await until(`ide.api.read(${notesPath}).then(s => s === ${J(notesBefore)})`, 'notes.txt reverted', 8000)
+    .then(() => check(true, 'a closed file changed by Replace All is restored to its previous text from Local History'), () => check(false, `notes.txt restored from Local History (${J(disk('notes.txt'))})`));
+  await js(`(ide.closeTabObject(ide.activeTab(), true), true)`);
+
+  // More files than Local History takes from one burst of outside changes (200), and one past its 1 MB limit for
+  // them, all never opened: each goes into the label with its text, as Replace All asks for it.
+  mkdirSync(path.join(project, 'burst'));
+  const burst = Array.from({ length: 230 }, (_, i) => path.join(project, 'burst', `f${i}.txt`));
+  for (const f of burst) writeFileSync(f, `burst_token ${f}\n`);
+  const large = path.join(project, 'burst', 'large.txt');
+  writeFileSync(large, 'burst_token\n'.repeat(130000));
+  const kept = await js(`ide.localHistory.checkpoint('Before Replace in Files', { paths: ${J([...burst, large])}, disk: true })`);
+  const burstRevs = await js(`ide.api.invoke('localHistory:list', ide.root, ide.util.joinPath(ide.root, 'burst'), true).then(r => r.revisions.filter(x => x.k === 'checkpoint' && x.l === 'Before Replace in Files').length)`);
+  check(kept?.skipped?.length === 0 && burstRevs === burst.length + 1, `231 files never opened, one of 1.5 MB, each get their text in the label (${J({ skipped: kept?.skipped, burstRevs })})`);
+
+  // A file Local History cannot read is named, and Replace All asks again before it changes anything.
+  const lockA = path.join(project, 'lockme_a.txt');
+  const lockB = path.join(project, 'lockme_b.txt');
+  writeFileSync(lockA, 'lockme\n');
+  writeFileSync(lockB, 'lockme\n');
+  await js(`(ide.editor?.focus(), true)`);
+  await press('Ctrl+Shift+R');
+  await until(`!!document.querySelector('#snReplace') && document.activeElement?.id === 'snQuery'`, 'Replace in Files again');
+  await setQuery('lockme');
+  await js(`document.querySelector('#snReplace').select()`);
+  await type('unlocked');
+  check(await status('2 matches in 2 files'), 'preview: lockme in 2 files');
+  await press('Enter');
+  await until(`!!document.querySelector('#snReplaceAll') && document.querySelector('#snFindHead').textContent.includes('lockme')`, 'Replace All for lockme');
+  execFileSync('icacls', [lockA, '/deny', `${process.env.USERNAME}:(RD)`], { stdio: 'ignore' });
+  try {
+    await click('#snReplaceAll');
+    await until(`[...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent === 'Replace 2 occurrences in 2 files?'`, 'the lockme question');
+    await answer('Replace');
+    await until(`([...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent || '').includes('lockme_a.txt')`, 'the second question', 8000)
+      .catch(() => {});
+    const second = await question();
+    check(second.startsWith('Local History cannot keep the current text of 1 file') && second.includes('lockme_a.txt (') && second.endsWith('Replace anyway?'), `a file Local History cannot read is named before the replace (${J(second)})`);
+    await answer('Cancel');
+    await until(`!document.getElementById('dialogHost').childElementCount`, 'the second question closed');
+    await sleep(500);
+  } finally {
+    execFileSync('icacls', [lockA, '/remove:d', process.env.USERNAME], { stdio: 'ignore' });
+  }
+  check(disk('lockme_a.txt') === 'lockme\n' && disk('lockme_b.txt') === 'lockme\n', 'Cancel there changes neither file');
 
   // A regex that can match the empty string replaces only the non-empty matches the preview counts.
   writeFileSync(path.join(project, 'empty_re.txt'), 'bab\n');

@@ -127,7 +127,7 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
       let color = 1;
       while (used.has(color) && color < COLORS - 1) color++;
       guest = { id: nextId++, name: oneLine(f.name, 40) || 'Guest', version: oneLine(f.version, 32), color, role: 'read', state: 'pending', token: null,
-        session: null, link: ch, holder: `collab:${crypto.randomBytes(6).toString('hex')}`, docs: new Map(), tokens: BURST, at: Date.now(), bad: 0, cursor: null, view: null };
+        session: null, link: ch, holder: `collab:${crypto.randomBytes(6).toString('hex')}`, docs: new Map(), locked: new Map(), noted: new Set(), tokens: BURST, at: Date.now(), bad: 0, cursor: null, view: null };
       guests.set(guest.id, guest);
       log(`guest ${guest.id} asks to join`);
       onEvent({ type: 'request', id: guest.id, name: guest.name });
@@ -241,7 +241,7 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
     Promise.resolve().then(() => handler(g, msg)).catch((err) => log(`guest ${g.id} ${msg.type}: ${err.message}`));
   }
 
-  const failDoc = (g, msg, err) => g.session.send({ type: 'doc:failed', path: msg.path, ticket: msg.ticket, error: String(err?.message || err).slice(0, 300), code: err?.code || 'failed' });
+  const failDoc = (g, msg, err) => g.session.send({ type: 'doc:failed', path: msg.path, ticket: msg.ticket, error: String(err?.message || err).slice(0, 300), code: err?.code || 'failed', why: err?.why });
   // The guest's document path -> its absolute path (as the windows spell it), checked; throws {code}.
   async function docPath(rel) {
     const abs = P.resolveGuest(root, rel, { hidden });
@@ -283,7 +283,11 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
       let abs;
       try { abs = await docPath(msg.path); } catch (err) { return failDoc(g, msg, err); }
       if (g.state === 'gone') return undefined;
+      let why;
+      try { why = await P.guestReadOnly(root, clean(msg.path)); } catch (err) { return failDoc(g, msg, err); }
+      if (g.state === 'gone') return undefined;
       g.docs.set(pathKey(abs), msg.path);
+      setLocked(g, pathKey(abs), msg.path, why);
       // The host's window takes the document too (a tab in the background), so its language server, saving and
       // problems cover what the guest edits.
       onEvent({ type: 'open', path: abs, by: g.id });
@@ -296,19 +300,26 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
       let abs;
       try { abs = P.resolveGuest(root, msg.path, { hidden }); } catch { return; }
       g.docs.delete(pathKey(abs));
+      g.locked.delete(pathKey(abs));
       sharedDocs.leave(g.holder, abs);
     },
     'doc:op'(g, msg) {
       let abs;
       try { abs = P.resolveGuest(root, msg.path, { hidden }); } catch { return; }
-      if (!g.docs.has(pathKey(abs))) return;
-      if (g.role !== 'edit') {
+      const k = pathKey(abs);
+      if (!g.docs.has(k)) return;
+      // Checked here and not only in the guest's editor, which takes a moment to learn that a file is read-only. The
+      // folders were looked at on joining (and again when files change, recheckLocked): an op waits for no disk.
+      const why = g.locked.get(k) || P.readOnlyRule(clean(msg.path));
+      if (g.role !== 'edit' || why) {
         // The guest's text is no longer the host's: it is out of the document, and opens it again to see the host's.
-        failDoc(g, msg, Object.assign(new Error('you may only view this session'), { code: 'readOnly' }));
-        g.docs.delete(pathKey(abs));
+        failDoc(g, msg, why ? P.readOnlyError(clean(msg.path), why) : Object.assign(new Error('you may only view this session'), { code: 'readOnly' }));
+        g.docs.delete(k);
+        g.locked.delete(k);
         sharedDocs.leave(g.holder, abs);
         return;
       }
+      noteChange(g, abs, msg.path);
       sharedDocs.op(g.holder, { path: abs, base: msg.base, ops: msg.ops });
     },
     cursor(g, msg) {
@@ -323,18 +334,23 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
     // Saving, and the files and folders: only a guest the host lets edit. The host's window saves (its encoding, its
     // save actions); a document no window holds is written here from the shared text.
     async 'doc:save'(g, msg) {
-      const answer = (ok, code, error) => g.session.send({ type: 'saved', req: msg.req, path: msg.path, ok, code, error });
+      const answer = (ok, code, error, why) => g.session.send({ type: 'saved', req: msg.req, path: msg.path, ok, code, error, why });
       if (g.role !== 'edit') return answer(false, 'readOnly');
       let abs;
-      try { abs = await docPath(msg.path); } catch (err) { return answer(false, err.code || 'failed', err.message); }
+      try {
+        abs = await docPath(msg.path);
+        await writable(msg.path);
+      } catch (err) { return answer(false, err.code || 'failed', err.message, err.why); }
       return onEvent({ type: 'save', path: abs, by: g.id, req: msg.req, rel: msg.path });
     },
     async 'fs:create'(g, msg) {
       await fsOp(g, msg, async () => {
         const abs = P.resolveGuest(root, msg.path, { hidden });
         await parentOf(msg.path);
+        await writable(msg.path);
         if (msg.dir) await fs.promises.mkdir(abs);
         else await fs.promises.writeFile(abs, '', { flag: 'wx' });
+        noteChange(g, abs, msg.path);
         return { changed: [parentRel(msg.path)], event: { type: 'fsChanged', path: abs } };
       });
     },
@@ -344,9 +360,12 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
         await P.realGuest(root, msg.from, { hidden });
         const toAbs = P.resolveGuest(root, msg.to, { hidden });
         await parentOf(msg.to);
+        await writable(msg.from);
+        await writable(msg.to);
         // Never over another file: a name that differs only in case is the same file on Windows, and is a rename.
         if (pathKey(fromAbs) !== pathKey(toAbs) && await fs.promises.access(toAbs).then(() => true, () => false)) throw Object.assign(new Error('a file of that name is there'), { code: 'EEXIST' });
         await fs.promises.rename(fromAbs, toAbs);
+        noteChange(g, toAbs, msg.to);
         toGuests({ type: 'moved', from: clean(msg.from), to: clean(msg.to) });
         return { changed: [...new Set([parentRel(msg.from), parentRel(msg.to)])], event: { type: 'moved', from: fromAbs, to: toAbs } };
       });
@@ -355,6 +374,7 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
       await fsOp(g, msg, async () => {
         const abs = P.resolveGuest(root, msg.path, { hidden });
         const real = await P.realGuest(root, msg.path, { hidden });
+        await writable(msg.path);
         await trash(real);
         toGuests({ type: 'moved', from: clean(msg.path), to: null });
         return { changed: [parentRel(msg.path)], event: { type: 'moved', from: abs, to: null } };
@@ -421,11 +441,44 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
     const real = parent ? await P.realGuest(root, parent, { hidden }) : await fs.promises.realpath(root);
     if (!(await fs.promises.stat(real)).isDirectory()) throw Object.assign(new Error('not a folder'), { code: 'ENOTDIR' });
   }
+  // Throws when a guest may not change rel (protocol.js READ_ONLY), whatever its role.
+  async function writable(rel) {
+    const why = await P.guestReadOnly(root, clean(rel));
+    if (why) throw P.readOnlyError(clean(rel), why);
+  }
+  // A guest's open document became read-only or writable again: its editor follows (the host refuses its ops anyway).
+  function setLocked(g, k, rel, why) {
+    if ((g.locked.get(k) || null) === (why || null)) return;
+    if (why) g.locked.set(k, why); else g.locked.delete(k);
+    g.session.send({ type: 'readOnly', path: rel, why: why || null });
+  }
+  // A folder may have become a virtual environment (or stopped being one) under a guest's open document.
+  let recheck = null;
+  function recheckLocked() {
+    if (recheck || !live().some((g) => g.docs.size)) return;
+    recheck = setTimeout(async () => {
+      recheck = null;
+      for (const g of live()) {
+        for (const [k, rel] of [...g.docs]) {
+          const why = await P.guestReadOnly(root, clean(rel)).catch(() => null);
+          if (g.state !== 'gone' && g.docs.get(k) === rel) setLocked(g, k, rel, why);
+        }
+      }
+    }, 200);
+    recheck.unref?.();
+  }
+  // The host is told, once per guest and file, when a guest changes a file that runs when the host tests or builds.
+  function noteChange(g, abs, rel) {
+    const k = pathKey(abs);
+    if (g.noted.has(k) || !P.isNoteworthy(clean(rel))) return;
+    g.noted.add(k);
+    onEvent({ type: 'guestChanged', by: g.id, name: g.name, path: abs, rel: clean(rel) });
+  }
   async function fsOp(g, msg, run) {
-    const answer = (ok, code, error) => g.session.send({ type: 'fs:result', req: msg.req, ok, code, error });
+    const answer = (ok, code, error, why) => g.session.send({ type: 'fs:result', req: msg.req, ok, code, error, why });
     if (g.role !== 'edit') return answer(false, 'readOnly');
     let r;
-    try { r = await run(); } catch (err) { return answer(false, err.code || 'failed', String(err.message).slice(0, 300)); }
+    try { r = await run(); } catch (err) { return answer(false, err.code || 'failed', String(err.message).slice(0, 300), err.why); }
     answer(true);
     for (const folder of r.changed) toGuests({ type: 'tree:changed', path: folder });
     onEvent(r.event);
@@ -517,6 +570,7 @@ function createHost({ root, sharedDocs, hidden = P.DEFAULT_HIDDEN, hostName = 'H
         if (to !== null) folders.add(folderOf(to));
       }
       for (const folder of [...folders].slice(0, 100)) toGuests({ type: 'tree:changed', path: folder });
+      recheckLocked();
     },
     // The host's answer to a run request: the host's window runs the file itself when allowed.
     runAnswer({ by, req, allowed }) {

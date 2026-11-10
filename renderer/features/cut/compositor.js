@@ -276,7 +276,8 @@
   }
 
   // Resolves what each item shows: a VideoFrame (to release), an ImageBitmap, a canvas, or a color. Returns the list
-  // of frames to release once drawn.
+  // of frames to release once drawn; an item that cannot be shown becomes a red frame and is listed in ctx.failed
+  // ({clip, name, media, missing, error}), so an export can tell a slate it was asked for from one it was not.
   async function fetchSources(project, seq, layers, ctx) {
     const media = need('media');
     const textrender = need('textrender');
@@ -292,13 +293,14 @@
       }
     };
     collect(layers);
-    const fail = (it, message) => {
+    const fail = (it, message, cause = null) => {
+      ctx.failed?.push({ clip: it.clip?.id ?? null, name: it.clip?.name || '', media: it.clip?.source?.media ?? null, missing: cause?.code === 'missing', error: String(cause?.message || cause?.detail || message) });
       it.kind = 'error';
       it.canvas = errorCanvas(it.seqW, it.seqH, ctx.k, message);
       it.w = it.seqW;
       it.h = it.seqH;
     };
-    await Promise.all(items.map((it) => fetchItem(it).catch(() => fail(it, tr('Media Cannot Be Shown')))));
+    await Promise.all(items.map((it) => fetchItem(it).catch((err) => fail(it, tr('Media Cannot Be Shown'), err))));
     async function fetchItem(it) {
       const W = it.seqW;
       const H = it.seqH;
@@ -331,7 +333,7 @@
         return;
       }
       let o = await media.open(project, it.clip.source.media, { proxy: !!ctx.proxy });
-      if (o.error || (it.kind === 'video' && !o.video) || (it.kind === 'image' && !o.image)) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'));
+      if (o.error || (it.kind === 'video' && !o.video) || (it.kind === 'image' && !o.image)) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'), o.error);
       const place = () => {
         const fit = fitScale(o.width, o.height, W, H, project.settings?.fit);
         it.w = o.width * fit;
@@ -353,7 +355,7 @@
         if (!o.proxy) throw err;
         media.forget(o.path);
         o = await media.open(project, it.clip.source.media, { proxy: false });
-        if (o.error || !o.video) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'));
+        if (o.error || !o.video) return fail(it, o.error?.code === 'missing' ? tr('Media Offline') : tr('Media Cannot Be Shown'), o.error);
         place();
         src = ctx.sources.get(it.key, o);
         frame = await src.frameAt(it.srcT);
@@ -1241,10 +1243,11 @@ ${V}
       // with the speaker's name and color where the track shows them
       const captions = need('speakers').decorate(project, captionsAt(seq, t, ropts.captions), globalThis.tr);
       const k = be.backend === 'webgpu' ? q : Math.min(be.width / seq.w, be.height / seq.h) * q;
-      const ctx = { sources, k, proxy: !!ropts.proxy, textCanvas: (it, W, H) => texts(it, W, H, k), graphicCanvas: (it, W, H) => graphics(it, W, H, k) };
+      const failed = [];
+      const ctx = { sources, k, proxy: !!ropts.proxy, failed, textCanvas: (it, W, H) => texts(it, W, H, k), graphicCanvas: (it, W, H) => graphics(it, W, H, k) };
       const frames = await fetchSources(project, seq, layers, ctx);
       try {
-        if (destroyed) return;
+        if (destroyed) return { failed };
         if (be.backend === 'webgpu') {
           await textFontsReady(captions);
           be.encodeFrame(seq, layers, captions, q, ropts, (caps, overlays, W, H) => captionCanvas(seq, caps, overlays, W, H));
@@ -1265,6 +1268,7 @@ ${V}
       st.renders++;
       st.layers = layers.length;
       st.lastMs = performance.now() - t0;
+      return { failed };
     }
     const textFontsReady = (captions) => need('textrender').prepare(captions.map((c) => ({ font: c.style?.font, weight: c.style?.weight, italic: false })));
     // Renders run one after another: a monitor and an export never interleave their GPU work on one compositor.
@@ -1280,6 +1284,7 @@ ${V}
       get width() { return be.width; },
       get height() { return be.height; },
       get errors() { return be.errors; },
+      get lost() { return be.lost ?? null; },
       resize: (w, h) => be.resize(w, h),
       render(project, seqId, t, ropts) {
         const seq = project.sequences.find((s) => s.id === seqId);
