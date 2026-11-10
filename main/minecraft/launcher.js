@@ -1156,7 +1156,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
   }
   // -> {translated, rejected, failed, files, pack, enabled (turnKoreanOn's, or null with no line to turn on)}.
   const translatingNow = new Set();
-  async function translateKorean(root, name, { translate, log, signal }) {
+  async function translateKorean(root, name, { translate, log, signal, progress }) {
     const inst = readInstance(root, name);
     koreanVersion(inst);
     const dir = dirOf(root, name);
@@ -1175,7 +1175,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
         const meta = packMcmeta(format, `Korean for the mods of ${inst.title || name}, by Nano Studio Craft (Minecraft ${inst.mc})`);
         fs.mkdirSync(pack, { recursive: true });
         if (readText(path.join(pack, 'pack.mcmeta')) !== meta) fs.writeFileSync(path.join(pack, 'pack.mcmeta'), meta);
-        result = await translation.translateMods(dir, { mods, translate, log, signal, pack });
+        result = await translation.translateMods(dir, { mods, translate, log, signal, progress, pack });
       }
       const enabled = koreanLines(pack) && fs.existsSync(path.join(pack, 'pack.mcmeta')) ? await turnKoreanOn(root, name, log) : null;
       return { ...result, pack, enabled };

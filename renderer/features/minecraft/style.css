@@ -465,3 +465,7 @@ img.mcpl-pick-icon { background: none; }
   .mcpl-banner { margin: 8px 12px 0; }
   .mcpl-result { padding: 6px 12px; }
 }
+
+/* The Korean translation's balloon: how far the whole run is. */
+.mc-tr-bar { height: 4px; margin: 6px 0 2px; border-radius: 2px; background: rgba(128, 128, 128, .3); overflow: hidden; }
+.mc-tr-fill { height: 100%; width: 0; border-radius: 2px; background: var(--accent, #3574f0); transition: width .2s ease; }

@@ -712,6 +712,10 @@ async function craftUi(first) {
     await press('.mcc-korean-run');
     await until(`[...document.querySelectorAll('.ide-balloon')].some((b) => /한국어로 번역하는 중/.test(b.textContent) && [...b.querySelectorAll('button')].some((x) => x.textContent === '취소'))`, 'the progress balloon', 15000);
     await until(() => claudeCalls().length === 1, 'Claude asked', 15000);
+    await until(`document.querySelector('.ide-balloon .mc-tr-bar')?.dataset.percent === '0'`, 'the first progress report', 10000).catch(() => {});
+    const koBar = await js(`(() => { const b = [...document.querySelectorAll('.ide-balloon')].find((x) => /한국어로 번역하는 중/.test(x.textContent)); const bar = b?.querySelector('.mc-tr-bar'); return { percent: bar?.dataset.percent ?? null, wide: (bar?.getBoundingClientRect().width || 0) > 40, text: b?.querySelector('.ide-balloon-text')?.textContent || '', task: ide.tasks.list().find((t) => /한국어로 번역하는 중/.test(t.title)) || null }; })()`);
+    check(koBar.percent === '0' && koBar.wide && koBar.text === '0% · 3줄 중 0줄' && koBar.task?.fraction === 0 && koBar.task.text === koBar.text,
+      `while Claude answers, the balloon and the status bar show how far the whole run is (${S(koBar)})`);
     await js(`([...document.querySelectorAll('.ide-balloon')].find((b) => /한국어로 번역하는 중/.test(b.textContent)).querySelectorAll('button').forEach((x) => { if (x.textContent === '취소') x.click(); }), true)`);
     await until(`/취소했습니다/.test(ide.run.sessions().find((s) => s.title === 'Minecraft: 한국어 번역')?.host.textContent || '')`, 'cancelled', 15000);
     rmSync(claudeHold, { force: true });

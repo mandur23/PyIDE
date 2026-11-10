@@ -29,6 +29,8 @@
   const jobs = new Map(); // job id -> console
   let jobSeq = 0;
   ide.api.on('minecraft:log', ({ job, text }) => jobs.get(job)?.append(text, 'sys'));
+  const progressOf = new Map(); // job id -> ({done, total}) => void, while a job that reports its progress runs
+  ide.api.on('minecraft:progress', ({ job, done, total }) => progressOf.get(job)?.({ done, total }));
   function job(con) {
     const id = `mc-${Date.now()}-${++jobSeq}`;
     jobs.set(id, con);
@@ -413,8 +415,26 @@
     translating.add(key);
     const con = jobSession(tr('Korean Translation'));
     const j = job(con);
-    const progress = ide.notifications?.notify({ title: tr('Translating the mods of {name} into Korean…', { name }), group: 'Minecraft', timeout: 0,
+    const title = tr('Translating the mods of {name} into Korean…', { name });
+    const progress = ide.notifications?.notify({ title, text: tr('Looking for text without Korean…'), group: 'Minecraft', timeout: 0, raw: true,
       actions: [{ label: tr('Cancel'), run: () => ide.api.invoke('minecraft:cancel', j.id) }] });
+    // One bar for the whole run: every line without Korean in all the mods is 100 %. In the balloon, and in the status
+    // bar's task, which stays when the balloon is closed.
+    const task = ide.tasks?.start({ title, onCancel: () => ide.api.invoke('minecraft:cancel', j.id) });
+    const bar = el('div', 'mc-tr-bar');
+    bar.appendChild(el('div', 'mc-tr-fill'));
+    progress?.balloon?.querySelector('.ide-balloon-text')?.after(bar);
+    progressOf.set(j.id, ({ done, total }) => {
+      if (!total) return;
+      const fraction = Math.min(1, done / total);
+      const percent = Math.floor(fraction * 100);
+      const text = tr('{percent}% · {done} / {total} lines', { percent, done: done.toLocaleString(), total: total.toLocaleString() });
+      task?.update({ fraction, text });
+      bar.firstChild.style.width = `${percent}%`;
+      bar.dataset.percent = String(percent);
+      const t = progress?.balloon?.querySelector('.ide-balloon-text');
+      if (t) t.textContent = text;
+    });
     try {
       const r = await run(j.id);
       const extra = [r.rejected ? tr('{count} answers changed a format code (%s, §7) and were left out.', { count: r.rejected }) : '',
@@ -432,6 +452,8 @@
       if (!/Cancelled/.test(errorText(err))) ide.notifications?.notify({ title: tr('The mods of {name} could not be translated', { name }), text, kind: 'error', group: 'Minecraft', raw: true });
       return null;
     } finally {
+      progressOf.delete(j.id);
+      task?.done();
       progress?.expire();
       j.done();
       translating.delete(key);

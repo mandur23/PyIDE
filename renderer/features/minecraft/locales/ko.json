@@ -879,5 +879,6 @@
   "Puts back the copy Nano Studio saved last, or reads the server type again from its files. The damaged file is kept as pyide-server.json.damaged.": "Nano Studio가 마지막으로 저장한 사본을 되돌리거나, 서버 파일에서 종류를 다시 읽어요. 손상된 파일은 pyide-server.json.damaged로 남겨요.",
   "{name} repaired": "{name} 서버를 복구했어요",
   "Its pyide-server.json is the copy Nano Studio saved last. The damaged one is pyide-server.json.damaged.": "pyide-server.json을 Nano Studio가 마지막으로 저장한 사본으로 되돌렸어요. 손상된 파일은 pyide-server.json.damaged에 있어요.",
-  "Its pyide-server.json was written again from what the folder runs, with the default memory. The damaged one is pyide-server.json.damaged.": "폴더에서 실행하는 서버를 보고 pyide-server.json을 다시 썼어요. 메모리는 기본값이에요. 손상된 파일은 pyide-server.json.damaged에 있어요."
+  "Its pyide-server.json was written again from what the folder runs, with the default memory. The damaged one is pyide-server.json.damaged.": "폴더에서 실행하는 서버를 보고 pyide-server.json을 다시 썼어요. 메모리는 기본값이에요. 손상된 파일은 pyide-server.json.damaged에 있어요.",
+  "{percent}% · {done} / {total} lines": "{percent}% · {total}줄 중 {done}줄"
 }

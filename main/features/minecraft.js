@@ -552,12 +552,12 @@ function langStatus(dir) {
   return { mods: mods.map((m) => ({ jar: m.jar, ns: m.ns, total: m.total, missing: count(m) })), skipped,
     missing: mods.reduce((s, m) => s + count(m), 0), pack: fs.existsSync(path.join(dir, 'resourcepack', 'pack.mcmeta')) };
 }
-async function translateMods(dir, log, signal) {
+async function translateMods(dir, log, signal, progress) {
   if (!KINDS[serverOf(dir).kind]?.mods) throw fail('Only a Fabric, Forge or NeoForge server has mods to translate');
   newResourcePack(dir);
   const { mods } = translation.scan(dir);
   if (!mods.some((m) => Object.keys(m.missing).length)) return { translated: 0, rejected: 0, failed: 0, files: [] };
-  return translation.translateMods(dir, { mods, translate: askClaude, log, signal });
+  return translation.translateMods(dir, { mods, translate: askClaude, log, signal, progress });
 }
 
 // Server folders (lower case) with a process minecraft:start started that has not ended -> how many: a Rerun's new
@@ -669,6 +669,8 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
   app.on('will-quit', players.closeAll);
   // A job's output goes to the window as minecraft:log {job, text}.
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
+  // A job that knows its size says how far it is: minecraft:progress {job, done, total}.
+  const progressTo = (job) => ({ done, total }) => send('minecraft:progress', { job, done, total });
   ipcMain.handle('minecraft:kinds', () => Object.entries(KINDS).map(([id, k]) => ({ id, title: k.title, plugins: k.plugins, mods: k.mods, proxy: !!k.proxy })));
   ipcMain.handle('minecraft:versions', (_e, kind) => KINDS[kind]?.versions() ?? []);
   // leftOver: {pid, started} of a process still running there that this app does not hold (see run-marker.js).
@@ -828,7 +830,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     playersAt(root, dir);
     const ctl = new AbortController();
     running.set(job, ctl);
-    try { return await translateMods(dir, logTo(job), ctl.signal); } finally { running.delete(job); }
+    try { return await translateMods(dir, logTo(job), ctl.signal, progressTo(job)); } finally { running.delete(job); }
   });
   ipcMain.handle('minecraft:cancel', (_e, job) => { running.get(job)?.abort(); return true; });
   ipcMain.handle('minecraft:newResourcePack', (_e, root, dir) => { playersAt(root, dir); return newResourcePack(dir); });
@@ -870,7 +872,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
   ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
   // An instance's mods into Korean, as minecraft:langStatus and minecraft:translateMods do a server's.
   ipcMain.handle('launcher:langStatus', (_e, root, name) => { guard(root); return craft.koreanStatus(root, name); });
-  ipcMain.handle('launcher:translateMods', (_e, root, name, job) => { guard(root); return cancellable(job, (log) => craft.translateKorean(root, name, { translate: askClaude, log, signal: log.signal })); });
+  ipcMain.handle('launcher:translateMods', (_e, root, name, job) => { guard(root); return cancellable(job, (log) => craft.translateKorean(root, name, { translate: askClaude, log, signal: log.signal, progress: progressTo(job) })); });
   ipcMain.handle('launcher:joinCode', (_e, server) => craft.joinCode(server));
   ipcMain.handle('launcher:parseJoinCode', (_e, text) => craft.parseJoinCode(text));
   // The join code of this server's private share, on request: ports:state never carries its key, and the window holds the

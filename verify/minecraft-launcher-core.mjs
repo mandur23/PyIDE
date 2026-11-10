@@ -469,7 +469,9 @@ try {
     write(path.join(launcherDir, 'versions', '1.20.1', '1.20.1.jar'), writeZip([{ name: 'version.json', data: Buffer.from(S({ id: '1.20.1', pack_version: { resource: 15, data: 15 } })) }]));
     const userOptions = 'version:3465\r\nlang:ko_kr\r\nresourcePacks:["vanilla","fabric","file/Mine.zip","file/Second Pack"]\r\nincompatibleResourcePacks:[]\r\nfov:0.0\r\n';
     write(optionsOf('ko'), userOptions);
-    const r1 = await craft.translateKorean(root, 'ko', { translate, log });
+    const steps = [];
+    const r1 = await craft.translateKorean(root, 'ko', { translate, log, progress: (p) => steps.push(`${p.done}/${p.total}`) });
+    check(S(steps) === S(['0/3', '3/3']), `the run reports its progress against every line without Korean, the refused one included (${S(steps)})`);
     const lines1 = readJson(koFile('ko'));
     const meta = readJson(path.join(koPack('ko'), 'pack.mcmeta'));
     check(r1.translated === 2 && r1.rejected === 1 && S(lines1) === S({ 'item.tm.gem': '보석', 'block.tm.ore': '%s 광석' }) && meta.pack?.pack_format === 15 && S(Object.keys(asked[0])) === S(['item.tm.gem', 'block.tm.ore', 'item.tm.shiny']),
@@ -852,6 +854,47 @@ try {
     write(koFile, '{"item.tm.old": "내가 쓴 줄"}');
     const fine = await translation.translateMods(tdir, { mods: translation.scan(tdir).mods, translate: async () => S({ 'item.tm.gem': '보석' }), log() {} });
     check(fine.translated === 1 && S(JSON.parse(text(koFile))) === S({ 'item.tm.old': '내가 쓴 줄', 'item.tm.gem': '보석' }), 'a sound one gets the new line beside the user\'s');
+    // Several questions at a time: three mods of 300 lines are nine batches, answered in any order.
+    {
+      const pdir = path.join(work, 'translate-parallel');
+      const many = Array.from({ length: 3 }, (_, m) => ({ jar: `p${m}.jar`, ns: `p${m}`, total: 300, missing: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`k${i}`, `Line %s ${i}`])) }));
+      let now = 0;
+      let peak = 0;
+      const steps = [];
+      const slow = async (_system, prompt) => {
+        peak = Math.max(peak, ++now);
+        await new Promise((r) => setTimeout(r, 20 + Math.random() * 30));
+        now--;
+        return S(Object.fromEntries(Object.entries(JSON.parse(prompt)).map(([k, v]) => [k, v.replace('Line', '줄')])));
+      };
+      const par = await translation.translateMods(pdir, { mods: many, translate: slow, log() {}, progress: (p) => steps.push(p.done) });
+      const written = many.map((m) => Object.keys(JSON.parse(text(path.join(pdir, 'resourcepack', 'assets', m.ns, 'lang', 'ko_kr.json')))).length);
+      check(peak === translation.PARALLEL && par.translated === 900 && S(written) === S([300, 300, 300]) && steps.at(-1) === 900 && steps.every((v, i) => !i || v >= steps[i - 1]),
+        `batches are asked ${translation.PARALLEL} at a time, every answer lands in its mod's file, and the progress only rises to the total (${S({ peak, translated: par.translated, written, last: steps.at(-1) })})`);
+      // Cancel ends the questions still running, and nothing more is written.
+      const ctl = new AbortController();
+      let asked = 0;
+      let ended = 0;
+      const hang = (_system, _prompt, signal) => new Promise((resolve, reject) => {
+        asked++;
+        const t = setTimeout(() => resolve('{}'), 5000);
+        signal.addEventListener('abort', () => { clearTimeout(t); ended++; reject(Object.assign(new Error('Cancelled'), { code: 'cancelled' })); });
+      });
+      setTimeout(() => ctl.abort(), 50);
+      const cdir = path.join(work, 'translate-cancel');
+      const stopped = await errOf(() => translation.translateMods(cdir, { mods: many, translate: hang, log() {}, signal: ctl.signal }));
+      check(stopped?.code === 'cancelled' && asked === translation.PARALLEL && ended === asked && !existsSync(path.join(cdir, 'resourcepack')),
+        `Cancel stops every question that was running and starts no more (${S({ code: stopped?.code, asked, ended })})`);
+      // Signed out: the first answer says so, and the run ends without waiting for the others.
+      let begun = 0;
+      const signedOut = async (_system, _prompt, signal) => {
+        if (begun++ === 0) throw Object.assign(new Error('Claude Code is not signed in'), { code: 'auth' });
+        return new Promise((resolve, reject) => { const t = setTimeout(() => resolve('{}'), 5000); signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('stopped')); }); });
+      };
+      const t0 = Date.now();
+      const auth = await errOf(() => translation.translateMods(path.join(work, 'translate-auth'), { mods: many, translate: signedOut, log() {} }));
+      check(auth?.code === 'auth' && Date.now() - t0 < 2000, `an answer that Claude Code is signed out ends the whole run at once (${auth?.code}, ${Date.now() - t0} ms)`);
+    }
     // A literal % before a space and a word is text, not a code the translation must keep; the codes the game fills are.
     const codes = [
       ['Speed +10% per level', '레벨당 속도 +10%', true], ['50% chance to drop %s', '%s 떨어뜨릴 확률 50%', true], ['100% done', '100% 완료', true],

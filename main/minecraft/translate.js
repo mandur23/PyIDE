@@ -101,41 +101,77 @@ You get one JSON object of translation keys and English lines. Answer with one J
 Keep every format code exactly as it is: %s, %d, %1$s, %2$s and the like, § colour codes such as §7 and §r, and line breaks (\\n). Keep names of mods and of keys pressed (Shift, Ctrl) as they are.`;
 
 // Translates what scan() found and writes it into the resource pack. translate(system, prompt, signal) -> Promise<text>.
+// The batches of all the mods are asked a few at a time (parallel, 3 unless given): each is its own question, and the
+// answers come in any order. A pack file is read, changed and written in one go when its answer arrives, with no await
+// in between, so two answers for one mod never write over each other.
+// progress({done, total}): lines dealt with (translated, refused or unanswered) of every line scan() found missing in
+// all the mods, at the start and after each batch, so one bar covers the whole run.
+// Cancel, Claude Code missing or signed out, or a pack file that is not JSON stops every question still running.
 // -> {translated, rejected (format codes changed), failed (no answer), files: [{ns, file, added}]}.
-async function translateMods(dir, { mods, translate, log, signal, pack = serverPack(dir) }) {
+const PARALLEL = 3;
+async function translateMods(dir, { mods, translate, log, signal, progress, parallel = PARALLEL, pack = serverPack(dir) }) {
   const result = { translated: 0, rejected: 0, failed: 0, files: [] };
+  const total = mods.reduce((n, m) => n + Object.keys(m.missing).length, 0);
+  let done = 0;
+  const step = (n) => { done += n; progress?.({ done, total }); };
+  step(0);
+  const cancelled = () => Object.assign(new Error('Cancelled'), { expected: true, code: 'cancelled' });
+  const jobs = [];
+  const added = new Map(); // mod -> lines added
   for (const mod of mods) {
     const todo = batches(mod.missing);
     if (!todo.length) continue;
     log(`${mod.jar} (${mod.ns}): ${Object.keys(mod.missing).length} lines\n`);
-    let added = 0;
-    for (const [i, batch] of todo.entries()) {
-      if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { expected: true, code: 'cancelled' });
-      let answer = null;
-      try {
-        answer = answerObject(await translate(SYSTEM, JSON.stringify(batch, null, 1), signal));
-      } catch (err) {
-        if (signal?.aborted || err.code === 'cancelled') throw Object.assign(new Error('Cancelled'), { expected: true, code: 'cancelled' });
-        if (err.code === 'not-installed' || err.code === 'auth') throw err;
-        log(`  ${i + 1}/${todo.length}: ${err.message}\n`);
-      }
-      if (!answer) { result.failed += Object.keys(batch).length; continue; }
-      // Read again before writing: the user may have edited the file while the answer was coming.
-      const lines = readPack(pack, mod.ns);
-      let ok = 0;
-      for (const [k, en] of Object.entries(batch)) {
-        if (lines[k]) continue;
-        if (sameCodes(en, answer[k])) { lines[k] = answer[k]; ok++; } else result.rejected++;
-      }
-      fs.mkdirSync(path.dirname(packFile(pack, mod.ns)), { recursive: true });
-      fs.writeFileSync(packFile(pack, mod.ns), `${JSON.stringify(lines, null, 2)}\n`);
-      added += ok;
-      result.translated += ok;
-      log(`  ${i + 1}/${todo.length}: ${ok} translated\n`);
-    }
-    if (added) result.files.push({ ns: mod.ns, file: packFile(pack, mod.ns), added });
+    for (const [i, batch] of todo.entries()) jobs.push({ mod, batch, name: `${mod.jar} ${i + 1}/${todo.length}` });
   }
+  // One failure that ends the run also ends the questions the other workers wait on.
+  const stop = new AbortController();
+  const onAbort = () => stop.abort();
+  if (signal?.aborted) throw cancelled();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  let fatal = null;
+  const end = (err) => { fatal ??= err; stop.abort(); };
+  async function one({ mod, batch, name }) {
+    const count = Object.keys(batch).length;
+    let answer = null;
+    try {
+      answer = answerObject(await translate(SYSTEM, JSON.stringify(batch, null, 1), stop.signal));
+    } catch (err) {
+      if (signal?.aborted || err.code === 'cancelled') return end(cancelled());
+      if (err.code === 'not-installed' || err.code === 'auth') return end(err);
+      if (stop.signal.aborted) return;
+      log(`  ${name}: ${err.message}\n`);
+    }
+    if (stop.signal.aborted) return;
+    if (!answer) { result.failed += count; step(count); return; }
+    // Read again before writing: the user may have edited the file while the answer was coming.
+    const lines = readPack(pack, mod.ns);
+    let ok = 0;
+    for (const [k, en] of Object.entries(batch)) {
+      if (lines[k]) continue;
+      if (sameCodes(en, answer[k])) { lines[k] = answer[k]; ok++; } else result.rejected++;
+    }
+    fs.mkdirSync(path.dirname(packFile(pack, mod.ns)), { recursive: true });
+    fs.writeFileSync(packFile(pack, mod.ns), `${JSON.stringify(lines, null, 2)}\n`);
+    added.set(mod, (added.get(mod) || 0) + ok);
+    result.translated += ok;
+    log(`  ${name}: ${ok} translated\n`);
+    step(count);
+  }
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length && !stop.signal.aborted) {
+      const job = jobs[next++];
+      try { await one(job); } catch (err) { end(err); }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, jobs.length)) }, worker));
+  } finally { signal?.removeEventListener('abort', onAbort); }
+  if (fatal) throw fatal;
+  if (signal?.aborted) throw cancelled();
+  for (const mod of mods) if (added.get(mod)) result.files.push({ ns: mod.ns, file: packFile(pack, mod.ns), added: added.get(mod) });
   return result;
 }
 
-module.exports = { scan, translateMods, sameCodes, batches };
+module.exports = { scan, translateMods, sameCodes, batches, PARALLEL };
