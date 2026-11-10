@@ -120,7 +120,18 @@ try {
   check(true, 'Pyright resolves the same import to src/mypkg/core.py (extraPaths)');
 
   // ---------- Revert ----------
-  await mouseAt(t, `[...${balloon}.querySelectorAll('.ide-balloon-action')].find((a) => a.textContent === 'Revert')`);
+  // The balloon lasts 10 s and goes sooner when newer ones would stack it past the window's top (a 1024x720 window, the
+  // runs above); the notification keeps its Revert in the Notifications tool window, where a user then finds it.
+  const balloons = await js(`[...document.querySelectorAll('.ide-balloon')].map((b) => b.querySelector('.ide-balloon-title').textContent)`);
+  if (await js(`!!${balloon}`)) await mouseAt(t, `[...${balloon}.querySelectorAll('.ide-balloon-action')].find((a) => a.textContent === 'Revert')`);
+  else {
+    console.log(`the balloon is gone (balloons: ${q(balloons)}, notifications: ${q(await js(`ide.notifications.list().map((e) => e.title)`))}); Revert from the Notifications tool window`);
+    await js(`(ide.runAction('ActivateNotificationsToolWindow'), true)`);
+    const revert = `[...document.querySelectorAll('.notes-item')].find((n) => n.textContent.includes("'src' has been marked as source root"))?.querySelector('.notes-foot')`
+      + ` && [...[...document.querySelectorAll('.notes-item')].find((n) => n.textContent.includes("'src' has been marked as source root")).querySelectorAll('.notes-action')].find((a) => a.textContent === 'Revert')`;
+    await until(`!!(${revert})`, 'Revert in the Notifications tool window');
+    await mouseAt(t, revert);
+  }
   await until(`ide.projectRoots.get().sources.length === 0`, 'src unmarked by Revert');
   await until(`${nodes('src')}?.querySelector('.file-icon')?.dataset.type === 'folder'`, 'src drawn as a plain folder');
   check(true, 'Revert unmarks src and the tree draws a plain folder');

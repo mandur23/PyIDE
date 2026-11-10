@@ -5,7 +5,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, tempDir, clickMenuPath } from './lib.mjs';
+import { closeBalloonsOver, launch, tempDir, clickMenuPath } from './lib.mjs';
 import { standInBore } from './stand-in-bore.mjs';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,9 +42,14 @@ require(${S(path.join(APP_DIR, 'main', 'bore-client.js'))});
     await ctx.click(sel);
   }
   // An element found by a page expression, pressed with the mouse.
+  // A list drawn again between the mark and the press (a peer's change arriving) drops the marked node: it is found again.
+  // Balloons over the node (the Host Terminal's Ask to Type on a 1024x720 window) are closed first.
   async function pressNode(ctx, expr, label) {
-    await ctx.until(`(() => { const n = ${expr}; if (!n) return false; document.querySelectorAll('[data-collab-test-target]').forEach((x) => x.removeAttribute('data-collab-test-target')); n.setAttribute('data-collab-test-target', '1'); n.scrollIntoView({ block: 'nearest' }); return true; })()`, label);
-    await ctx.click('[data-collab-test-target]');
+    for (let tries = 1; ; tries++) {
+      await ctx.until(`(() => { const n = ${expr}; if (!n) return false; document.querySelectorAll('[data-collab-test-target]').forEach((x) => x.removeAttribute('data-collab-test-target')); n.setAttribute('data-collab-test-target', '1'); n.scrollIntoView({ block: 'nearest' }); return true; })()`, label);
+      await closeBalloonsOver(ctx, `document.querySelector('[data-collab-test-target]')`);
+      try { return await ctx.click('[data-collab-test-target]'); } catch (err) { if (tries === 3 || !/^no element/.test(err.message)) throw err; }
+    }
   }
   // Types into a field of the topmost dialog, as a user does: a click into it, Ctrl+A, then the text.
   async function fill(ctx, selector, text) {

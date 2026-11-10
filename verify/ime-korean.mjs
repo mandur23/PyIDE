@@ -4,7 +4,7 @@
 // colour covers the tokens (Monaco's EditContext input renders the composition in the view itself). Also: several
 // syllables, Backspace inside a composition, a cancelled composition, and IME text in a notebook cell, the find
 // widget and the Python Console input. Port 9170.
-import { launch, openFile } from './lib.mjs';
+import { launch, lensesShown, openFile } from './lib.mjs';
 
 const J = JSON.stringify;
 const t = await launch({ fixture: 'ime-korean', port: 9170 });
@@ -40,7 +40,9 @@ const resetLine = () => js(`(() => { const e = ide.editor, m = e.getModel();
 // The coloured tokens of the line as drawn: for each token, its colour and what is topmost at its centre (an input
 // overlay over the line would be hit instead of the token).
 const TOKENS = ['return', '"hello"', '42', 'None', '# note'];
-const drawn = () => js(`(() => {
+// Chromium holds back animation frames for a window other windows cover, and Monaco paints on them: a tiny screenshot
+// makes one before the line is read.
+const drawn = async () => (await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 1 }), js(`(() => {
   const e = ide.editor, dom = e.getDomNode();
   const top = e.getTopForLineNumber(${LINE}) - e.getScrollTop() + dom.getBoundingClientRect().top;
   const line = [...dom.querySelectorAll('.view-lines .view-line')].find((n) => Math.abs(n.getBoundingClientRect().top - top) < 2);
@@ -63,7 +65,7 @@ const drawn = () => js(`(() => {
   }).map((n) => n.tagName.toLowerCase() + '.' + [...n.classList].join('.'));
   out.rect = { x: Math.round(lr.x), y: Math.round(lr.y), width: Math.round(Math.min(lr.width, 640)), height: Math.round(lr.height) };
   return out;
-})()`);
+})()`));
 const clipShot = async (file, rect) => {
   const r = await cdp('Page.captureScreenshot', { format: 'png', clip: { x: Math.max(0, rect.x - 60), y: rect.y - 6, width: rect.width + 60, height: rect.height + 12, scale: 1 } });
   const { writeFileSync } = await import('fs');
@@ -77,11 +79,13 @@ try {
   check(await js(`ide.editor.getOption(ide.monaco.editor.EditorOption.editContext) === true`), 'the editor takes keyboard and IME input through EditContext');
   await js(`(ide.editor.revealLineInCenter(${LINE}), true)`);
   check(await resetLine(), 'the editor has the caret mid-line');
-  await until(`(() => { const d = document.querySelectorAll('.view-lines .view-line'); return d.length > 5; })()`, 'lines drawn');
-  await sleep(300);
-  const before = await drawn();
-  check(before && TOKENS.every((k) => before.tokens[k]) && new Set(Object.values(before.tokens).map((x) => x.color)).size >= 3,
-    `the line is drawn with its token colours (${J(before?.tokens && Object.fromEntries(Object.entries(before.tokens).map(([k, v]) => [k, v.color])))})`);
+  // Monaco draws the scrolled view and the line's colours on later frames, and code lenses drawn late move the lines:
+  // the line is read once it is drawn at line 6's place with its tokens coloured.
+  const coloured = (d) => d && TOKENS.every((k) => d.tokens[k]) && new Set(Object.values(d.tokens).map((x) => x.color)).size >= 3;
+  let before = null;
+  for (const end = Date.now() + 15000; !coloured(before) && Date.now() < end; await sleep(150)) before = (await js(lensesShown())) ? await drawn() : null;
+  check(coloured(before), `the line is drawn with its token colours (${J(before?.tokens && Object.fromEntries(Object.entries(before.tokens).map(([k, v]) => [k, v.color])))})`);
+  if (!before) throw new Error(`line ${LINE} is not drawn`);
   await clipShot('before.png', before.rect);
 
   // ---- one syllable: colours stay while composing ----

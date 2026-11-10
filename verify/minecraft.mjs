@@ -568,7 +568,7 @@ try {
     .catch(async (e) => { console.log(await js(`document.querySelector('.mcset')?.textContent`)); throw e; });
   check(await js(`ide.activeTab()?.path.startsWith('minecraft:settings:') && ${field('motd')}.value === 'modded' && ${field('server-port')}.value === '25612' && ${field('$memory')}.value === '2G'
     && !${field('$jvmDefault')}.checked && ${field('$jvm')}.value === '-XX:+UseSerialGC' && ${field('view-distance')}.value === '10' && !${inTab('.mc-translate-run')}.disabled
-    && [...document.querySelectorAll('.mcset-page')].map((p) => p.dataset.section).join() === 'general,game,world,players,performance,antixray,mods,other' && ${inTab('.mcset-save')}.disabled`),
+    && [...document.querySelectorAll('.mcset-page')].map((p) => p.dataset.section).join() === 'general,game,world,players,performance,health,antixray,mods,other' && ${inTab('.mcset-save')}.disabled`),
     'Settings… opens the server\'s settings tab: its sections, the file\'s values (a missing line shows the server\'s default), the JVM options and the mods\' lines without Korean');
   await enter('max-players', '8');
   await enter('difficulty', 'hard', 'change');

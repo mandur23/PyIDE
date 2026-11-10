@@ -25,6 +25,8 @@ const fileServer = require('../minecraft/file-server');
 const { createPlayers } = require('../minecraft/players');
 const { forNewServer } = require('../minecraft/players/bridge');
 const runMarker = require('../minecraft/run-marker');
+const { createBackups, registerIpc: registerBackupIpc } = require('../minecraft/backups');
+const { createHealthMonitor, markStops, GC_LOG_ARG } = require('../minecraft/health-monitor');
 const { complete } = require('../ai/claude');
 const { privateShare } = require('./port-sharing');
 const { app, safeStorage } = require('electron');
@@ -342,7 +344,9 @@ async function launch(dir, log) {
   const home = await ensureJava(desc.java, { log });
   if (!isFile(path.join(home, 'bin', 'java.exe'))) throw fail(`Java ${desc.java} was not found in ${home}`);
   const mem = /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G';
-  const args = [...ENCODING_ARGS, `-Xmx${mem}`, ...jvmArgsOf(desc)];
+  // The GC log health-monitor.js reads for memory pressure, to a file: the console stays as it was. Java 8 refuses -Xlog.
+  const gcLog = desc.java >= 9 && !jvmArgsOf(desc).some((a) => /^-Xlog/i.test(a)) ? [GC_LOG_ARG] : [];
+  const args = [...ENCODING_ARGS, ...gcLog, `-Xmx${mem}`, ...jvmArgsOf(desc)];
   if (desc.launch.argsFile) {
     if (isFile(path.join(dir, 'user_jvm_args.txt'))) args.push('@user_jvm_args.txt');
     args.push(`@${desc.launch.argsFile}`);
@@ -566,9 +570,14 @@ const runningDirs = new Map();
 const isRunning = (dir) => runningDirs.has(keyOf(dir));
 const ownPids = new Set(); // the processes of runningDirs
 // A process a folder's marker names that this app did not start (or no longer knows: it was started before a crash).
+let health = null; // health-monitor.js, made in register (it tells the window)
 const leftOver = async (dir) => {
   const m = runMarker.read(dir);
-  return m && ownPids.has(m.pid) ? null : runMarker.leftOver(dir);
+  if (m && ownPids.has(m.pid)) return null;
+  const left = await runMarker.leftOver(dir);
+  // The marker went because its process is gone: the server ended while no Nano Studio watched it.
+  if (m && !left && !runMarker.read(dir)) health?.foundGone(dir, m);
+  return left;
 };
 const refuseLeftOver = async (dir) => {
   const left = await leftOver(dir);
@@ -615,6 +624,10 @@ async function releaseProps(dir) {
   await held.check();
 }
 const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile, running: isRunning });
+// World backups and restores (main/minecraft/backups.js, whose header lists the API). Other main code reaches it here.
+const backups = createBackups({ readServer: (dir) => readJson(path.join(dir, SERVER)), writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc),
+  readProps: serverSettings.readProperties, writeProps: serverSettings.writeProperties, isRunning, leftOver, appVersion: () => app.getVersion() });
+exports.backups = backups;
 
 // A saved private server's key, encrypted as a data source's password is, but with no plain fallback: without safeStorage
 // it stays in memory and the friend pastes the code again.
@@ -667,6 +680,24 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     return servers(root).map((s) => ({ name: s.name, dir: s.dir, kind: s.kind, mc: s.mc, ...players.bridgeStatus(s.dir) }));
   });
   app.on('will-quit', players.closeAll);
+  backups.connect({ send, trash: (file) => require('electron').shell.trashItem(file) });
+  registerBackupIpc(ipcMain, backups, playersAt);
+  app.on('will-quit', backups.shutdown);
+  const healthLog = diagnostics.logger('#minecraft');
+  health = createHealthMonitor({
+    send, readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), log: (text) => healthLog.warn(text),
+    // What an overload's suggestions start from: the distances as the server reads them, and Paper's anti-xray level.
+    describe: (dir) => {
+      const p = propsOf(dir);
+      let antiXray = null;
+      try { antiXray = xray.status(dir, xrayView(serverOf(dir))).level ?? null; } catch {}
+      return { view: p['view-distance'] ?? 10, sim: p['simulation-distance'] ?? 10, antiXray };
+    },
+  });
+  app.on('before-quit', () => health.quitting());
+  ipcMain.handle('minecraft:healthOf', (_e, root, dir) => { ofProject(root, dir); return health.of(dir); });
+  ipcMain.handle('minecraft:setHealth', (_e, root, dir, patch) => { playersAt(root, dir); return health.setSettings(dir, patch); });
+  ipcMain.handle('minecraft:dismissHealth', (_e, root, dir) => { ofProject(root, dir); health.dismiss(dir); return true; });
   // A job's output goes to the window as minecraft:log {job, text}.
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
   // A job that knows its size says how far it is: minecraft:progress {job, done, total}.
@@ -678,7 +709,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     if (!root) return [];
     const list = servers(root);
     const left = await Promise.all(list.map((s) => leftOver(s.dir).catch(() => null)));
-    return list.map((s, i) => (left[i] ? { ...s, leftOver: left[i] } : s));
+    return list.map((s, i) => ({ ...s, ...(left[i] && { leftOver: left[i] }), health: health.of(s.dir) }));
   });
   // Ends a left-over process without saving: the window asks the user first.
   ipcMain.handle('minecraft:endLeftOver', async (_e, root, dir) => {
@@ -718,14 +749,18 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
     const k = keyOf(spec.cwd);
     if (isRunning(spec.cwd) || claimed.has(k)) throw fail(`${path.basename(spec.cwd)} is running already`, 'running');
     claimed.add(k);
-    try { await refuseLeftOver(spec.cwd); } finally { claimed.delete(k); }
+    try { await refuseLeftOver(spec.cwd); await backups.beforeStart(spec.cwd); } finally { claimed.delete(k); }
     if (isRunning(spec.cwd)) throw fail(`${path.basename(spec.cwd)} is running already`, 'running');
     const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
     let proxy = false;
-    try { proxy = !!KINDS[serverOf(spec.cwd).kind]?.proxy; } catch {}
+    let desc = null;
+    try { desc = serverOf(spec.cwd); proxy = !!KINDS[desc.kind]?.proxy; } catch {}
+    if (desc) health.prepare(spec.cwd);
     const id = startProcess(spec.cmd, spec.args, { cwd: spec.cwd, windowsHide: true, filter: session?.filter, quitInput: proxy ? 'end\n' : 'stop\n', quitWaitMs: 60000 });
-    session?.attach(procs.get(id));
     const proc = procs.get(id);
+    markStops(proc);
+    session?.attach(proc);
+    if (session && !proxy && proc) backups.attach(spec.cwd, proc);
     if (proc) {
       runningDirs.set(k, (runningDirs.get(k) || 0) + 1);
       if (proc.pid) {
@@ -740,6 +775,14 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
       });
     }
     if (session) proc?.once('close', () => settleXray(spec.cwd, true));
+    if (proc && desc) {
+      // The port it binds and the address it binds it on: a server-ip of this PC's network answers there, not on loopback.
+      const ip = proxy ? '' : propsOf(spec.cwd)['server-ip'] || '';
+      const host = /^[\d.]+$/.test(ip) && ip !== '0.0.0.0' ? ip : '127.0.0.1';
+      health.watch(proc, { dir: spec.cwd, kind: desc.kind, memory: /^\d+[MG]$/i.test(desc.memory || '') ? desc.memory : '2G', java: desc.java,
+        port: Number.isInteger(spec.port) ? spec.port : portOf(spec.cwd, desc.kind), host, paper: KINDS[desc.kind]?.plugins === 'paper',
+        query: session && ((command, match, ms) => session.query(command, match, ms)) });
+    }
     return id;
   });
   // Whether nothing listens on a port (a server about to start there would fail to bind it).

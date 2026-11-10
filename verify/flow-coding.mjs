@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { descendants, launch, openFile, processSnapshot } from './lib.mjs';
+import { descendants, launch, openFile, processSnapshot, selectTreeRow } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const J = JSON.stringify;
@@ -450,8 +450,7 @@ try {
     check(/^from geo\.shapes import (Rect, sum_areas|sum_areas, Rect)$/m.test(read('main.py')) && read('main.py').includes('sum_areas(shapes)'), 'Shift+F6 renames the function and its import and call in main.py');
 
     const selectRow = async (rel) => {
-      await js(`ide.revealInTree(${J(file(rel))})`);
-      await until(`document.querySelector('#tree .node.selected')?._entry?.path.toLowerCase() === ${J(file(rel).toLowerCase())}`, `tree row ${rel}`);
+      await selectTreeRow(t, file(rel), `tree row ${rel}`);
       await js(`(document.getElementById('tree').focus(), true)`);
     };
     // rope is not in the new venv: the rename offers to install it (offline wheel) and then goes on

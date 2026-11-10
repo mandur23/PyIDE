@@ -377,6 +377,8 @@ function createSession({ version, proxy = false, store, notify = () => {}, log =
     poller = setInterval(tick, pollMs);
     poller.unref?.();
     child.on('close', end);
+    // "stop" sent (health-monitor.js markStops): one that hangs never prints "Stopping server", and a query would make it print.
+    child.on?.('stopAsked', () => setState('stopping'));
   }
   function end() {
     if (state === 'stopped') return;

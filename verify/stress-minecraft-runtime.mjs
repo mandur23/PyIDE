@@ -283,6 +283,10 @@ try {
     check(/printed nothing for 60 seconds after "stop", so it was ended/.test(await tabText('gamma'))
       && await js(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('gamma was ended without finishing its save'))`),
     'its console and a notification say it was ended without finishing its save');
+    // The stand-in answers any other line with "Unknown command". Its scheduled backup falls due 60 s after the start,
+    // inside the wait: a save-off sent then would re-arm the 60 s of silence.
+    check(!/Unknown command/.test(await tabText('gamma')) && await js(`![...document.querySelectorAll('.ide-balloon')].some((b) => /gamma (stopped unexpectedly|is not responding|restarted automatically)/.test(b.textContent))`),
+      `while it stops, nothing but "stop" is written to it (no backup, no health query), and the forced stop is not also reported as a crash or a freeze (${(await tabText('gamma')).match(/Unknown command: .*/g)?.join(', ') || 'none'})`);
     // Rerun of a hung server: the old process must not be left running.
     check(await startCard('gamma'), 'it starts again');
     const old = aliveServers(serverDir('gamma')).map((p) => p.pid);
@@ -372,6 +376,7 @@ try {
     check(/1 of them did not stop in time, so Nano Studio was not updated/.test(said) && Date.now() - t0 > 55000, `a server that ignores "stop" for the quit gate's minute is reported (${Math.round((Date.now() - t0) / 1000)} s: ${said.slice(0, 140)})`);
     check((logText().match(/starting the installer/g) || []).length === before && /not installing 9\.9\.9/.test(logText()), 'and the installer is not started over it');
     check(alive(hung) && await phase() === 'downloaded', 'the server is left running and the update is still offered');
+    check(!/Unknown command/.test(await tabText('upd')), `during the update's wait nothing but "stop" was written to it (${(await tabText('upd')).match(/Unknown command: .*/g)?.join(', ') || 'none'})`);
     await press('Close');
     rmSync(path.join(serverDir('upd'), 'hang.flag'));
     await js(`(${runTab('upd')}.stop(), true)`);

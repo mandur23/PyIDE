@@ -469,3 +469,54 @@ img.mcpl-pick-icon { background: none; }
 /* The Korean translation's balloon: how far the whole run is. */
 .mc-tr-bar { height: 4px; margin: 6px 0 2px; border-radius: 2px; background: rgba(128, 128, 128, .3); overflow: hidden; }
 .mc-tr-fill { height: 100%; width: 0; border-radius: 2px; background: var(--accent, #3574f0); transition: width .2s ease; }
+
+/* Crashes, freezes and lag (health.js) */
+.mc-health { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 6px; font-size: 12px; min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.mc-health.warn { border-color: color-mix(in srgb, var(--yellow) 45%, transparent); background: color-mix(in srgb, var(--yellow) 9%, transparent); }
+.mc-health.ok { border-color: color-mix(in srgb, var(--green6) 40%, transparent); background: color-mix(in srgb, var(--green6) 8%, transparent); }
+.mc-health .mc-health { margin-top: 4px; }
+.mc-health-title { font-weight: 600; font-size: 13px; }
+.mc-health-text, .mc-health-fix-text, .mc-health-note { white-space: pre-line; overflow-wrap: anywhere; }
+.mc-health-lines summary { cursor: pointer; color: var(--gray10); }
+.mc-health-pre { margin: 4px 0 0; padding: 6px 8px; max-height: 160px; overflow: auto; border-radius: 4px; background: var(--gray2); font-family: var(--mono); font-size: 11px;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.mc-health-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.mcc-chip.mc-load-chip.fine { background: color-mix(in srgb, var(--green6) 18%, transparent); color: color-mix(in srgb, var(--green6) 45%, var(--gray10)); }
+.mcc-chip.mc-load-chip.lagging { background: color-mix(in srgb, var(--yellow) 22%, transparent); color: color-mix(in srgb, var(--yellow) 40%, var(--gray11)); }
+.mcc-chip.mc-load-chip.overloaded { background: color-mix(in srgb, var(--red) 18%, transparent); color: color-mix(in srgb, var(--red) 45%, var(--gray10)); }
+.mcset-health { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mcset-health-row { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.mcset-health-numbers { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--gray2); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The Backups tab (backups.js). Its host also has .mcset for the header's look. */
+.mcbk-section { max-width: 860px; }
+.mcbk-summary { font-size: 12px; margin: 6px 0 8px; }
+.mcbk-summary.mcbk-over { color: var(--yellow); }
+.mcbk-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 10px 12px; margin: 8px 0; border-radius: 6px; background: var(--gray2); }
+.mcbk-progress.hidden { display: none; }
+.mcbk-ptext { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcbk-progress .mcbk-bar { grid-column: 1; margin: 0; }
+.mcbk-progress .mcbk-cancel { grid-column: 2; grid-row: 1 / span 2; }
+.mcbk-list { display: flex; flex-direction: column; }
+.mcbk-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin: 0 -12px; border-radius: 6px; }
+.mcbk-item:hover { background: var(--gray2); }
+.mcbk-item.damaged .mcbk-when { color: var(--gray8); }
+.mcbk-item-text { flex: 1; min-width: 0; }
+.mcbk-item-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mcbk-when { font-weight: 500; white-space: nowrap; }
+.mcbk-reason { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--gray3); color: var(--gray10); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mcbk-reason.manual { background: color-mix(in srgb, var(--blue6) 22%, transparent); color: var(--gray12); }
+.mcbk-meta { font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mcbk-keepbox { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.mcbk-keepbox:has(input:disabled) { cursor: default; opacity: 0.7; }
+.mcbk-item button { flex-shrink: 0; }
+.mcbk-saved { font-size: 12px; min-height: 16px; }
+.mcbk-every, .mcbk-keep, .mcbk-limit { max-width: 260px; }
+.mcbk-dialog .dialog-message + .dialog-message { margin-top: 8px; }
+.mcbk-warn { color: var(--yellow); }
+.mcbk-worldonly { display: flex; align-items: center; gap: 6px; margin-top: 12px; cursor: pointer; }
+@container (max-width: 640px) {
+  .mcbk-item { flex-wrap: wrap; }
+  .mcbk-item-text { flex-basis: 100%; }
+}

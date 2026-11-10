@@ -496,7 +496,8 @@ await section('drops', async () => {
   const ids = await js(`Cut.ui.media.importPaths(Cut.app, ${S([mp4, wav])}).then((ids) => ids)`);
   check(ids.length === 2, `the project panel imports the MP4 and the WAV (${S(ids)})`);
   await sleep(500);
-  await js('__tl.view(100)');
+  // 100 px a second, less on a narrow window (480 px of lanes at 1024x720): the drops below reach 8 s, all on screen.
+  await js(`__tl.view(Math.min(100, Math.floor((__tl.tl().root.querySelector('.cut-tl-scroll').clientWidth - 16) / 9)))`);
   await js(`Cut.ui.showPanel('project')`);
   await sleep(300);
   // the video item from the project panel onto V1 at 1 s, with the real mouse (Cut.ui.dnd); a narrow project panel

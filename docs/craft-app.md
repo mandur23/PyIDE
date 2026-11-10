@@ -38,7 +38,9 @@ npm start -- --mode=craft
 | `craft.js` | 플레이(인스턴스 카드, 모드 목록, 모드 한국어 번역, 새 인스턴스)와 서버 참여(참여 코드, 주소, 참여) |
 | `market.js` | Modrinth를 상점처럼 보여 주는 Market |
 | `server-settings.js` | 서버 설정 탭(섹션, 검색, 화이트리스트, op, 안티 엑스레이, 모드 번역) |
+| `backups.js` | 백업 탭(목록, 지금 백업, 되돌리기, 일정과 보관), 위험한 동작 전 자동 백업(`mc.backups.before`) |
 | `players.js`, `players-drag.js`, `players-bridge.js` | 플레이어 탭, 인벤토리 끌기, 상세 기록(NanoBridge) 설치 |
+| `health.js` | 카드의 비정상 종료·응답 없음·과부하 표시, 자동 재시작, 설정 탭의 "비정상 종료와 과부하" |
 | `style.css`, `locales/ko.json` | 모양과 한국어 |
 
 ### 메인
@@ -56,8 +58,11 @@ npm start -- --mode=craft
 | `main/minecraft/translate.js` | 모드 문구 한국어 번역(Claude Code CLI). 서버의 `resourcepack/`과 인스턴스의 `resourcepacks/Nano Studio Korean/`에 씁니다 |
 | `main/minecraft/templates.js` | 리소스 팩 `pack.mcmeta`, Velocity 연결 |
 | `main/minecraft/file-server.js` | 클라이언트 팩과 리소스 팩을 루프백 http로 제공 |
+| `main/minecraft/health.js`, `health-monitor.js` | 비정상 종료의 원인, 자동 재시작 규칙, 멈춤과 과부하 감지 |
 | `main/minecraft/ping.js`, `serversdat.js` | 서버 목록 핑, 게임의 `servers.dat` |
 | `main/minecraft/zipfile.js` | zip 쓰기와 jar 안 파일 읽기 |
+| `main/minecraft/zip64.js` | 크기 제한 없는 zip 쓰기와 읽기(스트림, ZIP64). 백업과 `writeZipFile`, `openZip`이 씁니다 |
+| `main/minecraft/backups.js` | 월드 백업과 되돌리기, 보관 규칙, 일정. 다른 메인 코드는 `require('../features/minecraft').backups`의 API를 씁니다(파일 머리 주석) |
 | `main/minecraft/private-join.js` | 친구 쪽 비공개 참여 프로세스 |
 | `main/minecraft/players/` | 플레이어 세션, 로그 해석, 기록 저장, 동작 명령, NBT, 아이템, NanoBridge |
 | `main/bore-gate.js`, `main/bore-client.js` | 비공개 공유 터널의 프로토콜과 bore 클라이언트 |
@@ -71,8 +76,12 @@ npm start -- --mode=craft
 - 서버마다 `servers/<이름>/pyide-server.json`이 종류, 버전, 로더, Java, 실행 방법을 적습니다.
 - 새 서버는 사용자가 EULA에 동의해야 만듭니다. 다운로드는 체크섬을 확인하고, 실패하면 반쯤 만든 서버를 지웁니다. 만드는 중에는 `pyide-server.unfinished` 표시를 둡니다.
 - 실행은 `launch()`가 정한 JVM 옵션으로 합니다. 출력과 stdin의 인코딩을 UTF-8로 고정합니다(한국어 Windows의 JVM은 MS949를 씁니다).
-- 정지는 `stop`을 보내고, 그 뒤 60초 동안 아무것도 출력하지 않으면 죽이고 콘솔과 알림으로 알립니다. 계속 출력하면 15분까지 기다립니다. 앱 종료 때는 main.js의 quit gate가 저장을 기다립니다(서버마다 60초). Windows 종료와 로그오프에는 before-quit이 없으므로, 서버가 실행 중이면 창의 `query-session-end`에서 세션 종료를 붙잡고 quit gate의 일을 먼저 한 뒤 앱을 끝냅니다.
+- 정지는 `stop`을 보내고, 그 뒤 60초 동안 아무것도 출력하지 않으면 죽이고 콘솔과 알림으로 알립니다. 계속 출력하면 15분까지 기다립니다. stdin에 `stop`이 간 순간부터 서버는 "멈추는 중"입니다(`health-monitor.js`의 `markStops`가 `proc.stopAsked`와 `'stopAsked'` 이벤트로 알립니다). 멈추는 동안에는 정지 로직만 stdin에 쓰고 서버를 끝냅니다: 백업(예약 백업 포함)은 시작하지 않고, 하던 백업은 바로 버리며 `save-on`도 보내지 않습니다(정지가 어차피 저장합니다). 건강 감시는 `tps`와 ping을 멈추고 멈춤 판정을 하지 않으며, 플레이어 세션은 질의를 그칩니다. 강제로 끝낸 정지는 정지이지 비정상 종료가 아니므로 자동 재시작도 하지 않습니다. 앱 종료 때는 main.js의 quit gate가 저장을 기다립니다(서버마다 60초). Windows 종료와 로그오프에는 before-quit이 없으므로, 서버가 실행 중이면 창의 `query-session-end`에서 세션 종료를 붙잡고 quit gate의 일을 먼저 한 뒤 앱을 끝냅니다.
 - 실행 중인 서버 폴더에는 `pyide-server.running`(pid, 시작 시각, 폴더)이 있습니다. 앱이 죽어도 서버는 남으므로, 다음 시작은 이 표시의 pid가 그 시각에 시작한 java.exe인지 보고 맞으면 시작을 거절하고 카드에 "서버 끝내기"를 보입니다. 끝내기는 저장 없는 강제 종료라 먼저 묻습니다.
+- 서버의 비정상 종료, 멈춤, 과부하는 `main/minecraft/health.js`(증거 읽기, 원인 분류, 재시작 규칙, 멈춤과 과부하 판단. 시계를 넣을 수 있는 순수 함수)와 `health-monitor.js`(프로세스 연결, `minecraft:health` 이벤트), 렌더러의 `health.js`(카드, 알림, 설정 탭의 "비정상 종료와 과부하")가 맡습니다.
+  - 예상한 종료는 stdin에 간 `stop`/`end`(정지, 재실행, 재시작, quit gate, 업데이트, Windows 세션 종료가 모두 이 길로 갑니다), 앱 종료 중, 서버가 남긴 `Stopping the server`(관리자의 /stop)입니다. 그 밖의 종료는 종료 코드와 상관없이 비정상 종료입니다. 다음 앱 시작 때 프로세스가 없는 실행 표시도 "앱이 보지 않는 동안 끝남"으로 알립니다.
+  - 원인은 증거로만 말합니다: 콘솔 끝, 이번 실행의 `logs/latest.log`, `crash-reports/*.txt`, `hs_err_pid<pid>.log`. 아는 원인이 없으면 "알 수 없음"과 마지막 오류 줄을 보입니다. 앱은 서버를 스스로 끄거나 설정을 바꾸지 않습니다. 자동 재시작은 서버별 설정(기본 꺼짐)이고, 10분에 3번이면 멈추며, 다시 해도 같은 원인과 시작 전 종료는 다시 시작하지 않습니다.
+  - Java 9 이상 서버는 `-Xlog:gc:file=.nano/gc.log`로 시작합니다(과부하의 메모리 판단). Paper 26.3에는 "Can't keep up" 줄이 없어서 Paper와 Purpur는 플레이어 세션의 숨은 질의로 `tps`를 묻습니다.
 - `server.properties`는 Java처럼 읽고 씁니다. 정규식으로 직접 고치지 않고 `readProperties`, `writeProperties`를 씁니다.
 - Paper 설정 파일 위치는 버전마다 다릅니다(1.18까지 `paper.yml`, 1.19부터 `config/`, 26.1부터 월드 안). 버전별 경로를 확인합니다.
 
@@ -85,6 +94,14 @@ npm start -- --mode=craft
 - 팩 주소는 https만, 팩 파일은 .mrpack 형식이 허용하는 호스트에서만 받습니다. 테스트 대역(`PYIDE_MC_SOURCES`)의 정확한 origin만 예외입니다.
 - 팩 주소와 리디렉트가 가는 호스트, 붙여 넣은 참여 코드의 주소는 이름을 풀어 봅니다(`hosts.js`). 주소 하나라도 이 컴퓨터나 내 네트워크면 팩은 거부하고 코드는 먼저 묻습니다.
 - 인스턴스 번역은 `options.txt`의 `resourcePacks`에 팩을 켭니다. 게임은 시작할 때 이 파일을 읽고 닫을 때 다시 쓰므로, 그 인스턴스의 게임이 실행 중이면 쓰지 않습니다.
+
+### 백업 (`main/minecraft/backups.js`)
+
+- 백업은 `<서버>/backups/<시각>_<이유>.zip` 하나이고 첫 항목이 `nano-backup.json`(앱과 마인크래프트 버전, 종류, level-name, 이유, 크기, 뺀 것)입니다. 월드와 설정 파일만 넣고 jar, mods, libraries, logs는 넣지 않습니다.
+- 실행 중인 서버는 `save-off`, `save-all flush` 뒤 "Saved the game"을 보고 묶고, 끝나면 언제나 `save-on`을 보냅니다(전에 이미 꺼져 있었으면 그대로 두고, 멈추는 중인 서버에는 보내지 않습니다). 답이 없으면 묶지 않습니다. 묶는 중에 서버가 멈추거나 `stop`을 받으면 그 백업은 바로 버립니다. 멈추는 중인 서버의 백업 요청은 거절합니다(`stopping`).
+- 되돌리기는 서버가 멈춘 뒤에만 합니다. 모든 항목의 CRC를 먼저 확인하고, 지금 상태를 "되돌리기 전"으로 백업하고, `.nano-restore/`에 풀어 이름 바꾸기로 바꿉니다. 중간에 실패하면 되돌리고, 앱이 죽어 끊기면 다음 시작이나 목록에서 `journal.json`으로 되돌립니다.
+- `pyide-server.json`은 jar를 설명하므로 되돌릴 때 메모리와 JVM 옵션만 가져옵니다.
+- 자동 백업은 Market 모드·플러그인 설치·업데이트·제거, 카드에 월드를 넣을 때, level-name이나 계정 확인을 바꿀 때, Repair 전에 렌더러가 `mc.backups.before`로 합니다. 풍선의 건너뛰기로 기다리지 않을 수 있습니다.
 
 ### Market
 
@@ -140,6 +157,10 @@ npm start -- --mode=craft
 | `verify/minecraft-antixray.mjs`, `minecraft-antixray-ui.mjs` | 안티 엑스레이 파일 고치기와 화면 |
 | `verify/private-share.mjs`, `verify/port-sharing.mjs` | 비공개 공유 프로토콜, 포트 공유 |
 | `verify/app-mode.mjs` | 시작 화면, 모드별 플러그인, Craft 셸 |
+| `verify/minecraft-health-core.mjs` | 일반 Node. 원인 분류(실제 서버와 로더 형식의 예), 재시작 규칙, 멈춤 시계, 과부하 구간, 제안, 대역 프로세스로 예상한 종료와 비정상 종료, GC 로그 옵션, 다음 시작에 찾은 종료 |
+| `verify/craft-health.mjs` | 한국어 창. 메모리 부족 카드와 고치기, 자동 재시작 한 번과 반복 멈춤, 응답 없음과 재시작, 과부하 상태와 제안 적용·되돌리기, 설정 탭 구역 |
+| `verify/minecraft-backups-core.mjs` | 일반 Node. ZIP64(65,535개, 4 GB 넘김), 매니페스트, 보관 규칙, 손상된 백업 거부, 중간에 실패한 교체, save-off/save-on 순서(답 없음, 채팅 위조, 취소, 정지), 300 MB 묶는 동안의 이벤트 루프 |
+| `verify/minecraft-backups.mjs` | 백업 탭(한국어): 멈춘 서버와 실행 중인 서버의 지금 백업, 실행 중인 서버의 되돌리기, 월드만 되돌리기, Market 업데이트 전 자동 백업과 건너뛰기, 두 테마와 900 px |
 | `verify/craft-polish.mjs` | 새 서버 이름과 버전 목록, Market 재검색, 카드의 시작 중·중지 중, 콘솔 기록, 설정 탭의 레벨 칸과 검색, 저장 실패 때 안티 엑스레이 되돌리기 |
 
 `MC_LAUNCHER_LIVE=1`(실제 로더 설치), `verify/minecraft-live.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing-bore-live.mjs`는 실제 네트워크를 쓰므로 CI에 없고, 사용자의 승인 없이 돌리지 않습니다.

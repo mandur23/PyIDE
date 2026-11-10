@@ -180,6 +180,8 @@
     const srv = serverOf();
     if (!srv || ide.trusted === false || working.has(h.id)) return;
     if (srv.market?.[h.id] && held(srv, h)) return;
+    // A mod or plugin installed, updated or removed can break a world: it is backed up first (backups.js).
+    if (state.type !== 'resourcepack' && mc.backups && !(await mc.backups.before(srv, 'market'))) return;
     working.add(h.id);
     b.disabled = true;
     b.textContent = tr('Installing…');
@@ -226,6 +228,7 @@
     const srv = serverOf();
     if (!srv || ide.trusted === false || held(srv, h)) return;
     if (working.has(h.id) || !(await ide.ui.confirm(tr('Remove {title} {version} from {server}?', { title: h.title, version: installed.version, server: srv.name }), { ok: tr('Remove') }))) return;
+    if (state.type !== 'resourcepack' && mc.backups && !(await mc.backups.before(srv, 'market'))) return;
     working.add(h.id);
     try {
       const r = await ide.api.invoke('minecraft:marketRemove', ide.root, srv.dir, h.id);

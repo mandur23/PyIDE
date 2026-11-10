@@ -371,6 +371,51 @@ export async function openFile(ctx, relPath) {
   await ctx.until(`ide.activeTab()?.path.toLowerCase().endsWith(${JSON.stringify(relPath.replace(/\//g, '\\').toLowerCase())})`, `tab ${relPath}`);
 }
 
+// A page expression, true once the project tree draws a row for the absolute `path`. The IDE lists the tree's folders
+// again after it changes files without waiting for the listing, so a check made as soon as the change is done (the file
+// on disk, its tab reopened) can still see the old rows on a slow disk.
+export const treeRowShown = (path) => `[...document.querySelectorAll('#tree .node')].some((n) => n._entry?.path.toLowerCase() === ${JSON.stringify(path.toLowerCase())})`;
+
+// Selects the project tree's row of the absolute `path`, as Select Opened File does, and waits until it is the selected
+// row. An operation that is still finishing (a rename, New › Python Package, a delete) selects its own row once its
+// listing ends, which can be after a single reveal: the reveal is made again until the selection holds.
+export async function selectTreeRow(ctx, path, label = `tree row ${path}`) {
+  await ctx.until(`ide.revealInTree(${JSON.stringify(path)}).then(() => document.querySelector('#tree .node.selected')?._entry?.path.toLowerCase() === ${JSON.stringify(path.toLowerCase())})`, label);
+}
+
+// A page expression -> the {x, y} to press on the element `expr` finds (scrolled into view), or null without one. On a
+// 1024x720 window balloons in the lower right cover the right half of the rows under them, so the point is the first of
+// the row's middle, left and right parts that the element itself is drawn at, as a user presses the part they can see;
+// the middle when nothing of it shows.
+export const visiblePoint = (expr) => `(() => { const n = ${expr}; if (!n) return null; n.scrollIntoView?.({ block: 'nearest' });
+  const r = n.getBoundingClientRect(), y = r.y + r.height / 2;
+  for (const f of [0.5, 0.25, 0.1, 0.75]) { const x = r.x + r.width * f, hit = document.elementFromPoint(x, y); if (hit && n.contains(hit)) return { x, y }; }
+  return { x: r.x + r.width / 2, y }; })()`;
+
+// Closes, with their × as a user does, the balloons over the element `expr` finds: a small button under the lower right
+// stack (seven balloons of a collaboration session on a 1024x720 window) cannot be pressed until they go. The stack
+// sinks as one closes, so the next one over the element is looked for again.
+export async function closeBalloonsOver(ctx, expr) {
+  await ctx.js(`(() => { const n = ${expr}; if (!n) return true; const r = n.getBoundingClientRect();
+    const over = () => [...document.querySelectorAll('.ide-balloon')].find((b) => { const q = b.getBoundingClientRect();
+      return q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top; });
+    for (let b = over(), i = 0; b && i < 20; b = over(), i++) b.querySelector('.ide-balloon-close').click();
+    return true; })()`);
+}
+
+// Shows Cut's workspace `id` from the top bar as a user does: its tab, or on a narrow window (1024 px), where the last
+// tabs move into the » menu, that menu's item.
+export async function cutWorkspace(ctx, id) {
+  const tab = `.cut-ws-tab[data-ws="${id}"]`;
+  await ctx.until(`!!document.querySelector('${tab}')`, `workspace tab ${id}`, 8000);
+  if (await ctx.js(`!document.querySelector('${tab}').hidden`)) await ctx.click(tab);
+  else {
+    await ctx.click('.cut-ws-more');
+    await clickMenuPath(ctx, [await ctx.js(`document.querySelector('${tab}').textContent`)]);
+  }
+  await ctx.until(`document.querySelector('${tab}')?.getAttribute('aria-selected') === 'true'`, `workspace ${id} shown`, 8000);
+}
+
 // A row of the open IDE context menu (ide.ui.contextMenu, also the editor's): `level` 0 is the menu, 1 its submenu.
 export const menuRow = (label, level = 0) => `[...document.querySelectorAll('.context-menu[data-level="${level}"] > .menu-item')].find((r) => r.querySelector('.menu-label')?.textContent === ${JSON.stringify(label)})`;
 

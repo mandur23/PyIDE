@@ -750,7 +750,9 @@
     closedHomeLast = false;
     renderList();
     renderDetail();
-    openHome();
+    // The project's tabs were all closed before it opened, so a tab here is one the user opened while the project
+    // loaded (its tree shows before its interpreters are listed): it stays in front.
+    if (!ide.tabs.length) openHome();
     renderHome();
     refresh();
   });

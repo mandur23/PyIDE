@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import http from 'http';
 import path from 'path';
 import { collabPair, sleep } from './collab-lib.mjs';
+import { closeBalloonsOver } from './lib.mjs';
 
 const pair = await collabPair({ name: 'collab-run', ports: [9467, 9468] });
 const { h, g, check, section, pressButton, pressNode } = pair;
@@ -81,7 +82,8 @@ try {
     await h.js(`(ide.api.send('pty:write', { id: ide.terminal.active().id, data: 'echo HOST_SAYS_HI\\r' }), true)`);
     await g.until(`document.querySelector('.collab-term-box')?.textContent.includes('HOST_SAYS_HI')`, 'the guest sees the host\'s command', 20000);
     check(true, 'the guest watches what happens in the host\'s terminal');
-    // Typing before the host allows it is dropped.
+    // Typing before the host allows it is dropped. (The guest's balloons cover the terminal on a 1024x720 window.)
+    await closeBalloonsOver(g, `document.querySelector('.collab-term-box .xterm')`);
     await g.click('.collab-term-box .xterm');
     await g.type('echo pwned>typed-early.txt');
     await g.press('Enter');
@@ -92,6 +94,7 @@ try {
     await h.until(dialogShown('Typing in Your Terminal'), 'the host is asked about typing', 15000);
     await pressButton(h, 'Allow Typing');
     await g.until(`document.querySelector('.collab-term-note').textContent.includes('you may type')`, 'the guest may type', 10000);
+    await closeBalloonsOver(g, `document.querySelector('.collab-term-box .xterm')`);
     await g.click('.collab-term-box .xterm');
     await g.type('echo typed>typed.txt');
     await g.press('Enter');

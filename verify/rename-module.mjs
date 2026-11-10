@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, openFile } from './lib.mjs';
+import { launch, openFile, selectTreeRow, treeRowShown } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -59,8 +59,7 @@ function helpers(t) {
   const doc = (rel) => js(`(() => { const t = ide.tabs.find((t) => t.kind === 'file' && t.path.toLowerCase() === ${q(P(rel).toLowerCase())}); return t ? t.model.getValue(1) : null; })()`);
   // Selects a row in the project tree and gives the tree the keyboard.
   async function selectRow(rel) {
-    await js(`ide.revealInTree(${q(P(rel))})`);
-    await until(`document.querySelector('#tree .node.selected')?._entry?.path.toLowerCase() === ${q(P(rel).toLowerCase())}`, `tree row ${rel}`);
+    await selectTreeRow(t, P(rel), `tree row ${rel}`);
     await js(`(document.getElementById('tree').focus(), true)`);
   }
   const rowOf = (rel) => `[...document.querySelectorAll('#tree .node')].find((n) => n._entry?.path.toLowerCase() === ${q(P(rel).toLowerCase())})`;
@@ -87,8 +86,15 @@ function helpers(t) {
   const exists = (rel) => existsSync(P(rel));
   // The tree's confirmation is answered Move, and its question kept.
   const acceptMoves = () => js(`(window.__confirms = [], ide.ui.confirm = async (m) => (window.__confirms.push(m), true), true)`);
+  // Waits for a condition read from the disk and the page together -> whether it came true.
+  const settled = async (fn, ms = 30000) => {
+    for (const end = Date.now() + ms; ; await t.sleep(150)) {
+      try { if (await fn()) return true; } catch {}
+      if (Date.now() > end) return false;
+    }
+  };
   const lastNote = () => js(`(() => { const n = ide.notifications.list().filter((e) => e.group === 'Refactoring').pop(); return n ? { title: n.title, text: n.text, kind: n.kind, id: n.id } : null; })()`);
-  return { P, disk, doc, selectRow, contextMenu, drag, dialog, gone, setInput, button, exists, press, acceptMoves, lastNote };
+  return { P, disk, doc, selectRow, contextMenu, drag, dialog, gone, setInput, button, exists, press, acceptMoves, lastNote, settled };
 }
 
 // A package with relative and absolute importers, moved with Cut / Paste (written into the fixture project, and under
@@ -156,18 +162,19 @@ try {
   await until(`ide.tabs.some((t) => t.kind === 'file' && /geo\\\\figures\\.py$/i.test(t.path))`, 'renamed module reopened');
   check(!(await js(`ide.tabs.some((t) => t.kind === 'file' && /shapes\\.py$/i.test(t.path))`)), 'the old tab is gone');
   check(h.disk('geo/figures.py').startsWith('# edited\n"""Shape formulas."""'), 'the module\'s unsaved text was saved before it moved');
-  check(await js(`[...document.querySelectorAll('#tree .node .name')].some((n) => n.textContent === 'figures.py')`), 'the tree shows the new name');
+  check(await until(treeRowShown(h.P('geo/figures.py')), 'the renamed row in the tree', 10000).catch(() => false), 'the tree shows the new name');
   check((await appOutput()) === baseline, 'the program prints the same after the rename');
 
   // one Ctrl+Z (in an importer) undoes it everywhere, Ctrl+Shift+Z redoes it
   await openFile(t, 'main.py');
   await js(`ide.editor.focus(), true`);
   await press('Ctrl+Z');
-  await until(`(async () => await ide.api.exists(${q(h.P('geo/shapes.py'))}))()`, 'rename undone', 30000);
-  check(!h.exists('geo/figures.py') && (await h.doc('main.py')) === mainBefore && h.disk('geo/report.py').startsWith('from . import shapes\n'), 'Ctrl+Z undoes the rename in every file');
+  // The undo moves the file back first, then writes the closed files and undoes the open ones.
+  check(await h.settled(async () => !h.exists('geo/figures.py') && h.exists('geo/shapes.py') && (await h.doc('main.py')) === mainBefore
+    && h.disk('geo/report.py').startsWith('from . import shapes\n')), 'Ctrl+Z undoes the rename in every file');
   await press('Ctrl+Shift+Z');
-  await until(`(async () => await ide.api.exists(${q(h.P('geo/figures.py'))}))()`, 'rename redone', 30000);
-  check((await h.doc('main.py')).startsWith('import geo.figures\n') && h.disk('geo/report.py').startsWith('from . import figures\n'), 'Ctrl+Shift+Z redoes it');
+  check(await h.settled(async () => h.exists('geo/figures.py') && ((await h.doc('main.py')) || '').startsWith('import geo.figures\n')
+    && h.disk('geo/report.py').startsWith('from . import figures\n')), 'Ctrl+Shift+Z redoes it');
   check((await appOutput()) === baseline, 'the program prints the same after undo and redo');
 
   // Undoing the rename while the renamed module has unsaved text: the text is saved and moves back with the file.
@@ -374,6 +381,8 @@ try {
   await h.selectRow('tools');
   await press('Ctrl+V');
   await until(`(async () => await ide.api.exists(${q(h.P('tools/app.py'))}))()`, 'move without rope', 30000);
+  // The tree's paste tells the moves' outcome once every entry has moved, a moment after the file is in place.
+  await h.settled(async () => (await h.lastNote())?.title === 'Imports were not updated', 10000);
   note = await h.lastNote();
   check(note?.kind === 'warn' && note.title === 'Imports were not updated' && /rope/.test(note.text), `without rope the module moves and a warning says its imports were not updated (${note?.title}: ${note?.text})`);
   await useInterpreter(t, VENV_PY);

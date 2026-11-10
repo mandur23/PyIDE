@@ -225,6 +225,20 @@ try {
   await until(`!ide.settings.get('workspace.recent').some(p => p.path === ${q(deleted)}) && ide.root?.toLowerCase() === ${q(t.project.toLowerCase())}`, 'deleted project removed');
   check(true, 'a recent project whose folder was deleted is offered for removal');
 
+  // A file opened from the tree while the project still loads (its interpreters listed after the tree, here slowed
+  // down) stays in front: Workspace Home does not cover it once the project has opened.
+  await js(`(() => { const real = ide.reloadInterpreters; ide.reloadInterpreters = async (...a) => { ide.reloadInterpreters = real; await new Promise((r) => setTimeout(r, 1500)); return real(...a); };
+    window.__projectOpened = false; ide.on('projectOpened', () => { window.__projectOpened = true; }); return true; })()`);
+  const opening = js(`ide.openProject(${q(second)})`);
+  await until(`ide.root === ${q(second)} && [...document.querySelectorAll('#tree .node')].some((n) => n._entry?.name === 'run.bat')`, 'second project tree while it loads');
+  const early = await js(`ide.openFile(ide.util.joinPath(ide.root, 'run.bat')).then(() => !window.__projectOpened)`);
+  await opening;
+  await sleep(300);
+  check(early && await js(`window.__projectOpened && ide.activeTab()?.title === 'run.bat'`),
+    `a file opened while the project loads stays in front of Workspace Home (opened before projectOpened: ${early}, front: ${await js('ide.activeTab()?.title')})`);
+  await js(`ide.openProject(${q(t.project)})`);
+  await until(`ide.root?.toLowerCase() === ${q(t.project.toLowerCase())}`, 'first project again');
+
   // ---------- unsaved files when switching, closing the project ----------
   await js(`ide.openFile(ide.util.joinPath(ide.root, 'tool.py'))`);
   await until(`ide.activeTab()?.title === 'tool.py'`, 'tool.py open before switching');

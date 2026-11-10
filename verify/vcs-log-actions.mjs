@@ -6,7 +6,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { launch } from './lib.mjs';
+import { launch, visiblePoint } from './lib.mjs';
 import { englishLeaks } from './i18n-lib.mjs';
 
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcsacts-git-'));
@@ -53,7 +53,7 @@ function helpers(t) {
   }
   async function mouse(expr, { button = 'left', label = expr } = {}) {
     await frame();
-    const box = await js(`(() => { const n = ${expr}; if (!n) return null; n.scrollIntoView?.({ block: 'nearest' }); const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    const box = await js(visiblePoint(expr));
     if (!box) throw new Error(`no element for ${label}`);
     await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
     await sleep(80);
@@ -66,8 +66,16 @@ function helpers(t) {
   async function menu(subject) {
     await t.press('Escape');
     await until(`!!${logRow(subject)}`, `log row ${subject}`, 20000);
-    await mouse(logRow(subject), { button: 'right', label: `${subject} row` });
-    await until(`document.querySelectorAll('#menuHost .menu-item').length > 3`, `menu of ${subject}`);
+    // A right-click the row did not get opens nothing; it is pressed again, as a user would.
+    for (let tries = 1; ; tries++) {
+      await mouse(logRow(subject), { button: 'right', label: `${subject} row` });
+      const shown = await until(`document.querySelectorAll('#menuHost .menu-item').length > 3`, `menu of ${subject}`, tries < 3 ? 4000 : 15000).catch((e) => e);
+      if (shown === true) break;
+      if (tries === 3) {
+        const at = await js(`(() => { const p = ${visiblePoint(logRow(subject))}; const n = p && document.elementFromPoint(p.x, p.y); return n ? n.tagName + '.' + [...n.classList].join('.') : String(p); })()`).catch(() => '?');
+        throw new Error(`${shown.message} (at the row's point: ${at})`);
+      }
+    }
     return labels();
   }
   const run = async (subject, label) => { await menu(subject); await mouse(menuItem(label), { label }); };

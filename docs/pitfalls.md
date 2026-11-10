@@ -57,6 +57,8 @@
 - **main 안의 알림을 `ipcMain.emit`으로 보내지 않습니다.** `main/ipc-guard.js`가 앱 페이지가 보내지 않은 메시지를 거절해서, 응답 없는 창의 네이티브 취소가 다시 시작을 취소하지 못했습니다. main 안에서는 모듈의 함수로 알립니다(`windows.onCloseCancelled`).
 - **자식 프로세스는 트리째 끝냅니다.** Kotlin 언어 서버는 cmd.exe로 시작해서 `proc.kill()`이 cmd.exe만 끝내고 JVM이 남았습니다. `taskkill /T /F`를 쓰고, 종료할 때는 동기로, 이미 끝난 pid에는 보내지 않습니다(다른 프로그램의 pid일 수 있음).
 - **읽기 실패와 파일 없음을 구분하지 않고 통째로 다시 쓰면 목록이 사라집니다.** `trusted-projects.json`과 `project-roots.json`이 잠긴 순간에 읽기가 실패하면 다음 저장이 빈 목록으로 덮었습니다. `main/json-store.js`의 `readStore`로 읽고, 못 읽으면 쓰지 않고, 깨진 파일은 `.bak`으로 남깁니다.
+- **작은 파일이 많은 폴더는 파일을 여는 비용(바이러스 검사)이 바이트보다 큽니다.** 5 KB 파일 하나에 약 5 ms가 들어 4,280개 월드를 차례로 읽으면 87초, 다음 8개를 미리 읽고 압축하면 4~6초였습니다. 큰 파일은 4 MB씩 읽습니다(1 MB보다 1.6배 빠름).
+- **진행률 조절에는 주입한 가짜 시계가 아니라 `Date.now()`를 씁니다.** 테스트의 고정 시계로 진행 이벤트가 멈춰 취소 테스트가 엉뚱하게 통과·실패했습니다.
 
 ## 공통: 렌더러
 
@@ -142,6 +144,10 @@
 - **CDP의 `Input.dispatchKeyEvent` Enter(rawKeyDown과 keyUp)는 포커스된 버튼을 누르지 않습니다.** 문자 이벤트가 없어서 브라우저가 클릭을 만들지 않습니다. 협업의 실행 요청 대화상자를 Enter로 거절하는 테스트가 그래서 멈췄습니다. 실제 사용자의 Enter는 누릅니다. 버튼은 `click`으로 누르고, 기본 버튼이 무엇인지는 따로 확인합니다.
 - **CDP의 `Input.dispatchKeyEvent`는 메뉴 단축키에 닿지 않습니다.** Chromium이 이 이벤트를 처리되지 않아도 넘기지 않는 이벤트로 표시해서, Electron 기본 메뉴의 Ctrl+R이 에디터 밖에서 페이지를 새로 고치는 것을 289개 suite가 놓쳤습니다. 창 수준 키(메뉴, `before-input-event`)는 메인 프로세스 inspector에서 `webContents.sendInputEvent`로 보내 확인합니다(`verify/core-lifecycle.mjs`).
 - **메인 프로세스 inspector의 `Runtime.evaluate`에는 `includeCommandLineAPI: true`를 넣습니다.** Electron 메인 프로세스는 CommonJS 모듈로 실행되므로 inspector의 전역에는 `require`가 없어서, 빠뜨리면 식이 ReferenceError로 끝나고 검사는 앱이 아니라 테스트 때문에 실패합니다.
+- **IDE가 파일을 바꾼 뒤 트리를 다시 그리는 일은 기다리지 않습니다.** 파일이 디스크에 생기거나 탭이 다시 열린 직후에 트리를 한 번 읽으면 느린 CI 디스크에서 옛 줄을 봅니다(`rename-module`). `verify/lib.mjs`의 `treeRowShown`으로 줄을 기다리고, 줄 선택은 `selectTreeRow`로 합니다. 이름 바꾸기, 새 패키지, 삭제가 끝나며 자기 줄을 선택해 한 번의 reveal을 덮기 때문입니다(`flow-coding`, `code-polish`).
+- **작업의 한 부분이 끝난 것은 작업이 끝난 것이 아닙니다.** 실행 취소는 파일을 먼저 옮기고 나머지 파일을 나중에 쓰며, 경고 알림은 이동이 다 끝난 뒤에 옵니다. exe-builder의 결과 파일은 PyInstaller가 끝나기 전에 생겨서 다음 빌드가 "실행 중입니다. 중지하고 다시 실행할까요?"를 띄웠습니다. 검사하는 결과 전체를 기다립니다.
+- **1024x720 창에서는 오른쪽 아래 알림 풍선이 버튼과 목록 줄을 덮습니다.** 협업 게스트는 풍선 7개가 Ask to Type과 터미널을 덮어 호스트가 질문을 받지 못했고, `vcs`는 Log 줄을 누르지 못했습니다. 줄은 `visiblePoint`로 보이는 부분을 누르고, 작은 버튼은 `closeBalloonsOver`로 위의 풍선을 닫고 누릅니다. 풍선의 동작을 누르는 테스트는 풍선이 사라졌으면 알림 도구 창에서 누릅니다(`run-roots`).
+- **`PYIDE_TEST_CPU`는 렌더러만 느리게 합니다.** 디스크나 프로세스 시작이 느린 CI 실패(`exe-builder`, `rename-module`)는 바쁜 프로세스 12개와 `PYIDE_TEST_CPU=4`를 함께 줘야 재현됐습니다.
 
 ## Code: 코딩
 
@@ -206,6 +212,7 @@
 - **플러그인용 `fs:read`/`fs:write`도 파일의 인코딩을 지킵니다.** UTF-8로만 읽고 써서 PowerShell 5가 만든 UTF-16 requirements.txt나 CP949 파일에 줄을 더하면 깨졌습니다. 이제 읽을 때 인코딩을 알아내고, 쓸 때는 디스크에 있는 파일의 인코딩으로 임시 파일에 써서 이름을 바꿉니다.
 - **여러 파일을 쓰는 작업은 중간 실패를 되돌립니다.** 리팩터링이 파일을 하나씩 쓰다 실패하면 반쯤 바뀐 채 실행 취소 기록도 없이 남았습니다. 실패하면 그때까지의 기록으로 되돌립니다(`refactor/index.js`의 `applyResult`).
 - **노트북 뷰는 대기 중인 편집이 있을 때만 문서에 씁니다.** 닫기 전에 무조건 직렬화하자 다른 도구가 저장한 `.ipynb`가 JSON 모양만 달라 저장 안 한 변경으로 보였고, Trust Project의 새로고침이 그 질문에서 멈췄습니다.
+- **`ide.root`가 바뀐 때와 `projectOpened` 사이에도 사용자는 트리에서 파일을 엽니다.** 인터프리터 목록이 그 뒤에 오기 때문입니다. `projectOpened`에서 탭을 앞에 띄우는 플러그인은 이미 열린 탭을 덮지 않습니다(Workspace 홈).
 
 ## Code: 테스트
 
@@ -227,7 +234,6 @@
 - **Node가 띄운 자식은 Node와 함께 끝납니다(libuv의 job).** 그래서 cmd.exe 밑의 JVM처럼 남는 프로그램을 흉내 내지 못해, 고치기 전 코드에서도 테스트가 통과했습니다. 대역은 `detached: true`로 띄웁니다(`standin-lsp.cjs`).
 - **디스크 확인이 곧 바로잡는 잘못된 다시 읽기는 마지막 상태만 보면 놓칩니다.** Git 롤백이 UTF-8로 잘못 읽은 글은 1초 안에 고쳐졌습니다. 모델의 변경을 모두 기록해 중간 글을 봅니다(`verify/encodings.mjs`).
 - **`ide.tabs`는 문서마다 탭 하나만 돌려줍니다.** 같은 파일의 두 탭은 `ide.groups().flatMap((g) => g.tabs)`로 셉니다.
-- **`verify/vcs.mjs`와 `verify/collab-run.mjs`는 CI에 없고 0.3.26에서도 검사 하나씩 실패합니다.** vcs는 1024x720에서 Git 알림이 Log 줄을 가려서, collab-run은 공유 터미널의 입력 질문이 뜨지 않아서입니다. 아직 고치지 않았습니다.
 
 ## Craft: 화면과 문구
 
@@ -299,6 +305,16 @@
 - **Paper 월드의 네더와 엔드는 `world_nether`, `world_the_end`라는 별도 폴더이고 각각 `level.dat`이 있습니다.** 월드로 따로 다루지 않습니다.
 - **zip을 ZIP64 없이 쓰면 65,535개, 4GB를 넘을 때 말없이 깨집니다.** 큰 압축은 메인에서 동기로 하지 않습니다.
 - **복구 같은 동작은 할 수 있는 경우에만 보여 줍니다.** 손상 카드가 근거(.bak, 알아보는 jar)가 없는 서버에도 복구를 보여 주면 누르면 실패하고 `.damaged`만 남았습니다. 목록이 `repair`(무엇으로 고칠지, 없으면 null)를 함께 주고, 창은 그것에 따라 버튼과 문구를 고릅니다.
+- **실행 중인 월드는 save-off, save-all flush 뒤 "Saved the game"을 본 다음에 읽습니다.** 답은 로그 접두사 뒤의 문구가 정확히 같을 때만 믿습니다(채팅 `<이름> Saved the game` 위조). save-on은 실패와 취소에도 보내고, 묶는 중에 서버가 멈추면(멈추는 서버는 월드를 씁니다) 그 백업은 버립니다. 실행 중인 월드의 `session.lock`은 서버가 잠가 읽을 수 없으니 넣지 않습니다.
+- **백업의 `pyide-server.json`은 jar를 설명합니다.** jar는 백업에 없으므로 되돌릴 때 종류, 버전, launch, Market 기록은 지금 것을 두고 메모리와 JVM 옵션만 가져옵니다.
+- **폴더를 바꾸는 되돌리기는 journal을 남깁니다.** 중간 실패는 바로 되돌리고, 앱이 죽어 끊긴 것은 다음 시작이나 목록에서 `.nano-restore/journal.json`으로 되돌립니다.
+- **Paper 26.3에는 "Can't keep up!" 줄이 없습니다.** 바닐라 26.3에는 있습니다(실제 jar의 상수 풀로 확인). 과부하를 이 줄로만 보면 Paper 서버는 늘 원활로 보입니다. Paper와 Purpur는 플레이어 세션의 숨은 질의로 `tps`를 묻습니다.
+- **hs_err의 "insufficient memory"는 힙이 아니라 PC의 메모리가 바닥난 것입니다.** 메모리 설정을 올리라고 하면 더 나빠집니다. 힙 OutOfMemoryError(올리기), "Could not reserve enough space"(내리기)와 구분합니다.
+- **한국어 Windows의 Fabric 로더는 의존성 오류를 한국어로 찍습니다(`Messages_ko_KR.properties`).** 영어 문구만 찾으면 빠진 모드를 못 찾습니다.
+- **관리자의 /stop도 비정상 종료가 아닙니다.** 앱의 정지는 모두 stdin의 `stop`을 지나지만 게임 안의 /stop은 아닙니다. `Stopping the server`(26.x는 `System chat: ` 앞붙임)로 가립니다. `Stopping server`는 크래시 때도 찍히므로 근거가 아닙니다.
+- **응답 없음 판단은 시작이 끝난(Done) 뒤에만, 첫 핑이 답한 서버에만 합니다.** 월드 생성은 길고 조용하며, server-ip가 다른 주소면 루프백 핑은 늘 실패합니다.
+- **서버는 stdin에 `stop`이 간 순간부터 멈추는 중입니다(`markStops`, `proc.stopAsked`, `'stopAsked'`).** 멈추는 동안 stdin에 쓰고 서버를 끝내는 것은 정지 로직뿐입니다. 백업(예약 포함), `save-on`, `tps`, 플레이어 질의, ping, 멈춤 판정, 자동 재시작은 하지 않습니다. 출력 하나가 창의 60초 침묵 타이머를 다시 거는데, 예약 백업의 첫 검사가 시작 60초 뒤라 멈추지 않는 서버의 강제 종료를 미뤘습니다. 서버에 무언가 쓰는 새 기능은 먼저 `stopAsked`를 봅니다.
+- **실제 서버로 확인하지 못한 것(0.3.29):** 백업의 save-off 응답 문구(Paper, Forge), 실제 충돌·멈춤·과부하 상황, NeoForge 의존성 오류와 "Address already in use", Velocity의 Done 줄 형식. 모두 대역 서버와 이 PC의 jar 상수로만 확인했습니다.
 
 ## Craft: 플레이어 탭
 
@@ -360,6 +376,7 @@
 - **`main/features/minecraft.js`는 `Module._load`로 `electron`만 바꾸면 일반 Node에서 IPC 핸들러째 시험할 수 있습니다(`verify/minecraft-launcher-core.mjs`).** 고치기 전 코드로 돌릴 때는 작업 트리를 stash하지 말고 `verify/out` 아래에 복사한 뒤 바꾼 파일만 `git show HEAD:`로 되돌립니다.
 - **`verify/minecraft.mjs`의 survival 서버는 드롭 단계 뒤로 다시 시작할 수 없습니다.** 드롭한 `extra-plugin.jar`를 대역 서버가 읽다가 죽습니다. 그 뒤 단계에서는 modded 서버를 씁니다.
 - **`minecraft:start`와 `minecraft:launch`는 이제 async입니다.** Node 테스트는 await합니다.
+- **크래시 판정 테스트의 대역은 정지 때 `Stopping the server`를 찍지 않습니다.** 찍으면 stdin 감지를 빼도 통과합니다(`verify/fixtures/craft-health/stand-in-server.cjs`).
 
 ## Cut: 형식과 프로젝트
 
@@ -552,7 +569,7 @@
 - **시간 다시 매핑을 끄면 클립의 길이는 그대로이고 속도는 첫 프레임의 속도가 됩니다.** 끈 뒤의 in/out을 원래 값으로 기대하면 틀립니다. 기대값은 그때의 `out - in`에서 계산합니다.
 
 - **AI 도구 목록 전체에 75,000자 상한이 있습니다(`verify/cut-control-core.mjs`).** 도구 설명은 700자까지이고, 목록 전체가 요청마다 모델에 가므로 크기를 지킵니다. 그래픽 레이어처럼 필드가 많은 인자는 필드마다 스키마를 쓰지 않고 안내 문장 하나로 설명하며, 자세한 검사와 거절 문장은 코드(`graphic.validate`)가 맡습니다. 같은 스키마를 여러 도구에 복사하지 않습니다.
-- **`cut-tools`, `cut-panels`, `cut-timeline`은 1024x720에서 몇 개씩 실패합니다(CI에 없음, 0.3.26에서도 같음).** 내보내기 작업 영역 탭이 »에 숨고, 시간 좌표가 480 px 레인 밖입니다. 숨겨진 데스크톱 기본 크기에서는 통과합니다. 1024에 맞게 고치기 전에는 그 실패를 진짜로 보지 않습니다.
+- **1024x720에서는 작업 영역 탭이 » 메뉴로 숨고 타임라인 레인은 약 480 px입니다.** 100 px/초에서 5초 뒤의 시간은 화면 밖입니다. 작업 영역은 `cutWorkspace`로 바꾸고, 시간 좌표는 보이는 레인 안에 들도록 스크롤하거나 줌을 맞춥니다. 깃발 사이 거리를 시험하는 곳은 줌 대신 스크롤합니다. 125% 캔버스의 2 px 선은 한 점이 아니라 주변 몇 점에서 읽습니다.
 
 ## 도구 사용
 

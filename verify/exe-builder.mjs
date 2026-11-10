@@ -138,6 +138,9 @@ try {
 
   await js(`(ide.exeBuilder.build(ide.util.joinPath(ide.root, 'main.py'), { exeName: 'tool.exe', mode: 'onefile', windowed: false, icon: '' }), true)`);
   await until(`ide.api.exists(${S(path.join(project, 'dist', 'tool.exe'))})`, 'tool.exe', 60000);
+  // The program is written before PyInstaller exits; a build started while this one still runs would first ask
+  // whether to stop it (Process 'Build MyApp' Is Running), so the next one waits for the end of this one.
+  await until(`document.querySelector('.run-session:not(.hidden)')?.textContent.includes('Executable built: ' + ${S(path.join(project, 'dist', 'tool.exe'))}) && !ide.run.activeSession().running`, 'tool.exe build finished', 30000);
   check(lastArgs()[lastArgs().indexOf('--name') + 1] === 'tool' && !existsSync(path.join(project, 'dist', 'tool.exe.exe')), 'a name typed with .exe is built as that name, not .exe.exe');
 
   await js(`(ide.exeBuilder.build(ide.util.joinPath(ide.root, 'main.py'), { exeName: 'Slow', mode: 'onefile', windowed: false, icon: '' }), true)`);

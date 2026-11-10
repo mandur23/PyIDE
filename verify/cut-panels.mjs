@@ -18,7 +18,7 @@
 // - screenshots in the dark and the light theme (verify/out/cut-panels/*.png).
 // Usage: node verify/cut-panels.mjs   (CUT_PANELS_ONLY=window,history,markers,easing,meters,shots)
 import path from 'path';
-import { launch, tempDir, menuRow, clickMenuPath } from './lib.mjs';
+import { cutWorkspace, launch, tempDir, menuRow, clickMenuPath } from './lib.mjs';
 
 const ONLY = (process.env.CUT_PANELS_ONLY || '').split(',').filter(Boolean);
 const want = (name) => !ONLY.length || ONLY.includes(name);
@@ -73,6 +73,9 @@ await js(`(() => {
   H.steps = () => Cut.app.history.position;
   H.label = () => Cut.app.history.list()[Cut.app.history.position - 1]?.label;
   H.visible = (sel) => { const n = document.querySelector(sel); if (!n) return false; const r = n.getBoundingClientRect(); if (!r.width || !r.height) return false; const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!hit && n.contains(hit); };
+  // The scroll at 100 px a second that keeps from..to s on screen, from at least 50 px in (none when the lanes are wide
+  // enough; 480 px of lanes on a 1024 px window show under 5 s).
+  H.fitScroll = (from, to) => Math.max(0, Math.min(from * 100 - 50, to * 100 + 16 - Cut.ui.timeline.root.querySelector('.cut-tl-scroll').clientWidth));
   // the ruler point of a sequence time (y in the marker flags' band)
   H.ruler = (sec, dy = 17) => { const r = Cut.ui.timeline.root.querySelector('.cut-tl-ruler').getBoundingClientRect(); return { x: r.left + Cut.ui.timeline.xOf(sec * T), y: r.top + dy }; };
   H.marker = (name) => { const m = H.seq().markers.find((x) => x.name === name); return m ? { id: m.id, t: m.t / T, frames: m.t / (T / 30), duration: m.duration / T, color: m.color, kind: m.kind } : null; };
@@ -119,7 +122,7 @@ async function showTab(panel) {
   return true;
 }
 async function workspace(id) {
-  await clickAt(await rect(`.cut-ws-tab[data-ws="${id}"]`));
+  await cutWorkspace(ctx, id);
   await sleep(200);
 }
 async function focusTimeline() {
@@ -318,7 +321,7 @@ await section('markers', async () => {
   check(await js(`!!__pn.marker('Opening') && Cut.ui.markers.panel.items.length === 43`), 'Ctrl+Z brings it back into the list');
 
   // ---- on the ruler ----
-  await js(`(Cut.ui.setSnapping(Cut.app, false), Cut.ui.timeline.setZoom(100, { t: 0, x: 0 }), Cut.ui.timeline.setScroll(0, 0), true)`);
+  await js(`(Cut.ui.setSnapping(Cut.app, false), Cut.ui.timeline.setZoom(100, { t: 0, x: 0 }), Cut.ui.timeline.setScroll(__pn.fitScroll(3.5, 8), 0), true)`);
   await sleep(100);
   const n2 = await steps();
   const a = await js(`__pn.ruler(3.5)`);
@@ -395,6 +398,8 @@ await section('easing', async () => {
   await press('Ctrl+z');
   check(Math.abs((await kf(0)).h[0] - 1 / 3) < 0.01, 'Ctrl+Z gives the handle back');
   // the timeline's keyframe line
+  await js(`(Cut.ui.timeline.setScroll(__pn.fitScroll(6, 7), 0), true)`);
+  await frames();
   const p = await js(`(() => {
     const tl = Cut.ui.timeline, box = tl.root.querySelector('.cut-tl-scroll').getBoundingClientRect(), r = tl.rowOf('V1'), x = tl.xOf(6 * ${T});
     for (let y = r.y; y < r.y + r.h; y++) if (tl.hit(x, y).part === 'kf') return { x: box.left + x, y: box.top + y + 1 };
@@ -445,7 +450,9 @@ await section('meters', async () => {
   check(playing.every((s) => !(s.dark[0] > 200 && s.dark[1] < 100)), 'the bar stays below -1 dB');
   // the peak hold after stopping, then its fall
   const hold = await js(`(() => { const st = Cut.ui.meters.state, g = Cut.ui.meters.geometry(), c = Cut.ui.meters.canvas; const x = (g.bars[0].x0 + g.bars[0].x1) / 2; const y = g.y(st.hold[0]);
-    return { hold: st.hold[0], line: __pn.pixel(c, x, y), clip: st.clip }; })()`);
+    // The 2 px line is drawn at whole CSS pixels around y; on a scaled canvas (125 %) y can fall on its edge.
+    const line = [-1, -0.5, 0, 0.5, 1].map((d) => __pn.pixel(c, x, y + d)).sort((p, q) => q[0] - p[0])[0];
+    return { hold: st.hold[0], line, clip: st.clip }; })()`);
   check(hold.hold != null && hold.hold > -10 && hold.hold <= -5.5 && hold.line[0] > 200 && hold.line[1] > 200, `after stopping the peak hold line stays near the last peak (${hold.hold?.toFixed(1)} dB, it falls 1.5 s after the beep; ${S(hold.line)})`);
   check(!hold.clip[0] && !(await js(`!!document.querySelector('.cut-meter-clip.on')`)), 'no clip light at -6 dBFS');
   await sleep(3500);

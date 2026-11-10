@@ -125,7 +125,8 @@ try {
   await until(`!!(${deleteButton})`, 'the Delete question', 5000);
   await mouse(deleteButton);
   await until(`!(${treeRow('x2.txt')})`, 'x2.txt gone', 10000);
-  await sleep(200);
+  // The folder watcher can redraw the tree without x2.txt before the delete has listed it again and moved the selection.
+  await until(`document.querySelector('#tree .node.selected')?._entry?.name === 'x3.txt'`, 'the row after x2.txt selected', 10000).catch(() => {});
   check(await selectedRow() === 'x3.txt', `after Delete the next row is selected (${await selectedRow()})`);
   await press('ArrowUp');
   check(await selectedRow() === 'x1.txt', `and the arrow keys go on from there, not from the top (${await selectedRow()})`);
@@ -162,8 +163,8 @@ try {
   await sleep(2500);
   check(await js(`!!(${balloon})`), 'a balloon under the pointer stays past its time');
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 300, button: 'none', buttons: 0 });
-  await sleep(2500);
-  check(!(await js(`!!(${balloon})`)), 'and goes a moment after the pointer leaves');
+  // 1.5 s after the pointer left; a throttled renderer runs that timer late.
+  check(await until(`!(${balloon})`, 'the balloon gone', 8000).catch(() => false), 'and goes a moment after the pointer leaves');
 
   // ---------- the Run console's emulated terminal follows the theme ----------
   write(inProject('waits.py'), 'import time\nprint("waiting")\ntime.sleep(60)\n');

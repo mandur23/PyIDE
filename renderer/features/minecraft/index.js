@@ -369,6 +369,7 @@
     await ide.documentsMoved?.(srv.dir, null);
     ide.closeTab(ide.minecraft.settings.tabId(srv.dir), true);
     ide.closeTab(ide.minecraft.players.tabId(srv.dir), true);
+    ide.closeTab(ide.minecraft.backups.tabId(srv.dir), true);
     ide.refreshTree?.();
     await refresh();
   }
@@ -682,6 +683,10 @@
     dimension: () => tr('added with its world') };
   async function dropped(paths, serverDir) {
     if (!paths.length || !trusted()) return;
+    // A world dropped on a server's card becomes its level: the world it had is backed up first (backups.js).
+    const target = serverDir && serverAt(serverDir);
+    if (target && (await Promise.all(paths.map((p) => ide.api.invoke('fs:exists', `${p}\\level.dat`).catch(() => false)))).some(Boolean)
+      && !(await ide.minecraft.backups.before(target, 'world'))) return;
     const con = jobSession(tr('Import'));
     const j = job(con);
     try {
@@ -740,6 +745,7 @@
     if (host) renderServers();
     ide.minecraft?.settings?.paintStates();
     ide.minecraft?.players?.paintStates();
+    ide.minecraft?.backups?.paintStates();
   }
   // Start or Debug clicked again before the server runs (its card shows Stop only then) starts it once.
   const launching = new Set(); // server folders (lower case)
@@ -768,6 +774,8 @@
       title.dataset.userText = '';
       head.append(el('span', `mc-dot${running || srv.leftOver ? ' on' : ''}`), title,
         el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
+      const load = ide.minecraft.health?.chip(srv);
+      if (load) head.append(load);
       const actions = el('div', 'mc-server-actions');
       // Starting (a Java download, a busy port being waited out) and saving after Stop take a while, and a second
       // press does nothing then: the card says so instead of offering a button that cannot work.
@@ -798,13 +806,14 @@
       }
       actions.append(button(tr('Players'), 'mc-players', () => serverPlayers(srv), tr('Who is on, their inventories, a log of what they did, and actions on them')));
       actions.append(button(tr('Settings…'), 'mc-settings', () => serverSettings(srv), srv.mods ? tr('Server settings, and Korean for its mods') : tr('Server settings')));
+      if (!srv.proxy) actions.append(button(tr('Backups'), 'mc-backups', () => ide.minecraft.backups.open(srv), tr('Back up the world, or put an earlier one back')));
       actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
       if (!busyAt(srv.dir)) actions.append(button(tr('Delete…'), 'mc-delete', () => deleteServer(srv), tr('Moves the server folder to the Recycle Bin')));
       const info = srv.proxy ? tr('Players join this proxy and are sent on to the project\'s Paper and Purpur servers.')
         : srv.plugins ? tr('Plugins run on the server: players need nothing.')
           : srv.autoSync ? tr('AutoModpack is on: players import the Client Pack once, then get the server\'s mods, and every change to them, when they join.')
             : srv.mods ? tr('Players need the same mods: share the Client Pack.') : '';
-      card.append(head, actions);
+      card.append(head, actions, ...(ide.minecraft.health?.panels(srv) || []));
       if (tunnel) card.append(publicRow(srv, tunnel));
       if (running) card.append(...lanRows(srv));
       card.append(el('div', 'mc-server-note muted', info));
@@ -842,6 +851,7 @@
   async function repairServer(srv) {
     if (!trusted()) return;
     try {
+      if (!(await ide.minecraft.backups.before(srv, 'repair'))) return;
       const r = await ide.api.invoke('minecraft:repairServer', ide.root, srv.dir);
       ide.notifications?.notify({ title: tr('{name} repaired', { name: srv.name }), group: 'Minecraft', kind: 'ok', raw: true,
         text: r.from === 'backup' ? tr('Its pyide-server.json is the copy Nano Studio saved last. The damaged one is pyide-server.json.damaged.')
@@ -982,12 +992,12 @@
   ide.registerAction({ id: 'Minecraft.NewServer', title: tr('New Minecraft Server…'), needsProject: true, run: newServer });
   ide.registerAction({ id: 'Minecraft.NewServerFromModpack', title: tr('New Minecraft Server from Modpack…'), needsProject: true, run: () => newFromModpack() });
   ide.minecraft = { refresh, servers: () => list, newServer, createServer, newFromModpack, createFromModpack, dropped, clientPack, autoSync, deleteServer, serverSettings, sendCommand, translateKorean, runTranslation, sharePack, resourcePack, sendPack,
-    job, jobSession, errorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig),
+    job, jobSession, errorText, kindTitle, runningAt, stoppingAt, restartIfRunning, startServer: (srv) => launchOnce(srv, run.runConfig), render,
     // The server list (with drops) in the Minecraft screen's My Servers page.
     showServersIn(container) { acceptDrops(container); host = container; refresh(); } };
 
   const here = document.currentScript.src.replace(/[^/]*$/, '');
-  for (const file of ['market.js', 'craft.js', 'screen.js', 'server-settings.js', 'players.js']) {
+  for (const file of ['market.js', 'craft.js', 'screen.js', 'server-settings.js', 'players.js', 'health.js', 'backups.js']) {
     const script = el('script');
     script.src = `${here}${file}`;
     script.async = false;

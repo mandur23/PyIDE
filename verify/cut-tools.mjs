@@ -40,7 +40,7 @@
 // Usage: node verify/cut-tools.mjs   (CUT_TOOLS_ONLY=keys,presets,toolspanel,buttons,settings,media,proxy,queue,drop,speed,volume,highlight,shots)
 import fs from 'fs';
 import path from 'path';
-import { launch, tempDir, menuRow } from './lib.mjs';
+import { cutWorkspace, launch, tempDir, menuRow } from './lib.mjs';
 
 const ONLY = (process.env.CUT_TOOLS_ONLY || '').split(',').filter(Boolean);
 const want = (name) => !ONLY.length || ONLY.includes(name);
@@ -150,7 +150,7 @@ async function space() {
   await sleep(60);
 }
 async function workspace(id) {
-  await clickSel(`.cut-ws-tab[data-ws="${id}"]`);
+  await cutWorkspace(ctx, id);
   await sleep(200);
 }
 async function showTab(panel) {

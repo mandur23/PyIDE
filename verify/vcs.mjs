@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { clickMenuPath, launch, lensesShown, openFile } from './lib.mjs';
+import { clickMenuPath, launch, lensesShown, openFile, visiblePoint } from './lib.mjs';
 
 // Isolate git from the user's global/system config (identity, autocrlf, default branch, hooks).
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcs-git-'));
@@ -28,10 +28,10 @@ async function until(expr, label, ms = 15000) {
   throw new Error(`timeout waiting for: ${label}`);
 }
 
-// Mouse input at the center of the element an expression returns.
+// Mouse input on the element an expression returns, at a part of it no balloon covers.
 async function mouse(expr, { button = 'left', clickCount = 1, label = expr } = {}) {
   await frame();
-  const box = await js(`(() => { const n = ${expr}; if (!n) return null; n.scrollIntoView?.({ block: 'nearest' }); const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  const box = await js(visiblePoint(expr));
   if (!box) throw new Error(`no element for ${label}`);
   await frame();
   await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });

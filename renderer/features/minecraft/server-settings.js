@@ -93,6 +93,7 @@
       ['rate-limit', tr('Packet limit'), tr('Players who send more packets a second than this are kicked. 0 for no limit.')],
       ['$jvm', tr('JVM options'), ''],
     ] },
+    { id: 'health', title: tr('Crashes and Lag'), rows: [['$health', tr('When something goes wrong'), tr('These apply at once, without Save.')]] },
     { id: 'antixray', title: tr('Anti-Xray'), rows: [
       ['$antixray', tr('Protection level'), ''],
       ['$antixrayNew', tr('Apply to new servers too'), tr('Paper and Purpur servers made from now on start at this level. A new server has no settings file yet, so it goes in after its first start.')],
@@ -240,7 +241,7 @@
     v.sections = [];
     for (const s of SECTIONS()) {
       if (s.mods && !srv.mods) continue;
-      const rows = s.rows.filter(([key]) => (base.proxy ? key === '$memory' || key === '$jvm' : key === '$other' || key.startsWith('$') || v.schema.has(key))
+      const rows = s.rows.filter(([key]) => (base.proxy ? key === '$memory' || key === '$jvm' || key === '$health' :key === '$other' || key.startsWith('$') || v.schema.has(key))
         && (!XRAY_READY_ROWS.has(key) || base.antiXray.state === 'ready'));
       if (!rows.length) continue;
       const sec = el('section', 'mcset-section');
@@ -312,6 +313,7 @@
     if (key === '$antixray') return xrayControl(v);
     if (key === '$antixrayNew') return xrayNewControl(v);
     if (key === '$antixrayOthers') return xrayOthersControl(v);
+    if (key === '$health') return mc.health?.settingsControl(v.srv) || el('div');
     if (key === 'motd') return motdControl(v);
     const p = v.schema.get(key);
     const value = v.draft.props[key];
@@ -759,6 +761,8 @@
       v.status.classList.add('mcset-error');
       return;
     }
+    // A new world name, or account checks turned on or off (whose player data is whose), is backed up first (backups.js).
+    if ((c.props['level-name'] !== undefined || c.props['online-mode'] !== undefined) && mc.backups && !(await mc.backups.before(v.srv, 'settings'))) return;
     const payload = {};
     if (Object.keys(c.props).length) payload.props = c.props;
     if (c.memory) payload.memory = v.draft.memory;
@@ -809,5 +813,6 @@
     }
   }
 
-  mc.settings = { open, tabId, paintStates };
+  // reload(dir): the tabs of that server read its files again, unsaved changes dropped (a restore replaced the files).
+  mc.settings = { open, tabId, paintStates, reload: (dir) => { for (const v of views) if (v.srv.dir.toLowerCase() === dir.toLowerCase()) load(v); } };
 })();
