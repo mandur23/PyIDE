@@ -1076,5 +1076,7 @@
   "{name} stopped unexpectedly": "{name} 서버가 예상치 않게 꺼졌어요",
   "{name} ended while Nano Studio was not running": "Nano Studio가 꺼져 있는 동안 {name} 서버가 끝났어요",
   "Ended while Nano Studio was not running": "Nano Studio가 꺼져 있는 동안 끝났어요",
-  "Put back a copy of the world folder if you have one.": "월드 폴더의 사본이 있으면 되돌려 놓으세요."
+  "Put back a copy of the world folder if you have one.": "월드 폴더의 사본이 있으면 되돌려 놓으세요.",
+  "Memory the game may use, from the next launch": "게임이 쓸 수 있는 메모리 (다음 실행부터 적용)",
+  "The memory of {name} was not changed": "{name}의 메모리를 바꾸지 못했어요"
 }

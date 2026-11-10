@@ -9,7 +9,7 @@
   const { el } = ide.util;
   const mc = ide.minecraft;
   const LOADERS = [['vanilla', 'Vanilla'], ['fabric', 'Fabric'], ['quilt', 'Quilt'], ['forge', 'Forge'], ['neoforge', 'NeoForge']];
-  const MEMORY = ['2G', '3G', '4G', '6G', '8G', '12G'];
+  const MEMORY = ['2G', '3G', '4G', '6G', '8G', '12G', '16G'];
   const loaderTitle = (k) => LOADERS.find(([id]) => id === k)?.[1] || k;
   // {play, join, joinBanner, joinList, joinGo}: the page containers, and the parts of Servers to Join that change.
   let view = null;
@@ -758,8 +758,23 @@
     body.append(name, meta, facts);
     const actions = el('div', 'mcc-actions');
     const working = busy.has(inst.name);
+    // The memory the game may use, from the next launch on. A value set by hand in instance.json stays in the list.
+    const mem = select(`mccMem-${inst.name}`, [...new Set([...MEMORY, inst.memory || '4G'])].map((m) => [m, m]), inst.memory || '4G');
+    mem.classList.add('mcc-memory');
+    mem.title = tr('Memory the game may use, from the next launch');
+    mem.setAttribute('aria-label', tr('Memory:'));
+    mem.addEventListener('change', async () => {
+      try {
+        await ide.api.invoke('launcher:setMemory', ide.root, inst.name, mem.value);
+        inst.memory = mem.value;
+      } catch (err) {
+        mem.value = inst.memory || '4G';
+        ide.notifications?.notify({ title: tr('The memory of {name} was not changed', { name: inst.title || inst.name }), text: errorText(err), group: 'Minecraft', kind: 'error', raw: true });
+      }
+    });
     const playBtn = button(working ? tr('Getting Ready…') : tr('Launch'), 'primary mcc-play', () => play(inst.name), 'runRun');
     playBtn.disabled = working;
+    meta.append(mem);
     actions.append(playBtn,
       button(tr('Mods'), 'secondary mcc-mods-btn', () => modsDialog(inst)),
       iconButton('web', tr('Korean Translation…'), 'mcc-korean-btn', () => koreanDialog(inst)),

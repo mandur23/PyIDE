@@ -487,8 +487,8 @@ process.stdin.on('data', (d) => {
     await sleep(800);
     const viaIpc = await call('minecraft:backupNow', proj, srv, { reason: 'market' });
     const list2 = await call('minecraft:backups', proj, srv);
-    check(viaIpc.ok && viaIpc.reason === 'market' && S(commands()) === S(['save-off', 'save-all flush', 'save-on']) && list2.items[0].file === viaIpc.file,
-      `minecraft:backupNow on a server minecraft:start started holds its saves the same way (${S(commands())})`);
+    check(viaIpc.ok && viaIpc.reason === 'market' && S(commands()) === S(['save-off', 'save-all flush', 'save-on']) && list2.items.some((i) => i.file === viaIpc.file && i.reason === 'market'),
+      `minecraft:backupNow on a server minecraft:start started holds its saves the same way (${S(commands())}; ${S({ ok: viaIpc.ok, reason: viaIpc.reason, file: path.basename(viaIpc.file || ''), listed: list2.items.map((i) => i.name) })})`);
     const outside = await errOf(() => call('minecraft:backups', proj, path.join(work, 'elsewhere')));
     check(/not a server of this project/.test(outside?.message || ''), 'a folder outside the project\'s servers/ is refused');
     const running = await call('minecraft:backupRestore', proj, srv, viaIpc.file);

@@ -784,6 +784,14 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     return m.toUpperCase();
   };
 
+  // The memory the game may use (-Xmx), from the next Play on: the profile is written again at each Play.
+  function setMemory(root, name, memory) {
+    const inst = readInstance(root, name);
+    if (memory == null || memory === '') throw fail('Memory is a number of M or G, such as 4G');
+    writeInstance(root, { ...inst, memory: memoryOf(memory) });
+    return describe(root, readInstance(root, name));
+  }
+
   async function create(root, { name, mc, loader = 'vanilla', loaderVersion, memory } = {}, log) {
     if (!LOADERS[loader]) throw fail(`Unknown mod loader ${loader}`);
     if (!VERSION(mc)) throw fail('Choose a Minecraft version');
@@ -1208,7 +1216,7 @@ function createLauncher({ fetchFile, ensureJava, javaFor, run, retried, keyring 
     return { ...code, private: !!key };
   };
 
-  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, koreanStatus, translateKorean, joinCode, parseJoinCode: readCode, ping: pingServer, stopJoins: joins.stopAll };
+  return { status, instances, versions: mcVersions, loaderVersions, create, fromPack, remove, servers, saveServers, join, play, mods, setMod, setMemory, koreanStatus, translateKorean, joinCode, parseJoinCode: readCode, ping: pingServer, stopJoins: joins.stopAll };
 }
 
 module.exports = { createLauncher, findLauncher, findStore, launchMethod, launcherOpen, closeLauncher, gameRunningIn, enablePack, parseJoinCode, joinCode, parseAddress, serverArgs, headlessClient, readProfiles, KOREAN_PACK };

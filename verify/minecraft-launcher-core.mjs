@@ -77,6 +77,14 @@ try {
   const pf = readJson(profilesFile);
   check(played.launched && pf.profiles.abc123?.name === 'Mine' && pf.profiles['nano-bom'] && pf.settings.locale === 'ko-kr' && broken(launcherDir).length === 0,
     `launcher_profiles.json with a UTF-8 BOM is read: the user's profile and settings stay, nothing is set aside as broken (${S(Object.keys(pf.profiles))})`);
+  // Memory, changed after the instance was made: the next Play writes it into the profile.
+  const mem = craft.setMemory(root, 'bom', '6g');
+  await craft.play(root, 'bom', { server: 'play.example.test:25570' }, log);
+  const badMem = await errOf(() => craft.setMemory(root, 'bom', 'lots'));
+  const noInst = await errOf(() => craft.setMemory(root, 'nobody', '4G'));
+  check(pf.profiles['nano-bom'].javaArgs === '-Xmx4G' && mem.memory === '6G' && readJson(profilesFile).profiles['nano-bom'].javaArgs === '-Xmx6G' && /number of M or G/.test(badMem?.message || '')
+    && noInst?.code === 'noInstance' && readJson(path.join(root, 'instances', 'bom', 'nano-instance.json')).memory === '6G',
+    `setMemory changes an instance's memory for the next Play and refuses what is not a size (${readJson(profilesFile).profiles['nano-bom'].javaArgs}; ${badMem?.message})`);
   const v = readJson(path.join(launcherDir, 'versions', 'nano-bom', 'nano-bom.json'));
   check(S(v.arguments) === S({ game: ['--quickPlayMultiplayer', 'play.example.test:25570'] }), `a 1.20.1 instance still joins with Quick Play (${S(v.arguments)})`);
   const playLog = logs.join('');

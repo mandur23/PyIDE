@@ -912,6 +912,7 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow
   ipcMain.handle('launcher:play', (_e, root, name, opts, job) => { guard(root); return cancellable(job, (log) => craft.play(root, name, opts, log)); });
   ipcMain.handle('launcher:ping', (_e, address) => craft.ping(address));
   ipcMain.handle('launcher:mods', (_e, root, name) => craft.mods(root, name));
+  ipcMain.handle('launcher:setMemory', (_e, root, name, memory) => { guard(root); return craft.setMemory(root, name, memory); });
   ipcMain.handle('launcher:setMod', (_e, root, name, file, enabled) => { guard(root); return craft.setMod(root, name, file, enabled); });
   // An instance's mods into Korean, as minecraft:langStatus and minecraft:translateMods do a server's.
   ipcMain.handle('launcher:langStatus', (_e, root, name) => { guard(root); return craft.koreanStatus(root, name); });

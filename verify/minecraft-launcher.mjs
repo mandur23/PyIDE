@@ -581,8 +581,14 @@ async function craftUi(first) {
     const cardText = await js(`document.querySelector('.mcs-play .mcc-card').textContent`);
     check(made.title === '테스트 월드' && made.loader === 'fabric' && made.loaderVersion === '0.15.11' && /Minecraft 1\.20\.1/.test(cardText) && /Fabric 0\.15\.11/.test(cardText) && /모드 0개/.test(cardText) && /아직 플레이 안 함/.test(cardText),
       `New Instance (the recommended loader version chosen) makes the instance in the craft workspace and shows its card (${S(made)}; ${cardText})`);
+    // The card's memory: chosen there, kept in the instance and given to the launcher at Play.
+    const memSel = `document.querySelector('.mcc-card[data-name="instance"] .mcc-memory')`;
+    const memWas = await js(`${memSel}.value`);
+    await js(`(() => { const s = ${memSel}; s.value = '6G'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    for (let i = 0; i < 50 && readJson(path.join(homeInst('instance'), 'nano-instance.json')).memory !== '6G'; i++) await new Promise((r) => setTimeout(r, 100));
     await js(`(document.querySelector('.mcc-card[data-name="instance"] .mcc-play').click(), true)`);
     const s1 = await uiStartsReach(1);
+    check(memWas === '4G' && readJson(`${uiLog}.1.json`).profiles['nano-instance']?.javaArgs === '-Xmx6G', `the card's memory list changes what the game may use at the next Play (${memWas} -> ${readJson(`${uiLog}.1.json`).profiles['nano-instance']?.javaArgs})`);
     const at = s1[0]?.args.indexOf('--workDir');
     check(s1.length === 1 && path.resolve(s1[0].args[at + 1]) === path.join(home, '.launcher') && path.resolve(readJson(`${uiLog}.1.json`).profiles['nano-instance']?.gameDir || '') === homeInst('instance'),
       `Play starts the stand-in launcher with --workDir <workspace>\\.launcher and the instance's profile (${S(s1[0]?.args)})`);
