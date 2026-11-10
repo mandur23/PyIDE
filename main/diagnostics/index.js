@@ -184,7 +184,8 @@ function markRead() { for (const e of errors) e.read = true; broadcast(); }
 // ---------- sidecar processes ----------
 // Logs a helper process's stderr and reports it as an internal error when it exits unexpectedly: not killed by the
 // IDE, not while quitting, and with a non-zero exit code. The owning plugin comes from `stack`, by default the caller's.
-function watchProcess(proc, { name, plugin, stack = new Error().stack } = {}) {
+// ended(): the owner ended it another way than proc.kill() (taskkill of its tree, which leaves proc.killed false).
+function watchProcess(proc, { name, plugin, stack = new Error().stack, ended } = {}) {
   const owner = plugin || ownerOfStack(stack);
   const label = name || path.basename(proc.spawnfile || 'process');
   const log = logger(`#sidecar.${label}`);
@@ -207,7 +208,7 @@ function watchProcess(proc, { name, plugin, stack = new Error().stack } = {}) {
   proc.on('exit', (code, signal) => {
     watched.delete(item);
     if (partial.trim()) { tail.push(partial); log.info(partial); }
-    if (code === 0 || proc.killed || quitting) { log.info(`exited with code ${code ?? signal}`); return; }
+    if (code === 0 || proc.killed || quitting || ended?.()) { log.info(`exited with code ${code ?? signal}`); return; }
     report({ source: 'sidecar', kind: 'crash', title: label,
       message: `${label} exited unexpectedly (exit code ${code ?? signal})`,
       stack: tail.length ? tail.join('\n') : `${label} exited unexpectedly (exit code ${code ?? signal})`,
@@ -300,9 +301,12 @@ function install() {
 
 // The plugin manager is created after install(); errors reported before then are attributed when listed.
 function setPluginResolver(fn) { resolveOwner = fn; }
+// Cancel in a window's close question calls the quit off, and later crashes are reported again (main.js, from the
+// window manager, which is created after install()).
+function quitCancelled() { quitting = false; }
 
 const api = {
-  install, setPluginResolver, configure, logger, report, listErrors, clearErrors, markRead, watchProcess, isEnvironmentError, markExpected, loadFailure,
+  install, setPluginResolver, quitCancelled, configure, logger, report, listErrors, clearErrors, markRead, watchProcess, isEnvironmentError, markExpected, loadFailure,
   logFile: () => logFile, logDir: () => logDir,
 };
 module.exports = api;

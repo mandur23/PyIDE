@@ -5,7 +5,7 @@
 // package manager is missing cannot be installed); opening a .c file offers clangd and installs nothing until asked;
 // installing it starts the client: completion, hover, Go to Declaration, errors in the editor, Reformat Code through
 // the server and then through clang-format with the editor's indentation; rust-analyzer and gopls (installed with
-// the pinned `go install` arguments); Safe Mode in an untrusted project; the Korean strings. Ports 9880, 9882-9883.
+// the pinned `go install` arguments); a server that ignores exit is ended with the programs it started; Safe Mode in an untrusted project; the Korean strings. Ports 9880, 9882-9883.
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import http from 'http';
@@ -59,7 +59,8 @@ writeFileSync(feedFile, J({
   tools: { go: path.join(TOOLS, 'fake-go.cjs'), gem: path.join(work, 'no-ruby.cjs'), dotnet: path.join(work, 'no-dotnet.cjs'), npm: path.join(TOOLS, 'fake-go.cjs') },
 }));
 const env = { PYIDE_INSTALL_ROOT: root, PYIDE_TOOLCHAINS: feedFile, PYIDE_LSP_STANDIN: path.join(TOOLS, 'standin-lsp.cjs'),
-  PYIDE_CLANG_FORMAT_STANDIN: path.join(TOOLS, 'fake-clang-format.cjs') };
+  PYIDE_CLANG_FORMAT_STANDIN: path.join(TOOLS, 'fake-clang-format.cjs'), PYIDE_LSP_STUBBORN: `rust:${path.join(work, 'rust-helper.pid')}` };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 const t = await launch({ fixture: 'language-servers/project', name: 'language-servers', port: 9880, env });
 const { js, until, press, type, check, sleep } = t;
@@ -135,6 +136,12 @@ try {
   await until(`document.getElementById('lsp-rust-status')?.textContent === 'Rust: ready'`, 'rust-analyzer ready', 30000);
   labels = await completions('\nrus');
   check(labels.includes('rust_item'), `Rust completion comes from rust-analyzer (${J(labels)})`);
+  // The rust stand-in started a program of its own and ignores exit, as a JVM under Kotlin's cmd.exe launcher can.
+  const helper = Number(readFileSync(path.join(work, 'rust-helper.pid'), 'utf8'));
+  await js(`ide.api.invoke('lsp-rust:stop').then(() => true)`);
+  for (let i = 0; i < 80 && alive(helper); i++) await sleep(100);
+  check(alive(helper) === false, `a server that does not exit when stopped is ended with the programs it started (pid ${helper})`);
+  if (alive(helper)) process.kill(helper);
 
   // ---------- Go through `go install` ----------
   await openFile(t, 'main.go');

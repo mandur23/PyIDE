@@ -116,5 +116,7 @@
   "Colab runtime for this notebook": "이 노트북의 Colab 런타임",
   "Colab is assigning a runtime ({spec})…": "Colab이 런타임을 배정하는 중… ({spec})",
   "high RAM": "고용량 RAM",
-  "Colab free": "Colab 무료"
+  "Colab free": "Colab 무료",
+  "Images over plain http are not loaded": "암호화하지 않은 http 이미지는 불러오지 않습니다",
+  "Remote images are not loaded: this folder is not trusted": "신뢰하지 않은 폴더라서 원격 이미지를 불러오지 않습니다"
 }

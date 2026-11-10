@@ -713,9 +713,41 @@
   }
 
   // ---------- save ----------
+  // Account checks decide what a player's UUID is (their Mojang account's, or one made from their name), and the
+  // whitelist, the operators and each player's data in the world go by it: turned on or off, nobody on the lists
+  // matches any more unless the lists follow. -> false when the Save does not go on.
+  async function followAccounts(v, running) {
+    const online = realAccounts(v);
+    const wasOnline = v.base.props['online-mode'] !== 'false' || !!v.base.behindProxy;
+    const count = v.draft.whitelist.length + v.draft.ops.length;
+    if (online === wasOnline || !count) return true;
+    const fail = (text) => { v.status.textContent = text; v.status.classList.add('mcset-error'); return false; };
+    if (running) return fail(tr('Stop {name} to turn account checks on or off: the whitelist and operators change with them, and a running server keeps its own lists.', { name: v.srv.name }));
+    const text = online
+      ? tr('With account checks on, players are known by their Minecraft account instead of an ID made from their name. The {count} players on the whitelist and operators are looked up and saved with their account IDs; a name with no account is taken off. Their inventories and places in the world stay under the old IDs, so they start over.', { count })
+      : tr('With account checks off, players are known by an ID made from their name instead of their Minecraft account. The {count} players on the whitelist and operators are saved with those IDs. Their inventories and places in the world stay under the old IDs, so they start over.', { count });
+    if (!(await ide.ui.confirm(text, { title: tr('Account Checks'), ok: tr('Update and Save') }))) return false;
+    const dropped = [];
+    try {
+      for (const which of ['whitelist', 'ops']) {
+        const next = [];
+        for (const p of v.draft[which]) {
+          try { next.push({ ...p, uuid: (await ide.api.invoke('minecraft:player', p.name, online)).uuid }); } catch (err) {
+            if (!/noAccount|No Minecraft account/.test(mc.errorText(err))) throw err;
+            dropped.push(p.name);
+          }
+        }
+        v.draft[which] = next;
+      }
+    } catch (err) { return fail(mc.errorText(err)); }
+    if (dropped.length) ide.notifications?.notify({ title: tr('Taken off the lists of {name}', { name: v.srv.name }), text: tr('No Minecraft account has these names: {names}', { names: [...new Set(dropped)].join(', ') }), group: 'Minecraft', raw: true });
+    return true;
+  }
+
   async function commit(v) {
-    const c = changes(v);
     const running = mc.runningAt(v.srv.dir);
+    if (!(await followAccounts(v, running))) return;
+    const c = changes(v);
     // A server saving after Stop runs no more commands, and writes its lists as it holds them.
     if ((c.whitelist || c.ops) && mc.stoppingAt(v.srv.dir)) {
       v.status.textContent = tr('{name} is stopping. Save the player lists once it has stopped.', { name: v.srv.name });

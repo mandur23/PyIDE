@@ -203,6 +203,21 @@ try {
 
   check(t.consoleErrors.length === 0, 'no renderer exceptions');
 
+  // ---------- Restart IDE, then Cancel in the unsaved-files question ----------
+  const shell = await js(`ide.api.invoke('pty:create', { shell: 'cmd' })`);
+  await js(`(async () => { const p = ide.util.joinPath(ide.root, 'restart-cancel.txt'); await ide.api.write(p, 'a\\n'); await ide.openFile(p); ide.editor.getModel().setValue('b\\n'); return true; })()`);
+  await until(`ide.isDirty(ide.activeTab())`, 'a modified file');
+  await sleep(500); // the window's dirty list reaches main
+  js('(ide.restart(), true)').catch(() => {});
+  await until(`!!document.querySelector('#closeConfirmDialog')`, 'the unsaved-files question', 10000);
+  await t.click(`#closeConfirmDialog .dialog-buttons button:last-child`);
+  await until(`!document.querySelector('#closeConfirmDialog')`, 'the question answered');
+  await sleep(1500);
+  const shellAlive = (() => { try { process.kill(shell.pid, 0); return true; } catch { return false; } })();
+  check(shellAlive && !markTime('will-quit') && (readMarks().match(/^before-quit /gm) || []).length === 1,
+    `after Restart IDE and Cancel, the terminal still runs and no quit handler tore anything down (${q({ shellAlive, marks: readMarks() })})`);
+  await js(`ide.api.invoke('pty:kill', ${shell.id})`);
+
   // ---------- the quit gate (last: the app quits) ----------
   await js(`ide.api.invoke('quitDemo:start')`);
   for (let i = 0; i < 100 && !(markTime('started') && /^stubborn \d+$/m.test(readMarks())); i++) await sleep(100);
@@ -219,8 +234,21 @@ try {
   check(!isAlive(t.pid) && took < 30000, `closing the window quits the app after the work it waits for (${took} ms)`);
   check(markTime('saved') > markTime('started'), `a program started with quitInput gets it at quit and the time to finish saving (${q(m)})`);
   check(!!markTime('held'), 'a holdQuit job is waited for');
-  check((m.match(/^before-quit /gm) || []).length === 1 && (m.match(/^will-quit /gm) || []).length === 1,
-    'the quit handlers of the features run once each, though the quit was held and taken up again');
+  check((m.match(/^before-quit /gm) || []).length === 2 && (m.match(/^will-quit /gm) || []).length === 1,
+    'the quit handlers of the features run once each, though the quit was held and taken up again (before-quit twice: the cancelled restart)');
+  // A restart that was cancelled must not come back with this quit as a new instance (same CDP port).
+  let relaunched = null;
+  for (let i = 0; i < 80 && !relaunched; i++) {
+    relaunched = await fetch('http://127.0.0.1:9276/json/version').then((r) => r.json(), () => null);
+    if (!relaunched) await sleep(100);
+  }
+  if (relaunched) {
+    const ws = new WebSocket(relaunched.webSocketDebuggerUrl);
+    await new Promise((r) => ws.addEventListener('open', r));
+    ws.send(q({ id: 1, method: 'Browser.close' }));
+    await sleep(2000);
+  }
+  check(!relaunched, 'the quit after a cancelled Restart IDE does not start the IDE again');
   check(markTime('will-quit') >= markTime('saved') && markTime('will-quit') >= markTime('held'), 'the will-quit handlers run after the wait, not before it');
   check(stubbornPid > 0 && !isAlive(stubbornPid), 'a program that does not stop within its quitWaitMs is killed');
 } catch (err) {

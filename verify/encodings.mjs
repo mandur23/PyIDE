@@ -173,6 +173,10 @@ const unit = (ok, label) => { results.push(!!ok); console.log(`${ok ? 'PASS' : '
 }
 
 // ---------- in the IDE ----------
+// The Git rollback below runs without the user's git settings (core.autocrlf would rewrite the file's line breaks).
+const gitConfig = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-encodings-git-')), 'gitconfig');
+writeFileSync(gitConfig, '[user]\n\tname = t\n\temail = t@t\n[core]\n\tautocrlf = false\n');
+Object.assign(process.env, { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: '1' });
 const t = await launch({ fixture: 'core', port: 9270, name: 'encodings', args: ['--inspect=9272'] });
 const { js, until, press, type, check, sleep } = t;
 // The main process's Node inspector, to make one file's disk slow. Closed before the window: a session that has
@@ -365,6 +369,57 @@ try {
   check(/UTF-16 LE \(no BOM\)/.test(refusal) && readFileSync(p('koonly.txt'), 'utf8') === koonly && (await status()) === 'UTF-8',
     `Convert to UTF-16 LE (no BOM) on Korean-only text is refused and the file is unchanged (${JSON.stringify(refusal)})`);
   if (await js(`!!document.querySelector('.dialog')`)) await closeDialog();
+
+  // requirements-sync, packages, exe-builder and http-client read a file with ide.api.read, add a line and write it
+  // back with ide.api.write: a UTF-16 requirements.txt (PowerShell 5) and a CP949 file keep their encoding.
+  writeFileSync(p('requirements.txt'), Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode('numpy\r\n', 'utf-16le')]));
+  writeFileSync(p('ignore949.txt'), iconv.encode('# 빌드 결과\nbuild/\n', 'cp949'));
+  const plugin = await js(`(async () => {
+    const out = {};
+    for (const name of ['requirements.txt', 'ignore949.txt']) {
+      const f = ide.util.joinPath(ide.root, name);
+      out[name] = await ide.api.read(f);
+      await ide.api.write(f, out[name] + 'requests\\n');
+    }
+    out.missing = await ide.api.read(ide.util.joinPath(ide.root, 'nope.txt')).then(() => 'read', (e) => (/ENOENT/.test(e.message) ? 'rejected' : e.message));
+    await ide.api.write(ide.util.joinPath(ide.root, 'fresh.txt'), '새 파일\\n');
+    return out;
+  })()`);
+  const req = readFileSync(p('requirements.txt'));
+  check(plugin['requirements.txt'] === 'numpy\r\n' && req[0] === 0xff && req[1] === 0xfe && iconv.decode(req.subarray(2), 'utf-16le') === 'numpy\r\nrequests\n',
+    `a plugin's read and write of a UTF-16 LE requirements.txt keeps UTF-16 LE (${JSON.stringify(plugin['requirements.txt'])}, ${req.subarray(0, 4).toString('hex')})`);
+  check(plugin['ignore949.txt'] === '# 빌드 결과\nbuild/\n' && iconv.decode(readFileSync(p('ignore949.txt')), 'cp949') === '# 빌드 결과\nbuild/\nrequests\n',
+    `a plugin's read and write of a CP949 file keeps CP949 (${JSON.stringify(plugin['ignore949.txt'])})`);
+  check(plugin.missing === 'rejected' && readFileSync(p('fresh.txt'), 'utf8') === '새 파일\n', `a missing file still rejects, and a new file is UTF-8 (${plugin.missing})`);
+
+  // A Git rollback reloads the file in the encoding the user picked for it (Reload in), not one detected again, and
+  // replaces unsaved edits. C7 A1 C7 A2 is valid UTF-8 ("ǡǢ") and CP949 Hangul ("퐈퐝"): detection reads UTF-8.
+  const git = (...a) => execFileSync('git', a, { cwd: t.project, stdio: 'ignore' });
+  writeFileSync(p('pinned.py'), Buffer.concat([Buffer.from('# '), Buffer.from([0xc7, 0xa1, 0xc7, 0xa2]), Buffer.from('\nx = 1\n')]));
+  git('init', '-q');
+  git('add', 'pinned.py');
+  git('commit', '-qm', 'pinned');
+  await openFile(t, 'pinned.py');
+  await pick('Reload in CP949 (EUC-KR)');
+  await until(`ide.editor.getModel().getValue() === '# 퐈퐝\\nx = 1\\n'`, 'pinned.py read as CP949');
+  writeFileSync(p('pinned.py'), iconv.encode('# 퐈퐝\ny = 2\n', 'cp949'));
+  await js(`(window.dispatchEvent(new Event('focus')), true)`);
+  await until(`ide.editor.getModel().getValue() === '# 퐈퐝\\ny = 2\\n'`, 'pinned.py changed on disk');
+  await js(`(ide.editor.executeEdits('t', [{ range: new ide.monaco.Range(1, 1, 1, 1), text: 'unsaved = 1\\n' }]), true)`);
+  const row = '.vcs-changes .vcs-file[data-path$="pinned.py"]';
+  if (!(await js(`ide.toolWindows.get('Commit').isVisible()`))) await press('Alt+0');
+  await until(`!!document.querySelector('${row}')`, 'pinned.py listed as changed', 15000);
+  await t.click(row);
+  await press('Ctrl+Alt+Z');
+  await until(`!!document.querySelector('.dialog')?.textContent.includes('pinned.py')`, 'rollback asked');
+  // Every text the editor shows on the way: a reload detected as UTF-8 is set right again by the next disk check.
+  await js(`(() => { const m = ide.getDocument(ide.util.joinPath(ide.root, 'pinned.py')).model; window.pinnedTexts = []; m.onDidChangeContent(() => window.pinnedTexts.push(m.getValue())); return true; })()`);
+  await t.click('.dialog .primary');
+  await until(`!document.querySelector('${row}')`, 'pinned.py rolled back', 15000);
+  await sleep(300);
+  const rolled = await js(`(() => { const t = ide.findTab(ide.util.joinPath(ide.root, 'pinned.py')); return { text: t.model.getValue(), dirty: ide.isDirty(t), status: document.querySelector('#statusEncoding').textContent, shown: window.pinnedTexts }; })()`);
+  check(rolled.text === '# 퐈퐝\nx = 1\n' && !rolled.dirty && rolled.status.startsWith('CP949') && !rolled.shown.some((s) => s.includes('ǡ')),
+    `a Git rollback replaces unsaved edits with the file read in the encoding picked for it (${JSON.stringify(rolled)})`);
 
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${JSON.stringify(t.consoleErrors)}` : ''}`);
 } catch (err) {

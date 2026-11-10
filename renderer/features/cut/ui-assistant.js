@@ -91,6 +91,7 @@
     let r;
     if (!app?.history) r = { ok: false, error: 'The editor is not ready.' };
     else if (client?.kind === 'chat' && (!turn || turn.id !== client.turn || turn.stopped)) r = { ok: false, error: 'This request has ended; nothing more can be changed in it.' };
+    else if (client?.kind === 'chat' && turn.history !== app.history) r = { ok: false, error: 'The user opened another project; this request has ended.' };
     else if (client?.kind === 'external' && setting('cut.control.external') !== true) r = { ok: false, error: 'External AIs are not allowed in Nano Studio Cut\'s settings.' };
     else {
       const ctl = new AbortController();
@@ -106,7 +107,7 @@
       };
       const env = { app, services, undoFloor: client?.kind === 'chat' ? turn.floor : null, signal: ctl.signal, progress };
       try { r = await K.call(name, args, env); } finally { calling = null; }
-      if (r.ok && r.edit && !(client?.kind === 'chat' && (turn?.id !== client.turn || turn?.stopped))) land(r.edit);
+      if (r.ok && r.edit && !(client?.kind === 'chat' && (turn?.id !== client.turn || turn?.stopped || turn.history !== app.history))) land(r.edit);
     }
     if (client?.kind === 'external') tell({ type: 'external', name, args, ok: r.ok, error: r.ok ? '' : r.error });
     return content(r);
@@ -220,6 +221,7 @@
     const st = await invoke('cut:aiStatus').catch(() => null);
     if (!st?.installed) { ui.ai?.explain?.('not-installed'); tell({ type: 'missing' }); return null; }
     if (conversationOf !== app.history) { conversation.length = 0; conversationOf = app.history; }
+    watchProject(app);
     turn = { id: `turn${++turnSeq}`, request, floor: app.history.position, history: app.history, answer: '' };
     const my = turn;
     const model = ui.ai?.model?.() || 'sonnet';
@@ -237,7 +239,8 @@
     if (steps > 0) app.history.squash(my.floor, labelOf(request));
     const usage = r?.usage || null;
     conversation.push({ request, answer: r?.ok ? r.text : '', usage });
-    tell({ type: 'end', turn: my.id, ok: !!r?.ok, code: r?.code || null, error: r?.error || '', text: r?.text || my.answer, steps, usage, total: total() });
+    const code = my.closed ? 'closed' : r?.code || null;
+    tell({ type: 'end', turn: my.id, ok: !!r?.ok && !my.closed, code, error: r?.error || '', text: r?.text || my.answer, steps, usage, total: total() });
     if (!r?.ok && (r?.code === 'not-installed' || r?.code === 'auth' || r?.code === 'quota')) ui.ai?.explain?.(r.code, r.code === 'quota' ? r.error : '');
     return r;
   }
@@ -250,6 +253,17 @@
     invoke('cut:agentStop', id).catch(() => {});
     tell({ type: 'stopping', turn: id });
     return true;
+  }
+  // A new, opened or recovered project ends the turn: its edits were for the project it started on.
+  let watched = null;
+  function watchProject(app) {
+    if (watched === app) return;
+    watched = app;
+    app.on('lifecycle', () => {
+      if (!turn || turn.history === app.history) return;
+      turn.closed = true;
+      stop();
+    });
   }
   ide.api.on('cut:agentEvent', (e) => {
     if (!e?.turn) return;
@@ -435,6 +449,7 @@
           current.text.classList.remove('cut-as-thinking');
           if (e.ok) current.text.textContent = finalText || tr('Done.');
           else if (e.code === 'cancelled') current.text.textContent = tr('Stopped. What was done so far is kept as one undo step.');
+          else if (e.code === 'closed') current.text.textContent = tr('Stopped because another project was opened; the request changes nothing in it.');
           else current.text.textContent = e.code === 'not-installed' ? tr('Claude Code is not installed on this PC.') : e.code === 'auth' ? tr('Claude Code is not signed in, or its sign-in has expired.')
             : e.code === 'quota' ? tr('Your Claude account has reached its usage limit for now.') : e.code === 'timeout' ? tr('Claude did not finish in time.') : tr('Claude Code failed: {error}', { error: e.error });
           current.box.dataset.result = e.ok ? 'ok' : e.code || 'error';

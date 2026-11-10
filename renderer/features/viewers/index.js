@@ -2,7 +2,7 @@
 // embedded editor. Each viewer is a custom tab mounted through ide.registerFileViewer (see FEATURES.md); it keeps
 // all of its state in its own host element, so several can be open at once, in split panes and in detached windows.
 (() => {
-  const { el, basename, dirname } = ide.util;
+  const { el, basename, dirname, fileUrl, resolveRel } = ide.util;
   const monaco = ide.monaco;
 
   // ---------- helpers ----------
@@ -12,26 +12,6 @@
   const userEl = (tag, cls, text) => user(el(tag, cls, text));
   const invoke = (ch, ...args) => ide.api.invoke(ch, ...args);
   const cleanError = (e) => ide.util.errorText(e);
-
-  // file:// URL for a Windows path, each segment encoded (#, %, spaces and Korean names all survive).
-  function fileUrl(p) {
-    const parts = p.replace(/\\/g, '/').split('/');
-    if (p.startsWith('\\\\')) return `file://${parts.slice(2).map(encodeURIComponent).join('/')}`;
-    return `file:///${parts.map((s, i) => (i === 0 && /^[a-zA-Z]:$/.test(s) ? s : encodeURIComponent(s))).join('/')}`;
-  }
-
-  // Resolves a relative (URL-style) reference against a folder; null when it climbs above the drive.
-  function resolveRel(dir, ref) {
-    let rel = ref.split(/[?#]/)[0];
-    try { rel = decodeURIComponent(rel); } catch {}
-    if (/^[a-zA-Z]:[\\/]/.test(rel)) return rel.replace(/\//g, '\\');
-    const out = dir.replace(/[\\/]+$/, '').split(/[\\/]/);
-    for (const seg of rel.split(/[\\/]/)) {
-      if (!seg || seg === '.') continue;
-      if (seg === '..') { if (out.length <= 1) return null; out.pop(); } else out.push(seg);
-    }
-    return out.join('\\');
-  }
 
   function fmtBytes(n) {
     if (n == null) return '';
@@ -1015,16 +995,8 @@
   const plainUrl = (u) => u.replace(/[\u0000- ]/g, '');
   const hasScheme = (u) => /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) && !/^[a-zA-Z]:[\\/]/.test(u);
   const safeHref = (u) => /^https?:\/\//i.test(u) || u.startsWith('#') || !hasScheme(u);
-  const safeSrc = (u, baseDir) => {
-    const plain = plainUrl(u);
-    if (/^https?:\/\//i.test(plain) || /^data:image\//i.test(plain)) return plain;
-    if (hasScheme(plain)) return null;
-    const p = resolveRel(baseDir, u.trim());
-    return p && fileUrl(p);
-  };
-
   // Links keep http(s), anchors and relative files; relative images resolve against the document's folder.
-  function sanitizeInto(html, baseDir) {
+  function sanitizeInto(html, baseDir, remote = false, blocked = []) {
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     const walk = (node) => {
@@ -1041,7 +1013,7 @@
         if (tag === 'input') { n.setAttribute('type', 'checkbox'); n.setAttribute('disabled', ''); }
         if (n.hasAttribute('href') && !safeHref(plainUrl(n.getAttribute('href')))) { n.removeAttribute('href'); n.classList.add('vw-md-dead-link'); }
         if (n.hasAttribute('src')) {
-          const src = ['img', 'video', 'audio', 'source'].includes(tag) ? safeSrc(n.getAttribute('src'), baseDir) : null;
+          const src = ['img', 'video', 'audio', 'source'].includes(tag) ? ide.util.mediaSrc(n.getAttribute('src'), baseDir, { remote, blocked }) : null;
           if (src) n.setAttribute('src', src); else n.removeAttribute('src');
         }
       }
@@ -1058,7 +1030,9 @@
   const MD_LIVE_LIMIT = 1000000; // characters
 
   // Renders Markdown into `target`; every top-level block carries data-line (0-based source line) for scroll sync.
-  function renderMarkdown(target, text, baseDir) {
+  // Returns the remote sources it left out (ide.util.mediaSrc).
+  function renderMarkdown(target, text, baseDir, remote) {
+    const blocked = [];
     const marked = window.marked;
     const tokens = marked.lexer(text, { gfm: true });
     const frag = document.createDocumentFragment();
@@ -1069,7 +1043,7 @@
       if (tok.type === 'space') continue;
       const sub = [tok];
       sub.links = tokens.links;
-      const nodes = sanitizeInto(marked.parser(sub, { gfm: true }), baseDir);
+      const nodes = sanitizeInto(marked.parser(sub, { gfm: true }), baseDir, remote, blocked);
       for (const n of nodes.children) n.dataset.line = String(start);
       frag.appendChild(nodes);
     }
@@ -1086,6 +1060,7 @@
       monaco.editor.colorize(code.textContent, lang, { tabSize: 4 }).then((html) => { if (code.isConnected) code.innerHTML = html; }).catch(() => {});
     }
     target.replaceChildren(frag);
+    return blocked;
   }
 
   function mountMarkdown(host, { path, doc }) {
@@ -1112,7 +1087,10 @@
     const refreshBtn = button('⟳', tr('Refresh Preview'), () => update(true), 'vw-btn vw-md-refresh');
     refreshBtn.classList.toggle('hidden', !large());
     const status = el('span', 'vw-status');
-    bar.append(seg.el, syncBtn, refreshBtn, status);
+    const blockedNote = el('span', 'vw-status vw-md-blocked');
+    bar.append(seg.el, syncBtn, refreshBtn, status, blockedNote);
+    // Decided once: Trust Project reloads the page.
+    const remote = invoke('trust:isTrusted', path).catch(() => false);
     const split = el('div', 'vw-md-split');
     const edHost = el('div', 'vw-md-editor');
     const divider = el('div', 'vw-md-divider');
@@ -1152,7 +1130,12 @@
       }
       status.textContent = '';
       const keep = preview.scrollTop;
-      renderMarkdown(preview, doc.model.getValue(), baseDir);
+      const trusted = await remote;
+      if (disposed) return;
+      const blocked = renderMarkdown(preview, doc.model.getValue(), baseDir, trusted);
+      blockedNote.textContent = !blocked.length ? '' : trusted ? tr('Images over plain http are not loaded')
+        : tr('Remote images are not loaded: this folder is not trusted');
+      blockedNote.title = blocked.slice(0, 10).join('\n');
       rendered = true;
       host.dataset.renders = String(Number(host.dataset.renders || 0) + 1);
       if (mode === 'split' && syncScroll) editorToPreview(); else preview.scrollTop = keep;

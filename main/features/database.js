@@ -387,7 +387,7 @@ function register({ ipcMain, app, send }) {
     return !!state;
   });
 
-  app.on('before-quit', () => { for (const id of [...conns.keys()]) disconnect(id); });
+  app.on('will-quit', () => { for (const id of [...conns.keys()]) disconnect(id); });
 }
 
 module.exports = { register };

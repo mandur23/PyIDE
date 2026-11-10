@@ -517,6 +517,17 @@ function chunkLayout(bytes, moov, src) {
   err = null;
   try { await w.finish(); } catch (e) { err = e; }
   check(err && /disk full/.test(err.message), 'a sink error rejects finish()');
+  // An export adds samples from the encoder's callback without awaiting them: onError tells it at the failed write.
+  let m = 0;
+  const heard = [];
+  const late = mp4write.create({ video: { codec: 'avc1.640028', width: 16, height: 16, description: avcC, frameRate: [30, 1] },
+    sink: { async write() { if (++m > 2) throw new Error('disk full'); } }, onError: (e) => heard.push(e.message) });
+  let added = 0;
+  for (let i = 0; i < 40 && !late.error; i++) {
+    try { late.addVideo({ data: fill(3 << 20, i), timestamp: i * time.frameTicks([30, 1]), duration: time.frameTicks([30, 1]), key: !i }); added++; } catch { break; }
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  check(JSON.stringify(heard) === JSON.stringify(["disk full"]) && late.error?.message === 'disk full' && added < 40, `onError hears the first refused write once, without awaiting the samples (${JSON.stringify(heard)}, ${added} added)`);
 }
 
 {

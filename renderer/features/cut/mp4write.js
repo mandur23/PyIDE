@@ -52,7 +52,9 @@
     w.bytes(body);
   }
 
-  function create({ video = null, audio = null, sink, timescale } = {}) {
+  // onError(err): the first write the sink refused, as it happens. The samples given after it are dropped and add()
+  // throws, but the caller learns of it without waiting for finish (a full disk at 20 % rendered on to 100 %).
+  function create({ video = null, audio = null, sink, timescale, onError } = {}) {
     if (!sink || typeof sink.write !== 'function') throw new TypeError('mp4write.create needs a sink with write(bytes, position)');
     if (!video && !audio) throw new TypeError('mp4write.create needs a video or an audio track');
     const tracks = [];
@@ -81,7 +83,11 @@
     let finished = false;
 
     const queue = (bytes, position) => {
-      chain = chain.then(() => (error ? null : sink.write(bytes, position))).catch((err) => { error = error || err; });
+      chain = chain.then(() => (error ? null : sink.write(bytes, position))).catch((err) => {
+        if (error) return;
+        error = err;
+        try { onError?.(err); } catch {}
+      });
     };
     const flushOut = () => {
       if (!out.length) return;
@@ -204,6 +210,7 @@
       },
       finish,
       get position() { return pos; },
+      get error() { return error; },
     };
   }
 

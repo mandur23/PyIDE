@@ -631,7 +631,26 @@
     for (const k of ['path', 'size', 'mtime', 'duration']) if (file[k] !== undefined) tx.set(m, k, file[k]);
     for (const k of ['video', 'audio']) if (file[k] !== undefined) tx.set(m, k, clone(file[k]));
     if (m.proxy) tx.set(m, 'proxy', null);
-    return {};
+    // A shorter file: the clips lose what they showed past its end, in whole frames; a clip with no frame left (or a
+    // freeze frame or a remapped clip that reaches past it) goes. Linked clips of one source end alike.
+    const trimmed = [];
+    const removed = [];
+    if (m.kind !== 'image') {
+      const D = m.duration;
+      for (const seq of project.sequences) {
+        const sc = context(project, tx, seq.id);
+        for (const clip of [...seq.clips]) {
+          if (clip.source?.media !== m.id) continue;
+          if (clip.source.freeze ? clip.in <= D : clip.out <= D + 0.5) continue;
+          const keep = clip.remap || clip.source.freeze ? 0 : floorFrames(sc, (D - clip.in) / clip.speed);
+          if (keep < sc.f) { removeFrom(sc, seq.clips, clip); removed.push(clip.id); continue; }
+          if (clip.reverse) setStart(sc, clip, end(clip) - keep);
+          else setEnd(sc, clip, clip.start + keep);
+          trimmed.push(clip.id);
+        }
+      }
+    }
+    return { trimmed, removed };
   };
   H.addBin = (project, tx, cmd) => {
     const c = projectContext(project, tx);
@@ -2262,6 +2281,8 @@
     // Stands for "nothing left to undo"; when the oldest step is dropped it becomes that step, so `dirty` stays right.
     let base = {};
     let saved = base;
+    let amends = 0; // changes made by amend(), counted
+    let savedAmends = 0;
     const listeners = new Set();
     const top = () => (undoStack.length ? undoStack[undoStack.length - 1] : base);
     project[model.REVISION] = 0;
@@ -2275,30 +2296,44 @@
       undoStack.push(entry);
       while (undoStack.length > limit) base = undoStack.shift();
     };
+    const run = (cmd, tx) => {
+      try {
+        const result = apply(project, tx, cmd);
+        normalize(project, tx);
+        const v = model.validate(project);
+        if (!v.ok) fail('The edit would leave the project damaged.', 'invalidResult', v.errors.slice(0, 5).join('; '));
+        return result;
+      } catch (err) {
+        rollback(tx.ops);
+        throw err;
+      }
+    };
 
     const history = {
       get project() { return project; },
       get canUndo() { return undoStack.length > 0 || !!group?.ops.length; },
       get canRedo() { return !group && redoStack.length > 0; },
-      get dirty() { return top() !== saved || !!group?.ops.length; },
+      get dirty() { return top() !== saved || !!group?.ops.length || amends !== savedAmends; },
       get grouping() { return !!group; },
       do(cmd) {
         const tx = recorder();
-        let result;
-        try {
-          result = apply(project, tx, cmd);
-          normalize(project, tx);
-          const v = model.validate(project);
-          if (!v.ok) fail('The edit would leave the project damaged.', 'invalidResult', v.errors.slice(0, 5).join('; '));
-        } catch (err) {
-          rollback(tx.ops);
-          throw err;
-        }
+        const result = run(cmd, tx);
         if (!tx.ops.length) return result;
         redoStack = [];
         if (group) group.ops.push(...tx.ops);
         else push({ label: label(cmd), ops: tx.ops });
         emit('do');
+        return result;
+      },
+      // A change that is no edit of the person's (a background job linking the proxy it made): kept in the project and
+      // saved with it, but no step, so it neither clears what can be redone nor lands between their steps. Only for
+      // changes that no step undoes or redoes (Cut.commands.setProxy). -> the command's result
+      amend(cmd) {
+        const tx = recorder();
+        const result = run(cmd, tx);
+        if (!tx.ops.length) return result;
+        amends += 1;
+        emit('amend');
         return result;
       },
       undo() {
@@ -2395,8 +2430,14 @@
       serialize() {
         return JSON.stringify(project);
       },
-      markSaved() {
-        saved = top();
+      // The state serialize() gives now, for markSaved once that text is on disk: edits made while it is written stay
+      // unsaved. A group with edits in it (a drag) may still be cancelled or go on, so that state is no step.
+      mark() {
+        return { entry: group?.ops.length ? {} : top(), amends };
+      },
+      markSaved(at = history.mark()) {
+        saved = at.entry;
+        savedAmends = at.amends;
       },
     };
     return history;

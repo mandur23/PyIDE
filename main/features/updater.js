@@ -545,6 +545,6 @@ function start({ ipcMain, app, send, diagnostics, quitAhead, windows }) {
     try { await download({ differential: settings?.['updates.differential'] !== false }); } catch (err) { log.warn(`update download failed: ${err.message}`); }
   }
 
-  app.on('before-quit', () => feed?.server?.close());
+  app.on('will-quit', () => feed?.server?.close());
   return { state: () => state, checkAtStart, updateNow };
 }

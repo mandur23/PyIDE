@@ -173,5 +173,9 @@
  { "name": "goto-test-edges", "file": "verify/goto-test-edges.mjs", "timeout": 15, "seconds": 12 },
  { "name": "process-tree", "file": "verify/process-tree.mjs", "timeout": 5, "seconds": 1 },
  { "name": "plugin-install-asar", "file": "verify/plugin-install-asar.mjs", "timeout": 5, "seconds": 1 },
- { "name": "release-harness", "file": "verify/release-harness.mjs", "timeout": 5, "seconds": 1 }
+ { "name": "release-harness", "file": "verify/release-harness.mjs", "timeout": 5, "seconds": 1 },
+ { "name": "test-env", "file": "verify/test-env.mjs", "timeout": 5, "seconds": 1 },
+ { "name": "ipc-guard", "file": "verify/ipc-guard.mjs", "timeout": 5, "seconds": 1 },
+ { "name": "json-stores", "file": "verify/json-stores.mjs", "timeout": 5, "seconds": 1 },
+ { "name": "window-close-unresponsive", "file": "verify/window-close-unresponsive.mjs", "timeout": 10, "seconds": 28 }
 ]

@@ -42,6 +42,7 @@
       action('save', { label: tr('Save') }),
       action('saveAs', { label: tr('Save As…') }),
       action('saveCopy'),
+      action('restoreAutosave'),
       sep,
       action('import', { label: tr('Import…') }),
       { label: tr('Import Folder…'), run: () => ui.media?.importFolder?.(app) },

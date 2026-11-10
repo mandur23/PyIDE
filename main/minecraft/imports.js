@@ -109,6 +109,15 @@ function classify(p) {
   return { path: p, name, kind: 'unknown' };
 }
 
+// 'nether' or 'the_end' for a Paper world's dimension folder (<world>_nether holding DIM-1, <world>_the_end holding
+// DIM1), else null.
+function dimensionOf(p) {
+  const m = /_(nether|the_end)$/i.exec(path.basename(p));
+  if (!m || !isFile(path.join(p, 'level.dat'))) return null;
+  const dim = m[1].toLowerCase();
+  return isDir(path.join(p, dim === 'nether' ? 'DIM-1' : 'DIM1')) ? dim : null;
+}
+
 // What kind of server a folder made outside PyIDE is, from what it runs: the Forge and NeoForge installers' libraries,
 // else the jar at its root (Paper's and Purpur's launcher, Velocity, Fabric's server launcher, Mojang's server).
 function detectServer(dir, javaOfJar) {
@@ -164,22 +173,33 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
         log(`Copying ${src} to ${dir}…\n`);
         await fs.promises.cp(src, dir, { recursive: true, errorOnExist: true });
       }
-      const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
-        || javaOfJar(path.join(dir, found.launch.jar || ''));
       // A folder that was a Nano Studio server elsewhere keeps the memory and JVM options it was given.
-      const had = readServer(dir) || {};
-      const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java,
-        memory: /^\d+[MG]$/i.test(had.memory || '') ? had.memory.toUpperCase() : '2G', launch: found.launch, imported: true,
-        ...(Array.isArray(had.jvmArgs) && had.jvmArgs.every((a) => typeof a === 'string' && /^-\S+$/.test(a) && !/^-Xmx/i.test(a)) && { jvmArgs: had.jvmArgs }) };
-      writeServer(dir, desc);
+      const desc = await describe(dir, found, readServer(dir) || {});
       if (!already) unfinished.done(dir);
-      log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${java}\n`);
+      log(`Imported ${path.basename(dir)}: ${KINDS[found.kind].title} ${desc.mc}${desc.loader ? ` (${desc.loader})` : ''}, Java ${desc.java}\n`);
       return { name: path.basename(dir), dir, ...desc };
     } catch (err) {
       // A copy cut off half-way is not left to look like the user's folder.
       if (!already) unfinished.undo(dir);
       throw err;
     }
+  }
+
+  // found: detectServer's. had: what a description the folder has gave it. -> the description written.
+  async function describe(dir, found, had) {
+    const java = found.java || (found.mc && /^\d/.test(found.mc) ? await javaFor(found.mc).catch(() => null) : null)
+      || javaOfJar(path.join(dir, found.launch.jar || ''));
+    const desc = { kind: found.kind, mc: found.mc || 'unknown', loader: found.loader || null, build: null, java,
+      memory: /^\d+[MG]$/i.test(had.memory || '') ? had.memory.toUpperCase() : '2G', launch: found.launch, imported: true,
+      ...(Array.isArray(had.jvmArgs) && had.jvmArgs.every((a) => typeof a === 'string' && /^-\S+$/.test(a) && !/^-Xmx/i.test(a)) && { jvmArgs: had.jvmArgs }) };
+    writeServer(dir, desc);
+    return desc;
+  }
+  // A server whose pyide-server.json is damaged, described again from what it runs as an import is.
+  async function redescribe(dir) {
+    const found = detectServer(dir, javaOfJar);
+    if (!found) throw fail(`Nano Studio cannot tell from its files what ${path.basename(dir)} runs: fix pyide-server.json by hand`);
+    return { name: path.basename(dir), dir, ...(await describe(dir, found, {})) };
   }
 
   // Files and folders dropped on the window (serverDir null) or on one server's card.
@@ -237,10 +257,29 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
           }
           done.push({ name: it.name, what: 'resourcepack', to: dest, server: s.name });
         } else if (it.kind === 'world') {
+          // Paper keeps a world's Nether and End beside it (world_nether, world_the_end, each with a level.dat): they go
+          // with the world dropped with them, and are no world of their own.
+          const dim = dimensionOf(it.path);
+          if (dim) {
+            const base = it.name.slice(0, -(dim.length + 1)).toLowerCase();
+            if (!paths.some((q) => path.basename(q).toLowerCase() === base && isFile(path.join(q, 'level.dat')))) skipped.push({ name: it.name, why: 'dimension' });
+            continue;
+          }
           const s = target((x) => !x.proxy);
           if (!s) { skipped.push({ name: it.name, why: 'target' }); continue; }
-          const name = freeName(s.dir, it.name, 'world');
+          const dims = paths.map((q) => ({ path: q, dim: dimensionOf(q) }))
+            .filter((d) => d.dim && path.basename(d.path).toLowerCase() === `${it.name}_${d.dim}`.toLowerCase());
+          const free = (n) => [n, ...dims.map((d) => `${n}_${d.dim}`)].every((x) => !fs.existsSync(path.join(s.dir, x)));
+          let name = freeName(s.dir, it.name, 'world');
+          for (let i = 2; !free(name); i++) name = freeName(s.dir, `${it.name}-${i}`, 'world');
           await fs.promises.cp(it.path, path.join(s.dir, name), { recursive: true, errorOnExist: true });
+          // Paper finds them by the level name; any other server reads a world's Nether and End from inside it.
+          for (const d of dims) {
+            const inner = d.dim === 'nether' ? 'DIM-1' : 'DIM1';
+            await (s.plugins === 'paper' ? fs.promises.cp(d.path, path.join(s.dir, `${name}_${d.dim}`), { recursive: true, errorOnExist: true })
+              : fs.promises.cp(path.join(d.path, inner), path.join(s.dir, name, inner), { recursive: true, errorOnExist: true }));
+            done.push({ name: path.basename(d.path), what: 'dimension', to: path.join(s.dir, name), server: s.name });
+          }
           setLevelName(s.dir, name);
           done.push({ name: it.name, what: 'world', to: path.join(s.dir, name), server: s.name });
         } else skipped.push({ name: it.name, why: 'unknown' });
@@ -361,7 +400,7 @@ function createImports({ root, servers, create, unfinished, javaFor, javaOfJar, 
     }
   }
 
-  return { importServer, drop, modpackInfo, fromModrinth, createFromModpack };
+  return { importServer, redescribe, drop, modpackInfo, fromModrinth, createFromModpack };
 }
 
 module.exports = { createImports, classify, detectServer, discardDownload, fetchChecked, hashOf, packEntry };

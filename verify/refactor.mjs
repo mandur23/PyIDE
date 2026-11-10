@@ -4,7 +4,7 @@
 // rope install offer, and the Korean UI. The fixture program's output is compared before and after.
 // The suite keeps a venv with rope in verify/out/refactor-venv (created on the first run). Ports 9690-9691.
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -390,6 +390,25 @@ try {
   await js(`ide.settings.set('editor.inlayHints', false), true`);
   check(await js(`(async () => (await ide.inlayHints.hints(ide.editor.getModel())).length === 0)()`), 'the master switch turns every hint off');
   await js(`(ide.settings.set('editor.inlayHints', true), ide.settings.set('editor.inlayHints.parameterNames', true), true)`);
+
+  // ---- a refactoring whose write fails partway leaves every file as it was ----
+  for (const [name, body] of [['rb_open.py', 'def old():\n    pass\n'], ['rb_a.py', 'from rb_open import old\n'], ['rb_b.py', 'from rb_open import old\nold()\n']]) writeFileSync(h.P(name), body);
+  chmodSync(h.P('rb_b.py'), 0o444);
+  await openFile(t, 'rb_open.py');
+  const recordsBefore = await js('ide.refactor.records().length');
+  const failed = await js(`(async () => {
+    const p = (n) => ide.util.joinPath(ide.root, n);
+    const changes = [
+      { path: p('rb_open.py'), old: 'def old():\\n    pass\\n', new: 'def new():\\n    pass\\n' },
+      { path: p('rb_a.py'), old: 'from rb_open import old\\n', new: 'from rb_open import new\\n' },
+      { path: p('rb_b.py'), old: 'from rb_open import old\\nold()\\n', new: 'from rb_open import new\\nnew()\\n' },
+    ];
+    try { await ide.refactor.applyResult({ changes }, 'Rename'); return 'applied'; } catch (e) { return ide.refactor.errorText(e); }
+  })()`);
+  chmodSync(h.P('rb_b.py'), 0o644);
+  check(/undone/.test(failed) && h.disk('rb_a.py') === 'from rb_open import old\n' && (await h.text()) === 'def old():\n    pass\n'
+    && (await js('ide.refactor.records().length')) === recordsBefore,
+    `a refactoring that cannot write one file undoes the files and editors it already changed (${JSON.stringify(failed)}, rb_a.py: ${JSON.stringify(h.disk('rb_a.py'))})`);
 
   // ---- no rope in the interpreter: a clear offer to install it ----
   const bare = bareVenv();

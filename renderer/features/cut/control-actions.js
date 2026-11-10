@@ -100,6 +100,7 @@
     save: t('save_project'),
     saveAs: no('It writes the project to a new file at a place the user picks; save_project saves it to its own file (asking for a place only when it has none).'),
     saveCopy: no('It writes a copy of the project to a place the user picks; the user does it.'),
+    restoreAutosave: no('It replaces the open project with an autosave the user picks from a list; the user does it.'),
     open: no('It closes this project and opens another; that is the user\'s call.'),
     newProject: no('It closes this project for a new one; that is the user\'s call.'),
     newSequence: t('add_sequence'), newBin: act('Adds a bin to the Project panel.', { also: ['project_items'] }),

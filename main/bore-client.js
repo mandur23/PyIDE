@@ -35,7 +35,8 @@ function takeSecret() {
   return secret.length === 32 ? secret : fail('the key is not valid');
 }
 
-// A process holding a key goes when the app that started it goes, however that ended: its stdin is the app's pipe.
+// The client goes when the app that started it goes, however that ended: its stdin is the app's pipe. A private share's
+// holds the key, and a public share's would otherwise keep relaying strangers to the server with no app to stop it.
 function followParent() {
   for (const event of ['end', 'close']) process.stdin.on(event, () => process.exit(0));
   process.stdin.resume();
@@ -184,7 +185,7 @@ function join(value, secret) {
 async function main(args) {
   const value = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
   const secret = takeSecret();
-  if (secret) followParent();
+  followParent();
   if (args[0] === 'join') return join(value, secret);
   const target = { server: value('--to'), localHost: value('--local-host') || 'localhost', localPort: Number(args[1]) };
   if (args[0] !== 'local' || !target.server || !Number.isInteger(target.localPort)) fail('usage: local <port> --local-host <host> --to <server>');

@@ -13,9 +13,9 @@ const trust = require('../trust');
 const { download, tarExe } = require('../installer/servers');
 const { createToolchains, installRoot } = require('../installer/toolchains');
 const { KINDS, javaFor, temurin, mojangProfile } = require('../minecraft/sources');
-const { writeZip, readEntry, openZip } = require('../minecraft/zipfile');
+const { writeZipFile, readEntry, openZip } = require('../minecraft/zipfile');
 const T = require('../minecraft/templates');
-const { createImports, discardDownload } = require('../minecraft/imports');
+const { createImports, detectServer, discardDownload } = require('../minecraft/imports');
 const market = require('../minecraft/market');
 const translation = require('../minecraft/translate');
 const serverSettings = require('../minecraft/server-settings');
@@ -24,6 +24,7 @@ const { createLauncher } = require('../minecraft/launcher');
 const fileServer = require('../minecraft/file-server');
 const { createPlayers } = require('../minecraft/players');
 const { forNewServer } = require('../minecraft/players/bridge');
+const runMarker = require('../minecraft/run-marker');
 const { complete } = require('../ai/claude');
 const { privateShare } = require('./port-sharing');
 const { app, safeStorage } = require('electron');
@@ -36,7 +37,13 @@ const NAME = /^[A-Za-z][\w-]{0,39}$/;
 const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
-const writeJson = (p, v) => fs.writeFileSync(p, `${JSON.stringify(v, null, 2)}\n`);
+// A server's pyide-server.json, written beside itself and renamed over: an app that dies mid-write leaves the old one.
+// What was written last is kept as pyide-server.json.bak too, for Repair to put back once a hand edit has broken it.
+const writeJson = (p, v) => {
+  const text = `${JSON.stringify(v, null, 2)}\n`;
+  serverSettings.replaceFile(p, text);
+  try { fs.writeFileSync(`${p}.bak`, text); } catch {}
+};
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const fail = (message, code) => Object.assign(new Error(message), { expected: true, code });
 const notReserved = (name) => { if (RESERVED.test(name)) throw fail(`${name} is a name Windows keeps for a device: choose another`); };
@@ -81,8 +88,14 @@ function portOf(dir, kind) {
   const v = propsOf(dir)['server-port'];
   return /^\d{1,5}$/.test(v || '') ? Number(v) : 25565;
 }
-// Account checks off: Minecraft reads anything but "true" (any case) as false.
+// Account checks off: Minecraft reads anything but "true" (any case) as false. A Velocity proxy keeps its own in
+// velocity.toml, at the top level (before the first table); one imported from elsewhere may have them off.
 const offlineAt = (dir) => { const v = propsOf(dir)['online-mode']; return v !== undefined && v.toLowerCase() !== 'true'; };
+const proxyOfflineAt = (dir) => {
+  const toml = path.join(dir, 'velocity.toml');
+  const top = (fs.existsSync(toml) ? fs.readFileSync(toml, 'utf8') : '').split(/^[ \t]*\[/m)[0];
+  return /^[ \t]*online-mode[ \t]*=[ \t]*false[ \t]*(#.*)?$/m.test(top);
+};
 
 // Mojang's and the Maven hosts' downloads break off now and then (a reset connection mid-file): a step that fetches
 // over the network is tried three times, a few seconds apart. What trying again cannot change is not retried: a
@@ -147,6 +160,7 @@ async function installJava(major, { log }) {
 // The folders of servers/ holding a pyide-server.json, as [{...its JSON, name, dir}], not one still being made. One
 // whose file cannot be read, or names a server type Nano Studio does not know, is {name, dir, damaged: 'unreadable' |
 // 'kind', kind}: listed so, it keeps its card (and its Stop, if it runs) and its name, instead of going without a word.
+// damagedServers adds repair: what Repair would take its description from (repairSource), null when nothing can.
 function serverFolders(root) {
   const parent = path.join(root, 'servers');
   return (fs.existsSync(parent) ? fs.readdirSync(parent, { withFileTypes: true }) : [])
@@ -158,7 +172,11 @@ function serverFolders(root) {
       return { ...meta, name: d.name, dir };
     });
 }
-const damagedServers = (root) => serverFolders(root).filter((s) => s.damaged);
+const usableDesc = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !!KINDS[v.kind];
+// 'backup': the copy written last (.bak) is one Nano Studio can run; 'files': the folder runs a server it recognises;
+// null: neither, so only a hand edit can fix it (a type from elsewhere, with no jar it knows).
+const repairSource = (dir) => (usableDesc(readJson(path.join(dir, `${SERVER}.bak`))) ? 'backup' : detectServer(dir, javaOfJar) ? 'files' : null);
+const damagedServers = (root) => serverFolders(root).filter((s) => s.damaged).map((s) => ({ ...s, repair: repairSource(s.dir) }));
 const sameDir = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 // AutoModpack's jar in the server's mods: players who have it get the server's mods when they join.
 const autoModpackOf = (dir) => (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).find((n) => /^automodpack.*\.jar$/i.test(n)) : null) || null;
@@ -168,8 +186,9 @@ function servers(root) {
   return serverFolders(root).filter((s) => !s.damaged).map((s) => ({
     ...s, plugins: KINDS[s.kind]?.plugins || null, mods: KINDS[s.kind]?.mods || null, proxy: !!KINDS[s.kind]?.proxy, port: portOf(s.dir, s.kind),
     resourcePack: fs.existsSync(path.join(s.dir, 'resourcepack', 'pack.mcmeta')), autoSync: !!autoModpackOf(s.dir),
-    // Account checks off (behind a proxy, which checks them): joined directly, anyone may take any player's name.
-    offline: !KINDS[s.kind]?.proxy && offlineAt(s.dir),
+    // Account checks off (behind a proxy, which checks them; or the proxy's own): joined directly, anyone may take any
+    // player's name.
+    offline: KINDS[s.kind]?.proxy ? proxyOfflineAt(s.dir) : offlineAt(s.dir),
   }));
 }
 const serverOf = (dir) => {
@@ -367,11 +386,23 @@ function rewireProxies(root) {
 // ---------- client pack ----------
 // A Modrinth modpack (.mrpack): modrinth.index.json naming Minecraft and the loader, and the server's mods as
 // overrides. Prism Launcher, the Modrinth App and ATLauncher import one into a ready instance.
-function clientPack(dir) {
+// The packs written this run, by file -> what they were made from. Copy Join Code asks for the pack each time: one whose
+// sources and own file are as they were is not zipped again.
+const packsBuilt = new Map();
+const statKey = (files) => JSON.stringify(files.map((f) => { try { const s = fs.statSync(f); return [f, s.size, s.mtimeMs]; } catch { return [f]; } }));
+async function packOnce(file, sources, entries) {
+  const key = statKey(sources);
+  if (packsBuilt.get(file) === `${key}${statKey([file])}`) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await writeZipFile(file, entries());
+  packsBuilt.set(file, `${key}${statKey([file])}`);
+}
+async function clientPack(dir) {
   const desc = serverOf(dir);
   const loaderKey = KINDS[desc.kind]?.mods;
   if (!loaderKey) throw fail('Players of a server without mods need nothing but Minecraft itself');
   const name = path.basename(dir);
+  const modsDir = path.join(dir, 'mods');
   // A server made from a modpack hands players the modpack itself, which has the client mods the server leaves out,
   // with the mods added to the server since (the Market, dropped jars) in its overrides.
   const pack = desc.modpack?.clientPack && path.join(dir, desc.modpack.clientPack);
@@ -383,25 +414,23 @@ function clientPack(dir) {
       try { index = JSON.parse(zip.read('modrinth.index.json').toString('utf8').replace(/^﻿/, '')); } catch {}
       const ofPack = new Set([...(Array.isArray(index?.files) ? index.files : []).map((f) => path.posix.basename(String(f?.path || ''))),
         ...zip.names.filter((n) => /^(client-|server-)?overrides\/mods\/[^/]+$/.test(n)).map((n) => path.posix.basename(n))].map((n) => n.toLowerCase()));
-      const added = (fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')) : []).filter((n) => n.endsWith('.jar') && !ofPack.has(n.toLowerCase())).sort();
+      const added = (fs.existsSync(modsDir) ? fs.readdirSync(modsDir) : []).filter((n) => n.endsWith('.jar') && !ofPack.has(n.toLowerCase())).sort();
       if (!added.length) return { file: pack, mods: [], added: [], ...info };
       const file = path.join(dir, 'client-pack', `${name}-${desc.mc}.mrpack`);
-      fs.writeFileSync(file, writeZip([...zip.names.filter((n) => !n.endsWith('/')).map((n) => ({ name: n, data: zip.read(n) })),
-        ...added.map((m) => ({ name: `overrides/mods/${m}`, data: fs.readFileSync(path.join(dir, 'mods', m)) }))]));
+      await packOnce(file, [pack, ...added.map((m) => path.join(modsDir, m))], () => [...zip.names.filter((n) => !n.endsWith('/')).map((n) => ({ name: n, read: () => zip.read(n) })),
+        ...added.map((m) => ({ name: `overrides/mods/${m}`, file: path.join(modsDir, m) }))]);
       return { file, mods: added, added, ...info };
     } finally { zip.close(); }
   }
   // With AutoModpack the pack holds it alone: it fetches the server's mods into its own folder at the first join, and
   // the same mods in mods/ as well would load twice.
   const sync = autoModpackOf(dir);
-  const mods = sync ? [sync] : fs.existsSync(path.join(dir, 'mods')) ? fs.readdirSync(path.join(dir, 'mods')).filter((n) => n.endsWith('.jar')) : [];
+  const mods = sync ? [sync] : fs.existsSync(modsDir) ? fs.readdirSync(modsDir).filter((n) => n.endsWith('.jar')) : [];
   const index = { formatVersion: 1, game: 'minecraft', versionId: new Date().toISOString().slice(0, 10), name, summary: `Mods of the ${name} server`,
     files: [], dependencies: { minecraft: desc.mc, [loaderKey]: desc.loader } };
-  const outDir = path.join(dir, 'client-pack');
-  fs.mkdirSync(outDir, { recursive: true });
-  const file = path.join(outDir, `${name}-${desc.mc}.mrpack`);
-  fs.writeFileSync(file, writeZip([{ name: 'modrinth.index.json', data: Buffer.from(JSON.stringify(index, null, 2)) },
-    ...mods.map((m) => ({ name: `overrides/mods/${m}`, data: fs.readFileSync(path.join(dir, 'mods', m)) }))]));
+  const file = path.join(dir, 'client-pack', `${name}-${desc.mc}.mrpack`);
+  await packOnce(file, [path.join(dir, SERVER), ...mods.map((m) => path.join(modsDir, m))], () => [{ name: 'modrinth.index.json', data: Buffer.from(JSON.stringify(index, null, 2)) },
+    ...mods.map((m) => ({ name: `overrides/mods/${m}`, file: path.join(modsDir, m) }))]);
   return { file, mods, autoSync: !!sync, mc: desc.mc, loader: `${loaderKey} ${desc.loader}` };
 }
 
@@ -430,14 +459,14 @@ function newResourcePack(dir) {
   return { folder, created: true };
 }
 // The pack zipped into client-pack/resourcepack.zip, with the SHA-1 Minecraft checks it against.
-function packResourcePack(dir) {
+async function packResourcePack(dir) {
   const folder = path.join(dir, 'resourcepack');
   if (!fs.existsSync(path.join(folder, 'pack.mcmeta'))) throw fail('The server has no resource pack yet');
-  const entries = filesUnder(folder, () => true).map((f) => ({ name: path.relative(folder, f).replace(/\\/g, '/'), data: fs.readFileSync(f) }));
+  const entries = filesUnder(folder, () => true).map((f) => ({ name: path.relative(folder, f).replace(/\\/g, '/'), file: f }));
   const outDir = path.join(dir, 'client-pack');
   fs.mkdirSync(outDir, { recursive: true });
   const file = path.join(outDir, 'resourcepack.zip');
-  fs.writeFileSync(file, writeZip(entries));
+  await writeZipFile(file, entries);
   return { file, sha1: hashOf('sha1', file), files: entries.length };
 }
 // Players are sent the pack when they join: server.properties names its address and SHA-1, and requires it.
@@ -535,6 +564,56 @@ async function translateMods(dir, log, signal) {
 // process starts before the old one has closed.
 const runningDirs = new Map();
 const isRunning = (dir) => runningDirs.has(keyOf(dir));
+const ownPids = new Set(); // the processes of runningDirs
+// A process a folder's marker names that this app did not start (or no longer knows: it was started before a crash).
+const leftOver = async (dir) => {
+  const m = runMarker.read(dir);
+  return m && ownPids.has(m.pid) ? null : runMarker.leftOver(dir);
+};
+const refuseLeftOver = async (dir) => {
+  const left = await leftOver(dir);
+  if (left) throw fail(`${path.basename(dir)} is still running outside this window (process ${left.pid}): an earlier Nano Studio started it, or another one did. End it on its card, or stop it where it was started.`, 'leftOver');
+};
+// Settings saved while a server runs apply at its next start, but a dedicated server writes server.properties whole,
+// from the copy it read when it started, whenever a command changes a setting (whitelist on, difficulty,
+// defaultgamemode): what was saved since is taken back. Until the server ends, the keys saved meanwhile are watched. A
+// rewrite that puts back the value a key had when it was saved is undone for that key; one that writes a third value is
+// the server's own change (an operator's /difficulty), which stands.
+const heldProps = new Map(); // folder (lower case) -> {file, keys: Map(key -> {was, now})}
+function holdProps(dir, before, saved) {
+  const k = keyOf(dir);
+  const file = path.join(dir, 'server.properties');
+  const held = heldProps.get(k) || { file, keys: new Map() };
+  for (const key of Object.keys(saved)) if (before[key] !== saved[key]) held.keys.set(key, { was: held.keys.get(key)?.was ?? before[key], now: saved[key] });
+  if (!held.keys.size || heldProps.has(k)) return;
+  heldProps.set(k, held);
+  let checking = false;
+  held.check = async () => {
+    if (checking) return;
+    checking = true;
+    // A moment for the server to finish writing its copy.
+    await new Promise((r) => { setTimeout(r, 300); });
+    try {
+      const current = serverSettings.readProperties(file);
+      const back = {};
+      for (const [key, { was, now }] of held.keys) {
+        if (current[key] === now || current[key] === undefined) continue;
+        // A key the file did not have holds the server's default, unknown here: a server writes every key at its start.
+        if (was === undefined || current[key] === was) back[key] = now;
+        else held.keys.delete(key);
+      }
+      if (Object.keys(back).length) serverSettings.writeProperties(file, back);
+    } catch {} finally { checking = false; }
+  };
+  fs.watchFile(file, { interval: 500 }, held.check);
+}
+async function releaseProps(dir) {
+  const held = heldProps.get(keyOf(dir));
+  if (!held || isRunning(dir)) return;
+  heldProps.delete(keyOf(dir));
+  fs.unwatchFile(held.file, held.check);
+  await held.check();
+}
 const shop = market.createMarket({ readServer: serverOf, writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), fetchFile, running: isRunning });
 
 // A saved private server's key, encrypted as a data source's password is, but with no plain fallback: without safeStorage
@@ -548,7 +627,7 @@ const craft = createLauncher({ fetchFile, ensureJava, javaFor, run, retried, key
 const imports = (root) => createImports({ root, servers: () => servers(root), create, unfinished, javaFor, javaOfJar, fetchFile,
   writeServer: (dir, desc) => writeJson(path.join(dir, SERVER), desc), readServer: (dir) => readJson(path.join(dir, SERVER)) });
 
-exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
+exports.register = ({ ipcMain, send, startProcess, procs, diagnostics, getWindow, quitAhead, killProcess, windows }) => {
   const guard = (root) => { if (!root || !trust.isTrusted(root)) throw fail('The project is open in Safe Mode, where Nano Studio runs nothing from it', 'untrusted'); };
   // Sessions live here and not in a window, so logging goes on while no window shows the tab. A folder under the
   // project's servers/ only: the files read for it are named by the renderer.
@@ -592,7 +671,19 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   const logTo = (job) => (text) => send('minecraft:log', { job, text: String(text) });
   ipcMain.handle('minecraft:kinds', () => Object.entries(KINDS).map(([id, k]) => ({ id, title: k.title, plugins: k.plugins, mods: k.mods, proxy: !!k.proxy })));
   ipcMain.handle('minecraft:versions', (_e, kind) => KINDS[kind]?.versions() ?? []);
-  ipcMain.handle('minecraft:servers', (_e, root) => (root ? servers(root) : []));
+  // leftOver: {pid, started} of a process still running there that this app does not hold (see run-marker.js).
+  ipcMain.handle('minecraft:servers', async (_e, root) => {
+    if (!root) return [];
+    const list = servers(root);
+    const left = await Promise.all(list.map((s) => leftOver(s.dir).catch(() => null)));
+    return list.map((s, i) => (left[i] ? { ...s, leftOver: left[i] } : s));
+  });
+  // Ends a left-over process without saving: the window asks the user first.
+  ipcMain.handle('minecraft:endLeftOver', async (_e, root, dir) => {
+    playersAt(root, dir);
+    if (!(await leftOver(dir))) return { ended: true };
+    return { ended: await runMarker.end(dir) };
+  });
   ipcMain.handle('minecraft:create', (_e, opts, job) => { guard(opts?.root); return create(opts, logTo(job)); });
   // A level waiting in pyide-server.json goes in once the server's files exist: before a start, where that start reads
   // it, and after a run, because a server's first run writes the files and only reads them at its next start (restart).
@@ -608,12 +699,25 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
       if (r.outcome === 'applied' || r.outcome === 'refused') send('minecraft:antiXray', { dir, restart, ...r });
     } catch (err) { playersLog.warn(`anti-xray: ${err.message}`); }
   };
-  ipcMain.handle('minecraft:launch', (_e, root, dir, job) => { guard(root); settleXray(dir, false); return launch(dir, logTo(job)); });
+  ipcMain.handle('minecraft:launch', async (_e, root, dir, job) => {
+    guard(root);
+    await refuseLeftOver(dir);
+    settleXray(dir, false);
+    return launch(dir, logTo(job));
+  });
   // Starts a launch spec ({cmd, args, cwd}) as an IDE process the Run window shows; -> process id. A process outside
   // the project's servers/ gets no players session. When the app quits, the server is asked to save and stop as Stop
   // does ("end" for a Velocity proxy) and given a big modpack's minute to do it before it is killed.
-  ipcMain.handle('minecraft:start', (_e, root, spec) => {
+  // One process a folder: a second would open the same world. A Rerun's old process has closed by the time its new one
+  // gets here (the window waits for it).
+  const claimed = new Set(); // folders (lower case) between the checks below and the spawn
+  ipcMain.handle('minecraft:start', async (_e, root, spec) => {
     guard(root);
+    const k = keyOf(spec.cwd);
+    if (isRunning(spec.cwd) || claimed.has(k)) throw fail(`${path.basename(spec.cwd)} is running already`, 'running');
+    claimed.add(k);
+    try { await refuseLeftOver(spec.cwd); } finally { claimed.delete(k); }
+    if (isRunning(spec.cwd)) throw fail(`${path.basename(spec.cwd)} is running already`, 'running');
     const session = inServers(root, spec.cwd) ? players.begin(spec.cwd) : null;
     let proxy = false;
     try { proxy = !!KINDS[serverOf(spec.cwd).kind]?.proxy; } catch {}
@@ -621,9 +725,17 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     session?.attach(procs.get(id));
     const proc = procs.get(id);
     if (proc) {
-      const k = keyOf(spec.cwd);
       runningDirs.set(k, (runningDirs.get(k) || 0) + 1);
-      proc.once('close', () => { if (runningDirs.get(k) > 1) runningDirs.set(k, runningDirs.get(k) - 1); else runningDirs.delete(k); });
+      if (proc.pid) {
+        ownPids.add(proc.pid);
+        runMarker.write(spec.cwd, proc.pid);
+      }
+      proc.once('close', () => {
+        if (runningDirs.get(k) > 1) runningDirs.set(k, runningDirs.get(k) - 1); else runningDirs.delete(k);
+        ownPids.delete(proc.pid);
+        runMarker.clear(spec.cwd, proc.pid);
+        releaseProps(spec.cwd);
+      });
     }
     if (session) proc?.once('close', () => settleXray(spec.cwd, true));
     return id;
@@ -641,6 +753,18 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   ipcMain.handle('minecraft:rewireProxies', (_e, root) => { guard(root); return rewireProxies(root); });
   ipcMain.handle('minecraft:blockedNames', (_e, root) => (root ? blockedNames(root) : []));
   ipcMain.handle('minecraft:damagedServers', (_e, root) => (root ? damagedServers(root) : []));
+  // A damaged pyide-server.json (unreadable, or naming a server type Nano Studio does not know) put right: from the copy
+  // written last (.bak), else described again from what the folder runs. The damaged file stays beside it, .damaged.
+  ipcMain.handle('minecraft:repairServer', async (_e, root, dir) => {
+    playersAt(root, dir);
+    const file = path.join(dir, SERVER);
+    const from = repairSource(dir);
+    if (!from) throw fail(`Nano Studio cannot tell from its files what ${path.basename(dir)} runs: fix pyide-server.json by hand`, 'notRepairable');
+    if (isFile(file)) fs.copyFileSync(file, `${file}.damaged`);
+    if (from === 'backup') writeJson(file, readJson(`${file}.bak`));
+    else await imports(root).redescribe(dir);
+    return { from };
+  });
   // A dedicated server that runs a command changing a setting (whitelist on) saves server.properties as it read it at
   // its start, losing what was saved since. The window awaits this before it sends the command: the file is read now,
   // and once the server has written its copy (within `wait` ms) the file goes back to what it was.
@@ -671,7 +795,13 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
   // A new port is written into the proxies that send players to the server.
   ipcMain.handle('minecraft:saveSettings', (_e, root, dir, values) => {
     playersAt(root, dir);
+    const running = isRunning(dir) && values?.props && !KINDS[serverOf(dir).kind]?.proxy;
+    const before = running ? propsOf(dir) : null;
     const r = saveSettings(dir, values);
+    if (running && !r.antiXrayRefused) {
+      const after = propsOf(dir);
+      holdProps(dir, before, Object.fromEntries(Object.keys(values.props).map((key) => [key, after[key]])));
+    }
     if (values?.props?.['server-port'] !== undefined) rewireProxies(root);
     return r;
   });
@@ -754,4 +884,24 @@ exports.register = ({ ipcMain, send, startProcess, procs, diagnostics }) => {
     return craft.joinCode({ ...share, pack: options?.pack, name: path.basename(dir) });
   });
   app.on('will-quit', craft.stopJoins);
+
+  // Windows ending the session (shut down, restart, sign out) quits the app without before-quit or will-quit, so the
+  // quit gate would never send "stop", and a server's java.exe gets a few seconds once the session does end. While a
+  // server runs, the session is held (Windows lists the app as keeping it open) and the servers get "stop" as at a
+  // quit; the app quits once they have stopped, and Windows goes on. One that does not stop in the gate's time is killed.
+  const sessionLog = diagnostics.logger('#minecraft');
+  let sessionEnding = false;
+  getWindow?.()?.on('query-session-end', (e) => {
+    if (!runningDirs.size || !quitAhead) return;
+    e.preventDefault();
+    if (sessionEnding) return;
+    sessionEnding = true;
+    sessionLog.warn(`Windows is ending the session (${(e.reasons || []).join(', ')}): stopping ${runningDirs.size} server(s) before the app quits`);
+    windows?.closeWithoutAsking(true);
+    quitAhead(() => { app.quit(); return true; }).then((late) => {
+      if (!late) return;
+      for (const id of procs.keys()) killProcess?.(id, { sync: true });
+      app.quit();
+    });
+  });
 };

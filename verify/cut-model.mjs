@@ -1050,6 +1050,110 @@ try {
   check(false, `history: ${err.stack}`);
 }
 
+// ---------- history: amend (a background job's change) and the saved mark ----------
+try {
+  const { h, s, a } = setup();
+  const [v] = place(h, s, { source: { media: a }, in: 0, out: f(90), at: 0, video: 'V1' });
+  h.markSaved();
+  const reasons = [];
+  h.onChange((r) => reasons.push(r));
+  const floor = h.position;
+  h.do(C.setClip(s, v, { name: 'one' }));
+  h.do(C.setClip(s, v, { name: 'two' }));
+  h.undo();
+  const list = S(h.list());
+  h.amend(C.setProxy(a, { path: 'cache:proxy-a' }));
+  eq([S(h.list()) === list, h.canRedo, h.position, h.project.media[0].proxy, reasons.at(-1)], [true, true, floor + 1, { path: 'cache:proxy-a' }, 'amend'],
+    'amend is no step: the steps and what can be redone stay, the project has the change and listeners hear amend');
+  h.redo();
+  eq([clip(h, s, v).name, h.project.media[0].proxy?.path], ['two', 'cache:proxy-a'], 'redo after an amend redoes the step and keeps the amend');
+  h.undo();
+  h.undo();
+  eq([h.position, clip(h, s, v).name, h.project.media[0].proxy?.path, h.dirty], [floor, 'a.mp4', 'cache:proxy-a', true],
+    'undoing to the saved step leaves the amend in place, and the project is dirty: the file lacks it');
+  h.markSaved();
+  check(!h.dirty, 'saving takes the amend in');
+  h.amend(C.setProxy(a, { path: 'cache:proxy-b' }));
+  check(h.dirty, 'an amend after a save is dirty');
+  // an AI turn: steps on both sides of an amend become one step; its undo keeps the amend
+  h.markSaved();
+  const turn = h.position;
+  h.do(C.setClip(s, v, { name: 'ai 1' }));
+  h.amend(C.setProxy(a, { path: 'cache:proxy-c' }));
+  h.do(C.setClip(s, v, { name: 'ai 2' }));
+  h.squash(turn, 'Rename the clip');
+  eq([h.position - turn, h.list().at(-1).label], [1, 'Rename the clip'], 'squash joins the steps around an amend into one');
+  h.undo();
+  eq([clip(h, s, v).name, h.project.media[0].proxy?.path, h.dirty], ['a.mp4', 'cache:proxy-c', true], 'undoing the squashed turn takes back both edits, not the amend');
+  h.redo();
+  eq(clip(h, s, v).name, 'ai 2', 'redoing the turn');
+  throws(() => h.amend(C.setProxy('m999', { path: 'x' })), 'notFound', 'an amend that fails throws');
+  check(h.project.media[0].proxy?.path === 'cache:proxy-c' && model.validate(h.project).ok, 'and changes nothing');
+  // the saved mark is taken before the text is written: what changes meanwhile stays unsaved
+  h.markSaved();
+  let at = h.mark();
+  h.do(C.setClip(s, v, { name: 'while saving' }));
+  h.markSaved(at);
+  check(h.dirty, 'an edit made while the file was written is not marked saved');
+  h.undo();
+  check(!h.dirty, 'undoing it is the saved state again');
+  at = h.mark();
+  h.amend(C.setProxy(a, { path: 'cache:proxy-d' }));
+  h.markSaved(at);
+  check(h.dirty, 'an amend made while the file was written is not marked saved');
+  h.markSaved();
+  h.begin('Opacity');
+  h.do(C.setClip(s, v, { props: { opacity: 50 } }));
+  at = h.mark();
+  h.markSaved(at);
+  h.cancel();
+  check(h.dirty, 'saved during a drag that is then cancelled: the file has the drag, so the project is dirty');
+  h.markSaved();
+  h.begin('Opacity');
+  h.do(C.setClip(s, v, { props: { opacity: 40 } }));
+  h.markSaved(h.mark());
+  h.do(C.setClip(s, v, { props: { opacity: 30 } }));
+  h.commit();
+  check(h.dirty, 'saved during a drag that goes on: dirty after its commit');
+  h.markSaved();
+  h.begin('Nothing yet');
+  h.markSaved(h.mark());
+  h.commit();
+  check(!h.dirty, 'saved during a group with no edit yet: clean');
+} catch (err) {
+  check(false, `history amend: ${err.stack}`);
+}
+
+// ---------- relinking to a shorter file ----------
+try {
+  const { h, s, a, music } = setup();
+  const [v1, a1] = place(h, s, { source: { media: a }, in: f(30), out: f(390), at: 0, video: 'V1', audio: 'A1' });
+  const [v2] = place(h, s, { source: { media: a }, in: f(500), out: f(560), at: f(400), video: 'V1', audio: null });
+  const [v3] = place(h, s, { source: { media: a }, in: f(0), out: f(60), at: f(600), video: 'V1', audio: null });
+  h.do(C.setClip(s, v3, { reverse: true }));
+  const fz = h.do(C.freezeFrame(s, v2, f(410))).id;
+  const [m1] = place(h, s, { source: { media: music }, in: 0, out: f(600), at: 0, audio: 'A2' });
+  const fzClip = clip(h, s, fz);
+  const before = h.serialize();
+  const D = f(300) + 1234;
+  const r = step(h, C.relinkMedia(a, { path: 'E:/short.mp4', size: 5, mtime: 6, duration: D }), 'relink to a shorter file');
+  const c1 = clip(h, s, v1);
+  eq([h.project.media[0].duration, fr(c1.out), fr(clip(h, s, a1).out), fr(model.clipDuration(c1))], [D, 300, 300, 270], 'clips past the new end end at its last whole frame, linked ones alike');
+  check(!clip(h, s, v2) && r.removed.includes(v2), 'a clip that starts after the new end is removed');
+  check(fzClip.in > D && !clip(h, s, fz) && r.removed.includes(fz), 'a freeze frame of a time past the end is removed');
+  eq([fr(clip(h, s, v3).in), fr(clip(h, s, v3).out), clip(h, s, v3).reverse], [0, 60, true], 'a clip inside the new length is untouched');
+  check(clip(h, s, m1) && r.trimmed.length === 2 && model.validate(h.project).ok, 'other media are untouched and the project is valid');
+  h.undo();
+  check(h.serialize() === before, 'undo brings the clips and the old length back');
+  const [rv] = place(h, s, { source: { media: a }, in: f(200), out: f(400), at: f(1000), video: 'V2', audio: null });
+  h.do(C.setClip(s, rv, { reverse: true }));
+  h.do(C.relinkMedia(a, { path: 'E:/short.mp4', duration: D }));
+  const rc = clip(h, s, rv);
+  eq([fr(rc.in), fr(rc.out), fr(rc.start), fr(model.clipEnd(rc))], [200, 300, 1100, 1200], 'a reversed clip loses its head, where the source past the end was shown, and keeps its end');
+} catch (err) {
+  check(false, `relink shorter: ${err.stack}`);
+}
+
 // ---------- keyframes ----------
 try {
   const lin = [{ t: 0, v: 0, ease: 'linear' }, { t: 100, v: 10, ease: 'linear' }, { t: 200, v: 30, ease: 'hold' }, { t: 300, v: 0 }];

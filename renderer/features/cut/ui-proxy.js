@@ -6,7 +6,7 @@
 // and the nearest editor frame rate goes through Cut.export.run with no sound and a keyframe every 15 frames, into the
 // Cut cache folder (proxy-<hash of path, size, mtime, height>.mp4, so the cache's size limit and Clear Cache cover
 // it). It waits while a monitor plays (export's gate) and shows its progress in the status bar, where it can be
-// cancelled. When it is done the media gets `proxy` (Cut.commands.setProxy, one undo step) if the project is still
+// cancelled. When it is done the media gets `proxy` (Cut.commands.setProxy through history.amend: no undo step) if the project is still
 // the one it was made for; a proxy file that already exists for the media is used at once. A proxy whose file goes
 // away plays the original (Cut.media.open).
 //
@@ -122,7 +122,8 @@
     if (app.history !== job.history || !app.project.media.some((m) => m.id === job.mediaId)) return false;
     Cut.media?.forget?.(path);
     if (app.project.media.find((m) => m.id === job.mediaId).proxy?.path === path) return true;
-    return !!ui.exec(app, Cut.commands.setProxy(job.mediaId, { path }));
+    // Not an undo step: the job finishing would clear what the person can redo, or land between their steps.
+    try { app.history.amend(Cut.commands.setProxy(job.mediaId, { path })); return true; } catch (err) { ui.report(err); return false; }
   }
 
   async function run(job) {

@@ -178,7 +178,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   const outDir = path.join(APP_DIR, 'verify', 'out', name);
   mkdirSync(outDir, { recursive: true });
 
-  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...(mode ? [`--mode=${mode}`] : []), ...extraArgs];
+  // An installed copy honours the PYIDE_* variables below only with --pyide-test-env (main/test-env.js).
+  const args = [open ? path.join(project, open) : project, `--remote-debugging-port=${port}`, `--lang=${lang}`, ...(mode ? [`--mode=${mode}`] : []), ...(exe ? ['--pyide-test-env'] : []), ...extraArgs];
   const spawnedAt = Date.now();
   const child = spawn(exe || ELECTRON, exe ? args : [APP_DIR, ...args], {
     cwd,

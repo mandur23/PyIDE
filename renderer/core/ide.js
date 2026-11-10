@@ -978,6 +978,11 @@ ide.ui.alert = (text) => {
 };
 // Every Open with Default App comes through shell:openPath, which refuses a program of an untrusted project.
 api.on('shell:openRefused', (p) => ide.ui.alert(tr('{name} is a program or script, so opening it would run it. Safe Mode runs nothing from a project you have not trusted: trust the project first.', { name: p.split(/[\\/]/).pop() })));
+api.on('shell:openAsk', async (p) => {
+  const name = p.split(/[\\/]/).pop();
+  const yes = await ide.ui.confirm(tr('{name} is not a plain document, and the app that opens it may run what is inside (macros, scripts). This project is not trusted. Open it anyway?', { name }), { title: tr('Open with Default App'), ok: tr('Open') });
+  if (yes) api.invoke('shell:openPath', p, { confirmed: true });
+});
 // A yes/no question in the IDE's own dialog; resolves true for `ok`. window.confirm() would block the renderer.
 ide.ui.confirm = (text, { title = '', ok = tr('OK') } = {}) => new Promise((resolve) => {
   let yes = false;
@@ -1835,6 +1840,42 @@ const ipcError = (e) => {
   return text;
 };
 ide.util.errorText = ipcError;
+
+// A local file (a UNC path too) as a URL an <img>, <video> or <audio> can load.
+ide.util.fileUrl = (p) => {
+  const parts = p.replace(/\\/g, '/').split('/');
+  if (p.startsWith('\\\\')) return `file://${parts.slice(2).map(encodeURIComponent).join('/')}`;
+  return `file:///${parts.map((s, i) => (i === 0 && /^[a-zA-Z]:$/.test(s) ? s : encodeURIComponent(s))).join('/')}`;
+};
+// Resolves a relative (URL-style) reference against a folder; null when it climbs above the drive.
+ide.util.resolveRel = (dir, ref) => {
+  let rel = ref.split(/[?#]/)[0];
+  try { rel = decodeURIComponent(rel); } catch {}
+  if (/^[a-zA-Z]:[\\/]/.test(rel)) return rel.replace(/\//g, '\\');
+  const out = dir.replace(/[\\/]+$/, '').split(/[\\/]/);
+  for (const seg of rel.split(/[\\/]/)) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { if (out.length <= 1) return null; out.pop(); } else out.push(seg);
+  }
+  return out.join('\\');
+};
+// Where a document rendered in the IDE (the Markdown preview, a notebook's Markdown) may load an image or video from:
+// data: images, files relative to baseDir and, with remote (a trusted folder), https. Plain http never (anyone on the
+// network can swap or watch it), and an untrusted folder's document fetches nothing: an image would tell its server
+// who opened the file, and when. -> the URL to use, or null; a remote source left out is pushed onto blocked.
+ide.util.mediaSrc = (src, baseDir, { remote = false, blocked = [] } = {}) => {
+  // Browsers ignore ASCII controls and spaces when they read a URL, so java\nscript: is still javascript:.
+  const plain = src.replace(/[\u0000- ]/g, '');
+  if (/^data:image\//i.test(plain)) return plain;
+  if (/^https?:\/\//i.test(plain) || plain.startsWith('//')) {
+    if (remote && /^https:/i.test(plain)) return plain;
+    blocked.push(plain);
+    return null;
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(plain) && !/^[a-zA-Z]:[\\/]/.test(plain)) return null;
+  const p = ide.util.resolveRel(baseDir, src.trim());
+  return p && ide.util.fileUrl(p);
+};
 
 // Hooks that give a new file (New Python File) its first text: `async (path) => text | false | undefined`; the first
 // string wins (file-templates: the "Python Script" template), false cancels the new file (a template variable dialog

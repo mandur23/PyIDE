@@ -454,6 +454,8 @@
   // history.dirty knows only edits made since it was created; a recovered project is modified from the start.
   let forceDirty = false;
   const dirty = () => !!app.history?.dirty || forceDirty;
+  // The project file's time when it was read or last written here (cut:projectWrite refuses to overwrite a newer one).
+  let diskMtime = null;
 
   async function startSession(newKey) {
     const old = key;
@@ -462,11 +464,13 @@
     await ide.api.invoke('cut:sessionStart', newKey).catch((err) => log.warn(`session: ${err.message}`));
   }
 
-  // history: a commands history; path: the .ncut file or null; opts.key: the session key to keep (a recovery).
-  async function adopt(history, path, { reason = 'open', sessionKey } = {}) {
+  // history: a commands history; path: the .ncut file or null; opts.sessionKey: the session key to keep (a recovery);
+  // opts.mtime: the file's time as read.
+  async function adopt(history, path, { reason = 'open', sessionKey, mtime = null } = {}) {
     clearTimeout(autosaveTimer);
     ui.monitors?.program?.pause?.();
     ui.monitors?.source?.pause?.();
+    diskMtime = path ? mtime : null;
     app.setHistory(history, path, reason);
     changes = 0;
     copiedAt = 0;
@@ -509,7 +513,13 @@
     if (r?.error) { ui.notify(tr('The project could not be opened: {error}', { error: r.error.message || r.error.code || String(r.error) }), { kind: 'error' }); return false; }
     let history;
     try { history = historyFromText(r.text); } catch (err) { ui.report(err); return false; }
-    await adopt(history, r.path || path, { reason: 'open' });
+    // An autosave copy is not a project's file: the app deletes old ones, so it opens unsaved and asks for a place.
+    await adopt(history, r.autosave ? null : r.path || path, { reason: 'open', mtime: r.mtime ?? null });
+    if (r.autosave) {
+      forceDirty = true;
+      refreshTitle();
+      ui.notify(tr('This is an autosave copy, which Nano Studio Cut deletes when it gets old. Save the project to keep it.'), { kind: 'warn' });
+    }
     ui.media?.checkOffline?.(app);
     return true;
   }
@@ -519,15 +529,31 @@
     return openPath(path);
   }
 
-  async function writeTo(path) {
-    const text = app.history.serialize();
-    const r = await ide.api.invoke('cut:projectWrite', path, text);
-    if (!r?.ok) {
-      ui.notify(tr('The project could not be saved: {error}', { error: r?.error?.message || r?.error?.code || tr('unknown error') }), { kind: 'error' });
-      return false;
+  // main's failures are { error: text, code }.
+  function saveFailed(r) {
+    ui.notify(r?.code === 'autosave'
+      ? tr('Projects are not saved in the Autosave folder, where Nano Studio Cut deletes old files. Choose another folder.')
+      : tr('The project could not be saved: {error}', { error: (typeof r?.error === 'string' ? r.error : r?.error?.message) || r?.code || tr('unknown error') }), { kind: 'error' });
+    return false;
+  }
+  async function writeTo(path, { overwrite = false } = {}) {
+    const history = app.history;
+    // Taken before the text: an edit made while the file is written is not marked saved.
+    const at = history.mark();
+    const text = history.serialize();
+    const same = !!app.path && app.path.toLowerCase() === path.toLowerCase();
+    const r = await ide.api.invoke('cut:projectWrite', path, text, same && !overwrite && diskMtime !== null ? { mtime: diskMtime } : {});
+    if (r?.code === 'changed') {
+      const yes = await ui.confirm(tr('{name} was changed on disk after it was opened here, by another window or program. Overwrite it with this project?', { name: ui.basename(path) }),
+        { title: tr('Save Project'), ok: tr('Overwrite') });
+      return yes && app.history === history ? writeTo(path, { overwrite: true }) : false;
     }
-    app.history.markSaved();
+    if (!r?.ok) return saveFailed(r);
+    if (app.history !== history) return true;
+    history.markSaved(at);
+    diskMtime = r.mtime ?? null;
     clearTimeout(autosaveTimer);
+    if (dirty()) autosaveTimer = setTimeout(autosaveNow, AUTOSAVE_MS);
     const was = app.path;
     app.path = r.path || path;
     if (!was || was.toLowerCase() !== app.path.toLowerCase()) await startSession(app.path);
@@ -559,10 +585,7 @@
     const path = await ide.api.invoke('cut:saveAs', { defaultPath: dir ? `${dir}\\${name}.ncut` : `${name}.ncut`, filters: FILTERS(), title: tr('Save a Copy') });
     if (!path) return false;
     const r = await ide.api.invoke('cut:projectWrite', path, app.history.serialize());
-    if (!r?.ok) {
-      ui.notify(tr('The project could not be saved: {error}', { error: r?.error?.message || r?.error?.code || tr('unknown error') }), { kind: 'error' });
-      return false;
-    }
+    if (!r?.ok) return saveFailed(r);
     ui.toast(tr('Saved a copy as {name}', { name: ui.basename(r.path || path) }));
     return true;
   }
@@ -704,6 +727,52 @@
     refreshTitle();
     for (const other of all) if (other !== item) ide.api.invoke('cut:recoveryDismiss', other.key).catch(() => {});
     ui.media?.checkOffline?.(app);
+  }
+  // File > Restore Autosave: the autosaves of the open project (its interval copies and its latest state), newest
+  // first; the one chosen replaces the project in the editor, unsaved, under the same file and session.
+  async function restoreAutosave() {
+    if (!app.history || !key) return false;
+    const list = await ide.api.invoke('cut:autosaves', key).catch(() => []);
+    if (!Array.isArray(list) || !list.length) { ui.notify(tr('There are no autosaves of {name}.', { name: projectName() })); return false; }
+    const body = el('div', 'cut-recovery');
+    body.appendChild(el('div', 'dialog-message', tr('Choose an autosave of {name} to open in its place. The project stays unsaved until you save it.', { name: projectName() })));
+    const items = el('div', 'cut-recovery-list cut-restore-list');
+    let chosen = list[0];
+    list.forEach((a, i) => {
+      const row = el('label', 'cut-recovery-row');
+      const radio = el('input', null, undefined, { type: 'radio', name: 'cutRestore' });
+      radio.checked = i === 0;
+      radio.addEventListener('change', () => { if (radio.checked) chosen = a; });
+      row.title = a.file;
+      row.append(radio, el('span', 'cut-recovery-name', new Date(a.time).toLocaleString()), el('span', 'cut-recovery-time', a.latest ? tr('Latest state') : tr('Autosave copy')));
+      items.appendChild(row);
+    });
+    body.appendChild(items);
+    let restore = false;
+    await new Promise((resolve) => {
+      ui.dialog({
+        title: tr('Restore Autosave'),
+        id: 'cutRestoreAutosave',
+        body,
+        width: 480,
+        onClose: resolve,
+        buttons: [
+          { label: tr('Restore'), primary: true, run: () => { restore = true; } },
+          { label: tr('Cancel') },
+        ],
+      });
+    });
+    if (!restore || !(await askToSave())) return false;
+    const r = await ide.api.invoke('cut:projectRead', chosen.file);
+    if (!r?.text) { ui.notify(tr('The autosave could not be read.'), { kind: 'error' }); return false; }
+    let history;
+    try { history = historyFromText(r.text); } catch (err) { ui.report(err); return false; }
+    await adopt(history, app.path, { reason: 'recover', sessionKey: key, mtime: diskMtime });
+    forceDirty = true;
+    refreshTitle();
+    ui.toast(tr('Restored the autosave of {time}', { time: new Date(chosen.time).toLocaleString() }));
+    ui.media?.checkOffline?.(app);
+    return true;
   }
   // ---------- top bar ----------
   let nameEl = null;
@@ -862,7 +931,7 @@
     focusPanel,
     mountedPanel: (id) => mounted.get(id)?.host || null,
     lifecycle: {
-      newProject, open, openPath, save, saveAs, saveCopy, askToSave, autosaveNow, autosaveCopy, offerRecovery,
+      newProject, open, openPath, save, saveAs, saveCopy, askToSave, autosaveNow, autosaveCopy, offerRecovery, restoreAutosave,
       get key() { return key; },
       get dirty() { return dirty(); },
       get lastAutosave() { return lastAutosave; },

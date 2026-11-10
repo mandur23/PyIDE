@@ -710,7 +710,7 @@ require(client);
   }, { prefix: [probe] });
 }
 attack('the key left in the environment', [['bore-client.js', 'delete process.env.PYIDE_BORE_SECRET;', '']], secretLeaks);
-attack('the key in the output', [['bore-client.js', "if (secret) followParent();", "if (secret) { followParent(); console.error(secret.toString('base64url')); }"]], secretLeaks);
+attack('the key in the output', [['bore-client.js', '  followParent();\n', "  followParent();\n  if (secret) console.error(secret.toString('base64url'));\n"]], secretLeaks);
 attack('the key on the command line', [['minecraft/private-join.js', "'--listen', `127.0.0.1:${port}`]", "'--listen', `127.0.0.1:${port}`, '--key', key]"]], async (client) => {
   const { createPrivateJoin } = require(path.join(path.dirname(client), 'minecraft', 'private-join.js'));
   const joins = createPrivateJoin({ argv: () => [electron, client] });
@@ -929,6 +929,26 @@ setInterval(() => {}, 1000);
   const gone = await until(() => !alive(), 'the orphan to go', 30000).then(() => true, () => false);
   if (alive()) process.kill(childPid);
   check(gone, 'a process holding the key goes with the app that started it, even when the app is killed');
+
+  // A public share holds no key, but it relays anyone to the server: it goes with the app too.
+  const relay = net.createServer((c) => { c.on('error', () => {}); c.write('{"Hello":40999}\0'); });
+  const relayPort = await listen(relay);
+  const publicParent = path.join(work, 'public-parent.cjs');
+  const publicPid = path.join(work, 'public-child.pid');
+  writeFileSync(publicParent, `const { spawn } = require('child_process');
+const child = spawn(process.execPath, ${JSON.stringify([realClient, 'local', '25565', '--local-host', '127.0.0.1', '--to', '127.0.0.1'])}, { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env: { ...process.env, PYIDE_BORE_CONTROL_PORT: ${JSON.stringify(String(relayPort))} } });
+child.stdout.once('data', () => { require('fs').writeFileSync(${JSON.stringify(publicPid)}, String(child.pid)); });
+setInterval(() => {}, 1000);
+`);
+  const app3 = runClient(publicParent, [], { secret: null });
+  await until(() => existsSync(publicPid), 'the public share under a stand-in app', 15000);
+  const publicChild = Number(readFileSync(publicPid, 'utf8'));
+  app3.child.kill();
+  const publicAlive = () => { try { process.kill(publicChild, 0); return true; } catch { return false; } };
+  const publicGone = await until(() => !publicAlive(), 'the public orphan to go', 30000).then(() => true, () => false);
+  if (publicAlive()) process.kill(publicChild);
+  relay.close();
+  check(publicGone, 'a public share\'s bore client goes with the app that started it, even when the app is killed');
 }
 
 // ---------- servers.dat ----------

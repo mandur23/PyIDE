@@ -2,7 +2,8 @@
 // saves, renames and deletes are relayed between them, and closing asks about unsaved changes and running programs
 // (Run sessions, Craft servers) first (closing the main window asks once about every window's, since it closes them all). Before the main window, the start chooser may ask
 // which app mode the process runs in (main.js).
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, dialog, ipcMain } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { pathKey, caseSensitiveDirs } = require('./path-case');
@@ -20,6 +21,11 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
   let main = null;
   let mode = 'code'; // the process's app mode, which every window's page is told (?mode=)
   let closingAll = false; // the user answered for every window: close them without asking again
+  // A page asked about closing says it got the question (window:closeAsked). One that does not within ANSWER_MS has
+  // crashed, hangs or never loaded its IDE, and could otherwise not be closed at all: it is asked natively instead.
+  const ANSWER_MS = 4000;
+  const asking = new Map(); // webContents id -> {timer} while the page has not answered, {abort} while asked natively
+  const langs = new Map(); // webContents id -> the language its page loaded (core:localeSync)
 
   const alive = () => [...all].filter((w) => !w.isDestroyed());
   const others = (sender) => alive().filter((w) => w.webContents.id !== sender.id);
@@ -62,13 +68,18 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
       const running = [...busyNames(w), ...(w === main ? others(w.webContents).flatMap(busyNames) : [])];
       if (!dirtyPaths(w).length && !elsewhere.length && !running.length) return;
       e.preventDefault();
+      if (asking.has(id)) return;
+      if (w.webContents.isCrashed()) return void askNatively(w, { crashed: true, elsewhere, running });
       w.webContents.send('window:confirmClose', { others: elsewhere, running });
+      asking.set(id, { timer: setTimeout(() => askNatively(w, { elsewhere, running }), ANSWER_MS) });
     });
     w.on('closed', () => {
       all.delete(w);
       initialState.delete(id);
       dirty.delete(id);
       busy.delete(id);
+      answered(id);
+      langs.delete(id);
       leaveAll(id);
       if (w === main) {
         main = null;
@@ -81,6 +92,57 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
     const page = { ...query, mode, product };
     w.loadFile(path.join(appDir, 'renderer', 'index.html'), { query: detached ? { ...page, detached: '1' } : page });
     return w;
+  }
+
+  function answered(id) {
+    const a = asking.get(id);
+    if (!a) return;
+    asking.delete(id);
+    clearTimeout(a.timer);
+    a.abort?.abort();
+  }
+  ipcMain.on('window:closeAsked', (e) => answered(e.sender.id));
+  // Cancel in a close question, the page's or the native one: a quit or restart waiting on the window is called off.
+  // Not an ipcMain.emit for the native one: main/ipc-guard.js refuses a message that no app page sent.
+  const cancelListeners = new Set();
+  const closeCancelled = () => { for (const fn of cancelListeners) fn(); };
+  ipcMain.on('window:closeCancelled', closeCancelled);
+  ipcMain.on('core:localeSync', (e, lang) => { langs.set(e.sender.id, lang); });
+  // The page's own words in its language (renderer/locales); the page that would translate them cannot.
+  const translator = (id) => {
+    const lang = langs.get(id);
+    let dict = {};
+    if (typeof lang === 'string' && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang)) {
+      try { dict = JSON.parse(fs.readFileSync(path.join(appDir, 'renderer', 'locales', `${lang}.json`), 'utf8')); } catch {}
+    }
+    return (text) => (typeof dict[text] === 'string' ? dict[text] : text);
+  };
+  async function askNatively(w, { crashed = false, elsewhere = [], running = [] }) {
+    if (w.isDestroyed()) return;
+    const id = w.webContents.id;
+    const abort = new AbortController();
+    asking.set(id, { abort });
+    const tr = translator(id);
+    const paths = [...dirtyPaths(w), ...elsewhere];
+    const detail = [
+      paths.length ? `${tr('Unsaved changes in these files will be lost:')}\n${paths.join('\n')}` : '',
+      running.length ? `${tr('These are still running. Closing stops them:')}\n${running.join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+    const { response } = await dialog.showMessageBox(w, {
+      type: 'warning', title: product, noLink: true, signal: abort.signal, detail,
+      message: crashed ? tr('This window stopped working.') : tr('This window is not responding.'),
+      buttons: [tr('Close Anyway'), tr('Cancel')], defaultId: 1, cancelId: 1,
+    });
+    // The page answered after all: its own dialog asks.
+    if (asking.get(id)?.abort !== abort) return;
+    asking.delete(id);
+    if (w.isDestroyed()) return;
+    if (response !== 0) return void closeCancelled();
+    dirty.delete(id);
+    busy.delete(id);
+    if (w === main) closingAll = true;
+    // Not close(): a hung page would hold that too, in its beforeunload.
+    w.destroy();
   }
 
   // The start chooser (renderer/chooser.html): a frameless window with a Dock of the modes. Resolves the mode picked, or
@@ -208,6 +270,7 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
     running: () => alive().flatMap(busyNames),
     // on: the user has answered for every window (Restart to Update), so they close without asking.
     closeWithoutAsking(on) { closingAll = !!on; },
+    onCloseCancelled(fn) { cancelListeners.add(fn); },
   };
 }
 

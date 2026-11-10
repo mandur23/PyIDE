@@ -329,7 +329,7 @@ try {
   await stopServer('survival');
   const stopDelays = await js(`(window.setTimeout = window.ownSetTimeout, window.delays)`);
   check((await tabText('survival')).includes('Stopping the server') && existsSync(path.join(serverDir('survival'), 'world.saved')), 'Stop asks the server to save and quit ("stop"), not a kill');
-  check(stopDelays.includes(60000) && !stopDelays.includes(30000), `a stopping server has 60 s to save before it is killed, which a big modpack needs (${S(stopDelays)})`);
+  check(stopDelays.includes(60000) && !stopDelays.includes(30000), `a stopping server is killed only after 60 s without output, which a big modpack's save needs (${S(stopDelays)})`);
 
   await startServer('survival');
 
@@ -408,6 +408,21 @@ try {
   await stopServer('survival');
   await stopServer('proxy');
   check((await tabText('proxy')).includes('Stopping the server'), 'Stop ends the proxy with its own command ("end")');
+  // A proxy with its own account checks off in velocity.toml (as one imported from elsewhere may be) is shared only
+  // after a warning.
+  const proxyToml = path.join(serverDir('proxy'), 'velocity.toml');
+  const proxyTomlWas = readFileSync(proxyToml, 'utf8');
+  writeFileSync(proxyToml, proxyTomlWas.replace(/^online-mode = true$/m, 'online-mode = false'));
+  await js('ide.minecraft.refresh().then(() => true)');
+  await startServer('proxy');
+  await js(`(${card('proxy')}.querySelector('.mc-share').click(), true)`);
+  await until(`!!${dialogButton('Share Anyway')}`, 'the warning about the proxy\'s account checks', 10000)
+    .then(() => check(true, 'sharing a proxy whose own account checks are off (online-mode = false in velocity.toml) warns first'), () => check(false, 'sharing a proxy with online-mode = false warns first'));
+  await js(`(${dialogButton('Cancel')}?.click(), true)`);
+  await sleep(500);
+  check(await js(`!ide.ports.state().tunnels.some((t) => t.port === 25613)`), 'Cancel leaves it unshared');
+  await stopServer('proxy');
+  writeFileSync(proxyToml, proxyTomlWas);
 
   // ---------- Forge, mod, client pack ----------
   check(await create({ name: 'modded', kind: 'forge', mc: '1.20.1', memory: '2G', port: 25612 }), 'a Forge server is created');
@@ -597,6 +612,28 @@ try {
   await until(`(${runTab('modded')}).host.textContent.includes('Unknown command: op Alex')`, 'op command', 10000);
   check(!existsSync(path.join(serverDir('modded'), 'ops.json')), 'on a running server a new operator is an /op typed into its console, which writes its own ops.json');
   await stopServer('modded');
+
+  // Account checks turned off and on again: the whitelist's UUIDs follow, from the name and from the account.
+  const offlineUuid = (name) => { const h = crypto.createHash('md5').update(`OfflinePlayer:${name}`).digest(); h[6] = (h[6] & 0x0f) | 0x30; h[8] = (h[8] & 0x3f) | 0x80; return h.toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5'); };
+  const whitelistNow = () => JSON.parse(readFileSync(path.join(serverDir('modded'), 'whitelist.json'), 'utf8'));
+  const flipAccounts = async (on) => {
+    await js(`(${inTab('.mcset-reload')}.click(), true)`);
+    await until(`!!${field('online-mode')} && ${field('online-mode')}.checked === ${!on}`, 'the settings read again', 10000);
+    await flip('online-mode', on);
+    await js(`(${inTab('.mcset-save')}.click(), true)`);
+    await until(`!!${dialogButton('Update and Save')}`, 'the question about the players\' IDs', 10000);
+    const said = await js(`[...document.querySelectorAll('.dialog')].pop().textContent`);
+    await js(`(${dialogButton('Update and Save')}.click(), true)`);
+    await until(`/Saved/.test(${inTab('.mcset-status')}.textContent)`, 'saved with the new IDs', 10000);
+    return said;
+  };
+  await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
+  const offSaid = await flipAccounts(false);
+  check(/an ID made from their name/.test(offSaid) && /start over/.test(offSaid) && whitelistNow()[0]?.uuid === offlineUuid('Steve')
+    && /^online-mode=false$/m.test(readFileSync(path.join(serverDir('modded'), 'server.properties'), 'utf8')),
+  `turning account checks off says what changes for the players and saves the whitelist with the IDs an offline server gives their names (${S(whitelistNow())})`);
+  await flipAccounts(true);
+  check(whitelistNow()[0]?.uuid === '01234567-89ab-cdef-0123-456789abcdef', `turning them on again looks the players up and saves their account IDs (${S(whitelistNow())})`);
   await js(`(${card('modded')}.querySelector('.mc-settings').click(), true)`);
   await until(`!!document.querySelector('.mc-translate-run') && !document.querySelector('.mc-translate-run').disabled`, 'translate button', 20000);
   await shot('server-settings.png');

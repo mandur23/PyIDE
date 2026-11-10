@@ -99,13 +99,20 @@ const byVersion = (a, b) => {
 };
 const RELEASE = /^\d+(\.\d+)+$/;
 
-let manifest = null;
-async function mojangManifest() {
-  manifest ||= getJson(base().mojang).catch((e) => { manifest = null; throw e; });
-  return manifest;
+// Mojang's list is kept for MANIFEST_MS: a Craft window stays open for days, and a version released meanwhile must show
+// up in New Server without a restart. A version a server names that the kept list lacks asks again at once.
+const MANIFEST_MS = 30 * 60000;
+let manifest = null; // {at, list: Promise}
+async function mojangManifest({ fresh = false } = {}) {
+  if (!manifest || fresh || Date.now() - manifest.at > MANIFEST_MS) {
+    const list = getJson(base().mojang).catch((e) => { if (manifest?.list === list) manifest = null; throw e; });
+    manifest = { at: Date.now(), list };
+  }
+  return manifest.list;
 }
 async function mojangVersion(mc) {
-  const entry = (await mojangManifest()).versions.find((v) => v.id === mc);
+  const find = (m) => (Array.isArray(m?.versions) ? m.versions : []).find((v) => v.id === mc);
+  const entry = find(await mojangManifest()) || find(await mojangManifest({ fresh: true }));
   if (!entry) throw new Error(`Minecraft ${mc} is not in Mojang's version list`);
   return getJson(entry.url);
 }

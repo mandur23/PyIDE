@@ -315,7 +315,41 @@ try {
   await until(`${H}.dataset.kernel === 'idle'`, 'restarted after death', 60000);
   await runAt(t, probe, '6 * 7', 'after death');
   check((await outputsText(t, probe)).includes('42'), 'Restart Kernel brings a dead kernel back');
+  check(await js(`ide.activeTab().busy()`), 'a notebook whose kernel runs is busy, so the tab limit leaves it open');
   await js(`ide.closeTab(ide.activeTab().path, true)`);
+
+  // ---------- an edit just before the tab closes ----------
+  // The notebook batches edits for 300 ms. With the file also open as text the close asks nothing (that tab keeps the
+  // document), and the last edit must still reach the document rather than go with the notebook view.
+  await openFile(t, 'analysis.ipynb');
+  await until(`${H}?.classList.contains('nb-host') && ${H}.dataset.cells > 0`, 'notebook for the last edit');
+  const nbPath = await js(`ide.activeTab().path`);
+  await js(`ide.openFile(${JSON.stringify(nbPath)}, { asText: true, group: 'right' }).then(() => true)`);
+  await until(`ide.groups().flatMap((g) => g.tabs).filter((t) => ide.util.samePath(t.path, ${JSON.stringify(nbPath)})).length === 2`, 'the notebook also open as text');
+  const lastEdit = await js(`(async () => {
+    const tab = ide.groups().flatMap((g) => g.tabs).find((t) => t.notebook && ide.util.samePath(t.path, ${JSON.stringify(nbPath)}));
+    const cell = tab.notebook.cells()[0].model;
+    cell.setValue('# first edit');
+    cell.setValue('# edit just before closing');
+    await ide.closeTabObject(tab);
+    return ide.getDocument(${JSON.stringify(nbPath)})?.model.getValue().includes('# edit just before closing');
+  })()`);
+  check(lastEdit, 'closing a notebook right after an edit keeps that edit in the document');
+  await js(`(ide.closeTab(${JSON.stringify(nbPath)}, true), true)`);
+  await js(`(ide.runAction?.('Unsplit'), true)`);
+
+  // ---------- an unedited notebook saved by another tool ----------
+  // Its JSON layout is not the notebook's own: closing it must not ask about changes nobody made.
+  writeFileSync(path.join(t.project, 'compact.ipynb'), JSON.stringify({ nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [{ cell_type: 'markdown', id: 'a', metadata: {}, source: ['# compact'] }] }));
+  await openFile(t, 'compact.ipynb');
+  await until(`${H}?.classList.contains('nb-host') && ${H}.dataset.cells > 0`, 'compact notebook');
+  const askedUnedited = await js(`(async () => {
+    ide.closeTab(ide.activeTab().path);
+    await new Promise((r) => setTimeout(r, 400));
+    return [...document.querySelectorAll('.dialog')].some((d) => /unsaved changes/.test(d.textContent));
+  })()`);
+  check(!askedUnedited, 'closing a notebook nobody edited asks nothing, even when another tool wrote its JSON');
+  if (askedUnedited) await js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Close').click(), true)`);
 
   // ---------- invalid file ----------
   await openFile(t, 'broken.ipynb');

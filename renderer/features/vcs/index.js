@@ -88,19 +88,8 @@
     }
   }
 
-  // Reloads tabs from disk after git rewrote files; unlike ide.reloadFromDisk this also replaces unsaved edits.
-  async function reloadTabs(paths, force) {
-    if (!force) return ide.reloadFromDisk(paths);
-    for (const tab of ide.tabs.filter((t) => t.kind === 'file' && paths.some((p) => samePath(p, t.path)))) {
-      // Read in the document's own encoding (CP949, UTF-16...), as the editor opened it.
-      let text;
-      try { ({ text } = await ide.api.invoke('fs:readText', tab.path, tab.doc?.encoding)); } catch { continue; }
-      if (text === undefined) continue;
-      if (text !== tab.model.getValue()) tab.model.pushEditOperations([], [{ range: tab.model.getFullModelRange(), text }], () => null);
-      tab.savedVersion = tab.model.getAlternativeVersionId();
-    }
-    ide.renderTabs();
-  }
+  // Reloads tabs from disk after git rewrote files; force also replaces unsaved edits (a rollback).
+  const reloadTabs = (paths, force) => ide.reloadFromDisk(paths, { force });
 
   // ---------- status refresh ----------
   let refreshSeq = 0;

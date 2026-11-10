@@ -219,15 +219,45 @@
     if (offline.size && ask) relinkDialog(app);
     return [...offline];
   }
-  // Fills the media entry of a file found again.
-  async function relinkTo(app, id, path) {
-    const st = await ide.api.invoke('cut:stat', path);
-    if (!st || st.missing || !st.isFile) return false;
-    const old = app.project.media.find((m) => m.id === id)?.path;
-    const r = ui.exec(app, Cut.commands.relinkMedia(id, { path: st.path || path, size: st.size, mtime: st.mtime }));
+  // A file found for media m, read like an import: -> {file} (the fields relinkMedia takes, its duration and streams
+  // included) or {error} (text for the person) when it is not the same kind of media with the same streams.
+  async function relinkCheck(m, path) {
+    const [p] = await probeAll([path]).catch(() => []);
+    if (!p?.media) return { error: reasonText(p?.error) };
+    const f = p.media;
+    if (f.kind !== m.kind || !!f.video !== !!m.video || !!f.audio !== !!m.audio) {
+      const what = (x) => (x.kind === 'image' ? tr('a picture') : x.video && x.audio ? tr('video with sound') : x.video ? tr('video without sound') : tr('sound only'));
+      return { error: tr('{name} is {found}, but the media was {was}.', { name: ui.basename(path), found: what(f), was: what(m) }) };
+    }
+    // within a frame it is the same length (a container rounding its duration otherwise); the clips keep theirs
+    const same = Math.abs(f.duration - m.duration) <= frameOf(m);
+    return { file: { path: f.path, size: f.size, mtime: f.mtime, duration: same ? m.duration : f.duration, video: f.video, audio: f.audio } };
+  }
+  const frameOf = (m) => (m.video?.fps ? Cut.time.frameTicks(Cut.model.validFps(m.video.fps) ? m.video.fps : nearestRate(m.video.fps)) : Cut.time.TICKS / 100);
+  // The clips of the project that use media id past time D.
+  const pastEnd = (project, id, D) => project.sequences.flatMap((s) => s.clips).filter((c) => c.source?.media === id && (c.source.freeze ? c.in > D : c.out > D + 0.5));
+  // A shorter file is a different take or a cut-off copy: the person is asked first. -> true to go on.
+  async function shorterOk(app, m, file) {
+    if (m.kind === 'image' || file.duration >= m.duration) return true;
+    const n = pastEnd(app.project, m.id, file.duration).length;
+    const secs = (t) => (t / Cut.time.TICKS).toFixed(1);
+    const text = tr('{name} is shorter than the file it replaces ({now} s instead of {was} s).', { name: ui.basename(file.path), now: secs(file.duration), was: secs(m.duration) })
+      + (n ? ` ${tr('{n} clips use the part after its end: they are shortened to it, or removed when nothing of them is left.', { n })}` : '');
+    return ui.confirm(text, { title: tr('Relink Media'), ok: tr('Relink') });
+  }
+  // Fills the media entry of a file found again. -> true when relinked; a file that does not fit is reported.
+  async function relinkTo(app, id, path, { quiet = false } = {}) {
+    const m = app.project.media.find((x) => x.id === id);
+    if (!m) return false;
+    const c = await relinkCheck(m, path);
+    if (c.error) { if (!quiet) ui.notify(tr('{name} was not relinked: {error}', { name: m.name, error: c.error }), { kind: 'warn' }); return false; }
+    if (!(await shorterOk(app, m, c.file))) return false;
+    const old = m.path;
+    const r = ui.exec(app, Cut.commands.relinkMedia(id, c.file));
     if (!r) return false;
     offline.delete(id);
     if (old) Cut.media?.forget?.(old);
+    if (r.removed?.length) ui.notify(tr('{n} clips past the end of {name} were removed.', { n: r.removed.length, name: m.name }), { kind: 'warn' });
     return true;
   }
   // Offline media -> {paths: Map(media id -> path)} found under a folder: the same file name and size, else the same
@@ -247,8 +277,7 @@
       if (!p) continue;
       const [probed] = await probeAll([p]).catch(() => []);
       const d = probed?.media?.duration;
-      const frame = m.video?.fps ? Cut.time.frameTicks(Cut.model.validFps(m.video.fps) ? m.video.fps : nearestRate(m.video.fps)) : Cut.time.TICKS / 100;
-      if (Number.isFinite(d) && Math.abs(d - m.duration) <= frame) paths.set(m.id, p);
+      if (Number.isFinite(d) && Math.abs(d - m.duration) <= frameOf(m)) paths.set(m.id, p);
     }
     return { paths };
   }
@@ -297,7 +326,7 @@
             try {
               for (const m of missing) {
                 const p = found.paths.get(m.id);
-                if (p && offline.has(m.id) && await relinkTo(app, m.id, p)) n += 1;
+                if (p && offline.has(m.id) && await relinkTo(app, m.id, p, { quiet: true })) n += 1;
               }
             } finally { app.history.commit(); }
           }

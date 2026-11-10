@@ -1091,7 +1091,7 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     return info;
   });
 
-  app.on('before-quit', () => {
+  app.on('will-quit', () => {
     for (const idx of indexes.values()) {
       clearTimeout(idx.saveTimer);
       try { flushSync(idx); } catch {}

@@ -15,6 +15,11 @@ const launchDir = process.cwd();
   if (!own) delete process.env.UV_THREADPOOL_SIZE;
 }
 const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, protocol, nativeImage } = require('electron');
+// Before any module reads one: an installed copy ignores the PYIDE_* test hooks (main/test-env.js).
+const droppedTestEnv = require('./main/test-env').dropTestEnv({ packaged: app.isPackaged, argv: process.argv, env: process.env });
+// Before any handler is registered: IPC answers only the app's own pages, top frame (main/ipc-guard.js).
+let ipcRefused = null;
+require('./main/ipc-guard').guardIpc(ipcMain, { appDir: __dirname, onRefused: (r) => ipcRefused?.(r) });
 // No application menu, before ready so Electron makes no default one. Its accelerators took every key the page left
 // unhandled (focus in the project tree, a dialog open): Ctrl+R reloaded the page with the unsaved edits, Ctrl+W
 // closed the window, Ctrl+M minimized it. The pages have their own keymaps (renderer/core/ide.js).
@@ -28,6 +33,17 @@ if (process.env.PYIDE_USER_DATA) app.setPath('userData', process.env.PYIDE_USER_
 app.setMaxListeners(50);
 // First: the IDE log and internal error collection (no raw Electron error dialogs from here on).
 const diagnostics = require('./main/diagnostics').install();
+if (droppedTestEnv.length) diagnostics.logger('#app').warn(`ignored test variables in an installed copy: ${droppedTestEnv.join(', ')}`);
+{
+  const seen = new Set();
+  const log = diagnostics.logger('#ipc');
+  ipcRefused = ({ channel, why, url }) => {
+    const key = `${channel}|${why}`;
+    if (seen.has(key) || seen.size > 200) return;
+    seen.add(key);
+    log.warn(`refused ${channel} from ${why} (${url.slice(0, 200)})`);
+  };
+}
 // Started as `nano .` the process would work in the project, and every child started without a working folder (the
 // interpreter probes, where.exe) would run there, with the project's modules and programs in reach.
 try {
@@ -241,13 +257,21 @@ ipcMain.handle('fs:probe', async (_e, p, ms = 5000) => {
 });
 // A handler that throws is logged as an error. A file gone between a rename and a reader that knew its old path is no
 // error, so that one comes back as a value and preload.js rejects with it.
-ipcMain.handle('fs:read', (_e, p) => {
-  try { return { text: fs.readFileSync(p, 'utf8') }; } catch (err) {
+// Plugins read a file with these, change a line and write it back, so both keep the file's own encoding as the editor
+// does: a UTF-16 requirements.txt from PowerShell 5 or a CP949 .gitignore came back as UTF-8 mojibake. A new file is UTF-8.
+ipcMain.handle('fs:read', async (_e, p) => {
+  try {
+    const buf = await fs.promises.readFile(p);
+    return { text: textCodec.decode(buf, textCodec.detect(buf)) };
+  } catch (err) {
     if (err.code === 'ENOENT') return { missing: err.message };
     throw err;
   }
 });
-ipcMain.handle('fs:write', (_e, p, text) => fs.writeFileSync(p, text, 'utf8'));
+ipcMain.handle('fs:write', async (_e, p, text) => {
+  const old = await fs.promises.readFile(p).catch((err) => { if (err.code === 'ENOENT') return null; throw err; });
+  return textCodec.writeAsync(p, text, old ? textCodec.detect(old) : 'utf-8');
+});
 // A name Windows does not keep as given: `a:b` makes file a with an alternate data stream b, a trailing dot or space is
 // dropped (and the file then cannot be opened by the name given), CON or NUL is a device. The tree refuses these with
 // its own message (renderer/core/ide.js badName); this is for every other caller.
@@ -328,10 +352,16 @@ ipcMain.handle('fs:writeText', (_e, p, text, encoding) => textCodec.writeAsync(p
 ipcMain.handle('fs:decode', (_e, p, encoding) => textCodec.readAsync(p, encoding));
 ipcMain.handle('shell:showInFolder', (_e, p) => shell.showItemInFolder(p));
 // Open with Default App starts a program, so a program of an untrusted project stays closed (Safe Mode runs nothing).
-ipcMain.handle('shell:openPath', (e, p) => {
-  if (!trust.runsWhenOpened(p) || trust.isTrusted(p)) return shell.openPath(p);
-  e.sender.send('shell:openRefused', p);
-  return 'untrusted';
+// In an untrusted project a program is refused, a folder or a plain document opens, and anything else (an Office file,
+// a .chm, a web page) opens only once the user agreed: the renderer asks and calls again with {confirmed: true}.
+ipcMain.handle('shell:openPath', async (e, p, { confirmed = false } = {}) => {
+  if (typeof p !== 'string' || !p) return 'invalid';
+  if (trust.isTrusted(p)) return shell.openPath(p);
+  const kind = trust.openKind(p);
+  const folder = kind !== 'program' && await require('fs').promises.stat(p).then((s) => s.isDirectory(), () => false);
+  if (folder || kind === 'document' || (kind === 'ask' && confirmed)) return shell.openPath(p);
+  e.sender.send(kind === 'program' ? 'shell:openRefused' : 'shell:openAsk', p);
+  return kind === 'program' ? 'untrusted' : 'ask';
 });
 // Sync: the output line that may hold such a link is being laid out (renderer/core/ide.js).
 ipcMain.on('security:shareAllowedSync', (e, p) => { e.returnValue = require('./main/security').shareAllowed(p); });
@@ -500,14 +530,17 @@ ipcMain.handle('core:features', async (e) => {
 ipcMain.on('core:localeSync', (e, lang) => { e.returnValue = plugins.localeDictionary(lang); });
 // The "PyIDE settings imported" notification, shown once by the first window that asks.
 ipcMain.handle('core:migrationNotice', () => migration.takeNotice(app.getPath('userData')));
-// A normal quit, not app.exit(): windows with unsaved files still ask, and the plugins' before-quit/will-quit handlers
-// (index and history flushes, terminals, servers, lock files) run before the new instance starts.
-// The new instance starts in this one's mode, without the chooser.
+// A normal quit, not app.exit(): windows with unsaved files still ask, and the plugins' will-quit handlers (index and
+// history flushes, terminals, servers, lock files) run before the new instance starts.
+// The new instance starts in this one's mode, without the chooser. app.relaunch() only at will-quit: once called it
+// cannot be taken back, and after Cancel in the unsaved-files question the next ordinary quit restarted the IDE.
+let relaunchArgs = null;
 ipcMain.handle('core:relaunch', () => {
   const args = process.argv.slice(1).filter((a) => !a.startsWith('--mode=')).map((a) => (a.startsWith('-') ? a : path.resolve(launchDir, a)));
-  app.relaunch({ args: [...args, `--mode=${appMode}`] });
+  relaunchArgs = [...args, `--mode=${appMode}`];
   app.quit();
 });
+app.on('will-quit', () => { if (relaunchArgs) app.relaunch({ args: relaunchArgs }); });
 ipcMain.handle('plugins:list', () => plugins.list());
 ipcMain.handle('plugins:setEnabled', (_e, id, enabled) => plugins.setEnabled(id, enabled));
 ipcMain.handle('plugins:install', (_e, source) => plugins.install(source));
@@ -577,6 +610,7 @@ function registerFeatures() {
 }
 
 const windows = createWindowManager({ appDir: __dirname, product: app.getName(), devToolsKey: !app.isPackaged });
+windows.onCloseCancelled(() => { relaunchArgs = null; diagnostics.quitCancelled(); });
 // Collaboration (main/features/collab.js) adds its guests to the windows' shared documents.
 featureContext.windows = windows;
 

@@ -3,7 +3,7 @@
 // Cut.testsrc, written into a temporary Cut home; native dialogs answer from PYIDE_CUT_DIALOG (main/features/cut.js).
 // Premiere Pro's frame: the workspace tabs and their arrangements, Alt+Shift+number, Reset to Saved Layout and Save
 // Changes from a tab's menu (Alt+Shift+0), maximizing a frame (` and Shift+`), and the menu bar (opening, moving over
-// and Right between menus, Sequence > Add Edit acting on the timeline, Window > Workspaces, File > Save a Copy).
+// and Right between menus, Sequence > Add Edit acting on the timeline, Window > Workspaces, File > Save a Copy), File > Restore Autosave, and an autosave copy that opens unsaved and is not saved in place.
 import { launch, clickMenuPath } from './lib.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, rmSync, renameSync, copyFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -351,6 +351,42 @@ try {
   check(count === before2 + 1 && JSON.parse(readFileSync(path.join(autosaveDir, saves[count - 1]), 'utf8')).sequences[0].markers.length === 1,
     `the autosave file appears 2 s after the edit, with the edit in it (${before2} -> ${count})`);
 
+  // an edit that lands while the file is written is not marked saved
+  const savedFirst = readFileSync(projectPath, 'utf8');
+  const during = await S(`(async () => {
+    const inv = ide.api.invoke;
+    ide.api.invoke = async (ch, ...a) => { const r = await inv(ch, ...a); if (ch === 'cut:projectWrite') Cut.app.history.do(Cut.commands.addMarker(Cut.app.sequence.id, { t: Cut.time.TICKS })); return r; };
+    try { await Cut.ui.lifecycle.save(); } finally { ide.api.invoke = inv; }
+    return { dirty: Cut.ui.lifecycle.dirty, markers: Cut.app.sequence.markers.length, root: document.querySelector('.cut-root').classList.contains('dirty') };
+  })()`);
+  check(during.dirty && during.markers === 2 && during.root && JSON.parse(readFileSync(projectPath, 'utf8')).sequences[0].markers.length === 1,
+    `a marker added while the save was being written leaves the project modified (${JSON.stringify(during)})`);
+  // another window or program saved the file since: Save asks before overwriting it
+  const theirs = readFileSync(projectPath, 'utf8').replace('"format"', '"other":"instance","format"');
+  writeFileSync(projectPath, theirs);
+  await key('Ctrl+S');
+  await until(`[...document.querySelectorAll('.dialog-backdrop')].some((d) => /changed on disk/.test(d.textContent))`, 'the overwrite question', 10000);
+  check(true, 'saving over a file changed on disk since it was opened asks first');
+  await S(`([...document.querySelectorAll('.dialog-backdrop')].find((d) => /changed on disk/.test(d.textContent)).dataset.t = 'changed', true)`);
+  await click('[data-t="changed"] .dialog-buttons button:not(.primary)');
+  await until(`![...document.querySelectorAll('.dialog-backdrop')].some((d) => /changed on disk/.test(d.textContent))`, 'the question closed', 5000);
+  check(readFileSync(projectPath, 'utf8') === theirs && await S(`Cut.ui.lifecycle.dirty`), 'Cancel leaves their file alone and the project modified');
+  await key('Ctrl+S');
+  await until(`[...document.querySelectorAll('.dialog-backdrop')].some((d) => /changed on disk/.test(d.textContent))`, 'the overwrite question again', 10000);
+  await S(`([...document.querySelectorAll('.dialog-backdrop')].find((d) => /changed on disk/.test(d.textContent)).dataset.t = 'changed', true)`);
+  await click('[data-t="changed"] .dialog-buttons button.primary');
+  await until(`!Cut.ui.lifecycle.dirty`, 'saved over', 10000);
+  const ours = JSON.parse(readFileSync(projectPath, 'utf8'));
+  check(!ours.other && ours.sequences[0].markers.length === 2, 'Overwrite saves this project over it');
+  await S(`(Cut.app.history.do(Cut.commands.addMarker(Cut.app.sequence.id, { t: 2 * Cut.time.TICKS })), true)`);
+  await key('Ctrl+S');
+  await until(`!Cut.ui.lifecycle.dirty`, 'saved again', 10000);
+  check(JSON.parse(readFileSync(projectPath, 'utf8')).sequences[0].markers.length === 3 && !(await S(`[...document.querySelectorAll('.dialog-backdrop')].some((d) => /changed on disk/.test(d.textContent))`)),
+    'the next save of a file only this window wrote does not ask');
+  // back to one marker and the file as first saved, which the later parts expect
+  await S(`(Cut.app.history.undo(), Cut.app.history.undo(), true)`);
+  writeFileSync(projectPath, savedFirst);
+
   // ---------- export ----------
   await key('Ctrl+M');
   await until(`!!document.querySelector('#cutExportDialog')`, 'the export dialog');
@@ -691,6 +727,55 @@ try {
   check(await app(`app.path && app.path.toLowerCase().endsWith('shell-test.ncut') && Cut.ui.lifecycle.dirty && document.querySelector('.cut-root').classList.contains('dirty')`),
     'Recover opens the autosave as the project, modified until saved');
   check(JSON.parse(readFileSync(projectPath, 'utf8')).sequences[0].markers.length === 0, 'recovering does not write over the saved file');
+
+  // ---------- File > Restore Autosave; an autosave copy opened from the Autosave folder ----------
+  await S(`(window.__said = [], Cut.ui.listen((t) => window.__said.push(t)), true)`);
+  await click('.cut-monitor-program .cut-monitor-head');
+  await key('Ctrl+S');
+  await until(`!Cut.ui.lifecycle.dirty`, 'the recovered project saved', 10000);
+  await key('End');
+  await key('M');
+  await until(`Cut.app.sequence.markers.length === 3`, 'a third marker');
+  await S(`Cut.ui.lifecycle.autosaveCopy({ force: true }).then(() => true)`);
+  await key('Ctrl+Z');
+  await until(`Cut.app.sequence.markers.length === 2 && !Cut.ui.lifecycle.dirty`, 'undone to the saved state');
+  await click('.cut-menubar-item[data-menu="file"]');
+  await clickMenuPath(ctx, ['Restore Autosave…']);
+  await until(`!!document.querySelector('#cutRestoreAutosave')`, 'the Restore Autosave dialog', 8000);
+  const rows = await S(`[...document.querySelectorAll('#cutRestoreAutosave .cut-recovery-row')].map((r) => r.querySelector('.cut-recovery-time').textContent)`);
+  check(rows.length === autosaves().length && rows.includes('Autosave copy') && rows.includes('Latest state') && await S(`document.querySelector('#cutRestoreAutosave input[type=radio]').checked`),
+    `File > Restore Autosave lists every autosave of the project, newest chosen (${JSON.stringify(rows)}, ${autosaves().length} files)`);
+  await shot('restore-autosave-dark.png');
+  await S(`ide.settings.set('appearance.theme', 'light')`);
+  await sleep(300);
+  await shot('restore-autosave-light.png');
+  await S(`ide.settings.set('appearance.theme', 'dark')`);
+  await click('#cutRestoreAutosave .dialog-buttons button.primary');
+  await until(`Cut.app.sequence.markers.length === 3`, 'restored', 10000);
+  check(await app(`app.path.toLowerCase().endsWith('shell-test.ncut') && Cut.ui.lifecycle.dirty`) && JSON.parse(readFileSync(projectPath, 'utf8')).sequences[0].markers.length === 2,
+    'Restore opens the autosave in place of the project, modified, and leaves the saved file alone');
+  await key('Ctrl+S');
+  await until(`!Cut.ui.lifecycle.dirty`, 'saved again', 10000);
+  const copyFile = path.join(autosaveDir, autosaves().sort().find((n) => !n.endsWith('.latest.ncut')));
+  const copyText = readFileSync(copyFile, 'utf8');
+  answer({ pickProject: copyFile });
+  await click('.cut-topbar .cut-open');
+  await until(`!Cut.app.path && Cut.ui.lifecycle.dirty && Cut.app.sequence.markers.length === 3`, 'the autosave copy opened', 10000);
+  check(await S(`document.querySelector('.cut-project-title').textContent === 'Untitled' && window.__said.some((t) => /autosave copy/.test(t))`),
+    'an autosave copy opens as an unsaved project, with a warning that the app deletes old copies');
+  answer({ saveAs: copyFile });
+  await key('Ctrl+S');
+  await until(`window.__said.some((t) => /not saved in the Autosave folder/.test(t))`, 'the refusal', 8000);
+  check(readFileSync(copyFile, 'utf8') === copyText && await S(`!Cut.app.path && Cut.ui.lifecycle.dirty`), 'saving into the Autosave folder is refused with a reason; the copy stays as it was');
+  answer({ saveAs: projectPath });
+  await key('Ctrl+S');
+  await until(`!!Cut.app.path && !Cut.ui.lifecycle.dirty`, 'saved over the project', 10000);
+  await click('.cut-monitor-program .cut-monitor-head');
+  await key('Home');
+  await key('ArrowRight');
+  await key('ArrowRight');
+  await key('M');
+  await until(`Cut.ui.lifecycle.dirty`, 'an unsaved edit before closing');
 
   // ---------- closing: Don't Save closes the window ----------
   await js(`ide.api.invoke('window:close')`).catch(() => {});

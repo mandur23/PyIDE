@@ -13,31 +13,79 @@ const LIMITS = { entry: 512 * 1024 * 1024, total: 2 * 1024 * 1024 * 1024, files:
 const mb = (n) => Math.ceil(n / 1048576);
 
 const CRC = new Int32Array(256).map((_v, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
-const crc32 = (buf) => { let c = -1; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; };
+const crc32 = zlib.crc32 || ((buf) => { let c = -1; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; });
+
+// What is written has no ZIP64 records, which hold no more than 65,535 entries and 4 GB: past that the directory's
+// counts and offsets wrap and the archive comes out damaged without a word, so it is refused instead.
+const MAX_ENTRIES = 0xffff;
+const MAX_BYTES = 0xffffffff;
+const tooMany = (n) => fail(`${n} files are more than the 65,535 a zip holds without ZIP64`);
+const tooLarge = () => fail('The archive would be larger than the 4 GB a zip holds without ZIP64');
+// One entry's local header and name, and its central directory record.
+function record(name, data, packed, offset) {
+  const n = Buffer.from(name, 'utf8');
+  if (data.length > MAX_BYTES || packed.length > MAX_BYTES || offset > MAX_BYTES) throw tooLarge();
+  const crc = crc32(data);
+  const head = Buffer.alloc(30);
+  head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt16LE(0x0800, 6); head.writeUInt16LE(8, 8);
+  head.writeUInt32LE(crc, 14); head.writeUInt32LE(packed.length, 18); head.writeUInt32LE(data.length, 22); head.writeUInt16LE(n.length, 26);
+  const dir = Buffer.alloc(46);
+  dir.writeUInt32LE(0x02014b50, 0); dir.writeUInt16LE(20, 4); dir.writeUInt16LE(20, 6); dir.writeUInt16LE(0x0800, 8); dir.writeUInt16LE(8, 10);
+  dir.writeUInt32LE(crc, 16); dir.writeUInt32LE(packed.length, 20); dir.writeUInt32LE(data.length, 24); dir.writeUInt16LE(n.length, 28); dir.writeUInt32LE(offset, 42);
+  return { local: Buffer.concat([head, n]), central: Buffer.concat([dir, n]) };
+}
+function endRecord(count, size, offset) {
+  if (offset > MAX_BYTES || offset + size > MAX_BYTES) throw tooLarge();
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10); end.writeUInt32LE(size, 12); end.writeUInt32LE(offset, 16);
+  return end;
+}
 
 // entries: [{name, data: Buffer}] -> the zip's bytes (deflated, UTF-8 names).
 function writeZip(entries) {
+  if (entries.length > MAX_ENTRIES) throw tooMany(entries.length);
   const locals = [];
   const central = [];
   let offset = 0;
   for (const { name, data } of entries) {
-    const n = Buffer.from(name, 'utf8');
     const packed = zlib.deflateRawSync(data);
-    const crc = crc32(data);
-    const head = Buffer.alloc(30);
-    head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt16LE(0x0800, 6); head.writeUInt16LE(8, 8);
-    head.writeUInt32LE(crc, 14); head.writeUInt32LE(packed.length, 18); head.writeUInt32LE(data.length, 22); head.writeUInt16LE(n.length, 26);
-    const dir = Buffer.alloc(46);
-    dir.writeUInt32LE(0x02014b50, 0); dir.writeUInt16LE(20, 4); dir.writeUInt16LE(20, 6); dir.writeUInt16LE(0x0800, 8); dir.writeUInt16LE(8, 10);
-    dir.writeUInt32LE(crc, 16); dir.writeUInt32LE(packed.length, 20); dir.writeUInt32LE(data.length, 24); dir.writeUInt16LE(n.length, 28); dir.writeUInt32LE(offset, 42);
-    locals.push(head, n, packed);
-    central.push(dir, n);
-    offset += head.length + n.length + packed.length;
+    const r = record(name, data, packed, offset);
+    locals.push(r.local, packed);
+    central.push(r.central);
+    offset += r.local.length + packed.length;
   }
-  const size = central.reduce((s, b) => s + b.length, 0);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(size, 12); end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, ...central, end]);
+  return Buffer.concat([...locals, ...central, endRecord(entries.length, central.reduce((s, b) => s + b.length, 0), offset)]);
+}
+
+// The same zip written to file, an entry at a time: entries [{name, data?: Buffer, file?: a path read when its turn
+// comes, read?: () => Buffer}]. Deflating runs on libuv's threads and nothing holds the whole archive, so a client
+// pack of hundreds of MB of mods does not stop the main process. Written beside file and renamed over it at the end.
+const deflate = (data) => new Promise((resolve, reject) => { zlib.deflateRaw(data, (err, out) => (err ? reject(err) : resolve(out))); });
+async function writeZipFile(file, entries) {
+  if (entries.length > MAX_ENTRIES) throw tooMany(entries.length);
+  const tmp = `${file}.${process.pid}.tmp`;
+  const out = await fs.promises.open(tmp, 'w');
+  try {
+    const central = [];
+    let offset = 0;
+    for (const e of entries) {
+      const data = e.data ?? (e.file ? await fs.promises.readFile(e.file) : e.read());
+      const packed = await deflate(data);
+      const r = record(e.name, data, packed, offset);
+      await out.write(r.local);
+      await out.write(packed);
+      central.push(r.central);
+      offset += r.local.length + packed.length;
+    }
+    const dir = Buffer.concat(central);
+    await out.write(Buffer.concat([dir, endRecord(entries.length, dir.length, offset)]));
+    await out.close();
+    await fs.promises.rename(tmp, file);
+  } catch (err) {
+    await out.close().catch(() => {});
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 // A zip on disk opened for reading entries: {names, read(name) -> Buffer | null, close()}. Only the central directory
@@ -142,4 +190,4 @@ function unpackZip(file, dest, prefix = '') {
   } finally { zip.close(); }
 }
 
-module.exports = { writeZip, readEntry, openZip, unpackZip, canonical };
+module.exports = { writeZip, writeZipFile, readEntry, openZip, unpackZip, canonical };

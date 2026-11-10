@@ -296,6 +296,23 @@ await section('stop', async () => {
   check(await js(`!!__chat.rect('.cut-assistant .cut-as-send') && !document.querySelector('.cut-assistant .cut-as-stop:not([hidden])')`), 'Send is back, Stop is gone');
 });
 
+// ---------- another project opened while a turn runs ----------
+await section('switch', async () => {
+  await js('__chat.fresh()');
+  scenario({ stepMs: 700 });
+  const calls0 = agentLog().filter((l) => l.tool).length;
+  await ask('천천히 표시 여러 개 넣어줘');
+  await until('__chat.seq().markers.length >= 2', 'two markers in', 20000);
+  await js(`Cut.ui.lifecycle.newProject({ ask: false }).then(() => true)`);
+  await idle(5000);
+  await sleep(1600);
+  const after = await js('({ markers: Cut.app.sequence.markers.length, steps: Cut.app.history.position, running: !!Cut.ui.assistant.running, text: [...document.querySelectorAll(".cut-assistant .cut-as-msg.assistant > .cut-as-text")].at(-1)?.textContent })');
+  check(after.markers === 0 && after.steps === 0, `nothing of the turn lands in the new project (${S(after)})`);
+  check(!after.running && /다른 프로젝트/.test(after.text || ''), `the turn ends and the chat says another project was opened (${after.text})`);
+  const late = agentLog().filter((l) => l.tool).slice(calls0).filter((l) => l.tool === 'add_marker' && l.ok);
+  check(late.length >= 2 && late.length < 8, `the turn's calls stop with it (${late.length} markers placed before the switch)`);
+});
+
 // ---------- export asks first ----------
 await section('export', async () => {
   await js('__chat.fresh()');

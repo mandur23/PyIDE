@@ -169,5 +169,5 @@ exports.register = ({ ipcMain, app, send, unpackedDir }) => {
     return true;
   });
 
-  app.on('before-quit', () => sidecar?.kill());
+  app.on('will-quit', () => sidecar?.kill());
 };

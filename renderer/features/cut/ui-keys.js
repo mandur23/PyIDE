@@ -114,6 +114,7 @@
     ['save', 'Save Project', 'Ctrl+S', 'always'],
     ['saveAs', 'Save Project As…', 'Ctrl+Shift+S', 'always'],
     ['saveCopy', 'Save a Copy…', [], 'always'],
+    ['restoreAutosave', 'Restore Autosave…', [], 'always'],
     ['open', 'Open Project…', 'Ctrl+O', 'always'],
     ['newProject', 'New Project', 'Ctrl+Alt+N', 'always'],
     ['newSequence', 'New Sequence…', [], 'global'],
@@ -211,7 +212,7 @@
     ['marks', 'Marking', /^(markIn|markOut|markClip|markSelection|clearIn|clearOut|clearInOut|addMarker|nextMarker|prevMarker|clearMarker|clearAllMarkers)$/],
     ['tools', 'Tools', /^(tool\.|snap$)/],
     ['view', 'View', /^(zoomIn|zoomOut|zoomFit|keyHelp|maximizePanel|maximizeUnderCursor|expandTracks|minimizeTracks|videoTracksTaller|videoTracksShorter|audioTracksTaller|audioTracksShorter)$/],
-    ['project', 'Project', /^(undo|redo|save|saveAs|saveCopy|open|newProject|newSequence|newBin|import|export|exportFrame|keyboardShortcuts|settings)$/],
+    ['project', 'Project', /^(undo|redo|save|saveAs|saveCopy|restoreAutosave|open|newProject|newSequence|newBin|import|export|exportFrame|keyboardShortcuts|settings)$/],
     ['media', 'Media', /^(selectUnused|removeUnused|findMissing|createProxy)$/],
     ['workspaces', 'Workspaces and Panels', /^(workspace\.|window\.)/],
     ['automation', 'Automation', /^auto\./],
@@ -271,6 +272,7 @@
   on('save', () => { life()?.save(); });
   on('saveAs', () => { life()?.saveAs(); });
   on('saveCopy', () => { life()?.saveCopy?.(); });
+  on('restoreAutosave', () => { life()?.restoreAutosave?.(); });
   on('open', () => { life()?.open(); });
   on('newProject', () => { life()?.newProject(); });
   on('newSequence', ({ app }) => { ui.media?.newSequenceDialog?.(app); });

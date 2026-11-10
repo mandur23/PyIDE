@@ -21,7 +21,7 @@
 //   onNotification(server, method, params) for server-specific notifications
 //   whenReady(server)     -> Promise settled when the server can answer (after initialize), else initialize is enough
 // }
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
@@ -116,7 +116,7 @@ class Server {
       });
     });
     this.proc.stdin.on('error', () => {}); // writes until 'exit' marks the server gone would otherwise throw EPIPE
-    diagnostics.watchProcess(this.proc, { name: spec.processName, stack: this.ownerStack });
+    diagnostics.watchProcess(this.proc, { name: spec.processName, stack: this.ownerStack, ended: () => this.stopping });
     this.ready = this.initialize().then(() => spec.whenReady?.(this));
     this.ready.catch(() => {});
     this.watch();
@@ -383,7 +383,15 @@ class Server {
     this.stopping = true;
     this.watcher?.close();
     if (this.procGone) return this.exited;
-    const kill = () => { try { this.proc.kill(); } catch {} };
+    // The whole tree: a server started through cmd.exe (Kotlin's launcher is a batch file) runs as its child, and ending
+    // cmd.exe alone left the JVM running. At quit (immediate) taskkill must finish before the IDE exits. Not once the
+    // process is gone: its pid may be another program's by then.
+    const kill = () => {
+      if (this.procGone || !this.proc.pid) return;
+      const args = ['/pid', String(this.proc.pid), '/T', '/F'];
+      if (immediate) spawnSync('taskkill', args, { windowsHide: true, timeout: 5000 });
+      else spawn('taskkill', args, { windowsHide: true }).on('error', () => {});
+    };
     if (immediate) {
       kill();
       this.cleanup(true);

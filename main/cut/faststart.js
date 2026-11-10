@@ -8,6 +8,7 @@
 // end of the file".
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const { fail, realFile } = require('./paths');
 const { renameOver } = require('./project');
 
@@ -16,6 +17,8 @@ const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
 const MOOV_LIMIT = 512 * 1024 * 1024;
 const COPY_CHUNK = 8 * 1024 * 1024;
 const U32 = 0xffffffff;
+// Room left on the disk after the copy, so moving the index never fills it.
+const SPARE = 64 * 1024 * 1024;
 
 class Damaged extends Error {}
 
@@ -137,7 +140,8 @@ async function copyRange(from, to, start, end, at) {
   return out;
 }
 
-async function faststart(p) {
+// temp: {add(file), remove(file)} journals the full-size copy while it exists, so a crash does not leave it behind.
+async function faststart(p, { temp } = {}) {
   const file = await realFile(p, MP4);
   if (file.error) return file;
   const size = file.stat.size;
@@ -169,7 +173,12 @@ async function faststart(p) {
       newSize = rewritten.length;
       rewritten = rewriteMoov(moovBytes, mapFor(newSize));
     }
+    // The copy is as large as the file: on a disk without room for it the file stays as it is (it plays; only not before
+    // it has been read to the end).
+    const disk = await fs.promises.statfs(path.dirname(file.real)).catch(() => null);
+    if (disk && disk.bavail * disk.bsize < size - oldSize + newSize + SPARE) return fail('diskFull', 'there is not enough free space to move the index to the front');
     tmp = `${file.real}.${crypto.randomBytes(4).toString('hex')}.faststart.tmp`;
+    await temp?.add(tmp);
     const out = await fs.promises.open(tmp, 'w');
     let end;
     try {
@@ -185,13 +194,17 @@ async function faststart(p) {
     await src.close();
     src = null;
     await renameOver(tmp, file.real);
+    await temp?.remove(tmp);
     tmp = null;
     return { ok: true, moved: true, bytes: end, path: file.real };
   } catch (err) {
     return err instanceof Damaged ? fail('damaged', err.message) : fail(err.code === 'ENOSPC' ? 'diskFull' : 'io', err.message);
   } finally {
     if (src) await src.close().catch(() => {});
-    if (tmp) await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    if (tmp) {
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+      if (!fs.existsSync(tmp)) await temp?.remove(tmp);
+    }
   }
 }
 

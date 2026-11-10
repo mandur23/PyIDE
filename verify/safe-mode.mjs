@@ -14,7 +14,7 @@ import path from 'path';
 import { launch, tempDir } from './lib.mjs';
 
 process.env.NoDefaultCurrentDirectoryInExePath = '1';
-const { runsWhenOpened } = createRequire(import.meta.url)('../main/trust.js');
+const { runsWhenOpened, openKind } = createRequire(import.meta.url)('../main/trust.js');
 const CSC ='C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
 const q = JSON.stringify;
 const work = tempDir('safe-mode');
@@ -130,6 +130,16 @@ try {
   await closeDialogs();
   check(runsWhenOpened('C:\\p\\Tool.EXE') && runsWhenOpened('C:\\p\\tool.exe. ') && runsWhenOpened('x.lnk') && !runsWhenOpened('C:\\p\\report.pdf') && !runsWhenOpened('C:\\p\\exe'),
     'programs, scripts and shortcuts are told from documents, which open as before');
+  // Not created: an answer other than 'ask' would have Windows open them (hh.exe for the .chm).
+  const askedOpen = [];
+  for (const name of ['manual.chm', 'cache.pyc', 'build.sh', 'report.docx', 'page.html']) askedOpen.push(await js(`ide.api.invoke('shell:openPath', ${q(inProject(name))})`));
+  check(askedOpen.every((a) => a === 'ask'), `a file that is neither a plain document nor a known program asks first (${askedOpen.join(', ')})`);
+  check(await soon(`document.querySelectorAll('.dialog-message').length === 5 && [...document.querySelectorAll('.dialog-message')].every((n) => n.textContent.includes('is not a plain document'))`, 4000), 'with the reason in the question');
+  for (let i = 0; i < 5; i++) await closeDialogs();
+  check(await soon(`!document.querySelector('.dialog')`, 4000), 'Cancel answers each question');
+  check(openKind('C:\\p\\report.pdf') === 'document' && openKind('C:\\p\\Photo.JPG. ') === 'document' && openKind('C:\\p\\a.mp4') === 'document'
+    && openKind('C:\\p\\report.pdf:evil') === 'ask' && openKind('C:\\p\\x.chm') === 'ask' && openKind('C:\\p\\x.pyc') === 'ask' && openKind('C:\\p\\x.exe') === 'program',
+    'only plain documents and media open without asking; an alternate data stream asks');
   await sleep(800);
   check(!ran().includes('app.exe'), `the project's app.exe did not start (${ran()})`);
 

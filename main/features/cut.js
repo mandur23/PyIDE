@@ -214,12 +214,13 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
 
   // ---------- projects, autosave, recovery ----------
   handle('cut:projectRead', (_o, p) => projects.projectRead(p));
-  handle('cut:projectWrite', async (_o, p, t) => {
-    const r = await projects.projectWrite(p, t);
+  handle('cut:projectWrite', async (_o, p, t, opts) => {
+    const r = await projects.projectWrite(p, t, { mtime: typeof opts?.mtime === 'number' ? opts.mtime : undefined });
     if (r.ok) forgetChecks();
     return r;
   });
   handle('cut:autosave', (_o, key, t, opts) => projects.autosave(key, t, opts && typeof opts === 'object' ? { latest: opts.latest === true, keep: opts.keep } : {}));
+  handle('cut:autosaves', (_o, key) => projects.autosavesOf(key));
   handle('cut:sessionStart', (owner, key) => projects.sessionStart(key, owner));
   handle('cut:sessionEnd', (owner, key) => projects.sessionEnd(key, owner));
   handle('cut:recovery', () => projects.recovery());
@@ -230,7 +231,7 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   handle('cut:writeAt', (owner, id, bytes, position) => sinks.write(owner, id, bytes, position));
   handle('cut:writeClose', (owner, id, opts) => sinks.close(owner, id, opts || {}));
   handle('cut:faststart', async (_o, p) => {
-    const r = await faststart(p);
+    const r = await faststart(p, { temp: sinks.temp });
     if (r.moved) forgetChecks();
     return r;
   });
@@ -266,7 +267,7 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   handle('cut:speechCancel', (owner, request) => speech.cancel(owner, request));
   handle('cut:speechClose', (owner, id) => speech.close(owner, id));
   handle('cut:speechTestConfig', (_o, cfg) => speech.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
-  app.on?.('before-quit', () => { speech.dispose().catch(() => {}); });
+  app.on?.('will-quit', () => { speech.dispose().catch(() => {}); });
 
   // ---------- speaker labels (main/cut/speakers.js), on the sound files of speech recognition ----------
   handle('cut:speakersStatus', () => speakers.status());
@@ -276,7 +277,7 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   handle('cut:speakersEmbed', (owner, id, opts) => speakers.embed(owner, id, opts && typeof opts === 'object' ? opts : {}));
   handle('cut:speakersCancel', (owner, request) => speakers.cancel(owner, request));
   handle('cut:speakersTestConfig', (_o, cfg) => speakers.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
-  app.on?.('before-quit', () => { speakers.dispose().catch(() => {}); });
+  app.on?.('will-quit', () => { speakers.dispose().catch(() => {}); });
 
   // ---------- voice isolation (main/cut/voice.js) ----------
   handle('cut:voiceStatus', () => voice.status());
@@ -290,7 +291,7 @@ function register({ ipcMain, app, getWindow, diagnostics, unpackedDir }) {
   handle('cut:voiceCancel', (owner, request) => voice.cancel(owner, request));
   handle('cut:voiceClose', (owner, id) => voice.close(owner, id));
   handle('cut:voiceTestConfig', (_o, cfg) => voice.testConfig(cfg && typeof cfg === 'object' ? cfg : {}));
-  app.on?.('before-quit', () => { voice.dispose().catch(() => {}); });
+  app.on?.('will-quit', () => { voice.dispose().catch(() => {}); });
 
   // ---------- text AI through Claude Code (main/cut/ai.js): text in, text out ----------
   handle('cut:aiStatus', () => ai.status());

@@ -231,7 +231,7 @@ exports.register = ({ ipcMain, app, programs }) => {
     sessions.delete(id);
   });
 
-  app.on('before-quit', () => {
+  app.on('will-quit', () => {
     for (const { proc } of sessions.values()) { try { proc.kill(); } catch {} }
     sessions.clear();
   });

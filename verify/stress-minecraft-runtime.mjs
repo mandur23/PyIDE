@@ -8,7 +8,7 @@
 // installer is started; one that ignores "stop" is not installed over), its folder deleted or renamed while it runs, a
 // damaged pyide-server.json, a wrong Java, the resource pack sent with none made, the Minecraft screen's pages switched many times, 50 servers in the project, and a server whose Java
 // is missing and cannot be downloaded. CDP ports 8620-8621; game ports 25800-25899.
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import crypto from 'crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'fs';
 import http from 'http';
@@ -65,6 +65,7 @@ public class FakeServer {
     for (String line; (line = in.readLine()) != null;) {
       if (line.trim().equals("stop")) {
         if (new File("hang.flag").exists()) { System.out.println("Ignoring stop"); continue; }
+        if (new File("slowstop.flag").exists()) for (int i = 1; i <= 8; i++) { System.out.println("Saving chunks for level 'world' " + i); Thread.sleep(10000); }
         System.out.println("Stopping the server"); Files.write(Paths.get("world.saved"), "ok".getBytes()); System.exit(0);
       }
       System.out.println("Unknown command: " + line.trim());
@@ -279,6 +280,9 @@ try {
     const ended = await stopped('gamma');
     check(ended && /Ignoring stop/.test(await tabText('gamma')) && Date.now() - t0 > 55000 && !aliveServers(serverDir('gamma')).length,
       `a server that ignores "stop" is killed about 60 s later (${Math.round((Date.now() - t0) / 1000)} s)`);
+    check(/printed nothing for 60 seconds after "stop", so it was ended/.test(await tabText('gamma'))
+      && await js(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes('gamma was ended without finishing its save'))`),
+    'its console and a notification say it was ended without finishing its save');
     // Rerun of a hung server: the old process must not be left running.
     check(await startCard('gamma'), 'it starts again');
     const old = aliveServers(serverDir('gamma')).map((p) => p.pid);
@@ -290,6 +294,20 @@ try {
     rmSync(path.join(serverDir('gamma'), 'hang.flag'));
     await js(`(${runTab('gamma')}.stop(), true)`);
     await stopped('gamma');
+  });
+
+  await section('slow save on stop', async () => {
+    check((await create({ name: 'slow', port: 25808 })).ok, 'a server whose save after "stop" takes 80 s, printing as it goes');
+    await refresh();
+    write(path.join(serverDir('slow'), 'slowstop.flag'), '');
+    check(await startCard('slow'), 'it starts');
+    const t0 = Date.now();
+    await js(`(${card('slow')}.querySelector('.mc-stop').click(), true)`);
+    const ended = await stopped('slow') || await waitFor(() => js(`!(${runTab('slow')})?.running`), 60000);
+    const text = await tabText('slow');
+    check(ended && /exit code 0/.test(text) && existsSync(path.join(serverDir('slow'), 'world.saved')) && Date.now() - t0 > 75000 && !/printed nothing/.test(text),
+      `a save that keeps printing past 60 s is not killed: the server finishes and exits by itself (${Math.round((Date.now() - t0) / 1000)} s)`);
+    rmSync(path.join(serverDir('slow'), 'slowstop.flag'));
   });
 
   // ---------- Restart to Update with a server running ----------
@@ -428,6 +446,29 @@ try {
     await closeDialogs();
   });
 
+  // ---------- a server left running by an app that is gone ----------
+  // The suite plays the earlier app: it starts the stand-in itself and leaves the marker such an app writes.
+  await section('left over from before', async () => {
+    const dir = serverDir('alpha');
+    const orphan = spawn(bin('java'), ['-jar', 'server.jar', 'nogui'], { cwd: dir, windowsHide: true });
+    orphan.stdout.on('data', () => {});
+    await waitFor(() => aliveServers(dir).length === 1, 20000);
+    writeFileSync(path.join(dir, 'pyide-server.running'), S({ pid: orphan.pid, started: Date.now(), dir }));
+    await refresh();
+    const shown = await js(`(() => { const c = ${card('alpha')}; return { end: !!c.querySelector('.mc-end-leftover'), start: !!c.querySelector('.mc-start'), del: !!c.querySelector('.mc-delete'), dot: c.querySelector('.mc-dot').classList.contains('on'), note: c.querySelector('.mc-leftover-why')?.textContent || '' }; })()`);
+    check(shown.end && !shown.start && !shown.del && shown.dot && /Still running from before/.test(shown.note), `a server still running from before shows as running, with End Server instead of Start and Delete (${S(shown)})`);
+    const refused = await ipc('minecraft:launch', root, dir, 'x');
+    check(!refused.ok && /still running outside this window/.test(refused.e) && aliveServers(dir).length === 1, `starting it anyway is refused, and no second server opens its world (${refused.e})`);
+    await js(`(${card('alpha')}.querySelector('.mc-end-leftover').click(), true)`);
+    await until(`!!${dialogButton('End Without Saving')}`, 'the question before ending it');
+    const asked = (await dialogs()).pop() || '';
+    check(/pulling the plug/.test(asked) && /autosave/.test(asked) && new RegExp(`process ${orphan.pid}`).test(asked), `End Server first says what ending it costs (${asked.slice(0, 200)})`);
+    await js(`(${dialogButton('End Without Saving')}.click(), true)`);
+    check(await waitFor(() => !aliveServers(dir).length, 20000), 'after the answer its process is ended');
+    await waitFor(() => js(`!!${card('alpha')}?.querySelector('.mc-start')`), 10000);
+    check(await js(`!!${card('alpha')}.querySelector('.mc-start')`) && !existsSync(path.join(dir, 'pyide-server.running')), 'the card offers Start again and the marker is gone');
+  });
+
   // ---------- the Minecraft screen, many servers ----------
   await section('screen', async () => {
     await js(`(async () => { for (let i = 0; i < 30; i++) { ide.minecraft.screen.show(i % 3 ? 'servers' : 'market'); await new Promise((r) => setTimeout(r, 15)); } ide.minecraft.screen.show('servers'); return true; })()`);
@@ -486,6 +527,41 @@ try {
   check(t2.consoleErrors.length === 0, `no renderer exceptions in the second window${t2.consoleErrors.length ? ` ${S(t2.consoleErrors)}` : ''}`);
   t2.close();
 } catch (err) { check(false, `Java missing: ${err.message}`); }
+
+// ---------- Windows ending the session with a server running (a third window, its main process inspected) ----------
+// Windows sends no before-quit for a shut down or sign out: the window's query-session-end, emitted here as Windows
+// would, is all the app hears before the session ends.
+try {
+  const project3 = path.join(work, 'project3');
+  const d = path.join(project3, 'servers', 'session');
+  write(path.join(d, 'server.jar'), paperJar);
+  write(path.join(d, 'eula.txt'), 'eula=true\n');
+  write(path.join(d, 'server.properties'), 'server-port=25821\n');
+  write(path.join(d, 'pyide-server.json'), S({ kind: 'paper', mc: '1.20.1', java: 17, memory: '1G', launch: { jar: 'server.jar' } }));
+  const t3 = await launch({ name: 'stress-minecraft-runtime-3', port: 8622, mode: 'craft', projectDir: project3, args: ['--inspect=8623'], env: { PYIDE_CRAFT_HOME: project3, PYIDE_MC_LAUNCHER_IMAGE: 'nano-no-such-launcher.exe', PYIDE_MC_JAVA: javaHome, PYIDE_MC_SOURCES: SOURCES } });
+  await t3.js(`(ide.minecraft.screen.show('servers'), true)`);
+  await t3.until(`!!${card('session')}`, 'server listed');
+  await t3.js(`(${card('session')}.querySelector('.mc-start').click(), true)`);
+  await waitFor(() => t3.js(`!!(${runTab('session')})?.running && (${runTab('session')}).host.textContent.includes('Done (0.4s)!')`), 30000);
+  const pid = aliveServers(d).map((p) => p.pid)[0];
+  const target = (await (await fetch('http://127.0.0.1:8623/json/list')).json())[0];
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener('open', r));
+  const held = await new Promise((resolve) => {
+    ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data); if (msg.id === 1) resolve(msg.result?.exceptionDetails?.exception?.description || msg.result?.result?.value); });
+    // includeCommandLineAPI: the inspector's global scope has no require of its own.
+    ws.send(S({ id: 1, method: 'Runtime.evaluate', params: { returnByValue: true, includeCommandLineAPI: true, expression: `(() => { const w = require('electron').BrowserWindow.getAllWindows().find((x) => x.isVisible()); let held = false; w.emit('query-session-end', { reasons: ['shutdown'], preventDefault() { held = true; } }); return held; })()` } }));
+  });
+  // An inspector session that has run code keeps Electron from exiting.
+  ws.close();
+  check(held === true, `with a server running, the app holds the session end while the server stops${held === true ? '' : ` (${String(held).split('\n')[0]})`}`);
+  const appGone = () => { try { process.kill(t3.pid, 0); return false; } catch { return true; } };
+  const quit = await waitFor(() => appGone() && !alive(pid), 60000, 250);
+  const log = (() => { try { return readFileSync(path.join(t3.userData, 'logs', 'pyide.log'), 'utf8'); } catch { return ''; } })();
+  check(quit && existsSync(path.join(d, 'world.saved')) && /asked to stop/.test(log) && /exited with code 0/.test(log.slice(log.lastIndexOf('asked to stop'))),
+    `the server got "stop", saved its world and exited by itself, and then the app quit (app ${appGone() ? 'gone' : 'running'}, server ${alive(pid) ? 'running' : 'gone'})`);
+  t3.close();
+} catch (err) { check(false, `session end: ${err.message}`); }
 
 // ---------- nothing left running ----------
 await sleep(1500);

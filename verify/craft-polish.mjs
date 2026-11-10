@@ -10,7 +10,8 @@
 // walk the typed commands, also after a restart; an operator's level box follows the server starting and stopping;
 // settings search says when nothing matches and Escape clears it; anti-xray's files go back when server.properties
 // cannot be written; a start takes the port server.properties has now, not the one the list read before; a server whose
-// pyide-server.json is damaged keeps a card with the reason, Open Folder and, while it runs, Stop, and its name; of
+// pyide-server.json is damaged keeps a card with the reason, Open Folder and, while it runs, Stop, and its name, and
+// Repair only where it has a copy or a jar to go on, which brings the server back; of
 // several modpacks dropped at once the others are said in the import log. Port 9737; the server listens on 25681.
 // Usage: node verify/craft-polish.mjs
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
@@ -293,8 +294,9 @@ try {
   await toCards();
   await until(`!!${card('odd')}`, 'the odd server\'s card', 5000);
   const odd = await js(`(() => { const c = ${card('odd')}; return { why: c.querySelector('.mc-damaged-why')?.textContent, chip: c.querySelector('.mc-damaged-chip')?.textContent, buttons: [...c.querySelectorAll('button')].map((b) => b.textContent) }; })()`);
-  check(/server type Nano Studio does not know \(spigot\)/.test(odd.why || '') && odd.chip === 'Damaged' && S(odd.buttons) === S(['Open Folder']) && await seen(`${card('odd')}.querySelector('.mc-damaged-why')`),
-    `a server whose pyide-server.json names an unknown type is listed as damaged with the reason and Open Folder (${S(odd)})`);
+  // Nothing to repair it from (no copy Nano Studio wrote, no jar it knows): Repair is not offered, nor named.
+  check(/server type Nano Studio does not know \(spigot\)\. Open the folder to fix it\.$/.test(odd.why || '') && odd.chip === 'Damaged' && S(odd.buttons) === S(['Open Folder']) && await seen(`${card('odd')}.querySelector('.mc-damaged-why')`),
+    `a server whose pyide-server.json names an unknown type, with nothing to repair it from, is listed as damaged with the reason and only Open Folder (${S(odd)})`);
   await shot('damaged-dark.png');
   await js(`(ide.settings.set('appearance.theme', 'light'), true)`);
   await until(`ide.theme.current() === 'light'`, 'light theme', 10000);
@@ -311,6 +313,27 @@ try {
   check(taken === 'A server named odd already exists.', `the New Server dialog says a damaged server's name is a server's (${taken})`);
   await press('Escape');
   await until(`!document.getElementById('mcName')`, 'the dialog closed', 5000);
+
+  // ---------- Repair: from the copy Nano Studio wrote last, and from what the folder runs ----------
+  // mended: emptied, with the .bak every write leaves. rebuilt: cut off, no .bak, a vanilla server.jar.
+  write(inServer('mended', 'pyide-server.json'), '');
+  write(inServer('mended', 'pyide-server.json.bak'), desc('paper', '26.3'));
+  write(inServer('mended', 'server.properties'), 'server-port=25685\n');
+  write(inServer('rebuilt', 'pyide-server.json'), '{ "kind": ');
+  write(inServer('rebuilt', 'server.jar'), writeZip([{ name: 'version.json', data: Buffer.from(S({ id: '1.20.1' })) }]));
+  write(inServer('rebuilt', 'server.properties'), 'server-port=25686\n');
+  await js('ide.minecraft.refresh().then(() => true)');
+  for (const [name, kind] of [['mended', 'paper'], ['rebuilt', 'vanilla']]) {
+    await until(`!!${card(name)}?.querySelector('.mc-repair')`, `Repair on the ${name} card`, 5000);
+    const offered = await js(`(() => { const c = ${card(name)}; return { why: c.querySelector('.mc-damaged-why')?.textContent, buttons: [...c.querySelectorAll('button')].map((b) => b.textContent) }; })()`);
+    await pressAt(`${card(name)}.querySelector('.mc-repair')`);
+    await until(`!!${card(name)}?.querySelector('.mc-start') && !${card(name)}.classList.contains('mc-damaged')`, `the ${name} card whole again`, 10000).catch(() => {});
+    const after = await js(`({ start: !!${card(name)}?.querySelector('.mc-start'), damaged: !!${card(name)}?.classList.contains('mc-damaged'), kind: ide.minecraft.servers().find((s) => s.name === ${S(name)})?.kind ?? null })`);
+    const file = (() => { try { return JSON.parse(read(inServer(name, 'pyide-server.json'))); } catch { return null; } })();
+    check(/cannot be read\. Repair it/.test(offered.why || '') && S(offered.buttons) === S(['Repair', 'Open Folder']) && after.start && !after.damaged && after.kind === kind && file?.kind === kind
+      && existsSync(inServer(name, 'pyide-server.json.damaged')),
+    `Repair on a card whose pyide-server.json is ${name === 'mended' ? 'empty puts back the copy written last' : 'cut off, with no copy, describes it again from its jar'}, and the server can start again (${S({ offered, after, kind: file?.kind })})`);
+  }
 
   // ---------- several modpacks dropped at once ----------
   const packs = ['One', 'Two', 'Three'].map((name) => {

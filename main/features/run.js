@@ -290,7 +290,7 @@ exports.register = (ctx) => {
     try { terminals.get(id)?.proc.resize(Math.max(2, cols | 0), Math.max(2, rows | 0)); } catch {}
   });
   ctx.ipcMain.handle('run:terminalKill', (_e, id) => killTerminal(id));
-  ctx.app.on('before-quit', () => { for (const id of terminals.keys()) killTerminal(id); });
+  ctx.app.on('will-quit', () => { for (const id of terminals.keys()) killTerminal(id); });
   // A before launch "Run External Tool" task. Its definition comes from the run configuration, which lives in the
   // user's settings, never in the project; still, like a file watcher, it starts nothing for a project the user has
   // not trusted (main/trust.js), since the tool runs in and on the project's files.

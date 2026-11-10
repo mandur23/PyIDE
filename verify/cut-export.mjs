@@ -7,7 +7,7 @@
 //   the sped-up beeps still at 1 kHz (pitch kept); the hardware and the software encoder both make valid files, so do
 //   HEVC (hardware) and the compositor's 2D back end (no full-range darkening); the files play in a <video> element
 //   from a blob URL and show the right frames after seeks;
-// - range export, captions burned in and as an SRT next to the file, cancel leaves no file or part file, export frame
+// - range export, captions burned in and as an SRT next to the file, cancel leaves no file or part file (also with an encoder that stops taking frames), a full disk stops the export at the refused write, export frame
 //   as PNG, chapters text;
 // - a source that stops giving its picture or sound on the way, or a lost GPU device, fails the export with the clip
 //   and the time named and no file; media offline from the start exports as the red picture and is listed; Export
@@ -23,6 +23,7 @@ import { launch, tempDir } from './lib.mjs';
 
 const ONLY = (process.env.CUT_EXPORT_ONLY || '').split(',').filter(Boolean);
 const want = (name) => !ONLY.length || ONLY.includes(name);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const home = tempDir('cut-export-home');
 const ctx = await launch({ fixture: 'core', port: 9754, name: 'cut-export', mode: 'cut', env: { PYIDE_CUT_HOME: home } });
 const { js, until, check, cdp } = ctx;
@@ -474,6 +475,56 @@ if (want('cancel')) {
   })()`);
   check(!stuck.ok && stuck.code === 'decode' && /codec avc1/.test(stuck.error) && stuck.ms < 15000 && !existsSync(stuckOut) && !existsSync(`${stuckOut}.part`),
     `a decoder that never gives a frame ends the export with the codec named, and no file (${S(stuck)})`);
+
+  // the disk fills up on the way: the export stops at the refused write, where it rendered on to 100 % and failed then
+  const fullOut = P('full.mp4');
+  const full = await js(`(async () => {
+    const p = __cx.projects.s1;
+    const invoke = ide.api.invoke;
+    let done = 0;
+    let doneAtFailure = null;
+    ide.api.invoke = (channel, ...a) => {
+      if (channel === 'cut:writeAt' && doneAtFailure === null) doneAtFailure = done;
+      if (channel === 'cut:writeAt') return Promise.resolve({ error: 'the disk is full', code: 'diskFull' });
+      return invoke(channel, ...a);
+    };
+    try {
+      const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(fullOut)}, preset: '720p', overrides: { bitrate: 30e6, mode: 'constant' }, backend: __cx.backend,
+        onProgress: (x) => { if (x.phase === 'video') done = Math.max(done, x.done); } });
+      return { ok: r.ok, code: r.code, error: String(r.error || ''), doneAtFailure, done };
+    } finally { ide.api.invoke = invoke; }
+  })()`);
+  check(!full.ok && full.code === 'diskFull' && /disk is full/.test(full.error) && full.doneAtFailure !== null && full.doneAtFailure < S1_FRAMES * 0.8 && full.done - full.doneAtFailure <= 40,
+    `a full disk stops the export within a few frames of the refused write (${S(full)})`);
+  check(!existsSync(fullOut) && !existsSync(`${fullOut}.part`), 'and leaves no file and no part file');
+
+  // an encoder that stops taking frames: Cancel still ends the export, where the wait for its queue never ended
+  const heldOut = P('held.mp4');
+  const held = await js(`(async () => {
+    const p = __cx.projects.s1;
+    const Real = window.VideoEncoder;
+    const ac = new AbortController();
+    let n = 0;
+    let abortedAt = 0;
+    window.VideoEncoder = class extends Real {
+      encode(...a) {
+        if (++n === 40) setTimeout(() => { abortedAt = performance.now(); ac.abort(); }, 300);
+        return super.encode(...a);
+      }
+      get encodeQueueSize() { return n >= 40 ? 99 : super.encodeQueueSize; }
+      flush() { return n >= 40 ? new Promise(() => {}) : super.flush(); }
+    };
+    try {
+      const r = await Promise.race([
+        Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(heldOut)}, preset: '720p', backend: __cx.backend, signal: ac.signal }),
+        new Promise((resolve) => setTimeout(() => resolve({ code: 'hung' }), 20000)),
+      ]);
+      return { code: r.code, n, ms: abortedAt ? Math.round(performance.now() - abortedAt) : null };
+    } finally { window.VideoEncoder = Real; }
+  })()`);
+  check(held.code === 'cancelled' && held.ms !== null && held.ms < 3000, `Cancel ends an export whose encoder stopped taking frames (${S(held)})`);
+  await sleep(500);
+  check(!existsSync(heldOut) && !existsSync(`${heldOut}.part`), 'and leaves no file and no part file');
 }
 
 // A source that stops giving its picture or sound during the export (a drive unplugged, a damaged packet), and a lost
@@ -569,6 +620,21 @@ if (want('fail')) {
   })()`);
   check(made.ok && off.ok && off.frames === 60 && off.offline === 2 && off.problems?.includes('offline') && !off.problems.includes('frames'),
     `media offline from the start still exports, as the red picture, and the check lists its clips (${S(off)})`);
+
+  // faststart that cannot run (no room for its copy): the finished file is kept and the check says why it is not
+  // faststart, where the export failed and pointed at a file that was whole
+  const slowOut = P('slow-start.mp4');
+  const slow = await js(`(async () => {
+    const p = __cx.projects.offline;
+    const invoke = ide.api.invoke;
+    ide.api.invoke = (channel, ...a) => (channel === 'cut:faststart' ? Promise.resolve({ error: 'there is not enough free space to move the index to the front', code: 'diskFull' }) : invoke(channel, ...a));
+    try {
+      const r = await Cut.export.run({ project: p.history.project, seqId: p.seq, path: ${S(slowOut)}, preset: '720p', backend: __cx.backend, overrides: { loudness: null } });
+      return { ok: r.ok, faststart: r.faststart, frames: r.verified?.frames, problems: r.verified?.problems?.map((x) => x.code), said: r.verified?.problems?.find((x) => x.code === 'faststart')?.params?.error };
+    } finally { ide.api.invoke = invoke; }
+  })()`);
+  check(slow.ok && slow.faststart === false && slow.frames === 60 && slow.problems?.includes('faststart') && /free space/.test(slow.said) && existsSync(slowOut),
+    `a faststart that cannot run keeps the exported file and names the reason in the check (${S(slow)})`);
 }
 
 // "Export" renders a copy of the project made when it is pressed: a ripple delete while it runs changes neither the

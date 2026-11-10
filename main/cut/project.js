@@ -34,10 +34,15 @@ async function renameOver(from, to) {
     }
   }
 }
-async function writeAtomic(file, data) {
+// sync: the data reaches the disk before the rename, so a power cut right after a save leaves the old file or the new
+// one, never an empty one (NTFS journals the rename, not the data).
+async function writeAtomic(file, data, { sync = false } = {}) {
   const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
-    await fs.promises.writeFile(tmp, data);
+    if (sync) {
+      const fh = await fs.promises.open(tmp, 'w');
+      try { await fh.writeFile(data); await fh.sync(); } finally { await fh.close(); }
+    } else await fs.promises.writeFile(tmp, data);
     await renameOver(tmp, file);
   } catch (err) {
     await fs.promises.rm(tmp, { force: true }).catch(() => {});
@@ -73,46 +78,66 @@ function createProjects({ autosaveDir, run, log }) {
   const badKey = (key) => typeof key !== 'string' || !key || key.length > MAX_KEY;
   const badText = (text) => typeof text !== 'string' || text.length > NCUT_TEXT_LIMIT;
 
+  // The cleanup and the rotation delete autosaves by their name alone, so a file in the Autosave folder is never a
+  // project's home: it opens as an unsaved project (`autosave: true`) and nothing is saved there.
+  let realAutosave = null;
+  const inAutosave = async (file) => {
+    realAutosave ??= await fs.promises.realpath(autosaveDir).catch(() => null);
+    return !!realAutosave && path.dirname(file).toLowerCase() === realAutosave.toLowerCase();
+  };
+
   async function projectRead(p) {
     const file = await realFile(p, NCUT);
     if (file.code === 'missing') return { missing: true };
     if (file.error) return file;
     if (file.stat.size > NCUT_TEXT_LIMIT) return fail('tooLarge', 'the project file is too large');
     try {
-      return { text: (await fs.promises.readFile(file.real, 'utf8')).replace(/^﻿/, ''), path: file.real, mtime: file.stat.mtimeMs };
+      const text = (await fs.promises.readFile(file.real, 'utf8')).replace(/^﻿/, '');
+      return { text, path: file.real, mtime: file.stat.mtimeMs, ...(await inAutosave(file.real) ? { autosave: true } : {}) };
     } catch (err) {
       return err.code === 'ENOENT' ? { missing: true } : fail('io', err.message);
     }
   }
 
-  // The previous file is kept as <name>.ncut.bak when the new text has another format version than it (a migration
-  // the user may want to undo), or when it is not a project this version can read.
-  async function projectWrite(p, text) {
+  // Every save keeps the file it replaces as <name>.ncut.bak. When the new text has another format version than that
+  // file (a migration the user may want to undo), or the file is not a project this version can read, it is also kept
+  // as <name>.ncut.v<version>.bak, which the next saves leave alone.
+  // mtime: the file's time when the editor read or last wrote it. A file changed since (another window or program
+  // saved it) is not overwritten: `changed`, with its time now, and the editor asks.
+  async function projectWrite(p, text, { mtime } = {}) {
     if (badText(text)) return fail('badArgs', 'not a project text');
     const version = versionOf(text);
     if (version === undefined) return fail('badArgs', 'not a project text');
     const target = await writableFile(p, NCUT);
     if (target.error) return target;
+    if (await inAutosave(target.path)) return fail('autosave', 'projects are not saved in the Autosave folder: the app deletes old files there');
+    if (Number.isFinite(mtime)) {
+      const now = await fs.promises.stat(target.path).then((st) => st.mtimeMs, () => null);
+      if (now !== null && now !== mtime) return { ...fail('changed', 'the project file was changed on disk since it was opened'), mtime: now };
+    }
     let bak = null;
+    let kept = null;
     try {
-      const st = await fs.promises.stat(target.path);
-      const old = st.size <= NCUT_TEXT_LIMIT ? await fs.promises.readFile(target.path, 'utf8').catch(() => null) : null;
-      if (old === null || versionOf(old.replace(/^﻿/, '')) !== version) {
-        bak = `${target.path}.bak`;
-        const tmp = `${bak}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-        await fs.promises.copyFile(target.path, tmp);
-        await renameOver(tmp, bak);
+      // Read, not copied: a copy would carry a read-only attribute over to the backup and block the next save.
+      const old = await fs.promises.readFile(target.path);
+      bak = `${target.path}.bak`;
+      await writeAtomic(bak, old, { sync: true });
+      const was = old.length > NCUT_TEXT_LIMIT ? undefined : versionOf(old.toString('utf8').replace(/^﻿/, ''));
+      if (was !== version) {
+        kept = `${target.path}.v${Number.isInteger(was) ? was : 'unknown'}.bak`;
+        await writeAtomic(kept, old, { sync: true });
       }
     } catch (err) {
       if (err.code !== 'ENOENT') return fail('io', `the previous version could not be kept: ${err.message}`);
     }
-    try { await writeAtomic(target.path, text); } catch (err) { return fail('io', err.message); }
+    try { await writeAtomic(target.path, text, { sync: true }); } catch (err) { return fail('io', err.message); }
     const session = own.get(hashOf(target.path)) || own.get(hashOf(p));
     if (session) {
       session.saved = Date.now();
       await writeMarker(session).catch(() => {});
     }
-    return { ok: true, path: target.path, bak };
+    const written = await fs.promises.stat(target.path).then((st) => st.mtimeMs, () => null);
+    return { ok: true, path: target.path, bak, kept, mtime: written };
   }
 
   // Autosaves of one key (by its hash), newest first: [{file, time, latest}].
@@ -237,7 +262,7 @@ function createProjects({ autosaveDir, run, log }) {
   }
   prune().catch((err) => log?.warn?.(`autosave cleanup: ${err.message}`));
 
-  return { projectRead, projectWrite, autosave, autosavesOf: (key) => autosavesOf(hashOf(key)), sessionStart, sessionEnd, ownerGone, recovery, dismiss };
+  return { projectRead, projectWrite, autosave, autosavesOf: (key) => (badKey(key) ? Promise.resolve([]) : autosavesOf(hashOf(key))), sessionStart, sessionEnd, ownerGone, recovery, dismiss };
 }
 
 module.exports = { createProjects, writeAtomic, renameOver, KEEP };

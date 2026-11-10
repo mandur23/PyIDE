@@ -18,7 +18,7 @@
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import http from 'http';
 import Module, { createRequire } from 'module';
 import net from 'net';
@@ -707,8 +707,8 @@ try {
     // Quitting the app: the server is asked to save, as Stop does, and has a minute.
     serverAt(elsewhere('quitPaper'), { kind: 'paper', mc: '1.20.1' });
     serverAt(elsewhere('quitProxy'), { kind: 'velocity', mc: '3.4.0' });
-    const quitPaper = call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitPaper') });
-    call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitProxy') });
+    const quitPaper = await call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitPaper') });
+    await call('minecraft:start', proj, { cmd: 'java', args: [], cwd: elsewhere('quitProxy') });
     check(started[0].quitInput === 'stop\n' && started[1].quitInput === 'end\n' && started.every((o) => o.quitWaitMs === 60000),
       `a server is started with what a quit sends it: "stop" ("end" for a Velocity proxy) and 60 s to save (${S(started.map((o) => [o.quitInput, o.quitWaitMs]))})`);
     procs.get(quitPaper).emit('close', 0);
@@ -749,7 +749,7 @@ try {
     const jar = (name, data) => { routes.set(`/files/${name}`, Buffer.from(data)); return { filename: name, url: `${sb}/files/${name}`, primary: true, size: data.length, hashes: { sha512: sha512(Buffer.from(data)) } }; };
     routes.set('/modrinth/project/MODA', { id: 'MODA', title: 'Mod A', server_side: 'required' });
     routes.set('/modrinth/project/MODA/version', [{ id: 'va2', version_number: '2.0', version_type: 'release', files: [jar('mod-a-2.0.jar', 'mod a 2.0')], dependencies: [] }]);
-    const moddedRun = call('minecraft:start', proj, { cmd: 'java', args: [], cwd: modded });
+    const moddedRun = await call('minecraft:start', proj, { cmd: 'java', args: [], cwd: modded });
     const mods = () => readdirSync(path.join(modded, 'mods')).sort();
     const record = () => JSON.parse(readFileSync(path.join(modded, 'pyide-server.json'), 'utf8')).market || {};
     const busyUpdate = await errOf(() => call('minecraft:marketInstall', proj, modded, { id: 'MODA', type: 'mod' }, 'job'));
@@ -794,6 +794,34 @@ try {
       && S(grownNames) === S(['client-overrides/options.txt', 'modrinth.index.json', 'overrides/mods/bundled.jar', 'overrides/mods/market-mod.jar'])
       && readFileSync(plain.file).equals(originalPack),
     `a mod added to the server goes into the players' pack with everything of the modpack, its client-only mods too (${S(grownNames)})`);
+    const builtAt = statSync(grown.file).mtimeMs;
+    await new Promise((r) => setTimeout(r, 50));
+    const again = await call('minecraft:clientPack', proj, packSrv);
+    check(again.file === grown.file && statSync(grown.file).mtimeMs === builtAt, 'asked again with nothing changed (Copy Join Code), the pack is not zipped again');
+    write(path.join(packSrv, 'mods', 'market-mod.jar'), 'updated');
+    const changed = await call('minecraft:clientPack', proj, packSrv);
+    const changedZip = openZip(changed.file);
+    const updated = changedZip.read('overrides/mods/market-mod.jar')?.toString('utf8');
+    changedZip.close();
+    check(updated === 'updated', 'a mod that changed is zipped again');
+
+    // A big modded server's pack is zipped without stopping the main process, which answers every window meanwhile.
+    const bigSrv = serverAt(srvDir('bigpack'), { kind: 'fabric', mc: '1.20.1', loader: '0.15.11' }, 'server-port=25606\n');
+    for (let i = 0; i < 30; i++) write(path.join(bigSrv, 'mods', `big-${i}.jar`), crypto.randomBytes(4 << 20));
+    let last = performance.now();
+    let longest = 0;
+    const beat = setInterval(() => { const now = performance.now(); longest = Math.max(longest, now - last); last = now; }, 5);
+    const t0 = performance.now();
+    const big = await call('minecraft:clientPack', proj, bigSrv);
+    const took = performance.now() - t0;
+    clearInterval(beat);
+    const bigZip = openZip(big.file);
+    const bigNames = bigZip.names.length;
+    const sameBytes = bigZip.read('overrides/mods/big-7.jar').equals(readFileSync(path.join(bigSrv, 'mods', 'big-7.jar')));
+    bigZip.close();
+    check(bigNames === 31 && sameBytes && longest < 250, `120 MB of mods are zipped in ${Math.round(took)} ms with the event loop never held longer than ${Math.round(longest)} ms`);
+    const tooMany = await errOf(async () => writeZip(Array.from({ length: 65536 }, (_v, i) => ({ name: `f${i}`, data: Buffer.alloc(0) }))));
+    check(/65,535/.test(tooMany?.message || ''), `a zip of more entries than a zip holds without ZIP64 is refused, not written damaged (${tooMany?.message})`);
 
     // Two servers starting at once that need a Java not on this computer: one download.
     const javaZip = writeZip([{ name: 'jdk-99.0.1+1-jre/bin/java.exe', data: Buffer.from('') }]);

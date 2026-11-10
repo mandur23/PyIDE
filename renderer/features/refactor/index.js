@@ -66,6 +66,8 @@
     unsaved: (p) => tr('{name} has unsaved changes that could not be saved, so it was not moved.', p),
     'empty-name': () => tr('Enter a name.'),
     timeout: (p) => tr('The refactoring took longer than {seconds} seconds and was stopped.', p),
+    'rolled-back': (p) => tr('It stopped partway ({detail}), and what it had changed was undone.', p),
+    partial: (p) => tr('It stopped partway ({detail}) and could not be undone. Local History has the files as they were before the refactoring.', p),
   };
   const errorText = (err) => {
     const m = MESSAGES[err?.code];
@@ -82,6 +84,7 @@
     if (ctl && ed.getPosition()) ctl.showMessage(text, ed.getPosition());
     else ide.ui.dialog({ title: tr('Cannot Perform Refactoring'), body: el('div', 'rf-message', text) });
   }
+  const reasonOf = (err, path) => `${basename(path)}: ${MESSAGES[err?.code] ? errorText(err) : ide.util.errorText(err)}`;
   const cannot = (err) => tr('Cannot perform refactoring. {reason}', { reason: errorText(err) });
 
   let ropeItem = null;
@@ -410,22 +413,40 @@
     } catch (e) { console.warn('local history checkpoint failed', e); }
     const rec = { label, models: [], files: [], moves: [], state: 'done', anchors: [], redoAnchors: [] };
     const written = [];
-    for (const { c, doc, disk } of plan) {
-      if (doc) {
-        rec.models.push(editModel(doc.model, c.old, c.new));
-      } else {
-        const text = withEol(c.new, disk?.text);
-        const encoding = disk?.encoding || 'utf-8';
-        const dir = ide.util.dirname(c.path);
-        if (!disk && !(await ide.api.exists(dir))) await ide.api.create(dir, true);
-        await ide.api.invoke('fs:writeText', c.path, text, encoding);
-        rec.files.push({ path: c.path, before: disk ? disk.text : null, after: text, encoding });
-        written.push(c.path);
-      }
-    }
     const reopen = [];
-    for (const m of moves) reopen.push(...(await moveOnDisk(m.from, m.to)));
-    rec.moves = moves.map((m) => ({ from: m.from, to: m.to }));
+    let doing = null;
+    try {
+      for (const { c, doc, disk } of plan) {
+        doing = c.path;
+        if (doc) {
+          rec.models.push(editModel(doc.model, c.old, c.new));
+        } else {
+          const text = withEol(c.new, disk?.text);
+          const encoding = disk?.encoding || 'utf-8';
+          const dir = ide.util.dirname(c.path);
+          if (!disk && !(await ide.api.exists(dir))) await ide.api.create(dir, true);
+          await ide.api.invoke('fs:writeText', c.path, text, encoding);
+          rec.files.push({ path: c.path, before: disk ? disk.text : null, after: text, encoding });
+          written.push(c.path);
+        }
+      }
+      for (const m of moves) {
+        doing = m.from;
+        reopen.push(...(await moveOnDisk(m.from, m.to)));
+        rec.moves.push({ from: m.from, to: m.to });
+      }
+    } catch (err) {
+      // A write or move that fails partway (a read-only or locked file, a full disk) would leave some files renamed and
+      // others not, with no undo step: what was done so far is undone the way Ctrl+Z would.
+      try {
+        await reopenTabs(reopen);
+        await replay(rec, 'undo');
+      } catch (undoErr) {
+        console.error(undoErr);
+        throw new RefactorError('partial', { detail: reasonOf(err, doing) });
+      }
+      throw new RefactorError('rolled-back', { detail: reasonOf(err, doing) });
+    }
     if (written.length) await ide.reloadFromDisk(written);
     ide.renderTabs();
     ide.refreshTree?.();
@@ -457,7 +478,12 @@
       pos: t.group?.editor && t === active ? t.group.editor.getPosition() : null,
     }));
     for (const t of tabs) ide.closeTab(t.path, true);
-    await ide.api.rename(from, to);
+    try {
+      await ide.api.rename(from, to);
+    } catch (err) {
+      await reopenTabs(reopen.map((r) => ({ ...r, path: from + r.path.slice(to.length) })));
+      throw err;
+    }
     await ide.documentsMoved(from, to);
     ide.emit('filesChanged', { renamed: [[from, to]] });
     return reopen;

@@ -6,7 +6,7 @@
 //   the user accepts the Minecraft EULA; or a Velocity proxy, which sends players on to the project's Paper and Purpur
 //   servers. The Java version comes from Mojang's data and is downloaded when missing.
 // - A server runs as a "Minecraft Server" run configuration: its console takes server commands (op, whitelist), and
-//   Stop sends "stop" so the world is saved, killing the process only if it has not ended 60 s later.
+//   Stop sends "stop" so the world is saved, killing the process only once it has printed nothing for 60 s.
 // - Client Pack: a .mrpack of a modded server's mods, which Prism Launcher or the Modrinth App imports in one step.
 // - Resource Pack: a resourcepack/ folder for textures and sounds; Send to Players zips it, serves it with a public link
 //   and names it in server.properties, so every player's game downloads it when they join.
@@ -54,11 +54,17 @@
   // Processes of servers asked to stop that have not ended yet (process id -> server folder, lower case): they still
   // hold their ports and worlds.
   const stopping = new Map();
-  // How long a stopping server has to save before it is killed (main gives it as long when the app quits).
+  // A stopping server is killed once it has printed nothing for STOP_WAIT: a big modpack saves for minutes, printing as
+  // it goes, and one that has hung is silent. One that never stops printing is killed STOP_LIMIT after Stop. (A quit
+  // gives each server main's fixed minute.)
   const STOP_WAIT = 60000;
+  const STOP_LIMIT = 15 * 60000;
+  const quietTimers = new Map(); // process id -> rearm(), while it stops
+  ide.api.on('proc:data', ({ id }) => quietTimers.get(id)?.());
   const stoppingAt = (dir) => [...stopping.values()].includes(dir.toLowerCase());
   // A server whose folder is in use: running, starting (a Java download, say), or still saving after Stop or Rerun.
-  const busyAt = (dir) => runningAt(dir) || !!sessionOf(dir)?.starting || launching.has(dir.toLowerCase()) || stoppingAt(dir);
+  // A process still running there that this window did not start (main's list says so: leftOver).
+  const busyAt = (dir) => runningAt(dir) || !!sessionOf(dir)?.starting || launching.has(dir.toLowerCase()) || stoppingAt(dir) || !!serverAt(dir)?.leftOver;
 
   // Before a proxy starts, its [servers] and the Paper servers' forwarding follow the project; before any server
   // starts, the Ports window learns its port is a game server's. The port is main's, read from the files as the server
@@ -72,26 +78,40 @@
       for (const s of skipped) con.append(`${tr('{name} runs Minecraft {mc}, older than 1.13, which has no modern forwarding: the proxy does not send players there, and it keeps its own account checks.', s)}\n`, 'err');
     }
     ide.ports?.gamePort(port);
-    // A server still stopping (Rerun of a running one) holds its world and port until it has saved, STOP_WAIT at most;
-    // a port that another program holds does not come free, so the start ends here instead of failing to bind it.
+    // A server still stopping (Rerun of a running one) holds its world and port until it has saved or been killed; a
+    // port that another program holds does not come free, so the start ends here instead of failing to bind it.
     const free = () => ide.api.invoke('minecraft:portFree', port);
     const saving = () => stoppingAt(dir);
     if (srv && (saving() || !(await free()))) {
       con.append(`${tr('Waiting for port {port} to be free…', { port })}\n`, 'sys');
-      for (let i = 0; i < (STOP_WAIT + 10000) / 500 && (stopping.size || i < 6) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
+      const longer = (i) => saving() || ((stopping.size || i < 6) && i < (STOP_WAIT + 10000) / 500);
+      for (let i = 0; longer(i) && (saving() || !(await free())); i++) await new Promise((r) => setTimeout(r, 500));
       if (!(await free())) throw new Error(tr('Port {port} is in use by another program: stop it, or change server-port in server.properties.', { port }));
     }
     livePorts.set(dir.toLowerCase(), port);
   }
-  // Stop asks the server to save and quit ("end" for a Velocity proxy); the process is killed only if it is still
-  // there STOP_WAIT later, which a big modpack's save needs. By its id: a Rerun has moved the session on to the next
-  // process by then.
+  // Stop asks the server to save and quit ("end" for a Velocity proxy); the process is killed only when it has gone
+  // quiet (above), and the console and a notification say so: its world may be half saved. By its id: a Rerun has
+  // moved the session on to the next process by then.
   function gracefulStop(s, dir) {
     s.kill = (pid) => {
       if (stopping.has(pid)) return;
       stopping.set(pid, dir.toLowerCase());
       ide.proc.input(pid, serverAt(dir)?.proxy ? 'end\n' : 'stop\n');
-      setTimeout(() => { if (stopping.has(pid)) ide.proc.kill(pid); }, STOP_WAIT);
+      const asked = Date.now();
+      let timer = null;
+      const kill = () => {
+        quietTimers.delete(pid);
+        if (!stopping.has(pid)) return;
+        const name = basename(dir);
+        const text = tr('{name} did not finish stopping: it printed nothing for {seconds} seconds after "stop", so it was ended. Its world may not have been saved completely.', { name, seconds: STOP_WAIT / 1000 });
+        s.con?.append(`\n${text}\n`, 'err');
+        ide.notifications?.notify({ title: tr('{name} was ended without finishing its save', { name }), text, kind: 'error', group: 'Minecraft', raw: true });
+        ide.proc.kill(pid);
+      };
+      const rearm = () => { clearTimeout(timer); timer = setTimeout(kill, Math.min(STOP_WAIT, Math.max(0, STOP_LIMIT - (Date.now() - asked)))); };
+      quietTimers.set(pid, rearm);
+      rearm();
       render();
     };
   }
@@ -112,7 +132,7 @@
         con.append(`${[spec.cmd, ...spec.args].map(quote).join(' ')}\n`, 'sys');
         const id = await ide.api.invoke('minecraft:start', ide.root, spec);
         gracefulStop(s, dir);
-        s.attach(id, { onExit: () => { stopping.delete(id); refresh(); } });
+        s.attach(id, { onExit: () => { stopping.delete(id); quietTimers.delete(id); refresh(); } });
         render();
         ide.api.invoke('ports:refresh').catch(() => {});
       } catch (err) {
@@ -127,7 +147,7 @@
     const s = sessionOf(serverDir);
     if (!s?.running) return;
     con.append(`${tr('Restarting the server to load it…')}\n`, 'sys');
-    const ended = new Promise((resolve) => { s.exitHooks.push(resolve); setTimeout(resolve, STOP_WAIT + 5000); });
+    const ended = new Promise((resolve) => { s.exitHooks.push(resolve); setTimeout(resolve, STOP_LIMIT + 5000); });
     s.stop();
     await ended;
     await run.runConfig(s.cfg, { confirm: false, remember: false });
@@ -348,6 +368,18 @@
     ide.closeTab(ide.minecraft.settings.tabId(srv.dir), true);
     ide.closeTab(ide.minecraft.players.tabId(srv.dir), true);
     ide.refreshTree?.();
+    await refresh();
+  }
+
+  // A server still running from before (the app closed or crashed while it ran) has no console here to send "stop" to:
+  // its process can only be ended, which is pulling the plug on its world.
+  async function endLeftOver(srv) {
+    if (!(await ide.ui.confirm(tr('{name} is still running from before (process {pid}), and this window cannot reach its console to ask it to save. Ending it is like pulling the plug: what happened in the world since its last autosave (every 5 minutes) is lost, and players on it are dropped. If another Nano Studio is running it, stop it there instead. End it now?', { name: srv.name, pid: srv.leftOver.pid }),
+      { title: tr('End Minecraft Server'), ok: tr('End Without Saving') }))) return;
+    try {
+      const r = await ide.api.invoke('minecraft:endLeftOver', ide.root, srv.dir);
+      if (!r.ended) ide.ui.alert(tr('{name} could not be ended. Open Task Manager and end its java.exe there.', { name: srv.name }));
+    } catch (err) { ide.ui.alert(errorText(err)); }
     await refresh();
   }
 
@@ -622,8 +654,10 @@
     modpack: () => tr('another modpack: a server is made from one modpack at a time, so drop this one again after that'),
     unknown: () => tr('not a server, world, resource pack, plugin, mod or modpack'),
     bomb: () => tr('Refused: its contents overlap, as in a zip bomb. Nothing was written.'),
+    dimension: () => tr('the Nether or the End of a Paper world: drop it together with its world folder'),
   };
-  const WHAT = { server: () => tr('server imported'), plugin: () => tr('plugin added'), mod: () => tr('mod added'), resourcepack: () => tr('resource pack added'), world: () => tr('world added (level-name)') };
+  const WHAT = { server: () => tr('server imported'), plugin: () => tr('plugin added'), mod: () => tr('mod added'), resourcepack: () => tr('resource pack added'), world: () => tr('world added (level-name)'),
+    dimension: () => tr('added with its world') };
   async function dropped(paths, serverDir) {
     if (!paths.length || !trusted()) return;
     const con = jobSession(tr('Import'));
@@ -710,12 +744,19 @@
       const head = el('div', 'mc-server-head');
       const title = el('span', 'mc-server-name', srv.name);
       title.dataset.userText = '';
-      head.append(el('span', `mc-dot${running ? ' on' : ''}`), title,
+      head.append(el('span', `mc-dot${running || srv.leftOver ? ' on' : ''}`), title,
         el('span', 'mc-server-kind muted', `${kindTitle(srv.kind)} ${srv.mc} · Java ${srv.java}${srv.loader ? ` · ${srv.loader}` : ''} · :${port}`));
       const actions = el('div', 'mc-server-actions');
       // Starting (a Java download, a busy port being waited out) and saving after Stop take a while, and a second
       // press does nothing then: the card says so instead of offering a button that cannot work.
       const wait = (label, cls) => Object.assign(button(label, cls, () => {}), { disabled: true });
+      if (srv.leftOver && !running) {
+        card.append(head, actions, el('div', 'mc-server-note mc-leftover-why', tr('Still running from before: an earlier Nano Studio started it (or another one did), and this window cannot reach its console.')));
+        actions.append(button(tr('End Server…'), 'mc-end-leftover', () => endLeftOver(srv), tr('Ends its process without saving')),
+          button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
+        host.append(card);
+        continue;
+      }
       if (stoppingAt(srv.dir)) actions.append(wait(tr('Stopping…'), 'mc-stopping'));
       else if (running) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
       else if (busyAt(srv.dir)) actions.append(wait(tr('Starting…'), 'mc-starting'));
@@ -762,12 +803,29 @@
     const actions = el('div', 'mc-server-actions');
     if (stoppingAt(srv.dir)) actions.append(Object.assign(button(tr('Stopping…'), 'mc-stopping', () => {}), { disabled: true }));
     else if (runningAt(srv.dir)) actions.append(button(tr('Stop'), 'mc-stop', () => sessionOf(srv.dir)?.stop()));
+    // Repair only where it has something to go on (srv.repair): a server type from elsewhere with no jar Nano Studio
+    // knows can only be fixed by hand.
+    if (srv.repair) actions.append(button(tr('Repair'), 'mc-repair', () => repairServer(srv), tr('Puts back the copy Nano Studio saved last, or reads the server type again from its files. The damaged file is kept as pyide-server.json.damaged.')));
     actions.append(button(tr('Open Folder'), 'mc-folder', () => ide.api.invoke('shell:openPath', srv.dir)));
+    const kind = { kind: srv.kind ?? '—' };
     const why = el('div', 'mc-server-note muted mc-damaged-why', srv.damaged === 'kind'
-      ? tr('Its pyide-server.json names a server type Nano Studio does not know ({kind}). Open the folder to fix it.', { kind: srv.kind ?? '—' })
-      : tr('Its pyide-server.json cannot be read. Open the folder to fix it.'));
+      ? (srv.repair ? tr('Its pyide-server.json names a server type Nano Studio does not know ({kind}). Repair it, or open the folder to fix it.', kind)
+        : tr('Its pyide-server.json names a server type Nano Studio does not know ({kind}). Open the folder to fix it.', kind))
+      : srv.repair ? tr('Its pyide-server.json cannot be read. Repair it, or open the folder to fix it.')
+        : tr('Its pyide-server.json cannot be read. Open the folder to fix it.'));
     card.append(head, actions, why);
     return card;
+  }
+
+  async function repairServer(srv) {
+    if (!trusted()) return;
+    try {
+      const r = await ide.api.invoke('minecraft:repairServer', ide.root, srv.dir);
+      ide.notifications?.notify({ title: tr('{name} repaired', { name: srv.name }), group: 'Minecraft', kind: 'ok', raw: true,
+        text: r.from === 'backup' ? tr('Its pyide-server.json is the copy Nano Studio saved last. The damaged one is pyide-server.json.damaged.')
+          : tr('Its pyide-server.json was written again from what the folder runs, with the default memory. The damaged one is pyide-server.json.damaged.') });
+    } catch (err) { ide.ui.alert(errorText(err)); }
+    await refresh();
   }
 
   // What other computers on the same network connect to: no sharing, no third party.
@@ -841,7 +899,9 @@
     const srv = list.find((s) => s.dir.toLowerCase() === card.dir.toLowerCase()) || card;
     let target = srv;
     if (srv.offline) {
-      const proxy = list.find((s) => s.proxy);
+      // A proxy that checks accounts itself; a proxy with its own checks off (online-mode = false in velocity.toml, as
+      // one imported from elsewhere may have) is warned about as a server is.
+      const proxy = !srv.proxy && list.find((s) => s.proxy && !s.offline);
       if (proxy) {
         if (!(await ide.ui.confirm(tr('{name} has account checks off because the proxy {proxy} checks them: joined directly, anyone could play under any name. Share the proxy instead?', { name: srv.name, proxy: proxy.name }),
           { title: tr('Share Minecraft Server'), ok: tr('Share the Proxy') }))) return;

@@ -144,31 +144,16 @@
 
   // ---------- Markdown ----------
 
-  function fileUrl(p) {
-    const parts = p.replace(/\\/g, '/').split('/');
-    return `file:///${parts.map((s, i) => (i === 0 && /^[a-zA-Z]:$/.test(s) ? s : encodeURIComponent(s))).join('/')}`;
-  }
-  function resolveRel(dir, ref) {
-    let rel = ref.split(/[?#]/)[0];
-    try { rel = decodeURIComponent(rel); } catch {}
-    if (/^[a-zA-Z]:[\\/]/.test(rel)) return rel.replace(/\//g, '\\');
-    const out = dir.replace(/[\\/]+$/, '').split(/[\\/]/);
-    for (const seg of rel.split(/[\\/]/)) {
-      if (!seg || seg === '.') continue;
-      if (seg === '..') { if (out.length <= 1) return null; out.pop(); } else out.push(seg);
-    }
-    return out.join('\\');
-  }
-
   // Allowlist sanitizer for rendered Markdown: unknown elements are unwrapped, scripts and styles dropped, links and
-  // images limited to safe schemes. Notebook attachments and relative images resolve against the notebook.
+  // images limited to safe schemes. Notebook attachments and relative images resolve against the notebook; remote ones
+  // load as in the Markdown preview (ide.util.mediaSrc: https in a trusted folder only), each left out pushed onto blocked.
   const MD_TAGS = new Set(['a', 'abbr', 'b', 'blockquote', 'br', 'code', 'dd', 'del', 'details', 'div', 'dl', 'dt', 'em', 'h1', 'h2',
     'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'kbd', 'li', 'ol', 'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strong',
     'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'mark', 'center', 'font', 'figure', 'figcaption']);
   const MD_DROP = new Set(['script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'link', 'meta', 'base',
     'form', 'button', 'textarea', 'select', 'option', 'noscript', 'template', 'svg', 'math', 'video', 'audio', 'title', 'head']);
   const MD_ATTRS = new Set(['href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'align', 'width', 'height', 'id', 'checked', 'open', 'start']);
-  function sanitizeMarkdown(html, { baseDir, attachments }) {
+  function sanitizeMarkdown(html, { baseDir, attachments, remote = false, blocked = [] }) {
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     const walk = (node) => {
@@ -194,10 +179,9 @@
             const bundle = attachments?.[decodeURIComponent(s.slice(11))];
             const mime = bundle && Object.keys(bundle).find((k) => k.startsWith('image/'));
             if (mime) n.setAttribute('src', imageSrc(mime, joinText(bundle[mime]))); else n.removeAttribute('src');
-          } else if (/^https?:\/\//i.test(s) || /^data:image\//i.test(s)) { /* kept */ } else if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[a-z]:[\\/]/i.test(s)) n.removeAttribute('src');
-          else {
-            const p = resolveRel(baseDir, s);
-            if (p) n.setAttribute('src', fileUrl(p)); else n.removeAttribute('src');
+          } else {
+            const src = ide.util.mediaSrc(s, baseDir, { remote, blocked });
+            if (src) n.setAttribute('src', src); else n.removeAttribute('src');
           }
         }
       }
@@ -206,9 +190,17 @@
     return tpl.content;
   }
 
+  // ctx: {baseDir, attachments, remote, onBlocked()}, onBlocked called when a remote image was left out.
   function renderMarkdownInto(target, text, ctx) {
     const marked = window.marked;
-    target.replaceChildren(sanitizeMarkdown(marked.parse(text, { gfm: true }), ctx));
+    const blocked = [];
+    target.replaceChildren(sanitizeMarkdown(marked.parse(text, { gfm: true }), { ...ctx, blocked }));
+    if (blocked.length) {
+      const note = el('div', 'nb-md-blocked', ctx.remote ? tr('Images over plain http are not loaded') : tr('Remote images are not loaded: this folder is not trusted'));
+      note.title = blocked.slice(0, 10).join('\n');
+      target.appendChild(note);
+      ctx.onBlocked?.();
+    }
     for (const code of target.querySelectorAll('pre > code[class*="language-"]')) {
       const lang = (code.className.match(/language-([\w+-]+)/) || [])[1]?.toLowerCase();
       const id = lang === 'py' ? 'python' : lang;
@@ -255,7 +247,9 @@ pre,code{font-family:${v('--mono')}}</style></head><body>${html}${tail}</body></
     if (ide.trusted === false) {
       f.setAttribute('sandbox', 'allow-same-origin');
       f.addEventListener('load', () => { const b = f.contentDocument?.body; if (b) fitFrame(f, b.getBoundingClientRect().height); });
-      f.srcdoc = page('');
+      // The page's CSP lets images and media come from anywhere; a saved output of an untrusted notebook (an IPython
+      // Image(url=...)) would tell its server who opened the file. This policy adds to the one the srcdoc inherits.
+      f.srcdoc = page('').replace('<head>', '<head><meta http-equiv="Content-Security-Policy" content="img-src data:; media-src data:">');
       return f;
     }
     f.setAttribute('sandbox', 'allow-scripts');
@@ -438,6 +432,10 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     const theme = () => (document.documentElement.dataset.theme === 'light' ? 'pycharm-light' : 'pycharm-dark');
     const baseDir = dirname(path);
     const disposers = [];
+    // Remote images load only once the folder is known to be trusted: what was left out meanwhile is drawn again then.
+    let remote = false;
+    let blockedAny = false;
+    const mdCtx = () => ({ baseDir, remote, onBlocked: () => { blockedAny = true; } });
     let meta = null;
     let cells = []; // {data, el, prompt, input, md, outputs, status, model, editor, editing, runs, started}
     let sel = 0;
@@ -1106,7 +1104,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
         c.md.replaceChildren(el('div', 'nb-md-empty', tr('Empty Markdown cell. Double-click to edit.')));
         return;
       }
-      try { renderMarkdownInto(c.md, text, { baseDir, attachments: c.data.raw.attachments }); } catch (e) { c.md.textContent = text; console.warn(e); }
+      try { renderMarkdownInto(c.md, text, { ...mdCtx(), attachments: c.data.raw.attachments }); } catch (e) { c.md.textContent = text; console.warn(e); }
       c.md.dataset.rendered = String(Number(c.md.dataset.rendered || 0) + 1);
     }
 
@@ -1117,7 +1115,7 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
       c.status.textContent = `${c.elapsed.ok ? '✓' : '✗'} ${ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`}`;
     }
 
-    const outputCtx = () => ({ baseDir, attachments: null, host });
+    const outputCtx = () => ({ ...mdCtx(), attachments: null, host });
     function renderOutputs(c) {
       if (c.data.type !== 'code') { c.outputs.replaceChildren(); return; }
       c.outputs.replaceChildren(...c.data.outputs.map((o) => renderOutput(o, outputCtx())));
@@ -1536,6 +1534,12 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
 
     load(doc.model.getValue());
     setMode('command');
+    ide.api.invoke('trust:isTrusted', path).then((yes) => {
+      if (!yes || disposed) return;
+      remote = true;
+      if (!blockedAny) return;
+      for (const c of cells) if (c.data.type !== 'markdown') renderOutputs(c); else if (!c.editing) renderMd(c);
+    }, () => {});
 
     const view = {
       path, tab, host, kernel, authority,
@@ -1549,9 +1553,15 @@ new ResizeObserver(post).observe(document.body);addEventListener('load',post);po
     host.notebook = view;
 
     return {
+      // Before the tab's close looks for unsaved changes: the last edit still waits up to 300 ms to reach the document.
+      // Only that edit: serializing an unedited notebook rewrites a file saved by another tool (its JSON layout), so
+      // the close would ask about changes nobody made.
+      flush: () => { if (flushTimer) flush(); },
+      // A running kernel is state the tab limit must not close away (core editors.js).
+      busy: () => kernel.running(),
       dispose() {
+        if (flushTimer) flush();
         disposed = true;
-        flush();
         clearTimeout(reloadTimer);
         views.delete(authority);
         kernelTask?.done();

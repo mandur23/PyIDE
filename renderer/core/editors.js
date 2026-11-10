@@ -493,12 +493,15 @@
     enforceTabLimit(g, tab);
   }
 
-  // PyCharm's tab limit: the least recently used unpinned, unmodified tab closes when a group overflows.
+  // PyCharm's tab limit: the least recently used unpinned, unmodified tab closes when a group overflows. Only a file or a
+  // viewer that can be opened again as it was: a tool tab (a merge being resolved, a database console) and a busy viewer
+  // (a notebook whose kernel runs) would lose their state without a word.
+  const limitMayClose = (t) => !t.pinned && !ide.isDirty(t) && (t.kind === 'file' || (!!t.viewer && !t.busy?.()));
   function enforceTabLimit(g, keep) {
     const limit = Number(settingOn('editor.tabLimit', 10)) || 0;
     while (limit > 0 && g.tabs.length > limit) {
       const victim = [...g.tabs].sort((a, b) => mruRank(b) - mruRank(a))
-        .find((t) => t !== keep && !t.pinned && !ide.isDirty(t));
+        .find((t) => t !== keep && limitMayClose(t));
       if (!victim) break;
       closeTabObj(victim, true);
     }
@@ -614,6 +617,8 @@
   function closeTabObj(tab, force = false, { moving = false } = {}) {
     const g = tab.group;
     if (g.tabs.indexOf(tab) < 0) return true;
+    // A viewer's edit it has not yet written to its document (a notebook batches them) counts as unsaved.
+    if (!force) safe(() => tab.flush?.());
     const last = tab.doc && tabsOfDoc(tab.doc).length === 1;
     if (!force && last && docDirty(tab.doc)) {
       return ide.ui.confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }), { ok: tr('Close') })
@@ -1118,6 +1123,8 @@
     addTab(g, tab);
     const r = safeMount(() => viewer.mount(host, { path, doc, tab }));
     tab.dispose = () => r?.dispose?.();
+    tab.busy = () => !!r?.busy?.();
+    tab.flush = () => r?.flush?.();
     return tab;
   }
   const safeMount = (fn) => { try { return fn(); } catch (err) { console.error(err); return null; } };
@@ -1396,20 +1403,22 @@
     updateStatus();
   }
 
-  async function reloadDoc(doc) {
-    if (docDirty(doc) || doc.remote) return;
+  // force: the file wins over unsaved edits too (a Git rollback the user asked for).
+  async function reloadDoc(doc, force = false) {
+    if ((!force && docDirty(doc)) || doc.remote) return;
     let r;
     try { r = await readForReload(doc); } catch { return; }
     // Typed into or closed while the file was read: the editor's text wins.
-    if (doc.model.isDisposed() || docDirty(doc) || r.text === undefined) return;
-    if (r.text !== diskText(doc)) return adoptDisk(doc, r);
+    if (doc.model.isDisposed() || (!force && docDirty(doc)) || r.text === undefined) return;
+    if (force || r.text !== diskText(doc)) return adoptDisk(doc, r);
     // The same text in another encoding: re-encoded outside PyIDE when the document's own encoding no longer reads it
     // (not a CP949 file that is all ASCII, which detection calls UTF-8).
     if (r.encoding !== doc.encoding && (await readDisk(doc).catch(() => null))?.text !== r.text) adoptDisk(doc, r);
   }
-  // Reloads open documents whose file changed on disk (after formatters, git checkout, replace-in-files...).
-  ide.reloadFromDisk = async (paths) => {
-    for (const doc of [...docs.values()].filter((d) => !paths || paths.some((p) => samePath(p, d.path)))) await reloadDoc(doc);
+  // Reloads open documents whose file changed on disk (after formatters, git checkout, replace-in-files...). force: also
+  // those with unsaved edits, which are replaced.
+  ide.reloadFromDisk = async (paths, { force = false } = {}) => {
+    for (const doc of [...docs.values()].filter((d) => !paths || paths.some((p) => samePath(p, d.path)))) await reloadDoc(doc, force);
     renderAllTabs();
   };
 
@@ -1714,6 +1723,8 @@
   // servers get a minute to save their worlds, main.js), so a window with only those asks Stop and Close or Cancel.
   let confirmingClose = false;
   ide.api.on('window:confirmClose', ({ others = [], running = [] } = {}) => {
+    // A page that does not say this in time is asked about natively (main/windows.js): it crashed or hangs.
+    ide.api.send('window:closeAsked');
     if (confirmingClose) return;
     const own = [...docs.values()].filter(docDirty).map((d) => d.path);
     const paths = [...own, ...others.filter((p) => !own.some((o) => samePath(o, p)))];
@@ -1733,12 +1744,14 @@
         : tr('These are still running. Closing stops them:')), list);
     }
     confirmingClose = true;
-    const closeNow = () => ide.api.invoke('window:closeNow');
+    let closing = false;
+    const closeNow = () => { closing = true; return ide.api.invoke('window:closeNow'); };
     const dlg = ide.ui.dialog({
       title: paths.length ? tr('Save Changes?') : craft ? tr('Servers Are Running') : tr('Programs Are Running'),
       body,
       width: 460,
-      onClose: () => { confirmingClose = false; },
+      // Cancel (or a Save All that failed) keeps the IDE open: a Restart IDE that asked here is called off.
+      onClose: () => { confirmingClose = false; if (!closing) ide.api.send('window:closeCancelled'); },
       buttons: paths.length ? [
         // A file that could not be saved (its error was shown) keeps the windows open.
         { label: tr('Save All'), primary: true, run: async () => {

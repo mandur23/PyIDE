@@ -8,12 +8,17 @@
 // writes that down the first time (adoptDetected), to say so; from then on the record is what counts.
 const fs = require('fs');
 const path = require('path');
+const { readStore, writeStore } = require('./json-store');
 
 const KINDS = ['sources', 'tests', 'excluded'];
 const keyOf = (root) => path.resolve(root).toLowerCase();
 const listeners = new Set();
 let store = null; // {root key: {sources: [rel], tests: [rel], excluded: [rel]}}
 let storeStamp = null; // mtime of the file store was read from: another Nano Studio on the same user data may write it
+// The file is there but could not be read (locked, no permission): it is not written over, and the roots set
+// meanwhile (unsaved, their keys) go onto its content once it reads again.
+let unread = false;
+const unsaved = new Set();
 
 const storeFile = () => {
   let dir;
@@ -23,31 +28,37 @@ const storeFile = () => {
 
 const relList = (v) => (Array.isArray(v) ? [...new Set(v.filter((r) => typeof r === 'string' && !path.isAbsolute(r) && !r.split(/[\\/]/).includes('..')))] : []);
 const clean = (rec) => Object.fromEntries(KINDS.map((k) => [k, relList(rec?.[k])]));
+const isRecords = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 function load() {
   const file = storeFile();
   let stamp = null;
   try { stamp = file && fs.statSync(file).mtimeMs; } catch {}
-  if (store && stamp === storeStamp) return store;
+  if (store && stamp === storeStamp && !unread) return store;
+  const r = file ? readStore(file, isRecords) : { value: undefined };
+  unread = !r;
+  if (!r) return (store ||= {});
+  const kept = store;
   store = {};
   storeStamp = stamp;
-  try {
-    const saved = stamp && JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (saved && typeof saved === 'object' && !Array.isArray(saved)) for (const [k, v] of Object.entries(saved)) store[k] = clean(v);
-  } catch {}
+  for (const [k, v] of Object.entries(r.value || {})) store[k] = clean(v);
+  if (unsaved.size) {
+    for (const k of unsaved) store[k] = kept[k];
+    unsaved.clear();
+    save();
+  }
   return store;
 }
 
-function save() {
+function save(key) {
   const file = storeFile();
   if (!file) return;
-  const tmp = `${file}.${process.pid}.tmp`;
+  if (unread) { if (key) unsaved.add(key); return; }
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(store, null, 1));
-    fs.renameSync(tmp, file);
+    writeStore(file, store);
     storeStamp = fs.statSync(file).mtimeMs;
-  } catch { try { fs.rmSync(tmp, { force: true }); } catch {} }
+  } catch {}
 }
 
 const isPython = (name) => /\.pyi?$/i.test(name);
@@ -131,7 +142,7 @@ function mark(root, folder, kind) {
 
 function set(root, rec) {
   load()[keyOf(root)] = clean(rec);
-  save();
+  save(keyOf(root));
   for (const fn of listeners) { try { fn(root); } catch {} }
 }
 

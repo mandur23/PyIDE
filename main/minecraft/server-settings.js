@@ -183,4 +183,4 @@ function prepare(dir, { props = {}, whitelist, ops } = {}) {
   };
 }
 
-module.exports = { PROPERTIES, read, prepare, player, readProperties, writeProperties, offlineUuid };
+module.exports = { PROPERTIES, read, prepare, player, readProperties, writeProperties, offlineUuid, replaceFile };

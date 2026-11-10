@@ -1,5 +1,7 @@
 {
   "File Viewers": "파일 뷰어",
+  "Images over plain http are not loaded": "암호화하지 않은 http 이미지는 불러오지 않습니다",
+  "Remote images are not loaded: this folder is not trusted": "신뢰하지 않은 폴더라서 원격 이미지를 불러오지 않습니다",
   "Viewers for images, video, audio waveforms, NumPy arrays and model files, plus Markdown preview and CSV/JSONL tables.": "이미지, 동영상, 오디오 파형, NumPy 배열, 모델 파일 뷰어와 Markdown 미리보기, CSV/JSONL 표를 제공합니다.",
   "Actual Size": "실제 크기",
   "All Columns": "모든 열",

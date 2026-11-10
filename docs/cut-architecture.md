@@ -218,7 +218,9 @@ writer = {
 - `timescale` is the video media timescale and the movie timescale. The default (`videoTimescale(fps)`) is
   `num * 1000` for integer rates and `num` for x/1001 rates. The audio media timescale is its sample rate.
 - `addVideo`/`addAudio` return a Promise that settles when every write queued so far is done: await it for
-  back-pressure. After a sink error they throw at once and `finish()` rejects. Samples of 2 MB or more go to the sink
+  back-pressure. After a sink error they throw at once and `finish()` rejects; `create`'s `onError(err)` hears the
+  first sink error when it happens and `writer.error` holds it, so an export stops at the full disk, not after the
+  last frame. Samples of 2 MB or more go to the sink
   uncopied: keep them unchanged until that promise settles.
 - Layout: ftyp (32 bytes: isom, iso2, avc1, mp41), then one mdat with a 16-byte header (size field 1 and a 64-bit size
   patched at finish: the sink's only positional write, 8 bytes at position 40), then moov at the end with stts, ctts
@@ -483,7 +485,14 @@ segment that leaves it. Keyframable paths are the props (`'opacity'`, `'position
 validate. Opened files go through `createHistory(Cut.model.migrate(text))`.
 
 - `history.project` (the current project; read-only), `do(command)` -> result | throws (nothing changes then),
-  `undo()` / `redo()` -> boolean, `canUndo`, `canRedo`, `dirty`, `markSaved()`.
+  `undo()` / `redo()` -> boolean, `canUndo`, `canRedo`, `dirty`, `mark()` and `markSaved(mark = mark())`: a save
+  takes `mark()` before `serialize()` and passes it to `markSaved` once the file is written, so an edit or amend made
+  while it is written stays unsaved; a mark taken inside a group with edits in it (a save during a drag) is no step, so
+  the project stays dirty until the next save.
+- `amend(command)` -> result | throws: a change that is no edit of the person's (a finished proxy job linking its
+  file): applied, validated and saved with the project like `do`, but no step. The steps, what can be redone and an AI
+  turn's `squash` are left as they were, undo and redo never take it back, and `dirty` is true until the next save.
+  Only for changes no step undoes or redoes (`setProxy`). Listeners hear 'amend'.
 - `begin(label)` / `commit()` / `cancel()` group several `do` into one undo step (slider drags, live trims). Nested
   pairs join the outer group; `cancel()` takes back everything since the outer begin. `grouping` is true inside one.
 - `list()` -> `[{ label, done }]`, oldest first: the steps that can be undone, then those that can be redone.
@@ -492,7 +501,7 @@ validate. Opened files go through `createHistory(Cut.model.migrate(text))`.
 - `squash(position, label)` joins the steps done after `position` into one step named `label` (an AI assistant's turn:
   each edit is a step while the turn runs, then the turn is one); the project does not change, the list does
   ('commit'); an open group is committed first; -> true when there was a step to name.
-- `onChange(fn)` (fn(reason) with 'do' | 'undo' | 'redo' | 'commit'; 'commit' when a group became a step: the list
+- `onChange(fn)` (fn(reason) with 'do' | 'undo' | 'redo' | 'commit' | 'amend'; 'commit' when a group became a step: the list
   changed, the project did not; returns a remover), `dispose()`, `serialize()` -> JSON text.
 
 A command is a plain object `{ type, ... }` built by helpers on `Cut.commands`, so a test or a panel writes
@@ -502,7 +511,10 @@ After every command the project must still `validate()` (else `invalidResult`). 
 
 Options are nested, never spread to the top level. The builders:
 
-- media: `importMedia(mediaList, binId?)`, `removeMedia(ids)`, `relinkMedia(id, {path, size, mtime})`,
+- media: `importMedia(mediaList, binId?)`, `removeMedia(ids)`, `relinkMedia(id, {path, size, mtime, duration?, video?,
+  audio?})` -> `{ trimmed, removed }` (clip ids: with a shorter `duration` the clips past the new end end at its last
+  whole frame, a reversed one loses its head; one with no frame left, a freeze frame of a later time or a remapped clip
+  past the end is removed, all in the same step),
   `addBin(name, parent?)`, `removeBin(id)`, `renameItem(id, name)`, `moveToBin(ids, binId)`,
   `setProxy(mediaId, {path} | null)`
 - project: `setSettings({fit, stillDuration, transitionDuration, freezeDuration, textStyles, speechTerms})`,
@@ -669,13 +681,20 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
   first filter's extension is added when the name has none). `PYIDE_CUT_DIALOG` (tests) names a JSON file
   `{pickMedia, pickFolder, pickProject, pickLut, saveAs}`, read at each call; each dialog returns that value (missing = cancelled) without
   showing anything.
-- `cut:projectRead(path)` -> `{ text, path, mtime }` | `{ missing }` | `{ error, code }`;
-  `cut:projectWrite(path, text)` -> `{ ok, path, bak }` | `{ error }`. Only `.ncut`, the text must be a JSON
-  object, the folder must exist. Temp file then rename; the previous file is kept as `.ncut.bak` when the format
-  version changes.
+- `cut:projectRead(path)` -> `{ text, path, mtime, autosave? }` | `{ missing }` | `{ error, code }` (`autosave: true`
+  for a file in the Autosave folder: the editor opens it as an unsaved project, since the cleanup deletes files there by
+  name; `cut:projectWrite` refuses that folder with code `autosave`);
+  `cut:projectWrite(path, text, { mtime? })` -> `{ ok, path, bak, kept, mtime }` | `{ error, code }`. With `mtime`
+  (the time `cut:projectRead` or the last write gave) a file whose time differs now (another window or program saved
+  it) is not written: `{ code: 'changed', mtime }`; the editor asks before it writes without the time (Overwrite).
+  There is no lock across app instances. Only `.ncut`, the text must be a JSON
+  object, the folder must exist. Temp file, flushed to the disk (fsync), then rename; every save keeps the file it
+  replaces as `.ncut.bak` (`bak`), and when the format version changes also as `.ncut.v<old version>.bak` (`kept`),
+  which later saves leave alone.
 - `cut:autosave(key, text, {latest, keep})` (key: the project path, or `untitled-<id>`) -> `{ ok, file }`: a copy
   `<autosave>\<name>-<hash>-<stamp>.ncut`, the newest `keep` (1 to 100, default 20) copies kept per key, or with
-  `latest: true` the latest state `<stamp>.latest.ncut`, only the newest kept; neither kind pushes out the other. `cut:sessionStart(key)` (also clears an
+  `latest: true` the latest state `<stamp>.latest.ncut`, only the newest kept; neither kind pushes out the other.
+  `cut:autosaves(key)` -> `[{ file, time, latest }]`, newest first (File > Restore Autosave). `cut:sessionStart(key)` (also clears an
   ended offer of the same key), `cut:sessionEnd(key)`, `cut:recovery()` -> `[{ key, file, time }]` for sessions that
   never ended (the run is gone or the window's renderer crashed) whose newest autosave is newer than the session's
   start and its last save. `cut:recoveryDismiss(key)` -> `{ ok }` removes an offer the user declined.
@@ -687,7 +706,9 @@ Channels (the renderer calls `ide.api.invoke('cut:...', ...)`; results are value
   crashed run at the next start.
 - `cut:faststart(path)` -> `{ ok, moved, bytes, path }` | `{ ok, already: true }`: moves moov in front of the first
   mdat through a temp file, adding the moov size to every co64 and stco entry (an stco that overflows becomes co64;
-  co64 stays co64), and keeps the mdat header form.
+  co64 stays co64), and keeps the mdat header form. The temp file is a full copy: with less free space than it needs
+  (plus 64 MB) it returns `{ error, code: 'diskFull' }` without writing, and while it exists it is in the sink's
+  journal, so a crash leaves no `.faststart.tmp` after the next start. The file is whole either way.
 - Cache: `cut:cacheGet(key)` -> `Uint8Array | null`, `cut:cachePut(key, bytes)` (up to 512 MB), `cut:cacheInfo()` ->
   `{ bytes, files, limit, dir }`, `cut:cacheClear()`. Least recently used files go first above the limit (setting
   `cut.cacheLimitGB`, default 10). Other files under the cache folder (a proxy an export sink wrote there) count too.
@@ -1207,12 +1228,16 @@ getAudio, compositor })`:
 - Muxes with `Cut.mp4write` into the `cut:writeOpen` sink (the `.part` file is renamed on success, deleted on cancel
   or failure), writes SRT sidecars when asked, runs `cut:faststart`, then verifies: re-opens the file with probe,
   checks frame count and track durations, decodes the first and last frames.
+- A write the sink refuses (a full disk, a removed drive) stops the export at once with the sink's code (`diskFull`,
+  `io`): the frames are no longer rendered to the end. Cancel also stops a wait for an encoder's queue or flush. A
+  failed faststart is not a failure: the export succeeds with `faststart: false` and a `faststart` problem in
+  `verified.problems` (the file plays, but a player reads all of it before it starts).
 - The path's extension is replaced with the preset's (`mp4` or `m4a`).
 - Success: `{ ok, path, bytes, seconds, speed /* x realtime */, frames, range, verified: { ok, frames,
   expectedFrames, duration, audioDuration, firstFrame, lastFrame, problems: [{ code, message /* English, for
   tr(message, params) */, params }] }, encoder: { codec, hardware }, audioDelay, audioBitrate, loudnessGain /* dB the loudness target added */, sidecars: [paths] }`.
 - Failure: `{ ok: false, code, error }` with code `cancelled`, `noSequence`, `settings`, `empty`, `noEncoder`,
-  `encode`, `audio`, `compositor`, `media`, `decode`, `faststart`, `io` and the sink's codes.
+  `encode`, `audio`, `compositor`, `media`, `decode`, `io` and the sink's codes.
 - Progress events: `{ phase: 'audio' | 'video' | 'finish' | 'verify', done, total, fraction, elapsed, eta, speed }`.
 - A numeric `settings.loudness` (LUFS) makes `run` measure the mix first (`audioengine.measure`, progress phase
   `audio`) and add `audioengine.matchGain(measured, target)` (true peak kept under -1 dBTP) to `seq.masterGain` and
@@ -1475,12 +1500,14 @@ splitter sizes are kept, and the last one is setting `cut.workspace`. Panels are
 workspaces. Panels added from the Window menu are kept per workspace in `cut.addedPanels` (`{ws: [{panel, slot:
 'row:slot'}]}`) and have a close mark on their tab. Every panel is also the IDE action `Cut.window.<id>`.
 
-`Cut.ui.lifecycle = { newProject, open, openPath, save, saveAs, askToSave, autosaveNow, autosaveCopy, offerRecovery,
+`Cut.ui.lifecycle = { newProject, open, openPath, save, saveAs, saveCopy, askToSave, autosaveNow, autosaveCopy, offerRecovery, restoreAutosave,
 key, dirty, lastAutosave, lastCopy, projectName }`. An untitled project at start (with `Cut.ui.projectDefaults()`);
 `cut:autosave(..., {latest: true})` 2 s after edits stop (only when dirty, not inside a history group) and
 `autosaveCopy()` every `cut.autosave.minutes` (copies kept: `cut.autosave.keep`) while dirty with edits the last copy
 lacks; `cut:sessionStart/End` per key (Save As from untitled ends `untitled-<id>` and starts the
-path); the recovery offer from `cut:recovery`, with `cut:recoveryDismiss` for what the user declines. The unsaved
+path); the recovery offer from `cut:recovery`, with `cut:recoveryDismiss` for what the user declines;
+`restoreAutosave()` (File > Restore Autosave…) lists `cut:autosaves(key)` and opens the chosen one in place of the
+project, unsaved, under the same path and session. A file from the Autosave folder opens untitled and modified. The unsaved
 project's close question uses a `beforeunload` guard (Electron honours it only after a user gesture); a running
 export joins the IDE's close question through `window:setBusy`.
 
@@ -1493,7 +1520,10 @@ findInFolder(folder, media) -> {paths}, offline,
 matchSequence(app, mediaId), describe, probeFile, newSequenceDialog, unusedIds(project), removeUnused(app),
 findMissing(app) }` and, while the panel is mounted, `selected()`, `selectUnused()`, `filter()` (null or 'unused');
 `Cut.ui.offline` (the Set of offline media ids). Relinking matches the file name and size (`cut:findMedia`), then for
-the rest the name alone with a probed duration within one frame. Import calls `Cut.ui.proxy.offer`. `matchSequence` uses `Media.video.w/h` as they
+the rest the name alone with a probed duration within one frame. A file found or located is probed before it is
+used: another kind or another set of streams (sound where there was none, or none where there was) is refused with
+the reason; a shorter one is asked about (the lengths and how many clips use the part past its end) and relinked with
+its duration, so `relinkMedia` cuts those clips in the same step. Import calls `Cut.ui.proxy.offer`. `matchSequence` uses `Media.video.w/h` as they
 are (already upright).
 
 ### Monitors (`ui-monitors.js`)
@@ -1841,7 +1871,9 @@ removal), `definitions()` (MCP `tools/list`), `describe(name, args)` -> `[Englis
   `.cut-as-input` (Enter sends, Shift+Enter a new line, not while composing), `.cut-as-send`, `.cut-as-stop`.
 - `Cut.ui.assistant = { ask(request), stop(), settingsSection(host, ctx), disconnect(), running /* {id, request} */,
   external /* {info, clients} */, relist, defaults }`. A turn remembers `history.position`; at its end (done, failed or
-  stopped) `history.squash(floor, request)` makes its edits one step. The prompt carries the last six requests and
+  stopped) `history.squash(floor, request)` makes its edits one step. A turn belongs to the history it started on: a
+  new, opened or recovered project (the `lifecycle` event) stops it (end code `closed`), and a call of a turn whose
+  history is no longer `app.history` is refused. The prompt carries the last six requests and
   answers of this project and `get_state` plus `get_sequence` (150 clips) as JSON. Settings:
   `cut.assistant.acknowledged` (the notice), `cut.control.external` (off by default; the settings section, drawn from
   the pending value until Apply, shows the `claude mcp add` command and the JSON with Copy, and New Token).
@@ -1902,7 +1934,7 @@ removal), `definitions()` (MCP `tools/list`), `describe(name, args)` -> `[Englis
   jobs(), running }`. A job builds a one-clip project (sequence at the proxy size and `nearestRate(fps)`, no audio
   track) and runs `Cut.export.run({ settings: presets.resolve('720p', ...) with audio null, keyInterval 15, gate })`
   into `<cache>\proxy-<FNV of path|size|mtime|height>-<height>p.mp4`; the gate waits while `app.playing` or the source
-  monitor plays. `setProxy` is done when the job's history is still `app.history` and no group is open. The app
+  monitor plays. `setProxy` is done through `history.amend` (no undo step) when the job's history is still `app.history` and no group is open. The app
   emits `proxies` when a job or a proxy's presence changes. Dismissed offers: setting `cut.proxy.dismissed` (lower-case
   session keys, at most 200; a first save carries the untitled key's answer to the path).
 - Export queue: `Cut.ui.exportQueue = { add(spec) -> job, cancel(id), remove(id), retry(id), move(id, ±1),

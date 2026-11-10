@@ -605,7 +605,7 @@ function register(ctx) {
   ipcMain.handle('localHistory:content', (_e, root, h) => storeOf(root).content(h));
   ipcMain.handle('localHistory:restore', (_e, root, abs, h) => storeOf(root).restore(abs, h));
   ipcMain.handle('localHistory:rename', (_e, root, from, to) => storeOf(root).rename(from, to));
-  app.on('before-quit', () => { for (const s of stores.values()) s.close(); });
+  app.on('will-quit', () => { for (const s of stores.values()) s.close(); });
 }
 
 module.exports = { register };

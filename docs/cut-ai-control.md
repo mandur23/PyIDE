@@ -365,6 +365,7 @@ menu (the assistant is Claude: it reads and writes the captions, titles and chap
 | `save` | `save_project` |
 | `saveAs` | Not for AI: It writes the project to a new file at a place the user picks; save_project saves it to its own file (asking for a place only when it has none). |
 | `saveCopy` | Not for AI: It writes a copy of the project to a place the user picks; the user does it. |
+| `restoreAutosave` | Not for AI: It replaces the open project with an autosave the user picks from a list; the user does it. |
 | `open` | Not for AI: It closes this project and opens another; that is the user's call. |
 | `newProject` | Not for AI: It closes this project for a new one; that is the user's call. |
 | `newSequence` | `add_sequence` |

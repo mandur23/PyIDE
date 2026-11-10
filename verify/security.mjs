@@ -8,7 +8,18 @@ import path from 'path';
 import { launch, openFile } from './lib.mjs';
 
 const PORT = 9870;
-const t = await launch({ fixture: 'core', port: PORT, name: 'security' });
+// 9869: the main process's Node inspector.
+const t = await launch({ fixture: 'core', port: PORT, name: 'security', args: ['--inspect=9869'] });
+const mainWs = new WebSocket((await (await fetch('http://127.0.0.1:9869/json/list')).json())[0].webSocketDebuggerUrl);
+await new Promise((r) => mainWs.addEventListener('open', r));
+let mainSeq = 0;
+const mainPending = new Map();
+mainWs.addEventListener('message', (m) => { const msg = JSON.parse(m.data); mainPending.get(msg.id)?.(msg); mainPending.delete(msg.id); });
+const mainEval = (expr) => new Promise((r) => {
+  const id = ++mainSeq;
+  mainPending.set(id, (msg) => r(msg.result?.result?.value ?? JSON.stringify({ error: msg.result?.exceptionDetails?.exception?.description || msg.error?.message })));
+  mainWs.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true, awaitPromise: true, includeCommandLineAPI: true } }));
+});
 const { js, until, check, cdp, sleep } = t;
 const H = 'ide.activeTab().host';
 const pages = async () => (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).filter((p) => p.type === 'page').length;
@@ -111,13 +122,36 @@ fetch('/' + decodeURIComponent(location.hash.slice(1))).then((r) => r.status, ()
   check(await js(`navigator.mediaDevices.getUserMedia({ audio: true }).then(() => 'granted', (e) => e.name)`) !== 'granted', 'the microphone is denied');
   check(await js(`window.__pwned === undefined`), 'no injected script ran');
 
+  // ---------- IPC answers the IDE page's top frame only (main/ipc-guard.js) ----------
+  // A frame cannot send IPC without the preload, so the messages are made in the main process (its inspector) with the
+  // window's real frames as senders, as an exploited page process would send them.
+  await js(`new Promise((resolve) => { const f = document.createElement('iframe'); f.id = 'ipcProbe'; f.onload = () => resolve(true); f.src = ${JSON.stringify(site)} + 'site/index.html'; document.body.appendChild(f); })`);
+  const fromFrame = (which) => mainEval(`(async () => {
+    const { ipcMain, BrowserWindow } = require('electron');
+    const wc = BrowserWindow.getAllWindows()[0].webContents;
+    const frame = ${which === 'top' ? 'wc.mainFrame' : 'wc.mainFrame.frames.find((f) => f.url.startsWith("pyide-preview:"))'};
+    if (!frame) return 'no frame';
+    const ev = { sender: wc, senderFrame: frame, returnValue: 'unanswered' };
+    ipcMain.emit('security:shareAllowedSync', ev, 'C:\\\\x.txt');
+    const invoked = await Promise.resolve().then(() => ipcMain._invokeHandlers.get('app:info')({ sender: wc, senderFrame: frame })).then((i) => typeof i?.version, (e) => e.message);
+    return JSON.stringify({ sync: ev.returnValue, invoked, url: frame.url.split('?')[0].slice(-30) });
+  })()`);
+  const topAnswer = JSON.parse(await fromFrame('top'));
+  const subAnswer = JSON.parse(await fromFrame('sub'));
+  check(typeof topAnswer.sync === 'boolean' && topAnswer.invoked === 'string', `the IDE page's top frame is answered (${JSON.stringify(topAnswer)})`);
+  check(subAnswer.sync === null && /not available to a subframe/.test(subAnswer.invoked), `a frame inside it (the HTML preview's) is refused, sync and invoke (${JSON.stringify(subAnswer)})`);
+  await js(`(document.getElementById('ipcProbe').remove(), true)`);
+
   // ---------- the API belongs to the IDE page only ----------
   // A browser-initiated load (DevTools) is the only way to put another page in the window; it must not get the API.
   w('elsewhere.html', '<!doctype html><p>not the IDE</p>\n');
   await cdp('Page.navigate', { url: `file:///${path.join(t.project, 'elsewhere.html').split(path.sep).join('/')}` });
   await until(`document.body?.textContent.includes('not the IDE')`, 'other page loaded', 10000);
   check(await js(`typeof window.api`) === 'undefined', 'a page other than the IDE gets no IPC API');
+  const foreignAnswer = JSON.parse(await fromFrame('top'));
+  check(foreignAnswer.sync === null && /not available to a foreign page/.test(foreignAnswer.invoked), `and messages from it are refused anyway (${JSON.stringify(foreignAnswer)})`);
 } catch (err) {
   check(false, err.message);
 }
+mainWs.close();
 t.finish();

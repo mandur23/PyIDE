@@ -71,7 +71,8 @@ npm start -- --mode=craft
 - 서버마다 `servers/<이름>/pyide-server.json`이 종류, 버전, 로더, Java, 실행 방법을 적습니다.
 - 새 서버는 사용자가 EULA에 동의해야 만듭니다. 다운로드는 체크섬을 확인하고, 실패하면 반쯤 만든 서버를 지웁니다. 만드는 중에는 `pyide-server.unfinished` 표시를 둡니다.
 - 실행은 `launch()`가 정한 JVM 옵션으로 합니다. 출력과 stdin의 인코딩을 UTF-8로 고정합니다(한국어 Windows의 JVM은 MS949를 씁니다).
-- 정지는 `stop`을 보내고 30초 뒤에도 살아 있으면 죽입니다. 앱 종료 때는 main.js의 quit gate가 저장을 기다립니다.
+- 정지는 `stop`을 보내고, 그 뒤 60초 동안 아무것도 출력하지 않으면 죽이고 콘솔과 알림으로 알립니다. 계속 출력하면 15분까지 기다립니다. 앱 종료 때는 main.js의 quit gate가 저장을 기다립니다(서버마다 60초). Windows 종료와 로그오프에는 before-quit이 없으므로, 서버가 실행 중이면 창의 `query-session-end`에서 세션 종료를 붙잡고 quit gate의 일을 먼저 한 뒤 앱을 끝냅니다.
+- 실행 중인 서버 폴더에는 `pyide-server.running`(pid, 시작 시각, 폴더)이 있습니다. 앱이 죽어도 서버는 남으므로, 다음 시작은 이 표시의 pid가 그 시각에 시작한 java.exe인지 보고 맞으면 시작을 거절하고 카드에 "서버 끝내기"를 보입니다. 끝내기는 저장 없는 강제 종료라 먼저 묻습니다.
 - `server.properties`는 Java처럼 읽고 씁니다. 정규식으로 직접 고치지 않고 `readProperties`, `writeProperties`를 씁니다.
 - Paper 설정 파일 위치는 버전마다 다릅니다(1.18까지 `paper.yml`, 1.19부터 `config/`, 26.1부터 월드 안). 버전별 경로를 확인합니다.
 

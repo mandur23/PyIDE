@@ -112,7 +112,7 @@ const call = (name, ...args) => A.call(win, name, ...args);
 
 try {
   // ---------- channels ----------
-  const contract = ['home', 'stat', 'read', 'pickMedia', 'pickFolder', 'pickProject', 'pickLut', 'saveAs', 'projectRead', 'projectWrite', 'autosave',
+  const contract = ['home', 'stat', 'read', 'pickMedia', 'pickFolder', 'pickProject', 'pickLut', 'saveAs', 'projectRead', 'projectWrite', 'autosave', 'autosaves',
     'sessionStart', 'sessionEnd', 'recovery', 'writeOpen', 'writeAt', 'writeClose', 'faststart', 'cacheGet', 'cachePut', 'cacheInfo',
     'cacheClear', 'findMedia', 'fonts', 'fontData', 'reveal'].map((c) => `cut:${c}`);
   const missingChannels = contract.filter((c) => !A.handlers.has(c));
@@ -245,13 +245,44 @@ try {
   fs.writeFileSync(proj, `\uFEFF${v1}`);
   check((await call('cut:projectRead', proj)).text === v1, 'a byte order mark is dropped on read');
   const v1b = S({ format: 'ncut', version: 1, name: 'second' });
-  await call('cut:projectWrite', proj, v1b);
-  check(fs.readFileSync(proj, 'utf8') === v1b && !fs.existsSync(`${proj}.bak`), 'a save in the same format version keeps no .bak');
+  // The order of syncs and renames, to see that a project's bytes are on the disk before its name points at them.
+  const order = [];
+  const probe = await fs.promises.open(proj, 'r');
+  const FileHandle = Object.getPrototypeOf(probe);
+  await probe.close();
+  const realSync = FileHandle.sync;
+  const realRename = fs.promises.rename;
+  FileHandle.sync = function sync() { order.push('sync'); return realSync.call(this); };
+  fs.promises.rename = (from, to) => { order.push(`rename ${path.basename(to)}`); return realRename(from, to); };
+  const wb = await call('cut:projectWrite', proj, v1b);
+  FileHandle.sync = realSync;
+  fs.promises.rename = realRename;
+  check(fs.readFileSync(proj, 'utf8') === v1b && wb.bak === `${proj}.bak` && fs.readFileSync(`${proj}.bak`, 'utf8') === String.fromCharCode(0xfeff) + v1 && !wb.kept,
+    `every save keeps the file it replaces as .bak; the same format version keeps nothing else (${S(wb)})`);
+  check(S(order) === S(['sync', 'rename Trip.ncut.bak', 'sync', 'rename Trip.ncut']), `the backup and the project are synced to the disk before their rename (${S(order)})`);
   const v2 = S({ format: 'ncut', version: 2, name: 'migrated' });
   const w2 = await call('cut:projectWrite', proj, v2);
-  check(w2.bak === `${proj}.bak` && fs.readFileSync(`${proj}.bak`, 'utf8') === v1b && fs.readFileSync(proj, 'utf8') === v2,
-    'a save that changes the format version keeps the previous file as .bak');
+  check(w2.kept === `${proj}.v1.bak` && fs.readFileSync(w2.kept, 'utf8') === v1b && fs.readFileSync(`${proj}.bak`, 'utf8') === v1b && fs.readFileSync(proj, 'utf8') === v2,
+    `a save that changes the format version also keeps the previous file as .v<version>.bak (${S(w2)})`);
+  await call('cut:projectWrite', proj, S({ format: 'ncut', version: 2, name: 'again' }));
+  check(fs.readFileSync(`${proj}.v1.bak`, 'utf8') === v1b && fs.readFileSync(`${proj}.bak`, 'utf8') === v2, 'the next save in the new version keeps the migration backup');
+  await call('cut:projectWrite', proj, v2);
   check(!fs.readdirSync(h.projects).some((n) => /\.tmp$/.test(n)), `no temporary files are left (${S(fs.readdirSync(h.projects))})`);
+  {
+    // a file written by someone else since this editor read it is not overwritten
+    const read = await call('cut:projectRead', proj);
+    const mine = await call('cut:projectWrite', proj, S({ format: 'ncut', version: 2, name: 'mine' }), { mtime: read.mtime });
+    check(mine.ok && mine.mtime === fs.statSync(proj).mtimeMs, `a save with the time the file was read writes it and returns its new time (${S(mine)})`);
+    const theirs = S({ format: 'ncut', version: 2, name: 'theirs' });
+    fs.writeFileSync(proj, theirs);
+    fs.utimesSync(proj, new Date(), new Date(Date.now() + 5000));
+    const stale = await call('cut:projectWrite', proj, S({ format: 'ncut', version: 2, name: 'stale' }), { mtime: mine.mtime });
+    check(stale.code === 'changed' && stale.mtime === fs.statSync(proj).mtimeMs && fs.readFileSync(proj, 'utf8') === theirs,
+      `a save with an older time is refused as changed and leaves the other file (${S(stale)})`);
+    check((await call('cut:projectWrite', proj, v2))?.ok && fs.readFileSync(proj, 'utf8') === v2, 'without a time (Save As, Overwrite) it writes');
+    check((await call('cut:projectWrite', path.join(h.projects, 'new-one.ncut'), v2, { mtime: 123 }))?.ok, 'a time for a file that is not there yet does not stop the save');
+    fs.rmSync(path.join(h.projects, 'new-one.ncut'));
+  }
   check((await call('cut:projectWrite', path.join(h.projects, 'evil.bat'), v1))?.code === 'extension' && !fs.existsSync(path.join(h.projects, 'evil.bat')),
     'cut:projectWrite writes .ncut files only');
   check((await call('cut:projectWrite', path.join(h.projects, 'x.ncut'), 'not json'))?.code === 'badArgs', 'a text that is not a project JSON is not written');
@@ -289,6 +320,19 @@ try {
   const lnums = ofL.map((n) => JSON.parse(fs.readFileSync(path.join(h.autosave, n), 'utf8')).n);
   check(ofL.length === 4 && S(lnums) === S(['c2', 'c3', 'c4', 'l6']) && ofL.filter((n) => n.endsWith('.latest.ncut')).length === 1,
     `copies keep the newest {keep}, the latest state only its newest, and neither pushes out the other (${S(lnums)})`);
+  const saves = await call('cut:autosaves', keyL);
+  check(S(saves.map((a) => JSON.parse(fs.readFileSync(a.file, 'utf8')).n)) === S(['l6', 'c4', 'c3', 'c2']) && S(saves.map((a) => a.latest)) === S([true, false, false, false])
+    && saves.every((a, i) => i === 0 || a.time <= saves[i - 1].time) && S(await call('cut:autosaves', '')) === '[]',
+  `cut:autosaves lists a key's autosaves newest first, marking the latest state (${S(saves.map((a) => [path.basename(a.file), a.latest]))})`);
+  // A copy opened from the Autosave folder and saved in place was deleted by the rotation and the 30-day cleanup,
+  // which go by the file name alone.
+  const opened = await call('cut:projectRead', saves[1].file);
+  check(opened.autosave === true && JSON.parse(opened.text).n === 'c4' && !(await call('cut:projectRead', proj)).autosave,
+    'cut:projectRead says when the file is an autosave; a project elsewhere is not one');
+  const inPlace = await call('cut:projectWrite', saves[1].file, S({ format: 'ncut', version: 1, n: 'mine' }));
+  const asNew = await call('cut:projectWrite', path.join(h.autosave, 'Keep.ncut'), S({ format: 'ncut', version: 1 }));
+  check(inPlace.code === 'autosave' && asNew.code === 'autosave' && JSON.parse(fs.readFileSync(saves[1].file, 'utf8')).n === 'c4' && !fs.existsSync(path.join(h.autosave, 'Keep.ncut')),
+    `nothing is saved into the Autosave folder, over a copy or as a new name (${S(inPlace)})`);
 
   // ---------- sessions and recovery ----------
   const k = (n) => path.join(h.projects, `Session ${n}.ncut`);
@@ -387,11 +431,12 @@ try {
   await call('cut:writeClose', twice.id, {});
   // A run that crashed with a sink open: the next start removes its part file (and only a .part file).
   const deadPart = write(path.join(outDir, 'crashed.mp4.part'), 'half');
+  const deadCopy = write(path.join(outDir, 'crashed.mp4.1a2b3c4d.faststart.tmp'), 'a full-size copy');
   const notPart = write(path.join(outDir, 'keep.mp4'), 'mine');
-  write(path.join(userData, 'cut-exports', '4000000-0badc0de.json'), S({ pid: 4000000, run: '0badc0de', started: Date.now() - 5000, parts: [deadPart, notPart] }));
+  write(path.join(userData, 'cut-exports', '4000000-0badc0de.json'), S({ pid: 4000000, run: '0badc0de', started: Date.now() - 5000, parts: [deadPart, deadCopy, notPart] }));
   start();
-  check(await until(() => !fs.existsSync(deadPart)) && fs.existsSync(notPart) && !fs.existsSync(path.join(userData, 'cut-exports', '4000000-0badc0de.json')),
-    'the part files a crashed run left are removed at the next start, and nothing else it listed');
+  check(await until(() => !fs.existsSync(deadPart) && !fs.existsSync(deadCopy)) && fs.existsSync(notPart) && !fs.existsSync(path.join(userData, 'cut-exports', '4000000-0badc0de.json')),
+    'the part files and faststart copies a crashed run left are removed at the next start, and nothing else it listed');
 
   // ---------- faststart ----------
   const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
@@ -458,6 +503,25 @@ try {
   const br = await call('cut:faststart', brokenFile);
   check(br.code === 'damaged' && bytesEqual(fs.readFileSync(brokenFile), brokenBytes), `a moov whose size does not fit the file is reported damaged and the file is untouched (${S(br)})`);
   check((await call('cut:faststart', path.join(media, 'ok.png'))).code === 'extension', 'faststart works on MP4-family files only');
+  // The full-size copy is in the run's journal while it exists, so a crash in the middle does not leave it for good.
+  const journaled = movie({ wideMdat: true });
+  const journaledFile = write(path.join(outDir, 'journaled.mp4'), journaled.bytes);
+  const journalNow = () => fs.readdirSync(path.join(userData, 'cut-exports')).filter((n) => n.endsWith('.json')).flatMap((n) => JSON.parse(fs.readFileSync(path.join(userData, 'cut-exports', n), 'utf8')).parts || []);
+  const realRename2 = fs.promises.rename;
+  let listedWhileCopying = null;
+  fs.promises.rename = (from, to) => { if (/\.faststart\.tmp$/.test(from)) listedWhileCopying = journalNow().includes(from); return realRename2(from, to); };
+  const jr = await call('cut:faststart', journaledFile);
+  fs.promises.rename = realRename2;
+  check(jr.moved && listedWhileCopying === true && !journalNow().some((p) => /faststart/.test(p)), `faststart's copy is journaled while it exists and taken off after (${listedWhileCopying})`);
+  // A disk without room for the copy: the file stays as it is, nothing is written.
+  const roomless = movie({ wideMdat: true });
+  const roomlessFile = write(path.join(outDir, 'roomless.mp4'), roomless.bytes);
+  const realStatfs = fs.promises.statfs;
+  fs.promises.statfs = async (p, o) => ({ ...(await realStatfs(p, o)), bavail: 1, bsize: 4096 });
+  const nr = await call('cut:faststart', roomlessFile);
+  fs.promises.statfs = realStatfs;
+  check(nr.code === 'diskFull' && bytesEqual(fs.readFileSync(roomlessFile), roomless.bytes) && !fs.readdirSync(outDir).some((n) => /\.tmp$/.test(n)),
+    `faststart on a disk without room for its copy leaves the file as it is and writes nothing (${S(nr)})`);
   // An stco whose shifted offsets pass 4 GiB becomes a co64; one that still fits stays an stco.
   const nearTop = 0xffffff00;
   const moovIn = box('moov', trak(box('stco', u32(0), u32(2), u32(nearTop), u32(0x10))), trak(box('stco', u32(0), u32(1), u32(0x20))));

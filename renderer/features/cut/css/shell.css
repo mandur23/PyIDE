@@ -130,6 +130,7 @@ body.cut-dragging, body.cut-dragging * { cursor: grabbing !important; }
 .cut-recovery-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; }
 .cut-recovery-row:hover { background: var(--gray3); }
 .cut-recovery-time { color: var(--gray8); font-size: 11px; }
+.cut-restore-list { max-height: 320px; overflow-y: auto; }
 
 /* monitors */
 .cut-monitor { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--gray2); container-type: inline-size; }

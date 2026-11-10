@@ -590,8 +590,9 @@
     }
 
     progress({ phase: 'finish', fraction: 1 });
-    const fast = await invoke('cut:faststart', attempt.path).catch((err) => ({ error: err.message }));
-    if (fast?.error) return fail('faststart', fast.error, { path: attempt.path });
+    // The file is whole without it: a failed faststart (no room for its copy) is a problem of the result, not a failure.
+    const fast = await invoke('cut:faststart', attempt.path).catch((err) => ({ error: err.message, code: 'io' }));
+    const fastProblem = fast?.error ? { code: 'faststart', message: 'The index could not be moved to the front of the file ({error}): it plays, but players and upload sites read all of it before they start.', params: { error: typeof fast.error === 'string' ? fast.error : fast.code } } : null;
     let verified = null;
     if (opts.verify !== false) {
       progress({ phase: 'verify', fraction: 1 });
@@ -601,6 +602,7 @@
         verified.problems.push({ code: 'offline', message: '{n} clips use offline media: they show the red "media offline" picture and are silent ({names}).', params: { n: names.length, names: names.join(', ') } });
         verified.ok = false;
       }
+      if (fastProblem) verified.problems.push(fastProblem);
     }
     const seconds = (performance.now() - started) / 1000;
     const media = (to - from) / TICKS;
@@ -612,6 +614,7 @@
     return {
       ok: true, path: attempt.path, bytes: st?.size ?? attempt.bytes, seconds, speed: media / Math.max(1e-6, seconds),
       frames: attempt.frames, range: { in: from, out: to }, verified, offline: attempt.slated, encoder: attempt.encoder, audioDelay: attempt.audioDelay, audioBitrate: attempt.audioBitrate, loudnessGain: attempt.loudnessGain, sidecars,
+      faststart: !fastProblem,
     };
   }
 
@@ -628,6 +631,14 @@
     let renderer = null;
     let venc = null;
     let aenc = null;
+    // A write the sink refused (a full disk) stops the export at once, not after the last frame.
+    const writeFailed = (e) => { failure = failure || Object.assign(e, { stage: 'write' }); };
+    const write = (fn) => { try { return fn(); } catch (e) { writeFailed(e); return null; } };
+    // An encoder's flush, or the renderer's last frames, given up when the export is cancelled.
+    const orCancel = (p) => (signal ? Promise.race([p, new Promise((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    })]) : p);
     const abort = async (result) => {
       try { if (venc && venc.state !== 'closed') venc.close(); } catch {}
       try { if (aenc && aenc.enc.state !== 'closed') aenc.enc.close(); } catch {}
@@ -673,7 +684,7 @@
         onError: (e) => { failure = failure || Object.assign(e, { stage: 'audio' }); },
         onChunk: (c) => {
           const sample = { data: c.data, timestamp: (Math.round((c.us * rate) / 1e6) - delay) * tps, duration: Math.round((c.durUs * rate) / 1e6) * tps };
-          if (writer) writer.addAudio(sample);
+          if (writer) write(() => writer.addAudio(sample));
           else early.push({ kind: 'audio', sample });
         },
       }) : null;
@@ -691,7 +702,7 @@
           for (const x of m.missed || []) slated.add(x.clip);
           aenc.push(m.out);
           sDone += n;
-          while (aenc.enc.encodeQueueSize > 8 && !failure) await sleep(1);
+          while (aenc.enc.encodeQueueSize > 8 && !failure && !signal?.aborted) await sleep(1);
           if (!settings.video && (sDone / rate) % 5 === 0) progress({ phase: 'audio', fraction: sDone / sTotal });
         }
       };
@@ -702,8 +713,9 @@
             colorSpace: vcolor || { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false } } : null,
           audio: aenc ? { codec: AAC, sampleRate: rate, channels: settings.audio.channels, description: aenc.description } : null,
           sink,
+          onError: writeFailed,
         });
-        for (const e of early.splice(0)) (e.kind === 'video' ? writer.addVideo(e.sample) : writer.addAudio(e.sample));
+        for (const e of early.splice(0)) write(() => (e.kind === 'video' ? writer.addVideo(e.sample) : writer.addAudio(e.sample)));
       };
 
       let encodeStart = performance.now();
@@ -723,7 +735,7 @@
             const pts = ptsQueue.shift();
             const sample = { data, timestamp: pts, duration: plan.frame, key: chunk.type === 'key' };
             if (!writer && vdesc && (!aenc || aenc.description)) makeWriter();
-            if (writer) lastWrite = writer.addVideo(sample);
+            if (writer) lastWrite = write(() => writer.addVideo(sample)) || lastWrite;
             else early.push({ kind: 'video', sample });
           },
           error: (e) => { failure = failure || Object.assign(e, { stage: 'video' }); },
@@ -741,7 +753,7 @@
           ptsQueue.push(pts);
           venc.encode(frame, { keyFrame: i % keyEvery === 0 });
           frame.close();
-          while (venc.encodeQueueSize > 3 && !failure) await new Promise((r) => { const tm = setTimeout(r, 20); venc.addEventListener('dequeue', () => { clearTimeout(tm); r(); }, { once: true }); });
+          while (venc.encodeQueueSize > 3 && !failure && !signal?.aborted) await new Promise((r) => { const tm = setTimeout(r, 20); venc.addEventListener('dequeue', () => { clearTimeout(tm); r(); }, { once: true }); });
           if (i % 30 === 29) await lastWrite;
           if (i % 5 === 0 || i === frames - 1) {
             const elapsed = (performance.now() - o.started) / 1000;
@@ -749,16 +761,20 @@
             progress({ phase: 'video', done: i + 1, total: frames, fraction, elapsed, eta: fraction > 0 ? (elapsed / fraction) * (1 - fraction) : null, speed: (pts / TICKS) / Math.max(1e-6, (performance.now() - encodeStart) / 1000) });
           }
         }
-        if (!failure) await venc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'video' }); });
-        if (!failure && !signal?.aborted) await renderer.done();
+        if (!failure && !signal?.aborted) await orCancel(venc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'video' }); }));
+        if (!failure && !signal?.aborted) await orCancel(renderer.done());
       }
       if (signal?.aborted) return abort(cancelled());
       if (aenc && !failure) {
         await pumpAudio(duration);
         if (signal?.aborted) return abort(cancelled());
-        await aenc.enc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'audio' }); });
+        await orCancel(aenc.enc.flush().catch((e) => { failure = failure || Object.assign(e, { stage: 'audio' }); }));
+        if (signal?.aborted) return abort(cancelled());
       }
-      if (failure) return abort(fail(failure.stage === 'video' ? 'encode' : 'audio', String(failure.message || failure), { hardware: o.choice?.hardware }));
+      if (failure) {
+        const code = failure.stage === 'write' ? codeOf(failure, 'io') : failure.stage === 'video' ? 'encode' : 'audio';
+        return abort(fail(code, String(failure.message || failure), { hardware: o.choice?.hardware }));
+      }
       if (!writer) makeWriter();
       const encodeSeconds = (performance.now() - encodeStart) / 1000;
       venc?.close();

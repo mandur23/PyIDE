@@ -83,7 +83,8 @@ try {
   let answer = null;
   const stand = http.createServer((q, r) => { (answer || ((_q, res) => { res.writeHead(404); res.end(); }))(q, r); });
   await new Promise((resolve) => { stand.listen(0, '127.0.0.1', resolve); });
-  process.env.PYIDE_MC_SOURCES = S({ paper: `http://127.0.0.1:${stand.address().port}/paper` });
+  const standBase = `http://127.0.0.1:${stand.address().port}`;
+  process.env.PYIDE_MC_SOURCES = S({ paper: `${standBase}/paper`, mojang: `${standBase}/mojang/manifest.json`, mojangApi: `${standBase}/mojang-api`, adoptium: `${standBase}/adoptium` });
   const load = Module._load;
   const stub = new Proxy({}, { get: (_t, key) => (key === 'app' ? { getPath: () => work, on() {}, isPackaged: false, getVersion: () => '0.0.0', getName: () => 'test' } : class {}) });
   Module._load = function loadWithoutElectron(request, parent, isMain) { return request === 'electron' ? stub : load.call(this, request, parent, isMain); };
@@ -134,6 +135,148 @@ try {
   answer = null;
   const second = await errOf(create);
   check(second && !/being made already/.test(second.message) && !existsSync(held), `once the file is let go, the next create of the name runs and cleans up (${second?.message})`);
+
+  // ---------- a server that outlives the app ----------
+  {
+  // A stand-in server (java.exe, as a real one) started by one app instance; a fresh copy of the module plays the app
+  // started again after a crash, which no longer holds the process.
+  const javaHome = process.env.JAVA_HOME_21_X64 || process.env.JAVA_HOME_17_X64 || process.env.JAVA_HOME;
+  const java = path.join(javaHome, 'bin', 'java.exe');
+  const idle = path.join(work, 'Idle.java');
+  write(idle, 'public class Idle { public static void main(String[] a) throws Exception { var in = new java.io.BufferedReader(new java.io.InputStreamReader(System.in)); for (String l; (l = in.readLine()) != null;) if (l.trim().equals("stop")) System.exit(0); Thread.sleep(600000); } }');
+  const appInstance = () => {
+    delete require.cache[require.resolve('../main/features/minecraft.js')];
+    Module._load = function loadWithoutElectron(request, parent, isMain) { return request === 'electron' ? stub : load.call(this, request, parent, isMain); };
+    const f = require('../main/features/minecraft.js');
+    Module._load = load;
+    const hs = new Map();
+    const procs = new Map();
+    let n = 0;
+    const startProcess = (cmd, args, opts) => { const child = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true }); holders.push(child); procs.set(++n, child); return n; };
+    f.register({ ipcMain: { handle: (h, fn) => hs.set(h, fn), on() {} }, send() {}, startProcess, procs, diagnostics: { logger: () => ({ warn() {}, info() {} }) } });
+    return (name, ...args) => hs.get(name)({}, ...args);
+  };
+  const runner = serverAt(srvDir('runner'), { kind: 'paper', mc: '1.20.1' }, 'server-port=25620\n');
+  const marker = path.join(runner, 'pyide-server.running');
+  const appA = appInstance();
+  await appA('minecraft:start', proj, { cmd: java, args: [idle], cwd: runner });
+  const child = holders[holders.length - 1];
+  const written = (() => { try { return JSON.parse(text(marker)); } catch { return null; } })();
+  check(written?.pid === child.pid, `a started server leaves a run marker with its pid in its folder (${S(written)})`);
+  const spawned = holders.length;
+  const twice = await errOf(() => appA('minecraft:start', proj, { cmd: java, args: [idle], cwd: runner }));
+  check(/running already/.test(twice?.message || '') && holders.length === spawned, `a second start of the same folder is refused while the first runs (${twice?.message})`);
+  await new Promise((r) => setTimeout(r, 1500));
+  const appB = appInstance();
+  const stale = serverAt(srvDir('stale'), { kind: 'paper', mc: '1.20.1' }, 'server-port=25621\n');
+  write(path.join(stale, 'pyide-server.running'), S({ pid: process.pid, started: Date.now(), dir: stale }));
+  const seen = await appB('minecraft:servers', proj);
+  check(seen.find((s) => s.name === 'runner')?.leftOver?.pid === child.pid, `after a restart the app sees the server still running from before (${S(seen.find((s) => s.name === 'runner')?.leftOver)})`);
+  check(!seen.find((s) => s.name === 'stale')?.leftOver && !existsSync(path.join(stale, 'pyide-server.running')),
+    'a marker whose pid now belongs to another program (not java.exe) is taken as stale and removed');
+  const launchRefused = await errOf(() => appB('minecraft:launch', proj, runner, 'job'));
+  const startRefused = await errOf(() => appB('minecraft:start', proj, { cmd: java, args: [idle], cwd: runner }));
+  check(/still running outside this window \(process \d+\)/.test(launchRefused?.message || '') && /still running outside/.test(startRefused?.message || '') && holders.length === spawned,
+    `Start is refused while it runs, saying so (${launchRefused?.message})`);
+  const ended = await appB('minecraft:endLeftOver', proj, runner);
+  const exited = await new Promise((r) => { if (child.exitCode !== null || child.signalCode) r(true); else { child.once('exit', () => r(true)); setTimeout(r, 10000, false); } });
+  check(ended.ended && exited && !existsSync(marker) && !(await appB('minecraft:servers', proj)).find((s) => s.name === 'runner')?.leftOver,
+    'End Server ends the left-over process and clears the marker');
+
+  // ---------- settings saved while a server runs ----------
+  // A stand-in dedicated server: it keeps server.properties as it read it at its start and writes that copy whole when
+  // a command changes a setting ("set key=value"), as Minecraft's does.
+  const propServer = path.join(work, 'prop-server.cjs');
+  write(propServer, `const fs = require('fs');
+const mem = {};
+for (const l of fs.readFileSync('server.properties', 'utf8').split(/\\r?\\n/)) { const m = /^([^#=]+)=(.*)$/.exec(l); if (m) mem[m[1]] = m[2]; }
+require('readline').createInterface({ input: process.stdin }).on('line', (l) => {
+  if (l === 'stop') process.exit(0);
+  const m = /^set (\\S+)=(.*)$/.exec(l);
+  if (m) { mem[m[1]] = m[2]; fs.writeFileSync('server.properties', Object.entries(mem).map(([k, v]) => k + '=' + v).join('\\n') + '\\n'); console.log('wrote'); }
+});
+`);
+  const live = serverAt(srvDir('live'), { kind: 'paper', mc: '1.20.1' }, 'motd=old\ndifficulty=easy\nmax-players=20\n');
+  const appC = appInstance();
+  await appC('minecraft:start', proj, { cmd: process.execPath, args: [propServer], cwd: live });
+  const liveProc = holders[holders.length - 1];
+  const tell = async (line) => { liveProc.stdin.write(`${line}\n`); await new Promise((r) => setTimeout(r, 2000)); };
+  const liveProps = () => ST.readProperties(path.join(live, 'server.properties'));
+  await new Promise((r) => setTimeout(r, 500));
+  await appC('minecraft:saveSettings', proj, live, { props: { motd: 'Saved while running', 'max-players': '8' } });
+  await tell('set difficulty=hard');
+  check(liveProps().motd === 'Saved while running' && liveProps().difficulty === 'hard' && liveProps()['max-players'] === '8',
+    `a command that makes the server write its start-time copy of server.properties does not take back what was saved since, and keeps the server's own change (${S(liveProps())})`);
+  await tell('set max-players=12');
+  check(liveProps()['max-players'] === '12' && liveProps().motd === 'Saved while running', `a saved key the server itself then sets to another value (an operator's command) keeps the server's value (${S(liveProps())})`);
+  liveProc.stdin.write('stop\n');
+  await new Promise((r) => { liveProc.once('exit', r); setTimeout(r, 5000); });
+
+  // ---------- a Paper world dropped with its Nether and End ----------
+  const drops = path.join(work, 'drops');
+  for (const [folder, inner] of [['survival', null], ['survival_nether', 'DIM-1'], ['survival_the_end', 'DIM1']]) {
+    write(path.join(drops, folder, 'level.dat'), 'level');
+    if (inner) write(path.join(drops, folder, inner, 'region', 'r.0.0.mca'), folder);
+  }
+  const paperWorlds = serverAt(srvDir('paperworlds'), { kind: 'paper', mc: '1.20.1' }, 'level-name=world\n');
+  const dropAll = ['survival_nether', 'survival', 'survival_the_end'].map((n) => path.join(drops, n));
+  const onPaper = await call('minecraft:drop', proj, paperWorlds, dropAll, 'job');
+  check(ST.readProperties(path.join(paperWorlds, 'server.properties'))['level-name'] === 'survival' && text(path.join(paperWorlds, 'survival_nether', 'DIM-1', 'region', 'r.0.0.mca')) === 'survival_nether'
+    && existsSync(path.join(paperWorlds, 'survival_the_end', 'DIM1')) && S(onPaper.done.map((d) => d.what).sort()) === S(['dimension', 'dimension', 'world']) && !onPaper.skipped.length,
+  `a Paper world dropped with its Nether and End folders is one world: the level name is the world's, and its dimensions sit beside it where Paper reads them (${S(onPaper)})`);
+  const again = await call('minecraft:drop', proj, paperWorlds, dropAll, 'job');
+  check(ST.readProperties(path.join(paperWorlds, 'server.properties'))['level-name'] === 'survival-2' && existsSync(path.join(paperWorlds, 'survival-2_nether', 'DIM-1')),
+    `dropped again, the copy and its dimensions take a free name together (${S(again.done.map((d) => d.to))})`);
+  const fabricWorlds = serverAt(srvDir('fabricworlds'), { kind: 'fabric', mc: '1.20.1' }, 'level-name=world\n');
+  await call('minecraft:drop', proj, fabricWorlds, dropAll, 'job');
+  check(text(path.join(fabricWorlds, 'survival', 'DIM-1', 'region', 'r.0.0.mca')) === 'survival_nether' && existsSync(path.join(fabricWorlds, 'survival', 'DIM1')) && !existsSync(path.join(fabricWorlds, 'survival_nether')),
+    'on a server that is not Paper, the Nether and End go inside the world, where it reads them');
+  const alone = await call('minecraft:drop', proj, paperWorlds, [path.join(drops, 'survival_nether')], 'job');
+  check(alone.skipped[0]?.why === 'dimension' && !alone.done.length && ST.readProperties(path.join(paperWorlds, 'server.properties'))['level-name'] === 'survival-2',
+    `a Nether folder dropped without its world is not made the server's world (${S(alone)})`);
+
+  // ---------- Mojang's version list ----------
+  const { KINDS: SOURCES, javaFor } = require('../main/minecraft/sources.js');
+  const sb = `http://127.0.0.1:${stand.address().port}`;
+  let released = ['1.20.1'];
+  let asked = 0;
+  answer = (q, res) => {
+    if (q.url === '/mojang/manifest.json') { asked++; res.end(S({ versions: released.map((id) => ({ id, type: 'release', url: `${sb}/mojang/${id}.json` })) })); return; }
+    const v = /^\/mojang\/(.+)\.json$/.exec(q.url);
+    if (v) { res.end(S({ javaVersion: { majorVersion: v[1] === '1.20.1' ? 17 : 21 } })); return; }
+    res.writeHead(404); res.end();
+  };
+  const listed1 = await SOURCES.vanilla.versions();
+  released = ['1.21.9', '1.20.1'];
+  const listed2 = await SOURCES.vanilla.versions();
+  check(S(listed1) === S(['1.20.1']) && S(listed2) === S(['1.20.1']) && asked === 1, `the version list is asked once and kept for a while (${asked} asks)`);
+  const newJava = await javaFor('1.21.9');
+  check(newJava === 21 && asked === 2, `a version released since the list was kept is found by asking again at once (Java ${newJava}, ${asked} asks)`);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 31 * 60000;
+  const later = await SOURCES.vanilla.versions().finally(() => { Date.now = realNow; });
+  check(S(later) === S(['1.21.9', '1.20.1']) && asked === 3, `half an hour on, the list is asked again (${S(later)})`);
+  answer = null;
+
+  // ---------- a pyide-server.json broken by hand ----------
+  const broken = serverAt(srvDir('broken'), { kind: 'paper', mc: '1.20.1' }, 'server-port=25622\n');
+  await call('minecraft:saveSettings', proj, broken, { memory: '3G' });
+  writeFileSync(path.join(broken, 'pyide-server.json'), '{"kind": "paper", oops');
+  const listedBroken = (await call('minecraft:damagedServers', proj)).some((s) => s.name === 'broken' && s.repair === 'backup');
+  const repaired = await call('minecraft:repairServer', proj, broken);
+  const back = JSON.parse(text(path.join(broken, 'pyide-server.json')));
+  check(listedBroken && repaired.from === 'backup' && back.memory === '3G' && back.kind === 'paper' && text(path.join(broken, 'pyide-server.json.damaged')) === '{"kind": "paper", oops'
+    && !(await call('minecraft:damagedServers', proj)).some((s) => s.name === 'broken'),
+  'Repair puts back the copy written last (its memory too) and keeps the damaged file beside it');
+  const foreign = srvDir('foreign');
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(path.join(foreign, 'pyide-server.json'), S({ kind: 'spigot', mc: '1.20.1' }));
+  const listedForeign = (await call('minecraft:damagedServers', proj)).find((s) => s.name === 'foreign');
+  const refused = await call('minecraft:repairServer', proj, foreign).then(() => null, (err) => err.code);
+  check(listedForeign?.damaged === 'kind' && listedForeign.repair === null && refused === 'notRepairable' && !existsSync(path.join(foreign, 'pyide-server.json.damaged'))
+    && JSON.parse(text(path.join(foreign, 'pyide-server.json'))).kind === 'spigot',
+  `a server type from elsewhere with no copy and no jar Nano Studio knows is listed as not repairable, and Repair leaves it as it is (${S(listedForeign)}, ${refused})`);
+  }
   stand.close();
 } catch (err) {
   check(false, `suite error: ${err.stack}`);

@@ -4,7 +4,7 @@
 // it or close it, and closing the window removes its part files.
 //
 // Each run lists its open part files in <journalDir>/<pid>-<run>.json, so the parts a crashed or killed run left behind
-// are removed at the next start.
+// are removed at the next start. Faststart's temporary copies of a finished export are listed there too (temp()).
 const fs = require('fs');
 const path = require('path');
 const { WRITE_LIMIT } = require('./limits');
@@ -12,6 +12,7 @@ const { OUTPUT, fail, writableFile } = require('./paths');
 const { renameOver, writeAtomic } = require('./project');
 
 const JOURNAL = /^(\d+)-([0-9a-f]+)\.json$/;
+const LEFTOVER = /\.(part|faststart\.tmp)$/i;
 
 const asBytes = (b) => (b instanceof Uint8Array ? b : ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
   : b instanceof ArrayBuffer ? new Uint8Array(b) : null);
@@ -19,10 +20,11 @@ const asBytes = (b) => (b instanceof Uint8Array ? b : ArrayBuffer.isView(b) ? ne
 function createSinks({ journalDir, run, onCommit, log }) {
   const sinks = new Map(); // id -> {owner, final, part, fh, end, written, queue, failed}
   const journal = path.join(journalDir, `${run.pid}-${run.run}.json`);
+  const temps = new Set();
   let nextId = 1;
 
   async function saveJournal() {
-    const parts = [...sinks.values()].map((s) => s.part);
+    const parts = [...sinks.values()].map((s) => s.part).concat([...temps]);
     try {
       if (parts.length) {
         await fs.promises.mkdir(journalDir, { recursive: true });
@@ -31,7 +33,7 @@ function createSinks({ journalDir, run, onCommit, log }) {
     } catch (err) { log?.warn?.(`export journal: ${err.message}`); }
   }
 
-  // Part files of runs that are gone. Only names ending in .part are removed, whatever a journal says.
+  // Part files of runs that are gone. Only names ending in .part or .faststart.tmp are removed, whatever a journal says.
   async function sweep() {
     let names = [];
     try { names = await fs.promises.readdir(journalDir); } catch { return; }
@@ -42,7 +44,7 @@ function createSinks({ journalDir, run, onCommit, log }) {
       try { marker = JSON.parse(await fs.promises.readFile(file, 'utf8')); } catch {}
       if (marker && run.alive(marker)) continue;
       for (const part of Array.isArray(marker?.parts) ? marker.parts : []) {
-        if (typeof part === 'string' && /\.part$/i.test(part)) await fs.promises.rm(part, { force: true }).catch(() => {});
+        if (typeof part === 'string' && LEFTOVER.test(part)) await fs.promises.rm(part, { force: true }).catch(() => {});
       }
       await fs.promises.rm(file, { force: true }).catch(() => {});
     }
@@ -134,7 +136,13 @@ function createSinks({ journalDir, run, onCommit, log }) {
     for (const [id, s] of [...sinks]) await close(s.owner, id, { commit: false });
   }
 
-  return { open, write, close, ownerGone, closeAll, sweep, openParts: () => [...sinks.values()].map((s) => s.part) };
+  // A temporary file of this run that a crash would leave: journaled while it exists. -> {add, remove}
+  const temp = {
+    add: async (file) => { temps.add(file); await saveJournal(); },
+    remove: async (file) => { if (temps.delete(file)) await saveJournal(); },
+  };
+
+  return { open, write, close, ownerGone, closeAll, sweep, temp, openParts: () => [...sinks.values()].map((s) => s.part) };
 }
 
 module.exports = { createSinks, asBytes };

@@ -589,6 +589,38 @@ await section('media', async () => {
   await menuClick('Find Missing Media…');
   await sleep(400);
   check(!(await js(`!!document.querySelector('#cutRelinkDialog')`)), 'with nothing missing no dialog opens');
+
+  // Locate looks inside the file: another stream layout is refused, a shorter take is asked about and cuts the clip
+  const other = path.join(home, 'other');
+  fs.mkdirSync(other, { recursive: true });
+  for (const [n, opts] of [['mute.mp4', { seconds: 3, audio: false }], ['short.mp4', { seconds: 1 }]]) {
+    const w = await js(`__ct.write(${S(path.join(other, n))}, { fps: [30, 1], w: 320, h: 180, keyEvery: 1, ...${S(opts)} })`);
+    if (w !== 'ok') throw new Error(`testsrc ${n}: ${w}`);
+  }
+  fs.renameSync(path.join(moved, 'a.mp4'), path.join(other, 'a-gone.mp4'));
+  const aId = await js(`Cut.app.project.media.find((m) => m.name === 'a.mp4').id`);
+  const aClip = await js(`__ct.seq().clips.find((c) => c.source.media === ${S(aId)}).id`);
+  await clickSel('.cut-panel[data-panel="project"] .cut-project-more');
+  await menuClick('Find Missing Media…');
+  await until(`!!document.querySelector('#cutRelinkDialog .cut-relink-row.offline')`, 'a offline', 10000);
+  answer({ pickMedia: [path.join(other, 'mute.mp4')] });
+  await clickSel(`#cutRelinkDialog .cut-relink-row[data-media="${aId}"] .cut-relink-locate`);
+  await until(`[...document.querySelectorAll('.cut-toast')].some((t) => /was not relinked/.test(t.textContent))`, 'the refusal', 15000).catch(() => {});
+  const refused = await js(`({ toast: [...document.querySelectorAll('.cut-toast')].map((t) => t.textContent).join(' | '), path: Cut.app.project.media.find((m) => m.id === ${S(aId)}).path, offline: Cut.ui.offline.has(${S(aId)}) })`);
+  check(/was not relinked/.test(refused.toast) && /without sound/.test(refused.toast) && /a\.mp4$/i.test(refused.path) && refused.offline,
+    `a file without the sound the media had is refused and says why (${S(refused)})`);
+  const steps1 = await js('Cut.app.history.position');
+  answer({ pickMedia: [path.join(other, 'short.mp4')] });
+  await clickSel(`#cutRelinkDialog .cut-relink-row[data-media="${aId}"] .cut-relink-locate`);
+  await until(`[...document.querySelectorAll('.dialog-backdrop')].some((d) => /is shorter than/.test(d.textContent))`, 'the shorter question', 15000);
+  const question = await js(`(() => { const d = [...document.querySelectorAll('.dialog-backdrop')].find((x) => /is shorter than/.test(x.textContent)); d.dataset.t = 'shorter'; return d.textContent; })()`);
+  check(/1\.0 s instead of 3\.0 s/.test(question) && /1 clips use the part after its end/.test(question), `a shorter file asks first, with the lengths and the clips past its end (${question.slice(0, 200)})`);
+  await clickSel('[data-t="shorter"] .dialog-buttons button.primary');
+  await until(`Cut.app.project.media.find((m) => m.id === ${S(aId)}).path.toLowerCase().endsWith('short.mp4')`, 'relinked to short', 10000);
+  const cut = await js(`({ len: Cut.model.clipDuration(__ct.seq().clips.find((c) => c.id === ${S(aClip)})) / Cut.time.TICKS, dur: Cut.app.project.media.find((m) => m.id === ${S(aId)}).duration / Cut.time.TICKS, steps: Cut.app.history.position })`);
+  check(Math.abs(cut.len - 1) < 0.04 && Math.abs(cut.dur - 1) < 0.04 && cut.steps === steps1 + 1, `relinked: the media takes the file's length and the clip ends with it, in one undo step (${S(cut)})`);
+  await clickSel('#cutRelinkDialog .dialog-buttons button:not(.primary)').catch(() => {});
+  await js(`(document.querySelectorAll('.dialog-backdrop').forEach((d) => d.remove()), true)`);
 });
 
 // ---------- proxies ----------
@@ -609,16 +641,38 @@ await section('proxy', async () => {
   await until(`Cut.app.project.media.length === 1`, 'imported', 20000);
   await until(`!!document.querySelector('.cut-proxy-offer')`, 'the proxy offer', 8000);
   check(/keyframes far apart/.test(await js(`document.querySelector('.cut-proxy-offer-text').textContent`)), 'importing a 1080p file with keyframes 5 s apart offers proxies and says why');
+  answer({ saveAs: path.join(home, 'proxy-project.ncut') });
+  check(await js(`Cut.ui.lifecycle.saveAs().then((ok) => ok && !Cut.ui.lifecycle.dirty)`), 'the project is saved before the proxy job');
   await clickSel('.cut-proxy-offer-create');
   const id = await js(`Cut.app.project.media[0].id`);
+  // While the job runs: an AI-like turn's first step, and a step undone so there is one to redo.
+  const floor = await js(`(() => { const C = Cut.commands, h = Cut.app.history, f = h.position; h.do(C.addBin('Turn 1', null)); h.do(C.addBin('Undone', null)); h.undo(); return f; })()`);
+  check(await js(`!Cut.app.project.media[0].proxy`), 'the steps are made before the proxy lands');
+  const steps = await js(`JSON.stringify(Cut.app.history.list())`);
   await until(`!!Cut.app.project.media[0].proxy`, 'the proxy made', 60000);
+  await sleep(200);
+  check(await js(`JSON.stringify(Cut.app.history.list()) === ${S(steps)} && Cut.app.history.canRedo && !Cut.app.history.list().some((s) => s.label === 'Proxy')`),
+    `the finished proxy is no undo step: the steps and the one to redo stay (${await js('JSON.stringify(Cut.app.history.list())')})`);
+  await workspace('editing');
+  await js(`(Cut.ui.openPanel?.('history'), true)`);
+  await sleep(300);
+  const rows = await js(`[...document.querySelectorAll('.cut-panel[data-panel="history"] .cut-history-row')].map((n) => n.textContent.trim())`);
+  check(rows.length === 4 && !rows.some((t) => /Proxy/.test(t)), `the History panel lists the start, Import and the two bins, no proxy step (${S(rows)})`);
+  check(await js(`(Cut.app.history.undo(), Cut.app.history.position === ${floor} && Cut.ui.lifecycle.dirty && !!Cut.app.project.media[0].proxy)`),
+    'undoing back to the saved step keeps the proxy, and the project is modified: its file lacks the proxy');
+  check(await js(`(Cut.app.history.redo(), Cut.app.history.do(Cut.commands.addBin('Turn 2', null)), Cut.app.history.squash(${floor}, 'AI request'),
+    Cut.app.history.list().at(-1).label === 'AI request' && Cut.app.history.position === ${floor} + 1)`), "the AI turn's squash joins its steps from both sides of the proxy into one");
+  check(await js(`(Cut.app.history.undo(), !Cut.app.project.bins.some((b) => /Turn/.test(b.name)) && !!Cut.app.project.media[0].proxy && Cut.ui.lifecycle.dirty)`),
+    "undoing the turn takes back both of its steps and keeps the proxy");
+  check(await js(`Cut.ui.lifecycle.save().then((ok) => ok && !Cut.ui.lifecycle.dirty)`), 'saving clears the modified mark');
+  check(JSON.parse(fs.readFileSync(path.join(home, 'proxy-project.ncut'), 'utf8')).media[0].proxy?.path === (await js(`Cut.app.project.media[0].proxy.path`)), 'the saved file has the proxy');
   const pp = await js(`Cut.app.project.media[0].proxy.path`);
   const info = await js(`__ct.probe(${S(pp)})`);
   check(pp.toLowerCase().startsWith(path.join(home, 'Cache').toLowerCase()) && fs.existsSync(pp), `the proxy is written in the Cut cache (${pp})`);
   check(info.w === 1280 && info.h === 720 && /^avc1/.test(info.codec) && info.frames === 90 && info.gop <= 15 && !info.audio,
     `it is 720p H.264, every frame, a keyframe at least every 15 frames, no sound (${S(info)})`);
-  check(await js(`Cut.app.history.list().at(-1).label === 'Proxy' && document.querySelector('.cut-panel[data-panel="project"] [data-id="${id}"] .cut-proxy-badge')?.dataset.state === 'ready'`),
-    'the media gets its proxy in one undo step and the panel shows it');
+  await showTab('project');
+  check(await js(`document.querySelector('.cut-panel[data-panel="project"] [data-id="${id}"] .cut-proxy-badge')?.dataset.state === 'ready'`), 'the project panel shows the proxy');
   // A proxy with another picture, so the pixels tell which file a monitor or an export draws.
   const red = path.join(dir, 'red.mp4');
   const rr = await js(`__ct.write(${S(red)}, { seconds: 3, fps: [30, 1], w: 1280, h: 720, keyEvery: 0.5, background: '#c03030' })`);

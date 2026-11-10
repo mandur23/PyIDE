@@ -137,6 +137,20 @@ try {
   await js(`ide.settings.set('editor.tabLimit', 3)`);
   for (const f of ['a.py', 'pkg\\d.py']) await js(`ide.openFile(ide.util.joinPath(ide.root, ${JSON.stringify(f)}))`);
   check(await js(`(${fileTabCount(0)}) <= 3 && ide.groups()[0].tabs.some(t => t.title === 'c.py')`), 'tab limit closes the least recently used tab but never a pinned one');
+  // A tool tab (a merge in progress) and a viewer that says it is busy (a notebook with its kernel running) hold state
+  // the tab limit must not throw away; the file tabs give way instead.
+  writeFileSync(path.join(t.project, 'live.livestate'), 'x');
+  await js(`(() => {
+    ide.registerFileViewer({ id: 'live-test', match: (p) => /\\.livestate$/.test(p), mount: (host) => { host.textContent = 'live'; return { busy: () => true }; } });
+    ide.openCustomTab({ id: 'live-tool-tab', title: 'Live Tool', mount: (host) => { host.textContent = 'tool'; } });
+    return true;
+  })()`);
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'live.livestate'))`);
+  for (const f of ['a.py', 'b.py', 'pkg\\d.py', 'notes.txt']) await js(`ide.openFile(ide.util.joinPath(ide.root, ${JSON.stringify(f)}))`);
+  const limitKept = await js(`ide.groups()[0].tabs.map(t => t.title)`);
+  check(limitKept.includes('Live Tool') && limitKept.includes('live.livestate') && limitKept.includes('notes.txt'),
+    `the tab limit keeps a tool tab and a busy viewer, closing file tabs instead (${limitKept.join(', ')})`);
+  await js(`(ide.closeTab('live-tool-tab', true), ide.closeTab(ide.util.joinPath(ide.root, 'live.livestate'), true), true)`);
   await js(`ide.settings.set('editor.tabLimit', 10)`);
 
   // ---------- encodings ----------
