@@ -327,7 +327,7 @@ try {
   await t.js(`ide.compare.files(${K('one.bin')}, ${K('three.bin')}).then(() => true)`);
   await t.until(`document.querySelector('.custom-tab:not(.hidden).cmp-message')?.dataset.verdict === 'different'`, 'ko binary message');
   const koMsg = await t.js(`document.querySelector('.custom-tab:not(.hidden) .cmp-message-box').textContent`);
-  t.check(koMsg.includes('바이너리 파일') && koMsg.includes('서로 다릅니다'), `the binary message is Korean (${S(koMsg)})`);
+  t.check(koMsg.includes('파일은 바이너리입니다') && koMsg.includes('서로 다릅니다'), `the binary message is Korean (${S(koMsg)})`);
   const leaks2 = await englishLeaks(t, '.custom-tab:not(.hidden) .cmp-message-box');
   t.check(leaks2.length === 0, `no English in the message (${S(leaks2)})`);
   const missing = (await missingTranslations(t)).filter((s) => /ompare|ifferen|lipboard|evision|ranch|binary|identical|viewer|read-only|vs/i.test(s));
