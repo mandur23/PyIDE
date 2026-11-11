@@ -74,9 +74,18 @@
   border-radius: 4px; padding: 3px 6px; outline: none; font: 12.5px var(--mono); }
 
 .dbg-console { flex: 1; min-height: 0; }
-.dbg-eval-line { display: flex; align-items: center; border-top: 1px solid var(--gray3); }
-.dbg-eval-line .console-in { border: 0; }
-.dbg-eval-prompt { padding-left: 10px; color: var(--blue8); font: 13px var(--mono); }
+/* The program's input (the console's own colours) and the evaluator below it (a tinted strip with >>>) each carry a
+   label, so the two boxes are not taken for one another. */
+.dbg-in-line, .dbg-eval-line { display: flex; align-items: center; border-top: 1px solid var(--gray3); }
+.dbg-in-line .console-in, .dbg-eval-line .console-in { border: 0; }
+.dbg-eval-line { background: var(--gray2); border-top-color: var(--gray4); }
+.dbg-eval-line .console-in { background: transparent; }
+.dbg-line-label { flex-shrink: 0; width: 64px; padding-left: 10px; color: var(--gray8); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.dbg-eval-prompt { color: var(--blue8); font: 13px var(--mono); }
+/* Output came while another sub-tab was shown. */
+.dbg-subtab.attention { position: relative; }
+.dbg-subtab.attention::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--blue6); }
 
 /* Dialogs */
 .dbg-check { display: flex; align-items: center; gap: 6px; margin: 6px 0; }

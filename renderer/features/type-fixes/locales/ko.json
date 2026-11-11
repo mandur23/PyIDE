@@ -4,5 +4,5 @@
   "Add 'assert {name} is not None'": "'assert {name} is not None' 추가",
   "Wrap in 'if {name} is not None:'": "'if {name} is not None:'으로 감싸기",
   "Add 'assert isinstance({name}, {types})'": "'assert isinstance({name}, {types})' 추가",
-  "Convert '{value}' with str()": "'{value}'을(를) str()로 변환"
+  "Convert '{value}' with str()": "'{value}' 값을 str()로 변환"
 }

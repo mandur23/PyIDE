@@ -259,7 +259,7 @@ try {
   k.check((await mainState(k)).checks === 0 && !(await k.js(`!!document.querySelector('.dialog')`)), 'with checks turned off nothing is checked');
   await k.js(`(ide.settings.set('updates.checkOnStartup', true), true)`);
   await k.until(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('9.9.9'))`, 'Korean update dialog', 20000);
-  k.check(await k.js(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('Nano Studio 9.9.9을(를) 사용할 수 있습니다.'))`), 'turning checks on checks, and the dialog is in Korean');
+  k.check(await k.js(`[...document.querySelectorAll('.dialog')].some(d => d.textContent.includes('Nano Studio 9.9.9 버전을 사용할 수 있습니다.'))`), 'turning checks on checks, and the dialog is in Korean');
   await k.js(`(ide.settings.set('updates.checkOnStartup', false), true)`);
   await closeDialogs(k);
 

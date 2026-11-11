@@ -449,7 +449,7 @@ try {
   await t.shot('ko-export-dialog.png');
   await pressPrimary(t);
   await until(`!!${topDialog}?.querySelector('.settings-sync-message.done')`, 'Korean export done');
-  check((await dialogText(t)).includes('(으)로 내보냈습니다'), 'Korean export result');
+  check((await dialogText(t)).includes('설정을 내보냈습니다: '), 'Korean export result');
   await closeDialogs(t);
 
   answer({ open: path.join(work, 'slip.zip') });

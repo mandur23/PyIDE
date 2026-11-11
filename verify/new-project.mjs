@@ -34,7 +34,8 @@ try {
 
   // ---------- the welcome screen: no tool windows, no Run or Debug, as in PyCharm's welcome window ----------
   const chromeShown = `['stripe', 'stripeRight', 'sidePanel', 'bottom', 'runWidget'].filter((id) => document.getElementById(id).getClientRects().length > 0)`;
-  check((await a.js(chromeShown)).join() === 'stripe,stripeRight,sidePanel,bottom,runWidget', 'with a project open, the stripes, panels and run widget show');
+  const shownAtStart = (await a.js(chromeShown)).join();
+  check(shownAtStart === 'stripe,stripeRight,sidePanel,runWidget', `with a project open, the stripes, side panel and run widget show; the bottom panel waits for a first run (${shownAtStart})`);
   await a.js(`ide.closeProject()`);
   await a.until(`!document.querySelector('#welcome').classList.contains('hidden')`, 'welcome');
   const leftOver = await a.js(chromeShown);
@@ -83,11 +84,16 @@ try {
   check(existsSync(path.join(demo, '.venv', 'Scripts', 'python.exe')), 'a .venv was created with the base interpreter');
   check(existsSync(path.join(demo, '.git')) && readFileSync(path.join(demo, '.gitignore'), 'utf8').includes('.venv/'), 'Git repository and .gitignore created');
   await a.until(`ide.activeTab()?.title === 'main.py'`, 'main.py opened');
-  check((await a.js(chromeShown)).join() === 'stripe,stripeRight,sidePanel,bottom,runWidget', 'opening a project brings the stripes, panels and run widget back');
-  check(await a.js(`ide.editor.getModel().getValue().includes("print_hi('PyCharm')")`), 'welcome script main.py is opened');
+  check((await a.js(chromeShown)).join() === 'stripe,stripeRight,sidePanel,runWidget', 'opening a project brings the stripes, panels and run widget back');
+  check(await a.js(`ide.editor.getModel().getValue().includes("print_hi('Nano Studio')") && !/PyCharm/.test(ide.editor.getModel().getValue())`), "welcome script main.py is opened, with the product's own name");
+  // The app's own inspections have nothing to say about the script it wrote (the comments name keys such as Ctrl+F8).
+  await a.until(`ide.lsp?.status?.() === 'ready'`, 'Pyright ready', 60000).catch(() => {});
+  await a.sleep(4000);
+  const ownMarks = await a.js(`ide.monaco.editor.getModelMarkers({ resource: ide.editor.getModel().uri }).map((m) => m.owner + ': ' + m.message)`);
+  check(!ownMarks.length && /Ctrl\+/.test(await a.js(`ide.editor.getModel().getValue()`)), `no inspection marks the welcome script (${JSON.stringify(ownMarks)})`);
   check(await a.js(`ide.currentInterp()?.executable.toLowerCase() === ${q(path.join(demo, '.venv', 'Scripts', 'python.exe').toLowerCase())}`), 'the new .venv is the project interpreter');
   await a.press('Shift+F10');
-  await a.until(`document.querySelector('#runOut')?.textContent.includes('Hi, PyCharm')`, 'ran', 30000);
+  await a.until(`document.querySelector('#runOut')?.textContent.includes('Hi, Nano Studio')`, 'ran', 30000);
   check(true, 'Shift+F10 runs the new project with its venv');
 
   // ---------- Flask on the base interpreter, packages not installed ----------
@@ -184,6 +190,13 @@ try {
   // ---------- Korean ----------
   const k = await launch({ fixture: 'core', port: 9546, name: 'new-project-ko', lang: 'ko-KR' });
   await openWizard(k);
+  const home = await k.js(`ide.api.invoke('app:info').then((i) => i.home)`);
+  check(await k.js(`document.querySelector('#npLocation').value`) === path.join(home, 'NanoStudioProjects'), 'a first New Project suggests a folder of the app\'s own, not PycharmProjects');
+  const interpShown = await k.js(`(() => { const s = document.querySelector('#npBase'); const o = s.selectedOptions[0]; const line = document.querySelector('#npBasePath');
+    return { option: o?.textContent || '', value: s.value, line: line.textContent, lineShown: line.getClientRects().length > 0, fits: s.scrollWidth <= s.clientWidth + 1 }; })()`);
+  const exeTail = interpShown.value.split('\\').slice(-2).join('\\');
+  check(!interpShown.value || (interpShown.option.endsWith(exeTail) && interpShown.line === interpShown.value && interpShown.lineShown),
+    `the Python version choice ends with the interpreter's folder and python.exe, and its full path is shown under it (${JSON.stringify(interpShown)})`);
   await k.js(`document.querySelector('.np-type[data-type="fastapi"]').click()`);
   const leaks = await englishLeaks(k, '.np-dialog', ['Flask', 'FastAPI', 'Django', 'Java', 'fastapi', 'uvicorn']);
   check(!leaks.length && (await k.js(`document.querySelector('.np-dialog .dialog-title').textContent`)) === '새 프로젝트', `wizard is Korean${leaks.length ? ` ${JSON.stringify(leaks.slice(0, 5))}` : ''}`);

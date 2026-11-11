@@ -63,6 +63,15 @@ async function choose(label) {
   }
   throw new Error(`could not focus quick fix "${label}"`);
 }
+const ASK = `[...document.querySelectorAll('.dialog')].find(d => d.querySelector('.import-install-ask'))`;
+// The install question: what it names, then Install or Cancel pressed with the mouse.
+async function answerInstall(button) {
+  await t.until(`!!${ASK}`, 'the install asks first');
+  const text = await t.js(`${ASK}.textContent`);
+  await t.click(`.dialog-buttons button.${button === 'Install' ? 'primary' : 'secondary'}`);
+  await t.until(`!${ASK}`, 'the question closes');
+  return text;
+}
 
 async function openMain() {
   const isVenv = `ide.currentInterp()?.executable.toLowerCase() === ${S(venvPython.toLowerCase())}`;
@@ -113,7 +122,16 @@ try {
   check(await js(marker(LINES.demo)), 'the unresolved import has a squiggle');
   titles = await quickFixTitles(LINES.demo);
   check(titles.some((x) => x.includes("Install package 'pyide-imp-demo'")), 'import pyide_imp_demo offers "Install package \'pyide-imp-demo\'"');
+  // Enter on the install: a question, not a download.
   await choose("Install package 'pyide-imp-demo'");
+  let asked = await answerInstall('Cancel');
+  check(asked.includes("'pyide-imp-demo'") && asked.includes(venvPython) && !asked.includes('not a virtual environment'),
+    `Enter on the install asks first, naming the package and the venv's python.exe (${S(asked)})`);
+  await t.sleep(1500);
+  check(!(await js(`/pip install pyide-imp-demo/.test(document.querySelector('#pkgOut')?.textContent || '')`)) && await js(missing(LINES.demo)), 'Cancel installs nothing');
+  titles = await quickFixTitles(LINES.demo);
+  await choose("Install package 'pyide-imp-demo'");
+  await answerInstall('Install');
   await until(`/Successfully installed pyide[-_]imp[-_]demo-1\\.0/i.test(document.querySelector('#pkgOut')?.textContent || '')`, 'pip installed the wheel', 120000);
   check(await js(`ide.toolWindows.get('PythonPackages').isVisible() && document.querySelector('#pkgOut').textContent.includes('python -m pip install pyide-imp-demo')`),
     'the install runs "python -m pip install pyide-imp-demo" in the visible Python Packages console');
@@ -126,6 +144,7 @@ try {
   check(await js(missing(LINES.yaml)), 'import yaml is unresolved (reportMissingModuleSource: stubs but no source)');
   titles = await quickFixTitles(LINES.yaml);
   await choose("Install package 'PyYAML' and add to requirements.txt");
+  await answerInstall('Install');
   await until(`/Successfully installed pyyaml-6\\.0\\.99/i.test(document.querySelector('#pkgOut')?.textContent || '')`, 'PyYAML installed', 120000);
   await until(`(ide.dependencies.state().files.find(f => f.kind === 'requirements')?.reqs || []).some(r => r.name === 'PyYAML')`, 'requirement added', 30000);
   const req = readFileSync(path.join(project, 'requirements.txt'), 'utf8');
@@ -133,6 +152,16 @@ try {
   await until(`!(${missing(LINES.yaml)})`, 'yaml squiggle gone', 60000);
   check(true, 'the yaml squiggle is gone');
   await shot('import-install-done.png');
+
+  // A Python outside the project: the question says the package goes to every program that uses it.
+  const outside = await js(`ide.interps.find(i => !i.invalid && !ide.util.isUnder(i.executable, ide.root))?.executable || null`);
+  if (outside) {
+    await js(`(ide.setInterpreter(${S(outside)}), true)`);
+    await until(`ide.currentInterp()?.executable === ${S(outside)}`, 'a global interpreter selected');
+    js(`(ide.importInstall.install('pyide-imp-demo', false), true)`);
+    asked = await answerInstall('Cancel');
+    check(asked.includes(outside) && asked.includes('not a virtual environment of the project'), `with a global Python the question warns (${S(asked)})`);
+  } else check(true, 'no Python outside the project on this computer; the global warning is not shown');
 } catch (err) {
   t.check(false, err.message);
   await t.shot('failure.png');

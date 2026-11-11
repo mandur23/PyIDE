@@ -12,7 +12,7 @@
 
 .run-tool { position: relative; }
 .run-tabs { display: flex; gap: 2px; padding: 2px 6px; border-bottom: 1px solid var(--gray3); flex-shrink: 0; overflow-x: auto; }
-.run-tabs::-webkit-scrollbar { height: 3px; }
+.run-tabs::-webkit-scrollbar { height: 6px; }
 .run-tabs::-webkit-scrollbar-thumb { background: var(--gray5); border-radius: 2px; }
 .run-tabs::-webkit-scrollbar-track { background: transparent; }
 .run-tab { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; border-radius: 5px; color: var(--gray9);

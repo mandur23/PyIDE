@@ -391,7 +391,7 @@ const texts = (sel) => `[...document.querySelectorAll(${q(sel)})].map(n => n.tex
     check(q(await js(`[...document.querySelectorAll('#ghFilter option')].map(o => o.textContent)`)) === q(['열린 풀 리퀘스트', '닫힌 풀 리퀘스트', '내 풀 리퀘스트']), 'filters are in Korean');
     await click('.gh-pr[data-number="1"]');
     await until(`document.querySelectorAll('.gh-file').length === 2`, 'Korean details');
-    check((await js(textOf('.gh-head-meta'))).includes('octocat 님이 feature/login을(를) main에 병합하려고 합니다'), 'the header sentence is Korean with names kept');
+    check((await js(textOf('.gh-head-meta'))).includes('octocat 님이 feature/login 브랜치를 main 브랜치에 병합하려고 합니다'), 'the header sentence is Korean with names kept');
     check((await js(textOf('.gh-check-summary'))).includes('실패 1') && (await js(textOf('.gh-review'))).includes('승인됨'), 'check and review states are Korean');
     const leaks = await englishLeaks(t, '.gh-tool', ['gh', 'CI']);
     check(!leaks.length, `no English left in the Pull Requests tool window${leaks.length ? ` ${q(leaks)}` : ''}`);

@@ -148,6 +148,8 @@ try {
   }), `OK stores the overrides (${S(await js(`ide.settings.get('keymap.overrides')`))})`);
 
   // ---------- the new keys run the actions, the old ones do not ----------
+  // Hidden first: an open Project window that the editor has the keyboard from is focused, not hidden, by its key.
+  await js(`(ide.toolWindows.get('Project').hide(), true)`);
   await h.caret(3);
   const p0 = await h.projectVisible();
   await press('Alt+1');
@@ -266,6 +268,7 @@ try {
   await openFile(b, 'main.py');
   check(await b.js(`ide.keysFor('ActivateProjectToolWindow')`) === 'Ctrl+Alt+Shift+1' && await b.js(`ide.keysFor('EditorDuplicate')`) === 'Ctrl+Alt+Shift+Y D',
     'the overrides apply at startup');
+  await b.js(`(ide.toolWindows.get('Project').hide(), true)`);
   await hb.caret(1);
   const p0 = await hb.projectVisible();
   await b.press('Alt+1');

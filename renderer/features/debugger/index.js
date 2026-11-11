@@ -552,10 +552,15 @@
   // when this session ends (replaced: another debug session took its place). Undefined when no session was started.
   async function debugFile(file, cfg = {}) {
     if (!file) return;
+    if (!cfg.interp && !ide.currentInterp()) await ide.recheckInvalidInterpreter?.();
     const interp = cfg.interp || ide.currentInterp();
     tw.show();
     showSub('console');
-    if (!interp) { con.append(`${tr('No Python interpreter found.')}\n`, 'err'); return; }
+    if (!interp) {
+      con.append(`${tr('No Python interpreter found.')}\n`, 'err');
+      if (ide.noInterpreterActions) ide.ui.consoleActions(con, ide.noInterpreterActions());
+      return;
+    }
     if (sess) await replaceSession();
     setSessionTabs(cfg.tabs);
     if (ide.settings.get('autosave.beforeRun', true)) await ide.saveAll();
@@ -1025,6 +1030,22 @@
     setRunning();
     reqTo(p.id, command, { threadId }).catch((err) => con.append(`${tr('{command} failed: {error}', { command, error: remoteError(err) })}\n`, 'err'));
     if (command === 'continue') showNextStop();
+    awaitInput(sess, command);
+  }
+
+  // A step over input() does not stop again until the user answers, and the prompt is in the Console sub-tab, behind
+  // Threads & Variables' "Frames are not available": it looked like a hang. A step that has not stopped again shortly
+  // after (or a Resume while the program's last output is an unfinished prompt) shows the Console with its input box
+  // ready. The next stop shows Threads & Variables again.
+  function awaitInput(s, command) {
+    const seq = s.runSeq = (s.runSeq || 0) + 1;
+    setTimeout(() => {
+      if (sess !== s || s.runSeq !== seq || s.state !== 'running' || shownSub === 'console' || s.attach) return;
+      if (command === 'continue' && !promptOpen) return;
+      showSub('console');
+      const away = document.activeElement && document.activeElement !== document.body && !document.activeElement.closest?.('.monaco-editor, .dbg-root');
+      if (!away && !con.input.disabled) con.input.focus();
+    }, 600);
   }
   const pause = () => sess?.state === 'running' && req('pause', { threadId: sess.threadId || 1 }).catch(() => {});
 
@@ -1695,12 +1716,14 @@
 
   // ---------- tool window ----------
   let con, tw, subTabs, subPanes, subSep, shownSub = 'debugger', lastFile = null, lastCfg = {};
+  let promptOpen = false; // the program's last output ends without a line break
   let lastRun = null; // Rerun: debugs the last file again or attaches to the last process again
   const btns = {};
 
   function showSub(which) {
     if (!subTabs[which]) which = 'console';
     shownSub = which;
+    if (which === 'console') subTabs.console.classList.remove('attention');
     for (const [k, b] of Object.entries(subTabs)) b.classList.toggle('active', k === which);
     for (const [k, p] of Object.entries(subPanes)) p.classList.toggle('hidden', k !== which);
   }
@@ -1854,6 +1877,18 @@
       con.out.id = 'dbgOut';
       con.input.id = 'dbgIn';
       con.input.disabled = true;
+      // What the program prints while Threads & Variables is shown marks the Console tab, as PyCharm's tab does; whether
+      // its last line is unfinished (an input() prompt) tells a program waiting for input from one still busy.
+      const append = con.append;
+      con.append = (text, kind) => {
+        if (kind !== 'cmd' && shownSub !== 'console' && sess) subTabs.console.classList.add('attention');
+        if (!kind || kind === 'err') promptOpen = !/\n$/.test(text);
+        return append.call(con, text, kind);
+      };
+      // The program's input and the expression evaluator are two boxes: each says what it is.
+      const inLine = el('div', 'dbg-in-line');
+      con.input.before(inLine);
+      inLine.append(el('span', 'dbg-line-label', tr('Input')), con.input);
       const evalLine = el('div', 'dbg-eval-line');
       const evalIn = el('input', 'console-in');
       evalIn.id = 'dbgConsoleEval';
@@ -1870,7 +1905,7 @@
         else if (r.value !== undefined && r.value !== '') con.append(`${r.value}\n`);
         refreshAfterEval();
       };
-      evalLine.append(el('span', 'dbg-eval-prompt', '>>>'), evalIn);
+      evalLine.append(el('span', 'dbg-line-label', tr('Evaluate')), el('span', 'dbg-eval-prompt', '>>>'), evalIn);
       consoleHost.appendChild(evalLine);
 
       subPanes = { debugger: vars, console: consoleHost };
@@ -1959,7 +1994,7 @@
   // Registered after every feature has loaded so it takes precedence over run's Ctrl+F2, but only while debugging.
   ide.on('ready', () => ide.registerAction({ id: 'StopDebug', title: tr('Stop Debugging'), keys: 'Ctrl+F2', when: () => !!sess, run: stopDebug }));
   // A file a configuration type claims has that type's own Debug entry (Debug 'pytest in …').
-  ide.registerTreeAction({ title: tr("Debug '…'"), when: (e) => !e.dir && e.name.endsWith('.py') && !claimingType(e.path), run: (e) => debugFile(e.path) });
+  ide.registerTreeAction({ title: (e) => tr("Debug '{name}'", { name: ide.run?.contextConfigForFile?.(e.path)?.name || e.name.replace(/\.py$/i, '') }), when: (e) => !e.dir && e.name.endsWith('.py') && !claimingType(e.path), run: (e) => debugFile(e.path) });
 
   // PyCharm's Settings › Build, Execution, Deployment › Python Debugger. Off, the Python processes a debugged program
   // starts run without the debugger (debugpy --configure-subProcess False; an attached process's are let go).

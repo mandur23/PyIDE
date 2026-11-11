@@ -119,7 +119,8 @@ try {
   await type('Current');
   await until(`document.querySelector('.popup-item.active .label')?.textContent === 'Current File'`, 'Current File highlighted');
   await press('Enter');
-  await until(`document.querySelectorAll('.run-tab').length === 3`, 'current file run tab');
+  // The open file (app.py) already has a configuration: running it as the current file reuses that one and its tab.
+  await until(`document.querySelectorAll('.run-tab').length === 2 && document.querySelector('.run-tab.active .run-tab-title')?.textContent === 'app'`, 'current file run in the tab of its configuration');
   check((await js(`document.querySelector('.run-target-name').textContent`)) === 'Current File', 'choosing Current File selects it');
 
   // ---------- multiple runs, stop ----------
@@ -154,7 +155,7 @@ try {
 
   // ---------- project tree "Run" creates a temporary configuration ----------
   await js(`(() => { const n = [...document.querySelectorAll('#tree .node')].find(n => n.textContent.includes('scratch.py')); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
-  await clickMenu("Run '…'");
+  await clickMenu("Run 'scratch'");
   await until(`document.querySelector('.run-tab.active .run-tab-title')?.textContent === 'scratch' && document.querySelector('#runOut').textContent.includes('y is 1024')`, 'tree run');
   check(await js(`ide.run.configs().some(c => c.name === 'scratch' && c.temporary)`), 'Run from the project tree creates a temporary configuration');
 
@@ -198,6 +199,8 @@ try {
   check(await js(`[...document.querySelectorAll('.run-session:not(.hidden) .tr-row[data-kind="test"] .tr-time')].length === 5`), 'each test shows a duration');
   check((await activeOut()).includes('assert 4 == 5') && (await activeOut()).includes('about to compare'), 'first failed test is selected with its failure and captured output');
   await js(`[...document.querySelectorAll('.run-session:not(.hidden) .tr-row')].find(r => r.dataset.id.endsWith('test_div_zero')).classList.add('pick-row')`);
+  // At 1024x720 the last rows of the results tree are below its fold.
+  await js(`(document.querySelector('.run-session:not(.hidden) .tr-row.pick-row').scrollIntoView({ block: 'nearest' }), true)`);
   await openFile(t, 'app.py');
   await click('.run-session:not(.hidden) .tr-row.pick-row');
   await until(`ide.activeTab()?.title === 'test_calc.py' && ide.editor.getPosition().lineNumber === 24`, 'navigated to test');
@@ -237,7 +240,7 @@ try {
   // project tree: a test file is offered as pytest, and the project folder runs every test
   // (a sixth temporary configuration pushes out the oldest)
   await js(`(() => { const n = [...document.querySelectorAll('#tree .node')].find(n => n.textContent.includes('test_units.py')); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);
-  check(!(await menuItems()).some((m) => m.startsWith("Run '…'")) && (await menuItems()).some((m) => m.startsWith("Run 'pytest in test_units.py'")), 'test files are offered as pytest runs (named after the file), not plain Python runs, in the tree');
+  check(!(await menuItems()).some((m) => m.startsWith("Run 'test_units'")) && (await menuItems()).some((m) => m.startsWith("Run 'pytest in test_units.py'")), 'test files are offered as pytest runs (named after the file), not plain Python runs, in the tree');
   await click('#status');
   check(!(await js(`document.querySelector('.context-menu')`)), 'clicking elsewhere closes the tree menu');
   await js(`(() => { const n = document.querySelector('#tree .node'); const r = n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.x + 20, clientY: r.y + 8 })); })()`);

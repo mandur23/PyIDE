@@ -210,7 +210,12 @@ try {
     if (id !== 'Terminal') {
       await press('Escape');
       check(await editorFocused() && await js(`ide.toolWindows.get(${q(id)}).isVisible()`), `Esc in ${id} returns to the editor and leaves it open`);
+      // PyCharm: open but not focused, the shortcut focuses the window; it hides only a window that has the keyboard.
       await press(key);
+      await until(`ide.toolWindows.get(${q(id)}).container.contains(document.activeElement)`, `${id} focused again`);
+      check(await js(`ide.toolWindows.get(${q(id)}).isVisible()`), `${key} from the editor focuses the open ${id} instead of hiding it`);
+      await press(key);
+      check(!(await js(`ide.toolWindows.get(${q(id)}).isVisible()`)) && await editorFocused(), `${key} again, with ${id} focused, hides it`);
       await press(key);
     }
     await until(`ide.toolWindows.get(${q(id)}).container.contains(document.activeElement)`, `${id} focused again`);

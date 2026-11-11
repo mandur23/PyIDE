@@ -16,7 +16,7 @@
   "Ruff fix failed: {error}": "ruff 수정 실패: {error}",
   "Applied ruff fixes": "ruff 수정 사항을 적용했습니다",
   "Nothing to fix": "수정할 항목이 없습니다",
-  "{name} updated": "{name}을(를) 업데이트했습니다",
+  "{name} updated": "업데이트했습니다: {name}",
   "{name}: nothing to change": "{name}: 변경할 내용이 없습니다",
   "Fix with ruff: {message} ({code})": "ruff로 수정: {message} ({code})",
   "Fix with ruff: {message} ({code}) [unsafe]": "ruff로 수정: {message} ({code}) [안전하지 않음]",

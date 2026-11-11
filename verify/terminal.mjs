@@ -68,7 +68,9 @@ try {
   await until(`/PS .*project>\\s*$/.test(ide.terminal.text().trimEnd() + ' ')`, 'back at PowerShell');
   const sideBefore = await js(`document.querySelector('#sidePanel').classList.contains('hidden')`);
   await press('Alt+1');
-  check((await js(`document.querySelector('#sidePanel').classList.contains('hidden')`)) !== sideBefore, 'tool window shortcuts (Alt+1) still work from the terminal');
+  // An open tool window takes the keyboard first and hides only when it already has it; a hidden one is shown.
+  const sideAfter = await js(`document.querySelector('#sidePanel').classList.contains('hidden')`);
+  check(sideBefore ? !sideAfter : !sideAfter && !(await focused()), `tool window shortcuts (Alt+1) still work from the terminal (hidden ${sideBefore} -> ${sideAfter})`);
   await press('Alt+1');
   await js(`document.querySelector('.term-session:not(.hidden) textarea').focus()`);
   await press('Alt+F12');
@@ -149,6 +151,10 @@ try {
   // ---------- closing ----------
   const before = await js('ide.terminal.sessions().length');
   await js(`document.querySelector('.term-tab.active .term-tab-close').click()`);
+  // The tab may run a program (the stand-in Claude Code): closing it asks first.
+  await until(`ide.terminal.sessions().length === ${before - 1} || [...document.querySelectorAll('#dialogHost .dialog-title')].some((n) => n.textContent === 'Terminate the Process?')`, 'tab closed or asked', 10000).catch(() => {});
+  await js(`([...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Terminate')?.click(), true)`);
+  await until(`ide.terminal.sessions().length === ${before - 1}`, 'tab closed', 10000).catch(() => {});
   check((await js('ide.terminal.sessions().length')) === before - 1, 'closing a tab ends its session');
 
   // A tab closed while its shell is still starting must not leave that shell running unseen.

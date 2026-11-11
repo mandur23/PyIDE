@@ -66,6 +66,7 @@
     unsaved: (p) => tr('{name} has unsaved changes that could not be saved, so it was not moved.', p),
     'empty-name': () => tr('Enter a name.'),
     timeout: (p) => tr('The refactoring took longer than {seconds} seconds and was stopped.', p),
+    unwritable: (p) => tr('Nothing was changed: these files cannot be written: {files}', p),
     'rolled-back': (p) => tr('It stopped partway ({detail}), and what it had changed was undone.', p),
     partial: (p) => tr('It stopped partway ({detail}) and could not be undone. Local History has the files as they were before the refactoring.', p),
   };
@@ -240,7 +241,7 @@
       if (!(await preview(result, label))) return false;
     }
     try {
-      await applyResult(result, label);
+      announce(await applyResult(result, label));
       return true;
     } catch (e) {
       if (e?.code) hint(cannot(e)); else { console.error(e); hint(cannot(e)); }
@@ -383,17 +384,47 @@
   const withEol = (text, like) => (like && /\r\n/.test(like) ? text.replace(/\n/g, '\r\n') : text);
   const stale = (path) => new RefactorError('stale', { name: basename(path) });
 
-  function editModel(model, oldText, newText) {
+  // `saved`: the refactoring also changes files on disk and the document had no unsaved changes, so the edit is saved
+  // with them (see saveEdited). One that stays inside open editors (Extract Variable) leaves them unsaved, as typing does.
+  function editModel(doc, oldText, newText, onDisk) {
+    const { model } = doc;
+    const saved = onDisk && !ide.isDirty({ doc });
     const pre = model.getAlternativeVersionId();
     model.pushStackElement();
     model.pushEditOperations([], lineEdits(oldText, newText), () => null);
     model.pushStackElement();
-    return { model, pre, post: model.getAlternativeVersionId() };
+    return { model, path: doc.path, saved, pre, post: model.getAlternativeVersionId() };
+  }
+
+  // As in PyCharm, a refactoring's edits in open files are saved along with the files it writes and moves, so a test
+  // run, a commit or another program never sees half of it. A document that had unsaved changes of the user's keeps
+  // them unsaved. -> the paths whose save failed.
+  async function saveEdited(models) {
+    const failed = [];
+    for (const m of models) {
+      const doc = !m.saved || m.model.isDisposed() ? null : ide.getDocument(m.path);
+      if (!doc || doc.model !== m.model || !ide.isDirty({ doc })) continue;
+      await ide.saveTab({ doc }).catch(() => {});
+      if (ide.isDirty({ doc })) failed.push(m.path);
+    }
+    return failed;
+  }
+
+  // Every file the refactoring writes, saves or moves is checked before anything changes: a read-only file met halfway
+  // used to leave the project half renamed.
+  const WRITE_WHY = { EPERM: () => tr('read-only or access denied'), EACCES: () => tr('read-only or access denied'), EBUSY: () => tr('in use by another program') };
+  async function checkWritable(paths) {
+    const blocked = await ide.api.invoke('refactor:unwritable', [...new Set(paths)]).catch(() => []);
+    if (!blocked.length) return;
+    const files = blocked.slice(0, 5).map((b) => `${rel(b.path)} (${WRITE_WHY[b.code]?.() || b.code})`);
+    if (blocked.length > 5) files.push(tr('{n} more', { n: blocked.length - 5 }));
+    throw new RefactorError('unwritable', { files: files.join(', ') });
   }
 
   async function applyResult(result, label) {
     const moves = result.moves || [];
     const underMove = (p) => moves.some((m) => isUnder(p, m.from));
+    await checkWritable([...result.changes.filter((c) => c.old !== null).map((c) => c.path), ...moves.map((m) => m.from)]);
     // A file that moves is written to disk first, so its open tab saves (an unsaved buffer was already in the overlay).
     await saveMoving(moves.map((m) => m.from));
     const plan = [];
@@ -411,7 +442,7 @@
     try {
       await ide.localHistory?.checkpoint?.('Before Refactoring', { paths: [...result.changes.map((c) => c.path), ...moves.map((m) => m.from)] });
     } catch (e) { console.warn('local history checkpoint failed', e); }
-    const rec = { label, models: [], files: [], moves: [], state: 'done', anchors: [], redoAnchors: [] };
+    const rec = { label, models: [], files: [], moves: [], state: 'done', anchors: [], redoAnchors: [], places: result.places, at: Date.now() };
     const written = [];
     const reopen = [];
     let doing = null;
@@ -419,7 +450,7 @@
       for (const { c, doc, disk } of plan) {
         doing = c.path;
         if (doc) {
-          rec.models.push(editModel(doc.model, c.old, c.new));
+          rec.models.push(editModel(doc, c.old, c.new, moves.length > 0 || plan.some((x) => !x.doc)));
         } else {
           const text = withEol(c.new, disk?.text);
           const encoding = disk?.encoding || 'utf-8';
@@ -430,6 +461,9 @@
           written.push(c.path);
         }
       }
+      // Saved before the moves: a moved document reopens from disk.
+      const unsaved = await saveEdited(rec.models);
+      if (unsaved.length) { doing = unsaved[0]; throw new RefactorError('unwritable', { files: unsaved.map(rel).join(', ') }); }
       for (const m of moves) {
         doing = m.from;
         reopen.push(...(await moveOnDisk(m.from, m.to)));
@@ -454,7 +488,10 @@
     if (created.length) ide.emit('filesChanged', { created });
     rec.anchors = await reopenTabs(reopen);
     track(rec);
+    announced?.expire();
+    announced = null;
     placeCaret(result.caret);
+    ide.emit('refactored', rec);
     return rec;
   }
 
@@ -553,6 +590,7 @@
           if (m.model === skip || m.model.isDisposed()) continue;
           if (m.model.getAlternativeVersionId() === m.post) m.model.undo(); else skipped.push(m.model.uri.fsPath);
         }
+        await saveEdited(rec.models);
         rec.state = 'undone';
         await ide.reloadFromDisk(rec.files.map((f) => f.path));
         rec.redoAnchors = await reopenTabs(reopen);
@@ -561,6 +599,7 @@
           if (m.model === skip || m.model.isDisposed()) continue;
           if (m.model.getAlternativeVersionId() === m.pre) m.model.redo(); else skipped.push(m.model.uri.fsPath);
         }
+        await saveEdited(rec.models);
         for (const f of rec.files) {
           const disk = f.before === null ? null : await readDisk(f.path);
           if (f.before !== null && (!disk || disk.text !== f.before)) { skipped.push(f.path); continue; }
@@ -578,7 +617,42 @@
       replaying = false;
     }
     for (const check of afterReplay.splice(0)) check();
+    ide.emit('refactored', rec);
     if (skipped.length) hint(tr('Some files changed after the refactoring and were left as they are: {files}', { files: skipped.map((p) => basename(p)).join(', ') }));
+  }
+
+  // What a refactoring over several files (or one that moved a file) changed, with Undo, as a balloon: the edits are
+  // saved, so nothing else would say that other files changed.
+  // Only the last refactoring's balloon offers Undo: undoing an older one under a newer one would undo the wrong files.
+  let announced = null;
+  function announce(rec) {
+    if (!rec) return;
+    const files = new Set([...rec.models.map((m) => m.path), ...rec.files.map((f) => f.path)].map((p) => p.toLowerCase())).size;
+    if (files < 2 && !rec.moves.length) return;
+    const title = rec.places ? tr('{label}: {places} places in {files} files changed', { label: rec.label, places: rec.places, files })
+      : files ? tr('{label}: {files} files changed', { label: rec.label, files }) : rec.label;
+    const note = ide.notifications.notify({
+      kind: 'ok', group: 'Refactoring', title,
+      text: rec.moves.map((m) => `${rel(m.from)} → ${rel(m.to)}`).join('\n'),
+      actions: [{
+        label: tr('Undo'), valid: () => rec.state === 'done' && records[records.length - 1] === rec,
+        run: async () => { await replay(rec, 'undo'); note.expire(); },
+      }],
+    });
+    announced = note;
+  }
+
+  // Ctrl+Z in an editor that has nothing of its own to undo (a file the refactoring did not touch, or one opened since)
+  // offers to undo the last refactoring, as PyCharm does.
+  function unanchoredRecord() {
+    const rec = records[records.length - 1];
+    const model = ide.editor?.hasTextFocus() ? ide.editor.getModel() : null;
+    if (!rec || rec.state !== 'done' || !model || model.canUndo?.() !== false) return null;
+    return rec;
+  }
+  async function undoFromAnywhere() {
+    const rec = unanchoredRecord();
+    if (rec && await ide.ui.confirm(tr('Undo {label}?', { label: rec.label }), { title: tr('Undo Refactoring'), ok: tr('Undo') })) await replay(rec, 'undo');
   }
 
   // A file that moved reopens as a new document with no undo history; Ctrl+Z there still undoes the refactoring.
@@ -1010,7 +1084,8 @@
     { id: 'ChangeSignature', title: tr('Change Signature…'), keys: 'Ctrl+F6', when: editorPython, run: changeSignature },
     { id: 'Move', title: tr('Move…'), keys: 'F6', when: editorPython, run: () => moveElement() },
     { id: 'Refactorings.QuickListPopupAction', title: tr('Refactor This…'), keys: 'Ctrl+Alt+Shift+T', when: editorPython, run: refactorThis },
-    { id: 'Refactor.Undo', title: tr('Undo Refactoring'), keys: 'Ctrl+Z', when: () => !!anchoredRecord('undo'), run: () => replay(anchoredRecord('undo'), 'undo') },
+    { id: 'Refactor.Undo', title: tr('Undo Refactoring'), keys: 'Ctrl+Z', when: () => !!(anchoredRecord('undo') || unanchoredRecord()),
+      run: () => (anchoredRecord('undo') ? replay(anchoredRecord('undo'), 'undo') : undoFromAnywhere()) },
     { id: 'Refactor.Redo', title: tr('Redo Refactoring'), keys: 'Ctrl+Shift+Z', when: () => !!anchoredRecord('redo'), run: () => replay(anchoredRecord('redo'), 'redo') },
   ].forEach(ide.registerAction);
 
@@ -1033,5 +1108,7 @@
     },
   });
 
-  ide.refactor = { call, applyResult, preview, errorText, hint, records:() => records.map(({ label, state, files, moves }) => ({ label, state, files: files.map((f) => f.path), moves })) };
+  // apply: a finished result applied as the dialogs do (checked, saved, one undo step, the balloon) -> the record.
+  const apply = async (result, label) => { const rec = await applyResult(result, label); announce(rec); return rec; };
+  ide.refactor = { call, applyResult, apply, preview, errorText, hint, records:() => records.map(({ label, state, files, moves }) => ({ label, state, files: files.map((f) => f.path), moves })) };
 })();

@@ -1,6 +1,15 @@
-.problem { font-family: var(--mono); cursor: pointer; }
+.problems-bar { display: flex; gap: 4px; padding: 2px 6px; border-bottom: 1px solid var(--gray3); flex: none; }
+.problems-filter { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--gray9); cursor: pointer; font: inherit; }
+.problems-filter.on { background: var(--gray3); border-color: var(--gray4); color: var(--gray12); }
+.problems-filter:not(.on) .sev { opacity: .45; }
+#problemList { flex: 1; overflow: auto; }
+.problem-file { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.problem-file > .ide-icon:first-child { width: 12px; height: 12px; transition: transform .1s; }
+.problem-file.collapsed > .ide-icon:first-child { transform: rotate(-90deg); }
+.problem-file .muted { margin-left: 6px; }
+.problem { font-family: var(--mono); cursor: pointer; padding-left: 28px; }
 .problem .sev { margin-right: 6px; }
-.problem .sev.error { color: var(--red); }
-.problem .sev.warning { color: var(--yellow); }
-.problem .sev.info { color: var(--blue8); }
-:root[data-theme="light"] .problem .sev.warning { color: #b07800; }
+.problem .sev.error, .problems-filter .sev.error { color: var(--red); }
+.problem .sev.warning, .problems-filter .sev.warning { color: var(--yellow); }
+.problem .sev.info, .problems-filter .sev.info { color: var(--blue8); }
+:root[data-theme="light"] .problem .sev.warning, :root[data-theme="light"] .problems-filter .sev.warning { color: #b07800; }

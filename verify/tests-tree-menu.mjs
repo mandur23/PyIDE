@@ -67,6 +67,16 @@ try {
   const none = { project: await offered(''), tests: await offered('tests'), src: await offered('src') };
   check(!none.project && !none.tests && !none.src, `with every test file deleted, the project and its folders offer no pytest run (${S(none)})`);
 
+  // A test file another program adds or removes (an editor, a git checkout): no filesChanged, only the tree's watcher.
+  writeFileSync(path.join(t.project, 'docs', 'test_outside.py'), 'def test_outside():\n    assert True\n');
+  await t.sleep(2500);
+  const outside = await offered('docs');
+  check(outside === both('docs'), `a test file added outside the IDE gives its folder the entry (${S(outside)})`);
+  rmSync(path.join(t.project, 'docs', 'test_outside.py'));
+  await t.sleep(2500);
+  const gone = await offered('docs');
+  check(!gone, `and removing it outside the IDE takes the entry away (${S(gone)})`);
+
   writeFileSync(path.join(t.project, 'tests', 'test_calc.py'), 'def test_add():\n    assert 1 + 1 == 2\n');
   await filesChanged('tests\\test_calc.py', 'created');
   await t.sleep(1500);

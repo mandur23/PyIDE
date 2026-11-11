@@ -362,6 +362,8 @@
         line: d.range.start.line + 1, col: d.range.start.character + 1,
         endLine: d.range.end.line + 1, endCol: d.range.end.character + 1,
         msg: d.message, severity: SEVERITY[d.severity] || 'info',
+        // What Ruff's same findings yield to (ide.problems): Pyright reports syntax errors without a rule code.
+        kind: d.code === 'reportUndefinedVariable' ? 'undefined' : !d.code && d.severity === 1 ? 'syntax' : undefined,
       })));
       const tab = ide.findTab(path);
       if (tab?.model && !tab.model.isDisposed()) {
@@ -642,6 +644,50 @@
     if (failed.length) ide.ui.alert(tr('These files could not be changed: {names}', { names: failed.join(', ') }));
     return { edits: monacoEdits, written };
   }
+  // A rename that reaches other files goes through the refactor plugin's apply (ide.refactor.apply), as a module
+  // rename does: every file is checked for writing first and nothing changes if one cannot be, open files are saved
+  // with the closed ones, a failure partway is put back, Ctrl+Z in any of them undoes the whole rename, and a balloon
+  // says how many places in how many files changed. A rename inside the one open file stays Monaco's own edit.
+  // -> true when this handled it (applied, or refused with the reason shown at the caret).
+  async function renameAcrossFiles(we, model) {
+    const byUri = editsByUri(we);
+    const paths = [...byUri.keys()].map(toPath);
+    if (paths.length < 2 && paths.every((p) => ide.getDocument(p))) return false;
+    const LF = monaco.editor.EndOfLinePreference.LF;
+    const norm = (t) => t.replace(/\r\n?/g, '\n');
+    const say = (text) => {
+      const ed = monaco.editor.getEditors().find((e) => e.getModel() === model && e.hasTextFocus()) || ide.editor;
+      ed?.getContribution('editor.contrib.messageController')?.showMessage(text, ed.getPosition());
+    };
+    const changes = [];
+    let places = 0;
+    for (const [uri, edits] of byUri) {
+      const path = toPath(uri);
+      places += edits.length;
+      const doc = ide.getDocument(path);
+      if (doc && !doc.model.isDisposed()) {
+        const old = doc.model.getValue(LF);
+        changes.push({ path, old, new: applyTextEdits(old, edits) });
+        continue;
+      }
+      let file = null;
+      try { file = await ide.api.invoke('fs:readText', path); } catch {}
+      const text = typeof file?.text === 'string' ? closedFileEdit(file, edits) : null;
+      if (text === null) {
+        say(typeof file?.text === 'string' ? tr('{name} cannot be changed: it is not a UTF-8 file and the change is on a line with non-ASCII text.', { name: basename(path) })
+          : tr('{name} cannot be read, so the change was not applied.', { name: basename(path) }));
+        return true;
+      }
+      changes.push({ path, old: norm(file.text), new: norm(text) });
+    }
+    try {
+      await ide.refactor.apply({ changes, places }, tr('Rename'));
+    } catch (err) {
+      say(tr('Cannot perform refactoring. {reason}', { reason: ide.refactor.errorText(err) }));
+    }
+    return true;
+  }
+
   async function applyOrExplain(we) {
     const { refused } = await applyWorkspaceEdit(we);
     if (refused) ide.ui.alert(refused);
@@ -861,6 +907,7 @@
         if (!/^[A-Za-z_\u00c0-\uffff][\w\u00c0-\uffff]*$/.test(newName)) return { edits: [], rejectReason: tr("'{name}' is not a valid identifier", { name: newName }) };
         const we = doc && await request('textDocument/rename', { textDocument: { uri: doc.uri }, position: lspPos(position), newName });
         if (!we) return { edits: [], rejectReason: tr('Rename failed') };
+        if (ide.refactor?.apply && !resourceOps(we).length && await renameAcrossFiles(we, model)) return { edits: [] };
         const { edits, refused } = await applyWorkspaceEdit(we, { keepOpenEdits: true });
         return refused ? { edits: [], rejectReason: refused } : { edits };
       },
@@ -1343,6 +1390,7 @@
   let findHead;
   const findTw = ide.registerToolWindow({
     id: 'FindUsages', title: tr('Find'), icon: '⌕', side: 'bottom', order: 18,
+    available: () => !!findList?.childElementCount,
     mount(container) {
       findHead = el('div', 'lsp-find-head muted');
       findHead.append(ide.keymap.text(el('span'), () => tr('Use {action} on a symbol to find its usages', { action: ide.keymap.withKeys(tr('Find Usages'), 'FindUsages') })));
@@ -1421,9 +1469,19 @@
       frag.append(head, rows);
     }
     findList.replaceChildren(frag);
+    findList.classList.remove('lsp-find-stale');
     findTw.show();
     findTw.setBadge(String(refs.length));
   }
+
+  // A refactoring (or its undo) changed the files the results point into: their names and lines may no longer be there.
+  ide.on('refactored', () => {
+    if (!findList?.querySelector('.lsp-find-row') || findList.classList.contains('lsp-find-stale')) return;
+    findList.classList.add('lsp-find-stale');
+    const note = el('span', 'lsp-find-stale-note', '');
+    ide.keymap.text(note, () => tr('Out of date after a refactoring. Use {action} again.', { action: ide.keymap.withKeys(tr('Find Usages'), 'FindUsages') }));
+    findHead.append(note);
+  });
 
   const inLspEditor = () => !!editorClient();
   [

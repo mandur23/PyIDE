@@ -1,3 +1,4 @@
+import { chmodSync } from 'fs';
 import { launch, openFile } from './lib.mjs';
 
 const t = await launch({ fixture: 'lsp', port: 9401 });
@@ -151,12 +152,17 @@ try {
   // ---- Shift+F6 rename across files (models.py and app.py open, cli.py closed) ----
   await openFile(t, 'app.py');
   await caret(6, 25);
+  await press('Alt+F7');
+  await until(`document.querySelectorAll('#lspFindList .lsp-find-row').length > 0`, 'usages of greet listed');
+  await js(`ide.notifications.clear?.(), true`);
+  await caret(6, 25);
   await press('Shift+F6');
   await until(`${visible('.rename-box input')} && document.activeElement?.closest('.rename-box') && document.activeElement.value === 'greet'`, 'inline rename box with the name selected');
   check(true, 'Shift+F6 opens inline rename prefilled with the symbol');
   await type('say_hello');
   await press('Enter');
   await until(`/say_hello/.test(ide.editor.getModel().getLineContent(6))`, 'rename applied in app.py');
+  await until(`ide.notifications.list().some(n => /places in/.test(n.title))`, 'rename finished', 10000).catch(() => {});
   check(/other\.say_hello\("world"\)/.test(await lineOf(9)), 'rename updates every usage in the current file');
   check(await js(`ide.findTab(ide.util.joinPath(ide.root, 'models.py')).model.getLineContent(10).includes('def say_hello(')`), 'rename updates the declaration in another open file');
   const cli = await js(`ide.api.read(ide.util.joinPath(ide.root, 'cli.py'))`);
@@ -166,6 +172,43 @@ try {
   check(kr.encoding === 'cp949' && kr.text.includes('make_greeter("kr").say_hello("kr"))  # 인사') && kr.text.includes('# 한글 인사'),
     `rename rewrites a closed CP949 file in CP949 (${JSON.stringify(kr)})`);
   await shot('rename.png');
+
+  // The whole rename is one change: open files are saved with the closed ones, a balloon says how much changed,
+  // Ctrl+Z in any of its files undoes all of it, and a read-only file stops it before anything changes.
+  const P = (f) => `ide.util.joinPath(ide.root, ${JSON.stringify(f)})`;
+  const disk = (f) => js(`ide.api.read(${P(f)})`);
+  check((await disk('models.py')).includes('def say_hello(') && (await disk('app.py')).includes('say_hello')
+    && !(await js(`ide.isDirty(ide.findTab(${P('models.py')})) || ide.isDirty(ide.findTab(${P('app.py')}))`)), 'the rename is saved in the open files too');
+  const note = await until(`ide.notifications.list?.().some(n => /places in \\d+ files changed/.test(n.title))`, 'rename balloon', 5000).then(() => js(`ide.notifications.list().find(n => /places in/.test(n.title)).title`), () => null);
+  check(note && /^Rename: \d+ places in [3-9] files changed$/.test(note), `a balloon says how many places in how many files changed (${note})`);
+  check(await js(`document.querySelector('#lspFindList').classList.contains('lsp-find-stale') && /Out of date/.test(document.querySelector('.lsp-find-stale-note')?.textContent)`), 'Find Usages results are marked out of date after the rename');
+  await openFile(t, 'app.py');
+  await caret(6, 1);
+  await press('Ctrl+Z');
+  await until(`/greet/.test(ide.editor.getModel().getLineContent(6))`, 'undo in app.py', 10000).catch(() => {});
+  // The undo writes the closed files first, then undoes and saves the open ones.
+  await until(`Promise.all([ide.api.read(${P('cli.py')}), ide.api.read(${P('models.py')})]).then(([c, m]) => c.includes('.greet("cli")') && m.includes('def greet('))`, 'rename undone on disk', 10000).catch(() => {});
+  check((await disk('models.py')).includes('def greet(') && (await disk('cli.py')).includes('.greet("cli")') && (await disk('app.py')).includes('greet')
+    && !(await disk('app.py')).includes('say_hello'), 'one Ctrl+Z in app.py undoes the rename in every file, on disk too');
+  await press('Ctrl+Shift+Z');
+  await until(`ide.api.read(${P('cli.py')}).then(t => t.includes('.say_hello("cli")'))`, 'redo', 10000)
+    .then(() => check(true, 'Ctrl+Shift+Z redoes it in every file'), () => check(false, 'Ctrl+Shift+Z redoes it in every file'));
+  const cliPath = await js(P('cli.py'));
+  chmodSync(cliPath, 0o444);
+  try {
+    await caret(6, 25);
+    await press('Shift+F6');
+    await until(`${visible('.rename-box input')} && document.activeElement?.value === 'say_hello'`, 'rename box again');
+    await type('say_hi');
+    await press('Enter');
+    await until(visible('.monaco-editor-overlaymessage'), 'refusal message', 10000).catch(() => {});
+    const msg = await textOf('.monaco-editor-overlaymessage');
+    check(/cli\.py/.test(msg) && /read-only/.test(msg), `a read-only file stops the rename and is named with the reason (${msg})`);
+    check(!(await disk('models.py')).includes('say_hi(') && !(await js(`ide.findTab(${P('models.py')}).model.getValue()`)).includes('say_hi(') && !(await lineOf(6)).includes('say_hi('), 'nothing was renamed anywhere');
+  } finally {
+    chmodSync(cliPath, 0o666);
+  }
+  await press('Escape');
   await press('Ctrl+S');
 
   // ---- completion with resolve, signature help ----

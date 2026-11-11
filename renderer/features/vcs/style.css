@@ -254,3 +254,10 @@
 .vcs-new-branch-name { padding: 4px 8px; background: var(--gray1); color: var(--gray12); border: 1px solid var(--gray4); border-radius: 4px; outline: none; }
 .vcs-new-branch-checkout { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .vcs-new-branch-checkout input { margin: 0; accent-color: var(--blue6); }
+.vcs-smart-checkout { display: flex; flex-direction: column; gap: 8px; }
+.vcs-smart-files { max-height: 180px; overflow: auto; font-family: var(--mono); font-size: 12px; padding: 6px 8px; border: 1px solid var(--gray4); border-radius: 4px; }
+.vcs-smart-files > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vcs-folder { display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 18px; cursor: pointer; white-space: nowrap; }
+.vcs-folder .arrow { width: 10px; color: var(--gray9); }
+.vcs-folder-name { overflow: hidden; text-overflow: ellipsis; }
+.vcs-file.vcs-nested { padding-left: 40px; }

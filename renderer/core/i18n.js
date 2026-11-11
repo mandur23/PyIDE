@@ -28,12 +28,24 @@
     return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
   };
 
+  let english = null; // translation -> English source, built on first use
   window.i18n = {
     locale,
     preference: pref,
     systemLocale,
     languages: [['system', 'System default'], ['en', 'English'], ['ko', '한국어']],
     missing,
+    // The English text a translated string came from, or null (English UI, or not a dictionary string). Find Action
+    // matches action names in English in any UI language, as PyCharm does.
+    english(text) {
+      if (locale === 'en' || !text) return null;
+      if (!english) {
+        english = new Map();
+        for (const [k, v] of Object.entries(dict)) if (!english.has(v)) english.set(v, k);
+      }
+      const s = english.get(text);
+      return s && s !== text ? s : null;
+    },
     // Static markup: data-i18n (text), data-i18n-title, data-i18n-placeholder.
     translateDom(root = document) {
       for (const n of root.querySelectorAll('[data-i18n]')) n.textContent = tr(n.dataset.i18n);

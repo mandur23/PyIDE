@@ -217,6 +217,9 @@ try {
   check(procsC.some((p) => /ping/i.test(p.name)), `pane C runs a child process (${names(procsC)})`);
   await mouse((await centerOf(`.term-pane[data-session="${C}"] .xterm-screen`)).x, (await centerOf(`.term-pane[data-session="${C}"] .xterm-screen`)).y, 'right');
   await menuPick('Close Session');
+  // A program runs in it: closing asks first (terminal-busy.mjs covers the question).
+  await until(`[...document.querySelectorAll('#dialogHost .dialog-title')].some((n) => n.textContent === 'Terminate the Process?')`, 'terminate question', 10000);
+  await js(`([...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Terminate').click(), true)`);
   await until(`ide.terminal.sessions().length === 2`, 'pane C closed');
   l = await layout();
   check(l.dir === 'row' && l.a.id === A && l.b.id === B && (await activeId()) === B, `closing a pane gives its room to its neighbour, which becomes active (${JSON.stringify(l)})`);
@@ -239,6 +242,7 @@ try {
   await until(`ide.terminal.tabs().length === 2 && ide.terminal.active()?.id`, 'second tab');
   const E = await activeId();
   await js(`ide.runAction('Terminal.CloseSession')`);
+  await until(`ide.terminal.tabs().length === 1`, 'idle pane closed', 8000).catch(() => {});
   check((await js('ide.terminal.tabs().length')) === 1 && (await activeId()) === D, 'closing the only pane of a tab closes the tab');
   const tabProcs = withDescendants(await js(`ide.terminal.sessions().map(s => s.pid)`));
   await send(D, 'ping -n 120 127.0.0.1\r');
@@ -249,6 +253,9 @@ try {
   await mouse(tabBox.x, tabBox.y, 'right');
   const tabMenu = await menuPick('Close Tab');
   check(tabMenu.includes('Split Right') && tabMenu.includes('Split Down'), `tab menu has Split Right and Split Down (${tabMenu.join(', ')})`);
+  // ping runs in it: Close Tab asks first.
+  await until(`[...document.querySelectorAll('#dialogHost .dialog-title')].some((n) => n.textContent === 'Terminate the Process?')`, 'terminate question for the tab', 10000);
+  await js(`([...document.querySelectorAll('#dialogHost .dialog-buttons button')].find((b) => b.textContent === 'Terminate').click(), true)`);
   await until(`ide.terminal.tabs().length === 0`, 'tab closed');
   check(await gone([...tabProcs, ...tabProcs2]), `closing a split tab ends every pane's shell (${names([...tabProcs, ...tabProcs2])})`);
   check(E !== D, 'tabs and panes are separate sessions');
@@ -315,6 +322,11 @@ try {
   const appProcs = withDescendants(await js(`ide.terminal.sessions().map(s => s.pid)`));
   await shot('split.png');
   js(`ide.runAction('Exit')`).catch(() => {});
+  // Programs run in both terminals, so Exit asks first; the click answers before the window goes.
+  await until(`!!document.querySelector('#closeConfirmDialog')`, 'Exit asks about the running terminals', 15000);
+  const exitAsked = await js(`document.querySelector('#closeConfirmDialog').innerText`);
+  check(/Programs Are Running/.test(exitAsked) && /Terminal/.test(exitAsked), `Exit with programs running in the terminals asks first (${JSON.stringify(exitAsked)})`);
+  await js(`(setTimeout(() => [...document.querySelectorAll('#closeConfirmDialog .dialog-buttons button')].find((b) => b.textContent === 'Stop and Close').click(), 50), true)`);
   const end = Date.now() + 20000;
   while (alive(t.pid) && Date.now() < end) await sleep(250);
   check(!alive(t.pid), 'Exit quits the app');

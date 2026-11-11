@@ -1,7 +1,13 @@
 {
   "Problems": "문제",
   "No problems found": "발견된 문제가 없습니다",
+  "No problems of the shown kinds": "표시하는 종류의 문제가 없습니다",
   "Error": "오류",
   "Warning": "경고",
-  "Information": "정보"
+  "Information": "정보",
+  "Errors": "오류",
+  "Warnings": "경고",
+  "Show {kind}": "{kind} 표시",
+  "Hide {kind}": "{kind} 숨기기",
+  "{n} problems": "문제 {n}개"
 }

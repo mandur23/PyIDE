@@ -217,8 +217,18 @@ try {
     check(await js(`ide.groups()[0].tabs.some((t) => t.title === 'shapes.py')`), 'Window › Reopen Closed Tab still reopens it');
   }
 
-  // ---------------- Find Action ----------------
+  // ---------------- Ctrl+R from the find bar ----------------
   await openFile(t, 'keys.py');
+  await setText('b = 2\na = 1\nc = 3\n', 1, 1);
+  await key('Ctrl+F');
+  await until(`document.activeElement?.closest('.find-widget.visible') && document.activeElement.matches('textarea, input')`, 'find bar has the keyboard');
+  await typeKeys('a');
+  await key('Ctrl+R');
+  const bar = await js(`(() => { const w = ide.editor.getDomNode().querySelector('.find-widget'); return { replace: w.classList.contains('replaceToggled'), search: ide.editor.getContribution('editor.contrib.findController').getState().searchString }; })()`);
+  check(bar.replace && bar.search === 'a', `Ctrl+R in the find bar switches it to replace, and the key does not reach the search text (${J(bar)})`);
+  await key('Escape');
+
+  // ---------------- Find Action ----------------
   await setText('b = 2\na = 1\nc = 3\n', 1, 1);
   await js(`(ide.runAction('GotoAction'), true)`);
   await until(`!document.getElementById('popup').classList.contains('hidden')`, 'Find Action');

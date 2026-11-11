@@ -560,9 +560,11 @@
     const bar = g.tabList;
     bar.replaceChildren();
     for (const t of g.tabs) {
-      const node = el('div', 'tab' + (t === g.active ? ' active' : '') + (t.preview ? ' preview' : '') + (t.pinned ? ' pinned' : ''));
+      const gone = t.kind === 'file' && !!t.doc?.gone;
+      const node = el('div', 'tab' + (t === g.active ? ' active' : '') + (t.preview ? ' preview' : '') + (t.pinned ? ' pinned' : '') + (gone ? ' gone' : ''));
       // A file's tooltip is its path; a custom tab's path is an internal id (workspace:home), so it shows its title.
       node.title = /^([a-z]:[\\/]|\\\\)/i.test(t.path || '') ? t.path : t.title;
+      if (gone) node.title = tr('{path} (deleted on disk)', { path: t.path });
       node.draggable = true;
       node.dataset.path = t.path;
       node.appendChild(tabIcon(t));
@@ -621,8 +623,27 @@
     if (!force) safe(() => tab.flush?.());
     const last = tab.doc && tabsOfDoc(tab.doc).length === 1;
     if (!force && last && docDirty(tab.doc)) {
-      return ide.ui.confirm(tr('{name} has unsaved changes. Close anyway?', { name: tab.title }), { ok: tr('Close') })
-        .then((yes) => yes && closeTabObj(tab, true, { moving }));
+      // As PyCharm and the window's close question: Save is the default, so Enter never throws the edits away.
+      return new Promise((resolve) => {
+        let answer = null;
+        const dlg = ide.ui.dialog({
+          title: tr('Save Changes?'),
+          body: el('div', 'dialog-message', tr('{name} has unsaved changes. Save them before closing?', { name: tab.title })),
+          width: 460,
+          onClose: () => resolve(answer === 'save' ? (async () => {
+            await saveDoc(tab.doc);
+            renderAllTabs();
+            // A save that failed or was called off (File Cache Conflict) keeps the tab.
+            return !docDirty(tab.doc) && closeTabObj(tab, true, { moving });
+          })() : answer === 'discard' && closeTabObj(tab, true, { moving })),
+          buttons: [
+            { label: tr('Save'), primary: true, run: () => { answer = 'save'; } },
+            { label: tr("Don't Save"), run: () => { answer = 'discard'; } },
+            { label: tr('Cancel') },
+          ],
+        });
+        dlg.el.classList.add('close-tab-confirm');
+      });
     }
     const i = g.tabs.indexOf(tab);
     g.tabs.splice(i, 1);
@@ -1313,7 +1334,7 @@
       ide.ui.dialog({
         title: tr('File Cache Conflict'),
         body: el('div', 'dialog-message', tr('{name} was changed both in the editor and on disk.', { name: basename(doc.path) })),
-        width: 480,
+        width: 640,
         onClose: () => resolve(choice),
         buttons: [
           { label: tr('Load File System Changes'), run: async () => {
@@ -1323,6 +1344,14 @@
           } },
           // The disk version is now acknowledged: a save that then fails (read-only file) does not ask again.
           { label: tr('Keep Memory Changes'), primary: true, run: () => { choice = true; doc.diskHash = textHash(r.text); } },
+          // The diff is a tab, which a modal question would cover: the save waits, and the next Ctrl+S asks again.
+          ...(ide.compare?.texts ? [{ label: tr('Show Difference'), run: () => {
+            ide.compare.texts({
+              id: `${doc.path} [${tr('File Cache Conflict')}]`, title: tr('{name}: disk vs editor', { name: basename(doc.path) }),
+              language: doc.model.getLanguageId(),
+              left: { title: tr('On disk (read-only)'), text: r.text }, right: { title: tr('In the editor'), doc },
+            });
+          } }] : []),
           { label: tr('Cancel') },
         ],
       });
@@ -1367,7 +1396,7 @@
     }
     doc.savedVersion = version;
     doc.diskHash = textHash(text);
-    doc.conflict = doc.skipNoted = false;
+    doc.conflict = doc.skipNoted = doc.gone = false;
     doc.mixedSeparators = false;
     if (!docDirty(doc)) clearChanged(doc);
     announceSaved(doc, doc.lineSeparator === '\r' ? text.replace(/\r/g, '\r\n') : text);
@@ -1430,11 +1459,29 @@
     for (const doc of list) {
       if (doc.untitled || doc.saving || doc.model.isDisposed() || doc.model.uri.scheme !== 'file') continue;
       let r;
-      try { r = await readDisk(doc); } catch { continue; }
+      try { r = await readDisk(doc); } catch { await checkGone(doc); continue; }
+      if (doc.gone) { doc.gone = false; renderAllTabs(); }
       if (r?.text === undefined || doc.model.isDisposed() || doc.saving || textHash(r.text) === doc.diskHash) continue;
       if (!docDirty(doc)) await reloadDoc(doc);
       else doc.conflict = true;
     }
+  }
+  // A file deleted outside the IDE: its tab is struck through (it reverts when the file comes back) and the user is told
+  // once. A rename this window or another one announces is followed first (doc:moved arrives after the disk change), and
+  // a file that is only unreadable for a moment (locked) still exists.
+  async function checkGone(doc) {
+    const missing = () => ide.api.exists(doc.path).then((x) => !x, () => false);
+    if (doc.gone || !(await missing())) return;
+    await new Promise((r) => setTimeout(r, 400));
+    await moves;
+    if (doc.gone || docs.get(key(doc.path)) !== doc || doc.model.isDisposed() || !(await missing())) return;
+    doc.gone = true;
+    renderAllTabs();
+    ide.notifications?.notify({
+      title: tr('File deleted on disk'), kind: 'warn', group: 'File System', raw: true,
+      text: docDirty(doc) ? tr('{name} was deleted outside the IDE. Its unsaved text is still in the editor; save it to write the file again.', { name: basename(doc.path) })
+        : tr('{name} was deleted outside the IDE.', { name: basename(doc.path) }),
+    });
   }
   const watchProject = (root) => { if (!ide.detached) ide.api.invoke('watch:project', root || null).catch(() => {}); };
   ide.on('projectOpened', watchProject);

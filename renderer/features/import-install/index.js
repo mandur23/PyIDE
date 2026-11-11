@@ -1,6 +1,7 @@
 // Quick fix "Install package '<dist>'" on an import Pyright cannot resolve (reportMissingImports,
 // reportMissingModuleSource), like PyCharm's. The import name maps to its PyPI distribution (cv2 -> opencv-python);
-// standard library names and the project's own modules get no fix. The install runs with the project's tool through
+// standard library names and the project's own modules get no fix. Every install first asks, naming the package and
+// the interpreter (and warning when that is not a venv of the project). The install runs with the project's tool through
 // ide.dependencies (uv pip install in a uv project, pip otherwise) in the Python Packages console, and Pyright
 // resolves imports again afterwards (the lsp plugin listens to packagesChanged). "Install package '<dist>' and add to
 // <file>" also writes the requirement through the packages plugin's "Add to requirements". Safe Mode: no fix.
@@ -83,11 +84,34 @@
   const INSTALL = 'pyide.importInstall.install';
   monaco.editor.registerCommand(INSTALL, (_accessor, dist, addToRequirements) => install(dist, addToRequirements));
 
+  // A one-letter typo in an import names someone else's package, and without a venv it lands in the Python every
+  // program uses: every install says what it fetches and where before it runs.
+  function confirmInstall(dist, interp) {
+    const { el } = ide.util;
+    const inProject = ide.root && ide.util.isUnder(interp.executable || '', ide.root);
+    const body = el('div', 'dialog-message import-install-ask');
+    body.append(
+      el('div', null, tr("Download '{name}' from the Python Package Index and install it?", { name: dist })),
+      el('div', 'import-install-interp', tr('Interpreter: {name}', { name: interp.label })),
+      el('div', 'import-install-path', interp.executable),
+    );
+    if (!inProject) body.append(el('div', 'import-install-global', tr('This interpreter is not a virtual environment of the project: every program that uses it gets the package.')));
+    return new Promise((resolve) => {
+      let yes = false;
+      ide.ui.dialog({
+        title: tr('Install Package'), body, onClose: () => resolve(yes),
+        buttons: [{ label: tr('Install'), primary: true, run: () => { yes = true; } }, { label: tr('Cancel') }],
+      });
+    });
+  }
+
   // Resolves true once the package is installed.
-  async function install(dist, addToRequirements) {
+  async function install(dist, addToRequirements, onConfirmed) {
     if (ide.trusted === false || !ide.dependencies) return false;
     const interp = ide.currentInterp();
     if (!interp) { ide.ui.alert(tr('No Python interpreter found.')); return false; }
+    if (!(await confirmInstall(dist, interp))) return false;
+    onConfirmed?.();
     const code = await ide.dependencies.installSpecs([dist]);
     if (code !== 0) return false;
     if (addToRequirements) {
@@ -106,7 +130,8 @@
     const diagnostics = markers.filter((m) => m.source === 'pyright' && m.startLineNumber === line);
     const out = [{
       title: tr("Install package '{name}'", { name: dist }),
-      kind: 'quickfix', isPreferred: true, diagnostics,
+      // Not preferred: Alt+Enter, Enter must take an import or a rename fix of the same line before a download.
+      kind: 'quickfix', diagnostics,
       command: { id: INSTALL, title: tr("Install package '{name}'", { name: dist }), arguments: [dist, false] },
     }];
     const file = ide.dependencies.requirementsFile();
@@ -164,8 +189,7 @@
     a.onclick = async () => {
       if (a.dataset.state === 'busy' || a.dataset.state === 'done') return;
       a.dataset.state = 'busy';
-      a.dataset.install = tr("Installing '{name}'…", { name: dist });
-      const ok = await install(dist, false);
+      const ok = await install(dist, false, () => { a.dataset.install = tr("Installing '{name}'…", { name: dist }); });
       a.dataset.state = ok ? 'done' : '';
       a.title = a.dataset.install = ok ? tr("'{name}' installed. Run again.", { name: dist }) : tr("Install package '{name}'", { name: dist });
     };

@@ -2,7 +2,7 @@
   "Terminal": "터미널",
   "Clear": "지우기",
   "cd: cannot find path '{path}'": "cd: '{path}' 경로를 찾을 수 없습니다",
-  "Process exited with code {code}. Press Enter to close this tab.": "프로세스가 종료 코드 {code}(으)로 종료되었습니다. Enter를 누르면 이 탭이 닫힙니다.",
+  "Process exited with code {code}. Press Enter to close this tab.": "프로세스가 종료되었습니다(종료 코드 {code}). Enter를 누르면 이 탭이 닫힙니다.",
   "The terminal could not start: {message}": "터미널을 시작할 수 없습니다: {message}",
   "Press Enter to close this tab.": "Enter를 누르면 이 탭이 닫힙니다.",
   "Close Session": "세션 닫기",
@@ -43,9 +43,12 @@
   "{count} terminal sessions are still running: {names}. Terminate them?": "터미널 세션 {count}개가 아직 실행 중입니다: {names}. 모두 종료하시겠습니까?",
   "Terminate Processes": "프로세스 종료",
   "Terminate": "종료",
-  "The terminal could not start: {shell} was not found ({file}).": "터미널을 시작할 수 없습니다: {shell}을(를) 찾을 수 없습니다({file}).",
+  "The terminal could not start: {shell} was not found ({file}).": "터미널을 시작할 수 없습니다: {shell} 셸을 찾을 수 없습니다({file}).",
   "Start another shell with New Session with… (▾), or choose the default shell in Settings › Terminal.": "'다른 셸로 새 세션…'(▾)으로 다른 셸을 시작하거나, 설정 › 터미널에서 기본 셸을 선택하세요.",
   "Default shell:": "기본 셸:",
   "Sign in to Claude Code": "Claude Code에 로그인",
-  "Command Prompt": "명령 프롬프트"
+  "Command Prompt": "명령 프롬프트",
+  "Terminal: {name}": "터미널: {name}",
+  "A program is still running in {names}. Closing terminates it.": "실행 중인 프로그램이 있는 세션: {names}. 닫으면 프로그램이 종료됩니다.",
+  "Terminate the Process?": "프로세스를 종료할까요?"
 }

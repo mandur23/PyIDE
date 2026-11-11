@@ -60,8 +60,9 @@ Accept: application/json
 
 ###
 `;
-  // PyCharm's welcome script, with its comments in the UI language and the user's shortcuts (a comment about an
-  // action without one is left out, and with neither Run nor Search Everywhere bound, so is their paragraph).
+  // PyCharm's welcome script with the product's own name, its comments in the UI language and the user's shortcuts (a
+  // comment about an action without one is left out, and with neither Run nor Search Everywhere bound, so is their
+  // paragraph). The app's own inspections (spelling, Pyright, ruff) find nothing in it: verify/new-project.mjs.
   const press = (id, text) => { const keys = ide.keymap.label(id); return keys ? text(keys) : ''; };
   const welcomeIntro = () => {
     const lines = [
@@ -80,7 +81,7 @@ def print_hi(name):
 
 # ${tr('Press the green button in the gutter to run the script.')}
 if __name__ == '__main__':
-    print_hi('PyCharm')
+    print_hi('Nano Studio')
 `;
   const GITIGNORE = '.venv/\nvenv/\n__pycache__/\n*.py[cod]\n.idea/\n.ruff_cache/\n.pytest_cache/\ndist/\nbuild/\n*.egg-info/\n';
 
@@ -106,7 +107,7 @@ if __name__ == '__main__':
   async function openWizard() {
     const info = await ide.api.invoke('app:info');
     const bases = await oncePerFile(await ide.api.interpreters(null, ide.settings.get('interpreters.extra', [])));
-    const parent = ide.settings.get('newProject.location') || joinPath(info.home, 'PycharmProjects');
+    const parent = ide.settings.get('newProject.location') || joinPath(info.home, 'NanoStudioProjects');
     const types = [...TYPES, ...(ide.projectTypes || []).filter((t) => t && typeof t.id === 'string' && typeof t.form === 'function')
       .map((t) => ({ packages: [], ...t }))];
     let type = types[0];
@@ -172,19 +173,34 @@ if __name__ == '__main__':
     mode('venv', tr('Project venv'));
     mode('base', tr('Base Python'));
     mode('custom', tr('Custom environment'));
+    // A python.exe path is long and tells its interpreter apart only at its end (…\pythoncore-3.14-64\python.exe), which
+    // a select cuts off: the choice shows the end, and the full path is spelled out under the select.
+    const pathEnd = (p) => { const parts = String(p).split('\\'); return parts.length <= 4 ? p : `${parts[0]}\\…\\${parts.slice(-3).join('\\')}`; };
+    const interpOption = (b) => Object.assign(new Option(`${b.label}   ${pathEnd(b.executable)}`, b.executable), { title: b.executable });
+    const fullPath = (select) => {
+      const line = el('div', 'np-preview np-interp-path muted');
+      line.dataset.userText = '';
+      const show = () => { line.textContent = select.value && select.value !== '__browse' ? select.value : ''; };
+      select.addEventListener('change', show);
+      return { line, show };
+    };
     const base = el('select');
     base.id = 'npBase';
-    for (const b of bases) base.add(new Option(`${b.label}   ${b.executable}`, b.executable));
+    for (const b of bases) base.add(interpOption(b));
     const custom = el('select');
     custom.id = 'npCustom';
     const allInterps = await oncePerFile([...bases, ...ide.interps.filter((i) => !i.invalid)]);
-    for (const b of allInterps) custom.add(new Option(`${b.label}   ${b.executable}`, b.executable));
+    for (const b of allInterps) custom.add(interpOption(b));
     custom.add(new Option(tr('Add Local Interpreter…'), '__browse'));
     const venvPath = el('div', 'np-preview muted');
     venvPath.id = 'npVenvPath';
+    const basePath = fullPath(base);
+    basePath.line.id = 'npBasePath';
+    const customPath = fullPath(custom);
+    customPath.line.id = 'npCustomPath';
     const baseRow = field(tr('Python version:'), base);
     const customRow = field(tr('Interpreter:'), custom);
-    interpSection.append(modes, baseRow, venvPath, customRow);
+    interpSection.append(modes, baseRow, basePath.line, venvPath, customRow, customPath.line);
 
     const log = el('pre', 'np-log hidden');
     log.id = 'npLog';
@@ -244,9 +260,13 @@ if __name__ == '__main__':
       const m = selectedMode();
       install.input.disabled = m !== 'venv' && !type.needsPackages;
       baseRow.classList.toggle('hidden', m === 'custom');
+      basePath.line.classList.toggle('hidden', m === 'custom');
+      basePath.show();
       venvPath.classList.toggle('hidden', m !== 'venv');
       venvPath.textContent = tr('Location: {path}', { path: joinPath(projectDir(), '.venv') });
       customRow.classList.toggle('hidden', m !== 'custom');
+      customPath.line.classList.toggle('hidden', m !== 'custom');
+      customPath.show();
       for (const b of nav.children) {
         b.classList.toggle('selected', b.dataset.type === type.id);
         b.setAttribute('aria-selected', String(b.dataset.type === type.id));
@@ -277,13 +297,14 @@ if __name__ == '__main__':
     custom.onchange = async () => {
       if (custom.value !== '__browse') return;
       const file = await ide.api.openFileDialog([{ name: tr('Python interpreter'), extensions: ['exe'] }]);
-      if (!file) { custom.selectedIndex = 0; return; }
+      if (!file) { custom.selectedIndex = 0; customPath.show(); return; }
       const key = await fileKey(file);
       const listed = [...custom.options].filter((o) => o.value !== '__browse');
       const keys = await Promise.all(listed.map((o) => fileKey(o.value)));
       const known = listed[keys.indexOf(key)];
-      if (!known) custom.add(new Option(file, file), custom.options.length - 1);
+      if (!known) custom.add(Object.assign(new Option(pathEnd(file), file), { title: file }), custom.options.length - 1);
       custom.value = known ? known.value : file;
+      customPath.show();
     };
     update();
 

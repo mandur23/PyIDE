@@ -234,10 +234,10 @@ try {
   await k.shot('push-rejected-ko.png');
   await hk.mouse(hk.dialogButton('푸시 거부됨', '강제 푸시'), 'ko Force Push');
   await hk.until(`!!${hk.dialog('보호된 브랜치에 강제 푸시')}`, 'ko protected question');
-  k.check(await k.js(`${hk.dialog('보호된 브랜치에 강제 푸시')}.textContent.includes('main은(는) 보호된 브랜치입니다.')`), 'the protected-branch warning reads in Korean');
+  k.check(await k.js(`${hk.dialog('보호된 브랜치에 강제 푸시')}.textContent.includes('main 브랜치는 보호된 브랜치입니다.')`), 'the protected-branch warning reads in Korean');
   leaks.push(...await englishLeaks(k, '.dialog'));
   await hk.mouse(hk.dialogButton('보호된 브랜치에 강제 푸시', '강제 푸시'), 'ko confirm');
-  await hk.until(`!!${hk.noteWith('main을(를) origin/main에 강제 푸시했습니다')}`, 'ko force pushed', 20000);
+  await hk.until(`!!${hk.noteWith('main 브랜치를 origin/main에 강제 푸시했습니다')}`, 'ko force pushed', 20000);
   k.check(true, 'the result reads in Korean');
   await k.js(`(ide.openSettings('vcs-git'), true)`);
   await hk.until(`!!document.querySelector('[data-key="vcs.protectedBranches"]')`, 'ko Git settings');

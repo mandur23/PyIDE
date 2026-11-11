@@ -23,7 +23,7 @@ function helpers(t) {
   const suspensions = () => js('window.__suspensions');
   const out = () => js(`document.querySelector('#dbgOut').textContent`);
   const vars = () => js(`document.querySelector('#dbgVars').textContent`);
-  const finished = (code) => until(`(t => t.includes('Process finished with exit code ${code}') || t.includes('종료 코드 ${code}(으)로'))(document.querySelector('#dbgOut').textContent)`, `exit code ${code}`, 30000);
+  const finished = (code) => until(`(t => t.includes('Process finished with exit code ${code}') || t.includes('(종료 코드 ${code})'))(document.querySelector('#dbgOut').textContent)`, `exit code ${code}`, 30000);
   const suspended = (n) => until(`window.__suspensions.length === ${n} && !!document.querySelector('#dbgVars .dbg-var')`, `suspension ${n}`, 20000);
   const cursorTo = (line) => js(`(ide.editor.focus(), ide.editor.setPosition({ lineNumber: ${line}, column: 1 }))`);
   const openDialog = async () => {

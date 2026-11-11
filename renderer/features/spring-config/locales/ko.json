@@ -12,6 +12,6 @@
   "Unknown Spring Boot property: {name}": "알 수 없는 Spring Boot 속성입니다: {name}",
   "Did you mean {name}?": "혹시 {name} 속성인가요?",
   "(checked against the Spring Boot {version} metadata bundled with the app)": "(앱에 포함된 Spring Boot {version} 메타데이터 기준)",
-  "Replace with {name}": "{name}(으)로 바꾸기",
+  "Replace with {name}": "다음으로 바꾸기: {name}",
   "Show Context Actions": "컨텍스트 액션 표시"
 }

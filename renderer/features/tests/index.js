@@ -589,7 +589,14 @@
     testDirs = dirs;
   }
   ide.on('projectOpened', scanTestDirs);
-  ide.on('filesChanged', () => { clearTimeout(scanTimer); scanTimer = setTimeout(scanTestDirs, 500); });
+  const scanSoon = () => { clearTimeout(scanTimer); scanTimer = setTimeout(scanTestDirs, 500); };
+  ide.on('filesChanged', scanSoon);
+  // Files another program adds or removes (an editor, a git checkout) reach the IDE through the project tree's watcher
+  // (main/project-watch.js), not filesChanged: a test file, a folder (no extension), or changes too many to list.
+  ide.api.on('watch:changed', ({ root, paths, overflow }) => {
+    if (!ide.root || !samePath(root, ide.root)) return;
+    if (overflow || (paths || []).some((p) => isTestFileName(basename(p)) || !/\.[^\\/.]+$/.test(basename(p)))) scanSoon();
+  });
   if (ide.root) scanTestDirs();
   // The tree reads `title` right after `when` accepted the entry, so the label names that entry.
   let menuEntry = null;

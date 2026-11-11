@@ -126,7 +126,7 @@ try {
   const items = await js(`[...document.querySelectorAll('.context-menu .menu-item')].map(n => n.textContent)`);
   check(items.includes('코드 서식 다시 지정Ctrl+Alt+L') && items.includes('import 최적화Ctrl+Alt+O'), `tree context menu items in Korean (${S(items)})`);
   await js(`[...document.querySelectorAll('.context-menu .menu-item')].find(n => n.textContent.startsWith('코드 서식 다시 지정')).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
-  await until(`document.querySelector('#toolingHint').textContent === 'savefmt.py을(를) 업데이트했습니다'`, 'tree reformat hint');
+  await until(`document.querySelector('#toolingHint').textContent === '업데이트했습니다: savefmt.py'`, 'tree reformat hint');
   check(true, 'tree reformat hint in Korean');
 
   // ---------- quick fixes ----------
@@ -180,7 +180,7 @@ try {
   await click('#pkgUninstall');
   await until(`!!document.querySelector('.dialog')`, 'confirm dialog');
   check(await js(`document.querySelector('.dialog-title').textContent === '패키지 제거' && [...document.querySelectorAll('.dialog-buttons button')].map(b => b.textContent).join('|') === '제거|취소'`), 'uninstall confirmation in Korean');
-  check(/에서 'pyide-probe' 0\.2을\(를\) 제거하시겠습니까\?$/.test(await js(`document.querySelector('.dialog-body').textContent`)), 'uninstall question in Korean');
+  check(/에서 'pyide-probe' 0\.2 패키지를 제거하시겠습니까\?$/.test(await js(`document.querySelector('.dialog-body').textContent`)), 'uninstall question in Korean');
   await leaks('.dialog', 'uninstall confirmation');
   await shot('uninstall-dialog.png');
   await click('.dialog-buttons .primary');

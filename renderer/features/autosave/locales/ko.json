@@ -1,8 +1,8 @@
 {
   "Auto Save": "자동 저장",
   "Saves files when Nano Studio loses focus, when you switch tabs and after an idle time, and runs actions on save such as stripping trailing whitespace.": "Nano Studio가 포커스를 잃을 때, 탭을 전환할 때, 일정 시간 유휴 상태일 때 파일을 저장하고, 후행 공백 제거 등 저장 시 액션을 실행합니다.",
-  "Not auto-saved: {name} changed on disk": "자동 저장 안 됨: 디스크의 {name}이(가) 변경됨",
-  "Not auto-saved: {name} cannot be read": "자동 저장 안 됨: {name}을(를) 읽을 수 없음",
+  "Not auto-saved: {name} changed on disk": "자동 저장 안 됨: 디스크의 '{name}' 파일이 변경됨",
+  "Not auto-saved: {name} cannot be read": "자동 저장 안 됨: '{name}' 파일을 읽을 수 없음",
   "Not auto-saved: {name} cannot be written": "자동 저장 안 됨: {name}에 쓸 수 없음",
   "{count} files not auto-saved": "자동 저장되지 않은 파일 {count}개",
   "Save (overwrite the file on disk)": "저장 (디스크의 파일 덮어쓰기)",

@@ -38,10 +38,14 @@
   const keyHint = (keys) => keys?.map(ide.keymap.format).join(', ') || '';
   // A menu item for a registered action, or null when the plugin that owns it is disabled; disabled when it needs a
   // project and none is open.
+  // A key two actions share, each in its own place (Ctrl+D: Duplicate Line in the editor, Compare With in the project
+  // tree; Ctrl+Shift+T: Go to Test in the editor, New Terminal Session in the terminal), is shown only on the item it
+  // runs from where the keyboard is. The menus leave the keyboard there (no focus on mousedown), so `when` still tells.
+  const trueKeys = (a) => a.keys.filter((k) => !a.when || a.when() || !ide.actions.some((o) => o !== a && o.keys.includes(k)));
   function act(id, extra = {}) {
     const a = ide.actions.find((x) => x.id === id);
     if (!a) return null;
-    return { label: a.title || id, hint: keyHint(a.keys) || a.menuHint, disabled: !ide.actionEnabled(a), run: () => ide.runAction(id), ...extra };
+    return { label: a.title || id, hint: keyHint(trueKeys(a)) || a.menuHint, disabled: !ide.actionEnabled(a), run: () => ide.runAction(id), ...extra };
   }
   // Drops separators left dangling by missing items.
   function tidy(items) {
@@ -101,14 +105,15 @@
     if (ed && text) { ed.focus(); ed.trigger('menu', 'type', { text }); }
   };
   function toolWindowItems() {
-    return [...ide.toolWindows.values()].sort((a, b) => a.order - b.order)
+    return [...ide.toolWindows.values()].filter((tw) => tw.available()).sort((a, b) => a.order - b.order)
       .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, disabled: !ide.root, run: () => tw.show() }));
   }
-  // File › Manage IDE Settings (the settings-sync plugin); left out when that plugin is disabled.
-  function manageSettingsItem() {
-    const items = tidy([act('ImportSettings'), act('ExportSettings')]);
-    return items.length ? { label: tr('Manage IDE Settings'), submenu: () => items } : null;
+  // A submenu of plugin actions, left out when the plugin is disabled (File › Manage IDE Settings: settings-sync).
+  function submenuOf(label, items) {
+    const list = tidy(items);
+    return list.length ? { label, submenu: () => list } : null;
   }
+  const manageSettingsItem = () => submenuOf(tr('Manage IDE Settings'), [act('ImportSettings'), act('ExportSettings')]);
   const MENUS = () => [
     { label: tr('File'), submenu: () => tidy([
       act('NewProject'), act('NewPythonFile'), act('NewScratchFile'), act('NewHttpRequest'), { separator: true },
@@ -116,6 +121,10 @@
       { label: tr('Recent Projects'), submenu: () => recentItems(15), disabled: !recentProjects().length },
       act('CloseProject'), { separator: true },
       act('SaveAll'), act('ShowSettings'), manageSettingsItem(), { separator: true },
+      // File › Local History, as in PyCharm (local-history plugin).
+      submenuOf(tr('Local History'), [act('LocalHistory.ShowHistory', { label: tr('Show History') }),
+        act('LocalHistory.ShowProjectHistory', { label: tr('Show Project History') }), act('LocalHistory.PutLabel', { label: tr('Put Label…') })]),
+      { separator: true },
       act('TogglePowerSave', { checked: !!ide.powerSave?.on() }), { separator: true },
       act('Exit'),
     ]) },
@@ -124,6 +133,8 @@
       act('Cut'), act('Copy'), act('Paste'), act('PasteMultiple'), act('CopyPaths'), { separator: true },
       act('SelectAll'), act('EditorSelectWord'), act('SelectNextOccurrence'), act('UnselectPreviousOccurrence'), act('SelectAllOccurrences'), { separator: true },
       act('Find'), act('Replace'), act('FindInPath'), act('ReplaceInPath'), act('FindUsages'), { separator: true },
+      // Edit › Bookmarks, as in PyCharm (bookmarks plugin).
+      submenuOf(tr('Bookmarks'), [act('ToggleBookmark'), act('ToggleBookmarkWithMnemonic'), act('ShowBookmarks')]), { separator: true },
       // editor-assists: PyCharm's Edit menu order.
       act('EditorCompleteStatement'), act('EditorJoinLines'), act('EditorDuplicate'), act('EditorDeleteLine'), act('EditorToggleCase'),
       act('EditorStartNewLine'), act('EditorStartNewLineBefore'), act('MoveLineUp'), act('MoveLineDown'),
@@ -202,6 +213,9 @@
     menu.id = 'mainMenu';
   }
   $('mainMenuBtn').onclick = openMainMenu;
+  // The keyboard stays where the user was, so the menu's shortcuts are those of that place (trueKeys), and an editor
+  // command run from the menu acts on the editor that had it.
+  $('mainMenuBtn').onmousedown = (e) => e.preventDefault();
 
   // ---------- status-bar interpreter ----------
   $('statusInterp').onclick = () => {
@@ -210,7 +224,8 @@
     ide.ui.contextMenu(r.right - 300, r.top - 8, tidy([
       ...ide.interps.map((it) => ({ label: it.label, detail: it.executable, userText: true, checked: cur && samePath(cur.executable, it.executable), icon: cur && samePath(cur.executable, it.executable) ? undefined : 'python', run: () => ide.setInterpreter(it.executable) })),
       { separator: true },
-      ide.openSettings && { label: tr('Add New Interpreter…'), icon: 'add', run: () => ide.openSettings('interpreter') },
+      ide.openSettings && { label: tr('Add New Interpreter…'), icon: 'add', run: () => ide.openSettings('interpreter', { add: 'menu' }) },
+      ide.root && ide.actions.some((a) => a.id === 'CreateVirtualEnvironment') && { label: tr('Create Virtual Environment…'), icon: 'newFolder', run: () => ide.runAction('CreateVirtualEnvironment') },
       ide.openSettings && { label: tr('Interpreter Settings…'), icon: 'settings', run: () => ide.openSettings('interpreter') },
     ]));
     // The menu opens upward from the status bar.

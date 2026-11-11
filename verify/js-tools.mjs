@@ -8,7 +8,7 @@
 // The fixture's node_modules hold stand-ins for the two CLIs (CI has no network). JS_TOOLS_LIVE=1 runs the same checks
 // once against the real prettier@3 and eslint@9 (JS_TOOLS_PRETTIER / JS_TOOLS_ESLINT pick other versions), installed
 // with npm into verify/out/js-tools-live (removed afterwards).
-// Ports 9876-9877.
+// Ports 9616-9617 (9876 is the default port of the Blender MCP add-on: a suite on it talks to Blender and hangs).
 import { execSync } from 'child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -115,7 +115,7 @@ function done(instance) {
 }
 
 // ================= trusted project, English =================
-t = await launch({ fixture: 'js-tools', port: 9876, name: 'js-tools', projectDir: projects.trusted });
+t = await launch({ fixture: 'js-tools', port: 9616, name: 'js-tools', projectDir: projects.trusted });
 let { check, js, until, sleep, press } = t;
 try {
   await js(`(ide.settings.set('aiComplete.enabled', false), true)`);
@@ -185,8 +185,8 @@ try {
   check(markers.some((m) => m.msg.includes('prefer-const') && m.s === 4), 'prefer-const is a warning marker');
   await press('Alt+6');
   await until(`document.querySelector('#problemList')?.textContent.includes('no-unused-vars')`, 'Problems tool window lists ESLint');
-  const problemRows = await js(`[...document.querySelectorAll('#problemList .problem')].map(r => r.textContent).filter(s => s.includes('lint.js'))`);
-  check(problemRows.some((r) => r.includes('lint.js:2:7') && r.includes('no-unused-vars') && r.includes('eslint')) && problemRows.some((r) => r.includes('prefer-const')), `Problems lists the ESLint findings with their place and rule (${J(problemRows)})`);
+  const problemRows = await js(`[...document.querySelectorAll('#problemList .problem')].filter(r => r.dataset.path.endsWith('lint.js')).map(r => r.textContent)`);
+  check(problemRows.some((r) => r.includes('2:7') && r.includes('no-unused-vars') && r.includes('eslint')) && problemRows.some((r) => r.includes('prefer-const')), `Problems lists the ESLint findings with their place and rule (${J(problemRows)})`);
   await js(`(${ED}.focus(), true)`);
 
   // Quick fixes.
@@ -272,7 +272,7 @@ rmSync(callsLog(projects.trusted), { force: true });
 const userData = path.join(mkdtempSync(path.join(tmpdir(), 'pyide-js-tools-ud-')), 'userdata');
 mkdirSync(userData, { recursive: true });
 writeFileSync(path.join(userData, 'settings.json'), J({ recentProjects: [{ path: projects.trusted, opened: Date.now() }] }));
-t = await launch({ fixture: 'js-tools', port: 9877, name: 'js-tools-ko', lang: 'ko', projectDir: projects.trusted, userData, env: { PYIDE_TRUST_ALL: '' } });
+t = await launch({ fixture: 'js-tools', port: 9617, name: 'js-tools-ko', lang: 'ko', projectDir: projects.trusted, userData, env: { PYIDE_TRUST_ALL: '' } });
 ({ check, js, until, sleep, press } = t);
 try {
   await js(`(ide.settings.set('aiComplete.enabled', false), true)`);

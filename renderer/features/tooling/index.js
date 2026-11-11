@@ -160,10 +160,13 @@
 
   // ---------- lint ----------
   const lintState = new Map(); // path lower -> {version, diags}
+  // Findings Pyright reports too are left out where it does (ide.problems): a syntax error anywhere in the file, an
+  // undefined name on the same line.
+  const YIELDS = { 'invalid-syntax': () => 'syntax', E999: () => 'syntax', F821: (d) => `undefined@${d.location.row}` };
   const toProblem = (d) => ({
     line: d.location.row, col: d.location.column,
     endLine: d.end_location.row, endCol: d.end_location.column,
-    msg: `${d.code} ${d.message}`, severity: 'warning',
+    msg: `${d.code} ${d.message}`, severity: 'warning', yields: YIELDS[d.code]?.(d),
   });
 
   // Ruff that cannot check at all (a configuration it cannot read, ruff.exe blocked) is one problem, on the

@@ -17,3 +17,8 @@
 .console a.console-install[data-state="busy"]::after { opacity: 0.7; }
 .console a.console-install[data-state="done"] { cursor: default; }
 .console a.console-install[data-state="done"]::after { background: var(--green6); }
+
+.import-install-ask { display: flex; flex-direction: column; gap: 6px; }
+.import-install-interp { margin-top: 4px; }
+.import-install-path { font-family: var(--mono); font-size: 12px; color: var(--gray10); overflow-wrap: anywhere; }
+.import-install-global { color: var(--yellow); }

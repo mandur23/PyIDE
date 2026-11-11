@@ -431,7 +431,7 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
   let tailLen = 0;
   let kept = 0;
   const reset = () => {
-    st = PLAIN; held.clear(); line = []; len = 0; col = 0; live = null; tail = null; tailLen = 0; kept = 0;
+    st = PLAIN; held.clear(); line = []; len = 0; col = 0; live = null; tail = null; tailLen = 0; kept = 0; dropped = null;
     stick = true;
     endTop = 0;
   };
@@ -472,11 +472,18 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
     }
     if (kept > consoleCap() + 65536) trim(kept - consoleCap());
   }
+  // The first line once older output was dropped, so the output does not seem to start in the middle of the run.
+  let dropped = null;
   // Drops the first `n` characters of finished output, up to the end of that line when it is near.
   function trim(n) {
+    if (!dropped) {
+      dropped = el('div', 'console-dropped', tr('Earlier output was dropped: the console keeps the last {size} KB.', { size: Math.round(consoleCap() / 1024) }));
+      out.prepend(dropped);
+    }
     const walker = document.createTreeWalker(out, NodeFilter.SHOW_TEXT);
     let removed = 0;
     for (let node = walker.nextNode(); node && removed < n;) {
+      if (dropped.contains(node)) { node = walker.nextNode(); continue; }
       if (live?.contains(node)) break;
       const next = walker.nextNode();
       if (removed + node.length <= n) {
@@ -493,8 +500,8 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
       node = next;
     }
     kept -= removed;
-    while (out.firstChild && out.firstChild !== live && !out.firstChild.textContent) out.firstChild.remove();
-    for (const e of [...(out.firstChild?.querySelectorAll?.('*') || [])]) if (!e.textContent) e.remove();
+    while (dropped.nextSibling && dropped.nextSibling !== live && !dropped.nextSibling.textContent) dropped.nextSibling.remove();
+    for (const e of [...(dropped.nextSibling?.querySelectorAll?.('*') || [])]) if (!e.textContent) e.remove();
     if (tail && !tail.isConnected) { tail = null; tailLen = 0; }
   }
   function drawLine() {
@@ -573,8 +580,23 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
       follow();
     },
     clear: () => { out.replaceChildren(); reset(); },
-    text: () => out.textContent,
+    // What the program printed, without the dropped-output line.
+    text: () => (dropped ? out.textContent.slice(dropped.textContent.length) : out.textContent),
   };
+};
+
+// A row of links under a console's last line, for what the user can do about what it just said (no interpreter: install
+// one, choose one). actions: [{label, run}].
+ide.ui.consoleActions = (con, actions) => {
+  const row = el('div', 'console-actions');
+  for (const a of actions) {
+    const link = el('a', 'console-action', a.label);
+    link.onclick = a.run;
+    row.appendChild(link);
+  }
+  con.out.appendChild(row);
+  con.out.scrollTop = con.out.scrollHeight;
+  return row;
 };
 
 // Keyboard for a tool window's list or tree of rows, as in PyCharm: the list takes focus, Up/Down/Home/End move the
@@ -635,11 +657,16 @@ ide.ui.listKeys = (host, { rows, selected, select, open = (row) => row.click(), 
 let popupState = null;
 let popupFrame = 0; // a draw waiting for the next frame
 const POPUP_ROWS = 200;
-// t: already lowercased.
+// t: already lowercased. A hit inside a word ("로그" in "프로그램") ranks below one at a word's start.
+const wordChar = /[\p{L}\p{N}]/u;
 const fuzzyScore = (t, q) => {
   if (!q) return 1;
   if (t.startsWith(q)) return 4;
-  if (t.includes(q)) return 3;
+  let k = t.indexOf(q);
+  if (k >= 0) {
+    for (; k >= 0; k = t.indexOf(q, k + 1)) if (!wordChar.test(t[k - 1]) || !wordChar.test(q[0])) return 3;
+    return 2;
+  }
   let i = 0;
   for (const ch of t) if (ch === q[i]) i++;
   return i === q.length ? 1 : 0;
@@ -647,17 +674,18 @@ const fuzzyScore = (t, q) => {
 
 // The rows for the typed text: the best POPUP_ROWS, in the order a stable sort by score gives. Scores are 0-9 (the
 // label's twice, plus 1 for the detail), so buckets do it without sorting every item; the lowercased texts are kept
-// for the item list, since Go to File ranks 20,000 files on every keystroke.
+// for the item list, since Go to File ranks 20,000 files on every keystroke. `alias` (an action's English name in
+// another UI language) matches as the label does.
 function popupMatches(s, q) {
   if (s.filter === false) return s.items;
   if (s.lowerOf !== s.items) {
     s.lowerOf = s.items;
-    s.lower = s.items.map((it) => [it.label.toLowerCase(), it.detail ? it.detail.toLowerCase() : null]);
+    s.lower = s.items.map((it) => [it.label.toLowerCase(), it.detail ? it.detail.toLowerCase() : null, it.alias ? it.alias.toLowerCase() : null]);
   }
   const buckets = Array.from({ length: 10 }, () => []);
   for (let i = 0; i < s.items.length; i++) {
-    const [label, detail] = s.lower[i];
-    const sc = fuzzyScore(label, q) * 2 + (detail !== null && fuzzyScore(detail, q) ? 1 : 0);
+    const [label, detail, alias] = s.lower[i];
+    const sc = Math.max(fuzzyScore(label, q), alias !== null ? fuzzyScore(alias, q) : 0) * 2 + (detail !== null && fuzzyScore(detail, q) ? 1 : 0);
     if (sc > 0) buckets[sc].push(s.items[i]);
   }
   const out = [];
@@ -1311,8 +1339,11 @@ function setAreaVisible(area, visible) {
   refreshStripe();
 }
 
-// {id, title, icon, iconName?, side: 'left'|'bottom'|'right', keys?, order?, mount(container, tw)} -> tw {show, hide, toggle, setActions, setBadge, isVisible}
-ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, order = 100, mount }) => {
+// {id, title, icon, iconName?, side: 'left'|'bottom'|'right', keys?, order?, available?() -> bool, mount(container, tw)}
+//   -> tw {show, hide, toggle, setActions, setBadge, isVisible, available}
+// available: whether the window applies to the open project now (Django Structure: a Django project; Find: results to
+// show); View › Tool Windows lists only those, and any window that is open.
+ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, order = 100, available, mount }) => {
   const area = areas[side];
   const container = el('div', 'tool');
   area.body.appendChild(container);
@@ -1336,6 +1367,7 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
     get keys() { return tw.keyAction && ide.actions.some((x) => x.id === tw.keyAction) ? ide.keymap.label(tw.keyAction) : keyText; },
     set keys(v) { keyText = v; }, iconName: iconName || TOOL_ICONS[id], glyph: icon,
     isVisible: () => !area.panel.classList.contains('hidden') && area.active === tw,
+    available: () => { try { return tw.isVisible() || !available || !!available(); } catch { return true; } },
     show() {
       area.active = tw;
       area.picked = true;
@@ -1370,10 +1402,12 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
   ide.toolWindows.set(id, tw);
   // A window opened by its shortcut takes the keyboard, as in PyCharm: its field or list (show() already focuses a field),
   // else the window itself, so Esc (back to the editor) and Shift+Esc (hide) work from it. Other ways of showing it
-  // leave the focus alone.
+  // leave the focus alone. As PyCharm's: the shortcut hides the window only when it already has the keyboard; open but
+  // not focused (the editor has the keyboard), it takes the keyboard.
   const activate = () => {
-    tw.toggle();
-    if (!tw.isVisible() || container.contains(document.activeElement)) return;
+    if (tw.isVisible() && area.panel.contains(document.activeElement)) return tw.hide();
+    if (!tw.isVisible()) tw.show();
+    if (container.contains(document.activeElement)) return;
     const target = [...container.querySelectorAll('[tabindex="0"], input:not([disabled]), textarea:not([disabled])')].find((n) => n.getClientRects().length);
     if (target) return target.focus();
     container.tabIndex = -1;
@@ -1461,11 +1495,24 @@ ide.on('settingsChanged', (key) => { if (key === 'sidebar.pinned') refreshStripe
 const problemStore = new Map(); // source -> Map(pathKey -> {path, items})
 const SEVERITY = () => ({ error: ide.monaco.MarkerSeverity.Error, warning: ide.monaco.MarkerSeverity.Warning, info: ide.monaco.MarkerSeverity.Info });
 
+// One message per problem: an item with `yields` (a linter's "undefined name", "syntax error") is left out while another
+// source reports the same `kind` there: `<kind>@<line>`, or a bare `<kind>` for anywhere in the file. Ruff and Pyright
+// both report these, and Pyright's message is in the UI language.
+function shownItems(key, source) {
+  const items = problemStore.get(source)?.get(key)?.items || [];
+  if (!items.some((p) => p.yields)) return items;
+  const kinds = new Set();
+  for (const [other, files] of problemStore) {
+    if (other === source) continue;
+    for (const p of files.get(key)?.items || []) if (p.kind && !p.yields) kinds.add(p.kind).add(`${p.kind}@${p.line}`);
+  }
+  return kinds.size ? items.filter((p) => !p.yields || !kinds.has(p.yields)) : items;
+}
+
 function applyMarkers(tab) {
   if (!tab?.model) return;
-  for (const [source, files] of problemStore) {
-    const entry = files.get(pathKey(tab.path));
-    ide.monaco.editor.setModelMarkers(tab.model, source, (entry?.items || []).map((p) => ({
+  for (const source of problemStore.keys()) {
+    ide.monaco.editor.setModelMarkers(tab.model, source, shownItems(pathKey(tab.path), source).map((p) => ({
       severity: SEVERITY()[p.severity || 'error'], message: p.msg, source,
       startLineNumber: p.line, startColumn: p.col || 1,
       endLineNumber: p.endLine || p.line, endColumn: Math.max(p.endCol || 0, (p.col || 1) + 1),
@@ -1474,7 +1521,7 @@ function applyMarkers(tab) {
 }
 
 ide.problems = {
-  // items: [{line, col, endLine?, endCol?, msg, severity: 'error'|'warning'|'info'}]
+  // items: [{line, col, endLine?, endCol?, msg, severity: 'error'|'warning'|'info', kind?, yields?}] (see shownItems)
   set(source, path, items) {
     if (!problemStore.has(source)) problemStore.set(source, new Map());
     const files = problemStore.get(source);
@@ -1493,9 +1540,15 @@ ide.problems = {
     }
     ide.emit('problemsChanged');
   },
-  all() {
+  // withHidden: also the items left out as another source's duplicates, marked `hidden`.
+  all({ withHidden = false } = {}) {
     const out = [];
-    for (const [source, files] of problemStore) for (const { path, items } of files.values()) for (const p of items) out.push({ ...p, path, source });
+    for (const [source, files] of problemStore) {
+      for (const [key, { path, items }] of files) {
+        const shown = shownItems(key, source);
+        for (const p of withHidden ? items : shown) out.push({ ...p, path, source, ...(shown.includes(p) ? {} : { hidden: true }) });
+      }
+    }
     return out;
   },
 };
@@ -1548,7 +1601,8 @@ function selectRange(i) {
 }
 
 ide.registerTreeDecorator = (fn) => { treeDecorators.push(fn); };
-// {title, when?(entry, selection), run(entry, selection)}; entry = {name, path, dir}; selection = the selected entries.
+// {title: string | (entry, selection) -> string, when?(entry, selection), run(entry, selection)}; entry = {name, path,
+// dir}; selection = the selected entries. A title function names the row (Run 'main').
 ide.registerTreeAction = (action) => { treeActions.push(action); };
 ide.selectedTreeEntry = () => selected;
 // Every selected entry, the focused one first (Ctrl+click adds and removes rows).
@@ -2087,7 +2141,8 @@ function showTreeMenu(entry, x, y) {
   const treeRoot = treeRootOf(entry);
   const own = treeRoot && (treeRoot.menu?.(entry) || []);
   const sel = ide.selectedTreeEntries();
-  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry, sel)).map((a) => ({ label: a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry, sel) }));
+  const extra = treeRoot ? own : treeActions.filter((a) => !a.when || a.when(entry, sel))
+    .map((a) => ({ label: typeof a.title === 'function' ? a.title(entry, sel) : a.title, hint: a.hint, keyAction: a.keyAction, run: () => a.run(entry, sel) }));
   const fixed = samePath(entry.path, ide.root) || !!entry.fixed;
   ide.ui.contextMenu(x, y, [
     ...(treeRoot ? [] : [
@@ -2363,8 +2418,21 @@ const tooOld = (version) => {
 // selected, so nothing runs until the user chooses (PyCharm's "Invalid Python interpreter selected for the project").
 // One that starts but is not found by the list (a Python the py launcher no longer names) is listed as it is.
 // Safe Mode keeps the project's own venvs unstarted, so there a venv is not checked.
+// With none chosen, the project's own venv is what the list would pick: when the project has venvs and none of them
+// works, the nearest one is reported the same way instead of the global Python running the project unannounced.
 async function chosenInterp(root, interps) {
-  const chosen = root ? ide.settings.get(`interpreter.${root}`, '') : '';
+  let chosen = root ? ide.settings.get(`interpreter.${root}`, '') : '';
+  if (root && !chosen) {
+    // Only the project folder's own venvs (.venv, venv): one deeper down (ai/.venv) belongs to a part of the project.
+    const venvs = (await ide.api.invoke('py:venvs', root).catch(() => [])).filter((v) => samePath(dirname(v), root));
+    const exes = venvs.map((v) => joinPath(v, 'Scripts\\python.exe'));
+    // Reported as broken only when it ran this project before: a folder that merely looks like a venv (made on another
+    // system, half copied, a fixture) never was the project's interpreter, and must not stop Run.
+    const works = exes.find((e) => interps.some((i) => samePath(e, i.executable)));
+    const seen = ide.settings.get(`interpreter.seen.${root}`, '');
+    if (works) { if (!samePath(works, seen)) ide.settings.set(`interpreter.seen.${root}`, works); }
+    else if (seen && exes.some((e) => samePath(e, seen))) chosen = seen;
+  }
   if (!/^([a-z]:[\\/]|\\\\)/i.test(chosen) || interps.some((i) => samePath(i.executable, chosen))) return null;
   const d = await ide.api.invoke('py:diagnose', root, chosen).catch(() => null);
   const venv = /[\\/]Scripts[\\/]python\.exe$/i.test(chosen) ? dirname(dirname(chosen)) : null;
@@ -2374,13 +2442,29 @@ async function chosenInterp(root, interps) {
   const reason = d.state === 'missing' ? tr('{path} does not exist.', { path: chosen }) : tr('{path} does not start: {detail}', { path: chosen, detail: d.detail });
   return { cmd: chosen, args: [], label: tr('{name} (invalid)', { name }), name, executable: chosen, invalid: true, reason, venv, state: d.state };
 }
+const invalidActions = (it) => {
+  const actions = [{ label: tr('Choose Interpreter…'), run: () => ide.openSettings?.('interpreter') }];
+  if (it.venv && isUnder(it.venv, ide.root) && ide.venvSetup?.recreate) actions.push({ label: tr('Recreate {name}', { name: basename(it.venv) }), run: () => ide.venvSetup.recreate(it.venv) });
+  return actions;
+};
+// What Run, Debug and the no-interpreter notification offer when no Python can run the project: for an invalid project
+// interpreter what fixes it, else the IDE's own Python (installer plugin), a Python already on the computer, and the
+// interpreter settings.
+ide.noInterpreterActions = () => {
+  const it = ide.interps?.[$('interpSelect').selectedIndex];
+  if (it?.invalid) return invalidActions(it);
+  return [
+    ...(ide.installer?.ownPython ? [ide.installer.ownPython()] : []),
+    ...(ide.openSettings ? [{ label: tr('Add Local Interpreter…'), run: () => ide.openSettings('interpreter', { add: 'local' }) },
+      { label: tr('Interpreter Settings…'), run: () => ide.openSettings('interpreter') }] : []),
+  ];
+};
 const toldInvalid = new Set();
 function tellInvalid(it) {
   const key = `${ide.root}|${it.executable}|${it.state}`.toLowerCase();
   if (toldInvalid.has(key)) return;
   toldInvalid.add(key);
-  const actions = [{ label: tr('Choose Interpreter…'), run: () => ide.openSettings?.('interpreter') }];
-  if (it.venv && isUnder(it.venv, ide.root) && ide.venvSetup?.recreate) actions.push({ label: tr('Recreate {name}', { name: basename(it.venv) }), run: () => ide.venvSetup.recreate(it.venv) });
+  const actions = invalidActions(it);
   ide.notifications?.notify({
     title: tr('Invalid Python interpreter selected for the project'), kind: 'warning', group: 'Python Interpreter', raw: true, actions,
     text: `${it.reason}\n${tr('Nano Studio does not run the project with another Python in its place. Choose an interpreter, or recreate the virtual environment.')}`,
@@ -2416,7 +2500,7 @@ async function loadInterpreters(seq) {
   sel.innerHTML = '';
   for (const it of ide.interps) sel.add(new Option(it.label));
   if (!ide.interps.length) sel.add(new Option(tr('<No interpreter>')));
-  const preferred = ide.settings.get(`interpreter.${ide.root}`, '');
+  const preferred = ide.settings.get(`interpreter.${ide.root}`, '') || (chosen?.invalid ? chosen.executable : '');
   const idx = ide.interps.findIndex((i) => samePath(i.executable, preferred));
   if (idx >= 0) sel.selectedIndex = idx;
   showInterp(ide.interps[sel.selectedIndex]);
@@ -2437,6 +2521,12 @@ $('interpSelect').onchange = () => {
   if (it && ide.root) ide.settings.set(`interpreter.${ide.root}`, it.executable);
   ide.emit('interpreterChanged', it);
 };
+// An invalid project interpreter is looked at again when the user comes back to the window (a venv recreated or a
+// Python reinstalled outside the IDE) and before a run starts, so the status bar does not keep saying it is invalid.
+ide.recheckInvalidInterpreter = async () => {
+  if (ide.interps?.[$('interpSelect').selectedIndex]?.invalid) await ide.reloadInterpreters();
+};
+window.addEventListener('focus', () => { ide.recheckInvalidInterpreter(); });
 
 // ---------- project ----------
 // A folder the user has not trusted (main/trust.js) asks first, like PyCharm's "Trust and Open Project": trusted, it
@@ -2652,7 +2742,7 @@ function monacoActions() {
 async function findAction() {
   const action = await ide.ui.pick({
     placeholder: tr('Search actions'),
-    items: [...ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, hint: a.keys.map(ide.keymap.format).join(', '), value: a })), ...monacoActions()],
+    items: [...ide.actions.filter((a) => a.title).map((a) => ({ label: a.title, alias: i18n.english(a.title), hint: a.keys.map(ide.keymap.format).join(', '), value: a })), ...monacoActions()],
   });
   action?.run();
 }
@@ -2677,7 +2767,9 @@ const editorAction = (id) => Object.assign(() => ide.editor?.trigger('keymap', i
   { id: 'CommentByBlockComment', title: tr('Comment with Block Comment'), keys: 'Ctrl+Shift+/', when: inEditor, run: editorAction('editor.action.blockComment') },
   { id: 'GotoLine', title: tr('Go to Line…'), keys: 'Ctrl+G', when: inEditor, run: editorAction('editor.action.gotoLine') },
   { id: 'Find', title: tr('Find'), keys: 'Ctrl+F', when: inEditor, run: editorAction('actions.find') },
-  { id: 'Replace', title: tr('Replace'), keys: 'Ctrl+R', when: inEditor, run: editorAction('editor.action.startFindReplaceAction') },
+  // As in PyCharm, Ctrl+R in the find bar turns it into the replace bar.
+  { id: 'Replace', title: tr('Replace'), keys: 'Ctrl+R', context: 'editor', when: () => inEditor() || !!document.activeElement?.closest('.find-widget') && !!ide.editor?.getDomNode()?.contains(document.activeElement),
+    run: editorAction('editor.action.startFindReplaceAction') },
   { id: 'EditorSelectWord', title: tr('Extend Selection'), keys: 'Ctrl+W', when: inEditor, run: editorAction('editor.action.smartSelect.expand') },
   { id: 'EditorUnSelectWord', title: tr('Shrink Selection'), keys: 'Ctrl+Shift+W', when: inEditor, run: editorAction('editor.action.smartSelect.shrink') },
   { id: 'MoveLineUp', title: tr('Move Line Up'), keys: 'Alt+Shift+ArrowUp', when: inEditor, run: editorAction('editor.action.moveLinesUpAction') },
@@ -2750,7 +2842,9 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   const createDiffEditor = monaco.editor.createDiffEditor;
   monaco.editor.createDiffEditor = (el, options, override) => {
     el.classList.add('monaco-component');
-    const diff = createDiffEditor(el, { renderGutterMenu: false, ...options }, override);
+    // No inlay hints in a diff: the working copy shares the editor's model and got them, the other side never does,
+    // so lines that are the same looked changed.
+    const diff = createDiffEditor(el, { renderGutterMenu: false, inlayHints: { enabled: 'off' }, ...options }, override);
     const dispose = diff.dispose.bind(diff);
     diff.dispose = () => {
       try { diff.setModel(null); } catch {}

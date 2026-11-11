@@ -263,6 +263,23 @@
 
   ide.registerAction({ id: 'CreateVirtualEnvironment', title: tr('Create Virtual Environment…'), run: openDialog });
 
+  // The first run of a project on a Python that is not a virtual environment (a system install, Nano Studio Python) says
+  // so once per project, under the run's output: packages installed for the project would go into a Python every
+  // project shares, as PyCharm's "no virtual environment" warning says. A project whose bar shows already knows.
+  // -> {text, actions} to show, or null.
+  const NOTED = (root) => `venvPrompt.systemNoted:${root}`;
+  const isVenvPython = (exe) => /[\\/]Scripts[\\/]pythonw?\.exe$/i.test(exe || '');
+  function systemPythonNote(interp) {
+    const root = ide.root;
+    if (!root || ide.trusted === false || !interp || interp.target || interp.invalid || isVenvPython(interp.executable)) return null;
+    if (ide.interps.some((i) => isUnder(i.executable || '', root)) || ide.settings.get(NOTED(root), false) || ide.settings.get(IGNORE(root), false) || bar.dataset.state) return null;
+    ide.settings.set(NOTED(root), true);
+    return {
+      text: tr('This project has no virtual environment: it runs on {interpreter}, and packages installed for it are shared with every project that uses that Python.', { interpreter: interp.executable }),
+      actions: [{ label: tr('Create Virtual Environment…'), run: openDialog }],
+    };
+  }
+
   ide.on('projectOpened', () => { hide(); evaluate(); });
   ide.on('projectClosed', () => { seq++; hide(); });
   ide.on('interpreterChanged', () => { if (bar.dataset.state === 'prompt') evaluate(); });
@@ -272,5 +289,5 @@
   });
   if (ide.root) evaluate();
 
-  ide.venvSetup = { create: create_, recreate, openDialog, evaluate, state: () => bar.dataset.state || null };
+  ide.venvSetup = { create: create_, recreate, openDialog, evaluate, systemPythonNote, state: () => bar.dataset.state || null };
 })();

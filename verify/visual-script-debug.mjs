@@ -91,6 +91,12 @@ const waitPaused = (ctx, id, label, ms = 30000) => ctx.until(`ide.debugger.stopp
     const seen = await ctx.js(`JSON.stringify({ active: ide.debugger.isActive(), stopped: ide.debugger.stopped(), paused: document.querySelector(${S(HOST)})?.dataset.paused || null, out: (document.querySelector('#dbgOut')?.textContent || '').slice(-800), dialogs: [...document.querySelectorAll('.dialog')].map((d) => d.textContent.slice(0, 300)) })`).catch(() => 'n/a');
     throw new Error(`${e.message}: ${seen}`);
   });
+// A first-opened project starts with the bottom panel closed, so the graph was fitted to the whole editor and the Debug
+// window the pause opens covers its lowest nodes (Python Expression): fitted again, every pin can be hovered.
+async function refit(ctx) {
+  await ctx.js(`(${V}.fit(), true)`);
+  await ctx.js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
+}
 const waitEnded = (ctx, label) => ctx.until(`!ide.debugger.isActive() && (document.querySelector('#dbgOut')?.textContent || '').includes('Process finished with exit code')`, label, 30000);
 // Hovers a point and resolves the value bubble's text.
 async function hoverValue(ctx, ui, p, label) {
@@ -176,6 +182,7 @@ try {
   check(await js(`(() => { const c = document.querySelector(${S(`${HOST} .vs-canvas`)}).getBoundingClientRect(); const r = document.querySelector(${S(node('n4'))}).getBoundingClientRect();
     return r.left >= c.left && r.right <= c.right && r.top >= c.top && r.bottom <= c.bottom; })()`), 'the paused node is in view');
   await shot('paused.png');
+  await refit(t);
 
   check(await hoverValue(t, ui, await ui.center(pin('n3', 'out', 'index')), 'the index pin') === '0', 'hovering the loop index pin shows 0');
   check(await hoverValue(t, ui, await ui.wireMid('n8', 'n4'), 'the Math wire') === '0', 'hovering a wire shows its value (total + index = 0)');
@@ -362,6 +369,7 @@ try {
     await ko.until(`document.querySelector('#dbgVars').textContent.includes('범위 반복 (for range) (n3) = {int} 0')`, 'Korean: the loop index in Variables');
     const koIndex = await ko.js(`[...document.querySelectorAll('#dbgVars .dbg-name')].find((x) => x.textContent === '범위 반복 (for range) (n3)')?.title`);
     ko.check(koIndex === 'index_n3 = 0', `Korean: Variables names the loop index with the node's Korean title, index_n3 in the tooltip (${koIndex})`);
+    await refit(ko);
     const ne = await hoverValue(ko, kui, await kui.center(pin('n10', 'out', 'result')), 'Korean Python Expression');
     ko.check(ne === '(평가하지 않음: 코드를 다시 실행하게 됩니다)', `Korean: the not-evaluated note (${ne})`);
     ko.check(await hoverValue(ko, kui, await kui.center(pin('n3', 'out', 'index')), 'Korean index') === '0', 'Korean: values on hover');

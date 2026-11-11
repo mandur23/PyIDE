@@ -187,8 +187,7 @@ try {
   check(true, 'open editor reloads rolled back file');
 
   // --- Git log (Alt+9) ---
-  await js(`ide.editor.focus()`);
-  if (await js(`ide.toolWindows.get('Git').isVisible()`)) await press('Alt+9');
+  await js(`(ide.toolWindows.get('Git').hide(), ide.editor.focus(), true)`);
   await press('Alt+9');
   await until(`ide.toolWindows.get('Git').isVisible() && document.querySelectorAll('.vcs-log-rows .vcs-log-row').length === 2`, 'log rows');
   const firstRow = await js(`[...document.querySelectorAll('.vcs-log-rows .vcs-log-row')][0].textContent`);
@@ -363,6 +362,24 @@ try {
   check(await js(`document.querySelector('.custom-tab:not(.hidden)')._vcsDiff.getOriginalEditor().getValue().startsWith('# 한글')`), 'the diff with HEAD shows a CP949 file\'s Korean text');
   await press('Ctrl+F4');
   await js(`(ide.closeTab(ide.util.joinPath(ide.root, 'legacy.py'), true), true)`);
+
+  // The tab limit closing the editor tab whose model a diff shows: the diff keeps the document, no internal error.
+  const BOM = path.join(project, 'bom.py');
+  await openFile(t, 'bom.py');
+  await js(`ide.runAction('Compare.SameVersion')`);
+  await until(`!!document.querySelector('.custom-tab:not(.hidden)')?._vcsDiff`, 'bom.py diff tab');
+  const errorsBefore = (await js(`ide.api.invoke('diagnostics:errors').then((l) => l.length)`));
+  const limitWas = await js(`ide.settings.get('editor.tabLimit')`);
+  await js(`(ide.settings.set('editor.tabLimit', 2), true)`);
+  await openFile(t, 'legacy.py');
+  await until(`!ide.tabs.some((x) => x.kind === 'file' && x.title === 'bom.py')`, 'the tab limit closes bom.py');
+  await sleep(300);
+  const kept = await js(`(() => { const d = ide.tabs.find(x => x.title === 'Diff: bom.py'); const m = d?.host._vcsDiff?.getModifiedEditor().getModel();
+    return { open: !!d, model: !!m && !m.isDisposed(), same: !!m && m === ide.getDocument(${JSON.stringify(BOM)})?.model }; })()`);
+  const errorsAfter = await js(`ide.api.invoke('diagnostics:errors').then((l) => l.slice(${errorsBefore}).map((e) => e.message))`);
+  check(kept.open && kept.model && kept.same && !errorsAfter.length,
+    `the tab limit closing a file a diff shows leaves the diff open with its document and no internal error (${JSON.stringify({ kept, errorsAfter })})`);
+  await js(`(ide.settings.set('editor.tabLimit', ${JSON.stringify(limitWas ?? 10)}), ide.closeTab(ide.tabs.find(x => x.title === 'Diff: bom.py').path, true), ide.closeTab(ide.util.joinPath(ide.root, 'legacy.py'), true), true)`);
 
   // --- external change picked up on window focus ---
   writeFileSync(path.join(project, 'README.md'), '# VCS fixture\n\nEdited outside.\n');

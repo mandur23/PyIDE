@@ -8,7 +8,7 @@
   "The file is not in the project.": "파일이 프로젝트에 없습니다.",
   "Program is not specified.": "프로그램이 지정되지 않았습니다.",
   "Working directory does not exist: {path}": "작업 디렉터리가 존재하지 않습니다: {path}",
-  "Process finished with exit code {code}": "종료 코드 {code}(으)로 완료된 프로세스",
+  "Process finished with exit code {code}": "프로세스 완료(종료 코드 {code})",
   "Exit code {code}": "종료 코드 {code}",
   "Open a project to set up its file watchers.": "파일 감시기를 설정하려면 프로젝트를 여세요.",
   "Watchers belong to this project and are kept in your settings, not in the project folder.": "감시기는 이 프로젝트에 속하며 프로젝트 폴더가 아닌 사용자 설정에 저장됩니다.",

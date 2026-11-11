@@ -5,6 +5,13 @@ import { launch, openFile } from './lib.mjs';
 
 const t = await launch({ fixture: 'search-nav', port: 9403, env: { PYIDE_FIND_TIMEOUT_MS: '4000', PYIDE_REPLACE_TIMEOUT_MS: '4000' } });
 const { js, until, press, type, click, shot, cdp, project, sleep } = t;
+// The fixture's myenv is a bare pyvenv.cfg (a folder the searches must skip). The IDE now takes a project venv as the
+// project's interpreter and refuses a broken one, which left Structure and the symbol index without Python: make it
+// a real venv of the Python running the tests (no pip, nothing downloaded).
+execFileSync(process.platform === 'win32' ? 'py' : 'python3', ['-3', '-m', 'venv', '--without-pip', path.join(project, 'myenv')]);
+await js(`(ide.reloadInterpreters?.(), true)`);
+await sleep(3000);
+await js(`document.querySelectorAll('.ide-balloon').forEach((b) => b.remove())`);
 let seenErrors = 0;
 const check = (ok, label) => {
   t.check(ok, label);
@@ -258,6 +265,8 @@ try {
   await press('Enter');
   await until(`!!document.querySelector('#snReplaceAll')`, 'Replace All in find window');
   await shot('replace-window.png');
+  const preview = await js(`[...document.querySelectorAll('#snFindResults .sn-match')].map((r) => [r.querySelector('.sn-old')?.textContent, r.querySelector('.sn-new')?.textContent])`);
+  check(preview.length >= 3 && preview.every(([a, b]) => a === 'compute' && b === 'calculate'), `the results show each match with its replacement (${J(preview.slice(0, 3))})`);
   const disk = (rel) => readFileSync(path.join(project, rel), 'utf8');
   const notesBefore = disk('notes.txt');
   const historyLabels = () => js(`ide.api.invoke('localHistory:list', ide.root, ide.root, true).then(r => r.labels.map(l => l.l))`);
@@ -426,6 +435,46 @@ try {
   check(await until(`(document.querySelector('#snFindHead')?.textContent || '').includes('The search was stopped after 4 seconds')`, 'stopped message', 15000).then(() => true, () => false),
     'the Find tool window reports a search stopped at its time limit');
   writeFileSync(path.join(project, 'backtrack.txt'), 'gone\n');
+
+  // ---- Replace All past the 5,000 matches the list shows, and its one-step Undo ----
+  // 300 files with 20 matches each: the list stops at 5,000, Replace All counts and replaces all 6,000.
+  const capDir = path.join(project, 'cap');
+  mkdirSync(capDir);
+  const CAP_TEXT = 'captoken line\n'.repeat(20);
+  for (let i = 0; i < 300; i++) writeFileSync(path.join(capDir, `c${String(i).padStart(4, '0')}.txt`), CAP_TEXT);
+  writeFileSync(path.join(project, 'cap_open.txt'), 'captoken in an open file\n');
+  await openFile(t, 'cap_open.txt');
+  await js(`ide.editor.focus(), ide.editor.setPosition({ lineNumber: 1, column: 1 })`);
+  await type('x');
+  await js(`ide.editor.focus()`);
+  await press('Ctrl+Shift+R');
+  await until(`!!document.querySelector('#snReplace') && document.activeElement?.id === 'snQuery'`, 'replace dialog for captoken');
+  await setToggle('regex', false);
+  await setToggle('caseSensitive', true);
+  await setQuery('captoken');
+  await js(`document.querySelector('#snReplace').select()`);
+  await type('capdone');
+  const capStatus = await until(`/^More than 5000 matches/.test(document.querySelector('#snStatus')?.textContent || '')`, 'capped status', 15000)
+    .then(() => js(`document.querySelector('#snStatus').textContent`), () => js(`document.querySelector('#snStatus')?.textContent`));
+  check(/^More than 5000 matches; the first 5000 are shown/.test(capStatus), `the status says the list is capped, not that 5000 is the count (${capStatus})`);
+  const cancelled = await js(`(async () => { const p = ide.api.invoke('search:findAll', ide.root, { query: 'captoken', caseSensitive: true, words: false, regex: false, mask: '', dir: null, replacement: '' }, {}, 'cancel-me'); ide.api.invoke('search:cancelFindAll', 'cancel-me'); return p; })()`);
+  check(cancelled.cancelled === true, `the full count before Replace All can be cancelled (${J(cancelled)})`);
+  await answer('Replace All');
+  await until(`/^Replace 6001 occurrences in 301 files\\?$/.test(${'[...document.querySelectorAll(\'#dialogHost .dialog-message\')].pop()?.textContent || \'\''})`, 'the true count in the question', 60000)
+    .then(() => check(true, 'Replace All asks with the true count: "Replace 6001 occurrences in 301 files?"'), async () => check(false, `Replace All asks with the true count (${J(await question())})`));
+  await answer('Replace');
+  await until(`document.querySelector('#snFindHead')?.textContent.includes('Replaced 6001 occurrences in 301 files')`, 'replaced everything', 60000)
+    .then(() => check(true, 'every match is replaced, past the 5000 shown'), async () => check(false, `every match is replaced (${J(await js(`document.querySelector('#snFindHead')?.textContent`))})`));
+  const capFiles = readdirSync(capDir).map((n) => readFileSync(path.join(capDir, n), 'utf8'));
+  check(capFiles.length === 300 && capFiles.every((s) => !s.includes('captoken') && s.split('capdone').length === 21), 'all 300 closed files are rewritten');
+  check(await js(`ide.findTab(ide.util.joinPath(ide.root, 'cap_open.txt')).model.getValue()`) === 'xcapdone in an open file\n', 'and the unsaved buffer');
+  check(await js(`ide.notifications.list().some((n) => n.title === 'Replaced 6001 occurrences in 301 files' && n.actions?.some((a) => a.label === 'Undo'))`), 'a balloon reports it and offers Undo');
+  await click('#snUndoReplace');
+  await until(`document.querySelector('#snFindHead')?.textContent.includes('Replace undone')`, 'undone', 60000).catch(() => {});
+  const undone = readdirSync(capDir).map((n) => readFileSync(path.join(capDir, n), 'utf8'));
+  check(undone.every((s) => s === CAP_TEXT) && await js(`ide.findTab(ide.util.joinPath(ide.root, 'cap_open.txt')).model.getValue()`) === 'xcaptoken in an open file\n',
+    'Undo Replace puts every file and the buffer back in one step');
+  await js(`(ide.closeTabObject(ide.findTab(ide.util.joinPath(ide.root, 'cap_open.txt')), true), true)`);
 
   // ---- Find in a directory from the project tree ----
   await press('Alt+1');

@@ -91,3 +91,6 @@
 .sn-fs-row.active { background: var(--blue2); }
 .sn-fs-row.dim .sn-name { color: var(--gray7); }
 :root[data-theme="light"] .sn-fs { background: #ffffff; }
+.sn-old { text-decoration: line-through; }
+.sn-new { background: var(--sn-new-bg, #2f4a2f); color: var(--sn-hit-fg); border-radius: 2px; margin-left: 1px; }
+:root[data-theme="light"] .sn-new { background: #c9e6cf; }

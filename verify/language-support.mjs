@@ -5,11 +5,13 @@
 // headings and list continuation on Enter; Enter indentation and closing-word outdent in Lua and shell; XML tag
 // closing; Java, JavaScript/TypeScript and C/C++ live templates and postfix templates, not in strings; the Live
 // Templates page's language list; the new strings in Korean. Ports 9870-9871.
-import { launch, openFile } from './lib.mjs';
+import { launch, openFile, tempDir } from './lib.mjs';
 import { missingTranslations } from './i18n-lib.mjs';
 
 const J = JSON.stringify;
-const t = await launch({ fixture: 'language-support', port: 9870 });
+// An empty install root: with JDT LS installed under ~\.pyide and a JDK 21 on this computer, the fixture's pom.xml
+// starts Java's server on project open, it is ready within seconds and answers "whi" itself (nothing outside a class).
+const t = await launch({ fixture: 'language-support', port: 9870, env: { PYIDE_INSTALL_ROOT: tempDir('language-support-root') } });
 const { js, until, press, type, check, sleep, cdp } = t;
 
 const edFor = (name) => `ide.monaco.editor.getEditors().find(e => e.getModel()?.uri.path.endsWith('/${name}') && e.getDomNode()?.isConnected)`;

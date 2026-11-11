@@ -1,8 +1,9 @@
 // Window › Layouts, as in PyCharm: tool window layouts saved under a name and restored later, IDE-wide (setting
 // `toolWindowLayouts`, a list of {name, layout}). A layout is, per area (left, bottom, right), whether it is open, the
 // window it shows (also when closed) and its size, plus the windows pinned to the sidebar stripes. Restore Default
-// Layout (PyCharm's RestoreFactoryDefaultLayout) brings back the first-run layout: Project on the left and the
-// lowest-ordered bottom window open at their default sizes, the right side closed, the default pinned set.
+// Layout (PyCharm's RestoreFactoryDefaultLayout) brings back the first-run layout: Project on the left at its default
+// size, the bottom panel closed until something runs (the lowest-ordered window chosen there), the right side closed,
+// the default pinned set.
 // Restore Current Layout (Shift+F12) and Save Changes in Current Layout work on the layout last saved or restored.
 (() => {
   const KEY = 'toolWindowLayouts';
@@ -25,7 +26,7 @@
   }
   // The first-run layout (see the core's registerToolWindow: an area's default window has the lowest order).
   const defaultLayout = () => ({
-    areas: { left: { visible: true, active: null, size: '' }, bottom: { visible: true, active: null, size: '' }, right: { visible: false, active: null, size: '' } },
+    areas: { left: { visible: true, active: null, size: '' }, bottom: { visible: false, active: null, size: '' }, right: { visible: false, active: null, size: '' } },
     pinned: ide.sidebar.defaultPinned(),
   });
   // Settings may hold anything (hand-edited, another version): a layout is read field by field.
@@ -219,6 +220,12 @@
     // restore's own opens and its last front tabs would cover it. The other projectOpened handlers (Workspace Home)
     // have run after the first await.
     await null;
+    // A project opened for the first time has nothing to show in the bottom panel: like PyCharm, it opens closed and the
+    // first run opens it (Run shows its window). Once the project has a record, its own layout comes back below.
+    if (!saved && sameProject()) {
+      const shown = windowsOn('bottom').find((tw) => tw.isVisible());
+      if (shown?.id === 'Run' && !ide.run?.sessions().length) await apply({ areas: { bottom: { visible: false, active: 'Run', size: sizeOf('bottom', shown.area.panel) } } });
+    }
     const front = {
       tab: ide.activeTab(),
       picked: null,

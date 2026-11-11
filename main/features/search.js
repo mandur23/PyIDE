@@ -234,14 +234,17 @@ function describe(text, starts, index, length) {
   return { line: li + 1, col: col + 1, len, text: line, start: col - from, end: col - from + len, clipped: from > 0 };
 }
 
-function findIn(text, { re, perLine }, limit) {
+// Each match also carries `rep`, the text Replace would put there (groups expanded), for the replace preview.
+function findIn(text, { re, rep, perLine }, limit) {
   const out = [];
   const { flat } = normalized(text);
   let starts;
-  for (const { m, index } of matchesOf(flat, re, perLine)) {
+  for (const { m, index, str } of matchesOf(flat, re, perLine)) {
     if (out.length >= limit) break;
     starts ??= lineStarts(flat);
-    out.push(describe(flat, starts, index, m[0].length));
+    const args = [...m, m.index, str];
+    if (m.groups !== undefined) args.push(m.groups);
+    out.push({ ...describe(flat, starts, index, m[0].length), rep: expandReplacement(rep, args) });
   }
   return out;
 }
@@ -390,12 +393,59 @@ function replaceFile(p, buf) {
   }
 }
 
-// UTF-8 files only; the others are returned as `foreign` for the main side to rewrite in their own encoding.
-function replaceIn(paths, opts) {
+// The files in a search's scope (folder, mask, exclusions), for a search that must see every match.
+function scopePaths(root, opts, excluded) {
+  const accept = maskMatcher(opts.mask);
+  const out = [];
+  walk(opts.dir || root, (p) => { if (accept(p)) out.push(p); }, excluded);
+  return out;
+}
+
+// Each of `paths` that has a match, with how many and no lines -> {files: [{path, count}], count}. Replace All
+// replaces in every one of them, also past the 5,000 matches the results list stops at.
+async function countIn(paths, opts, overrides) {
+  const c = compile(opts);
+  const unsaved = overrideOf(overrides);
+  const texts = new Array(paths.length);
+  let ahead = 0;
+  const files = [];
+  let count = 0;
+  for (let i = 0; i < paths.length; i++) {
+    for (; ahead < paths.length && ahead < i + READ_AHEAD; ahead++) texts[ahead] = unsaved(paths[ahead]) ?? cachedText(paths[ahead]);
+    const text = await texts[i];
+    texts[i] = undefined;
+    if (text == null) continue;
+    let n = 0;
+    for (const _ of matchesOf(normalized(text).flat, c.re, c.perLine)) n++;
+    if (n) { files.push({ path: paths[i], count: n }); count += n; }
+  }
+  return { files, count };
+}
+
+// Puts back the bytes a Replace All wrote over, in the files that still hold what it wrote -> {restored, changed}.
+function restoreIn(entries) {
+  const restored = [];
+  const changed = [];
+  for (const { path: p, before, after } of entries) {
+    try {
+      if (!Buffer.from(after).equals(fs.readFileSync(p))) { changed.push(p); continue; }
+      replaceFile(p, Buffer.from(before));
+      restored.push(p);
+    } catch {
+      changed.push(p);
+    }
+  }
+  return { restored, changed };
+}
+
+// UTF-8 files only; the others are returned as `foreign` for the main side to rewrite in their own encoding. With
+// `journal`, the bytes before and after of each file written come back too, for Undo.
+function replaceIn(paths, opts, journal = false) {
   const c = compile(opts);
   const changed = [];
   const foreign = [];
   const skipped = [];
+  const written = [];
   let count = 0;
   for (const p of paths) {
     try {
@@ -409,14 +459,16 @@ function replaceIn(paths, opts) {
       const bom = text.charCodeAt(0) === 0xfeff ? '﻿' : '';
       const { text: next, count: n } = replaceText(text.slice(bom.length), c);
       if (!n || bom + next === text) continue;
-      replaceFile(p, Buffer.from(bom + next, 'utf8'));
+      const out = Buffer.from(bom + next, 'utf8');
+      replaceFile(p, out);
       changed.push(p);
+      if (journal) written.push({ path: p, before: raw, after: out });
       count += n;
     } catch (e) {
       skipped.push(skip(p, 'error', e));
     }
   }
-  return { changed, count, foreign, skipped };
+  return { changed, count, foreign, skipped, written };
 }
 
 const COMMENT = { js: '//', ts: '//', jsx: '//', tsx: '//', java: '//', c: '//', h: '//', cpp: '//', go: '//', rs: '//', kt: '//', swift: '//' };
@@ -510,7 +562,7 @@ const replaceTexts = (texts, opts) => {
   const c = compile(opts);
   return texts.map((t) => replaceText(t, c));
 };
-const SCANS = { find, replace: (paths, opts) => replaceIn(paths, opts), replaceTexts, todos, pyFiles, invalidate: invalidateScans };
+const SCANS = { find, replace: replaceIn, replaceTexts, todos, pyFiles, invalidate: invalidateScans, scopePaths, countIn, restore: restoreIn };
 if (!isMainThread && workerData?.role === 'pyide-search') {
   // One request at a time, answered in order (worker-host times the first one waiting), although find awaits reads.
   let queue = Promise.resolve();
@@ -552,7 +604,7 @@ function keyedOverrides(overrides) {
 // within `timeout` ms (ETIMEDOUT past it), as it does for the other files: on this thread a user's regex that
 // backtracks for hours froze every window. A file whose encoding cannot hold the new text (an emoji into CP949) is
 // left as it was and reported.
-async function replaceForeign(paths, opts, timeout) {
+async function replaceForeign(paths, opts, timeout, written = null) {
   const changed = [];
   const skipped = [];
   let count = 0;
@@ -576,7 +628,9 @@ async function replaceForeign(paths, opts, timeout) {
         skipped.push({ path: p, reason: 'encoding', encoding: file.encoding });
         continue;
       }
+      const before = written && await fs.promises.readFile(p);
       await textCodec.writeAsync(p, text, file.encoding);
+      if (written) written.push({ path: p, before, after: await fs.promises.readFile(p) });
       changed.push(p);
       count += n;
     } catch (e) {
@@ -593,6 +647,23 @@ const FIND_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 60000;
 const PREVIEW_TIMEOUT = Number(process.env.PYIDE_FIND_TIMEOUT_MS) || 30000;
 const REPLACE_TIMEOUT = Number(process.env.PYIDE_REPLACE_TIMEOUT_MS) || 120000;
 const SUPERSEDED = () => ({ files: [], count: 0, superseded: true });
+const ALL_BATCH = 400;
+const allSearches = new Map(); // search:findAll token -> AbortController
+const JOURNAL_BYTES = 256 * 1024 * 1024;
+const journals = new Map(); // id -> [{path, before, after}], oldest first
+let journalSeq = 0;
+function keepJournal(entries) {
+  const size = (list) => list.reduce((n, e) => n + e.before.length + e.after.length, 0);
+  if (!entries?.length || size(entries) > JOURNAL_BYTES) return null;
+  const id = ++journalSeq;
+  journals.set(id, entries);
+  let total = 0;
+  for (const [k, list] of [...journals].reverse()) {
+    total += size(list);
+    if (total > JOURNAL_BYTES || k <= id - 5) journals.delete(k);
+  }
+  return id;
+}
 const findOnWorker = (args, timeout, signal) => scan.with({ timeout, signal }, 'find', ...args).catch((e) => {
   if (e.code === 'ABORT_ERR') return SUPERSEDED();
   if (e.code === 'ETIMEDOUT') return { files: [], count: 0, stopped: timeout / 1000 };
@@ -943,20 +1014,61 @@ exports.register = ({ ipcMain, app }) => {
   });
   // {changed, count, skipped}, or {stopped} when the worker was stopped partway: some of `paths` may then have been
   // replaced.
+  // Undo of a Replace All: the bytes of every file it wrote, before and after, kept for the last few replaces while
+  // they fit in JOURNAL_BYTES -> `journal` (an id for search:undoReplace), absent when they did not fit.
   ipcMain.handle('search:replace', async (_e, opts, paths) => {
     const until = Date.now() + REPLACE_TIMEOUT;
     let res;
     try {
-      res = await scan.with({ timeout: REPLACE_TIMEOUT, resend: false }, 'replace', paths, opts);
+      res = await scan.with({ timeout: REPLACE_TIMEOUT, resend: false }, 'replace', paths, opts, true);
       // Replaced by rename on the worker: the language server's watcher is to see a change, not a new file.
       res.changed.forEach(textCodec.noteReplaced);
-      const other = await replaceForeign(res.foreign, opts, Math.max(1, until - Date.now()));
-      return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped] };
+      const written = res.written;
+      const other = await replaceForeign(res.foreign, opts, Math.max(1, until - Date.now()), written);
+      return { changed: [...res.changed, ...other.changed], count: res.count + other.count, skipped: [...res.skipped, ...other.skipped], journal: keepJournal(written) };
     } catch (e) {
       if (e.code === 'ETIMEDOUT') return { changed: res?.changed || [], count: res?.count || 0, stopped: REPLACE_TIMEOUT / 1000 };
       throw e;
     }
   });
+  // -> {restored, changed}: the files put back, and those changed again since (left as they are).
+  ipcMain.handle('search:undoReplace', async (_e, id) => {
+    const entries = journals.get(id);
+    if (!entries) return { restored: [], changed: [], gone: true };
+    journals.delete(id);
+    const r = await scan('restore', entries);
+    r.restored.forEach(textCodec.noteReplaced);
+    return r;
+  });
+  // Every match in scope, counted file by file in batches -> {files: [{path, count}], count}, {cancelled}, {stopped}
+  // or {failed}; each batch sends search:findAllProgress {token, done, total, count}. search:cancelFindAll stops it.
+  ipcMain.handle('search:findAll', async (e, root, opts, overrides, token) => {
+    const ctl = new AbortController();
+    allSearches.set(token, ctl);
+    const ask = (op, ...args) => scan.with({ timeout: FIND_TIMEOUT, signal: ctl.signal }, op, ...args);
+    try {
+      dropPreviews();
+      const paths = await ask('scopePaths', root, opts, excludedOf(root));
+      const keyed = keyedOverrides(overrides);
+      const files = [];
+      let count = 0;
+      for (let i = 0; i < paths.length; i += ALL_BATCH) {
+        const r = await ask('countIn', paths.slice(i, i + ALL_BATCH), opts, keyed);
+        files.push(...r.files);
+        count += r.count;
+        if (!e.sender.isDestroyed()) e.sender.send('search:findAllProgress', { token, done: Math.min(i + ALL_BATCH, paths.length), total: paths.length, count });
+      }
+      files.sort((a, b) => a.path.localeCompare(b.path));
+      return { files, count };
+    } catch (err) {
+      if (err.code === 'ABORT_ERR') return { files: [], count: 0, cancelled: true };
+      if (err.code === 'ETIMEDOUT') return { files: [], count: 0, stopped: FIND_TIMEOUT / 1000 };
+      return { files: [], count: 0, failed: err.message };
+    } finally {
+      allSearches.delete(token);
+    }
+  });
+  ipcMain.handle('search:cancelFindAll', (_e, token) => { allSearches.get(token)?.abort(); });
   // The same replacement applied to an unsaved buffer's text -> {text, count}, the text unchanged when the pattern ran
   // past the limit ({stopped}).
   ipcMain.handle('search:replaceText', async (_e, opts, text) => {

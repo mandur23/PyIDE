@@ -680,9 +680,14 @@
     grid.appendChild(homeLaunchers);
     renderHomeLaunchers();
 
-    const venvCard = card(tr('Virtual Environments'), 'ws-card-venvs');
+    const canCreate = ide.trusted !== false && ide.actions.some((a) => a.id === 'CreateVirtualEnvironment');
+    const createVenv = () => button('ws-link-btn ws-create-venv', tr('Create Virtual Environment…'), '', () => ide.runAction('CreateVirtualEnvironment'));
+    const venvCard = card(tr('Virtual Environments'), 'ws-card-venvs', canCreate && scanned.venvs.length ? [createVenv()] : []);
     const vb = el('div', 'ws-card-body');
-    if (!scanned.venvs.length) vb.appendChild(el('div', 'muted ws-none', tr('No virtual environments found.')));
+    if (!scanned.venvs.length) {
+      vb.appendChild(el('div', 'muted ws-none', tr('No virtual environments found.')));
+      if (canCreate) vb.appendChild(createVenv());
+    }
     const extra = ide.settings.get('interpreters.extra', []);
     for (const v of scanned.venvs) {
       const row = el('div', 'ws-venv');

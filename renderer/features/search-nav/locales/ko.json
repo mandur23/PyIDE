@@ -3,7 +3,7 @@
   "Find in Files…": "파일에서 찾기…",
   "Replace in Files": "파일에서 바꾸기",
   "Replace in Files…": "파일에서 바꾸기…",
-  "Use {action} to search the project": "프로젝트를 검색하려면 {action}을(를) 사용하세요",
+  "Use {action} to search the project": "프로젝트를 검색하려면 다음을 사용하세요: {action}",
   "Rerun Search": "검색 다시 실행",
   "Expand All": "모두 펼치기",
   "Collapse All": "모두 접기",
@@ -81,7 +81,7 @@
 
   "larger than 2 MB": "2MB보다 큼",
   "not a text file": "텍스트 파일이 아님",
-  "{encoding} cannot store the new text": "{encoding}(으)로 저장할 수 없는 문자가 있음",
+  "{encoding} cannot store the new text": "{encoding} 인코딩으로 저장할 수 없는 문자가 있음",
   "{n} more": "외 {n}개",
   "Not replaced in {n} file:": "파일 {n}개에서 바꾸지 않음:",
   "Not replaced in {n} files:": "파일 {n}개에서 바꾸지 않음:",
@@ -96,5 +96,14 @@
   "Local History cannot keep the current text of these files, so Replace cannot be undone there.": "로컬 기록에 이 파일들의 지금 내용을 남길 수 없어서 바꾸기를 로컬 기록으로 되돌릴 수 없습니다.",
   "Replace anyway?": "그래도 바꾸시겠습니까?",
   "outside the project": "프로젝트 밖",
-  "not a file": "파일이 아님"
+  "not a file": "파일이 아님",
+  "More than {count} matches; the first {count} are shown, in {files} files": "일치 항목 {count}개 초과: 처음 {count}개 표시(파일 {files}개)",
+  "{count} matches so far, {done} of {total} files searched": "지금까지 일치 {count}개, 파일 {total}개 중 {done}개 검색함",
+  "Finding every match to replace": "바꿀 일치 항목을 모두 찾는 중",
+  "Finding every match to replace…": "바꿀 일치 항목을 모두 찾는 중…",
+  "Replace All was cancelled; nothing was replaced.": "모두 바꾸기를 취소했습니다. 아무것도 바꾸지 않았습니다.",
+  "Undo Replace": "바꾸기 실행 취소",
+  "Replace undone, except in files changed since: {files}": "바꾸기를 실행 취소했습니다. 그 뒤에 바뀐 파일은 그대로 둡니다: {files}",
+  "Replace undone": "바꾸기를 실행 취소했습니다",
+  "Undo": "실행 취소"
 }

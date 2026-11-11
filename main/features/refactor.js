@@ -2,6 +2,7 @@
 // relays JSON-lines requests to it. One process per interpreter; it is replaced when the interpreter changes.
 // Python runs the script from the unpacked copy in packaged builds; it cannot read app.asar.
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
@@ -78,5 +79,19 @@ exports.register = ({ ipcMain, app, appDir, unpackedDir = appDir }) => {
     });
   });
   ipcMain.handle('refactor:stop', () => stop());
+  // The files of `paths` that cannot be written now -> [{path, code}]: a refactoring checks every file it changes
+  // before it changes any. Opening for writing (and closing at once) sees the read-only attribute, a file another
+  // program holds locked and a folder's permissions; a file that does not exist yet is the refactoring's to create.
+  ipcMain.handle('refactor:unwritable', async (_e, paths) => {
+    const out = [];
+    for (const p of Array.isArray(paths) ? paths.map(String) : []) {
+      try {
+        await (await fs.promises.open(p, 'r+')).close();
+      } catch (err) {
+        if (err.code !== 'ENOENT') out.push({ path: p, code: err.code || 'EIO' });
+      }
+    }
+    return out;
+  });
   app.on('will-quit', () => stop(true));
 };

@@ -13,7 +13,7 @@
   "The pull request's commits are not in the local repository. Use Checkout to get them.": "풀 리퀘스트의 커밋이 로컬 저장소에 없습니다. 브랜치 전환으로 가져오세요.",
   "A remote named {name} already exists.": "{name} 원격이 이미 있습니다.",
   "The project is already on GitHub: {url}": "프로젝트가 이미 GitHub에 있습니다: {url}",
-  "The base branch {branch} is not in the local repository.": "기준 브랜치 {branch}이(가) 로컬 저장소에 없습니다.",
+  "The base branch {branch} is not in the local repository.": "기준 브랜치가 로컬 저장소에 없습니다: {branch}",
   "Close": "닫기",
   "Nano Studio uses the GitHub CLI to share projects and list pull requests. Install it, then click Refresh.": "Nano Studio는 GitHub CLI로 프로젝트를 공유하고 풀 리퀘스트를 나열합니다. 설치한 다음 새로고침을 클릭하세요.",
   "Install GitHub CLI…": "GitHub CLI 설치…",
@@ -61,7 +61,7 @@
   "Open in Browser": "브라우저에서 열기",
   "Checkout": "브랜치 전환",
   "Cannot load the pull request": "풀 리퀘스트를 불러올 수 없습니다",
-  "{author} wants to merge {head} into {base}": "{author} 님이 {head}을(를) {base}에 병합하려고 합니다",
+  "{author} wants to merge {head} into {base}": "{author} 님이 {head} 브랜치를 {base} 브랜치에 병합하려고 합니다",
   "No description provided.": "설명이 없습니다.",
   "Files changed": "변경된 파일",
   "Checks": "검사",
@@ -74,6 +74,6 @@
   "No comments": "코멘트 없음",
   "Cannot show the diff": "차이를 표시할 수 없습니다",
   "Checkout failed": "체크아웃 실패",
-  "Checked out pull request #{n}": "풀 리퀘스트 #{n}(으)로 전환했습니다",
+  "Checked out pull request #{n}": "#{n} 풀 리퀘스트로 전환했습니다",
   "View Pull Requests": "풀 리퀘스트 보기"
 }

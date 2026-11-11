@@ -107,16 +107,17 @@
   const summaryOf = (res) => (res.stopped ? tr('The search was stopped after {seconds} seconds. Try a simpler pattern or a smaller scope.', { seconds: res.stopped })
     : res.failed ? tr('Search failed: {message}', { message: res.failed })
     : res.error ? tr('Invalid regular expression: {message}', { message: res.error })
-    : nt2(res.count, res.files.length, ['{count} match in {files} file', '{count} match in {files} files', '{count} matches in {files} file', '{count} matches in {files} files'])
-      + (res.truncated ? ` ${tr('(results truncated)')}` : ''));
+    // The list stops at 5,000 matches, so a truncated count is a lower bound and says so.
+    : res.truncated ? tr('More than {count} matches; the first {count} are shown, in {files} files', { count: res.count, files: res.files.length })
+    : nt2(res.count, res.files.length, ['{count} match in {files} file', '{count} match in {files} files', '{count} matches in {files} file', '{count} matches in {files} files']));
 
   // One row per line; every match on the line is highlighted, the first one is the jump target.
   function lineRows(matches) {
     const rows = [];
     for (const m of matches) {
       const last = rows[rows.length - 1];
-      if (last && last.line === m.line) last.ranges.push([m.start, m.end]);
-      else rows.push({ line: m.line, col: m.col, len: m.len, text: m.text, ranges: [[m.start, m.end]] });
+      if (last && last.line === m.line) { last.ranges.push([m.start, m.end]); last.reps.push(m.rep); }
+      else rows.push({ line: m.line, col: m.col, len: m.len, text: m.text, ranges: [[m.start, m.end]], reps: [m.rep] });
     }
     for (const r of rows) {
       const lead = r.text.length - r.text.trimStart().length;
@@ -128,6 +129,7 @@
 
   const findTw = ide.registerToolWindow({
     id: 'FindInFiles', title: tr('Find in Files'), icon: '🔍', side: 'bottom', order: 20,
+    available: () => !!findState,
     mount(container, tw) {
       findHead = el('div', 'sn-head');
       findHead.id = 'snFindHead';
@@ -144,10 +146,24 @@
     },
   });
 
-  function matchRow(path, r) {
+  // In a replace, each match shows struck out with the text that replaces it after it, as in PyCharm's preview.
+  function replaced(text, ranges, reps) {
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    ranges.forEach(([s, e], i) => {
+      if (s < last || e <= s) return;
+      frag.append(text.slice(last, s), el('span', 'sn-hit sn-old', text.slice(s, e)));
+      if (typeof reps[i] === 'string') frag.append(el('span', 'sn-new', reps[i].replace(/\n/g, '⏎')));
+      last = e;
+    });
+    frag.append(text.slice(last));
+    return frag;
+  }
+
+  function matchRow(path, r, replace) {
     const row = el('div', 'list-row sn-match');
     row.append(el('span', 'sn-ln', String(r.line)), userText(el('span', 'sn-text')));
-    row.lastChild.append(highlight(r.text, r.ranges));
+    row.lastChild.append(replace ? replaced(r.text, r.ranges, r.reps) : highlight(r.text, r.ranges));
     row.onclick = () => {
       findList.querySelectorAll('.selected').forEach((n) => n.classList.remove('selected'));
       row.classList.add('selected');
@@ -156,7 +172,7 @@
     return row;
   }
 
-  function renderFindResults(note) {
+  function renderFindResults(note, action) {
     const { opts: o, res, replace } = findState;
     findHead.replaceChildren(el('span', 'sn-title', replace
       ? tr("Replace: '{query}' → '{replacement}'", { query: o.query, replacement: o.replacement })
@@ -165,6 +181,12 @@
       o.useMask && o.mask ? tr('mask {mask}', { mask: o.mask }) : ''].filter(Boolean).join(', ');
     findHead.append(el('span', hasError(res) ? 'sn-error' : 'muted', `${summaryOf(res)} · ${scope}`));
     if (note) findHead.append(el('span', 'sn-note', note));
+    if (action && !action.used) {
+      const u = el('button', 'secondary sn-btn', action.label);
+      u.id = 'snUndoReplace';
+      u.onclick = () => action.run();
+      findHead.append(u);
+    }
     findHead.append(el('span', 'spacer'));
     if (replace && res.files.length) {
       const b = el('button', 'secondary sn-btn', tr('Replace All'));
@@ -174,7 +196,7 @@
     }
     findList.replaceChildren();
     for (const f of res.files) {
-      const g = fileGroup(f.path, nt(f.matches.length, '{n} match', '{n} matches'), lineRows(f.matches).map((r) => matchRow(f.path, r)), findCollapsed);
+      const g = fileGroup(f.path, nt(f.matches.length, '{n} match', '{n} matches'), lineRows(f.matches).map((r) => matchRow(f.path, r, replace)), findCollapsed);
       g.dataset.path = f.path.toLowerCase();
       findList.append(g);
     }
@@ -189,14 +211,14 @@
     findList.replaceChildren();
   }
   let findSeq = 0;
-  async function showFindResults(o, replace, note) {
+  async function showFindResults(o, replace, note, action) {
     findTw.show();
     findHead.replaceChildren(el('span', 'muted', tr("Searching for '{query}'…", { query: o.query })));
     const mine = ++findSeq;
     const res = await runFind(o);
     if (mine !== findSeq) return;
     findState = { opts: o, res, replace };
-    renderFindResults(note);
+    renderFindResults(note, action);
   }
 
   // The Local History label put before Replace All rewrites files (English; Local History translates it where shown).
@@ -216,16 +238,44 @@
     return ide.ui.confirm(`${lost}\n${tr('Replace anyway?')}`, { title: tr('Replace in Files'), ok: tr('Replace') });
   }
 
+  // Every match in scope, past the 5,000 the results list stops at, counted with progress in the status bar and a
+  // Cancel there -> the result, or null when cancelled.
+  const allProgress = new Map(); // token -> task
+  ide.api.on('search:findAllProgress', (p) => allProgress.get(p?.token)?.update({
+    fraction: p.total ? p.done / p.total : null, text: tr('{count} matches so far, {done} of {total} files searched', p),
+  }));
+  async function findEverything(o) {
+    const token = `${Date.now()}-${Math.random()}`;
+    const task = ide.tasks.start({ title: tr('Finding every match to replace'), fraction: 0, onCancel: () => ide.api.invoke('search:cancelFindAll', token) });
+    allProgress.set(token, task);
+    findHead.replaceChildren(el('span', 'muted', tr('Finding every match to replace…')));
+    try {
+      const res = await ide.api.invoke('search:findAll', ide.root, searchOpts(o), dirtyTexts(), token).catch((e) => ({ files: [], count: 0, failed: ipcError(e) }));
+      return res.cancelled || task.cancelled ? null : res;
+    } finally {
+      allProgress.delete(token);
+      task.done();
+    }
+  }
+
   // -> false when the user said no.
   async function replaceAll(o, res) {
     res = res || (await runFind(o));
     if (hasError(res) || !res.files.length) return showFindResults(o, true);
+    // The list stops at 5,000 matches; Replace All replaces all of them, so they are counted first.
+    if (res.truncated) {
+      findTw.show();
+      res = await findEverything(o);
+      if (!res) { await showFindResults(o, true, tr('Replace All was cancelled; nothing was replaced.')); return false; }
+      if (hasError(res) || !res.files.length) return showFindResults(o, true);
+    }
     const question = nt2(res.count, res.files.length, ['Replace {count} occurrence in {files} file?', 'Replace {count} occurrence in {files} files?',
       'Replace {count} occurrences in {files} file?', 'Replace {count} occurrences in {files} files?']);
-    if (!(await ide.ui.confirm(res.truncated ? `${question} ${tr('(results truncated)')}` : question, { title: tr('Replace in Files'), ok: tr('Replace') }))) return false;
+    if (!(await ide.ui.confirm(question, { title: tr('Replace in Files'), ok: tr('Replace') }))) return false;
     if (!(await keepBeforeReplace(res.files.map((f) => f.path)))) return false;
     const changed = [];
     const onDisk = [];
+    const buffers = []; // {model, post}: the unsaved buffers edited, for Undo
     let count = 0;
     for (const f of res.files) {
       const tab = ide.findTab(f.path);
@@ -235,7 +285,10 @@
         const before = tab.model.getValue();
         const { text: after, count: n } = await ide.api.invoke('search:replaceText', searchOpts(o), before);
         if (!n || after === before || tab.model.getValue() !== before) continue;
+        tab.model.pushStackElement();
         applyText(tab.model, before, after);
+        tab.model.pushStackElement();
+        buffers.push({ model: tab.model, post: tab.model.getAlternativeVersionId() });
         count += n;
         changed.push(f.path);
       } else onDisk.push(f.path);
@@ -259,7 +312,43 @@
     if (r.failed) return showFindResults(o, true, tr('Replace failed: {message}', { message: r.failed }));
     const done = nt2(count, changed.length, ['Replaced {count} occurrence in {files} file', 'Replaced {count} occurrence in {files} files',
       'Replaced {count} occurrences in {files} file', 'Replaced {count} occurrences in {files} files']);
-    await showFindResults(o, true, r.skipped?.length ? `${done}. ${skippedText(r.skipped)}` : done);
+    const undo = changed.length && (r.journal || !onDisk.length) ? undoReplace(o, r.journal, buffers) : null;
+    if (undo) {
+      const note = ide.notifications.notify({
+        kind: 'ok', group: 'Find', title: done, actions: [{ label: tr('Undo'), valid: () => !undo.used, run: async () => { note.expire(); await undo.run(); } }],
+      });
+      undo.note = note;
+    }
+    await showFindResults(o, true, r.skipped?.length ? `${done}. ${skippedText(r.skipped)}` : done, undo);
+  }
+
+  // The whole Replace All undone in one step: the files on disk put back from main's journal (those changed since are
+  // left and named), the unsaved buffers by their own undo.
+  function undoReplace(o, journal, buffers) {
+    const undo = { used: false, label: tr('Undo Replace') };
+    undo.run = async () => {
+      if (undo.used) return;
+      undo.used = true;
+      undo.note?.expire();
+      const left = [];
+      let back = [];
+      if (journal) {
+        const r = await ide.api.invoke('search:undoReplace', journal).catch(() => ({ restored: [], changed: [], gone: true }));
+        back = r.restored;
+        left.push(...r.changed);
+        await ide.reloadFromDisk(back);
+        ide.api.invoke('search:invalidate', back).catch(() => {});
+      }
+      for (const b of buffers) {
+        if (b.model.isDisposed() || b.model.getAlternativeVersionId() !== b.post) { left.push(b.model.uri.fsPath); continue; }
+        b.model.undo();
+      }
+      ide.renderTabs();
+      refreshTodos();
+      const text = left.length ? tr('Replace undone, except in files changed since: {files}', { files: left.map((p) => basename(p)).join(', ') }) : tr('Replace undone');
+      await showFindResults(o, true, text);
+    };
+    return undo;
   }
 
   // Files left as they were, each with why: by Replace (main/features/search.js) or by Local History's checkpoint
@@ -360,7 +449,7 @@
           if (n++ >= 200) break;
           const node = el('div', 'sn-prow');
           node.append(userText(el('span', 'sn-text')), userText(el('span', 'sn-ploc', `${basename(f.path)} ${row.line}`)));
-          node.firstChild.append(highlight(row.text, row.ranges));
+          node.firstChild.append(replace ? replaced(row.text, row.ranges, row.reps) : highlight(row.text, row.ranges));
           node.onclick = () => { dlg.close(); goTo(f.path, row.line, row.col, row.len); };
           preview.append(node);
         }

@@ -474,7 +474,7 @@ try {
   await k.js(`(ide.settings.set('updates.feedUrl', ${S(feedFolder('9.9.9'))}), true)`);
   await k.js(`(ide.runAction('CheckForUpdates'), true)`);
   await k.until(`[...document.querySelectorAll('.dialog')].pop()?.textContent.includes('9.9.9')`, 'Korean update dialog');
-  k.check((await dialogText(k)).includes('Nano Studio 9.9.9을(를) 사용할 수 있습니다.'), 'the update dialog is in Korean');
+  k.check((await dialogText(k)).includes('Nano Studio 9.9.9 버전을 사용할 수 있습니다.'), 'the update dialog is in Korean');
   const dialogLeaks = await englishLeaks(k, '.dialog');
   k.check(!dialogLeaks.length, `no English in the Korean update dialog${dialogLeaks.length ? `: ${S(dialogLeaks)}` : ''}`);
   await pressButton(k, '닫기');

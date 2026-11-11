@@ -460,7 +460,7 @@ try {
   await ko.until(`!!document.querySelector('#dialogHost .dialog')`, 'overwrite question in Korean');
   const dlgLeaks = await englishLeaks(ko, '#dialogHost');
   const dlgText = await ko.js(`document.querySelector('#dialogHost .dialog').textContent`);
-  ko.check(!dlgLeaks.length && dlgText.includes('demo.py이(가) 이미 있습니다. 덮어쓸까요?') && dlgText.includes('덮어쓰기'), `the overwrite question is Korean (${S(dlgText)}${dlgLeaks.length ? ` leaks ${S(dlgLeaks)}` : ''})`);
+  ko.check(!dlgLeaks.length && dlgText.includes('demo.py 파일이 이미 있습니다. 덮어쓸까요?') && dlgText.includes('덮어쓰기'), `the overwrite question is Korean (${S(dlgText)}${dlgLeaks.length ? ` leaks ${S(dlgLeaks)}` : ''})`);
   await kui.clickOn('#dialogHost .dialog button.secondary');
   await ko.until(`!document.querySelector('#dialogHost .dialog')`, 'cancelled');
 
@@ -470,7 +470,7 @@ try {
   await ko.until(`!!document.querySelector('#dialogHost .dialog .vs-export-input')`, 'the export name question in Korean');
   const nameLeaks = await englishLeaks(ko, '#dialogHost');
   const nameText = await ko.js(`document.querySelector('#dialogHost .dialog').textContent`);
-  ko.check(!nameLeaks.length && nameText.includes('random.py은(는) Python 모듈 random을(를) 가립니다') && nameText.includes('내보내기'), `the export name question is Korean (${S(nameText)}${nameLeaks.length ? ` leaks ${S(nameLeaks)}` : ''})`);
+  ko.check(!nameLeaks.length && nameText.includes('random.py 파일이 Python random 모듈을 가립니다') && nameText.includes('내보내기'), `the export name question is Korean (${S(nameText)}${nameLeaks.length ? ` leaks ${S(nameLeaks)}` : ''})`);
   await ko.press('Escape');
   await ko.until(`!document.querySelector('#dialogHost .dialog')`, 'closed');
 

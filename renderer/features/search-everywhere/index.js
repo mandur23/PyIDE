@@ -78,12 +78,25 @@
     }));
   }
 
+  // A hit inside a word ("로그" in "프로그램 재개") ranks below the other matches. The English name matches too, in any
+  // UI language, as in PyCharm; the row still shows the translated title.
+  const midWord = (text, ranges) => ranges.length > 0 && ranges[0][0] > 0 && /[\p{L}\p{N}]/u.test(text[ranges[0][0] - 1]) && /[\p{L}\p{N}]/u.test(text[ranges[0][0]]);
+  function actionScore(title, q) {
+    const m = score(title, q);
+    if (m.score === 40 && midWord(title, m.ranges)) m.score = 5;
+    const en = i18n.english(title);
+    if (!en) return m;
+    const e = score(en, q);
+    if (e.score === 40 && midWord(en, e.ranges)) e.score = 5;
+    return e.score > m.score ? { score: e.score, ranges: [] } : m;
+  }
+
   function actions(q, ctx) {
     if (!q) return [];
     const scored = [];
     for (const a of ide.actions) {
       if (!a.title || a.id === 'SearchEverywhere') continue;
-      const m = score(a.title, q);
+      const m = actionScore(a.title, q);
       if (m.score) scored.push({ a, m, score: m.score, tie: a.title.length });
     }
     return topBy(scored, ctx.limit).map(({ a, m }) => ({

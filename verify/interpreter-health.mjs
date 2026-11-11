@@ -90,4 +90,56 @@ try {
 } catch (err) {
   check(false, err.message);
 }
-t.finish();
+t.close();
+
+// ---------- a venv the project picked by itself (never chosen by hand) ----------
+// Broken, it is reported as a chosen one is, instead of the global Python running the project unannounced; once its
+// python.exe is back, coming back to the window clears the invalid mark; a pyvenv.cfg whose home stops naming a Python
+// takes the venv off the list although its python.exe is unchanged, and a run that still starts it (a configuration
+// naming it) says what is wrong instead of only Windows' "No Python at". Port 9957.
+const auto = tempDir('interp-health-auto');
+writeFileSync(path.join(auto, 'main.py'), 'print("hello")\n');
+const autoVenv = path.join(auto, '.venv');
+const autoPy = path.join(autoVenv, 'Scripts', 'python.exe');
+execFileSync('py', ['-3', '-m', 'venv', '--without-pip', autoVenv]);
+// The venv runs the project once, so that the project knows it: a folder that only looks like a venv is not reported.
+const first = await launch({ fixture: 'core', port: 9957, name: 'interpreter-health-auto', projectDir: auto });
+await first.until(`ide.util.samePath(ide.currentInterp()?.executable || '', ${q(autoPy)})`, 'the project picks its .venv', 30000).catch(() => {});
+const autoData = first.userData;
+await first.sleep(1500);
+first.close();
+renameSync(autoPy, `${autoPy}.gone`);
+const a = await launch({ fixture: 'core', port: 9957, name: 'interpreter-health-auto', projectDir: auto, userData: autoData });
+try {
+  await a.until(`ide.notifications.list().some((n) => n.title === ${q(TITLE)})`, 'invalid notification for the picked venv', 20000).catch(() => {});
+  const note = await a.js(`ide.notifications.list().filter((n) => n.title === ${q(TITLE)}).map((n) => ({ text: n.text, actions: (n.actions || []).map((x) => x.label) }))`);
+  a.check(note.length === 1 && note[0].text.includes(autoPy) && q(note[0].actions) === q(['Choose Interpreter…', 'Recreate .venv']),
+    `a broken venv the project picked by itself gets the same notification (${q(note)})`);
+  const st = await a.js(`({ current: ide.currentInterp(), label: document.getElementById('statusInterpLabel').textContent })`);
+  a.check(st.current === null && /Invalid interpreter: \.venv/.test(st.label), `the global Python does not take its place (${q(st)})`);
+
+  renameSync(`${autoPy}.gone`, autoPy);
+  await a.js(`(window.dispatchEvent(new Event('focus')), true)`);
+  await a.until(`ide.util.samePath(ide.currentInterp()?.executable || '', ${q(autoPy)})`, 'venv back after focus', 15000).catch(() => {});
+  const back = await a.js(`({ current: ide.currentInterp()?.executable || null, label: document.getElementById('statusInterpLabel').textContent })`);
+  a.check(!/Invalid/.test(back.label) && back.current && back.current.toLowerCase() === autoPy.toLowerCase(), `with python.exe back, returning to the window clears the invalid mark (${q(back)})`);
+
+  const autoCfg = path.join(autoVenv, 'pyvenv.cfg');
+  writeFileSync(autoCfg, readFileSync(autoCfg, 'utf8').replace(/^home = .*$/m, 'home = C:\\Python-moved-away'));
+  await a.js('ide.reloadInterpreters()');
+  const homeGone = await a.js(`({ listed: ide.interps.filter((i) => !i.invalid).some((i) => ide.util.samePath(i.executable, ${q(autoPy)})), label: document.getElementById('statusInterpLabel').textContent })`);
+  a.check(!homeGone.listed && /Invalid/.test(homeGone.label), `a pyvenv.cfg whose home is gone takes the venv off the list at once (${q(homeGone)})`);
+
+  await a.js(`ide.openFile(${q(path.join(auto, 'main.py'))})`);
+  await a.js(`(() => { const c = ide.run.addTemporary({ type: 'python', name: 'main', script: ${q(path.join(auto, 'main.py'))}, interp: ${q(autoPy)} }); ide.run.runConfig(c); return true; })()`);
+  await a.until(`(ide.run.activeSession()?.con?.out?.textContent || '').includes('exit code 103')`, 'run with the broken venv', 30000);
+  const outText = await a.js(`ide.run.activeSession().con.out.textContent`);
+  const fixes = await a.js(`[...ide.run.activeSession().con.out.querySelectorAll('.console-actions a')].map((x) => x.textContent)`);
+  a.check(/No Python at|did not find executable at/.test(outText) && /was made from C:\\Python-moved-away.*no longer there/s.test(outText) && q(fixes) === q(['Recreate .venv', 'Choose Interpreter…']),
+    `a run that fails with "No Python at" says the venv's base Python is gone and offers the fixes (${q(outText.slice(-300))}, ${q(fixes)})`);
+  a.check(a.consoleErrors.length === 0, 'no renderer exceptions (picked venv)');
+} catch (err) {
+  a.check(false, err.message);
+}
+a.results.unshift(...t.results);
+a.finish();

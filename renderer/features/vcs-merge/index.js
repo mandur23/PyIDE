@@ -36,6 +36,12 @@
   // ---------- operations that can stop on conflicts ----------
   const CONTINUE = { merge: tr('Continue Merge'), rebase: tr('Continue Rebase'), 'cherry-pick': tr('Continue Cherry-Pick'), revert: tr('Continue Revert') };
   const ABORT = { merge: tr('Abort Merge'), rebase: tr('Abort Rebase'), 'cherry-pick': tr('Abort Cherry-Pick'), revert: tr('Abort Revert') };
+  const ABORT_QUESTION = {
+    merge: tr('Abort the merge? The files go back to how they were before it, and conflicts you resolved are lost.'),
+    rebase: tr('Abort the rebase? The branch goes back to how it was before it, and conflicts you resolved are lost.'),
+    'cherry-pick': tr('Abort the cherry-pick? The files go back to how they were before it, and conflicts you resolved are lost.'),
+    revert: tr('Abort the revert? The files go back to how they were before it, and conflicts you resolved are lost.'),
+  };
   const ABORTED = { merge: tr('Merge aborted'), rebase: tr('Rebase aborted'), 'cherry-pick': tr('Cherry-pick aborted'), revert: tr('Revert aborted') };
   const FINISHED = { merge: tr('Merge committed'), rebase: tr('Rebase finished'), 'cherry-pick': tr('Cherry-pick committed'), revert: tr('Revert committed') };
   const IN_PROGRESS = { merge: tr('Merge in progress'), rebase: tr('Rebase in progress'), 'cherry-pick': tr('Cherry-pick in progress'), revert: tr('Revert in progress') };
@@ -117,6 +123,7 @@
       notify(tr('Unresolved conflicts'), tr('Resolve all conflicts before continuing.'), 'warn');
       return openConflicts();
     }
+    if (action === 'abort' && !(await ide.ui.confirm(ABORT_QUESTION[op], { title: ABORT[op], ok: ABORT[op] }))) return;
     await ide.saveAll();
     const r = await invoke('operation', ide.root, action);
     const done = action === 'abort' ? ABORTED[op] : action === 'skip' ? tr('Commit skipped') : FINISHED[op];
@@ -155,9 +162,10 @@
       text.append(a);
     }
     const btns = el('div', 'vcs-op-btns');
-    btns.append(button(tr('Continue'), 'secondary vcs-op-continue', () => control('continue')));
-    if (SKIPPABLE.has(repo.op)) btns.append(button(tr('Skip'), 'secondary vcs-op-skip', () => control('skip')));
-    btns.append(button(tr('Abort'), 'secondary vcs-op-abort', () => control('abort')));
+    // The operation's own words: a bare "Continue" took another plugin's translation (the loop keyword's).
+    btns.append(button(CONTINUE[repo.op], 'secondary vcs-op-continue', () => control('continue')));
+    if (SKIPPABLE.has(repo.op)) btns.append(button(tr('Skip Commit'), 'secondary vcs-op-skip', () => control('skip')));
+    btns.append(button(ABORT[repo.op], 'secondary vcs-op-abort', () => control('abort')));
     box.append(text, btns);
     return box;
   });
@@ -291,9 +299,27 @@
     ide.openCustomTab({
       id, title: tr('Merge: {name}', { name: basename(path) }), icon: 'merge',
       mount(host) { tool = mountMergeTool(host, { path, v, sides, close: () => ide.closeTab(id) }); },
-      onClose() { tool?.dispose(); },
+      onClose() { tool?.dispose(); mergeTabs.delete(id); setTimeout(fitMergeTab); },
     });
+    mergeTabs.add(id);
+    fitMergeTab();
   }
+
+  // Three panes need the width: while a merge tab is in front the tool windows are hidden, and the ones hidden for it
+  // come back when another tab comes to the front or the merge tab closes.
+  const mergeTabs = new Set();
+  let hiddenForMerge = null;
+  function fitMergeTab() {
+    const front = mergeTabs.has(ide.activeTab()?.path);
+    if (front && !hiddenForMerge) {
+      hiddenForMerge = [...ide.toolWindows.values()].filter((tw) => tw.isVisible());
+      for (const tw of hiddenForMerge) tw.hide();
+    } else if (!front && hiddenForMerge) {
+      for (const tw of hiddenForMerge) if (!tw.isVisible()) tw.show();
+      hiddenForMerge = null;
+    }
+  }
+  ide.on('activeTabChanged', () => fitMergeTab());
 
   let mergeSeq = 0;
   function mountMergeTool(host, { path, v, sides, close }) {
@@ -488,6 +514,30 @@
       eds.result.focus();
     }
 
+    // The first conflict (else the first change) in view in every pane, at the column where the sides differ, so the
+    // part of a long line that conflicts is on screen.
+    function revealFirst() {
+      const c = chunks.find((x) => x.kind === 'conflict') || chunks[0];
+      if (!c) return;
+      const firstDiff = (a = '', b = '') => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i + 1; };
+      const o = lines.ours[c.ours[0]] ?? '';
+      const t = lines.theirs[c.theirs[0]] ?? '';
+      const col = firstDiff(o, t);
+      const at = (pane, line) => {
+        const lineNumber = Math.min(line + 1, models[pane].getLineCount());
+        const column = Math.min(col, models[pane].getLineMaxColumn(lineNumber));
+        eds[pane].setPosition({ lineNumber, column });
+        eds[pane].revealPositionInCenter({ lineNumber, column });
+      };
+      setTimeout(() => {
+        if (disposed) return;
+        at('result', c.result[0]);
+        at('ours', c.ours[0]);
+        at('theirs', c.theirs[0]);
+        eds.result.focus();
+      });
+    }
+
     // ----- scrolling the three panes together, line for line outside chunks and proportionally inside them -----
     function mapLine(i, from, to) {
       let delta = 0;
@@ -540,6 +590,7 @@
     }
 
     refreshView();
+    revealFirst();
     root._vcsMerge = { chunks, eds, models };
     return {
       dispose() {

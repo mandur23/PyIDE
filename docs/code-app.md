@@ -56,7 +56,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 
 - `ide.openFile(path, {line, col, focus, group, preview})`. `preview`는 `editor.previewTab` 설정이 켜져 있을 때만 미리보기 탭이 됩니다.
 - 긴 이름은 `ide.util.fileLabel`이 확장자를 남기고 줄입니다. 탭은 `--tab-name-max`(220px)에서 멈춥니다.
-- 창 닫기: 메인(`main/windows.js`)이 저장 안 한 파일(`window:setDirty`)과 실행 중인 프로그램(`window:setBusy`)을 알고, 있으면 `window:confirmClose`를 보냅니다. 렌더러가 대화상자를 띄우고 `window:closeNow`로 닫습니다.
+- 창 닫기: 메인(`main/windows.js`)이 저장 안 한 파일(`window:setDirty`)과 실행 중인 프로그램(`window:setBusy`)을 알고, 있으면 `window:confirmClose`를 보냅니다. `window:setBusy`는 이름 배열(run 플러그인, Cut 내보내기) 또는 `{source, names}`(터미널: 셸 말고 다른 프로그램이 도는 세션, `pty:busy`)를 받고, 보낸 쪽마다 따로 보관합니다. 렌더러가 대화상자를 띄우고 `window:closeNow`로 닫습니다.
 - 공유된 문서(다른 창이나 협업)의 실행 취소는 자기 편집만 되돌립니다. 원격 편집은 `applyEdits`로 넣고, 모델의 `undo`와 `redo`는 `ownUndo`가 `renderer/core/ot.js`의 기록으로 바꿉니다. 공유 문서에 편집을 넣는 새 코드는 원격이면 기록을 옮기고(`rebase`), 로컬이면 `localEdit`를 지나야 합니다.
 - 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`. 작은 수정 모음(Ctrl+Tab, Reopen Closed Tab, 상태 표시줄 선택 크기, 트리 삭제 뒤 선택, 대화상자 버튼 중복 실행, 풍선, Run 터미널 테마, Maven 경로, Find in Files 초기화)은 `verify/code-polish.mjs`입니다.
 
@@ -65,7 +65,9 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 실행 구성 타입은 `ide.run.registerType`으로 등록합니다. 타입이 없는 저장된 구성(플러그인이 꺼졌거나 다른 모드의 타입)도 처리해야 합니다.
 - run 플러그인의 `reportBusy()`가 실행 중인 세션 이름을 메인에 알립니다. 새 실행 방식을 만들면 세션이 `busy`에 잡히는지 확인합니다.
 - Python 디버그는 `vendor/`의 debugpy, Java는 JDWP입니다. 디버그 포트는 다른 로컬 계정이 먼저 접속할 수 있다는 문제가 남아 있습니다.
-- 테스트: `verify/run-automation.mjs`, `verify/debugger.mjs`, `verify/spring-boot.mjs`, `verify/flow-coding.mjs`.
+- 현재 파일 실행(Shift+F10, 현재 파일 선택)은 그 파일의 임시 구성(`addTemporary(cfg, {select: false})`, 최대 5개)으로 실행합니다. 끝난 Run 탭은 5개까지 남습니다(`MAX_FINISHED`).
+- 인터프리터 목록(`py:interpreters`)은 프로젝트 venv, `interpreters.extra`, `py -3`, `python` 다음에 `py -0p`와 표준 설치 폴더(`pythonRoots`)의 Python을 더합니다. 테스트에서 Python이 없는 컴퓨터를 만들려면 PATH와 함께 `PYIDE_PYTHON_ROOTS=;`를 줍니다.
+- 테스트: `verify/run-automation.mjs`, `verify/debugger.mjs`, `verify/spring-boot.mjs`, `verify/flow-coding.mjs`, `verify/run-ux.mjs`, `verify/interpreter-ux.mjs`, `verify/terminal-busy.mjs`.
 
 ### 언어 기능 (lsp)
 

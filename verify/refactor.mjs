@@ -406,9 +406,23 @@ try {
     try { await ide.refactor.applyResult({ changes }, 'Rename'); return 'applied'; } catch (e) { return ide.refactor.errorText(e); }
   })()`);
   chmodSync(h.P('rb_b.py'), 0o644);
-  check(/undone/.test(failed) && h.disk('rb_a.py') === 'from rb_open import old\n' && (await h.text()) === 'def old():\n    pass\n'
+  check(/^Nothing was changed: these files cannot be written: rb_b\.py \(read-only/.test(failed) && h.disk('rb_a.py') === 'from rb_open import old\n' && (await h.text()) === 'def old():\n    pass\n'
     && (await js('ide.refactor.records().length')) === recordsBefore,
-    `a refactoring that cannot write one file undoes the files and editors it already changed (${JSON.stringify(failed)}, rb_a.py: ${JSON.stringify(h.disk('rb_a.py'))})`);
+    `a read-only file stops a refactoring before it changes anything, named with the reason (${JSON.stringify(failed)}, rb_a.py: ${JSON.stringify(h.disk('rb_a.py'))})`);
+  // A write that fails after that check (a new file under a name that is a file) undoes what was already changed.
+  writeFileSync(h.P('rb_file'), 'a file, not a folder\n');
+  const partway = await js(`(async () => {
+    const p = (n) => ide.util.joinPath(ide.root, n);
+    const changes = [
+      { path: p('rb_open.py'), old: 'def old():\\n    pass\\n', new: 'def new():\\n    pass\\n' },
+      { path: p('rb_a.py'), old: 'from rb_open import old\\n', new: 'from rb_open import new\\n' },
+      { path: p('rb_file') + '\\\\inner.py', old: null, new: 'x = 1\\n' },
+    ];
+    try { await ide.refactor.applyResult({ changes }, 'Rename'); return 'applied'; } catch (e) { return ide.refactor.errorText(e); }
+  })()`);
+  check(/undone/.test(partway) && h.disk('rb_a.py') === 'from rb_open import old\n' && (await h.text()) === 'def old():\n    pass\n'
+    && (await js('ide.refactor.records().length')) === recordsBefore,
+    `a refactoring that fails partway undoes the files and editors it already changed (${JSON.stringify(partway)}, rb_a.py: ${JSON.stringify(h.disk('rb_a.py'))})`);
 
   // ---- no rope in the interpreter: a clear offer to install it ----
   const bare = bareVenv();

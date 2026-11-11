@@ -136,6 +136,7 @@
       if (gitTw.isVisible()) loadLog();
       // Commits, checkouts, resets: code vision blames its files again.
       ide.emit('vcsHeadChanged', { root, head });
+      if (workingDiffs.size) refreshWorkingDiffs();
     }
     setRepoKey(!!repo);
     // Other plugins (the Workspace home's branch chip) follow Create Git Repository, checkouts and rebases, which change
@@ -343,12 +344,50 @@
     if (name === repo?.branch) return;
     await ide.saveAll();
     const localName = remote ? name.split('/').slice(1).join('/') : name;
-    const r = !remote ? await invoke('checkout', ide.root, name)
-      : local.includes(localName) ? await invoke('checkout', ide.root, localName) : await invoke('checkout', ide.root, name, true);
-    logResult(r);
-    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
-    notify(tr('Checked out {branch}', { branch: localName }), '', 'ok');
+    const [ref, track] = !remote || local.includes(localName) ? [localName, false] : [name, true];
+    const r = await smartCheckout(ref, track, localName);
+    if (!r) return;
     afterCheckout();
+  }
+
+  // A checkout, and PyCharm's Smart Checkout when git refuses it for local changes the target would overwrite: the
+  // files are named and the user chooses between stashing them, switching and putting them back, or Cancel.
+  // -> the result once checked out (notified), null otherwise.
+  async function smartCheckout(ref, track, shown) {
+    let r = await invoke('checkout', ide.root, ref, track);
+    logResult(r);
+    if (!r.ok && r.reason === 'localChanges') {
+      if (!(await askSmartCheckout(r, shown))) return null;
+      r = await invoke('checkout', ide.root, ref, track, { smart: true });
+      logResult(r);
+    }
+    if (!r.ok) { notify(tr('Checkout failed'), errorText(r), 'error', true); return null; }
+    if (r.unstashFailed) {
+      notify(tr('Checked out {branch}; your changes conflict with it', { branch: shown }),
+        tr('Your changes are applied with conflicts and also kept in the stash. Resolve the conflicts, then drop the stash.'), 'warn');
+    } else notify(tr('Checked out {branch}', { branch: shown }), r.smart ? tr('Your local changes were carried over.') : '', 'ok');
+    return r;
+  }
+
+  function askSmartCheckout(r, branch) {
+    return new Promise((resolve) => {
+      const body = el('div', 'vcs-smart-checkout');
+      body.append(el('div', null, r.untracked
+        ? tr('Checking out {branch} would overwrite these untracked files:', { branch })
+        : tr('Checking out {branch} would overwrite your local changes to these files:', { branch })));
+      const list = el('div', 'vcs-smart-files');
+      for (const f of r.files.slice(0, 15)) list.append(Object.assign(el('div', null, f), { title: f }));
+      if (r.files.length > 15) list.append(el('div', 'muted', tr('{n} more', { n: r.files.length - 15 })));
+      list.dataset.userText = '';
+      body.append(list, el('div', 'muted', tr('Smart Checkout stashes the changes, checks out {branch} and puts them back.', { branch })));
+      let choice = false;
+      const dlg = ide.ui.dialog({
+        title: tr('Git Checkout Problem'), body, width: 560,
+        buttons: [{ label: tr('Smart Checkout'), primary: true, run: () => { choice = true; } }, { label: tr('Cancel') }],
+        onClose: () => resolve(choice),
+      });
+      dlg.el.id = 'vcsSmartCheckout';
+    });
   }
 
   // A local branch's own actions, as in PyCharm's branch popup: Right on the selected branch, or a right-click on one,
@@ -446,6 +485,7 @@
   // unversioned files, and rebuilding a row for each on every refresh and click took seconds. "Show more" doubles it.
   const GROUP_ROWS = 300;
   const groupRows = new Map(); // group title -> rows shown
+  const folderOpen = new Map(); // lower folder path of unversioned files -> open (see renderFolders)
   let listEl, msgEl, initBox, commitBody, headerEl;
   // Conflicted files are left out until resolved: committing one as is would record its conflict markers.
   const fileIncluded = (f) => f.status !== 'conflict' && (included.get(key(f.path)) ?? f.status !== 'unversioned');
@@ -554,7 +594,7 @@
 
   // Everything the changes list is drawn from, as of its last drawing.
   let drawnKey = null;
-  const changesKey = () => JSON.stringify([ide.root, repo, noRepo, [...selection], [...included], [...groupRows], commitHeaders.length, !!conflictHandler]);
+  const changesKey = () => JSON.stringify([ide.root, repo, noRepo, [...selection], [...included], [...groupRows], [...folderOpen], commitHeaders.length, !!conflictHandler]);
 
   function renderChanges() {
     if (!listEl) return;
@@ -597,39 +637,131 @@
     }
     listEl.appendChild(head);
     const limit = groupRows.get(title) || GROUP_ROWS;
-    for (const f of files.slice(0, limit)) {
-      const row = el('div', 'vcs-file' + (selection.has(key(f.path)) ? ' selected' : ''));
-      row.dataset.path = f.path;
-      row.dataset.status = f.status;
-      const fcb = el('input');
-      fcb.type = 'checkbox';
-      fcb.checked = fileIncluded(f);
-      fcb.disabled = f.status === 'conflict';
-      fcb.onclick = (e) => e.stopPropagation();
-      fcb.onchange = () => { included.set(key(f.path), fcb.checked); renderChanges(); };
-      const name = userText('span', 'vcs-name', basename(f.path));
-      name.style.color = COLORS[f.status];
-      const dir = ide.util.rel(dirname(f.path));
-      row.append(fcb, Object.assign(ide.fileIcon(f.path), { className: 'file-icon icon' }), name, userText('span', 'muted vcs-dir', samePath(dirname(f.path), ide.root) ? '' : dir));
-      row.title = `${ide.util.rel(f.path)} — ${STATUS_LABEL[f.status] || f.status}`;
-      row.onclick = (e) => {
-        if (!e.ctrlKey) selection.clear();
-        const k = key(f.path);
-        e.ctrlKey && selection.has(k) ? selection.delete(k) : selection.add(k);
-        listEl.focus();
-        renderChanges();
-      };
-      row.ondblclick = () => openChange(f.path);
-      listEl.appendChild(row);
+    if (files.length && files.every((f) => f.status === 'unversioned')) return renderFolders(title, files, limit);
+    for (const f of files.slice(0, limit)) listEl.appendChild(fileRow(f));
+    moreRow(title, files.length, limit);
+  }
+
+  function moreRow(title, total, limit) {
+    if (total <= limit) return;
+    const more = el('a', 'vcs-more', tr('Show {n} more', { n: Math.min(limit, total - limit) }));
+    more.href = '#';
+    more.onclick = (e) => { e.preventDefault(); groupRows.set(title, limit * 2); renderChanges(); };
+    const row = el('div', 'vcs-more-row');
+    row.append(more, el('span', 'muted', tr('{shown} of {total}', { shown: limit, total })));
+    listEl.appendChild(row);
+  }
+
+  // Unversioned files by folder, as PyCharm groups them: thousands of files in one flat list hid everything else. The
+  // folders start collapsed when there are many files; what the user opened or closed stays so across refreshes.
+  const MANY_UNVERSIONED = 50;
+  function renderFolders(title, files, limit) {
+    const byDir = new Map();
+    for (const f of files) {
+      const d = dirname(f.path);
+      if (!byDir.has(key(d))) byDir.set(key(d), { dir: d, files: [] });
+      byDir.get(key(d)).files.push(f);
     }
-    if (files.length > limit) {
-      const more = el('a', 'vcs-more', tr('Show {n} more', { n: Math.min(limit, files.length - limit) }));
-      more.href = '#';
-      more.onclick = (e) => { e.preventDefault(); groupRows.set(title, limit * 2); renderChanges(); };
-      const moreRow = el('div', 'vcs-more-row');
-      moreRow.append(more, el('span', 'muted', tr('{shown} of {total}', { shown: limit, total: files.length })));
-      listEl.appendChild(moreRow);
+    const dirs = [...byDir.values()].sort((a, b) => ide.util.rel(a.dir).localeCompare(ide.util.rel(b.dir)));
+    let shown = 0;
+    let openRows = 0;
+    for (const { dir, files: inDir } of dirs) {
+      const open = folderOpen.get(key(dir)) ?? files.length <= MANY_UNVERSIONED;
+      const head = el('div', `vcs-folder${open ? ' open' : ''}`);
+      head.dataset.path = dir;
+      const cb = el('input');
+      cb.type = 'checkbox';
+      const on = inDir.filter(fileIncluded).length;
+      cb.checked = on === inDir.length;
+      cb.indeterminate = on > 0 && on < inDir.length;
+      cb.onclick = (e) => e.stopPropagation();
+      cb.onchange = () => { for (const f of inDir) included.set(key(f.path), cb.checked); renderChanges(); };
+      const name = userText('span', 'vcs-folder-name', samePath(dir, ide.root) ? basename(ide.root) : ide.util.rel(dir));
+      head.append(el('span', 'arrow', open ? '▾' : '▸'), cb, Object.assign(ide.fileIcon(dir, { dir: true }), { className: 'file-icon icon' }), name, el('span', 'muted', nFiles(inDir.length)));
+      head.onclick = () => { folderOpen.set(key(dir), !open); renderChanges(); };
+      head.oncontextmenu = (e) => { e.preventDefault(); changeMenu(e, inDir); };
+      listEl.appendChild(head);
+      if (!open) continue;
+      openRows += inDir.length;
+      for (const f of inDir) if (shown < limit) { listEl.appendChild(fileRow(f, true)); shown++; }
     }
+    moreRow(title, openRows, limit);
+  }
+
+  // nested: under its folder's row, so the folder is not repeated.
+  function fileRow(f, nested = false) {
+    const row = el('div', 'vcs-file' + (nested ? ' vcs-nested' : '') + (selection.has(key(f.path)) ? ' selected' : ''));
+    row.dataset.path = f.path;
+    row.dataset.status = f.status;
+    const fcb = el('input');
+    fcb.type = 'checkbox';
+    fcb.checked = fileIncluded(f);
+    fcb.disabled = f.status === 'conflict';
+    fcb.onclick = (e) => e.stopPropagation();
+    fcb.onchange = () => { included.set(key(f.path), fcb.checked); renderChanges(); };
+    const name = userText('span', 'vcs-name', basename(f.path));
+    name.style.color = COLORS[f.status];
+    const dir = ide.util.rel(dirname(f.path));
+    row.append(fcb, Object.assign(ide.fileIcon(f.path), { className: 'file-icon icon' }), name, userText('span', 'muted vcs-dir', nested || samePath(dirname(f.path), ide.root) ? '' : dir));
+    row.title = `${ide.util.rel(f.path)} — ${STATUS_LABEL[f.status] || f.status}`;
+    row.onclick = (e) => {
+      if (!e.ctrlKey) selection.clear();
+      const k = key(f.path);
+      e.ctrlKey && selection.has(k) ? selection.delete(k) : selection.add(k);
+      listEl.focus();
+      renderChanges();
+    };
+    row.ondblclick = () => openChange(f.path);
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      if (!selection.has(key(f.path))) { selection.clear(); selection.add(key(f.path)); renderChanges(); }
+      changeMenu(e, selectedFiles());
+    };
+    return row;
+  }
+
+  // PyCharm's menu on the changes list: Show Diff, Jump to Source, Rollback, Add to VCS (unversioned files), Delete.
+  function changeMenu(e, files) {
+    if (!files.length) return;
+    const first = files[0];
+    const unversioned = files.filter((f) => f.status === 'unversioned');
+    const onDisk = files.filter((f) => f.status !== 'deleted');
+    const menu = ide.ui.contextMenu(e.clientX, e.clientY, [
+      { label: tr('Show Diff'), hint: 'Ctrl+D', run: () => openChange(first.path) },
+      { label: tr('Jump to Source'), hint: 'F4', disabled: !onDisk.length, run: () => onDisk.forEach((f, i) => ide.openFile(f.path, { focus: i === onDisk.length - 1 })) },
+      { separator: true },
+      { label: tr('Rollback…'), keyAction: 'ChangesView.Revert', disabled: unversioned.length === files.length, run: () => rollbackFiles(files) },
+      { label: tr('Add to VCS'), hint: 'Ctrl+Alt+A', disabled: !unversioned.length, run: () => addToVcs(unversioned) },
+      { label: tr('Delete…'), hint: 'Delete', disabled: !onDisk.length, run: () => deleteChanged(onDisk) },
+    ]);
+    if (menu) menu.id = 'vcsChangeMenu';
+  }
+
+  async function addToVcs(files) {
+    if (!repo || !files.length) return;
+    const r = await invoke('add', ide.root, files.map((f) => f.path));
+    logResult(r);
+    if (!r.ok) return notify(tr('Add to VCS failed'), errorText(r), 'error', true);
+    for (const f of files) included.set(key(f.path), true);
+    await refresh();
+  }
+
+  async function deleteChanged(files) {
+    const question = files.length === 1 ? tr('Move {name} to the Recycle Bin?', { name: basename(files[0].path) }) : tr('Move {n} items to the Recycle Bin?', { n: files.length });
+    if (!(await ide.ui.confirm(question, { ok: tr('Delete') }))) return;
+    const deleted = [];
+    const failed = [];
+    for (const f of files) {
+      try { await ide.api.trash(f.path); } catch (err) { failed.push(tr('Could not move {name} to the Recycle Bin: {error}', { name: basename(f.path), error: ide.util.errorText(err) })); continue; }
+      await ide.documentsMoved(f.path, null);
+      deleted.push(f.path);
+      selection.delete(key(f.path));
+    }
+    if (failed.length) ide.ui.alert(failed.join('\n'));
+    if (!deleted.length) return;
+    ide.emit('filesChanged', { deleted });
+    ide.refreshTree();
+    await refresh();
   }
 
   function onListKey(e) {
@@ -650,6 +782,15 @@
       e.preventDefault();
       for (const f of selectedFiles()) included.set(key(f.path), !fileIncluded(f));
       renderChanges();
+    } else if (e.key === 'F4' && rows[i]) {
+      e.preventDefault();
+      if (byPath.get(key(rows[i].dataset.path))?.status !== 'deleted') ide.openFile(rows[i].dataset.path);
+    } else if (e.key === 'Delete' && selectedFiles().length) {
+      e.preventDefault();
+      deleteChanged(selectedFiles().filter((f) => f.status !== 'deleted'));
+    } else if (e.key === 'a' && e.ctrlKey && e.altKey) {
+      e.preventDefault();
+      addToVcs(selectedFiles().filter((f) => f.status === 'unversioned'));
     }
   }
 
@@ -767,6 +908,7 @@
           const r = await invoke('rollback', ide.root, files.map((f) => ({ path: f.path, status: f.status, orig: f.orig })));
           logResult(r);
           if (!r.ok) notify(tr('Rollback failed'), r.log.map((l) => l.err).join('\n'), 'error', true);
+          else notify(trn(files.length, 'Rolled back changes in {n} file', 'Rolled back changes in {n} files'), files.slice(0, 5).map((f) => ide.util.rel(f.path)).join(', '), 'ok', true);
           for (const f of files) selection.delete(key(f.path));
           await reloadTabs(files.flatMap((f) => (f.orig ? [f.path, f.orig] : [f.path])), true);
           ide.refreshTree();
@@ -822,6 +964,10 @@
     diff.setModel({ original, modified });
     diff.onDidUpdateDiff(() => markModifiedBlocks(diff));
     host._vcsDiff = diff;
+    host._vcsSetLeft = (text, title) => {
+      if (original.getValue() !== text) original.setValue(text);
+      head.firstChild.replaceWith(diffSide(title));
+    };
     return () => {
       // the modified side may be an open editor's model, which outlives this view
       if (diff._vcsMod) diff.getModifiedEditor().deltaDecorations(diff._vcsMod.mod, []);
@@ -838,30 +984,43 @@
     const id = `${path} [${tr('diff with HEAD')}]`; // tab ids double as the status-bar path
     if (ide.findTab(id)) return ide.openCustomTab({ id });
     const f = byPath.get(key(path));
-    const left = f?.status === 'unversioned' || f?.status === 'added' ? '' : await invoke('show', ide.root, f?.orig || path, 'HEAD');
-    openLocalDiff({ id, path, left, deleted: f?.status === 'deleted',
-      leftTitle: lastHead ? tr('HEAD ({hash}) — read-only', { hash: lastHead.slice(0, 8) }) : 'HEAD' });
+    openLocalDiff({ id, path, left: await headSide(path), deleted: f?.status === 'deleted', leftTitle: headTitle(), live: true });
+  }
+  const headTitle = () => (lastHead ? tr('HEAD ({hash}) — read-only', { hash: lastHead.slice(0, 8) }) : 'HEAD');
+  async function headSide(path) {
+    const f = byPath.get(key(path));
+    return f?.status === 'unversioned' || f?.status === 'added' ? '' : ((await invoke('show', ide.root, f?.orig || path, 'HEAD')) ?? '');
+  }
+
+  // The open diffs with HEAD follow HEAD: after a commit, checkout or reset their left side is the new HEAD's text,
+  // where it used to keep comparing against the commit before.
+  const workingDiffs = new Map(); // tab id -> {path, host}
+  async function refreshWorkingDiffs() {
+    for (const [id, d] of workingDiffs) {
+      const left = await headSide(d.path);
+      if (workingDiffs.get(id) === d) d.host._vcsSetLeft?.(left, headTitle());
+    }
   }
 
   // A diff tab of `left` against the file as it is now: the open editor's model (edits show at once and can be made in
   // the diff), else the text on disk, read-only.
-  async function openLocalDiff({ id, path, left, leftTitle, deleted = false }) {
+  async function openLocalDiff({ id, path, left, leftTitle, deleted = false, live = false }) {
     const tab = ide.findTab(path);
     let right = null;
     if (!tab && !deleted) { try { right = (await ide.api.invoke('fs:readText', path)).text ?? ''; } catch { right = ''; } }
     let dispose;
-    let unsub;
+    // The right side is the open editor's model: the tab holds that document (core ide.openCustomTab({doc})), so the
+    // editor tab closing (by hand or by the tab limit) leaves the model to the diff instead of disposing it under it.
     ide.openCustomTab({
-      id, title: tr('Diff: {name}', { name: basename(path) }), icon: 'diff',
+      id, title: tr('Diff: {name}', { name: basename(path) }), icon: 'diff', doc: tab?.doc,
       mount(host) {
         dispose = mountDiff(host, {
           name: basename(path), left, right, rightModel: tab?.model, leftTitle,
           rightTitle: tab ? tr('Your version') : tr('Your version — read-only'),
         });
-        // the right side shares the open editor's model, so the diff cannot outlive that tab
-        if (tab) unsub = ide.on('fileClosed', (p) => samePath(p, path) && setTimeout(() => ide.closeTab(id)));
+        if (live) workingDiffs.set(id, { path, host });
       },
-      onClose() { unsub?.(); dispose?.(); },
+      onClose() { workingDiffs.delete(id); dispose?.(); },
     });
   }
 
@@ -1509,10 +1668,7 @@
 
   async function checkoutRevision(c) {
     await ide.saveAll();
-    const r = await invoke('checkout', ide.root, c.hash);
-    logResult(r);
-    if (!r.ok) return notify(tr('Checkout failed'), errorText(r), 'error', true);
-    notify(tr('Checked out {branch}', { branch: c.short }), '', 'ok');
+    if (!(await smartCheckout(c.hash, false, c.short))) return;
     afterRewrite(c.hash);
   }
 
@@ -2334,6 +2490,17 @@
     if (blames.has(key(tab.path))) annotate(tab);
   });
   ide.on('filesChanged', () => scheduleRefresh());
+  // Changes made outside the IDE (a terminal elsewhere, another program): files created, changed or deleted, and the
+  // repository itself (git init, commit, checkout, fetch), which main reports apart from the files. The watcher batches
+  // a burst (a checkout of thousands of files) into one event, and refreshes run one at a time.
+  let logTimer = null;
+  ide.api.on('watch:changed', ({ root } = {}) => { if (ide.root && samePath(root, ide.root)) scheduleRefresh(400); });
+  ide.api.on('watch:gitChanged', ({ root } = {}) => {
+    if (!ide.root || !samePath(root, ide.root)) return;
+    scheduleRefresh(300);
+    // A commit on another branch or a fetch moves no HEAD, so the Log does not reload by itself.
+    if (gitTw.isVisible()) { clearTimeout(logTimer); logTimer = setTimeout(() => loadLog(), 600); }
+  });
   // overview-ruler marks carry concrete colors; recolor them for the new theme
   ide.on('themeChanged', () => setTimeout(updateVisibleGutters));
   ide.on('activeTabChanged', (tab) => { updateGutter(tab); layoutAnnotations(); });

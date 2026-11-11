@@ -492,7 +492,7 @@ try {
   await k.until(`${demoRow}?.dataset.vulnerable === '2'`, 'vulnerable row (ko)', 60000);
   await k.click('#pkgList .pkg-row[data-name="pyide-vuln-demo"]');
   await k.until(`!!document.querySelector('#pkgVulns')`, 'details (ko)');
-  k.check(await k.js(`document.querySelector('#pkgVulnUpgrade').textContent === '1.1(으)로 업그레이드'`), 'the Upgrade button is Korean');
+  k.check(await k.js(`document.querySelector('#pkgVulnUpgrade').textContent === '1.1 버전으로 업그레이드'`), 'the Upgrade button is Korean');
   let leaks = (await englishLeaks(k, '#pkgVulns, #vulnStatus')).map((l) => l.text);
   k.check(!leaks.length, `the advisory details are Korean apart from the advisory data (${leaks.join(' | ')})`);
   await k.sleep(2500);

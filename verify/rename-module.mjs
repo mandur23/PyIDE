@@ -154,7 +154,13 @@ try {
   const main1 = await h.doc('main.py');
   check(main1.startsWith('import geo.figures\nfrom geo import figures\nfrom geo.figures import area\nfrom geo.report import report\n')
     && main1.includes('print(geo.figures.area(2), figures.area(3), area(4)'), `the open importer is rewritten (main.py: ${main1.split('\n').slice(0, 3).join(' | ')})`);
-  check(await js(`ide.isDirty(ide.tabs.find((t) => /main\\.py$/.test(t.path)))`), 'the open importer gets an unsaved, undoable edit');
+  // As in PyCharm the refactoring's edits are saved with the move, so a run or a commit from outside sees it whole;
+  // an importer that had unsaved text of the user's keeps it unsaved.
+  check(!(await js(`ide.isDirty(ide.tabs.find((t) => /main\\.py$/.test(t.path)))`)) && h.disk('main.py').startsWith('import geo.figures\n'), "the open importer's edit is saved with the move");
+  check(await js(`ide.isDirty(ide.tabs.find((t) => /calc\\.py$/.test(t.path)))`), "an importer with unsaved text of the user's stays unsaved");
+  const done = await h.lastNote();
+  check(/^Rename: \d+ files changed$/.test(done?.title) && /shapes\.py → .*figures\.py/.test(done?.text), `a balloon says the rename finished (${q(done)})`);
+  check(await js(`ide.notifications.list().find((n) => n.id === ${q(done?.id)})?.actions?.some((a) => a.label === 'Undo')`), 'and offers Undo');
   const calc1 = await h.doc('tools/calc.py');
   check(calc1.startsWith('from geo.figures import area\n') && calc1.endsWith('# unsaved note\n'), 'an importer with unsaved text keeps it');
   check(h.disk('geo/report.py') === 'from . import figures\nfrom .figures import area\n\n\ndef report():\n    return figures.area(1) + area(1)\n', 'relative imports in a closed file are rewritten');
@@ -176,6 +182,19 @@ try {
   check(await h.settled(async () => h.exists('geo/figures.py') && ((await h.doc('main.py')) || '').startsWith('import geo.figures\n')
     && h.disk('geo/report.py').startsWith('from . import figures\n')), 'Ctrl+Shift+Z redoes it');
   check((await appOutput()) === baseline, 'the program prints the same after undo and redo');
+
+  // Ctrl+Z in an editor the refactoring did not touch, with nothing of its own to undo, asks and undoes the refactoring.
+  await openFile(t, 'notes.txt');
+  await js(`ide.editor.focus(), true`);
+  await press('Ctrl+Z');
+  const asked = await until(`[...document.querySelectorAll('.dialog')].some((d) => d.textContent.includes('Undo Rename?'))`, 'undo question', 10000).then(() => true, () => false);
+  check(asked, 'Ctrl+Z in an untouched file asks "Undo Rename?"');
+  if (asked) await js(`[...[...document.querySelectorAll('.dialog')].pop().querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Undo').click(), true`);
+  check(await h.settled(async () => !h.exists('geo/figures.py') && h.exists('geo/shapes.py') && h.disk('main.py').startsWith('import geo.shapes\n')), 'and undoes it in every file, on disk too');
+  await openFile(t, 'main.py');
+  await js(`ide.editor.focus(), true`);
+  await press('Ctrl+Shift+Z');
+  check(await h.settled(async () => h.exists('geo/figures.py') && h.disk('main.py').startsWith('import geo.figures\n')), 'Ctrl+Shift+Z in an importer redoes it');
 
   // Undoing the rename while the renamed module has unsaved text: the text is saved and moves back with the file.
   const TYPED = '# typed after the rename\n';

@@ -43,9 +43,9 @@ const feed = `http://127.0.0.1:${server.address().port}/feed`;
 const work = mkdtempSync(path.join(tmpdir(), 'pyide-installer-python-'));
 const root = path.join(work, 'root');
 const exe = path.join(root, 'python', VERSION, 'python.exe');
-// No Python on PATH: the py launcher (C:\Windows) and the Store aliases are left out.
+// No Python on PATH: the py launcher (C:\Windows) and the Store aliases are left out, and no install folder is searched.
 const PATH = [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'), path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'Wbem')].join(';');
-const env = { PYIDE_INSTALL_ROOT: root, PYIDE_PYTHON_FEED: feed, PATH, Path: PATH };
+const env = { PYIDE_INSTALL_ROOT: root, PYIDE_PYTHON_FEED: feed, PATH, Path: PATH, PYIDE_PYTHON_ROOTS: ';' };
 const ID = 'python:3.13';
 const card = `.inst-card[data-id="${ID}"]`;
 

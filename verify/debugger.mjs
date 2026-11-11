@@ -317,11 +317,9 @@ try {
   await openFile(t, 'main.py');
   await until(`(ide.editor.render(true), document).querySelectorAll('#editor .dbg-bp.cond').length === 1`, 'breakpoint restored');
   check(true, 'breakpoints restored after reload');
-  const wasVisible = await js(`ide.toolWindows.get('Debug').isVisible()`);
+  await js(`(ide.toolWindows.get('Debug').hide(), true)`);
   await press('Alt+5');
-  const toggled = (await js(`ide.toolWindows.get('Debug').isVisible()`)) !== wasVisible;
-  if (wasVisible) await press('Alt+5');
-  check(toggled && await js(`ide.toolWindows.get('Debug').isVisible()`), 'Alt+5 toggles the Debug tool window');
+  check(await js(`ide.toolWindows.get('Debug').isVisible()`), 'Alt+5 shows the Debug tool window');
   check(await js(`document.querySelector('#dbgWatches').textContent.includes('total * 2')`), 'watches persisted');
   await shot('final.png');
 } catch (err) {

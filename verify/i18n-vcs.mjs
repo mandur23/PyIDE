@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch, lensesShown, openFile } from './lib.mjs';
+import { closeBalloonsOver, launch, lensesShown, openFile } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 // Same git isolation as verify/vcs.mjs.
@@ -160,6 +160,8 @@ try {
   check(await js(`document.querySelector('.vcs-side-title').textContent`) === '파일 1개 변경됨', 'changed-files title is Korean');
   await noLeaks(BOTTOM, 'Git log window');
   await shot('log-ko.png');
+  // The rollback's balloon sits over the changed files of the Log: a double click on its action would show the console.
+  await closeBalloonsOver(t, `[...document.querySelectorAll('.vcs-log-file')].find(r => r.dataset.rel === 'util/helpers.py')`);
   await mouse(`[...document.querySelectorAll('.vcs-log-file')].find(r => r.dataset.rel === 'util/helpers.py')`, { clickCount: 2, label: 'log helpers.py' });
   await until(`ide.activeTab()?.title.startsWith('helpers.py (') && !!${diffTab}?._vcsDiff`, 'commit diff');
   check(await js(`${diffTab}.querySelector('.vcs-diff-side').textContent.endsWith('^ (부모)')`), 'commit diff header says (부모)');

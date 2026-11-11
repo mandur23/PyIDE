@@ -102,7 +102,7 @@
   "Zoom In": "확대",
   "Zoom Out": "축소",
   "Zoom to Fit": "창에 맞추기",
-  "{module} is not installed in the selected interpreter.": "선택한 인터프리터에 {module}이(가) 설치되어 있지 않습니다.",
+  "{module} is not installed in the selected interpreter.": "선택한 인터프리터에 {module} 모듈이 설치되어 있지 않습니다.",
   "{n} channels": "{n}채널",
   "Parse errors: {n}": "파싱 오류: {n}",
   "Rows: {n}": "행: {n}",

@@ -50,6 +50,13 @@ try {
   await until(`!ide.isDirty(ide.activeTab())`, 'reset');
   await conflict('Keep Memory Changes');
   check(disk('broken.py').startsWith('# editor Keep Memory Changes') && !(await js(`ide.isDirty(ide.activeTab())`)), 'Keep Memory Changes writes the editor text');
+  await conflict('Show Difference');
+  await until(`!!ide.compare.view()`, 'the difference opens in a diff tab');
+  const sides = await js(`(() => { const d = ide.compare.view().diff; return { left: d.getOriginalEditor().getValue(), right: d.getModifiedEditor().getValue(), editable: !d.getModifiedEditor().getOption(ide.monaco.editor.EditorOption.readOnly) }; })()`);
+  check(sides.left === 'OUTSIDE_ShowDifference = 1\n' && sides.right.startsWith('# editor Show Difference') && sides.editable && disk('broken.py') === 'OUTSIDE_ShowDifference = 1\n',
+    `Show Difference opens the disk text against the editor's, writes nothing, and the editor side stays editable (${JSON.stringify(sides)})`);
+  await js(`(ide.closeTab(ide.activeTab().path, true), true)`);
+  await until(`ide.activeTab()?.title === 'broken.py'`, 'back to broken.py');
   await conflict('Load File System Changes');
   check(disk('broken.py') === 'OUTSIDE_LoadFileSystemChanges = 1\n' && await js(`ide.editor.getModel().getValue()`) === 'OUTSIDE_LoadFileSystemChanges = 1\n'
     && !(await js(`ide.isDirty(ide.activeTab())`)), 'Load File System Changes replaces the editor text with the disk text');
@@ -61,6 +68,23 @@ try {
   unlinkSync(p('made_outside.py'));
   await until(`![...document.querySelectorAll('#tree .node .name')].some(n => n.textContent === 'made_outside.py')`, 'deleted file leaves tree', 10000);
   check(true, 'a file deleted outside leaves the tree');
+
+  // ---------- an open file deleted outside ----------
+  writeFileSync(p('gone.py'), 'G = 1\n');
+  await openFile(t, 'gone.py');
+  const goneTab = `[...document.querySelectorAll('.tab')].find(n => n.textContent.includes('gone.py'))`;
+  const goneNotes = `ide.notifications.list().filter(e => e.text.includes('gone.py was deleted outside the IDE')).length`;
+  unlinkSync(p('gone.py'));
+  await until(`${goneTab}?.classList.contains('gone')`, 'the tab of a deleted file is marked', 10000);
+  const struck = await js(`getComputedStyle(${goneTab}.querySelector('.name')).textDecorationLine`);
+  check(struck === 'line-through' && (await js(`${goneTab}.title`)).includes('deleted on disk'), `the tab of a file deleted outside is struck through and says so (${struck})`);
+  await js(`window.dispatchEvent(new Event('focus'))`);
+  await sleep(1500);
+  check(await js(goneNotes) === 1, 'the user is told once, not again on the next check');
+  writeFileSync(p('gone.py'), 'G = 1\n');
+  await until(`!${goneTab}?.classList.contains('gone')`, 'the file came back', 10000);
+  check(true, 'a deleted file that comes back is shown as a normal tab again');
+  await js(`(ide.closeTab(${JSON.stringify(p('gone.py'))}, true), true)`);
   check(t.consoleErrors.length === 0, `no renderer exceptions${t.consoleErrors.length ? ` ${JSON.stringify(t.consoleErrors)}` : ''}`);
 } catch (err) {
   check(false, err.message);

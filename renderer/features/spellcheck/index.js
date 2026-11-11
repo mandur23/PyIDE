@@ -69,7 +69,7 @@
     tarballs untar binaries changelog changelogs readme roadmap todos signup login logout logins signin signout
     whitelist blacklist allowlist denylist blocklist natively hardcode hardcoded hardcoding versioning versioned
     unversioned stateful stateless idempotent idempotency memoize memoized memoization cacheable uncached
-    enqueue dequeue enqueued dequeued`;
+    enqueue dequeue enqueued dequeued ctrl alt esc pgup pgdn numpad cmd nano`;
   const IGNORE = new Set();
   for (const block of [KEYWORDS, BUILTINS, PROGRAMMING]) for (const w of block.split(/\s+/)) if (w) IGNORE.add(w);
 

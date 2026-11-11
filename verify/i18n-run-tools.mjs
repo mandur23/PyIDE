@@ -135,8 +135,8 @@ try {
   if (await js(`ide.actions.some(a => a.id === 'DebugCurrent' || a.id === 'Debug')`)) check(gm.some((s) => s.includes("'app' 디버그")), 'gutter menu offers 디버그');
   await noLeaks('.context-menu', 'gutter menu');
   await clickMenu("'app' 실행");
-  await until(`document.querySelector('#runOut')?.textContent.includes('종료 코드 0(으)로 완료된 프로세스')`, 'Korean exit line');
-  check(true, 'Run prints 종료 코드 0(으)로 완료된 프로세스');
+  await until(`document.querySelector('#runOut')?.textContent.includes('프로세스 완료(종료 코드 0)')`, 'Korean exit line');
+  check(true, 'Run prints 프로세스 완료(종료 코드 0)');
   check((await runOut()).includes('sum: 5'), 'program output is shown untranslated');
   await noLeaks('.run-tool', 'Run tool window with a session');
   await toolWindowChrome('Run', 'Run');
@@ -222,7 +222,7 @@ try {
   check((await activeOut()).includes('건너뜀: not ready'), 'skip reason note (reason itself untranslated)');
   check(hangul(await js(`document.querySelector('.run-session:not(.hidden) .tr-row').title`)), 'result rows have Korean status tooltips');
   await js(`document.querySelector('.run-session:not(.hidden) .tr-row[data-kind="root"]').click()`);
-  check((await activeOut()).includes('종료 코드 1(으)로 완료된 프로세스'), 'test run log ends with the Korean exit line');
+  check((await activeOut()).includes('프로세스 완료(종료 코드 1)'), 'test run log ends with the Korean exit line');
   await shot('ko-test-results.png');
   await click('#bottomActions button[title="실패한 테스트 다시 실행"]');
   await sleep(300);
@@ -234,7 +234,8 @@ try {
   check(tmenu.some((s) => s.includes("'test_units.py의 pytest' 실행")) && !tmenu.some((s) => s.startsWith('Run ')), `tree menu on a test file (${tmenu.join(' | ')})`);
   await closeMenu();
   tmenu = await treeMenu('scratch.py');
-  check(tmenu.some((s) => s.includes("'…' 실행")), `tree menu on a script (${tmenu.join(' | ')})`);
+  check(tmenu.some((s) => s.includes("'scratch' 실행")) && !tmenu.some((s) => s.includes("'…'")), `tree menu on a script names it (${tmenu.join(' | ')})`);
+  check(tmenu.some((s) => s.includes('.exe 프로그램으로 빌드')) && !tmenu.some((s) => s.includes('실행 파일 만들기')), `Build Executable cannot be read as running (${tmenu.join(' | ')})`);
   await closeMenu();
 
   // ---------- unittest fallback: install hint ----------
@@ -266,7 +267,7 @@ try {
   check((await js(`ide.toolWindows.get('PythonConsole').tab.textContent`)) === 'Python 콘솔', 'Python Console title');
   await shot('ko-python-console.png');
   await click('#bottomActions button[title="콘솔 중지"]');
-  await until(`document.querySelector('#pyconsoleOut').textContent.includes('(으)로 완료된 프로세스')`, 'console stopped');
+  await until(`document.querySelector('#pyconsoleOut').textContent.includes('프로세스 완료(종료 코드')`, 'console stopped');
   check(true, 'stopping the console prints the Korean exit line');
   check(hangul(await js(`ide.editor.getAction('pyide.executeInConsole').label`)), 'editor context menu: Execute Selection in Python Console');
 

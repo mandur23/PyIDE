@@ -62,6 +62,27 @@ const SCANS = {
     return venvs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length || a.localeCompare(b));
   },
   ping: () => true,
+  // python.exe of every Python installed on this computer, found without starting any: what the py launcher lists
+  // (`py -0p`) and the folders under `roots` named Python* (the python.org installer's and the Python install manager's
+  // places). The Store's app execution alias is no install.
+  installedPythons: (roots) => new Promise((resolve) => {
+    execFile('py', ['-0p'], { encoding: 'utf8', timeout: 5000, windowsHide: true }, (err, out) => {
+      const found = [];
+      for (const line of err ? [] : out.split(/\r?\n/)) {
+        const m = /([A-Za-z]:\\.*\.exe)\s*$/i.exec(line);
+        if (m && !/\\WindowsApps\\/i.test(m[1])) found.push(m[1]);
+      }
+      for (const root of roots) {
+        let entries = [];
+        try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch {}
+        for (const d of entries) {
+          const exe = path.join(root, d.name, 'python.exe');
+          if (d.isDirectory() && /^python/i.test(d.name) && fs.existsSync(exe)) found.push(exe);
+        }
+      }
+      resolve(found);
+    });
+  }),
   // Version, real executable and base interpreter (itself, or the one a venv was made from) of the Python that
   // `cmd args` starts; null when it does not start.
   probe: (cmd, args) => new Promise((resolve) => {

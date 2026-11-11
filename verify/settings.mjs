@@ -58,6 +58,30 @@ try {
   await a.click('#settingsApply');
   await a.until(`ide.editor.getOption(ide.monaco.editor.EditorOption.fontSize) === 16`, 'font applied');
   check(true, 'Apply changes the editor font live');
+  // "100" passes through a valid "10" while typed: the refused value must not apply that, and says why beside the field.
+  await a.js(`(() => { const i = document.querySelector('[data-key="editor.fontSize"]'); i.focus(); i.select(); })()`);
+  await a.type('100');
+  const refusedFont = await a.js(`(() => { const i = document.querySelector('[data-key="editor.fontSize"]'); const r = i.nextElementSibling;
+    return { invalid: i.classList.contains('invalid'), reason: r?.classList.contains('field-error') ? r.textContent : null, shown: !!r && r.getClientRects().length > 0, apply: document.querySelector('#settingsApply').disabled }; })()`);
+  check(refusedFont.invalid && refusedFont.reason === 'Enter a value between 6 and 48' && refusedFont.shown && refusedFont.apply,
+    `a refused font size shows its reason beside the field and leaves nothing to apply (${JSON.stringify(refusedFont)})`);
+  await a.click('#settingsOk');
+  await a.sleep(300);
+  check(await a.js(`!!document.querySelector('.settings-dialog') && document.activeElement?.dataset.key === 'editor.fontSize' && ide.settings.get('editor.fontSize') === 16 && ide.editor.getOption(ide.monaco.editor.EditorOption.fontSize) === 16`),
+    'OK with a refused value keeps the dialog open on that field, and the font stays 16 (not the 10 typed on the way)');
+  await a.js(`document.querySelector('[data-key="editor.fontSize"]').select()`);
+  await a.type('16');
+  check(await a.js(`!document.querySelector('.field-error') && document.querySelector('#settingsApply').disabled`), 'a valid value again clears the reason');
+  // ---------- editor font family ----------
+  const fonts = await a.js(`[...document.querySelector('[data-key="editor.fontFamily"]').options].map(o => [o.value, o.textContent])`);
+  check(fonts[0]?.[1] === 'JetBrains Mono (default)' && fonts.some(([v]) => v === 'Consolas') && await a.js(`document.querySelector('[data-key="editor.fontFamily"]').value`) === 'JetBrains Mono',
+    `Font: lists the default first and the monospace fonts of this computer (${JSON.stringify(fonts)})`);
+  await a.js(`(() => { const s = document.querySelector('[data-key="editor.fontFamily"]'); s.value = 'Consolas'; s.dispatchEvent(new Event('change')); })()`);
+  await a.click('#settingsApply');
+  await a.until(`ide.editor.getOption(ide.monaco.editor.EditorOption.fontFamily).startsWith("'Consolas'")`, 'font family applied');
+  check(true, 'Apply sets the editor font family at once');
+  await a.js(`(() => { const s = document.querySelector('[data-key="editor.fontFamily"]'); s.value = 'JetBrains Mono'; s.dispatchEvent(new Event('change')); })()`);
+  await a.click('#settingsApply');
   // An editor a viewer creates keeps the options it set itself (a notebook cell's and the DB console's rulers: [],
   // the cell's wordWrap: 'off') when an editor setting changes, and follows the others.
   const own = await a.js(`(() => {

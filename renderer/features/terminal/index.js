@@ -113,7 +113,7 @@
     host.appendChild(t.el);
     t.tabEl = el('div', 'term-tab');
     t.tabEl.onclick = () => selectPane(t.active);
-    t.tabEl.onauxclick = (e) => e.button === 1 && closeTab(t);
+    t.tabEl.onauxclick = (e) => e.button === 1 && closeTabAsking(t);
     t.tabEl.ondblclick = () => renameSession(t.active);
     t.tabEl.addEventListener('contextmenu', (e) => { e.preventDefault(); tabMenu(t, e.clientX, e.clientY); });
     tabBar.insertBefore(t.tabEl, tabBar.querySelector('.term-new'));
@@ -237,7 +237,12 @@
     s.name ??= s.shellName;
     renderTab(s.t);
     for (const d of pending) s.term.write(d);
-    s.term.onData((data) => !s.exited && ide.api.send('pty:write', { id: s.id, data }));
+    s.term.onData((data) => {
+      if (s.exited) return;
+      ide.api.send('pty:write', { id: s.id, data });
+      // Enter may have started a program: looked at once it has had time to start.
+      if (data.includes('\r')) checkBusy(s, 800);
+    });
     s.term.onResize(({ cols, rows }) => ide.api.send('pty:resize', { id: s.id, cols, rows }));
     // A resize while the shell started (the panel settling after it opened) did not reach the pty.
     if (s.term.cols !== size.cols || s.term.rows !== size.rows) ide.api.send('pty:resize', { id: s.id, cols: s.term.cols, rows: s.term.rows });
@@ -276,16 +281,53 @@
   // here may still print until their exit arrives; that output is dropped.
   const orphanOutput = new Map();
   const closedIds = new Set();
+
+  // ---------- programs running in a session ----------
+  // s.busy: a program besides the shell runs in the session (main asks the console, pty:busy). Looked at after Enter and,
+  // while busy, after output (the prompt coming back), never on a timer. Closing the window asks about busy sessions
+  // (window:setBusy, as the Run window's runs), and closing a busy session's tab asks first.
+  function checkBusy(s, delay) {
+    clearTimeout(s.busyTimer);
+    s.busyTimer = setTimeout(async () => {
+      if (s.closed || s.exited || !s.id) return;
+      const busy = await ide.api.invoke('pty:busy', s.id).catch(() => null);
+      if (busy !== null && !s.closed && !s.exited) setBusy(s, busy);
+    }, delay);
+  }
+  let lastBusy = '';
+  function setBusy(s, busy) {
+    s.busy = busy;
+    const names = sessions.filter((o) => o.busy && !o.closed && !o.exited).map((o) => tr('Terminal: {name}', { name: o.name || '…' }));
+    const now = JSON.stringify(names);
+    if (now !== lastBusy) { lastBusy = now; ide.api.send('window:setBusy', { source: 'terminal', names }); }
+  }
+  // Closing panes that may run a program: each is asked about fresh, and if any runs one, the user confirms, like
+  // PyCharm's "Terminate the process?". -> false when the user keeps them.
+  async function confirmClose(list) {
+    const live = list.filter((s) => s.id && !s.exited && !s.closed);
+    const answers = await Promise.all(live.map((s) => ide.api.invoke('pty:busy', s.id).catch(() => null)));
+    const running = live.filter((_s, i) => answers[i]);
+    if (!running.length) return true;
+    return ide.ui.confirm(tr('A program is still running in {names}. Closing terminates it.', { names: running.map((s) => s.name || '…').join(', ') }),
+      { title: tr('Terminate the Process?'), ok: tr('Terminate') });
+  }
+  const closeTabAsking = async (t) => { if (await confirmClose(leaves(t.root))) closeTab(t); };
+  const closeSessionAsking = async (s) => { if (s && await confirmClose([s])) closeSession(s); };
+
   ide.api.on('pty:data', ({ id, data }) => {
     const s = byId(id);
-    if (s) s.term.write(data);
-    else if (!closedIds.has(id)) (orphanOutput.get(id) || orphanOutput.set(id, []).get(id)).push(data);
+    if (s) {
+      s.term.write(data);
+      // A program that ends gives the prompt back, which is output: a busy session is looked at again then.
+      if (s.busy) checkBusy(s, 500);
+    } else if (!closedIds.has(id)) (orphanOutput.get(id) || orphanOutput.set(id, []).get(id)).push(data);
   });
   ide.api.on('pty:exit', ({ id, code }) => {
     const s = byId(id);
     closedIds.delete(id);
     if (!s) return;
     s.exited = true;
+    setBusy(s, false);
     // A split pane whose shell ends (`exit`) closes, as in PyCharm; a tab's only pane keeps its output until Enter.
     if (s.t.root.kind === 'split') { closeSession(s); return; }
     s.term.write(`\r\n\x1b[90m${tr('Process exited with code {code}. Press Enter to close this tab.', { code })}\x1b[0m\r\n`);
@@ -318,6 +360,8 @@
   function closeSession(s) {
     if (!s || s.closed) return;
     s.closed = true;
+    clearTimeout(s.busyTimer);
+    if (s.busy) setBusy(s, false);
     if (s.id && !s.exited) { closedIds.add(s.id); ide.api.invoke('pty:kill', s.id); }
     s.size.disconnect();
     // xterm 5.5 never disposes the device-pixel-ratio monitor its CoreBrowserService creates, so every closed terminal
@@ -367,7 +411,7 @@
     if (n > 1) t.tabEl.append(el('span', 'term-tab-count', String(n)));
     const close = el('button', 'term-tab-close', '×');
     close.title = tr('Close Tab');
-    close.onclick = (e) => { e.stopPropagation(); closeTab(t); };
+    close.onclick = (e) => { e.stopPropagation(); closeTabAsking(t); };
     t.tabEl.append(close);
   }
 
@@ -458,7 +502,7 @@
       ...splitItems(s),
       { separator: true },
       { label: tr('Rename Session'), run: () => renameSession(s) },
-      { label: tr('Close Session'), keyAction: 'Terminal.CloseSession', run: () => closeSession(s) },
+      { label: tr('Close Session'), keyAction: 'Terminal.CloseSession', run: () => closeSessionAsking(s) },
     ]);
   }
 
@@ -472,7 +516,7 @@
       ...splitItems(t.active),
       { separator: true },
       { label: tr('Rename Session'), run: () => renameSession(t.active) },
-      { label: tr('Close Tab'), run: () => closeTab(t) },
+      { label: tr('Close Tab'), run: () => closeTabAsking(t) },
     ]);
   }
 
@@ -645,7 +689,7 @@
   ide.registerAction({ id: 'Terminal.SplitDown', title: tr('Split Terminal Down'), run: () => splitPane(active, 'down'), terminal: true });
   ide.registerAction({ id: 'Terminal.NextSplitter', title: tr('Next Terminal Split'), run: () => cycleSplit(1), terminal: true });
   ide.registerAction({ id: 'Terminal.PreviousSplitter', title: tr('Previous Terminal Split'), run: () => cycleSplit(-1), terminal: true });
-  ide.registerAction({ id: 'Terminal.CloseSession', title: tr('Close Terminal Session'), run: () => closeSession(active), terminal: true });
+  ide.registerAction({ id: 'Terminal.CloseSession', title: tr('Close Terminal Session'), run: () => closeSessionAsking(active), terminal: true });
   ide.registerAction({ id: 'InstallClaudeCode', title: tr('Install Claude Code'), run: showInstallPrompt });
   // The official installer runs in a visible Terminal session, so the user sees exactly what it does; the Install
   // Manager card waits until the claude binary shows up.
@@ -728,7 +772,14 @@
         if (k >= 0) return { row: lines[i].row + Math.floor(k / s.term.cols), col: k % s.term.cols };
       }
       return null;
-    },    send: (text, id) => { const s = id ? byId(id) : active; if (s?.id) ide.api.send('pty:write', { id: s.id, data: text }); },
+    },
+    // A command sent here starts a program as one typed does, so the session is looked at the same way.
+    send: (text, id) => {
+      const s = id ? byId(id) : active;
+      if (!s?.id) return;
+      ide.api.send('pty:write', { id: s.id, data: text });
+      if (/[\r\n]/.test(text)) checkBusy(s, 800);
+    },
     openClaude,
     claudeStatus: () => claude,
     // Cell geometry of the active session, for placing the mouse on a given buffer line.

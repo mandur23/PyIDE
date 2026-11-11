@@ -22,7 +22,7 @@
   "Starting the Java language server for {name}": "{name}에 대해 Java 언어 서버 시작 중",
   "The Java language server failed to start": "Java 언어 서버를 시작하지 못했습니다",
   "Java language server ready ({jdk})": "Java 언어 서버 준비됨({jdk})",
-  "The Java language server exited with code {code}": "Java 언어 서버가 종료 코드 {code}(으)로 종료되었습니다",
+  "The Java language server exited with code {code}": "Java 언어 서버가 종료되었습니다(종료 코드 {code})",
   "The Java language server stopped": "Java 언어 서버가 중지되었습니다",
   "Java language server error: {message}": "Java 언어 서버 오류: {message}",
   "Java language server stopped": "Java 언어 서버 중지됨",

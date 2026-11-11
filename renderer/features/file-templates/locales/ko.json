@@ -14,7 +14,7 @@
   "New Python package name": "새 Python 패키지 이름",
   "Name for the new {template}": "새 {template}의 이름",
   "New file name": "새 파일 이름",
-  "{path} already exists": "{path}이(가) 이미 존재합니다",
+  "{path} already exists": "이미 존재합니다: {path}",
   "New": "새로 만들기",
   "File": "파일",
   "Python File": "Python 파일",
@@ -43,5 +43,5 @@
   "Java Record": "Java 레코드",
   "Java Annotation": "Java 어노테이션",
   "New Java Class": "새 Java 클래스",
-  "{name} is not a valid Java name": "{name}은(는) 올바른 Java 이름이 아닙니다"
+  "{name} is not a valid Java name": "올바른 Java 이름이 아닙니다: {name}"
 }

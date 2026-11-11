@@ -787,11 +787,30 @@ exports.register = ({ ipcMain, app }) => {
     return { local, remote };
   });
 
-  h('checkout', async (root, branch, track) => {
+  // A checkout git refuses because it would overwrite local changes answers reason 'localChanges' with the files
+  // (`untracked` when they are untracked files), for PyCharm's Smart Checkout question. smart: stash the changes,
+  // switch, and put them back; a stash that does not go back cleanly is left in place with the conflicts to resolve.
+  h('checkout', async (root, branch, track, { smart = false } = {}) => {
     if (isOption(branch)) return notARef(branch);
     const args = track ? ['checkout', '--track', branch] : ['checkout', branch];
-    const r = await git(root, args);
-    return { ok: !r.code, cmd: cmdLine(args), out: r.out, err: r.err };
+    const log = [];
+    const step = async (a) => { const r = await git(root, a); log.push({ cmd: cmdLine(a), out: r.out, err: r.err }); return r; };
+    let stashed = false;
+    if (smart) {
+      const s = await step(['stash', 'push', '--include-untracked', '-m', `Smart checkout to ${branch}`]);
+      if (s.code) return { ok: false, cmd: cmdLine(args), out: s.out, err: s.err, log };
+      stashed = !/No local changes to save/i.test(s.out + s.err);
+    }
+    const r = await step(args);
+    if (r.code) {
+      if (stashed) await step(['stash', 'pop']);
+      const blocked = /would be overwritten by checkout:\r?\n((?:\s+\S.*\r?\n)+)/.exec(r.err);
+      const files = blocked ? blocked[1].split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+      return { ok: false, cmd: cmdLine(args), out: r.out, err: r.err, log, ...(files.length ? { reason: 'localChanges', files, untracked: /untracked working tree files/.test(r.err) } : {}) };
+    }
+    if (!stashed) return { ok: true, cmd: cmdLine(args), out: r.out, err: r.err, log };
+    const back = await step(['stash', 'pop']);
+    return { ok: true, cmd: cmdLine(args), out: r.out, err: r.err, log, smart: true, ...(back.code ? { unstashFailed: true, unstashErr: (back.err || back.out).trim() } : {}) };
   });
 
   // opts.at: the commit to start the branch at (the Log's New Branch…), HEAD by default; opts.checkout: false only
@@ -902,6 +921,13 @@ exports.register = ({ ipcMain, app }) => {
     return { ok: !r.code, cmd: cmdLine(shown), out: r.out, err: r.err, hash };
   });
 
+  // Add to VCS: unversioned files become added (staged).
+  h('add', async (root, paths) => {
+    const args = ['add', '--pathspec-from-file=-', '--pathspec-file-nul'];
+    const r = await git(root, args, paths.map((p) => relOf(root, p)).join('\0'));
+    return { ok: !r.code, cmd: cmdLine([...args.slice(0, 1), '--', ...paths.map((p) => relOf(root, p))]), out: r.out, err: r.err };
+  });
+
   // files: [{path, status}]. Tracked changes are restored from HEAD; newly added files are only unstaged.
   h('rollback', async (root, files) => {
     const log = [];
@@ -922,7 +948,9 @@ exports.register = ({ ipcMain, app }) => {
   });
 
   h('log', async (root, max = 1000) => {
-    const r = await git(root, ['log', '--all', '--date-order', `-n${max}`, '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%P%x1e']);
+    // Branches, tags, remotes and HEAD, not --all: that takes refs/stash too, and a stash's internal commits ("WIP on
+    // main", "index on main") showed as commits with a merge badge.
+    const r = await git(root, ['log', '--branches', '--tags', '--remotes', 'HEAD', '--date-order', `-n${max}`, '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%D%x1f%P%x1e']);
     if (r.code) return [];
     return r.out.split('\x1e').map((s) => s.trim()).filter(Boolean).map((rec) => {
       const [hash, short, author, email, time, subject, refs, parents] = rec.split('\x1f');

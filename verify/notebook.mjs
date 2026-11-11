@@ -349,7 +349,7 @@ try {
     return [...document.querySelectorAll('.dialog')].some((d) => /unsaved changes/.test(d.textContent));
   })()`);
   check(!askedUnedited, 'closing a notebook nobody edited asks nothing, even when another tool wrote its JSON');
-  if (askedUnedited) await js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Close').click(), true)`);
+  if (askedUnedited) await js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === "Don't Save").click(), true)`);
 
   // ---------- invalid file ----------
   await openFile(t, 'broken.ipynb');

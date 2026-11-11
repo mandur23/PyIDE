@@ -136,7 +136,7 @@ try {
   await k.cdp('Emulation.clearDeviceMetricsOverride');
   await k.js(`document.querySelector('#vcsActivityTab').click()`);
   await k.until(`document.querySelectorAll('#vcsActivity .vcs-act-row').length >= 9`, 'ko activity');
-  check(await k.js(`[...document.querySelectorAll('#vcsActivity .vcs-act-row[data-kind="checkout"] .vcs-act-text')][0].textContent`) === 'feature에서 main(으)로 전환함', 'a branch switch reads in Korean');
+  check(await k.js(`[...document.querySelectorAll('#vcsActivity .vcs-act-row[data-kind="checkout"] .vcs-act-text')][0].textContent`) === 'feature 브랜치에서 main 브랜치로 전환함', 'a branch switch reads in Korean');
   leaks.push(...await englishLeaks(k, '.vcs-activity'));
   check(!leaks.length, `Korean Git log and Activity have no English leaks${leaks.length ? ` ${JSON.stringify(leaks)}` : ''}`);
   await k.shot('activity-ko.png');

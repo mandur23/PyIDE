@@ -78,6 +78,38 @@ try {
   t.check(main === 'MainThread · breakpoint', `a stop on the main thread reads MainThread (${main})`);
   await t.press('F9');
   await t.until(`${OUT}.includes('Process finished with exit code 0')`, 'finished', 20000);
+
+  // ---------- stepping over input() ----------
+  // The prompt is in the Console sub-tab: output there marks the tab while Threads & Variables shows, and a step that
+  // waits for input shows the Console with its input box ready, instead of "Frames are not available".
+  writeFileSync(path.join(t.project, 'greet.py'), "print('starting')\nname = input('Name? ')\nprint('hi ' + name)\n");
+  await openFile(t, 'greet.py');
+  await t.js(`(ide.editor.setPosition({ lineNumber: 1, column: 1 }), ide.editor.focus(), true)`);
+  await t.press('Ctrl+F8');
+  await t.press('Shift+F9');
+  await t.until(`window.__debugger.state()?.state === 'suspended' && window.__debugger.state().frames[0]?.line === 1`, 'stopped on line 1', 30000);
+  await t.until(`document.getElementById('dbgTabVars').classList.contains('active')`, 'Threads & Variables shown');
+  await t.press('F8');
+  await t.until(`window.__debugger.state()?.state === 'suspended' && window.__debugger.state().frames[0]?.line === 2`, 'stopped on line 2', 20000);
+  const marked = await t.js(`({ vars: document.getElementById('dbgTabVars').classList.contains('active'), attention: document.getElementById('dbgTabConsole').classList.contains('attention') })`);
+  t.check(marked.vars && marked.attention, `output while Threads & Variables shows marks the Console tab (${JSON.stringify(marked)})`);
+  await t.press('F8');
+  await t.until(`document.getElementById('dbgTabConsole').classList.contains('active')`, 'console shown for input', 5000).catch(() => {});
+  const waiting = await t.js(`({ console: document.getElementById('dbgTabConsole').classList.contains('active'), attention: document.getElementById('dbgTabConsole').classList.contains('attention'), focus: document.activeElement?.id, prompt: ${OUT}.includes('Name? '), state: window.__debugger.state()?.state })`);
+  t.check(waiting.console && !waiting.attention && waiting.focus === 'dbgIn' && waiting.prompt && waiting.state === 'running',
+    `a step over input() shows the Console with the prompt and its input box focused (${JSON.stringify(waiting)})`);
+  const boxes = await t.js(`(() => { const lab = (s) => document.querySelector(s)?.textContent; const bg = (s) => getComputedStyle(document.querySelector(s)).backgroundColor;
+    return { input: lab('.dbg-in-line .dbg-line-label'), evaluate: lab('.dbg-eval-line .dbg-line-label'), differ: bg('.dbg-in-line') !== bg('.dbg-eval-line') }; })()`);
+  t.check(boxes.input === 'Input' && boxes.evaluate === 'Evaluate' && boxes.differ, `the program's input and the evaluator are labelled and look different (${JSON.stringify(boxes)})`);
+  await t.type('Lee');
+  await t.press('Enter');
+  // The step ends once input() returns: the next line stops, and Threads & Variables comes back.
+  await t.until(`window.__debugger.state()?.state === 'suspended' && window.__debugger.state().frames[0]?.line === 3`, 'stopped on line 3 after the answer', 20000);
+  t.check(await t.js(`document.getElementById('dbgTabVars').classList.contains('active')`), 'once the step stops again, Threads & Variables shows');
+  await t.press('F9');
+  await t.until(`${OUT}.includes('hi Lee')`, 'program got the answer', 20000);
+  await t.until(`${OUT}.includes('Process finished with exit code 0')`, 'greet finished', 20000);
+  t.check(true, 'the answer typed there reaches the program');
   t.check(t.consoleErrors.length === 0, 'no renderer exceptions');
 } catch (err) {
   t.check(false, err.message);

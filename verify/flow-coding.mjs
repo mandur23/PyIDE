@@ -734,6 +734,10 @@ try {
     await until(`!!${fix}`, 'install quick fix', 30000);
     for (let i = 0; i < 12 && !(await js(`!!${fix}?.classList.contains('focused')`)); i++) await press('ArrowDown');
     await press('Enter');
+    // The install asks first: which package, into which interpreter.
+    const ask = `[...document.querySelectorAll('.dialog')].find(d => d.querySelector('.import-install-ask'))`;
+    await until(`!!${ask}`, 'install question', 15000);
+    await js(`(${ask}.querySelector('.dialog-buttons button.primary').click(), true)`);
     await until(`/Successfully installed flow[-_]units-1\\.2\\.0/i.test(document.querySelector('#pkgOut')?.textContent || '')`, 'flow-units installed', 120000);
     await until(`!(${missing})`, 'import resolved', 60000);
     check(true, 'the quick fix installs the package offline and the import resolves');

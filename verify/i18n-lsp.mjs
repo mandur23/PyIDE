@@ -56,6 +56,33 @@ try {
   const parenMsgs = `ide.problems.all().filter(p => p.source === 'pyright' && p.path.endsWith('paren.py')).map(p => p.msg).join(' | ')`;
   await until(`(${parenMsgs}).length > 0`, 'pyright diagnostics for paren.py', 30000).catch(() => {});
   check((await js(parenMsgs)).includes('"("가 닫혀 있지 않음'), `an unclosed parenthesis is reported in Korean (${await js(parenMsgs)})`);
+  // One message per problem: Ruff's syntax errors and undefined names give way to Pyright's Korean ones; what only Ruff
+  // finds (an unused import) stays. The list is grouped by file and a severity can be hidden.
+  writeFileSync(path.join(t.project, 'dup_undef.py'), 'import os\nprint(undefined_thing)\n');
+  writeFileSync(path.join(t.project, 'dup_syntax.py'), 'import os\n\n\ndef f(:\n    pass\n');
+  const raw = (name) => `(() => { const m = ide.monaco.editor.getModelMarkers({}).filter(m => m.resource.path.endsWith(${JSON.stringify(name)})); return { ruff: m.filter(x => x.owner === 'ruff').map(x => x.message), pyright: m.filter(x => x.owner === 'pyright').map(x => x.message) }; })()`;
+  const ruffDup = (name, gone) => `ide.problems.all({ withHidden: true }).filter(p => p.source === 'ruff' && p.path.endsWith(${JSON.stringify(name)}) && ${gone}.test(p.msg))`;
+  for (const [name, gone, own] of [['dup_undef.py', /F821/, true], ['dup_syntax.py', /invalid-syntax|E999/, false]]) {
+    await openFile(t, name);
+    const got = await until(`(() => { const r = ${raw(name)}; return r.pyright.length && ${ruffDup(name, gone)}.length ? r : null; })()`, `${name}: both tools reported`, 30000).catch(() => null);
+    await sleep(500);
+    const now = await js(raw(name));
+    const hiddenDup = await js(`${ruffDup(name, gone)}.every(p => p.hidden)`);
+    check(!!got && hiddenDup && !now.ruff.some((m) => gone.test(m)) && now.pyright.length > 0 && (!own || now.ruff.some((m) => m.startsWith('F401'))),
+      `${name}: Ruff's duplicate is left out, Pyright's message${own ? " and Ruff's own F401" : ''} stay (${JSON.stringify(now)})`);
+    const listed = await js(`ide.problems.all().filter(p => p.path.endsWith(${JSON.stringify(name)})).map(p => p.source + ': ' + p.msg)`);
+    check(!listed.some((m) => gone.test(m)), `${name}: the Problems list has no duplicate either (${JSON.stringify(listed)})`);
+  }
+  if (!(await js(`ide.toolWindows.get('Problems').isVisible()`))) await press('Alt+6');
+  await until(`ide.toolWindows.get('Problems').isVisible() && [...document.querySelectorAll('#problemList .problem-file')].some(r => r.textContent.includes('dup_undef.py'))`, 'grouped by file', 10000);
+  const groups = await js(`[...document.querySelectorAll('#problemList .problem-file .problem-path')].map(n => n.textContent)`);
+  check(groups.length >= 3 && new Set(groups).size === groups.length, `Problems is grouped by file, one header per file (${JSON.stringify(groups)})`);
+  await t.click('.problems-filter[data-severity="warning"]');
+  await until(`![...document.querySelectorAll('#problemList .problem .sev')].some(s => s.classList.contains('warning'))`, 'warnings hidden', 5000)
+    .then(() => check(true, 'the Warnings toggle hides warnings'), async () => check(false, `the Warnings toggle hides warnings (${await js(`(() => { const b = document.querySelector('.problems-filter[data-severity="warning"]'); const r = b.getBoundingClientRect(); return JSON.stringify({ r, on: b.className, at: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 120) }); })()`)})`));
+  check(await js(`[...document.querySelectorAll('#problemList .problem .sev')].some(s => s.classList.contains('error'))`), 'errors stay listed');
+  await noLeaks('.problems-bar', 'Problems filter bar');
+  await t.click('.problems-filter[data-severity="warning"]');
   await openFile(t, 'errors.py');
   await shot('problems.png');
 
@@ -115,7 +142,7 @@ try {
 
   // ---- Find tool window ----
   const findText = async () => js(`ide.toolWindows.get('FindUsages').container.textContent`);
-  check((await findText()).includes('심볼에서 사용 위치 찾기 (Alt+F7)을(를) 사용하면 사용 위치를 찾습니다'), 'Find window empty state is Korean');
+  check((await findText()).includes('심볼에서 사용 위치 찾기 (Alt+F7) 명령을 사용하면 사용 위치를 찾습니다'), 'Find window empty state is Korean');
   await caret(8, 14);
   await press('Alt+F7');
   await until(`document.querySelectorAll('#lspFindList .lsp-find-row').length >= 3`, 'usages of Greeter');

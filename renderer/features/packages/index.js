@@ -151,6 +151,17 @@
     });
   }
 
+  // pip's own words when it cannot reach the package index (offline, a proxy, a dead index URL). It retries, then ends in
+  // "No matching distribution found", which reads as if the package did not exist; the connection errors are above.
+  const PIP_UNREACHABLE = /NewConnectionError|Failed to establish a new connection|ConnectTimeoutError|ProxyError|getaddrinfo failed|Name or service not known|Temporary failure in name resolution|Network is unreachable|Could not fetch URL|connection broken by/i;
+  function tellUnreachable(header, where) {
+    const text = where ? tr('The package index {host} could not be reached, so nothing was installed. Check the internet connection, the proxy or the index URL; the package itself may well exist.', { host: where })
+      : tr('The package index could not be reached, so nothing was installed. Check the internet connection, the proxy or the index URL; the package itself may well exist.');
+    con.append(`${text}\n`, 'err');
+    ide.notifications?.notify({ title: tr('Package index unreachable'), text: `${header}\n${text}`, kind: 'error', group: 'Python Packages', raw: true,
+      actions: [{ label: tr('Show Output'), run: () => tw.show() }] });
+  }
+
   // Runs a process in the tool window's console, then lists the packages and checks the dependencies again.
   // start() -> {id, command?} | {error}; exit(code) writes the closing line. Resolves with the exit code once the
   // list and the check are done (-1 when the process did not start). A successful run emits packagesChanged(interp),
@@ -178,7 +189,11 @@
     // with WARNING or DEPRECATION; a line split over two messages keeps the class its start got.
     let errCls = null;
     let lineStart = true;
+    let unreachable = false;
+    let index = ''; // the index pip names when it is not PyPI ("Looking in indexes: <url>")
     const data = (text, stream) => {
+      index ||= /Looking in indexes: (\S+)/.exec(text)?.[1] || '';
+      unreachable ||= PIP_UNREACHABLE.test(text);
       if (stream !== 'err') return con.append(text, null);
       for (const part of text.split(/(?<=\n)/)) {
         if (lineStart) errCls = /^(?:\s|\x1b\[[0-9;]*m)*(WARNING|DEPRECATION)/.test(part) ? null : 'err';
@@ -194,6 +209,7 @@
           task?.done();
           try {
             await exit(code);
+            if (code !== 0 && unreachable) tellUnreachable(header, index.replace(/,$/, ''));
             await Promise.all([refresh(), checkDeps({ fresh: true })]);
             if (code === 0) ide.emit('packagesChanged', interp);
           } finally { resolve(code); }

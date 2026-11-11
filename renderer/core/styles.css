@@ -173,6 +173,8 @@ input, select, textarea { font: inherit; }
 .tab.active { border-bottom-color: var(--gray7); }
 .editor-group.active-group .tab.active { border-bottom-color: var(--blue6); }
 .tab.preview .name { font-style: italic; }
+/* The file was deleted outside the IDE (PyCharm strikes the name through). */
+.tab.gone .name { text-decoration: line-through; color: var(--red); }
 .tab .pin { font-size: 10px; }
 .tab.drop-before { box-shadow: inset 2px 0 0 var(--blue6); }
 .tab.drop-after { box-shadow: inset -2px 0 0 var(--blue6); }
@@ -220,6 +222,13 @@ input, select, textarea { font: inherit; }
 .console a { color: var(--blue8); cursor: pointer; text-decoration: underline; }
 .console-in { width: 100%; border: 0; border-top: 1px solid var(--gray3); background: var(--gray1);
   color: var(--gray12); font: 13px var(--mono); padding: 6px 10px; outline: none; }
+/* A finished program's input: nothing reads it, so it must not look like the box of a running one. */
+.console-in:disabled { background: var(--gray2); color: var(--gray8); cursor: not-allowed; }
+.console-in:disabled::placeholder { color: var(--gray7); font-style: italic; }
+.console .console-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0; white-space: normal; }
+.console .console-actions a { text-decoration: none; }
+.console .console-actions a:hover { text-decoration: underline; }
+.console .console-dropped { color: var(--gray8); font-style: italic; border-bottom: 1px dashed var(--gray4); padding-bottom: 2px; margin-bottom: 4px; }
 
 .list { flex: 1; overflow: auto; padding: 4px 0; }
 .list-row { padding: 3px 12px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

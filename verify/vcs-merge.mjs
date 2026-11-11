@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { launch } from './lib.mjs';
+import { closeBalloonsOver, launch } from './lib.mjs';
 import { englishLeaks, missingTranslations } from './i18n-lib.mjs';
 
 const gitHome = mkdtempSync(path.join(tmpdir(), 'pyide-vcsmerge-git-'));
@@ -84,6 +84,8 @@ function helpers(t) {
   }
   async function mouse(expr, { button = 'left', clickCount = 1, label = expr } = {}) {
     await frame();
+    // The merge tab fills the editor area, so its Apply sits in the corner the balloons use.
+    await closeBalloonsOver(t, expr);
     const box = await js(`(() => { const n = ${expr}; if (!n) return null; n.scrollIntoView?.({ block: 'nearest' }); const r = n.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (!box) throw new Error(`no element for ${label}`);
     await frame();
@@ -154,6 +156,13 @@ try {
   await mouse(h.conflictRow('main.py'), { clickCount: 2, label: 'main.py row' });
   await until(`!!${MT}?._vcsMerge && ${MT}.querySelectorAll('.vcs-mt-act').length >= 4`, 'merge tool', 20000);
   check(await js(`ide.activeTab().title === 'Merge: main.py' && !document.querySelector('.dialog')`),'Merge… opens a Merge: main.py tab in place of the dialog');
+  // The three panes get the whole editor area, and the first conflict is in view in each, at the column it starts.
+  check(await js(`[...ide.toolWindows.values()].every((tw) => !tw.isVisible())`), 'the tool windows are hidden while the merge tab is in front');
+  const widths = await js(`[...${MT}.querySelectorAll('.vcs-mt-pane')].map((p) => Math.round(p.getBoundingClientRect().width))`);
+  check(widths.length === 3 && widths.every((w) => w >= 260), `each pane is wide enough to read (${q(widths)})`);
+  await t.sleep(300);
+  const inView = await js(`(() => { const m = ${MT}._vcsMerge; const c = m.chunks.find((x) => x.kind === 'conflict'); return ['ours', 'result', 'theirs'].map((pane) => { const ed = m.eds[pane]; const line = c[pane][0] + 1; const pos = ed.getPosition(); const v = ed.getScrolledVisiblePosition(pos); const w = ed.getLayoutInfo().contentWidth; return pos.lineNumber === line && pos.column > 1 && !!v && v.left >= 0 && v.left <= w && ed.getVisibleRanges().some((r) => r.startLineNumber <= line && r.endLineNumber >= line); }); })()`);
+  check(inView.every(Boolean), `the first conflict is in view in every pane, at the column where the sides differ (${q(inView)})`);
   check(await js(`[...${MT}.querySelectorAll('.vcs-mt-head .vcs-diff-side')].map(s => s.textContent).join('|')`) === 'Yours (main) — read-only|Result|Theirs (feature) — read-only', 'the panes are Yours | Result | Theirs');
   check(await js(`${MT}._vcsMerge.chunks.map(c => c.kind).join(',')`) === 'conflict,ours,theirs', 'the chunks are the greet() conflict, main\'s add() change and feature\'s footer');
   check(await js(`${MT}._vcsMerge.models.result.getValue()`) === MAIN('Hello, {name}!', 'a + b'), 'the result starts as the common base');
@@ -186,6 +195,8 @@ try {
   check(file('main.py') === merged, 'Apply writes the result to main.py');
   check(git(project, 'diff', '--name-only', '--diff-filter=U') === '' && git(project, 'status', '--porcelain').includes('M  main.py'), 'Apply marks main.py resolved (git add)');
   check(await js(`!document.querySelector('.vcs-mt')`), 'the merge tab closes');
+  await until(`ide.toolWindows.get('Commit').isVisible()`, 'tool windows back', 5000).catch(() => {});
+  check(await js(`ide.toolWindows.get('Commit').isVisible()`), 'the tool windows hidden for it come back');
 
   // ---------- the commit window during the merge ----------
   await until(`!!document.querySelector('.vcs-op-banner[data-op="merge"]')`, 'merge banner');
@@ -214,7 +225,7 @@ try {
   await press('Escape');
   await until(`document.querySelector('.vcs-op-banner')?.dataset.op === 'rebase' && document.querySelector('.vcs-branch-op')?.textContent === 'Rebasing'`, 'rebase banner');
   check(await js(`document.querySelector('.vcs-branch-name').textContent`) === 'main', 'the widget still names the branch being rebased');
-  check(await js(`[...document.querySelectorAll('.vcs-op-btns button')].map(b => b.textContent).join('|')`) === 'Continue|Skip|Abort', 'a stopped rebase offers Continue, Skip and Abort');
+  check(await js(`[...document.querySelectorAll('.vcs-op-btns button')].map(b => b.textContent).join('|')`) === 'Continue Rebase|Skip Commit|Abort Rebase', 'a stopped rebase offers Continue Rebase, Skip Commit and Abort Rebase');
   await mouse(`document.querySelector('.vcs-changes .vcs-file[data-status="conflict"]')`, { label: 'conflict row' });
   check(await js(`document.querySelector('.vcs-group.vcs-conflicts .vcs-group-title').textContent === 'Merge Conflicts' && document.querySelector('.vcs-file[data-status="conflict"] input').disabled`), 'conflicts are their own group and cannot be ticked for commit');
   await mouse(`document.querySelector('.vcs-branch')`, { label: 'branch widget' });
@@ -223,6 +234,10 @@ try {
   await press('Escape');
   await clearNotes();
   await mouse(`document.querySelector('.vcs-op-abort')`, { label: 'Abort' });
+  await until(`[...document.querySelectorAll('#dialogHost .dialog-message')].pop()?.textContent.startsWith('Abort the rebase?')`, 'abort question', 5000)
+    .then(() => check(true, 'Abort asks first'), () => check(false, 'Abort asks first'));
+  check(existsSync(path.join(project, '.git', 'rebase-merge')), 'nothing is aborted before the answer');
+  await mouse(`[...[...document.querySelectorAll('#dialogHost .dialog')].pop().querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === 'Abort Rebase')`, { label: 'Abort Rebase' });
   await until(noteWith('Rebase aborted'), 'rebase aborted');
   check(git(project, 'rev-parse', 'HEAD') === mainHead && !existsSync(path.join(project, '.git', 'rebase-merge')) && file('util/helpers.py') === HELPERS('2 * x  # main'), 'Abort puts main back where it was');
 
@@ -374,7 +389,7 @@ try {
   await k.press('Escape');
 
   await kh.branchItem('현재 브랜치로 병합…');
-  await kh.pickBranch('main(으)로 병합', 'feature');
+  await kh.pickBranch('main 브랜치로 병합', 'feature');
   await kh.until(`!!document.querySelector('.dialog .vcs-conflicts')`, 'ko conflicts dialog', 20000);
   k.check(await k.js(`document.querySelector('.dialog-title').textContent`) === '충돌' && await k.js(kh.noteWith('파일 2개에 충돌이 있습니다')), 'the Conflicts dialog and its notification are Korean');
   await noLeaks('#dialogHost', 'Conflicts dialog');
@@ -397,7 +412,11 @@ try {
   k.check(true, 'the Commit window banner and branch widget say 병합 진행 중 / 병합 중');
   await noLeaks('#sideTitle, #sideActions, #sideBody .tool.active', 'Commit window during a merge');
   await kh.clearNotes();
-  await kh.mouse(`document.querySelector('.vcs-op-abort')`, { label: '중단' });
+  k.check(await k.js(`document.querySelector('.vcs-op-continue').textContent`) === '병합 계속', `the banner says 병합 계속, not the loop keyword's word (${await k.js(`document.querySelector('.vcs-op-continue').textContent`)})`);
+  await kh.mouse(`document.querySelector('.vcs-op-abort')`, { label: '병합 중단' });
+  await kh.until(`!!document.querySelector('#dialogHost .dialog')`, 'ko abort question');
+  await noLeaks('#dialogHost', 'abort question');
+  await kh.mouse(`[...[...document.querySelectorAll('#dialogHost .dialog')].pop().querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '병합 중단')`, { label: '병합 중단' });
   await kh.until(kh.noteWith('병합을 중단했습니다'), 'ko merge aborted');
   await noLeaks('.ide-balloons', 'merge aborted notification');
   k.check(git(k.project, 'diff', '--name-only', '--diff-filter=U') === '' && !existsSync(path.join(k.project, '.git', 'MERGE_HEAD')), 'Abort from the Korean banner aborts the merge');
@@ -418,7 +437,7 @@ try {
   await noLeaks('#dialogHost', 'Unstash dialog with the drop confirmation');
   await k.shot('unstash-ko.png');
   await kh.mouse(`document.querySelector('.dialog .primary')`, { label: '스태시 적용' });
-  await kh.until(kh.noteWith('stash@{0}을(를) 적용했습니다'), 'ko applied');
+  await kh.until(kh.noteWith('stash@{0} 스태시를 적용했습니다'), 'ko applied');
   await noLeaks('.ide-balloons', 'unstash notification');
 
   await k.js(`(ide.toolWindows.get('Git').show(), true)`);

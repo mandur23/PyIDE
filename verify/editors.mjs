@@ -287,10 +287,21 @@ try {
   await sleep(300);
   check(await js(`ide.activeTab()?.title === 'c.py' && ide.isDirty(ide.activeTab())`), 'Cancel keeps the modified tab open');
   await press('Ctrl+F4');
-  await until(`!!document.querySelector('.dialog-message')`, 'close tab question again');
-  await js(`[...document.querySelectorAll('.dialog-buttons button')].find(b => b.textContent === 'Close').click()`);
+  await until(`!!document.querySelector('.close-tab-confirm')`, 'close tab question again');
+  const closeAsk = await js(`(() => { const d = document.querySelector('.close-tab-confirm'); return { buttons: [...d.querySelectorAll('.dialog-buttons button')].map(b => b.textContent), primary: d.querySelector('.dialog-buttons .primary')?.textContent, focused: document.activeElement?.textContent }; })()`);
+  check(JSON.stringify(closeAsk.buttons) === JSON.stringify(['Save', "Don't Save", 'Cancel']) && closeAsk.primary === 'Save' && closeAsk.focused === 'Save',
+    `the question offers Save, Don't Save and Cancel with Save the default (${JSON.stringify(closeAsk)})`);
+  await t.click('.close-tab-confirm .dialog-buttons button.primary');
+  await until(`!ide.findTab(ide.util.joinPath(ide.root, 'c.py'))`, 'tab closed after Save');
+  check(readFileSync(path.join(t.project, 'c.py'), 'utf8').startsWith('DIRTY = 1\n'), 'Save writes the edits and closes the tab');
+  await js(`ide.openFile(ide.util.joinPath(ide.root, 'c.py'))`);
+  await until(`ide.activeTab()?.title === 'c.py'`, 'c.py once more');
+  await js(`(ide.editor.trigger('test', 'type', { text: 'THROWN = 1\\n' }), true)`);
+  await press('Ctrl+F4');
+  await until(`!!document.querySelector('.close-tab-confirm')`, 'close tab question a third time');
+  await js(`[...document.querySelectorAll('.close-tab-confirm .dialog-buttons button')].find(b => b.textContent === "Don't Save").click()`);
   await until(`!ide.findTab(ide.util.joinPath(ide.root, 'c.py'))`, 'tab closed');
-  check(true, 'Close closes it without saving');
+  check(!readFileSync(path.join(t.project, 'c.py'), 'utf8').includes('THROWN'), "Don't Save closes it without saving");
 
   // ---------- files dragged in from Explorer (real CDP drags with file paths, copy only) ----------
   const outside = path.join(path.dirname(t.project), 'outside');

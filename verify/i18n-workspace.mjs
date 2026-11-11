@@ -87,7 +87,7 @@ try {
 
   await clickNode(rowExpr('python -m app'), 'app row');
   await click('#wsDetail .ws-detail-run');
-  await until(`document.querySelector('#wsDetail .ws-console:not(.hidden) .console')?.textContent.includes('종료 코드 0(으)로 완료된 프로세스')`, 'Korean exit line', 20000);
+  await until(`document.querySelector('#wsDetail .ws-console:not(.hidden) .console')?.textContent.includes('프로세스 완료(종료 코드 0)')`, 'Korean exit line', 20000);
   check((await detailOut()).includes('Hello from app, world'), 'launcher output passes through untranslated');
 
   // ---------- port dialog ----------
@@ -97,7 +97,7 @@ try {
   await until(`!!document.querySelector('.ws-port-dialog')`, 'port dialog', 20000);
   const dlg = await js(`({ title: document.querySelector('.dialog-title').textContent, body: document.querySelector('.ws-port-dialog').textContent, buttons: [...document.querySelectorAll('.dialog-buttons button')].map(b => b.textContent) })`);
   check(dlg.title === '포트 8799 사용 중', `port dialog title in Korean (${dlg.title})`);
-  check(dlg.body.startsWith('포트 8799은(는) 이미 node.exe(PID ') && dlg.body.includes("지금 'Static Server'을(를) 시작하면"), `port dialog text in Korean (${dlg.body})`);
+  check(dlg.body.startsWith('8799번 포트는 이미 node.exe(PID ') && dlg.body.includes("지금 'Static Server' 실행 도구를 시작하면"), `port dialog text in Korean (${dlg.body})`);
   check(S(dlg.buttons) === S(['해당 프로세스 중지', '무시하고 실행', '취소']), `port dialog buttons in Korean (${dlg.buttons})`);
   await leaks('.dialog', 'the port dialog');
   await shot('port-dialog-ko.png');

@@ -176,8 +176,10 @@ function killProcess(id, { sync = false } = {}) {
 // (a Python installed later), so a cached bare command, found or missing, is probed again in the background and
 // the next list has the new answer.
 const PROBES_FILE = path.join(app.getPath('userData'), 'interpreters.json');
-const PROBES_VERSION = 2;
-let probes = null; // Promise<Map<`${cmd} ${args}`, {version, executable, base, mtime, size, baseStat} | {missing: true}>>
+// A venv's pyvenv.cfg is checked as well: its `home` names the base Python, and a home that no longer holds one makes
+// the venv's python.exe fail ("No Python at ...") while both executables are unchanged.
+const PROBES_VERSION = 3;
+let probes = null; // Promise<Map<`${cmd} ${args}`, {version, executable, base, mtime, size, baseStat, cfgStat} | {missing: true}>>
 const loadProbes = () => (probes ??= fs.promises.readFile(PROBES_FILE, 'utf8').then((text) => {
   const saved = JSON.parse(text);
   return saved.version === PROBES_VERSION ? new Map(Object.entries(saved.probes)) : new Map();
@@ -192,14 +194,17 @@ const saveProbes = (cache) => {
 };
 const statOf = (p) => fs.promises.stat(p).then((st) => ({ mtime: st.mtimeMs, size: st.size }), () => null);
 const sameFile = (hit, st) => !!hit && !!st && st.mtime === hit.mtime && st.size === hit.size;
+const sameOrNone = (hit, st) => (!hit && !st) || sameFile(hit, st);
+const cfgOf = (cmd) => (path.isAbsolute(cmd) ? path.join(path.dirname(path.dirname(cmd)), 'pyvenv.cfg') : null);
 const reprobed = new Set(); // bare commands checked in the background this session
 let probesStarted = 0;
 
 async function probe(cache, key, cmd, args) {
   const info = await fsScan('probe', cmd, args);
-  const entry = info ? { ...info, ...(await statOf(info.executable)), baseStat: await statOf(info.base) } : path.isAbsolute(cmd) ? null : { missing: true };
+  const cfg = cfgOf(cmd);
+  const entry = info ? { ...info, ...(await statOf(info.executable)), baseStat: await statOf(info.base), cfgStat: cfg && await statOf(cfg) } : path.isAbsolute(cmd) ? null : { missing: true };
   const old = cache.get(key);
-  const same = !!entry && !!old && (entry.missing ? !!old.missing : old.executable === entry.executable && sameFile(old, entry) && sameFile(old.baseStat, entry.baseStat));
+  const same = !!entry && !!old && (entry.missing ? !!old.missing : old.executable === entry.executable && sameFile(old, entry) && sameFile(old.baseStat, entry.baseStat) && sameOrNone(old.cfgStat, entry.cfgStat));
   if (!same && (entry || old)) {
     if (entry) cache.set(key, entry); else cache.delete(key);
     saveProbes(cache);
@@ -211,7 +216,9 @@ async function probeInterpreter(cmd, args) {
   const key = [cmd, ...args].join(' ').toLowerCase();
   const hit = cache.get(key);
   const bare = !path.isAbsolute(cmd);
-  const valid = !!hit && (hit.missing ? bare : sameFile(hit, await statOf(hit.executable)) && sameFile(hit.baseStat, await statOf(hit.base)));
+  const cfg = cfgOf(cmd);
+  const valid = !!hit && (hit.missing ? bare : sameFile(hit, await statOf(hit.executable)) && sameFile(hit.baseStat, await statOf(hit.base))
+    && sameOrNone(hit.cfgStat, cfg && await statOf(cfg)));
   if (!valid) {
     probesStarted++;
     return probe(cache, key, cmd, args);
@@ -371,9 +378,30 @@ ipcMain.handle('clipboard:readText', () => clipboard.readText());
 ipcMain.handle('shell:openExternal', (_e, url) => (/^https?:\/\//i.test(url) ? shell.openExternal(url) : false));
 ipcMain.handle('fs:trash', (_e, p) => shell.trashItem(p));
 
-// The project's venvs (nearest first), the configured extra interpreters, then the py launcher and python from PATH;
-// all probed at once, and an executable found twice keeps its first entry.
+// The project's venvs (nearest first), the configured extra interpreters, the py launcher and python from PATH, then
+// every other Python installed on this computer; all probed at once, and an executable found twice keeps its first entry.
 const interpLog = diagnostics.logger('#interpreters');
+// Where Python installs itself: the python.org installer (per user, for everyone, the old C:\PythonXY) and the Python
+// install manager (pythoncore-3.14-64). PYIDE_PYTHON_ROOTS (;-separated, may be empty) replaces them for the suites
+// that need a computer without Python.
+const pythonRoots = () => {
+  if (process.env.PYIDE_PYTHON_ROOTS != null) return process.env.PYIDE_PYTHON_ROOTS.split(';').filter(Boolean);
+  const env = process.env;
+  return [env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'Python'), env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Python'),
+    env.ProgramFiles, env['ProgramFiles(x86)'], `${env.SystemDrive || 'C:'}\\`].filter(Boolean);
+};
+// Like a bare command, the list is read again in the background after its first use, so a Python installed meanwhile
+// shows on the next list without the startup path waiting for `py -0p`.
+let installed = null;
+let installedAt = 0;
+const installedPythons = () => {
+  if (installed && Date.now() - installedAt < 10000) return installed;
+  installedAt = Date.now();
+  const fresh = fsScan('installedPythons', pythonRoots()).catch(() => []);
+  const answer = installed || fresh;
+  installed = fresh;
+  return answer;
+};
 ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
   const t0 = performance.now();
   const started = probesStarted;
@@ -392,6 +420,7 @@ ipcMain.handle('py:interpreters', async (_e, root, extraPaths = []) => {
     candidates.push([p, [], path.resolve(p).toLowerCase().startsWith(ownPython) ? 'Nano Studio Python' : path.basename(path.dirname(path.dirname(p))) || p]);
   }
   candidates.push(['py', ['-3'], 'py launcher'], ['python', [], 'python']);
+  for (const p of await installedPythons()) candidates.push([p, [], path.basename(path.dirname(p))]);
   const infos = await Promise.all(candidates.map(([cmd, args]) => probeInterpreter(cmd, args)));
   const found = [];
   const seen = new Set();
@@ -425,6 +454,10 @@ ipcMain.handle('py:diagnose', async (_e, root, exe) => {
     });
   });
 });
+
+// The project's virtual environments (folders with a pyvenv.cfg, nearest first), working or not; none for a project in
+// Safe Mode. The renderer tells a broken one the list left out from a project that never had one.
+ipcMain.handle('py:venvs', async (_e, root) => (root && trust.isTrusted(root) ? fsScan('venvs', root) : []));
 
 ipcMain.handle('proc:input', (_e, id, text) => procs.get(id)?.stdin.write(text));
 // stdin.end() returns the stream, which cannot cross IPC; the handler answers nothing.

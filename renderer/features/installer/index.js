@@ -667,15 +667,20 @@
     const item = items().find((it) => it.id === `python:${OWN_PYTHON}`);
     ide.notifications?.notify({
       title: tr('No Python interpreter found'),
-      text: tr('Install {name} ({size}) to run, debug and test Python code without installing Python on the system.', { name: item.name, size: mb(list.get(OWN_PYTHON)?.size || 0) }),
+      text: tr('{name} ({size}) runs, debugs and tests Python code without installing Python on the system. A Python that is already on this computer can be added instead.', { name: item.name, size: mb(list.get(OWN_PYTHON)?.size || 0) }),
       kind: 'warn', group: 'Python Interpreter',
-      actions: [{ label: tr('Install {name}', { name: item.name }), run: () => { open(item.category); run(item, 'install'); } }],
+      actions: ide.noInterpreterActions?.() || [ownPython()],
     });
   });
+  // Install Nano Studio Python, for what offers it where no interpreter is found (Run, Debug, this notification).
+  function ownPython() {
+    const item = items().find((it) => it.id === `python:${OWN_PYTHON}`);
+    return { label: tr('Install {name}', { name: item.name }), run: () => { open(item.category); run(item, 'install'); } };
+  }
 
   // run(id, op): an operation started from elsewhere (New Project's Download JDK), with the card's log, task and notification.
   const runById = (id, op = 'install') => { const it = items().find((i) => i.id === id); return it ? run(it, op) : Promise.resolve(); };
   // job(spec, log, progress, signal): a job of main/features/installer.js (toolchain-install…) for another plugin's installable.
-  ide.installer = { open, refresh, register, pip, run: runById, job: mainJob, state: (id) => ({ ...entry(id), ctl: undefined }) };
+  ide.installer = { open, refresh, register, pip, run: runById, job: mainJob, state: (id) => ({ ...entry(id), ctl: undefined }), ownPython };
   ide.emit('installablesChanged');
 })();

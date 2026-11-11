@@ -16,3 +16,5 @@
 .lsp-find-row .code { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .lsp-find-row .hit { background: #32593d; color: var(--gray12); border-radius: 2px; }
 :root[data-theme="light"] .lsp-find-row .hit { background: #c9e6cf; }
+.lsp-find-stale .lsp-find-row { opacity: .55; }
+.lsp-find-stale-note { margin-left: 12px; color: var(--yellow); }

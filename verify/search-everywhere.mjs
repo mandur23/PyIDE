@@ -1,5 +1,6 @@
 // Search Everywhere (Double Shift): the key gesture, every tab finding its kind and acting on Enter, the All tab's
 // groups and "more", recent files, a 12,000-file project, and Korean (ports 9950-9951).
+import { execFileSync } from 'child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { launch, openFile } from './lib.mjs';
@@ -9,9 +10,19 @@ const J = JSON.stringify;
 const OPEN = `!!document.querySelector('#searchEverywhere')`;
 const tabOf = `document.querySelector('#searchEverywhere .se-tab.active')?.dataset.tab`;
 const labels = `[...document.querySelectorAll('#seList .se-row:not(.se-more) .se-label')].map(n => n.textContent)`;
+const POPUP_ROWS = `[...document.querySelectorAll('#popupList .popup-item:not(.hint) .label')].map(n => n.textContent)`;
 const activeLabel = `document.querySelector('#seList .se-row.active .se-label')?.textContent`;
 
+// The fixture's myenv is a bare pyvenv.cfg. The IDE takes a project venv as the project's interpreter and refuses a
+// broken one, which left the symbol index (Classes, Symbols) without Python: make it a real venv, without pip.
+async function realVenv(ctx) {
+  execFileSync('py', ['-3', '-m', 'venv', '--without-pip', path.join(ctx.project, 'myenv')]);
+  await ctx.js(`(ide.reloadInterpreters?.(), true)`);
+  await ctx.sleep(3000);
+  await ctx.js(`document.querySelectorAll('.ide-balloon').forEach((b) => b.remove())`);
+}
 const t = await launch({ fixture: 'search-nav', port: 9950, name: 'search-everywhere' });
+await realVenv(t);
 const { js, until, press, type, click, shot, sleep, project } = t;
 let seenErrors = 0;
 const check = (ok, label) => {
@@ -245,6 +256,7 @@ try {
 
 // ---- Korean ----
 const k = await launch({ fixture: 'search-nav', port: 9951, name: 'search-everywhere-ko', lang: 'ko-KR' });
+await realVenv(k);
 try {
   await openFile(k, 'main.py');
   await k.js(`ide.editor.focus()`);
@@ -262,6 +274,38 @@ try {
   const missing = (await missingTranslations(k)).filter((s) => mine.has(s));
   check(missing.length === 0, `no missing translations (${J(missing)})`);
   await k.shot('se-ko.png');
+
+  // English action names find actions in the Korean UI too (shown with the Korean title), and a hit inside a word
+  // ("로그" in "프로그램 재개") ranks below one at a word's start.
+  await k.press('Tab'); await k.press('Tab'); await k.press('Tab'); await k.press('Tab');
+  check((await k.js(tabOf)) === 'actions', 'Tab moves to the Actions tab');
+  for (const [q, want] of [['commit', '커밋'], ['rename', null], ['bookmark', '북마크'], ['find usages', null], ['diff', null], ['annotate', null]]) {
+    await k.js(`document.querySelector('#seInput').select()`);
+    await k.type(q); await k.sleep(500);
+    const got = await k.until(`${labels}.length && document.querySelector('#seInput').value === ${J(q)} && !document.querySelector('.se-empty')`, `actions for ${q}`, 8000).then(() => k.js(labels), () => null);
+    check(!!got?.length && (!want || got.some((s) => s.includes(want))) && !got.some((s) => /^[\x20-\x7e…]+$/.test(s) && /[a-z]{4}/.test(s)), `Search Everywhere finds "${q}" in the Korean UI, shown in Korean (${J(got?.slice(0, 3))})`);
+  }
+  await k.js(`document.querySelector('#seInput').select()`);
+  await k.type('로그'); await k.sleep(500);
+  const logRows = await k.until(`${labels}.length && document.querySelector('#seInput').value === '로그' && !document.querySelector('.se-empty')`, 'actions for 로그', 8000).then(() => k.sleep(300)).then(() => k.js(labels), () => null);
+  const resumeAt = logRows?.indexOf(await k.js(`tr('Resume Program')`)) ?? -1;
+  check(logRows?.[0]?.startsWith('로그') && (resumeAt < 0 || logRows.slice(resumeAt).every((s) => !s.startsWith('로그'))), `"로그" lists 로그 표시 before 프로그램 재개 (${J(logRows)})`);
+  await k.press('Escape');
+
+  await k.js(`ide.editor.focus()`);
+  await k.press('Ctrl+Shift+A');
+  await k.until(`!document.querySelector('#popup').classList.contains('hidden')`, 'Find Action open', 5000);
+  for (const q of ['commit', 'find usages', 'annotate']) {
+    await k.js(`document.querySelector('#popupIn').select()`);
+    await k.type(q);
+    const rows = await k.until(`document.querySelectorAll('#popupList .popup-item:not(.hint)').length && document.querySelector('#popupIn').value === ${J(q)}`, `Find Action ${q}`, 5000).then(() => k.js(POPUP_ROWS), () => null);
+    check(!!rows?.length, `Find Action finds "${q}" in the Korean UI (${J(rows?.slice(0, 2))})`);
+  }
+  await k.js(`document.querySelector('#popupIn').select()`);
+  await k.type('로그');
+  const fa = await k.until(`document.querySelectorAll('#popupList .popup-item:not(.hint)').length && document.querySelector('#popupIn').value === '로그'`, 'Find Action 로그', 5000).then(() => k.js(POPUP_ROWS), () => null);
+  check(fa?.[0]?.startsWith('로그'), `Find Action "로그" puts 로그 표시 first (${J(fa?.slice(0, 3))})`);
+  await k.press('Escape');
 } catch (err) {
   check(false, `ko error: ${err.message}`);
 }

@@ -241,7 +241,7 @@ if (jdk) {
     await k.js(`(document.querySelector('#dbgConsoleEval').focus(), true)`);
     await k.type('nosuch');
     await k.press('Enter');
-    await k.until(`document.querySelector('#dbgOut').textContent.includes("심볼 'nosuch'을(를) 찾을 수 없습니다")`, 'Korean evaluation error');
+    await k.until(`document.querySelector('#dbgOut').textContent.includes("'nosuch' 심볼을 찾을 수 없습니다")`, 'Korean evaluation error');
     k.check(true, 'an evaluation error is Korean');
     await k.click('#dbgStop');
     await k.until(`!window.__debugger.state()`, 'session ended', 15000);

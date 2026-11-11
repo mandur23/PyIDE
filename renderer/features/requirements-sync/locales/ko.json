@@ -15,9 +15,9 @@
   "In {file} but not imported": "{file}에 있지만 가져오지 않음",
   "remove": "제거",
   "No import of the project uses it. A command-line tool or a plugin is used without an import, so check before removing it.": "프로젝트의 어떤 import도 이 패키지를 쓰지 않습니다. 명령줄 도구나 플러그인은 import 없이 쓰이므로, 지우기 전에 확인하세요.",
-  "The project has no requirements file; {file} is created.": "프로젝트에 요구 사항 파일이 없어 {file}을(를) 새로 만듭니다.",
+  "The project has no requirements file; {file} is created.": "프로젝트에 요구 사항 파일이 없어 {file} 파일을 새로 만듭니다.",
   "Sync Python Requirements…": "Python 요구 사항 동기화…",
-  "{file} updated": "{file}을(를) 고쳤습니다",
+  "{file} updated": "{file} 파일을 고쳤습니다",
   "Not installed in the project interpreter: {names}": "프로젝트 인터프리터에 설치되지 않음: {names}",
   "Install '{name}'": "'{name}' 설치",
   "Install {count} packages": "패키지 {count}개 설치"

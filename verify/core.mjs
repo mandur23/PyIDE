@@ -63,8 +63,12 @@ try {
   await press('Escape');
   check(true, 'Find Action lists registered actions');
 
+  await js(`(ide.toolWindows.get('Project').show(), ide.editor.focus(), true)`);
   await press('Alt+1');
-  check(await js(`document.querySelector('#sidePanel').classList.contains('hidden')`), 'Alt+1 hides project panel');
+  check(await js(`!document.querySelector('#sidePanel').classList.contains('hidden') && document.querySelector('#sidePanel').contains(document.activeElement)`),
+    'Alt+1 from the editor focuses the open project panel');
+  await press('Alt+1');
+  check(await js(`document.querySelector('#sidePanel').classList.contains('hidden')`), 'Alt+1 in the focused panel hides it');
   await press('Alt+1');
   check(await js(`!document.querySelector('#sidePanel').classList.contains('hidden')`), 'Alt+1 shows project panel');
 

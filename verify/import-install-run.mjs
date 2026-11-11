@@ -58,6 +58,15 @@ try {
   check(await js(`!${button}.closest('.console').textContent.includes('Install package')`), 'the console text keeps only what the program printed');
   await shot('run-button.png');
   await js(`${button}.click()`);
+  const ASK = `[...document.querySelectorAll('.dialog')].find(d => d.querySelector('.import-install-ask'))`;
+  await until(`!!${ASK}`, 'the console button asks first');
+  check(await js(`${ASK}.textContent.includes("'PyYAML'") && ${ASK}.textContent.includes('.venv')`), 'the question names PyYAML and the venv');
+  await t.click('.dialog-buttons button.secondary');
+  await sleep(1000);
+  check(await js(`${button}.dataset.state === '' && !document.body.innerText.includes('Successfully installed PyYAML')`), 'Cancel leaves the button and installs nothing');
+  await js(`${button}.click()`);
+  await until(`!!${ASK}`, 'asked again');
+  await t.click('.dialog-buttons button.primary');
   await until(`${button}?.dataset.state === 'done'`, 'installed from the console', 60000);
   check(await js(`${button}.dataset.install`) === "'PyYAML' installed. Run again.", 'the button says the package is installed');
   check(await js(`document.body.innerText.includes('Successfully installed PyYAML')`), 'pip installed PyYAML in the Packages console');
@@ -75,6 +84,7 @@ try {
     if (!box) break;
     await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
     for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    if (await until(`!!${ASK}`, 'the hover link asks first', 5000).then(() => true, () => false)) await t.click('.dialog-buttons button.primary');
     await until(`document.body.innerText.includes('pip install pyide-imp-demo')`, 'the install starts from the hover', 5000).catch(() => {});
   }
   await until(`!(${missingAt(2)})`, 'the squiggle goes after the install from the hover', 90000);

@@ -53,7 +53,7 @@ try {
     && tips.includes('표현식 평가 (Alt+F8)') && tips.includes('중단점 보기 (Ctrl+Shift+F8)') && tips.includes('프로그램 일시 중지') && tips.includes('다시 실행'),
   'tooltips use PyCharm Korean terms');
   check(await js(`[...document.querySelectorAll('.dbg-pane-head > span:first-child')].map(s => s.textContent).join()`) === '프레임,변수,감시', 'pane titles 프레임/변수/감시');
-  check(await js(`document.querySelector('#dbgVars').textContent`) === '디버그 중이 아닙니다. Shift+F9(으)로 시작하세요', 'Variables empty state in Korean');
+  check(await js(`document.querySelector('#dbgVars').textContent`) === '디버그 중이 아닙니다. Shift+F9 키로 시작하세요', 'Variables empty state in Korean');
   await noLeaks('.dbg-root', 'Debug tool window without a session');
   await shot('idle.png');
 
@@ -83,7 +83,7 @@ try {
   if (node) {
     for (const kind of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type: kind, x: node.x, y: node.y, button: 'right', clickCount: 1, buttons: 2 });
     await until(`!!document.querySelector('.context-menu')`, 'tree context menu');
-    check(await js(`document.querySelector('.context-menu').textContent.includes("'…' 디버그")`), "project tree menu shows '…' 디버그");
+    check(await js(`document.querySelector('.context-menu').textContent.includes("'main' 디버그")`), "project tree menu names the file: 'main' 디버그");
     await press('Escape');
     await js(`document.querySelector('.context-menu')?.remove(), true`);
   } else check(false, 'main.py node in the project tree');
@@ -187,7 +187,7 @@ try {
   await until(`document.activeElement?.id === 'dbgIn'`, 'stdin focused');
   await type('Ann');
   await press('Enter');
-  await until(`document.querySelector('#dbgOut').textContent.includes('종료 코드 0(으)로 완료된 프로세스')`, 'program finished');
+  await until(`document.querySelector('#dbgOut').textContent.includes('프로세스 완료(종료 코드 0)')`, 'program finished');
   check(await js(`document.querySelector('#dbgOut').textContent.includes('result=60 name=Ann')`), 'program output untouched');
   // Console eval outside a session reports in Korean
   await js(`document.querySelector('#dbgConsoleEval').focus()`);

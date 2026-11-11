@@ -407,7 +407,7 @@ try {
   await k.js(`([...document.querySelectorAll('.dialog-buttons button')].find((b) => b.textContent === '취소').click(), true)`);
   await k.until(`!document.querySelector('.rc-dialog')`, 'dialog closed');
   await k.js(`(ide.run.runConfig(ide.run.selected()), true)`);
-  await k.until(`ide.notifications.list().some((e) => e.title === "'Target'이(가) 시작되지 않았습니다")`, 'Korean failure notification', 30000);
+  await k.until(`ide.notifications.list().some((e) => e.title === "'Target' 구성이 시작되지 않았습니다")`, 'Korean failure notification', 30000);
   const kNote = await k.js(`ide.notifications.list().find((e) => e.title.startsWith("'Target'")).text`);
   kcheck(kNote.includes('실행 전 작업 실패: 외부 도구 실행: Gen') && kNote.includes('프로젝트를 신뢰하지 않습니다(안전 모드).'), `the notification is in Korean and says the tool did not run in Safe Mode (${kNote})`);
   kcheck(!existsSync(path.join(repo, 'bl.jsonl')), 'Safe Mode: the before launch tool did not start');

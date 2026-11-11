@@ -13,7 +13,7 @@
   "Open in Find Tool Window": "찾기 도구 창에서 열기",
   "Usages of {name}": "{name}의 사용 위치",
   "Annotate with Git Blame": "Git Blame으로 어노테이트",
-  "Commits that changed {name}": "{name}을(를) 변경한 커밋",
+  "Commits that changed {name}": "{name} 변경 커밋",
   "Usages": "사용 위치",
   "Code author (Git)": "코드 작성자 (Git)",
   "Shown above classes and functions. Usages come from Pyright and are counted only for the code in view; names found in more than {count} project files are counted when clicked. Authors come from git blame in trusted projects. Code vision is off in Power Save Mode.": "클래스와 함수 위에 표시됩니다. 사용 위치는 Pyright에서 가져오며 화면에 보이는 코드에 대해서만 계산하고, 프로젝트 파일 {count}개보다 많은 곳에 나오는 이름은 클릭할 때 계산합니다. 작성자는 신뢰할 수 있는 프로젝트에서 git blame으로 가져옵니다. 절전 모드에서는 코드 비전이 꺼집니다.",

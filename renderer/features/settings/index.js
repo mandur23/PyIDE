@@ -52,6 +52,7 @@
     'appearance.theme': 'dark',
     'appearance.language': 'system',
     'editor.fontSize': 14,
+    'editor.fontFamily': 'JetBrains Mono',
     'editor.wheelZoom': true,
     'editor.lineHeight': 1.6,
     'editor.tabSize': 4,
@@ -120,11 +121,29 @@
     else model.detectIndentation(true, DEFAULT_INDENT[model.getLanguageId()] || n);
   }
 
+  // Monospace families looked for on this computer (the app ships no font of its own). A family is installed when text
+  // set in it measures differently from each generic fallback alone.
+  const MONO_FONTS = ['JetBrains Mono', 'Consolas', 'Cascadia Mono', 'Cascadia Code', 'D2Coding', 'NanumGothicCoding', 'Fira Code',
+    'Fira Mono', 'Source Code Pro', 'Hack', 'IBM Plex Mono', 'Roboto Mono', 'Ubuntu Mono', 'Inconsolata', 'DejaVu Sans Mono',
+    'Lucida Console', 'Courier New'];
+  let installedMono = null;
+  function monoFonts() {
+    if (installedMono) return installedMono;
+    const c = document.createElement('canvas').getContext('2d');
+    const width = (font) => { c.font = `40px ${font}`; return c.measureText('mmmmmmmmmlli10O@#한글').width; };
+    const generic = ['monospace', 'serif', 'sans-serif'];
+    const base = generic.map(width);
+    installedMono = MONO_FONTS.filter((name) => generic.some((g, i) => width(`'${name}', ${g}`) !== base[i]));
+    return installedMono;
+  }
+  const fontStack = (name) => `'${String(name || DEFAULTS['editor.fontFamily']).replace(/['"\\;{}]/g, '')}', Consolas, 'Courier New', monospace`;
+
   function applyEditor() {
     const fontSize = Math.max(6, Number(get('editor.fontSize')) || 14);
     const ruler = Number(get('editor.ruler')) || 0;
     // Every pane and every editor embedded in a viewer, now and later.
     ide.updateEditorOptions({
+      fontFamily: fontStack(get('editor.fontFamily')),
       fontSize,
       lineHeight: Math.round(fontSize * (Number(get('editor.lineHeight')) || 1.6)),
       renderWhitespace: get('editor.showWhitespace') ? 'all' : 'none',
@@ -332,7 +351,10 @@
   // A row matches when its own text holds every word, or holds one and its section title the rest.
   const rowMatches = ({ own, section }, q) => q.every((w) => own.includes(w)) || (q.some((w) => own.includes(w)) && q.every((w) => own.includes(w) || section.includes(w)));
 
-  function openSettings(pageId = 'appearance') {
+  // opts.add (Python Interpreter page): 'menu' opens its Add Interpreter menu, 'local' the file picker of Add Local
+  // Interpreter, 'venv' the New Virtualenv Environment form, so a menu's Add New Interpreter goes straight to that step.
+  function openSettings(pageId = 'appearance', opts = {}) {
+    interpAdd = opts.add || null;
     if (open) return open.show(pageId);
     rebuildTree();
     let pending = {};
@@ -343,7 +365,7 @@
     };
     // Plugin enable/disable choices are pending until OK/Apply, like the other settings.
     const pluginChanges = new Map();
-    const ctx = { value, set, pluginChanges, changed: updateButtons, markRestart: () => { restartPending = true; updateButtons(); },
+    const ctx = { value, set, saved: get, pluginChanges, changed: updateButtons, markRestart: () => { restartPending = true; updateButtons(); },
       // Form helpers for pages registered by other plugins; values go through value/set, so OK/Apply/Cancel cover them.
       ui: { section, fieldRow, checkbox: (key, label) => checkbox(ctx, key, label), numberInput: (key, opts) => numberInput(ctx, key, opts), selectInput: (key, options, fallback) => selectInput(ctx, key, options, fallback) } };
 
@@ -531,14 +553,21 @@
     addEventListener('keydown', enterGuard, true);
 
     let closedByOk = false;
+    // A field holding a value it refused (its reason is shown beside it) takes the keyboard instead of applying. Only
+    // the shown page has fields: another page is mounted afresh, from the saved and pending values.
+    const refused = () => {
+      const bad = root.querySelector('input.invalid');
+      bad?.focus();
+      return !!bad;
+    };
     const dlg = ide.ui.dialog({
       title: tr('Settings'),
       body: root,
       width: 960,
       buttons: [
-        { label: tr('OK'), primary: true, run: async () => { await applyPending(); closedByOk = true; } },
+        { label: tr('OK'), primary: true, run: async () => { if (refused()) return false; await applyPending(); closedByOk = true; } },
         { label: tr('Cancel') },
-        { label: tr('Apply'), run: async () => { await applyPending(); return false; } },
+        { label: tr('Apply'), run: async () => { if (!refused()) await applyPending(); return false; } },
       ],
       onClose() {
         removeEventListener('keydown', enterGuard, true);
@@ -590,12 +619,17 @@
     i.dataset.key = key;
     const v = ctx.value(key) ?? fallback;
     i.value = placeholder && !v ? '' : v;
+    // The reason sits beside the field, and a refused value drops what was typed on the way to it ("10" of "100"):
+    // the setting keeps its saved value until the field holds a valid one (OK and Apply wait for that).
+    const reason = el('span', 'field-error');
     i.oninput = () => {
       const n = i.value === '' ? (placeholder ? 0 : NaN) : Number(i.value);
       const ok = !Number.isNaN(n) && (n === 0 && placeholder ? true : n >= min && n <= max);
       i.classList.toggle('invalid', !ok);
-      i.title = ok ? '' : tr('Enter a value between {min} and {max}', { min, max });
-      if (ok) ctx.set(key, n);
+      reason.textContent = ok ? '' : tr('Enter a value between {min} and {max}', { min, max });
+      if (!ok && !reason.isConnected) i.after(reason);
+      if (ok) reason.remove();
+      ctx.set(key, ok ? n : ctx.saved(key));
     };
     return i;
   }
@@ -950,6 +984,11 @@
 
   function mountEditor(host, ctx) {
     const font = section(host, tr('Font'));
+    const family = ctx.value('editor.fontFamily');
+    const families = [...new Set([DEFAULTS['editor.fontFamily'], ...monoFonts(), family])];
+    const pick = selectInput(ctx, 'editor.fontFamily', families.map((f) => [f, f === DEFAULTS['editor.fontFamily'] ? tr('{name} (default)', { name: f }) : f]));
+    for (const o of pick.options) o.style.fontFamily = fontStack(o.value);
+    font.appendChild(fieldRow(tr('Font:'), pick));
     font.appendChild(fieldRow(tr('Size:'), numberInput(ctx, 'editor.fontSize'), '6 – 48'));
     font.appendChild(fieldRow(tr('Line height:'), numberInput(ctx, 'editor.lineHeight', { step: 0.1 }), '1.0 – 3.0'));
     const mouse = section(host, tr('Mouse Control'));
@@ -1362,7 +1401,10 @@
   }
 
   // ---------- Python Interpreter page ----------
+  let interpAdd = null; // the add step openSettings was asked to go to
   function mountInterpreter(host, ctx) {
+    const addStep = interpAdd;
+    interpAdd = null;
     if (!ide.root) {
       host.appendChild(el('div', 'muted', tr('Open a project to configure its interpreter.')));
       return;
@@ -1379,7 +1421,16 @@
     const form = el('div', 'venv-form hidden');
     const table = el('div', 'pkg-table');
     table.id = 'settingsPackages';
-    host.append(top, status, form, table);
+    // Installing and removing packages is the Python Packages window's: the list here only shows what is installed.
+    const pkgNote = el('div', 'muted settings-note interp-packages-note');
+    if (ide.toolWindows.has('PythonPackages')) {
+      const link = el('a', 'settings-link', tr('Install or remove packages in the Python Packages window'));
+      link.id = 'interpPackagesLink';
+      // As OK: the interpreter just chosen on this page is the one the window then shows.
+      link.onclick = () => { document.getElementById('settingsOk')?.click(); ide.toolWindows.get('PythonPackages').show(); };
+      pkgNote.appendChild(link);
+    }
+    host.append(top, status, form, pkgNote, table);
 
     const selectedExe = () => ctx.value(key) || ide.currentInterp()?.executable;
     function fillSelect() {
@@ -1500,6 +1551,8 @@
       [tr('Create Virtualenv Environment…'), showVenvForm],
       ...(ide.interpreterAddActions || []).map((a) => [a.label(), () => a.run({ form, status, useInterpreter })]),
     ], 'addInterpMenu');
+    // After the dialog has laid out: the menu is placed under the button.
+    if (addStep) requestAnimationFrame(() => ({ menu: addBtn.onclick, local: addExisting, venv: showVenvForm })[addStep]?.());
   }
 
   // ---------- actions ----------

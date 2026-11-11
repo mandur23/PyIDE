@@ -87,8 +87,9 @@
   }
 
   // Adds a temporary configuration (or reuses the matching one), selects it, and returns it, like PyCharm does
-  // when you run something from the editor or the project tree.
-  function addTemporary(cfg) {
+  // when you run something from the editor or the project tree. select: false leaves the run widget's choice alone
+  // (Run with Current File chosen keeps running the file in front, through that file's temporary configuration).
+  function addTemporary(cfg, { select = true } = {}) {
     const type = types.get(cfg.type);
     const key = type?.identity?.(cfg);
     let existing = state.configs.find((c) => c.type === cfg.type && type?.identity?.(c) === key);
@@ -100,7 +101,7 @@
         state.configs.splice(state.configs.indexOf(old), 1);
       }
     }
-    state.selected = existing.id;
+    if (select) state.selected = existing.id;
     persist();
     return existing;
   }
@@ -168,8 +169,27 @@
     }
     emptyNote.classList.toggle('hidden', !!s);
     tabBar.classList.toggle('hidden', !sessions.length);
+    // The tab bar scrolls sideways once the tabs outgrow it: the tab shown is always one the user can see.
+    if (s) requestAnimationFrame(() => s.tab.isConnected && s.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     syncIds();
     renderActions();
+  }
+
+  ide.on('toolWindowShown', (id) => { if (id === 'Run' && activeSession) requestAnimationFrame(() => activeSession?.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })); });
+
+  // Finished runs keep their tabs, as in PyCharm, but not without end: past MAX_FINISHED the oldest finished tab of a
+  // configuration goes when a new one opens (a running, starting or shown tab, and a plugin's own tab, stay).
+  const MAX_FINISHED = 5;
+  function dropOldFinished() {
+    const finished = sessions.filter((o) => !busy(o) && o !== activeSession && o.cfg.type);
+    for (const o of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED))) closeSession(o);
+  }
+  function tabMenu(s, x, y) {
+    const finished = sessions.filter((o) => !busy(o));
+    ide.ui.contextMenu(x, y, [
+      { label: tr('Close'), run: () => closeSession(s) },
+      { label: tr('Close All Finished Tabs'), disabled: !finished.length, run: () => { for (const o of finished) closeSession(o); } },
+    ]);
   }
 
   function closeSession(s) {
@@ -183,6 +203,20 @@
     if (activeSession === s) selectSession(sessions[sessions.length - 1] || null);
     else tabBar.classList.toggle('hidden', !sessions.length);
     updateToolbar();
+  }
+
+  // Windows' "No Python at '<home>\python.exe'" says only what is missing: the run's virtual environment was made from
+  // a Python that is no longer there. This says that and offers what fixes it; the interpreter list is read again so
+  // the status bar shows the interpreter as invalid.
+  function brokenVenvHint(s, base) {
+    const exe = interpFor(s.cfg)?.executable || '';
+    const venv = /[\\/]Scripts[\\/]python\.exe$/i.test(exe) ? dirname(dirname(exe)) : null;
+    s.con.append(`${tr('The virtual environment {venv} was made from {base}, which is no longer there. Recreate the virtual environment, or choose another interpreter.', { venv: venv || exe, base })}\n`, 'err');
+    const actions = [];
+    if (venv && ide.root && ide.util.isUnder(venv, ide.root) && ide.venvSetup?.recreate) actions.push({ label: tr('Recreate {name}', { name: basename(venv) }), run: () => ide.venvSetup.recreate(venv) });
+    if (ide.openSettings) actions.push({ label: tr('Choose Interpreter…'), run: () => ide.openSettings('interpreter') });
+    if (actions.length) ide.ui.consoleActions(s.con, actions);
+    ide.reloadInterpreters?.();
   }
 
   function createSession(cfg) {
@@ -231,7 +265,10 @@
       exited(id, code) {
         if (s.procId !== id) return;
         s.running = false;
-        if (s.con?.input) s.con.input.disabled = true;
+        if (s.con?.input) {
+          s.con.input.disabled = true;
+          s.con.input.placeholder = tr('The process has finished: nothing reads input now. Rerun to type input again.');
+        }
         updateToolbar();
         if (activeSession === s) renderActions();
         for (const hook of s.exitHooks.splice(0)) hook();
@@ -242,12 +279,20 @@
       // tab replaced (s.procId moved on) writes nothing more: its console is gone and s.con is the new run's.
       attach(id, { onExit } = {}) {
         s.started(id);
+        // The venv launcher's own failure: its pyvenv.cfg names a base Python that is gone (exit code 103; "No Python at" before
+        // Python 3.13's launcher, "did not find executable at" since).
+        let noBase = null;
         ide.proc.attach(id, {
-          data: (text, stream) => s.procId === id && s.con?.append(text, stream === 'err' ? 'err' : null),
+          data: (text, stream) => {
+            if (s.procId !== id) return;
+            noBase ??= /(?:No Python at|did not find executable at) '?([^'\r\n]+)/.exec(text)?.[1] || null;
+            s.con?.append(text, stream === 'err' ? 'err' : null);
+          },
           exit(code) {
             if (s.procId === id) {
               s.con?.append(`\n${tr('Process finished with exit code {code}', { code: code ?? 1 })}\n`, 'sys');
               s.setIcon(code === 0 ? 'run' : 'error', code === 0 ? 'done' : 'failed');
+              if (code === 103 && noBase && s.con) brokenVenvHint(s, noBase);
             }
             onExit?.(code);
             s.exited(id, code);
@@ -279,9 +324,11 @@
     s.tab.appendChild(close);
     s.tab.onclick = () => selectSession(s);
     s.tab.onauxclick = (e) => e.button === 1 && closeSession(s);
+    s.tab.oncontextmenu = (e) => { e.preventDefault(); tabMenu(s, e.clientX, e.clientY); };
     tabBar.appendChild(s.tab);
     bodies.appendChild(s.host);
     sessions.push(s);
+    if (cfg.type) dropOldFinished();
     return s;
   }
 
@@ -506,9 +553,15 @@
     const s = await prepareSession(cfg, executor);
     try {
       // A type that starts no Python (Java, C/C++: needsInterp false) gets no interpreter and no executor.
+      if (type.needsInterp !== false && !interpFor(cfg)) await ide.recheckInvalidInterpreter?.();
       let interp = type.needsInterp === false ? null : interpFor(cfg);
       if (type.needsInterp !== false) {
-        if (!interp) return s.console().append(`${tr('No Python interpreter found.')}\n`, 'err');
+        if (!interp) {
+          const con = s.console();
+          con.append(`${tr('No Python interpreter found.')}\n`, 'err');
+          if (ide.noInterpreterActions) ide.ui.consoleActions(con, ide.noInterpreterActions());
+          return;
+        }
         // The executor returns the interpreter to start instead (null cancels the run) and may add exit hooks.
         if (executor && !(interp = await executor.prepare(cfg, interp, s))) return s;
       }
@@ -702,6 +755,12 @@
       const id = await ide.api.invoke('run:start', interp, r.script, cwd, r.params, r.env, ide.root ? [ide.root] : [], envFilesFor(cfg),
         { interpOptions: r.interpOptions, stdin: r.stdin || undefined });
       s.attach(id);
+      s.exitHooks.push(() => {
+        const note = ide.venvSetup?.systemPythonNote?.(interp);
+        if (!note || !s.con) return;
+        s.con.append(`${note.text}\n`, 'sys');
+        ide.ui.consoleActions(s.con, note.actions);
+      });
     },
   });
 
@@ -783,11 +842,13 @@
     return { ...types.get(cfg.type).defaults(), ...cfg, id: `file:${file.toLowerCase()}` };
   };
 
+  // The file runs through its temporary configuration, as in PyCharm: it shows in the run widget's list, where its
+  // parameters can be edited and it can be saved.
   function runCurrentFile(opts = {}) {
     const file = currentPyFile();
-    if (file) return runConfig(currentFileConfig(file), opts);
-    if (lastRun) return runConfig(lastRun, opts);
-    ide.ui.dialog({ title: tr('Run'), body: tr('Open a Python file to run it, or select a run configuration.') });
+    if (!file) return lastRun ? runConfig(lastRun, opts) : ide.ui.dialog({ title: tr('Run'), body: tr('Open a Python file to run it, or select a run configuration.') });
+    const cfg = contextConfigForFile(file);
+    return runConfig(ide.root && types.get(cfg.type)?.identity ? addTemporary(cfg, { select: false }) : currentFileConfig(file), opts);
   }
 
   function runSelected(opts = {}) {
@@ -898,7 +959,7 @@
   ide.registerAction({ id: 'editRunConfigurations', title: tr('Edit Configurations…'), run: () => editConfigurations() });
   ide.registerAction({ id: 'Rerun', title: tr('Rerun'), run: () => activeSession && (activeSession.rerun ? activeSession.rerun() : runConfig(activeSession.cfg, { executor: activeSession.executor })) });
   ide.registerTreeAction({
-    title: tr("Run '…'"),
+    title: (e) => tr("Run '{name}'", { name: contextConfigForFile(e.path)?.name || e.name }),
     keyAction: 'RunClass',
     when: (e) => !e.dir && /\.pyw?$/i.test(e.name) && contextConfigForFile(e.path)?.type === 'python',
     run: (e) => runContext(contextConfigForFile(e.path)),
@@ -932,7 +993,8 @@
         run() {
           const cfg = { ...t.defaults(), id: newId(), type: t.type, name: tr('Unnamed') };
           const file = currentPyFile();
-          if (file && t.forFile) Object.assign(cfg, t.forFile(file) || {}, { type: t.type, name: tr('Unnamed') });
+          // Named after the script it is filled in with, as PyCharm names a new configuration.
+          if (file && t.forFile) { const f = t.forFile(file) || {}; Object.assign(cfg, f, { type: t.type, name: f.name || tr('Unnamed') }); }
           draft.push(cfg);
           current = cfg;
           render();

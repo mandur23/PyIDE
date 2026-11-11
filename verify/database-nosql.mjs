@@ -365,7 +365,7 @@ try {
   await clickText(k, `.custom-tab:not(.hidden) .db-view-btn`, 'JSON');
   check((await status(k)).includes('문서 3개') && (await k.js(`[...${activeConsole}.querySelectorAll('.db-view-btn')].map(b => b.textContent).join()`)) === '그리드,JSON', `results are in Korean (${await status(k)})`);
   await runLine(k, 2);
-  check((await k.js(`${activeConsole}.querySelector('.db-message')?.textContent`)) === '데이터베이스를 shop(으)로 전환했습니다', 'the use notice is translated');
+  check((await k.js(`${activeConsole}.querySelector('.db-message')?.textContent`)) === "'shop' 데이터베이스로 전환했습니다", 'the use notice is translated');
   const allowed = ['MongoDB', 'Redis', 'SQLite', 'PostgreSQL', 'MySQL', 'MariaDB', 'JSON', 'CSV', 'TSV', 'NULL', 'TLS', 'ms', 'mongodb', 'SELECT', 'localhost', 'admin', 'default'];
   let leaks = await englishLeaks(k, '.db-tool, .db-console', allowed);
   await rightClickText(k, '#dbTree .db-node.db-source', 'shop-db');

@@ -151,7 +151,7 @@ try {
   h = await menuHints();
   await closeMenus();
   check(h['Reformat Code'] === 'Ctrl+Alt+Shift+F' && h['Optimize Imports'] === 'Ctrl+Alt+O', `tree menu: Reformat Code follows the keymap (${S(h)})`);
-  check(h["Run '…'"] === '', `tree menu: Run '…' shows no shortcut once Run Context Configuration has none (${S(h["Run '…'"])})`);
+  check(h["Run 'main'"] === '', `tree menu: Run 'main' shows no shortcut once Run Context Configuration has none (${S(h["Run 'main'"])})`);
   await rightClick(treeNode('util'));
   await until(`!!document.querySelector('.context-menu')`, 'folder menu');
   h = await menuHints();
@@ -216,9 +216,9 @@ try {
   await b.js(`(ide.settings.set('keymap.overrides', ${S({ FindInPath: ['Ctrl+Alt+Shift+G'], Run: [], ToggleBookmark: ['Ctrl+K B'] })}), true)`);
   await b.sleep(200);
   const ko = (sel) => b.js(`document.querySelector(${S(sel)})?.textContent`);
-  check(await ko('#snFindHead') === '프로젝트를 검색하려면 파일에서 찾기 (Ctrl+Alt+Shift+G)을(를) 사용하세요', `Korean Find in Files text (${await ko('#snFindHead')})`);
+  check(await ko('#snFindHead') === '프로젝트를 검색하려면 다음을 사용하세요: 파일에서 찾기 (Ctrl+Alt+Shift+G)', `Korean Find in Files text (${await ko('#snFindHead')})`);
   check(await ko('.run-empty') === '표시할 내용이 없습니다.', `Korean Run empty text (${await ko('.run-empty')})`);
-  check(await ko('.bm-empty') === '북마크가 없습니다. 에디터에서 북마크 토글 (Ctrl+K, B)을(를) 사용해 추가하세요.', `Korean Bookmarks text (${await ko('.bm-empty')})`);
+  check(await ko('.bm-empty') === '북마크가 없습니다. 에디터에서 북마크 토글 (Ctrl+K, B) 명령을 사용해 추가하세요.', `Korean Bookmarks text (${await ko('.bm-empty')})`);
   check(await b.js(`document.querySelector('#searchBtn').title`) === '어디서나 검색 (Shift 두 번)', `Korean Search Everywhere tooltip (${await b.js(`document.querySelector('#searchBtn').title`)})`);
   const mine = /\{action\}|\{keys\}|\{saves\}|\{dialog\}|explicit saves|Surround With|the Push dialog|Nothing to show|Inline Edit|AI edits with Claude|^Execute$|request$|Show Context Actions/;
   const missing = (await missingTranslations(b)).filter((s) => mine.test(s));

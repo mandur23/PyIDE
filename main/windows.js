@@ -17,7 +17,7 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
   const sharedDocs = createSharedDocs({ keyOf: pathKey, load: loadFromDisk });
   const initialState = new Map(); // webContents id -> payload for a detached window
   const dirty = new Map(); // webContents id -> paths of its modified documents
-  const busy = new Map(); // webContents id -> names of what runs in it (the run plugin's sessions), stopped by closing
+  const busy = new Map(); // webContents id -> Map(reporter -> names of what runs in it), stopped by closing
   let main = null;
   let mode = 'code'; // the process's app mode, which every window's page is told (?mode=)
   let closingAll = false; // the user answered for every window: close them without asking again
@@ -30,7 +30,7 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
   const alive = () => [...all].filter((w) => !w.isDestroyed());
   const others = (sender) => alive().filter((w) => w.webContents.id !== sender.id);
   const dirtyPaths = (w) => dirty.get(w.webContents.id) || [];
-  const busyNames = (w) => busy.get(w.webContents.id) || [];
+  const busyNames = (w) => [...(busy.get(w.webContents.id)?.values() || [])].flat();
   // Before the page sees the key: plain F12 is no shortcut of any mode.
   const addDevToolsKey = (w) => {
     if (!devToolsKey) return;
@@ -202,7 +202,13 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
     return true;
   });
   ipcMain.on('window:setDirty', (e, paths) => dirty.set(e.sender.id, Array.isArray(paths) ? paths : []));
-  ipcMain.on('window:setBusy', (e, names) => busy.set(e.sender.id, Array.isArray(names) ? names.map(String) : []));
+  // names: what runs (the run plugin's, Cut's exports), or {source, names} from another reporter in the same window (the
+  // Terminal's sessions with a program running), so each reporter replaces only its own list.
+  ipcMain.on('window:setBusy', (e, payload) => {
+    const { source, names } = Array.isArray(payload) ? { source: '', names: payload } : { source: String(payload?.source || ''), names: payload?.names };
+    if (!busy.has(e.sender.id)) busy.set(e.sender.id, new Map());
+    busy.get(e.sender.id).set(source, Array.isArray(names) ? names.map(String) : []);
+  });
   // Closes the window without asking (the user answered); from the main window, every window.
   ipcMain.handle('window:closeNow', (e) => {
     dirty.delete(e.sender.id);

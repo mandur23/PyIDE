@@ -138,7 +138,8 @@
     diff.setModel({ original, modified });
     const marks = { orig: diff.getOriginalEditor().createDecorationsCollection(), mod: diff.getModifiedEditor().createDecorationsCollection() };
     let computed = false;
-    const onlySeparators = separators && differOnlyInSeparators(left.text, right.text);
+    // An editable side is a document, whose text has the editor's line separators: nothing to tell apart there.
+    const onlySeparators = separators && !right.doc && differOnlyInSeparators(left.text, right.text);
     const update = () => {
       const n = changesOf(diff).length;
       count.textContent = !computed ? tr('Comparing…') : n ? (n === 1 ? tr('1 difference') : tr('{n} differences', { n }))

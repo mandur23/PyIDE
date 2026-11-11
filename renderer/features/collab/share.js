@@ -85,6 +85,7 @@
   };
   const termTw = ide.registerToolWindow({
     id: 'CollabTerminal', title: tr('Host Terminal'), icon: '>_', iconName: 'terminal', side: 'bottom', order: 96,
+    available: () => C.state().role === 'guest',
     mount(container) {
       container.classList.add('collab-term-tool');
       const bar = el('div', 'collab-term-bar');

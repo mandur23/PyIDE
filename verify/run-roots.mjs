@@ -299,7 +299,7 @@ r.close();
 const k = await launch({ fixture: 'run-roots', port: 9592, name: 'run-roots-ko', lang: 'ko-KR' });
 await k.js(`ide.settings.set('projectTree.compactFolders', false)`);
 try {
-  const title = "'src'이(가) 소스 루트로 표시됨";
+  const title = "'src' 폴더가 소스 루트로 표시됨";
   await k.until(`[...document.querySelectorAll('.ide-balloon')].some((b) => b.textContent.includes(${q(title)}))`, 'Korean notification', 20000);
   const actions = await k.js(`[...[...document.querySelectorAll('.ide-balloon')].find((b) => b.textContent.includes(${q(title)})).querySelectorAll('.ide-balloon-action')].map((a) => a.textContent)`);
   k.check(q(actions) === q(['확인', '되돌리기', '다시 표시 안 함']), `${title}: 확인, 되돌리기, 다시 표시 안 함 (${actions})`);

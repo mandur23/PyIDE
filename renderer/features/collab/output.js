@@ -34,6 +34,7 @@
   let shownName = null;
   const tw = ide.registerToolWindow({
     id: 'CollabOutput', title: tr('Host Output'), icon: '▶', iconName: 'run', side: 'bottom', order: 95,
+    available: () => C.state().role === 'guest',
     mount(container) {
       container.classList.add('collab-output');
       con = ide.ui.console(container, {});

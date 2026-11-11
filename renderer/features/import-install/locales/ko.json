@@ -5,5 +5,10 @@
   "Install Missing Packages": "누락된 패키지 설치",
   "Quick fix that installs the package of an unresolved import (Pyright's reportMissingImports) with the project's tool, optionally adding it to the requirements.": "해결되지 않은 import(Pyright의 reportMissingImports)의 패키지를 프로젝트의 도구로 설치하고, 원하면 요구 사항에도 추가하는 빠른 수정입니다.",
   "Installing '{name}'…": "'{name}' 설치 중…",
-  "'{name}' installed. Run again.": "'{name}' 설치됨. 다시 실행하세요."
+  "'{name}' installed. Run again.": "'{name}' 설치됨. 다시 실행하세요.",
+  "Download '{name}' from the Python Package Index and install it?": "Python Package Index에서 '{name}' 패키지를 받아 설치할까요?",
+  "Interpreter: {name}": "인터프리터: {name}",
+  "This interpreter is not a virtual environment of the project: every program that uses it gets the package.": "이 인터프리터는 프로젝트의 가상 환경이 아닙니다. 이 인터프리터를 쓰는 모든 프로그램에 패키지가 설치됩니다.",
+  "Install Package": "패키지 설치",
+  "Install": "설치"
 }

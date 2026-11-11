@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const { allowShare } = require('./security');
 
+// The project's own repository changed outside the IDE (git init, a commit, checkout or fetch in a terminal or another
+// program): its HEAD, index, refs, or the folder itself. Objects and logs only follow those, and are left out.
+const GIT_STATE = /^\.git([\\/](HEAD|index|packed-refs|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|REBASE_HEAD|refs([\\/].*)?|rebase-merge|rebase-apply))?$/i;
+
 // Paths under these folders never matter to the tree or open documents.
 const NOISE = /(^|[\\/])(\.git|__pycache__|node_modules|\.mypy_cache|\.pytest_cache|\.ruff_cache|\.tox|\.nox|\.idea)([\\/]|$)/i;
 
@@ -19,6 +23,7 @@ function register({ ipcMain }) {
     if (!root) return false;
     const pending = new Set();
     let overflow = false;
+    let gitChanged = false;
     let timer = null;
     let last = 0;
     let watcher;
@@ -28,9 +33,13 @@ function register({ ipcMain }) {
       timer = null;
       const paths = [...pending].map((n) => path.join(root, n));
       const lost = overflow;
+      const git = gitChanged;
       pending.clear();
       overflow = false;
-      if (!sender.isDestroyed()) sender.send('watch:changed', { root, paths, overflow: lost });
+      gitChanged = false;
+      if (sender.isDestroyed()) return;
+      if (paths.length || lost) sender.send('watch:changed', { root, paths, overflow: lost });
+      if (git || lost) sender.send('watch:gitChanged', { root });
     };
     const start = () => {
       try {
@@ -38,6 +47,7 @@ function register({ ipcMain }) {
           // No name: the change buffer overflowed (a large checkout); everything may have changed.
           if (!name) overflow = true;
           else if (!NOISE.test(name)) pending.add(name);
+          else if (GIT_STATE.test(name)) gitChanged = true;
           else return;
           last = Date.now();
           if (!timer) timer = setTimeout(flush, 300);

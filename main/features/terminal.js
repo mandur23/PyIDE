@@ -4,7 +4,7 @@ const pty = require('@lydell/node-pty');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, fork } = require('child_process');
 const claude = require('../ai/claude');
 const claudeIde = require('./claude-ide');
 const remote = require('../remote');
@@ -224,6 +224,28 @@ exports.register = ({ ipcMain, app, programs }) => {
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
     try { sessions.get(id)?.proc.resize(Math.max(2, cols), Math.max(2, rows)); } catch {}
   });
+  // Whether a program runs in a session: a process besides the shell attached to its console (python, a server). An
+  // idle shell at its prompt has none. Read by node-pty's own agent in a child process, since a process can attach to
+  // one console only; node-pty runs the same agent to end a session. -> true, false, or null when it cannot tell.
+  const AGENT = path.join(path.dirname(require.resolve('@lydell/node-pty')), 'conpty_console_list_agent');
+  ipcMain.handle('pty:busy', (_e, id) => {
+    const pid = sessions.get(id)?.proc.pid;
+    if (!pid) return false;
+    return new Promise((resolve) => {
+      let agent;
+      try { agent = fork(AGENT, [String(pid)], { stdio: 'ignore', serialization: 'json' }); } catch { return resolve(null); }
+      const timer = setTimeout(() => { try { agent.kill(); } catch {} resolve(null); }, 5000);
+      agent.once('message', (m) => {
+        clearTimeout(timer);
+        const list = Array.isArray(m?.consoleProcessList) ? m.consoleProcessList : null;
+        resolve(list ? list.some((p) => p !== pid && p !== agent.pid) : null);
+      });
+      agent.once('error', () => { clearTimeout(timer); resolve(null); });
+      // The agent exits right after it sends; its message may still be on the way.
+      agent.once('exit', () => { clearTimeout(timer); setTimeout(resolve, 500, null); });
+    });
+  });
+
   ipcMain.handle('pty:kill', (_e, id) => {
     const s = sessions.get(id);
     if (!s) return;
