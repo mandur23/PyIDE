@@ -1570,6 +1570,7 @@
   }
 
   let logSeq = 0;
+  let logShown = '';
   async function loadLog() {
     if (!logRows) return;
     const my = ++logSeq;
@@ -1586,6 +1587,14 @@
     const [list, who, mine] = await Promise.all([historyOf ? invoke('fileHistory', ide.root, historyOf) : invoke('log', ide.root), invoke('identity', ide.root),
       invoke('unpushed', ide.root)]);
     if (my !== logSeq) return;
+    // A reload that brings what is shown (the watcher's, after the app's own commit) draws nothing again: replacing the
+    // rows under the mouse swallows the click between its press and its release.
+    const shown = JSON.stringify([historyOf, list, who, mine]);
+    if (shown === logShown && logRows.querySelector('.vcs-log-row')) {
+      if (!activityPane.classList.contains('hidden')) loadActivity();
+      return;
+    }
+    logShown = shown;
     commits = list;
     me = who;
     unpushed = new Set(mine);

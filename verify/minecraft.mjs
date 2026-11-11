@@ -684,8 +684,14 @@ try {
   writeFileSync(purpProps, readFileSync(purpProps, 'utf8').replace(/^server-port=.*$/m, 'server-port=25612'));
   await js('ide.minecraft.refresh().then(() => true)');
   await startServer('modded');
-  await js(`(ide.ports.share(25612, { private: false }), true)`);
-  await until(`${card('modded')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40612'`, 'modded shared before the delete', 30000);
+  // A share is refused until the server listens, which a busy machine reaches after startServer returns: asked again
+  // until the address shows.
+  const moddedShared = `${card('modded')}?.querySelector('.mc-public-addr')?.textContent === 'bore.pub:40612'`;
+  for (let i = 0; i < 15 && !(await js(moddedShared)); i++) {
+    await js(`(Promise.resolve(ide.ports.share(25612, { private: false })).catch(() => {}), true)`);
+    await until(moddedShared, 'modded shared', 4000).catch(() => {});
+  }
+  await until(moddedShared, 'modded shared before the delete', 30000);
   const trashed = path.join(work, 'trashed-purp');
   await js(`(ide.api.trash = (p) => ide.api.rename(p, ${S(trashed)}), true)`);
   await js(`(${card('purp')}.querySelector('.mc-settings').click(), true)`);
