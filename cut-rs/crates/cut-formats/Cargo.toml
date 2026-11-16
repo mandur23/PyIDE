@@ -1,0 +1,21 @@
+[package]
+name = "cut-formats"
+description = "Media files in Nano Studio Cut: MP4/MOV, WebM/Matroska, MP3, WAV and ADTS readers and the MP4 writer (port of codecs, mp4read, mkvread, audioread, probe and mp4write)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+# The JavaScript prints the shortest decimal of a double: it must parse back to the same double.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[lints]
+workspace = true

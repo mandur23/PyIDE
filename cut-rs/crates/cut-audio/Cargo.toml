@@ -1,0 +1,23 @@
+[package]
+name = "cut-audio"
+description = "The sound of Nano Studio Cut: decoded sources, the mixer (clips, keyframed gain and pan, fades, crossfades, tracks, speed, nests, the audio effects), loudness, waveform peaks, levels and playback (port of renderer/features/cut/audioengine.js, audiofx.js and the audio parts of analyze.js and thumbs.js)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+cut-formats = { path = "../cut-formats" }
+cut-model = { path = "../cut-model" }
+cut-decode = { path = "../cut-decode" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+cpal = "0.16"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "cut-engine"
+description = "The picture engine of Nano Studio Cut: the frame of a sequence at a time, drawn on the GPU with wgpu and the JavaScript compositor's own WGSL (native counterpart of renderer/features/cut/{media,decoder,compositor,effects,lumetri,textrender,player}.js)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+cut-formats = { path = "../cut-formats" }
+cut-model = { path = "../cut-model" }
+cut-decode = { path = "../cut-decode" }
+# The version eframe 0.37 builds, so the app can hand its device and queue to the engine.
+wgpu = "30.0.1"
+bytemuck = "1"
+pollster = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+swash = { version = "0.2", default-features = false }
+unicode-segmentation = "1"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+png = "0.18"
+
+[lints]
+workspace = true

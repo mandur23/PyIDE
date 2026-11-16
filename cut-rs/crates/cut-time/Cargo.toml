@@ -1,0 +1,15 @@
+[package]
+name = "cut-time"
+description = "Time in Nano Studio Cut: integer ticks and frame rates (port of renderer/features/cut/time.js)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,33 @@
+# Nano Studio Cut in Rust: the video editor as its own native app.
+# The JavaScript editor under renderer/features/cut is the reference: each crate here ports one of its layers and is
+# checked against the module it replaces (tools/oracle.mjs runs the JavaScript on the same inputs).
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "UNLICENSED"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# An editor is unusable at debug speed: the workspace's own code stays quick to build, what it depends on is optimized.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -1,0 +1,43 @@
+[package]
+name = "cut-app"
+description = "Nano Studio Cut: the editor's window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "cut_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nano-studio-cut"
+path = "src/main.rs"
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+cut-model = { path = "../cut-model" }
+cut-formats = { path = "../cut-formats" }
+cut-engine = { path = "../cut-engine" }
+cut-audio = { path = "../cut-audio" }
+cut-export = { path = "../cut-export" }
+# The codec tables behind the import's refusal sentences (and the generated test media in tests/media).
+cut-decode = { path = "../cut-decode" }
+# Thumbnails kept in the cache as JPEG, as the JavaScript keeps them (the engine already builds this version).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
+# The installed fonts for the Text panel (the engine already builds this version and these features).
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
+rfd = { version = "0.15", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha1 = "0.10"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu", "snapshot", "eframe"] }
+
+[lints]
+workspace = true

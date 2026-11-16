@@ -1,0 +1,28 @@
+[package]
+name = "cut-export"
+description = "Export in Nano Studio Cut: presets, the frame plan, Media Foundation encoding, MP4 writing with the part file and faststart, and the check of the written file (native counterpart of renderer/features/cut/{presets,export}.js and main/cut/{sink,faststart}.js)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+cut-model = { path = "../cut-model" }
+cut-formats = { path = "../cut-formats" }
+cut-decode = { path = "../cut-decode" }
+cut-engine = { path = "../cut-engine" }
+cut-audio = { path = "../cut-audio" }
+wgpu = "30.0.1"
+bytemuck = "1"
+pollster = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+
+[lints]
+workspace = true

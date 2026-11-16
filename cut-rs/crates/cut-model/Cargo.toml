@@ -1,0 +1,22 @@
+[package]
+name = "cut-model"
+description = "The project model of Nano Studio Cut: the .ncut document, its queries, keyframes, time remapping, masks, captions, edit commands and undo (port of renderer/features/cut/model.js and the modules around it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cut-time = { path = "../cut-time" }
+encoding_rs = "0.8.44"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: a number the JavaScript wrote reads back to the same f64 (the default parser can be an ulp off).
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+
+[dev-dependencies]
+cut-oracle = { path = "../cut-oracle" }
+
+[lints]
+workspace = true
