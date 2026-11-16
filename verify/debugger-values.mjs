@@ -193,7 +193,8 @@ try {
     const p = await js(`(() => { const r = ${row}.getBoundingClientRect(); return { x: r.x + 40, y: r.y + r.height / 2 }; })()`);
     await t.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
     for (const type of ['mousePressed', 'mouseReleased']) await t.cdp('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'right', clickCount: 1, buttons: type === 'mousePressed' ? 2 : 0 });
-    await until(`!!document.querySelector('.context-menu .menu-label')`, `menu on ${name}`);
+    // The menu of this row: a right-click selects the row it lands on, so a tree that redrew under the pointer shows.
+    await until(`!!document.querySelector('.context-menu .menu-label') && ide.selectedTreeEntry()?.name === ${JSON.stringify(name)}`, `menu on ${name}`);
     const labels = await js(`[...document.querySelectorAll('.context-menu .menu-label')].map((l) => l.textContent)`);
     await press('Escape');
     return labels;
@@ -202,7 +203,7 @@ try {
   const scriptDebug = (l) => l.startsWith("Debug '") && !l.includes('pytest');
   check(!labels.some(scriptDebug) && labels.includes("Debug 'pytest in test_calc.py'"), `a test file's tree menu offers only its tests' Debug entry (${labels.filter((l) => l.startsWith('Debug')).join(' | ')})`);
   labels = await treeMenu('loop.py');
-  check(labels.some(scriptDebug), `a plain script keeps its Debug entry (${labels.filter(scriptDebug).join(' | ')})`);
+  check(labels.some(scriptDebug), `a plain script keeps its Debug entry (${labels.filter(scriptDebug).join(' | ') || `none in: ${labels.join(' | ')}`})`);
   await openFile(t, 'test_calc.py');
   const firstLine = `document.querySelector('#dbgOut').textContent.split('\\n')[0]`;
   const before = await js(firstLine);
