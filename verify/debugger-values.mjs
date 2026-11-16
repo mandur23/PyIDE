@@ -196,7 +196,9 @@ try {
     // The menu of this row: a right-click selects the row it lands on, so a tree that redrew under the pointer shows.
     await until(`!!document.querySelector('.context-menu .menu-label') && ide.selectedTreeEntry()?.name === ${JSON.stringify(name)}`, `menu on ${name}`);
     const labels = await js(`[...document.querySelectorAll('.context-menu .menu-label')].map((l) => l.textContent)`);
-    await press('Escape');
+    // The menu takes its keys a task after it opens: an Escape sent sooner is lost, and the menu left open covers the
+    // next row (the next right-click would land on it and open nothing).
+    for (let i = 0; i < 20 && await js(`!!document.querySelector('.context-menu')`); i++) { await press('Escape'); await t.sleep(100); }
     return labels;
   };
   let labels = await treeMenu('test_calc.py');
