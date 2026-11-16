@@ -637,6 +637,11 @@
   // A theme switch (also the OS's, under Sync with OS) repaints the emulated terminals, as the Terminal does: the
   // colours are read once the new theme's variables apply.
   ide.on('themeChanged', () => requestAnimationFrame(() => { for (const s of sessions) if (s.term) s.term.options.theme = termTheme(); }));
+  // The Run window went to a window of its own or came back (renderer/core/popout.js): the emulated terminals draw with
+  // the frames and pixel ratio of the window they are in now.
+  ide.on('panelMoved', ({ id }) => {
+    if (id === 'Run') for (const s of sessions) if (s.term?.element?.parentElement) s.term.open(s.term.element.parentElement);
+  });
 
   async function startInTerminal(cfg, s, interp, r) {
     await loadXterm();

@@ -26,6 +26,7 @@ npm start -- --mode=craft
 - 편집기 탭(서버 설정, 플레이어 탭, 파일)을 열면 `body.mc-craft-tab`이 켜져 탭이 앱 전체를 덮습니다. 탭 안의 버튼이 탭 밖 화면으로 보내면 탭을 먼저 닫습니다.
 - 설정 창에는 `craft: true`인 페이지만 나옵니다. `ide.debugger` 같은 Code 전용 API는 없습니다. `ide.openProject`와 `ide.closeProject`는 거부됩니다.
 - 문구는 모두 한국어 -요 말투입니다. 메인의 영어 로그는 Run 탭에 두고 화면에는 한국어 단계를 보여 줍니다.
+- 아래쪽 도구 창(서버 콘솔이 있는 실행 창, 터미널, 문제, 포트)과 오른쪽 알림 창은 탭이나 머리글 메뉴의 "새 창으로 열기"로 따로 띄울 수 있습니다(`renderer/core/popout.js`, Code와 같은 코어). 콘솔은 같은 객체가 옮겨 가는 것이라 서버 출력과 입력이 그대로 이어집니다. 서버 설정, 플레이어, 백업 탭은 편집기 탭이라 메인 창에 남습니다. 테스트는 `verify/popout-craft.mjs`입니다.
 
 ## 3. 파일 지도
 
@@ -162,6 +163,7 @@ npm start -- --mode=craft
 | `verify/minecraft-backups-core.mjs` | 일반 Node. ZIP64(65,535개, 4 GB 넘김), 매니페스트, 보관 규칙, 손상된 백업 거부, 중간에 실패한 교체, save-off/save-on 순서(답 없음, 채팅 위조, 취소, 정지), 300 MB 묶는 동안의 이벤트 루프 |
 | `verify/minecraft-backups.mjs` | 백업 탭(한국어): 멈춘 서버와 실행 중인 서버의 지금 백업, 실행 중인 서버의 되돌리기, 월드만 되돌리기, Market 업데이트 전 자동 백업과 건너뛰기, 두 테마와 900 px |
 | `verify/craft-polish.mjs` | 새 서버 이름과 버전 목록, Market 재검색, 카드의 시작 중·중지 중, 콘솔 기록, 설정 탭의 레벨 칸과 검색, 저장 실패 때 안티 엑스레이 되돌리기 |
+| `verify/popout-craft.mjs` | 한국어 창. 서버 콘솔이 있는 실행 창을 새 창으로 열기, 그 창에서 명령 입력과 단축키, 기본 창으로 되돌리기와 창 닫기, 재시작 뒤 복원, 도구 창 전부 열고 되돌리기 |
 
 `MC_LAUNCHER_LIVE=1`(실제 로더 설치), `verify/minecraft-live.mjs`, `verify/port-sharing-live.mjs`, `verify/port-sharing-bore-live.mjs`는 실제 네트워크를 쓰므로 CI에 없고, 사용자의 승인 없이 돌리지 않습니다.
 

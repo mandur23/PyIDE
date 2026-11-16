@@ -308,8 +308,10 @@ ipcMain.handle('fs:copyInto', async (_e, sources, dir, overwrite = false) => {
   const copied = [];
   const failed = [];
   const names = new Set();
-  for (const src of sources) {
-    const name = path.basename(src);
+  for (const source of sources) {
+    // {path, name}: a copy pasted beside its source gets another name.
+    const src = typeof source === 'string' ? source : source.path;
+    const name = typeof source === 'string' ? path.basename(src) : source.name;
     if (names.has(name.toLowerCase())) { failed.push({ name, code: 'ESAMENAME', error: 'another dropped item has the same name' }); continue; }
     names.add(name.toLowerCase());
     const to = path.join(dir, name);
@@ -321,6 +323,19 @@ ipcMain.handle('fs:copyInto', async (_e, sources, dir, overwrite = false) => {
   }
   return { copied, failed };
 });
+// Copy in the project tree: the files and folders go on the system clipboard as files (CF_HDROP), so Explorer and this
+// tree both paste them. Electron's clipboard writes no file list; PowerShell does. The paths go in on stdin as UTF-8,
+// so no quoting or code page touches a name like 과제. The focused element then gets the paste (tree:paste: the
+// tree's Paste menu item has no key event of its own).
+ipcMain.handle('fs:copyToClipboard', (_e, paths) => new Promise((resolve, reject) => {
+  const files = (Array.isArray(paths) ? paths : []).filter((p) => typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p));
+  if (!files.length) return resolve(0);
+  const script = '[Console]::InputEncoding = [Text.Encoding]::UTF8; Set-Clipboard -LiteralPath @([Console]::In.ReadToEnd() -split "`n" | Where-Object { $_ })';
+  const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', script], { windowsHide: true, timeout: 20000 },
+    (err) => (err ? reject(new Error(`the clipboard could not be written: ${err.message}`)) : resolve(files.length)));
+  child.stdin.end(files.join('\n'), 'utf8');
+}));
+ipcMain.on('tree:paste', (e) => { if (!e.sender.isDestroyed()) e.sender.paste(); });
 // Files and folders dragged out of the project tree: a system drag, so Explorer, the desktop and other apps (mail,
 // chat) take them as files. Windows lets such a drag copy or link, never move, so nothing leaves the project. The call
 // returns when the drag ends (Windows runs it in a nested loop); the renderer is told, so it forgets the drag.

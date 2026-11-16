@@ -20,22 +20,75 @@ const fileLabel = (name, { cls = 'name', ext = true } = {}) => {
   return n;
 };
 
+// A ResizeObserver reports only elements in its own window's document: one made by this page stops seeing an element
+// moved into a panel window (popout.js) after its first report. So every observer this page makes watches each element
+// through a native observer of the window the element is in, and rehomeObservers() follows elements that changed window.
+const NativeResizeObserver = window.ResizeObserver;
+const liveObservers = new Set(); // WeakRef of each observer made here
+const winOf = (node) => node?.ownerDocument?.defaultView || window;
+// Cut has no panel windows (its panels are its own, renderer/features/cut).
+if (new URLSearchParams(location.search).get('mode') !== 'cut') window.ResizeObserver = class ResizeObserver {
+  #callback;
+  #natives = new Map(); // window -> its native observer
+  #targets = new Map(); // element -> {win, options}
+  constructor(callback) { this.#callback = callback; liveObservers.add(new WeakRef(this)); }
+  #native(win) {
+    let o = this.#natives.get(win);
+    if (!o) {
+      const Native = win === window ? NativeResizeObserver : win.ResizeObserver;
+      o = new Native((entries) => this.#callback(entries, this));
+      this.#natives.set(win, o);
+    }
+    return o;
+  }
+  observe(target, options) {
+    const win = winOf(target);
+    const was = this.#targets.get(target);
+    if (was && was.win !== win) try { this.#natives.get(was.win)?.unobserve(target); } catch {}
+    this.#targets.set(target, { win, options });
+    this.#native(win).observe(target, options);
+  }
+  unobserve(target) {
+    const t = this.#targets.get(target);
+    this.#targets.delete(target);
+    if (t) try { this.#natives.get(t.win)?.unobserve(target); } catch {}
+  }
+  disconnect() {
+    for (const o of this.#natives.values()) try { o.disconnect(); } catch {}
+    this.#natives.clear();
+    this.#targets.clear();
+  }
+  rehome() {
+    for (const [target, t] of [...this.#targets]) if (winOf(target) !== t.win) this.observe(target, t.options);
+    for (const [win, o] of [...this.#natives]) if (win !== window && win.closed) { this.#natives.delete(win); try { o.disconnect(); } catch {} }
+  }
+};
+const rehomeObservers = () => {
+  for (const ref of [...liveObservers]) {
+    const o = ref.deref();
+    if (o) o.rehome(); else liveObservers.delete(ref);
+  }
+};
+
 // ResizeObserver with its work moved to the next animation frame, and skipped while the size stays the same. A callback
 // that changes layout (a redraw, a terminal fit, a scrollbar appearing) then cannot re-trigger itself within the same
-// frame, which the browser reports as "ResizeObserver loop completed with undelivered notifications".
+// frame, which the browser reports as "ResizeObserver loop completed with undelivered notifications". The frame is the
+// target's window's: a panel window keeps drawing while the main window is minimized.
 function observeSize(target, fn) {
   let frame = 0;
+  let frameWin = window;
   let last = '';
   const ro = new ResizeObserver((entries) => {
     const r = entries[entries.length - 1].contentRect;
     const size = `${Math.round(r.width)}x${Math.round(r.height)}`;
     if (size === last) return;
     last = size;
-    cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => fn(r));
+    frameWin.cancelAnimationFrame(frame);
+    frameWin = winOf(target);
+    frame = frameWin.requestAnimationFrame(() => fn(r));
   });
   ro.observe(target);
-  return { disconnect: () => { cancelAnimationFrame(frame); ro.disconnect(); } };
+  return { disconnect: () => { frameWin.cancelAnimationFrame(frame); ro.disconnect(); } };
 }
 const dirname = (p) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')));
 const joinPath = (a, b) => `${a.replace(/[\\/]+$/, '')}\\${b}`;
@@ -92,7 +145,7 @@ const ide = (window.ide = {
   interps: [],
   actions: [],
   toolWindows: new Map(),
-  util: { $, el, fileLabel, basename, dirname, joinPath, samePath, isUnder, pathKey, badName, observeSize, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
+  util: { $, el, fileLabel, basename, dirname, joinPath, samePath, isUnder, pathKey, badName, observeSize, rehomeObservers, rel: (p) => (ide.root && isUnder(p, ide.root) ? p.slice(ide.root.length + 1) : p) },
 });
 
 if (ide.detached) document.body.classList.add('detached');
@@ -332,9 +385,10 @@ const SPLIT_TAIL = /\r$|\x1b(?:\[[0-9;?]{0,32}|\][^\x07\x1b\n]{0,510}\x1b?)?$/;
 // When the page last got a key that scrolls up the scroller the user clicked (the console's <pre> takes no focus, so
 // its keys go to the body).
 let scrollUpKeyAt = -Infinity;
-document.addEventListener('keydown', (e) => {
-  if ((e.target === document.body || e.target?.closest?.('.console')) && /^(PageUp|ArrowUp|Home)$/.test(e.key)) scrollUpKeyAt = performance.now();
-}, true);
+const scrollUpKey = (e) => {
+  if ((e.target === e.target?.ownerDocument?.body || e.target?.closest?.('.console')) && /^(PageUp|ArrowUp|Home)$/.test(e.key)) scrollUpKeyAt = performance.now();
+};
+document.addEventListener('keydown', scrollUpKey, true);
 
 // Program output as a terminal shows it. The unfinished last line stays editable: \r returns to its start and later
 // text overwrites it (progress bars), \b steps back, colors carry across chunks. Finished lines are written once.
@@ -361,13 +415,14 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
   out.addEventListener('wheel', (e) => { if (e.deltaY < 0) stick = false; }, { passive: true });
   out.addEventListener('pointerdown', () => {
     pointerDown = true;
+    const win = winOf(out);
     const up = () => {
       pointerDown = false;
-      window.removeEventListener('pointerup', up, true);
-      window.removeEventListener('pointercancel', up, true);
+      win.removeEventListener('pointerup', up, true);
+      win.removeEventListener('pointercancel', up, true);
     };
-    window.addEventListener('pointerup', up, true);
-    window.addEventListener('pointercancel', up, true);
+    win.addEventListener('pointerup', up, true);
+    win.addEventListener('pointercancel', up, true);
   });
   out.addEventListener('scroll', () => {
     if (!out.clientHeight) return;
@@ -379,7 +434,7 @@ ide.ui.console = (host, { input = false, placeholder = '', onInput, history = []
   const follow = () => {
     if (frameQueued) return;
     frameQueued = true;
-    requestAnimationFrame(() => {
+    winOf(out).requestAnimationFrame(() => {
       frameQueued = false;
       if (stick) toEnd();
       else endTop = out.scrollHeight - out.clientHeight;
@@ -653,7 +708,16 @@ ide.ui.listKeys = (host, { rows, selected, select, open = (row) => row.click(), 
   });
 };
 
+// The window menus, dialogs and the popup chooser show in: a panel window the user is working in (popout.js), else
+// this one. The popup chooser's element moves to that window when it opens.
+const uiWin = () => ide.popout?.activeWindow() || window;
+const hostIn = (win, id) => (win === window ? null : win.document.getElementById(id)) || $(id);
+const dialogsOpen = () => !!$('dialogHost').childElementCount || !!ide.popout?.windows().some((w) => w.document.getElementById('dialogHost')?.childElementCount);
+
 // Popup chooser used by search everywhere, find action, recent files, and prompts.
+const popupEl = $('popup');
+const popupIn = $('popupIn');
+const popupList = $('popupList');
 let popupState = null;
 let popupFrame = 0; // a draw waiting for the next frame
 const POPUP_ROWS = 200;
@@ -694,16 +758,16 @@ function popupMatches(s, q) {
 }
 
 function renderPopup() {
-  cancelAnimationFrame(popupFrame);
+  winOf(popupEl).cancelAnimationFrame(popupFrame);
   popupFrame = 0;
   const s = popupState;
-  const list = $('popupList');
+  const list = popupList;
   list.innerHTML = '';
   if (s.mode === 'prompt') {
     list.appendChild(el('div', 'popup-item hint', tr('{label} — Enter to confirm, Esc to cancel', { label: s.placeholder })));
     return;
   }
-  const items = popupMatches(s, $('popupIn').value.trim().toLowerCase());
+  const items = popupMatches(s, popupIn.value.trim().toLowerCase());
   items.slice(0, POPUP_ROWS).forEach((it, i) => {
     const row = el('div', 'popup-item' + (i === 0 ? ' active' : ''));
     if (it.icon) {
@@ -732,21 +796,23 @@ function closePopup(value = null) {
   if (!popupState) return;
   const { resolve, prevFocus } = popupState;
   popupState = null;
-  $('popup').classList.add('hidden');
-  if (document.activeElement === $('popupIn')) focusBack(prevFocus);
+  popupEl.classList.add('hidden');
+  if (document.activeElement === popupIn) focusBack(prevFocus);
   resolve(value);
 }
 
 function openPopup(state) {
   const prevFocus = popupState ? popupState.prevFocus : document.activeElement;
   if (popupState) closePopup();
+  const win = uiWin();
+  if (popupEl.ownerDocument !== win.document) win.document.body.appendChild(popupEl);
   return new Promise((resolve) => {
     popupState = { ...state, resolve, prevFocus };
-    $('popupIn').placeholder = state.placeholder || '';
-    $('popupIn').value = state.initial || '';
-    $('popup').classList.remove('hidden');
-    $('popupIn').focus();
-    if (state.mode === 'prompt') $('popupIn').select();
+    popupIn.placeholder = state.placeholder || '';
+    popupIn.value = state.initial || '';
+    popupEl.classList.remove('hidden');
+    popupIn.focus();
+    if (state.mode === 'prompt') popupIn.select();
     renderPopup();
   });
 }
@@ -760,7 +826,7 @@ ide.ui.pick = ({ placeholder, items, initial }) => {
     let seq = 0;
     const refresh = async () => {
       const my = ++seq;
-      const res = await load($('popupIn').value);
+      const res = await load(popupIn.value);
       if (popupState && my === seq) { popupState.items = res; renderPopup(); }
     };
     popupState.onQuery = refresh;
@@ -775,17 +841,17 @@ ide.ui.prompt = (placeholder, initial = '', { allowEmpty = false } = {}) => open
 
 // The rows are drawn in the next frame, which shows them no later than drawing at once: keys typed faster than the
 // rows draw are drawn once. Enter and Up/Down draw the pending rows first.
-$('popupIn').oninput = () => {
+popupIn.oninput = () => {
   if (popupState?.onQuery) popupState.onQuery();
-  else if (popupState) popupFrame ||= requestAnimationFrame(() => { popupFrame = 0; if (popupState) renderPopup(); });
+  else if (popupState) popupFrame ||= winOf(popupEl).requestAnimationFrame(() => { popupFrame = 0; if (popupState) renderPopup(); });
 };
-$('popupIn').onkeydown = (e) => {
+popupIn.onkeydown = (e) => {
   if (!popupState) return;
   if (e.key === 'Escape') { e.stopPropagation(); return closePopup(); }
   if (popupFrame && ['Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) renderPopup();
   // preventDefault: the Enter must not also reach the editor that gets the keyboard back.
-  if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup($('popupIn').value.trim() || (popupState.allowEmpty ? '' : null)); } return; }
-  const rows = [...$('popupList').querySelectorAll('.popup-item:not(.hint)')];
+  if (popupState.mode === 'prompt') { if (e.key === 'Enter') { e.preventDefault(); closePopup(popupIn.value.trim() || (popupState.allowEmpty ? '' : null)); } return; }
+  const rows = [...popupList.querySelectorAll('.popup-item:not(.hint)')];
   const i = rows.findIndex((r) => r.classList.contains('active'));
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
@@ -798,13 +864,14 @@ $('popupIn').onkeydown = (e) => {
     closePopup(rows[i]._item.value ?? rows[i]._item);
   }
 };
-$('popupIn').onblur = () => setTimeout(() => document.activeElement !== $('popupIn') && closePopup(), 120);
+popupIn.onblur = () => setTimeout(() => document.activeElement !== popupIn && closePopup(), 120);
 
 // Menus: items are [{label, hint?, keyAction?, icon?, checked?, disabled?, run?, submenu?: items | () => items} | {separator: true}].
 // keyAction: the id of the action whose current shortcut is the hint (none when the user removed it), instead of a fixed hint.
 // Submenus open on hover or Right; Up/Down move, Enter runs, Left closes a submenu, Esc closes the menu.
 const menuStack = [];
 let menuCleanup = null;
+let menuWin = window; // the window the open menu shows in, its submenus too
 
 function closeMenus(level = 0) {
   while (menuStack.length > level) menuStack.pop().el.remove();
@@ -874,9 +941,10 @@ function showMenu(x, y, items, level, leftEdge) {
     };
     menu.appendChild(row);
   }
-  $('menuHost').appendChild(menu);
+  hostIn(menuWin, 'menuHost').appendChild(menu);
   menuStack[level] = { el: menu, active: null };
   const r = menu.getBoundingClientRect();
+  const { innerWidth, innerHeight } = menuWin;
   let left = x;
   if (left + r.width > innerWidth - 4) left = leftEdge !== undefined ? leftEdge - r.width + 2 : innerWidth - r.width - 4;
   menu.style.left = `${Math.max(4, left)}px`;
@@ -886,6 +954,8 @@ function showMenu(x, y, items, level, leftEdge) {
 
 ide.ui.contextMenu = (x, y, items) => {
   closeMenus(0);
+  menuWin = uiWin();
+  const win = menuWin;
   const root = showMenu(x, y, items, 0);
   const dismiss = (e) => { if (!e.target.closest?.('.context-menu')) closeMenus(0); };
   const keys = (e) => {
@@ -911,14 +981,14 @@ ide.ui.contextMenu = (x, y, items) => {
   setTimeout(() => {
     // A menu opened again before this task has its own handlers; these would never be removed (Up/Down moved twice).
     if (menuStack[0]?.el !== root) return;
-    addEventListener('mousedown', dismiss, true);
-    addEventListener('keydown', keys, true);
-    addEventListener('blur', ide.ui.closeMenus);
+    win.addEventListener('mousedown', dismiss, true);
+    win.addEventListener('keydown', keys, true);
+    win.addEventListener('blur', ide.ui.closeMenus);
   });
   menuCleanup = () => {
-    removeEventListener('mousedown', dismiss, true);
-    removeEventListener('keydown', keys, true);
-    removeEventListener('blur', ide.ui.closeMenus);
+    win.removeEventListener('mousedown', dismiss, true);
+    win.removeEventListener('keydown', keys, true);
+    win.removeEventListener('blur', ide.ui.closeMenus);
   };
   return menuStack[0].el;
 };
@@ -935,13 +1005,15 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   if (typeof body === 'string') content.textContent = body; else if (body) content.appendChild(body);
   const foot = el('div', 'dialog-buttons');
   const prevFocus = document.activeElement;
+  const win = uiWin();
+  const host = hostIn(win, 'dialogHost');
   const dlg = {
     el: box,
     body: content,
     close() {
-      const hadFocus = box.contains(document.activeElement) || document.activeElement === document.body;
+      const hadFocus = box.contains(document.activeElement) || document.activeElement === document.body || document.activeElement === win.document.body;
       backdrop.remove();
-      removeEventListener('keydown', onKey, true);
+      win.removeEventListener('keydown', onKey, true);
       if (hadFocus) focusBack(prevFocus);
       onClose?.();
     },
@@ -968,7 +1040,7 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
   // while an IME composes it commits the text. A dialog without a primary button leaves Enter to its content (the
   // Conflicts dialog's file list merges the selected file).
   const onKey = (e) => {
-    if (backdrop !== $('dialogHost').lastElementChild || menusOpen()) return;
+    if (backdrop !== host.lastElementChild || menusOpen()) return;
     if (e.key === 'Escape') { e.stopPropagation(); dlg.close(); }
     const primary = foot.querySelector('.primary');
     if (e.key === 'Enter' && primary && !e.isComposing && !['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName) && !e.target.matches?.('.native-edit-context')) {
@@ -991,10 +1063,10 @@ ide.ui.dialog = ({ title, body, buttons = [{ label: tr('OK'), primary: true }], 
       (next || stops[e.shiftKey ? stops.length - 1 : 0])?.focus();
     }
   };
-  addEventListener('keydown', onKey, true);
+  win.addEventListener('keydown', onKey, true);
   box.append(head, content, foot);
   backdrop.appendChild(box);
-  $('dialogHost').appendChild(backdrop);
+  host.appendChild(backdrop);
   // The keyboard starts in the first field (a Monaco editor's is its EditContext element; its .ime-text-area is only
   // Monaco's IME helper), or on the primary button of a dialog without fields.
   ([...content.querySelectorAll('input,select,textarea:not(.ime-text-area),.native-edit-context')].find(shown) || foot.querySelector('.primary') || foot.querySelector('button'))?.focus();
@@ -1095,10 +1167,11 @@ ide.on('settingsChanged', (key) => {
 ide.on('keymapChanged', refreshKeymapTexts);
 ide.on('ready', refreshKeymapTexts);
 // Elements with data-keymap-action="<action id>" show that action's current shortcut in their tooltip: "Run (Shift+F10)".
-addEventListener('mouseover', (e) => {
+const keymapHover = (e) => {
   const n = e.target.closest?.('[data-keymap-action]');
   if (n) keymapTooltip(n);
-}, true);
+};
+addEventListener('mouseover', keymapHover, true);
 
 // {id, title, keys?: 'Ctrl+Shift+F' | [...], run, when?: () => bool, context?: 'editor' | 'projectView'}. Later
 // registrations win on key clashes. context names where `when` lets the action fire (PyCharm's Editor Actions and
@@ -1140,8 +1213,8 @@ const startsChord = (combo) => {
   return ide.actions.some((a) => a.keys.some((k) => k.startsWith(`${combo} `) && k !== 'Shift Shift')
     && !(terminalFocused && !a.terminal) && (!a.when || a.when()));
 };
-document.addEventListener('keydown', (e) => {
-  if (popupState || $('dialogHost').childElementCount || menusOpen()) { cancelChord(); return; }
+const onKeymapKey = (e) => {
+  if (popupState || dialogsOpen() || menusOpen()) { cancelChord(); return; }
   if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.repeat && !firstStroke) {
     // The key's own time, not the handling time: a busy renderer must not split one Double Shift into two Shifts.
     const now = e.timeStamp;
@@ -1170,33 +1243,48 @@ document.addEventListener('keydown', (e) => {
     chordTimer = setTimeout(() => {
       if (firstStroke !== first) return;
       firstStroke = null;
-      if (!popupState && !$('dialogHost').childElementCount && !menusOpen()) fireCombo(first.combo, null);
+      if (!popupState && !dialogsOpen() && !menusOpen()) fireCombo(first.combo, null);
     }, CHORD_MS);
     e.preventDefault();
     e.stopPropagation();
     return;
   }
   fireCombo(combo, e);
-}, true);
+};
+document.addEventListener('keydown', onKeymapKey, true);
 
 // Double Ctrl ('Ctrl Ctrl', PyCharm's Run Anything): Ctrl pressed and released twice with no other key, mouse button or
 // wheel in between, the second press within 350 ms of the first release. It fires on the second release, so Ctrl+C,
 // Ctrl+S or Ctrl+click right after a Ctrl tap never count, and holding Ctrl for a chord never does. Listened to on the
 // window in the capture phase, before dialogs and editors can swallow the keys in between.
 let ctrlTap = null; // {step: 'first' | 'released' | 'second', t}
-addEventListener('keydown', (e) => {
-  if (e.key !== 'Control' || e.altKey || e.shiftKey || e.metaKey) { ctrlTap = null; return; }
-  if (e.repeat) return;
-  ctrlTap = ctrlTap?.step === 'released' && e.timeStamp - ctrlTap.t < 350 ? { step: 'second' } : { step: 'first' };
-}, true);
-addEventListener('keyup', (e) => {
-  if (e.key !== 'Control' || !ctrlTap) return;
-  if (ctrlTap.step === 'first') { ctrlTap = { step: 'released', t: e.timeStamp }; return; }
-  const fire = ctrlTap.step === 'second';
-  ctrlTap = null;
-  if (fire && !popupState && !$('dialogHost').childElementCount && !menusOpen()) { cancelChord(); fireCombo('Ctrl Ctrl', e); }
-}, true);
-for (const type of ['mousedown', 'wheel', 'blur']) addEventListener(type, (e) => { if (type !== 'blur' || e.target === window) ctrlTap = null; }, true);
+const ctrlTapKeys = {
+  keydown: (e) => {
+    if (e.key !== 'Control' || e.altKey || e.shiftKey || e.metaKey) { ctrlTap = null; return; }
+    if (e.repeat) return;
+    ctrlTap = ctrlTap?.step === 'released' && e.timeStamp - ctrlTap.t < 350 ? { step: 'second' } : { step: 'first' };
+  },
+  keyup: (e) => {
+    if (e.key !== 'Control' || !ctrlTap) return;
+    if (ctrlTap.step === 'first') { ctrlTap = { step: 'released', t: e.timeStamp }; return; }
+    const fire = ctrlTap.step === 'second';
+    ctrlTap = null;
+    if (fire && !popupState && !dialogsOpen() && !menusOpen()) { cancelChord(); fireCombo('Ctrl Ctrl', e); }
+  },
+};
+const ctrlTapBreak = (win) => (e) => { if (e.type !== 'blur' || e.target === win) ctrlTap = null; };
+// The keymap of a panel window (popout.js) is this page's: its keys go through the same handlers.
+const listenKeys = (win) => {
+  if (win !== window) {
+    win.document.addEventListener('keydown', onKeymapKey, true);
+    win.document.addEventListener('keydown', scrollUpKey, true);
+    win.addEventListener('mouseover', keymapHover, true);
+  }
+  for (const [type, fn] of Object.entries(ctrlTapKeys)) win.addEventListener(type, fn, true);
+  for (const type of ['mousedown', 'wheel', 'blur']) win.addEventListener(type, ctrlTapBreak(win), true);
+};
+listenKeys(window);
+ide.keymap.listenIn = listenKeys;
 
 // Inside a terminal, keys belong to the program running there (Esc, Ctrl+T, Ctrl+K... matter to Claude Code, readline,
 // vim); only actions marked terminal: true (tool windows and a few window-level ones) still fire, like PyCharm's
@@ -1362,17 +1450,23 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
     tab.appendChild(el('span', 'badge'));
     placeOrdered($('bottomTabs'), tab, order);
   }
+  // popout: set while the window is in a panel window of its own (popout.js): {focus(), reveal(), focused(),
+  // renderActions()}. It is shown there, so it counts as visible; show() brings that window back only when it is
+  // minimized (a run showing its console must not take the keyboard), the user's own ways of opening it (its button,
+  // tab or shortcut) bring it to the front, and hide() gives the keyboard back to the main window.
   const tw = {
-    id, title, area, container, button, actionList: [], keyAction: keys ? `Activate${id}ToolWindow` : null,
+    id, title, area, container, button, actionList: [], keyAction: keys ? `Activate${id}ToolWindow` : null, popout: null,
     get keys() { return tw.keyAction && ide.actions.some((x) => x.id === tw.keyAction) ? ide.keymap.label(tw.keyAction) : keyText; },
     set keys(v) { keyText = v; }, iconName: iconName || TOOL_ICONS[id], glyph: icon,
-    isVisible: () => !area.panel.classList.contains('hidden') && area.active === tw,
+    isVisible: () => !!tw.popout || (!area.panel.classList.contains('hidden') && area.active === tw),
     available: () => { try { return tw.isVisible() || !available || !!available(); } catch { return true; } },
     show() {
+      if (tw.popout) { tw.popout.reveal(); ide.emit('toolWindowShown', id); return; }
       area.active = tw;
       area.picked = true;
       for (const other of ide.toolWindows.values()) {
-        if (other.area !== area) continue;
+        // One in a window of its own stays shown there.
+        if (other.area !== area || other.popout) continue;
         other.container.classList.toggle('active', other === tw);
         other.tab?.classList.toggle('active', other === tw);
       }
@@ -1382,30 +1476,72 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
       ide.emit('toolWindowShown', id);
       container.querySelector('input.console-in:not([disabled]), input:not([disabled])')?.focus();
     },
-    hide() { if (area.active === tw) { setAreaVisible(area, false); ide.editor?.focus(); } },
-    toggle() { tw.isVisible() ? tw.hide() : tw.show(); },
-    setActions(list) { tw.actionList = list; if (area.active === tw) renderAreaActions(area); },
+    hide() {
+      if (tw.popout) { ide.popout.focusMain(); ide.editor?.focus(); return; }
+      if (area.active === tw) { setAreaVisible(area, false); ide.editor?.focus(); }
+    },
+    toggle() {
+      if (tw.popout) return tw.popout.focused() ? tw.hide() : tw.popout.focus();
+      tw.isVisible() ? tw.hide() : tw.show();
+    },
+    setActions(list) { tw.actionList = list; if (tw.popout) tw.popout.renderActions(); else if (area.active === tw) renderAreaActions(area); },
     setBadge(text) { if (tab) tab.querySelector('.badge').textContent = text || ''; button.dataset.badge = text || ''; },
     tab,
+    // For popout.js: the area gives the window up (another becomes its choice, and it closes if it showed this one), and
+    // takes it back with its actions.
+    leaveArea() {
+      const wasShown = !area.panel.classList.contains('hidden') && area.active === tw;
+      container.classList.add('active');
+      if (area.active === tw) {
+        const next = [...ide.toolWindows.values()].filter((o) => o.area === area && o !== tw && !o.popout).sort((a, b) => a.order - b.order)[0];
+        area.active = next || null;
+        for (const o of ide.toolWindows.values()) if (o.area === area && o !== tw && !o.popout) { o.container.classList.toggle('active', o === next); o.tab?.classList.toggle('active', o === next); }
+        tab?.classList.remove('active');
+        if (area.title) area.title.textContent = next?.title || '';
+        renderAreaActions(area);
+        if (wasShown) setAreaVisible(area, false);
+      }
+      button.classList.add('popped-out');
+      tab?.classList.add('popped-out');
+      refreshStripe();
+    },
+    returnToArea() {
+      button.classList.remove('popped-out');
+      tab?.classList.remove('popped-out');
+      if (!area.body.contains(container)) area.body.appendChild(container);
+      container.classList.toggle('active', area.active === tw || !area.active);
+      if (!area.active) { area.active = tw; tab?.classList.add('active'); if (area.title) area.title.textContent = title; renderAreaActions(area); }
+      refreshStripe();
+    },
   };
   button.onclick = tw.toggle;
-  button.oncontextmenu = (e) => {
+  // Show or Hide, In New Window or Return to Main Window, pinning: the stripe button's, the bottom tab's and the side
+  // panel header's menu.
+  const windowMenu = (e, { pin = true } = {}) => {
     e.preventDefault();
     ide.ui.contextMenu(e.clientX, e.clientY, [
-      { label: tw.isVisible() ? tr('Hide') : tr('Show'), hint: tw.keys, run: tw.toggle },
-      isPinned(id)
+      !tw.popout && { label: tw.isVisible() ? tr('Hide') : tr('Show'), hint: tw.keys, run: tw.toggle },
+      ide.popout?.menuItem(tw),
+      pin && (isPinned(id)
         ? { label: tr('Remove from Sidebar'), run: () => setPinned(id, false) }
-        : { label: tr('Pin to Sidebar'), run: () => setPinned(id, true) },
-    ]);
+        : { label: tr('Pin to Sidebar'), run: () => setPinned(id, true) }),
+    ].filter(Boolean));
   };
-  if (tab) tab.onclick = tw.show;
+  button.oncontextmenu = (e) => windowMenu(e);
+  tw.contextMenu = windowMenu;
+  if (tab) {
+    tab.onclick = () => (tw.popout ? tw.popout.focus() : tw.show());
+    tab.oncontextmenu = (e) => windowMenu(e, { pin: false });
+  }
   ide.toolWindows.set(id, tw);
   // A window opened by its shortcut takes the keyboard, as in PyCharm: its field or list (show() already focuses a field),
   // else the window itself, so Esc (back to the editor) and Shift+Esc (hide) work from it. Other ways of showing it
   // leave the focus alone. As PyCharm's: the shortcut hides the window only when it already has the keyboard; open but
-  // not focused (the editor has the keyboard), it takes the keyboard.
+  // not focused (the editor has the keyboard), it takes the keyboard. In a window of its own, the same with that window.
   const activate = () => {
-    if (tw.isVisible() && area.panel.contains(document.activeElement)) return tw.hide();
+    if (tw.popout && tw.popout.focused() && container.contains(document.activeElement)) return tw.hide();
+    if (!tw.popout && tw.isVisible() && area.panel.contains(document.activeElement)) return tw.hide();
+    if (tw.popout) tw.popout.focus(); else ide.popout?.focusMain();
     if (!tw.isVisible()) tw.show();
     if (container.contains(document.activeElement)) return;
     const target = [...container.querySelectorAll('[tabindex="0"], input:not([disabled]), textarea:not([disabled])')].find((n) => n.getClientRects().length);
@@ -1431,6 +1567,12 @@ ide.registerToolWindow = ({ id, title, icon, iconName, side = 'bottom', keys, or
   return tw;
 };
 $('hideBottomBtn').onclick = () => areas.bottom.active?.hide();
+// A side panel's header has the menu of the window it shows (the bottom tabs have their own).
+for (const area of [areas.left, areas.right]) {
+  area.panel.querySelector('.panel-header').oncontextmenu = (e) => {
+    if (area.active && !e.target.closest('button')) area.active.contextMenu(e, { pin: false });
+  };
+}
 
 // "More Tool Windows", one button per side: that side's tool windows, with a pin to keep one on the sidebar. Bottom
 // has by far the most, so its panel has two columns.
@@ -1463,7 +1605,7 @@ function renderMore() {
     pin.title = isPinned(tw.id) ? tr('Remove from Sidebar') : tr('Pin to Sidebar');
     pin.onclick = (e) => { e.stopPropagation(); setPinned(tw.id, !isPinned(tw.id)); renderMore(); };
     row.appendChild(pin);
-    row.onclick = () => { closeMore(); tw.show(); };
+    row.onclick = () => { closeMore(); if (tw.popout) tw.popout.focus(); else tw.show(); };
     rows.appendChild(row);
   }
 }
@@ -2059,14 +2201,30 @@ const COPY_ERRORS = {
   ERR_FS_CP_DIR_TO_NON_DIR: tr('a file with this name is already there'),
   ERR_FS_CP_NON_DIR_TO_DIR: tr('a folder with this name is already there'),
 };
-// Files and folders dropped from Explorer are copied into dir, as PyCharm does. A source already in dir, or one that
-// holds dir, is left out; names that exist there are overwritten or skipped as the user chooses.
-async function copyDropped(paths, dir) {
-  const sources = paths.filter((p) => !samePath(dirname(p), dir) && !isUnder(dir, p));
+// The name of a copy pasted beside its source, as Explorer names it: "notes - Copy.txt", then "notes - Copy (2).txt".
+async function copyName(dir, path) {
+  const name = basename(path);
+  const dot = (await ide.api.stat(path))?.isDirectory ? -1 : name.lastIndexOf('.');
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+  for (let n = 1; ; n++) {
+    const copy = `${tr('{name} - Copy', { name: stem })}${n > 1 ? ` (${n})` : ''}${ext}`;
+    if (!(await ide.api.exists(joinPath(dir, copy)))) return copy;
+  }
+}
+// Files and folders dropped from Explorer, or pasted (Ctrl+V: copied in Explorer or in this tree), are copied into dir,
+// as PyCharm does. A source that holds dir is left out, and so is a dropped one already in dir; a pasted one (beside)
+// becomes a copy under another name there. Names that exist in dir are overwritten or skipped as the user chooses.
+async function copyDropped(paths, dir, { beside = false } = {}) {
+  const sources = [];
+  for (const p of paths) {
+    if (isUnder(dir, p)) continue;
+    if (!samePath(dirname(p), dir)) sources.push({ path: p, name: basename(p) });
+    else if (beside) sources.push({ path: p, name: await copyName(dir, p) });
+  }
   if (!sources.length) return;
   const where = ide.util.rel(dir) || basename(dir);
   const existing = [];
-  for (const p of sources) if (await ide.api.exists(joinPath(dir, basename(p)))) existing.push(basename(p));
+  for (const x of sources) if (await ide.api.exists(joinPath(dir, x.name))) existing.push(x.name);
   let overwrite = false;
   if (existing.length) {
     const choice = await new Promise((resolve) => ide.ui.dialog({
@@ -2152,7 +2310,8 @@ function showTreeMenu(entry, x, y) {
     ...(extra.length ? [...extra, { separator: true }] : []),
     ...(treeRoot ? [] : [
       { label: tr('Cut'), hint: 'Ctrl+X', run: () => setCut(operands(entry)), disabled: fixed },
-      { label: tr('Paste'), hint: 'Ctrl+V', run: () => pasteInto({ entry }), disabled: !cutEntries.length },
+      { label: tr('Copy'), hint: 'Ctrl+C', run: () => copyEntries(operands(entry, copyableEntry)), disabled: !copyableEntry(entry) },
+      { label: tr('Paste'), hint: 'Ctrl+V', run: () => pasteInto({ entry }) },
     ]),
     { label: tr('Rename…'), keyAction: 'RenameElement', run: () => renameEntry(entry), disabled: fixed },
     { label: tr('Delete'), hint: 'Delete', run: () => deleteEntries(operands(entry, deletableEntry)), disabled: fixed },
@@ -2171,16 +2330,48 @@ ide.on('ready', () => ide.registerAction({
   run: () => setCut([]),
 }));
 const movable = (row) => !!row && row.depth > 0 && !row.entry.fixed && !row.entry.treeRoot && !treeRootOf(row.entry);
+// Ctrl+C (or Copy) puts the selection on the system clipboard as files, so Explorer pastes them too; it ends a cut.
+const copyableEntry = (e) => !!e?.path && !e.fixed && !treeRoots.some((r) => r.id === e.treeRoot && samePath(r.entry.path, e.path));
+async function copyEntries(entries) {
+  if (!entries.length) return;
+  setCut([]);
+  try { await ide.api.invoke('fs:copyToClipboard', entries.map((x) => x.path)); } catch (e) { ide.ui.alert(ipcError(e)); }
+}
 // Only into the project: rows under Scratches and Consoles (and their nodes) are not paste targets, even when the
 // project folder contains them, and the cut entries stay cut for another try.
-const pasteInto = (row) => {
-  const entries = cutEntries;
-  if (!entries.length || row?.entry.treeRoot) return;
+const pasteDir = (row) => {
+  if (!ide.root || row?.entry.treeRoot) return null;
   const dir = !row ? ide.root : row.entry.dir ? row.entry.path : dirname(row.entry.path);
-  if (!isUnder(dir, ide.root) || !entries.every((x) => isUnder(x.path, ide.root)) || treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path))) return;
-  setCut([]);
-  moveEntries(entries, dir);
+  return isUnder(dir, ide.root) && !treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path)) ? dir : null;
 };
+// The row a paste asked for from the menu or the keyboard aims at, until the tree's paste event takes it.
+let pasteRow;
+// Cut rows are moved. Without a cut, the files and folders on the system clipboard are copied in: main pastes into
+// the tree (tree:paste), whose paste event carries them, folders too (wireTreePaste).
+const pasteInto = (row) => {
+  const dir = pasteDir(row);
+  if (!dir) return;
+  const entries = cutEntries;
+  if (entries.length) {
+    if (!entries.every((x) => isUnder(x.path, ide.root))) return;
+    setCut([]);
+    return void moveEntries(entries, dir);
+  }
+  pasteRow = row;
+  $('tree').focus();
+  ide.api.send('tree:paste');
+};
+function wireTreePaste(tree) {
+  tree.addEventListener('paste', (e) => {
+    const row = pasteRow === undefined ? rows[selected ? rowIndexOf(selected.path, selected.treeRoot) : -1] : pasteRow;
+    pasteRow = undefined;
+    const paths = [...(e.clipboardData?.files || [])].map((f) => ide.api.pathForFile(f)).filter(Boolean);
+    const dir = pasteDir(row);
+    if (!paths.length || !dir) return;
+    e.preventDefault();
+    copyDropped(paths, dir, { beside: true });
+  });
+}
 const selectAll = () => {
   const all = rows.filter((r) => r.depth > 0 && !r.entry.treeRoot).map((r) => r.entry);
   if (!all.length) return;
@@ -2192,7 +2383,7 @@ function treeKey(e) {
   if (!rows.length || e.altKey || e.metaKey) return;
   const i = selected ? rowIndexOf(selected.path, selected.treeRoot) : -1;
   const row = rows[i];
-  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) setCut(operands(row.entry)); }, KeyV: () => pasteInto(row), KeyA: selectAll }[e.code]
+  const special = e.ctrlKey && !e.shiftKey ? { KeyX: () => { if (movable(row)) setCut(operands(row.entry)); }, KeyC: () => row && copyEntries(operands(row.entry, copyableEntry)), KeyV: () => pasteInto(row), KeyA: selectAll }[e.code]
     : !e.ctrlKey && e.shiftKey && e.key === 'F6' ? () => movable(row) && renameEntry(row.entry) : null;
   if (special) {
     e.preventDefault();
@@ -2294,6 +2485,7 @@ function wireTree(tree) {
     const dir = !entry ? ide.root : entry.dir ? entry.path : dirname(entry.path);
     return dir && ide.root && isUnder(dir, ide.root) && !treeRoots.some((r) => isUnder(dir, r.entry.path) && !isUnder(ide.root, r.entry.path)) ? dir : null;
   };
+  wireTreePaste(tree);
   let nativeDrags = 0;
   tree.addEventListener('dragstart', (e) => {
     dragged = entryAt(e);
@@ -2971,6 +3163,8 @@ monacoNls.then(() => require(['vs/editor/editor.main'], async () => {
   if (params.get('file') && ide.root) await ide.openFile(params.get('file'));
   // The Minecraft plugin mounts its screen into the host once the workspace is open (ide.root set).
   if (craftHome && ide.root) ide.emit(`${ide.appMode}Ready`, { host: $(`${ide.appMode}Host`) });
+  // Tool windows that were in windows of their own come out again, where they were.
+  await ide.popout?.restore();
   ide.api.invoke('core:migrationNotice').then((m) => m && ide.notifications?.notify({
     title: tr('PyIDE settings imported'), kind: m.failed.length ? 'warn' : 'info', group: 'Settings', raw: true,
     text: m.failed.length

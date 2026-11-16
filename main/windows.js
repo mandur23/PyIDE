@@ -85,6 +85,7 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
         main = null;
         closingAll = true;
         for (const other of alive()) other.close();
+        for (const p of popouts) if (!p.isDestroyed()) p.destroy();
       }
       announcePeers();
     });
@@ -184,6 +185,72 @@ function createWindowManager({ appDir, product = 'Nano Studio', devToolsKey = fa
       w.loadFile(page, { query: { product } });
     });
   }
+
+  // ---------- panel windows ----------
+  // A tool window moved to its own window (renderer/core/popout.js) is an empty child page of the main window's page,
+  // which renders the panel into it (main/security.js allows exactly those). They close with the main window, and
+  // while one is open the main page is not throttled when hidden behind it: the panel's code runs in that page.
+  // Their bounds are this module's (BrowserWindow bounds, not the page's screenX/outerWidth, which leave out the
+  // frame's invisible borders): the page asks for them in window.open's features and is told them when they change.
+  const popouts = new Set();
+  const onScreen = (b) => {
+    const { screen } = require('electron');
+    // The title bar must be reachable: a window saved on a monitor that is gone comes back on the main window's.
+    const bar = { x: b.x + 40, y: b.y, width: Math.max(1, b.width - 80), height: 28 };
+    const hit = screen.getAllDisplays().some(({ workArea: a }) => bar.x < a.x + a.width && bar.x + bar.width > a.x && bar.y >= a.y && bar.y < a.y + a.height);
+    if (hit) return b;
+    const home = main && !main.isDestroyed() ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
+    const a = home.workArea;
+    const width = Math.min(b.width, a.width), height = Math.min(b.height, a.height);
+    return { x: Math.round(a.x + (a.width - width) / 2), y: Math.round(a.y + (a.height - height) / 2), width, height };
+  };
+  const featureBounds = (features) => {
+    const f = Object.fromEntries(String(features || '').split(',').map((kv) => kv.split('=').map((s) => s.trim())));
+    const n = (k) => (/^-?\d{1,6}$/.test(f[k] || '') ? Number(f[k]) : NaN);
+    const b = { x: n('left'), y: n('top'), width: n('width'), height: n('height') };
+    if (!(b.width >= 200 && b.height >= 120)) return null;
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) {
+      const m = main && !main.isDestroyed() ? main.getBounds() : { x: 0, y: 0 };
+      Object.assign(b, { x: m.x + 80, y: m.y + 80 });
+    }
+    return onScreen(b);
+  };
+  // The bounds the last allowed window.open asked for: a window made with them is a few pixels off at a display scale
+  // like 125% (and would grow at every restart), so created() sets them once more, as getBounds() reads them back.
+  let asked = null;
+  require('./security').setPopouts({
+    options: (features) => {
+      asked = featureBounds(features);
+      return { ...(asked || { width: 720, height: 480 }), minWidth: 260, minHeight: 160, backgroundColor: '#1e1f22', autoHideMenuBar: true, show: true };
+    },
+    created(win, opener, name) {
+      const want = asked;
+      asked = null;
+      if (opener !== main?.webContents) return void win.destroy();
+      popouts.add(win);
+      addDevToolsKey(win);
+      if (want) win.setBounds(want);
+      let tell = 0;
+      const told = () => { clearTimeout(tell); if (!win.isDestroyed() && !opener.isDestroyed()) opener.send('window:popoutBounds', { name, bounds: win.getBounds() }); };
+      const soon = () => { clearTimeout(tell); tell = setTimeout(told, 300); };
+      win.on('move', soon);
+      win.on('resize', soon);
+      win.on('close', told);
+      soon();
+      opener.setBackgroundThrottling(false);
+      // A reloaded page has lost what it drew into the window.
+      const drop = () => { if (!win.isDestroyed()) win.destroy(); };
+      opener.once('did-navigate', drop);
+      opener.once('render-process-gone', drop);
+      win.on('closed', () => {
+        clearTimeout(tell);
+        opener.removeListener('did-navigate', drop);
+        opener.removeListener('render-process-gone', drop);
+        popouts.delete(win);
+        if (!popouts.size && !opener.isDestroyed()) opener.setBackgroundThrottling(true);
+      });
+    },
+  });
 
   ipcMain.handle('window:openDetached', (e, payload) => {
     const parent = BrowserWindow.fromWebContents(e.sender);

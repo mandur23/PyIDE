@@ -47,7 +47,8 @@
     if (ide.appearanceModes?.mode()) await ide.appearanceModes.exit();
     const focus = document.activeElement;
     for (const [side, s] of Object.entries(layout.areas)) {
-      const list = windowsOn(side);
+      // A tool window in a window of its own (renderer/core/popout.js) stays there.
+      const list = windowsOn(side).filter((tw) => !tw.popout);
       if (!list.length) continue;
       const area = list[0].area;
       const want = list.find((tw) => tw.id === s.active) || list[0];

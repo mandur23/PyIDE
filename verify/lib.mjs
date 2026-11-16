@@ -165,6 +165,62 @@ export function descendants(rows, rootPid, { includeRoot = false, since = SUITE_
   return out;
 }
 
+// Real key events through the browser input pipeline (reaches Monaco and the global keymap like a user would).
+const KEYCODES = { F1: 112, F2: 113, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120, F10: 121, F12: 123, Enter: 13,
+  Escape: 27, Tab: 9, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46, Backspace: 8, Shift: 16, '/': 191 };
+async function pressKeys(cdp, combo) {
+  const parts = combo.split('+');
+  const key = parts.pop();
+  const mods = (parts.includes('Alt') ? 1 : 0) | (parts.includes('Ctrl') ? 2 : 0) | (parts.includes('Shift') ? 8 : 0);
+  const upper = key.length === 1 ? key.toUpperCase() : key;
+  const code = key.length === 1 ? (/[a-z]/i.test(key) ? `Key${upper}` : /\d/.test(key) ? `Digit${key}` : key === '/' ? 'Slash' : '') : key;
+  const windowsVirtualKeyCode = KEYCODES[key] ?? upper.charCodeAt(0);
+  const base = { modifiers: mods, key: key.length === 1 ? (mods & 8 ? upper : key.toLowerCase()) : key, code, windowsVirtualKeyCode };
+  await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await sleep(60);
+}
+
+// Another window of the app on CDP `port` (a tool window's own window, renderer/core/popout.js; a detached editor
+// window): the first page target `match(target)` accepts, with its own session, so keys and clicks go to that window as
+// a user's do. -> {target, cdp, press(combo), type(text), click(x, y, button), shot(file), close()}
+export async function attachPage(port, match, ms = 15000) {
+  let target = null;
+  for (const end = Date.now() + ms; !target && Date.now() < end; await sleep(200)) {
+    try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page' && match(t)); } catch {}
+  }
+  if (!target) throw new Error('no such window on the CDP port');
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws.addEventListener('open', r); ws.addEventListener('error', j); });
+  let seq = 0;
+  const pending = new Map();
+  ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data); pending.get(msg.id)?.(msg); pending.delete(msg.id); });
+  ws.addEventListener('close', () => { for (const r of pending.values()) r({ error: { message: 'the window closed' } }); pending.clear(); });
+  const cdp = (method, params = {}) => new Promise((r) => {
+    if (ws.readyState !== WebSocket.OPEN) return r({ error: { message: 'the window closed' } });
+    const id = ++seq;
+    pending.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const click = async (x, y, button = 'left') => {
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' });
+    for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x, y, button, buttons: type === 'mousePressed' ? (button === 'right' ? 2 : 1) : 0, clickCount: 1 });
+    await sleep(60);
+  };
+  const shot = async (file) => {
+    const r = await cdp('Page.captureScreenshot', { format: 'png' });
+    if (r.result?.data) writeFileSync(file, Buffer.from(r.result.data, 'base64'));
+    return file;
+  };
+  return {
+    target, cdp, click, shot,
+    press: (combo) => pressKeys(cdp, combo),
+    type: async (text) => { await cdp('Input.insertText', { text }); await sleep(30); },
+    close: () => ws.close(),
+  };
+}
+
 // lang: UI language for the run (Chromium --lang); tests default to English regardless of the OS language.
 // userData: reuse a user-data directory from an earlier launch (to test what persists across restarts).
 // exe: an installed "Nano Studio.exe" to run instead of the source tree; open: a project file to pass instead of the folder.
@@ -195,7 +251,8 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
   let page;
   for (let i = 0; i < 100 && !page; i++) {
     await sleep(200);
-    try { page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'); } catch {}
+    // Not a tool window's own window (about:blank, renderer/core/popout.js), which a restart opens beside the main one.
+    try { page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page' && !t.url.startsWith('about:')); } catch {}
   }
   if (!page) throw new Error(`no CDP page on port ${port}`);
 
@@ -274,21 +331,7 @@ export async function launch({ fixture, port, name = fixture, lang = 'en-US', us
     await until(`!window.__pyideReplaced && (${expr})`, 'the reloaded page ready', ms);
     await js(CLIPBOARD_HOOK).catch(() => {});
   };
-  // Real key events through the browser input pipeline (reaches Monaco and the global keymap like a user would).
-  const KEYCODES = { F1: 112, F2: 113, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120, F10: 121, F12: 123, Enter: 13,
-    Escape: 27, Tab: 9, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46, Backspace: 8, Shift: 16, '/': 191 };
-  const press = async (combo) => {
-    const parts = combo.split('+');
-    const key = parts.pop();
-    const mods = (parts.includes('Alt') ? 1 : 0) | (parts.includes('Ctrl') ? 2 : 0) | (parts.includes('Shift') ? 8 : 0);
-    const upper = key.length === 1 ? key.toUpperCase() : key;
-    const code = key.length === 1 ? (/[a-z]/i.test(key) ? `Key${upper}` : /\d/.test(key) ? `Digit${key}` : key === '/' ? 'Slash' : '') : key;
-    const windowsVirtualKeyCode = KEYCODES[key] ?? upper.charCodeAt(0);
-    const base = { modifiers: mods, key: key.length === 1 ? (mods & 8 ? upper : key.toLowerCase()) : key, code, windowsVirtualKeyCode };
-    await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
-    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
-    await sleep(60);
-  };
+  const press = (combo) => pressKeys(cdp, combo);
   const type = async (text) => { await cdp('Input.insertText', { text }); await sleep(30); };
   // A toolbar or grid that redraws between the press and the release takes the click away from its button: on a slow
   // runner the page then goes on as if nothing was pressed. One that did not reach the element is pressed once more.

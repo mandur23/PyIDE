@@ -295,6 +295,21 @@ input, select, textarea { font: inherit; }
   border: 1px solid var(--gray4); border-radius: 4px; padding: 5px 8px; outline: none; }
 .field input:focus, .field select:focus, .field textarea:focus, .input:focus { border-color: var(--blue6); }
 
+/* A tool window in a window of its own (popout.js): its title, actions and Return button over the panel. Its button
+   and tab in the main window stay, marked, and bring that window to the front. */
+.popout-root { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--gray1); }
+.popout-root.popout-side { background: var(--gray2); }
+.popout-head { gap: 6px; border-bottom: 1px solid var(--gray3); }
+.popout-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popout-dock { color: var(--gray9); width: 26px; height: 24px; border-radius: 4px; display: grid; place-items: center; }
+.popout-dock:hover { background: var(--gray3); }
+.popout-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* Its area's other windows switching (.active) never hides it here. */
+.popout-body > .tool { display: flex !important; }
+.stripe-btn.popped-out::before { content: ''; position: absolute; left: 3px; bottom: 3px; width: 6px; height: 6px;
+  border: 1.5px solid var(--blue8); border-radius: 2px; }
+.bottom-tab.popped-out > span:first-child::after { content: ' ↗'; color: var(--blue8); }
+
 /* Detached editor windows ("Open in New Window") show only the editor area. */
 body.detached #stripe, body.detached #sidePanel, body.detached #sideSplitter, body.detached #bottom,
 body.detached #stripeRight, body.detached #rightPanel, body.detached #rightSplitter,

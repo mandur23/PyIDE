@@ -29,6 +29,13 @@ function blockedFileUrl(url) {
   return !shares.has(`${u.hostname}\\${share}`.toLowerCase());
 }
 
+// A panel window ("Open in New Window" on a tool window, renderer/core/popout.js): an empty page the IDE page opens and
+// fills with its own panel, so the panel's state (a terminal's process, a server's console) stays in the one page.
+const POPOUT_NAME = /^pyide-popout:[\w.-]{1,80}$/;
+// {options(features), created(win, opener, name)} from main/windows.js, which makes the panel windows; none until set.
+let popouts = null;
+const setPopouts = (p) => { popouts = p; };
+
 function install({ appDir }) {
   allowShare(appDir);
   const indexFile = path.join(appDir, 'renderer', 'index.html').toLowerCase();
@@ -37,11 +44,16 @@ function install({ appDir }) {
   };
 
   app.on('web-contents-created', (_e, contents) => {
-    // window.open, target=_blank, middle-click and Shift+click on a link, Monaco's link opener.
-    contents.setWindowOpenHandler(({ url }) => {
+    // window.open, target=_blank, middle-click and Shift+click on a link, Monaco's link opener. Only the IDE page's own
+    // top frame may open an empty panel window; nothing loads in it, and it may open nothing itself.
+    contents.setWindowOpenHandler(({ url, frameName, features }) => {
+      if (popouts && url === 'about:blank' && POPOUT_NAME.test(frameName || '') && contents.getType() === 'window' && isIdePage(contents.getURL())) {
+        return { action: 'allow', overrideBrowserWindowOptions: popouts.options(features) };
+      }
       if (isWeb(url)) shell.openExternal(url).catch(() => {});
       return { action: 'deny' };
     });
+    contents.on('did-create-window', (win, { frameName }) => { if (popouts && POPOUT_NAME.test(frameName || '')) popouts.created(win, contents, frameName.slice(frameName.indexOf(':') + 1)); });
     // A link clicked in rendered content, a URL or file dropped on the window, location.href set by a page.
     contents.on('will-navigate', (e, url) => {
       if (isIdePage(url)) return;
@@ -63,4 +75,4 @@ function install({ appDir }) {
   });
 }
 
-module.exports = { install, isWeb, allowShare, shareAllowed };
+module.exports = { install, isWeb, allowShare, shareAllowed, setPopouts };

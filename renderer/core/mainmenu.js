@@ -106,7 +106,7 @@
   };
   function toolWindowItems() {
     return [...ide.toolWindows.values()].filter((tw) => tw.available()).sort((a, b) => a.order - b.order)
-      .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, disabled: !ide.root, run: () => tw.show() }));
+      .map((tw) => ({ label: tw.title, icon: tw.iconName, glyph: tw.glyph, hint: tw.keys, disabled: !ide.root, run: () => (tw.popout ? tw.popout.focus() : tw.show()) }));
   }
   // A submenu of plugin actions, left out when the plugin is disabled (File › Manage IDE Settings: settings-sync).
   function submenuOf(label, items) {
@@ -201,7 +201,7 @@
       // Window › Layouts (layouts plugin).
       ide.layouts?.menu(), { separator: true },
       act('SplitVertically'), act('SplitHorizontally'), act('Unsplit'), act('UnsplitAll'), act('ChangeSplitOrientation'),
-      { separator: true }, act('OpenInNewWindow'), act('MoveToNewWindow'), { separator: true },
+      { separator: true }, act('OpenInNewWindow'), act('MoveToNewWindow'), act('PopoutToolWindow'), act('DockToolWindow'), { separator: true },
       act('PreviousTab'), act('NextTab'), act('ReopenClosedTab'), act('PinActiveTab'), act('CloseContent'),
     ]) },
     { label: tr('Help'), submenu: () => tidy([act('KeymapReference'), act('FindActionHelp') || act('GotoAction'), { separator: true },

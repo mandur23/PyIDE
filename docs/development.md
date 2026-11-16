@@ -20,7 +20,7 @@ Nano Studio를 고칠 때 먼저 읽는 문서입니다. 구조, 기능을 만�
 | 경로 | 내용 |
 | --- | --- |
 | `main.js` | 앱 시작, 모드 선택, 프로세스 실행(`startProcess`), 인터프리터 목록, 종료 관문(`holdQuit`) |
-| `main/windows.js` | 메인 창과 분리 창, 시작 화면, 닫기 전 확인(저장 안 한 파일, 실행 중인 프로그램) |
+| `main/windows.js` | 메인 창과 분리 창, 도구 창의 새 창, 시작 화면, 닫기 전 확인(저장 안 한 파일, 실행 중인 프로그램) |
 | `main/plugin-manager.js` | 플러그인 찾기, 모드 거르기, 켜고 끄기, 설치 |
 | `main/features/<기능>.js` | 기능의 메인 모듈. `register(ctx)`로 IPC를 등록합니다 |
 | `main/trust.js`, `main/security.js`, `main/program-env.js` | 안전 모드, 창 탐색과 권한 차단, 자식 프로세스 환경 |
@@ -117,6 +117,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 ### 작성
 
 - `verify/lib.mjs`의 `launch({fixture, port, mode, lang, env, projectDir, ...})`가 임시 프로젝트, 임시 사용자 데이터, CDP 포트로 앱을 띄웁니다. 돌려받는 도구는 `js`, `until`, `press`, `type`, `click`, `cdp`, `shot`, `check`, `finish`, `close`입니다.
+- 앱의 다른 창(도구 창의 새 창, 분리 편집기 창)은 `attachPage(port, match)`로 붙습니다. 그 창의 CDP 세션으로 키와 클릭을 보냅니다.
 - 포트는 테스트마다 고유합니다. 새 포트는 `grep -rn "port: 9762" verify`처럼 먼저 찾아봅니다.
 - 사용자가 하는 그대로 시험합니다. 클릭은 `click(selector)`나 `cdp('Input.dispatchMouseEvent', ...)`로 실제로 누르고, 키는 `press`로 보냅니다. DOM `.click()`과 스크립트 `focus()`는 포커스와 배치 문제를 숨깁니다.
 - 보이는지는 `elementFromPoint`와 스크린샷으로 확인합니다. overflow 검사만으로는 부족합니다.
@@ -163,7 +164,7 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 4. 베타를 냅니다(같은 명령에서 `--dry-run`만 뺍니다). 업데이트 채널이 베타인 설치본만 받고, `latest.yml`은 그대로입니다. 베타의 `Release <버전>` 커밋이 푸시되면서 CI가 돕니다.
 5. CI 결과를 확인합니다. 실패가 있으면 원인을 보고, 고친 뒤 `-beta.2`를 냅니다. 한 번만 실패한 시간 초과는 그 job을 다시 돌려(`gh run rerun <id> --failed`) 확인합니다.
 6. CI가 통과하고 베타에 문제가 없으면 정식을 냅니다. 드라이런과 exe 확인을 한 번 더 하고 `npm run release -- 0.3.23 --skip-tests`를 실행합니다. 스크립트가 버전 올리기, 빌드, 커밋과 태그, 푸시, 업로드, `latest.yml` 확인까지 합니다.
-7. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`의 옛 버전은 지우지 않습니다. 그 뒤 임시 폴더를 지웁니다.
+7. 새 설치 파일(`NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`)을 `dist/`로 복사합니다. `dist/`에는 최신 정식 버전 2개만 남기고 그보다 오래된 버전과 베타 파일은 지웁니다. 그 뒤 임시 폴더를 지웁니다.
 8. `gh release list -R mandur23/Portfolio-Nano-`에서 Latest가 여전히 v1.4.3인지 봅니다. `nano-studio` 릴리스가 Latest가 되면 안 됩니다.
 9. `nano-studio` 릴리스에 이 버전의 `NanoStudio-Setup-<v>.exe.sig`, `NanoStudio-<v>.msi.sig`와 함께 `NanoStudio-Setup-<v>.exe.manifest`, `NanoStudio-<v>.msi.manifest`가 있는지 봅니다. 스크립트 8단계 출력에 두 줄 `<파일>.manifest is signed for <파일> <v>`가 있어야 합니다. `.sig`는 설치 파일 바이트만 서명하며 0.3.25 이하 설치본이 읽습니다. `.manifest`는 파일 이름, 버전, SHA-512를 묶어 서명한 것으로 그 뒤 버전이 읽고, 없으면 업데이트를 거부합니다. 둘 중 하나라도 빠지면 `--publish-only`로 다시 올립니다.
 
@@ -173,5 +174,5 @@ Cut의 기능은 AI도 쓸 수 있어야 합니다. 키보드 동작, 자동화 
 
 - 요청 없이 커밋, 푸시, 릴리스하지 않습니다.
 - 시스템 소프트웨어를 설치하거나 사용자 대신 로그인하지 않습니다.
-- `dist/`의 옛 설치 파일을 지우지 않습니다.
+- `dist/`에는 최신 정식 버전 2개의 설치 파일만 둡니다.
 - Craft의 금지 사항(EULA 동의, 실제 런처와 게임 실행 등)은 [craft-app.md](craft-app.md)의 "하지 않는 것"에 있습니다.

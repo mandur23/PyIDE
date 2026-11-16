@@ -22,6 +22,7 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 | --- | --- |
 | `renderer/core/ide.js` | `window.ide` API, 액션과 키맵(`KEYMAP_DEFAULTS`), 툴 윈도우와 스트라이프, 상태 표시줄, 대화상자(`ide.ui`), 설정, 프로젝트 열기, 프로젝트 트리 |
 | `renderer/core/editors.js` | 편집기 탭과 그룹 분할, `ide.openFile`, 미리보기 탭, 분리 창, 창 닫기 대화상자(`#closeConfirmDialog`) |
+| `renderer/core/popout.js` | 도구 창을 새 창으로 열기(Code와 Craft). 빈 자식 창에 도구 창의 요소를 옮기고, 그동안 `document`를 쓰는 코드가 여러 창에서도 맞게 동작하게 합니다. 창의 위치와 크기는 `main/windows.js`가 정합니다 |
 | `renderer/core/ot.js` | 동시 편집의 순수 계산(OT 변환, 클라이언트 단계, 참여 번호, 파일의 줄바꿈 판단, 자기 편집만 되돌리는 실행 취소 기록). 편집기, `main/shared-docs.js`, `verify/collab-core.mjs`가 함께 씁니다 |
 | `main/shared-docs.js` | 여러 곳(창, 협업 손님)에서 연 파일의 편집 순서를 매기는 서버 쪽. 손님의 op를 호스트의 글에 대고 검사하고, 창이 없는 파일은 `loadFromDisk`로 읽습니다. `main/windows.js`가 창을 연결합니다 |
 | `main/collab/protocol.js` | 협업 메시지 틀(길이 + JSON), 손님 메시지 검사, 손님 경로 규칙(프로젝트 밖·숨김 파일·8.3 이름 거절, `realGuest`가 실제 경로에서 다시 확인). 계획은 [collab-coding-plan.md](collab-coding-plan.md) |
@@ -59,6 +60,14 @@ Code는 코어 위에 플러그인 약 75개가 올라간 구조입니다. 코�
 - 창 닫기: 메인(`main/windows.js`)이 저장 안 한 파일(`window:setDirty`)과 실행 중인 프로그램(`window:setBusy`)을 알고, 있으면 `window:confirmClose`를 보냅니다. `window:setBusy`는 이름 배열(run 플러그인, Cut 내보내기) 또는 `{source, names}`(터미널: 셸 말고 다른 프로그램이 도는 세션, `pty:busy`)를 받고, 보낸 쪽마다 따로 보관합니다. 렌더러가 대화상자를 띄우고 `window:closeNow`로 닫습니다.
 - 공유된 문서(다른 창이나 협업)의 실행 취소는 자기 편집만 되돌립니다. 원격 편집은 `applyEdits`로 넣고, 모델의 `undo`와 `redo`는 `ownUndo`가 `renderer/core/ot.js`의 기록으로 바꿉니다. 공유 문서에 편집을 넣는 새 코드는 원격이면 기록을 옮기고(`rebase`), 로컬이면 `localEdit`를 지나야 합니다.
 - 테스트: `verify/editors.mjs`, `verify/session.mjs`, `verify/close-running.mjs`. 작은 수정 모음(Ctrl+Tab, Reopen Closed Tab, 상태 표시줄 선택 크기, 트리 삭제 뒤 선택, 대화상자 버튼 중복 실행, 풍선, Run 터미널 테마, Maven 경로, Find in Files 초기화)은 `verify/code-polish.mjs`입니다.
+
+### 도구 창의 새 창 (`renderer/core/popout.js`)
+
+- 도구 창의 버튼, 아래쪽 탭, 옆 패널 머리글의 메뉴에 "새 창으로 열기"가 있습니다. 새 창은 IDE 페이지가 `window.open('about:blank', 'pyide-popout:<id>')`로 연 빈 페이지이고, 도구 창의 요소가 그리로 옮겨 갑니다. 상태(터미널의 셸, 서버 콘솔)는 같은 페이지의 같은 객체라 IPC로 맞출 것이 없습니다. 편집기 탭의 새 창(`Shift+F4`)은 문서를 공유하는 별도 IDE 페이지로, 다른 방식입니다.
+- 패널이 다른 창에 있는 동안 `document.activeElement`, `getElementById`, `querySelector(All)`, `contains`는 그 창도 봅니다. 메뉴, 대화상자, 선택 팝업은 사용자가 일하는 창에 뜹니다(`ide.js`의 `uiWin`). 그래도 플러그인이 `window`나 `document`에 단 리스너는 새 창의 이벤트를 받지 못합니다. 새 창에서 동작해야 하는 키는 키맵 액션으로 만듭니다.
+- 페이지가 만든 `ResizeObserver`는 다른 창으로 옮긴 요소를 처음 한 번만 알립니다. `ide.js`가 생성자를 감싸 요소가 있는 창의 관찰자로 보고, `ide.util.rehomeObservers()`가 옮긴 요소를 따라갑니다. xterm을 가진 플러그인은 `panelMoved`에서 `term.open()`을 다시 불러 그 창의 프레임으로 그립니다(terminal, run).
+- 어느 도구 창이 나가 있는지와 창의 위치는 `popout.windows` 설정에 모드별로 남고, 시작할 때 다시 엽니다. 위치는 `BrowserWindow.getBounds()` 단위입니다(페이지의 `screenX`/`outerWidth`와 다릅니다).
+- 테스트: `verify/popout.mjs`, Craft는 `verify/popout-craft.mjs`. 새 창은 `lib.mjs`의 `attachPage(port, match)`로 붙어 그 창의 CDP 세션으로 누릅니다.
 
 ### 실행, 디버그, 테스트 (run, debugger, tests)
 

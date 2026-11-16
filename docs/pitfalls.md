@@ -60,6 +60,8 @@
 - **작은 파일이 많은 폴더는 파일을 여는 비용(바이러스 검사)이 바이트보다 큽니다.** 5 KB 파일 하나에 약 5 ms가 들어 4,280개 월드를 차례로 읽으면 87초, 다음 8개를 미리 읽고 압축하면 4~6초였습니다. 큰 파일은 4 MB씩 읽습니다(1 MB보다 1.6배 빠름).
 - **진행률 조절에는 주입한 가짜 시계가 아니라 `Date.now()`를 씁니다.** 테스트의 고정 시계로 진행 이벤트가 멈춰 취소 테스트가 엉뚱하게 통과·실패했습니다.
 
+- **창의 위치와 크기는 한 단위로만 저장하고 되돌립니다.** 페이지의 `screenX`/`outerWidth`는 Windows 창의 보이지 않는 테두리를 빼서 `BrowserWindow`의 너비보다 14px 작습니다. window.open의 features로 만든 창은 125% 배율에서 몇 px 다르게 열려 시작할 때마다 자랐고, `overrideBrowserWindowOptions`의 width와 height는 features를 덮어썼습니다. 도구 창의 새 창은 `getBounds()` 값을 저장하고, 만든 뒤 `setBounds`로 다시 정합니다(`main/windows.js`).
+
 ## 공통: 렌더러
 
 - **편집기를 키로 하는 표는 WeakMap으로 둡니다.** 협업의 이름표 표(`presence.js`)가 `monaco.editor.getEditors()`의 모든 편집기를 Map에 넣고 지우지 않아, 파일 비교를 열고 닫을 때마다 닫힌 diff 편집기와 DOM 49개가 남았습니다(`core-lifecycle`가 잡음). 0.3.23-beta.1에 들어갔습니다.
@@ -80,6 +82,10 @@
 - **`window:setBusy`는 보낸 쪽마다 따로 보관합니다.** 한 창에서 두 플러그인이 이름 목록 하나를 보내면 서로 덮어씁니다(`{source, names}`).
 - **여러 동작이 같은 키를 쓰는 메뉴는 포커스가 있던 곳을 기준으로 단축키를 보여 줍니다.** 메뉴 버튼이 mousedown에 포커스를 가져가면 `when`이 모두 거짓이 되므로, 메뉴 버튼은 포커스를 가져가지 않습니다.
 - **입력하는 동안 검사하는 숫자 칸은 거부한 값에서 이전 pending을 지웁니다.** "100"을 치는 동안 지나간 "10"이 적용됐습니다.
+
+- **페이지가 만든 `ResizeObserver`는 다른 창(`window.open`으로 연 도구 창의 새 창)으로 옮긴 요소를 처음 한 번만 알립니다.** 그 뒤의 크기 변화는 그 창의 `ResizeObserver`만 압니다. `ide.js`가 생성자를 감싸 요소가 있는 창의 관찰자로 보고, 요소를 옮긴 뒤 `ide.util.rehomeObservers()`를 부릅니다(Cut은 감싸지 않습니다).
+- **새 창에 복사한 스타일시트는 비동기로 로드됩니다.** 시트 없이 배치된 터미널이 몇 칸 너비로 맞춰져 cmd가 프롬프트 줄을 다시 감쌌습니다. 패널은 새 창의 시트가 로드된 뒤 옮깁니다(`popout.js`의 `stylesLoaded`).
+- **도구 창의 `.active`는 영역의 것입니다.** 같은 영역의 다른 도구 창을 보이면 새 창으로 나간 패널의 `.active`까지 지워져 그 창이 비었습니다(시작할 때 두 창을 복원한 1024x720에서만 재현). 나간 창은 건너뛰고, CSS `.popout-body > .tool`이 언제나 보이게 합니다.
 
 ## 공통: Code, Craft, Cut 모드
 
@@ -134,6 +140,7 @@
 - **CSP 위반이 있으면 `finish()`가 테스트를 실패시킵니다.** Markdown의 `on*` 속성은 sanitizer의 파싱 때도 보고됩니다. 이 경우만 `SANITIZED_HANDLER`로 걸러집니다.
 - **실제 OS 드래그는 마우스 메시지가 있어야 끝납니다.** `verify/post-mouse-move.ps1`로 테스트 창에만 메시지를 보냅니다. 실제 마우스를 움직이지 않습니다.
 - **테스트는 클립보드를 보존해야 합니다.** Electron 45에서 `clipboard-keeper`가 조용히 고장 나 있었습니다. 로그에 경고가 있는지 봅니다.
+- **클립보드의 파일 목록은 `paste` 이벤트로만 읽습니다.** Electron의 `clipboard`는 탐색기가 복사한 파일 목록을 읽지도 쓰지도 못하고, PowerShell로 읽으면 1.5초가 걸립니다. `paste` 이벤트의 `clipboardData.files`에는 폴더도 들어 있습니다(`webUtils.getPathForFile`). 키 처리에서 `preventDefault`하면 이벤트가 오지 않으므로 `webContents.paste()`(`tree:paste`)로 일으킵니다. 쓰기만 PowerShell(`fs:copyToClipboard`)입니다. 컨텍스트 메뉴 항목은 `click`이 아니라 `mousedown`에 실행됩니다(테스트에서 `click()`은 아무 일도 하지 않습니다).
 - **`verify/out`은 여럿이 같이 씁니다.** 다른 세션의 정리가 실행 중인 폴더를 지울 수 있습니다. 동시 작업 중에는 `node verify/clean.mjs --age 15`를 쓰고, 끝난 뒤 `--age 0`을 씁니다. `*-venv`와 `downloads-cache`는 남깁니다.
 - **문구 검사는 Code와 Craft 양쪽을 봅니다.** `verify/i18n-static.mjs`가 모드별로 검사합니다. 예전에는 전부 합쳐 검사해서 Craft 누락을 못 찾았습니다.
 - **고정된 시간 상한은 부하에서 깨집니다.** 코어 수의 두 배만큼 바쁜 프로세스를 함께 돌리면 이 PC에서 117개 중 6개가 실패했습니다. 타이밍 의심은 바쁜 프로세스로 재현합니다. 이 PC는 논리 코어 16개인데, 12개를 채우면 `tasklist`가 0.7초에 답하고 `private-share`가 156/156으로 끝납니다. 16개 이상을 채우면 `tasklist`가 부하가 끝날 때까지 답하지 않아 런처 검사 하나가 실패하고 15분 안에 끝나지 않습니다. 부하는 코어의 4분의 3으로 봅니다. 기다림은 답이 어느 쪽으로든 나면 끝나게 씁니다(`outcome`). 상한은 실패하는 쪽만 기다리는 시간이 되어 넉넉해도 비용이 없습니다.
@@ -154,6 +161,8 @@
 - **작업의 한 부분이 끝난 것은 작업이 끝난 것이 아닙니다.** 실행 취소는 파일을 먼저 옮기고 나머지 파일을 나중에 쓰며, 경고 알림은 이동이 다 끝난 뒤에 옵니다. exe-builder의 결과 파일은 PyInstaller가 끝나기 전에 생겨서 다음 빌드가 "실행 중입니다. 중지하고 다시 실행할까요?"를 띄웠습니다. 검사하는 결과 전체를 기다립니다.
 - **1024x720 창에서는 오른쪽 아래 알림 풍선이 버튼과 목록 줄을 덮습니다.** 협업 게스트는 풍선 7개가 Ask to Type과 터미널을 덮어 호스트가 질문을 받지 못했고, `vcs`는 Log 줄을 누르지 못했습니다. 줄은 `visiblePoint`로 보이는 부분을 누르고, 작은 버튼은 `closeBalloonsOver`로 위의 풍선을 닫고 누릅니다. 풍선의 동작을 누르는 테스트는 풍선이 사라졌으면 알림 도구 창에서 누릅니다(`run-roots`).
 - **`PYIDE_TEST_CPU`는 렌더러만 느리게 합니다.** 디스크나 프로세스 시작이 느린 CI 실패(`exe-builder`, `rename-module`)는 바쁜 프로세스 12개와 `PYIDE_TEST_CPU=4`를 함께 줘야 재현됐습니다.
+
+- **CDP의 `/json`은 `window.open`으로 연 창을 IDE 페이지보다 먼저 나열합니다.** 첫 `page`를 잡으면 도구 창을 복원한 재시작에서 about:blank에 붙어 `__ideReady`를 영영 기다립니다. `launch()`는 about: 페이지를 건너뛰고, 그런 창은 `attachPage(port, match)`로 따로 붙어 그 세션으로 누릅니다.
 
 ## Code: 코딩
 
@@ -622,7 +631,7 @@
 - **`marketplace/index.json`을 바꾸면 같은 커밋에서 `npm run marketplace:sign`을 실행합니다.** 안 하면 release 1단계가 멈춥니다.
 - **포트폴리오 사이트는 고정 이름 `NanoStudio-Setup.exe`를 가리킵니다.** 저장소 이름은 `mandur23/PyIDE` 그대로입니다.
 - **설치본 테스트(`verify/installed.mjs`, `update-e2e`, `update-delta`)는 평소 건너뜁니다.** 패키징 영향이 큰 변경(Electron, 경로, CSP)은 빌드한 앱을 직접 띄워 확인합니다.
-- **`dist/`에는 모든 버전의 설치 파일을 남깁니다.** 0.3.10 설치 파일을 지웠다가 태그에서 다시 빌드했습니다. 릴리스는 `PYIDE_DIST_DIR`로 임시 폴더에 빌드하고 `NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`을 `dist/`로 복사만 합니다. 옛 버전을 다시 빌드할 때는 `git archive`로 태그를 풀고 `npm ci` 뒤 `vendor/`를 복사합니다. `vendor/`를 빠뜨린 첫 빌드에는 debugpy와 ruff가 없었습니다.
+- **`dist/`에는 최신 정식 버전 2개의 설치 파일만 남깁니다(2026-11-12부터).** 그 전에는 모든 버전을 남겼고 14GB가 됐습니다. 더 오래된 버전이 필요하면 태그에서 다시 빌드합니다. 릴리스는 `PYIDE_DIST_DIR`로 임시 폴더에 빌드하고 `NanoStudio-Setup-<v>.exe`, 그 `.blockmap`, `NanoStudio-<v>.msi`, `latest.yml`을 `dist/`로 복사만 합니다. 옛 버전을 다시 빌드할 때는 `git archive`로 태그를 풀고 `npm ci` 뒤 `vendor/`를 복사합니다. `vendor/`를 빠뜨린 첫 빌드에는 debugpy와 ruff가 없었습니다.
 
 ## 아직 남은 문제: 공통
 

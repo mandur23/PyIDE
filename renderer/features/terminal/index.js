@@ -672,6 +672,12 @@
   ide.on('settingsChanged', (key) => {
     if (key === 'terminal.fontSize') for (const s of sessions) { s.term.options.fontSize = fontSize(); fitPane(s); }
   });
+  // The Terminal went to a window of its own or came back (renderer/core/popout.js): opening an xterm again where it is
+  // makes it draw with that window's frames and pixel ratio.
+  ide.on('panelMoved', ({ id }) => {
+    if (id !== 'Terminal') return;
+    for (const s of sessions) if (s.term.element?.parentElement) s.term.open(s.term.element.parentElement);
+  });
 
   // Toolbar button and stripe icon for Claude Code.
   const claudeBtn = el('button', 'tb-icon claude-btn');
