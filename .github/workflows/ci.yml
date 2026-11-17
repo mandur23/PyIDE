@@ -68,6 +68,8 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+          # The runner's stand-in sound device ends the process when a stream opens on it (cut-audio/tests/playback.rs).
+          CUT_TEST_NO_SOUND_DEVICE: '1'
         run: cargo test --workspace --exclude cut-app --exclude cut-engine --exclude cut-export --exclude cut-decode --locked --no-fail-fast --manifest-path cut-rs/Cargo.toml
 
       - name: Upload verify/out

@@ -24,6 +24,12 @@ fn get_audio(b: &Built) -> GetAudio {
 }
 
 fn silent(b: &Built) -> Option<Playback> {
+    // A GitHub runner's sound device is a stand-in whose driver ends the process (an access violation) when streams
+    // are opened on it: the CI job sets this, and the tests are skipped as on a PC without a sound device.
+    if std::env::var_os("CUT_TEST_NO_SOUND_DEVICE").is_some() {
+        eprintln!("skipped: CUT_TEST_NO_SOUND_DEVICE is set");
+        return None;
+    }
     match Playback::new(get_audio(b)) {
         Ok(p) => {
             p.set_output_gain(0.0);
