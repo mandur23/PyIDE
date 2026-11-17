@@ -22,7 +22,9 @@ const REAL = exeArg ? path.join(path.dirname(exeArg), 'resources', 'cut', 'nano-
 const SIDECARS = ['whisper_server.py', 'voice_server.py', 'speaker_server.py'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const S = (x) => JSON.stringify(x);
-const same = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+// 8.3 short names (RUNNER~1 on a GitHub runner) and long ones are one folder.
+const long = (p) => { try { return realpathSync.native(p); } catch { return path.resolve(p); } };
+const same = (a, b) => !!a && !!b && long(a).toLowerCase() === long(b).toLowerCase();
 
 let passed = 0, failed = 0;
 const check = (ok, label) => { if (ok) passed++; else failed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${label}`); };

@@ -62,7 +62,11 @@ jobs:
 
       - name: cargo test --workspace
         timeout-minutes: 45
-        run: cargo test --workspace --locked --manifest-path cut-rs/Cargo.toml
+        # The runner's TEMP is an 8.3 short name (RUNNER~1), which the tests' path comparisons do not expect.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cargo test --workspace --locked --no-fail-fast --manifest-path cut-rs/Cargo.toml
 
       - name: Upload verify/out
         if: ${{ failure() }}
